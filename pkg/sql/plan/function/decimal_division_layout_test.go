@@ -70,7 +70,7 @@ func TestLegacyDecimalDivisionPlanUsesTaggedScale(t *testing.T) {
 	overload, err := GetFunctionById(proc.Ctx, EncodeOverloadID(DIV, 0))
 	require.NoError(t, err)
 	execute, _, _, _ := overload.GetExecuteMethod()
-	require.NoError(t, execute([]*vector.Vector{left, right}, result, proc, 1, nil))
+	require.NoError(t, execute([]*vector.Vector{left, right}, result, proc, 1))
 	require.Equal(t, legacyType, *result.GetResultVector().GetType())
 	require.Equal(t, types.Decimal128{B0_63: 33333333}, vector.MustFixedColNoTypeCheck[types.Decimal128](result.GetResultVector())[0])
 }

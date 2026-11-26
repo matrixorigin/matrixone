@@ -109,7 +109,7 @@ func TestInsertIgnoreAdjustsMySQLSpecialTypeValues(t *testing.T) {
 	ignoreProc.SetStmtProfile(&process.StmtProfile{})
 	ignoreProc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
 
-	run := func(name string, inputs []FunctionTestInput, expect FunctionTestResult, fn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error) {
+	run := func(name string, inputs []FunctionTestInput, expect FunctionTestResult, fn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error) {
 		t.Helper()
 		t.Run(name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(ignoreProc, inputs, expect, fn)
@@ -426,7 +426,7 @@ func TestTypedArrayBinaryCompatibilityUsesRawPayloadLength(t *testing.T) {
 func TestEmptyDomainVectorConversions(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	run := func(inputs []FunctionTestInput, expected FunctionTestResult, fn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error) {
+	run := func(inputs []FunctionTestInput, expected FunctionTestResult, fn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error) {
 		t.Helper()
 		tc := NewFunctionTestCase(proc, inputs, expected, fn)
 		ok, info := tc.RunAndFree()

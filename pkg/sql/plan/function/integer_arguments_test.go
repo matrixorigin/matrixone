@@ -154,17 +154,15 @@ func TestIntegerArgumentTextBits(t *testing.T) {
 		input   FunctionTestInput
 		want    []uint64
 		nulls   []bool
-		mask    *FunctionSelectList
 		wantErr bool
 	}{
 		{input: NewFunctionTestInput(types.T_text.ToType(), []string{"-9223372036854775808", "9223372036854775808", "18446744073709551615", "65.9tail", "abc"}, nil), want: []uint64{1 << 63, 1 << 63, math.MaxUint64, 65, 0}},
-		{input: NewFunctionTestInput(types.T_text.ToType(), []string{"18446744073709551616", "-1", "-9223372036854775809"}, nil), want: []uint64{0, math.MaxUint64, 0}, nulls: []bool{true, false, true}, mask: &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}}},
 		{input: NewFunctionTestConstInput(types.T_text.ToType(), []string{"18446744073709551616"}, []bool{true}), want: []uint64{0}, nulls: []bool{true}},
 		{input: NewFunctionTestInput(types.T_text.ToType(), []string{"18446744073709551616"}, nil), wantErr: true},
 		{input: NewFunctionTestInput(types.T_text.ToType(), []string{"-9223372036854775809"}, nil), wantErr: true},
 		{input: NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, nil), wantErr: true},
 	} {
-		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(target, []uint64{}, nil)}, NewFunctionTestResult(target, tc.wantErr, tc.want, tc.nulls), NewTextIntegerBitsCast).WithSelectList(tc.mask)
+		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(target, []uint64{}, nil)}, NewFunctionTestResult(target, tc.wantErr, tc.want, tc.nulls), NewTextIntegerBitsCast)
 		ok, info := test.RunAndFree()
 		require.True(t, ok, info)
 	}
@@ -231,23 +229,21 @@ func TestPrivateIntegerArgumentCastPreservesScalarDomain(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		source  *vector.Vector
-		mask    *FunctionSelectList
 		length  int
 		isConst bool
 	}{
-		{"scalar three rows", scalar, nil, 3, true},
-		{"flat equal values", flat, nil, 3, false},
-		{"scalar partial selection", scalar, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}, 3, false},
-		{"scalar zero rows", scalar, nil, 0, false},
-		{"scalar reused", scalar, nil, 3, true},
+		{"scalar three rows", scalar, 3, true},
+		{"flat equal values", flat, 3, false},
+		{"scalar zero rows", scalar, 0, false},
+		{"scalar reused", scalar, 3, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, result.PreExtendAndReset(tc.length))
-			require.NoError(t, NewIntegerArgumentCast([]*vector.Vector{tc.source, target}, result, proc, tc.length, tc.mask))
+			require.NoError(t, NewIntegerArgumentCast([]*vector.Vector{tc.source, target}, result, proc, tc.length))
 			got := result.GetResultVector()
 			require.Equal(t, tc.isConst, got.IsConst())
 			require.Equal(t, tc.length, got.Length())
-			if tc.length > 0 && tc.mask == nil {
+			if tc.length > 0 {
 				for i := 0; i < tc.length; i++ {
 					require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](got, i))
 				}
@@ -328,26 +324,24 @@ func TestIntegerArgumentVectorSourcesAndMasks(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		input FunctionTestInput
-		mask  *FunctionSelectList
 		want  []int64
 		nulls []bool
 	}{
-		{NewFunctionTestInput(types.T_bool.ToType(), []bool{false, true, false}, []bool{false, false, true}), nil, []int64{0, 1, 0}, []bool{false, false, true}},
-		{NewFunctionTestConstInput(types.T_float64.ToType(), []float64{math.Inf(1)}, []bool{true}), nil, []int64{0}, []bool{true}},
-		{NewFunctionTestInput(types.T_float64.ToType(), []float64{math.Inf(1), 1.5, math.NaN()}, nil), &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}}, []int64{0, 2, 0}, []bool{true, false, true}},
-		{NewFunctionTestInput(types.T_varchar.ToType(), []string{"18446744073709551616", "2.5", "9223372036854775808"}, nil), &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}}, []int64{0, 2, 0}, []bool{true, false, true}},
-		{NewFunctionTestInput(types.T_float64.ToType(), []float64{math.Inf(1)}, nil), &FunctionSelectList{AllNull: true}, []int64{0}, []bool{true}},
+		{NewFunctionTestInput(types.T_bool.ToType(), []bool{false, true, false}, []bool{false, false, true}), []int64{0, 1, 0}, []bool{false, false, true}},
+		{NewFunctionTestConstInput(types.T_float64.ToType(), []float64{math.Inf(1)}, []bool{true}), []int64{0}, []bool{true}},
+		{NewFunctionTestInput(types.T_float64.ToType(), []float64{math.Inf(1), 1.5, math.NaN()}, []bool{true, false, true}), []int64{0, 2, 0}, []bool{true, false, true}},
+		{NewFunctionTestInput(types.T_varchar.ToType(), []string{"18446744073709551616", "2.5", "9223372036854775808"}, []bool{true, false, true}), []int64{0, 2, 0}, []bool{true, false, true}},
 	} {
-		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, tc.want, tc.nulls), NewIntegerArgumentCast).WithSelectList(tc.mask)
+		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, tc.want, tc.nulls), NewIntegerArgumentCast)
 		ok, info := test.RunAndFree()
 		require.True(t, ok, info)
 	}
 	large, err := types.ParseDecimal256("10000000000000000000000000000000000000000000000000000000000000000000000", 76, 0)
 	require.NoError(t, err)
 	test := NewFunctionTestCase(proc, []FunctionTestInput{
-		NewFunctionTestInput(types.New(types.T_decimal256, 76, 0), []types.Decimal256{large, {B0_63: 2}}, nil),
+		NewFunctionTestInput(types.New(types.T_decimal256, 76, 0), []types.Decimal256{large, {B0_63: 2}}, []bool{true, false}),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
-	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 2}, []bool{true, false}), NewIntegerArgumentCast).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 2}, []bool{true, false}), NewIntegerArgumentCast)
 	ok, info := test.RunAndFree()
 	require.True(t, ok, info)
 	value, err := decimal256IntegerArgument(large, 0)
@@ -482,7 +476,6 @@ func TestIntegerArgumentTextWarningControls(t *testing.T) {
 		values          []string
 		want            []int64
 		nulls           []bool
-		mask            *FunctionSelectList
 		binary, wantErr bool
 		warnings        int
 	}{
@@ -490,20 +483,16 @@ func TestIntegerArgumentTextWarningControls(t *testing.T) {
 		{name: "unicode_preserves_value", source: types.T_text, values: []string{"\u00a03\u00a0"}, want: []int64{3}, warnings: 1},
 		{name: "binary_storage_text", source: types.T_varbinary, values: []string{"3x"}, want: []int64{3}, warnings: 1},
 		{name: "binary_literal_numeric", source: types.T_varbinary, values: []string{"3x"}, want: []int64{0x3378}, binary: true},
-		{name: "partial_selection", source: types.T_varchar, values: []string{"bad", "2x", "bad"}, want: []int64{0, 2, 0}, nulls: []bool{true, false, true}, mask: &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}}, warnings: 1},
-		{name: "ignore_all", source: types.T_varchar, values: []string{"bad"}, want: []int64{0}, nulls: []bool{true}, mask: &FunctionSelectList{AllNull: true}},
 		{name: "overflow_stays_error", source: types.T_varchar, values: []string{"9223372036854775808x"}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			session := &numericWarningSession{}
 			proc.Session = session
-			// Masked outputs are NULL; the input itself remains non-NULL to prove
-			// that selection suppresses conversion diagnostics.
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestInput(tc.source.ToType(), tc.values, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
-			}, NewFunctionTestResult(types.T_int64.ToType(), tc.wantErr, tc.want, tc.nulls), NewIntegerArgumentCast).WithSelectList(tc.mask)
+			}, NewFunctionTestResult(types.T_int64.ToType(), tc.wantErr, tc.want, tc.nulls), NewIntegerArgumentCast)
 			fc.result.SetArgumentIsBin([]bool{tc.binary})
 			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)

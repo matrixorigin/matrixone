@@ -186,7 +186,7 @@ func requireSequence(ctx context.Context, rel engine.Relation) error {
 // Set is_called to true if it is false, if is_]called is true Advance last_seq_num.
 // Return advanced last_seq_num.
 
-func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	if err = rejectSequenceMutationInReadOnly(proc); err != nil {
 		return err
 	}
@@ -391,7 +391,7 @@ func makePosIncr[T constraints.Integer](incr int64) T {
 	return T(incr)
 }
 
-func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	if err = rejectSequenceMutationInReadOnly(proc); err != nil {
 		return err
 	}
@@ -484,7 +484,7 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 	return setvalLocal(tblname, setnum, iscalled, db, proc, rel)
 }
 
-func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 	var databases vector.FunctionParameterWrapper[types.Varlena]
@@ -553,7 +553,7 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return
 }
 
-func Lastval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func Lastval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	release, err := proc.AcquireSequence(proc.Ctx)
 	if err != nil {
 		return err

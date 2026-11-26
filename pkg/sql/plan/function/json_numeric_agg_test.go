@@ -441,33 +441,9 @@ func TestJSONNumericAggScalarConversionBranches(t *testing.T) {
 	require.Zero(t, got)
 }
 
-func TestJSONNumericAggSelectionAndArity(t *testing.T) {
+func TestJSONNumericAggArity(t *testing.T) {
 	proc := testutil.NewProcess(t)
-
-	input := makeJSONEncodedFromText(t, []string{`1`, `2`}, nil)
-	selected := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_json.ToType(), input, nil),
-		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 2}, []bool{true, false}),
-		JsonAggToDouble,
-	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
-	ok, info := selected.RunAndFree()
-	require.True(t, ok, info)
-
-	allNull := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_json.ToType(), input, nil),
-		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0}, []bool{true, true}),
-		JsonAggToDouble,
-	).WithSelectList(&FunctionSelectList{AllNull: true, SelectList: []bool{false, false}})
-	ok, info = allNull.RunAndFree()
-	require.True(t, ok, info)
-
-	err := JsonAggToDouble(nil, nil, proc, 0, nil)
+	err := JsonAggToDouble(nil, nil, proc, 0)
 	require.ErrorContains(t, err, "expects one argument")
 }
 

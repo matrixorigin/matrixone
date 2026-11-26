@@ -24,15 +24,13 @@ import (
 // LOG10 value kernels: the templates own the NULL results, this pass walks the
 // rows after evaluation and reports one warning 3020 per evaluated row whose
 // arguments are invalid. It is called only after a successful kernel run and
-// mirrors appendDivisionByZeroWarnings: batches without NULL results or with
-// every row masked do no per-row work (#30214).
-func appendLogarithmArgWarnings(parameters []*vector.Vector, result *vector.Vector, proc *process.Process, length int, selectList *FunctionSelectList) {
+// mirrors appendDivisionByZeroWarnings: batches without NULL results do no
+// per-row work (#30214).
+func appendLogarithmArgWarnings(parameters []*vector.Vector, result *vector.Vector, proc *process.Process, length int) {
 	if length <= 0 || proc == nil || (!result.IsConstNull() && !result.GetNulls().Any()) {
 		return
 	}
-	if selectList != nil && selectList.IgnoreAllRow() {
-		return
-	}
+
 	binaryLog := len(parameters) == 2
 	if !binaryLog && len(parameters) != 1 {
 		return
@@ -54,11 +52,9 @@ func appendLogarithmArgWarnings(parameters []*vector.Vector, result *vector.Vect
 	}
 	var warnings process.WarningAccumulator
 	defer warnings.Reset()
-	masked := selectList != nil && !selectList.ShouldEvalAllRow()
 	for i := 0; i < length; i++ {
 		row := uint64(i)
-		if (masked && selectList.Contains(row)) || !result.IsNull(row) || left.IsNull(row) ||
-			(binaryLog && right.IsNull(row)) {
+		if !result.IsNull(row) || left.IsNull(row) || (binaryLog && right.IsNull(row)) {
 			// NULL operands propagate NULL silently, like the division
 			// diagnostics; only rows with two evaluated non-NULL arguments
 			// that produce an invalid logarithm report warning 3020.

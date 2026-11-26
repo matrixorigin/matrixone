@@ -36,7 +36,6 @@ func builtInIsLegacyTemporaryTable(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
 	relKinds := vector.GenerateFunctionStrParameter(parameters[0])
 	relNames := vector.GenerateFunctionStrParameter(parameters[1])
@@ -46,13 +45,6 @@ func builtInIsLegacyTemporaryTable(
 	results := vector.MustFunctionResult[bool](result)
 
 	for row := uint64(0); row < uint64(length); row++ {
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(row) {
-			if err := results.Append(false, true); err != nil {
-				return err
-			}
-			continue
-		}
-
 		relKind, nullKind := relKinds.GetStrValue(row)
 		relName, nullName := relNames.GetStrValue(row)
 		database, nullDatabase := databases.GetStrValue(row)

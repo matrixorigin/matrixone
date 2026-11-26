@@ -132,16 +132,15 @@ func MoTableSize(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) (err error) {
 
 	useOldStr := GetUseOldImplVariable(proc)
 	if useOldStr {
 		// the old implement
-		return MoTableSizeOld(iVecs, result, proc, length, selectList)
+		return MoTableSizeOld(iVecs, result, proc, length)
 	}
 
-	return MoTableSizeNew(iVecs, result, proc, length, selectList)
+	return MoTableSizeNew(iVecs, result, proc, length)
 }
 
 func MoTableRows(
@@ -149,16 +148,15 @@ func MoTableRows(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) (err error) {
 
 	useOldStr := GetUseOldImplVariable(proc)
 	if useOldStr {
 		// the old implement
-		return MoTableRowsOld(iVecs, result, proc, length, selectList)
+		return MoTableRowsOld(iVecs, result, proc, length)
 	}
 
-	return MoTableRowsNew(iVecs, result, proc, length, selectList)
+	return MoTableRowsNew(iVecs, result, proc, length)
 }
 
 //#region MoTableSizeRows New Implements
@@ -312,7 +310,6 @@ func MoTableSizeRowsHelper(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 	executor *atomic.Pointer[GetMoTableSizeRowsFuncType],
 	fallback executeLogicOfOverload,
 ) (err error) {
@@ -465,7 +462,7 @@ func MoTableSizeRowsHelper(
 		if err := proc.Ctx.Err(); err != nil {
 			return err
 		}
-		return fallback(iVecs, result, proc, length, selectList)
+		return fallback(iVecs, result, proc, length)
 	}
 	if len(ret) != len(tblIds) {
 		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: invalid statistics cardinality")
@@ -488,10 +485,8 @@ func MoTableSizeNew(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) (err error) {
-
-	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableSizeFunc, MoTableSizeOld)
+	return MoTableSizeRowsHelper(iVecs, result, proc, length, &GetMoTableSizeFunc, MoTableSizeOld)
 }
 
 func MoTableRowsNew(
@@ -499,17 +494,15 @@ func MoTableRowsNew(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) (err error) {
-
-	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableRowsFunc, MoTableRowsOld)
+	return MoTableSizeRowsHelper(iVecs, result, proc, length, &GetMoTableRowsFunc, MoTableRowsOld)
 }
 
 //#endregion MoTableSizeRows New Implements
 
 //#region MoTableSizeRows Old Implements
 
-func MoTableRowsOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func MoTableRowsOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -614,7 +607,7 @@ func MoTableRowsOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
-func MoTableSizeOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func MoTableSizeOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -791,16 +784,16 @@ func specialTableFilterForNonSys(ctx context.Context, dbStr, tblStr string) (boo
 }
 
 // MoTableColMax return the max value of the column
-func MoTableColMax(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return moTableColMaxMinImpl("mo_table_col_max", ivecs, result, proc, length, selectList)
+func MoTableColMax(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return moTableColMaxMinImpl("mo_table_col_max", ivecs, result, proc, length)
 }
 
 // MoTableColMax return the max value of the column
-func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return moTableColMaxMinImpl("mo_table_col_min", ivecs, result, proc, length, selectList)
+func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return moTableColMaxMinImpl("mo_table_col_min", ivecs, result, proc, length)
 }
 
-func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if !ok || proc.GetTxnOperator() == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableColMaxMin: txn operator is nil")
@@ -1074,7 +1067,7 @@ var (
 
 // enum("a","b","c") -> CastIndexToValue(1) -> "a"
 // CastIndexToValue returns enum type index according to the value
-func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	indexs := vector.GenerateFunctionFixedTypeParameter[types.Enum](ivecs[1])
@@ -1113,7 +1106,7 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 
 // enum("a","b","c") -> CastValueToIndex("a") -> 1
 // CastValueToIndex returns enum type index according to the value
-func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -1124,12 +1117,6 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	defer warnings.Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if enumSetConversionSkipped(selectList, i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
 		enumValue, enumValNull := enumValues.GetStrValue(i)
 		if typeEnumNull || enumValNull {
@@ -1271,11 +1258,11 @@ func (index *enumValueIndex) lookupRaw(value string) types.Enum {
 
 // enum("a","b","c") -> CastIndexValueToIndex(1) -> 1
 // CastIndexValueToIndex returns enum type index according to the index value
-func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return castIntegerToEnum[uint16](ivecs, result, proc, length, selectList)
+func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return castIntegerToEnum[uint16](ivecs, result, proc, length)
 }
 
-func castIntegerToEnum[T uint16 | uint64 | int64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func castIntegerToEnum[T uint16 | uint64 | int64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
@@ -1284,12 +1271,6 @@ func castIntegerToEnum[T uint16 | uint64 | int64](ivecs []*vector.Vector, result
 	defer warnings.Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if enumSetConversionSkipped(selectList, i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
 		enumValueIndex, enumValNull := enumIndexValues.GetValue(i)
 		if typeEnumNull || enumValNull {
@@ -1318,7 +1299,7 @@ func castIntegerToEnum[T uint16 | uint64 | int64](ivecs []*vector.Vector, result
 }
 
 // set("a","b","c") -> CastSetIndexToValue(3) -> "a,b"
-func CastSetIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func CastSetIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
 	indexes := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
@@ -1345,7 +1326,7 @@ func CastSetIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWra
 }
 
 // set("a","b","c") -> CastSetValueToIndex("a,b") -> 3
-func CastSetValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func CastSetValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint64](result)
 	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
 	setValues := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -1354,12 +1335,6 @@ func CastSetValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWra
 	defer warnings.Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if enumSetConversionSkipped(selectList, i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		typeSet, typeSetNull := typeSets.GetStrValue(i)
 		setValue, setValueNull := setValues.GetStrValue(i)
 		if typeSetNull || setValueNull {
@@ -1395,10 +1370,6 @@ func allowEnumSetAdjustment(proc *process.Process) bool {
 	return proc != nil && proc.Base != nil && (statementIgnore(proc) || !isStrictSqlMode(proc))
 }
 
-func enumSetConversionSkipped(selection *FunctionSelectList, row uint64) bool {
-	return selection != nil && (selection.IgnoreAllRow() || (!selection.ShouldEvalAllRow() && selection.Contains(row)))
-}
-
 func recordEnumSetTruncation(proc *process.Process, warnings *process.WarningAccumulator, allowAdjustment bool, typ string, value any) error {
 	if allowAdjustment {
 		if warnings.Total == 0 {
@@ -1428,11 +1399,11 @@ func recordEnumSetTruncation(proc *process.Process, warnings *process.WarningAcc
 }
 
 // set("a","b","c") -> CastSetIndexValueToIndex(3) -> 3
-func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return castIntegerToSet[uint64](ivecs, result, proc, length, selectList)
+func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return castIntegerToSet[uint64](ivecs, result, proc, length)
 }
 
-func castIntegerToSet[T uint64 | int64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func castIntegerToSet[T uint64 | int64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint64](result)
 	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
 	setIndexValues := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
@@ -1441,12 +1412,6 @@ func castIntegerToSet[T uint64 | int64](ivecs []*vector.Vector, result vector.Fu
 	defer warnings.Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if enumSetConversionSkipped(selectList, i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		typeSet, typeSetNull := typeSets.GetStrValue(i)
 		setIndexValue, setIndexNull := setIndexValues.GetValue(i)
 		if typeSetNull || setIndexNull {
@@ -1479,7 +1444,7 @@ func castIntegerToSet[T uint64 | int64](ivecs []*vector.Vector, result vector.Fu
 // the column subtype name (e.g. "POINT", or empty for a generic GEOMETRY
 // column); SRID is enforced at bind time from the value/column types, not here,
 // because the WKB payload does not carry an SRID.
-func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(targetSubtype, payload []byte) ([]byte, error) {
 		columnSubtype := strings.ToUpper(strings.TrimSpace(functionUtil.QuickBytesToStr(targetSubtype)))
 		// A "32:" prefix marks a GEOMETRY32 (float32-coordinate) column.
@@ -1496,7 +1461,7 @@ func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultW
 			columnSubtype = ""
 		}
 		return NormalizeGeometryForStorage(proc, payload, columnSubtype, float32Column)
-	}, selectList)
+	})
 }
 
 // NormalizeGeometryForStorage validates a geometry payload (WKB or legacy WKT)
@@ -1521,7 +1486,7 @@ func NormalizeGeometryForStorage(proc *process.Process, payload []byte, columnSu
 	return encodeGeometryPayload(wkt, 0, false), nil
 }
 
-func CastJsonToArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func CastJsonToArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(targetArrayType, payload []byte) ([]byte, error) {
 		declaredType := strings.TrimSpace(functionUtil.QuickBytesToStr(targetArrayType))
 		elemSpec, err := parseTypedArrayElementSpec(declaredType)
@@ -1537,7 +1502,7 @@ func CastJsonToArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			return nil, moerr.NewInvalidInputNoCtxf("cannot store JSON value with incompatible element type in %s column", declaredType)
 		}
 		return payload, nil
-	}, selectList)
+	})
 }
 
 type typedArrayElementSpec struct {
@@ -1807,7 +1772,7 @@ func jsonYearCompatible(elem bytejson.ByteJson) bool {
 }
 
 // CastNanoToTimestamp returns timestamp string according to the nano
-func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	nanos := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
 
@@ -1829,9 +1794,9 @@ func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWra
 }
 
 // CastRangeValueUnit returns the value in hour unit according to the range value and unit
-func CastRangeValueUnit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func CastRangeValueUnit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opBinaryFixedStrToFixedWithErrorCheck[uint8, int64](ivecs, result, proc, length,
-		castRangevalueUnitToHourUnit, selectList)
+		castRangevalueUnitToHourUnit)
 }
 
 func castRangevalueUnitToHourUnit(value uint8, unit string) (int64, error) {

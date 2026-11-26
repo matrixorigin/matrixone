@@ -24,7 +24,7 @@ import (
 // no scan has completed (including on a non-interactive session that has no
 // Kafka state at all). The reader records the value in Close on a clean
 // stream end; see reader_kafka.go.
-func builtInLastKafkaMessageID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+func builtInLastKafkaMessageID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[int64](result)
 	var id int64
 	var has bool

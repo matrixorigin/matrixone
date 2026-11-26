@@ -186,7 +186,7 @@ func processParquetTemporalAssignment[T types.Timestamp | types.Datetime](
 	if proc.GetStmtProfile().GetStatementIgnore() {
 		cast = function.NewAssignIgnoreCast
 	}
-	if err := cast([]*vector.Vector{staging, vec}, result, proc, length, nil); err != nil {
+	if err := cast([]*vector.Vector{staging, vec}, result, proc, length); err != nil {
 		return err
 	}
 	if err := validateParquetTemporalLoadAssignment(proc.Ctx, result.GetResultVector(), length, parquetSessionLocation(proc)); err != nil {

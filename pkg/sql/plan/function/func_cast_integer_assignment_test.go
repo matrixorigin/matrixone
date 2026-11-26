@@ -324,27 +324,21 @@ func TestIntegerAssignmentContracts(t *testing.T) {
 						NewFunctionTestInput(types.T_uint8.ToType(), []uint8{}, nil),
 					}, NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{7, 0, 9}, []bool{false, true, false}), NewAssignCast)
 					t.Cleanup(func() { fc.Free(); require.Equal(t, baseline, proc.Mp().CurrNB()) })
-					steps := []string{"overflow", "masked", "NULL", "valid"}
-					// AllNull admission and uint8 result reset have the same owner for every source.
+					steps := []string{"overflow", "NULL", "valid"}
+					// uint8 result reset has the same owner for every source.
 					if tc.source.typ.Oid == types.T_float64 {
-						steps = []string{"overflow", "masked", "NULL", "all masked", "overflow again", "valid"}
+						steps = []string{"overflow", "NULL", "overflow again", "valid"}
 					}
 					for _, step := range steps {
-						fc.selectList = nil
 						fc.parameters[0].GetNulls().Reset()
 						fc.expected.nullList = []bool{false, true, false}
 						switch step {
-						case "masked":
-							fc.selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
 						case "NULL":
 							fc.parameters[0].GetNulls().Add(1)
 						case "valid":
 							require.NoError(t, tc.setValid(fc.parameters[0]), "step=%s", step)
 							fc.expected.wanted = []uint8{7, 8, 9}
 							fc.expected.nullList = nil
-						case "all masked":
-							fc.selectList = &FunctionSelectList{AllNull: true}
-							fc.expected.nullList = []bool{true, true, true}
 						}
 						if step == "overflow" || step == "overflow again" {
 							v, err := fc.DebugRun()

@@ -55,10 +55,9 @@ func TestTemporalCastIntegerLiveMode(t *testing.T) {
 					empty = []uint64{}
 				}
 				test := NewFunctionTestCase(proc, []FunctionTestInput{
-					NewFunctionTestInput(source.ToTypeWithScale(6), values, []bool{false, true, false}),
+					NewFunctionTestInput(source.ToTypeWithScale(6), values, []bool{false, true, true}),
 					NewFunctionTestInput(target.ToType(), empty, nil),
-				}, NewFunctionTestResult(target.ToType(), false, empty, []bool{false, true, true}), NewTemporalCastInteger).
-					WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false}})
+				}, NewFunctionTestResult(target.ToType(), false, empty, []bool{false, true, true}), NewTemporalCastInteger)
 				defer test.Free()
 				for _, tc := range []struct {
 					mode string
@@ -75,14 +74,14 @@ func TestTemporalCastIntegerLiveMode(t *testing.T) {
 				require.Equal(t, 3, calls, "resolve the live mode once per execution, not per row")
 				resolveErr = errors.New("sql_mode unavailable")
 				require.NoError(t, test.result.PreExtendAndReset(test.fnLength))
-				require.ErrorIs(t, NewTemporalCastInteger(test.parameters, test.result, proc, test.fnLength, nil), resolveErr)
+				require.ErrorIs(t, NewTemporalCastInteger(test.parameters, test.result, proc, test.fnLength), resolveErr)
 			})
 		}
 	}
 }
 
 func TestTemporalCastIntegerRejectsInvalidShape(t *testing.T) {
-	require.Error(t, NewTemporalCastInteger(nil, nil, nil, 0, nil))
+	require.Error(t, NewTemporalCastInteger(nil, nil, nil, 0))
 	proc := testutil.NewProcess(t)
 	for _, inputs := range [][]FunctionTestInput{
 		{NewFunctionTestInput(types.T_varchar.ToType(), []string{"x"}, nil), NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)},
@@ -174,8 +173,8 @@ func TestExplicitTemporalIntegerCastSelection(t *testing.T) {
 				if target == types.T_uint64 {
 					empty, expected = []uint64{}, []uint64{uint64(want), 0, 0}
 				}
-				inputs := []FunctionTestInput{NewFunctionTestInput(oid.ToTypeWithScale(6), values, []bool{false, false, true}), NewFunctionTestInput(target.ToType(), empty, nil)}
-				test := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target.ToType(), false, expected, []bool{false, true, true}), NewExplicitCast).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+				inputs := []FunctionTestInput{NewFunctionTestInput(oid.ToTypeWithScale(6), values, []bool{false, true, true}), NewFunctionTestInput(target.ToType(), empty, nil)}
+				test := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target.ToType(), false, expected, []bool{false, true, true}), NewExplicitCast)
 				ok, info := test.RunAndFree()
 				require.True(t, ok, info)
 				// A single physical value is broadcast to all logical rows.
@@ -192,11 +191,8 @@ func TestExplicitTemporalIntegerCastSelection(t *testing.T) {
 				test = NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target.ToType(), false, expected, []bool{true, true, true}), NewExplicitCast)
 				ok, info = test.RunAndFree()
 				require.True(t, ok, info)
-				// Neither an invalid masked value nor an empty batch is evaluated.
+				// An empty batch is not evaluated.
 				inputs[0].isConst = false
-				test = NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target.ToType(), false, expected, []bool{true, true, true}), NewExplicitCast).WithSelectList(&FunctionSelectList{AllNull: true})
-				ok, info = test.RunAndFree()
-				require.True(t, ok, info)
 				test = NewFunctionTestCase(proc, inputs, NewFunctionTestResult(target.ToType(), false, empty, nil), NewExplicitCast)
 				test.fnLength = 0
 				ok, info = test.RunAndFree()

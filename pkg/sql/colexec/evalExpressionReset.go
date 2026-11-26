@@ -50,8 +50,7 @@ type functionInformationForEval struct {
 		parameters []*vector.Vector,
 		result vector.FunctionResultWrapper,
 		proc *process.Process,
-		rowCount int,
-		selectList *function.FunctionSelectList) error
+		rowCount int) error
 	resetFn                 func() error
 	freeFn                  func() error
 	fid                     int32
@@ -313,7 +312,7 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 	}
 	parameters := expr.parameterResults
 	expr.publishArgumentIsBin(expr.resultVector)
-	if err := expr.evalFn(parameters, expr.resultVector, evalProc, execLen, nil); err != nil {
+	if err := expr.evalFn(parameters, expr.resultVector, evalProc, execLen); err != nil {
 		if probe != nil {
 			// Selection owns failures as well as warnings. Leave the expression
 			// executable so an inactive branch never observes a probe failure.

@@ -39,7 +39,7 @@ func setVecBlockOperand(o *metric.VecBlockOperand, oid types.T, v []byte) error 
 
 // vecBlockDistance runs fn over vecf8/vecf4 arguments, each optionally vecf32.
 func vecBlockDistance(fn func(x, y *metric.VecBlockOperand) (float64, error)) executeLogicOfOverload {
-	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 		oid1, oid2 := ivecs[0].GetType().Oid, ivecs[1].GetType().Oid
 		var x, y metric.VecBlockOperand
 		return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
@@ -50,7 +50,7 @@ func vecBlockDistance(fn func(x, y *metric.VecBlockOperand) (float64, error)) ex
 				return 0, err
 			}
 			return fn(&x, &y)
-		}, selectList)
+		})
 	}
 }
 
@@ -111,19 +111,19 @@ var CosineSimilarityVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperan
 })
 
 // VectorDimsVecBlock is vector_dims over a vecf8/vecf4 cell.
-func VectorDimsVecBlock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func VectorDimsVecBlock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length, func(in []byte) (int64, error) {
 		c, err := types.ParseBlockScaledCell(in)
 		if err != nil {
 			return 0, err
 		}
 		return int64(c.Dim), nil
-	}, selectList)
+	})
 }
 
 // NormalizeL2VecBlock is normalize_l2 over a vecf8/vecf4 cell; the result is re-encoded in the
 // argument's format.
-func NormalizeL2VecBlock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func NormalizeL2VecBlock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	var in, out []float32
 	var cell []byte
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
@@ -139,7 +139,7 @@ func NormalizeL2VecBlock(ivecs []*vector.Vector, result vector.FunctionResultWra
 		}
 		cell, err = types.AppendBlockScaled(cell[:0], c.Format, out)
 		return cell, err
-	}, selectList)
+	})
 }
 
 // vecBlockBinaryOverloads returns the vecf8/vecf4 overloads of a binary distance function,
@@ -169,15 +169,15 @@ func vecBlockBinaryOverloads(first int, op executeLogicOfOverload) []overload {
 
 // VecBlockJSON returns the exact text of each vecf8/vecf4 value (types.BlockScaledToJSON),
 // which casts back to the same cell.
-func VecBlockJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func VecBlockJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
 		text, err := types.BlockScaledToJSON(v)
 		return []byte(text), err
-	}, selectList)
+	})
 }
 
 // VecBlockBinary returns the stored cell of each vecf8/vecf4 value, which casts back to the
 // same cell.
-func VecBlockBinary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte { return v }, selectList)
+func VecBlockBinary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte { return v })
 }

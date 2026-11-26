@@ -244,7 +244,6 @@ func timestampWithTime(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
 	dateReader, err := newTimestampPairDateReader(parameters[0], proc)
 	if err != nil {
@@ -259,13 +258,6 @@ func timestampWithTime(
 	minimum := int64(types.DatetimeEpoch)
 	maximum := int64(types.DatetimeFromClock(types.MaxDatetimeYear, 12, 31, 23, 59, 59, 999999))
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err = results.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
-
 		base, invalidBase := dateReader(i)
 		delta, invalidDelta := timeReader(i)
 		baseValue := int64(base)

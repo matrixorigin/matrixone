@@ -69,7 +69,7 @@ func BenchmarkIntegerMembership(b *testing.B) {
 						fn, _, _, _ := ov.GetExecuteMethod()
 						params := []*vector.Vector{input, list}
 						require.NoError(b, out.PreExtendAndReset(rows))
-						require.NoError(b, fn(params, out, proc, rows, nil))
+						require.NoError(b, fn(params, out, proc, rows))
 						b.ReportAllocs()
 						b.ResetTimer()
 						for i := 0; i < b.N; i++ {
@@ -79,7 +79,7 @@ func BenchmarkIntegerMembership(b *testing.B) {
 							if err := out.PreExtendAndReset(rows); err != nil {
 								b.Fatal(err)
 							}
-							if err := fn(params, out, proc, rows, nil); err != nil {
+							if err := fn(params, out, proc, rows); err != nil {
 								b.Fatal(err)
 							}
 						}

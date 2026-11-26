@@ -248,7 +248,7 @@ func TestJSONLineBitNumberStagedParallelLoadCast(t *testing.T) {
 			// Mirror FunctionTestCase.Run's prepration of the result vector
 			// before evaluating the cast function.
 			require.NoError(t, result.PreExtendAndReset(src.Length()))
-			require.NoError(t, function.NewCast([]*vector.Vector{src, typVec}, result, proc, src.Length(), nil))
+			require.NoError(t, function.NewCast([]*vector.Vector{src, typVec}, result, proc, src.Length()))
 			out := result.GetResultVector()
 			require.Equal(t, 1, out.Length())
 			if tc.wantNull {

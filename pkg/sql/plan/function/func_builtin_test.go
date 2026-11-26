@@ -188,7 +188,7 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 
 	for _, test := range []struct {
 		name   string
-		fn     func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		fn     func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error
 		values []int64
 	}{
 		{
@@ -406,7 +406,7 @@ func TestBuiltInNameConst(t *testing.T) {
 	valueVec := vector.NewConstNull(types.T_int64.ToType(), 3, proc.Mp())
 	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, result.PreExtendAndReset(3))
-	require.NoError(t, builtInNameConst([]*vector.Vector{nameVec, valueVec}, result, proc, 3, nil))
+	require.NoError(t, builtInNameConst([]*vector.Vector{nameVec, valueVec}, result, proc, 3))
 	require.True(t, result.GetResultVector().GetNulls().Contains(0))
 	require.True(t, result.GetResultVector().GetNulls().Contains(1))
 	require.True(t, result.GetResultVector().GetNulls().Contains(2))
@@ -1146,7 +1146,7 @@ func TestBuiltInConvertUsingCodecCancellation(t *testing.T) {
 	proc.Ctx = ctx
 	cancel()
 	// A cancellation is an error, not CONVERT's successful invalid-byte NULL.
-	require.ErrorIs(t, fc.fn(fc.parameters, fc.result, proc, fc.fnLength, nil), context.Canceled)
+	require.ErrorIs(t, fc.fn(fc.parameters, fc.result, proc, fc.fnLength), context.Canceled)
 	require.Zero(t, fc.result.GetResultVector().Length())
 }
 
@@ -1179,7 +1179,7 @@ func TestBuiltInConvertUsingBatchPublication(t *testing.T) {
 			require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
 			ctx := &convertCancelAtPublication{Context: proc.Ctx}
 			proc.Ctx = ctx
-			require.ErrorIs(t, fc.fn(fc.parameters, fc.result, proc, fc.fnLength, nil), context.Canceled)
+			require.ErrorIs(t, fc.fn(fc.parameters, fc.result, proc, fc.fnLength), context.Canceled)
 			// Values are staged, not a successful result: publication must fail.
 			require.Equal(t, 128, fc.result.GetResultVector().Length())
 			require.Equal(t, 2, ctx.checks)
@@ -1267,7 +1267,7 @@ func TestBuiltInConvertUsingRejectsDisabledCharsets(t *testing.T) {
 			defer parameter.Free(fc.proc.Mp())
 		}
 		require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
-		require.ErrorContains(t, fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, nil), "unsupported character set")
+		require.ErrorContains(t, fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength), "unsupported character set")
 	}
 	for _, charset := range []string{"utf8", "utf8mb3", "utf8mb4"} {
 		fc := NewFunctionTestCase(proc, []FunctionTestInput{
@@ -1302,64 +1302,6 @@ func TestBuiltInConvertUsingCharsetConstArgs(t *testing.T) {
 	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInConvertUsingCharset)
 	s, info := fcTC.RunAndFree()
 	require.True(t, s, info)
-}
-
-func TestBuiltInConvertUsingCharsetSelectList(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	invalidUTF8 := string([]byte{0xff})
-	fcTC := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{"ok", invalidUTF8, invalidUTF8},
-				[]bool{false, false, false}),
-			NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{"utf8mb4", "utf8mb4", "utf8mb4"},
-				[]bool{false, false, false}),
-		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
-		builtInConvertUsingCharset)
-	defer fcTC.Free()
-	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
-
-	selectList := &FunctionSelectList{
-		AnyNull:    true,
-		SelectList: []bool{true, false, true},
-	}
-	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, selectList))
-
-	resultVec := fcTC.result.GetResultVector()
-	strParam := vector.GenerateFunctionStrParameter(resultVec)
-	value, isNull := strParam.GetStrValue(0)
-	require.False(t, isNull)
-	require.Equal(t, "ok", string(value))
-	require.True(t, resultVec.GetNulls().Contains(1))
-	require.True(t, resultVec.GetNulls().Contains(2))
-}
-
-func TestBuiltInConvertUsingCharsetIgnoreAllRows(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	fcTC := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{"a", "b", "c"},
-				[]bool{false, false, false}),
-			NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{"utf8mb4", "utf8mb4", "utf8mb4"},
-				[]bool{false, false, false}),
-		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
-		builtInConvertUsingCharset)
-	defer fcTC.Free()
-	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
-
-	selectList := &FunctionSelectList{AllNull: true}
-	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, selectList))
-
-	resultVec := fcTC.result.GetResultVector()
-	require.Equal(t, fcTC.fnLength, resultVec.Length())
-	require.True(t, resultVec.GetNulls().Contains(0))
-	require.True(t, resultVec.GetNulls().Contains(1))
-	require.True(t, resultVec.GetNulls().Contains(2))
 }
 
 func Test_MakeIntervalParamInvalid(t *testing.T) {
@@ -1765,7 +1707,7 @@ func TestTextResultCapacityUsesResultDomain(t *testing.T) {
 	ok, info = multibyteRepeat.RunAndFree()
 	require.True(t, ok, info)
 
-	for name, fn := range map[string]func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error{
+	for name, fn := range map[string]func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error{
 		"lower": builtInToLower,
 		"upper": builtInToUpper,
 	} {
@@ -2011,8 +1953,8 @@ func TestSerialAndSerialFullEncodeNonNullRowsIdentically(t *testing.T) {
 	defer serialOp.Close()
 	serialFullOp := newOpSerial()
 	defer serialFullOp.Close()
-	require.NoError(t, serialOp.BuiltInSerial(parameters, serialResult, proc, 3, nil))
-	require.NoError(t, serialFullOp.BuiltInSerialFull(parameters, serialFullResult, proc, 3, nil))
+	require.NoError(t, serialOp.BuiltInSerial(parameters, serialResult, proc, 3))
+	require.NoError(t, serialFullOp.BuiltInSerialFull(parameters, serialFullResult, proc, 3))
 
 	for row := 0; row < 3; row++ {
 		require.False(t, serialResult.GetResultVector().IsNull(uint64(row)))
@@ -2036,7 +1978,7 @@ func TestSerialFullUnicodeKeepsOriginalValue(t *testing.T) {
 	require.NoError(t, result.PreExtendAndReset(1))
 	op := newOpSerial()
 	defer op.Close()
-	require.NoError(t, op.BuiltInSerialFull([]*vector.Vector{input}, result, proc, 1, nil))
+	require.NoError(t, op.BuiltInSerialFull([]*vector.Vector{input}, result, proc, 1))
 
 	tuple, err := types.Unpack(result.GetResultVector().GetBytesAt(0))
 	require.NoError(t, err)
@@ -2055,7 +1997,7 @@ func TestSerialUnicodeKeepsOriginalValue(t *testing.T) {
 	require.NoError(t, result.PreExtendAndReset(1))
 	op := newOpSerial()
 	defer op.Close()
-	require.NoError(t, op.BuiltInSerial([]*vector.Vector{input}, result, proc, 1, nil))
+	require.NoError(t, op.BuiltInSerial([]*vector.Vector{input}, result, proc, 1))
 
 	tuple, err := types.Unpack(result.GetResultVector().GetBytesAt(0))
 	require.NoError(t, err)
@@ -2074,7 +2016,7 @@ func TestPhysicalSerialUsesUnicodeComparisonKeys(t *testing.T) {
 	require.NoError(t, physicalResult.PreExtendAndReset(1))
 	op := newOpSerial()
 	defer op.Close()
-	require.NoError(t, op.BuiltInPhysicalSerial([]*vector.Vector{input}, physicalResult, proc, 1, nil))
+	require.NoError(t, op.BuiltInPhysicalSerial([]*vector.Vector{input}, physicalResult, proc, 1))
 	tuple, err := types.Unpack(physicalResult.GetResultVector().GetBytesAt(0))
 	require.NoError(t, err)
 	require.Equal(t, []byte(types.CollationKeyOrOriginal(unicodeType.Charset, []byte("b"))), tuple[0])
@@ -2082,7 +2024,7 @@ func TestPhysicalSerialUsesUnicodeComparisonKeys(t *testing.T) {
 	keyResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 	defer keyResult.Free()
 	require.NoError(t, keyResult.PreExtendAndReset(1))
-	require.NoError(t, BuiltInPhysicalCollationKey([]*vector.Vector{input}, keyResult, proc, 1, nil))
+	require.NoError(t, BuiltInPhysicalCollationKey([]*vector.Vector{input}, keyResult, proc, 1))
 	require.Equal(t, types.CollationKeyOrOriginal(unicodeType.Charset, []byte("b")), keyResult.GetResultVector().GetBytesAt(0))
 }
 
@@ -2100,7 +2042,7 @@ func TestPhysicalSerialRejectsOutOfRepertoireValues(t *testing.T) {
 	require.NoError(t, result.PreExtendAndReset(1))
 	op := newOpSerial()
 	defer op.Close()
-	err := op.BuiltInPhysicalSerialFull([]*vector.Vector{input}, result, proc, 1, nil)
+	err := op.BuiltInPhysicalSerialFull([]*vector.Vector{input}, result, proc, 1)
 	require.ErrorIs(t, err, collation.ErrRepertoire)
 }
 
@@ -2474,7 +2416,7 @@ func TestSerialExtractNegativeIndexReturnsError(t *testing.T) {
 			}, NewFunctionTestResult(tc.result, true, nil, nil), builtInSerialExtract)
 			defer fc.Free()
 			require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
-			err := fc.fn(fc.parameters, fc.result, proc, fc.fnLength, nil)
+			err := fc.fn(fc.parameters, fc.result, proc, fc.fnLength)
 			require.ErrorContains(t, err, "index out of range")
 		})
 	}
@@ -3346,7 +3288,7 @@ func TestBuiltInCotUsesStableReciprocalAndNullsOverflow(t *testing.T) {
 	)
 	defer tcc.Free()
 	require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
-	require.NoError(t, builtInCot(tcc.parameters, tcc.result, proc, tcc.fnLength, nil))
+	require.NoError(t, builtInCot(tcc.parameters, tcc.result, proc, tcc.fnLength))
 
 	result := vector.GenerateFunctionFixedTypeParameter[float64](tcc.result.GetResultVector())
 	for i, input := range inputs {
@@ -3367,91 +3309,12 @@ func TestBuiltInCotUsesStableReciprocalAndNullsOverflow(t *testing.T) {
 	)
 	defer constant.Free()
 	require.NoError(t, constant.result.PreExtendAndReset(constant.fnLength))
-	require.NoError(t, builtInCot(constant.parameters, constant.result, proc, constant.fnLength, nil))
+	require.NoError(t, builtInCot(constant.parameters, constant.result, proc, constant.fnLength))
 	constantResult := vector.GenerateFunctionFixedTypeParameter[float64](constant.result.GetResultVector())
 	for i := 0; i < constant.fnLength; i++ {
 		value, isNull := constantResult.GetValue(uint64(i))
 		require.False(t, isNull)
 		require.Equal(t, 1/math.Tan(1e-20), value)
-	}
-}
-
-func TestBuiltInExpAndCotRespectSelectList(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	testCases := []struct {
-		name  string
-		input []float64
-		value float64
-		fn    executeLogicOfOverload
-	}{
-		{
-			name:  "exp skips masked overflow",
-			input: []float64{710, 1},
-			value: math.E,
-			fn:    builtInExp,
-		},
-		{
-			name:  "cot skips masked zero",
-			input: []float64{0, 1},
-			value: 1 / math.Tan(1),
-			fn:    builtInCot,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			tcc := NewFunctionTestCase(
-				proc,
-				[]FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(), tc.input, nil)},
-				NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil),
-				tc.fn,
-			)
-			defer tcc.Free()
-			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
-
-			selectList := &FunctionSelectList{
-				AnyNull:    true,
-				SelectList: []bool{false, true},
-			}
-			require.NoError(t, tc.fn(tcc.parameters, tcc.result, proc, tcc.fnLength, selectList))
-
-			resultVec := tcc.result.GetResultVector()
-			require.True(t, resultVec.GetNulls().Contains(0))
-			resultParam := vector.GenerateFunctionFixedTypeParameter[float64](resultVec)
-			value, isNull := resultParam.GetValue(1)
-			require.False(t, isNull)
-			require.InDelta(t, tc.value, value, 1e-15)
-		})
-	}
-
-	for _, tc := range []struct {
-		name  string
-		input FunctionTestInput
-		fn    executeLogicOfOverload
-	}{
-		{
-			name:  "exp skips constant overflow when all rows are masked",
-			input: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{710, 710}, nil),
-			fn:    builtInExp,
-		},
-		{
-			name:  "cot skips constant zero when all rows are masked",
-			input: NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0, 0}, nil),
-			fn:    builtInCot,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tcc := NewFunctionTestCase(
-				proc,
-				[]FunctionTestInput{tc.input},
-				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0}, []bool{true, true}),
-				tc.fn,
-			)
-			defer tcc.Free()
-			tcc = tcc.WithSelectList(&FunctionSelectList{AllNull: true})
-			succeed, info := tcc.Run()
-			require.True(t, succeed, info)
-		})
 	}
 }
 
@@ -3475,7 +3338,7 @@ func TestBuiltInExpOverflowAllocationsDoNotScaleWithRows(t *testing.T) {
 			if err := result.PreExtendAndReset(rowCount); err != nil {
 				panic(err)
 			}
-			if err := builtInExp([]*vector.Vector{input}, result, proc, rowCount, nil); err != nil {
+			if err := builtInExp([]*vector.Vector{input}, result, proc, rowCount); err != nil {
 				panic(err)
 			}
 		})
@@ -3508,7 +3371,7 @@ func BenchmarkBuiltInConvertUsingBorrowedBatch(b *testing.B) {
 			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 			defer result.Free()
 			require.NoError(b, result.PreExtendAndReset(rows))
-			require.NoError(b, builtInConvertUsingCharset(parameters, result, proc, rows, nil))
+			require.NoError(b, builtInConvertUsingCharset(parameters, result, proc, rows))
 			b.ReportAllocs()
 			b.SetBytes(rows * 8)
 			b.ResetTimer()
@@ -3516,7 +3379,7 @@ func BenchmarkBuiltInConvertUsingBorrowedBatch(b *testing.B) {
 				if err := result.PreExtendAndReset(rows); err != nil {
 					b.Fatal(err)
 				}
-				if err := builtInConvertUsingCharset(parameters, result, proc, rows, nil); err != nil {
+				if err := builtInConvertUsingCharset(parameters, result, proc, rows); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -3543,7 +3406,7 @@ func BenchmarkBuiltInExpOverflowBatch(b *testing.B) {
 		if err := result.PreExtendAndReset(rowCount); err != nil {
 			b.Fatal(err)
 		}
-		if err := builtInExp([]*vector.Vector{input}, result, proc, rowCount, nil); err != nil {
+		if err := builtInExp([]*vector.Vector{input}, result, proc, rowCount); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -3565,7 +3428,7 @@ func TestBuiltInCurrentTimeNoArgDefaultsToZeroFSP(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(tc.typ, proc.Mp())
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
-			require.NoError(t, tc.fn(nil, result, proc, 1, nil))
+			require.NoError(t, tc.fn(nil, result, proc, 1))
 			require.Equal(t, int32(0), result.GetResultVector().GetType().Scale)
 		})
 	}
@@ -3586,7 +3449,7 @@ func TestTimestampFunctionsIgnoreNullPrecisionValue(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
-			require.NoError(t, tc.fn([]*vector.Vector{arg}, result, proc, 1, nil))
+			require.NoError(t, tc.fn([]*vector.Vector{arg}, result, proc, 1))
 			require.Equal(t, int32(0), result.GetResultVector().GetType().Scale)
 		})
 	}
@@ -3680,7 +3543,7 @@ func TestBuiltInUUIDVersionGenerators(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_uuid.ToType(), proc.Mp())
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(rows))
-			require.NoError(t, c.fn(nil, result, proc, rows, nil))
+			require.NoError(t, c.fn(nil, result, proc, rows))
 
 			rv := result.GetResultVector()
 			require.Equal(t, rows, rv.Length())
@@ -3772,7 +3635,7 @@ func TestBuiltInUUIDShifted(t *testing.T) {
 			defer units.Free(proc.Mp())
 
 			before := time.Now()
-			require.NoError(t, makeBuiltInUUIDShifted(version)([]*vector.Vector{nums, units}, result, proc, rows, nil))
+			require.NoError(t, makeBuiltInUUIDShifted(version)([]*vector.Vector{nums, units}, result, proc, rows))
 			after := time.Now()
 
 			rv := result.GetResultVector()
@@ -3813,7 +3676,7 @@ func TestBuiltInUUIDShifted(t *testing.T) {
 		require.NoError(t, result.PreExtendAndReset(1))
 		nums := testutil.NewInt64Vector(1, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{c.num})
 		units := testutil.NewInt64Vector(1, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{int64(c.unit)})
-		require.NoError(t, makeBuiltInUUIDShifted(7)([]*vector.Vector{nums, units}, result, proc, 1, nil))
+		require.NoError(t, makeBuiltInUUIDShifted(7)([]*vector.Vector{nums, units}, result, proc, 1))
 		require.True(t, result.GetResultVector().GetNulls().Contains(0), "num=%d unit=%d", c.num, c.unit)
 		nums.Free(proc.Mp())
 		units.Free(proc.Mp())
@@ -4356,7 +4219,7 @@ func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInMoShowVisibleBin)
 			t.Cleanup(testCase.Free)
 			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
-			require.ErrorContains(t, testCase.fn(testCase.parameters, testCase.result, proc, testCase.fnLength, nil), tc.want)
+			require.ErrorContains(t, testCase.fn(testCase.parameters, testCase.result, proc, testCase.fnLength), tc.want)
 			require.Zero(t, testCase.result.GetResultVector().Length())
 		})
 	}
@@ -4369,7 +4232,7 @@ func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
 		}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInMoShowVisibleBin)
 		t.Cleanup(testCase.Free)
 		require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
-		require.ErrorContains(t, testCase.fn(testCase.parameters, testCase.result, proc, testCase.fnLength, nil),
+		require.ErrorContains(t, testCase.fn(testCase.parameters, testCase.result, proc, testCase.fnLength),
 			"the second argument must be in [0, 7], but got NULL")
 		require.Zero(t, testCase.result.GetResultVector().Length())
 	})

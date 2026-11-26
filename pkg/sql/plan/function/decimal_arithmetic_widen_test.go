@@ -157,7 +157,6 @@ func TestDecimal256ArithmeticPublishedPrecision(t *testing.T) {
 		left, right, want               []string
 		leftNulls, wantNulls            []bool
 		leftConst, rightConst           bool
-		selection                       *FunctionSelectList
 		rawWant                         []types.Decimal256
 		wantErr                         string
 	}{
@@ -191,9 +190,6 @@ func TestDecimal256ArithmeticPublishedPrecision(t *testing.T) {
 		{name: "minimum NULL row ignored", fn: plusFn,
 			leftType: types.New(types.T_decimal256, 65, 0), rightType: types.New(types.T_decimal256, 65, 12), resultType: types.New(types.T_decimal256, 65, 12),
 			left: []string{"1", whole}, right: []string{"0", fraction}, leftNulls: []bool{false, true}, want: []string{"1", "0"}, wantNulls: []bool{false, true}},
-		{name: "minimum filtered row ignored", fn: plusFn,
-			leftType: types.New(types.T_decimal256, 65, 0), rightType: types.New(types.T_decimal256, 65, 12), resultType: types.New(types.T_decimal256, 65, 12),
-			left: []string{"1", whole}, right: []string{"0", fraction}, selection: &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}, want: []string{"1", "0"}, wantNulls: []bool{false, true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			parse := func(values []string, typ types.Type) []types.Decimal256 {
@@ -214,7 +210,7 @@ func TestDecimal256ArithmeticPublishedPrecision(t *testing.T) {
 				want = parse(tc.want, tc.resultType)
 			}
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{left, right},
-				NewFunctionTestResult(tc.resultType, tc.wantErr != "", want, tc.wantNulls), tc.fn).WithSelectList(tc.selection)
+				NewFunctionTestResult(tc.resultType, tc.wantErr != "", want, tc.wantNulls), tc.fn)
 			defer fc.Free()
 			fc.fnLength = max(len(tc.left), len(tc.right))
 			if tc.wantErr != "" {

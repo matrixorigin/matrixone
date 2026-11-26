@@ -145,7 +145,7 @@ func TestJsonDepthRejectsEmptyTypedPayloadWithoutPanic(t *testing.T) {
 
 	var got error
 	require.NotPanics(t, func() {
-		got = JsonDepth([]*vector.Vector{input}, result, proc, 1, nil)
+		got = JsonDepth([]*vector.Vector{input}, result, proc, 1)
 	})
 	require.ErrorContains(t, got, "invalid argument json_depth, bad value invalid JSON document")
 }
@@ -159,7 +159,7 @@ func TestJsonDepthPreparedProvenanceAndSelectList(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, JsonDepth([]*vector.Vector{input}, result, proc, 1, nil))
+	require.NoError(t, JsonDepth([]*vector.Vector{input}, result, proc, 1))
 	value, isNull := vector.GenerateFunctionFixedTypeParameter[int64](result.GetResultVector()).GetValue(0)
 	require.False(t, isNull)
 	require.Equal(t, int64(1), value)
@@ -167,7 +167,7 @@ func TestJsonDepthPreparedProvenanceAndSelectList(t *testing.T) {
 	input.ResetWithSameType()
 	require.NoError(t, vector.AppendBytes(input, []byte(`{"a":[1]}`), false, proc.Mp()))
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, JsonDepth([]*vector.Vector{input}, result, proc, 1, nil))
+	require.NoError(t, JsonDepth([]*vector.Vector{input}, result, proc, 1))
 	value, isNull = vector.GenerateFunctionFixedTypeParameter[int64](result.GetResultVector()).GetValue(0)
 	require.False(t, isNull)
 	require.Equal(t, int64(3), value)
@@ -175,15 +175,14 @@ func TestJsonDepthPreparedProvenanceAndSelectList(t *testing.T) {
 	input.ResetWithSameType()
 	require.NoError(t, vector.AppendBytes(input, []byte(`1`), true, proc.Mp()))
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, JsonDepth([]*vector.Vector{input}, result, proc, 1, nil))
+	require.NoError(t, JsonDepth([]*vector.Vector{input}, result, proc, 1))
 	_, isNull = vector.GenerateFunctionFixedTypeParameter[int64](result.GetResultVector()).GetValue(0)
 	require.True(t, isNull)
 
-	vec := runJsonFunctionWithSelectList(t, proc,
+	vec := runJsonFunctionForTest(t, proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{`not-json`, `{"a":[1]}`}, nil),
-		}, types.T_int64.ToType(), JsonDepth,
-		&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`not-json`, `{"a":[1]}`}, []bool{true, false}),
+		}, types.T_int64.ToType(), JsonDepth)
 	require.True(t, vec.IsNull(0))
 	value, isNull = vector.GenerateFunctionFixedTypeParameter[int64](vec).GetValue(1)
 	require.False(t, isNull)
@@ -218,7 +217,7 @@ func TestJsonDepthLimitAndErrorRecovery(t *testing.T) {
 		input.ResetWithSameType()
 		require.NoError(t, vector.AppendBytes(input, []byte(raw), false, proc.Mp()))
 		require.NoError(t, result.PreExtendAndReset(1))
-		return JsonDepth([]*vector.Vector{input}, result, proc, 1, nil)
+		return JsonDepth([]*vector.Vector{input}, result, proc, 1)
 	}
 	require.NoError(t, run(`{"a":[1]}`))
 	require.Error(t, run(`not-json`))

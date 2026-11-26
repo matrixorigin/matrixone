@@ -88,7 +88,7 @@ func TestMoTableStatsOwnerModeSQLFallback(t *testing.T) {
 			// Control: actual SQL function resolves one valid table and reaches
 			// the supplied concrete owner through EntireEngine.
 			first.dynamicCtx.setUseOldImpl(false)
-			require.ErrorIs(t, call([]*vector.Vector{dbv, tbv}, result, proc, 1, nil), wantErr)
+			require.ErrorIs(t, call([]*vector.Vector{dbv, tbv}, result, proc, 1), wantErr)
 			first.dynamicCtx.setUseOldImpl(true)
 			// A control operation on a different CN must not change this owner's
 			// path. This is the actual per-owner control used by mo_ctl.
@@ -98,7 +98,7 @@ func TestMoTableStatsOwnerModeSQLFallback(t *testing.T) {
 			for _, previous := range []int64{111, 222} {
 				require.NoError(t, result.PreExtendAndReset(1))
 				vector.MustFixedColWithTypeCheck[int64](result.GetResultVector())[0] = previous
-				require.NoError(t, call([]*vector.Vector{dbv, tbv}, result, proc, 1, nil))
+				require.NoError(t, call([]*vector.Vector{dbv, tbv}, result, proc, 1))
 				values = append(values, vector.MustFixedColWithTypeCheck[int64](result.GetResultVector())[0])
 			}
 			require.Equal(t, []int64{0, 0}, values, "the real old SQL path must return the empty relation result, not retained vector data")
@@ -122,7 +122,7 @@ func TestMoTableStatsOwnerModeSQLFallback(t *testing.T) {
 					proc.Ctx = canceled
 					require.NoError(t, result.PreExtendAndReset(1))
 					vector.MustFixedColWithTypeCheck[int64](result.GetResultVector())[0] = 111
-					err := call([]*vector.Vector{dbv, tbv}, result, proc, 1, nil)
+					err := call([]*vector.Vector{dbv, tbv}, result, proc, 1)
 					cancel()
 					proc.Ctx = original
 					require.ErrorIs(t, err, expected, "canceled old-mode admission must not fall back")
@@ -131,10 +131,10 @@ func TestMoTableStatsOwnerModeSQLFallback(t *testing.T) {
 			}
 			require.NoError(t, second.Close())
 			require.NoError(t, result.PreExtendAndReset(1))
-			require.NoError(t, call([]*vector.Vector{dbv, tbv}, result, proc, 1, nil))
+			require.NoError(t, call([]*vector.Vector{dbv, tbv}, result, proc, 1))
 			require.Equal(t, int64(0), vector.MustFixedColWithTypeCheck[int64](result.GetResultVector())[0])
 			first.dynamicCtx.setUseOldImpl(false)
-			require.ErrorIs(t, call([]*vector.Vector{dbv, tbv}, result, proc, 1, nil), wantErr)
+			require.ErrorIs(t, call([]*vector.Vector{dbv, tbv}, result, proc, 1), wantErr)
 		})
 	}
 }

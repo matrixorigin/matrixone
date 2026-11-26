@@ -67,7 +67,7 @@ func appendStrToDateWarning(proc *process.Process, code uint16, prefix, suffix s
 	appender.AppendWarningDiagnostic(code, fmt.Sprintf("%s: '%s'%s", prefix, input, suffix))
 }
 
-func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -75,12 +75,6 @@ func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultW
 
 	time := NewGeneralTime()
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetStrValue(i)
 		if null1 || null2 {
@@ -114,7 +108,7 @@ func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-func builtInStrToDatetime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInStrToDatetime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -122,12 +116,6 @@ func builtInStrToDatetime(parameters []*vector.Vector, result vector.FunctionRes
 
 	time := NewGeneralTime()
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetStrValue(i)
 		if null1 || null2 {
@@ -163,7 +151,7 @@ func builtInStrToDatetime(parameters []*vector.Vector, result vector.FunctionRes
 	return nil
 }
 
-func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -171,12 +159,6 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 
 	time := NewGeneralTime()
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetStrValue(i)
 		if null1 || null2 {

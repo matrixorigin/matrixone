@@ -189,10 +189,9 @@ func TestExplicitCastLexicalDecimalDiagnostics(t *testing.T) {
 				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
 				target := types.New(oid, tc.width, tc.scale)
 				fc := NewFunctionTestCase(proc, []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "", "  ", "123tail", "42", "x9", "bad"}, []bool{false, false, false, false, false, true, false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "", "  ", "123tail", "42", "x9", "bad"}, []bool{false, false, false, false, false, true, true}),
 					NewFunctionTestInput(target, emptyCastTargetValues(target), nil),
-				}, NewFunctionTestResult(target, false, nil, nil), NewExplicitCast).
-					WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, true, true, false}})
+				}, NewFunctionTestResult(target, false, nil, nil), NewExplicitCast)
 				t.Cleanup(fc.Free)
 				got, err := fc.DebugRun()
 				require.NoError(t, err)
@@ -200,7 +199,7 @@ func TestExplicitCastLexicalDecimalDiagnostics(t *testing.T) {
 					require.Equal(t, want, explicitCastDecimalTestValue(got, row))
 				}
 				require.True(t, got.IsNull(5), "NULL input must stay NULL without a warning")
-				require.True(t, got.IsNull(6), "masked row must not be evaluated")
+				require.True(t, got.IsNull(6))
 				require.Equal(t, []numericWarning{
 					{1292, "Truncated incorrect DECIMAL value: 'abc'"},
 					{1292, "Truncated incorrect DECIMAL value: ''"},
@@ -294,9 +293,9 @@ func TestExplicitCastNumericDecimalRangeDiagnostics(t *testing.T) {
 			input   FunctionTestInput
 			control string
 		}{
-			{"integer", NewFunctionTestInput(types.T_int64.ToType(), []int64{1000, 999, -1000, 1000, 1000}, []bool{false, false, false, true, false}), "999.00"},
-			{"float", NewFunctionTestInput(types.T_float64.ToType(), []float64{1000, 999.994, -1000, math.Inf(1), math.Inf(1)}, []bool{false, false, false, true, false}), "999.99"},
-			{"decimal", NewFunctionTestInput(types.New(types.T_decimal64, 7, 3), []types.Decimal64{999995, 999994, types.Decimal64(999995).Minus(), 0, 999995}, []bool{false, false, false, true, false}), "999.99"},
+			{"integer", NewFunctionTestInput(types.T_int64.ToType(), []int64{1000, 999, -1000, 1000, 1000}, []bool{false, false, false, true, true}), "999.00"},
+			{"float", NewFunctionTestInput(types.T_float64.ToType(), []float64{1000, 999.994, -1000, math.Inf(1), math.Inf(1)}, []bool{false, false, false, true, true}), "999.99"},
+			{"decimal", NewFunctionTestInput(types.New(types.T_decimal64, 7, 3), []types.Decimal64{999995, 999994, types.Decimal64(999995).Minus(), 0, 999995}, []bool{false, false, false, true, true}), "999.99"},
 		} {
 			t.Run(fmt.Sprintf("%s/%s", oid, source.name), func(t *testing.T) {
 				proc := testutil.NewProcess(t)
@@ -304,8 +303,7 @@ func TestExplicitCastNumericDecimalRangeDiagnostics(t *testing.T) {
 				proc.WarningSink = sink
 				target := types.New(oid, 5, 2)
 				fc := NewFunctionTestCase(proc, []FunctionTestInput{source.input, NewFunctionTestInput(target, emptyCastTargetValues(target), nil)},
-					NewFunctionTestResult(target, false, nil, nil), NewExplicitCast).
-					WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
+					NewFunctionTestResult(target, false, nil, nil), NewExplicitCast)
 				t.Cleanup(fc.Free)
 				got, err := fc.DebugRun()
 				require.NoError(t, err)
@@ -313,7 +311,7 @@ func TestExplicitCastNumericDecimalRangeDiagnostics(t *testing.T) {
 					require.Equal(t, want, explicitCastDecimalTestValue(got, row))
 				}
 				require.True(t, got.IsNull(3))
-				require.True(t, got.IsNull(4), "unselected nonfinite/overflow operand must not be evaluated")
+				require.True(t, got.IsNull(4))
 				require.Equal(t, []numericWarning{
 					{1264, "Out of range value for column 'decimal' at row 1"},
 					{1264, "Out of range value for column 'decimal' at row 3"},
@@ -331,43 +329,6 @@ func explicitCastDecimalTestValue(vec *vector.Vector, row int) string {
 		return vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[row].Format(vec.GetType().Scale)
 	default:
 		return vector.MustFixedColWithTypeCheck[types.Decimal256](vec)[row].Format(vec.GetType().Scale)
-	}
-}
-
-func TestExplicitCastRangeDiagnosticsSelection(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		input  FunctionTestInput
-		target types.Type
-		code   uint16
-	}{
-		{"signed", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"9223372036854775808"}, nil), types.T_int64.ToType(), 1105},
-		{"unsigned", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"18446744073709551616"}, nil), types.T_uint64.ToType(), 1292},
-		{"lexical_signed", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"abc"}, nil), types.T_int64.ToType(), 1292},
-		{"lexical_unsigned", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"abc"}, nil), types.T_uint64.ToType(), 1292},
-		{"string_decimal", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"999.995"}, nil), types.New(types.T_decimal64, 5, 2), 1264},
-		{"numeric_decimal", NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1000}, nil), types.New(types.T_decimal64, 5, 2), 1264},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			sink := &numericWarningSession{}
-			proc.WarningSink = sink
-			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil)},
-				NewFunctionTestResult(tc.target, false, nil, nil), NewExplicitCast).
-				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
-			t.Cleanup(fc.Free)
-			fc.fnLength = 3
-			got, err := fc.DebugRun()
-			require.NoError(t, err)
-			require.Equal(t, 3, got.Length())
-			require.False(t, got.IsNull(0))
-			require.True(t, got.IsNull(1))
-			require.False(t, got.IsNull(2))
-			require.Len(t, sink.warnings, 2)
-			for _, warning := range sink.warnings {
-				require.Equal(t, tc.code, warning.code)
-			}
-		})
 	}
 }
 

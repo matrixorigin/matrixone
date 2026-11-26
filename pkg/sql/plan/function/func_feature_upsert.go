@@ -215,7 +215,7 @@ func moFeatureValidateLimitTarget(proc *process.Process, exec executor.SQLExecut
 	return moerr.NewInvalidInputf(proc.Ctx, "scope %q is not allowed for feature %q", scope, featureCode)
 }
 
-func MoFeatureRegistryUpsert(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+func MoFeatureRegistryUpsert(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if length != 1 {
 		return moerr.NewInvalidInput(proc.Ctx, "mo_feature_registry_upsert can only be called with const args")
 	}
@@ -281,7 +281,7 @@ func MoFeatureRegistryUpsert(parameters []*vector.Vector, result vector.Function
 	return moFeatureAppendPrettyResult(rs, true, oldRow, nowRow)
 }
 
-func MoFeatureLimitUpsert(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+func MoFeatureLimitUpsert(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if length != 1 {
 		return moerr.NewInvalidInput(proc.Ctx, "mo_feature_limit_upsert can only be called with const args")
 	}

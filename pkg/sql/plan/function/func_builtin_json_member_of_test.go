@@ -173,9 +173,9 @@ func TestJSONMemberOfConstructorBinaryValuesPreserveDomain(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			array := runJsonFunctionWithSelectList(t, proc,
+			array := runJsonFunctionForTest(t, proc,
 				[]FunctionTestInput{tc.makeInput([]string{raw})},
-				types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray, nil)
+				types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray)
 			encoded, isNull := vector.GenerateFunctionStrParameter(array).GetStrValue(0)
 			require.False(t, isNull)
 
@@ -194,8 +194,8 @@ func TestJSONMemberOfConstructorBinaryValuesPreserveDomain(t *testing.T) {
 	for i := range largeInputs {
 		largeInputs[i] = tests[0].makeInput([]string{raw})
 	}
-	largeArray := runJsonFunctionWithSelectList(t, proc, largeInputs,
-		types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray, nil)
+	largeArray := runJsonFunctionForTest(t, proc, largeInputs,
+		types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray)
 	largeEncoded, isNull := vector.GenerateFunctionStrParameter(largeArray).GetStrValue(0)
 	require.False(t, isNull)
 	// A single probe deliberately takes the linear path even for a large
@@ -220,10 +220,10 @@ func TestJSONMemberOfConstructorBinaryValuesPreserveDomain(t *testing.T) {
 func TestJSONMemberOfConstructorBitValuePreservesDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typ := types.New(types.T_bit, 9, 0)
-	array := runJsonFunctionWithSelectList(t, proc,
+	array := runJsonFunctionForTest(t, proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(typ, []uint64{0x10a}, nil),
-		}, types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray, nil)
+		}, types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray)
 	encoded, isNull := vector.GenerateFunctionStrParameter(array).GetStrValue(0)
 	require.False(t, isNull)
 
@@ -275,14 +275,13 @@ func TestJSONMemberOfSelectListAndInvalidJSON(t *testing.T) {
 		proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2, 3}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{`[1]`, `invalid`, `[3]`}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`[1]`, `invalid`, `[3]`}, []bool{false, true, false}),
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		jsonMemberOf)
 	defer testCase.Free()
-	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
 	require.NoError(t, testCase.result.PreExtendAndReset(3))
-	require.NoError(t, testCase.fn(testCase.parameters, testCase.result, proc, 3, selectList))
+	require.NoError(t, testCase.fn(testCase.parameters, testCase.result, proc, 3))
 	result := testCase.result.GetResultVector()
 	require.Equal(t, int64(1), vector.MustFixedColWithTypeCheck[int64](result)[0])
 	require.True(t, result.IsNull(1))
@@ -400,7 +399,7 @@ func TestJSONMemberOfRejectsInvalidRightDomainsAtExecution(t *testing.T) {
 			)
 			defer testCase.Free()
 			require.NoError(t, testCase.result.PreExtendAndReset(1), oid.String())
-			err := testCase.fn(testCase.parameters, testCase.result, testCase.proc, 1, nil)
+			err := testCase.fn(testCase.parameters, testCase.result, testCase.proc, 1)
 			require.EqualError(t, err, want, oid.String())
 			require.Equal(t, uint16(moerr.ER_INVALID_JSON_CHARSET), err.(*moerr.Error).MySQLCode(), oid.String())
 		}()
@@ -418,7 +417,7 @@ func TestJSONMemberOfRejectsInvalidRightDomainsAtExecution(t *testing.T) {
 	)
 	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
-	err := testCase.fn(testCase.parameters, testCase.result, testCase.proc, 1, nil)
+	err := testCase.fn(testCase.parameters, testCase.result, testCase.proc, 1)
 	require.EqualError(t, err, want)
 	require.Equal(t, uint16(moerr.ER_INVALID_JSON_CHARSET), err.(*moerr.Error).MySQLCode())
 }
@@ -435,7 +434,7 @@ func TestJSONMemberOfRejectsUnsupportedRightDomainAtExecution(t *testing.T) {
 	)
 	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
-	err := testCase.fn(testCase.parameters, testCase.result, testCase.proc, 1, nil)
+	err := testCase.fn(testCase.parameters, testCase.result, testCase.proc, 1)
 	require.EqualError(t, err,
 		"Invalid data type for JSON data in argument 2 to function member of; a JSON string or JSON type is required.")
 }
@@ -452,7 +451,7 @@ func TestJSONMemberOfCountEvaluableRows(t *testing.T) {
 		jsonMemberOf,
 	)
 	defer testCase.Free()
-	require.Equal(t, 2, jsonMemberOfCountEvaluableRows(testCase.parameters[0], 4, nil))
+	require.Equal(t, 2, jsonMemberOfCountEvaluableRows(testCase.parameters[0], 4))
 	require.False(t, jsonOverlapShouldPrepareScalar(512, 2))
 	require.True(t, jsonOverlapShouldPrepareScalar(512, 20))
 }
@@ -470,7 +469,7 @@ func TestJSONMemberOfRejectsBinaryRightRuntimeProvenance(t *testing.T) {
 	)
 	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(1))
-	err := testCase.fn(testCase.parameters, testCase.result, proc, 1, nil)
+	err := testCase.fn(testCase.parameters, testCase.result, proc, 1)
 	require.EqualError(t, err, "Cannot create a JSON value from a string with CHARACTER SET 'binary'.")
 	require.Equal(t, uint16(moerr.ER_INVALID_JSON_CHARSET), err.(*moerr.Error).MySQLCode())
 }

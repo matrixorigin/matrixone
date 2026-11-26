@@ -162,7 +162,7 @@ func runVecBlockFn(t *testing.T, proc *process.Process, op executeLogicOfOverloa
 	result := vector.NewFunctionResultWrapper(rt, proc.Mp())
 	t.Cleanup(result.Free)
 	require.NoError(t, result.PreExtendAndReset(args[0].Length()))
-	err := op(args, result, proc, args[0].Length(), nil)
+	err := op(args, result, proc, args[0].Length())
 	return result.GetResultVector(), err
 }
 

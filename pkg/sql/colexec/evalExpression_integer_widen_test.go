@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -41,11 +40,8 @@ func TestIntegerWideningBoundExpressionSelection(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(executor.Free)
 	calls := 0
-	colexec.ObserveIntegerWideningCastForTest(executor, func(selection *function.FunctionSelectList) {
+	colexec.ObserveIntegerWideningCastForTest(executor, func() {
 		calls++
-		require.NotNil(t, selection, "ordinary Eval must exercise its internal selection object")
-		require.False(t, selection.IgnoreAllRow())
-		require.True(t, selection.ShouldEvalAllRow())
 	})
 	bat := batch.NewWithSize(1)
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })

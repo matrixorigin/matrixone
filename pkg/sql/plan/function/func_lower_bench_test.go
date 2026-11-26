@@ -26,8 +26,8 @@ import (
 )
 
 func BenchmarkBuiltInToLower(b *testing.B) {
-	original := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selected *FunctionSelectList) error {
-		return opUnaryBytesToBytesByStringDomain(parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selected)
+	original := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+		return opUnaryBytesToBytesByStringDomain(parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value })
 	}
 	boundary := strings.Repeat("AbC ", (64<<10)/4+1)
 	for _, scenario := range []struct {
@@ -93,7 +93,7 @@ func BenchmarkBuiltInToLower(b *testing.B) {
 						if err := fc.result.PreExtendAndReset(scenario.rows); err != nil {
 							b.Fatal(err)
 						}
-						if err := implementation.fn(fc.parameters, fc.result, proc, scenario.rows, nil); err != nil {
+						if err := implementation.fn(fc.parameters, fc.result, proc, scenario.rows); err != nil {
 							b.Fatal(err)
 						}
 					}

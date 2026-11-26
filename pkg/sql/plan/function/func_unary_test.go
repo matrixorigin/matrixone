@@ -305,7 +305,7 @@ func TestAsciiKeepsLegacyUint8ResultWrapper(t *testing.T) {
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(1))
 		require.NoError(t, AsciiString(
-			[]*vector.Vector{input}, result, proc, 1, nil))
+			[]*vector.Vector{input}, result, proc, 1))
 		require.Equal(t, []uint8{65}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
 	})
 	t.Run("signed integer", func(t *testing.T) {
@@ -316,7 +316,7 @@ func TestAsciiKeepsLegacyUint8ResultWrapper(t *testing.T) {
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(1))
 		require.NoError(t, AsciiInt[int64](
-			[]*vector.Vector{input}, result, proc, 1, nil))
+			[]*vector.Vector{input}, result, proc, 1))
 		require.Equal(t, []uint8{'1'}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
 	})
 	t.Run("unsigned integer", func(t *testing.T) {
@@ -327,7 +327,7 @@ func TestAsciiKeepsLegacyUint8ResultWrapper(t *testing.T) {
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(1))
 		require.NoError(t, AsciiUint[uint64](
-			[]*vector.Vector{input}, result, proc, 1, nil))
+			[]*vector.Vector{input}, result, proc, 1))
 		require.Equal(t, []uint8{'1'}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
 	})
 }
@@ -482,26 +482,13 @@ func TestQuote(t *testing.T) {
 func TestQuoteHonorsSelectList(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, test := range []struct {
-		name       string
-		selectList *FunctionSelectList
-		nulls      []bool
-	}{
-		{
-			name:       "partial mask",
-			selectList: &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}},
-			nulls:      []bool{false, true},
-		},
-		{
-			name:       "all rows masked",
-			selectList: &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false, false}},
-			nulls:      []bool{true, true},
-		},
-	} {
+		name  string
+		nulls []bool
+	}{} {
 		t.Run(test.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "b"}, nil),
-			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"'a'", ""}, test.nulls), Quote).
-				WithSelectList(test.selectList)
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"'a'", ""}, test.nulls), Quote)
 			ok, info := fcTC.RunAndFree()
 			require.True(t, ok, info)
 		})
@@ -523,7 +510,7 @@ func TestQuoteRejectsInvalidUTF8FromBinaryInput(t *testing.T) {
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
 
-	err := Quote([]*vector.Vector{input}, result, proc, 1, nil)
+	err := Quote([]*vector.Vector{input}, result, proc, 1)
 	var conversionErr *moerr.Error
 	require.ErrorAs(t, err, &conversionErr)
 	require.Equal(t, moerr.ER_CANNOT_CONVERT_STRING, conversionErr.MySQLCode())
@@ -1023,22 +1010,12 @@ func TestStGeomFromWKBWithSRIDRejectsInvalidInput(t *testing.T) {
 
 	masked := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-wkb", validWKB}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-wkb", validWKB}, []bool{true, false}),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, 4326}, []bool{false, false}),
 		},
 		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", "POINT(1 2)"}, []bool{true, false}),
-		StGeomFromWKBWithSRID).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+		StGeomFromWKBWithSRID)
 	ok, info := masked.RunAndFree()
-	require.True(t, ok, info)
-
-	allMasked := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-wkb", "not-a-wkb"}, []bool{false, false}),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -1}, []bool{false, false}),
-		},
-		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", ""}, []bool{true, true}),
-		StGeomFromWKBWithSRID).WithSelectList(&FunctionSelectList{AllNull: true})
-	ok, info = allMasked.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -1248,22 +1225,12 @@ func TestStSRIDWithSRIDRejectsInvalidInputAndHonorsSelection(t *testing.T) {
 
 	masked := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_geometry.ToType(), []string{"not-a-geometry", validWKB}, []bool{false, false}),
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"not-a-geometry", validWKB}, []bool{true, false}),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, 4326}, []bool{false, false}),
 		},
 		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", "POINT(1 2)"}, []bool{true, false}),
-		StSRIDWithSRID).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+		StSRIDWithSRID)
 	ok, info := masked.RunAndFree()
-	require.True(t, ok, info)
-
-	allMasked := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_geometry.ToType(), []string{"not-a-geometry", "not-a-geometry"}, []bool{false, false}),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -1}, []bool{false, false}),
-		},
-		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", ""}, []bool{true, true}),
-		StSRIDWithSRID).WithSelectList(&FunctionSelectList{AllNull: true})
-	ok, info = allMasked.RunAndFree()
 	require.True(t, ok, info)
 }
 
@@ -3335,21 +3302,6 @@ func TestBinStringUsesNumericPrefix(t *testing.T) {
 	require.True(t, s, info)
 }
 
-func TestBinStringSkipsMaskedInvalidInput(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	tc := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-number", "7x"}, []bool{false, false}),
-		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "111"}, []bool{true, false}),
-		BinString).WithSelectList(&FunctionSelectList{
-		AnyNull:    true,
-		SelectList: []bool{false, true},
-	})
-	s, info := tc.RunAndFree()
-	require.True(t, s, info)
-}
-
 func TestBinTypeMatchPreservesNumericOverloads(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, typ := range []types.T{
@@ -3437,15 +3389,6 @@ func TestBinDynamicTypedDispatch(t *testing.T) {
 			require.True(t, succeed, info)
 		})
 	}
-
-	fc := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(decimalType, []types.Decimal64{decimal, decimal}, []bool{false, false}),
-		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", ""}, []bool{true, true}),
-		BinDynamic).WithSelectList(&FunctionSelectList{AllNull: true})
-	succeed, info := fc.RunAndFree()
-	require.True(t, succeed, info)
 }
 
 func TestBinDynamicCoversRemainingDomains(t *testing.T) {
@@ -3503,7 +3446,7 @@ func TestBinDynamicCoversRemainingDomains(t *testing.T) {
 		input := vector.NewVec(types.T_any.ToType(), proc.Mp())
 		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 		require.NoError(t, result.PreExtendAndReset(1))
-		require.NoError(t, BinDynamic([]*vector.Vector{input}, result, proc, 1, nil))
+		require.NoError(t, BinDynamic([]*vector.Vector{input}, result, proc, 1))
 		_, isNull := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
 		require.True(t, isNull)
 	})
@@ -3793,14 +3736,14 @@ func TestDateStringToDate(t *testing.T) {
 		})
 	}
 	for _, sqlMode := range []string{"", "NO_ZERO_DATE"} {
-		t.Run("zero and masked rows/"+sqlMode, func(t *testing.T) {
+		t.Run("zero and NULL rows/"+sqlMode, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad", "0000-00-00", "2024-02-29"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad", "0000-00-00", "2024-02-29"}, []bool{true, false, false}),
 			}, NewFunctionTestResult(types.T_date.ToType(), false,
 				[]types.Date{0, types.ZeroDate, types.DateFromCalendar(2024, 2, 29)}, []bool{true, sqlMode != "", false}),
-				DateStringToDate).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}})
+				DateStringToDate)
 			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 		})
@@ -4017,20 +3960,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 		require.True(t, succeed, info)
 	})
 
-	t.Run("masked binary row is not evaluated", func(t *testing.T) {
-		ftc := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"binary", "binary"}, []bool{false, false}),
-			},
-			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", ""}, []bool{true, true}),
-			JsonQuote).WithSelectList(&FunctionSelectList{
-			AnyNull:    true,
-			SelectList: []bool{false, false},
-		})
-		defer ftc.Free()
-		succeed, info := ftc.Run()
-		require.True(t, succeed, info)
-	})
 }
 
 func TestJsonQuoteReturnType(t *testing.T) {
@@ -4281,13 +4210,8 @@ func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 			input, wanted := jsonInputs, values
 			inputNulls := make([]bool, len(input))
 			wantedNulls := make([]bool, len(wanted))
-			var selected *FunctionSelectList
 			if scenario.masked {
-				inputNulls[1], wantedNulls[1], wantedNulls[2] = true, true, true
-				selected = &FunctionSelectList{AnyNull: true, SelectList: make([]bool, len(input))}
-				for row := range selected.SelectList {
-					selected.SelectList[row] = row != 2
-				}
+				inputNulls[1], inputNulls[2], wantedNulls[1], wantedNulls[2] = true, true, true, true
 			}
 			inputCase := NewFunctionTestInput(types.T_json.ToType(), input, inputNulls)
 			if scenario.constant {
@@ -4297,8 +4221,7 @@ func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 				inputCase = NewFunctionTestConstInput(types.T_json.ToType(), input, nil)
 			}
 			jsonTC := NewFunctionTestCase(proc, []FunctionTestInput{inputCase},
-				NewFunctionTestResult(types.T_varchar.ToType(), false, wanted, wantedNulls), JsonUnquote).
-				WithSelectList(selected)
+				NewFunctionTestResult(types.T_varchar.ToType(), false, wanted, wantedNulls), JsonUnquote)
 			defer jsonTC.Free()
 			jsonTC.fnLength = len(wanted)
 			source := jsonTC.parameters[0]
@@ -4508,11 +4431,11 @@ func TestDatalinkFileFunctionsSkipSelectedRows(t *testing.T) {
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{
 			filepath.Join(dir, "masked.txt"),
 			"file://" + input,
-		}, nil)},
+		}, []bool{true, false})},
 		NewFunctionTestResult(types.T_text.ToType(), false,
 			[]string{"", "selected content"}, []bool{true, false}),
 		LoadText,
-	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	)
 	s, info := loadTextCase.RunAndFree()
 	require.True(t, s, info)
 
@@ -4526,12 +4449,12 @@ func TestDatalinkFileFunctionsSkipSelectedRows(t *testing.T) {
 				filepath.Join(dir, "masked-output.txt"),
 				"file://" + output,
 			}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"masked", "written"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"masked", "written"}, []bool{true, false}),
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), false,
 			[]int64{0, int64(len("written"))}, []bool{true, false}),
 		WriteFileDatalink,
-	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	)
 	s, info = writeCase.RunAndFree()
 	require.True(t, s, info)
 	data, err := os.ReadFile(output)
@@ -4602,7 +4525,7 @@ func TestWriteFileDatalinkCancellationDoesNotReportSuccess(t *testing.T) {
 	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- WriteFileDatalink(tc.parameters, tc.result, proc, tc.fnLength, nil)
+		errCh <- WriteFileDatalink(tc.parameters, tc.result, proc, tc.fnLength)
 	}()
 	select {
 	case <-service.started:
@@ -4678,7 +4601,7 @@ func TestWriteFileDatalinkCompletionFailureIsNotReportedAsSuccess(t *testing.T) 
 	)
 	defer fc.Free()
 	require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
-	err = WriteFileDatalink(fc.parameters, fc.result, proc, fc.fnLength, nil)
+	err = WriteFileDatalink(fc.parameters, fc.result, proc, fc.fnLength)
 	require.ErrorIs(t, err, completionErr)
 	require.Equal(t, int32(1), service.writes.Load(), "the SQL path must reach the configured service")
 	require.Zero(t, vector.GetFixedAtWithTypeCheck[int64](fc.result.GetResultVector(), 0),
@@ -4698,7 +4621,6 @@ func evalLoadFileForTest(
 	proc *process.Process,
 	input FunctionTestInput,
 	fn executeLogicOfOverload,
-	selectList *FunctionSelectList,
 ) *vector.Vector {
 	t.Helper()
 	testCase := NewFunctionTestCase(
@@ -4715,7 +4637,6 @@ func evalLoadFileForTest(
 		testCase.result,
 		proc,
 		testCase.fnLength,
-		selectList,
 	))
 	return testCase.GetResultVectorDirectly()
 }
@@ -4733,7 +4654,7 @@ func requireLoadFileResult(t *testing.T, result *vector.Vector, values []string,
 	}
 }
 
-func TestLoadFileCardinalityAndSelection(t *testing.T) {
+func TestLoadFileCardinality(t *testing.T) {
 	dir := t.TempDir()
 	proc := newSQLFileAccessTestProc(t)
 	ctx := proc.Ctx
@@ -4762,7 +4683,7 @@ func TestLoadFileCardinalityAndSelection(t *testing.T) {
 	t.Run("zero rows", func(t *testing.T) {
 		result := evalLoadFileForTest(t, proc,
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil),
-			LoadFile, nil)
+			LoadFile)
 		requireLoadFileResult(t, result, nil, nil)
 	})
 
@@ -4770,7 +4691,7 @@ func TestLoadFileCardinalityAndSelection(t *testing.T) {
 		result := evalLoadFileForTest(t, proc,
 			NewFunctionTestConstInput(types.T_varchar.ToType(),
 				[]string{missingPath, missingPath}, []bool{true, false}),
-			LoadFile, nil)
+			LoadFile)
 		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
 	})
 
@@ -4778,7 +4699,7 @@ func TestLoadFileCardinalityAndSelection(t *testing.T) {
 		result := evalLoadFileForTest(t, proc,
 			NewFunctionTestConstInput(types.T_varchar.ToType(),
 				[]string{emptyPath, emptyPath}, nil),
-			LoadFile, nil)
+			LoadFile)
 		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
 	})
 
@@ -4786,10 +4707,9 @@ func TestLoadFileCardinalityAndSelection(t *testing.T) {
 		result := evalLoadFileForTest(t, proc,
 			NewFunctionTestConstInput(types.T_varchar.ToType(),
 				[]string{largeValuePath, largeValuePath, largeValuePath}, nil),
-			LoadFile,
-			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+			LoadFile)
 		requireLoadFileResult(t, result,
-			[]string{largeValue, "", largeValue}, []bool{false, true, false})
+			[]string{largeValue, largeValue, largeValue}, []bool{false, false, false})
 		require.Len(t, result.GetArea(), len(largeValue))
 	})
 
@@ -4797,27 +4717,9 @@ func TestLoadFileCardinalityAndSelection(t *testing.T) {
 		result := evalLoadFileForTest(t, proc,
 			NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{missingPath, emptyPath, valuePath}, []bool{true, false, false}),
-			LoadFile, nil)
+			LoadFile)
 		requireLoadFileResult(t, result,
 			[]string{"", "", "value"}, []bool{true, true, false})
-	})
-
-	t.Run("selection skips IO", func(t *testing.T) {
-		result := evalLoadFileForTest(t, proc,
-			NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{missingPath, valuePath}, nil),
-			LoadFile,
-			&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-		requireLoadFileResult(t, result, []string{"", "value"}, []bool{true, false})
-	})
-
-	t.Run("ignore all skips IO", func(t *testing.T) {
-		result := evalLoadFileForTest(t, proc,
-			NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{missingPath, missingPath}, nil),
-			LoadFile,
-			&FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false, false}})
-		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
 	})
 }
 
@@ -4852,7 +4754,7 @@ func TestLoadFileDatalink(t *testing.T) {
 	}
 }
 
-func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
+func TestLoadFileDatalinkCardinality(t *testing.T) {
 	dir := t.TempDir()
 	proc := newSQLFileAccessTestProc(t)
 	emptyPath := filepath.Join(dir, "empty")
@@ -4867,7 +4769,7 @@ func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
 	t.Run("zero rows", func(t *testing.T) {
 		result := evalLoadFileForTest(t, proc,
 			NewFunctionTestInput(types.T_datalink.ToType(), []string{}, nil),
-			LoadFileDatalink, nil)
+			LoadFileDatalink)
 		requireLoadFileResult(t, result, nil, nil)
 	})
 
@@ -4875,7 +4777,7 @@ func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
 		result := evalLoadFileForTest(t, proc,
 			NewFunctionTestInput(types.T_datalink.ToType(),
 				[]string{"file://" + emptyPath, "file://" + valuePath}, nil),
-			LoadFileDatalink, nil)
+			LoadFileDatalink)
 		requireLoadFileResult(t, result, []string{"", "value"}, []bool{true, false})
 
 		resultBatch := batch.NewWithSize(1)
@@ -4888,7 +4790,7 @@ func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
 		result := evalLoadFileForTest(t, proc,
 			NewFunctionTestConstInput(types.T_datalink.ToType(),
 				[]string{"file://" + emptyPath, "file://" + emptyPath}, nil),
-			LoadFileDatalink, nil)
+			LoadFileDatalink)
 		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
 	})
 
@@ -4896,7 +4798,7 @@ func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
 		result := evalLoadFileForTest(t, proc,
 			NewFunctionTestConstInput(types.T_datalink.ToType(),
 				[]string{"file://" + valuePath, "file://" + valuePath}, nil),
-			LoadFileDatalink, nil)
+			LoadFileDatalink)
 		requireLoadFileResult(t, result, []string{"value", "value"}, []bool{false, false})
 	})
 
@@ -4905,10 +4807,9 @@ func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
 		result := evalLoadFileForTest(t, proc,
 			NewFunctionTestConstInput(types.T_datalink.ToType(),
 				[]string{datalink, datalink, datalink}, nil),
-			LoadFileDatalink,
-			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+			LoadFileDatalink)
 		requireLoadFileResult(t, result,
-			[]string{largeValue, "", largeValue}, []bool{false, true, false})
+			[]string{largeValue, largeValue, largeValue}, []bool{false, false, false})
 		require.Len(t, result.GetArea(), len(largeValue))
 	})
 
@@ -4916,25 +4817,7 @@ func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
 		result := evalLoadFileForTest(t, proc,
 			NewFunctionTestConstInput(types.T_datalink.ToType(),
 				[]string{"file://" + missingPath, "file://" + missingPath}, []bool{true, false}),
-			LoadFileDatalink, nil)
-		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
-	})
-
-	t.Run("selection skips IO", func(t *testing.T) {
-		result := evalLoadFileForTest(t, proc,
-			NewFunctionTestInput(types.T_datalink.ToType(),
-				[]string{"file://" + missingPath, "file://" + valuePath}, nil),
-			LoadFileDatalink,
-			&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-		requireLoadFileResult(t, result, []string{"", "value"}, []bool{true, false})
-	})
-
-	t.Run("ignore all skips IO", func(t *testing.T) {
-		result := evalLoadFileForTest(t, proc,
-			NewFunctionTestInput(types.T_datalink.ToType(),
-				[]string{"file://" + missingPath, "file://" + missingPath}, nil),
-			LoadFileDatalink,
-			&FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false, false}})
+			LoadFileDatalink)
 		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
 	})
 }
@@ -5145,18 +5028,16 @@ func TestSpaceLargeResultTypesAndDecimalCounts(t *testing.T) {
 	}
 }
 
-func TestSpaceSkipsNullAndMaskedLargeCounts(t *testing.T) {
+func TestSpaceSkipsNullLargeCounts(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	testCase := NewFunctionTestCase(proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(),
 			[]int64{65536, MaxAllowedValue + 1, MaxAllowedValue + 1, -1},
-			[]bool{false, true, false, false})},
+			[]bool{false, true, true, false})},
 		NewFunctionTestResult(types.New(types.T_text, types.MaxLongTextLen, 0), false,
 			[]string{strings.Repeat(" ", 65536), "", "", ""}, []bool{false, true, true, false}),
-		SpaceNumber[int64]).WithSelectList(&FunctionSelectList{
-		AnyNull: true, SelectList: []bool{true, true, false, true},
-	})
+		SpaceNumber[int64])
 	succeeded, info := testCase.RunAndFree()
 	require.True(t, succeeded, info)
 }
@@ -6064,32 +5945,6 @@ func TestStringTimeExtractRegisteredOverloads(t *testing.T) {
 	}
 }
 
-func TestStringTimeExtractSelectList(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	fcTC := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"12:30:45", "invalid"}, []bool{false, false}),
-		},
-		NewFunctionTestResult(types.T_uint32.ToType(), false, nil, nil),
-		StringToHour)
-	defer fcTC.Free()
-
-	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
-	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength,
-		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
-	resultVec := fcTC.result.GetResultVector()
-	require.Equal(t, uint32(12), vector.GetFixedAtNoTypeCheck[uint32](resultVec, 0))
-	require.True(t, resultVec.IsNull(1))
-
-	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
-	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength,
-		&FunctionSelectList{AllNull: true}))
-	resultVec = fcTC.result.GetResultVector()
-	for i := 0; i < fcTC.fnLength; i++ {
-		require.True(t, resultVec.IsNull(uint64(i)))
-	}
-}
-
 func initBinaryTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -6346,11 +6201,10 @@ func TestHexExplicitFloatRejectsSignedIntegerOverflow(t *testing.T) {
 	ok, info := fc.RunAndFree()
 	require.True(t, ok, info)
 
-	// A masked overflow row must not fail short-circuit evaluation.
+	// A NULL overflow row must not fail evaluation.
 	fc = NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(),
-		[]float64{1e20, 15.5}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false,
-		[]string{"", "F"}, []bool{true, false}), HexExplicitFloat64).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+		[]float64{1e20, 15.5}, []bool{true, false})}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{"", "F"}, []bool{true, false}), HexExplicitFloat64)
 	ok, info = fc.RunAndFree()
 	require.True(t, ok, info)
 }
@@ -6908,15 +6762,12 @@ func TestFromBase64SelectionAndReuse(t *testing.T) {
 		NewFunctionTestResult(types.T_blob.ToType(), false, nil, nil), FromBase64)
 	defer tc.Free()
 	for _, scenario := range []struct {
-		mask  *FunctionSelectList
 		nulls [3]bool
 	}{
-		{mask: &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}}, nulls: [3]bool{true, false, false}},
-		{mask: &FunctionSelectList{AllNull: true}, nulls: [3]bool{true, true, true}},
-		{mask: nil, nulls: [3]bool{false, false, false}},
+		{nulls: [3]bool{false, false, false}},
 	} {
 		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
-		require.NoError(t, FromBase64(tc.parameters, tc.result, proc, tc.fnLength, scenario.mask))
+		require.NoError(t, FromBase64(tc.parameters, tc.result, proc, tc.fnLength))
 		result := tc.result.GetResultVector()
 		require.Equal(t, len(values), result.Length())
 		for i, want := range []string{strings.Repeat("abc", 32), "ab", "abc"} {
@@ -6950,7 +6801,7 @@ func BenchmarkFromBase64(b *testing.B) {
 				// Reject deceptively fast implementations that return early or
 				// produce NULL instead of decoding every whitespace-bearing row.
 				require.NoError(b, tc.result.PreExtendAndReset(tc.fnLength))
-				require.NoError(b, FromBase64(tc.parameters, tc.result, proc, tc.fnLength, nil))
+				require.NoError(b, FromBase64(tc.parameters, tc.result, proc, tc.fnLength))
 				require.Equal(b, len(values), tc.result.GetResultVector().Length())
 				for i := range values {
 					require.False(b, tc.result.GetResultVector().IsNull(uint64(i)))
@@ -6963,7 +6814,7 @@ func BenchmarkFromBase64(b *testing.B) {
 					if err := tc.result.PreExtendAndReset(tc.fnLength); err != nil {
 						b.Fatal(err)
 					}
-					if err := FromBase64(tc.parameters, tc.result, proc, tc.fnLength, nil); err != nil {
+					if err := FromBase64(tc.parameters, tc.result, proc, tc.fnLength); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -7747,7 +7598,7 @@ func TestOctBinaryLiteral(t *testing.T) {
 	result.SetArgumentIsBin([]bool{true})
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
-	require.NoError(t, OctString([]*vector.Vector{input}, result, proc, input.Length(), nil))
+	require.NoError(t, OctString([]*vector.Vector{input}, result, proc, input.Length()))
 
 	parameter := vector.GenerateFunctionStrParameter(result.GetResultVector())
 	for i, want := range []string{"0", "", "377", "402", "377", "0"} {
@@ -10123,25 +9974,6 @@ func TestUserLevelLockBatchValidationPreventsPartialEffects(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrUserLockWrongName), err)
 		require.Equal(t, uint64(1), userLevelLockRefCount(userLevelLockOwner(proc), heldName))
 		value, isNull, err := releaseUserLevelLock(heldName, proc)
-		require.NoError(t, err)
-		require.False(t, isNull)
-		require.Equal(t, int64(1), value)
-	})
-}
-
-func TestUserLevelLockBatchSelectionSkipsNullName(t *testing.T) {
-	runUserLevelLockTest(t, func(services []lockservice.LockService) {
-		proc := newUserLevelLockTestProcess(t, services[0], "acc")
-		fc := NewFunctionTestCase(proc, []FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"selected_lock", ""}, []bool{false, true}),
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{0, math.NaN()}, []bool{false, false}),
-		}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 0}, []bool{false, true}), GetLock)
-		defer fc.Free()
-		fc.selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
-		succeeded, info := fc.Run()
-		require.True(t, succeeded, info)
-		require.Equal(t, uint64(1), userLevelLockRefCount(userLevelLockOwner(proc), "selected_lock"))
-		value, isNull, err := releaseUserLevelLock("selected_lock", proc)
 		require.NoError(t, err)
 		require.False(t, isNull)
 		require.Equal(t, int64(1), value)
@@ -13418,7 +13250,7 @@ func TestLastDayDateResultContracts(t *testing.T) {
 		}()
 	}
 	func() {
-		fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-02-10", "2024-02-10"}, nil)}, NewFunctionTestResult(types.T_date.ToType(), false, []types.Date{date("2024-02-29"), 0}, []bool{false, true}), LastDay).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-02-10", "2024-02-10"}, []bool{false, true})}, NewFunctionTestResult(types.T_date.ToType(), false, []types.Date{date("2024-02-29"), 0}, []bool{false, true}), LastDay)
 		defer fc.Free()
 		ok, info := fc.Run()
 		require.True(t, ok, info)
@@ -13445,11 +13277,13 @@ func TestCalendarNumericMaskedResults(t *testing.T) {
 		{"week datetime", NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.DateFromCalendar(2024, 12, 31).ToDatetime(), types.DateFromCalendar(2025, 1, 1).ToDatetime()}, nil), DatetimeToWeek, []int32{0, 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			inputs := []FunctionTestInput{tc.input}
+			input := tc.input
+			input.nullList = []bool{true, false}
+			inputs := []FunctionTestInput{input}
 			if tc.name != "dayofyear" {
 				inputs = append(inputs, NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, nil))
 			}
-			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_int32.ToType(), false, tc.want, []bool{true, false}), tc.fn).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_int32.ToType(), false, tc.want, []bool{true, false}), tc.fn)
 			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 		})
@@ -13615,5 +13449,5 @@ func TestCheckAsyncDatalinkSourceEligibility(t *testing.T) {
 	}, NewFunctionTestResult(types.T_bool.ToType(), false, nil, nil), CheckAsyncDatalinkSource)
 	defer denied.Free()
 	require.NoError(t, denied.result.PreExtendAndReset(denied.fnLength))
-	require.ErrorContains(t, denied.fn(denied.parameters, denied.result, proc, denied.fnLength, nil), "asynchronous indexes require remote Datalink sources")
+	require.ErrorContains(t, denied.fn(denied.parameters, denied.result, proc, denied.fnLength), "asynchronous indexes require remote Datalink sources")
 }

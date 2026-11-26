@@ -105,27 +105,6 @@ func TestLikeRowVaryingPatterns(t *testing.T) {
 	require.True(t, ok, info)
 }
 
-func TestLikePatternSelection(t *testing.T) {
-	proc := newLikeTestProcess(t)
-	for _, pattern := range []string{"a%b%c", "%a_b%c", "a%"} {
-		for _, allNull := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/allNull=%v", pattern, allNull), func(t *testing.T) {
-				tcc := NewFunctionTestCase(proc, []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{"aXbYc", "aXbYc"}, nil),
-					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{pattern}, nil),
-				}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, true}, []bool{true, allNull}),
-					func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
-						selection := &FunctionSelectList{AnyNull: true, AllNull: allNull, SelectList: []bool{false, true}}
-						return newOpBuiltInRegexp().likeFn(parameters, result, proc, length, selection)
-					})
-				defer tcc.Free()
-				ok, info := tcc.Run()
-				require.True(t, ok, info)
-			})
-		}
-	}
-}
-
 // Cancel a real context synchronously at an observable evaluation boundary.
 // No goroutine, deadline or production test hook is needed to cancel mid-batch.
 type likeCancelAfterChecksContext struct {
@@ -198,7 +177,7 @@ func TestLikeRegexpBatchHonorsCancellation(t *testing.T) {
 				if tc.insensitive {
 					fn = op.iLikeFn
 				}
-				err := fn(parameters, result, proc, rows, nil)
+				err := fn(parameters, result, proc, rows)
 				require.ErrorIs(t, err, context.Canceled)
 				require.Same(t, ctx.Err(), err, "return the original context error")
 				matches := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
@@ -249,7 +228,7 @@ func TestLikeFastPathBatchHonorsCancellation(t *testing.T) {
 				if insensitive {
 					fn = op.iLikeFn
 				}
-				err = fn([]*vector.Vector{values, patterns}, result, proc, rows, nil)
+				err = fn([]*vector.Vector{values, patterns}, result, proc, rows)
 				require.ErrorIs(t, err, context.Canceled)
 				require.Same(t, ctx.Err(), err)
 				matches := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
@@ -263,7 +242,7 @@ func TestLikeFastPathBatchHonorsCancellation(t *testing.T) {
 func TestLikeCancellationPreservesUnevaluatedRows(t *testing.T) {
 	for _, insensitive := range []bool{false, true} {
 		for _, explicit := range []bool{false, true} {
-			for _, mode := range []string{"NULL values", "NULL pattern", "all skipped", "partial selection"} {
+			for _, mode := range []string{"NULL values", "NULL pattern"} {
 				t.Run(fmt.Sprintf("%s/insensitive=%v/escape=%v", mode, insensitive, explicit), func(t *testing.T) {
 					proc := newLikeTestProcess(t)
 					pattern := NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a_%b"}, nil)
@@ -273,16 +252,8 @@ func TestLikeCancellationPreservesUnevaluatedRows(t *testing.T) {
 					valueNulls := []bool{false, false, false}
 					wantNulls := []bool{true, true, true}
 					want := []bool{false, false, false}
-					var selection *FunctionSelectList
-					switch mode {
-					case "NULL values":
+					if mode == "NULL values" {
 						valueNulls = []bool{true, true, true}
-					case "all skipped":
-						selection = &FunctionSelectList{AnyNull: true, AllNull: true}
-					case "partial selection":
-						selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}}
-						wantNulls = []bool{true, false, true}
-						want[1] = true
 					}
 					inputs := []FunctionTestInput{
 						NewFunctionTestInput(types.T_varchar.ToType(), []string{"aXXb", "aXXb", "aXXb"}, valueNulls), pattern,
@@ -298,14 +269,12 @@ func TestLikeCancellationPreservesUnevaluatedRows(t *testing.T) {
 						fn = op.iLikeFn
 					}
 					tcc := NewFunctionTestCase(proc, inputs,
-						NewFunctionTestResult(types.T_bool.ToType(), false, want, wantNulls), fn).WithSelectList(selection)
+						NewFunctionTestResult(types.T_bool.ToType(), false, want, wantNulls), fn)
 					defer tcc.Free()
 					ok, info := tcc.Run()
 					require.True(t, ok, info)
-					require.NoError(t, ctx.Err(), "NULL and skipped rows must not invoke a regexp matcher")
-					if mode != "partial selection" {
-						require.Empty(t, op.regMap.mp, "unevaluated patterns must remain unprepared")
-					}
+					require.NoError(t, ctx.Err(), "NULL rows must not invoke a regexp matcher")
+					require.Empty(t, op.regMap.mp, "unevaluated patterns must remain unprepared")
 				})
 			}
 		}

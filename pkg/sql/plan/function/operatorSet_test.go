@@ -176,22 +176,6 @@ func Test_Operator_Unary_Tilde(t *testing.T) {
 		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
-	{
-		// selective evaluation mask must not change the emitted rows.
-		tc := tcTemp{
-			info: "select unary_tilde(tinyint unsigned) with select list",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_uint8.ToType(),
-					[]uint8{0, 1, 255}, nil),
-			},
-			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
-				[]uint64{math.MaxUint64, math.MaxUint64 - 1, 18446744073709551360}, nil),
-		}
-		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint8]).
-			WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}})
-		succeed, info := tcc.RunAndFree()
-		require.True(t, succeed, tc.info, info)
-	}
 }
 
 func Test_Operator_Unary_Minus(t *testing.T) {
@@ -553,17 +537,15 @@ func Test_Operator_Xor(t *testing.T) {
 		left, right FunctionTestInput
 		wanted      []bool
 		nulls       []bool
-		selection   *FunctionSelectList
 	}{
-		{"left constant", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, nil), NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, false}, []bool{false, false, true}), []bool{true, false, false}, []bool{false, false, true}, nil},
-		{"right constant", NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, false}, []bool{false, false, true}), NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil), []bool{false, true, false}, []bool{false, false, true}, nil},
-		{"both constant broadcast", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, nil), NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil), []bool{true, true, true}, nil, nil},
-		{"left constant null", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, []bool{true}), NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true}, nil), []bool{false, false, false}, []bool{true, true, true}, nil},
-		{"right constant null", NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true}, nil), NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, []bool{true}), []bool{false, false, false}, []bool{true, true, true}, nil},
-		{"direct row selection", NewFunctionTestInput(types.T_bool.ToType(), []bool{false, false}, nil), NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil), []bool{false, false}, []bool{true, false}, &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}},
+		{"left constant", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, nil), NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, false}, []bool{false, false, true}), []bool{true, false, false}, []bool{false, false, true}},
+		{"right constant", NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, false}, []bool{false, false, true}), NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil), []bool{false, true, false}, []bool{false, false, true}},
+		{"both constant broadcast", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, nil), NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil), []bool{true, true, true}, nil},
+		{"left constant null", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, []bool{true}), NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true}, nil), []bool{false, false, false}, []bool{true, true, true}},
+		{"right constant null", NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true}, nil), NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, []bool{true}), []bool{false, false, false}, []bool{true, true, true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, NewFunctionTestResult(types.T_bool.ToType(), false, tc.wanted, tc.nulls), xorFn).WithSelectList(tc.selection)
+			c := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, NewFunctionTestResult(types.T_bool.ToType(), false, tc.wanted, tc.nulls), xorFn)
 			t.Cleanup(c.Free)
 			c.fnLength = len(tc.wanted)
 			ok, info := c.Run()
@@ -863,7 +845,7 @@ func TestCaseFixedNullElse(t *testing.T) {
 		tc.result = vector.NewFunctionResultWrapper(types.T_int64.ToType(), selection)
 		for _, n := range []int{130, 65, 130} {
 			require.NoError(t, tc.result.PreExtendAndReset(n))
-			require.NoError(t, caseFn(tc.parameters, tc.result, proc, n, nil))
+			require.NoError(t, caseFn(tc.parameters, tc.result, proc, n))
 			result := tc.result.GetResultVector()
 			for i := 0; i < n; i++ {
 				require.Equal(t, !conditions[i], result.IsNull(uint64(i)), "length %d row %d", n, i)
@@ -1467,37 +1449,6 @@ func TestIffFn_DecimalConditionBatch(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{20, 11, 22}, nil), iffFn)
 	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
-}
-
-func TestIffFn_SkipsInactiveRows(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	tc := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"0x10", "bad", "0"}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 11, 12}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22}, nil),
-		},
-		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil), iffFn)
-	defer tc.Free()
-
-	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
-	err := iffFn(tc.parameters, tc.result, proc, tc.fnLength,
-		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
-	require.NoError(t, err)
-	result := tc.result.GetResultVector()
-	require.Equal(t, tc.fnLength, result.Length())
-	require.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](result, 0))
-	require.True(t, result.GetNulls().Contains(1))
-	require.Equal(t, int64(22), vector.GetFixedAtNoTypeCheck[int64](result, 2))
-
-	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
-	err = iffFn(tc.parameters, tc.result, proc, tc.fnLength, &FunctionSelectList{AllNull: true})
-	require.NoError(t, err)
-	result = tc.result.GetResultVector()
-	require.Equal(t, tc.fnLength, result.Length())
-	for i := uint64(0); i < uint64(tc.fnLength); i++ {
-		require.True(t, result.GetNulls().Contains(i))
-	}
 }
 
 func Test_CaseCheck_MixedStringNumeric(t *testing.T) {

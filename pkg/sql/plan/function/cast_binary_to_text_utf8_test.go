@@ -26,7 +26,7 @@ import (
 )
 
 // castFn matches the overload constructors (NewExplicitCast, NewCast, ...).
-type castFn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+type castFn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error
 
 // runBinarySourceTextCast drives a real cast overload with a binary-flagged
 // varlena source (published as a binary-literal argument) and a text-family target,
@@ -42,7 +42,7 @@ func runBinarySourceTextCast(t *testing.T, proc *process.Process, fn castFn, val
 	result.SetArgumentIsBin([]bool{true})
 	t.Cleanup(result.Free)
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
-	require.NoError(t, fn([]*vector.Vector{input, targetMarker}, result, proc, input.Length(), nil))
+	require.NoError(t, fn([]*vector.Vector{input, targetMarker}, result, proc, input.Length()))
 	return result.GetResultVector()
 }
 
@@ -140,14 +140,14 @@ func TestNonExplicitModesKeepBinaryPayload(t *testing.T) {
 
 // runExplicitCastOn drives the real explicit-cast overload with a caller-built
 // source vector; the binary domain comes from the vector itself.
-func runExplicitCastOn(t *testing.T, proc *process.Process, input *vector.Vector, target types.Type, selectList *FunctionSelectList) *vector.Vector {
+func runExplicitCastOn(t *testing.T, proc *process.Process, input *vector.Vector, target types.Type) *vector.Vector {
 	t.Helper()
 	targetMarker := testutil.MakeVarlenaVector([][]byte{{0}}, nil, target, proc.Mp())
 	t.Cleanup(func() { targetMarker.Free(proc.Mp()) })
 	result := vector.NewFunctionResultWrapper(target, proc.Mp())
 	t.Cleanup(result.Free)
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
-	require.NoError(t, NewExplicitCast([]*vector.Vector{input, targetMarker}, result, proc, input.Length(), selectList))
+	require.NoError(t, NewExplicitCast([]*vector.Vector{input, targetMarker}, result, proc, input.Length()))
 	return result.GetResultVector()
 }
 
@@ -176,10 +176,10 @@ func TestExplicitCastOfUnhexResultRejectsInvalidUtf8(t *testing.T) {
 	unhexRes := vector.NewFunctionResultWrapper(unhexReturnType([]types.Type{srcType}), proc.Mp())
 	t.Cleanup(unhexRes.Free)
 	require.NoError(t, unhexRes.PreExtendAndReset(1))
-	require.NoError(t, Unhex([]*vector.Vector{src}, unhexRes, proc, 1, nil))
+	require.NoError(t, Unhex([]*vector.Vector{src}, unhexRes, proc, 1))
 	produced := unhexRes.GetResultVector()
 	require.Equal(t, []byte{0xC3, 0x28}, produced.GetBytesAt(0), "UNHEX('C328') real bytes")
-	res := runExplicitCastOn(t, proc, produced, types.T_varchar.ToType(), nil)
+	res := runExplicitCastOn(t, proc, produced, types.T_varchar.ToType())
 	require.True(t, res.IsNull(0), "explicit CAST(UNHEX('C328') AS CHAR) must be NULL")
 	require.Equal(t, []numericWarning{{1300, "Invalid utf8mb4 character string: 'c328'"}}, sink.warnings)
 }
@@ -195,8 +195,8 @@ func TestExplicitCastOfUnhexResultKeepsLegalUtf8(t *testing.T) {
 	unhexRes := vector.NewFunctionResultWrapper(unhexReturnType([]types.Type{srcType}), proc.Mp())
 	t.Cleanup(unhexRes.Free)
 	require.NoError(t, unhexRes.PreExtendAndReset(1))
-	require.NoError(t, Unhex([]*vector.Vector{src}, unhexRes, proc, 1, nil))
-	res := runExplicitCastOn(t, proc, unhexRes.GetResultVector(), types.T_varchar.ToType(), nil)
+	require.NoError(t, Unhex([]*vector.Vector{src}, unhexRes, proc, 1))
+	res := runExplicitCastOn(t, proc, unhexRes.GetResultVector(), types.T_varchar.ToType())
 	require.False(t, res.IsNull(0))
 	require.Equal(t, []byte("中"), res.GetBytesAt(0))
 	require.Empty(t, sink.warnings)
@@ -208,7 +208,7 @@ func TestExplicitCastStaticBinaryDomainWithoutLegacyFlag(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	sink := &numericWarningSession{}
 	proc.WarningSink = sink
-	res := runExplicitCastOn(t, proc, staticBinaryVector(t, proc, [][]byte{{0xFF}}, nil), types.T_varchar.ToType(), nil)
+	res := runExplicitCastOn(t, proc, staticBinaryVector(t, proc, [][]byte{{0xFF}}, nil), types.T_varchar.ToType())
 	require.True(t, res.IsNull(0))
 	require.Equal(t, []numericWarning{{1300, "Invalid utf8mb4 character string: 'ff'"}}, sink.warnings)
 }
@@ -219,21 +219,8 @@ func TestExplicitCastNullAndUnselectedRowsSkipWarning(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		sink := &numericWarningSession{}
 		proc.WarningSink = sink
-		res := runExplicitCastOn(t, proc, staticBinaryVector(t, proc, [][]byte{{0xFF}}, []uint64{0}), types.T_varchar.ToType(), nil)
+		res := runExplicitCastOn(t, proc, staticBinaryVector(t, proc, [][]byte{{0xFF}}, []uint64{0}), types.T_varchar.ToType())
 		require.True(t, res.IsNull(0))
 		require.Empty(t, sink.warnings, "NULL rows must not warn")
-	})
-	t.Run("unselected_row", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		sink := &numericWarningSession{}
-		proc.WarningSink = sink
-		vec := staticBinaryVector(t, proc, [][]byte{{0xFF}, []byte("abc")}, nil)
-		// SelectList is inverted: with AnyNull set, SelectList[i]==false skips row i.
-		sel := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
-		res := runExplicitCastOn(t, proc, vec, types.T_varchar.ToType(), sel)
-		require.True(t, res.IsNull(0), "skipped row stays NULL")
-		require.False(t, res.IsNull(1))
-		require.Equal(t, []byte("abc"), res.GetBytesAt(1))
-		require.Empty(t, sink.warnings, "unselected rows must not warn")
 	})
 }

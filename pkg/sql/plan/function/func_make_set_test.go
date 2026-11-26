@@ -135,31 +135,20 @@ func TestMakeSetDecimal(t *testing.T) {
 				}
 				result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 				t.Cleanup(result.Free)
-				for _, masked := range []bool{false, true} {
-					var selection *FunctionSelectList
-					if masked {
-						selected := make([]bool, n)
-						for i := range selected {
-							selected[i] = true
-						}
-						selected[0] = false
-						selection = &FunctionSelectList{AnyNull: true, SelectList: selected}
+				require.NoError(t, result.PreExtendAndReset(n))
+				require.NoError(t, MakeSet(inputs, result, proc, n))
+				require.Equal(t, n, result.GetResultVector().Length())
+				output := vector.GenerateFunctionStrParameter(result.GetResultVector())
+				for i := 0; i < n; i++ {
+					r := rows[0]
+					if !constant {
+						r = rows[i]
 					}
-					require.NoError(t, result.PreExtendAndReset(n))
-					require.NoError(t, MakeSet(inputs, result, proc, n, selection))
-					require.Equal(t, n, result.GetResultVector().Length())
-					output := vector.GenerateFunctionStrParameter(result.GetResultVector())
-					for i := 0; i < n; i++ {
-						r := rows[0]
-						if !constant {
-							r = rows[i]
-						}
-						got, isNull := output.GetStrValue(uint64(i))
-						wantNull := r.value == "NULL" || (masked && i == 0)
-						require.Equalf(t, wantNull, isNull, "value=%s masked=%v row=%d", r.value, masked, i)
-						if !wantNull {
-							require.Equalf(t, r.want, string(got), "value=%s", r.value)
-						}
+					got, isNull := output.GetStrValue(uint64(i))
+					wantNull := r.value == "NULL"
+					require.Equalf(t, wantNull, isNull, "value=%s row=%d", r.value, i)
+					if !wantNull {
+						require.Equalf(t, r.want, string(got), "value=%s", r.value)
 					}
 				}
 			}

@@ -22,12 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func builtInInternalTableCollation(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInInternalTableCollation(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	input := vector.GenerateFunctionStrParameter(parameters[0])
 	output := vector.MustFunctionResult[types.Varlena](result)
 	for row := uint64(0); row < uint64(length); row++ {
 		data, null := input.GetStrValue(row)
-		if null || functionRowSkipped(selectList, row) {
+		if null {
 			if err := output.AppendBytes(nil, true); err != nil {
 				return err
 			}

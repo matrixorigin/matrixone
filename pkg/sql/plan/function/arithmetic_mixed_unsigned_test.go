@@ -112,7 +112,7 @@ func TestMixedUnsignedArithmeticDomainChecks(t *testing.T) {
 	}
 }
 
-func TestMixedUnsignedArithmeticSkipsMaskedRows(t *testing.T) {
+func TestMixedUnsignedArithmeticSkipsNullRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	maxUnsigned := uint64(math.MaxUint64)
@@ -125,23 +125,8 @@ func TestMixedUnsignedArithmeticSkipsMaskedRows(t *testing.T) {
 		mixedUnsignedPlusFn,
 	)
 	defer caseUnderTest.Free()
-	caseUnderTest = caseUnderTest.WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
-	result, err := caseUnderTest.DebugRun()
-	require.NoError(t, err)
-	require.False(t, result.GetNulls().Contains(0))
-	require.True(t, result.GetNulls().Contains(1))
-	require.Equal(t, maxUnsigned, vector.GetFixedAtNoTypeCheck[uint64](result, 0))
-
-	// Reusing the result must not preserve a prior selection's NULL bitmap.
-	caseUnderTest = caseUnderTest.WithSelectList(&FunctionSelectList{AllNull: true})
-	result, err = caseUnderTest.DebugRun()
-	require.NoError(t, err)
-	require.True(t, result.GetNulls().Contains(0))
-	require.True(t, result.GetNulls().Contains(1))
-
 	caseUnderTest.parameters[1].GetNulls().Add(1)
-	caseUnderTest = caseUnderTest.WithSelectList(nil)
-	result, err = caseUnderTest.DebugRun()
+	result, err := caseUnderTest.DebugRun()
 	require.NoError(t, err)
 	require.False(t, result.GetNulls().Contains(0))
 	require.True(t, result.GetNulls().Contains(1))

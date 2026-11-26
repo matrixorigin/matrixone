@@ -117,7 +117,7 @@ func TestDecimalArithmeticErrorMapping(t *testing.T) {
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
 
-	err = decimalBatchArith[types.Decimal128, types.Decimal128](inputs, result, proc, 1, d128Add, nil)
+	err = decimalBatchArith[types.Decimal128, types.Decimal128](inputs, result, proc, 1, d128Add)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
 }

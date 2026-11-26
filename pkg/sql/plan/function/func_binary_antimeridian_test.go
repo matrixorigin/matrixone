@@ -175,16 +175,6 @@ func TestWGS84AntimeridianGeometry32AndMaskedRows(t *testing.T) {
 	require.True(t, ok, info)
 	_, err := geo.ReadWKBFloat32(intersection.GetResultVectorDirectly().GetBytesAt(0))
 	require.NoError(t, err, "intersection should preserve GEOMETRY32 encoding")
-
-	masked := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(geometry32, []string{"POINT(181 0)", g32(antimeridianOuter)}, []bool{false, false}),
-			NewFunctionTestInput(geometry32, []string{g32(antimeridianInner), g32(antimeridianInner)}, []bool{false, false}),
-		},
-		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, true}, []bool{true, false}), StIntersects).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-	ok, info = masked.RunAndFree()
-	require.True(t, ok, info)
 }
 
 func TestWGS84AntimeridianRejectsOutOfRangeCoordinates(t *testing.T) {
@@ -194,7 +184,7 @@ func TestWGS84AntimeridianRejectsOutOfRangeCoordinates(t *testing.T) {
 		NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil), StIntersects)
 	defer fc.Free()
 	require.NoError(t, fc.result.PreExtendAndReset(2))
-	err := StIntersects(fc.parameters, fc.result, proc, 2, nil)
+	err := StIntersects(fc.parameters, fc.result, proc, 2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "SRID 4326 longitude")
 }

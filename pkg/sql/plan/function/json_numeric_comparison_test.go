@@ -230,7 +230,7 @@ func TestJSONNumericDirectTypesAndResolution(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp())
 			t.Cleanup(result.Free)
 			require.NoError(t, result.PreExtendAndReset(2))
-			require.NoError(t, greatThanFn([]*vector.Vector{jsonVector, numbers}, result, proc, 2, nil))
+			require.NoError(t, greatThanFn([]*vector.Vector{jsonVector, numbers}, result, proc, 2))
 			require.Equal(t, []bool{true, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 			for _, name := range []string{"=", "!=", "<=>", "<", "<=", ">", ">="} {
 				for _, reversed := range []bool{false, true} {
@@ -317,7 +317,7 @@ func BenchmarkJSONNumericDirectComparison(b *testing.B) {
 					if err := result.PreExtendAndReset(length); err != nil {
 						b.Fatal(err)
 					}
-					if err := greatThanFn(args, result, proc, length, nil); err != nil {
+					if err := greatThanFn(args, result, proc, length); err != nil {
 						b.Fatal(err)
 					}
 				}

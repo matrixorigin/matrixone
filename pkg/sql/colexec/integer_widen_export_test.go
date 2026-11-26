@@ -16,17 +16,16 @@ package colexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // ObserveIntegerWideningCastForTest lets the external binder test inspect the
 // selection at the real cast boundary without a production hook or counter.
-func ObserveIntegerWideningCastForTest(executor ExpressionExecutor, observe func(*function.FunctionSelectList)) {
+func ObserveIntegerWideningCastForTest(executor ExpressionExecutor, observe func()) {
 	cast := executor.(*FunctionExpressionExecutor).parameterExecutor[0].(*FunctionExpressionExecutor)
 	original := cast.evalFn
-	cast.evalFn = func(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int, s *function.FunctionSelectList) error {
-		observe(s)
-		return original(p, r, proc, n, s)
+	cast.evalFn = func(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int) error {
+		observe()
+		return original(p, r, proc, n)
 	}
 }

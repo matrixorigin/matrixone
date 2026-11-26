@@ -915,12 +915,12 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		evalProc.Ctx = proc.Ctx
 		evalProc.WarningSink = probe
 	}
-	err = exec(inputs, result, evalProc, evaluateLength, nil)
+	err = exec(inputs, result, evalProc, evaluateLength)
 	if probe != nil && (err != nil || probe.Warned()) {
 		// The probe has no statement-visible effects. Re-evaluate at the
 		// requested cardinality so the caller owns diagnostics and errors.
 		if err = result.PreExtendAndReset(length); err == nil {
-			err = exec(inputs, result, proc, length, nil)
+			err = exec(inputs, result, proc, length)
 		}
 	}
 	if err != nil {
@@ -1355,8 +1355,7 @@ type FuncNew struct {
 
 type executeLogicOfOverload func(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
-	proc *process.Process, length int,
-	selectList *FunctionSelectList) error
+	proc *process.Process, length int) error
 
 // executeFreeOfOverload is used to free the resources allocated by the execution logic.
 // It is mainly used in SERIAL and SERIAL_FULL.
@@ -1614,33 +1613,6 @@ func newCheckResultWithCast(overloadId int, castType []types.Type) checkResult {
 		idx:       overloadId,
 		finalType: castType,
 	}
-}
-
-type FunctionSelectList struct {
-	AnyNull    bool
-	AllNull    bool
-	SelectList []bool
-}
-
-func (selectList *FunctionSelectList) ShouldEvalAllRow() bool {
-	if selectList == nil {
-		return true
-	}
-	return !selectList.AnyNull
-}
-
-func (selectList *FunctionSelectList) IgnoreAllRow() bool {
-	if selectList == nil {
-		return false
-	}
-	return selectList.AllNull
-}
-
-func (selectList *FunctionSelectList) Contains(row uint64) bool {
-	if selectList == nil || len(selectList.SelectList) <= int(row) {
-		return false
-	}
-	return !selectList.SelectList[row]
 }
 
 var EncodeOverloadID = encodeOverloadID

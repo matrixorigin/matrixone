@@ -29,7 +29,7 @@ import (
 
 // jsonUnquoteBeforeBorrowedString is the implementation from 730437ed46,
 // retained here to compare the complete vector path with the same append APIs.
-func jsonUnquoteBeforeBorrowedString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func jsonUnquoteBeforeBorrowedString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	jsonSingle := func(v []byte) (string, error) {
 		bj := types.DecodeJson(v)
 		return bj.Unquote()
@@ -59,7 +59,7 @@ func jsonUnquoteBeforeBorrowedString(ivecs []*vector.Vector, result vector.Funct
 		return jsonSingle(v)
 	}
 
-	return opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, single, selectList)
+	return opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, single)
 }
 
 func BenchmarkJsonUnquote(b *testing.B) {
@@ -152,7 +152,7 @@ func BenchmarkJsonUnquote(b *testing.B) {
 						if err := fc.result.PreExtendAndReset(scenario.rows); err != nil {
 							b.Fatal(err)
 						}
-						if err := implementation.fn(fc.parameters, fc.result, proc, scenario.rows, nil); err != nil {
+						if err := implementation.fn(fc.parameters, fc.result, proc, scenario.rows); err != nil {
 							b.Fatal(err)
 						}
 					}

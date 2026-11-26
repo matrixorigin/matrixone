@@ -24,7 +24,7 @@ import (
 
 // A dynamic ADDTIME/SUBTIME result is TIME even for calendar input. Calendar
 // arithmetic precedes clock extraction; genuine durations retain hours > 24.
-func timeResultArithmetic(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, subtract bool) error {
+func timeResultArithmetic(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, subtract bool) error {
 	results := vector.MustFunctionResult[types.Time](result)
 	scale := max(results.GetType().Scale, parameters[1].GetType().Scale)
 	var read func(uint64) (types.Datetime, types.Time, temporalStringKind, bool)
@@ -59,12 +59,6 @@ func timeResultArithmetic(parameters []*vector.Vector, result vector.FunctionRes
 	}
 	second := vector.GenerateFunctionStrParameter(parameters[1])
 	for row := uint64(0); row < uint64(length); row++ {
-		if functionRowSkipped(selectList, row) {
-			if err := results.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		text, isNull := second.GetStrValue(row)
 		if isNull {
 			if err := results.Append(0, true); err != nil {

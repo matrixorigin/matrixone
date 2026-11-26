@@ -124,23 +124,19 @@ func (op *opBuiltInWasm) runWasm(fn string, arg []byte) ([]byte, error) {
 }
 
 func (op *opBuiltInWasm) wasm(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.tryWasmImpl(params, result, proc, length, selectList, false)
+	proc *process.Process, length int) error {
+	return op.tryWasmImpl(params, result, proc, length, false)
 }
 
 func (op *opBuiltInWasm) tryWasm(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.tryWasmImpl(params, result, proc, length, selectList, true)
+	proc *process.Process, length int) error {
+	return op.tryWasmImpl(params, result, proc, length, true)
 }
 
 func (op *opBuiltInWasm) tryWasmImpl(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList, isTry bool) error {
+	proc *process.Process, length int, isTry bool) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	if length == 0 {
-		return nil
-	}
-	if selectList.IgnoreAllRow() {
-		rs.SetNullResult(uint64(length))
 		return nil
 	}
 
@@ -160,12 +156,6 @@ func (op *opBuiltInWasm) tryWasmImpl(params []*vector.Vector, result vector.Func
 	p3 := vector.GenerateFunctionStrParameter(params[2])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		fn, isnull := p2.GetStrValue(i)
 		if isnull {
 			if err := rs.AppendBytes(nil, true); err != nil {

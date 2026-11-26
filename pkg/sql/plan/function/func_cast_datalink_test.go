@@ -28,14 +28,13 @@ func TestCastToDatalinkValidatesValues(t *testing.T) {
 	datalinkType := types.T_datalink.ToType()
 
 	for _, test := range []struct {
-		name       string
-		cast       executeLogicOfOverload
-		values     []string
-		nulls      []bool
-		selectList *FunctionSelectList
-		want       []string
-		wantNulls  []bool
-		wantErr    bool
+		name      string
+		cast      executeLogicOfOverload
+		values    []string
+		nulls     []bool
+		want      []string
+		wantNulls []bool
+		wantErr   bool
 	}{
 		{
 			name:    "assignment rejects unsupported scheme",
@@ -58,14 +57,6 @@ func TestCastToDatalinkValidatesValues(t *testing.T) {
 			wantNulls: []bool{false, true},
 		},
 		{
-			name:       "inactive invalid value is not evaluated",
-			cast:       NewAssignCast,
-			values:     []string{"file:///tmp/object.txt", "not-a-datalink"},
-			selectList: &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}},
-			want:       []string{"file:///tmp/object.txt", ""},
-			wantNulls:  []bool{false, true},
-		},
-		{
 			name:    "active invalid value after valid row is rejected",
 			cast:    NewAssignCast,
 			values:  []string{"file:///tmp/object.txt", "not-a-datalink"},
@@ -80,7 +71,7 @@ func TestCastToDatalinkValidatesValues(t *testing.T) {
 				},
 				NewFunctionTestResult(datalinkType, test.wantErr, test.want, test.wantNulls),
 				test.cast,
-			).WithSelectList(test.selectList)
+			)
 
 			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)

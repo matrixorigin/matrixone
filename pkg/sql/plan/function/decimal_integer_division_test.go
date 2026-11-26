@@ -136,9 +136,8 @@ func TestDecimalIntegerDivUnsignedVectorAdmission(t *testing.T) {
 			require.True(t, ok, info)
 		})
 	}
-	// The existing wrapper must mask a bad negative row before the kernel runs.
-	fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(typ, []types.Decimal256{{B0_63: 5}, {B0_63: ^uint64(4), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}}, []bool{false, false}), NewFunctionTestInput(typ, []types.Decimal256{{B0_63: 2}, {B0_63: 2}}, []bool{false, false})}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{2, 0}, []bool{false, true}), decimalIntegerDivUnsignedFn)
-	fc.selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+	// A NULL negative row must not reach the kernel's range check.
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(typ, []types.Decimal256{{B0_63: 5}, {B0_63: ^uint64(4), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}}, []bool{false, true}), NewFunctionTestInput(typ, []types.Decimal256{{B0_63: 2}, {B0_63: 2}}, []bool{false, false})}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{2, 0}, []bool{false, true}), decimalIntegerDivUnsignedFn)
 	ok, info := fc.RunAndFree()
 	require.True(t, ok, info)
 }
@@ -146,15 +145,14 @@ func TestDecimalIntegerDivUnsignedVectorAdmission(t *testing.T) {
 // Exercise the new overload's diagnostic boundary, including failed kernels.
 func TestDecimalIntegerDivUnsignedWarnings(t *testing.T) {
 	for _, tc := range []struct {
-		name                                      string
-		disabled, dml, allMasked, empty, negative bool
-		code                                      uint16
-		want                                      uint64
+		name                           string
+		disabled, dml, empty, negative bool
+		code                           uint16
+		want                           uint64
 	}{
 		{name: "enabled", want: 1},
 		{name: "disabled", disabled: true},
 		{name: "strict DML", dml: true, code: moerr.ErrDivByZero},
-		{name: "all masked", allMasked: true},
 		{name: "empty", empty: true},
 		{name: "negative result", negative: true, code: moerr.ErrOutOfRange},
 	} {
@@ -183,21 +181,20 @@ func TestDecimalIntegerDivUnsignedWarnings(t *testing.T) {
 			}
 			test := NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestInput(typ, left, []bool{false, true, false, false, false}),
-				NewFunctionTestInput(typ, right, []bool{false, false, true, false, false}),
+				NewFunctionTestInput(typ, right, []bool{false, false, true, false, true}),
 			}, NewFunctionTestResult(types.T_uint64.ToType(), false, nil, nil), decimalIntegerDivUnsignedFn)
 			defer test.Free()
 			length := 5
 			if tc.empty {
 				length = 0
 			}
-			selection := &FunctionSelectList{AnyNull: true, AllNull: tc.allMasked, SelectList: []bool{true, true, true, true, false}}
 			require.NoError(t, test.result.PreExtendAndReset(length))
-			err := test.fn(test.parameters, test.result, proc, length, selection)
+			err := test.fn(test.parameters, test.result, proc, length)
 			if tc.code != 0 {
 				require.True(t, moerr.IsMoErrCode(err, tc.code), err)
 			} else {
 				require.NoError(t, err)
-				if !tc.allMasked && !tc.empty {
+				if !tc.empty {
 					for _, row := range []uint64{0, 1, 2, 4} {
 						require.True(t, test.GetResultVectorDirectly().IsNull(row))
 					}

@@ -312,7 +312,7 @@ func TestTimestampTemporalResultPaths(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(resultType, proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, TimestampAddTimestamp([]*vector.Vector{unit, interval, timestamp}, result, proc, 1, nil))
+	require.NoError(t, TimestampAddTimestamp([]*vector.Vector{unit, interval, timestamp}, result, proc, 1))
 	got := vector.GenerateFunctionFixedTypeParameter[types.Datetime](result.GetResultVector())
 	value, isNull := got.GetValue(0)
 	require.False(t, isNull)
@@ -330,7 +330,7 @@ func TestTimestampTemporalResultPaths(t *testing.T) {
 	convertResult := vector.NewFunctionResultWrapper(resultType, proc.Mp())
 	defer convertResult.Free()
 	require.NoError(t, convertResult.PreExtendAndReset(1))
-	require.NoError(t, ConvertTz([]*vector.Vector{date, from, to}, convertResult, proc, 1, nil))
+	require.NoError(t, ConvertTz([]*vector.Vector{date, from, to}, convertResult, proc, 1))
 	converted := vector.GenerateFunctionFixedTypeParameter[types.Datetime](convertResult.GetResultVector())
 	convertedValue, isNull := converted.GetValue(0)
 	require.False(t, isNull)
@@ -356,7 +356,7 @@ func TestTemporalDatetimeResultBranches(t *testing.T) {
 	defer result.Free()
 
 	require.NoError(t, result.PreExtendAndReset(3))
-	require.NoError(t, TimestampAdd([]*vector.Vector{timestampVec, intervalVec, unitVec}, result, proc, 3, nil))
+	require.NoError(t, TimestampAdd([]*vector.Vector{timestampVec, intervalVec, unitVec}, result, proc, 3))
 	resultVec := result.GetResultVector()
 	require.False(t, resultVec.IsNull(0))
 	require.True(t, resultVec.IsNull(1))
@@ -367,7 +367,7 @@ func TestTemporalDatetimeResultBranches(t *testing.T) {
 	require.Equal(t, types.DatetimeFromClock(2024, 1, 3, 3, 4, 5, 123456), value)
 
 	require.NoError(t, result.PreExtendAndReset(3))
-	require.NoError(t, TimestampSub([]*vector.Vector{timestampVec, intervalVec, unitVec}, result, proc, 3, nil))
+	require.NoError(t, TimestampSub([]*vector.Vector{timestampVec, intervalVec, unitVec}, result, proc, 3))
 	resultVec = result.GetResultVector()
 	require.False(t, resultVec.IsNull(0))
 	require.True(t, resultVec.IsNull(1))
@@ -390,7 +390,7 @@ func TestTemporalDatetimeResultBranches(t *testing.T) {
 	convertResult := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 	defer convertResult.Free()
 	require.NoError(t, convertResult.PreExtendAndReset(3))
-	require.NoError(t, ConvertTz([]*vector.Vector{dateVec, fromVec, toVec}, convertResult, proc, 3, nil))
+	require.NoError(t, ConvertTz([]*vector.Vector{dateVec, fromVec, toVec}, convertResult, proc, 3))
 	converted := vector.GenerateFunctionFixedTypeParameter[types.Datetime](convertResult.GetResultVector())
 	convertedValue, isNull := converted.GetValue(0)
 	require.False(t, isNull)
@@ -414,10 +414,9 @@ func TestTimestampAddSubTimeDatetimeResultBranches(t *testing.T) {
 	require.NoError(t, vector.AppendStringList(times,
 		[]string{"01:02:03.000001", "01:02:03", "01:02:03", "not-a-time"}, nil, proc.Mp()))
 
-	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true, true}}
 	for _, tc := range []struct {
 		name string
-		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error
 	}{
 		{name: "add", fn: AddTime},
 		{name: "sub", fn: SubTime},
@@ -426,10 +425,10 @@ func TestTimestampAddSubTimeDatetimeResultBranches(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(4))
-			require.NoError(t, tc.fn([]*vector.Vector{timestamps, times}, result, proc, 4, selectList))
+			require.NoError(t, tc.fn([]*vector.Vector{timestamps, times}, result, proc, 4))
 			out := result.GetResultVector()
 			require.False(t, out.IsNull(0))
-			require.True(t, out.IsNull(1), "masked rows must be NULL")
+			require.True(t, out.IsNull(1), "NULL rows must be NULL")
 			require.True(t, out.IsNull(2), "zero timestamps must be NULL")
 			require.True(t, out.IsNull(3), "invalid time text must be NULL")
 		})
@@ -656,10 +655,9 @@ func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
 	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	for _, tc := range []struct {
-		name       string
-		input      FunctionTestInput
-		expect     FunctionTestResult
-		selectList *FunctionSelectList
+		name   string
+		input  FunctionTestInput
+		expect FunctionTestResult
 	}{
 		{
 			name:  "typed null constant",
@@ -701,26 +699,9 @@ func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
 				[]string{""}, []bool{false}),
 			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
 		},
-		{
-			name: "masked malformed row",
-			input: NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{"1.9", "not-a-number", "-1.1"}, []bool{false, false, false}),
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{1, 0, -2}, []bool{false, true, false}),
-			selectList: &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}},
-		},
-		{
-			name: "all masked malformed rows skip parsing",
-			input: NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{"not-a-number", ""}, []bool{false, false}),
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 0}, []bool{true, true}),
-			selectList: &FunctionSelectList{AllNull: true},
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			floorCase := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, tc.expect, FloorStr).
-				WithSelectList(tc.selectList)
+			floorCase := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, tc.expect, FloorStr)
 			succeeded, info := floorCase.RunAndFree()
 			require.True(t, succeeded, info)
 		})
@@ -734,7 +715,7 @@ func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
 		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), FloorStr)
 	defer invalidSecondArg.Free()
 	require.NoError(t, invalidSecondArg.result.PreExtendAndReset(invalidSecondArg.fnLength))
-	err := FloorStr(invalidSecondArg.parameters, invalidSecondArg.result, proc, invalidSecondArg.fnLength, nil)
+	err := FloorStr(invalidSecondArg.parameters, invalidSecondArg.result, proc, invalidSecondArg.fnLength)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "the second argument of the floor")
 	require.NotContains(t, err.Error(), "ceil")
@@ -1040,7 +1021,7 @@ func TestTimestampAddWithNullParameter(t *testing.T) {
 		err := result.PreExtendAndReset(fnLength)
 		require.NoError(t, err)
 
-		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		err = TimestampAddDate(parameters, result, proc, fnLength)
 		require.NoError(t, err)
 
 		v := result.GetResultVector()
@@ -1073,7 +1054,7 @@ func TestTimestampAddWithNullParameter(t *testing.T) {
 		err := result.PreExtendAndReset(fnLength)
 		require.NoError(t, err)
 
-		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		err = TimestampAddDate(parameters, result, proc, fnLength)
 		require.NoError(t, err)
 
 		v := result.GetResultVector()
@@ -1104,7 +1085,7 @@ func TestTimestampAddWithNullParameter(t *testing.T) {
 		err := result.PreExtendAndReset(fnLength)
 		require.NoError(t, err)
 
-		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		err = TimestampAddDate(parameters, result, proc, fnLength)
 		require.NoError(t, err)
 
 		v := result.GetResultVector()
@@ -1140,7 +1121,7 @@ func TestTimestampAddDateWithMicrosecond(t *testing.T) {
 	err := result.PreExtendAndReset(fnLength)
 	require.NoError(t, err)
 
-	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+	err = TimestampAddDate(parameters, result, proc, fnLength)
 	require.NoError(t, err)
 
 	// Check the result - TempSetType should have changed it to DATETIME
@@ -1233,7 +1214,7 @@ func TestTimestampAddComprehensiveFromExpectResult(t *testing.T) {
 				err := result.PreExtendAndReset(fnLength)
 				require.NoError(t, err)
 
-				err = TimestampAddString(parameters, result, proc, fnLength, nil)
+				err = TimestampAddString(parameters, result, proc, fnLength)
 				require.NoError(t, err)
 
 				v := result.GetResultVector()
@@ -1274,7 +1255,7 @@ func TestTimestampAddComprehensiveFromExpectResult(t *testing.T) {
 				err := result.PreExtendAndReset(fnLength)
 				require.NoError(t, err)
 
-				err = TimestampAddString(parameters, result, proc, fnLength, nil)
+				err = TimestampAddString(parameters, result, proc, fnLength)
 				require.NoError(t, err)
 
 				v := result.GetResultVector()
@@ -1320,7 +1301,7 @@ func TestTimestampAddComprehensiveFromExpectResult(t *testing.T) {
 				err := result.PreExtendAndReset(fnLength)
 				require.NoError(t, err)
 
-				err = TimestampAddString(parameters, result, proc, fnLength, nil)
+				err = TimestampAddString(parameters, result, proc, fnLength)
 				require.NoError(t, err)
 
 				v := result.GetResultVector()
@@ -1367,7 +1348,7 @@ func TestTimestampAddComprehensiveFromExpectResult(t *testing.T) {
 				err := result.PreExtendAndReset(fnLength)
 				require.NoError(t, err)
 
-				err = TimestampAddString(parameters, result, proc, fnLength, nil)
+				err = TimestampAddString(parameters, result, proc, fnLength)
 				require.NoError(t, err)
 
 				v := result.GetResultVector()
@@ -1416,7 +1397,7 @@ func TestTimestampAddComprehensiveFromExpectResult(t *testing.T) {
 				err := result.PreExtendAndReset(fnLength)
 				require.NoError(t, err)
 
-				err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+				err = TimestampAddDate(parameters, result, proc, fnLength)
 				require.NoError(t, err)
 
 				v := result.GetResultVector()
@@ -1464,7 +1445,7 @@ func TestTimestampAddComprehensiveFromExpectResult(t *testing.T) {
 				err := result.PreExtendAndReset(fnLength)
 				require.NoError(t, err)
 
-				err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+				err = TimestampAddDate(parameters, result, proc, fnLength)
 				require.NoError(t, err)
 
 				v := result.GetResultVector()
@@ -1518,7 +1499,7 @@ func TestTimestampAddComprehensiveFromExpectResult(t *testing.T) {
 				err := result.PreExtendAndReset(fnLength)
 				require.NoError(t, err)
 
-				err = TimestampAddTimestamp(parameters, result, proc, fnLength, nil)
+				err = TimestampAddTimestamp(parameters, result, proc, fnLength)
 				require.NoError(t, err)
 
 				v := result.GetResultVector()
@@ -1563,7 +1544,7 @@ func TestTimestampAddComprehensiveFromExpectResult(t *testing.T) {
 				err := result.PreExtendAndReset(fnLength)
 				require.NoError(t, err)
 
-				err = TimestampAddDatetime(parameters, result, proc, fnLength, nil)
+				err = TimestampAddDatetime(parameters, result, proc, fnLength)
 				require.NoError(t, err)
 
 				v := result.GetResultVector()
@@ -1727,7 +1708,7 @@ func TestTimestampAddNonConstantUnit(t *testing.T) {
 		err := result.PreExtendAndReset(fnLength)
 		require.NoError(t, err)
 
-		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		err = TimestampAddDate(parameters, result, proc, fnLength)
 		require.NoError(t, err, "Should handle non-constant unit")
 
 		v := result.GetResultVector()
@@ -1775,7 +1756,7 @@ func TestTimestampAddNonConstantUnit(t *testing.T) {
 		err := result.PreExtendAndReset(fnLength)
 		require.NoError(t, err)
 
-		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		err = TimestampAddDate(parameters, result, proc, fnLength)
 		require.NoError(t, err, "Should handle mixed date/time units")
 
 		v := result.GetResultVector()
@@ -1827,7 +1808,7 @@ func TestTimestampAddNonConstantUnit(t *testing.T) {
 		err := result.PreExtendAndReset(fnLength)
 		require.NoError(t, err)
 
-		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		err = TimestampAddDate(parameters, result, proc, fnLength)
 		require.NoError(t, err, "Should handle all time units")
 
 		v := result.GetResultVector()
@@ -1877,7 +1858,7 @@ func TestTimestampAddNonConstantUnit(t *testing.T) {
 		err := result.PreExtendAndReset(fnLength)
 		require.NoError(t, err)
 
-		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		err = TimestampAddDate(parameters, result, proc, fnLength)
 		// NULL unit should cause error or be handled gracefully
 		// The important thing is it doesn't panic
 		if err != nil {
@@ -2028,7 +2009,7 @@ func TestTimestampAddMySQLCompatibility(t *testing.T) {
 
 		fnLength := dateVec.Length()
 		require.NoError(t, result.PreExtendAndReset(fnLength))
-		require.NoError(t, TimestampAddDate(parameters, result, proc, fnLength, nil))
+		require.NoError(t, TimestampAddDate(parameters, result, proc, fnLength))
 
 		v := result.GetResultVector()
 		require.Equal(t, types.T_date, v.GetType().Oid)
@@ -2052,7 +2033,7 @@ func TestTimestampAddMySQLCompatibility(t *testing.T) {
 
 		fnLength := dateVec.Length()
 		require.NoError(t, result.PreExtendAndReset(fnLength))
-		require.NoError(t, TimestampAddDate(parameters, result, proc, fnLength, nil))
+		require.NoError(t, TimestampAddDate(parameters, result, proc, fnLength))
 
 		v := result.GetResultVector()
 		require.Equal(t, types.T_date, v.GetType().Oid)
@@ -2076,7 +2057,7 @@ func TestTimestampAddMySQLCompatibility(t *testing.T) {
 
 		fnLength := dateVec.Length()
 		require.NoError(t, result.PreExtendAndReset(fnLength))
-		require.NoError(t, TimestampAddDate(parameters, result, proc, fnLength, nil))
+		require.NoError(t, TimestampAddDate(parameters, result, proc, fnLength))
 
 		v := result.GetResultVector()
 		require.Equal(t, types.T_datetime, v.GetType().Oid)
@@ -2222,7 +2203,7 @@ func TestDateAddOverflow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Call DateAdd - should return NULL (not error)
-	err = DateAdd(ivecs, result, proc, 1, nil)
+	err = DateAdd(ivecs, result, proc, 1)
 	require.NoError(t, err, "date_add with overflow should return NULL, not error")
 
 	// Check that result is NULL
@@ -2267,7 +2248,7 @@ func TestDateAddOverflowNegative(t *testing.T) {
 	require.NoError(t, err)
 
 	// Call DateAdd - should return zero date for underflow (MySQL behavior)
-	err = DateAdd(ivecs, result, proc, 1, nil)
+	err = DateAdd(ivecs, result, proc, 1)
 	require.NoError(t, err, "date_add with underflow should return zero date, not error")
 
 	// Check result is zero date
@@ -2350,7 +2331,7 @@ func TestDateAddNormal(t *testing.T) {
 			require.NoError(t, vecErr)
 
 			// Call DateAdd
-			err = DateAdd(ivecs, result, proc, 1, nil)
+			err = DateAdd(ivecs, result, proc, 1)
 			if tc.shouldSucceed {
 				require.NoError(t, err, "date_add should succeed for normal case")
 				resultVec := result.GetResultVector()
@@ -2403,7 +2384,7 @@ func TestTimestampAddOverflowReturnsNull(t *testing.T) {
 	require.NoError(t, err)
 
 	// Call TimestampAddString - should return NULL (no error)
-	err = TimestampAddString(ivecs, result, proc, 1, nil)
+	err = TimestampAddString(ivecs, result, proc, 1)
 	require.NoError(t, err, "TimestampAddString with overflow should return NULL, not error")
 
 	// Check result is NULL
@@ -2448,7 +2429,7 @@ func TestDateAddOverflowNegativeMonth(t *testing.T) {
 	require.NoError(t, err)
 
 	// Call DateAdd - should return NULL (not error)
-	err = DateAdd(ivecs, result, proc, 1, nil)
+	err = DateAdd(ivecs, result, proc, 1)
 	require.NoError(t, err, "DateAdd with negative MONTH causing year < 1 should return NULL, not error")
 
 	// Check that result is NULL
@@ -2492,7 +2473,7 @@ func TestDateAddOverflowNegativeQuarter(t *testing.T) {
 	require.NoError(t, err)
 
 	// Call DateAdd - should return NULL (not error)
-	err = DateAdd(ivecs, result, proc, 1, nil)
+	err = DateAdd(ivecs, result, proc, 1)
 	require.NoError(t, err, "DateAdd with negative QUARTER causing year < 1 should return NULL, not error")
 
 	// Check that result is NULL
@@ -2865,18 +2846,6 @@ func TestConvTypedNumericDispatch(t *testing.T) {
 			})
 		}
 	})
-	t.Run("masked rows do not access the typed vector", func(t *testing.T) {
-		fc := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(decimalType, []types.Decimal64{decimal, decimal}, []bool{false, false}),
-				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10, 10}, []bool{false, false}),
-				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16, 16}, []bool{false, false}),
-			},
-			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", ""}, []bool{true, true}),
-			Conv).WithSelectList(&FunctionSelectList{AllNull: true})
-		succeed, info := fc.RunAndFree()
-		require.True(t, succeed, info)
-	})
 }
 
 func TestConvNegativeFromBaseUsesSignedSourceDomain(t *testing.T) {
@@ -3084,7 +3053,7 @@ func TestConvCoversRemainingTypedDomains(t *testing.T) {
 		require.NoError(t, err)
 		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 		require.NoError(t, result.PreExtendAndReset(1))
-		require.NoError(t, Conv([]*vector.Vector{input, fromBase, toBase}, result, proc, 1, nil))
+		require.NoError(t, Conv([]*vector.Vector{input, fromBase, toBase}, result, proc, 1))
 		_, isNull := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
 		require.True(t, isNull)
 	})
@@ -3302,11 +3271,11 @@ func TestDateFormatUsesPerRowFormat(t *testing.T) {
 	caseWithSelection := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_datetime.ToType(), dates, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y", "%m", "%d"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y", "%m", "%d"}, []bool{false, true, false}),
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"2020", "", "04"}, []bool{false, true, false}),
-		DateFormat).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+		DateFormat)
 	defer caseWithSelection.Free()
 	ok, info = caseWithSelection.Run()
 	require.True(t, ok, info)
@@ -3442,71 +3411,6 @@ func TestDateSub(t *testing.T) {
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
-}
-
-func TestDateSubRespectsSelectList(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_date.ToType(), []types.Date{
-			types.Date(0),
-			types.DateFromCalendar(2024, 1, 2),
-		}, nil),
-		NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1}, nil),
-		NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.Day)}, nil),
-	}
-	tc := NewFunctionTestCase(
-		proc,
-		inputs,
-		NewFunctionTestResult(types.T_date.ToType(), false, nil, nil),
-		DateSub,
-	)
-	defer tc.Free()
-	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
-	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
-	require.NoError(t, DateSub(tc.parameters, tc.result, proc, tc.fnLength, selectList))
-
-	result := tc.result.GetResultVector()
-	require.True(t, result.IsNull(0))
-	value, isNull := vector.GenerateFunctionFixedTypeParameter[types.Date](result).GetValue(1)
-	require.False(t, isNull)
-	require.Equal(t, types.DateFromCalendar(2024, 1, 1), value)
-
-	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
-	require.NoError(t, DateSub(tc.parameters, tc.result, proc, tc.fnLength, &FunctionSelectList{AllNull: true}))
-	require.Equal(t, tc.fnLength, tc.result.GetResultVector().GetNulls().Count())
-}
-
-func TestTimestampAddRespectsSelectList(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().TimeZone = time.UTC
-	timestamp := types.FromClockUTC(2024, 1, 2, 3, 4, 5, 0)
-
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp, timestamp}, nil),
-		NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2}, nil),
-		NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.Day)}, nil),
-	}
-	tc := NewFunctionTestCase(
-		proc,
-		inputs,
-		NewFunctionTestResult(types.T_timestamp.ToType(), false, nil, nil),
-		TimestampAdd,
-	)
-	defer tc.Free()
-	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
-	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
-	require.NoError(t, TimestampAdd(tc.parameters, tc.result, proc, tc.fnLength, selectList))
-
-	result := tc.result.GetResultVector()
-	require.True(t, result.IsNull(0))
-	value, isNull := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](result).GetValue(1)
-	require.False(t, isNull)
-	require.Equal(t, types.FromClockUTC(2024, 1, 4, 3, 4, 5, 0), value)
-
-	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
-	require.NoError(t, TimestampAdd(tc.parameters, tc.result, proc, tc.fnLength, &FunctionSelectList{AllNull: true}))
-	require.Equal(t, tc.fnLength, tc.result.GetResultVector().GetNulls().Count())
 }
 
 func initFieldTestCase() []tcTemp {
@@ -4407,21 +4311,6 @@ func TestSubStrIndexOverlappingDelimiters(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tc.want, got, "value=%q delimiter=%q count=%d", tc.value, tc.delimiter, tc.count)
 	}
-}
-
-func TestSubStrIndexNullAndSelectedRows(t *testing.T) {
-	proc := newMemoryFunctionTestProcess(t)
-	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
-	fc := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"aaaaa", "aaaaa", "x.y", "m.n"}, []bool{false, false, true, false}),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"aa", "aa", ".", "."}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -2, 1, 1}, nil),
-		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "aaa", "", ""}, []bool{false, false, true, true}),
-		SubStrIndex[int64]).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}})
-	ok, info := fc.RunAndFree()
-	require.True(t, ok, info)
 }
 
 func initTimeDiffInTimeTestCase() []tcTemp {
@@ -5628,7 +5517,7 @@ func TestPowerNegativeFractionalExponentReturnsOutOfRange(t *testing.T) {
 		)
 		defer tcc.Free()
 		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
-		err := Power(tcc.parameters, tcc.result, proc, tcc.fnLength, nil)
+		err := Power(tcc.parameters, tcc.result, proc, tcc.fnLength)
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange),
 			"expected ErrOutOfRange, got %v", err)
@@ -5689,44 +5578,14 @@ func TestPowerEmptyBatchEvaluatesNoRows(t *testing.T) {
 	defer tcc.Free()
 	require.NoError(t, tcc.result.PreExtendAndReset(0))
 	require.Equal(t, 0, tcc.result.GetResultVector().Length())
-	err := Power(tcc.parameters, tcc.result, proc, 0, nil)
+	err := Power(tcc.parameters, tcc.result, proc, 0)
 	require.NoError(t, err)
 	require.Equal(t, 0, tcc.result.GetResultVector().Length())
 }
 
-// TestPowerRespectsSelectList pins the selectList boundary of the domain
-// rejection: rows masked off by the select list are never evaluated, so a
-// masked domain row stays NULL without raising an error, a selected domain
-// row surfaces the typed out-of-range error, and an all-masked constant
-// batch short-circuits to NULL. Every case binds its own cleanup at
-// creation, so assertion failures and completion both release the
-// case-owned vectors (no cross-case pointer rebinding).
-func TestPowerRespectsSelectList(t *testing.T) {
+// A negative base with a fractional exponent surfaces the typed out-of-range error.
+func TestPowerNegativeBaseFractionalExponentErrors(t *testing.T) {
 	proc := testutil.NewProcess(t)
-
-	masked := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{-2, 2}, nil),
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5, 3}, nil),
-		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 8}, []bool{true, false}),
-		Power,
-	)
-	defer masked.Free()
-	require.NoError(t, masked.result.PreExtendAndReset(masked.fnLength))
-	err := Power(masked.parameters, masked.result, proc, masked.fnLength, &FunctionSelectList{
-		AnyNull:    true,
-		SelectList: []bool{false, true},
-	})
-	require.NoError(t, err)
-	resultVec := masked.result.GetResultVector()
-	require.True(t, resultVec.GetNulls().Contains(0))
-	resultParam := vector.GenerateFunctionFixedTypeParameter[float64](resultVec)
-	value, isNull := resultParam.GetValue(1)
-	require.False(t, isNull)
-	require.Equal(t, float64(8), value)
-
 	selected := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
@@ -5738,27 +5597,10 @@ func TestPowerRespectsSelectList(t *testing.T) {
 	)
 	defer selected.Free()
 	require.NoError(t, selected.result.PreExtendAndReset(selected.fnLength))
-	err = Power(selected.parameters, selected.result, proc, selected.fnLength, &FunctionSelectList{
-		AnyNull:    true,
-		SelectList: []bool{true, false},
-	})
+	err := Power(selected.parameters, selected.result, proc, selected.fnLength)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange),
 		"expected ErrOutOfRange, got %v", err)
-
-	allMasked := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
-			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
-		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0}, []bool{true, true}),
-		Power,
-	)
-	defer allMasked.Free()
-	allMasked = allMasked.WithSelectList(&FunctionSelectList{AllNull: true})
-	succeed, info := allMasked.Run()
-	require.True(t, succeed, info)
 }
 
 // TRUNCATE
@@ -5924,22 +5766,19 @@ func TestRoundAndTruncateReusePrecisionFrame(t *testing.T) {
 				name   string
 				digits *vector.Vector
 				want   []float64
-				mask   *FunctionSelectList
 			}{
-				{"const", constant, []float64{100, 100}, nil},
-				{"null", null, nil, nil},
-				{"flat", flat, tc.flat, nil},
-				{"masked", flat, tc.flat, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}},
-				{"all masked", flat, nil, &FunctionSelectList{AllNull: true}},
-				{"const again", constant, []float64{100, 100}, nil},
+				{"const", constant, []float64{100, 100}},
+				{"null", null, nil},
+				{"flat", flat, tc.flat},
+				{"const again", constant, []float64{100, 100}},
 			} {
 				t.Run(step.name, func(t *testing.T) {
 					require.NoError(t, result.PreExtendAndReset(2))
-					require.NoError(t, tc.fn([]*vector.Vector{values, step.digits}, result, proc, 2, step.mask))
+					require.NoError(t, tc.fn([]*vector.Vector{values, step.digits}, result, proc, 2))
 					actual := vector.GenerateFunctionFixedTypeParameter[float64](result.GetResultVector())
 					for i := uint64(0); i < 2; i++ {
 						value, isNull := actual.GetValue(i)
-						wantNull := step.want == nil || (step.mask != nil && !step.mask.SelectList[i])
+						wantNull := step.want == nil
 						require.Equal(t, wantNull, isNull)
 						if !wantNull {
 							require.Equal(t, step.want[i], value)
@@ -5962,7 +5801,7 @@ func TestRoundAndTruncateWithDynamicDigits(t *testing.T) {
 		[]float64{123, 123.4, 123.45, 120, -123.4, 0}, []bool{false, false, false, false, false, true})
 	for _, tc := range []struct {
 		name string
-		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error
 		want *FunctionTestResult
 	}{
 		{name: "round", fn: RoundFloat64, want: &expectedRound},
@@ -6458,10 +6297,9 @@ func TestStMeasuresGeodeticSRID0Compatibility(t *testing.T) {
 	masked := NewFunctionTestCase(proc,
 		[]FunctionTestInput{NewFunctionTestInput(geom4326,
 			[]string{"LINESTRING(0 0,1 0)", "", "LINESTRING(0 0,181 0)"},
-			[]bool{false, true, false})},
+			[]bool{false, true, true})},
 		NewFunctionTestResult(types.T_float64.ToType(), false,
-			[]float64{oneDegreeMeters, 0, 0}, []bool{false, true, true}), StLength).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false}})
+			[]float64{oneDegreeMeters, 0, 0}, []bool{false, true, true}), StLength)
 	ok, info := masked.RunAndFree()
 	require.True(t, ok, info)
 
@@ -6575,7 +6413,7 @@ func TestGeometry32ConstructorAndDerivedOverflow(t *testing.T) {
 		NewFunctionTestResult(types.T_geometry32.ToType(), true, nil, nil), StPoint32)
 	defer badPoint.Free()
 	require.NoError(t, badPoint.result.PreExtendAndReset(2))
-	err := StPoint32(badPoint.parameters, badPoint.result, proc, 2, nil)
+	err := StPoint32(badPoint.parameters, badPoint.result, proc, 2)
 	require.ErrorContains(t, err, "not finite in GEOMETRY32")
 	require.Len(t, badPoint.GetResultVectorDirectly().GetBytesAt(0), 13)
 
@@ -6587,7 +6425,7 @@ func TestGeometry32ConstructorAndDerivedOverflow(t *testing.T) {
 		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"POINT(9 10)"}, nil), StPoint32)
 	defer goodPoint.Free()
 	require.NoError(t, badPoint.result.PreExtendAndReset(1))
-	require.NoError(t, StPoint32(goodPoint.parameters, badPoint.result, proc, 1, nil))
+	require.NoError(t, StPoint32(goodPoint.parameters, badPoint.result, proc, 1))
 	raw := badPoint.GetResultVectorDirectly().GetBytesAt(0)
 	require.Len(t, raw, 13)
 	got, err := geo.ReadWKBFloat32(raw)
@@ -6609,20 +6447,19 @@ func TestGeometry32ConstructorAndDerivedOverflow(t *testing.T) {
 		NewFunctionTestResult(types.T_geometry32.ToType(), true, nil, nil), StBuffer)
 	defer overflowBuffer.Free()
 	require.NoError(t, overflowBuffer.result.PreExtendAndReset(1))
-	err = StBuffer(overflowBuffer.parameters, overflowBuffer.result, proc, 1, nil)
+	err = StBuffer(overflowBuffer.parameters, overflowBuffer.result, proc, 1)
 	require.ErrorContains(t, err, "not finite in GEOMETRY32")
 
 	maskedBuffer := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_geometry32.ToType(), []string{maxPoint, geom32WKB(t, "POINT(0 0)")}, nil),
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{maxPoint, geom32WKB(t, "POINT(0 0)")}, []bool{true, false}),
 			NewFunctionTestInput(types.T_float64.ToType(), []float64{float64(math.MaxFloat32), 1}, nil),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{4, 4}, nil),
 		},
-		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"", ""}, []bool{true, false}), StBufferQS).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"", ""}, []bool{true, false}), StBufferQS)
 	defer maskedBuffer.Free()
 	require.NoError(t, maskedBuffer.result.PreExtendAndReset(2))
-	require.NoError(t, StBufferQS(maskedBuffer.parameters, maskedBuffer.result, proc, 2, maskedBuffer.selectList))
+	require.NoError(t, StBufferQS(maskedBuffer.parameters, maskedBuffer.result, proc, 2))
 	maskedResult := maskedBuffer.GetResultVectorDirectly()
 	require.Equal(t, 2, maskedResult.Length())
 	require.True(t, maskedResult.IsNull(0))
@@ -7281,7 +7118,7 @@ func TestGeoHashFunctionsSkipInvalidConstantsForEmptyBatches(t *testing.T) {
 				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
 			defer fc.Free()
 			require.NoError(t, fc.result.PreExtendAndReset(0))
-			require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 0, nil))
+			require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 0))
 			require.Zero(t, fc.GetResultVectorDirectly().Length())
 		})
 	}
@@ -7502,7 +7339,6 @@ func TestStDistanceValidationOrder(t *testing.T) {
 		left, right FunctionTestInput
 		want        FunctionTestResult
 		fn          executeLogicOfOverload
-		selectList  *FunctionSelectList
 	}{
 		{
 			name:  "float64 all null",
@@ -7512,27 +7348,11 @@ func TestStDistanceValidationOrder(t *testing.T) {
 			fn:    StDistance,
 		},
 		{
-			name:       "float64 all masked",
-			left:       NewFunctionTestInput(unsupported, []string{"POINT(0 0)"}, []bool{false}),
-			right:      NewFunctionTestInput(unsupported, []string{"POINT(1 0)"}, []bool{false}),
-			want:       NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
-			fn:         StDistance,
-			selectList: &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false}},
-		},
-		{
 			name:  "float32 all null",
 			left:  NewFunctionTestInput(unsupported32, []string{""}, []bool{true}),
 			right: NewFunctionTestInput(unsupported32, []string{""}, []bool{true}),
 			want:  NewFunctionTestResult(types.T_float32.ToType(), false, []float32{0}, []bool{true}),
 			fn:    StDistance32,
-		},
-		{
-			name:       "float32 all masked",
-			left:       NewFunctionTestInput(unsupported32, []string{"POINT(0 0)"}, []bool{false}),
-			right:      NewFunctionTestInput(unsupported32, []string{"POINT(1 0)"}, []bool{false}),
-			want:       NewFunctionTestResult(types.T_float32.ToType(), false, []float32{0}, []bool{true}),
-			fn:         StDistance32,
-			selectList: &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false}},
 		},
 		{
 			name:  "float64 unsupported SRID with evaluated row",
@@ -7550,8 +7370,7 @@ func TestStDistanceValidationOrder(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, tc.want, tc.fn).
-				WithSelectList(tc.selectList)
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, tc.want, tc.fn)
 			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 		})
@@ -7582,11 +7401,10 @@ func TestStDistanceEvaluatorSelectionNullAndMalformedRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	geom := types.T_geometry.ToType()
 	valid := NewFunctionTestCase(proc, []FunctionTestInput{
-		NewFunctionTestInput(geom, []string{"GEOMETRYCOLLECTION(", "POINT(0 0)"}, []bool{false, false}),
+		NewFunctionTestInput(geom, []string{"GEOMETRYCOLLECTION(", "POINT(0 0)"}, []bool{true, false}),
 		NewFunctionTestInput(geom, []string{"GEOMETRYCOLLECTION(", "POINT(3 4)"}, []bool{false, false}),
 	}, NewFunctionTestResult(types.T_float64.ToType(), false,
-		[]float64{0, 5}, []bool{true, false}), StDistance).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+		[]float64{0, 5}, []bool{true, false}), StDistance)
 	ok, info := valid.RunAndFree()
 	require.True(t, ok, info)
 
@@ -9767,7 +9585,7 @@ func TestAllBinarySpatialFunctionEvaluatorsRejectDifferentSRIDsBeforeDecoding(t 
 
 				// The invalid payloads make this a boundary test: a missed admission
 				// check would return a decode error instead of the SRID error.
-				err := tc.fn(fc.parameters, fc.result, proc, 1, nil)
+				err := tc.fn(fc.parameters, fc.result, proc, 1)
 				require.Error(t, err)
 				require.ErrorContains(t, err, "Binary geometry function "+tc.functionName)
 				require.ErrorContains(t, err, fmt.Sprintf("different srids: %d and %d", pair.left, pair.right))
@@ -9831,102 +9649,11 @@ func TestBinarySpatialSRIDMismatchPreservesNullPropagation(t *testing.T) {
 				defer fc.Free()
 				require.NoError(t, fc.result.PreExtendAndReset(1))
 
-				err := tc.fn(fc.parameters, fc.result, proc, 1, nil)
+				err := tc.fn(fc.parameters, fc.result, proc, 1)
 				require.NoError(t, err)
 				require.True(t, fc.GetResultVectorDirectly().IsNull(0))
 			})
 		}
-	}
-}
-
-func TestBinarySpatialSRIDMismatchSkipsMaskedAndEmptyRows(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	left := geomInputEWKTAsType("not a geometry payload", types.T_geometry)
-	right := geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
-	left.typ.Width = 4327
-	right.typ.Width = 1
-	fc := NewFunctionTestCase(proc,
-		[]FunctionTestInput{left, right},
-		NewFunctionTestResult(types.T_geometry.ToType(), false, nil, nil), StUnion)
-	defer fc.Free()
-	selectList := &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false}}
-	require.NoError(t, fc.result.PreExtendAndReset(1))
-	require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 1, selectList))
-	require.True(t, fc.GetResultVectorDirectly().IsNull(0), "a fully masked row must not trigger SRID validation")
-
-	left = geomInputEWKTAsType("not a geometry payload", types.T_geometry)
-	right = geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
-	left.typ.Width = 4327
-	right.typ.Width = 1
-	left.values = []string{"masked malformed row", "null evaluated row"}
-	left.nullList = []bool{false, true}
-	right.values = []string{"masked malformed row", "null evaluated row"}
-	fc.Free()
-	fc = NewFunctionTestCase(proc,
-		[]FunctionTestInput{left, right},
-		NewFunctionTestResult(types.T_geometry.ToType(), false, nil, nil), StUnion)
-	selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
-	require.NoError(t, fc.result.PreExtendAndReset(2))
-	require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 2, selectList))
-	require.True(t, fc.GetResultVectorDirectly().IsNull(0), "masked row must remain NULL")
-	require.True(t, fc.GetResultVectorDirectly().IsNull(1), "evaluated NULL argument must remain NULL")
-
-	left = geomInputEWKTAsType("not a geometry payload", types.T_geometry)
-	right = geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
-	left.typ.Width = 4327
-	right.typ.Width = 1
-	left.values = []string{"left NULL", "left value"}
-	left.nullList = []bool{true, false}
-	right.values = []string{"right value", "right NULL"}
-	right.nullList = []bool{false, true}
-	fc.Free()
-	fc = NewFunctionTestCase(proc,
-		[]FunctionTestInput{left, right},
-		NewFunctionTestResult(types.T_geometry.ToType(), false, nil, nil), StUnion)
-	require.NoError(t, fc.result.PreExtendAndReset(2))
-	require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 2, nil))
-	require.True(t, fc.GetResultVectorDirectly().IsNull(0), "the left-NULL pair must not require matching SRIDs")
-	require.True(t, fc.GetResultVectorDirectly().IsNull(1), "the right-NULL pair must not require matching SRIDs")
-
-	left = geomInputEWKTAsType("not a geometry payload", types.T_geometry)
-	right = geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
-	left.typ.Width = 4327
-	right.typ.Width = 1
-	left.values = []string{"masked non-null payload", "selected non-null payload"}
-	right.values = []string{"masked non-null payload", "selected non-null payload"}
-	fc.Free()
-	fc = NewFunctionTestCase(proc,
-		[]FunctionTestInput{left, right},
-		NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil), StUnion)
-	selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
-	require.NoError(t, fc.result.PreExtendAndReset(2))
-	err := fc.fn(fc.parameters, fc.result, proc, 2, selectList)
-	require.ErrorContains(t, err, "different srids: 4326 and 0")
-	require.Zero(t, fc.GetResultVectorDirectly().Length(), "SRID rejection must precede masked-row and result writes")
-
-	for _, fn := range []struct {
-		name string
-		fn   executeLogicOfOverload
-		out  types.T
-	}{
-		{name: "varlena", fn: StCollect, out: types.T_geometry},
-		{name: "fixed", fn: MBRContains, out: types.T_bool},
-	} {
-		t.Run("empty/"+fn.name, func(t *testing.T) {
-			left := geomInputEWKTAsType("", types.T_geometry)
-			right := geomInputEWKTAsType("", types.T_geometry)
-			left.typ.Width = 4327
-			right.typ.Width = 1
-			left.values = []string{}
-			right.values = []string{}
-			fc := NewFunctionTestCase(proc,
-				[]FunctionTestInput{left, right},
-				NewFunctionTestResult(fn.out.ToType(), false, nil, nil), fn.fn)
-			defer fc.Free()
-			require.NoError(t, fc.result.PreExtendAndReset(0))
-			require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 0, nil))
-			require.Zero(t, fc.GetResultVectorDirectly().Length())
-		})
 	}
 }
 
@@ -9955,7 +9682,7 @@ func TestBinarySpatialSRIDMismatchFailsBeforeAppendingRows(t *testing.T) {
 			defer fc.Free()
 			require.NoError(t, fc.result.PreExtendAndReset(2))
 
-			err := tc.fn(fc.parameters, fc.result, proc, 2, nil)
+			err := tc.fn(fc.parameters, fc.result, proc, 2)
 			require.Error(t, err)
 			require.ErrorContains(t, err, "different srids: 4326 and 0")
 			if tc.resultType == types.T_geometry {
@@ -10006,7 +9733,7 @@ func TestBinarySpatialEmptyConstBatchDoesNotDecodeInputs(t *testing.T) {
 					NewFunctionTestResult(tc.resultType.ToType(), false, nil, nil), tc.fn)
 				defer fc.Free()
 				require.NoError(t, fc.result.PreExtendAndReset(0))
-				err := tc.fn(fc.parameters, fc.result, proc, 0, nil)
+				err := tc.fn(fc.parameters, fc.result, proc, 0)
 				require.NoError(t, err, "an empty batch has no geometry pair to decode or reject")
 				require.Zero(t, fc.GetResultVectorDirectly().Length())
 				require.Zero(t, fc.GetResultVectorDirectly().GetNulls().Count())
@@ -10142,35 +9869,10 @@ func TestL1DistanceArrayConstQueryDimMismatch(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp)
 	require.NoError(t, result.PreExtendAndReset(1))
 
-	err := L1DistanceArray[float64]([]*vector.Vector{col, cst}, result, proc, 1, nil)
+	err := L1DistanceArray[float64]([]*vector.Vector{col, cst}, result, proc, 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid input", "must be the scalar error, not ErrInternal")
 	require.Contains(t, err.Error(), "(3, 2)", "the error must name both dimensions")
-}
-
-// TestL1DistanceArrayConstQueryMaskedRow: the batched path evaluates every row and lets any
-// row's error escape. A row the expression framework masked off must not be evaluated --
-// otherwise a bad dimension in a branch SQL never selected fails the whole query.
-func TestL1DistanceArrayConstQueryMaskedRow(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	tc := tcTemp{
-		info: "l1_distance must skip a masked row carrying a bad dimension",
-		inputs: []FunctionTestInput{
-			NewFunctionTestInput(types.T_array_float32.ToType(),
-				[][]float32{{1, 2, 3}, {4, 5}}, []bool{false, false}),
-			NewFunctionTestConstInput(types.T_array_float32.ToType(),
-				[][]float32{{1, 2}}, []bool{false}),
-		},
-		expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-			[]float64{0, 6}, []bool{true, false}),
-	}
-	// Row 0 holds the mismatched dimension and is masked off; only row 1 is evaluated:
-	// |4-1|+|5-2| = 6.
-	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
-	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect,
-		L1DistanceArray[float32]).WithSelectList(selectList)
-	s, info := fcTC.RunAndFree()
-	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 }
 
 // L2 Distance
@@ -10414,7 +10116,7 @@ func TestExtractMicrosecondFromDateAddString(t *testing.T) {
 	err = result.PreExtendAndReset(fnLength)
 	require.NoError(t, err)
 
-	err = ExtractFromVarchar(parameters, result, proc, fnLength, nil)
+	err = ExtractFromVarchar(parameters, result, proc, fnLength)
 	require.NoError(t, err)
 
 	// Verify result
@@ -10971,11 +10673,11 @@ func TestTimeFormatUsesPerRowFormat(t *testing.T) {
 	caseWithSelection := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_time.ToType(), times, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"%H", "%i", "%s"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"%H", "%i", "%s"}, []bool{false, true, false}),
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
 			[]string{"03", "", "07"}, []bool{false, true, false}),
-		TimeFormat).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+		TimeFormat)
 	ok, info = caseWithSelection.RunAndFree()
 	require.True(t, ok, info)
 }
@@ -11155,25 +10857,6 @@ func TestSecToTimeOutOfRangeWarning(t *testing.T) {
 			require.Contains(t, session.warnings[len(session.warnings)-1].msg, "Truncated incorrect time value")
 		})
 	}
-}
-
-func TestSecToTimeRespectsSelectListBeforeDiagnostics(t *testing.T) {
-	session := &numericWarningSession{}
-	proc := testutil.NewProcess(t)
-	proc.Session = session
-	tc := NewFunctionTestCase(proc,
-		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "foo"}, nil)},
-		NewFunctionTestResult(types.T_time.ToType(), false,
-			[]types.Time{types.MicroSecsPerSec, 0}, []bool{false, true}),
-		SecToTime)
-	defer tc.Free()
-	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
-	require.NoError(t, SecToTime(tc.parameters, tc.result, proc, tc.fnLength,
-		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
-	values := vector.MustFixedColWithTypeCheck[types.Time](tc.result.GetResultVector())
-	require.Equal(t, types.Time(types.MicroSecsPerSec), values[0])
-	require.True(t, tc.result.GetResultVector().GetNulls().Contains(1))
-	require.Empty(t, session.warnings)
 }
 
 func TestSecToTimeVarcharConversionWarningsAreBounded(t *testing.T) {
@@ -11638,7 +11321,7 @@ func TestTimestampDiffDateString(t *testing.T) {
 		require.NoError(t, err)
 
 		// Use TimestampDiffDateString to handle DATE and string mix
-		err = TimestampDiffDateString(parameters, result, proc, fnLength, nil)
+		err = TimestampDiffDateString(parameters, result, proc, fnLength)
 		require.NoError(t, err)
 
 		v := result.GetResultVector()
@@ -11666,7 +11349,7 @@ func TestTimestampDiffDateString(t *testing.T) {
 		err := result.PreExtendAndReset(fnLength)
 		require.NoError(t, err)
 
-		err = TimestampDiffDateString(parameters, result, proc, fnLength, nil)
+		err = TimestampDiffDateString(parameters, result, proc, fnLength)
 		require.NoError(t, err)
 
 		v := result.GetResultVector()
@@ -11698,7 +11381,7 @@ func TestTimestampDiffStringDate(t *testing.T) {
 		require.NoError(t, err)
 
 		// Use TimestampDiffStringDate to handle string and DATE mix
-		err = TimestampDiffStringDate(parameters, result, proc, fnLength, nil)
+		err = TimestampDiffStringDate(parameters, result, proc, fnLength)
 		require.NoError(t, err)
 
 		v := result.GetResultVector()
@@ -11726,7 +11409,7 @@ func TestTimestampDiffStringDate(t *testing.T) {
 		err := result.PreExtendAndReset(fnLength)
 		require.NoError(t, err)
 
-		err = TimestampDiffStringDate(parameters, result, proc, fnLength, nil)
+		err = TimestampDiffStringDate(parameters, result, proc, fnLength)
 		require.NoError(t, err)
 
 		v := result.GetResultVector()
@@ -11757,7 +11440,7 @@ func TestTimestampDiffTimestampDate(t *testing.T) {
 		err := result.PreExtendAndReset(fnLength)
 		require.NoError(t, err)
 
-		err = TimestampDiffTimestampDate(parameters, result, proc, fnLength, nil)
+		err = TimestampDiffTimestampDate(parameters, result, proc, fnLength)
 		require.NoError(t, err)
 
 		v := result.GetResultVector()
@@ -11791,7 +11474,7 @@ func TestTimestampDiffDateTimestamp(t *testing.T) {
 		err := result.PreExtendAndReset(fnLength)
 		require.NoError(t, err)
 
-		err = TimestampDiffDateTimestamp(parameters, result, proc, fnLength, nil)
+		err = TimestampDiffDateTimestamp(parameters, result, proc, fnLength)
 		require.NoError(t, err)
 
 		v := result.GetResultVector()
@@ -11829,7 +11512,7 @@ func TestDatetimeAddInvalidInterval(t *testing.T) {
 	require.NoError(t, err)
 
 	// Call DatetimeAdd
-	err = DatetimeAdd(ivecs, result, proc, 1, nil)
+	err = DatetimeAdd(ivecs, result, proc, 1)
 	require.NoError(t, err)
 
 	// Verify result is NULL
@@ -11846,7 +11529,7 @@ func TestDateAddWithNullInterval(t *testing.T) {
 		name         string
 		dateStr      string
 		intervalType types.IntervalType
-		testFunc     func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		testFunc     func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error
 		resultType   types.T
 	}{
 		{
@@ -11914,7 +11597,7 @@ func TestDateAddWithNullInterval(t *testing.T) {
 			require.NoError(t, err)
 
 			// Call the function
-			err = tc.testFunc(ivecs, result, proc, 1, nil)
+			err = tc.testFunc(ivecs, result, proc, 1)
 			require.NoError(t, err, "Function should not return error for NULL interval")
 
 			// Verify result is NULL
@@ -12024,7 +11707,7 @@ func TestDateSubWithDecimalInterval(t *testing.T) {
 			rs.TempSetType(types.New(types.T_datetime, 0, 6))
 
 			// Call DatetimeSub
-			err = DatetimeSub(ivecs, result, proc, 1, nil)
+			err = DatetimeSub(ivecs, result, proc, 1)
 			require.NoError(t, err)
 
 			// Verify result
@@ -12181,14 +11864,14 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		dateAddSyntax bool
-		fn            func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		fn            func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error
 	}{
 		{name: "DATE_ADD timestamp column", dateAddSyntax: true, fn: TimestampAdd},
 		{name: "TIMESTAMPADD timestamp column", fn: TimestampAddTimestamp},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			parameters, result := timestampInputs(t, test.dateAddSyntax)
-			require.NoError(t, test.fn(parameters, result, timestampProc, 3, nil))
+			require.NoError(t, test.fn(parameters, result, timestampProc, 3))
 			resultVec := result.GetResultVector()
 			require.True(t, resultVec.GetNulls().Contains(0), "upper overflow must be row-local NULL")
 			require.False(t, resultVec.GetNulls().Contains(1), "ordinary neighbor must remain valid")
@@ -12202,7 +11885,7 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		dateAddSyntax bool
-		fn            func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		fn            func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error
 	}{
 		{name: "DATE_ADD string column", dateAddSyntax: true, fn: DateStringAdd},
 		{name: "TIMESTAMPADD string column", fn: TimestampAddString},
@@ -12236,7 +11919,7 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 			t.Cleanup(result.Free)
 			require.NoError(t, result.PreExtendAndReset(4))
 
-			require.NoError(t, test.fn(parameters, result, stringProc, 4, nil))
+			require.NoError(t, test.fn(parameters, result, stringProc, 4))
 			resultNulls := result.GetResultVector().GetNulls()
 			require.True(t, resultNulls.Contains(0), "one microsecond below minimum must be NULL")
 			require.True(t, resultNulls.Contains(1), "two microseconds below minimum must be NULL")
@@ -12310,7 +11993,7 @@ func TestTimestampAddDateWithTChar(t *testing.T) {
 			err = result.PreExtendAndReset(fnLength)
 			require.NoError(t, err)
 
-			err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+			err = TimestampAddDate(parameters, result, proc, fnLength)
 			require.NoError(t, err, tc.desc)
 
 			v := result.GetResultVector()
@@ -12394,7 +12077,7 @@ func TestTimestampAddStringWithTChar(t *testing.T) {
 			err = result.PreExtendAndReset(fnLength)
 			require.NoError(t, err)
 
-			err = TimestampAddString(parameters, result, proc, fnLength, nil)
+			err = TimestampAddString(parameters, result, proc, fnLength)
 			require.NoError(t, err, tc.desc)
 
 			v := result.GetResultVector()
@@ -12474,7 +12157,7 @@ func TestTimestampDiffWithTChar(t *testing.T) {
 			err = result.PreExtendAndReset(fnLength)
 			require.NoError(t, err)
 
-			err = TimestampDiff(parameters, result, proc, fnLength, nil)
+			err = TimestampDiff(parameters, result, proc, fnLength)
 			require.NoError(t, err, tc.desc)
 
 			v := result.GetResultVector()
@@ -12553,7 +12236,7 @@ func TestTimestampDiffDateWithTChar(t *testing.T) {
 			err = result.PreExtendAndReset(fnLength)
 			require.NoError(t, err)
 
-			err = TimestampDiffDate(parameters, result, proc, fnLength, nil)
+			err = TimestampDiffDate(parameters, result, proc, fnLength)
 			require.NoError(t, err, tc.desc)
 
 			v := result.GetResultVector()
@@ -12637,7 +12320,7 @@ func TestTimestampDiffTimestampWithTChar(t *testing.T) {
 			err = result.PreExtendAndReset(fnLength)
 			require.NoError(t, err)
 
-			err = TimestampDiffTimestamp(parameters, result, proc, fnLength, nil)
+			err = TimestampDiffTimestamp(parameters, result, proc, fnLength)
 			require.NoError(t, err, tc.desc)
 
 			v := result.GetResultVector()
@@ -12720,7 +12403,7 @@ func TestTimestampDiffStringWithTChar(t *testing.T) {
 			err = result.PreExtendAndReset(fnLength)
 			require.NoError(t, err)
 
-			err = TimestampDiffString(parameters, result, proc, fnLength, nil)
+			err = TimestampDiffString(parameters, result, proc, fnLength)
 			require.NoError(t, err, tc.desc)
 
 			v := result.GetResultVector()
@@ -12876,7 +12559,7 @@ func TestDateAddMinimumValidDate(t *testing.T) {
 			require.NoError(t, err)
 
 			// Call DateAdd
-			err = DateAdd(ivecs, result, proc, 1, nil)
+			err = DateAdd(ivecs, result, proc, 1)
 			require.NoError(t, err, tc.description)
 
 			// Check result
@@ -13021,7 +12704,7 @@ func TestTimestampAddMinimumValidDate(t *testing.T) {
 			require.NoError(t, err)
 
 			// Call TimestampAddDate
-			err = TimestampAddDate(ivecs, result, proc, 1, nil)
+			err = TimestampAddDate(ivecs, result, proc, 1)
 			require.NoError(t, err, tc.description)
 
 			// Check result
@@ -13135,7 +12818,7 @@ func TestDatetimeAddMinimumValidDate(t *testing.T) {
 			require.NoError(t, err)
 
 			// Call DatetimeAdd
-			err = DatetimeAdd(ivecs, result, proc, 1, nil)
+			err = DatetimeAdd(ivecs, result, proc, 1)
 			require.NoError(t, err, tc.description)
 
 			// Check result
@@ -13231,7 +12914,7 @@ func TestDateAddYearZeroBoundary(t *testing.T) {
 			require.NoError(t, err)
 
 			// Call DateAdd
-			err = DateAdd(ivecs, result, proc, 1, nil)
+			err = DateAdd(ivecs, result, proc, 1)
 			require.NoError(t, err, tc.description)
 
 			// Check result
@@ -13295,9 +12978,7 @@ func TestTimestampAddDateMetadataAndWrapperReuse(t *testing.T) {
 				{"dynamic null day", []string{"", "DAY"}, false, true, types.T_date, 0, []string{"", "2024-01-04"}, nil, false, false},
 				{"dynamic microsecond", []string{"MICROSECOND", "DAY"}, false, false, types.T_datetime, 6, []string{"2024-01-01 00:00:00.000001", "2024-01-04 00:00:00.000000"}, nil, false, false},
 				{"dynamic day hour", []string{"DAY", "HOUR"}, false, false, types.T_datetime, 0, []string{"2024-01-02 00:00:00", "2024-01-02 02:00:00"}, nil, false, false},
-				{"masked microsecond", []string{"DAY", "MICROSECOND"}, false, false, types.T_date, 0, []string{"2024-01-02", ""}, []bool{true, false}, false, false},
 				{"NULL dates retain microsecond metadata", []string{"DAY", "MICROSECOND"}, false, false, types.T_datetime, 6, []string{"", ""}, nil, true, false},
-				{"masked invalid unit", []string{"DAY", "INVALID"}, false, false, types.T_date, 0, []string{"2024-01-02", ""}, []bool{true, false}, false, false},
 				{"invalid unit before NULL dates", []string{"DAY", "INVALID"}, false, false, types.T_date, 0, nil, nil, true, true},
 				{"invalid unit after overflowing microsecond", []string{"MICROSECOND", "INVALID"}, false, false, types.T_date, 0, nil, nil, false, true},
 				{"constant invalid unit before NULL dates", []string{"INVALID"}, true, false, types.T_date, 0, nil, nil, true, true},
@@ -13330,14 +13011,10 @@ func TestTimestampAddDateMetadataAndWrapperReuse(t *testing.T) {
 					require.NoError(t, err)
 					require.NoError(t, vector.AppendFixedList(dates, []types.Date{first, second}, []bool{tc.nullDates, tc.nullDates}, proc.Mp()))
 					require.NoError(t, result.PreExtendAndReset(2))
-					var selected *FunctionSelectList
-					if tc.selected != nil {
-						selected = &FunctionSelectList{AnyNull: true, SelectList: tc.selected}
-					}
 					beforeType := *result.GetResultVector().GetType()
 					warnings := &numericWarningSession{}
 					proc.WarningSink = warnings
-					err = TimestampAddDate([]*vector.Vector{units, intervals, dates}, result, proc, 2, selected)
+					err = TimestampAddDate([]*vector.Vector{units, intervals, dates}, result, proc, 2)
 					if tc.wantError {
 						require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 						require.Empty(t, warnings.warnings, "unit admission must finish before row evaluation")
@@ -13385,7 +13062,7 @@ func TestTimestampAddTimestampWithMaxInt64Interval(t *testing.T) {
 	err = result.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = TimestampAddTimestamp(parameters, result, proc, 1, nil)
+	err = TimestampAddTimestamp(parameters, result, proc, 1)
 	require.NoError(t, err)
 
 	v := result.GetResultVector()
@@ -13442,7 +13119,7 @@ func TestDateTruncTimestampVectorPreservesDSTFold(t *testing.T) {
 	err = result.PreExtendAndReset(len(values))
 	require.NoError(t, err)
 
-	err = DateTruncTimestamp([]*vector.Vector{unitVec, tsVec}, result, proc, len(values), nil)
+	err = DateTruncTimestamp([]*vector.Vector{unitVec, tsVec}, result, proc, len(values))
 	require.NoError(t, err)
 
 	got := vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())
@@ -13471,7 +13148,7 @@ func TestDateTruncZeroTemporalsReturnNull(t *testing.T) {
 					return err
 				}
 				values.SetLength(2)
-				return DateTruncDate([]*vector.Vector{unitVec, values}, result, proc, 2, nil)
+				return DateTruncDate([]*vector.Vector{unitVec, values}, result, proc, 2)
 			},
 		},
 		{
@@ -13484,7 +13161,7 @@ func TestDateTruncZeroTemporalsReturnNull(t *testing.T) {
 					return err
 				}
 				values.SetLength(2)
-				return DateTrunc([]*vector.Vector{unitVec, values}, result, proc, 2, nil)
+				return DateTrunc([]*vector.Vector{unitVec, values}, result, proc, 2)
 			},
 		},
 		{
@@ -13497,7 +13174,7 @@ func TestDateTruncZeroTemporalsReturnNull(t *testing.T) {
 					return err
 				}
 				values.SetLength(2)
-				return DateTruncTimestamp([]*vector.Vector{unitVec, values}, result, proc, 2, nil)
+				return DateTruncTimestamp([]*vector.Vector{unitVec, values}, result, proc, 2)
 			},
 		},
 	}
@@ -13533,7 +13210,7 @@ func TestMoWinTruncateKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(2))
-	require.NoError(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 2, nil))
+	require.NoError(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 2))
 
 	got := vector.MustFixedColNoTypeCheck[types.Datetime](result.GetResultVector())
 	require.Equal(t, types.ZeroDatetime, got[0])
@@ -13562,7 +13239,7 @@ func TestMoWinTruncateTimestampPreservesInstantIdentity(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(3))
-	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 3))
 
 	got := vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())
 	require.Equal(t, types.ZeroTimestamp, got[0])
@@ -13589,7 +13266,7 @@ func TestMoWinTruncateTimestampUsesSessionTimezoneForBucketAlignment(t *testing.
 	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(2))
-	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 2, nil))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 2))
 
 	got := vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())
 	require.Equal(t, types.ZeroTimestamp, got[0])
@@ -13617,7 +13294,7 @@ func TestMoWinTruncateTimestampUsesBoundaryOffsetAcrossDST(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 1, nil))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 1))
 
 	want, err := types.ParseTimestamp(location, "2025-12-16 00:00:00", 6)
 	require.NoError(t, err)
@@ -13643,7 +13320,7 @@ func TestMoWinTruncateTimestampCanonicalizesDSTGapIdempotently(t *testing.T) {
 		result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(1))
-		require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 1, nil))
+		require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 1))
 		return vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())[0]
 	}
 
@@ -13693,7 +13370,7 @@ func TestMoWinTruncatePropagatesNull(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(3))
-	require.NoError(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
+	require.NoError(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 3))
 
 	got := result.GetResultVector()
 	require.False(t, got.IsNull(0))
@@ -13732,7 +13409,7 @@ func TestMoWinTruncateTimestampPropagatesNull(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(3))
-	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 3))
 
 	got := result.GetResultVector()
 	require.False(t, got.IsNull(0))
@@ -13761,7 +13438,7 @@ func TestMoWinTruncateRejectsNonPositiveInterval(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.ErrorContains(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 1, nil), "time window interval must be greater than zero")
+	require.ErrorContains(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 1), "time window interval must be greater than zero")
 }
 
 func TestMoWinDivisorRejectsNonPositiveIntervalAndSliding(t *testing.T) {
@@ -13803,7 +13480,7 @@ func TestMoWinDivisorRejectsNonPositiveIntervalAndSliding(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
-			require.ErrorContains(t, Divisor([]*vector.Vector{interval, minute, sliding, minute}, result, proc, 1, nil), tc.wantErr)
+			require.ErrorContains(t, Divisor([]*vector.Vector{interval, minute, sliding, minute}, result, proc, 1), tc.wantErr)
 		})
 	}
 }
@@ -13846,7 +13523,7 @@ func TestDateTruncInvalidUnitErrorsAreInvalidInput(t *testing.T) {
 	err = result.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = DateTruncDate([]*vector.Vector{unitVec, dateVec}, result, proc, 1, nil)
+	err = DateTruncDate([]*vector.Vector{unitVec, dateVec}, result, proc, 1)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 }
@@ -13868,7 +13545,7 @@ func TestTimestampAddDatetimeWithNonOverflowError(t *testing.T) {
 	err := result.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = TimestampAddDatetime(parameters, result, proc, 1, nil)
+	err = TimestampAddDatetime(parameters, result, proc, 1)
 	require.NoError(t, err)
 
 	// Cleanup
@@ -13897,7 +13574,7 @@ func TestTimestampAddTimestampWithNonOverflowError(t *testing.T) {
 	err := result.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = TimestampAddTimestamp(parameters, result, proc, 1, nil)
+	err = TimestampAddTimestamp(parameters, result, proc, 1)
 	require.NoError(t, err)
 
 	// Cleanup
@@ -13927,7 +13604,7 @@ func TestTimestampAddDateWithNonOverflowError(t *testing.T) {
 	err := result.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = TimestampAddDate(parameters, result, proc, 1, nil)
+	err = TimestampAddDate(parameters, result, proc, 1)
 	require.NoError(t, err)
 
 	// Cleanup
@@ -13955,7 +13632,7 @@ func TestTimestampAddDatetimeWithMicrosecondScale(t *testing.T) {
 	err := result.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = TimestampAddDatetime(parameters, result, proc, 1, nil)
+	err = TimestampAddDatetime(parameters, result, proc, 1)
 	require.NoError(t, err)
 
 	v := result.GetResultVector()
@@ -13993,7 +13670,7 @@ func TestTimestampAddDatetimeWithScaleZero(t *testing.T) {
 	err = result.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = TimestampAddDatetime(parameters, result, proc, 1, nil)
+	err = TimestampAddDatetime(parameters, result, proc, 1)
 	require.NoError(t, err)
 
 	v := result.GetResultVector()
@@ -14024,7 +13701,7 @@ func TestTimestampAddTimestampWithMicrosecondScale(t *testing.T) {
 	err := result.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = TimestampAddTimestamp(parameters, result, proc, 1, nil)
+	err = TimestampAddTimestamp(parameters, result, proc, 1)
 	require.NoError(t, err)
 
 	v := result.GetResultVector()
@@ -14071,7 +13748,7 @@ func TestTimestampAddDateWithTCharNonConstUnit(t *testing.T) {
 	err := result.PreExtendAndReset(fnLength)
 	require.NoError(t, err)
 
-	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+	err = TimestampAddDate(parameters, result, proc, fnLength)
 	require.NoError(t, err)
 
 	v := result.GetResultVector()
@@ -14138,7 +13815,7 @@ func TestTimestampDiffStringWithTCharErrorHandling(t *testing.T) {
 			err = result.PreExtendAndReset(fnLength)
 			require.NoError(t, err)
 
-			err = TimestampDiffString(parameters, result, proc, fnLength, nil)
+			err = TimestampDiffString(parameters, result, proc, fnLength)
 			require.NoError(t, err, tc.desc)
 
 			v := result.GetResultVector()
@@ -14275,7 +13952,7 @@ func TestEltHandlesUnsignedAndBitOverflowIndexes(t *testing.T) {
 	}
 }
 
-func TestEltCoversSignedAndSelectListPaths(t *testing.T) {
+func TestEltCoversSignedIndexPaths(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	t.Run("int64 path returns null for null string and out of range indexes", func(t *testing.T) {
 		tc := tcTemp{
@@ -14293,21 +13970,17 @@ func TestEltCoversSignedAndSelectListPaths(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	})
 
-	testSelectList := func(t *testing.T, indexType types.Type, indexValues any) {
+	testIndex := func(t *testing.T, indexType types.Type, indexValues any) {
 		ivecs := []*vector.Vector{
 			newVectorByType(proc.Mp(), indexType, indexValues, nil),
-			newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"a"}, nil),
+			newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"a", "a"}, nil),
 		}
 
 		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 		err := result.PreExtendAndReset(2)
 		require.NoError(t, err)
 
-		selectList := &FunctionSelectList{
-			AnyNull:    true,
-			SelectList: []bool{true, false},
-		}
-		err = Elt(ivecs, result, proc, 2, selectList)
+		err = Elt(ivecs, result, proc, 2)
 		require.NoError(t, err)
 
 		resultVec := result.GetResultVector()
@@ -14316,15 +13989,15 @@ func TestEltCoversSignedAndSelectListPaths(t *testing.T) {
 		value, isNull := strParam.GetStrValue(0)
 		require.False(t, isNull)
 		require.Equal(t, "a", string(value))
-		require.True(t, resultVec.GetNulls().Contains(1))
+		require.False(t, resultVec.GetNulls().Contains(1))
 	}
 
-	t.Run("int64 selectList rows return null", func(t *testing.T) {
-		testSelectList(t, types.T_int64.ToType(), []int64{1, 1})
+	t.Run("int64 index", func(t *testing.T) {
+		testIndex(t, types.T_int64.ToType(), []int64{1, 1})
 	})
 
-	t.Run("uint64 selectList rows return null", func(t *testing.T) {
-		testSelectList(t, types.T_uint64.ToType(), []uint64{1, 1})
+	t.Run("uint64 index", func(t *testing.T) {
+		testIndex(t, types.T_uint64.ToType(), []uint64{1, 1})
 	})
 }
 
@@ -14915,7 +14588,6 @@ func TestGeodeticDiscreteDistanceUnitEmpty(t *testing.T) {
 	geom32.Width = 4327 // SRID 4326
 
 	line := "LINESTRING(0 0,1 0)"
-	oneDegreeMeters := math.Pi / 180 * geo.EarthRadiusMeters
 	encode32 := func(t *testing.T, wkt string) string {
 		t.Helper()
 		if wkt == "\x01" || wkt == "GEOMETRYCOLLECTION() trailing" {
@@ -15053,42 +14725,6 @@ func TestGeodeticDiscreteDistanceUnitEmpty(t *testing.T) {
 		})
 	}
 
-	for _, fn := range []struct {
-		name string
-		fn   executeLogicOfOverload
-		fn32 executeLogicOfOverload
-	}{
-		{name: "frechet", fn: StFrechetDistanceWithUnit, fn32: StFrechetDistanceWithUnit32},
-		{name: "hausdorff", fn: StHausdorffDistanceWithUnit, fn32: StHausdorffDistanceWithUnit32},
-	} {
-		t.Run(fn.name+"/mixed rows and mask", func(t *testing.T) {
-			selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false, true}}
-			fc := NewFunctionTestCase(proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(geom, []string{line, "LINESTRING EMPTY", line, "\x01"}, []bool{false, false, false, true}),
-					NewFunctionTestInput(geom, []string{"LINESTRING(0 1,1 1)", line, "\x01", line}, nil),
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre", "metre", "metre", "metre"}, nil),
-				},
-				NewFunctionTestResult(types.T_float64.ToType(), false,
-					[]float64{oneDegreeMeters, 0, 0, 0}, []bool{false, true, true, true}), fn.fn).WithSelectList(selectList)
-			ok, info := fc.RunAndFree()
-			require.True(t, ok, info)
-
-			line32 := encode32(t, line)
-			other32 := encode32(t, "LINESTRING(0 1,1 1)")
-			empty32 := encode32(t, "LINESTRING EMPTY")
-			fc32 := NewFunctionTestCase(proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(geom32, []string{line32, empty32, line32, "\x01"}, []bool{false, false, false, true}),
-					NewFunctionTestInput(geom32, []string{other32, line32, "\x01", line32}, nil),
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre", "metre", "metre", "metre"}, nil),
-				},
-				NewFunctionTestResult(types.T_float32.ToType(), false,
-					[]float32{float32(oneDegreeMeters), 0, 0, 0}, []bool{false, true, true, true}), fn.fn32).WithSelectList(selectList)
-			ok, info = fc32.RunAndFree()
-			require.True(t, ok, info)
-		})
-	}
 }
 
 func TestSpatialDistanceUnitOverloadsResolve(t *testing.T) {
@@ -15325,7 +14961,7 @@ func TestDecimalPrecisionKernelSelection(t *testing.T) {
 						result := vector.NewFunctionResultWrapper(types.New(oid, width, outputScale), proc.Mp())
 						defer result.Free()
 						require.NoError(t, result.PreExtendAndReset(1))
-						require.NoError(t, kernel([]*vector.Vector{input, digits}, result, proc, 1, nil))
+						require.NoError(t, kernel([]*vector.Vector{input, digits}, result, proc, 1))
 						expected := uint64(10)
 						if name == "floor" {
 							expected = 9
@@ -15340,7 +14976,7 @@ func TestDecimalPrecisionKernelSelection(t *testing.T) {
 						}
 					}()
 				}
-				for _, mode := range []string{"selected", "null", "masked"} {
+				for _, mode := range []string{"selected", "null"} {
 					func() {
 						input := vector.NewVec(typ, proc.Mp())
 						defer input.Free(proc.Mp())
@@ -15366,11 +15002,7 @@ func TestDecimalPrecisionKernelSelection(t *testing.T) {
 						result := vector.NewFunctionResultWrapper(resolved.GetReturnType(), proc.Mp())
 						defer result.Free()
 						require.NoError(t, result.PreExtendAndReset(2))
-						var selection *FunctionSelectList
-						if mode == "masked" {
-							selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
-						}
-						invoke := func() error { return kernel([]*vector.Vector{input, digits}, result, proc, 2, selection) }
+						invoke := func() error { return kernel([]*vector.Vector{input, digits}, result, proc, 2) }
 						if mode == "selected" {
 							var caught any
 							var diagnostic error
@@ -15587,7 +15219,7 @@ func TestTimestampAddDateDeniedTypeGrowth(t *testing.T) {
 				}
 			}
 			require.NotPanics(t, func() {
-				err = TimestampAddDate([]*vector.Vector{unit, count, date}, result, proc, 128, nil)
+				err = TimestampAddDate([]*vector.Vector{unit, count, date}, result, proc, 128)
 			})
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.Equal(t, types.T_date, result.GetResultVector().GetType().Oid)
@@ -15628,9 +15260,9 @@ func TestTimestampAddDateWarningsPerSelectedRow(t *testing.T) {
 				result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
 				t.Cleanup(result.Free)
 				require.NoError(t, result.PreExtendAndReset(3))
-				require.NoError(t, TimestampAddDate([]*vector.Vector{unit, count, date}, result, proc, 3, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}))
+				require.NoError(t, TimestampAddDate([]*vector.Vector{unit, count, date}, result, proc, 3))
 				require.Equal(t, 3, result.GetResultVector().GetNulls().Count())
-				require.Len(t, warnings.warnings, 2, "each evaluated overflowing row emits one warning; masked rows emit none")
+				require.Len(t, warnings.warnings, 3, "each evaluated overflowing row emits one warning")
 			})
 		}
 	}
@@ -15690,7 +15322,7 @@ func BenchmarkTimestampAddDate(b *testing.B) {
 			if err = result.PreExtendAndReset(size); err != nil {
 				b.Fatal(err)
 			}
-			if err = TimestampAddDate(inputs, result, proc, size, nil); err != nil {
+			if err = TimestampAddDate(inputs, result, proc, size); err != nil {
 				b.Fatal(err)
 			}
 			b.ReportAllocs()
@@ -15701,7 +15333,7 @@ func BenchmarkTimestampAddDate(b *testing.B) {
 				if err = result.PreExtendAndReset(size); err != nil {
 					b.Fatal(err)
 				}
-				if err = TimestampAddDate(inputs, result, proc, size, nil); err != nil {
+				if err = TimestampAddDate(inputs, result, proc, size); err != nil {
 					b.Fatal(err)
 				}
 			}

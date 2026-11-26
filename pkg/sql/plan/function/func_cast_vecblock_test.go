@@ -29,7 +29,7 @@ func runVecBlockCast(t *testing.T, proc *process.Process, src *vector.Vector, to
 	t.Helper()
 	result := vector.NewFunctionResultWrapper(to, proc.Mp())
 	require.NoError(t, result.PreExtendAndReset(src.Length()))
-	err := NewCast([]*vector.Vector{src, vector.NewVec(to, proc.Mp())}, result, proc, src.Length(), nil)
+	err := NewCast([]*vector.Vector{src, vector.NewVec(to, proc.Mp())}, result, proc, src.Length())
 	return result.GetResultVector(), err
 }
 
@@ -199,7 +199,7 @@ func TestCastVecBlockExactText(t *testing.T) {
 		// vecblock_json
 		result := vector.NewFunctionResultWrapper(types.T_text.ToType(), proc.Mp())
 		require.NoError(t, result.PreExtendAndReset(2))
-		require.NoError(t, VecBlockJSON([]*vector.Vector{src}, result, proc, 2, nil))
+		require.NoError(t, VecBlockJSON([]*vector.Vector{src}, result, proc, 2))
 		text := result.GetResultVector().GetStringAt(0)
 		require.True(t, result.GetResultVector().IsNull(1))
 
@@ -236,7 +236,7 @@ func TestVecBlockBinary(t *testing.T) {
 
 		bin := vector.NewFunctionResultWrapper(types.T_blob.ToType(), proc.Mp())
 		require.NoError(t, bin.PreExtendAndReset(2))
-		require.NoError(t, VecBlockBinary([]*vector.Vector{cells}, bin, proc, 2, nil))
+		require.NoError(t, VecBlockBinary([]*vector.Vector{cells}, bin, proc, 2))
 		require.Equal(t, cell, bin.GetResultVector().GetBytesAt(0), oid.String())
 		require.True(t, bin.GetResultVector().IsNull(1))
 

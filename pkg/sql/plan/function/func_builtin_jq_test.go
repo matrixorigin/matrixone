@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestJqConstResultPreservesCardinalityMaskAndReuse(t *testing.T) {
+func TestJqConstResultPreservesCardinalityAndReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	op := newOpBuiltInJq()
 	inputs := []FunctionTestInput{
@@ -59,22 +59,21 @@ func TestJqConstResultPreservesCardinalityMaskAndReuse(t *testing.T) {
 	succeed, info := testCase.Run()
 	require.True(t, succeed, info)
 
-	// Reuse the result wrapper and operator with one masked row. Reuse must be
-	// equivalent to a fresh result, and every logical row must still have one
-	// physical varlena descriptor.
+	// Reuse the result wrapper and operator. Reuse must be equivalent to a
+	// fresh result, and every logical row must still have one physical varlena
+	// descriptor.
 	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 	require.NoError(t, op.tryJq(
 		testCase.parameters,
 		testCase.result,
 		proc,
 		testCase.fnLength,
-		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}},
 	))
 
 	result := testCase.GetResultVectorDirectly()
 	require.Equal(t, 3, result.Length())
 	param := vector.GenerateFunctionStrParameter(result)
-	for row, wantNull := range []bool{false, true, false} {
+	for row, wantNull := range []bool{false, false, false} {
 		value, isNull := param.GetStrValue(uint64(row))
 		require.Equalf(t, wantNull, isNull, "row %d null state", row)
 		if !wantNull {
@@ -99,10 +98,10 @@ func TestJqConstNonInlineResultSharesPayload(t *testing.T) {
 			types.T_varchar.ToType(), []string{jsonPayload, jsonPayload, jsonPayload}, nil),
 		NewFunctionTestConstInput(
 			types.T_varchar.ToType(), []string{".", ".", "."}, nil),
-	}, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}, false)
+	}, false)
 	require.NoError(t, err)
 	requireJqResult(t, result,
-		[]string{jsonPayload, "", jsonPayload}, []bool{false, true, false})
+		[]string{jsonPayload, jsonPayload, jsonPayload}, []bool{false, false, false})
 	require.Len(t, result.GetArea(), len(jsonPayload))
 }
 
@@ -111,7 +110,6 @@ func evalJqForTest(
 	proc *process.Process,
 	op *opBuiltInJq,
 	inputs []FunctionTestInput,
-	selectList *FunctionSelectList,
 	isTry bool,
 ) (*vector.Vector, error) {
 	t.Helper()
@@ -128,7 +126,7 @@ func evalJqForTest(
 	if isTry {
 		fn = op.tryJq
 	}
-	err := fn(testCase.parameters, testCase.result, proc, testCase.fnLength, selectList)
+	err := fn(testCase.parameters, testCase.result, proc, testCase.fnLength)
 	return testCase.GetResultVectorDirectly(), err
 }
 
@@ -153,7 +151,7 @@ func TestJqVarlenaProducerMatrix(t *testing.T) {
 		result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{}, nil),
-		}, nil, false)
+		}, false)
 		require.NoError(t, err)
 		require.Zero(t, result.Length())
 	})
@@ -163,7 +161,7 @@ func TestJqVarlenaProducerMatrix(t *testing.T) {
 		result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"invalid", "invalid"}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{".", "."}, nil),
-		}, nil, true)
+		}, true)
 		require.NoError(t, err)
 		requireJqResult(t, result, []string{"", ""}, []bool{true, true})
 	})
@@ -173,21 +171,21 @@ func TestJqVarlenaProducerMatrix(t *testing.T) {
 		result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"", ""}, []bool{true, false}),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{".", "."}, nil),
-		}, nil, true)
+		}, true)
 		require.NoError(t, err)
 		requireJqResult(t, result, []string{"", ""}, []bool{true, true})
 
 		result, err = evalJqForTest(t, proc, op, []FunctionTestInput{
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"foo":1}`, `{"foo":2}`}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"", ""}, []bool{true, false}),
-		}, nil, true)
+		}, true)
 		require.NoError(t, err)
 		requireJqResult(t, result, []string{"", ""}, []bool{true, true})
 
 		result, err = evalJqForTest(t, proc, op, []FunctionTestInput{
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"foo":1}`, `{"foo":2}`}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"(", "("}, nil),
-		}, nil, true)
+		}, true)
 		require.NoError(t, err)
 		requireJqResult(t, result, []string{"", ""}, []bool{true, true})
 	})
@@ -198,8 +196,8 @@ func TestJqVarlenaProducerMatrix(t *testing.T) {
 			NewFunctionTestConstInput(types.T_varchar.ToType(),
 				[]string{`{"foo":1}`, `{"foo":1}`, `{"foo":1}`, `{"foo":1}`}, nil),
 			NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{".foo", "(", ".foo", ".foo"}, []bool{false, false, true, false}),
-		}, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}}, true)
+				[]string{".foo", "(", ".foo", ".foo"}, []bool{false, false, true, true}),
+		}, true)
 		require.NoError(t, err)
 		requireJqResult(t, result,
 			[]string{"1", "", "", ""}, []bool{false, true, true, true})
@@ -210,10 +208,10 @@ func TestJqVarlenaProducerMatrix(t *testing.T) {
 		result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
 			NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{`{"foo":1}`, "invalid", `{"foo":1}`, `{"foo":1}`},
-				[]bool{false, false, true, false}),
+				[]bool{false, false, true, true}),
 			NewFunctionTestConstInput(types.T_varchar.ToType(),
 				[]string{".foo", ".foo", ".foo", ".foo"}, nil),
-		}, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}}, true)
+		}, true)
 		require.NoError(t, err)
 		requireJqResult(t, result,
 			[]string{"1", "", "", ""}, []bool{false, true, true, true})
@@ -223,7 +221,7 @@ func TestJqVarlenaProducerMatrix(t *testing.T) {
 		result, err = evalJqForTest(t, proc, op, []FunctionTestInput{
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"foo":2}`}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{".foo"}, nil),
-		}, nil, true)
+		}, true)
 		require.NoError(t, err)
 		requireJqResult(t, result, []string{"2"}, []bool{false})
 	})
@@ -234,8 +232,8 @@ func TestJqVarlenaProducerMatrix(t *testing.T) {
 			NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{`{"foo":1}`, `{"foo":2}`, "invalid", `{"foo":4}`}, nil),
 			NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{".foo", "(", ".foo", ".foo"}, []bool{false, false, true, false}),
-		}, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}}, true)
+				[]string{".foo", "(", ".foo", ".foo"}, []bool{false, false, true, true}),
+		}, true)
 		require.NoError(t, err)
 		requireJqResult(t, result,
 			[]string{"1", "", "", ""}, []bool{false, true, true, true})
@@ -247,7 +245,7 @@ func TestJqVarlenaProducerMatrix(t *testing.T) {
 			NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{`{"foo":1}`, `{"foo":2}`}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"(", "("}, nil),
-		}, nil, false)
+		}, false)
 		require.Error(t, err)
 		require.Zero(t, result.Length())
 	})
@@ -287,7 +285,7 @@ func TestJqFramesMultipleResultsAndPreservesLargeIntegers(t *testing.T) {
 			result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{test.json}, nil),
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{test.query}, nil),
-			}, nil, test.isTry)
+			}, test.isTry)
 			require.NoError(t, err)
 			requireJqResult(t, result, []string{test.want}, []bool{false})
 		})
@@ -296,19 +294,19 @@ func TestJqFramesMultipleResultsAndPreservesLargeIntegers(t *testing.T) {
 	_, err := evalJqForTest(t, proc, op, []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil),
 		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"."}, nil),
-	}, nil, false)
+	}, false)
 	require.EqualError(t, err, "unexpected end of JSON input")
 
 	_, err = evalJqForTest(t, proc, op, []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e1000"}, nil),
 		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"."}, nil),
-	}, nil, false)
+	}, false)
 	require.EqualError(t, err, "json: cannot unmarshal number 1e1000 into Go value of type float64")
 
 	result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"value":-1e1000}`}, nil),
 		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{".value"}, nil),
-	}, nil, true)
+	}, true)
 	require.NoError(t, err)
 	requireJqResult(t, result, []string{""}, []bool{true})
 }
@@ -333,13 +331,13 @@ func TestJqRejectsOutOfRangeNumbersBeforeDuplicateKeysOverwriteThem(t *testing.T
 			_, err := evalJqForTest(t, proc, newOpBuiltInJq(), []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{test.json}, nil),
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"."}, nil),
-			}, nil, false)
+			}, false)
 			require.EqualError(t, err, test.want)
 
 			result, err := evalJqForTest(t, proc, newOpBuiltInJq(), []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{test.json}, nil),
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"."}, nil),
-			}, nil, true)
+			}, true)
 			require.NoError(t, err)
 			requireJqResult(t, result, []string{""}, []bool{true})
 		})
@@ -362,7 +360,7 @@ func evalJqSingleForTest(
 			[]string{jsonStr, jsonStr, jsonStr}, nil),
 		NewFunctionTestConstInput(types.T_varchar.ToType(),
 			[]string{query, query, query}, nil),
-	}, nil, isTry)
+	}, isTry)
 	if err != nil {
 		return "", false, err
 	}
@@ -414,7 +412,7 @@ func TestJqMultiResultFraming(t *testing.T) {
 				[]string{`["a","b","c","d","e"]`, `{"a":1,"b":2}`, `[1,2,3,4,5]`}, nil),
 			NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{`.[]`, `.[]`, `.[] | select(. > 2)`}, nil),
-		}, nil, false)
+		}, false)
 		require.NoError(t, err)
 		requireJqResult(t, result, []string{
 			"\"a\"\n\"b\"\n\"c\"\n\"d\"\n\"e\"",
@@ -430,7 +428,7 @@ func TestJqMultiResultFraming(t *testing.T) {
 				[]string{`[1,2,3,4,5]`, `[1,2,3,4,5]`, `[1,2,3,4,5]`}, nil),
 			NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{`.[]`, `.[] | select(. > 3)`, `.[]`}, nil),
-		}, nil, false)
+		}, false)
 		require.NoError(t, err)
 		requireJqResult(t, result, []string{
 			"1\n2\n3\n4\n5",
@@ -446,7 +444,7 @@ func TestJqMultiResultFraming(t *testing.T) {
 				[]string{`[1,2,3]`, `[4,5]`, `[]`}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(),
 				[]string{`.[]`, `.[]`, `.[]`}, nil),
-		}, nil, false)
+		}, false)
 		require.NoError(t, err)
 		requireJqResult(t, result, []string{
 			"1\n2\n3",
@@ -536,7 +534,7 @@ func TestJqPreservesExactIntegerBoundaries(t *testing.T) {
 				[]string{`{"n":9007199254740993}`, `{"n":-9007199254740993}`, `{"n":4722366482869645213696}`}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(),
 				[]string{`.n`, `.n`, `.n`}, nil),
-		}, nil, false)
+		}, false)
 		require.NoError(t, err)
 		requireJqResult(t, result, []string{
 			"9007199254740993",
@@ -592,7 +590,7 @@ func TestJqRejectsFloatOverflowLikeLegacyUnmarshal(t *testing.T) {
 				[]string{`{"n":1}`, `{"n":1e309}`, `{"n":3}`}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(),
 				[]string{`.n`, `.n`, `.n`}, nil),
-		}, nil, false)
+		}, false)
 		require.Error(t, err)
 
 		opTry := newOpBuiltInJq()
@@ -601,7 +599,7 @@ func TestJqRejectsFloatOverflowLikeLegacyUnmarshal(t *testing.T) {
 				[]string{`{"n":1}`, `{"n":1e309}`, `{"n":3}`}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(),
 				[]string{`.n`, `.n`, `.n`}, nil),
-		}, nil, true)
+		}, true)
 		require.NoError(t, err)
 		requireJqResult(t, result,
 			[]string{"1", "", "3"}, []bool{false, true, false})
@@ -635,32 +633,24 @@ func TestJqRejectsFloatOverflowLikeLegacyUnmarshal(t *testing.T) {
 }
 
 func TestJsonRowPropagatesResultAllocationFailureAndResetsEncoder(t *testing.T) {
-	for _, masked := range []bool{false, true} {
-		t.Run(strconv.FormatBool(masked), func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			defer proc.Free()
-			memory, err := mpool.NewMPool("json-row-result-failure", 1<<20, mpool.NoFixed)
-			require.NoError(t, err)
-			defer mpool.DeleteMPool(memory)
-			held, err := memory.Alloc(1<<20, true)
-			require.NoError(t, err)
-			defer memory.Free(held)
-			failed := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), memory)
-			defer failed.Free()
-			require.NoError(t, failed.PreExtendAndReset(0))
-			op := newOpBuiltInJsonRow()
-			var mask *FunctionSelectList
-			if masked {
-				mask = &FunctionSelectList{AnyNull: true, SelectList: []bool{false}}
-			}
-			require.Error(t, op.jsonRow(nil, failed, proc, 1, mask))
-			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-			defer result.Free()
-			require.NoError(t, result.PreExtendAndReset(1))
-			require.NoError(t, op.jsonRow(nil, result, proc, 1, nil))
-			value, isNull := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
-			require.False(t, isNull)
-			require.Equal(t, "[]", string(value))
-		})
-	}
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	memory, err := mpool.NewMPool("json-row-result-failure", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(memory)
+	held, err := memory.Alloc(1<<20, true)
+	require.NoError(t, err)
+	defer memory.Free(held)
+	failed := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), memory)
+	defer failed.Free()
+	require.NoError(t, failed.PreExtendAndReset(0))
+	op := newOpBuiltInJsonRow()
+	require.Error(t, op.jsonRow(nil, failed, proc, 1))
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, op.jsonRow(nil, result, proc, 1))
+	value, isNull := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+	require.False(t, isNull)
+	require.Equal(t, "[]", string(value))
 }

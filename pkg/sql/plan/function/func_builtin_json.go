@@ -260,21 +260,12 @@ func computeStringSimple(json []byte, paths []*bytejson.Path) (bytejson.ByteJson
 	return bj.QuerySimple(paths), nil
 }
 
-func (op *opBuiltInJsonContains) jsonContains(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonContains) jsonContains(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	targetVec := parameters[0]
 	candidateVec := parameters[1]
 	targetWrapper := vector.GenerateFunctionStrParameter(targetVec)
 	candidateWrapper := vector.GenerateFunctionStrParameter(candidateVec)
 	rs := vector.MustFunctionResult[int64](result)
-
-	if selectList != nil && selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 
 	var pathWrapper vector.FunctionParameterWrapper[types.Varlena]
 	hasPath := len(parameters) == 3
@@ -283,13 +274,6 @@ func (op *opBuiltInJsonContains) jsonContains(parameters []*vector.Vector, resul
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
-
 		targetBytes, targetNull := targetWrapper.GetStrValue(i)
 		candidateBytes, candidateNull := candidateWrapper.GetStrValue(i)
 		if targetNull || candidateNull {
@@ -341,7 +325,7 @@ func (op *opBuiltInJsonContains) jsonContains(parameters []*vector.Vector, resul
 	return nil
 }
 
-func (op *opBuiltInJsonContainsPath) jsonContainsPath(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonContainsPath) jsonContainsPath(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	docVec := parameters[0]
 	docWrapper := vector.GenerateFunctionStrParameter(docVec)
 	modeVec := parameters[1]
@@ -352,27 +336,11 @@ func (op *opBuiltInJsonContainsPath) jsonContainsPath(parameters []*vector.Vecto
 	}
 	rs := vector.MustFunctionResult[int64](result)
 
-	if selectList != nil && selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
 	if len(op.pathCache) != len(pathWrappers) {
 		op.pathCache = make([]jsonContainsPathPathCache, len(pathWrappers))
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
-
 		docBytes, docNull := docWrapper.GetStrValue(i)
 		if docNull {
 			if err := rs.Append(0, true); err != nil {
@@ -796,7 +764,7 @@ func isJsonNumericType(tp bytejson.TpCode) bool {
 	}
 }
 
-func jsonLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func jsonLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	legacy := legacyJSONBinding(proc.Ctx)
 	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
@@ -963,15 +931,9 @@ func computeStringJsonRemove(json []byte, paths []*bytejson.Path) (bytejson.Byte
 	return bj.Remove(paths)
 }
 
-func (op *opBuiltInJsonExtract) buildPath(ctx context.Context, params []*vector.Vector, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonExtract) buildPath(ctx context.Context, params []*vector.Vector, length int) error {
 	op.npath = len(params) - 1
 	if op.npath == 0 {
-		return nil
-	}
-	if selectList.IgnoreAllRow() {
-		op.pathStrs = nil
-		op.paths = nil
-		op.simple = true
 		return nil
 	}
 
@@ -1040,13 +1002,7 @@ func (op *opBuiltInJsonExtract) buildPath(ctx context.Context, params []*vector.
 			}
 			strs := op.pathStrs[i*op.npath : (i+1)*op.npath]
 			paths := op.paths[i*op.npath : (i+1)*op.npath]
-			if selectList.Contains(uint64(i)) {
-				for j := 0; j < op.npath; j++ {
-					strs[j] = ""
-					paths[j] = nil
-				}
-				continue
-			}
+
 			if err := op.buildOnePath(pathWrapers, i, strs, paths); err != nil {
 				return err
 			}
@@ -1096,7 +1052,7 @@ func (op *opBuiltInJsonExtract) buildOnePath(paramWrappers []vector.FunctionPara
 }
 
 // CheckJSONExtractRow checks before the next bounded group of rows, including
-// groups consisting entirely of masked or NULL inputs.
+// groups consisting entirely of NULL inputs.
 func CheckJSONExtractRow(ctx context.Context, row int) error {
 	if row%64 == 0 && ctx != nil {
 		return ctx.Err()
@@ -1104,7 +1060,7 @@ func CheckJSONExtractRow(ctx context.Context, row int) error {
 	return nil
 }
 
-func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	ctx := proc.Ctx
 	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
@@ -1114,7 +1070,7 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 	if err := CheckJSONExtractRow(ctx, 0); err != nil {
 		return err
 	}
-	if err := op.buildPath(ctx, parameters, length, selectList); err != nil {
+	if err := op.buildPath(ctx, parameters, length); err != nil {
 		return err
 	}
 
@@ -1122,12 +1078,7 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 		if err := CheckJSONExtractRow(ctx, row); err != nil {
 			return err
 		}
-		if selectList.IgnoreAllRow() || selectList.Contains(uint64(row)) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
+
 		raw, null := jsonWrapper.GetStrValue(uint64(row))
 		paths := op.getPaths(uint64(row))
 		if null || len(paths) == 0 || paths[0] == nil {
@@ -1159,7 +1110,7 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 }
 
 // JSON_EXTRACT_STRING: extract a string value from a json object
-func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	var err error
 	var fn computeFn
 
@@ -1167,17 +1118,8 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	if selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
 	// build all paths
-	if err = op.buildPath(proc.Ctx, parameters, length, selectList); err != nil {
+	if err = op.buildPath(proc.Ctx, parameters, length); err != nil {
 		return err
 	}
 
@@ -1191,12 +1133,6 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
 			if err = rs.AppendBytes(nil, true); err != nil {
@@ -1243,7 +1179,7 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 }
 
 // JSON_EXTRACT_FLOAT64: extract a float64 value from a json object
-func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	var err error
 	var fn computeFn
 
@@ -1251,17 +1187,8 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[float64](result)
 
-	if selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
 	// build all paths
-	if err = op.buildPath(proc.Ctx, parameters, length, selectList); err != nil {
+	if err = op.buildPath(proc.Ctx, parameters, length); err != nil {
 		return err
 	}
 	if !op.simple || op.npath > 1 {
@@ -1275,12 +1202,6 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
 			if err = rs.Append(0, true); err != nil {
@@ -1457,41 +1378,32 @@ func jsonMergeCheckFn(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithCast(0, ts)
 }
 
-func (op *opBuiltInJsonSet) buildJsonSet(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifySet)
+func (op *opBuiltInJsonSet) buildJsonSet(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return op.buildJsonFunction(parameters, result, proc, length, bytejson.JsonModifySet)
 }
 
-func (op *opBuiltInJsonSet) buildJsonInsert(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyInsert)
+func (op *opBuiltInJsonSet) buildJsonInsert(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return op.buildJsonFunction(parameters, result, proc, length, bytejson.JsonModifyInsert)
 }
 
-func (op *opBuiltInJsonSet) buildJsonReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyReplace)
+func (op *opBuiltInJsonSet) buildJsonReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return op.buildJsonFunction(parameters, result, proc, length, bytejson.JsonModifyReplace)
 }
 
-func (op *opBuiltInJsonSet) buildJsonArrayAppend(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyArrayAppend)
+func (op *opBuiltInJsonSet) buildJsonArrayAppend(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return op.buildJsonFunction(parameters, result, proc, length, bytejson.JsonModifyArrayAppend)
 }
 
-func (op *opBuiltInJsonSet) buildJsonArrayInsert(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyArrayInsert)
+func (op *opBuiltInJsonSet) buildJsonArrayInsert(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return op.buildJsonFunction(parameters, result, proc, length, bytejson.JsonModifyArrayInsert)
 }
 
-func (op *opBuiltInJsonRemove) buildJsonRemove(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonRemove) buildJsonRemove(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	var fn computeFn
 
 	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[types.Varlena](result)
-
-	if selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 
 	if jsonVec.GetType().Oid == types.T_json {
 		fn = computeJsonRemove
@@ -1501,13 +1413,6 @@ func (op *opBuiltInJsonRemove) buildJsonRemove(parameters []*vector.Vector, resu
 
 rowLoop:
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -1547,16 +1452,9 @@ rowLoop:
 	return nil
 }
 
-func (op *opBuiltInJsonMerge) buildJsonMergePatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonMerge) buildJsonMergePatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	if selectList != nil && selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
+
 	rs.UseOptFunctionParamFrame(len(parameters))
 	wrappers := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
 	for i, parameter := range parameters {
@@ -1566,13 +1464,6 @@ func (op *opBuiltInJsonMerge) buildJsonMergePatch(parameters []*vector.Vector, r
 	defer builder.Clear()
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
 		if err := builder.BeginRow(); err != nil {
 			return err
 		}
@@ -1624,16 +1515,9 @@ func (op *opBuiltInJsonMerge) buildJsonMergePatch(parameters []*vector.Vector, r
 	return nil
 }
 
-func (op *opBuiltInJsonMerge) buildJsonMergePreserve(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonMerge) buildJsonMergePreserve(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	if selectList != nil && selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
+
 	rs.UseOptFunctionParamFrame(len(parameters))
 	wrappers := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
 	for i, parameter := range parameters {
@@ -1644,13 +1528,6 @@ func (op *opBuiltInJsonMerge) buildJsonMergePreserve(parameters []*vector.Vector
 
 rowLoop:
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
 		if err := builder.BeginRow(); err != nil {
 			return err
 		}
@@ -1709,7 +1586,7 @@ func jsonMergeDocument(
 	return document, false, nil
 }
 
-func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, jsonFuncType bytejson.JsonModifyType) error {
+func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, jsonFuncType bytejson.JsonModifyType) error {
 	legacy := legacyJSONBinding(proc.Ctx)
 	// implement json_set function
 	// the first parameter is the json object
@@ -1722,14 +1599,6 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	if selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 	protocolVersion := jsonSessionProtocolVersion(proc)
 
 	switch jsonFuncType {
@@ -1785,12 +1654,6 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 
 rowLoop:
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
 			if err = rs.AppendBytes(nil, true); err != nil {
@@ -1895,26 +1758,12 @@ func newOpBuiltInJsonArray() *opBuiltInJsonArray {
 }
 
 func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	if selectList != nil && selectList.IgnoreAllRow() {
-		for j := 0; j < length; j++ {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 	protocolVersion := jsonSessionProtocolVersion(proc)
 
 	for j := 0; j < length; j++ {
-		if selectList.Contains(uint64(j)) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		elems := make([]any, 0, len(params))
 		for i := 0; i < len(params); i++ {
 			elem, err := op.convertToAny(proc, params[i], result.ArgumentIsBin(i), j, protocolVersion)
@@ -2022,27 +1871,13 @@ func newOpBuiltInJsonObject() *opBuiltInJsonObject {
 }
 
 func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	arrayOp := &opBuiltInJsonArray{}
 
-	if selectList != nil && selectList.IgnoreAllRow() {
-		for j := 0; j < length; j++ {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 	protocolVersion := jsonSessionProtocolVersion(proc)
 
 	for j := 0; j < length; j++ {
-		if selectList.Contains(uint64(j)) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		obj := make(map[string]any, len(params)/2)
 
 		for i := 0; i < len(params); i += 2 {
@@ -2165,24 +2000,15 @@ func newOpBuiltInJsonType() *opBuiltInJsonType {
 }
 
 func (op *opBuiltInJsonType) jsonType(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	jsonVec := params[0]
 	isBinary := jsonVec.GetType().Oid == types.T_json
 	p := vector.GenerateFunctionStrParameter(jsonVec)
 
-	if selectList.IgnoreAllRow() {
-		for j := 0; j < length; j++ {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
 	for j := uint64(0); j < uint64(length); j++ {
 		val, null := p.GetStrValue(j)
-		if null || selectList.Contains(j) {
+		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -2222,7 +2048,7 @@ func newTypedByteJson(tp bytejson.TpCode, s string) bytejson.ByteJson {
 }
 
 // JSON_VALID
-func JsonValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func JsonValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	// T_json input: internal representation is always valid JSON.
 	jsonValid := func(v []byte) (bool, error) {
 		return true, nil
@@ -2236,18 +2062,18 @@ func JsonValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	if ivecs[0].GetType().Oid.IsMySQLString() {
 		fn = strValid
 	}
-	return opUnaryBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, fn, selectList)
+	return opUnaryBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, fn)
 }
 
 // JSON_LENGTH
-func JsonLength(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func JsonLength(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if len(ivecs) == 2 {
-		return jsonLengthWithPath(ivecs, result, proc, length, selectList)
+		return jsonLengthWithPath(ivecs, result, proc, length)
 	}
-	return jsonLengthRoot(ivecs, result, proc, length, selectList)
+	return jsonLengthRoot(ivecs, result, proc, length)
 }
 
-func jsonLengthRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func jsonLengthRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	jsonFn := func(v []byte) (int64, error) {
 		bj := types.DecodeJson(v)
 		return jsonValueLength(bj), nil
@@ -2263,10 +2089,10 @@ func jsonLengthRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	if ivecs[0].GetType().Oid.IsMySQLString() {
 		fn = strFn
 	}
-	return opUnaryBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length, fn, selectList)
+	return opUnaryBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length, fn)
 }
 
-func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	legacy := legacyJSONBinding(proc.Ctx)
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[int64](result)
@@ -2278,18 +2104,7 @@ func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrap
 
 	isJson := !ivecs[0].GetType().Oid.IsMySQLString()
 
-	// selectList: ignore all rows
-	if selectList != nil && selectList.IgnoreAllRow() {
-		rsNull.AddRange(0, uint64(length))
-		return nil
-	}
-
 	for i := uint64(0); i < uint64(length); i++ {
-		// selectList: skip rows that were already evaluated
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
-			rsNull.Add(i)
-			continue
-		}
 		jsonBytes, null1 := p1.GetStrValue(i)
 		pathBytes, null2 := p2.GetStrValue(i)
 		if null1 || null2 {
@@ -2338,31 +2153,20 @@ func jsonValueLength(bj bytejson.ByteJson) int64 {
 }
 
 // JSON_KEYS
-func JsonKeys(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func JsonKeys(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if len(ivecs) == 2 {
-		return jsonKeysWithPath(ivecs, result, proc, length, selectList)
+		return jsonKeysWithPath(ivecs, result, proc, length)
 	}
-	return jsonKeysRoot(ivecs, result, proc, length, selectList)
+	return jsonKeysRoot(ivecs, result, proc, length)
 }
 
-func jsonKeysRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func jsonKeysRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	isString := ivecs[0].GetType().Oid.IsMySQLString()
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
 
-	if selectList != nil && selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			rs.AppendMustNullForBytesResult()
-		}
-		return nil
-	}
-
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			rs.AppendMustNullForBytesResult()
-			continue
-		}
 		v, null := p1.GetStrValue(i)
 		if null {
 			rs.AppendMustNullForBytesResult()
@@ -2390,7 +2194,7 @@ func jsonKeysRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	return nil
 }
 
-func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
@@ -2398,18 +2202,7 @@ func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 
 	isJson := !ivecs[0].GetType().Oid.IsMySQLString()
 
-	if selectList != nil && selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			rs.AppendMustNullForBytesResult()
-		}
-		return nil
-	}
-
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			rs.AppendMustNullForBytesResult()
-			continue
-		}
 		jsonBytes, null1 := p1.GetStrValue(i)
 		if null1 {
 			rs.AppendMustNullForBytesResult()
@@ -2467,24 +2260,13 @@ func buildJsonKeysArray(bj bytejson.ByteJson) (bytejson.ByteJson, error) {
 }
 
 // JSON_PRETTY
-func JsonPretty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func JsonPretty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	isString := ivecs[0].GetType().Oid.IsMySQLString()
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
 
-	if selectList != nil && selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			rs.AppendMustNullForBytesResult()
-		}
-		return nil
-	}
-
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			rs.AppendMustNullForBytesResult()
-			continue
-		}
 		v, null := p1.GetStrValue(i)
 		if null {
 			rs.AppendMustNullForBytesResult()
@@ -2593,7 +2375,7 @@ func prettyPrintScalar(ctx context.Context, w *bytes.Buffer, bj bytejson.ByteJso
 }
 
 // JSON_SCHEMA_VALID
-func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if err := proc.Ctx.Err(); err != nil {
 		return err
 	}
@@ -2606,13 +2388,6 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	docIsStr := ivecs[1].GetType().Oid.IsMySQLString()
 	schemaIsConst := ivecs[0].IsConst()
 
-	if selectList.IgnoreAllRow() {
-		for i := uint64(0); i < uint64(length); i++ {
-			rs.AppendMustNull()
-		}
-		return nil
-	}
-
 	// When the schema is constant, compile it once and reuse across all rows.
 	var compiled *gojsonschema.Schema
 	if schemaIsConst {
@@ -2624,7 +2399,7 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			}
 			return nil
 		}
-		if !hasEvaluableJsonSchemaDoc(p2, length, selectList) {
+		if !hasEvaluableJsonSchemaDoc(p2, length) {
 			for i := uint64(0); i < uint64(length); i++ {
 				rs.AppendMustNull()
 			}
@@ -2644,10 +2419,7 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		if err := proc.Ctx.Err(); err != nil {
 			return err
 		}
-		if selectList.Contains(i) {
-			rs.AppendMustNull()
-			continue
-		}
+
 		if schemaIsConst {
 			_, null2 := p2.GetStrValue(i)
 			if null2 {
@@ -2672,7 +2444,7 @@ func JsonSchemaValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 // JSON_SCHEMA_VALIDATION_REPORT
-func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if err := proc.Ctx.Err(); err != nil {
 		return err
 	}
@@ -2685,13 +2457,6 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 	docIsStr := ivecs[1].GetType().Oid.IsMySQLString()
 	schemaIsConst := ivecs[0].IsConst()
 
-	if selectList.IgnoreAllRow() {
-		for i := uint64(0); i < uint64(length); i++ {
-			rs.AppendMustNullForBytesResult()
-		}
-		return nil
-	}
-
 	var compiled *gojsonschema.Schema
 	if schemaIsConst {
 		schemaBytes, null := p1.GetStrValue(0)
@@ -2701,7 +2466,7 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 			}
 			return nil
 		}
-		if !hasEvaluableJsonSchemaDoc(p2, length, selectList) {
+		if !hasEvaluableJsonSchemaDoc(p2, length) {
 			for i := uint64(0); i < uint64(length); i++ {
 				rs.AppendMustNullForBytesResult()
 			}
@@ -2721,10 +2486,7 @@ func JsonSchemaValidationReport(ivecs []*vector.Vector, result vector.FunctionRe
 		if err := proc.Ctx.Err(); err != nil {
 			return err
 		}
-		if selectList.Contains(i) {
-			rs.AppendMustNullForBytesResult()
-			continue
-		}
+
 		if !schemaIsConst {
 			_, null1 := p1.GetStrValue(i)
 			_, null2 := p2.GetStrValue(i)
@@ -2969,11 +2731,8 @@ func normalizeMySQLDraft4ExclusiveBound(obj map[string]any, exclusiveKey, boundK
 	}
 }
 
-func hasEvaluableJsonSchemaDoc(p vector.FunctionParameterWrapper[types.Varlena], length int, selectList *FunctionSelectList) bool {
+func hasEvaluableJsonSchemaDoc(p vector.FunctionParameterWrapper[types.Varlena], length int) bool {
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			continue
-		}
 		_, null := p.GetStrValue(i)
 		if !null {
 			return true
@@ -3113,7 +2872,7 @@ func bestEffortSchemaLocation(err gojsonschema.ResultError) string {
 
 // JSON_VALUE(json_doc, path) → VARCHAR
 // Equivalent to JSON_UNQUOTE(JSON_EXTRACT(json_doc, path)).
-func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
@@ -3121,18 +2880,7 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 
 	isStr := ivecs[0].GetType().Oid.IsMySQLString()
 
-	if selectList != nil && selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			rs.AppendMustNullForBytesResult()
-		}
-		return nil
-	}
-
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			rs.AppendMustNullForBytesResult()
-			continue
-		}
 		jsonBytes, null1 := p1.GetStrValue(i)
 		pathBytes, null2 := p2.GetStrValue(i)
 		if null1 || null2 {

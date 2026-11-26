@@ -172,7 +172,7 @@ func unsignedCalendarIntervalGetter[T interface {
 	return typedCalendarIntervalGetter(vec, 0, func(v T, _ int32) string { return strconv.FormatUint(uint64(v), 10) })
 }
 
-func ToCalendarInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func ToCalendarInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	get, err := calendarIntervalGetter(ivecs[0])
 	if err != nil {
 		return err
@@ -181,12 +181,6 @@ func ToCalendarInterval(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	units := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i)) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		text, null := get(i)
 		unit, unitNull := units.GetValue(i)
 		if null || unitNull {

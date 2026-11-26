@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func timestampAsDatetime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func timestampAsDatetime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	reader, err := newTimestampPairDateReader(parameters[0], proc)
 	if err != nil {
 		return err
@@ -28,12 +28,6 @@ func timestampAsDatetime(parameters []*vector.Vector, result vector.FunctionResu
 	results := vector.MustFunctionResult[types.Datetime](result)
 	scale := results.GetType().Scale
 	for row := uint64(0); row < uint64(length); row++ {
-		if functionRowSkipped(selectList, row) {
-			if err := results.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		value, invalid := reader(row)
 		if invalid || !validDatetimeResult(value) {
 			if err := results.Append(0, true); err != nil {

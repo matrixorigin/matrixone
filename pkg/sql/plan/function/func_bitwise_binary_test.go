@@ -145,7 +145,7 @@ func TestBitwiseStringLengthMismatchReturnsTypedError(t *testing.T) {
 
 			err := tc.result.PreExtendAndReset(tc.fnLength)
 			require.NoError(t, err)
-			err = tc.fn(tc.parameters, tc.result, tc.proc, tc.fnLength, tc.selectList)
+			err = tc.fn(tc.parameters, tc.result, tc.proc, tc.fnLength)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidBitwiseOperandsSize))
 		})
@@ -212,27 +212,17 @@ func TestBitwiseBinaryNotHandlesNullMasksAndConstantResults(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typ := types.New(types.T_varbinary, 8, 0)
 
-	t.Run("unmasked null and skipped row", func(t *testing.T) {
+	t.Run("null rows", func(t *testing.T) {
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(typ,
 					[]string{string([]byte{0x00, 0xff}), "ignored", string([]byte{0x10, 0x20})},
-					[]bool{false, true, false}),
+					[]bool{false, true, true}),
 			},
 			NewFunctionTestResult(typ, false,
 				[]string{string([]byte{0xff, 0x00}), "", ""},
 				[]bool{false, true, true}),
-			operatorOpBitwiseBinaryNotFn).WithSelectList(
-			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false}})
-		ok, info := tc.RunAndFree()
-		require.True(t, ok, info)
-	})
-
-	t.Run("all rows masked", func(t *testing.T) {
-		tc := NewFunctionTestCase(proc,
-			[]FunctionTestInput{NewFunctionTestInput(typ, []string{"ignored", "also ignored"}, nil)},
-			NewFunctionTestResult(typ, false, []string{"", ""}, []bool{true, true}),
-			operatorOpBitwiseBinaryNotFn).WithSelectList(&FunctionSelectList{AllNull: true})
+			operatorOpBitwiseBinaryNotFn)
 		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
@@ -247,7 +237,7 @@ func TestBitwiseBinaryNotHandlesNullMasksAndConstantResults(t *testing.T) {
 		constResult, err := vector.NewConstBytes(typ, []byte("old"), 2, proc.Mp())
 		require.NoError(t, err)
 		tc.result.SetResultVector(constResult)
-		require.NoError(t, tc.fn(tc.parameters, tc.result, proc, tc.fnLength, nil))
+		require.NoError(t, tc.fn(tc.parameters, tc.result, proc, tc.fnLength))
 
 		result := vector.GenerateFunctionStrParameter(tc.result.GetResultVector())
 		for row := uint64(0); row < 2; row++ {
@@ -293,31 +283,18 @@ func TestBitwiseBinaryShiftHandlesNullsMasksAndConstants(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typ := types.New(types.T_varbinary, 8, 0)
 
-	t.Run("mixed nulls and partial mask", func(t *testing.T) {
+	t.Run("mixed nulls", func(t *testing.T) {
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(typ,
 					[]string{string([]byte{0x01, 0x02}), string([]byte{0x01, 0x02}), string([]byte{0x01, 0x02}), string([]byte{0x01, 0x02})},
 					[]bool{false, true, false, false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1, 1}, []bool{false, false, true, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1, 1}, []bool{false, false, true, true}),
 			},
 			NewFunctionTestResult(typ, false,
 				[]string{string([]byte{0x02, 0x04}), "", "", ""},
 				[]bool{false, true, true, true}),
-			operatorOpBitShiftLeftBinaryInt64Fn).WithSelectList(
-			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}})
-		ok, info := tc.RunAndFree()
-		require.True(t, ok, info)
-	})
-
-	t.Run("all rows masked", func(t *testing.T) {
-		tc := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(typ, []string{"bad", "also-not-read"}, nil),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2}, nil),
-			},
-			NewFunctionTestResult(typ, false, []string{"", ""}, []bool{true, true}),
-			operatorOpBitShiftLeftBinaryInt64Fn).WithSelectList(&FunctionSelectList{AllNull: true})
+			operatorOpBitShiftLeftBinaryInt64Fn)
 		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
@@ -353,7 +330,7 @@ func TestBitwiseBinaryShiftHandlesNullsMasksAndConstants(t *testing.T) {
 		constResult, err := vector.NewConstBytes(typ, []byte("old"), 2, proc.Mp())
 		require.NoError(t, err)
 		tc.result.SetResultVector(constResult)
-		require.NoError(t, tc.fn(tc.parameters, tc.result, proc, tc.fnLength, nil))
+		require.NoError(t, tc.fn(tc.parameters, tc.result, proc, tc.fnLength))
 		got := vector.GenerateFunctionStrParameter(tc.result.GetResultVector())
 		for row := uint64(0); row < 2; row++ {
 			value, isNull := got.GetStrValue(row)

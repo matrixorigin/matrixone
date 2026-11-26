@@ -131,7 +131,7 @@ func TestLoadTimeTextAssignmentRange(t *testing.T) {
 						if policy == "ignore" {
 							cast = function.NewAssignIgnoreCast
 						}
-						err := cast([]*vector.Vector{input.Vecs[0], target}, result, proc, 1, nil)
+						err := cast([]*vector.Vector{input.Vecs[0], target}, result, proc, 1)
 						if policy == "strict" {
 							require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
 							require.ErrorContains(t, err, text)

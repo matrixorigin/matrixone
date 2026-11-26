@@ -16,11 +16,12 @@ package function
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestIncompleteCalendarClassification(t *testing.T) {
@@ -65,10 +66,9 @@ func TestIncompleteDateFormatFields(t *testing.T) {
 	session.warnings = nil
 	proc.GetSessionInfo().LCTimeNames = "fr_FR"
 	c := NewFunctionTestCase(proc, []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-02-00", "2024-00-00", "2024-00-00", "bad"}, []bool{false, false, true, false}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-02-00", "2024-00-00", "2024-00-00", "bad"}, []bool{false, false, true, true}),
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"%M", "%W", "%Y", "%Y"}, nil),
-	}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"février", "jeudi", "", ""}, []bool{false, false, true, true}), DateFormat).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}})
+	}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"février", "jeudi", "", ""}, []bool{false, false, true, true}), DateFormat)
 	ok, info := c.RunAndFree()
 	require.True(t, ok, info)
 }
@@ -119,9 +119,8 @@ func TestIncompleteCalendarFunctionWarnings(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			session := &numericWarningSession{}
 			proc.Session = session
-			inputs := append([]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-00-00", "2024-02-29", "2024-00-00", "2024-00-00"}, []bool{false, false, true, false})}, tc.extra...)
-			c := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(tc.typ.ToType(), false, tc.want, []bool{true, false, true, true}), tc.fn).
-				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}})
+			inputs := append([]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-00-00", "2024-02-29", "2024-00-00", "2024-00-00"}, []bool{false, false, true, true})}, tc.extra...)
+			c := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(tc.typ.ToType(), false, tc.want, []bool{true, false, true, true}), tc.fn)
 			ok, info := c.RunAndFree()
 			require.True(t, ok, info)
 			require.Equal(t, []numericWarning{{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Incorrect datetime value: '2024-00-00'"}}, session.warnings)
@@ -146,15 +145,14 @@ func TestIncompleteCalendarTotalsConversionPolicy(t *testing.T) {
 			proc.Session = session
 			inputs := []string{"2024-02-30", "2024-02-29", "bad", "2024-02-29 24:00:00", "2024-00-00", "", "ignored NULL", "2024-00-00", "0000-00-00", "2024-13-00"}
 			c := NewFunctionTestCase(proc, []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), inputs, []bool{false, false, false, false, false, false, true, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), inputs, []bool{false, false, false, false, false, false, true, true, false, false}),
 			}, NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{0, tc.want, 0, 0, 0, 0, 0, 0, 0, 0},
-				[]bool{true, false, true, true, true, true, true, true, true, true}), tc.fn).
-				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, true, true, true, false, true, true}})
+				[]bool{true, false, true, true, true, true, true, true, true, true}), tc.fn)
 			ok, info := c.RunAndFree()
 			require.True(t, ok, info)
-			// Only the selected incomplete calendar adds a diagnostic. Malformed,
-			// empty, zero, NULL and masked inputs keep expression-cast behavior.
+			// Only the incomplete calendar adds a diagnostic. Malformed, empty,
+			// zero and NULL inputs keep expression-cast behavior.
 			require.Equal(t, []numericWarning{{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Incorrect datetime value: '2024-00-00'"}}, session.warnings)
 		})
 	}
@@ -260,9 +258,8 @@ func TestIncompleteDateFormatKeepsConversionPolicy(t *testing.T) {
 			format = NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y-%m-%d", "%Y-%m-%d", "%Y-%m-%d", "%Y-%m-%d", "%Y-%m-%d"}, nil)
 		}
 		c := NewFunctionTestCase(proc, []FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"2026-02-30", "2024-02-29", "2024-00-00", "", "invalid skipped row"}, []bool{false, false, false, true, false}), format,
-		}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "2024-02-29", "2024-00-00", "", ""}, []bool{true, false, false, true, true}), DateFormat).
-			WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"2026-02-30", "2024-02-29", "2024-00-00", "", "invalid skipped row"}, []bool{false, false, false, true, true}), format,
+		}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "2024-02-29", "2024-00-00", "", ""}, []bool{true, false, false, true, true}), DateFormat)
 		ok, info := c.RunAndFree()
 		require.True(t, ok, info)
 		require.Len(t, session.warnings, 1)

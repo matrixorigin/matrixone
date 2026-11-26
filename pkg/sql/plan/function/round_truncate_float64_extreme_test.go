@@ -187,7 +187,7 @@ func TestRoundFloat64WrapperConstDigitsErrorChannel(t *testing.T) {
 		NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), RoundFloat64)
 	defer tcc.Free()
 	require.NoError(t, tcc.result.PreExtendAndReset(2))
-	err := tcc.fn(tcc.parameters, tcc.result, proc, 2, nil)
+	err := tcc.fn(tcc.parameters, tcc.result, proc, 2)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "expected ER_DATA_OUT_OF_RANGE, got %v", err)
 }
@@ -206,36 +206,12 @@ func TestRoundFloat64WrapperRowwiseDigitsErrorChannel(t *testing.T) {
 		NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), RoundFloat64)
 	defer tcc.Free()
 	require.NoError(t, tcc.result.PreExtendAndReset(2))
-	err := tcc.fn(tcc.parameters, tcc.result, proc, 2, nil)
+	err := tcc.fn(tcc.parameters, tcc.result, proc, 2)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "expected ER_DATA_OUT_OF_RANGE, got %v", err)
 }
 
-// Rows masked out by selectList (CASE/IF short-circuit) must not be evaluated,
-// so an out-of-range masked row cannot fail the call. The generic skip
-// semantics of this op error channel are framework-covered by
-// Test_DivFn_SelectListSkipsMaskedRows in arithmetic_overflow_boundary_test.go;
-// this test locks them for the round/truncate registration.
-func TestRoundFloat64WrapperMaskedOverflowRowSkipped(t *testing.T) {
-	proc := newMemoryFunctionTestProcess(t)
-	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
-
-	maskRow1 := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
-	values := NewFunctionTestInput(types.T_float64.ToType(), []float64{1e308, 1.5e308}, nil)
-	digits := NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-308}, nil)
-	tcc := NewFunctionTestCase(proc, []FunctionTestInput{values, digits},
-		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), RoundFloat64)
-	defer tcc.Free()
-	require.NoError(t, tcc.result.PreExtendAndReset(2))
-	err := tcc.fn(tcc.parameters, tcc.result, proc, 2, maskRow1)
-	require.NoError(t, err, "masked overflow row must not fail the call")
-	rsVec := tcc.GetResultVectorDirectly()
-	require.True(t, rsVec.GetNulls().Contains(1), "masked row must be NULL in the result")
-	require.False(t, rsVec.GetNulls().Contains(0), "unmasked row must be computed")
-	require.Equal(t, 1e308, vector.GetAny(rsVec, 0, false))
-}
-
-// A NULL input row is likewise never evaluated: the would-be-overflow value
+// A NULL input row is never evaluated: the would-be-overflow value
 // hidden by NULL must not fail the call.
 func TestRoundFloat64WrapperNullRowSkipped(t *testing.T) {
 	proc := newMemoryFunctionTestProcess(t)
@@ -247,7 +223,7 @@ func TestRoundFloat64WrapperNullRowSkipped(t *testing.T) {
 		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), RoundFloat64)
 	defer tcc.Free()
 	require.NoError(t, tcc.result.PreExtendAndReset(2))
-	err := tcc.fn(tcc.parameters, tcc.result, proc, 2, nil)
+	err := tcc.fn(tcc.parameters, tcc.result, proc, 2)
 	require.NoError(t, err, "NULL input row must not be evaluated")
 	rsVec := tcc.GetResultVectorDirectly()
 	require.True(t, rsVec.GetNulls().Contains(1))

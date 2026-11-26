@@ -264,14 +264,14 @@ func TestLegacyMatrixOneCompressedDataRemainsReadable(t *testing.T) {
 	require.Empty(t, decoded)
 }
 
-func TestCompressFunctionsNullsSelectListAndLengthMask(t *testing.T) {
+func TestCompressFunctionsNullsAndLengthMask(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	input := testutil.NewVectorWithNulls(
 		3,
 		types.T_blob.ToType(),
 		proc.Mp(),
 		false,
-		[]bool{false, true, false},
+		[]bool{false, true, true},
 		[]string{"Hello World", "ignored null", "ignored row"},
 	)
 
@@ -279,7 +279,6 @@ func TestCompressFunctionsNullsSelectListAndLengthMask(t *testing.T) {
 	require.NoError(t, compressedResult.PreExtendAndReset(3))
 	require.NoError(t, Compress(
 		[]*vector.Vector{input}, compressedResult, proc, 3,
-		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false}},
 	))
 	compressed := compressedResult.GetResultVector()
 	require.False(t, compressed.IsNull(0))
@@ -288,25 +287,25 @@ func TestCompressFunctionsNullsSelectListAndLengthMask(t *testing.T) {
 
 	uncompressedResult := vector.NewFunctionResultWrapper(types.T_blob.ToType(), proc.Mp())
 	require.NoError(t, uncompressedResult.PreExtendAndReset(3))
-	require.NoError(t, Uncompress([]*vector.Vector{compressed}, uncompressedResult, proc, 3, nil))
+	require.NoError(t, Uncompress([]*vector.Vector{compressed}, uncompressedResult, proc, 3))
 	uncompressed := uncompressedResult.GetResultVector()
 	require.Equal(t, []byte("Hello World"), uncompressed.GetBytesAt(0))
 	require.True(t, uncompressed.IsNull(1))
 	require.True(t, uncompressed.IsNull(2))
 
 	legacy := []byte{3, 0, 0, 0, 0, 3, 0, 0xfc, 0xff, 'a', 'b', 'c', 3, 0}
-	invalidInput := testutil.NewVector(
+	invalidInput := testutil.NewVectorWithNulls(
 		3,
 		types.T_blob.ToType(),
 		proc.Mp(),
 		false,
+		[]bool{false, true, false},
 		[]string{"invalid", string(compressed.GetBytesAt(0)), string(legacy)},
 	)
 	invalidResult := vector.NewFunctionResultWrapper(types.T_blob.ToType(), proc.Mp())
 	require.NoError(t, invalidResult.PreExtendAndReset(3))
 	require.NoError(t, Uncompress(
 		[]*vector.Vector{invalidInput}, invalidResult, proc, 3,
-		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}},
 	))
 	require.True(t, invalidResult.GetResultVector().IsNull(0))
 	require.True(t, invalidResult.GetResultVector().IsNull(1))
@@ -324,7 +323,7 @@ func TestCompressFunctionsNullsSelectListAndLengthMask(t *testing.T) {
 	)
 	lengthResult := vector.NewFunctionResultWrapper(types.T_int32.ToType(), proc.Mp())
 	require.NoError(t, lengthResult.PreExtendAndReset(5))
-	require.NoError(t, UncompressedLength([]*vector.Vector{lengthInput}, lengthResult, proc, 5, nil))
+	require.NoError(t, UncompressedLength([]*vector.Vector{lengthInput}, lengthResult, proc, 5))
 	lengthVector := lengthResult.GetResultVector()
 	require.Equal(t, []int32{0, 0, int32(mysqlCompressedLengthMask), 561409641, 0}, vector.MustFixedColNoTypeCheck[int32](lengthVector))
 	require.False(t, lengthVector.IsNull(0))
@@ -333,7 +332,7 @@ func TestCompressFunctionsNullsSelectListAndLengthMask(t *testing.T) {
 
 	wideLengthResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, wideLengthResult.PreExtendAndReset(5))
-	require.NoError(t, UncompressedLength([]*vector.Vector{lengthInput}, wideLengthResult, proc, 5, nil))
+	require.NoError(t, UncompressedLength([]*vector.Vector{lengthInput}, wideLengthResult, proc, 5))
 	wideLengthVector := wideLengthResult.GetResultVector()
 	require.Equal(t, []int64{0, 0, int64(mysqlCompressedLengthMask), 561409641, 0}, vector.MustFixedColNoTypeCheck[int64](wideLengthVector))
 	require.False(t, wideLengthVector.IsNull(0))
@@ -376,7 +375,7 @@ func TestUncompressedLengthEmitsWarningForShortNonEmptyInput(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_int32.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(6))
-	require.NoError(t, UncompressedLength([]*vector.Vector{input}, result, proc, 6, nil))
+	require.NoError(t, UncompressedLength([]*vector.Vector{input}, result, proc, 6))
 
 	lengths := vector.MustFixedColNoTypeCheck[int32](result.GetResultVector())
 	require.Equal(t, []int32{0, 0, 0, 0, 0, 0}, lengths)
@@ -388,29 +387,6 @@ func TestUncompressedLengthEmitsWarningForShortNonEmptyInput(t *testing.T) {
 		{code: moerr.ER_ZLIB_Z_DATA_ERROR, message: uncompressDataWarning},
 		{code: moerr.ER_ZLIB_Z_DATA_ERROR, message: uncompressDataWarning},
 	}, warnings.records)
-
-	maskedResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
-	defer maskedResult.Free()
-	require.NoError(t, maskedResult.PreExtendAndReset(6))
-	require.NoError(t, UncompressedLength(
-		[]*vector.Vector{input}, maskedResult, proc, 6,
-		&FunctionSelectList{
-			AnyNull:    true,
-			SelectList: []bool{true, false, true, false, false, true},
-		},
-	))
-	masked := maskedResult.GetResultVector()
-	require.False(t, masked.IsNull(0))
-	require.True(t, masked.IsNull(1))
-	require.False(t, masked.IsNull(2))
-	require.True(t, masked.IsNull(3))
-	require.True(t, masked.IsNull(4))
-	require.True(t, masked.IsNull(5))
-	require.Equal(t, uint64(4), warnings.total)
-	require.Equal(t, uncompressWarningRecord{
-		code:    moerr.ER_ZLIB_Z_DATA_ERROR,
-		message: uncompressDataWarning,
-	}, warnings.records[3])
 }
 
 func TestUncompressedLengthWarningRetentionUsesProcessLimits(t *testing.T) {
@@ -449,7 +425,7 @@ func TestUncompressedLengthWarningRetentionUsesProcessLimits(t *testing.T) {
 				proc.Base.Lim.Size = tc.queryLimit
 			}
 
-			require.NoError(t, UncompressedLength([]*vector.Vector{input}, result, proc, tc.rowCount, nil))
+			require.NoError(t, UncompressedLength([]*vector.Vector{input}, result, proc, tc.rowCount))
 			require.Equal(t, uint64(tc.rowCount), warnings.total)
 			require.Len(t, warnings.records, tc.wantRecordCount)
 		})
@@ -491,7 +467,7 @@ func TestUncompressEmitsMySQLWarningsForRejectedInput(t *testing.T) {
 		types.T_blob.ToType(),
 		proc.Mp(),
 		false,
-		[]bool{false, false, false, false, false, false, false, true, false},
+		[]bool{false, false, false, false, false, false, false, true, true},
 		[]string{
 			string([]byte{0, 0, 0, 0}),
 			string([]byte{3, 0, 0, 0, 0x78, 0x9c, 0}),
@@ -508,11 +484,7 @@ func TestUncompressEmitsMySQLWarningsForRejectedInput(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_blob.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(9))
-	selection := &FunctionSelectList{
-		AnyNull:    true,
-		SelectList: []bool{true, true, true, true, true, true, true, true, false},
-	}
-	require.NoError(t, Uncompress([]*vector.Vector{input}, result, proc, 9, selection))
+	require.NoError(t, Uncompress([]*vector.Vector{input}, result, proc, 9))
 
 	out := result.GetResultVector()
 	for i := 0; i < 4; i++ {
@@ -523,7 +495,7 @@ func TestUncompressEmitsMySQLWarningsForRejectedInput(t *testing.T) {
 	require.False(t, out.IsNull(6))
 	require.Empty(t, out.GetBytesAt(6), "empty input remains empty without warning")
 	require.True(t, out.IsNull(7), "SQL NULL remains NULL without warning")
-	require.True(t, out.IsNull(8), "selection-masked invalid input remains NULL without warning")
+	require.True(t, out.IsNull(8), "NULL invalid input remains NULL without warning")
 
 	require.Equal(t, 1, warnings.calls)
 	require.Equal(t, uint64(4), warnings.total)
@@ -593,7 +565,7 @@ func TestUncompressBoundsWarningsForRepeatedConstantRows(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_blob.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(rowCount))
-	require.NoError(t, Uncompress([]*vector.Vector{input}, result, proc, rowCount, nil))
+	require.NoError(t, Uncompress([]*vector.Vector{input}, result, proc, rowCount))
 
 	require.Equal(t, uint64(rowCount), warnings.total, "each active row contributes a warning")
 	require.Len(t, warnings.records, 64, "SHOW WARNINGS diagnostics remain bounded")

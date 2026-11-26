@@ -26,16 +26,16 @@ type temporalBoundValue interface {
 	types.Datetime | types.Timestamp
 }
 
-func temporalDatetimeBound(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selections *FunctionSelectList) error {
-	return temporalBoundEndpoint[types.Timestamp, types.Datetime](parameters, result, proc, length, selections, types.T_datetime)
+func temporalDatetimeBound(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return temporalBoundEndpoint[types.Timestamp, types.Datetime](parameters, result, proc, length, types.T_datetime)
 }
 
-func temporalTimestampBound(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selections *FunctionSelectList) error {
-	return temporalBoundEndpoint[types.Datetime, types.Timestamp](parameters, result, proc, length, selections, types.T_timestamp)
+func temporalTimestampBound(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return temporalBoundEndpoint[types.Datetime, types.Timestamp](parameters, result, proc, length, types.T_timestamp)
 }
 
 func temporalBoundEndpoint[Input, Output temporalBoundValue](parameters []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selections *FunctionSelectList, key types.T,
+	proc *process.Process, length int, key types.T,
 ) error {
 	values := vector.GenerateFunctionFixedTypeParameter[Input](parameters[0])
 	ops := vector.GenerateFunctionFixedTypeParameter[int32](parameters[1])
@@ -43,12 +43,6 @@ func temporalBoundEndpoint[Input, Output temporalBoundValue](parameters []*vecto
 	selectors := vector.GenerateFunctionFixedTypeParameter[int32](parameters[3])
 	out := vector.MustFunctionResult[Output](result)
 	for row := uint64(0); row < uint64(length); row++ {
-		if functionRowSkipped(selections, row) {
-			if err := out.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		if err := proc.Ctx.Err(); err != nil {
 			return err
 		}

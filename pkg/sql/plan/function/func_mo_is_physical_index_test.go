@@ -64,17 +64,14 @@ func TestIsPhysicalIndexVectorNullAndSelection(t *testing.T) {
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", indexExtra, "", "", ""}, []bool{false, false, false, false, true}),
 	}
 	for _, tc := range []struct {
-		name      string
-		selection *FunctionSelectList
-		want      []bool
-		nulls     []bool
+		name  string
+		want  []bool
+		nulls []bool
 	}{
-		{"all", nil, []bool{false, true, true, false, false}, []bool{false, false, false, true, true}},
-		{"partial", &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true, true, true}}, []bool{false, false, true, false, false}, []bool{false, true, false, true, true}},
-		{"none", &FunctionSelectList{AllNull: true}, []bool{false, false, false, false, false}, []bool{true, true, true, true, true}},
+		{"all", []bool{false, true, true, false, false}, []bool{false, false, false, true, true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_bool.ToType(), false, tc.want, tc.nulls), builtInIsPhysicalIndex).WithSelectList(tc.selection)
+			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_bool.ToType(), false, tc.want, tc.nulls), builtInIsPhysicalIndex)
 			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 		})

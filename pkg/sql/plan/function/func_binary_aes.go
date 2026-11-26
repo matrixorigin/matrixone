@@ -362,15 +362,15 @@ func aesOverloads(decrypt bool) []overload {
 	return result
 }
 
-func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return evalAES(ivecs, result, proc, length, selectList, false)
+func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return evalAES(ivecs, result, proc, length, false)
 }
 
-func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return evalAES(ivecs, result, proc, length, selectList, true)
+func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return evalAES(ivecs, result, proc, length, true)
 }
 
-func evalAES(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, decrypt bool) error {
+func evalAES(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, decrypt bool) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	params := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
 	for i, v := range ivecs {
@@ -382,12 +382,6 @@ func evalAES(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	}
 	modeInfo, modeErr := getAESMode(proc)
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(i)) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		if err := proc.Ctx.Err(); err != nil {
 			return err
 		}

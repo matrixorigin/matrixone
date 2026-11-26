@@ -46,7 +46,7 @@ func TestTemporalBoundRuntimeValues(t *testing.T) {
 	eval := func(op, scale, selector *vector.Vector) []types.Datetime {
 		t.Helper()
 		require.NoError(t, out.PreExtendAndReset(3))
-		require.NoError(t, temporalDatetimeBound([]*vector.Vector{values, op, scale, selector}, out, proc, 3, nil))
+		require.NoError(t, temporalDatetimeBound([]*vector.Vector{values, op, scale, selector}, out, proc, 3))
 		return vector.MustFixedColWithTypeCheck[types.Datetime](out.GetResultVector())
 	}
 	lo := eval(op, scale, control(0))
@@ -71,7 +71,7 @@ func TestTemporalBoundRuntimeValues(t *testing.T) {
 	proc.Ctx = ctx
 	cancel()
 	require.NoError(t, out.PreExtendAndReset(3))
-	require.ErrorIs(t, temporalDatetimeBound([]*vector.Vector{values, op, scale, selector}, out, proc, 3, nil), context.Canceled)
+	require.ErrorIs(t, temporalDatetimeBound([]*vector.Vector{values, op, scale, selector}, out, proc, 3), context.Canceled)
 }
 
 func TestTemporalBoundIsRuntimeConstantOnly(t *testing.T) {

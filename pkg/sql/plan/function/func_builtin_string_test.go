@@ -158,7 +158,7 @@ func Test_BuiltInToLower(t *testing.T) {
 		result := vector.NewFunctionResultWrapper(types.T_text.ToType(), proc.Mp())
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(len(values)))
-		require.NoError(t, builtInToLower([]*vector.Vector{source}, result, proc, len(values), nil))
+		require.NoError(t, builtInToLower([]*vector.Vector{source}, result, proc, len(values)))
 		for row, value := range values {
 			require.True(t, bytes.Equal(value, source.GetBytesAt(row)), "input row %d changed", row)
 			require.True(t, bytes.Equal(bytes.ToLower(value), result.GetResultVector().GetBytesAt(row)), "result row %d differs", row)
@@ -181,15 +181,14 @@ func Test_BuiltInToLower(t *testing.T) {
 		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(2))
-		require.NoError(t, builtInToLower([]*vector.Vector{source}, result, proc, 2,
-			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
+		require.NoError(t, builtInToLower([]*vector.Vector{source}, result, proc, 2))
 		require.Equal(t, []byte("ABC"), result.GetResultVector().GetBytesAt(0))
 		require.True(t, result.GetResultVector().IsNull(1))
 
 		next := testutil.MakeVarlenaVector([][]byte{[]byte("ALPHA"), []byte("beta")}, nil, types.T_varchar.ToType(), proc.Mp())
 		defer next.Free(proc.Mp())
 		require.NoError(t, result.PreExtendAndReset(2))
-		require.NoError(t, builtInToLower([]*vector.Vector{next}, result, proc, 2, nil))
+		require.NoError(t, builtInToLower([]*vector.Vector{next}, result, proc, 2))
 		for row, want := range []string{"alpha", "beta"} {
 			require.False(t, result.GetResultVector().IsNull(uint64(row)))
 			require.Equal(t, want, string(result.GetResultVector().GetBytesAt(row)))

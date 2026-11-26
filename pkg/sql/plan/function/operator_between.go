@@ -24,7 +24,7 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	if isMixedDatetimeTimestampTypes(parameters) {
@@ -79,11 +79,11 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		})
 
 	case types.T_char:
-		return opBetweenBytesWithFunc(parameters, rs, proc, length, selectList, func(a, b []byte) int {
+		return opBetweenBytesWithFunc(parameters, rs, proc, length, func(a, b []byte) int {
 			return compareTextBytes(*paramType, a, b)
 		})
 	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		return opBetweenBytesWithFunc(parameters, rs, proc, length, selectList, func(a, b []byte) int {
+		return opBetweenBytesWithFunc(parameters, rs, proc, length, func(a, b []byte) int {
 			return compareTextBytes(*paramType, a, b)
 		})
 	}
@@ -479,7 +479,6 @@ func opBetweenBytesWithFunc(
 	result vector.FunctionResultWrapper,
 	_ *process.Process,
 	length int,
-	_ *FunctionSelectList,
 	compareFunc func(v1, v2 []byte) int,
 ) error {
 	if hasBetweenRowBounds(parameters) {
@@ -641,7 +640,7 @@ func opBetweenBytesRows(
 	return nil
 }
 
-func inRangeImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func inRangeImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
@@ -694,7 +693,7 @@ func inRangeImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		paramType := parameters[0].GetType()
-		return inRangeBytesWithFunc(parameters, rs, proc, length, selectList, func(a, b []byte) int {
+		return inRangeBytesWithFunc(parameters, rs, proc, length, func(a, b []byte) int {
 			return compareTextBytes(*paramType, a, b)
 		})
 	}
@@ -1017,7 +1016,6 @@ func inRangeBytesWithFunc(
 	result vector.FunctionResultWrapper,
 	_ *process.Process,
 	length int,
-	_ *FunctionSelectList,
 	compareFunc func(v1, v2 []byte) int,
 ) error {
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {

@@ -42,19 +42,13 @@ func RequireLoadFKIgnoreProtocol(ctx context.Context, proc *process.Process) err
 // loadFKIgnoreCheck is emitted only at explicit LOAD IGNORE's admission barrier.
 // Parent existence and MATCH SIMPLE are resolved before this predicate. One
 // combined FK result yields exactly one warning per rejected candidate.
-func loadFKIgnoreCheck(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func loadFKIgnoreCheck(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	flags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
 	res := vector.MustFunctionResult[bool](result)
 	var warnings process.WarningAccumulator
 	warnings.SetWarningRetentionForProcess(proc)
 	defer warnings.Reset()
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := res.Append(true, true); err != nil {
-				return err
-			}
-			continue
-		}
 		flag, isNull := flags.GetValue(i)
 		pass := !isNull && flag
 		if !pass {

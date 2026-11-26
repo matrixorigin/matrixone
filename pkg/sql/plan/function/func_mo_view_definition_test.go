@@ -558,7 +558,7 @@ func TestBuiltInViewDefinition(t *testing.T) {
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(input.Length()))
 		require.NoError(t, builtInViewDefinition(
-			[]*vector.Vector{input}, result, proc, input.Length(), nil))
+			[]*vector.Vector{input}, result, proc, input.Length()))
 
 		values := vector.GenerateFunctionStrParameter(result.GetResultVector())
 		value, isNull := values.GetStrValue(0)
@@ -571,19 +571,16 @@ func TestBuiltInViewDefinition(t *testing.T) {
 		require.True(t, isNull)
 	})
 
-	t.Run("preserves null inputs and selection mask", func(t *testing.T) {
+	t.Run("preserves null inputs", func(t *testing.T) {
 		input := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		defer input.Free(proc.Mp())
 		require.NoError(t, vector.AppendStringList(input,
-			[]string{current, legacy}, []bool{false, false}, proc.Mp()))
+			[]string{current, legacy}, []bool{false, true}, proc.Mp()))
 		result := vector.NewFunctionResultWrapper(types.T_text.ToType(), proc.Mp())
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(input.Length()))
 		require.NoError(t, builtInViewDefinition([]*vector.Vector{input}, result,
-			proc, input.Length(), &FunctionSelectList{
-				AnyNull:    true,
-				SelectList: []bool{true, false},
-			}))
+			proc, input.Length()))
 
 		values := vector.GenerateFunctionStrParameter(result.GetResultVector())
 		value, isNull := values.GetStrValue(0)
@@ -598,7 +595,7 @@ func TestBuiltInViewDefinition(t *testing.T) {
 		defer nullResult.Free()
 		require.NoError(t, nullResult.PreExtendAndReset(nullInput.Length()))
 		require.NoError(t, builtInViewDefinition(
-			[]*vector.Vector{nullInput}, nullResult, proc, nullInput.Length(), nil))
+			[]*vector.Vector{nullInput}, nullResult, proc, nullInput.Length()))
 		_, isNull = vector.GenerateFunctionStrParameter(
 			nullResult.GetResultVector()).GetStrValue(0)
 		require.True(t, isNull)
@@ -628,7 +625,7 @@ func TestBuiltInViewCheckOption(t *testing.T) {
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
 	require.NoError(t, builtInViewCheckOption(
-		[]*vector.Vector{input}, result, proc, input.Length(), nil))
+		[]*vector.Vector{input}, result, proc, input.Length()))
 	values := vector.GenerateFunctionStrParameter(result.GetResultVector())
 	for row, want := range []string{"CASCADED", "LOCAL", "CASCADED", "NONE", "LOCAL", "", ""} {
 		value, isNull := values.GetStrValue(uint64(row))

@@ -36,7 +36,6 @@ type binaryStringTestFn func(
 	vector.FunctionResultWrapper,
 	*process.Process,
 	int,
-	*FunctionSelectList,
 ) error
 
 func makeBinaryStringTestInput(
@@ -66,7 +65,7 @@ func runBinaryStringBytesFn(
 	t.Helper()
 	result := vector.NewFunctionResultWrapper(resultType, proc.Mp())
 	require.NoError(t, result.PreExtendAndReset(inputs[0].Length()))
-	require.NoError(t, fn(inputs, result, proc, inputs[0].Length(), nil))
+	require.NoError(t, fn(inputs, result, proc, inputs[0].Length()))
 	return result
 }
 
@@ -109,7 +108,7 @@ func evalBinaryStringSubjectDomains(
 		inputs = append(inputs, others[subjectIdx:]...)
 		result := vector.NewFunctionResultWrapper(resultType, proc.Mp())
 		require.NoError(t, result.PreExtendAndReset(1))
-		require.NoError(t, fn(inputs, result, proc, 1, nil))
+		require.NoError(t, fn(inputs, result, proc, 1))
 		subject.Free(proc.Mp())
 		results[arm] = result
 	}
@@ -198,7 +197,7 @@ func TestBinaryStringFieldComparison(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(subject.Length()))
-			require.NoError(t, FieldString([]*vector.Vector{subject, first, second}, result, proc, subject.Length(), nil))
+			require.NoError(t, FieldString([]*vector.Vector{subject, first, second}, result, proc, subject.Length()))
 			require.Equal(t, []uint64{2, 2, 2, 2, 1, 0, 2}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
 			for row := range subject.Length() {
 				require.False(t, result.GetResultVector().IsNull(uint64(row)))
@@ -234,14 +233,14 @@ func TestBinaryStringFieldSubjectDomain(t *testing.T) {
 			defer result.Free()
 			for range 2 {
 				require.NoError(t, result.PreExtendAndReset(2))
-				require.NoError(t, FieldString([]*vector.Vector{subject, first, second}, result, proc, 2, nil))
+				require.NoError(t, FieldString([]*vector.Vector{subject, first, second}, result, proc, 2))
 				require.Equal(t, tc.want, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
 			}
 		})
 	}
 }
 
-func TestBinaryStringFieldConstantAndSelection(t *testing.T) {
+func TestBinaryStringFieldConstant(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()
 	subject, err := vector.NewConstBytes(types.T_blob.ToType(), []byte("a"), 2, mp)
@@ -252,15 +251,10 @@ func TestBinaryStringFieldConstantAndSelection(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(2))
-	require.NoError(t, FieldString([]*vector.Vector{subject, candidate}, result, proc, 2, nil))
+	require.NoError(t, FieldString([]*vector.Vector{subject, candidate}, result, proc, 2))
 	require.Equal(t, []uint64{0, 1}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
-	require.NoError(t, result.PreExtendAndReset(2))
-	require.NoError(t, FieldString([]*vector.Vector{subject, candidate}, result, proc, 2,
-		&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}))
-	require.True(t, result.GetResultVector().IsNull(0))
-	require.Equal(t, uint64(1), vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector())[1])
 	require.NoError(t, result.PreExtendAndReset(0))
-	require.NoError(t, FieldString([]*vector.Vector{subject, candidate}, result, proc, 0, nil))
+	require.NoError(t, FieldString([]*vector.Vector{subject, candidate}, result, proc, 0))
 	require.Zero(t, result.GetResultVector().Length())
 }
 
@@ -350,7 +344,7 @@ func TestBinaryStringAdditionalTransformsAndMask(t *testing.T) {
 			t, proc, builtInToUpper, types.T_varchar.ToType(), [2][]byte{[]byte("äa"), []byte("äa")}, 0))
 	})
 
-	t.Run("trim and mask", func(t *testing.T) {
+	t.Run("trim", func(t *testing.T) {
 		source := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{
 			[]byte(" 你 "), []byte(" 你 "),
 		})
@@ -359,10 +353,9 @@ func TestBinaryStringAdditionalTransformsAndMask(t *testing.T) {
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(source.Length()))
 		require.NoError(t, Ltrim(
-			[]*vector.Vector{source}, result, proc, source.Length(),
-			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
+			[]*vector.Vector{source}, result, proc, source.Length()))
 		require.Equal(t, []byte("你 "), result.GetResultVector().GetBytesAt(0))
-		require.True(t, result.GetResultVector().IsNull(1))
+		require.Equal(t, []byte("你 "), result.GetResultVector().GetBytesAt(1))
 
 		require.Equal(t, [][]byte{[]byte(" 你"), []byte(" 你")}, runBinaryStringSubjectDomains(
 			t, proc, Rtrim, types.T_varchar.ToType(), [2][]byte{[]byte(" 你 "), []byte(" 你 ")}, 0))
@@ -564,7 +557,7 @@ func TestLikeEscapeValidationUsesStaticSubjectDomain(t *testing.T) {
 		result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
 		require.NoError(t, result.PreExtendAndReset(2))
 		err = newOpBuiltInRegexp().likeFn(
-			[]*vector.Vector{values, patterns, escape}, result, proc, 2, nil)
+			[]*vector.Vector{values, patterns, escape}, result, proc, 2)
 		if binary {
 			require.NoError(t, err)
 			require.Equal(t, []bool{true, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()),
@@ -723,7 +716,7 @@ func TestByteLikeCompiledPatternUsesLinearAccountedStorage(t *testing.T) {
 	require.NoError(t, result.PreExtendAndReset(1))
 	limitedProc := testutil.NewProcessWithOwnedMPool(t, "byte-like-compile-limit", limited)
 	require.Error(t, newOpBuiltInRegexp().likeFn(
-		[]*vector.Vector{value, patternVector}, result, limitedProc, 1, nil))
+		[]*vector.Vector{value, patternVector}, result, limitedProc, 1))
 	require.Zero(t, limited.CurrNB())
 }
 
@@ -746,7 +739,7 @@ func TestByteLikeConstantPatternCompilesOnceForMultipleRows(t *testing.T) {
 
 	beforeAllocs := mp.Stats().NumAlloc.Load()
 	require.NoError(t, newOpBuiltInRegexp().likeFn(
-		[]*vector.Vector{values, patterns}, result, proc, rows, nil))
+		[]*vector.Vector{values, patterns}, result, proc, rows))
 	require.Equal(t, int64(2), mp.Stats().NumAlloc.Load()-beforeAllocs,
 		"a constant pattern must allocate one compiled buffer and one reusable sparse-literal buffer")
 	for _, matched := range vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()) {
@@ -948,7 +941,7 @@ func TestByteLikeSingleCandidateStaysOnDirectPath(t *testing.T) {
 	beforeBytes := mp.CurrNB()
 	beforeAllocs := mp.Stats().NumAlloc.Load()
 	require.NoError(t, newOpBuiltInRegexp().likeFn(
-		[]*vector.Vector{values, patterns}, result, proc, rows, nil))
+		[]*vector.Vector{values, patterns}, result, proc, rows))
 	require.Equal(t, int64(1), mp.Stats().NumAlloc.Load()-beforeAllocs,
 		"a single-candidate constant pattern must only allocate its compiled token storage")
 	require.Equal(t, beforeBytes, mp.CurrNB())
@@ -1232,7 +1225,7 @@ func TestByteLikeConvolutionAllocationFailureDoesNotLeak(t *testing.T) {
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
 	limitedProc := testutil.NewProcessWithOwnedMPool(t, "byte-like-convolution-limit", limited)
-	err = newOpBuiltInRegexp().likeFn([]*vector.Vector{values, patterns}, result, limitedProc, 1, nil)
+	err = newOpBuiltInRegexp().likeFn([]*vector.Vector{values, patterns}, result, limitedProc, 1)
 	require.Error(t, err)
 	require.Zero(t, limited.CurrNB())
 
@@ -1296,7 +1289,7 @@ func TestByteLikeConstantPatternReusesConvolutionScratchAcrossRows(t *testing.T)
 	beforeBytes := mp.CurrNB()
 	beforeAllocs := mp.Stats().NumAlloc.Load()
 	require.NoError(t, newOpBuiltInRegexp().likeFn(
-		[]*vector.Vector{values, patterns}, result, proc, rows, nil))
+		[]*vector.Vector{values, patterns}, result, proc, rows))
 	require.Equal(t, int64(2), mp.Stats().NumAlloc.Load()-beforeAllocs,
 		"one compiled-pattern allocation and one reusable convolution allocation are expected")
 	require.Equal(t, beforeBytes, mp.CurrNB())
@@ -1561,7 +1554,7 @@ func TestBinaryStringLikeAndConcatConsumeStaticDomain(t *testing.T) {
 		lengthResult := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
 		require.NoError(t, lengthResult.PreExtendAndReset(1))
 		require.NoError(t, LengthUTF8(
-			[]*vector.Vector{concatenated.GetResultVector()}, lengthResult, proc, 1, nil))
+			[]*vector.Vector{concatenated.GetResultVector()}, lengthResult, proc, 1))
 		require.Equal(t, []uint64{test.want}, vector.MustFixedColNoTypeCheck[uint64](lengthResult.GetResultVector()))
 		lengthResult.Free()
 		concatenated.Free()
@@ -1609,7 +1602,7 @@ func TestCharsetAndCollationExecutorsUseStaticType(t *testing.T) {
 	}
 }
 
-func TestCharsetAndCollationNonStringInputsAndMask(t *testing.T) {
+func TestCharsetAndCollationNonStringInputs(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()
 	for _, input := range []*vector.Vector{
@@ -1621,10 +1614,9 @@ func TestCharsetAndCollationNonStringInputsAndMask(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
 			require.NoError(t, result.PreExtendAndReset(2))
 			require.NoError(t, fn(
-				[]*vector.Vector{input}, result, proc, 2,
-				&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
+				[]*vector.Vector{input}, result, proc, 2))
 			require.Equal(t, []byte("binary"), result.GetResultVector().GetBytesAt(0))
-			require.True(t, result.GetResultVector().IsNull(1))
+			require.Equal(t, []byte("binary"), result.GetResultVector().GetBytesAt(1))
 			result.Free()
 		}
 	}

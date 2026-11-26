@@ -82,7 +82,7 @@ func TestVectorMatmulCPUMatchesScalarOrder(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(typ, mp)
 			t.Cleanup(result.Free)
 			require.NoError(t, result.PreExtendAndReset(len(vs)))
-			require.NoError(t, NewCast([]*vector.Vector{from, target}, result, proc, len(vs), nil))
+			require.NoError(t, NewCast([]*vector.Vector{from, target}, result, proc, len(vs)))
 			return result.GetResultVector()
 		}
 		for _, mc := range []struct{ metric, fn string }{

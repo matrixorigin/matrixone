@@ -111,7 +111,7 @@ PR 4 does this:
 | `CASE` with two conditions | 294 → 202 | 750 → 282 | 144 → 73 |
 | `COALESCE(a, b)` | 84 → 40 | 250 → 55 | 38 → 14 |
 
-The kernels' own masking paths (`FunctionSelectList` with `AnyNull`) are no longer reached from the executor. Removing them is part of PR 6.
+The kernels' own masking paths (`FunctionSelectList` with `AnyNull`) are no longer reached from the executor. PR 6b removes them.
 
 **Remaining selections (PR 5).** Each of these sites built an ascending list a row at a time and then shrank or gathered by it. Each now builds a bitmap owned by the operator (allocated once, freed in `Reset` and `Free`) and uses `ShrinkByMask` or `UnionByMask`:
 
@@ -136,7 +136,7 @@ Left for later: the set operators' `[]uint8` flags (built per 256-row hash chunk
 
 One keep-only gather by list stays, as `Vector.ShrinkByRows(sels, mp)`: rows that arrive as a list from a storage search, a membership filter or a TopN (see "Storage search results stay lists"). Its callers are blockio's reader selection, scoped owned read and TopN winner positions, and table_scan's local-domain membership. PR 7 folds it into the RemapList gather.
 
-Not in PR 6: the kernels' `FunctionSelectList` masking paths (about 3,500 references under `pkg/sql/plan/function`), dead since PR 4, go in their own PR.
+**Removing the function select list (PR 6b).** The kernels' `FunctionSelectList` masking paths, dead since PR 4, are gone, and so is the type: a function implementation is `func(parameters, result, proc, length) error` and evaluates every row it is given. The change was made mechanically. Every check was folded with the value the executor has passed since PR 4 (non-nil, nothing masked), then the parameter and its arguments were dropped. Row-skip helpers that became constant were inlined and deleted. Constant folding and zone-map evaluation used to pass a nil list. Folding both ways shows one kernel that took a different path for nil: string equality used a header-compare fast path (`compareVarlenaEqual`) only then. That path is deleted, so folding now takes the same path as execution. Tests whose subject was masked or all-NULL selections are removed with the code they tested.
 
 ## Design: RemapList
 
@@ -199,6 +199,7 @@ Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a 
 | 4 | Bitmap | Expression evaluation | `Eval` takes the bitmap; `evalSelectedRows` gathers and scatters by mask; the `FunctionSelectList` copy goes away | expression benchmarks under partial selection |
 | 5 | Bitmap | Remaining selections | DML operators, join finalize, set operators' `[]uint8` flags, frontend loops; contiguous ranges become window copies | per-operator benchmarks; BVT |
 | 6 | Bitmap | Remove list APIs | delete `Shrink([]int64)` and the negate form of `FilterInPlaceOrdered`; a keep-only `ShrinkByRows` stays for search and TopN lists | build and full test run |
+| 6b | Bitmap | Remove function select list | delete `FunctionSelectList`, the kernels' masking paths and the kernel parameter | build and full test run |
 | 7 | RemapList | Type and gather | new package `pkg/common/remaplist` with `remaplist.List`; generic `Vector.Gather` / `Batch.Gather` with the null remap in the same pass | gather microbenchmarks against `Union` and `Shuffle` |
 | 8 | RemapList | Buckets | shuffle, spill and partition use `BuildBuckets` | shuffle and spill benchmarks |
 | 9 | RemapList | Sorts | order, mergeorder, top, mergetop, window, mergesort and logtail sorts use `Identity` → sort → `Gather`; remove `Shuffle`, `ShuffleWithBuf`, `UnionInt32` | sort and top-k benchmarks |

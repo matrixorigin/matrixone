@@ -80,12 +80,11 @@ func TestTemporalReleaseOverloadABI(t *testing.T) {
 				ov, err := GetFunctionById(proc.Ctx, EncodeOverloadID(fn.id, int32(6+i)))
 				require.NoError(t, err)
 				inputs := []FunctionTestInput{
-					NewFunctionTestInput(typ.ToType(), []string{"2024-01-02 03:04:05.123456", "bad", "", "bad"}, []bool{false, false, true, false}),
+					NewFunctionTestInput(typ.ToType(), []string{"2024-01-02 03:04:05.123456", "bad", "", "bad"}, []bool{false, false, true, true}),
 					NewFunctionTestConstInput(sig[1].ToType(), []string{"00:00:01"}, nil),
 				}
 				want := NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false, []types.Datetime{fn.want, 0, 0, 0}, []bool{false, true, true, true})
-				fc := NewFunctionTestCase(proc, inputs, want, executeLogicOfOverload(ov.newOp())).
-					WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}})
+				fc := NewFunctionTestCase(proc, inputs, want, executeLogicOfOverload(ov.newOp()))
 				ok, info := fc.RunAndFree()
 				require.True(t, ok, info)
 				bound, err := GetFunctionByName(proc.Ctx, fn.name, []types.Type{typ.ToType(), sig[1].ToType()})

@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if parameters[1].AllNull() {
 		result.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		return nil
@@ -74,12 +74,12 @@ func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 	return nil
 }
 
-func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBetweenBytesWithFunc(parameters, result, proc, length, selectList, types.PrefixCompare)
+func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBetweenBytesWithFunc(parameters, result, proc, length, types.PrefixCompare)
 }
 
-func PrefixInRange(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return inRangeBytesWithFunc(parameters, result, proc, length, selectList, types.PrefixCompare)
+func PrefixInRange(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return inRangeBytesWithFunc(parameters, result, proc, length, types.PrefixCompare)
 }
 
 type implPrefixIn struct {
@@ -118,7 +118,7 @@ func (op *implPrefixIn) init(rvec *vector.Vector) {
 	op.vals = op.vals[:vlen]
 }
 
-func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if !op.ready {
 		op.init(parameters[1])
 	}

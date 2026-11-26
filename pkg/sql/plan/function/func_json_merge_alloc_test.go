@@ -54,7 +54,6 @@ func TestJsonMergePatchWrapperAllocationsDoNotScaleWithRows(t *testing.T) {
 					testCase.result,
 					testCase.proc,
 					testCase.fnLength,
-					nil,
 				)
 			}
 		})

@@ -32,7 +32,7 @@ func BenchmarkIntegerAddMulBatch(b *testing.B) {
 		for _, path := range []string{"narrow_control", "wide_signed_kernel", "wide_mixed_kernel", "mixed_decimal_reference", "signed_cast_pipeline", "mixed_cast_pipeline", "mixed_decimal_cast_pipeline"} {
 			shapes := []string{"dense"}
 			if path == "wide_mixed_kernel" || path == "mixed_decimal_reference" {
-				shapes = append(shapes, "negative", "nullable", "masked")
+				shapes = append(shapes, "negative", "nullable")
 			}
 			for _, shape := range shapes {
 				b.Run(fmt.Sprintf("multiply=%t/%s/%s", multiply, path, shape), func(b *testing.B) {
@@ -51,7 +51,6 @@ func BenchmarkIntegerAddMulBatch(b *testing.B) {
 					defer b64.Free(proc.Mp())
 					u64 := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 					defer u64.Free(proc.Mp())
-					active := make([]bool, rows)
 					for i := 0; i < rows; i++ {
 						a, v := int8(1+i%7), uint8(1+i%3)
 						if shape == "negative" && i%2 == 0 {
@@ -62,7 +61,6 @@ func BenchmarkIntegerAddMulBatch(b *testing.B) {
 							}
 						}
 						isNull := shape == "nullable" && i%4 == 0
-						active[i] = shape != "masked" || i%4 != 0
 						for _, err := range []error{
 							vector.AppendFixed(a8, a, isNull, proc.Mp()), vector.AppendFixed(b8, int8(v), false, proc.Mp()),
 							vector.AppendFixed(u8, v, false, proc.Mp()), vector.AppendFixed(a64, int64(a), isNull, proc.Mp()),
@@ -70,10 +68,6 @@ func BenchmarkIntegerAddMulBatch(b *testing.B) {
 						} {
 							require.NoError(b, err)
 						}
-					}
-					var selected *FunctionSelectList
-					if shape == "masked" {
-						selected = &FunctionSelectList{AnyNull: true, SelectList: active}
 					}
 					mixed := path == "wide_mixed_kernel" || path == "mixed_decimal_reference" || path == "mixed_cast_pipeline" || path == "mixed_decimal_cast_pipeline"
 					casts := path == "signed_cast_pipeline" || path == "mixed_cast_pipeline" || path == "mixed_decimal_cast_pipeline"
@@ -126,10 +120,10 @@ func BenchmarkIntegerAddMulBatch(b *testing.B) {
 							if err := rightResult.PreExtendAndReset(rows); err != nil {
 								return err
 							}
-							if err := NewCast(castLeftParams, leftResult, proc, rows, nil); err != nil {
+							if err := NewCast(castLeftParams, leftResult, proc, rows); err != nil {
 								return err
 							}
-							if err := NewCast(castRightParams, rightResult, proc, rows, nil); err != nil {
+							if err := NewCast(castRightParams, rightResult, proc, rows); err != nil {
 								return err
 							}
 							params[0] = leftResult.GetResultVector()
@@ -138,7 +132,7 @@ func BenchmarkIntegerAddMulBatch(b *testing.B) {
 						if err := result.PreExtendAndReset(rows); err != nil {
 							return err
 						}
-						return fn(params, result, proc, rows, selected)
+						return fn(params, result, proc, rows)
 					}
 					require.NoError(b, run())
 					got := result.GetResultVector()
@@ -146,7 +140,7 @@ func BenchmarkIntegerAddMulBatch(b *testing.B) {
 					// Independent numerical checks stay outside timing, including cancellation
 					// and zero products of negative signed inputs.
 					for row := 0; row < rows; row++ {
-						wantNull := !active[row] || a64.IsNull(uint64(row))
+						wantNull := a64.IsNull(uint64(row))
 						require.Equal(b, wantNull, got.IsNull(uint64(row)))
 						if wantNull {
 							continue

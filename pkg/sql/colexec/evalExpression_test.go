@@ -886,9 +886,9 @@ func TestFlowControlFolding(t *testing.T) {
 		branch := expr.parameterExecutor[1].(*FunctionExpressionExecutor)
 		realEval := branch.evalFn
 		foldCalls := 0
-		branch.evalFn = func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *function.FunctionSelectList) error {
+		branch.evalFn = func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 			foldCalls++
-			return realEval(params, result, proc, length, selection)
+			return realEval(params, result, proc, length)
 		}
 		bat := batch.New(nil)
 		bat.SetRowCount(1)

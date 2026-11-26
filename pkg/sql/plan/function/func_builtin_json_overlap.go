@@ -108,33 +108,17 @@ func jsonOverlaps(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
 	rs := vector.MustFunctionResult[int64](result)
-	if selectList != nil && selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 
 	left, right := newJSONOverlapOperands(parameters, rs)
 	var workspace jsonOverlapWorkspace
 	defer workspace.clear()
 	defer left.prepared.clear()
 	defer right.prepared.clear()
-	evaluableRows := jsonOverlapEvaluableRows(&left, &right, length, selectList)
+	evaluableRows := jsonOverlapEvaluableRows(&left, &right, length)
 
 	for row := uint64(0); row < uint64(length); row++ {
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(row) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
-
 		leftDocument, leftNull, err := left.documentAt(row, proc)
 		if err != nil {
 			return err
@@ -184,12 +168,9 @@ func newJSONOverlapOperands(
 	return left, right
 }
 
-func jsonOverlapEvaluableRows(left, right *jsonOverlapOperand, length int, selectList *FunctionSelectList) int {
+func jsonOverlapEvaluableRows(left, right *jsonOverlapOperand, length int) int {
 	count := 0
 	for row := uint64(0); row < uint64(length); row++ {
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(row) {
-			continue
-		}
 		_, leftNull := left.wrapper.GetStrValue(row)
 		if leftNull {
 			continue

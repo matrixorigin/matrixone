@@ -112,20 +112,13 @@ func jsonStringConsumerUnaryBytesToBytes(
 	proc *process.Process,
 	length int,
 	resultFn func([]byte) []byte,
-	selectList *FunctionSelectList,
 ) error {
 	if parameters[0].GetType().Oid != types.T_json {
-		return opUnaryBytesToBytes(parameters, result, proc, length, resultFn, selectList)
+		return opUnaryBytesToBytes(parameters, result, proc, length, resultFn)
 	}
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for row := uint64(0); row < uint64(length); row++ {
-		if functionRowSkipped(selectList, row) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		value, isNull, err := getJSONStringConsumerValue(proc.Ctx, source, row)
 		if err != nil {
 			return err

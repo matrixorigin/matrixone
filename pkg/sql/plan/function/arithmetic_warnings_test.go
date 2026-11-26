@@ -72,7 +72,7 @@ func TestDivisionWarningModeSourcesAndScope(t *testing.T) {
 			defer test.Free()
 			require.Equal(t, tc.want > 0, ScalarDivisionNeedsRowEvaluation(test.parameters, proc))
 			require.NoError(t, test.result.PreExtendAndReset(1))
-			require.NoError(t, test.fn(test.parameters, test.result, proc, 1, nil))
+			require.NoError(t, test.fn(test.parameters, test.result, proc, 1))
 			require.True(t, test.GetResultVectorDirectly().IsNull(0))
 			require.Equal(t, tc.want, sink.total)
 		})
@@ -92,24 +92,20 @@ func TestDivisionWarningBoundariesAndRetention(t *testing.T) {
 			typ := types.T_float64.ToType()
 			test := NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestInput(typ, []float64{0, 1, 1, 1, 4}, nil),
-				NewFunctionTestInput(typ, []float64{0, math.Copysign(0, -1), 0, 0, 2}, []bool{false, false, true, false, false}),
+				NewFunctionTestInput(typ, []float64{0, math.Copysign(0, -1), 0, 0, 2}, []bool{false, false, true, true, false}),
 			}, NewFunctionTestResult(typ, false, nil, nil), divFn)
 			defer test.Free()
 			require.NoError(t, test.result.PreExtendAndReset(5))
-			// Row 3 is masked, row 2 has a NULL divisor, row 4 is a control.
-			selection := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false, true, false}}
-			require.NoError(t, test.fn(test.parameters, test.result, proc, 5, selection))
+			// Rows 2 and 3 have a NULL divisor, row 4 is a control.
+			require.NoError(t, test.fn(test.parameters, test.result, proc, 5))
 			require.Equal(t, uint64(2), sink.total)
 			require.Len(t, sink.records, min(limit, 2))
 			require.True(t, test.GetResultVectorDirectly().IsNull(0))
 			require.True(t, test.GetResultVectorDirectly().IsNull(1))
 			require.False(t, test.GetResultVectorDirectly().IsNull(4))
-			// Reuse the invocation with no rows and an all-masked batch.
+			// Reuse the invocation with no rows.
 			require.NoError(t, test.result.PreExtendAndReset(0))
-			require.NoError(t, test.fn(test.parameters, test.result, proc, 0, nil))
-			require.NoError(t, test.result.PreExtendAndReset(5))
-			require.NoError(t, test.fn(test.parameters, test.result, proc, 5, &FunctionSelectList{AnyNull: true, AllNull: true}))
-			require.Equal(t, uint64(2), sink.total)
+			require.NoError(t, test.fn(test.parameters, test.result, proc, 0))
 		})
 	}
 }
@@ -137,7 +133,7 @@ func TestDivisionWarningsMixedIntegerDomains(t *testing.T) {
 			defer test.Free()
 			require.True(t, ScalarDivisionNeedsRowEvaluation(test.parameters, proc))
 			require.NoError(t, test.result.PreExtendAndReset(1))
-			require.NoError(t, test.fn(test.parameters, test.result, proc, 1, nil))
+			require.NoError(t, test.fn(test.parameters, test.result, proc, 1))
 			require.Equal(t, uint64(1), sink.total)
 			require.True(t, test.GetResultVectorDirectly().IsNull(0))
 		}()

@@ -77,13 +77,13 @@ func TestCastStringWidthContracts(t *testing.T) {
 			fc := NewFunctionTestCase(proc,
 				[]FunctionTestInput{NewFunctionTestInput(tc.source.ToType(), []string{input}, nil)},
 				NewFunctionTestResult(target, false, []string{tc.want}, nil),
-				func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+				func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 					from := vector.GenerateFunctionStrParameter(parameters[0])
 					to := result.(*vector.FunctionResult[types.Varlena])
 					if tc.source == types.T_json {
-						return jsonToStr(proc, context.Background(), from, to, length, nil, tc.strict, tc.allowTrim, tc.allowTrim, false, tc.allowTrim)
+						return jsonToStr(proc, context.Background(), from, to, length, tc.strict, tc.allowTrim, tc.allowTrim, false, tc.allowTrim)
 					}
-					return strToStr(context.Background(), proc, from, to, length, target, tc.strict, tc.allowTrim, tc.allowTrim, castModeNormal, nil)
+					return strToStr(context.Background(), proc, from, to, length, target, tc.strict, tc.allowTrim, tc.allowTrim, castModeNormal)
 				})
 			t.Cleanup(func() {
 				fc.Free()
@@ -110,7 +110,6 @@ func TestZeroWidthCharVarcharAssignment(t *testing.T) {
 		vector.FunctionResultWrapper,
 		*process.Process,
 		int,
-		*FunctionSelectList,
 	) error
 
 	run := func(
@@ -151,7 +150,7 @@ func TestZeroWidthCharVarcharAssignment(t *testing.T) {
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(1))
 
-		if err := cast([]*vector.Vector{src, dst}, result, proc, 1, nil); err != nil {
+		if err := cast([]*vector.Vector{src, dst}, result, proc, 1); err != nil {
 			return "", err
 		}
 		got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
@@ -282,7 +281,7 @@ func castTextToVarchar3(t *testing.T, proc *process.Process, input string) (stri
 	rs := vector.NewFunctionResultWrapper(vc3, proc.Mp())
 	defer rs.Free()
 	require.NoError(t, rs.PreExtendAndReset(1))
-	if err := NewAssignCast([]*vector.Vector{src, dst}, rs, proc, 1, nil); err != nil {
+	if err := NewAssignCast([]*vector.Vector{src, dst}, rs, proc, 1); err != nil {
 		return "", err
 	}
 	got, _ := vector.GenerateFunctionStrParameter(rs.GetResultVector()).GetStrValue(0)
@@ -334,7 +333,7 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	rs := vector.NewFunctionResultWrapper(types.New(types.T_varchar, 3, 0), proc.Mp())
 	defer rs.Free()
 	require.NoError(t, rs.PreExtendAndReset(1))
-	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
+	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1))
 }
 
 func TestDecimalAssignmentChecksPrecisionInStrictMode(t *testing.T) {
@@ -362,7 +361,7 @@ func TestDecimalAssignmentChecksPrecisionInStrictMode(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
-			err := NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
+			err := NewAssignCast([]*vector.Vector{source, target}, result, proc, 1)
 			if tc.sqlMode != "" {
 				require.Error(t, err)
 			} else {
@@ -397,7 +396,7 @@ func TestDateAssignmentKeepsZeroAndRejectsInvalidText(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
-			err := NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
+			err := NewAssignCast([]*vector.Vector{source, target}, result, proc, 1)
 			if tc.valid {
 				require.NoError(t, err)
 				require.Equal(t, types.ZeroDate, vector.MustFixedColWithTypeCheck[types.Date](result.GetResultVector())[0])
@@ -419,7 +418,7 @@ func TestTypedBinaryAssignmentPreservesShortPayload(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil))
+	require.NoError(t, NewAssignCast([]*vector.Vector{source, target}, result, proc, 1))
 	got, isNull := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
 	require.False(t, isNull)
 	require.Equal(t, []byte{'A', 'B'}, got)
@@ -445,7 +444,7 @@ func TestAlterCopyCanNarrowDatetimeToDate(t *testing.T) {
 		result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(1))
-		return NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
+		return NewAssignCast([]*vector.Vector{source, target}, result, proc, 1)
 	}
 	require.Error(t, run())
 	proc.Ctx = context.WithValue(proc.Ctx, defines.AlterCopyOpt{}, &plan.AlterCopyOpt{})
@@ -470,7 +469,7 @@ func TestStrictBinaryAssignmentRejectsOverWidthValue(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(typ, proc.Mp())
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
-			require.Error(t, NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil))
+			require.Error(t, NewAssignCast([]*vector.Vector{source, target}, result, proc, 1))
 		})
 	}
 }
@@ -508,7 +507,7 @@ func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
 
-			require.NoError(t, NewAssignIgnoreCast([]*vector.Vector{source, destination}, result, proc, 1, nil))
+			require.NoError(t, NewAssignIgnoreCast([]*vector.Vector{source, destination}, result, proc, 1))
 			got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
 			require.False(t, null)
 			require.Equal(t, tc.want, string(got))
@@ -539,7 +538,7 @@ func TestAssignStringWidthWarningUsesExecutionAttemptSink(t *testing.T) {
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
 
-	require.NoError(t, NewAssignIgnoreCast([]*vector.Vector{source, destination}, result, proc, 1, nil))
+	require.NoError(t, NewAssignIgnoreCast([]*vector.Vector{source, destination}, result, proc, 1))
 	require.Nil(t, proc.Session)
 	require.Len(t, sink.warnings, 1)
 	require.Equal(t, moerr.WARN_DATA_TRUNCATED, sink.warnings[0].code)
@@ -574,7 +573,7 @@ func TestTinyTextAssignmentWidthUsesBytes(t *testing.T) {
 		t *testing.T,
 		sqlMode string,
 		input string,
-		cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error,
+		cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error,
 	) (string, error) {
 		t.Helper()
 		proc := testutil.NewProcess(t)
@@ -594,7 +593,7 @@ func TestTinyTextAssignmentWidthUsesBytes(t *testing.T) {
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(1))
 
-		if err := cast([]*vector.Vector{src, dst}, result, proc, 1, nil); err != nil {
+		if err := cast([]*vector.Vector{src, dst}, result, proc, 1); err != nil {
 			return "", err
 		}
 		got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
@@ -629,7 +628,7 @@ func TestTextBlobFamilyAssignmentWidthUsesBytes(t *testing.T) {
 		sourceType, targetType types.Type,
 		input []byte,
 		sqlMode string,
-		cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error,
+		cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error,
 	) ([]byte, []numericWarning, error) {
 		t.Helper()
 		proc := testutil.NewProcess(t)
@@ -649,7 +648,7 @@ func TestTextBlobFamilyAssignmentWidthUsesBytes(t *testing.T) {
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(1))
 
-		err := cast([]*vector.Vector{src, dst}, result, proc, 1, nil)
+		err := cast([]*vector.Vector{src, dst}, result, proc, 1)
 		if err != nil {
 			return nil, session.warnings, err
 		}
@@ -741,7 +740,7 @@ func TestAssignmentCastTypedSource(t *testing.T) {
 	}
 	run := func(
 		proc *process.Process,
-		cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error,
+		cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error,
 	) (string, error) {
 		src := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, int64(12345), false, proc.Mp()))
@@ -752,7 +751,7 @@ func TestAssignmentCastTypedSource(t *testing.T) {
 		result := vector.NewFunctionResultWrapper(target, proc.Mp())
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(1))
-		if err := cast([]*vector.Vector{src, dst}, result, proc, 1, nil); err != nil {
+		if err := cast([]*vector.Vector{src, dst}, result, proc, 1); err != nil {
 			return "", err
 		}
 		got, _ := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
@@ -807,7 +806,6 @@ func castGeometryToString(
 		vector.FunctionResultWrapper,
 		*process.Process,
 		int,
-		*FunctionSelectList,
 	) error,
 ) (string, error) {
 	t.Helper()
@@ -833,7 +831,7 @@ func castGeometryToString(
 	rs := vector.NewFunctionResultWrapper(toType, proc.Mp())
 	defer rs.Free()
 	require.NoError(t, rs.PreExtendAndReset(1))
-	if err := cast([]*vector.Vector{src, dst}, rs, proc, 1, nil); err != nil {
+	if err := cast([]*vector.Vector{src, dst}, rs, proc, 1); err != nil {
 		return "", err
 	}
 	got, _ := vector.GenerateFunctionStrParameter(rs.GetResultVector()).GetStrValue(0)
@@ -1014,7 +1012,7 @@ func TestJSONBlobAssignmentWidthWarning(t *testing.T) {
 	input := `"` + strings.Repeat("x", types.MaxStringSize+1) + `"`
 	encoded := makeJSONEncodedFromText(t, []string{input}, nil)[0]
 
-	run := func(t *testing.T, sqlMode string, cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error) ([]byte, *numericWarningSession, error) {
+	run := func(t *testing.T, sqlMode string, cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error) ([]byte, *numericWarningSession, error) {
 		t.Helper()
 		proc := testutil.NewProcess(t)
 		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
@@ -1033,7 +1031,7 @@ func TestJSONBlobAssignmentWidthWarning(t *testing.T) {
 		result := vector.NewFunctionResultWrapper(target, proc.Mp())
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(1))
-		err := cast([]*vector.Vector{source, destination}, result, proc, 1, nil)
+		err := cast([]*vector.Vector{source, destination}, result, proc, 1)
 		if err != nil {
 			return nil, session, err
 		}
@@ -1082,8 +1080,8 @@ func TestCastBinaryAssignmentByteWidth(t *testing.T) {
 			t.Run(oid.String()+"/"+tc.name, func(t *testing.T) {
 				target := types.New(oid, 2, 0)
 				fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.input}, nil)}, NewFunctionTestResult(target, false, []string{tc.want}, nil),
-					func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-						return strToStr(proc.Ctx, proc, vector.GenerateFunctionStrParameter(parameters[0]), result.(*vector.FunctionResult[types.Varlena]), length, target, tc.strict, true, true, tc.mode, selectList)
+					func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return strToStr(proc.Ctx, proc, vector.GenerateFunctionStrParameter(parameters[0]), result.(*vector.FunctionResult[types.Varlena]), length, target, tc.strict, true, true, tc.mode)
 					})
 				t.Cleanup(fc.Free)
 				actual, err := fc.DebugRun()

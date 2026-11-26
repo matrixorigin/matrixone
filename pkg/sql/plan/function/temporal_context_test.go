@@ -126,19 +126,10 @@ func TestTemporalContextCasts(t *testing.T) {
 				if target == types.T_float64 {
 					empty, want = []float64{}, tc.floats
 				}
-				for _, selection := range []*FunctionSelectList{nil, {AnyNull: true, SelectList: []bool{true, false, true, true}}, {AllNull: true}} {
-					nulls := []bool{false, false, false, true}
-					if selection != nil {
-						if selection.AllNull {
-							nulls = []bool{true, true, true, true}
-						} else {
-							nulls[1] = true
-						}
-					}
-					fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(target.ToType(), empty, nil)}, NewFunctionTestResult(target.ToType(), false, want, nulls), NewCast).WithSelectList(selection)
-					ok, info := fc.RunAndFree()
-					require.True(t, ok, info)
-				}
+				nulls := []bool{false, false, false, true}
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(target.ToType(), empty, nil)}, NewFunctionTestResult(target.ToType(), false, want, nulls), NewCast)
+				ok, info := fc.RunAndFree()
+				require.True(t, ok, info)
 			})
 		}
 	}

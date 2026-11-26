@@ -153,18 +153,10 @@ func checkedIntegerArgument[R int64 | uint64](value integerArgumentValue, proc *
 }
 
 func integerArgumentRows[T types.FixedSizeTExceptStrType, R int64 | uint64](
-	source *vector.Vector, result *vector.FunctionResult[R], proc *process.Process, length int,
-	selectList *FunctionSelectList, convert func(T) (integerArgumentValue, error),
+	source *vector.Vector, result *vector.FunctionResult[R], proc *process.Process, length int, convert func(T) (integerArgumentValue, error),
 ) error {
 	input := vector.GenerateFunctionFixedTypeParameter[T](source)
 	for i := uint64(0); i < uint64(length); i++ {
-		// Do not read, round, parse, or range-check an unselected row.
-		if functionRowSkipped(selectList, i) {
-			if err := result.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		value, isNull := input.GetValue(i)
 		if isNull {
 			if err := result.Append(0, true); err != nil {
@@ -187,17 +179,11 @@ func integerArgumentRows[T types.FixedSizeTExceptStrType, R int64 | uint64](
 	return nil
 }
 
-func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *vector.FunctionResult[R], proc *process.Process, length int, selectList *FunctionSelectList, textBits bool) error {
+func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *vector.FunctionResult[R], proc *process.Process, length int, textBits bool) error {
 	input := vector.GenerateFunctionStrParameter(source)
 	// The source is the call's first argument.
 	isBin := result.ArgumentIsBin(0)
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := result.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		value, isNull := input.GetStrValue(i)
 		if isNull {
 			if err := result.Append(0, true); err != nil {
@@ -234,8 +220,8 @@ func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *ve
 	return nil
 }
 
-func integerArgumentCast[R int64 | uint64](source *vector.Vector, result *vector.FunctionResult[R], proc *process.Process, length int, selectList *FunctionSelectList, truncate bool) error {
-	if source.IsConstNull() || (selectList != nil && selectList.IgnoreAllRow()) {
+func integerArgumentCast[R int64 | uint64](source *vector.Vector, result *vector.FunctionResult[R], proc *process.Process, length int, truncate bool) error {
+	if source.IsConstNull() {
 		for i := 0; i < length; i++ {
 			if err := result.Append(0, true); err != nil {
 				return err
@@ -245,82 +231,82 @@ func integerArgumentCast[R int64 | uint64](source *vector.Vector, result *vector
 	}
 	switch source.GetType().Oid {
 	case types.T_int8:
-		return integerArgumentRows(source, result, proc, length, selectList, signedIntegerArgument[int8])
+		return integerArgumentRows(source, result, proc, length, signedIntegerArgument[int8])
 	case types.T_int16:
-		return integerArgumentRows(source, result, proc, length, selectList, signedIntegerArgument[int16])
+		return integerArgumentRows(source, result, proc, length, signedIntegerArgument[int16])
 	case types.T_year:
-		return integerArgumentRows(source, result, proc, length, selectList, signedIntegerArgument[types.MoYear])
+		return integerArgumentRows(source, result, proc, length, signedIntegerArgument[types.MoYear])
 	case types.T_int32:
-		return integerArgumentRows(source, result, proc, length, selectList, signedIntegerArgument[int32])
+		return integerArgumentRows(source, result, proc, length, signedIntegerArgument[int32])
 	case types.T_int64:
-		return integerArgumentRows(source, result, proc, length, selectList, signedIntegerArgument[int64])
+		return integerArgumentRows(source, result, proc, length, signedIntegerArgument[int64])
 	case types.T_uint8:
-		return integerArgumentRows(source, result, proc, length, selectList, unsignedIntegerArgument[uint8])
+		return integerArgumentRows(source, result, proc, length, unsignedIntegerArgument[uint8])
 	case types.T_uint16:
-		return integerArgumentRows(source, result, proc, length, selectList, unsignedIntegerArgument[uint16])
+		return integerArgumentRows(source, result, proc, length, unsignedIntegerArgument[uint16])
 	case types.T_enum:
-		return integerArgumentRows(source, result, proc, length, selectList, unsignedIntegerArgument[types.Enum])
+		return integerArgumentRows(source, result, proc, length, unsignedIntegerArgument[types.Enum])
 	case types.T_uint32:
-		return integerArgumentRows(source, result, proc, length, selectList, unsignedIntegerArgument[uint32])
+		return integerArgumentRows(source, result, proc, length, unsignedIntegerArgument[uint32])
 	case types.T_uint64, types.T_bit:
-		return integerArgumentRows(source, result, proc, length, selectList, unsignedIntegerArgument[uint64])
+		return integerArgumentRows(source, result, proc, length, unsignedIntegerArgument[uint64])
 	case types.T_bool:
-		return integerArgumentRows(source, result, proc, length, selectList, func(v bool) (integerArgumentValue, error) {
+		return integerArgumentRows(source, result, proc, length, func(v bool) (integerArgumentValue, error) {
 			if v {
 				return integerArgumentValue{magnitude: 1}, nil
 			}
 			return integerArgumentValue{}, nil
 		})
 	case types.T_float32:
-		return integerArgumentRows(source, result, proc, length, selectList, func(v float32) (integerArgumentValue, error) { return realIntegerArgument(float64(v), truncate), nil })
+		return integerArgumentRows(source, result, proc, length, func(v float32) (integerArgumentValue, error) { return realIntegerArgument(float64(v), truncate), nil })
 	case types.T_float64:
-		return integerArgumentRows(source, result, proc, length, selectList, func(v float64) (integerArgumentValue, error) { return realIntegerArgument(v, truncate), nil })
+		return integerArgumentRows(source, result, proc, length, func(v float64) (integerArgumentValue, error) { return realIntegerArgument(v, truncate), nil })
 	case types.T_bf16:
-		return integerArgumentRows(source, result, proc, length, selectList, func(v types.BF16) (integerArgumentValue, error) {
+		return integerArgumentRows(source, result, proc, length, func(v types.BF16) (integerArgumentValue, error) {
 			return realIntegerArgument(float64(v.ToFloat32()), truncate), nil
 		})
 	case types.T_float16:
-		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Float16) (integerArgumentValue, error) {
+		return integerArgumentRows(source, result, proc, length, func(v types.Float16) (integerArgumentValue, error) {
 			return realIntegerArgument(float64(v.ToFloat32()), truncate), nil
 		})
 	case types.T_float8:
-		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Float8) (integerArgumentValue, error) {
+		return integerArgumentRows(source, result, proc, length, func(v types.Float8) (integerArgumentValue, error) {
 			return realIntegerArgument(float64(v.ToFloat32()), truncate), nil
 		})
 	case types.T_float4:
-		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Float4) (integerArgumentValue, error) {
+		return integerArgumentRows(source, result, proc, length, func(v types.Float4) (integerArgumentValue, error) {
 			return realIntegerArgument(float64(v.ToFloat32()), truncate), nil
 		})
 	case types.T_decimal64:
-		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Decimal64) (integerArgumentValue, error) {
+		return integerArgumentRows(source, result, proc, length, func(v types.Decimal64) (integerArgumentValue, error) {
 			return decimal64IntegerArgument(v, source.GetType().Scale)
 		})
 	case types.T_decimal128:
-		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Decimal128) (integerArgumentValue, error) {
+		return integerArgumentRows(source, result, proc, length, func(v types.Decimal128) (integerArgumentValue, error) {
 			return decimal128IntegerArgument(v, source.GetType().Scale)
 		})
 	case types.T_decimal256:
-		return integerArgumentRows(source, result, proc, length, selectList, func(v types.Decimal256) (integerArgumentValue, error) {
+		return integerArgumentRows(source, result, proc, length, func(v types.Decimal256) (integerArgumentValue, error) {
 			return decimal256IntegerArgument(v, source.GetType().Scale)
 		})
 	default:
 		if source.GetType().Oid.IsMySQLString() {
-			return integerArgumentTextRows(source, result, proc, length, selectList, false)
+			return integerArgumentTextRows(source, result, proc, length, false)
 		}
 		return moerr.NewInvalidInputf(proc.Ctx, "unsupported integer argument source %s", source.GetType().Oid)
 	}
 }
 
-func newIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, truncate bool) error {
+func newIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, truncate bool) error {
 	if len(parameters) != 2 {
 		return moerr.NewInvalidInput(proc.Ctx, "integer argument cast requires a value and target")
 	}
 	var err error
 	switch result.GetResultVector().GetType().Oid {
 	case types.T_int64:
-		err = integerArgumentCast(parameters[0], vector.MustFunctionResult[int64](result), proc, length, selectList, truncate)
+		err = integerArgumentCast(parameters[0], vector.MustFunctionResult[int64](result), proc, length, truncate)
 	case types.T_uint64:
-		err = integerArgumentCast(parameters[0], vector.MustFunctionResult[uint64](result), proc, length, selectList, truncate)
+		err = integerArgumentCast(parameters[0], vector.MustFunctionResult[uint64](result), proc, length, truncate)
 	default:
 		return moerr.NewInvalidInput(proc.Ctx, "integer argument cast requires int64 or uint64 target")
 	}
@@ -334,10 +320,6 @@ func newIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionR
 	if length > 0 && parameters[0].IsConst() {
 		allSelected := true
 		for row := 0; row < length; row++ {
-			if functionRowSkipped(selectList, uint64(row)) {
-				allSelected = false
-				break
-			}
 		}
 		if allSelected {
 			result.GetResultVector().ToConst()
@@ -348,18 +330,18 @@ func newIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionR
 
 // NewTextIntegerBitsCast is shared by text-valued bit parameters, not numeric
 // sources, public CAST, assignment, or signed count parameters.
-func NewTextIntegerBitsCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func NewTextIntegerBitsCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if len(parameters) != 2 || result.GetResultVector().GetType().Oid != types.T_uint64 {
 		return moerr.NewInvalidInput(proc.Ctx, "text integer bits cast requires a value and uint64 target")
 	}
 	source := parameters[0]
-	if source.IsConstNull() || (selectList != nil && selectList.IgnoreAllRow()) {
-		return integerArgumentCast(source, vector.MustFunctionResult[uint64](result), proc, length, selectList, false)
+	if source.IsConstNull() {
+		return integerArgumentCast(source, vector.MustFunctionResult[uint64](result), proc, length, false)
 	}
 	if !source.GetType().Oid.IsMySQLString() {
 		return moerr.NewInvalidInput(proc.Ctx, "text integer bits cast requires a text source")
 	}
-	return integerArgumentTextRows(source, vector.MustFunctionResult[uint64](result), proc, length, selectList, true)
+	return integerArgumentTextRows(source, vector.MustFunctionResult[uint64](result), proc, length, true)
 }
 
 // Temporal values are rounded in their clock/calendar domain before decimal
@@ -375,39 +357,39 @@ func datetimeIntegerArgument(value types.Datetime) (integerArgumentValue, error)
 // NewTemporalIntegerArgumentCast is selected only by temporal-capable roles.
 // Its identity retains the permission across prepared source changes; CAST 5/6
 // must continue rejecting these sources in ordinary integer contexts.
-func NewTemporalIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func NewTemporalIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if len(parameters) != 2 || result.GetResultVector().GetType().Oid != types.T_int64 {
 		return moerr.NewInvalidInput(proc.Ctx, "temporal integer argument cast requires a value and int64 target")
 	}
 	source := parameters[0]
 	rs := vector.MustFunctionResult[int64](result)
-	if source.IsConstNull() || (selectList != nil && selectList.IgnoreAllRow()) || (!integerArgumentTemporalSource(source.GetType().Oid) && source.GetType().Oid != types.T_uuid) {
-		return integerArgumentCast(source, rs, proc, length, selectList, false)
+	if source.IsConstNull() || (!integerArgumentTemporalSource(source.GetType().Oid) && source.GetType().Oid != types.T_uuid) {
+		return integerArgumentCast(source, rs, proc, length, false)
 	}
 	switch source.GetType().Oid {
 	case types.T_uuid:
-		return integerArgumentRows(source, rs, proc, length, selectList, func(v types.Uuid) (integerArgumentValue, error) {
+		return integerArgumentRows(source, rs, proc, length, func(v types.Uuid) (integerArgumentValue, error) {
 			return textIntegerArgument([]byte(v.String()), false), nil
 		})
 	case types.T_date:
-		return integerArgumentRows(source, rs, proc, length, selectList, func(v types.Date) (integerArgumentValue, error) {
+		return integerArgumentRows(source, rs, proc, length, func(v types.Date) (integerArgumentValue, error) {
 			return signedIntegerArgument(packedDateInt64(v))
 		})
 	case types.T_time:
-		return integerArgumentRows(source, rs, proc, length, selectList, timeIntegerArgument)
+		return integerArgumentRows(source, rs, proc, length, timeIntegerArgument)
 	case types.T_datetime:
-		return integerArgumentRows(source, rs, proc, length, selectList, datetimeIntegerArgument)
+		return integerArgumentRows(source, rs, proc, length, datetimeIntegerArgument)
 	default:
-		return integerArgumentRows(source, rs, proc, length, selectList, func(v types.Timestamp) (integerArgumentValue, error) {
+		return integerArgumentRows(source, rs, proc, length, func(v types.Timestamp) (integerArgumentValue, error) {
 			return datetimeIntegerArgument(v.ToDatetime(proc.GetSessionInfo().TimeZone))
 		})
 	}
 }
 
-func NewIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return newIntegerArgumentCast(parameters, result, proc, length, selectList, false)
+func NewIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return newIntegerArgumentCast(parameters, result, proc, length, false)
 }
 
-func NewTruncatedIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return newIntegerArgumentCast(parameters, result, proc, length, selectList, true)
+func NewTruncatedIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return newIntegerArgumentCast(parameters, result, proc, length, true)
 }

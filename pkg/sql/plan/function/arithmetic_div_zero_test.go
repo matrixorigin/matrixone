@@ -485,7 +485,7 @@ func TestDivisionByZeroStrictMode(t *testing.T) {
 
 	// Test 1: First call should compute and cache
 	// Without StmtProfile, should default to "return NULL" (cache = 0)
-	shouldError := checkDivisionByZeroBehavior(proc, nil)
+	shouldError := checkDivisionByZeroBehavior(proc)
 	require.False(t, shouldError, "Without StmtProfile, should return NULL")
 	require.Equal(t, int32(0), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode), "Should cache 0 (return NULL)")
 
@@ -494,7 +494,7 @@ func TestDivisionByZeroStrictMode(t *testing.T) {
 	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode), "SetStmtProfile should reset cache to -1")
 
 	// Test 3: After reset, next call should recompute
-	shouldError = checkDivisionByZeroBehavior(proc, nil)
+	shouldError = checkDivisionByZeroBehavior(proc)
 	require.False(t, shouldError, "After reset, should recompute and return NULL")
 	require.Equal(t, int32(0), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode), "Should cache 0 again")
 
@@ -558,9 +558,9 @@ func TestDivisionByZeroSQLModes(t *testing.T) {
 				proc.SetStmtProfile(profile)
 				profile.SetDivByZeroRuntimeProfile(stmt.name, stmt.query, stmt.ignore)
 				want := tc.want && stmt.check
-				require.Equal(t, want, checkDivisionByZeroBehavior(proc, nil), stmt.name)
+				require.Equal(t, want, checkDivisionByZeroBehavior(proc), stmt.name)
 				resolved := calls
-				require.Equal(t, want, checkDivisionByZeroBehavior(proc, nil), stmt.name)
+				require.Equal(t, want, checkDivisionByZeroBehavior(proc), stmt.name)
 				require.Equal(t, resolved, calls, "cached check must not resolve again")
 			}
 		})
@@ -570,7 +570,7 @@ func TestDivisionByZeroSQLModes(t *testing.T) {
 	profile := &process.StmtProfile{}
 	proc.SetStmtProfile(profile)
 	profile.SetDivByZeroRuntimeProfile("Insert", tree.QueryTypeDML, false)
-	require.False(t, checkDivisionByZeroBehavior(proc, nil))
+	require.False(t, checkDivisionByZeroBehavior(proc))
 }
 
 func TestDivisionByZeroInsertIgnoreStrictMode(t *testing.T) {
@@ -587,14 +587,14 @@ func TestDivisionByZeroInsertIgnoreStrictMode(t *testing.T) {
 	proc.SetStmtProfile(stmtProfile)
 	stmtProfile.SetDivByZeroRuntimeProfile("Insert", tree.QueryTypeDML, true)
 
-	require.False(t, checkDivisionByZeroBehavior(proc, nil), "INSERT IGNORE should return NULL for division by zero")
+	require.False(t, checkDivisionByZeroBehavior(proc), "INSERT IGNORE should return NULL for division by zero")
 	require.Equal(t, int32(0), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
 
 	stmtProfile = &process.StmtProfile{}
 	proc.SetStmtProfile(stmtProfile)
 	stmtProfile.SetDivByZeroRuntimeProfile("Insert", tree.QueryTypeDML, false)
 
-	require.True(t, checkDivisionByZeroBehavior(proc, nil), "plain INSERT should still error in strict mode")
+	require.True(t, checkDivisionByZeroBehavior(proc), "plain INSERT should still error in strict mode")
 	require.Equal(t, int32(1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
 }
 
@@ -825,7 +825,7 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
 			defer tcc.Free()
 			require.NoError(t, tcc.result.PreExtendAndReset(2))
-			require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 2, nil))
+			require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 2))
 			rsVec := tcc.GetResultVectorDirectly()
 			require.Equal(t, tc.resultType, *rsVec.GetType())
 			rsNull := rsVec.GetNulls()
@@ -833,20 +833,6 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 			require.True(t, rsNull.Contains(1))
 		})
 	}
-
-	// A masked non-NULL row is not evaluable. The only selected row is NULL,
-	// so strict mode must still return NULL instead of raising an error.
-	maskSecondRow := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
-	maskedTC := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 5}, []bool{true, false}),
-			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
-		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), divFn)
-	defer maskedTC.Free()
-	require.NoError(t, maskedTC.result.PreExtendAndReset(2))
-	require.NoError(t, maskedTC.fn(maskedTC.parameters, maskedTC.result, proc, 2, maskSecondRow))
-	require.Equal(t, 2, maskedTC.GetResultVectorDirectly().GetNulls().Count())
 
 	// A mixed batch still contains an evaluable 5 / 0 row and must error in
 	// strict mode. This guards against treating "has any NULL" as "all NULL".
@@ -858,7 +844,7 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 		NewFunctionTestResult(types.T_decimal128.ToType(), false, nil, nil), divFn)
 	defer mixedTC.Free()
 	require.NoError(t, mixedTC.result.PreExtendAndReset(2))
-	require.Error(t, mixedTC.fn(mixedTC.parameters, mixedTC.result, proc, 2, nil))
+	require.Error(t, mixedTC.fn(mixedTC.parameters, mixedTC.result, proc, 2))
 
 	// In non-strict mode the same evaluable zero-divisor row becomes NULL.
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
@@ -870,7 +856,7 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 		NewFunctionTestResult(types.T_decimal128.ToType(), false, nil, nil), divFn)
 	defer nonStrictTC.Free()
 	require.NoError(t, nonStrictTC.result.PreExtendAndReset(2))
-	require.NoError(t, nonStrictTC.fn(nonStrictTC.parameters, nonStrictTC.result, proc, 2, nil))
+	require.NoError(t, nonStrictTC.fn(nonStrictTC.parameters, nonStrictTC.result, proc, 2))
 	require.Equal(t, 2, nonStrictTC.GetResultVectorDirectly().GetNulls().Count())
 }
 
@@ -1147,7 +1133,7 @@ func TestIntegerDivUnsignedDividendWithDecimalConstZeroStrictMode(t *testing.T) 
 			}
 
 			require.NoError(t, tc.result.PreExtendAndReset(len(test.dividend)))
-			require.NoError(t, tc.fn(tc.parameters, tc.result, proc, len(test.dividend), nil))
+			require.NoError(t, tc.fn(tc.parameters, tc.result, proc, len(test.dividend)))
 			require.Equal(t, len(test.dividend), tc.GetResultVectorDirectly().GetNulls().Count())
 		})
 	}

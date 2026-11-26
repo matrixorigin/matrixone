@@ -154,9 +154,9 @@ func TestORLikeSubjectReuseInvocation(t *testing.T) {
 			canonical := root.states[0].executor.(*FunctionExpressionExecutor)
 			eval := canonical.evalFn
 			calls := 0
-			canonical.evalFn = func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, length int, selection *function.FunctionSelectList) error {
+			canonical.evalFn = func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, length int) error {
 				calls++
-				return eval(parameters, result, p, length, selection)
+				return eval(parameters, result, p, length)
 			}
 			_, err = DebugShowExecutor(executor)
 			require.NoError(t, err)
@@ -451,9 +451,9 @@ func TestORLikeSubjectReuseCoalesceStringDomains(t *testing.T) {
 			for _, leaf := range raw.(*FunctionExpressionExecutor).parameterExecutor {
 				lower := leaf.(*FunctionExpressionExecutor).parameterExecutor[0].(*FunctionExpressionExecutor)
 				eval := lower.evalFn
-				lower.evalFn = func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, length int, selection *function.FunctionSelectList) error {
+				lower.evalFn = func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, length int) error {
 					calls++
-					return eval(parameters, result, p, length, selection)
+					return eval(parameters, result, p, length)
 				}
 			}
 			executor = ReuseFilterExpressionExecutor(expression, raw, orLikeMinFirstBatchRows)
@@ -740,7 +740,7 @@ func TestORLikeSubjectReuseErrorRecoveryAndTransfer(t *testing.T) {
 	subject := root.states[0].executor.(*FunctionExpressionExecutor)
 	realEval := subject.evalFn
 	failure := moerr.NewInvalidInputNoCtx("injected subject failure")
-	subject.evalFn = func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *function.FunctionSelectList) error {
+	subject.evalFn = func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error {
 		return failure
 	}
 	input := orLikeTestBatch(t, proc, []string{"error", "ordinary"}, nil)
@@ -753,7 +753,7 @@ func TestORLikeSubjectReuseErrorRecoveryAndTransfer(t *testing.T) {
 	require.Equal(t, []bool{true, false}, vector.MustFixedColNoTypeCheck[bool](result))
 	late := root.executor.(*FunctionExpressionExecutor).parameterExecutor[1].(*FunctionExpressionExecutor)
 	lateEval := late.evalFn
-	late.evalFn = func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *function.FunctionSelectList) error {
+	late.evalFn = func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error {
 		return failure
 	}
 	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)

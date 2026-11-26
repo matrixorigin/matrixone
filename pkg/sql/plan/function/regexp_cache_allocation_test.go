@@ -108,7 +108,7 @@ func BenchmarkRegexpOperatorCold(b *testing.B) {
 			if err := result.PreExtendAndReset(1); err != nil {
 				b.Fatal(err)
 			}
-			if err := newOpBuiltInRegexp().likeFn(parameters, result, proc, 1, nil); err != nil {
+			if err := newOpBuiltInRegexp().likeFn(parameters, result, proc, 1); err != nil {
 				b.Fatal(err)
 			}
 			if !vector.GetFixedAtNoTypeCheck[bool](result.GetResultVector(), 0) {

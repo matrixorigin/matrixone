@@ -28,25 +28,15 @@ func bitwiseBinaryScalarResultType(left types.Type) types.Type {
 	return bitwiseBinaryReturnType([]types.Type{left})
 }
 
-func bitwiseBinaryRowSkipped(selectList *FunctionSelectList, row uint64) bool {
-	return selectList != nil && (selectList.IgnoreAllRow() ||
-		(!selectList.ShouldEvalAllRow() && selectList.Contains(row)))
-}
-
 func operatorOpBitwiseBinaryNotFn(
 	parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	_ *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
 	p := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	constantResult := result.GetResultVector().IsConst()
-	if selectList != nil && selectList.IgnoreAllRow() {
-		rs.SetNullResult(uint64(length))
-		return nil
-	}
 
 	var scratch []byte
 	var sourceForWriter []byte
@@ -57,13 +47,6 @@ func operatorOpBitwiseBinaryNotFn(
 		return nil
 	}
 	for row := uint64(0); row < uint64(length); row++ {
-		if bitwiseBinaryRowSkipped(selectList, row) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
 		src, isNull := p.GetStrValue(row)
 		if isNull {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -99,9 +82,8 @@ func operatorOpBitShiftLeftBinaryInt64Fn(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
-	return operatorOpBitShiftBinary[int64](parameters, result, proc, length, selectList, shiftBinaryLeft)
+	return operatorOpBitShiftBinary[int64](parameters, result, proc, length, shiftBinaryLeft)
 }
 
 func operatorOpBitShiftLeftBinaryUint64Fn(
@@ -109,9 +91,8 @@ func operatorOpBitShiftLeftBinaryUint64Fn(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
-	return operatorOpBitShiftBinary[uint64](parameters, result, proc, length, selectList, shiftBinaryLeft)
+	return operatorOpBitShiftBinary[uint64](parameters, result, proc, length, shiftBinaryLeft)
 }
 
 func operatorOpBitShiftRightBinaryInt64Fn(
@@ -119,9 +100,8 @@ func operatorOpBitShiftRightBinaryInt64Fn(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
-	return operatorOpBitShiftBinary[int64](parameters, result, proc, length, selectList, shiftBinaryRight)
+	return operatorOpBitShiftBinary[int64](parameters, result, proc, length, shiftBinaryRight)
 }
 
 func operatorOpBitShiftRightBinaryUint64Fn(
@@ -129,9 +109,8 @@ func operatorOpBitShiftRightBinaryUint64Fn(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
-	return operatorOpBitShiftBinary[uint64](parameters, result, proc, length, selectList, shiftBinaryRight)
+	return operatorOpBitShiftBinary[uint64](parameters, result, proc, length, shiftBinaryRight)
 }
 
 func operatorOpBitShiftBinary[T int64 | uint64](
@@ -139,17 +118,12 @@ func operatorOpBitShiftBinary[T int64 | uint64](
 	result vector.FunctionResultWrapper,
 	_ *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 	shift func(src, dst []byte, count uint64),
 ) error {
 	p := vector.GenerateFunctionStrParameter(parameters[0])
 	countParam := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	constantResult := result.GetResultVector().IsConst()
-	if selectList != nil && selectList.IgnoreAllRow() {
-		rs.SetNullResult(uint64(length))
-		return nil
-	}
 
 	var scratch []byte
 	var sourceForWriter []byte
@@ -159,13 +133,6 @@ func operatorOpBitShiftBinary[T int64 | uint64](
 		return nil
 	}
 	for row := uint64(0); row < uint64(length); row++ {
-		if bitwiseBinaryRowSkipped(selectList, row) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
 		src, isNull := p.GetStrValue(row)
 		if isNull {
 			if err := rs.AppendBytes(nil, true); err != nil {

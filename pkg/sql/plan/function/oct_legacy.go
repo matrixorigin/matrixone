@@ -60,8 +60,8 @@ func withLegacyOctOverloads(current []overload) []overload {
 
 // These executors intentionally preserve pre-VARCHAR OCT behavior, including
 // rounding and conversion errors, for already persisted expressions.
-func legacyOct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[T, types.Decimal128](ivecs, result, proc, length, legacyOctValue[T], selectList)
+func legacyOct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToFixedWithErrorCheck[T, types.Decimal128](ivecs, result, proc, length, legacyOctValue[T])
 }
 
 func legacyOctValue[T constraints.Unsigned | constraints.Signed](val T) (types.Decimal128, error) {
@@ -69,27 +69,27 @@ func legacyOctValue[T constraints.Unsigned | constraints.Signed](val T) (types.D
 	return types.ParseDecimal128(fmt.Sprintf("%o", _val), 38, 0)
 }
 
-func legacyOctFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[T, types.Decimal128](ivecs, result, proc, length, legacyOctFloatValue[T], selectList)
+func legacyOctFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToFixedWithErrorCheck[T, types.Decimal128](ivecs, result, proc, length, legacyOctFloatValue[T])
 }
 
-func legacyOctDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func legacyOctDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryFixedToFixedWithErrorCheck[types.Date, types.Decimal128](ivecs, result, proc, length, func(v types.Date) (types.Decimal128, error) {
 		year, _, _, _ := v.Calendar(true)
 		val := int64(year)
 		return legacyOctValue[int64](val)
-	}, selectList)
+	})
 }
 
-func legacyOctDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func legacyOctDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryFixedToFixedWithErrorCheck[types.Datetime, types.Decimal128](ivecs, result, proc, length, func(v types.Datetime) (types.Decimal128, error) {
 		year, _, _, _ := v.ToDate().Calendar(true)
 		val := int64(year)
 		return legacyOctValue[int64](val)
-	}, selectList)
+	})
 }
 
-func legacyOctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func legacyOctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToFixedWithErrorCheck[types.Decimal128](ivecs, result, proc, length, func(v []byte) (types.Decimal128, error) {
 		s := string(v)
 		dt, err := types.ParseDatetime(s, 6)
@@ -109,7 +109,7 @@ func legacyOctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			return legacyOctValue[int64](val)
 		}
 		return types.Decimal128{}, moerr.NewInvalidArgNoCtx("function oct", s)
-	}, selectList)
+	})
 }
 
 func legacyOctFloatValue[T constraints.Float](xs T) (types.Decimal128, error) {

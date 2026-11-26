@@ -223,23 +223,6 @@ func TestSHA2StringLengthAcceptsEveryMySQLStringDomain(t *testing.T) {
 	}
 }
 
-func TestSHA2StringLengthHonorsSelectList(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	testCase := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"hello", "hello"}, []bool{false, false}),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-length", "256"}, []bool{false, false}),
-		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false,
-			[]string{"", sha2TestDigest("hello", 256)}, []bool{true, false}),
-		SHA2StringLengthFunc,
-	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-	succeeded, info := testCase.RunAndFree()
-	require.True(t, succeeded, info)
-}
-
 func sha2TestDigest(input string, algorithm int64) string {
 	var digest []byte
 	switch algorithm {

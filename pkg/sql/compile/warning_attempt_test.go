@@ -292,7 +292,7 @@ func TestStringAssignmentWarningAttemptDiscard(t *testing.T) {
 	require.NoError(t, result.PreExtendAndReset(1))
 
 	require.NoError(t, planfunction.NewAssignIgnoreCast(
-		[]*vector.Vector{source, destination}, result, proc, 1, nil))
+		[]*vector.Vector{source, destination}, result, proc, 1))
 	total, warnings := attempt.collector.SnapshotWarnings()
 	require.Equal(t, uint64(1), total)
 	require.Len(t, warnings, 1)

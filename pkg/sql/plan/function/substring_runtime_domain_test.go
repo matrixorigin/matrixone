@@ -114,17 +114,6 @@ func TestSubstringExactBinaryStaticDomain(t *testing.T) {
 				require.Equal(t, wantBinary, output.GetBytesAt(0))
 				require.Equal(t, wantBinary, output.GetBytesAt(1))
 				require.True(t, output.IsNull(2))
-
-				overload, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
-				require.NoError(t, err)
-				exec, _, _, _ := overload.GetExecuteMethod()
-				masked := vector.NewFunctionResultWrapper(resolved.GetReturnType(), mp)
-				defer masked.Free()
-				require.NoError(t, masked.PreExtendAndReset(3))
-				require.NoError(t, exec(inputs, masked, proc, 3, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, false}}))
-				require.Equal(t, wantBinary, masked.GetResultVector().GetBytesAt(0))
-				require.True(t, masked.GetResultVector().IsNull(1))
-				require.True(t, masked.GetResultVector().IsNull(2))
 			})
 		}
 	}

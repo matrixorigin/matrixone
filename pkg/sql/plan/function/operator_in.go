@@ -156,7 +156,7 @@ func (op *opOperatorStrIn) containsKey(value []byte) bool {
 	return ok
 }
 
-func (op *opOperatorFixedIn[T]) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opOperatorFixedIn[T]) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if !op.ready {
 		op.init(parameters[1])
 	}
@@ -185,7 +185,7 @@ func (op *opOperatorFixedIn[T]) operatorIn(parameters []*vector.Vector, result v
 	return nil
 }
 
-func (op *opOperatorFixedIn[T]) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opOperatorFixedIn[T]) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if !op.ready {
 		op.init(parameters[1])
 	}
@@ -214,7 +214,7 @@ func (op *opOperatorFixedIn[T]) operatorNotIn(parameters []*vector.Vector, resul
 	return nil
 }
 
-func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if !op.ready {
 		op.init(parameters[0], parameters[1])
 	}
@@ -244,7 +244,7 @@ func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector
 	return nil
 }
 
-func (op *opOperatorStrIn) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opOperatorStrIn) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if !op.ready {
 		op.init(parameters[0], parameters[1])
 	}
@@ -335,11 +335,11 @@ func (op *opOperatorIntegerIn[T]) initBitmap(tuple *vector.Vector, mp *mpool.MPo
 	return true
 }
 
-func (op *opOperatorIntegerIn[T]) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opOperatorIntegerIn[T]) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return op.eval(parameters, result, proc, length, false)
 }
 
-func (op *opOperatorIntegerIn[T]) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opOperatorIntegerIn[T]) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return op.eval(parameters, result, proc, length, true)
 }
 

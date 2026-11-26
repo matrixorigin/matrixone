@@ -435,7 +435,7 @@ func nextvalRow(proc *process.Process) (string, error) {
 	if err := result.PreExtendAndReset(1); err != nil {
 		return "", err
 	}
-	if err := Nextval([]*vector.Vector{input}, result, proc, 1, nil); err != nil {
+	if err := Nextval([]*vector.Vector{input}, result, proc, 1); err != nil {
 		return "", err
 	}
 	return string(result.GetResultVector().GetBytesAt(0)), nil
@@ -452,7 +452,7 @@ func nextvalRows(proc *process.Process, n int) ([]string, error) {
 	if err := result.PreExtendAndReset(n); err != nil {
 		return nil, err
 	}
-	if err := Nextval([]*vector.Vector{input}, result, proc, n, nil); err != nil {
+	if err := Nextval([]*vector.Vector{input}, result, proc, n); err != nil {
 		return nil, err
 	}
 	rv := result.GetResultVector()
@@ -484,7 +484,7 @@ func setvalRow(proc *process.Process, num string, iscalled bool) (string, error)
 	if err := result.PreExtendAndReset(1); err != nil {
 		return "", err
 	}
-	if err := Setval([]*vector.Vector{table, value, called}, result, proc, 1, nil); err != nil {
+	if err := Setval([]*vector.Vector{table, value, called}, result, proc, 1); err != nil {
 		return "", err
 	}
 	return string(result.GetResultVector().GetBytesAt(0)), nil
@@ -1536,7 +1536,7 @@ func TestNextvalBatchFlushesCommittedRowsBeforeResolutionError(t *testing.T) {
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(3))
 
-	err := Nextval([]*vector.Vector{input}, result, f.proc, 3, nil)
+	err := Nextval([]*vector.Vector{input}, result, f.proc, 3)
 	require.Error(t, err)
 	require.Equal(t, []string{"update `db`.`seq` set last_seq_num = 12"}, f.state.recordedUpdates(),
 		"the two earlier rows' burst commits before the third row's error surfaces")

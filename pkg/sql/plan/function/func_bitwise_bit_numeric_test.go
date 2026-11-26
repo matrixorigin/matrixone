@@ -170,7 +170,7 @@ func TestIntegerDivBitSignedDivisorAndMinInt64(t *testing.T) {
 		integerDivFn)
 	defer tc2.Free()
 	require.NoError(t, tc2.result.PreExtendAndReset(2))
-	err := tc2.fn(tc2.parameters, tc2.result, proc, 2, nil)
+	err := tc2.fn(tc2.parameters, tc2.result, proc, 2)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "expected unsigned overflow, got %v", err)
 	require.Equal(t, uint64(0), vector.MustFixedColNoTypeCheck[uint64](tc2.GetResultVectorDirectly())[0])
 }
@@ -191,23 +191,6 @@ func TestIntegerDivBitNullConstantAndMaskedRows(t *testing.T) {
 		require.True(t, ok, info)
 	})
 
-	t.Run("masked negative quotient is not evaluated", func(t *testing.T) {
-		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
-		tc := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(bit64, []uint64{0, uint64(1) << 63}, nil),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -1}, nil),
-			},
-			NewFunctionTestResult(types.T_uint64.ToType(), false, nil, nil),
-			integerDivFn).WithSelectList(selectList)
-		defer tc.Free()
-		require.NoError(t, tc.result.PreExtendAndReset(2))
-		require.NoError(t, tc.fn(tc.parameters, tc.result, proc, 2, selectList))
-		result := tc.GetResultVectorDirectly()
-		require.Equal(t, uint64(0), vector.MustFixedColNoTypeCheck[uint64](result)[0])
-		require.False(t, result.GetNulls().Contains(0))
-		require.True(t, result.GetNulls().Contains(1))
-	})
 }
 
 func TestIntegerDivBitZeroDivisorRespectsNullAndStrictMode(t *testing.T) {
@@ -254,7 +237,7 @@ func TestIntegerDivBitUnsignedZeroAndMaskedRows(t *testing.T) {
 			integerDivFn)
 		defer tc.Free()
 		require.NoError(t, tc.result.PreExtendAndReset(1))
-		err := tc.fn(tc.parameters, tc.result, proc, 1, nil)
+		err := tc.fn(tc.parameters, tc.result, proc, 1)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDivByZero), "expected division-by-zero error, got %v", err)
 	})
 
@@ -271,17 +254,4 @@ func TestIntegerDivBitUnsignedZeroAndMaskedRows(t *testing.T) {
 		require.True(t, ok, info)
 	})
 
-	t.Run("masked zero divisor is not evaluated", func(t *testing.T) {
-		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
-		tc := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(bit64, []uint64{8, 9}, nil),
-				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{2, 0}, nil),
-			},
-			NewFunctionTestResult(types.T_uint64.ToType(), false,
-				[]uint64{4, 0}, []bool{false, true}),
-			integerDivFn).WithSelectList(selectList)
-		ok, info := tc.RunAndFree()
-		require.True(t, ok, info)
-	})
 }

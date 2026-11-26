@@ -68,16 +68,12 @@ func jsonDepthCheckPreparedInput(
 	inputIsBin bool,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
-	if input == nil || selectList != nil && selectList.IgnoreAllRow() {
+	if input == nil {
 		return nil
 	}
 
 	for row := 0; row < length; row++ {
-		if selectList != nil && selectList.Contains(uint64(row)) {
-			continue
-		}
 		physicalRow := row
 		if input.IsConst() {
 			physicalRow = 0
@@ -101,9 +97,8 @@ func JsonDepth(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
-	if err := jsonDepthCheckPreparedInput(ivecs[0], result.ArgumentIsBin(0), proc, length, selectList); err != nil {
+	if err := jsonDepthCheckPreparedInput(ivecs[0], result.ArgumentIsBin(0), proc, length); err != nil {
 		return err
 	}
 	checkCancelled := func() error {
@@ -158,6 +153,5 @@ func JsonDepth(
 		proc,
 		length,
 		depth,
-		selectList,
 	)
 }

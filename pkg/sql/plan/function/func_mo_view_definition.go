@@ -53,18 +53,11 @@ func builtInViewDefinition(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
 	definitions := vector.GenerateFunctionStrParameter(parameters[0])
 	results := vector.MustFunctionResult[types.Varlena](result)
 
 	for row := uint64(0); row < uint64(length); row++ {
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(row) {
-			if err := results.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		persisted, isNull := definitions.GetStrValue(row)
 		if isNull {
 			if err := results.AppendBytes(nil, true); err != nil {
@@ -91,18 +84,11 @@ func builtInViewCheckOption(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
 	definitions := vector.GenerateFunctionStrParameter(parameters[0])
 	results := vector.MustFunctionResult[types.Varlena](result)
 
 	for row := uint64(0); row < uint64(length); row++ {
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(row) {
-			if err := results.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		persisted, isNull := definitions.GetStrValue(row)
 		if isNull {
 			if err := results.AppendBytes(nil, true); err != nil {

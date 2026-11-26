@@ -87,7 +87,7 @@ func TestCastNullToLowPrecisionFloat(t *testing.T) {
 		target := vector.NewConstNull(oid.ToType(), 2, proc.Mp())
 		result := vector.NewFunctionResultWrapper(oid.ToType(), proc.Mp())
 		require.NoError(t, result.PreExtendAndReset(2))
-		require.NoError(t, NewCast([]*vector.Vector{nullVec, target}, result, proc, 2, nil), oid.String())
+		require.NoError(t, NewCast([]*vector.Vector{nullVec, target}, result, proc, 2), oid.String())
 		out := result.GetResultVector()
 		require.Equal(t, oid, out.GetType().Oid)
 		require.True(t, out.IsNull(0) && out.IsNull(1), oid.String())
@@ -132,7 +132,7 @@ func TestLowPrecisionFloatCastsMatchFloat32(t *testing.T) {
 		if err := result.PreExtendAndReset(len(vals)); err != nil {
 			return nil, err
 		}
-		if err := NewCast([]*vector.Vector{from, target}, result, proc, len(vals), nil); err != nil {
+		if err := NewCast([]*vector.Vector{from, target}, result, proc, len(vals)); err != nil {
 			return nil, err
 		}
 		out := result.GetResultVector()
@@ -210,7 +210,7 @@ func TestIntegerArgumentLowPrecisionFloat(t *testing.T) {
 		defer w.Free()
 		require.NoError(t, w.PreExtendAndReset(src.Length()))
 		rs := vector.MustFunctionResult[int64](w)
-		require.NoError(t, integerArgumentCast(src, rs, proc, src.Length(), nil, false))
+		require.NoError(t, integerArgumentCast(src, rs, proc, src.Length(), false))
 		return append([]int64(nil), vector.MustFixedColNoTypeCheck[int64](w.GetResultVector())...)
 	}
 	vals := []float32{1.5, -2, 4, 0.5}
@@ -284,61 +284,12 @@ func TestBlockScaledComparisonKernels(t *testing.T) {
 			l, r := build(left), build(right)
 			w := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp())
 			require.NoError(t, w.PreExtendAndReset(3))
-			require.NoError(t, test.fn([]*vector.Vector{l, r}, w, proc, 3, nil), "%s %s", oid, test.name)
+			require.NoError(t, test.fn([]*vector.Vector{l, r}, w, proc, 3), "%s %s", oid, test.name)
 			require.Equal(t, test.want, vector.MustFixedColNoTypeCheck[bool](w.GetResultVector()), "%s %s", oid, test.name)
 			w.Free()
 			l.Free(proc.Mp())
 			r.Free(proc.Mp())
 		}
-	}
-}
-
-// TestNarrowCastHonorsSelectList checks that casting text to bf16/float16/float8/float4 and
-// to vecf8/vecf4, and vecf8/vecf4 to vecf32, leaves a row outside the select list NULL
-// without converting it, so an invalid value there is not an error.
-func TestNarrowCastHonorsSelectList(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	run := func(from *vector.Vector, to types.Type) vector.FunctionResultWrapper {
-		target := vector.NewConstNull(to, 2, proc.Mp())
-		defer target.Free(proc.Mp())
-		result := vector.NewFunctionResultWrapper(to, proc.Mp())
-		require.NoError(t, result.PreExtendAndReset(2))
-		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
-		require.NoError(t, NewCast([]*vector.Vector{from, target}, result, proc, 2, selectList), to.String())
-		return result
-	}
-	text := func(values ...string) *vector.Vector {
-		v := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
-		for _, s := range values {
-			require.NoError(t, vector.AppendBytes(v, []byte(s), false, proc.Mp()))
-		}
-		return v
-	}
-	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
-		from := text("1.5", "invalid")
-		result := run(from, oid.ToType())
-		out := result.GetResultVector()
-		require.False(t, out.IsNull(0), oid.String())
-		require.True(t, out.IsNull(1), oid.String())
-		f, ok := vector.GetLowPrecisionFloatAt(out, 0)
-		require.True(t, ok, oid.String())
-		require.Equal(t, float32(1.5), f, oid.String())
-		result.Free()
-		from.Free(proc.Mp())
-	}
-	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
-		from := text("[1,2]", "[1,2,3]")
-		result := run(from, types.New(oid, 2, 0))
-		out := result.GetResultVector()
-		require.False(t, out.IsNull(0), oid.String())
-		require.True(t, out.IsNull(1), oid.String())
-		back := run(out, types.New(types.T_array_float32, 2, 0))
-		require.Equal(t, []float32{1, 2}, types.BytesToArray[float32](back.GetResultVector().GetBytesAt(0)), oid.String())
-		require.True(t, back.GetResultVector().IsNull(1), oid.String())
-		back.Free()
-		result.Free()
-		from.Free(proc.Mp())
 	}
 }
 
@@ -363,7 +314,7 @@ func TestCastTextToFloat8DigitSeparators(t *testing.T) {
 		target := vector.NewConstNull(types.T_float8.ToType(), 1, proc.Mp())
 		result := vector.NewFunctionResultWrapper(types.T_float8.ToType(), proc.Mp())
 		require.NoError(t, result.PreExtendAndReset(1))
-		require.NoError(t, NewCast([]*vector.Vector{from, target}, result, proc, 1, nil), tc.text)
+		require.NoError(t, NewCast([]*vector.Vector{from, target}, result, proc, 1), tc.text)
 		got, ok := vector.GetLowPrecisionFloatAt(result.GetResultVector(), 0)
 		require.True(t, ok)
 		require.Equal(t, tc.want, got, tc.text)
@@ -403,7 +354,7 @@ func TestCastTextToFloat8Hexadecimal(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_float8.ToType(), proc.Mp())
 			t.Cleanup(result.Free)
 			require.NoError(t, result.PreExtendAndReset(1))
-			err := NewCast([]*vector.Vector{from, target}, result, proc, 1, nil)
+			err := NewCast([]*vector.Vector{from, target}, result, proc, 1)
 			if tc.fails {
 				require.Error(t, err)
 				return

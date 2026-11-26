@@ -46,11 +46,11 @@ func onnxTestModel(t *testing.T, name string) []byte {
 // onnxEval builds the four argument vectors, runs the operator, and returns
 // the result json texts (empty string for NULL rows).
 func onnxEval(t *testing.T, proc *process.Process, op *opOnnxRun,
-	params []*vector.Vector, n int, selectList *FunctionSelectList) ([]string, error) {
+	params []*vector.Vector, n int) ([]string, error) {
 	t.Helper()
 	wrapper := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
 	require.NoError(t, wrapper.PreExtendAndReset(n))
-	if err := op.onnxRun(params, wrapper, proc, n, selectList); err != nil {
+	if err := op.onnxRun(params, wrapper, proc, n); err != nil {
 		return nil, err
 	}
 	out := make([]string, n)
@@ -106,7 +106,7 @@ func TestOnnxRunVarbinaryConst(t *testing.T) {
 	defer func() { require.NoError(t, op.Close()) }()
 
 	model := onnxTestModel(t, "sum_and_difference.onnx")
-	out, err := onnxEval(t, proc, op, sumDiffParams(t, proc, model, 3), 3, nil)
+	out, err := onnxEval(t, proc, op, sumDiffParams(t, proc, model, 3), 3)
 	require.NoError(t, err)
 	for _, s := range out {
 		require.Contains(t, s, "1.9999883")
@@ -132,7 +132,7 @@ func TestOnnxRunVarbinaryNonConst(t *testing.T) {
 		constStr(t, proc, types.T_varchar, sumDiffInShape, 2),
 		constStr(t, proc, types.T_varchar, sumDiffOutShape, 2),
 	}
-	out, err := onnxEval(t, proc, op, params, 2, nil)
+	out, err := onnxEval(t, proc, op, params, 2)
 	require.NoError(t, err)
 	require.Equal(t, out[0], out[1])
 	// Non-const path retains the model argument for the reuse check.
@@ -153,7 +153,7 @@ func TestOnnxRunNullHandling(t *testing.T) {
 			constStr(t, proc, types.T_varchar, sumDiffInShape, 1),
 			constStr(t, proc, types.T_varchar, sumDiffOutShape, 1),
 		}
-		out, err := onnxEval(t, proc, op, params, 1, nil)
+		out, err := onnxEval(t, proc, op, params, 1)
 		require.NoError(t, err)
 		require.Equal(t, "", out[0])
 		require.NoError(t, op.Close())
@@ -171,7 +171,7 @@ func TestOnnxRunNullHandling(t *testing.T) {
 			constStr(t, proc, types.T_varchar, `{"dim":[1,4],"dtype":"float32"}`, 1),
 			constNull(t, proc, types.T_varchar, 1),
 		}
-		out, err := onnxEval(t, proc, op, params, 1, nil)
+		out, err := onnxEval(t, proc, op, params, 1)
 		require.NoError(t, err)
 		require.Contains(t, out[0], "output_label")
 		require.Contains(t, out[0], "output_probability")
@@ -202,7 +202,7 @@ func TestOnnxRunErrors(t *testing.T) {
 			constStr(t, proc, types.T_varchar, inShape, 1),
 			out,
 		}
-		_, err = onnxEval(t, proc, op, params, 1, nil)
+		_, err = onnxEval(t, proc, op, params, 1)
 		return err
 	}
 
@@ -240,14 +240,14 @@ func TestOnnxRunLifecycle(t *testing.T) {
 	op := newOpOnnxRun()
 	model := onnxTestModel(t, "sum_and_difference.onnx")
 
-	_, err := onnxEval(t, proc, op, sumDiffParams(t, proc, model, 1), 1, nil)
+	_, err := onnxEval(t, proc, op, sumDiffParams(t, proc, model, 1), 1)
 	require.NoError(t, err)
 	require.NotNil(t, op.sess)
 
 	// Reset drops the session; a new eval rebuilds it.
 	require.NoError(t, op.Reset())
 	require.Nil(t, op.sess)
-	out, err := onnxEval(t, proc, op, sumDiffParams(t, proc, model, 1), 1, nil)
+	out, err := onnxEval(t, proc, op, sumDiffParams(t, proc, model, 1), 1)
 	require.NoError(t, err)
 	require.Contains(t, out[0], "1.9999883")
 
@@ -281,38 +281,11 @@ func TestOnnxRunDatalinkResetRechecksAuthorization(t *testing.T) {
 	require.ErrorContains(t, err, "only the sys account moadmin role")
 }
 
-// TestOnnxRunSelectList covers the filtered-row paths.
-func TestOnnxRunSelectList(t *testing.T) {
-	skipNoOnnxRuntime(t)
-	proc := testutil.NewProcess(t)
-	model := onnxTestModel(t, "sum_and_difference.onnx")
-
-	// All rows filtered out.
-	{
-		op := newOpOnnxRun()
-		sl := &FunctionSelectList{AllNull: true}
-		out, err := onnxEval(t, proc, op, sumDiffParams(t, proc, model, 2), 2, sl)
-		require.NoError(t, err)
-		require.Equal(t, []string{"", ""}, out)
-		require.NoError(t, op.Close())
-	}
-	// One row filtered, one evaluated.
-	{
-		op := newOpOnnxRun()
-		sl := &FunctionSelectList{SelectList: []bool{false, true}}
-		out, err := onnxEval(t, proc, op, sumDiffParams(t, proc, model, 2), 2, sl)
-		require.NoError(t, err)
-		require.Equal(t, "", out[0])
-		require.Contains(t, out[1], "1.9999883")
-		require.NoError(t, op.Close())
-	}
-}
-
 func TestOnnxRunZeroRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	result := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
 	require.NoError(t, result.PreExtendAndReset(0))
-	require.NoError(t, newOpOnnxRun().onnxRun(nil, result, proc, 0, nil))
+	require.NoError(t, newOpOnnxRun().onnxRun(nil, result, proc, 0))
 	require.Zero(t, result.GetResultVector().Length())
 }
 
@@ -348,7 +321,7 @@ func TestOnnxRunRegistration(t *testing.T) {
 		}
 		wrapper := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
 		require.NoError(t, wrapper.PreExtendAndReset(1))
-		require.NoError(t, evalFn(params, wrapper, proc, 1, nil))
+		require.NoError(t, evalFn(params, wrapper, proc, 1))
 		require.NoError(t, resetFn())
 		require.NoError(t, freeFn())
 	}

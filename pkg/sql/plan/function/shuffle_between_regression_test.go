@@ -52,11 +52,11 @@ func TestBetweenAfterShuffleInvalidatesSorted(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
 			t.Cleanup(result.Free)
 			require.NoError(t, result.PreExtendAndReset(n))
-			require.NoError(t, betweenImpl([]*vector.Vector{v, lower, upper}, result, nil, n, nil))
+			require.NoError(t, betweenImpl([]*vector.Vector{v, lower, upper}, result, nil, n))
 			actual := append([]bool(nil), vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())...)
 			sorted := v.GetSorted()
 			v.SetSorted(false)
-			require.NoError(t, betweenImpl([]*vector.Vector{v, lower, upper}, result, nil, n, nil))
+			require.NoError(t, betweenImpl([]*vector.Vector{v, lower, upper}, result, nil, n))
 			want := []bool{false, true}
 			if buffered {
 				want = append(want, true)
@@ -114,12 +114,12 @@ func TestSortedConsumersAfterShuffle(t *testing.T) {
 				result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
 				t.Cleanup(result.Free)
 				require.NoError(t, result.PreExtendAndReset(n))
-				require.NoError(t, betweenImpl([]*vector.Vector{ints, lower, upper}, result, nil, n, nil))
+				require.NoError(t, betweenImpl([]*vector.Vector{ints, lower, upper}, result, nil, n))
 				for i, sel := range tc.sels {
 					require.Equal(t, values[sel] >= 2 && values[sel] <= 3, vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())[i])
 				}
 				require.NoError(t, result.PreExtendAndReset(n))
-				require.NoError(t, PrefixEq([]*vector.Vector{strs, prefix}, result, nil, n, nil))
+				require.NoError(t, PrefixEq([]*vector.Vector{strs, prefix}, result, nil, n))
 				for i, sel := range tc.sels {
 					require.Equal(t, strings.HasPrefix(words[sel], "ab"), vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())[i])
 				}

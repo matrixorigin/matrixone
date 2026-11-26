@@ -41,7 +41,7 @@ func TestScanFollowupLengthConsumer(t *testing.T) {
 				result := vector.NewFunctionResultWrapper(typ.ToType(), proc.Mp())
 				defer result.Free()
 				require.NoError(t, result.PreExtendAndReset(input.Length()))
-				require.NoError(t, LengthUTF8([]*vector.Vector{input}, result, proc, input.Length(), nil))
+				require.NoError(t, LengthUTF8([]*vector.Vector{input}, result, proc, input.Length()))
 				output := result.GetResultVector()
 				require.Equal(t, typ, output.GetType().Oid)
 				require.True(t, output.IsNull(2))

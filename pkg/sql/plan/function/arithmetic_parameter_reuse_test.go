@@ -55,7 +55,7 @@ func TestMixedDecimalPlusReuse(t *testing.T) {
 						parameters[nullSide] = nilInput
 					}
 					require.NoError(t, rs.PreExtendAndReset(1))
-					require.NoError(t, plusFn(parameters, rs, proc, 1, nil), "call %d", call)
+					require.NoError(t, plusFn(parameters, rs, proc, 1), "call %d", call)
 					out := rs.GetResultVector()
 					require.Equal(t, rt, *out.GetType())
 					require.Equal(t, 1, out.Length())

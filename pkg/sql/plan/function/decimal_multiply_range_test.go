@@ -44,7 +44,7 @@ func TestDecimalMultiplyOperandRange(t *testing.T) {
 func TestDecimalMultiplyRangePreservesCoefficientAndMetadata(t *testing.T) {
 	for _, width := range []int32{9, 10, 18, 19} {
 		for _, scale := range []int32{0, min(width, 18)} {
-			for _, shape := range []string{"vector", "left_constant", "right_constant", "null", "selection"} {
+			for _, shape := range []string{"vector", "left_constant", "right_constant", "null"} {
 				t.Run(fmt.Sprintf("precision_%d/scale_%d/%s", width, scale, shape), func(t *testing.T) {
 					proc := testutil.NewProcess(t)
 					t.Cleanup(proc.Free)
@@ -98,17 +98,12 @@ func TestDecimalMultiplyRangePreservesCoefficientAndMetadata(t *testing.T) {
 					l, r := NewFunctionTestInput(typ, left, nil), NewFunctionTestInput(typ, right, nil)
 					l.isConst, r.isConst = shape == "left_constant", shape == "right_constant"
 					var masked []bool
-					var selection *FunctionSelectList
 					if shape == "null" {
 						l.nullList = []bool{false, true, false}
 						masked = []bool{false, true, false}
 					}
-					if shape == "selection" {
-						selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
-						masked = []bool{false, true, false}
-					}
 					resultType := types.New(types.T_decimal256, 2*width, desiredScale)
-					fc := NewFunctionTestCase(proc, []FunctionTestInput{l, r}, NewFunctionTestResult(resultType, false, want, masked), multiFn).WithSelectList(selection)
+					fc := NewFunctionTestCase(proc, []FunctionTestInput{l, r}, NewFunctionTestResult(resultType, false, want, masked), multiFn)
 					t.Cleanup(fc.Free)
 					fc.fnLength = 3
 					ok, info := fc.Run()

@@ -49,7 +49,7 @@ func TestDecimalAssignmentChecksDeclaredPrecision(t *testing.T) {
 		}
 		for _, cast := range []executeLogicOfOverload{NewStrictCast, NewAssignCast} {
 			require.NoError(t, result.PreExtendAndReset(1))
-			require.Error(t, cast([]*vector.Vector{source, target}, result, proc, 1, nil))
+			require.Error(t, cast([]*vector.Vector{source, target}, result, proc, 1))
 		}
 	}
 }
@@ -144,7 +144,7 @@ func TestDecimalAssignmentRangeAdjustsOutsideStrictMode(t *testing.T) {
 			if tc.ignore {
 				fn = NewAssignIgnoreCast
 			}
-			err := fn([]*vector.Vector{source, target}, result, proc, 1, nil)
+			err := fn([]*vector.Vector{source, target}, result, proc, 1)
 			if tc.wantError {
 				require.Error(t, err)
 				require.Empty(t, warnings.warnings)
@@ -188,19 +188,16 @@ func TestDecimalAssignmentWidening(t *testing.T) {
 		name             string
 		values, want     []types.Decimal64
 		nulls, wantNulls []bool
-		mask             *FunctionSelectList
 	}{
 		{"exact", []types.Decimal64{negative, 17, 999999999999}, []types.Decimal64{negative, 0, 999999999999},
-			[]bool{false, true, false}, []bool{false, true, false}, nil},
-		{"masked", []types.Decimal64{negative, 17, 999999999999}, []types.Decimal64{negative, 0, 0},
-			[]bool{false, true, false}, []bool{false, true, true}, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false}}},
-		{"outside source precision only", []types.Decimal64{1000000000000}, []types.Decimal64{1000000000000}, nil, nil, nil},
+			[]bool{false, true, false}, []bool{false, true, false}},
+		{"outside source precision only", []types.Decimal64{1000000000000}, []types.Decimal64{1000000000000}, nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			test := NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestInput(from, tc.values, tc.nulls),
 				NewFunctionTestInput(to, []types.Decimal64{0}, nil),
-			}, NewFunctionTestResult(to, false, tc.want, tc.wantNulls), NewAssignCast).WithSelectList(tc.mask)
+			}, NewFunctionTestResult(to, false, tc.want, tc.wantNulls), NewAssignCast)
 			ok, info := test.RunAndFree()
 			require.True(t, ok, info)
 			require.Empty(t, warnings.warnings)
@@ -253,7 +250,7 @@ func BenchmarkDecimalAssignmentWidening(b *testing.B) {
 					if err := result.PreExtendAndReset(n); err != nil {
 						b.Fatal(err)
 					}
-					if err := mode.fn([]*vector.Vector{src, target}, result, proc, n, nil); err != nil {
+					if err := mode.fn([]*vector.Vector{src, target}, result, proc, n); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -306,7 +303,7 @@ func TestDecimalAssignmentFromMaterializedByteString(t *testing.T) {
 			if !tc.strict {
 				cast = NewAssignIgnoreCast
 			}
-			err := cast([]*vector.Vector{source, target}, result, proc, 1, nil)
+			err := cast([]*vector.Vector{source, target}, result, proc, 1)
 			if tc.strict && tc.wantCode != 0 {
 				var diagnostic *moerr.Error
 				require.ErrorAs(t, err, &diagnostic)

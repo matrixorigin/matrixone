@@ -278,7 +278,7 @@ func TestBoolToDecimalAssignmentRangeCheck(t *testing.T) {
 		result := vector.NewFunctionResultWrapper(target, proc.Mp())
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(1))
-		return NewCast([]*vector.Vector{src, targetVec}, result, proc, 1, nil)
+		return NewCast([]*vector.Vector{src, targetVec}, result, proc, 1)
 	}
 
 	require.ErrorContains(t, cast(types.New(types.T_decimal64, 1, 1), true),

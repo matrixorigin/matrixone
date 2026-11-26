@@ -2991,7 +2991,7 @@ func processStringToTimeAssignment(mp *columnMapper, page parquet.Page, proc *pr
 	if proc.GetStmtProfile().GetStatementIgnore() {
 		cast = function.NewAssignIgnoreCast
 	}
-	if err := cast([]*vector.Vector{text, vec}, result, proc, text.Length(), nil); err != nil {
+	if err := cast([]*vector.Vector{text, vec}, result, proc, text.Length()); err != nil {
 		return err
 	}
 	checkpoint := vec.MakeAppendCheckpoint()

@@ -67,7 +67,7 @@ func BenchmarkGeneralCIPrefixLike(b *testing.B) {
 					if err := result.PreExtendAndReset(rows); err != nil {
 						b.Fatal(err)
 					}
-					if err := op.likeFn(parameters, result, proc, rows, nil); err != nil {
+					if err := op.likeFn(parameters, result, proc, rows); err != nil {
 						b.Fatal(err)
 					}
 				}

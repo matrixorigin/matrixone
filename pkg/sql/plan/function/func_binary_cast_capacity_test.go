@@ -50,16 +50,3 @@ func TestStrictBinaryCapacityCountsBytes(t *testing.T) {
 		})
 	}
 }
-
-func TestStrictBinaryCapacitySkipsMaskedRows(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	target := types.New(types.T_varbinary, 3, 0)
-	caseTest := NewFunctionTestCase(proc, []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"😀", "x"}, nil),
-		NewFunctionTestInput(target, []string{"", ""}, nil),
-	}, NewFunctionTestResult(target, false, []string{"", "x"}, []bool{true, false}), NewStrictCast).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-	ok, info := caseTest.RunAndFree()
-	require.True(t, ok, info)
-	require.Zero(t, proc.Mp().CurrNB())
-}

@@ -128,7 +128,6 @@ func compareJSONBoolean(
 	length int,
 	nullSafe bool,
 	cmp func(int) bool,
-	selectList *FunctionSelectList,
 ) error {
 	jsonPos, boolPos := 0, 1
 	if parameters[0].GetType().Oid == types.T_bool {
@@ -148,10 +147,6 @@ func compareJSONBoolean(
 	booleanIsConst := booleanVector.IsConst()
 	rss := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
 	resultNulls := result.GetResultVector().GetNulls()
-	if selectList != nil && selectList.IgnoreAllRow() {
-		resultNulls.AddRange(0, uint64(length))
-		return nil
-	}
 
 	var cachedJSON bytejson.ByteJson
 	var cachedJSONNull bool
@@ -164,11 +159,6 @@ func compareJSONBoolean(
 		}
 	}
 	for row := 0; row < length; row++ {
-		if selectList != nil && selectList.Contains(uint64(row)) {
-			resultNulls.Add(uint64(row))
-			continue
-		}
-
 		jsonValue, jsonVectorNull := cachedJSON, cachedJSONNull
 		if !jsonIsConst {
 			var err error
@@ -337,7 +327,6 @@ func compareDatetimeAndTimestamp(
 	proc *process.Process,
 	length int,
 	cmp func(left, right types.Timestamp) bool,
-	selectList *FunctionSelectList,
 ) error {
 	zone := proc.GetSessionInfo().TimeZone
 	fixed, offsetMicros := false, int64(0)
@@ -345,8 +334,7 @@ func compareDatetimeAndTimestamp(
 	// Local can initialize lazily even when FLAT NULL bitmaps mask every row.
 	if zone != nil && zone != time.Local && length > 1 &&
 		!(parameters[0].IsConst() && parameters[1].IsConst()) &&
-		!parameters[0].IsConstNull() && !parameters[1].IsConstNull() &&
-		selectList.ShouldEvalAllRow() && !selectList.IgnoreAllRow() {
+		!parameters[0].IsConstNull() && !parameters[1].IsConstNull() {
 		if offset, ok := types.FixedZoneOffset(zone); ok && int64(offset) >= math.MinInt32 && int64(offset) <= math.MaxInt32 {
 			fixed, offsetMicros = true, int64(offset)*types.MicroSecsPerSec
 		}
@@ -361,7 +349,7 @@ func compareDatetimeAndTimestamp(
 				return cmp(fixedZoneComparisonTimestamp(left, zone, offsetMicros).TruncateToScale(timestampScale), right)
 			}
 		}
-		return opBinaryFixedFixedToFixed[types.Datetime, types.Timestamp, bool](parameters, result, proc, length, compare, selectList)
+		return opBinaryFixedFixedToFixed[types.Datetime, types.Timestamp, bool](parameters, result, proc, length, compare)
 	}
 	timestampScale := parameters[0].GetType().Scale
 	compare := func(left types.Timestamp, right types.Datetime) bool {
@@ -372,7 +360,7 @@ func compareDatetimeAndTimestamp(
 			return cmp(left, fixedZoneComparisonTimestamp(right, zone, offsetMicros).TruncateToScale(timestampScale))
 		}
 	}
-	return opBinaryFixedFixedToFixed[types.Timestamp, types.Datetime, bool](parameters, result, proc, length, compare, selectList)
+	return opBinaryFixedFixedToFixed[types.Timestamp, types.Datetime, bool](parameters, result, proc, length, compare)
 }
 
 func floatArrayEqual[T constraints.Float](left, right []T) bool {
@@ -405,7 +393,6 @@ func opBinaryFixedFixedToFixedNullSafe[T types.FixedSizeTExceptStrType](
 	_ *process.Process,
 	length int,
 	cmpFn func(v1, v2 T) bool,
-	selectList *FunctionSelectList,
 ) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[bool](result)
@@ -438,7 +425,6 @@ func opBinaryBytesBytesToFixedNullSafe(
 	_ *process.Process,
 	length int,
 	cmpFn func(v1, v2 []byte) bool,
-	selectList *FunctionSelectList,
 ) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
@@ -499,7 +485,6 @@ func opBinaryJSONBytesBytesToFixedNullSafe(
 	_ *process.Process,
 	length int,
 	cmpFn func(int) bool,
-	_ *FunctionSelectList,
 ) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[bool](result)
@@ -553,7 +538,6 @@ func opBinaryJSONBytesBytesToFixed(
 	_ *process.Process,
 	length int,
 	cmpFn func(int) bool,
-	selectList *FunctionSelectList,
 ) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[bool](result)
@@ -565,20 +549,6 @@ func opBinaryJSONBytesBytesToFixed(
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 
 	if c1 && c2 {
 		left, null1 := prepareJSONComparisonAt(p1, 0)
@@ -691,112 +661,109 @@ func float32ComparisonNormalizers(leftScale, rightScale int32) (
 // dequantized values, element-wise as for the other vector types; done is false for any
 // other pair. A string literal is cast to the column's type before, so it is quantized as
 // a stored value is.
-func blockScaledCompare(parameters []*vector.Vector, rs *vector.FunctionResult[bool], proc *process.Process, length int,
-	selectList *FunctionSelectList, nullSafe bool, cmp func(c int) bool) (done bool, err error) {
+func blockScaledCompare(parameters []*vector.Vector, rs *vector.FunctionResult[bool], proc *process.Process, length int, nullSafe bool, cmp func(c int) bool) (done bool, err error) {
 	oid := parameters[0].GetType().Oid
 	if !oid.IsBlockScaledArray() || parameters[1].GetType().Oid != oid {
 		return false, nil
 	}
 	f := func(v1, v2 []byte) bool { return cmp(types.CompareBlockScaledFromBytes(v1, v2, false)) }
 	if nullSafe {
-		return true, opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, f, selectList)
+		return true, opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, f)
 	}
-	return true, opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, f, selectList)
+	return true, opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, f)
 }
 
 // lowPrecisionCompare compares two bf16, float16, float8 or float4 operands of the same
 // type by their float32 values; done is false for any other pair. Binding widens these
 // operands to float32, so this covers plans in which both sides keep the column type.
-func lowPrecisionCompare(parameters []*vector.Vector, rs *vector.FunctionResult[bool], proc *process.Process, length int,
-	selectList *FunctionSelectList, nullSafe bool, cmp func(a, b float32) bool) (done bool, err error) {
+func lowPrecisionCompare(parameters []*vector.Vector, rs *vector.FunctionResult[bool], proc *process.Process, length int, nullSafe bool, cmp func(a, b float32) bool) (done bool, err error) {
 	oid := parameters[0].GetType().Oid
 	if !oid.IsLowPrecisionFloat() || parameters[1].GetType().Oid != oid {
 		return false, nil
 	}
 	switch oid {
 	case types.T_bf16:
-		return true, lowPrecisionCompareOf[types.BF16](parameters, rs, proc, length, selectList, nullSafe, cmp)
+		return true, lowPrecisionCompareOf[types.BF16](parameters, rs, proc, length, nullSafe, cmp)
 	case types.T_float16:
-		return true, lowPrecisionCompareOf[types.Float16](parameters, rs, proc, length, selectList, nullSafe, cmp)
+		return true, lowPrecisionCompareOf[types.Float16](parameters, rs, proc, length, nullSafe, cmp)
 	case types.T_float8:
-		return true, lowPrecisionCompareOf[types.Float8](parameters, rs, proc, length, selectList, nullSafe, cmp)
+		return true, lowPrecisionCompareOf[types.Float8](parameters, rs, proc, length, nullSafe, cmp)
 	case types.T_float4:
-		return true, lowPrecisionCompareOf[types.Float4](parameters, rs, proc, length, selectList, nullSafe, cmp)
+		return true, lowPrecisionCompareOf[types.Float4](parameters, rs, proc, length, nullSafe, cmp)
 	default:
 		return true, moerr.NewInternalErrorNoCtxf("lowPrecisionCompare: unexpected type %s", oid)
 	}
 }
 
-func lowPrecisionCompareOf[T types.LowPrecFloat](parameters []*vector.Vector, rs *vector.FunctionResult[bool], proc *process.Process, length int,
-	selectList *FunctionSelectList, nullSafe bool, cmp func(a, b float32) bool) error {
+func lowPrecisionCompareOf[T types.LowPrecFloat](parameters []*vector.Vector, rs *vector.FunctionResult[bool], proc *process.Process, length int, nullSafe bool, cmp func(a, b float32) bool) error {
 	f := func(a, b T) bool { return cmp(a.ToFloat32(), b.ToFloat32()) }
 	if nullSafe {
-		return opBinaryFixedFixedToFixedNullSafe[T](parameters, rs, proc, length, f, selectList)
+		return opBinaryFixedFixedToFixedNullSafe[T](parameters, rs, proc, length, f)
 	}
-	return opBinaryFixedFixedToFixed[T, T, bool](parameters, rs, proc, length, f, selectList)
+	return opBinaryFixedFixedToFixed[T, T, bool](parameters, rs, proc, length, f)
 }
 
-func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
-		return compareJSONNumericVectors(parameters, result, proc, length, true, func(c int) bool { return c == 0 }, selectList)
+		return compareJSONNumericVectors(parameters, result, proc, length, true, func(c int) bool { return c == 0 })
 	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
-	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, true, func(c int) bool { return c == 0 }); done {
+	if done, err := blockScaledCompare(parameters, rs, proc, length, true, func(c int) bool { return c == 0 }); done {
 		return err
 	}
-	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, true, func(a, b float32) bool { return a == b }); done {
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, true, func(a, b float32) bool { return a == b }); done {
 		return err
 	}
 	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
-		return compareJSONBoolean(parameters, rs, proc, length, true, func(c int) bool { return c == 0 }, selectList)
+		return compareJSONBoolean(parameters, rs, proc, length, true, func(c int) bool { return c == 0 })
 	}
 
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixedNullSafe[bool](parameters, rs, proc, length, func(a, b bool) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_bit:
 		return opBinaryFixedFixedToFixedNullSafe[uint64](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixedNullSafe[int8](parameters, rs, proc, length, func(a, b int8) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_int16:
 		return opBinaryFixedFixedToFixedNullSafe[int16](parameters, rs, proc, length, func(a, b int16) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_int32:
 		return opBinaryFixedFixedToFixedNullSafe[int32](parameters, rs, proc, length, func(a, b int32) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_int64:
 		return opBinaryFixedFixedToFixedNullSafe[int64](parameters, rs, proc, length, func(a, b int64) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixedNullSafe[uint8](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixedNullSafe[uint16](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixedNullSafe[uint32](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixedNullSafe[uint64](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_uuid:
 		return opBinaryFixedFixedToFixedNullSafe[types.Uuid](parameters, rs, proc, length, func(a, b types.Uuid) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_float32:
 		leftNormalizer, rightNormalizer, normalize := float32ComparisonNormalizers(
 			paramType.Scale,
@@ -807,175 +774,175 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 				a = leftNormalizer.Normalize(a)
 				b = rightNormalizer.Normalize(b)
 				return a == b
-			}, selectList)
+			})
 		}
 		return opBinaryFixedFixedToFixedNullSafe[float32](parameters, rs, proc, length, func(a, b float32) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_float64:
 		return opBinaryFixedFixedToFixedNullSafe[float64](parameters, rs, proc, length, func(a, b float64) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_json:
 		return opBinaryJSONBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(c int) bool {
 			return c == 0
-		}, selectList)
+		})
 	case types.T_char:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) == 0
-		}, selectList)
+		})
 	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_geometry, types.T_geometry32:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) == 0
-		}, selectList)
+		})
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float32](v1)
 			_v2 := types.BytesToArray[float32](v2)
 			return floatArrayEqual(_v1, _v2)
-		}, selectList)
+		})
 	case types.T_array_float64:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float64](v1)
 			_v2 := types.BytesToArray[float64](v2)
 			return floatArrayEqual(_v1, _v2)
-		}, selectList)
+		})
 	case types.T_array_bf16:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.BF16](v1)
 			_v2 := types.BytesToArray[types.BF16](v2)
 			return narrowFloatArrayEqual(_v1, _v2)
-		}, selectList)
+		})
 	case types.T_array_float16:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.Float16](v1)
 			_v2 := types.BytesToArray[types.Float16](v2)
 			return narrowFloatArrayEqual(_v1, _v2)
-		}, selectList)
+		})
 	case types.T_array_int8:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[int8](v1)
 			_v2 := types.BytesToArray[int8](v2)
 			return types.ArrayElementCompare[int8](_v1, _v2) == 0
-		}, selectList)
+		})
 	case types.T_array_uint8:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[uint8](v1)
 			_v2 := types.BytesToArray[uint8](v2)
 			return types.ArrayElementCompare[uint8](_v1, _v2) == 0
-		}, selectList)
+		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixedNullSafe[types.Date](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_datetime:
 		return opBinaryFixedFixedToFixedNullSafe[types.Datetime](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_time:
 		return opBinaryFixedFixedToFixedNullSafe[types.Time](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_timestamp:
 		return opBinaryFixedFixedToFixedNullSafe[types.Timestamp](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_decimal64:
 		return opBinaryFixedFixedToFixedNullSafe[types.Decimal64](parameters, rs, proc, length, func(a, b types.Decimal64) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_decimal128:
 		return opBinaryFixedFixedToFixedNullSafe[types.Decimal128](parameters, rs, proc, length, func(a, b types.Decimal128) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_decimal256:
 		return opBinaryFixedFixedToFixedNullSafe[types.Decimal256](parameters, rs, proc, length, func(a, b types.Decimal256) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixedNullSafe[types.Rowid](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.EQ(&b)
-		}, selectList)
+		})
 	case types.T_enum:
 		return opBinaryFixedFixedToFixedNullSafe[types.Enum](parameters, rs, proc, length, func(a, b types.Enum) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_year:
 		return opBinaryFixedFixedToFixedNullSafe[types.MoYear](parameters, rs, proc, length, func(a, b types.MoYear) bool {
 			return a == b
-		}, selectList)
+		})
 	}
 	panic("unreached code")
 }
 
 // should convert to c.Numeric next.
-func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
-		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c == 0 }, selectList)
+		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c == 0 })
 	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
-	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c == 0 }); done {
+	if done, err := blockScaledCompare(parameters, rs, proc, length, false, func(c int) bool { return c == 0 }); done {
 		return err
 	}
-	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a == b }); done {
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, false, func(a, b float32) bool { return a == b }); done {
 		return err
 	}
 	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
-		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c == 0 }, selectList)
+		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c == 0 })
 	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left == right
-		}, selectList)
+		})
 	}
 
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_bit:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_int16:
 		return opBinaryFixedFixedToFixed[int16, int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_int32:
 		return opBinaryFixedFixedToFixed[int32, int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_int64:
 		return opBinaryFixedFixedToFixed[int64, int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixed[uint8, uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixed[uint16, uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_uuid:
 		return opBinaryFixedFixedToFixed[types.Uuid, types.Uuid, bool](parameters, rs, proc, length, func(a, b types.Uuid) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_float32:
 		leftNormalizer, rightNormalizer, normalize := float32ComparisonNormalizers(
 			paramType.Scale,
@@ -986,101 +953,98 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 				a = leftNormalizer.Normalize(a)
 				b = rightNormalizer.Normalize(b)
 				return a == b
-			}, selectList)
+			})
 		}
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_float64:
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_json:
 		return opBinaryJSONBytesBytesToFixed(parameters, rs, proc, length, func(c int) bool {
 			return c == 0
-		}, selectList)
+		})
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) == 0
-		}, selectList)
+		})
 	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_geometry, types.T_geometry32:
-		if !types.IsUnicodeCollation(paramType.Charset) && parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
-			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
-		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			return compareTextBytes(*paramType, v1, v2) == 0
-		}, selectList)
+		})
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float32](v1)
 			_v2 := types.BytesToArray[float32](v2)
 
 			return floatArrayEqual(_v1, _v2)
-		}, selectList)
+		})
 	case types.T_array_float64:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float64](v1)
 			_v2 := types.BytesToArray[float64](v2)
 
 			return floatArrayEqual(_v1, _v2)
-		}, selectList)
+		})
 	case types.T_array_bf16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			return narrowFloatArrayEqual(types.BytesToArray[types.BF16](v1), types.BytesToArray[types.BF16](v2))
-		}, selectList)
+		})
 	case types.T_array_float16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			return narrowFloatArrayEqual(types.BytesToArray[types.Float16](v1), types.BytesToArray[types.Float16](v2))
-		}, selectList)
+		})
 	case types.T_array_int8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			return types.ArrayElementCompare[int8](types.BytesToArray[int8](v1), types.BytesToArray[int8](v2)) == 0
-		}, selectList)
+		})
 	case types.T_array_uint8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			return types.ArrayElementCompare[uint8](types.BytesToArray[uint8](v1), types.BytesToArray[uint8](v2)) == 0
-		}, selectList)
+		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_datetime:
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_time:
 		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_timestamp:
 		return opBinaryFixedFixedToFixed[types.Timestamp, types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_decimal64:
 		return valueDec64Compare(parameters, rs, uint64(length), func(a, b types.Decimal64) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_decimal128:
 		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_decimal256:
 		return valueDec256Compare(parameters, rs, uint64(length), func(a, b types.Decimal256) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.EQ(&b)
-		}, selectList)
+		})
 	case types.T_enum:
 		return opBinaryFixedFixedToFixed[types.Enum, types.Enum, bool](parameters, rs, proc, length, func(a, b types.Enum) bool {
 			return a == b
-		}, selectList)
+		})
 	case types.T_year:
 		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, bool](parameters, rs, proc, length, func(a, b types.MoYear) bool {
 			return a == b
-		}, selectList)
+		})
 	}
 	panic("unreached code")
 }
@@ -1091,7 +1055,7 @@ type valueDecimalCompareType interface {
 
 func valueDecimalCompare[T valueDecimalCompareType](
 	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b T) bool, scaleValue func(v T, delta int32) (T, error), selectList *FunctionSelectList) error {
+	cmpFn func(a, b T) bool, scaleValue func(v T, delta int32) (T, error)) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
 
@@ -1104,20 +1068,6 @@ func valueDecimalCompare[T valueDecimalCompareType](
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if c1 && c2 {
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
@@ -1316,92 +1266,92 @@ func valueDecimalCompare[T valueDecimalCompareType](
 
 func valueDec64Compare(
 	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b types.Decimal64) bool, selectList *FunctionSelectList) error {
+	cmpFn func(a, b types.Decimal64) bool) error {
 	return valueDecimalCompare[types.Decimal64](parameters, result, length, cmpFn, func(v types.Decimal64, delta int32) (types.Decimal64, error) {
 		scaled, _ := v.Scale(delta)
 		return scaled, nil
-	}, selectList)
+	})
 }
 
 func valueDec128Compare(
 	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b types.Decimal128) bool, selectList *FunctionSelectList) error {
+	cmpFn func(a, b types.Decimal128) bool) error {
 	return valueDecimalCompare[types.Decimal128](parameters, result, length, cmpFn, func(v types.Decimal128, delta int32) (types.Decimal128, error) {
 		scaled, _ := v.Scale(delta)
 		return scaled, nil
-	}, selectList)
+	})
 }
 
 func valueDec256Compare(
 	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b types.Decimal256) bool, selectList *FunctionSelectList) error {
+	cmpFn func(a, b types.Decimal256) bool) error {
 	return valueDecimalCompare[types.Decimal256](parameters, result, length, cmpFn, func(v types.Decimal256, delta int32) (types.Decimal256, error) {
 		return v.Scale(delta)
-	}, selectList)
+	})
 }
 
-func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
-		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c > 0 }, selectList)
+		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c > 0 })
 	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
-	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c > 0 }); done {
+	if done, err := blockScaledCompare(parameters, rs, proc, length, false, func(c int) bool { return c > 0 }); done {
 		return err
 	}
-	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a > b }); done {
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, false, func(a, b float32) bool { return a > b }); done {
 		return err
 	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left > right
-		}, selectList)
+		})
 	}
 	switch paramType.Oid {
 	case types.T_bit:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return x && !y
-		}, selectList)
+		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_int16:
 		return opBinaryFixedFixedToFixed[int16, int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_int32:
 		return opBinaryFixedFixedToFixed[int32, int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_int64:
 		return opBinaryFixedFixedToFixed[int64, int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixed[uint8, uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixed[uint16, uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_uuid:
 		return opBinaryFixedFixedToFixed[types.Uuid, types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
 			return types.CompareUuid(v1, v2) > 0
-		}, selectList)
+		})
 	case types.T_float32:
 		leftNormalizer, rightNormalizer, normalize := float32ComparisonNormalizers(
 			paramType.Scale,
@@ -1412,171 +1362,171 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				a = leftNormalizer.Normalize(a)
 				b = rightNormalizer.Normalize(b)
 				return a > b
-			}, selectList)
+			})
 		}
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_float64:
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_json:
 		return opBinaryJSONBytesBytesToFixed(parameters, rs, proc, length, func(c int) bool {
 			return c > 0
-		}, selectList)
+		})
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) > 0
-		}, selectList)
+		})
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) > 0
-		}, selectList)
+		})
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) > 0
-		}, selectList)
+		})
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float32](v1)
 			_v2 := types.BytesToArray[float32](v2)
 
 			return types.ArrayCompare[float32](_v1, _v2) > 0
-		}, selectList)
+		})
 	case types.T_array_float64:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float64](v1)
 			_v2 := types.BytesToArray[float64](v2)
 
 			return types.ArrayCompare[float64](_v1, _v2) > 0
-		}, selectList)
+		})
 	case types.T_array_bf16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.BF16](v1)
 			_v2 := types.BytesToArray[types.BF16](v2)
 			return types.ArrayElementCompare[types.BF16](_v1, _v2) > 0
-		}, selectList)
+		})
 	case types.T_array_float16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.Float16](v1)
 			_v2 := types.BytesToArray[types.Float16](v2)
 			return types.ArrayElementCompare[types.Float16](_v1, _v2) > 0
-		}, selectList)
+		})
 	case types.T_array_int8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[int8](v1)
 			_v2 := types.BytesToArray[int8](v2)
 			return types.ArrayElementCompare[int8](_v1, _v2) > 0
-		}, selectList)
+		})
 	case types.T_array_uint8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[uint8](v1)
 			_v2 := types.BytesToArray[uint8](v2)
 			return types.ArrayElementCompare[uint8](_v1, _v2) > 0
-		}, selectList)
+		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_datetime:
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_time:
 		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_timestamp:
 		return opBinaryFixedFixedToFixed[types.Timestamp, types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a > b
-		}, selectList)
+		})
 	case types.T_decimal64:
 		return valueDec64Compare(parameters, rs, uint64(length), func(a, b types.Decimal64) bool {
 			return a.Compare(b) > 0
-		}, selectList)
+		})
 	case types.T_decimal128:
 		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
 			return a.Compare(b) > 0
-		}, selectList)
+		})
 	case types.T_decimal256:
 		return valueDec256Compare(parameters, rs, uint64(length), func(a, b types.Decimal256) bool {
 			return a.Compare(b) > 0
-		}, selectList)
+		})
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.GT(&b)
-		}, selectList)
+		})
 	case types.T_year:
 		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, bool](parameters, rs, proc, length, func(a, b types.MoYear) bool {
 			return a > b
-		}, selectList)
+		})
 	}
 	panic("unreached code")
 }
 
-func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
-		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c >= 0 }, selectList)
+		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c >= 0 })
 	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
-	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c >= 0 }); done {
+	if done, err := blockScaledCompare(parameters, rs, proc, length, false, func(c int) bool { return c >= 0 }); done {
 		return err
 	}
-	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a >= b }); done {
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, false, func(a, b float32) bool { return a >= b }); done {
 		return err
 	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left >= right
-		}, selectList)
+		})
 	}
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return x || !y
-		}, selectList)
+		})
 	case types.T_bit:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_int16:
 		return opBinaryFixedFixedToFixed[int16, int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_int32:
 		return opBinaryFixedFixedToFixed[int32, int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_int64:
 		return opBinaryFixedFixedToFixed[int64, int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixed[uint8, uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixed[uint16, uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_uuid:
 		return opBinaryFixedFixedToFixed[types.Uuid, types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
 			return types.CompareUuid(v1, v2) >= 0
-		}, selectList)
+		})
 	case types.T_float32:
 		leftNormalizer, rightNormalizer, normalize := float32ComparisonNormalizers(
 			paramType.Scale,
@@ -1587,174 +1537,174 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 				a = leftNormalizer.Normalize(a)
 				b = rightNormalizer.Normalize(b)
 				return a >= b
-			}, selectList)
+			})
 		}
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_float64:
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_json:
 		return opBinaryJSONBytesBytesToFixed(parameters, rs, proc, length, func(c int) bool {
 			return c >= 0
-		}, selectList)
+		})
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) >= 0
-		}, selectList)
+		})
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) >= 0
-		}, selectList)
+		})
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) >= 0
-		}, selectList)
+		})
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float32](v1)
 			_v2 := types.BytesToArray[float32](v2)
 
 			return types.ArrayCompare[float32](_v1, _v2) >= 0
-		}, selectList)
+		})
 	case types.T_array_float64:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float64](v1)
 			_v2 := types.BytesToArray[float64](v2)
 
 			return types.ArrayCompare[float64](_v1, _v2) >= 0
-		}, selectList)
+		})
 	case types.T_array_bf16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.BF16](v1)
 			_v2 := types.BytesToArray[types.BF16](v2)
 			return types.ArrayElementCompare[types.BF16](_v1, _v2) >= 0
-		}, selectList)
+		})
 	case types.T_array_float16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.Float16](v1)
 			_v2 := types.BytesToArray[types.Float16](v2)
 			return types.ArrayElementCompare[types.Float16](_v1, _v2) >= 0
-		}, selectList)
+		})
 	case types.T_array_int8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[int8](v1)
 			_v2 := types.BytesToArray[int8](v2)
 			return types.ArrayElementCompare[int8](_v1, _v2) >= 0
-		}, selectList)
+		})
 	case types.T_array_uint8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[uint8](v1)
 			_v2 := types.BytesToArray[uint8](v2)
 			return types.ArrayElementCompare[uint8](_v1, _v2) >= 0
-		}, selectList)
+		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_datetime:
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_time:
 		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_timestamp:
 		return opBinaryFixedFixedToFixed[types.Timestamp, types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a >= b
-		}, selectList)
+		})
 	case types.T_decimal64:
 		return valueDec64Compare(parameters, rs, uint64(length), func(a, b types.Decimal64) bool {
 			return a.Compare(b) >= 0
-		}, selectList)
+		})
 	case types.T_decimal128:
 		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
 			return a.Compare(b) >= 0
-		}, selectList)
+		})
 	case types.T_decimal256:
 		return valueDec256Compare(parameters, rs, uint64(length), func(a, b types.Decimal256) bool {
 			return a.Compare(b) >= 0
-		}, selectList)
+		})
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.GE(&b)
-		}, selectList)
+		})
 	case types.T_year:
 		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, bool](parameters, rs, proc, length, func(a, b types.MoYear) bool {
 			return a >= b
-		}, selectList)
+		})
 	}
 	panic("unreached code")
 }
 
-func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
-		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c != 0 }, selectList)
+		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c != 0 })
 	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
-	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c != 0 }); done {
+	if done, err := blockScaledCompare(parameters, rs, proc, length, false, func(c int) bool { return c != 0 }); done {
 		return err
 	}
-	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a != b }); done {
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, false, func(a, b float32) bool { return a != b }); done {
 		return err
 	}
 	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
-		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c != 0 }, selectList)
+		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c != 0 })
 	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left != right
-		}, selectList)
+		})
 	}
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_bit:
 		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_int16:
 		return opBinaryFixedFixedToFixed[int16, int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_int32:
 		return opBinaryFixedFixedToFixed[int32, int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_int64:
 		return opBinaryFixedFixedToFixed[int64, int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixed[uint8, uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixed[uint16, uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_uuid:
 		return opBinaryFixedFixedToFixed[types.Uuid, types.Uuid, bool](parameters, rs, proc, length, func(a, b types.Uuid) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_float32:
 		leftNormalizer, rightNormalizer, normalize := float32ComparisonNormalizers(
 			paramType.Scale,
@@ -1765,171 +1715,171 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 				a = leftNormalizer.Normalize(a)
 				b = rightNormalizer.Normalize(b)
 				return a != b
-			}, selectList)
+			})
 		}
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_float64:
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_json:
 		return opBinaryJSONBytesBytesToFixed(parameters, rs, proc, length, func(c int) bool {
 			return c != 0
-		}, selectList)
+		})
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) != 0
-		}, selectList)
+		})
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) != 0
-		}, selectList)
+		})
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) != 0
-		}, selectList)
+		})
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float32](v1)
 			_v2 := types.BytesToArray[float32](v2)
 
 			return !floatArrayEqual(_v1, _v2)
-		}, selectList)
+		})
 	case types.T_array_float64:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float64](v1)
 			_v2 := types.BytesToArray[float64](v2)
 
 			return !floatArrayEqual(_v1, _v2)
-		}, selectList)
+		})
 	case types.T_array_bf16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.BF16](v1)
 			_v2 := types.BytesToArray[types.BF16](v2)
 			return !narrowFloatArrayEqual(_v1, _v2)
-		}, selectList)
+		})
 	case types.T_array_float16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.Float16](v1)
 			_v2 := types.BytesToArray[types.Float16](v2)
 			return !narrowFloatArrayEqual(_v1, _v2)
-		}, selectList)
+		})
 	case types.T_array_int8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[int8](v1)
 			_v2 := types.BytesToArray[int8](v2)
 			return types.ArrayElementCompare[int8](_v1, _v2) != 0
-		}, selectList)
+		})
 	case types.T_array_uint8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[uint8](v1)
 			_v2 := types.BytesToArray[uint8](v2)
 			return types.ArrayElementCompare[uint8](_v1, _v2) != 0
-		}, selectList)
+		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_datetime:
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_time:
 		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_timestamp:
 		return opBinaryFixedFixedToFixed[types.Timestamp, types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_decimal64:
 		return valueDec64Compare(parameters, rs, uint64(length), func(a, b types.Decimal64) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_decimal128:
 		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_decimal256:
 		return valueDec256Compare(parameters, rs, uint64(length), func(a, b types.Decimal256) bool {
 			return a != b
-		}, selectList)
+		})
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return !a.EQ(&b)
-		}, selectList)
+		})
 	case types.T_year:
 		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, bool](parameters, rs, proc, length, func(a, b types.MoYear) bool {
 			return a != b
-		}, selectList)
+		})
 	}
 	panic("unreached code")
 }
 
-func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
-		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c < 0 }, selectList)
+		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c < 0 })
 	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
-	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c < 0 }); done {
+	if done, err := blockScaledCompare(parameters, rs, proc, length, false, func(c int) bool { return c < 0 }); done {
 		return err
 	}
-	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a < b }); done {
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, false, func(a, b float32) bool { return a < b }); done {
 		return err
 	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left < right
-		}, selectList)
+		})
 	}
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return !x && y
-		}, selectList)
+		})
 	case types.T_bit:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_int16:
 		return opBinaryFixedFixedToFixed[int16, int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_int32:
 		return opBinaryFixedFixedToFixed[int32, int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_int64:
 		return opBinaryFixedFixedToFixed[int64, int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixed[uint8, uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixed[uint16, uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_uuid:
 		return opBinaryFixedFixedToFixed[types.Uuid, types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
 			return types.CompareUuid(v1, v2) < 0
-		}, selectList)
+		})
 	case types.T_float32:
 		leftNormalizer, rightNormalizer, normalize := float32ComparisonNormalizers(
 			paramType.Scale,
@@ -1940,171 +1890,171 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 				a = leftNormalizer.Normalize(a)
 				b = rightNormalizer.Normalize(b)
 				return a < b
-			}, selectList)
+			})
 		}
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_float64:
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_json:
 		return opBinaryJSONBytesBytesToFixed(parameters, rs, proc, length, func(c int) bool {
 			return c < 0
-		}, selectList)
+		})
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) < 0
-		}, selectList)
+		})
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) < 0
-		}, selectList)
+		})
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) < 0
-		}, selectList)
+		})
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float32](v1)
 			_v2 := types.BytesToArray[float32](v2)
 
 			return types.ArrayCompare[float32](_v1, _v2) < 0
-		}, selectList)
+		})
 	case types.T_array_float64:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float64](v1)
 			_v2 := types.BytesToArray[float64](v2)
 
 			return types.ArrayCompare[float64](_v1, _v2) < 0
-		}, selectList)
+		})
 	case types.T_array_bf16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.BF16](v1)
 			_v2 := types.BytesToArray[types.BF16](v2)
 			return types.ArrayElementCompare[types.BF16](_v1, _v2) < 0
-		}, selectList)
+		})
 	case types.T_array_float16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.Float16](v1)
 			_v2 := types.BytesToArray[types.Float16](v2)
 			return types.ArrayElementCompare[types.Float16](_v1, _v2) < 0
-		}, selectList)
+		})
 	case types.T_array_int8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[int8](v1)
 			_v2 := types.BytesToArray[int8](v2)
 			return types.ArrayElementCompare[int8](_v1, _v2) < 0
-		}, selectList)
+		})
 	case types.T_array_uint8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[uint8](v1)
 			_v2 := types.BytesToArray[uint8](v2)
 			return types.ArrayElementCompare[uint8](_v1, _v2) < 0
-		}, selectList)
+		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_datetime:
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_time:
 		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_timestamp:
 		return opBinaryFixedFixedToFixed[types.Timestamp, types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a < b
-		}, selectList)
+		})
 	case types.T_decimal64:
 		return valueDec64Compare(parameters, rs, uint64(length), func(a, b types.Decimal64) bool {
 			return a.Compare(b) < 0
-		}, selectList)
+		})
 	case types.T_decimal128:
 		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
 			return a.Compare(b) < 0
-		}, selectList)
+		})
 	case types.T_decimal256:
 		return valueDec256Compare(parameters, rs, uint64(length), func(a, b types.Decimal256) bool {
 			return a.Compare(b) < 0
-		}, selectList)
+		})
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.LT(&b)
-		}, selectList)
+		})
 	case types.T_year:
 		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, bool](parameters, rs, proc, length, func(a, b types.MoYear) bool {
 			return a < b
-		}, selectList)
+		})
 	}
 	panic("unreached code")
 }
 
-func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
-		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c <= 0 }, selectList)
+		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c <= 0 })
 	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
-	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c <= 0 }); done {
+	if done, err := blockScaledCompare(parameters, rs, proc, length, false, func(c int) bool { return c <= 0 }); done {
 		return err
 	}
-	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a <= b }); done {
+	if done, err := lowPrecisionCompare(parameters, rs, proc, length, false, func(a, b float32) bool { return a <= b }); done {
 		return err
 	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left <= right
-		}, selectList)
+		})
 	}
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return !x || y
-		}, selectList)
+		})
 	case types.T_bit:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_int16:
 		return opBinaryFixedFixedToFixed[int16, int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_int32:
 		return opBinaryFixedFixedToFixed[int32, int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_int64:
 		return opBinaryFixedFixedToFixed[int64, int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixed[uint8, uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixed[uint16, uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_uuid:
 		return opBinaryFixedFixedToFixed[types.Uuid, types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
 			return types.CompareUuid(v1, v2) <= 0
-		}, selectList)
+		})
 	case types.T_float32:
 		leftNormalizer, rightNormalizer, normalize := float32ComparisonNormalizers(
 			paramType.Scale,
@@ -2115,105 +2065,105 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				a = leftNormalizer.Normalize(a)
 				b = rightNormalizer.Normalize(b)
 				return a <= b
-			}, selectList)
+			})
 		}
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_float64:
 		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_json:
 		return opBinaryJSONBytesBytesToFixed(parameters, rs, proc, length, func(c int) bool {
 			return c <= 0
-		}, selectList)
+		})
 	case types.T_char:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) <= 0
-		}, selectList)
+		})
 	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) <= 0
-		}, selectList)
+		})
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) <= 0
-		}, selectList)
+		})
 	case types.T_array_float32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float32](v1)
 			_v2 := types.BytesToArray[float32](v2)
 
 			return types.ArrayCompare[float32](_v1, _v2) <= 0
-		}, selectList)
+		})
 	case types.T_array_float64:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float64](v1)
 			_v2 := types.BytesToArray[float64](v2)
 
 			return types.ArrayCompare[float64](_v1, _v2) <= 0
-		}, selectList)
+		})
 	case types.T_array_bf16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.BF16](v1)
 			_v2 := types.BytesToArray[types.BF16](v2)
 			return types.ArrayElementCompare[types.BF16](_v1, _v2) <= 0
-		}, selectList)
+		})
 	case types.T_array_float16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.Float16](v1)
 			_v2 := types.BytesToArray[types.Float16](v2)
 			return types.ArrayElementCompare[types.Float16](_v1, _v2) <= 0
-		}, selectList)
+		})
 	case types.T_array_int8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[int8](v1)
 			_v2 := types.BytesToArray[int8](v2)
 			return types.ArrayElementCompare[int8](_v1, _v2) <= 0
-		}, selectList)
+		})
 	case types.T_array_uint8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[uint8](v1)
 			_v2 := types.BytesToArray[uint8](v2)
 			return types.ArrayElementCompare[uint8](_v1, _v2) <= 0
-		}, selectList)
+		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_datetime:
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_time:
 		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_timestamp:
 		return opBinaryFixedFixedToFixed[types.Timestamp, types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a <= b
-		}, selectList)
+		})
 	case types.T_decimal64:
 		return valueDec64Compare(parameters, rs, uint64(length), func(a, b types.Decimal64) bool {
 			return a.Compare(b) <= 0
-		}, selectList)
+		})
 	case types.T_decimal128:
 		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
 			return a.Compare(b) <= 0
-		}, selectList)
+		})
 	case types.T_decimal256:
 		return valueDec256Compare(parameters, rs, uint64(length), func(a, b types.Decimal256) bool {
 			return a.Compare(b) <= 0
-		}, selectList)
+		})
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.LE(&b)
-		}, selectList)
+		})
 	case types.T_year:
 		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, bool](parameters, rs, proc, length, func(a, b types.MoYear) bool {
 			return a <= b
-		}, selectList)
+		})
 	}
 	panic("unreached code")
 }
@@ -2284,23 +2234,23 @@ func operatorOpStrFn(
 	return nil
 }
 
-func operatorOpBitAndUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitAndUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i & i2 })
 }
 
-func operatorOpBitAndInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitAndInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpInt64ToUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i & i2 })
 }
 
-func operatorOpBitAndUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitAndUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpUint64Int64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i & i2 })
 }
 
-func operatorOpBitAndInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitAndInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpInt64Uint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i & i2 })
 }
 
-func operatorOpBitAndStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitAndStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpStrFn(parameters, result, proc, length, func(i []byte, i2 []byte) ([]byte, error) {
 		if len(i) != len(i2) {
 			return nil, moerr.NewInvalidBitwiseOperandsSizeNoCtx()
@@ -2313,23 +2263,23 @@ func operatorOpBitAndStrFn(parameters []*vector.Vector, result vector.FunctionRe
 	})
 }
 
-func operatorOpBitXorUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitXorUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i ^ i2 })
 }
 
-func operatorOpBitXorInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitXorInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpInt64ToUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i ^ i2 })
 }
 
-func operatorOpBitXorUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitXorUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpUint64Int64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i ^ i2 })
 }
 
-func operatorOpBitXorInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitXorInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpInt64Uint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i ^ i2 })
 }
 
-func operatorOpBitXorStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitXorStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpStrFn(parameters, result, proc, length, func(i []byte, i2 []byte) ([]byte, error) {
 		if len(i) != len(i2) {
 			return nil, moerr.NewInvalidBitwiseOperandsSizeNoCtx()
@@ -2342,23 +2292,23 @@ func operatorOpBitXorStrFn(parameters []*vector.Vector, result vector.FunctionRe
 	})
 }
 
-func operatorOpBitOrUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitOrUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i | i2 })
 }
 
-func operatorOpBitOrInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitOrInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpInt64ToUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i | i2 })
 }
 
-func operatorOpBitOrUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitOrUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpUint64Int64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i | i2 })
 }
 
-func operatorOpBitOrInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitOrInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpInt64Uint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i | i2 })
 }
 
-func operatorOpBitOrStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitOrStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpStrFn(parameters, result, proc, length, func(i []byte, i2 []byte) ([]byte, error) {
 		if len(i) != len(i2) {
 			return nil, moerr.NewInvalidBitwiseOperandsSizeNoCtx()
@@ -2385,34 +2335,34 @@ func bitShiftRight(value, shift uint64) uint64 {
 	return value >> shift
 }
 
-func operatorOpBitShiftLeftUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitShiftLeftUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpUint64Fn(parameters, result, proc, length, bitShiftLeft)
 }
 
-func operatorOpBitShiftLeftInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitShiftLeftInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpInt64ToUint64Fn(parameters, result, proc, length, bitShiftLeft)
 }
 
-func operatorOpBitShiftLeftUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitShiftLeftUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpUint64Int64Fn(parameters, result, proc, length, bitShiftLeft)
 }
 
-func operatorOpBitShiftLeftInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitShiftLeftInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpInt64Uint64Fn(parameters, result, proc, length, bitShiftLeft)
 }
 
-func operatorOpBitShiftRightUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitShiftRightUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpUint64Fn(parameters, result, proc, length, bitShiftRight)
 }
 
-func operatorOpBitShiftRightInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitShiftRightInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpInt64ToUint64Fn(parameters, result, proc, length, bitShiftRight)
 }
 
-func operatorOpBitShiftRightUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitShiftRightUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpUint64Int64Fn(parameters, result, proc, length, bitShiftRight)
 }
 
-func operatorOpBitShiftRightInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func operatorOpBitShiftRightInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return operatorOpInt64Uint64Fn(parameters, result, proc, length, bitShiftRight)
 }

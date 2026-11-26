@@ -168,7 +168,7 @@ func TestStrIffFnBinarySelectsBranchBytes(t *testing.T) {
 		result.Free()
 	})
 	require.NoError(t, result.PreExtendAndReset(2))
-	require.NoError(t, strIffFn([]*vector.Vector{condVec, thenVec, elseVec}, result, proc, 2, nil))
+	require.NoError(t, strIffFn([]*vector.Vector{condVec, thenVec, elseVec}, result, proc, 2))
 
 	// cond row 0 is true -> the then bytes survive unchanged; row 1 is false
 	// -> the all-null else branch surfaces as NULL.

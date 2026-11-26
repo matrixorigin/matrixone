@@ -54,7 +54,7 @@ func TestTSToTimestampPreservesAbsoluteInstant(t *testing.T) {
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(len(values)))
 			require.NoError(t, TSToTimestamp(
-				[]*vector.Vector{input}, result, proc, len(values), nil))
+				[]*vector.Vector{input}, result, proc, len(values)))
 
 			output := result.GetResultVector()
 			require.Equal(t, int32(6), output.GetType().Scale)
@@ -94,7 +94,7 @@ func TestCastTSToTimestampPreservesAbsoluteInstant(t *testing.T) {
 
 			require.NoError(t, result.PreExtendAndReset(len(values)))
 			require.NoError(t, NewCast(
-				[]*vector.Vector{input, target}, result, proc, len(values), nil))
+				[]*vector.Vector{input, target}, result, proc, len(values)))
 
 			output := result.GetResultVector()
 			got := vector.MustFixedColWithTypeCheck[types.Timestamp](output)
@@ -128,7 +128,7 @@ func TestTSToTimestampPrecisionContract(t *testing.T) {
 
 			require.NoError(t, result.PreExtendAndReset(1))
 			require.NoError(t, TSToTimestamp(
-				[]*vector.Vector{input, precision}, result, proc, 1, nil))
+				[]*vector.Vector{input, precision}, result, proc, 1))
 
 			output := result.GetResultVector()
 			got := vector.MustFixedColWithTypeCheck[types.Timestamp](output)
@@ -160,7 +160,7 @@ func TestTSToTimestampRejectsInvalidPrecision(t *testing.T) {
 			defer result.Free()
 
 			require.NoError(t, result.PreExtendAndReset(1))
-			err = TSToTimestamp([]*vector.Vector{input, precision}, result, proc, 1, nil)
+			err = TSToTimestamp([]*vector.Vector{input, precision}, result, proc, 1)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "precision")
 
@@ -182,7 +182,7 @@ func TestTSToTimestampPrecisionMustBeConstantOrNull(t *testing.T) {
 		require.NoError(t, result.PreExtendAndReset(len(values)))
 
 		err := TSToTimestamp(
-			[]*vector.Vector{input, precision}, result, proc, len(values), nil)
+			[]*vector.Vector{input, precision}, result, proc, len(values))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "must be constant")
 	})
@@ -195,7 +195,7 @@ func TestTSToTimestampPrecisionMustBeConstantOrNull(t *testing.T) {
 		require.NoError(t, result.PreExtendAndReset(len(values)))
 
 		require.NoError(t, TSToTimestamp(
-			[]*vector.Vector{input, precision}, result, proc, len(values), nil))
+			[]*vector.Vector{input, precision}, result, proc, len(values)))
 		require.True(t, result.GetResultVector().GetNulls().Contains(0))
 		require.True(t, result.GetResultVector().GetNulls().Contains(1))
 	})

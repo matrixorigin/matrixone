@@ -72,10 +72,10 @@ func TestJSONOpaqueObjectKeyUsesJSONVisibleText(t *testing.T) {
 	// Existing stored compact tagged JSON, independent of the CAST producer.
 	compact := "base64:type252:" + strings.Repeat("YWFh", 19) + "YQ=="
 	input := encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeBlob, compact))
-	vec := runJsonFunctionWithSelectList(t, proc, []FunctionTestInput{
+	vec := runJsonFunctionForTest(t, proc, []FunctionTestInput{
 		NewFunctionTestInput(types.T_json.ToType(), []string{input}, nil),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
-	}, types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject, nil)
+	}, types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject)
 	got := jsonVectorRowString(t, vec, 0)
 	var object map[string]int
 	require.NoError(t, json.Unmarshal([]byte(got), &object))
@@ -98,13 +98,7 @@ func TestJSONBinaryCastRepresentationAdmissionAndMaskedNull(t *testing.T) {
 	test := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_json.ToType(), true, nil, nil), NewCast)
 	ok, info := test.RunAndFree()
 	require.True(t, ok, info)
-	for _, allNull := range []bool{false, true} {
-		input := []FunctionTestInput{NewFunctionTestInput(types.T_blob.ToType(), []string{"bad"}, []bool{allNull}), NewFunctionTestInput(types.T_json.ToType(), []string{}, nil)}
-		selection := (*FunctionSelectList)(nil)
-		if !allNull {
-			selection = &FunctionSelectList{AnyNull: true, AllNull: true}
-		}
-		vec := runJsonFunctionWithSelectList(t, proc, input, types.T_json.ToType(), NewCast, selection)
-		require.True(t, vec.IsNull(0))
-	}
+	input := []FunctionTestInput{NewFunctionTestInput(types.T_blob.ToType(), []string{"bad"}, []bool{true}), NewFunctionTestInput(types.T_json.ToType(), []string{}, nil)}
+	vec := runJsonFunctionForTest(t, proc, input, types.T_json.ToType(), NewCast)
+	require.True(t, vec.IsNull(0))
 }

@@ -520,7 +520,7 @@ func TestDecimalWideningConstBatch(t *testing.T) {
 			source := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](input)
 			for _, size := range []int{0, 3, 0} {
 				require.NoError(t, result.PreExtendAndReset(size))
-				err = decimal64ToDecimal128Array(source, result, size, nil)
+				err = decimal64ToDecimal128Array(source, result, size)
 				if size > 0 && tc.wantErr {
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
 					require.ErrorContains(t, err, "Decimal128(10,2)")

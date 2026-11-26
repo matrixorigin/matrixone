@@ -27,7 +27,7 @@ import (
 // evaluation policy, separately from storage values and private argument casts.
 const TemporalCastIntegerOverload int32 = 9
 
-func NewTemporalCastInteger(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func NewTemporalCastInteger(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if len(parameters) != 2 {
 		return moerr.NewInvalidInputNoCtx("temporal CAST integer conversion requires a value and target")
 	}
@@ -42,9 +42,9 @@ func NewTemporalCastInteger(parameters []*vector.Vector, result vector.FunctionR
 	}
 	switch parameters[1].GetType().Oid {
 	case types.T_int64:
-		return explicitTemporalIntegerCast[int64](parameters, result, proc, length, selectList, truncate)
+		return explicitTemporalIntegerCast[int64](parameters, result, proc, length, truncate)
 	case types.T_uint64:
-		return explicitTemporalIntegerCast[uint64](parameters, result, proc, length, selectList, truncate)
+		return explicitTemporalIntegerCast[uint64](parameters, result, proc, length, truncate)
 	default:
 		return moerr.NewInvalidInputNoCtx("temporal CAST integer conversion requires int64 or uint64 target")
 	}
@@ -82,26 +82,26 @@ func roundedTimeInteger(value types.Time) int64 {
 
 // This is the public integer CAST policy, not assignment or the binder-owned
 // integer-argument protocol. Negative TIME wraps only for explicit UNSIGNED.
-func explicitTemporalIntegerCast[R int64 | uint64](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, truncate bool) error {
+func explicitTemporalIntegerCast[R int64 | uint64](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, truncate bool) error {
 	switch parameters[0].GetType().Oid {
 	case types.T_date:
 		return opUnaryFixedToFixed(parameters, result, proc, length, func(value types.Date) R {
 			return R(packedDateInt64(value))
-		}, selectList)
+		})
 	case types.T_time:
 		return opUnaryFixedToFixed(parameters, result, proc, length, func(value types.Time) R {
 			if truncate {
 				return R(value.ToInt64())
 			}
 			return R(roundedTimeInteger(value))
-		}, selectList)
+		})
 	case types.T_datetime:
 		return opUnaryFixedToFixed(parameters, result, proc, length, func(value types.Datetime) R {
 			if truncate {
 				return R(packedDatetimeInt64(value))
 			}
 			return R(roundedDatetimeInteger(value))
-		}, selectList)
+		})
 	default: // TIMESTAMP: pack the session's civil clock, not UTC.
 		zone := time.Local
 		if proc != nil {
@@ -112,6 +112,6 @@ func explicitTemporalIntegerCast[R int64 | uint64](parameters []*vector.Vector, 
 				return R(packedDatetimeInt64(value.ToDatetime(zone)))
 			}
 			return R(roundedDatetimeInteger(value.ToDatetime(zone)))
-		}, selectList)
+		})
 	}
 }

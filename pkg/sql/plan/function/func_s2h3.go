@@ -52,29 +52,14 @@ const earthRadiusMeters = 6371008.8
 // analogue to S2's leaf cell (which a point maps to uniquely).
 const h3DefaultResolution = 15
 
-// s2h3RowSkipped reports whether row i must be skipped (emitted as NULL) given
-// the function's select list, following the same convention as the other
-// builtins in this package.
-func s2h3RowSkipped(selectList *FunctionSelectList, i uint64) bool {
-	return selectList != nil && (selectList.IgnoreAllRow() ||
-		(!selectList.ShouldEvalAllRow() && selectList.Contains(i)))
-}
-
 // s2h3CellToFixed evaluates a unary function whose input is a uint64 cell id and
 // whose output is a fixed-size scalar (uint64 / int32 / float64 / bool).
 func s2h3CellToFixed[T types.FixedSizeTExceptStrType](
-	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int,
-	selectList *FunctionSelectList, fn func(uint64) (T, error)) error {
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, fn func(uint64) (T, error)) error {
 	src := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
 	rs := vector.MustFunctionResult[T](result)
 	var zero T
 	for i := uint64(0); i < uint64(length); i++ {
-		if s2h3RowSkipped(selectList, i) {
-			if err := rs.Append(zero, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v, null := src.GetValue(i)
 		if null {
 			if err := rs.Append(zero, true); err != nil {
@@ -96,18 +81,11 @@ func s2h3CellToFixed[T types.FixedSizeTExceptStrType](
 // s2h3CellIntToU64 evaluates a (uint64 cell, int64) -> uint64 function, used for
 // the parent-at-level overloads.
 func s2h3CellIntToU64(
-	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int,
-	selectList *FunctionSelectList, fn func(uint64, int64) (uint64, error)) error {
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, fn func(uint64, int64) (uint64, error)) error {
 	cells := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
 	levels := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[uint64](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if s2h3RowSkipped(selectList, i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		c, n1 := cells.GetValue(i)
 		l, n2 := levels.GetValue(i)
 		if n1 || n2 {
@@ -130,18 +108,11 @@ func s2h3CellIntToU64(
 // s2h3BinCellToBool evaluates a (uint64 cell, uint64 cell) -> bool function, used
 // for the are-neighbours predicates.
 func s2h3BinCellToBool(
-	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int,
-	selectList *FunctionSelectList, fn func(uint64, uint64) (bool, error)) error {
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, fn func(uint64, uint64) (bool, error)) error {
 	a := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
 	b := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
 	rs := vector.MustFunctionResult[bool](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if s2h3RowSkipped(selectList, i) {
-			if err := rs.Append(false, true); err != nil {
-				return err
-			}
-			continue
-		}
 		av, n1 := a.GetValue(i)
 		bv, n2 := b.GetValue(i)
 		if n1 || n2 {
@@ -164,17 +135,10 @@ func s2h3BinCellToBool(
 // s2h3CellToGeometry evaluates a unary uint64-cell -> GEOMETRY (bare WKB)
 // function (the *_Center / *_Boundary functions).
 func s2h3CellToGeometry(
-	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int,
-	selectList *FunctionSelectList, fn func(uint64) ([]byte, error)) error {
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, fn func(uint64) ([]byte, error)) error {
 	src := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if s2h3RowSkipped(selectList, i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v, null := src.GetValue(i)
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -196,17 +160,10 @@ func s2h3CellToGeometry(
 // s2h3CellToJSON evaluates a unary uint64-cell -> JSON function (the neighbour
 // lists).
 func s2h3CellToJSON(
-	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int,
-	selectList *FunctionSelectList, fn func(uint64) (bytejson.ByteJson, error)) error {
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, fn func(uint64) (bytejson.ByteJson, error)) error {
 	src := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if s2h3RowSkipped(selectList, i) {
-			if err := rs.AppendByteJson(bytejson.Null, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v, null := src.GetValue(i)
 		if null {
 			if err := rs.AppendByteJson(bytejson.Null, true); err != nil {
@@ -228,17 +185,10 @@ func s2h3CellToJSON(
 // s2h3PointToU64 evaluates a unary POINT -> uint64 function (the indexing
 // constructors), reading the point as (longitude, latitude).
 func s2h3PointToU64(
-	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int,
-	selectList *FunctionSelectList, fn func(lng, lat float64) (uint64, error)) error {
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, fn func(lng, lat float64) (uint64, error)) error {
 	src := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[uint64](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if s2h3RowSkipped(selectList, i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v, null := src.GetStrValue(i)
 		if null {
 			if err := rs.Append(0, true); err != nil {
@@ -297,8 +247,8 @@ func s2RequireValid(c uint64) (s2.CellID, error) {
 }
 
 // S2CellId converts a POINT(longitude latitude) to the S2 leaf CellId.
-func S2CellId(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3PointToU64(ivecs, result, length, selectList, func(lng, lat float64) (uint64, error) {
+func S2CellId(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3PointToU64(ivecs, result, length, func(lng, lat float64) (uint64, error) {
 		if err := validLatLng(lat, lng); err != nil {
 			return 0, err
 		}
@@ -307,8 +257,8 @@ func S2CellId(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 // S2CellIdLevel returns the level (0..30) of a CellId.
-func S2CellIdLevel(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3CellToFixed[int32](ivecs, result, length, selectList, func(c uint64) (int32, error) {
+func S2CellIdLevel(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3CellToFixed[int32](ivecs, result, length, func(c uint64) (int32, error) {
 		cid, err := s2RequireValid(c)
 		if err != nil {
 			return 0, err
@@ -318,8 +268,8 @@ func S2CellIdLevel(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 }
 
 // S2CellIdCenter returns the center of a CellId as a POINT(longitude latitude).
-func S2CellIdCenter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3CellToGeometry(ivecs, result, length, selectList, func(c uint64) ([]byte, error) {
+func S2CellIdCenter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3CellToGeometry(ivecs, result, length, func(c uint64) ([]byte, error) {
 		cid, err := s2RequireValid(c)
 		if err != nil {
 			return nil, err
@@ -330,8 +280,8 @@ func S2CellIdCenter(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 // S2CellIdArea returns the approximate area of a CellId in square metres.
-func S2CellIdArea(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3CellToFixed[float64](ivecs, result, length, selectList, func(c uint64) (float64, error) {
+func S2CellIdArea(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3CellToFixed[float64](ivecs, result, length, func(c uint64) (float64, error) {
 		cid, err := s2RequireValid(c)
 		if err != nil {
 			return 0, err
@@ -342,8 +292,8 @@ func S2CellIdArea(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 }
 
 // S2CellIdParent returns the ancestor CellId at the given (coarser) level.
-func S2CellIdParent(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3CellIntToU64(ivecs, result, length, selectList, func(c uint64, level int64) (uint64, error) {
+func S2CellIdParent(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3CellIntToU64(ivecs, result, length, func(c uint64, level int64) (uint64, error) {
 		cid, err := s2RequireValid(c)
 		if err != nil {
 			return 0, err
@@ -360,8 +310,8 @@ func S2CellIdParent(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 // S2CellIdEdgeNeighbors returns the 4 edge-adjacent neighbours at this cell's
 // level as a JSON array of uint64.
-func S2CellIdEdgeNeighbors(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3CellToJSON(ivecs, result, length, selectList, func(c uint64) (bytejson.ByteJson, error) {
+func S2CellIdEdgeNeighbors(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3CellToJSON(ivecs, result, length, func(c uint64) (bytejson.ByteJson, error) {
 		cid, err := s2RequireValid(c)
 		if err != nil {
 			return bytejson.Null, err
@@ -377,8 +327,8 @@ func S2CellIdEdgeNeighbors(ivecs []*vector.Vector, result vector.FunctionResultW
 
 // S2CellIdAllNeighbors returns all neighbours (edge + vertex adjacent) at this
 // cell's level as a JSON array of uint64.
-func S2CellIdAllNeighbors(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3CellToJSON(ivecs, result, length, selectList, func(c uint64) (bytejson.ByteJson, error) {
+func S2CellIdAllNeighbors(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3CellToJSON(ivecs, result, length, func(c uint64) (bytejson.ByteJson, error) {
 		cid, err := s2RequireValid(c)
 		if err != nil {
 			return bytejson.Null, err
@@ -394,8 +344,8 @@ func S2CellIdAllNeighbors(ivecs []*vector.Vector, result vector.FunctionResultWr
 
 // S2CellIdAreNeighbors reports whether two CellIds are neighbours, evaluated at
 // the level of the first cell.
-func S2CellIdAreNeighbors(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3BinCellToBool(ivecs, result, length, selectList, func(a, b uint64) (bool, error) {
+func S2CellIdAreNeighbors(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3BinCellToBool(ivecs, result, length, func(a, b uint64) (bool, error) {
 		ca, err := s2RequireValid(a)
 		if err != nil {
 			return false, err
@@ -438,25 +388,19 @@ func h3IndexAt(lng, lat float64, res int) (uint64, error) {
 
 // H3H3Index converts a POINT(longitude latitude) to an H3Index at the default
 // resolution (15, the finest).
-func H3H3Index(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3PointToU64(ivecs, result, length, selectList, func(lng, lat float64) (uint64, error) {
+func H3H3Index(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3PointToU64(ivecs, result, length, func(lng, lat float64) (uint64, error) {
 		return h3IndexAt(lng, lat, h3DefaultResolution)
 	})
 }
 
 // H3H3IndexWithRes converts a POINT(longitude latitude) to an H3Index at the
 // given resolution (0..15).
-func H3H3IndexWithRes(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func H3H3IndexWithRes(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	src := vector.GenerateFunctionStrParameter(ivecs[0])
 	resolutions := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[uint64](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if s2h3RowSkipped(selectList, i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v, n1 := src.GetStrValue(i)
 		res, n2 := resolutions.GetValue(i)
 		if n1 || n2 {
@@ -484,8 +428,8 @@ func H3H3IndexWithRes(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 // H3H3IndexResolution returns the resolution (0..15) of an H3Index.
-func H3H3IndexResolution(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3CellToFixed[int32](ivecs, result, length, selectList, func(h uint64) (int32, error) {
+func H3H3IndexResolution(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3CellToFixed[int32](ivecs, result, length, func(h uint64) (int32, error) {
 		c, err := h3RequireValid(h)
 		if err != nil {
 			return 0, err
@@ -495,8 +439,8 @@ func H3H3IndexResolution(ivecs []*vector.Vector, result vector.FunctionResultWra
 }
 
 // H3H3IndexCenter returns the center of an H3Index cell as a POINT(longitude latitude).
-func H3H3IndexCenter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3CellToGeometry(ivecs, result, length, selectList, func(h uint64) ([]byte, error) {
+func H3H3IndexCenter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3CellToGeometry(ivecs, result, length, func(h uint64) ([]byte, error) {
 		c, err := h3RequireValid(h)
 		if err != nil {
 			return nil, err
@@ -511,8 +455,8 @@ func H3H3IndexCenter(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 
 // H3H3IndexBoundary returns the boundary vertices of an H3Index cell as a
 // MULTIPOINT of POINT(longitude latitude).
-func H3H3IndexBoundary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3CellToGeometry(ivecs, result, length, selectList, func(h uint64) ([]byte, error) {
+func H3H3IndexBoundary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3CellToGeometry(ivecs, result, length, func(h uint64) ([]byte, error) {
 		c, err := h3RequireValid(h)
 		if err != nil {
 			return nil, err
@@ -530,8 +474,8 @@ func H3H3IndexBoundary(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 }
 
 // H3H3IndexParent returns the immediate parent (one resolution coarser).
-func H3H3IndexParent(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3CellToFixed[uint64](ivecs, result, length, selectList, func(h uint64) (uint64, error) {
+func H3H3IndexParent(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3CellToFixed[uint64](ivecs, result, length, func(h uint64) (uint64, error) {
 		c, err := h3RequireValid(h)
 		if err != nil {
 			return 0, err
@@ -548,8 +492,8 @@ func H3H3IndexParent(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 // H3H3IndexParentAtRes returns the ancestor at the given (coarser) resolution.
-func H3H3IndexParentAtRes(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3CellIntToU64(ivecs, result, length, selectList, func(h uint64, res int64) (uint64, error) {
+func H3H3IndexParentAtRes(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3CellIntToU64(ivecs, result, length, func(h uint64, res int64) (uint64, error) {
 		c, err := h3RequireValid(h)
 		if err != nil {
 			return 0, err
@@ -570,8 +514,8 @@ func H3H3IndexParentAtRes(ivecs []*vector.Vector, result vector.FunctionResultWr
 
 // H3H3IndexNeighbors returns the immediate neighbours (the grid disk of radius 1
 // excluding the cell itself) as a JSON array of uint64.
-func H3H3IndexNeighbors(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3CellToJSON(ivecs, result, length, selectList, func(h uint64) (bytejson.ByteJson, error) {
+func H3H3IndexNeighbors(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3CellToJSON(ivecs, result, length, func(h uint64) (bytejson.ByteJson, error) {
 		c, err := h3RequireValid(h)
 		if err != nil {
 			return bytejson.Null, err
@@ -592,8 +536,8 @@ func H3H3IndexNeighbors(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 // H3H3IndexAreNeighbors reports whether two H3Index cells are neighbours.
-func H3H3IndexAreNeighbors(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return s2h3BinCellToBool(ivecs, result, length, selectList, func(a, b uint64) (bool, error) {
+func H3H3IndexAreNeighbors(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return s2h3BinCellToBool(ivecs, result, length, func(a, b uint64) (bool, error) {
 		ca, err := h3RequireValid(a)
 		if err != nil {
 			return false, err

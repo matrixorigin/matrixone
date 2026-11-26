@@ -67,7 +67,7 @@ func (op *opBuiltInLlmFunction) initLlmClient(params []*vector.Vector, proc *pro
 }
 
 func (op *opBuiltInLlmFunction) llmChat(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	proc *process.Process, length int) error {
 	var err error
 	if op.llmClient == nil {
 		if err = op.initLlmClient(params, proc); err != nil {
@@ -100,7 +100,7 @@ func (op *opBuiltInLlmFunction) llmChat(params []*vector.Vector, result vector.F
 }
 
 func (op *opBuiltInLlmFunction) llmEmbedding(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	proc *process.Process, length int) error {
 	var err error
 	if op.llmClient == nil {
 		if err = op.initLlmClient(params, proc); err != nil {

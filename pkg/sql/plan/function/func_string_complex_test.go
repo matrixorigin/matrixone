@@ -147,20 +147,15 @@ func Test_BuiltInConcat(t *testing.T) {
 		})
 	}
 
-	t.Run("NULL positions and selected rows", func(t *testing.T) {
+	t.Run("NULL positions", func(t *testing.T) {
 		tc := NewFunctionTestCase(proc, []FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "a", "a", "a", "a"}, []bool{true, false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "a", "a", "a", "a"}, []bool{true, false, false, false, true}),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"b", "b", "b", "b", "b"}, []bool{false, true, false, false, false}),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"c", "c", "c", "c", "c"}, []bool{false, false, true, false, false}),
 		}, NewFunctionTestResult(types.T_varchar.ToType(), false,
-			[]string{"", "", "", "abc", ""}, []bool{true, true, true, false, true}), builtInConcat).
-			WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
+			[]string{"", "", "", "abc", ""}, []bool{true, true, true, false, true}), builtInConcat)
 		defer tc.Free()
 		ok, info := tc.Run()
-		require.True(t, ok, info)
-		tc.selectList = &FunctionSelectList{AnyNull: true, AllNull: true}
-		tc.expected.nullList = []bool{true, true, true, true, true}
-		ok, info = tc.Run()
 		require.True(t, ok, info)
 	})
 
@@ -205,11 +200,10 @@ func Test_BuiltInConcatReuseAndOwnership(t *testing.T) {
 	})
 	long := strings.Repeat("a", 24)
 	tc := NewFunctionTestCase(proc, []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{long, "你", "null", "masked"}, []bool{false, false, true, false}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{long, "你", "null", "masked"}, []bool{false, false, true, true}),
 		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"!"}, nil),
 	}, NewFunctionTestResult(types.T_varchar.ToType(), false,
-		[]string{long + "!", "你!", "", ""}, []bool{false, false, true, true}), builtInConcat).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}})
+		[]string{long + "!", "你!", "", ""}, []bool{false, false, true, true}), builtInConcat)
 	t.Cleanup(tc.Free)
 	for range 2 {
 		ok, info := tc.Run()
@@ -220,7 +214,6 @@ func Test_BuiltInConcatReuseAndOwnership(t *testing.T) {
 	tc.parameters[0].GetBytesAt(0)[0] = 'z'
 	require.Equal(t, long+"!", string(tc.GetResultVectorDirectly().GetBytesAt(0)))
 	tc.parameters[0].GetNulls().Reset()
-	tc.selectList = nil
 	tc.expected.wanted = []string{"z" + long[1:] + "!", "你!", "null!", "masked!"}
 	tc.expected.nullList = nil
 	ok, info := tc.Run()
@@ -245,7 +238,7 @@ func Test_BuiltInConcatConstResult(t *testing.T) {
 	constant, err := vector.NewConstBytes(types.T_varchar.ToType(), nil, 1, proc.Mp())
 	require.NoError(t, err)
 	tc.result.SetResultVector(constant)
-	require.NoError(t, builtInConcat(tc.parameters, tc.result, proc, 1, nil))
+	require.NoError(t, builtInConcat(tc.parameters, tc.result, proc, 1))
 	require.True(t, constant.IsConst())
 	require.Equal(t, strings.Repeat("x", 24)+"!", string(constant.GetBytesAt(0)))
 }
@@ -281,7 +274,7 @@ func Test_BuiltInConcatResultAllocationFailure(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { memory.Free(held) })
 			before := memory.CurrNB()
-			err = builtInConcat(tc.parameters, result, proc, 2, nil)
+			err = builtInConcat(tc.parameters, result, proc, 2)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "%v", err)
 			require.Equal(t, before, memory.CurrNB())
 			require.Empty(t, result.GetResultVector().GetArea())
@@ -295,7 +288,7 @@ func Test_BuiltInConcatResultAllocationFailure(t *testing.T) {
 			memory.Free(held)
 			held = nil
 			require.NoError(t, result.PreExtendAndReset(2))
-			require.NoError(t, builtInConcat(tc.parameters, result, proc, 2, nil))
+			require.NoError(t, builtInConcat(tc.parameters, result, proc, 2))
 			require.Equal(t, 2, result.GetResultVector().Length())
 			require.Equal(t, "ok!", string(result.GetResultVector().GetBytesAt(0)))
 			require.Equal(t, strings.Repeat("a", 32)+strings.Repeat("b", 32), string(result.GetResultVector().GetBytesAt(1)))
@@ -328,7 +321,7 @@ func Test_BuiltInConcatAllocationLimitAndLaterNull(t *testing.T) {
 	t.Cleanup(result.Free)
 	require.NoError(t, result.PreExtendAndReset(1))
 	allocatedBefore := mp.CurrNB()
-	err := builtInConcat(parameters, result, proc, 1, nil)
+	err := builtInConcat(parameters, result, proc, 1)
 	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
 	require.Zero(t, result.GetResultVector().Length())
 	require.Empty(t, result.GetResultVector().GetArea())
@@ -338,7 +331,7 @@ func Test_BuiltInConcatAllocationLimitAndLaterNull(t *testing.T) {
 	t.Cleanup(func() { last.Free(mp) })
 	parameters = append(parameters, last)
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, builtInConcat(parameters, result, proc, 1, nil))
+	require.NoError(t, builtInConcat(parameters, result, proc, 1))
 	require.Equal(t, 1, result.GetResultVector().Length())
 	require.True(t, result.GetResultVector().IsNull(0))
 	require.Empty(t, result.GetResultVector().GetArea())
@@ -347,7 +340,7 @@ func Test_BuiltInConcatAllocationLimitAndLaterNull(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { normal.Free(mp) })
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, builtInConcat([]*vector.Vector{normal, normal}, result, proc, 1, nil))
+	require.NoError(t, builtInConcat([]*vector.Vector{normal, normal}, result, proc, 1))
 	require.Equal(t, 1, result.GetResultVector().Length())
 	require.False(t, result.GetResultVector().IsNull(0))
 	require.Equal(t, "okok", string(result.GetResultVector().GetBytesAt(0)))
@@ -370,21 +363,20 @@ func Test_BuiltInConcatResultValidationFailure(t *testing.T) {
 			}, NewFunctionTestResult(resultType, false, nil, nil), builtInConcat)
 			defer tc.Free()
 			require.NoError(t, tc.result.PreExtendAndReset(2))
-			err := builtInConcat(tc.parameters, tc.result, proc, 2, nil)
+			err := builtInConcat(tc.parameters, tc.result, proc, 2)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
 			require.Equal(t, 1, tc.GetResultVectorDirectly().Length())
 			require.Empty(t, tc.GetResultVectorDirectly().GetArea())
 			require.Equal(t, "ok!", string(tc.GetResultVectorDirectly().GetBytesAt(0)))
 
-			// Masking and a later NULL must both suppress text validation.
-			tc.selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+			// A NULL row and a later NULL constant must both suppress text validation.
+			tc.parameters[0].GetNulls().Add(1)
 			tc.expected.wanted = []string{"ok!", ""}
 			tc.expected.nullList = []bool{false, true}
 			ok, info := tc.Run()
 			require.True(t, ok, info)
 
 			tc.parameters[1].GetNulls().Add(0)
-			tc.selectList = nil
 			tc.expected.nullList = []bool{true, true}
 			ok, info = tc.Run()
 			require.True(t, ok, info)
@@ -1372,7 +1364,7 @@ func Test_BuiltInCharIsBin(t *testing.T) {
 		result.SetArgumentIsBin([]bool{true})
 		require.NoError(t, result.PreExtendAndReset(1))
 
-		err := builtInChar([]*vector.Vector{input}, result, proc, 1, nil)
+		err := builtInChar([]*vector.Vector{input}, result, proc, 1)
 		require.NoError(t, err, c.info)
 		got := vector.InefficientMustStrCol(result.GetResultVector())
 		require.Equal(t, []string{c.want}, got, c.info)
@@ -1397,7 +1389,7 @@ func Test_BuiltInCharNotBin(t *testing.T) {
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
 
-	require.NoError(t, builtInChar([]*vector.Vector{input}, result, proc, 1, nil))
+	require.NoError(t, builtInChar([]*vector.Vector{input}, result, proc, 1))
 	got := vector.InefficientMustStrCol(result.GetResultVector())
 	require.Equal(t, []string{"\x00"}, got)
 }

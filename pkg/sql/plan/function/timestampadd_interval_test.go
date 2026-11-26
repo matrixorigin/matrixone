@@ -63,7 +63,7 @@ func TestTimestampAddSecondSourceVectors(t *testing.T) {
 		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	}
-	tc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(), []float64{1.000001, math.Inf(1), math.NaN(), math.MaxFloat64, 1e30}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1000001, 0, 0, math.MinInt64, 0}, []bool{false, true, true, false, true}), TimestampAddSecondInterval).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(), []float64{1.000001, math.Inf(1), math.NaN(), math.MaxFloat64, 1e30}, []bool{false, false, false, false, true})}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1000001, 0, 0, math.MinInt64, 0}, []bool{false, true, true, false, true}), TimestampAddSecondInterval)
 	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
@@ -179,18 +179,18 @@ func BenchmarkTimestampAddSecondDecimal(b *testing.B) {
 	}
 }
 
-func timestampAddSecondLexicalBenchmark(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selected *FunctionSelectList) error {
+func timestampAddSecondLexicalBenchmark(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	switch vecs[0].GetType().Oid {
 	case types.T_decimal64:
-		return timestampAddTypedSeconds(vecs[0], result, length, selected, func(v types.Decimal64, s int32) (int64, bool) {
+		return timestampAddTypedSeconds(vecs[0], result, length, func(v types.Decimal64, s int32) (int64, bool) {
 			return timestampAddSecondMicroseconds(v.Format(s)), false
 		})
 	case types.T_decimal128:
-		return timestampAddTypedSeconds(vecs[0], result, length, selected, func(v types.Decimal128, s int32) (int64, bool) {
+		return timestampAddTypedSeconds(vecs[0], result, length, func(v types.Decimal128, s int32) (int64, bool) {
 			return timestampAddSecondMicroseconds(v.Format(s)), false
 		})
 	default:
-		return timestampAddTypedSeconds(vecs[0], result, length, selected, func(v types.Decimal256, s int32) (int64, bool) {
+		return timestampAddTypedSeconds(vecs[0], result, length, func(v types.Decimal256, s int32) (int64, bool) {
 			return timestampAddSecondMicroseconds(v.Format(s)), false
 		})
 	}

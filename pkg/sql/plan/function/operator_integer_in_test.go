@@ -65,7 +65,7 @@ func checkIntegerMembership[T constraints.Integer](t *testing.T, typ types.T, me
 					// The same closure processes multiple batches and vector shapes.
 					for _, rows := range []int{len(probes), 0, len(probes)} {
 						require.NoError(t, out.PreExtendAndReset(rows))
-						require.NoError(t, fn([]*vector.Vector{input, list}, out, proc, rows, nil))
+						require.NoError(t, fn([]*vector.Vector{input, list}, out, proc, rows))
 						result := out.GetResultVector()
 						for i := 0; i < rows; i++ {
 							physical := i

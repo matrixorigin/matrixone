@@ -572,7 +572,7 @@ func TestIntegerOverDecimal256DivisionSignedDIV(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(retType, proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	err = exec([]*vector.Vector{left, right}, result, proc, 1, nil)
+	err = exec([]*vector.Vector{left, right}, result, proc, 1)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange),
 		"actual division overflow identity: %v", err)

@@ -40,7 +40,7 @@ func TestPreparedNonFiniteFloatCast(t *testing.T) {
 		result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp())
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(4))
-		require.NoError(t, NewCast([]*vector.Vector{input, target}, result, proc, 4, nil))
+		require.NoError(t, NewCast([]*vector.Vector{input, target}, result, proc, 4))
 		got := vector.MustFixedColNoTypeCheck[float64](result.GetResultVector())
 		require.True(t, math.IsNaN(got[0]), "NaN parameter: %v", got[0])
 		require.True(t, math.IsInf(got[1], 1), "+Inf parameter: %v", got[1])

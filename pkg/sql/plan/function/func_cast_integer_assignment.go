@@ -42,55 +42,54 @@ func isStorageIntegerOid(oid types.T) bool {
 // only when SQL mode or IGNORE permits it. Use an exact integer domain so a
 // UINT64 source never passes through FLOAT64 before it is clipped.
 func clampIntegerAssignmentSource(proc *process.Process, source *vector.Vector, target types.T,
-	result vector.FunctionResultWrapper, length int, selection *FunctionSelectList) error {
+	result vector.FunctionResultWrapper, length int) error {
 	switch source.GetType().Oid {
 	case types.T_int8:
-		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[int8](source), target, result, length, selection)
+		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[int8](source), target, result, length)
 	case types.T_int16:
-		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[int16](source), target, result, length, selection)
+		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[int16](source), target, result, length)
 	case types.T_int32:
-		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[int32](source), target, result, length, selection)
+		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[int32](source), target, result, length)
 	case types.T_int64:
-		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[int64](source), target, result, length, selection)
+		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[int64](source), target, result, length)
 	case types.T_uint8:
-		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint8](source), target, result, length, selection)
+		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint8](source), target, result, length)
 	case types.T_uint16:
-		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint16](source), target, result, length, selection)
+		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint16](source), target, result, length)
 	case types.T_uint32:
-		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint32](source), target, result, length, selection)
+		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint32](source), target, result, length)
 	case types.T_uint64, types.T_bit:
-		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint64](source), target, result, length, selection)
+		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint64](source), target, result, length)
 	}
 	return moerr.NewInternalError(proc.Ctx, "unsupported integer assignment source")
 }
 
 func clampIntegerAssignmentTarget[S constraints.Integer](proc *process.Process,
 	source vector.FunctionParameterWrapper[S], target types.T, result vector.FunctionResultWrapper,
-	length int, selection *FunctionSelectList) error {
+	length int) error {
 	switch target {
 	case types.T_int8:
-		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[int8](result), length, selection)
+		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[int8](result), length)
 	case types.T_int16:
-		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[int16](result), length, selection)
+		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[int16](result), length)
 	case types.T_int32:
-		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[int32](result), length, selection)
+		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[int32](result), length)
 	case types.T_int64:
-		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[int64](result), length, selection)
+		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[int64](result), length)
 	case types.T_uint8:
-		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[uint8](result), length, selection)
+		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[uint8](result), length)
 	case types.T_uint16:
-		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[uint16](result), length, selection)
+		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[uint16](result), length)
 	case types.T_uint32:
-		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[uint32](result), length, selection)
+		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[uint32](result), length)
 	case types.T_uint64:
-		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[uint64](result), length, selection)
+		return appendClampedIntegerAssignment(proc, source, vector.MustFunctionResult[uint64](result), length)
 	}
 	return moerr.NewInternalError(proc.Ctx, "unsupported integer assignment target")
 }
 
 func appendClampedIntegerAssignment[S, D constraints.Integer](proc *process.Process,
-	source vector.FunctionParameterWrapper[S], result *vector.FunctionResult[D], length int,
-	selection *FunctionSelectList) error {
+	source vector.FunctionParameterWrapper[S], result *vector.FunctionResult[D], length int) error {
 	var zero D
 	bits := integerAssignmentBitSize(result.GetType(), int(unsafe.Sizeof(zero)*8))
 	signed := ^zero < zero
@@ -104,7 +103,7 @@ func appendClampedIntegerAssignment[S, D constraints.Integer](proc *process.Proc
 	}
 	for row := 0; row < length; row++ {
 		value, isNull := source.GetValue(uint64(row))
-		if isNull || functionRowSkipped(selection, uint64(row)) {
+		if isNull {
 			if err := result.Append(zero, true); err != nil {
 				return err
 			}
@@ -192,7 +191,7 @@ func retryMediumIntRadixText[I constraints.Integer](
 // while reading the bytes so neither a uint64 nor the physical target wraps.
 func binaryToIntegerAssignment[I constraints.Integer](ctx context.Context, proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena], result *vector.FunctionResult[I],
-	bits, length int, selectList *FunctionSelectList, mode castMode,
+	bits, length int, mode castMode,
 ) error {
 	var zero I
 	target := result.GetType()
@@ -203,9 +202,7 @@ func binaryToIntegerAssignment[I constraints.Integer](ctx context.Context, proc 
 	for row := range length {
 		var raw []byte
 		isNull := true
-		if !functionRowSkipped(selectList, uint64(row)) {
-			raw, isNull = source.GetStrValue(uint64(row))
-		}
+		raw, isNull = source.GetStrValue(uint64(row))
 		if isNull {
 			if err := result.Append(zero, true); err != nil {
 				return err
@@ -268,26 +265,26 @@ func signedIntegerMagnitude(value int64) (bool, uint64) {
 // rounded integer to the destination column range.
 func decimalToIntegerAssignment[D types.Decimal64 | types.Decimal128 | types.Decimal256](
 	proc *process.Process, source vector.FunctionParameterWrapper[D], target types.T,
-	result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+	result vector.FunctionResultWrapper, length int,
 	mode castMode, round func(D, int32) string,
 ) error {
 	switch target {
 	case types.T_int8:
-		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[int8](result), length, selectList, mode, round)
+		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[int8](result), length, mode, round)
 	case types.T_int16:
-		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[int16](result), length, selectList, mode, round)
+		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[int16](result), length, mode, round)
 	case types.T_int32:
-		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[int32](result), length, selectList, mode, round)
+		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[int32](result), length, mode, round)
 	case types.T_int64:
-		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[int64](result), length, selectList, mode, round)
+		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[int64](result), length, mode, round)
 	case types.T_uint8:
-		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[uint8](result), length, selectList, mode, round)
+		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[uint8](result), length, mode, round)
 	case types.T_uint16:
-		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[uint16](result), length, selectList, mode, round)
+		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[uint16](result), length, mode, round)
 	case types.T_uint32:
-		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[uint32](result), length, selectList, mode, round)
+		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[uint32](result), length, mode, round)
 	case types.T_uint64:
-		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[uint64](result), length, selectList, mode, round)
+		return roundDecimalAssignment(proc, source, vector.MustFunctionResult[uint64](result), length, mode, round)
 	default:
 		return moerr.NewInternalError(proc.Ctx, "non-integer assignment destination")
 	}
@@ -295,7 +292,7 @@ func decimalToIntegerAssignment[D types.Decimal64 | types.Decimal128 | types.Dec
 
 func roundDecimalAssignment[D types.Decimal64 | types.Decimal128 | types.Decimal256, I constraints.Integer](
 	proc *process.Process, source vector.FunctionParameterWrapper[D], result *vector.FunctionResult[I],
-	length int, selectList *FunctionSelectList, mode castMode, round func(D, int32) string,
+	length int, mode castMode, round func(D, int32) string,
 ) error {
 	var zero I
 	bits := integerAssignmentBitSize(result.GetType(), int(unsafe.Sizeof(zero)*8))
@@ -311,7 +308,7 @@ func roundDecimalAssignment[D types.Decimal64 | types.Decimal128 | types.Decimal
 		(mode == castModeAssignment && isStrictSqlMode(proc))
 	for i := 0; i < length; i++ {
 		value, isNull := source.GetValue(uint64(i))
-		if isNull || functionRowSkipped(selectList, uint64(i)) {
+		if isNull {
 			if err := result.Append(zero, true); err != nil {
 				return err
 			}
@@ -348,30 +345,30 @@ func roundDecimalAssignment[D types.Decimal64 | types.Decimal128 | types.Decimal
 	return nil
 }
 
-func floatToIntegerAssignment[F constraints.Float](proc *process.Process, source vector.FunctionParameterWrapper[F], target types.T, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, mode castMode) error {
+func floatToIntegerAssignment[F constraints.Float](proc *process.Process, source vector.FunctionParameterWrapper[F], target types.T, result vector.FunctionResultWrapper, length int, mode castMode) error {
 	switch target {
 	case types.T_int8:
-		return roundFloatAssignment(proc, source, vector.MustFunctionResult[int8](result), length, selectList, mode)
+		return roundFloatAssignment(proc, source, vector.MustFunctionResult[int8](result), length, mode)
 	case types.T_int16:
-		return roundFloatAssignment(proc, source, vector.MustFunctionResult[int16](result), length, selectList, mode)
+		return roundFloatAssignment(proc, source, vector.MustFunctionResult[int16](result), length, mode)
 	case types.T_int32:
-		return roundFloatAssignment(proc, source, vector.MustFunctionResult[int32](result), length, selectList, mode)
+		return roundFloatAssignment(proc, source, vector.MustFunctionResult[int32](result), length, mode)
 	case types.T_int64:
-		return roundFloatAssignment(proc, source, vector.MustFunctionResult[int64](result), length, selectList, mode)
+		return roundFloatAssignment(proc, source, vector.MustFunctionResult[int64](result), length, mode)
 	case types.T_uint8:
-		return roundFloatAssignment(proc, source, vector.MustFunctionResult[uint8](result), length, selectList, mode)
+		return roundFloatAssignment(proc, source, vector.MustFunctionResult[uint8](result), length, mode)
 	case types.T_uint16:
-		return roundFloatAssignment(proc, source, vector.MustFunctionResult[uint16](result), length, selectList, mode)
+		return roundFloatAssignment(proc, source, vector.MustFunctionResult[uint16](result), length, mode)
 	case types.T_uint32:
-		return roundFloatAssignment(proc, source, vector.MustFunctionResult[uint32](result), length, selectList, mode)
+		return roundFloatAssignment(proc, source, vector.MustFunctionResult[uint32](result), length, mode)
 	case types.T_uint64:
-		return roundFloatAssignment(proc, source, vector.MustFunctionResult[uint64](result), length, selectList, mode)
+		return roundFloatAssignment(proc, source, vector.MustFunctionResult[uint64](result), length, mode)
 	default:
 		return moerr.NewInternalError(proc.Ctx, "non-integer assignment destination")
 	}
 }
 
-func roundFloatAssignment[F constraints.Float, I constraints.Integer](proc *process.Process, source vector.FunctionParameterWrapper[F], result *vector.FunctionResult[I], length int, selectList *FunctionSelectList, mode castMode) error {
+func roundFloatAssignment[F constraints.Float, I constraints.Integer](proc *process.Process, source vector.FunctionParameterWrapper[F], result *vector.FunctionResult[I], length int, mode castMode) error {
 	var zero I
 	bits := integerAssignmentBitSize(result.GetType(), int(unsafe.Sizeof(zero)*8))
 	lower, upper := 0.0, math.Ldexp(1, bits)
@@ -382,7 +379,7 @@ func roundFloatAssignment[F constraints.Float, I constraints.Integer](proc *proc
 	}
 	for i := 0; i < length; i++ {
 		value, isNull := source.GetValue(uint64(i))
-		if isNull || functionRowSkipped(selectList, uint64(i)) {
+		if isNull {
 			if err := result.Append(zero, true); err != nil {
 				return err
 			}

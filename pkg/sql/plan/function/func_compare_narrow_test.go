@@ -36,7 +36,7 @@ func TestNarrowArrayCompareSupports(t *testing.T) {
 	}
 }
 
-type narrowCompareFn = func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+type narrowCompareFn = func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int) error
 
 // runNarrowCompareOps drives every comparison operator over three rows — (b,a),
 // (a,b), (a,a) with a < b elementwise — and checks each operator's narrow-vector

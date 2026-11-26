@@ -184,7 +184,7 @@ func TestExtractMinuteVectorConstantTemporalAndNullUnit(t *testing.T) {
 	if err := emptyBatch.result.PreExtendAndReset(0); err != nil {
 		t.Fatal(err)
 	}
-	if err := ExtractFromDatetime(emptyBatch.parameters, emptyBatch.result, proc, 0, nil); err != nil {
+	if err := ExtractFromDatetime(emptyBatch.parameters, emptyBatch.result, proc, 0); err != nil {
 		t.Fatal(err)
 	}
 	if got := emptyBatch.result.GetResultVector().Length(); got != 0 {
@@ -275,7 +275,7 @@ func benchmarkExtractMinuteVector(
 		if err := fc.result.PreExtendAndReset(rows); err != nil {
 			b.Fatal(err)
 		}
-		if err := fc.fn(fc.parameters, fc.result, proc, rows, nil); err != nil {
+		if err := fc.fn(fc.parameters, fc.result, proc, rows); err != nil {
 			b.Fatal(err)
 		}
 	}

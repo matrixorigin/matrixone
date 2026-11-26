@@ -339,7 +339,7 @@ func TestJSONStringConsumersDoNotTruncateWideJSON(t *testing.T) {
 	)
 }
 
-func TestJSONStringConsumersJSONNullAndMaskedRows(t *testing.T) {
+func TestJSONStringConsumersJSONNullAndSQLNullRows(t *testing.T) {
 	visible := []string{`null`, `"a\nb"`}
 	digests := func(hash func([]byte) []byte) []string {
 		return []string{hex.EncodeToString(hash([]byte(visible[0]))), hex.EncodeToString(hash([]byte(visible[1])))}
@@ -374,8 +374,9 @@ func TestJSONStringConsumersJSONNullAndMaskedRows(t *testing.T) {
 				}, nil)
 				defer input.Free(proc.Mp())
 				input.GetNulls().Add(1)
-				// A masked row must not decode stored JSON at all. Corrupt only
+				// A SQL NULL row must not decode stored JSON at all. Corrupt only
 				// after normal vector admission, as in the malformed-input suite.
+				input.GetNulls().Add(0)
 				input.GetBytesAt(0)[0] = 0xff
 				parameters := []*vector.Vector{input}
 				if tc.lengthType != types.T_any {
@@ -395,15 +396,15 @@ func TestJSONStringConsumersJSONNullAndMaskedRows(t *testing.T) {
 				result := vector.NewFunctionResultWrapper(resultType, proc.Mp())
 				defer result.Free()
 				require.NoError(t, result.PreExtendAndReset(4))
-				require.NoError(t, tc.fn(parameters, result, proc, 4,
-					&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true, true}}))
+				require.NoError(t, tc.fn(parameters, result, proc, 4))
 				got := result.GetResultVector()
-				require.True(t, got.IsNull(0), "masked malformed JSON must not be evaluated")
-				if tc.name == "quote" {
-					require.False(t, got.IsNull(1))
-					require.Equal(t, "NULL", string(got.GetBytesAt(1)))
-				} else {
-					require.True(t, got.IsNull(1), "SQL NULL must remain SQL NULL")
+				for _, row := range []uint64{0, 1} {
+					if tc.name == "quote" {
+						require.False(t, got.IsNull(row))
+						require.Equal(t, "NULL", string(got.GetBytesAt(int(row))))
+					} else {
+						require.True(t, got.IsNull(row), "SQL NULL must remain SQL NULL")
+					}
 				}
 				for i, v := range visible {
 					row := uint64(i + 2)

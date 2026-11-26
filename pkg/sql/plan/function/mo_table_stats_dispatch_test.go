@@ -125,7 +125,7 @@ func TestMoTableStatsSQLDispatch(t *testing.T) {
 				defer result.Free()
 				require.NoError(t, result.PreExtendAndReset(4))
 				copy(vector.MustFixedColWithTypeCheck[int64](result.GetResultVector()), []int64{111, 222, 333, 444})
-				err := call([]*vector.Vector{dbv, tblv}, result, proc, 4, nil)
+				err := call([]*vector.Vector{dbv, tblv}, result, proc, 4)
 				if mode == "error" {
 					require.ErrorIs(t, err, sentinel)
 					return
@@ -218,7 +218,7 @@ func TestMoTableStatsSubscriptionIndexKindAdmission(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
-			err = MoTableRows([]*vector.Vector{dbv, tblv}, result, proc, 1, nil)
+			err = MoTableRows([]*vector.Vector{dbv, tblv}, result, proc, 1)
 			if !tc.allow {
 				require.ErrorContains(t, err, "privilege")
 				return

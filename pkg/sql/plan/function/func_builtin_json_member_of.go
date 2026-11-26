@@ -209,17 +209,8 @@ func jsonMemberOf(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
 	rs := vector.MustFunctionResult[int64](result)
-	if selectList != nil && selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 
 	rs.UseOptFunctionParamFrame(2)
 	left := jsonMemberOfValueOperand{parameter: parameters[0], isBin: result.ArgumentIsBin(0)}
@@ -241,13 +232,6 @@ func jsonMemberOf(
 	preparedArrayDecisionReady := false
 
 	for row := uint64(0); row < uint64(length); row++ {
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(row) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
-
 		// SQL NULL on either side short-circuits MEMBER OF before validating
 		// prepared domains or parsing the other operand. In particular, the
 		// prepared BIT/vector limitation must not turn `? MEMBER OF (NULL)`
@@ -292,7 +276,7 @@ func jsonMemberOf(
 		if !preparedArrayDecisionReady && right.parameter.IsConst() &&
 			rightDocument.Type == bytejson.TpCodeArray &&
 			rightDocument.GetElemCnt() > jsonOverlapLinearCompareBudget {
-			evaluableRows = jsonMemberOfCountEvaluableRows(parameters[0], length, selectList)
+			evaluableRows = jsonMemberOfCountEvaluableRows(parameters[0], length)
 			usePreparedArray = jsonOverlapShouldPrepareScalar(rightDocument.GetElemCnt(), evaluableRows)
 			preparedArrayDecisionReady = true
 		}
@@ -326,13 +310,9 @@ func jsonMemberOf(
 func jsonMemberOfCountEvaluableRows(
 	left *vector.Vector,
 	length int,
-	selectList *FunctionSelectList,
 ) int {
 	count := 0
 	for row := uint64(0); row < uint64(length); row++ {
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(row) {
-			continue
-		}
 		if !left.IsNull(row) {
 			count++
 		}

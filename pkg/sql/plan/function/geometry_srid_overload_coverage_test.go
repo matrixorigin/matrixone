@@ -81,34 +81,10 @@ func TestGeometrySRIDOverloadRegistry(t *testing.T) {
 	}
 }
 
-func TestGeometrySRIDAwareConstructorsHonorSelectionAndNullContracts(t *testing.T) {
+func TestGeometrySRIDAwareConstructorsHonorNullContracts(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	wkb := string(geo.WriteWKB(geo.Point{X: 1, Y: 2}))
-
-	// A masked row must not decode its payload or validate its SRID.  This is
-	// the short-circuit contract used by WHERE/CASE evaluation.
-	wkbCase := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-wkb", wkb}, []bool{false, false}),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, 4326}, []bool{false, false}),
-		},
-		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", wkb}, []bool{true, false}),
-		StGeomFromWKBWithSRID).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-	ok, info := wkbCase.RunAndFree()
-	require.True(t, ok, info)
-
-	// All rows masked still produce a cardinality-preserving NULL result and do
-	// not surface an invalid SRID from an unselected branch.
-	allMasked := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-wkb"}, []bool{false}),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
-		},
-		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{true}),
-		StGeomFromWKBWithSRID).WithSelectList(&FunctionSelectList{AllNull: true})
-	ok, info = allMasked.RunAndFree()
-	require.True(t, ok, info)
 
 	// NULL propagation precedes SRID validation, while a non-NULL source with
 	// an out-of-range SRID remains an error.
@@ -118,7 +94,7 @@ func TestGeometrySRIDAwareConstructorsHonorSelectionAndNullContracts(t *testing.
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
 		},
 		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{true}), StGeomFromWKBWithSRID)
-	ok, info = nullSource.RunAndFree()
+	ok, info := nullSource.RunAndFree()
 	require.True(t, ok, info)
 
 	for _, srid := range []int64{-1, int64(geo.MaxSRID) + 1} {
@@ -139,26 +115,17 @@ func TestGeometrySRIDAwareConstructorsHonorSelectionAndNullContracts(t *testing.
 	ok, info = badPayload.RunAndFree()
 	require.True(t, ok, info)
 
-	// The same selection/null behavior applies to the ST_SRID setter, including
-	// the float32 reader used by GEOMETRY32 values.
+	// The ST_SRID setter shares the NULL contract, including the float32
+	// reader used by GEOMETRY32 values.
 	float32Type := types.T_geometry32.ToType()
 	float32Payload, err := geo.WriteWKBFloat32(geo.Point{X: 1, Y: 2})
 	require.NoError(t, err)
 	setter := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(float32Type, []string{"not-wkb", string(float32Payload)}, []bool{false, false}),
+			NewFunctionTestInput(float32Type, []string{"not-wkb", string(float32Payload)}, []bool{true, false}),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, 4326}, []bool{false, false}),
 		}, NewFunctionTestResult(float32Type, false, []string{"", string(float32Payload)}, []bool{true, false}),
-		StSRIDWithSRID).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+		StSRIDWithSRID)
 	ok, info = setter.RunAndFree()
-	require.True(t, ok, info)
-
-	allSetterMasked := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(float32Type, []string{"not-wkb"}, []bool{false}),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
-		}, NewFunctionTestResult(float32Type, false, []string{""}, []bool{true}), StSRIDWithSRID).
-		WithSelectList(&FunctionSelectList{AllNull: true})
-	ok, info = allSetterMasked.RunAndFree()
 	require.True(t, ok, info)
 }

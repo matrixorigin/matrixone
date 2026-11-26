@@ -32,22 +32,16 @@ func TestDecimalMultiplyConstantBroadcastAndReuse(t *testing.T) {
 	left, right := NewFunctionTestInput(typ, []types.Decimal256{types.Decimal256FromInt64(43)}, nil), NewFunctionTestInput(typ, []types.Decimal256{types.Decimal256FromInt64(23)}, nil)
 	left.isConst, right.isConst = true, true
 	want := make([]types.Decimal256, length)
-	mask := make([]bool, length)
-	selected := make([]bool, length)
 	for i := range want {
 		want[i] = types.Decimal256FromInt64(989)
-		selected[i] = i != 0 && i != 6
-		mask[i] = !selected[i]
 	}
-	fc := NewFunctionTestCase(proc, []FunctionTestInput{left, right}, NewFunctionTestResult(types.New(types.T_decimal256, 18, 0), false, want, mask), multiFn).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: selected})
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{left, right}, NewFunctionTestResult(types.New(types.T_decimal256, 18, 0), false, want, nil), multiFn)
 	t.Cleanup(fc.Free)
 	fc.fnLength = length
 	ok, info := fc.Run()
 	require.True(t, ok, info)
 	require.True(t, fc.parameters[0].GetNulls().IsEmpty())
 	require.True(t, fc.parameters[1].GetNulls().IsEmpty())
-	fc.selectList = nil
-	fc.expected.nullList = nil
 	// Only physical row zero is meaningful for a non-NULL constant. Bits
 	// outside that row must not become NULLs in the broadcast result.
 	fc.parameters[0].GetNulls().Add(1)
@@ -57,7 +51,7 @@ func TestDecimalMultiplyConstantBroadcastAndReuse(t *testing.T) {
 }
 
 func TestDecimalMultiplyNoEvaluableRows(t *testing.T) {
-	for _, shape := range []string{"empty", "constant_null", "all_masked"} {
+	for _, shape := range []string{"empty", "constant_null"} {
 		t.Run(shape, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			t.Cleanup(proc.Free)
@@ -84,9 +78,6 @@ func TestDecimalMultiplyNoEvaluableRows(t *testing.T) {
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{left, right}, NewFunctionTestResult(typ, false, make([]types.Decimal256, length), mask), multiFn)
 			t.Cleanup(fc.Free)
 			fc.fnLength = length
-			if shape == "all_masked" {
-				fc.selectList = &FunctionSelectList{AnyNull: true, SelectList: make([]bool, length)}
-			}
 			ok, info := fc.Run()
 			require.True(t, ok, info)
 		})

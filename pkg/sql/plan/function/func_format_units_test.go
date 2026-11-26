@@ -126,11 +126,6 @@ func TestFormatUnitsVectorExecution(t *testing.T) {
 					assertFormatUnitsRows(t, result, want, nulls)
 				}
 				check([]string{tc.want, tc.want, tc.want}, []bool{false, !constant, false})
-				fc = fc.WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, false}})
-				check([]string{tc.want, "", ""}, []bool{false, true, true})
-				fc = fc.WithSelectList(&FunctionSelectList{AllNull: true})
-				check([]string{"", "", ""}, []bool{true, true, true})
-				fc = fc.WithSelectList(nil)
 				fc.parameters[0].GetNulls().Add(0)
 				check([]string{"", tc.want, tc.want}, []bool{true, true, constant})
 				fc.fnLength = 0

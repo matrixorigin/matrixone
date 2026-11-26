@@ -266,7 +266,7 @@ func TestBitCountVarcharWithIsBin(t *testing.T) {
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
 
-	require.NoError(t, BitCountNonBinaryString([]*vector.Vector{input}, result, proc, input.Length(), nil))
+	require.NoError(t, BitCountNonBinaryString([]*vector.Vector{input}, result, proc, input.Length()))
 	require.Equal(t, []uint64{7, 1, 0, 8}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
 }
 
@@ -307,24 +307,18 @@ func TestBitCountStringWarnings(t *testing.T) {
 		values           []string
 		want             []uint64
 		nulls            []bool
-		mask             *FunctionSelectList
 		binary, constant bool
 		warnings         int
 	}{
 		{name: "text", values: []string{"3x", "2.9", "3 ", "", "bad", "3x"}, want: []uint64{2, 1, 2, 0, 0, 0}, nulls: []bool{false, false, false, false, false, true}, warnings: 3},
 		{name: "binary_literal", values: []string{"3x"}, want: []uint64{8}, binary: true},
-		{name: "partial_selection", values: []string{"bad", "3x", "bad"}, want: []uint64{0, 2, 0}, mask: &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}}, warnings: 1},
 		{name: "constant_rows", values: []string{"3x"}, want: []uint64{2, 2, 2}, constant: true, warnings: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			session := &numericWarningSession{}
 			proc.Session = session
-			outputNulls := tc.nulls
-			if tc.mask != nil {
-				outputNulls = []bool{true, false, true}
-			}
-			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), tc.values, tc.nulls)}, NewFunctionTestResult(types.T_uint64.ToType(), false, tc.want, outputNulls), BitCountNonBinaryString).WithSelectList(tc.mask)
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), tc.values, tc.nulls)}, NewFunctionTestResult(types.T_uint64.ToType(), false, tc.want, tc.nulls), BitCountNonBinaryString)
 			defer fc.Free()
 			fc.result.SetArgumentIsBin([]bool{tc.binary})
 			if tc.constant {

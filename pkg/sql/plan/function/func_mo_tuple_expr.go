@@ -24,18 +24,13 @@ import (
 
 // MoTupleExpr decodes a tuple bytes representation and returns a human-readable string.
 // It uses DecodeTuple to decode the bytes and SQLStrings to format the output.
-func MoTupleExpr(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func MoTupleExpr(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	if length == 0 {
 		return nil
 	}
 	p := vector.GenerateFunctionStrParameter(params[0])
 
-	// special case: ignore all rows
-	if selectList.IgnoreAllRow() {
-		rs.SetNullResult(uint64(length))
-		return nil
-	}
 	if params[0].IsConst() {
 		v, null := p.GetStrValue(0)
 		if null {
@@ -47,16 +42,10 @@ func MoTupleExpr(params []*vector.Vector, result vector.FunctionResultWrapper, p
 			rs.SetNullResult(uint64(length))
 			return nil
 		}
-		return appendRepeatedBytesResultWithSelection(rs, output, length, selectList)
+		return appendRepeatedBytesResult(rs, output, length)
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			if err := rs.AppendMustNullForBytesResult(); err != nil {
-				return err
-			}
-			continue
-		}
 		v, null := p.GetStrValue(i)
 		if null {
 			if err := rs.AppendMustNullForBytesResult(); err != nil {

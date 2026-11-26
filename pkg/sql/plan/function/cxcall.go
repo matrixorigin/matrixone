@@ -100,7 +100,7 @@ func newXCallFunction(xfId int64) *XCallFunction {
 }
 
 // So far XCall only support strict, not generating null, and fixed length result.
-func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if xcall.clHost == "" {
 		// initilize runtime info
 		val, err := proc.GetResolveVariableFunc()("cl_host", true, false)
@@ -137,23 +137,6 @@ func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.Function
 	rsNull := resultVec.GetNulls()
 
 	nullsInited := false
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			if err := rsNull.InitWithSize(length, resultVec.MPool()); err != nil {
-				return err
-			}
-			nullsInited = true
-			for i := 0; i < length; i++ {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 
 	for _, v := range ivecs {
 		if v.IsConst() {

@@ -40,11 +40,11 @@ func mixedUnsignedOracle(s int64, u uint64, multiply bool) (uint64, bool) {
 }
 
 func mixedUnsignedDecimalReference(multiply bool) executeLogicOfOverload {
-	return func(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int, selected *FunctionSelectList) error {
+	return func(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int) error {
 		if multiply {
-			return checkedIntegerArithmetic[uint64](p, r, proc, n, selected, "*", types.Decimal128.Mul128)
+			return checkedIntegerArithmetic[uint64](p, r, proc, n, "*", types.Decimal128.Mul128)
 		}
-		return checkedIntegerArithmetic[uint64](p, r, proc, n, selected, "+", types.Decimal128.Add128)
+		return checkedIntegerArithmetic[uint64](p, r, proc, n, "+", types.Decimal128.Add128)
 	}
 }
 
@@ -158,9 +158,9 @@ func TestMixedUnsignedAddMulVectorReuse(t *testing.T) {
 			defer fc.Free()
 			signed, unsigned := fc.parameters[0], fc.parameters[1]
 			for _, shape := range []struct {
-				name                                                                 string
-				constS, constU, nullS, nullU, masked, allMasked, ignoreAll, overflow bool
-				rows                                                                 int
+				name                                   string
+				constS, constU, nullS, nullU, overflow bool
+				rows                                   int
 			}{
 				{name: "dense", rows: 3},
 				{name: "signed constant", constS: true, rows: 3},
@@ -168,9 +168,6 @@ func TestMixedUnsignedAddMulVectorReuse(t *testing.T) {
 				{name: "both constant", constS: true, constU: true, rows: 3},
 				{name: "NULL hides overflow", nullU: true, overflow: true, rows: 3},
 				{name: "all NULL", constS: true, nullS: true, overflow: true, rows: 3},
-				{name: "sparse mask hides overflow", masked: true, overflow: true, rows: 3},
-				{name: "both constants all masked without AllNull", constS: true, constU: true, allMasked: true, overflow: true, rows: 3},
-				{name: "IgnoreAllRow", ignoreAll: true, overflow: true, rows: 3},
 				{name: "empty overflowing constants", constS: true, constU: true, overflow: true, rows: 0},
 				{name: "unmasked overflow", overflow: true, rows: 3},
 				{name: "reset after error to dense", rows: 3},
@@ -201,16 +198,6 @@ func TestMixedUnsignedAddMulVectorReuse(t *testing.T) {
 					if shape.constU {
 						unsigned.SetClass(vector.CONSTANT)
 					}
-					fc.selectList = nil
-					if shape.masked {
-						fc.selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
-					}
-					if shape.allMasked {
-						fc.selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, false}}
-					}
-					if shape.ignoreAll {
-						fc.selectList = &FunctionSelectList{AllNull: true}
-					}
 					fc.fnLength = shape.rows
 					for _, reverse := range []bool{false, true} {
 						fc.parameters[0], fc.parameters[1] = signed, unsigned
@@ -240,7 +227,7 @@ func TestMixedUnsignedAddMulVectorReuse(t *testing.T) {
 							if shape.constU {
 								ui = 0
 							}
-							wantNull := shape.allMasked || shape.ignoreAll || (shape.masked && row == 1) || (shape.nullS && si == 0) || (shape.nullU && ui == 1)
+							wantNull := (shape.nullS && si == 0) || (shape.nullU && ui == 1)
 							require.Equal(t, wantNull, got.IsNull(uint64(row)))
 							if !wantNull {
 								want, ok := mixedUnsignedOracle(ss[si], us[ui], multiply)

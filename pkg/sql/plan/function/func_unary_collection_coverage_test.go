@@ -372,22 +372,20 @@ func TestStCentroidResultNullTemplateModes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	point := "POINT(1 2)"
 	empty := "GEOMETRYCOLLECTION EMPTY"
-	run := func(t *testing.T, input FunctionTestInput, expected FunctionTestResult, selectList *FunctionSelectList) {
+	run := func(t *testing.T, input FunctionTestInput, expected FunctionTestResult) {
 		t.Helper()
-		tc := NewFunctionTestCase(proc, []FunctionTestInput{input}, expected, StCentroid).WithSelectList(selectList)
+		tc := NewFunctionTestCase(proc, []FunctionTestInput{input}, expected, StCentroid)
 		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	}
-	run(t, NewFunctionTestInput(types.T_geometry.ToType(), []string{}, nil), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{}, nil), nil)
-	run(t, NewFunctionTestConstInput(types.T_geometry.ToType(), []string{point}, nil), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POINT(1 2)"}, []bool{false}), nil)
-	run(t, NewFunctionTestConstInput(types.T_geometry.ToType(), []string{point}, []bool{true}), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{true}), nil)
-	run(t, NewFunctionTestConstInput(types.T_geometry.ToType(), []string{empty}, nil), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{true}), nil)
-	run(t, NewFunctionTestInput(types.T_geometry.ToType(), []string{point, empty, point}, []bool{false, false, true}), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POINT(1 2)", "", ""}, []bool{false, true, true}), nil)
-	run(t, NewFunctionTestInput(types.T_geometry.ToType(), []string{point, point}, nil), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", "POINT(1 2)"}, []bool{true, false}), &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-	run(t, NewFunctionTestInput(types.T_geometry.ToType(), []string{"LINESTRING(0 0)"}, nil), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{true}), &FunctionSelectList{AnyNull: true, AllNull: true})
+	run(t, NewFunctionTestInput(types.T_geometry.ToType(), []string{}, nil), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{}, nil))
+	run(t, NewFunctionTestConstInput(types.T_geometry.ToType(), []string{point}, nil), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POINT(1 2)"}, []bool{false}))
+	run(t, NewFunctionTestConstInput(types.T_geometry.ToType(), []string{point}, []bool{true}), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{true}))
+	run(t, NewFunctionTestConstInput(types.T_geometry.ToType(), []string{empty}, nil), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{true}))
+	run(t, NewFunctionTestInput(types.T_geometry.ToType(), []string{point, empty, point}, []bool{false, false, true}), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POINT(1 2)", "", ""}, []bool{false, true, true}))
 }
 
-func TestStCentroidResultNullTemplateConstBroadcastAndMaskedMalformed(t *testing.T) {
+func TestStCentroidResultNullTemplateConstBroadcast(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	in, err := vector.NewConstBytes(types.T_geometry.ToType(), []byte("POINT(1 2)"), 3, proc.Mp())
 	require.NoError(t, err)
@@ -395,7 +393,7 @@ func TestStCentroidResultNullTemplateConstBroadcastAndMaskedMalformed(t *testing
 	out := vector.NewFunctionResultWrapper(types.T_geometry.ToType(), proc.Mp())
 	defer out.Free()
 	require.NoError(t, out.PreExtendAndReset(3))
-	require.NoError(t, StCentroid([]*vector.Vector{in}, out, proc, 3, nil))
+	require.NoError(t, StCentroid([]*vector.Vector{in}, out, proc, 3))
 	for i := uint64(0); i < 3; i++ {
 		got := out.GetResultVector().GetBytesAt(int(i))
 		require.False(t, out.GetResultVector().GetNulls().Contains(i))
@@ -404,24 +402,4 @@ func TestStCentroidResultNullTemplateConstBroadcastAndMaskedMalformed(t *testing
 		require.Equal(t, "POINT(1 2)", geo.WriteWKT(g))
 	}
 
-	input := vector.NewVec(types.T_geometry.ToType(), proc.Mp())
-	defer input.Free(proc.Mp())
-	require.NoError(t, vector.AppendBytes(input, []byte("POINT(1 2)"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(input, []byte("LINESTRING(0 0)"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(input, []byte("POINT(1 2)"), false, proc.Mp()))
-	masked := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
-	out = vector.NewFunctionResultWrapper(types.T_geometry.ToType(), proc.Mp())
-	defer out.Free()
-	require.NoError(t, out.PreExtendAndReset(3))
-	require.NoError(t, StCentroid([]*vector.Vector{input}, out, proc, 3, masked))
-	result := out.GetResultVector()
-	require.False(t, result.GetNulls().Contains(0))
-	require.True(t, result.GetNulls().Contains(1))
-	require.False(t, result.GetNulls().Contains(2))
-	for _, row := range []int{0, 2} {
-		got := result.GetBytesAt(row)
-		g, err := geo.ReadWKB(got)
-		require.NoError(t, err)
-		require.Equal(t, "POINT(1 2)", geo.WriteWKT(g))
-	}
 }

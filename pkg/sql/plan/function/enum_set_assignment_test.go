@@ -67,7 +67,7 @@ func TestEnumSetAssignmentModes(t *testing.T) {
 					defer fc.Free()
 					if mode == "strict" {
 						require.NoError(t, fc.result.PreExtendAndReset(3))
-						err := fc.fn(fc.parameters, fc.result, proc, 3, nil)
+						err := fc.fn(fc.parameters, fc.result, proc, 3)
 						var failure *moerr.Error
 						require.ErrorAs(t, err, &failure)
 						require.True(t, failure.IsRealError())
@@ -137,7 +137,7 @@ func TestEnumSetAssignmentPolicySources(t *testing.T) {
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"a"}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad"}, nil)}, NewFunctionTestResult(types.T_enum.ToType(), true, nil, nil), CastValueToIndex)
 			defer fc.Free()
 			require.NoError(t, fc.result.PreExtendAndReset(1))
-			err := fc.fn(fc.parameters, fc.result, callProc, 1, nil)
+			err := fc.fn(fc.parameters, fc.result, callProc, 1)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrEnumSetValueTruncated))
 		}()
 	}
@@ -164,52 +164,24 @@ func TestEnumSetAssignmentMasksAndFailures(t *testing.T) {
 			inputs := func(values any) []FunctionTestInput {
 				return []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.def, tc.def, tc.def}, nil), NewFunctionTestInput(tc.source, values, nil)}
 			}
-			selected := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
-			want := any([]uint64{1, 0, 2})
-			if tc.target.Oid == types.T_enum {
-				want = []types.Enum{1, 0, 2}
-			}
-			fc := NewFunctionTestCase(proc, inputs(tc.good), NewFunctionTestResult(tc.target, false, want, []bool{false, true, false}), tc.fn).WithSelectList(selected)
-			ok, info := fc.RunAndFree()
-			require.True(t, ok, info)
-			require.Zero(t, sink.total)
 			proc.GetSessionInfo().SqlMode = process.EmptySqlModeSentinel
 			zero := any([]uint64{0, 0, 0})
 			if tc.target.Oid == types.T_enum {
 				zero = []types.Enum{0, 0, 0}
 			}
-			// Invalid selected rows adjust and warn twice, even when only one record fits.
-			fc = NewFunctionTestCase(proc, inputs(tc.bad), NewFunctionTestResult(tc.target, false, zero, []bool{false, true, false}), tc.fn).WithSelectList(selected)
-			// Numeric SET 9 retains the a bit, unlike the invalid text member.
-			if tc.name == "set integer" {
-				fc.expected.wanted = []uint64{1, 0, 1}
-			}
-			ok, info = fc.RunAndFree()
-			require.True(t, ok, info)
-			require.Equal(t, uint64(2), sink.total)
-			require.Len(t, sink.records, 1)
-			sink.total = 0
-			sink.records = nil
-			// NULL and all-skipped rows cannot parse even malformed metadata.
+			// NULL rows cannot parse even malformed metadata.
 			badDef := ""
 			if tc.target.Oid == types.T_enum {
 				badDef = strings.Repeat("x,", types.MaxEnumLen)
 			}
-			for _, nullInput := range []bool{true, false} {
-				in := inputs(tc.bad)
-				in[0] = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{badDef}, nil)
-				if nullInput {
-					in[1].nullList = []bool{true, true, true}
-				}
-				fc = NewFunctionTestCase(proc, in, NewFunctionTestResult(tc.target, false, zero, []bool{true, true, true}), tc.fn)
-				fc.fnLength = 3
-				if !nullInput {
-					fc.selectList = &FunctionSelectList{AllNull: true}
-				}
-				ok, info = fc.RunAndFree()
-				require.True(t, ok, info)
-				require.Zero(t, sink.total)
-			}
+			in := inputs(tc.bad)
+			in[0] = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{badDef}, nil)
+			in[1].nullList = []bool{true, true, true}
+			fc := NewFunctionTestCase(proc, in, NewFunctionTestResult(tc.target, false, zero, []bool{true, true, true}), tc.fn)
+			fc.fnLength = 3
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+			require.Zero(t, sink.total)
 			for _, ignore := range []bool{false, true} {
 				proc.SetStmtProfile(&process.StmtProfile{})
 				proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", ignore)
@@ -219,7 +191,7 @@ func TestEnumSetAssignmentMasksAndFailures(t *testing.T) {
 				func() {
 					defer invalid.Free()
 					require.NoError(t, invalid.result.PreExtendAndReset(3))
-					err := invalid.fn(invalid.parameters, invalid.result, proc, 3, nil)
+					err := invalid.fn(invalid.parameters, invalid.result, proc, 3)
 					require.Error(t, err)
 					require.False(t, moerr.IsMoErrCode(err, moerr.ErrEnumSetValueTruncated))
 					require.Zero(t, sink.total, "bad metadata never becomes an assignment warning")
@@ -231,31 +203,26 @@ func TestEnumSetAssignmentMasksAndFailures(t *testing.T) {
 			fc.expected.wanted = zero // Run verifies zero cardinality independently of source length.
 			defer fc.Free()
 			require.NoError(t, fc.result.PreExtendAndReset(0))
-			require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 0, nil))
+			require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 0))
 			require.Zero(t, fc.result.GetResultVector().Length())
 			require.Zero(t, sink.total)
 		})
 	}
 	// Exercise lazy metadata/index construction above the 64-row threshold.
-	for _, allSkipped := range []bool{false, true} {
+	func() {
 		proc := testutil.NewProcess(t)
-		func() {
-			defer proc.Free()
-			invalid := strings.Repeat("x,", types.MaxEnumLen)
-			nulls := make([]bool, 64)
-			for i := range nulls {
-				nulls[i] = true
-			}
-			input := NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"bad"}, []bool{!allSkipped})
-			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{invalid}, nil), input}, NewFunctionTestResult(types.T_enum.ToType(), false, make([]types.Enum, 64), nulls), CastValueToIndex)
-			fc.fnLength = 64
-			if allSkipped {
-				fc.selectList = &FunctionSelectList{AllNull: true}
-			}
-			ok, info := fc.RunAndFree()
-			require.True(t, ok, info)
-		}()
-	}
+		defer proc.Free()
+		invalid := strings.Repeat("x,", types.MaxEnumLen)
+		nulls := make([]bool, 64)
+		for i := range nulls {
+			nulls[i] = true
+		}
+		input := NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"bad"}, []bool{true})
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{invalid}, nil), input}, NewFunctionTestResult(types.T_enum.ToType(), false, make([]types.Enum, 64), nulls), CastValueToIndex)
+		fc.fnLength = 64
+		ok, info := fc.RunAndFree()
+		require.True(t, ok, info)
+	}()
 
 	// An adjusted row followed by bad metadata must discard pending local warnings.
 	proc := testutil.NewProcess(t)
@@ -267,7 +234,7 @@ func TestEnumSetAssignmentMasksAndFailures(t *testing.T) {
 	fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b", ""}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,x", "a"}, nil)}, NewFunctionTestResult(types.T_uint64.ToType(), true, nil, nil), CastSetValueToIndex)
 	defer fc.Free()
 	require.NoError(t, fc.result.PreExtendAndReset(2))
-	err := fc.fn(fc.parameters, fc.result, proc, 2, nil)
+	err := fc.fn(fc.parameters, fc.result, proc, 2)
 	require.Error(t, err)
 	require.False(t, moerr.IsMoErrCode(err, moerr.ErrEnumSetValueTruncated))
 	require.Zero(t, sink.total)

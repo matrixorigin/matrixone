@@ -124,24 +124,13 @@ func TestHyperbolicSelectionAndReuse(t *testing.T) {
 					input = NewFunctionTestConstInput(types.T_float64.ToType(), []float64{tc.input}, nil)
 				}
 				fc := NewFunctionTestCase(proc, []FunctionTestInput{input},
-					NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), tc.fn).
-					WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, false}})
+					NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), tc.fn)
 				defer fc.Free()
 				fc.fnLength = 3
-				result, err := fc.DebugRun()
-				require.NoError(t, err)
-				assertHyperbolicRows(t, result, []float64{tc.want, 0, 0}, []bool{false, true, true})
-
-				fc = fc.WithSelectList(&FunctionSelectList{AllNull: true})
-				result, err = fc.DebugRun()
-				require.NoError(t, err)
-				assertHyperbolicRows(t, result, []float64{0, 0, 0}, []bool{true, true, true})
-
-				fc = fc.WithSelectList(nil)
 				if !constant {
 					vector.MustFixedColNoTypeCheck[float64](fc.parameters[0])[1] = tc.input
 				}
-				result, err = fc.DebugRun()
+				result, err := fc.DebugRun()
 				require.NoError(t, err)
 				nulls := []bool{false, false, !constant}
 				assertHyperbolicRows(t, result, []float64{tc.want, tc.want, tc.want}, nulls)

@@ -53,14 +53,14 @@ func newOpBuiltInRegexp() *opBuiltInRegexp {
 	return &opBuiltInRegexp{}
 }
 
-func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	// LIKE compares with the character equivalence of its resolved text
 	// collation: utf8mb4_general_ci per-character weights, UCA 4.0.0 weight
 	// streams for the unicode_ci family, and the byte matcher for binary
 	// string domains (issue #31175).
 	fold := likeFoldModeFor(parameters[0].GetType().Charset)
 	if len(parameters) == 3 {
-		return op.likeFnWithEscape(parameters, result, proc, length, selectList, fold, false)
+		return op.likeFnWithEscape(parameters, result, proc, length, fold, false)
 	}
 
 	// MySQL compares byte-wise when either LIKE operand is a binary
@@ -70,7 +70,7 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	patternBinary := isBinaryStringVector(parameters[1], result.ArgumentIsBin(1))
 	if uniformBinary || patternBinary {
 		return op.likeByStringDomain(
-			parameters, result, proc, length, selectList, uniformBinary,
+			parameters, result, proc, length, uniformBinary,
 			patternBinary,
 			[]byte{byte(DefaultEscapeChar)}, true, fold)
 	}
@@ -80,7 +80,7 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	// represent, so unicode_ci patterns use the per-character matcher.
 	if fold == likeFoldUnicodeCI {
 		return op.likeByStringDomain(
-			parameters, result, proc, length, selectList, false, false,
+			parameters, result, proc, length, false, false,
 			[]byte{byte(DefaultEscapeChar)}, true, fold)
 	}
 
@@ -89,7 +89,7 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	rs := vector.MustFunctionResult[bool](result)
 
 	// optimize rule for some special case.
-	if parameters[1].IsConst() && !selectList.IgnoreAllRow() && selectList.ShouldEvalAllRow() {
+	if parameters[1].IsConst() {
 		if fold == likeFoldGeneralCI {
 			if optimized, err := tryGeneralCIPrefixLike(proc.Ctx, p1, p2, rs, length); optimized {
 				return err
@@ -110,13 +110,13 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	}
 
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length,
-		op.regMap.likeMatchFn(proc.Ctx, parameters[1].IsConst(), DefaultEscapeChar, true, fold), selectList)
+		op.regMap.likeMatchFn(proc.Ctx, parameters[1].IsConst(), DefaultEscapeChar, true, fold))
 }
 
-func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if len(parameters) == 3 {
 		// ILIKE keeps its historical fold-on-every-domain behavior.
-		return op.likeFnWithEscape(parameters, result, proc, length, selectList, likeFoldILike, true)
+		return op.likeFnWithEscape(parameters, result, proc, length, likeFoldILike, true)
 	}
 
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -124,7 +124,7 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 	rs := vector.MustFunctionResult[bool](result)
 
 	// optimize rule for some special case.
-	if parameters[1].IsConst() && !selectList.IgnoreAllRow() && selectList.ShouldEvalAllRow() {
+	if parameters[1].IsConst() {
 		canOptimize, err := optimizeRuleForLike(proc.Ctx, p1, p2, rs, length, ilikeFold)
 		if canOptimize {
 			return err
@@ -132,7 +132,7 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 	}
 
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length,
-		op.regMap.likeMatchFn(proc.Ctx, parameters[1].IsConst(), DefaultEscapeChar, true, likeFoldILike), selectList)
+		op.regMap.likeMatchFn(proc.Ctx, parameters[1].IsConst(), DefaultEscapeChar, true, likeFoldILike))
 }
 
 func (op *opBuiltInRegexp) likeFnWithEscape(
@@ -140,7 +140,6 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 	fold likeFoldMode,
 	foldBinaryDomain bool,
 ) error {
@@ -166,7 +165,7 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	patternBinary := isBinaryStringVector(parameters[1], result.ArgumentIsBin(1))
 	if !foldBinaryDomain && (uniformBinary || patternBinary) {
 		return op.likeByStringDomain(
-			parameters[:2], result, proc, length, selectList, uniformBinary,
+			parameters[:2], result, proc, length, uniformBinary,
 			patternBinary,
 			escapeBytes, escapeEnabled, fold)
 	}
@@ -176,7 +175,7 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	if fold == likeFoldUnicodeCI {
 		// The weight-stream matcher owns unicode_ci escapes as well.
 		return op.likeByStringDomain(
-			parameters[:2], result, proc, length, selectList, false, false,
+			parameters[:2], result, proc, length, false, false,
 			escapeBytes, escapeEnabled, fold)
 	}
 	var escape rune
@@ -184,7 +183,7 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 		escape, _ = utf8.DecodeRune(escapeBytes)
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length,
-		op.regMap.likeMatchFn(proc.Ctx, parameters[1].IsConst(), escape, escapeEnabled, fold), selectList)
+		op.regMap.likeMatchFn(proc.Ctx, parameters[1].IsConst(), escape, escapeEnabled, fold))
 }
 
 func (op *opBuiltInRegexp) likeByStringDomain(
@@ -192,7 +191,6 @@ func (op *opBuiltInRegexp) likeByStringDomain(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 	uniformBinary bool,
 	patternBinary bool,
 	escapeBytes []byte,
@@ -217,12 +215,6 @@ func (op *opBuiltInRegexp) likeByStringDomain(
 	compiledPatternReady := false
 	defer compiledPattern.free()
 	for row := uint64(0); row < uint64(length); row++ {
-		if functionRowSkipped(selectList, row) {
-			if err := rs.Append(false, true); err != nil {
-				return err
-			}
-			continue
-		}
 		value, valueNull := values.GetStrValue(row)
 		pattern, patternNull := patterns.GetStrValue(row)
 		if valueNull || patternNull {
@@ -1227,12 +1219,12 @@ func optimizeAnchoredLikeSegments(ctx context.Context, p1 vector.FunctionParamet
 	return false, nil
 }
 
-func (op *opBuiltInRegexp) builtInRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.builtInRegexpPredicate(parameters, result, length, selectList, false, false)
+func (op *opBuiltInRegexp) builtInRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return op.builtInRegexpPredicate(parameters, result, length, false, false)
 }
 
-func (op *opBuiltInRegexp) builtInNotRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.builtInRegexpPredicate(parameters, result, length, selectList, false, true)
+func (op *opBuiltInRegexp) builtInNotRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return op.builtInRegexpPredicate(parameters, result, length, false, true)
 }
 
 // builtInRegexpPredicate is shared by REGEXP/RLIKE, NOT REGEXP and
@@ -1243,7 +1235,6 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 	parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	length int,
-	selectList *FunctionSelectList,
 	like, negate bool,
 ) error {
 	if len(parameters) < 2 || len(parameters) > 3 || (!like && len(parameters) != 2) {
@@ -1277,7 +1268,7 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 						match = !match
 					}
 					return match, err
-				}, selectList)
+				})
 		}
 	}
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1289,12 +1280,6 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 	rs := vector.MustFunctionResult[bool](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if regexpRowMasked(selectList, i) {
-			if err := rs.Append(false, true); err != nil {
-				return err
-			}
-			continue
-		}
 		subject, subjectNull := p1.GetStrValue(i)
 		pattern, patternNull := p2.GetStrValue(i)
 		matchType, matchTypeNull := []byte("c"), false
@@ -1399,7 +1384,7 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 	return nil
 }
 
-func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -1407,12 +1392,6 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 	switch len(parameters) {
 	case 2:
 		for i := uint64(0); i < uint64(length); i++ {
-			if regexpRowMasked(selectList, i) {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			matchingIsBinary := regexpMatchUsesBinary(parameters, result, int(i))
@@ -1445,12 +1424,6 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 	case 3:
 		positions := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
 		for i := uint64(0); i < uint64(length); i++ {
-			if regexpRowMasked(selectList, i) {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
@@ -1489,12 +1462,6 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			matchTypes = vector.GenerateFunctionStrParameter(parameters[4])
 		}
 		for i := uint64(0); i < uint64(length); i++ {
-			if regexpRowMasked(selectList, i) {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
@@ -1548,7 +1515,7 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 	return nil
 }
 
-func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
@@ -1556,12 +1523,6 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 	switch len(parameters) {
 	case 2:
 		for i := uint64(0); i < uint64(length); i++ {
-			if regexpRowMasked(selectList, i) {
-				if err := rs.Append(0, true); err != nil {
-					return err
-				}
-				continue
-			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			matchingIsBinary := regexpMatchUsesBinary(parameters, result, int(i))
@@ -1596,12 +1557,6 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 	case 3:
 		positions := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
 		for i := uint64(0); i < uint64(length); i++ {
-			if regexpRowMasked(selectList, i) {
-				if err := rs.Append(0, true); err != nil {
-					return err
-				}
-				continue
-			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
@@ -1636,12 +1591,6 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 		positions := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
 		occurrences := vector.GenerateFunctionFixedTypeParameter[int64](parameters[3])
 		for i := uint64(0); i < uint64(length); i++ {
-			if regexpRowMasked(selectList, i) {
-				if err := rs.Append(0, true); err != nil {
-					return err
-				}
-				continue
-			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
@@ -1683,12 +1632,6 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			matchTypes = vector.GenerateFunctionStrParameter(parameters[5])
 		}
 		for i := uint64(0); i < uint64(length); i++ {
-			if regexpRowMasked(selectList, i) {
-				if err := rs.Append(0, true); err != nil {
-					return err
-				}
-				continue
-			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
@@ -1741,11 +1684,11 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 	return nil
 }
 
-func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.builtInRegexpPredicate(parameters, result, length, selectList, true, false)
+func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return op.builtInRegexpPredicate(parameters, result, length, true, false)
 }
 
-func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0]) // expr
 	p2 := vector.GenerateFunctionStrParameter(parameters[1]) // pat
 	p3 := vector.GenerateFunctionStrParameter(parameters[2]) // repl
@@ -1755,12 +1698,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 	switch len(parameters) {
 	case 3:
 		for i := uint64(0); i < uint64(length); i++ {
-			if regexpRowMasked(selectList, i) {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			v3, null3 := p3.GetStrValue(i)
@@ -1797,12 +1734,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 	case 4:
 		p4 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[3])
 		for i := uint64(0); i < uint64(length); i++ {
-			if regexpRowMasked(selectList, i) {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			v3, null3 := p3.GetStrValue(i)
@@ -1845,12 +1776,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			matchTypes = vector.GenerateFunctionStrParameter(parameters[5])
 		}
 		for i := uint64(0); i < uint64(length); i++ {
-			if regexpRowMasked(selectList, i) {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			v3, null3 := p3.GetStrValue(i)
@@ -2183,10 +2108,6 @@ func regexpMatchDomainBinary(parameters []*vector.Vector, result vector.Function
 		}
 	}
 	return binary
-}
-
-func regexpRowMasked(selectList *FunctionSelectList, row uint64) bool {
-	return selectList != nil && selectList.Contains(row)
 }
 
 type regexpSet struct {

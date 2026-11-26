@@ -103,7 +103,7 @@ func TestCurrvalResolvesDatabaseOncePerBatch(t *testing.T) {
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(4))
 
-	require.NoError(t, Currval([]*vector.Vector{input}, result, proc, 4, nil))
+	require.NoError(t, Currval([]*vector.Vector{input}, result, proc, 4))
 	for i := 0; i < 4; i++ {
 		require.Equal(t, []byte("42"), result.GetResultVector().GetBytesAt(i))
 	}
@@ -142,7 +142,7 @@ func TestCurrvalAppliesSessionCasePolicy(t *testing.T) {
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
 
-			require.NoError(t, Currval([]*vector.Vector{input}, result, proc, 1, nil))
+			require.NoError(t, Currval([]*vector.Vector{input}, result, proc, 1))
 			require.Equal(t, []byte("4242"), result.GetResultVector().GetBytesAt(0))
 		}
 	}
@@ -629,7 +629,7 @@ func TestNextvalChildProcessesSerializeMetadataAndSessionPublication(t *testing.
 		if err = result.PreExtendAndReset(1); err != nil {
 			return "", err
 		}
-		if err = Nextval([]*vector.Vector{input}, result, proc, 1, nil); err != nil {
+		if err = Nextval([]*vector.Vector{input}, result, proc, 1); err != nil {
 			return "", err
 		}
 		return string(result.GetResultVector().GetBytesAt(0)), nil
@@ -894,7 +894,7 @@ func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 		if err = result.PreExtendAndReset(1); err != nil {
 			return "", err
 		}
-		if err = Setval([]*vector.Vector{table, value}, result, proc, 1, nil); err != nil {
+		if err = Setval([]*vector.Vector{table, value}, result, proc, 1); err != nil {
 			return "", err
 		}
 		return string(result.GetResultVector().GetBytesAt(0)), nil
@@ -910,7 +910,7 @@ func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 		if err = result.PreExtendAndReset(1); err != nil {
 			return "", err
 		}
-		if err = Currval([]*vector.Vector{input}, result, proc, 1, nil); err != nil {
+		if err = Currval([]*vector.Vector{input}, result, proc, 1); err != nil {
 			return "", err
 		}
 		return string(result.GetResultVector().GetBytesAt(0)), nil
@@ -921,7 +921,7 @@ func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 		if err := result.PreExtendAndReset(1); err != nil {
 			return "", err
 		}
-		if err := Lastval(nil, result, proc, 1, nil); err != nil {
+		if err := Lastval(nil, result, proc, 1); err != nil {
 			return "", err
 		}
 		return string(result.GetResultVector().GetBytesAt(0)), nil

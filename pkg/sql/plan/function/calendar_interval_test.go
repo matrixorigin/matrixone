@@ -15,11 +15,12 @@
 package function
 
 import (
+	"math"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"math"
-	"testing"
 )
 
 func TestCalendarIntervalNormalization(t *testing.T) {
@@ -120,9 +121,4 @@ func TestToCalendarIntervalTypedVectors(t *testing.T) {
 			require.True(t, ok, info)
 		})
 	}
-	masked := NewFunctionTestCase(proc, []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.5", "999999999999999999999"}, nil),
-		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Day)}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 0}, []bool{false, true}), ToCalendarInterval).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
-	ok, info := masked.RunAndFree()
-	require.True(t, ok, info)
 }

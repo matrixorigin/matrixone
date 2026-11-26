@@ -20,17 +20,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func xorFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, result, proc, length, func(v1, v2 bool) bool { return v1 != v2 }, selectList)
+func xorFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, result, proc, length, func(v1, v2 bool) bool { return v1 != v2 })
 }
 
-func notFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func notFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryFixedToFixed[bool, bool](parameters, result, proc, length, func(v bool) bool {
 		return !v
-	}, selectList)
+	})
 }
 
-func opMultiAnd(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func opMultiAnd(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rsVec := vector.MustFunctionResult[bool](result).GetResultVector()
 	rsArr := vector.MustFixedColWithTypeCheck[bool](rsVec)
 
@@ -98,7 +98,7 @@ func opMultiAnd(params []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	return nil
 }
 
-func opMultiOr(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func opMultiOr(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rsVec := vector.MustFunctionResult[bool](result).GetResultVector()
 	rsArr := vector.MustFixedColWithTypeCheck[bool](rsVec)
 

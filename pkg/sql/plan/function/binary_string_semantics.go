@@ -76,13 +76,12 @@ func opUnaryBytesToFixedByStringDomain[T types.FixedSizeTExceptStrType](
 	length int,
 	textFn func([]byte) T,
 	binaryFn func([]byte) T,
-	selectList *FunctionSelectList,
 ) error {
 	fn := textFn
 	if isBinaryStringVector(parameters[0], result.ArgumentIsBin(0)) {
 		fn = binaryFn
 	}
-	return opUnaryBytesToFixed[T](parameters, result, proc, length, fn, selectList)
+	return opUnaryBytesToFixed[T](parameters, result, proc, length, fn)
 }
 
 func opUnaryBytesToBytesByStringDomain(
@@ -92,11 +91,10 @@ func opUnaryBytesToBytesByStringDomain(
 	length int,
 	textFn func([]byte) []byte,
 	binaryFn func([]byte) []byte,
-	selectList *FunctionSelectList,
 ) error {
 	fn := textFn
 	if isBinaryStringVector(parameters[0], result.ArgumentIsBin(0)) {
 		fn = binaryFn
 	}
-	return opUnaryBytesToBytes(parameters, result, proc, length, fn, selectList)
+	return opUnaryBytesToBytes(parameters, result, proc, length, fn)
 }

@@ -26,12 +26,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRegexp2FunctionEntryPointsPreserveMaskAndNullSemantics(t *testing.T) {
+func TestRegexp2FunctionEntryPointsPreserveNullSemantics(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	selectList := &FunctionSelectList{SelectList: []bool{true, true, true, false}}
 	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"ab", "ac", "ignored", "ab"}, []bool{false, false, true, false}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"ab", "ac", "ignored", "ab"}, []bool{false, false, true, true}),
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{`a(?=b)`, `a(?=b)`, `a(?=b)`, `a(?=b)`}, nil),
 	}
 
@@ -49,7 +48,7 @@ func TestRegexp2FunctionEntryPointsPreserveMaskAndNullSemantics(t *testing.T) {
 				inputs,
 				NewFunctionTestResult(types.T_bool.ToType(), false, tc.want, []bool{false, false, true, true}),
 				tc.fn,
-			).WithSelectList(selectList)
+			)
 			succeed, info := caseRun.RunAndFree()
 			require.True(t, succeed, info)
 		})
@@ -62,7 +61,7 @@ func TestRegexp2FunctionEntryPointsPreserveMaskAndNullSemantics(t *testing.T) {
 		likeInputs,
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false, false}, []bool{false, false, true, true}),
 		newOpBuiltInRegexp().builtInRegexpLike,
-	).WithSelectList(selectList)
+	)
 	succeed, info := like.RunAndFree()
 	require.True(t, succeed, info)
 }
@@ -98,12 +97,11 @@ func TestRegexp2FunctionEntryPointsValidateICUPatternBeforeNull(t *testing.T) {
 func TestRegexp2SearchAndReplaceEntryPoints(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	mask := &FunctionSelectList{SelectList: []bool{true, true, false}}
 
 	instr := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"zab", "za", "ignored"}, []bool{false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"zab", "za", "ignored"}, []bool{false, false, true}),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{`a(?=b)`, `a(?=b)`, `a(?=b)`}, nil),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
@@ -112,14 +110,14 @@ func TestRegexp2SearchAndReplaceEntryPoints(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2, 0, 0}, []bool{false, false, true}),
 		newOpBuiltInRegexp().builtInRegexpInstr,
-	).WithSelectList(mask)
+	)
 	succeed, info := instr.RunAndFree()
 	require.True(t, succeed, info)
 
 	substr := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"zab", "za", "ignored"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"zab", "za", "ignored"}, []bool{false, false, true}),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{`a(?=b)`, `a(?=b)`, `a(?=b)`}, nil),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
@@ -127,14 +125,14 @@ func TestRegexp2SearchAndReplaceEntryPoints(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "", ""}, []bool{false, true, true}),
 		newOpBuiltInRegexp().builtInRegexpSubstr,
-	).WithSelectList(mask)
+	)
 	succeed, info = substr.RunAndFree()
 	require.True(t, succeed, info)
 
 	replace := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"aa", "ba", "ignored"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"aa", "ba", "ignored"}, []bool{false, false, true}),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{`(a)\1`, `(a)\1`, `(a)\1`}, nil),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"<$0>", "<$0>", "<$0>"}, nil),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
@@ -143,7 +141,7 @@ func TestRegexp2SearchAndReplaceEntryPoints(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"<aa>", "ba", ""}, []bool{false, false, true}),
 		newOpBuiltInRegexp().builtInRegexpReplace,
-	).WithSelectList(mask)
+	)
 	succeed, info = replace.RunAndFree()
 	require.True(t, succeed, info)
 }

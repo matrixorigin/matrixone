@@ -21,27 +21,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := divFnImpl(parameters, result, proc, length, selectList); err != nil {
+func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if err := divFnImpl(parameters, result, proc, length); err != nil {
 		return err
 	}
-	appendDivisionByZeroWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	appendDivisionByZeroWarnings(parameters, result.GetResultVector(), proc, length)
 	return nil
 }
 
-func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := integerDivFnImpl(parameters, result, proc, length, selectList); err != nil {
+func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if err := integerDivFnImpl(parameters, result, proc, length); err != nil {
 		return err
 	}
-	appendDivisionByZeroWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	appendDivisionByZeroWarnings(parameters, result.GetResultVector(), proc, length)
 	return nil
 }
 
-func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := modFnImpl(parameters, result, proc, length, selectList); err != nil {
+func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if err := modFnImpl(parameters, result, proc, length); err != nil {
 		return err
 	}
-	appendDivisionByZeroWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	appendDivisionByZeroWarnings(parameters, result.GetResultVector(), proc, length)
 	return nil
 }
 
@@ -97,13 +97,11 @@ func ScalarDivisionNeedsRowEvaluation(parameters []*vector.Vector, proc *process
 // The kernels own values and strict DML errors. Successful scalar arithmetic
 // owns SELECT diagnostics here, including the heterogeneous integer DIV paths.
 // Batches without NULL results do not resolve variables or scan input rows.
-func appendDivisionByZeroWarnings(parameters []*vector.Vector, result *vector.Vector, proc *process.Process, length int, selectList *FunctionSelectList) {
+func appendDivisionByZeroWarnings(parameters []*vector.Vector, result *vector.Vector, proc *process.Process, length int) {
 	if length <= 0 || proc == nil || (!result.IsConstNull() && !result.GetNulls().Any()) {
 		return
 	}
-	if selectList != nil && selectList.IgnoreAllRow() {
-		return
-	}
+
 	if !proc.DivisionByZeroWarningsEnabled() {
 		return
 	}
@@ -112,35 +110,35 @@ func appendDivisionByZeroWarnings(parameters []*vector.Vector, result *vector.Ve
 	// typeswitch:partial division operators admit only float32/float64 among floats
 	switch parameters[1].GetType().Oid {
 	case types.T_int8:
-		appendTypedDivisionByZeroWarnings[int8](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[int8](parameters, result, proc, length)
 	case types.T_int16:
-		appendTypedDivisionByZeroWarnings[int16](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[int16](parameters, result, proc, length)
 	case types.T_int32:
-		appendTypedDivisionByZeroWarnings[int32](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[int32](parameters, result, proc, length)
 	case types.T_int64:
-		appendTypedDivisionByZeroWarnings[int64](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[int64](parameters, result, proc, length)
 	case types.T_uint8:
-		appendTypedDivisionByZeroWarnings[uint8](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[uint8](parameters, result, proc, length)
 	case types.T_uint16:
-		appendTypedDivisionByZeroWarnings[uint16](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[uint16](parameters, result, proc, length)
 	case types.T_uint32:
-		appendTypedDivisionByZeroWarnings[uint32](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[uint32](parameters, result, proc, length)
 	case types.T_uint64, types.T_bit:
-		appendTypedDivisionByZeroWarnings[uint64](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[uint64](parameters, result, proc, length)
 	case types.T_float32:
-		appendTypedDivisionByZeroWarnings[float32](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[float32](parameters, result, proc, length)
 	case types.T_float64:
-		appendTypedDivisionByZeroWarnings[float64](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[float64](parameters, result, proc, length)
 	case types.T_decimal64:
-		appendTypedDivisionByZeroWarnings[types.Decimal64](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[types.Decimal64](parameters, result, proc, length)
 	case types.T_decimal128:
-		appendTypedDivisionByZeroWarnings[types.Decimal128](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[types.Decimal128](parameters, result, proc, length)
 	case types.T_decimal256:
-		appendTypedDivisionByZeroWarnings[types.Decimal256](parameters, result, proc, length, selectList)
+		appendTypedDivisionByZeroWarnings[types.Decimal256](parameters, result, proc, length)
 	}
 }
 
-func appendTypedDivisionByZeroWarnings[T comparable](parameters []*vector.Vector, result *vector.Vector, proc *process.Process, length int, selectList *FunctionSelectList) {
+func appendTypedDivisionByZeroWarnings[T comparable](parameters []*vector.Vector, result *vector.Vector, proc *process.Process, length int) {
 	left, right := parameters[0], parameters[1]
 	if left.IsConstNull() || right.IsConstNull() {
 		return
@@ -149,10 +147,9 @@ func appendTypedDivisionByZeroWarnings[T comparable](parameters []*vector.Vector
 	var zero T
 	var warnings process.WarningAccumulator
 	defer warnings.Reset()
-	masked := selectList != nil && !selectList.ShouldEvalAllRow()
 	for i := 0; i < length; i++ {
 		row := uint64(i)
-		if (masked && selectList.Contains(row)) || !result.IsNull(row) || left.IsNull(row) || right.IsNull(row) {
+		if !result.IsNull(row) || left.IsNull(row) || right.IsNull(row) {
 			continue
 		}
 		index := i

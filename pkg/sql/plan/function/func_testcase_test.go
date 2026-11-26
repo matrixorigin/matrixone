@@ -76,7 +76,6 @@ type FunctionTestCase struct {
 	expected   FunctionTestResult
 	fn         executeLogicOfOverload
 	fnLength   int
-	selectList *FunctionSelectList
 }
 
 // FunctionTestInput
@@ -177,15 +176,6 @@ func NewFunctionTestCase(
 	return f
 }
 
-// WithSelectList sets the FunctionSelectList handed to the evaluated function. The
-// expression framework supplies one whenever short-circuit evaluation has masked rows off;
-// without it a test can only ever exercise the evaluate-every-row path, which is exactly
-// where a batched fast path can wrongly evaluate (and raise errors from) a masked row.
-func (fc FunctionTestCase) WithSelectList(selectList *FunctionSelectList) FunctionTestCase {
-	fc.selectList = selectList
-	return fc
-}
-
 // Free releases the case's input and result vectors. The process and evaluator
 // remain caller-owned. A borrowed result is valid only until reset or Free.
 func (fc *FunctionTestCase) Free() {
@@ -223,7 +213,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 		panic(err)
 	}
 
-	err = fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, fc.selectList)
+	err = fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength)
 	if err != nil {
 		if fc.expected.wantErr {
 			return true, ""
@@ -525,7 +515,7 @@ func (fc *FunctionTestCase) DebugRun() (*vector.Vector, error) {
 	if err := fc.result.PreExtendAndReset(fc.fnLength); err != nil {
 		return nil, err
 	}
-	err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, fc.selectList)
+	err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength)
 	return fc.result.GetResultVector(), err
 }
 
@@ -540,7 +530,7 @@ func (fc *FunctionTestCase) Benchmark(b *testing.B) {
 		if err := fc.result.PreExtendAndReset(fc.fnLength); err != nil {
 			b.Fatal(err)
 		}
-		err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, fc.selectList)
+		err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength)
 		if err != nil && !fc.expected.wantErr {
 			b.Fatal(err)
 		}
@@ -804,27 +794,13 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 		f32.Free()
 		assertReleased(t)
 
-		mask := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
 		debug := NewFunctionTestCase(proc, []FunctionTestInput{
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{-7, math.MinInt64}, nil),
-		}, NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil), AbsInt64).WithSelectList(mask)
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-9, -8}, nil),
+		}, NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil), AbsInt64)
 		defer debug.Free()
 		result, err := debug.DebugRun()
 		require.NoError(t, err)
 		require.Equal(t, types.T_int64.ToType(), *result.GetType())
-		require.Equal(t, 2, result.Length())
-		values := vector.GenerateFunctionFixedTypeParameter[int64](result)
-		value, isNull := values.GetValue(0)
-		require.False(t, isNull)
-		require.Equal(t, int64(7), value)
-		_, isNull = values.GetValue(1)
-		require.True(t, isNull)
-		require.Equal(t, []int64{-7, math.MinInt64}, vector.MustFixedColNoTypeCheck[int64](debug.parameters[0]))
-		require.Equal(t, []bool{true, false}, mask.SelectList)
-		debug.selectList = nil
-		copy(vector.MustFixedColNoTypeCheck[int64](debug.parameters[0]), []int64{-9, -8})
-		result, err = debug.DebugRun()
-		require.NoError(t, err)
 		require.Equal(t, []int64{9, 8}, vector.MustFixedColNoTypeCheck[int64](result))
 		require.False(t, result.IsNull(0))
 		require.False(t, result.IsNull(1))
@@ -881,9 +857,9 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 	})
 	t.Run("JSON borrowed subtest lifetime", func(t *testing.T) {
 		t.Run("evaluate", func(t *testing.T) {
-			vec := runJsonFunctionWithSelectList(t, proc, []FunctionTestInput{
+			vec := runJsonFunctionForTest(t, proc, []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, nil),
-			}, types.T_json.ToType(), JsonKeys, nil)
+			}, types.T_json.ToType(), JsonKeys)
 			require.Equal(t, `["a"]`, jsonVectorRowString(t, vec, 0))
 		})
 		assertReleased(t)
@@ -953,7 +929,7 @@ func TestFunctionResultMetadataContract(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1}}, nil)},
 					NewFunctionTestResult(types.T_array_float32.ToType(), false, [][]float32{tc.want}, nil),
-					func(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, _ int, _ *FunctionSelectList) error {
+					func(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, _ int) error {
 						return vector.MustFunctionResult[types.Varlena](result).AppendBytes(types.ArrayToBytes(tc.actual), false)
 					})
 				t.Cleanup(fc.Free)
@@ -989,7 +965,7 @@ func TestFunctionResultMetadataContract(t *testing.T) {
 				mask[0] = tc.null
 			}
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(typ, values, mask)}, NewFunctionTestResult(typ, false, values, mask),
-				func(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *FunctionSelectList) error {
+				func(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 					v := result.GetResultVector()
 					if length > 0 {
 						if err := vector.SetFixedAtWithTypeCheck(v, 0, types.Decimal64(123)); err != nil {

@@ -274,7 +274,7 @@ func TestXMLUpdateTextTargets(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	err = UpdateXML([]*vector.Vector{doc, xpath, replacement}, result, proc, 1, nil)
+	err = UpdateXML([]*vector.Vector{doc, xpath, replacement}, result, proc, 1)
 	require.NoError(t, err)
 	require.True(t, result.GetResultVector().IsNull(0))
 }
@@ -363,12 +363,10 @@ func TestXMLOversizedXPathAdmission(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.ErrorContains(t, ExtractValue([]*vector.Vector{doc, path}, result, proc, 1, nil), "16 KiB")
-	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, ExtractValue([]*vector.Vector{doc, path}, result, proc, 1, &FunctionSelectList{AllNull: true}))
+	require.ErrorContains(t, ExtractValue([]*vector.Vector{doc, path}, result, proc, 1), "16 KiB")
 }
 
-func TestXMLVectorWarningsMasksAndReuse(t *testing.T) {
+func TestXMLVectorWarningsAndReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	sink := &uncompressWarningSink{}
@@ -381,7 +379,7 @@ func TestXMLVectorWarningsMasksAndReuse(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(5))
-	require.NoError(t, ExtractValue([]*vector.Vector{docs, path}, result, proc, 5, nil))
+	require.NoError(t, ExtractValue([]*vector.Vector{docs, path}, result, proc, 5))
 	v := result.GetResultVector()
 	require.Equal(t, "x", v.GetStringAt(0))
 	require.True(t, v.IsNull(1))
@@ -390,22 +388,19 @@ func TestXMLVectorWarningsMasksAndReuse(t *testing.T) {
 	require.True(t, v.IsNull(4))
 	require.Equal(t, uint64(1), sink.total)
 	require.Equal(t, uint16(1525), sink.records[0].code)
-	require.NoError(t, result.PreExtendAndReset(5))
-	require.NoError(t, ExtractValue([]*vector.Vector{docs, path}, result, proc, 5, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true, true, true}}))
-	require.Equal(t, uint64(1), sink.total, "masked malformed input must not warn")
 	other, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("count(/a)"), 1, proc.Mp())
 	require.NoError(t, err)
 	defer other.Free(proc.Mp())
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, ExtractValue([]*vector.Vector{docs, other}, result, proc, 1, nil))
+	require.NoError(t, ExtractValue([]*vector.Vector{docs, other}, result, proc, 1))
 	require.Equal(t, "1", result.GetResultVector().GetStringAt(0))
 	require.NoError(t, result.PreExtendAndReset(0))
-	require.NoError(t, ExtractValue([]*vector.Vector{docs, path}, result, proc, 0, nil))
+	require.NoError(t, ExtractValue([]*vector.Vector{docs, path}, result, proc, 0))
 	badNUL, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("<a>\x002</a>"), 1, proc.Mp())
 	require.NoError(t, err)
 	defer badNUL.Free(proc.Mp())
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, ExtractValue([]*vector.Vector{badNUL, path}, result, proc, 1, nil))
+	require.NoError(t, ExtractValue([]*vector.Vector{badNUL, path}, result, proc, 1))
 	require.True(t, result.GetResultVector().IsNull(0))
 	require.Equal(t, uint64(2), sink.total)
 	require.Equal(t, uint16(1525), sink.records[1].code)
@@ -461,9 +456,9 @@ func TestXMLWarningRetentionUsesProcessLimits(t *testing.T) {
 
 			var callErr error
 			if tc.update {
-				callErr = UpdateXML(parameters, result, proc, tc.rowCount, nil)
+				callErr = UpdateXML(parameters, result, proc, tc.rowCount)
 			} else {
-				callErr = ExtractValue(parameters, result, proc, tc.rowCount, nil)
+				callErr = ExtractValue(parameters, result, proc, tc.rowCount)
 			}
 			require.NoError(t, callErr)
 			require.Equal(t, uint64(tc.rowCount), warnings.total)
@@ -483,10 +478,8 @@ func TestXMLXPathPrecedesNullDocument(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.ErrorContains(t, ExtractValue([]*vector.Vector{doc, path}, result, proc, 1, nil), "XPATH")
+	require.ErrorContains(t, ExtractValue([]*vector.Vector{doc, path}, result, proc, 1), "XPATH")
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, ExtractValue([]*vector.Vector{doc, path}, result, proc, 1, &FunctionSelectList{AllNull: true}))
-	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, ExtractValue([]*vector.Vector{path, doc}, result, proc, 1, nil))
+	require.NoError(t, ExtractValue([]*vector.Vector{path, doc}, result, proc, 1))
 	require.True(t, result.GetResultVector().IsNull(0))
 }

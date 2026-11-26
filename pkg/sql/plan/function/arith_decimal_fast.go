@@ -1756,8 +1756,8 @@ func d128ModDiffScaleYPow10(x, y types.Decimal128, pow10a uint64, twoStep bool, 
 // ---- Decimal128 integer division ----
 
 // d128IntDivKernel returns a closure for Decimal128 → int64 integer division.
-func d128IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+func d128IntDivKernel(proc *process.Process) func(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+	shouldError := checkDivisionByZeroBehavior(proc)
 	return func(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 		return d128IntDiv(v1, v2, rs, scale1, scale2, rsnull, shouldError)
 	}
@@ -3930,8 +3930,8 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 // ---- Decimal256 integer division ----
 
 // d256IntDivKernel returns a closure for Decimal256 → int64 integer division.
-func d256IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+func d256IntDivKernel(proc *process.Process) func(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+	shouldError := checkDivisionByZeroBehavior(proc)
 	return func(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 		return d256IntDiv(v1, v2, rs, scale1, scale2, rsnull, shouldError)
 	}
@@ -5211,8 +5211,8 @@ func d64Mod(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 // ---- Decimal64 integer division ----
 
 // d64IntDivKernel returns a closure for Decimal64 to int64 integer division.
-func d64IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+func d64IntDivKernel(proc *process.Process) func(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+	shouldError := checkDivisionByZeroBehavior(proc)
 	return func(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 		return d64IntDiv(v1, v2, rs, scale1, scale2, rsnull, shouldError)
 	}

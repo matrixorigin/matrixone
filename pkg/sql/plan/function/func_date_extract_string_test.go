@@ -312,8 +312,8 @@ func TestDateExtractStringFunctionsIncompleteDates(t *testing.T) {
 func TestDateStringToStringCallbackInvalid(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	input := NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-01-15"}, nil)
-	fn := func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-		return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(dateExtractParts) (string, bool) {
+	fn := func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+		return dateStringToStringWithNullOnError(ivecs, result, proc, length, func(dateExtractParts) (string, bool) {
 			return "", false
 		})
 	}
@@ -321,70 +321,4 @@ func TestDateStringToStringCallbackInvalid(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}), fn)
 	success, info := ftc.RunAndFree()
 	require.True(t, success, info)
-}
-
-func TestDateExtractStringFunctionsIgnoreAllRows(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	input := NewFunctionTestInput(types.T_varchar.ToType(),
-		[]string{"2024-01-15", "not-a-date"}, nil)
-
-	for _, tc := range []struct {
-		name       string
-		resultType types.Type
-		fn         executeLogicOfOverload
-	}{
-		{
-			name:       "dayofmonth",
-			resultType: types.T_uint8.ToType(),
-			fn:         DateStringToDay,
-		},
-		{
-			name:       "dayname",
-			resultType: types.T_varchar.ToType(),
-			fn:         DateStringToDayName,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ftc := NewFunctionTestCase(proc, []FunctionTestInput{input},
-				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
-			defer ftc.Free()
-			require.NoError(t, ftc.result.PreExtendAndReset(ftc.fnLength))
-			require.NoError(t, tc.fn(ftc.parameters, ftc.result, ftc.proc, ftc.fnLength,
-				&FunctionSelectList{AllNull: true}))
-
-			result := ftc.result.GetResultVector()
-			require.Equal(t, ftc.fnLength, result.Length())
-			for i := uint64(0); i < uint64(ftc.fnLength); i++ {
-				require.Truef(t, result.GetNulls().Contains(i), "row %d should be NULL", i)
-			}
-		})
-	}
-}
-
-func TestDateExtractStringFunctionsSelectList(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	input := NewFunctionTestInput(types.T_varchar.ToType(),
-		[]string{"2024-01-15", "2024-12-31"}, nil)
-
-	for _, tc := range []struct {
-		name       string
-		resultType types.Type
-		fn         executeLogicOfOverload
-	}{
-		{name: "dayofmonth", resultType: types.T_uint8.ToType(), fn: DateStringToDay},
-		{name: "dayname", resultType: types.T_varchar.ToType(), fn: DateStringToDayName},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ftc := NewFunctionTestCase(proc, []FunctionTestInput{input},
-				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
-			defer ftc.Free()
-			require.NoError(t, ftc.result.PreExtendAndReset(ftc.fnLength))
-			require.NoError(t, tc.fn(ftc.parameters, ftc.result, ftc.proc, ftc.fnLength,
-				&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
-
-			result := ftc.result.GetResultVector()
-			require.False(t, result.GetNulls().Contains(0))
-			require.True(t, result.GetNulls().Contains(1))
-		})
-	}
 }

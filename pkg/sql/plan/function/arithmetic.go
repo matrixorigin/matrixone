@@ -105,10 +105,9 @@ func multiOperatorSupports(typ1, typ2 types.Type) bool {
 // comparisons, and storage under a narrower type tag.
 func decimal256BatchArith(parameters []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int,
-	arithFn func(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error,
-	selectList *FunctionSelectList) error {
+	arithFn func(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error) error {
 	if err := decimalBatchArith[types.Decimal256, types.Decimal256](
-		parameters, result, proc, length, arithFn, selectList); err != nil {
+		parameters, result, proc, length, arithFn); err != nil {
 		return err
 	}
 
@@ -148,7 +147,7 @@ func checkDecimal256ResultPrecision(resultVector *vector.Vector, proc *process.P
 // decimal256Multiply uses the already resolved Decimal256 storage directly.
 // No capture callback, cached type proof or temporary scalar slice is needed.
 func decimal256Multiply(parameters []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	proc *process.Process, length int) error {
 	if length == 0 {
 		return nil
 	}
@@ -170,8 +169,7 @@ func decimal256Multiply(parameters []*vector.Vector, result vector.FunctionResul
 		rightNulls = nil
 	}
 	nulls.Or(leftNulls, rightNulls, resultNulls)
-	done, _ := maskUnselectedRows(resultNulls, selectList, length)
-	if done || !hasEvaluableRows(resultNulls, length) {
+	if !hasEvaluableRows(resultNulls, length) {
 		return nil
 	}
 	v1 := vector.MustFixedColNoTypeCheck[types.Decimal256](left)
@@ -326,55 +324,27 @@ func modOperatorSupports(typ1, typ2 types.Type) bool {
 	return true
 }
 
-func vectorScalarOp[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, op string, selectList *FunctionSelectList) (err error) {
+func vectorScalarOp[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, op string) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	num := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
 
-	if selectList == nil || !selectList.ShouldEvalAllRow() {
-		for i := uint64(0); i < uint64(length); i++ {
-			vec, null1 := vs.GetStrValue(i)
-			sca, null2 := num.GetValue(i)
+	for i := uint64(0); i < uint64(length); i++ {
+		vec, null1 := vs.GetStrValue(i)
+		sca, null2 := num.GetValue(i)
 
-			if null1 || null2 {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				out, err := moarray.ScalarOp[T](types.BytesToArray[T](vec), op, float64(sca))
-				if err != nil {
-					return err
-				}
-
-				if err = rs.AppendBytes(types.ArrayToBytes[T](out), false); err != nil {
-					return err
-				}
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
 			}
-		}
-	} else {
-		for i := uint64(0); i < uint64(length); i++ {
-			if selectList.Contains(i) {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
+		} else {
+			out, err := moarray.ScalarOp[T](types.BytesToArray[T](vec), op, float64(sca))
+			if err != nil {
+				return err
 			}
-			vec, null1 := vs.GetStrValue(i)
-			sca, null2 := num.GetValue(i)
 
-			if null1 || null2 {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				out, err := moarray.ScalarOp[T](types.BytesToArray[T](vec), op, float64(sca))
-				if err != nil {
-					return err
-				}
-
-				if err = rs.AppendBytes(types.ArrayToBytes[T](out), false); err != nil {
-					return err
-				}
+			if err = rs.AppendBytes(types.ArrayToBytes[T](out), false); err != nil {
+				return err
 			}
 		}
 	}
@@ -382,7 +352,7 @@ func vectorScalarOp[T types.RealNumbers](ivecs []*vector.Vector, result vector.F
 	return nil
 }
 
-func plusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func plusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	vectorIdx, scalarIdx := 0, 1
 	if parameters[1].GetType().Oid.IsArrayRelate() {
 		vectorIdx, scalarIdx = 1, 0
@@ -390,20 +360,20 @@ func plusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResul
 
 	vectorAndScalarParams := []*vector.Vector{parameters[vectorIdx], parameters[scalarIdx]}
 	if parameters[vectorIdx].GetType().Oid == types.T_array_float32 {
-		return vectorScalarOp[float32](vectorAndScalarParams, result, proc, length, "+", selectList)
+		return vectorScalarOp[float32](vectorAndScalarParams, result, proc, length, "+")
 	} else {
-		return vectorScalarOp[float64](vectorAndScalarParams, result, proc, length, "+", selectList)
+		return vectorScalarOp[float64](vectorAndScalarParams, result, proc, length, "+")
 	}
 }
 
-func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	// Check result type first, as it may differ from parameter types after type conversion
 	resultType := result.GetResultVector().GetType()
 
 	// If result type is decimal128, use decimal128 handler
 	// This handles cases like decimal64 + float64 where both are converted to decimal128
 	if resultType.Oid == types.T_decimal128 {
-		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Add, selectList)
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Add)
 	}
 
 	paramType := parameters[0].GetType()
@@ -412,147 +382,145 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	case types.T_bit:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
 			return addUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint8, uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) (uint8, error) {
 			return addUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint16, uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) (uint16, error) {
 			return addUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint32, uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) (uint32, error) {
 			return addUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
 			return addUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int8, int8, int8](parameters, result, proc, length, func(v1, v2 int8) (int8, error) {
 			return addSignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_int16:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int16, int16, int16](parameters, result, proc, length, func(v1, v2 int16) (int16, error) {
 			return addSignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_int32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int32, int32, int32](parameters, result, proc, length, func(v1, v2 int32) (int32, error) {
 			return addSignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_int64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int64, int64, int64](parameters, result, proc, length, func(v1, v2 int64) (int64, error) {
 			return addSignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_float32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
 			return addFloat32WithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_float64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
 			return addFloat64WithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_decimal64:
-		return decimalBatchArith[types.Decimal64, types.Decimal64](parameters, result, proc, length, d64Add, selectList)
+		return decimalBatchArith[types.Decimal64, types.Decimal64](parameters, result, proc, length, d64Add)
 	case types.T_decimal128:
-		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Add, selectList)
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Add)
 	case types.T_decimal256:
-		return decimal256BatchArith(parameters, result, proc, length, d256Add, selectList)
-
+		return decimal256BatchArith(parameters, result, proc, length, d256Add)
 	case types.T_array_float32:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float32], selectList)
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float32])
 	case types.T_array_float64:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float64], selectList)
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float64])
 	}
 	panic("unreached code")
 }
 
-func minusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func minusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	vectorIdx, scalarIdx := 0, 1
 	vectorAndScalarParams := []*vector.Vector{parameters[vectorIdx], parameters[scalarIdx]}
 	if parameters[vectorIdx].GetType().Oid == types.T_array_float32 {
-		return vectorScalarOp[float32](vectorAndScalarParams, result, proc, length, "-", selectList)
+		return vectorScalarOp[float32](vectorAndScalarParams, result, proc, length, "-")
 	} else {
-		return vectorScalarOp[float64](vectorAndScalarParams, result, proc, length, "-", selectList)
+		return vectorScalarOp[float64](vectorAndScalarParams, result, proc, length, "-")
 	}
 }
 
-func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_bit:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
 			return subUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint8, uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) (uint8, error) {
 			return subUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint16, uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) (uint16, error) {
 			return subUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint32, uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) (uint32, error) {
 			return subUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
 			return subUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int8, int8, int8](parameters, result, proc, length, func(v1, v2 int8) (int8, error) {
 			return subSignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_int16:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int16, int16, int16](parameters, result, proc, length, func(v1, v2 int16) (int16, error) {
 			return subSignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_int32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int32, int32, int32](parameters, result, proc, length, func(v1, v2 int32) (int32, error) {
 			return subSignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_int64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int64, int64, int64](parameters, result, proc, length, func(v1, v2 int64) (int64, error) {
 			return subSignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_float32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
 			return subFloat32WithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_float64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
 			return subFloat64WithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_decimal64:
-		return decimalBatchArith[types.Decimal64, types.Decimal64](parameters, result, proc, length, d64Sub, selectList)
+		return decimalBatchArith[types.Decimal64, types.Decimal64](parameters, result, proc, length, d64Sub)
 	case types.T_decimal128:
-		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Sub, selectList)
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Sub)
 	case types.T_decimal256:
-		return decimal256BatchArith(parameters, result, proc, length, d256Sub, selectList)
-
+		return decimal256BatchArith(parameters, result, proc, length, d256Sub)
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, int64](parameters, result, proc, length, func(v1, v2 types.Date) int64 {
 			return int64(v1 - v2)
-		}, selectList)
+		})
 	case types.T_datetime:
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, int64](parameters, result, proc, length, func(v1, v2 types.Datetime) int64 {
 			return v1.DatetimeMinusWithSecond(v2)
-		}, selectList)
+		})
 	case types.T_array_float32:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[float32], selectList)
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[float32])
 	case types.T_array_float64:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[float64], selectList)
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[float64])
 	case types.T_year:
 		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, int64](parameters, result, proc, length, func(v1, v2 types.MoYear) int64 {
 			return int64(v1 - v2)
-		}, selectList)
+		})
 	}
 	panic("unreached code")
 }
 
-func multiFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func multiFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	vectorIdx, scalarIdx := 0, 1
 	if parameters[1].GetType().Oid.IsArrayRelate() {
 		vectorIdx, scalarIdx = 1, 0
@@ -560,140 +528,139 @@ func multiFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResu
 
 	vectorAndScalarParams := []*vector.Vector{parameters[vectorIdx], parameters[scalarIdx]}
 	if parameters[vectorIdx].GetType().Oid == types.T_array_float32 {
-		return vectorScalarOp[float32](vectorAndScalarParams, result, proc, length, "*", selectList)
+		return vectorScalarOp[float32](vectorAndScalarParams, result, proc, length, "*")
 	} else {
-		return vectorScalarOp[float64](vectorAndScalarParams, result, proc, length, "*", selectList)
+		return vectorScalarOp[float64](vectorAndScalarParams, result, proc, length, "*")
 	}
 }
 
-func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_bit:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
 			return mulUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint8, uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) (uint8, error) {
 			return mulUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_uint16:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint16, uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) (uint16, error) {
 			return mulUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_uint32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint32, uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) (uint32, error) {
 			return mulUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_uint64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
 			return mulUnsignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_int8:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int8, int8, int8](parameters, result, proc, length, func(v1, v2 int8) (int8, error) {
 			return mulSignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_int16:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int16, int16, int16](parameters, result, proc, length, func(v1, v2 int16) (int16, error) {
 			return mulSignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_int32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int32, int32, int32](parameters, result, proc, length, func(v1, v2 int32) (int32, error) {
 			return mulSignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_int64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[int64, int64, int64](parameters, result, proc, length, func(v1, v2 int64) (int64, error) {
 			return mulSignedWithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_float32:
 		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
 			return mulFloat32WithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_float64:
 		return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
 			return mulFloat64WithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_decimal64:
-		return decimalBatchArith[types.Decimal64, types.Decimal128](parameters, result, proc, length, d64Mul, selectList)
+		return decimalBatchArith[types.Decimal64, types.Decimal128](parameters, result, proc, length, d64Mul)
 	case types.T_decimal128:
-		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Mul, selectList)
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Mul)
 	case types.T_decimal256:
-		return decimal256Multiply(parameters, result, proc, length, selectList)
-
+		return decimal256Multiply(parameters, result, proc, length)
 	case types.T_array_float32:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float32], selectList)
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float32])
 	case types.T_array_float64:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float64], selectList)
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float64])
 	case types.T_year:
 		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, int64](parameters, result, proc, length, func(v1, v2 types.MoYear) int64 {
 			return int64(v1) * int64(v2)
-		}, selectList)
+		})
 	}
 	panic("unreached code")
 }
 
-func divFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func divFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	vectorIdx, scalarIdx := 0, 1
 	vectorAndScalarParams := []*vector.Vector{parameters[vectorIdx], parameters[scalarIdx]}
 	if parameters[vectorIdx].GetType().Oid == types.T_array_float32 {
-		return vectorScalarOp[float32](vectorAndScalarParams, result, proc, length, "/", selectList)
+		return vectorScalarOp[float32](vectorAndScalarParams, result, proc, length, "/")
 	} else {
-		return vectorScalarOp[float64](vectorAndScalarParams, result, proc, length, "/", selectList)
+		return vectorScalarOp[float64](vectorAndScalarParams, result, proc, length, "/")
 	}
 }
 
-func divFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func divFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	// typeswitch:partial divOperatorSupports admits only float32/float64 and vecf32/vecf64 operands
 	switch paramType.Oid {
 	case types.T_float32:
 		return specialTemplateForDivFunction[float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
 			return divFloat32WithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_float64:
 		return specialTemplateForDivFunction[float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
 			return divFloat64WithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_decimal64:
-		shouldError := checkDivisionByZeroBehavior(proc, selectList)
+		shouldError := checkDivisionByZeroBehavior(proc)
 		resultScale := result.GetResultVector().GetType().Scale
-		return decimalBatchArith[types.Decimal64, types.Decimal128](parameters, result, proc, length, d64DivKernelAtScale(shouldError, resultScale), selectList)
+		return decimalBatchArith[types.Decimal64, types.Decimal128](parameters, result, proc, length, d64DivKernelAtScale(shouldError, resultScale))
 	case types.T_decimal128:
-		shouldError := checkDivisionByZeroBehavior(proc, selectList)
+		shouldError := checkDivisionByZeroBehavior(proc)
 		resultScale := result.GetResultVector().GetType().Scale
-		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128DivKernelAtScale(shouldError, resultScale), selectList)
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128DivKernelAtScale(shouldError, resultScale))
 	case types.T_decimal256:
-		shouldError := checkDivisionByZeroBehavior(proc, selectList)
+		shouldError := checkDivisionByZeroBehavior(proc)
 		resultScale := result.GetResultVector().GetType().Scale
-		return decimal256BatchArith(parameters, result, proc, length, d256DivKernelAtScale(shouldError, resultScale), selectList)
+		return decimal256BatchArith(parameters, result, proc, length, d256DivKernelAtScale(shouldError, resultScale))
 	case types.T_array_float32:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float32], selectList)
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float32])
 	case types.T_array_float64:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float64], selectList)
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float64])
 	case types.T_year:
 		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, float64](parameters, result, proc, length, func(v1, v2 types.MoYear) float64 {
 			if v2 == 0 {
 				return math.NaN()
 			}
 			return float64(v1) / float64(v2)
-		}, selectList)
+		})
 	}
 	panic("unreached code")
 }
 
-func integerDivFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func integerDivFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if integerDivBitResolvedTypes(*parameters[0].GetType(), *parameters[1].GetType()) {
 		if parameters[1].GetType().Oid == types.T_int64 {
-			return integerDivBitSigned(parameters, result, proc, length, selectList)
+			return integerDivBitSigned(parameters, result, proc, length)
 		}
-		return integerDivBitUnsigned(parameters, result, proc, length, selectList)
+		return integerDivBitUnsigned(parameters, result, proc, length)
 	}
 
 	if integerDivUnsignedMixedResolvedTypes(*parameters[0].GetType(), *parameters[1].GetType()) {
 		if parameters[1].GetType().Oid == types.T_int64 {
-			return integerDivUnsignedSigned(parameters, result, proc, length, selectList)
+			return integerDivUnsignedSigned(parameters, result, proc, length)
 		}
-		return integerDivUnsignedDecimal256(parameters, result, proc, length, selectList)
+		return integerDivUnsignedDecimal256(parameters, result, proc, length)
 	}
 
 	paramType := parameters[0].GetType()
@@ -701,29 +668,29 @@ func integerDivFnImpl(parameters []*vector.Vector, result vector.FunctionResultW
 	switch paramType.Oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		// Signed integers -> int64 result
-		return integerDivSigned(parameters, result, proc, length, selectList)
+		return integerDivSigned(parameters, result, proc, length)
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		// Unsigned integers -> uint64 result
-		return integerDivUnsigned(parameters, result, proc, length, selectList)
+		return integerDivUnsigned(parameters, result, proc, length)
 	case types.T_float32:
 		return specialTemplateForDivFunction[float32, int64](parameters, result, proc, length, func(v1, v2 float32) (int64, error) {
 			return floatDivToInt64WithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_float64:
 		return specialTemplateForDivFunction[float64, int64](parameters, result, proc, length, func(v1, v2 float64) (int64, error) {
 			return floatDivToInt64WithOverflowCheck(proc.Ctx, v1, v2)
-		}, selectList)
+		})
 	case types.T_decimal64:
-		return decimalBatchArith[types.Decimal64, int64](parameters, result, proc, length, d64IntDivKernel(proc, selectList), selectList)
+		return decimalBatchArith[types.Decimal64, int64](parameters, result, proc, length, d64IntDivKernel(proc))
 	case types.T_decimal128:
-		return decimalBatchArith[types.Decimal128, int64](parameters, result, proc, length, d128IntDivKernel(proc, selectList), selectList)
+		return decimalBatchArith[types.Decimal128, int64](parameters, result, proc, length, d128IntDivKernel(proc))
 	case types.T_decimal256:
-		return decimalBatchArith[types.Decimal256, int64](parameters, result, proc, length, d256IntDivKernel(proc, selectList), selectList)
+		return decimalBatchArith[types.Decimal256, int64](parameters, result, proc, length, d256IntDivKernel(proc))
 	}
 	panic("unreached code")
 }
 
-func integerDivBitSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func integerDivBitSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if length == 0 {
 		return nil
 	}
@@ -734,17 +701,9 @@ func integerDivBitSigned(parameters []*vector.Vector, result vector.FunctionResu
 	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, parameters[1])
 	rss := vector.MustFixedColNoTypeCheck[uint64](rs.GetResultVector())
 	rsNull := rs.GetResultVector().GetNulls()
-	done, skipMasked := maskUnselectedRows(rsNull, selectList, length)
-	if done {
-		return nil
-	}
-
 	constantLeft, constantRight := parameters[0].IsConst(), parameters[1].IsConst()
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	shouldError := checkDivisionByZeroBehavior(proc)
 	for i := uint64(0); i < uint64(length); i++ {
-		if skipMasked && rsNull.Contains(i) {
-			continue
-		}
 		leftIndex, rightIndex := i, i
 		if constantLeft {
 			leftIndex = 0
@@ -782,7 +741,7 @@ func integerDivBitSigned(parameters []*vector.Vector, result vector.FunctionResu
 	return nil
 }
 
-func integerDivBitUnsigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func integerDivBitUnsigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if length == 0 {
 		return nil
 	}
@@ -793,17 +752,9 @@ func integerDivBitUnsigned(parameters []*vector.Vector, result vector.FunctionRe
 	p2 := vector.OptGetParamFromWrapper[uint64](rs, 1, parameters[1])
 	rss := vector.MustFixedColNoTypeCheck[uint64](rs.GetResultVector())
 	rsNull := rs.GetResultVector().GetNulls()
-	done, skipMasked := maskUnselectedRows(rsNull, selectList, length)
-	if done {
-		return nil
-	}
-
 	constantLeft, constantRight := parameters[0].IsConst(), parameters[1].IsConst()
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	shouldError := checkDivisionByZeroBehavior(proc)
 	for i := uint64(0); i < uint64(length); i++ {
-		if skipMasked && rsNull.Contains(i) {
-			continue
-		}
 		leftIndex, rightIndex := i, i
 		if constantLeft {
 			leftIndex = 0
@@ -829,31 +780,8 @@ func integerDivBitUnsigned(parameters []*vector.Vector, result vector.FunctionRe
 	return nil
 }
 
-// maskUnselectedRows marks rows short-circuited by selectList (e.g. the
-// untaken branch of CASE/IF) as NULL so kernels skip them; per-row checks
-// such as overflow or division by zero must not fire on masked rows.
-// done means every row is masked and the caller can return immediately.
-func maskUnselectedRows(rsNull *nulls.Nulls, selectList *FunctionSelectList, length int) (done bool, skipMasked bool) {
-	if selectList == nil {
-		return false, false
-	}
-	if selectList.IgnoreAllRow() {
-		rsNull.AddRange(0, uint64(length))
-		return true, false
-	}
-	if !selectList.ShouldEvalAllRow() {
-		for i := 0; i < length; i++ {
-			if selectList.Contains(uint64(i)) {
-				rsNull.Add(uint64(i))
-			}
-		}
-		return false, true
-	}
-	return false, false
-}
-
 // integerDivSigned handles DIV for signed integer types
-func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if length == 0 {
 		return nil
 	}
@@ -863,20 +791,12 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
 	rsNull := rsVec.GetNulls()
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
-	done, skipMasked := maskUnselectedRows(rsNull, selectList, length)
-	if done {
-		return nil
-	}
-
+	shouldError := checkDivisionByZeroBehavior(proc)
 	switch paramType.Oid {
 	case types.T_int8:
 		p1 := vector.GenerateFunctionFixedTypeParameter[int8](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[int8](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
-			if skipMasked && rsNull.Contains(i) {
-				continue
-			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -892,9 +812,6 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 		p1 := vector.GenerateFunctionFixedTypeParameter[int16](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[int16](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
-			if skipMasked && rsNull.Contains(i) {
-				continue
-			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -910,9 +827,6 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 		p1 := vector.GenerateFunctionFixedTypeParameter[int32](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[int32](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
-			if skipMasked && rsNull.Contains(i) {
-				continue
-			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -928,9 +842,6 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 		p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
-			if skipMasked && rsNull.Contains(i) {
-				continue
-			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -952,7 +863,7 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-func integerDivUnsignedSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func integerDivUnsignedSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if length == 0 {
 		return nil
 	}
@@ -963,13 +874,8 @@ func integerDivUnsignedSigned(parameters []*vector.Vector, result vector.Functio
 	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, parameters[1])
 	rss := vector.MustFixedColNoTypeCheck[int64](rs.GetResultVector())
 	rsNull := rs.GetResultVector().GetNulls()
-	done, _ := maskUnselectedRows(rsNull, selectList, length)
-	if done {
-		return nil
-	}
-
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	shouldError := checkDivisionByZeroBehavior(proc)
 	for i := uint64(0); i < uint64(length); i++ {
 		if rsNull.Contains(i) {
 			continue
@@ -1017,7 +923,7 @@ func integerDivUnsignedSigned(parameters []*vector.Vector, result vector.Functio
 	return nil
 }
 
-func integerDivUnsignedDecimal256(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func integerDivUnsignedDecimal256(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if length == 0 {
 		return nil
 	}
@@ -1028,11 +934,6 @@ func integerDivUnsignedDecimal256(parameters []*vector.Vector, result vector.Fun
 	p2 := vector.OptGetParamFromWrapper[types.Decimal256](rs, 1, parameters[1])
 	rss := vector.MustFixedColNoTypeCheck[int64](rs.GetResultVector())
 	rsNull := rs.GetResultVector().GetNulls()
-	done, _ := maskUnselectedRows(rsNull, selectList, length)
-	if done {
-		return nil
-	}
-
 	if parameters[0].IsConst() {
 		_, null1 := p1.GetValue(0)
 		if null1 {
@@ -1069,7 +970,7 @@ func integerDivUnsignedDecimal256(parameters []*vector.Vector, result vector.Fun
 		}
 	}
 	v2 := p2.UnSafeGetAllValue()
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	shouldError := checkDivisionByZeroBehavior(proc)
 	if err := d256IntDiv(v1, v2, rss, 0, parameters[1].GetType().Scale, rsNull, shouldError); err != nil {
 		return err
 	}
@@ -1083,7 +984,7 @@ func integerDivUnsignedDecimal256(parameters []*vector.Vector, result vector.Fun
 }
 
 // integerDivUnsigned handles DIV for unsigned integer types
-func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if length == 0 {
 		return nil
 	}
@@ -1093,20 +994,12 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
 	rsNull := rsVec.GetNulls()
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
-	done, skipMasked := maskUnselectedRows(rsNull, selectList, length)
-	if done {
-		return nil
-	}
-
+	shouldError := checkDivisionByZeroBehavior(proc)
 	switch paramType.Oid {
 	case types.T_uint8:
 		p1 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
-			if skipMasked && rsNull.Contains(i) {
-				continue
-			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -1122,9 +1015,6 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 		p1 := vector.GenerateFunctionFixedTypeParameter[uint16](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[uint16](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
-			if skipMasked && rsNull.Contains(i) {
-				continue
-			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -1140,9 +1030,6 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 		p1 := vector.GenerateFunctionFixedTypeParameter[uint32](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[uint32](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
-			if skipMasked && rsNull.Contains(i) {
-				continue
-			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -1158,9 +1045,6 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 		p1 := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[0])
 		p2 := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[1])
 		for i := uint64(0); i < uint64(length); i++ {
-			if skipMasked && rsNull.Contains(i) {
-				continue
-			}
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
@@ -1181,63 +1065,63 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 	return nil
 }
 
-func modFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func modFnImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	// typeswitch:partial modOperatorSupports admits only float32/float64 among floats
 	switch paramType.Oid {
 	case types.T_bit:
 		return specialTemplateForModFunction[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
 			return v1 % v2
-		}, selectList)
+		})
 	case types.T_uint8:
 		return specialTemplateForModFunction[uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 % v2
-		}, selectList)
+		})
 	case types.T_uint16:
 		return specialTemplateForModFunction[uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
 			return v1 % v2
-		}, selectList)
+		})
 	case types.T_uint32:
 		return specialTemplateForModFunction[uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
 			return v1 % v2
-		}, selectList)
+		})
 	case types.T_uint64:
 		return specialTemplateForModFunction[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
 			return v1 % v2
-		}, selectList)
+		})
 	case types.T_int8:
 		return specialTemplateForModFunction[int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
 			return v1 % v2
-		}, selectList)
+		})
 	case types.T_int16:
 		return specialTemplateForModFunction[int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
 			return v1 % v2
-		}, selectList)
+		})
 	case types.T_int32:
 		return specialTemplateForModFunction[int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
 			return v1 % v2
-		}, selectList)
+		})
 	case types.T_int64:
 		return specialTemplateForModFunction[int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
 			return v1 % v2
-		}, selectList)
+		})
 	case types.T_float32:
 		return specialTemplateForModFunction[float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
 			return float32(math.Mod(float64(v1), float64(v2)))
-		}, selectList)
+		})
 	case types.T_float64:
 		return specialTemplateForModFunction[float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
 			return math.Mod(v1, v2)
-		}, selectList)
+		})
 	case types.T_decimal64:
-		shouldError := checkDivisionByZeroBehavior(proc, selectList)
-		return decimalBatchArith[types.Decimal64, types.Decimal64](parameters, result, proc, length, d64ModKernel(shouldError), selectList)
+		shouldError := checkDivisionByZeroBehavior(proc)
+		return decimalBatchArith[types.Decimal64, types.Decimal64](parameters, result, proc, length, d64ModKernel(shouldError))
 	case types.T_decimal128:
-		shouldError := checkDivisionByZeroBehavior(proc, selectList)
-		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128ModKernel(shouldError), selectList)
+		shouldError := checkDivisionByZeroBehavior(proc)
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128ModKernel(shouldError))
 	case types.T_decimal256:
-		shouldError := checkDivisionByZeroBehavior(proc, selectList)
-		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256ModKernel(shouldError), selectList)
+		shouldError := checkDivisionByZeroBehavior(proc)
+		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256ModKernel(shouldError))
 	}
 	panic("unreached code")
 }

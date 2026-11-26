@@ -15,12 +15,13 @@
 package function
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestUnaryInactiveExecutionContracts(t *testing.T) {
@@ -34,72 +35,72 @@ func TestUnaryInactiveExecutionContracts(t *testing.T) {
 		execute func(*int) executeLogicOfOverload
 	}{
 		{"opUnaryFixedToFixed", NewFunctionTestConstInput(types.T_int64.ToType(), []int64{7}, nil), types.T_int64.ToType(), []int64{9, 9}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryFixedToFixed(parameters, result, proc, length, func(v int64) int64 { (*calls)++; return int64(9) }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryFixedToFixed(parameters, result, proc, length, func(v int64) int64 { (*calls)++; return int64(9) })
 			}
 		}},
 		{"opUnaryBytesToFixed", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"input"}, nil), types.T_int64.ToType(), []int64{9, 9}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryBytesToFixed(parameters, result, proc, length, func(v []byte) int64 { (*calls)++; return int64(9) }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryBytesToFixed(parameters, result, proc, length, func(v []byte) int64 { (*calls)++; return int64(9) })
 			}
 		}},
 		{"opUnaryBytesToBytes", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"input"}, nil), types.T_varchar.ToType(), []string{"result", "result"}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte { (*calls)++; return []byte("result") }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte { (*calls)++; return []byte("result") })
 			}
 		}},
 		{"opUnaryFixedToStr", NewFunctionTestConstInput(types.T_int64.ToType(), []int64{7}, nil), types.T_varchar.ToType(), []string{"result", "result"}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryFixedToStr(parameters, result, proc, length, func(v int64) string { (*calls)++; return "result" }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryFixedToStr(parameters, result, proc, length, func(v int64) string { (*calls)++; return "result" })
 			}
 		}},
 		{"opUnaryFixedToStrWithNullOnError", NewFunctionTestConstInput(types.T_int64.ToType(), []int64{7}, nil), types.T_varchar.ToType(), []string{"result", "result"}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryFixedToStrWithNullOnError(parameters, result, proc, length, func(v int64) (string, error) { (*calls)++; return "result", nil }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryFixedToStrWithNullOnError(parameters, result, proc, length, func(v int64) (string, error) { (*calls)++; return "result", nil })
 			}
 		}},
 		{"opUnaryFixedToStrWithErrorCheck", NewFunctionTestConstInput(types.T_int64.ToType(), []int64{7}, nil), types.T_varchar.ToType(), []string{"result", "result"}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryFixedToStrWithErrorCheck(parameters, result, proc, length, func(v int64) (string, error) { (*calls)++; return "result", nil }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryFixedToStrWithErrorCheck(parameters, result, proc, length, func(v int64) (string, error) { (*calls)++; return "result", nil })
 			}
 		}},
 		{"opUnaryStrToBytesWithRowErrorCheck", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"input"}, nil), types.T_varchar.ToType(), []string{"result", "result"}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryStrToBytesWithRowErrorCheck(parameters, result, length, func(v string, row int) ([]byte, error) { (*calls)++; return []byte("result"), nil }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryStrToBytesWithRowErrorCheck(parameters, result, length, func(v string, row int) ([]byte, error) { (*calls)++; return []byte("result"), nil })
 			}
 		}},
 		{"opUnaryBytesToBytesWithErrorCheck", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"input"}, nil), types.T_varchar.ToType(), []string{"result", "result"}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryBytesToBytesWithErrorCheck(parameters, result, proc, length, func(v []byte) ([]byte, error) { (*calls)++; return []byte("result"), nil }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryBytesToBytesWithErrorCheck(parameters, result, proc, length, func(v []byte) ([]byte, error) { (*calls)++; return []byte("result"), nil })
 			}
 		}},
 		{"opUnaryBytesToBytesWithResultNull", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"input"}, nil), types.T_varchar.ToType(), []string{"result", "result"}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryBytesToBytesWithResultNull(parameters, result, proc, length, func(v []byte) ([]byte, bool, error) { (*calls)++; return []byte("result"), false, nil }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryBytesToBytesWithResultNull(parameters, result, proc, length, func(v []byte) ([]byte, bool, error) { (*calls)++; return []byte("result"), false, nil })
 			}
 		}},
 		{"opUnaryBytesToBytesWithNullOnError", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"input"}, nil), types.T_varchar.ToType(), []string{"result", "result"}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryBytesToBytesWithNullOnError(parameters, result, proc, length, func(v []byte) ([]byte, error) { (*calls)++; return []byte("result"), nil }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryBytesToBytesWithNullOnError(parameters, result, proc, length, func(v []byte) ([]byte, error) { (*calls)++; return []byte("result"), nil })
 			}
 		}},
 		{"opUnaryBytesToStrWithRowErrorCheck", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"input"}, nil), types.T_varchar.ToType(), []string{"result", "result"}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryBytesToStrWithRowErrorCheck(parameters, result, length, func(v []byte, row int) (string, error) { (*calls)++; return "result", nil }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryBytesToStrWithRowErrorCheck(parameters, result, length, func(v []byte, row int) (string, error) { (*calls)++; return "result", nil })
 			}
 		}},
 		{"opUnaryFixedToFixedWithErrorCheck", NewFunctionTestConstInput(types.T_int64.ToType(), []int64{7}, nil), types.T_int64.ToType(), []int64{9, 9}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryFixedToFixedWithErrorCheck(parameters, result, proc, length, func(v int64) (int64, error) { (*calls)++; return int64(9), nil }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryFixedToFixedWithErrorCheck(parameters, result, proc, length, func(v int64) (int64, error) { (*calls)++; return int64(9), nil })
 			}
 		}},
 		{"opUnaryFixedToFixedWithNullCheck", NewFunctionTestConstInput(types.T_int64.ToType(), []int64{7}, nil), types.T_int64.ToType(), []int64{9, 9}, func(calls *int) executeLogicOfOverload {
-			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-				return opUnaryFixedToFixedWithNullCheck(parameters, result, length, func(v int64) (int64, bool) { (*calls)++; return int64(9), false }, selection)
+			return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				return opUnaryFixedToFixedWithNullCheck(parameters, result, length, func(v int64) (int64, bool) { (*calls)++; return int64(9), false })
 			}
 		}},
 	}
-	// Every distinct owner must suppress constant work for empty and fully masked batches.
+	// Every distinct owner must suppress constant work for empty batches.
 	// Shape and metadata controls are concentrated on the fixed owner and the special string owner.
 	for _, tc := range cases {
 		shapes := []bool{true}
@@ -112,14 +113,13 @@ func TestUnaryInactiveExecutionContracts(t *testing.T) {
 				shape = "constant"
 			}
 			t.Run(tc.name+"/"+shape, func(t *testing.T) {
-				states := []string{"empty", "all bitmap"}
+				states := []string{"empty"}
 				if tc.name == "opUnaryFixedToFixed" || tc.name == "opUnaryFixedToStrWithNullOnError" {
-					states = []string{"empty", "all flag", "all bitmap", "partial", "active", "NULL", "stale bitmap"}
+					states = []string{"empty", "active", "NULL"}
 				}
 				for _, state := range states {
 					t.Run(state, func(t *testing.T) {
 						length := 2
-						selection := (*FunctionSelectList)(nil)
 						nullList := []bool(nil)
 						input := tc.input
 						wanted := tc.wanted
@@ -142,36 +142,19 @@ func TestUnaryInactiveExecutionContracts(t *testing.T) {
 							} else {
 								wanted = []string{}
 							}
-						case "all flag":
-							selection = &FunctionSelectList{AllNull: true}
-							nullList = []bool{true, true}
-							expectCalls = 0
-						case "all bitmap":
-							selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, false}}
-							nullList = []bool{true, true}
-							expectCalls = 0
-						case "partial":
-							selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{false}}
-							nullList = []bool{true, false}
-							expectCalls = 1
-						case "stale bitmap":
-							selection = &FunctionSelectList{AnyNull: false, SelectList: []bool{false, false}}
 						case "NULL":
 							input.nullList = []bool{true, true}
 							nullList = []bool{true, true}
 							expectCalls = 0
 						}
 						calls := 0
-						fc := NewFunctionTestCase(proc, []FunctionTestInput{input}, NewFunctionTestResult(tc.target, false, wanted, nullList), tc.execute(&calls)).WithSelectList(selection)
+						fc := NewFunctionTestCase(proc, []FunctionTestInput{input}, NewFunctionTestResult(tc.target, false, wanted, nullList), tc.execute(&calls))
 						t.Cleanup(fc.Free)
 						fc.fnLength = length
 						ok, info := fc.Run()
 						t.Logf("calls=%d expected=%d", calls, expectCalls)
 						require.True(t, ok, info)
 						require.Equal(t, expectCalls, calls)
-						if state == "all bitmap" {
-							require.False(t, fc.result.GetResultVector().GetNulls().Contains(uint64(length)), "mask tail must not escape the batch")
-						}
 					})
 				}
 			})
@@ -189,7 +172,7 @@ func TestUnaryInactiveExecutionContracts(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			calls := 0
-			fn := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, n int, selection *FunctionSelectList) error {
+			fn := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, n int) error {
 				if stringsResult {
 					return opUnaryFixedToStrWithNullOnError(parameters, result, p, n, func(v int64) (string, error) {
 						calls++
@@ -200,9 +183,9 @@ func TestUnaryInactiveExecutionContracts(t *testing.T) {
 							return "first", nil
 						}
 						return "second", nil
-					}, selection)
+					})
 				}
-				return opUnaryFixedToFixed(parameters, result, p, n, func(v int64) int64 { calls++; return v + 1 }, selection)
+				return opUnaryFixedToFixed(parameters, result, p, n, func(v int64) int64 { calls++; return v + 1 })
 			}
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestConstInput(types.T_int64.ToType(), []int64{7}, nil)}, NewFunctionTestResult(target, false, wanted, []bool{true, true}), fn)
 			t.Cleanup(fc.Free)
@@ -211,19 +194,14 @@ func TestUnaryInactiveExecutionContracts(t *testing.T) {
 			if stringsResult {
 				steps = 5
 			}
-			for step := 0; step < steps; step++ {
-				if step == 0 {
-					fc.selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, false}}
-				} else {
-					fc.selectList = nil
-					fc.expected.nullList = nil
-					if step == 2 {
-						vector.MustFixedColNoTypeCheck[int64](fc.parameters[0])[0] = 11
-						if stringsResult {
-							fc.expected.wanted = []string{"second", "second"}
-						} else {
-							fc.expected.wanted = []int64{12, 12}
-						}
+			for step := 1; step < steps; step++ {
+				fc.expected.nullList = nil
+				if step == 2 {
+					vector.MustFixedColNoTypeCheck[int64](fc.parameters[0])[0] = 11
+					if stringsResult {
+						fc.expected.wanted = []string{"second", "second"}
+					} else {
+						fc.expected.wanted = []int64{12, 12}
 					}
 				}
 				if step == 3 {
@@ -246,30 +224,20 @@ func TestUnaryInactiveExecutionContracts(t *testing.T) {
 			if bytesInput {
 				name = "bytes"
 			}
-			for _, state := range []string{"empty", "all flag", "all bitmap", "active error"} {
+			for _, state := range []string{"empty", "active error"} {
 				t.Run(name+"/"+state, func(t *testing.T) {
 					calls := 0
 					length := 2
-					selection := (*FunctionSelectList)(nil)
 					if state == "empty" {
 						length = 0
 					}
-					if state == "all flag" {
-						selection = &FunctionSelectList{AllNull: true}
-					}
-					if state == "all bitmap" {
-						selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, false}}
-					}
-					if state == "active error" {
-						selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{false}}
-					}
-					fn := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, n int, s *FunctionSelectList) error {
+					fn := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, n int) error {
 						if bytesInput {
-							return opUnaryBytesToFixedWithErrorCheck(parameters, result, p, n, func(v []byte) (int64, error) { calls++; return 0, moerr.NewInvalidInputNoCtx("inactive row evaluated") }, s)
+							return opUnaryBytesToFixedWithErrorCheck(parameters, result, p, n, func(v []byte) (int64, error) { calls++; return 0, moerr.NewInvalidInputNoCtx("inactive row evaluated") })
 						}
-						return opUnaryStrToFixedWithErrorCheck(parameters, result, p, n, func(v string) (int64, error) { calls++; return 0, moerr.NewInvalidInputNoCtx("inactive row evaluated") }, s)
+						return opUnaryStrToFixedWithErrorCheck(parameters, result, p, n, func(v string) (int64, error) { calls++; return 0, moerr.NewInvalidInputNoCtx("inactive row evaluated") })
 					}
-					fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"bad"}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, nil), fn).WithSelectList(selection)
+					fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"bad"}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, nil), fn)
 					t.Cleanup(fc.Free)
 					fc.fnLength = length
 					actual, err := fc.DebugRun()
@@ -293,33 +261,6 @@ func TestUnaryInactiveExecutionContracts(t *testing.T) {
 	})
 }
 
-func TestUnaryStringConsumerSelection(t *testing.T) {
-	proc := newMemoryFunctionTestProcess(t)
-	t.Cleanup(func() {
-		proc.Free()
-		require.Zero(t, proc.Mp().CurrNB())
-		require.Zero(t, proc.Mp().OnHeapCurrNB())
-	})
-	input := NewFunctionTestInput(types.T_varchar.ToType(), []string{"a\x00é", "", "masked", "source NULL"}, []bool{false, false, false, true})
-	mask := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false, true}}
-	for _, tc := range []struct {
-		name     string
-		fn       executeLogicOfOverload
-		expected FunctionTestResult
-	}{
-		{"length", Length, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4, 0, 0, 0}, []bool{false, false, true, true})},
-		{"bit length", BitLengthFunc, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{32, 0, 0, 0}, []bool{false, false, true, true})},
-		{"hex", HexString, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"6100C3A9", "", "", ""}, []bool{false, false, true, true})},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expected, tc.fn).WithSelectList(mask)
-			t.Cleanup(fc.Free)
-			ok, info := fc.Run()
-			require.True(t, ok, info)
-		})
-	}
-}
-
 func TestUnaryStringErrorPreservesAdmissionAndReuse(t *testing.T) {
 	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
@@ -331,17 +272,17 @@ func TestUnaryStringErrorPreservesAdmissionAndReuse(t *testing.T) {
 	var observed error
 	var visited []string
 	fail := true
-	fn := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, length int, selection *FunctionSelectList) error {
+	fn := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, length int) error {
 		observed = opUnaryStrToFixedWithErrorCheck(parameters, result, p, length, func(v string) (int64, error) {
 			visited = append(visited, v)
 			if fail && v == "failure" {
 				return 99, sentinel
 			}
 			return int64(len(v)), nil
-		}, selection)
+		})
 		return observed
 	}
-	fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"a\x00é", "source NULL", "masked", "failure", "after"}, []bool{false, true, false, false, false})}, NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), fn).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false, true, true}})
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"a\x00é", "source NULL", "source NULL", "failure", "after"}, []bool{false, true, true, false, false})}, NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), fn)
 	t.Cleanup(fc.Free)
 	ok, info := fc.Run()
 	require.True(t, ok, info)
@@ -367,14 +308,14 @@ func TestUnaryBytesResultCopiesBorrowedCallbackBytes(t *testing.T) {
 	})
 	scratch := make([]byte, 24)
 	calls := 0
-	fn := func(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int, s *FunctionSelectList) error {
+	fn := func(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int) error {
 		return opUnaryBytesToBytes(p, r, proc, n, func(v []byte) []byte {
 			calls++
 			for i := range scratch {
 				scratch[i] = v[0]
 			}
 			return scratch
-		}, s)
+		})
 	}
 	fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "b"}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"aaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbb"}, nil), fn)
 	t.Cleanup(fc.Free)
@@ -396,7 +337,7 @@ func TestUnaryStringDecimalPrefixCastConsumer(t *testing.T) {
 		require.Zero(t, proc.Mp().CurrNB())
 		require.Zero(t, proc.Mp().OnHeapCurrNB())
 	})
-	input := NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.25tail", "source NULL", "masked bad", "2.50tail"}, []bool{false, true, false, false})
+	input := NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.25tail", "source NULL", "source NULL", "2.50tail"}, []bool{false, true, true, false})
 	for _, tc := range []struct {
 		name   string
 		typ    types.Type
@@ -408,7 +349,7 @@ func TestUnaryStringDecimalPrefixCastConsumer(t *testing.T) {
 		{"decimal256", types.NewWithCharset(types.T_decimal256, 65, 2, 255), []types.Decimal256{}, []types.Decimal256{{B0_63: 125}, {}, {}, {B0_63: 250}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fc := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(tc.typ, tc.empty, nil)}, NewFunctionTestResult(tc.typ, false, tc.wanted, []bool{false, true, true, false}), NewCast).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false, true}})
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(tc.typ, tc.empty, nil)}, NewFunctionTestResult(tc.typ, false, tc.wanted, []bool{false, true, true, false}), NewCast)
 			t.Cleanup(fc.Free)
 			ok, info := fc.Run()
 			require.True(t, ok, info)
@@ -424,8 +365,8 @@ func TestBinaryFixedExecutionContracts(t *testing.T) {
 		require.Zero(t, proc.Mp().OnHeapCurrNB())
 	})
 	calls := 0
-	fn := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
-		return opBinaryFixedFixedToFixed(parameters, result, proc, length, func(left, right int64) int64 { calls++; return left + right }, selection)
+	fn := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+		return opBinaryFixedFixedToFixed(parameters, result, proc, length, func(left, right int64) int64 { calls++; return left + right })
 	}
 	flat := NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2, 3}, nil)
 	right := NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 20, 30}, nil)
@@ -435,42 +376,31 @@ func TestBinaryFixedExecutionContracts(t *testing.T) {
 		left, right FunctionTestInput
 		wanted      []int64
 		nulls       []bool
-		selection   *FunctionSelectList
 		calls       int
 	}{
-		{"empty constants", constant, constant, []int64{}, nil, nil, 0},
-		{"all bitmap constants", constant, constant, []int64{0, 0}, []bool{true, true}, &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, false}}, 0},
-		{"all flag", flat, right, []int64{0, 0, 0}, []bool{true, true, true}, &FunctionSelectList{AllNull: true}, 0},
-		{"left constant partial", constant, right, []int64{17, 0, 37}, []bool{false, true, false}, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}, 2},
-		{"right constant short mask", flat, constant, []int64{0, 9, 10}, []bool{true, false, false}, &FunctionSelectList{AnyNull: true, SelectList: []bool{false}}, 2},
-		{"source null and mask union", NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2, 3}, []bool{false, true, false}), right, []int64{0, 0, 33}, []bool{true, true, false}, &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}}, 1},
-		{"stale bitmap ignored", constant, constant, []int64{14, 14}, nil, &FunctionSelectList{SelectList: []bool{false, false, false}}, 1},
-		{"tail outside batch", flat, right, []int64{11, 22}, nil, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false}}, 2},
+		{"empty constants", constant, constant, []int64{}, nil, 0},
+		{"constants", constant, constant, []int64{14, 14}, nil, 1},
+		{"left constant", constant, right, []int64{17, 27, 37}, nil, 3},
+		{"right constant", flat, constant, []int64{8, 9, 10}, nil, 3},
+		{"source null", NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2, 3}, []bool{false, true, false}), right, []int64{11, 0, 33}, []bool{false, true, false}, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls = 0
-			c := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, NewFunctionTestResult(types.T_int64.ToType(), false, tc.wanted, tc.nulls), fn).WithSelectList(tc.selection)
+			c := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, NewFunctionTestResult(types.T_int64.ToType(), false, tc.wanted, tc.nulls), fn)
 			t.Cleanup(c.Free)
 			c.fnLength = len(tc.wanted)
 			ok, info := c.Run()
 			require.True(t, ok, info)
 			require.Equal(t, tc.calls, calls)
-			require.False(t, c.GetResultVectorDirectly().GetNulls().Contains(uint64(c.fnLength)), "mask tail must not escape the batch")
 		})
 	}
 
-	t.Run("masked to active with changed constant", func(t *testing.T) {
+	t.Run("reuse with changed constant", func(t *testing.T) {
 		calls = 0
-		c := NewFunctionTestCase(proc, []FunctionTestInput{constant, right}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{true, true}), fn)
+		c := NewFunctionTestCase(proc, []FunctionTestInput{constant, right}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{17, 27}, nil), fn)
 		t.Cleanup(c.Free)
 		c.fnLength = 2
-		c.selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, false}}
 		ok, info := c.Run()
-		require.True(t, ok, info)
-		require.Zero(t, calls)
-		c.selectList = nil
-		c.expected.wanted, c.expected.nullList = []int64{17, 27}, nil
-		ok, info = c.Run()
 		require.True(t, ok, info)
 		require.Equal(t, 2, calls)
 		vector.MustFixedColNoTypeCheck[int64](c.parameters[0])[0] = 9

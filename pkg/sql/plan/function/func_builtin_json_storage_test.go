@@ -139,12 +139,11 @@ func TestJsonStorageSize(t *testing.T) {
 		require.True(t, succeed, info)
 	})
 
-	t.Run("select list skips malformed row", func(t *testing.T) {
-		vec := runJsonFunctionWithSelectList(t, proc,
+	t.Run("NULL row skips malformed value", func(t *testing.T) {
+		vec := runJsonFunctionForTest(t, proc,
 			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-json", `"x"`}, nil),
-			}, types.T_int64.ToType(), JsonStorageSize,
-			&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-json", `"x"`}, []bool{true, false}),
+			}, types.T_int64.ToType(), JsonStorageSize)
 		require.True(t, vec.IsNull(0))
 		value, isNull := vector.GenerateFunctionFixedTypeParameter[int64](vec).GetValue(1)
 		require.False(t, isNull)
@@ -181,12 +180,11 @@ func TestJsonStorageFree(t *testing.T) {
 		require.True(t, succeed, info)
 	})
 
-	t.Run("select list skips malformed row", func(t *testing.T) {
-		vec := runJsonFunctionWithSelectList(t, proc,
+	t.Run("NULL row skips malformed value", func(t *testing.T) {
+		vec := runJsonFunctionForTest(t, proc,
 			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-json", `"x"`}, nil),
-			}, types.T_int64.ToType(), JsonStorageFree,
-			&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-json", `"x"`}, []bool{true, false}),
+			}, types.T_int64.ToType(), JsonStorageFree)
 		require.True(t, vec.IsNull(0))
 		value, isNull := vector.GenerateFunctionFixedTypeParameter[int64](vec).GetValue(1)
 		require.False(t, isNull)
@@ -272,7 +270,7 @@ func TestJsonStorageSizeUsesPersistedSpecialByteJson(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(len(values)))
-	require.NoError(t, JsonStorageSize([]*vector.Vector{input}, result, proc, len(values), nil))
+	require.NoError(t, JsonStorageSize([]*vector.Vector{input}, result, proc, len(values)))
 	got := vector.GenerateFunctionFixedTypeParameter[int64](result.GetResultVector())
 	for i, expected := range want {
 		value, isNull := got.GetValue(uint64(i))
@@ -320,7 +318,7 @@ func TestJsonStorageErrorRecoveryAfterInvalidText(t *testing.T) {
 				input.ResetWithSameType()
 				require.NoError(t, vector.AppendBytes(input, []byte(text), false, proc.Mp()))
 				require.NoError(t, result.PreExtendAndReset(1))
-				return tc.fn([]*vector.Vector{input}, result, proc, 1, nil)
+				return tc.fn([]*vector.Vector{input}, result, proc, 1)
 			}
 
 			require.NoError(t, run(`{"a":1}`))

@@ -264,7 +264,7 @@ func TestAESCBCInvalidIVErrorCodes(t *testing.T) {
 				NewFunctionTestResult(tt.resultType, true, nil, nil), tt.fn)
 			defer caseData.Free()
 			require.NoError(t, caseData.result.PreExtendAndReset(caseData.fnLength))
-			err := caseData.fn(caseData.parameters, caseData.result, caseData.proc, caseData.fnLength, nil)
+			err := caseData.fn(caseData.parameters, caseData.result, caseData.proc, caseData.fnLength)
 			require.Error(t, err)
 			code, ok := moerr.GetMoErrCode(err)
 			require.True(t, ok)
@@ -276,7 +276,7 @@ func TestAESCBCInvalidIVErrorCodes(t *testing.T) {
 	}
 }
 
-func TestAESCBCInvalidIVInMaskedRowIsIgnored(t *testing.T) {
+func TestAESCBCInvalidIVInNullRowIsIgnored(t *testing.T) {
 	proc := newAESProcess(t, "aes-256-cbc")
 	plain := "active row"
 	key := "key"
@@ -288,19 +288,13 @@ func TestAESCBCInvalidIVInMaskedRowIsIgnored(t *testing.T) {
 
 	caseData := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"masked row", plain}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"masked row", plain}, []bool{true, false}),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{key, key}, nil),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"short", validIV}, nil),
 		},
 		NewFunctionTestResult(types.T_blob.ToType(), false,
 			[]string{"", string(wantCiphertext)}, []bool{true, false}),
-		AESEncrypt).WithSelectList(&FunctionSelectList{
-		AnyNull: true,
-		SelectList: []bool{
-			false,
-			true,
-		},
-	})
+		AESEncrypt)
 	ok, info := caseData.RunAndFree()
 	require.True(t, ok, info)
 }

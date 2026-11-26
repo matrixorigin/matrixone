@@ -105,23 +105,23 @@ func (operand integerDomainOperand) value(row uint64) (types.Decimal128, bool) {
 	return types.Decimal128{B0_63: v}, null
 }
 
-func mixedUnsignedPlusFn(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int, selected *FunctionSelectList) error {
+func mixedUnsignedPlusFn(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int) error {
 	if isMixedInt64Uint64(p) {
-		return mixedUnsignedAddMul(p, r, proc, n, selected, false)
+		return mixedUnsignedAddMul(p, r, proc, n, false)
 	}
-	return checkedIntegerArithmetic[uint64](p, r, proc, n, selected, "+", types.Decimal128.Add128)
+	return checkedIntegerArithmetic[uint64](p, r, proc, n, "+", types.Decimal128.Add128)
 }
-func mixedUnsignedMinusFn(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int, selected *FunctionSelectList) error {
-	return checkedIntegerArithmetic[uint64](p, r, proc, n, selected, "-", types.Decimal128.Sub128)
+func mixedUnsignedMinusFn(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int) error {
+	return checkedIntegerArithmetic[uint64](p, r, proc, n, "-", types.Decimal128.Sub128)
 }
-func mixedUnsignedMultiFn(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int, selected *FunctionSelectList) error {
+func mixedUnsignedMultiFn(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int) error {
 	if isMixedInt64Uint64(p) {
-		return mixedUnsignedAddMul(p, r, proc, n, selected, true)
+		return mixedUnsignedAddMul(p, r, proc, n, true)
 	}
-	return checkedIntegerArithmetic[uint64](p, r, proc, n, selected, "*", types.Decimal128.Mul128)
+	return checkedIntegerArithmetic[uint64](p, r, proc, n, "*", types.Decimal128.Mul128)
 }
-func signedUnsignedMinusFn(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int, selected *FunctionSelectList) error {
-	return checkedIntegerArithmetic[int64](p, r, proc, n, selected, "-", types.Decimal128.Sub128)
+func signedUnsignedMinusFn(p []*vector.Vector, r vector.FunctionResultWrapper, proc *process.Process, n int) error {
+	return checkedIntegerArithmetic[int64](p, r, proc, n, "-", types.Decimal128.Sub128)
 }
 
 func isMixedInt64Uint64(p []*vector.Vector) bool {
@@ -132,7 +132,7 @@ func isMixedInt64Uint64(p []*vector.Vector) bool {
 // Only genuine mixed pairs use this path. Existing same-sign overload-2 inputs
 // keep checkedIntegerArithmetic's behavior. Normalize reading roles without
 // converting negative signed operands into unsigned mathematical values.
-func mixedUnsignedAddMul(p []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, n int, selected *FunctionSelectList, multiply bool) error {
+func mixedUnsignedAddMul(p []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, n int, multiply bool) error {
 	signed, unsigned := p[0], p[1]
 	if signed.GetType().Oid == types.T_uint64 {
 		signed, unsigned = unsigned, signed
@@ -142,12 +142,6 @@ func mixedUnsignedAddMul(p []*vector.Vector, result vector.FunctionResultWrapper
 	sourceSigned := vector.OptGetParamFromWrapper[int64](out, 0, signed)
 	sourceUnsigned := vector.OptGetParamFromWrapper[uint64](out, 1, unsigned)
 	for i := uint64(0); i < uint64(n); i++ {
-		if selected != nil && (selected.IgnoreAllRow() || selected.Contains(i)) {
-			if err := out.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		s, sn := sourceSigned.GetValue(i)
 		u, un := sourceUnsigned.GetValue(i)
 		if sn || un {
@@ -206,7 +200,7 @@ func mixedUnsignedAddMulError(ctx context.Context, s int64, u uint64, multiply b
 // result before checking its signed or unsigned output domain.
 func checkedIntegerArithmetic[T int64 | uint64](
 	p []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process,
-	n int, selected *FunctionSelectList, operator string,
+	n int, operator string,
 	op func(types.Decimal128, types.Decimal128) (types.Decimal128, error),
 ) error {
 	left := newIntegerDomainOperand(p[0])
@@ -222,12 +216,6 @@ func checkedIntegerArithmetic[T int64 | uint64](
 		domain = "BIGINT"
 	}
 	for i := uint64(0); i < uint64(n); i++ {
-		if selected != nil && (selected.IgnoreAllRow() || selected.Contains(i)) {
-			if err := out.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		a, an := left.value(i)
 		b, bn := right.value(i)
 		if an || bn {

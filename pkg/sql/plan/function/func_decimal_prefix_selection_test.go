@@ -28,7 +28,7 @@ func TestDecimalPrefixSelectionContracts(t *testing.T) {
 			if constant {
 				shape = "constant"
 			}
-			for _, state := range []string{"active", "partial", "all masked", "all bitmap", "empty", "NULL"} {
+			for _, state := range []string{"active", "empty", "NULL"} {
 				t.Run(oid.String()+"/"+shape+"/"+state, func(t *testing.T) {
 					input := NewFunctionTestInput(types.T_varchar.ToType(), []string{"12tail", "12tail"}, nil)
 					if constant {
@@ -36,21 +36,8 @@ func TestDecimalPrefixSelectionContracts(t *testing.T) {
 					}
 					length := 2
 					nulls := []bool(nil)
-					selection := (*FunctionSelectList)(nil)
 					if state == "NULL" {
 						input.nullList = []bool{true, true}
-						nulls = []bool{true, true}
-					}
-					if state == "partial" {
-						selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
-						nulls = []bool{true, false}
-					}
-					if state == "all masked" {
-						selection = &FunctionSelectList{AllNull: true}
-						nulls = []bool{true, true}
-					}
-					if state == "all bitmap" {
-						selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false}}
 						nulls = []bool{true, true}
 					}
 					if state == "empty" {
@@ -68,7 +55,7 @@ func TestDecimalPrefixSelectionContracts(t *testing.T) {
 					if length == 0 {
 						wanted = emptyCastTargetValues(target)
 					}
-					fc := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(target, emptyCastTargetValues(target), nil)}, NewFunctionTestResult(target, false, wanted, nulls), NewCast).WithSelectList(selection)
+					fc := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(target, emptyCastTargetValues(target), nil)}, NewFunctionTestResult(target, false, wanted, nulls), NewCast)
 					t.Cleanup(fc.Free)
 					fc.fnLength = length
 					ok, info := fc.Run()

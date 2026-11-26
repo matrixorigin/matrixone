@@ -93,7 +93,7 @@ func BenchmarkDateTruncFixedVector(b *testing.B) {
 				if err := result.PreExtendAndReset(count); err != nil {
 					b.Fatal(err)
 				}
-				if err := DateTrunc([]*vector.Vector{units, input}, result, proc, count, nil); err != nil {
+				if err := DateTrunc([]*vector.Vector{units, input}, result, proc, count); err != nil {
 					b.Fatal(err)
 				}
 				fixedTruncBenchmarkSink = vector.GetFixedAtWithTypeCheck[types.Datetime](result.GetResultVector(), count-1)

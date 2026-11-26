@@ -49,10 +49,10 @@ func newTextReservationFixture(t *testing.T, typ types.Type, values [][]byte) (*
 }
 
 func runTextReservationCast(proc *process.Process, source *vector.Vector, result vector.FunctionResultWrapper,
-	typ types.Type, length int, mode castMode, selected *FunctionSelectList) error {
+	typ types.Type, length int, mode castMode) error {
 	return strToStr(context.Background(), proc, vector.GenerateFunctionStrParameter(source),
 		vector.MustFunctionResult[types.Varlena](result), length, typ,
-		mode.strictStringWidth(), true, true, mode, selected)
+		mode.strictStringWidth(), true, true, mode)
 }
 
 func TestTextAssignmentReservationPreservesOwnedResults(t *testing.T) {
@@ -65,7 +65,7 @@ func TestTextAssignmentReservationPreservesOwnedResults(t *testing.T) {
 
 			target := vector.NewVec(typ, proc.Mp())
 			t.Cleanup(func() { target.Free(proc.Mp()) })
-			require.NoError(t, NewAssignCast([]*vector.Vector{source, target}, result, proc, len(values), nil))
+			require.NoError(t, NewAssignCast([]*vector.Vector{source, target}, result, proc, len(values)))
 			out := result.GetResultVector()
 			require.Equal(t, typ, *out.GetType())
 			require.Equal(t, len(values), out.Length())
@@ -83,7 +83,7 @@ func TestTextAssignmentReservationPreservesOwnedResults(t *testing.T) {
 
 			// Reuse of a result with enough capacity must preserve the new input.
 			require.NoError(t, result.PreExtendAndReset(len(values)))
-			require.NoError(t, runTextReservationCast(proc, source, result, typ, len(values), castModeStrictStringWidth, nil))
+			require.NoError(t, runTextReservationCast(proc, source, result, typ, len(values), castModeStrictStringWidth))
 			require.Equal(t, byte('a'), result.GetResultVector().GetBytesAt(0)[0])
 			require.Equal(t, byte('y'), result.GetResultVector().GetBytesAt(3)[0])
 		})
@@ -96,7 +96,7 @@ func TestTextAssignmentReservationAvoidsRepeatedAreaGrowth(t *testing.T) {
 		bytes.Repeat([]byte("c"), 4097), bytes.Repeat([]byte("d"), 8193)}
 	proc, source, result := newTextReservationFixture(t, typ, values)
 	allocsBefore := proc.Mp().Stats().NumAlloc.Load()
-	require.NoError(t, runTextReservationCast(proc, source, result, typ, len(values), castModeStrictStringWidth, nil))
+	require.NoError(t, runTextReservationCast(proc, source, result, typ, len(values), castModeStrictStringWidth))
 	require.Equal(t, int64(1), proc.Mp().Stats().NumAlloc.Load()-allocsBefore,
 		"all non-inline values should fit in one result-area allocation")
 	for i, value := range values {
@@ -110,7 +110,7 @@ func TestTextAssignmentReservationKeepsDiagnosticsAndSelection(t *testing.T) {
 
 	t.Run("strict rejects at original row", func(t *testing.T) {
 		proc, source, result := newTextReservationFixture(t, typ, values)
-		err := runTextReservationCast(proc, source, result, typ, len(values), castModeStrictStringWidth, nil)
+		err := runTextReservationCast(proc, source, result, typ, len(values), castModeStrictStringWidth)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCastWidthExceeded), "%v", err)
 		require.Equal(t, 1, result.GetResultVector().Length())
 		require.Equal(t, values[0], result.GetResultVector().GetBytesAt(0))
@@ -119,23 +119,11 @@ func TestTextAssignmentReservationKeepsDiagnosticsAndSelection(t *testing.T) {
 		proc, source, result := newTextReservationFixture(t, typ, values)
 		sink := &numericWarningSession{}
 		proc.WarningSink = sink
-		require.NoError(t, runTextReservationCast(proc, source, result, typ, len(values), castModeAssignment, nil))
+		require.NoError(t, runTextReservationCast(proc, source, result, typ, len(values), castModeAssignment))
 		require.Equal(t, values[1][:30], result.GetResultVector().GetBytesAt(1))
 		require.Len(t, sink.warnings, 1)
 		require.Equal(t, moerr.WARN_DATA_TRUNCATED, sink.warnings[0].code)
 		require.Contains(t, sink.warnings[0].msg, "row 2")
-	})
-	t.Run("unselected overlong row stays null", func(t *testing.T) {
-		proc, source, result := newTextReservationFixture(t, typ, values)
-		sink := &numericWarningSession{}
-		proc.WarningSink = sink
-		selected := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
-		require.NoError(t, runTextReservationCast(proc, source, result, typ, len(values), castModeStrictStringWidth, selected))
-		out := result.GetResultVector()
-		require.Equal(t, values[0], out.GetBytesAt(0))
-		require.True(t, out.IsNull(1))
-		require.Equal(t, values[2], out.GetBytesAt(2))
-		require.Empty(t, sink.warnings)
 	})
 	t.Run("invalid collation remains an error", func(t *testing.T) {
 		unicodeType := types.NewWithCharset(types.T_text, 128, 0, types.CharsetUTF8MB4UnicodeCI)
@@ -148,7 +136,7 @@ func TestTextAssignmentReservationKeepsDiagnosticsAndSelection(t *testing.T) {
 		result.GetResultVector().SetType(unicodeType)
 		expected := types.ValidateCollationValue(unicodeType, invalid)
 		require.Error(t, expected)
-		err := runTextReservationCast(proc, source, result, unicodeType, 2, castModeStrictStringWidth, nil)
+		err := runTextReservationCast(proc, source, result, unicodeType, 2, castModeStrictStringWidth)
 		require.EqualError(t, err, expected.Error())
 		require.Equal(t, 1, result.GetResultVector().Length())
 	})
@@ -161,7 +149,7 @@ func TestTextAssignmentReservationWithSharedPayload(t *testing.T) {
 	require.NoError(t, vector.AppendMultiBytes(source, value, false, 3, proc.Mp()))
 	require.False(t, source.VarlenaAreaIsDisjoint())
 	require.NoError(t, result.PreExtendAndReset(3))
-	require.NoError(t, runTextReservationCast(proc, source, result, typ, 3, castModeStrictStringWidth, nil))
+	require.NoError(t, runTextReservationCast(proc, source, result, typ, 3, castModeStrictStringWidth))
 	out := result.GetResultVector()
 	for i := 0; i < 3; i++ {
 		require.Equal(t, value, out.GetBytesAt(i))
@@ -176,7 +164,7 @@ func TestTextAssignmentReservationWithSharedPayload(t *testing.T) {
 	// reuse its area without another MPool allocation.
 	require.NoError(t, result.PreExtendAndReset(3))
 	before := proc.Mp().Stats().NumAllocBytes.Load()
-	require.NoError(t, runTextReservationCast(proc, source, result, typ, 3, castModeStrictStringWidth, nil))
+	require.NoError(t, runTextReservationCast(proc, source, result, typ, 3, castModeStrictStringWidth))
 	require.Equal(t, before, proc.Mp().Stats().NumAllocBytes.Load())
 	require.Equal(t, value, result.GetResultVector().GetBytesAt(2))
 }
@@ -203,7 +191,7 @@ func TestTextAssignmentReservationAllocationFailureCanReuse(t *testing.T) {
 	t.Cleanup(result.Free)
 	require.NoError(t, result.PreExtendAndReset(2))
 
-	err = runTextReservationCast(proc, source, result, typ, 2, castModeStrictStringWidth, nil)
+	err = runTextReservationCast(proc, source, result, typ, 2, castModeStrictStringWidth)
 	require.Error(t, err)
 	require.True(t, mpool.IsMPoolCapacityFailure(err), "%v", err)
 	require.Equal(t, byte('a'), source.GetBytesAt(0)[0])
@@ -211,7 +199,7 @@ func TestTextAssignmentReservationAllocationFailureCanReuse(t *testing.T) {
 	source.CleanOnlyData()
 	require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte("b"), 64), false, inputMP))
 	require.NoError(t, result.PreExtendAndReset(1))
-	require.NoError(t, runTextReservationCast(proc, source, result, typ, 1, castModeStrictStringWidth, nil))
+	require.NoError(t, runTextReservationCast(proc, source, result, typ, 1, castModeStrictStringWidth))
 	require.Equal(t, bytes.Repeat([]byte("b"), 64), result.GetResultVector().GetBytesAt(0))
 }
 
@@ -220,10 +208,10 @@ func TestTextAssignmentReservationSkipsOneExternalValue(t *testing.T) {
 	values := [][]byte{bytes.Repeat([]byte("x"), 80), []byte("inline")}
 	proc, source, result := newTextReservationFixture(t, typ, values)
 	done, err := tryReserveAssignedText(proc, vector.GenerateFunctionStrParameter(source),
-		vector.MustFunctionResult[types.Varlena](result), len(values), typ, nil)
+		vector.MustFunctionResult[types.Varlena](result), len(values), typ)
 	require.NoError(t, err)
 	require.False(t, done)
-	require.NoError(t, runTextReservationCast(proc, source, result, typ, len(values), castModeStrictStringWidth, nil))
+	require.NoError(t, runTextReservationCast(proc, source, result, typ, len(values), castModeStrictStringWidth))
 	for i := range values {
 		require.Equal(t, values[i], result.GetResultVector().GetBytesAt(i))
 	}
@@ -242,7 +230,7 @@ func TestTextAssignmentReservationFromRetainedArea(t *testing.T) {
 	retained := vector.NewVecWithData(typ, owner.Length(), owner.GetData(), lent, nil)
 	require.True(t, retained.IsReadOnly())
 
-	require.NoError(t, runTextReservationCast(proc, retained, result, typ, len(values), castModeStrictStringWidth, nil))
+	require.NoError(t, runTextReservationCast(proc, retained, result, typ, len(values), castModeStrictStringWidth))
 	// Retiring both input generations cannot invalidate the independent output.
 	retained.CleanOnlyData()
 	source.CleanOnlyData()
@@ -268,7 +256,7 @@ func TestTextAssignmentReservationConcurrentReaders(t *testing.T) {
 				errs <- err
 				return
 			}
-			if err := runTextReservationCast(proc, source, result, typ, len(values), castModeStrictStringWidth, nil); err != nil {
+			if err := runTextReservationCast(proc, source, result, typ, len(values), castModeStrictStringWidth); err != nil {
 				errs <- err
 				return
 			}

@@ -36,19 +36,13 @@ func TestConvRowDependentBases(t *testing.T) {
 	fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), Conv)
 	defer fc.Free()
 	require.NoError(t, fc.result.PreExtendAndReset(7))
-	require.NoError(t, Conv(fc.parameters, fc.result, proc, 7, nil))
+	require.NoError(t, Conv(fc.parameters, fc.result, proc, 7))
 	got := fc.result.GetResultVector()
 	for i, want := range []string{"255", "A", "-A", "35"} {
 		require.Equal(t, want, string(got.GetBytesAt(i)))
 		require.False(t, got.IsNull(uint64(i)))
 	}
 	for i := 4; i < 7; i++ {
-		require.True(t, got.IsNull(uint64(i)))
-	}
-	// Reuse must not leak values across masked/NULL rows.
-	require.NoError(t, fc.result.PreExtendAndReset(7))
-	require.NoError(t, Conv(fc.parameters, fc.result, proc, 7, &FunctionSelectList{AllNull: true}))
-	for i := 0; i < 7; i++ {
 		require.True(t, got.IsNull(uint64(i)))
 	}
 }
@@ -85,26 +79,12 @@ func TestConvDynamicBasesPreserveTypedInputs(t *testing.T) {
 				NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), Conv)
 			defer fc.Free()
 			require.NoError(t, fc.result.PreExtendAndReset(6))
-			require.NoError(t, Conv(fc.parameters, fc.result, proc, 6, nil))
+			require.NoError(t, Conv(fc.parameters, fc.result, proc, 6))
 			for i, want := range tc.want {
 				require.Equal(t, want, string(fc.result.GetResultVector().GetBytesAt(i)))
 			}
 			for row := uint64(3); row < 6; row++ {
 				require.True(t, fc.result.GetResultVector().IsNull(row), "invalid/NULL bases must be handled by every typed conversion loop")
-			}
-			// Reuse the output with one selected valid row, masked valid rows,
-			// and the same invalid/NULL base rows. Every typed loop must honor
-			// selection without retaining values from the previous evaluation.
-			require.NoError(t, fc.result.PreExtendAndReset(6))
-			require.NoError(t, Conv(fc.parameters, fc.result, proc, 6,
-				&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false, true, true, true}}))
-			for row := uint64(0); row < 6; row++ {
-				if row == 1 {
-					require.False(t, fc.result.GetResultVector().IsNull(row))
-					require.Equal(t, tc.want[1], string(fc.result.GetResultVector().GetBytesAt(int(row))))
-				} else {
-					require.True(t, fc.result.GetResultVector().IsNull(row))
-				}
 			}
 		})
 	}
@@ -148,14 +128,14 @@ func BenchmarkConvConstantBases(b *testing.B) {
 	}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), Conv)
 	defer fc.Free()
 	require.NoError(b, fc.result.PreExtendAndReset(rows))
-	require.NoError(b, Conv(fc.parameters, fc.result, proc, rows, nil))
+	require.NoError(b, Conv(fc.parameters, fc.result, proc, rows))
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if err := fc.result.PreExtendAndReset(rows); err != nil {
 			b.Fatal(err)
 		}
-		if err := Conv(fc.parameters, fc.result, proc, rows, nil); err != nil {
+		if err := Conv(fc.parameters, fc.result, proc, rows); err != nil {
 			b.Fatal(err)
 		}
 	}

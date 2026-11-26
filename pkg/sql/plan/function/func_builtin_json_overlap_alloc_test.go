@@ -53,7 +53,7 @@ func TestJSONOverlapsAccessorWrappersAreResultScoped(t *testing.T) {
 	require.Same(t, firstRight.wrapper, secondRight.wrapper)
 
 	require.NoError(t, testCase.result.PreExtendAndReset(rows))
-	require.NoError(t, testCase.fn(testCase.parameters, testCase.result, proc, rows, nil))
+	require.NoError(t, testCase.fn(testCase.parameters, testCase.result, proc, rows))
 	values := vector.MustFixedColNoTypeCheck[int64](testCase.result.GetResultVector())
 	require.Len(t, values, rows)
 	for _, value := range values {

@@ -148,7 +148,7 @@ func TestDateTruncFixedUnitsVectorContract(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 			t.Cleanup(result.Free)
 			require.NoError(t, result.PreExtendAndReset(4))
-			require.NoError(t, DateTrunc([]*vector.Vector{units, values}, result, proc, 4, nil))
+			require.NoError(t, DateTrunc([]*vector.Vector{units, values}, result, proc, 4))
 			vec := result.GetResultVector()
 			require.False(t, vec.IsNull(0))
 			require.Equal(t, types.DatetimeEpoch, vector.GetFixedAtWithTypeCheck[types.Datetime](vec, 0))
@@ -171,7 +171,7 @@ func TestDateTruncFixedUnitsVectorContract(t *testing.T) {
 		result := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 		t.Cleanup(result.Free)
 		require.NoError(t, result.PreExtendAndReset(len(names)))
-		require.NoError(t, DateTrunc([]*vector.Vector{units, values}, result, proc, len(names), nil))
+		require.NoError(t, DateTrunc([]*vector.Vector{units, values}, result, proc, len(names)))
 		vec := result.GetResultVector()
 		for index := range names {
 			if index >= 4 {
@@ -192,7 +192,7 @@ func TestDateTruncFixedUnitsVectorContract(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 			t.Cleanup(result.Free)
 			require.NoError(t, result.PreExtendAndReset(1))
-			err = DateTrunc([]*vector.Vector{units, values}, result, proc, 1, nil)
+			err = DateTrunc([]*vector.Vector{units, values}, result, proc, 1)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		})
 	}

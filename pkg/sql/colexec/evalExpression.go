@@ -701,18 +701,11 @@ type FunctionExpressionExecutor struct {
 	// first use, re-initialized per batch, and freed in Free.
 	branchRows    bitmap.Bitmap
 	branchScratch bitmap.Bitmap
-	// allRows is the select list kernels receive: the executor calls a kernel
-	// only when every row is selected (partial selections are compacted
-	// first). It stays the zero value, which selects every row; some kernels
-	// choose their path by whether the list is nil, so it is never nil.
-	allRows function.FunctionSelectList
-
-	// A function implementation cannot be required to interpret selectList
-	// correctly: many built-ins predate it, and evaluating them on masked rows
-	// can still raise errors or perform side effects. For a partial selection we
-	// therefore compact row-aligned parameters, evaluate only selected rows, and
-	// scatter the result back to the original row positions. These buffers are
-	// allocated lazily and reused across batches.
+	// Function implementations evaluate every row they are given: evaluating
+	// an unselected row could raise an error or perform a side effect. For a
+	// partial selection we therefore compact row-aligned parameters, evaluate
+	// only selected rows, and scatter the result back to the original row
+	// positions. These buffers are allocated lazily and reused across batches.
 	selectedParameterResults []*vector.Vector
 	selectedParameterVectors []*vector.Vector
 	selectedResult           vector.FunctionResultWrapper
@@ -1726,7 +1719,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	parameters := expr.selectedParameterResults
 	expr.publishArgumentIsBin(expr.selectedResult)
 	if err := expr.evalFn(
-		expr.semanticParameterVectors(parameters), expr.selectedResult, proc, selectedCount, nil); err != nil {
+		expr.semanticParameterVectors(parameters), expr.selectedResult, proc, selectedCount); err != nil {
 		return nil, err
 	}
 
@@ -1882,7 +1875,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	parameters := expr.parameterResults
 	expr.publishArgumentIsBin(expr.resultVector)
 	if err = expr.evalFn(
-		expr.semanticParameterVectors(parameters), expr.resultVector, proc, rowCount, &expr.allRows); err != nil {
+		expr.semanticParameterVectors(parameters), expr.resultVector, proc, rowCount); err != nil {
 		return nil, err
 	}
 	// Partial selections returned through evalSelectedRows above.
@@ -3287,7 +3280,7 @@ func GetExprZoneMap(
 					typ := types.MustTypeFromPlan(expr.Typ)
 
 					zms[expr.AuxId] = evaluateZoneMapFunction(child, typ, zms[expr.AuxId], func(result vector.FunctionResultWrapper) error {
-						return fn(ivecs, result, child, 2, nil)
+						return fn(ivecs, result, child, 2)
 					}, fnFree, func(output *vector.Vector) bool {
 						return !probe.Warned() && (kind != function.ZoneMapTemporal || zoneMapTemporalEndpoints(proc, args, ivecs, output))
 					})

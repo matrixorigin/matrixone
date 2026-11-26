@@ -26,7 +26,7 @@ import (
 )
 
 func runAssignmentIgnoreStringCast(t *testing.T, sourceType, targetType types.Type,
-	values []string, nulls []bool, binary bool, selectList *FunctionSelectList) (*vector.Vector, *numericWarningSession, error) {
+	values []string, nulls []bool, binary bool) (*vector.Vector, *numericWarningSession, error) {
 	t.Helper()
 	session := &numericWarningSession{}
 	proc := newMemoryFunctionTestProcess(t)
@@ -43,7 +43,7 @@ func runAssignmentIgnoreStringCast(t *testing.T, sourceType, targetType types.Ty
 		},
 		NewFunctionTestResult(targetType, false, nil, nil),
 		NewAssignIgnoreCast,
-	).WithSelectList(selectList)
+	)
 	t.Cleanup(tc.Free)
 	tc.result.SetArgumentIsBin([]bool{binary})
 	result, err := tc.DebugRun()
@@ -95,7 +95,7 @@ func emptyCastTargetValues(typ types.Type) any {
 func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 	t.Run("signed integer", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), types.T_int32.ToType(), []string{"abc"}, nil, false, nil)
+			t, types.T_varchar.ToType(), types.T_int32.ToType(), []string{"abc"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []int32{0}, vector.MustFixedColWithTypeCheck[int32](result))
 		require.False(t, result.GetNulls().Contains(0))
@@ -105,7 +105,7 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 
 	t.Run("signed numeric prefix is retained", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), types.T_int32.ToType(), []string{"12tail"}, nil, false, nil)
+			t, types.T_varchar.ToType(), types.T_int32.ToType(), []string{"12tail"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []int32{12}, vector.MustFixedColWithTypeCheck[int32](result))
 		require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}},
@@ -114,7 +114,7 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 
 	t.Run("unsigned numeric prefix is retained", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"12.9tail"}, nil, false, nil)
+			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"12.9tail"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []uint32{13}, vector.MustFixedColWithTypeCheck[uint32](result))
 		require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}},
@@ -124,7 +124,7 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 	t.Run("complete unsigned decimal and exponent do not warn", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_uint32.ToType(),
-			[]string{"12.9", "1e2", "12.9tail", "1e2tail"}, nil, false, nil)
+			[]string{"12.9", "1e2", "12.9tail", "1e2tail"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []uint32{13, 100, 13, 100}, vector.MustFixedColWithTypeCheck[uint32](result))
 		require.Equal(t, []numericWarning{
@@ -136,7 +136,7 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 	t.Run("fraction and exponent numeric prefixes round", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_int64.ToType(),
-			[]string{"12.9tail", "12.9", "1e2tail", "1e2", "-12.5tail", ".5tail", "1e+tail"}, nil, false, nil)
+			[]string{"12.9tail", "12.9", "1e2tail", "1e2", "-12.5tail", ".5tail", "1e+tail"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []int64{13, 13, 100, 100, -13, 1, 1}, vector.MustFixedColWithTypeCheck[int64](result))
 		require.Equal(t, []numericWarning{
@@ -150,7 +150,7 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 
 	t.Run("unsigned negative clips to zero", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"-1"}, nil, false, nil)
+			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"-1"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []uint32{0}, vector.MustFixedColWithTypeCheck[uint32](result))
 		require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
@@ -159,7 +159,7 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 
 	t.Run("integer range adjusts with a warning", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), types.T_int8.ToType(), []string{"999"}, nil, false, nil)
+			t, types.T_varchar.ToType(), types.T_int8.ToType(), []string{"999"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []int8{math.MaxInt8}, vector.MustFixedColWithTypeCheck[int8](result))
 		require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
@@ -168,12 +168,12 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 
 	t.Run("extension numeric syntax is not treated as a decimal prefix", func(t *testing.T) {
 		_, session, err := runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), types.T_int32.ToType(), []string{"0x12tail"}, nil, false, nil)
+			t, types.T_varchar.ToType(), types.T_int32.ToType(), []string{"0x12tail"}, nil, false)
 		require.Error(t, err)
 		require.Empty(t, session.warnings)
 
 		_, session, err = runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), types.New(types.T_decimal64, 10, 2), []string{"0x12tail"}, nil, false, nil)
+			t, types.T_varchar.ToType(), types.New(types.T_decimal64, 10, 2), []string{"0x12tail"}, nil, false)
 		require.Error(t, err)
 		require.Empty(t, session.warnings)
 	})
@@ -181,7 +181,7 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 	t.Run("ordinary words sharing float prefixes are adjusted", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_int32.ToType(),
-			[]string{"information", "nanny"}, nil, false, nil)
+			[]string{"information", "nanny"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []int32{0, 0}, vector.MustFixedColWithTypeCheck[int32](result))
 		require.Equal(t, []numericWarning{
@@ -192,7 +192,7 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 
 	t.Run("date", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), types.T_date.ToType(), []string{"2024-02-30"}, nil, false, nil)
+			t, types.T_varchar.ToType(), types.T_date.ToType(), []string{"2024-02-30"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []types.Date{types.ZeroDate}, vector.MustFixedColWithTypeCheck[types.Date](result))
 		require.False(t, result.GetNulls().Contains(0))
@@ -212,7 +212,7 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				result, session, err := runAssignmentIgnoreStringCast(
-					t, types.T_varchar.ToType(), tc.target, []string{""}, nil, false, nil)
+					t, types.T_varchar.ToType(), tc.target, []string{""}, nil, false)
 				require.NoError(t, err)
 				require.Equal(t, tc.zero, temporalVectorValues(result, tc.target.Oid))
 				require.False(t, result.GetNulls().Contains(0))
@@ -225,7 +225,7 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 	t.Run("datetime", func(t *testing.T) {
 		target := types.T_datetime.ToTypeWithScale(6)
 		result, session, err := runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), target, []string{"2024-02-30 25:00:00"}, nil, false, nil)
+			t, types.T_varchar.ToType(), target, []string{"2024-02-30 25:00:00"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []types.Datetime{types.ZeroDatetime}, vector.MustFixedColWithTypeCheck[types.Datetime](result))
 		require.False(t, result.GetNulls().Contains(0))
@@ -236,7 +236,7 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 	t.Run("timestamp", func(t *testing.T) {
 		target := types.T_timestamp.ToTypeWithScale(6)
 		result, session, err := runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), target, []string{"2024-02-30 25:00:00"}, nil, false, nil)
+			t, types.T_varchar.ToType(), target, []string{"2024-02-30 25:00:00"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []types.Timestamp{types.ZeroTimestamp}, vector.MustFixedColWithTypeCheck[types.Timestamp](result))
 		require.False(t, result.GetNulls().Contains(0))
@@ -248,7 +248,7 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 func TestAssignmentIgnoreTimeKeepsValidPrefix(t *testing.T) {
 	result, session, err := runAssignmentIgnoreStringCast(
 		t, types.T_varchar.ToType(), types.T_time.ToTypeWithScale(6),
-		[]string{"01:02:03.456789tail", "tail"}, nil, false, nil)
+		[]string{"01:02:03.456789tail", "tail"}, nil, false)
 	require.NoError(t, err)
 	require.Equal(t, []types.Time{types.TimeFromClock(false, 1, 2, 3, 456789), 0},
 		vector.MustFixedColWithTypeCheck[types.Time](result))
@@ -262,7 +262,7 @@ func TestAssignmentIgnoreTimeKeepsValidPrefix(t *testing.T) {
 
 func TestAssignmentIgnoreEmptyTimeIsZeroWithWarning(t *testing.T) {
 	result, session, err := runAssignmentIgnoreStringCast(
-		t, types.T_varchar.ToType(), types.T_time.ToTypeWithScale(6), []string{""}, nil, false, nil)
+		t, types.T_varchar.ToType(), types.T_time.ToTypeWithScale(6), []string{""}, nil, false)
 	require.NoError(t, err)
 	require.Equal(t, []types.Time{0}, vector.MustFixedColWithTypeCheck[types.Time](result))
 	require.False(t, result.GetNulls().Contains(0))
@@ -281,7 +281,7 @@ func TestAssignmentIgnoreDecimalClassification(t *testing.T) {
 	} {
 		t.Run(tc.name+" lexical", func(t *testing.T) {
 			result, session, err := runAssignmentIgnoreStringCast(
-				t, types.T_varchar.ToType(), tc.target, []string{"abc"}, nil, false, nil)
+				t, types.T_varchar.ToType(), tc.target, []string{"abc"}, nil, false)
 			require.NoError(t, err)
 			require.Equal(t, tc.zero, vectorValues(result, tc.target.Oid))
 			require.False(t, result.GetNulls().Contains(0))
@@ -291,7 +291,7 @@ func TestAssignmentIgnoreDecimalClassification(t *testing.T) {
 
 		t.Run(tc.name+" range adjusts with a warning", func(t *testing.T) {
 			result, session, err := runAssignmentIgnoreStringCast(
-				t, types.T_varchar.ToType(), tc.target, []string{"999999999999999999999999999999999999999"}, nil, false, nil)
+				t, types.T_varchar.ToType(), tc.target, []string{"999999999999999999999999999999999999999"}, nil, false)
 			require.NoError(t, err)
 			require.Equal(t, strings.Repeat("9", int(tc.target.Width-tc.target.Scale))+".99",
 				decimalVectorValueString(result, tc.target))
@@ -301,7 +301,7 @@ func TestAssignmentIgnoreDecimalClassification(t *testing.T) {
 
 		t.Run(tc.name+" prefix is retained", func(t *testing.T) {
 			result, session, err := runAssignmentIgnoreStringCast(
-				t, types.T_varchar.ToType(), tc.target, []string{"12.34tail"}, nil, false, nil)
+				t, types.T_varchar.ToType(), tc.target, []string{"12.34tail"}, nil, false)
 			require.NoError(t, err)
 			require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}},
 				stripWarningMessages(session.warnings))
@@ -311,7 +311,7 @@ func TestAssignmentIgnoreDecimalClassification(t *testing.T) {
 		t.Run(tc.name+" prefixed range clips with one warning", func(t *testing.T) {
 			result, session, err := runAssignmentIgnoreStringCast(
 				t, types.T_varchar.ToType(), tc.target,
-				[]string{"-" + strings.Repeat("9", int(tc.target.Width)) + "tail"}, nil, false, nil)
+				[]string{"-" + strings.Repeat("9", int(tc.target.Width)) + "tail"}, nil, false)
 			require.NoError(t, err)
 			require.Equal(t, "-"+strings.Repeat("9", int(tc.target.Width-tc.target.Scale))+".99",
 				decimalVectorValueString(result, tc.target))
@@ -324,7 +324,7 @@ func TestAssignmentIgnoreDecimalClassification(t *testing.T) {
 func TestAssignmentIgnorePreservesNullsAndWarnsPerRow(t *testing.T) {
 	result, session, err := runAssignmentIgnoreStringCast(
 		t, types.T_varchar.ToType(), types.T_int64.ToType(),
-		[]string{"abc", "abc", "ignored"}, []bool{false, false, true}, false, nil)
+		[]string{"abc", "abc", "ignored"}, []bool{false, false, true}, false)
 	require.NoError(t, err)
 	require.Equal(t, []int64{0, 0, 0}, vector.MustFixedColWithTypeCheck[int64](result))
 	require.False(t, result.GetNulls().Contains(0))
@@ -358,7 +358,7 @@ func TestAssignmentIgnoreIntegerPrefixRoundingBoundaries(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result, session, err := runAssignmentIgnoreStringCast(
-				t, types.T_varchar.ToType(), tc.target, []string{tc.value}, nil, false, nil)
+				t, types.T_varchar.ToType(), tc.target, []string{tc.value}, nil, false)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, assignmentIntegerVectorValues(result, tc.target.Oid))
 			require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}},
@@ -385,7 +385,7 @@ func TestAssignmentIgnoreIntegerPrefixRoundingBoundaries(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result, session, err := runAssignmentIgnoreStringCast(
-				t, types.T_varchar.ToType(), tc.target, []string{tc.value}, nil, false, nil)
+				t, types.T_varchar.ToType(), tc.target, []string{tc.value}, nil, false)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, assignmentIntegerVectorValues(result, tc.target.Oid))
 			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
@@ -396,7 +396,7 @@ func TestAssignmentIgnoreIntegerPrefixRoundingBoundaries(t *testing.T) {
 	t.Run("rounds exact values above float64 integer precision", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_int64.ToType(),
-			[]string{"9007199254740992.6tail", "9223372036854775806.6tail"}, nil, false, nil)
+			[]string{"9007199254740992.6tail", "9223372036854775806.6tail"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []int64{9007199254740993, math.MaxInt64},
 			vector.MustFixedColWithTypeCheck[int64](result))
@@ -408,14 +408,14 @@ func TestAssignmentIgnoreIntegerPrefixRoundingBoundaries(t *testing.T) {
 
 	t.Run("unsigned negative rounded values clip to zero", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"-0.4tail"}, nil, false, nil)
+			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"-0.4tail"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []uint32{0}, vector.MustFixedColWithTypeCheck[uint32](result))
 		require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}},
 			stripWarningMessages(session.warnings))
 
 		result, session, err = runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"-0.5tail"}, nil, false, nil)
+			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"-0.5tail"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []uint32{0}, vector.MustFixedColWithTypeCheck[uint32](result))
 		require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
@@ -427,7 +427,7 @@ func TestAssignmentIgnoreIntegerPrefixExponentIsBounded(t *testing.T) {
 	t.Run("long mantissa cancels a negative exponent", func(t *testing.T) {
 		value := strings.Repeat("9", 1000) + "e-999tail"
 		result, session, err := runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), types.T_int64.ToType(), []string{value}, nil, false, nil)
+			t, types.T_varchar.ToType(), types.T_int64.ToType(), []string{value}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []int64{10}, vector.MustFixedColWithTypeCheck[int64](result))
 		require.Len(t, session.warnings, 1)
@@ -436,7 +436,7 @@ func TestAssignmentIgnoreIntegerPrefixExponentIsBounded(t *testing.T) {
 	t.Run("huge negative exponent rounds to zero", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_int64.ToType(),
-			[]string{"1e-999999999999999999999999tail"}, nil, false, nil)
+			[]string{"1e-999999999999999999999999tail"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []int64{0}, vector.MustFixedColWithTypeCheck[int64](result))
 		require.Len(t, session.warnings, 1)
@@ -445,7 +445,7 @@ func TestAssignmentIgnoreIntegerPrefixExponentIsBounded(t *testing.T) {
 	t.Run("zero mantissa with huge positive exponent remains zero", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_uint64.ToType(),
-			[]string{strings.Repeat("0", 1000) + "e999999999999999999999tail"}, nil, false, nil)
+			[]string{strings.Repeat("0", 1000) + "e999999999999999999999tail"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{0}, vector.MustFixedColWithTypeCheck[uint64](result))
 		require.Len(t, session.warnings, 1)
@@ -454,7 +454,7 @@ func TestAssignmentIgnoreIntegerPrefixExponentIsBounded(t *testing.T) {
 	t.Run("exponent with many leading zeros is parsed exactly", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_int64.ToType(),
-			[]string{"1e" + strings.Repeat("0", 1000) + "2tail"}, nil, false, nil)
+			[]string{"1e" + strings.Repeat("0", 1000) + "2tail"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []int64{100}, vector.MustFixedColWithTypeCheck[int64](result))
 		require.Len(t, session.warnings, 1)
@@ -463,43 +463,10 @@ func TestAssignmentIgnoreIntegerPrefixExponentIsBounded(t *testing.T) {
 	t.Run("huge positive exponent clips at target bound", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_uint64.ToType(),
-			[]string{"1e999999999999999999999999tail"}, nil, false, nil)
+			[]string{"1e999999999999999999999999tail"}, nil, false)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{math.MaxUint64}, vector.MustFixedColWithTypeCheck[uint64](result))
 		require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
-			stripWarningMessages(session.warnings))
-	})
-}
-
-func TestAssignmentIgnoreSkipsInactiveNumericRows(t *testing.T) {
-	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
-	for _, target := range []types.Type{
-		types.T_int32.ToType(),
-		types.T_uint32.ToType(),
-		types.New(types.T_decimal64, 10, 2),
-		types.New(types.T_decimal128, 20, 2),
-		types.New(types.T_decimal256, 40, 2),
-	} {
-		t.Run(target.Oid.String(), func(t *testing.T) {
-			result, session, err := runAssignmentIgnoreStringCast(
-				t, types.T_varchar.ToType(), target, []string{"abc", "invalid"}, nil, false, selectList)
-			require.NoError(t, err)
-			require.False(t, result.IsNull(0))
-			require.True(t, result.IsNull(1))
-			require.Len(t, session.warnings, 1)
-		})
-	}
-
-	t.Run("inactive fractional overflow does not fail or warn", func(t *testing.T) {
-		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
-		result, session, err := runAssignmentIgnoreStringCast(
-			t, types.T_varchar.ToType(), types.T_int8.ToType(),
-			[]string{"127.5tail", "12.9tail"}, nil, false, selectList)
-		require.NoError(t, err)
-		require.True(t, result.IsNull(0))
-		require.False(t, result.IsNull(1))
-		require.Equal(t, int8(13), vector.MustFixedColWithTypeCheck[int8](result)[1])
-		require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}},
 			stripWarningMessages(session.warnings))
 	})
 }
@@ -516,7 +483,7 @@ func TestAssignmentIgnoreDoesNotAdjustBinaryString(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, session, err := runAssignmentIgnoreStringCast(
-				t, types.T_binary.ToType(), tc.target, []string{tc.value}, nil, true, nil)
+				t, types.T_binary.ToType(), tc.target, []string{tc.value}, nil, true)
 			require.Error(t, err)
 			require.Empty(t, session.warnings)
 		})
@@ -577,7 +544,7 @@ func TestAssignmentIgnoreClipsRoundedStringToIntegerBounds(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result, session, err := runAssignmentIgnoreStringCast(
-				t, types.T_varchar.ToType(), tc.target, []string{tc.value}, nil, false, nil)
+				t, types.T_varchar.ToType(), tc.target, []string{tc.value}, nil, false)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, assignmentIntegerVectorValues(result, tc.target.Oid))
 			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},

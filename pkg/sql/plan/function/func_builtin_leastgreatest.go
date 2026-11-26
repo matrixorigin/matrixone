@@ -815,27 +815,12 @@ func leastGreatestFnFixed[T types.FixedSizeTExceptStrType](
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 	compareFn func(v1, v2 T) bool) error {
 	rs := vector.MustFunctionResult[T](result)
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColWithTypeCheck[T](rsVec)
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			return leastGreatestSetNullResult(result, length)
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 
 	for np, pv := range parameters {
 		p := vector.GenerateFunctionFixedTypeParameter[T](pv)
@@ -869,24 +854,8 @@ func leastGreatestFnVarlen(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 	compareFn func(v1, v2 []byte) bool) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	rsVec := rs.GetResultVector()
-	rsNull := rsVec.GetNulls()
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			return leastGreatestSetNullResult(result, length)
-		}
-		if !selectList.ShouldEvalAllRow() {
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 
 	for _, pv := range parameters {
 		if pv.IsConstNull() {
@@ -897,13 +866,6 @@ func leastGreatestFnVarlen(
 	for i := uint64(0); i < uint64(length); i++ {
 		var v []byte
 		var isNull bool
-
-		if selectList != nil && selectList.ShouldEvalAllRow() {
-			if selectList.Contains(i) {
-				rs.AppendBytes(nil, true)
-				continue
-			}
-		}
 
 		for _, pv := range parameters {
 			if pv.IsNull(i) {
@@ -931,56 +893,55 @@ func leastGreatestYearNumericFn(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 	compareFn func(int) bool) error {
 	target := *result.GetResultVector().GetType()
 	switch target.Oid {
 	case types.T_int8:
-		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, selectList, func(y int64) (int8, error) {
+		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, func(y int64) (int8, error) {
 			return int8(y), nil
 		}, func(v1, v2 int8) bool { return compareFn(compareOrdered(v1, v2)) })
 	case types.T_int16:
-		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, selectList, func(y int64) (int16, error) {
+		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, func(y int64) (int16, error) {
 			return int16(y), nil
 		}, func(v1, v2 int16) bool { return compareFn(compareOrdered(v1, v2)) })
 	case types.T_int32:
-		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, selectList, func(y int64) (int32, error) {
+		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, func(y int64) (int32, error) {
 			return int32(y), nil
 		}, func(v1, v2 int32) bool { return compareFn(compareOrdered(v1, v2)) })
 	case types.T_int64:
-		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, selectList, func(y int64) (int64, error) {
+		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, func(y int64) (int64, error) {
 			return y, nil
 		}, func(v1, v2 int64) bool { return compareFn(compareOrdered(v1, v2)) })
 	case types.T_uint8:
-		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, selectList, func(y int64) (uint8, error) {
+		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, func(y int64) (uint8, error) {
 			return uint8(y), nil
 		}, func(v1, v2 uint8) bool { return compareFn(compareOrdered(v1, v2)) })
 	case types.T_uint16:
-		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, selectList, func(y int64) (uint16, error) {
+		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, func(y int64) (uint16, error) {
 			return uint16(y), nil
 		}, func(v1, v2 uint16) bool { return compareFn(compareOrdered(v1, v2)) })
 	case types.T_uint32:
-		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, selectList, func(y int64) (uint32, error) {
+		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, func(y int64) (uint32, error) {
 			return uint32(y), nil
 		}, func(v1, v2 uint32) bool { return compareFn(compareOrdered(v1, v2)) })
 	case types.T_uint64:
-		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, selectList, func(y int64) (uint64, error) {
+		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, func(y int64) (uint64, error) {
 			return uint64(y), nil
 		}, func(v1, v2 uint64) bool { return compareFn(compareOrdered(v1, v2)) })
 	case types.T_float64:
-		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, selectList, func(y int64) (float64, error) {
+		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, func(y int64) (float64, error) {
 			return float64(y), nil
 		}, func(v1, v2 float64) bool { return compareFn(compareOrdered(v1, v2)) })
 	case types.T_decimal64:
-		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, selectList, func(y int64) (types.Decimal64, error) {
+		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, func(y int64) (types.Decimal64, error) {
 			return types.ParseDecimal64(strconv.FormatInt(y, 10), target.Width, target.Scale)
 		}, func(v1, v2 types.Decimal64) bool { return compareFn(v1.Compare(v2)) })
 	case types.T_decimal128:
-		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, selectList, func(y int64) (types.Decimal128, error) {
+		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, func(y int64) (types.Decimal128, error) {
 			return types.ParseDecimal128(strconv.FormatInt(y, 10), target.Width, target.Scale)
 		}, func(v1, v2 types.Decimal128) bool { return compareFn(v1.Compare(v2)) })
 	case types.T_decimal256:
-		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, selectList, func(y int64) (types.Decimal256, error) {
+		return leastGreatestYearNumericFnFixed(parameters, result, proc, length, func(y int64) (types.Decimal256, error) {
 			return types.ParseDecimal256(strconv.FormatInt(y, 10), target.Width, target.Scale)
 		}, func(v1, v2 types.Decimal256) bool { return compareFn(v1.Compare(v2)) })
 	default:
@@ -1003,26 +964,12 @@ func leastGreatestYearNumericFnFixed[T types.FixedSizeTExceptStrType](
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 	yearToTarget func(int64) (T, error),
 	compareFn func(v1, v2 T) bool) error {
 	rs := vector.MustFunctionResult[T](result)
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColWithTypeCheck[T](rsVec)
 	rsNull := rsVec.GetNulls()
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			return leastGreatestSetNullResult(result, length)
-		}
-		if !selectList.ShouldEvalAllRow() {
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 
 	for _, pv := range parameters {
 		if pv.IsConstNull() {
@@ -1080,13 +1027,12 @@ func leastGreatestFnPackedDate(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 	compareFn func(v1, v2 types.Datetime) bool) error {
 	resolution, ok := resolveLeastGreatestType(vectorTypes(parameters))
 	if !ok || resolution.comparisonMode != leastGreatestComparePackedDate {
 		return moerr.NewInternalErrorNoCtx("unsupported temporal comparison resolution")
 	}
-	return leastGreatestFnPackedDateResolved(parameters, result, proc, length, selectList, resolution, compareFn)
+	return leastGreatestFnPackedDateResolved(parameters, result, proc, length, resolution, compareFn)
 }
 
 func leastGreatestFnJSONPackedDate(
@@ -1094,14 +1040,13 @@ func leastGreatestFnJSONPackedDate(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 	compareFn func(v1, v2 types.Datetime) bool) error {
 	resolution := leastGreatestResolution{
 		resultType:       types.T_varchar.ToType(),
 		comparisonMode:   leastGreatestComparePackedDate,
 		temporalItemType: leastGreatestTemporalItemType(vectorTypes(parameters)),
 	}
-	return leastGreatestFnPackedDateResolved(parameters, result, proc, length, selectList, resolution, compareFn)
+	return leastGreatestFnPackedDateResolved(parameters, result, proc, length, resolution, compareFn)
 }
 
 func leastGreatestFnPackedDateResolved(
@@ -1109,23 +1054,10 @@ func leastGreatestFnPackedDateResolved(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 	resolution leastGreatestResolution,
 	compareFn func(v1, v2 types.Datetime) bool) error {
 	rsVec := result.GetResultVector()
 	rsNull := rsVec.GetNulls()
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			return leastGreatestSetNullResult(result, length)
-		}
-		if !selectList.ShouldEvalAllRow() {
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 
 	for _, pv := range parameters {
 		if pv.IsConstNull() {
@@ -1148,12 +1080,6 @@ func leastGreatestFnPackedDateResolved(
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.ShouldEvalAllRow() && selectList.Contains(i) {
-			if err := leastGreatestAppendPackedDateResult(result, resolution, types.Datetime(0), loc, true); err != nil {
-				return err
-			}
-			continue
-		}
 		if rsNull.Contains(i) {
 			if err := leastGreatestAppendPackedDateResult(result, resolution, types.Datetime(0), loc, true); err != nil {
 				return err
@@ -1392,17 +1318,17 @@ func leastGreatestRestoreTemporalResultType(parameters []*vector.Vector, result 
 }
 
 func leastCollatedFn(parameters []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return leastGreatestCollatedFn(parameters, result, proc, length, selectList, true)
+	proc *process.Process, length int) error {
+	return leastGreatestCollatedFn(parameters, result, proc, length, true)
 }
 
 func greatestCollatedFn(parameters []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return leastGreatestCollatedFn(parameters, result, proc, length, selectList, false)
+	proc *process.Process, length int) error {
+	return leastGreatestCollatedFn(parameters, result, proc, length, false)
 }
 
 func leastGreatestCollatedFn(parameters []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList, least bool) error {
+	proc *process.Process, length int, least bool) error {
 	if len(parameters) == 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "collation-aware LEAST/GREATEST requires an argument")
 	}
@@ -1416,14 +1342,13 @@ func leastGreatestCollatedFn(parameters []*vector.Vector, result vector.Function
 	if !least {
 		compare = func(v1, v2 []byte) bool { return compareTextBytes(paramType, v1, v2) > 0 }
 	}
-	return leastGreatestFnVarlen(parameters, result, proc, length, selectList, compare)
+	return leastGreatestFnVarlen(parameters, result, proc, length, compare)
 }
 
 func leastFn(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList) error {
+	length int) error {
 	leastGreatestRestoreTemporalResultType(parameters, result)
 	paramType := leastGreatestParamType(parameters)
 	switch paramType.Oid {
@@ -1433,7 +1358,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 bool) bool {
 				return !v1 && v2
 			})
@@ -1444,7 +1368,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 uint64) bool {
 				return v1 < v2
 			})
@@ -1455,7 +1378,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 int8) bool {
 				return v1 < v2
 			})
@@ -1465,7 +1387,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 int16) bool {
 				return v1 < v2
 			})
@@ -1475,7 +1396,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 int32) bool {
 				return v1 < v2
 			})
@@ -1485,7 +1405,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 int64) bool {
 				return v1 < v2
 			})
@@ -1495,7 +1414,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 uint8) bool {
 				return v1 < v2
 			})
@@ -1505,7 +1423,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 uint16) bool {
 				return v1 < v2
 			})
@@ -1515,7 +1432,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 uint32) bool {
 				return v1 < v2
 			})
@@ -1525,7 +1441,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 uint64) bool {
 				return v1 < v2
 			})
@@ -1536,7 +1451,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Uuid) bool {
 				return types.CompareUuid(v1, v2) < 0
 			})
@@ -1547,7 +1461,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 float32) bool {
 				return v1 < v2
 			})
@@ -1558,7 +1471,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 float64) bool {
 				return v1 < v2
 			})
@@ -1569,7 +1481,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				return bytes.Compare(v1, v2) < 0
 			})
@@ -1580,7 +1491,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				return bytes.Compare(v1, v2) < 0
 			})
@@ -1591,7 +1501,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				_v1 := types.BytesToArray[float32](v1)
 				_v2 := types.BytesToArray[float32](v2)
@@ -1605,7 +1514,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				_v1 := types.BytesToArray[float64](v1)
 				_v2 := types.BytesToArray[float64](v2)
@@ -1618,7 +1526,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				// CompareArrayElementFromBytes covers every element type;
 				// types.ArrayCompare is constrained to RealNumbers.
@@ -1631,7 +1538,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				// CompareArrayElementFromBytes covers every element type;
 				// types.ArrayCompare is constrained to RealNumbers.
@@ -1644,7 +1550,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				// CompareArrayElementFromBytes covers every element type;
 				// types.ArrayCompare is constrained to RealNumbers.
@@ -1657,7 +1562,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				// CompareArrayElementFromBytes covers every element type;
 				// types.ArrayCompare is constrained to RealNumbers.
@@ -1670,7 +1574,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Date) bool {
 				return v1 < v2
 			})
@@ -1681,7 +1584,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Datetime) bool {
 				return v1 < v2
 			})
@@ -1692,7 +1594,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Time) bool {
 				return v1 < v2
 			})
@@ -1703,7 +1604,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Timestamp) bool {
 				return v1 < v2
 			})
@@ -1714,7 +1614,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.MoYear) bool {
 				return v1 < v2
 			})
@@ -1725,7 +1624,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Decimal64) bool {
 				return v1.Compare(v2) < 0
 			})
@@ -1736,7 +1634,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Decimal128) bool {
 				return v1.Compare(v2) < 0
 			})
@@ -1747,7 +1644,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Decimal256) bool {
 				return v1.Compare(v2) < 0
 			})
@@ -1758,7 +1654,6 @@ func leastFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Rowid) bool {
 				return v1.LT(&v2)
 			})
@@ -1769,9 +1664,8 @@ func leastFn(parameters []*vector.Vector,
 func leastTemporalFn(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList) error {
-	return leastGreatestFnPackedDate(parameters, result, proc, length, selectList, func(v1, v2 types.Datetime) bool {
+	length int) error {
+	return leastGreatestFnPackedDate(parameters, result, proc, length, func(v1, v2 types.Datetime) bool {
 		return v1 < v2
 	})
 }
@@ -1779,9 +1673,8 @@ func leastTemporalFn(parameters []*vector.Vector,
 func leastJSONTemporalFn(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList) error {
-	return leastGreatestFnJSONPackedDate(parameters, result, proc, length, selectList, func(v1, v2 types.Datetime) bool {
+	length int) error {
+	return leastGreatestFnJSONPackedDate(parameters, result, proc, length, func(v1, v2 types.Datetime) bool {
 		return v1 < v2
 	})
 }
@@ -1789,9 +1682,8 @@ func leastJSONTemporalFn(parameters []*vector.Vector,
 func leastYearNumericFn(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList) error {
-	return leastGreatestYearNumericFn(parameters, result, proc, length, selectList, func(comparison int) bool {
+	length int) error {
+	return leastGreatestYearNumericFn(parameters, result, proc, length, func(comparison int) bool {
 		return comparison < 0
 	})
 }
@@ -1799,8 +1691,7 @@ func leastYearNumericFn(parameters []*vector.Vector,
 func greatestFn(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList) error {
+	length int) error {
 	leastGreatestRestoreTemporalResultType(parameters, result)
 	paramType := leastGreatestParamType(parameters)
 	switch paramType.Oid {
@@ -1810,7 +1701,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 bool) bool {
 				return v1 && !v2
 			})
@@ -1821,7 +1711,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 uint64) bool {
 				return v1 > v2
 			})
@@ -1832,7 +1721,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 int8) bool {
 				return v1 > v2
 			})
@@ -1842,7 +1730,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 int16) bool {
 				return v1 > v2
 			})
@@ -1852,7 +1739,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 int32) bool {
 				return v1 > v2
 			})
@@ -1862,7 +1748,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 int64) bool {
 				return v1 > v2
 			})
@@ -1872,7 +1757,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 uint8) bool {
 				return v1 > v2
 			})
@@ -1882,7 +1766,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 uint16) bool {
 				return v1 > v2
 			})
@@ -1892,7 +1775,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 uint32) bool {
 				return v1 > v2
 			})
@@ -1902,7 +1784,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 uint64) bool {
 				return v1 > v2
 			})
@@ -1913,7 +1794,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Uuid) bool {
 				return types.CompareUuid(v1, v2) > 0
 			})
@@ -1924,7 +1804,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 float32) bool {
 				return v1 > v2
 			})
@@ -1935,7 +1814,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 float64) bool {
 				return v1 > v2
 			})
@@ -1946,7 +1824,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				return bytes.Compare(v1, v2) > 0
 			})
@@ -1957,7 +1834,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				return bytes.Compare(v1, v2) > 0
 			})
@@ -1968,7 +1844,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				_v1 := types.BytesToArray[float32](v1)
 				_v2 := types.BytesToArray[float32](v2)
@@ -1981,7 +1856,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				_v1 := types.BytesToArray[float64](v1)
 				_v2 := types.BytesToArray[float64](v2)
@@ -1994,7 +1868,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				// CompareArrayElementFromBytes covers every element type;
 				// types.ArrayCompare is constrained to RealNumbers.
@@ -2007,7 +1880,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				// CompareArrayElementFromBytes covers every element type;
 				// types.ArrayCompare is constrained to RealNumbers.
@@ -2020,7 +1892,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				// CompareArrayElementFromBytes covers every element type;
 				// types.ArrayCompare is constrained to RealNumbers.
@@ -2033,7 +1904,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 []byte) bool {
 				// CompareArrayElementFromBytes covers every element type;
 				// types.ArrayCompare is constrained to RealNumbers.
@@ -2046,7 +1916,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Date) bool {
 				return v1 > v2
 			})
@@ -2057,7 +1926,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Datetime) bool {
 				return v1 > v2
 			})
@@ -2068,7 +1936,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Time) bool {
 				return v1 > v2
 			})
@@ -2079,7 +1946,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Timestamp) bool {
 				return v1 > v2
 			})
@@ -2090,7 +1956,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.MoYear) bool {
 				return v1 > v2
 			})
@@ -2101,7 +1966,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Decimal64) bool {
 				return v1.Compare(v2) > 0
 			})
@@ -2112,7 +1976,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Decimal128) bool {
 				return v1.Compare(v2) > 0
 			})
@@ -2123,7 +1986,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Decimal256) bool {
 				return v1.Compare(v2) > 0
 			})
@@ -2134,7 +1996,6 @@ func greatestFn(parameters []*vector.Vector,
 			result,
 			proc,
 			length,
-			selectList,
 			func(v1, v2 types.Rowid) bool {
 				return v1.GT(&v2)
 			})
@@ -2145,9 +2006,8 @@ func greatestFn(parameters []*vector.Vector,
 func greatestTemporalFn(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList) error {
-	return leastGreatestFnPackedDate(parameters, result, proc, length, selectList, func(v1, v2 types.Datetime) bool {
+	length int) error {
+	return leastGreatestFnPackedDate(parameters, result, proc, length, func(v1, v2 types.Datetime) bool {
 		return v1 > v2
 	})
 }
@@ -2155,9 +2015,8 @@ func greatestTemporalFn(parameters []*vector.Vector,
 func greatestJSONTemporalFn(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList) error {
-	return leastGreatestFnJSONPackedDate(parameters, result, proc, length, selectList, func(v1, v2 types.Datetime) bool {
+	length int) error {
+	return leastGreatestFnJSONPackedDate(parameters, result, proc, length, func(v1, v2 types.Datetime) bool {
 		return v1 > v2
 	})
 }
@@ -2165,9 +2024,8 @@ func greatestJSONTemporalFn(parameters []*vector.Vector,
 func greatestYearNumericFn(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList) error {
-	return leastGreatestYearNumericFn(parameters, result, proc, length, selectList, func(comparison int) bool {
+	length int) error {
+	return leastGreatestYearNumericFn(parameters, result, proc, length, func(comparison int) bool {
 		return comparison > 0
 	})
 }

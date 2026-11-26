@@ -248,7 +248,7 @@ func TestAESKDFVectorContract(t *testing.T) {
 			require.True(t, ok, info)
 		}
 	}
-	// Bad options in masked rows must not be validated. NULL data/key wins over
+	// NULL data/key wins over
 	// missing/short IV and NULL KDF options. The active row uses a fixed oracle.
 	for _, fn := range []executeLogicOfOverload{AESEncrypt, AESDecrypt} {
 		for nullAt := 3; nullAt <= 5; nullAt++ {
@@ -261,17 +261,6 @@ func TestAESKDFVectorContract(t *testing.T) {
 			require.True(t, ok, info)
 		}
 	}
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"ignored", "hello", ""}, []bool{false, false, true}),
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"password", "password", "password"}, nil),
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", ""}, nil),
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad", "hkdf", "bad"}, nil),
-	}
-	c := NewFunctionTestCase(newAESProcess(t, "aes-128-ecb"), inputs, NewFunctionTestResult(types.T_blob.ToType(), false,
-		[]string{"", string(aesHex(t, "7d0cfc63f883519e5b8f78de8933dee6")), ""}, []bool{true, false, true}), AESEncrypt).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}})
-	ok, info := c.RunAndFree()
-	require.True(t, ok, info)
 }
 
 func TestAESBindingAndSessionMode(t *testing.T) {
@@ -391,25 +380,5 @@ func TestAESCancellation(t *testing.T) {
 	}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), AESEncrypt)
 	defer c.Free()
 	require.NoError(t, c.result.PreExtendAndReset(1))
-	require.ErrorIs(t, c.fn(c.parameters, c.result, proc, 1, nil), context.Canceled)
-}
-
-func TestAESAllMaskedSkipsWork(t *testing.T) {
-	for _, fn := range []executeLogicOfOverload{AESEncrypt, AESDecrypt} {
-		proc := newAESProcess(t, "aes-192-cfb1")
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		proc.Ctx = ctx
-		// AllNull intentionally carries no bitmap. Even cancellation, invalid
-		// IV and invalid KDF must not be evaluated for a wholly masked input.
-		inputs := make([]FunctionTestInput, 0, 4)
-		for _, arg := range []string{"hello", "password", "short", "bad"} {
-			inputs = append(inputs, NewFunctionTestInput(types.T_varchar.ToType(), []string{arg, arg}, nil))
-		}
-		c := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_blob.ToType(), false,
-			[]string{"", ""}, []bool{true, true}), fn).
-			WithSelectList(&FunctionSelectList{AllNull: true, AnyNull: true})
-		ok, info := c.RunAndFree()
-		require.True(t, ok, info)
-	}
+	require.ErrorIs(t, c.fn(c.parameters, c.result, proc, 1), context.Canceled)
 }

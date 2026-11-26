@@ -38,10 +38,10 @@ func checkIntegerWidening[T1, T2 constraints.Integer | constraints.Float](t *tes
 	require.NoError(t, result.PreExtendAndReset(len(values)))
 	from := vector.GenerateFunctionFixedTypeParameter[T1](input)
 	to := vector.MustFunctionResult[T2](result)
-	require.Equal(t, handled, widenIntegerBatch(from, to, len(values), nil))
+	require.Equal(t, handled, widenIntegerBatch(from, to, len(values)))
 	// The normal entry point also proves fallback behavior and wrapper metadata.
 	require.NoError(t, result.PreExtendAndReset(len(values)))
-	require.NoError(t, numericToNumeric(proc.Ctx, from, to, len(values), nil))
+	require.NoError(t, numericToNumeric(proc.Ctx, from, to, len(values)))
 	require.Equal(t, want, vector.MustFixedColWithTypeCheck[T2](result.GetResultVector()))
 	require.Equal(t, len(values), result.GetResultVector().Length())
 	require.Equal(t, target.ToType(), *result.GetResultVector().GetType())
@@ -84,7 +84,7 @@ func TestIntegerWideningBatch(t *testing.T) {
 	})
 }
 
-func TestIntegerWideningSelectionAndReuse(t *testing.T) {
+func TestIntegerWideningReuse(t *testing.T) {
 	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	fc := NewFunctionTestCase(proc, []FunctionTestInput{
@@ -97,31 +97,13 @@ func TestIntegerWideningSelectionAndReuse(t *testing.T) {
 	require.NoError(t, err)
 	from := vector.GenerateFunctionFixedTypeParameter[int8](source)
 	to := vector.MustFunctionResult[int64](fc.result)
-	for _, tc := range []struct {
-		name      string
-		selection *FunctionSelectList
-		handled   bool
-	}{
-		{"nil", nil, true},
-		{"zero", &FunctionSelectList{}, true},
-		{"all true", &FunctionSelectList{SelectList: []bool{true, true, true}}, true},
-		{"stale bitmap", &FunctionSelectList{SelectList: []bool{false, false, false}}, true},
-		{"partial", &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}, false},
-		{"all bitmap", &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, false}}, false},
-		{"all flag", &FunctionSelectList{AllNull: true}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			require.NoError(t, fc.result.PreExtendAndReset(3))
-			dst := vector.MustFixedColWithTypeCheck[int64](fc.result.GetResultVector())
-			copy(dst, []int64{91, 92, 93})
-			require.Equal(t, tc.handled, widenIntegerBatch(from, to, 3, tc.selection))
-			if !tc.handled {
-				require.Equal(t, []int64{91, 92, 93}, dst, "rejection must not write")
-			}
-			fc.selectList = tc.selection
-			ok, info := fc.Run()
-			require.True(t, ok, info)
-		})
+	{
+		require.NoError(t, fc.result.PreExtendAndReset(3))
+		dst := vector.MustFixedColWithTypeCheck[int64](fc.result.GetResultVector())
+		copy(dst, []int64{91, 92, 93})
+		require.True(t, widenIntegerBatch(from, to, 3))
+		ok, info := fc.Run()
+		require.True(t, ok, info)
 	}
 	// One result crosses fast/slow and size boundaries; NULLs cannot escape reset.
 	for _, state := range []struct {
@@ -139,11 +121,11 @@ func TestIntegerWideningSelectionAndReuse(t *testing.T) {
 			source.SetClass(vector.CONSTANT)
 		}
 		require.NoError(t, fc.result.PreExtendAndReset(state.length))
-		require.Equal(t, state.length > 0 && !state.nullable && !state.constant, widenIntegerBatch(from, to, state.length, nil))
+		require.Equal(t, state.length > 0 && !state.nullable && !state.constant, widenIntegerBatch(from, to, state.length))
 		// Recreate the parameter wrapper after changing const/NULL classification.
 		from = vector.GenerateFunctionFixedTypeParameter[int8](source)
 		require.NoError(t, fc.result.PreExtendAndReset(state.length))
-		require.NoError(t, numericToNumeric(proc.Ctx, from, to, state.length, nil))
+		require.NoError(t, numericToNumeric(proc.Ctx, from, to, state.length))
 		out := fc.result.GetResultVector()
 		require.Equal(t, state.length, out.Length())
 		for row := 0; row < state.length; row++ {
@@ -168,7 +150,6 @@ func TestIntegerWideningSelectionAndReuse(t *testing.T) {
 	_, err = fc.DebugRun()
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
 	to.TempSetType(types.T_int64.ToType())
-	fc.selectList = nil
 	ok, info := fc.Run()
 	require.True(t, ok, info)
 	for _, fn := range []executeLogicOfOverload{NewExplicitCast, NewAssignCast} {
@@ -188,8 +169,8 @@ func TestIntegerWideningConstNull(t *testing.T) {
 	require.NoError(t, result.PreExtendAndReset(3))
 	from := vector.GenerateFunctionFixedTypeParameter[int8](source)
 	to := vector.MustFunctionResult[int64](result)
-	require.False(t, widenIntegerBatch(from, to, 3, nil))
-	require.NoError(t, numericToNumeric(proc.Ctx, from, to, 3, nil))
+	require.False(t, widenIntegerBatch(from, to, 3))
+	require.NoError(t, numericToNumeric(proc.Ctx, from, to, 3))
 	for row := uint64(0); row < 3; row++ {
 		require.True(t, result.GetResultVector().IsNull(row))
 	}
@@ -198,7 +179,7 @@ func TestIntegerWideningConstNull(t *testing.T) {
 func BenchmarkIntegerWideningCastPipeline(b *testing.B) {
 	const rows = 8192
 	for _, sourceOID := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_uint8, types.T_uint16, types.T_uint32} {
-		for _, shape := range []string{"all rows", "nullable", "selection"} {
+		for _, shape := range []string{"all rows", "nullable"} {
 			b.Run(sourceOID.String()+"/"+shape, func(b *testing.B) {
 				proc := newMemoryFunctionTestProcess(b)
 				b.Cleanup(func() { proc.Free(); require.Zero(b, proc.Mp().CurrNB()) })
@@ -236,28 +217,20 @@ func BenchmarkIntegerWideningCastPipeline(b *testing.B) {
 				b.Cleanup(cast.Free)
 				result := vector.NewFunctionResultWrapper(targetOID.ToType(), proc.Mp())
 				b.Cleanup(result.Free)
-				selection := &FunctionSelectList{}
-				if shape == "selection" {
-					selection.AnyNull = true
-					selection.SelectList = make([]bool, rows)
-					for i := range selection.SelectList {
-						selection.SelectList[i] = i%2 == 0
-					}
-				}
 				parameters := []*vector.Vector{input, target}
 				args := make([]*vector.Vector, 2)
 				run := func() error {
 					if err := cast.PreExtendAndReset(rows); err != nil {
 						return err
 					}
-					if err := NewCast(parameters, cast, proc, rows, selection); err != nil {
+					if err := NewCast(parameters, cast, proc, rows); err != nil {
 						return err
 					}
 					args[0], args[1] = cast.GetResultVector(), cast.GetResultVector()
 					if err := result.PreExtendAndReset(rows); err != nil {
 						return err
 					}
-					return multiFn(args, result, proc, rows, selection)
+					return multiFn(args, result, proc, rows)
 				}
 				before := proc.Mp().CurrNB()
 				require.NoError(b, run())

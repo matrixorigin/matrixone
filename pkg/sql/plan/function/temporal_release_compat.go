@@ -27,7 +27,7 @@ import (
 // Keep those executors available for DEFAULT/ON UPDATE and generated/check
 // expressions. New SQL binds appended overloads; compatibility costs stay off
 // the new execution path, and reading metadata never rewrites shared catalog state.
-func legacyExtract(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func legacyExtract(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if !ivecs[0].IsConst() {
 		return moerr.NewInternalError(proc.Ctx, "invalid input for extract")
 	}
@@ -84,7 +84,7 @@ func legacyExtract(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if unitNull || functionRowSkipped(selectList, i) {
+		if unitNull {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -101,17 +101,17 @@ func legacyExtract(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	return nil
 }
 
-func legacyAddTimeString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return legacyStringTimeArithmetic(ivecs, result, length, selectList, false)
+func legacyAddTimeString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return legacyStringTimeArithmetic(ivecs, result, length, false)
 }
 
-func legacySubTimeString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return legacyStringTimeArithmetic(ivecs, result, length, selectList, true)
+func legacySubTimeString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return legacyStringTimeArithmetic(ivecs, result, length, true)
 }
 
 // Preserve the release's DATETIME result, including its TIME-to-today rule.
 // New string arithmetic uses VARCHAR and never reaches this compatibility path.
-func legacyStringTimeArithmetic(ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, subtract bool) error {
+func legacyStringTimeArithmetic(ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, subtract bool) error {
 	first := vector.GenerateFunctionStrParameter(ivecs[0])
 	second := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[types.Datetime](result)
@@ -119,7 +119,7 @@ func legacyStringTimeArithmetic(ivecs []*vector.Vector, result vector.FunctionRe
 		a, an := first.GetStrValue(i)
 		b, bn := second.GetStrValue(i)
 		var value types.Datetime
-		null := an || bn || functionRowSkipped(selectList, i)
+		null := an || bn
 		if !null {
 			dt, err := types.ParseDatetime(string(a), 6)
 			if err != nil {
@@ -147,7 +147,7 @@ func legacyStringTimeArithmetic(ivecs []*vector.Vector, result vector.FunctionRe
 	return nil
 }
 
-func legacyExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func legacyExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	extractFromDate := func(unit string, d types.Date) (uint32, error) {
 		var r uint32
 		switch unit {
@@ -175,7 +175,7 @@ func legacyExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultW
 		return moerr.NewInternalError(proc.Ctx, "invalid input for extract")
 	}
 
-	return opBinaryStrFixedToFixedWithErrorCheck[types.Date, uint32](ivecs, result, proc, length, extractFromDate, selectList)
+	return opBinaryStrFixedToFixedWithErrorCheck[types.Date, uint32](ivecs, result, proc, length, extractFromDate)
 }
 
 func legacyFormatExtractDatetime(unit string, d types.Datetime) (string, error) {

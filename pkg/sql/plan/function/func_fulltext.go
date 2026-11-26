@@ -21,11 +21,11 @@ import (
 )
 
 // return true or false for filter. arg = [search_string, mode, key1, key2, ..., KeyN]
-func fullTextMatch(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func fullTextMatch(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return moerr.NewNotSupported(proc.Ctx, "MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.")
 }
 
 // return score.  arg = [search_string, mode, key1, key2, ..., KeyN]
-func fullTextMatchScore(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func fullTextMatchScore(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return moerr.NewNotSupported(proc.Ctx, "MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.")
 }

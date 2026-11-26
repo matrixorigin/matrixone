@@ -15,15 +15,15 @@
 package function
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
-func TestSpecialIntegerKernelsSelection(t *testing.T) {
+func TestSpecialIntegerKernelsNulls(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	mask := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}}
 	for _, tc := range []struct {
 		name   string
 		inputs []FunctionTestInput
@@ -31,21 +31,21 @@ func TestSpecialIntegerKernelsSelection(t *testing.T) {
 		want   []string
 	}{
 		{"format numeric", []FunctionTestInput{
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{99, 1234, 99}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{99, 1234, 99}, []bool{true, false, true}),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 2, 0}, nil),
 		}, formatIntegerPrecision, []string{"", "1,234.00", ""}},
 		{"format text locale", []FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"x", "1234.5", "x"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"x", "1234.5", "x"}, []bool{true, false, true}),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 2, 0}, nil),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "de_DE", ""}, nil),
 		}, formatIntegerPrecision, []string{"", "1.234,50", ""}},
 		{"makedate", []FunctionTestInput{
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 2024, 0}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 2024, 0}, []bool{true, false, true}),
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 60, 0}, nil),
 		}, makeDateInteger, []string{"", "2024-02-29", ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			test := NewFunctionTestCase(proc, tc.inputs, NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, []bool{true, false, true}), tc.run).WithSelectList(mask)
+			test := NewFunctionTestCase(proc, tc.inputs, NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, []bool{true, false, true}), tc.run)
 			ok, info := test.RunAndFree()
 			require.True(t, ok, info)
 		})

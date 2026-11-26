@@ -35,7 +35,6 @@ func NewBitwiseAggregateCast(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
 	if len(parameters) != 2 {
 		return moerr.NewInternalErrorNoCtx("bitwise aggregate cast expects value and target type")
@@ -50,8 +49,7 @@ func NewBitwiseAggregateCast(
 	switch fromType.Oid {
 	case types.T_any:
 		for i := uint64(0); i < uint64(length); i++ {
-			if bitwiseAggregateSelectedRow(selectList, i) &&
-				!from.IsConstNull() && !from.GetNulls().Contains(i) {
+			if !from.IsConstNull() && !from.GetNulls().Contains(i) {
 				return moerr.NewInternalErrorNoCtx("non-NULL value reached untyped bitwise aggregate cast")
 			}
 			if err := appendBitwiseAggregateNull(to); err != nil {
@@ -60,22 +58,22 @@ func NewBitwiseAggregateCast(
 		}
 		return nil
 	case types.T_decimal64:
-		return bitwiseAggregateDecimal64ToInt64(from, to, length, fromType.Scale, selectList)
+		return bitwiseAggregateDecimal64ToInt64(from, to, length, fromType.Scale)
 	case types.T_decimal128:
-		return bitwiseAggregateDecimal128ToInt64(from, to, length, fromType.Scale, selectList)
+		return bitwiseAggregateDecimal128ToInt64(from, to, length, fromType.Scale)
 	case types.T_decimal256:
-		return bitwiseAggregateDecimal256ToInt64(from, to, length, fromType.Scale, selectList)
+		return bitwiseAggregateDecimal256ToInt64(from, to, length, fromType.Scale)
 	case types.T_float32:
-		return bitwiseAggregateFloat32ToInt64(from, to, proc, length, selectList)
+		return bitwiseAggregateFloat32ToInt64(from, to, proc, length)
 	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		tmp := vector.NewVec(types.T_float32.ToType(), proc.Mp())
 		defer tmp.Free(proc.Mp())
 		if err := materializeLowPrecAsFloat32(proc.Ctx, from, tmp, length, proc.Mp()); err != nil {
 			return err
 		}
-		return bitwiseAggregateFloat32ToInt64(tmp, to, proc, length, selectList)
+		return bitwiseAggregateFloat32ToInt64(tmp, to, proc, length)
 	case types.T_float64:
-		return bitwiseAggregateFloat64ToInt64(from, to, proc, length, selectList)
+		return bitwiseAggregateFloat64ToInt64(from, to, proc, length)
 	case types.T_char, types.T_varchar, types.T_text:
 		// A stale prepared plan must not reinterpret a binary packet as a numeric
 		// string. The prepared visitor is responsible for rebinding the aggregate
@@ -83,29 +81,24 @@ func NewBitwiseAggregateCast(
 		if to.ArgumentIsBin(0) {
 			return moerr.NewInternalErrorNoCtx("binary value reached numeric bitwise aggregate cast")
 		}
-		return bitwiseAggregateStringToInt64(from, to, proc, length, selectList)
+		return bitwiseAggregateStringToInt64(from, to, proc, length)
 	case types.T_date:
-		return bitwiseAggregateDateToInt64(from, to, length, selectList)
+		return bitwiseAggregateDateToInt64(from, to, length)
 	case types.T_year:
-		return bitwiseAggregateYearToInt64(from, to, length, selectList)
+		return bitwiseAggregateYearToInt64(from, to, length)
 	case types.T_datetime:
-		return bitwiseAggregateDatetimeToInt64(from, to, length, fromType.Scale, selectList)
+		return bitwiseAggregateDatetimeToInt64(from, to, length, fromType.Scale)
 	case types.T_timestamp:
 		zone := time.Local
 		if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
 			zone = proc.GetSessionInfo().TimeZone
 		}
-		return bitwiseAggregateTimestampToInt64(from, to, length, fromType.Scale, zone, selectList)
+		return bitwiseAggregateTimestampToInt64(from, to, length, fromType.Scale, zone)
 	case types.T_time:
-		return bitwiseAggregateTimeToInt64(from, to, length, fromType.Scale, selectList)
+		return bitwiseAggregateTimeToInt64(from, to, length, fromType.Scale)
 	default:
 		return moerr.NewInternalErrorNoCtxf("unsupported bitwise aggregate conversion from %s", fromType)
 	}
-}
-
-func bitwiseAggregateSelectedRow(selectList *FunctionSelectList, row uint64) bool {
-	return selectList == nil || selectList.ShouldEvalAllRow() ||
-		(!selectList.IgnoreAllRow() && !selectList.Contains(row))
 }
 
 func appendBitwiseAggregateNull(to *vector.FunctionResult[int64]) error {
@@ -114,16 +107,10 @@ func appendBitwiseAggregateNull(to *vector.FunctionResult[int64]) error {
 
 func bitwiseAggregateStringToInt64(
 	from *vector.Vector, to *vector.FunctionResult[int64], proc *process.Process,
-	length int, selectList *FunctionSelectList,
+	length int,
 ) error {
 	source := vector.GenerateFunctionStrParameter(from)
 	for i := uint64(0); i < uint64(length); i++ {
-		if !bitwiseAggregateSelectedRow(selectList, i) {
-			if err := appendBitwiseAggregateNull(to); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetStrValue(i)
 		if null {
 			if err := appendBitwiseAggregateNull(to); err != nil {
@@ -149,16 +136,9 @@ func bitwiseAggregateStringToInt64(
 
 func bitwiseAggregateDateToInt64(
 	from *vector.Vector, to *vector.FunctionResult[int64], length int,
-	selectList *FunctionSelectList,
 ) error {
 	source := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
 	for i := uint64(0); i < uint64(length); i++ {
-		if !bitwiseAggregateSelectedRow(selectList, i) {
-			if err := appendBitwiseAggregateNull(to); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetValue(i)
 		if null {
 			if err := appendBitwiseAggregateNull(to); err != nil {
@@ -175,16 +155,9 @@ func bitwiseAggregateDateToInt64(
 
 func bitwiseAggregateYearToInt64(
 	from *vector.Vector, to *vector.FunctionResult[int64], length int,
-	selectList *FunctionSelectList,
 ) error {
 	source := vector.GenerateFunctionFixedTypeParameter[types.MoYear](from)
 	for i := uint64(0); i < uint64(length); i++ {
-		if !bitwiseAggregateSelectedRow(selectList, i) {
-			if err := appendBitwiseAggregateNull(to); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetValue(i)
 		if null {
 			if err := appendBitwiseAggregateNull(to); err != nil {
@@ -201,16 +174,9 @@ func bitwiseAggregateYearToInt64(
 
 func bitwiseAggregateFloat32ToInt64(
 	from *vector.Vector, to *vector.FunctionResult[int64], proc *process.Process, length int,
-	selectList *FunctionSelectList,
 ) error {
 	source := vector.GenerateFunctionFixedTypeParameter[float32](from)
 	for i := uint64(0); i < uint64(length); i++ {
-		if !bitwiseAggregateSelectedRow(selectList, i) {
-			if err := appendBitwiseAggregateNull(to); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -245,16 +211,9 @@ func bitwiseAggregateFloat32ToInt64(
 
 func bitwiseAggregateFloat64ToInt64(
 	from *vector.Vector, to *vector.FunctionResult[int64], proc *process.Process, length int,
-	selectList *FunctionSelectList,
 ) error {
 	source := vector.GenerateFunctionFixedTypeParameter[float64](from)
 	for i := uint64(0); i < uint64(length); i++ {
-		if !bitwiseAggregateSelectedRow(selectList, i) {
-			if err := appendBitwiseAggregateNull(to); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -302,16 +261,9 @@ func appendBitwiseAggregateFloatOverflowWarning(proc *process.Process, value flo
 
 func bitwiseAggregateDatetimeToInt64(
 	from *vector.Vector, to *vector.FunctionResult[int64], length int, scale int32,
-	selectList *FunctionSelectList,
 ) error {
 	source := vector.GenerateFunctionFixedTypeParameter[types.Datetime](from)
 	for i := uint64(0); i < uint64(length); i++ {
-		if !bitwiseAggregateSelectedRow(selectList, i) {
-			if err := appendBitwiseAggregateNull(to); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -338,16 +290,9 @@ func bitwiseAggregateTimestampToInt64(
 	length int,
 	scale int32,
 	zone *time.Location,
-	selectList *FunctionSelectList,
 ) error {
 	source := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
 	for i := uint64(0); i < uint64(length); i++ {
-		if !bitwiseAggregateSelectedRow(selectList, i) {
-			if err := appendBitwiseAggregateNull(to); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -371,16 +316,9 @@ func bitwiseAggregateTimestampToInt64(
 
 func bitwiseAggregateTimeToInt64(
 	from *vector.Vector, to *vector.FunctionResult[int64], length int, scale int32,
-	selectList *FunctionSelectList,
 ) error {
 	source := vector.GenerateFunctionFixedTypeParameter[types.Time](from)
 	for i := uint64(0); i < uint64(length); i++ {
-		if !bitwiseAggregateSelectedRow(selectList, i) {
-			if err := appendBitwiseAggregateNull(to); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -418,17 +356,10 @@ func mysqlTimeInt64(value types.Time, roundFraction bool) int64 {
 
 func bitwiseAggregateDecimal64ToInt64(
 	from *vector.Vector, to *vector.FunctionResult[int64], length int, scale int32,
-	selectList *FunctionSelectList,
 ) error {
 	source := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
 	divisor, roundsToZero := decimal64RoundingDivisor(scale)
 	for i := uint64(0); i < uint64(length); i++ {
-		if !bitwiseAggregateSelectedRow(selectList, i) {
-			if err := appendBitwiseAggregateNull(to); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -479,7 +410,6 @@ func decimal64ToInt64(value types.Decimal64, scale int32, divisor uint64, rounds
 
 func bitwiseAggregateDecimal128ToInt64(
 	from *vector.Vector, to *vector.FunctionResult[int64], length int, scale int32,
-	selectList *FunctionSelectList,
 ) error {
 	source := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
 	divisor, roundsToZero, err := decimal128RoundingDivisor(scale)
@@ -487,12 +417,6 @@ func bitwiseAggregateDecimal128ToInt64(
 		return err
 	}
 	for i := uint64(0); i < uint64(length); i++ {
-		if !bitwiseAggregateSelectedRow(selectList, i) {
-			if err := appendBitwiseAggregateNull(to); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -564,7 +488,6 @@ func bitwiseAggregateDecimal128ToInt64Value(value, divisor types.Decimal128, rou
 
 func bitwiseAggregateDecimal256ToInt64(
 	from *vector.Vector, to *vector.FunctionResult[int64], length int, scale int32,
-	selectList *FunctionSelectList,
 ) error {
 	source := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
 	divisor, roundsToZero, err := decimal256RoundingDivisor(scale)
@@ -572,12 +495,6 @@ func bitwiseAggregateDecimal256ToInt64(
 		return err
 	}
 	for i := uint64(0); i < uint64(length); i++ {
-		if !bitwiseAggregateSelectedRow(selectList, i) {
-			if err := appendBitwiseAggregateNull(to); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {

@@ -76,7 +76,7 @@ func runUnsignedDecimalAdmissionWithArgumentIsBin(
 		return result, err
 	}
 	err = newUnsignedDecimalAdmission(
-		[]*vector.Vector{from, targetCarrier, nameCarrier}, result, proc, length, nil, entry)
+		[]*vector.Vector{from, targetCarrier, nameCarrier}, result, proc, length, entry)
 	return result, err
 }
 
@@ -682,7 +682,7 @@ func TestUnsignedDecimalAdmissionScalarNullAndValidation(t *testing.T) {
 	// Parameter shape validation: the admission takes exactly three
 	// parameters (value, target type carrier, column name carrier).
 	err = newUnsignedDecimalAdmission(
-		[]*vector.Vector{from}, nil, proc, 1, nil, unsignedDecimalAdmissionMode)
+		[]*vector.Vector{from}, nil, proc, 1, unsignedDecimalAdmissionMode)
 	require.Error(t, err)
 
 	intCarrier := vector.NewVec(types.T_int64.ToType(), proc.Mp())
@@ -690,7 +690,7 @@ func TestUnsignedDecimalAdmissionScalarNullAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	result = vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 	err = newUnsignedDecimalAdmission(
-		[]*vector.Vector{from, intCarrier, nameCarrier}, result, proc, 1, nil, unsignedDecimalAdmissionMode)
+		[]*vector.Vector{from, intCarrier, nameCarrier}, result, proc, 1, unsignedDecimalAdmissionMode)
 	require.Error(t, err, "a non-decimal target carrier is invalid")
 }
 
@@ -893,88 +893,6 @@ func TestUnsignedDecimalAdmissionTemporalEnumAndUnsupportedSources(t *testing.T)
 	_, err = runUnsignedDecimalAdmission(proc, from, target, types.T_uuid.ToType(), 1,
 		unsignedDecimalAdmissionStrict, "d")
 	require.ErrorContains(t, err, "is not supported")
-}
-
-// TestUnsignedDecimalAdmissionSelectListSkipsRows checks skipped rows
-// materialize as NULL with no classification or diagnostics in every
-// admission shape.
-func TestUnsignedDecimalAdmissionSelectListSkipsRows(t *testing.T) {
-	// SelectList[i] == false marks row i skipped (Contains negates it).
-	skip0 := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
-	run := func(from *vector.Vector, resultType types.Type, proc *process.Process, entry unsignedDecimalAdmissionEntry) (vector.FunctionResultWrapper, error) {
-		targetCarrier := vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
-		nameCarrier, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("s"), 2, proc.Mp())
-		require.NoError(t, err)
-		result := vector.NewFunctionResultWrapper(resultType, proc.Mp())
-		// The binary shape's source stands for a binary literal.
-		result.SetArgumentIsBin([]bool{resultType.Oid == types.T_varbinary})
-		require.NoError(t, result.PreExtendAndReset(2))
-		err = newUnsignedDecimalAdmission(
-			[]*vector.Vector{from, targetCarrier, nameCarrier}, result, proc, 2, skip0, entry)
-		return result, err
-	}
-
-	// Fixed-size shape: the skipped row carries a negative that must NOT
-	// reject, and the evaluated row passes through.
-	t.Run("fixed", func(t *testing.T) {
-		proc, session := unsignedDecimalAdmissionProc(t, "STRICT_TRANS_TABLES")
-		typ := types.T_int8.ToType()
-		from := testutil.NewVector(2, typ, proc.Mp(), false, []int8{-1, 5})
-		result, err := run(from, typ, proc, unsignedDecimalAdmissionStrict)
-		require.NoError(t, err)
-		vec := vector.MustFunctionResult[int8](result).GetResultVector()
-		require.True(t, vec.GetNulls().Contains(0), "skipped row materializes as NULL")
-		require.Equal(t, int8(5), vector.GetFixedAtWithTypeCheck[int8](vec, 1))
-		require.Empty(t, session.warnings)
-	})
-
-	// JSON shape.
-	t.Run("json", func(t *testing.T) {
-		proc, session := unsignedDecimalAdmissionProc(t, "ONLY_FULL_GROUP_BY")
-		jsonT := types.T_json.ToType()
-		encode := func(s string) []byte {
-			bj, err := types.ParseStringToByteJson(s)
-			require.NoError(t, err)
-			enc, err := types.EncodeJson(bj)
-			require.NoError(t, err)
-			return enc
-		}
-		from := vector.NewVec(jsonT, proc.Mp())
-		require.NoError(t, vector.AppendBytes(from, encode("-1"), false, proc.Mp()))
-		require.NoError(t, vector.AppendBytes(from, encode("2"), false, proc.Mp()))
-		result, err := run(from, jsonT, proc, unsignedDecimalAdmissionIgnore)
-		require.NoError(t, err)
-		vec := vector.MustFunctionResult[types.Varlena](result).GetResultVector()
-		require.True(t, vec.GetNulls().Contains(0))
-		require.Empty(t, session.warnings, "the skipped negative earns no clip warning")
-	})
-
-	// Binary shape.
-	t.Run("binary", func(t *testing.T) {
-		proc, session := unsignedDecimalAdmissionProc(t, "STRICT_TRANS_TABLES")
-		binT := types.T_varbinary.ToType()
-		from := testutil.NewVector(2, binT, proc.Mp(), false,
-			[]string{string([]byte{0x00, 0x96}), string([]byte{0x00, 0x96})})
-		result, err := run(from, binT, proc, unsignedDecimalAdmissionStrict)
-		require.NoError(t, err)
-		vec := vector.MustFunctionResult[types.Varlena](result).GetResultVector()
-		require.True(t, vec.GetNulls().Contains(0))
-		require.Equal(t, "1.50", vec.GetStringAt(1), "150 renders 1.50 at scale 2")
-		require.Empty(t, session.warnings)
-	})
-
-	// Text varlena shape.
-	t.Run("varlena", func(t *testing.T) {
-		proc, session := unsignedDecimalAdmissionProc(t, "STRICT_TRANS_TABLES")
-		strT := types.T_varchar.ToType()
-		from := testutil.NewVector(2, strT, proc.Mp(), false, []string{"-1.5", "2.5"})
-		result, err := run(from, strT, proc, unsignedDecimalAdmissionStrict)
-		require.NoError(t, err)
-		vec := vector.MustFunctionResult[types.Varlena](result).GetResultVector()
-		require.True(t, vec.GetNulls().Contains(0))
-		require.Equal(t, "2.5", vec.GetStringAt(1))
-		require.Empty(t, session.warnings)
-	})
 }
 
 // TestUnsignedDecimalAdmissionBinaryDecimal128And256 walks the binary decode

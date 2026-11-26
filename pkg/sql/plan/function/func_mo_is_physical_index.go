@@ -38,18 +38,12 @@ func isPhysicalIndex(name, kind string, extraInfo []byte) bool {
 	return catalog.RequiresPrivilegedRelationAccess(name, kind, extra.FeatureFlag)
 }
 
-func builtInIsPhysicalIndex(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInIsPhysicalIndex(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	names := vector.GenerateFunctionStrParameter(parameters[0])
 	kinds := vector.GenerateFunctionStrParameter(parameters[1])
 	extras := vector.GenerateFunctionStrParameter(parameters[2])
 	results := vector.MustFunctionResult[bool](result)
 	for row := uint64(0); row < uint64(length); row++ {
-		if functionRowSkipped(selectList, row) {
-			if err := results.Append(false, true); err != nil {
-				return err
-			}
-			continue
-		}
 		name, nullName := names.GetStrValue(row)
 		kind, nullKind := kinds.GetStrValue(row)
 		extra, nullExtra := extras.GetStrValue(row)

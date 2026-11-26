@@ -163,17 +163,6 @@ func TestMathBoolCastTargetsPreserveValuesAndNulls(t *testing.T) {
 	}
 }
 
-func TestMathBoolCastsHonorMaskedRows(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	fc := NewFunctionTestCase(proc, []FunctionTestInput{
-		NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
-		NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 0}, nil),
-	}, NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1, 0}, []bool{false, true}), NewCast).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
-	ok, info := fc.RunAndFree()
-	require.True(t, ok, info)
-}
-
 func TestMathBooleanValuesReachMathExecutors(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx := proc.Ctx

@@ -117,17 +117,17 @@ func (op *opBuiltInStarlark) buildFn(proc *process.Process, program string) erro
 }
 
 func (op *opBuiltInStarlark) starlark(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.tryStarlarkImpl(params, result, proc, length, selectList, false)
+	proc *process.Process, length int) error {
+	return op.tryStarlarkImpl(params, result, proc, length, false)
 }
 
 func (op *opBuiltInStarlark) tryStarlark(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.tryStarlarkImpl(params, result, proc, length, selectList, true)
+	proc *process.Process, length int) error {
+	return op.tryStarlarkImpl(params, result, proc, length, true)
 }
 
 func (op *opBuiltInStarlark) tryStarlarkImpl(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList, isTry bool) error {
+	proc *process.Process, length int, isTry bool) error {
 	p1 := vector.GenerateFunctionStrParameter(params[0])
 	if !params[0].IsConst() {
 		return moerr.NewInvalidInput(proc.Ctx, "starlark code must be constant.")

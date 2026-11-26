@@ -201,7 +201,7 @@ func (c incompleteCalendar) formatDirective(locale *temporalLocale, b rune, buf 
 	return false, nil
 }
 
-func stringCalendarTotal(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, seconds bool) error {
+func stringCalendarTotal(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, seconds bool) error {
 	truncateFractional, err := process.ResolveTimeTruncateFractional(proc)
 	if err != nil {
 		return err
@@ -213,12 +213,6 @@ func stringCalendarTotal(ivecs []*vector.Vector, result vector.FunctionResultWra
 		unit, offset = intervalUnitSECOND, ADZeroSeconds
 	}
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetStrValue(i)
 		if null || len(value) == 0 {
 			if err := rs.Append(0, true); err != nil {
@@ -262,14 +256,14 @@ func stringCalendarTotal(ivecs []*vector.Vector, result vector.FunctionResultWra
 	}
 	return nil
 }
-func stringToDays(v []*vector.Vector, r vector.FunctionResultWrapper, p *process.Process, n int, s *FunctionSelectList) error {
-	return stringCalendarTotal(v, r, p, n, s, false)
+func stringToDays(v []*vector.Vector, r vector.FunctionResultWrapper, p *process.Process, n int) error {
+	return stringCalendarTotal(v, r, p, n, false)
 }
-func stringToSeconds(v []*vector.Vector, r vector.FunctionResultWrapper, p *process.Process, n int, s *FunctionSelectList) error {
-	return stringCalendarTotal(v, r, p, n, s, true)
+func stringToSeconds(v []*vector.Vector, r vector.FunctionResultWrapper, p *process.Process, n int) error {
+	return stringCalendarTotal(v, r, p, n, true)
 }
 
-func stringCalendarIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, week bool) error {
+func stringCalendarIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, week bool) error {
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	var modes vector.FunctionParameterWrapper[int64]
 	defaultMode := 0
@@ -298,12 +292,6 @@ func stringCalendarIndex(ivecs []*vector.Vector, result vector.FunctionResultWra
 		return days.Append(int64(n), null)
 	}
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := appendValue(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := source.GetStrValue(i)
 		if null {
 			if err := appendValue(0, true); err != nil {
@@ -340,16 +328,16 @@ func stringCalendarIndex(ivecs []*vector.Vector, result vector.FunctionResultWra
 	}
 	return nil
 }
-func stringDayOfWeek(v []*vector.Vector, r vector.FunctionResultWrapper, p *process.Process, n int, s *FunctionSelectList) error {
-	return stringCalendarIndex(v, r, p, n, s, false)
+func stringDayOfWeek(v []*vector.Vector, r vector.FunctionResultWrapper, p *process.Process, n int) error {
+	return stringCalendarIndex(v, r, p, n, false)
 }
-func stringWeek(v []*vector.Vector, r vector.FunctionResultWrapper, p *process.Process, n int, s *FunctionSelectList) error {
-	return stringCalendarIndex(v, r, p, n, s, true)
+func stringWeek(v []*vector.Vector, r vector.FunctionResultWrapper, p *process.Process, n int) error {
+	return stringCalendarIndex(v, r, p, n, true)
 }
 
 // Mixed DATEDIFF overloads keep typed operands typed. Only string operands
 // inspect raw components and own their rejection diagnostic.
-func stringDateDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func stringDateDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	operand := func(v *vector.Vector) func(uint64) (types.Date, bool) {
 		if v.GetType().Oid == types.T_date {
 			p := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
@@ -373,7 +361,7 @@ func stringDateDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	left, right := operand(ivecs[0]), operand(ivecs[1])
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) || ivecs[0].IsNull(i) || ivecs[1].IsNull(i) {
+		if ivecs[0].IsNull(i) || ivecs[1].IsNull(i) {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}

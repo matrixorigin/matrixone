@@ -92,7 +92,7 @@ func BenchmarkFloatDecimalVectors(b *testing.B) {
 						if err := result.PreExtendAndReset(rows); err != nil {
 							return err
 						}
-						return cast(parameters, result, proc, rows, nil)
+						return cast(parameters, result, proc, rows)
 					}
 					require.NoError(b, run())
 					verify := func() {

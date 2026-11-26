@@ -223,7 +223,7 @@ func comparisonNumericAt(value *vector.Vector, row int, scratch *[8]byte) bytejs
 	return bytejson.ByteJson{Type: code, Data: scratch[:]}
 }
 
-func compareJSONNumericVectors(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, nullSafe bool, cmp func(int) bool, selectList *FunctionSelectList) error {
+func compareJSONNumericVectors(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, nullSafe bool, cmp func(int) bool) error {
 	jsonPos, numericPos := 0, 1
 	if parameters[0].GetType().Oid != types.T_json {
 		jsonPos, numericPos = 1, 0
@@ -240,10 +240,7 @@ func compareJSONNumericVectors(parameters []*vector.Vector, result vector.Functi
 	var cachedJSONNull, jsonReady bool
 	for row := 0; row < length; row++ {
 		values[row] = false
-		if selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(uint64(row))) {
-			output.GetNulls().Add(uint64(row))
-			continue
-		}
+
 		value, jsonNull := cachedJSON, cachedJSONNull
 		if !jsonReady {
 			var err error

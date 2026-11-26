@@ -47,12 +47,9 @@ func TestUUIDShort(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		length int
-		mask   *FunctionSelectList
 		calls  int
 	}{
-		{"empty", 0, nil, 0}, {"all", 3, nil, 3},
-		{"ignored", 3, &FunctionSelectList{AllNull: true, AnyNull: true}, 0},
-		{"partial", 3, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}, 2},
+		{"empty", 0, 0}, {"all", 3, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), proc.Mp())
@@ -69,7 +66,7 @@ func TestUUIDShort(t *testing.T) {
 				calls++
 				return math.MaxUint64 - uint64(calls-1), nil
 			}}
-			require.NoError(t, builtInUUIDShort(nil, result, proc, tc.length, tc.mask))
+			require.NoError(t, builtInUUIDShort(nil, result, proc, tc.length))
 			require.Equal(t, tc.calls, calls)
 			require.Equal(t, tc.length, result.GetResultVector().Length())
 			if child != nil {
@@ -77,12 +74,9 @@ func TestUUIDShort(t *testing.T) {
 			}
 			next := uint64(math.MaxUint64)
 			for i := 0; i < tc.length; i++ {
-				ignored := tc.mask.IgnoreAllRow() || (!tc.mask.ShouldEvalAllRow() && tc.mask.Contains(uint64(i)))
-				require.Equal(t, ignored, result.GetResultVector().GetNulls().Contains(uint64(i)))
-				if !ignored {
-					require.Equal(t, next, vector.GetFixedAtNoTypeCheck[uint64](result.GetResultVector(), i))
-					next--
-				}
+				require.False(t, result.GetResultVector().GetNulls().Contains(uint64(i)))
+				require.Equal(t, next, vector.GetFixedAtNoTypeCheck[uint64](result.GetResultVector(), i))
+				next--
 			}
 		})
 	}
@@ -101,13 +95,11 @@ func TestUUIDShort(t *testing.T) {
 			r := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), proc.Mp())
 			defer r.Free()
 			require.NoError(t, r.PreExtendAndReset(2))
-			err := builtInUUIDShort(nil, r, proc, 2, nil)
+			err := builtInUUIDShort(nil, r, proc, 2)
 			require.Error(t, err)
 			if tc.want != nil {
 				require.ErrorIs(t, err, tc.want)
 			}
-			// Ignored rows must not reach even a missing/failing allocator.
-			require.NoError(t, builtInUUIDShort(nil, r, proc, 2, &FunctionSelectList{AllNull: true}))
 		})
 	}
 	parent, cancel := context.WithCancel(proc.Ctx)
@@ -117,5 +109,5 @@ func TestUUIDShort(t *testing.T) {
 	r := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), proc.Mp())
 	defer r.Free()
 	require.NoError(t, r.PreExtendAndReset(1))
-	require.ErrorIs(t, builtInUUIDShort(nil, r, proc, 1, nil), context.Canceled)
+	require.ErrorIs(t, builtInUUIDShort(nil, r, proc, 1), context.Canceled)
 }

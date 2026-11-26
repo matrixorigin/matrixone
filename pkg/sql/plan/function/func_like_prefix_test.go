@@ -47,15 +47,13 @@ func TestGeneralCIPrefixVectorEntryAndFallbacks(t *testing.T) {
 		name, pattern string
 		values        []string
 		want          []bool
-		masked        bool
 	}{
-		{"prefix", "foReSt%", []string{"forest", "fórêst", "forex", "forest\xff"}, []bool{true, true, false, true}, false},
-		{"late Unicode", "forest%", []string{"foreßt", "foreST", "forest🙂", "fórest"}, []bool{true, true, true, true}, false},
-		{"contains fallback", "%forest%", []string{"xforest", "coral", "forest", "xx"}, []bool{true, false, true, false}, false},
-		{"underscore fallback", "f_rest%", []string{"forest", "fórest", "forx", "fXrest"}, []bool{true, true, false, true}, false},
-		{"escaped fallback", `f\%rest%`, []string{"f%rest", "forest", "f%restx", "fXrest"}, []bool{true, false, true, false}, false},
-		{"Unicode pattern fallback", "fórest%", []string{"forest", "fórêst", "coral", "FOREST"}, []bool{true, true, false, true}, false},
-		{"masked fallback", "forest%", []string{"forest", "coral", "forest", "FOREST"}, []bool{false, false, true, false}, true},
+		{"prefix", "foReSt%", []string{"forest", "fórêst", "forex", "forest\xff"}, []bool{true, true, false, true}},
+		{"late Unicode", "forest%", []string{"foreßt", "foreST", "forest🙂", "fórest"}, []bool{true, true, true, true}},
+		{"contains fallback", "%forest%", []string{"xforest", "coral", "forest", "xx"}, []bool{true, false, true, false}},
+		{"underscore fallback", "f_rest%", []string{"forest", "fórest", "forx", "fXrest"}, []bool{true, true, false, true}},
+		{"escaped fallback", `f\%rest%`, []string{"f%rest", "forest", "f%restx", "fXrest"}, []bool{true, false, true, false}},
+		{"Unicode pattern fallback", "fórest%", []string{"forest", "fórêst", "coral", "FOREST"}, []bool{true, true, false, true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, constant := range []bool{false, true} {
@@ -67,14 +65,9 @@ func TestGeneralCIPrefixVectorEntryAndFallbacks(t *testing.T) {
 				want := append([]bool(nil), tc.want...)
 				want[3] = false
 				wantNulls := append([]bool(nil), nulls...)
-				var selection *FunctionSelectList
-				if tc.masked {
-					selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, true, false}}
-					wantNulls = []bool{true, true, false, true}
-				}
 				fn := newOpBuiltInRegexp().likeFn
 				tcc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(typ, tc.values, nulls), pattern},
-					NewFunctionTestResult(types.T_bool.ToType(), false, want, wantNulls), fn).WithSelectList(selection)
+					NewFunctionTestResult(types.T_bool.ToType(), false, want, wantNulls), fn)
 				ok, info := tcc.Run()
 				tcc.Free()
 				require.True(t, ok, info)

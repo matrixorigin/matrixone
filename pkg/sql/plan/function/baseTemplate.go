@@ -38,29 +38,6 @@ func appendRepeatedBytesResult(
 	return rs.AppendMultiBytes(value, false, length)
 }
 
-func appendRepeatedBytesResultWithSelection(
-	rs *vector.FunctionResult[types.Varlena],
-	value []byte,
-	length int,
-	selectList *FunctionSelectList,
-) error {
-	if selectList.IgnoreAllRow() {
-		rs.SetNullResult(uint64(length))
-		return nil
-	}
-	if err := appendRepeatedBytesResult(rs, value, length); err != nil {
-		return err
-	}
-	if !selectList.ShouldEvalAllRow() {
-		for row := uint64(0); row < uint64(length); row++ {
-			if selectList.Contains(row) {
-				rs.AddNullAt(row)
-			}
-		}
-	}
-	return nil
-}
-
 type templateDec interface {
 	types.Decimal64 | types.Decimal128 | types.Decimal256
 }
@@ -79,7 +56,7 @@ type templateDecOut interface {
 // The kernel receives (v1, v2, rs) slices where len==1 indicates a constant.
 // Scale values and null bitmap are provided for kernels that need them.
 func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
-	arithFn func(v1, v2 []TIn, rs []TOut, scale1, scale2 int32, rsnull *nulls.Nulls) error, selectList *FunctionSelectList) error {
+	arithFn func(v1, v2 []TIn, rs []TOut, scale1, scale2 int32, rsnull *nulls.Nulls) error) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[TOut](result)
 	p1 := vector.OptGetParamFromWrapper[TIn](rs, 0, parameters[0])
@@ -110,19 +87,6 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsNull)
 	}
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			for i := 0; i < length; i++ {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if !hasEvaluableRows(rsNull, length) {
 		return nil
 	}
@@ -163,7 +127,7 @@ func opBinaryFixedFixedToFixed[
 	T1 types.FixedSizeTExceptStrType,
 	T2 types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v1 T1, v2 T2) Tr, selectList *FunctionSelectList) error {
+	resultFn func(v1 T1, v2 T2) Tr) error {
 	if length == 0 {
 		return nil
 	}
@@ -178,13 +142,8 @@ func opBinaryFixedFixedToFixed[
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
-	if selectList != nil {
-		var allMasked bool
-		rsAnyNull, allMasked = applyFunctionSelection(rsNull, selectList, length)
-		if allMasked {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
+	if length == 0 {
+		return nil
 	}
 	if c1 && c2 {
 		v1, null1 := p1.GetValue(0)
@@ -283,7 +242,7 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 	T1 types.FixedSizeTExceptStrType,
 	T2 types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v1 T1, v2 T2) (Tr, error), selectList *FunctionSelectList) error {
+	resultFn func(v1 T1, v2 T2) (Tr, error)) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
@@ -295,20 +254,6 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := 0; i < length; i++ {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if c1 && c2 {
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
@@ -433,7 +378,7 @@ func opBinaryFixedFixedToFixedWithNullOnError[
 	T1 types.FixedSizeTExceptStrType,
 	T2 types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v1 T1, v2 T2) (Tr, error), selectList *FunctionSelectList) error {
+	resultFn func(v1 T1, v2 T2) (Tr, error)) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
@@ -445,20 +390,6 @@ func opBinaryFixedFixedToFixedWithNullOnError[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if c1 && c2 {
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
@@ -589,7 +520,7 @@ func opBinaryFixedFixedToFixedWithNullOnError[
 func opBinaryStrFixedToFixedWithErrorCheck[
 	T2 types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v1 string, v2 T2) (Tr, error), selectList *FunctionSelectList) error {
+	resultFn func(v1 string, v2 T2) (Tr, error)) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -601,20 +532,6 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if c1 && c2 {
 		v1, null1 := p1.GetStrValue(0)
 		v2, null2 := p2.GetValue(0)
@@ -744,7 +661,7 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 func opTernaryStrFixedStrToFixed[
 	T2 types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v1 string, v2 T2, v3 string) Tr, selectList *FunctionSelectList) error {
+	resultFn func(v1 string, v2 T2, v3 string) Tr) error {
 	result.UseOptFunctionParamFrame(3)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -753,20 +670,6 @@ func opTernaryStrFixedStrToFixed[
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 	rsNull := rsVec.GetNulls()
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 
 	// A constant NULL represents NULL for every output row; a non-constant
 	// vector's null bitmap is already row-indexed.  Treat all three operands as
@@ -822,7 +725,7 @@ func opTernaryStrFixedStrToFixed[
 
 func opBinaryStrFixedToStrWithErrorCheck[
 	T2 types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v1 string, v2 T2) (string, error), selectList *FunctionSelectList) error {
+	resultFn func(v1 string, v2 T2) (string, error)) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -833,20 +736,6 @@ func opBinaryStrFixedToStrWithErrorCheck[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rs.SetNullResult(uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if c1 && c2 {
 		v1, null1 := p1.GetStrValue(0)
 		v2, null2 := p2.GetValue(0)
@@ -993,7 +882,7 @@ func opBinaryStrFixedToStrWithErrorCheck[
 func opBinaryFixedStrToFixedWithErrorCheck[
 	T1 types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v1 T1, v2 string) (Tr, error), selectList *FunctionSelectList) error {
+	resultFn func(v1 T1, v2 string) (Tr, error)) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
@@ -1005,20 +894,6 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if c1 && c2 {
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetStrValue(0)
@@ -1142,7 +1017,7 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 
 func specialTemplateForModFunction[
 	T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
-	modFn func(v1, v2 T) T, selectList *FunctionSelectList) error {
+	modFn func(v1, v2 T) T) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T](result)
 	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
@@ -1154,20 +1029,6 @@ func specialTemplateForModFunction[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := 0; i < length; i++ {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if c1 && c2 {
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
@@ -1175,7 +1036,7 @@ func specialTemplateForModFunction[
 		if ifNull {
 			rsNull.AddRange(0, uint64(length))
 		} else if v2 == 0 {
-			if checkDivisionByZeroBehavior(proc, selectList) {
+			if checkDivisionByZeroBehavior(proc) {
 				return moerr.NewDivByZeroNoCtx()
 			}
 			rsNull.AddRange(0, uint64(length))
@@ -1194,7 +1055,7 @@ func specialTemplateForModFunction[
 		if null1 {
 			rsNull.AddRange(0, uint64(length))
 		} else {
-			shouldError := checkDivisionByZeroBehavior(proc, selectList)
+			shouldError := checkDivisionByZeroBehavior(proc)
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
 				rowCount := uint64(length)
@@ -1242,7 +1103,7 @@ func specialTemplateForModFunction[
 				return nil
 			}
 			if v2 == 0 {
-				if checkDivisionByZeroBehavior(proc, selectList) {
+				if checkDivisionByZeroBehavior(proc) {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				rsNull.AddRange(0, uint64(length))
@@ -1269,7 +1130,7 @@ func specialTemplateForModFunction[
 	}
 
 	// basic case.
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	shouldError := checkDivisionByZeroBehavior(proc)
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
 		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -1314,7 +1175,7 @@ func specialTemplateForModFunction[
 // - In SELECT: always return NULL (never raise error)
 // - In INSERT/UPDATE: raise error if strict mode + ERROR_FOR_DIVISION_BY_ZERO are enabled
 // - In INSERT IGNORE: always return NULL (never raise error, even in strict mode)
-func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSelectList) (shouldError bool) {
+func checkDivisionByZeroBehavior(proc *process.Process) (shouldError bool) {
 	if proc == nil {
 		return false
 	}
@@ -1375,8 +1236,7 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 }
 
 // hasEvaluableRows reports whether at least one row in the current batch may
-// execute the arithmetic kernel. Input NULLs and selectList-masked rows must
-// already be merged into rsNull before calling it. The bitmap can retain bits
+// execute the arithmetic kernel. Input NULLs must already be merged into rsNull before calling it. The bitmap can retain bits
 // outside [0, length) when an expression executor is reused with a smaller
 // batch, so its total cardinality must not be used here.
 func hasEvaluableRows(rsNull *nulls.Nulls, length int) bool {
@@ -1396,7 +1256,7 @@ func hasEvaluableRows(rsNull *nulls.Nulls, length int) bool {
 
 func specialTemplateForDivFunction[
 	T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
-	divFn func(v1, v2 T) (T2, error), selectList *FunctionSelectList) error {
+	divFn func(v1, v2 T) (T2, error)) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T2](result)
 	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
@@ -1408,20 +1268,6 @@ func specialTemplateForDivFunction[
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := 0; i < length; i++ {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if c1 && c2 {
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
@@ -1430,7 +1276,7 @@ func specialTemplateForDivFunction[
 			rsNull.AddRange(0, uint64(length))
 		} else {
 			if v2 == 0 {
-				if checkDivisionByZeroBehavior(proc, selectList) {
+				if checkDivisionByZeroBehavior(proc) {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				// Return NULL (MySQL 8.0 behavior: SELECT always returns NULL, INSERT/UPDATE returns NULL if not strict+ERROR_FOR_DIVISION_BY_ZERO)
@@ -1463,7 +1309,7 @@ func specialTemplateForDivFunction[
 					}
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
-						if checkDivisionByZeroBehavior(proc, selectList) {
+						if checkDivisionByZeroBehavior(proc) {
 							return moerr.NewDivByZeroNoCtx()
 						}
 						// Return NULL (MySQL 8.0 behavior)
@@ -1481,7 +1327,7 @@ func specialTemplateForDivFunction[
 				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
-						if checkDivisionByZeroBehavior(proc, selectList) {
+						if checkDivisionByZeroBehavior(proc) {
 							return moerr.NewDivByZeroNoCtx()
 						}
 						// Return NULL (MySQL 8.0 behavior)
@@ -1511,7 +1357,7 @@ func specialTemplateForDivFunction[
 				return nil
 			}
 			if v2 == 0 {
-				if checkDivisionByZeroBehavior(proc, selectList) {
+				if checkDivisionByZeroBehavior(proc) {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				// Return NULL (MySQL 8.0 behavior)
@@ -1558,7 +1404,7 @@ func specialTemplateForDivFunction[
 			v1, _ := p1.GetValue(i)
 			v2, _ := p2.GetValue(i)
 			if v2 == 0 {
-				if checkDivisionByZeroBehavior(proc, selectList) {
+				if checkDivisionByZeroBehavior(proc) {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				// Return NULL (MySQL 8.0 behavior)
@@ -1575,7 +1421,7 @@ func specialTemplateForDivFunction[
 	}
 
 	rowCount := uint64(length)
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	shouldError := checkDivisionByZeroBehavior(proc)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
@@ -1597,7 +1443,7 @@ func specialTemplateForDivFunction[
 
 func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	arithFn func(v1, v2 []byte) Tr, selectList *FunctionSelectList) error {
+	arithFn func(v1, v2 []byte) Tr) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -1609,20 +1455,6 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if c1 && c2 {
 		v1, null1 := p1.GetStrValue(0)
 		v2, null2 := p2.GetStrValue(0)
@@ -1718,7 +1550,7 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 
 func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	fn func(v1, v2 []byte) (Tr, error), selectList *FunctionSelectList) error {
+	fn func(v1, v2 []byte) (Tr, error)) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -1730,20 +1562,6 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if c1 && c2 {
 		v1, null1 := p1.GetStrValue(0)
 		v2, null2 := p2.GetStrValue(0)
@@ -1861,7 +1679,7 @@ func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 
 func opBinaryBytesBytesToBytesWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	fn func(v1, v2 []byte) ([]byte, error), selectList *FunctionSelectList) error {
+	fn func(v1, v2 []byte) ([]byte, error)) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -1873,20 +1691,6 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rs.SetNullResult(uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if c1 && c2 {
 		v1, null1 := p1.GetStrValue(0)
 		v2, null2 := p2.GetStrValue(0)
@@ -2036,49 +1840,9 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 	return nil
 }
 
-func compareVarlenaEqual(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[bool](result)
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
-
-	v1, v2 := parameters[0], parameters[1]
-	if v1.IsConstNull() || v2.IsConstNull() {
-		rsVec.GetNulls().AddRange(0, uint64(length))
-		return nil
-	}
-	col1 := vector.MustVarlenaToInt64Slice(v1)
-	col2 := vector.MustVarlenaToInt64Slice(v2)
-
-	if v1.IsConst() && v2.IsConst() {
-		ret := col1[0] == col2[0]
-		for i := uint64(0); i < uint64(length); i++ {
-			rss[i] = ret
-		}
-		return nil
-	}
-
-	if !v1.IsConst() && !v2.IsConst() {
-		for i := 0; i < length; i++ {
-			rss[i] = col1[i] == col2[i]
-		}
-		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-	} else if v1.IsConst() {
-		for i := 0; i < length; i++ {
-			rss[i] = col1[0] == col2[i]
-		}
-		nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
-	} else {
-		for i := 0; i < length; i++ {
-			rss[i] = col1[i] == col2[0]
-		}
-		nulls.Or(parameters[0].GetNulls(), rsVec.GetNulls(), rsVec.GetNulls())
-	}
-	return nil
-}
-
 func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	arithFn func(v1, v2 string) Tr, selectList *FunctionSelectList) error {
+	arithFn func(v1, v2 string) Tr) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -2090,20 +1854,6 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 	rsNull := rsVec.GetNulls()
 	rsAnyNull := false
 
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rsNull.AddRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
 	if c1 && c2 {
 		v1, null1 := p1.GetStrValue(0)
 		v2, null2 := p2.GetStrValue(0)
@@ -2201,7 +1951,7 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 
 func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	fn func(v1, v2 string) (Tr, error), selectList *FunctionSelectList) error {
+	fn func(v1, v2 string) (Tr, error)) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -2210,21 +1960,6 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			rs.AddNullRange(0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rs.AddNullAt(uint64(i))
-				}
-			}
-		}
-	}
 
 	if c1 && c2 {
 		v1, null1 := p1.GetStrValue(0)
@@ -2343,37 +2078,12 @@ func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
 	return nil
 }
 
-// applyFunctionSelection publishes partial selection NULLs within the logical row
-// domain. The caller retains its result-kind-specific all-NULL publication.
-func applyFunctionSelection(resultNulls *nulls.Nulls, selectList *FunctionSelectList, length int) (anyMasked, allMasked bool) {
-	if length == 0 {
-		return false, true
-	}
-	if selectList.IgnoreAllRow() {
-		return true, true
-	}
-	if selectList.ShouldEvalAllRow() {
-		return false, false
-	}
-	masked := 0
-	for row, evaluate := range selectList.SelectList {
-		if row >= length {
-			break
-		}
-		if !evaluate {
-			resultNulls.Add(uint64(row))
-			masked++
-		}
-	}
-	return masked != 0, masked == length
-}
-
 // opUnaryFixedToFixed for unary functions whose result of f(x) is null if x is null.
 // and if x was not null, result will be not null.
 func opUnaryFixedToFixed[
 	T types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v T) Tr, selectList *FunctionSelectList) error {
+	resultFn func(v T) Tr) error {
 	if length == 0 {
 		return nil
 	}
@@ -2386,9 +2096,8 @@ func opUnaryFixedToFixed[
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
-		rsNull.AddRange(0, uint64(length))
+	rsAnyNull := false
+	if length == 0 {
 		return nil
 	}
 	if c1 {
@@ -2429,7 +2138,7 @@ func opUnaryFixedToFixed[
 
 func opUnaryBytesToFixed[
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v []byte) Tr, selectList *FunctionSelectList) error {
+	resultFn func(v []byte) Tr) error {
 	if length == 0 {
 		return nil
 	}
@@ -2442,9 +2151,8 @@ func opUnaryBytesToFixed[
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
-		rsNull.AddRange(0, uint64(length))
+	rsAnyNull := false
+	if length == 0 {
 		return nil
 	}
 	if c1 {
@@ -2485,7 +2193,7 @@ func opUnaryBytesToFixed[
 
 func opUnaryBytesToBytes(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v []byte) []byte, selectList *FunctionSelectList) error {
+	resultFn func(v []byte) []byte) error {
 	if length == 0 {
 		return nil
 	}
@@ -2497,8 +2205,8 @@ func opUnaryBytesToBytes(
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
+	rsAnyNull := false
+	if length == 0 {
 		rs.SetNullResult(uint64(length))
 		return nil
 	}
@@ -2548,7 +2256,7 @@ func opUnaryBytesToBytes(
 
 func opUnaryFixedToStr[
 	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v T) string, selectList *FunctionSelectList) error {
+	resultFn func(v T) string) error {
 	if length == 0 {
 		return nil
 	}
@@ -2560,8 +2268,8 @@ func opUnaryFixedToStr[
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
+	rsAnyNull := false
+	if length == 0 {
 		rs.SetNullResult(uint64(length))
 		return nil
 	}
@@ -2614,7 +2322,7 @@ func opUnaryFixedToStr[
 
 func opUnaryFixedToStrWithNullOnError[
 	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v T) (string, error), selectList *FunctionSelectList) error {
+	resultFn func(v T) (string, error)) error {
 	if length == 0 {
 		return nil
 	}
@@ -2624,11 +2332,6 @@ func opUnaryFixedToStrWithNullOnError[
 	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
 
 	if parameters[0].IsConst() {
-		_, allMasked := applyFunctionSelection(rs.GetResultVector().GetNulls(), selectList, length)
-		if allMasked {
-			rs.SetNullResult(uint64(length))
-			return nil
-		}
 		v, null := p1.GetValue(0)
 		if null {
 			rs.SetNullResult(uint64(length))
@@ -2643,13 +2346,6 @@ func opUnaryFixedToStrWithNullOnError[
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.AppendMustNullForBytesResult(); err != nil {
-				return err
-			}
-			continue
-		}
-
 		v, null := p1.GetValue(i)
 		if null {
 			if err := rs.AppendMustNullForBytesResult(); err != nil {
@@ -2673,7 +2369,7 @@ func opUnaryFixedToStrWithNullOnError[
 
 func opUnaryFixedToStrWithErrorCheck[
 	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v T) (string, error), selectList *FunctionSelectList) error {
+	resultFn func(v T) (string, error)) error {
 	if length == 0 {
 		return nil
 	}
@@ -2685,8 +2381,8 @@ func opUnaryFixedToStrWithErrorCheck[
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
+	rsAnyNull := false
+	if length == 0 {
 		rs.SetNullResult(uint64(length))
 		return nil
 	}
@@ -2748,16 +2444,16 @@ func opUnaryFixedToStrWithErrorCheck[
 
 func opUnaryStrToBytesWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v string) ([]byte, error), selectList *FunctionSelectList) error {
+	resultFn func(v string) ([]byte, error)) error {
 	return opUnaryStrToBytesWithRowErrorCheck(parameters, result, length,
 		func(v string, _ int) ([]byte, error) {
 			return resultFn(v)
-		}, selectList)
+		})
 }
 
 func opUnaryStrToBytesWithRowErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, length int,
-	resultFn func(v string, row int) ([]byte, error), selectList *FunctionSelectList) error {
+	resultFn func(v string, row int) ([]byte, error)) error {
 	if length == 0 {
 		return nil
 	}
@@ -2769,8 +2465,8 @@ func opUnaryStrToBytesWithRowErrorCheck(
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
+	rsAnyNull := false
+	if length == 0 {
 		rs.SetNullResult(uint64(length))
 		return nil
 	}
@@ -2830,7 +2526,7 @@ func opUnaryStrToBytesWithRowErrorCheck(
 
 func opUnaryBytesToBytesWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v []byte) ([]byte, error), selectList *FunctionSelectList) error {
+	resultFn func(v []byte) ([]byte, error)) error {
 	if length == 0 {
 		return nil
 	}
@@ -2842,8 +2538,8 @@ func opUnaryBytesToBytesWithErrorCheck(
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
+	rsAnyNull := false
+	if length == 0 {
 		rs.SetNullResult(uint64(length))
 		return nil
 	}
@@ -2910,7 +2606,7 @@ func opUnaryBytesToBytesWithErrorCheck(
 // geometry functions must still reject malformed payloads.
 func opUnaryBytesToBytesWithResultNull(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v []byte) ([]byte, bool, error), selectList *FunctionSelectList) error {
+	resultFn func(v []byte) ([]byte, bool, error)) error {
 	if length == 0 {
 		return nil
 	}
@@ -2922,8 +2618,8 @@ func opUnaryBytesToBytesWithResultNull(
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
+	rsAnyNull := false
+	if length == 0 {
 		rs.SetNullResult(uint64(length))
 		return nil
 	}
@@ -2984,7 +2680,7 @@ func opUnaryBytesToBytesWithResultNull(
 
 func opUnaryBytesToBytesWithNullOnError(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v []byte) ([]byte, error), selectList *FunctionSelectList) error {
+	resultFn func(v []byte) ([]byte, error)) error {
 	if length == 0 {
 		return nil
 	}
@@ -2996,8 +2692,8 @@ func opUnaryBytesToBytesWithNullOnError(
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
+	rsAnyNull := false
+	if length == 0 {
 		rs.SetNullResult(uint64(length))
 		return nil
 	}
@@ -3063,16 +2759,16 @@ func opUnaryBytesToBytesWithNullOnError(
 
 func opUnaryBytesToStrWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v []byte) (string, error), selectList *FunctionSelectList) error {
+	resultFn func(v []byte) (string, error)) error {
 	return opUnaryBytesToStrWithRowErrorCheck(parameters, result, length,
 		func(v []byte, _ int) (string, error) {
 			return resultFn(v)
-		}, selectList)
+		})
 }
 
 func opUnaryBytesToStrWithRowErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, length int,
-	resultFn func(v []byte, row int) (string, error), selectList *FunctionSelectList) error {
+	resultFn func(v []byte, row int) (string, error)) error {
 	if length == 0 {
 		return nil
 	}
@@ -3084,8 +2780,8 @@ func opUnaryBytesToStrWithRowErrorCheck(
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
+	rsAnyNull := false
+	if length == 0 {
 		rs.SetNullResult(uint64(length))
 		return nil
 	}
@@ -3148,7 +2844,7 @@ func opUnaryBytesToStrWithRowErrorCheck(
 func opUnaryFixedToFixedWithErrorCheck[
 	T types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v T) (Tr, error), selectList *FunctionSelectList) error {
+	resultFn func(v T) (Tr, error)) error {
 	if length == 0 {
 		return nil
 	}
@@ -3161,9 +2857,8 @@ func opUnaryFixedToFixedWithErrorCheck[
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
-		rsNull.AddRange(0, uint64(length))
+	rsAnyNull := false
+	if length == 0 {
 		return nil
 	}
 	if c1 {
@@ -3215,11 +2910,11 @@ func opUnaryFixedToFixedWithErrorCheck[
 func opUnaryFixedToFixedWithNullOnError[
 	T types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v T) (Tr, error), selectList *FunctionSelectList) error {
+	resultFn func(v T) (Tr, error)) error {
 	return opUnaryFixedToFixedWithNullCheck(parameters, result, length, func(v T) (Tr, bool) {
 		r, err := resultFn(v)
 		return r, err != nil
-	}, selectList)
+	})
 }
 
 // opUnaryFixedToFixedWithNullCheck evaluates a unary function and marks a row
@@ -3229,7 +2924,7 @@ func opUnaryFixedToFixedWithNullOnError[
 func opUnaryFixedToFixedWithNullCheck[
 	T types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, length int,
-	resultFn func(v T) (Tr, bool), selectList *FunctionSelectList) error {
+	resultFn func(v T) (Tr, bool)) error {
 	if length == 0 {
 		return nil
 	}
@@ -3242,9 +2937,8 @@ func opUnaryFixedToFixedWithNullCheck[
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
-		rsNull.AddRange(0, uint64(length))
+	rsAnyNull := false
+	if length == 0 {
 		return nil
 	}
 	if c1 {
@@ -3298,7 +2992,7 @@ func opUnaryFixedToFixedWithNullCheck[
 
 func opUnaryBytesToFixedWithErrorCheck[
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v []byte) (Tr, error), selectList *FunctionSelectList) error {
+	resultFn func(v []byte) (Tr, error)) error {
 	if length == 0 {
 		return nil
 	}
@@ -3310,9 +3004,8 @@ func opUnaryBytesToFixedWithErrorCheck[
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
-		rsNull.AddRange(0, uint64(length))
+	rsAnyNull := false
+	if length == 0 {
 		return nil
 	}
 	if c1 {
@@ -3366,7 +3059,7 @@ func opUnaryBytesToFixedWithErrorCheck[
 // whole statement with resultFn's error.
 func opUnaryBytesToFixedWithNullOnError[
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v []byte) (Tr, error), selectList *FunctionSelectList) error {
+	resultFn func(v []byte) (Tr, error)) error {
 	if length == 0 {
 		return nil
 	}
@@ -3378,9 +3071,8 @@ func opUnaryBytesToFixedWithNullOnError[
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
-		rsNull.AddRange(0, uint64(length))
+	rsAnyNull := false
+	if length == 0 {
 		return nil
 	}
 	if c1 {
@@ -3435,7 +3127,7 @@ func opUnaryBytesToFixedWithNullOnError[
 
 func opUnaryStrToFixedWithErrorCheck[
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v string) (Tr, error), selectList *FunctionSelectList) error {
+	resultFn func(v string) (Tr, error)) error {
 	if length == 0 {
 		return nil
 	}
@@ -3447,9 +3139,8 @@ func opUnaryStrToFixedWithErrorCheck[
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyFunctionSelection(rsNull, selectList, length)
-	if allMasked {
-		rsNull.AddRange(0, uint64(length))
+	rsAnyNull := false
+	if length == 0 {
 		return nil
 	}
 	if c1 {

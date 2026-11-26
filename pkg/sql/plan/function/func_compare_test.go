@@ -96,7 +96,7 @@ func TestJSONComparisonCoercion(t *testing.T) {
 					} {
 						t.Run(fmt.Sprintf("%s/reversed=%t", op.name, reversed), func(t *testing.T) {
 							result := makeResult(t, length)
-							require.NoError(t, op.fn(args, result, proc, length, nil))
+							require.NoError(t, op.fn(args, result, proc, length))
 							got := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
 							for row, sign := range signs {
 								if row >= 14 {
@@ -146,7 +146,7 @@ func TestJSONComparisonCoercion(t *testing.T) {
 				} {
 					t.Run(fmt.Sprintf("%s/%s/reversed=%t", mode, op.name, reversed), func(t *testing.T) {
 						result := makeResult(t, length)
-						require.NoError(t, op.fn(args, result, proc, length, nil))
+						require.NoError(t, op.fn(args, result, proc, length))
 						got := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
 						for row, sign := range []int{0, 1, -1, 1, 0, 0} {
 							if row >= 4 {
@@ -174,27 +174,17 @@ func TestJSONComparisonCoercion(t *testing.T) {
 			require.NoError(t, vector.AppendFixed(numbers, v, false, proc.Mp()))
 		}
 		result := makeResult(t, 3)
-		selected := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
-		require.NoError(t, equalFn([]*vector.Vector{jsonValues, numbers}, result, proc, 3, selected))
-		require.Equal(t, []bool{true, false, false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
-		require.True(t, result.GetResultVector().IsNull(1))
-		require.True(t, result.GetResultVector().IsNull(2))
-		allSkipped := &FunctionSelectList{AllNull: true}
-		require.NoError(t, nullSafeEqualFn([]*vector.Vector{jsonValues, numbers}, result, proc, 3, allSkipped))
-		for row := range 3 {
-			require.True(t, result.GetResultVector().IsNull(uint64(row)))
-		}
 		nullPeer := vector.NewConstNull(types.T_int64.ToType(), 3, proc.Mp())
 		t.Cleanup(func() { nullPeer.Free(proc.Mp()) })
-		require.NoError(t, nullSafeEqualFn([]*vector.Vector{nullPeer, jsonValues}, result, proc, 3, nil))
+		require.NoError(t, nullSafeEqualFn([]*vector.Vector{nullPeer, jsonValues}, result, proc, 3))
 		require.Equal(t, []bool{false, false, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 		require.True(t, result.GetResultVector().GetNulls().IsEmpty())
-		require.NoError(t, equalFn([]*vector.Vector{jsonValues, numbers}, result, proc, 3, nil))
+		require.NoError(t, equalFn([]*vector.Vector{jsonValues, numbers}, result, proc, 3))
 		require.Equal(t, []bool{true, false, false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 		require.False(t, result.GetResultVector().IsNull(1))
 		require.True(t, result.GetResultVector().IsNull(2))
 		empty := makeJSON(t, nil)
-		require.NoError(t, equalFn([]*vector.Vector{empty, numbers}, makeResult(t, 0), proc, 0, nil))
+		require.NoError(t, equalFn([]*vector.Vector{empty, numbers}, makeResult(t, 0), proc, 0))
 	})
 
 	t.Run("mixed JSON boolean operators preserve scalar category", func(t *testing.T) {
@@ -241,7 +231,7 @@ func TestJSONComparisonCoercion(t *testing.T) {
 					t.Run(operator.name, func(t *testing.T) {
 						result := makeResult(t, len(operator.expected))
 						require.NoError(t, operator.fn(
-							orientation.parameters, result, proc, len(operator.expected), nil))
+							orientation.parameters, result, proc, len(operator.expected)))
 						got := result.GetResultVector()
 						require.Equal(t, operator.expected, vector.MustFixedColNoTypeCheck[bool](got))
 						for row, expectedNull := range operator.expectedNulls {
@@ -274,34 +264,8 @@ func TestJSONComparisonCoercion(t *testing.T) {
 		for _, value := range []any{map[string]any{"v": true}, []any{true}} {
 			jsonValue := makeJSON(t, []any{value})
 			require.Error(t, equalFn(
-				[]*vector.Vector{jsonValue, booleanValue}, makeResult(t, 1), proc, 1, nil))
+				[]*vector.Vector{jsonValue, booleanValue}, makeResult(t, 1), proc, 1))
 		}
-	})
-
-	t.Run("mixed JSON boolean comparison masks rows before conversion", func(t *testing.T) {
-		jsonValues := makeJSON(t, []any{true, map[string]any{"unsupported": true}})
-		booleanValues, err := vector.NewConstFixed(types.T_bool.ToType(), true, 2, proc.Mp())
-		require.NoError(t, err)
-		t.Cleanup(func() { booleanValues.Free(proc.Mp()) })
-		result := makeResult(t, 2)
-		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
-		require.NoError(t, equalFn(
-			[]*vector.Vector{jsonValues, booleanValues}, result, proc, 2, selectList))
-		got := result.GetResultVector()
-		require.True(t, vector.MustFixedColNoTypeCheck[bool](got)[0])
-		require.True(t, got.IsNull(1))
-	})
-
-	t.Run("mixed JSON boolean comparison skips an all-masked batch", func(t *testing.T) {
-		malformedJSON := makeJSON(t, []any{map[string]any{"unsupported": true}})
-		booleanValue, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
-		require.NoError(t, err)
-		t.Cleanup(func() { booleanValue.Free(proc.Mp()) })
-		result := makeResult(t, 1)
-		require.NoError(t, equalFn(
-			[]*vector.Vector{malformedJSON, booleanValue}, result, proc, 1,
-			&FunctionSelectList{AnyNull: true, AllNull: true}))
-		require.True(t, result.GetResultVector().IsNull(0))
 	})
 
 	t.Run("mixed JSON boolean comparison rejects truncated scalar encodings", func(t *testing.T) {
@@ -321,7 +285,7 @@ func TestJSONComparisonCoercion(t *testing.T) {
 			require.NoError(t, vector.AppendBytes(malformedJSON, encoded, false, proc.Mp()))
 			malformedJSON.SetType(types.T_json.ToType())
 			require.Error(t, equalFn(
-				[]*vector.Vector{malformedJSON, booleanValue}, makeResult(t, 1), proc, 1, nil))
+				[]*vector.Vector{malformedJSON, booleanValue}, makeResult(t, 1), proc, 1))
 		}
 	})
 
@@ -332,14 +296,14 @@ func TestJSONComparisonCoercion(t *testing.T) {
 
 		ordinaryResult := makeResult(t, 3)
 		require.NoError(t, equalFn(
-			[]*vector.Vector{jsonValues, booleanNull}, ordinaryResult, proc, 3, nil))
+			[]*vector.Vector{jsonValues, booleanNull}, ordinaryResult, proc, 3))
 		for row := 0; row < 3; row++ {
 			require.True(t, ordinaryResult.GetResultVector().IsNull(uint64(row)))
 		}
 
 		result := makeResult(t, 3)
 		require.NoError(t, nullSafeEqualFn(
-			[]*vector.Vector{jsonValues, booleanNull}, result, proc, 3, nil))
+			[]*vector.Vector{jsonValues, booleanNull}, result, proc, 3))
 		require.Equal(t, []bool{true, false, false},
 			vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
@@ -349,7 +313,7 @@ func TestJSONComparisonCoercion(t *testing.T) {
 		right := makeJSON(t, []any{true})
 		result := makeResult(t, 1)
 		require.NoError(t, equalFn(
-			[]*vector.Vector{left, right}, result, proc, 1, nil))
+			[]*vector.Vector{left, right}, result, proc, 1))
 		require.Equal(t, []bool{true},
 			vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
@@ -388,7 +352,7 @@ func TestJSONComparisonCoercion(t *testing.T) {
 			param := test.param(t)
 			t.Cleanup(func() { param.Free(proc.Mp()) })
 			result := makeResult(t, 1)
-			require.NoError(t, equalFn([]*vector.Vector{jsonValues, param}, result, proc, 1, nil))
+			require.NoError(t, equalFn([]*vector.Vector{jsonValues, param}, result, proc, 1))
 			require.Equal(t, []bool{test.want}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 		})
 	}
@@ -428,7 +392,7 @@ func BenchmarkJSONBooleanComparison(b *testing.B) {
 		}
 		if err := compareJSONBoolean(
 			[]*vector.Vector{jsonValues, booleanValue}, result, proc, length,
-			false, func(c int) bool { return c == 0 }, nil); err != nil {
+			false, func(c int) bool { return c == 0 }); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -501,7 +465,7 @@ func BenchmarkJSONDirectComparisonWideAndNestedArrays(b *testing.B) {
 			if err := result.PreExtendAndReset(length); err != nil {
 				b.Fatal(err)
 			}
-			if err := lessThanFn([]*vector.Vector{leftVector, rightVector}, result, proc, length, nil); err != nil {
+			if err := lessThanFn([]*vector.Vector{leftVector, rightVector}, result, proc, length); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -527,7 +491,7 @@ func BenchmarkJSONDirectComparisonWideAndNestedArrays(b *testing.B) {
 			if err := result.PreExtendAndReset(length); err != nil {
 				b.Fatal(err)
 			}
-			if err := lessThanFn([]*vector.Vector{leftVector, rightVector}, result, proc, length, nil); err != nil {
+			if err := lessThanFn([]*vector.Vector{leftVector, rightVector}, result, proc, length); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -552,7 +516,7 @@ func BenchmarkJSONDirectComparisonWideAndNestedArrays(b *testing.B) {
 			if err := result.PreExtendAndReset(length); err != nil {
 				b.Fatal(err)
 			}
-			if err := lessThanFn([]*vector.Vector{leftVector, rightVector}, result, proc, length, nil); err != nil {
+			if err := lessThanFn([]*vector.Vector{leftVector, rightVector}, result, proc, length); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -795,7 +759,7 @@ func TestDatetimeTimestampKernelConstantSelectionAndReuse(t *testing.T) {
 	center := types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 123456)
 	for _, zone := range []*time.Location{time.UTC, time.FixedZone("fixed", 8*3600), time.Local} {
 		proc.GetSessionInfo().TimeZone = zone
-		for _, scenario := range []string{"flat", "datetime constant", "timestamp constant", "both constant", "constant NULL", "flat all NULL", "complementary NULL", "partial selection", "all selection", "empty", "single"} {
+		for _, scenario := range []string{"flat", "datetime constant", "timestamp constant", "both constant", "constant NULL", "flat all NULL", "complementary NULL", "empty", "single"} {
 			for _, reverse := range []bool{false, true} {
 				length := 4
 				if scenario == "empty" {
@@ -811,7 +775,6 @@ func TestDatetimeTimestampKernelConstantSelectionAndReuse(t *testing.T) {
 					stamps[i] = center.ToTimestamp(zone).TruncateToScale(3)
 				}
 				dc, tc := scenario == "datetime constant" || scenario == "both constant", scenario == "timestamp constant" || scenario == "both constant" || scenario == "constant NULL"
-				var selected *FunctionSelectList
 				switch scenario {
 				case "constant NULL":
 					for i := range tn {
@@ -825,10 +788,6 @@ func TestDatetimeTimestampKernelConstantSelectionAndReuse(t *testing.T) {
 					for i := range dn {
 						dn[i], tn[i] = i%2 == 0, i%2 != 0
 					}
-				case "partial selection":
-					selected = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true, false}}
-				case "all selection":
-					selected = &FunctionSelectList{AllNull: true}
 				}
 				want, ns := make([]bool, length), make([]bool, length)
 				for i := range dates {
@@ -839,7 +798,7 @@ func TestDatetimeTimestampKernelConstantSelectionAndReuse(t *testing.T) {
 					if tc {
 						ti = 0
 					}
-					ns[i] = dn[di] || tn[ti] || selected.IgnoreAllRow() || !selected.ShouldEvalAllRow() && selected.Contains(uint64(i))
+					ns[i] = dn[di] || tn[ti]
 					if !ns[i] {
 						v := dates[di].ToTimestamp(zone).TruncateToScale(3)
 						if reverse {
@@ -856,7 +815,7 @@ func TestDatetimeTimestampKernelConstantSelectionAndReuse(t *testing.T) {
 					inputs[0], inputs[1] = inputs[1], inputs[0]
 				}
 				func() {
-					fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_bool.ToType(), false, want, ns), greatThanFn).WithSelectList(selected)
+					fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_bool.ToType(), false, want, ns), greatThanFn)
 					defer fc.Free()
 					for range 2 {
 						ok, info := fc.Run()

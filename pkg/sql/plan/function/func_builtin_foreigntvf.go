@@ -28,11 +28,11 @@ import (
 // are marked volatile so they are evaluated for their connect side effect and
 // never constant-folded.
 
-func builtInEsqlTvfConnect(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInEsqlTvfConnect(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return foreignTvfConnect(parameters, result, proc, length, foreigntvf.KindESQL)
 }
 
-func builtInSqlTvfConnect(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInSqlTvfConnect(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return foreignTvfConnect(parameters, result, proc, length, foreigntvf.KindSQL)
 }
 
@@ -70,11 +70,11 @@ func foreignTvfConnect(parameters []*vector.Vector, result vector.FunctionResult
 // by handle, returning true if a connection was removed, false if the handle
 // was unknown (already disconnected), and NULL for a NULL handle.
 
-func builtInEsqlTvfDisconnect(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInEsqlTvfDisconnect(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return foreignTvfDisconnect(parameters, result, proc, length)
 }
 
-func builtInSqlTvfDisconnect(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInSqlTvfDisconnect(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return foreignTvfDisconnect(parameters, result, proc, length)
 }
 

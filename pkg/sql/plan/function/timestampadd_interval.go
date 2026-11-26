@@ -69,35 +69,29 @@ func timestampAddSecondMicroseconds(text string) int64 {
 
 // TimestampAddSecondInterval is separate from DATE_ADD's interval grammar and
 // rounding contract. All sources follow one decimal truncation rule.
-func TimestampAddSecondInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func TimestampAddSecondInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	// typeswitch:partial bf16/float16/float8/float4 sources are widened to float32 at resolution
 	switch ivecs[0].GetType().Oid {
 	case types.T_decimal64:
-		return timestampAddTypedSeconds[types.Decimal64](ivecs[0], result, length, selectList, func(v types.Decimal64, scale int32) (int64, bool) {
+		return timestampAddTypedSeconds[types.Decimal64](ivecs[0], result, length, func(v types.Decimal64, scale int32) (int64, bool) {
 			return timestampAddDecimal64Seconds(v, scale), false
 		})
 	case types.T_decimal128:
-		return timestampAddTypedSeconds[types.Decimal128](ivecs[0], result, length, selectList, func(v types.Decimal128, scale int32) (int64, bool) {
+		return timestampAddTypedSeconds[types.Decimal128](ivecs[0], result, length, func(v types.Decimal128, scale int32) (int64, bool) {
 			return timestampAddDecimal128Seconds(v, scale), false
 		})
 	case types.T_decimal256:
-		return timestampAddTypedSeconds[types.Decimal256](ivecs[0], result, length, selectList, func(v types.Decimal256, scale int32) (int64, bool) {
+		return timestampAddTypedSeconds[types.Decimal256](ivecs[0], result, length, func(v types.Decimal256, scale int32) (int64, bool) {
 			return timestampAddDecimal256Seconds(v, scale), false
 		})
 	case types.T_float32:
-		return timestampAddTypedSeconds[float32](ivecs[0], result, length, selectList, func(v float32, _ int32) (int64, bool) { return timestampAddFloatSeconds(float64(v)) })
+		return timestampAddTypedSeconds[float32](ivecs[0], result, length, func(v float32, _ int32) (int64, bool) { return timestampAddFloatSeconds(float64(v)) })
 	case types.T_float64:
-		return timestampAddTypedSeconds[float64](ivecs[0], result, length, selectList, func(v float64, _ int32) (int64, bool) { return timestampAddFloatSeconds(v) })
+		return timestampAddTypedSeconds[float64](ivecs[0], result, length, func(v float64, _ int32) (int64, bool) { return timestampAddFloatSeconds(v) })
 	default:
 		values := vector.GenerateFunctionStrParameter(ivecs[0])
 		rs := vector.MustFunctionResult[int64](result)
 		for i := uint64(0); i < uint64(length); i++ {
-			if functionRowSkipped(selectList, i) {
-				if err := rs.Append(0, true); err != nil {
-					return err
-				}
-				continue
-			}
 			value, null := values.GetStrValue(i)
 			if err := rs.Append(timestampAddSecondMicroseconds(functionUtil.QuickBytesToStr(value)), null); err != nil {
 				return err
@@ -107,16 +101,10 @@ func TimestampAddSecondInterval(ivecs []*vector.Vector, result vector.FunctionRe
 	}
 }
 
-func timestampAddTypedSeconds[T types.FixedSizeTExceptStrType](vec *vector.Vector, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, convert func(T, int32) (int64, bool)) error {
+func timestampAddTypedSeconds[T types.FixedSizeTExceptStrType](vec *vector.Vector, result vector.FunctionResultWrapper, length int, convert func(T, int32) (int64, bool)) error {
 	values := vector.GenerateFunctionFixedTypeParameter[T](vec)
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		value, null := values.GetValue(i)
 		if null {
 			if err := rs.Append(0, true); err != nil {

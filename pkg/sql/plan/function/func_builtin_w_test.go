@@ -49,7 +49,7 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 		)
 		defer testCase.Free()
 		require.NoError(t, testCase.result.PreExtendAndReset(0))
-		require.NoError(t, op.tryWasm(testCase.parameters, testCase.result, proc, 0, nil))
+		require.NoError(t, op.tryWasm(testCase.parameters, testCase.result, proc, 0))
 		require.Zero(t, testCase.GetResultVectorDirectly().Length())
 	})
 	testCase := NewFunctionTestCase(
@@ -59,7 +59,7 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 				[]string{wasmURL, wasmURL, wasmURL, wasmURL, wasmURL}, nil),
 			NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{"cat", "cat", "cat", "missing", "cat"},
-				[]bool{false, false, true, false, false}),
+				[]bool{true, false, true, false, false}),
 			NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{"a", "b", "c", "d", "e"},
 				[]bool{false, false, false, false, true}),
@@ -74,7 +74,6 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 		testCase.result,
 		proc,
 		testCase.fnLength,
-		&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true, true, true}},
 	))
 
 	result := testCase.GetResultVectorDirectly()
@@ -122,7 +121,7 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 				)
 				defer testCase.Free()
 				require.NoError(t, testCase.result.PreExtendAndReset(1))
-				require.Error(t, evalFn(testCase.parameters, testCase.result, proc, 1, nil))
+				require.Error(t, evalFn(testCase.parameters, testCase.result, proc, 1))
 				require.Zero(t, testCase.GetResultVectorDirectly().Length())
 			})
 		}
@@ -141,7 +140,7 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 		)
 		defer testCase.Free()
 		require.NoError(t, testCase.result.PreExtendAndReset(1))
-		require.Error(t, op.wasm(testCase.parameters, testCase.result, proc, 1, nil))
+		require.Error(t, op.wasm(testCase.parameters, testCase.result, proc, 1))
 		require.Zero(t, testCase.GetResultVectorDirectly().Length())
 	})
 
@@ -161,7 +160,7 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 		)
 		defer testCase.Free()
 		require.NoError(t, testCase.result.PreExtendAndReset(1))
-		require.Error(t, op.tryWasm(testCase.parameters, testCase.result, proc, 1, nil))
+		require.Error(t, op.tryWasm(testCase.parameters, testCase.result, proc, 1))
 		require.Zero(t, testCase.GetResultVectorDirectly().Length())
 		require.Nil(t, op.plugin)
 	})

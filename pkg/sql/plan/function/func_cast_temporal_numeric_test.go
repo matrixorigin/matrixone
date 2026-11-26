@@ -57,7 +57,7 @@ func TestExplicitCastTemporalDecimalRange(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%s", oid, tc.name), func(t *testing.T) {
 				proc := testutil.NewProcess(t)
 				proc.GetSessionInfo().TimeZone = time.FixedZone("UTC+8", 8*60*60)
-				nulls := []bool{false, true, false}
+				nulls := []bool{false, true, true}
 				var input FunctionTestInput
 				switch tc.source {
 				case types.T_date:
@@ -80,14 +80,13 @@ func TestExplicitCastTemporalDecimalRange(t *testing.T) {
 				}
 				target := types.New(oid, tc.width, tc.scale)
 				fc := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(target, emptyCastTargetValues(target), nil)},
-					NewFunctionTestResult(target, false, nil, nil), NewExplicitCast).
-					WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false}})
+					NewFunctionTestResult(target, false, nil, nil), NewExplicitCast)
 				t.Cleanup(fc.Free)
 				got, err := fc.DebugRun()
 				require.NoError(t, err)
 				require.Equal(t, tc.want, explicitCastDecimalTestValue(got, 0))
 				require.True(t, got.IsNull(1))
-				require.True(t, got.IsNull(2), "unselected temporal operands must not be evaluated")
+				require.True(t, got.IsNull(2))
 			})
 		}
 	}

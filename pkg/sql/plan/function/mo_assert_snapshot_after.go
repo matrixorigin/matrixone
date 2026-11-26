@@ -30,18 +30,11 @@ func moAssertSnapshotAfter(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selected *FunctionSelectList,
 ) error {
 	args := vector.GenerateFunctionStrParameter(inputs[0])
 	out := vector.MustFunctionResult[bool](result)
 	var snapshot timestamp.Timestamp
 	for row := uint64(0); row < uint64(length); row++ {
-		if selected != nil && (selected.IgnoreAllRow() || (!selected.ShouldEvalAllRow() && selected.Contains(row))) {
-			if err := out.Append(false, true); err != nil {
-				return err
-			}
-			continue
-		}
 		if snapshot.IsEmpty() {
 			var err error
 			snapshot, err = localExplicitSnapshot(proc)

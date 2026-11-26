@@ -54,15 +54,11 @@ func jsonStorageCheckPreparedInput(
 	proc *process.Process,
 	functionName string,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
-	if input == nil || selectList != nil && selectList.IgnoreAllRow() {
+	if input == nil {
 		return nil
 	}
 	for row := 0; row < length; row++ {
-		if selectList != nil && selectList.Contains(uint64(row)) {
-			continue
-		}
 		physicalRow := row
 		if input.IsConst() {
 			physicalRow = 0
@@ -83,14 +79,13 @@ func JsonStorageSize(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
-	if err := jsonStorageCheckPreparedInput(ivecs[0], proc, "json_storage_size", length, selectList); err != nil {
+	if err := jsonStorageCheckPreparedInput(ivecs[0], proc, "json_storage_size", length); err != nil {
 		return err
 	}
 	if ivecs[0].GetType().Oid == types.T_json {
 		return opUnaryBytesToFixed[int64](ivecs, result, proc, length,
-			func(value []byte) int64 { return int64(len(value)) }, selectList)
+			func(value []byte) int64 { return int64(len(value)) })
 	}
 	return opUnaryBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length,
 		func(value []byte) (int64, error) {
@@ -99,7 +94,7 @@ func JsonStorageSize(
 				return 0, jsonStorageInvalidArg(proc, "json_storage_size")
 			}
 			return int64(1 + len(bj.Data)), nil
-		}, selectList)
+		})
 }
 
 func JsonStorageFree(
@@ -107,9 +102,8 @@ func JsonStorageFree(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 ) error {
-	if err := jsonStorageCheckPreparedInput(ivecs[0], proc, "json_storage_free", length, selectList); err != nil {
+	if err := jsonStorageCheckPreparedInput(ivecs[0], proc, "json_storage_free", length); err != nil {
 		return err
 	}
 	return opUnaryBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length,
@@ -121,5 +115,5 @@ func JsonStorageFree(
 				return 0, jsonStorageInvalidArg(proc, "json_storage_free")
 			}
 			return 0, nil
-		}, selectList)
+		})
 }

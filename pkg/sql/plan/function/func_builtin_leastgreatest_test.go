@@ -1046,95 +1046,6 @@ func TestLeastGreatestSupportedOidResolution(t *testing.T) {
 	}
 }
 
-func TestLeastGreatestPackedDateMaterializesNullRows(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	d1, err := types.ParseDateCast("2020-01-01")
-	require.NoError(t, err)
-	dateTyp := types.T_date.ToType()
-	varcharTyp := types.T_varchar.ToType()
-
-	t.Run("ignore all rows", func(t *testing.T) {
-		fcTC := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(dateTyp, []types.Date{d1, d1, d1}, nil),
-				NewFunctionTestInput(varcharTyp, []string{"2020-01-01", "2020-01-01", "2020-01-01"}, nil),
-			},
-			NewFunctionTestResult(varcharTyp, false, nil, nil),
-			greatestTemporalFn)
-		defer fcTC.Free()
-		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
-		require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, &FunctionSelectList{AllNull: true}))
-
-		resultVec := fcTC.result.GetResultVector()
-		require.Equal(t, fcTC.fnLength, resultVec.Length())
-		for i := 0; i < fcTC.fnLength; i++ {
-			require.True(t, resultVec.IsNull(uint64(i)))
-		}
-	})
-
-	t.Run("constant null argument", func(t *testing.T) {
-		fcTC := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(dateTyp, []types.Date{d1, d1, d1}, nil),
-				NewFunctionTestConstInput(varcharTyp, []string{"2020-01-01"}, []bool{true}),
-			},
-			NewFunctionTestResult(varcharTyp, false, nil, nil),
-			greatestTemporalFn)
-		defer fcTC.Free()
-		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
-		require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, nil))
-
-		resultVec := fcTC.result.GetResultVector()
-		require.Equal(t, fcTC.fnLength, resultVec.Length())
-		for i := 0; i < fcTC.fnLength; i++ {
-			require.True(t, resultVec.IsNull(uint64(i)))
-		}
-	})
-}
-
-func TestLeastGreatestVarlenMaterializesNullRows(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	varcharTyp := types.T_varchar.ToType()
-
-	t.Run("ignore all rows", func(t *testing.T) {
-		fcTC := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(varcharTyp, []string{"a", "b", "c"}, nil),
-				NewFunctionTestInput(varcharTyp, []string{"d", "e", "f"}, nil),
-			},
-			NewFunctionTestResult(varcharTyp, false, nil, nil),
-			greatestFn)
-		defer fcTC.Free()
-		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
-		require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, &FunctionSelectList{AllNull: true}))
-
-		resultVec := fcTC.result.GetResultVector()
-		require.Equal(t, fcTC.fnLength, resultVec.Length())
-		for i := 0; i < fcTC.fnLength; i++ {
-			require.True(t, resultVec.IsNull(uint64(i)))
-		}
-	})
-
-	t.Run("constant null argument", func(t *testing.T) {
-		fcTC := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(varcharTyp, []string{"a", "b", "c"}, nil),
-				NewFunctionTestConstInput(varcharTyp, []string{"x"}, []bool{true}),
-			},
-			NewFunctionTestResult(varcharTyp, false, nil, nil),
-			greatestFn)
-		defer fcTC.Free()
-		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
-		require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, nil))
-
-		resultVec := fcTC.result.GetResultVector()
-		require.Equal(t, fcTC.fnLength, resultVec.Length())
-		for i := 0; i < fcTC.fnLength; i++ {
-			require.True(t, resultVec.IsNull(uint64(i)))
-		}
-	})
-}
-
 func TestLeastGreatestYearNumericExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decimalType := types.New(types.T_decimal128, 10, 1)
@@ -1377,7 +1288,7 @@ func BenchmarkLeastGreatestTemporalFixedReaders(b *testing.B) {
 		if err := result.PreExtendAndReset(rowCount); err != nil {
 			b.Fatal(err)
 		}
-		if err := greatestTemporalFn(parameters, result, proc, rowCount, nil); err != nil {
+		if err := greatestTemporalFn(parameters, result, proc, rowCount); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -1793,4 +1704,55 @@ func TestLeastGreatestStringCollationRevisionPreserved(t *testing.T) {
 	)
 	require.Equal(t, types.CharsetUTF8MB4UnicodeCI, merged.Charset)
 	require.Equal(t, uint8(types.CollationVersionV1), merged.CollationVersion)
+}
+
+func TestLeastGreatestPackedDateMaterializesNullRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	d1, err := types.ParseDateCast("2020-01-01")
+	require.NoError(t, err)
+	dateTyp := types.T_date.ToType()
+	varcharTyp := types.T_varchar.ToType()
+
+	t.Run("constant null argument", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(dateTyp, []types.Date{d1, d1, d1}, nil),
+				NewFunctionTestConstInput(varcharTyp, []string{"2020-01-01"}, []bool{true}),
+			},
+			NewFunctionTestResult(varcharTyp, false, nil, nil),
+			greatestTemporalFn)
+		defer fcTC.Free()
+		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+		require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength))
+
+		resultVec := fcTC.result.GetResultVector()
+		require.Equal(t, fcTC.fnLength, resultVec.Length())
+		for i := 0; i < fcTC.fnLength; i++ {
+			require.True(t, resultVec.IsNull(uint64(i)))
+		}
+	})
+}
+
+func TestLeastGreatestVarlenMaterializesNullRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	varcharTyp := types.T_varchar.ToType()
+
+	t.Run("constant null argument", func(t *testing.T) {
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(varcharTyp, []string{"a", "b", "c"}, nil),
+				NewFunctionTestConstInput(varcharTyp, []string{"x"}, []bool{true}),
+			},
+			NewFunctionTestResult(varcharTyp, false, nil, nil),
+			greatestFn)
+		defer fcTC.Free()
+		require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+		require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength))
+
+		resultVec := fcTC.result.GetResultVector()
+		require.Equal(t, fcTC.fnLength, resultVec.Length())
+		for i := 0; i < fcTC.fnLength; i++ {
+			require.True(t, resultVec.IsNull(uint64(i)))
+		}
+	})
 }

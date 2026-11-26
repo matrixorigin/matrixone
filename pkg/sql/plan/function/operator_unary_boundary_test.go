@@ -31,14 +31,10 @@ func checkUnaryRows[T, R constraints.Signed | constraints.Float](t *testing.T, n
 	t.Helper()
 	proc := testutil.NewProcess(t)
 	for _, mode := range []struct {
-		name      string
-		selection *FunctionSelectList
-		nulls     []bool
+		name  string
+		nulls []bool
 	}{
-		{"no_selection", nil, []bool{false, true, false}},
-		{"all_selected", &FunctionSelectList{}, []bool{false, true, false}},
-		{"partial", &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}}, []bool{true, true, false}},
-		{"none_selected", &FunctionSelectList{AnyNull: true, AllNull: true}, []bool{true, true, true}},
+		{"all_rows", []bool{false, true, false}},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
 			resolved, err := GetFunctionByName(proc.Ctx, name, []types.Type{inputType.ToType()})
@@ -54,7 +50,7 @@ func checkUnaryRows[T, R constraints.Signed | constraints.Float](t *testing.T, n
 			out := vector.NewFunctionResultWrapper(resolved.GetReturnType(), proc.Mp())
 			defer out.Free()
 			require.NoError(t, out.PreExtendAndReset(len(values)))
-			require.NoError(t, exec([]*vector.Vector{in}, out, proc, len(values), mode.selection))
+			require.NoError(t, exec([]*vector.Vector{in}, out, proc, len(values)))
 			v := out.GetResultVector()
 			require.Equal(t, len(values), v.Length())
 			got := vector.MustFixedColNoTypeCheck[R](v)
@@ -68,7 +64,7 @@ func checkUnaryRows[T, R constraints.Signed | constraints.Float](t *testing.T, n
 	}
 }
 
-func TestUnaryRegisteredTypeAndSelection(t *testing.T) {
+func TestUnaryRegisteredType(t *testing.T) {
 	for _, inputType := range []types.T{types.T_int8, types.T_int16, types.T_int32} {
 		t.Run(inputType.String()+"_widening_plan", func(t *testing.T) {
 			resolved, err := GetFunctionByName(t.Context(), "unary_minus", []types.Type{inputType.ToType()})
@@ -141,7 +137,7 @@ func TestUnaryMinusLegacyOverloadsPreserveSerializedContract(t *testing.T) {
 			defer out.Free()
 			require.NoError(t, out.PreExtendAndReset(1))
 			exec, _, _, _ := overload.GetExecuteMethod()
-			require.NoError(t, exec([]*vector.Vector{in}, out, proc, 1, nil))
+			require.NoError(t, exec([]*vector.Vector{in}, out, proc, 1))
 			switch want := test.want.(type) {
 			case int8:
 				require.Equal(t, want, vector.MustFixedColNoTypeCheck[int8](out.GetResultVector())[0])
@@ -157,7 +153,7 @@ func TestUnaryMinusLegacyOverloadsPreserveSerializedContract(t *testing.T) {
 func TestUnaryMinusInt64Overflow(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, constant := range []bool{false, true} {
-		for _, mode := range []string{"overflow", "null", "masked", "all_masked"} {
+		for _, mode := range []string{"overflow", "null"} {
 			t.Run(mode+map[bool]string{false: "/vector", true: "/constant"}[constant], func(t *testing.T) {
 				var in *vector.Vector
 				if constant {
@@ -169,19 +165,13 @@ func TestUnaryMinusInt64Overflow(t *testing.T) {
 					require.NoError(t, vector.AppendFixedList(in, []int64{math.MinInt64, math.MinInt64, math.MinInt64}, nil, proc.Mp()))
 				}
 				defer in.Free(proc.Mp())
-				var selection *FunctionSelectList
-				switch mode {
-				case "null":
+				if mode == "null" {
 					in.GetNulls().Add(0, 1, 2)
-				case "masked":
-					selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, false}}
-				case "all_masked":
-					selection = &FunctionSelectList{AnyNull: true, AllNull: true}
 				}
 				out := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 				defer out.Free()
 				require.NoError(t, out.PreExtendAndReset(3))
-				err := operatorUnaryMinus[int64]([]*vector.Vector{in}, out, proc, 3, selection)
+				err := operatorUnaryMinus[int64]([]*vector.Vector{in}, out, proc, 3)
 				if mode == "overflow" {
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
 					return

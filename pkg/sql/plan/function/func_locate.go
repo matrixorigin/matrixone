@@ -25,7 +25,7 @@ import (
 )
 
 // LOCATE(substr, str)
-func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[int64](result)
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
@@ -33,12 +33,6 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 	caseInsensitive := types.IsCaseInsensitiveCollation(parameters[1].GetType().Charset)
 
 	for row := uint64(0); row < uint64(length); row++ {
-		if functionRowSkipped(selectList, row) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		substr, null1 := substrVs.GetStrValue(row)
 		str, null2 := strVs.GetStrValue(row)
 		if null1 || null2 {
@@ -54,7 +48,7 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 }
 
 // LOCATE(substr, str, position)
-func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[int64](result)
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
@@ -63,12 +57,6 @@ func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResul
 	caseInsensitive := types.IsCaseInsensitiveCollation(parameters[1].GetType().Charset)
 
 	for row := uint64(0); row < uint64(length); row++ {
-		if functionRowSkipped(selectList, row) {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
 		substr, null1 := substrVs.GetStrValue(row)
 		str, null2 := strVs.GetStrValue(row)
 		position, null3 := posVs.GetValue(row)

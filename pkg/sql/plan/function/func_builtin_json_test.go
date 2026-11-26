@@ -418,12 +418,12 @@ func TestJsonObjectKeysPreserveExistingConversion(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := runJsonFunctionWithSelectList(t, proc,
+			vec := runJsonFunctionForTest(t, proc,
 				[]FunctionTestInput{
 					tc.key,
 					NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
 				},
-				types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject, nil)
+				types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject)
 			require.Equal(t, tc.want, jsonVectorRowString(t, vec, 0))
 		})
 	}
@@ -535,12 +535,12 @@ func TestJsonConstructorPreparedMetadata(t *testing.T) {
 
 func TestJsonObjectBitKeyPreservesLegacyNameAndTaggedValue(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	vec := runJsonFunctionWithSelectList(t, proc,
+	vec := runJsonFunctionForTest(t, proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.New(types.T_bit, 9, 0), []uint64{0x101}, []bool{false}),
 			NewFunctionTestInput(types.New(types.T_bit, 4, 0), []uint64{0xa}, []bool{false}),
 		},
-		types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject, nil)
+		types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject)
 
 	got := jsonVectorRowString(t, vec, 0)
 	require.Equal(t, `{"AQE=": "base64:type16:Cg=="}`, got)

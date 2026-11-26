@@ -38,27 +38,27 @@ func packedTimeFloat(v types.Time) float64 {
 
 func temporalContextResult[S types.FixedSizeTExceptStrType](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process,
-	length int, selectList *FunctionSelectList, numeric func(S) float64,
+	length int, numeric func(S) float64,
 ) error {
 	if result.GetResultVector().GetType().Oid == types.T_bool {
-		return opUnaryFixedToFixed(parameters, result, proc, length, func(v S) bool { return numeric(v) != 0 }, selectList)
+		return opUnaryFixedToFixed(parameters, result, proc, length, func(v S) bool { return numeric(v) != 0 })
 	}
-	return opUnaryFixedToFixed(parameters, result, proc, length, numeric, selectList)
+	return opUnaryFixedToFixed(parameters, result, proc, length, numeric)
 }
 
 // Only the context-local matchers opt in to these casts implicitly. Other
 // numeric targets, especially integer rounding and DECIMAL range behavior,
 // retain their existing executors.
-func castTemporalContext(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func castTemporalContext(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	switch parameters[0].GetType().Oid {
 	case types.T_date:
-		return temporalContextResult(parameters, result, proc, length, selectList, func(v types.Date) float64 { return float64(packedDateInt64(v)) })
+		return temporalContextResult(parameters, result, proc, length, func(v types.Date) float64 { return float64(packedDateInt64(v)) })
 	case types.T_datetime:
-		return temporalContextResult(parameters, result, proc, length, selectList, packedDatetimeFloat)
+		return temporalContextResult(parameters, result, proc, length, packedDatetimeFloat)
 	case types.T_time:
-		return temporalContextResult(parameters, result, proc, length, selectList, packedTimeFloat)
+		return temporalContextResult(parameters, result, proc, length, packedTimeFloat)
 	default: // TIMESTAMP is interpreted in the session time zone, never raw UTC microseconds.
 		zone := proc.GetSessionInfo().TimeZone
-		return temporalContextResult(parameters, result, proc, length, selectList, func(v types.Timestamp) float64 { return packedDatetimeFloat(v.ToDatetime(zone)) })
+		return temporalContextResult(parameters, result, proc, length, func(v types.Timestamp) float64 { return packedDatetimeFloat(v.ToDatetime(zone)) })
 	}
 }

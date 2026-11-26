@@ -22,12 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func formatBytes(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[float64](parameters, result, proc, length, formatBytesValue, selectList)
+func formatBytes(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToStr[float64](parameters, result, proc, length, formatBytesValue)
 }
 
-func formatPicoTime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[float64](parameters, result, proc, length, formatPicoTimeValue, selectList)
+func formatPicoTime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToStr[float64](parameters, result, proc, length, formatPicoTimeValue)
 }
 
 func formatBytesValue(value float64) string {

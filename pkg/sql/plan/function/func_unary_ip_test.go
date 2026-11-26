@@ -76,7 +76,7 @@ func TestIPPredicatesRejectUnexpectedResultType(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
 	t.Cleanup(func() { result.Free() })
 	require.NoError(t, result.PreExtendAndReset(1))
-	err := IsIPv4([]*vector.Vector{input}, result, proc, 1, nil)
+	err := IsIPv4([]*vector.Vector{input}, result, proc, 1)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "expected INT32 or legacy INT64")
 }
@@ -572,54 +572,6 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 	})
 }
 
-func TestIPFunctionsSelectionMasksInvalidRows(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	selected := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
-
-	tests := []struct {
-		name   string
-		input  FunctionTestInput
-		result FunctionTestResult
-		fn     executeLogicOfOverload
-	}{
-		{
-			name:   "inet_ntoa dynamic selection",
-			input:  NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "2"}, nil),
-			result: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "0.0.0.2"}, []bool{true, false}),
-			fn:     InetNtoaDynamic,
-		},
-		{
-			name:  "inet_aton",
-			input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-an-ip", "127.0.0.1"}, nil),
-			result: NewFunctionTestResult(types.T_uint64.ToType(), false,
-				[]uint64{0, 2130706433}, []bool{true, false}),
-			fn: InetAton,
-		},
-		{
-			name:  "inet_ntoa",
-			input: NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, 16909060}, nil),
-			result: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"", "1.2.3.4"}, []bool{true, false}),
-			fn: InetNtoa,
-		},
-		{
-			name:  "is_ipv4 legacy INT64 result",
-			input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"127.0.0.1", "bad"}, nil),
-			result: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{1, 0}, []bool{true, false}),
-			fn: IsIPv4,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			caseRun := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, tc.result, tc.fn).
-				WithSelectList(selected)
-			ok, info := caseRun.RunAndFree()
-			require.True(t, ok, info)
-		})
-	}
-}
-
 func TestInetNtoaPreparedParameterTypes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	// Prepared parameters reach execution as typed values. Typed numeric
@@ -648,7 +600,7 @@ func TestInetNtoaPreparedParameterTypes(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 			t.Cleanup(result.Free)
 			require.NoError(t, result.PreExtendAndReset(1))
-			require.NoError(t, InetNtoaDynamic([]*vector.Vector{input}, result, proc, 1, nil))
+			require.NoError(t, InetNtoaDynamic([]*vector.Vector{input}, result, proc, 1))
 			output := result.GetResultVector()
 			got, isNull := vector.GenerateFunctionStrParameter(output).GetStrValue(0)
 			require.Equal(t, test.wantNull, isNull)
@@ -671,6 +623,6 @@ func TestInetNtoaDynamicRejectsNonNullAny(t *testing.T) {
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
 	require.ErrorContains(t,
-		InetNtoaDynamic([]*vector.Vector{input}, result, proc, 1, nil),
+		InetNtoaDynamic([]*vector.Vector{input}, result, proc, 1),
 		"non-NULL ANY")
 }

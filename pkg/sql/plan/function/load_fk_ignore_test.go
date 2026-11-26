@@ -63,17 +63,14 @@ func TestLoadFKIgnoreCheck(t *testing.T) {
 	}
 }
 
-func TestLoadFKIgnoreCheckSelectedConstantRows(t *testing.T) {
+func TestLoadFKIgnoreCheckConstantRows(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		length    int
-		selection *FunctionSelectList
-		count     uint64
+		name   string
+		length int
+		count  uint64
 	}{
-		{"constant", 3, nil, 3},
-		{"selected", 3, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}, 2},
-		{"none", 3, &FunctionSelectList{AnyNull: true, AllNull: true}, 0},
-		{"empty", 0, nil, 0},
+		{"constant", 3, 3},
+		{"empty", 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -86,7 +83,7 @@ func TestLoadFKIgnoreCheckSelectedConstantRows(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp())
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(tc.length))
-			require.NoError(t, loadFKIgnoreCheck([]*vector.Vector{flags}, result, proc, tc.length, tc.selection))
+			require.NoError(t, loadFKIgnoreCheck([]*vector.Vector{flags}, result, proc, tc.length))
 			require.Equal(t, tc.count, sink.total)
 			require.Equal(t, tc.length, result.GetResultVector().Length())
 		})

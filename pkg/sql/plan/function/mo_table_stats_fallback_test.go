@@ -16,6 +16,8 @@ package function
 
 import (
 	"context"
+	"testing"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 type fallbackSubscriptionSQL struct{ meta, queries int }
@@ -118,7 +119,7 @@ func TestMoTableStatsFallbackResolvesMetadataOnce(t *testing.T) {
 					result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 					defer result.Free()
 					require.NoError(t, result.PreExtendAndReset(1))
-					require.NoError(t, call([]*vector.Vector{dbv, tv}, result, proc, 1, nil))
+					require.NoError(t, call([]*vector.Vector{dbv, tv}, result, proc, 1))
 					require.Equal(t, int64(37), vector.MustFixedColWithTypeCheck[int64](result.GetResultVector())[0])
 					t.Logf("database=%d relation=%d subscription-meta=%d catalog-SQL=%d", databases, relations, counter.meta, counter.queries)
 					require.Equal(t, 1, databases, "owner old mode must resolve the original database only once")

@@ -59,18 +59,18 @@ const (
 )
 
 // NewUnsignedDecimalAdmission is the sql-mode-resolved DML entry.
-func NewUnsignedDecimalAdmission(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return newUnsignedDecimalAdmission(parameters, result, proc, length, selectList, unsignedDecimalAdmissionMode)
+func NewUnsignedDecimalAdmission(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return newUnsignedDecimalAdmission(parameters, result, proc, length, unsignedDecimalAdmissionMode)
 }
 
 // NewUnsignedDecimalAdmissionStrict is the authoring-time validation entry.
-func NewUnsignedDecimalAdmissionStrict(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return newUnsignedDecimalAdmission(parameters, result, proc, length, selectList, unsignedDecimalAdmissionStrict)
+func NewUnsignedDecimalAdmissionStrict(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return newUnsignedDecimalAdmission(parameters, result, proc, length, unsignedDecimalAdmissionStrict)
 }
 
 // NewUnsignedDecimalAdmissionIgnore is the INSERT/UPDATE IGNORE entry.
-func NewUnsignedDecimalAdmissionIgnore(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return newUnsignedDecimalAdmission(parameters, result, proc, length, selectList, unsignedDecimalAdmissionIgnore)
+func NewUnsignedDecimalAdmissionIgnore(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return newUnsignedDecimalAdmission(parameters, result, proc, length, unsignedDecimalAdmissionIgnore)
 }
 
 func newUnsignedDecimalAdmission(
@@ -78,7 +78,6 @@ func newUnsignedDecimalAdmission(
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	selectList *FunctionSelectList,
 	entry unsignedDecimalAdmissionEntry,
 ) error {
 	if len(parameters) != 3 {
@@ -107,57 +106,57 @@ func newUnsignedDecimalAdmission(
 	}
 	switch from.GetType().Oid {
 	case types.T_decimal64:
-		return unsignedDecimalAdmissionFixed[types.Decimal64](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[types.Decimal64](proc, from, result, length, entry, column)
 	case types.T_decimal128:
-		return unsignedDecimalAdmissionFixed[types.Decimal128](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[types.Decimal128](proc, from, result, length, entry, column)
 	case types.T_decimal256:
-		return unsignedDecimalAdmissionFixed[types.Decimal256](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[types.Decimal256](proc, from, result, length, entry, column)
 	case types.T_float32:
-		return unsignedDecimalAdmissionFixed[float32](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[float32](proc, from, result, length, entry, column)
 	case types.T_float64:
-		return unsignedDecimalAdmissionFixed[float64](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[float64](proc, from, result, length, entry, column)
 	case types.T_bf16:
-		return unsignedDecimalAdmissionFixed[types.BF16](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[types.BF16](proc, from, result, length, entry, column)
 	case types.T_float16:
-		return unsignedDecimalAdmissionFixed[types.Float16](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[types.Float16](proc, from, result, length, entry, column)
 	case types.T_float8:
-		return unsignedDecimalAdmissionFixed[types.Float8](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[types.Float8](proc, from, result, length, entry, column)
 	case types.T_float4:
-		return unsignedDecimalAdmissionFixed[types.Float4](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[types.Float4](proc, from, result, length, entry, column)
 	case types.T_int8:
-		return unsignedDecimalAdmissionFixed[int8](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[int8](proc, from, result, length, entry, column)
 	case types.T_int16:
-		return unsignedDecimalAdmissionFixed[int16](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[int16](proc, from, result, length, entry, column)
 	case types.T_int32:
-		return unsignedDecimalAdmissionFixed[int32](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[int32](proc, from, result, length, entry, column)
 	case types.T_int64:
-		return unsignedDecimalAdmissionFixed[int64](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[int64](proc, from, result, length, entry, column)
 	case types.T_uint8:
-		return unsignedDecimalAdmissionFixed[uint8](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[uint8](proc, from, result, length, entry, column)
 	case types.T_uint16:
-		return unsignedDecimalAdmissionFixed[uint16](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[uint16](proc, from, result, length, entry, column)
 	case types.T_uint32:
-		return unsignedDecimalAdmissionFixed[uint32](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[uint32](proc, from, result, length, entry, column)
 	case types.T_uint64:
-		return unsignedDecimalAdmissionFixed[uint64](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[uint64](proc, from, result, length, entry, column)
 	case types.T_bool:
-		return unsignedDecimalAdmissionFixed[bool](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[bool](proc, from, result, length, entry, column)
 	case types.T_bit:
-		return unsignedDecimalAdmissionFixed[uint64](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[uint64](proc, from, result, length, entry, column)
 	// TIME carries an explicit sign in this engine (Time < 0), and YEAR values
 	// are 0 or 1901..2155 by construction (ValidateMoYear): both belong to the
 	// fixed-size source domain rather than the temporal identity group, and
 	// YEAR keeps its physical MoYear representation so the framework result
 	// wrapper matches.
 	case types.T_time:
-		return unsignedDecimalAdmissionFixed[types.Time](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[types.Time](proc, from, result, length, entry, column)
 	case types.T_year:
-		return unsignedDecimalAdmissionFixed[types.MoYear](proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionFixed[types.MoYear](proc, from, result, length, entry, column)
 	case types.T_json:
-		return unsignedDecimalAdmissionJSON(proc, from, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionJSON(proc, from, result, length, entry, column)
 	case types.T_varchar, types.T_char, types.T_text, types.T_blob,
 		types.T_varbinary, types.T_binary, types.T_datalink:
-		return unsignedDecimalAdmissionVarlena(proc, from, *targetType, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionVarlena(proc, from, *targetType, result, length, entry, column)
 	default:
 		// Date, datetime, timestamp and enum ordinals are non-negative by
 		// construction in this engine, and no remaining source kind can
@@ -165,13 +164,13 @@ func newUnsignedDecimalAdmission(
 		// the fixed-size kind still reachable here.
 		switch from.GetType().Oid {
 		case types.T_date:
-			return unsignedDecimalAdmissionFixed[types.Date](proc, from, result, length, selectList, entry, column)
+			return unsignedDecimalAdmissionFixed[types.Date](proc, from, result, length, entry, column)
 		case types.T_datetime:
-			return unsignedDecimalAdmissionFixed[types.Datetime](proc, from, result, length, selectList, entry, column)
+			return unsignedDecimalAdmissionFixed[types.Datetime](proc, from, result, length, entry, column)
 		case types.T_timestamp:
-			return unsignedDecimalAdmissionFixed[types.Timestamp](proc, from, result, length, selectList, entry, column)
+			return unsignedDecimalAdmissionFixed[types.Timestamp](proc, from, result, length, entry, column)
 		case types.T_enum:
-			return unsignedDecimalAdmissionFixed[types.Enum](proc, from, result, length, selectList, entry, column)
+			return unsignedDecimalAdmissionFixed[types.Enum](proc, from, result, length, entry, column)
 		default:
 			return moerr.NewInvalidInputNoCtxf("unsigned decimal admission source type %s is not supported", from.GetType().Oid)
 		}
@@ -239,7 +238,6 @@ func unsignedDecimalAdmissionFixed[T types.FixedSizeTExceptStrType](
 	from *vector.Vector,
 	result vector.FunctionResultWrapper,
 	length int,
-	selectList *FunctionSelectList,
 	entry unsignedDecimalAdmissionEntry,
 	column string,
 ) error {
@@ -247,12 +245,6 @@ func unsignedDecimalAdmissionFixed[T types.FixedSizeTExceptStrType](
 	src := vector.GenerateFunctionFixedTypeParameter[T](from)
 	var zero T
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.Append(zero, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v, null := src.GetValue(i)
 		if null {
 			if err := rs.Append(zero, true); err != nil {
@@ -336,7 +328,6 @@ func unsignedDecimalAdmissionJSON(
 	from *vector.Vector,
 	result vector.FunctionResultWrapper,
 	length int,
-	selectList *FunctionSelectList,
 	entry unsignedDecimalAdmissionEntry,
 	column string,
 ) error {
@@ -344,12 +335,6 @@ func unsignedDecimalAdmissionJSON(
 	src := vector.GenerateFunctionStrParameter(from)
 	var zeroJSON []byte
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v, null := src.GetStrValue(i)
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -441,7 +426,6 @@ func unsignedDecimalAdmissionBinary(
 	targetType types.Type,
 	result vector.FunctionResultWrapper,
 	length int,
-	selectList *FunctionSelectList,
 	entry unsignedDecimalAdmissionEntry,
 	column string,
 ) error {
@@ -449,12 +433,6 @@ func unsignedDecimalAdmissionBinary(
 	src := vector.GenerateFunctionStrParameter(from)
 	radixCoefficient := IsBinaryCharacterType(*from.GetType())
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v, null := src.GetStrValue(i)
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -592,7 +570,6 @@ func unsignedDecimalAdmissionVarlena(
 	targetType types.Type,
 	result vector.FunctionResultWrapper,
 	length int,
-	selectList *FunctionSelectList,
 	entry unsignedDecimalAdmissionEntry,
 	column string,
 ) error {
@@ -602,7 +579,7 @@ func unsignedDecimalAdmissionVarlena(
 	isBin := result.ArgumentIsBin(0)
 	mysqlPrefix := targetType.Charset == 255 && (!isBin || from.IsConst())
 	if IsBinaryCharacterType(*from.GetType()) || (isBin && !mysqlPrefix) {
-		return unsignedDecimalAdmissionBinary(proc, from, targetType, result, length, selectList, entry, column)
+		return unsignedDecimalAdmissionBinary(proc, from, targetType, result, length, entry, column)
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	src := vector.GenerateFunctionStrParameter(from)
@@ -611,12 +588,6 @@ func unsignedDecimalAdmissionVarlena(
 	retainPrefix := entry == unsignedDecimalAdmissionIgnore ||
 		(entry == unsignedDecimalAdmissionMode && !StrictSqlModeForAssignment(proc))
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
 		v, null := src.GetStrValue(i)
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {

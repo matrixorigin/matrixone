@@ -40,13 +40,12 @@ func TestEmptyTimeConversionPreservesReleaseContract(t *testing.T) {
 						session := &numericWarningSession{}
 						proc.Session = session
 						inputs := []FunctionTestInput{
-							NewFunctionTestInput(source.ToType(), []string{"", " ", "15", "", "bad"}, []bool{false, false, false, true, false}),
+							NewFunctionTestInput(source.ToType(), []string{"", " ", "15", "", "bad"}, []bool{false, false, false, true, true}),
 							NewFunctionTestInput(types.T_time.ToType(), []types.Time{}, nil),
 						}
 						expect := NewFunctionTestResult(types.T_time.ToType(), false,
 							[]types.Time{0, 0, 15 * types.MicroSecsPerSec, 0, 0}, []bool{true, false, false, true, true})
-						tc := NewFunctionTestCase(proc, inputs, expect, fn).
-							WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
+						tc := NewFunctionTestCase(proc, inputs, expect, fn)
 						defer tc.Free()
 						tc.result.SetArgumentIsBin([]bool{binary})
 						ok, info := tc.Run()
@@ -273,7 +272,7 @@ func TestExplicitCastZeroTemporalStringsHonorStrictNoZeroDate(t *testing.T) {
 			proc.GetSessionInfo().TimeZone = time.UTC
 			tc.configure(proc)
 
-			result := runStringTemporalCast(t, proc, NewCast, tc.input, tc.target, nil)
+			result := runStringTemporalCast(t, proc, NewCast, tc.input, tc.target)
 			require.Equal(t, tc.wantNull, result.nulls[0])
 		})
 	}
@@ -297,10 +296,10 @@ func TestAssignmentCastZeroTemporalStringsPreserveSentinels(t *testing.T) {
 		{name: "timestamp", input: "0000-00-00 00:00:00", target: types.T_timestamp.ToType()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			explicit := runStringTemporalCast(t, proc, NewCast, tc.input, tc.target, nil)
+			explicit := runStringTemporalCast(t, proc, NewCast, tc.input, tc.target)
 			require.True(t, explicit.nulls[0], "explicit cast should return SQL NULL before assignment")
 
-			assignment := runStringTemporalCast(t, proc, NewStrictCast, tc.input, tc.target, nil)
+			assignment := runStringTemporalCast(t, proc, NewStrictCast, tc.input, tc.target)
 			require.False(t, assignment.nulls[0], "assignment cast should preserve zero temporal sentinel")
 		})
 	}
@@ -320,7 +319,6 @@ func TestAssignmentDateCastRejectsInvalidStrings(t *testing.T) {
 				NewCast,
 				input,
 				types.T_date.ToType(),
-				nil,
 			)
 			require.True(t, expression.nulls[0])
 
@@ -340,7 +338,6 @@ func TestAssignmentDateCastRejectsInvalidStrings(t *testing.T) {
 				result,
 				proc,
 				1,
-				nil,
 			)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
@@ -352,7 +349,7 @@ func TestAssignmentDateCastRejectsInvalidStrings(t *testing.T) {
 func TestDateAssignmentDiagnosesDatetimeNarrowing(t *testing.T) {
 	explicitProc := testutil.NewProcess(t)
 	explicit := runStringTemporalCast(t, explicitProc, NewExplicitCast,
-		"2026-10-21 10:20:30", types.T_date.ToType(), nil)
+		"2026-10-21 10:20:30", types.T_date.ToType())
 	require.False(t, explicit.nulls[0])
 	for _, value := range []string{
 		"2026-10-21 10:20:30",
@@ -390,7 +387,7 @@ func TestDateAssignmentDiagnosesDatetimeNarrowing(t *testing.T) {
 				if tc.ignore {
 					fn = NewAssignIgnoreCast
 				}
-				err := fn([]*vector.Vector{input, target}, result, proc, 1, nil)
+				err := fn([]*vector.Vector{input, target}, result, proc, 1)
 				if tc.wantError {
 					require.Error(t, err)
 					require.Empty(t, warnings.warnings)
@@ -438,7 +435,7 @@ func TestTypedDatetimeAssignmentDiagnosesDateNarrowing(t *testing.T) {
 			if tc.ignore {
 				fn = NewAssignIgnoreCast
 			}
-			err := fn([]*vector.Vector{input, target}, result, proc, 1, nil)
+			err := fn([]*vector.Vector{input, target}, result, proc, 1)
 			if tc.wantError {
 				require.Error(t, err)
 				require.Empty(t, warnings.warnings)
@@ -462,12 +459,11 @@ func TestDatetimeExpressionCastInvalidStrings(t *testing.T) {
 				fc := NewFunctionTestCase(proc, []FunctionTestInput{
 					NewFunctionTestInput(source.ToType(),
 						[]string{"2026-02-30", "2026-13-01", "not a date", "", " ", "ignored", "2024-02-29 12:34:56.123456", "masked"},
-						[]bool{false, false, false, false, false, true, false, false}),
+						[]bool{false, false, false, false, false, true, false, true}),
 					NewFunctionTestInput(target, []types.Datetime{}, nil),
 				}, NewFunctionTestResult(target, false,
 					[]types.Datetime{0, 0, 0, 0, 0, 0, types.DatetimeFromClock(2024, 2, 29, 12, 34, 56, 123456), 0},
-					[]bool{true, true, true, true, true, true, false, true}), fn).
-					WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, true, true, true, false}})
+					[]bool{true, true, true, true, true, true, false, true}), fn)
 				ok, info := fc.RunAndFree()
 				require.True(t, ok, info)
 				if isTemporalTextSource(source) {
@@ -483,7 +479,7 @@ func TestDatetimeExpressionCastInvalidStrings(t *testing.T) {
 			t.Run(fmt.Sprintf("precision/%s/%d", sqlMode, scale), func(t *testing.T) {
 				proc := testutil.NewProcess(t)
 				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
-				result := runStringTemporalCast(t, proc, NewCast, "bad", types.T_datetime.ToTypeWithScale(scale), nil,
+				result := runStringTemporalCast(t, proc, NewCast, "bad", types.T_datetime.ToTypeWithScale(scale),
 					"2024-02-29 12:34:56.9999999")
 				want := types.DatetimeFromClock(2024, 2, 29, 12, 34, 57, 0)
 				if sqlMode == "TIME_TRUNCATE_FRACTIONAL" {
@@ -525,7 +521,7 @@ func TestDatetimeInvalidCastRetainsRestrictedDomains(t *testing.T) {
 			defer fc.Free()
 			fc.result.SetArgumentIsBin([]bool{tc.binary})
 			require.NoError(t, fc.result.PreExtendAndReset(1))
-			err := tc.fn(fc.parameters, fc.result, proc, 1, nil)
+			err := tc.fn(fc.parameters, fc.result, proc, 1)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
 		})
 	}
@@ -539,7 +535,7 @@ func TestDatetimeInvalidCastRetainsRestrictedDomains(t *testing.T) {
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
 			err := strToDatetime(proc, vector.GenerateFunctionStrParameter(input),
-				vector.MustFunctionResult[types.Datetime](result), 1, nil, castModeNormal)
+				vector.MustFunctionResult[types.Datetime](result), 1, castModeNormal)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
 		})
 	}
@@ -571,41 +567,10 @@ func TestExplicitCastZeroTemporalResolverErrorPropagates(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(tc.target, proc.Mp())
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
-			err := tc.fn([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
+			err := tc.fn([]*vector.Vector{inputVec, targetType}, result, proc, 1)
 			require.ErrorContains(t, err, "sql_mode lookup failed")
 		})
 	}
-}
-
-func TestExplicitCastZeroTemporalSkippedRowsAreNotParsed(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().TimeZone = time.UTC
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
-		return "STRICT_TRANS_TABLES,NO_ZERO_DATE", nil
-	})
-
-	selectList := &FunctionSelectList{
-		AnyNull:    true,
-		SelectList: []bool{false, true, true},
-	}
-	result := runStringTemporalCast(
-		t,
-		proc,
-		NewCast,
-		"not-a-timestamp",
-		types.T_timestamp.ToType(),
-		selectList,
-		"0000-00-00 00:00:00",
-		"2024-01-02 03:04:05",
-	)
-
-	require.True(t, result.nulls[0], "skipped rows should append NULL without parsing")
-	require.True(t, result.nulls[1], "strict+NO_ZERO_DATE explicit cast should return NULL")
-	require.False(t, result.nulls[2], "non-zero timestamp should still be parsed")
-
-	expected, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05", 0)
-	require.NoError(t, err)
-	require.Equal(t, expected, result.timestamps[2])
 }
 
 type temporalCastResult struct {
@@ -621,7 +586,6 @@ func runStringTemporalCast(
 	fn executeLogicOfOverload,
 	input string,
 	target types.Type,
-	selectList *FunctionSelectList,
 	extraInputs ...string,
 ) temporalCastResult {
 	t.Helper()
@@ -634,7 +598,7 @@ func runStringTemporalCast(
 	result := vector.NewFunctionResultWrapper(target, proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(len(values)))
-	require.NoError(t, fn([]*vector.Vector{inputVec, targetType}, result, proc, len(values), selectList))
+	require.NoError(t, fn([]*vector.Vector{inputVec, targetType}, result, proc, len(values)))
 
 	rsVec := result.GetResultVector()
 	out := temporalCastResult{nulls: make([]bool, len(values))}
@@ -910,7 +874,7 @@ func TestUnixTimestampNoArgReturnsIntegerSeconds(t *testing.T) {
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
 
-	require.NoError(t, builtInUnixTimestamp(nil, result, proc, 1, nil))
+	require.NoError(t, builtInUnixTimestamp(nil, result, proc, 1))
 
 	vec := result.GetResultVector()
 	require.False(t, vec.IsNull(0))

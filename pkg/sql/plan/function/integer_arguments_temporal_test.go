@@ -38,7 +38,6 @@ func TestIntegerArgumentTemporalCast(t *testing.T) {
 		input   FunctionTestInput
 		want    []int64
 		nulls   []bool
-		mask    *FunctionSelectList
 		wantErr bool
 	}{
 		{input: NewFunctionTestInput(types.T_uuid.ToType(), []types.Uuid{uuid}, nil), want: []int64{256}},
@@ -46,14 +45,12 @@ func TestIntegerArgumentTemporalCast(t *testing.T) {
 		{input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, nil), want: []int64{20240102}},
 		{input: NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{dt, maxDT}, nil), want: []int64{20240101000000, 99991231000000}},
 		{input: NewFunctionTestInput(types.T_time.ToTypeWithScale(6), []types.Time{175500000, 3599500000, -1500000, 3020399999999, -3020399999999, 3020400000000}, nil), want: []int64{256, 10000, -2, 8385959, -8385959, 8390000}},
-		{input: NewFunctionTestInput(types.T_time.ToTypeWithScale(6), []types.Time{1500000, 1500000, 1500000}, []bool{false, false, true}), want: []int64{0, 2, 0}, nulls: []bool{true, false, true}, mask: &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}}},
 		{input: NewFunctionTestConstInput(types.T_time.ToType(), []types.Time{math.MaxInt64}, []bool{true}), want: []int64{0}, nulls: []bool{true}},
-		{input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{math.MaxInt64}, nil), want: []int64{0}, nulls: []bool{true}, mask: &FunctionSelectList{AllNull: true}},
 		{input: NewFunctionTestInput(types.T_float64.ToType(), []float64{1.5, 2.5}, nil), want: []int64{2, 2}},
 		{input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.9tail", "2.5"}, nil), want: []int64{1, 2}},
 		{input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"9223372036854775808"}, nil), wantErr: true},
 	} {
-		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), tc.wantErr, tc.want, tc.nulls), NewTemporalIntegerArgumentCast).WithSelectList(tc.mask)
+		test := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), tc.wantErr, tc.want, tc.nulls), NewTemporalIntegerArgumentCast)
 		ok, info := test.RunAndFree()
 		require.True(t, ok, info)
 	}

@@ -62,26 +62,20 @@ func newOpBuiltInJq() *opBuiltInJq {
 }
 
 func (op *opBuiltInJq) jq(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.tryJqImpl(params, result, proc, length, selectList, false)
+	proc *process.Process, length int) error {
+	return op.tryJqImpl(params, result, proc, length, false)
 }
 
 func (op *opBuiltInJq) tryJq(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.tryJqImpl(params, result, proc, length, selectList, true)
+	proc *process.Process, length int) error {
+	return op.tryJqImpl(params, result, proc, length, true)
 }
 
 func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList,
+	proc *process.Process, length int,
 	isTry bool) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	if length == 0 {
-		return nil
-	}
-
-	// special case
-	if selectList.IgnoreAllRow() {
-		rs.SetNullResult(uint64(length))
 		return nil
 	}
 
@@ -107,7 +101,7 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 					return err
 				}
 			}
-			return op.appendJqConstResult(rs, length, selectList)
+			return op.appendJqConstResult(rs, length)
 		}
 		return nil
 	} else if c1 {
@@ -120,7 +114,7 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 		} else {
 			for i := uint64(0); i < uint64(length); i++ {
 				v2, null2 := p2.GetStrValue(i)
-				if null2 || selectList.Contains(i) {
+				if null2 {
 					if err := rs.AppendBytes(nil, true); err != nil {
 						return err
 					}
@@ -165,7 +159,7 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
-			if null1 || selectList.Contains(i) {
+			if null1 {
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -191,7 +185,7 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
-			if null1 || null2 || selectList.Contains(i) {
+			if null1 || null2 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -228,10 +222,9 @@ func (op *opBuiltInJq) appendJqRowResult(rs *vector.FunctionResult[types.Varlena
 func (op *opBuiltInJq) appendJqConstResult(
 	rs *vector.FunctionResult[types.Varlena],
 	length int,
-	selectList *FunctionSelectList,
 ) (err error) {
 	defer op.enc.done()
-	return appendRepeatedBytesResultWithSelection(rs, op.enc.bytes(), length, selectList)
+	return appendRepeatedBytesResult(rs, op.enc.bytes(), length)
 }
 
 // run jq.  The result is stored in the encoder bytes().  If succeeded, caller
@@ -616,7 +609,7 @@ func (op *opBuiltInJsonRow) grow(length int) {
 }
 
 func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.FunctionResultWrapper,
-	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	proc *process.Process, length int) error {
 	op.grow(length)
 	defer func() {
 		for i := range op.enc[:length] {
@@ -726,14 +719,8 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 
 	for j := 0; j < length; j++ {
 		op.enc[j].w.WriteByte(']')
-		if selectList.Contains(uint64(j)) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.AppendBytes(op.enc[j].bytes(), false); err != nil {
-				return err
-			}
+		if err := rs.AppendBytes(op.enc[j].bytes(), false); err != nil {
+			return err
 		}
 	}
 	return nil

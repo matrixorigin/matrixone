@@ -247,41 +247,6 @@ func TestStrToDatetimeWarnings(t *testing.T) {
 	require.Equal(t, "Truncated incorrect datetime value: '2024-01-02 10:30:45xyz'", warnings.warnings[1].msg)
 }
 
-// Masked branches must not publish diagnostics for unevaluated rows.
-func TestStrToDateWarningsRespectSelection(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		typ  types.Type
-		fn   executeLogicOfOverload
-		zero any
-	}{
-		{"date", types.T_date.ToType(), builtInStrToDate, []types.Date{0, 0, 0}},
-		{"datetime", types.T_datetime.ToType(), builtInStrToDatetime, []types.Datetime{0, 0, 0}},
-		{"time", types.T_time.ToType(), builtInStrToTime, []types.Time{0, 0, 0}},
-	} {
-		for _, all := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/all=%t", tc.name, all), func(t *testing.T) {
-				proc := testutil.NewProcess(t)
-				defer proc.Free()
-				sink := &numericWarningSession{}
-				proc.WarningSink = sink
-				test := NewFunctionTestCase(proc, []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad", "bad", "bad"}, []bool{false, false, true}),
-					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y-%m-%d"}, nil),
-				}, NewFunctionTestResult(tc.typ, false, tc.zero, []bool{true, true, true}), tc.fn).
-					WithSelectList(&FunctionSelectList{AnyNull: true, AllNull: all, SelectList: []bool{false, true, true}})
-				ok, info := test.RunAndFree()
-				require.True(t, ok, info)
-				want := 1
-				if all {
-					want = 0
-				}
-				require.Len(t, sink.warnings, want)
-			})
-		}
-	}
-}
-
 func TestStrToDateWarningMessageBound(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -395,7 +360,7 @@ func BenchmarkFormatLocaleDiagnostics(b *testing.B) {
 								if err := fc.result.PreExtendAndReset(1); err != nil {
 									b.Fatal(err)
 								}
-								if err := formatIntegerPrecision(fc.parameters, fc.result, proc, 1, nil); err != nil {
+								if err := formatIntegerPrecision(fc.parameters, fc.result, proc, 1); err != nil {
 									b.Fatal(err)
 								}
 							} else {
@@ -574,7 +539,7 @@ func TestTemporalCastWarnings(t *testing.T) {
 				result := vector.NewFunctionResultWrapper(typ, proc.Mp())
 				defer result.Free()
 				require.NoError(t, result.PreExtendAndReset(3))
-				require.NoError(t, tc.fn([]*vector.Vector{input, target}, result, proc, 3, nil))
+				require.NoError(t, tc.fn([]*vector.Vector{input, target}, result, proc, 3))
 				v := result.GetResultVector()
 				require.True(t, v.GetNulls().Contains(0))
 				require.True(t, v.GetNulls().Contains(1))

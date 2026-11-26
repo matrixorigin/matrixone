@@ -916,7 +916,7 @@ func TestStringToFixedFloat32PreservesSourcePrecision(t *testing.T) {
 				defer result.Free()
 				require.NoError(t, result.PreExtendAndReset(1))
 
-				err := strToFloat(context.Background(), mode, vector.GenerateFunctionStrParameter(inputVec), result, 32, 1, nil)
+				err := strToFloat(context.Background(), mode, vector.GenerateFunctionStrParameter(inputVec), result, 32, 1)
 				require.Error(t, err)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 			})
@@ -942,38 +942,10 @@ func TestStringToFixedFloat32PreservesSourcePrecision(t *testing.T) {
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
 
-			err := strToFloat(context.Background(), tc.mode, vector.GenerateFunctionStrParameter(inputVec), result, 32, 1, nil)
+			err := strToFloat(context.Background(), tc.mode, vector.GenerateFunctionStrParameter(inputVec), result, 32, 1)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[float32](result.GetResultVector(), 0))
 		})
-	}
-}
-
-func TestStringToFloatSkipsInactiveInvalidRows(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	input := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"1.5", "invalid"}, nil)
-	defer input.Free(proc.Mp())
-
-	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp()).(*vector.FunctionResult[float64])
-	defer result.Free()
-	require.NoError(t, result.PreExtendAndReset(2))
-
-	err := strToFloat(context.Background(), SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(input), result, 64, 2,
-		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
-	require.NoError(t, err)
-	resultVec := result.GetResultVector()
-	require.Equal(t, 2, resultVec.Length())
-	require.Equal(t, 1.5, vector.GetFixedAtNoTypeCheck[float64](resultVec, 0))
-	require.True(t, resultVec.GetNulls().Contains(1))
-
-	require.NoError(t, result.PreExtendAndReset(2))
-	err = strToFloat(context.Background(), SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(input), result, 64, 2,
-		&FunctionSelectList{AllNull: true})
-	require.NoError(t, err)
-	resultVec = result.GetResultVector()
-	require.Equal(t, 2, resultVec.Length())
-	for i := uint64(0); i < 2; i++ {
-		require.True(t, resultVec.GetNulls().Contains(i))
 	}
 }
 
@@ -1171,7 +1143,7 @@ func TestBinaryToFloatConversion(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToFloat(ctx, SQLCompatibilityMySQL, from, to, 64, len(tt.inputs), nil)
+			err = strToFloat(ctx, SQLCompatibilityMySQL, from, to, 64, len(tt.inputs))
 			require.NoError(t, err, "should not return error for invalid binary")
 
 			resultVec := to.GetResultVector()
@@ -1193,7 +1165,7 @@ func TestBinaryToFloatConversion(t *testing.T) {
 			defer to.Free()
 			require.NoError(t, to.PreExtendAndReset(1))
 
-			err := strToFloat(ctx, SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(inputVec), to, 64, 1, nil)
+			err := strToFloat(ctx, SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(inputVec), to, 64, 1)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		})
@@ -1205,7 +1177,7 @@ func TestBinaryToFloatConversion(t *testing.T) {
 	to.SetArgumentIsBin([]bool{true})
 	defer to.Free()
 	require.NoError(t, to.PreExtendAndReset(1))
-	require.NoError(t, strToFloat(ctx, SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(inputVec), to, 64, 1, nil))
+	require.NoError(t, strToFloat(ctx, SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(inputVec), to, 64, 1))
 	require.Equal(t, []float64{0}, vector.MustFixedColNoTypeCheck[float64](to.GetResultVector()))
 }
 
@@ -1418,7 +1390,7 @@ func TestGeometry32OverflowAdmission(t *testing.T) {
 		NewFunctionTestResult(types.T_geometry32.ToType(), true, nil, nil), NewCast)
 	defer cast.Free()
 	require.NoError(t, cast.result.PreExtendAndReset(1))
-	err = NewCast(cast.parameters, cast.result, proc, 1, nil)
+	err = NewCast(cast.parameters, cast.result, proc, 1)
 	require.ErrorContains(t, err, "not finite in GEOMETRY32")
 
 	boundary := fmt.Sprintf("POINT(%g %g)", float64(math.MaxFloat32), -float64(math.MaxFloat32))
@@ -1557,7 +1529,7 @@ func Test_CastVarcharToGeometry(t *testing.T) {
 
 		err := result.PreExtendAndReset(1)
 		require.NoError(t, err)
-		err = NewCast([]*vector.Vector{nullVec, targetType}, result, proc, 1, nil)
+		err = NewCast([]*vector.Vector{nullVec, targetType}, result, proc, 1)
 		require.NoError(t, err)
 
 		resultVec := result.GetResultVector()
@@ -1577,7 +1549,7 @@ func Test_CastVarcharToGeometry(t *testing.T) {
 
 		err := result.PreExtendAndReset(1)
 		require.NoError(t, err)
-		err = NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
+		err = NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "invalid geometry type")
 	})
@@ -3474,7 +3446,7 @@ func Test_strToSigned_Binary(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToSigned(ctx, from, to, tt.bitSize, len(tt.inputs), nil)
+			err = strToSigned(ctx, from, to, tt.bitSize, len(tt.inputs))
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -3525,7 +3497,7 @@ func Test_strToUnsigned_BinaryIntroducedHexText(t *testing.T) {
 		defer to.Free()
 		require.NoError(t, to.PreExtendAndReset(1))
 
-		require.NoError(t, strToUnsigned(ctx, from, to, 64, 1, nil))
+		require.NoError(t, strToUnsigned(ctx, from, to, 64, 1))
 
 		resultVec := to.GetResultVector()
 		result := vector.GenerateFunctionFixedTypeParameter[uint64](resultVec)
@@ -3609,7 +3581,7 @@ func Benchmark_strToSigned_Binary(b *testing.B) {
 
 				from := vector.GenerateFunctionStrParameter(inputVec)
 
-				err = strToSigned(ctx, from, to, bc.bitSize, len(bc.inputs), nil)
+				err = strToSigned(ctx, from, to, bc.bitSize, len(bc.inputs))
 				if err != nil {
 					b.Fatalf("strToSigned failed: %v", err)
 				}
@@ -3774,7 +3746,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false, castModeNormal, nil)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false, castModeNormal)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -3855,7 +3827,7 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			defer to.Free()
 			require.NoError(t, to.PreExtendAndReset(1))
 
-			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false, castModeNormal, nil)
+			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false, castModeNormal)
 			if tt.wantErr {
 				require.Error(t, err)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
@@ -3893,7 +3865,7 @@ func TestStrToStrNormalizesOnlyPhysicalEqualityCasts(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(test.toType, mp).(*vector.FunctionResult[types.Varlena])
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
-			require.NoError(t, strToStr(context.Background(), nil, from, result, 1, test.toType, false, false, false, test.mode, nil))
+			require.NoError(t, strToStr(context.Background(), nil, from, result, 1, test.toType, false, false, false, test.mode))
 
 			got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
 			require.False(t, null)
@@ -4002,7 +3974,7 @@ func Test_NewStrictCast_NonStringToCharVarcharRejectsOverWidth(t *testing.T) {
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))
 
-			err := NewStrictCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
+			err := NewStrictCast([]*vector.Vector{inputVec, targetType}, result, proc, 1)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "larger than Dest length")
 		})
@@ -4029,7 +4001,7 @@ func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	err := to.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false, castModeNormal, nil)
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false, castModeNormal)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }
@@ -4318,8 +4290,8 @@ func TestDecimal256ToOthersDispatcher(t *testing.T) {
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestInput(sourceType, values, tc.nulls),
 			}, NewFunctionTestResult(target, tc.errCode != 0, tc.want, tc.nulls),
-				func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-					return decimal256ToOthers(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal256](parameters[0]), target, result, length, selectList)
+				func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					return decimal256ToOthers(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal256](parameters[0]), target, result, length)
 				})
 			t.Cleanup(fc.Free)
 			if tc.errCode != 0 {
@@ -4845,22 +4817,6 @@ func TestCastToJSONRejectsNonFiniteFloatAndSkipsInactiveRows(t *testing.T) {
 		require.True(t, ok, info)
 	})
 
-	t.Run("inactive invalid JSON is not evaluated", func(t *testing.T) {
-		tc := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`, `not json`}, nil),
-				NewFunctionTestInput(jsonType, []string{}, nil),
-			},
-			NewFunctionTestResult(jsonType, false, nil, nil), NewCast)
-		defer tc.Free()
-		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
-		err := tc.fn(tc.parameters, tc.result, proc, tc.fnLength, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
-		require.NoError(t, err)
-		out := tc.GetResultVectorDirectly()
-		require.Equal(t, 2, out.Length())
-		require.Equal(t, "1", types.DecodeJson(out.GetBytesAt(0)).String())
-		require.True(t, out.IsNull(1))
-	})
 }
 
 func TestCastToJSONAllNullPathsMaterializeVarlenaLength(t *testing.T) {
@@ -4874,7 +4830,7 @@ func TestCastToJSONAllNullPathsMaterializeVarlenaLength(t *testing.T) {
 		result := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
 		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(3))
-		require.NoError(t, NewCast([]*vector.Vector{source, jsonTarget}, result, proc, 3, nil))
+		require.NoError(t, NewCast([]*vector.Vector{source, jsonTarget}, result, proc, 3))
 		out := result.GetResultVector()
 		require.Equal(t, 3, out.Length())
 		for row := uint64(0); row < 3; row++ {
@@ -4882,19 +4838,6 @@ func TestCastToJSONAllNullPathsMaterializeVarlenaLength(t *testing.T) {
 		}
 	})
 
-	t.Run("ignore all rows", func(t *testing.T) {
-		source := testutil.MakeVarcharVector([]string{`not json`, `also not json`}, nil, proc.Mp())
-		defer source.Free(proc.Mp())
-		result := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
-		defer result.Free()
-		require.NoError(t, result.PreExtendAndReset(2))
-		require.NoError(t, NewCast([]*vector.Vector{source, jsonTarget}, result, proc, 2, &FunctionSelectList{AllNull: true}))
-		out := result.GetResultVector()
-		require.Equal(t, 2, out.Length())
-		for row := uint64(0); row < 2; row++ {
-			require.True(t, out.IsNull(row))
-		}
-	})
 }
 
 func TestBitToJSONRestoresDeclaredWidth(t *testing.T) {
@@ -5806,16 +5749,16 @@ func strToSigned[T constraints.Signed](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList, explicit ...bool) error {
-	return strToSignedWithProc(ctx, nil, from, to, bitSize, length, selectList, castModeNormal, explicit...)
+	length int, explicit ...bool) error {
+	return strToSignedWithProc(ctx, nil, from, to, bitSize, length, castModeNormal, explicit...)
 }
 
 func strToUnsigned[T constraints.Unsigned](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList, explicit ...bool) error {
-	return strToUnsignedWithProc(ctx, nil, from, to, bitSize, length, selectList, castModeNormal, explicit...)
+	length int, explicit ...bool) error {
+	return strToUnsignedWithProc(ctx, nil, from, to, bitSize, length, castModeNormal, explicit...)
 }
 
 func strToFloat[T constraints.Float](
@@ -5823,6 +5766,6 @@ func strToFloat[T constraints.Float](
 	mode SQLCompatibilityMode,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList) error {
-	return strToFloatWithProc(ctx, nil, mode, from, to, bitSize, length, selectList)
+	length int) error {
+	return strToFloatWithProc(ctx, nil, mode, from, to, bitSize, length)
 }
