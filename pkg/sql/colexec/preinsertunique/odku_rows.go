@@ -258,17 +258,6 @@ func (preInsertUnique *PreInsertUnique) publishODKUAction(proc *process.Process,
 			}
 		}
 	}
-	for i := range preInsertUnique.ctr.acceptedKeys {
-		// Mutable-key attempts retain the old groups until their distinct
-		// transient keys have been locked; the same groups deduplicate that history.
-		if rows.keys != nil && preInsertUnique.PreInsertCtx.GetOdkuActions().GetPriorData() == nil && preInsertUnique.ctr.acceptedKeys[i].shouldRebuild() {
-			// Logical owners are dense positions in keys; nil avoids an
-			// additional row-sized, separately-accounted owners array.
-			if err = preInsertUnique.rebuildODKUKeyIndex(proc, i, rows.keys.Vecs[i], nil); err != nil {
-				return -1, 0, err
-			}
-		}
-	}
 	completed = true
 	return -1, 0, nil
 }

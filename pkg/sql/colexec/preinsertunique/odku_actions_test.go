@@ -382,6 +382,52 @@ func TestODKUActionsValidatePriorRowsAtBoundary(t *testing.T) {
 	}
 }
 
+func TestODKUMutableActionsRetainDistinctTransientLocks(t *testing.T) {
+	a, proc, child, account := odkuActionFixture(t, 16<<20)
+	c := a.PreInsertCtx.OdkuActions
+	c.PriorData = &plan.OdkuPriorData{Ref: &plan.ObjectRef{Obj: 1}, TableDef: &plan.TableDef{}}
+	for _, col := range c.OldColumns {
+		c.PriorData.TableDef.Cols = append(c.PriorData.TableDef.Cols, &plan.ColDef{Typ: col.Typ})
+	}
+	for i, key := range c.Constraints {
+		key.LookupRef = &plan.ObjectRef{Obj: int64(i + 1)}
+	}
+	// n=VALUES(n), followed by the generated UNIQUE key u=n. The same
+	// inserted owner moves A -> B -> A -> C, crossing an already vacated key.
+	incoming := &plan.Expr{Typ: c.SourceColumns[2].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}}}
+	c.UpdateColumns = []int32{2, 1}
+	c.UpdateExprs = []*plan.Expr{incoming, c.SourceColumns[2]}
+	c.ChangeCheckAssignmentCount = 2
+	c.ChangeCheckColumns = []int32{1, 2}
+	a.PriorDataView = odkuTestPriorView{lookup: func(uint64) (*batch.Batch, error) { return nil, nil }}
+	for range 2 {
+		locked := make(map[int][]int64)
+		a.LockKeys = func(_ *process.Process, slot int, keys *vector.Vector) error {
+			require.NotContains(t, locked, slot, "validate each constraint once per attempt")
+			locked[slot] = append([]int64(nil), vector.MustFixedColNoTypeCheck[int64](keys)...)
+			return nil
+		}
+		child.WithBatchs([]*batch.Batch{odkuActionInput(t, proc, [][9]int64{
+			{1, 10, 10, 1}, {1, 20, 20, 2}, {1, 10, 10, 3}, {1, 30, 30, 4},
+		})})
+		require.NoError(t, a.Prepare(proc))
+		out, err := a.Call(proc)
+		require.NoError(t, err)
+		require.NotNil(t, out.Batch)
+		require.Equal(t, 1, out.Batch.RowCount())
+		require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[0], 0))
+		require.Equal(t, int64(30), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[1], 0))
+		require.Equal(t, int64(30), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[2], 0))
+		require.Equal(t, map[int][]int64{0: {1}, 1: {10, 20, 30}}, locked)
+		out, err = a.Call(proc)
+		require.NoError(t, err)
+		require.Nil(t, out.Batch)
+		a.Reset(proc, false, nil)
+		child.Free(proc, false, nil)
+		require.Zero(t, account.Snapshot().Used)
+	}
+}
+
 func TestODKUActionsInvalidMetadata(t *testing.T) {
 	for name, change := range map[string]func(*plan.OdkuActionCtx){
 		"missing ordinal":           func(c *plan.OdkuActionCtx) { c.SourceOrdinal = nil },
