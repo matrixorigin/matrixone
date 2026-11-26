@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -203,13 +204,25 @@ func indexFileBytes(n int, seed byte) []byte {
 
 func TestIndexFileWriteOpenThroughEngine(t *testing.T) {
 	e := setupIndexFileEngine(t)
-	base := indexFileBytes((indexfile.ChunksPerStatement+3)*indexfile.ChunkSize+99, 1)
+	base := indexFileBytes(65*indexfile.ChunkSize+99, 1)
 	frame := indexFileBytes(2*indexfile.ChunkSize+5, 2)
 
 	txn1 := e.txn()
 	writeCache := e.cache()
-	baseRef, err := e.write(txn1, writeCache, indexfile.Ref{DB: "ifdb", Table: "idx", IndexID: "idx:1:0"}, base)
+	baseRef := indexfile.Ref{DB: "ifdb", Table: "idx", IndexID: "idx:1:0"}
+	size, sum, err := indexfile.Write(e.ctx, e.env(txn1, writeCache), baseRef, bytes.NewReader(base), func(sql string) error {
+		// Run two SQL statements against the same registered source and transaction.
+		// The first also crosses the table function's 64-row output batch boundary.
+		// TestIndexFileChunksWriteRoundTrip checks the production INSERT split.
+		prefix, ok := strings.CutSuffix(sql, ", 0, 66) AS f")
+		require.True(t, ok, "unexpected chunk INSERT: %s", sql)
+		if err := e.run(txn1, prefix+", 0, 65) AS f"); err != nil {
+			return err
+		}
+		return e.run(txn1, prefix+", 65, 1) AS f")
+	})
 	require.NoError(t, err)
+	baseRef.Size, baseRef.Checksum = size, sum
 	frameRef, err := e.write(txn1, writeCache, indexfile.Ref{DB: "ifdb", Table: "idx", IndexID: "cdc_tail", Tag: 1, FirstChunk: 40}, frame)
 	require.NoError(t, err)
 
