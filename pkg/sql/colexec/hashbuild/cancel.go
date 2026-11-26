@@ -14,7 +14,10 @@
 
 package hashbuild
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 // checkHashBuildCanceled is polled at batch, bucket, and iterator-chunk
 // boundaries. It bounds cancellation latency without adding a select to the
@@ -22,7 +25,7 @@ import "github.com/matrixorigin/matrixone/pkg/vm/process"
 func checkHashBuildCanceled(proc *process.Process) error {
 	select {
 	case <-proc.Ctx.Done():
-		return proc.Ctx.Err()
+		return moerr.PipelineContextError(proc.Ctx)
 	default:
 		return nil
 	}

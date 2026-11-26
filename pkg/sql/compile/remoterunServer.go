@@ -150,6 +150,9 @@ func CnServerMessageHandler(
 	// requested StopSending may make execution return an error, but its terminal
 	// response and FIN still need the same cleanup barrier.
 	handlerErr := handlePipelineMessage(&receiver)
+	if moerr.PipelineStopCause(handlerErr) != nil {
+		handlerErr = moerr.PipelineContextError(receiver.messageCtx)
+	}
 	if handlerErr == nil && lifecycle != nil && lifecycle.batchFlow != nil {
 		handlerErr = waitUntilPipelineBatchFlowDrained(
 			receiver.messageCtx,
@@ -219,12 +222,12 @@ func waitUntilPipelineBatchFlowDrained(
 		return nil
 	}
 	if messageCtx != nil && messageCtx.Err() != nil {
-		return moerr.AttachCause(messageCtx, messageCtx.Err())
+		return moerr.PipelineContextError(messageCtx)
 	}
 	if connectionCtx != nil && connectionCtx.Err() != nil {
 		return moerr.NewStreamClosed(messageCtx)
 	}
-	if flow.wasStoppedByReceiver() && isScopeCancellationError(err) {
+	if flow.wasStoppedByReceiver() && moerr.IsPipelineInterruption(err) {
 		return nil
 	}
 	return err
@@ -980,7 +983,12 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	// a method to send back.
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.fill = func(b *batch.Batch, counter *perfcounter.CounterSet) error {
-		return receiver.sendBatch(b)
+		err := receiver.sendBatch(b)
+		if err != nil && receiver.streamLifecycle != nil &&
+			receiver.streamLifecycle.batchFlow.wasStoppedByReceiver() {
+			return moerr.PipelineIOError(proc.Ctx, err)
+		}
+		return moerr.PipelineIOError(receiver.messageCtx, err)
 	}
 
 	return c, nil
@@ -1343,10 +1351,7 @@ func remoteRegistrationContextError(ctx context.Context) error {
 	if ctx == nil {
 		return context.Canceled
 	}
-	if err := context.Cause(ctx); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
+	if err := moerr.PipelineContextError(ctx); err != nil {
 		return err
 	}
 	return context.Canceled

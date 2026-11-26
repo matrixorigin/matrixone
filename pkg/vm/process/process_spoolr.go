@@ -37,7 +37,7 @@ var (
 
 	// ErrPipelineEndSignalDeliveryFailed marks a successful cleanup path that
 	// could not durably record its normal End and had to fall back to abort.
-	ErrPipelineEndSignalDeliveryFailed = moerr.NewInternalErrorNoCtx("pipeline end signal delivery failed")
+	ErrPipelineEndSignalDeliveryFailed = moerr.PipelineEndDeliveryFailed
 
 	// ErrPipelineTerminalWithoutCause marks a failure/abort terminal event whose
 	// caller did not provide the original cause. Error and Abort terminal events
@@ -443,13 +443,13 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 			chosen, msg = receiver.listenToAll()
 			analyzer.WaitStop(start)
 			if chosen == 0 {
-				return nil, nil
+				return nil, moerr.PipelineContextError(receiver.usrCtx)
 			}
 
 		} else {
 			chosen, msg = receiver.listenToAll()
 			if chosen == 0 {
-				return nil, nil
+				return nil, moerr.PipelineContextError(receiver.usrCtx)
 			}
 		}
 

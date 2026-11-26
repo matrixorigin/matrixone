@@ -2338,7 +2338,7 @@ func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
 			wantErr: duplicateErr,
 		},
 		{
-			name: "raw pipeline cancellation without substantive cause is secondary",
+			name: "raw I/O cancellation from a downstream stop is secondary",
 			factoryErr: func(context.Context) error {
 				return context.Canceled
 			},
@@ -2371,7 +2371,11 @@ func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
 				require.NotNil(t, cancelQuery)
 				cancelQuery()
 			} else if !tt.keepPipelineActive {
-				scopeProc.Cancel(tt.cancelCause)
+				if tt.cancelCause == nil {
+					moerr.StopPipeline(scopeProc.Cancel)
+				} else {
+					scopeProc.Cancel(tt.cancelCause)
+				}
 			}
 
 			uid, err := uuid.NewV7()

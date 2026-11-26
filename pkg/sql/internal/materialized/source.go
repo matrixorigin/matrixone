@@ -281,7 +281,7 @@ func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.B
 		select {
 		case <-notify:
 		case <-ctx.Done():
-			return nil, true, context.Cause(ctx)
+			return nil, true, moerr.PipelineContextError(ctx)
 		}
 	}
 }

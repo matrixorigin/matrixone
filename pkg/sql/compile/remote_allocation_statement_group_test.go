@@ -25,11 +25,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -546,6 +548,56 @@ func TestRemoteAllocationStatementGenerationCapacity(t *testing.T) {
 	tombstoneCount := len(remoteAllocationStatementGroups.tombstones)
 	remoteAllocationStatementGroups.Unlock()
 	require.Equal(t, remoteAllocationStatementGenerationLimit, tombstoneCount)
+}
+
+func TestRemoteFragmentGroupRetainsErrorAcrossTwoWireHops(t *testing.T) {
+	ctx := context.Background()
+	roundTrip := func(t *testing.T, err error) error {
+		t.Helper()
+		var frame pipeline.Message
+		frame.SetMoError(ctx, err)
+		decoded, ok := frame.TryToGetMoErr()
+		require.True(t, ok)
+		return decoded
+	}
+	for _, tc := range []struct {
+		name          string
+		first, second error
+		code          uint16
+	}{
+		{"bare and encoded interruptions", context.Canceled, moerr.NewQueryInterrupted(ctx), moerr.ErrQueryInterrupted},
+		{"foreign key and interruption", moerr.NewErrFKRowIsReferenced(ctx), context.Canceled, moerr.ErrFKRowIsReferenced},
+		{"foreign key and cleanup fallback", moerr.NewErrFKNoReferencedRow2(ctx), process.ErrPipelineEndSignalDeliveryFailed, moerr.ErrFKNoReferencedRow2},
+		{"foreign key and generic cleanup", moerr.NewErrFKNoReferencedRow2(ctx), errors.New("fragment cleanup failed"), moerr.ErrFKNoReferencedRow2},
+		{"RPC timeout and interruption", moerr.NewRPCTimeout(ctx), context.Canceled, moerr.ErrRPCTimeout},
+	} {
+		for _, reverse := range []bool{false, true} {
+			name := tc.name
+			if reverse {
+				name += "/reversed"
+			}
+			t.Run(name, func(t *testing.T) {
+				board := message.NewMessageBoard()
+				first, err := acquireRemoteAllocationStatementTestParticipant(t, board, 2, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { _, _ = first.finish(nil) })
+				second, err := acquireRemoteAllocationStatementTestParticipant(t, board, 2, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { _, _ = second.finish(nil) })
+
+				firstErr, secondErr := tc.first, tc.second
+				if reverse {
+					firstErr, secondErr = secondErr, firstErr
+				}
+				pending, err := first.finish(roundTrip(t, firstErr))
+				require.NoError(t, err)
+				require.False(t, pending.complete)
+				terminal, err := second.finish(roundTrip(t, secondErr))
+				require.True(t, terminal.complete)
+				require.True(t, moerr.IsMoErrCode(roundTrip(t, err), tc.code), "%v", err)
+			})
+		}
+	}
 }
 
 func TestRemoteAllocationStatementGroupFailureCancelsActiveSibling(t *testing.T) {

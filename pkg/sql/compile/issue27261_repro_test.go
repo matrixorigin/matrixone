@@ -23,7 +23,10 @@ import (
 
 	"github.com/golang/mock/gomock"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -34,7 +37,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -44,7 +46,7 @@ import (
 // issue27261BlockingScan models a remote table reader that is still in flight
 // when its downstream LIMIT stops consuming and sends StopSending.
 type issue27261BlockingScan struct {
-	*colexec.MockOperator
+	mockReaderForParallelOrderBy
 	started chan struct{}
 	once    sync.Once
 }
@@ -97,10 +99,10 @@ func (r *issue27261BlockingRelation) BuildReaders(
 	return nil, ctx.Err()
 }
 
-func (op *issue27261BlockingScan) Call(proc *process.Process) (vm.CallResult, error) {
-	op.once.Do(func() { close(op.started) })
-	<-proc.Ctx.Done()
-	return vm.CancelResult, proc.Ctx.Err()
+func (r *issue27261BlockingScan) Read(ctx context.Context, _ []string, _ *plan.Expr, _ *mpool.MPool, _ *batch.Batch) (bool, error) {
+	r.once.Do(func() { close(r.started) })
+	<-ctx.Done()
+	return true, ctx.Err()
 }
 
 // This is a deterministic reduction of the production failure. A normal
@@ -124,15 +126,14 @@ func TestIssue27261StopSendingCancelsOnlyRemotePipeline(t *testing.T) {
 	server.RecordBuiltPipeline(session, streamID, rootProc)
 	t.Cleanup(func() { server.RemoveRelatedPipeline(session, streamID) })
 
-	op := &issue27261BlockingScan{
-		MockOperator: colexec.NewMockOperator(),
-		started:      make(chan struct{}),
-	}
-	scope := &Scope{Proc: readerProc, RootOp: op}
+	reader := &issue27261BlockingScan{started: make(chan struct{})}
+	scan := table_scan.NewArgument().WithTypes([]plan.Type{{Id: int32(types.T_int32)}})
+	defer scan.Release()
+	scope := &Scope{Proc: readerProc, RootOp: scan, DataSource: &Source{R: reader, Attributes: []string{"k"}}}
 	result := runIssue27261Scope(t, rootProc, func() error { return scope.Run(&Compile{proc: rootProc}) })
 
 	select {
-	case <-op.started:
+	case <-reader.started:
 	case <-time.After(time.Second):
 		t.Fatal("remote scan did not start")
 	}

@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"context"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -125,11 +124,11 @@ func (s *Scope) runVectorQueryScope(c *Compile) (err error) {
 	}
 	var wg sync.WaitGroup
 	var claimed [3]bool
-	var results [3]scopeRunResult
+	var results [3]error
 	done := [3]chan struct{}{make(chan struct{}), make(chan struct{}), make(chan struct{})}
 	finish := func(i int, branchErr error) {
 		s.cancelMergeSiblingsOnError(branchErr)
-		results[i] = newScopeRunResult(branchErr, s.PreScopes[i])
+		results[i] = branchErr
 		close(done[i])
 	}
 	start := func(i int) error {
@@ -137,7 +136,7 @@ func (s *Scope) runVectorQueryScope(c *Compile) (err error) {
 			return moerr.NewInternalErrorNoCtx("invalid vector query branch activation")
 		}
 		branch := s.PreScopes[i]
-		startErr := context.Cause(s.Proc.Ctx)
+		startErr := moerr.PipelineContextError(s.Proc.Ctx)
 		if startErr == nil {
 			startErr = func() (initErr error) {
 				defer func() {
@@ -152,8 +151,9 @@ func (s *Scope) runVectorQueryScope(c *Compile) (err error) {
 		// 等待尚未启动的 producer，形成清理之间的环形等待。
 		claimed[i] = true
 		if startErr != nil {
-			cleanUnstartedVectorScope(branch, c, startErr)
-			finish(i, startErr)
+			outcome := scopeExecutionError(s.Proc, startErr)
+			cleanUnstartedVectorScope(branch, c, outcome)
+			finish(i, outcome)
 			return startErr
 		}
 		wg.Add(1)
@@ -186,10 +186,9 @@ func (s *Scope) runVectorQueryScope(c *Compile) (err error) {
 		}
 		select {
 		case <-done[i]:
-			result, _ := results[i].resolveCancelCause()
-			return result.err
+			return results[i]
 		case <-s.Proc.Ctx.Done():
-			return context.Cause(s.Proc.Ctx)
+			return moerr.PipelineContextError(s.Proc.Ctx)
 		}
 	}
 	selector.SetBranches(start, wait)
@@ -200,21 +199,18 @@ func (s *Scope) runVectorQueryScope(c *Compile) (err error) {
 		// 自底向上发布终态，使每个 merge 只等待确实存在的清理发送者。
 		for i, branch := range s.PreScopes {
 			if !claimed[i] {
-				cleanUnstartedVectorScope(branch, c, context.Canceled)
+				cleanUnstartedVectorScope(branch, c, err)
 			}
 		}
 		wg.Wait()
 		// 未启动 reader 不会 Prepare，不能靠它的上一代 released 标记
 		// 释放本代所有权。确认全部分支清理完成后由执行域关闭本代 source。
 		selector.Source.Close()
-		result := newScopeRunResultForProcess(err, s.Proc)
 		for i := range claimed {
 			if claimed[i] {
-				result = preferPrimaryScopeResult(result, results[i])
+				err = preferPrimaryScopeError(err, results[i])
 			}
 		}
-		result, _ = result.resolveCancelCause()
-		err = result.err
 	}()
 	return s.ParallelRun(c)
 }

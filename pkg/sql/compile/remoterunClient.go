@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -110,7 +109,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		}
 	}
 	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc, debugMsg); err != nil {
-		return sender, err
+		return sender, sender.transportError(err)
 	}
 
 	err = receiveMessageFromCnServer(s, withoutOutput, sender)
@@ -446,6 +445,7 @@ type messageSenderOnClient struct {
 	terminalNegotiated bool
 	expectedEnd        pipeline.Method
 	stateMu            sync.Mutex
+	stopResponseErr    error
 	closeOnce          sync.Once
 	requestFinishAck   bool
 	pendingBatchAck    uint64
@@ -493,7 +493,7 @@ func newMessageSenderOnClient(
 
 	streamSender, err := pipelineClient.NewStream(streamCtx, toAddr)
 	if err != nil {
-		err = moerr.AttachCause(streamCtx, err)
+		err = pipelineTransportError(streamCtx, useInternalTimeout, err)
 		cleanupStreamCtx()
 		return nil, err
 	}
@@ -521,7 +521,7 @@ func newMessageSenderOnClient(
 	// Only Inc() when we return a valid sender that the caller will eventually close();
 	// when Receive() fails, close the stream here because remoteRun returns nil and never calls close().
 	if err != nil {
-		err = moerr.AttachCause(streamCtx, err)
+		err = pipelineTransportError(streamCtx, useInternalTimeout, err)
 		cleanupStreamCtx()
 		_ = streamSender.Close(true)
 		return nil, err
@@ -681,13 +681,14 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			batchSequence = sequence
 		}
 		if m.IsEndMessage() && len(m.GetAnalyse()) > 0 {
-			if err = sender.dealRemoteTerminal(m.GetAnalyse()); err != nil {
-				return nil, false, err
-			}
+			err = sender.dealRemoteTerminal(m.GetAnalyse())
 		}
 		if info, get := m.TryToGetMoErr(); get {
 			sender.markTerminal(m, false)
-			return nil, false, info
+			return nil, false, preferPrimaryScopeError(info, err)
+		}
+		if err != nil {
+			return nil, false, err
 		}
 		if m.IsEndMessage() {
 			sender.markTerminal(m, true)
@@ -733,24 +734,30 @@ func (sender *messageSenderOnClient) acknowledgeRemoteBatch() error {
 	message.SetSid(pipeline.Status_Last)
 	message.BatchAckSequence = sequence
 	if err := sender.streamSender.Send(sender.ctx, message); err != nil {
-		return err
+		return sender.transportError(err)
 	}
 	sender.pendingBatchAck = 0
 	return nil
 }
 
 func (sender *messageSenderOnClient) contextDoneError() error {
-	if sender.ctx == nil {
-		return nil
-	}
-	err := sender.ctx.Err()
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, context.DeadlineExceeded) && sender.useInternalTimeout {
+	cause := moerr.PipelineContextError(sender.ctx)
+	if cause == context.DeadlineExceeded && sender.useInternalTimeout {
 		return moerr.NewRPCTimeout(sender.ctx)
 	}
-	return moerr.NewQueryInterrupted(sender.ctx)
+	return cause
+}
+
+func (sender *messageSenderOnClient) transportError(err error) error {
+	return pipelineTransportError(sender.ctx, sender.useInternalTimeout, err)
+}
+
+func pipelineTransportError(ctx context.Context, internalTimeout bool, err error) error {
+	err = moerr.PipelineIOError(ctx, err)
+	if err == context.DeadlineExceeded && internalTimeout && ctx.Err() == context.DeadlineExceeded {
+		return moerr.NewRPCTimeout(ctx)
+	}
+	return err
 }
 
 func forwardRemoteBatchWithContext(
@@ -770,26 +777,26 @@ func forwardRemoteBatchWithContext(
 			return false, nil
 		}
 		bat.Clean(mp)
-		return true, nil
+		return true, nextReg.Err()
 	}
 
 	if nextReg.SendDataDirect(sender.ctx, bat, mp) {
 		return false, nil
 	}
 	bat.Clean(mp)
-	if err := sender.contextDoneError(); err != nil {
+	if err := nextReg.Err(); err != nil {
 		return true, err
 	}
-	return true, nil
+	return true, sender.contextDoneError()
 }
 
 // no matter how we stop the remote-run, we should get the final remote cost here.
-func (sender *messageSenderOnClient) waitingTheStopResponse() {
+func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 	sender.stateMu.Lock()
 	receiveClosed, safeToClose := sender.receiveClosed, sender.safeToClose
 	sender.stateMu.Unlock()
 	if receiveClosed || safeToClose {
-		return
+		return nil
 	}
 
 	// cannot use sender.ctx here, because ctx maybe done.
@@ -800,7 +807,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 	if err := sender.streamSender.Send(
 		maxWaitingTime,
 		generateStopSendingMessage(sender.streamSender.ID())); err != nil {
-		return
+		return nil
 	}
 
 	// wait an EndMessage response.
@@ -809,7 +816,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 		case val, ok := <-sender.receiveCh:
 			if !ok || val == nil {
 				sender.markReceiveClosed()
-				return
+				return nil
 			}
 
 			message := val.(*pipeline.Message)
@@ -822,13 +829,18 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 				// worker answers with its negotiated terminal response. The later FIN
 				// still waits for the same server cleanup barrier. Unnegotiated or
 				// mismatched terminal responses remain poisoned.
-				sender.markTerminal(message, message.IsEndMessage())
-				// in fact, we should deal the cost analysis information here.
-				return
+				err, failed := message.TryToGetMoErr()
+				if failed {
+					sender.stateMu.Lock()
+					sender.allowCleanupCancellation = false
+					sender.stateMu.Unlock()
+				}
+				sender.markTerminal(message, !failed && message.IsEndMessage())
+				return err
 			}
 
 		case <-maxWaitingTime.Done():
-			return
+			return nil
 		}
 	}
 }
@@ -924,12 +936,12 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	return nil
 }
 
-func (sender *messageSenderOnClient) close() {
+func (sender *messageSenderOnClient) close() error {
 	sender.closeOnce.Do(func() {
 		// Ensure Gauge is decremented exactly once when this sender is torn down.
 		defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
 
-		sender.waitingTheStopResponse()
+		sender.stopResponseErr = sender.waitingTheStopResponse()
 		sender.stateMu.Lock()
 		receiveClosed, reuseEligible := sender.receiveClosed, sender.reuseEligible
 		sender.stateMu.Unlock()
@@ -953,4 +965,5 @@ func (sender *messageSenderOnClient) close() {
 		}
 		_ = sender.streamSender.Close(true)
 	})
+	return sender.stopResponseErr
 }

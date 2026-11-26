@@ -347,10 +347,8 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	if err != nil {
 		return err
 	}
-	if buildErr := dep.BuildError(); buildErr != nil {
-		// A terminal BuildError is a failed dependency, never an empty build.
-		// Return before consuming probe input so no successful rows can escape.
-		return buildErr.AsMoErr()
+	if err = dep.DependencyError(proc.Ctx); err != nil {
+		return err
 	}
 	ctr.mp = dep.JoinMap()
 

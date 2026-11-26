@@ -679,66 +679,38 @@ func TestDebugLogFor19288(t *testing.T) {
 	}
 }
 
-func TestPreferPrimaryScopeResult(t *testing.T) {
-	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
-	executionErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
-	joinedExecutionErr := errors.Join(executionErr, context.Canceled)
-	joinedDeadlineErr := errors.Join(context.DeadlineExceeded, context.Canceled)
-	queryInterrupted := moerr.NewQueryInterrupted(context.Background())
-	joinedCancellationErr := errors.Join(context.Canceled, queryInterrupted)
-	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
-	cancelInternal(executionErr)
-	internalNormalCancelCtx, cancelInternalNormal := context.WithCancelCause(context.Background())
-	cancelInternalNormal(nil)
-	activeQueryCtx := context.Background()
-	externalCancelCtx, cancelExternal := context.WithCancel(context.Background())
-	cancelExternal()
-	externalDeadlineCtx, cancelExternalDeadline := context.WithTimeout(context.Background(), 0)
-	defer cancelExternalDeadline()
-	queryDeadlineCauseCtx, cancelQueryDeadlineCause := context.WithTimeoutCause(
-		context.Background(), 0, moerr.CauseInternalExecutorExec)
-	defer cancelQueryDeadlineCause()
-	pipelineDeadlineCauseCtx, cancelPipelineDeadlineCause := context.WithCancelCause(queryDeadlineCauseCtx)
-	defer cancelPipelineDeadlineCause(nil)
-	externalCause := moerr.NewInternalErrorNoCtx("client canceled query")
-	externalCauseCtx, cancelExternalCause := context.WithCancelCause(context.Background())
-	cancelExternalCause(externalCause)
-
+func TestPreferPrimaryScopeError(t *testing.T) {
+	ctx := context.Background()
+	cleanup := process.ErrPipelineEndSignalDeliveryFailed
+	execution := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	budget := moerr.NewOOM(ctx)
+	rpcTimeout := moerr.NewRPCTimeout(ctx)
+	interrupt := moerr.NewQueryInterrupted(ctx)
+	parentFK := moerr.NewErrFKRowIsReferenced(ctx)
+	childFK := moerr.NewErrFKNoReferencedRow2(ctx)
 	tests := []struct {
-		name      string
-		current   scopeRunResult
-		candidate scopeRunResult
-		want      error
+		name                     string
+		current, candidate, want error
 	}{
-		{name: "first error", candidate: scopeRunResult{err: cleanupErr}, want: cleanupErr},
-		{name: "execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
-		{name: "joined execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedExecutionErr}, want: joinedExecutionErr},
-		{name: "joined independent deadline replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedDeadlineErr}, want: context.DeadlineExceeded},
-		{name: "causal cancellation replaces cleanup fallback with execution error", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, want: executionErr},
-		{name: "external cancellation replaces cleanup fallback with external cause", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx}, want: externalCause},
-		{name: "cleanup fallback does not replace execution error", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: cleanupErr}, want: executionErr},
-		{name: "unresolved canceled sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled}, want: cleanupErr},
-		{name: "unresolved interrupted sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: queryInterrupted}, want: cleanupErr},
-		{name: "unresolved joined cancellation is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedCancellationErr}, want: cleanupErr},
-		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
-		{name: "normal internal cancellation is secondary", current: scopeRunResult{err: context.Canceled, ctx: internalNormalCancelCtx, queryCtx: activeQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
-		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
-		{name: "plain external cancellation remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCancelCtx, queryCtx: externalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: context.Canceled},
-		{name: "external deadline remains primary", current: scopeRunResult{err: context.DeadlineExceeded, ctx: externalDeadlineCtx, queryCtx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
-		{name: "query deadline classification survives custom timeout cause", current: scopeRunResult{err: context.DeadlineExceeded, ctx: pipelineDeadlineCauseCtx, queryCtx: queryDeadlineCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
-		{name: "external cancellation cause remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx, queryCtx: externalCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: externalCause},
-		{name: "first substantive error remains", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: moerr.NewInternalErrorNoCtx("later")}, want: executionErr},
+		{"first failure", nil, cleanup, cleanup},
+		{"execution explains cleanup", cleanup, execution, execution},
+		{"cleanup secondary to execution", execution, cleanup, execution},
+		{"joined execution explains cleanup", cleanup, errors.Join(context.Canceled, execution), execution},
+		{"joined deadline explains cleanup", cleanup, errors.Join(context.Canceled, context.DeadlineExceeded), context.DeadlineExceeded},
+		{"reported interruption replaces cleanup", cleanup, interrupt, interrupt},
+		{"parent foreign key outranks interruption", interrupt, parentFK, parentFK},
+		{"child foreign key outranks bare interruption", context.Canceled, childFK, childFK},
+		{"foreign key remains primary", childFK, interrupt, childFK},
+		{"unique violation outranks interruption", interrupt, execution, execution},
+		{"budget failure outranks interruption", interrupt, budget, budget},
+		{"observed external cancellation remains primary", moerr.PipelineContextCanceled, execution, context.Canceled},
+		{"RPC timeout remains primary", rpcTimeout, interrupt, rpcTimeout},
+		{"other execution failures keep their order", execution, childFK, execution},
+		{"query deadline remains primary", context.DeadlineExceeded, childFK, context.DeadlineExceeded},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := preferPrimaryScopeResult(tt.current, tt.candidate)
-			got, _ = got.resolveCancelCause()
-			if errors.Is(tt.want, context.Canceled) || errors.Is(tt.want, context.DeadlineExceeded) {
-				require.ErrorIs(t, got.err, tt.want)
-			} else {
-				require.Same(t, tt.want, got.err)
-			}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.ErrorIs(t, preferPrimaryScopeError(tc.current, tc.candidate), tc.want)
 		})
 	}
 }
@@ -747,10 +719,18 @@ type scopeRunCancelErrorOperator struct {
 	*colexec.MockOperator
 	cancelCause error
 	runErr      error
+	observeOnly bool
 }
 
 func (op *scopeRunCancelErrorOperator) Call(proc *process.Process) (vm.CallResult, error) {
-	proc.Cancel(op.cancelCause)
+	if op.cancelCause == nil {
+		moerr.StopPipeline(proc.Cancel)
+	} else {
+		proc.Cancel(op.cancelCause)
+	}
+	if op.observeOnly {
+		return vm.CancelResult, moerr.PipelineContextError(proc.Ctx)
+	}
 	return vm.NewCallResult(), op.runErr
 }
 
@@ -761,6 +741,7 @@ func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
 		cancelCause error
 		runErr      error
 		want        error
+		observeOnly bool
 	}{
 		{
 			name:        "substantive execution error survives normal sibling cancellation",
@@ -775,13 +756,15 @@ func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
 			want:        primaryErr,
 		},
 		{
-			name:        "cancellation resolves to substantive pipeline cause",
+			name:        "local observation carries substantive pipeline cause",
+			observeOnly: true,
 			cancelCause: primaryErr,
 			runErr:      context.Canceled,
 			want:        primaryErr,
 		},
 		{
-			name:        "normal internal cancellation remains secondary",
+			name:        "local observation of downstream stop succeeds",
+			observeOnly: true,
 			cancelCause: nil,
 			runErr:      context.Canceled,
 			want:        nil,
@@ -799,20 +782,20 @@ func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
 			want:        context.DeadlineExceeded,
 		},
 		{
-			name:        "joined cancellation fallout remains secondary",
+			name:        "reported bare and encoded interruption survives the downstream stop",
 			cancelCause: nil,
 			runErr: errors.Join(
 				context.Canceled,
 				moerr.NewQueryInterrupted(context.Background())),
-			want: nil,
+			want: context.Canceled,
 		},
 		{
-			name:        "joined cancellation fallout resolves to substantive cause",
+			name:        "reported interruption survives the sibling failure",
 			cancelCause: primaryErr,
 			runErr: errors.Join(
 				context.Canceled,
 				moerr.NewQueryInterrupted(context.Background())),
-			want: primaryErr,
+			want: context.Canceled,
 		},
 		{
 			name:        "joined independent deadline survives substantive cancellation cause",
@@ -830,6 +813,7 @@ func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
 				MockOperator: colexec.NewMockOperator(),
 				cancelCause:  test.cancelCause,
 				runErr:       test.runErr,
+				observeOnly:  test.observeOnly,
 			}
 			scope := &Scope{RootOp: op, Proc: proc}
 			compile := &Compile{proc: proc}

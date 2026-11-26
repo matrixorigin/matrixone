@@ -622,8 +622,8 @@ func (t JoinMapMsg) DebugString() string {
 	if jm := t.Result.JoinMap(); jm != nil {
 		buf.WriteString("joinmap rowcnt " + strconv.Itoa(int(jm.rowCnt)) + "\n")
 		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(jm.GetRefCount())) + "\n")
-	} else if t.Result.IsBuildError() {
-		buf.WriteString("joinmap build error " + t.Result.BuildError().Error() + "\n")
+	} else if err := t.Result.Err(); err != nil {
+		buf.WriteString("joinmap build error " + err.Error() + "\n")
 	} else {
 		buf.WriteString("joinmap is nil \n")
 	}
@@ -639,10 +639,27 @@ func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoar
 	if err != nil {
 		return nil, err
 	}
-	if buildErr := result.BuildError(); buildErr != nil {
-		return nil, buildErr.AsMoErr()
+	return result.JoinMap(), result.DependencyError(ctx)
+}
+
+// DependencyError resolves a received result for a consumer. A pipeline that
+// still needs the map must report a failed dependency rather than continue with
+// an empty build. Wait only for an already-started cancellation to propagate.
+func (r JoinMapResult) DependencyError(ctx context.Context) error {
+	if r.stop != nil {
+		r.stop.WaitForPropagation()
+		if cause := moerr.PipelineContextError(ctx); cause != nil {
+			return cause
+		}
+		return r.Err()
 	}
-	return result.JoinMap(), nil
+	if buildErr := r.BuildError(); buildErr != nil {
+		if buildErr.deadline {
+			return context.DeadlineExceeded
+		}
+		return buildErr.AsMoErr()
+	}
+	return nil
 }
 
 // ReceiveJoinMapResult waits for the immutable terminal dependency result.
@@ -656,10 +673,7 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 			return JoinMapResult{}, err
 		}
 		if ctxDone {
-			if err := ctx.Err(); err != nil {
-				return JoinMapResult{}, err
-			}
-			return JoinMapResult{}, nil
+			return JoinMapResult{}, moerr.PipelineContextError(ctx)
 		}
 		for i := range msgs {
 			msg, ok := msgs[i].(JoinMapMsg)
@@ -678,9 +692,6 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 				continue
 			}
 			jm := result.JoinMap()
-			if result.IsBuildError() {
-				return result, nil
-			}
 			if jm == nil {
 				return result, nil
 			}

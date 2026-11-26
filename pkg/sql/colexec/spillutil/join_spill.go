@@ -72,7 +72,7 @@ type SpillBucket struct {
 func checkSpillCanceled(proc *process.Process) error {
 	select {
 	case <-proc.Ctx.Done():
-		return proc.Ctx.Err()
+		return moerr.PipelineContextError(proc.Ctx)
 	default:
 		return nil
 	}
