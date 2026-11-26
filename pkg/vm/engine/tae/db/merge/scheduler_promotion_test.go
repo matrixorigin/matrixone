@@ -119,7 +119,7 @@ func TestPreparePromotionReconcilesStoppedScheduler(t *testing.T) {
 	oldSupporter.AddTask()
 	removedSupporter := sched.supps[drop.ID()]
 	removedSupporter.AddTask()
-	removedObserver := sched.taskObserverFactory(nil, removedSupporter, 0, sched.rc)
+	removedObserver := sched.taskObserverFactory(removedSupporter, 0, sched.rc)
 	removedObserver.Admit()
 	trigger, err := DefaultMergeSettings.ToMMsgTaskTrigger()
 	require.NoError(t, err)
