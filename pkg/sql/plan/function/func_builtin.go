@@ -314,14 +314,14 @@ func builtInCurrentTime(ivecs []*vector.Vector, result vector.FunctionResultWrap
 
 	// Get scale from optional parameter (default 0 for TIME type)
 	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
-		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
-		// Clamp scale to valid range [0, 6]
-		if scale < 0 {
-			scale = 0
-		} else if scale > 6 {
-			scale = 6
+	if len(ivecs) == 1 && ivecs[0].Length() > 0 && !ivecs[0].IsConstNull() && !ivecs[0].IsNull(0) {
+		fsp := vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0]
+		// MySQL rejects an FSP outside [0, 6] like NOW()/SYSDATE() do instead
+		// of silently clamping it.
+		if fsp < 0 || fsp > 6 {
+			return moerr.NewErrTooBigPrecision(proc.Ctx, fsp, "curtime", 6)
 		}
+		scale = int32(fsp)
 	}
 	rs.TempSetType(types.New(types.T_time, 0, scale))
 

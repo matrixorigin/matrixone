@@ -1,0 +1,12 @@
+SELECT CURTIME(7);
+Too-big precision 7 specified for 'curtime'. Maximum is 6.
+SELECT CURRENT_TIME(10);
+Too-big precision 10 specified for 'curtime'. Maximum is 6.
+SELECT NOW(7);
+Too-big precision 7 specified for 'now'. Maximum is 6.
+SELECT CURTIME(6) IS NOT NULL AS ok6, CURRENT_TIME(0) IS NOT NULL AS ok0;
+➤ ok6[-6,8,0]  ¦  ok0[-6,8,0]  𝄀
+1  ¦  1
+SELECT LENGTH(CAST(CURTIME(6) AS CHAR)) AS len6, LENGTH(CAST(CURTIME(3) AS CHAR)) AS len3;
+➤ len6[-5,64,0]  ¦  len3[-5,64,0]  𝄀
+15  ¦  12
