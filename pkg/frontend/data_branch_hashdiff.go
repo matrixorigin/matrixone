@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -2249,6 +2250,31 @@ func dataBranchSchemaPathTo(image *plan2.TableDef, defs []*plan2.TableDef) []*pl
 	return append(slices.Clone(defs[:i]), image)
 }
 
+// A newly named column is an addition when the COPY retains every
+// earlier column name. The COPY compiler rejects replacements on a
+// data-branch lineage, so retained names still denote the old columns
+// even when the statement changes their physical order.
+func isPickAddedCopyColumn(previous, birth *plan2.TableDef, col *plan2.ColDef) bool {
+	if !isDataBranchUserVisibleColumn(col) || dataBranchLCASchemaContainsColumn(previous, col) {
+		return false
+	}
+	retainedNames := make(map[string]struct{}, len(birth.Cols))
+	for _, current := range birth.Cols {
+		if isDataBranchUserVisibleColumn(current) {
+			retainedNames[commonutil.EqualFoldKey(current.Name)] = struct{}{}
+		}
+	}
+	for _, old := range previous.Cols {
+		if !isDataBranchUserVisibleColumn(old) {
+			continue
+		}
+		if _, retained := retainedNames[commonutil.EqualFoldKey(old.Name)]; !retained {
+			return false
+		}
+	}
+	return true
+}
+
 // A COPY that introduced a column has a committed image of the values
 // materialized into the existing rows. Later defaults cannot describe it.
 func pickAddedColumnImage(
@@ -2264,7 +2290,7 @@ func pickAddedColumnImage(
 			continue
 		}
 		if reaches || redefined || !edges[i] || previous.TblId == birth.TblId ||
-			!dataBranchCopyPreservesColumnOrder(previous, birth) {
+			!isPickAddedCopyColumn(previous, birth, col) {
 			break
 		}
 		idx := slices.Index(tables.pickBasePath, birth.TblId)

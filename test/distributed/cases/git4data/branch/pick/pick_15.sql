@@ -1578,3 +1578,29 @@ select k,v,tag from dst order by k;
 drop snapshot pick_window_hi;
 drop snapshot pick_window_lo;
 drop database pick_window;
+
+-- @testcase: COPY can reorder existing columns while introducing a new column
+create database pick_window;
+use pick_window;
+begin;
+create table root(k int primary key,v int);
+insert into root values(1,10),(2,20),(3,30),(4,40);
+data branch create table dst from root;
+data branch create table src from root;
+commit;
+alter table dst modify column v int first, add column tag int default null;
+alter table src add column tag int default null;
+update dst set tag=99 where k=4;
+create snapshot pick_window_lo for account sys;
+update src set v=52 where k=2;
+delete from src where k in (3,4);
+insert into src(k,v) values(5,80);
+create snapshot pick_window_hi for account sys;
+-- @regex("conflict:.*pk\(4\)", true)
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v,tag from dst order by k;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v,tag from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
