@@ -731,7 +731,7 @@ func TestPreparedTemporalDecimalProbeControls(t *testing.T) {
 				executor, err := colexec.NewExpressionExecutor(proc, &decoded)
 				require.NoError(t, err)
 				defer executor.Free()
-				input := batch.New(nil)
+				input := batch.NewWithSize(0)
 				defer input.Clean(proc.Mp())
 				for _, rows := range []int{2, 3} {
 					input.SetRowCount(rows)
@@ -1231,7 +1231,7 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 		for _, dependent := range []bool{false, true} {
 			ctx := withPreparedSourceBindings(context.Background(),
 				[]PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}},
-				[]any{ParamValue{Value: "7", IsBinaryProtocol: true, PrepareParamKind: types.StringConversionInteger}})
+				[]any{comStmtIntParam(7)})
 			state := preparedBindingState(ctx)
 			state.valueDependent = dependent
 			state.selectStatement = selectStatement
@@ -1293,10 +1293,10 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 
 func TestPreparedIntegerConsumerLoweringProvenance(t *testing.T) {
 	for _, value := range []ParamValue{
-		{Value: "7", PrepareParamKind: types.StringConversionInteger},
+		sqlIntParam(7),
 		{Value: "7", IsBinaryProtocol: true},
-		{Value: "7", IsBinaryProtocol: true, IsBin: true, PrepareParamKind: types.StringConversionInteger},
-		{Value: "7", IsBinaryProtocol: true, IsBinaryString: true, PrepareParamKind: types.StringConversionInteger},
+		{Value: "7", IsBinaryProtocol: true, IsBin: true, RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		{Value: "7", IsBinaryProtocol: true, IsBinaryString: true, RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
 	} {
 		ctx := withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}}, []any{value})
 		param := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
@@ -1851,7 +1851,7 @@ func TestPreparedExplicitIntegerCastFilters(t *testing.T) {
 						}
 						require.NoError(t, vector.AppendBytes(params, []byte(value), tc.null, proc.Mp()))
 						if !tc.null {
-							values[i] = ParamValue{Value: value, IsBinaryProtocol: true, PrepareParamKind: types.StringConversionInteger}
+							values[i] = ParamValue{Value: value, IsBinaryProtocol: true, RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}
 						}
 					}
 					proc.SetPrepareParams(params)

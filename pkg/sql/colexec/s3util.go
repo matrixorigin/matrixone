@@ -612,6 +612,26 @@ func (w *CNS3Writer) FillBlockInfoBat(mp *mpool.MPool) (*batch.Batch, error) {
 	return w.blockInfoBat, nil
 }
 
+// Column names of the batches AllocCNS3ResultBat builds, for data and for
+// tombstone objects. They travel beside the batch to Relation.Write.
+// Shared; do not modify.
+var (
+	CNS3ResultAttrs          = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+	CNS3TombstoneResultAttrs = []string{catalog.ObjectMeta_ObjectStats}
+	// DeleteRowsAttrs names a row-delete batch (rowid, pk).
+	DeleteRowsAttrs = []string{catalog.Row_ID, "pk"}
+)
+
+// RelayedDeleteAttrs names a delete batch decoded from a relay blob. Its
+// producer wrote either a row-delete batch (leading rowid column) or a
+// tombstone object-stats batch; the layout tells which.
+func RelayedDeleteAttrs(bat *batch.Batch) []string {
+	if len(bat.Vecs) > 0 && bat.Vecs[0].GetType().Oid == types.T_Rowid {
+		return DeleteRowsAttrs
+	}
+	return CNS3TombstoneResultAttrs
+}
+
 func AllocCNS3ResultBat(
 	isTombstone bool,
 	mp *mpool.MPool,
@@ -625,15 +645,14 @@ func AllocCNS3ResultBat(
 	)
 
 	if !isTombstone {
-		attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+		attrs = CNS3ResultAttrs
 		attrTypes = []types.Type{types.T_text.ToType(), types.T_binary.ToType()}
 	} else {
-		attrs = []string{catalog.ObjectMeta_ObjectStats}
+		attrs = CNS3TombstoneResultAttrs
 		attrTypes = []types.Type{types.T_binary.ToType()}
 	}
 
 	blockInfoBat = batch.NewWithSize(len(attrs))
-	blockInfoBat.Attrs = attrs
 
 	for i := range attrs {
 		blockInfoBat.Vecs[i] = vector.NewVec(attrTypes[i], mp)
@@ -672,8 +691,8 @@ func SortByKey(
 		hasNull = true
 		if !allow_null {
 			return moerr.NewConstraintViolationf(proc.Ctx,
-				"sort key can not be null, sortIndex = %d, sortCol = %s",
-				sortIndex, bat.Attrs[sortIndex])
+				"sort key can not be null, sortIndex = %d",
+				sortIndex)
 		}
 	}
 	rowCount := int64(bat.RowCount())

@@ -1,5 +1,3 @@
-//go:build !race
-
 // Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,9 +15,6 @@
 package fulltext2
 
 import (
-	"runtime"
-	"runtime/debug"
-	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,33 +22,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The race runtime deliberately drops some sync.Pool puts, so exact pool-reuse
-// accounting is meaningful only in a normal build. The same production search paths
-// remain covered by the race-enabled conjunctive parity tests.
+// Every exit of a conjunctive search returns each block buffer it took. Count
+// buffers taken and returned directly: pool reuse is not a usable signal,
+// because the race runtime deliberately drops some sync.Pool puts.
 func TestConjunctiveWandBuffersReleasedOnEveryExit(t *testing.T) {
-	oldProcs := runtime.GOMAXPROCS(1)
-	defer runtime.GOMAXPROCS(oldProcs)
-	oldGC := debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(oldGC)
-
-	assertReused := func(t *testing.T, run func() []Result, wantNew int) []Result {
+	assertReleased := func(t *testing.T, run func() []Result, wantTaken int) []Result {
 		t.Helper()
-		newCount := 0
-		wandBufPool = sync.Pool{New: func() any {
-			newCount++
-			return &wandBuf{docs: make([]int64, BlockSize), tfs: make([]uint8, BlockSize)}
-		}}
-		defer func() {
-			wandBufPool = sync.Pool{New: func() any {
-				return &wandBuf{docs: make([]int64, BlockSize), tfs: make([]uint8, BlockSize)}
-			}}
-		}()
+		taken, returned := 0, 0
+		oldGet, oldPut := getWandBuf, putWandBuf
+		getWandBuf = func() *wandBuf { taken++; return oldGet() }
+		putWandBuf = func(b *wandBuf) { returned++; oldPut(b) }
+		defer func() { getWandBuf, putWandBuf = oldGet, oldPut }()
 
 		first := run()
-		require.Equal(t, wantNew, newCount, "first run must allocate one buffer per unique present term")
+		require.Equal(t, wantTaken, taken, "one buffer per unique present term")
+		require.Equal(t, taken, returned, "every buffer taken must be returned")
 		second := run()
 		require.Equal(t, first, second)
-		require.Equal(t, wantNew, newCount, "second run must reuse every buffer released by the first")
+		require.Equal(t, 2*wantTaken, taken)
+		require.Equal(t, taken, returned)
 		return second
 	}
 
@@ -84,13 +71,13 @@ func TestConjunctiveWandBuffersReleasedOnEveryExit(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		s := build(t, []string{"alpha", "beta"}, []string{"alpha"})
 		run := runQuery(t, s, "+alpha +beta")
-		require.Len(t, assertReused(t, run, 2), 1)
+		require.Len(t, assertReleased(t, run, 2), 1)
 	})
 
 	t.Run("missing-after-allocation", func(t *testing.T) {
 		s := build(t, []string{"alpha"})
 		run := runQuery(t, s, "+alpha +missing")
-		require.Empty(t, assertReused(t, run, 1))
+		require.Empty(t, assertReleased(t, run, 1))
 	})
 
 	t.Run("probe-exhausted", func(t *testing.T) {
@@ -103,6 +90,6 @@ func TestConjunctiveWandBuffersReleasedOnEveryExit(t *testing.T) {
 			[]string{"alpha"},
 		)
 		run := runQuery(t, s, "+alpha +beta")
-		require.Len(t, assertReused(t, run, 2), 1)
+		require.Len(t, assertReleased(t, run, 2), 1)
 	})
 }

@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -86,6 +87,30 @@ func BenchmarkCopyIntoBatchesPartialTail(b *testing.B) {
 	}
 }
 
+func TestAppendableRowsReorderedVarlen(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	src := batch.NewWithSize(1)
+	defer src.Clean(mp)
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
+	src.SetVector(0, vec)
+	for _, size := range []int{120, 4, 48, 0, 1} {
+		require.NoError(t, vector.AppendBytes(vec, make([]byte, size), size == 0, mp))
+	}
+	require.NoError(t, vec.Shuffle([]int64{2, 1, 3, 0, 0}, mp))
+	src.SetRowCount(vec.Length())
+
+	// The selected range contains an inline value, NULL, and two references
+	// to the same 120-byte payload. UnionBatch may copy both references.
+	var rows int
+	allocs := testing.AllocsPerRun(5, func() {
+		rows = appendableRows(nil, src, 1, 4, 200)
+	})
+	require.Equal(t, 3, rows)
+	require.Equal(t, 4, appendableRows(nil, src, 1, 4, 240))
+	require.Zero(t, allocs, "sizing a range must not allocate a whole-vector sort buffer")
+}
+
 func TestBatches(t *testing.T) {
 	var batches Batches
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
@@ -129,7 +154,8 @@ func TestBatches(t *testing.T) {
 
 	rowCnt := batches.RowCount()
 	bm := &bitmap.Bitmap{}
-	bm.InitWithSize(int64(rowCnt))
+	bm.Init(bitmapTestMP)
+	mustBitmapOK(bm.InitWithSize(int64(rowCnt), bitmapTestMP))
 	bm.AddRange(1000, 11000)
 	batches.Shrink(bm, proc)
 	require.Equal(t, rowCnt-10000, batches.RowCount())
@@ -163,7 +189,8 @@ func TestBatchesShrinkPreservesAllocationAndRollback(t *testing.T) {
 		var shrinkErr error
 		if shrink {
 			ignore := &bitmap.Bitmap{}
-			ignore.InitWithSize(DefaultBatchSize)
+			ignore.Init(bitmapTestMP)
+			mustBitmapOK(ignore.InitWithSize(DefaultBatchSize, bitmapTestMP))
 			ignore.Add(0)
 			shrinkErr = batches.Shrink(ignore, proc)
 			if shrinkErr == nil {

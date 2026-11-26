@@ -156,7 +156,7 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 	if err != nil {
 		return err
 	}
-	err = relIndex.Write(ctx, indexMetaBatch)
+	err = relIndex.Write(ctx, indexMetaBatch, InsertIndexMetaAttrs)
 	if err != nil {
 		return err
 	}
@@ -191,34 +191,38 @@ func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Dat
 	if err != nil {
 		return err
 	}
-	err = relIndex.Write(ctx, indexMetaBatch)
+	err = relIndex.Write(ctx, indexMetaBatch, InsertIndexMetaAttrs)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
+// InsertIndexMetaAttrs names the columns of the batch buildInsertIndexMetaBatch
+// builds for mo_indexes. Shared; do not modify.
+var InsertIndexMetaAttrs = []string{
+	MO_INDEX_ID,
+	MO_INDEX_TABLE_ID,
+	MO_INDEX_DATABASE_ID,
+	MO_INDEX_NAME,
+	MO_INDEX_TYPE,
+	MO_INDEX_ALGORITHM,
+	MO_INDEX_ALGORITHM_TABLE_TYPE,
+	MO_INDEX_ALGORITHM_PARAMS,
+	MO_INDEX_IS_VISIBLE,
+	MO_INDEX_HIDDEN,
+	MO_INDEX_COMMENT,
+	MO_INDEX_COLUMN_NAME,
+	MO_INDEX_ORDINAL_POSITION,
+	MO_INDEX_OPTIONS,
+	MO_INDEX_TABLE_NAME,
+	MO_INDEX_PRIKEY,
+}
+
 func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.ConstraintDef, eg engine.Engine, proc *process.Process) (*batch.Batch, error) {
 	bat := &batch.Batch{
-		Attrs: make([]string, 16),
-		Vecs:  make([]*vector.Vector, 16),
+		Vecs: make([]*vector.Vector, len(InsertIndexMetaAttrs)),
 	}
-	bat.Attrs[0] = MO_INDEX_ID
-	bat.Attrs[1] = MO_INDEX_TABLE_ID
-	bat.Attrs[2] = MO_INDEX_DATABASE_ID
-	bat.Attrs[3] = MO_INDEX_NAME
-	bat.Attrs[4] = MO_INDEX_TYPE
-	bat.Attrs[5] = MO_INDEX_ALGORITHM
-	bat.Attrs[6] = MO_INDEX_ALGORITHM_TABLE_TYPE
-	bat.Attrs[7] = MO_INDEX_ALGORITHM_PARAMS
-	bat.Attrs[8] = MO_INDEX_IS_VISIBLE
-	bat.Attrs[9] = MO_INDEX_HIDDEN
-	bat.Attrs[10] = MO_INDEX_COMMENT
-	bat.Attrs[11] = MO_INDEX_COLUMN_NAME
-	bat.Attrs[12] = MO_INDEX_ORDINAL_POSITION
-	bat.Attrs[13] = MO_INDEX_OPTIONS
-	bat.Attrs[14] = MO_INDEX_TABLE_NAME
-	bat.Attrs[15] = MO_INDEX_PRIKEY
 
 	vec_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ID].ToType(), proc.Mp())
 	bat.Vecs[0] = vec_id

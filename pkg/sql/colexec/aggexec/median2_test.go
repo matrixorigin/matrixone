@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -1395,9 +1394,6 @@ func TestMedianNumericValsFloatMidpointBoundaries(t *testing.T) {
 }
 
 func TestMedianNumericMidpointReusesScratch(t *testing.T) {
-	if util.RaceDetectorEnabled {
-		t.Skip("allocation counts include race-detector instrumentation")
-	}
 	var arithmetic percentileArithmeticScratch
 	for range 4 {
 		_ = medianNumericMidpoint(

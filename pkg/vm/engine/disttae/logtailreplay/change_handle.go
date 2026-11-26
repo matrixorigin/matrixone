@@ -28,7 +28,6 @@ import (
 	goSort "sort"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -227,7 +226,6 @@ func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (
 	t0 := time.Now()
 	if *bat == nil {
 		*bat = batch.NewWithSize(0)
-		(*bat).Attrs = append((*bat).Attrs, r.batches.Attrs...)
 		for _, vec := range r.batches.Vecs {
 			newVec, err := vec.CloneWindow(start, end, mp)
 			if err != nil {
@@ -494,7 +492,6 @@ func (r *rangeSpillRunReader) close() {
 func appendRangeSpillRow(dst **batch.Batch, src *batch.Batch, row int, mp *mpool.MPool) error {
 	if *dst == nil {
 		*dst = batch.NewWithSize(len(src.Vecs))
-		(*dst).Attrs = append((*dst).Attrs, src.Attrs...)
 		for idx := range src.Vecs {
 			(*dst).Vecs[idx] = vector.NewVec(*src.Vecs[idx].GetType(), mp)
 		}
@@ -1434,7 +1431,6 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 	t0 := time.Now()
 	if *bat == nil {
 		*bat = batch.NewWithSize(0)
-		(*bat).Attrs = append((*bat).Attrs, data.Attrs...)
 		for _, vec := range data.Vecs {
 			newVec := vector.NewVec(*vec.GetType(), mp)
 			if err != nil {
@@ -2284,7 +2280,6 @@ func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 	t0 := time.Now()
 	if *bat == nil {
 		*bat = batch.NewWithSize(len(h.currentBatch.Vecs))
-		(*bat).Attrs = append((*bat).Attrs, h.currentBatch.Attrs...)
 		for i, vec := range h.currentBatch.Vecs {
 			newVec, err := vec.CloneWindow(start, end, mp)
 			if err != nil {
@@ -4211,7 +4206,7 @@ func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, skipTS map[types.TS]st
 		return nil
 	}
 	if bat.Vecs[sortIdx].GetType().Oid != types.T_TS {
-		panic(fmt.Sprintf("logic error, batch attrs %v, sort idx %d", bat.Attrs, sortIdx))
+		panic(fmt.Sprintf("logic error, sort idx %d", sortIdx))
 	}
 	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[sortIdx])
 	deletes := make([]int64, 0)
@@ -4239,7 +4234,7 @@ func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 		return nil
 	}
 	if bat.Vecs[sortIdx].GetType().Oid != types.T_TS {
-		panic(fmt.Sprintf("logic error, batch attrs %v, sort idx %d", bat.Attrs, sortIdx))
+		panic(fmt.Sprintf("logic error, sort idx %d", sortIdx))
 	}
 	sortedIdx := make([]int64, bat.Vecs[0].Length())
 	for i := 0; i < len(sortedIdx); i++ {
@@ -4258,7 +4253,6 @@ func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 func newDataBatchWithBatch(src *batch.Batch, retainRowID bool, logicalSeqnums []uint16, mp *mpool.MPool) (data *batch.Batch) {
 	data = batch.NewWithSize(0)
 	if retainRowID {
-		data.Attrs = append(data.Attrs, catalog.Row_ID)
 		data.Vecs = append(data.Vecs, vector.NewVec(types.T_Rowid.ToType(), mp))
 	}
 	if len(logicalSeqnums) > 0 {
@@ -4267,15 +4261,9 @@ func newDataBatchWithBatch(src *batch.Batch, retainRowID bool, logicalSeqnums []
 			if idx >= len(src.Vecs) || src.Vecs[idx] == nil {
 				continue
 			}
-			attr := ""
-			if idx < len(src.Attrs) {
-				attr = src.Attrs[idx]
-			}
-			data.Attrs = append(data.Attrs, attr)
 			data.Vecs = append(data.Vecs, vector.NewVec(*src.Vecs[idx].GetType(), mp))
 		}
 	} else {
-		data.Attrs = append(data.Attrs, src.Attrs[2:]...)
 		for _, vec := range src.Vecs {
 			if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
 				continue
@@ -4283,7 +4271,6 @@ func newDataBatchWithBatch(src *batch.Batch, retainRowID bool, logicalSeqnums []
 			data.Vecs = append(data.Vecs, vector.NewVec(*vec.GetType(), mp))
 		}
 	}
-	data.Attrs = append(data.Attrs, objectio.DefaultCommitTS_Attr)
 	newVec := vector.NewVec(types.T_TS.ToType(), mp)
 	data.Vecs = append(data.Vecs, newVec)
 	return
@@ -4370,7 +4357,7 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 
 func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, logicalSeqnums []uint16, mp *mpool.MPool) {
 	if *bat == nil {
-		(*bat) = newDataBatchWithBatch(entry.Batch, retainRowID, logicalSeqnums, mp)
+		(*bat) = newDataBatchWithBatch(entry.Batch.Batch, retainRowID, logicalSeqnums, mp)
 	}
 	dstOffset := 0
 	if retainRowID {
@@ -4414,13 +4401,10 @@ func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp 
 	}
 	if *bat == nil {
 		vecCnt := 2
-		attrs := []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 		if retainRowID {
 			vecCnt = 3
-			attrs = []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 		}
 		(*bat) = batch.NewWithSize(vecCnt)
-		(*bat).SetAttributes(attrs)
 		if retainRowID {
 			(*bat).Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 			(*bat).Vecs[1] = vector.NewVec(*pkVec.GetType(), mp)
@@ -4644,20 +4628,6 @@ func prependRowIDVectorIfNeeded(bat *batch.Batch, blk *types.Blockid, mp *mpool.
 			rebuiltVecs = append(rebuiltVecs, vec)
 		}
 		bat.Vecs = rebuiltVecs
-		if len(bat.Attrs) == len(origVecs) {
-			rebuiltAttrs := make([]string, 0, len(rebuiltVecs))
-			rebuiltAttrs = append(rebuiltAttrs, catalog.Row_ID)
-			for i, attr := range bat.Attrs {
-				if i == firstRowIDIdx {
-					continue
-				}
-				if origVecs[i] != nil && origVecs[i].GetType().Oid == types.T_Rowid {
-					continue
-				}
-				rebuiltAttrs = append(rebuiltAttrs, attr)
-			}
-			bat.Attrs = rebuiltAttrs
-		}
 		return nil
 	}
 	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
@@ -4668,9 +4638,6 @@ func prependRowIDVectorIfNeeded(bat *batch.Batch, blk *types.Blockid, mp *mpool.
 		}
 	}
 	bat.Vecs = append([]*vector.Vector{rowIDVec}, bat.Vecs...)
-	if len(bat.Attrs) == len(bat.Vecs)-1 {
-		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
-	}
 	return nil
 }
 
@@ -4730,11 +4697,6 @@ func updateTombstoneBatch(
 	}
 	if retainRowID {
 		bat.Vecs = []*vector.Vector{rowIDVec, pkVec, commitTSVec}
-		bat.Attrs = []string{
-			catalog.Row_ID,
-			objectio.TombstoneAttr_PK_Attr,
-			objectio.DefaultCommitTS_Attr,
-		}
 		if err := applyTSFilterForBatch(bat, 2, skipTS, start, end, mp); err != nil {
 			return err
 		}
@@ -4743,9 +4705,6 @@ func updateTombstoneBatch(
 			rowIDVec.Free(mp)
 		}
 		bat.Vecs = []*vector.Vector{pkVec, commitTSVec}
-		bat.Attrs = []string{
-			objectio.TombstoneAttr_PK_Attr,
-			objectio.DefaultCommitTS_Attr}
 		if err := applyTSFilterForBatch(bat, 1, skipTS, start, end, mp); err != nil {
 			return err
 		}
@@ -4843,11 +4802,9 @@ func updatePersistedTombstoneBatch(
 	}
 	if retainRowID {
 		bat.Vecs = []*vector.Vector{rowIDVec, pkVec, commitTSVec}
-		bat.Attrs = []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 	} else {
 		rowIDVec.Free(mp)
 		bat.Vecs = []*vector.Vector{pkVec, commitTSVec}
-		bat.Attrs = []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 	}
 	for _, vec := range bat.Vecs {
 		if err := vec.Shrink(deletes, true, mp); err != nil {
@@ -4884,46 +4841,25 @@ func updateDataBatch(
 	}
 	filteredVecs := make([]*vector.Vector, 0, len(bat.Vecs))
 	var commitTSVec *vector.Vector
-	rebuildAttrs := len(bat.Attrs) == len(bat.Vecs)
-	filteredAttrs := make([]string, 0, len(bat.Attrs))
-	var commitTSAttr string
 
-	for i, vec := range bat.Vecs {
+	for _, vec := range bat.Vecs {
 		switch vec.GetType().Oid {
 		case types.T_Rowid:
 			if retainRowID {
 				filteredVecs = append(filteredVecs, vec)
-				if rebuildAttrs {
-					filteredAttrs = append(filteredAttrs, bat.Attrs[i])
-				}
 			} else {
 				vec.Free(mp)
 			}
 		case types.T_TS:
 			commitTSVec = vec
-			if rebuildAttrs {
-				commitTSAttr = bat.Attrs[i]
-			}
 		default:
 			filteredVecs = append(filteredVecs, vec)
-			if rebuildAttrs {
-				filteredAttrs = append(filteredAttrs, bat.Attrs[i])
-			}
 		}
 	}
 	if commitTSVec != nil {
 		filteredVecs = append(filteredVecs, commitTSVec)
-		if rebuildAttrs {
-			if commitTSAttr == "" {
-				commitTSAttr = objectio.DefaultCommitTS_Attr
-			}
-			filteredAttrs = append(filteredAttrs, commitTSAttr)
-		}
 	}
 	bat.Vecs = filteredVecs
-	if rebuildAttrs {
-		bat.Attrs = filteredAttrs
-	}
 	return applyTSFilterForBatch(bat, len(bat.Vecs)-1, nil, start, end, mp)
 }
 
@@ -5002,10 +4938,7 @@ func updatePersistedDataBatch(
 		}
 	}
 
-	rebuildAttrs := len(bat.Attrs) == len(bat.Vecs)
 	filteredVecs := make([]*vector.Vector, 0, len(bat.Vecs)-1)
-	filteredAttrs := make([]string, 0, len(bat.Attrs))
-	commitTSAttr := objectio.DefaultCommitTS_Attr
 	var rowIDVec *vector.Vector
 	rowIDKept := false
 	if retainRowID && rowIDPos == objectio.InvalidSpecialColumnPosition {
@@ -5028,9 +4961,6 @@ func updatePersistedDataBatch(
 		}
 		switch {
 		case pos == commitPos:
-			if rebuildAttrs && bat.Attrs[i] != "" {
-				commitTSAttr = bat.Attrs[i]
-			}
 		case hasAbort && pos == abortPos:
 			vec.Free(mp)
 		case pos == rowIDPos:
@@ -5042,25 +4972,13 @@ func updatePersistedDataBatch(
 			}
 		default:
 			filteredVecs = append(filteredVecs, vec)
-			if rebuildAttrs {
-				filteredAttrs = append(filteredAttrs, bat.Attrs[i])
-			}
 		}
 	}
 	if rowIDKept {
 		filteredVecs = append([]*vector.Vector{rowIDVec}, filteredVecs...)
-		if rebuildAttrs {
-			filteredAttrs = append([]string{catalog.Row_ID}, filteredAttrs...)
-		}
 	}
 	filteredVecs = append(filteredVecs, commitTSVec)
-	if rebuildAttrs {
-		filteredAttrs = append(filteredAttrs, commitTSAttr)
-	}
 	bat.Vecs = filteredVecs
-	if rebuildAttrs {
-		bat.Attrs = filteredAttrs
-	}
 	for _, vec := range bat.Vecs {
 		if err := vec.Shrink(deletes, true, mp); err != nil {
 			return err
@@ -5108,10 +5026,8 @@ func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, blk *types.Bloc
 	}
 	if retainRowID {
 		bat.Vecs = []*vector.Vector{rowid, pk, commitTS}
-		bat.Attrs = []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 	} else {
 		bat.Vecs = []*vector.Vector{pk, commitTS}
-		bat.Attrs = []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 	}
 	return nil
 }
@@ -5123,9 +5039,6 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, blk *types.Blockid, 
 		if vec.GetType().Oid == types.T_TS {
 			vec.Free(mp)
 			bat.Vecs = append(bat.Vecs[:i], bat.Vecs[i+1:]...)
-			if len(bat.Attrs) == len(bat.Vecs)+1 {
-				bat.Attrs = append(bat.Attrs[:i], bat.Attrs[i+1:]...)
-			}
 			break
 		}
 	}
@@ -5142,9 +5055,6 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, blk *types.Blockid, 
 		return err
 	}
 	bat.Vecs = append(bat.Vecs, commitTSVec)
-	if len(bat.Attrs) == len(bat.Vecs)-1 {
-		bat.Attrs = append(bat.Attrs, objectio.DefaultCommitTS_Attr)
-	}
 	return nil
 }
 

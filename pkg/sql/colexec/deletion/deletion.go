@@ -245,7 +245,7 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-			return deletion.ctr.source.Delete(newCtx, deletion.ctr.resBat, catalog.Row_ID)
+			return deletion.ctr.source.Delete(newCtx, deletion.ctr.resBat, DelBatchAttrs, catalog.Row_ID)
 		})
 		if err != nil {
 			return result, err

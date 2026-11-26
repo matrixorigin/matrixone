@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -48,15 +47,6 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 	if len(result.Backing) > siriusbridge.WindowBytes {
 		return nil, moerr.NewInvalidInputNoCtx("Sirius output backing exceeds native result window")
 	}
-	accounted := bytes
-	if uint64(len(result.Backing)) > accounted {
-		accounted = uint64(len(result.Backing))
-	}
-	lease, err := bufferlease.NewRefCounted(result.Backing, int64(accounted), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer lease.Release()
 	bat = batch.NewWithSize(len(result.Vectors))
 	defer func() {
 		if err != nil {
@@ -64,17 +54,14 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 			bat = nil
 		}
 	}()
-	bat.Attrs = request.Headings
 	bat.SetRowCount(int(result.Rows))
-	// The batch is the lender of the native window its vectors alias; the
-	// window stays valid for the callback that consumes and cleans the batch.
-	if err = bat.HoldLease(lease); err != nil {
-		return bat, err
-	}
+	// The vectors borrow the native result window. The window belongs to the
+	// query callback and stays valid until it returns, and the callback
+	// consumes and cleans the batch before that, so nothing needs pinning.
 	for i, v := range result.Vectors {
 		t := request.OutputTypes[i]
 		typ := types.New(types.T(t.Id), t.Width, t.Scale)
-		// A read-only reference to the native window the batch holds.
+		// A read-only reference to the native result window.
 		var area []byte
 		if len(v.Area) > 0 {
 			area = v.Area
@@ -82,10 +69,13 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 		vec := vector.NewVecWithData(typ, int(result.Rows), v.Data, area, nil)
 		bat.Vecs[i] = vec
 		if len(v.Nulls) != 0 {
-			// The null bitmap is the read-only vector's own (Go heap), built
-			// here; only its data and area reference the native window.
+			// The null bitmap is built here from mp and owned by the vector,
+			// which frees it with the batch; only its data and area reference
+			// the native window.
 			nsp := vec.GetNulls()
-			nsp.InitWithSize(int(result.Rows))
+			if err = nsp.InitWithSize(int(result.Rows), mp); err != nil {
+				return bat, err
+			}
 			for row := uint32(0); row < result.Rows; row++ {
 				if v.Nulls[row/8]&(1<<(row%8)) != 0 {
 					nsp.Add(uint64(row))

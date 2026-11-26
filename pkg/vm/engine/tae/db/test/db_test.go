@@ -2523,10 +2523,10 @@ func TestChaos1(t *testing.T) {
 	assert.NoError(t, err)
 	defer view.Close()
 	assert.Equal(t, int(appendCnt), view.Length())
-	mask := view.Deletes
+	// Compact releases the deletes bitmap, so count it first.
+	assert.Equal(t, int(deleteCnt), view.Deletes.Count())
 	view.Compact()
 	t.Log(view.String())
-	assert.Equal(t, int(deleteCnt), mask.Count())
 }
 
 // Testing Steps
@@ -6933,6 +6933,8 @@ func TestAlterFakePk(t *testing.T) {
 		// check non-exist column foreach
 		newSchema := obj.GetRelation().Schema(false)
 		sels := &nulls.Nulls{}
+		sels.Init(common.DefaultAllocator)
+		defer sels.Free()
 		sels.Add(1)
 		sels.Add(3)
 		rows := make([]int, 0, 4)
@@ -6973,7 +6975,7 @@ func TestAlterFakePk(t *testing.T) {
 
 	dataObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat, mpool.MustNewZero())
 	assert.NoError(t, err)
-	tnDataObjectBat := containers.NewNonNullBatchWithSharedMemory(dataObjectBat, common.DefaultAllocator)
+	tnDataObjectBat := containers.NewNonNullBatchWithSharedMemory(dataObjectBat, resp.Commands[0].Bat.Attrs, common.DefaultAllocator)
 	t.Log(tnDataObjectBat.Attrs)
 	assert.Equal(t, 10, len(tnDataObjectBat.Vecs))
 	for _, v := range tnDataObjectBat.Vecs {
@@ -6982,7 +6984,7 @@ func TestAlterFakePk(t *testing.T) {
 
 	tombstoneObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[1].Bat, mpool.MustNewZero())
 	assert.NoError(t, err)
-	tnTombstoneObjectBat := containers.NewNonNullBatchWithSharedMemory(tombstoneObjectBat, common.DefaultAllocator)
+	tnTombstoneObjectBat := containers.NewNonNullBatchWithSharedMemory(tombstoneObjectBat, resp.Commands[1].Bat.Attrs, common.DefaultAllocator)
 	t.Log(tnTombstoneObjectBat.Attrs)
 	assert.Equal(t, 10, len(tnTombstoneObjectBat.Vecs)) // 1 fake pk + 1 rowid + 1 committs
 	for _, v := range tnTombstoneObjectBat.Vecs {
@@ -6991,7 +6993,7 @@ func TestAlterFakePk(t *testing.T) {
 
 	insBat, err := batch.ProtoBatchToBatch(resp.Commands[2].Bat, mpool.MustNewZero())
 	assert.NoError(t, err)
-	tnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat, common.DefaultAllocator)
+	tnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat, resp.Commands[2].Bat.Attrs, common.DefaultAllocator)
 	t.Log(tnInsBat.Attrs)
 	assert.Equal(t, 6, len(tnInsBat.Vecs)) // 3 col + 1 fake pk + 1 rowid + 1 committs
 	for _, v := range tnInsBat.Vecs {
@@ -7001,7 +7003,7 @@ func TestAlterFakePk(t *testing.T) {
 
 	delBat, err := batch.ProtoBatchToBatch(resp.Commands[3].Bat, mpool.MustNewZero())
 	assert.NoError(t, err)
-	tnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat, common.DefaultAllocator)
+	tnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat, resp.Commands[3].Bat.Attrs, common.DefaultAllocator)
 	t.Log(tnDelBat.Attrs)
 	assert.Equal(t, 4, len(tnDelBat.Vecs)) // 1 fake pk + 1 rowid + 1 committs + tombstone rowID
 	for _, v := range tnDelBat.Vecs {
@@ -13573,6 +13575,7 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 
 	txn, _ = tae.GetRelation()
 	deletes := &nulls.Nulls{}
+	deletes.Init(common.DebugAllocator)
 	nbid := types.NewBlockidWithObjectID(dataObj.ID(), 0)
 	atombstone.GetObjectData().FillBlockTombstones(
 		ctx,
@@ -13583,6 +13586,7 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 		common.DebugAllocator)
 	assert.NoError(t, txn.Commit(ctx))
 	assert.Equal(t, 1, deletes.Count())
+	deletes.Free()
 	assert.Equal(t, debugBaseline, common.DebugAllocator.CurrNB())
 }
 

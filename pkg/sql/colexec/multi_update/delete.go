@@ -85,7 +85,7 @@ func (update *MultiUpdate) delete_table(
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
 		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-			return source.Delete(newCtx, deleteBatch, catalog.Row_ID)
+			return source.Delete(newCtx, deleteBatch, DeleteBatchAttrs, catalog.Row_ID)
 		})
 		if err != nil {
 			return err
@@ -96,7 +96,7 @@ func (update *MultiUpdate) delete_table(
 }
 
 func newDeleteBatch(inputBatch *batch.Batch, mainPkIdx int, mp *mpool.MPool) *batch.Batch {
-	buf := batch.New([]string{catalog.Row_ID, "pk"})
+	buf := batch.NewWithSize(2)
 	buf.SetVector(0, vector.NewVec(types.T_Rowid.ToType(), mp))
 	buf.SetVector(1, vector.NewVec(*inputBatch.Vecs[mainPkIdx].GetType(), mp))
 	return buf

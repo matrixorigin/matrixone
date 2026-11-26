@@ -1031,7 +1031,7 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 			instrExecutor, err := colexec.NewExpressionExecutor(cw.proc, projects[0])
 			require.NoError(t, err)
 			defer instrExecutor.Free()
-			input := batch.New(nil)
+			input := batch.NewWithSize(0)
 			input.SetRowCount(1)
 			instrResult, err := instrExecutor.Eval(cw.proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
@@ -1245,8 +1245,61 @@ func TestUserVariableNullTypeDoesNotLeakHistoryToExecuteParams(t *testing.T) {
 			value, _ := plan2.AsParamValue(values[0])
 			require.Nil(t, value.Value)
 			require.False(t, value.HasSourceType, "literal NULL has no current conversion type, regardless of history")
-			require.Equal(t, types.StringConversionString, value.PrepareParamKind)
+			require.Equal(t, types.StringConversionString, plan2.ParamValueKind(value))
 		}()
+	}
+}
+
+// SET @v = @@x copies a Boolean or DOUBLE system variable, which the
+// synthetic SELECT projects as TEXT, with its numeric value and type, so a
+// prepared LIMIT accepts SET @lim = @@autocommit as it accepts SET @lim = 1.
+// A string system variable and a literal string stay TEXT and are rejected.
+func TestSetUserVarFromSystemVarKeepsNumericType(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 107, "select 1 limit ?")
+	defer prepareStmt.Close()
+	ctx := execCtx.reqCtx
+	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "autocommit", int64(1)))
+	textType := plan.Type{Id: int32(types.T_text)}
+	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+
+	for _, tc := range []struct {
+		name      string
+		expr      string
+		projected any
+		want      any
+		wantType  types.T
+		limitOK   bool
+	}{
+		{"autocommit", "@@autocommit", "1", int64(1), types.T_int64, true},
+		{"parenthesized", "((@@session.autocommit))", "1", int64(1), types.T_int64, true},
+		{"double", "@@long_query_time", "10", float64(10), types.T_float64, false},
+		{"string", "@@sql_mode", "x", "x", types.T_text, false},
+		{"literal string", "'1'", "1", "1", types.T_text, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := mysql.Parse(ctx, "set @lim = "+tc.expr, 1)
+			require.NoError(t, err)
+			source := stmts[0].(*tree.SetVar).Assignments[0].Value
+			value, valueType, err := systemVariableNumericCopy(ses, source, tc.projected, textType)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, value)
+			require.Equal(t, tc.wantType, types.T(valueType.Id))
+
+			require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
+				"lim", value, "", false, valueType, false))
+			params, values, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(
+				cw.proc, ses.txnCompileCtx.ResolveVariablePrepareParamKind,
+				[]*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "lim"}}}}, nil, nil)
+			require.NoError(t, err)
+			defer params.Free(cw.proc.Mp())
+			err = plan2.ValidatePreparedPaginationParams(ctx, preparePlan, values)
+			if tc.limitOK {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
 	}
 }
 
@@ -1446,9 +1499,10 @@ func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
 
 	values, err := preparedParamValues(cw.proc, nil, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, []types.StringConversionKind{types.StringConversionDecimal})
 	require.NoError(t, err)
+	// A NULL carries no type: like MySQL, it does not decide how the
+	// parameter is planned, whatever type the packet names.
 	require.Equal(t, []any{plan2.ParamValue{
 		IsBinaryProtocol:    true,
-		PrepareParamKind:    types.StringConversionDecimal,
 		EnableNumericPrefix: true,
 	}}, paramValuesOf(values))
 }
@@ -1611,7 +1665,7 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 	executor, err := colexec.NewExpressionExecutor(cw.proc, resultExpr(reusedPlan))
 	require.NoError(t, err)
 	defer executor.Free()
-	input := batch.New(nil)
+	input := batch.NewWithSize(0)
 	input.SetRowCount(1)
 	result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
@@ -1724,7 +1778,7 @@ func TestPreparedInetNtoaReusesDecimalRuntimePlan(t *testing.T) {
 		executor, err := colexec.NewExpressionExecutor(cw.proc, inetNtoa)
 		require.NoError(t, err)
 		defer executor.Free()
-		input := batch.New(nil)
+		input := batch.NewWithSize(0)
 		input.SetRowCount(1)
 		defer input.Clean(cw.proc.Mp())
 		result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
@@ -1872,7 +1926,7 @@ func TestSQLPreparedBooleanDirectResultIsIndependentOfNumericSibling(t *testing.
 						t.Helper()
 						executor, err := colexec.NewExpressionExecutor(cw.proc, expr)
 						require.NoError(t, err)
-						input := batch.New(nil)
+						input := batch.NewWithSize(0)
 						input.SetRowCount(1)
 						result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
 						require.NoError(t, err)
@@ -1966,7 +2020,7 @@ func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
 	require.Len(t, cw.paramVals, 1)
 	param, ok := plan2.AsParamValue(cw.paramVals[0])
 	require.True(t, ok)
-	require.Equal(t, types.StringConversionBoolean, param.PrepareParamKind)
+	require.Equal(t, types.StringConversionBoolean, plan2.ParamValueKind(param))
 	require.True(t, param.HasRuntimeType)
 	require.Equal(t, types.T_bool.ToType(), param.RuntimeType)
 }
@@ -2213,12 +2267,13 @@ func TestPreparedParamValuesCarriesBothDecimalDomains(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, values, 1)
 			value, _ := plan2.AsParamValue(values[0])
-			require.Equal(t, test.value, value.Value)
+			// The packet spelling is decoded once: the planner sees the
+			// canonical lexeme, and the visible scale survives in DirectResultType.
+			require.Equal(t, test.canonical, value.Value)
 			require.Equal(t, test.normalized, value.RuntimeType)
 			require.True(t, value.HasRuntimeType)
 			require.Equal(t, test.visible, value.DirectResultType)
 			require.True(t, value.HasDirectResultType)
-			require.Equal(t, test.canonical, value.MaterializedValue)
 			require.Equal(t, test.canonical, cw.proc.GetPrepareParams().GetStringAt(0),
 				"the restored typed ParamRef must execute against the bounded canonical lexeme")
 		})
@@ -2702,8 +2757,11 @@ func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
 	require.Len(t, values, 1)
 	param, ok := plan2.AsParamValue(values[0])
 	require.True(t, ok)
-	require.Equal(t, value, param.Value)
-	require.Equal(t, types.StringConversionDecimal, param.PrepareParamKind)
+	// The packet spelling is decoded once into its canonical lexeme.
+	_, _, canonical, ok := plan2.PreparedDecimalRuntimeDomains(value)
+	require.True(t, ok)
+	require.Equal(t, canonical, param.Value)
+	require.Equal(t, types.StringConversionDecimal, plan2.ParamValueKind(param))
 	require.True(t, param.HasRuntimeType)
 	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
 	require.Equal(t, int32(39), param.RuntimeType.Width)
@@ -2732,7 +2790,7 @@ func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
 	require.Equal(t, int32(types.T_decimal256), abs.Typ.Id)
 	require.Equal(t, int32(types.T_decimal256), abs.GetF().Args[0].Typ.Id)
 	require.Equal(t, "cast", abs.GetF().Args[0].GetF().Func.GetObjName())
-	require.Equal(t, value, abs.GetF().Args[0].GetF().Args[0].GetLit().GetSval())
+	require.Equal(t, canonical, abs.GetF().Args[0].GetF().Args[0].GetLit().GetSval())
 }
 
 func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
@@ -2775,7 +2833,7 @@ func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
 	executor, execErr := colexec.NewExpressionExecutor(cw.proc, projectNode.ProjectList[0])
 	require.NoError(t, execErr)
 	defer executor.Free()
-	input := batch.New(nil)
+	input := batch.NewWithSize(0)
 	input.SetRowCount(1)
 	vec, evalErr := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
 	require.NoError(t, evalErr)
@@ -2819,7 +2877,7 @@ func TestInitExecuteStmtParamAcceptsPaddedBinaryDecimal(t *testing.T) {
 	executor, err := colexec.NewExpressionExecutor(cw.proc, project)
 	require.NoError(t, err)
 	defer executor.Free()
-	input := batch.New(nil)
+	input := batch.NewWithSize(0)
 	input.SetRowCount(1)
 	result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
@@ -3004,7 +3062,7 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	executor, execErr := colexec.NewExpressionExecutor(cw.proc, project)
 	require.NoError(t, execErr)
 	defer executor.Free()
-	input := batch.New(nil)
+	input := batch.NewWithSize(0)
 	input.SetRowCount(1)
 	vec, evalErr := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
 	require.NoError(t, evalErr)
@@ -3185,7 +3243,7 @@ func TestPreparedBitCountPreservesRepreparedNumericProtocolType(t *testing.T) {
 		executor, execErr := colexec.NewExpressionExecutor(cw.proc, projectNode.ProjectList[0])
 		require.NoError(t, execErr)
 		defer executor.Free()
-		input := batch.New(nil)
+		input := batch.NewWithSize(0)
 		input.SetRowCount(1)
 		result, evalErr := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
 		require.NoError(t, evalErr)
@@ -3476,7 +3534,7 @@ func TestPreparedBitCountStateAdvancesAlongsideOtherNumericOverloads(t *testing.
 	executor, execErr := colexec.NewExpressionExecutor(cw.proc, projectNode.ProjectList[1])
 	require.NoError(t, execErr)
 	defer executor.Free()
-	input := batch.New(nil)
+	input := batch.NewWithSize(0)
 	input.SetRowCount(1)
 	result, evalErr := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
 	require.NoError(t, evalErr)
@@ -4373,7 +4431,7 @@ func TestCOMStmtCharRuntimeCacheReusesTextSourceAcrossSignedness(t *testing.T) {
 				prepareStmt.params = params
 				prepareStmt.paramsMP = cw.proc.Mp()
 				// VAR_STRING is the real COM_STMT text shape: it has no numeric
-				// PrepareParamKind or RuntimeType. CHAR keeps it as text and
+				// RuntimeType. CHAR keeps it as text and
 				// evaluates its signed/unsigned prefix through private CAST7.
 				prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
 			}
@@ -4437,7 +4495,7 @@ func TestPreparedExecutionBindingKeyPreservesIdentity(t *testing.T) {
 	bindings[1].Type.Charset = 255
 	for flags := range 32 {
 		param := plan2.ParamValue{
-			Value: "17", PrepareParamKind: types.StringConversionInteger,
+			Value: "17", SourceType: types.T_int64.ToType(), HasSourceType: true,
 			IsBinaryProtocol: flags&1 != 0, IsBin: flags&2 != 0,
 			IsBinaryString: flags&4 != 0, EnableNumericPrefix: flags&8 != 0,
 			RuntimeStringDomain: types.RuntimeStringDomain(flags % 3),
@@ -4454,7 +4512,7 @@ func TestPreparedExecutionBindingKeyPreservesIdentity(t *testing.T) {
 				fmt.Fprintf(&expected, "%d:%d:%d:%d;", typ.Oid, typ.Charset, typ.Width, typ.Scale)
 			}
 			if p, ok := plan2.AsParamValue(values[i]); ok {
-				fmt.Fprintf(&expected, "%d:%t:%t:%t:%d:%t:%t;", p.PrepareParamKind,
+				fmt.Fprintf(&expected, "%d:%t:%t:%t:%d:%t:%t;", plan2.ParamValueKind(p),
 					p.IsBinaryProtocol, p.IsBin, p.IsBinaryString, p.RuntimeStringDomain,
 					p.EnableNumericPrefix, p.Value == nil)
 			}
@@ -4605,32 +4663,21 @@ func TestSQLVariablePrepareParamKind(t *testing.T) {
 	require.Equal(t, types.StringConversionString, prepareParamKindFromValue("5"))
 }
 
-func TestTransparentPrepareParamKind(t *testing.T) {
-	ses, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 109, "select ?")
-	defer prepareStmt.Close()
-
-	params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
-	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, cw.proc.Mp()))
-	defer params.Free(cw.proc.Mp())
-	cw.proc.SetPrepareParams(params)
-	installTestTypedPrepareParams(t, cw.proc, types.T_float64.ToType())
-	defer cw.proc.SetPrepareParams(nil)
-
-	kind, err := transparentPrepareParamKind(
-		&tree.ParenExpr{Expr: tree.NewParamExpr(1)}, ses)
-	require.NoError(t, err)
-	require.Equal(t, types.StringConversionFloat, kind)
-
-	require.NoError(t, ses.setUserDefinedVarWithKind(
-		"decimal_value", "5.9", "", false, types.StringConversionDecimal))
-	kind, err = transparentPrepareParamKind(
-		tree.NewVarExpr("decimal_value", false, false, nil), ses)
-	require.NoError(t, err)
-	require.Equal(t, types.StringConversionDecimal, kind)
-
-	kind, err = transparentPrepareParamKind(tree.NewParamExpr(2), ses)
-	require.NoError(t, err)
-	require.Equal(t, types.StringConversionString, kind)
+func TestUserDefinedVarPrepareParamKindFollowsType(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		variable UserDefinedVar
+		want     types.StringConversionKind
+	}{
+		{"decimal", UserDefinedVar{Value: "5.9", Type: plan.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 1}}, types.StringConversionDecimal},
+		{"float", UserDefinedVar{Value: float64(5), Type: plan.Type{Id: int32(types.T_float64)}}, types.StringConversionFloat},
+		// A copy of a numeric system variable holds its text: it is a string.
+		{"text", UserDefinedVar{Value: "1", Type: plan.Type{Id: int32(types.T_text)}}, types.StringConversionString},
+		{"untyped value", UserDefinedVar{Value: int64(5)}, types.StringConversionInteger},
+		{"untyped NULL", UserDefinedVar{}, types.StringConversionString},
+	} {
+		t.Run(test.name, func(t *testing.T) { require.Equal(t, test.want, test.variable.prepareParamKind()) })
+	}
 }
 
 func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
@@ -4875,8 +4922,9 @@ func TestBuildExecuteUserParamsPreservesBoundConcreteTypes(t *testing.T) {
 func TestBuildExecuteUserParamsRejectsBoundTypeKindMismatch(t *testing.T) {
 	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 119)
 	defer prepareStmt.Close()
-	require.NoError(t, ses.setUserDefinedVarWithKind(
-		"mismatched", int8(1), "", false, types.StringConversionFloat))
+	// The variable was reassigned a FLOAT after EXECUTE bound it as TINYINT.
+	require.NoError(t, ses.setUserDefinedVarWithType(
+		"mismatched", float32(1), "", false, plan.Type{Id: int32(types.T_float32)}))
 
 	params, _, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc, ses.txnCompileCtx.ResolveVariablePrepareParamKind, []*plan.Expr{{
 		Typ:  plan.Type{Id: int32(types.T_int8)},
@@ -5013,11 +5061,11 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 	require.Equal(t, []types.T{types.T_int64, types.T_int64, types.T_any}, paramTypes)
 	require.Equal(t, []any{
 		plan2.ParamValue{
-			Value: int64(10), IsBin: false, PrepareParamKind: types.StringConversionInteger, EnableNumericPrefix: true,
+			Value: int64(10), IsBin: false, EnableNumericPrefix: true,
 			SourceType: types.T_int64.ToType(), HasSourceType: true,
 		},
 		plan2.ParamValue{
-			Value: int64(20), IsBin: false, PrepareParamKind: types.StringConversionInteger, EnableNumericPrefix: true,
+			Value: int64(20), IsBin: false, EnableNumericPrefix: true,
 			SourceType: types.T_int64.ToType(), HasSourceType: true,
 		},
 		plan2.ParamValue{
@@ -5035,8 +5083,8 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	defer prepareStmt.Close()
 
 	decimalType := plan.Type{Id: int32(types.T_decimal128), Width: 12, Scale: 3}
-	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
-		"runtime_decimal", "2.500", "", false, decimalType, types.StringConversionDecimal))
+	require.NoError(t, ses.setUserDefinedVarWithType(
+		"runtime_decimal", "2.500", "", false, decimalType))
 	require.NoError(t, ses.SetUserDefinedVar("runtime_text", "2.500", ""))
 	require.NoError(t, ses.SetUserDefinedVar("runtime_bool", true, ""))
 	binaryTextType := plan.Type{
@@ -5047,12 +5095,12 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	dateType := plan.Type{Id: int32(types.T_date)}
 	timeType := plan.Type{Id: int32(types.T_time), Scale: 6}
 	jsonType := plan.Type{Id: int32(types.T_json)}
-	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
-		"runtime_date", "2024-01-02", "", false, dateType, types.StringConversionString))
-	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
-		"runtime_time", "00:00:02.654321", "", false, timeType, types.StringConversionString))
-	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
-		"runtime_json", "1.6", "", false, jsonType, types.StringConversionString))
+	require.NoError(t, ses.setUserDefinedVarWithType(
+		"runtime_date", "2024-01-02", "", false, dateType))
+	require.NoError(t, ses.setUserDefinedVarWithType(
+		"runtime_time", "00:00:02.654321", "", false, timeType))
+	require.NoError(t, ses.setUserDefinedVarWithType(
+		"runtime_json", "1.6", "", false, jsonType))
 
 	args := []*plan.Expr{
 		{
@@ -5093,7 +5141,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, decimalParam.HasSourceType)
 	require.Equal(t, types.New(types.T_decimal128, 12, 3), decimalParam.SourceType)
-	require.Equal(t, types.StringConversionDecimal, decimalParam.PrepareParamKind)
+	require.Equal(t, types.StringConversionDecimal, plan2.ParamValueKind(decimalParam))
 
 	textParam, ok := plan2.AsParamValue(paramVals[1])
 	require.True(t, ok)
@@ -5106,7 +5154,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.Equal(t, types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), binaryParam.SourceType)
 	boolParam, _ := plan2.AsParamValue(paramVals[3])
 	require.Equal(t, "true", params.GetStringAt(3), "do not rewrite the transport value")
-	require.Equal(t, types.StringConversionBoolean, boolParam.PrepareParamKind)
+	require.Equal(t, types.StringConversionBoolean, plan2.ParamValueKind(boolParam))
 	require.True(t, boolParam.HasSourceType)
 	require.Equal(t, types.T_bool.ToType(), boolParam.SourceType)
 	require.False(t, boolParam.HasRuntimeType,
@@ -6799,7 +6847,7 @@ func TestInitExecuteStmtParamSpecializesCOMStmtBinaryFunction(t *testing.T) {
 	executor, err := colexec.NewExpressionExecutor(cw.proc, root.ProjectList[0])
 	require.NoError(t, err)
 	defer executor.Free()
-	input := batch.New(nil)
+	input := batch.NewWithSize(0)
 	input.SetRowCount(1)
 	value, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
@@ -6828,10 +6876,9 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 			})
 			assign := func(typ types.Type, domain types.RuntimeStringDomain, value any) {
 				t.Helper()
-				require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+				require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
 					"bound_s", value, "", false,
-					plan.Type{Id: int32(typ.Oid), Charset: uint32(typ.Charset)},
-					types.StringConversionString, false, domain))
+					plan.Type{Id: int32(typ.Oid), Charset: uint32(typ.Charset)}, false, domain))
 			}
 			bind := func() *plan.Plan {
 				t.Helper()

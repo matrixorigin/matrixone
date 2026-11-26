@@ -323,7 +323,7 @@ func TestMergeCTEResetClearsRecursiveFlagOnCompatibleBatch(t *testing.T) {
 
 	arg.Reset(proc, false, nil)
 	freeMergeCTEChildren(arg, proc, false)
-	initial := batch.New([]string{"value"})
+	initial := batch.NewWithSize(1)
 	initial.Vecs[0] = testutil.MakeVarcharVector([]string{"new generation"}, nil, proc.Mp())
 	initial.SetRowCount(1)
 	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{initial}))
@@ -333,7 +333,7 @@ func TestMergeCTEResetClearsRecursiveFlagOnCompatibleBatch(t *testing.T) {
 	result, err = vm.Exec(arg, proc)
 	require.NoError(t, err)
 	require.False(t, result.Batch.Last())
-	require.Equal(t, initial.Attrs, result.Batch.Attrs)
+	require.Equal(t, len(initial.Vecs), len(result.Batch.Vecs))
 	require.Equal(t, initial.RowCount(), result.Batch.RowCount())
 
 	freeMergeCTEChildren(arg, proc, false)
@@ -347,7 +347,7 @@ func TestMergeCTEResetClearsRecursiveFlagOnCompatibleBatch(t *testing.T) {
 func TestMergeCTEMemoryQuotaInitialAndRecursivePhases(t *testing.T) {
 	t.Run("initial", func(t *testing.T) {
 		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-		src := batch.New([]string{"value"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 256)}, nil, proc.Mp())
 		src.SetRowCount(1)
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(src.Size() - 1), nil })
@@ -372,10 +372,10 @@ func TestMergeCTEMemoryQuotaInitialAndRecursivePhases(t *testing.T) {
 
 	t.Run("recursive", func(t *testing.T) {
 		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-		initial := batch.New([]string{"value"})
+		initial := batch.NewWithSize(1)
 		initial.Vecs[0] = testutil.MakeVarcharVector([]string{"seed"}, nil, proc.Mp())
 		initial.SetRowCount(1)
-		large := batch.New([]string{"value"})
+		large := batch.NewWithSize(1)
 		large.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 4096)}, nil, proc.Mp())
 		large.SetRowCount(1)
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(1024), nil })
@@ -408,7 +408,7 @@ func TestMergeCTEMarkerReleasesBackingAndNewStatementDropsOversizedCache(t *test
 	arg := &MergeCTE{NodeCnt: 1}
 	require.NoError(t, arg.Prepare(proc))
 
-	src := batch.New([]string{"value"})
+	src := batch.NewWithSize(1)
 	src.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 4096)}, nil, proc.Mp())
 	src.SetRowCount(1)
 	cached, err := arg.ctr.cacheBatch(proc, arg.OpAnalyzer, src)
@@ -456,7 +456,7 @@ func TestMergeCTECopyAndReconcileFailuresAreAtomic(t *testing.T) {
 		require.NoError(t, arg.Prepare(proc))
 
 		sourcePool := mpool.MustNewZero()
-		src := batch.New([]string{"value"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 2<<20)}, nil, sourcePool)
 		src.SetRowCount(1)
 		_, err = arg.ctr.cacheBatch(proc, arg.OpAnalyzer, src)
@@ -478,13 +478,13 @@ func TestMergeCTECopyAndReconcileFailuresAreAtomic(t *testing.T) {
 		arg := &MergeCTE{NodeCnt: 1}
 		require.NoError(t, arg.Prepare(proc))
 
-		initial := batch.New([]string{"value"})
+		initial := batch.NewWithSize(1)
 		initial.Vecs[0] = testutil.MakeVarcharVector([]string{}, nil, proc.Mp())
 		initial.SetRowCount(0)
 		_, err := arg.ctr.cacheBatch(proc, arg.OpAnalyzer, initial)
 		require.NoError(t, err)
 		arg.ctr.i = 0
-		src := batch.New([]string{"value"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = testutil.MakeVarcharVector([]string{"x", "y", "z"}, nil, proc.Mp())
 		src.SetRowCount(3)
 		require.Equal(t, 72, src.Size())
@@ -705,7 +705,7 @@ func makeMergeCTEDepthBatches(t *testing.T, proc *process.Process, specs []merge
 
 func makeMergeCTEDepthBatch(t *testing.T, proc *process.Process, values []int64, last bool) *batch.Batch {
 	t.Helper()
-	bat := batch.New([]string{"n"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	for _, value := range values {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, proc.Mp()))

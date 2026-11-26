@@ -45,13 +45,19 @@ func preservePhysicalRows(ctx context.Context) bool {
 	return preserve
 }
 
-func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Nulls) {
+// compactInvisibleAppendRows takes ownership of invisibleRows.
+func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Nulls, mp *mpool.MPool) error {
 	if bat == nil || invisibleRows.IsEmpty() {
-		return
+		invisibleRows.Free()
+		return nil
 	}
 
 	invisible := invisibleRows.ToArray()
-	remainingDeletes := nulls.NewWithSize(bat.Length() - len(invisible))
+	remainingDeletes, err := nulls.NewWithSize(bat.Length()-len(invisible), mp)
+	if err != nil {
+		invisibleRows.Free()
+		return err
+	}
 	invisibleIdx := 0
 	for _, row := range bat.Deletes.ToArray() {
 		for invisibleIdx < len(invisible) && invisible[invisibleIdx] < row {
@@ -66,10 +72,23 @@ func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Null
 	// Compact rows hidden by append MVCC (rollback holes and commits newer than
 	// the reader snapshot). Tombstone and workspace deletes remain represented
 	// in the returned batch, with offsets shifted over the removed rows.
-	bat.Deletes = invisibleRows
+	bat.SetDeletes(invisibleRows)
 	bat.Compact()
-	if !remainingDeletes.IsEmpty() {
-		bat.Deletes = remainingDeletes
+	if remainingDeletes.IsEmpty() {
+		remainingDeletes.Free()
+		return nil
+	}
+	bat.SetDeletes(remainingDeletes)
+	return nil
+}
+
+// closeBatchOnError closes *bat and sets it to nil when err is set and the
+// caller is responsible for the batch (own), so a partly built batch is
+// neither leaked nor handed back closed.
+func closeBatchOnError(err error, own bool, bat **containers.Batch) {
+	if err != nil && own && *bat != nil {
+		(*bat).Close()
+		*bat = nil
 	}
 }
 
@@ -82,7 +101,12 @@ func HybridScanByBlock(
 	colIdxs []int,
 	blkID *objectio.Blockid,
 	mp *mpool.MPool,
-) error {
+) (err error) {
+	// Once Scan has run, an error leaves *bat closed and nil, also when the
+	// caller passed one in: it may hold part of this block. Errors before
+	// that leave the caller's batch alone.
+	scanned := false
+	defer func() { closeBatchOnError(err, scanned, bat) }()
 	dataObject, err := tableEntry.GetObjectByID(blkID.Object(), false)
 	if err != nil {
 		return err
@@ -94,9 +118,13 @@ func HybridScanByBlock(
 	if *bat != nil {
 		deleteStartOffset = (*bat).Length()
 		if filterInvisibleAppendRows {
-			deletesBeforeScan = (*bat).Deletes.Clone()
+			if deletesBeforeScan, err = (*bat).Deletes.Clone(mp); err != nil {
+				return err
+			}
+			defer deletesBeforeScan.Free()
 		}
 	}
+	scanned = true
 	err = dataObject.GetObjectData().Scan(
 		ctx, bat, txn, readSchema, offset, colIdxs, mp)
 	if err != nil {
@@ -106,8 +134,12 @@ func HybridScanByBlock(
 		return nil
 	}
 	var invisibleAppendRows *nulls.Nulls
+	// Freed on error; compactInvisibleAppendRows takes it on success.
+	defer func() { invisibleAppendRows.Free() }()
 	if filterInvisibleAppendRows {
-		invisibleAppendRows = (*bat).Deletes.Clone()
+		if invisibleAppendRows, err = (*bat).Deletes.Clone(mp); err != nil {
+			return err
+		}
 		if deletesBeforeScan != nil {
 			deletesBeforeScan.Foreach(func(row uint64) bool {
 				invisibleAppendRows.Del(row)
@@ -119,9 +151,8 @@ func HybridScanByBlock(
 	defer it.Release()
 	for it.Next() {
 		tombstone := it.Item()
-		err := tombstone.GetObjectData().FillBlockTombstones(ctx, txn, blkID, &(*bat).Deletes, uint64(deleteStartOffset), mp)
+		err = tombstone.GetObjectData().FillBlockTombstones(ctx, txn, blkID, &(*bat).Deletes, uint64(deleteStartOffset), mp)
 		if err != nil {
-			(*bat).Close()
 			return err
 		}
 	}
@@ -129,11 +160,11 @@ func HybridScanByBlock(
 	id.BlockID = *blkID
 	err = txn.GetStore().FillInWorkspaceDeletes(id, &(*bat).Deletes, uint64(deleteStartOffset))
 	if err != nil {
-		(*bat).Close()
 		return err
 	}
-	compactInvisibleAppendRows(*bat, invisibleAppendRows)
-	return nil
+	rows := invisibleAppendRows
+	invisibleAppendRows = nil
+	return compactInvisibleAppendRows(*bat, rows, mp)
 }
 
 /*

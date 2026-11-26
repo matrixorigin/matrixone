@@ -319,7 +319,7 @@ func TestIssue26796PruningKeepsReadSemantics(t *testing.T) {
 		txn, pool := newIssue26796Txn(t)
 		issue26796InsertBatch(t, txn, 5, 1, 9)
 		other := batch.NewWithSize(2)
-		other.Attrs = []string{issue26796PKName, "value"}
+		otherAttrs := []string{issue26796PKName, "value"}
 		other.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 		other.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(other.GetVector(0), int64(17), false, txn.proc.Mp()))
@@ -331,6 +331,7 @@ func TestIssue26796PruningKeepsReadSemantics(t *testing.T) {
 			tableId:    issue26796TblID + 1,
 			databaseId: issue26796DBID,
 			bat:        other,
+			attrs:      otherAttrs,
 		})
 		txn.writes = append(txn.writes, Entry{typ: INSERT, tableId: issue26796TblID, databaseId: issue26796DBID})
 		txn.Unlock()
@@ -666,7 +667,7 @@ func TestIssue26796MembershipFilterGatesExactProbePath(t *testing.T) {
 	insert := func(t *testing.T, txn *Transaction, pk, value, memberCol int64) {
 		t.Helper()
 		bat := batch.NewWithSize(3)
-		bat.Attrs = []string{issue26796PKName, "value", catalog.IndexTablePrimaryColName}
+		batAttrs := []string{issue26796PKName, "value", catalog.IndexTablePrimaryColName}
 		bat.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 		bat.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 		bat.SetVector(2, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
@@ -676,7 +677,7 @@ func TestIssue26796MembershipFilterGatesExactProbePath(t *testing.T) {
 		bat.SetRowCount(1)
 		_, err := txn.WriteBatch(
 			INSERT, "", 1, issue26796DBID, issue26796SecTableID,
-			issue26796DB, issue26796SecTable, bat, DNStore{},
+			issue26796DB, issue26796SecTable, bat, batAttrs, DNStore{},
 		)
 		require.NoError(t, err)
 	}

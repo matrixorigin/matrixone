@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -194,26 +193,30 @@ func TestISCPIterationWaitsForPendingTailCleanup(t *testing.T) {
 		t.Run(ending, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			// Closing the pending tail batch is the observable cleanup step:
+			// it blocks until the test allows it.
 			releaseStarted := make(chan struct{})
 			allowRelease := make(chan struct{})
 			released := make(chan struct{})
-			var releaseOnce sync.Once
-			t.Cleanup(func() { releaseOnce.Do(func() { close(allowRelease) }) })
-
-			// The batch's held lease is the observable cleanup step: its
-			// release blocks until the test allows it.
-			lease, err := bufferlease.NewRefCounted(nil, 0, func() {
-				close(releaseStarted)
+			var startOnce, allowOnce sync.Once
+			t.Cleanup(func() { allowOnce.Do(func() { close(allowRelease) }) })
+			original := closePendingTailBatch
+			t.Cleanup(func() { closePendingTailBatch = original })
+			closePendingTailBatch = func(atomicBatch *AtomicBatch) {
+				startOnce.Do(func() { close(releaseStarted) })
 				<-allowRelease
-				close(released)
-			})
-			require.NoError(t, err)
+				original(atomicBatch)
+				select {
+				case <-released:
+				default:
+					close(released)
+				}
+			}
 			firstBatch := testutil.NewBatchWithVectors([]*vector.Vector{
 				testutil.NewVector(1, types.T_int64.ToType(), mp, false, []int64{1}),
 				testutil.NewVector(1, types.T_TS.ToType(), mp, false, []types.TS{types.BuildTS(1, 0)}),
 			}, nil)
-			require.NoError(t, firstBatch.HoldLease(lease))
-			lease.Release() // the batch now holds the only reference
+			require.Positive(t, mp.CurrNB())
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -251,7 +254,7 @@ func TestISCPIterationWaitsForPendingTailCleanup(t *testing.T) {
 				t.Fatal("iteration returned before pending tail cleanup completed")
 			case <-time.After(time.Second):
 			}
-			releaseOnce.Do(func() { close(allowRelease) })
+			allowOnce.Do(func() { close(allowRelease) })
 			select {
 			case <-done:
 			case <-time.After(5 * time.Second):
@@ -260,7 +263,7 @@ func TestISCPIterationWaitsForPendingTailCleanup(t *testing.T) {
 			select {
 			case <-released:
 			default:
-				t.Fatal("release callback was still running when iteration returned")
+				t.Fatal("pending tail cleanup was still running when iteration returned")
 			}
 			require.Zero(t, mp.CurrNB())
 		})

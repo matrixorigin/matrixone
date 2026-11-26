@@ -173,17 +173,6 @@ func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	return
 }
 
-func (n *anode) FillBlockView(
-	view *containers.Batch, colIdxes []int, mp *mpool.MPool,
-) (err error) {
-	for _, colIdx := range colIdxes {
-		orig := n.data.Vecs[colIdx]
-		view.AddVector(n.data.Attrs[colIdx], orig.CloneWindow(0, orig.Length(), mp))
-	}
-	view.Deletes = n.data.Deletes
-	return
-}
-
 func (n *anode) Compact() {
 	if n.data == nil {
 		return

@@ -149,7 +149,6 @@ func testSequenceAlterBatch[T sequenceTestInteger](t *testing.T, oid types.T) {
 				require.Equal(t, baseline, proc.Mp().CurrNB(), "all batch vectors must be released")
 			}()
 			require.Equal(t, 1, bat.RowCount())
-			require.Equal(t, []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called"}, bat.Attrs)
 			require.Len(t, bat.Vecs, 7)
 			for i, want := range []T{tc.last, 1, 100, 1} {
 				require.Equal(t, oid, bat.Vecs[i].GetType().Oid)

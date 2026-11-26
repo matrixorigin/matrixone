@@ -41,7 +41,7 @@ func TestApplyPreparedMetadataToCatalogCache(t *testing.T) {
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
 
-	protoBatch, err := batch.BatchToProtoBatch(bat)
+	protoBatch, err := batch.BatchToProtoBatch(bat, nil)
 	require.NoError(t, err)
 	catalogCache := cache.NewCatalog()
 	applyToCatalogCache(catalogCache, &api.Entry{

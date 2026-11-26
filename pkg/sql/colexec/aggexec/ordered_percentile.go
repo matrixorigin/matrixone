@@ -607,7 +607,7 @@ func (exec *orderedPercentileExec[T, R]) FlushWithContext(ctx context.Context) (
 		}
 		x++
 	}
-	return exec.ret.flushAll(), nil
+	return exec.ret.flushAll()
 }
 
 func (exec *orderedPercentileExec[T, R]) flushAccounted(ctx context.Context) (

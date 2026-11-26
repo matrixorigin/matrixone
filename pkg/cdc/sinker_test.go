@@ -257,7 +257,7 @@ func Test_consoleSinker_Sink(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat := batch.New([]string{"a", "b", "c"})
+	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
 	bat.SetRowCount(3)

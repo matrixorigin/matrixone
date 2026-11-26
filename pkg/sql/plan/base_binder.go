@@ -857,7 +857,10 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			err = moerr.NewBadFieldErrorf(localErrCtx, "invalid input: column %s does not exist", name)
 		}
 	} else {
-		binding := b.resolveTableBinding(b.ctx, db, table)
+		binding, ambiguous := b.resolveTableBinding(b.ctx, db, table)
+		if ambiguous {
+			return nil, moerr.NewInvalidInputf(localErrCtx, "ambiguous table reference '%s'", table)
+		}
 		if binding != nil {
 			resolvedBinding = binding
 			colPos = binding.FindColumn(col)
@@ -1086,7 +1089,7 @@ func (b *baseBinder) joinOnNamespaceResolved(db, table string) bool {
 		if c.binder == nil {
 			continue
 		}
-		if b.resolveTableBinding(c, db, table) != nil {
+		if binding, ambiguous := b.resolveTableBinding(c, db, table); binding != nil || ambiguous {
 			return true
 		}
 	}
@@ -2810,9 +2813,9 @@ func (b *baseBinder) numericColumnTypeInContext(
 		return Type{}, false, false
 	}
 
-	binding := b.resolveTableBinding(ctx, astExpr.DbName(), table)
+	binding, ambiguous := b.resolveTableBinding(ctx, astExpr.DbName(), table)
 	if binding == nil {
-		return Type{}, false, false
+		return Type{}, false, ambiguous
 	}
 	typ, found = bindingColumnType(binding, col)
 	return typ, found, false
@@ -2820,12 +2823,12 @@ func (b *baseBinder) numericColumnTypeInContext(
 
 // resolveTableBinding preserves the lazy default-database lookup for rewritten
 // tables. Qualified namespace matching belongs to BindContext.
-func (b *baseBinder) resolveTableBinding(ctx *BindContext, db, table string) *Binding {
-	binding := ctx.resolveTableBinding(db, table)
-	if binding == nil && db == "" && ctx.remapOption != nil && b.builder != nil {
-		binding = ctx.resolveTableBinding(b.builder.compCtx.DefaultDatabase(), table)
+func (b *baseBinder) resolveTableBinding(ctx *BindContext, db, table string) (*Binding, bool) {
+	binding, ambiguous := ctx.resolveTableBinding(db, table)
+	if binding == nil && !ambiguous && db == "" && ctx.remapOption != nil && b.builder != nil {
+		return ctx.resolveTableBinding(b.builder.compCtx.DefaultDatabase(), table)
 	}
-	return binding
+	return binding, ambiguous
 }
 
 func bindingColumnType(binding *Binding, col string) (Type, bool) {
@@ -5186,9 +5189,6 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 				value := state.values[pos]
 				if param, ok := AsParamValue(value); ok {
 					value = param.Value
-					if param.MaterializedValue != "" {
-						value = param.MaterializedValue
-					}
 				}
 				if str, ok := value.(string); ok {
 					str = strings.TrimSpace(str)

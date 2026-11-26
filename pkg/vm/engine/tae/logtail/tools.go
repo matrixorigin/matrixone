@@ -207,5 +207,5 @@ func filterAbortedLogtailRows(src *containers.BatchWithVersion) {
 
 func containersBatchToProtoBatch(bat *containers.Batch) (*api.Batch, error) {
 	mobat := containers.ToCNBatch(bat)
-	return batch.BatchToProtoBatch(mobat)
+	return batch.BatchToProtoBatch(mobat, bat.Attrs)
 }

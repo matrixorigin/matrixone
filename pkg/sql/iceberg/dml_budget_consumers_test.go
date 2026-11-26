@@ -209,7 +209,7 @@ func TestReplacementWriterRejectsMetadataBudget(t *testing.T) {
 	objects := &recordingDMLDeleteObjectWriter{}
 	files, err := WriteDMLReplacementDataFiles(context.Background(), DMLReplacementDataFilesRequest{
 		TableLocation: "s3://warehouse/orders", Base: dml.CommitBase{Table: "orders", StatementID: "stmt"}, SnapshotID: 10,
-		Schema: schema, Attrs: bat.Attrs, Batch: bat, ObjectWriter: objects, MemoryBudget: budget,
+		Schema: schema, Attrs: []string{"id", "name"}, Batch: bat, ObjectWriter: objects, MemoryBudget: budget,
 	})
 	assertConsumerBudgetError(t, err, 0, retainedDMLDataFileMetadataBytesForSchema(schema, api.PartitionSpec{}), 1)
 	require.Zero(t, budget.usedBytes())
@@ -321,7 +321,7 @@ func TestReplacementFanoutSinkCloseBudgetError(t *testing.T) {
 	metadata := retainedDMLDataFileMetadataBytesForSchema(schema, api.PartitionSpec{})
 	req := DMLReplacementDataFilesRequest{
 		TableLocation: "s3://secret-token/orders", Base: dml.CommitBase{Table: "orders", StatementID: "stmt"}, SnapshotID: 10,
-		Schema: schema, Attrs: bat.Attrs, Batch: bat,
+		Schema: schema, Attrs: []string{"id", "name"}, Batch: bat,
 	}
 	baseline := &recordingDMLDeleteObjectWriter{}
 	req.ObjectWriter = baseline
@@ -358,7 +358,7 @@ func TestReplacementFanoutSinkWriteBudgetError(t *testing.T) {
 	objects := &recordingDMLDeleteObjectWriter{}
 	files, err := WriteDMLReplacementDataFiles(ctx, DMLReplacementDataFilesRequest{
 		TableLocation: "s3://secret-token/orders", Base: dml.CommitBase{Table: "orders", StatementID: "stmt"}, SnapshotID: 10,
-		Schema: schema, Attrs: bat.Attrs, Batch: bat, MemoryBudget: budget, ObjectWriter: objects,
+		Schema: schema, Attrs: []string{"id", "name"}, Batch: bat, MemoryBudget: budget, ObjectWriter: objects,
 	})
 	assertConsumerBudgetError(t, err, metadata, 64<<10, metadata)
 	require.NotContains(t, err.Error(), "secret-token")
@@ -388,7 +388,7 @@ func TestReplacementFanoutUploadCancellation(t *testing.T) {
 	go func() {
 		_, err := WriteDMLReplacementDataFiles(ctx, DMLReplacementDataFilesRequest{
 			TableLocation: "s3://warehouse/orders", Base: dml.CommitBase{Table: "orders", StatementID: "stmt"}, SnapshotID: 10,
-			Schema: schema, Attrs: bat.Attrs, Batch: bat, MemoryBudget: budget, ObjectWriter: writer,
+			Schema: schema, Attrs: []string{"id", "name"}, Batch: bat, MemoryBudget: budget, ObjectWriter: writer,
 		})
 		done <- err
 	}()
@@ -404,7 +404,7 @@ func TestReplacementFanoutUploadCancellation(t *testing.T) {
 func TestReplacementFanoutSharedBudgetRotates(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"name"})
+	bat := batch.NewWithSize(1)
 	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for i := 0; i < 8; i++ {
 		require.NoError(t, vector.AppendBytes(vec, bytes.Repeat([]byte{byte('a' + i)}, 64<<10), false, mp))
@@ -418,7 +418,7 @@ func TestReplacementFanoutSharedBudgetRotates(t *testing.T) {
 	objects := &recordingDMLDeleteObjectWriter{}
 	files, err := WriteDMLReplacementDataFiles(ctx, DMLReplacementDataFilesRequest{
 		TableLocation: "s3://warehouse/orders", Base: dml.CommitBase{Table: "orders", StatementID: "stmt"}, SnapshotID: 10,
-		Schema: schema, Attrs: bat.Attrs, Batch: bat, MemoryBudget: budget, ObjectWriter: objects,
+		Schema: schema, Attrs: []string{"name"}, Batch: bat, MemoryBudget: budget, ObjectWriter: objects,
 	})
 	require.NoError(t, err)
 	require.Greater(t, len(files), 1)
@@ -463,7 +463,7 @@ func TestFanoutSharedBudgetPartitionedOutput(t *testing.T) {
 					want[id] = region
 					func() {
 						mp := mpool.MustNewZero()
-						bat := batch.New([]string{"id", "region", "payload"})
+						bat := batch.NewWithSize(3)
 						bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 						bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 						bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
@@ -472,7 +472,7 @@ func TestFanoutSharedBudgetPartitionedOutput(t *testing.T) {
 						require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(region), part == 0, mp))
 						require.NoError(t, vector.AppendBytes(bat.Vecs[2], bytes.Repeat([]byte{byte('a' + id)}, 64<<10), false, mp))
 						bat.SetRowCount(1)
-						require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+						require.NoError(t, writer.WriteBatch(ctx, []string{"id", "region", "payload"}, bat))
 						require.LessOrEqual(t, budget.usedBytes(), limit)
 						require.GreaterOrEqual(t, budget.usedBytes(), metadataBytes*int64(len(objects.objects)))
 					}()

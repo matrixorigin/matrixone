@@ -546,6 +546,7 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 }
 
 func (ctr *container) freeRightRowsMatched(proc *process.Process) {
+	ctr.rightRowsMatched.Free()
 	ctr.rightRowsMatched = nil
 }
 
@@ -558,6 +559,8 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 }
 
 func (ctr *container) cleanHashMap() {
+	// The remaining match group belongs to the current JoinMap.
+	ctr.sels = nil
 	ctr.buildAreaChecked = false
 	ctr.checkBuildArea = false
 	ctr.checkProbeArea = false

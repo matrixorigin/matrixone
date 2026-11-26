@@ -180,7 +180,6 @@ func gatherSelectedColumns(proc *process.Process, input *batch.Batch, loaded []i
 			}
 		}
 	}
-	output.Attrs = append(output.Attrs, input.Attrs...)
 	output.Recursive, output.ShuffleIDX = input.Recursive, input.ShuffleIDX
 	output.SetRowCount(len(rows))
 	return output, nil

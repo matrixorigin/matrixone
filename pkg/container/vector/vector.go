@@ -42,9 +42,6 @@ import (
 const (
 	FLAT     = iota // flat vector represent a uncompressed vector
 	CONSTANT        // const vector
-	// LegacyRowBufferClass is the retired class 2. Old encoded values are
-	// already materialized and decode as FLAT; vectors never carry it.
-	LegacyRowBufferClass
 )
 
 // Vector represent a column
@@ -80,7 +77,6 @@ func toSliceOfLengthNoTypeCheck[T any](vec *Vector, length int) []T {
 	if length == 0 {
 		return nil
 	}
-	checkTypeIfRaceDetectorEnabled[T](vec)
 	return util.UnsafeSliceCastToLength[T](vec.data, length)
 }
 
@@ -134,7 +130,7 @@ func (v *Vector) Reset(typ types.Type) {
 	}
 
 	v.length = 0
-	v.nsp.Clear()
+	v.clearNulls()
 	v.sorted = false
 }
 
@@ -144,7 +140,8 @@ func (v *Vector) ResetWithSameType() {
 		v.area = v.area[:0]
 	}
 	v.length = 0
-	v.nsp.Reset()
+	// Keep an owned bitmap's words for reuse, like the data capacity.
+	v.clearNulls()
 	v.sorted = false
 }
 
@@ -159,9 +156,19 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
-	v.nsp.Clear()
+	v.clearNulls()
 	v.length = 0
 	v.sorted = false
+}
+
+// clearNulls empties the null rows: an owned bitmap keeps its words for
+// reuse, and a read-only one drops the words it references.
+func (v *Vector) clearNulls() {
+	if v.nsp.IsReadOnly() {
+		v.nsp.Free()
+		return
+	}
+	v.nsp.Clear()
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
@@ -187,7 +194,12 @@ func (v *Vector) Capacity() int {
 // Allocated returns the total allocated memory size of the vector.
 // it can be used to estimate the memory usage of the vector.
 func (v *Vector) Allocated() int {
+	// An owned null bitmap holds pool memory too, and CleanOnlyData keeps it
+	// for reuse; a read-only one references words it does not own.
 	retained := 0
+	if !v.nsp.IsReadOnly() {
+		retained = v.nsp.GetBitmap().CapWords() * 8
+	}
 	return retained + cap(v.data) + cap(v.area)
 }
 
@@ -265,8 +277,6 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	nulls.RemoveRange(&v.nsp, uint64(checkpoint.length), uint64(end))
 	v.length = checkpoint.length
 	v.area = v.area[:checkpoint.areaLength]
-	// A failed varlen append may already have exposed shared or partial area
-	// layout. Roll back logical lengths, but keep this proof fail-closed.
 	v.sorted = checkpoint.sorted
 	return nil
 }
@@ -336,8 +346,29 @@ func (v *Vector) GetNulls() *nulls.Nulls {
 	return &v.nsp
 }
 
+// DetachNulls gives v an owned copy of its null bitmap allocated from mp, so
+// that v stops referencing the bitmap of the vector it was windowed from. A
+// read-only window that must outlive its source (its payload being kept
+// alive by a lease) detaches its nulls first; v's payload is unchanged.
+func (v *Vector) DetachNulls(mp *mpool.MPool) error {
+	if !v.nsp.IsReadOnly() {
+		return nil
+	}
+	if v.nsp.IsEmpty() {
+		v.nsp.Free()
+		return nil
+	}
+	var owned nulls.Nulls
+	if err := owned.InitWith(&v.nsp, mp); err != nil {
+		return err
+	}
+	v.nsp.Free()
+	v.nsp = owned
+	return nil
+}
+
 func (v *Vector) SetNulls(nsp *nulls.Nulls) {
-	v.nsp.Clear()
+	v.clearNulls()
 	if nsp == nil {
 		return
 	}
@@ -345,7 +376,9 @@ func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 }
 
 func (v *Vector) SetAllNulls(length int) {
-	v.nsp.InitWithSize(int(length))
+	if err := v.nsp.InitWithSize(length, v.mp); err != nil {
+		panic(err)
+	}
 	v.nsp.AddRange(0, uint64(length))
 }
 
@@ -354,7 +387,16 @@ func (v *Vector) HasNull() bool {
 }
 
 func (v *Vector) AllNull() bool {
-	return v.IsConstNull() || (v.length != 0 && v.nsp.Count() == v.length)
+	if v.IsConstNull() {
+		return true
+	}
+	if v.length == 0 || v.nsp.Count() < v.length {
+		return false
+	}
+	if v.nsp.Len() <= int64(v.length) {
+		return v.nsp.Count() == v.length
+	}
+	return v.nsp.CountRange(0, uint64(v.length)) == v.length
 }
 
 func (v *Vector) prepareOrdinaryAppendMetadata(rows int, mp *mpool.MPool) error {
@@ -470,7 +512,7 @@ func (v *Vector) CleanOnlyData() {
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
-	v.nsp.Clear()
+	v.clearNulls()
 	v.sorted = false
 }
 
@@ -607,6 +649,7 @@ func (v *Vector) InitVec(typ types.Type, mp *mpool.MPool) {
 		panic(moerr.NewInternalErrorNoCtx("InitVec on a vector that holds memory"))
 	}
 	*v = Vector{typ: typ, class: FLAT, mp: mp}
+	v.nsp.Init(mp)
 }
 
 // MPool returns the pool the vector was created with; nil for a read-only
@@ -723,9 +766,6 @@ func (v *Vector) IsConst() bool {
 }
 
 func (v *Vector) SetClass(class int) {
-	if class == LegacyRowBufferClass {
-		panic(moerr.NewInvalidStateNoCtx("class 2 is a retired legacy encoding"))
-	}
 	v.class = class
 }
 
@@ -1022,7 +1062,9 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.area = nil
 	v.length = 0
 
-	v.nsp.Reset()
+	// Free returns the bitmap's words to its pool (the vector's), or only
+	// drops a read-only vector's reference.
+	v.nsp.Free()
 	v.sorted = false
 }
 
@@ -1377,16 +1419,6 @@ type vectorBinaryLayout struct {
 	sorted bool
 }
 
-// decodedPhysicalClass preserves the legacy row-buffer class 2. Its encoded
-// values are already materialized; the format contains no dictionary base or
-// selection. Decode it as FLAT without rewriting the caller's input bytes.
-func decodedPhysicalClass(class byte) byte {
-	if class == LegacyRowBufferClass {
-		return FLAT
-	}
-	return class
-}
-
 type vectorBinaryCursor struct {
 	data   []byte
 	offset int
@@ -1474,9 +1506,8 @@ func decodeVectorBinaryLayout(
 	if err != nil {
 		return vectorBinaryLayout{}, err
 	}
-	physicalClass := decodedPhysicalClass(class[0])
 	if err = validateVectorBinary(
-		physicalClass,
+		class[0],
 		typ,
 		length,
 		vectorData,
@@ -1487,7 +1518,7 @@ func decodeVectorBinaryLayout(
 		return vectorBinaryLayout{}, err
 	}
 	return vectorBinaryLayout{
-		class:  physicalClass,
+		class:  class[0],
 		typ:    typ,
 		length: int(length),
 		data:   vectorData,
@@ -1514,12 +1545,13 @@ func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 	if err != nil {
 		return err
 	}
-	// The data and area are read-only references to data, but the null
-	// bitmap is private: null bits set or cleared through GetNulls must never
-	// reach memory the vector does not own (for example the FileService cache).
+	// The data, area and null bitmap are all read-only references to data.
+	// The null bitmap has no pool, so a write to it panics instead of
+	// reaching memory the vector does not own (for example the FileService
+	// cache).
 	var decodedNulls nulls.Nulls
 	if len(layout.nulls) > 0 {
-		if err = decodedNulls.ReadNoCopy(bytes.Clone(layout.nulls)); err != nil {
+		if err = decodedNulls.ReadNoCopy(layout.nulls); err != nil {
 			return err
 		}
 	}
@@ -1708,8 +1740,8 @@ func (v *Vector) unmarshalBinaryCopy(data []byte, validateValues bool, mp *mpool
 		copy(decoded.area, layout.area)
 	}
 	if len(layout.nulls) > 0 {
-		// Nulls.Read aliases its input; the owned vector must not share data.
-		if err = decoded.nsp.Read(bytes.Clone(layout.nulls)); err != nil {
+		// decoded's bitmap has v's pool, so Read copies into it.
+		if err = decoded.nsp.Read(layout.nulls); err != nil {
 			return err
 		}
 	}
@@ -1738,7 +1770,7 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) (retErr error
 	if err != nil {
 		return err
 	}
-	v.class = int(decodedPhysicalClass(byte(encodedClass)))
+	v.class = encodedClass
 
 	if v.typ, err = types.ReadType(r); err != nil {
 		return err
@@ -1791,34 +1823,17 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) (retErr error
 	)
 }
 
-func (v *Vector) readNullsWithReader(r io.Reader, mp *mpool.MPool) error {
-	if !mp.IsView() {
-		nspLen, err := types.ReadInt32(r)
-		if err != nil {
-			return err
-		}
-		if nspLen < 0 {
-			return moerr.NewInvalidInputNoCtx("negative vector null bitmap size")
-		}
-		if err = validateStreamingReadSize(r, int64(nspLen)); err != nil {
-			return err
-		}
-		if nspLen > 0 {
-			nspBuf := make([]byte, nspLen)
-			if _, err = io.ReadFull(r, nspBuf); err != nil {
-				return err
-			}
-			if err := validateVectorNullBitmap(nspBuf, true); err != nil {
-				return err
-			}
-			return v.nsp.Read(nspBuf)
-		}
-		v.nsp.Reset()
-		return nil
-	}
-
+// readNullsWithReader reads the null bitmap straight into words allocated
+// from the vector's pool: one copy, from the reader into the bitmap.
+func (v *Vector) readNullsWithReader(r io.Reader, _ *mpool.MPool) error {
 	size, err := types.ReadInt32(r)
 	if err != nil {
+		return err
+	}
+	if size < 0 {
+		return moerr.NewInvalidInputNoCtx("negative vector null bitmap size")
+	}
+	if err = validateStreamingReadSize(r, int64(size)); err != nil {
 		return err
 	}
 	if size == 0 {
@@ -1839,10 +1854,7 @@ func (v *Vector) readNullsWithReader(r io.Reader, mp *mpool.MPool) error {
 	if bitLength > int64(math.MaxInt) {
 		return moerr.NewInvalidInputNoCtx("vector null bitmap exceeds platform limit")
 	}
-	payload, err := v.nsp.GetBitmap().PrepareUnmarshal(
-		header[:],
-		int(size),
-	)
+	payload, err := v.nsp.GetBitmap().PrepareUnmarshal(header[:], int(size))
 	if err != nil {
 		return err
 	}
@@ -1850,7 +1862,11 @@ func (v *Vector) readNullsWithReader(r io.Reader, mp *mpool.MPool) error {
 		v.nsp.Reset()
 		return err
 	}
-	return v.nsp.GetBitmap().Validate()
+	if err = v.nsp.GetBitmap().Validate(); err != nil {
+		v.nsp.Reset()
+		return err
+	}
+	return nil
 }
 
 func (v *Vector) ToConst() {
@@ -2131,7 +2147,10 @@ func (v *Vector) dup(mp *mpool.MPool) (*Vector, error) {
 		}
 	}
 	w.length = v.length
-	w.GetNulls().InitWith(v.GetNulls())
+	if err = w.nsp.InitWith(&v.nsp, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
 	copy(w.data, v.data[:dataLen])
 
 	if len(v.area) > 0 {
@@ -2235,6 +2254,11 @@ func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
 func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 
 	if v.IsConst() {
+		if v.typ.Oid == types.T_any {
+			if err := v.checkMP(mp); err != nil {
+				return err
+			}
+		}
 		if negate {
 			v.length -= len(sels)
 		} else {
@@ -2242,9 +2266,23 @@ func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 		}
 		return nil
 	}
-	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 	if err := v.checkMP(mp); err != nil {
 		return err
+	}
+	if v.typ.Oid == types.T_any && (v.length == 0 || v.AllNull()) {
+		newLength := len(sels)
+		if negate {
+			newLength = v.length - len(sels)
+		}
+		if !negate || len(sels) > 0 {
+			nulls.FilterInPlaceOrdered(&v.nsp, sels, negate)
+		}
+		v.length = newLength
+		trimVectorBitmap(&v.nsp, newLength)
+		return nil
+	}
+	if v.typ.Oid == types.T_any {
+		return moerr.NewNotSupportedNoCtx("non-NULL ANY selection")
 	}
 	switch v.typ.Oid {
 	case types.T_bool:
@@ -2323,6 +2361,11 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, m
 		return nil
 	}
 	if v.IsConst() {
+		if v.typ.Oid == types.T_any {
+			if err := v.checkMP(mp); err != nil {
+				return err
+			}
+		}
 		if negate {
 			v.length -= sels.Count()
 		} else {
@@ -2332,6 +2375,19 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, m
 	}
 	if err := v.checkMP(mp); err != nil {
 		return err
+	}
+	if v.typ.Oid == types.T_any && (v.length == 0 || v.AllNull()) {
+		newLength := sels.Count()
+		if negate {
+			newLength = v.length - newLength
+		}
+		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, negate, offset)
+		v.length = newLength
+		trimVectorBitmap(&v.nsp, newLength)
+		return nil
+	}
+	if v.typ.Oid == types.T_any {
+		return moerr.NewNotSupportedNoCtx("non-NULL ANY selection")
 	}
 	switch v.typ.Oid {
 	case types.T_bool:
@@ -2407,7 +2463,27 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, m
 // Shuffle use to shrink vectors, sels can be disordered
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.IsConst() {
+		if v.typ.Oid == types.T_any {
+			if err := v.checkMP(mp); err != nil {
+				return err
+			}
+			v.length = len(sels)
+		}
 		return nil
+	}
+	// ANY has no value payload; its row metadata still follows the selection.
+	if v.typ.Oid == types.T_any && (v.length == 0 || v.AllNull()) {
+		if err := v.checkMP(mp); err != nil {
+			return err
+		}
+		if err := v.remapShuffleBitmaps(sels, mp); err != nil {
+			return err
+		}
+		v.length = len(sels)
+		return nil
+	}
+	if v.typ.Oid == types.T_any {
+		return moerr.NewNotSupportedNoCtx("non-NULL ANY selection")
 	}
 	switch v.typ.Oid {
 	case types.T_bool:
@@ -2485,8 +2561,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 // alloc/free churn when the permutation preserves the element count.
 // buf is grown as needed and retained across calls.
 func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err error) {
-	if v.IsConst() {
-		return nil
+	if v.IsConst() || v.typ.Oid == types.T_any {
+		return v.Shuffle(sels, mp)
 	}
 	// The reusable buffer is Go-heap storage and therefore has no physical
 	// allocation provenance. Allocation-accounted vectors must use Shuffle,
@@ -2503,6 +2579,13 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 		return v.Shuffle(sels, mp)
 	}
 	return v.shuffleWithBufData(sels, buf)
+}
+
+// trimVectorBitmap drops stale rows left by a previous shortened view.
+func trimVectorBitmap(bitmap *nulls.Nulls, length int) {
+	if uint64(length) < uint64(bitmap.Len()) {
+		nulls.RemoveRange(bitmap, uint64(length), uint64(bitmap.Len()))
+	}
 }
 
 // shuffleWithBufData performs the common payload/bitmap permutation after all
@@ -2643,6 +2726,17 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
 	union := getUnionAllFunction(typ, mp)
 	return func(v, w *Vector) error {
+		if typ.Oid == types.T_any {
+			if v.length < 0 || w.length < 0 || w.length > math.MaxInt-v.length {
+				return moerr.NewInternalErrorNoCtx("invalid ANY vector length")
+			}
+			if err := validBitmapRows(v.length + w.length); err != nil {
+				return err
+			}
+			if (v.length != 0 && !v.AllNull()) || (w.length != 0 && !w.AllNull()) {
+				return moerr.NewInternalErrorNoCtx("cannot copy a non-NULL value of type ANY")
+			}
+		}
 
 		// A Window retains the area lease but may alias our owned descriptors.
 		if v.dataAliases(w) {
@@ -2653,7 +2747,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		if err := v.checkMP(mp); err != nil {
 			return err
 		}
-		if w.IsConst() {
+		if w.IsConst() && typ.Oid != types.T_any {
 			// The raw const append helpers classify their input as ordinary data.
 			// UnionMulti copies a source value instead and therefore preserves its
 			// provenance without a second, post-publication sidecar transition.
@@ -2685,6 +2779,24 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 	}
 
 	switch typ.Oid {
+	case types.T_any:
+		return func(v, w *Vector) error {
+			if w.length == 0 {
+				return nil
+			}
+			oldLength := v.length
+			if err := extendWithBitmaps(v, w.length, mp, true); err != nil {
+				return err
+			}
+			// SetLength can leave metadata past the visible prefix on a reused
+			// destination. New rows must not inherit those stale NULL bits.
+			if end := v.nsp.Len(); end > int64(oldLength) {
+				nulls.RemoveRange(&v.nsp, uint64(oldLength), uint64(end))
+			}
+			v.nsp.AddRange(uint64(oldLength), uint64(oldLength+w.length))
+			v.setLengthAfterExtend(oldLength + w.length)
+			return nil
+		}
 	case types.T_bool:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
@@ -3923,15 +4035,12 @@ type FixedSourceRow struct {
 }
 
 // TryUnionFlatFixedRows copies fixed-size payloads across source vectors without
-// changing their order, including legacy inline CHAR/VARCHAR descriptors. A
+// changing their order, including inline CHAR/VARCHAR descriptors. A
 // false result leaves v untouched, allowing the caller to use UnionOne.
 // A true result transfers no source ownership; v owns every copied payload.
 func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (bool, error) {
 	inlineStrings := v.typ.Oid == types.T_char || v.typ.Oid == types.T_varchar
 	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() && !inlineStrings {
-		return false, nil
-	}
-	if inlineStrings && types.IsUnicodeCollation(v.typ.Charset) {
 		return false, nil
 	}
 	size := v.typ.TypeSize()
@@ -4216,8 +4325,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		// With both areas empty, valid non-NULL descriptors are either inline
 		// or empty non-inline values at offset zero. Neither needs area growth
 		// or rebasing, so copy them directly without a separate sizing pass.
-		emptyAreas := !hasNull && len(w.area) == 0 && len(v.area) == 0 &&
-			!types.IsUnicodeCollation(v.typ.Charset)
+		emptyAreas := !hasNull && len(w.area) == 0 && len(v.area) == 0
 		if !emptyAreas {
 			for _, sel := range sels {
 				if hasNull && w.nsp.Contains(uint64(sel)) {
@@ -4234,13 +4342,13 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		}
 		// Reuse the area sizing pass to select an inline-copy batch. The small
 		// check still handles non-inline zero-length descriptors correctly.
-		// Mixed/area payloads and Unicode admission keep the original loops.
+		// Mixed/area payloads keep the original loops.
 		if emptyAreas {
 			target := vCol[oldLen : oldLen+len(sels)]
 			for i, sel := range sels {
 				target[i] = wCol[sel]
 			}
-		} else if total == 0 && !types.IsUnicodeCollation(v.typ.Charset) {
+		} else if total == 0 {
 			if hasNull {
 				for i, sel := range sels {
 					if w.nsp.Contains(uint64(sel)) {
@@ -5531,9 +5639,6 @@ func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([
 		}
 		value.SetOffsetLen(uint32(offset), uint32(size))
 	}
-	if err = types.ValidateCollationValue(vec.typ, value.GetByteSlice(vec.area)); err != nil {
-		return err
-	}
 	return appendOneOwnedVarlena(vec, value, mp)
 }
 
@@ -6097,7 +6202,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 
 // A fresh, empty destination cannot own any input bytes, so reserving its
 // area cannot invalidate a caller's source slices. These types also have no
-// per-value JSON or Unicode admission that could change error precedence.
+// per-value admission that could change error precedence.
 func canPregrowRawByteList(vec *Vector, isNulls []bool) bool {
 	if cap(vec.data) != 0 || cap(vec.area) != 0 || len(isNulls) != 0 ||
 		vec.length != 0 {
@@ -6107,7 +6212,7 @@ func canPregrowRawByteList(vec *Vector, isNulls []bool) bool {
 	case types.T_varbinary:
 		return true
 	case types.T_varchar:
-		return !types.IsUnicodeCollation(vec.typ.Charset)
+		return true
 	default:
 		return false
 	}
@@ -6298,8 +6403,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 
 // remapShuffleBitmaps preserves Shuffle's arbitrary-selection semantics.
 func (v *Vector) remapShuffleBitmaps(sels []int64, _ *mpool.MPool) error {
-	nulls.Filter(&v.nsp, sels, false)
-	return nil
+	return nulls.Filter(&v.nsp, sels, false)
 }
 
 // shuffleFixedNoTypeCheckWithBuf permutes elements using a reusable scratch
@@ -6321,10 +6425,13 @@ func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64,
 	ws := util.UnsafeSliceCastToLength[T](*buf, ns)
 
 	preserved, identityProven := shuffleWithSortedProof(vs, ws, sels, v.sorted)
+	// Remap the nulls first: it can fail allocating, and v is still intact.
+	if err := nulls.Filter(&v.nsp, sels, false); err != nil {
+		return err
+	}
 	if !identityProven || byteSlicesOverlap(v.data[:needed], *buf) {
 		copy(v.data[:needed], *buf)
 	}
-	nulls.Filter(&v.nsp, sels, false)
 	v.length = ns
 	v.sorted = preserved
 	return nil
@@ -6373,10 +6480,11 @@ func (v *Vector) window(start, end int, logicalRows bool) (*Vector, error) {
 
 // WindowInto is Window into a descriptor the caller already holds: w becomes a
 // read-only reference to [start, end) of v's memory without allocating a new
-// Vector. w must be read-only (a reference or a zero Vector); whatever it
+// Vector. w must be read-only (a reference or a zero Vector) and must not own
+// its nulls bitmap (a read-only vector can, e.g. Arrow validity); whatever it
 // referenced before is dropped.
 func (v *Vector) WindowInto(w *Vector, start, end int) error {
-	if !w.IsReadOnly() {
+	if !w.IsReadOnly() || !w.nsp.IsReadOnly() {
 		return moerr.NewInternalErrorNoCtx("vector window target owns memory")
 	}
 	if !v.validWindowRange(start, end, false) {
@@ -6396,7 +6504,7 @@ func (v *Vector) readOnlyWindow(start, end int) *Vector {
 
 func (v *Vector) readOnlyWindowInto(w *Vector, start, end int) {
 	*w = Vector{typ: v.typ, class: v.class, length: end - start, sorted: v.sorted}
-	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
+	w.nsp.InitView(&v.nsp, start, end)
 	if v.IsConst() {
 		if !v.IsConstNull() {
 			w.data = v.data
@@ -6448,7 +6556,7 @@ func (v *Vector) copyWindowBitmaps(w *Vector, start, end int, mp *mpool.MPool) e
 		if err := w.PreExtendNulls(length, mp); err != nil {
 			return err
 		}
-		nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
+		return nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp, mp)
 	}
 	return nil
 }
@@ -6636,52 +6744,47 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeBool(&maxVal)
 
 	case types.T_bit:
-		minVal, maxVal := OrderedGetMinAndMax[uint64](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint64](v)
 		minv = types.EncodeUint64(&minVal)
 		maxv = types.EncodeUint64(&maxVal)
 
 	case types.T_int8:
-		minVal, maxVal := OrderedGetMinAndMax[int8](v)
+		minVal, maxVal := IntegerGetMinAndMax[int8](v)
 		minv = types.EncodeInt8(&minVal)
 		maxv = types.EncodeInt8(&maxVal)
 
 	case types.T_int16:
-		minVal, maxVal := OrderedGetMinAndMax[int16](v)
+		minVal, maxVal := IntegerGetMinAndMax[int16](v)
 		minv = types.EncodeInt16(&minVal)
 		maxv = types.EncodeInt16(&maxVal)
 
 	case types.T_int32:
-		minVal, maxVal := OrderedGetMinAndMax[int32](v)
+		minVal, maxVal := IntegerGetMinAndMax[int32](v)
 		minv = types.EncodeInt32(&minVal)
 		maxv = types.EncodeInt32(&maxVal)
 
 	case types.T_int64:
-		var minVal, maxVal int64
-		if v.class == FLAT && v.length >= 32 && !v.HasNull() {
-			minVal, maxVal = int64MinMaxNoNull(MustFixedColNoTypeCheck[int64](v))
-		} else {
-			minVal, maxVal = OrderedGetMinAndMax[int64](v)
-		}
+		minVal, maxVal := IntegerGetMinAndMax[int64](v)
 		minv = types.EncodeInt64(&minVal)
 		maxv = types.EncodeInt64(&maxVal)
 
 	case types.T_uint8:
-		minVal, maxVal := OrderedGetMinAndMax[uint8](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint8](v)
 		minv = types.EncodeUint8(&minVal)
 		maxv = types.EncodeUint8(&maxVal)
 
 	case types.T_uint16:
-		minVal, maxVal := OrderedGetMinAndMax[uint16](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint16](v)
 		minv = types.EncodeUint16(&minVal)
 		maxv = types.EncodeUint16(&maxVal)
 
 	case types.T_uint32:
-		minVal, maxVal := OrderedGetMinAndMax[uint32](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint32](v)
 		minv = types.EncodeUint32(&minVal)
 		maxv = types.EncodeUint32(&maxVal)
 
 	case types.T_uint64:
-		minVal, maxVal := OrderedGetMinAndMax[uint64](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint64](v)
 		minv = types.EncodeUint64(&minVal)
 		maxv = types.EncodeUint64(&maxVal)
 
@@ -6740,32 +6843,32 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeFixed(maxVal)
 
 	case types.T_date:
-		minVal, maxVal := OrderedGetMinAndMax[types.Date](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Date](v)
 		minv = types.EncodeDate(&minVal)
 		maxv = types.EncodeDate(&maxVal)
 
 	case types.T_year:
-		minVal, maxVal := OrderedGetMinAndMax[types.MoYear](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.MoYear](v)
 		minv = types.EncodeMoYear(&minVal)
 		maxv = types.EncodeMoYear(&maxVal)
 
 	case types.T_datetime:
-		minVal, maxVal := OrderedGetMinAndMax[types.Datetime](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Datetime](v)
 		minv = types.EncodeDatetime(&minVal)
 		maxv = types.EncodeDatetime(&maxVal)
 
 	case types.T_time:
-		minVal, maxVal := OrderedGetMinAndMax[types.Time](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Time](v)
 		minv = types.EncodeTime(&minVal)
 		maxv = types.EncodeTime(&maxVal)
 
 	case types.T_timestamp:
-		minVal, maxVal := OrderedGetMinAndMax[types.Timestamp](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Timestamp](v)
 		minv = types.EncodeTimestamp(&minVal)
 		maxv = types.EncodeTimestamp(&maxVal)
 
 	case types.T_enum:
-		minVal, maxVal := OrderedGetMinAndMax[types.Enum](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Enum](v)
 		minv = types.EncodeEnum(&minVal)
 		maxv = types.EncodeEnum(&maxVal)
 
@@ -7251,7 +7354,9 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 	// bits from them. Expanding those bitmaps would panic even though there is no
 	// row metadata to move (runtime-filter vectors commonly use this layout).
 	if !v.nsp.GetBitmap().IsEmpty() {
-		v.nsp.GetBitmap().TryExpandWithSize(v.length)
+		if err := v.nsp.GetBitmap().TryExpandWithSize(v.length); err != nil {
+			panic(err)
+		}
 	}
 	sort.Stable(vectorMetadataSorter{vector: v, varlena: varlena})
 	newLength := v.length
@@ -7994,13 +8099,6 @@ func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m
 	if err := vec.checkMP(m); err != nil {
 		return err
 	}
-	// Legacy domains need no collation admission. Check the domain before
-	// extracting bytes, especially for inline values copied in merge loops.
-	if types.IsUnicodeCollation(vec.typ.Charset) {
-		if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
-			return err
-		}
-	}
 	if (*v2)[0] <= types.VarlenaInlineSize {
 		BuildVarlenaInline(v1, v2)
 		return nil
@@ -8012,9 +8110,6 @@ func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m
 
 func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpool.MPool) error {
 	if err := vec.checkMP(m); err != nil {
-		return err
-	}
-	if err := types.ValidateCollationValue(vec.typ, *bs); err != nil {
 		return err
 	}
 	vlen := len(*bs)
@@ -8359,11 +8454,21 @@ func Union2VectorValen(
 	return nil
 }
 
-func (v *Vector) FillRawPtrLen(dest []uintptr) {
+// FillRawPtrLen writes v's raw (pointer, length) pairs for native code. A
+// read-only null bitmap (a window view) may be shifted, which C cannot read,
+// so it is handed over as a clean copy. The returned slice holds that copy:
+// the caller must keep it alive until the native call returns.
+func (v *Vector) FillRawPtrLen(dest []uintptr) (keepAlive []uint64) {
 	// The null map's first word and its length in bits; (0, 0) when it has
 	// no storage.
 	dest[0], dest[1] = 0, 0
-	if ptr := nulls.Ptr(&v.nsp); ptr != nil {
+	if v.nsp.IsReadOnly() {
+		bm := v.nsp.GetBitmap()
+		if keepAlive = bm.WordsCovering(int(bm.Len())); len(keepAlive) > 0 {
+			dest[0] = uintptr(unsafe.Pointer(&keepAlive[0]))
+			dest[1] = uintptr(bm.Len())
+		}
+	} else if ptr := nulls.Ptr(&v.nsp); ptr != nil {
 		dest[0] = uintptr(unsafe.Pointer(ptr))
 		dest[1] = uintptr(v.nsp.GetBitmap().Len())
 	}
@@ -8376,17 +8481,19 @@ func (v *Vector) FillRawPtrLen(dest []uintptr) {
 		dest[4] = uintptr(unsafe.Pointer(&v.area[0]))
 		dest[5] = uintptr(len(v.area))
 	}
+	return keepAlive
 }
 
 // hasBackingStorage reports whether v holds any data, area or bitmap storage.
 func (v *Vector) hasBackingStorage() bool {
 	return cap(v.data) != 0 ||
 		cap(v.area) != 0 ||
-		v.nsp.GetBitmap().Size() != 0
+		v.nsp.GetBitmap().CapWords() != 0
 }
 
-// Bitmaps always use Go-owned memory. When a vector grows, it reserves room in
-// the bitmaps it uses for all of its rows; a bitmap also grows itself on write.
+// The null bitmap allocates from the vector's pool and is freed with the
+// vector. When a vector grows, it reserves room in the bitmap for all of its
+// rows; a bitmap also grows itself on write.
 
 func validBitmapRows(rows int) error {
 	if rows < 0 || rows > math.MaxInt-63 {
@@ -8399,8 +8506,7 @@ func (v *Vector) ensureNullCapacity(rows int) error {
 	if err := validBitmapRows(rows); err != nil {
 		return err
 	}
-	v.nsp.GetBitmap().Reserve(rows)
-	return nil
+	return v.nsp.GetBitmap().Reserve(rows)
 }
 
 func errVectorReadOnly() error {

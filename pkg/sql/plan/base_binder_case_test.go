@@ -301,7 +301,7 @@ func TestPreparedBitCountDefaultsToBinaryAndSpecializesNumericValues(t *testing.
 	require.Equal(t, int32(types.T_varbinary), fn.GetF().Args[0].Typ.Id)
 
 	numericPlan, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, []any{
-		ParamValue{Value: "64", PrepareParamKind: types.StringConversionInteger},
+		sqlIntParam(64),
 	})
 	require.NoError(t, err)
 	require.True(t, specialized)
@@ -312,7 +312,7 @@ func TestPreparedBitCountDefaultsToBinaryAndSpecializesNumericValues(t *testing.
 	require.Equal(t, int32(types.T_int64), fn.GetF().Args[0].Typ.Id)
 
 	stringPlan, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, []any{
-		ParamValue{Value: "64", IsBinaryProtocol: true, PrepareParamKind: types.StringConversionString},
+		ParamValue{Value: "64", IsBinaryProtocol: true},
 	})
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(stringPlan, "bit_count")
@@ -1454,11 +1454,10 @@ func TestPreparedNumericRuntimeLiteralRebindingHelpers(t *testing.T) {
 
 	floatRule := NewResetParamRefRule(ctx, nil)
 	floatRule.SetParamValues([]any{ParamValue{
-		Value:            -1.5,
-		PrepareParamKind: types.StringConversionFloat,
-		HasRuntimeType:   true,
-		RuntimeType:      types.T_float64.ToType(),
-		RetainParamRef:   true,
+		Value:          -1.5,
+		HasRuntimeType: true,
+		RuntimeType:    types.T_float64.ToType(),
+		RetainParamRef: true,
 	}})
 	bound, ok, err := floatRule.typedRuntimeParamExpr(0)
 	require.NoError(t, err)
@@ -1472,7 +1471,7 @@ func TestPreparedNumericRuntimeLiteralRebindingHelpers(t *testing.T) {
 			Value: &planpb.Literal_Bval{Bval: true},
 		}},
 	}})
-	boolRule.SetParamKinds([]types.StringConversionKind{types.StringConversionBoolean})
+	boolRule.SetParamValues([]any{sqlBoolParam(true)})
 	runtimeType, ok := boolRule.runtimeParamType(0)
 	require.True(t, ok)
 	require.Equal(t, types.T_bool, runtimeType.Oid)
@@ -1532,7 +1531,7 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.NoError(t, err)
 	queryPlan := prepared.GetDcl().GetPrepare().Plan
 	filled, err := FillValuesOfParamsInPlan(ctx, queryPlan, []any{
-		ParamValue{Value: "-9007199254740993", PrepareParamKind: types.StringConversionInteger},
+		sqlIntParam(-9007199254740993),
 	})
 	require.NoError(t, err)
 	fn := findPlanFunctionExpr(filled, "abs")
@@ -1547,8 +1546,8 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	queryPlan = prepared.GetDcl().GetPrepare().Plan
 	require.Equal(t, []int32{0, 1}, PreparedPlanNumericFallbackParamPositions(queryPlan))
 	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
-		ParamValue{Value: "-9007199254740993", PrepareParamKind: types.StringConversionInteger},
-		ParamValue{Value: "0", PrepareParamKind: types.StringConversionInteger},
+		sqlIntParam(-9007199254740993),
+		sqlIntParam(0),
 	})
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(filled, "abs")
@@ -1560,8 +1559,8 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 		"prepare stmt_abs_multi_decimal from 'select abs(? + ?)'")
 	require.NoError(t, err)
 	filled, err = FillValuesOfParamsInPlan(ctx, prepared.GetDcl().GetPrepare().Plan, []any{
-		ParamValue{Value: "-9007199254740993", PrepareParamKind: types.StringConversionInteger},
-		ParamValue{Value: "0.5", PrepareParamKind: types.StringConversionDecimal},
+		sqlIntParam(-9007199254740993),
+		ParamValue{Value: "0.5", SourceType: decimalParamType("0.5"), HasSourceType: true},
 	})
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(filled, "abs")
@@ -1578,7 +1577,7 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 		prepared, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err)
 		filled, err = FillValuesOfParamsInPlan(ctx, prepared.GetDcl().GetPrepare().Plan, []any{
-			ParamValue{Value: "-9007199254740993", PrepareParamKind: types.StringConversionInteger},
+			sqlIntParam(-9007199254740993),
 		})
 		require.NoError(t, err)
 		fn = findPlanFunctionExpr(filled, "abs")
@@ -1627,7 +1626,7 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 		"explicit cast overload was lost: original=%d copied=%d",
 		fn.GetF().Args[0].GetF().GetFunc().GetObj(), copiedFn.GetF().Args[0].GetF().GetFunc().GetObj())
 	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
-		ParamValue{Value: "9007199254740993", PrepareParamKind: types.StringConversionInteger},
+		sqlIntParam(9007199254740993),
 	})
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(filled, "abs")
@@ -1641,8 +1640,8 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.NoError(t, err)
 	filled, err = FillValuesOfParamsInPlan(ctx, prepared.GetDcl().GetPrepare().Plan, []any{
 		ParamValue{
-			Value:            "12345678901234567890123456789012345.6789",
-			PrepareParamKind: types.StringConversionDecimal,
+			Value:      "12345678901234567890123456789012345.6789",
+			SourceType: decimalParamType("12345678901234567890123456789012345.6789"), HasSourceType: true,
 		},
 	})
 	require.NoError(t, err)
@@ -1662,7 +1661,7 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	queryPlan = prepared.GetDcl().GetPrepare().Plan
 	require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(queryPlan))
 	filled, err = FillValuesOfParamsInPlan(ctx, queryPlan, []any{
-		ParamValue{Value: "-9007199254740993", PrepareParamKind: types.StringConversionInteger},
+		sqlIntParam(-9007199254740993),
 	})
 	require.NoError(t, err)
 	fn = findPlanFunctionExpr(filled, "abs")
