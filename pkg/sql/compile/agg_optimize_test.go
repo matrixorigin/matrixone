@@ -15,11 +15,23 @@
 package compile
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -246,4 +258,85 @@ func TestScopeAggOptimizeWithSeparateAggregateKeepsInput(t *testing.T) {
 	require.NoError(t, s.aggOptimize(&Compile{}, nil, t.Context()))
 	require.Same(t, data, s.NodeInfo.Data)
 	require.False(t, s.StarCountOnly)
+}
+
+type starCountBlockedMetadataFS struct {
+	fileservice.FileService
+	entered chan<- context.Context
+}
+
+func (fs starCountBlockedMetadataFS) Read(ctx context.Context, _ *fileservice.IOVector) error {
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.Get.Add(1)
+		counter.FileService.S3ReadSize.Add(64)
+	})
+	fs.entered <- ctx
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestScopeSealedCountIOUsesScannerCancellationAndAccounting(t *testing.T) {
+	queryCtx, cancelQuery := context.WithCancel(t.Context())
+	defer cancelQuery()
+	topCtx := defines.AttachAccountId(queryCtx, 42)
+	stats := &statistic.StatsInfo{}
+	topCtx = statistic.ContextWithStatsInfo(topCtx, stats)
+	deadline, end := context.WithTimeout(t.Context(), 5*time.Second)
+	defer end()
+	child, stop := context.WithCancel(defines.AttachAccountId(deadline, 17))
+	defer stop()
+
+	c := NewMockCompile(t)
+	t.Cleanup(c.proc.Free)
+	s := &Scope{Proc: &process.Process{Ctx: child}}
+	scan := &table_scan.TableScan{}
+	entered := make(chan context.Context, 1)
+	result := make(chan error, 1)
+	done := make(chan struct{})
+	fs := starCountBlockedMetadataFS{entered: entered}
+	id := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&id)
+	loc := objectio.BuildLocation(name, objectio.NewExtent(0, 0, 64, 64), 1, 0)
+
+	go func() {
+		defer close(done)
+		result <- scan.MeasureReaderStartup(s.countSealedBlocksContext(c, topCtx), func(ctx context.Context, analyzer process.Analyzer) error {
+			_, err := process.MeasureFilesystemWait(analyzer, func() (objectio.ObjectMeta, error) {
+				return objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+			})
+			return err
+		})
+	}()
+	defer func() {
+		stop()
+		cancelQuery()
+		<-done
+	}()
+	select {
+	case readCtx := <-entered:
+		account, err := defines.GetAccountId(readCtx)
+		require.NoError(t, err)
+		require.Equal(t, uint32(42), account)
+		require.Same(t, stats, statistic.StatsInfoFromContext(readCtx))
+	case <-deadline.Done():
+		t.Fatal("metadata read did not start")
+	}
+	stop()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-deadline.Done():
+		t.Fatal("the scope cancellation did not wake the metadata read")
+	}
+	require.NoError(t, topCtx.Err())
+
+	snapshot := scan.OpAnalyzer.GetOpStats().ResourceDelta()
+	require.Positive(t, snapshot.Usage.WaitNS[resource.WaitFilesystem])
+	require.Equal(t, int64(1), scan.OpAnalyzer.GetOpStats().S3Get)
+	require.Equal(t, int64(64), scan.OpAnalyzer.GetOpStats().S3ReadSize)
+	require.NoError(t, scan.Prepare(c.proc))
+	t.Cleanup(func() { scan.Free(c.proc, false, nil) })
+	require.Equal(t, snapshot.Usage, scan.OpAnalyzer.GetOpStats().ResourceDelta().Usage)
+	require.NoError(t, scan.Prepare(c.proc))
+	require.Zero(t, scan.OpAnalyzer.GetOpStats().S3Get, "reader startup counters are consumed once")
 }

@@ -16,6 +16,7 @@ package table_scan
 
 import (
 	"bytes"
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,11 +45,33 @@ func (tableScan *TableScan) OpType() vm.OpType {
 	return vm.TableScan
 }
 
-func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
+func (tableScan *TableScan) resetAnalyzer() {
 	if tableScan.OpAnalyzer == nil {
 		tableScan.OpAnalyzer = process.NewAnalyzer(tableScan.GetIdx(), tableScan.IsFirst, tableScan.IsLast, "table_scan")
 	} else {
 		tableScan.OpAnalyzer.Reset()
+	}
+}
+
+// MeasureReaderStartup records reads that are part of this scan but must
+// finish before its reader and partial aggregate input can be constructed.
+func (tableScan *TableScan) MeasureReaderStartup(
+	ctx context.Context,
+	read func(context.Context, process.Analyzer) error,
+) error {
+	tableScan.resetAnalyzer()
+	tableScan.ctr.readerStartupMeasured = true
+	analyzer := tableScan.OpAnalyzer
+	analyzer.Start()
+	defer analyzer.Stop()
+	return read(perfcounter.WithCounterSet(ctx, analyzer.GetOpCounterSet()), analyzer)
+}
+
+func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
+	if tableScan.ctr.readerStartupMeasured {
+		tableScan.ctr.readerStartupMeasured = false
+	} else {
+		tableScan.resetAnalyzer()
 	}
 
 	if tableScan.TopValueMsgTag > 0 {

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -137,7 +138,8 @@ func TestCountSealedBlocksMatchesOrdinaryBlockRead(t *testing.T) {
 	appendable := objectio.BlockInfo{ObjectFlags: objectio.ObjectFlag_Appendable}
 	ranges.AppendBlockInfo(&appendable)
 
-	count, remaining, err := CountSealedBlocks(ctx, &txnTableDelegate{origin: tbl}, ranges, 0)
+	analyzer := process.NewAnalyzer(0, true, false, "test_scan")
+	count, remaining, err := CountSealedBlocks(ctx, &txnTableDelegate{origin: tbl}, ranges, 0, analyzer)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), count)
 	require.Zero(t, dataReads, "COUNT must not load ordinary columns")
@@ -162,22 +164,22 @@ func TestCountSealedBlocksMatchesOrdinaryBlockRead(t *testing.T) {
 	// A local workspace delete is visible. An offset past the end of the
 	// block must not contribute to its cardinality.
 	txn.deletedBlocks.addDeletedBlocks(tbl.tableId, &second.BlockID, []int64{1, 9})
-	count, _, err = CountSealedBlocks(ctx, tbl, ranges, 0)
+	count, _, err = CountSealedBlocks(ctx, tbl, ranges, 0, analyzer)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), count)
 	txn.deletedBlocks.addDeletedBlocks(tbl.tableId, &second.BlockID, []int64{0})
-	count, _, err = CountSealedBlocks(ctx, tbl, ranges, 0)
+	count, _, err = CountSealedBlocks(ctx, tbl, ranges, 0, analyzer)
 	require.NoError(t, err)
 	require.Zero(t, count)
 
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	_, remaining, err = CountSealedBlocks(cancelled, tbl, ranges, 0)
+	_, remaining, err = CountSealedBlocks(cancelled, tbl, ranges, 0, analyzer)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, remaining)
 
 	failTombstones = true
-	_, remaining, err = CountSealedBlocks(ctx, tbl, ranges, 0)
+	_, remaining, err = CountSealedBlocks(ctx, tbl, ranges, 0, analyzer)
 	require.ErrorIs(t, err, injected)
 	require.Nil(t, remaining)
 }
