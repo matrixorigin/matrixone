@@ -2158,8 +2158,14 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
 		}
+		remoteScalarCount := len(ss) == 1 && ss[0].HasPartialResults &&
+			isSingleStarCountNoFilterNoGroupBy(childNode) && !c.scopesRunOnCoordinator(ss)
 		ss = c.compileGroupWithoutShuffle(
 			node, ss, nodes, distinctRequiresSingleStage)
+		if remoteScalarCount {
+			// Final projection and statement output remain on the coordinator.
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_SAMPLE:

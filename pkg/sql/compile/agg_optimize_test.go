@@ -17,13 +17,21 @@ package compile
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -563,4 +571,126 @@ func TestScopeAggOptimizeDeclinesWholeNode(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScopeAggOptimizeWithSeparateAggregateKeepsInput(t *testing.T) {
+	data := readutil.NewBlockListRelationData(0)
+	data.AppendBlockInfo(&objectio.EmptyBlockInfo)
+	data.AppendBlockInfo(&objectio.BlockInfo{BlockID: types.Blockid{1}})
+	node := zmAggNode(nil, zmAggFuncExpr("starcount", zmAggConstExpr(), 0))
+	s := &Scope{
+		DataSource: &Source{node: node},
+		NodeInfo:   engine.Node{Mcpu: 1, Data: data},
+	}
+	// Any attempt to compute partials would call a method on the missing
+	// relation. A separated scan must simply preserve its original input.
+	require.NoError(t, s.aggOptimize(&Compile{}, nil, t.Context()))
+	require.Same(t, data, s.NodeInfo.Data)
+	require.False(t, s.StarCountOnly)
+}
+
+type starCountBlockedMetadataFS struct {
+	fileservice.FileService
+	entered chan<- context.Context
+}
+
+func (fs starCountBlockedMetadataFS) Read(ctx context.Context, _ *fileservice.IOVector) error {
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.Get.Add(1)
+		counter.FileService.S3ReadSize.Add(64)
+	})
+	wait := fileservice.ReadWaitTrackerFromContext(ctx)
+	start := wait.Start()
+	fs.entered <- ctx
+	<-ctx.Done()
+	wait.Stop(start)
+	return ctx.Err()
+}
+
+func TestScopeSealedCountIOUsesScannerCancellationAndAccounting(t *testing.T) {
+	queryCtx, cancelQuery := context.WithCancel(t.Context())
+	defer cancelQuery()
+	topCtx := defines.AttachAccountId(queryCtx, 42)
+	stats := &statistic.StatsInfo{}
+	topCtx = statistic.ContextWithStatsInfo(topCtx, stats)
+	deadline, end := context.WithTimeout(t.Context(), 5*time.Second)
+	defer end()
+	child, stop := context.WithCancel(defines.AttachAccountId(deadline, 17))
+	defer stop()
+
+	c := NewMockCompile(t)
+	t.Cleanup(c.proc.Free)
+	s := &Scope{Proc: &process.Process{Ctx: child}}
+	scan := &table_scan.TableScan{}
+	entered := make(chan context.Context, 1)
+	result := make(chan error, 1)
+	done := make(chan struct{})
+	fs := starCountBlockedMetadataFS{entered: entered}
+	id := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&id)
+	loc := objectio.BuildLocation(name, objectio.NewExtent(0, 0, 64, 64), 1, 0)
+
+	go func() {
+		defer close(done)
+		result <- scan.MeasureReaderStartup(s.countSealedBlocksContext(c, topCtx), func(ctx context.Context, analyzer process.Analyzer) error {
+			ctx, finish := process.WithFilesystemReadWait(ctx, analyzer)
+			defer finish()
+			_, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+			return err
+		})
+	}()
+	defer func() {
+		stop()
+		cancelQuery()
+		<-done
+	}()
+	select {
+	case readCtx := <-entered:
+		account, err := defines.GetAccountId(readCtx)
+		require.NoError(t, err)
+		require.Equal(t, uint32(42), account)
+		require.Same(t, stats, statistic.StatsInfoFromContext(readCtx))
+	case <-deadline.Done():
+		t.Fatal("metadata read did not start")
+	}
+	stop()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-deadline.Done():
+		t.Fatal("the scope cancellation did not wake the metadata read")
+	}
+	require.NoError(t, topCtx.Err())
+
+	owner := scan.OpAnalyzer.GetOpStats()
+	startup := owner.ResourceDelta()
+	require.Positive(t, startup.Usage.ExclusiveActiveNS)
+	require.Positive(t, startup.Usage.WaitNS[resource.WaitFilesystem])
+	require.Equal(t, uint64(1), startup.Usage.S3Requests[resource.S3Get])
+	require.Equal(t, uint64(64), startup.Usage.S3ReadBytes)
+	require.Zero(t, owner.CallNum)
+	require.Zero(t, owner.TimeConsumed)
+	require.Zero(t, owner.WaitTimeConsumed)
+	require.Zero(t, owner.S3Get)
+	require.NoError(t, scan.Prepare(c.proc))
+	t.Cleanup(func() { scan.Free(c.proc, false, nil) })
+	require.Equal(t, startup, owner.ResourceDelta())
+	require.Zero(t, owner.CallNum)
+
+	// The ordinary reader reports its own interval on the same owner.
+	owner.CallNum = 1
+	owner.TimeConsumed = 100
+	owner.WaitTimeConsumed = 200
+	owner.ResourceWaitNS[resource.WaitFilesystem] = 200
+	owner.S3Get = 2
+	owner.S3ReadSize = 128
+	combined := owner.ResourceDelta()
+	require.Equal(t, startup.Usage.ExclusiveActiveNS+100, combined.Usage.ExclusiveActiveNS)
+	require.Equal(t, startup.Usage.WaitNS[resource.WaitFilesystem]+200, combined.Usage.WaitNS[resource.WaitFilesystem])
+	require.Equal(t, uint64(3), combined.Usage.S3Requests[resource.S3Get])
+	require.Equal(t, uint64(192), combined.Usage.S3ReadBytes)
+	require.Equal(t, 1, owner.CallNum)
+
+	require.NoError(t, scan.Prepare(c.proc))
+	require.Empty(t, owner.ResourceDelta(), "reusing the scan must clear the startup interval")
 }
