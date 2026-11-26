@@ -2029,19 +2029,8 @@ func reconcilePickWindowDestinationInsert(
 				}
 			}
 		}
-		prior, _, err := probeDataBranchRows(ctx, ses, bh, missingKeys, tables, inheritedAt.ToTimestamp())
-		if err != nil {
-			return false, err
-		}
-		if prior.RowCount() != 0 {
-			if stop, err := emitBatch(emit, batchWithKind{
-				name: tables.baseRel.GetTableName(), kind: diffDelete, side: diffSideBase, batch: prior,
-				hasReplacement: true, fromUpdate: true,
-			}, false, tables.retPool); err != nil || stop {
-				return stop, err
-			}
-		} else {
-			tables.retPool.releaseRetBatch(prior, false)
+		if stop, err := emitPreviouslyPresentPickKeys(ctx, ses, bh, tables, missingKeys, inheritedAt, emit); err != nil || stop {
+			return stop, err
 		}
 	}
 	if matches == nil {
@@ -2174,6 +2163,65 @@ func reconcilePickWindowDestinationInsert(
 	}
 	matches = nil // emitBatch transfers or releases the batch.
 	return emitBatch(emit, wrapped, false, tables.retPool)
+}
+
+// A currently absent key that existed in a committed destination generation
+// is a deletion even if a later destination fork inherited that absence.
+func emitPreviouslyPresentPickKeys(
+	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
+	keys *vector.Vector, creation types.TS, emit emitFunc,
+) (bool, error) {
+	starts := append([]dataBranchPickWindowStart{
+		{tableID: tables.baseRel.GetTableID(ctx), snapshot: creation, identity: tables.resolvedLCAIdentity(ctx, ses)},
+	}, tables.zeroHistoryBaseStarts...)
+	for _, start := range starts {
+		rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{start.identity}, start.tableID, start.snapshot)
+		if err != nil {
+			return false, err
+		}
+		kind, names := dataBranchPrimaryKeyColumns(rel.GetTableDef(identityCtx(ctx, ident)))
+		if kind != tables.def.pkKind || len(names) != len(tables.def.pkColIdxes) {
+			return false, moerr.NewNotSupportedNoCtx("DATA BRANCH PICK cannot resolve the historical destination primary key")
+		}
+		probe := tables
+		probe.lcaRel, probe.lcaIdent, probe.lcaRelSnapshot = rel, &ident, start.snapshot
+		probe.lcaProbeTableId = 0
+		probe.def.lcaColNames = make([]string, len(probe.def.colNames))
+		probe.def.tarOnlyIdxes = nil
+		for i, idx := range probe.def.pkColIdxes {
+			probe.def.lcaColNames[idx] = names[i]
+		}
+		// Membership uses only the historical key. An ordinary column may
+		// have used the current key's name before a rename.
+		for idx, name := range probe.def.lcaColNames {
+			if name == "" && idx != probe.def.pkColIdx {
+				probe.def.tarOnlyIdxes = append(probe.def.tarOnlyIdxes, idx)
+			}
+		}
+		prior, missing, err := probeDataBranchRows(ctx, ses, bh, keys, probe, start.snapshot.ToTimestamp())
+		if err != nil {
+			return false, err
+		}
+		if prior.RowCount() != 0 {
+			if stop, err := emitBatch(emit, batchWithKind{
+				name: tables.baseRel.GetTableName(), kind: diffDelete, side: diffSideBase, batch: prior,
+				hasReplacement: true, fromUpdate: true,
+			}, false, tables.retPool); err != nil || stop {
+				return stop, err
+			}
+		} else {
+			tables.retPool.releaseRetBatch(prior, false)
+		}
+		if len(missing) == 0 {
+			break
+		}
+		if len(missing) != keys.Length() {
+			if err := keys.Shrink(missing, false, ses.proc.Mp()); err != nil {
+				return false, err
+			}
+		}
+	}
+	return false, nil
 }
 
 func hashDiffIfNoLCA(
@@ -3823,14 +3871,30 @@ func dataBranchSourceColToTargetIdx(
 	targetColNames []string,
 	targetOnlyIdxes []int,
 	excludeTargetOnly bool,
+	historical ...[]*plan2.ColDef,
 ) ([]int, error) {
 	if sourceDef == nil || targetDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing schema for historical data branch projection")
+	}
+	var sourceColumns map[*plan2.ColDef]int
+	if len(historical) != 0 {
+		sourceColumns = make(map[*plan2.ColDef]int, len(historical[0]))
+		for idx, col := range historical[0] {
+			if col != nil {
+				sourceColumns[col] = idx
+			}
+		}
 	}
 	if err := checkDataBranchPrimaryKeyCompatibilityWithResolver(
 		targetDef,
 		sourceDef,
 		func(targetCol *plan2.ColDef) *plan2.ColDef {
+			if sourceColumns != nil {
+				if idx := dataBranchColumnIndexByName(targetColNames, targetCol.Name); idx >= 0 {
+					return historical[0][idx]
+				}
+				return nil
+			}
 			return dataBranchEndpointColumnDef(sourceDef, targetCol)
 		},
 	); err != nil {
@@ -3874,10 +3938,18 @@ func dataBranchSourceColToTargetIdx(
 		if col.Name == catalog.Row_ID {
 			continue
 		}
-		targetCol := dataBranchEndpointColumnDef(targetDef, col)
+		var targetCol *plan2.ColDef
 		targetIdx := -1
-		if targetCol != nil {
-			targetIdx = dataBranchColumnIndexByName(targetColNames, targetCol.Name)
+		if sourceColumns != nil {
+			if idx, ok := sourceColumns[col]; ok {
+				targetIdx = idx
+				targetCol = dataBranchColumnDefByName(targetDef, targetColNames[idx])
+			}
+		} else {
+			targetCol = dataBranchEndpointColumnDef(targetDef, col)
+			if targetCol != nil {
+				targetIdx = dataBranchColumnIndexByName(targetColNames, targetCol.Name)
+			}
 		}
 		_, isTargetOnly := targetOnly[targetIdx]
 		if excludeTargetOnly && isTargetOnly {

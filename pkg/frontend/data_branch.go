@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1480,6 +1481,7 @@ func reconcileDataBranchEndpointSchema(
 			if err != nil {
 				return err
 			}
+			tables.pickSourceDefs, tables.pickSourceEdges = tarDefs, tarEdges
 		}
 		renameProof := make(dataBranchRenameProof)
 		endpointColumns, err := dataBranchLineageEndpointColumns(tarDefs, tarEdges, baseDefs, baseEdges, renameProof)
@@ -2343,6 +2345,7 @@ func constructChangeHandle(
 	); err != nil {
 		return
 	}
+	tables.zeroHistoryBaseStarts = baseRange.zeroHistoryStarts
 	tarSnapshot, baseSnapshot := tables.resolvedSnapshots(ses)
 	tarRelSp, baseRelSp := tables.resolvedRelSnapshots(ses)
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
@@ -2362,6 +2365,7 @@ func constructChangeHandle(
 		j := 0
 		lastDropped := -1
 		boundaries := make([]engine.Relation, 0, len(tarRange.rel))
+		var forkBefore []*dataBranchPickWindowStart
 		for i := range tarRange.rel {
 			if tarRange.end[i].LT(&bFrom) {
 				lastDropped = i
@@ -2403,6 +2407,9 @@ func constructChangeHandle(
 							identity: ident,
 						}
 					}
+					if i < len(tarRange.forkBefore) && tarRange.forkBefore[i] != nil {
+						tables.pickWindowStart = tarRange.forkBefore[i]
+					}
 				}
 				tarRange.from[j] = f
 				tarRange.end[j] = e
@@ -2414,6 +2421,9 @@ func constructChangeHandle(
 					tarRange.idents[j] = tarRange.idents[i]
 				}
 				boundaries = append(boundaries, startBoundary)
+				if tarRange.forkBefore != nil {
+					forkBefore = append(forkBefore, tarRange.forkBefore[i])
+				}
 				j++
 			}
 		}
@@ -2427,6 +2437,19 @@ func constructChangeHandle(
 			tarRange.idents = tarRange.idents[:j]
 		}
 		tarRange.startBoundaryRel = boundaries
+		tarRange.forkBefore = forkBefore
+		for i, before := range forkBefore {
+			if before == nil {
+				continue
+			}
+			ident := tarRange.segmentIdentity(i, tarIdent)
+			tarRange.rel[i], tarRange.idents[i], err = reopenDataBranchNodeByID(
+				ctx, ses, bh, []branchIdentity{ident}, tarRange.rel[i].GetTableID(ctx), tarRange.from[i],
+			)
+			if err != nil {
+				return
+			}
+		}
 	}
 	tarHydrationRel := tables.tarRel
 	tarHydrationSnapshot := tarSnapshot
@@ -2443,6 +2466,10 @@ func constructChangeHandle(
 		tarHydrationIdent = tarRange.segmentIdentity(last, tarIdent)
 	}
 	targetDef := tables.tarRel.GetTableDef(ctx)
+	var renameProof dataBranchRenameProof
+	if tables.boundedPick && tables.lcaHasZeroHistory {
+		renameProof = make(dataBranchRenameProof)
+	}
 	ctx = engine.WithVisibleStateRecoveryResources(
 		ctx,
 		&dataBranchVisibleStateRecoveryResources{allocator: tables.hashmapAllocator},
@@ -2465,27 +2492,40 @@ func constructChangeHandle(
 
 	for i := range tarRange.rel {
 		collectStart := time.Now()
+		tarSegIdent := tarRange.segmentIdentity(i, tarIdent)
+		segDef := tarRange.rel[i].GetTableDef(identityCtx(ctx, tarSegIdent))
 		var (
 			sourceMapping   []int
 			needsProjection bool
 		)
-		if tarRange.rel[i].GetTableID(ctx) != tables.tarRel.GetTableID(ctx) {
-			if sourceMapping, err = dataBranchSourceColToTargetIdx(
-				tarRange.rel[i].GetTableDef(ctx), targetDef, tables.def.colNames,
-				tables.def.tarOnlyIdxes, false,
-			); err != nil {
+		if segDef.TblId != targetDef.TblId || renameProof != nil && segDef.Version != targetDef.Version {
+			if renameProof != nil {
+				var cols []*plan.ColDef
+				cols, err = zeroHistoryPickSourceColumns(*tables, segDef, targetDef, renameProof)
+				if err != nil {
+					return
+				}
+				sourceMapping, err = dataBranchSourceColToTargetIdx(segDef, targetDef,
+					tables.def.colNames, tables.def.tarOnlyIdxes, false, cols)
+			} else {
+				sourceMapping, err = dataBranchSourceColToTargetIdx(segDef, targetDef,
+					tables.def.colNames, tables.def.tarOnlyIdxes, false)
+			}
+			if err != nil {
 				return
 			}
 			needsProjection = dataBranchNeedsHistoricalProjection(
 				sourceMapping, len(tables.def.colNames),
 			)
 		}
-		tarSegIdent := tarRange.segmentIdentity(i, tarIdent)
 		collectCtx := identityCtx(ctx, tarSegIdent)
 		if startBoundary := tarRange.startBoundary(i); startBoundary != nil {
 			collectCtx = engine.WithVisibleStateStartRelation(
 				collectCtx, startBoundary,
 			)
+		}
+		if i < len(tarRange.forkBefore) && tarRange.forkBefore[i] != nil {
+			collectCtx = engine.WithCollectChangesVisibleDiff(collectCtx)
 		}
 		if handle, err = collectFn(
 			collectCtx,
@@ -2588,6 +2628,33 @@ func constructChangeHandle(
 	}
 
 	return
+}
+
+// Align a retained source segment using the same creation and fork schemas
+// that established the endpoint column identities.
+func zeroHistoryPickSourceColumns(
+	tables tableStuff, segment, endpoint *plan.TableDef, proof dataBranchRenameProof,
+) ([]*plan.ColDef, error) {
+	first := slices.IndexFunc(tables.pickSourceDefs, func(def *plan.TableDef) bool {
+		return def.TblId == segment.TblId && def.Version >= segment.Version
+	})
+	if first < 0 {
+		return nil, moerr.NewInternalErrorNoCtxf("DATA BRANCH PICK has no source schema path for table %d", segment.TblId)
+	}
+	defs := append([]*plan.TableDef{segment}, tables.pickSourceDefs[first:]...)
+	edges := append([]bool{false}, tables.pickSourceEdges[first:]...)
+	cols := make([]*plan.ColDef, len(tables.def.colNames))
+	for idx, name := range tables.def.colNames {
+		col := dataBranchColumnDefByName(endpoint, name)
+		if col != nil && col.Name == catalog.CPrimaryKeyColName {
+			cols[idx] = dataBranchColumnDefByName(segment, col.Name)
+			continue
+		}
+		if ok, ancestor, redefined := dataBranchColumnReachesLCA(defs, edges, col, proof); ok && !redefined {
+			cols[idx] = ancestor
+		}
+	}
+	return cols, nil
 }
 
 func dataBranchPathTableDefs(
@@ -3073,14 +3140,14 @@ func decideCollectRange(
 		if tarCollectRange, _, err = buildSideCollectRange(
 			ctx, ses, bh, tables, dedupeBranchIdentities(tarIdent, baseIdent), tarSp, tarCTS,
 			dagInfo.pathFromLCAToTar, dagInfo.pathFromLCAToTarTS,
-			nil, nil, types.TS{}, true,
+			nil, nil, nil, types.TS{}, true,
 		); err != nil {
 			return
 		}
 		if baseCollectRange, _, err = buildSideCollectRange(
 			ctx, ses, bh, tables, dedupeBranchIdentities(baseIdent, tarIdent), baseSp, baseCTS,
 			dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS,
-			nil, nil, types.TS{}, true,
+			nil, nil, nil, types.TS{}, true,
 		); err != nil {
 			return
 		}
@@ -3197,13 +3264,13 @@ func decideCollectRange(
 	var tarHasZeroHistory, baseHasZeroHistory bool
 	if tarCollectRange, tarHasZeroHistory, err = buildSideCollectRange(
 		ctx, ses, bh, tables, dedupeBranchIdentities(tarIdent, baseIdent), tarSp, tarCTS,
-		tarPath, tarPathTS, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, baseSp, false,
+		tarPath, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, baseSp, false,
 	); err != nil {
 		return
 	}
 	if baseCollectRange, baseHasZeroHistory, err = buildSideCollectRange(
 		ctx, ses, bh, tables, dedupeBranchIdentities(baseIdent, tarIdent), baseSp, baseCTS,
-		basePath, basePathTS, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, tarSp, false,
+		basePath, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, tarSp, false,
 	); err != nil {
 		return
 	}
@@ -3224,11 +3291,12 @@ func decideCollectRange(
 			}
 		}
 		baseCollectRange = collectRange{
-			from:        []types.TS{types.MinTs()},
-			end:         []types.TS{baseSp},
-			rel:         []engine.Relation{tables.baseRel},
-			relSnapshot: []types.TS{baseRelSp},
-			idents:      []branchIdentity{baseIdent},
+			from:              []types.TS{types.MinTs()},
+			end:               []types.TS{baseSp},
+			rel:               []engine.Relation{tables.baseRel},
+			relSnapshot:       []types.TS{baseRelSp},
+			idents:            []branchIdentity{baseIdent},
+			zeroHistoryStarts: baseCollectRange.zeroHistoryStarts,
 		}
 		logutil.Info("DataBranch-CollectRange-Fallback-WholeHistory",
 			zap.Bool("target-zero-history", tarHasZeroHistory),
@@ -3295,6 +3363,7 @@ func buildSideCollectRange(
 	endpointCTS types.TS,
 	selfPath []uint64,
 	selfPathTS []types.TS,
+	selfPathLineageOnly []bool,
 	otherPathTS []types.TS,
 	otherPathLineageOnly []bool,
 	otherSP types.TS,
@@ -3305,6 +3374,21 @@ func buildSideCollectRange(
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
 	tarRelSp, baseRelSp := tables.resolvedRelSnapshots(ses)
 	var previousRel engine.Relation
+	var previousPoint dataBranchPickWindowStart
+	appendSegment := func(rel engine.Relation, openedAt, from, to types.TS, ident branchIdentity, before *dataBranchPickWindowStart) {
+		cr.rel = append(cr.rel, rel)
+		cr.relSnapshot = append(cr.relSnapshot, openedAt)
+		cr.from = append(cr.from, from)
+		cr.end = append(cr.end, to)
+		cr.idents = append(cr.idents, ident)
+		cr.startBoundaryRel = append(cr.startBoundaryRel, previousRel)
+		if before != nil && cr.forkBefore == nil {
+			cr.forkBefore = make([]*dataBranchPickWindowStart, len(cr.rel)-1, len(selfPath)+1)
+		}
+		if cr.forkBefore != nil {
+			cr.forkBefore = append(cr.forkBefore, before)
+		}
+	}
 	for i, nodeID := range selfPath {
 		var (
 			rel             engine.Relation
@@ -3392,6 +3476,12 @@ func buildSideCollectRange(
 		}
 
 		// Window lower bound.
+		if tables.boundedPick && tables.lcaHasZeroHistory && hasZeroHistory &&
+			nodeID != endpointID && nodeCTS.LE(&windowEnd) {
+			cr.zeroHistoryStarts = append(cr.zeroHistoryStarts, dataBranchPickWindowStart{
+				tableID: nodeID, snapshot: nodeCTS, identity: segIdent,
+			})
+		}
 		if wholeHistory && i == 0 {
 			windowFrom = types.MinTs()
 		} else if hasZeroHistory && len(cr.rel) == 0 {
@@ -3415,17 +3505,19 @@ func buildSideCollectRange(
 			}
 		}
 
-		if windowFrom.GT(&windowEnd) {
-			previousRel = rel
-			continue
+		if hasZeroHistory && previousRel != nil && endpointID == tables.tarRel.GetTableID(ctx) &&
+			i < len(selfPathLineageOnly) && !selfPathLineageOnly[i] &&
+			previousPoint.snapshot.EQ(&selfPathTS[i]) && nodeCTS.LE(&windowEnd) {
+			// The parent's fork image excludes inherited rows from the
+			// child creation commit while preserving its own writes.
+			before := previousPoint
+			appendSegment(rel, nodeCTS, nodeCTS, nodeCTS, segIdent, &before)
 		}
-		cr.rel = append(cr.rel, rel)
-		cr.relSnapshot = append(cr.relSnapshot, relationSnapshot)
-		cr.from = append(cr.from, windowFrom)
-		cr.end = append(cr.end, windowEnd)
-		cr.idents = append(cr.idents, segIdent)
-		cr.startBoundaryRel = append(cr.startBoundaryRel, previousRel)
+		if windowFrom.LE(&windowEnd) {
+			appendSegment(rel, relationSnapshot, windowFrom, windowEnd, segIdent, nil)
+		}
 		previousRel = rel
+		previousPoint = dataBranchPickWindowStart{tableID: nodeID, snapshot: relationSnapshot, identity: segIdent}
 	}
 	return
 }

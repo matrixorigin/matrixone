@@ -81,11 +81,13 @@ const (
 )
 
 type collectRange struct {
-	from             []types.TS
-	end              []types.TS
-	rel              []engine.Relation
-	relSnapshot      []types.TS // The snapshot at which each relation was opened.
-	startBoundaryRel []engine.Relation
+	from              []types.TS
+	end               []types.TS
+	rel               []engine.Relation
+	relSnapshot       []types.TS // The snapshot at which each relation was opened.
+	startBoundaryRel  []engine.Relation
+	forkBefore        []*dataBranchPickWindowStart
+	zeroHistoryStarts []dataBranchPickWindowStart
 	// idents carries the physical identity each segment was opened under
 	// (design §6): the walking side's endpoint identity for the endpoint
 	// segment and the winning candidate identity for reopened lineage
@@ -269,11 +271,12 @@ type tableStuff struct {
 	tarOperand  *branchOperand
 	baseOperand *branchOperand
 
-	lcaRel            engine.Relation
-	lcaRelSnapshot    types.TS // snapshot at which lcaRel was opened
-	lcaProbeTableId   uint64   // nonzero when the probe uses a different generation from lcaRel
-	lcaCTS            types.TS
-	lcaHasZeroHistory bool
+	lcaRel                engine.Relation
+	lcaRelSnapshot        types.TS // snapshot at which lcaRel was opened
+	lcaProbeTableId       uint64   // nonzero when the probe uses a different generation from lcaRel
+	lcaCTS                types.TS
+	lcaHasZeroHistory     bool
+	zeroHistoryBaseStarts []dataBranchPickWindowStart
 	// lcaIdent is the winning owner identity lcaRel was reopened under
 	// (design §6.4). Nil when the LCA is an endpoint of a legacy
 	// local-local diff; identity accessors fall back to the session.
@@ -283,6 +286,8 @@ type tableStuff struct {
 	// boundary. Resolve source updates against that window's before image.
 	boundedPick     bool
 	pickWindowStart *dataBranchPickWindowStart
+	pickSourceDefs  []*plan.TableDef
+	pickSourceEdges []bool
 
 	def struct {
 		colNames      []string     // all columns

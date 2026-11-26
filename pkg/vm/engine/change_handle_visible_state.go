@@ -44,6 +44,21 @@ type VisibleStateRecoveryResources interface {
 }
 
 type visibleStateStartRelationKey struct{}
+type collectChangesVisibleDiffKey struct{}
+
+// WithCollectChangesVisibleDiff asks CollectChanges to compare the protected
+// start relation and the end snapshot, without replaying materialization.
+func WithCollectChangesVisibleDiff(ctx context.Context) context.Context {
+	return context.WithValue(ctx, collectChangesVisibleDiffKey{}, true)
+}
+
+func CollectChangesVisibleDiffFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	forced, _ := ctx.Value(collectChangesVisibleDiffKey{}).(bool)
+	return forced
+}
 
 // WithVisibleStateStartRelation supplies the protected lineage boundary that
 // precedes a CollectChanges range. Data Branch uses the parent relation at a
