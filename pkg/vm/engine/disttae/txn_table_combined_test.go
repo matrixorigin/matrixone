@@ -2270,6 +2270,10 @@ func (m *mockRelation) CollectObjectList(ctx context.Context, from, to types.TS,
 	return nil
 }
 
+func (m *mockRelation) VisibleObjectCount(ctx context.Context) (int, error) {
+	return 0, nil
+}
+
 func (m *mockRelation) ApproxObjectsNum(ctx context.Context) int {
 	if m.approxObjectsNumFunc != nil {
 		return m.approxObjectsNumFunc(ctx)
