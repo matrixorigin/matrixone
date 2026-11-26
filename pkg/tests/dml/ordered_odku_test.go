@@ -453,8 +453,16 @@ func TestODKUSystematicSQL(t *testing.T) {
 		t.Run("constraint priority interleaves local and snapshot", func(t *testing.T) {
 			exec(t, "create table priority "+schema)
 			exec(t, "insert into priority values (9,90,900,0)")
-			exec(t, "insert into priority values (1,10,100,1),(2,10,900,2) on duplicate key update payload=values(payload)")
-			require.Equal(t, []string{"1|10|100|2", "9|90|900|0"}, rows(t, "select * from priority order by id"))
+			result, e := conn.ExecContext(ctx, "insert into priority values (1,10,100,1),(2,10,900,2),(3,30,300,3),(4,90,400,4),(5,50,500,5),(6,60,500,6) on duplicate key update payload=values(payload)")
+			require.NoError(t, e)
+			affected, e := result.RowsAffected()
+			require.NoError(t, e)
+			require.Equal(t, int64(9), affected)
+			want := []string{"1|10|100|2", "3|30|300|3", "5|50|500|6", "9|90|900|4"}
+			require.Equal(t, want, rows(t, "select * from priority order by id"))
+			_, e = conn.ExecContext(ctx, "insert into priority values (10,100,1000,7),(11,110,1100,null) on duplicate key update payload=values(payload)")
+			require.ErrorContains(t, e, "cannot be null")
+			require.Equal(t, want, rows(t, "select * from priority order by id"))
 		})
 		t.Run("update does not publish unused incoming keys", func(t *testing.T) {
 			exec(t, "create table unused "+schema)

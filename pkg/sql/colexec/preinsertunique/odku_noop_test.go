@@ -75,6 +75,22 @@ func noopNotNull(t *testing.T, p *process.Process, column int32, typ plan.Type) 
 	}}}
 }
 
+func TestODKUDirectNoopAfterInsertRun(t *testing.T) {
+	arg, proc, child, _ := odkuActionFixture(t, 16<<20)
+	directNoopUpdate(arg.PreInsertCtx.OdkuActions)
+	child.WithBatchs([]*batch.Batch{odkuActionInput(t, proc, [][9]int64{
+		{1, 10, 5, 1},
+		{99, 20, 5, 2, 0, 7, 7, 20, 5},
+	})})
+	require.NoError(t, arg.Prepare(proc))
+	require.GreaterOrEqual(t, arg.ctr.actions.noopOrdinal, int32(0))
+	out, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, out.Batch)
+	require.Equal(t, 1, out.Batch.RowCount())
+	require.Equal(t, 1, arg.ctr.actionRows.images.RowCount(), "the unchanged owner's image stays in the snapshot")
+}
+
 func TestODKUDirectNoopMatchesNormalActions(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -218,7 +234,7 @@ func stageDirectNoop(t *testing.T, fresh bool, configure ...func(*plan.OdkuActio
 		a.keys.Vecs[i] = source.Vecs[key.InputKey.GetCol().ColPos]
 	}
 	require.NoError(t, arg.initODKUActionRows(proc, a.incoming, a.keys, a.old, c.RowIdColumn, odkuMutableColumns(c)))
-	require.NoError(t, arg.prepareODKUTarget(proc))
+	require.NoError(t, arg.prepareODKUTarget(proc, nil))
 	if !fresh {
 		// Construct an existing owner through the ordinary action path;
 		// the direct proof can leave an unchanged snapshot unregistered.
@@ -228,7 +244,7 @@ func stageDirectNoop(t *testing.T, fresh bool, configure ...func(*plan.OdkuActio
 		a.noopOrdinal = ordinal
 		a.sourceRow = 1
 		a.targetReady = false
-		require.NoError(t, arg.prepareODKUTarget(proc))
+		require.NoError(t, arg.prepareODKUTarget(proc, nil))
 	}
 	return arg, proc, account
 }

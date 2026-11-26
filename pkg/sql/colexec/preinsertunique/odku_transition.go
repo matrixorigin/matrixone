@@ -31,6 +31,7 @@ import (
 type odkuKeyChange struct {
 	old, next       *vector.Vector
 	oldRow, nextRow int
+	knownMiss       bool // The same eligible input key missed during target resolution.
 	nextOwned       bool // Scratch from this call's validation phase only.
 }
 
@@ -74,7 +75,7 @@ func (preInsertUnique *PreInsertUnique) transitionODKUKeys(proc *process.Process
 				return -1, 0, moerr.NewInternalError(proc.Ctx, "ODKU transition old key owner mismatch")
 			}
 		}
-		if change.next.IsNull(uint64(change.nextRow)) {
+		if change.knownMiss || change.next.IsNull(uint64(change.nextRow)) {
 			continue
 		}
 		current, found, e := preInsertUnique.lookupODKUKeyVector(proc, slot, change.next, change.nextRow)

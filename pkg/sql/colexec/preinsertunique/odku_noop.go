@@ -117,7 +117,7 @@ func (preInsertUnique *PreInsertUnique) tryDirectNoop(proc *process.Process, own
 		return true, err
 	}
 	if !fresh {
-		if err := rows.copyInto(proc, rows.images, a.incoming, 0, int(owner), false, rows.deadImageArea, []int32{a.noopOrdinal}, preInsertUnique); err != nil {
+		if err := rows.copyInto(proc, rows.images, a.incoming, int(owner), false, rows.deadImageArea, []int32{a.noopOrdinal}, preInsertUnique); err != nil {
 			return true, err
 		}
 	}

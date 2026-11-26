@@ -399,7 +399,7 @@ func (preInsertUnique *PreInsertUnique) registerODKUOriginal(proc *process.Proce
 // Keep the most recent image pending until it is superseded or emitted as a
 // final row. Only superseded images need transient FK validation; final images
 // must reach the existing parent-lock/retry path before a missing-parent error.
-func (preInsertUnique *PreInsertUnique) prepareODKUTarget(proc *process.Process) error {
+func (preInsertUnique *PreInsertUnique) prepareODKUTarget(proc *process.Process, beforeExisting func() error) error {
 	a, c := preInsertUnique.ctr.actions, preInsertUnique.PreInsertCtx.OdkuActions
 	ordinal := a.source.Vecs[c.SourceOrdinal.GetCol().ColPos]
 	ord := vector.GetFixedAtNoTypeCheck[int64](ordinal, a.sourceRow)
@@ -435,6 +435,11 @@ func (preInsertUnique *PreInsertUnique) prepareODKUTarget(proc *process.Process)
 		}
 		hasOriginal := !a.source.Vecs[key.PriorTarget.GetCol().ColPos].IsNull(uint64(a.sourceRow))
 		if (found || hasOriginal) && a.directInsert {
+			if beforeExisting != nil {
+				if err := beforeExisting(); err != nil {
+					return err
+				}
+			}
 			if err := preInsertUnique.copyODKURow(proc, a.incoming, a.source, a.sourceRow, c.SourceColumns); err != nil {
 				return err
 			}
@@ -470,9 +475,6 @@ func (preInsertUnique *PreInsertUnique) prepareODKUTarget(proc *process.Process)
 func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) error {
 	a, c := preInsertUnique.ctr.actions, preInsertUnique.PreInsertCtx.OdkuActions
 	owner := a.target
-	if owner < 0 && a.directInsert {
-		return preInsertUnique.insertODKUSourceRow(proc)
-	}
 	freshOriginal := a.staticKeys && owner >= 0 && owner == int64(preInsertUnique.ctr.actionRows.images.RowCount())
 	for i, p := range c.InputColumns {
 		a.inputImage.Vecs[i] = a.nullImage.Vecs[i]
@@ -622,7 +624,8 @@ func (preInsertUnique *PreInsertUnique) checkODKUInsertSnapshot(proc *process.Pr
 	a, c := preInsertUnique.ctr.actions, preInsertUnique.PreInsertCtx.OdkuActions
 	if c.PriorData == nil {
 		for slot, key := range c.Constraints {
-			if !a.source.Vecs[key.PriorTarget.GetCol().ColPos].IsNull(uint64(a.sourceRow)) {
+			// Target arbitration already checked eligible snapshot keys for this insert.
+			if !key.TargetEligible && !a.source.Vecs[key.PriorTarget.GetCol().ColPos].IsNull(uint64(a.sourceRow)) {
 				return preInsertUnique.odkuDuplicate(proc, slot, a.source.Vecs[key.InputKey.GetCol().ColPos], a.sourceRow)
 			}
 		}
@@ -630,40 +633,103 @@ func (preInsertUnique *PreInsertUnique) checkODKUInsertSnapshot(proc *process.Pr
 	return nil
 }
 
-// Static INSERT actions have no executor or FK obligation that needs a
-// one-row image. Borrow the current source until the sole owner retains it.
-func (preInsertUnique *PreInsertUnique) insertODKUSourceRow(proc *process.Process) error {
+// Retain a contiguous run of validated inserts in the existing owner. Native
+// keys are claimed in source order. Flush the images before any later action
+// can consume an owner, or before the input batch becomes invalid.
+func (preInsertUnique *PreInsertUnique) insertODKUSourceRun(proc *process.Process) error {
 	a, c := preInsertUnique.ctr.actions, preInsertUnique.PreInsertCtx.OdkuActions
-	for i, column := range c.SourceColumns {
-		a.proposed.Vecs[i] = a.source.Vecs[column.GetCol().ColPos]
-	}
-	defer func() {
+	rows := preInsertUnique.ctr.actionRows
+	start, owner := a.sourceRow, rows.images.RowCount()
+	count := a.source.RowCount()
+	completed := false
+	resetInput := func() {
 		clear(a.proposed.Vecs)
 		clear(a.keys.Vecs)
 		a.proposed.SetRowCount(1)
 		a.keys.SetRowCount(1)
-	}()
-	if err := odkueval.EvaluateDirectNotNullChecksAt(a.insertChecks, a.proposed, c.InputColumns, a.sourceRow, proc); err != nil {
-		return err
 	}
-	if err := preInsertUnique.checkODKUInsertSnapshot(proc); err != nil {
-		return err
+	defer func() {
+		clear(rows.changes)
+		if !completed {
+			resetInput()
+			preInsertUnique.ctr.failed = true
+		}
+	}()
+	for i, column := range c.SourceColumns {
+		a.proposed.Vecs[i] = a.source.Vecs[column.GetCol().ColPos]
 	}
 	for i, key := range c.Constraints {
-		a.keys.Vecs[i] = a.proposed.Vecs[c.InputColumns[key.CurrentKey.GetCol().ColPos]]
+		v := a.proposed.Vecs[c.InputColumns[key.CurrentKey.GetCol().ColPos]]
+		a.keys.Vecs[i] = v
+		rows.changes[i] = odkuKeyChange{
+			next: v, knownMiss: key.TargetEligible && v == a.source.Vecs[key.InputKey.GetCol().ColPos],
+		}
 	}
-	rows := a.source.RowCount()
-	a.proposed.SetRowCount(rows)
-	a.keys.SetRowCount(rows)
-	owner := int64(preInsertUnique.ctr.actionRows.images.RowCount())
-	conflict, _, err := preInsertUnique.publishODKUActionAt(proc, owner, a.proposed, a.keys, nil, a.sourceRow, rows)
-	if err != nil {
+	a.proposed.SetRowCount(count)
+	a.keys.SetRowCount(count)
+	if err := validateODKUActionRow(proc, rows.images, a.proposed, count); err != nil {
 		return err
 	}
-	if conflict >= 0 {
-		return preInsertUnique.odkuDuplicate(proc, conflict, a.keys.Vecs[conflict], a.sourceRow)
+	if err := preInsertUnique.validateODKUActionKeys(proc, a.keys, count); err != nil {
+		return err
 	}
-	return preInsertUnique.finishODKUAction(proc, 1)
+	flush := func() error {
+		if err := context.Cause(proc.Ctx); err != nil {
+			return err
+		}
+		n := a.sourceRow - start
+		for i, dst := range rows.images.Vecs {
+			if err := dst.UnionBatch(a.proposed.Vecs[i], int64(start), n, nil, proc.Mp()); err != nil {
+				return err
+			}
+		}
+		for i, dst := range rows.origins.Vecs {
+			if err := dst.UnionMulti(a.nullImage.Vecs[i], 0, n, proc.Mp()); err != nil {
+				return err
+			}
+		}
+		rows.images.AddRowCount(n)
+		rows.origins.AddRowCount(n)
+		resetInput() // Original registration reuses the one-row scratch.
+		return nil
+	}
+	for {
+		if err := odkueval.EvaluateDirectNotNullChecksAt(a.insertChecks, a.proposed, c.InputColumns, a.sourceRow, proc); err != nil {
+			return err
+		}
+		if err := preInsertUnique.checkODKUInsertSnapshot(proc); err != nil {
+			return err
+		}
+		for i := range rows.changes {
+			rows.changes[i].nextRow = a.sourceRow
+		}
+		slot, _, err := preInsertUnique.transitionODKUKeys(proc, int64(owner+a.sourceRow-start), rows.changes)
+		if err != nil {
+			return err
+		}
+		if slot >= 0 {
+			return preInsertUnique.odkuDuplicate(proc, slot, a.keys.Vecs[slot], a.sourceRow)
+		}
+		if err := preInsertUnique.finishODKUAction(proc, 1); err != nil {
+			return err
+		}
+		a.sourceRow++
+		a.targetReady = false
+		if a.sourceRow == count {
+			if err = flush(); err != nil {
+				return err
+			}
+			break
+		}
+		if err = preInsertUnique.prepareODKUTarget(proc, flush); err != nil {
+			return err
+		}
+		if a.target >= 0 {
+			break
+		}
+	}
+	completed = true
+	return nil
 }
 
 func (preInsertUnique *PreInsertUnique) finishODKUAction(proc *process.Process, weight uint64) error {
@@ -846,13 +912,19 @@ func (preInsertUnique *PreInsertUnique) callODKUActions(proc *process.Process) (
 				}
 			}
 			if !a.targetReady {
-				if err := preInsertUnique.prepareODKUTarget(proc); err != nil {
+				if err := preInsertUnique.prepareODKUTarget(proc, nil); err != nil {
 					return vm.CancelResult, err
 				}
 				if !preInsertUnique.ctr.buf.IsEmpty() && (preInsertUnique.ctr.buf.RowCount() >= colexec.DefaultBatchSize || preInsertUnique.ctr.buf.Size() >= 1<<20) {
 					result.Batch = preInsertUnique.ctr.buf
 					return result, nil
 				}
+			}
+			if a.directInsert && a.target < 0 {
+				if err := preInsertUnique.insertODKUSourceRun(proc); err != nil {
+					return vm.CancelResult, err
+				}
+				continue
 			}
 			if err := preInsertUnique.applyODKUAction(proc); err != nil {
 				return vm.CancelResult, err

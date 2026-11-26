@@ -223,6 +223,38 @@ func TestODKUActionsCheckFailureThenReset(t *testing.T) {
 	}
 }
 
+func TestODKUInsertRunAdmissionFailureAfterKeyClaims(t *testing.T) {
+	a, proc, child, account := odkuActionFixture(t, 256<<10)
+	c := a.PreInsertCtx.OdkuActions
+	varchar := types.T_varchar.ToType()
+	textType := plan.Type{Id: int32(varchar.Oid), Width: varchar.Width, Scale: varchar.Scale}
+	c.SourceColumns[2].Typ, c.OldColumns[2].Typ = textType, textType
+	c.UpdateExprs[0] = &plan.Expr{Typ: textType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}}}
+	input := odkuActionInput(t, proc, [][9]int64{{1, 10, 0, 1}, {2, 20, 0, 2}})
+	input.Vecs[2].Free(proc.Mp())
+	input.Vecs[2] = vector.NewVec(varchar)
+	input.Vecs[8].Free(proc.Mp())
+	input.Vecs[8] = vector.NewConstNull(varchar, 2, proc.Mp())
+	for range 2 {
+		require.NoError(t, vector.AppendBytes(input.Vecs[2], make([]byte, 256<<10), false, proc.Mp()))
+	}
+	child.WithBatchs([]*batch.Batch{input})
+	a.PublishAffectedRows = func(uint64) error { t.Fatal("failed attempt published a row count"); return nil }
+	require.NoError(t, a.Prepare(proc))
+	require.True(t, a.ctr.actions.directInsert)
+	out, err := a.Call(proc)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), "%v", err)
+	require.Nil(t, out.Batch)
+	for i := range c.Constraints {
+		require.Equal(t, uint64(2), a.ctr.acceptedKeys[i].index.GroupCount())
+	}
+	require.Zero(t, a.ctr.actionRows.images.RowCount())
+	_, err = a.Call(proc)
+	require.ErrorContains(t, err, "require Reset")
+	a.Reset(proc, true, err)
+	require.Zero(t, account.Snapshot().Used)
+}
+
 func TestODKUActionsFailureAndCleanup(t *testing.T) {
 	for _, name := range []string{"ordinal", "key type", "short old vector", "canceled", "budget-1", "budget-4096"} {
 		t.Run(name, func(t *testing.T) {
