@@ -267,7 +267,7 @@ func TestBackendCreateResetDoesNotExposeLateFactoryError(t *testing.T) {
 			client.mu.Unlock()
 
 			var creationStart time.Time
-			err := client.waitBackendCreateCompletion(
+			_, err := client.waitBackendCreateCompletion(
 				context.Background(),
 				remote,
 				&creationStart,
@@ -456,7 +456,7 @@ func TestAutoCreateWaitBudgetStartsAtFactoryAdmission(t *testing.T) {
 		close(state.done)
 		var creationStart time.Time
 
-		err := client.waitBackendCreateCompletion(
+		_, err := client.waitBackendCreateCompletion(
 			context.Background(),
 			"test-backend",
 			&creationStart,
@@ -479,7 +479,7 @@ func TestAutoCreateWaitBudgetStartsAtFactoryAdmission(t *testing.T) {
 		close(state.done)
 		var creationStart time.Time
 
-		err := client.waitBackendCreateCompletion(
+		_, err := client.waitBackendCreateCompletion(
 			context.Background(),
 			"test-backend",
 			&creationStart,
@@ -503,7 +503,7 @@ func TestAutoCreateWaitBudgetStartsAtFactoryAdmission(t *testing.T) {
 		close(state.done)
 		var creationStart time.Time
 
-		err := client.waitBackendCreateCompletion(
+		_, err := client.waitBackendCreateCompletion(
 			context.Background(),
 			"test-backend",
 			&creationStart,
@@ -537,7 +537,7 @@ func TestBackendCreateQueueTimeoutInvalidatesExactState(t *testing.T) {
 	client.mu.Unlock()
 
 	var creationStart time.Time
-	err = client.waitBackendCreateCompletion(
+	_, err = client.waitBackendCreateCompletion(
 		context.Background(),
 		"queued",
 		&creationStart,
@@ -596,7 +596,9 @@ func TestPoolReturnDuringQueuedExpansion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	var start time.Time
-	require.NoError(t, c.waitBackendChange(ctx, "remote", &start, state, 0))
+	event, err := c.waitBackendCreateCompletion(ctx, "remote", &start, state)
+	require.NoError(t, err)
+	require.Equal(t, backendPoolReturned, event)
 	require.True(t, start.IsZero())
 	require.NoError(t, state.ctx.Err())
 	// If a competitor consumed both, the next cohort must not spin on the
@@ -612,7 +614,8 @@ func TestPoolReturnDuringQueuedExpansion(t *testing.T) {
 	default:
 	}
 	cancel()
-	require.ErrorIs(t, c.waitBackendChange(ctx, "remote", &start, state, 0), context.Canceled)
+	_, err = c.waitBackendCreateCompletion(ctx, "remote", &start, state)
+	require.ErrorIs(t, err, context.Canceled)
 	a.Unlock()
 	b.Unlock()
 	a.atomic.draining.Store(true)
@@ -628,6 +631,34 @@ func TestPoolReturnDuringQueuedExpansion(t *testing.T) {
 	default:
 		t.Fatal("missed an already returned backend")
 	}
+}
+
+func TestPoolHintDoesNotExemptNewCreateOrHideFailure(t *testing.T) {
+	c := &client{logger: logutil.GetGlobalLogger()}
+	c.options.retryPolicy = DefaultRetryPolicy
+	c.options.retryPolicy.MaxRetries = 2
+	state := newBackendCreateState(&backendGeneration{})
+	defer state.stop()
+	state.markStarted()
+	hint := &backendReuseSignal{done: make(chan struct{})}
+	state.reuse.Store(hint)
+	hint.notify()
+	var retry backendOperationRetry
+	require.NoError(t, c.waitForBackend(t.Context(), "remote", state, &retry, ErrBackendCreating, "NewStream"))
+	require.Equal(t, 1, retry.count)
+
+	// The hint is not transferable, even to another create in the same pool generation.
+	replacement := newBackendCreateState(state.generation)
+	defer replacement.stop()
+	other := retry
+	require.ErrorIs(t, c.waitForBackend(t.Context(), "remote", replacement, &other, ErrBackendCreating, "NewStream"), ErrBackendCreating)
+	require.Equal(t, 2, other.count)
+
+	// A terminal error on the original create still wins over its closed hint.
+	state.factoryErr = moerr.NewRPCTimeoutNoCtx()
+	close(state.done)
+	require.ErrorIs(t, c.waitForBackend(t.Context(), "remote", state, &retry, ErrBackendCreating, "NewStream"), state.factoryErr)
+	require.Equal(t, 1, retry.count)
 }
 
 func TestRetryQueueSharesOriginalFactoryBudget(t *testing.T) {
@@ -655,7 +686,7 @@ func TestRetryQueueSharesOriginalFactoryBudget(t *testing.T) {
 	client.mu.Unlock()
 
 	creationStart := time.Now().Add(-2 * factoryTimeout)
-	err = client.waitBackendCreateCompletion(
+	_, err = client.waitBackendCreateCompletion(
 		context.Background(),
 		"retry",
 		&creationStart,
@@ -671,8 +702,8 @@ func TestRetryQueueSharesOriginalFactoryBudget(t *testing.T) {
 	client.mu.Unlock()
 
 	// Coalesced callers do not inherit this caller's older factory budget.
-	_, started, coalescedErr := client.backendCreateAdmissionResult(queuedRetry)
-	require.False(t, started)
+	_, event, coalescedErr := client.backendCreateAdmissionResult(queuedRetry)
+	require.Equal(t, backendWaitFinished, event)
 	require.NoError(t, coalescedErr)
 	require.Zero(t, factory.attempts.Load())
 }

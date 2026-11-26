@@ -545,9 +545,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 	}()
 
 	policy := c.options.retryPolicy
-	var backoff time.Duration
-	retryCount := 0
-	var creationStart time.Time
+	var retry backendOperationRetry
 
 	for {
 		var admitErr error
@@ -573,43 +571,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
-				shouldContinue, waitErr := c.handleAutoCreateWait(
-					ctx,
-					backend,
-					&creationStart,
-					backendCreate,
-					retryCount,
-				)
-				if !shouldContinue {
-					// Record circuit breaker failure on timeout
-					if !errors.Is(waitErr, context.Canceled) &&
-						!errors.Is(waitErr, context.DeadlineExceeded) {
-						permit.RecordFailure()
-					}
-					return nil, waitErr
-				}
-
-				retryCount++
-				// Check if max retries exceeded (0 means unlimited)
-				if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
-					c.logger.Warn("max retries exceeded for Send",
-						zap.String("backend", backend),
-						zap.Int("retries", retryCount),
-						zap.Error(err))
-					// Record circuit breaker failure on max retries
-					permit.RecordFailure()
-					return nil, err
-				}
-
-				// Calculate next backoff with jitter
-				backoff = policy.nextBackoff(backoff)
-				if waitErr := c.waitBackendChange(
-					ctx,
-					backend,
-					&creationStart,
-					backendCreate,
-					backoff,
-				); waitErr != nil {
+				if waitErr := c.waitForBackend(ctx, backend, backendCreate, &retry, err, "Send"); waitErr != nil {
 					if !errors.Is(waitErr, context.Canceled) &&
 						!errors.Is(waitErr, context.DeadlineExceeded) &&
 						!isBackendCreateQueueCongestion(waitErr) {
@@ -629,6 +591,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			return nil, err
 		}
 
+		retry.resume = nil
 		f, err := b.Send(ctx, request)
 		if errors.Is(err, backendDraining) {
 			// Drain is a healthy generation handoff, not a peer failure. Retry
@@ -640,31 +603,31 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 		if isBackendClosedError(err) {
 			c.retireBackend(backend, b)
 			permit.RecordFailure()
-			retryCount++
+			retry.count++
 			// Check if max retries exceeded (0 means unlimited)
-			if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
+			if policy.MaxRetries > 0 && retry.count >= policy.MaxRetries {
 				c.logger.Warn("max retries exceeded for Send",
 					zap.String("backend", backend),
-					zap.Int("retries", retryCount),
+					zap.Int("retries", retry.count),
 					zap.Error(err))
 				return nil, err
 			}
 
 			// Calculate next backoff with jitter
-			backoff = policy.nextBackoff(backoff)
-			if backoff > 0 {
+			retry.backoff = policy.nextBackoff(retry.backoff)
+			if retry.backoff > 0 {
 				select {
 				case <-ctx.Done():
 					return nil, ctx.Err()
-				case <-time.After(backoff):
+				case <-time.After(retry.backoff):
 				}
 			}
 
-			if retryCount <= 3 || retryCount%10 == 0 {
+			if retry.count <= 3 || retry.count%10 == 0 {
 				c.logger.Debug("retrying Send after backend closed",
 					zap.String("backend", backend),
-					zap.Int("retry", retryCount),
-					zap.Duration("backoff", backoff))
+					zap.Int("retry", retry.count),
+					zap.Duration("backoff", retry.backoff))
 			}
 			continue
 		}
@@ -689,9 +652,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 	}()
 
 	policy := c.options.retryPolicy
-	var backoff time.Duration
-	retryCount := 0
-	var creationStart time.Time
+	var retry backendOperationRetry
 
 	for {
 		// Check context before attempting
@@ -721,43 +682,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
-				shouldContinue, waitErr := c.handleAutoCreateWait(
-					ctx,
-					backend,
-					&creationStart,
-					backendCreate,
-					retryCount,
-				)
-				if !shouldContinue {
-					// Record circuit breaker failure on timeout
-					if !errors.Is(waitErr, context.Canceled) &&
-						!errors.Is(waitErr, context.DeadlineExceeded) {
-						permit.RecordFailure()
-					}
-					return nil, waitErr
-				}
-
-				retryCount++
-				// Check if max retries exceeded
-				if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
-					c.logger.Warn("max retries exceeded for NewStream",
-						zap.String("backend", backend),
-						zap.Int("retries", retryCount),
-						zap.Error(err))
-					// Record circuit breaker failure on max retries
-					permit.RecordFailure()
-					return nil, err
-				}
-
-				// Calculate next backoff with jitter
-				backoff = policy.nextBackoff(backoff)
-				if waitErr := c.waitBackendChange(
-					ctx,
-					backend,
-					&creationStart,
-					backendCreate,
-					backoff,
-				); waitErr != nil {
+				if waitErr := c.waitForBackend(ctx, backend, backendCreate, &retry, err, "NewStream"); waitErr != nil {
 					if !errors.Is(waitErr, context.Canceled) &&
 						!errors.Is(waitErr, context.DeadlineExceeded) &&
 						!isBackendCreateQueueCongestion(waitErr) {
@@ -776,6 +701,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 			return nil, err
 		}
 
+		retry.resume = nil
 		st, err := b.NewStream(lock)
 		if err != nil && lock {
 			// getBackendForOperation acquired this lock on behalf of the stream.
@@ -790,31 +716,31 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 		if isBackendClosedError(err) {
 			c.retireBackend(backend, b)
 			permit.RecordFailure()
-			retryCount++
+			retry.count++
 			// Check if max retries exceeded
-			if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
+			if policy.MaxRetries > 0 && retry.count >= policy.MaxRetries {
 				c.logger.Warn("max retries exceeded for NewStream",
 					zap.String("backend", backend),
-					zap.Int("retries", retryCount),
+					zap.Int("retries", retry.count),
 					zap.Error(err))
 				return nil, err
 			}
 
 			// Calculate next backoff with jitter
-			backoff = policy.nextBackoff(backoff)
-			if backoff > 0 {
+			retry.backoff = policy.nextBackoff(retry.backoff)
+			if retry.backoff > 0 {
 				select {
 				case <-ctx.Done():
 					return nil, ctx.Err()
-				case <-time.After(backoff):
+				case <-time.After(retry.backoff):
 				}
 			}
 
-			if retryCount <= 3 || retryCount%10 == 0 {
+			if retry.count <= 3 || retry.count%10 == 0 {
 				c.logger.Debug("retrying NewStream after backend closed",
 					zap.String("backend", backend),
-					zap.Int("retry", retryCount),
-					zap.Duration("backoff", backoff))
+					zap.Int("retry", retry.count),
+					zap.Duration("backoff", retry.backoff))
 			}
 			continue
 		}
@@ -839,9 +765,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 	}()
 
 	policy := c.options.retryPolicy
-	var backoff time.Duration
-	retryCount := 0
-	var creationStart time.Time
+	var retry backendOperationRetry
 
 	for {
 		select {
@@ -870,43 +794,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
-				shouldContinue, waitErr := c.handleAutoCreateWait(
-					ctx,
-					backend,
-					&creationStart,
-					backendCreate,
-					retryCount,
-				)
-				if !shouldContinue {
-					// Record circuit breaker failure on timeout
-					if !errors.Is(waitErr, context.Canceled) &&
-						!errors.Is(waitErr, context.DeadlineExceeded) {
-						permit.RecordFailure()
-					}
-					return waitErr
-				}
-
-				retryCount++
-				// Check if max retries exceeded
-				if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
-					c.logger.Warn("max retries exceeded for Ping",
-						zap.String("backend", backend),
-						zap.Int("retries", retryCount),
-						zap.Error(err))
-					// Record circuit breaker failure on max retries
-					permit.RecordFailure()
-					return err
-				}
-
-				// Calculate next backoff with jitter
-				backoff = policy.nextBackoff(backoff)
-				if waitErr := c.waitBackendChange(
-					ctx,
-					backend,
-					&creationStart,
-					backendCreate,
-					backoff,
-				); waitErr != nil {
+				if waitErr := c.waitForBackend(ctx, backend, backendCreate, &retry, err, "Ping"); waitErr != nil {
 					if !errors.Is(waitErr, context.Canceled) &&
 						!errors.Is(waitErr, context.DeadlineExceeded) &&
 						!isBackendCreateQueueCongestion(waitErr) {
@@ -925,6 +813,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 			return err
 		}
 
+		retry.resume = nil
 		f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
 		if err != nil {
 			if errors.Is(err, backendDraining) {
@@ -934,31 +823,31 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 			if isBackendClosedError(err) {
 				c.retireBackend(backend, b)
 				permit.RecordFailure()
-				retryCount++
+				retry.count++
 				// Check if max retries exceeded
-				if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
+				if policy.MaxRetries > 0 && retry.count >= policy.MaxRetries {
 					c.logger.Warn("max retries exceeded for Ping",
 						zap.String("backend", backend),
-						zap.Int("retries", retryCount),
+						zap.Int("retries", retry.count),
 						zap.Error(err))
 					return err
 				}
 
 				// Calculate next backoff with jitter
-				backoff = policy.nextBackoff(backoff)
-				if backoff > 0 {
+				retry.backoff = policy.nextBackoff(retry.backoff)
+				if retry.backoff > 0 {
 					select {
 					case <-ctx.Done():
 						return ctx.Err()
-					case <-time.After(backoff):
+					case <-time.After(retry.backoff):
 					}
 				}
 
-				if retryCount <= 3 || retryCount%10 == 0 {
+				if retry.count <= 3 || retry.count%10 == 0 {
 					c.logger.Debug("retrying Ping after backend closed",
 						zap.String("backend", backend),
-						zap.Int("retry", retryCount),
-						zap.Duration("backoff", backoff))
+						zap.Int("retry", retry.count),
+						zap.Duration("backoff", retry.backoff))
 				}
 				continue
 			}
@@ -2087,59 +1976,80 @@ func (c *client) handleAutoCreateWait(
 	return true, nil
 }
 
-// waitBackendChange waits on a real asynchronous-create state transition when
-// one exists. Backoff remains the fallback for states that have no completion
-// owner (for example, a fully busy pool). This preserves retry throttling while
-// removing the latency amplification where a backend becomes ready near the
-// start of a long exponential-backoff interval.
-func (c *client) waitBackendChange(
-	ctx context.Context,
-	backend string,
-	creationStart *time.Time,
-	backendCreate *backendCreateState,
-	backoff time.Duration,
+// Retry and backoff count actual attempts, not hints about local pool capacity.
+type backendOperationRetry struct {
+	count         int
+	backoff       time.Duration
+	creationStart time.Time
+	resume        *backendCreateState // the exact wait interrupted by a pool return
+}
+
+func (c *client) waitForBackend(
+	ctx context.Context, backend string, state *backendCreateState,
+	r *backendOperationRetry, lookupErr error, operation string,
 ) error {
-	if backendCreate != nil {
-		if err := c.waitBackendCreateCompletion(
-			ctx,
-			backend,
-			creationStart,
-			backendCreate,
-		); err == errBackendReturned {
-			// Do not read factoryErr here: the factory may still be running.
-			return ctx.Err()
-		} else if err != nil {
+	if state == nil || state != r.resume {
+		if ok, err := c.handleAutoCreateWait(ctx, backend, &r.creationStart, state, r.count); !ok {
 			return err
 		}
-		if backendCreate.factoryErr == nil {
+		r.count++
+		policy := c.options.retryPolicy
+		if policy.MaxRetries > 0 && r.count >= policy.MaxRetries {
+			c.logger.Warn("max retries exceeded for "+operation, zap.String("backend", backend),
+				zap.Int("retries", r.count), zap.Error(lookupErr))
+			return lookupErr
+		}
+		r.backoff = policy.nextBackoff(r.backoff)
+	} else if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	r.resume = nil
+	if state != nil {
+		event, err := c.waitBackendCreateCompletion(ctx, backend, &r.creationStart, state)
+		if err != nil {
+			return err
+		}
+		if event == backendPoolReturned {
+			// Re-select through the usual breaker and pool admission path. A
+			// lost race for the old backend is still the same factory attempt.
+			r.resume = state
+			return ctx.Err()
+		}
+		if state.factoryErr == nil {
 			return nil
 		}
 	}
-
-	return c.waitBackendRetryBackoff(ctx, backend, *creationStart, backoff)
+	return c.waitBackendRetryBackoff(ctx, backend, r.creationStart, r.backoff)
 }
 
-var errBackendReturned = errors.New("pooled backend returned")
+type backendWaitEvent uint8
+
+const (
+	backendWaitFinished backendWaitEvent = iota
+	backendFactoryStarted
+	backendPoolReturned
+)
 
 func (c *client) waitBackendCreateCompletion(
 	ctx context.Context,
 	backend string,
 	creationStart *time.Time,
 	backendCreate *backendCreateState,
-) error {
+) (backendWaitEvent, error) {
 	var returned <-chan struct{}
 	if signal := backendCreate.reuse.Load(); signal != nil {
 		returned = signal.done
 	}
-	startedAt, started, err := c.waitBackendCreateAdmission(
+	startedAt, event, err := c.waitBackendCreateAdmission(
 		ctx,
 		backend,
 		*creationStart,
 		backendCreate,
 		returned,
 	)
-	if err != nil || !started {
-		return err
+	if err != nil || event != backendFactoryStarted {
+		return event, err
 	}
 	if creationStart.IsZero() {
 		*creationStart = startedAt
@@ -2163,9 +2073,9 @@ func (c *client) waitBackendCreateAdmission(
 	creationStart time.Time,
 	state *backendCreateState,
 	returned <-chan struct{},
-) (time.Time, bool, error) {
+) (time.Time, backendWaitEvent, error) {
 	if startedAt, ok := state.startTime(); ok {
-		return startedAt, true, nil
+		return startedAt, backendFactoryStarted, nil
 	}
 	if backendCreateDone(state) {
 		return c.backendCreateAdmissionResult(state)
@@ -2175,23 +2085,23 @@ func (c *client) waitBackendCreateAdmission(
 		creationStart,
 		state,
 	)
-	onReturn := func() (time.Time, bool, error) {
+	onReturn := func() (time.Time, backendWaitEvent, error) {
 		if startedAt, ok := state.startTime(); ok {
-			return startedAt, true, nil // observe the factory's original budget
+			return startedAt, backendFactoryStarted, nil // observe the factory's original budget
 		}
 		if backendCreateDone(state) {
 			return c.backendCreateAdmissionResult(state)
 		}
-		return time.Time{}, false, errBackendReturned
+		return time.Time{}, backendPoolReturned, nil
 	}
 	if deadline.IsZero() {
 		select {
 		case <-ctx.Done():
-			return time.Time{}, false, ctx.Err()
+			return time.Time{}, backendWaitFinished, ctx.Err()
 		case <-returned:
 			return onReturn()
 		case <-state.started:
-			return state.startedAt, true, nil
+			return state.startedAt, backendFactoryStarted, nil
 		case <-state.done:
 			return c.backendCreateAdmissionResult(state)
 		}
@@ -2210,14 +2120,14 @@ func (c *client) waitBackendCreateAdmission(
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return time.Time{}, false, ctx.Err()
+		return time.Time{}, backendWaitFinished, ctx.Err()
 	case <-returned:
 		if time.Now().Before(deadline) {
 			return onReturn()
 		}
 		return c.handleBackendCreateAdmissionDeadline(backend, creationStart, state, deadlineKind)
 	case <-state.started:
-		return state.startedAt, true, nil
+		return state.startedAt, backendFactoryStarted, nil
 	case <-state.done:
 		return c.backendCreateAdmissionResult(state)
 	case <-timer.C:
@@ -2274,16 +2184,16 @@ func backendCreateDone(state *backendCreateState) bool {
 
 func (c *client) backendCreateAdmissionResult(
 	state *backendCreateState,
-) (time.Time, bool, error) {
+) (time.Time, backendWaitEvent, error) {
 	if startedAt, ok := state.startTime(); ok {
-		return startedAt, true, nil
+		return startedAt, backendFactoryStarted, nil
 	}
 	if state.queueTimedOut {
-		return time.Time{}, false, ErrBackendCreateQueueTimeout
+		return time.Time{}, backendWaitFinished, ErrBackendCreateQueueTimeout
 	}
 	// Reset, close, or manager shutdown can invalidate a queued request without
 	// starting it. Wake the caller to re-evaluate the current generation.
-	return time.Time{}, false, nil
+	return time.Time{}, backendWaitFinished, nil
 }
 
 func (c *client) handleBackendCreateAdmissionDeadline(
@@ -2291,13 +2201,13 @@ func (c *client) handleBackendCreateAdmissionDeadline(
 	creationStart time.Time,
 	state *backendCreateState,
 	kind backendCreateAdmissionDeadlineKind,
-) (time.Time, bool, error) {
+) (time.Time, backendWaitEvent, error) {
 	if kind == backendCreateQueueAdmissionDeadline {
 		// Worker admission and queue expiry linearize under c.mu. If the worker
 		// won, startedAt is visible through the closed started channel; if
 		// expiry won, only this exact state is removed.
 		if c.expireBackendCreateQueue(backend, state) {
-			return time.Time{}, false, ErrBackendCreateQueueTimeout
+			return time.Time{}, backendWaitFinished, ErrBackendCreateQueueTimeout
 		}
 	} else if kind == backendCreateFactoryBudgetDeadline {
 		// This caller's shared retry budget expired while the exact request was
@@ -2306,7 +2216,7 @@ func (c *client) handleBackendCreateAdmissionDeadline(
 		// different factory budget and should simply wake and re-evaluate.
 		if c.invalidateQueuedBackendCreate(backend, state) {
 			timeout := c.options.autoCreateWaitTimeout
-			return time.Time{}, false, c.autoCreateTimeoutError(
+			return time.Time{}, backendWaitFinished, c.autoCreateTimeoutError(
 				backend,
 				time.Since(creationStart),
 				timeout,
@@ -2315,14 +2225,14 @@ func (c *client) handleBackendCreateAdmissionDeadline(
 		}
 	}
 	if startedAt, ok := state.startTime(); ok {
-		return startedAt, true, nil
+		return startedAt, backendFactoryStarted, nil
 	}
 	if backendCreateDone(state) {
 		return c.backendCreateAdmissionResult(state)
 	}
 	if kind == backendCreateFactoryBudgetDeadline {
 		timeout := c.options.autoCreateWaitTimeout
-		return time.Time{}, false, c.autoCreateTimeoutError(
+		return time.Time{}, backendWaitFinished, c.autoCreateTimeoutError(
 			backend,
 			time.Since(creationStart),
 			timeout,
@@ -2331,7 +2241,7 @@ func (c *client) handleBackendCreateAdmissionDeadline(
 	}
 	// The state was replaced without this waiter owning its completion. Treat
 	// that as invalidation and let the caller re-read current client state.
-	return time.Time{}, false, nil
+	return time.Time{}, backendWaitFinished, nil
 }
 
 func (c *client) waitBackendFactoryCompletion(
@@ -2340,26 +2250,26 @@ func (c *client) waitBackendFactoryCompletion(
 	creationStart time.Time,
 	state *backendCreateState,
 	returned <-chan struct{},
-) error {
+) (backendWaitEvent, error) {
 	timeout := c.options.autoCreateWaitTimeout
 	if timeout <= 0 {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return backendWaitFinished, ctx.Err()
 		case <-returned:
 			if backendCreateDone(state) {
-				return definitiveBackendCreateError(state.factoryErr)
+				return backendWaitFinished, definitiveBackendCreateError(state.factoryErr)
 			}
-			return errBackendReturned
+			return backendPoolReturned, nil
 		case <-state.done:
-			return definitiveBackendCreateError(state.factoryErr)
+			return backendWaitFinished, definitiveBackendCreateError(state.factoryErr)
 		}
 	}
 
 	deadline := creationStart.Add(timeout)
 	for {
 		if backendCreateDone(state) {
-			return c.classifyBackendFactoryCompletion(
+			return backendWaitFinished, c.classifyBackendFactoryCompletion(
 				backend,
 				creationStart,
 				deadline,
@@ -2373,7 +2283,7 @@ func (c *client) waitBackendFactoryCompletion(
 		// occurred late, report the timeout independent of select scheduling.
 		if completedAt, ok := state.completionTime(); ok {
 			if completedAt.After(deadline) {
-				return c.autoCreateTimeoutError(
+				return backendWaitFinished, c.autoCreateTimeoutError(
 					backend,
 					completedAt.Sub(creationStart),
 					timeout,
@@ -2382,9 +2292,9 @@ func (c *client) waitBackendFactoryCompletion(
 			}
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return backendWaitFinished, ctx.Err()
 			case <-state.done:
-				return c.classifyBackendFactoryCompletion(
+				return backendWaitFinished, c.classifyBackendFactoryCompletion(
 					backend,
 					creationStart,
 					deadline,
@@ -2396,7 +2306,7 @@ func (c *client) waitBackendFactoryCompletion(
 
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return c.autoCreateTimeoutError(
+			return backendWaitFinished, c.autoCreateTimeoutError(
 				backend,
 				time.Since(creationStart),
 				timeout,
@@ -2407,16 +2317,16 @@ func (c *client) waitBackendFactoryCompletion(
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return backendWaitFinished, ctx.Err()
 		case <-returned:
 			timer.Stop()
 			if !backendCreateDone(state) && time.Now().Before(deadline) {
-				return errBackendReturned
+				return backendPoolReturned, nil
 			}
 			returned = nil // classify the original deadline/completion above
 		case <-state.done:
 			timer.Stop()
-			return c.classifyBackendFactoryCompletion(
+			return backendWaitFinished, c.classifyBackendFactoryCompletion(
 				backend,
 				creationStart,
 				deadline,
