@@ -152,7 +152,7 @@ func TestUnionFixedSelection(t *testing.T) {
 	}
 }
 
-func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
+func TestUnionRowsFromCharAndPrefixes(t *testing.T) {
 	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_decimal128, types.T_decimal256, types.T_char, types.T_varchar} {
 		varlen := oid == types.T_char || oid == types.T_varchar
 		prefixes := []int{0, 1, 2}
@@ -200,15 +200,13 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 							require.NoError(t, want.UnionOne(a, sel, mp))
 						}
 					}
-					rows := []FixedSourceRow{{a, 8}, {b, 2}, {a, 8}, {b, 0}, {a, 4}, {b, 19}}
+					srcs, rows := []*Vector{a, b, a, b, a, b}, []int64{8, 2, 8, 0, 4, 19}
 					if onlyNulls {
-						rows = []FixedSourceRow{{a, 2}, {b, 4}, {a, 2}}
+						srcs, rows = []*Vector{a, b, a}, []int64{2, 4, 2}
 					}
-					used, err := got.TryUnionFlatFixedRows(rows, mp)
-					require.True(t, used)
-					require.NoError(t, err)
-					for _, row := range rows {
-						require.NoError(t, want.UnionOne(row.Vec, row.Row, mp))
+					require.NoError(t, got.UnionRowsFrom(srcs, rows, mp))
+					for i := range srcs {
+						require.NoError(t, want.UnionOne(srcs[i], rows[i], mp))
 					}
 					require.Equal(t, want.length, got.length)
 					width := oid.TypeLen()
@@ -228,7 +226,9 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 	}
 }
 
-func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
+// Unusual sources take the UnionOne path with the same result; a row outside
+// its source is an error and leaves the destination unchanged.
+func TestUnionRowsFromFallbackAndAdmission(t *testing.T) {
 	for _, shape := range []string{"const", "alias", "type", "negative", "past_end", "singleton", "unicode", "out_of_line"} {
 		t.Run(shape, func(t *testing.T) {
 			mp := mpool.MustNewZero()
@@ -251,27 +251,47 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 				}
 			}
 			require.NoError(t, dst.UnionOne(a, 0, mp))
-			rows := []FixedSourceRow{{a, 0}, {b, 1}}
+			srcs, rows := []*Vector{a, b}, []int64{0, 1}
 			switch shape {
 			case "const":
 				b.class = CONSTANT
 			case "alias":
-				rows[1] = FixedSourceRow{dst, 0}
+				srcs[1], rows[1] = dst, 0
 			case "type":
 				b.typ = types.T_int32.ToType()
 			case "negative":
-				rows[1].Row = -1
+				rows[1] = -1
 			case "past_end":
-				rows[1].Row = 2
+				rows[1] = 2
 			case "singleton":
-				rows = rows[:1]
+				srcs, rows = srcs[:1], rows[:1]
 			}
-			before := append([]byte(nil), dst.data...)
-			used, err := dst.TryUnionFlatFixedRows(rows, mp)
-			require.False(t, used)
+			if shape == "negative" || shape == "past_end" {
+				before := append([]byte(nil), dst.data...)
+				require.Error(t, dst.UnionRowsFrom(srcs, rows, mp))
+				require.Equal(t, 1, dst.length)
+				require.Equal(t, before, dst.data)
+				return
+			}
+			if shape == "type" {
+				// UnionOne copies by the destination's width; only the row
+				// count is checked for a mismatched source type.
+				require.NoError(t, dst.UnionRowsFrom(srcs, rows, mp))
+				require.Equal(t, 3, dst.length)
+				return
+			}
+			want, err := dst.Dup(mp)
 			require.NoError(t, err)
-			require.Equal(t, 1, dst.length)
-			require.Equal(t, before, dst.data)
+			defer want.Free(mp)
+			for i := range srcs {
+				src := srcs[i]
+				if src == dst {
+					src = want
+				}
+				require.NoError(t, want.UnionOne(src, rows[i], mp))
+			}
+			require.NoError(t, dst.UnionRowsFrom(srcs, rows, mp))
+			requireSameRows(t, want, dst)
 		})
 	}
 	for _, nullable := range []bool{false, true} {
@@ -289,8 +309,7 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 			})
 			require.NoError(t, AppendFixed(src, int64(10), nullable, mp))
 			require.NoError(t, AppendFixed(src, int64(20), false, mp))
-			used, err := dst.TryUnionFlatFixedRows([]FixedSourceRow{{src, 0}, {src, 1}}, dmp)
-			require.True(t, used)
+			err := dst.UnionRowsFrom([]*Vector{src, src}, []int64{0, 1}, dmp)
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.Zero(t, dst.length)
 			require.Zero(t, state.account.Snapshot().Used)

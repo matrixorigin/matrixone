@@ -1040,8 +1040,8 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							dst := ctr.resBat.Vecs[j]
 							// Tiny matches do not amortize gather setup; leave them on
 							// the scalar path irrespective of estimates or query shape.
-							if len(sels) >= 8 && !dst.GetType().IsVarlen() {
-								if err = ctr.appendFixedBuildColumn(dst, rp.Pos, sels, resMP); err != nil {
+							if len(sels) >= 8 {
+								if err = ctr.appendBuildColumn(dst, rp.Pos, sels, resMP); err != nil {
 									return err
 								}
 								continue
@@ -1717,24 +1717,19 @@ func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc 
 	return nil
 }
 
-func (ctr *container) appendFixedBuildColumn(dst *vector.Vector, column int32, sels []int32, resMP *mpool.MPool) error {
-	var sources [hashmap.UnitLimit]vector.FixedSourceRow
+// appendBuildColumn appends build column `column` of the build rows sels, in
+// order, with one many-source gather per bounded chunk.
+func (ctr *container) appendBuildColumn(dst *vector.Vector, column int32, sels []int32, resMP *mpool.MPool) error {
+	var srcs [hashmap.UnitLimit]*vector.Vector
+	var rows [hashmap.UnitLimit]int64
 	for len(sels) > 0 {
-		n := min(len(sels), len(sources))
+		n := min(len(sels), len(srcs))
 		for i, sel := range sels[:n] {
 			batchIdx, row := ctr.locateBuildRow(int64(sel))
-			sources[i] = vector.FixedSourceRow{Vec: ctr.rightBats[batchIdx].Vecs[column], Row: row}
+			srcs[i], rows[i] = ctr.rightBats[batchIdx].Vecs[column], row
 		}
-		used, err := dst.TryUnionFlatFixedRows(sources[:n], resMP)
-		if err != nil {
+		if err := dst.UnionRowsFrom(srcs[:n], rows[:n], resMP); err != nil {
 			return err
-		}
-		if !used {
-			for _, row := range sources[:n] {
-				if err = dst.UnionOne(row.Vec, row.Row, resMP); err != nil {
-					return err
-				}
-			}
 		}
 		sels = sels[n:]
 	}
@@ -1969,7 +1964,7 @@ func (ctr *container) appendBuildPayloadRows(hashJoin *HashJoin, proc *process.P
 	firstBatch, _ := ctr.locateBuildRow(rightRows[0])
 	lastBatch, _ := ctr.locateBuildRow(rightRows[matched-1])
 	if matched >= 8 && firstBatch != lastBatch {
-		var sources [hashmap.UnitLimit]vector.FixedSourceRow
+		var srcs [hashmap.UnitLimit]*vector.Vector
 		// Probe outputs are already copied; reuse their selection scratch for
 		// build-local ordinals instead of allocating another per-chunk array.
 		selections := leftRows[:matched]
@@ -1987,32 +1982,10 @@ func (ctr *container) appendBuildPayloadRows(hashJoin *HashJoin, proc *process.P
 				continue
 			}
 			for i := range matched {
-				sources[i] = vector.FixedSourceRow{
-					Vec: ctr.rightBats[rightRows[i]].Vecs[rp.Pos],
-					Row: selections[i],
-				}
+				srcs[i] = ctr.rightBats[rightRows[i]].Vecs[rp.Pos]
 			}
-			dst := ctr.resBat.Vecs[j]
-			used, err := dst.TryUnionFlatFixedRows(sources[:matched], resMP)
-			if err != nil {
+			if err := ctr.resBat.Vecs[j].UnionRowsFrom(srcs[:matched], selections, resMP); err != nil {
 				return 0, err
-			}
-			if !used {
-				for start := 0; start < matched; {
-					end := start + 1
-					for end < matched && sources[end].Vec == sources[start].Vec {
-						end++
-					}
-					if end-start == 1 {
-						err = dst.UnionOne(sources[start].Vec, selections[start], resMP)
-					} else {
-						err = dst.Union(sources[start].Vec, selections[start:end], resMP)
-					}
-					if err != nil {
-						return 0, err
-					}
-					start = end
-				}
 			}
 		}
 		return matched, nil

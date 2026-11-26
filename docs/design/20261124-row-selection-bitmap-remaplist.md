@@ -246,6 +246,21 @@ Measured, pinned to one core, minimum of five runs, PR 8 → PR 9:
 
 The operators are flat: the permutation is a small part of a sort. (`order`'s `BenchmarkOrder` panics with "mismatched multi-column semantic types" before and after this change, so it is left out.)
 
+**Joins (PR 10).** The probe side already gathers with `Union` over one probe batch. The build side is the many-source case: a matched build row is an ordinal over all build batches, so one output column takes rows from several source vectors. `Vector.UnionRowsFrom(srcs, rows, mp)` gathers row `rows[i]` of `srcs[i]`. When every source is a flat vector of the destination's type, it takes one pass per column: NULLs a word at a time, the fixed-width value loop per payload width, and varlena payloads copied into an area grown once for the whole call. Any other source (a constant, a different type, the destination itself) falls back to `UnionOne` per row, with the same result. A row outside its flat source is an error and leaves the destination unchanged. The hash join decodes ordinals into (batch, row) once per output chunk and uses it for every build column, varlena included. `TryUnionFlatFixedRows`, its `FixedSourceRow` type and the run-wise varlena fallback are gone.
+
+Measured, pinned to one core, minimum of six interleaved runs, PR 9 → PR 10. `BenchmarkHashJoinDuplicateFanout` joins 64 probe rows against 4 × 8192 build rows with 128 matches per key, for 8192 output rows and 3 build columns:
+
+| benchmark | old | new |
+| --- | --- | --- |
+| fanout, int64 | 78.9 µs | 69.5 µs |
+| fanout, decimal128 | 109.1 µs | 81.2 µs |
+| fanout, varchar of 8 bytes (inline) | 134.8 µs | 115.3 µs |
+| fanout, varchar of 48 bytes | 287.2 µs | 255.3 µs |
+| `BenchmarkHashJoinUniqueProjection`, 256 rows from alternating build batches, int32 / decimal128 / varchar | 2.87 / 4.20 / 18.3 µs | 2.58 / 3.33 / 15.4 µs |
+| `BenchmarkHashJoinSmallDuplicatePayload`, `HashJoinMembershipProjection`, `RightExistentialRepeatedKeys` | | within ±1.5% |
+
+Single-batch projections still go through `Union` and are unchanged. These runs were on a shared machine with other work running, so only the interleaved minimums are compared.
+
 ## Implementation plan
 
 Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a duplicate and each measured with its own benchmark. The tracks are independent until the last cleanup.
@@ -262,7 +277,7 @@ Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a 
 | 7 | RemapList | Type and gather | new package `pkg/common/remaplist` with `remaplist.List`; one gather kernel behind `Vector.Union` / `Batch.Union` with the null remap in the same pass | gather microbenchmarks against `Union` and `Shuffle` |
 | 8 | RemapList | Buckets | spill, hash-build spill, group spill, the complete-key shuffle and partition use the one counting sort (`SplitBuckets` / `BuildBuckets`); the typed shuffle kernels keep their fused append (measured); their `int32` lists become `int64` and `UnionInt32` goes away | shuffle and spill benchmarks |
 | 9 | RemapList | Sorts | order, mergeorder, top, mergetop, window, mergesort, logtail and publication sorts apply their permutation with `Permute` / `PermuteWithScratch` on the gather kernel; remove `Shuffle` and `ShuffleWithBuf` | sort and top-k benchmarks |
-| 10 | RemapList | Joins | probe and build gathers use RemapList with global row ids; `TryUnionFlatFixedRows` goes away | hash-join benchmarks; TPC-H join queries |
+| 10 | RemapList | Joins | the probe side keeps `Union`; build gathers over several batches use `UnionRowsFrom` (per-row source and row); `TryUnionFlatFixedRows` goes away | hash-join benchmarks; TPC-H join queries |
 | 11 | RemapList | Inverse maps | mergesort and transfer use `InvertInto` | merge benchmarks |
 
 Every PR follows the same checks:
