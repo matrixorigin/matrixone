@@ -57,7 +57,9 @@ var (
 )
 
 const MOLoggerUser = "mo_logger"
-const MaxConnectionNumber = 1
+
+// A single replay may pin a connection across multiple LOADs.
+const MaxConnectionNumber = 2
 
 const DBConnRetryThreshold = 8
 

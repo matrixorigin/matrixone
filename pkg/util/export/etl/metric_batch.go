@@ -43,7 +43,16 @@ import (
 
 const metricReplaySQLTarget = 4 * mpool.MB
 
+var metricReplaySlot = make(chan struct{}, 1)
+
 func ReplayMetricBatch(ctx context.Context, tbl *table.Table, data []byte, id uuid.UUID) error {
+	// Leave at least one connection available to foreground exporters.
+	select {
+	case metricReplaySlot <- struct{}{}:
+		defer func() { <-metricReplaySlot }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	return NewSQLFlusher(tbl).flushMetricBatch(ctx, data, id, false)
 }
 

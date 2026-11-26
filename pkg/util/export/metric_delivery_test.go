@@ -64,6 +64,7 @@ func metricDeliveryDB(t *testing.T) sqlmock.Sqlmock {
 	provider, backoff := dbholder.GetOrInitDBConn, dbholder.DBConnErrCount
 	dbholder.GetOrInitDBConn = func(bool, bool) (*sql.DB, error) { return db, nil }
 	dbholder.DBConnErrCount = dbholder.NewReConnectionBackOff(time.Minute, dbholder.DBConnRetryThreshold)
+	db.SetMaxOpenConns(dbholder.MaxConnectionNumber)
 	dbholder.SetDBConn(db)
 	t.Cleanup(func() {
 		dbholder.SetDBConn(nil)
@@ -458,9 +459,26 @@ func TestMetricReplayRenewsDeadlinePerLoad(t *testing.T) {
 		}
 		expectMetricCommit(mock)
 
+		mock.MatchExpectationsInOrder(false)
+		mock.ExpectExec("^SELECT 1$").WillReturnResult(sqlmock.NewResult(0, 0))
 		start := time.Now()
-		err := etl.ReplayMetricBatch(t.Context(), tbl, []byte(strings.Repeat(row, 3)), id)
+		done := make(chan error, 1)
+		go func() {
+			done <- etl.ReplayMetricBatch(t.Context(), tbl, []byte(strings.Repeat(row, 3)), id)
+		}()
+		synctest.Wait()
+
+		// A second importer waits outside the pool and can be canceled there.
+		ctx, cancel := context.WithCancel(t.Context())
+		go cancel()
+		require.ErrorIs(t, etl.ReplayMetricBatch(ctx, tbl, []byte(row), uuid.New()), context.Canceled)
+		db, err := dbholder.GetOrInitMetricDBConn(t.Context())
 		require.NoError(t, err)
+		require.NoError(t, dbholder.WithMetricBatchTimeout(t.Context(), func(ctx context.Context) error {
+			_, err := db.ExecContext(ctx, "SELECT 1")
+			return err
+		}))
+		require.NoError(t, <-done)
 		require.Equal(t, 12*time.Second, time.Since(start))
 	})
 }

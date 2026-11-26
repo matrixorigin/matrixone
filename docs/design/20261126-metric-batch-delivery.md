@@ -31,7 +31,9 @@ with the receipt.
 Replay observes task cancellation throughout the transaction. CN discovery,
 connection acquisition, each SQL statement and COMMIT each get a fresh
 10-second deadline, so a large file can finish while its statements make
-progress. The synchronous first write retains its 10-second total budget.
+progress. Each exporter process admits one file replay at a time and allows
+two connections in its shared pool, leaving capacity for foreground writes.
+The synchronous first write retains its 10-second total budget.
 An interrupted COMMIT leaves the file available for receipt-based
 adjudication. A connection error, operation timeout or rolling-restart
 refusal marks the pool for CN reselection even if the next replay runs
