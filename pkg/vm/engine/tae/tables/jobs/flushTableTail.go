@@ -674,7 +674,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	// do first sort
 	var writtenBatches []*batch.Batch
 	var releaseF func()
-	var mapping []int
+	var mapping []int64
 	if schema.HasSortKey() {
 		writtenBatches, releaseF, mapping, err = mergesort.MergeAObj(ctx, task, readedBats, sortKeyPos, toLayout)
 		if err != nil {

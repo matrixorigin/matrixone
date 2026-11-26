@@ -27,7 +27,7 @@ import (
 )
 
 type AObjMerger interface {
-	Merge(context.Context) ([]*batch.Batch, func(), []int, error)
+	Merge(context.Context) ([]*batch.Batch, func(), []int64, error)
 }
 
 type aObjMerger[T comparable] struct {
@@ -39,8 +39,8 @@ type aObjMerger[T comparable] struct {
 	bats      []*containers.Batch
 	rowIdx    []int64
 	accRowCnt []int64
+	totalRows int
 
-	mapping  []int
 	toLayout []uint32
 	vpool    DisposableVecPool
 }
@@ -50,7 +50,7 @@ func MergeAObj(
 	vpool DisposableVecPool,
 	batches []*containers.Batch,
 	sortKeyPos int,
-	toLayout []uint32) ([]*batch.Batch, func(), []int, error) {
+	toLayout []uint32) ([]*batch.Batch, func(), []int64, error) {
 	var merger AObjMerger
 	typ := batches[0].Vecs[sortKeyPos].GetType()
 	size := len(batches)
@@ -273,15 +273,27 @@ func newAObjMerger[T comparable](
 		m.accRowCnt[i] = int64(totalRowCnt)
 		totalRowCnt += m.df.length(uint32(i))
 	}
-	m.mapping = make([]int, totalRowCnt)
-	for i := range m.mapping {
-		m.mapping[i] = -1
-	}
+	m.totalRows = totalRowCnt
 
 	return m
 }
 
-func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []int, error) {
+// Merge merges the batches by sort key into blocks of toLayout sizes,
+// skipping deleted rows. The heap only records the output order; the columns
+// are then gathered one at a time. It also returns the old → new map over the
+// global row ids, -1 for deleted rows, valid until the release function is
+// called.
+func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []int64, error) {
+	layoutRows := 0
+	for _, size := range am.toLayout {
+		layoutRows += int(size)
+	}
+	var order mergeOrder
+	defer order.free()
+	if err := order.init(am.vpool, am.accRowCnt, min(am.totalRows, layoutRows)); err != nil {
+		return nil, nil, nil, err
+	}
+
 	for i := 0; i < len(am.bats); i++ {
 		heapPush(am.heap, heapElem[T]{
 			data:   am.df.at(uint32(i), 0),
@@ -289,25 +301,9 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []i
 			src:    uint32(i),
 		})
 	}
-
-	cnBat := containers.ToCNBatch(am.bats[0])
-	batches := make([]*batch.Batch, len(am.toLayout))
-	releaseFs := make([]func(), len(am.toLayout))
-
-	blkCnt := 0
-	bufferRowCnt := 0
-	k := 0
-	releaseAll := func() {
-		for _, f := range releaseFs {
-			if f != nil {
-				f()
-			}
-		}
-	}
 	for am.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
-			releaseAll()
 			return nil, nil, nil, ctx.Err()
 		default:
 		}
@@ -317,36 +313,29 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []i
 			am.pushNewElem(blkIdx)
 			continue
 		}
-		if batches[blkCnt] == nil {
-			batches[blkCnt], releaseFs[blkCnt] = getSimilarBatch(cnBat, int(am.toLayout[blkCnt]), am.vpool)
+		if err := order.add(int(blkIdx), am.rowIdx[blkIdx]); err != nil {
+			return nil, nil, nil, err
 		}
-		rowIdx := am.rowIdx[blkIdx]
-		for i := range batches[blkCnt].Vecs {
-			err := batches[blkCnt].Vecs[i].UnionOne(am.bats[blkIdx].Vecs[i].GetDownstreamVector(), rowIdx, am.vpool.GetMPool())
-			if err != nil {
-				releaseAll()
-				return nil, nil, nil, err
-			}
-		}
-
-		am.mapping[am.accRowCnt[blkIdx]+rowIdx] = k
-		k++
-		bufferRowCnt++
-		// write new block
-		if bufferRowCnt == int(am.toLayout[blkCnt]) {
-			bufferRowCnt = 0
-			blkCnt++
-		}
-
 		am.pushNewElem(blkIdx)
 	}
-	return batches, func() {
+
+	batches, releaseFs, err := order.gather(am.bats, am.toLayout, am.vpool)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	releaseAll := func() {
 		for _, f := range releaseFs {
 			if f != nil {
 				f()
 			}
 		}
-	}, am.mapping, nil
+	}
+	mapping, freeMapping, err := order.mapping(am.vpool, am.totalRows)
+	if err != nil {
+		releaseAll()
+		return nil, nil, nil, err
+	}
+	return batches, func() { releaseAll(); freeMapping() }, mapping, nil
 }
 
 func (am *aObjMerger[T]) nextPos() uint32 {

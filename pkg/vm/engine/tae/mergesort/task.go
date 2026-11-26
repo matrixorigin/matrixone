@@ -356,7 +356,7 @@ func AddSortPhaseMapping(b api.TransferMaps, mapIdx int, rowCnt int, mapping []i
 	b[mapIdx] = m
 }
 
-func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint32) {
+func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int64, toLayout []uint32) {
 	bisectHaystack := make([]uint32, 0, len(toLayout)+1)
 	bisectHaystack = append(bisectHaystack, 0)
 	for _, x := range toLayout {

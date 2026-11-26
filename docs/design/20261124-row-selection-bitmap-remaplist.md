@@ -261,6 +261,15 @@ Measured, pinned to one core, minimum of six interleaved runs, PR 9 → PR 10. `
 
 Single-batch projections still go through `Union` and are unchanged. These runs were on a shared machine with other work running, so only the interleaved minimums are compared.
 
+**Inverse maps (PR 11).** `List.InvertInto(srcRows, dst)` writes the old row → new row map of a forward list into a list the caller owns: `srcRows` entries, -1 for every source row the list leaves out. A repeated or out-of-range source row is an error. The TN merges that feed transfer are its users. `MergeAObj` (merge of appendable objects by sort key) and `ReshapeBatches` (no sort key) used to copy each kept row with `UnionOne` per column and fill a `[]int` map by hand. Now the heap, or the scan in input order, only records the kept rows as global row ids in a List. The columns are then gathered one at a time per output block with `UnionRowsFrom`, and `InvertInto` derives the map, which comes from the merge's pool and is freed by the merge's release function. The map is `[]int64`, so `UpdateMappingAfterMerge` takes `[]int64`. `AddSortPhaseMapping` stays as it is: it inverts straight into the transfer slab's `TransferDestPos` entries, and an `int64` map in between would be an extra pass.
+
+Measured, pinned to one core, minimum of five interleaved runs, PR 10 → PR 11. The input is 4 appendable batches of 8192 rows with an interleaving int64 sort key, an int64, a decimal128 and a varchar column, with every 10th row deleted:
+
+| benchmark | old | new |
+| --- | --- | --- |
+| `BenchmarkMergeAObjGather` | 1864 µs, 265 KB Go heap | 1020 µs, 134 KB |
+| `BenchmarkReshapeBatchesGather` | 1282 µs, 266 KB | 632 µs, 134 KB |
+
 ## Implementation plan
 
 Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a duplicate and each measured with its own benchmark. The tracks are independent until the last cleanup.
@@ -278,7 +287,7 @@ Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a 
 | 8 | RemapList | Buckets | spill, hash-build spill, group spill, the complete-key shuffle and partition use the one counting sort (`SplitBuckets` / `BuildBuckets`); the typed shuffle kernels keep their fused append (measured); their `int32` lists become `int64` and `UnionInt32` goes away | shuffle and spill benchmarks |
 | 9 | RemapList | Sorts | order, mergeorder, top, mergetop, window, mergesort, logtail and publication sorts apply their permutation with `Permute` / `PermuteWithScratch` on the gather kernel; remove `Shuffle` and `ShuffleWithBuf` | sort and top-k benchmarks |
 | 10 | RemapList | Joins | the probe side keeps `Union`; build gathers over several batches use `UnionRowsFrom` (per-row source and row); `TryUnionFlatFixedRows` goes away | hash-join benchmarks; TPC-H join queries |
-| 11 | RemapList | Inverse maps | mergesort and transfer use `InvertInto` | merge benchmarks |
+| 11 | RemapList | Inverse maps | `InvertInto`; `MergeAObj` and `ReshapeBatches` record the kept rows in a List, gather columns with `UnionRowsFrom` and derive the transfer map with `InvertInto` | merge benchmarks |
 
 Every PR follows the same checks:
 

@@ -144,7 +144,7 @@ func TestJSONClusterKeyPreservesPhysicalOrderThroughWriteAndMerge(t *testing.T) 
 		context.Background(), mergerPool, []*containers.Batch{oldObject, newObject}, 0, []uint32{4})
 	require.NoError(t, err)
 	defer release()
-	require.Equal(t, []int{0, 2, 1, 3}, mapping)
+	require.Equal(t, []int64{0, 2, 1, 3}, mapping)
 	require.Equal(t,
 		[][]byte{rawJSON("true"), rawJSON("false"), rawJSON("0"), rawJSON("1")},
 		vector.InefficientMustBytesCol(merged[0].Vecs[0]))
@@ -193,7 +193,7 @@ func TestJSONClusterKeyPreservesDivergentLegacyArrayOrderThroughWriteAndMerge(t 
 		context.Background(), mergerPool, []*containers.Batch{oldObject, newObject}, 0, []uint32{3})
 	require.NoError(t, err)
 	defer release()
-	require.Equal(t, []int{0, 1, 2}, mapping)
+	require.Equal(t, []int64{0, 1, 2}, mapping)
 	require.Equal(t, [][]byte{zeroZero, zeroZero, hundred},
 		vector.InefficientMustBytesCol(merged[0].Vecs[0]))
 }
@@ -234,7 +234,7 @@ func TestJSONClusterKeyRejectsLegacyRawMergedRunReinterpretation(t *testing.T) {
 		context.Background(), &testPool{pool: pool}, []*containers.Batch{legacyRun, newRun}, 0, []uint32{3})
 	require.NoError(t, err)
 	defer release()
-	require.Equal(t, []int{0, 1, 2}, mapping)
+	require.Equal(t, []int64{0, 1, 2}, mapping)
 	require.Equal(t,
 		[][]byte{hundred, zeroZero, threeZeros},
 		vector.InefficientMustBytesCol(merged[0].Vecs[0]),
@@ -350,7 +350,7 @@ func TestAObjMergeDecimal256(t *testing.T) {
 	ret, releaseF, mapping, err := MergeAObj(context.Background(), testPool, batches, 0, []uint32{3, 2})
 	require.NoError(t, err)
 	defer releaseF()
-	require.Equal(t, []int{0, 3, 4, 1, 2}, mapping)
+	require.Equal(t, []int64{0, 3, 4, 1, 2}, mapping)
 	require.Equal(t, []string{
 		"-2.0000",
 		"0.0001",

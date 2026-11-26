@@ -43,57 +43,65 @@ func SortBlockColumns(
 	return sortedIdx, nil
 }
 
-func ReshapeBatches(batches []*containers.Batch, toLayout []uint32, vpool DisposableVecPool) ([]*batch.Batch, func(), []int, error) {
-	// just do reshape, keep sortedIdx nil
-	ret := make([]*batch.Batch, len(toLayout))
-	rfs := make([]func(), len(toLayout))
-	releaseF := func() {
-		for _, rf := range rfs {
-			rf()
-		}
-	}
-
-	k := 0
+// ReshapeBatches copies the rows of batches that are not deleted, in order,
+// into new batches of toLayout sizes. Rows past the layout are dropped. It
+// also returns the old → new map: entry r is where global row r (the rows of
+// all batches numbered one after another) went, or -1 if it was dropped. The
+// map is valid until the returned release function is called.
+func ReshapeBatches(batches []*containers.Batch, toLayout []uint32, vpool DisposableVecPool) ([]*batch.Batch, func(), []int64, error) {
 	accRowCnt := make([]int64, len(batches))
-
 	totalRowCnt := 0
 	for i, blk := range batches {
 		accRowCnt[i] = int64(totalRowCnt)
 		totalRowCnt += blk.Length()
 	}
-
-	mapping := make([]int, totalRowCnt)
-	for i := range mapping {
-		mapping[i] = -1
+	layoutRows := 0
+	for _, size := range toLayout {
+		layoutRows += int(size)
 	}
 
-	retIdx := 0
-	ret[0], rfs[0] = getSimilarBatch(containers.ToCNBatch(batches[0]), int(toLayout[retIdx]), vpool)
+	var order mergeOrder
+	defer order.free()
+	if err := order.init(vpool, accRowCnt, min(totalRowCnt, layoutRows)); err != nil {
+		return nil, nil, nil, err
+	}
+collect:
 	for batIdx, bat := range batches {
-		cnBat := containers.ToCNBatch(bat)
-		for row := 0; row < cnBat.RowCount(); row++ {
+		for row := 0; row < bat.Length(); row++ {
+			if order.rows.Len() == layoutRows {
+				break collect
+			}
 			if bat.Deletes.Contains(uint64(row)) {
 				continue
 			}
-
-			mapping[accRowCnt[batIdx]+int64(row)] = k
-			k++
-			for idx := range ret[retIdx].Vecs {
-				err := ret[retIdx].Vecs[idx].UnionOne(cnBat.Vecs[idx], int64(row), vpool.GetMPool())
-				if err != nil {
-					releaseF()
-					return nil, nil, nil, err
-				}
-			}
-			ret[retIdx].SetRowCount(ret[retIdx].RowCount() + 1)
-			if uint32(ret[retIdx].RowCount()) == toLayout[retIdx] {
-				if retIdx == len(toLayout)-1 {
-					return ret, releaseF, mapping, nil
-				}
-				retIdx++
-				ret[retIdx], rfs[retIdx] = getSimilarBatch(containers.ToCNBatch(batches[0]), int(toLayout[retIdx]), vpool)
+			if err := order.add(batIdx, int64(row)); err != nil {
+				return nil, nil, nil, err
 			}
 		}
 	}
-	return ret, releaseF, mapping, nil
+
+	ret, rfs, err := order.gather(batches, toLayout, vpool)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// A block is made when the one before it is full, even if no rows are
+	// left for it, and the first block always.
+	for b := range ret {
+		if ret[b] == nil && (b == 0 || ret[b-1] != nil && uint32(ret[b-1].RowCount()) == toLayout[b-1]) {
+			ret[b], rfs[b] = getSimilarBatch(containers.ToCNBatch(batches[0]), int(toLayout[b]), vpool)
+		}
+	}
+	releaseF := func() {
+		for _, rf := range rfs {
+			if rf != nil {
+				rf()
+			}
+		}
+	}
+	mapping, freeMapping, err := order.mapping(vpool, totalRowCnt)
+	if err != nil {
+		releaseF()
+		return nil, nil, nil, err
+	}
+	return ret, func() { releaseF(); freeMapping() }, mapping, nil
 }
