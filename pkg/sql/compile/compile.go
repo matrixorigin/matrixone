@@ -6016,12 +6016,12 @@ func (c *Compile) compileUpdateUnique(node *plan.Node, ss []*Scope) ([]*Scope, e
 			RowID: int(ctx.RowId), Active: int(ctx.Active), Keys: keys, Values: values, Checks: checks,
 			RejectZeroTemporal: rejectZeroTemporal,
 			SpillConfig: materialized.SpillConfig{
-				FileFactory: func(name string) (*os.File, error) {
+				FileFactory: func(ctx context.Context, name string) (*os.File, error) {
 					spillFS, err := c.proc.GetSpillFileService()
 					if err != nil {
 						return nil, err
 					}
-					return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
+					return spillFS.CreateAndRemoveFile(ctx, name)
 				},
 				Budget: newMaterializedSpillBudget(c.proc),
 			},

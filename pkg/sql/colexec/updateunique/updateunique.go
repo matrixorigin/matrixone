@@ -72,15 +72,16 @@ type UpdateUnique struct {
 }
 
 type container struct {
-	source    *materialized.Source
-	ledgers   []*updateKeyLedger
-	decisions *vector.Vector
-	output    *batch.Batch
-	position  int
-	offset    int64
-	prepared  bool
-	decided   bool
-	done      bool
+	source            *materialized.Source
+	ledgers           []*updateKeyLedger
+	decisions         *vector.Vector
+	output            *batch.Batch
+	outputReservation materialized.Reservation
+	position          int
+	offset            int64
+	prepared          bool
+	decided           bool
+	done              bool
 }
 
 var _ vm.Operator = (*UpdateUnique)(nil)
@@ -167,10 +168,7 @@ func (op *UpdateUnique) Call(proc *process.Process) (vm.CallResult, error) {
 	if !op.ctr.prepared {
 		return vm.CancelResult, moerr.NewInternalErrorNoCtx("update unique operator is not prepared")
 	}
-	if op.ctr.output != nil {
-		op.ctr.output.Clean(proc.Mp())
-		op.ctr.output = nil
-	}
+	op.cleanOutput(proc)
 	if op.ctr.done {
 		return vm.CallResult{Status: vm.ExecStop}, nil
 	}
@@ -183,7 +181,7 @@ func (op *UpdateUnique) Call(proc *process.Process) (vm.CallResult, error) {
 			return vm.CancelResult, err
 		}
 	}
-	bat, end, err := op.ctr.source.Next(proc.Ctx, 1, op.ctr.position)
+	bat, reservation, end, err := op.ctr.source.Next(proc.Ctx, 1, op.ctr.position)
 	if err != nil {
 		op.cleanup(proc)
 		return vm.CancelResult, err
@@ -198,6 +196,8 @@ func (op *UpdateUnique) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CallResult{Status: vm.ExecStop}, nil
 	}
 	op.ctr.position++
+	op.ctr.output = bat
+	op.ctr.outputReservation = reservation
 	accepted, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_bool.ToType(), op.alloc.vector)
 	if err == nil {
 		err = accepted.UnionBatch(op.ctr.decisions, op.ctr.offset, bat.RowCount(), nil, proc.Mp())
@@ -206,17 +206,14 @@ func (op *UpdateUnique) Call(proc *process.Process) (vm.CallResult, error) {
 		if accepted != nil {
 			accepted.Free(proc.Mp())
 		}
-		bat.Clean(proc.Mp())
 		op.cleanup(proc)
 		return vm.CancelResult, err
 	}
 	op.ctr.offset += int64(bat.RowCount())
 	if err = op.appendSelection(proc, bat, accepted); err != nil {
-		bat.Clean(proc.Mp())
 		op.cleanup(proc)
 		return vm.CancelResult, err
 	}
-	op.ctr.output = bat
 	return vm.CallResult{Batch: bat, Status: vm.ExecNext}, nil
 }
 
@@ -359,13 +356,13 @@ func (op *UpdateUnique) collectAndDecide(proc *process.Process) error {
 				}
 			}
 		}
-		if err = op.ctr.source.Append(input.Batch); err != nil {
+		if err = op.ctr.source.Append(proc.Ctx, input.Batch); err != nil {
 			return err
 		}
 	}
 	op.ctr.source.Finish(nil)
 	for pos := 0; ; pos++ {
-		bat, end, err := op.ctr.source.Next(proc.Ctx, 0, pos)
+		bat, reservation, end, err := op.ctr.source.Next(proc.Ctx, 0, pos)
 		if err != nil {
 			return err
 		}
@@ -374,6 +371,9 @@ func (op *UpdateUnique) collectAndDecide(proc *process.Process) error {
 		}
 		err = op.decideBatch(proc, bat)
 		bat.Clean(proc.Mp())
+		if reservation != nil {
+			reservation.Release()
+		}
 		if err != nil {
 			return err
 		}
@@ -470,10 +470,19 @@ func (op *UpdateUnique) validate(bat *batch.Batch) error {
 	return nil
 }
 
-func (op *UpdateUnique) cleanup(proc *process.Process) {
+func (op *UpdateUnique) cleanOutput(proc *process.Process) {
 	if op.ctr.output != nil {
 		op.ctr.output.Clean(proc.Mp())
+		op.ctr.output = nil
 	}
+	if op.ctr.outputReservation != nil {
+		op.ctr.outputReservation.Release()
+		op.ctr.outputReservation = nil
+	}
+}
+
+func (op *UpdateUnique) cleanup(proc *process.Process) {
+	op.cleanOutput(proc)
 	if op.ctr.source != nil {
 		op.ctr.source.Close()
 	}

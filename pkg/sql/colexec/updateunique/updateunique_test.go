@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -86,6 +87,11 @@ func admissionOperator(t *testing.T, proc *process.Process) (*UpdateUnique, *mpo
 func TestAdmissionDrainsAndChecksAllKeys(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	op, _, _ := admissionOperator(t, proc)
+	budget := proc.GetCTEMemoryBudget()
+	op.SpillConfig.Allocation = op.alloc.vector
+	op.SpillConfig.Budget.ReserveMemory = func(size uint64) (materialized.Reservation, error) {
+		return budget.Reserve(proc.Ctx, size)
+	}
 	first := admissionBatch(t, proc.Mp(), admissionRow{id: 1, active: true, oldU: 10, newU: 500, oldV: 100, newV: 300, hitV: true})
 	second := admissionBatch(t, proc.Mp(), admissionRow{id: 2, active: true, oldU: 20, newU: 500, oldV: 200, newV: 400})
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
@@ -97,6 +103,7 @@ func TestAdmissionDrainsAndChecksAllKeys(t *testing.T) {
 	for _, expected := range []bool{false, true} {
 		result, err := op.Call(proc)
 		require.NoError(t, err)
+		require.NotNil(t, op.ctr.outputReservation)
 		require.True(t, drained, "no decisions may be published before the child finishes")
 		require.Equal(t, 1, result.Batch.RowCount())
 		require.Equal(t, expected, vector.GetFixedAtNoTypeCheck[bool](result.Batch.Vecs[10], 0))
@@ -105,6 +112,8 @@ func TestAdmissionDrainsAndChecksAllKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, result.Batch)
 	require.Equal(t, vm.ExecStop, result.Status)
+	_, used, _ := budget.Snapshot()
+	require.Zero(t, used, "decision and output replays must release their batch reservations")
 }
 
 func TestAdmissionIncludesInactiveLaterParticipant(t *testing.T) {

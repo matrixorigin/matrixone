@@ -70,7 +70,7 @@ func TestAdmissionCancellationAfterSpillReleasesResources(t *testing.T) {
 	var spillFile *os.File
 	dir := t.TempDir()
 	op.SpillConfig = materialized.SpillConfig{
-		FileFactory: func(name string) (*os.File, error) {
+		FileFactory: func(_ context.Context, name string) (*os.File, error) {
 			file, err := os.CreateTemp(dir, name)
 			if err == nil {
 				err = os.Remove(file.Name())
