@@ -152,7 +152,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				}
 			}
 		}
-		expr, err = b.impl.BindColRef(exprImpl, depth, isRoot)
+		if exprImpl.StoredValue {
+			expr, err = b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+				return b.impl.BindColRef(exprImpl, depth, isRoot)
+			})
+		} else {
+			expr, err = b.impl.BindColRef(exprImpl, depth, isRoot)
+		}
 
 	case *tree.SerialExtractExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("serial_extract", []tree.Expr{astExpr}, depth)
@@ -529,9 +535,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	if colPos != NotFound {
+		rawSpecial := b.bindRawMySQLSpecialType
+		if binding := b.ctx.bindingByTag[relPos]; binding != nil && binding.indexBackfillRaw {
+			rawSpecial = true
+		}
 		// Display-wrapped special columns historically do not participate in
 		// this binder's bare-column accounting.
-		if b.bindRawMySQLSpecialType || !isEnumOrSetPlanType(typ) {
+		if rawSpecial || !isEnumOrSetPlanType(typ) {
 			b.boundCols = append(b.boundCols, table+"."+col)
 		}
 
@@ -558,7 +568,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 		// Preserve the column's correlation depth inside its display wrapper.
 		// Numeric contexts use the raw storage value instead.
-		if !b.bindRawMySQLSpecialType && isEnumOrSetPlanType(typ) {
+		if !rawSpecial && isEnumOrSetPlanType(typ) {
 			expr, err = makeEnumOrSetDisplayValue(b.GetContext(), expr)
 		}
 		if err != nil {

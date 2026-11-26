@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/logservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/proxy"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
@@ -33,11 +32,6 @@ import (
 // Coordinator is assumed to be used in synchronous, single-threaded context.
 type Coordinator struct {
 	OperatorController *operator.Controller
-
-	// Considering the context of `Coordinator`,
-	// there is no need for a mutext to protect.
-	teardown    bool
-	teardownOps []*operator.Operator
 
 	service string
 	cfg     hakeeper.Config
@@ -71,38 +65,8 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 		zap.Uint64("current tick", currentTick),
 	)
 
-	defer func() {
-		if !c.teardown {
-			runtime.ServiceRuntime(c.service).Logger().Debug("MO is working.")
-		}
-	}()
-
 	c.OperatorController.RemoveFinishedOperator(logState, tnState, cnState, proxyState)
 
-	// if we've discovered unhealthy already, no need to keep alive anymore.
-	if c.teardown {
-		return c.OperatorController.Dispatch(c.teardownOps, logState, tnState, cnState, proxyState)
-	}
-
-	// check whether system health or not.
-	if operators, health := syshealth.Check(c.cfg, cluster, tnState, logState, currentTick); !health {
-		// TN starts have a report/target lifetime. Teardown ends their ownership
-		// before ordinary checks stop running.
-		for _, record := range cluster.TNShards {
-			for _, op := range slices.Clone(c.OperatorController.GetOperators(record.ShardID)) {
-				if steps := op.OpSteps(); len(steps) == 1 {
-					if _, ok := steps[0].(operator.AddTnReplica); ok {
-						c.OperatorController.RemoveOperator(op)
-					}
-				}
-			}
-		}
-		c.teardown = true
-		c.teardownOps = operators
-		return c.OperatorController.Dispatch(c.teardownOps, logState, tnState, cnState, proxyState)
-	}
-
-	// system health, try to keep alive.
 	executing := c.OperatorController.GetExecutingReplicas()
 	executingNonVoting := c.OperatorController.GetNonVotingExecutingReplicas()
 

@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -554,38 +555,45 @@ func (l *getLockHolderTestTable) getBind() pb.LockTable {
 func (l *getLockHolderTestTable) close(reason closeReason) {}
 
 func TestForceRefreshLockTableBinds(t *testing.T) {
-	runBindChangedTests(
-		t,
-		false,
-		func(
-			ctx context.Context,
-			alloc *lockTableAllocator,
-			l1, l2, _ *service,
-			table uint64) {
-			l1.ForceRefreshLockTableBinds(nil, nil)
-			l2.ForceRefreshLockTableBinds(nil, nil)
+	runLockServiceTests(t, []string{"owner", "source"}, func(_ *lockTableAllocator, nodes []*service) {
+		owner, source := nodes[0], nodes[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table = 1810
+		localID, remoteID := []byte("txn1"), []byte("txn2")
+		opts := newTestRowExclusiveOptions()
+		_, err := owner.Lock(ctx, table, newTestRows(1), localID, opts)
+		require.NoError(t, err)
+		mustAddTestLockWithBackendRetry(t, ctx, source, table, remoteID, newTestRows(2), opts.Granularity)
 
-			mustAddTestLock(
-				t,
-				ctx,
-				l1,
-				table,
-				[]byte("txn1"),
-				[][]byte{{1}},
-				pb.Granularity_Row,
-			)
+		// Refreshing a stateless source route leaves the owner's existing
+		// lock table intact, so the source transaction can continue.
+		source.ForceRefreshLockTableBinds(nil, nil)
+		_, err = source.Lock(ctx, table, newTestRows(4), remoteID, opts)
+		require.NoError(t, err)
+		require.NoError(t, source.Unlock(ctx, remoteID, timestamp.Timestamp{}))
+		for _, row := range newTestRows(2, 4) {
+			_, held, err := owner.GetLockHolder(ctx, table, row, opts)
+			require.NoError(t, err)
+			require.False(t, held)
+		}
+		remoteID = []byte("remote-before-refresh")
+		_, err = source.Lock(ctx, table, newTestRows(2), remoteID, opts)
+		require.NoError(t, err)
 
-			mustAddTestLock(
-				t,
-				ctx,
-				l2,
-				table,
-				[]byte("txn2"),
-				[][]byte{{2}},
-				pb.Granularity_Row,
-			)
-		},
-	)
+		// Refreshing on the owner actually retires the lock store.
+		owner.ForceRefreshLockTableBinds(nil, nil)
+		fresh := []byte("fresh")
+		_, err = owner.Lock(ctx, table, newTestRows(3), fresh, opts)
+		require.NoError(t, err)
+		_, err = owner.Lock(ctx, table, newTestRows(1), localID, opts)
+		require.ErrorIs(t, err, ErrLockTableBindChanged)
+		_, err = source.Lock(ctx, table, newTestRows(2), remoteID, opts)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged), "%v", err)
+		require.NoError(t, source.Unlock(ctx, remoteID, timestamp.Timestamp{}))
+		require.NoError(t, owner.Unlock(ctx, localID, timestamp.Timestamp{}))
+		require.NoError(t, owner.Unlock(ctx, fresh, timestamp.Timestamp{}))
+	})
 }
 
 func TestGetLockTableBind(t *testing.T) {

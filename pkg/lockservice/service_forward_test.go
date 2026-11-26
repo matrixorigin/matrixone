@@ -182,6 +182,10 @@ func TestDeadLockWithForward(t *testing.T) {
 
 			txn1 := []byte("txn1")
 			txn2 := []byte("txn2")
+			// The receiving CN is the logical coordinator, as in CN setup.
+			l2.cfg.ForwardedLockAdmission = func(id []byte) bool { return string(id) == string(txn2) }
+			l1.cfg.TxnIterFunc = func(visit func([]byte) bool) { visit(txn1) }
+			l2.cfg.TxnIterFunc = func(visit func([]byte) bool) { visit(txn2) }
 			row1 := []byte{1}
 			row2 := []byte{2}
 
@@ -190,25 +194,212 @@ func TestDeadLockWithForward(t *testing.T) {
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
-				ForwardTo:   "s2",
+				ForwardTo:   l2.serviceID,
 			})
 			require.NoError(t, err)
 
-			var wg sync.WaitGroup
-			wg.Add(2)
-			go func() {
-				defer wg.Done()
-				maybeAddTestLockWithDeadlock(t, ctx, l1, 1, txn1, [][]byte{row2},
-					pb.Granularity_Row)
-				require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
-			}()
-			go func() {
-				defer wg.Done()
-				maybeAddTestLockWithDeadlock(t, ctx, l2, 1, txn2, [][]byte{row1},
-					pb.Granularity_Row)
-				require.NoError(t, l2.Unlock(ctx, txn2, timestamp.Timestamp{}))
-			}()
-			wg.Wait()
+			holder, held, err := l1.GetLockHolder(ctx, 1, row2, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			require.True(t, held)
+			require.Equal(t, txn2, holder.TxnID)
+
+			lockErrors := make(chan error, 2)
+			unlockErrors := make(chan error, 2)
+			for _, participant := range []struct {
+				service *service
+				txn     []byte
+				row     []byte
+			}{{l1, txn1, row2}, {l2, txn2, row1}} {
+				go func() {
+					_, err := participant.service.Lock(ctx, 1, [][]byte{participant.row},
+						participant.txn, newTestRowExclusiveOptions())
+					lockErrors <- err
+					unlockErrors <- participant.service.Unlock(ctx, participant.txn, timestamp.Timestamp{})
+				}()
+			}
+			first, second := <-lockErrors, <-lockErrors
+			require.NoError(t, <-unlockErrors)
+			require.NoError(t, <-unlockErrors)
+			firstDeadlock := moerr.IsMoErrCode(first, moerr.ErrDeadLockDetected)
+			secondDeadlock := moerr.IsMoErrCode(second, moerr.ErrDeadLockDetected)
+			require.True(t, (firstDeadlock || secondDeadlock) &&
+				(first == nil || firstDeadlock) && (second == nil || secondDeadlock),
+				"expected a detected deadlock, got %v and %v", first, second)
 		},
 	)
+}
+
+func TestLocalRollbackRechecksRouteAfterForwardedLock(t *testing.T) {
+	type rollbackKey struct{}
+	immediateEntered := make(chan struct{}, 1)
+	resumeImmediate := make(chan struct{})
+	resume := sync.OnceFunc(func() { close(resumeImmediate) })
+	runLockServiceTests(t, []string{"coordinator", "mirror", "owner"},
+		func(_ *lockTableAllocator, services []*service) {
+			defer resume()
+			coordinator, mirror, owner := services[0], services[1], services[2]
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			const localTable, remoteTable = 1050, 1051
+			row := []byte{1}
+			rows := [][]byte{row}
+			id := []byte("forward-vs-local-rollback")
+			coordinator.cfg.ForwardedLockAdmission = func([]byte) bool { return true }
+			coordinator.cfg.EnableRemoteLocalProxy = true
+
+			_, err := coordinator.Lock(ctx, localTable, rows, id, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			_, err = owner.Lock(ctx, remoteTable, rows, []byte("seed"), newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			require.NoError(t, owner.Unlock(ctx, []byte("seed"), timestamp.Timestamp{}))
+			table, err := coordinator.getLockTableWithCreate(ctx, 0, remoteTable, rows, pb.Sharding_None)
+			require.NoError(t, err)
+			proxy := table.(*localLockTableProxy)
+
+			immediate := make(chan error, 1)
+			go func() {
+				immediate <- coordinator.unlockTransaction(context.WithValue(ctx, rollbackKey{}, true),
+					id, timestamp.Timestamp{}, localRollbackCleanup)
+			}()
+			select {
+			case <-immediateEntered:
+			case <-ctx.Done():
+				t.Fatal("rollback did not reach the close boundary")
+			}
+
+			options := newTestRowSharedOptions()
+			options.ForwardTo = coordinator.serviceID
+			_, err = mirror.Lock(ctx, remoteTable, rows, id, options)
+			require.NoError(t, err)
+
+			// A rollback must see the remote route under its transaction mutex
+			// and exit without trying to acquire the proxy mutex.
+			proxy.mu.Lock()
+			resume()
+			select {
+			case err := <-immediate:
+				proxy.mu.Unlock()
+				require.ErrorIs(t, err, ErrLockTimeout)
+			case <-time.After(time.Second):
+				proxy.mu.Unlock()
+				t.Fatal("foreground rollback entered proxy cleanup")
+			}
+
+			resolved := make(chan struct{})
+			pending, err := coordinator.ResolveRollbackCleanup(id, func() { close(resolved) })
+			require.NoError(t, err)
+			require.True(t, pending)
+			select {
+			case <-resolved:
+			case <-ctx.Done():
+				t.Fatal("resolver did not release forwarded lock")
+			}
+			_, held, err := owner.GetLockHolder(ctx, remoteTable, row, options)
+			require.NoError(t, err)
+			require.False(t, held)
+		},
+		WithWait(func(ctx context.Context) error {
+			if ctx.Value(rollbackKey{}) == nil {
+				return nil
+			}
+			immediateEntered <- struct{}{}
+			select {
+			case <-resumeImmediate:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}),
+	)
+}
+
+func TestForwardLockCreatesMissingAndRejectsReplacedTable(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		replace  bool
+		sharding pb.Sharding
+	}{
+		{name: "missing route"},
+		{name: "cold by-row route", sharding: pb.Sharding_ByRow},
+		{name: "replaced instance", replace: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockServiceTests(t, []string{"worker", "owner"}, func(_ *lockTableAllocator, nodes []*service) {
+				worker, owner := nodes[0], nodes[1]
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				const table = 1811
+				rows := newTestRows(1)
+				opts := newTestRowExclusiveOptions()
+				opts.Sharding = tc.sharding
+				old, err := owner.getLockTableWithCreate(ctx, 0, table, rows, opts.Sharding)
+				require.NoError(t, err)
+				opts.ForwardTo = owner.serviceID
+				id := []byte("forwarded")
+				result := make(chan error, 1)
+				remove := func() {
+					removed, err := owner.CloseRemoteLockTable(0, old.getBind().Table, old.getBind().Version)
+					require.NoError(t, err)
+					require.True(t, removed)
+				}
+
+				entered, release := make(chan struct{}), make(chan struct{})
+				resume := sync.OnceFunc(func() { close(release) })
+				defer resume()
+				if tc.replace {
+					owner.option.beforeRemoteLockBindCheck = sync.OnceFunc(func() {
+						close(entered)
+						<-release
+					})
+				} else {
+					remove()
+				}
+				go func() {
+					_, err := worker.Lock(ctx, table, rows, id, opts)
+					result <- err
+				}()
+				if tc.replace {
+					select {
+					case <-entered:
+					case <-ctx.Done():
+						t.Fatal("forwarded request did not reach the bind check")
+					}
+					remove()
+					current, err := owner.getLockTableWithCreate(ctx, 0, table, rows, opts.Sharding)
+					require.NoError(t, err)
+					require.NotSame(t, old, current)
+					require.True(t, old.getBind().Equal(current.getBind()))
+					resume()
+				}
+				select {
+				case err := <-result:
+					if tc.replace {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged), "%v", err)
+					} else {
+						require.NoError(t, err)
+					}
+				case <-ctx.Done():
+					t.Fatal("forwarded request did not return")
+				}
+				if tc.replace {
+					require.False(t, owner.activeTxnHolder.hasActiveTxn(id))
+					_, held, err := owner.GetLockHolder(ctx, table, rows[0], opts)
+					require.NoError(t, err)
+					require.False(t, held)
+					_, err = worker.Lock(ctx, table, rows, id, opts)
+					require.NoError(t, err)
+				}
+				holder, held, err := owner.GetLockHolder(ctx, table, rows[0], opts)
+				require.NoError(t, err)
+				require.True(t, held)
+				require.Equal(t, id, holder.TxnID)
+				if tc.sharding == pb.Sharding_ByRow {
+					bind := owner.tableGroups.get(0, ShardingByRow(rows[0])).getBind()
+					require.Equal(t, uint64(table), bind.OriginTable)
+					require.Equal(t, ShardingByRow(rows[0]), bind.Table)
+				}
+				require.NoError(t, owner.Unlock(ctx, id, timestamp.Timestamp{}))
+			})
+		})
+	}
 }

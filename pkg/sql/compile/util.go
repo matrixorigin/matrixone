@@ -158,11 +158,12 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 	if err != nil {
 		return "", err
 	}
-	temp := partsToIndexExprStr(indexDef.Parts, prefixLengths)
+	parts := indexDef.Parts
 	spatialIndex := catalog.IsRTreeIndexAlgo(indexDef.IndexAlgo)
-	if spatialIndex && len(indexDef.Parts) > 0 {
-		temp = partsToIndexExprStr(indexDef.Parts[:1], prefixLengths)
+	if spatialIndex && len(parts) > 0 {
+		parts = parts[:1]
 	}
+	temp := strings.Join(indexPartExpressions(parts, prefixLengths), ",")
 	if len(originTableDef.Pkey.PkeyColName) == 0 {
 		if len(indexDef.Parts) == 1 || spatialIndex {
 			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
@@ -501,21 +502,17 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 	return nil
 }
 
-func partsToIndexExprStr(parts []string, prefixLengths map[string]int) string {
-	var temp string
+func indexPartExpressions(parts []string, prefixLengths map[string]int) []string {
+	expressions := make([]string, len(parts))
 	for i, part := range parts {
 		part = catalog.ResolveAlias(part)
-		partExpr := quoteMySQLQualifiedIdent(part)
+		expr := quoteMySQLQualifiedIdent(part)
 		if length := prefixLengths[part]; length > 0 {
-			partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
+			expr = fmt.Sprintf("substring(%s, 1, %d)", expr, length)
 		}
-		if i == 0 {
-			temp += partExpr
-		} else {
-			temp += "," + partExpr
-		}
+		expressions[i] = expr
 	}
-	return temp
+	return expressions
 }
 
 func quoteMySQLIdent(ident string) string {

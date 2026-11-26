@@ -66,6 +66,9 @@ type ColumnItem struct {
 // the unresolved qualified name like column name.
 type UnresolvedName struct {
 	exprImpl
+	// StoredValue is set only on engine-generated column references that must
+	// preserve the physical ENUM/SET value for index maintenance.
+	StoredValue bool
 	//the number of name parts specified, including the star. Always 1 or greater.
 	NumParts int
 

@@ -851,9 +851,8 @@ func (builder *QueryBuilder) validateModernUpdateParentRowClosure(
 		if parentCol == nil {
 			return moerr.NewInternalError(builder.GetContext(), "invalid parent foreign key action columns")
 		}
-		if parentCol.Typ.Id != childCol.Typ.Id ||
-			parentCol.Typ.Width != childCol.Typ.Width ||
-			parentCol.Typ.Scale != childCol.Typ.Scale ||
+		if parentCol.Typ.Width != childCol.Typ.Width ||
+			!ColumnStorageScalesEqual(&parentCol.Typ, &childCol.Typ) ||
 			!sameTypeMemberDomain(&parentCol.Typ, &childCol.Typ) {
 			return builder.newUnsupportedUpdateParentRowClosureError()
 		}

@@ -41,6 +41,8 @@ type Config struct {
 	RPC morpc.Config `toml:"-"`
 	// TxnIterFunc used to iterate all active transactions in current cn
 	TxnIterFunc func(func([]byte) bool) `toml:"-"`
+	// ForwardedLockAdmission verifies the logical coordinator's transaction.
+	ForwardedLockAdmission func([]byte) bool `toml:"-"`
 	// disconnectAfterRead for testing
 	disconnectAfterRead      int           `toml:"-"`
 	removeDisconnectDuration time.Duration `toml:"-"`

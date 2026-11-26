@@ -28,12 +28,14 @@ import (
 var Handler *versionHandle
 
 func init() {
+	// Keep the released offset. The COLUMNS refresh runs when an earlier
+	// catalog goes through the 4.0.6 upgrade handler.
 	Handler = &versionHandle{metadata: versions.Version{
 		Version:           "4.0.6",
 		MinUpgradeVersion: "4.0.5",
 		UpgradeCluster:    versions.Yes,
 		UpgradeTenant:     versions.Yes,
-		VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
+		VersionOffset:     5,
 	}}
 }
 

@@ -343,5 +343,13 @@ select count(*) as diff_schema_mismatch_tables
     from mo_catalog.mo_tables
     where reldatabase = 'test_diff_output_as' and relname = 'diff_schema_mismatch';
 
+-- Preserve the projected column charset in the materialized result.
+create table base_charset(id int primary key, payload varchar(20) character set utf8mb4 collate utf8mb4_bin);
+create table branch_charset like base_charset;
+insert into branch_charset values (1, 'branch');
+data branch diff branch_charset against base_charset output as diff_charset;
+select CHARACTER_SET_NAME, COLLATION_NAME from information_schema.COLUMNS
+where TABLE_SCHEMA = 'test_diff_output_as' and TABLE_NAME = 'diff_charset' and COLUMN_NAME = 'payload';
+
 drop database test_diff_output_as_dst;
 drop database test_diff_output_as;

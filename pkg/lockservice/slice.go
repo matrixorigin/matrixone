@@ -111,7 +111,7 @@ func (cs *cowSlice) appendSegments(values [][]byte) {
 		} else {
 			n = min(maxSize, len(values))
 			next := cs.fsp.get(n)
-			old.ref()
+			old.retain()
 			next.prev, next.prefixLen = old, old.totalLen()
 			next.append(values[:n])
 			cs.replace(old, next)
@@ -133,7 +133,7 @@ func (cs *cowSlice) appendToTail(old *fixedSlice, values [][]byte) {
 	// overhead can be ignored.
 	new := cs.fsp.get(newLen)
 	if old.prev != nil {
-		old.prev.ref()
+		old.prev.retain()
 		new.prev, new.prefixLen = old.prev, old.prefixLen
 	}
 	new.join(old, values)
@@ -161,15 +161,16 @@ func (cs *cowSlice) slice() *fixedSlice {
 		// In either case, if we get an incorrect fs, the following atomic operation
 		// will not succeed, the data will not be read.
 		fs := cs.mustGet()
-		fs.ref()
 		if cs.hack.slice != nil {
 			cs.hack.slice()
+		}
+		if !fs.tryRef() {
+			continue
 		}
 		if cs.v.CompareAndSwap(v, v+1) {
 			return fs
 		}
-		// anyway, adding a ref does not produce an error. When we find that the fs we
-		// get is incorrect, we unref
+		// When we find that the fs we get is incorrect, we unref.
 		fs.unref()
 	}
 }
@@ -264,8 +265,29 @@ func (s *fixedSlice) cap() int {
 	return cap(s.values)
 }
 
-func (s *fixedSlice) ref() {
-	s.atomic.ref.Add(1)
+func (s *fixedSlice) initRef() {
+	if !s.atomic.ref.CompareAndSwap(0, 1) {
+		panic("BUG: invalid initial ref count")
+	}
+}
+
+// retain pins a live segment while the writer still owns a reference to it.
+func (s *fixedSlice) retain() {
+	if !s.tryRef() {
+		panic("BUG: retaining a retired segment")
+	}
+}
+
+func (s *fixedSlice) tryRef() bool {
+	for {
+		v := s.atomic.ref.Load()
+		if v <= 0 {
+			return false
+		}
+		if s.atomic.ref.CompareAndSwap(v, v+1) {
+			return true
+		}
+	}
 }
 
 func (s *fixedSlice) unref() {
@@ -334,7 +356,7 @@ func (sp *fixedSlicePool) get(n int) *fixedSlice {
 	sp.acquireV.Add(1)
 	i := int(math.Log2(float64(roundUp(n))))
 	s := sp.slices[i].Get().(*fixedSlice)
-	s.ref()
+	s.initRef()
 	return s
 }
 

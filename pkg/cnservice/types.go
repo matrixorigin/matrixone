@@ -605,6 +605,10 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 
 		tc.IterTxnIDs(f)
 	}
+	s.cfg.LockService.ForwardedLockAdmission = func(id []byte) bool {
+		checker, ok := s._txnClient.(interface{ CanAdmitForwardedLock([]byte) bool })
+		return ok && checker.CanAdmitForwardedLock(id)
+	}
 	return s.cfg.LockService
 }
 

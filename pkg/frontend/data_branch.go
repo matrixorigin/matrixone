@@ -146,6 +146,25 @@ func dataBranchGeneratedExprColumn(tblDef *plan.TableDef, pos int32) *plan.ColDe
 	return nil
 }
 
+// generatedTextCastSource recognizes an implicit cast added solely because
+// the source and target carried different text charset selectors.
+func generatedTextCastSource(expr *plan.Expr) *plan.Expr {
+	cast := expr.GetF()
+	if cast == nil || cast.Func == nil || len(cast.Args) != 2 || cast.Args[1].GetT() == nil {
+		return nil
+	}
+	functionID, overload := function.DecodeOverloadID(cast.Func.Obj)
+	if overload != 0 || (functionID != function.CAST && functionID != function.CAST_STRICT) {
+		return nil
+	}
+	source := cast.Args[0]
+	if source == nil || source.Typ.Width != expr.Typ.Width || source.Typ.Scale == expr.Typ.Scale ||
+		!plan2.ColumnStorageScalesEqual(&source.Typ, &expr.Typ) {
+		return nil
+	}
+	return source
+}
+
 func canonicalizeDataBranchGeneratedExpr(
 	expr *plan.Expr,
 	resolveColumn func(int32) (string, bool),
@@ -153,6 +172,11 @@ func canonicalizeDataBranchGeneratedExpr(
 	if expr == nil {
 		return true
 	}
+	if source := generatedTextCastSource(expr); source != nil {
+		*expr = *source
+		return canonicalizeDataBranchGeneratedExpr(expr, resolveColumn)
+	}
+	expr.Typ.Scale = types.TextStorageScale(types.T(expr.Typ.Id), expr.Typ.Scale)
 	switch item := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		name, ok := resolveColumn(item.Col.ColPos)
@@ -1573,7 +1597,7 @@ func checkDataBranchPrimaryKeyCompatibilityWithResolver(
 
 func dataBranchColumnTypeAttributesEqual(left, right plan.Type) bool {
 	return left.Width == right.Width &&
-		left.Scale == right.Scale &&
+		plan2.ColumnStorageScalesEqual(&left, &right) &&
 		types.EnumMembersEqual(left.Enumvalues, left.EnumEncoding, right.Enumvalues, right.EnumEncoding) &&
 		left.AutoIncr == right.AutoIncr &&
 		left.NotNullable == right.NotNullable
@@ -1717,9 +1741,12 @@ func checkSchemaCompatibilityWithResolver(
 // preserved by an inplace ALTER, so matching column IDs and OIDs alone do not
 // guarantee that values valid on one side can be materialized into the other.
 func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
-	return left.Id == right.Id &&
-		left.Width == right.Width &&
-		left.Scale == right.Scale &&
+	return left.Scale == right.Scale && isDataBranchStorageTypeEquivalent(left, right)
+}
+
+func isDataBranchStorageTypeEquivalent(left, right plan.Type) bool {
+	return left.Width == right.Width &&
+		plan2.ColumnStorageScalesEqual(&left, &right) &&
 		types.EnumMembersEqual(left.Enumvalues, left.EnumEncoding, right.Enumvalues, right.EnumEncoding) &&
 		left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr

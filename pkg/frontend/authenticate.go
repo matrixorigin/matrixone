@@ -2416,6 +2416,8 @@ type privilege struct {
 	needMatchedRole          bool
 	// databases that may be written by statement-level DDL or account/database operations
 	writeDatabaseTargets []string
+	// Index DDL can use the ownership grant for its new table in the user transaction.
+	transactionTableOwner *transactionTableOwner
 }
 
 func (p *privilege) objectType() objectType {
@@ -7432,7 +7434,7 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 		} else if p.GetDdl().GetCreateIndex() != nil {
 			createIndex := p.GetDdl().GetCreateIndex()
 			appendPt(privilegeTips{
-				typ:                   PrivilegeTypeDropTable,
+				typ:                   PrivilegeTypeIndex,
 				objType:               objectTypeTable,
 				databaseName:          createIndex.GetDatabase(),
 				tableName:             createIndex.GetTable(),
@@ -7441,7 +7443,7 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 		} else if p.GetDdl().GetDropIndex() != nil {
 			dropIndex := p.GetDdl().GetDropIndex()
 			appendPt(privilegeTips{
-				typ:                   PrivilegeTypeDropTable,
+				typ:                   PrivilegeTypeIndex,
 				objType:               objectTypeTable,
 				databaseName:          dropIndex.GetDatabase(),
 				tableName:             dropIndex.GetTable(),
@@ -8102,6 +8104,12 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									}
 									candidates, count := planPrivilegeCandidates(tempEntry, entry.compound.perObjectCovers)
 									for _, candidate := range candidates[:count] {
+										if owner := priv.transactionTableOwner; candidate == PrivilegeTypeTableOwnership &&
+											mi.privilegeTyp == PrivilegeTypeIndex && owner != nil &&
+											owner.roleID == checkRoleId && owner.database == mi.dbName && owner.table == mi.tableName {
+											yes = true
+											break
+										}
 										candidateEntry := tempEntry
 										candidateEntry.privilegeId = candidate
 										yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, candidateEntry, pls, useCache)

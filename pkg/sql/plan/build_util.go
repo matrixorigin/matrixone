@@ -350,6 +350,46 @@ func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs 
 	return nil
 }
 
+func supportsColumnCharset(typ *plan.Type) bool {
+	return typ.Id == int32(types.T_char) || typ.Id == int32(types.T_varchar) || typ.Id == int32(types.T_text)
+}
+
+// ColumnStorageScalesEqual compares scales for storage compatibility. In 4.2,
+// an explicit utf8mb4_bin declaration uses the legacy text representation.
+func ColumnStorageScalesEqual(left, right *plan.Type) bool {
+	return left.Id == right.Id &&
+		types.TextStorageScale(types.T(left.Id), left.Scale) == types.TextStorageScale(types.T(right.Id), right.Scale)
+}
+
+func hasExplicitUTF8MB4Bin(typ *plan.Type) bool {
+	return supportsColumnCharset(typ) && typ.Scale == types.UTF8MB4BinColumnScale
+}
+
+func applyColumnCharset(typ *plan.Type, attrs []tree.ColumnAttribute) bool {
+	var explicit bool
+	for _, attr := range attrs {
+		switch a := attr.(type) {
+		case *tree.AttributeCharset:
+			if !strings.EqualFold(a.Charset, "utf8mb4") {
+				return false
+			}
+			explicit = true
+		case *tree.AttributeCollate:
+			if !strings.EqualFold(a.Collate, "utf8mb4_bin") {
+				return false
+			}
+			explicit = true
+		}
+	}
+	if explicit {
+		if !supportsColumnCharset(typ) {
+			return false
+		}
+		typ.Scale = types.UTF8MB4BinColumnScale
+	}
+	return true
+}
+
 func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil

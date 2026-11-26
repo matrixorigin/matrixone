@@ -2704,3 +2704,55 @@ func TestWithTxnLockWaitTimeout(t *testing.T) {
 		WithTxnLockWaitTimeout(60*time.Second),
 	)
 }
+
+type rollbackCleanupTestService struct {
+	unknownCommitResolverLockService
+}
+
+func (s *rollbackCleanupTestService) ResolveRollbackCleanup(txnID []byte, onResolved func()) (bool, error) {
+	return true, s.ResolveCommitUnknown(txnID, time.Time{}, 0, onResolved)
+}
+
+func TestRollbackTransferRetainsUserAdmissionUntilOwnerRelease(t *testing.T) {
+	resolver := &rollbackCleanupTestService{}
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		op, err := c.New(ctx, newTestTimestamp(0), WithUserTxn(), WithTxnMode(txn.TxnMode_Pessimistic))
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		id := append([]byte(nil), tc.Txn().ID...)
+		require.NoError(t, tc.AddLockTable(lock.LockTable{Group: 0, Table: 1, Valid: true}))
+		require.NoError(t, tc.Rollback(ctx))
+
+		resolver.mu.Lock()
+		require.Equal(t, id, resolver.resolvedTxnID)
+		require.Empty(t, resolver.unlockedTxnID)
+		resolver.mu.Unlock()
+
+		activated := make(chan error, 1)
+		go func() {
+			next, err := c.New(ctx, newTestTimestamp(0), WithUserTxn(), WithTxnMode(txn.TxnMode_Optimistic))
+			if err == nil {
+				err = next.Rollback(ctx)
+			}
+			activated <- err
+		}()
+		require.Eventually(t, func() bool {
+			users, active, waiting := txnAdmissionCounts(c)
+			return users == 1 && active == 0 && waiting == 1
+		}, time.Second, time.Millisecond)
+
+		resolver.completeResolution()
+		select {
+		case err := <-activated:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatal("owner cleanup did not free the retained user admission")
+		}
+		users, active, waiting := txnAdmissionCounts(c)
+		require.Zero(t, users)
+		require.Zero(t, active)
+		require.Zero(t, waiting)
+	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}

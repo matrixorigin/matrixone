@@ -1276,6 +1276,60 @@ func TestBranchHashmapPopByVectorsStreamInMemory(t *testing.T) {
 	require.False(t, after[1].Exists)
 }
 
+func TestBranchHashmapTextKeyWithExplicitCharset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	legacyKey := buildStringVector(t, mp, []string{"😀"})
+	defer legacyKey.Free(mp)
+	legacyValue := buildStringVector(t, mp, []string{"before"})
+	defer legacyValue.Free(mp)
+	declaredKey := buildStringVector(t, mp, []string{"😀"})
+	defer declaredKey.Free(mp)
+	declaredKey.GetType().Scale = types.UTF8MB4BinColumnScale
+	declaredValue := buildStringVector(t, mp, []string{"after"})
+	defer declaredValue.Free(mp)
+	declaredValue.GetType().Scale = types.UTF8MB4BinColumnScale
+
+	bh, err := NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{legacyKey, legacyValue}, []int{0}))
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{declaredKey, declaredValue}, []int{0}))
+	require.EqualValues(t, types.UTF8MB4BinColumnScale, declaredValue.GetType().Scale)
+
+	declaredValue.GetType().Scale = 2
+	err = bh.PutByVectors([]*vector.Vector{declaredKey, declaredValue}, []int{0})
+	require.ErrorContains(t, err, "vector type mismatch at column 1")
+
+	rows, err := bh.GetByVectors([]*vector.Vector{declaredKey})
+	require.NoError(t, err)
+	require.True(t, rows[0].Exists)
+	require.Len(t, rows[0].Rows, 2)
+
+	var values []string
+	removed, err := bh.PopByVectorsStream([]*vector.Vector{declaredKey}, true, func(idx int, key, row []byte) error {
+		require.Zero(t, idx)
+		require.NotEmpty(t, key)
+		tuple, err := types.Unpack(row)
+		require.NoError(t, err)
+		require.Len(t, tuple, 2)
+		require.Equal(t, []byte("😀"), tuple[0])
+		values = append(values, string(tuple[1].([]byte)))
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, removed)
+	require.ElementsMatch(t, []string{"before", "after"}, values)
+	require.EqualValues(t, types.UTF8MB4BinColumnScale, declaredKey.GetType().Scale)
+
+	declaredKey.GetType().Scale = 2
+	_, err = bh.GetByVectors([]*vector.Vector{declaredKey})
+	require.ErrorContains(t, err, "key vector type mismatch")
+}
+
 func TestBranchHashmapPopByVectorsStreamInMemoryCallbackError(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
