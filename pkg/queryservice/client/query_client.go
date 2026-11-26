@@ -87,6 +87,7 @@ type queryClient struct {
 type QueryClient interface {
 	ServiceID() string
 	// SendMessage send message to a cache server.
+	// For CountCachedObjectFiles, SendMessage consumes req even on failure.
 	SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error)
 	// NewRequest creates a new request by cmd method.
 	NewRequest(pb.CmdMethod) *pb.Request
@@ -100,6 +101,15 @@ func NewQueryClient(sid string, cfg morpc.Config) (QueryClient, error) {
 	pool := morpc.NewMessagePool(
 		func() *pb.Request { return &pb.Request{} },
 		func() *pb.Response { return &pb.Response{} },
+	)
+	cfg.BackendOptions = append(
+		append([]morpc.BackendOption(nil), cfg.BackendOptions...),
+		morpc.WithBackendRequestReleaseFor(isCountCachedObjectFilesRequest, func(message morpc.Message) {
+			pool.ReleaseRequest(message.(*pb.Request))
+		}),
+		morpc.WithBackendFreeOrphansResponse(func(message morpc.Message) {
+			pool.ReleaseResponse(message.(*pb.Response))
+		}),
 	)
 	c, err := cfg.NewClient(
 		sid,
@@ -125,14 +135,12 @@ func (c *queryClient) ServiceID() string {
 
 // SendMessage implements the QueryService interface.
 func (c *queryClient) SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error) {
-	if address == "" {
-		return nil, moerr.NewInternalErrorf(ctx, "invalid CN query address %s", address)
-	}
-	if err := CheckMethodVersion(ctx, c.serviceID, req); err != nil {
-		return nil, err
-	}
-	f, err := c.client.Send(ctx, address, req)
+	f, err := c.send(ctx, address, req)
 	if err != nil {
+		// An unsuccessful Send leaves the request with this client.
+		if isCountCachedObjectFilesRequest(req) {
+			c.pool.ReleaseRequest(req)
+		}
 		return nil, err
 	}
 	defer f.Close()
@@ -142,6 +150,21 @@ func (c *queryClient) SendMessage(ctx context.Context, address string, req *pb.R
 	}
 	resp := v.(*pb.Response)
 	return c.unwrapResponseError(resp)
+}
+
+func (c *queryClient) send(ctx context.Context, address string, req *pb.Request) (*morpc.Future, error) {
+	if address == "" {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid CN query address %s", address)
+	}
+	if err := CheckMethodVersion(ctx, c.serviceID, req); err != nil {
+		return nil, err
+	}
+	return c.client.Send(ctx, address, req)
+}
+
+func isCountCachedObjectFilesRequest(message morpc.Message) bool {
+	req, ok := message.(*pb.Request)
+	return ok && req != nil && req.CmdMethod == pb.CmdMethod_CountCachedObjectFiles
 }
 
 // NewRequest implements the QueryService interface.

@@ -16,21 +16,157 @@ package client
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/stretchr/testify/require"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func testCreateQueryClient(t *testing.T) QueryClient {
 	ct, err := NewQueryClient("", morpc.Config{})
 	assert.NoError(t, err)
 	return ct
+}
+
+func TestCountCachedObjectFilesReturnsWhileWriteIsPending(t *testing.T) {
+	sid := t.Name()
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { runtime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+
+	dir, err := os.MkdirTemp("/tmp", "mo-query-")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, os.RemoveAll(dir)) })
+	address := "unix://" + dir + "/rpc"
+	server, err := morpc.NewMessageHandler(sid, sid, address, morpc.Config{},
+		morpc.NewMessagePool(
+			func() *query.Request { return &query.Request{} },
+			func() *query.Response { return &query.Response{} },
+		))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, server.Close()) })
+	server.RegisterMethod(uint32(query.CmdMethod_CountCachedObjectFiles),
+		func(_ context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+			resp.CountCachedObjectFilesResponse = &query.CountCachedObjectFilesResponse{
+				Hits: uint32(len(req.CountCachedObjectFilesRequest.ObjectIds)),
+			}
+			return nil
+		}, false)
+	require.NoError(t, server.Start())
+
+	writerEntered := make(chan struct{})
+	unblockWriter := make(chan struct{})
+	defer close(unblockWriter)
+	cfg := morpc.Config{BackendOptions: []morpc.BackendOption{
+		morpc.WithBackendFilter(func(msg morpc.Message, _ string) bool {
+			if isCountCachedObjectFilesRequest(msg) &&
+				len(msg.(*query.Request).CountCachedObjectFilesRequest.ObjectIds) == 2 {
+				close(writerEntered)
+				<-unblockWriter
+			}
+			return true
+		}),
+	}}
+	cli, err := NewQueryClient(sid, cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, cli.Close()) })
+
+	guard, stopGuard := context.WithTimeout(t.Context(), 5*time.Second)
+	defer stopGuard()
+	req := cli.NewRequest(query.CmdMethod_CountCachedObjectFiles)
+	req.CountCachedObjectFilesRequest = &query.CountCachedObjectFilesRequest{ObjectIds: [][]byte{{1}}}
+	resp, err := cli.SendMessage(guard, address, req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	defer cli.Release(resp)
+	require.EqualValues(t, 1, resp.CountCachedObjectFilesResponse.GetHits())
+
+	ctx, cancel := context.WithCancel(guard)
+	defer cancel()
+	req = cli.NewRequest(query.CmdMethod_CountCachedObjectFiles)
+	req.CountCachedObjectFilesRequest = &query.CountCachedObjectFilesRequest{ObjectIds: [][]byte{{1}, {2}}}
+	done := make(chan error, 1)
+	go func() {
+		resp, err := cli.SendMessage(ctx, address, req)
+		if resp != nil {
+			cli.Release(resp)
+		}
+		done <- err
+	}()
+	select {
+	case <-writerEntered:
+	case <-guard.Done():
+		t.Fatal("writer did not receive the request")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-guard.Done():
+		t.Fatal("cancellation waited for the blocked writer")
+	}
+}
+
+func TestCountCachedObjectFilesUnsentRequestIsReleased(t *testing.T) {
+	sid := t.Name()
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { runtime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+	pool := &testQueryMessagePool{MessagePool: morpc.NewMessagePool(
+		func() *query.Request { return &query.Request{} },
+		func() *query.Response { return &query.Response{} },
+	)}
+	cli := &queryClient{serviceID: sid, pool: pool, client: unsentQueryRPCClient{}}
+
+	for _, address := range []string{"", "unused"} {
+		req := cli.NewRequest(query.CmdMethod_CountCachedObjectFiles)
+		req.CountCachedObjectFilesRequest = &query.CountCachedObjectFilesRequest{ObjectIds: [][]byte{{1}}}
+		resp, err := cli.SendMessage(t.Context(), address, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Equal(t, &query.Request{}, req)
+	}
+	require.Equal(t, 2, pool.releasedRequests)
+
+	req := cli.NewRequest(query.CmdMethod_GetCommit)
+	resp, err := cli.SendMessage(t.Context(), "unused", req)
+	require.Error(t, err)
+	require.Nil(t, resp)
+	require.Equal(t, query.CmdMethod_GetCommit, req.CmdMethod)
+	require.Equal(t, 2, pool.releasedRequests)
+
+	cli.serviceID = sid + "-missing"
+	req = cli.NewRequest(query.CmdMethod_CountCachedObjectFiles)
+	resp, err = cli.SendMessage(t.Context(), "unused", req)
+	require.ErrorContains(t, err, "service runtime is unavailable")
+	require.Nil(t, resp)
+	require.Equal(t, &query.Request{}, req)
+	require.Equal(t, 3, pool.releasedRequests)
+}
+
+type testQueryMessagePool struct {
+	morpc.MessagePool[*query.Request, *query.Response]
+	releasedRequests int
+}
+
+func (p *testQueryMessagePool) ReleaseRequest(req *query.Request) {
+	p.releasedRequests++
+	p.MessagePool.ReleaseRequest(req)
+}
+
+type unsentQueryRPCClient struct {
+	morpc.RPCClient
+}
+
+func (unsentQueryRPCClient) Send(context.Context, string, morpc.Message) (*morpc.Future, error) {
+	return nil, context.Canceled
 }
 
 func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
