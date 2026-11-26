@@ -131,19 +131,21 @@ indexes it like any range. A whole object is the range `[0, size)`: there is no 
 whole-file name. A read finds cached bytes in one index, whether a whole object, a range,
 or several ranges that together cover its bytes.
 
-### The governor owns connections and memory (decision 2026-11-26)
+### The object storage server (decision 2026-11-26)
 
-One governor admits every object-storage request of a connection pool, with the
-connections and the memory the request needs, together.
+Each file service has one object storage server. It owns the file service's connection
+pool and memory budget, and admits every object-storage request of the file service, with
+the connections and the memory the request needs, together. File services, and the CNs
+that own them, share no server, pool or budget.
 
-- **One governor per connection pool.** File services that share a connection pool share
-  its governor; a file service with a pool of its own has a governor of its own. A request
+- **Its own pool.** The server's connection pool is used by nothing else, so a request
   never waits for a connection inside the pool.
-- **Room.** The governor runs as many requests at once as the pool's connections per host
+- **The server calls no server.** A request the server makes goes only to object storage.
+- **Room.** The server runs as many requests at once as the pool's connections per host
   or the storage concurrency, whichever is smaller, and never fewer than 64: a smaller
   configured value is raised to 64, with a warning that names it. There is no upper
   bound; a request costs a small, fixed amount of memory of its own.
-- **The governor makes every request.** It offers a fixed set of requests: read a range
+- **The server makes every request.** It offers a fixed set of requests: read a range
   into a buffer, read a range into a fill's file, write a part from a buffer, read a page
   of a listing, stat, delete, copy. A request is data, never a function. No other code
   reaches object storage.
@@ -177,7 +179,7 @@ Memory comes in two kinds, by what frees it:
 | A write part read from the caller's reader | the file service, but it is filled by caller code | no: if it does not fit when the part is read, the part is read into a temporary file |
 
 A write whose bytes are already in memory sends those bytes as they are and takes no
-memory of the governor.
+memory of the server.
 
 No deadlock is possible: a request that holds room waits only for object storage, which
 ends with its bytes, an error, its context, or the idle timeout; a request that waits holds
@@ -200,12 +202,12 @@ Where caller code meets object storage:
 - A fill is waiting, running or ended, and every fill in any state is in the one registry.
   There is no separate prefetch queue, live queue or worker pool.
 - Each started fill runs on its own. As many fills, or parts of a split fill, run at once
-  as the governor has room for; a waiting fill holds no goroutine.
+  as the server has room for; a waiting fill holds no goroutine.
 - A prefetch makes waiting background fills for the bytes it asks for. A request for bytes a
   waiting fill of the same cache already holds merges into it: the sooner due time, the
   larger share, and both scans. Bytes a running fill holds need nothing more. Other bytes
   of the same object get fills of their own at once.
-- The governor admits the first waiting fill in its one order (class, then share, then
+- The server admits the first waiting fill in its one order (class, then share, then
   due time, then arrival) once its room and, when it is held in memory, its buffer fit. A
   fill that cannot be admitted keeps the fills after it waiting. A started fill checks the cache first and ends without downloading when its
   bytes are cached, or held by a fill under way.
@@ -263,26 +265,26 @@ startup removes them as stale cache. The cache refills them on use.
 
 ## Bounds and ownership of resources
 
-The governor of a connection pool holds the room and the memory of every request it
-admits; file-backed fills count against the disk cache, and waiting background fills
+The object storage server of a file service holds the room and the memory of every
+request it admits; file-backed fills count against the disk cache, and waiting background fills
 against the queue's byte bound. Each bound is charged in one place.
 
 Memory (decision 2026-11-26):
 
-- The memory of the governor is one budget. Memory that cannot be waited for, the buffers
+- The memory of the server is one budget, set by the file service's configuration. Memory that cannot be waited for, the buffers
   of streams and of write parts read from callers, holds at most a fixed share of it; the
   rest is memory requests may wait for, and is always freed by the file service alone.
 - A fill is memory-backed only when it is at most the memory limit and its buffer fits its
   class's share of the memory that can be waited for: all of it for foreground, half for
   background. Otherwise it is file-backed.
 - A waiting fill takes its buffer only as it is admitted, never while it waits.
-- Peak memory is the governor's budget, plus a small, fixed amount for each request
+- Peak memory of a file service is its server's budget, plus a small, fixed amount for each request
   running.
 
 No wait holds a resource another wait needs: a waiting fill or request holds nothing, a
-started fill takes its file and registration before it asks the governor, a request that
+started fill takes its file and registration before it asks the server, a request that
 holds room waits only for object storage, and a read waits only for a fill or the
-governor, neither of which waits for a read or for caller code.
+server, neither of which waits for a read or for caller code.
 
 ## Alternatives
 
@@ -325,6 +327,6 @@ follow-up PR.
 ## Open questions
 
 - The default room: today the pool's connections per host default to 128, so the room is
-  128 when neither setting is configured. Raising the default, for example to 1024, also
-  raises the default connections of the shared pool.
-- The size of the governor's memory budget and of its share that cannot be waited for.
+  128 when neither setting is configured.
+- The memory budget's setting and default, and the size of its share that cannot be
+  waited for.
