@@ -3248,7 +3248,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if err != nil {
 				return 0, err
 			}
-			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, builder.isInsertIgnore, colDef.Name)
+			// #33281: ENUM/SET targets need the label-aware conversion that
+			// INSERT and UPDATE use. The generic assignment cast has no
+			// VARCHAR->ENUM/SET overload, so v='a' failed with 20203.
+			switch {
+			case isEnumPlanType(&colDef.Typ):
+				updateExpr, err = funcCastForEnumType(builder.GetContext(), updateExpr, colDef.Typ)
+			case isSetPlanType(&colDef.Typ):
+				updateExpr, err = funcCastForSetType(builder.GetContext(), updateExpr, colDef.Typ)
+			default:
+				updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, builder.isInsertIgnore, colDef.Name)
+			}
 			if err != nil {
 				return 0, err
 			}

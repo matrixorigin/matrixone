@@ -1,0 +1,55 @@
+drop database if exists odku_enum_set_33281;
+create database odku_enum_set_33281;
+use odku_enum_set_33281;
+create table e(id int primary key, v enum('a','b','c') not null);
+create table s(id int primary key, v set('a','b','c') not null);
+insert into e values (1, 'c');
+insert into s values (1, 'a');
+insert into e(id, v) values (1, 'a') on duplicate key update v = 'a';
+select id, v, v + 0 from e;
+➤ id[4,32,0]  ¦  v[1,1,0]  ¦  v + 0[-5,64,0]  𝄀
+1  ¦  a  ¦  1
+insert into e(id, v) values (1, 'a') on duplicate key update v = concat('', 'b');
+select id, v, v + 0 from e;
+➤ id[4,32,0]  ¦  v[1,1,0]  ¦  v + 0[-5,64,0]  𝄀
+1  ¦  b  ¦  2
+insert into e(id, v) values (1, 'a') on duplicate key update v = 3;
+select id, v, v + 0 from e;
+➤ id[4,32,0]  ¦  v[1,1,0]  ¦  v + 0[-5,64,0]  𝄀
+1  ¦  c  ¦  3
+insert into e(id, v) values (1, 'a') on duplicate key update v = values(v);
+select id, v, v + 0 from e;
+➤ id[4,32,0]  ¦  v[1,1,0]  ¦  v + 0[-5,64,0]  𝄀
+1  ¦  a  ¦  1
+insert into e(id, v) values (1, 'a') on duplicate key update v = 'zz';
+Data truncated for ENUM value: 'zz'
+select id, v, v + 0 from e;
+➤ id[4,32,0]  ¦  v[1,1,0]  ¦  v + 0[-5,64,0]  𝄀
+1  ¦  a  ¦  1
+insert into s(id, v) values (1, 'a') on duplicate key update v = 'b,c';
+select id, v, v + 0 from s;
+➤ id[4,32,0]  ¦  v[1,5,0]  ¦  v + 0[-5,21,0]  𝄀
+1  ¦  b,c  ¦  6
+insert into s(id, v) values (1, 'a') on duplicate key update v = cast('a,c' as char);
+select id, v, v + 0 from s;
+➤ id[4,32,0]  ¦  v[1,5,0]  ¦  v + 0[-5,21,0]  𝄀
+1  ¦  a,c  ¦  5
+insert into s(id, v) values (1, 'a') on duplicate key update v = 7;
+select id, v, v + 0 from s;
+➤ id[4,32,0]  ¦  v[1,5,0]  ¦  v + 0[-5,21,0]  𝄀
+1  ¦  a,b,c  ¦  7
+prepare p_e from 'insert into e(id, v) values (?, ?) on duplicate key update v = ?';
+set @id = 1, @ins = 'a', @upd = 'c';
+execute p_e using @id, @ins, @upd;
+select id, v, v + 0 from e;
+➤ id[4,32,0]  ¦  v[1,1,0]  ¦  v + 0[-5,64,0]  𝄀
+1  ¦  c  ¦  3
+deallocate prepare p_e;
+prepare p_s from 'insert into s(id, v) values (?, ?) on duplicate key update v = ?';
+set @upd = 'a,b';
+execute p_s using @id, @ins, @upd;
+select id, v, v + 0 from s;
+➤ id[4,32,0]  ¦  v[1,5,0]  ¦  v + 0[-5,21,0]  𝄀
+1  ¦  a,b  ¦  3
+deallocate prepare p_s;
+drop database odku_enum_set_33281;
