@@ -26,33 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
-
-func vectorPlacementCompile(t *testing.T, workers engine.Nodes) (*Compile, *expressionVersionClient) {
-	t.Helper()
-	c, client := expressionProtocolTestCompile(t)
-	t.Cleanup(c.proc.Free)
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.anal = &AnalyzeModule{isFirst: true}
-	c.cnList = slices.Clone(workers)
-	c.addr = workers[0].Addr
-	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	value, _ := rt.GetGlobalVariables(moruntime.ClusterService)
-	cluster := value.(*schedulerTestCluster)
-	cluster.cns = nil
-	for _, worker := range workers {
-		cluster.cns = append(cluster.cns, metadata.CNService{
-			ServiceID: worker.Id, PipelineServiceAddress: worker.Addr, QueryAddress: worker.Addr,
-		})
-	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
-	client.version = vectorscan.IndexSearchScanProtocolVersion
-	return c, client
-}
 
 func vectorPlacementNode() *plan.Node {
 	return &plan.Node{
@@ -157,14 +134,28 @@ func TestPrunedVectorScanDoesNotProbePeer(t *testing.T) {
 			defer ReleaseScopes(scopes)
 			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 			require.Len(t, c.cnList, 2)
-			if tc.limit == 0 {
-				require.NoError(t, err)
-				require.Zero(t, client.calls)
-				require.Len(t, scopes, 1)
-			} else {
-				require.ErrorIs(t, err, client.sendErr)
-				require.Positive(t, client.calls, "a live scan still checks the existing protocol")
-			}
+			require.NoError(t, err)
+			require.Zero(t, client.calls, "placement probes no peer")
 		})
 	}
+}
+
+func vectorPlacementCompile(t *testing.T, workers engine.Nodes) (*Compile, *expressionVersionClient) {
+	t.Helper()
+	c, client := expressionProtocolTestCompile(t)
+	t.Cleanup(c.proc.Free)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{isFirst: true}
+	c.cnList = slices.Clone(workers)
+	c.addr = workers[0].Addr
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	value, _ := rt.GetGlobalVariables(moruntime.ClusterService)
+	cluster := value.(*schedulerTestCluster)
+	cluster.cns = nil
+	for _, worker := range workers {
+		cluster.cns = append(cluster.cns, metadata.CNService{
+			ServiceID: worker.Id, PipelineServiceAddress: worker.Addr, QueryAddress: worker.Addr,
+		})
+	}
+	return c, client
 }

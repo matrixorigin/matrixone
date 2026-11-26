@@ -84,16 +84,6 @@ func isRemoteDeleteLayout(bat *batch.Batch) bool {
 	return true
 }
 
-// RelayWireNames returns the column names an older coordinator expects on
-// the wire for bat when bat has the remote-delete layout, and nil
-// otherwise. Older coordinators recognize the remote rows by these names.
-func RelayWireNames(bat *batch.Batch) []string {
-	if isRemoteDeleteLayout(bat) && len(bat.Vecs) == len(DelRemoteBatchAttrs) {
-		return DelRemoteBatchAttrs
-	}
-	return nil
-}
-
 // TryExtractRemoteDeleteObjectNames returns ok=true only for a batch
 // carrying the standalone deletion operator's remote layout, with one
 // canonical name per flushed tombstone object, or an error when a

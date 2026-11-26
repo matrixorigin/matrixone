@@ -96,7 +96,7 @@ func TestMergeGroupExtraBufCollationAdmission(t *testing.T) {
 				wire, err := partial.MarshalBinaryWithBuffer(new(bytes.Buffer), true)
 				require.NoError(t, err)
 				decoded := batch.NewWithSize(0)
-				require.NoError(t, decoded.UnmarshalBinaryForPipeline(wire, proc.Mp()))
+				require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(wire, proc.Mp()))
 				_, err = merge.buildOneBatch(proc, decoded)
 				decoded.Clean(proc.Mp())
 				if incomingRevision != 0 {

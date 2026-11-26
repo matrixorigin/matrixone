@@ -21,8 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -84,37 +82,19 @@ func TestJSONMinMaxSimulatedVersionRemoteTopology(t *testing.T) {
 		oldForce := plan.GetForceScanOnMultiCN()
 		plan.SetForceScanOnMultiCN(true)
 		defer plan.SetForceScanOnMultiCN(oldForce)
-		peerRuntime := moruntime.ServiceRuntime(peer.ServiceID())
-		oldVersion, hadVersion := peerRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
-		require.True(t, hadVersion, "peer CN must expose its protocol version")
-		defer peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
 
 		const query = "select min(j), max(j) from src"
 		stateErr := withCNDraining(ctx, inventory, refresher, cn.ServiceID(),
 			[]string{cn.ServiceID(), peer.ServiceID()},
 			func(err error) { fixtureInvalidationErr = err },
 			func() {
-				// Simulated v132 is below this candidate typed MIN/MAX floor. The
-				// coordinator must reject remote JSON partials and fall back to
-				// one-CN execution, while retaining the correct SQL result.
-				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
+				// The JSON aggregate runs on the peer and preserves the typed
+				// ordering counterexample 1 < 256.
 				physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 				require.NoError(t, err)
-				require.NotContains(t, physical.Text, peerAddr,
-					"a simulated v132 worker must not receive a JSON MIN/MAX partial")
-				var minValue, maxValue string
-				require.NoError(t, db.QueryRowContext(ctx, query).Scan(&minValue, &maxValue))
-				require.Equal(t, "1", minValue)
-				require.Equal(t, "256", maxValue)
-
-				// Version 133 is the capable remote worker. The same production SQL
-				// query must place the JSON aggregate on the peer and preserve
-				// the typed ordering counterexample 1 < 256.
-				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
-				physical, err = testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
-				require.NoError(t, err)
 				require.Contains(t, physical.Text, peerAddr,
-					"a capable worker must execute the remote JSON MIN/MAX partial")
+					"the peer executes the remote JSON MIN/MAX partial")
+				var minValue, maxValue string
 				require.NoError(t, db.QueryRowContext(ctx, query).Scan(&minValue, &maxValue))
 				require.Equal(t, "1", minValue)
 				require.Equal(t, "256", maxValue)

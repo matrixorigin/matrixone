@@ -160,12 +160,12 @@ func TestIssue25590RelayS3InfoNameExtraction(t *testing.T) {
 
 	// The wire shape: the production server encodes batches with
 	// MarshalBinaryWithBuffer and the client decodes them with
-	// UnmarshalBinaryForPipeline before this recognizer runs.
+	// UnmarshalBinaryWithAnyMp before this recognizer runs.
 	var transport bytes.Buffer
 	data, err := bat.MarshalBinaryWithBuffer(&transport, false)
 	require.NoError(t, err)
 	wire := batch.NewWithSize(0)
-	require.NoError(t, wire.UnmarshalBinaryForPipeline(data, mp))
+	require.NoError(t, wire.UnmarshalBinaryWithAnyMp(data, mp))
 	defer wire.CleanOnlyData()
 	wireNames, ok, err := TryExtractRelayS3InfoObjectNames(wire, mp)
 	require.NoError(t, err)

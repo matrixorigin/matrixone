@@ -43,7 +43,6 @@ func (mergeBlock *MergeBlock) Prepare(proc *process.Process) error {
 
 	if mergeBlock.container.mp == nil {
 		mergeBlock.container.mp = make(map[int]*batch.Batch)
-		mergeBlock.container.mp2 = make(map[int][]*batch.Batch)
 	}
 
 	ref := mergeBlock.Ref
@@ -90,21 +89,6 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		}
 		analyzer.AddWrittenRows(int64(mergeBlock.container.mp[0].RowCount()))
 	}
-
-	for _, bat := range mergeBlock.container.mp2[0] {
-		crs := analyzer.GetOpCounterSet()
-		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		//batches in mp2 will be deeply copied into txn's workspace.
-		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-			return mergeBlock.container.source.Write(newCtx, bat, mergeBlock.Attrs)
-		}); err != nil {
-			return input, err
-		}
-		analyzer.AddWrittenRows(int64(bat.RowCount()))
-
-		bat.Clean(proc.GetMPool())
-	}
-	mergeBlock.container.mp2[0] = mergeBlock.container.mp2[0][:0]
 
 	return input, nil
 }

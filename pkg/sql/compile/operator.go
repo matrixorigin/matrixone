@@ -976,17 +976,9 @@ func constructPreInsertSk(node *plan.Node) *preinsertsecondaryindex.PreInsertSec
 }
 
 func constructMergeblock(eng engine.Engine, node *plan.Node) *mergeblock.MergeBlock {
-	// The insert producer's names for its in-memory data batches.
-	var attrs []string
-	for _, col := range node.InsertCtx.TableDef.Cols {
-		if col.Name != catalog.Row_ID {
-			attrs = append(attrs, col.GetOriginCaseName())
-		}
-	}
 	return mergeblock.NewArgument().
 		WithEngine(eng).
 		WithObjectRef(node.InsertCtx.Ref).
-		WithAttrs(attrs).
 		WithAddAffectedRows(node.InsertCtx.AddAffectedRows)
 }
 
