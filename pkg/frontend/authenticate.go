@@ -75,10 +75,11 @@ import (
 )
 
 type TenantInfo struct {
-	mu          sync.Mutex
-	Tenant      string
-	User        string
-	DefaultRole string
+	taskServiceUser bool // internal task-storage connection, assigned at registration
+	mu              sync.Mutex
+	Tenant          string
+	User            string
+	DefaultRole     string
 
 	TenantID      uint32
 	UserID        uint32
@@ -109,6 +110,7 @@ func (ti *TenantInfo) Copy() *TenantInfo {
 	ti.mu.Lock()
 	defer ti.mu.Unlock()
 	return &TenantInfo{
+		taskServiceUser:     ti.taskServiceUser,
 		Tenant:              ti.Tenant,
 		User:                ti.User,
 		DefaultRole:         ti.DefaultRole,
@@ -485,13 +487,24 @@ func setSpecialUser(userName string, user *initUser) {
 // SetSpecialUser saves the user for initialization
 // !!!NOTE: userName must not contain Colon ':'
 func SetSpecialUser(username string, password []byte) {
+	registerSpecialUser(username, password, false)
+}
+
+// SetTaskServiceUser identifies the SQL connection that maintains task catalogs,
+// including CDC cleanup performed in a separate transaction during account removal.
+func SetTaskServiceUser(username string, password []byte) {
+	registerSpecialUser(username, password, true)
+}
+
+func registerSpecialUser(username string, password []byte, taskService bool) {
 	acc := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          username,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        math.MaxUint32,
-		DefaultRoleID: moAdminRoleID,
+		taskServiceUser: taskService,
+		Tenant:          sysAccountName,
+		User:            username,
+		DefaultRole:     moAdminRoleName,
+		TenantID:        sysAccountID,
+		UserID:          math.MaxUint32,
+		DefaultRoleID:   moAdminRoleID,
 	}
 
 	user := &initUser{
@@ -4168,7 +4181,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		// Publication fanout holds shared locks on these same immutable IDs.
 		// Exclude new grants before inspecting or deleting any subscriptions.
 		bh.ClearExecResultSet()
-		if rtnErr = bh.Exec(ctx, fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update", accountId)); rtnErr != nil {
+		if rtnErr = bh.Exec(defines.WithExactCatalogRows(ctx), fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update", accountId)); rtnErr != nil {
 			return rtnErr
 		}
 
@@ -4357,7 +4370,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			return rtnErr
 		}
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
-		rtnErr = bh.Exec(ctx, sql)
+		rtnErr = bh.Exec(defines.WithExactCatalogRows(ctx), sql)
 		if rtnErr != nil {
 			return rtnErr
 		}

@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -276,6 +277,10 @@ func TestMoveToCannotCloseWaiter(t *testing.T) {
 		w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")}, "", nil)
 		defer w1.close("", nil)
 
+		timer := time.NewTimer(time.Hour)
+		defer timer.Stop()
+		w1.lockWaitTimer.Store(timer)
+
 		from.put(w1)
 		require.Equal(t, int32(2), w1.refCount.Load())
 
@@ -285,6 +290,19 @@ func TestMoveToCannotCloseWaiter(t *testing.T) {
 		to.rollbackChange()
 
 		require.Equal(t, int32(2), w1.refCount.Load())
+		require.Same(t, timer, w1.lockWaitTimer.Load())
+		require.Same(t, w1, from.first())
+
+		// An accepted transfer preserves the same active wait in the new queue.
+		defer to.close(notifyValue{})
+		mc := newMergeContext(to)
+		defer mc.close()
+		mc.mergeWaiter(from)
+		mc.commit(newBtreeBasedStorage(), getLogger(""))
+		require.Same(t, timer, w1.lockWaitTimer.Load())
+		require.Equal(t, int32(2), w1.refCount.Load())
+		require.Nil(t, from.first())
+		require.Same(t, w1, to.first())
 	})
 
 }

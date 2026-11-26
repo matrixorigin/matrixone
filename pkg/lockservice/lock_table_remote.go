@@ -227,14 +227,14 @@ func (l *remoteLockTable) lock(
 			cutoff = 0
 		}
 		txn.retainRemoteCleanup(l, cutoff)
-		_ = txn.lockAddedForCleanup(l.bind.Group, l.bind, rows, l.logger)
+		_ = txn.recordRemoteLocks(l.bind, rows, l.logger, false, opts.ExactRows)
 	}
 
 	if txn.bindChanged || txn.closing.Load() {
 		if err == nil {
 			defer releaseResponse(resp)
 			if resp.NewBind == nil {
-				if err := txn.lockAddedForCleanup(l.bind.Group, l.bind, rows, l.logger); err != nil {
+				if err := txn.recordRemoteLocks(l.bind, rows, l.logger, false, opts.ExactRows); err != nil {
 					txn.retainRemoteCleanup(l, 0)
 				}
 			}
@@ -262,7 +262,7 @@ func (l *remoteLockTable) lock(
 			return
 		}
 
-		err = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+		err = txn.recordRemoteLocks(l.bind, rows, l.logger, true, opts.ExactRows)
 		if err != nil {
 			txn.retainRemoteCleanup(l, 0)
 		}
