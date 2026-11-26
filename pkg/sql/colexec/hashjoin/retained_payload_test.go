@@ -55,7 +55,7 @@ func TestHashJoinSharedVarlenOutputBudget(t *testing.T) {
 
 	probeCols := []colexec.ResultPos{{Rel: 0, Pos: 0}}
 	require.True(t, needsOutputAreaCheck(probeCols, input, 0, true))
-	join := HashJoin{RightTypes: []types.Type{textType}, ResultCols: []colexec.ResultPos{{Rel: 1, Pos: 0}}}
+	join := HashJoin{JoinType: plan.Node_LEFT, RightTypes: []types.Type{textType}, ResultCols: []colexec.ResultPos{{Rel: 1, Pos: 0}}}
 	join.ctr.mp = joinMap
 	join.prepareBuildOutputAreaCheck()
 	require.True(t, join.ctr.checkBuildArea)
