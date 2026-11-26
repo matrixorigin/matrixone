@@ -410,8 +410,8 @@ func (o *objectDownload) failure() error {
 // estimate returns the bytes a part of the download still writes before the bytes in
 // [off, end) are written, the most of the parts holding them, and the time until they
 // are: the time to the first byte of a part not yet writing, plus its bytes left at its
-// rate so far, or at the recent downloads' rate before it wrote enough to measure its own;
-// out of reach while a part holding them has not begun.
+// rate so far, or at the recent downloads' rate before it wrote enough to measure its own.
+// A part that has not begun is estimated as beginning now.
 func (o *objectDownload) estimate(off, end int64) (int64, time.Duration) {
 	now := time.Now()
 	latency := rangeReadCosts.firstByte()
@@ -432,13 +432,11 @@ func (o *objectDownload) estimate(off, end int64) (int64, time.Duration) {
 		if left <= 0 {
 			continue
 		}
-		// A part that has not begun holds no connection yet: no read waits for it.
-		if p.began.IsZero() {
-			return math.MaxInt64, time.Duration(math.MaxInt64)
-		}
 		behind = max(behind, left)
 		var ttfb time.Duration
-		if p.first.IsZero() {
+		if p.began.IsZero() {
+			ttfb = latency
+		} else if p.first.IsZero() {
 			ttfb = max(latency-now.Sub(p.began), 0)
 		}
 		rate := recent
@@ -870,21 +868,6 @@ func (d *DiskCache) backgroundRequests() int {
 	return d.governor.backgroundMax
 }
 
-// prefetchWorkers is the most prefetches run at once, a quarter of the background
-// requests: past it more streams share the bandwidth without adding any. It is at least
-// 4, or each background request when fewer, and at least 1.
-func (d *DiskCache) prefetchWorkers() int {
-	limit := d.backgroundRequests()
-	return max(limit/4, min(limit, 4), 1)
-}
-
-// prefetchShare is the most prefetch objects of one prefetch that wait for their resources
-// or read at once: the background requests over the prefetch workers, so the prefetches
-// of all workers can read at once; at least 1.
-func (d *DiskCache) prefetchShare() int {
-	return max(d.backgroundRequests()/d.prefetchWorkers(), 1)
-}
-
 // freedSignal wakes the waiters for a resource once some is freed. It is guarded by the
 // lock of the resource.
 type freedSignal struct {
@@ -942,6 +925,7 @@ func (d *DiskCache) readDownloadEntry(ctx context.Context, diskPath string, p *f
 			metric.FSDiskCacheDownloadDeclinedBytesCounter.Add(float64(entry.Size))
 			return true, false, nil
 		}
+		d.promoteObject(p)
 		if _, ok := o.waitFor(ctx, entry.Offset-base, end-base, 0); !ok {
 			if err := readFailure(ctx, vector.FilePath, fromSource, cmp.Or(ctx.Err(), o.failure())); err != nil {
 				return true, false, &failingReadError{err: err}
@@ -964,6 +948,14 @@ func (d *DiskCache) readDownloadEntry(ctx context.Context, diskPath string, p *f
 		return false, false, nil
 	}
 	return true, err == nil, err
+}
+
+// promoteObject promotes the fill of o, which a read joins.
+func (d *DiskCache) promoteObject(o prefetchObject) {
+	f := &d.prefetchObjects
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d.promoteObjectLocked(o)
 }
 
 // joinsFill reports whether a read of n bytes joins a file fill whose bytes arrive wait

@@ -44,7 +44,28 @@ func withBackgroundRequests(ctx context.Context) context.Context {
 	return context.WithValue(ctx, backgroundRequestKey{}, true)
 }
 
+type promotionKey struct{}
+
+// withPromotion returns ctx under which requests to object storage are background until
+// promoted is closed.
+func withPromotion(ctx context.Context, promoted <-chan struct{}) context.Context {
+	return context.WithValue(ctx, promotionKey{}, promoted)
+}
+
+func promotionOf(ctx context.Context) <-chan struct{} {
+	ch, _ := ctx.Value(promotionKey{}).(<-chan struct{})
+	return ch
+}
+
 func requestClassOf(ctx context.Context) requestClass {
+	if promoted := promotionOf(ctx); promoted != nil {
+		select {
+		case <-promoted:
+			return foregroundRequest
+		default:
+			return backgroundRequest
+		}
+	}
 	if ctx.Value(backgroundRequestKey{}) == true {
 		return backgroundRequest
 	}
@@ -98,50 +119,83 @@ func (g *governor) canRunLocked(c requestClass) bool {
 	return c == foregroundRequest || g.running[backgroundRequest] < g.backgroundMax
 }
 
-// wait waits for room for a request of class c until ctx ends or g closes.
-func (g *governor) wait(ctx context.Context, c requestClass) error {
+// wait waits for room for a request of class c until ctx ends or g closes, and returns
+// the class of the room granted. A background request whose promotion of ctx closes
+// waits as a foreground one from then.
+func (g *governor) wait(ctx context.Context, c requestClass) (requestClass, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return c, err
+	}
+	var promoted <-chan struct{}
+	if c == backgroundRequest {
+		if promoted = promotionOf(ctx); promoted != nil {
+			select {
+			case <-promoted:
+				c, promoted = foregroundRequest, nil
+			default:
+			}
+		}
 	}
 	g.mu.Lock()
 	if g.closed {
 		g.mu.Unlock()
-		return errGovernorClosed
+		return c, errGovernorClosed
 	}
 	if g.waiting[foregroundRequest].Len() == 0 &&
 		(c == foregroundRequest || g.waiting[backgroundRequest].Len() == 0) && g.canRunLocked(c) {
 		g.startLocked(c)
 		g.mu.Unlock()
-		return nil
+		return c, nil
 	}
 	w := &roomWaiter{class: c, granted: make(chan struct{})}
 	w.elem = g.waiting[c].PushBack(w)
 	waitingGauge(c).Inc()
 	g.mu.Unlock()
-	select {
-	case <-w.granted:
-		return nil
-	case <-ctx.Done():
-		return g.abandon(w, ctx.Err())
-	case <-g.closedCh:
-		return g.abandon(w, errGovernorClosed)
+	for {
+		select {
+		case <-w.granted:
+			return w.class, nil
+		case <-promoted:
+			promoted = nil
+			g.promote(w)
+		case <-ctx.Done():
+			return g.abandon(w, ctx.Err())
+		case <-g.closedCh:
+			return g.abandon(w, errGovernorClosed)
+		}
 	}
 }
 
-// abandon ends the wait of w with err, freeing the room it was granted meanwhile.
-func (g *governor) abandon(w *roomWaiter, err error) error {
+// promote moves w, while it waits as a background request, to the foreground waiters.
+func (g *governor) promote(w *roomWaiter) {
 	g.mu.Lock()
+	defer g.mu.Unlock()
+	if w.elem == nil || w.class == foregroundRequest {
+		return
+	}
+	g.waiting[backgroundRequest].Remove(w.elem)
+	waitingGauge(backgroundRequest).Dec()
+	w.class = foregroundRequest
+	w.elem = g.waiting[foregroundRequest].PushBack(w)
+	waitingGauge(foregroundRequest).Inc()
+	g.grantLocked()
+}
+
+// abandon ends the wait of w with err, freeing the room it was granted meanwhile.
+func (g *governor) abandon(w *roomWaiter, err error) (requestClass, error) {
+	g.mu.Lock()
+	c := w.class
 	if w.elem == nil {
 		g.mu.Unlock()
-		g.done(w.class)
-		return err
+		g.done(c)
+		return c, err
 	}
-	g.waiting[w.class].Remove(w.elem)
+	g.waiting[c].Remove(w.elem)
 	w.elem = nil
-	waitingGauge(w.class).Dec()
+	waitingGauge(c).Dec()
 	g.grantLocked()
 	g.mu.Unlock()
-	return err
+	return c, err
 }
 
 func (g *governor) startLocked(c requestClass) {
@@ -170,14 +224,6 @@ func (g *governor) grantLocked() {
 			return
 		}
 	}
-}
-
-// hasRoom reports whether a request of class c would be admitted now.
-func (g *governor) hasRoom(c requestClass) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.waiting[foregroundRequest].Len() == 0 &&
-		(c == foregroundRequest || g.waiting[backgroundRequest].Len() == 0) && g.canRunLocked(c)
 }
 
 // close ends the waits for room; running requests run on.
@@ -237,7 +283,8 @@ func (r *requestRoom) resume(ctx context.Context) error {
 	if held {
 		return nil
 	}
-	if err := r.g.wait(ctx, r.class); err != nil {
+	c, err := r.g.wait(ctx, r.class)
+	if err != nil {
 		return err
 	}
 	r.mu.Lock()
@@ -245,7 +292,7 @@ func (r *requestRoom) resume(ctx context.Context) error {
 	if r.held {
 		r.g.done(r.class)
 	}
-	r.held = true
+	r.class, r.held = c, true
 	return nil
 }
 
@@ -587,11 +634,8 @@ type fillProgress struct {
 
 // began records that the read holds room.
 func (p fillProgress) began() {
-	switch {
-	case p.download != nil:
+	if p.download != nil {
 		p.download.begin(p.part)
-	case p.flight != nil:
-		p.flight.requested.Store(true)
 	}
 }
 

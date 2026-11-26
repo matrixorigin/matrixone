@@ -38,7 +38,7 @@ func occupiedRoom(g *governor) *atomic.Int64 {
 func occupy(t *testing.T, g *governor, c requestClass, n int) func() {
 	t.Helper()
 	for range n {
-		require.NoError(t, g.wait(context.Background(), c))
+		require.NoError(t, waitRoom(g, context.Background(), c))
 		occupiedRoom(g).Add(1)
 	}
 	return sync.OnceFunc(func() {
@@ -100,7 +100,7 @@ func openerSource(open func(ctx context.Context, start, end int64) (io.ReadClose
 func admitted(g *governor, c requestClass) (func(), bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if g.wait(ctx, c) != nil {
+	if waitRoom(g, ctx, c) != nil {
 		return nil, false
 	}
 	return func() { g.done(c) }, true
@@ -118,7 +118,7 @@ func TestGovernorOrder(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			require.NoError(t, g.wait(context.Background(), c))
+			require.NoError(t, waitRoom(g, context.Background(), c))
 			mu.Lock()
 			order = append(order, name)
 			mu.Unlock()
@@ -143,7 +143,7 @@ func TestGovernorBackgroundWaitsBehindForeground(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		require.NoError(t, g.wait(context.Background(), foregroundRequest))
+		require.NoError(t, waitRoom(g, context.Background(), foregroundRequest))
 		g.done(foregroundRequest)
 	}()
 	require.Eventually(t, waitingFor(g, foregroundRequest, 1), 5*time.Second, time.Millisecond)
@@ -203,7 +203,7 @@ func TestGovernorCancel(t *testing.T) {
 	free := occupy(t, g, foregroundRequest, minRequestRoom)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	go func() { errCh <- g.wait(ctx, foregroundRequest) }()
+	go func() { errCh <- waitRoom(g, ctx, foregroundRequest) }()
 	require.Eventually(t, waitingFor(g, foregroundRequest, 1), 5*time.Second, time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-errCh, context.Canceled)
@@ -215,7 +215,7 @@ func TestGovernorCancel(t *testing.T) {
 	for range 200 {
 		free := occupy(t, g, foregroundRequest, minRequestRoom)
 		ctx, cancel := context.WithCancel(context.Background())
-		go func() { errCh <- g.wait(ctx, foregroundRequest) }()
+		go func() { errCh <- waitRoom(g, ctx, foregroundRequest) }()
 		require.Eventually(t, waitingFor(g, foregroundRequest, 1), 5*time.Second, time.Microsecond)
 		go free()
 		cancel()
@@ -247,7 +247,7 @@ func TestGovernorCloseWithWaiters(t *testing.T) {
 	free := occupy(t, g, foregroundRequest, minRequestRoom)
 	errCh := make(chan error, 2)
 	for _, c := range []requestClass{foregroundRequest, backgroundRequest} {
-		go func() { errCh <- g.wait(context.Background(), c) }()
+		go func() { errCh <- waitRoom(g, context.Background(), c) }()
 		require.Eventually(t, waitingFor(g, c, 1), 5*time.Second, time.Millisecond)
 	}
 	g.close()
@@ -257,7 +257,7 @@ func TestGovernorCloseWithWaiters(t *testing.T) {
 	require.Equal(t, minRequestRoom, running[foregroundRequest])
 	free()
 	require.Zero(t, heldRoom(g))
-	require.ErrorIs(t, g.wait(context.Background(), foregroundRequest), errGovernorClosed)
+	require.ErrorIs(t, waitRoom(g, context.Background(), foregroundRequest), errGovernorClosed)
 }
 
 type retryStorage struct {
@@ -298,7 +298,7 @@ func TestGovernorRetryWaitsWithoutRoom(t *testing.T) {
 	require.Eventually(t, waitingFor(g, foregroundRequest, 1), 5*time.Second, time.Millisecond)
 	attemptsBefore := make(chan int, 1)
 	go func() {
-		if err := g.wait(ctx, foregroundRequest); err != nil {
+		if err := waitRoom(g, ctx, foregroundRequest); err != nil {
 			attemptsBefore <- -1
 			return
 		}

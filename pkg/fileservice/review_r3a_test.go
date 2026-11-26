@@ -75,7 +75,7 @@ func TestJoinedColumnReadReleasesBufferOnDecoderPanic(t *testing.T) {
 				require.ErrorIs(t, fs.Read(ctx, vector), decoderError)
 			}
 			unblock()
-			fs.prefetcher.wg.Wait()
+			waitFillsIdle(t, fs.diskCache)
 			fs.diskCache.prefetchObjects.reads.Wait()
 			flights := &fs.diskCache.prefetchObjects
 			flights.mu.Lock()
@@ -146,7 +146,7 @@ func TestFileRangeReadUsesCachePublishedWhileAdmitted(t *testing.T) {
 			}
 			if !tc.overlap {
 				unblock()
-				fs.prefetcher.wg.Wait()
+				waitFillsIdle(t, fs.diskCache)
 			}
 			vector := &IOVector{FilePath: "object", Policy: ExactColumnsRead | SkipMemoryCache, Entries: []IOEntry{{Size: size}}}
 			readDone := make(chan struct{})

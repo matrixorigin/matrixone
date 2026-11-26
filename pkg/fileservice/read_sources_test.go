@@ -43,11 +43,8 @@ func wantSources(s *S3FS, p Policy, download, streamsLarge bool) readSources {
 	return readSources{
 		indexRead: index && p&SkipCacheReads != SkipCacheReads,
 		tier:      tier,
-		// BC16: an exact read joins queued ranges as a column read does.
-		queue:       disk && s.prefetcher != nil && !(!p.Any(ColumnPrefetch, ExactRead) && p.Any(SkipFullFilePreloads)),
-		queueRanges: p.Any(ColumnPrefetch, ExactRead),
-		flights:     disk && p.Any(ColumnPrefetch, ExactRead),
-		window:      disk && tier == diskTier,
+		flights:   disk && p.Any(ColumnPrefetch, ExactRead),
+		window:    disk && tier == diskTier,
 		// BC10: a read that caches its bytes joins only objects that cache theirs.
 		caches: p.CacheIOEntry() && tier == diskTier,
 		fetch:  disk,
@@ -56,7 +53,6 @@ func wantSources(s *S3FS, p Policy, download, streamsLarge bool) readSources {
 
 func TestSourcesForTable(t *testing.T) {
 	fs, _, _ := newIndexObjectFS(t, true)
-	require.NotNil(t, fs.prefetcher)
 	for p := Policy(0); p < IndexFileObject<<1; p++ {
 		for _, download := range []bool{false, true} {
 			for _, streams := range []int64{0, 1, fs.diskCache.memoryPrefetchMax + 1} {

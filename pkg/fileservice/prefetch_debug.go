@@ -33,12 +33,12 @@ func init() {
 }
 
 // writePrefetchObjects writes the prefetch objects of d, registered or waiting for their
-// resources, one a line: its kind, object, bytes, where it is in its life and for how long,
+// resources, and its queued fills, one a line: its kind, object, bytes, where it is in its life and for how long,
 // and the bytes and connections the prefetch objects hold. It copies them under the lock
 // and writes them after.
 func (d *DiskCache) writePrefetchObjects(w io.Writer) {
 	type row struct {
-		file           bool
+		file, fill     bool
 		diskPath       string
 		start, end     int64
 		state          string
@@ -65,7 +65,19 @@ func (d *DiskCache) writePrefetchObjects(w io.Writer) {
 	for o := range f.waiting {
 		add(o.target().diskPath, o)
 	}
-	bytes := f.bytes
+	for key, fills := range f.fills {
+		for _, q := range fills {
+			r := row{fill: true, diskPath: key.diskPath, start: q.start, end: q.end, state: "waiting", joinable: true}
+			if q.running {
+				r.state = "running"
+			}
+			if q.isPromoted() {
+				r.state += ", foreground"
+			}
+			rows = append(rows, r)
+		}
+	}
+	bytes, queued := f.bytes, f.queuedBytes
 	f.mu.Unlock()
 
 	now := time.Now()
@@ -74,6 +86,9 @@ func (d *DiskCache) writePrefetchObjects(w io.Writer) {
 		kind, state, age := "memory", r.state, ""
 		if r.file {
 			kind = "file"
+		}
+		if r.fill {
+			kind = "queued fill"
 		}
 		if r.kept {
 			age = now.Sub(r.since).Round(time.Millisecond).String()
@@ -87,7 +102,7 @@ func (d *DiskCache) writePrefetchObjects(w io.Writer) {
 	for _, l := range lines {
 		fmt.Fprintln(w, l)
 	}
-	fmt.Fprintf(w, "  buffer bytes %d of %d\n", bytes, d.flightBytes())
+	fmt.Fprintf(w, "  buffer bytes %d of %d, queued background fill bytes %d of %d\n", bytes, d.flightBytes(), queued, d.fillQueueLimit())
 	if g := d.governor; g != nil {
 		running, waiting := g.counts()
 		fmt.Fprintf(w, "  requests of %d: foreground running %d waiting %d, background running %d of %d waiting %d\n",

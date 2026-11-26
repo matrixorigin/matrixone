@@ -39,7 +39,7 @@ func TestIndexPrefetchWarmsIndexTierWithWarmDiskCache(t *testing.T) {
 			ctx = WithFileServicePolicy(ctx, IndexFileObject)
 			if queued {
 				require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
-				require.Eventually(t, func() bool { return fs.prefetcher.known.Load() == 0 }, 5*time.Second, time.Millisecond)
+				waitFillsIdle(t, fs.diskCache)
 			} else {
 				require.NoError(t, fs.PrefetchFile(ctx, "object"))
 			}
@@ -68,7 +68,7 @@ func TestFilePrefetchRetriesKnownObjectEnd(t *testing.T) {
 			submitAndWait := func() {
 				t.Helper()
 				require.NoError(t, fs.PrefetchObject(ctx, req))
-				require.Eventually(t, func() bool { return fs.prefetcher.known.Load() == 0 }, 5*time.Second, time.Millisecond)
+				waitFillsIdle(t, fs.diskCache)
 			}
 			submitAndWait()
 			require.EqualValues(t, 1, storage.reads.Load())
@@ -85,76 +85,6 @@ func TestFilePrefetchRetriesKnownObjectEnd(t *testing.T) {
 	}
 }
 
-func TestPrefetchDeferredDownloadOrder(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		deferredDue int64
-		want        string
-	}{
-		{name: "queued_download_due_first", deferredDue: 30, want: "bystander"},
-		{name: "deferred_download_due_first", deferredDue: 10, want: "object"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			gate := newGatedRun("object", "bystander")
-			p := newPrefetcher(1, func() int64 { return 2 }, func(ObjectPrefetch) bool { return false }, gate.run)
-			defer p.close(context.Background())
-			defer gate.releaseAll()
-			next := func() string {
-				t.Helper()
-				select {
-				case path := <-gate.started:
-					return path
-				case <-ctx.Done():
-					t.Fatal(ctx.Err())
-					return ""
-				}
-			}
-
-			p.add(ObjectPrefetch{FilePath: "object", Size: 1, Ranges: []PrefetchRange{{Size: 1}}})
-			require.Equal(t, "object", next())
-			p.add(ObjectPrefetch{FilePath: "object", Size: 1, Due: tc.deferredDue, Ranges: []PrefetchRange{{Offset: 2, Size: 1}}})
-			p.add(ObjectPrefetch{FilePath: "bystander", Size: 1, Due: 20})
-			p.checkCharges(t)
-			require.True(t, p.isQueued("bystander"))
-			close(gate.release["object"])
-
-			require.Equal(t, tc.want, next(), "the next worker should take the download due first")
-		})
-	}
-}
-
-func TestOversizedPrefetchMergePreservesQueue(t *testing.T) {
-	for _, path := range []string{"new", "queued", "running"} {
-		t.Run(path, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			gate := newGatedRun("running")
-			p := newPrefetcher(1, func() int64 { return 4 }, func(ObjectPrefetch) bool { return false }, gate.run)
-			defer p.close(context.Background())
-			defer gate.releaseAll()
-
-			p.add(ObjectPrefetch{FilePath: "running", Size: 1, Ranges: []PrefetchRange{{Size: 1}}})
-			select {
-			case started := <-gate.started:
-				require.Equal(t, "running", started)
-			case <-ctx.Done():
-				t.Fatal(ctx.Err())
-			}
-			p.add(ObjectPrefetch{FilePath: "queued", Size: 1, Ranges: []PrefetchRange{{Size: 1}}})
-			ended := new(PrefetchScan)
-			p.add(ObjectPrefetch{FilePath: "ended", Size: 2, Scan: ended})
-			ended.End()
-
-			p.add(ObjectPrefetch{FilePath: path, Size: 5, Ranges: []PrefetchRange{{Offset: 2, Size: 5}}})
-			p.checkCharges(t)
-			require.True(t, p.isQueued("ended"), "an oversized request must leave the queue unchanged")
-			require.True(t, p.isQueued("queued"))
-		})
-	}
-}
-
 func TestDeleteRemovesQueuedPrefetchByObject(t *testing.T) {
 	for _, qualify := range []bool{false, true} {
 		name := "same_spelling"
@@ -166,26 +96,16 @@ func TestDeleteRemovesQueuedPrefetchByObject(t *testing.T) {
 			defer cancel()
 			fs, _, data := newPrefetchRangeFS(t, 0, 1024)
 			<-fs.diskCache.load.done
-			fs.prefetcher.close(ctx)
-			gate := newGatedRun("blocker")
-			fs.prefetcher = newPrefetcher(1, fs.prefetchQueueLimit(), fs.haveObject, gate.run)
-			defer gate.releaseAll()
-			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "blocker", Size: 1}))
-			select {
-			case path := <-gate.started:
-				require.Equal(t, "blocker", path)
-			case <-ctx.Done():
-				t.Fatal(ctx.Err())
-			}
+			busyFills(t, fs)
 			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
-			require.True(t, fs.prefetcher.isQueued("object"))
+			require.True(t, fs.diskCache.isQueued("object"))
 
 			path := "object"
 			if qualify {
 				path = JoinPath(fs.Name(), path)
 			}
 			require.NoError(t, fs.Delete(ctx, path))
-			require.False(t, fs.prefetcher.isQueued("object"), "deleting an object should free its queued prefetch bytes")
+			require.False(t, fs.diskCache.isQueued("object"), "deleting an object should free its queued prefetch bytes")
 		})
 	}
 }

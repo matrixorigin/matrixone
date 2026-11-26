@@ -501,7 +501,7 @@ func TestGovernorProbePeakOpensWithinRoom(t *testing.T) {
 	}
 	fs.diskCache.prefetchObjects.reads.Wait()
 	require.Eventually(t, func() bool {
-		return !slices.ContainsFunc(objects, fs.prefetcher.isRunning) && heldRoom(fs.governor) == 0
+		return !slices.ContainsFunc(objects, fs.diskCache.fillsUnderWay) && heldRoom(fs.governor) == 0
 	}, 10*time.Second, time.Millisecond)
 	require.Positive(t, counting.total.Load())
 	require.LessOrEqual(t, counting.most.Load(), int64(room), "peak requests open")

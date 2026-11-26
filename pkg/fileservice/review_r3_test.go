@@ -51,41 +51,6 @@ func TestExactReadSkipsGapBeforeTail(t *testing.T) {
 	}
 }
 
-func TestPrefetchUnknownReadCountGetsWholeObjectPriority(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		blocks int
-	}{
-		{name: "object_block_count_unknown"},
-		{name: "object_block_count_known", blocks: 10},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			gate := newGatedRun("hold", "unknown", "partial")
-			p := newPrefetcher(1, func() int64 { return 2 }, func(ObjectPrefetch) bool { return false }, gate.run)
-			defer p.close(context.Background())
-			defer gate.releaseAll()
-			next := func() string {
-				t.Helper()
-				select {
-				case path := <-gate.started:
-					return path
-				case <-ctx.Done():
-					t.Fatal("prefetch worker did not start the next request")
-					return ""
-				}
-			}
-			p.add(ObjectPrefetch{FilePath: "hold", Size: 1})
-			require.Equal(t, "hold", next())
-			p.add(ObjectPrefetch{FilePath: "unknown", Size: 1, Due: 2, Blocks: tc.blocks})
-			p.add(ObjectPrefetch{FilePath: "partial", Size: 1, Due: 1, Reads: 1, Blocks: 10})
-			close(gate.release["hold"])
-			require.Equal(t, "unknown", next(), "Reads=0 means unknown and should rank as a whole-object read")
-		})
-	}
-}
-
 type idlePartStorage struct {
 	ObjectStorage
 	opened   atomic.Bool

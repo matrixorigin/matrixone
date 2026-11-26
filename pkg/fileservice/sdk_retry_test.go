@@ -62,7 +62,7 @@ func (f *failingHeads) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	n := f.attempts.Add(1)
 	if n == 1 {
 		go func() {
-			if err := f.g.wait(context.Background(), foregroundRequest); err != nil {
+			if err := waitRoom(f.g, context.Background(), foregroundRequest); err != nil {
 				f.ranWith <- -1
 				return
 			}

@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The prefetcher downloads the whole object at the size the prefetch told, without asking
+// A fill downloads the whole object at the size the prefetch told, without asking
 // object storage for it.
 func TestS3FSPrefetchObjectDownloadsWhole(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
@@ -41,35 +41,19 @@ func TestS3FSPrefetchObjectDownloadsWhole(t *testing.T) {
 	require.Zero(t, stats.stats.Load())
 }
 
-// busyPrefetcher gives fs a prefetcher of one worker per queue whose prefetch worker
-// downloads a placeholder until the test ends, so the prefetches asked for wait in the
-// prefetch queue.
-func busyPrefetcher(t *testing.T, fs *S3FS) {
-	release, started := make(chan struct{}), make(chan struct{})
-	run := func(ctx context.Context, req ObjectPrefetch) {
-		if req.FilePath == "busy" {
-			close(started)
-			<-release
-			return
-		}
-		fs.prefetchObject(ctx, req)
-	}
-	fs.prefetcher = newPrefetcher(1, func() int64 { return 1 << 40 }, fs.haveObject, run)
-	fs.prefetcher.add(ObjectPrefetch{FilePath: "busy", Size: 1})
-	<-started
-	t.Cleanup(func() { close(release) })
-}
-
-// A read of an object whose download is queued joins that download, which a live worker
-// starts, and is served from it; the object is cached whole.
+// A read of an object whose download waits, while the background fills and all background
+// room are held, joins that download and promotes it: it is read once, in two parts from
+// the read's block, serves the read and is cached whole.
 func TestS3FSReadOfQueuedObjectJoinsItsDownload(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
-	busyPrefetcher(t, fs)
+	busyFills(t, fs)
+	defer occupy(t, fs.governor, backgroundRequest, fs.governor.backgroundMax-1)()
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Due: 1 << 62}))
+	require.True(t, fs.diskCache.isQueued("object"))
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)
-	require.False(t, fs.prefetcher.isQueued("object"))
+	require.False(t, fs.diskCache.isQueued("object"))
 	require.Eventually(t, func() bool { return fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))) },
 		10*time.Second, time.Millisecond)
 	require.Equal(t, int64(2), storage.reads.Load(), "the whole object in two parts, read once")
@@ -89,9 +73,9 @@ func TestPrefetchOfCachedObjectMarksItUsed(t *testing.T) {
 		require.NoError(t, os.WriteFile(p, []byte{1}, 0o644))
 		d.cache.Set(ctx, p, struct{}{}, 1)
 	}
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyFills(t, fs)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "a", Size: 1}))
-	require.False(t, fs.prefetcher.isQueued("a"), "a cached object is not queued")
+	require.False(t, fs.diskCache.isQueued("a"), "a cached object is not queued")
 	d.cache.ForceEvict(ctx, 1)
 	require.True(t, d.cache.Contains(a))
 	require.False(t, d.cache.Contains(b))
@@ -109,9 +93,9 @@ func TestRangePrefetchOfCachedObjectLeavesItsOrder(t *testing.T) {
 		require.NoError(t, os.WriteFile(p, []byte{1}, 0o644))
 		d.cache.Set(ctx, p, struct{}{}, 1)
 	}
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyFills(t, fs)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "a", Size: 1, Ranges: []PrefetchRange{{Offset: 0, Size: 1}}}))
-	require.False(t, fs.prefetcher.isQueued("a"), "a cached object is not queued")
+	require.False(t, fs.diskCache.isQueued("a"), "a cached object is not queued")
 	d.cache.ForceEvict(ctx, 1)
 	require.False(t, d.cache.Contains(a))
 	require.True(t, d.cache.Contains(b))
@@ -137,15 +121,15 @@ func TestS3FSPrefetchRanges(t *testing.T) {
 	require.Equal(t, data[200<<10+5:200<<10+15], got)
 	require.Equal(t, int64(2), storage.reads.Load(), "a read within a range is served from the cache")
 
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyFills(t, fs)
 	require.NoError(t, fs.PrefetchObject(ctx, req))
-	require.False(t, fs.prefetcher.isQueued("object"), "its ranges are cached")
+	require.False(t, fs.diskCache.isQueued("object"), "its ranges are cached")
 	whole := ObjectPrefetch{FilePath: "object", Size: int64(len(data))}
 	require.False(t, fs.haveObject(whole), "a whole request wants the object whatever ranges are cached")
 	other := req
 	other.Ranges = []PrefetchRange{{Offset: 1000, Size: 10}}
 	require.NoError(t, fs.PrefetchObject(ctx, other))
-	require.True(t, fs.prefetcher.isQueued("object"))
+	require.True(t, fs.diskCache.isQueued("object"))
 }
 
 // Adjacent ranges not cached are read in one read; cached ones are not read.
@@ -194,13 +178,14 @@ func TestPrefetchedObjectsBound(t *testing.T) {
 	require.False(t, ok)
 }
 
-// A column read of an object whose column ranges are queued joins their download, which
-// a live worker starts, and is served from them; a queued download of the whole object
-// stays queued.
+// A column read of an object whose column ranges are queued joins the fill holding its
+// bytes, which starts as foreground, and is served from it; the fill of another range
+// stays queued until a read of it joins it. A column read joins a queued fill of the
+// whole object.
 func TestS3FSColumnReadJoinsQueuedColumns(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
 	ctx := context.Background()
-	busyPrefetcher(t, fs)
+	busyFills(t, fs)
 	req := ObjectPrefetch{
 		FilePath: "object",
 		Size:     30,
@@ -208,26 +193,29 @@ func TestS3FSColumnReadJoinsQueuedColumns(t *testing.T) {
 		Ranges:   []PrefetchRange{{Offset: 100, Size: 10}, {Offset: 200 << 10, Size: 20}},
 	}
 	require.NoError(t, fs.PrefetchObject(ctx, req))
-	require.True(t, fs.prefetcher.isQueued("object"))
+	require.True(t, fs.diskCache.isQueued("object"))
 
 	cache := &publicationVectorCache{}
 	vec := &IOVector{FilePath: "object", Policy: ColumnPrefetch | SkipFullFilePreloads | SkipMemoryCache,
 		Caches: []IOVectorCache{cache}, Entries: []IOEntry{{Offset: 200<<10 + 5, Size: 10}}}
 	require.NoError(t, fs.Read(ctx, vec))
-	fs.diskCache.prefetchObjects.reads.Wait()
+	waitObjectsEnd(fs.diskCache, "object")
 	require.Equal(t, data[200<<10+5:200<<10+15], vec.Entries[0].Data)
 	vec.Release()
 	require.Equal(t, int64(1), cache.updates.Load(), "the read updates the caches it missed")
-	require.False(t, fs.prefetcher.isQueued("object"), "the read moved the queued columns to the live queue")
+	require.True(t, fs.diskCache.isQueued("object"), "the fill of the other range stays queued")
+	require.Equal(t, int64(1), storage.reads.Load())
+	require.Equal(t, int64(20), storage.bytes.Load(), "the column range, not the bytes around it")
+	require.Equal(t, data[102:107], readRangeOf(t, fs, ColumnPrefetch, 102, 5))
+	require.False(t, fs.diskCache.isQueued("object"))
 	require.Equal(t, int64(2), storage.reads.Load())
 	require.Equal(t, int64(30), storage.bytes.Load(), "the column ranges, not the bytes around them")
-	require.Equal(t, data[102:107], readRangeOf(t, fs, ColumnPrefetch, 102, 5))
+	require.Equal(t, data[103:106], readRangeOf(t, fs, ColumnPrefetch, 103, 3))
 	require.Equal(t, int64(2), storage.reads.Load(), "served from the column ranges")
 
-	busyPrefetcher(t, fs)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Due: 1 << 62}))
 	require.Equal(t, data[150<<10:150<<10+10], readRangeOf(t, fs, ColumnPrefetch, 150<<10, 10))
-	require.False(t, fs.prefetcher.isQueued("object"), "a column read joins a whole-object download")
+	require.False(t, fs.diskCache.isQueued("object"), "a column read joins a whole-object download")
 	require.Eventually(t, func() bool { return fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))) },
 		10*time.Second, time.Millisecond)
 }
@@ -275,17 +263,17 @@ func TestS3FSColumnReadOfSparseEntriesReadsThemApart(t *testing.T) {
 }
 
 // An exact read reads only its entry, and leaves a queued download of the object's column
-// ranges to the prefetcher.
+// ranges to their fill.
 func TestS3FSExactReadLeavesQueuedColumns(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 64<<10, 300<<10)
 	ctx := context.Background()
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyFills(t, fs)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{
 		FilePath: "object", Size: 10, Due: 1 << 62, Ranges: []PrefetchRange{{Offset: 0, Size: 10}},
 	}))
 	require.Equal(t, data[200<<10:200<<10+10], readRangeOf(t, fs, ExactRead, 200<<10, 10))
 	require.Equal(t, int64(10), storage.bytes.Load())
-	require.True(t, fs.prefetcher.isQueued("object"), "the column ranges stay queued")
+	require.True(t, fs.diskCache.isQueued("object"), "the column ranges stay queued")
 }
 
 // A column prefetch past the bytes of the flights under way reads its ranges one by one,
@@ -293,12 +281,11 @@ func TestS3FSExactReadLeavesQueuedColumns(t *testing.T) {
 func TestS3FSPrefetchPastFlightBytesFinishes(t *testing.T) {
 	fs, storage, _ := newPrefetchRangeFS(t, 256<<10, 300<<10)
 	fs.diskCache.prefetchFlightBytes = 1
-	fs.prefetcher = newPrefetcher(1, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{
 		FilePath: "object", Size: 30, Due: 1 << 62,
 		Ranges: []PrefetchRange{{Offset: 100, Size: 10}, {Offset: 200 << 10, Size: 20}},
 	}))
-	require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") && !fs.prefetcher.isQueued("object") },
+	require.Eventually(t, func() bool { return !fs.diskCache.fillsUnderWay("object") && !fs.diskCache.isQueued("object") },
 		10*time.Second, time.Millisecond)
 	require.Equal(t, int64(2), storage.reads.Load())
 }
@@ -321,36 +308,27 @@ func TestS3FSColumnPrefetchFailureCountsFailed(t *testing.T) {
 	require.False(t, cached)
 }
 
-// A column prefetch past the bytes of the flights under way waits for them to end, then
-// reads its ranges as flights; it reads nothing meanwhile.
+// A column prefetch past the background share of the flight budget waits, as a queued
+// fill holding nothing, for the flights under way to end, then reads its ranges as
+// flights; it reads nothing meanwhile.
 func TestS3FSColumnPrefetchWaitsForFlightBytes(t *testing.T) {
 	fs, storage, _ := newPrefetchRangeFS(t, 256<<10, 300<<10)
-	fs.diskCache.prefetchFlightBytes = 10
+	fs.diskCache.prefetchFlightBytes = 2 * flightBufSize(10)
 	held := &heldStorage{ObjectStorage: fs.governor.raw, read: make(chan struct{}), released: make(chan struct{})}
 	fs.governor.raw = held
 	ctx := context.Background()
-	first := make(chan struct{})
-	go func() {
-		defer close(first)
-		fs.prefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 10, Ranges: []PrefetchRange{{Offset: 100, Size: 10}}})
-	}()
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 10, Ranges: []PrefetchRange{{Offset: 100, Size: 10}}}))
 	<-held.read
-	second := make(chan struct{})
-	go func() {
-		defer close(second)
-		fs.prefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 20, Ranges: []PrefetchRange{{Offset: 200 << 10, Size: 20}}})
-	}()
-	f := &fs.diskCache.prefetchObjects
-	require.Eventually(t, func() bool {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		return f.freed.ch != nil
-	}, 10*time.Second, time.Millisecond, "the second prefetch waits for room")
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 20, Ranges: []PrefetchRange{{Offset: 200 << 10, Size: 20}}}))
+	require.True(t, fs.diskCache.isQueued("object"), "the second prefetch waits for room")
 	require.Equal(t, int64(1), storage.reads.Load())
+	f := &fs.diskCache.prefetchObjects
+	f.mu.Lock()
+	require.Equal(t, flightBufSize(10), f.bytes, "the waiting fill holds no buffer")
+	f.mu.Unlock()
 
 	close(held.released)
-	<-first
-	<-second
+	waitFillsEnd(fs.diskCache, "object")
 	require.Equal(t, int64(2), storage.reads.Load())
 	_, cached := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), 200<<10, 20)
 	require.True(t, cached)
@@ -363,11 +341,11 @@ func TestS3FSCachedColumnReadDoesNotWaitForQueuedColumns(t *testing.T) {
 	ctx := context.Background()
 	fs.prefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 10, Ranges: []PrefetchRange{{Offset: 100, Size: 10}}})
 	reads := storage.reads.Load()
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyFills(t, fs)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{
 		FilePath: "object", Size: 20, Due: 1 << 62, Ranges: []PrefetchRange{{Offset: 200 << 10, Size: 20}},
 	}))
-	require.True(t, fs.prefetcher.isQueued("object"))
+	require.True(t, fs.diskCache.isQueued("object"))
 
 	got := make(chan []byte, 1)
 	go func() { got <- readRangeOf(t, fs, ColumnPrefetch, 102, 5) }()
@@ -378,7 +356,7 @@ func TestS3FSCachedColumnReadDoesNotWaitForQueuedColumns(t *testing.T) {
 		t.Fatal("the cached read waited for the queued download")
 	}
 	require.Equal(t, reads, storage.reads.Load(), "served from the disk cache")
-	require.True(t, fs.prefetcher.isQueued("object"), "the other columns stay queued")
+	require.True(t, fs.diskCache.isQueued("object"), "the other columns stay queued")
 }
 
 // A column read the caches do not hold reads its bytes without waiting for a queued
@@ -386,11 +364,11 @@ func TestS3FSCachedColumnReadDoesNotWaitForQueuedColumns(t *testing.T) {
 func TestS3FSColumnReadLeavesQueuedOtherColumns(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
 	ctx := context.Background()
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyFills(t, fs)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{
 		FilePath: "object", Size: 20, Due: 1 << 62, Ranges: []PrefetchRange{{Offset: 200 << 10, Size: 20}},
 	}))
-	require.True(t, fs.prefetcher.isQueued("object"))
+	require.True(t, fs.diskCache.isQueued("object"))
 
 	got := make(chan []byte, 1)
 	go func() { got <- readRangeOf(t, fs, ColumnPrefetch, 102, 5) }()
@@ -401,7 +379,7 @@ func TestS3FSColumnReadLeavesQueuedOtherColumns(t *testing.T) {
 		t.Fatal("the read waited for a download of other columns")
 	}
 	require.NotZero(t, storage.reads.Load())
-	require.True(t, fs.prefetcher.isQueued("object"), "the other columns stay queued")
+	require.True(t, fs.diskCache.isQueued("object"), "the other columns stay queued")
 }
 
 // A read that skips the disk cache reads its bytes without waiting for a queued download
@@ -409,9 +387,9 @@ func TestS3FSColumnReadLeavesQueuedOtherColumns(t *testing.T) {
 func TestS3FSCacheBypassReadLeavesQueuedObject(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 256<<10, 300<<10)
 	ctx := context.Background()
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyFills(t, fs)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Due: 1 << 62}))
-	require.True(t, fs.prefetcher.isQueued("object"))
+	require.True(t, fs.diskCache.isQueued("object"))
 
 	got := make(chan error, 1)
 	vec := &IOVector{FilePath: "object", Policy: SkipAllCache, Entries: []IOEntry{{Offset: 100, Size: 10}}}
@@ -424,5 +402,5 @@ func TestS3FSCacheBypassReadLeavesQueuedObject(t *testing.T) {
 		t.Fatal("the read waited for the queued download")
 	}
 	require.NotZero(t, storage.reads.Load())
-	require.True(t, fs.prefetcher.isQueued("object"), "the download stays queued")
+	require.True(t, fs.diskCache.isQueued("object"), "the download stays queued")
 }

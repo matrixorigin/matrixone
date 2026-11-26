@@ -37,7 +37,7 @@ func TestPrefetchBufferReleasedBeforeDecode(t *testing.T) {
 			fs, _, data := newPrefetchRangeFS(t, 0, 64<<10)
 			d := fs.diskCache
 			<-d.load.done
-			d.prefetchFlightBytes = budget
+			d.prefetchFlightBytes = 2 * budget
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			require.NoError(t, fs.Write(ctx, IOVector{FilePath: "bystander", Policy: SkipAllCache,
@@ -93,6 +93,9 @@ func TestPrefetchBufferReleasedBeforeDecode(t *testing.T) {
 				<-done
 			}
 
+			// The rest of the budget is held, so the bystander gets a buffer only once the
+			// prefetch released its own.
+			holdForegroundBuffer(t, fs, budget)
 			other := &IOVector{FilePath: "bystander", Policy: ExactColumnsRead | SkipMemoryCache | SkipDiskCacheWrites,
 				Entries: []IOEntry{{Size: size}}}
 			defer other.Release()
@@ -126,7 +129,7 @@ func TestPrefetchBufferReleasedBeforeDecode(t *testing.T) {
 				}
 				return false
 			}, time.Second, time.Millisecond)
-			require.Zero(t, charged, "the bystander should finish while the decoder runs on its own copy")
+			require.LessOrEqual(t, charged, int64(budget), "the bystander should finish while the decoder runs on its own copy")
 		})
 	}
 }

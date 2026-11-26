@@ -502,7 +502,7 @@ func TestIndexFileCacheDeleteReturnsWhilePutIsStalled(t *testing.T) {
 	}
 }
 
-// A read that waited for a queued prefetch reads the cache the prefetch published to.
+// A read that joins a queued prefetch is served by it, from the cache it fills.
 func TestReadRechecksCachesAfterQueuedPublication(t *testing.T) {
 	for _, index := range []bool{false, true} {
 		name := "table_disk_cache"
@@ -513,25 +513,7 @@ func TestReadRechecksCachesAfterQueuedPublication(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			fs, storage, data := newIndexObjectFS(t, index)
-			fs.prefetcher.close(ctx)
-			gate := newGatedRun("blocker")
-			fs.prefetcher = newPrefetcher(1, fs.prefetchQueueLimit(), fs.haveObject, func(ctx context.Context, req ObjectPrefetch) {
-				if req.FilePath == "blocker" {
-					gate.run(ctx, req)
-					return
-				}
-				// Force the legal scheduling order where the queued read resumes
-				// only after the real publisher installed and unregistered the fill.
-				fs.prefetchObject(withDownloadStarted(ctx, func() {}), req)
-			})
-			defer gate.releaseAll()
-			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "blocker", Size: 1}))
-			select {
-			case path := <-gate.started:
-				require.Equal(t, "blocker", path)
-			case <-ctx.Done():
-				t.Fatal(ctx.Err())
-			}
+			busyFills(t, fs)
 
 			policy := Policy(SkipMemoryCache)
 			if index {
@@ -539,7 +521,7 @@ func TestReadRechecksCachesAfterQueuedPublication(t *testing.T) {
 			}
 			ctx = WithFileServicePolicy(ctx, policy)
 			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
-			require.True(t, fs.prefetcher.isQueued("object"))
+			require.True(t, fs.diskCache.isQueued("object"))
 			vec := &IOVector{FilePath: "object", Policy: policy, Entries: []IOEntry{{Offset: 32, Size: 16}}}
 			defer vec.Release()
 			require.NoError(t, fs.Read(ctx, vec))

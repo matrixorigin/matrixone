@@ -17,50 +17,12 @@ package fileservice
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
-
-func TestPrefetchCoverageAcrossAdjacentRanges(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		ranges []PrefetchRange
-	}{
-		{name: "baseline_one_covering_range", ranges: []PrefetchRange{{Size: 2}}},
-		{name: "two_adjacent_covering_ranges", ranges: []PrefetchRange{{Size: 1}, {Offset: 1, Size: 1}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			gate := newGatedRun("object")
-			p := newPrefetcher(1, func() int64 { return 2 }, func(ObjectPrefetch) bool { return false }, gate.run)
-			defer p.close(context.Background())
-			defer gate.releaseAll()
-
-			p.add(ObjectPrefetch{FilePath: "object", Size: 2, Ranges: tc.ranges})
-			select {
-			case path := <-gate.started:
-				require.Equal(t, "object", path)
-			case <-ctx.Done():
-				t.Fatal("prefetch worker did not start")
-			}
-			p.add(ObjectPrefetch{FilePath: "object", Size: 2, Ranges: []PrefetchRange{{Size: 2}}})
-			p.add(ObjectPrefetch{FilePath: "bystander", Size: 2})
-			p.checkCharges(t)
-
-			p.mu.Lock()
-			deferred := p.deferred
-			p.mu.Unlock()
-			require.True(t, p.isQueued("bystander"),
-				"an already-covered request charged %d deferred bytes and displaced the bystander", deferred)
-			require.Zero(t, deferred)
-		})
-	}
-}
 
 func TestCachingReadDoesNotJoinUncachedFlight(t *testing.T) {
 	for _, tc := range []struct {
@@ -161,80 +123,6 @@ func TestAsyncDiskPrefetchSurvivesIndexDownload(t *testing.T) {
 					"the disk cache stayed empty after %d storage open(s), despite a prefetch for each cache", attempts)
 				require.Equal(t, 2, attempts)
 			})
-		})
-	}
-}
-
-func TestDeferredCacheCheckKeepsReplacement(t *testing.T) {
-	for _, tc := range []struct {
-		name            string
-		replacementSize int64
-	}{
-		{name: "baseline_replacement_changes_size", replacementSize: 2},
-		{name: "replacement_has_same_size", replacementSize: 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			ran := make(chan ObjectPrefetch, 4)
-			running, checking := make(chan struct{}), make(chan struct{})
-			checkRelease := make(chan struct{})
-			finishFirst := sync.OnceFunc(func() { close(running) })
-			finishCheck := sync.OnceFunc(func() { close(checkRelease) })
-			var oldChecks atomic.Int32
-			p := newPrefetcher(1, func() int64 { return 8 }, func(req ObjectPrefetch) bool {
-				if len(req.Ranges) == 1 && req.Ranges[0].Offset == 10 && oldChecks.Add(1) == 2 {
-					close(checking)
-					<-checkRelease
-					return true
-				}
-				return false
-			}, func(ctx context.Context, req ObjectPrefetch) {
-				ran <- req
-				if len(req.Ranges) == 1 && req.Ranges[0].Offset == 0 {
-					select {
-					case <-running:
-					case <-ctx.Done():
-					}
-				}
-			})
-			defer p.close(context.Background())
-			defer finishFirst()
-			defer finishCheck()
-			next := func() ObjectPrefetch {
-				t.Helper()
-				select {
-				case req := <-ran:
-					return req
-				case <-ctx.Done():
-					t.Fatal("no work started on the prefetch worker")
-					return ObjectPrefetch{}
-				}
-			}
-
-			p.add(ObjectPrefetch{FilePath: "object", Size: 1, Ranges: []PrefetchRange{{Size: 1}}})
-			require.Equal(t, "object", next().FilePath)
-			scan := new(PrefetchScan)
-			p.add(ObjectPrefetch{FilePath: "object", Size: 1, Ranges: []PrefetchRange{{Offset: 10, Size: 1}}, Scan: scan})
-			finishFirst()
-			select {
-			case <-checking:
-			case <-ctx.Done():
-				t.Fatal("the worker did not reach the cache check for the deferred request")
-			}
-
-			scan.End()
-			want := PrefetchRange{Offset: 20, Size: tc.replacementSize}
-			p.add(ObjectPrefetch{FilePath: "object", Size: want.Size, Due: 1, Ranges: []PrefetchRange{want}})
-			p.add(ObjectPrefetch{FilePath: "bystander", Size: 1, Due: 2})
-			require.True(t, p.isQueued("object"))
-			require.True(t, p.isQueued("bystander"))
-			p.checkCharges(t)
-
-			finishCheck()
-			got := next()
-			require.Equal(t, "object", got.FilePath, "the stale cache hit discarded the queued replacement range")
-			require.Equal(t, []PrefetchRange{want}, got.Ranges)
 		})
 	}
 }

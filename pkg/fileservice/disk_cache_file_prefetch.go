@@ -50,6 +50,9 @@ type filePrefetchObject struct {
 	// copies its bytes: starterHeld while it holds one, starterDone once the read no longer
 	// needs it.
 	holdStarter, starterHeld, starterDone bool
+	// kept is set, under the lock of the prefetch objects, on one a read started that a
+	// queued fill holding its bytes relies on.
+	kept bool
 	// whole is set on the download of a whole object, [0, size) or [0, end of object);
 	// stopOnClose, set once it is registered, ends its stop on the closing of the cache.
 	whole       bool
@@ -100,8 +103,8 @@ func (d *DiskCache) newWholeObject(ctx context.Context, diskPath string, index b
 	if !ok {
 		deletes = d.deletes.now()
 	}
-	needs := flightNeeds{deletes: &deletes, waiting: func() { downloadStarted(ctx) }}
-	p.prefetchTarget = prefetchTarget{d: d, diskPath: diskPath, needs: needs, index: index}
+	needs := flightNeeds{deletes: &deletes}
+	p.prefetchTarget = prefetchTarget{d: d, diskPath: diskPath, needs: needs, index: index, fill: queuedFillOf(ctx)}
 	p.whole = true
 	return p
 }
@@ -253,8 +256,17 @@ func (p *filePrefetchObject) abandon() { p.cancelRead() }
 // forgotten once its file is published.
 func (d *DiskCache) endFilePrefetch(objectPath string, p *filePrefetchObject) func(error) {
 	return func(err error) {
+		f := &d.prefetchObjects
+		f.mu.Lock()
 		if !p.handedOff {
-			d.forgetFill(objectPath, p)
+			f.forgetLocked(objectPath, p)
+		}
+		if p.fill != nil && !p.whole {
+			d.partEndedLocked(p.fill, err)
+		}
+		f.mu.Unlock()
+		if !p.handedOff {
+			p.cancelRead()
 		}
 		p.mu.Lock()
 		p.endErr = err

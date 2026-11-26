@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -145,7 +144,8 @@ func TestObjectDownloadWaitsForItsPart(t *testing.T) {
 	ctx := context.Background()
 	o := newObjectDownload("", false, []int64{0, 4, 8})
 	_, wait := o.estimate(0, 1)
-	require.Equal(t, time.Duration(math.MaxInt64), wait, "a part that has not begun is out of reach")
+	require.Equal(t, rangeReadCosts.firstByte()+time.Duration(float64(time.Second)/downloadRates.rate()), wait,
+		"a part that has not begun is estimated as beginning now")
 	o.begin(0)
 	o.begin(1)
 	_, wait = o.estimate(0, 1)
@@ -406,13 +406,14 @@ func TestDeleteForgetsPrefetchedSize(t *testing.T) {
 func TestPrefetchBeforeDeleteKeepsNoSize(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	ctx := context.Background()
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyFills(t, fs)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
-	require.True(t, fs.prefetcher.isQueued("object"))
-	taken := fs.prefetcher.entries[prefetchKey{path: "object"}].req
+	require.True(t, fs.diskCache.isQueued("object"))
+	taken := fs.diskCache.waitingFillsOf("object")[0].req
 	require.NoError(t, fs.Delete(ctx, "object"))
-	require.False(t, fs.prefetcher.isQueued("object"), "the delete drops the queued prefetch")
+	require.False(t, fs.diskCache.isQueued("object"), "the delete drops the queued prefetch")
 
+	fs.diskCache.setFillsMax(0)
 	fs.prefetchObject(ctx, taken)
 	_, known := fs.diskCache.prefetched.size(fs.diskCache.objectKey("object"))
 	require.False(t, known, "a prefetch made before the delete does not store its size")
@@ -491,9 +492,9 @@ func TestS3FSObjectSplitDownloadsShareFewConnections(t *testing.T) {
 	require.Eventually(t, func() bool { return heldRoom(fs.governor) == 0 }, 5*time.Second, time.Millisecond)
 }
 
-// A read of bytes in a part of a split download that waits for room reads its own range:
-// no read joins a part that has not begun.
-func TestS3FSReadOfPartWaitingForConnectionReadsItsRange(t *testing.T) {
+// A read of bytes in a part of a split download that waits for room joins the download and
+// waits for the part, making no request of its own.
+func TestS3FSReadOfPartWaitingForConnectionJoinsIt(t *testing.T) {
 	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	limitRoom(t, fs.governor, 2, 1)
 	bystander := occupy(t, fs.governor, foregroundRequest, 1)
@@ -516,19 +517,21 @@ func TestS3FSReadOfPartWaitingForConnectionReadsItsRange(t *testing.T) {
 	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: 250 << 10, Size: 10}}}
 	read := make(chan error, 1)
 	go func() { read <- fs.Read(ctx, vec) }()
-	require.Eventually(t, waitingFor(fs.governor, foregroundRequest, 2), 2*time.Second, time.Millisecond,
-		"the read waits for room of its own")
+	require.Never(t, waitingFor(fs.governor, foregroundRequest, 2), 100*time.Millisecond, time.Millisecond,
+		"the read makes no request of its own")
 	bystander()
 	require.NoError(t, <-read)
 	require.Equal(t, data[250<<10:250<<10+10], vec.Entries[0].Data)
 	vec.Release()
 	release()
 	require.NoError(t, <-whole)
+	_, _, total := g.counts(key)
+	require.Equal(t, 2, total, "the object is read once, in two parts")
 }
 
-// A read that joins bytes at copy time takes no download whose part holding them has not
-// begun, and takes it once the part begins.
-func TestJoinableSkipsPartNotBegun(t *testing.T) {
+// A read that joins bytes at copy time takes a download whose part holding them has not
+// begun, as one that begins now.
+func TestJoinableTakesPartNotBegun(t *testing.T) {
 	fs, _, _ := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
 	diskPath := d.objectKey("object")
@@ -547,7 +550,7 @@ func TestJoinableSkipsPartNotBegun(t *testing.T) {
 		return d.joinableLocked(diskPath, false, lo, hi, time.Now(), true)
 	}
 	require.NotNil(t, covering(1, 2), "the first part has begun")
-	require.Nil(t, covering(5, 6), "the second part has not begun")
+	require.NotNil(t, covering(5, 6), "the second part has not begun")
 	o.begin(1)
 	require.NotNil(t, covering(5, 6))
 }

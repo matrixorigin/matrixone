@@ -140,24 +140,24 @@ func TestIndexObjectMissReadsStorage(t *testing.T) {
 	require.Same(t, FileService(fs), shared)
 }
 
-// The prefetches of an object the index-file cache holds, through the prefetcher or the
+// The prefetches of an object the index-file cache holds, through a queued fill or the
 // IO pipeline, are not downloaded into the disk cache; those of one it does not hold are.
 func TestPrefetchOfCachedIndexObjectIsSkipped(t *testing.T) {
 	fs, _, data := newIndexObjectFS(t, true)
 	ctx := WithFileServicePolicy(context.Background(), IndexFileObject)
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyFills(t, fs)
 	require.False(t, FullFilePreloadSkipped(ctx, fs, IndexFileObject, "object"))
 	require.False(t, FullFilePreloadSkipped(ctx, fs, IndexFileObject|SkipFullFilePreloads|NarrowRead, "object"),
 		"a filtered search still preloads an object the index-file cache keeps")
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
-	require.True(t, fs.prefetcher.isQueued("object"))
-	fs.prefetcher.remove("object")
+	require.True(t, fs.diskCache.isQueued("object"))
+	fs.diskCache.dropFills("object")
 
 	cacheIndexObject(t, fs, "object", data)
 	require.True(t, FullFilePreloadSkipped(ctx, fs, IndexFileObject, "object"))
 	require.False(t, FullFilePreloadSkipped(ctx, fs, 0, "object"))
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
-	require.False(t, fs.prefetcher.isQueued("object"))
+	require.False(t, fs.diskCache.isQueued("object"))
 }
 
 // Deleting an object deletes its entry; after it is written again, reads return the new
@@ -226,17 +226,19 @@ func TestNonIndexObjectFillUsesDiskCache(t *testing.T) {
 }
 
 // A queued whole-object prefetch of an IndexFileObject request publishes into the
-// index-file cache, though the prefetcher runs it without the request's context.
+// index-file cache, though its fill runs without the request's context.
 func TestIndexObjectPrefetchFillsIndexFileCache(t *testing.T) {
 	fs, _, data := newIndexObjectFS(t, true)
-	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	busyFills(t, fs)
 	ctx := WithFileServicePolicy(context.Background(), IndexFileObject)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
-	fs.prefetcher.mu.Lock()
-	req := fs.prefetcher.entries[prefetchKey{path: "object", index: true}].req
-	fs.prefetcher.mu.Unlock()
+	f := &fs.diskCache.prefetchObjects
+	f.mu.Lock()
+	req := f.fills[fillKey{diskPath: fs.diskCache.objectKey("object"), index: true}][0].req
+	f.mu.Unlock()
 	require.True(t, req.indexObject)
-	fs.prefetcher.remove("object")
+	fs.diskCache.dropFills("object")
+	fs.diskCache.setFillsMax(0)
 
 	require.False(t, fs.haveObject(req))
 	fs.prefetchObject(context.Background(), req)

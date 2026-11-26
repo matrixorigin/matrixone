@@ -96,7 +96,7 @@ func (s *S3FS) streamBuffer(size int64) ([]byte, func()) {
 	f := &d.prefetchObjects
 	charge := flightBufSize(size)
 	f.mu.Lock()
-	if f.bytes > 0 && f.bytes+charge > d.flightBytes() {
+	if !d.fitsLocked(charge, false) {
 		f.mu.Unlock()
 		return nil, nil
 	}
@@ -105,7 +105,9 @@ func (s *S3FS) streamBuffer(size int64) ([]byte, func()) {
 	buf := getFlightBuf(size)
 	return buf, func() {
 		putFlightBuf(buf)
-		f.uncharge(charge, false)
+		f.mu.Lock()
+		d.unchargeLocked(charge)
+		f.mu.Unlock()
 	}
 }
 

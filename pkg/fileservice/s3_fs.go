@@ -60,7 +60,6 @@ type S3FS struct {
 
 	ioMerger     *IOMerger
 	decodedReads *decodedReadRegistry
-	prefetcher   *prefetcher
 
 	parallelMode ParallelMode
 }
@@ -179,8 +178,7 @@ func NewS3FS(
 		}
 		if fs.diskCache != nil {
 			fs.diskCache.governor = fs.governor
-			workers := fs.diskCache.prefetchWorkers()
-			fs.prefetcher = newPrefetcher(workers, fs.prefetchQueueLimit(), fs.haveObject, fs.prefetchObject)
+			fs.diskCache.prefetchObjects.runWhole = fs.runWholeFill
 		}
 	}
 
@@ -478,6 +476,11 @@ func (s *S3FS) WholeObjectPreloadSkipped(filePath string, group uint64) bool {
 }
 
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
+	return s.prefetchFile(ctx, filePath, 0)
+}
+
+// prefetchFile is PrefetchFile, whose split starts a part at splitAt.
+func (s *S3FS) prefetchFile(ctx context.Context, filePath string, splitAt int64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -505,9 +508,9 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 
 	// load to disk cache, or to the index-file cache for an object it keeps
 	target := s.fillTarget(GetFileServicePolicy(ctx), filePath)
-	layout := s.prefetchedSize(path.File, 0)
+	layout := s.prefetchedSize(path.File, splitAt)
 	if target == nil {
-		layout = s.cachedObjectSize(path.File)
+		layout = s.cachedObjectSize(path.File, splitAt)
 	}
 	if err := s.diskCache.fillFileTo(
 		withBackgroundRequests(withPrefetchFill(ctx)), path.File,
@@ -545,9 +548,6 @@ type readSources struct {
 	indexRead bool
 	// tier is where it caches the bytes it reads.
 	tier cacheTier
-	// queue is set when it joins the prefetcher's queued download of its whole object, and
-	// queueRanges when also one of ranges holding its bytes.
-	queue, queueRanges bool
 	// flights is set when it takes its bytes from the prefetch objects under way that hold
 	// them, through readFromFlights.
 	flights bool
@@ -573,60 +573,13 @@ func (s *S3FS) sourcesFor(ctx context.Context, vector *IOVector) readSources {
 	columns := p.Any(ColumnPrefetch, ExactRead)
 	tier := s.tierOf(p)
 	return readSources{
-		indexRead:   s.indexObjectReadable(p),
-		tier:        tier,
-		queue:       join && s.prefetcher != nil && (columns || !p.Any(SkipFullFilePreloads)),
-		queueRanges: columns,
-		flights:     join && columns,
-		window:      join && tier == diskTier,
-		caches:      p.CacheIOEntry() && tier == diskTier,
-		fetch:       join,
+		indexRead: s.indexObjectReadable(p),
+		tier:      tier,
+		flights:   join && columns,
+		window:    join && tier == diskTier,
+		caches:    p.CacheIOEntry() && tier == diskTier,
+		fetch:     join,
 	}
-}
-
-// joinQueued waits until the read can join the prefetcher's download of the object of
-// vector, when src joins it: one of the whole object, or with src.queueRanges also one
-// of ranges holding bytes it reads; it reports whether there was one. A download still
-// waiting moves to the live queue.
-func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector, src readSources) bool {
-	if !src.queue {
-		return false
-	}
-	path, err := parseFilePathAtService(vector.FilePath, s.name)
-	if err != nil {
-		return false
-	}
-	// The read joins a download into the cache of its own tier.
-	index := s.indexObject(vector.Policy)
-	started, leave, ok := s.prefetcher.join(path.File, func(req ObjectPrefetch) bool {
-		return req.indexObject == index && (len(req.Ranges) == 0 || src.queueRanges && rangesHoldNeeded(req.Ranges, vector))
-	})
-	if !ok {
-		return false
-	}
-	defer leave()
-	select {
-	case <-started:
-	case <-ctx.Done():
-	}
-	return true
-}
-
-// rangesHoldNeeded reports whether a range of ranges holds bytes of an entry of vector not
-// done.
-func rangesHoldNeeded(ranges []PrefetchRange, vector *IOVector) bool {
-	for i := range vector.Entries {
-		e := &vector.Entries[i]
-		if e.done {
-			continue
-		}
-		for _, r := range ranges {
-			if (e.Size < 0 || r.Offset < e.Offset+e.Size) && e.Offset < r.Offset+r.Size {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // firstNeeded returns the least offset of the entries of vector not done.
@@ -654,8 +607,8 @@ func (s *S3FS) prefetchedSize(file string, splitAt int64) objectLayout {
 // cachedObjectSize is prefetchedSize, which learns the size of an object none told of
 // from object storage when the disk cache holds a range of it from its start, so a fill
 // finds the object cached as the range [0, size).
-func (s *S3FS) cachedObjectSize(file string) objectLayout {
-	told := s.prefetchedSize(file, 0)
+func (s *S3FS) cachedObjectSize(file string, splitAt int64) objectLayout {
+	told := s.prefetchedSize(file, splitAt)
 	return func(ctx context.Context) (int64, int64, error) {
 		size, splitAt, err := told(ctx)
 		if err == nil || !s.diskCache.ranges.startsAt0(s.diskCache.objectKey(file)) {
@@ -1100,9 +1053,9 @@ read_disk_cache:
 		}
 	}
 
-	// A read the caches do not hold waits to join a queued download of its object.
+	// A read the caches do not hold joins the fills of its object waiting to start.
 	src := s.sourcesFor(ctx, vector)
-	joined := s.joinQueued(ctx, vector, src)
+	joined := s.joinFills(ctx, vector, src)
 	if joined {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1426,7 +1379,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	src := objectSource{g: s.governor, key: key, end: -1}
 
 	if readFullObject && s.shouldStreamFullObjectToDiskCache(vector) {
-		if s.prefetcher != nil && s.prefetcher.isRunning(path.File) {
+		if s.diskCache.fillsUnderWay(path.File) {
 			metric.FSPrefetchReadOwnRunningCounter.Inc()
 		} else {
 			metric.FSPrefetchReadOwnDownloadCounter.Inc()
@@ -2089,8 +2042,8 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 			return err
 		}
 		keys = append(keys, s.pathToKey(path.File))
-		if s.prefetcher != nil {
-			s.prefetcher.remove(path.File)
+		if s.diskCache != nil {
+			s.diskCache.dropFills(path.File)
 		}
 	}
 
@@ -2132,9 +2085,6 @@ func (s *S3FS) IndexFileCache() *IndexFileCache {
 
 func (s *S3FS) Close(ctx context.Context) {
 	defer s.governor.close()
-	if s.prefetcher != nil {
-		s.prefetcher.close(ctx)
-	}
 	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache, index: s.indexFileCache}
 	if s.decodedReads != nil {
 		s.decodedReads.close(func() { caches.close(ctx) })

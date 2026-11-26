@@ -56,7 +56,7 @@ func TestDeleteInvalidatesPrefetchedRangeForNestedPath(t *testing.T) {
 			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{
 				FilePath: tc.path, Size: size, Ranges: []PrefetchRange{{Size: size}},
 			}))
-			require.Eventually(t, func() bool { return !fs.prefetcher.isRunning(tc.path) }, time.Second, time.Millisecond)
+			require.Eventually(t, func() bool { return !fs.diskCache.fillsUnderWay(tc.path) }, time.Second, time.Millisecond)
 			require.EqualValues(t, 1, storage.reads.Load(), "the prefetch should read the former object once")
 			require.Equal(t, byte(1), read())
 			require.EqualValues(t, 1, storage.reads.Load(), "the former data should be read from the prefetched cache range")
@@ -173,7 +173,7 @@ func TestSyncWholeFillDoesNotPublishAfterDeleteMark(t *testing.T) {
 			if tc.delete {
 				require.NoError(t, <-deleted)
 			}
-			require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") }, time.Second, time.Millisecond)
+			require.Eventually(t, func() bool { return !fs.diskCache.fillsUnderWay("object") }, time.Second, time.Millisecond)
 			if !tc.delete {
 				require.FileExists(t, d.wholePath("object", 64<<10))
 				return

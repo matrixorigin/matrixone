@@ -358,6 +358,7 @@ func TestSkippedWholeFillReadsCacheAgain(t *testing.T) {
 func TestExactReadJoinsQueuedRanges(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	<-fs.diskCache.load.done
+	busyFills(t, fs)
 	storage := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
 	fs.governor.raw = storage
 	t.Cleanup(func() { close(storage.gate) })
@@ -366,7 +367,7 @@ func TestExactReadJoinsQueuedRanges(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	vec := &IOVector{FilePath: "object", Policy: ExactColumnsRead, Entries: []IOEntry{{Offset: r.Offset, Size: r.Size}}}
-	require.True(t, fs.joinQueued(ctx, vec, fs.sourcesFor(ctx, vec)))
+	require.True(t, fs.joinFills(ctx, vec, fs.sourcesFor(ctx, vec)))
 }
 
 // BC15: a read made under a download's context joins no prefetch object.

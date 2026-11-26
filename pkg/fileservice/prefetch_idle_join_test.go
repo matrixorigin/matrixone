@@ -60,9 +60,8 @@ func TestJoinedReadOfIdleStoppedFlightReadsItsBytes(t *testing.T) {
 	}
 	bg := make(chan error, 1)
 	go func() {
-		_, err := fs.diskCache.readRanges(context.Background(), "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch,
-			[]PrefetchRange{{Offset: 0, Size: 4096}}, openerSource(open))
-		bg <- err
+		prefetchRanges(fs, []PrefetchRange{{Offset: 0, Size: 4096}}, open)
+		bg <- nil
 	}()
 	<-canceled // the idle timer fired: no read waits for the flight
 

@@ -274,7 +274,7 @@ func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
 		size   = 16 << 10
 	)
 	fs, _, data := newPrefetchRangeFS(t, unit, 2*ranges*unit)
-	budget := 2 * flightBufSize(size)
+	budget := 4 * flightBufSize(size)
 	fs.diskCache.prefetchFlightBytes = budget
 	f := &fs.diskCache.prefetchObjects
 	var opens atomic.Int64
@@ -292,22 +292,18 @@ func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
 	for i := range rs {
 		rs[i] = PrefetchRange{Offset: int64(2*i) * unit, Size: size}
 	}
-	var started atomic.Int64
-	ctx := context.WithValue(context.Background(), downloadStartedKey{}, func() { started.Add(1) })
 	done := make(chan error, 1)
 	go func() {
-		ok, err := fs.diskCache.readRanges(ctx, "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, rs, openerSource(open))
-		if err == nil && !ok {
-			err = errors.New("the ranges were not read")
-		}
-		done <- err
+		prefetchRanges(fs, rs, open)
+		done <- nil
 	}()
 	require.Eventually(t, func() bool { return opens.Load() == 2 }, 10*time.Second, time.Millisecond)
+	require.Never(t, func() bool { return opens.Load() > 2 }, 100*time.Millisecond, time.Millisecond,
+		"background buffers take at most half the budget")
 	f.mu.Lock()
 	inMemory := f.bytes
 	f.mu.Unlock()
-	require.LessOrEqual(t, inMemory, budget)
-	require.Equal(t, int64(1), started.Load(), "started while ranges wait")
+	require.LessOrEqual(t, inMemory, budget/2)
 
 	close(release)
 	select {
@@ -317,7 +313,6 @@ func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
 		t.Fatal("the prefetch did not return")
 	}
 	require.Equal(t, int64(ranges), opens.Load(), "no range is read twice")
-	require.Equal(t, int64(1), started.Load())
 }
 
 // Concurrent cold reads, each of more runs than the buffers may hold, all return with
@@ -546,9 +541,9 @@ func TestPrefetchReadAcrossDeleteReturnsNoBytes(t *testing.T) {
 	require.False(t, ok, "no bytes read across a delete are returned")
 }
 
-// With no memory available, concurrent reads hold one buffer at a time, and all of them
-// return their bytes.
-func TestPrefetchMemoryExhaustedHoldsOneBuffer(t *testing.T) {
+// With no memory available, concurrent reads hold no buffer: each reads its range through a
+// file fill, and all of them return their bytes.
+func TestPrefetchMemoryExhaustedHoldsNoBuffer(t *testing.T) {
 	const (
 		unit  = 64 << 10
 		units = 8
@@ -584,13 +579,10 @@ func TestPrefetchMemoryExhaustedHoldsOneBuffer(t *testing.T) {
 			done <- r
 		}()
 	}
-	require.Eventually(t, func() bool {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		return storage.opens.Load() == 1 && len(f.waiting) == units-1
-	}, 10*time.Second, time.Millisecond, "one read holds a buffer, the others wait for it")
+	require.Eventually(t, func() bool { return storage.opens.Load() == units }, 10*time.Second, time.Millisecond,
+		"every read reads at once")
 	f.mu.Lock()
-	require.Equal(t, flightBufSize(unit), f.bytes)
+	require.Zero(t, f.bytes, "no read holds a buffer")
 	f.mu.Unlock()
 
 	release()

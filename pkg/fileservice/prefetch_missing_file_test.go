@@ -25,7 +25,7 @@ import (
 
 func waitPrefetcherIdle(t *testing.T, fs *S3FS) {
 	t.Helper()
-	require.Eventually(t, func() bool { return fs.prefetcher.known.Load() == 0 }, 5*time.Second, time.Millisecond)
+	waitFillsIdle(t, fs.diskCache)
 	fs.diskCache.prefetchObjects.reads.Wait()
 }
 

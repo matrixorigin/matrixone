@@ -261,11 +261,7 @@ func TestPrefetchObjectsUnderStress(t *testing.T) {
 		k.(*PrefetchScan).End()
 		return true
 	})
-	require.Eventually(t, func() bool {
-		fs.prefetcher.mu.Lock()
-		defer fs.prefetcher.mu.Unlock()
-		return len(fs.prefetcher.entries) == 0
-	}, 10*time.Second, time.Millisecond, "every prefetch ends")
+	waitFillsIdle(t, d)
 	f := &d.prefetchObjects
 	f.reads.Wait()
 	require.Eventually(t, func() bool {
