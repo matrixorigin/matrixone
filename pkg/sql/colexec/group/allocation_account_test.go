@@ -22,11 +22,13 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1524,6 +1526,109 @@ func TestSpillReloadRetriesWholeRecordAfterCapacityRejection(t *testing.T) {
 	used, _, _ := controller.snapshot()
 	require.Zero(t, used)
 	finalizeGroupTestAllocation(t, g, allocation)
+}
+
+// Match only bitmap target growth during reload, not the allocations made by
+// decoding the incoming spill record or by the hash table.
+type bitmapReloadCapacityController struct {
+	*process.ExecutionResourceGeneration
+	armed               bool
+	rejections          int
+	publicationRequests int
+}
+
+func (c *bitmapReloadCapacityController) AcquireAllocationCapacity(size uint64) error {
+	if c.armed && size == 4*4 { // growth from two to four uint32 values
+		var pcs [32]uintptr
+		frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs[:])])
+		for {
+			frame, more := frames.Next()
+			if strings.HasSuffix(frame.Function, ".(*bmpExecCommon).batchMerge") {
+				c.publicationRequests++
+				return mpool.ErrAllocationAccountCapacity
+			}
+			if strings.HasSuffix(frame.Function, ".(*bmpExecCommon).preflightBitmapMerge") {
+				if c.rejections == 0 {
+					c.rejections++
+					return mpool.ErrAllocationAccountCapacity
+				}
+				break
+			}
+			if !more {
+				break
+			}
+		}
+	}
+	return c.ExecutionResourceGeneration.AcquireAllocationCapacity(size)
+}
+
+func TestAccountedBitmapSpillReloadRetriesMergePreflight(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	}()
+	proc.Base.Lim.Size = 64 << 20
+	generation := installGroupTestResourceBudget(t, proc)
+	bitmapOr := aggexec.MakeAggFunctionExpression(aggexec.AggIdOfBitmapOr, false,
+		[]*plan.Expr{colExpr(1, types.T_varbinary)}, nil)
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countStarAgg(), bitmapOr})
+	g.SpillMem = 1 << 30 // force waves explicitly, not by a soft threshold
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<16)
+	require.NoError(t, err)
+	controller := &bitmapReloadCapacityController{ExecutionResourceGeneration: generation}
+	account, err := registry.OpenWithController(64<<20, controller)
+	require.NoError(t, err)
+	allocation := groupTestAllocation{generation: generation, registry: registry, account: account}
+	defer func() {
+		g.Free(proc, false, nil)
+		finalizeGroupTestAllocation(t, g, allocation)
+	}()
+	require.NoError(t, g.ctr.setAllocationAccount(account))
+	require.NoError(t, g.Prepare(proc))
+
+	// Three records in the same bucket: seed an exact-capacity target, merge
+	// a duplicate without acquiring capacity, then reject genuine growth.
+	for _, values := range [][]uint32{{1, 2}, {1, 2}, {2, 3}} {
+		func() {
+			input := batch.NewWithSize(2)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+			input.Vecs[1] = vector.NewVec(types.T_varbinary.ToType(), proc.Mp())
+			data, err := roaring.BitmapOf(values...).ToBytes()
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendBytes(input.Vecs[1], data, false, proc.Mp()))
+			input.SetRowCount(1)
+			_, err = g.buildOneBatch(proc, input)
+			require.NoError(t, err)
+			written, rows, err := g.ctr.spillDataToDisk(proc, g.OpAnalyzer, nil)
+			require.NoError(t, err)
+			require.Positive(t, written)
+			require.Equal(t, int64(1), rows)
+			g.ctr.aggList, err = g.ctr.makeAggList(g.Aggs)
+			require.NoError(t, err)
+		}()
+	}
+	controller.armed = true
+	result, err := g.ctr.outputOneBatchFinal(proc, g.OpAnalyzer, g.Aggs)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, []int32{7}, vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0]))
+	// A count before bitmap in the aggregate list detects an early publish
+	// followed by an incorrect replay of the rejected record.
+	require.Equal(t, []int64{3}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1]))
+	bitmap := roaring.New()
+	require.False(t, result.Batch.Vecs[2].IsNull(0))
+	require.NoError(t, bitmap.UnmarshalBinary(result.Batch.Vecs[2].GetBytesAt(0)))
+	require.Equal(t, []uint32{1, 2, 3}, bitmap.ToArray())
+	result, err = g.ctr.outputOneBatchFinal(proc, g.OpAnalyzer, g.Aggs)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.Equal(t, 1, controller.rejections)
+	require.Zero(t, controller.publicationRequests)
+	require.Equal(t, int64(1), g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadRetries"])
 }
 
 func TestAccountedGroupResidentAndSpillMatchForH8AndHStr(t *testing.T) {

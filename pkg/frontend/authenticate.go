@@ -7552,6 +7552,7 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 				continue
 			}
 			externalSelectScan := plan2.IsExternalScanRequiringSelectPrivilege(node)
+			diagnosticScan := node.GetNodeType() == plan.Node_FUNCTION_SCAN && node.GetTableDef().GetTblFunc().GetName() == "mo_index_stats"
 			if isPrivilegeBearingTableScan(node) || externalSelectScan {
 				if _, ok := insertDedupScans[int32(nodeID)]; ok {
 					continue
@@ -7563,33 +7564,11 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
 					}
 
-					var scanTyp PrivilegeType
-					var scanOperation clusterTableOperationType
-					switch q.StmtType {
-					case plan.Query_UPDATE:
-						scanTyp = PrivilegeTypeSelect
-						scanOperation = clusterTableSelect
-						if _, ok := scanTargetTables[[2]string{node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName()}]; ok {
-							scanTyp = PrivilegeTypeUpdate
-							scanOperation = clusterTableModify
-						}
-					case plan.Query_DELETE:
-						scanTyp = PrivilegeTypeSelect
-						scanOperation = clusterTableSelect
-						if _, ok := scanTargetTables[[2]string{node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName()}]; ok {
-							scanTyp = PrivilegeTypeDelete
-							scanOperation = clusterTableModify
-						}
-					default:
-						scanTyp = PrivilegeTypeSelect
-						scanOperation = clusterTableSelect
-					}
-					if externalSelectScan {
-						// An external scan is always a read, even when its relation name
-						// matches a DML target. Subscription aliases make name-based
-						// target matching especially unsafe.
-						scanTyp = PrivilegeTypeSelect
-						scanOperation = clusterTableSelect
+					scanTyp, scanOperation := PrivilegeTypeSelect, clusterTableSelect
+					_, target := scanTargetTables[[2]string{node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName()}]
+					// External and diagnostic scans read their source even when it is also the DML target.
+					if target && !externalSelectScan && !diagnosticScan {
+						scanTyp, scanOperation = t, clusterTableModify
 					}
 
 					// External tables are independent catalog objects even when their
@@ -7938,12 +7917,7 @@ func isPrivilegeBearingTableScan(node *plan.Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		return true
 	}
-	return isTableChangesScan(node)
-}
-
-func isTableChangesScan(node *plan.Node) bool {
-	return node.GetNodeType() == plan.Node_FUNCTION_SCAN &&
-		node.GetTableDef().GetTblFunc().GetName() == "table_changes"
+	return plan2.IsSourceResolvingTableFunction(node)
 }
 
 func addReplaceDeletePrivilegeTips(arr privilegeTipsArray, p *plan2.Plan) privilegeTipsArray {
