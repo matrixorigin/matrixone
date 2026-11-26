@@ -2824,6 +2824,147 @@ func TestLockedStream(t *testing.T) {
 	)
 }
 
+// Start with one ordinary pooled transport. Hold only expansion at its
+// context-aware factory boundary, so closing the client also releases the test.
+type gatedExpansionFactory struct {
+	ContextBackendFactory
+	calls     atomic.Int32
+	expanding chan struct{}
+	proceed   chan struct{}
+}
+
+func (f *gatedExpansionFactory) CreateWithContext(ctx context.Context, addr string, opts ...BackendOption) (Backend, error) {
+	attempt := f.calls.Add(1)
+	if attempt == 1 {
+		return f.ContextBackendFactory.CreateWithContext(ctx, addr, opts...)
+	}
+	if attempt == 2 {
+		close(f.expanding)
+	}
+	select {
+	case <-f.proceed:
+		return f.ContextBackendFactory.CreateWithContext(ctx, addr, opts...)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func TestNewStreamReusesBackendDuringExpansion(t *testing.T) {
+	testPoolReturnDuringExpansion(t, 1)
+}
+
+func TestCompetingStreamsShareExpansionRetry(t *testing.T) {
+	testPoolReturnDuringExpansion(t, 2)
+}
+
+func testPoolReturnDuringExpansion(t *testing.T, waiters int) {
+	t.Helper()
+	// Keep the Unix socket path short even with a long test name.
+	dir, err := os.MkdirTemp("", "mo-morpc-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+	path := filepath.Join(dir, "s")
+	addr := "unix://" + path
+	app := newTestAppWithAddr(t, addr, path, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+		return conn.Write(msg, goetty.WriteOptions{Flush: true})
+	})
+	require.NoError(t, app.Start())
+	t.Cleanup(func() { require.NoError(t, app.Stop()) })
+	factory := &gatedExpansionFactory{
+		ContextBackendFactory: NewGoettyBasedBackendFactory(newTestCodec()).(ContextBackendFactory),
+		expanding:             make(chan struct{}),
+		proceed:               make(chan struct{}),
+	}
+	opts := []ClientOption{WithClientInitBackends([]string{addr}, []int{1}),
+		WithClientMaxBackendPerHost(2), WithClientEnableAutoCreateBackend(), WithClientAutoCreateWaitTimeout(5 * time.Second)}
+	if waiters == 2 {
+		policy := DefaultRetryPolicy
+		policy.MaxRetries = 2
+		opts = append(opts, WithClientRetryPolicy(policy), WithClientCircuitBreaker(CircuitBreakerConfig{
+			Enabled: true, FailureThreshold: 1, ResetTimeout: time.Minute, HalfOpenMaxRequests: 1,
+		}))
+	}
+	rc, err := NewClient(t.Name(), factory, opts...)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rc.Close()) })
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	holder, err := rc.NewStream(ctx, addr, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, holder.Close(false)) })
+
+	type result struct {
+		stream Stream
+		err    error
+	}
+	c := rc.(*client)
+	c.mu.Lock()
+	cursor := c.mu.ops[addr]
+	before := atomic.LoadUint64(&cursor.seq)
+	c.mu.Unlock()
+	waiter := make(chan result, waiters)
+	for range waiters {
+		go func() {
+			s, err := rc.NewStream(ctx, addr, true)
+			waiter <- result{s, err}
+		}()
+	}
+	select {
+	case <-factory.expanding:
+	case <-ctx.Done():
+		t.Fatal("expansion did not reach the factory")
+	}
+	// In the single-backend pool, one rotation under c.mu is one lookup.
+	// Wait until all callers have joined the same create before the return.
+	require.Eventually(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return atomic.LoadUint64(&cursor.seq)-before == uint64(waiters)
+	}, 3*time.Second, time.Millisecond)
+	c.mu.Lock()
+	state := c.mu.creating[addr]
+	c.mu.Unlock()
+	first := state.reuse.Load()
+	require.NotNil(t, first)
+	require.NoError(t, holder.Close(false))
+	func() {
+		for i := range waiters {
+			var got result
+			select {
+			case got = <-waiter:
+			case <-ctx.Done():
+				t.Fatal("waiter did not finish")
+			}
+			require.NoError(t, got.err)
+			defer got.stream.Close(false)
+			msg := &testMessage{id: got.stream.ID(), payload: []byte{byte(i + 1)}}
+			require.NoError(t, got.stream.Send(ctx, msg))
+			replies, err := got.stream.Receive()
+			require.NoError(t, err)
+			select {
+			case reply := <-replies:
+				require.Equal(t, msg, reply)
+			case <-ctx.Done():
+				t.Fatal("no response on the reused backend")
+			}
+			if i == 0 && waiters == 2 {
+				// Keep the winner's stream locked. Only finish the real second
+				// connection once the loser has missed and rearmed this same wait.
+				require.Eventually(t, func() bool { return state.reuse.Load() != first },
+					3*time.Second, time.Millisecond)
+				close(factory.proceed)
+			}
+		}
+	}()
+	if waiters == 2 {
+		// The local competition must not have opened the threshold-one breaker.
+		probe, err := rc.NewStream(ctx, addr, true)
+		require.NoError(t, err)
+		require.NoError(t, probe.Close(false))
+	}
+	require.EqualValues(t, 2, factory.calls.Load())
+}
+
 func TestIssue7678(t *testing.T) {
 	s := &stream{}
 	s.lastReceivedSequence = 10

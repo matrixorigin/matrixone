@@ -88,6 +88,7 @@ type alterDataBranchLineagePlan struct {
 	preserveHistoricalSource bool
 	cloneTS                  int64
 	fixedCopyTS              bool
+	clearsRows               bool
 }
 
 type alterDataBranchLineageInspection struct {
@@ -723,16 +724,21 @@ func (c *Compile) compactExpiredAlterDataBranchLineage(now time.Time) error {
 func alterDataBranchLineageMetadata(
 	dag databranchutils.BranchReclaimDag,
 	oldTableID uint64,
+	clearsRows bool,
 ) (creator uint32, level string) {
+	nextLevel := databranchutils.NextAlterLineageLevel
+	if clearsRows {
+		nextLevel = databranchutils.NextTruncateLineageLevel
+	}
 	meta, ok := dag.Info[oldTableID]
 	if !ok || meta.Deleted {
-		return catalog.System_Account, databranchutils.AlterLineageLevel
+		return catalog.System_Account, nextLevel("")
 	}
-	return uint32(meta.Creator), databranchutils.NextAlterLineageLevel(meta.Level)
+	return uint32(meta.Creator), nextLevel(meta.Level)
 }
 
-// preserveAlterDataBranchLineage models ALTER's copy-and-swap as a lineage
-// edge whenever the old physical table has a live branch descendant. The
+// preserveAlterDataBranchLineage publishes a physical rebuild edge for COPY
+// ALTER and TRUNCATE when the old generation still has lineage owners. The
 // matching snapshot pins the old generation until every later generation and
 // descendant has been dropped.
 func (c *Compile) preserveAlterDataBranchLineage(
@@ -761,7 +767,7 @@ func (c *Compile) preserveAlterDataBranchLineage(
 	if err != nil {
 		return err
 	}
-	creator, lineageLevel := alterDataBranchLineageMetadata(dag, oldTableID)
+	creator, lineageLevel := alterDataBranchLineageMetadata(dag, oldTableID, plan.clearsRows)
 	metadataSQL, snapshotSQL := buildAlterDataBranchLineageSQL(
 		oldTableID, newTableID, plan.cloneTS, creator, lineageLevel,
 		c.proc.GetSessionInfo().Account, databaseName, tableName, snapshotID.String(),

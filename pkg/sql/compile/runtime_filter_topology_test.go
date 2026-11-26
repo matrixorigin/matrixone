@@ -21,7 +21,6 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/mock/gomock"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -33,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -464,10 +462,11 @@ func BenchmarkValidateLocalRuntimeFilterTopologyNoFilter(b *testing.B) {
 	}
 }
 
+// A required IVF membership filter needs every producer to broadcast to every
+// CN reader: a partial, duplicate or unreachable sender is rejected, and a
+// remote fragment decoded over RPC keeps producer and reader on one board.
 func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
-	c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
-	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
-	client.version = vectorscan.IndexSearchScanProtocolVersion
+	c, _ := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
 	c.proc.Base.TxnOperator = fakeTxnOperator{}
 	c.proc.Base.SessionInfo.TimeZone = time.UTC
 	c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
@@ -534,10 +533,8 @@ func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
 	roots[1].PreScopes = nil
 	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
 	roots[1].PreScopes = saved
-	var required int64
-	data, err := encodeRemoteScopeWithProtocol(roots[1], c.proc, &required)
+	data, err := encodeRemoteScope(roots[1], c.proc)
 	require.NoError(t, err)
-	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, required)
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
 	t.Cleanup(decoded.release)

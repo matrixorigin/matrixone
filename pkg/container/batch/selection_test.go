@@ -41,8 +41,7 @@ func TestBatchSelection(t *testing.T) {
 
 	var selection bitmap.Bitmap
 
-	selection.Init(bitmapTestMP)
-	mustBitmapOK(selection.InitWithSize(6, bitmapTestMP))
+	require.NoError(t, selection.InitWithSize(6, mp))
 	selection.AddMany([]uint64{1, 4, 5})
 	bat.SetSelection(&selection)
 	require.Equal(t, []int64{1, 4, 5}, bat.SelectionRows(nil))
@@ -91,6 +90,7 @@ func TestBatchSelection(t *testing.T) {
 
 	compact.Clean(mp)
 	bat.Clean(mp)
+	selection.Free()
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -182,8 +182,7 @@ func TestBatchOwnSelectionPool(t *testing.T) {
 }
 
 // Every release of a batch that may own selection storage returns its words:
-// FreeWindow and CleanOwned as well as Clean. A spill view never carries the
-// storage, so it cannot free it.
+// FreeWindow and CleanOwned as well as Clean.
 func TestBatchReleasesFreeOwnSelection(t *testing.T) {
 	mp := mpool.MustNewZero()
 	for name, release := range map[string]func(*Batch){
@@ -198,10 +197,6 @@ func TestBatchReleasesFreeOwnSelection(t *testing.T) {
 			sel.Add(3)
 			bat.SetSelection(sel)
 			require.True(t, bat.HoldsSelectionMemory())
-
-			view := bat.spillView()
-			require.False(t, view.HoldsSelectionMemory())
-			require.Same(t, bat.Selection(), view.Selection())
 
 			release(bat)
 			require.False(t, bat.HasSelection())

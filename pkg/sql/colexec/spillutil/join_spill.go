@@ -270,7 +270,7 @@ func (r *BucketReader) readBatchRecord(
 			return io.LimitedReader{}, err
 		}
 		limited := io.LimitedReader{R: r.reader, N: batchSize}
-		return limited, reuseBat.UnmarshalFromReaderForSpill(&limited, decodedMP)
+		return limited, reuseBat.UnmarshalFramedFrom(&limited, decodedMP)
 	}
 	limited, decodeErr := decode()
 	if decodeErr != nil && mpool.IsRetryableAllocationCapacity(decodeErr) {
@@ -528,7 +528,7 @@ func marshalSpillRecordTo(
 	}
 	cnt := int64(bat.RowCount())
 	buf.Reset()
-	batchSize, err := bat.MarshalBinaryForSpillSize()
+	batchSize, err := bat.MarshalFramedSize()
 	if err != nil || batchSize > math.MaxInt-24 {
 		if err != nil {
 			return err
@@ -546,7 +546,7 @@ func marshalSpillRecordTo(
 		return err
 	}
 	batchStart := buf.Len()
-	if err := bat.MarshalBinaryForSpillTo(buf); err != nil {
+	if err := bat.MarshalFramedTo(buf); err != nil {
 		return err
 	}
 	serializedSize := int64(buf.Len() - batchStart)

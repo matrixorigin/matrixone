@@ -15,75 +15,15 @@
 package compile
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
-func TestStrictWriteRequiresCompleteWorkerReporting(t *testing.T) {
-	c, client := expressionProtocolTestCompile(t)
-	c.stmt = &tree.Insert{}
-	c.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "STRICT_TRANS_TABLES", nil })
-	attempt := newWarningAttempt(c.proc, true)
-	defer attempt.finish(false, nil)
-	wire := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
-	for _, version := range []int64{defines.MORPCVersion67, defines.MORPCVersion68} {
-		client.version = version
-		c.execType = plan2.ExecTypeAP_MULTICN
-		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-		require.NoError(t, c.constrainStrictWriteWorkers())
-		err := validateStrictWriteDestination(c.proc, wire)
-		if version < defines.MORPCVersion68 {
-			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-			require.Equal(t, c.addr, c.cnList[0].Addr)
-			require.Error(t, err)
-		} else {
-			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
-			require.NoError(t, err)
-		}
-	}
-	workers := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	for _, probeErr := range []error{errors.New("unavailable"), context.DeadlineExceeded, context.Canceled} {
-		client.customResponse, client.sendErr = true, probeErr
-		c.execType, c.cnList = plan2.ExecTypeAP_MULTICN, workers
-		require.NoError(t, c.constrainStrictWriteWorkers())
-		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-		require.Equal(t, c.addr, c.cnList[0].Addr)
-		require.ErrorIs(t, validateStrictWriteDestination(c.proc, wire), probeErr)
-	}
-	parent := c.proc.Ctx
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
-	c.proc.Ctx, client.onSend = ctx, cancel
-	c.execType, c.cnList = plan2.ExecTypeAP_MULTICN, workers
-	require.ErrorIs(t, c.constrainStrictWriteWorkers(), context.Canceled)
-	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
-	require.Equal(t, workers, c.cnList)
-	c.proc.Ctx, client.onSend = parent, nil
-	client.customResponse, client.sendErr = false, nil
-	client.version = defines.MORPCVersion67
-	c.stmt = &tree.Select{} // internal SELECT inherits the strict parent's intent
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainStrictWriteWorkers())
-	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-	attempt.finish(false, nil)
-	c.stmt = &tree.Update{Ignore: true}
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainStrictWriteWorkers())
-	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
-}
 func TestStrictWriteRejectsIncompleteOldWorkerReport(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
