@@ -73,7 +73,8 @@ func repeatedPrimaryKey(
 func appendRepeatedPrimaryLookup(
 	builder *QueryBuilder, bindCtx *BindContext, last int32, target *dmlPlanCtx, keyPos int,
 ) (int32, error) {
-	table := target.tableDef
+	// The writer rewrites its column list; this scan keeps the original RowID layout.
+	table := CloneTableDefForPlan(target.tableDef, true)
 	pkPos, _ := getPkPos(table, false)
 	if pkPos < 0 || pkPos >= len(table.Cols) || target.rowIdPos < 0 || target.rowIdPos >= len(table.Cols) {
 		return -1, moerr.NewInternalErrorNoCtx("invalid repeated UPDATE primary lookup")
