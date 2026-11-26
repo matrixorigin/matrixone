@@ -56,7 +56,7 @@ func TestSampleCountTombstoneObjects(t *testing.T) {
 		relKind: "v", // Supply immutable state to ordinary partition admission in this fixture.
 	}
 	rel := &txnTableDelegate{origin: tbl}
-	sample, err := rel.SampleCountTombstoneObjects(ctx, 5_000_000)
+	sample, err := sampleCountTombstoneObjectsForTest(ctx, rel, 5_000_000)
 	require.NoError(t, err)
 	require.Empty(t, sample)
 
@@ -83,7 +83,7 @@ func TestSampleCountTombstoneObjects(t *testing.T) {
 	}
 	publish()
 
-	sample, err = rel.SampleCountTombstoneObjects(ctx, 5_000_000)
+	sample, err = sampleCountTombstoneObjectsForTest(ctx, rel, 5_000_000)
 	require.NoError(t, err)
 	require.Len(t, sample, objectio.MaxObjectCacheProbeIDs)
 	for _, id := range sample {
@@ -91,27 +91,62 @@ func TestSampleCountTombstoneObjects(t *testing.T) {
 		require.True(t, visible[oid], "the sample may only include distinct visible objects")
 		delete(visible, oid)
 	}
-	again, err := tbl.SampleCountTombstoneObjects(ctx, 5_000_000)
+	again, err := sampleCountTombstoneObjectsForTest(ctx, tbl, 5_000_000)
 	require.NoError(t, err)
 	require.Equal(t, sample, again)
 
-	sample, err = tbl.SampleCountTombstoneObjects(ctx, totalVisible*1_000_000)
+	sample, err = sampleCountTombstoneObjectsForTest(ctx, tbl, totalVisible*1_000_000)
 	require.NoError(t, err)
 	require.Empty(t, sample, "the threshold is strict and excludes later objects")
 
+	// All entries are invisible at this snapshot. A long run of skipped
+	// entries must still poll the budget on each raw index entry.
+	traversal := &starCountTraversalBudget{Context: ctx, checksLeft: 3}
+	err = partition.Snapshot().VisitVisibleTombstoneObjects(traversal, types.BuildTS(2, 0), func(objectio.ObjectEntry) {
+		t.Error("a future tombstone was visited")
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	_, err = tbl.SampleCountTombstoneObjects(cancelled, 0)
+	_, err = sampleCountTombstoneObjectsForTest(cancelled, tbl, 0)
 	require.ErrorIs(t, err, context.Canceled)
 
 	eng.pClient.receivedLogTailTime.tList[0].Store(timestamp.Timestamp{})
-	sample, err = rel.SampleCountTombstoneObjects(ctx, 5_000_000)
+	sample, err = sampleCountTombstoneObjectsForTest(ctx, rel, 5_000_000)
 	require.NoError(t, err)
 	require.Equal(t, again, sample, "a missing ready snapshot must use ordinary local admission")
 	eng.pClient.receivedLogTailTime.tList[0].Store(snapshot.Prev())
 
 	txn.readOnly.Store(false)
-	sample, err = tbl.SampleCountTombstoneObjects(ctx, 0)
+	sample, err = sampleCountTombstoneObjectsForTest(ctx, tbl, 0)
 	require.NoError(t, err)
 	require.Empty(t, sample)
+}
+
+func sampleCountTombstoneObjectsForTest(
+	ctx context.Context,
+	rel interface {
+		PrepareCountTombstoneSample(context.Context) (func(context.Context, int) ([][]byte, error), error)
+	},
+	minRows int,
+) ([][]byte, error) {
+	sample, err := rel.PrepareCountTombstoneSample(ctx)
+	if err != nil || sample == nil {
+		return nil, err
+	}
+	return sample(ctx, minRows)
+}
+
+type starCountTraversalBudget struct {
+	context.Context
+	checksLeft int
+}
+
+func (c *starCountTraversalBudget) Err() error {
+	if c.checksLeft == 0 {
+		return context.DeadlineExceeded
+	}
+	c.checksLeft--
+	return c.Context.Err()
 }

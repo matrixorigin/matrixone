@@ -23,16 +23,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
-func (tbl *txnTableDelegate) SampleCountTombstoneObjects(ctx context.Context, minRows int) ([][]byte, error) {
+func (tbl *txnTableDelegate) PrepareCountTombstoneSample(ctx context.Context) (func(context.Context, int) ([][]byte, error), error) {
 	if tbl.combined.is || tbl.shard.is {
 		return nil, nil
 	}
-	return tbl.origin.SampleCountTombstoneObjects(ctx, minRows)
+	return tbl.origin.PrepareCountTombstoneSample(ctx)
 }
 
-// SampleCountTombstoneObjects returns a bounded sample from the scan's
-// committed snapshot once it crosses the per-block threshold.
-func (tbl *txnTable) SampleCountTombstoneObjects(ctx context.Context, minRows int) ([][]byte, error) {
+// PrepareCountTombstoneSample admits the local snapshot needed by the scan.
+// The returned sampler has its own optional deadline and reads only this
+// immutable partition state.
+func (tbl *txnTable) PrepareCountTombstoneSample(ctx context.Context) (func(context.Context, int) ([][]byte, error), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -60,41 +61,34 @@ func (tbl *txnTable) SampleCountTombstoneObjects(ctx context.Context, minRows in
 	if part.ApproxTombstoneObjectsNum() == 0 {
 		return nil, nil
 	}
-	iter, err := part.NewObjectsIter(types.TimestampToTS(snapshot), true, true)
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
-	// Reservoir sampling gives each object the same chance of being selected.
-	// The same table and visible object order yield a stable sample.
-	rng := rand.New(rand.NewPCG(tbl.tableId, 0))
-	var (
-		sampled [objectio.MaxObjectCacheProbeIDs]objectio.ObjectId
-		objects int
-		rows    uint64
-	)
-	for iter.Next() {
-		if err = ctx.Err(); err != nil {
+	return func(ctx context.Context, minRows int) ([][]byte, error) {
+		// Reservoir sampling gives each object the same chance of being
+		// selected, stably for this table and the visible object order.
+		rng := rand.New(rand.NewPCG(tbl.tableId, 0))
+		var (
+			sampled [objectio.MaxObjectCacheProbeIDs]objectio.ObjectId
+			objects int
+			rows    uint64
+		)
+		err := part.VisitVisibleTombstoneObjects(ctx, types.TimestampToTS(snapshot), func(obj objectio.ObjectEntry) {
+			rows += uint64(obj.Rows())
+			pos := objects
+			objects++
+			if pos >= len(sampled) {
+				pos = rng.IntN(objects)
+			}
+			if pos < len(sampled) {
+				sampled[pos] = *obj.ObjectName().ObjectId()
+			}
+		})
+		if err != nil || rows <= uint64(minRows) {
 			return nil, err
 		}
-		obj := iter.Entry()
-		rows += uint64(obj.Rows())
-		pos := objects
-		objects++
-		if pos >= len(sampled) {
-			pos = rng.IntN(objects)
+		result := make([][]byte, min(objects, len(sampled)))
+		for i := range result {
+			result[i] = sampled[i][:]
 		}
-		if pos < len(sampled) {
-			sampled[pos] = *obj.ObjectName().ObjectId()
-		}
-	}
-	if rows <= uint64(minRows) {
-		return nil, nil
-	}
-	result := make([][]byte, min(objects, len(sampled)))
-	for i := range result {
-		result[i] = sampled[i][:]
-	}
-	return result, nil
+		return result, nil
+	}, nil
 }
