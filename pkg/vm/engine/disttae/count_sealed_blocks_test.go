@@ -120,7 +120,10 @@ func TestCountSealedBlocksMatchesOrdinaryBlockRead(t *testing.T) {
 		return fs.Read(ctx, vec)
 	}}
 
-	txn := &Transaction{engine: &Engine{fs: countFS}}
+	txn := &Transaction{
+		engine:        &Engine{fs: countFS},
+		deletedBlocks: &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
+	}
 	op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 	op.EXPECT().SnapshotTS().Return(types.BuildTS(5, 0).ToTimestamp()).AnyTimes()
 	op.EXPECT().IsSnapOp().Return(false).AnyTimes()
@@ -155,6 +158,17 @@ func TestCountSealedBlocksMatchesOrdinaryBlockRead(t *testing.T) {
 	}
 	require.Equal(t, ordinaryCount, count)
 	require.Positive(t, dataReads, "control must load an ordinary column")
+
+	// A local workspace delete is visible. An offset past the end of the
+	// block must not contribute to its cardinality.
+	txn.deletedBlocks.addDeletedBlocks(tbl.tableId, &second.BlockID, []int64{1, 9})
+	count, _, err = CountSealedBlocks(ctx, tbl, ranges, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+	txn.deletedBlocks.addDeletedBlocks(tbl.tableId, &second.BlockID, []int64{0})
+	count, _, err = CountSealedBlocks(ctx, tbl, ranges, 0)
+	require.NoError(t, err)
+	require.Zero(t, count)
 
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
