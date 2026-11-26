@@ -1855,7 +1855,21 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 
 			if estimatedTombstoneRows > defaultStarCountTombstoneThreshold {
 				metricv2.StarcountPathPerBlockCounter.Inc()
-				// Fall through to per-block aggOptimize (only scan blocks with tombstones)
+				if mergeGroup := findMergeGroup(s.RootOp); mergeGroup != nil &&
+					len(node.RuntimeFilterProbeList) == 0 && node.Limit == nil && node.Offset == nil {
+					rows, remaining, err := disttae.CountSealedBlocks(ctx, rel, s.NodeInfo.Data, s.TxnOffset)
+					if err != nil {
+						return err
+					}
+					if remaining != nil {
+						s.NodeInfo.Data = remaining
+						mergeGroup.PartialResults = []any{rows}
+						mergeGroup.PartialResultTypes = []types.T{types.T_int64}
+						s.StarCountMergeGroup = mergeGroup
+						return nil
+					}
+				}
+				// Fall through to the generic block aggregate optimization.
 			} else {
 				metricv2.StarcountPathFastCounter.Inc()
 				fastStart := time.Now()
