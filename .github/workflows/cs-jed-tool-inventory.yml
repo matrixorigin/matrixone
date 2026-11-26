@@ -1,0 +1,31 @@
+name: JED Coverage runner build tool inventory
+on:
+  push:
+    branches: [weilu-runner-test]
+    paths: ['.github/workflows/cs-jed-tool-inventory.yml']
+permissions: {}
+jobs:
+  probe:
+    name: Inspect JED node1 build tools
+    if: >-
+      github.repository == 'matrixorigin/matrixone' &&
+      github.actor == 'Ariznawlll' && github.run_attempt == 1 &&
+      github.event.before == 'dfbafef240f06b28e0410fd73bfb697afa261ad8'
+    runs-on: cs-jed-nc-n1-pr-v1
+    timeout-minutes: 4
+    steps:
+      - name: Inventory compiler and interpreter commands
+        env:
+          ASSIGNED_RUNNER: ${{ runner.name }}
+        run: |
+          set -euo pipefail
+          [[ "$ASSIGNED_RUNNER" =~ ^cs-jed-nc-n1-pr-v1-[a-z0-9]+-runner-[a-z0-9]+$ ]]
+          printf 'Verified runner: %s\n' "$ASSIGNED_RUNNER"
+          for tool in gcc g++ make pkg-config cmake python python3; do
+            if path=$(command -v "$tool"); then
+              printf 'Tool %s: %s\n' "$tool" "$path"
+            else
+              printf 'Missing tool: %s\n' "$tool"
+            fi
+          done
+          python3 --version
