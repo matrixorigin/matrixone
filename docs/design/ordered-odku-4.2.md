@@ -201,6 +201,11 @@ direct Bloom-fault and mixed-policy/DDL combinations remain untested limits.
 Any narrowing to an ODKU-only per-write policy requires a new lifetime/consumer
 proof; ODKU alone cannot justify unrelated global policy changes.
 
+For immutable keys, actions with native NOT NULL-only insert checks can
+publish a validated source row directly to the same owner. Conflict probes
+stay source-ordered, and update actions still stage the one-row evaluator
+input. The owner retains its own copy before the child batch can be reused.
+
 ## Resource bounds and deferred cleanup
 
 Retain one original/current image per touched row and one live non-NULL key per

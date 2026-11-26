@@ -204,6 +204,15 @@ func TestODKUSystematicSQL(t *testing.T) {
 				require.Equal(t, want, rows(t, "select id,v,year(ts),g from "+name+" order by id"), "the real collision rolls back the whole action")
 			}
 		})
+		t.Run("wide insert followed by another action on the same owner", func(t *testing.T) {
+			exec(t, "create table wide_ordered_owner(id int primary key,u int unique,payload varchar(1024) not null)")
+			payload := strings.Repeat("x", 512)
+			affected(t, 4, "insert into wide_ordered_owner values(?,?,?),(?,?,?),(?,?,?) on duplicate key update payload=concat(payload,values(payload))",
+				1, 10, payload, 2, 20, "other", 3, 10, "!")
+			want := []string{"1|" + payload + "!", "2|other"}
+			require.Equal(t, want, rows(t, "select id,payload from wide_ordered_owner order by id"))
+			require.Equal(t, want, rows(t, "select id,payload from wide_ordered_owner force index(u) where u in (10,20) order by id"))
+		})
 		t.Run("logical action counts and final automatic image", func(t *testing.T) {
 			exec(t, "create table action_counts(id int primary key,v int)")
 			affected(t, 1, "insert into action_counts values(1,0)")

@@ -780,7 +780,7 @@ func TestStatementKeyProbeFloatFallbackKeepsBothZeroOwners(t *testing.T) {
 				var got []types.Rowid
 				for iter.Next() {
 					entry := iter.Entry()
-					if sameStatementKey(key, 0, pk, int(entry.Offset)) {
+					if sameStatementKey(key, 0, entry.Batch.Vecs[2], int(entry.Offset)) {
 						got = append(got, entry.RowID)
 					}
 				}

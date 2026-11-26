@@ -122,7 +122,12 @@ func (preInsertUnique *PreInsertUnique) initODKUActionRows(proc *process.Process
 	return nil
 }
 
-// publishODKUAction borrows stable one-row execution scratch until it returns.
+func (preInsertUnique *PreInsertUnique) publishODKUAction(proc *process.Process, owner int64, image, keys, origin *batch.Batch) (int, int64, error) {
+	return preInsertUnique.publishODKUActionAt(proc, owner, image, keys, origin, 0, 1)
+}
+
+// publishODKUActionAt borrows the projected source row or one-row evaluation
+// scratch until it returns. It copies only the retained image and key state.
 // Inputs must not alias retained rows or index storage. The execution owner
 // copies retained values before evaluating assignments or prior keys. owner is
 // either an existing row position or exactly RowCount for a new logical row.
@@ -130,7 +135,7 @@ func (preInsertUnique *PreInsertUnique) initODKUActionRows(proc *process.Process
 // a newly inserted row has a nil origin. Once registered, an origin is fixed.
 // A conflict, error, or panic makes the attempt terminal; no partial state may
 // be emitted, and the owner must Reset before reuse.
-func (preInsertUnique *PreInsertUnique) publishODKUAction(proc *process.Process, owner int64, image, keys, origin *batch.Batch) (slot int, other int64, err error) {
+func (preInsertUnique *PreInsertUnique) publishODKUActionAt(proc *process.Process, owner int64, image, keys, origin *batch.Batch, sourceRow, sourceRows int) (slot int, other int64, err error) {
 	completed := false
 	defer func() {
 		if !completed {
@@ -145,11 +150,14 @@ func (preInsertUnique *PreInsertUnique) publishODKUAction(proc *process.Process,
 		return -1, 0, err
 	}
 	inserting := owner == int64(rows.images.RowCount())
+	if sourceRow < 0 || sourceRow >= sourceRows || (sourceRows != 1 && (!inserting || origin != nil)) {
+		return -1, 0, moerr.NewInternalError(proc.Ctx, "invalid ODKU action source row")
+	}
 	if !inserting && origin != nil {
 		return -1, 0, moerr.NewInternalError(proc.Ctx, "ODKU original identity is immutable")
 	}
 	if inserting && origin != nil {
-		if err = validateODKUActionRow(proc, rows.origins, origin); err != nil {
+		if err = validateODKUActionRow(proc, rows.origins, origin, 1); err != nil {
 			return -1, 0, err
 		}
 		originalKey := origin.Vecs[rows.originRowIDColumn]
@@ -159,7 +167,7 @@ func (preInsertUnique *PreInsertUnique) publishODKUAction(proc *process.Process,
 		// All production callers have just resolved this RowID through the
 		// sole owner. The native claim below remains the integrity check.
 	}
-	if err = validateODKUActionRow(proc, rows.images, image); err != nil {
+	if err = validateODKUActionRow(proc, rows.images, image, sourceRows); err != nil {
 		return -1, 0, err
 	}
 	// Reuse the bounded column scratch. Always refill it for a new owner;
@@ -180,7 +188,7 @@ func (preInsertUnique *PreInsertUnique) publishODKUAction(proc *process.Process,
 		}
 	}
 	imageColumns := rows.imageColumns
-	if err = preInsertUnique.validateODKUActionKeys(proc, keys); err != nil {
+	if err = preInsertUnique.validateODKUActionKeys(proc, keys, sourceRows); err != nil {
 		return -1, 0, err
 	}
 	// Static snapshot keys already belong to storage; retain only their RowID
@@ -203,7 +211,7 @@ func (preInsertUnique *PreInsertUnique) publishODKUAction(proc *process.Process,
 	if !keysUnchanged {
 		defer clear(rows.changes) // Do not retain borrowed expression results, even on failure.
 		for i := range rows.changes {
-			rows.changes[i] = odkuKeyChange{next: keys.Vecs[i], nextRow: 0}
+			rows.changes[i] = odkuKeyChange{next: keys.Vecs[i], nextRow: sourceRow}
 			if !inserting {
 				rows.changes[i].old = preInsertUnique.retainedODKUActionKey(i)
 				rows.changes[i].oldRow = int(owner)
@@ -217,11 +225,11 @@ func (preInsertUnique *PreInsertUnique) publishODKUAction(proc *process.Process,
 	if err = context.Cause(proc.Ctx); err != nil {
 		return -1, 0, err
 	}
-	if err = rows.copyInto(proc, rows.images, image, int(owner), inserting, rows.deadImageArea, imageColumns, preInsertUnique); err != nil {
+	if err = rows.copyInto(proc, rows.images, image, sourceRow, int(owner), inserting, rows.deadImageArea, imageColumns, preInsertUnique); err != nil {
 		return -1, 0, err
 	}
 	if !keysUnchanged && rows.keys != nil {
-		if err = rows.copyInto(proc, rows.keys, keys, int(owner), inserting, rows.deadKeyArea, rows.keyColumns, preInsertUnique); err != nil {
+		if err = rows.copyInto(proc, rows.keys, keys, sourceRow, int(owner), inserting, rows.deadKeyArea, rows.keyColumns, preInsertUnique); err != nil {
 			return -1, 0, err
 		}
 	}
@@ -271,12 +279,12 @@ func (preInsertUnique *PreInsertUnique) retainedODKUActionKey(slot int) *vector.
 	return rows.images.Vecs[c.InputColumns[c.Constraints[slot].CurrentKey.GetCol().ColPos]]
 }
 
-func (preInsertUnique *PreInsertUnique) validateODKUActionKeys(proc *process.Process, keys *batch.Batch) error {
-	if keys == nil || keys.RowCount() != 1 || len(keys.Vecs) != len(preInsertUnique.ctr.acceptedKeys) {
+func (preInsertUnique *PreInsertUnique) validateODKUActionKeys(proc *process.Process, keys *batch.Batch, sourceRows int) error {
+	if keys == nil || keys.RowCount() != sourceRows || len(keys.Vecs) != len(preInsertUnique.ctr.acceptedKeys) {
 		return moerr.NewInternalError(proc.Ctx, "invalid ODKU action keys")
 	}
 	for i, key := range keys.Vecs {
-		if key == nil || key.Length() != 1 || !odkuKeyTypeEqual(*key.GetType(), preInsertUnique.ctr.acceptedKeys[i].keyType) {
+		if key == nil || key.Length() != sourceRows || !odkuKeyTypeEqual(*key.GetType(), preInsertUnique.ctr.acceptedKeys[i].keyType) {
 			return moerr.NewInternalError(proc.Ctx, "invalid ODKU action key column")
 		}
 	}
@@ -313,19 +321,19 @@ func (preInsertUnique *PreInsertUnique) lookupODKUOrigin(proc *process.Process, 
 	return owner, found, nil
 }
 
-func validateODKUActionRow(proc *process.Process, dst, src *batch.Batch) error {
-	if src == nil || src.RowCount() != 1 || len(dst.Vecs) != len(src.Vecs) {
+func validateODKUActionRow(proc *process.Process, dst, src *batch.Batch, sourceRows int) error {
+	if src == nil || src.RowCount() != sourceRows || len(dst.Vecs) != len(src.Vecs) {
 		return moerr.NewInternalError(proc.Ctx, "invalid ODKU action image")
 	}
 	for i, v := range src.Vecs {
-		if v == nil || v.Length() != 1 || !odkuKeyTypeEqual(*dst.Vecs[i].GetType(), *v.GetType()) {
+		if v == nil || v.Length() != sourceRows || !odkuKeyTypeEqual(*dst.Vecs[i].GetType(), *v.GetType()) {
 			return moerr.NewInternalError(proc.Ctx, "invalid ODKU action column")
 		}
 	}
 	return nil
 }
 
-func (rows *odkuActionRows) copyInto(proc *process.Process, dst, src *batch.Batch, owner int, inserting bool, dead []int, columns []int32, pre *PreInsertUnique) error {
+func (rows *odkuActionRows) copyInto(proc *process.Process, dst, src *batch.Batch, sourceRow, owner int, inserting bool, dead []int, columns []int32, pre *PreInsertUnique) error {
 	for _, column := range columns {
 		i := int(column)
 		v := dst.Vecs[i]
@@ -341,9 +349,9 @@ func (rows *odkuActionRows) copyInto(proc *process.Process, dst, src *batch.Batc
 		}
 		var err error
 		if inserting {
-			err = v.UnionOne(src.Vecs[i], 0, proc.Mp())
+			err = v.UnionOne(src.Vecs[i], int64(sourceRow), proc.Mp())
 		} else {
-			err = v.Copy(src.Vecs[i], int64(owner), 0, proc.Mp())
+			err = v.Copy(src.Vecs[i], int64(owner), int64(sourceRow), proc.Mp())
 		}
 		if err != nil {
 			return err

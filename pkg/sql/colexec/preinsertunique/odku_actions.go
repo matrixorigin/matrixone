@@ -47,7 +47,7 @@ type odkuActions struct {
 	touchedKeys                          []*vector.Vector
 	groupCounts                          []uint64
 	priorValidated                       bool
-	staticKeys                           bool
+	staticKeys, directInsert             bool
 	noopOrdinal                          int32
 
 	source              *batch.Batch
@@ -169,6 +169,7 @@ func (preInsertUnique *PreInsertUnique) prepareODKUActions(proc *process.Process
 	if a.insertChecks, err = odkueval.CompileChecks(c.InsertChecks, left, right, proc, preInsertUnique.allocationAccount); err != nil {
 		return err
 	}
+	a.directInsert = a.staticKeys && odkueval.DirectNotNullChecks(a.insertChecks, c.InputColumns)
 	if a.updateChecks, err = odkueval.CompileChecks(c.UpdateChecks, left, right, proc, preInsertUnique.allocationAccount); err != nil {
 		return err
 	}
@@ -363,11 +364,11 @@ func (preInsertUnique *PreInsertUnique) registerODKUOriginal(proc *process.Proce
 		// Preserve the eager registration's validation/conflict boundary before
 		// input checks or volatile RHSs. Only publication is delayed.
 		for _, layout := range [][2]*batch.Batch{{rows.origins, a.old}, {rows.images, a.proposed}} {
-			if err := validateODKUActionRow(proc, layout[0], layout[1]); err != nil {
+			if err := validateODKUActionRow(proc, layout[0], layout[1], 1); err != nil {
 				return 0, err
 			}
 		}
-		if err := preInsertUnique.validateODKUActionKeys(proc, a.keys); err != nil {
+		if err := preInsertUnique.validateODKUActionKeys(proc, a.keys, 1); err != nil {
 			return 0, err
 		}
 		for i, key := range a.keys.Vecs {
@@ -405,8 +406,10 @@ func (preInsertUnique *PreInsertUnique) prepareODKUTarget(proc *process.Process)
 	if ordinal.IsNull(uint64(a.sourceRow)) || ord <= preInsertUnique.ctr.lastOrdinal {
 		return moerr.NewInternalError(proc.Ctx, "ODKU source ordinals must be positive and strictly increasing")
 	}
-	if err := preInsertUnique.copyODKURow(proc, a.incoming, a.source, a.sourceRow, c.SourceColumns); err != nil {
-		return err
+	if !a.directInsert {
+		if err := preInsertUnique.copyODKURow(proc, a.incoming, a.source, a.sourceRow, c.SourceColumns); err != nil {
+			return err
+		}
 	}
 	owner := int64(-1)
 	priorRows := preInsertUnique.ctr.actionRows.images.RowCount()
@@ -430,11 +433,17 @@ func (preInsertUnique *PreInsertUnique) prepareODKUTarget(proc *process.Process)
 		if err != nil {
 			return err
 		}
+		hasOriginal := !a.source.Vecs[key.PriorTarget.GetCol().ColPos].IsNull(uint64(a.sourceRow))
+		if (found || hasOriginal) && a.directInsert {
+			if err := preInsertUnique.copyODKURow(proc, a.incoming, a.source, a.sourceRow, c.SourceColumns); err != nil {
+				return err
+			}
+		}
 		if found {
 			owner = foundOwner
 			break
 		}
-		if !a.source.Vecs[key.PriorTarget.GetCol().ColPos].IsNull(uint64(a.sourceRow)) {
+		if hasOriginal {
 			owner, err = preInsertUnique.registerODKUOriginal(proc, slot)
 			if err != nil {
 				return err
@@ -461,6 +470,9 @@ func (preInsertUnique *PreInsertUnique) prepareODKUTarget(proc *process.Process)
 func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) error {
 	a, c := preInsertUnique.ctr.actions, preInsertUnique.PreInsertCtx.OdkuActions
 	owner := a.target
+	if owner < 0 && a.directInsert {
+		return preInsertUnique.insertODKUSourceRow(proc)
+	}
 	freshOriginal := a.staticKeys && owner >= 0 && owner == int64(preInsertUnique.ctr.actionRows.images.RowCount())
 	for i, p := range c.InputColumns {
 		a.inputImage.Vecs[i] = a.nullImage.Vecs[i]
@@ -479,10 +491,8 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 		for i := range a.eligible {
 			a.eligible[i] = true
 		}
-		for slot, key := range c.Constraints {
-			if c.PriorData == nil && !a.source.Vecs[key.PriorTarget.GetCol().ColPos].IsNull(uint64(a.sourceRow)) {
-				return preInsertUnique.odkuDuplicate(proc, slot, a.source.Vecs[key.InputKey.GetCol().ColPos], a.sourceRow)
-			}
+		if err := preInsertUnique.checkODKUInsertSnapshot(proc); err != nil {
+			return err
 		}
 	} else {
 		if err := odkueval.EvaluateChecks(a.insertChecks[:c.InsertCheckConstraintCount], a.inputImage, a.incoming, proc); err != nil {
@@ -606,6 +616,54 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 		weight = 2
 	}
 	return preInsertUnique.finishODKUAction(proc, weight)
+}
+
+func (preInsertUnique *PreInsertUnique) checkODKUInsertSnapshot(proc *process.Process) error {
+	a, c := preInsertUnique.ctr.actions, preInsertUnique.PreInsertCtx.OdkuActions
+	if c.PriorData == nil {
+		for slot, key := range c.Constraints {
+			if !a.source.Vecs[key.PriorTarget.GetCol().ColPos].IsNull(uint64(a.sourceRow)) {
+				return preInsertUnique.odkuDuplicate(proc, slot, a.source.Vecs[key.InputKey.GetCol().ColPos], a.sourceRow)
+			}
+		}
+	}
+	return nil
+}
+
+// Static INSERT actions have no executor or FK obligation that needs a
+// one-row image. Borrow the current source until the sole owner retains it.
+func (preInsertUnique *PreInsertUnique) insertODKUSourceRow(proc *process.Process) error {
+	a, c := preInsertUnique.ctr.actions, preInsertUnique.PreInsertCtx.OdkuActions
+	for i, column := range c.SourceColumns {
+		a.proposed.Vecs[i] = a.source.Vecs[column.GetCol().ColPos]
+	}
+	defer func() {
+		clear(a.proposed.Vecs)
+		clear(a.keys.Vecs)
+		a.proposed.SetRowCount(1)
+		a.keys.SetRowCount(1)
+	}()
+	if err := odkueval.EvaluateDirectNotNullChecksAt(a.insertChecks, a.proposed, c.InputColumns, a.sourceRow, proc); err != nil {
+		return err
+	}
+	if err := preInsertUnique.checkODKUInsertSnapshot(proc); err != nil {
+		return err
+	}
+	for i, key := range c.Constraints {
+		a.keys.Vecs[i] = a.proposed.Vecs[c.InputColumns[key.CurrentKey.GetCol().ColPos]]
+	}
+	rows := a.source.RowCount()
+	a.proposed.SetRowCount(rows)
+	a.keys.SetRowCount(rows)
+	owner := int64(preInsertUnique.ctr.actionRows.images.RowCount())
+	conflict, _, err := preInsertUnique.publishODKUActionAt(proc, owner, a.proposed, a.keys, nil, a.sourceRow, rows)
+	if err != nil {
+		return err
+	}
+	if conflict >= 0 {
+		return preInsertUnique.odkuDuplicate(proc, conflict, a.keys.Vecs[conflict], a.sourceRow)
+	}
+	return preInsertUnique.finishODKUAction(proc, 1)
 }
 
 func (preInsertUnique *PreInsertUnique) finishODKUAction(proc *process.Process, weight uint64) error {
