@@ -98,8 +98,9 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 
 	var info error
 	result := vm.NewCallResult()
+	queryCtx, _ := process.GetQueryCtxFromProc(proc)
 	for {
-		result.Batch, info = merge.ctr.receiver.GetNextBatch(analyzer)
+		result.Batch, info = merge.ctr.receiver.GetNextMergeBatch(analyzer, queryCtx)
 		if info != nil {
 			return vm.CancelResult, info
 		}

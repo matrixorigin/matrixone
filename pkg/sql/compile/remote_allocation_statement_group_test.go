@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -546,6 +547,48 @@ func TestRemoteAllocationStatementGenerationCapacity(t *testing.T) {
 	tombstoneCount := len(remoteAllocationStatementGroups.tombstones)
 	remoteAllocationStatementGroups.Unlock()
 	require.Equal(t, remoteAllocationStatementGenerationLimit, tombstoneCount)
+}
+
+func TestRemoteAllocationStatementGroupPreservesWireError(t *testing.T) {
+	ctx := context.Background()
+	wire := func(t *testing.T, err error) error {
+		t.Helper()
+		var msg pipeline.Message
+		msg.SetMoError(ctx, err)
+		decoded, ok := msg.TryToGetMoErr()
+		require.True(t, ok)
+		return decoded
+	}
+	canceled := wire(t, moerr.NewQueryInterrupted(ctx))
+	fk := wire(t, moerr.NewErrFKNoReferencedRow2(ctx))
+	cleanup := errors.New("remote fragment cleanup failed")
+	for _, tc := range []struct {
+		name          string
+		first, second error
+		code          uint16
+	}{
+		{"two interruptions", canceled, wire(t, moerr.NewQueryInterrupted(ctx)), moerr.ErrQueryInterrupted},
+		{"fk then cleanup", fk, cleanup, moerr.ErrFKNoReferencedRow2},
+		{"cleanup then fk", cleanup, fk, moerr.ErrFKNoReferencedRow2},
+		{"interruption then fk", canceled, fk, moerr.ErrFKNoReferencedRow2},
+		{"interruption then cleanup", canceled, cleanup, moerr.ErrInternal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			board := message.NewMessageBoard()
+			first, err := acquireRemoteAllocationStatementTestParticipant(t, board, 2, nil)
+			require.NoError(t, err)
+			second, err := acquireRemoteAllocationStatementTestParticipant(t, board, 2, nil)
+			require.NoError(t, err)
+			terminal, err := first.finish(tc.first)
+			require.NoError(t, err)
+			require.False(t, terminal.complete)
+			terminal, err = second.finish(tc.second)
+			require.Error(t, err)
+			require.True(t, terminal.complete)
+			decoded := wire(t, err)
+			require.True(t, moerr.IsMoErrCode(decoded, tc.code), "%v", decoded)
+		})
+	}
 }
 
 func TestRemoteAllocationStatementGroupFailureCancelsActiveSibling(t *testing.T) {

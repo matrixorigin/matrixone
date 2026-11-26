@@ -367,7 +367,7 @@ func (hashBuild *HashBuild) build(
 		}
 		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, analyzer)
 		if err != nil {
-			return message.PreserveJoinMapInputFailure(proc.Ctx, err)
+			return err
 		}
 		// A child can finish a Call after the pipeline was canceled. Do not copy
 		// or spill the batch it returned after that cancellation.

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
 var (
@@ -426,8 +427,18 @@ func (receiver *PipelineSignalReceiver) releaseCurrent() {
 	}
 }
 
-func (receiver *PipelineSignalReceiver) GetNextBatch(
-	analyzer Analyzer) (content *batch.Batch, info error) {
+func (receiver *PipelineSignalReceiver) GetNextBatch(analyzer Analyzer) (*batch.Batch, error) {
+	return receiver.getNextBatch(analyzer, nil)
+}
+
+// GetNextMergeBatch keeps a received EventError distinct from a local stop.
+// Whole-query cancellation still propagates as cancellation.
+func (receiver *PipelineSignalReceiver) GetNextMergeBatch(analyzer Analyzer, queryCtx context.Context) (*batch.Batch, error) {
+	return receiver.getNextBatch(analyzer, queryCtx)
+}
+
+func (receiver *PipelineSignalReceiver) getNextBatch(
+	analyzer Analyzer, queryCtx context.Context) (content *batch.Batch, info error) {
 	var chosen int
 	var msg PipelineSignal
 
@@ -463,7 +474,9 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 				// Graceful end from one sender — continue draining others.
 				continue
 			}
-			// EventError or EventAbort: propagate the error.
+			if msg.EventType == EventError && queryCtx != nil && queryCtx.Err() == nil {
+				return nil, message.PreserveExplicitPipelineFailure(queryCtx, msg.terminalErr)
+			}
 			return nil, msg.terminalErr
 		}
 

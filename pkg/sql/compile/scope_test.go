@@ -2483,15 +2483,30 @@ func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
 	}
 }
 
+type cancelAfterMergeTerminal struct {
+	*merge.Merge
+}
+
+func (m *cancelAfterMergeTerminal) Call(proc *process.Process) (vm.CallResult, error) {
+	result, err := m.Merge.Call(proc)
+	// Force local cleanup to win before HashBuild can observe the error.
+	// The terminal has already been received, so cancellation cannot win
+	// the receiver's select instead.
+	proc.Cancel(nil)
+	return result, err
+}
+
 func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		err  error
-		code uint16
+		name               string
+		err                error
+		code               uint16
+		cancelAfterReceive bool
 	}{
-		{name: "end"},
+		{name: "end", cancelAfterReceive: true},
 		{name: "canceled input", err: context.Canceled, code: moerr.ErrInternal},
-		{name: "foreign key", err: moerr.NewErrFKNoReferencedRow2(context.Background()), code: moerr.ErrFKNoReferencedRow2},
+		{name: "canceled input before local stop", err: context.Canceled, code: moerr.ErrInternal, cancelAfterReceive: true},
+		{name: "foreign key", err: moerr.NewErrFKNoReferencedRow2(context.Background()), code: moerr.ErrFKNoReferencedRow2, cancelAfterReceive: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := NewMockCompile(t)
@@ -2508,7 +2523,11 @@ func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
 			input := merge.NewArgument()
 			defer input.Release()
 			defer build.Release()
-			build.AppendChild(input)
+			if tc.cancelAfterReceive {
+				build.AppendChild(&cancelAfterMergeTerminal{Merge: input})
+			} else {
+				build.AppendChild(input)
+			}
 			producer := &Scope{Magic: Normal, Proc: c.proc.NewContextChildProc(1), RootOp: build}
 			join := hashjoin.NewArgument()
 			join.JoinMapTag = 1
@@ -2536,6 +2555,7 @@ func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
 			require.True(t, process.TrySendPipelineSignal(producer.Proc.Reg.MergeReceivers[0], signal))
 
 			err = consumer.MergeRun(c)
+			require.NoError(t, query.Err())
 			if tc.err == nil {
 				require.NoError(t, err)
 			} else {

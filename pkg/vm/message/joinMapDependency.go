@@ -90,13 +90,10 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	return &JoinMapBuildError{err: moerr.NewInternalErrorNoCtx(err.Error())}
 }
 
-// PreserveJoinMapInputFailure keeps a cancellation-shaped error returned by
-// an input while the build context is live from becoming cleanup fallout.
-// Once cleanup cancels the scope, the original context state is lost.
-func PreserveJoinMapInputFailure(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return err
-	}
+// PreserveExplicitPipelineFailure keeps a reported terminal failure from
+// being mistaken for a cancellation observed while stopping a local pipeline.
+// Callers must have observed an explicit failure event, not just ctx.Done().
+func PreserveExplicitPipelineFailure(ctx context.Context, err error) error {
 	c := classifyBuildError(err)
 	if c.pureCancellation && !c.deadline {
 		return moerr.NewInternalError(ctx, err.Error())
