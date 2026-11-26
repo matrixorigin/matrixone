@@ -110,7 +110,7 @@ void adhoc_brute_force_search(const raft::resources& res,
                               cuvs::distance::DistanceType metric,
                               int64_t* neighbors,
                               float* distances) {
-    auto stream = raft::resource::get_cuda_stream(res);
+    auto stream = cuda_stream_handle(res);
 
     // cuVS rejects k > n_rows. Clamp to effective_k and pad the caller's
     // (n_queries × limit) buffers with (-1, FLT_MAX) — same pattern as the
