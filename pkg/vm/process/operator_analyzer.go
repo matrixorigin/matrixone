@@ -792,6 +792,10 @@ func (ps *OperatorStats) CloneForExport() *OperatorStats {
 	}
 
 	clone := *ps
+	if ps.startupResource != nil {
+		startup := *ps.startupResource
+		clone.startupResource = &startup
+	}
 	if ps.OperatorMetrics != nil {
 		clone.OperatorMetrics = make(map[MetricType]int64, len(ps.OperatorMetrics))
 		for key, value := range ps.OperatorMetrics {
