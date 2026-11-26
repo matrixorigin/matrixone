@@ -18,13 +18,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"io"
 	"net"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -251,4 +253,65 @@ func TestTaskFailoverReadPolicy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.retry, retryTaskFailoverRead(tc.err)) })
 	}
+}
+
+func TestCreateTaskAfterFailover(t *testing.T) {
+	metadata := task.TaskMetadata{ID: "survivor-after-expiry", Executor: task.TaskCode_TestOnly}
+	bindChanged := &mysql.MySQLError{Number: moerr.ErrLockTableBindChanged}
+
+	t.Run("retry the rolled back insert", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			attempts := 0
+			err := createTaskAfterFailover(ctx, func(gotCtx context.Context, got task.TaskMetadata) error {
+				require.Equal(t, ctx, gotCtx)
+				require.Equal(t, metadata, got)
+				attempts++
+				if attempts == 1 {
+					return bindChanged
+				}
+				return nil
+			}, metadata)
+			require.NoError(t, err)
+			require.Equal(t, 2, attempts)
+		})
+	})
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"unknown commit status", &mysql.MySQLError{Number: moerr.ErrTxnUnknown}},
+		{"mixed write outcome", errors.Join(bindChanged, io.EOF)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attempts := 0
+			err := createTaskAfterFailover(t.Context(), func(context.Context, task.TaskMetadata) error {
+				attempts++
+				require.Equal(t, 1, attempts, "must not repeat a write with an uncertain outcome")
+				return tc.err
+			}, metadata)
+			require.Same(t, tc.err, err)
+		})
+	}
+
+	t.Run("deadline prevents another insert", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+			defer cancel()
+			attempts := 0
+			err := createTaskAfterFailover(ctx, func(context.Context, task.TaskMetadata) error {
+				attempts++
+				return bindChanged
+			}, metadata)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.ErrorIs(t, err, bindChanged)
+			require.Equal(t, 1, attempts)
+			require.ErrorIs(t, createTaskAfterFailover(ctx, func(context.Context, task.TaskMetadata) error {
+				t.Fatal("insert attempted after deadline")
+				return nil
+			}, metadata), context.DeadlineExceeded)
+		})
+	})
 }

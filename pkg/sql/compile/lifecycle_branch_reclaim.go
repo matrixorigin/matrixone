@@ -412,7 +412,7 @@ func validateActiveBranchDeleteRows(
 ) error {
 	for _, id := range target.TableIDs {
 		row, ok := dag.Info[id]
-		if !ok || row.Deleted || row.Level == databranchutils.AlterLineageLevel {
+		if !ok || row.Deleted || !databranchutils.IsLiveBranchLevel(row.Level) {
 			name := target.Database
 			if target.Table != "" {
 				name += "." + target.Table
@@ -491,7 +491,7 @@ func (c *Compile) validateBranchDeleteDatabaseRC(
 		for _, id := range current {
 			if !slices.Contains(target.TableIDs, id) {
 				row, ok := dag.Info[id]
-				if !ok || row.Deleted || row.Level == databranchutils.AlterLineageLevel {
+				if !ok || row.Deleted || !databranchutils.IsLiveBranchLevel(row.Level) {
 					return moerr.NewInternalErrorf(c.proc.Ctx,
 						"DATA BRANCH DELETE target %s.%s is not an active branch table",
 						target.Database, names[id])

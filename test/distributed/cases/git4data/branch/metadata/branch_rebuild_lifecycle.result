@@ -13,6 +13,13 @@ set @rebuild_after_truncate = (
 select rel_id from mo_catalog.mo_tables
 where reldatabase = 'issue26064_rebuild' and relname = 'rebuild_branch'
 );
+select p_table_id = @rebuild_before_truncate
+and level = 'truncate:table'
+and not table_deleted as active_truncate_branch
+from mo_catalog.mo_branch_metadata
+where table_id = @rebuild_after_truncate;
+➤ active_truncate_branch[-7,1,0]  𝄀
+1
 delete from rebuild_branch;
 set @rebuild_after_delete = (
 select rel_id from mo_catalog.mo_tables
@@ -30,7 +37,7 @@ and table_deleted;
 ➤ retired_rebuild_generations[-5,64,0]  𝄀
 2
 select p_table_id = @rebuild_after_truncate
-and level = 'alter:table'
+and level = 'truncate:table'
 and not table_deleted as active_rebuild_branch
 from mo_catalog.mo_branch_metadata
 where table_id = @rebuild_after_delete;
@@ -47,7 +54,9 @@ concat('__mo_branch_', cast(@rebuild_after_delete as char))
 ➤ rebuild_protection_snapshots[-5,64,0]  𝄀
 3
 data branch diff rebuild_branch against rebuild_base;
-➤ diff rebuild_branch against rebuild_base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  existing_value[4,32,0]  ¦  removable_value[4,32,0]
+➤ diff rebuild_branch against rebuild_base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  existing_value[4,32,0]  ¦  removable_value[4,32,0]  𝄀
+rebuild_branch  ¦  DELETE  ¦  1  ¦  10  ¦  100  𝄀
+rebuild_branch  ¦  DELETE  ¦  2  ¦  20  ¦  200
 data branch delete table rebuild_branch;
 select count(*) as rebuild_snapshots_after_branch_delete
 from mo_catalog.mo_snapshots

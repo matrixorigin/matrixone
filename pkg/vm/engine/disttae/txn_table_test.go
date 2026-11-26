@@ -54,6 +54,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestVisibleObjectCountAtSnapshot(t *testing.T) {
+	tbl, _ := newViewPathTxnTable(t) // snapshot at physical time 100
+	ctx := t.Context()
+	state, publish := tbl.getTxn().engine.GetOrCreateLatestPart(ctx, uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId).MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	for _, obj := range []struct {
+		tombstone        bool
+		created, deleted int64
+	}{
+		{false, 80, 0}, {false, 95, 0}, {false, 101, 0}, {false, 70, 99},
+		{true, 90, 0}, {true, 101, 0}, {true, 80, 99},
+	} {
+		id := types.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsSize(stats, 128))
+		entry := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: types.BuildTS(obj.created, 0)}
+		if obj.deleted > 0 {
+			entry.DeleteTime = types.BuildTS(obj.deleted, 0)
+		}
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, entry, obj.tombstone))
+	}
+	publish()
+	count, err := (&txnTableDelegate{origin: tbl}).VisibleObjectCount(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 3, count, "two visible data objects and one visible tombstone")
+}
+
 func TestTxnTableWriteTableName(t *testing.T) {
 	tbl := &txnTable{tableId: catalog.MO_COLUMNS_ID, tableName: catalog.MO_COLUMNS}
 	require.Equal(t, catalog.MO_COLUMNS, tbl.writeTableName(context.Background()))
