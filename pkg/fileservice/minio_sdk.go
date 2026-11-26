@@ -15,7 +15,6 @@
 package fileservice
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -25,7 +24,6 @@ import (
 	"os"
 	gotrace "runtime/trace"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -439,41 +437,26 @@ func (a *MinioSDK) Write(
 ) {
 	defer wrapSizeMismatchErr(&err)
 
-	var n atomic.Int64
-	if sizeHint != nil {
-		r = &countingReader{
-			R: r,
-			C: &n,
-		}
-	}
-
 	if sizeHint != nil && (*sizeHint <= smallObjectThreshold || exclusiveWrite(ctx)) {
-		data, err := io.ReadAll(r)
+		body, size, err := bodyOf(r)
 		if err != nil {
 			return err
+		}
+		if size != *sizeHint {
+			return moerr.NewSizeNotMatchNoCtx(key)
 		}
 		_, err = DoWithRetryContext(ctx, "write", func() (minio.UploadInfo, error) {
 			return a.putObject(
 				ctx,
 				key,
-				bytes.NewReader(data),
+				io.NewSectionReader(body, 0, size),
 				sizeHint,
 				expire,
 			)
 		}, maxRetryAttemps, minioRetryable())
-		if err != nil {
-			return err
-		}
-
-	} else {
-		return writeParts(ctx, storageParts{a}, key, r, sizeHint, &ParallelMultipartOption{Concurrency: 1, Expire: expire})
+		return err
 	}
-
-	if sizeHint != nil && n.Load() != *sizeHint {
-		return moerr.NewSizeNotMatchNoCtx(key)
-	}
-
-	return
+	return writeParts(ctx, storageParts{a}, key, r, sizeHint, &ParallelMultipartOption{Concurrency: 1, Expire: expire})
 }
 
 func (a *MinioSDK) Read(
@@ -633,15 +616,15 @@ func (a *MinioSDK) createMultipart(ctx context.Context, key string, expire *time
 	}, maxRetryAttemps, minioRetryable())
 }
 
-func (a *MinioSDK) uploadPart(ctx context.Context, key, uploadID string, num int32, data []byte) (string, error) {
+func (a *MinioSDK) uploadPart(ctx context.Context, key, uploadID string, num int32, body io.ReaderAt, size int64) (string, error) {
 	part, err := DoWithRetryContext(ctx, "upload part", func() (minio.ObjectPart, error) {
 		recordS3PutRequest(ctx, a.perfCounterSets...)
-		return a.core.PutObjectPart(ctx, a.bucket, key, uploadID, int(num), bytes.NewReader(data), int64(len(data)), minio.PutObjectPartOptions{})
+		return a.core.PutObjectPart(ctx, a.bucket, key, uploadID, int(num), io.NewSectionReader(body, 0, size), size, minio.PutObjectPartOptions{})
 	}, maxRetryAttemps, minioRetryable())
 	if err != nil {
 		return "", err
 	}
-	recordS3AcceptedBytes(ctx, int64(len(data)), a.perfCounterSets...)
+	recordS3AcceptedBytes(ctx, size, a.perfCounterSets...)
 	return part.ETag, nil
 }
 

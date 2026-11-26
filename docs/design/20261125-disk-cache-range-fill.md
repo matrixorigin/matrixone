@@ -61,9 +61,9 @@ downloaded:
 | Cache | disk cache, or index-file cache | the request's tier, as today |
 | Starter | a read, a prefetch, or the write path caching bytes it holds | who makes it |
 
-and the same life: it is made, waits holding nothing for its buffer or file slot and its
-object-storage connection, registers so reads can join it, downloads, publishes, and
-ends. A fill that finds, once it may register, a fill of its cache holding its bytes
+and the same life: it is made, waits holding nothing for the room of its object-storage
+request, takes its buffer only if it fits then, registers so reads can join it, downloads,
+publishes, and ends. A fill that finds, once it may register, a fill of its cache holding its bytes
 joins that one instead.
 
 ## Contracts
@@ -134,35 +134,39 @@ or several ranges that together cover its bytes.
 ### The object storage server (decision 2026-11-26)
 
 Each file service has one object storage server. It owns the file service's connection
-pool and memory budget, and admits every object-storage request of the file service, with
-the connections and the memory the request needs, together. File services, and the CNs
-that own them, share no server, pool or budget.
+pool and memory budget, and admits every object-storage request of the file service.
+File services, and the CNs that own them, share no server, pool or budget, also when
+several run in one process.
 
-- **Its own pool.** The server's connection pool is used by nothing else, so a request
-  never waits for a connection inside the pool.
+- **Its own pool.** The server's connection pool is used by nothing else, also when
+  `max-conns-per-host` is not configured, and holds as many connections to a host, busy
+  or idle, as the server has room. A request never waits for a connection inside the pool.
 - **The server calls no server.** A request the server makes goes only to object storage.
-- **Room.** The server runs as many requests at once as the pool's connections per host
-  or the storage concurrency, whichever is smaller, and never fewer than 64: a smaller
-  configured value is raised to 64, with a warning that names it. There is no upper
-  bound; a request costs a small, fixed amount of memory of its own.
+- **Room.** The server runs as many requests at once as the smaller of
+  `max-conns-per-host` (128 when not configured) and `concurrency` (1024 when not
+  configured), so 128 when neither is; never fewer than 64: a smaller configured value is
+  raised to 64, with a warning that names it. There is no upper bound; a request costs a
+  small, fixed amount of memory of its own.
 - **The server makes every request.** It offers a fixed set of requests: read a range
-  into a buffer, read a range into a fill's file, write a part from a buffer, read a page
-  of a listing, stat, delete, copy. A request is data, never a function. No other code
-  reaches object storage.
-- **Room and memory are granted together.** A request that needs a buffer waits holding
-  nothing, and is admitted when both its room and its buffer fit. Its room is freed when
-  the request ends; its buffer is freed when the file service is done with the bytes.
+  into a buffer, read a range into a fill's file, write bytes ready in memory or a file, write
+  a part, read a page of a listing, stat, delete, copy. A request is data, never a function.
+  No other code reaches object storage.
 - **Nothing else runs while a request holds room.** A request moves bytes between object
   storage and memory or a file that were ready before it began. The only thing it calls
   is a fill's progress record, which notes the bytes written and wakes their readers
   without waiting. Files, the registry, paths, eviction, the publisher and the caller's
   code are dealt with before the request starts or after it ends.
-- **Order.** One order for room and memory: foreground first, then background, then by
-  share, due time and arrival. Background requests hold at most half of the room and at
-  most half of the memory that can be waited for. A running request is never stopped.
-  Making a fill foreground makes its waiting requests and its buffer foreground.
-- **Every wait ends with the waiter's own context.** A retry the file service makes
-  waits with nothing held.
+- **One order for room.** Requests wait for room holding nothing, foreground first, then
+  background, then by a larger share, a sooner due time and arrival; a request of no fill
+  has the whole share and is due when it is made. Background requests hold at most half
+  of the room. A running request is never stopped. Making a fill foreground makes its
+  waiting requests and its buffer foreground.
+- **Memory is never waited for.** Memory is taken only when it fits the budget at once:
+  a foreground take within the whole budget, a background one also within half of it.
+  What does not fit is held in a file instead. Memory is freed when the file service is
+  done with the bytes, never later than when the caller that holds them lets them go.
+- **Every wait ends with the waiter's own context** or the closing of the server. A retry
+  the file service makes waits for room again, holding only the buffer it reads into.
 - **The file service retries; the SDK does not.** A call the file service retries makes
   one attempt in the object storage SDK, and is retried on every error the SDK would
   retry, at least as often as the SDK would. A call the file service does not retry keeps
@@ -170,22 +174,22 @@ that own them, share no server, pool or budget.
   copy, the abort of a multipart upload, the bucket check, and a MinIO object read, whose
   request starts at its first read.
 
-Memory comes in two kinds, by what frees it:
+What takes memory, and where its bytes go when it does not fit:
 
-| Memory | Freed by | Can a request wait for it? |
-|---|---|---|
-| A fill's buffer | the file service, once the download ends and its readers have copied | yes |
-| A stream's buffer | the caller closing the stream | no: if it does not fit when the stream opens, the stream reads into a temporary file |
-| A write part read from the caller's reader | the file service, but it is filled by caller code | no: if it does not fit when the part is read, the part is read into a temporary file |
+| Memory | Taken | When it does not fit | Freed |
+|---|---|---|---|
+| A fill's buffer | when its request is admitted, if it fit when the fill was made and fits still | the fill is file-backed | once the download ends and its readers have copied |
+| A stream's buffer | when the stream opens | the stream reads into a temporary file | when the caller closes the stream |
+| A write part read from the caller's reader | before the part is read | the part is read into a temporary file | when the part's request ends |
 
-A write whose bytes are already in memory sends those bytes as they are and takes no
-memory of the server.
+A write whose bytes are already in memory sends those bytes as they are, with no copy, and
+takes no memory of the server. Part buffers are reused from one write to the next.
 
 No deadlock is possible: a request that holds room waits only for object storage, which
-ends with its bytes, an error, its context, or the idle timeout; a request that waits holds
-nothing; and a request waits only for room and for memory the file service frees by
-itself, never for memory whose release needs caller code. Nothing waits in a cycle, for
-every caller, whatever it does while it waits.
+ends with its bytes, an error, its context, or the idle timeout; a request that waits for
+room holds nothing but, on a retry, its own buffer, which no one waits for; and nothing
+waits for memory. Nothing waits in a cycle, for every caller, whatever it does while it
+waits, also when caller-held memory fills the whole budget.
 
 Where caller code meets object storage:
 
@@ -194,7 +198,7 @@ Where caller code meets object storage:
 | reads a stream (`ReadCloserForRead`) | The stream is read in one request into memory, when its buffer fits at once, or into the file service's own temporary file; the caller reads it as bytes arrive. |
 | receives bytes (`WriterForRead`, `ToCacheData`) | The range is read first; the caller's writer or decoder runs after the request ends. |
 | supplies a write (`ReaderForWrite`) | Each part is read from the caller into a buffer, when it fits at once, or a temporary file first; then one request writes it. |
-| writes bytes it holds (`Data`) | One request sends the caller's bytes as they are, with no copy. |
+| writes bytes it holds (`Data`) | One request sends the caller's bytes as they are, with no copy, or one request per part of them. |
 | handles listed entries (`List`) | One request per page; entries are handed to the caller between pages. |
 
 ### The queue is the waiting fills (decision 2026-11-25)
@@ -202,15 +206,18 @@ Where caller code meets object storage:
 - A fill is waiting, running or ended, and every fill in any state is in the one registry.
   There is no separate prefetch queue, live queue or worker pool.
 - Each started fill runs on its own. As many fills, or parts of a split fill, run at once
-  as the server has room for; a waiting fill holds no goroutine.
+  as the server has room for; a waiting fill holds no goroutine, and at most half of the
+  room in background fills runs at once.
 - A prefetch makes waiting background fills for the bytes it asks for. A request for bytes a
   waiting fill of the same cache already holds merges into it: the sooner due time, the
   larger share, and both scans. Bytes a running fill holds need nothing more. Other bytes
   of the same object get fills of their own at once.
-- The server admits the first waiting fill in its one order (class, then share, then
-  due time, then arrival) once its room and, when it is held in memory, its buffer fit. A
-  fill that cannot be admitted keeps the fills after it waiting. A started fill checks the cache first and ends without downloading when its
-  bytes are cached, or held by a fill under way.
+- The waiting fills start in one order (class, then share, then due time, then arrival),
+  and their requests wait for room in the server's order with their share and due time. A
+  fill that cannot start keeps the fills after it waiting. A started fill checks the cache
+  first and ends without downloading when its bytes are cached, or held by a fill under
+  way. A fill of a range held in memory takes its buffer when its request is admitted, if
+  it still fits; otherwise it runs file-backed.
 - A started fill of ranges is, from the step that starts it, the prefetch objects it
   registers; a started fill of a whole object stays registered until reads can join its
   download, and a read that finds it waits for that, or for its end.
@@ -265,26 +272,31 @@ startup removes them as stale cache. The cache refills them on use.
 
 ## Bounds and ownership of resources
 
-The object storage server of a file service holds the room and the memory of every
-request it admits; file-backed fills count against the disk cache, and waiting background fills
-against the queue's byte bound. Each bound is charged in one place.
+The object storage server of a file service holds the room of every request it admits and
+the memory of the file service's fills, streams and write parts; file-backed fills count
+against the disk cache, and waiting background fills against the queue's byte bound. Each
+bound is charged in one place.
 
 Memory (decision 2026-11-26):
 
-- The memory of the server is one budget, set by the file service's configuration. Memory that cannot be waited for, the buffers
-  of streams and of write parts read from callers, holds at most a fixed share of it; the
-  rest is memory requests may wait for, and is always freed by the file service alone.
-- A fill is memory-backed only when it is at most the memory limit and its buffer fits its
-  class's share of the memory that can be waited for: all of it for foreground, half for
-  background. Otherwise it is file-backed.
-- A waiting fill takes its buffer only as it is admitted, never while it waits.
-- Peak memory of a file service is its server's budget, plus a small, fixed amount for each request
-  running.
+- The memory of the server is one budget: `object-storage-memory` of the object-storage
+  arguments, next to `max-conns-per-host` and `concurrency`; when it is not set, 5% of the
+  memory available on the node, measured about once a second, or 256 MiB when it cannot
+  be measured. A budget that shrinks below the memory in use takes nothing back; new
+  memory is taken only once it fits again.
+- Any memory may use the whole budget: fill buffers, stream buffers and write parts are
+  not apart. Foreground takes up to the whole budget, background at most half of it.
+- `disk-prefetch-memory-max` is only the largest range held in memory.
+- A fill is made memory-backed only when it is at most that limit and its buffer fits its
+  class now; it takes the buffer only when its request is admitted, if it still fits, and
+  is otherwise file-backed. A waiting fill holds no memory.
+- Peak memory of a file service is its server's budget, plus a small, fixed amount for each
+  request running.
 
-No wait holds a resource another wait needs: a waiting fill or request holds nothing, a
-started fill takes its file and registration before it asks the server, a request that
-holds room waits only for object storage, and a read waits only for a fill or the
-server, neither of which waits for a read or for caller code.
+No wait holds a resource another wait needs: a waiting fill or request holds nothing a wait
+needs, a started fill takes its file and registration before it asks the server, a request
+that holds room waits only for object storage, a read waits only for a fill or the server,
+neither of which waits for a read or for caller code, and nothing waits for memory.
 
 ## Alternatives
 
@@ -302,7 +314,9 @@ server, neither of which waits for a read or for caller code.
 - After an upgrade, whole objects cached by the earlier version are removed at startup,
   so the first reads of them download them again. Range files keep their names and stay.
 - Configuration is unchanged, except that the extra-wait setting is accepted and ignored,
-  with a deprecation log. The publisher adds queue-depth and wait metrics.
+  with a deprecation log, and the object-storage arguments add `object-storage-memory`. The
+  publisher adds queue-depth and wait metrics, and the server reports the memory it holds
+  by class.
 - Fix-missing no longer restores objects from the disk cache: the `fix-missing` setting is
   accepted and ignored, with a deprecation log.
 - Upgrade is by full shutdown; no mixed-version behavior is involved.
@@ -324,9 +338,11 @@ server, neither of which waits for a read or for caller code.
 The change lands in PR #32812, which adds the code it replaces, rather than as a
 follow-up PR.
 
-## Open questions
+## Closed questions
 
-- The default room: today the pool's connections per host default to 128, so the room is
-  128 when neither setting is configured.
-- The memory budget's setting and default, and the size of its share that cannot be
-  waited for.
+- The default room (decision 2026-11-26): the smaller of `max-conns-per-host` and
+  `concurrency`, 128 when neither is configured, at least 64, with no upper bound; the pool's
+  connections per host equal the room.
+- The memory budget (decision 2026-11-26): `object-storage-memory`, by default 5% of the
+  memory available, measured about every second, or 256 MiB; no share of it is kept apart,
+  and no memory is waited for.

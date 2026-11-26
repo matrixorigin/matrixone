@@ -65,7 +65,6 @@ func TestNewHTTPClient(t *testing.T) {
 
 func TestDNSResolverScope(t *testing.T) {
 	assert.NotSame(t, dnsResolver, net.DefaultResolver)
-	assert.NotSame(t, httpRoundTripper, http.DefaultTransport)
+	assert.NotSame(t, newHTTPClient(ObjectStorageArguments{}).Transport, http.DefaultTransport)
 	assert.Same(t, dnsResolver, httpDialer.Resolver)
-	assert.Same(t, httpRoundTripper, newHTTPClient(ObjectStorageArguments{}).Transport)
 }

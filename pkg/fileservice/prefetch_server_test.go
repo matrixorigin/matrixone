@@ -46,10 +46,40 @@ func (h *gateStorage) Read(ctx context.Context, key string, min, max *int64) (io
 	return h.ObjectStorage.Read(ctx, key, min, max)
 }
 
+// heldMemory returns the memory the server of d holds.
+func heldMemory(d *DiskCache) int64 {
+	used := d.server.memoryInUse()
+	return used[foregroundRequest] + used[backgroundRequest]
+}
+
+// fillRoom holds all the free room of g until the returned function frees it.
+func fillRoom(t *testing.T, g *objectStorageServer) func() {
+	t.Helper()
+	var frees []func()
+	for _, c := range []requestClass{backgroundRequest, foregroundRequest} {
+		for {
+			free, ok := admitted(g, c)
+			if !ok {
+				break
+			}
+			occupiedRoom(g).Add(1)
+			frees = append(frees, func() {
+				free()
+				occupiedRoom(g).Add(-1)
+			})
+		}
+	}
+	return sync.OnceFunc(func() {
+		for _, free := range frees {
+			free()
+		}
+	})
+}
+
 // Concurrent reads of different prefetch ranges run MemoryPrefetchObjects only up to the
-// bytes the buffers may hold; the others wait without reading object storage, a waiting
-// read whose context ends returns, and once storage answers every read gets its bytes and
-// no buffer stays counted.
+// bytes the memory budget holds; the others read their ranges through file fills at once,
+// never waiting for memory. A read whose context ends returns, and once storage answers
+// every read gets its bytes and no buffer stays counted.
 func TestPrefetchMemoryBoundUnderConcurrentReads(t *testing.T) {
 	const (
 		unit    = 64 << 10
@@ -58,7 +88,7 @@ func TestPrefetchMemoryBoundUnderConcurrentReads(t *testing.T) {
 		waiting = 4
 	)
 	fs, _, data := newPrefetchRangeFS(t, unit, (units+waiting)*unit)
-	fs.diskCache.prefetchFlightBytes = budget
+	fs.server.memoryLimit = budget
 	storage := &gateStorage{ObjectStorage: fs.server.raw, release: make(chan struct{})}
 	fs.server.raw = storage
 	f := &fs.diskCache.prefetchObjects
@@ -69,11 +99,9 @@ func TestPrefetchMemoryBoundUnderConcurrentReads(t *testing.T) {
 	go func() {
 		defer close(sampled)
 		for {
-			f.mu.Lock()
-			if f.bytes > peak.Load() {
-				peak.Store(f.bytes)
+			if n := heldMemory(fs.diskCache); n > peak.Load() {
+				peak.Store(n)
 			}
-			f.mu.Unlock()
 			select {
 			case <-stopSampling:
 				return
@@ -104,11 +132,8 @@ func TestPrefetchMemoryBoundUnderConcurrentReads(t *testing.T) {
 	for i := range units {
 		go read(context.Background(), i, done)
 	}
-	require.Eventually(t, func() bool {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		return storage.opens.Load() == budget/unit && f.freed.ch != nil
-	}, 10*time.Second, time.Millisecond, "the reads past the bound wait")
+	require.Eventually(t, func() bool { return storage.opens.Load() == units }, 10*time.Second, time.Millisecond,
+		"the reads past the bound read at once")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	canceled := make(chan result, waiting)
@@ -121,8 +146,7 @@ func TestPrefetchMemoryBoundUnderConcurrentReads(t *testing.T) {
 		}()
 	}
 	started.Wait()
-	require.Never(t, func() bool { return storage.opens.Load() > budget/unit }, 200*time.Millisecond, time.Millisecond,
-		"no read past the bound reads object storage")
+	require.Eventually(t, func() bool { return storage.opens.Load() == units+waiting }, 10*time.Second, time.Millisecond)
 	cancel()
 	for range waiting {
 		r := <-canceled
@@ -145,9 +169,7 @@ func TestPrefetchMemoryBoundUnderConcurrentReads(t *testing.T) {
 	<-sampled
 
 	require.LessOrEqual(t, peak.Load(), int64(budget))
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	require.Zero(t, f.bytes)
+	require.Zero(t, heldMemory(fs.diskCache))
 	require.Empty(t, f.m)
 }
 
@@ -179,11 +201,7 @@ func TestPrefetchBufferCountedUntilLastRelease(t *testing.T) {
 	storage := &suffixGateStorage{ObjectStorage: fs.server.raw, from: 2 * unit, release: make(chan struct{})}
 	fs.server.raw = storage
 	f := &fs.diskCache.prefetchObjects
-	bytes := func() int64 {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		return f.bytes
-	}
+	bytes := func() int64 { return heldMemory(fs.diskCache) }
 	memoryObjects := func() int {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -218,8 +236,8 @@ func TestPrefetchBufferCountedUntilLastRelease(t *testing.T) {
 	require.Zero(t, bytes())
 }
 
-// A cold read whose entries make more runs than the buffers may hold reads the runs that
-// fit, the others waiting, in order, for buffers; the buffers never exceed the bound, each
+// A cold read whose entries make more runs than the memory budget holds reads every run at
+// once, those past the budget through file fills; the buffers never exceed the bound, each
 // run is read once, and the read gets its bytes.
 func TestPrefetchMemoryBoundForColdMultiRunRead(t *testing.T) {
 	const (
@@ -228,7 +246,7 @@ func TestPrefetchMemoryBoundForColdMultiRunRead(t *testing.T) {
 		budget = 2 * unit
 	)
 	fs, _, data := newPrefetchRangeFS(t, unit, 2*runs*unit)
-	fs.diskCache.prefetchFlightBytes = budget
+	fs.server.memoryLimit = budget
 	storage := &gateStorage{ObjectStorage: fs.server.raw, release: make(chan struct{})}
 	fs.server.raw = storage
 	f := &fs.diskCache.prefetchObjects
@@ -240,14 +258,10 @@ func TestPrefetchMemoryBoundForColdMultiRunRead(t *testing.T) {
 	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: entries}
 	done := make(chan error, 1)
 	go func() { done <- fs.Read(context.Background(), vec) }()
-	require.Eventually(t, func() bool { return storage.opens.Load() == budget/unit }, 10*time.Second, time.Millisecond,
-		"the runs that fit are read")
-	require.Never(t, func() bool { return storage.opens.Load() > budget/unit }, 100*time.Millisecond, time.Millisecond,
-		"the others wait for buffers")
-	f.mu.Lock()
-	inMemory := f.bytes
-	f.mu.Unlock()
-	require.LessOrEqual(t, inMemory, int64(budget))
+	require.Eventually(t, func() bool { return storage.opens.Load() == runs }, 10*time.Second, time.Millisecond,
+		"every run is read at once")
+	require.LessOrEqual(t, heldMemory(fs.diskCache), int64(budget))
+	_ = f
 
 	close(storage.release)
 	select {
@@ -264,9 +278,9 @@ func TestPrefetchMemoryBoundForColdMultiRunRead(t *testing.T) {
 	require.Equal(t, int64(runs), storage.opens.Load(), "no run is read twice")
 }
 
-// A cold column prefetch of more ranges than the flight bytes hold reads only the ranges
-// that fit, the first one at least; the others wait, and once storage answers every range
-// is read once. The download counts as started, once, when its first ranges are under way.
+// A cold column prefetch of more ranges than the memory budget holds reads every range at
+// once, background buffers within half the budget and the others through file fills, and
+// once storage answers every range is read once.
 func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
 	const (
 		unit   = 64 << 10
@@ -275,7 +289,7 @@ func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
 	)
 	fs, _, data := newPrefetchRangeFS(t, unit, 2*ranges*unit)
 	budget := 4 * flightBufSize(size)
-	fs.diskCache.prefetchFlightBytes = budget
+	fs.server.memoryLimit = budget
 	f := &fs.diskCache.prefetchObjects
 	var opens atomic.Int64
 	release := make(chan struct{})
@@ -297,13 +311,9 @@ func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
 		prefetchRanges(fs, rs, open)
 		done <- nil
 	}()
-	require.Eventually(t, func() bool { return opens.Load() == 2 }, 10*time.Second, time.Millisecond)
-	require.Never(t, func() bool { return opens.Load() > 2 }, 100*time.Millisecond, time.Millisecond,
-		"background buffers take at most half the budget")
-	f.mu.Lock()
-	inMemory := f.bytes
-	f.mu.Unlock()
-	require.LessOrEqual(t, inMemory, budget/2)
+	require.Eventually(t, func() bool { return opens.Load() == ranges }, 10*time.Second, time.Millisecond)
+	require.LessOrEqual(t, heldMemory(fs.diskCache), budget/2, "background buffers take at most half the budget")
+	_ = f
 
 	close(release)
 	select {
@@ -315,10 +325,9 @@ func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
 	require.Equal(t, int64(ranges), opens.Load(), "no range is read twice")
 }
 
-// Concurrent cold reads, each of more runs than the buffers may hold, all return with
-// their bytes: a read holds only runs under way while its later runs wait for buffers, so
-// no read waits for buffers another read holds while it waits. The buffers never exceed
-// the bound, and none stays counted.
+// Concurrent cold reads, each of more runs than the memory budget holds, all return with
+// their bytes: no run waits for memory. The buffers never exceed the bound, and none stays
+// counted.
 func TestPrefetchConcurrentMultiRunReadsUnderTightBudget(t *testing.T) {
 	const (
 		unit    = 64 << 10
@@ -327,7 +336,7 @@ func TestPrefetchConcurrentMultiRunReadsUnderTightBudget(t *testing.T) {
 		budget  = 2 * unit
 	)
 	fs, _, data := newPrefetchRangeFS(t, unit, 2*runs*unit*2)
-	fs.diskCache.prefetchFlightBytes = budget
+	fs.server.memoryLimit = budget
 	f := &fs.diskCache.prefetchObjects
 	var peak atomic.Int64
 	stop := make(chan struct{})
@@ -335,11 +344,9 @@ func TestPrefetchConcurrentMultiRunReadsUnderTightBudget(t *testing.T) {
 	go func() {
 		defer close(sampled)
 		for {
-			f.mu.Lock()
-			if f.bytes > peak.Load() {
-				peak.Store(f.bytes)
+			if n := heldMemory(fs.diskCache); n > peak.Load() {
+				peak.Store(n)
 			}
-			f.mu.Unlock()
 			select {
 			case <-stop:
 				return
@@ -380,9 +387,7 @@ func TestPrefetchConcurrentMultiRunReadsUnderTightBudget(t *testing.T) {
 	close(stop)
 	<-sampled
 	require.LessOrEqual(t, peak.Load(), int64(budget))
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	require.Zero(t, f.bytes)
+	require.Zero(t, heldMemory(fs.diskCache))
 }
 
 // A read whose entry spans a block another read's run is reading and a block no run reads
@@ -416,20 +421,17 @@ func TestPrefetchReadOfJoinedBlockReleasesIt(t *testing.T) {
 	require.NoError(t, <-first)
 	require.NoError(t, <-second)
 	f.reads.Wait()
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	require.Zero(t, f.bytes, "no buffer stays counted")
+	require.Zero(t, heldMemory(fs.diskCache), "no buffer stays counted")
 }
 
-// A read of units of which it takes some blocks, with buffers for one run, returns: it
-// holds no run of blocks it takes no bytes of while its next run waits for buffers.
+// A read of units of which it takes some blocks, with memory for one run, returns.
 func TestPrefetchReadHoldsNoUnneededRun(t *testing.T) {
 	const (
 		block = 64 << 10
 		unit  = 4 * block
 	)
 	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
-	fs.diskCache.prefetchFlightBytes = flightBufSize(2 * block)
+	fs.server.memoryLimit = flightBufSize(2 * block)
 	f := &fs.diskCache.prefetchObjects
 	// Each entry is in the third block of a unit, the units apart: the read takes the
 	// third and fourth blocks of each as one run, and reads the first two as another.
@@ -448,9 +450,7 @@ func TestPrefetchReadHoldsNoUnneededRun(t *testing.T) {
 	}
 	vec.Release()
 	f.reads.Wait()
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	require.Zero(t, f.bytes)
+	require.Zero(t, heldMemory(fs.diskCache))
 }
 
 // keepOnDeleteStorage serves an object after it is deleted, as object storage may for a
@@ -459,15 +459,15 @@ type keepOnDeleteStorage struct{ ObjectStorage }
 
 func (keepOnDeleteStorage) Delete(context.Context, ...string) error { return nil }
 
-// A read whose run waits for buffers while its object is deleted starts no run after the
-// delete, so no range of the deleted object is cached, even while storage still serves it.
+// A read whose run waits for room while its object is deleted leaves no range of the
+// deleted object cached, even while storage still serves it.
 func TestPrefetchReadRunWaitingAcrossDeleteCachesNothing(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
 	ctx := context.Background()
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
-	fs.diskCache.prefetchFlightBytes = flightBufSize(unit)
+	fs.server.memoryLimit = flightBufSize(unit)
 	otherKey := fs.pathToKey("other")
 	g := newBlackBoxStorage(keepOnDeleteStorage{fs.server.raw}, func(key string, _ int64) bool { return key == otherKey })
 	fs.server.raw = g
@@ -481,16 +481,19 @@ func TestPrefetchReadRunWaitingAcrossDeleteCachesNothing(t *testing.T) {
 	other := make(chan error, 1)
 	go read("other", other)
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(otherKey); return cur == 1 }, 5*time.Second, time.Millisecond,
-		"the read of other holds the buffers")
+		"the read of other holds its room")
+	freeRoom := fillRoom(t, fs.server)
 	object := make(chan error, 1)
 	go read("object", object)
 	f := &fs.diskCache.prefetchObjects
-	require.Eventually(t, func() bool {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		return f.freed.ch != nil
-	}, 5*time.Second, time.Millisecond, "the read of object waits for buffers")
-	require.NoError(t, fs.Delete(ctx, "object"))
+	require.Eventually(t, waitingFor(fs.server, foregroundRequest, 1), 5*time.Second, time.Millisecond,
+		"the read of object waits for room")
+	// The delete's own request waits for room behind the run.
+	deleted := make(chan error, 1)
+	go func() { deleted <- fs.Delete(ctx, "object") }()
+	require.Eventually(t, waitingFor(fs.server, foregroundRequest, 2), 5*time.Second, time.Millisecond)
+	freeRoom()
+	require.NoError(t, <-deleted)
 	release()
 	require.NoError(t, <-other)
 	<-object
@@ -552,8 +555,8 @@ func TestPrefetchMemoryExhaustedHoldsNoBuffer(t *testing.T) {
 	t.Cleanup(func() { memoryAvailable = prev })
 	memoryAvailable = func() (uint64, bool) { return 0, true }
 	fs, _, data := newPrefetchRangeFS(t, unit, units*unit)
-	fs.diskCache.prefetchFlightBytes = 0
-	fs.diskCache.flightBudget.at.Store(0)
+	fs.server.memoryLimit = 0
+	fs.server.measuredAt.Store(0)
 	storage := &gateStorage{ObjectStorage: fs.server.raw, release: make(chan struct{})}
 	fs.server.raw = storage
 	release := sync.OnceFunc(func() { close(storage.release) })
@@ -581,9 +584,7 @@ func TestPrefetchMemoryExhaustedHoldsNoBuffer(t *testing.T) {
 	}
 	require.Eventually(t, func() bool { return storage.opens.Load() == units }, 10*time.Second, time.Millisecond,
 		"every read reads at once")
-	f.mu.Lock()
-	require.Zero(t, f.bytes, "no read holds a buffer")
-	f.mu.Unlock()
+	require.Zero(t, heldMemory(fs.diskCache), "no read holds a buffer")
 
 	release()
 	for range units {
@@ -593,7 +594,5 @@ func TestPrefetchMemoryExhaustedHoldsNoBuffer(t *testing.T) {
 		require.Equal(t, data[off:off+10], r.data)
 	}
 	f.reads.Wait()
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	require.Zero(t, f.bytes)
+	require.Zero(t, heldMemory(fs.diskCache))
 }

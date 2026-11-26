@@ -722,34 +722,30 @@ func TestPrefetchFlightBufferReusedAfterLastHolder(t *testing.T) {
 	putFlightBuf(make([]byte, 100))
 }
 
-// The bytes of the flights under way are a share of the memory available, measured at
-// most once per refresh, and at most one MemoryPrefetchObject's buffer per download
-// connection.
-func TestFlightBytesFollowAvailableMemory(t *testing.T) {
+// The memory budget of a server is a share of the memory available, measured at most once
+// per refresh, the default when it cannot be measured, or the configured budget.
+func TestServerMemoryFollowsAvailableMemory(t *testing.T) {
 	prev := memoryAvailable
 	t.Cleanup(func() { memoryAvailable = prev })
 	var calls int
 	avail := uint64(4 << 30)
 	memoryAvailable = func() (uint64, bool) { calls++; return avail, true }
 	d := &DiskCache{memoryPrefetchMax: 20 << 20, server: newObjectStorageServer(nil, minRequestRoom)}
-	share := int64(avail / 100 * flightMemoryPercent)
-	require.Equal(t, share, d.flightBytes())
+	share := int64(avail / 100 * serverMemoryPercent)
+	require.Equal(t, share, d.memoryBudget())
 	avail = 1 << 20
-	require.Equal(t, share, d.flightBytes(), "measured once per refresh")
+	require.Equal(t, share, d.memoryBudget(), "measured once per refresh")
 	require.Equal(t, 1, calls)
-	d.flightBudget.at.Store(0)
-	require.Equal(t, int64(avail/100*flightMemoryPercent), d.flightBytes(), "a small cgroup holds its share")
+	d.server.measuredAt.Store(0)
+	require.Equal(t, int64(avail/100*serverMemoryPercent), d.memoryBudget(), "a small cgroup holds its share")
 	avail = 0
-	d.flightBudget.at.Store(0)
-	require.Zero(t, d.flightBytes(), "exhausted memory holds none")
-	avail = 1 << 40
-	d.flightBudget.at.Store(0)
-	require.Equal(t, int64(minRequestRoom/2*32<<20), d.flightBytes(), "at most a MemoryPrefetchObject's buffer per connection")
+	d.server.measuredAt.Store(0)
+	require.Zero(t, d.memoryBudget(), "exhausted memory holds none")
 	memoryAvailable = func() (uint64, bool) { return 0, false }
-	d.flightBudget.at.Store(0)
-	require.Equal(t, int64(prefetchFlightBytesMax), d.flightBytes())
-	d.prefetchFlightBytes = 7
-	require.Equal(t, int64(7), d.flightBytes())
+	d.server.measuredAt.Store(0)
+	require.Equal(t, int64(serverMemoryDefault), d.memoryBudget())
+	d.server.memoryLimit = 7
+	require.Equal(t, int64(7), d.memoryBudget())
 }
 
 // A read of a stopped MemoryPrefetchObject misses its bytes; a read of one whose read

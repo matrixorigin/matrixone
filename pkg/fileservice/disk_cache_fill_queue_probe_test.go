@@ -219,14 +219,15 @@ func (s *startRecorder) offsets() []int64 {
 	return append([]int64(nil), s.starts...)
 }
 
-// The buffers of memory fills never exceed the flight budget: background fills take at
-// most half of it, and a foreground read gets a buffer and returns while they hold theirs.
+// The buffers of memory fills never exceed the memory budget: background fills take at
+// most half of it, the others running file-backed at once, and a foreground read gets a
+// buffer and returns while they hold theirs.
 // A read that joins a running background fill moves its buffer to the foreground charge.
 func TestFillProbeFlightBytesWithinBudget(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	buf := flightBufSize(1 << 10)
 	budget := 4 * buf
-	fs.diskCache.prefetchFlightBytes = budget
+	fs.server.memoryLimit = budget
 	key := fs.pathToKey("object")
 	g := newBlackBoxStorage(fs.server.raw, func(_ string, off int64) bool { return off < 200<<10 })
 	fs.server.raw = g
@@ -252,9 +253,8 @@ func TestFillProbeFlightBytesWithinBudget(t *testing.T) {
 	ranges := columnRanges(6, 20<<10, 1<<10)
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: 6 << 10,
 		Ranges: ranges, Scan: &PrefetchScan{}}))
-	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 2 }, 5*time.Second, time.Millisecond)
-	require.Never(t, func() bool { cur, _, _ := g.counts(key); return cur > 2 }, 50*time.Millisecond, time.Millisecond,
-		"background buffers take at most half the budget")
+	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == len(ranges) }, 5*time.Second, time.Millisecond,
+		"every range runs at once")
 	bytes, background := probeFlightBytes(fs)
 	require.Equal(t, 2*buf, bytes)
 	require.Equal(t, 2*buf, background)
@@ -264,9 +264,19 @@ func TestFillProbeFlightBytesWithinBudget(t *testing.T) {
 	require.NoError(t, err, "a foreground read gets a buffer while background fills hold theirs")
 	require.Equal(t, data[bystander.Offset:bystander.Offset+bystander.Size], got)
 
+	var inMemory PrefetchRange
+	f := &fs.diskCache.prefetchObjects
+	f.mu.Lock()
+	for _, o := range f.m[fs.diskCache.objectKey("object")] {
+		if fl, ok := o.(*memoryPrefetchObject); ok && fl.background {
+			inMemory = PrefetchRange{Offset: fl.start, Size: fl.end - fl.start}
+		}
+	}
+	f.mu.Unlock()
+	require.NotZero(t, inMemory.Size, "a background fill holds a buffer")
 	joined := make(chan error, 1)
 	go func() {
-		_, err := probeRead(fs, ranges[0])
+		_, err := probeRead(fs, inMemory)
 		joined <- err
 	}()
 	require.Eventually(t, func() bool { _, background := probeFlightBytes(fs); return background == buf }, 2*time.Second,
@@ -323,7 +333,7 @@ func TestFillProbeIndexAndDiskFillsIndependent(t *testing.T) {
 }
 
 // A delete of the object, or the closing of the file service, reaches its fills in each
-// state: waiting, joined by a read and waiting for a buffer, and running. Afterwards no
+// state: waiting, joined by a read and waiting for room, and running. Afterwards no
 // fill, buffer or room is held, and the joined read returns.
 func TestFillProbeDeleteAndCloseReachEveryState(t *testing.T) {
 	for _, event := range []string{"delete", "close"} {
@@ -343,8 +353,6 @@ func TestFillProbeDeleteAndCloseReachEveryState(t *testing.T) {
 					probeBusy(t, fs)
 				case "promoted":
 					probeBusy(t, fs)
-					fs.diskCache.prefetchFlightBytes = 2 * flightBufSize(r.Size)
-					freeBuffer = holdForegroundBuffer(t, fs, flightBufSize(r.Size))
 				}
 				baseRoom := heldRoom(fs.server)
 				baseBytes, _ := probeFlightBytes(fs)
@@ -354,16 +362,22 @@ func TestFillProbeDeleteAndCloseReachEveryState(t *testing.T) {
 				case "waiting":
 					require.True(t, probeQueued(fs, "object"))
 				case "promoted":
+					freeBuffer = fillRoom(t, fs.server)
 					go func() {
 						_, err := readColumnRange(ctx, fs, r)
 						joined <- err
 					}()
-					require.Eventually(t, func() bool { return probeJoined(fs, "object") }, 2*time.Second, time.Millisecond)
+					require.Eventually(t, func() bool { return probeJoinedRunning(fs, "object") }, 2*time.Second, time.Millisecond)
 				case "running":
 					require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 1 }, 5*time.Second, time.Millisecond)
 				}
 				if event == "delete" {
-					require.NoError(t, fs.Delete(ctx, "object"))
+					// The delete drops the fills before its own request waits for room.
+					deleted := make(chan error, 1)
+					go func() { deleted <- fs.Delete(ctx, "object") }()
+					require.Eventually(t, func() bool { return !probeUnderWay(fs, "object") }, 2*time.Second, time.Millisecond)
+					freeBuffer()
+					require.NoError(t, <-deleted)
 				} else {
 					fs.Close(ctx)
 				}
@@ -387,13 +401,10 @@ func TestFillProbeDeleteAndCloseReachEveryState(t *testing.T) {
 	}
 }
 
-// holdForegroundBuffer charges n bytes of the flight budget of fs, as a foreground flight
-// does, until the returned function or the test's end.
+// holdForegroundBuffer takes n bytes of the memory of the server of fs, as a foreground
+// flight does, until the returned function or the test's end.
 func holdForegroundBuffer(t *testing.T, fs *S3FS, n int64) func() {
-	f := &fs.diskCache.prefetchObjects
-	f.mu.Lock()
-	f.bytes += n
-	f.mu.Unlock()
+	require.True(t, fs.server.takeMemory(n, foregroundRequest))
 	free := sync.OnceFunc(func() { probeUncharge(fs, n) })
 	t.Cleanup(free)
 	return free

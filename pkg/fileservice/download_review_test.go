@@ -247,7 +247,7 @@ func TestFlightBudgetDoesNotOverflow(t *testing.T) {
 			cfg := CacheConfig{DiskPrefetchMemoryMax: &tc.limit}
 			fs, _, _ := newPrefetchRangeFS(t, 0, 1)
 			fs.diskCache.memoryPrefetchMax = cfg.diskPrefetchMemoryMax()
-			require.EqualValues(t, (uint64(1)<<30)/100*5, fs.diskCache.flightBytes(), "the measured ceiling should constrain an oversized configured ceiling")
+			require.EqualValues(t, (uint64(1)<<30)/100*5, fs.server.memoryBudget(), "the measured ceiling should constrain an oversized configured ceiling")
 		})
 	}
 }

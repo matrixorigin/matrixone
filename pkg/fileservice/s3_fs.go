@@ -110,6 +110,11 @@ func NewS3FS(
 
 	args.NoDefaultCredentials = args.NoDefaultCredentials || noDefaultCredential || args.callerCredentialsOnly
 	args.raiseRequestRoom()
+	// The room of the server is the connections of its own pool to each host.
+	room := min(cmp.Or(args.MaxConnsPerHost, maxConnsPerHost), int(cmp.Or(args.Concurrency, 1024)))
+	if args.MaxConnsPerHost >= 0 && args.Concurrency >= 0 {
+		args.MaxConnsPerHost = room
+	}
 
 	fs := &S3FS{
 		name:            args.Name,
@@ -169,7 +174,8 @@ func NewS3FS(
 	}
 
 	fs.rawStorage = storage
-	fs.server = newObjectStorageServer(storage, min(cmp.Or(args.MaxConnsPerHost, maxConnsPerHost), int(cmp.Or(args.Concurrency, 1024))))
+	fs.server = newObjectStorageServer(storage, room)
+	fs.server.memoryLimit = int64(min(uint64(args.ObjectStorageMemory), math.MaxInt64))
 
 	// cache
 	if !noCache {
@@ -698,24 +704,31 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	size := vector.size()
 	writeDiskCache := s.diskCache != nil && !vector.Policy.Any(SkipDiskCacheWrites)
 	replayDiskCache := writeDiskCache && vector.Policy.Any(ReplayDataForDiskCache) && size != nil && canReplayWriteEntries(vector.Entries)
+	// Bytes the vector holds in memory are written as they are; others are read from it.
 	var reader io.Reader
-	if replayDiskCache {
-		reader = &replayDataReader{ctx: ctx, entries: vector.Entries, remaining: *size}
+	var body io.ReaderAt
+	var n atomic.Int64
+	var diskCacheBuf *bytes.Buffer
+	if size != nil && canReplayWriteEntries(vector.Entries) {
+		body = entriesBody(vector.Entries)
+		n.Store(*size)
+		if writeDiskCache && !replayDiskCache {
+			diskCacheBuf = bytes.NewBuffer(make([]byte, 0, *size))
+			for _, e := range vector.Entries {
+				diskCacheBuf.Write(e.Data)
+			}
+		}
 	} else {
 		reader = newIOEntriesReader(ctx, vector.Entries)
-	}
-	var n atomic.Int64
-	reader = &countingReader{R: reader, C: &n}
-
-	var diskCacheBuf *bytes.Buffer
-	if writeDiskCache && !replayDiskCache {
-		diskCacheBuf = new(bytes.Buffer)
-		reader = io.TeeReader(reader, diskCacheBuf)
-	}
-
-	// some SDKs can't handle unknown reader type
-	if size != nil {
-		reader = io.LimitReader(reader, *size)
+		reader = &countingReader{R: reader, C: &n}
+		if writeDiskCache && !replayDiskCache {
+			diskCacheBuf = new(bytes.Buffer)
+			reader = io.TeeReader(reader, diskCacheBuf)
+		}
+		// some SDKs can't handle unknown reader type
+		if size != nil {
+			reader = io.LimitReader(reader, *size)
+		}
 	}
 
 	var expire *time.Time
@@ -745,7 +758,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 
 	storageStart := time.Now()
-	if err := s.writeObject(ctx, key, reader, size, expire, enableParallel && !exclusiveWrite(ctx)); err != nil {
+	if err := s.writeObject(ctx, key, reader, body, size, expire, enableParallel && !exclusiveWrite(ctx)); err != nil {
 		return 0, err
 	}
 	metric.FSWriteDurationStorage.Observe(time.Since(storageStart).Seconds())
@@ -775,22 +788,41 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 // writePartSize is the size of the parts S3FS writes an object in.
 var writePartSize int64 = defaultParallelMultipartPartSize
 
-// writeObject writes the size bytes of r, or all when size is nil, as the object key.
-// Object storage that writes in parts gets each part read from r before its request, at
-// once when parallel is set; the disk object storage gets r staged in its own temporary
-// file and published by one request; other object storage gets r copied into a temporary
-// file of the process first, then sent by one request.
-func (s *S3FS) writeObject(ctx context.Context, key string, r io.Reader, size *int64, expire *time.Time, parallel bool) error {
+// entriesBody returns the bytes of entries, contiguous from 0 and held in memory, as
+// they are.
+func entriesBody(entries []IOEntry) io.ReaderAt {
+	if len(entries) == 1 {
+		return bytes.NewReader(entries[0].Data)
+	}
+	slices := make(bytesReaderAt, len(entries))
+	for i, e := range entries {
+		slices[i] = e.Data
+	}
+	return slices
+}
+
+// writeObject writes as the object key the size bytes of body when it is set, which are
+// in memory and sent as they are, otherwise the size bytes of r, or all when size is nil.
+// Object storage that writes in parts gets each part of r read before its request, at
+// once when parallel is set; the disk object storage gets the bytes staged in its own
+// temporary file and published by one request; other object storage gets r copied into
+// a temporary file of the process first, then sent by one request.
+func (s *S3FS) writeObject(ctx context.Context, key string, r io.Reader, body io.ReaderAt, size *int64, expire *time.Time, parallel bool) error {
+	concurrency := 1
+	if parallel {
+		concurrency = runtime.NumCPU()
+	}
+	options := &ParallelMultipartOption{PartSize: writePartSize, Concurrency: concurrency, Expire: expire}
 	switch raw := s.server.raw.(type) {
 	case multipartStorage:
-		concurrency := 1
-		if parallel {
-			concurrency = runtime.NumCPU()
+		if body != nil {
+			return writeBytes(ctx, s.server, key, body, *size, options)
 		}
-		return writeParts(ctx, s.server, key, r, size, &ParallelMultipartOption{
-			PartSize: writePartSize, Concurrency: concurrency, Expire: expire,
-		})
+		return writeParts(ctx, s.server, key, r, size, options)
 	case *diskObjectStorage:
+		if body != nil {
+			r = io.NewSectionReader(body, 0, *size)
+		}
 		tempPath, err := raw.stage(ctx, key, r, size)
 		if err != nil {
 			return err
@@ -801,14 +833,15 @@ func (s *S3FS) writeObject(ctx context.Context, key string, r io.Reader, size *i
 		}
 		return nil
 	}
-	f, err := os.CreateTemp("", "mo-fs-write-*")
+	if body != nil {
+		_, err := s.server.Do(ctx, putRequest{key: key, body: body, size: *size, expire: expire})
+		return err
+	}
+	f, err := createUnlinkedTemp("mo-fs-write-*")
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = f.Close()
-		_ = os.Remove(f.Name())
-	}()
+	defer func() { _ = f.Close() }()
 	n, err := io.Copy(f, r)
 	if err != nil {
 		return err
@@ -816,7 +849,7 @@ func (s *S3FS) writeObject(ctx context.Context, key string, r io.Reader, size *i
 	if size != nil && n != *size {
 		return moerr.NewSizeNotMatchNoCtx(key)
 	}
-	_, err = s.server.Do(ctx, putFileRequest{key: key, file: f, size: n, expire: expire})
+	_, err = s.server.Do(ctx, putRequest{key: key, body: f, size: n, expire: expire})
 	return err
 }
 

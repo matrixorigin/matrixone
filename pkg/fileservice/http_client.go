@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"cmp"
 	"crypto/tls"
 	"crypto/x509"
 	"net"
@@ -30,12 +31,10 @@ import (
 )
 
 var (
-	connectTimeout      = time.Second * 5
-	readWriteTimeout    = time.Second * 20
-	maxIdleConns        = 128
-	maxIdleConnsPerHost = 128
-	maxConnsPerHost     = 128
-	idleConnTimeout     = 10 * time.Second
+	connectTimeout   = time.Second * 5
+	readWriteTimeout = time.Second * 20
+	maxConnsPerHost  = 128
+	idleConnTimeout  = 10 * time.Second
 )
 
 var dnsResolver = dns.NewCachingResolver(
@@ -143,19 +142,23 @@ func cleanupStaleConnections() {
 	})
 }
 
-var httpTransport = &http.Transport{
-	DialContext:           wrapDialContext(httpDialer.DialContext),
-	MaxIdleConns:          maxIdleConns,
-	IdleConnTimeout:       idleConnTimeout,
-	MaxIdleConnsPerHost:   maxIdleConnsPerHost,
-	MaxConnsPerHost:       maxConnsPerHost,
-	TLSHandshakeTimeout:   connectTimeout,
-	ResponseHeaderTimeout: readWriteTimeout,
-	TLSClientConfig: &tls.Config{
-		InsecureSkipVerify: true,
-		RootCAs:            caPool,
-	},
-	Proxy: http.ProxyFromEnvironment,
+// newHTTPTransport returns a transport of its own, with at most maxConns connections, and
+// as many idle ones, to each host.
+var newHTTPTransport = func(maxConns int) http.RoundTripper {
+	return wrapRoundTripper(&http.Transport{
+		DialContext:           wrapDialContext(httpDialer.DialContext),
+		MaxIdleConns:          maxConns,
+		IdleConnTimeout:       idleConnTimeout,
+		MaxIdleConnsPerHost:   maxConns,
+		MaxConnsPerHost:       maxConns,
+		TLSHandshakeTimeout:   connectTimeout,
+		ResponseHeaderTimeout: readWriteTimeout,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			RootCAs:            caPool,
+		},
+		Proxy: http.ProxyFromEnvironment,
+	})
 }
 
 func init() {
@@ -170,8 +173,6 @@ func init() {
 		}
 	}()
 }
-
-var httpRoundTripper = wrapRoundTripper(httpTransport)
 
 var caPool = func() *x509.CertPool {
 	pool, err := x509.SystemCertPool()
@@ -202,26 +203,8 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 		}
 	}
 
-	// use default transport if MaxConnsPerHost is not configured
-	transport := httpRoundTripper
-	if args.MaxConnsPerHost > 0 {
-		// create a custom transport with configured MaxConnsPerHost
-		customTransport := &http.Transport{
-			DialContext:           wrapDialContext(httpDialer.DialContext),
-			MaxIdleConns:          maxIdleConns,
-			IdleConnTimeout:       idleConnTimeout,
-			MaxIdleConnsPerHost:   maxIdleConnsPerHost,
-			MaxConnsPerHost:       args.MaxConnsPerHost,
-			TLSHandshakeTimeout:   connectTimeout,
-			ResponseHeaderTimeout: readWriteTimeout,
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-				RootCAs:            caPool,
-			},
-			Proxy: http.ProxyFromEnvironment,
-		}
-		transport = wrapRoundTripper(customTransport)
-	}
+	// Each client has a transport of its own, shared with no other.
+	transport := newHTTPTransport(cmp.Or(args.MaxConnsPerHost, maxConnsPerHost))
 
 	// client
 	client := &http.Client{

@@ -145,6 +145,7 @@ func initFileServiceMetrics() {
 	registry.MustRegister(fsMultipartInitCounter)
 	registry.MustRegister(FSObjectStorageOperations)
 	registry.MustRegister(FSObjectStorageRequestsGauge)
+	registry.MustRegister(FSObjectStorageMemoryGauge)
 
 	registry.MustRegister(FSHTTPTraceCounter)
 	registry.MustRegister(S3ConnActiveGauge)

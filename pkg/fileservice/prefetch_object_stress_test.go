@@ -109,7 +109,7 @@ func TestPrefetchObjectsUnderStress(t *testing.T) {
 	sizes := []int{100<<10 + 3, 300 << 10, 700<<10 + 11, 1 << 20, 1500 << 10, 2<<20 + 5}
 	fs, _, _ := newPrefetchRangeFS(t, unit, 1)
 	d := fs.diskCache
-	d.prefetchFlightBytes = 4 * prefetchBlockMax
+	d.server.memoryLimit = 4 * prefetchBlockMax
 	limitRoom(t, d.server, 6, 3)
 	d.memoryPrefetchMax = 256 << 10
 	d.objectSplit = objectSplitConfig{parts: 2, min: 256 << 10}
@@ -267,7 +267,7 @@ func TestPrefetchObjectsUnderStress(t *testing.T) {
 	require.Eventually(t, func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return len(f.m) == 0 && f.bytes == 0
+		return len(f.m) == 0 && heldMemory(d) == 0
 	}, 10*time.Second, time.Millisecond, "no prefetch object or buffer stays")
 	require.Eventually(t, func() bool { return heldRoom(d.server) == 0 }, 10*time.Second, time.Millisecond,
 		"no connection stays held")

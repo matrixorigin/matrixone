@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -22,12 +23,11 @@ import (
 	"errors"
 	"io"
 	"iter"
+	"os"
 	"runtime"
 	"slices"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/semaphore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -91,218 +91,188 @@ const (
 	maxMultipartParts = 10000
 )
 
-var (
-	parallelUploadSemaphoreOnce sync.Once
-	parallelUploadSemaphore     chan struct{}
+// partBuffers keeps released part buffers for reuse, a pool for each part size.
+var partBuffers sync.Map // int64 -> *sync.Pool
 
-	parallelUploadBufferBudgetOnce sync.Once
-	parallelUploadBufferBudget     *weightedUploadBufferBudget
-)
-
-type weightedUploadBufferBudget struct {
-	semaphore *semaphore.Weighted
-	capacity  int64
-}
-
-func getParallelUploadSemaphore() chan struct{} {
-	parallelUploadSemaphoreOnce.Do(func() {
-		parallelUploadSemaphore = make(chan struct{}, runtime.NumCPU())
-	})
-	return parallelUploadSemaphore
-}
-
-func getParallelUploadBufferBudget() *weightedUploadBufferBudget {
-	parallelUploadBufferBudgetOnce.Do(func() {
-		capacity := int64(runtime.NumCPU()) * int64(defaultParallelMultipartPartSize)
-		if capacity < 1 {
-			capacity = 1
-		}
-		parallelUploadBufferBudget = &weightedUploadBufferBudget{
-			semaphore: semaphore.NewWeighted(capacity),
-			capacity:  capacity,
-		}
-	})
-	return parallelUploadBufferBudget
-}
-
-func acquireParallelUploadBufferBudget(ctx context.Context, bytes int64) (int64, error) {
-	budget := getParallelUploadBufferBudget()
-	if bytes < 1 {
-		bytes = 1
+// partBufferCharge returns the bytes of the buffer partBuffer returns.
+func partBufferCharge(size, partSize int64) int64 {
+	if size != partSize {
+		return flightBufSize(size)
 	}
-	if bytes > budget.capacity {
-		return 0, moerr.NewInvalidInputNoCtxf(
-			"multipart part size %d exceeds shared upload buffer budget %d",
-			bytes,
-			budget.capacity,
-		)
-	}
-	if err := budget.semaphore.Acquire(ctx, bytes); err != nil {
-		return 0, err
-	}
-	return bytes, nil
+	return size
 }
 
-func releaseParallelUploadBufferBudget(bytes int64) {
-	if bytes <= 0 {
-		return
+// partBuffer returns a buffer of size bytes, for a part of partSize bytes: from the pool
+// of partSize when size is partSize, otherwise from the flight buffers, and the function
+// keeping it for reuse.
+func partBuffer(size, partSize int64) ([]byte, func([]byte)) {
+	if size != partSize {
+		return getFlightBuf(size), putFlightBuf
 	}
-	getParallelUploadBufferBudget().semaphore.Release(bytes)
+	p, _ := partBuffers.LoadOrStore(size, new(sync.Pool))
+	pool := p.(*sync.Pool)
+	put := func(b []byte) {
+		b = b[:cap(b)]
+		pool.Put(&b)
+	}
+	if b, ok := pool.Get().(*[]byte); ok {
+		return *b, put
+	}
+	return make([]byte, size), put
 }
 
-// parallelUploadPart owns the budget reserved for its buffer until released.
-type parallelUploadPart struct {
+// writePart is a part of a write read from the caller's reader: n bytes in buf, taken of
+// the memory of its writer, or in an unlinked temporary file.
+type writePart struct {
 	buf    []byte
-	n      int
-	tokens int64
+	put    func([]byte)
+	file   *os.File
+	n      int64
+	w      partWriter
+	class  requestClass
+	charge int64
 }
 
-func releaseParallelUploadPart(part *parallelUploadPart) {
-	if part == nil {
+// body returns the bytes of p.
+func (p *writePart) body() io.ReaderAt {
+	if p.file != nil {
+		return p.file
+	}
+	return bytes.NewReader(p.buf[:p.n])
+}
+
+// release frees the buffer or the file of p.
+func (p *writePart) release() {
+	if p == nil {
 		return
 	}
-	releaseParallelUploadBufferBudget(part.tokens)
+	if p.file != nil {
+		_ = p.file.Close()
+		p.file = nil
+	}
+	if p.buf != nil {
+		p.put(p.buf)
+		p.buf = nil
+		p.w.freeMemory(p.charge, p.class)
+	}
 }
 
-func readParallelUploadPart(ctx context.Context, r io.Reader, partSize int64) (*parallelUploadPart, error) {
-	tokens, err := acquireParallelUploadBufferBudget(ctx, partSize)
+// readWritePart reads at most size bytes of r into a part of a write in parts of partSize
+// bytes: into a buffer when the memory of w fits it now, otherwise into an unlinked
+// temporary file. It returns io.EOF, with the part, when r ends within it.
+func readWritePart(ctx context.Context, w partWriter, r io.Reader, size, partSize int64) (*writePart, error) {
+	p := &writePart{w: w, class: requestClassOf(ctx)}
+	var err error
+	if charge := partBufferCharge(size, partSize); w.takeMemory(charge, p.class) {
+		p.charge = charge
+		p.buf, p.put = partBuffer(size, partSize)
+		var n int
+		n, err = io.ReadFull(r, p.buf)
+		p.n = int64(n)
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			err = io.EOF
+		}
+	} else {
+		if p.file, err = createUnlinkedTemp("mo-fs-part-*"); err != nil {
+			return nil, err
+		}
+		p.n, err = io.CopyN(p.file, r, size)
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		p.release()
+		return nil, err
+	}
+	return p, err
+}
+
+// createUnlinkedTemp returns a temporary file of the process, already removed.
+func createUnlinkedTemp(pattern string) (*os.File, error) {
+	f, err := os.CreateTemp("", pattern)
 	if err != nil {
 		return nil, err
 	}
-	raw := make([]byte, partSize)
-	n, err := io.ReadFull(r, raw)
-	switch {
-	case errors.Is(err, io.EOF):
-		releaseParallelUploadBufferBudget(tokens)
-		return nil, io.EOF
-	case errors.Is(err, io.ErrUnexpectedEOF):
-		return &parallelUploadPart{buf: raw, n: n, tokens: tokens}, io.EOF
-	case err != nil:
-		releaseParallelUploadBufferBudget(tokens)
+	if err := os.Remove(f.Name()); err != nil {
+		_ = f.Close()
 		return nil, err
-	default:
-		return &parallelUploadPart{buf: raw, n: n, tokens: tokens}, nil
 	}
+	return f, nil
 }
 
-// uploadParallelParts owns each part until its upload finishes or is rejected.
-func uploadParallelParts[T any](ctx context.Context, cancel context.CancelFunc, r io.Reader, options ParallelMultipartOption, firstPart *parallelUploadPart, upload func(context.Context, int32, *parallelUploadPart) (T, error)) ([]T, error) {
-	type partJob struct {
-		num  int32
-		part *parallelUploadPart
-	}
-
+// uploadParts uploads the parts next returns, part by part, at most options.Concurrency at
+// once, each in its own request, and returns them in order. next returns nil after the
+// last part; its error, or a failed upload, cancels the parts under way.
+func uploadParts(ctx context.Context, w partWriter, key, uploadID string, options ParallelMultipartOption, next func() (io.ReaderAt, int64, func(), error)) ([]multipartPart, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var (
-		partNum   int32
-		parts     []T
-		partsLock sync.Mutex
-		wg        sync.WaitGroup
-		errOnce   sync.Once
-		firstErr  error
+		parts    []multipartPart
+		mu       sync.Mutex
+		wg       sync.WaitGroup
+		firstErr error
+		num      int32
 	)
-
-	setErr := func(e error) {
-		if e == nil {
-			return
-		}
-		errOnce.Do(func() {
-			firstErr = e
+	setErr := func(err error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
 			cancel()
-		})
+		}
+		mu.Unlock()
 	}
-
-	uploadSlots := make(chan struct{}, options.Concurrency)
-	startPartUpload := func(job partJob) bool {
-		select {
-		case uploadSlots <- struct{}{}:
-		case <-ctx.Done():
-			releaseParallelUploadPart(job.part)
-			setErr(ctx.Err())
-			return false
+	slots := make(chan struct{}, options.Concurrency)
+	for {
+		body, size, release, err := next()
+		if err != nil {
+			setErr(err)
+			break
+		}
+		if body == nil {
+			break
+		}
+		if num++; num > maxMultipartParts {
+			release()
+			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", num))
+			break
 		}
 		select {
-		case getParallelUploadSemaphore() <- struct{}{}:
+		case slots <- struct{}{}:
 		case <-ctx.Done():
-			<-uploadSlots
-			releaseParallelUploadPart(job.part)
-			setErr(ctx.Err())
-			return false
+		}
+		if err := ctx.Err(); err != nil {
+			release()
+			setErr(err)
+			break
 		}
 		wg.Add(1)
-		go func() {
+		go func(num int32) {
 			defer wg.Done()
-			defer func() {
-				<-getParallelUploadSemaphore()
-				<-uploadSlots
-			}()
+			defer func() { <-slots }()
+			defer release()
 			if options.beforePartUpload != nil {
 				options.beforePartUpload()
 			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				setErr(ctxErr)
-				releaseParallelUploadPart(job.part)
+			if err := ctx.Err(); err != nil {
+				setErr(err)
 				return
 			}
-			result, uploadErr := upload(ctx, job.num, job.part)
-			if uploadErr != nil {
-				setErr(uploadErr)
-				releaseParallelUploadPart(job.part)
+			res, err := w.Do(ctx, uploadPartRequest{key: key, uploadID: uploadID, num: num, body: body, size: size})
+			if err != nil {
+				setErr(err)
 				return
 			}
-			releaseParallelUploadPart(job.part)
-			partsLock.Lock()
-			parts = append(parts, result)
-			partsLock.Unlock()
-		}()
-		return true
+			mu.Lock()
+			parts = append(parts, multipartPart{num: num, etag: res.id})
+			mu.Unlock()
+		}(num)
 	}
-
-	sendJob := func(part *parallelUploadPart) bool {
-		partNum++
-		if partNum > maxMultipartParts {
-			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
-			releaseParallelUploadPart(part)
-			return false
-		}
-		job := partJob{
-			num:  partNum,
-			part: part,
-		}
-		return startPartUpload(job)
-	}
-
-	if sendJob(firstPart) {
-		for {
-			part, readErr := readParallelUploadPart(ctx, r, options.PartSize)
-			if errors.Is(readErr, io.EOF) && part == nil {
-				break
-			}
-			if readErr != nil && !errors.Is(readErr, io.EOF) {
-				setErr(readErr)
-				releaseParallelUploadPart(part)
-				break
-			}
-			if part == nil || part.n == 0 {
-				releaseParallelUploadPart(part)
-				break
-			}
-			if !sendJob(part) {
-				break
-			}
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-		}
-	}
-
 	wg.Wait()
-
 	if firstErr != nil {
 		return nil, firstErr
 	}
-	if len(parts) != int(partNum) {
-		return nil, moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))
+	if len(parts) != int(num) {
+		return nil, moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", num, len(parts))
 	}
+	slices.SortFunc(parts, func(a, b multipartPart) int { return cmp.Compare(a.num, b.num) })
 	return parts, nil
 }
 
@@ -310,7 +280,7 @@ func uploadParallelParts[T any](ctx context.Context, cancel context.CancelFunc, 
 // request.
 type multipartStorage interface {
 	createMultipart(ctx context.Context, key string, expire *time.Time) (uploadID string, err error)
-	uploadPart(ctx context.Context, key, uploadID string, num int32, data []byte) (etag string, err error)
+	uploadPart(ctx context.Context, key, uploadID string, num int32, body io.ReaderAt, size int64) (etag string, err error)
 	completeMultipart(ctx context.Context, key, uploadID string, parts []multipartPart) error
 	abortMultipart(ctx context.Context, key, uploadID string) error
 }
@@ -320,12 +290,16 @@ type multipartPart struct {
 	etag string
 }
 
-// partWriter makes the requests of a write in parts.
+// partWriter makes the requests of a write in parts and holds the memory of the parts it
+// reads from callers.
 type partWriter interface {
 	Do(ctx context.Context, req request) (result, error)
+	takeMemory(n int64, c requestClass) bool
+	freeMemory(n int64, c requestClass)
 }
 
-// storageParts makes the requests of a write in parts on s itself.
+// storageParts makes the requests of a write in parts on s itself; the parts it reads
+// are always held in memory.
 type storageParts struct {
 	s interface {
 		ObjectStorage
@@ -337,91 +311,147 @@ func (p storageParts) Do(ctx context.Context, req request) (result, error) {
 	return makeRequest(ctx, p.s, req)
 }
 
+func (storageParts) takeMemory(int64, requestClass) bool { return true }
+
+func (storageParts) freeMemory(int64, requestClass) {}
+
 const multipartAbortTimeout = 30 * time.Second
 
-// writeParts writes r as the object key: with one put when it ends within its first part,
-// otherwise as a multipart upload. Each part is read from r before its request is made.
-func writeParts(ctx context.Context, w partWriter, key string, r io.Reader, sizeHint *int64, opt *ParallelMultipartOption) (err error) {
-	defer wrapSizeMismatchErr(&err)
-	options := normalizeParallelOption(opt)
-	if sizeHint != nil {
-		r = &exactSizeReader{R: r, Expected: *sizeHint, Key: key}
-		if parts := (*sizeHint + options.PartSize - 1) / options.PartSize; parts > maxMultipartParts {
-			return moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", parts)
-		}
-	}
-	first, err := readFirstPart(ctx, r, sizeHint, options.PartSize)
-	if errors.Is(err, io.EOF) {
-		defer releaseParallelUploadPart(first)
-		_, err = w.Do(ctx, putRequest{key: key, data: first.buf[:first.n], expire: options.Expire})
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	parentCtx := ctx
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+// multipartUpload creates a multipart upload of key, uploads the parts next returns, and
+// completes it, or aborts it on failure.
+func multipartUpload(ctx context.Context, w partWriter, key string, options ParallelMultipartOption, next func() (io.ReaderAt, int64, func(), error)) (err error) {
 	created, err := w.Do(ctx, createMultipartRequest{key: key, expire: options.Expire})
 	if err != nil {
-		releaseParallelUploadPart(first)
 		return err
 	}
 	uploadID := created.id
 	defer func() {
 		if err != nil {
-			abortCtx, abortCancel := context.WithTimeout(context.WithoutCancel(parentCtx), multipartAbortTimeout)
+			abortCtx, abortCancel := context.WithTimeout(context.WithoutCancel(ctx), multipartAbortTimeout)
 			defer abortCancel()
 			_, abortErr := w.Do(abortCtx, abortMultipartRequest{key: key, uploadID: uploadID})
 			err = errors.Join(err, abortErr)
 		}
 	}()
-	parts, err := uploadParallelParts(ctx, cancel, r, options, first, func(ctx context.Context, num int32, part *parallelUploadPart) (multipartPart, error) {
-		res, err := w.Do(ctx, uploadPartRequest{key: key, uploadID: uploadID, num: num, data: part.buf[:part.n]})
-		return multipartPart{num: num, etag: res.id}, err
-	})
+	parts, err := uploadParts(ctx, w, key, uploadID, options, next)
 	if err != nil {
 		return err
 	}
-	slices.SortFunc(parts, func(a, b multipartPart) int { return cmp.Compare(a.num, b.num) })
 	_, err = w.Do(ctx, completeMultipartRequest{key: key, uploadID: uploadID, parts: parts})
 	return err
 }
 
-// readFirstPart reads the first part of r, at most partSize bytes, with io.EOF when r
-// ends within it. A part of a body that may not end within it is charged to the shared
-// upload buffer budget before it is read.
-func readFirstPart(ctx context.Context, r io.Reader, sizeHint *int64, partSize int64) (*parallelUploadPart, error) {
-	if sizeHint != nil && *sizeHint <= partSize {
-		data := make([]byte, *sizeHint)
-		if _, err := io.ReadFull(r, data); err != nil {
-			return nil, err
+// writeParts writes r as the object key: with one put when it ends within its first part,
+// otherwise as a multipart upload. Each part is read from r before its request is made,
+// into memory of w when it fits at once, otherwise into a temporary file.
+func writeParts(ctx context.Context, w partWriter, key string, r io.Reader, sizeHint *int64, opt *ParallelMultipartOption) (err error) {
+	defer wrapSizeMismatchErr(&err)
+	options := normalizeParallelOption(opt)
+	firstSize := options.PartSize
+	if sizeHint != nil {
+		r = &exactSizeReader{R: r, Expected: *sizeHint, Key: key}
+		if parts := (*sizeHint + options.PartSize - 1) / options.PartSize; parts > maxMultipartParts {
+			return moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", parts)
 		}
-		if _, err := r.Read(make([]byte, 1)); err != nil && !errors.Is(err, io.EOF) {
-			return nil, err
+		firstSize = min(*sizeHint, options.PartSize)
+	}
+	first, err := readWritePart(ctx, w, r, firstSize, options.PartSize)
+	defer func() { first.release() }()
+	if err == nil && sizeHint != nil && *sizeHint <= options.PartSize {
+		// The reader ends within the part: a longer one fails here.
+		if _, err = r.Read(make([]byte, 1)); err == nil || errors.Is(err, io.EOF) {
+			err = io.EOF
 		}
-		return &parallelUploadPart{buf: data, n: len(data)}, io.EOF
 	}
-	tokens, err := acquireParallelUploadBufferBudget(ctx, partSize)
+	if errors.Is(err, io.EOF) {
+		_, err = w.Do(ctx, putRequest{key: key, body: first.body(), size: first.n, expire: options.Expire})
+		return err
+	}
 	if err != nil {
-		return nil, err
+		return err
 	}
-	part := &parallelUploadPart{tokens: tokens}
-	if sizeHint == nil {
-		part.buf, err = io.ReadAll(io.LimitReader(r, partSize))
-	} else {
-		part.buf = make([]byte, partSize)
-		_, err = io.ReadFull(r, part.buf)
+	ended := false
+	return multipartUpload(ctx, w, key, options, func() (io.ReaderAt, int64, func(), error) {
+		if first != nil {
+			p := first
+			first = nil
+			return p.body(), p.n, p.release, nil
+		}
+		if ended {
+			return nil, 0, nil, nil
+		}
+		p, err := readWritePart(ctx, w, r, options.PartSize, options.PartSize)
+		if errors.Is(err, io.EOF) {
+			ended = true
+			if p.n == 0 {
+				p.release()
+				return nil, 0, nil, nil
+			}
+			err = nil
+		}
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		return p.body(), p.n, p.release, nil
+	})
+}
+
+// writeBytes writes the size bytes of body, which are in memory, as the object key: with
+// one put when they fit a part, otherwise as a multipart upload of sections of body. It
+// copies no bytes and takes no memory of w.
+func writeBytes(ctx context.Context, w partWriter, key string, body io.ReaderAt, size int64, opt *ParallelMultipartOption) error {
+	options := normalizeParallelOption(opt)
+	if size <= options.PartSize {
+		_, err := w.Do(ctx, putRequest{key: key, body: body, size: size, expire: options.Expire})
+		return err
 	}
-	part.n = len(part.buf)
-	if err != nil {
-		releaseParallelUploadPart(part)
-		return nil, err
+	if parts := (size + options.PartSize - 1) / options.PartSize; parts > maxMultipartParts {
+		return moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", parts)
 	}
-	if int64(part.n) < partSize {
-		return part, io.EOF
+	var off int64
+	return multipartUpload(ctx, w, key, options, func() (io.ReaderAt, int64, func(), error) {
+		if off >= size {
+			return nil, 0, nil, nil
+		}
+		n := min(options.PartSize, size-off)
+		section := io.NewSectionReader(body, off, n)
+		off += n
+		return section, n, func() {}, nil
+	})
+}
+
+// bodyOf returns the bytes r reads as a ReaderAt and their size: r itself, from where it
+// is, when it is a section, otherwise the bytes read from it.
+func bodyOf(r io.Reader) (io.ReaderAt, int64, error) {
+	if s, ok := r.(*io.SectionReader); ok {
+		pos, err := s.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, 0, err
+		}
+		return io.NewSectionReader(s, pos, s.Size()-pos), s.Size() - pos, nil
 	}
-	return part, nil
+	data, err := io.ReadAll(r)
+	return bytes.NewReader(data), int64(len(data)), err
+}
+
+// bytesReaderAt reads the bytes of slices one after another.
+type bytesReaderAt [][]byte
+
+func (b bytesReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	n := 0
+	for _, s := range b {
+		if off >= int64(len(s)) {
+			off -= int64(len(s))
+			continue
+		}
+		c := copy(p[n:], s[off:])
+		n += c
+		off = 0
+		if n == len(p) {
+			return n, nil
+		}
+	}
+	return n, io.EOF
 }
 
 func normalizeParallelOption(opt *ParallelMultipartOption) ParallelMultipartOption {

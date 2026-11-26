@@ -117,7 +117,11 @@ func (p *partStorage) createMultipart(_ context.Context, _ string, expire *time.
 	return "upload", nil
 }
 
-func (p *partStorage) uploadPart(_ context.Context, _, _ string, num int32, data []byte) (string, error) {
+func (p *partStorage) uploadPart(_ context.Context, _, _ string, num int32, body io.ReaderAt, size int64) (string, error) {
+	data, err := io.ReadAll(io.NewSectionReader(body, 0, size))
+	if err != nil {
+		return "", err
+	}
 	n := p.cur.Add(1)
 	defer p.cur.Add(-1)
 	for most := p.most.Load(); n > most && !p.most.CompareAndSwap(most, n); most = p.most.Load() {
@@ -125,7 +129,7 @@ func (p *partStorage) uploadPart(_ context.Context, _, _ string, num int32, data
 	time.Sleep(10 * time.Millisecond)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.parts[num] = bytes.Clone(data)
+	p.parts[num] = data
 	return "etag", nil
 }
 

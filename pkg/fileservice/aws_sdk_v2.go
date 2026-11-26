@@ -15,7 +15,6 @@
 package fileservice
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -451,7 +450,7 @@ func (a *AwsSDKv2) Write(
 		return writeParts(ctx, storageParts{a}, key, r, nil, &ParallelMultipartOption{Concurrency: 1, Expire: expire})
 
 	} else if *sizeHint < smallObjectThreshold || exclusiveWrite(ctx) {
-		data, err := io.ReadAll(r)
+		body, size, err := bodyOf(r)
 		if err != nil {
 			return err
 		}
@@ -461,7 +460,7 @@ func (a *AwsSDKv2) Write(
 				&s3.PutObjectInput{
 					Bucket:        ptrTo(a.bucket),
 					Key:           ptrTo(key),
-					Body:          bytes.NewReader(data),
+					Body:          io.NewSectionReader(body, 0, size),
 					ContentLength: sizeHint,
 					Expires:       expire,
 				},
@@ -550,7 +549,7 @@ func (a *AwsSDKv2) createMultipart(ctx context.Context, key string, expire *time
 	return aws.ToString(output.UploadId), nil
 }
 
-func (a *AwsSDKv2) uploadPart(ctx context.Context, key, uploadID string, num int32, data []byte) (string, error) {
+func (a *AwsSDKv2) uploadPart(ctx context.Context, key, uploadID string, num int32, body io.ReaderAt, size int64) (string, error) {
 	output, err := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
 		recordS3PutRequest(ctx, a.perfCounterSets...)
 		return a.client.UploadPart(ctx, &s3.UploadPartInput{
@@ -558,13 +557,13 @@ func (a *AwsSDKv2) uploadPart(ctx context.Context, key, uploadID string, num int
 			Key:        ptrTo(key),
 			PartNumber: &num,
 			UploadId:   &uploadID,
-			Body:       bytes.NewReader(data),
+			Body:       io.NewSectionReader(body, 0, size),
 		}, withoutSDKRetries(nil)...)
 	}, maxRetryAttemps, awsRetryable())
 	if err != nil {
 		return "", err
 	}
-	recordS3AcceptedBytes(ctx, int64(len(data)), a.perfCounterSets...)
+	recordS3AcceptedBytes(ctx, size, a.perfCounterSets...)
 	return aws.ToString(output.ETag), nil
 }
 

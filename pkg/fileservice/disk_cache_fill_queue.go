@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"container/heap"
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -152,6 +153,8 @@ type queuedFill struct {
 	// background is set while it runs counted among the background fills.
 	background bool
 	promoted   chan struct{}
+	// cancel, when set, ends the wait of its memory flight for room.
+	cancel context.CancelFunc
 	// started is closed once reads can join what it downloads, or it ended.
 	started     chan struct{}
 	startedOnce sync.Once
@@ -495,33 +498,20 @@ func (d *DiskCache) fillsMaxLocked() int {
 	return d.backgroundRequests()
 }
 
-// memoryBacked reports whether a fill of n bytes is held in memory: it is at most
-// memoryPrefetchMax bytes and its buffer is within the share of the flight budget of its
-// class, all of it for foreground, half of it for background.
+// memoryBacked reports whether a fill of n bytes is made to be held in memory: it is at
+// most memoryPrefetchMax bytes and its buffer fits the memory of the server for its class
+// now. Its buffer is taken only once its request is admitted, if it still fits.
 func (d *DiskCache) memoryBacked(n int64, background bool) bool {
-	share := d.flightBytes()
+	c := foregroundRequest
 	if background {
-		share /= 2
+		c = backgroundRequest
 	}
-	return n <= d.memoryPrefetchMax && flightBufSize(n) <= share
-}
-
-// fitsLocked reports whether a buffer of charge bytes fits the flight budget now: with the
-// buffers under way within the budget, and, for a background buffer, with the background
-// buffers within half of it while no foreground flight waits for one.
-func (d *DiskCache) fitsLocked(charge int64, background bool) bool {
-	f := &d.prefetchObjects
-	budget := d.flightBytes()
-	if f.bytes+charge > budget {
-		return false
-	}
-	return !background || f.background+charge <= budget/2 && f.foregroundWaiting == 0
+	return n <= d.memoryPrefetchMax && d.server.memoryFits(flightBufSize(n), c)
 }
 
 // startFillsLocked starts the waiting fills in order while the first can start: it is
-// foreground, or fewer than fillsMax background fills run and no foreground flight waits
-// for a buffer; and its buffer, when it is held in memory, fits. A fill whose scans all
-// ended and no read joined is dropped instead.
+// foreground, or fewer than fillsMax background fills run. A fill whose scans all ended
+// and no read joined is dropped instead.
 func (d *DiskCache) startFillsLocked() {
 	f := &d.prefetchObjects
 	for len(f.waitingFills) > 0 && !f.closed {
@@ -531,26 +521,24 @@ func (d *DiskCache) startFillsLocked() {
 			continue
 		}
 		background := !q.isPromoted()
-		if background && (f.backgroundFills >= d.fillsMaxLocked() || f.foregroundWaiting > 0) {
-			return
-		}
-		memory := !q.whole && d.memoryBacked(q.size(), background)
-		if memory && !d.fitsLocked(flightBufSize(q.size()), background) {
+		if background && f.backgroundFills >= d.fillsMaxLocked() {
 			return
 		}
 		heap.Pop(&f.waitingFills)
 		if background {
 			f.queuedBytes -= q.size()
 		}
-		d.startFillLocked(q, background, memory)
+		d.startFillLocked(q, background, !q.whole && d.memoryBacked(q.size(), background))
 	}
 }
 
 // startFillLocked starts q, taken from the waiting fills. A fill of the whole object runs
 // on its own goroutine, registered until reads can join its download. A fill of a range
 // that finds its bytes cached, held by a prefetch object or its object deleted ends;
-// otherwise it registers one prefetch object of its range, a memory flight when memory is
-// set, a file fill otherwise, running on its own goroutine.
+// otherwise it runs one prefetch object of its range on its own goroutine: when memory is
+// set, a memory flight admitted with the room of its request and its buffer, or a file
+// fill once its buffer does not fit; a file fill otherwise. The requests of q wait in its
+// order: its share, then its due time.
 func (d *DiskCache) startFillLocked(q *queuedFill, background bool, memory bool) {
 	f := &d.prefetchObjects
 	closing, _ := f.openLocked()
@@ -558,7 +546,7 @@ func (d *DiskCache) startFillLocked(q *queuedFill, background bool, memory bool)
 	if background {
 		f.backgroundFills++
 	}
-	ctx := withQueuedFill(context.Background(), q)
+	ctx := withRequestOrder(withQueuedFill(context.Background(), q), requestOrder{share: q.req.share(), due: q.req.Due})
 	if q.whole {
 		f.reads.Add(1)
 		run := f.runWhole
@@ -572,17 +560,20 @@ func (d *DiskCache) startFillLocked(q *queuedFill, background bool, memory bool)
 		}()
 		return
 	}
-	d.forgetFillLocked(q)
-	q.markStarted()
 	diskPath, filePath := q.key.diskPath, q.req.FilePath
+	end := func() {
+		d.forgetFillLocked(q)
+		q.markStarted()
+		d.endFillLocked(q)
+	}
 	if d.deletes.since(diskPath, q.req.deletes) {
 		metric.FSPrefetchEndedCounter.Inc()
-		d.endFillLocked(q)
+		end()
 		return
 	}
 	if _, cached := d.ranges.covering(diskPath, q.start, q.size()); cached {
 		metric.FSPrefetchCachedCounter.Inc()
-		d.endFillLocked(q)
+		end()
 		return
 	}
 	now := time.Now()
@@ -591,24 +582,74 @@ func (d *DiskCache) startFillLocked(q *queuedFill, background bool, memory bool)
 			p.kept = true
 		}
 		metric.FSPrefetchMergedCounter.Inc()
-		d.endFillLocked(q)
+		end()
 		return
 	}
 	deletes := q.req.deletes
 	needs := flightNeeds{caching: true, deletes: &deletes}
 	if memory {
-		fl := d.newFlight(filePath, q.start, q.end, rangeFillPolicy, q.src, needs)
-		fl.fill, fl.background = q, background
-		setStateLocked(fl, objectRegistered)
-		fl.registerLocked(ctx, closing, now)
-		go fl.run()
+		// The fill stays in the registry while its flight waits for room.
+		ctx, q.cancel = context.WithCancel(ctx)
+		f.reads.Add(1)
+		go d.runRangeFill(ctx, q, needs)
 		return
 	}
+	d.forgetFillLocked(q)
+	q.markStarted()
 	p := d.newFileObject(ctx, filePath, q.start, q.end, q.src, needs)
 	p.fill = q
 	setStateLocked(p, objectRegistered)
 	p.registerLocked(ctx, closing, now)
 	go p.run()
+}
+
+// runRangeFill runs q, a fill of a range that may be held in memory: its memory flight,
+// once admitted with its buffer, otherwise a file fill of its range. A fill that finds its
+// bytes cached, held by a prefetch object, its object deleted or the cache closed ends.
+func (d *DiskCache) runRangeFill(ctx context.Context, q *queuedFill, needs flightNeeds) {
+	f := &d.prefetchObjects
+	defer f.reads.Done()
+	fl := d.newFlight(q.req.FilePath, q.start, q.end, rangeFillPolicy, q.src, needs)
+	fl.fill = q
+	var o waitingObject = fl
+	got, err := admit(ctx, fl)
+	f.mu.Lock()
+	cancel := q.cancel
+	q.cancel = nil
+	d.forgetFillLocked(q)
+	f.mu.Unlock()
+	defer cancel()
+	q.markStarted()
+	if errors.Is(err, errNoBuffer) {
+		p := d.newFileObject(ctx, q.req.FilePath, q.start, q.end, q.src, needs)
+		p.fill = q
+		o = p
+		got, err = admit(ctx, p)
+	}
+	if got == prefetchObject(o) {
+		got.release()
+		o.run()
+		return
+	}
+	o.abandon()
+	if got != nil {
+		defer got.release()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case got != nil:
+		if p, ok := got.(*filePrefetchObject); ok {
+			p.kept = true
+		}
+		metric.FSPrefetchMergedCounter.Inc()
+	case err == nil:
+		metric.FSPrefetchCachedCounter.Inc()
+	case errors.Is(err, errPrefetchDeleted):
+		metric.FSPrefetchEndedCounter.Inc()
+	}
+	d.endFillLocked(q)
+	d.startFillsLocked()
 }
 
 // rangeEndedLocked ends q, whose prefetch object ended with err, why it cached nothing.
@@ -656,8 +697,8 @@ func (d *DiskCache) promoteLocked(q *queuedFill) {
 func (d *DiskCache) promoteObjectLocked(o prefetchObject) {
 	t := o.target()
 	d.promoteLocked(t.fill)
-	if fl, ok := o.(*memoryPrefetchObject); ok && fl.background && fl.owner != nil {
-		d.prefetchObjects.background -= fl.charge
+	if fl, ok := o.(*memoryPrefetchObject); ok && fl.background && fl.charge > 0 {
+		d.server.promoteMemory(fl.charge)
 		fl.background = false
 	}
 }
@@ -727,6 +768,8 @@ func (d *DiskCache) dropFillsLocked(diskPath string) {
 		for _, q := range slices.Clone(f.fills[fillKey{diskPath: diskPath, index: index}]) {
 			if q.pos >= 0 {
 				d.removeWaitingLocked(q)
+			} else if q.cancel != nil {
+				q.cancel()
 			}
 		}
 	}

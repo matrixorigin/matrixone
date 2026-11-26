@@ -197,6 +197,17 @@ var (
 	FSObjectStorageRequestsForegroundWaiting = FSObjectStorageRequestsGauge.WithLabelValues("foreground", "waiting")
 	FSObjectStorageRequestsBackgroundRunning = FSObjectStorageRequestsGauge.WithLabelValues("background", "running")
 	FSObjectStorageRequestsBackgroundWaiting = FSObjectStorageRequestsGauge.WithLabelValues("background", "waiting")
+
+	// FSObjectStorageMemoryGauge is the memory the object storage servers hold, by class.
+	FSObjectStorageMemoryGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "object_storage_memory_bytes",
+			Help:      "Memory the object storage servers hold, by class",
+		}, []string{"class"})
+	FSObjectStorageMemoryForeground = FSObjectStorageMemoryGauge.WithLabelValues("foreground")
+	FSObjectStorageMemoryBackground = FSObjectStorageMemoryGauge.WithLabelValues("background")
 )
 
 var (
@@ -452,7 +463,8 @@ var (
 	FSPrefetchDroppedCounter    = FSPrefetchObjectCounter.WithLabelValues("dropped")
 
 	// FSPrefetchObjectWaitingGauge is the prefetch objects of runs waiting for their
-	// resources, by what they wait for: a slot of their prefetch or a buffer.
+	// resources, by what they wait for: a slot of their prefetch or room of the object
+	// storage server.
 	FSPrefetchObjectWaitingGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
@@ -460,8 +472,8 @@ var (
 			Name:      "prefetch_object_waiting",
 			Help:      "Prefetch objects of runs waiting for their resources, by what they wait for",
 		}, []string{"for"})
-	FSPrefetchObjectWaitingSlot   = FSPrefetchObjectWaitingGauge.WithLabelValues("slot")
-	FSPrefetchObjectWaitingBuffer = FSPrefetchObjectWaitingGauge.WithLabelValues("buffer")
+	FSPrefetchObjectWaitingSlot = FSPrefetchObjectWaitingGauge.WithLabelValues("slot")
+	FSPrefetchObjectWaitingRoom = FSPrefetchObjectWaitingGauge.WithLabelValues("room")
 
 	// FSPrefetchObjectWaitDuration is how long the prefetch objects of runs waited for their
 	// resources, each wait, however it ended.

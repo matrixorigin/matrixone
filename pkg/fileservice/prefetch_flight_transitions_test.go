@@ -28,10 +28,7 @@ import (
 )
 
 func prefetchBytes(fs *S3FS) int64 {
-	f := &fs.diskCache.prefetchObjects
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.bytes
+	return heldMemory(fs.diskCache)
 }
 
 // A column read past disk-prefetch-memory-max reads through a FilePrefetchObject of its
@@ -106,7 +103,7 @@ func TestFlightTransitionColumnReadReleasesCopiedFlight(t *testing.T) {
 			fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 			ranges := columnRanges(3, 40<<10, 1<<10)
 			unit := flightBufSize(ranges[0].Size)
-			fs.diskCache.prefetchFlightBytes = 4 * unit
+			fs.server.memoryLimit = 4 * unit
 			gates := []chan struct{}{make(chan struct{}), make(chan struct{})}
 			release := []func(){sync.OnceFunc(func() { close(gates[0]) }), sync.OnceFunc(func() { close(gates[1]) })}
 			defer release[0]()
@@ -193,7 +190,7 @@ func flightRefs(fs *S3FS, offset int64) int {
 func TestFlightTransitionPrefetchReadReleasesCopiedFlight(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, data := newPrefetchRangeFS(t, unit, 5*unit)
-	fs.diskCache.prefetchFlightBytes = 2 * unit
+	fs.server.memoryLimit = 2 * unit
 	gx, gy := make(chan struct{}), make(chan struct{})
 	releaseX, releaseY := sync.OnceFunc(func() { close(gx) }), sync.OnceFunc(func() { close(gy) })
 	defer releaseX()
@@ -254,7 +251,7 @@ func TestFlightTransitionPrefetchReadReleasesCopiedFlight(t *testing.T) {
 func TestFlightTransitionRangeReadReleasesEndedRun(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, data := newPrefetchRangeFS(t, unit, 5*unit)
-	fs.diskCache.prefetchFlightBytes = 2 * unit
+	fs.server.memoryLimit = 2 * unit
 	// Unit 1 is cached, so the read runs units 0 and 2 apart.
 	readRangeOf(t, fs, 0, unit+5, 5)
 	gate := make(chan struct{})
@@ -425,7 +422,7 @@ func TestFlightTransitionColumnPrefetchReturnsBudgetAndConns(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	limitRoom(t, fs.server, 18, 2)
 	ranges := columnRanges(8, 20<<10, 1<<10)
-	fs.diskCache.prefetchFlightBytes = 4 * flightBufSize(ranges[0].Size)
+	fs.server.memoryLimit = 4 * flightBufSize(ranges[0].Size)
 	g := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return true })
 	fs.server.raw = g
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: 8 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
@@ -487,81 +484,6 @@ func TestFlightTransitionDeleteStopsWaitingFlight(t *testing.T) {
 	}
 	_, _, total := g.counts(key)
 	require.Equal(t, 2, total)
-}
-
-// A range read waiting for budget returns once the cache closes; nothing stays charged.
-func TestFlightTransitionBudgetWaiterReturnsOnClose(t *testing.T) {
-	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
-	ranges := columnRanges(2, 40<<10, 1<<10)
-	fs.diskCache.prefetchFlightBytes = flightBufSize(ranges[0].Size)
-	g := newBlackBoxStorage(fs.server.raw, func(_ string, offset int64) bool { return offset == ranges[0].Offset })
-	fs.server.raw = g
-	release := sync.OnceFunc(func() { close(g.gate) })
-	defer release()
-	ctx := context.Background()
-	// A foreground read's flight holds the budget of foreground flights.
-	blocker := make(chan struct{})
-	go func() {
-		defer close(blocker)
-		_, _ = readColumnRange(ctx, fs, ranges[0])
-	}()
-	key := fs.pathToKey("object")
-	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 1 }, 5*time.Second, time.Millisecond)
-	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{ranges[1].entry()}}
-		err := fs.Read(readCtx, vec)
-		if err == nil {
-			vec.Release()
-		}
-		done <- err
-	}()
-	require.Never(t, func() bool { return len(done) > 0 }, 100*time.Millisecond, time.Millisecond, "the read waits for budget")
-	closeCtx, cancelClose := context.WithTimeout(ctx, 5*time.Second)
-	defer cancelClose()
-	fs.Close(closeCtx)
-	require.NoError(t, closeCtx.Err(), "close does not wait for its context")
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the read waiting for budget did not return after close")
-	}
-	release()
-	<-blocker
-	require.Zero(t, prefetchBytes(fs))
-}
-
-// A range read whose context ends while it waits for budget returns, holding nothing.
-func TestFlightTransitionBudgetWaiterContextEnds(t *testing.T) {
-	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
-	ranges := columnRanges(2, 40<<10, 1<<10)
-	fs.diskCache.prefetchFlightBytes = flightBufSize(ranges[0].Size)
-	g := newBlackBoxStorage(fs.server.raw, func(_ string, offset int64) bool { return offset == ranges[0].Offset })
-	fs.server.raw = g
-	release := sync.OnceFunc(func() { close(g.gate) })
-	defer release()
-	ctx := context.Background()
-	// A foreground read's flight holds the budget of foreground flights.
-	blocker := make(chan struct{})
-	go func() {
-		defer close(blocker)
-		_, _ = readColumnRange(ctx, fs, ranges[0])
-	}()
-	key := fs.pathToKey("object")
-	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 1 }, 5*time.Second, time.Millisecond)
-	readCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-	defer cancel()
-	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{ranges[1].entry()}}
-	require.ErrorIs(t, fs.Read(readCtx, vec), context.DeadlineExceeded)
-	_, _, total := g.counts(key)
-	require.Equal(t, 1, total)
-	release()
-	<-blocker
-	fs.diskCache.prefetchObjects.reads.Wait()
-	require.Zero(t, prefetchBytes(fs))
-	require.Zero(t, heldRoom(fs.server))
 }
 
 func assertEventuallyBytes(t *testing.T, fs *S3FS, want int64) bool {

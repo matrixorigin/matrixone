@@ -40,7 +40,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	costypes "github.com/tencentyun/cos-go-sdk-v5"
-	"golang.org/x/sync/semaphore"
 )
 
 // failAfterBytesReader wraps an io.Reader and returns errAfter once
@@ -548,7 +547,7 @@ func TestAwsWriteLargeNonSeekableFallsBackToMultipart(t *testing.T) {
 	}
 }
 
-func TestAwsParallelMultipartCompletesWithSingleGlobalSlot(t *testing.T) {
+func TestAwsParallelMultipartCompletes(t *testing.T) {
 	server, state := newMockAWSServer(t, 0)
 	defer server.Close()
 	state.uploadID = "uid-no-deadlock"
@@ -556,12 +555,6 @@ func TestAwsParallelMultipartCompletesWithSingleGlobalSlot(t *testing.T) {
 	sdk := newTestAWSClient(t, server)
 	data := bytes.Repeat([]byte("m"), int(minMultipartPartSize*2))
 	size := int64(len(data))
-
-	oldSlots := getParallelUploadSemaphore()
-	parallelUploadSemaphore = make(chan struct{}, 1)
-	defer func() {
-		parallelUploadSemaphore = oldSlots
-	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -572,9 +565,6 @@ func TestAwsParallelMultipartCompletesWithSingleGlobalSlot(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
-	if len(parallelUploadSemaphore) != 0 {
-		t.Fatal("multipart upload retained a global slot")
-	}
 
 	if len(state.parts) != 2 {
 		t.Fatalf("expected 2 parts, got %d", len(state.parts))
@@ -582,99 +572,6 @@ func TestAwsParallelMultipartCompletesWithSingleGlobalSlot(t *testing.T) {
 	if len(state.completeBody) == 0 {
 		t.Fatalf("expected multipart complete request")
 	}
-}
-
-func TestAwsParallelMultipartBufferBudgetBlocksBeforeRead(t *testing.T) {
-	server, state := newMockAWSServer(t, 0)
-	defer server.Close()
-	state.uploadID = "uid-buffer-budget"
-	state.blockUploadPart = make(chan struct{})
-	state.uploadPartStarted = make(chan struct{})
-
-	oldBudget := getParallelUploadBufferBudget()
-	capacity := int64(minMultipartPartSize * 2)
-	parallelUploadBufferBudget = &weightedUploadBufferBudget{
-		semaphore: semaphore.NewWeighted(capacity),
-		capacity:  capacity,
-	}
-	defer func() {
-		parallelUploadBufferBudget = oldBudget
-	}()
-
-	sdk := newTestAWSClient(t, server)
-	data := bytes.Repeat([]byte("b"), int(minMultipartPartSize*3))
-	size := int64(len(data))
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	firstErr := make(chan error, 1)
-	go func() {
-		var bytesRead atomic.Int64
-		firstErr <- sdk.WriteMultipartParallel(ctx, "first", &countingReader{
-			R: bytes.NewReader(data),
-			C: &bytesRead,
-		}, &size, &ParallelMultipartOption{
-			PartSize:    minMultipartPartSize,
-			Concurrency: 2,
-		})
-	}()
-
-	select {
-	case <-state.uploadPartStarted:
-	case <-ctx.Done():
-		t.Fatalf("first multipart upload did not start: %v", ctx.Err())
-	}
-
-	var secondBytesRead atomic.Int64
-	secondErr := make(chan error, 1)
-	go func() {
-		secondErr <- sdk.WriteMultipartParallel(ctx, "second", &countingReader{
-			R: bytes.NewReader(data),
-			C: &secondBytesRead,
-		}, &size, &ParallelMultipartOption{
-			PartSize:    minMultipartPartSize,
-			Concurrency: 2,
-		})
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-	if got := secondBytesRead.Load(); got != 0 {
-		t.Fatalf("second upload read %d bytes before shared buffer budget was released", got)
-	}
-
-	close(state.blockUploadPart)
-	if err := <-firstErr; err != nil {
-		t.Fatalf("first write failed: %v", err)
-	}
-	if err := <-secondErr; err != nil {
-		t.Fatalf("second write failed: %v", err)
-	}
-}
-
-func TestParallelUploadBufferBudgetRejectsOversizedPartAndAcquiresAtomically(t *testing.T) {
-	oldBudget := getParallelUploadBufferBudget()
-	parallelUploadBufferBudget = &weightedUploadBufferBudget{
-		semaphore: semaphore.NewWeighted(2 << 20),
-		capacity:  2 << 20,
-	}
-	defer func() { parallelUploadBufferBudget = oldBudget }()
-
-	_, err := acquireParallelUploadBufferBudget(context.Background(), 5<<20)
-	require.ErrorContains(t, err, "exceeds shared upload buffer budget")
-
-	charged, err := acquireParallelUploadBufferBudget(context.Background(), 1<<20)
-	require.NoError(t, err)
-	require.Equal(t, int64(1<<20), charged)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	_, err = acquireParallelUploadBufferBudget(ctx, 2<<20)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	releaseParallelUploadBufferBudget(charged)
-
-	charged, err = acquireParallelUploadBufferBudget(context.Background(), 2<<20)
-	require.NoError(t, err)
-	releaseParallelUploadBufferBudget(charged)
 }
 
 func TestAwsDeleteMultiUsesBatchWhenSupported(t *testing.T) {
@@ -1695,7 +1592,7 @@ func TestCOSMultipartCreateFail(t *testing.T) {
 	}
 }
 
-func TestCOSParallelMultipartCompletesWithSingleGlobalSlot(t *testing.T) {
+func TestCOSParallelMultipartCompletes(t *testing.T) {
 	server, state := newMockCOSServer(t, 0)
 	defer server.Close()
 	state.uploadID = "cos-no-deadlock"
@@ -1703,12 +1600,6 @@ func TestCOSParallelMultipartCompletesWithSingleGlobalSlot(t *testing.T) {
 	sdk := newTestCOSClient(t, server)
 	data := bytes.Repeat([]byte("n"), int(minMultipartPartSize*2))
 	size := int64(len(data))
-
-	oldSlots := getParallelUploadSemaphore()
-	parallelUploadSemaphore = make(chan struct{}, 1)
-	defer func() {
-		parallelUploadSemaphore = oldSlots
-	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -1718,9 +1609,6 @@ func TestCOSParallelMultipartCompletesWithSingleGlobalSlot(t *testing.T) {
 		Concurrency: 2,
 	}); err != nil {
 		t.Fatalf("write failed: %v", err)
-	}
-	if len(parallelUploadSemaphore) != 0 {
-		t.Fatal("multipart upload retained a global slot")
 	}
 
 	if len(state.parts) != 2 {

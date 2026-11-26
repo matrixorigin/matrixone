@@ -15,16 +15,18 @@
 package fileservice
 
 import (
-	"bytes"
-	"container/list"
+	"container/heap"
 	"context"
 	"io"
 	"iter"
+	"math"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -72,36 +74,117 @@ func requestClassOf(ctx context.Context) requestClass {
 	return foregroundRequest
 }
 
+type requestOrderKey struct{}
+
+// requestOrder is where a request waits among those of its class: a larger share first,
+// then a sooner due time, in Unix nanoseconds.
+type requestOrder struct {
+	share int
+	due   int64
+}
+
+// withRequestOrder returns ctx under which requests wait in order o.
+func withRequestOrder(ctx context.Context, o requestOrder) context.Context {
+	return context.WithValue(ctx, requestOrderKey{}, o)
+}
+
+// requestOrderOf returns the order of a request under ctx: the order ctx carries, or the
+// whole share and the time now.
+func requestOrderOf(ctx context.Context) requestOrder {
+	if o, ok := ctx.Value(requestOrderKey{}).(requestOrder); ok {
+		return o
+	}
+	return requestOrder{share: 10, due: time.Now().UnixNano()}
+}
+
 var errServerClosed = moerr.NewInternalErrorNoCtx("fileservice: object storage server closed")
 
 // minRequestRoom is the least room of a server.
 const minRequestRoom = 64
 
-// server makes every request to the object storage raw, at most capacity at once.
-// Waiting requests are admitted foreground first, then background, each in arrival
-// order; background requests run at most backgroundMax at once. A running request is
-// never stopped.
+const (
+	// serverMemoryDefault is the memory budget of a server when the memory available on
+	// the node cannot be measured.
+	serverMemoryDefault = 256 << 20
+	// serverMemoryPercent is the share, in percent, of the memory available on the node
+	// that a server's memory budget is when no budget is configured.
+	serverMemoryPercent = 5
+	// serverMemoryRefresh is how often the memory available on the node is measured.
+	serverMemoryRefresh = time.Second
+)
+
+// memoryAvailable measures the memory available on the node.
+var memoryAvailable = system.MemoryAvailableIncludingCache
+
+// objectStorageServer makes every request to the object storage raw, at most capacity
+// at once, and holds the memory budget of the file service. Waiting requests are
+// admitted foreground first, then background, each by a larger share, a sooner due time,
+// then arrival; background requests run at most backgroundMax at once. A running request
+// is never stopped. Memory is taken only when it fits at once: a foreground take within
+// the budget, a background one also within half of it.
 type objectStorageServer struct {
 	raw ObjectStorage
 	ops [opCount]prometheus.Gauge
+
+	// memoryLimit, when set, is the memory budget; otherwise it is measured.
+	memoryLimit int64
+	measured    atomic.Int64
+	measuredAt  atomic.Int64 // in Unix nanoseconds
 
 	mu            sync.Mutex
 	capacity      int
 	backgroundMax int
 	running       [2]int
-	waiting       [2]list.List
+	waiting       [2]roomWaiters
+	seq           uint64
+	memoryUsed    [2]int64
 	closed        bool
 	closedCh      chan struct{}
 }
 
 type roomWaiter struct {
 	class   requestClass
+	order   requestOrder
+	seq     uint64
 	granted chan struct{}
-	elem    *list.Element
+	// pos is the index in the waiters of its class, -1 once it does not wait.
+	pos int
 }
 
-// newObjectStorageServer returns a server of raw with room for capacity requests, at least
-// minRequestRoom, half of it for background requests.
+// roomWaiters is a heap of the waiters of a class in their order.
+type roomWaiters []*roomWaiter
+
+func (h roomWaiters) Len() int { return len(h) }
+func (h roomWaiters) Less(i, j int) bool {
+	a, b := h[i], h[j]
+	if a.order.share != b.order.share {
+		return a.order.share > b.order.share
+	}
+	if a.order.due != b.order.due {
+		return a.order.due < b.order.due
+	}
+	return a.seq < b.seq
+}
+func (h roomWaiters) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].pos, h[j].pos = i, j
+}
+func (h *roomWaiters) Push(x any) {
+	w := x.(*roomWaiter)
+	w.pos = len(*h)
+	*h = append(*h, w)
+}
+func (h *roomWaiters) Pop() any {
+	old := *h
+	w := old[len(old)-1]
+	old[len(old)-1] = nil
+	*h = old[:len(old)-1]
+	w.pos = -1
+	return w
+}
+
+// newObjectStorageServer returns a server of raw with room for capacity requests, at
+// least minRequestRoom, half of it for background requests.
 func newObjectStorageServer(raw ObjectStorage, capacity int) *objectStorageServer {
 	g := &objectStorageServer{raw: raw, closedCh: make(chan struct{})}
 	for op, name := range opNames {
@@ -119,9 +202,9 @@ func (g *objectStorageServer) canRunLocked(c requestClass) bool {
 	return c == foregroundRequest || g.running[backgroundRequest] < g.backgroundMax
 }
 
-// wait waits for room for a request of class c until ctx ends or g closes, and returns
-// the class of the room granted. A background request whose promotion of ctx closes
-// waits as a foreground one from then.
+// wait waits for room for a request of class c, in the order of ctx, until ctx ends or g
+// closes, and returns the class of the room granted. A background request whose
+// promotion of ctx closes waits as a foreground one from then.
 func (g *objectStorageServer) wait(ctx context.Context, c requestClass) (requestClass, error) {
 	if err := ctx.Err(); err != nil {
 		return c, err
@@ -147,8 +230,9 @@ func (g *objectStorageServer) wait(ctx context.Context, c requestClass) (request
 		g.mu.Unlock()
 		return c, nil
 	}
-	w := &roomWaiter{class: c, granted: make(chan struct{})}
-	w.elem = g.waiting[c].PushBack(w)
+	g.seq++
+	w := &roomWaiter{class: c, order: requestOrderOf(ctx), seq: g.seq, granted: make(chan struct{})}
+	heap.Push(&g.waiting[c], w)
 	waitingGauge(c).Inc()
 	g.mu.Unlock()
 	for {
@@ -170,13 +254,13 @@ func (g *objectStorageServer) wait(ctx context.Context, c requestClass) (request
 func (g *objectStorageServer) promote(w *roomWaiter) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if w.elem == nil || w.class == foregroundRequest {
+	if w.pos < 0 || w.class == foregroundRequest {
 		return
 	}
-	g.waiting[backgroundRequest].Remove(w.elem)
+	heap.Remove(&g.waiting[backgroundRequest], w.pos)
 	waitingGauge(backgroundRequest).Dec()
 	w.class = foregroundRequest
-	w.elem = g.waiting[foregroundRequest].PushBack(w)
+	heap.Push(&g.waiting[foregroundRequest], w)
 	waitingGauge(foregroundRequest).Inc()
 	g.grantLocked()
 }
@@ -185,13 +269,12 @@ func (g *objectStorageServer) promote(w *roomWaiter) {
 func (g *objectStorageServer) abandon(w *roomWaiter, err error) (requestClass, error) {
 	g.mu.Lock()
 	c := w.class
-	if w.elem == nil {
+	if w.pos < 0 {
 		g.mu.Unlock()
 		g.done(c)
 		return c, err
 	}
-	g.waiting[c].Remove(w.elem)
-	w.elem = nil
+	heap.Remove(&g.waiting[c], w.pos)
 	waitingGauge(c).Dec()
 	g.grantLocked()
 	g.mu.Unlock()
@@ -211,11 +294,12 @@ func (g *objectStorageServer) done(c requestClass) {
 	g.mu.Unlock()
 }
 
+// grantLocked admits the first waiter of each class in order while it can run, the
+// background ones only once no foreground request waits.
 func (g *objectStorageServer) grantLocked() {
 	for _, c := range []requestClass{foregroundRequest, backgroundRequest} {
 		for g.waiting[c].Len() > 0 && g.canRunLocked(c) {
-			w := g.waiting[c].Remove(g.waiting[c].Front()).(*roomWaiter)
-			w.elem = nil
+			w := heap.Pop(&g.waiting[c]).(*roomWaiter)
 			waitingGauge(c).Dec()
 			g.startLocked(c)
 			close(w.granted)
@@ -258,6 +342,100 @@ func waitingGauge(c requestClass) prometheus.Gauge {
 		return metric.FSObjectStorageRequestsBackgroundWaiting
 	}
 	return metric.FSObjectStorageRequestsForegroundWaiting
+}
+
+// memoryBudget returns the memory budget of g: memoryLimit when set, otherwise
+// serverMemoryPercent of the memory available on the node, measured at most once a
+// serverMemoryRefresh, or serverMemoryDefault when it cannot be measured; 0 for a nil g.
+func (g *objectStorageServer) memoryBudget() int64 {
+	if g == nil {
+		return 0
+	}
+	if g.memoryLimit > 0 {
+		return g.memoryLimit
+	}
+	now := time.Now().UnixNano()
+	at := g.measuredAt.Load()
+	// One caller measures once the last measurement is stale; the others keep it meanwhile.
+	if at != 0 && (now-at < int64(serverMemoryRefresh) || !g.measuredAt.CompareAndSwap(at, now)) {
+		return g.measured.Load()
+	}
+	bytes := int64(serverMemoryDefault)
+	if avail, ok := memoryAvailable(); ok {
+		bytes = int64(min(avail/100*serverMemoryPercent, math.MaxInt64))
+	}
+	g.measured.Store(bytes)
+	g.measuredAt.Store(now)
+	return bytes
+}
+
+// takeMemory takes n bytes of the memory budget for class c when they fit now: within
+// the budget, and, for background, with the background memory within half of it. It never
+// waits.
+func (g *objectStorageServer) takeMemory(n int64, c requestClass) bool {
+	if g == nil {
+		return false
+	}
+	budget := g.memoryBudget()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.memoryFitsLocked(n, c, budget) {
+		return false
+	}
+	g.memoryUsed[c] += n
+	memoryGauge(c).Add(float64(n))
+	return true
+}
+
+// memoryFits reports whether n bytes of memory for class c fit now, as takeMemory takes
+// them.
+func (g *objectStorageServer) memoryFits(n int64, c requestClass) bool {
+	if g == nil {
+		return false
+	}
+	budget := g.memoryBudget()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.memoryFitsLocked(n, c, budget)
+}
+
+func (g *objectStorageServer) memoryFitsLocked(n int64, c requestClass, budget int64) bool {
+	if g.memoryUsed[foregroundRequest]+g.memoryUsed[backgroundRequest]+n > budget {
+		return false
+	}
+	return c == foregroundRequest || g.memoryUsed[backgroundRequest]+n <= budget/2
+}
+
+// freeMemory frees n bytes of the memory of class c.
+func (g *objectStorageServer) freeMemory(n int64, c requestClass) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.memoryUsed[c] -= n
+	memoryGauge(c).Sub(float64(n))
+}
+
+// promoteMemory moves n bytes of background memory to foreground.
+func (g *objectStorageServer) promoteMemory(n int64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.memoryUsed[backgroundRequest] -= n
+	g.memoryUsed[foregroundRequest] += n
+	memoryGauge(backgroundRequest).Sub(float64(n))
+	memoryGauge(foregroundRequest).Add(float64(n))
+}
+
+// memoryInUse returns the memory taken of each class.
+func (g *objectStorageServer) memoryInUse() [2]int64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.memoryUsed
+}
+
+func memoryGauge(c requestClass) prometheus.Gauge {
+	if c == backgroundRequest {
+		return metric.FSObjectStorageMemoryBackground
+	}
+	return metric.FSObjectStorageMemoryForeground
 }
 
 // requestRoom is the room of a request: held while the request runs and while a retry of
@@ -309,6 +487,16 @@ func (r *requestRoom) end() {
 	}
 }
 
+// acquire waits for room for a request under ctx, in the class and order of ctx, and
+// returns it held, for doHeld.
+func (g *objectStorageServer) acquire(ctx context.Context) (*requestRoom, error) {
+	c, err := g.wait(ctx, requestClassOf(ctx))
+	if err != nil {
+		return nil, err
+	}
+	return &requestRoom{g: g, class: c, held: true}, nil
+}
+
 // pauseRequest frees the room of the request ctx runs under, for a retry to wait, and
 // returns the room to resume, or nil.
 func pauseRequest(ctx context.Context) *requestRoom {
@@ -337,7 +525,7 @@ type request interface {
 }
 
 var requestTypes = []request{statRequest{}, existsRequest{}, deleteRequest{}, copyRequest{}, statIdentityRequest{},
-	listRequest{}, rangeRead{}, putRequest{}, putFileRequest{}, publishRequest{}, createMultipartRequest{},
+	listRequest{}, rangeRead{}, putRequest{}, publishRequest{}, createMultipartRequest{},
 	uploadPartRequest{}, completeMultipartRequest{}, abortMultipartRequest{}}
 
 type (
@@ -352,15 +540,10 @@ type (
 	statIdentityRequest struct{ key string }
 	// listRequest takes the next entry of l.
 	listRequest struct{ l *listing }
-	putRequest  struct {
+	// putRequest writes the size bytes of body as key.
+	putRequest struct {
 		key    string
-		data   []byte
-		expire *time.Time
-	}
-	// putFileRequest writes the size bytes of file as key.
-	putFileRequest struct {
-		key    string
-		file   *os.File
+		body   io.ReaderAt
 		size   int64
 		expire *time.Time
 	}
@@ -370,10 +553,12 @@ type (
 		key    string
 		expire *time.Time
 	}
+	// uploadPartRequest writes the size bytes of body as the part num.
 	uploadPartRequest struct {
 		key, uploadID string
 		num           int32
-		data          []byte
+		body          io.ReaderAt
+		size          int64
 	}
 	completeMultipartRequest struct {
 		key, uploadID string
@@ -390,7 +575,6 @@ func (statIdentityRequest) op() objectStorageOp      { return opStat }
 func (listRequest) op() objectStorageOp              { return opCount }
 func (rangeRead) op() objectStorageOp                { return opRead }
 func (putRequest) op() objectStorageOp               { return opWrite }
-func (putFileRequest) op() objectStorageOp           { return opWrite }
 func (publishRequest) op() objectStorageOp           { return opWrite }
 func (createMultipartRequest) op() objectStorageOp   { return opWrite }
 func (uploadPartRequest) op() objectStorageOp        { return opWrite }
@@ -407,8 +591,20 @@ type result struct {
 	id       string         // the upload of a createMultipart; the etag of an uploadPart
 }
 
-// Do waits for room for req in the class of ctx, makes req on raw, and frees the room.
+// Do waits for room for req in the class and order of ctx, makes req on raw, and frees
+// the room.
 func (g *objectStorageServer) Do(ctx context.Context, req request) (result, error) {
+	r := &requestRoom{g: g, class: requestClassOf(ctx)}
+	if q, ok := req.(listRequest); ok {
+		r = q.l.room
+	}
+	return g.doHeld(ctx, r, req)
+}
+
+// doHeld makes req on raw with the room r, waiting for it unless r holds it, and frees
+// the room once req ends.
+func (g *objectStorageServer) doHeld(ctx context.Context, r *requestRoom, req request) (result, error) {
+	defer r.end()
 	switch req.(type) {
 	case copyRequest:
 		if _, ok := g.raw.(objectStorageCopier); !ok {
@@ -419,14 +615,9 @@ func (g *objectStorageServer) Do(ctx context.Context, req request) (result, erro
 			return result{}, moerr.NewNotSupported(ctx, "object storage identity")
 		}
 	}
-	r := &requestRoom{g: g, class: requestClassOf(ctx)}
-	if q, ok := req.(listRequest); ok {
-		r = q.l.room
-	}
 	if err := r.resume(ctx); err != nil {
 		return result{}, err
 	}
-	defer r.end()
 	if op := req.op(); op < opCount {
 		g.ops[op].Inc()
 	}
@@ -451,16 +642,13 @@ func makeRequest(ctx context.Context, raw ObjectStorage, req request) (res resul
 	case rangeRead:
 		res.data, res.n, err = readRangeBody(ctx, raw, q)
 	case putRequest:
-		size := int64(len(q.data))
-		err = raw.Write(ctx, q.key, bytes.NewReader(q.data), &size, q.expire)
-	case putFileRequest:
-		err = raw.Write(ctx, q.key, io.NewSectionReader(q.file, 0, q.size), &q.size, q.expire)
+		err = raw.Write(ctx, q.key, io.NewSectionReader(q.body, 0, q.size), &q.size, q.expire)
 	case publishRequest:
 		err = raw.(*diskObjectStorage).publish(ctx, q.key, q.tempPath)
 	case createMultipartRequest:
 		res.id, err = raw.(multipartStorage).createMultipart(ctx, q.key, q.expire)
 	case uploadPartRequest:
-		res.id, err = raw.(multipartStorage).uploadPart(ctx, q.key, q.uploadID, q.num, q.data)
+		res.id, err = raw.(multipartStorage).uploadPart(ctx, q.key, q.uploadID, q.num, q.body, q.size)
 	case completeMultipartRequest:
 		err = raw.(multipartStorage).completeMultipart(ctx, q.key, q.uploadID, q.parts)
 	case abortMultipartRequest:
@@ -521,6 +709,8 @@ func readRangeBody(ctx context.Context, raw ObjectStorage, rr rangeRead) ([]byte
 		return nil, 0, err
 	}
 	rr.progress.opened()
+	activeReads.Inc()
+	defer activeReads.Dec()
 	var data []byte
 	var n int64
 	switch {
@@ -615,6 +805,9 @@ func readIntoFile(body io.Reader, rr rangeRead) (int64, error) {
 		}
 	}
 }
+
+// activeReads counts the reads whose body is open.
+var activeReads = metric.FSObjectStorageOperations.WithLabelValues("s3", "active-read")
 
 // bodyCloseError is the error closing the body of a stream's read that read its bytes.
 type bodyCloseError struct{ err error }

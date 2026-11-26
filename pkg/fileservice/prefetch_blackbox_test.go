@@ -109,7 +109,7 @@ func readColumnRange(ctx context.Context, fs *S3FS, r PrefetchRange) ([]byte, er
 func TestBlackBoxJoinedColumnReadReturnsWhileRangesWait(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	ranges := columnRanges(3, 40<<10, 1<<10)
-	fs.diskCache.prefetchFlightBytes = 2 * flightBufSize(ranges[0].Size)
+	limitRoom(t, fs.server, 2, 1)
 	first, rest := make(chan struct{}), make(chan struct{})
 	g := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return false })
 	g.gated = func(_ string, offset int64) chan struct{} {
@@ -249,7 +249,7 @@ func TestBlackBoxForegroundReadNotHeldByWaitingConnection(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	limitRoom(t, fs.server, 2, 1)
 	ranges := columnRanges(2, 40<<10, 1<<10)
-	fs.diskCache.prefetchFlightBytes = 4 * flightBufSize(ranges[0].Size)
+	fs.server.memoryLimit = 4 * flightBufSize(ranges[0].Size)
 	got, offset, err := foregroundReadOfWaitingRange(t, fs, ranges)
 	require.NoError(t, err)
 	require.Equal(t, data[offset:offset+ranges[0].Size], got)
@@ -264,7 +264,7 @@ func TestBlackBoxForegroundReadNotHeldByBufferOfWaitingRange(t *testing.T) {
 		Policy: SkipDiskCache | SkipMemoryCache}))
 	ranges := columnRanges(2, 40<<10, 1<<10)
 	limitRoom(t, fs.server, 2, 1)
-	fs.diskCache.prefetchFlightBytes = flightBufSize(ranges[0].Size)
+	fs.server.memoryLimit = flightBufSize(ranges[0].Size)
 	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
 	g := newBlackBoxStorage(fs.server.raw, func(key string, _ int64) bool { return key == otherKey })
 	fs.server.raw = g
@@ -441,11 +441,11 @@ func TestBlackBoxWholeObjectPrefetchWaitingForConnection(t *testing.T) {
 }
 
 // A memory-backed column prefetch starts no range of an object deleted while its ranges
-// wait for buffers.
+// wait for room.
 func TestBlackBoxMemoryColumnPrefetchStopsAfterDelete(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	ranges := columnRanges(6, 20<<10, 1<<10)
-	fs.diskCache.prefetchFlightBytes = 2 * flightBufSize(ranges[0].Size)
+	limitRoom(t, fs.server, 2, 1)
 	g := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return true })
 	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
@@ -513,7 +513,7 @@ func TestBlackBoxEndedPrefetchRangeFreesItsBuffer(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
 	ctx := context.Background()
 	d := fs.diskCache
-	d.prefetchFlightBytes = 2 * flightBufSize(unit)
+	d.server.memoryLimit = 2 * flightBufSize(unit)
 	key := fs.pathToKey("object")
 	g := newBlackBoxStorage(fs.server.raw, func(k string, offset int64) bool { return k == key && offset == 0 })
 	fs.server.raw = g
@@ -526,7 +526,7 @@ func TestBlackBoxEndedPrefetchRangeFreesItsBuffer(t *testing.T) {
 	require.Eventually(t, func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return len(f.m[diskPath]) == 1 && f.bytes == flightBufSize(unit)
+		return len(f.m[diskPath]) == 1 && heldMemory(d) <= flightBufSize(unit)
 	}, 5*time.Second, time.Millisecond, "the second range ended and freed its buffer while the first reads")
 
 	read := make(chan []byte, 1)
@@ -582,7 +582,7 @@ func TestBlackBoxWideRangePrefetchWaitingTakesNoGoroutinePerRange(t *testing.T) 
 		return waiting() == 0 && !fs.diskCache.fillsUnderWay("object") && runtime.NumGoroutine()-before < 32
 	}, 5*time.Second, time.Millisecond, "the delete ends every range")
 	f.mu.Lock()
-	require.Zero(t, f.bytes)
+	require.Zero(t, heldMemory(d))
 	f.mu.Unlock()
 	require.Zero(t, heldRoom(d.server), "no range took room")
 }

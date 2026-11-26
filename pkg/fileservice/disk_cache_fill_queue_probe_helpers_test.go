@@ -47,22 +47,31 @@ func probeJoined(fs *S3FS, filePath string) bool {
 	return false
 }
 
+// probeJoinedRunning reports whether a read joined a started fill of the object at
+// filePath whose prefetch object is not registered yet.
+func probeJoinedRunning(fs *S3FS, filePath string) bool {
+	f := &fs.diskCache.prefetchObjects
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, q := range f.fills[fillKey{diskPath: fs.diskCache.objectKey(filePath)}] {
+		if q.joiners > 0 && q.pos < 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func probeWaitIdle(t *testing.T, fs *S3FS) { waitFillsIdle(t, fs.diskCache) }
 
 func probeQueueLimit(fs *S3FS) int64 { return fs.diskCache.fillQueueLimit() }
 
 func probeFlightBytes(fs *S3FS) (bytes, background int64) {
-	f := &fs.diskCache.prefetchObjects
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.bytes, f.background
+	used := fs.server.memoryInUse()
+	return used[foregroundRequest] + used[backgroundRequest], used[backgroundRequest]
 }
 
 func probeUncharge(fs *S3FS, n int64) {
-	f := &fs.diskCache.prefetchObjects
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	fs.diskCache.unchargeLocked(n)
+	fs.server.freeMemory(n, foregroundRequest)
 }
 
 func probeUnderWay(fs *S3FS, filePath string) bool { return fs.diskCache.fillsUnderWay(filePath) }

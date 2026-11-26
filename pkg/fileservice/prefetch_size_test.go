@@ -280,7 +280,7 @@ func TestS3FSExactReadLeavesQueuedColumns(t *testing.T) {
 // and those reads do not wait for the prefetch itself.
 func TestS3FSPrefetchPastFlightBytesFinishes(t *testing.T) {
 	fs, storage, _ := newPrefetchRangeFS(t, 256<<10, 300<<10)
-	fs.diskCache.prefetchFlightBytes = 1
+	fs.server.memoryLimit = 1
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{
 		FilePath: "object", Size: 30, Due: 1 << 62,
 		Ranges: []PrefetchRange{{Offset: 100, Size: 10}, {Offset: 200 << 10, Size: 20}},
@@ -308,30 +308,25 @@ func TestS3FSColumnPrefetchFailureCountsFailed(t *testing.T) {
 	require.False(t, cached)
 }
 
-// A column prefetch past the background share of the flight budget waits, as a queued
-// fill holding nothing, for the flights under way to end, then reads its ranges as
-// flights; it reads nothing meanwhile.
-func TestS3FSColumnPrefetchWaitsForFlightBytes(t *testing.T) {
+// A column prefetch past the background share of the memory budget runs file-backed at
+// once, never waiting for memory, and caches its range.
+func TestS3FSColumnPrefetchPastMemoryRunsFileBacked(t *testing.T) {
 	fs, storage, _ := newPrefetchRangeFS(t, 256<<10, 300<<10)
-	fs.diskCache.prefetchFlightBytes = 2 * flightBufSize(10)
+	fs.server.memoryLimit = 2 * flightBufSize(10)
 	held := &heldStorage{ObjectStorage: fs.server.raw, read: make(chan struct{}), released: make(chan struct{})}
 	fs.server.raw = held
 	ctx := context.Background()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 10, Ranges: []PrefetchRange{{Offset: 100, Size: 10}}}))
 	<-held.read
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 20, Ranges: []PrefetchRange{{Offset: 200 << 10, Size: 20}}}))
-	require.True(t, fs.diskCache.isQueued("object"), "the second prefetch waits for room")
-	require.Equal(t, int64(1), storage.reads.Load())
-	f := &fs.diskCache.prefetchObjects
-	f.mu.Lock()
-	require.Equal(t, flightBufSize(10), f.bytes, "the waiting fill holds no buffer")
-	f.mu.Unlock()
-
+	require.Eventually(t, func() bool {
+		_, cached := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), 200<<10, 20)
+		return cached
+	}, 10*time.Second, time.Millisecond, "the second prefetch runs while the first holds the background memory")
+	require.Equal(t, int64(2), storage.reads.Load())
+	require.Equal(t, flightBufSize(10), heldMemory(fs.diskCache), "the second prefetch took no memory")
 	close(held.released)
 	waitFillsEnd(fs.diskCache, "object")
-	require.Equal(t, int64(2), storage.reads.Load())
-	_, cached := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), 200<<10, 20)
-	require.True(t, cached)
 }
 
 // A column read the disk cache holds returns from it while a download of other columns of

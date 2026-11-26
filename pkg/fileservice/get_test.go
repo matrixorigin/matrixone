@@ -75,7 +75,7 @@ func TestBackupObjectStorageUsesDedicatedConnectionPool(t *testing.T) {
 	setBackupConnectionPool(&args)
 
 	assert.Equal(t, maxConnsPerHost, args.MaxConnsPerHost)
-	assert.NotEqual(t, httpRoundTripper, newHTTPClient(args).Transport)
+	assert.NotEqual(t, newHTTPClient(ObjectStorageArguments{}).Transport, newHTTPClient(args).Transport)
 
 	args.MaxConnsPerHost = 7
 	setBackupConnectionPool(&args)

@@ -15,7 +15,6 @@
 package fileservice
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -329,7 +328,7 @@ func (a *QCloudSDK) Write(
 	defer wrapSizeMismatchErr(&err)
 
 	if sizeHint != nil && *sizeHint < smallObjectThreshold {
-		data, err := io.ReadAll(r)
+		body, size, err := bodyOf(r)
 		if err != nil {
 			return err
 		}
@@ -337,7 +336,7 @@ func (a *QCloudSDK) Write(
 			return 0, a.putObject(
 				ctx,
 				key,
-				bytes.NewReader(data),
+				io.NewSectionReader(body, 0, size),
 				sizeHint,
 				expire,
 			)
@@ -517,16 +516,16 @@ func (a *QCloudSDK) createMultipart(ctx context.Context, key string, expire *tim
 	return output.UploadID, nil
 }
 
-func (a *QCloudSDK) uploadPart(ctx context.Context, key, uploadID string, num int32, data []byte) (string, error) {
-	uploadOpt := &cos.ObjectUploadPartOptions{ContentLength: int64(len(data))}
+func (a *QCloudSDK) uploadPart(ctx context.Context, key, uploadID string, num int32, body io.ReaderAt, size int64) (string, error) {
+	uploadOpt := &cos.ObjectUploadPartOptions{ContentLength: size}
 	resp, err := DoWithRetryContext(ctx, "cos upload part", func() (*cos.Response, error) {
 		recordS3PutRequest(ctx, a.perfCounterSets...)
-		return a.client.Object.UploadPart(ctx, key, uploadID, int(num), bytes.NewReader(data), uploadOpt)
+		return a.client.Object.UploadPart(ctx, key, uploadID, int(num), io.NewSectionReader(body, 0, size), uploadOpt)
 	}, maxRetryAttemps, IsRetryableError)
 	if err != nil {
 		return "", err
 	}
-	recordS3AcceptedBytes(ctx, int64(len(data)), a.perfCounterSets...)
+	recordS3AcceptedBytes(ctx, size, a.perfCounterSets...)
 	if resp != nil && resp.Header != nil {
 		return resp.Header.Get("ETag"), nil
 	}

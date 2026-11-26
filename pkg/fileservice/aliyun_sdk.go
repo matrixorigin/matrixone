@@ -15,7 +15,7 @@
 package fileservice
 
 import (
-	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -94,9 +94,9 @@ func NewAliyunSDK(
 			int64(readWriteTimeout/time.Second),
 		),
 		oss.MaxConns(
-			maxIdleConns,
-			maxIdleConnsPerHost,
-			maxConnsPerHost,
+			cmp.Or(args.MaxConnsPerHost, maxConnsPerHost),
+			cmp.Or(args.MaxConnsPerHost, maxConnsPerHost),
+			cmp.Or(args.MaxConnsPerHost, maxConnsPerHost),
 		),
 	}
 	if args.Region != "" {
@@ -322,7 +322,7 @@ func (a *AliyunSDK) Write(
 	defer wrapSizeMismatchErr(&err)
 
 	if sizeHint != nil && *sizeHint <= smallObjectThreshold {
-		data, err := io.ReadAll(r)
+		body, size, err := bodyOf(r)
 		if err != nil {
 			return err
 		}
@@ -330,7 +330,7 @@ func (a *AliyunSDK) Write(
 			return 0, a.putObject(
 				ctx,
 				key,
-				bytes.NewReader(data),
+				io.NewSectionReader(body, 0, size),
 				sizeHint,
 				expire,
 			)
@@ -363,15 +363,15 @@ func (a *AliyunSDK) createMultipart(ctx context.Context, key string, expire *tim
 	return result.UploadID, err
 }
 
-func (a *AliyunSDK) uploadPart(ctx context.Context, key, uploadID string, num int32, data []byte) (string, error) {
+func (a *AliyunSDK) uploadPart(ctx context.Context, key, uploadID string, num int32, body io.ReaderAt, size int64) (string, error) {
 	part, err := DoWithRetryContext(ctx, "upload part", func() (oss.UploadPart, error) {
 		recordS3PutRequest(ctx, a.perfCounterSets...)
-		return a.bucket.UploadPart(a.multipart(key, uploadID), bytes.NewReader(data), int64(len(data)), int(num), oss.WithContext(ctx))
+		return a.bucket.UploadPart(a.multipart(key, uploadID), io.NewSectionReader(body, 0, size), size, int(num), oss.WithContext(ctx))
 	}, maxRetryAttemps, IsRetryableError)
 	if err != nil {
 		return "", err
 	}
-	recordS3AcceptedBytes(ctx, int64(len(data)), a.perfCounterSets...)
+	recordS3AcceptedBytes(ctx, size, a.perfCounterSets...)
 	return part.ETag, nil
 }
 

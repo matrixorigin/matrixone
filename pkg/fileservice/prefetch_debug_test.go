@@ -51,7 +51,7 @@ func TestDebugPrefetchObjectsListsWaitingObjects(t *testing.T) {
 	}
 	objectPath := fs.diskCache.objectKey("object")
 	require.Eventually(t, func() bool {
-		return strings.Contains(page(), "memory "+objectPath+" [0, 1024) registered")
+		return strings.Contains(page(), "memory "+objectPath+" [0, 1024) waiting for room")
 	}, 5*time.Second, time.Millisecond, "the waiting object is listed")
 	require.Eventually(t, func() bool {
 		return strings.Contains(page(), fmt.Sprintf("background running %d of %d waiting 1", fs.server.backgroundMax, fs.server.backgroundMax))

@@ -91,10 +91,6 @@ type DiskCache struct {
 	hooks diskCacheHooks
 	// deletes counts the deletes of objects; see objectDeletes.
 	deletes objectDeletes
-	// prefetchFlightBytes, when set, is the most bytes of prefetch range runs under way,
-	// instead of flightBudget.
-	prefetchFlightBytes int64
-	flightBudget        flightBudget
 }
 
 // diskCacheHooks are test-only phase barriers; production instances leave them nil.

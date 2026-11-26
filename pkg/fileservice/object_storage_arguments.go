@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"go.uber.org/zap"
 )
 
@@ -33,14 +34,18 @@ type ObjectStorageArguments struct {
 	// Set only by the SQL acquisition owner, never parsed from provider options.
 	callerCredentialsOnly bool
 	// misc
-	Name                 string       `toml:"name"`
-	KeyPrefix            string       `toml:"key-prefix"`
-	SharedConfigProfile  string       `toml:"shared-config-profile"`
-	NoDefaultCredentials bool         `toml:"no-default-credentials"`
-	NoBucketValidation   bool         `toml:"no-bucket-validation"`
-	Concurrency          int64        `toml:"concurrency"`
-	MaxConnsPerHost      int          `toml:"max-conns-per-host"`
-	ParallelMode         ParallelMode `toml:"parallel-mode"`
+	Name                 string `toml:"name"`
+	KeyPrefix            string `toml:"key-prefix"`
+	SharedConfigProfile  string `toml:"shared-config-profile"`
+	NoDefaultCredentials bool   `toml:"no-default-credentials"`
+	NoBucketValidation   bool   `toml:"no-bucket-validation"`
+	Concurrency          int64  `toml:"concurrency"`
+	MaxConnsPerHost      int    `toml:"max-conns-per-host"`
+	// ObjectStorageMemory is the memory budget of the object storage server of the file
+	// service; 0 for 5% of the memory available on the node, measured about every second,
+	// or 256 MiB when it cannot be measured.
+	ObjectStorageMemory toml.ByteSize `json:",string" toml:"object-storage-memory"`
+	ParallelMode        ParallelMode  `toml:"parallel-mode"`
 
 	// s3
 	Bucket    string   `toml:"bucket"`
@@ -117,6 +122,12 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 				return moerr.NewInvalidInputNoCtxf("invalid S3 option: %s", key)
 			}
 			o.MaxConnsPerHost = n
+		case "object-storage-memory":
+			var n toml.ByteSize
+			if err := n.UnmarshalText([]byte(value)); err != nil {
+				return moerr.NewInvalidInputNoCtxf("invalid S3 option: %s", key)
+			}
+			o.ObjectStorageMemory = n
 		case "parallel-mode", "parallel":
 			mode, ok := parseParallelMode(value)
 			if !ok {

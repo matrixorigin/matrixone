@@ -37,7 +37,7 @@ func TestPrefetchBufferReleasedBeforeDecode(t *testing.T) {
 			fs, _, data := newPrefetchRangeFS(t, 0, 64<<10)
 			d := fs.diskCache
 			<-d.load.done
-			d.prefetchFlightBytes = 2 * budget
+			d.server.memoryLimit = 2 * budget
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			require.NoError(t, fs.Write(ctx, IOVector{FilePath: "bystander", Policy: SkipAllCache,
@@ -122,8 +122,8 @@ func TestPrefetchBufferReleasedBeforeDecode(t *testing.T) {
 				f.mu.Lock()
 				defer f.mu.Unlock()
 				for o := range f.waiting {
-					if target := o.target(); target.filePath == "bystander" && target.state == objectWaitingBuffer {
-						charged = f.bytes
+					if target := o.target(); target.filePath == "bystander" && target.state == objectWaitingRoom {
+						charged = heldMemory(d)
 						return true
 					}
 				}

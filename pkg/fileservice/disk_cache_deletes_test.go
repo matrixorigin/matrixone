@@ -187,35 +187,18 @@ func TestPrefetchRangeSkipsDiskCacheReads(t *testing.T) {
 	require.Equal(t, int64(2), storage.reads.Load(), "read from object storage")
 }
 
-// Past the bytes of the prefetch range runs under way, a read reads only its entries;
-// A read whose prefetch range runs would pass the bytes of the runs under way waits for
-// them to end, then reads its prefetch range.
+// A read whose prefetch range run does not fit the memory budget reads its prefetch range
+// at once through a file fill, never waiting for memory.
 func TestPrefetchRangeRunsAreBounded(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	// A run's buffer is at least 64 KiB, the bytes it counts for.
-	fs.diskCache.prefetchFlightBytes = 64 << 10
-	f := &fs.diskCache.prefetchObjects
-	f.mu.Lock()
-	f.bytes = 1
-	f.mu.Unlock()
-	got := make(chan []byte, 1)
-	go func() { got <- readRangeOf(t, fs, 0, 5000, 2) }()
-	require.Eventually(t, func() bool {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		return f.freed.ch != nil
-	}, 10*time.Second, time.Millisecond, "the read waits for room")
-	require.Zero(t, storage.bytes.Load())
-
-	f.mu.Lock()
-	f.bytes = 0
-	f.freed.notifyLocked()
-	f.mu.Unlock()
-	require.Equal(t, data[5000:5002], <-got)
+	fs.server.memoryLimit = 64 << 10
+	require.True(t, fs.server.takeMemory(1, foregroundRequest))
+	require.Equal(t, data[5000:5002], readRangeOf(t, fs, 0, 5000, 2))
 	require.Equal(t, int64(4096), storage.bytes.Load(), "the prefetch range")
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	require.Zero(t, f.bytes)
+	fs.diskCache.prefetchObjects.reads.Wait()
+	require.Equal(t, int64(1), heldMemory(fs.diskCache), "the run took no memory")
+	fs.server.freeMemory(1, foregroundRequest)
 }
 
 // A probe of a few columns reads exactly their entries, never the whole object, even when

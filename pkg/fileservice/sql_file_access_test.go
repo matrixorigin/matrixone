@@ -133,8 +133,7 @@ func TestSQLFileCredentialsDoNotDiscoverServerIdentity(t *testing.T) {
 	t.Setenv("AWS_CONFIG_FILE", invalidConfig)
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", invalidConfig)
 	t.Setenv("AWS_PROFILE", "owned-missing-profile")
-	old := httpRoundTripper
-	t.Cleanup(func() { httpRoundTripper = old })
+	useTestTransport(t)
 	calls := 0
 	anonymous := false
 	httpRoundTripper = sqlCredentialTransport(func(r *http.Request) (*http.Response, error) {
@@ -178,8 +177,7 @@ func TestSQLFileS3UsesEnvironmentRegionWhenNotSpecified(t *testing.T) {
 	t.Setenv("AWS_DEFAULT_REGION", "us-west-1")
 	t.Setenv("AWS_ACCESS_KEY_ID", "ambient-key")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "ambient-secret")
-	old := httpRoundTripper
-	t.Cleanup(func() { httpRoundTripper = old })
+	useTestTransport(t)
 	calls := 0
 	httpRoundTripper = sqlCredentialTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
@@ -218,8 +216,7 @@ func TestExplicitAWSConfigRegionFallback(t *testing.T) {
 }
 
 func TestSQLFileRoleFailureCannotFallBack(t *testing.T) {
-	old := httpRoundTripper
-	t.Cleanup(func() { httpRoundTripper = old })
+	useTestTransport(t)
 	posts, objects := 0, 0
 	httpRoundTripper = sqlCredentialTransport(func(r *http.Request) (*http.Response, error) {
 		if r.Method == http.MethodPost {
@@ -245,8 +242,7 @@ func TestSQLFileRoleFailureCannotFallBack(t *testing.T) {
 }
 
 func TestSQLFileRoleAcquisitionHonorsCancellation(t *testing.T) {
-	old := httpRoundTripper
-	t.Cleanup(func() { httpRoundTripper = old })
+	useTestTransport(t)
 	for _, extra := range []string{"", ",is-minio=true"} {
 		ctx, cancel := context.WithCancel(WithSQLFileAccess(t.Context(), "tenant", "public"))
 		t.Cleanup(cancel)
@@ -280,8 +276,7 @@ func TestSQLFileRoleUsesExplicitUpstreamOnRefresh(t *testing.T) {
 	require.NoError(t, os.WriteFile(invalid, []byte("[invalid"), 0600))
 	t.Setenv("AWS_CONFIG_FILE", invalid)
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", invalid)
-	old := httpRoundTripper
-	t.Cleanup(func() { httpRoundTripper = old })
+	useTestTransport(t)
 	posts, objects := 0, 0
 	httpRoundTripper = sqlCredentialTransport(func(r *http.Request) (*http.Response, error) {
 		body := ""
@@ -343,4 +338,16 @@ func TestSQLBackupFactoryOwnsAdmission(t *testing.T) {
 	require.NoError(t, err)
 	defer backup.Close(admin)
 	require.IsType(t, &diskObjectStorage{}, backup.(*S3FS).rawStorage)
+}
+
+// httpRoundTripper is the transport newHTTPClient gives every client while
+// useTestTransport is in effect.
+var httpRoundTripper http.RoundTripper
+
+// useTestTransport makes newHTTPClient give every client httpRoundTripper until the test
+// ends.
+func useTestTransport(t *testing.T) {
+	old, oldTransport := newHTTPTransport, httpRoundTripper
+	newHTTPTransport = func(int) http.RoundTripper { return httpRoundTripper }
+	t.Cleanup(func() { newHTTPTransport, httpRoundTripper = old, oldTransport })
 }

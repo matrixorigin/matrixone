@@ -79,7 +79,7 @@ func TestJoinedColumnReadReleasesBufferOnDecoderPanic(t *testing.T) {
 			fs.diskCache.prefetchObjects.reads.Wait()
 			flights := &fs.diskCache.prefetchObjects
 			flights.mu.Lock()
-			charged := flights.bytes
+			charged := heldMemory(fs.diskCache)
 			flights.mu.Unlock()
 			require.Zero(t, charged, "a finished prefetch must return its buffer charge after the reading decoder exits")
 		})

@@ -77,7 +77,7 @@ func (d *DiskCache) writePrefetchObjects(w io.Writer) {
 			rows = append(rows, r)
 		}
 	}
-	bytes, queued := f.bytes, f.queuedBytes
+	queued := f.queuedBytes
 	f.mu.Unlock()
 
 	now := time.Now()
@@ -102,8 +102,10 @@ func (d *DiskCache) writePrefetchObjects(w io.Writer) {
 	for _, l := range lines {
 		fmt.Fprintln(w, l)
 	}
-	fmt.Fprintf(w, "  buffer bytes %d of %d, queued background fill bytes %d of %d\n", bytes, d.flightBytes(), queued, d.fillQueueLimit())
+	fmt.Fprintf(w, "  queued background fill bytes %d of %d\n", queued, d.fillQueueLimit())
 	if g := d.server; g != nil {
+		used := g.memoryInUse()
+		fmt.Fprintf(w, "  memory foreground %d background %d of %d\n", used[foregroundRequest], used[backgroundRequest], g.memoryBudget())
 		running, waiting := g.counts()
 		fmt.Fprintf(w, "  requests of %d: foreground running %d waiting %d, background running %d of %d waiting %d\n",
 			g.capacity, running[foregroundRequest], waiting[foregroundRequest],

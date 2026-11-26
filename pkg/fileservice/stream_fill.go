@@ -21,11 +21,14 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"time"
+
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 // streamDownload reads a range of an object in one request on its own goroutine: into a
-// buffer when its size is known and fits the stream memory of the disk cache, otherwise
-// into an unlinked temporary file. Its reader reads the bytes as they arrive.
+// buffer when its size is known and its buffer fits the memory of the server when it
+// opens, otherwise into an unlinked temporary file. Its reader reads the bytes as they arrive.
 type streamDownload struct {
 	cancel context.CancelFunc
 	// done is closed once the request ends.
@@ -49,9 +52,11 @@ type streamDownload struct {
 // openStream starts the read rr, which sets neither buf nor file, under ctx and returns
 // the reader of its bytes once its request is open, or the error that ended it before.
 func (s *S3FS) openStream(ctx context.Context, rr rangeRead) (*streamReader, error) {
+	t0 := time.Now()
+	defer func() { metric.FSReadDurationGetReader.Observe(time.Since(t0).Seconds()) }()
 	f := &streamDownload{arrived: make(chan struct{}), done: make(chan struct{}), free: func() {}}
 	if rr.end >= 0 {
-		if buf, free := s.streamBuffer(rr.end - rr.start); buf != nil {
+		if buf, free := s.streamBuffer(ctx, rr.end-rr.start); buf != nil {
 			f.buf, f.free = buf, free
 		}
 	}
@@ -85,29 +90,22 @@ func (s *S3FS) openStream(ctx context.Context, rr rangeRead) (*streamReader, err
 	return r, nil
 }
 
-// streamBuffer returns a buffer of size bytes charged to the stream memory of the disk
-// cache, and the function freeing it, or nil when there is no disk cache or it does not
-// fit. The stream memory is at most the memory limit and is apart from the flight budget.
-func (s *S3FS) streamBuffer(size int64) ([]byte, func()) {
-	d := s.diskCache
-	if d == nil || size > d.memoryPrefetchMax {
+// streamBuffer returns a buffer of size bytes taken of the memory of the server, for a
+// stream under ctx, and the function freeing it, or nil when size is past the memory limit
+// of the disk cache or the buffer does not fit the memory now.
+func (s *S3FS) streamBuffer(ctx context.Context, size int64) ([]byte, func()) {
+	limit := int64(DefaultDiskPrefetchMemoryMax)
+	if s.diskCache != nil {
+		limit = s.diskCache.memoryPrefetchMax
+	}
+	charge, c := flightBufSize(size), requestClassOf(ctx)
+	if size > limit || !s.server.takeMemory(charge, c) {
 		return nil, nil
 	}
-	f := &d.prefetchObjects
-	charge := flightBufSize(size)
-	f.mu.Lock()
-	if f.streamBytes+charge > d.memoryPrefetchMax {
-		f.mu.Unlock()
-		return nil, nil
-	}
-	f.streamBytes += charge
-	f.mu.Unlock()
 	buf := getFlightBuf(size)
 	return buf, func() {
 		putFlightBuf(buf)
-		f.mu.Lock()
-		f.streamBytes -= charge
-		f.mu.Unlock()
+		s.server.freeMemory(charge, c)
 	}
 }
 

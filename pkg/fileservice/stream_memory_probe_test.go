@@ -38,13 +38,13 @@ func openProbeStreams(t *testing.T, fs *S3FS, n int, size int64) []io.ReadCloser
 	return streams
 }
 
-// A caller that keeps open streams whose buffers fill the flight budget and then reads a
+// A caller that keeps open streams whose buffers fill the memory budget and then reads a
 // column range whose flight needs a buffer gets its bytes promptly. Control: the same read
 // with no stream open returns, and the streams read their bytes.
 func TestStreamProbeOpenStreamsDoNotBlockFlights(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	const size = 1 << 10
-	fs.diskCache.prefetchFlightBytes = 2 * flightBufSize(size)
+	fs.server.memoryLimit = 2 * flightBufSize(size)
 
 	control := PrefetchRange{Offset: 200 << 10, Size: size}
 	got, err := probeRead(fs, control)
@@ -71,22 +71,17 @@ func TestStreamProbeOpenStreamsDoNotBlockFlights(t *testing.T) {
 	}
 }
 
-func probeStreamBytes(fs *S3FS) int64 {
-	f := &fs.diskCache.prefetchObjects
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.streamBytes
-}
+func probeStreamBytes(fs *S3FS) int64 { return heldMemory(fs.diskCache) }
 
-// Streams take buffers only while their bytes fit the stream bound; the others read into
-// their temporary files, every stream reads its bytes, and no stream charges the flight
-// budget. Control: once they are closed, a stream takes a buffer again.
+// Streams take buffers only while their bytes fit the memory budget when they open; the
+// others read into their temporary files, and every stream reads its bytes. Control: once
+// they are closed, a stream takes a buffer again.
 func TestStreamProbeStreamBytesWithinBound(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	const size = 1 << 10
 	buf := flightBufSize(size)
 	bound := 2 * buf
-	fs.diskCache.memoryPrefetchMax = bound
+	fs.server.memoryLimit = bound
 
 	streams := openProbeStreams(t, fs, 6, size)
 	require.Equal(t, bound, probeStreamBytes(fs), "the streams that fit take buffers")
@@ -97,8 +92,6 @@ func TestStreamProbeStreamBytesWithinBound(t *testing.T) {
 		}
 	}
 	require.Equal(t, 2, memory)
-	flight, _ := probeFlightBytes(fs)
-	require.Zero(t, flight, "streams charge no flight memory")
 	for i, s := range streams {
 		b, err := io.ReadAll(s)
 		require.NoError(t, err)
