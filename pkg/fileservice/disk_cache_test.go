@@ -1242,3 +1242,25 @@ func (*countingDataCache) Flush(context.Context) {}
 func (*countingDataCache) Evict(context.Context, chan int64) {}
 
 func (*countingDataCache) EvictToTargetWithWait(context.Context, int64) int64 { return 0 }
+
+func TestIsWholeObjectCachedOnlyCountsFullFiles(t *testing.T) {
+	ctx := t.Context()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { cache.Close(ctx) })
+
+	const path = "test-object"
+	fs := &S3FS{diskCache: cache}
+	require.False(t, IsWholeObjectCached(fs, path))
+	require.NoError(t, cache.Update(ctx, &IOVector{FilePath: path, Entries: []IOEntry{
+		{Offset: 0, Size: 1, Data: []byte("a")},
+	}}, false))
+	require.False(t, IsWholeObjectCached(fs, path), "a cached range is insufficient")
+
+	require.NoError(t, cache.SetFile(ctx, path, func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewBufferString("abc")), nil
+	}))
+	require.True(t, IsWholeObjectCached(fs, path))
+	require.NoError(t, cache.removeOnePath(ctx, path))
+	require.False(t, IsWholeObjectCached(fs, path))
+}

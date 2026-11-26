@@ -25,6 +25,8 @@ import (
 )
 
 var methodVersions = map[pb.CmdMethod]int64{
+	// Optional cache hint; old peers may reject the command.
+	pb.CmdMethod_CountCachedObjectFiles:   defines.MORPCMinVersion,
 	pb.CmdMethod_ShowProcessList:          defines.MORPCVersion1,
 	pb.CmdMethod_AlterAccount:             defines.MORPCVersion1,
 	pb.CmdMethod_KillConn:                 defines.MORPCVersion1,

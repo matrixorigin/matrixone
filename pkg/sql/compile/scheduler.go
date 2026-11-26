@@ -462,13 +462,21 @@ func (c *Compile) evaluateQueryPlacement(
 	ctx context.Context,
 	mode queryCandidateMode,
 ) (schedule.QueryDecision, string, error) {
+	return c.evaluateQueryPlacementForExecType(ctx, mode, c.execType)
+}
+
+func (c *Compile) evaluateQueryPlacementForExecType(
+	ctx context.Context,
+	mode queryCandidateMode,
+	execType plan2.ExecType,
+) (schedule.QueryDecision, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	currentCN := c.currentCNWorker()
 	intent := c.effectiveQuerySchedulingIntent()
 	req := schedule.QueryRequest{
-		ExecKind:        toScheduleExecKind(c.execType),
+		ExecKind:        toScheduleExecKind(execType),
 		CurrentCN:       currentCN,
 		CurrentCNPolicy: intent.CurrentCNPolicy,
 		Intent:          intent,
@@ -476,7 +484,7 @@ func (c *Compile) evaluateQueryPlacement(
 	if schedule.ValidateSchedulingIntent(intent) != "" {
 		return schedule.DecideQueryPlacement(req), "", nil
 	}
-	if c.execType != plan2.ExecTypeAP_MULTICN {
+	if execType != plan2.ExecTypeAP_MULTICN {
 		req.CandidateResolution = schedule.CandidateResolution{
 			DiscoverySource: schedule.CandidateSourceNotRequired,
 			PoolResolution:  schedule.PoolResolutionNotRequired,

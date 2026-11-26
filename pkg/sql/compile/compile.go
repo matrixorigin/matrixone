@@ -1334,7 +1334,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileShuffleGroup(node, ss, nodes)
 		} else {
+			remoteScalarCount := len(ss) == 1 && ss[0].HasPartialResults &&
+				isSingleStarCountNoFilterNoGroupBy(childNode) && !sameExecutionAddr(ss[0].NodeInfo.Addr, c.addr)
 			ss = c.compileGroupWithoutShuffle(node, ss, nodes, distinctRequiresSingleStage)
+			if remoteScalarCount {
+				// Final projection and statement output remain on the coordinator.
+				ss = []*Scope{c.newMergeScope(ss)}
+			}
 		}
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 		return ss, nil
