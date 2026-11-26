@@ -2410,9 +2410,9 @@ func constructChangeHandle(
 		return
 	}
 	tables.zeroHistoryBaseStarts = baseRange.zeroHistoryStarts
-	if tables.lcaHasZeroHistory && tables.lcaRel != nil &&
-		tarRange.firstCommitted.tableID != 0 && baseRange.firstCommitted.tableID != 0 &&
-		tarRange.firstCommitted.snapshot.EQ(&tables.lcaCTS) && baseRange.firstCommitted.snapshot.EQ(&tables.lcaCTS) {
+	if tarRange.firstCommitted.tableID != 0 && baseRange.firstCommitted.tableID != 0 &&
+		tarRange.firstCommitted.snapshot.EQ(&baseRange.firstCommitted.snapshot) &&
+		(!tables.lcaHasZeroHistory || tables.lcaRel != nil && tarRange.firstCommitted.snapshot.EQ(&tables.lcaCTS)) {
 		tables.pickOrigin = &dataBranchPickOrigin{
 			source: tarRange.firstCommitted, destination: baseRange.firstCommitted,
 		}
@@ -2705,7 +2705,7 @@ func constructChangeHandle(
 						tables.baseRel.GetTableID(ctx),
 				}
 			} else if baseRange.rel[i].GetTableID(ctx) == tables.baseRel.GetTableID(ctx) {
-				handle = &currentBaseChangesHandle{inner: handle, tblStuff: tables}
+				handle = &currentBaseChangesHandle{inner: handle, tblStuff: *tables}
 			}
 			if i < len(baseRange.forkBefore) && baseRange.forkBefore[i] != nil {
 				for _, fork := range branchInfo.baseForks {
@@ -3704,12 +3704,13 @@ func buildSideCollectRange(
 		}
 
 		// Window lower bound.
-		if tables.boundedPick && tables.lcaHasZeroHistory && hasZeroHistory && nodeCTS.LE(&windowEnd) {
+		if tables.boundedPick && nodeCTS.LE(&windowEnd) &&
+			(logicalFork(i) || tables.lcaHasZeroHistory && hasZeroHistory) {
 			image := dataBranchPickWindowStart{tableID: nodeID, snapshot: nodeCTS, identity: segIdent}
 			if cr.firstCommitted.tableID == 0 {
 				cr.firstCommitted = image
 			}
-			if nodeID != endpointID {
+			if tables.lcaHasZeroHistory && hasZeroHistory && nodeID != endpointID {
 				cr.zeroHistoryStarts = append(cr.zeroHistoryStarts, image)
 			}
 		}

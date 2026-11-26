@@ -1519,7 +1519,7 @@ func hashDiffIfHasLCA(
 					return false, err
 				}
 				defer keys.Free(ses.proc.Mp())
-				if stop, err := forkHistory.emitMissingConflicts(ctx, ses, bh, tblStuff, wrapped.batch, keys, false, write); err != nil || stop {
+				if stop, err := forkHistory.emitMissingConflicts(ctx, ses, bh, tblStuff, wrapped.batch, keys, write); err != nil || stop {
 					return stop, err
 				}
 			}
@@ -1926,6 +1926,13 @@ func hashDiffIfHasLCA(
 		return
 	}
 
+	if copt.preservePickConflicts && tblStuff.pickOrigin != nil && !tblStuff.lcaHasZeroHistory {
+		if baseUpdateBatches, baseDeleteBatches, err = discardSharedForkChanges(ctx, ses, bh, tblStuff,
+			baseUpdateBatches, baseDeleteBatches); err != nil {
+			return err
+		}
+	}
+
 	// phase2: handle tar dels and updates on lca
 	if err = stepHandler(false); err != nil {
 		return
@@ -2069,7 +2076,7 @@ func reconcilePickWindowDestinationInsert(
 			}
 		}
 		if protectForks && missingKeys.Length() != 0 {
-			if stop, err := forkHistory.emitMissingConflicts(ctx, ses, bh, tables, src.batch, missingKeys, true, emit); err != nil || stop {
+			if stop, err := forkHistory.emitMissingConflicts(ctx, ses, bh, tables, src.batch, missingKeys, emit); err != nil || stop {
 				return stop, err
 			}
 		}
@@ -2117,12 +2124,6 @@ func reconcilePickWindowDestinationInsert(
 				conflicting = append(conflicting, int64(i))
 			}
 		}
-		if tables.pickOrigin != nil && len(conflicting) != 0 {
-			conflicting, err = excludeInheritedPickRows(ctx, ses, bh, tables, matches, conflicting)
-			if err != nil {
-				return false, err
-			}
-		}
 	} else if src.fromUpdate {
 		for i, srcRow := range srcRows {
 			cmp, err := compareRowInWrappedBatches(ctx, ses, tables, int(srcRow), i, true,
@@ -2160,6 +2161,12 @@ func reconcilePickWindowDestinationInsert(
 				conflicting = append(conflicting, int64(i))
 			}
 			forkRow++
+		}
+	}
+	if tables.pickOrigin != nil && len(conflicting) != 0 {
+		conflicting, err = excludeInheritedPickRows(ctx, ses, bh, tables, matches, conflicting)
+		if err != nil {
+			return false, err
 		}
 	}
 	if len(conflicting) == 0 {
@@ -2307,6 +2314,85 @@ func excludeInheritedPickRows(
 		_, found := slices.BinarySearch(inherited, row)
 		return found
 	}), nil
+}
+
+// A comparison against the committed parent can produce an UPDATE for a
+// value both branches inherited from the parent's workspace. Remove the
+// synthetic UPDATE pair while retaining real changes to the destination.
+func discardSharedForkChanges(
+	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
+	updates, deletes []batchWithKind,
+) ([]batchWithKind, []batchWithKind, error) {
+	inherited := make(map[string]struct{})
+	mp := ses.proc.Mp()
+	keptUpdates := updates[:0]
+	for _, update := range updates {
+		if !update.fromUpdate {
+			keptUpdates = append(keptUpdates, update)
+			continue
+		}
+		rows := make([]int64, update.batch.RowCount())
+		for i := range rows {
+			rows[i] = int64(i)
+		}
+		keep, err := excludeInheritedPickRows(ctx, ses, bh, tables, update.batch, rows)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(keep) == len(rows) {
+			keptUpdates = append(keptUpdates, update)
+			continue
+		}
+		for i := range rows {
+			if _, kept := slices.BinarySearch(keep, int64(i)); kept {
+				continue
+			}
+			key, err := extractPKAsString(ses, tables, update.batch, i)
+			if err != nil {
+				return nil, nil, err
+			}
+			inherited[key] = struct{}{}
+		}
+		if len(keep) == 0 {
+			tables.retPool.releaseRetBatch(update.batch, false)
+			continue
+		}
+		if err := update.batch.Shrink(keep, false, mp); err != nil {
+			return nil, nil, err
+		}
+		keptUpdates = append(keptUpdates, update)
+	}
+	if len(inherited) == 0 {
+		return keptUpdates, deletes, nil
+	}
+	keptDeletes := deletes[:0]
+	for _, deletion := range deletes {
+		if !deletion.fromUpdate {
+			keptDeletes = append(keptDeletes, deletion)
+			continue
+		}
+		var keep []int64
+		for i := range deletion.batch.RowCount() {
+			key, err := extractPKAsString(ses, tables, deletion.batch, i)
+			if err != nil {
+				return nil, nil, err
+			}
+			if _, shared := inherited[key]; !shared {
+				keep = append(keep, int64(i))
+			}
+		}
+		if len(keep) == 0 {
+			tables.retPool.releaseRetBatch(deletion.batch, false)
+			continue
+		}
+		if len(keep) != deletion.batch.RowCount() {
+			if err := deletion.batch.Shrink(keep, false, mp); err != nil {
+				return nil, nil, err
+			}
+		}
+		keptDeletes = append(keptDeletes, deletion)
+	}
+	return keptUpdates, keptDeletes, nil
 }
 
 // A currently absent key that existed in a committed destination generation

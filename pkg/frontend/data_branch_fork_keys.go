@@ -50,7 +50,7 @@ func captureDataBranchForkKeys(
 	if destination.Pkey == nil || destination.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return nil
 	}
-	uncommitted, err := forkSourceHasUncommittedData(ctx, ses, receipt, txn)
+	fullImage, err := forkNeedsFullImage(ctx, ses, receipt, txn)
 	if err != nil {
 		return err
 	}
@@ -58,7 +58,7 @@ func captureDataBranchForkKeys(
 	ownerCtx := context.WithValue(defines.AttachAccountId(ctx, receipt.toAccount), defines.BranchForkKeyAccess{}, true)
 	ledger := catalog.MO_CATALOG + "." + catalog.MO_BRANCH_FORK_KEYS
 	bh.ClearExecResultSet()
-	if uncommitted {
+	if fullImage {
 		pk := sqlquote.Ident(destination.Pkey.PkeyColName)
 		if destination.Pkey.CompPkeyCol == nil {
 			column := dataBranchColumnDefByName(destination, destination.Pkey.PkeyColName)
@@ -74,12 +74,21 @@ func captureDataBranchForkKeys(
 			return err
 		}
 	}
-	return bh.Exec(ownerCtx, fmt.Sprintf("insert into %s (table_id,key_bytes,full_image) values (%d,null,%t)", ledger, receipt.dstTableID, uncommitted))
+	marker := "x''"
+	if fullImage {
+		marker = "null"
+	}
+	return bh.Exec(ownerCtx, fmt.Sprintf("insert into %s (table_id,key_bytes) values (%d,%s)", ledger, receipt.dstTableID, marker))
 }
 
-func forkSourceHasUncommittedData(
+func forkNeedsFullImage(
 	ctx context.Context, ses *Session, receipt *cloneReceipt, txn TxnOperator,
 ) (bool, error) {
+	// A subscriber's fork may outlive the publishing account and its
+	// historical catalog. Keep a self-contained image for this edge.
+	if receipt.srcAccount != receipt.toAccount {
+		return true, nil
+	}
 	if receipt.snapshot != nil {
 		return false, nil
 	}
@@ -134,7 +143,7 @@ func lookupDataBranchForkKeys(
 	}
 	ctx = context.WithValue(defines.AttachAccountId(ctx, catalog.System_Account), defines.BranchForkKeyAccess{}, true)
 	ledger := catalog.MO_CATALOG + "." + catalog.MO_BRANCH_FORK_KEYS
-	prefix := fmt.Sprintf("select key_bytes,full_image from %s where table_id=%d and (key_bytes is null or key_bytes in (", ledger, tableID)
+	prefix := fmt.Sprintf("select key_bytes from %s where table_id=%d and (key_bytes is null or key_bytes=x'' or key_bytes in (", ledger, tableID)
 	for lo := 0; lo < keys.Length(); {
 		hi := lo
 		var query strings.Builder
@@ -161,10 +170,11 @@ func lookupDataBranchForkKeys(
 		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
 				if cols[0].IsNull(uint64(i)) {
+					recorded, fullImage = true, true
+				} else if key := cols[0].GetBytesAt(i); len(key) == 0 {
 					recorded = true
-					fullImage = vector.GetFixedAtNoTypeCheck[bool](cols[1], i)
 				} else {
-					present[string(cols[0].GetBytesAt(i))] = struct{}{}
+					present[string(key)] = struct{}{}
 				}
 			}
 			return true
@@ -190,7 +200,7 @@ type pickForkHistory struct {
 
 func (h *pickForkHistory) emitMissingConflicts(
 	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff, source *batch.Batch,
-	keys *vector.Vector, fromUpdate bool, emit emitFunc,
+	keys *vector.Vector, emit emitFunc,
 ) (bool, error) {
 	// The destination change map need not contain unchanged inherited rows.
 	// Probe the live endpoint before interpreting any absence as a deletion.
@@ -238,7 +248,7 @@ func (h *pickForkHistory) emitMissingConflicts(
 			return false, err
 		}
 		if !full {
-			found, err = historicalForkMembers(ctx, ses, bh, tables, fork, keys, uncertain, proof, recorded, fromUpdate)
+			found, err = historicalForkMembers(ctx, ses, bh, tables, fork, keys, uncertain, proof, recorded)
 			if err != nil {
 				return false, err
 			}
@@ -296,7 +306,7 @@ func (h *pickForkHistory) emitMissingConflicts(
 func historicalForkMembers(
 	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
 	fork dataBranchFork, keys *vector.Vector, uncertain []bool, proof dataBranchRenameProof,
-	recorded, fromUpdate bool,
+	recorded bool,
 ) ([]int64, error) {
 	source, destination := tables.endpointIdentities(ctx, ses)
 	candidates := dedupeBranchIdentities(localOperandIdentity(ctx, fork.parentOwner), localOperandIdentity(ctx, fork.childOwner))
@@ -306,12 +316,8 @@ func historicalForkMembers(
 		}
 	}
 	markUnknown := func() {
-		// Without a before-image, an update can restore a missing key.
-		// A pure new insert needs some historical evidence of that key.
-		if fromUpdate {
-			for i := range uncertain {
-				uncertain[i] = true
-			}
+		for i := range uncertain {
+			uncertain[i] = true
 		}
 	}
 	_, parentOwner, err := reopenDataBranchNodeByID(ctx, ses, bh, candidates, fork.parent, fork.snapshot)
@@ -321,6 +327,10 @@ func historicalForkMembers(
 	until := fork.childUntil
 	if until.IsEmpty() {
 		_, until = tables.resolvedSnapshots(ses)
+	}
+	if err != nil {
+		markUnknown()
+		return nil, nil
 	}
 	var commits []types.TS
 	if !recorded {
@@ -348,25 +358,6 @@ func historicalForkMembers(
 		}
 		return absent, rows != nil, err
 	}
-	if err != nil {
-		markUnknown()
-		if !fromUpdate && !recorded {
-			if _, ident, openErr := reopenDataBranchNodeByID(ctx, ses, bh, candidates, fork.parent, commits[0]); openErr == nil {
-				missing, available, probeErr := probe(ident, commits[0])
-				if probeErr != nil {
-					return nil, probeErr
-				}
-				for i := 0; available && i < keys.Length(); i++ {
-					if _, absent := slices.BinarySearch(missing, int64(i)); !absent {
-						uncertain[i] = true
-					}
-				}
-			} else if !isMissingDataBranchRelationByID(openErr) {
-				return nil, openErr
-			}
-		}
-		return nil, nil
-	}
 	atFork, available, err := probe(parentOwner, fork.snapshot)
 	if err != nil {
 		return nil, err
@@ -390,7 +381,7 @@ func historicalForkMembers(
 			uncertain[i] = true
 		} else if _, absent := slices.BinarySearch(atFork, key); !absent {
 			found = append(found, key)
-		} else if !recorded && fromUpdate {
+		} else if !recorded {
 			// An insert followed by a delete in the parent workspace can
 			// disappear from committed history even if the clone inherited
 			// the key between those writes.

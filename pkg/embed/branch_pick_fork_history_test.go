@@ -45,6 +45,7 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 			name         string
 			setup        []string
 			evidenceRows int
+			windowWrite  string
 		}{
 			{"transaction-local parent", []string{
 				"begin", "create table root(k int primary key, v int)",
@@ -52,7 +53,7 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 				"data branch create table src from root",
 				"data branch create table dst from root",
 				"delete from dst where k=2", "commit",
-			}, 3},
+			}, 3, "update src set v=52 where k=2"},
 			{"parent key restored in the fork commit", []string{
 				"create table root(k int primary key, v int)",
 				"insert into root values(1,10),(2,20)", "begin",
@@ -60,7 +61,15 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 				"data branch create table dst from root",
 				"insert into root values(2,20)",
 				"data branch create table src from root", "commit",
-			}, 2},
+			}, 2, "update src set v=52 where k=2"},
+			{"window insert after an unobservable fork", []string{
+				"begin", "create table root(k int primary key, v int)",
+				"insert into root values(1,10),(2,20)",
+				"data branch create table src from root",
+				"data branch create table dst from root",
+				"delete from src where k=2", "delete from dst where k=2",
+				"drop table root", "commit",
+			}, 3, "insert into src values(2,52)"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				run := func(statements ...string) {
@@ -81,7 +90,7 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 				run("create database pick_fork_evidence", "use pick_fork_evidence")
 				run(tc.setup...)
 				run("create snapshot fork_evidence_lo for account sys",
-					"update src set v=52 where k=2", "insert into src values(3,80)",
+					tc.windowWrite, "insert into src values(3,80)",
 					"create snapshot fork_evidence_hi for account sys")
 
 				// Simulate a branch created without a fork ledger.

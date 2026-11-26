@@ -1316,3 +1316,44 @@ select k,v from dst order by k;
 drop snapshot pick_window_hi;
 drop snapshot pick_window_lo;
 drop database pick_window;
+
+-- @testcase: Both forks inherit a key inserted into the committed parent in the fork transaction
+create database pick_window;
+use pick_window;
+create table root(k int primary key,v int);
+insert into root values(1,10);
+begin;
+insert into root values(2,20);
+data branch create table dst from root;
+data branch create table src from root;
+commit;
+create snapshot pick_window_lo for account sys;
+update src set v=52 where k=2;
+insert into src values(3,80);
+create snapshot pick_window_hi for account sys;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: Both forks inherit a non-key update made to the committed parent in the fork transaction
+create database pick_window;
+use pick_window;
+create table root(k int primary key,v int);
+insert into root values(1,10);
+insert into root values(2,20);
+begin;
+update root set v=21 where k=2;
+data branch create table dst from root;
+data branch create table src from root;
+commit;
+create snapshot pick_window_lo for account sys;
+update src set v=52 where k=2;
+insert into src values(3,80);
+create snapshot pick_window_hi for account sys;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
