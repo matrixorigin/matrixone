@@ -45,7 +45,7 @@ func (s *store) createTxnStorage(
 	switch s.cfg.Txn.Storage.Backend {
 	case StorageMEMKV:
 		factory := s.createLogServiceClientFactory(shard)
-		logClient, err := factory()
+		logClient, err := factory(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -65,7 +65,10 @@ func (s *store) createTxnStorage(
 
 func (s *store) createLogServiceClientFactory(shard metadata.TNShard) logservice.ClientFactory {
 	if factory := s.options.logServiceClientFactory; factory != nil {
-		return func() (logservice.Client, error) {
+		return func(ctx context.Context) (logservice.Client, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			return factory(shard)
 		}
 	}

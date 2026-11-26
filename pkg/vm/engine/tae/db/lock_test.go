@@ -23,11 +23,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/vfs"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,6 +40,60 @@ type delayedWALAppendClient struct {
 	logservice.Client
 	started chan<- struct{}
 	release <-chan struct{}
+}
+
+func TestCanceledWALLeaseClaimReleasesWriterLock(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	service, cfg, err := logservice.NewTestService(vfs.NewStrictMem())
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	claimStarted := make(chan struct{})
+	once := sync.OnceFunc(func() { close(claimStarted) })
+	openCtx := logservice.SetBackendOptions(ctx, morpc.WithBackendFilter(func(msg morpc.Message, _ string) bool {
+		req, ok := msg.(*logservice.RPCRequest)
+		if !ok || req.Request.Method != pb.CLAIM_TN_LEASE {
+			return true
+		}
+		once()
+		<-ctx.Done()
+		return false
+	}))
+	dir := t.TempDir()
+	factory := logservice.NewTNWriterClientFactory("", cfg, 30*time.Second)
+	opts := &options.Options{WalClientFactory: logservicedriver.LogServiceClientFactory(factory)}
+	done := make(chan error, 1)
+	go func() {
+		db, err := Open(openCtx, dir, opts)
+		if err == nil {
+			_ = db.Close()
+		}
+		done <- err
+	}()
+
+	select {
+	case <-claimStarted:
+	case err := <-done:
+		t.Fatalf("DB open exited before requesting a lease: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("lease RPC did not start")
+	}
+	lock, err := createDBLock(dir)
+	require.Error(t, err)
+	require.Nil(t, lock)
+
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(3 * time.Second):
+		t.Fatal("DB open did not stop after cancellation")
+	}
+	lock, err = createDBLock(dir)
+	require.NoError(t, err)
+	require.NoError(t, lock.Close())
 }
 
 func (c *delayedWALAppendClient) Append(ctx context.Context, record logservice.LogRecord) (uint64, error) {
@@ -55,8 +114,8 @@ func TestWriterLockRetainedUntilWALShutdown(t *testing.T) {
 	allowAppend := sync.OnceFunc(func() { close(release) })
 	defer allowAppend()
 	cfg := logservicedriver.NewConfig("", logservicedriver.WithConfigOptMaxClient(1),
-		logservicedriver.WithConfigOptClientFactory(func() (logservice.Client, error) {
-			client, err := factory()
+		logservicedriver.WithConfigOptClientFactory(func(ctx context.Context) (logservice.Client, error) {
+			client, err := factory(ctx)
 			return &delayedWALAppendClient{Client: client, started: started, release: release}, err
 		}))
 	cfg.CloseTimeout = 50 * time.Millisecond

@@ -16,9 +16,11 @@ package logservicedriver
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,7 +39,7 @@ func TestNewClientPoolRetriesThenSucceeds(t *testing.T) {
 		ClientRetryTimes:    2,
 		ClientRetryInterval: time.Millisecond,       // 1ms between retries
 		ClientRetryDuration: 100 * time.Millisecond, // 100ms budget (enough for any CI)
-		ClientFactory: func() (logservice.Client, error) {
+		ClientFactory: func(ctx context.Context) (logservice.Client, error) {
 			if attempts.Add(1) == 1 {
 				return nil, moerr.NewInternalErrorNoCtx("logservice client creation failed")
 			}
@@ -47,7 +49,7 @@ func TestNewClientPoolRetriesThenSucceeds(t *testing.T) {
 	cfg.fillDefaults()
 	cfg.validate()
 
-	pool, err := openClientPool(cfg)
+	pool, err := openClientPool(t.Context(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 
@@ -68,7 +70,7 @@ func TestOpenClientPoolReturnsLeaseRejection(t *testing.T) {
 	}
 	var calls atomic.Int32
 	var closed atomic.Int32
-	cfg.ClientFactory = func() (logservice.Client, error) {
+	cfg.ClientFactory = func(ctx context.Context) (logservice.Client, error) {
 		if calls.Add(1) == 1 {
 			return &closeCountingClient{Client: newMockBackendClient(NewMockBackend()), closed: &closed}, nil
 		}
@@ -77,11 +79,57 @@ func TestOpenClientPoolReturnsLeaseRejection(t *testing.T) {
 	cfg.fillDefaults()
 	cfg.validate()
 
-	pool, err := openClientPool(cfg)
+	pool, err := openClientPool(t.Context(), cfg)
 	require.Nil(t, pool)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder))
 	require.Equal(t, int32(2), calls.Load())
 	require.Equal(t, int32(1), closed.Load())
+}
+
+func TestOpenClientPoolDoesNotRetryUncertainLease(t *testing.T) {
+	var attempts atomic.Int32
+	claimErr := errors.Join(logservice.ErrTNLeaseClaimUncertain, context.DeadlineExceeded)
+	cfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(func(context.Context) (logservice.Client, error) {
+			attempts.Add(1)
+			return nil, claimErr
+		}))
+	cfg.ClientRetryTimes = 3
+	cfg.ClientRetryInterval = time.Millisecond
+	cfg.ClientRetryDuration = time.Second
+
+	pool, err := openClientPool(t.Context(), &cfg)
+	require.Nil(t, pool)
+	require.ErrorIs(t, err, claimErr)
+	require.Equal(t, int32(1), attempts.Load())
+}
+
+func TestOpenClientPoolCancelsRetryBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		var attempts atomic.Int32
+		cfg := NewConfig("", WithConfigOptMaxClient(1),
+			WithConfigOptClientFactory(func(context.Context) (logservice.Client, error) {
+				attempts.Add(1)
+				return nil, moerr.NewNoHAKeeper(ctx)
+			}))
+		cfg.ClientRetryInterval = time.Hour
+		done := make(chan error, 1)
+		go func() {
+			_, err := openClientPool(ctx, &cfg)
+			done <- err
+		}()
+		synctest.Wait()
+		require.Equal(t, int32(1), attempts.Load())
+		cancel()
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(time.Second):
+			t.Fatal("WAL retry backoff did not stop")
+		}
+	})
 }
 
 func TestGetOnFlyDoesNotBlockPoolGetWhileCreatingClient(t *testing.T) {
@@ -98,7 +146,7 @@ func TestGetOnFlyDoesNotBlockPoolGetWhileCreatingClient(t *testing.T) {
 		ClientRetryTimes:    1,
 		ClientRetryInterval: time.Nanosecond,
 		ClientRetryDuration: time.Second,
-		ClientFactory: func() (logservice.Client, error) {
+		ClientFactory: func(ctx context.Context) (logservice.Client, error) {
 			if attempts.Add(1) == 1 {
 				return newMockBackendClient(backend), nil
 			}
@@ -110,7 +158,7 @@ func TestGetOnFlyDoesNotBlockPoolGetWhileCreatingClient(t *testing.T) {
 	cfg.fillDefaults()
 	cfg.validate()
 
-	pool, err := openClientPool(cfg)
+	pool, err := openClientPool(t.Context(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 
@@ -120,7 +168,7 @@ func TestGetOnFlyDoesNotBlockPoolGetWhileCreatingClient(t *testing.T) {
 	var onFlyErr error
 	go func() {
 		defer wg.Done()
-		onFlyClient, onFlyErr = pool.GetOnFly()
+		onFlyClient, onFlyErr = pool.GetOnFly(t.Context())
 	}()
 	defer func() {
 		releaseOnce.Do(func() { close(releaseFactory) })
@@ -175,7 +223,7 @@ func TestGetOnFlyClosesCreatedClientWhenPoolClosesConcurrently(t *testing.T) {
 		ClientRetryTimes:    1,
 		ClientRetryInterval: time.Nanosecond,
 		ClientRetryDuration: time.Second,
-		ClientFactory: func() (logservice.Client, error) {
+		ClientFactory: func(ctx context.Context) (logservice.Client, error) {
 			if attempts.Add(1) == 1 {
 				return newMockBackendClient(backend), nil
 			}
@@ -190,7 +238,7 @@ func TestGetOnFlyClosesCreatedClientWhenPoolClosesConcurrently(t *testing.T) {
 	cfg.fillDefaults()
 	cfg.validate()
 
-	pool, err := openClientPool(cfg)
+	pool, err := openClientPool(t.Context(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		releaseOnce.Do(func() { close(releaseFactory) })
@@ -202,7 +250,7 @@ func TestGetOnFlyClosesCreatedClientWhenPoolClosesConcurrently(t *testing.T) {
 		err    error
 	}, 1)
 	go func() {
-		client, err := pool.GetOnFly()
+		client, err := pool.GetOnFly(t.Context())
 		result <- struct {
 			client *wrappedClient
 			err    error

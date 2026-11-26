@@ -145,8 +145,8 @@ func TestStoreCloseDeadlineIncludesAppendDrain(t *testing.T) {
 	defer allowAppend()
 	cfg := logservicedriver.NewConfig("",
 		logservicedriver.WithConfigOptMaxClient(1),
-		logservicedriver.WithConfigOptClientFactory(func() (logservice.Client, error) {
-			client, err := newClient()
+		logservicedriver.WithConfigOptClientFactory(func(ctx context.Context) (logservice.Client, error) {
+			client, err := newClient(ctx)
 			return &blockedAppendClient{Client: client, started: started, release: release, closed: closed}, err
 		}),
 	)

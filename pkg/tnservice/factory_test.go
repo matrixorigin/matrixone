@@ -31,7 +31,7 @@ func TestCreateLogServiceClient(t *testing.T) {
 	s.options.logServiceClientFactory = func(d metadata.TNShard) (logservice.Client, error) {
 		return mem.NewMemLog(), nil
 	}
-	v, err := s.createLogServiceClientFactory(metadata.TNShard{})()
+	v, err := s.createLogServiceClientFactory(metadata.TNShard{})(t.Context())
 	assert.NoError(t, err)
 	assert.NotNil(t, v)
 }

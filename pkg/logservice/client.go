@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	stderrors "errors"
 	"math/rand"
 	"sync"
 	"time"
@@ -55,7 +56,11 @@ func IsTempError(err error) bool {
 var NewLogRecord = pb.NewLogRecord
 var NewUserLogRecord = pb.NewUserLogRecord
 
-type ClientFactory func() (Client, error)
+type ClientFactory func(context.Context) (Client, error)
+
+// ErrTNLeaseClaimUncertain ends retries on a factory whose claim might have
+// committed. A new factory can check the authoritative assignment again.
+var ErrTNLeaseClaimUncertain = moerr.NewInternalErrorNoCtx("TN writer lease claim outcome is uncertain")
 
 // Client is the Log Service Client interface exposed to the DN.
 type Client interface {
@@ -149,23 +154,41 @@ func NewClient(
 func NewTNWriterClientFactory(sid string, cfg ClientConfig, timeout time.Duration) ClientFactory {
 	cfg.connectWithoutLease = true
 	if err := cfg.ValidateClient(); err != nil {
-		return func() (Client, error) { return nil, err }
+		return func(context.Context) (Client, error) { return nil, err }
 	}
-	var claimMu sync.Mutex
+	claimGate := make(chan struct{}, 1)
 	var claimFinished bool
 	var claimErr error
-	return func() (Client, error) {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseNewLogServiceClient)
+	return func(ctx context.Context) (Client, error) {
+		ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseNewLogServiceClient)
 		defer cancel()
+
+		select {
+		case claimGate <- struct{}{}:
+		case <-ctx.Done():
+			return nil, moerr.AttachCause(ctx, ctx.Err())
+		}
+		if err := ctx.Err(); err != nil {
+			<-claimGate
+			return nil, moerr.AttachCause(ctx, err)
+		}
+		if claimFinished {
+			err := claimErr
+			<-claimGate
+			if err != nil {
+				return nil, err
+			}
+			c, err := NewClient(ctx, sid, cfg)
+			return c, moerr.AttachCause(ctx, err)
+		}
+		defer func() { <-claimGate }()
+
 		c, err := newClient(ctx, sid, cfg)
 		if err != nil {
 			return nil, moerr.AttachCause(ctx, err)
 		}
 
-		claimMu.Lock()
-		if claimFinished {
-			err = claimErr
-		} else if ctx.Err() != nil {
+		if ctx.Err() != nil {
 			err = moerr.AttachCause(ctx, ctx.Err())
 		} else {
 			var dispatched bool
@@ -176,10 +199,12 @@ func NewTNWriterClientFactory(sid string, cfg ClientConfig, timeout time.Duratio
 			// even when the client could not confirm the grant.
 			if dispatched && !errors.Is(err, dragonboat.ErrShardNotFound) &&
 				!moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) {
+				if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder) {
+					err = stderrors.Join(ErrTNLeaseClaimUncertain, err)
+				}
 				claimFinished, claimErr = true, err
 			}
 		}
-		claimMu.Unlock()
 		if err != nil {
 			if closeErr := c.close(); closeErr != nil {
 				logutil.Error("failed to close the client", zap.Error(closeErr))
@@ -515,7 +540,7 @@ func connectToLogServiceByReverseProxy(
 	discoveryAddress string,
 	cfg ClientConfig,
 ) (*client, error) {
-	si, ok, err := GetShardInfo(sid, discoveryAddress, cfg.LogShardID)
+	si, ok, err := getShardInfoWithContext(ctx, sid, discoveryAddress, cfg.LogShardID)
 	if err != nil {
 		return nil, err
 	}

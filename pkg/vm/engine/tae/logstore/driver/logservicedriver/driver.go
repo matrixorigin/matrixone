@@ -106,16 +106,16 @@ type LogServiceDriver struct {
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
-	d, err := OpenLogServiceDriver(cfg)
+	d, err := OpenLogServiceDriver(context.Background(), cfg)
 	if err != nil {
 		panic(err)
 	}
 	return d
 }
 
-func OpenLogServiceDriver(cfg *Config) (*LogServiceDriver, error) {
+func OpenLogServiceDriver(ctx context.Context, cfg *Config) (*LogServiceDriver, error) {
 	start := time.Now()
-	clientPool, err := openClientPool(cfg)
+	clientPool, err := openClientPool(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

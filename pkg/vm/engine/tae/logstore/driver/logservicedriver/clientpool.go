@@ -16,6 +16,7 @@ package logservicedriver
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -122,6 +123,7 @@ type wrappedClient struct {
 }
 
 func NewClient(
+	ctx context.Context,
 	factory LogServiceClientFactory,
 	bufSize int,
 	retryTimes int,
@@ -135,7 +137,17 @@ func NewClient(
 	// Standard retry logic: try up to retryTimes, respecting total duration
 	// First attempt doesn't count as a retry
 	for attempt := 0; attempt < retryTimes; attempt++ {
-		if wrapped, err = factory(); err == nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		wrapped, err = factory(ctx)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if err == nil {
+				_ = wrapped.Close()
+			}
+			return nil, ctxErr
+		}
+		if err == nil {
 			// Success
 			client.wrapped = wrapped
 			client.buf = wrapped.GetLogRecord(bufSize)
@@ -144,7 +156,7 @@ func NewClient(
 
 		logutil.Errorf("WAL-Replay failed to create log service client (attempt %d/%d): %v",
 			attempt+1, retryTimes, err)
-		if moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder) {
+		if moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder) || errors.Is(err, logservice.ErrTNLeaseClaimUncertain) {
 			break
 		}
 
@@ -155,7 +167,13 @@ func NewClient(
 				logutil.Errorf("WAL-Replay retry timeout after %v, stopping retries", retryDuration)
 				break
 			}
-			time.Sleep(retryInterval)
+			timer := time.NewTimer(retryInterval)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			}
 		}
 	}
 
@@ -255,7 +273,7 @@ type clientPool struct {
 	writeTokenController *writeTokenController
 }
 
-func openClientPool(cfg *Config) (*clientPool, error) {
+func openClientPool(ctx context.Context, cfg *Config) (*clientPool, error) {
 	maxPenddingWrites := cfg.ClientMaxCount
 	if maxPenddingWrites < DefaultMaxClient {
 		maxPenddingWrites = DefaultMaxClient
@@ -278,7 +296,7 @@ func openClientPool(cfg *Config) (*clientPool, error) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			client, err := NewClient(cfg.ClientFactory, cfg.ClientBufSize, cfg.ClientRetryTimes, cfg.ClientRetryInterval, cfg.ClientRetryDuration)
+			client, err := NewClient(ctx, cfg.ClientFactory, cfg.ClientBufSize, cfg.ClientRetryTimes, cfg.ClientRetryInterval, cfg.ClientRetryDuration)
 			results <- initResult{
 				idx:    idx,
 				client: client,
@@ -297,6 +315,9 @@ func openClientPool(cfg *Config) (*clientPool, error) {
 			continue
 		}
 		pool.clients[res.idx] = res.client
+	}
+	if err := ctx.Err(); err != nil {
+		openErr = err
 	}
 	if openErr != nil {
 		for _, client := range pool.clients {
@@ -331,7 +352,7 @@ func (c *clientPool) Close() {
 	c.cond.Broadcast()
 }
 
-func (c *clientPool) GetOnFly() (*wrappedClient, error) {
+func (c *clientPool) GetOnFly(ctx context.Context) (*wrappedClient, error) {
 	c.cond.L.Lock()
 	if c.closed {
 		c.cond.L.Unlock()
@@ -339,7 +360,7 @@ func (c *clientPool) GetOnFly() (*wrappedClient, error) {
 	}
 	c.cond.L.Unlock()
 
-	client, err := NewClient(c.cfg.ClientFactory, c.cfg.ClientBufSize, c.cfg.ClientRetryTimes, c.cfg.ClientRetryInterval, c.cfg.ClientRetryDuration)
+	client, err := NewClient(ctx, c.cfg.ClientFactory, c.cfg.ClientBufSize, c.cfg.ClientRetryTimes, c.cfg.ClientRetryInterval, c.cfg.ClientRetryDuration)
 	if err != nil {
 		return nil, err
 	}

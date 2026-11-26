@@ -165,7 +165,7 @@ func (d *LogServiceDriver) truncateFromRemote(
 	if err = ctx.Err(); err != nil {
 		return
 	}
-	if client, err = d.clientPool.GetOnFly(); err != nil {
+	if client, err = d.clientPool.GetOnFly(ctx); err != nil {
 		return
 	}
 	defer client.Putback()

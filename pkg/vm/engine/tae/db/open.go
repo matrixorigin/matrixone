@@ -120,7 +120,7 @@ func Open(
 
 	logutil.Info(Phase_Open + "-open-wal-start")
 	if opts.WalClientFactory != nil {
-		if db.Wal, err = wal.OpenLogserviceHandle(opts.WalClientFactory, opts.MaxWALRecordSize); err != nil {
+		if db.Wal, err = wal.OpenLogserviceHandle(ctx, opts.WalClientFactory, opts.MaxWALRecordSize); err != nil {
 			return
 		}
 	} else {

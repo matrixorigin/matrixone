@@ -508,7 +508,7 @@ func TestTNWriterReconnectDoesNotReclaimLease(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), testIOTimeout)
 		defer cancel()
 		oldFactory := NewTNWriterClientFactory("", cfg, testIOTimeout)
-		old, err := oldFactory()
+		old, err := oldFactory(t.Context())
 		require.NoError(t, err)
 		defer old.Close()
 		oldRecord := old.GetLogRecord(8)
@@ -517,7 +517,7 @@ func TestTNWriterReconnectDoesNotReclaimLease(t *testing.T) {
 
 		cfg.TNReplicaID++
 		newFactory := NewTNWriterClientFactory("", cfg, testIOTimeout)
-		replacement, err := newFactory()
+		replacement, err := newFactory(t.Context())
 		require.NoError(t, err)
 		defer replacement.Close()
 		newRecord := replacement.GetLogRecord(8)
@@ -527,7 +527,7 @@ func TestTNWriterReconnectDoesNotReclaimLease(t *testing.T) {
 		old.(*managedClient).resetClient()
 		_, err = old.Append(ctx, oldRecord)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
-		stale, err := oldFactory()
+		stale, err := oldFactory(t.Context())
 		require.NoError(t, err)
 		defer stale.Close()
 		_, err = stale.Append(ctx, oldRecord)
@@ -584,12 +584,12 @@ func TestTNWriterLeaseClaimFailure(t *testing.T) {
 			}
 			cfg.TNReplicaID++
 			factory := NewTNWriterClientFactory("", cfg, testIOTimeout)
-			c, err := factory()
+			c, err := factory(t.Context())
 			require.ErrorIs(t, err, sendErr)
 			require.Nil(t, c)
 
 			connectToLogServiceAddressFn = originalConnect
-			c, err = factory()
+			c, err = factory(t.Context())
 			require.NoError(t, err)
 			defer c.Close()
 			ctx, cancel := context.WithTimeout(t.Context(), testIOTimeout)
@@ -621,8 +621,8 @@ func TestTNWriterLeaseClaimFailure(t *testing.T) {
 			}
 			cfg.TNReplicaID++
 			factory := NewTNWriterClientFactory("", cfg, testIOTimeout)
-			c, claimErr := factory()
-			require.Error(t, claimErr)
+			c, claimErr := factory(t.Context())
+			require.ErrorIs(t, claimErr, ErrTNLeaseClaimUncertain)
 			require.Nil(t, c)
 			select {
 			case err := <-applied:
@@ -634,11 +634,20 @@ func TestTNWriterLeaseClaimFailure(t *testing.T) {
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
 
 			connectToLogServiceAddressFn = originalConnect
+			retry, err := NewTNWriterClientFactory("", cfg, testIOTimeout)(t.Context())
+			require.NoError(t, err)
+			defer retry.Close()
+			_, err = retry.Append(ctx, retry.GetLogRecord(8))
+			require.NoError(t, err)
+
 			cfg.TNReplicaID++
-			successor, err := NewTNWriterClientFactory("", cfg, testIOTimeout)()
+			successor, err := NewTNWriterClientFactory("", cfg, testIOTimeout)(t.Context())
 			require.NoError(t, err)
 			defer successor.Close()
-			c, err = factory()
+			connectToLogServiceAddressFn = func(context.Context, string, string, ClientConfig) (*client, error) {
+				return nil, errors.New("cached claim reopened a transport")
+			}
+			c, err = factory(t.Context())
 			require.ErrorIs(t, err, claimErr)
 			require.Nil(t, c)
 			_, err = successor.Append(ctx, successor.GetLogRecord(8))
@@ -699,7 +708,7 @@ func TestTNLeaseRejectsStaleStartupAndDelayedClaim(t *testing.T) {
 		}
 		oldCfg := cfg
 		oldOwner := assign(1, oldCfg.TNReplicaID)
-		old, err := NewTNWriterClientFactory("", oldCfg, testIOTimeout)()
+		old, err := NewTNWriterClientFactory("", oldCfg, testIOTimeout)(t.Context())
 		require.NoError(t, err)
 		defer old.Close()
 		_, err = old.Append(ctx, old.GetLogRecord(8))
@@ -709,14 +718,14 @@ func TestTNLeaseRejectsStaleStartupAndDelayedClaim(t *testing.T) {
 		cfg.TNReplicaID--
 		replacementOwner := assign(2, cfg.TNReplicaID)
 		require.Greater(t, replacementOwner.Epoch, oldOwner.Epoch)
-		replacement, err := NewTNWriterClientFactory("", cfg, testIOTimeout)()
+		replacement, err := NewTNWriterClientFactory("", cfg, testIOTimeout)(t.Context())
 		require.NoError(t, err)
 		defer replacement.Close()
 		_, err = replacement.Append(ctx, replacement.GetLogRecord(8))
 		require.NoError(t, err)
 
 		// A restarted TN constructs a fresh factory from the old disk identity.
-		c, err := NewTNWriterClientFactory("", oldCfg, testIOTimeout)()
+		c, err := NewTNWriterClientFactory("", oldCfg, testIOTimeout)(t.Context())
 		require.Nil(t, c)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
 		// An old request might already have read its assignment before takeover.
@@ -729,7 +738,7 @@ func TestTNLeaseRejectsStaleStartupAndDelayedClaim(t *testing.T) {
 
 		_, err = replacement.Append(ctx, replacement.GetLogRecord(8))
 		require.NoError(t, err)
-		c, err = NewTNWriterClientFactory("", cfg, testIOTimeout)()
+		c, err = NewTNWriterClientFactory("", cfg, testIOTimeout)(t.Context())
 		require.NoError(t, err)
 		defer c.Close()
 		_, err = c.Append(ctx, c.GetLogRecord(8))

@@ -105,7 +105,7 @@ func TestCommitSubmissionWaitsForWorkerHandoff(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var startOnce sync.Once
-	factory := func() (logservice.Client, error) {
+	factory := func(ctx context.Context) (logservice.Client, error) {
 		return &blockingBackendClient{
 			mockBackendClient: newMockBackendClient(backend),
 			appendStarted:     started,
@@ -180,7 +180,7 @@ func (c *retryTruncateReadClient) GetTruncatedLsn(context.Context) (uint64, erro
 func TestGetTruncatedPSNRetriesTransientRead(t *testing.T) {
 	client := &retryTruncateReadClient{mockBackendClient: newMockBackendClient(NewMockBackend())}
 	cfg := NewConfig("", WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second),
-		WithConfigOptClientFactory(func() (logservice.Client, error) { return client, nil }))
+		WithConfigOptClientFactory(func(ctx context.Context) (logservice.Client, error) { return client, nil }))
 	d := NewLogServiceDriver(&cfg)
 	defer func() { require.NoError(t, d.Close()) }()
 
@@ -235,7 +235,7 @@ func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
 	backend := NewMockBackend()
 	started := make(chan struct{})
 	release := make(chan struct{})
-	factory := func() (logservice.Client, error) {
+	factory := func(ctx context.Context) (logservice.Client, error) {
 		return &deadlineBlockingBackendClient{
 			mockBackendClient: newMockBackendClient(backend),
 			appendStarted:     started,
@@ -324,7 +324,7 @@ func TestCloseDeadlineIncludesInFlightTruncate(t *testing.T) {
 	allowTruncate := sync.OnceFunc(func() { close(release) })
 	defer allowTruncate()
 	cfg := NewConfig("", WithConfigOptMaxClient(1),
-		WithConfigOptClientFactory(func() (logservice.Client, error) {
+		WithConfigOptClientFactory(func(ctx context.Context) (logservice.Client, error) {
 			return &blockedTruncateClient{
 				mockBackendClient: newMockBackendClient(backend),
 				started:           started,
@@ -385,7 +385,7 @@ func (c *failingBackendClient) Append(context.Context, logservice.LogRecord) (ui
 func TestAppendFailureCompletesWaiterBeforeFailStop(t *testing.T) {
 	backend := NewMockBackend()
 	errExpected := errors.New("append failed")
-	factory := func() (logservice.Client, error) {
+	factory := func(ctx context.Context) (logservice.Client, error) {
 		return &failingBackendClient{
 			mockBackendClient: newMockBackendClient(backend),
 			err:               errExpected,
@@ -438,7 +438,7 @@ func (c *takeoverAppendClient) Append(ctx context.Context, record logservice.Log
 	}
 	c.startOnce.Do(func() { close(c.started) })
 	<-c.release
-	client, err := c.reconnect()
+	client, err := c.reconnect(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -454,8 +454,8 @@ func TestTimedOutWriterCannotOverwriteReplacementWAL(t *testing.T) {
 	allowAppend := sync.OnceFunc(func() { close(release) })
 	defer allowAppend()
 	cfg := NewConfig("", WithConfigOptMaxClient(1),
-		WithConfigOptClientFactory(func() (logservice.Client, error) {
-			client, err := oldFactory()
+		WithConfigOptClientFactory(func(ctx context.Context) (logservice.Client, error) {
+			client, err := oldFactory(ctx)
 			if err != nil {
 				return nil, err
 			}
