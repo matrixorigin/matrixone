@@ -240,7 +240,7 @@ func readSpillPayload(proc *process.Process, reader io.Reader, reuseBat *batch.B
 		return nil, moerr.NewInternalError(proc.Ctx, "negative merge-order spill payload size")
 	}
 	reuseBat.CleanOnlyData()
-	if err := reuseBat.UnmarshalFromReaderWithMetadata(reader, batchSize, mp); err != nil {
+	if err := reuseBat.UnmarshalSizedFrom(reader, batchSize, mp); err != nil {
 		return nil, err
 	}
 	return reuseBat, nil

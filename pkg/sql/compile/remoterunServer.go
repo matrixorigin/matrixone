@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -120,9 +119,6 @@ func CnServerMessageHandler(
 	if msg.GetCmd() == pipeline.Method_PipelineBatchAck {
 		return handlePipelineBatchAck(msg, cs)
 	}
-	if msg.GetCmd() == pipeline.Method_PipelineProtocolCheck {
-		return handlePipelineProtocolCheck(ctx, msg, cs, lockService.GetConfig().ServiceID, messageAcquirer)
-	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
 	receiver, err := newMessageReceiverOnServer(ctx, serverAddress, msg,
@@ -206,28 +202,6 @@ func CnServerMessageHandler(
 		receiver.colexecServer.RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
-}
-
-func handlePipelineProtocolCheck(
-	ctx context.Context,
-	request *pipeline.Message,
-	cs morpc.ClientSession,
-	serviceID string,
-	messageAcquirer func() morpc.Message,
-) error {
-	response, ok := messageAcquirer().(*pipeline.Message)
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("pipeline protocol response has wrong type")
-	}
-	response.SetID(request.GetID())
-	response.SetMessageType(pipeline.Method_PipelineProtocolCheck)
-	response.SetSid(pipeline.Status_Last)
-	if runtime := moruntime.ServiceRuntime(serviceID); runtime != nil {
-		if value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
-			response.ProtocolVersion, _ = value.(int64)
-		}
-	}
-	return cs.Write(ctx, response)
 }
 
 // waitUntilPipelineBatchFlowDrained preserves the ownership boundary between
@@ -681,7 +655,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		if runErr != nil {
 			return runErr
 		}
-		receiver.relayAdmission = scopeRemoteObjectAdmission(s)
 		if !receiver.needNotReply {
 			s = appendWriteBackOperator(runCompile, s)
 		}
@@ -1063,10 +1036,6 @@ type messageReceiverOnServer struct {
 
 	colexecServer *colexec.Server
 
-	// relayAdmission is the decoded scope's remote-object admission; it
-	// picks the wire names older coordinators expect on relay batches.
-	relayAdmission remoteObjectAdmission
-
 	// result.
 	phyPlan                           *models.PhyPlan
 	resourceDelta                     resource.Delta
@@ -1403,8 +1372,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	}
 
 	var transport bytes.Buffer
-	data, err := b.MarshalBinaryWithBufferAndNames(
-		&transport, false, receiver.relayAdmission.relayWireNames(b))
+	data, err := b.MarshalBinaryWithBuffer(&transport, false)
 	if err != nil {
 		return err
 	}

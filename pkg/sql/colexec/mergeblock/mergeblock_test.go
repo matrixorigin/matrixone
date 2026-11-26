@@ -19,7 +19,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -89,13 +88,12 @@ func TestMergeBlock(t *testing.T) {
 
 	batch1 := &batch.Batch{
 		Vecs: []*vector.Vector{
-			testutil.MakeInt16Vector([]int16{0, 0, 0}, nil, proc.Mp()),
 			testutil.MakeTextVector([]string{
 				string(objectio.EncodeBlockInfo(&blkInfo1)),
 				string(objectio.EncodeBlockInfo(&blkInfo2)),
 				string(objectio.EncodeBlockInfo(&blkInfo3))},
 				nil, proc.Mp()),
-			testutil.MakeTextVector([]string{
+			makeBinaryVector([]string{
 				string(objectio.ZeroObjectStats[:]),
 				string(objectio.ZeroObjectStats[:]),
 				string(objectio.ZeroObjectStats[:])},
@@ -131,36 +129,27 @@ func TestMergeBlock(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
+func makeBinaryVector(values []string, _ []uint64, mp *mpool.MPool) *vector.Vector {
+	vec := vector.NewVec(types.T_binary.ToType(), mp)
+	for _, value := range values {
+		if err := vector.AppendBytes(vec, []byte(value), false, mp); err != nil {
+			panic(err)
+		}
+	}
+	return vec
+}
+
 func resetChildren(arg *MergeBlock, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
 
-func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
-	var attrs []string
-	if withStats {
-		attrs = []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-	} else {
-		attrs = []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo}
-	}
-
-	blockInfoBat := batch.NewWithSize(len(attrs))
-	blockInfoBat.Vecs[0] = vector.NewVec(types.T_int16.ToType(), proc.Mp())
-	blockInfoBat.Vecs[1] = vector.NewVec(types.T_text.ToType(), proc.Mp())
-
-	if withStats {
-		blockInfoBat.Vecs[2], _ = vector.NewConstBytes(types.T_binary.ToType(),
-			objectio.ZeroObjectStats.Marshal(), 1, proc.GetMPool())
-	}
-
-	return blockInfoBat
-}
-
-func makeLegacyBlockInfoBat(
+// makeBlockInfoBat builds the insert S3 writer's result: one block of rows
+// rows, and its object's stats.
+func makeBlockInfoBat(
 	t *testing.T,
 	proc *process.Process,
-	tableIdx int16,
 	rows uint32,
 ) *batch.Batch {
 	t.Helper()
@@ -178,16 +167,14 @@ func makeLegacyBlockInfoBat(
 	}
 	blockInfo.SetMetaLocation(loc)
 
-	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_int16.ToType(), proc.Mp())
-	bat.Vecs[1] = vector.NewVec(types.T_text.ToType(), proc.Mp())
-	bat.Vecs[2] = vector.NewVec(types.T_binary.ToType(), proc.Mp())
-	require.NoError(t, vector.AppendFixed(bat.Vecs[0], tableIdx, false, proc.GetMPool()))
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_binary.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(
-		bat.Vecs[1], objectio.EncodeBlockInfo(&blockInfo), false, proc.GetMPool(),
+		bat.Vecs[0], objectio.EncodeBlockInfo(&blockInfo), false, proc.GetMPool(),
 	))
 	require.NoError(t, vector.AppendBytes(
-		bat.Vecs[2], objectio.ZeroObjectStats.Marshal(), false, proc.GetMPool(),
+		bat.Vecs[1], objectio.ZeroObjectStats.Marshal(), false, proc.GetMPool(),
 	))
 	bat.SetRowCount(1)
 	return bat
@@ -198,32 +185,31 @@ func newTestArgument() *MergeBlock {
 		container: Container{
 			source: &mockRelation{},
 			mp:     make(map[int]*batch.Batch),
-			mp2:    make(map[int][]*batch.Batch),
 		},
 		AddAffectedRows: true,
 	}
 }
 
-func TestMergeBlockSplitRejectsLegacyIndexTable(t *testing.T) {
-	for _, tableIdx := range []int16{1, -2} {
-		t.Run(fmt.Sprintf("encoded-index-%d", tableIdx), func(t *testing.T) {
-			proc := testutil.NewProc(t)
-			arg := newTestArgument()
-			bat := makeLegacyBlockInfoBat(t, proc, tableIdx, 15)
-			t.Cleanup(func() {
-				bat.Clean(proc.GetMPool())
-				arg.Free(proc, false, nil)
-				proc.Free()
-				require.Zero(t, proc.GetMPool().CurrNB())
-			})
+// Any other layout, such as an older CN's leading table-index column, is
+// rejected before anything is appended.
+func TestMergeBlockSplitRejectsOtherLayouts(t *testing.T) {
+	proc := testutil.NewProc(t)
+	arg := newTestArgument()
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.MakeInt16Vector([]int16{0}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeTextVector([]string{"blk"}, nil, proc.Mp())
+	bat.Vecs[2] = makeBinaryVector([]string{"stats"}, nil, proc.Mp())
+	bat.SetRowCount(1)
+	t.Cleanup(func() {
+		bat.Clean(proc.GetMPool())
+		arg.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.GetMPool().CurrNB())
+	})
 
-			err := arg.Split(proc, bat, nil)
-			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
-			require.Zero(t, arg.container.mp[0].RowCount())
-			require.Zero(t, arg.container.affectedRows)
-		})
-	}
+	require.Error(t, arg.Split(proc, bat, nil))
+	require.Nil(t, arg.container.mp[0])
+	require.Zero(t, arg.container.affectedRows)
 }
 
 func TestMergeBlockSplitReturnsAppendOOM(t *testing.T) {
@@ -237,7 +223,7 @@ func TestMergeBlockSplitReturnsAppendOOM(t *testing.T) {
 			require.NoError(t, err)
 			proc := testutil.NewProcessWithMPool(t, "", procMP)
 			arg := newTestArgument()
-			bat := makeLegacyBlockInfoBat(t, proc, 0, 15)
+			bat := makeBlockInfoBat(t, proc, 15)
 			var filler []byte
 			t.Cleanup(func() {
 				if filler != nil {
@@ -254,10 +240,10 @@ func TestMergeBlockSplitReturnsAppendOOM(t *testing.T) {
 			if preallocateBlockInfo {
 				// Keep capacity in the block-info destination so Split reaches
 				// the object-stats append before exhausting the mpool.
-				arg.GetMetaLocBat(bat, proc)
+				arg.metaLocBat(proc)
 				require.NoError(t, vector.AppendBytes(
 					arg.container.mp[0].Vecs[0],
-					bat.Vecs[1].GetBytesAt(0),
+					bat.Vecs[0].GetBytesAt(0),
 					false,
 					procMP,
 				))
@@ -282,30 +268,23 @@ func TestMergeBlockSplitReturnsAppendOOM(t *testing.T) {
 	}
 }
 
-func TestArgument_GetMetaLocBat(t *testing.T) {
+// mp[0] is created on first use and emptied, not replaced, afterwards.
+func TestMergeBlockMetaLocBatReuse(t *testing.T) {
 	arg := newTestArgument()
-
 	proc := testutil.NewProc(t)
-	proc.Ctx = context.TODO()
+	bat := makeBlockInfoBat(t, proc, 15)
 
-	bat := mockBlockInfoBat(proc, true)
-	arg.GetMetaLocBat(bat, proc)
+	require.NoError(t, arg.Split(proc, bat, nil))
+	first := arg.container.mp[0]
+	require.Equal(t, 2, len(first.Vecs))
+	require.Equal(t, 1, first.RowCount())
 
-	require.Equal(t, 2, len(arg.container.mp[0].Vecs))
-
-	bat.Clean(proc.GetMPool())
-
-	bat = mockBlockInfoBat(proc, false)
-	arg.GetMetaLocBat(bat, proc)
-
-	require.Equal(t, 2, len(arg.container.mp[0].Vecs))
+	require.NoError(t, arg.Split(proc, bat, nil))
+	require.Same(t, first, arg.container.mp[0])
+	require.Equal(t, 1, first.RowCount())
 
 	arg.Free(proc, false, nil)
-	for k := range arg.container.mp {
-		arg.container.mp[k].Clean(proc.GetMPool())
-	}
-
-	proc.Free()
 	bat.Clean(proc.GetMPool())
+	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
