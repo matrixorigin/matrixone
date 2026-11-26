@@ -171,6 +171,12 @@ func TestServerProbeOneOrderForRoom(t *testing.T) {
 	require.NoError(t, <-statDone)
 }
 
+// notePeak raises peak to n when n is larger.
+func notePeak(peak *atomic.Int64, n int64) {
+	for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+	}
+}
+
 // The memory a file service holds never passes its budget while reads, streams and
 // background prefetches run at once; with the whole budget held, a read whose range would
 // be held in memory reads it through a file fill at once, never waiting.
@@ -185,9 +191,7 @@ func TestServerProbeMemoryWithinBudget(t *testing.T) {
 	go func() {
 		defer close(sampled)
 		for {
-			if n := probeMemoryHeld(fs); n > peak.Load() {
-				peak.Store(n)
-			}
+			notePeak(&peak, probeMemoryHeld(fs))
 			select {
 			case <-stop:
 				return
@@ -226,6 +230,7 @@ func TestServerProbeMemoryWithinBudget(t *testing.T) {
 				Entries: []IOEntry{{Offset: off, Size: unit, ReadCloserForRead: &rc}}}
 			err := fs.Read(ctx, vec)
 			if err == nil {
+				notePeak(&peak, probeMemoryHeld(fs))
 				var b []byte
 				b, err = io.ReadAll(rc)
 				_ = rc.Close()
