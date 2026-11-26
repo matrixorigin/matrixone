@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -36,6 +37,24 @@ type cloneDatabaseSource struct {
 	snapshot           *plan.Snapshot
 	opAccountId        uint32
 	toAccountId        uint32
+}
+
+func (source *cloneDatabaseSource) sortViews(ctx context.Context, ses *Session, bh BackgroundExec, snapshotTS int64) ([]string, error) {
+	snapshot := prepareCloneViewSnapshot(source.snapshot, snapshotTS)
+	account := source.opAccountId
+	if snapshot != nil && snapshot.Tenant != nil {
+		account = snapshot.Tenant.TenantID
+	}
+	// CLONE plans in the publisher's namespace without changing the caller's
+	// session. Keep this guard here: RESTORE owns its existing database state.
+	compCtx := ses.GetTxnCompileCtx()
+	oldContext, oldDatabase := compCtx.GetContext(), compCtx.GetDatabase()
+	compCtx.SetContext(defines.AttachAccountId(oldContext, account))
+	defer func() {
+		compCtx.SetContext(oldContext)
+		compCtx.SetDatabase(oldDatabase)
+	}()
+	return sortedViewInfos(ctx, ses, bh, "", snapshot, source.viewMap, account, source.toAccountId)
 }
 
 func (source *cloneDatabaseSource) branchTableCount() int64 {

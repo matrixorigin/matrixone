@@ -1572,15 +1572,6 @@ func sortedViewInfos(
 		return nil, nil
 	}
 	compCtx := ses.GetTxnCompileCtx()
-	// Dependency planning belongs to the source account. A subscription's
-	// tenant-only snapshot does not itself switch every metadata lookup.
-	oldContext := compCtx.GetContext()
-	oldDatabase := compCtx.GetDatabase()
-	compCtx.SetContext(defines.AttachAccountId(oldContext, fromAccountId))
-	defer func() {
-		compCtx.SetContext(oldContext)
-		compCtx.SetDatabase(oldDatabase)
-	}()
 	if snapshot != nil {
 		oldSnapshot = compCtx.GetSnapshot()
 		compCtx.SetSnapshot(snapshot)

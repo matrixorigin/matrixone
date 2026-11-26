@@ -263,7 +263,9 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 			exec(t, "create view "+source+".v_external as select id,label from "+external+".v_parent")
 			exec(t, "create view "+source+".v_nested as select l.id,e.label from "+source+".v_qualified l join "+source+".v_external e on l.id=e.id")
 
+			exec(t, "use "+external)
 			exec(t, "create database "+target+" clone "+source)
+			count(t, "select count(*) from parent where id=1 and label='external original'", 1)
 			count(t, "select count(*) from "+target+".v_nested where id=1 and label='external original'", 1)
 			count(t, "select count(*) from mo_catalog.mo_foreign_keys where db_name='"+target+"' and table_name='outgoing' and constraint_name='fk_local' and refer_db_name='"+target+"' and refer_table_name='parent'", 1)
 			count(t, "select count(*) from mo_catalog.mo_foreign_keys where db_name='"+target+"' and table_name='outgoing' and constraint_name='fk_external' and refer_db_name='"+external+"' and refer_table_name='parent'", 1)
@@ -288,6 +290,12 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 			count(t, "select count(*) from "+source+".native_peer_a where id=1 and marker='native_peer_a'", 1)
 			exec(t, "update "+external+".parent set label='external updated' where id=1")
 			count(t, "select count(*) from "+target+".v_nested where id=1 and label='external updated'", 1)
+			exec(t, "drop database "+target)
+			exec(t, "drop view "+external+".v_parent")
+			_, err := conn.ExecContext(ctx, "create database "+target+" clone "+source)
+			require.ErrorContains(t, err, "v_parent")
+			count(t, "select count(*) from parent where id=1 and label='external updated'", 1)
+			count(t, "select count(*) from mo_catalog.mo_database where datname='"+target+"'", 0)
 		})
 
 		exec(t, "begin")
@@ -317,6 +325,29 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 			exec(t, "create database "+first+" clone mo_catalog")
 			exec(t, "create database "+second+" clone "+first)
 			count(t, "select count(*) from "+second+".mo_database where datname='"+source+"'", 1)
+		})
+
+		t.Run("restored views retain their database resolution", func(t *testing.T) {
+			const database, snapshot = "clone_inventory_restore_views", "clone_inventory_restore_views_snapshot"
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				for _, statement := range []string{"drop snapshot if exists " + snapshot, "drop database if exists " + database} {
+					_, err := conn.ExecContext(cleanupCtx, statement)
+					assert.NoError(t, err, statement)
+				}
+			}()
+			exec(t, "create database "+database)
+			exec(t, "use "+database)
+			exec(t, "create table t(id int primary key)")
+			exec(t, "insert into t values (7)")
+			exec(t, "create view v as select id from t")
+			exec(t, "create snapshot "+snapshot+" for database "+database)
+			exec(t, "drop database "+database)
+			exec(t, "restore database "+database+"{snapshot='"+snapshot+"'}")
+			count(t, "select count(*) from v where id=7", 1)
+			exec(t, "drop view v")
+			exec(t, "drop table t")
 		})
 
 		t.Run("subscribed views retain the source account", func(t *testing.T) {

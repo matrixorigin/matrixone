@@ -1176,15 +1176,7 @@ func handleCloneDatabaseWithSource(
 
 	// clone view table
 	if len(source.viewMap) != 0 {
-		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, snapshotTS)
-		fromAccount := source.opAccountId
-		if viewSnapshot != nil && viewSnapshot.Tenant != nil {
-			fromAccount = viewSnapshot.Tenant.TenantID
-		}
-
-		if sortedViews, err = sortedViewInfos(
-			reqCtx, ses, bh, "", viewSnapshot, source.viewMap, fromAccount, source.toAccountId,
-		); err != nil {
+		if sortedViews, err = source.sortViews(reqCtx, ses, bh, snapshotTS); err != nil {
 			return
 		}
 
