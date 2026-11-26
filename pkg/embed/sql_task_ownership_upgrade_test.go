@@ -165,20 +165,25 @@ func TestSQLTaskOwnershipUpgradeFromReleasedCatalog(t *testing.T) {
 			return err
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())
 	}
-	ownershipStart := v4_0_7.Handler.ClusterUpgradeEntryCount() - 3
+	// These are the 4.0.7 cluster entry indices. Later migrations may follow them.
+	const (
+		runClaimEntry = 14 + iota
+		scheduleGenerationEntry
+		runningIndexEntry
+	)
 	_, err = taskDB.ExecContext(ctx, "alter table mo_task.sql_task add column schedule_generation bigint not null default 2")
 	require.NoError(t, err)
-	require.ErrorContains(t, applyEntry(ownershipStart+1), "incompatible definition")
+	require.ErrorContains(t, applyEntry(scheduleGenerationEntry), "incompatible definition")
 	_, err = taskDB.ExecContext(ctx, "alter table mo_task.sql_task drop column schedule_generation")
 	require.NoError(t, err)
 	_, err = taskDB.ExecContext(ctx, "create index idx_task_running on mo_task.sql_task_run(account_id, task_name, status)")
 	require.NoError(t, err)
-	require.ErrorContains(t, applyEntry(ownershipStart+2), "unexpected columns")
+	require.ErrorContains(t, applyEntry(runningIndexEntry), "unexpected columns")
 	_, err = taskDB.ExecContext(ctx, "alter table mo_task.sql_task_run drop index idx_task_running")
 	require.NoError(t, err)
 	// Stage one committed ownership DDL before crossing. The upgrade must
 	// recognize the existing column and apply the remaining entries.
-	require.NoError(t, applyEntry(ownershipStart))
+	require.NoError(t, applyEntry(runClaimEntry))
 	require.NoError(t, taskDB.Close())
 	require.NoError(t, db.Close())
 	require.NoError(t, c.Stop())
@@ -196,7 +201,7 @@ func TestSQLTaskOwnershipUpgradeFromReleasedCatalog(t *testing.T) {
 		require.Equal(t, "4.0.6", steps[0].FromVersion)
 		require.Equal(t, "4.0.7", steps[0].ToVersion)
 		require.Equal(t, versions.StateReady, steps[0].State)
-		for index := ownershipStart; index < v4_0_7.Handler.ClusterUpgradeEntryCount(); index++ {
+		for index := runClaimEntry; index <= runningIndexEntry; index++ {
 			require.NoError(t, applyEntry(index), "replaying a completed migration must be idempotent")
 		}
 
