@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -63,7 +64,7 @@ type activeTxn struct {
 	lockHolders    map[uint32]*tableLockHolder
 	remoteService  string
 	deadlockFound  bool
-	bindChanged    bool
+	bindFence      atomic.Pointer[txnBindFence]
 	closing        atomic.Bool
 	generation     uint64
 
@@ -73,6 +74,51 @@ type activeTxn struct {
 
 	// test-only hook: called before lockAdded; return non-nil to abort
 	beforeLockAdded func(txnID []byte, locks [][]byte) error
+}
+
+// A transaction without cold binding work needs no fence notification context.
+// The sentinel records fences that occurred before any subscriber registered.
+type txnBindFence struct {
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+}
+
+var fencedWithoutSubscriber = &txnBindFence{}
+
+func newTxnBindFence() *txnBindFence {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	return &txnBindFence{ctx: ctx, cancel: cancel}
+}
+
+func (txn *activeTxn) isFenced() bool {
+	fence := txn.bindFence.Load()
+	return fence != nil && (fence == fencedWithoutSubscriber ||
+		(fence.ctx.Err() != nil && context.Cause(fence.ctx) == ErrLockTableBindChanged))
+}
+
+// Caller must keep the transaction generation pinned until registration returns.
+func (txn *activeTxn) bindFenceContext() context.Context {
+	fence := txn.bindFence.Load()
+	if fence == nil {
+		fence = newTxnBindFence()
+		if !txn.bindFence.CompareAndSwap(nil, fence) {
+			fence.cancel(ErrTxnNotFound)
+			fence = txn.bindFence.Load()
+		}
+	}
+	if fence == fencedWithoutSubscriber {
+		return nil
+	}
+	return fence.ctx
+}
+
+func (txn *activeTxn) markFenced() {
+	if txn.bindFence.CompareAndSwap(nil, fencedWithoutSubscriber) {
+		return
+	}
+	if fence := txn.bindFence.Load(); fence != fencedWithoutSubscriber {
+		fence.cancel(ErrLockTableBindChanged)
+	}
 }
 
 type contextUnlocker interface {
@@ -657,7 +703,9 @@ func (txn *activeTxn) reset() {
 	txn.blockedWaiters = txn.blockedWaiters[:0]
 	txn.remoteService = ""
 	txn.deadlockFound = false
-	txn.bindChanged = false
+	if fence := txn.bindFence.Swap(nil); fence != nil && fence != fencedWithoutSubscriber {
+		fence.cancel(ErrTxnNotFound)
+	}
 	txn.closing.Store(false)
 	clear(txn.remoteCutoffs)
 }
@@ -710,9 +758,12 @@ func (txn *activeTxn) fenceByBindChangedLocked(bind pb.LockTable, logger *log.MO
 }
 
 func (txn *activeTxn) markBindChangedLocked(logger *log.MOLogger) {
-	txn.bindChanged = true
-	for _, w := range txn.blockedWaiters {
-		w.notify(notifyValue{err: ErrLockTableBindChanged}, logger)
+	txn.markFenced()
+	if len(txn.blockedWaiters) > 0 {
+		err := moerr.NewLockTableBindChangedForFencedTxnNoCtx()
+		for _, w := range txn.blockedWaiters {
+			w.notify(notifyValue{err: err}, logger)
+		}
 	}
 }
 

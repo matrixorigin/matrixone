@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -62,6 +63,10 @@ var (
 
 func acquireRequest() *pb.Request {
 	return reuse.Alloc[pb.Request](nil)
+}
+
+func releaseLockRequest(request morpc.Message) {
+	releaseRequest(request.(*pb.Request))
 }
 
 func releaseRequest(request *pb.Request) {
@@ -205,9 +210,7 @@ func NewClient(
 	keeperConfig := *c.cfg
 	keeperConfig.BackendOptions = append(
 		append([]morpc.BackendOption(nil), c.cfg.BackendOptions...),
-		morpc.WithBackendRequestRelease(func(message morpc.Message) {
-			releaseRequest(message.(*pb.Request))
-		}),
+		morpc.WithBackendRequestRelease(releaseLockRequest),
 	)
 	keeperClient, err := keeperConfig.NewClient(
 		service,
@@ -326,7 +329,7 @@ func (c *client) asyncSend(
 	for i := 0; i < 2; i++ {
 		var lookupErr error
 		switch request.Method {
-		case pb.Method_ForwardLock:
+		case pb.Method_ForwardLock, pb.Method_ResolveForwardBind:
 			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
 			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
@@ -386,6 +389,12 @@ func (c *client) asyncSend(
 					address = s.LockServiceAddress
 					return false
 				})
+		case pb.Method_GetBind:
+			var values []metadata.TNService
+			values, lookupErr = clusterservice.GetAllTNServicesWithContext(ctx, c.cluster)
+			if len(values) > 0 {
+				address = values[0].LockServiceAddress
+			}
 		default:
 			values := c.cluster.GetAllTNServices()
 			if len(values) > 0 {
@@ -438,8 +447,25 @@ func (c *client) asyncSend(
 		address = c.activeTxnBackend(sid, address)
 		transport = c.activeTxnTransport()
 	}
-	f, err := transport.Send(ctx, address, request)
+	outbound := request
+	if !useKeeperTransport && (method == pb.Method_GetBind || method == pb.Method_ResolveForwardBind) {
+		// The binding lookup may return on cancellation while the writer
+		// still has its request queued. Give it an independent pooled copy.
+		outbound = acquireRequest()
+		outbound.Method = method
+		outbound.GetBind = request.GetBind
+		outbound.GetBind.XXX_unrecognized = bytes.Clone(request.GetBind.XXX_unrecognized)
+		if method == pb.Method_ResolveForwardBind {
+			outbound.Lock.Options.ForwardTo = request.Lock.Options.ForwardTo
+			outbound.Lock.TxnID = bytes.Clone(request.Lock.TxnID)
+		}
+		ctx = morpc.WithRequestRelease(ctx, releaseLockRequest)
+	}
+	f, err := transport.Send(ctx, address, outbound)
 	if err != nil {
+		if outbound != request {
+			releaseRequest(outbound)
+		}
 		return returnError(err)
 	}
 	return f, err
@@ -476,7 +502,7 @@ func lockserviceRemoteRPCErrorType(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return ""
 	}
-	if errors.Is(err, os.ErrDeadlineExceeded) {
+	if errors.Is(err, os.ErrDeadlineExceeded) || moerr.IsMoErrCode(err, moerr.ErrLockTableBindLookupTimeout) {
 		return "timeout"
 	}
 	var netErr net.Error
