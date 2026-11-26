@@ -346,6 +346,20 @@ func TestODKUSystematicSQL(t *testing.T) {
 					}
 				})
 			}
+			t.Run("fulltext keeps the other physical zero owner", func(t *testing.T) {
+				exec(t, "create table texts_zero(k double primary key,id int,body text,fulltext ft(body))")
+				hidden := rows(t, "select index_table_name from mo_catalog.mo_indexes where name='ft' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='odku_systematic' and relname='texts_zero')")
+				require.Len(t, hidden, 1)
+				words := func() []string {
+					return rows(t, "select word from `"+hidden[0]+"` where word in ('originaltoken','neighbortoken','updatedtoken') order by word")
+				}
+				affected(t, 2, "insert into texts_zero values(?,?,?),(?,?,?) on duplicate key update body=values(body)",
+					float64(0), 1, "originaltoken", math.Copysign(0, -1), 2, "neighbortoken")
+				require.Equal(t, []string{"neighbortoken", "originaltoken"}, words())
+				affected(t, 2, "insert into texts_zero values(?,?,?) on duplicate key update body=values(body)", float64(0), 3, "updatedtoken")
+				require.Equal(t, []string{"1|updatedtoken", "2|neighbortoken"}, rows(t, "select id,body from texts_zero order by id"))
+				require.Equal(t, []string{"neighbortoken", "updatedtoken"}, words())
+			})
 			t.Run("IVF original key and rollback", func(t *testing.T) {
 				oldIVF := rows(t, "select @@experimental_ivf_index")[0]
 				exec(t, "set experimental_ivf_index=1")

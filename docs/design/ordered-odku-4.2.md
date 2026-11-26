@@ -183,11 +183,11 @@ views without waiting under that mutex. Compile joins scopes and closes views
 before sealing their account or entering rollback/retry. Prepared reuse resets
 executors, images, claims, eligibility, ordinals and result generation.
 
-All old regular-index reads and fulltext/IVF delete preparation complete before
-any physical writer mutates data. Materialized producers must all succeed
-before writers proceed. Base and every index consume the same effective final
-image. A generated PK move updates hidden-index base-PK payloads even when their
-index keys do not change. There is no all-deletes-first escape path.
+Base and index writers consume the same effective final image. Old-index
+lookups use physical PK identity, including in fulltext, IVF and master indexes.
+For mutable keys, all old regular-index reads and irregular delete preparation
+finish before any physical writer mutates data. A generated PK move updates
+hidden-index base-PK payloads even when their index keys do not change.
 
 The TN common scan advances separate data/tombstone dedup frontiers only after
 all eligible in-memory and persisted sources complete. Cancellation, Bloom,

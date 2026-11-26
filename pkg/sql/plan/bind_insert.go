@@ -709,10 +709,10 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 	}
 
 	// join entries (left) with the image (right) on origin_pk == old/final PK.
-	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-		{Typ: orgPkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
-		builder.deletePkColExpr(1),
-	})
+	cond, err := bindStoredKeyEquality(builder,
+		&plan.Expr{Typ: orgPkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
+		builder.deletePkColExpr(1), orgPkTyp,
+	)
 	if err != nil {
 		return err
 	}
@@ -797,10 +797,10 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 	}
 
 	// join index (left) with the image (right) on doc_id == old/final PK.
-	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-		{Typ: docIdTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
-		builder.deletePkColExpr(1),
-	})
+	cond, err := bindStoredKeyEquality(builder,
+		&plan.Expr{Typ: docIdTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+		builder.deletePkColExpr(1), docIdTyp,
+	)
 	if err != nil {
 		return err
 	}
@@ -879,10 +879,10 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 	}
 
 	// join index (left) with the image (right) on __mo_index_pri_col == old/final PK.
-	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-		{Typ: priColTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
-		builder.deletePkColExpr(1),
-	})
+	cond, err := bindStoredKeyEquality(builder,
+		&plan.Expr{Typ: priColTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+		builder.deletePkColExpr(1), priColTyp,
+	)
 	if err != nil {
 		return err
 	}
