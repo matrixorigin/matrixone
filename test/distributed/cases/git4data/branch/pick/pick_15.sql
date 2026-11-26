@@ -614,3 +614,36 @@ select k,a,b from dst_fork order by k;
 drop snapshot pick_window_hi;
 drop snapshot pick_window_lo;
 drop database pick_window;
+
+-- @testcase: Preserve committed source and destination history beyond a zero-history ancestor
+create database pick_window;
+use pick_window;
+begin;
+create table root (k int primary key, a int, b int);
+insert into root values (1,10,20),(2,30,40);
+data branch create table parent_src from root;
+data branch create table dst from root;
+data branch create table dst_alias from root;
+drop table root;
+commit;
+data branch create table leaf_dst from dst;
+delete from dst where k=1;
+delete from leaf_dst where k=1;
+alter table dst_alias algorithm=inplace, rename column a to tmp;
+alter table dst_alias algorithm=inplace, rename column b to a;
+alter table dst_alias algorithm=inplace, rename column tmp to b;
+create snapshot pick_window_lo for account sys;
+update parent_src set a=60 where k=1;
+data branch create table leaf_src from parent_src;
+insert into leaf_src values (3,70,80);
+create snapshot pick_window_hi for account sys;
+-- @regex("conflict: leaf_src INSERT and dst INSERT", true)
+data branch pick leaf_src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,a,b from dst order by k;
+data branch pick leaf_src into leaf_dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,a,b from leaf_dst order by k;
+data branch pick leaf_src into dst_alias between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,a,b from dst_alias order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;

@@ -1242,6 +1242,7 @@ func dataBranchPickWindowProbe(
 	tblStuff.lcaProbeTableId = 0
 	tblStuff.def.lcaColNames = make([]string, len(tblStuff.def.colNames))
 	tblStuff.def.tarOnlyIdxes = slices.Clone(tblStuff.def.tarOnlyIdxes)
+	renameProof := make(dataBranchRenameProof)
 	for i, name := range tblStuff.def.colNames {
 		if slices.Contains(tblStuff.def.tarOnlyIdxes, i) {
 			continue
@@ -1277,7 +1278,7 @@ func dataBranchPickWindowProbe(
 					)
 				}
 				var proven bool
-				startCol, proven = dataBranchPickWindowCopyColumn(prev, created, createdCol)
+				startCol, proven = dataBranchPickWindowCopyColumn(prev, created, createdCol, renameProof)
 				if !proven {
 					return tableStuff{}, moerr.NewNotSupportedNoCtxf(
 						"DATA BRANCH PICK has ambiguous COPY ALTER column lineage for %q at the window start", name)
@@ -1328,6 +1329,7 @@ func dataBranchPickWindowCreation(
 
 func dataBranchPickWindowCopyColumn(
 	previousDef, copyDef *plan2.TableDef, col *plan2.ColDef,
+	renameProof dataBranchRenameProof,
 ) (*plan2.ColDef, bool) {
 	previous := dataBranchColumnDefByIdentity(previousDef, col)
 	if !isDataBranchUserVisibleColumn(previous) || !isDataBranchLogicalTypeEquivalent(previous.Typ, col.Typ) {
@@ -1354,7 +1356,7 @@ func dataBranchPickWindowCopyColumn(
 
 	// An isolated rename is unambiguous when all visible coordinates are
 	// preserved and every other name still belongs to the same column.
-	if dataBranchColumnDefByRenameIdentity(previousDef, copyDef, col) == nil {
+	if dataBranchColumnDefByRenameIdentity(previousDef, copyDef, col, renameProof) == nil {
 		return nil, false
 	}
 	for _, candidate := range previousDef.Cols {
@@ -1477,14 +1479,15 @@ func hashDiffIfHasLCA(
 	baseProbeStuff := sideTableStuffForLCAProbe(tblStuff, copt, dagInfo, tarSP, baseSP, true)
 	if tblStuff.lcaHasZeroHistory {
 		// The destination's first committed image can classify its later
-		// changes. It cannot establish which rows were inherited.
+		// changes and prove an absent row was deleted. It cannot establish
+		// that an existing row was inherited from the source.
 		_, ident := tblStuff.endpointIdentities(ctx, ses)
 		cts, err := getTablesCreationCommitTS(ctx, ses, ident, tblStuff.baseRel, ident, tblStuff.baseRel,
 			[]types.TS{baseSP, baseSP})
 		if err != nil {
 			return err
 		}
-		baseLCAProbe = cts[0]
+		baseLCAProbe, inheritedAt = cts[0], cts[0]
 		baseProbeStuff = dataBranchHistoricalProbeStuff(ctx, tblStuff, tblStuff.baseRel)
 		baseProbeStuff.lcaIdent = &ident
 	} else if tblStuff.boundedPick && tarLCAProbe.LT(&baseLCAProbe) {
@@ -1498,7 +1501,8 @@ func hashDiffIfHasLCA(
 		if (tblStuff.boundedPick || tblStuff.pickWindowStart != nil) && copt.conflictOpt != nil &&
 			((wrapped.kind == diffDelete && !wrapped.fromUpdate) ||
 				(wrapped.kind == diffInsert && wrapped.fromUpdate)) &&
-			wrapped.batch.RowCount() > 0 && baseDataHashmap.ItemCount() > 0 {
+			wrapped.batch.RowCount() > 0 &&
+			(baseDataHashmap.ItemCount() > 0 || tblStuff.lcaHasZeroHistory && wrapped.fromUpdate) {
 			stop, err := reconcilePickWindowDestinationInsert(ctx, ses, bh, baseProbeStuff, tarProbeStuff,
 				copt, emit, wrapped, baseDataHashmap, inheritedAt)
 			if stop || err != nil || wrapped.batch.RowCount() == 0 {
@@ -2004,8 +2008,44 @@ func reconcilePickWindowDestinationInsert(
 			return appendTupleToBat(ses, matches, tuple, tables)
 		},
 	)
-	if err != nil || matches == nil {
+	if err != nil {
 		return false, err
+	}
+	if tables.lcaHasZeroHistory && src.fromUpdate && len(srcRows) < src.batch.RowCount() {
+		// The destination's live image has no tombstones. Use the first
+		// committed image only to distinguish a proven deletion from a key
+		// that was already absent, never to classify an existing row.
+		live := make([]bool, src.batch.RowCount())
+		for _, row := range srcRows {
+			live[row] = true
+		}
+		srcKeys := src.batch.Vecs[pkIdx]
+		missingKeys := vector.NewVec(*srcKeys.GetType(), ses.proc.Mp())
+		defer missingKeys.Free(ses.proc.Mp())
+		for row, found := range live {
+			if !found {
+				if err := missingKeys.UnionOne(srcKeys, int64(row), ses.proc.Mp()); err != nil {
+					return false, err
+				}
+			}
+		}
+		prior, _, err := probeDataBranchRows(ctx, ses, bh, missingKeys, tables, inheritedAt.ToTimestamp())
+		if err != nil {
+			return false, err
+		}
+		if prior.RowCount() != 0 {
+			if stop, err := emitBatch(emit, batchWithKind{
+				name: tables.baseRel.GetTableName(), kind: diffDelete, side: diffSideBase, batch: prior,
+				hasReplacement: true, fromUpdate: true,
+			}, false, tables.retPool); err != nil || stop {
+				return stop, err
+			}
+		} else {
+			tables.retPool.releaseRetBatch(prior, false)
+		}
+	}
+	if matches == nil {
+		return false, nil
 	}
 	matches.SetRowCount(len(srcRows))
 	conflicting := make([]int64, 0, len(srcRows))

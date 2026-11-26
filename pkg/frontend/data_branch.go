@@ -1481,7 +1481,8 @@ func reconcileDataBranchEndpointSchema(
 				return err
 			}
 		}
-		endpointColumns, err := dataBranchLineageEndpointColumns(tarDefs, tarEdges, baseDefs, baseEdges)
+		renameProof := make(dataBranchRenameProof)
+		endpointColumns, err := dataBranchLineageEndpointColumns(tarDefs, tarEdges, baseDefs, baseEdges, renameProof)
 		if err != nil {
 			return err
 		}
@@ -1503,7 +1504,7 @@ func reconcileDataBranchEndpointSchema(
 			}
 			idx++
 			reaches, tarLCACol, tarForkCol, redefined := dataBranchColumnAtFork(
-				tarDefs, tarEdges, tarCol,
+				tarDefs, tarEdges, tarCol, renameProof,
 			)
 			if !reaches || redefined || tarLCACol == nil {
 				continue
@@ -1516,7 +1517,7 @@ func reconcileDataBranchEndpointSchema(
 			// lineage match, as in the shared probe layout.
 			tables.def.baseLCAColNames[idx] = tables.def.tarLCAColNames[idx]
 			if reaches, _, baseForkCol, redefined := dataBranchColumnAtFork(
-				baseDefs, baseEdges, resolveBaseColumn(tarCol),
+				baseDefs, baseEdges, resolveBaseColumn(tarCol), renameProof,
 			); reaches && !redefined && baseForkCol != nil {
 				tables.def.baseLCAColNames[idx] = baseForkCol.Name
 			}
@@ -1598,7 +1599,7 @@ func pickForkSchemaPath(
 	outEdges := make([]bool, 0, len(defs))
 	for i, def := range defs {
 		sameGeneration := false
-		if i != 0 && def.Version != 0 && defs[i-1] != def {
+		if i != 0 && def.Version != 0 && path[i] == def.TblId {
 			rel, ident, at := endpoint, owners[0], endpointSP
 			if i+1 < len(defs) {
 				var err error
@@ -1615,6 +1616,11 @@ func pickForkSchemaPath(
 			if created.Version != 0 {
 				return nil, nil, moerr.NewNotSupportedNoCtxf(
 					"DATA BRANCH PICK cannot establish the creation schema for table %d", path[i])
+			}
+			// An ephemeral ancestor can use its first committed child's
+			// definition as a stand-in. Anchor those entries at creation.
+			for j := len(out) - 1; j >= 0 && out[j] == def; j-- {
+				out[j] = created
 			}
 			out, outEdges = append(out, created), append(outEdges, edges[i])
 			sameGeneration = true
@@ -2685,8 +2691,9 @@ func dataBranchColumnReachesLCA(
 	pathDefs []*plan.TableDef,
 	lineageOnly []bool,
 	endpointCol *plan.ColDef,
+	renameProof ...dataBranchRenameProof,
 ) (reachesLCA bool, lcaCol *plan.ColDef, redefined bool) {
-	reachesLCA, lcaCol, _, redefined = dataBranchColumnAtFork(pathDefs, lineageOnly, endpointCol)
+	reachesLCA, lcaCol, _, redefined = dataBranchColumnAtFork(pathDefs, lineageOnly, endpointCol, renameProof...)
 	return
 }
 
@@ -2694,6 +2701,7 @@ func dataBranchColumnAtFork(
 	pathDefs []*plan.TableDef,
 	lineageOnly []bool,
 	endpointCol *plan.ColDef,
+	renameProof ...dataBranchRenameProof,
 ) (reachesLCA bool, lcaCol, forkCol *plan.ColDef, redefined bool) {
 	if len(pathDefs) == 0 || len(pathDefs) != len(lineageOnly) || endpointCol == nil {
 		return false, nil, nil, false
@@ -2729,7 +2737,7 @@ func dataBranchColumnAtFork(
 			// ALTER coordinates are table-local, so a partial identity match is
 			// not sufficient: ADD/reorder can reuse another column's old pair.
 			previous = dataBranchColumnDefByRenameIdentity(
-				pathDefs[i], pathDefs[i+1], current,
+				pathDefs[i], pathDefs[i+1], current, renameProof...,
 			)
 		}
 		if previous == nil {
@@ -2748,10 +2756,14 @@ func dataBranchColumnAtFork(
 	return true, current, forkCol, false
 }
 
+// A schema edge's full-table proof is independent of the column being mapped.
+type dataBranchRenameProof map[[2]*plan.TableDef]bool
+
 func dataBranchColumnDefByRenameIdentity(
 	previousDef *plan.TableDef,
 	currentDef *plan.TableDef,
 	currentCol *plan.ColDef,
+	renameProof ...dataBranchRenameProof,
 ) *plan.ColDef {
 	previousCol := dataBranchColumnDefByIdentity(previousDef, currentCol)
 	if previousCol == nil || strings.EqualFold(previousCol.Name, currentCol.Name) ||
@@ -2759,6 +2771,25 @@ func dataBranchColumnDefByRenameIdentity(
 		return nil
 	}
 
+	edge := [2]*plan.TableDef{previousDef, currentDef}
+	var cache dataBranchRenameProof
+	if len(renameProof) != 0 {
+		cache = renameProof[0]
+	}
+	preservesIdentity, checked := cache[edge]
+	if !checked {
+		preservesIdentity = dataBranchCopyPreservesRenameIdentity(previousDef, currentDef)
+		if cache != nil {
+			cache[edge] = preservesIdentity
+		}
+	}
+	if !preservesIdentity {
+		return nil
+	}
+	return previousCol
+}
+
+func dataBranchCopyPreservesRenameIdentity(previousDef, currentDef *plan.TableDef) bool {
 	previousVisible := 0
 	currentVisible := 0
 	matchedPrevious := make(map[*plan.ColDef]struct{})
@@ -2774,24 +2805,21 @@ func dataBranchColumnDefByRenameIdentity(
 		currentVisible++
 		matched := dataBranchColumnDefByIdentity(previousDef, col)
 		if matched == nil || !isDataBranchUserVisibleColumn(matched) {
-			return nil
+			return false
 		}
 		if _, duplicate := matchedPrevious[matched]; duplicate {
-			return nil
+			return false
 		}
 		matchedPrevious[matched] = struct{}{}
 		if sameName := dataBranchColumnDefByName(previousDef, col.Name); sameName != nil {
 			if sameName != matched {
-				return nil
+				return false
 			}
 		} else if dataBranchColumnDefByName(currentDef, matched.Name) != nil {
-			return nil
+			return false
 		}
 	}
-	if previousVisible != currentVisible {
-		return nil
-	}
-	return previousCol
+	return previousVisible == currentVisible
 }
 
 func dataBranchLCASchemaContainsColumn(lcaDef *plan.TableDef, col *plan.ColDef) bool {
@@ -2823,9 +2851,13 @@ func dataBranchLineageEndpointColumns(
 	tarLineageOnly []bool,
 	baseDefs []*plan.TableDef,
 	baseLineageOnly []bool,
+	renameProof ...dataBranchRenameProof,
 ) (map[string]*plan.ColDef, error) {
 	if len(tarDefs) == 0 || len(baseDefs) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("data branch: missing schema lineage")
+	}
+	if len(renameProof) == 0 {
+		renameProof = []dataBranchRenameProof{make(dataBranchRenameProof)}
 	}
 	tarEndpoint := tarDefs[len(tarDefs)-1]
 	baseEndpoint := baseDefs[len(baseDefs)-1]
@@ -2841,7 +2873,7 @@ func dataBranchLineageEndpointColumns(
 		if !isDataBranchUserVisibleColumn(col) {
 			continue
 		}
-		reaches, ancestor, redefined := dataBranchColumnReachesLCA(baseDefs, baseLineageOnly, col)
+		reaches, ancestor, redefined := dataBranchColumnReachesLCA(baseDefs, baseLineageOnly, col, renameProof...)
 		baseAncestry[col] = ancestry{column: ancestor, reaches: reaches, redefined: redefined}
 		if reaches && !redefined {
 			if _, exists := baseByAncestor[ancestor]; exists {
@@ -2869,7 +2901,7 @@ func dataBranchLineageEndpointColumns(
 		}
 		seenTargetKeys[key] = tarCol.Name
 		tarReachesLCA, tarLCACol, tarRedefined := dataBranchColumnReachesLCA(
-			tarDefs, tarLineageOnly, tarCol,
+			tarDefs, tarLineageOnly, tarCol, renameProof...,
 		)
 		var baseCol *plan.ColDef
 		var baseAncestor *plan.ColDef
@@ -3181,12 +3213,15 @@ func decideCollectRange(
 		// materializes that intermediate's complete state, including writes made
 		// before the clone. Compare both endpoint histories directly so inherited
 		// rows cancel while those writes remain visible in the diff.
-		tarCollectRange = collectRange{
-			from:        []types.TS{types.MinTs()},
-			end:         []types.TS{tarSp},
-			rel:         []engine.Relation{tables.tarRel},
-			relSnapshot: []types.TS{tarRelSp},
-			idents:      []branchIdentity{tarIdent},
+		boundedZeroHistory := tables.boundedPick && tables.lcaHasZeroHistory
+		if !boundedZeroHistory {
+			tarCollectRange = collectRange{
+				from:        []types.TS{types.MinTs()},
+				end:         []types.TS{tarSp},
+				rel:         []engine.Relation{tables.tarRel},
+				relSnapshot: []types.TS{tarRelSp},
+				idents:      []branchIdentity{tarIdent},
+			}
 		}
 		baseCollectRange = collectRange{
 			from:        []types.TS{types.MinTs()},
@@ -3310,11 +3345,20 @@ func buildSideCollectRange(
 				ctx, ses, bh, candidates, nodeID, relationSnapshot,
 			); err != nil {
 				historicalErr := err
-				rel, winner, nodeCTS, hasZeroHistory, err = resolveSameTransactionDataBranchRelation(
+				var zeroHistory bool
+				rel, winner, nodeCTS, zeroHistory, err = resolveSameTransactionDataBranchRelation(
 					ctx, ses, bh, candidates, nodeID, relationSnapshot, endpointCTS, historicalErr,
 				)
-				if err != nil || hasZeroHistory {
+				if err != nil {
 					return
+				}
+				if zeroHistory {
+					hasZeroHistory = true
+					if !tables.boundedPick || !tables.lcaHasZeroHistory {
+						return
+					}
+					previousRel = nil
+					continue
 				}
 				relationSnapshot = endpointCTS
 				nodeCTSResolved = true
@@ -3350,6 +3394,8 @@ func buildSideCollectRange(
 		// Window lower bound.
 		if wholeHistory && i == 0 {
 			windowFrom = types.MinTs()
+		} else if hasZeroHistory && len(cr.rel) == 0 {
+			windowFrom = nodeCTS
 		} else {
 			windowFrom = nodeCTS.Next()
 		}
