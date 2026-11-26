@@ -1036,6 +1036,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <privilegeType> priv_type
 %type <privilegeLevel> priv_level
 %type <unresolveNames> column_name_list
+%type <unresolveNames> cluster_decl_name_list
 %type <partitionOption> partition_by_opt
 %type <clusterByOption> cluster_by_opt
 %type <partitionBy> partition_method sub_partition_method sub_partition_opt
@@ -11754,7 +11755,7 @@ cluster_by_opt:
     {
         $$ = nil
     }
-|   CLUSTER BY column_name
+|   CLUSTER BY column_decl_name
     {
         var ColumnList = []*tree.UnresolvedName{$3}
         $$ = tree.NewClusterByOption(
@@ -11762,12 +11763,25 @@ cluster_by_opt:
         )
 
     }
-    | CLUSTER BY '(' column_name_list ')'
+    | CLUSTER BY '(' cluster_decl_name_list ')'
     {
         var ColumnList = $4
         $$ = tree.NewClusterByOption(
             ColumnList,
         )
+    }
+
+// cluster_decl_name_list is confined to CLUSTER BY: it accepts the same
+// declaration identifier rule (including the unquoted END column) without
+// widening the shared column_name_list used by privilege/INCLUDE contexts.
+cluster_decl_name_list:
+    column_decl_name
+    {
+        $$ = []*tree.UnresolvedName{$1}
+    }
+|   cluster_decl_name_list ',' column_decl_name
+    {
+        $$ = append($1, $3)
     }
 
 sub_partition_opt:

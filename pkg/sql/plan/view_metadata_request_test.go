@@ -16,10 +16,12 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -408,4 +410,101 @@ func TestViewMetadataWarmMemoCancellationDuringRootRead(t *testing.T) {
 	result.Release()
 	next.Close()
 	require.Zero(t, f.generation.Used())
+}
+
+// The actual public SHOW/view_columns metadata route drives the released
+// extra-grouping fixture through DescribeViewMetadata: the request results
+// carry the exact single visible BIGINT a and the seeded physical
+// pg200.tw_src identity, the result and request are both released, and a
+// marked full-binding control surfaces the genuine duplicate-window
+// validation instead of a raw parse error.
+func TestViewMetadataRequestDescribesReleasedExtraGroupingFixture(t *testing.T) {
+	f := newViewSchemaTestFixture(t)
+	seedReleasePg200TwSrc(t, f.compiler.MockCompilerContext)
+	seedQualified := mockQualifiedTableName("pg200", "tw_src")
+	f.compiler.MockCompilerContext.tables["tw_src"] = f.compiler.MockCompilerContext.tablesByQualifiedName[seedQualified]
+	f.compiler.MockCompilerContext.objects["tw_src"] = f.compiler.MockCompilerContext.objectsByQualifiedName[seedQualified]
+	// The authentic release-written bytes: the release did not persist a
+	// creation-time lower_case_table_names, so the typed metadata route
+	// genuinely refuses them with the real legacy-context error.
+	var authentic ViewData
+	require.NoErrorf(t, json.Unmarshal([]byte(releasePg189VNested), &authentic), "the authentic fixture bytes must decode")
+	annotated := func(marked bool) string {
+		t.Helper()
+		creationContext := int64(1)
+		data, err := json.Marshal(ViewData{
+			Stmt: authentic.Stmt, DefaultDatabase: "pg200",
+			SQLMode: authentic.SQLMode, SecurityType: authentic.SecurityType,
+			LowerCaseTableNames: &creationContext,
+			CTEScopeProtocol: func() *int64 {
+				if marked {
+					one := int64(1)
+					return &one
+				}
+				return nil
+			}(),
+		})
+		require.NoErrorf(t, err, "the registered definition must marshal to valid JSON")
+		return string(data)
+	}
+	registerNamedView := func(name, viewSQL string) {
+		def := &TableDef{
+			Name: name, DbName: "pg200", DbId: 7, TblId: 4203, LogicalId: 4203, Version: 5,
+			TableType: catalog.SystemViewRel,
+			ViewSql:   &planpb.ViewDef{View: viewSQL},
+			// A stale physical schema must never determine the described columns.
+			Cols: []*ColDef{{Name: "stale", Typ: planpb.Type{Id: int32(types.T_int8)}}},
+		}
+		qualified := mockQualifiedTableName("pg200", name)
+		f.compiler.MockCompilerContext.tablesByQualifiedName[qualified] = def
+		f.compiler.MockCompilerContext.objectsByQualifiedName[qualified] = &ObjectRef{DbName: "pg200", ObjName: name, Obj: 4203, SchemaName: "pg200"}
+		f.compiler.MockCompilerContext.tables[name] = def
+		f.compiler.MockCompilerContext.objects[name] = &ObjectRef{DbName: "pg200", ObjName: name, Obj: 4203, SchemaName: "pg200"}
+	}
+	registerNamedView("v_nested", releasePg189VNested)
+	createSQL := "create view pg200.v_nested as ((select count(*) as a from pg200.tw_src interval(ts, 1, minute))) interval(ts, 2, minute) limit 5"
+	orig := f.provider
+	f.provider = func(ctx context.Context) (*ViewSchemaBinding, error) {
+		b, err := orig(ctx)
+		if err != nil {
+			return nil, err
+		}
+		b.Compiler.SetContext(WithRestoredViewDefinition(b.Compiler.GetContext(), "pg200", "v_nested", releasePg189VNested, createSQL))
+		return b, nil
+	}
+	r := NewViewMetadataRequest(t.Context(), f.provider)
+	defer r.Close()
+	_, err := DescribeViewMetadata(r.Context(), "pg200", "v_nested", nil)
+	require.ErrorContainsf(t, err, "LEGACY_CONTEXT_UNAVAILABLE", "the strict authentic release bytes carry no creation-time context and must be refused by the real creation-context guard")
+	// The provider-backed pattern registers the view exactly the way this
+	// fixture registers every described view: the authentic statement with
+	// the creation-time context. The released inference then describes it.
+	registerNamedView("v_nested_ctx", annotated(false))
+	result, err := DescribeViewMetadata(r.Context(), "pg200", "v_nested_ctx", nil)
+	require.NoErrorf(t, err, "the actual metadata route must describe the released extra-grouping fixture through the creation-context registration")
+	require.NotNilf(t, result, "the metadata route must return a real result")
+	defer result.Release()
+	cols, err := result.Columns()
+	require.NoErrorf(t, err, "the result columns decode")
+	require.Lenf(t, cols, 1, "exactly one visible output column per the release SHOW COLUMNS readback")
+	require.Truef(t, strings.EqualFold(cols[0].Name, "a"), "the single visible output column is a")
+	require.Equalf(t, int32(types.T_int64), cols[0].Typ.Id, "the output column a is BIGINT per the release readback")
+	deps, err := result.Dependencies()
+	require.NoErrorf(t, err, "the result dependencies decode")
+	var sawSrc bool
+	for _, dep := range deps {
+		if strings.EqualFold(dep.DatabaseName, "pg200") && strings.EqualFold(dep.RelationName, "tw_src") {
+			require.Equalf(t, uint64(4202), dep.RelationID, "the physical dependency must resolve to the seeded RelationID")
+			require.Equalf(t, uint64(4202), dep.LogicalID, "the physical dependency must carry the seeded LogicalID")
+			sawSrc = true
+		}
+	}
+	require.Truef(t, sawSrc, "the real result must carry the seeded physical pg200.tw_src dependency (refuse nil/empty)")
+	// The marked full-binding control on the same actual route: the genuine
+	// duplicate-window validation, not a parse error.
+	marked := annotated(true)
+	requireRecognizedMarker(t, marked)
+	registerNamedView("v_nested_marked", marked)
+	_, err = DescribeViewMetadata(r.Context(), "pg200", "v_nested_marked", nil)
+	require.ErrorContainsf(t, err, "multiple time window clauses", "a marked definition keeps the complete binding and must genuinely surface the duplicate-window validation through the metadata route")
 }

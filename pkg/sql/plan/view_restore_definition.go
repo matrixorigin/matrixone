@@ -70,13 +70,15 @@ func restoredViewLowerCase(ctx context.Context, data ViewData, fallback int64) (
 }
 
 // restoredLegacyInnerWindowInferenceInput reproduces the released server's
-// one-level CREATE inference boundary for the one marker-free restored shape
-// that needs it: the defining select is a direct outer window on a
-// parenthesized SELECT whose inner body itself owns an authored window and no
-// WITH scope of its own. The released CREATE bound that inner body, so the
-// restored schema/dependency inference selects the same inner input instead
-// of rejecting the duplicated window ownership. Every other authored shape
-// (including any WITH-bearing source) keeps the complete defining select.
+// CREATE inference boundary for marker-free restored definitions generally:
+// the released genViewTableDef switch binds the immediate parenthesized child
+// in every paren-form shape (`case *tree.ParenSelect` -> bind(s.Select), with
+// no condition on the outer window, a WITH or any inner clause - see
+// build_ddl.go:171-182 at the v4.2.9 release commit 6c05e42), while every
+// non-parenthesized form binds the whole statement. The restored
+// schema/dependency inference selects that same inner input, so an
+// extra-grouping layer or an authored WITH inside the body resolves exactly
+// as the release did; every other shape keeps the complete defining select.
 func restoredLegacyInnerWindowInferenceInput(ctx CompilerContext, database, name string, stmt *tree.Select) *tree.Select {
 	inner, ok := restoredLegacyInnerWindow(ctx, database, name, stmt)
 	if !ok || inner == nil {
@@ -97,41 +99,22 @@ func restoredLegacyInnerWindow(ctx CompilerContext, database, name string, stmt 
 	if err := json.Unmarshal([]byte(source.definition), &data); err != nil || data.CTEScopeProtocol != nil {
 		return nil, false
 	}
-	// The demonstrated released conflict is exactly a direct outer window on
-	// a parenthesized body whose inner select owns its own window and no
-	// LIMIT (the release witness decorates the outer level with both the
-	// window and the LIMIT). Any other authored field at either level - an
-	// BY RANK, lock/export/INTO/rewrite state, a WITH, or a competing inner
-	// LIMIT - keeps the previous complete binding, so its duplicate-clause
-	// and typed denials stay enforced. A directly-authored outer ORDER BY is
-	// projection ordering over the inner window: the released schema
-	// inference binds paren.Select only, so the guard admits it and the
-	// inference handoff below still passes the inner Select unchanged.
-	if stmt.Select == nil || stmt.TimeWindow == nil || stmt.With != nil {
-		return nil, false
-	}
-	if stmt.RankOption != nil || stmt.Ep != nil || stmt.IntoVars != nil || stmt.DeprecatedInto || stmt.SelectLockInfo != nil || stmt.RewriteOption != nil || stmt.IsPerform {
-		return nil, false
-	}
+	// The released server's genViewTableDef binds the immediate parenthesized
+	// child for CREATE VIEW inference in every paren-form shape: its switch arm
+	// is `case *tree.ParenSelect` -> bind(s.Select) with no condition on the
+	// outer window, a WITH, lock/export/INTO state or any inner clause, while
+	// the non-paren forms bind the whole statement (build_ddl.go:171-182 at the
+	// v4.2.9 release commit 6c05e42). This guard mirrors that boundary for
+	// marker-free restored definitions: a *tree.ParenSelect body hands the
+	// immediate child to the schema/dependency inference whatever clauses
+	// either level carries, and every other shape keeps the complete defining
+	// select so current-generation validation stays whole. The authentic
+	// release-authored extra-grouping capture proves the immediate child may
+	// itself be a transparent paren layer whose window binds through, and the
+	// release rejects the WITH-paren-body spelling outright (1064), so no
+	// marker-free definition of that shape can exist.
 	paren, ok := stmt.Select.(*tree.ParenSelect)
 	if !ok || paren.Select == nil {
-		return nil, false
-	}
-	inner := paren.Select
-	// The released CREATE inference binds the parenthesized body's inner
-	// select alone for schema and dependencies, so every clause that
-	// release authorized inside that body - a WITH, a competing LIMIT, and
-	// ORDER BY alone or paired - is an inference input only here: the
-	// handoff passes the inner Select unchanged and the readers keep the
-	// released execution semantics (the duplicate ORDER pair still reads
-	// exactly as the release does, with its duplicate-clause error at query
-	// time) instead of aborting restore/dependency planning. Only this
-	// marker-free inference boundary changes; authored current-generation
-	// definitions keep the complete defining select and its validation.
-	if inner.TimeWindow == nil {
-		return nil, false
-	}
-	if inner.RankOption != nil || inner.Ep != nil || inner.IntoVars != nil || inner.DeprecatedInto || inner.SelectLockInfo != nil || inner.RewriteOption != nil || inner.IsPerform {
 		return nil, false
 	}
 	return paren.Select, true

@@ -185,15 +185,26 @@ func TestRestoredLegacyInnerWindowInferenceShapeIsExact(t *testing.T) {
 	if inner, ok := restoredLegacyInnerWindow(mc, "pg", "v", stmtOf(innerLimit)); !ok || inner == nil {
 		t.Fatalf("the released-witnessed inner-LIMIT shape must select the inner inference input")
 	}
-	// Excluded shapes keep the complete binding: a body without its own
-	// window is outside the released dual-window boundary.
+	// The released case arm binds the immediate parenthesized child whatever
+	// it carries, so a body without its own window still infers from that
+	// body alone: the outer window never belongs to the released inference
+	// input (the authentic release-authored capture in this review's phase
+	// evidence proves the arm also peels a transparent extra paren layer).
+	noInnerWindow := "(select count(*) as a from tw_src) interval(ts, 2, minute) limit 5"
+	bindDefinition(markerFree)
+	if inner, ok := restoredLegacyInnerWindow(mc, "pg", "v", stmtOf(noInnerWindow)); !ok || inner == nil {
+		t.Fatalf("the released paren-child boundary must select the body's own select for inference")
+	}
+	// Excluded shape: an UNPARENTHESIZED body is the released default arm's
+	// territory - the whole statement binds, so the legacy inner-window
+	// inference input does not apply.
 	excluded := []string{
-		"(select count(*) as a from tw_src) interval(ts, 2, minute) limit 5",
+		"select count(*) as a from tw_src interval(ts, 1, minute)",
 	}
 	for _, sql := range excluded {
 		bindDefinition(markerFree)
 		if inner, ok := restoredLegacyInnerWindow(mc, "pg", "v", stmtOf(sql)); ok || inner != nil {
-			t.Fatalf("an unrelated authored state must keep the previous complete binding: %q", sql)
+			t.Fatalf("an unparenthesized body keeps the released default arm's complete binding: %q", sql)
 		}
 	}
 

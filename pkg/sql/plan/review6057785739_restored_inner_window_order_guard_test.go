@@ -66,9 +66,13 @@ func TestRestoredInnerWindowOrderGuardAdmitsSingleInnerOrOuterOnly(t *testing.T)
 	require.True(t, ok)
 	_, ok = restoredGuardSelect(t, "(select count(*) as a from t interval(ts, 1, minute) order by a) interval(ts, 2, minute) order by a limit 5")
 	require.True(t, ok)
-	// an inner WITH still rejects when it hides the inner window itself
+	// an inner WITH body without its own window: the released case arm binds
+	// the parenthesized child whatever it carries, so the body's own WITH is
+	// an inference input exactly like the v_innerwith witness and the shape is
+	// admitted; its genuine resolution (CTE visibility, real bind errors)
+	// belongs to the released binder's semantics, not the shape gate.
 	_, ok = restoredGuardSelect(t, "(with c as (select ts from t) select count(*) as a from c) interval(ts, 2, minute) limit 5")
-	require.False(t, ok)
+	require.True(t, ok)
 	// a non-window outside-family shape: no gate effect
 	_, ok = restoredGuardSelect(t, "select a from t")
 	require.False(t, ok)

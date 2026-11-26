@@ -288,10 +288,12 @@ func inferViewColumns(
 	// top-level ParenSelect before binding would drop it and let a
 	// same-name physical table silently take over (or the CTE vanish
 	// when no homonym exists).
-	// A marker-free restored definition may carry the released dual-window
-	// shape; its schema/dependency inference repeats the released one-level
-	// CREATE boundary. Only this inference input changes: every other
-	// consumer of the authored stmt below keeps the complete defining select.
+	// A marker-free restored definition follows the released CREATE inference
+	// boundary generally: the immediate parenthesized child becomes the
+	// schema/dependency inference input in every paren-form shape, exactly as
+	// the released genViewTableDef case arm binds it. Only this inference
+	// input changes: every other consumer of the authored stmt below keeps the
+	// complete defining select.
 	inferenceInput := restoredLegacyInnerWindowInferenceInput(ctx, viewDatabase, viewName, stmt)
 	stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 		plan.Query_SELECT, ctx, inferenceInput, false, true, validate, captureColumnTypes, true,

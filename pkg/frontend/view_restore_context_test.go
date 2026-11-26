@@ -17,10 +17,12 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -162,4 +164,61 @@ func TestViewRestoreParserPreservesIdentifierCase(t *testing.T) {
 	require.NoError(t, err)
 	defer freeStatements(ordinary)
 	require.Equal(t, "mixedcase", string(ordinary[0].(*tree.CreateView).Name.ObjectName))
+}
+
+// The authentic release-authored extra-grouping fixture bytes (captured from
+// the real v4.2.9 server; verified marker-free) drive the actual frontend
+// restore helpers.
+const releaseVNestedViewData6066215544 = `{"Stmt":"create view pg200.v_nested as ((select count(*) as a from pg200.tw_src interval(ts, 1, minute))) interval(ts, 2, minute) limit 5","DefaultDatabase":"","sql_mode":"ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES","security_type":"DEFINER"}`
+
+// pg200SeedCompiler binds only the fixture's own physical source identity and
+// delegates everything else to the underlying mock compiler.
+type pg200SeedCompiler struct {
+	*plan.MockCompilerContext
+}
+
+func (c *pg200SeedCompiler) Resolve(schemaName, tableName string, snapshot *plan.Snapshot, resolution *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	if strings.EqualFold(schemaName, "pg200") && strings.EqualFold(tableName, "tw_src") {
+		def := &plan.TableDef{
+			Name: "tw_src", DbName: "pg200", TblId: 4202, LogicalId: 4202,
+			Cols: []*plan.ColDef{{Name: "ts", Typ: plan.Type{Id: int32(types.T_timestamp)}}},
+		}
+		return &plan.ObjectRef{DbName: "pg200", ObjName: "tw_src", Obj: 4202, SchemaName: "pg200"}, def, nil
+	}
+	return c.MockCompilerContext.Resolve(schemaName, tableName, snapshot, resolution)
+}
+
+func TestViewRestoreHelpersBindReleasedExtraGroupingFixture(t *testing.T) {
+	inner := plan.NewMockCompilerContext(false, testutil.NewProcess(t))
+	compiler := &pg200SeedCompiler{MockCompilerContext: inner}
+	original := t.Context()
+	compiler.SetContext(original)
+	createSQL := "create view pg200.v_nested as ((select count(*) as a from pg200.tw_src interval(ts, 1, minute))) interval(ts, 2, minute) limit 5"
+	info := &tableInfo{dbName: "pg200", tblName: "v_nested", createSql: createSQL, viewDef: releaseVNestedViewData6066215544}
+	statements, err := parseViewCreateSQLForRestore(original, info, 1)
+	require.NoErrorf(t, err, "the release-authored CREATE VIEW must parse through the frontend restore helper")
+	defer freeStatements(statements)
+	p, err := buildViewCreatePlanForRestore(compiler, info, statements[0])
+	require.NoErrorf(t, err, "the actual frontend restore helper must plan the released extra-grouping fixture")
+	require.NotNilf(t, p, "the restore helper must produce a real plan")
+	// the helper owns and restores the compiler context.
+	require.Same(t, original, compiler.GetContext(), "the restore helper must restore the original context ownership")
+	// the emitted CREATE DDL persists the authored statement and the physical dependency identity.
+	var emitted plan.ViewData
+	require.NoErrorf(t, json.Unmarshal([]byte(p.GetDdl().GetCreateView().TableDef.ViewSql.View), &emitted), "the emitted CREATE DDL must decode")
+	require.NotEmptyf(t, emitted.Stmt, "the emitted CREATE DDL must carry the authored statement")
+	var sawSrc bool
+	for _, dep := range emitted.Dependencies {
+		if strings.EqualFold(dep.DatabaseName, "pg200") && strings.EqualFold(dep.RelationName, "tw_src") {
+			require.Equalf(t, uint64(4202), dep.RelationID, "the emitted CREATE DDL must persist the physical RelationID")
+			require.Equalf(t, uint64(4202), dep.LogicalID, "the emitted CREATE DDL must persist the physical LogicalID")
+			sawSrc = true
+		}
+	}
+	require.Truef(t, sawSrc, "the emitted CREATE DDL must bind the seeded pg200.tw_src dependency (refuse nil/empty)")
+	// the planned view definition: exactly one visible BIGINT a.
+	cols := p.GetDdl().GetCreateView().TableDef.Cols
+	require.Lenf(t, cols, 1, "the planned view definition has exactly one visible output column")
+	require.Truef(t, strings.EqualFold(cols[0].Name, "a"), "the planned output column is a")
+	require.Equalf(t, int32(types.T_int64), cols[0].Typ.Id, "the planned output column a is BIGINT per the release readback")
 }
