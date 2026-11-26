@@ -504,10 +504,18 @@ func (gs *globalStats) phraseDf(slots []phraseSlot) int {
 		return d
 	}
 	d := 0
+	exact := exactPhraseSlots(slots)
 	for si, seg := range gs.idx.segments {
-		for _, h := range seg.matchPhrase(slots) { // counted, then the slice is released this iteration
-			if gs.idx.isLive(si, h.ord) {
+		count := func(ord int64, _ int) {
+			if gs.idx.isLive(si, ord) {
 				d++
+			}
+		}
+		if exact {
+			seg.visitExactPhrase(slots, count)
+		} else {
+			for _, h := range seg.matchPhrase(slots) {
+				count(h.ord, h.tf)
 			}
 		}
 	}

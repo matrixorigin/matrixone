@@ -118,6 +118,14 @@ func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, allow Member
 	if k <= 0 || s.N == 0 || (len(q.must) == 0 && len(q.should) == 0 && len(q.adjust) == 0) {
 		return nil, nil
 	}
+	// A single required phrase emits each matching ordinal once. With no other
+	// clauses to combine, feed those scores directly into the filtered top-k.
+	if len(q.must) == 1 && len(q.should) == 0 && len(q.mustNot) == 0 && len(q.adjust) == 0 {
+		c := q.must[0]
+		if c.kind == clausePhrase && exactPhraseSlots(c.phrase) {
+			return s.searchRequiredPhrase(c, algo, k, allow, gs), nil
+		}
+	}
 	if terms, ok := conjunctiveTerms(q); ok {
 		return s.searchConjunctiveTerms(terms, algo, k, allow, gs), nil
 	}
@@ -125,6 +133,24 @@ func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, allow Member
 		return s.searchWAND(terms, algo, k, allow, gs), nil
 	}
 	return s.searchBooleanFull(q, algo, k, allow, gs)
+}
+
+func (s *Segment) searchRequiredPhrase(c clause, algo ScoreAlgo, k int, allow Membership, gs *globalStats) []Result {
+	var localDF int
+	if gs == nil {
+		s.visitExactPhrase(c.phrase, func(int64, int) { localDF++ })
+	}
+	idf := gs.phraseIdfFor(s, c.phrase, localDF)
+	avg := gs.avgdl(s)
+	h := newTopKHeap(k, s.N)
+	s.visitExactPhrase(c.phrase, func(ord int64, tf int) {
+		if allowed(allow, ord) {
+			// Match evalBoolean's addition to an initially positive-zero score.
+			score := 0 + c.weight*s.scoreTerm(algo, float64(tf), idf, ord, avg)
+			h.Push(ord, -score)
+		}
+	})
+	return heapToResults(s, h)
 }
 
 // conjunctiveTerms reports whether q is a pure conjunction of single-term MUST

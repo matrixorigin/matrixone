@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/stretchr/testify/require"
 )
@@ -202,4 +203,38 @@ func TestIsConjunctiveTermQuery(t *testing.T) {
 
 	_, err := IsConjunctiveTermQuery([]byte("+alpha"), "unsupported")
 	require.Error(t, err)
+}
+
+func TestSingleMustPhraseTopK(t *testing.T) {
+	seg, err := BuildSegmentFromDocsParser("zh", int32(types.T_int64), []Doc{
+		{int64(1), []byte("中华人民共和国中华人民共和国")},
+		{int64(2), []byte("中华人民共和国")},
+		{int64(3), []byte("中华人民共和国")},
+		{int64(4), []byte("共和国")},
+	}, ParserNgram)
+	require.NoError(t, err)
+	allow := ordSet{1: {}, 2: {}}
+	for _, pattern := range []string{"+中华人民共和国", "+共和国"} {
+		q, err := buildBooleanQuery(pattern, ParserNgram)
+		require.NoError(t, err)
+		require.Len(t, q.must, 1)
+		require.Equal(t, clausePhrase, q.must[0].kind)
+		require.True(t, exactPhraseSlots(q.must[0].phrase))
+		for _, algo := range []ScoreAlgo{BM25, TfIdf} {
+			for _, k := range []int{1, 4} {
+				want, err := seg.searchBooleanFull(q, algo, k, allow, nil)
+				require.NoError(t, err)
+				require.Len(t, want, min(k, 2))
+				got, err := seg.SearchBoolean(q, algo, k, allow, nil)
+				require.NoError(t, err)
+				require.Equal(t, pkslice(want), pkslice(got))
+				require.Equal(t, resultScoreBits(want), resultScoreBits(got))
+				if pattern == "+共和国" {
+					for _, bits := range resultScoreBits(got) {
+						require.Zero(t, bits)
+					}
+				}
+			}
+		}
+	}
 }
