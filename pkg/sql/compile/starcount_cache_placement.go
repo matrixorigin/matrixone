@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -116,9 +117,16 @@ func (c *Compile) placeStarCountByCache(
 	if err != nil || sample == nil {
 		return fallback, ctx.Err()
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, starCountCacheProbeTimeout)
+	threshold, timeout := defaultStarCountTombstoneThreshold, starCountCacheProbeTimeout
+	if cfg, ok := runtime.GetStarCountTestConfig(c.proc.GetService(), uint64(node.ObjRef.Obj)); ok {
+		threshold = cfg.TombstoneThreshold
+		if cfg.ProbeTimeout > 0 {
+			timeout = cfg.ProbeTimeout
+		}
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	objects, err := sample(probeCtx, defaultStarCountTombstoneThreshold)
+	objects, err := sample(probeCtx, threshold)
 	if err != nil || probeCtx.Err() != nil || len(objects) == 0 {
 		return fallback, ctx.Err()
 	}

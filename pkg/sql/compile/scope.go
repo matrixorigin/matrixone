@@ -1859,7 +1859,15 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 			}
 			metricv2.StarcountEstimateTombstoneRowsHistogram.Observe(float64(estimatedTombstoneRows))
 
-			if estimatedTombstoneRows > defaultStarCountTombstoneThreshold {
+			threshold := defaultStarCountTombstoneThreshold
+			var onSealedRows func(int64)
+			if s.Proc != nil {
+				if cfg, ok := runtime.GetStarCountTestConfig(s.Proc.GetService(), uint64(node.GetObjRef().GetObj())); ok {
+					threshold = cfg.TombstoneThreshold
+					onSealedRows = cfg.OnSealedRows
+				}
+			}
+			if estimatedTombstoneRows > threshold {
 				metricv2.StarcountPathPerBlockCounter.Inc()
 				if len(node.RuntimeFilterProbeList) == 0 && node.Limit == nil && node.Offset == nil {
 					var rows int64
@@ -1878,6 +1886,9 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 						mergeGroup.PartialResults = []any{rows}
 						mergeGroup.PartialResultTypes = []types.T{types.T_int64}
 						s.StarCountMergeGroup = mergeGroup
+						if onSealedRows != nil {
+							onSealedRows(rows)
+						}
 						return nil
 					}
 				}
