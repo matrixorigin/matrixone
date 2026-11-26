@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,8 +29,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
 )
+
+// Isolate this test with -covermode=count to measure actual Fill calls in
+// processAggregateFuncRange and evaluateFullPartitions on the same OVER() plan.
+func TestBitmapOrWindowFillWork(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	defer func() { proc.Free(); require.Zero(t, mp.CurrNB()) }()
+	child := colexec.NewMockOperator()
+	defer child.Free(proc, false, nil)
+	const rows = 1600
+	typ := types.T_varbinary.ToType()
+	input := batch.NewWithSize(1)
+	child.WithBatchs([]*batch.Batch{input})
+	input.Vecs[0] = vector.NewVec(typ, mp)
+	for row := range rows {
+		data, err := roaring.BitmapOf(uint32(row % 8)).ToBytes()
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], data, false, mp))
+	}
+	input.SetRowCount(rows)
+	spec := makeAggWindowSpec("bitmap_or_agg")
+	spec.GetW().Frame.Type = plan.FrameClause_RANGE
+	arg := &Window{WinSpecList: []*plan.Expr{spec}, Aggs: []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfBitmapOr, false, []*plan.Expr{newColExprWithType(0, typ)}, nil),
+	}}
+	arg.AppendChild(child)
+	defer arg.Free(proc, false, nil)
+	require.NoError(t, arg.Prepare(proc))
+	want := []uint32{0, 1, 2, 3, 4, 5, 6, 7}
+	seen := 0
+	for {
+		result, err := arg.Call(proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop {
+			require.Nil(t, result.Batch)
+			break
+		}
+		require.NotNil(t, result.Batch)
+		require.Positive(t, result.Batch.RowCount())
+		out := result.Batch.Vecs[1]
+		for row := range result.Batch.RowCount() {
+			checkBitmapWindowRow(t, out, row, want)
+		}
+		seen += result.Batch.RowCount()
+		require.LessOrEqual(t, seen, rows)
+	}
+	require.Equal(t, rows, seen)
+}
 
 func TestFullPartitionSumAcrossChunksAndNullPartitions(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
