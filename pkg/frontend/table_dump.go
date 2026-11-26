@@ -24,12 +24,15 @@ import (
 	"io"
 	"path"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -359,17 +362,15 @@ func tableSchemaHashWithOptions(
 	} else if tableDumpHasLegacyTextMetadata(def) {
 		normalizeTableDumpLegacyTextMetadata(def)
 	}
+	return tableSchemaFingerprint(def)
+}
+
+func tableSchemaFingerprint(def *plan.TableDef) (string, error) {
 	// For ordinary tables, reconstruct the DDL from the expanded TableDef. This
 	// makes CREATE TABLE ... LIKE ... compare equal to an equivalent explicit
 	// CREATE TABLE statement stored by another cluster.
 	if canReconstructTableSchema(def) {
-		clone := *def
-		clone.Name = "__table_dump_target__"
-		clone.DbName = ""
-		clone.Createsql = ""
-		// This is persisted fingerprint input, not the replayable manifest DDL.
-		// Keep the historical comment and default bytes so existing archives remain loadable.
-		canonical, err := sqlplan.ConstructCreateTableSQLForSchemaHash(&clone)
+		canonical, err := tableDumpCanonicalCreate(def)
 		if err != nil {
 			return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 		}
@@ -415,6 +416,15 @@ func tableSchemaHashWithOptions(
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func tableDumpCanonicalCreate(def *plan.TableDef) (string, error) {
+	clone := *def
+	clone.Name = "__table_dump_target__"
+	clone.DbName = ""
+	clone.Createsql = ""
+	// Keep the historical comment and default bytes in persisted fingerprints.
+	return sqlplan.ConstructCreateTableSQLForSchemaHash(&clone)
 }
 
 // Internal index relations cannot be altered directly, so their table-level
@@ -1706,24 +1716,56 @@ func tableDumpReleasedPowerSchemaHash(ctx context.Context, target *plan.TableDef
 	if !canReconstructTableSchema(target) {
 		return "", nil
 	}
-	sourceNames, sourceImplicit, ok := tableDumpCheckDeclarations(ctx, manifest.CreateSQL, manifest.SourceDatabase, manifest.SourceTable)
-	if !ok {
+	sourceDDL := parseTableDumpCreateDeclaration(ctx, manifest.CreateSQL)
+	if sourceDDL == nil {
 		return "", nil
 	}
-	targetNames, targetImplicit, ok := tableDumpCheckDeclarations(ctx, target.Createsql, target.DbName, target.Name)
-	if !ok || len(sourceNames) != len(target.Checks) || len(targetNames) != len(target.Checks) {
+	defer sourceDDL.Free()
+	targetDDL := parseTableDumpCreateDeclaration(ctx, target.Createsql)
+	if targetDDL == nil {
+		return "", nil
+	}
+	defer targetDDL.Free()
+	sourceMatches := tableDumpCreateTableMatches(&sourceDDL.Table, manifest.SourceDatabase, manifest.SourceTable)
+	targetMatches := tableDumpCreateTableMatches(&targetDDL.Table, target.DbName, target.Name)
+	sourceNames, sourceImplicit := collectTableDumpCheckDeclarations(sourceDDL)
+	targetNames, targetImplicit := collectTableDumpCheckDeclarations(targetDDL)
+	if len(sourceNames) != len(target.Checks) || len(targetNames) != len(target.Checks) {
 		return "", nil
 	}
 	legacy := *target
 	legacy.Checks = make([]*plan.CheckDef, len(target.Checks))
+	var renderedTargetNames map[int]bool
+	var sourceCompositeShow bool
 	renamed := false
 	for i, check := range target.Checks {
-		if check == nil || !strings.EqualFold(sourceNames[i], targetNames[i]) {
+		if check == nil {
 			return "", nil
 		}
+		releasedName := fmt.Sprintf("__mo_chk_%d", i+1)
+		currentName := fmt.Sprintf("%s_chk_%d", target.Name, i+1)
+		if !strings.EqualFold(sourceNames[i], targetNames[i]) {
+			switch {
+			case sourceNames[i] == "" && targetNames[i] == releasedName && check.Name == releasedName:
+				// The release's SHOW CREATE explicitly spelled the anonymous
+				// name. Verify the entire declaration after removing this label.
+				if renderedTargetNames == nil {
+					renderedTargetNames = make(map[int]bool)
+				}
+				renderedTargetNames[i] = true
+			case manifest.Version == tableDumpBoundFormatVersion && !sourceImplicit &&
+				sourceNames[i] == releasedName && targetNames[i] == "" &&
+				(check.Name == currentName || check.Name == releasedName):
+				// A v3 replayable SHOW CREATE for a packed composite key
+				// must be proved below against the complete old declaration.
+				sourceCompositeShow = true
+			default:
+				return "", nil
+			}
+		}
 		copy := *check
-		if sourceNames[i] == "" && check.Name == fmt.Sprintf("%s_chk_%d", target.Name, i+1) {
-			copy.Name = fmt.Sprintf("__mo_chk_%d", i+1)
+		if targetNames[i] == "" && check.Name == currentName && (sourceNames[i] == "" || sourceCompositeShow && sourceNames[i] == releasedName) {
+			copy.Name = releasedName
 			if checkAliases != nil {
 				checkAliases[strings.ToLower(check.Name)] = copy.Name
 			}
@@ -1731,8 +1773,37 @@ func tableDumpReleasedPowerSchemaHash(ctx context.Context, target *plan.TableDef
 		}
 		legacy.Checks[i] = &copy
 	}
+	if !sourceMatches || !targetMatches || len(renderedTargetNames) != 0 {
+		// Older RENAME retained the original CREATE name. Compare complete
+		// declarations, allowing only separately witnessed identity changes.
+		if (!sourceMatches && !tableDumpOrdinaryRenameDeclaration(&sourceDDL.Table, manifest.SourceDatabase)) ||
+			(!targetMatches && !tableDumpOrdinaryRenameDeclaration(&targetDDL.Table, target.DbName)) ||
+			!sameTableDumpRenameDeclaration(sourceDDL, targetDDL, target, renderedTargetNames) {
+			return "", nil
+		}
+	}
+	if sourceCompositeShow && !tableDumpMatchesReleasedCompositeShow(ctx, &legacy, sourceDDL) {
+		return "", nil
+	}
+	if !sourceImplicit && targetImplicit && manifest.Version == tableDumpBoundFormatVersion {
+		// Some v3 writers rendered SHOW CREATE for the legacy packed
+		// carrier. Accept only that complete, independently reproduced DDL.
+		sourceImplicit = sourceCompositeShow || tableDumpMatchesReleasedCompositeShow(ctx, target, sourceDDL)
+	}
 	if sourceImplicit && targetImplicit && tableDumpV1CollationIndependent(target) {
 		legacy.DefaultCharset = uint32(types.CharsetLegacy)
+		if manifest.Version == tableDumpFormatVersion && tableDumpNativeCompositePK(target) {
+			legacy.Cols = append([]*plan.ColDef(nil), target.Cols...)
+			for i, col := range legacy.Cols {
+				if col.Name == catalog.CPrimaryKeyColName {
+					packed := *col
+					packed.Typ.Charset = uint32(types.CharsetLegacy)
+					legacy.Cols[i] = &packed
+					break
+				}
+			}
+			return tableDumpV1UndecoratedPackedHash(&legacy)
+		}
 	} else if manifest.Version == tableDumpBoundFormatVersion && !renamed {
 		return "", nil
 	}
@@ -1746,26 +1817,201 @@ func tableDumpReleasedPowerMainHash(ctx context.Context, target *plan.TableDef, 
 	if hash == "" || hash != manifest.SchemaHash || err != nil {
 		return "", err
 	}
+	if !tableDumpMainRelationHasHash(manifest, hash) {
+		return "", nil
+	}
+	return hash, nil
+}
+
+func tableDumpMainRelationHasHash(manifest *tableDumpManifest, hash string) bool {
 	for _, relation := range manifest.Relations {
 		if relation.Role == "main" && strings.EqualFold(relation.SourceTable, manifest.SourceTable) && relation.SchemaHash == hash &&
 			(relation.LogicalSchemaHash == hash || relation.LogicalSchemaHash == "" && manifest.Version == tableDumpFormatVersion) {
-			return hash, nil
+			return true
 		}
 	}
-	return "", nil
+	return false
 }
 
-func tableDumpCheckDeclarations(ctx context.Context, sql, database, name string) (names []string, implicitCharset, ok bool) {
+// Released regular packed indexes stored the same serialized tuples under
+// a legacy VARCHAR collation tag. Prove the ordinary numeric/native key
+// layout before reconstructing the old presentation and hashing everything.
+func tableDumpReleasedPackedIndex(master, def *plan.TableDef, index tableDumpRelation) *plan.TableDef {
+	if def == nil || def.TableType != catalog.SystemIndexRel || def.DefaultCharset != uint32(types.CharsetLegacy) ||
+		master.KeyFormat != collation.KeyFormatLegacy || def.KeyFormat != collation.KeyFormatLegacy || len(def.Cols) != 3 ||
+		def.GetPkey().GetPkeyColName() != catalog.IndexTableIndexColName {
+		return nil
+	}
+	var metadata *plan.IndexDef
+	for _, candidate := range master.Indexes {
+		if candidate.GetIndexName() == index.IndexName && candidate.GetIndexAlgoTableType() == index.IndexAlgoTableType {
+			metadata = candidate
+			break
+		}
+	}
+	if metadata == nil || metadata.Unique || metadata.KeyFormat != collation.KeyFormatLegacy || metadata.IndexTableName != def.Name ||
+		index.IndexAlgoTableType != "" || len(metadata.Parts) < 2 ||
+		(!catalog.IsNullIndexAlgo(metadata.IndexAlgo) && catalog.ToLower(metadata.IndexAlgo) != catalog.MoIndexBTreeAlgo.ToString()) {
+		return nil
+	}
+	masterPKName := master.GetPkey().GetPkeyColName()
+	compositePK := masterPKName == catalog.CPrimaryKeyColName
+	for _, part := range metadata.Parts {
+		if compositePK && catalog.IsAlias(part) && catalog.ResolveAlias(part) == masterPKName {
+			// The hidden VARCHAR is the serialized primary tuple, not a
+			// user text key. Check every actual primary key component.
+			if !tableDumpNativeCompositePK(master) {
+				return nil
+			}
+			continue
+		}
+		if !tableDumpNativePackedIndexPart(master, catalog.ResolveAlias(part)) {
+			return nil
+		}
+	}
+	key, primary, rowID := def.Cols[0], def.Cols[1], def.Cols[2]
+	masterPK := sqlplan.FindColumn(master.Cols, masterPKName)
+	if masterPK == nil || key.GetName() != catalog.IndexTableIndexColName ||
+		primary.GetName() != catalog.IndexTablePrimaryColName || rowID.GetName() != catalog.Row_ID ||
+		!tableDumpPackedVarchar(key.Typ) || !canReconstructTableSchema(def) {
+		return nil
+	}
+	primaryType := masterPK.Typ
+	// Both index builders copy the primary value's type without copying
+	// its allocator, including when the main relation has a hidden PK.
+	primaryType.AutoIncr = false
+	if !sameTableDumpValueType(primary.Typ, primaryType) || compositePK && !tableDumpPackedVarchar(primary.Typ) {
+		return nil
+	}
+	legacy := *def
+	legacy.Cols = append([]*plan.ColDef(nil), def.Cols...)
+	legacyKey := *key
+	legacyKey.Typ.Charset = uint32(types.CharsetLegacy)
+	legacy.Cols[0] = &legacyKey
+	if compositePK {
+		legacyPrimary := *primary
+		legacyPrimary.Typ.Charset = uint32(types.CharsetLegacy)
+		legacy.Cols[1] = &legacyPrimary
+	}
+	return &legacy
+}
+
+func tableDumpMatchesReleasedCompositeShow(ctx context.Context, target *plan.TableDef, source *tree.CreateTable) bool {
+	if source == nil || !tableDumpNativeCompositePK(target) || !tableDumpV1CollationIndependent(target) {
+		return false
+	}
+	witness := *target
+	witness.DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
+	sql, _, err := sqlplan.ConstructCreateTableSQL(nil, &witness, nil, false, nil)
+	if err != nil {
+		return false
+	}
+	ddl := parseTableDumpCreateDeclaration(ctx, sql)
+	if ddl == nil {
+		return false
+	}
+	defer ddl.Free()
+	return sameTableDumpRenameDeclaration(source, ddl, target, nil)
+}
+
+func tableDumpNativeCompositePK(def *plan.TableDef) bool {
+	pk := def.GetPkey()
+	if pk.GetPkeyColName() != catalog.CPrimaryKeyColName || len(pk.Names) < 2 || def.KeyFormat != collation.KeyFormatLegacy {
+		return false
+	}
+	packed := sqlplan.FindColumn(def.Cols, catalog.CPrimaryKeyColName)
+	if packed == nil || !packed.Hidden || !tableDumpPackedVarchar(packed.Typ) {
+		return false
+	}
+	for _, name := range pk.Names {
+		col := sqlplan.FindColumn(def.Cols, name)
+		if col == nil || col.Hidden || !tableDumpV1CollationIndependentType(types.T(col.Typ.Id)) {
+			return false
+		}
+	}
+	return true
+}
+
+func tableDumpNativePackedIndexPart(master *plan.TableDef, name string) bool {
+	col := sqlplan.FindColumn(master.Cols, name)
+	return col != nil && tableDumpV1CollationIndependentType(types.T(col.Typ.Id))
+}
+
+func tableDumpPackedVarchar(typ plan.Type) bool {
+	return typ.Id == int32(types.T_varchar) && typ.Width == types.MaxVarcharLen &&
+		typ.CollationVersion == 0 && !typ.PadSpace &&
+		(typ.Charset == uint32(types.CharsetBinary) || typ.Charset == uint32(types.CharsetLegacy))
+}
+
+func tableDumpReleasedIndexSchemaMatches(
+	ctx context.Context, master, indexDef *plan.TableDef, target, dump tableDumpRelation, version int,
+) (bool, error) {
+	ordinaryMatch := tableDumpRelationSchemaMatches(target, dump)
+	if ordinaryMatch && (version != tableDumpBoundFormatVersion || target.SchemaHash == dump.SchemaHash) {
+		return true, nil
+	}
+	released := tableDumpReleasedPackedIndex(master, indexDef, target)
+	if released == nil {
+		return ordinaryMatch, nil
+	}
+	suffix, secondary := strings.CutPrefix(dump.SourceTable, catalog.SecondaryIndexTableNamePrefix)
+	releasedName := secondary && tableDumpCanonicalUUIDv7(suffix)
+	switch version {
+	case tableDumpFormatVersion:
+		// The released v1 writer used the raw catalog declaration, before
+		// modern SHOW CREATE started spelling its legacy collation tags.
+		masterPK := sqlplan.FindColumn(master.Cols, master.GetPkey().GetPkeyColName())
+		if !releasedName || dump.LogicalSchemaHash != "" || masterPK.Typ.AutoIncr {
+			return false, nil
+		}
+		hash, err := tableDumpV1UndecoratedPackedHash(released)
+		return err == nil && hash == dump.SchemaHash, err
+	case tableDumpBoundFormatVersion:
+		physical, err := tableSchemaHashWithResolver(ctx, released, nil)
+		if err != nil {
+			return false, err
+		}
+		logical, err := tableLogicalSchemaHashWithResolver(ctx, released, nil)
+		if err != nil {
+			return false, err
+		}
+		if physical == dump.SchemaHash || logical == dump.LogicalSchemaHash {
+			// Two halves from different layouts do not identify an index.
+			return releasedName && physical == dump.SchemaHash && logical == dump.LogicalSchemaHash, nil
+		}
+		return ordinaryMatch, nil
+	default:
+		return false, nil
+	}
+}
+
+func tableDumpV1UndecoratedPackedHash(def *plan.TableDef) (string, error) {
+	canonical, err := tableDumpCanonicalCreate(def)
+	if err != nil {
+		return "", err
+	}
+	// The current renderer derives a table default from a legacy VARCHAR.
+	// Packed key carriers did not contribute that suffix in v4.2.9.
+	raw := strings.TrimSuffix(canonical, " COLLATE=utf8mb4_bin")
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func parseTableDumpCreateDeclaration(ctx context.Context, sql string) *tree.CreateTable {
 	// Keep the original identifier spelling for the internal UUID check.
 	stmt, err := mysql.ParseOne(ctx, sql, 0)
 	if err != nil {
-		return nil, false, false
+		return nil
 	}
-	defer stmt.Free()
 	create, ok := stmt.(*tree.CreateTable)
-	if !ok || create.IsAsLike || create.IsAsSelect || !tableDumpCreateTableMatches(&create.Table, database, name) {
-		return nil, false, false
+	if !ok || create.IsAsLike || create.IsAsSelect {
+		stmt.Free()
+		return nil
 	}
+	return create
+}
+
+func collectTableDumpCheckDeclarations(create *tree.CreateTable) (names []string, implicitCharset bool) {
 	for _, def := range create.Defs {
 		switch def := def.(type) {
 		case *tree.CheckIndex:
@@ -1785,7 +2031,201 @@ func tableDumpCheckDeclarations(ctx context.Context, sql, database, name string)
 			implicitCharset = false
 		}
 	}
-	return names, implicitCharset, true
+	return names, implicitCharset
+}
+
+func tableDumpOrdinaryRenameDeclaration(table *tree.TableName, database string) bool {
+	// Keep UUID-shaped suffixes on the stricter COPY path. A user's
+	// ordinary historical name may include "_copy_" without a UUID.
+	name := strings.ToLower(string(table.ObjectName))
+	copyTag := strings.LastIndex(name, "_copy_")
+	if copyTag >= 0 {
+		suffix := name[copyTag+len("_copy_"):]
+		if len(suffix) >= 24 && suffix[8] == '-' && suffix[13] == '-' && suffix[18] == '-' && suffix[23] == '-' {
+			return false
+		}
+	}
+	return table.AtTsExpr == nil && table.IcebergRef == nil && !table.ExplicitCatalog &&
+		(!table.ExplicitSchema || strings.EqualFold(string(table.SchemaName), database))
+}
+
+func sameTableDumpRenameDeclaration(source, target *tree.CreateTable, catalogDef *plan.TableDef, renderedTargetNames map[int]bool) bool {
+	left, leftPK, leftOwners := tableDumpCreateWithoutIdentity(source, nil)
+	right, rightPK, rightOwners := tableDumpCreateWithoutIdentity(target, renderedTargetNames)
+	// Formatting can erase expression syntax, including the distinction
+	// between a string operand and an identifier. Compare the parsed trees.
+	if leftPK != rightPK || !reflect.DeepEqual(left, right) {
+		return false
+	}
+	for i, leftOwner := range leftOwners {
+		rightOwner := rightOwners[i]
+		if leftOwner == rightOwner {
+			continue
+		}
+		if leftOwner != "" && rightOwner != "" {
+			return false
+		}
+		owner := leftOwner
+		if owner == "" {
+			owner = rightOwner
+		}
+		if !tableDumpCheckBindsColumn(catalogDef, i, owner) {
+			return false
+		}
+	}
+	return true
+}
+
+func tableDumpCheckBindsColumn(def *plan.TableDef, ordinal int, owner string) bool {
+	if ordinal >= len(def.Checks) || def.Checks[ordinal] == nil || def.Checks[ordinal].Check.GetExpr() == nil {
+		return false
+	}
+	position := slices.IndexFunc(def.Cols, func(col *plan.ColDef) bool {
+		return col != nil && !col.Hidden && col.Name == owner
+	})
+	if position < 0 {
+		return false
+	}
+	err := plan.VisitExprTree(def.Checks[ordinal].Check, func(expr *plan.Expr) error {
+		ref := expr.GetCol()
+		if ref != nil && (ref.RelPos != 0 || int(ref.ColPos) != position) {
+			return moerr.NewInvalidInputNoCtx("table dump column CHECK does not match its bound column")
+		}
+		return nil
+	})
+	return err == nil
+}
+
+func tableDumpCreateWithoutIdentity(create *tree.CreateTable, renderedNames map[int]bool) (*tree.CreateTable, string, []string) {
+	clone := *create
+	clone.Table = tree.TableName{}
+	clone.IfNotExists = false
+	pkColumns, tablePK := tableDumpPrimaryKeyColumns(create.Defs)
+	var pk string
+	if len(pkColumns) == 1 {
+		pk = pkColumns[0]
+	} else {
+		tablePK = nil // Keep a composite PRIMARY KEY's declaration and order.
+	}
+	clone.Defs = make(tree.TableDefs, 0, len(create.Defs))
+	var checks tree.TableDefs
+	var owners []string
+	checkOrdinal := 0
+	for _, def := range create.Defs {
+		if check, ok := def.(*tree.CheckIndex); ok {
+			if renderedNames[checkOrdinal] {
+				copy := *check
+				copy.ConstraintSymbol = ""
+				check = &copy
+			}
+			checkOrdinal++
+			checks = append(checks, check)
+			owners = append(owners, "")
+			continue
+		}
+		if tablePK != nil && def == tablePK {
+			continue
+		}
+		if col, ok := def.(*tree.ColumnTableDef); ok {
+			isPK := slices.Contains(pkColumns, col.Name.ColName())
+			plainNullable := !isPK && tableDumpNullableNullDeclaration(col)
+			column := *col
+			column.Attributes = nil
+			for _, attr := range col.Attributes {
+				switch node := attr.(type) {
+				case *tree.AttributeCheckConstraint:
+					name := node.Name
+					if renderedNames[checkOrdinal] {
+						name = ""
+					}
+					checks = append(checks, &tree.CheckIndex{ConstraintSymbol: name, Expr: node.Expr, Enforced: node.Enforced})
+					owners = append(owners, col.Name.ColName())
+					checkOrdinal++
+					continue
+				case *tree.AttributePrimaryKey, *tree.AttributeKey:
+					if isPK {
+						continue
+					}
+				case *tree.AttributeNull:
+					if (isPK && !node.Is) || (plainNullable && node.Is) {
+						continue
+					}
+				case *tree.AttributeDefault:
+					if plainNullable {
+						continue
+					}
+				}
+				column.Attributes = append(column.Attributes, attr)
+			}
+			def = &column
+		}
+		clone.Defs = append(clone.Defs, def)
+	}
+	// SHOW CREATE emits both kinds of CHECK after keys, in catalog order.
+	clone.Defs = append(clone.Defs, checks...)
+	return &clone, pk, owners
+}
+
+// SHOW CREATE spells the implicit default of a nullable column as DEFAULT
+// NULL. TIMESTAMP has a historical implicit default policy of its own.
+func tableDumpNullableNullDeclaration(col *tree.ColumnTableDef) bool {
+	typ, ok := col.Type.(*tree.T)
+	if !ok || typ.InternalType.Family == tree.TimestampFamily {
+		return false
+	}
+	var defaultNull bool
+	for _, attr := range col.Attributes {
+		switch attr := attr.(type) {
+		case *tree.AttributeNull:
+			if !attr.Is {
+				return false
+			}
+		case *tree.AttributeAutoIncrement, *tree.AttributePrimaryKey, *tree.AttributeKey, *tree.AttributeGeneratedAlways:
+			return false
+		case *tree.AttributeDefault:
+			literal, ok := attr.Expr.(*tree.NumVal)
+			if defaultNull || !ok || literal.ValType != tree.P_null {
+				return false
+			}
+			defaultNull = true
+		}
+	}
+	return true
+}
+
+// Only an unnamed, unadorned PRIMARY KEY accounts for a NOT NULL emitted
+// by SHOW. A single member can also move between a column and a table clause.
+func tableDumpPrimaryKeyColumns(defs tree.TableDefs) ([]string, *tree.PrimaryKeyIndex) {
+	var names []string
+	var tablePK *tree.PrimaryKeyIndex
+	for _, def := range defs {
+		switch def := def.(type) {
+		case *tree.PrimaryKeyIndex:
+			if len(names) != 0 || def.Name != "" || def.ConstraintSymbol != "" || !def.Empty ||
+				def.IndexOption != nil || len(def.KeyParts) == 0 {
+				return nil, nil
+			}
+			for _, part := range def.KeyParts {
+				if part.ColName == nil || part.ColName.NumParts != 1 || part.Expr != nil || part.Length != 0 ||
+					part.Direction != tree.DefaultDirection {
+					return nil, nil
+				}
+				names = append(names, part.ColName.ColName())
+			}
+			tablePK = def
+		case *tree.ColumnTableDef:
+			for _, attr := range def.Attributes {
+				switch attr.(type) {
+				case *tree.AttributePrimaryKey, *tree.AttributeKey:
+					if len(names) != 0 {
+						return nil, nil
+					}
+					names = []string{def.Name.ColName()}
+				}
+			}
+		}
+	}
+	return names, tablePK
 }
 
 // The released COPY implementation left its internal CREATE in the catalog
@@ -1803,7 +2243,10 @@ func tableDumpCreateTableMatches(table *tree.TableName, database, name string) b
 	if len(actual) != len(prefix)+36 || !strings.EqualFold(actual[:len(prefix)], prefix) {
 		return false
 	}
-	suffix := actual[len(prefix):]
+	return tableDumpCanonicalUUIDv7(actual[len(prefix):])
+}
+
+func tableDumpCanonicalUUIDv7(suffix string) bool {
 	id, err := uuid.Parse(suffix)
 	return err == nil && id.Version() == 7 && id.Variant() == uuid.RFC4122 && id.String() == suffix
 }
@@ -1816,12 +2259,33 @@ func tableDumpV1CollationIndependentType(typ types.T) bool {
 }
 
 func tableDumpV1CollationIndependent(def *plan.TableDef) bool {
-	for _, col := range def.Cols {
-		if !col.Hidden && !tableDumpV1CollationIndependentType(types.T(col.Typ.Id)) {
+	expressions := def
+	for i, col := range def.Cols {
+		if col.Hidden {
+			continue
+		}
+		typ := types.T(col.Typ.Id)
+		// JSON and vectors are stored natively. Only accept them as columns
+		// here: the separate expression walk still rejects dependencies on
+		// their conversion or comparison contracts.
+		if !tableDumpV1CollationIndependentType(typ) && typ != types.T_json && !typ.IsArray() {
 			return false
 		}
+		if (typ == types.T_json || typ.IsArray()) && tableDumpDirectNullDefault(col) {
+			// SHOW CREATE spells this implicit NULL explicitly. Exclude just
+			// this default owner, leaving every other expression visible.
+			if expressions == def {
+				copy := *def
+				copy.Cols = append([]*plan.ColDef(nil), def.Cols...)
+				expressions = &copy
+			}
+			column, defaultValue := *col, *col.Default
+			defaultValue.Expr = nil
+			column.Default = &defaultValue
+			expressions.Cols[i] = &column
+		}
 	}
-	err := plan.VisitExpressionsInOwner(def, func(expr *plan.Expr) error {
+	err := plan.VisitExpressionsInOwner(expressions, func(expr *plan.Expr) error {
 		if !tableDumpV1CollationIndependentExpression(expr) {
 			return moerr.NewInvalidInputNoCtx("table expression may depend on collation")
 		}
@@ -1891,9 +2355,9 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	var restoredDef *plan.TableDef
 	var restoreExpressions bool
 	var releasedHash string
+	var releasedPower bool
 	var checkAliases map[string]string
 	if manifest.Version == tableDumpFormatVersion && tableDumpHasBoundExpressions(targetDef) {
-		var releasedPower bool
 		restoredDef, releasedPower, err = sqlplan.RecoverTableDumpV1Bindings(ses.GetTxnCompileCtx(), targetDef)
 		if err != nil {
 			return err
@@ -1917,23 +2381,35 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
 	}
 	if manifest.Version == tableDumpLegacyBoundFormatVersion || manifest.Version == tableDumpBoundFormatVersion {
+		releasedBindings := manifest.Version == tableDumpBoundFormatVersion && releasedHash != ""
 		restoredDef, restoreExpressions, err = tableDumpRestoredExpressionsWithCheckAliases(
-			targetDef, manifest.BoundExpressions, manifest.ExpressionHash, checkAliases)
+			targetDef, manifest.BoundExpressions, manifest.ExpressionHash, checkAliases, releasedBindings)
+		if err != nil && !releasedBindings && manifest.Version == tableDumpBoundFormatVersion &&
+			tableDumpNativeCompositePK(targetDef) && tableDumpMainRelationHasHash(manifest, targetRefs[0].SchemaHash) {
+			sourceDDL := parseTableDumpCreateDeclaration(ctx, manifest.CreateSQL)
+			if sourceDDL != nil {
+				releasedBindings = tableDumpCreateTableMatches(&sourceDDL.Table, manifest.SourceDatabase, manifest.SourceTable) &&
+					tableDumpMatchesReleasedCompositeShow(ctx, targetDef, sourceDDL)
+				sourceDDL.Free()
+			}
+			if releasedBindings {
+				restoredDef, restoreExpressions, err = tableDumpRestoredExpressionsWithCheckAliases(
+					targetDef, manifest.BoundExpressions, manifest.ExpressionHash, checkAliases, true)
+			}
+		}
 		if err != nil {
 			return err
 		}
-		if releasedHash == "" {
-			if _, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, restoredDef); err != nil {
+		if releasedBindings || manifest.Version == tableDumpBoundFormatVersion && len(targetDef.Indexes) != 0 {
+			releasedPower, err = sqlplan.ProveTableDumpReleasedPower(ses.GetTxnCompileCtx(), targetDef, restoredDef)
+			if err != nil {
 				return err
 			}
-		} else {
-			releasedPower, proofErr := sqlplan.ProveTableDumpReleasedPower(ses.GetTxnCompileCtx(), targetDef, restoredDef)
-			if proofErr != nil {
-				return proofErr
-			}
-			if !releasedPower {
+			if releasedBindings && !releasedPower {
 				return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
 			}
+		} else if _, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, restoredDef); err != nil {
+			return err
 		}
 	}
 	if releasedHash != "" {
@@ -1999,7 +2475,18 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		}
 		seenRelations[key] = struct{}{}
 		targetRef, ok := targetByKey[key]
-		if !ok || !tableDumpRelationSchemaMatches(targetRef.tableDumpRelation, relationDump) {
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")
+		}
+		matches := tableDumpRelationSchemaMatches(targetRef.tableDumpRelation, relationDump)
+		if releasedPower && relationDump.Role == "index" {
+			matches, err = tableDumpReleasedIndexSchemaMatches(
+				ctx, targetDef, targetRef.relation.GetTableDef(ctx), targetRef.tableDumpRelation, relationDump, manifest.Version)
+			if err != nil {
+				return err
+			}
+		}
+		if !matches {
 			return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")
 		}
 		existingRows, err := targetRef.relation.Rows(ctx)

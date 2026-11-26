@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/sync/errgroup"
@@ -61,6 +62,16 @@ func EncodeSQLUdfBody(body string) string {
 // row-local NULL results for POW.
 func DecodeSQLUdfBody(body string) (string, bool) {
 	return strings.CutPrefix(body, sqlUdfPowerNullHeader)
+}
+
+// DecodeUdfCatalogBody returns the executable body and its legacy POW binding.
+// Other languages keep their own body format.
+func DecodeUdfCatalogBody(language, body string) (string, bool) {
+	if language != string(tree.SQL) {
+		return body, false
+	}
+	sql, nullOnNonFinite := DecodeSQLUdfBody(body)
+	return sql, !nullOnNonFinite
 }
 
 // SQLUdfBodyIsQuery distinguishes standalone SELECT/WITH from an expression

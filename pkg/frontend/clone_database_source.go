@@ -454,23 +454,12 @@ func collectCloneRoutineReferences(
 	if isFunction {
 		body, _ = function.DecodeSQLUdfBody(body)
 	}
-	parseBody := body
 	parseAsExpression := isFunction && !function.SQLUdfBodyIsQuery(body, sqlMode)
-	if parseAsExpression {
-		// SQL UDF metadata stores scalar bodies without a SELECT wrapper. Parse
-		// them as a projection so calls to another SQL UDF remain visible to the
-		// dependency graph without changing the stored definition.
-		parseBody = "select " + body
-	}
-	statements, err := parsers.ParseWithSQLMode(
-		ctx, dialect.MYSQL, parseBody, lowerCaseTableNames, sqlMode,
-	)
+	statements, err := parseCloneRoutineBody(ctx, body, sqlMode, lowerCaseTableNames, parseAsExpression)
 	if err != nil {
 		if parseAsExpression {
-			// Existing scalar UDF clone support does not parse these bodies. Keep
-			// that compatibility behavior, but let the caller omit this
-			// uninspectable SQL routine whenever the clone already omits a
-			// relation.
+			// Preserve historical scalar metadata that cannot be parsed and
+			// let the caller omit it if the clone already omits a relation.
 			return references, cloneRoutineDependenciesUninspectable, nil
 		}
 		return references, cloneRoutineDependenciesUninspectable, err
@@ -894,6 +883,7 @@ func rewriteCloneStoredProcedureBodies(
 			srcDBName,
 			dstDBName,
 			lowerCaseTableNames,
+			false,
 		)
 		if err != nil {
 			return nil, err
@@ -940,11 +930,9 @@ func rewriteCloneSQLFunctionBody(
 	lowerCaseTableNames int64,
 ) (string, error) {
 	sql, nullOnNonFinite := function.DecodeSQLUdfBody(body)
-	if !function.SQLUdfBodyIsQuery(sql, sqlMode) {
-		return body, nil
-	}
+	parseAsExpression := !function.SQLUdfBodyIsQuery(sql, sqlMode)
 	rewritten, err := plan2.RewriteSQLUdfBodyPreservingArguments(sql, sqlMode, dstDBName, func(protected string) (string, error) {
-		return rewriteCloneSQLRoutineBody(ctx, protected, sqlMode, srcDBName, dstDBName, lowerCaseTableNames)
+		return rewriteCloneSQLRoutineBody(ctx, protected, sqlMode, srcDBName, dstDBName, lowerCaseTableNames, parseAsExpression)
 	})
 	if err != nil {
 		return "", err
@@ -962,18 +950,26 @@ func rewriteCloneSQLRoutineBody(
 	srcDBName string,
 	dstDBName string,
 	lowerCaseTableNames int64,
+	parseAsExpression bool,
 ) (string, error) {
 	if srcDBName == "" || srcDBName == dstDBName {
 		return body, nil
 	}
 
-	stmts, err := parsers.ParseWithSQLMode(ctx, dialect.MYSQL, body, lowerCaseTableNames, sqlMode)
+	stmts, err := parseCloneRoutineBody(ctx, body, sqlMode, lowerCaseTableNames, parseAsExpression)
 	if err != nil {
+		if parseAsExpression {
+			return body, nil
+		}
 		return "", err
 	}
 	defer freeStatements(stmts)
 
-	options := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
+	options := []tree.FmtCtxOption{
+		tree.WithSingleQuoteString(),
+		tree.WithQuoteIdentifier(),
+		tree.WithPreserveBinaryHexLiterals(),
+	}
 	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
 		options = append(options, tree.WithNoBackslashEscape())
 	}
@@ -987,7 +983,23 @@ func rewriteCloneSQLRoutineBody(
 	if rewritten == original {
 		return body, nil
 	}
+	if parseAsExpression {
+		rewritten = strings.TrimPrefix(rewritten, cloneRoutineProjectionPrefix)
+	}
 	return rewritten, nil
+}
+
+const cloneRoutineProjectionPrefix = "select "
+
+func parseCloneRoutineBody(
+	ctx context.Context, body, sqlMode string, lowerCaseTableNames int64, parseAsExpression bool,
+) ([]tree.Statement, error) {
+	if parseAsExpression {
+		// Use the same projection wrapper as SQL UDF binding. The remapper
+		// can then see nested subqueries and qualified function calls.
+		body = cloneRoutineProjectionPrefix + body
+	}
+	return parsers.ParseWithSQLMode(ctx, dialect.MYSQL, body, lowerCaseTableNames, sqlMode)
 }
 
 func formatCloneRoutineStatements(stmts []tree.Statement, options ...tree.FmtCtxOption) string {

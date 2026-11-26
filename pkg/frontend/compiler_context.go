@@ -1155,7 +1155,7 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 				return nil, err
 			}
 			udf = &function.Udf{}
-			udf.Body, err = erArray[0].GetString(ctx, i, 1)
+			body, err := erArray[0].GetString(ctx, i, 1)
 			if err != nil {
 				return nil, err
 			}
@@ -1163,11 +1163,7 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 			if err != nil {
 				return nil, err
 			}
-			if udf.Language == string(tree.SQL) {
-				var nullOnNonFinite bool
-				udf.Body, nullOnNonFinite = function.DecodeSQLUdfBody(udf.Body)
-				udf.LegacyPower = !nullOnNonFinite
-			}
+			udf.Body, udf.LegacyPower = function.DecodeUdfCatalogBody(udf.Language, body)
 			udf.RetType, err = erArray[0].GetString(ctx, i, 3)
 			if err != nil {
 				return nil, err

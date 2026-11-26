@@ -646,7 +646,7 @@ func TestRewriteCloneRoutineBodiesPreserveOpaqueLanguagesAndRejectInvalidSQL(t *
 	})
 
 	t.Run("identity mapping does not parse the body", func(t *testing.T) {
-		body, err := rewriteCloneSQLRoutineBody(ctx, "not valid SQL", "", "source_db", "source_db", 1)
+		body, err := rewriteCloneSQLRoutineBody(ctx, "not valid SQL", "", "source_db", "source_db", 1, false)
 		require.NoError(t, err)
 		require.Equal(t, "not valid SQL", body)
 	})
@@ -1251,6 +1251,135 @@ func TestCloneSQLUdfPreservesPowerDefinition(t *testing.T) {
 			}))
 			require.True(t, found, "the cloned POWER must remain executable for a prepared argument")
 		})
+	}
+}
+
+func TestCloneScalarSQLUdfRemapsPowerSubquery(t *testing.T) {
+	const sqlMode = "ANSI_QUOTES"
+	const sql = `pow((select n_nationkey from "source_db"."nation" where n_nationkey = $1),0.5)`
+	for _, tc := range []struct {
+		name    string
+		body    string
+		ordinal int32
+	}{
+		{name: "released", body: sql, ordinal: 0},
+		{name: "current", body: function.EncodeSQLUdfBody(sql), ordinal: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			refs, status, err := collectCloneRoutineReferences(t.Context(), tc.body, "sql", sqlMode, "source_db", 1, true)
+			require.NoError(t, err)
+			require.Equal(t, cloneRoutineDependenciesInspected, status)
+			require.Contains(t, refs.tables, cloneDatabaseObjectKey("source_db", "nation", 1))
+
+			clone, err := rewriteCloneSQLFunctionBody(t.Context(), tc.body, sqlMode, "source_db", "tpch", 1)
+			require.NoError(t, err)
+			text, legacy := function.DecodeUdfCatalogBody("sql", clone)
+			require.Equal(t, tc.ordinal == 0, legacy)
+			require.False(t, function.SQLUdfBodyIsQuery(text, sqlMode))
+			require.Contains(t, text, "from `tpch`.`nation`")
+			require.Contains(t, text, "= $1")
+
+			mode := sqlMode
+			compiler := &clonedPowerUdfCompiler{
+				MockCompilerContext: sqlplan.NewMockCompilerContext(true, newPlanTestProcess(t)),
+				definition:          function.Udf{Body: text, Language: "sql", LegacyPower: legacy, SQLMode: &mode},
+			}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select cloned_pow(cast(? as signed))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := sqlplan.BuildPlan(compiler, stmt, true, nil)
+			require.NoError(t, err)
+			query := built.GetQuery()
+			require.NotNil(t, query)
+			var scanFound, powerFound, argumentFound bool
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN {
+					require.Equal(t, "tpch", node.GetTableDef().GetDbName())
+					require.Equal(t, "nation", node.GetTableDef().GetName())
+					scanFound = true
+				}
+			}
+			require.NoError(t, plan.VisitExpressionsInOwner(query, func(root *plan.Expr) error {
+				return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+					if param := expr.GetP(); param != nil {
+						require.Equal(t, int32(1), param.Pos)
+						argumentFound = true
+					}
+					if call := expr.GetF(); call.GetFunc() != nil {
+						if id, ordinal := function.DecodeOverloadID(call.Func.Obj); id == function.POW {
+							require.Equal(t, tc.ordinal, ordinal)
+							powerFound = true
+						}
+					}
+					return nil
+				})
+			}))
+			require.True(t, scanFound, "the scalar subquery must scan the cloned table")
+			require.True(t, powerFound, "the scalar UDF must preserve its POW overload")
+			require.True(t, argumentFound, "the scalar subquery must retain the caller's parameter")
+		})
+	}
+}
+
+func TestCloneSQLUdfPreservesLiteralSemantics(t *testing.T) {
+	const expr = `concat(inet_ntoa(_binary 0x31), inet_ntoa(0x31), inet_ntoa(_binary '1'),
+		'a''b\\c', _binary '` + "\xff" + `\\', (select n_nationkey from "source_db"."nation" where n_nationkey = $1))`
+	for _, sqlMode := range []string{"ANSI_QUOTES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+		t.Run(sqlMode, func(t *testing.T) {
+			for _, prefix := range []string{"", "select "} {
+				// The routine formatter is shared by scalar and query bodies.
+				text := prefix + expr
+				rewritten, err := rewriteCloneSQLFunctionBody(t.Context(), text, sqlMode, "source_db", "tpch", 1)
+				require.NoError(t, err)
+				require.Contains(t, rewritten, "from `tpch`.`nation`")
+				require.Contains(t, rewritten, "= $1")
+				require.Equal(t, prefix != "", function.SQLUdfBodyIsQuery(rewritten, sqlMode))
+
+				for _, sql := range []string{text, rewritten} {
+					stmt, err := parsers.ParseOneWithSQLMode(t.Context(), dialect.MYSQL, "select "+strings.TrimPrefix(sql, prefix), 1, sqlMode)
+					require.NoError(t, err)
+					t.Cleanup(stmt.Free)
+					args := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.FuncExpr).Exprs
+					for i, want := range []struct {
+						kind  tree.P_TYPE
+						value string
+					}{
+						{tree.P_ScoreBinaryHexnum, "0x31"},
+						{tree.P_hexnum, "0x31"},
+						{tree.P_ScoreBinary, "1"},
+					} {
+						literal := args[i].(*tree.FuncExpr).Exprs[0].(*tree.NumVal)
+						require.Equal(t, want.kind, literal.ValType)
+						require.Equal(t, want.value, literal.String())
+					}
+					wantString, wantBinary := `a'b\c`, "\xff"+`\`
+					if sqlMode == "ANSI_QUOTES,NO_BACKSLASH_ESCAPES" {
+						wantString, wantBinary = `a'b\\c`, "\xff"+`\\`
+					}
+					literal := args[3].(*tree.NumVal)
+					require.Equal(t, tree.P_char, literal.ValType)
+					require.Equal(t, wantString, literal.String())
+					binary := args[4].(*tree.NumVal)
+					require.Equal(t, tree.P_ScoreBinary, binary.ValType)
+					require.Equal(t, wantBinary, binary.String())
+				}
+			}
+		})
+	}
+}
+
+func TestCloneScalarSQLUdfPreservesUnrelatedBody(t *testing.T) {
+	const sqlMode = "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"
+	for _, sql := range []string{
+		`/* keep format */ pow((select n_nationkey from "other_db"."nation" where n_nationkey = $1), 0.5)`,
+		`/* "source_db"."nation" */ concat('$1', 'source_db.nation', '$2\n', $1)`,
+		`pow($1,`,
+	} {
+		for _, body := range []string{sql, function.EncodeSQLUdfBody(sql)} {
+			clone, err := rewriteCloneSQLFunctionBody(t.Context(), body, sqlMode, "source_db", "tpch", 1)
+			require.NoError(t, err)
+			require.Equal(t, body, clone)
+		}
 	}
 }
 
