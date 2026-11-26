@@ -93,7 +93,9 @@ whole-object downloads.
 - Joining a waiting fill makes it foreground: it orders before every background fill, may
   use any free room, and is no longer charged to the background bytes. A waiting fill of
   a whole object large enough to split starts its first part at the first block the first
-  joined read needs.
+  joined read needs. Joining a running fill makes it foreground the same way: its
+  requests still waiting for room wait as foreground ones, and its buffer moves to the
+  foreground charge.
 - A joined read waits until its own context ends or the fill stops; a fill that is
   canceled, sends no bytes within the idle timeout, or ends short of its range leaves the
   read to make a fill of its own. There is no estimate of when bytes will arrive, no
@@ -147,7 +149,8 @@ than 64: a smaller configured value is raised to 64, with a warning that names i
   caller's code are dealt with before the request starts or after it ends.
 - **Order.** Waiting requests are admitted foreground first, then background, then in
   arrival order. Background requests hold at most half of the room, so at least 32. A
-  running request is never stopped to make room.
+  running request is never stopped to make room. A background request whose fill is made
+  foreground while it waits waits from then as a foreground one.
 - **Every wait ends with the waiter's own context.** A retry the file service makes
   waits with no room held.
 - **The file service retries; the SDK does not.** A call the file service retries makes
@@ -181,12 +184,23 @@ Where caller code meets object storage:
   waiting fill of the same cache already holds merges into it: the sooner due time, the
   larger share, and both scans. Bytes a running fill holds need nothing more. Other bytes
   of the same object get fills of their own at once.
-- The governor starts the first waiting fill in order: class, then share, then due time,
-  then arrival. A started fill checks the cache first and ends without downloading when
-  its bytes are cached.
-- Waiting background fills are bounded by bytes. When a new one does not fit, fills whose
-  scans all ended are dropped first, then the last in order, if the new one orders before
-  it. A waiting fill whose scans all end, with no read joined, is dropped.
+- The first waiting fill in order starts: class, then share, then due time, then
+  arrival. It starts once it is foreground, or once fewer background fills run than the
+  governor's background room and no foreground flight waits for a buffer, and, when it is
+  held in memory, once its buffer fits. A fill that cannot start keeps the fills after it
+  waiting. A started fill checks the cache first and ends without downloading when its
+  bytes are cached, or held by a fill under way.
+- A started fill of ranges is, from the step that starts it, the prefetch objects it
+  registers; a started fill of a whole object stays registered until reads can join its
+  download, and a read that finds it waits for that, or for its end.
+- A waiting fill of a whole object takes over the waiting fills of ranges of the same
+  object and cache that no read joined.
+- Waiting background fills are bounded by bytes: half of what the disk cache keeps. When a
+  new one does not fit, fills whose scans all ended are dropped first, then the last in
+  order, if the new one orders before it; otherwise the new one is dropped. A waiting fill
+  whose scans all end, with no read joined, is never started and is dropped.
+- A delete of an object and the closing of the cache drop its waiting fills, whatever
+  their class, and wake the reads joined to them.
 
 ### Files are immutable (decision 2026-11-25)
 
@@ -234,6 +248,26 @@ Memory-backed fills count against the flight memory budget, file-backed fills ag
 disk cache, waiting background fills against the queue's byte bound, and every
 object-storage request against the governor's room. Each bound is charged in one place,
 because there is one kind of fill and one way to open a connection.
+
+The flight memory budget (decision 2026-11-26):
+
+- The buffers of memory-backed fills and streams under way never exceed the budget.
+- A fill, or a stream, is memory-backed only when it is at most the memory limit and its
+  buffer fits its class's share of the budget: all of it for foreground, half of it for
+  background. Otherwise it is file-backed.
+- A buffer is taken only when it fits: with the buffers under way within the budget and,
+  for a background buffer, with the background buffers within half of it while no
+  foreground flight waits for a buffer.
+- A waiting background fill takes its buffer only as it starts, never while it waits. A
+  foreground flight waits for a buffer holding nothing; a read whose buffer no longer fits
+  its share reads its bytes itself.
+- Making a fill foreground moves its buffer from the background charge to the foreground
+  charge.
+
+No wait holds a resource another wait needs: a waiting fill holds nothing, a started fill
+takes its buffer, file and registration before it asks for room, a request that holds room
+waits only for object storage, and a read waits only for a fill, a buffer or room, none of
+which waits for a read.
 
 ## Alternatives
 
