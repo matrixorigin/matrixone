@@ -4687,11 +4687,19 @@ type UserDefinedVar struct {
 	// needed by unsized binary CAST compatibility. It never supplies the
 	// ordinary SQL or prepared-parameter conversion type of a NULL value.
 	RegexpStringResult  bool
-	PrepareParamKind    types.StringConversionKind
 	RuntimeStringDomain types.RuntimeStringDomain
 	// Replayable is true only when the proxy can replay the assignment as a
 	// captured raw COM_QUERY SET statement during legacy migration.
 	Replayable bool
+}
+
+// prepareParamKind is the conversion kind the variable's value has as a
+// prepared parameter, derived from its type.
+func (v *UserDefinedVar) prepareParamKind() types.StringConversionKind {
+	if v.Type.Id != 0 {
+		return prepareParamKindFromType(types.T(v.Type.Id))
+	}
+	return prepareParamKindFromValue(v.Value)
 }
 
 // userVariableRegexpStringResult models MySQL's user-variable result category,

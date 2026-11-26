@@ -51,14 +51,11 @@ func MatchPreparedDecimalFloatProofs(proofs []PreparedDecimalFloatProof, binding
 }
 
 func preparedIntegerFloatValue(value any, source types.T) (float64, bool) {
-	if param, ok := value.(ParamValue); ok {
+	if param, ok := AsParamValue(value); ok {
 		if param.Value == nil {
 			return 0, false
 		}
 		value = param.Value
-		if param.MaterializedValue != "" {
-			value = param.MaterializedValue
-		}
 	}
 	if !source.IsInteger() {
 		return 0, false

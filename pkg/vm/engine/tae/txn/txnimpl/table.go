@@ -28,7 +28,6 @@ import (
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -424,11 +423,13 @@ func (tbl *txnTable) TransferDeletes(
 			tFindTombstone := time.Now()
 			sel, err := ioutil.FindTombstonesOfObject(
 				ctx, obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs,
+				common.WorkspaceAllocator,
 			)
 			findTombstoneDuration += time.Since(tFindTombstone)
 			if err != nil {
 				return err
 			}
+			defer sel.Free()
 			id := obj.AsCommonID()
 			if sel.IsEmpty() {
 				return nil
@@ -560,7 +561,9 @@ func (tbl *txnTable) TransferDeletes(
 		v2.TxnS3TombstoneTransferReadTombstoneHistogram.Observe(readTombstoneDuration.Seconds())
 		v2.TxnS3TombstoneTransferDeleteRowsHistogram.Observe(deleteRowsDuration.Seconds())
 	}
-	transferd := nulls.Nulls{}
+	var transferd nulls.Nulls
+	transferd.Init(common.WorkspaceAllocator)
+	defer transferd.Free()
 	// transfer in memory deletes
 	if tbl.tombstoneTable.tableSpace.node == nil {
 		return
@@ -1547,6 +1550,15 @@ func (tbl *txnTable) DedupSnapByPK(
 	return
 }
 
+func markDeletedRow(rows containers.Vector, row int) error {
+	mask := rows.NullMask()
+	if err := nulls.TryExpand(mask, row+1); err != nil {
+		return err
+	}
+	mask.Add(uint64(row))
+	return nil
+}
+
 func (tbl *txnTable) findDeletesForCandidates(
 	ctx context.Context,
 	candidates *duplicatedRowIDs,
@@ -1574,21 +1586,29 @@ func (tbl *txnTable) findDeletesForCandidates(
 	}
 	appendCandidates(candidates.appendable, candidates.appendableByKey)
 	appendCandidates(candidates.nonAppendable, candidates.nonAppendableByKey)
-	copyBack := func() {
+	copyBack := func() error {
 		for i, ref := range refs {
 			if combined.IsNull(i) {
-				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), nil, true, ref.rows.GetAllocator())
+				if err := containers.MarkNull(ref.rows.GetDownstreamVector(), uint32(ref.index)); err != nil {
+					return err
+				}
 			} else {
 				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), vector.GetFixedAtNoTypeCheck[types.Rowid](combined.GetDownstreamVector(), i), false, ref.rows.GetAllocator())
 			}
 		}
+		return nil
 	}
 	err := tbl.findDeletes(ctx, combined, from, to, metricPhase)
 	// findDeletes may have completed filtering for earlier tombstones before
 	// returning a WW conflict from a later one. Preserve that partial result so
 	// callers that intentionally tolerate the conflict do not resurrect a stale
 	// candidate from the unfiltered vectors.
-	copyBack()
+	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+		return err
+	}
+	if copyErr := copyBack(); copyErr != nil {
+		return copyErr
+	}
 	return err
 }
 
@@ -1610,7 +1630,9 @@ func (tbl *txnTable) findDeletes(
 	if err = index.BatchUpdateZM(keysZM, rowIDs.GetDownstreamVector()); err != nil {
 		return
 	}
-	tbl.contains(ctx, rowIDs, keysZM, rowIDs.GetAllocator())
+	if err = tbl.contains(ctx, rowIDs, keysZM); err != nil {
+		return
+	}
 
 	// Dedup uses a PrepareTS-based upper fence. A delete that is still
 	// committing conflicts with the writer regardless of whether it prepared
@@ -2239,7 +2261,6 @@ func (tbl *txnTable) contains(
 	ctx context.Context,
 	keys containers.Vector,
 	keysZM index.ZM,
-	mp *mpool.MPool,
 ) (err error) {
 	if tbl.tombstoneTable == nil || tbl.tombstoneTable.tableSpace == nil {
 		return
@@ -2285,7 +2306,9 @@ func (tbl *txnTable) contains(
 			} else if !slices.Contains(workspaceRowids, keyRowids[j]) {
 				continue
 			}
-			containers.UpdateValue(keys.GetDownstreamVector(), uint32(j), nil, true, mp)
+			if err := markDeletedRow(keys, j); err != nil {
+				return err
+			}
 		}
 	}
 	for _, stats := range tbl.tombstoneTable.tableSpace.stats {
@@ -2304,9 +2327,15 @@ func (tbl *txnTable) contains(
 		}
 		idx := indexwrapper.NewImmutIndex(stats.SortKeyZoneMap(), bf, stats.ObjectLocation())
 		for i := uint16(0); i < uint16(blkCount); i++ {
-			sel, err := idx.BatchDedup(ctx, keys, keysZM, tbl.store.rt, true, uint32(i))
-			if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+			sel, err := idx.BatchDedup(ctx, keys, keysZM, tbl.store.rt, true, uint32(i), common.WorkspaceAllocator)
+			if err == nil {
+				sel.Free()
 				continue
+			}
+			if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+				// A failed probe proves nothing about the block's keys.
+				sel.Free()
+				return err
 			}
 
 			var blkRow uint32
@@ -2319,7 +2348,7 @@ func (tbl *txnTable) contains(
 			metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
 
 			vectors, closeFunc, err := ioutil.LoadColumns2(
-				tbl.store.ctx,
+				ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
 				tbl.store.rt.Fs,
@@ -2329,10 +2358,11 @@ func (tbl *txnTable) contains(
 				nil,
 			)
 			if err != nil {
+				sel.Free()
 				return err
 			}
 			data := vector.MustFixedColWithTypeCheck[types.Rowid](vectors[0].GetDownstreamVector())
-			containers.ForeachVector(keys,
+			err = containers.ForeachVector(keys,
 				func(id types.Rowid, isNull bool, row int) error {
 					if keys.IsNull(row) {
 						return nil
@@ -2343,11 +2373,15 @@ func (tbl *txnTable) contains(
 						types.CompareRowidRowidAligned,
 						nil,
 					); existed {
-						keys.Update(row, nil, true)
+						return markDeletedRow(keys, row)
 					}
 					return nil
 				}, sel)
 			closeFunc()
+			sel.Free()
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -2388,6 +2422,7 @@ func (tbl *txnTable) FillInWorkspaceDeletes(blkID types.Blockid, deletes **nulls
 				row := rowVec[i].GetRowOffset()
 				if *deletes == nil {
 					*deletes = &nulls.Nulls{}
+					(*deletes).Init(common.WorkspaceAllocator)
 				}
 				(*deletes).Add(uint64(row) + deleteStartOffset)
 			}
@@ -2431,6 +2466,7 @@ func (tbl *txnTable) FillInWorkspaceDeletes(blkID types.Blockid, deletes **nulls
 					_, row := rowID.Decode()
 					if *deletes == nil {
 						*deletes = &nulls.Nulls{}
+						(*deletes).Init(common.WorkspaceAllocator)
 					}
 					(*deletes).Add(uint64(row) + deleteStartOffset)
 				}

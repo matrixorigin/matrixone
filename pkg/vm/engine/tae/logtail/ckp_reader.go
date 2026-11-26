@@ -90,7 +90,8 @@ func (r *ckpObjectReader) Read(
 		return true, nil
 	}
 	for {
-		if end, err = r.reader.Read(ctx, bat.Attrs, nil, mp, bat); err != nil {
+		// bat is a ckputil.MakeDataScanTableIDBatch batch.
+		if end, err = r.reader.Read(ctx, ckputil.DataScan_TableIDAtrrs, nil, mp, bat); err != nil {
 			return
 		}
 		if !end {
@@ -179,7 +180,7 @@ func (r *ckpObjectReaderForV12) Read(
 	}
 	var bats []*containers.Batch
 	if bats, err = LoadBlkColumnsByMeta(
-		CheckpointVersion12, ctx, typs, destBatch.Attrs, batchIndex, reader, mp,
+		CheckpointVersion12, ctx, typs, ckputil.DataScan_TableIDAtrrs, batchIndex, reader, mp,
 	); err != nil {
 		return
 	}
@@ -455,7 +456,7 @@ func readMetaBatch(
 	); err != nil {
 		return
 	}
-	metaBatch = batch.New(ckputil.MetaAttrs)
+	metaBatch = batch.NewWithSize(len(ckputil.MetaAttrs))
 	for i, vec := range metaVecs {
 		metaBatch.Vecs[i] = &vec
 	}
@@ -1226,7 +1227,7 @@ func (reader *SyncTableIDReader) Read(ctx context.Context) (release func(), bat 
 	); err != nil {
 		return
 	}
-	bat = batch.New(TableIDAttrs)
+	bat = batch.NewWithSize(len(TableIDAttrs))
 	for i, vec := range preTableIDVecs {
 		bat.Vecs[i] = &vec
 	}

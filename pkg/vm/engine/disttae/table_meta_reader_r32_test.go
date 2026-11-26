@@ -139,7 +139,7 @@ func TestIssue25590MaterializingWritersReserveBeforePersistence(t *testing.T) {
 			pks[i] = int64(i + 1)
 		}
 		delBat := batch.NewWithSize(2)
-		delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
+		delBatAttrs := []string{objectio.PhysicalAddr_Attr, "a"}
 		rv := vector.NewVec(types.T_Rowid.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(rv, rowids, nil, mp))
 		pv := vector.NewVec(types.T_int64.ToType(), mp)
@@ -155,6 +155,7 @@ func TestIssue25590MaterializingWritersReserveBeforePersistence(t *testing.T) {
 			databaseName: "db",
 			tableName:    "r32tbl",
 			bat:          delBat,
+			attrs:        delBatAttrs,
 		})
 	}
 	driveTombstone := func() (string, error) {
@@ -182,7 +183,6 @@ func TestIssue25590MaterializingWritersReserveBeforePersistence(t *testing.T) {
 	// One real readable source object, written by an UNHOOKED writer
 	// exactly the committed source state owns it.
 	srcRows := batch.NewWithSize(3)
-	srcRows.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a", "v"})
 	srcRowids := make([]types.Rowid, 16)
 	srcPKs := make([]int64, 16)
 	for i := range srcRowids {
@@ -249,7 +249,7 @@ func TestIssue25590MaterializingWritersReserveBeforePersistence(t *testing.T) {
 		mp, false, recBat, false, r32FirstOutBatchStats(t, dataOut)))
 	require.NoError(t, txn.WriteFile(
 		INSERT, 1, tbl.db.databaseId, r32TableID, "db", "r32tbl",
-		matName, recBat, txn.tnStores[0]))
+		matName, recBat, catalog.ObjectInsertAttrs, txn.tnStores[0]))
 	_, reserved = txn.UnsettledCleanupOwnershipForTest()
 	require.Empty(t, reserved,
 		"the record converted the data family's reservation")
@@ -384,7 +384,7 @@ func r32FirstOutBatchStats(
 ) objectio.ObjectStats {
 	t.Helper()
 	statsVecIdx := 1
-	if len(outBatch.Attrs) == 1 {
+	if len(outBatch.Vecs) == 1 {
 		statsVecIdx = 0
 	}
 	require.Greater(t, outBatch.RowCount(), 0,
@@ -426,7 +426,7 @@ func TestIssue25590MaterializingOptionBindsRecordingTxnNotSource(t *testing.T) {
 		pks[i] = int64(i + 1)
 	}
 	delBat := batch.NewWithSize(2)
-	delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
+	delBatAttrs := []string{objectio.PhysicalAddr_Attr, "a"}
 	rv := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(rv, rowids, nil, mp))
 	pv := vector.NewVec(types.T_int64.ToType(), mp)
@@ -442,6 +442,7 @@ func TestIssue25590MaterializingOptionBindsRecordingTxnNotSource(t *testing.T) {
 		databaseName: "db",
 		tableName:    "r32tbl",
 		bat:          delBat,
+		attrs:        delBatAttrs,
 	})
 
 	// The reader reads the SOURCE table's data, but carries the

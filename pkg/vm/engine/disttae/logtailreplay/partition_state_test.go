@@ -2244,7 +2244,7 @@ func TestCalculateTableStatsWithAppendableRows(t *testing.T) {
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
 			Time:    types.BuildTS(5, uint32(i)),
-			Batch:   bat,
+			Batch:   &ReplayBatch{Batch: bat},
 			Offset:  int64(i),
 			ID:      int64(i),
 			Deleted: false,
@@ -2265,11 +2265,62 @@ func TestCalculateTableStatsWithAppendableRows(t *testing.T) {
 	assert.Equal(t, 0, stats.TombstoneObjectCnt)
 }
 
+func TestReplayInsertPayloadLifetime(t *testing.T) {
+	const payload = "long enough to use the varchar area"
+	for _, mode := range []string{"received", "local", "keys-only"} {
+		t.Run(mode, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			packer := types.NewPacker()
+			defer packer.Close()
+			row := clusterRow{rowID: types.RandomRowid(), ts: types.BuildTS(1, 0), pk: 42, serial: []byte(payload)}
+			src := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(src) })
+			input := makeClusterReplayBatch(t, src, []clusterRow{row}, []string{"rowid", "time", "pk", clusterTestCompoundAttr})
+			state := NewPartitionState("", mode == "keys-only", 42, false)
+			if mode == "local" {
+				state.HandleRowsInsert(t.Context(), input, 0, packer, mp)
+			} else {
+				msg := api.Entry{EntryType: api.Entry_Insert, TableName: "t", Bat: input}
+				wire, err := msg.Marshal()
+				require.NoError(t, err)
+				var received api.Entry
+				require.NoError(t, received.Unmarshal(wire))
+				clear(wire)
+				state.HandleLogtailEntry(t.Context(), nil, &received, 0, packer, mp)
+				received.Reset()
+			}
+			// The sender (or the local bootstrap caller) can reuse its buffers.
+			clear(input.Vecs[2].Data)
+			clear(input.Vecs[3].Area)
+			old := state.Copy()
+			stats := objectio.NewObjectStatsWithObjectID(row.rowID.BorrowObjectID(), true, false, false)
+			require.NoError(t, objectio.SetObjectStatsSize(stats, 1000))
+			require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+			obj := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: row.ts, DeleteTime: types.BuildTS(2, 0)}
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, obj, false))
+			require.Zero(t, state.rows.Len())
+			require.Zero(t, state.rowPrimaryKeyIndex.Len())
+
+			it := old.NewRowsIter(row.ts, nil, false)
+			defer it.Close()
+			require.True(t, it.Next())
+			entry := it.Entry()
+			if mode == "keys-only" {
+				require.Nil(t, entry.Batch)
+			} else {
+				require.Equal(t, row.pk, vector.GetFixedAtWithTypeCheck[int64](entry.Batch.Vecs[2], int(entry.Offset)))
+				require.Equal(t, payload, entry.Batch.Vecs[3].GetStringAt(int(entry.Offset)))
+			}
+			require.Zero(t, mp.CurrNB(), "replay payload cannot require per-row mpool cleanup")
+		})
+	}
+}
+
 func TestCollectDataStatsCountsCompactReplayPhysicalColumns(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	input := batch.NewWithSize(3)
-	input.SetAttributes([]string{"rowid", "time", "id"})
 	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	input.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	input.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
@@ -2278,7 +2329,7 @@ func TestCollectDataStatsCountsCompactReplayPhysicalColumns(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(1, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(input.Vecs[2], int64(42), false, mp))
 	input.SetRowCount(1)
-	proto, err := batch.BatchToProtoBatch(input)
+	proto, err := batch.BatchToProtoBatch(input, []string{"rowid", "time", "id"})
 	require.NoError(t, err)
 	state := NewPartitionState("test", false, 42, false)
 	packer := types.NewPacker()
@@ -2374,7 +2425,7 @@ func TestCalculateTableStatsPairedInsertDelete(t *testing.T) {
 		BlockID: rid.CloneBlockID(),
 		RowID:   rid,
 		Time:    types.BuildTS(5, 0),
-		Batch:   bat,
+		Batch:   &ReplayBatch{Batch: bat},
 		Offset:  0,
 		ID:      0,
 		Deleted: false,
@@ -2441,7 +2492,7 @@ func TestCalculateTableStatsFilterByObjectVisibility(t *testing.T) {
 			BlockID: rid1.CloneBlockID(),
 			RowID:   rid1,
 			Time:    types.BuildTS(5, uint32(i)),
-			Batch:   bat,
+			Batch:   &ReplayBatch{Batch: bat},
 			Offset:  int64(i),
 			ID:      int64(i),
 			Deleted: false,
@@ -2512,7 +2563,7 @@ func TestCalculateTableStatsIntegration(t *testing.T) {
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
 			Time:    types.BuildTS(5, uint32(i)),
-			Batch:   bat,
+			Batch:   &ReplayBatch{Batch: bat},
 			Offset:  int64(i),
 			ID:      int64(i),
 			Deleted: false,
@@ -3034,7 +3085,7 @@ func TestTombstoneReplayReclamationBoundaries(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(input.Vecs[3], types.NewRowid(&block, uint32(i)), false, pool))
 			}
 			input.SetRowCount(len(rowIDs))
-			proto, err := batch.BatchToProtoBatch(input)
+			proto, err := batch.BatchToProtoBatch(input, nil)
 			require.NoError(t, err)
 			state.HandleRowsDelete(t.Context(), proto, packer, pool)
 			retained, ok := state.rows.Get(&RowEntry{
@@ -3139,7 +3190,7 @@ func newReplayObjectListBatch(tb testing.TB, pool *mpool.MPool, entry objectio.O
 		require.NoError(tb, err)
 	}
 	live.SetRowCount(1)
-	proto, err := batch.BatchToProtoBatch(live)
+	proto, err := batch.BatchToProtoBatch(live, nil)
 	require.NoError(tb, err)
 	return proto
 }

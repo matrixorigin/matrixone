@@ -89,18 +89,20 @@ func GetClusterByColumnOrder(cbName, colName string) int {
 }
 
 // build the clusterBy key's vector of the cluster table according to the composite column name, and append the result vector to batch
+// attrs: names of bat's columns
 // cbName: column name of composite column
-func FillCompositeClusterByBatch(bat *batch.Batch, cbName string, proc *process.Process) error {
+func FillCompositeClusterByBatch(bat *batch.Batch, attrs []string, cbName string, proc *process.Process) error {
 	names := SplitCompositeClusterByColumnName(cbName)
-	return FillCompositeKeyBatch(bat, cbName, names, proc)
+	return FillCompositeKeyBatch(bat, attrs, cbName, names, proc)
 }
 
 // build the vector of the composite key, and append the result vector to batch
+// attrs: names of bat's columns; the caller names the appended column ckeyName
 // ckeyName: column name of composite column
 // keyParts: parts of the composite column
-func FillCompositeKeyBatch(bat *batch.Batch, ckeyName string, keyParts []string, proc *process.Process) error {
+func FillCompositeKeyBatch(bat *batch.Batch, attrs []string, ckeyName string, keyParts []string, proc *process.Process) error {
 	cCBVectorMap := make(map[string]*vector.Vector)
-	for num, attrName := range bat.Attrs {
+	for num, attrName := range attrs {
 		for _, elem := range keyParts {
 			if strings.EqualFold(attrName, elem) {
 				cCBVectorMap[elem] = bat.Vecs[num]
@@ -116,7 +118,6 @@ func FillCompositeKeyBatch(bat *batch.Batch, ckeyName string, keyParts []string,
 	if err != nil {
 		return err
 	}
-	bat.Attrs = append(bat.Attrs, ckeyName)
 	bat.Vecs = append(bat.Vecs, vec)
 	return nil
 }

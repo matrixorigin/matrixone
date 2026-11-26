@@ -1,7 +1,7 @@
 # MatrixOne 双机主备部署（DRBD + Pacemaker/STONITH）
 
 两台机器，用 DRBD 块级复制整个数据目录，Pacemaker 保证严格单活。
-MatrixOne 以 all-in-one 容器运行，由 Pacemaker 的 `docker-compose` 资源代理启停
+MatrixOne 以 all-in-one 容器运行，由 Pacemaker 的 `ocf:matrixone:docker-compose` 资源代理启停
 （**不进 systemd**）。同步复制的 RPO=0 以 DRBD 正常连接、双端同步及隔离机制通过验收为前提；切换时间受故障检测、隔离和 MO 恢复耗时影响。
 
 支持 RHEL / CentOS / Rocky / AlmaLinux 与 Debian / Ubuntu。
@@ -45,6 +45,26 @@ sudo ./mo-ha-deploy.sh --config node1.env --bootstrap --format-drbd --yes
 ```bash
 sudo ./mo-ha-deploy.sh --config node1.env --stages check --yes
 ```
+
+双端一致只在 `drbdadm status` 同时出现 `replication:Established`、本端 `disk:UpToDate` 和对端 `peer-disk:UpToDate` 时记为 PASS。对端 `connection:Connecting`、状态缺失或查询失败记为 FAIL：本机可能仍在单端服务，但没有双副本保护，不能把这次检查当成部署通过。
+
+正在同步时，check 会一直读取 `done:` 和 `out-of-sync:`，结果里持续显示 `[SYNC] DRBD 同步进度`。只有同步结束，并且状态变成 `replication:Established`、双方 `UpToDate` 之后，同一次检查才显示双端一致和「部署检查通过」。默认每 5 秒采样一次，可用 `DRBD_SYNC_INTERVAL` 调整。对端断开或状态查询失败会停止等待并记为 FAIL。
+
+`Failed Actions`、`Failed Resource Actions` 和 `Failed Fencing Actions` 都是历史失败记录。资源或 fencing 设备当前已经 Started 时，检查仍会 FAIL；读不到 `pcs status` 时不会报告“无失败”。
+
+`pkg` 阶段在两台节点安装随包提供的 MatrixOne 资源代理和 Python 3。已有集群如果已具备 Python 3 和支持 `config --format json` 的 Docker Compose 插件，可以在两台节点的部署目录单独安装代理。
+
+```bash
+sudo install -D -m 0755 agents/heartbeat/docker-compose /usr/lib/ocf/resource.d/matrixone/docker-compose
+```
+
+如果 `p_mo` 仍使用 `ocf:heartbeat:docker-compose`，在维护窗口停用该资源并确认容器已停止。通过离线 CIB 将 `p_mo` 的 provider 改为 `matrixone`，保留现有资源参数和约束，校验后发布并重新启用 `p_mo`。
+
+停机或迁移时，资源代理也会停止能确认属于该配置的活动 `docker compose run` 任务，以便释放共享数据。请在维护前完成需要保留运行的任务。已经退出的临时容器会保留；使用 `--rm` 启动的任务由 Docker 自动清理。
+
+如果 Compose 配置丢失，且仍有属于该配置的活动容器，监控会报错。恢复原配置后，代理才能核对 MatrixOne 等预期服务是否运行。如果配置可读、部分服务缺失，且容器归属清楚，`start` 会尝试一次 `compose up -d` 并重新检查。
+
+服务改名或缩容到零后，如果旧容器仍在运行，代理会报错并阻止启动替代容器。请先确认旧容器已释放数据目录。如果常驻服务已经停止，但同项目的临时任务仍在运行，代理也会阻止启动，直到任务退出或由停机操作结束。
 
 ## 三、验证
 
@@ -112,7 +132,7 @@ fencing 不能省，也不能用假实现。上线前务必对非活动节点实
 | `mo-ha-deploy.sh` | 一键部署脚本，RPM / DEB 通用 |
 | `deploy.env.example` | 参数模板，复制后修改 |
 | `mo-config/` | MatrixOne all-in-one compose 与 launch/log/tn/cn 配置模板 |
-| `agents/heartbeat/docker-compose` | OCF 资源代理（EL9 的 resource-agents 不含，随包下发） |
+| `agents/heartbeat/docker-compose` | 随包提供的 OCF 代理源码，安装为 `ocf:matrixone:docker-compose` |
 | `backups/20261105-before-fixes/` | 本次修改前的原脚本、env 模板及 SHA-256 校验值 |
 | `backups/20261105-before-proxmox-fix/` | 集成 Proxmox 自动发现修复前的脚本 |
 

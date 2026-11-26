@@ -28,6 +28,7 @@ package nulls
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 type Nulls struct {
@@ -89,57 +90,91 @@ type Nulls struct {
 // @ requires nsp != nil ==> acc(nsp.np.Inv(), 1/2)
 // @ ensures nsp != nil ==> acc(nsp.np.Inv(), 1/2) && nsp.NLen() == old(nsp.NLen())
 // @ ensures forall r int :: {nsp.Has(r)} nsp.Has(r) == old(nsp.Has(r))
-// @ ensures (res == nil) == (nsp == nil)
+// @ ensures (res == nil) == (nsp == nil || err != nil)
 // @ ensures res != nil ==> res.np.Inv() && res.NLen() == nsp.NLen()
 // @ ensures res != nil ==> forall r int :: {res.Has(r)} res.Has(r) == nsp.Has(r)
 // @ decreases
-func (nsp *Nulls) Clone() (res *Nulls) {
+func (nsp *Nulls) Clone(mp *mpool.MPool) (res *Nulls, err error) {
 	if nsp == nil {
-		return nil
+		return nil, nil
 	}
 	var n /*@@@*/ Nulls
-	n.InitWith(nsp)
-	return &n
+	// @ n.np.Unowned()
+	if err = n.InitWith(nsp, mp); err != nil {
+		return nil, err
+	}
+	return &n, nil
 }
 
-// InitWith makes nsp a copy of n. It ignores the old contents of nsp.
-// @ requires acc(nsp) && n != nil && acc(n.np.Inv(), 1/2)
-// @ ensures nsp.np.Inv() && acc(n.np.Inv(), 1/2) && n.NLen() == old(n.NLen())
+// InitWith makes nsp a copy of n. It ignores the old contents of nsp. On an
+// error nsp keeps its words and is left for reinitialization or Free.
+// @ requires nsp != nil && nsp.np.Raw() && n != nil && acc(n.np.Inv(), 1/2)
+// @ ensures acc(n.np.Inv(), 1/2) && n.NLen() == old(n.NLen())
 // @ ensures forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
-// @ ensures nsp.NLen() == n.NLen() && forall r int :: {nsp.Has(r)} nsp.Has(r) == n.Has(r)
+// @ ensures err == nil ==> nsp.np.Inv() && nsp.NLen() == n.NLen() && forall r int :: {nsp.Has(r)} nsp.Has(r) == n.Has(r)
+// @ ensures err != nil ==> nsp.np.Raw()
 // @ decreases
-func (nsp *Nulls) InitWith(n *Nulls) {
-	nsp.np.InitWith(&n.np)
+func (nsp *Nulls) InitWith(n *Nulls, mp *mpool.MPool) (err error) {
+	return nsp.np.InitWith(&n.np, mp)
 }
 
 // InitWithSize makes nsp an all-clear bitmap of size rows. It ignores the old
-// contents of nsp.
-// @ requires acc(nsp) && 0 <= size
-// @ ensures nsp.np.Inv() && nsp.NLen() == int64(size)
-// @ ensures forall r int :: {nsp.Has(r)} !nsp.Has(r)
+// contents of nsp. On an error nsp keeps its words.
+// @ requires nsp != nil && nsp.np.Raw() && 0 <= size
+// @ ensures err == nil ==> nsp.np.Inv() && nsp.NLen() == int64(size)
+// @ ensures err == nil ==> forall r int :: {nsp.Has(r)} !nsp.Has(r)
+// @ ensures err != nil ==> nsp.np.Raw()
 // @ decreases
-func (nsp *Nulls) InitWithSize(size int) {
-	nsp.np.InitWithSize(int64(size))
+func (nsp *Nulls) InitWithSize(size int, mp *mpool.MPool) (err error) {
+	return nsp.np.InitWithSize(int64(size), mp)
 }
 
 // @ requires 0 <= size
-// @ ensures res != nil && res.np.Inv() && res.NLen() == int64(size)
-// @ ensures forall r int :: {res.Has(r)} !res.Has(r)
+// @ ensures (res == nil) == (err != nil)
+// @ ensures res != nil ==> res.np.Inv() && res.NLen() == int64(size)
+// @ ensures res != nil ==> forall r int :: {res.Has(r)} !res.Has(r)
 // @ decreases
-func NewWithSize(size int) (res *Nulls) {
+func NewWithSize(size int, mp *mpool.MPool) (res *Nulls, err error) {
 	var n /*@@@*/ Nulls
-	n.InitWithSize(size)
-	return &n
+	// @ n.np.Unowned()
+	if err = n.InitWithSize(size, mp); err != nil {
+		return nil, err
+	}
+	return &n, nil
 }
 
-// Reset makes nsp empty with length 0 and drops its storage. It ignores the
-// old contents of nsp.
-// @ requires acc(nsp)
+// Reset makes nsp empty with length 0 and returns its storage to its pool.
+// It ignores the old contents of nsp.
+// @ requires nsp != nil && nsp.np.Raw() && nsp.np.HasPool()
 // @ ensures nsp.np.Inv() && nsp.NLen() == 0
 // @ ensures forall r int :: {nsp.Has(r)} !nsp.Has(r)
 // @ decreases
 func (nsp *Nulls) Reset() {
 	nsp.np.Reset()
+}
+
+// Free returns nsp's words to its pool and leaves it empty with the same
+// pool. A read-only Nulls only drops its reference.
+// @ requires nsp != nil ==> nsp.np.Raw()
+// @ ensures nsp != nil ==> acc(&nsp.np)
+// @ decreases
+func (nsp *Nulls) Free() {
+	if nsp != nil {
+		nsp.np.Free()
+	}
+}
+
+// mustOK panics with err. The in-place writers (Add, Set, AddRange, Or)
+// have no error result; they can fail only when growing the bitmap from its
+// pool, or when the Nulls is read-only. A call that returns had a nil err,
+// which is all the trusted contract says.
+// @ trusted
+// @ ensures err == nil
+// @ decreases
+func mustOK(err error) {
+	if err != nil {
+		panic(err)
+	}
 }
 
 // Clear unsets every row and keeps the length.
@@ -161,7 +196,8 @@ func (nsp *Nulls) GetBitmap() (res *bitmap.Bitmap) {
 
 // Or performs union operation on Nulls nsp,m and store the result in r.
 // r keeps its own rows, except that when nsp and m are both empty, r is
-// reset to length 0. r may alias nsp or m.
+// cleared. Its length and storage are kept, so a result that reserved its
+// validity can still set NULL rows in place afterwards. r may alias nsp or m.
 // @ requires r != nil && r.np.Inv()
 // @ requires nsp != nil && nsp != r ==> acc(nsp.np.Inv(), 1/2)
 // @ requires m != nil && m != r ==> acc(m.np.Inv(), 1/2)
@@ -170,14 +206,13 @@ func (nsp *Nulls) GetBitmap() (res *bitmap.Bitmap) {
 // @ ensures m != nil && m != r ==> acc(m.np.Inv(), 1/2)
 // @ ensures nsp != r ==> forall x int :: {nsp.Has(x)} nsp.Has(x) == old(nsp.Has(x))
 // @ ensures m != r ==> forall x int :: {m.Has(x)} m.Has(x) == old(m.Has(x))
-// @ ensures old(nsp.IsEmpty()) && old(m.IsEmpty()) ==> r.NLen() == 0 && forall x int :: {r.Has(x)} !r.Has(x)
+// @ ensures old(nsp.IsEmpty()) && old(m.IsEmpty()) ==> r.NLen() == old(r.NLen()) && forall x int :: {r.Has(x)} !r.Has(x)
 // @ ensures !(old(nsp.IsEmpty()) && old(m.IsEmpty())) ==>
 // @ 	forall x int :: {r.Has(x)} r.Has(x) == (old(r.Has(x)) || old(nsp.Has(x)) || old(m.Has(x)))
 // @ decreases
 func Or(nsp, m, r *Nulls) {
 	if nsp.IsEmpty() && m.IsEmpty() {
-		// @ r.np.Release()
-		r.Reset()
+		r.Clear()
 		return
 	}
 
@@ -209,27 +244,53 @@ func orBitmapInto(dst *Nulls, src *bitmap.Bitmap) {
 }
 
 // Build makes nsp a bitmap of size rows with rows set. It ignores the old
-// contents of nsp. The length grows past size if a row needs it.
-// @ requires acc(nsp) && 0 <= size && (forall k int :: {&rows[k]} 0 <= k && k < len(rows) ==> acc(&rows[k], 1/2))
-// @ ensures nsp.np.Inv() && (forall k int :: {&rows[k]} 0 <= k && k < len(rows) ==> acc(&rows[k], 1/2)) && nsp.NLen() >= int64(size)
-// @ ensures forall r int :: {nsp.Has(r)} nsp.Has(r) == bitmap.InRowsU(seq(rows), len(rows), r)
+// contents of nsp. The length grows past size if a row needs it. On an error
+// nsp keeps its words and is left for reinitialization or Free.
+// @ requires nsp != nil && nsp.np.Raw() && 0 <= size && (forall k int :: {&rows[k]} 0 <= k && k < len(rows) ==> acc(&rows[k], 1/2))
+// @ ensures forall k int :: {&rows[k]} 0 <= k && k < len(rows) ==> acc(&rows[k], 1/2)
+// @ ensures err == nil ==> nsp.np.Inv() && nsp.NLen() >= int64(size)
+// @ ensures err == nil ==> forall r int :: {nsp.Has(r)} nsp.Has(r) == bitmap.InRowsU(seq(rows), len(rows), r)
+// @ ensures err != nil ==> nsp.np.Raw()
 // @ requires forall k int :: {&rows[k]} 0 <= k && k < len(rows) ==> 0 <= rows[k]
 // @ decreases
-func (nsp *Nulls) Build(size int, rows ...uint64) {
-	nsp.InitWithSize(size)
-	nsp.addRows(rows)
+func (nsp *Nulls) Build(size int, mp *mpool.MPool, rows ...uint64) (err error) {
+	return nsp.build(size, mp, rows)
+}
+
+// build is Build with the rows as a slice; Gobra cannot spread a variadic.
+// @ requires nsp != nil && nsp.np.Raw() && 0 <= size && (forall k int :: {&rows[k]} 0 <= k && k < len(rows) ==> acc(&rows[k], 1/2))
+// @ ensures forall k int :: {&rows[k]} 0 <= k && k < len(rows) ==> acc(&rows[k], 1/2)
+// @ ensures err == nil ==> nsp.np.Inv() && nsp.NLen() >= int64(size)
+// @ ensures err == nil ==> forall r int :: {nsp.Has(r)} nsp.Has(r) == bitmap.InRowsU(seq(rows), len(rows), r)
+// @ ensures err != nil ==> nsp.np.Raw()
+// @ requires forall k int :: {&rows[k]} 0 <= k && k < len(rows) ==> 0 <= rows[k]
+// @ decreases
+func (nsp *Nulls) build(size int, mp *mpool.MPool, rows []uint64) (err error) {
+	if err = nsp.InitWithSize(size, mp); err != nil {
+		return err
+	}
+	if err = nsp.tryAddRows(rows); err != nil {
+		// @ nsp.np.Release()
+		return err
+	}
+	return nil
 }
 
 // @ requires 0 <= size && (forall k int :: {&rows[k]} 0 <= k && k < len(rows) ==> acc(&rows[k], 1/2))
-// @ ensures res != nil && res.np.Inv() && (forall k int :: {&rows[k]} 0 <= k && k < len(rows) ==> acc(&rows[k], 1/2)) && res.NLen() >= int64(size)
-// @ ensures forall r int :: {res.Has(r)} res.Has(r) == bitmap.InRowsU(seq(rows), len(rows), r)
+// @ ensures forall k int :: {&rows[k]} 0 <= k && k < len(rows) ==> acc(&rows[k], 1/2)
+// @ ensures (res == nil) == (err != nil)
+// @ ensures res != nil ==> res.np.Inv() && res.NLen() >= int64(size)
+// @ ensures res != nil ==> forall r int :: {res.Has(r)} res.Has(r) == bitmap.InRowsU(seq(rows), len(rows), r)
 // @ requires forall k int :: {&rows[k]} 0 <= k && k < len(rows) ==> 0 <= rows[k]
 // @ decreases
-func Build(size int, rows ...uint64) (res *Nulls) {
+func Build(size int, mp *mpool.MPool, rows ...uint64) (res *Nulls, err error) {
 	var n /*@@@*/ Nulls
-	n.InitWithSize(size)
-	n.addRows(rows)
-	return &n
+	// @ n.np.Unowned()
+	if err = n.build(size, mp, rows); err != nil {
+		n.Free()
+		return nil, err
+	}
+	return &n, nil
 }
 
 // Size estimates the memory usage of the Nulls.
@@ -245,11 +306,11 @@ func Size(nsp *Nulls) (res int) {
 
 // TryExpand grows nsp to at least size rows; new rows are clear.
 // @ requires nsp != nil && nsp.np.Inv()
-// @ ensures nsp.np.Inv() && nsp.NLen() >= old(nsp.NLen()) && nsp.NLen() >= int64(size)
+// @ ensures nsp.np.Inv() && nsp.NLen() >= old(nsp.NLen()) && (err == nil ==> nsp.NLen() >= int64(size))
 // @ ensures forall r int :: {nsp.Has(r)} nsp.Has(r) == old(nsp.Has(r))
 // @ decreases
-func TryExpand(nsp *Nulls, size int) {
-	nsp.np.TryExpandWithSize(size)
+func TryExpand(nsp *Nulls, size int) (err error) {
+	return nsp.np.TryExpandWithSize(size)
 }
 
 // Contains returns true if the integer is contained in the Nulls
@@ -283,8 +344,25 @@ func (nsp *Nulls) Add(sels ...uint64) {
 // @ requires forall k int :: {&sels[k]} 0 <= k && k < len(sels) ==> 0 <= sels[k]
 // @ decreases
 func (nsp *Nulls) addRows(sels []uint64) {
-	if nsp == nil || len(sels) == 0 {
+	if nsp == nil {
 		return
+	}
+	mustOK(nsp.tryAddRows(sels))
+}
+
+// tryAddRows is addRows returning the allocation error instead of
+// panicking. On an error nsp is unchanged.
+// @ requires nsp != nil && nsp.np.Inv()
+// @ requires (forall k int :: {&sels[k]} 0 <= k && k < len(sels) ==> acc(&sels[k], 1/2))
+// @ requires forall k int :: {&sels[k]} 0 <= k && k < len(sels) ==> 0 <= sels[k]
+// @ ensures nsp.np.Inv() && nsp.NLen() >= old(nsp.NLen())
+// @ ensures (forall k int :: {&sels[k]} 0 <= k && k < len(sels) ==> acc(&sels[k], 1/2))
+// @ ensures err == nil ==> forall r int :: {nsp.Has(r)} nsp.Has(r) == (old(nsp.Has(r)) || bitmap.InRowsU(seq(sels), len(sels), r))
+// @ ensures err != nil ==> forall r int :: {nsp.Has(r)} nsp.Has(r) == old(nsp.Has(r))
+// @ decreases
+func (nsp *Nulls) tryAddRows(sels []uint64) (err error) {
+	if len(sels) == 0 {
+		return nil
 	}
 	maxRow := sels[0]
 	// @ invariant (forall k int :: {&sels[k]} 0 <= k && k < len(sels) ==> acc(&sels[k], 1/2)) && 1 <= i && i <= len(sels)
@@ -296,9 +374,12 @@ func (nsp *Nulls) addRows(sels []uint64) {
 			maxRow = sels[i]
 		}
 	}
-	nsp.np.TryExpandWithSize(int(maxRow) + 1)
+	if err = nsp.np.TryExpandWithSize(int(maxRow) + 1); err != nil {
+		return err
+	}
 	// @ assert forall k int :: {&sels[k]} 0 <= k && k < len(sels) ==> sels[k] <= maxRow
 	nsp.np.AddMany(sels)
+	return nil
 }
 
 // AddRange sets rows [start, end).
@@ -309,7 +390,7 @@ func (nsp *Nulls) addRows(sels []uint64) {
 // @ decreases
 func (nsp *Nulls) AddRange(start, end uint64) {
 	if nsp != nil {
-		nsp.np.TryExpandWithSize(int(end))
+		mustOK(nsp.np.TryExpandWithSize(int(end)))
 		nsp.np.AddRange(start, end)
 	}
 }
@@ -414,18 +495,21 @@ func RemoveRange(nsp *Nulls, start, end uint64) {
 // @ requires 0 <= bias && bias <= start && bias <= end
 // @ ensures nsp != nil ==> acc(nsp.np.Inv(), 1/2) && nsp.NLen() == old(nsp.NLen())
 // @ ensures forall r int :: {nsp.Has(r)} nsp.Has(r) == old(nsp.Has(r))
-// @ ensures b.np.Inv()
-// @ ensures old(nsp.IsEmpty()) ==> b.NLen() == old(b.NLen()) && forall i int :: {b.Has(i)} b.Has(i) == old(b.Has(i))
-// @ ensures !old(nsp.IsEmpty()) ==> b.NLen() == int64(end-bias)
-// @ ensures !old(nsp.IsEmpty()) ==> forall i int :: {b.Has(i)} b.Has(i) == (int(start-bias) <= i && i < int(end-bias) && nsp.Has(i+int(bias)))
+// @ ensures err == nil ==> b.np.Inv()
+// @ ensures err != nil ==> b.np.Raw() && !old(nsp.IsEmpty())
+// @ ensures old(nsp.IsEmpty()) ==> err == nil && b.NLen() == old(b.NLen()) && forall i int :: {b.Has(i)} b.Has(i) == old(b.Has(i))
+// @ ensures !old(nsp.IsEmpty()) && err == nil ==> b.NLen() == int64(end-bias)
+// @ ensures !old(nsp.IsEmpty()) && err == nil ==> forall i int :: {b.Has(i)} b.Has(i) == (int(start-bias) <= i && i < int(end-bias) && nsp.Has(i+int(bias)))
 // @ decreases
-func Range(nsp *Nulls, start, end, bias uint64, b *Nulls) {
+func Range(nsp *Nulls, start, end, bias uint64, b *Nulls, mp *mpool.MPool) (err error) {
 	if nsp.IsEmpty() {
-		return
+		return nil
 	}
 
 	// @ b.np.Release()
-	b.np.InitWithSize(int64(end - bias))
+	if err = b.np.InitWithSize(int64(end-bias), mp); err != nil {
+		return err
+	}
 	// @ ghost start0 := start
 	// @ invariant acc(nsp.np.Inv(), 1/2) && b.np.Inv() && b.NLen() == int64(end-bias)
 	// @ invariant nsp.np.Len() == old(nsp.np.Len()) && nsp.np.ISeq() == old(nsp.np.ISeq())
@@ -438,6 +522,7 @@ func Range(nsp *Nulls, start, end, bias uint64, b *Nulls) {
 			b.np.Add(start - bias)
 		}
 	}
+	return nil
 }
 
 // Filter keeps the rows named by sels.
@@ -456,28 +541,32 @@ func Range(nsp *Nulls, start, end, bias uint64, b *Nulls) {
 // @ requires negate ==> bitmap.SortedRows(seq(sels))
 // @ ensures nsp != nil ==> nsp.np.Inv()
 // @ ensures (forall k int :: {&sels[k]} 0 <= k && k < len(sels) ==> acc(&sels[k], 1/2))
-// @ ensures old(nsp.IsEmpty()) ==> nsp.NLen() == old(nsp.NLen()) && forall i int :: {nsp.Has(i)} nsp.Has(i) == old(nsp.Has(i))
-// @ ensures !old(nsp.IsEmpty()) && !negate ==> nsp.NLen() == int64(len(sels))
-// @ ensures !old(nsp.IsEmpty()) && !negate ==> forall i int :: {nsp.Has(i)} 0 <= i && i < len(sels) ==>
+// @ ensures (old(nsp.IsEmpty()) || err != nil) ==> nsp.NLen() == old(nsp.NLen()) && forall i int :: {nsp.Has(i)} nsp.Has(i) == old(nsp.Has(i))
+// @ ensures err != nil ==> !old(nsp.IsEmpty()) && !negate
+// @ ensures !old(nsp.IsEmpty()) && !negate && err == nil ==> nsp.NLen() == int64(len(sels))
+// @ ensures !old(nsp.IsEmpty()) && !negate && err == nil ==> forall i int :: {nsp.Has(i)} 0 <= i && i < len(sels) ==>
 // @ 	nsp.Has(i) == old(sels[i] >= 0 && nsp.Has(int(sels[i])))
-// @ ensures !old(nsp.IsEmpty()) && !negate ==> forall i int :: {nsp.Has(i)} len(sels) <= i ==> !nsp.Has(i)
+// @ ensures !old(nsp.IsEmpty()) && !negate && err == nil ==> forall i int :: {nsp.Has(i)} len(sels) <= i ==> !nsp.Has(i)
 // @ ensures !old(nsp.IsEmpty()) && negate ==> nsp.NLen() == old(nsp.NLen())
 // @ ensures !old(nsp.IsEmpty()) && negate ==> forall s int :: {old(nsp.Has(s))} 0 <= s && s < int(old(nsp.NLen())) &&
 // @ 	bitmap.Rank(seq(sels), int64(s+1)) == bitmap.Rank(seq(sels), int64(s)) ==>
 // @ 	nsp.Has(s-bitmap.Rank(seq(sels), int64(s))) == old(nsp.Has(s))
 // @ ensures !old(nsp.IsEmpty()) && negate ==> forall i int :: {nsp.Has(i)} int(old(nsp.NLen()))-bitmap.Rank(seq(sels), old(nsp.NLen())) <= i ==> !nsp.Has(i)
 // @ decreases
-func Filter(nsp *Nulls, sels []int64, negate bool) {
+func Filter(nsp *Nulls, sels []int64, negate bool) (err error) {
 	if nsp.IsEmpty() {
-		return
+		return nil
 	}
 	if negate {
 		nsp.np.RemapOrderedUnchecked(sels, true)
-		return
+		return nil
 	}
 
 	var bm /*@@@*/ bitmap.Bitmap
-	bm.InitWithSize(int64(len(sels)))
+	// @ bm.Unowned()
+	if err = bm.InitWithSize(int64(len(sels)), nsp.np.MPool()); err != nil {
+		return err
+	}
 	// @ invariant nsp.np.Inv() && bm.Inv() && bm.Len() == int64(len(sels))
 	// @ invariant (forall k int :: {&sels[k]} 0 <= k && k < len(sels) ==> acc(&sels[k], 1/2)) && 0 <= i && i <= len(sels)
 	// @ invariant nsp.np.Len() == old(nsp.np.Len()) && nsp.np.ISeq() == old(nsp.np.ISeq())
@@ -491,6 +580,9 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 		}
 	}
 	nsp.np.Swap(&bm)
+	// @ bm.Release()
+	bm.Free()
+	return nil
 }
 
 // FilterInPlaceOrdered is Filter for strictly increasing, non-negative sels,
@@ -500,7 +592,7 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 // @ ensures nsp != nil ==> nsp.np.Inv()
 // @ ensures (forall k int :: {&sels[k]} 0 <= k && k < len(sels) ==> acc(&sels[k], 1/2))
 // @ ensures old(nsp.IsEmpty()) ==> nsp.NLen() == old(nsp.NLen()) && forall i int :: {nsp.Has(i)} nsp.Has(i) == old(nsp.Has(i))
-// @ ensures !old(nsp.IsEmpty()) && !negate ==> nsp.NLen() == int64(len(sels))
+// @ ensures !old(nsp.IsEmpty()) && !negate ==> nsp.NLen() == (old(nsp.NLen()) < int64(len(sels)) ? old(nsp.NLen()) : int64(len(sels)))
 // @ ensures !old(nsp.IsEmpty()) && !negate ==> forall i int :: {nsp.Has(i)} 0 <= i && i < len(sels) ==>
 // @ 	nsp.Has(i) == old(sels[i] >= 0 && nsp.Has(int(sels[i])))
 // @ ensures !old(nsp.IsEmpty()) && !negate ==> forall i int :: {nsp.Has(i)} len(sels) <= i ==> !nsp.Has(i)
@@ -515,12 +607,9 @@ func FilterInPlaceOrdered(nsp *Nulls, sels []int64, negate bool) {
 		return
 	}
 	// @ assert forall i int :: {sels[i]} 0 <= i && i < len(sels) ==> seq(sels)[i] == sels[i] && sels[i] >= 0
+	// Without negate the length becomes min(Len, len(sels)). Rows past Len
+	// read as clear, so the bitmap is not grown (an allocation) to cover them.
 	nsp.np.RemapOrderedUnchecked(sels, negate)
-	if !negate {
-		// RemapOrdered leaves the length at min(Len, len(sels)); Filter's
-		// length is len(sels), and the extra rows are clear.
-		nsp.np.TryExpandWithSize(len(sels))
-	}
 }
 
 // @ requires nsp != nil ==> nsp.np.Inv()
@@ -528,7 +617,7 @@ func FilterInPlaceOrdered(nsp *Nulls, sels []int64, negate bool) {
 // @ ensures nsp != nil ==> nsp.np.Inv()
 // @ ensures acc(sels.Inv(), 1/2) && sels.Len() == old(sels.Len()) && sels.ISeq() == old(sels.ISeq())
 // @ ensures old(nsp.IsEmpty()) ==> nsp.NLen() == old(nsp.NLen()) && forall i int :: {nsp.Has(i)} nsp.Has(i) == old(nsp.Has(i))
-// @ ensures !old(nsp.IsEmpty()) && !negate ==> nsp.NLen() == int64(old(sels.Count()))
+// @ ensures !old(nsp.IsEmpty()) && !negate ==> nsp.NLen() == (old(nsp.NLen()) < int64(old(sels.Count())) ? old(nsp.NLen()) : int64(old(sels.Count())))
 // @ ensures !old(nsp.IsEmpty()) && !negate ==> forall r int :: {sels.Has(r)} sels.Has(r) &&
 // @ 	sels.CntBelow(r) < int(old(nsp.NLen())) && sels.CntBelow(r) < old(sels.Count()) ==>
 // @ 	nsp.Has(sels.CntBelow(r)) == old(nsp.Has(r))
@@ -546,14 +635,14 @@ func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 // are r+offset for the set rows r of sels, in increasing order. The selection
 // bitmap is relative to a window of the owning vector, while the null bitmap
 // remains in the full vector's row domain. When negate is false the length
-// becomes sels.Count(); when negate is true it is unchanged. The bitmap is
+// becomes min(Len, sels.Count()); when negate is true it is unchanged. The bitmap is
 // rewritten in place.
 // @ requires nsp != nil ==> nsp.np.Inv()
 // @ requires sels != nil && acc(sels.Inv(), 1/2) && 0 <= offset
 // @ ensures nsp != nil ==> nsp.np.Inv()
 // @ ensures acc(sels.Inv(), 1/2) && sels.Len() == old(sels.Len()) && sels.ISeq() == old(sels.ISeq())
 // @ ensures old(nsp.IsEmpty()) ==> nsp.NLen() == old(nsp.NLen()) && forall i int :: {nsp.Has(i)} nsp.Has(i) == old(nsp.Has(i))
-// @ ensures !old(nsp.IsEmpty()) && !negate ==> nsp.NLen() == int64(old(sels.Count()))
+// @ ensures !old(nsp.IsEmpty()) && !negate ==> nsp.NLen() == (old(nsp.NLen()) < int64(old(sels.Count())) ? old(nsp.NLen()) : int64(old(sels.Count())))
 // @ ensures !old(nsp.IsEmpty()) && !negate ==> forall r int :: {sels.Has(r)} sels.Has(r) &&
 // @ 	sels.CntBelow(r) < int(old(nsp.NLen())) && sels.CntBelow(r) < old(sels.Count()) ==>
 // @ 	nsp.Has(sels.CntBelow(r)) == old(nsp.Has(r+int(offset)))
@@ -569,12 +658,8 @@ func FilterByMaskWithOffset(nsp *Nulls, sels *bitmap.Bitmap, negate bool, offset
 	}
 	// @ sels.CountIsRows()
 	nsp.np.RemapMaskOrderedWithOffset(sels, negate, offset)
-	// @ sels.CountIsRows()
-	if !negate {
-		// The remap leaves the length at min(Len, sels.Count()); the
-		// result has sels.Count() rows, and the extra rows are clear.
-		nsp.np.TryExpandWithSize(sels.Count())
-	}
+	// Without negate the length becomes min(Len, sels.Count()); rows past
+	// it read as clear, so the bitmap is not grown to cover them.
 }
 
 // FilterByMaskInPlace is FilterByMask; it never needed scratch space.
@@ -621,7 +706,7 @@ func (nsp *Nulls) IsEmpty() bool {
 // @ requires 0 <= row
 // @ decreases
 func (nsp *Nulls) Set(row uint64) {
-	nsp.np.TryExpandWithSize(int(row) + 1)
+	mustOK(nsp.np.TryExpandWithSize(int(row) + 1))
 	nsp.np.Add(row)
 }
 

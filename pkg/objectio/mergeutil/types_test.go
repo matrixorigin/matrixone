@@ -88,7 +88,7 @@ func TestMergeSortBatchesDecimal256(t *testing.T) {
 	}
 
 	newBuffer := func() *batch.Batch {
-		return batch.NewWithSchema([]string{"id", "payload"}, []types.Type{decimalTyp, types.T_int32.ToType()}, mp)
+		return batch.NewWithTypes([]types.Type{decimalTyp, types.T_int32.ToType()}, mp)
 	}
 	buffer := newBuffer()
 
@@ -127,7 +127,7 @@ func TestMergeSortBatchesYear(t *testing.T) {
 	}
 
 	newBuffer := func() *batch.Batch {
-		return batch.NewWithSchema([]string{"id", "payload"}, []types.Type{types.T_year.ToType(), types.T_int32.ToType()}, mp)
+		return batch.NewWithTypes([]types.Type{types.T_year.ToType(), types.T_int32.ToType()}, mp)
 	}
 	buffer := newBuffer()
 
@@ -169,7 +169,7 @@ func TestMergeSortBatchesDisjointRanges(t *testing.T) {
 	require.Equal(t, []int{1, 0}, merge.disjointBatchOrder())
 
 	newBuffer := func() *batch.Batch {
-		return batch.NewWithSchema([]string{"id", "payload"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
+		return batch.NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
 	}
 	buffer := newBuffer()
 	var gotKeys, gotPayloads []int64
@@ -198,8 +198,8 @@ func TestMergeSortBatchesDisjointRanges(t *testing.T) {
 func TestDisjointBatchOrderFallsBackForOverlappingRanges(t *testing.T) {
 	ds := &fixedDataSlice[int64]{cols: [][]int64{{1, 4}, {2, 3}}}
 	merge := newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{
-		nulls.NewWithSize(2),
-		nulls.NewWithSize(2),
+		mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)),
+		mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)),
 	})
 	require.Nil(t, merge.disjointBatchOrder())
 }
@@ -207,25 +207,25 @@ func TestDisjointBatchOrderFallsBackForOverlappingRanges(t *testing.T) {
 func TestDisjointBatchOrderFallsBackForEqualBoundaries(t *testing.T) {
 	ds := &fixedDataSlice[int64]{cols: [][]int64{{1, 2}, {2, 3}}}
 	merge := newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{
-		nulls.NewWithSize(2),
-		nulls.NewWithSize(2),
+		mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)),
+		mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)),
 	})
 	require.Nil(t, merge.disjointBatchOrder())
 }
 
 func TestDisjointBatchOrderHandlesNullBoundariesConservatively(t *testing.T) {
-	leftNulls := nulls.NewWithSize(3)
+	leftNulls := mustNullsOK(nulls.NewWithSize(3, bitmapTestMP))
 	leftNulls.Add(0)
-	rightNulls := nulls.NewWithSize(3)
+	rightNulls := mustNullsOK(nulls.NewWithSize(3, bitmapTestMP))
 	rightNulls.Add(0)
 	ds := &fixedDataSlice[int64]{cols: [][]int64{{0, 1, 2}, {0, 3, 4}}}
 	merge := newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{leftNulls, rightNulls})
 	require.Nil(t, merge.disjointBatchOrder(), "mixed null/non-null ranges overlap")
 
-	allNulls := nulls.NewWithSize(2)
+	allNulls := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 	allNulls.Add(0, 1)
 	ds = &fixedDataSlice[int64]{cols: [][]int64{{0, 0}, {1, 2}}}
-	merge = newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{allNulls, nulls.NewWithSize(2)})
+	merge = newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{allNulls, mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))})
 	require.Equal(t, []int{0, 1}, merge.disjointBatchOrder())
 }
 
@@ -238,7 +238,7 @@ func TestMergeSortBatchesDisjointSinkError(t *testing.T) {
 	for _, bat := range batches {
 		defer bat.Clean(mp)
 	}
-	buffer := batch.NewWithSchema([]string{"id", "payload"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
+	buffer := batch.NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
 	sinkErr := errors.New("sink failed")
 	returned, err := MergeSortBatches(batches, 0, buffer, func(out *batch.Batch) (*batch.Batch, error) {
 		return out, sinkErr
@@ -251,13 +251,13 @@ func TestMergeSortBatchesDisjointSinkError(t *testing.T) {
 func TestMergeSortBatchesEmptyFloatBatches(t *testing.T) {
 	mp := mpool.MustNewZero()
 	batches := []*batch.Batch{
-		batch.NewWithSchema([]string{"id"}, []types.Type{types.T_float64.ToType()}, mp),
-		batch.NewWithSchema([]string{"id"}, []types.Type{types.T_float64.ToType()}, mp),
+		batch.NewWithTypes([]types.Type{types.T_float64.ToType()}, mp),
+		batch.NewWithTypes([]types.Type{types.T_float64.ToType()}, mp),
 	}
 	for _, bat := range batches {
 		defer bat.Clean(mp)
 	}
-	buffer := batch.NewWithSchema([]string{"id"}, []types.Type{types.T_float64.ToType()}, mp)
+	buffer := batch.NewWithTypes([]types.Type{types.T_float64.ToType()}, mp)
 	sinkCalls := 0
 	buffer, err := MergeSortBatches(batches, 0, buffer, func(out *batch.Batch) (*batch.Batch, error) {
 		sinkCalls++
@@ -281,7 +281,7 @@ func TestMergeSortBatchesDisjointVarlenaRanges(t *testing.T) {
 	}
 
 	newBuffer := func() *batch.Batch {
-		return batch.NewWithSchema([]string{"id", "payload"}, []types.Type{typ, types.T_int32.ToType()}, mp)
+		return batch.NewWithTypes([]types.Type{typ, types.T_int32.ToType()}, mp)
 	}
 	buffer := newBuffer()
 	var gotKeys []string
@@ -313,7 +313,7 @@ func BenchmarkMergeSortBatchesDisjointRanges(b *testing.B) {
 			bat.Clean(mp)
 		}
 	}()
-	buffer := batch.NewWithSchema([]string{"id", "payload"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
+	buffer := batch.NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
 	defer buffer.Clean(mp)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -334,7 +334,7 @@ func BenchmarkMergeSortBatchesOverlappingRanges(b *testing.B) {
 	const batchCount = 16
 	batches := make([]*batch.Batch, 0, batchCount)
 	for i := 0; i < batchCount; i++ {
-		bat := batch.NewWithSchema([]string{"id", "payload"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
+		bat := batch.NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
 		for row := 0; row < objectio.BlockMaxRows; row++ {
 			key := int64(row*batchCount + i)
 			require.NoError(b, vector.AppendFixed(bat.Vecs[0], key, false, mp))
@@ -348,7 +348,7 @@ func BenchmarkMergeSortBatchesOverlappingRanges(b *testing.B) {
 			bat.Clean(mp)
 		}
 	}()
-	buffer := batch.NewWithSchema([]string{"id", "payload"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
+	buffer := batch.NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
 	defer buffer.Clean(mp)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -387,7 +387,7 @@ func TestMergeSortBatchesBinaryTypes(t *testing.T) {
 			}
 
 			newBuffer := func() *batch.Batch {
-				return batch.NewWithSchema([]string{"id", "payload"}, []types.Type{tc.typ, types.T_int32.ToType()}, mp)
+				return batch.NewWithTypes([]types.Type{tc.typ, types.T_int32.ToType()}, mp)
 			}
 			buffer := newBuffer()
 
@@ -420,7 +420,7 @@ func newDecimal256MergeBatch(
 	t.Helper()
 	require.Len(t, payloads, len(keys))
 
-	bat := batch.NewWithSchema([]string{"id", "payload"}, []types.Type{decimalTyp, types.T_int32.ToType()}, mp)
+	bat := batch.NewWithTypes([]types.Type{decimalTyp, types.T_int32.ToType()}, mp)
 	for i, key := range keys {
 		value, err := types.ParseDecimal256(key, decimalTyp.Width, decimalTyp.Scale)
 		require.NoError(t, err)
@@ -440,7 +440,7 @@ func newYearMergeBatch(
 	t.Helper()
 	require.Len(t, payloads, len(keys))
 
-	bat := batch.NewWithSchema([]string{"id", "payload"}, []types.Type{types.T_year.ToType(), types.T_int32.ToType()}, mp)
+	bat := batch.NewWithTypes([]types.Type{types.T_year.ToType(), types.T_int32.ToType()}, mp)
 	for i, key := range keys {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], payloads[i], false, mp))
@@ -451,7 +451,7 @@ func newYearMergeBatch(
 
 func newInt64MergeBatch(t testing.TB, mp *mpool.MPool, start, end int) *batch.Batch {
 	t.Helper()
-	bat := batch.NewWithSchema([]string{"id", "payload"}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
+	bat := batch.NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
 	for i := start; i < end; i++ {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], -int64(i), false, mp))
@@ -470,7 +470,7 @@ func newVarlenaMergeBatch(
 	t.Helper()
 	require.Len(t, payloads, len(keys))
 
-	bat := batch.NewWithSchema([]string{"id", "payload"}, []types.Type{typ, types.T_int32.ToType()}, mp)
+	bat := batch.NewWithTypes([]types.Type{typ, types.T_int32.ToType()}, mp)
 	for i, key := range keys {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], key, false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], payloads[i], false, mp))
@@ -624,7 +624,7 @@ func TestMergeSortBatchesLowPrecisionSortKey(t *testing.T) {
 		batches := make([]*batch.Batch, 0, len(runs))
 		var want []float32
 		for _, run := range runs {
-			bat := batch.NewWithSchema([]string{"k", "payload"}, typs, mp)
+			bat := batch.NewWithTypes(typs, mp)
 			for _, x := range run {
 				var err error
 				switch oid {
@@ -647,7 +647,7 @@ func TestMergeSortBatchesLowPrecisionSortKey(t *testing.T) {
 		slices.Sort(want)
 		var got []float32
 		var gotPayloads []int32
-		buffer, err := MergeSortBatches(batches, 0, batch.NewWithSchema([]string{"k", "payload"}, typs, mp), func(out *batch.Batch) (*batch.Batch, error) {
+		buffer, err := MergeSortBatches(batches, 0, batch.NewWithTypes(typs, mp), func(out *batch.Batch) (*batch.Batch, error) {
 			payloads := vector.MustFixedColNoTypeCheck[int32](out.Vecs[1])
 			for i := 0; i < out.RowCount(); i++ {
 				f, ok := vector.GetLowPrecisionFloatAt(out.Vecs[0], i)
@@ -656,7 +656,7 @@ func TestMergeSortBatchesLowPrecisionSortKey(t *testing.T) {
 				gotPayloads = append(gotPayloads, payloads[i])
 			}
 			out.Clean(mp)
-			return batch.NewWithSchema([]string{"k", "payload"}, typs, mp), nil
+			return batch.NewWithTypes(typs, mp), nil
 		}, mp, nil)
 		require.NoError(t, err, oid.String())
 		require.Equal(t, want, got, oid.String())

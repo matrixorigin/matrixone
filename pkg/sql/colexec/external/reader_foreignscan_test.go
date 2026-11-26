@@ -129,7 +129,6 @@ func TestForeignScanReaderOpenReadClose(t *testing.T) {
 	require.Equal(t, "select q1", conn.lastQuery)
 
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{"id", "name"}
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
@@ -178,7 +177,6 @@ func TestForeignScanReaderESQLHeaderSkip(t *testing.T) {
 		_, err := r.Open(param, proc)
 		require.NoError(t, err)
 		bat := batch.NewWithSize(2)
-		bat.Attrs = []string{"id", "name"}
 		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		finished, err := r.ReadBatch(context.Background(), bat, proc, nil)
@@ -263,7 +261,6 @@ func TestForeignScanISO8601Timestamp(t *testing.T) {
 	_, err := r.Open(param, proc)
 	require.NoError(t, err)
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{"name", "hired"}
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	bat.Vecs[1] = vector.NewVec(ts3, proc.Mp())
 	defer bat.Clean(proc.Mp())

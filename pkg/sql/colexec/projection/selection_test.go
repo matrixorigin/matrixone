@@ -41,9 +41,10 @@ func TestProjectionSelectedInput(t *testing.T) {
 		input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil, proc.Mp())
 		input.Vecs[1] = testutil.MakeInt32Vector([]int32{10, 20, 30, 40, 50}, nil, proc.Mp())
 		var selection bitmap.Bitmap
-		selection.InitWithSize(5)
+		selection.Init(bitmapTestMP)
+		mustBitmapOK(selection.InitWithSize(5, bitmapTestMP))
 		selection.AddMany([]uint64{1, 3, 4})
-		input.SetSelection(5, &selection)
+		input.SetSelection(&selection)
 
 		arg := NewArgument()
 		arg.ProjectList = []*plan.Expr{

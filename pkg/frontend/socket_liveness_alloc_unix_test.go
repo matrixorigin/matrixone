@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build (darwin || linux) && !race
+//go:build darwin || linux
 
 package frontend
 
@@ -22,9 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The race runtime adds bookkeeping allocations to the syscall callback path.
-// Functional live-socket behavior remains covered under -race by the tests in
-// socket_liveness_unix_test.go.
 func TestConnectionPeerClosedLivePathDoesNotAllocate(t *testing.T) {
 	server, client := tcpConnectionPair(t)
 	t.Cleanup(func() {

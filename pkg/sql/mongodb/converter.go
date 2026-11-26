@@ -121,13 +121,10 @@ func (c *Converter) Columns() []ColumnMapping {
 }
 
 func (c *Converter) NewBatch(mp *mpool.MPool) *batch.Batch {
-	attrs := make([]string, len(c.columns))
 	bat := batch.NewWithSize(len(c.columns))
 	for i, column := range c.columns {
-		attrs[i] = column.Name
 		bat.Vecs[i] = vector.NewVec(types.New(types.T(column.TypeID), column.Width, column.Scale), mp)
 	}
-	bat.Attrs = attrs
 	return bat
 }
 

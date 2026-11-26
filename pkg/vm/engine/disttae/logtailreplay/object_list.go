@@ -67,7 +67,7 @@ var ObjectListTypes = []types.Type{
 
 // CreateObjectListBatch creates a new batch for object list with proper schema
 func CreateObjectListBatch(mp *mpool.MPool) *batch.Batch {
-	return batch.NewWithSchema(ObjectListAttrs, ObjectListTypes, mp)
+	return batch.NewWithTypes(ObjectListTypes, mp)
 }
 
 func tailCheckFn(objEntry objectio.ObjectEntry, start, end types.TS) bool {

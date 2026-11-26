@@ -197,7 +197,7 @@ func Test_internalProtocol_Write(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	mockBatch := func(vals []int64) *batch.Batch {
-		bat := batch.New([]string{"col1"})
+		bat := batch.NewWithSize(1)
 		vecs := make([]*vector.Vector, 1)
 		vecs[0] = testutil.MakeInt64Vector(vals, nil, mp)
 		bat.Vecs = vecs

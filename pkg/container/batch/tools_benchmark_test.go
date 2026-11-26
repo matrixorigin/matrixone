@@ -30,7 +30,7 @@ import (
 func TestBatchToProtoBatchPreservesRepresentation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := NewWithSize(4)
-	bat.Attrs = []string{"fixed", "varlen", "const", "null"}
+	attrs := []string{"fixed", "varlen", "const", "null"}
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
@@ -41,11 +41,11 @@ func TestBatchToProtoBatchPreservesRepresentation(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(bat.Vecs[3], int64(0), true, mp))
 	t.Cleanup(func() { bat.Clean(mp) })
 
-	pb, err := BatchToProtoBatch(bat)
+	pb, err := BatchToProtoBatch(bat, attrs)
 	require.NoError(t, err)
 	require.Len(t, pb.Vecs, 4)
 	require.Equal(t, len(pb.Vecs), cap(pb.Vecs))
-	require.Equal(t, bat.Attrs, pb.Attrs)
+	require.Equal(t, attrs, pb.Attrs)
 	require.True(t, pb.Vecs[2].IsConst)
 	require.False(t, pb.Vecs[3].IsConst)
 	require.NotEmpty(t, bat.Vecs[1].GetArea())
@@ -53,14 +53,11 @@ func TestBatchToProtoBatchPreservesRepresentation(t *testing.T) {
 
 	roundTrip, err := ProtoBatchToBatch(pb, nil)
 	require.NoError(t, err)
-	require.Equal(t, bat.Attrs, roundTrip.Attrs)
 	require.Equal(t, bat.Vecs[0].GetType(), roundTrip.Vecs[0].GetType())
 	require.Equal(t, bat.Vecs[1].GetType(), roundTrip.Vecs[1].GetType())
 	require.True(t, roundTrip.Vecs[2].IsConst())
 	require.True(t, roundTrip.Vecs[3].IsNull(0))
 
-	bat.Attrs[0] = "changed"
-	require.Equal(t, "changed", pb.Attrs[0])
 	pb.Vecs[0].Data[0] = 1
 	require.Equal(t, byte(1), bat.Vecs[0].GetData()[0])
 	pb.Vecs[1].Area[0] = 'x'
@@ -69,7 +66,7 @@ func TestBatchToProtoBatchPreservesRepresentation(t *testing.T) {
 }
 
 func TestBatchToProtoBatchKeepsNilVecsForEmptyBatch(t *testing.T) {
-	pb, err := BatchToProtoBatch(new(Batch))
+	pb, err := BatchToProtoBatch(new(Batch), nil)
 	require.NoError(t, err)
 	require.Nil(t, pb.Vecs)
 }
@@ -81,7 +78,9 @@ func BenchmarkBatchToProtoBatchPreallocation(b *testing.B) {
 			benchmarkBatchToProtoBatch(b, bat, batchToProtoBatchAppend)
 		})
 		b.Run(fmt.Sprintf("vectors=%d/exact", size), func(b *testing.B) {
-			benchmarkBatchToProtoBatch(b, bat, BatchToProtoBatch)
+			benchmarkBatchToProtoBatch(b, bat, func(bat *Batch) (*api.Batch, error) {
+				return BatchToProtoBatch(bat, nil)
+			})
 		})
 	}
 }
@@ -110,7 +109,6 @@ func benchmarkBatchToProtoBatch(b *testing.B, bat *Batch, convert func(*Batch) (
 
 func batchToProtoBatchAppend(bat *Batch) (*api.Batch, error) {
 	rbat := new(api.Batch)
-	rbat.Attrs = bat.Attrs
 	for _, vec := range bat.Vecs {
 		pbVector, err := vector.VectorToProtoVector(vec)
 		if err != nil {

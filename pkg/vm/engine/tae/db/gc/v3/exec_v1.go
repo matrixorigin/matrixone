@@ -16,13 +16,14 @@ package gc
 
 import (
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"go.uber.org/zap"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -148,7 +149,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 	)
 	defer buffer.Close(e.mp)
 	transObjects := make(map[string]map[uint64]*ObjectEntry, 100)
-	coarseFilter, err := MakeBloomfilterCoarseFilter(
+	coarseFilter, releaseCoarse, err := MakeBloomfilterCoarseFilter(
 		ctx,
 		e.config.coarseEstimateRows,
 		e.config.coarseProbility,
@@ -164,6 +165,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer releaseCoarse()
 
 	fineFilter, err := MakeSnapshotAndPitrFineFilter(
 		e.ts,
@@ -224,7 +226,7 @@ func MakeBloomfilterCoarseFilter(
 	ctx context.Context,
 	rowCount int,
 	probability float64,
-	buffer containers.IBatchBuffer,
+	buffer *containers.OneSchemaBatchBuffer,
 	location objectio.Location,
 	ckpVersion uint32,
 	ts *types.TS,
@@ -234,12 +236,13 @@ func MakeBloomfilterCoarseFilter(
 	fs fileservice.FileService,
 ) (
 	FilterFn,
+	func(),
 	error,
 ) {
 	reader := logtail.NewCKPReader(ckpVersion, location, mp, fs)
 	var err error
 	if err = reader.ReadMeta(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	bf, err := BuildBloomfilter(
 		ctx,
@@ -252,8 +255,10 @@ func MakeBloomfilterCoarseFilter(
 		dataProcess,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	// The returned filter reads bf; release frees it once the filter is done.
+	release := func() { bf.Free() }
 	return func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,
@@ -323,7 +328,7 @@ func MakeBloomfilterCoarseFilter(
 		)
 		return nil
 
-	}, nil
+	}, release, nil
 }
 
 // buildTableExistenceMap creates a combined map of table IDs from both snapshotMeta and catalog

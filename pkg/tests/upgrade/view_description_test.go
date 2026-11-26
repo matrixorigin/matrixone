@@ -1172,6 +1172,12 @@ func TestViewDescriptionSubscription(t *testing.T) {
 			}) {
 				return
 			}
+			// Authorization and source remapping own separate execution budgets.
+			// Keep the prepared statement and connection across the phase boundary.
+			cancel()
+			sourceCtx, sourceCancel := context.WithTimeout(t.Context(), 90*time.Second)
+			defer sourceCancel()
+			ctx = sourceCtx
 			defer func() {
 				cleanup(t, sys, "drop publication view_description_publication")
 				cleanup(t, sys, "create publication view_description_publication database view_description_pub account view_description_sub")

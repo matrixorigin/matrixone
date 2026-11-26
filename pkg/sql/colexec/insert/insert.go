@@ -221,7 +221,6 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 
 		if insert.ctr.buf == nil {
 			insert.ctr.buf = batch.NewWithSize(len(insert.InsertCtx.Attrs))
-			insert.ctr.buf.SetAttributes(insert.InsertCtx.Attrs)
 		}
 	}
 	insert.ctr.affectedRows = 0
@@ -397,7 +396,6 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 			}
 
 			// write to s3.
-			input.Batch.Attrs = append(input.Batch.Attrs[:0], insert.InsertCtx.Attrs...)
 			if err = insert.acquireS3WriteMemory(proc, analyzer, input.Batch.Size()); err != nil {
 				insert.ctr.state = vm.End
 				return vm.CancelResult, err
@@ -596,7 +594,7 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 	input := insert.input
 	affectedRows := uint64(input.Batch.RowCount())
 	insert.ctr.buf.CleanOnlyData()
-	for i := range insert.ctr.buf.Attrs {
+	for i := range insert.ctr.buf.Vecs {
 		if insert.ctr.buf.Vecs[i] == nil {
 			insert.ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType(), proc.Mp())
 		}
@@ -611,7 +609,7 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 
 	// insert into table, insertBat will be deeply copied into txn's workspace.
 	err := process.MeasureFilesystemWaitErr(analyzer, func() error {
-		return insert.ctr.source.Write(newCtx, insert.ctr.buf)
+		return insert.ctr.source.Write(newCtx, insert.ctr.buf, insert.InsertCtx.Attrs)
 	})
 	if err != nil {
 		return input, err

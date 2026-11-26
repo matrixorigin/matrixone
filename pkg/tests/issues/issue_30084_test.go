@@ -71,6 +71,8 @@ func TestIssue30084ODKUPartitionSnapshotValidation(t *testing.T) {
 			{name: "composite", partition: "partition by key(id) partitions 8", composite: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+				defer cancel()
 				table := fmt.Sprintf("`%s`.`%s`", name, tc.name)
 				columns, seed, incoming := "(id int primary key, uk int unique, v int)", "(1,10,1)", "(100099,10,999)"
 				if tc.incoming != "" {
@@ -123,6 +125,11 @@ func TestIssue30084ODKUPartitionSnapshotValidation(t *testing.T) {
 				return
 			}
 		}
+		// The partition cases own their budgets; terminal lifecycle coverage
+		// must not inherit the database setup context's consumed deadline.
+		cancel()
+		ctx, cancel = context.WithTimeout(t.Context(), 120*time.Second)
+		defer cancel()
 		// Exercise terminal paths on the same fixture, then make a normal
 		// request to prove hooks do not leak into the next operation.
 		table := fmt.Sprintf("`%s`.`barrier_lifecycle`", name)

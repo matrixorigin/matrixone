@@ -3843,6 +3843,10 @@ func appendParquetVarlenValue(
 			}
 		}
 	}
+	// A native Unicode column admits only valid text in its charset.
+	if err := types.ValidateCollationValue(typ, value); err != nil {
+		return err
+	}
 	return vector.AppendBytes(vec, value, false, pool)
 }
 
@@ -4845,7 +4849,9 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 	vec.SetLength(n + length)
 	ret := vector.MustFixedColWithTypeCheck[U](vec)
 	if !noNulls {
-		nulls.TryExpand(vec.GetNulls(), n+length)
+		if err := nulls.TryExpand(vec.GetNulls(), n+length); err != nil {
+			return err
+		}
 	}
 	j := 0
 	for i := 0; i < n; i++ {
@@ -4962,7 +4968,9 @@ func copyPlainBoolPageToVec(mp *columnMapper, page parquet.Page, proc *process.P
 		return err
 	}
 	if !nc.noNulls {
-		nulls.TryExpand(vec.GetNulls(), n+length)
+		if err := nulls.TryExpand(vec.GetNulls(), n+length); err != nil {
+			return rollback(err)
+		}
 	}
 
 	// Required BOOLEAN pages expose a typed reader. Decode directly into the
@@ -5072,7 +5080,9 @@ func copyBoolDictPageToVec(
 		return nil
 	}
 
-	nulls.TryExpand(vec.GetNulls(), n+length)
+	if err := nulls.TryExpand(vec.GetNulls(), n+length); err != nil {
+		return err
+	}
 	levels := nc.levels
 	maxDefinitionLevel := nc.maxDefinitionLevel
 	j := 0

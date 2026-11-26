@@ -1023,7 +1023,8 @@ func (s *relationScanner) recordRelationExecutionStats(
 
 // relationScanPolicy mirrors the distributed table-scan ownership contract:
 // the coordinator owns in-memory rows independently of its object partition
-// ordinal. Remote partitions read only persisted objects assigned by object ID.
+// ordinal, including the flushed appendable representation of those rows.
+// Remote partitions read only immutable objects assigned by object ID.
 // Replicated metadata/centroid requests set partitionCount=1 and therefore
 // read all visible data on every executing CN.
 func relationScanPolicy(partitionCount int32, ownsInMemory bool) engine.DataCollectPolicy {
@@ -1262,7 +1263,6 @@ func compactRelationTop(res *executor.Result, limit int, desc bool) error {
 	}
 	first := res.Batches[0]
 	out := batch.NewWithSize(len(first.Vecs))
-	out.Attrs = append(out.Attrs, first.Attrs...)
 	for i, src := range first.Vecs {
 		out.Vecs[i] = vector.NewVec(*src.GetType(), res.Mp)
 	}
@@ -1290,7 +1290,6 @@ func compactRelationTop(res *executor.Result, limit int, desc bool) error {
 
 func makeRelationScanBatch(tableDef *plan.TableDef, columns []string, mp *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(columns))
-	bat.Attrs = append(bat.Attrs, columns...)
 	for i, name := range columns {
 		pos, ok := tableDef.Name2ColIndex[name]
 		if !ok {

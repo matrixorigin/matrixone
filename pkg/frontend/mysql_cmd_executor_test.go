@@ -3851,7 +3851,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		batchCase2 := func() *batch.Batch {
 			bat := genBatch()
-			for i := 0; i < len(bat.Attrs); i++ {
+			for i := 0; i < len(bat.Vecs); i++ {
 				for j := 0; j < bat.Vecs[0].Length(); j++ {
 					bat.Vecs[i].GetNulls().Add(uint64(j))
 				}
@@ -3925,7 +3925,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		batchCase2 := func() *batch.Batch {
 			bat := genBatch()
 
-			for i := 0; i < len(bat.Attrs); i++ {
+			for i := 0; i < len(bat.Vecs); i++ {
 				for j := 0; j < 1; j++ {
 					bat.Vecs[i].GetNulls().Add(uint64(j))
 				}
@@ -4013,7 +4013,7 @@ func Test_typeconvert(t *testing.T) {
 }
 
 func allocTestBatch(mp *mpool.MPool, attrName []string, tt []types.Type, batchSize int) *batch.Batch {
-	batchData := batch.New(attrName)
+	batchData := batch.NewWithSize(len(attrName))
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
@@ -6139,7 +6139,7 @@ func Test_doResetClearsPreparedBinaryState(t *testing.T) {
 	ses.prepareStmts[stmtName] = prepareStmt
 
 	require.NoError(t, doReset(ctx, ses, tree.NewReset(tree.Identifier(stmtName))))
-	require.Nil(t, prepareStmt.params)
+	require.Nil(t, prepareStmt.params, "an explicit reset returns the parameter storage")
 	require.Empty(t, prepareStmt.getFromSendLongData)
 }
 
@@ -6284,7 +6284,11 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.Equal(t, ErrorResponse, resp.category)
-	require.Nil(t, prepareStmt.params)
+	// The statement keeps its parameter storage for the next execution, but
+	// no values, and no process still reads it.
+	require.Same(t, params, prepareStmt.params)
+	require.Zero(t, prepareStmt.params.Length())
+	require.Nil(t, proc.GetPrepareParams())
 	require.Empty(t, prepareStmt.getFromSendLongData)
 	require.Zero(t, ses.diagnosticsSnapshot().length())
 }
@@ -8786,9 +8790,9 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 			EnableNumericPrefix: true,
 		},
 		plan.ParamValue{
-			Value:               "9007199254740992.0000000000",
-			IsBinaryProtocol:    true,
-			PrepareParamKind:    types.StringConversionDecimal,
+			Value:            "9007199254740992.0000000000",
+			IsBinaryProtocol: true,
+			RuntimeType:      types.New(types.T_decimal128, 38, 10), HasRuntimeType: true,
 			EnableNumericPrefix: true,
 		},
 	})
@@ -10198,7 +10202,7 @@ func Test_getSqlType(t *testing.T) {
 			{name: "internal input", tenant: &TenantInfo{User: "dump"}, internal: true},
 			{name: "absent tenant"},
 			{name: "internal account", tenant: &TenantInfo{Tenant: "sys", User: "internal"}},
-			{name: "special user", tenant: &TenantInfo{User: specialUser}},
+			{name: "special user", tenant: &TenantInfo{Tenant: "sys", TenantID: sysAccountID, UserID: ^uint32(0), User: specialUser}},
 			{name: "field list", tenant: &TenantInfo{User: "dump"}, sql: cmdFieldListSql},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -10262,7 +10266,7 @@ func Test_getSqlType(t *testing.T) {
 
 		user := "special_user"
 		tenant := &TenantInfo{
-			User: user,
+			Tenant: "sys", TenantID: sysAccountID, UserID: ^uint32(0), User: user,
 		}
 		ses.SetTenantInfo(tenant)
 		SetSpecialUser(user, nil)
@@ -11845,7 +11849,9 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedParamState(t *testing.T) {
 	resp, err := ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_EXECUTE, data: payload})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	require.Nil(t, prepareStmt.params)
+	require.True(t, prepareStmt.params == nil || prepareStmt.params.Length() == 0,
+		"a failed execute leaves no parameter values")
+	require.NotSame(t, prepareStmt.params, ses.GetProc().GetPrepareParams())
 	require.Empty(t, prepareStmt.getFromSendLongData)
 }
 

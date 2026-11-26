@@ -96,7 +96,7 @@ func persistScopedHistoryIndex(
 	sinker := ioutil.NewSinker(-1, taelogtail.TableIDAttrs, taelogtail.TableIDTypes, factory, h.m, h.db.Runtime.Fs,
 		ioutil.WithMemorySizeThreshold(4*1024*1024))
 	defer sinker.Close()
-	bat := batch.NewWithSchema(taelogtail.TableIDAttrs, taelogtail.TableIDTypes, h.m)
+	bat := batch.NewWithTypes(taelogtail.TableIDTypes, h.m)
 	defer bat.Clean(h.m)
 
 	accounts := make([]uint32, 0, objectio.BlockMaxRows)
@@ -245,7 +245,7 @@ func TestScopedChangedTablesBatchesCheckpointReads(t *testing.T) {
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	writer, err := ioutil.NewBlockWriterNew(fs, name, 0, taelogtail.TableIDSeqnums, false)
 	require.NoError(t, err)
-	bat := batch.NewWithSchema(taelogtail.TableIDAttrs, taelogtail.TableIDTypes, mp)
+	bat := batch.NewWithTypes(taelogtail.TableIDTypes, mp)
 	defer bat.Clean(mp)
 	for i := range objectBlocks {
 		identity := cmd_util.ScopedChangedTable{AccountID: 3, DatabaseID: 4000, TableID: uint64(1000 + i)}

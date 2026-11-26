@@ -28,7 +28,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
@@ -142,8 +141,7 @@ func (c *Compile) prepareLoadUniqueIndexPromotion(pn *plan.Plan) {
 	}
 	txnOp := c.proc.GetTxnOperator()
 	if !loadUniqueIndexPromotionTxnEligible(txnOp) ||
-		client.LockWaitTimeoutFromTxn(txnOp) <= 0 ||
-		!supportsLogtailReadBarrier(c.proc.GetService()) {
+		client.LockWaitTimeoutFromTxn(txnOp) <= 0 {
 		return
 	}
 	if _, ok := getLogtailReadBarrier(c.e); !ok {
@@ -185,16 +183,6 @@ func loadUniqueIndexPromotionTxnEligible(txnOp client.TxnOperator) bool {
 	return len(meta.ID) > 0 && meta.Status == txn.TxnStatus_Active && !meta.Mirror &&
 		meta.IsPessimistic() && meta.IsRCIsolation() &&
 		opts.Autocommit && !opts.ByBegin
-}
-
-func supportsLogtailReadBarrier(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion39
 }
 
 // getLogtailReadBarrier unwraps EntireEngine before capability admission.
@@ -699,8 +687,7 @@ func (c *Compile) maybePromoteLoadUniqueIndexes() error {
 	if state.phase != loadUniqueIndexPromotionEligible || !c.loadUniqueIndexPromotionOwner ||
 		!c.resourceAttemptOwnerEligible || c.executionGeneration != 0 ||
 		state.logicalPlan != c.pn || c.planGenerationReused || c.disableRetry ||
-		!loadUniqueIndexPromotionTxnEligible(c.proc.GetTxnOperator()) ||
-		!supportsLogtailReadBarrier(c.proc.GetService()) {
+		!loadUniqueIndexPromotionTxnEligible(c.proc.GetTxnOperator()) {
 		state.disable()
 		return nil
 	}

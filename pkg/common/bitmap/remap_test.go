@@ -32,7 +32,7 @@ func refRemap(src *Bitmap, selected []uint64, negate bool) *Bitmap {
 		if int64(len(selected)) < l {
 			l = int64(len(selected))
 		}
-		out.InitWithSize(l)
+		mustOK(out.InitWithSize(l, testMP))
 		for i := int64(0); i < l; i++ {
 			if src.Contains(selected[i]) {
 				out.Add(uint64(i))
@@ -44,7 +44,7 @@ func refRemap(src *Bitmap, selected []uint64, negate bool) *Bitmap {
 	for _, r := range selected {
 		removed[r] = true
 	}
-	out.InitWithSize(oldLen)
+	mustOK(out.InitWithSize(oldLen, testMP))
 	next := uint64(0)
 	for r := uint64(0); r < uint64(oldLen); r++ {
 		if removed[r] {
@@ -71,14 +71,14 @@ func randomRemapCase(r *rand.Rand) *remapCase {
 	nullP := []float64{0, 0.001, 0.01, 0.33, 0.9, 1}[r.Intn(6)]
 	selP := []float64{0, 0.01, 0.5, 0.99, 1}[r.Intn(5)]
 	run := []int{1, 1, 7, 64, 256}[r.Intn(5)]
-	c.src.InitWithSize(int64(size))
+	mustOK(c.src.InitWithSize(int64(size), testMP))
 	for i := 0; i < size; i++ {
 		if r.Float64() < nullP {
 			c.src.Add(uint64(i))
 		}
 	}
 	limit := size + r.Intn(200)
-	c.mask.InitWithSize(int64(limit))
+	mustOK(c.mask.InitWithSize(int64(limit), testMP))
 	in := false
 	for i := 0; i < limit; i++ {
 		if i%run == 0 {
@@ -112,7 +112,7 @@ func TestRemapOrderedMatchesReference(t *testing.T) {
 		for _, negate := range []bool{false, true} {
 			msg := fmt.Sprintf("iter=%d len=%d sels=%d negate=%t", iter, c.src.Len(), len(c.sels), negate)
 			var got Bitmap
-			got.InitWith(&c.src)
+			mustOK(got.InitWith(&c.src, testMP))
 			got.RemapOrdered(c.sels, negate)
 			requireSameBitmap(t, refRemap(&c.src, selected, negate), &got, msg)
 		}
@@ -130,7 +130,7 @@ func TestRemapMaskOrderedMatchesReference(t *testing.T) {
 		for _, negate := range []bool{false, true} {
 			msg := fmt.Sprintf("iter=%d len=%d sels=%d offset=%d negate=%t", iter, c.src.Len(), len(c.sels), c.offset, negate)
 			var got Bitmap
-			got.InitWith(&c.src)
+			mustOK(got.InitWith(&c.src, testMP))
 			got.RemapMaskOrderedWithOffset(&c.mask, negate, c.offset)
 			requireSameBitmap(t, refRemap(&c.src, selected, negate), &got, msg)
 		}
@@ -140,7 +140,7 @@ func TestRemapMaskOrderedMatchesReference(t *testing.T) {
 func TestRemapOrderedRejectsUnsorted(t *testing.T) {
 	for _, sels := range [][]int64{{3, 3}, {5, 2}, {-1}, {0, 70, 65}} {
 		var n Bitmap
-		n.InitWithSize(200)
+		mustOK(n.InitWithSize(200, testMP))
 		require.Panics(t, func() { n.RemapOrdered(sels, true) }, "%v", sels)
 	}
 }

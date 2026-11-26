@@ -699,8 +699,15 @@ func (fr *FunctionResult[T]) preExtendAndReset(targetSize int, nullable bool) er
 	if !wasConst {
 		fr.vec.ResetWithSameType()
 	}
-	// The null bitmap is allocated on the first NULL write, so a result that
-	// never holds NULL does not allocate one.
+	// A nullable result reserves its null bitmap here, where an admission
+	// failure is an error: kernels then set NULL rows in place (Add, AddRange,
+	// Or), which cannot fail within the reserved rows. A result proven to emit
+	// no NULLs reserves nothing.
+	if nullable && targetSize > 0 {
+		if err := fr.vec.ensureNullCapacity(targetSize); err != nil {
+			return err
+		}
+	}
 
 	if !fr.isVarlena {
 		fr.length = 0
@@ -731,14 +738,34 @@ func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
 	return nil
 }
 
+// validateText rejects bytes that are not valid text for a native Unicode
+// result type. Functions and casts are where text values are produced, so a
+// result is checked once here instead of on every later copy of the vector.
+func (fr *FunctionResult[T]) validateText(val []byte) error {
+	return types.ValidateCollationValue(fr.vec.typ, val)
+}
+
 func (fr *FunctionResult[T]) AppendBytesWithWriter(size int, writer func([]byte) error) error {
 	if fr.vec.IsConst() {
 		return moerr.NewInternalErrorNoCtx("direct varlena writer does not support const result")
+	}
+	if types.IsUnicodeCollation(fr.vec.typ.Charset) {
+		return AppendBytesWithWriter(fr.vec, size, fr.mp, func(dst []byte) error {
+			if err := writer(dst); err != nil {
+				return err
+			}
+			return fr.validateText(dst)
+		})
 	}
 	return AppendBytesWithWriter(fr.vec, size, fr.mp, writer)
 }
 
 func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
+	if !isnull {
+		if err := fr.validateText(val); err != nil {
+			return err
+		}
+	}
 	if !fr.vec.IsConst() {
 		return AppendBytes(fr.vec, val, isnull, fr.mp)
 	} else if !isnull {
@@ -750,6 +777,11 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 // AppendMultiBytes appends cnt logical rows backed by one materialized varlena
 // payload. Non-inline descriptors intentionally share the same area range.
 func (fr *FunctionResult[T]) AppendMultiBytes(val []byte, isnull bool, cnt int) error {
+	if !isnull {
+		if err := fr.validateText(val); err != nil {
+			return err
+		}
+	}
 	if !fr.vec.IsConst() {
 		return AppendMultiBytes(fr.vec, val, isnull, cnt, fr.mp)
 	}
@@ -786,6 +818,9 @@ func (fr *FunctionResult[T]) AppendMustNull() {
 }
 
 func (fr *FunctionResult[T]) AppendMustBytesValue(val []byte) error {
+	if err := fr.validateText(val); err != nil {
+		return err
+	}
 	return AppendBytes(fr.vec, val, false, fr.mp)
 }
 
