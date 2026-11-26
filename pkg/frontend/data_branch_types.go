@@ -117,6 +117,15 @@ func (r collectRange) startBoundary(i int) engine.Relation {
 	return r.startBoundaryRel[i]
 }
 
+func (r collectRange) hasCollapsedFork() bool {
+	for _, before := range r.forkBefore {
+		if before != nil && before.collapsedFork {
+			return true
+		}
+	}
+	return false
+}
+
 // branchMetaInfo describes the lineage relationship between the two
 // endpoints of a `data branch diff` request, expressed entirely as
 // the DAG paths from the LCA (lowest common ancestor) down to each
