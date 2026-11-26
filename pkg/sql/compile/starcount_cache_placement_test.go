@@ -16,14 +16,19 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -189,4 +194,76 @@ func TestStarCountCachePlacementFallback(t *testing.T) {
 	actual, err = c.placeStarCountByCache(ctx, scan, nil, req, fallback)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, fallback, actual)
+}
+
+type starCountSamplingRelation struct {
+	engine.Relation
+	tombstoneRows int
+	samples       int
+}
+
+func (r *starCountSamplingRelation) SampleCountTombstoneObjects(_ context.Context, threshold int) ([][]byte, error) {
+	r.samples++
+	if r.tombstoneRows <= threshold {
+		return nil, nil
+	}
+	id := objectio.NewObjectid()
+	return [][]byte{id[:]}, nil
+}
+
+func TestStarCountCacheDiscoversCandidatesOnlyForHeavyCounts(t *testing.T) {
+	scan := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{TableType: catalog.SystemOrdinaryRel},
+		ObjRef:   &plan.ObjectRef{},
+		AggList:  []*plan.Expr{zmAggFuncExpr("starcount", zmAggConstExpr(), 0)},
+	}
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{1},
+		Nodes:    []*plan.Node{scan, {NodeType: plan.Node_AGG, Children: []int32{0}, AggList: scan.AggList}},
+	}
+	current := schedule.Worker{ID: "local", Addr: "local:6001", Route: schedule.WorkerRouteLocal}
+	fallback := schedule.ScanDecision{
+		Workers: schedule.Workers{current}, Reason: schedule.ReasonScanForceSingle, LocalOnly: true,
+	}
+	req := schedule.ScanRequest{CurrentCN: current, QueryWorkers: fallback.Workers}
+	c := NewMockCompile(t)
+	t.Cleanup(c.proc.Free)
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}
+	c.addr = current.Addr
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.proc.Base.QueryClient = fakeQueryClient{}
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(t.Context()) })
+	c.proc.Base.FileService = fs
+	_, txn := newTestTxnClientAndOp(gomock.NewController(t), &readonlyWorkspaceForScheduling{Ws: &Ws{}})
+	c.proc.Base.TxnOperator = txn
+	discoverer := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		discoveryErr:        errors.New("discovery deliberately unavailable"),
+	}
+	c.e = discoverer
+
+	for _, tc := range []struct {
+		name           string
+		rows           int
+		discoveryCalls int
+	}{
+		{name: "empty"},
+		{name: "below threshold", rows: defaultStarCountTombstoneThreshold - 1},
+		{name: "at threshold", rows: defaultStarCountTombstoneThreshold},
+		{name: "heavy", rows: defaultStarCountTombstoneThreshold + 1, discoveryCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			discoverer.discoveryCalls = 0
+			rel := &starCountSamplingRelation{tombstoneRows: tc.rows}
+			actual, err := c.placeStarCountByCache(t.Context(), scan, rel, req, fallback)
+			require.NoError(t, err)
+			require.Equal(t, fallback, actual)
+			require.Equal(t, 1, rel.samples)
+			require.Equal(t, tc.discoveryCalls, discoverer.discoveryCalls)
+		})
+	}
 }
