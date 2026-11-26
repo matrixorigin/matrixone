@@ -61,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -5759,10 +5760,19 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 			dataScope.setRootOperator(dispatchArg)
 		}
 		dataScope.IsEnd = true
+		var localObjects *colexec.LocalInsertObjects
+		eng, _ := unwrapSchedulingEngine(c.e)
+		storage, _ := eng.(*disttae.Engine)
 		for i := range scopes {
 			insertArg, err := constructInsert(c.proc, node, c.e, true)
 			if err != nil {
 				return nil, err
+			}
+			if op, ok := insertArg.(*insert.Insert); ok && storage != nil {
+				if localObjects == nil {
+					localObjects = storage.NewLocalInsertObjectStream()
+				}
+				op.InsertCtx.LocalObjects = localObjects
 			}
 
 			insertArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -5773,6 +5783,8 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		rs.PreScopes = append(rs.PreScopes, dataScope)
 		rs.Magic = MergeInsert
 		mergeInsertArg := constructMergeblock(c.e, node)
+		rs.localInsertObjects = localObjects
+		mergeInsertArg.LocalObjects = localObjects
 		mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(mergeInsertArg)
 		ss = []*Scope{rs}
