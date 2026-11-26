@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -42,11 +43,15 @@ func TestStarCountSealedBlocksAndCachePlacement(t *testing.T) {
 	ctx, cancel := context.WithTimeout(defines.AttachAccountId(t.Context(), 0), 3*time.Minute)
 	defer cancel()
 	cacheRoot := t.TempDir()
+	var fixtureDataDir string
 	cluster, err := embed.StartTestCluster(embed.WithCNCount(2), embed.WithTestAdmissionContext(ctx), embed.WithPreStart(func(svc embed.ServiceOperator) {
 		if svc.ServiceType() == metadata.ServiceType_TN {
 			// Leave the row inserted after the explicit flush in memory
 			// even if the test runs under an instrumented scheduler.
 			svc.Adjust(func(cfg *embed.ServiceConfig) {
+				// StartTestCluster generated this private data directory
+				// and shares it only among the services in this fixture.
+				fixtureDataDir = cfg.DataDir
 				cfg.TN_please_use_getTNServiceConfig.Ckp.FlushInterval.Duration = time.Hour
 			})
 		}
@@ -63,9 +68,17 @@ func TestStarCountSealedBlocksAndCachePlacement(t *testing.T) {
 			}
 		})
 	}))
-	if cluster != nil {
-		t.Cleanup(func() { assertStarCountCleanup(t, cluster.Close()) })
-	}
+	t.Cleanup(func() {
+		if cluster != nil {
+			if err := cluster.Close(); err != nil {
+				assertStarCountCleanup(t, err)
+				return
+			}
+		}
+		if fixtureDataDir != "" {
+			assertStarCountCleanup(t, os.RemoveAll(fixtureDataDir))
+		}
+	})
 	require.NoError(t, err)
 	coldCN, err := cluster.GetCNService(0)
 	require.NoError(t, err)
