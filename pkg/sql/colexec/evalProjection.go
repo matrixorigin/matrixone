@@ -119,7 +119,7 @@ func (projection *Projection) EvalProjectionSelected(bat, physical *batch.Batch,
 		projection.projectBat.Vecs[i] = vec
 	}
 	projection.ProjectAllocSize = max(projection.ProjectAllocSize, int64(projection.projectBat.Size()))
-	projection.projectBat.SetSelection(bat.PhysicalRowCount(), bat.Selection())
+	projection.projectBat.SetSelection(bat.Selection())
 	return projection.projectBat, nil
 }
 

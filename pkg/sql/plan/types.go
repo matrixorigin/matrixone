@@ -1443,6 +1443,7 @@ type Binding struct {
 	db                     string
 	table                  string
 	tableID                uint64
+	caseInsensitiveTable   bool // unaliased relation in a case-insensitive system schema
 	// lower case: used for binding/lookup
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)

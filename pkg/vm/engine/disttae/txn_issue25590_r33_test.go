@@ -46,6 +46,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -76,7 +77,7 @@ func TestIssue25590RollbackRecyclesUnrecordedReservations(t *testing.T) {
 		}
 		return txn.WriteFile(
 			INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-			name, recBat, txn.tnStores[0])
+			name, recBat, catalog.ObjectInsertAttrs, txn.tnStores[0])
 	}
 
 	// The PRIOR RECORDED write: a statement before every failed round

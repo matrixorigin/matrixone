@@ -722,7 +722,7 @@ func TestHasNewVersionInRange(t *testing.T) {
 		nil,
 	)
 	analyzer := process.NewTempAnalyzer()
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 
 	changed, err := hasNewVersionInRange(proc, rel, analyzer, 1, eng, nil, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{}, nil)
 	require.NoError(t, err)

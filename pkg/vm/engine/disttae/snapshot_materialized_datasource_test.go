@@ -191,7 +191,6 @@ func collectMaterializedSnapshotInt64Column(
 	defer source.Close()
 
 	out := batch.NewWithSize(len(attrs))
-	out.SetAttributes(attrs)
 	for i := range attrs {
 		out.Vecs[i] = vector.NewVec(colTypes[i], mp)
 	}

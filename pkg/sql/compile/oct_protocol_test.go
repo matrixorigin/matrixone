@@ -15,18 +15,13 @@
 package compile
 
 import (
-	"context"
 	"testing"
 
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -90,74 +85,5 @@ func TestOctLegacySerializedExpression(t *testing.T) {
 				}()
 			}
 		})
-	}
-}
-
-func TestOctProtocolPlanAdmissionAndCachedRun(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	expr := octCompatibilityExpr(function.OctStringOverloadStart+7, plan2.MakePlan2Int64ConstExprWithType(12))
-	for _, tc := range []struct {
-		name  string
-		table *plan.TableDef
-	}{
-		{"check", &plan.TableDef{Checks: []*plan.CheckDef{{Check: expr}}}},
-		{"default", &plan.TableDef{Cols: []*plan.ColDef{{Default: &plan.Default{Expr: expr}}}}},
-		{"generated", &plan.TableDef{Cols: []*plan.ColDef{{GeneratedCol: &plan.GeneratedCol{Expr: expr}}}}},
-		{"on_update", &plan.TableDef{Cols: []*plan.ColDef{{OnUpdate: &plan.OnUpdate{Expr: expr}}}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{TableDef: tc.table}}}}}
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion62)
-			require.NoError(t, validateOctStringProtocol(proc, pn))
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
-			c := &Compile{proc: proc, pn: pn}
-			require.ErrorContains(t, c.Compile(context.Background(), pn, nil), "protocol version 62")
-			_, err := c.Run(0)
-			require.ErrorContains(t, err, "protocol version 62")
-		})
-	}
-	for _, version := range []any{int64(58), defines.MORPCVersion59, defines.MORPCVersion60, defines.MORPCVersion61, nil, "61"} {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		require.ErrorContains(t, validateOctStringProtocol(proc, expr), "protocol version 62")
-		require.NoError(t, validateOctStringProtocol(proc, octCompatibilityExpr(7, plan2.MakePlan2Int64ConstExprWithType(12))))
-		require.NoError(t, validateOctStringProtocol(proc, plan2.MakePlan2Int64ConstExprWithType(12)))
-	}
-	require.ErrorContains(t, validateOctStringProtocol(nil, expr), "protocol version 62")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion62)
-	require.Zero(t, testing.AllocsPerRun(100, func() { require.NoError(t, validateOctStringProtocol(proc, expr)) }))
-}
-
-func TestOctRemoteProtocolSenderAndReceiver(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	for _, id := range []int32{7, function.OctStringOverloadStart + 7} {
-		project := projection.NewArgument()
-		project.ProjectList = []*plan.Expr{octCompatibilityExpr(id, plan2.MakePlan2Int64ConstExprWithType(12))}
-		scope := &Scope{Proc: proc, RootOp: project}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion62)
-		data, err := encodeRemoteScope(scope, proc)
-		require.NoError(t, err)
-		decoded, err := decodeScope(data, proc, true, nil)
-		require.NoError(t, err)
-		require.NotNil(t, decoded)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
-		_, sendErr := encodeRemoteScope(scope, proc)
-		_, localEncodeErr := encodeScope(scope)
-		_, receiveErr := decodeScope(data, proc, true, nil)
-		if id < function.OctStringOverloadStart {
-			require.NoError(t, sendErr)
-			require.NoError(t, localEncodeErr)
-			require.NoError(t, receiveErr)
-		} else {
-			require.ErrorContains(t, sendErr, "protocol version 62")
-			require.ErrorContains(t, localEncodeErr, "protocol version 62")
-			require.ErrorContains(t, receiveErr, "protocol version 62")
-			child := new(pipeline.Pipeline)
-			require.NoError(t, child.Unmarshal(data))
-			require.ErrorContains(t, validateOctStringProtocol(proc, &pipeline.Pipeline{Children: []*pipeline.Pipeline{child}}), "protocol version 62")
-		}
 	}
 }

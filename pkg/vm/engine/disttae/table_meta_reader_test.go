@@ -17,10 +17,10 @@ package disttae
 import (
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -86,10 +86,10 @@ func TestTableMetaReaderRecordsCloneObjectOwnership(t *testing.T) {
 
 func TestInMemTombstonePKVector(t *testing.T) {
 	pkVec := vector.NewVec(types.T_int64.ToType(), mpool.MustNewZero())
-	compact := &logtailreplay.RowEntry{Batch: batch.NewWithSize(1)}
+	compact := &logtailreplay.RowEntry{Batch: &logtailreplay.ReplayBatch{Batch: batch.NewWithSize(1)}}
 	compact.Batch.Vecs[0] = pkVec
 	require.Same(t, pkVec, inMemTombstonePKVector(compact))
-	legacy := &logtailreplay.RowEntry{Batch: batch.NewWithSize(4)}
+	legacy := &logtailreplay.RowEntry{Batch: &logtailreplay.ReplayBatch{Batch: batch.NewWithSize(4)}}
 	legacy.Batch.Vecs[2] = pkVec
 	require.Same(t, pkVec, inMemTombstonePKVector(legacy))
 }
@@ -109,6 +109,7 @@ func TestNewImmutableTableMetaReader(t *testing.T) {
 	tbl.getTxn().writes = append(tbl.getTxn().writes, Entry{
 		typ: INSERT, databaseId: tbl.db.databaseId, tableId: tbl.tableId,
 		fileName: stats[0].ObjectName().String(), bat: statsBat,
+		attrs: catalog.ObjectInsertAttrs,
 	})
 	reader, err := NewImmutableTableMetaReader(context.Background(), tbl, 7)
 	require.NoError(t, err)
@@ -154,6 +155,7 @@ func TestNewImmutableTableMetaReader(t *testing.T) {
 	tbl.getTxn().writes = append(tbl.getTxn().writes, Entry{
 		typ: INSERT, databaseId: tbl.db.databaseId, tableId: tbl.tableId,
 		fileName: appendableStats[0].ObjectName().String(), bat: appendableBat,
+		attrs: catalog.ObjectInsertAttrs,
 	})
 	appendableReader, err := NewImmutableTableMetaReader(context.Background(), tbl, 7)
 	require.NoError(t, err)
@@ -188,6 +190,7 @@ func TestImmutableTableMetaReaderDoesNotRetainCloneFilesAcrossStatements(t *test
 		txn.writes = append(txn.writes, Entry{
 			typ: INSERT, databaseId: tbl.db.databaseId, tableId: tbl.tableId,
 			fileName: stats[statement].ObjectName().String(), bat: statsBat,
+			attrs: catalog.ObjectInsertAttrs,
 		})
 
 		txn.StartStatement()
@@ -220,7 +223,7 @@ func TestProtectCloneFilesDistinguishesExistingOwnership(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := cloneObjectStatsBatchForTest(t, mp, stats[1])
 	defer bat.Clean(mp)
-	txn.writes = append(txn.writes, Entry{typ: INSERT, fileName: "load-meta", bat: bat})
+	txn.writes = append(txn.writes, Entry{typ: INSERT, fileName: "load-meta", bat: bat, attrs: catalog.ObjectInsertAttrs})
 
 	txn.ProtectCloneFiles(stats[0].ObjectName().String(), stats[1].ObjectName().String())
 	txnID := txn.op.Txn().ID
@@ -446,6 +449,7 @@ func TestCloneTxnIntermediateGCKeepsTxnLocalSharedObjects(t *testing.T) {
 		typ:      INSERT,
 		fileName: "clone-meta",
 		bat:      bat,
+		attrs:    catalog.ObjectInsertAttrs,
 	})
 
 	require.NoError(t, txn.GCObjsByIdxRange(0, 0))
@@ -493,6 +497,7 @@ func TestCloneTxnRollbackGCDeletesTxnLocalSharedObjects(t *testing.T) {
 		typ:      INSERT,
 		fileName: "clone-meta",
 		bat:      bat,
+		attrs:    catalog.ObjectInsertAttrs,
 	})
 
 	require.NoError(t, txn.gcObjsByIdxRange(0, 0, cloneGCTxnRollback))
@@ -535,6 +540,7 @@ func TestCloneTxnCompactionGCDeletesUnreferencedTxnLocalSharedObject(t *testing.
 		typ:      INSERT,
 		fileName: name,
 		bat:      bat,
+		attrs:    catalog.ObjectInsertAttrs,
 	})
 	txn.writes[0].bat.Clean(mp)
 	txn.writes[0].bat = nil
@@ -585,6 +591,7 @@ func TestCloneTxnCompactionGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 		typ:      INSERT,
 		fileName: name,
 		bat:      liveBat,
+		attrs:    catalog.ObjectInsertAttrs,
 	})
 
 	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(stats, nil)
@@ -630,6 +637,7 @@ func TestCloneTxnTablesInVainGCDeletesUnreferencedTxnLocalSharedObject(t *testin
 		tableId:  42,
 		fileName: name,
 		bat:      cloneObjectStatsBatchForTest(t, proc.Mp(), stats...),
+		attrs:    catalog.ObjectInsertAttrs,
 	})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(ctx))
@@ -678,12 +686,14 @@ func TestCloneTxnTablesInVainGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 		tableId:  42,
 		fileName: name,
 		bat:      cloneObjectStatsBatchForTest(t, proc.Mp(), stats...),
+		attrs:    catalog.ObjectInsertAttrs,
 	})
 	appendWorkspaceEntryForTest(t, txn, Entry{
 		typ:      INSERT,
 		tableId:  43,
 		fileName: name,
 		bat:      liveBat,
+		attrs:    catalog.ObjectInsertAttrs,
 	})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(ctx))
@@ -732,6 +742,7 @@ func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
 		tableId:  42,
 		fileName: name,
 		bat:      cloneObjectStatsBatchForTest(t, proc.Mp(), stats...),
+		attrs:    catalog.ObjectInsertAttrs,
 	})
 
 	txn.FinalizeCommitWithUnknownResult(ctx)
@@ -747,7 +758,7 @@ func cloneObjectStatsBatchForTest(
 	mp *mpool.MPool,
 	statsList ...objectio.ObjectStats,
 ) *batch.Batch {
-	bat := batch.New([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
+	bat := batch.NewWithSize(2)
 	bat.SetVector(0, vector.NewVec(types.T_varchar.ToType(), mp))
 	bat.SetVector(1, vector.NewVec(types.T_varchar.ToType(), mp))
 	for i := range statsList {

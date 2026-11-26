@@ -23,26 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func supportsSessionTemporaryDDL(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	v, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	version, ok := v.(int64)
-	return ok && version >= defines.MORPCVersion55
-}
-
 // sessionTemporaryDDLOwner admits only top-level client schema operations to
 // the session-owned temporary DDL lifecycle. Temporary DDL issued by a SQL
 // executor is a constituent operation of that executor's transaction even when
 // it carries the originating frontend session.
 func sessionTemporaryDDLOwner(c *Compile) (process.TemporaryTableDDL, bool) {
-	if c.isInternal || c.temporaryDDLInExecutorTxn || !c.proc.Base.IsFrontend ||
-		!supportsSessionTemporaryDDL(c.proc.GetService()) {
+	if c.isInternal || c.temporaryDDLInExecutorTxn || !c.proc.Base.IsFrontend {
 		return nil, false
 	}
 	owner, ok := c.proc.GetSession().(process.TemporaryTableDDL)

@@ -136,9 +136,9 @@ var MetaTypes = []types.Type{
 var MetaSeqnums = []uint16{0, 1, 2, 3, 4}
 
 func NewObjectListBatch(mp *mpool.MPool) *batch.Batch {
-	return batch.NewWithSchema(TableObjectsAttrs, TableObjectsTypes, mp)
+	return batch.NewWithTypes(TableObjectsTypes, mp)
 }
 
 func NewMetaBatch(mp *mpool.MPool) *batch.Batch {
-	return batch.NewWithSchema(MetaAttrs, MetaTypes, mp)
+	return batch.NewWithTypes(MetaTypes, mp)
 }

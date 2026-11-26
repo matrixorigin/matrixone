@@ -93,8 +93,8 @@ func newIgnoreFillMainHarness(
 	written := make([]*batch.Batch, 0, 1)
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().
-		Write(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, b *batch.Batch) error {
+		Write(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, b *batch.Batch, _ []string) error {
 			written = append(written, b)
 			return nil
 		}).AnyTimes()
@@ -127,7 +127,7 @@ func makeIgnoreFillInputBatch(mp *mpool.MPool, withClusterByHelper bool) *batch.
 		vecs = append(vecs,
 			testutil.MakeInt32Vector([]int32{4, 5, 6}, []uint64{0, 1, 2}, mp))
 	}
-	bat := batch.New(attrs)
+	bat := batch.NewWithSize(len(attrs))
 	bat.Vecs = vecs
 	bat.SetRowCount(3)
 	return bat
@@ -274,8 +274,8 @@ func newIgnoreFillPkDropHarness(
 	written := make([]*batch.Batch, 0, 1)
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().
-		Write(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, b *batch.Batch) error {
+		Write(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, b *batch.Batch, _ []string) error {
 			written = append(written, b)
 			return nil
 		}).AnyTimes()
@@ -300,7 +300,7 @@ func newIgnoreFillPkDropHarness(
 func makeIgnorePkDropInputBatch(mp *mpool.MPool) *batch.Batch {
 	// rows: (a=5, id=NULL, b=0), (a=6, id=2, b=NULL), (a=NULL, id=NULL, b=1)
 	attrs := []string{"a", "id", "b"}
-	bat := batch.New(attrs)
+	bat := batch.NewWithSize(len(attrs))
 	bat.Vecs = []*vector.Vector{
 		testutil.MakeInt32Vector([]int32{5, 6, 0}, []uint64{2}, mp),
 		testutil.MakeInt64Vector([]int64{0, 2, 0}, []uint64{0, 2}, mp),
@@ -381,7 +381,7 @@ func TestInsertMainTableIgnoreDropsAllNullPkBatch(t *testing.T) {
 
 	op, _, written := newIgnoreFillPkDropHarness(t, ctrl)
 	attrs := []string{"a", "id", "b"}
-	input := batch.New(attrs)
+	input := batch.NewWithSize(len(attrs))
 	input.Vecs = []*vector.Vector{
 		testutil.MakeInt32Vector([]int32{5, 6}, []uint64{1}, mp),
 		testutil.MakeInt64Vector([]int64{0, 0}, []uint64{0, 1}, mp),
@@ -428,8 +428,8 @@ func TestInsertMainTableIgnoreKeepsNullablePseudoPkColumn(t *testing.T) {
 	written := make([]*batch.Batch, 0, 1)
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().
-		Write(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, b *batch.Batch) error {
+		Write(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, b *batch.Batch, _ []string) error {
 			written = append(written, b)
 			return nil
 		}).AnyTimes()
@@ -449,7 +449,7 @@ func TestInsertMainTableIgnoreKeepsNullablePseudoPkColumn(t *testing.T) {
 	op.addAffectedRowsFunc = op.doAddAffectedRows
 
 	attrs := []string{"a", "c1", "b"}
-	input := batch.New(attrs)
+	input := batch.NewWithSize(len(attrs))
 	input.Vecs = []*vector.Vector{
 		testutil.MakeInt32Vector([]int32{5, 0}, []uint64{1}, mp),
 		testutil.MakeInt64Vector([]int64{0, 0}, []uint64{0, 1}, mp),
@@ -558,8 +558,8 @@ func TestInsertMainTableIgnoreDropsNullPkRowsOffColumnZero(t *testing.T) {
 	written := make([]*batch.Batch, 0, 1)
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().
-		Write(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, b *batch.Batch) error {
+		Write(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, b *batch.Batch, _ []string) error {
 			written = append(written, b)
 			return nil
 		}).AnyTimes()
@@ -580,7 +580,7 @@ func TestInsertMainTableIgnoreDropsNullPkRowsOffColumnZero(t *testing.T) {
 
 	// rows: (nn=1, a=NULL, id=NULL) and (nn=NULL, a=5, id=7)
 	attrs := []string{"nn", "a", "id"}
-	input := batch.New(attrs)
+	input := batch.NewWithSize(len(attrs))
 	input.Vecs = []*vector.Vector{
 		testutil.MakeInt32Vector([]int32{1, 0}, []uint64{1}, mp),
 		testutil.MakeInt32Vector([]int32{0, 5}, []uint64{0}, mp),
@@ -627,8 +627,8 @@ func TestInsertMainTableIgnoreCompositePkMembersFollowFill(t *testing.T) {
 	written := make([]*batch.Batch, 0, 1)
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().
-		Write(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, b *batch.Batch) error {
+		Write(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, b *batch.Batch, _ []string) error {
 			written = append(written, b)
 			return nil
 		}).AnyTimes()
@@ -648,7 +648,7 @@ func TestInsertMainTableIgnoreCompositePkMembersFollowFill(t *testing.T) {
 	op.addAffectedRowsFunc = op.doAddAffectedRows
 
 	attrs := []string{"k1", "k2"}
-	input := batch.New(attrs)
+	input := batch.NewWithSize(len(attrs))
 	input.Vecs = []*vector.Vector{
 		testutil.MakeInt32Vector([]int32{0, 3}, []uint64{0}, mp),
 		testutil.MakeInt32Vector([]int32{2, 0}, []uint64{1}, mp),
@@ -712,8 +712,8 @@ func TestUpdateOneBatchIgnoreFillLeavesChildBatchUntouched(t *testing.T) {
 
 	newRel := func(sink *[][]ignoreFillWrittenRow) *mock_frontend.MockRelation {
 		rel := mock_frontend.NewMockRelation(ctrl)
-		rel.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, b *batch.Batch) error {
+		rel.EXPECT().Write(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, b *batch.Batch, _ []string) error {
 				*sink = append(*sink, captureInt32Rows(b))
 				return nil
 			}).AnyTimes()

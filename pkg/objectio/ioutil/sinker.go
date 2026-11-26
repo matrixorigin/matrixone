@@ -499,7 +499,6 @@ func (sinker *Sinker) fillDefaults() {
 	if sinker.buf.buffers == nil {
 		sinker.buf.isOwner = true
 		sinker.buf.buffers = containers.NewBatchFreeList(
-			sinker.schema.attrs,
 			sinker.schema.attrTypes,
 			sinker.config.offHeap,
 		)
@@ -816,7 +815,7 @@ func (sinker *Sinker) cleanupRunOnFailure(ctx context.Context, operationErr *err
 
 func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 	x := sinker.buf.buffers.Len()
-	bat := sinker.buf.buffers.FetchWithSchema(sinker.schema.attrs, sinker.schema.attrTypes, sinker.mp)
+	bat := sinker.buf.buffers.FetchWithTypes(sinker.schema.attrTypes, sinker.mp)
 	y := sinker.buf.buffers.Len()
 
 	if x < y {

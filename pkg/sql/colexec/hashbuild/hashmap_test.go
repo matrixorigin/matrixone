@@ -662,7 +662,7 @@ func TestDedupUpdateBuildGroupsNullKeysSeparately(t *testing.T) {
 		nulls[i] = uint64(hashmap.UnitLimit + i)
 	}
 	keyVec := testutil.MakeInt32Vector(keys, nulls, proc.Mp())
-	bat := batch.New([]string{"id"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, keyVec)
 	bat.SetRowCount(rows)
 	require.NoError(t, hb.CopyBuildBatch(bat, proc))
@@ -745,7 +745,7 @@ func TestStrIteratorCapacityPrune(t *testing.T) {
 	vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	large := strings.Repeat("x", hashmap.MaxStrIteratorCapacity+4096)
 	require.NoError(t, vector.AppendBytes(vec, []byte(large), false, proc.Mp()))
-	bat := batch.New([]string{"col"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, vec)
 	bat.SetRowCount(1)
 	hb.InputBatchRowCount = bat.RowCount()
@@ -768,7 +768,7 @@ func TestStrIteratorBelowThresholdIsKept(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		require.NoError(t, vector.AppendBytes(vec, []byte("small"), false, proc.Mp()))
 	}
-	bat := batch.New([]string{"col"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, vec)
 	bat.SetRowCount(vec.Length())
 	hb.InputBatchRowCount = bat.RowCount()
@@ -821,7 +821,7 @@ func TestAlternateIntStrBuildsReuseIndependently(t *testing.T) {
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_varchar.ToType())}, -1, -1, nil, proc))
 	vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
-	bat := batch.New([]string{"col"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, vec)
 	bat.SetRowCount(1)
 	hb.InputBatchRowCount = bat.RowCount()
@@ -1223,7 +1223,6 @@ func TestDedupBuildIgnorePrefersOriginalKeyOwner(t *testing.T) {
 				defer bat.Clean(proc.Mp())
 				logical := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				bat.Vecs = append(bat.Vecs, logical)
-				bat.Attrs = append(bat.Attrs, "logical")
 				require.NoError(t, vector.AppendBytesList(logical, [][]byte{[]byte("BETA"), []byte("beta")}, nil, proc.Mp()))
 				require.NoError(t, hb.CopyBuildBatch(bat, proc))
 				hb.InputBatchRowCount = bat.RowCount()
@@ -1384,7 +1383,7 @@ func TestBuildHashmapErrorDoesNotLeakIterators(t *testing.T) {
 	hb.Batches.Reset()
 	hb.Batches.Buf = nil
 	intVec := testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
-	intBat := batch.New([]string{"col"})
+	intBat := batch.NewWithSize(1)
 	intBat.SetVector(0, intVec)
 	intBat.SetRowCount(1)
 	require.NoError(t, hb.CopyBuildBatch(intBat, proc))
@@ -1541,7 +1540,7 @@ func TestFreeThenBuildRepopulatesCache(t *testing.T) {
 	// First build to populate cache.
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
 	intVec := testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
-	intBat := batch.New([]string{"col"})
+	intBat := batch.NewWithSize(1)
 	intBat.SetVector(0, intVec)
 	intBat.SetRowCount(2)
 	hb.InputBatchRowCount = intBat.RowCount()
@@ -1615,7 +1614,7 @@ func makeIntBatch(tb testing.TB, n int, proc *process.Process) *batch.Batch {
 		ints[i] = int32(i)
 	}
 	vec := testutil.MakeInt32Vector(ints, nil, proc.Mp())
-	bat := batch.New([]string{"col"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, vec)
 	bat.SetRowCount(n)
 	return bat
@@ -1626,7 +1625,7 @@ func makeStrBatch(tb testing.TB, n int, proc *process.Process) *batch.Batch {
 	for i := 0; i < n; i++ {
 		require.NoError(tb, vector.AppendBytes(vec, []byte("v"+strconv.Itoa(i)), false, proc.Mp()))
 	}
-	bat := batch.New([]string{"col"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, vec)
 	bat.SetRowCount(n)
 	return bat
@@ -1635,7 +1634,7 @@ func makeStrBatch(tb testing.TB, n int, proc *process.Process) *batch.Batch {
 func makeIntKeyValueBatch(proc *process.Process, keys []int32, values []int32) *batch.Batch {
 	keyVec := testutil.MakeInt32Vector(keys, nil, proc.Mp())
 	valueVec := testutil.MakeInt32Vector(values, nil, proc.Mp())
-	bat := batch.New([]string{"id", "v"})
+	bat := batch.NewWithSize(2)
 	bat.SetVector(0, keyVec)
 	bat.SetVector(1, valueVec)
 	bat.SetRowCount(len(keys))
@@ -1651,7 +1650,7 @@ func makeIntKeyValueBatchWithReleaseMarker(
 	keyVec := testutil.MakeInt32Vector(keys, nil, proc.Mp())
 	valueVec := testutil.MakeInt32Vector(values, nil, proc.Mp())
 	releasedVec := testutil.MakeBoolVector(released, nil, proc.Mp())
-	bat := batch.New([]string{"id", "v", "released"})
+	bat := batch.NewWithSize(3)
 	bat.SetVector(0, keyVec)
 	bat.SetVector(1, valueVec)
 	bat.SetVector(2, releasedVec)
@@ -1669,7 +1668,7 @@ func makeIntKeyValueBatchWithMarker(
 	keyVec := testutil.MakeInt32Vector(keys, nil, proc.Mp())
 	valueVec := testutil.MakeInt32Vector(values, nil, proc.Mp())
 	markerVec := testutil.MakeInt32Vector(markers, markerNulls, proc.Mp())
-	bat := batch.New([]string{"id", "v", "old_row_id"})
+	bat := batch.NewWithSize(3)
 	bat.SetVector(0, keyVec)
 	bat.SetVector(1, valueVec)
 	bat.SetVector(2, markerVec)
@@ -1899,7 +1898,7 @@ func TestStrIteratorLargeStringTriggersPrune(t *testing.T) {
 	vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	large := strings.Repeat("x", hashmap.MaxStrIteratorCapacity+2048)
 	require.NoError(t, vector.AppendBytes(vec, []byte(large), false, proc.Mp()))
-	bat := batch.New([]string{"col"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, vec)
 	bat.SetRowCount(1)
 

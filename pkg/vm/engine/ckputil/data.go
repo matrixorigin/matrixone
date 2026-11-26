@@ -36,11 +36,7 @@ var DataScan_TableIDTypes = append(TableObjectsTypes, objectio.RowidType)
 var DataScan_TableIDSeqnums = append(TableObjectsSeqnums, objectio.SEQNUM_ROWID)
 
 func MakeDataScanTableIDBatch(mp *mpool.MPool) *batch.Batch {
-	return batch.NewWithSchema(
-		DataScan_TableIDAtrrs,
-		DataScan_TableIDTypes,
-		mp,
-	)
+	return batch.NewWithTypes(DataScan_TableIDTypes, mp)
 }
 
 var DataScan_ObjectEntryAttrs = []string{

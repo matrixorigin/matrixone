@@ -17,4 +17,24 @@ select p.part,p.supp,p.avail from p where p.part in (select part from domain_key
 select p.part,p.supp,p.avail from p where p.part not in (select part from domain_keys where name like 'lime%') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
 select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like 'lime%') or p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
 select 'fórêst' collate utf8mb4_general_ci like 'forest%' as accent, 'ßx' collate utf8mb4_general_ci like 'sx%' as sharp, 'ßx' collate utf8mb4_general_ci like 'ss%' as double_sharp, 'Forest' collate utf8mb4_bin like 'forest%' as binary_case;
+-- A matching key with a NULL or empty name distinguishes the wildcard boundaries.
+insert into domain_keys values (4,null),(5,'');
+insert into p values (4,10,100),(5,10,100);
+insert into f values (4,10,1,'1993-05-01'),(5,10,1,'1993-05-01');
+select part,name like '%' as any_name,name like '_' as one_character from domain_keys where part in (4,5) order by part;
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like '%') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name is not null) and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+-- After excluding NULL and declaring NOT NULL, TRUE admits the same candidate keys.
+delete from domain_keys where name is null;
+alter table domain_keys modify column name varchar(20) not null;
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like '%%') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where true) and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+-- Reuse one prepared statement with unselective and selective patterns.
+prepare membership_pattern from "select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like ?) and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail";
+set @membership_pattern = '%';
+execute membership_pattern using @membership_pattern;
+set @membership_pattern = 'lime%';
+execute membership_pattern using @membership_pattern;
+deallocate prepare membership_pattern;
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like '%' escape '!!') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
 drop database aggregate_membership_domain;

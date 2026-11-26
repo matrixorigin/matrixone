@@ -440,7 +440,7 @@ func getddlbatch(
 
 	// Create a new batch with 4 columns: dbname, tablename, tableid, tablesql
 	colNames := []string{"dbname", "tablename", "tableid", "tablesql"}
-	resultBatch := batch.New(colNames)
+	resultBatch := batch.NewWithSize(len(colNames))
 
 	// Initialize vectors for each column
 	// Column 0: dbname (varchar)

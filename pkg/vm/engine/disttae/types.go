@@ -2012,6 +2012,10 @@ type Entry struct {
 	fileName string
 	//tuples would be applied to the table which belongs to the tenant(accountId)
 	bat *batch.Batch
+	// attrs names bat's columns, one name per vector. It is the entry's own
+	// copy: the names travel to TN with the batch (TN keys columns by name),
+	// and ALTER renames them in place.
+	attrs []string
 	// pkRange is the canonical-encoded primary-key envelope of an insert
 	// entry's rows (issue 26796). Writers compute it once from the entry's
 	// primary-key column; readers use it to skip the whole batch when the
@@ -2084,6 +2088,9 @@ func (e *Entry) TableId() uint64 {
 func (e *Entry) Type() int         { return e.typ }
 func (e *Entry) FileName() string  { return e.fileName }
 func (e *Entry) Bat() *batch.Batch { return e.bat }
+
+// Attrs names the columns of Bat.
+func (e *Entry) Attrs() []string { return e.attrs }
 
 // isCatalog denotes the entry is apply the tree tables
 func (e *Entry) isCatalog() bool {

@@ -285,7 +285,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 
 		var rowsPerBatch []int
 		for {
-			bat := batch.NewWithSchema([]string{"path"}, []types.Type{types.T_text.ToType()}, proc.Mp())
+			bat := batch.NewWithTypes([]types.Type{types.T_text.ToType()}, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			rowsPerBatch = append(rowsPerBatch, bat.RowCount())
@@ -336,7 +336,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 		var values []int32
 		var rowsPerBatch []int
 		for {
-			bat := batch.NewWithSchema([]string{"c", "path"}, []types.Type{types.T_int32.ToType(), types.T_text.ToType()}, proc.Mp())
+			bat := batch.NewWithTypes([]types.Type{types.T_int32.ToType(), types.T_text.ToType()}, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			rowsPerBatch = append(rowsPerBatch, bat.RowCount())
@@ -359,8 +359,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 		reader, _, proc := newBatchBudgetHiveDefaultPartitionReader(t, data, 1<<10)
 		defer reader.Close()
 
-		bat := batch.NewWithSchema([]string{"c", "p"},
-			[]types.Type{types.T_int32.ToType(), types.T_text.ToType()}, proc.Mp())
+		bat := batch.NewWithTypes([]types.Type{types.T_int32.ToType(), types.T_text.ToType()}, proc.Mp())
 		finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 		require.NoError(t, err)
 		require.False(t, finished)
@@ -397,8 +396,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 
 		var ordinals []int64
 		for {
-			bat := batch.NewWithSchema([]string{"c", IcebergDMLDataFilePathAttr, IcebergDMLRowOrdinalAttr},
-				[]types.Type{types.T_int32.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()}, proc.Mp())
+			bat := batch.NewWithTypes([]types.Type{types.T_int32.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()}, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			require.Equal(t, 1, bat.RowCount())
@@ -421,8 +419,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 		var values []int32
 		var rowsPerBatch []int
 		for {
-			bat := batch.NewWithSchema([]string{"c", "added"},
-				[]types.Type{types.T_int32.ToType(), types.T_text.ToType()}, proc.Mp())
+			bat := batch.NewWithTypes([]types.Type{types.T_int32.ToType(), types.T_text.ToType()}, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			rowsPerBatch = append(rowsPerBatch, bat.RowCount())
