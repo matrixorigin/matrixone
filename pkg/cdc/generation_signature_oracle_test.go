@@ -545,6 +545,195 @@ func TestRevalidateCDCTargetGenerationRoutes(t *testing.T) {
 // exactly for generated columns). Generated, missing and denied metadata all
 // fail closed, and any other error on the routine never reaches the fallback
 // (the catalog query is never issued).
+// genSigSval builds a trusted string literal expression (the WKT shape).
+func genSigSval(v string) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: v}}},
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+	}
+}
+
+// genSigDval builds an untrusted floating-point literal expression.
+func genSigDval(v float64) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: v}}},
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+	}
+}
+
+// genSigBval builds a boolean literal expression.
+func genSigBval(v bool) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: v}}},
+		Typ:  plan.Type{Id: int32(types.T_bool)},
+	}
+}
+
+// genSigNullLit builds a NULL literal expression.
+func genSigNullLit() *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		Typ:  plan.Type{Id: int32(types.T_any)},
+	}
+}
+
+// genSigMarker builds the persisted target-type marker node.
+func genSigMarker(resultTyp int32) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_T{}, Typ: plan.Type{Id: resultTyp}}
+}
+
+// genSigBadCol builds a column expression whose inner column reference is nil.
+func genSigBadCol() *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Col{}, Typ: plan.Type{Id: int32(types.T_int32)}}
+}
+
+// TestCDCGeneratedExprWalkerArms locks down the typed walker's observable
+// behavior on both sides of the session-free safety boundary: every admitted
+// persisted bind shape and every fail-closed counterpart. The rows assert
+// real contract semantics, not coverage bookkeeping.
+func TestCDCGeneratedExprWalkerArms(t *testing.T) {
+	// Trusted int arithmetic over a base column still admits, including the
+	// persisted cast/marker wrappers.
+	require.True(t, CDCGeneratedExprSafe(&plan.GeneratedCol{Expr: genSigPersistedAPlusOne(0), IsStored: true}, -1, types.T_int32))
+	// A nil generated column or a declared generated column without a typed
+	// tree is never silently admitted as safe.
+	require.False(t, CDCGeneratedExprSafe(nil, -1, types.T_int32))
+	require.False(t, CDCGeneratedExprSafe(&plan.GeneratedCol{IsStored: true}, -1, types.T_int32))
+	// The depth bound rejects a chain the canonicalizer cannot render.
+	deep := genSigI64(1)
+	cur := deep
+	for i := 0; i < 70; i++ {
+		next := genSigCast(int32(types.T_int64), cur)
+		cur = next
+	}
+	require.False(t, CDCGeneratedExprSafe(&plan.GeneratedCol{Expr: cur, IsStored: true}, -1, types.T_int64))
+
+	cases := []struct {
+		name      string
+		expr      *plan.Expr
+		resultTyp types.T
+		firstGen  int32
+		want      bool
+	}{
+		{"trusted i64 literal", genSigI64(7), types.T_int64, -1, true},
+		{"trusted string WKT literal", genSigSval("POINT(1 2)"), types.T_varchar, -1, true},
+		{"untrusted NULL literal", genSigNullLit(), types.T_float64, -1, false},
+		{"untrusted float-point literal", genSigDval(1.5), types.T_float64, -1, false},
+		{"untrusted boolean literal", genSigBval(true), types.T_bool, -1, false},
+		{"marker with int family admits", genSigMarker(int32(types.T_int32)), types.T_int32, -1, true},
+		{"marker with non-int result rejects", genSigMarker(int32(types.T_float32)), types.T_float32, -1, false},
+		{"column below the first generated slot admits", genSigColRef(0, int32(types.T_int32)), types.T_int32, 2, true},
+		{"column at or above the first generated slot rejects", genSigColRef(2, int32(types.T_int32)), types.T_int32, 2, false},
+		{"malformed column reference rejects", genSigBadCol(), types.T_int32, -1, false},
+		{"cast with int family admits", genSigCast(int32(types.T_int32), genSigColRef(0, int32(types.T_int32))), types.T_int32, -1, true},
+		{"cast with non-int result rejects", genSigCast(int32(types.T_float32), genSigColRef(0, int32(types.T_int32))), types.T_float32, -1, false},
+		{"cast without arguments rejects", genSigCast(int32(types.T_int32)), types.T_int32, -1, false},
+		{"cast over a non-int operand rejects", genSigCast(int32(types.T_int32), genSigSval("1")), types.T_int32, -1, false},
+		{"cast nested over an untrusted constant rejects", genSigCast(int32(types.T_int32), genSigCast(int32(types.T_int32), genSigDval(1.5))), types.T_int32, -1, false},
+		{"unknown session-dependent function rejects", genSigFunc("sin", int32(types.T_float64), genSigColRef(0, int32(types.T_float64))), types.T_float64, -1, false},
+		{"unary minus over int admits", genSigFunc("~", int32(types.T_int32), genSigColRef(0, int32(types.T_int32))), types.T_int32, -1, true},
+		{"arithmetic with non-int result rejects", genSigFunc("+", int32(types.T_float64), genSigColRef(0, int32(types.T_int32)), genSigI64(1)), types.T_float64, -1, false},
+		{"arithmetic with wrong arity rejects", genSigFunc("+", int32(types.T_int32), genSigColRef(0, int32(types.T_int32)), genSigI64(1), genSigI64(2)), types.T_int32, -1, false},
+		{"arithmetic over a non-int operand rejects", genSigFunc("+", int32(types.T_int32), genSigColRef(0, int32(types.T_int32)), genSigSval("x")), types.T_int32, -1, false},
+		{"arithmetic nested over untrusted constants rejects", genSigFunc("+", int32(types.T_int32), genSigColRef(0, int32(types.T_int32)), genSigDval(1.5)), types.T_int32, -1, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := CDCGeneratedExprSafe(&plan.GeneratedCol{Expr: tc.expr, IsStored: true}, tc.firstGen, tc.resultTyp)
+			require.Equal(t, tc.want, got)
+		})
+	}
+	// The geometry constructor family: string WKT over a geometry result
+	// admits with one or two literal arguments and rejects every drift.
+	geomOK1 := genSigFunc("st_geomfromtext", int32(types.T_geometry), genSigSval("POINT(1 2)"))
+	require.True(t, CDCGeneratedExprSafe(&plan.GeneratedCol{Expr: geomOK1, IsStored: true}, -1, types.T_geometry))
+	geomOK2 := genSigFunc("st_geomfromtext", int32(types.T_geometry), genSigSval("POINT(1 2)"), genSigI64(0))
+	require.True(t, CDCGeneratedExprSafe(&plan.GeneratedCol{Expr: geomOK2, IsStored: true}, -1, types.T_geometry))
+	for _, tc := range []struct {
+		name  string
+		expr  *plan.Expr
+		reTyp types.T
+	}{
+		{"non-geometry result rejects", genSigFunc("st_geomfromtext", int32(types.T_varchar), genSigSval("POINT(1 2)")), types.T_varchar},
+		{"wrong arity rejects", genSigFunc("st_geomfromtext", int32(types.T_geometry), genSigSval("POINT(1 2)"), genSigI64(0), genSigI64(0)), types.T_geometry},
+		{"non-literal first argument rejects", genSigFunc("st_geomfromtext", int32(types.T_geometry), genSigColRef(0, int32(types.T_varchar))), types.T_geometry},
+		{"non-string first argument rejects", genSigFunc("st_geomfromtext", int32(types.T_geometry), genSigI64(1)), types.T_geometry},
+		{"untrusted srid argument rejects", genSigFunc("st_geomfromtext", int32(types.T_geometry), genSigSval("POINT(1 2)"), genSigDval(1.5)), types.T_geometry},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.False(t, CDCGeneratedExprSafe(&plan.GeneratedCol{Expr: tc.expr, IsStored: true}, -1, tc.reTyp))
+		})
+	}
+
+	// The diagnosable structure renderer names the node kinds without raw
+	// expression contents.
+	require.Equal(t, "nil", CDCGeneratedExprStructure(nil, 0))
+	require.Contains(t, CDCGeneratedExprStructure(genSigPersistedAPlusOne(0), 0), "node=col,pos=0")
+	require.Contains(t, CDCGeneratedExprStructure(genSigI64(1), 0), "node=lit")
+	require.Contains(t, CDCGeneratedExprStructure(&plan.Expr{Expr: &plan.Expr_F{}}, 0), "node=f,bad")
+	require.Contains(t, CDCGeneratedExprStructure(genSigFunc("+", int32(types.T_int32), genSigColRef(0, int32(types.T_int32)), genSigI64(1)), 0), "func=+")
+	require.Contains(t, CDCGeneratedExprStructure(&plan.Expr{Expr: &plan.Expr_Vec{}, Typ: plan.Type{Id: int32(types.T_int32)}}, 0), "node=*plan.Expr_Vec")
+	require.Equal(t, "nil", CDCGeneratedExprStructure(genSigI64(1), 9), "a node at the exceeded depth renders as the truncation marker")
+	deep2 := genSigI64(1)
+	cur2 := deep2
+	for i := 0; i < 9; i++ {
+		cur2 = genSigCast(int32(types.T_int64), cur2)
+	}
+	require.Contains(t, CDCGeneratedExprStructure(cur2, 0), " nil",
+		"a chain past the depth bound renders top-down and terminates in the truncation marker")
+
+	// The signature sort is ordinal-definite.
+	rows := []CDCGenerationColumnSignature{{Ordinal: 2}, {Ordinal: 0}, {Ordinal: 1}}
+	CDCColumnSigSort(rows)
+	require.Equal(t, []int32{0, 1, 2}, []int32{rows[0].Ordinal, rows[1].Ordinal, rows[2].Ordinal})
+
+	// The revalidation fence compares the COMPLETE signature and never pads a
+	// short, extra-long, drifted, or unknown-class layout into a match.
+	c := &CDCTargetGenerationContract{
+		Copy:         []bool{true, true},
+		TargetClass:  []byte{CDCColumnOrdinary, CDCColumnOrdinary},
+		TargetDigest: []uint64{1, 2},
+	}
+	require.True(t, CDCContractMatchesSignature(c, []byte{CDCColumnOrdinary, CDCColumnOrdinary}, []uint64{1, 2}))
+	require.False(t, CDCContractMatchesSignature(nil, []byte{CDCColumnOrdinary}, []uint64{1}))
+	require.False(t, CDCContractMatchesSignature(&CDCTargetGenerationContract{Copy: nil}, []byte{CDCColumnOrdinary}, []uint64{1}))
+	require.False(t, CDCContractMatchesSignature(c, []byte{CDCColumnOrdinary}, []uint64{1}))
+	require.False(t, CDCContractMatchesSignature(c, []byte{CDCColumnOrdinary, CDCColumnOrdinary, CDCColumnOrdinary}, []uint64{1, 2, 3}))
+	require.False(t, CDCContractMatchesSignature(c, []byte{0, CDCColumnOrdinary}, []uint64{1, 2}))
+	require.False(t, CDCContractMatchesSignature(c, []byte{CDCColumnOrdinary, CDCColumnGeneratedStored}, []uint64{1, 2}))
+	require.False(t, CDCContractMatchesSignature(c, []byte{CDCColumnOrdinary, CDCColumnOrdinary}, []uint64{1, 3}))
+
+	// The source generated-column probe skips nil, internal and hidden
+	// columns and reports the first visible generated slot.
+	require.False(t, CDCSourceHasGeneratedColumn(nil))
+	require.False(t, CDCSourceHasGeneratedColumn(genSigVisible(genSigOrdinary("id", int32(types.T_int32)))))
+	require.False(t, CDCSourceHasGeneratedColumn(genSigVisible(genSigOrdinary("__mo_tick", int32(types.T_int64)))))
+	internal := genSigOrdinary("id", int32(types.T_int32))
+	internal.Hidden = true
+	require.False(t, CDCSourceHasGeneratedColumn(genSigVisible(internal)))
+	require.True(t, CDCSourceHasGeneratedColumn(genSigVisible(genSigOrdinary("id", int32(types.T_int32)), genSigGeneratedStored("g", genSigPersistedAPlusOne(0), int32(types.T_int32)))))
+
+	// The typed digest is complete and collision-free for real value shapes:
+	// strings, booleans and NULLs digest distinctly; an unhandled literal
+	// variant fails closed instead of aliasing.
+	d1, ok1 := CDCColumnTypedDigestFromColDef(genSigOrdinary("v", int32(types.T_int32)), 0)
+	require.True(t, ok1)
+	require.NotZero(t, d1)
+	d2, ok2 := CDCColumnTypedDigestFromColDef(genSigOrdinary("v", int32(types.T_int32)), 0)
+	require.True(t, ok2)
+	require.Equal(t, d1, d2, "equal columns must digest identically")
+	d3, ok3 := CDCColumnTypedDigestFromColDef(genSigOrdinary("w", int32(types.T_int64)), 0)
+	require.True(t, ok3)
+	require.NotEqual(t, d1, d3, "different column types must not collide")
+	exotic := genSigOrdinary("v", int32(types.T_float64))
+	exotic.GeneratedCol = &plan.GeneratedCol{Expr: &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_EnumVal{}}},
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+	}, IsStored: true}
+	_, okExotic := CDCColumnTypedDigestFromColDef(exotic, 0)
+	require.False(t, okExotic, "an unhandled literal variant must fail the digest closed")
+}
+
 func TestClassifyShowColumnsOrdinaryMatrix(t *testing.T) {
 	ctx := context.Background()
 	headers := []string{"Field", "Type", "Collation", "Null", "Key", "Default", "Extra", "Privileges", "Comment"}
