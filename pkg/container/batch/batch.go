@@ -29,52 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-const (
-	batchMetadataMagic0      = byte('P')
-	batchMetadataMagic1      = byte('P')
-	batchMetadataMagic2      = byte('B')
-	batchMetadataVersionV1   = byte(1)
-	batchMetadataVersion     = byte(2)
-	batchMetadataModeNone    = byte(0)
-	batchMetadataModeUniform = byte(1)
-	batchMetadataModeRows    = byte(2)
-	batchMetadataBinaryFlag  = byte(0x80)
-	batchMetadataTextFlag    = byte(0x40)
-	batchMetadataMaxRows     = int32(1 << 24)
-	// Older writers put a per-row kind (0..4) in the low bits; it is retired
-	// and dropped on read.
-	batchMetadataRetiredKindMax = byte(4)
-)
-
-type batchMetadataRecord struct {
-	mode        byte
-	encodedRows []byte
-}
-
-// discardBatchMetadataRows validates and drops one vector's per-row
-// binary/text string flags written by an older peer. Vectors no longer carry
-// a runtime string domain: the static type is authoritative.
-func discardBatchMetadataRows(r io.Reader, n int) error {
-	var buf [256]byte
-	for n > 0 {
-		chunk := buf[:min(n, len(buf))]
-		if _, err := io.ReadFull(r, chunk); err != nil {
-			return err
-		}
-		for _, b := range chunk {
-			if b&batchMetadataBinaryFlag != 0 && b&batchMetadataTextFlag != 0 {
-				return moerr.NewInvalidInputNoCtx("binary and text row flags are mutually exclusive")
-			}
-			// The retired kind field held values 0..4.
-			if b&^(batchMetadataBinaryFlag|batchMetadataTextFlag) > batchMetadataRetiredKindMax {
-				return moerr.NewInvalidInputNoCtxf("invalid row metadata byte %d", b)
-			}
-		}
-		n -= len(chunk)
-	}
-	return nil
-}
-
 func NewWithSize(n int) *Batch {
 	return &Batch{
 		Vecs:     make([]*vector.Vector, n),
@@ -107,55 +61,37 @@ func (bat *Batch) CheckLength() error {
 	return nil
 }
 
-// MarshalBinary encodes bat in the stable Batch wire format. The format has
-// a column-name section; it is written empty. Use MarshalBinaryWithNames for a
-// message whose receiver identifies its columns by name.
+// MarshalBinary encodes bat in the Batch wire format: the row count, each
+// vector with its length, the extra buffer, Recursive and ShuffleIDX. Peers
+// run the same binary (shutdown upgrade only) and the bytes are never
+// persisted, so the format carries no version or legacy sections.
 func (bat *Batch) MarshalBinary() ([]byte, error) {
 	var w bytes.Buffer
-	return bat.MarshalBinaryWithBufferAndNames(&w, false, nil)
-}
-
-// MarshalBinaryWithNames is MarshalBinary with names written into the
-// format's column-name section. names belong to the message, not to bat:
-// WireNames reads them back from the encoded bytes.
-func (bat *Batch) MarshalBinaryWithNames(names []string) ([]byte, error) {
-	var w bytes.Buffer
-	return bat.MarshalBinaryWithBufferAndNames(&w, false, names)
+	return bat.MarshalBinaryWithBuffer(&w, false)
 }
 
 func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, error) {
-	return bat.MarshalBinaryWithBufferAndNames(w, reset, nil)
-}
-
-// MarshalBinaryWithBufferAndNames is MarshalBinaryWithBuffer with names
-// written into the column-name section (see MarshalBinaryWithNames).
-func (bat *Batch) MarshalBinaryWithBufferAndNames(
-	w *bytes.Buffer, reset bool, names []string,
-) ([]byte, error) {
 	if reset {
 		w.Reset()
 	}
-	if err := bat.marshalBinaryTo(w, names); err != nil {
+	if err := bat.MarshalBinaryTo(w); err != nil {
 		return nil, err
 	}
 	return w.Bytes(), nil
 }
 
 func (bat *Batch) MarshalBinarySize() (int, error) {
-	return bat.prepareMarshalBinary(nil, nil)
+	return bat.prepareMarshalBinary(nil)
 }
 
-func (bat *Batch) prepareMarshalBinary(
-	plans []vector.MarshalBinaryPlan,
-	names []string,
-) (int, error) {
+func (bat *Batch) prepareMarshalBinary(plans []vector.MarshalBinaryPlan) (int, error) {
 	if bat == nil {
 		return 0, moerr.NewInvalidInputNoCtx("invalid batch for marshal")
 	}
 	if bat.selection != nil {
 		return 0, errSelectedBatch()
 	}
-	const fixedSize = uint64(8 + 4 + 4 + 4 + 4 + 4)
+	const fixedSize = uint64(8 + 4 + 4 + 4 + 4)
 	total := fixedSize
 	add := func(value uint64) bool {
 		if value > uint64(^uint(0)>>1)-total {
@@ -165,7 +101,6 @@ func (bat *Batch) prepareMarshalBinary(
 		return true
 	}
 	if uint64(len(bat.Vecs)) > uint64(^uint32(0)>>1) ||
-		uint64(len(names)) > uint64(^uint32(0)>>1) ||
 		uint64(len(bat.extraBuf)) > uint64(^uint32(0)>>1) {
 		return 0, moerr.NewInvalidInputNoCtx(
 			"batch field exceeds marshal format",
@@ -195,14 +130,6 @@ func (bat *Batch) prepareMarshalBinary(
 			plans[i] = plan
 		}
 	}
-	for _, attr := range names {
-		if uint64(len(attr)) > uint64(^uint32(0)>>1) ||
-			!add(4+uint64(len(attr))) {
-			return 0, moerr.NewInvalidInputNoCtx(
-				"batch attribute exceeds marshal format",
-			)
-		}
-	}
 	if !add(uint64(len(bat.extraBuf))) {
 		return 0, moerr.NewInvalidInputNoCtx(
 			"batch marshal size exceeds platform limit",
@@ -212,10 +139,6 @@ func (bat *Batch) prepareMarshalBinary(
 }
 
 func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
-	return bat.marshalBinaryTo(w, nil)
-}
-
-func (bat *Batch) marshalBinaryTo(w io.Writer, names []string) error {
 	if bat == nil || w == nil {
 		return io.ErrClosedPipe
 	}
@@ -229,7 +152,7 @@ func (bat *Batch) marshalBinaryTo(w io.Writer, names []string) error {
 	} else {
 		plans = make([]vector.MarshalBinaryPlan, len(bat.Vecs))
 	}
-	size, err := bat.prepareMarshalBinary(plans, names)
+	size, err := bat.prepareMarshalBinary(plans)
 	if err != nil {
 		return err
 	}
@@ -258,24 +181,6 @@ func (bat *Batch) marshalBinaryTo(w io.Writer, names []string) error {
 		}
 		if err := plans[i].MarshalTo(w); err != nil {
 			return err
-		}
-	}
-
-	l = int32(len(names))
-	if err := writeBatchMarshalInt32(w, l); err != nil {
-		return err
-	}
-	for i := 0; i < int(l); i++ {
-		size := int32(len(names[i]))
-		if err := writeBatchMarshalInt32(w, size); err != nil {
-			return err
-		}
-		n, err := io.WriteString(w, names[i])
-		if err != nil {
-			return err
-		}
-		if int32(n) != size {
-			return io.ErrShortWrite
 		}
 	}
 
@@ -330,452 +235,6 @@ func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
 	return bat.UnmarshalBinaryWithAnyMp(data, nil)
 }
 
-// UnmarshalBinaryWithMetadata decodes the stable Batch prefix and an
-// optional pipeline-only provenance trailer.  The stable public decoder keeps
-// its historical trailing-byte behavior for persisted/legacy callers.
-func (bat *Batch) UnmarshalBinaryWithMetadata(data []byte, mp *mpool.MPool) error {
-	prefixLen, err := stableBatchPayloadLength(data)
-	if err != nil {
-		return err
-	}
-	return bat.unmarshalBinaryWithMetadataAtPrefix(data, prefixLen, mp)
-}
-
-// unmarshalBinaryWithMetadataAtPrefix uses a previously validated
-// stable boundary; callers must ensure it lies within data.
-func (bat *Batch) unmarshalBinaryWithMetadataAtPrefix(data []byte, prefixLen int, mp *mpool.MPool) error {
-	if err := bat.UnmarshalBinaryWithAnyMp(data[:prefixLen], mp); err != nil {
-		return err
-	}
-	if prefixLen == len(data) {
-		return nil
-	}
-	records, rowCount, err := parseBatchMetadataTrailer(
-		data[prefixLen:], bat.Vecs, int64(bat.RowCount()))
-	if err != nil {
-		return err
-	}
-	if rowCount != int64(bat.RowCount()) {
-		return moerr.NewInvalidInputNoCtx("prepared parameter metadata batch row count mismatch")
-	}
-	for i, record := range records {
-		if i >= len(bat.Vecs) {
-			return moerr.NewInvalidInputNoCtx("prepared parameter metadata vector count mismatch")
-		}
-		// The trailer carries only retired metadata from older writers; it is
-		// validated and dropped.
-		switch record.mode {
-		case batchMetadataModeNone, batchMetadataModeUniform:
-		case batchMetadataModeRows:
-			if len(record.encodedRows) != bat.Vecs[i].Length() {
-				return moerr.NewInvalidInputNoCtx("prepared parameter metadata row count mismatch")
-			}
-			if err := discardBatchMetadataRows(
-				bytes.NewReader(record.encodedRows), len(record.encodedRows)); err != nil {
-				return err
-			}
-		default:
-			return moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode")
-		}
-	}
-	return nil
-}
-
-// UnmarshalFromReaderWithMetadata decodes a framed local-spill
-// payload without copying the stable batch or its trailer to a Go-heap
-// buffer. payloadSize is the exact size of this batch section; any remaining
-// bytes after the stable Batch fields are parsed as the transient provenance
-// trailer. The stable reader remains the ownership-aware MPool path.
-func (bat *Batch) UnmarshalFromReaderWithMetadata(
-	r io.Reader,
-	payloadSize int64,
-	mp *mpool.MPool,
-) error {
-	return bat.unmarshalFromReaderWithMetadata(
-		r,
-		payloadSize,
-		mp,
-		true,
-	)
-}
-
-// UnmarshalFromReaderWithMetadataForSpill is the metadata-free local
-// spill variant. It rejects column names and ExtraBuf before allocating their
-// payloads, while retaining the prepared-parameter trailer used by expression
-// results.
-func (bat *Batch) UnmarshalFromReaderWithMetadataForSpill(
-	r io.Reader,
-	payloadSize int64,
-	mp *mpool.MPool,
-) error {
-	return bat.unmarshalFromReaderWithMetadata(
-		r,
-		payloadSize,
-		mp,
-		false,
-	)
-}
-
-func (bat *Batch) unmarshalFromReaderWithMetadata(
-	r io.Reader,
-	payloadSize int64,
-	mp *mpool.MPool,
-	allowMetadata bool,
-) error {
-	if bat == nil || r == nil {
-		return io.ErrClosedPipe
-	}
-	if payloadSize < 0 {
-		return moerr.NewInvalidInputNoCtx("negative batch payload size")
-	}
-	limited := &io.LimitedReader{R: r, N: payloadSize}
-	if err := bat.unmarshalFromReader(limited, mp, allowMetadata); err != nil {
-		return err
-	}
-	if limited.N == 0 {
-		return nil
-	}
-	trailerSize := limited.N
-	if trailerSize < 0 || trailerSize > int64(^uint32(0)) {
-		return moerr.NewInvalidInputNoCtx("prepared parameter metadata trailer exceeds wire limit")
-	}
-	startRemaining := trailerSize
-	readByte := func() (byte, error) {
-		return types.ReadByte(limited)
-	}
-	magic0, err := readByte()
-	if err != nil {
-		return err
-	}
-	magic1, err := readByte()
-	if err != nil {
-		return err
-	}
-	magic2, err := readByte()
-	if err != nil {
-		return err
-	}
-	version, err := readByte()
-	if err != nil {
-		return err
-	}
-	if magic0 != batchMetadataMagic0 ||
-		magic1 != batchMetadataMagic1 ||
-		magic2 != batchMetadataMagic2 ||
-		version != batchMetadataVersionV1 && version != batchMetadataVersion {
-		return moerr.NewInvalidInputNoCtx("invalid prepared parameter batch trailer")
-	}
-	nVecs, err := types.ReadInt32(limited)
-	if err != nil || nVecs < 0 || nVecs > 1<<20 {
-		if err == nil {
-			err = moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata vector count")
-		}
-		return err
-	}
-	if int(nVecs) != len(bat.Vecs) {
-		return moerr.NewInvalidInputNoCtx("prepared parameter metadata vector count mismatch")
-	}
-	rowCount, err := types.ReadInt64(limited)
-	if err != nil || rowCount < 0 || int64(int(rowCount)) != rowCount {
-		if err == nil {
-			err = moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
-		}
-		return err
-	}
-	if rowCount != int64(bat.RowCount()) {
-		return moerr.NewInvalidInputNoCtx("prepared parameter metadata batch row count mismatch")
-	}
-	for i := range bat.Vecs {
-		mode, err := readByte()
-		if err != nil {
-			return err
-		}
-		binaryString := mode&batchMetadataBinaryFlag != 0
-		textString := mode&batchMetadataTextFlag != 0
-		if binaryString && textString {
-			return moerr.NewInvalidInputNoCtx("binary and text vector flags are mutually exclusive")
-		}
-		mode &^= batchMetadataBinaryFlag | batchMetadataTextFlag
-		switch mode {
-		case batchMetadataModeNone:
-		case batchMetadataModeUniform:
-			kind, err := readByte()
-			if err != nil {
-				return err
-			}
-			// Retired kind byte from an older writer.
-			if kind == 0 || kind > batchMetadataRetiredKindMax {
-				return moerr.NewInvalidInputNoCtx("invalid uniform vector metadata kind")
-			}
-		case batchMetadataModeRows:
-			count, err := types.ReadInt32(limited)
-			if err != nil {
-				return err
-			}
-			if count < 0 || count > batchMetadataMaxRows || count != int32(bat.Vecs[i].Length()) {
-				return moerr.NewInvalidInputNoCtx("prepared parameter metadata row count mismatch")
-			}
-			// Before the vector allocates count bytes, prove that the frame can
-			// contain this row payload, at least one mode byte for every
-			// remaining vector record, and the four-byte trailer footer.
-			// nVecs is capped above, so this int64 sum cannot overflow.
-			minimumPerVector := int64(1)
-			if version >= batchMetadataVersion {
-				minimumPerVector = 2
-			}
-			minimumRemaining := int64(len(bat.Vecs)-i-1)*minimumPerVector + 4
-			if limited.N < minimumRemaining || int64(count) > limited.N-minimumRemaining {
-				return io.ErrUnexpectedEOF
-			}
-			if err := discardBatchMetadataRows(limited, int(count)); err != nil {
-				return err
-			}
-		default:
-			return moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode")
-		}
-		if version >= batchMetadataVersion {
-			sourceMode, err := readByte()
-			if err != nil {
-				return err
-			}
-			// The string-source section is retired: validate an older writer's
-			// section and drop it.
-			switch sourceMode {
-			case batchMetadataModeNone:
-			case batchMetadataModeUniform:
-				encoded, err := readByte()
-				source := types.StringSource(encoded)
-				if err != nil || !source.Valid() || source == types.StringSourceExpression {
-					return moerr.NewInvalidInputNoCtx("invalid uniform string source metadata")
-				}
-			case batchMetadataModeRows:
-				count, err := types.ReadInt32(limited)
-				if err != nil || count < 0 || count != int32(bat.Vecs[i].Length()) ||
-					count > batchMetadataMaxRows || int64(count) > limited.N-4 {
-					return moerr.NewInvalidInputNoCtx("invalid string source metadata row count")
-				}
-				for row := int32(0); row < count; row++ {
-					encoded, err := readByte()
-					if err != nil {
-						return err
-					}
-					if !types.StringSource(encoded).Valid() {
-						return moerr.NewInvalidInputNoCtx("invalid string source metadata")
-					}
-				}
-			default:
-				return moerr.NewInvalidInputNoCtx("invalid string source metadata mode")
-			}
-		}
-	}
-	trailerLen, err := types.ReadUint32(limited)
-	if err != nil {
-		return err
-	}
-	if trailerLen != uint32(startRemaining) || limited.N != 0 {
-		return moerr.NewInvalidInputNoCtx("prepared parameter metadata length mismatch")
-	}
-	return nil
-}
-
-// stableBatchPayloadLength parses only the stable Batch framing and returns
-// the exact byte offset at which any pipeline-only extension begins.  Keeping
-// this parser separate from UnmarshalBinaryWithAnyMp preserves the historical
-// public decoder while making the extension boundary unambiguous: a random
-// "PPB" sequence inside a vector or attribute can never be mistaken for a
-// trailer.
-func stableBatchPayloadLength(data []byte) (int, error) {
-	cursor := batchUnmarshalCursor{data: data}
-	rowCount, err := cursor.readInt64()
-	if err != nil {
-		return 0, err
-	}
-	if rowCount < 0 || int64(int(rowCount)) != rowCount {
-		return 0, moerr.NewInvalidInputNoCtx("invalid batch row count")
-	}
-	vecs, err := cursor.readInt32()
-	if err != nil {
-		return 0, err
-	}
-	if vecs < 0 || int64(vecs) > int64(len(cursor.data)/4) {
-		return 0, moerr.NewInvalidInputNoCtx("invalid batch vector count")
-	}
-	for range vecs {
-		size, err := cursor.readUint32()
-		if err != nil {
-			return 0, err
-		}
-		if uint64(size) > uint64(len(cursor.data)) {
-			return 0, io.ErrUnexpectedEOF
-		}
-		if _, err := cursor.read(int(size)); err != nil {
-			return 0, err
-		}
-	}
-	attrs, err := cursor.readInt32()
-	if err != nil {
-		return 0, err
-	}
-	if attrs < 0 || int64(attrs) > int64(len(cursor.data)/4) {
-		return 0, moerr.NewInvalidInputNoCtx("invalid batch attribute count")
-	}
-	for range attrs {
-		size, err := cursor.readInt32()
-		if err != nil {
-			return 0, err
-		}
-		if size < 0 {
-			return 0, moerr.NewInvalidInputNoCtx("invalid batch attribute size")
-		}
-		if _, err := cursor.read(int(size)); err != nil {
-			return 0, err
-		}
-	}
-	extra, err := cursor.readInt32()
-	if err != nil {
-		return 0, err
-	}
-	if extra < 0 {
-		return 0, moerr.NewInvalidInputNoCtx("invalid batch extra buffer size")
-	}
-	if _, err := cursor.read(int(extra)); err != nil {
-		return 0, err
-	}
-	if _, err := cursor.readInt32(); err != nil {
-		return 0, err
-	}
-	if _, err := cursor.readInt32(); err != nil {
-		return 0, err
-	}
-	return len(data) - len(cursor.data), nil
-}
-
-func parseBatchMetadataTrailer(
-	ext []byte,
-	vecs []*vector.Vector,
-	expectedRowCount int64,
-) ([]batchMetadataRecord, int64, error) {
-	if len(ext) < 4+4 {
-		return nil, 0, moerr.NewInvalidInputNoCtx("truncated prepared parameter batch trailer")
-	}
-	reader := bytes.NewReader(ext)
-	magic0, _ := types.ReadByte(reader)
-	magic1, _ := types.ReadByte(reader)
-	magic2, _ := types.ReadByte(reader)
-	version, err := types.ReadByte(reader)
-	if err != nil || magic0 != batchMetadataMagic0 ||
-		magic1 != batchMetadataMagic1 || magic2 != batchMetadataMagic2 ||
-		version != batchMetadataVersionV1 && version != batchMetadataVersion {
-		return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter batch trailer")
-	}
-	nVecs, err := types.ReadInt32(reader)
-	if err != nil || nVecs < 0 || nVecs > 1<<20 {
-		return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata vector count")
-	}
-	if int(nVecs) != len(vecs) {
-		return nil, 0, moerr.NewInvalidInputNoCtx("prepared parameter metadata vector count mismatch")
-	}
-	rowCount, err := types.ReadInt64(reader)
-	if err != nil || rowCount < 0 || int64(int(rowCount)) != rowCount {
-		return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
-	}
-	if rowCount != expectedRowCount {
-		return nil, 0, moerr.NewInvalidInputNoCtx("prepared parameter metadata batch row count mismatch")
-	}
-	records := make([]batchMetadataRecord, len(vecs))
-	for i := range records {
-		mode, err := types.ReadByte(reader)
-		if err != nil {
-			return nil, 0, err
-		}
-		if mode&batchMetadataBinaryFlag != 0 && mode&batchMetadataTextFlag != 0 {
-			return nil, 0, moerr.NewInvalidInputNoCtx("binary and text vector flags are mutually exclusive")
-		}
-		mode &^= batchMetadataBinaryFlag | batchMetadataTextFlag
-		records[i].mode = mode
-		switch mode {
-		case batchMetadataModeNone:
-		case batchMetadataModeUniform:
-			kind, err := types.ReadByte(reader)
-			if err != nil || kind == 0 || kind > batchMetadataRetiredKindMax {
-				return nil, 0, moerr.NewInvalidInputNoCtx("invalid uniform vector metadata kind")
-			}
-		case batchMetadataModeRows:
-			count, err := types.ReadInt32(reader)
-			if err != nil || count < 0 || count > batchMetadataMaxRows {
-				return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
-			}
-			if vecs[i] == nil || count != int32(vecs[i].Length()) {
-				return nil, 0, moerr.NewInvalidInputNoCtx("prepared parameter metadata row count mismatch")
-			}
-			// Reserve at least the footer before allocating a row payload.  The
-			// vector-length check above bounds this allocation by the decoded
-			// batch, while this check rejects truncated amplification payloads.
-			if reader.Len() < 4 || int64(count) > int64(reader.Len()-4) {
-				return nil, 0, io.ErrUnexpectedEOF
-			}
-			rowStart := len(ext) - reader.Len()
-			rowEnd := rowStart + int(count)
-			records[i].encodedRows = ext[rowStart:rowEnd]
-			for _, encoded := range records[i].encodedRows {
-				if encoded&batchMetadataBinaryFlag != 0 && encoded&batchMetadataTextFlag != 0 {
-					return nil, 0, moerr.NewInvalidInputNoCtx("binary and text row flags are mutually exclusive")
-				}
-				kind := encoded &^ (batchMetadataBinaryFlag | batchMetadataTextFlag)
-				if kind > batchMetadataRetiredKindMax {
-					return nil, 0, moerr.NewInvalidInputNoCtx("invalid vector metadata kind")
-				}
-			}
-			if _, err := reader.Seek(int64(count), io.SeekCurrent); err != nil {
-				return nil, 0, err
-			}
-		default:
-			return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode")
-		}
-		if version >= batchMetadataVersion {
-			sourceMode, err := types.ReadByte(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-			switch sourceMode {
-			case batchMetadataModeNone:
-			case batchMetadataModeUniform:
-				encoded, err := types.ReadByte(reader)
-				source := types.StringSource(encoded)
-				if err != nil || !source.Valid() || source == types.StringSourceExpression {
-					return nil, 0, moerr.NewInvalidInputNoCtx("invalid uniform string source metadata")
-				}
-			case batchMetadataModeRows:
-				count, err := types.ReadInt32(reader)
-				if err != nil || count < 0 || vecs[i] == nil || count != int32(vecs[i].Length()) ||
-					count > batchMetadataMaxRows || int64(count) > int64(reader.Len()-4) {
-					return nil, 0, moerr.NewInvalidInputNoCtx("invalid string source metadata row count")
-				}
-				rowStart := len(ext) - reader.Len()
-				rowEnd := rowStart + int(count)
-				for _, encoded := range ext[rowStart:rowEnd] {
-					if !types.StringSource(encoded).Valid() {
-						return nil, 0, moerr.NewInvalidInputNoCtx("invalid string source metadata")
-					}
-				}
-				if _, err := reader.Seek(int64(count), io.SeekCurrent); err != nil {
-					return nil, 0, err
-				}
-			default:
-				return nil, 0, moerr.NewInvalidInputNoCtx("invalid string source metadata mode")
-			}
-		}
-	}
-	if reader.Len() != 4 {
-		return nil, 0, moerr.NewInvalidInputNoCtx("unexpected prepared parameter metadata bytes")
-	}
-	trailerLen, err := types.ReadUint32(reader)
-	if err != nil || trailerLen != uint32(len(ext)) {
-		return nil, 0, moerr.NewInvalidInputNoCtx("prepared parameter metadata length mismatch")
-	}
-	return records, rowCount, nil
-}
-
 type batchUnmarshalCursor struct {
 	data []byte
 }
@@ -811,67 +270,6 @@ func (c *batchUnmarshalCursor) readUint32() (uint32, error) {
 		return 0, err
 	}
 	return types.DecodeUint32(data), nil
-}
-
-// WireNames returns the column-name section of a batch encoded in the stable
-// Batch wire format, without decoding the vectors. It is empty unless the
-// writer used MarshalBinaryWithNames (or is an older version, which always
-// wrote names).
-//
-// It exists for tests that pin what this version writes for older CNs.
-// Production code must not call it: a decoder skips the names, and a
-// consumer takes column names from its plan or its producer's fixed layout,
-// never from the wire.
-func WireNames(data []byte) ([]string, error) {
-	cursor := batchUnmarshalCursor{data: data}
-	if _, err := cursor.readInt64(); err != nil {
-		return nil, err
-	}
-	l, err := cursor.readInt32()
-	if err != nil {
-		return nil, err
-	}
-	if l < 0 || int64(l) > int64(len(cursor.data)/4) {
-		return nil, moerr.NewInvalidInputNoCtx("invalid batch vector count")
-	}
-	for i := 0; i < int(l); i++ {
-		size, err := cursor.readUint32()
-		if err != nil {
-			return nil, err
-		}
-		if uint64(size) > uint64(len(cursor.data)) {
-			return nil, io.ErrUnexpectedEOF
-		}
-		if _, err := cursor.read(int(size)); err != nil {
-			return nil, err
-		}
-	}
-	l, err = cursor.readInt32()
-	if err != nil {
-		return nil, err
-	}
-	if l < 0 || int64(l) > int64(len(cursor.data)/4) {
-		return nil, moerr.NewInvalidInputNoCtx("invalid batch attribute count")
-	}
-	if l == 0 {
-		return nil, nil
-	}
-	names := make([]string, l)
-	for i := range names {
-		size, err := cursor.readInt32()
-		if err != nil {
-			return nil, err
-		}
-		if size < 0 {
-			return nil, moerr.NewInvalidInputNoCtx("invalid batch attribute size")
-		}
-		name, err := cursor.read(int(size))
-		if err != nil {
-			return nil, err
-		}
-		names[i] = string(name)
-	}
-	return names, nil
 }
 
 func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
@@ -967,28 +365,6 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		}
 	}
 
-	l, err = cursor.readInt32()
-	if err != nil {
-		return err
-	}
-	if l < 0 || int64(l) > int64(len(cursor.data)/4) {
-		return moerr.NewInvalidInputNoCtx("invalid batch attribute count")
-	}
-	// The column-name section belongs to the message, not to the batch:
-	// WireNames reads it for a receiver that needs it. Skip it here.
-	for i := 0; i < int(l); i++ {
-		size, err := cursor.readInt32()
-		if err != nil {
-			return err
-		}
-		if size < 0 {
-			return moerr.NewInvalidInputNoCtx("invalid batch attribute size")
-		}
-		if _, err := cursor.read(int(size)); err != nil {
-			return err
-		}
-	}
-
 	// ExtraBuf
 	l, err = cursor.readInt32()
 	if err != nil {
@@ -1021,19 +397,15 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	if err != nil {
 		return err
 	}
+	if len(cursor.data) != 0 {
+		return moerr.NewInvalidInputNoCtxf("batch has %d trailing bytes", len(cursor.data))
+	}
 	bat.rowCount = decodedRowCount
 	return nil
 }
 
+// UnmarshalFromReader decodes one batch from r, reading exactly its bytes.
 func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) {
-	return bat.unmarshalFromReader(r, mp, true)
-}
-
-func (bat *Batch) unmarshalFromReader(
-	r io.Reader,
-	mp *mpool.MPool,
-	allowMetadata bool,
-) (err error) {
 	if bat == nil || r == nil {
 		return io.ErrClosedPipe
 	}
@@ -1075,37 +447,8 @@ func (bat *Batch) unmarshalFromReader(
 		}
 	}
 
-	l, err = types.ReadInt32AsInt(r)
-	if err != nil {
+	if err = bat.readExtraBuf(r, mp); err != nil {
 		return err
-	}
-	if err = validateReaderElementCount(r, l, 4, "attribute"); err != nil {
-		return err
-	}
-	if !allowMetadata && l != 0 {
-		return moerr.NewInvalidInputNoCtx("spill batch attributes are not allowed")
-	}
-	for i := 0; i < int(l); i++ {
-		if _, err := readBatchSizedBytes(r); err != nil {
-			return err
-		}
-	}
-
-	// extraBuf is a data-scaled field in the stable Batch codec. Spill
-	// records do not use it and reject it before allocating its payload.
-	if allowMetadata {
-		if err = bat.readExtraBuf(r, mp); err != nil {
-			return err
-		}
-	} else {
-		extraSize, readErr := types.ReadInt32AsInt(r)
-		if readErr != nil {
-			return readErr
-		}
-		if extraSize != 0 {
-			return moerr.NewInvalidInputNoCtx("spill batch extra buffer is not allowed")
-		}
-		bat.releaseExtraBuf()
 	}
 
 	if bat.Recursive, err = types.ReadInt32(r); err != nil {
@@ -1115,6 +458,69 @@ func (bat *Batch) unmarshalFromReader(
 		return err
 	}
 	bat.rowCount = decodedRowCount
+	return nil
+}
+
+// MarshalFramedSize returns the size of the record MarshalFramedTo writes.
+func (bat *Batch) MarshalFramedSize() (int, error) {
+	size, err := bat.MarshalBinarySize()
+	if err != nil {
+		return 0, err
+	}
+	if size > math.MaxInt-8 {
+		return 0, moerr.NewInvalidInputNoCtx("batch record exceeds marshal format")
+	}
+	return size + 8, nil
+}
+
+// MarshalFramedTo writes bat as one record of a batch file: an int64 length
+// followed by the batch. UnmarshalFramedFrom reads it back.
+func (bat *Batch) MarshalFramedTo(w io.Writer) error {
+	if bat == nil || w == nil {
+		return io.ErrClosedPipe
+	}
+	size, err := bat.MarshalBinarySize()
+	if err != nil {
+		return err
+	}
+	if err := writeBatchMarshalInt64(w, int64(size)); err != nil {
+		return err
+	}
+	return bat.MarshalBinaryTo(w)
+}
+
+// UnmarshalFramedFrom reads one record written by MarshalFramedTo, and checks
+// that every vector holds the batch's row count.
+func (bat *Batch) UnmarshalFramedFrom(r io.Reader, mp *mpool.MPool) error {
+	size, err := types.ReadInt64(r)
+	if err != nil {
+		return err
+	}
+	if err := bat.UnmarshalSizedFrom(r, size, mp); err != nil {
+		return err
+	}
+	if err := bat.CheckLength(); err != nil {
+		return moerr.NewInvalidInputNoCtx("batch record vector length does not match row count")
+	}
+	return nil
+}
+
+// UnmarshalSizedFrom decodes a batch that takes exactly size bytes of r, for
+// a caller that frames its own records.
+func (bat *Batch) UnmarshalSizedFrom(r io.Reader, size int64, mp *mpool.MPool) error {
+	if bat == nil || r == nil {
+		return io.ErrClosedPipe
+	}
+	if size < 0 {
+		return moerr.NewInvalidInputNoCtx("negative batch record size")
+	}
+	limited := &io.LimitedReader{R: r, N: size}
+	if err := bat.UnmarshalFromReader(limited, mp); err != nil {
+		return err
+	}
+	if limited.N != 0 {
+		return moerr.NewInvalidInputNoCtxf("batch record has %d trailing bytes", limited.N)
+	}
 	return nil
 }
 
@@ -1605,7 +1011,7 @@ func (bat *Batch) CloneSelectedColumnsTo(
 	return nil
 }
 
-// ViewInto makes dst a view of bat: the same vectors, attributes, row count
+// ViewInto makes dst a view of bat: the same vectors, row count
 // and selection. dst owns nothing it references (no vectors, selection or
 // ExtraBuf); it is valid while bat is, and is released by dropping it.
 func (bat *Batch) ViewInto(dst *Batch) {

@@ -80,10 +80,9 @@ func TestIssue25590DeletionRelayObjectNames(t *testing.T) {
 		res.Vecs[4] = nil
 		res.Clean(mp)
 	}()
-	// The producer writes the blobs' names into them (deletion.go).
-	statsBytes, err := statsBat.MarshalBinaryWithNames(TombstoneObjectStatsAttrs)
+	statsBytes, err := statsBat.MarshalBinary()
 	require.NoError(t, err)
-	rowOnlyBytes, err := rowOnly.MarshalBinaryWithNames(DelBatchAttrs)
+	rowOnlyBytes, err := rowOnly.MarshalBinary()
 	require.NoError(t, err)
 	// A retained block's class row: not a flushed tombstone.
 	require.NoError(t, vector.AppendBytes(res.Vecs[0], []byte("blk-a"), false, mp))
@@ -120,28 +119,6 @@ func TestIssue25590DeletionRelayObjectNames(t *testing.T) {
 	require.Error(t, err,
 		"a flushed tombstone row whose stats batch cannot decode rejects the ack fail-closed")
 
-	// The stats column comes from the producer's fixed layout, never from
-	// names on the wire: a blob with no names, or with misleading ones,
-	// adopts the same objects.
-	for _, wireNames := range [][]string{nil, {"not-object-stats"}} {
-		statsOnlyBytes, err := statsBat.MarshalBinaryWithNames(wireNames)
-		require.NoError(t, err)
-		statsOnly := makeDelRemoteBatch(mp)
-		statsOnly.Vecs[4] = vector.NewVec(types.T_uint64.ToType(), mp)
-		require.NoError(t, vector.AppendBytes(statsOnly.Vecs[0], []byte("obj-id"), false, mp))
-		require.NoError(t, vector.AppendBytes(statsOnly.Vecs[1], statsOnlyBytes, false, mp))
-		require.NoError(t, vector.AppendFixed(statsOnly.Vecs[2], int8(FlushDeltaLoc), false, mp))
-		require.NoError(t, vector.AppendFixed(statsOnly.Vecs[3], int32(0), false, mp))
-		statsOnly.SetRowCount(1)
-		got, ok, err := TryExtractRemoteDeleteObjectNames(statsOnly, mp)
-		require.NoError(t, err)
-		require.True(t, ok)
-		require.Equal(t, want, got, "wire names %v", wireNames)
-		statsOnly.Vecs[4].Free(mp)
-		statsOnly.Vecs[4] = nil
-		statsOnly.Clean(mp)
-	}
-
 	// A foreign layout is ordinary data rows: a batch carries no names, so
 	// the producer's vector types are what identify its rows.
 	foreign := batch.NewWithSize(4)
@@ -159,6 +136,4 @@ func TestIssue25590DeletionRelayObjectNames(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok,
 		"a layout the producer never emits never looks like ownership metadata")
-	require.Nil(t, RelayWireNames(foreign))
-	require.Equal(t, DelRemoteBatchAttrs, RelayWireNames(res))
 }

@@ -8692,7 +8692,7 @@ func TestIssue25590StandaloneProducerFormatsAdoptBeforeRelease(t *testing.T) {
 	issue25590BindRound21Txn(t, delTxn)
 	tail := issue25590Round21TombstoneStatsBatch(t, delTxn.proc.Mp(), statsB)
 	defer tail.Clean(delTxn.proc.Mp())
-	tailBytes, err := tail.MarshalBinaryWithNames(issue25590TombstoneStatsAttrs)
+	tailBytes, err := tail.MarshalBinary()
 	require.NoError(t, err)
 	rowBat := batch.NewWithSize(2)
 	rowBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), delTxn.proc.Mp())

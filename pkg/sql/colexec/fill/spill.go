@@ -603,7 +603,7 @@ func (s *fillSpill) readRecordReverse(
 		reuse.CleanOnlyData()
 	}
 	section := io.NewSectionReader(fd, start+8, size)
-	if err := reuse.UnmarshalFromReaderWithMetadataForSpill(section, size, decodedMP); err != nil {
+	if err := reuse.UnmarshalSizedFrom(section, size, decodedMP); err != nil {
 		if allocated {
 			reuse.Clean(mp)
 		}
