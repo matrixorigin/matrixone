@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// typeswitch:partial(decimal) avg_tw_cache has decimal64 and decimal128 states only
 var AvgTwCacheSupportedTypes = []types.T{
 	types.T_bit,
 	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -30,6 +31,7 @@ var AvgTwCacheSupportedTypes = []types.T{
 }
 
 func AvgTwCacheReturnType(typs []types.Type) types.Type {
+	// typeswitch:partial(decimal) avg_tw_cache supports decimal64 and decimal128 only (AvgTwCacheSupportedTypes)
 	switch typs[0].Oid {
 	case types.T_decimal64, types.T_decimal128:
 		s := int32(12)
@@ -426,6 +428,7 @@ func (exec *avgTwCacheDecimalExec[A]) Flush() (_ []*vector.Vector, retErr error)
 }
 
 func makeAvgTwCacheExec(mp *mpool.MPool, aggID int64, param types.Type) (AggFuncExec, error) {
+	// typeswitch:partial(decimal) avg_tw_cache supports decimal64 and decimal128 only (AvgTwCacheSupportedTypes); others are an error
 	switch param.Oid {
 	case types.T_bit, types.T_uint64:
 		return newAvgTwCacheNumericExec[uint64](mp, aggID, param), nil

@@ -747,6 +747,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64, source type
 	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
 		return &plan.Literal{Isnull: true}
 	}
+	// typeswitch:partial(decimal) plan literals have no decimal256 form, so a decimal256 value is not converted to or from a literal here
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		return &plan.Literal{
@@ -903,6 +904,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 			err = vector.AppendBytes(vec, nil, true, proc.Mp())
 			return true, err
 		}
+		// typeswitch:partial(decimal) plan literals have no decimal256 form, so a decimal256 value is not converted to or from a literal here
 		switch vec.GetType().Oid {
 		case types.T_bool:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Bval); ok {

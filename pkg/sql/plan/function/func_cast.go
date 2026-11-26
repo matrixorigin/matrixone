@@ -1394,6 +1394,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = float64ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_decimal64:
 		var s vector.FunctionParameterWrapper[types.Decimal64]
+		// typeswitch:partial(decimal) decimal256 targets return earlier, through castToDecimal256
 		if toType.Oid == types.T_decimal64 || toType.Oid == types.T_decimal128 {
 			result.UseOptFunctionParamFrame(1)
 			s = vector.OptGetParamFromWrapper[types.Decimal64](result, 0, from)
@@ -1500,6 +1501,7 @@ func widenDecimal256Batch(from *vector.Vector, to *vector.FunctionResult[types.D
 	}
 	dst := vector.MustFixedColNoTypeCheck[types.Decimal256](to.GetResultVector())
 	_ = dst[length-1]
+	// typeswitch:partial(decimal) only narrower decimals widen; a decimal256 source returns false and takes the general cast
 	switch source.Oid {
 	case types.T_decimal64:
 		values := vector.MustFixedColNoTypeCheck[types.Decimal64](from)
@@ -3545,6 +3547,7 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 			continue
 		}
 		bj := types.DecodeJson(v)
+		// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before this dispatch
 		switch toType.Oid {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 			value, isNull, ok := jsonToInt64Scalar(bj)
@@ -3630,6 +3633,7 @@ func jsonIntegerText(bj bytejson.ByteJson) (string, bool) {
 }
 
 func jsonAppendDecimalText(result vector.FunctionResultWrapper, toType types.Type, text string) (bool, error) {
+	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before this dispatch
 	switch toType.Oid {
 	case types.T_decimal64:
 		d, err := types.ParseDecimal64(text, toType.Width, toType.Scale)

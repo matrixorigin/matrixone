@@ -10579,6 +10579,11 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 						if min.Compare(partialResults[i].(types.Decimal128)) < 0 {
 							partialResults[i] = min
 						}
+					case types.T_decimal256:
+						min := types.DecodeFixed[types.Decimal256](zm.GetMinBuf())
+						if min.Compare(partialResults[i].(types.Decimal256)) < 0 {
+							partialResults[i] = min
+						}
 					case types.T_uuid:
 						min := types.DecodeFixed[types.Uuid](zm.GetMinBuf())
 						if min.Lt(partialResults[i].(types.Uuid)) {
@@ -10706,6 +10711,11 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 					case types.T_decimal128:
 						max := types.DecodeFixed[types.Decimal128](zm.GetMaxBuf())
 						if max.Compare(partialResults[i].(types.Decimal128)) > 0 {
+							partialResults[i] = max
+						}
+					case types.T_decimal256:
+						max := types.DecodeFixed[types.Decimal256](zm.GetMaxBuf())
+						if max.Compare(partialResults[i].(types.Decimal256)) > 0 {
 							partialResults[i] = max
 						}
 					case types.T_uuid:

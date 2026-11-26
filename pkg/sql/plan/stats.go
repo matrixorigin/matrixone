@@ -481,6 +481,17 @@ func UpdateStatsInfo(info *TableStatsInfo, tableDef *plan.TableDef, s *pb.StatsI
 				s.MinValMap[colName] = minFloat
 				s.MaxValMap[colName] = maxFloat
 
+			case types.T_decimal256:
+				// Fix: Use actual scale from ZoneMap (not TableDef)
+				// This ensures consistency with getMinMaxValueByFloat64 in disttae/stats.go
+				scale := info.ColumnZMs[i].GetScale()
+				minDec := types.DecodeDecimal256(info.ColumnZMs[i].GetMinBuf())
+				maxDec := types.DecodeDecimal256(info.ColumnZMs[i].GetMaxBuf())
+				minFloat := types.Decimal256ToFloat64(minDec, scale)
+				maxFloat := types.Decimal256ToFloat64(maxDec, scale)
+				s.MinValMap[colName] = minFloat
+				s.MaxValMap[colName] = maxFloat
+
 			}
 		}
 
@@ -926,6 +937,7 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 }
 
 func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
+	// typeswitch:partial(decimal) plan literals have no decimal256 form, so a decimal256 value is not converted to or from a literal here
 	switch typ {
 	case types.T_float32:
 		if val, valOk := lit.Value.(*plan.Literal_Fval); valOk {
@@ -1035,6 +1047,7 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 		case "":
 			// CRITICAL FIX: For decimal types, we need to pass the expr to get scale information
 			// Decimal literals store internal scaled values, need proper conversion
+			// typeswitch:partial(decimal) plan literals have no decimal256 form, so decimal256 ranges take the generic estimate
 			if typ == types.T_decimal64 || typ == types.T_decimal128 {
 				return calcSelectivityByMinMaxForDecimal(
 					funcName, minVal, maxVal, expr)
@@ -1324,6 +1337,7 @@ func rangeLiteralAsFloat64(expr *plan.Expr, typ types.T) (float64, bool) {
 	if literal == nil {
 		return 0, false
 	}
+	// typeswitch:partial(decimal) plan literals have no decimal256 form, so there is no decimal256 range literal to read
 	if typ == types.T_decimal64 || typ == types.T_decimal128 {
 		return getDecimalLiteralValue(literal, expr.Typ.Scale)
 	}
@@ -1380,6 +1394,8 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 		w += 8
 	case int32(types.T_decimal128):
 		w += 16
+	case int32(types.T_decimal256):
+		w += 32
 	case int32(types.T_float32), int32(types.T_float64):
 		w += 8
 	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text):

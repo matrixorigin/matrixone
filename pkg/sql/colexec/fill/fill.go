@@ -1434,6 +1434,7 @@ func setDecimal128Value(v, w *vector.Vector, i, j int) error {
 		err   error
 	)
 	targetScale := v.GetType().Scale
+	// typeswitch:partial(decimal) fills a decimal128 target; a decimal256 fill value is reported as an error, not narrowed
 	switch w.GetType().Oid {
 	case types.T_int8:
 		value = types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[int8](w, j)))
@@ -1467,6 +1468,7 @@ func setDecimal128Value(v, w *vector.Vector, i, j int) error {
 	if err != nil {
 		return err
 	}
+	// typeswitch:partial(decimal) fills a decimal128 target; a decimal256 fill value is reported as an error, not narrowed
 	if w.GetType().Oid != types.T_float32 && w.GetType().Oid != types.T_float64 &&
 		w.GetType().Oid != types.T_decimal64 && w.GetType().Oid != types.T_decimal128 {
 		value, err = value.Scale(targetScale)

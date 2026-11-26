@@ -70,6 +70,7 @@ func decimalLiteral(e *plan.Expr) bool {
 	}
 	if l := e.GetLit(); l != nil {
 		oid := types.T(e.Typ.Id)
+		// typeswitch:partial(decimal) a decimal64/decimal128 fast path; decimal256 operands take the general path
 		return !l.Isnull && (oid.IsInteger() || oid == types.T_decimal64 || oid == types.T_decimal128)
 	}
 	f := decimalCall(e, function.CAST)
@@ -163,6 +164,7 @@ func decimalMulSubLiteralValue(planExpr *plan.Expr, executor ExpressionExecutor,
 	}
 	var value int64
 	sourceScale := int32(0)
+	// typeswitch:partial(decimal) a decimal64/decimal128 fast path; it declines decimal256, which takes the general path
 	switch v.GetType().Oid {
 	case types.T_int8:
 		value = int64(vector.GetFixedAtNoTypeCheck[int8](v, 0))

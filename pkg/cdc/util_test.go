@@ -801,13 +801,28 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      vector.NewVec(types.T_decimal256.ToType(), mp),
+				vec:      vector.NewVec(types.T_geometry.ToType(), mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
 			},
 			wantRow: []any{},
 			wantErr: assert.Error,
+		},
+		{
+			args: args{
+				ctx: context.Background(),
+				vec: func() *vector.Vector {
+					v := vector.NewVec(types.New(types.T_decimal256, 50, 2), mp)
+					_ = vector.AppendFixed(v, types.Decimal256{B0_63: 12345}, false, mp)
+					return v
+				}(),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{"123.45"},
+			wantErr: assert.NoError,
 		},
 	}
 

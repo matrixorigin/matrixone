@@ -44,6 +44,7 @@ import (
 // false for variable-width types (varchar/blob/uuid/json…). Used to validate a docmap's
 // per-pk length prefix at load and to guard decodePk's fixed-width reads.
 func fixedPkByteWidth(pkType int32) (int, bool) {
+	// typeswitch:partial(decimal) fulltext2 does not accept decimal256 primary keys (SupportedPrimaryKeyTypes)
 	switch types.T(pkType) {
 	case types.T_int8, types.T_uint8:
 		return 1, true
@@ -62,6 +63,7 @@ func fixedPkByteWidth(pkType int32) (int, bool) {
 }
 
 func encodePk(pkType int32, v any) ([]byte, error) {
+	// typeswitch:partial(decimal) fulltext2 does not accept decimal256 primary keys (SupportedPrimaryKeyTypes)
 	switch types.T(pkType) {
 	case types.T_int64:
 		return packUint64(uint64(v.(int64))), nil
@@ -127,6 +129,7 @@ func decodePk(pkType int32, b []byte) (any, error) {
 	if w, fixed := fixedPkByteWidth(pkType); fixed && len(b) < w {
 		return nil, moerr.NewInternalErrorNoCtxf("fulltext2: corrupt pk: type %d needs %d bytes, got %d", pkType, w, len(b))
 	}
+	// typeswitch:partial(decimal) fulltext2 does not accept decimal256 primary keys (SupportedPrimaryKeyTypes)
 	switch types.T(pkType) {
 	case types.T_int64:
 		return int64(binary.LittleEndian.Uint64(b)), nil

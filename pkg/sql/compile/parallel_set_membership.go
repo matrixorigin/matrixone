@@ -44,6 +44,7 @@ func setMembershipIdentityKeys(node *plan.Node) []int32 {
 		if !proto.Equal(&visibleType, &keyType) {
 			continue
 		}
+		// typeswitch:partial(decimal) only the listed key types qualify; a decimal256 key is not used as an identity key, which is conservative
 		switch types.T(key.Typ.Id) {
 		case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,

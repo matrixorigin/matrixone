@@ -226,7 +226,7 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		buf.WriteString(value)
 	case *plan.Expr_T:
 		tt := types.T(expr.Typ.Id)
-		if tt == types.T_decimal64 || tt == types.T_decimal128 {
+		if tt.IsDecimal() {
 			fmt.Fprintf(buf, "%s(%d, %d))", tt.String(), expr.Typ.Width, expr.Typ.Scale)
 		} else {
 			fmt.Fprintf(buf, "%s)", tt.String())
@@ -571,7 +571,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return err
 		}
 		tt := types.T(Typ.Id)
-		if tt == types.T_decimal64 || tt == types.T_decimal128 {
+		if tt.IsDecimal() {
 			fmt.Fprintf(buf, " AS %s(%d, %d))", tt.String(), Typ.Width, Typ.Scale)
 		} else {
 			fmt.Fprintf(buf, " AS %s)", tt.String())

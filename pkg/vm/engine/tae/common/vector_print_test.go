@@ -79,8 +79,8 @@ func TestMoVectorToStringVariableAndEmpty(t *testing.T) {
 	}
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	unsupported := vector.NewVec(types.T_decimal256.ToType(), mp)
-	defer unsupported.Free(mp)
-	require.NoError(t, vector.AppendFixed(unsupported, types.Decimal256{B0_63: 7}, false, mp))
-	require.Equal(t, "unkown type vec... DECIMAL256", MoVectorToString(unsupported, 10))
+	dec := vector.NewVec(types.T_decimal256.ToType(), mp)
+	defer dec.Free(mp)
+	require.NoError(t, vector.AppendFixed(dec, types.Decimal256{B0_63: 7}, false, mp))
+	require.Equal(t, "[1]: 7", MoVectorToString(dec, 10))
 }

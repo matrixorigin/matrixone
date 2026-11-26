@@ -85,6 +85,7 @@ func bindPreparedDecimalFloatArguments(ctx context.Context, name string, args []
 	}
 	for side, column := range args {
 		if column == nil || column.GetCol() == nil ||
+			// typeswitch:partial(decimal) decimal256 columns keep the generic prepared binding
 			(column.Typ.Id != int32(types.T_decimal64) && column.Typ.Id != int32(types.T_decimal128)) {
 			continue
 		}

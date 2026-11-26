@@ -929,6 +929,7 @@ func getConstantFromBytes(data []byte, typ plan.Type) (*plan.Literal, bool) {
 		}, true
 	}
 
+	// typeswitch:partial(decimal) plan literals have no decimal256 form, so a decimal256 value is not converted to or from a literal here
 	switch oid {
 	case types.T_bool, types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -944,6 +945,7 @@ func getConstantFromBytes(data []byte, typ plan.Type) (*plan.Literal, bool) {
 		return nil, false
 	}
 
+	// typeswitch:partial(decimal) plan literals have no decimal256 form, so a decimal256 value is not converted to or from a literal here
 	switch oid {
 	case types.T_bool:
 		val := types.DecodeBool(data)

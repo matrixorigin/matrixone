@@ -2942,6 +2942,8 @@ func appendCSVUnquotedVecValue(w *bytes.Buffer, typ types.Type, vec *vector.Vect
 		appendDecimal64(w, vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[rowIdx], vec.GetType().Scale)
 	case types.T_decimal128:
 		appendDecimal128(w, vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[rowIdx], vec.GetType().Scale)
+	case types.T_decimal256:
+		appendDecimal256(w, vector.MustFixedColWithTypeCheck[types.Decimal256](vec)[rowIdx], vec.GetType().Scale)
 	case types.T_date:
 		appendDate(w, vector.MustFixedColWithTypeCheck[types.Date](vec)[rowIdx])
 	case types.T_time:
@@ -3051,6 +3053,10 @@ func appendDecimal64(w *bytes.Buffer, value types.Decimal64, scale int32) {
 		w.WriteByte('0')
 	}
 	w.Write(frac)
+}
+
+func appendDecimal256(w *bytes.Buffer, value types.Decimal256, scale int32) {
+	w.WriteString(value.Format(scale))
 }
 
 func appendDecimal128(w *bytes.Buffer, value types.Decimal128, scale int32) {

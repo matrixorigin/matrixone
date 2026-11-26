@@ -70,7 +70,7 @@ func UsableOrderZoneMap(zm objectio.ZoneMap, typ plan.Type, desc bool) bool {
 	if !zm.IsInited() || int32(zm.GetType()) != typ.Id || (desc && zm.MaxTruncated()) {
 		return false
 	}
-	if zm.GetType() == types.T_decimal64 || zm.GetType() == types.T_decimal128 {
+	if zm.GetType().IsDecimal() {
 		return zm.GetScale() == int32(uint8(typ.Scale)&0x3f)
 	}
 	return true

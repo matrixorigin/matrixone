@@ -72,6 +72,7 @@ func candidateScalarFilterSafe(expr *plan.Expr, table *plan.TableDef, rawKey boo
 	column := colDef.Typ
 	kind := types.T(column.Id)
 	bytesDomain := kind == types.T_varchar || kind == types.T_varbinary
+	// typeswitch:partial(decimal) decimal256 keys are not candidates for this filter; it returns false
 	switch kind {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,

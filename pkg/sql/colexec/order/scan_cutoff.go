@@ -31,6 +31,7 @@ import (
 // count is zero, and publication uses the certified-witness rules in Observe,
 // so nullability itself is not an admission constraint there.
 func SupportsScanCutoffType(typ plan.Type) bool {
+	// typeswitch:partial(decimal) decimal256 is not a scan-cutoff type; it returns false and the sort runs without the cutoff
 	switch types.T(typ.Id) {
 	case types.T_bool, types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,

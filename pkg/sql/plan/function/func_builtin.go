@@ -1538,6 +1538,7 @@ func builtInIntervalCheck(_ []overload, inputs []types.Type) checkResult {
 }
 
 func intervalTypeSupported(source types.Type) bool {
+	// typeswitch:partial(decimal) INTERVAL() does not accept decimal256 arguments
 	return source.IsIntOrUint() ||
 		source.IsFloat() ||
 		source.Oid == types.T_decimal64 ||
@@ -1634,12 +1635,15 @@ func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
 	typ := *v.GetType()
 	p := intervalParam{
 		useDecimalCompare: typ.IsIntOrUint() || typ.IsDecimal(),
+		// typeswitch:partial(decimal) INTERVAL() does not accept decimal256 arguments (intervalTypeSupported)
 		canDecimalCompare: typ.IsIntOrUint() || typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128,
 	}
+	// typeswitch:partial(decimal) INTERVAL() does not accept decimal256 arguments (intervalTypeSupported)
 	if typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128 {
 		p.decScale = typ.Scale
 	}
 
+	// typeswitch:partial(decimal) INTERVAL() does not accept decimal256 arguments (intervalTypeSupported)
 	switch typ.Oid {
 	case types.T_float64:
 		fp := vector.GenerateFunctionFixedTypeParameter[float64](v)

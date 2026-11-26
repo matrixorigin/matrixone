@@ -307,6 +307,13 @@ func fillConstantVectorWithPool(
 		}
 		return vector.SetConstFixed(vec, v, rowCount, mp)
 
+	case types.T_decimal256:
+		v, err := types.ParseDecimal256(strVal, col.Typ.Width, col.Typ.Scale)
+		if err != nil {
+			return wrapErr(err)
+		}
+		return vector.SetConstFixed(vec, v, rowCount, mp)
+
 	case types.T_date:
 		v, err := types.ParseDateCast(strVal)
 		if err != nil {

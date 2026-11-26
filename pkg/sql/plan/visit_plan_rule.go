@@ -4683,6 +4683,7 @@ func preparedFixedDecimalCommonType(
 		}
 	}
 	width := max(maxIntegral+scale, int32(1))
+	// typeswitch:partial(decimal) picks the decimal type by width; decimal256 is the default branch
 	switch {
 	case width <= types.T_decimal64.ToType().Width:
 		return types.New(types.T_decimal64, width, scale), true, nil

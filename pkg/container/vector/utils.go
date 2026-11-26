@@ -417,6 +417,7 @@ func typeCompatible[T any](typ types.Type) bool {
 	case types.Decimal64:
 		return typ.Oid == types.T_decimal64
 	case types.Decimal128:
+		// typeswitch:partial(decimal) the Decimal128 Go type matches decimal64 and decimal128 vectors; Decimal256 has its own case
 		return typ.Oid == types.T_decimal128 || typ.Oid == types.T_decimal64
 	case types.Decimal256:
 		return typ.Oid == types.T_decimal256

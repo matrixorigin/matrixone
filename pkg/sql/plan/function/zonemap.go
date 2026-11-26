@@ -136,6 +136,7 @@ func GetZoneMapEvaluation(fn *plan.Function) ZoneMapEvaluation {
 		}
 	case CEIL, FLOOR, ROUND, TRUNCATE:
 		if len(args) == 1 || len(args) == 2 && fixed(1) {
+			// typeswitch:partial(decimal) decimal256 zone maps are not evaluated through this function, which is conservative
 			switch oid(0) {
 			case types.T_int64, types.T_uint64, types.T_float64:
 				return ZoneMapEndpoints

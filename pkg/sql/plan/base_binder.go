@@ -7153,6 +7153,7 @@ func normalizePercentileParam(ctx context.Context, name string, args []*Expr) er
 
 func percentileParamTypeSupported(name string, typ types.Type) bool {
 	if name == NameApproxPercentile {
+		// typeswitch:partial(decimal) approx_percentile does not accept decimal256; it returns false
 		switch typ.Oid {
 		case types.T_int32, types.T_int64, types.T_float32, types.T_float64,
 			types.T_decimal64, types.T_decimal128:
@@ -11997,6 +11998,7 @@ func floatingComparisonConstant(expr *Expr) (float64, bool) {
 		if text := inner.Args[0].GetLit(); text != nil &&
 			text.LiteralForm == plan.StringLiteralForm_STRING_LITERAL_TEXT &&
 			types.T(inner.Args[0].Typ.Id).IsMySQLString() {
+			// typeswitch:partial(decimal) decimal256 sources are not parsed here; the comparison is left as written
 			switch types.T(source.Typ.Id) {
 			case types.T_decimal64:
 				decimal, err := types.ParseDecimal64(text.GetSval(), source.Typ.Width, source.Typ.Scale)
@@ -12043,6 +12045,7 @@ func decimalFloatComparisonHasUniqueValue(value float64, column types.Type) bool
 	if math.IsNaN(value) || math.IsInf(value, 0) || column.Scale < 0 {
 		return false
 	}
+	// typeswitch:partial(decimal) decimal256 columns are not checked; it returns false, which keeps the comparison
 	switch column.Oid {
 	case types.T_decimal64:
 		candidate, err := types.Decimal64FromFloat64(value, column.Width, column.Scale)
@@ -12079,6 +12082,7 @@ func foldFloatComparisonConstants(proc *process.Process, name string, args []*Ex
 			return candidate
 		}
 		oid := types.T(candidate.Typ.Id)
+		// typeswitch:partial(decimal) decimal256 candidates are not folded; the comparison is left as written
 		if (!oid.IsInteger() && !oid.IsFloat() && oid != types.T_decimal64 && oid != types.T_decimal128) ||
 			!staticIntegerComparisonPeer(candidate) {
 			return candidate

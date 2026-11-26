@@ -1384,6 +1384,9 @@ func (top *Top) getTopValue() ([]byte, bool) {
 	case types.T_decimal128:
 		v := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, x)
 		return types.EncodeDecimal128(&v), true
+	case types.T_decimal256:
+		v := vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, x)
+		return types.EncodeDecimal256(&v), true
 	case types.T_enum:
 		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, x)
 		return types.EncodeEnum(&v), true

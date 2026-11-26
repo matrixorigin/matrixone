@@ -207,6 +207,7 @@ func (CatalogHooks) ValidQuantization(quant, op string) error {
 // use ISCP for tail maintenance, so advertising a wider set would let CREATE
 // INDEX succeed and then make maintenance stop on the first non-NULL value.
 func (CatalogHooks) SupportedIncludeColumnTypes() []types.T {
+	// typeswitch:partial(decimal) the INCLUDE column buffer has no decimal256 encoding, so DDL rejects such columns
 	return []types.T{
 		types.T_bool, types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,

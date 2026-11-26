@@ -1516,6 +1516,7 @@ func makeOrderedPercentileExec(mp *mpool.MPool, aggID int64, isDistinct bool, pa
 	} else {
 		info.retType = PercentileDiscReturnType([]types.Type{param})
 	}
+	// typeswitch:partial(decimal) decimal256 takes the default: the generic discrete exec when PercentileDiscSupportedType allows it, an error otherwise
 	switch param.Oid {
 	case types.T_bit:
 		if mode == orderedPercentileContinuous {

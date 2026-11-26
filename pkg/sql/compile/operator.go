@@ -3933,6 +3933,10 @@ func getPercentileConfigValue(vec *vector.Vector, functionName string, allowSing
 		d := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0]
 		p = types.Decimal128ToFloat64(d, vec.GetType().Scale)
 		config = d.Format(vec.GetType().Scale)
+	case types.T_decimal256:
+		d := vector.MustFixedColWithTypeCheck[types.Decimal256](vec)[0]
+		p = types.Decimal256ToFloat64(d, vec.GetType().Scale)
+		config = d.Format(vec.GetType().Scale)
 	default:
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"unsupported percentile type %s for %s", vec.GetType().String(), functionName)

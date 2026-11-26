@@ -2162,6 +2162,7 @@ func insertDecimalLiteralNeedsAdjustment(proc *process.Process, numVal *tree.Num
 	}
 	var canInsert bool
 	var err error
+	// typeswitch:partial(decimal) decimal256 targets are not pre-checked here; the insert cast validates the value
 	switch colType.Oid {
 	case types.T_decimal64:
 		canInsert, _, err = util.SetInsertValueDecimal64(proc, numVal, colType)

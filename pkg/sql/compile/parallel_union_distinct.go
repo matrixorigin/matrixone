@@ -59,6 +59,7 @@ func (c *Compile) parallelUnionDistinct(node *plan.Node, inputs ...[]*Scope) ([]
 		if expr == nil || expr.GetCol() == nil || expr.GetCol().RelPos != 0 || expr.GetCol().ColPos != int32(i) {
 			return nil, 1
 		}
+		// typeswitch:partial(decimal) decimal256 keys are not parallelized; it returns one partition
 		switch types.T(expr.Typ.Id) {
 		case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,

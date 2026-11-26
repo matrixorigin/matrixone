@@ -1044,6 +1044,7 @@ func boundedSlidingRangeFrame(frame *plan.FrameClause, orderVecs []colexec.ExprE
 		return false
 	}
 
+	// typeswitch:partial(decimal) decimal256 order keys are not a bounded sliding frame; it returns false and the general frame is used
 	switch orderVecs[0].Vec[0].GetType().Oid {
 	case types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -3753,6 +3754,7 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 	}
 
 	var right int
+	// typeswitch:partial(decimal) RANGE offsets are plan literals, which have no decimal256 form; such a frame is an error
 	switch vec.GetType().Oid {
 	case types.T_bit:
 		col := vector.MustFixedColNoTypeCheck[uint64](vec)

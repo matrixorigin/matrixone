@@ -2603,6 +2603,7 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 	}
 
 	//TODO: Check if T_array is required here?
+	// typeswitch:partial(decimal) a decimal256 constant or column keeps its cast, which is always correct
 	switch constT.Oid {
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		switch columnT.Oid {
@@ -2713,6 +2714,7 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 
 	case types.T_decimal64, types.T_decimal128:
 		// Allow casting decimal constants to decimal columns only if no precision loss
+		// typeswitch:partial(decimal) a decimal256 constant or column keeps its cast, which is always correct
 		if columnT.Oid == types.T_decimal64 || columnT.Oid == types.T_decimal128 {
 			// Optimization 1: Check if column scale >= constant scale (already handled)
 			if columnT.Scale >= constT.Scale {
@@ -5715,6 +5717,7 @@ func PreparedNumericPrefixTypeFromString(value string) types.Type {
 	}
 
 	w, s := int32(width), int32(scale)
+	// typeswitch:partial(decimal) picks the decimal type by width; decimal256 is the default branch
 	switch {
 	case w <= types.T_decimal64.ToType().Width:
 		return types.New(types.T_decimal64, w, s)
@@ -6099,6 +6102,7 @@ func preparedDecimalTypeForWidth(width, scale int64) (types.Type, bool) {
 		return types.Type{}, false
 	}
 	w, s := int32(width), int32(scale)
+	// typeswitch:partial(decimal) picks the decimal type by width; decimal256 is the default branch
 	switch {
 	case w <= types.T_decimal64.ToType().Width:
 		return types.New(types.T_decimal64, w, s), true
@@ -8778,6 +8782,7 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 		return
 	}
 	can = true
+	// typeswitch:partial(decimal) decimal256 constants report can=false and are not used here, which is conservative
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		val := vector.MustFixedColNoTypeCheck[bool](vec)[row]

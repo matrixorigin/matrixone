@@ -494,6 +494,7 @@ func decimalValue(ctx context.Context, vec *vector.Vector, row int, typ api.Iceb
 		return nil, false, api.NewError(api.ErrUnsupportedFeature, "Iceberg writer decimal precision is unsupported", map[string]string{"type": typ.String()})
 	}
 	scaleDelta := int32(typ.Scale) - vec.GetType().Scale
+	// typeswitch:partial(decimal) Iceberg decimals hold at most 38 digits, so a decimal256 column is a type mismatch
 	switch vec.GetType().Oid {
 	case types.T_decimal64:
 		value := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, row)

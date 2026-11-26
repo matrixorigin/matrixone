@@ -2493,6 +2493,7 @@ func collectNestedFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Exp
 // NOT see through such a cast: a dropped non-matching row (relevance 0) whose wrapped value is not
 // zero would change a SUM/MAX or wrongly satisfy a `> 0` membership predicate.
 func castPreservesZero(t plan.Type) bool {
+	// typeswitch:partial(decimal) decimal256 is not proven to preserve zero; it returns false, which keeps the cast
 	switch types.T(t.Id) {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,

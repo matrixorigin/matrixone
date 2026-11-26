@@ -894,6 +894,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 	if zm.hasNaNBound() {
 		return 0, vec.Length()
 	}
+	// typeswitch:partial(decimal) decimal256 vectors are not searched; it returns the whole vector, which is conservative
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		col := vector.MustFixedColNoTypeCheck[bool](vec)
@@ -1219,6 +1220,7 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 	if zm.hasNaNBound() {
 		return true
 	}
+	// typeswitch:partial(decimal) decimal256 vectors are not searched; it answers true (may contain), which is conservative
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		col := vector.MustFixedColNoTypeCheck[bool](vec)
@@ -1604,6 +1606,7 @@ func checkedArithmeticBounds[T constraints.Integer | constraints.Float](min1, ma
 
 func applyArithmetic(v1, v2, res ZM, op byte, scale1, scale2 int32) (ok bool) {
 	ok = true
+	// typeswitch:partial(decimal) decimal256 has no scaled Add, Sub or Mul; it takes the default, which declines
 	switch v1.GetType() {
 	case types.T_bit:
 		minv, maxv, valid := checkedArithmeticBounds(types.DecodeUint64(v1.GetMinBuf()), types.DecodeUint64(v1.GetMaxBuf()), types.DecodeUint64(v2.GetMinBuf()), types.DecodeUint64(v2.GetMaxBuf()), op, checkedIntegerArithmetic[uint64])
@@ -1808,6 +1811,11 @@ func applyArithmetic(v1, v2, res ZM, op byte, scale1, scale2 int32) (ok bool) {
 		res.SetScale(newScale)
 		UpdateZM(res, types.EncodeDecimal128(&minv))
 		UpdateZM(res, types.EncodeDecimal128(&maxv))
+	default:
+		// No arithmetic for this type (decimal256 has no scaled Add, Sub or
+		// Mul): report that the result zone map cannot be derived, rather
+		// than ok with res never set.
+		return false
 	}
 	return
 }

@@ -314,6 +314,8 @@ func validateLoadTargetType(ctx context.Context, typ types.Type) error {
 		expected = 8
 	case types.T_decimal128:
 		expected = 16
+	case types.T_decimal256:
+		expected = 32
 	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
 		expected = int32(types.VarlenaSize)
 	default:
