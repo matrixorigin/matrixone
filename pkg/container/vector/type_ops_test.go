@@ -60,6 +60,9 @@ func TestTypeOpsRows(t *testing.T) {
 		require.NotNil(t, ops.shrinkByMask, name)
 		require.NotNil(t, ops.shuffle, name)
 		require.NotNil(t, ops.shuffleWithBuf, name)
+		require.NotNil(t, ops.unionAll, name)
+		require.NotNil(t, ops.appendBytes, name)
+		require.NotNil(t, ops.newResult, name)
 		require.Equal(t, r.oid.ToType().IsVarlen(), ops.varlen, "%s: varlen", name)
 
 		// The Go type GetAny returns is the row's element type (or []byte for
@@ -261,6 +264,140 @@ func TestTypeOpsMatchLegacy(t *testing.T) {
 	require.Zero(t, mp.CurrNB(), "vectors leaked")
 }
 
+// TestTypeOpsConstructorsMatchLegacy compares the functions that build a
+// per-type function (union, append-bytes, function result) and the
+// type checks moved onto the table with their switch implementations, for
+// every type id.
+func TestTypeOpsConstructorsMatchLegacy(t *testing.T) {
+	mp := mpool.MustNewZero()
+	rng := rand.New(rand.NewSource(33339))
+	const n = 23
+
+	for i := 0; i < 256; i++ {
+		oid := types.T(i)
+		typ, ok := oid.TryToType()
+		if !ok {
+			typ = types.Type{Oid: oid}
+		}
+		name := fmt.Sprintf("T(%d) %s", i, oid.OidString())
+
+		require.Equal(t, legacyIsVarlenaMarshalType(oid), isVarlenaMarshalType(oid), "%s: isVarlenaMarshalType", name)
+		for _, size := range []int32{typ.Size, typ.Size + 1} {
+			typ2 := typ
+			typ2.Size = size
+			require.Equal(t, outcomeOf(func() error { _, err := legacyCanonicalVectorTypeSize(typ2); return err }),
+				outcomeOf(func() error { _, err := canonicalVectorTypeSize(typ2); return err }), "%s: canonicalVectorTypeSize size %d", name, size)
+		}
+
+		if !vectorTypeOps[oid].supported {
+			for _, c := range []struct {
+				name        string
+				legacy, new func() error
+			}{
+				{"union", func() error { legacyGetUnionAllFunction(typ, mp); return nil }, func() error { getUnionAllFunction(typ, mp); return nil }},
+				{"MakeAppendBytesFunc", func() error { legacyMakeAppendBytesFunc(NewVec(typ, mp)); return nil },
+					func() error { MakeAppendBytesFunc(NewVec(typ, mp)); return nil }},
+				{"NewFunctionResultWrapper", func() error { legacyNewFunctionResultWrapper(typ, mp); return nil },
+					func() error { NewFunctionResultWrapper(typ, mp); return nil }},
+			} {
+				want := outcomeOf(c.legacy)
+				if oid != types.T_any || c.name == "MakeAppendBytesFunc" || c.name == "NewFunctionResultWrapper" {
+					require.Contains(t, want, "panic(", "%s: %s", name, c.name)
+				}
+				require.Equal(t, want, outcomeOf(c.new), "%s: %s", name, c.name)
+			}
+			continue
+		}
+
+		src := randomVector(t, rng, typ, n, mp)
+		// a const source
+		constSrc := NewVec(typ, mp)
+		require.NoError(t, getConstSetFunction(typ, mp)(constSrc, src, firstNonNull(src), 5))
+		constNull := NewConstNull(typ, 4, mp)
+
+		// union: append each kind of source to copies of another vector, whose
+		// area differs from src's, so a varlena copy must move payloads
+		base := randomVector(t, rng, typ, n, mp)
+		for _, w := range []struct {
+			name string
+			vec  *Vector
+		}{{"plain", src}, {"const", constSrc}, {"const null", constNull}} {
+			a, err := base.Dup(mp)
+			require.NoError(t, err)
+			b, err := base.Dup(mp)
+			require.NoError(t, err)
+			require.Equal(t, outcomeOf(func() error { return legacyGetUnionAllFunction(typ, mp)(a, w.vec) }),
+				outcomeOf(func() error { return getUnionAllFunction(typ, mp)(b, w.vec) }), "%s: union %s", name, w.name)
+			requireSameVector(t, a, b, name+": union "+w.name)
+			a.Free(mp)
+			b.Free(mp)
+		}
+
+		// MakeAppendBytesFunc: append every row's raw bytes (and NULLs)
+		a, b := NewVec(typ, mp), NewVec(typ, mp)
+		appendA, appendB := legacyMakeAppendBytesFunc(a), MakeAppendBytesFunc(b)
+		for row := 0; row < n; row++ {
+			null := src.IsNull(uint64(row))
+			raw := append([]byte(nil), src.GetRawBytesAt(row)...)
+			require.Equal(t, outcomeOf(func() error { return appendA(raw, null, mp) }),
+				outcomeOf(func() error { return appendB(raw, null, mp) }), "%s: append bytes row %d", name, row)
+		}
+		requireSameVector(t, a, b, name+": MakeAppendBytesFunc")
+		a.Free(mp)
+		b.Free(mp)
+
+		// NewFunctionResultWrapper: same concrete type, same result vector type
+		ra, rb := legacyNewFunctionResultWrapper(typ, mp), NewFunctionResultWrapper(typ, mp)
+		require.Equal(t, fmt.Sprintf("%T", ra), fmt.Sprintf("%T", rb), "%s: function result", name)
+		require.NoError(t, ra.PreExtendAndReset(1))
+		require.NoError(t, rb.PreExtendAndReset(1))
+		require.Equal(t, *ra.GetResultVector().GetType(), *rb.GetResultVector().GetType(), "%s: function result", name)
+		ra.Free()
+		rb.Free()
+
+		src.Free(mp)
+		constSrc.Free(mp)
+		constNull.Free(mp)
+		base.Free(mp)
+	}
+	require.Zero(t, mp.CurrNB(), "vectors leaked")
+}
+
+// TestConstSetCoversTypeOps ties getConstSetFunction, which stays a switch
+// (its hand-written closures run per row in SetJoinBatchValues, and a generic
+// version measured about 1 ns slower per call), to the table: it must return
+// a function for every supported type id and panic for every other one but
+// T_any, so a type added to the table cannot be missed there.
+func TestConstSetCoversTypeOps(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, oid := range types.AllOids() {
+		typ, ok := oid.TryToType()
+		if !ok {
+			typ = types.Type{Oid: oid}
+		}
+		got := outcomeOf(func() error {
+			if getConstSetFunction(typ, mp) == nil {
+				return fmt.Errorf("nil function")
+			}
+			return nil
+		})
+		if vectorTypeOps[oid].supported || oid == types.T_any {
+			require.Equal(t, "ok", got, oid.OidString())
+		} else {
+			require.Contains(t, got, "panic(unexpect type", oid.OidString())
+		}
+	}
+}
+
+func firstNonNull(v *Vector) int64 {
+	for i := 0; i < v.Length(); i++ {
+		if !v.IsNull(uint64(i)) {
+			return int64(i)
+		}
+	}
+	return 0
+}
+
 // randomSels returns an ascending, duplicate-free random subset of [0, n).
 func randomSels(rng *rand.Rand, n int) []int64 {
 	var sels []int64
@@ -314,5 +451,37 @@ func BenchmarkTypeOpsDispatch(b *testing.B) {
 			}
 		})
 		v.Free(mp)
+	}
+}
+
+// BenchmarkTypeOpsConstructors compares the generic union function with the
+// hand-written per-type closures it replaces.
+func BenchmarkTypeOpsConstructors(b *testing.B) {
+	mp := mpool.MustNewZero()
+	rng := rand.New(rand.NewSource(2))
+	t := &testing.T{}
+	for _, oid := range []types.T{types.T_int32, types.T_date, types.T_decimal128, types.T_varchar} {
+		typ := oid.ToType()
+		src := randomVector(t, rng, typ, 1024, mp)
+		for _, impl := range []struct {
+			name  string
+			union func(types.Type, *mpool.MPool) func(v, w *Vector) error
+		}{
+			{"table", getUnionAllFunction},
+			{"switch", legacyGetUnionAllFunction},
+		} {
+			b.Run(oid.OidString()+"/union/"+impl.name, func(b *testing.B) {
+				dst := NewVec(typ, mp)
+				union := impl.union(typ, mp)
+				for i := 0; i < b.N; i++ {
+					if i%64 == 0 {
+						dst.CleanOnlyData()
+					}
+					_ = union(dst, src)
+				}
+				dst.Free(mp)
+			})
+		}
+		src.Free(mp)
 	}
 }

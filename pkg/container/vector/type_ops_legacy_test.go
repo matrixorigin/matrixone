@@ -554,3 +554,1036 @@ func legacyShuffleWithBufData(v *Vector, sels []int64, buf *[]byte) (err error) 
 
 	return err
 }
+
+func legacyGetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
+	// a more simple and quickly union nsp but not good.
+	unionNsp := func(dst *nulls.Nulls, more *nulls.Nulls, oldLength int, moreLength int) {
+		u64offset := uint64(oldLength)
+		u64Length := uint64(moreLength)
+
+		moreNp := more.GetBitmap()
+		if moreNp == nil || moreNp.IsEmpty() || moreLength == 0 {
+			return
+		}
+
+		for i := u64Length - 1; i != 0; i-- {
+			if moreNp.Contains(i) {
+				dst.Set(i + u64offset)
+			}
+		}
+		if moreNp.Contains(0) {
+			dst.Set(u64offset)
+		}
+	}
+
+	switch typ.Oid {
+	case types.T_any:
+		return func(v, w *Vector) error {
+			if w.length == 0 {
+				return nil
+			}
+			oldLength := v.length
+			if err := extendWithBitmaps(v, w.length, mp, true); err != nil {
+				return err
+			}
+			// SetLength can leave metadata past the visible prefix on a reused
+			// destination. New rows must not inherit those stale NULL bits.
+			if end := v.nsp.Len(); end > int64(oldLength) {
+				nulls.RemoveRange(&v.nsp, uint64(oldLength), uint64(end))
+			}
+			v.nsp.AddRange(uint64(oldLength), uint64(oldLength+w.length))
+			v.setLengthAfterExtend(oldLength + w.length)
+			return nil
+		}
+	case types.T_bool:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[bool](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_bit:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[uint64](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_int8:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[int8](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_int16:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[int16](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_int32:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[int32](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_int64:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[int64](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_uint8:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[uint8](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_float8:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Float8](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_float4:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Float4](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_uint16:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[uint16](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_bf16:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.BF16](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_float16:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Float16](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_uint32:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[uint32](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_uint64:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[uint64](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_float32:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[float32](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_float64:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[float64](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_date:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Date](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_year:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.MoYear](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_datetime:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Datetime](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_time:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Time](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_timestamp:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Timestamp](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_enum:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Enum](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_decimal64:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Decimal64](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_decimal128:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Decimal128](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_decimal256:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, types.Decimal256{}, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Decimal256](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_uuid:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Uuid](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_TS:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.TS](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_Rowid:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Rowid](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			ws := MustFixedColNoTypeCheck[types.Varlena](w)
+			if w.IsConst() {
+				if err := appendMultiBytes(v, ws[0].GetByteSlice(w.area), false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if sz := len(v.area) + len(w.area); sz > cap(v.area) {
+				area, err := v.growArea(mp, sz)
+				if err != nil {
+					return err
+				}
+				v.area = area[:len(v.area)]
+			}
+
+			var err error
+			vs := toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+w.length)
+
+			bm := w.nsp.GetBitmap()
+			if bm != nil && !bm.IsEmpty() {
+				for i := range ws {
+					if bm.Contains(uint64(i)) {
+						vs[v.length] = types.Varlena{}
+						v.nsp.Add(uint64(v.length))
+					} else {
+						err = BuildVarlenaFromVarlena(v, &vs[v.length], &ws[i], &w.area, mp)
+						if err != nil {
+							return err
+						}
+					}
+					v.setLengthAfterExtend(v.length + 1)
+				}
+			} else {
+				for i := range ws {
+					err = BuildVarlenaFromVarlena(v, &vs[v.length], &ws[i], &w.area, mp)
+					if err != nil {
+						return err
+					}
+					v.setLengthAfterExtend(v.length + 1)
+				}
+			}
+			return nil
+		}
+	case types.T_Blockid:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Blockid](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any()); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.setLengthAfterExtend(v.length + w.length)
+			return nil
+		}
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.GetUnionFunction", typ))
+	}
+}
+
+func legacyCanonicalVectorTypeSize(typ types.Type) (int, error) {
+	switch typ.Oid {
+	case types.T_any,
+		types.T_bit,
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
+		types.T_char, types.T_varchar, types.T_json, types.T_uuid,
+		types.T_binary, types.T_varbinary, types.T_enum, types.T_geometry, types.T_geometry32,
+		types.T_blob, types.T_text, types.T_datalink,
+		types.T_TS, types.T_Rowid, types.T_Blockid,
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4:
+	default:
+		return 0, moerr.NewInvalidInputNoCtx("unknown vector type")
+	}
+
+	canonicalSize := typ.Oid.TypeLen()
+	if typ.TypeSize() != canonicalSize {
+		return 0, moerr.NewInvalidInputNoCtx("invalid vector type size")
+	}
+	return canonicalSize, nil
+}
+
+func legacyIsVarlenaMarshalType(oid types.T) bool {
+	switch oid {
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4,
+		types.T_datalink, types.T_geometry, types.T_geometry32:
+		return true
+	default:
+		return false
+	}
+}
+
+func legacyMakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
+	t := vec.GetType()
+	if t.IsVarlen() {
+		return func(v []byte, isNull bool, mp *mpool.MPool) (err error) {
+			return AppendBytes(vec, v, isNull, mp)
+		}
+	}
+	switch t.Oid {
+	case types.T_bool:
+		return appendBytesToFixSized[bool](vec)
+	case types.T_bit:
+		return appendBytesToFixSized[uint64](vec)
+	case types.T_int8:
+		return appendBytesToFixSized[int8](vec)
+	case types.T_int16:
+		return appendBytesToFixSized[int16](vec)
+	case types.T_int32:
+		return appendBytesToFixSized[int32](vec)
+	case types.T_int64:
+		return appendBytesToFixSized[int64](vec)
+	case types.T_uint8:
+		return appendBytesToFixSized[uint8](vec)
+	case types.T_uint16:
+		return appendBytesToFixSized[uint16](vec)
+	case types.T_uint32:
+		return appendBytesToFixSized[uint32](vec)
+	case types.T_uint64:
+		return appendBytesToFixSized[uint64](vec)
+	case types.T_float32:
+		return appendBytesToFixSized[float32](vec)
+	case types.T_float64:
+		return appendBytesToFixSized[float64](vec)
+	case types.T_bf16:
+		return appendBytesToFixSized[types.BF16](vec)
+	case types.T_float16:
+		return appendBytesToFixSized[types.Float16](vec)
+	case types.T_float8:
+		return appendBytesToFixSized[types.Float8](vec)
+	case types.T_float4:
+		return appendBytesToFixSized[types.Float4](vec)
+	case types.T_date:
+		return appendBytesToFixSized[types.Date](vec)
+	case types.T_datetime:
+		return appendBytesToFixSized[types.Datetime](vec)
+	case types.T_time:
+		return appendBytesToFixSized[types.Time](vec)
+	case types.T_timestamp:
+		return appendBytesToFixSized[types.Timestamp](vec)
+	case types.T_enum:
+		return appendBytesToFixSized[types.Enum](vec)
+	case types.T_decimal64:
+		return appendBytesToFixSized[types.Decimal64](vec)
+	case types.T_decimal128:
+		return appendBytesToFixSized[types.Decimal128](vec)
+	case types.T_decimal256:
+		return appendBytesToFixSized[types.Decimal256](vec)
+	case types.T_uuid:
+		return appendBytesToFixSized[types.Uuid](vec)
+	case types.T_TS:
+		return appendBytesToFixSized[types.TS](vec)
+	case types.T_Rowid:
+		return appendBytesToFixSized[types.Rowid](vec)
+	case types.T_Blockid:
+		return appendBytesToFixSized[types.Blockid](vec)
+	case types.T_year:
+		return appendBytesToFixSized[types.MoYear](vec)
+	}
+	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
+}
+
+func legacyNewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
+	if typ.IsVarlen() {
+		return newResultFunc[types.Varlena](typ, mp)
+	}
+
+	switch typ.Oid {
+	case types.T_bool:
+		return newResultFunc[bool](typ, mp)
+	case types.T_bit:
+		return newResultFunc[uint64](typ, mp)
+	case types.T_int8:
+		return newResultFunc[int8](typ, mp)
+	case types.T_int16:
+		return newResultFunc[int16](typ, mp)
+	case types.T_int32:
+		return newResultFunc[int32](typ, mp)
+	case types.T_int64:
+		return newResultFunc[int64](typ, mp)
+	case types.T_uint8:
+		return newResultFunc[uint8](typ, mp)
+	case types.T_uint16:
+		return newResultFunc[uint16](typ, mp)
+	case types.T_uint32:
+		return newResultFunc[uint32](typ, mp)
+	case types.T_uint64:
+		return newResultFunc[uint64](typ, mp)
+	case types.T_float32:
+		return newResultFunc[float32](typ, mp)
+	case types.T_float64:
+		return newResultFunc[float64](typ, mp)
+	case types.T_bf16:
+		return newResultFunc[types.BF16](typ, mp)
+	case types.T_float16:
+		return newResultFunc[types.Float16](typ, mp)
+	case types.T_float8:
+		return newResultFunc[types.Float8](typ, mp)
+	case types.T_float4:
+		return newResultFunc[types.Float4](typ, mp)
+	case types.T_date:
+		return newResultFunc[types.Date](typ, mp)
+	case types.T_year:
+		return newResultFunc[types.MoYear](typ, mp)
+	case types.T_datetime:
+		return newResultFunc[types.Datetime](typ, mp)
+	case types.T_time:
+		return newResultFunc[types.Time](typ, mp)
+	case types.T_timestamp:
+		return newResultFunc[types.Timestamp](typ, mp)
+	case types.T_decimal64:
+		return newResultFunc[types.Decimal64](typ, mp)
+	case types.T_decimal128:
+		return newResultFunc[types.Decimal128](typ, mp)
+	case types.T_decimal256:
+		return newResultFunc[types.Decimal256](typ, mp)
+	case types.T_TS:
+		return newResultFunc[types.TS](typ, mp)
+	case types.T_Rowid:
+		return newResultFunc[types.Rowid](typ, mp)
+	case types.T_Blockid:
+		return newResultFunc[types.Blockid](typ, mp)
+	case types.T_uuid:
+		return newResultFunc[types.Uuid](typ, mp)
+	case types.T_enum:
+		return newResultFunc[types.Enum](typ, mp)
+	}
+	panic(fmt.Sprintf("unexpected type %s for function result", typ))
+}

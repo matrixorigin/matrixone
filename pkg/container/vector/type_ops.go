@@ -42,6 +42,11 @@ type typeOps struct {
 	shrinkByMask   func(v *Vector, sels *bitmap.Bitmap, negate bool, offset uint64)
 	shuffle        func(v *Vector, sels []int64, mp *mpool.MPool) error
 	shuffleWithBuf func(v *Vector, sels []int64, buf *[]byte) error
+
+	// constructors of per-type functions
+	unionAll    func(mp *mpool.MPool) func(v, w *Vector) error              // getUnionAllFunction
+	appendBytes func(vec *Vector) func([]byte, bool, *mpool.MPool) error    // MakeAppendBytesFunc
+	newResult   func(typ types.Type, mp *mpool.MPool) FunctionResultWrapper // NewFunctionResultWrapper
 }
 
 // fixedOps are the operations for a type id whose elements are T.
@@ -58,6 +63,11 @@ func fixedOps[T types.FixedSizeT]() typeOps {
 		shrinkByMask:   shrinkFixedByMask[T],
 		shuffle:        shuffleFixedNoTypeCheck[T],
 		shuffleWithBuf: shuffleFixedNoTypeCheckWithBuf[T],
+		unionAll:       unionAllFixed[T],
+		appendBytes:    appendBytesToFixSized[T],
+		newResult: func(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
+			return newResultFunc[T](typ, mp)
+		},
 	}
 }
 
@@ -79,6 +89,13 @@ func varlenOps() typeOps {
 	ops.appendAny = func(v *Vector, val any, mp *mpool.MPool) error {
 		return appendOneBytes(v, val.([]byte), false, mp)
 	}
+	ops.unionAll = unionAllVarlen
+	ops.appendBytes = func(vec *Vector) func([]byte, bool, *mpool.MPool) error {
+		return func(v []byte, isNull bool, mp *mpool.MPool) error {
+			return AppendBytes(vec, v, isNull, mp)
+		}
+	}
+	// newResult stays newResultFunc[types.Varlena]
 	return ops
 }
 
