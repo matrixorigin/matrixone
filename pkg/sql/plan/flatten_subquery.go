@@ -475,6 +475,17 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	} else {
 		dependent = builder.rangeScalarNeedsDependent(nodeID, subquery, ctx, guarded)
 	}
+	// SCRATCH glm80 (review #6031303617): a scalar subquery consumed by a
+	// registered MERGE clause payload slot takes the existing dependent
+	// admission here, BEFORE the legacy eager hoist, so its evaluation is
+	// demanded per row by the winner-guarded arm instead of running for
+	// every row. The flag lives on the consumer expression's own
+	// BindContext (appendProjectionNode saves/sets/restores it around
+	// exactly one expression), so WHEN slots and nested derived SELECTs can
+	// never inherit it.
+	if subquery.Typ == plan.SubqueryRef_SCALAR && ctx.icebergMergePayloadActive && !dependent {
+		dependent = true
+	}
 	rootZeroDependent := builder.scalarRootZeroNeedsDependent(subquery)
 	if rootZeroDependent {
 		switch builder.zeroScalarPolicy {

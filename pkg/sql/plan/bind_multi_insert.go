@@ -154,10 +154,15 @@ func multiInsertBranches(stmt *tree.MultiInsert) []*multiInsertBranch {
 
 func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *BindContext) error {
 	// Never inherit single-table insert proofs/flags from a previous DML bound
-	// on this builder.
+	// on this builder. Record the multi-insert builder's own DML write
+	// provenance so an explicit radix CAST inside an assignment expression
+	// rides the statement's write conversion (a loose session clips at the
+	// cast's own bound with the established warning; a strict session
+	// rejects) instead of the standalone scalar range rejection.
 	builder.insertInputKeysUnique = false
 	builder.isInsertIgnore = false
 	builder.isODKU = false
+	builder.isBindingDMLWrite = true
 
 	if stmt.Source == nil {
 		return moerr.NewInternalError(builder.GetContext(), "multi-table insert has no source query")

@@ -39,6 +39,14 @@ func buildIcebergUpdatePlan(stmt *tree.Update, ctx CompilerContext, isPrepareStm
 	}
 
 	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, isPrepareStmt, false)
+	// Mirror bindUpdate: this builder owns an UPDATE, so a radix literal
+	// inside an assignment expression rides the statement's own write and
+	// IGNORE policy through the shared assignment conversion instead of the
+	// standalone scalar range rejection. The outer assignment at the bottom
+	// already forwards stmt.Ignore; this records the provenance before any
+	// RHS bind can see it.
+	builder.isBindingDMLWrite = true
+	builder.isUpdateIgnore = stmt.Ignore
 	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
@@ -124,6 +132,13 @@ func buildIcebergDeletePlan(stmt *tree.Delete, ctx CompilerContext, isPrepareStm
 	}
 
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, false)
+	// Mirror bindDelete: this builder owns a DML write, so an explicit radix
+	// CAST inside a DELETE predicate rides the statement's write conversion
+	// policy (a loose session clips at the cast's own bound with the
+	// established warning; a strict session rejects) instead of the
+	// standalone scalar range rejection. DELETE has no statement-ignore bit
+	// in that routing.
+	builder.isBindingDMLWrite = true
 	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {

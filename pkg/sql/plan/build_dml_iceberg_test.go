@@ -19,18 +19,20 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIcebergDeleteBuildsDMLWriteIntent(t *testing.T) {
@@ -93,6 +95,295 @@ func TestIcebergDeleteBuildsDMLWriteIntent(t *testing.T) {
 	if got := projectColPosByName(scan.GetProjectList(), icebergapi.DMLRowOrdinalColumnName); got != rowInputPos {
 		t.Fatalf("row-ordinal metadata projection colpos = %d, want scan input colpos %d", got, rowInputPos)
 	}
+}
+
+// Review #6018431168: the specialized Iceberg DELETE builder must record the
+// statement's own DML write provenance so an explicit radix CAST inside a
+// WHERE predicate rides the write conversion policy when the plan executes:
+// a loose session clips at the cast's own declared bound with exactly one
+// 1264, while a strict statement keeps the typed 20301 rejection.
+func TestIcebergDeleteRadixCastWritePolicy(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["gold_orders"].Cols = append(ctx.tables["gold_orders"].Cols,
+		&planpb.ColDef{
+			Name:    "d",
+			Typ:     planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2, Table: "gold_orders"},
+			Default: &planpb.Default{NullAbility: true},
+		},
+	)
+	proc := ctx.GetProcess()
+	require.NotNil(t, proc, "the Iceberg fixture must bind with a real process")
+	stmt, err := mysql.ParseOne(context.Background(),
+		"delete from gold_orders where d = cast(0x1000 as decimal(4,1))", 1)
+	require.NoError(t, err, "parse the specialized Iceberg DELETE")
+	p, err := buildIcebergDeletePlan(stmt.(*tree.Delete), ctx, false)
+	require.NoError(t, err, "the specialized Iceberg DELETE must plan")
+	query := p.GetQuery()
+	// Locate the whole equality predicate (the filter expr that owns the
+	// radix literal), the cast chain itself, and the column position it
+	// references, so the typed predicate can be executed over row values.
+	var predicateExpr, radixCast *Expr
+	var capPos int32
+	var search func(bucket, e *Expr) bool
+	search = func(bucket, e *Expr) bool {
+		if e == nil {
+			return false
+		}
+		if lit := e.GetLit(); lit != nil && lit.GetSval() == "4096" {
+			predicateExpr = bucket
+			return true
+		}
+		if f := e.GetF(); f != nil {
+			if bucket == nil {
+				bucket = e
+			}
+			for _, arg := range f.Args {
+				if search(bucket, arg) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, node := range query.GetNodes() {
+		for _, predicate := range append(append([]*Expr{}, node.GetFilterList()...), node.GetProjectList()...) {
+			if search(nil, predicate) {
+				break
+			}
+		}
+		if predicateExpr != nil {
+			break
+		}
+	}
+	require.NotNil(t, predicateExpr, "the delete predicate must stay a whole filter expression")
+	require.NotNil(t, predicateExpr.GetF(), "the predicate must stay an executable comparison")
+	// The literal sits at the innermost cast of the assignment chain
+	// (eq -> outer cast_ignore -> inner cast_ignore -> operand), so locate the
+	// cast node by full recursion rather than one level of args.
+	var locate func(e *Expr) *Expr
+	locate = func(e *Expr) *Expr {
+		if e == nil {
+			return nil
+		}
+		if f := e.GetF(); f != nil {
+			for _, subArg := range f.Args {
+				if subArg.GetLit() != nil && subArg.GetLit().GetSval() == "4096" {
+					return e
+				}
+				if found := locate(subArg); found != nil {
+					return found
+				}
+			}
+		}
+		return nil
+	}
+	for _, arg := range predicateExpr.GetF().Args {
+		if col := arg.GetCol(); col != nil {
+			capPos = col.ColPos
+		}
+		if found := locate(arg); found != nil {
+			radixCast = found
+		}
+	}
+	require.NotNil(t, radixCast, "the delete predicate must keep the bound radix cast")
+	require.NotNil(t, radixCast.GetF(), "the cast must stay an executable write-policy cast")
+	require.GreaterOrEqual(t, capPos, int32(0), "the predicate must reference the d column")
+	// executePredicate evaluates the typed whole predicate over decimal rows:
+	// the loose clip keeps the cap-matching row selectable while the
+	// nonmatching rows stay untouched; the strict mode rejects instead.
+	executePredicate := func(mode string, values []types.Decimal64, want []bool) {
+		executor, err := colexec.NewExpressionExecutor(proc, predicateExpr)
+		require.NoError(t, err, "must construct the whole-predicate executor")
+		defer executor.Free()
+		sink := &loadAssignmentWarningSink{}
+		proc.WarningSink = sink
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return mode, nil })
+		input := batch.NewWithSize(int(capPos) + 1)
+		for i := range input.Vecs {
+			if int32(i) == capPos {
+				input.Vecs[i] = vector.NewVec(types.T_decimal64.ToTypeWithScale(2), proc.Mp())
+			} else {
+				input.Vecs[i] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+			}
+		}
+		for _, v := range values {
+			require.NoError(t, vector.AppendFixed[types.Decimal64](input.Vecs[capPos], v, false, proc.Mp()))
+			for i := range input.Vecs {
+				if int32(i) != capPos {
+					require.NoError(t, vector.AppendFixed[int64](input.Vecs[i], 1, false, proc.Mp()))
+				}
+			}
+		}
+		input.SetRowCount(len(values))
+		defer func() {
+			for _, vec := range input.Vecs {
+				vec.Free(proc.Mp())
+			}
+		}()
+		result, evalErr := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, evalErr, "the whole predicate must execute")
+		require.Equal(t, len(want), result.Length(), "one selection per row")
+		require.Equal(t, want, vector.MustFixedColWithTypeCheck[bool](result),
+			"the typed predicate selects exactly the cap-matching rows")
+	}
+	// The loose row-selection oracle: the cap-matching row stays deletable
+	// while the in-range and nonmatching rows are not selected.
+	executePredicate("", []types.Decimal64{99990, 100, 4060}, []bool{true, false, false})
+
+	execute := func(mode string, check func(*vector.Vector, []uint16, error)) {
+		executor, cerr := colexec.NewExpressionExecutor(proc, radixCast)
+		require.NoError(t, cerr, "must construct the predicate cast executor")
+		defer executor.Free()
+		sink := &loadAssignmentWarningSink{}
+		proc.WarningSink = sink
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return mode, nil })
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(types.T_decimal64.ToType(), proc.Mp())
+		require.NoError(t, vector.AppendFixed[types.Decimal64](input.Vecs[0], types.Decimal64(0), false, proc.Mp()))
+		input.SetRowCount(1)
+		defer input.Clean(proc.Mp())
+		result, evalErr := executor.Eval(proc, []*batch.Batch{input}, nil)
+		check(result, sink.codes, evalErr)
+	}
+
+	execute("", func(result *vector.Vector, codes []uint16, err error) {
+		require.NoError(t, err, "the loose predicate cast must execute")
+		require.NotNil(t, result)
+		require.Equal(t, int32(1), result.GetType().Scale, "the cast keeps its own declared scale")
+		require.Equal(t, int32(4), result.GetType().Width, "the cast keeps its own declared width")
+		require.Equal(t, types.Decimal64(9999),
+			vector.GetFixedAtWithTypeCheck[types.Decimal64](result, 0),
+			"the loose predicate clips at the cast's own bound 999.9")
+		require.Equal(t, []uint16{moerr.ER_WARN_DATA_OUT_OF_RANGE}, codes,
+			"the clipped predicate cast reports exactly one 1264")
+	})
+	execute("STRICT_TRANS_TABLES", func(result *vector.Vector, codes []uint16, err error) {
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput),
+			"the strict predicate keeps the typed 20301 rejection, got %v", err)
+		require.Nil(t, result, "a rejected predicate cast produces no value")
+		require.Empty(t, codes, "a typed rejection emits no warning")
+	})
+}
+
+// TestIcebergUpdateRadixCastWritePolicy evaluates the replacement expression
+// built by the specialized Iceberg UPDATE planner. It verifies that the inner
+// DECIMAL cast uses the statement's IGNORE or strict write policy.
+func TestIcebergUpdateRadixCastWritePolicy(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["gold_orders"].Cols = append(ctx.tables["gold_orders"].Cols,
+		&planpb.ColDef{
+			Name:    "d",
+			Typ:     planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2, Table: "gold_orders"},
+			Default: &planpb.Default{NullAbility: true},
+		},
+	)
+	proc := ctx.GetProcess()
+	require.NotNil(t, proc, "the Iceberg fixture must bind with a real process")
+
+	build := func(sql string) *Expr {
+		p, err := buildIcebergTestPlan(t, ctx, sql)
+		require.NoError(t, err, "BuildPlan must accept the specialized Iceberg UPDATE")
+		query := p.GetQuery()
+		require.Equal(t, planpb.Query_UPDATE, query.GetStmtType())
+		var sink *planpb.Node
+		for _, node := range query.GetNodes() {
+			if node.GetExtraOptions() == icebergapi.DMLUpdatePlanExtraOptions {
+				sink = node
+			}
+		}
+		require.NotNil(t, sink, "expected the Iceberg UPDATE DML sink")
+		replacement := icebergDMLSinkChildProject(t, query, sink)
+		idx := -1
+		for i, col := range sink.GetTableDef().GetCols() {
+			if col.GetName() == "d" {
+				idx = i
+			}
+		}
+		require.GreaterOrEqual(t, idx, 0, "the d column must exist on the sink table def")
+		require.Greater(t, len(replacement.GetProjectList()), idx,
+			"the replacement project must carry the d assignment")
+		assignment := replacement.GetProjectList()[idx]
+		require.Equal(t, int32(10), assignment.GetTyp().Width,
+			"the planned assignment targets the column's declared width")
+		require.Equal(t, int32(2), assignment.GetTyp().Scale,
+			"the planned assignment targets the column's declared scale")
+		return assignment
+	}
+	// The planned replacement expression evaluates through the real expression
+	// executor under the named-load assignment reference lifecycle: the
+	// statement's IGNORE policy clips at the CAST's own declared bound and
+	// reports exactly one MySQL 1264, while the strict statement keeps the
+	// typed 20301 rejection with no value. In-range radix and numeric
+	// controls evaluate their exact values without any warning.
+	execute := func(expr *Expr, mode string, check func(*vector.Vector, []uint16, error)) {
+		executor, err := colexec.NewExpressionExecutor(proc, expr)
+		require.NoError(t, err, "must construct the replacement expression executor")
+		defer executor.Free()
+		sink := &loadAssignmentWarningSink{}
+		proc.WarningSink = sink
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return mode, nil })
+		// Evaluate against one deterministic replacement-row input: the
+		// executor and the row stay alive through the caller's assertions.
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(types.T_decimal64.ToType(), proc.Mp())
+		require.NoError(t, vector.AppendFixed[types.Decimal64](input.Vecs[0], types.Decimal64(0), false, proc.Mp()))
+		input.SetRowCount(1)
+		defer input.Clean(proc.Mp())
+		result, evalErr := executor.Eval(proc, []*batch.Batch{input}, nil)
+		check(result, sink.codes, evalErr)
+	}
+	requireOneDecimalRow := func(result *vector.Vector, want types.Decimal64, message string) {
+		require.NotNil(t, result, "%s: the evaluation must return a value", message)
+		require.Equal(t, types.T_decimal64, result.GetType().Oid, "%s: one DECIMAL64 row", message)
+		require.Equal(t, int32(2), result.GetType().Scale, "%s: the column's declared scale", message)
+		require.Equal(t, 1, result.Length(), "%s: exactly one replacement row", message)
+		require.False(t, result.IsNull(0), "%s: the replacement row must be non-null", message)
+		require.Equal(t, want, vector.GetFixedAtWithTypeCheck[types.Decimal64](result, 0),
+			"%s: the evaluated row value", message)
+	}
+
+	// IGNORE: even under a strict session the statement policy clips the
+	// inner Decimal(4,1) to 999.9 and the column assignment evaluates 999.90,
+	// reporting exactly one 1264.
+	proc.GetSessionInfo().SqlMode = "STRICT_TRANS_TABLES"
+	ignoreExpr := build("update ignore gold_orders set d = cast(0x1000 as decimal(4,1)) where id = 1")
+	execute(ignoreExpr, "STRICT_TRANS_TABLES", func(result *vector.Vector, codes []uint16, err error) {
+		require.NoError(t, err, "the IGNORE replacement expression must evaluate")
+		requireOneDecimalRow(result, types.Decimal64(99990),
+			"the clipped IGNORE assignment evaluates 999.90")
+		require.Equal(t, []uint16{moerr.ER_WARN_DATA_OUT_OF_RANGE}, codes,
+			"the clipped assignment reports exactly one 1264")
+	})
+
+	// Strict statement: the same chain rejects at the cast's own bound with
+	// the typed error and produces no row.
+	strictExpr := build("update gold_orders set d = cast(0x1000 as decimal(4,1)) where id = 1")
+	execute(strictExpr, "STRICT_TRANS_TABLES", func(result *vector.Vector, codes []uint16, err error) {
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput),
+			"the strict statement keeps the typed 20301 rejection at the cast's own bound, got %v", err)
+		require.Nil(t, result, "a rejected strict replacement produces no value")
+		require.Empty(t, codes, "a typed rejection emits no warning")
+	})
+
+	// In-range radix control: the magnitude 4096 reaches the column exactly as
+	// 4096.00 with no warning.
+	inRangeExpr := build("update gold_orders set d = cast(0x1000 as decimal(10,2)) where id = 1")
+	execute(inRangeExpr, "STRICT_TRANS_TABLES", func(result *vector.Vector, codes []uint16, err error) {
+		require.NoError(t, err)
+		requireOneDecimalRow(result, types.Decimal64(409600),
+			"an in-range radix magnitude evaluates its exact value")
+		require.Empty(t, codes, "an in-range radix assignment reports no warning")
+	})
+
+	// In-range numeric control: 4096 fits Decimal(5,1) exactly and reaches the
+	// column as 4096.00 with no warning.
+	numericExpr := build("update gold_orders set d = cast(4096 as decimal(5,1)) where id = 1")
+	execute(numericExpr, "STRICT_TRANS_TABLES", func(result *vector.Vector, codes []uint16, err error) {
+		require.NoError(t, err)
+		requireOneDecimalRow(result, types.Decimal64(409600),
+			"an ordinary in-range numeric control evaluates its exact value")
+		require.Empty(t, codes, "an in-range numeric assignment reports no warning")
+	})
 }
 
 func TestIcebergUpdateBuildsDMLWriteIntent(t *testing.T) {
@@ -318,6 +609,193 @@ func TestIcebergUpdateRewritesDMLScanFilterColumnPositions(t *testing.T) {
 	if got := filterColPosByName(scan.GetFilterList(), "payment_type"); got != paymentTypeIdx {
 		t.Fatalf("payment_type filter colpos = %d, want %d; filters=%+v scan cols=%+v",
 			got, paymentTypeIdx, scan.GetFilterList(), scan.GetTableDef().GetCols())
+	}
+}
+
+func TestIcebergMergeRadixCastWritePolicy(t *testing.T) {
+	// A fresh fixture per discriminating statement: the MERGE metadata
+	// rewrite annotates the target's table definition during BuildPlan, so
+	// each action type builds on its own compiler context.
+	newCtx := func() CompilerContext {
+		ctx := newIcebergTestCompilerContext(t, nil)
+		ctx.tables["gold_orders"].Cols = append(ctx.tables["gold_orders"].Cols,
+			&planpb.ColDef{
+				Name:    "d",
+				Typ:     planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2, Table: "gold_orders"},
+				Default: &planpb.Default{NullAbility: true},
+			})
+		return ctx
+	}
+	// The MERGE rewrite routes the action expressions through the query's
+	// projection chain including the write-policy assignment casts: the
+	// matched UPDATE's SET and the not-matched INSERT's value each carry the
+	// radix cast through the statement's write conversion, so a loose session
+	// clips at the cast's own bound with exactly one 1264 while a strict
+	// session keeps the typed rejection.
+	runCase := func(sql, name string, perScale map[int32]types.Decimal64, inRange bool) {
+		ctx := newCtx()
+		proc := ctx.GetProcess()
+		require.NotNil(t, proc, "the Iceberg fixture must bind with a real process")
+		p, err := buildIcebergTestPlan(t, ctx, sql)
+		require.NoError(t, err, "BuildPlan must accept the specialized Iceberg MERGE for the %s action", name)
+		query := p.GetQuery()
+		require.Equal(t, planpb.Query_MERGE, query.GetStmtType())
+		var sink *planpb.Node
+		for _, node := range query.GetNodes() {
+			if node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+				sink = node
+			}
+		}
+		require.NotNil(t, sink, "expected the Iceberg MERGE DML sink")
+		require.NotEmpty(t, sink.GetChildren(), "the MERGE sink must have a rewritten child")
+		var found *Expr
+		if inRange {
+			// An in-range radix cast inside a MERGE action folds to the
+			// non-null constant the write conversion produces, so locate the
+			// folded Decimal(10,2) literal carrying 4096.00.
+			isFoldedInRange := func(e *Expr) bool {
+				if e == nil {
+					return false
+				}
+				lit := e.GetLit()
+				return lit != nil &&
+					e.Typ.Id == int32(types.T_decimal64) &&
+					e.Typ.Width == 10 &&
+					e.Typ.Scale == 2 &&
+					lit.GetDecimal64Val().GetA() == int64(409600)
+			}
+		outerFold:
+			for _, node := range query.GetNodes() {
+				for _, expr := range node.GetProjectList() {
+					if isFoldedInRange(expr) {
+						found = expr
+						break outerFold
+					}
+				}
+				for _, expr := range node.GetFilterList() {
+					if isFoldedInRange(expr) {
+						found = expr
+						break outerFold
+					}
+				}
+			}
+		} else {
+			var collect func(e *Expr) *Expr
+			collect = func(e *Expr) *Expr {
+				if e == nil {
+					return nil
+				}
+				if f := e.GetF(); f != nil {
+					for _, arg := range f.Args {
+						if lit := arg.GetLit(); lit != nil && lit.GetSval() == "4096" {
+							return e
+						}
+					}
+					for _, arg := range f.Args {
+						if got := collect(arg); got != nil {
+							return got
+						}
+					}
+				}
+				return nil
+			}
+		outer:
+			for _, node := range query.GetNodes() {
+				for _, expr := range node.GetProjectList() {
+					if got := collect(expr); got != nil {
+						found = got
+						break outer
+					}
+				}
+				for _, expr := range node.GetFilterList() {
+					if got := collect(expr); got != nil {
+						found = got
+						break outer
+					}
+				}
+			}
+		}
+		require.NotNil(t, found, "the discriminating MERGE %s action must carry the radix cast", name)
+		execute := func(mode string, check func(*vector.Vector, []uint16, error)) {
+			executor, err := colexec.NewExpressionExecutor(proc, found)
+			require.NoError(t, err, "must construct the MERGE %s action executor", name)
+			defer executor.Free()
+			sink := &loadAssignmentWarningSink{}
+			proc.WarningSink = sink
+			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return mode, nil })
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(types.T_decimal64.ToType(), proc.Mp())
+			require.NoError(t, vector.AppendFixed[types.Decimal64](input.Vecs[0], types.Decimal64(0), false, proc.Mp()))
+			input.SetRowCount(1)
+			defer input.Clean(proc.Mp())
+			result, evalErr := executor.Eval(proc, []*batch.Batch{input}, nil)
+			check(result, sink.codes, evalErr)
+		}
+		checkRow := func(result *vector.Vector, message string) {
+			require.NotNil(t, result, "%s: the evaluation must return a value", message)
+			require.Equal(t, types.T_decimal64, result.GetType().Oid, "%s: one DECIMAL64 row", message)
+			require.Equal(t, 1, result.Length(), "%s: exactly one action row", message)
+			require.False(t, result.IsNull(0), "%s: the action row must be non-null", message)
+			scale := result.GetType().Scale
+			want, ok := perScale[scale]
+			require.True(t, ok, "%s: unexpected action result scale %d", message, scale)
+			require.Equal(t, want, vector.GetFixedAtWithTypeCheck[types.Decimal64](result, 0),
+				"%s: the evaluated action row value at scale %d", message, scale)
+		}
+		execute("", func(result *vector.Vector, codes []uint16, err error) {
+			require.NoError(t, err, "the loose %s action must evaluate", name)
+			checkRow(result, "the loose "+name+" action value")
+			if inRange {
+				require.Empty(t, codes, "an in-range %s action reports no warning", name)
+			} else {
+				require.Equal(t, []uint16{moerr.ER_WARN_DATA_OUT_OF_RANGE}, codes,
+					"the loose %s action reports exactly one 1264", name)
+			}
+		})
+		execute("STRICT_TRANS_TABLES", func(result *vector.Vector, codes []uint16, err error) {
+			if inRange {
+				require.NoError(t, err, "the strict in-range %s action must evaluate", name)
+				checkRow(result, "the strict in-range "+name+" action value")
+				require.Empty(t, codes, "an in-range strict %s action reports no warning", name)
+				return
+			}
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput),
+				"the strict %s action keeps the typed 20301 rejection at the cast's own bound, got %v", name, err)
+			require.Nil(t, result, "a rejected strict %s action produces no value", name)
+			require.Empty(t, codes, "a typed rejection emits no warning")
+		})
+		execute("", func(result *vector.Vector, codes []uint16, err error) {
+			require.NoError(t, err, "the loose %s action must evaluate again", name)
+			checkRow(result, "the loose "+name+" action value after the strict control")
+		})
+	}
+	clipScale := map[int32]types.Decimal64{1: 9999, 2: 99990}
+	inRangeScale := map[int32]types.Decimal64{1: 40960, 2: 409600}
+	looseStmts := []struct {
+		name, sql string
+	}{
+		{"matched update set", "merge into gold_orders as t using dim_orders as s on t.id = s.id " +
+			"when matched then update set d = cast(0x1000 as decimal(4,1)) " +
+			"when not matched then insert (id) values (s.id)"},
+		{"not matched insert value", "merge into gold_orders as t using dim_orders as s on t.id = s.id " +
+			"when matched then update set id = s.id " +
+			"when not matched then insert (id, d) values (s.id, cast(0x1000 as decimal(4,1)))"},
+	}
+	for _, stmtCase := range looseStmts {
+		runCase(stmtCase.sql, stmtCase.name, clipScale, false)
+	}
+	inRangeStmts := []struct {
+		name, sql string
+	}{
+		{"matched update set in-range", "merge into gold_orders as t using dim_orders as s on t.id = s.id " +
+			"when matched then update set d = cast(0x1000 as decimal(10,2)) " +
+			"when not matched then insert (id) values (s.id)"},
+		{"not matched insert value in-range", "merge into gold_orders as t using dim_orders as s on t.id = s.id " +
+			"when matched then update set id = s.id " +
+			"when not matched then insert (id, d) values (s.id, cast(0x1000 as decimal(10,2)))"},
+	}
+	for _, stmtCase := range inRangeStmts {
+		runCase(stmtCase.sql, stmtCase.name, inRangeScale, true)
 	}
 }
 

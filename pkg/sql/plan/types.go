@@ -395,6 +395,7 @@ type updateTargetScope struct {
 }
 
 type QueryBuilder struct {
+
 	// mixedDomainCoalesce is set when the statement binds a binary-typed
 	// COALESCE that can return a text value; see coalesce_text_domain.go.
 	mixedDomainCoalesce bool
@@ -575,9 +576,15 @@ type QueryBuilder struct {
 	isRestore             bool
 	isRestoreByTs         bool
 	skipStats             bool
-	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
-	isODKU                bool             // INSERT ... ON DUPLICATE KEY UPDATE: retain action provenance
-	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	isInsertIgnore        bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	isUpdateIgnore        bool // UPDATE IGNORE: assignment conversions keep the statement's ignore policy
+	// isBindingDMLWrite records that the statement this QueryBuilder owns is
+	// an INSERT/REPLACE/UPDATE write. It is the statement-kind provenance for
+	// shared expression binding, independent of any process profile, so a
+	// PREPARE building the same write plan routes conversions identically.
+	isBindingDMLWrite bool
+	isODKU            bool             // INSERT ... ON DUPLICATE KEY UPDATE: retain action provenance
+	deleteNode        map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// Ordinary LOAD validates real primary keys while retaining the bulk-write plan.
 	checkLoadPrimaryKey bool
@@ -932,7 +939,12 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
-	builder *QueryBuilder
+	// SCRATCH glm80 (review #6031303617): MERGE clause-payload slot
+	// registration OWNED BY THIS BIND CONTEXT (the merge select itself), and
+	// a per-expression active flag set only around one expression's flatten.
+	icebergMergePayloadSlots  map[int]bool
+	icebergMergePayloadActive bool
+	builder                   *QueryBuilder
 	// Internal UPDATE/DELETE target projections need the persisted value for
 	// old secondary-index keys. The user predicate in the same SELECT still
 	// observes the session's virtual-column value.
@@ -971,6 +983,13 @@ type BindContext struct {
 	// View. It lets transparent derived/CTE query boundaries expose their raw
 	// ENUM/SET values without changing ordinary query-boundary behavior.
 	restoreViewMySQLSpecialTypes bool
+	// persistedBodyCompatibility marks a BindContext that is rebinding
+	// persisted SQL text (a stored SQL UDF body). It rides the same
+	// child-context inheritance as restoreViewMySQLSpecialTypes so a
+	// subquery-shaped body binds every nested expression through the
+	// historical persisted semantics; the radix literal gate honors it
+	// exactly like the binder-scoped persistedFormatCompatibility.
+	persistedBodyCompatibility bool
 	// mysqlSpecialRawProjectPositions maps a visible output position to a hidden
 	// raw ENUM/SET sidecar in the query block's PROJECT. It is populated only
 	// for row-preserving View ORDER BY boundaries.

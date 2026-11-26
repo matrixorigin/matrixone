@@ -411,6 +411,12 @@ type VarScopeKey struct{}
 type VarScopeTypeKey struct{}
 
 // Determine if it is a stored procedure
+// SavedSpBodyKey marks static saved procedure-body statements: their SQL
+// text was persisted by an earlier release, so plan binding must keep the
+// historical persisted semantics for syntax-owned radix literals. Only the
+// procedure interpreter's saved-statement executor attaches it.
+type SavedSpBodyKey struct{}
+
 type InSp struct{}
 
 // IvfMembershipFilter carries doc_id membership-filter bytes (tagged docfilter

@@ -221,6 +221,108 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
+		if types.T(typ.Id).IsDecimal() && !b.persistedFormatCompatibility &&
+			!(b.ctx != nil && b.ctx.restoreViewMySQLSpecialTypes) &&
+			!(b.ctx != nil && b.ctx.persistedBodyCompatibility) &&
+			b.GetContext().Value(defines.SavedSpBodyKey{}) == nil {
+			// #31816: an explicit CAST is the same keyword boundary a direct
+			// assignment is, so a syntax-owned HEX/BIT literal operand has
+			// MySQL's unsigned integer value here too. Bind its bounded
+			// magnitude once through the radix normalization VALUES already
+			// use; the DECIMAL cast then applies its own scale, precision
+			// and range policy to the numeric value instead of routing the
+			// literal bytes into the shared coefficient decode. Range
+			// policy is route-specific, as the issue's witness pins on this
+			// tree: an over-wide magnitude is rejected here by this bound's
+			// own conversion diagnostic, computed at bind time before any
+			// session mode is consulted, while ordinary non-literalized
+			// numeric inputs keep the engine's existing clamp-plus-warning
+			// policy in each checked mode (that policy is upstream-owned
+			// and untouched).
+			//
+			// Persisted-expression and stored-view routes are deliberately
+			// out of scope: bindPersistedExpr (pkg/sql/plan/
+			// persisted_format.go) sets persistedFormatCompatibility while
+			// binding DEFAULT, ON UPDATE, generated, CHECK, functional-index
+			// and table-dump definitions, and a stored view's rebind carries
+			// its BindContext's restoreViewMySQLSpecialTypes. That flag is the
+			// persisted-view routing mark: view expansion sets it directly and
+			// the view-schema memo and select-building callers carry it
+			// (build/bindCtx wiring), with child contexts inheriting it. Both
+			// routes keep the historical coefficient binding so that a
+			// valid schema of any authoring era - including definitions
+			// published by prepatch planner builds, and stored views
+			// created before this change such as the released
+			// SELECT CAST(X'41' AS DECIMAL(4,4)) - rebinds to the same
+			// bound tree and keeps serving its recorded values; the
+			// frontend's export (pkg/frontend/table_dump.go:1306) and
+			// restored-dump verification (:1744) then accept genuine old
+			// schemas, while the dump analysis itself still rejects
+			// mismatched or corrupted manifests. The operand must itself
+			// be the radix literal (transparent parentheses are
+			// unwrapped), so opaque binary sources, columns, parameters,
+			// stored expressions and every non-DECIMAL target keep their
+			// existing binding unchanged.
+			if src := decimalRadixAssignmentSource(exprImpl.Expr); src != nil {
+				// Normalize only the radix operand's magnitude. The explicit
+				// CAST keeps its own declared precision and scale: a magnitude
+				// that fits the declared (w,s) binds to a typed decimal
+				// constant carrying the cast's target type - a folded constant
+				// carries the declared type, not a syntax flag - so every
+				// consumer, projected destination column, intervening function
+				// or DML write, sees the exact typed value.
+				digits := src.GetLit().GetSval()
+				switch types.T(typ.Id) {
+				case types.T_decimal64, types.T_decimal128:
+					// The magnitude is unsigned integer digits, so it fits the
+					// declared precision exactly when its digit count fits the
+					// integer-digit budget width - scale.
+					if int32(len(digits)) <= typ.Width-typ.Scale {
+						if types.T(typ.Id) == types.T_decimal64 {
+							if d, perr := types.ParseDecimal64(digits, typ.Width, typ.Scale); perr == nil {
+								expr = MakePlan2Decimal64ExprWithType(d, &typ)
+								// A folded magnitude constant can never be
+								// NULL: keep NOT NULL metadata for inquiry
+								// results and CTAS columns, matching the
+								// ordinary literal cast convention.
+								expr.Typ.NotNullable = true
+								return
+							}
+						} else if d, perr := types.ParseDecimal128(digits, typ.Width, typ.Scale); perr == nil {
+							expr = MakePlan2Decimal128ExprWithType(d, &typ)
+							expr.Typ.NotNullable = true
+							return
+						}
+					}
+				}
+				// An overflowing magnitude in a DML write stays under the
+				// existing assignment-aware conversion owner: the same
+				// ignore/strict-aware cast the radix VALUES route uses
+				// (forceAssignmentCastExprWithProcess) enforces this cast's
+				// own declared bounds with the statement's write policy -
+				// strict DML rejects atomically, INSERT IGNORE and loose
+				// sessions keep the established single out-of-range warning
+				// and the clipped value. Outside DML a standalone query keeps
+				// the typed overflow rejection over the magnitude operand.
+				if b.builder != nil && b.builder.isBindingDMLWrite && b.builder.compCtx != nil {
+					if proc := b.builder.compCtx.GetProcess(); proc != nil {
+						// The statement actually being bound is a write
+						// (bindInsert/bindUpdate forward paths record the
+						// kind on the builder, also when PREPARE builds the
+						// same write plan), so this cast rides the write's
+						// own conversion policy instead of the outer process
+						// profile. Statement-ignore provenance: INSERT IGNORE
+						// and UPDATE IGNORE each record their own bit.
+						statementIgnore := b.builder.isInsertIgnore || b.builder.isUpdateIgnore
+						expr, err = forceAssignmentCastExprWithProcess(
+							b.GetContext(), src, typ, statementIgnore, proc)
+						return
+					}
+				}
+				expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), src, typ)
+				return
+			}
+		}
 		if castType, ok := exprImpl.Type.(*tree.T); ok && castType.InternalType.CastCharsetSpecified {
 			// Reuse the existing CONVERT USING charset owner for conversion and
 			// result metadata, then use the explicit CAST overload to enforce the
@@ -6239,6 +6341,23 @@ func bindFuncExprImplUdf(
 				return nil, moerr.NewNotSupported(b.GetContext(),
 					"SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery")
 			}
+		}
+		// The saved SQL body is persisted catalog text, exactly like a
+		// stored DEFAULT or view: it was authored against the pre-upgrade
+		// binding, so a syntax-owned HEX/BIT literal inside it must keep the
+		// historical persisted-coefficient binding instead of the new
+		// magnitude route. The compatibility is scoped to the radix-literal
+		// gate through the bind-context mark only: setting the binder-level
+		// persisted format compatibility here would also redirect unrelated
+		// saved-body functions such as FORMAT to their legacy overloads. The
+		// call-site argument expressions are already bound normally above,
+		// and the mark is restored on every exit so nested UDF calls and
+		// later callers never see a stale flag.
+		var previousCtxMode bool
+		if b.ctx != nil {
+			previousCtxMode = b.ctx.persistedBodyCompatibility
+			b.ctx.persistedBodyCompatibility = true
+			defer func() { b.ctx.persistedBodyCompatibility = previousCtxMode }()
 		}
 		if expressionBody {
 			expr, err := b.impl.BindExpr(bodyExpr, depth, false)

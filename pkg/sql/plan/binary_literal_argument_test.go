@@ -35,8 +35,10 @@ func TestBinaryLiteralNumericContextThroughPlanner(t *testing.T) {
 	}{
 		{"select 0x41 + 0, '5' + 0", []string{"65", "5"}},
 		{"select cast(X'41' as signed), cast(0x41 as unsigned)", []string{"65", "65"}},
-		// Binary bytes decode as the unscaled decimal value (0x3135 = 12597).
-		{"select cast(X'3135' as decimal(10, 2)), cast('15' as decimal(10, 2))", []string{"125.97", "15.00"}},
+		// The explicit CAST applies its scale to the unsigned integer
+		// magnitude (#31816): 0x3135 is the number 12597, so decimal(10,2)
+		// renders 12597.00 while the quoted text control stays 15.00.
+		{"select cast(X'3135' as decimal(10, 2)), cast('15' as decimal(10, 2))", []string{"12597.00", "15.00"}},
 		{"select cast(0x41 as double), cast(b'01000001' as double)", []string{"65", "65"}},
 		{"select cast(concat(0x3135) as signed), 0x3135 + 0", []string{"15", "12597"}},
 		// x'30' is 48 as a number but '0' as text.

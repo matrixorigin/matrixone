@@ -92,6 +92,13 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// INSERT IGNORE is a statement-level conversion policy and may coexist with
 	// an executable ODKU assignment list.
 	builder.isInsertIgnore = stmt.IsIgnore()
+	// This fallback is itself an INSERT write: the statement's write
+	// conversion policy must apply before any value or ODKU assignment
+	// expression binds (the no-unique-key ODKU route rides the same owner),
+	// so a radix literal keeps the established loose clip-with-warning and
+	// strict typed rejection instead of the scalar query semantics. The
+	// ignore provenance above stays the route's own statement-level policy.
+	builder.isBindingDMLWrite = true
 	if stmt.IsRestore {
 		builder.isRestore = true
 		if stmt.IsRestoreByTs {

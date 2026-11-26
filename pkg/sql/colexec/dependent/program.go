@@ -28,7 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -70,6 +73,12 @@ type Template struct {
 	mainRoots   []int32
 	query       *plan.Query
 	regions     []regionTemplate
+	// scalarShareEligible is IMMUTABLE per-occurrence metadata built once at
+	// Compile: only a guarded MERGE clause-payload call (StageId mark) whose
+	// capture-free SCALAR program subtree passes the conservative audit -
+	// no nested dependent calls, no volatile/real-time overloads, same-type
+	// casts only - may be memoized per Execution.
+	scalarShareEligible map[uint32]bool
 }
 
 // Compile binds all scalar instructions and source factories once. Instancing
@@ -85,6 +94,8 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 	// call observes existence; a value consumer keeps the original template.
 	uses := make([]uint8, len(query.Correlation.Programs)+1)
 	comparisons := make(map[uint32]*colexec.DependentExpressionProgram)
+	scalarShareEligible := make(map[uint32]bool)
+	guardedOccurrences := icebergMergeGuardedPayloadOccurrences(query)
 	if err := plan.WalkQueryNodes(query, func(_ int32, n *plan.Node) error {
 		return plan.VisitExpressionsInOwner(n, func(e *plan.Expr) error {
 			return plan.VisitExprTree(e, func(e *plan.Expr) error {
@@ -101,6 +112,10 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 					} else {
 						uses[call.ProgramId] |= 2
 					}
+					if captureFreeScalarCall(call) && guardedOccurrences[call.OccurrenceId] &&
+						auditShareEligibleProgram(query, call.ProgramId) {
+						scalarShareEligible[call.OccurrenceId] = true
+					}
 				}
 				return nil
 			})
@@ -108,7 +123,8 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 	}); err != nil {
 		return nil, err
 	}
-	t := &Template{comparisons: comparisons, query: query, regions: make([]regionTemplate, len(query.Correlation.Programs)+1)}
+	t := &Template{
+		scalarShareEligible: scalarShareEligible, comparisons: comparisons, query: query, regions: make([]regionTemplate, len(query.Correlation.Programs)+1)}
 	if query.StmtType != plan.Query_SELECT {
 		for step, root := range query.Steps {
 			if query.Correlation.StepOwners[step] == 0 && int32(step) != query.MainOutputStep() && query.Nodes[root].NodeType != plan.Node_SINK {
@@ -313,7 +329,43 @@ type Execution struct {
 	allocation   *mpool.MPool
 	main         *region
 	account      *mpool.AllocationAccount
+	// scalarShares memoizes the finalized result of an eligible capture-free
+	// scalar occurrence's FIRST winning row so later winning rows of the SAME
+	// occurrence inside THIS Execution reuse it instead of opening and
+	// re-evaluating the inner relation. The owner is this per-statement
+	// Execution - never the reusable Template - so no value crosses a
+	// statement, snapshot or execution boundary. Eligibility requires the
+	// precise guarded-MERGE-payload StageId mark, the plan's own capture-free
+	// provenance and the template's immutable per-occurrence audit; a fresh
+	// Execution starts empty and close releases every donated batch and its
+	// carried budget exactly once.
+	scalarShares map[uint32]*batch.Batch
+	// scalarShareCharged is the memo's carried accounting on the Execution's
+	// own resource budget: each donated batch's cost was transferred off the
+	// donating reducer (which stops owning it) and is released once here.
+	scalarShareCharged uint64
+	scalarShareBudget  *process.ExecutionResourceGeneration
 }
+
+// sharedScalarInvocation serves a memoized capture-free scalar result without
+// opening the inner relation: stepping is immediately done, the result is the
+// Execution-owned batch, and Close is a no-op because the cache's lifetime is
+// the Execution's own close.
+type sharedScalarInvocation struct {
+	result *batch.Batch
+}
+
+func (s *sharedScalarInvocation) Step(context.Context) (vm.ContinuationStep, error) {
+	return vm.ContinuationStep{Done: true}, nil
+}
+
+func (s *sharedScalarInvocation) Accept(vm.Continuation) error {
+	return nil
+}
+
+func (s *sharedScalarInvocation) Result() *batch.Batch { return s.result }
+
+func (s *sharedScalarInvocation) Close(_ error) error { return nil }
 
 // CountFoundRowsAt designates the main statement's pagination before the
 // template is published. Nested program limits never own session row counts.
@@ -337,7 +389,7 @@ func (t *Template) NewExecution(proc *process.Process, allocation *mpool.MPool, 
 	if err != nil {
 		return nil, err
 	}
-	e := &Execution{template: t, proc: owner, allocation: allocation}
+	e := &Execution{template: t, proc: owner, allocation: allocation, scalarShares: make(map[uint32]*batch.Batch)}
 	if len(accounts) > 0 {
 		e.account = accounts[0]
 	}
@@ -387,13 +439,361 @@ func (e *Execution) close(cause error) error {
 	}
 	err := e.main.close(cause)
 	e.main = nil
+	// Release every memoized capture-free scalar batch exactly once through
+	// the allocation its reducer charged: the FIRST winning row donated its
+	// finalized reducer tuple here (see shareScalarResult), and later winning
+	// rows merely read the cached pointer.
+	for occurrence, donated := range e.scalarShares {
+		donated.Clean(e.allocation)
+		delete(e.scalarShares, occurrence)
+	}
+	if e.scalarShareCharged > 0 && e.scalarShareBudget != nil {
+		e.scalarShareBudget.ReleaseAllocationCapacity(e.scalarShareCharged)
+	}
+	e.scalarShareCharged = 0
+	e.scalarShareBudget = nil
 	e.proc.CloseDependentProcess()
 	return err
+}
+
+// shareScalarResult donates the FIRST winning row's finalized result for the
+// given occurrence into the Execution-owned cache. The reducer's tuple is
+// detached first so the donating invocation's own Close cannot double-free
+// it; the Execution's close is the single release owner.
+func (e *Execution) shareScalarResult(occurrence uint32, inv *invocation) {
+	if e.scalarShares == nil || inv.reducer == nil || inv.result == nil {
+		return
+	}
+	// Ownership stays with the donating reducer until the transfer is
+	// GUARANTEED: the target acquires first, and any failure (a sealed or
+	// exhausted budget) leaves both the tuple and its charge exactly where
+	// they were, so the first caller still consumes its own result and the
+	// reducer's normal Close releases exactly once. Only after a successful
+	// reservation does the reducer detach (releasing its charge and dropping
+	// its pointer), transferring the release obligation to this Execution.
+	budget, err := e.proc.GetExecutionResourceBudget()
+	if err != nil {
+		return
+	}
+	cost := inv.reducer.TupleCost()
+	if cost == 0 {
+		return
+	}
+	if err := budget.AcquireAllocationCapacity(cost); err != nil {
+		return
+	}
+	inv.reducer.DetachTuple()
+	e.scalarShareCharged += cost
+	e.scalarShareBudget = budget
+	// The donation keeps inv.result itself unchanged: the FIRST winning row
+	// must still read its own finalized result from the invocation. Only the
+	// ownership changes - the donating invocation's Close must not free the
+	// batch (the tuple is detached), and the Execution's close is the single
+	// release for the cached pointer shared with later winning rows.
+	e.scalarShares[occurrence] = inv.result
+}
+
+// captureFreeScalarCall reports the plan-level eligibility for Execution-scoped
+// memoization: a single-output SCALAR reduction with no correlated Inputs, no
+// Lhs and no Comparison - the closure references nothing from the outer rows
+// and its value can only change with a new execution snapshot. Occurrences
+// outside this provenance (correlated, comparison-driven, multi-row or
+// effect-bearing shapes) always keep their per-row evaluation.
+func captureFreeScalarCall(call *plan.DependentExpr) bool {
+	return call.Reducer == plan.SubqueryRef_SCALAR &&
+		call.Comparison == nil &&
+		len(call.Inputs) == 0 &&
+		len(call.Lhs) == 0
+}
+
+// sharedScalarCallReady is the FULL gate: the precise guarded-MERGE-payload
+// membership mark (StageId, set at the planner's flatten admission seam) AND
+// the plan-level capture-free provenance AND this template's immutable
+// per-occurrence audit result. Everything else - correlated, comparison,
+// multi-row, WHEN/USING scopes, volatile or warning-capable or unknown
+// nested-program subtrees - keeps its original per-row evaluation.
+func sharedScalarCallReady(t *Template, call *plan.DependentExpr) bool {
+	return captureFreeScalarCall(call) &&
+		t.scalarShareEligible[call.OccurrenceId]
+}
+
+// guardedPayloadOccurrences walks the FINAL plan graph for the specialized
+// MERGE clause-payload guards: the rewrite wraps every guarded payload slot as
+// if(= (winnerRef, lit(ordinal)), <payload expr>, same-typed NULL literal).
+// This wrapper is plan-owned final-graph data - it survives deep copy and the
+// correlation stage directory remap because it depends on no StageId index -
+// and it is produced only for guarded MERGE clause payloads: WHEN slots,
+// derived USING subqueries and ordinary SQL never appear inside such a guard,
+// even when their calls' shapes look capture-free.
+func icebergMergeGuardedPayloadOccurrences(query *plan.Query) map[uint32]bool {
+	occurrences := make(map[uint32]bool)
+	if query.StmtType != plan.Query_MERGE || query.Correlation == nil || len(query.Steps) == 0 {
+		return occurrences
+	}
+	writer := query.Nodes[query.Steps[query.MainOutputStep()]]
+	if writer == nil || writer.ExtraOptions != icebergapi.DMLMergePlanExtraOptions {
+		return occurrences
+	}
+	// The planner-authored membership: the specialized Iceberg MERGE rewrite
+	// (rowSelectIcebergMergeClauseValues) stamps GuardedMergePayload on
+	// exactly the capture-free SCALAR calls its winner guards coordinate.
+	// The correlation finalization only reassigns OccurrenceId/StageId, so
+	// the stamp rides each call through copy/remap/serialization; the
+	// statement/writer validation above is belt-and-braces for the owning
+	// writer. Ordinary CASE/IF lookalikes, MERGE WHEN conditions, derived
+	// USING subqueries and every unstamped or older-plan call simply keep
+	// per-row semantics.
+	for _, n := range query.Nodes {
+		for _, e := range n.ProjectList {
+			_ = plan.VisitExprTree(e, func(e *plan.Expr) error {
+				if call := e.GetDependent(); call != nil && call.GuardedMergePayload {
+					occurrences[call.OccurrenceId] = true
+				}
+				return nil
+			})
+		}
+	}
+	return occurrences
+}
+
+// auditShareEligibleProgram walks the occurrence's program subtree from its
+// rooted nodes and reports whether every reachable expression is provably
+// deterministic and side-effect-free for Execution-scoped memoization: no
+// nested dependent calls (unknown nested programs stay per-row), no volatile
+// or real-time function overloads (the same registry tests the planner uses:
+// function.GetFunctionByIdWithoutError + CannotFold/IsRealTimeRelated, see
+// cte_reuse.go), and casts only as an identical-type passthrough - a scaling
+// or narrowing cast is the row-local clip/warning class and stays per-row.
+// isStoredDecimalType reports the narrow proven value domain: the stored
+// DECIMAL64/DECIMAL128 representation this optimization was measured for.
+func isStoredDecimalType(id int32) bool {
+	return id == int32(types.T_decimal64) || id == int32(types.T_decimal128)
+}
+
+func auditShareEligibleProgram(query *plan.Query, programID uint32) bool {
+	if programID == 0 || int(programID) > len(query.Correlation.Programs) {
+		return false
+	}
+	prog := query.Correlation.Programs[programID-1]
+	visited := make(map[int32]bool)
+	// root glm93 finding 1: the stored-DECIMAL identity is attribute-exact as
+	// well - NumericAttributes (plan.Type field 14) carries the parser/#32002
+	// numeric metadata the executor honors, so a differing attribute is a
+	// different assignment channel and keeps the occurrence per-row.
+	tsame := func(a, b *plan.Type) bool {
+		return a != nil && b != nil && a.Id == b.Id &&
+			a.Width == b.Width && a.Scale == b.Scale &&
+			a.NumericAttributes == b.NumericAttributes
+	}
+	// The POSITIVE typed class covering every per-invocation evaluation the
+	// region performs. Admitted operations are deterministic, warning-free
+	// and side-effect-free for the proven shapes ONLY:
+	//   - the rewrite's control pair: the IF branch selection over an EQUAL
+	//     of two same-typed column/literal comparands (the winner
+	//     machinery), with the selected arm audited recursively;
+	//   - MIN/MAX by REGISTERED overload over stored DECIMAL arguments;
+	//   - an identical-type DECIMAL CAST passthrough (the plan carries its
+	//     typed TargetType descriptor as further arguments - accepted only
+	//     inside this proven channel);
+	//   - CAST_ASSIGN ONLY in the exact identity subcase, where the typed
+	//     descriptor equals the value's own type so the assignment cannot
+	//     rescale, clip or warn; every other combination - real narrowing,
+	//     uncertain typing, volatile or nested dependent forms, unknown
+	//     overloads - stays per-row with its original row-local
+	//     diagnostics;
+	//   - a bare column reference or a literal.
+	// The audited occurrence's OWN call is the memoization subject, so it
+	// is exempt by exact program identity; any OTHER nested dependent call
+	// keeps the occurrence per-row.
+	var auditExpr func(e *plan.Expr) bool
+	auditExpr = func(e *plan.Expr) bool {
+		if e == nil {
+			return true
+		}
+		if e.GetDependent() != nil {
+			// A reachable nested call is never proven safe by identity: same
+			// ProgramId is not proof of safe nested evaluation, so the
+			// occurrence keeps per-row semantics.
+			return false
+		}
+		if e.GetT() != nil {
+			// The typed descriptor marker is ONLY a member as an argument of
+			// an admitted CAST/CAST_ASSIGN channel; a standalone occurrence
+			// is not an auditable value.
+			return false
+		}
+		fn := e.GetF()
+		if fn == nil || fn.Func == nil {
+			return e.GetCol() != nil || e.GetLit() != nil
+		}
+		if _, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj); !ok {
+			return false
+		}
+		fnID, _ := function.DecodeOverloadID(fn.Func.Obj)
+		switch fnID {
+		case function.IFF:
+			if len(fn.Args) != 3 {
+				return false
+			}
+			for _, a := range fn.Args {
+				if !auditExpr(a) {
+					return false
+				}
+			}
+			return true
+		case function.EQUAL, function.NOT_EQUAL,
+			function.GREAT_THAN, function.GREAT_EQUAL,
+			function.LESS_THAN, function.LESS_EQUAL:
+			// The pure comparison members of the winner's control
+			// machinery: same-typed operands, no coercion warning path.
+			if len(fn.Args) != 2 {
+				return false
+			}
+			for _, a := range fn.Args {
+				if a == nil || (a.GetCol() == nil && a.GetLit() == nil) {
+					return false
+				}
+			}
+			return tsame(&fn.Args[0].Typ, &fn.Args[1].Typ)
+		case function.AND, function.OR, function.NOT:
+			// The boolean combinators of the same machinery; every operand
+			// must itself be an admitted member.
+			if len(fn.Args) == 0 || (fnID != function.AND && fnID != function.OR && len(fn.Args) > 1) {
+				return false
+			}
+			for _, a := range fn.Args {
+				if !auditExpr(a) {
+					return false
+				}
+			}
+			return true
+		case function.MIN, function.MAX:
+			if len(fn.Args) != 1 || !isStoredDecimalType(fn.Args[0].Typ.Id) {
+				return false
+			}
+			return isStoredDecimalType(e.Typ.Id) && auditExpr(fn.Args[0])
+		case function.CAST:
+			// The plan's CAST carries its typed TargetType descriptor as
+			// further arguments; ONLY the value argument participates in the
+			// value audit and ONLY the descriptor markers parse as channel
+			// members here.
+			if len(fn.Args) < 2 || !isStoredDecimalType(e.Typ.Id) {
+				return false
+			}
+			if !tsame(&fn.Args[0].Typ, &e.Typ) {
+				return false
+			}
+			for _, a := range fn.Args[1:] {
+				if a == nil || a.GetT() == nil || !tsame(&a.Typ, &e.Typ) {
+					return false
+				}
+			}
+			return auditExpr(fn.Args[0])
+		case function.CAST_ASSIGN:
+			// #6031303617: CAST_ASSIGN has exactly two registered operands -
+			// the value and its typed descriptor. ONLY the exact warning-free
+			// stored-DECIMAL identity participates: the result type, the
+			// value's own type AND the descriptor all match on the full
+			// numeric identity (Id, Width=decimal precision, Scale), and no
+			// extra argument is silently skipped. Any extra operand, any
+			// non-DECIMAL identity, and any narrowing/rounding channel keeps
+			// the occurrence per-row with its original row-local diagnostics.
+			if len(fn.Args) != 2 {
+				return false
+			}
+			val, desc := fn.Args[0], fn.Args[1]
+			if val == nil || desc == nil {
+				return false
+			}
+			if desc.GetT() == nil {
+				return false
+			}
+			if !isStoredDecimalType(e.Typ.Id) || !isStoredDecimalType(val.Typ.Id) {
+				return false
+			}
+			if !tsame(&e.Typ, &val.Typ) || !tsame(&desc.Typ, &val.Typ) {
+				return false
+			}
+			return auditExpr(val)
+		default:
+			return false
+		}
+	}
+	allowedNode := func(n *plan.Node) bool {
+		switch n.NodeType {
+		case plan.Node_PROJECT, plan.Node_TABLE_SCAN, plan.Node_AGG:
+			return true
+		}
+		return false
+	}
+	var walkNode func(id int32) bool
+	walkNode = func(id int32) bool {
+		if id < 0 || int(id) >= len(query.Nodes) || visited[id] {
+			return true
+		}
+		visited[id] = true
+		node := query.Nodes[id]
+		if !allowedNode(node) {
+			return false
+		}
+		eligible := true
+		_ = plan.VisitExpressionsInOwner(node, func(fe *plan.Expr) error {
+			if eligible && !auditExpr(fe) {
+				eligible = false
+			}
+			return nil
+		})
+		if !eligible {
+			return false
+		}
+		for _, child := range node.Children {
+			if !walkNode(child) {
+				return false
+			}
+		}
+		// SourceStep entries index query.Steps: the native Compile resolves
+		// query.Steps[step] and a region whose local source edge needs data
+		// pulls it (source.go r.pull(query.Steps[step])). The resolved node
+		// is the MATERIALIZED STEP BOUNDARY of the owning outer pipeline:
+		// the main step computed it once (its sink), and this region reads
+		// rows through the registered reader edge (the regionTemplate build
+		// assigns SINK_SCAN readerIDs over those steps). The boundary node's
+		// OWN expressions - the guarded payload projections the region then
+		// re-frames per invocation - are audited fully here with the same
+		// typed class; the boundary's CHILDREN are the outer step's own
+		// once-run computation and are not this region's frames, so the walk
+		// stops at the sink edge without a visited flag and without any
+		// suppression of a later direct-child inspection. Any out-of-range
+		// or unresolvable edge fails closed.
+		for _, step := range node.SourceStep {
+			if step < 0 || int(step) >= len(query.Steps) {
+				return false
+			}
+			// readSource pulls the resolved root inside this region and its
+			// DESCENDANTS also execute, so the audit walks the whole
+			// resolved producer subtree with the same owner-aware
+			// recursion and fail-closed bounds - never the resolved node
+			// alone.
+			if !walkNode(query.Steps[step]) {
+				return false
+			}
+		}
+		return true
+	}
+	// The invocation pulls its program RootNode on every row: the root's
+	// OWN expressions are per-invocation work and are audited like every
+	// other node of the region's reachable graph.
+	return walkNode(prog.RootNode)
 }
 
 func (e *Execution) Open(parent *process.Process, call *plan.DependentExpr, slots, lhs []*vector.Vector) (colexec.DependentInvocation, error) {
 	if call.ProgramId == 0 || int(call.ProgramId) >= len(e.template.regions) {
 		return nil, moerr.NewInternalErrorNoCtx("dependent program id")
+	}
+	if sharedScalarCallReady(e.template, call) {
+		if cached, ok := e.scalarShares[call.OccurrenceId]; ok {
+			return &sharedScalarInvocation{result: cached}, nil
+		}
 	}
 	p := e.template.query.Correlation.Programs[call.ProgramId-1]
 	child, err := parent.NewDependentProcess(call.ProgramId, slots, len(e.template.query.Nodes))
@@ -414,6 +814,9 @@ func (e *Execution) Open(parent *process.Process, call *plan.DependentExpr, slot
 	lhsBatch := &batch.Batch{Vecs: lhs}
 	lhsBatch.SetRowCount(1)
 	inv := &invocation{region: r, proc: child}
+	if sharedScalarCallReady(e.template, call) {
+		inv.shareExecution, inv.shareOccurrence = e, call.OccurrenceId
+	}
 	inv.reducer, err = colexec.NewDependentReducer(child, call, p.OutputTypes, lhsBatch, e.allocation, e.template.comparisons[call.OccurrenceId])
 	if err != nil {
 		_ = inv.Close(err)
@@ -428,6 +831,11 @@ type invocation struct {
 	reducer *colexec.DependentReducer
 	done    bool
 	result  *batch.Batch
+	// shareExecution/shareOccurrence are set only for the eligible
+	// capture-free scalar class so the FIRST winning row donates its
+	// finalized result; they are nil for every ineligible invocation.
+	shareExecution  *Execution
+	shareOccurrence uint32
 }
 
 func (i *invocation) Step(context.Context) (vm.ContinuationStep, error) {
@@ -437,6 +845,11 @@ func (i *invocation) Step(context.Context) (vm.ContinuationStep, error) {
 		}
 		var err error
 		i.result, err = i.reducer.Finish()
+		if err == nil && i.shareExecution != nil && i.result != nil {
+			// First-demand donating: only a successful finalized result is
+			// cached, never a partial or failed one.
+			i.shareExecution.shareScalarResult(i.shareOccurrence, i)
+		}
 		return vm.ContinuationStep{Done: err == nil}, err
 	}
 	task, err := i.region.pull(i.region.template.root)
