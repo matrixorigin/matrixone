@@ -1207,6 +1207,12 @@ type RelationCreatedInCurrentTxn interface {
 	CreatedInCurrentTxn(context.Context) (bool, error)
 }
 
+// RelationWithUncommittedData reports whether the current workspace can
+// contribute rows or tombstones to a clone's initial image.
+type RelationWithUncommittedData interface {
+	HasUncommittedData() (bool, error)
+}
+
 // SourceCommitTSProvider is an optional relation capability used by async
 // indexes that must prove their source-table coverage.  It is intentionally not
 // part of Relation: engines without a logtail partition state simply do not

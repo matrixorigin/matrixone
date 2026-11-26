@@ -1992,6 +1992,22 @@ func (tbl *txnTable) CreatedInCurrentTxn(ctx context.Context) (bool, error) {
 	return tbl.isCreatedInTxn(ctx)
 }
 
+func (tbl *txnTable) hasUncommittedData() bool {
+	if tbl.db.op.IsSnapOp() {
+		return false
+	}
+	txn := tbl.getTxn()
+	txn.Lock()
+	defer txn.Unlock()
+	for _, entry := range txn.writes {
+		if entry.tableId == tbl.tableId && (entry.typ == INSERT || entry.typ == DELETE) &&
+			entry.bat != nil && entry.bat.RowCount() != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func validateAutoIncrEpochAdvance(current uint32, resets uint64) error {
 	if uint64(current)+resets > math.MaxUint32 {
 		return moerr.NewInternalErrorNoCtx("AUTO_INCREMENT epoch exhausted")

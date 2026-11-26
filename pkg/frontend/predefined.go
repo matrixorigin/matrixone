@@ -429,6 +429,7 @@ var (
 		table_id bigint unsigned not null,
 		entry_id uuid not null default uuid(),
 		key_bytes longblob,
+		full_image bool not null default true,
 		primary key(table_id, entry_id)
 	)`, catalog.MO_BRANCH_FORK_KEYS)
 

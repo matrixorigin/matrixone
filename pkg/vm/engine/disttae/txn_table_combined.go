@@ -72,6 +72,25 @@ func (t *combinedTxnTable) CreatedInCurrentTxn(ctx context.Context) (bool, error
 	return t.primary.CreatedInCurrentTxn(ctx)
 }
 
+func (t *combinedTxnTable) HasUncommittedData() (bool, error) {
+	if t.primary.hasUncommittedData() {
+		return true, nil
+	}
+	tables, err := t.tablesFunc()
+	if err != nil {
+		return false, err
+	}
+	for _, table := range tables {
+		if workspace, ok := table.(engine.RelationWithUncommittedData); ok {
+			has, err := workspace.HasUncommittedData()
+			if err != nil || has {
+				return has, err
+			}
+		}
+	}
+	return false, nil
+}
+
 func filterNilRelations(relations []engine.Relation) []engine.Relation {
 	for i, rel := range relations {
 		if rel == nil {

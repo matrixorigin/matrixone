@@ -2705,6 +2705,16 @@ func constructChangeHandle(
 						tables.baseRel.GetTableID(ctx),
 				}
 			}
+			if i < len(baseRange.forkBefore) && baseRange.forkBefore[i] != nil {
+				for _, fork := range branchInfo.baseForks {
+					if fork.parent == baseRange.forkBefore[i].tableID && segDef.Pkey != nil &&
+						segDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+						handle = &forkEvidenceTombstones{ChangesHandle: handle, ses: ses, bh: bh,
+							childID: fork.child, composite: segDef.Pkey.CompPkeyCol != nil}
+						break
+					}
+				}
+			}
 			baseHandle = append(baseHandle, handle)
 		}
 	}
@@ -4434,8 +4444,12 @@ func decideLCABranchTSFromBranchDAG(
 				if branchInfo.pathFromLCAToBaseLineageOnly[i] {
 					continue
 				}
+				var childUntil types.TS
+				if i+1 < len(baseIDs) {
+					childUntil = branchInfo.pathFromLCAToBaseTS[i+1]
+				}
 				branchInfo.baseForks = append(branchInfo.baseForks, dataBranchFork{
-					child: baseIDs[i], parent: baseIDs[i-1], snapshot: branchInfo.pathFromLCAToBaseTS[i],
+					child: baseIDs[i], parent: baseIDs[i-1], snapshot: branchInfo.pathFromLCAToBaseTS[i], childUntil: childUntil,
 					parentOwner: dag.Creator(baseIDs[i-1]), childOwner: dag.Creator(baseIDs[i]),
 				})
 			}

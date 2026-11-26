@@ -1511,6 +1511,23 @@ func hashDiffIfHasLCA(
 	}
 
 	forkHistory := pickForkHistory{branches: dagInfo.pathFromLCAToBase, forks: dagInfo.baseForks}
+	if copt.protectMissingPickHistory && tblStuff.boundedPick && tblStuff.def.pkKind != fakeKind && len(forkHistory.forks) != 0 {
+		write := emit
+		emit = func(wrapped batchWithKind) (bool, error) {
+			if wrapped.side == diffSideTarget && wrapped.kind == diffInsert && !wrapped.fromUpdate && wrapped.batch.RowCount() != 0 {
+				keys, err := wrapped.batch.Vecs[tblStuff.def.pkColIdx].Dup(ses.proc.Mp())
+				if err != nil {
+					return false, err
+				}
+				defer keys.Free(ses.proc.Mp())
+				if stop, err := forkHistory.emitMissingConflicts(ctx, ses, bh, tblStuff, wrapped.batch, keys, false, write); err != nil || stop {
+					return stop, err
+				}
+			}
+			return write(wrapped)
+		}
+	}
+
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
 		wrapped.side = diffSideTarget
 		if (tblStuff.boundedPick || tblStuff.pickWindowStart != nil) && copt.conflictOpt != nil &&
@@ -2053,7 +2070,7 @@ func reconcilePickWindowDestinationInsert(
 			}
 		}
 		if protectForks && missingKeys.Length() != 0 {
-			if stop, err := forkHistory.emitMissingConflicts(ctx, ses, bh, tables, src.batch, missingKeys, emit); err != nil || stop {
+			if stop, err := forkHistory.emitMissingConflicts(ctx, ses, bh, tables, src.batch, missingKeys, true, emit); err != nil || stop {
 				return stop, err
 			}
 		}

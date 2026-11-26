@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,52 +36,68 @@ import (
 
 type dataBranchFork struct {
 	child, parent           uint64
-	snapshot                types.TS
+	snapshot, childUntil    types.TS
 	parentOwner, childOwner uint32
 }
 
-// A branch created from a transaction-local table has no committed snapshot
-// of its fork image. Record its initial key membership in the clone
-// transaction, before later statements can compact inherited rows away.
+// A clone can include transaction-local rows even if its parent was already
+// committed. Record its initial key membership in the clone transaction,
+// before later statements can compact inherited rows away.
 func captureDataBranchForkKeys(
 	ctx context.Context, ses *Session, bh BackgroundExec, receipt *cloneReceipt,
 	txn TxnOperator, destination *plan.TableDef,
 ) error {
-	if receipt.snapshot != nil || destination.Pkey == nil || destination.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	if destination.Pkey == nil || destination.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return nil
 	}
-	sourceCtx := defines.AttachAccountId(ctx, receipt.srcAccount)
-	_, _, source, err := ses.proc.GetSessionInfo().StorageEngine.GetRelationById(sourceCtx, txn, receipt.srcTableID)
+	uncommitted, err := forkSourceHasUncommittedData(ctx, ses, receipt, txn)
 	if err != nil {
-		return err
-	}
-	creation, ok := source.(engine.RelationCreatedInCurrentTxn)
-	if !ok {
-		return nil
-	}
-	uncommitted, err := creation.CreatedInCurrentTxn(sourceCtx)
-	if err != nil || !uncommitted {
 		return err
 	}
 
 	ownerCtx := context.WithValue(defines.AttachAccountId(ctx, receipt.toAccount), defines.BranchForkKeyAccess{}, true)
-	pk := sqlquote.Ident(destination.Pkey.PkeyColName)
-	if destination.Pkey.CompPkeyCol == nil {
-		column := dataBranchColumnDefByName(destination, destination.Pkey.PkeyColName)
-		if types.T(column.Typ.Id) == types.T_enum {
-			// SQL serial normally binds ENUM to its display string; the key
-			// probe uses the stored ordinal.
-			pk = "cast(" + pk + " as smallint unsigned)"
-		}
-		pk = "serial(" + pk + ")"
-	}
 	ledger := catalog.MO_CATALOG + "." + catalog.MO_BRANCH_FORK_KEYS
 	bh.ClearExecResultSet()
-	if err := bh.Exec(ownerCtx, fmt.Sprintf("insert into %s (table_id,key_bytes) select %d,%s from %s.%s",
-		ledger, receipt.dstTableID, pk, sqlquote.Ident(receipt.dstDb), sqlquote.Ident(receipt.dstTbl))); err != nil {
-		return err
+	if uncommitted {
+		pk := sqlquote.Ident(destination.Pkey.PkeyColName)
+		if destination.Pkey.CompPkeyCol == nil {
+			column := dataBranchColumnDefByName(destination, destination.Pkey.PkeyColName)
+			if types.T(column.Typ.Id) == types.T_enum {
+				// SQL serial normally binds ENUM to its display string; the key
+				// probe uses the stored ordinal.
+				pk = "cast(" + pk + " as smallint unsigned)"
+			}
+			pk = "serial(" + pk + ")"
+		}
+		if err := bh.Exec(ownerCtx, fmt.Sprintf("insert into %s (table_id,key_bytes) select %d,%s from %s.%s",
+			ledger, receipt.dstTableID, pk, sqlquote.Ident(receipt.dstDb), sqlquote.Ident(receipt.dstTbl))); err != nil {
+			return err
+		}
 	}
-	return bh.Exec(ownerCtx, fmt.Sprintf("insert into %s (table_id,key_bytes) values (%d,null)", ledger, receipt.dstTableID))
+	return bh.Exec(ownerCtx, fmt.Sprintf("insert into %s (table_id,key_bytes,full_image) values (%d,null,%t)", ledger, receipt.dstTableID, uncommitted))
+}
+
+func forkSourceHasUncommittedData(
+	ctx context.Context, ses *Session, receipt *cloneReceipt, txn TxnOperator,
+) (bool, error) {
+	if receipt.snapshot != nil {
+		return false, nil
+	}
+	sourceCtx := defines.AttachAccountId(ctx, receipt.srcAccount)
+	_, _, source, err := ses.proc.GetSessionInfo().StorageEngine.GetRelationById(sourceCtx, txn, receipt.srcTableID)
+	if err != nil {
+		return false, err
+	}
+	if creation, ok := source.(engine.RelationCreatedInCurrentTxn); ok {
+		created, err := creation.CreatedInCurrentTxn(sourceCtx)
+		if err != nil || created {
+			return created, err
+		}
+	}
+	if workspace, ok := source.(engine.RelationWithUncommittedData); ok {
+		return workspace.HasUncommittedData()
+	}
+	return false, nil
 }
 
 // lookupDataBranchForkKeys returns indexes in the input key vector. The
@@ -88,7 +105,7 @@ func captureDataBranchForkKeys(
 func lookupDataBranchForkKeys(
 	ctx context.Context, ses *Session, bh BackgroundExec, tableID uint64,
 	keys *vector.Vector, composite bool,
-) (found []int64, recorded bool, err error) {
+) (found []int64, recorded, fullImage bool, err error) {
 	if !composite {
 		if keys.GetType().Oid == types.T_enum {
 			ordinals := vector.NewVec(types.T_uint16.ToType(), ses.proc.Mp())
@@ -96,20 +113,20 @@ func lookupDataBranchForkKeys(
 			for row := range keys.Length() {
 				ordinal := vector.GetFixedAtNoTypeCheck[types.Enum](keys, row)
 				if err := vector.AppendFixed(ordinals, uint16(ordinal), false, ses.proc.Mp()); err != nil {
-					return nil, false, err
+					return nil, false, false, err
 				}
 			}
 			keys = ordinals
 		}
 		keys, err = function.RunFunctionDirectly(ses.proc, function.SerialFunctionEncodeID, []*vector.Vector{keys}, keys.Length())
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		defer keys.Free(ses.proc.Mp())
 	}
 	ctx = context.WithValue(defines.AttachAccountId(ctx, catalog.System_Account), defines.BranchForkKeyAccess{}, true)
 	ledger := catalog.MO_CATALOG + "." + catalog.MO_BRANCH_FORK_KEYS
-	prefix := fmt.Sprintf("select key_bytes from %s where table_id=%d and (key_bytes is null or key_bytes in (", ledger, tableID)
+	prefix := fmt.Sprintf("select key_bytes,full_image from %s where table_id=%d and (key_bytes is null or key_bytes in (", ledger, tableID)
 	for lo := 0; lo < keys.Length(); {
 		hi := lo
 		var query strings.Builder
@@ -130,13 +147,14 @@ func lookupDataBranchForkKeys(
 		query.WriteString("))")
 		result, err := runSql(ctx, ses, bh, query.String(), nil, nil)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		present := make(map[string]struct{}, hi-lo)
 		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
 				if cols[0].IsNull(uint64(i)) {
 					recorded = true
+					fullImage = vector.GetFixedAtNoTypeCheck[bool](cols[1], i)
 				} else {
 					present[string(cols[0].GetBytesAt(i))] = struct{}{}
 				}
@@ -151,7 +169,7 @@ func lookupDataBranchForkKeys(
 		}
 		lo = hi
 	}
-	return found, recorded, nil
+	return found, recorded, fullImage, nil
 }
 
 // pickForkHistory is scoped to a protected PICK. For missing destination
@@ -164,7 +182,7 @@ type pickForkHistory struct {
 
 func (h *pickForkHistory) emitMissingConflicts(
 	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff, source *batch.Batch,
-	keys *vector.Vector, emit emitFunc,
+	keys *vector.Vector, fromUpdate bool, emit emitFunc,
 ) (bool, error) {
 	// The destination change map need not contain unchanged inherited rows.
 	// Probe the live endpoint before interpreting any absence as a deletion.
@@ -190,8 +208,7 @@ func (h *pickForkHistory) emitMissingConflicts(
 	proof := newDataBranchRenameProof(tables.pickForkColumns)
 	matches := make([]bool, keys.Length())
 	matched := 0
-	unknown := false
-	checked := h.forks[:0]
+	uncertain := make([]bool, keys.Length())
 	for _, fork := range h.forks {
 		// A transaction-local intermediate can be absent from the catalog.
 		// Its first visible descendant supplies the key layout for that path.
@@ -208,31 +225,16 @@ func (h *pickForkHistory) emitMissingConflicts(
 			continue
 		}
 
-		found, recorded, err := lookupDataBranchForkKeys(ctx, ses, bh, fork.child, keys, tables.def.pkKind == compositeKind)
+		found, recorded, full, err := lookupDataBranchForkKeys(ctx, ses, bh, fork.child, keys, tables.def.pkKind == compositeKind)
 		if err != nil {
 			return false, err
 		}
-		if !recorded {
-			// Ordinary forks have a committed parent before-image. A legacy
-			// fork without either source of evidence cannot classify this key.
-			sourceOwner, _ := tables.endpointIdentities(ctx, ses)
-			candidates := dedupeBranchIdentities(
-				localOperandIdentity(ctx, fork.parentOwner), localOperandIdentity(ctx, fork.childOwner))
-			for _, ident := range []branchIdentity{owner, sourceOwner} {
-				if !slices.ContainsFunc(candidates, func(other branchIdentity) bool { return other.account == ident.account }) {
-					candidates = append(candidates, ident)
-				}
-			}
-			_, _, err = reopenDataBranchNodeByID(ctx, ses, bh, candidates, fork.parent, fork.snapshot)
-			if err == nil {
-				continue
-			}
-			if !isMissingDataBranchRelationByID(err) {
+		if !full {
+			found, err = historicalForkMembers(ctx, ses, bh, tables, fork, keys, uncertain, proof, recorded, fromUpdate)
+			if err != nil {
 				return false, err
 			}
-			unknown = true
 		}
-		checked = append(checked, fork)
 		for _, i := range found {
 			if !matches[i] {
 				matches[i] = true
@@ -240,9 +242,10 @@ func (h *pickForkHistory) emitMissingConflicts(
 			}
 		}
 	}
-	h.forks = checked
-	if unknown && matched != keys.Length() {
-		return false, moerr.NewNotSupportedNoCtx("DATA BRANCH PICK cannot distinguish an inherited deletion from an absent key without fork history")
+	for i, ambiguous := range uncertain {
+		if ambiguous && !matches[i] {
+			return false, moerr.NewNotSupportedNoCtx("DATA BRANCH PICK cannot distinguish an inherited deletion from an absent key without fork history")
+		}
 	}
 	if matched == 0 {
 		return false, nil
@@ -277,4 +280,154 @@ func (h *pickForkHistory) emitMissingConflicts(
 		name: tables.baseRel.GetTableName(), kind: diffDelete, side: diffSideBase,
 		batch: markers, hasReplacement: true, fromUpdate: true,
 	}, false, tables.retPool)
+}
+
+// A clean fork reads its committed parent image. A legacy fork from a
+// committed parent can still expose writes made in the clone transaction.
+// Observe membership across the child's exact commit to detect those keys.
+func historicalForkMembers(
+	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
+	fork dataBranchFork, keys *vector.Vector, uncertain []bool, proof dataBranchRenameProof,
+	recorded, fromUpdate bool,
+) ([]int64, error) {
+	source, destination := tables.endpointIdentities(ctx, ses)
+	candidates := dedupeBranchIdentities(localOperandIdentity(ctx, fork.parentOwner), localOperandIdentity(ctx, fork.childOwner))
+	for _, ident := range []branchIdentity{destination, source} {
+		if !slices.ContainsFunc(candidates, func(other branchIdentity) bool { return other.account == ident.account }) {
+			candidates = append(candidates, ident)
+		}
+	}
+	markUnknown := func() {
+		// Without a before-image, an update can restore a missing key.
+		// A pure new insert needs some historical evidence of that key.
+		if fromUpdate {
+			for i := range uncertain {
+				uncertain[i] = true
+			}
+		}
+	}
+	_, parentOwner, err := reopenDataBranchNodeByID(ctx, ses, bh, candidates, fork.parent, fork.snapshot)
+	if err != nil && !isMissingDataBranchRelationByID(err) {
+		return nil, err
+	}
+	until := fork.childUntil
+	if until.IsEmpty() {
+		_, until = tables.resolvedSnapshots(ses)
+	}
+	var commits []types.TS
+	if !recorded {
+		child, owner, childErr := reopenDataBranchNodeByID(ctx, ses, bh, candidates, fork.child, until)
+		if isMissingDataBranchRelationByID(childErr) {
+			markUnknown()
+			return nil, nil
+		}
+		if childErr != nil {
+			return nil, childErr
+		}
+		commits, childErr = getTablesCreationCommitTS(ctx, ses, owner, child, owner, child, []types.TS{until, until})
+		if childErr != nil {
+			return nil, childErr
+		}
+	}
+	probe := func(identity branchIdentity, at types.TS) (missing []int64, available bool, err error) {
+		start := dataBranchPickWindowStart{tableID: fork.parent, snapshot: at, identity: identity}
+		rows, absent, err := probePickKeyMembership(ctx, ses, bh, tables, keys, start, tables.pickBaseDefs, tables.pickBaseEdges, proof)
+		if isMissingDataBranchRelationByID(err) {
+			return nil, false, nil
+		}
+		if rows != nil {
+			tables.retPool.releaseRetBatch(rows, false)
+		}
+		return absent, rows != nil, err
+	}
+	if err != nil {
+		markUnknown()
+		if !fromUpdate && !recorded {
+			if _, ident, openErr := reopenDataBranchNodeByID(ctx, ses, bh, candidates, fork.parent, commits[0]); openErr == nil {
+				missing, available, probeErr := probe(ident, commits[0])
+				if probeErr != nil {
+					return nil, probeErr
+				}
+				for i := 0; available && i < keys.Length(); i++ {
+					if _, absent := slices.BinarySearch(missing, int64(i)); !absent {
+						uncertain[i] = true
+					}
+				}
+			} else if !isMissingDataBranchRelationByID(openErr) {
+				return nil, openErr
+			}
+		}
+		return nil, nil
+	}
+	atFork, available, err := probe(parentOwner, fork.snapshot)
+	if err != nil {
+		return nil, err
+	}
+	if !available {
+		markUnknown()
+		return nil, nil
+	}
+	var beforeCommit, afterCommit []int64
+	if !recorded {
+		if beforeCommit, available, err = probe(parentOwner, commits[0].Prev()); err != nil {
+			return nil, err
+		}
+		if !available {
+			markUnknown()
+			return nil, nil
+		}
+		if afterCommit, available, err = probe(parentOwner, commits[0]); err != nil {
+			return nil, err
+		}
+		if !available {
+			markUnknown()
+			return nil, nil
+		}
+	}
+	var found []int64
+	for i := range keys.Length() {
+		key := int64(i)
+		_, before := slices.BinarySearch(beforeCommit, key)
+		_, after := slices.BinarySearch(afterCommit, key)
+		if before != after {
+			uncertain[i] = true
+		} else if _, absent := slices.BinarySearch(atFork, key); !absent {
+			found = append(found, key)
+		}
+	}
+	return found, nil
+}
+
+// A fork comparison can synthesize a deletion using a row that was removed
+// from the parent's workspace before the clone. Keep real inherited
+// deletions. The handle is scoped to the fork's creation-commit comparison;
+// subsequent destination tombstones come from other handles.
+type forkEvidenceTombstones struct {
+	engine.ChangesHandle
+	ses       *Session
+	bh        BackgroundExec
+	childID   uint64
+	composite bool
+}
+
+func (h *forkEvidenceTombstones) Next(ctx context.Context, mp *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	data, deleted, hint, err := h.ChangesHandle.Next(ctx, mp)
+	if err != nil || deleted == nil || deleted.RowCount() == 0 {
+		return data, deleted, hint, err
+	}
+	// The primary key immediately precedes the commit timestamp, with
+	// or without a leading row ID.
+	keys := deleted.Vecs[deleted.VectorCount()-2]
+	found, _, full, err := lookupDataBranchForkKeys(ctx, h.ses, h.bh, h.childID, keys, h.composite)
+	if err == nil && full && len(found) != deleted.RowCount() {
+		err = deleted.Shrink(found, false, mp)
+	}
+	if err != nil {
+		if data != nil {
+			data.Clean(mp)
+		}
+		deleted.Clean(mp)
+		return nil, nil, hint, err
+	}
+	return data, deleted, hint, nil
 }

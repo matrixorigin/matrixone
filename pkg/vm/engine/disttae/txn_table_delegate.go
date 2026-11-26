@@ -167,6 +167,13 @@ func (tbl *txnTableDelegate) CreatedInCurrentTxn(ctx context.Context) (bool, err
 	return tbl.origin.CreatedInCurrentTxn(ctx)
 }
 
+func (tbl *txnTableDelegate) HasUncommittedData() (bool, error) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.HasUncommittedData()
+	}
+	return tbl.origin.hasUncommittedData(), nil
+}
+
 func (tbl *txnTableDelegate) CollectObjectList(ctx context.Context, from, to types.TS, bat *batch.Batch, mp *mpool.MPool) error {
 	if tbl.combined.is {
 		return tbl.combined.tbl.CollectObjectList(ctx, from, to, bat, mp)
