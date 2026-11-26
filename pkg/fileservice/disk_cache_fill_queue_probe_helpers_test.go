@@ -29,8 +29,9 @@ func probeBusy(t *testing.T, fs *S3FS) func() { return busyFills(t, fs) }
 func probeQueued(fs *S3FS, filePath string) bool { return fs.diskCache.isQueued(filePath) }
 
 func probeWaiting(fs *S3FS, filePath string) []probeFill {
-	var out []probeFill
-	for _, q := range fs.diskCache.waitingFillsOf(filePath) {
+	fills := fs.diskCache.waitingFillsOf(filePath)
+	out := make([]probeFill, 0, len(fills))
+	for _, q := range fills {
 		out = append(out, probeFill{due: q.req.Due, share: q.req.share(), scans: q.scans})
 	}
 	return out

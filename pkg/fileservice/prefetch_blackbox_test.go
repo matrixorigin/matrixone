@@ -351,9 +351,11 @@ func TestBlackBoxColumnReadNotHeldByFilePrefetchWaitingForConnection(t *testing.
 }
 
 // A column read of an object whose whole-object prefetch waits for a connection, held by
-// another object's download, reads its own bytes.
+// another object's download, joins the prefetch, which it promotes: it is served, and the
+// object is read once.
 func TestBlackBoxColumnReadNotHeldByWholeObjectPrefetchWaitingForConnection(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+	objectKey := fs.pathToKey("object")
 	ctx := context.Background()
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
@@ -374,7 +376,10 @@ func TestBlackBoxColumnReadNotHeldByWholeObjectPrefetchWaitingForConnection(t *t
 	got, err := readColumnRange(readCtx, fs, r)
 	require.NoError(t, err)
 	require.Equal(t, data[r.Offset:r.Offset+r.Size], got)
-	require.True(t, fs.diskCache.fillsUnderWay("object"), "the prefetch still waits")
+	require.Eventually(t, func() bool { return fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))) },
+		5*time.Second, time.Millisecond)
+	_, _, total := g.counts(objectKey)
+	require.Equal(t, 1, total, "the read is served by the whole-object download it joined")
 }
 
 // A memory-backed column prefetch whose ranges wait for a connection ends once its object

@@ -867,40 +867,6 @@ func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 	}
 }
 
-// gatedOpener opens ranges of data once gate is closed, and counts the opens under way and
-// in all.
-type gatedOpener struct {
-	data             []byte
-	gate             chan struct{}
-	mu               sync.Mutex
-	cur, most, total int
-}
-
-func (g *gatedOpener) open(ctx context.Context, start, end int64) (io.ReadCloser, error) {
-	g.mu.Lock()
-	g.cur++
-	g.total++
-	g.most = max(g.most, g.cur)
-	g.mu.Unlock()
-	defer func() {
-		g.mu.Lock()
-		g.cur--
-		g.mu.Unlock()
-	}()
-	select {
-	case <-g.gate:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	return io.NopCloser(bytes.NewReader(g.data[start:end])), nil
-}
-
-func (g *gatedOpener) counts() (cur, most, total int) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.cur, g.most, g.total
-}
-
 // A read of a cached range whose file is short or removed returns storage's bytes, and
 // drops the range: the reads after it are served from the range cached again.
 func TestDiskCacheBadRangeFileIsDropped(t *testing.T) {
