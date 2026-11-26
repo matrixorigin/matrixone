@@ -79,11 +79,12 @@ type Fulltext2Search struct {
 	// MAX(metadata.timestamp) (REBUILD/MERGE), loadedTail = MAX(tag=1 CdcTail chunk_id) (CDC
 	// append). cnUUID/accountID are the durable handles to re-query in the background.
 	// genValid is false when capture failed / no resolver (unit tests) → IsStale is a no-op.
-	cnUUID     string
-	accountID  uint32
-	loadedTs   int64
-	loadedTail int64
-	genValid   bool
+	cnUUID             string
+	accountID          uint32
+	loadedTs           int64
+	loadedTail         int64
+	genValid           bool
+	diagnosticSnapshot bool
 
 	// buildTS is MAX(metadata.build_ts) over the loaded generation (base + cdc_tail):
 	// the greatest source-table commit this index reflects. Captured at Load so it
@@ -206,6 +207,9 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	s.loaded = true
 	s.baseSegs = len(bases)
 	s.tailSegs = len(tails)
+	if s.diagnosticSnapshot {
+		return nil
+	}
 
 	// Capture the base-table coverage of exactly what was just loaded, in the same
 	// txn/snapshot as the data, so a reader (the json-probe operator) can bind its

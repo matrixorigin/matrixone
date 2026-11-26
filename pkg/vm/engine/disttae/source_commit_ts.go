@@ -79,6 +79,21 @@ func (tbl *txnTable) hasTransactionLocalWrites() bool {
 	return false
 }
 
+func (tbl *txnTable) SourceVisibleAtSnapshot(ctx context.Context) (bool, error) {
+	created, err := tbl.CreatedInCurrentTxn(ctx)
+	if err != nil || created {
+		return false, err
+	}
+	return !tbl.hasTransactionLocalWrites(), nil
+}
+
+func (tbl *txnTableDelegate) SourceVisibleAtSnapshot(ctx context.Context) (bool, error) {
+	if tbl.combined.is {
+		return false, moerr.NewNotSupported(ctx, "historical IVF cohorts on partitioned tables")
+	}
+	return tbl.origin.SourceVisibleAtSnapshot(ctx)
+}
+
 func (tbl *txnTableDelegate) SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error) {
 	if tbl.combined.is {
 		return tbl.combined.tbl.SourceCommitTS(ctx, mustExceed)
