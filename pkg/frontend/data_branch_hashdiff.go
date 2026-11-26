@@ -2219,9 +2219,8 @@ func reconcilePickWindowDestinationInsert(
 	return emitBatch(emit, wrapped, false, tables.retPool)
 }
 
-// Both branches committed with the retained ancestor. Their first committed
-// images establish the values they agreed on at that point, including when
-// the ancestor itself was changed after the forks.
+// Exclude only unchanged rows that both branches actually inherited. Equal
+// first committed values can also come from writes made to each child.
 func excludeInheritedPickRows(
 	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
 	matches *batch.Batch, conflicts []int64,
@@ -2286,11 +2285,40 @@ func excludeInheritedPickRows(
 		if err != nil {
 			return nil, err
 		}
+		if rows == nil {
+			return conflicts, nil
+		}
+		if rows.RowCount() == 0 {
+			tables.retPool.releaseRetBatch(rows, false)
+			return conflicts, nil
+		}
+		var proofColumns []*vector.Vector
+		for _, col := range forkRowColumns(def) {
+			idx := slices.Index(probe.def.lcaColNames, col.Name)
+			if idx < 0 {
+				proofColumns = nil
+				break
+			}
+			proofColumns = append(proofColumns, rows.Vecs[idx])
+		}
+		if len(proofColumns) == 0 {
+			tables.retPool.releaseRetBatch(rows, false)
+			return conflicts, nil
+		}
+		proven, err := lookupDataBranchForkRows(ctx, ses, bh, image.tableID, proofColumns, rows.RowCount())
+		if err != nil {
+			tables.retPool.releaseRetBatch(rows, false)
+			return nil, err
+		}
 		kept := inherited[:0]
 		row, miss := 0, 0
 		for i, candidate := range inherited {
 			if miss < len(missing) && missing[miss] == int64(i) {
 				miss++
+				continue
+			}
+			if _, found := slices.BinarySearch(proven, int64(row)); !found {
+				row++
 				continue
 			}
 			cmp, err := compareRowInWrappedBatches(ctx, ses, tables, int(candidate), row, true,

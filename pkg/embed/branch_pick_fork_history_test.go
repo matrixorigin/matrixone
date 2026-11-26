@@ -53,7 +53,7 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 				"data branch create table src from root",
 				"data branch create table dst from root",
 				"delete from dst where k=2", "commit",
-			}, 3, "update src set v=52 where k=2"},
+			}, 5, "update src set v=52 where k=2"},
 			{"parent key restored in the fork commit", []string{
 				"create table root(k int primary key, v int)",
 				"insert into root values(1,10),(2,20)", "begin",
@@ -61,7 +61,7 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 				"data branch create table dst from root",
 				"insert into root values(2,20)",
 				"data branch create table src from root", "commit",
-			}, 2, "update src set v=52 where k=2"},
+			}, 3, "update src set v=52 where k=2"},
 			{"window insert after an unobservable fork", []string{
 				"begin", "create table root(k int primary key, v int)",
 				"insert into root values(1,10),(2,20)",
@@ -69,7 +69,7 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 				"data branch create table dst from root",
 				"delete from src where k=2", "delete from dst where k=2",
 				"drop table root", "commit",
-			}, 3, "insert into src values(2,52)"},
+			}, 5, "insert into src values(2,52)"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				run := func(statements ...string) {

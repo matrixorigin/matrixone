@@ -2410,7 +2410,9 @@ func constructChangeHandle(
 		return
 	}
 	tables.zeroHistoryBaseStarts = baseRange.zeroHistoryStarts
-	if tarRange.firstCommitted.tableID != 0 && baseRange.firstCommitted.tableID != 0 &&
+	if branchInfo.tarFirstFork != 0 && len(branchInfo.baseForks) != 0 &&
+		tarRange.firstCommitted.tableID == branchInfo.tarFirstFork &&
+		baseRange.firstCommitted.tableID == branchInfo.baseForks[0].child &&
 		tarRange.firstCommitted.snapshot.EQ(&baseRange.firstCommitted.snapshot) &&
 		(!tables.lcaHasZeroHistory || tables.lcaRel != nil && tarRange.firstCommitted.snapshot.EQ(&tables.lcaCTS)) {
 		tables.pickOrigin = &dataBranchPickOrigin{
@@ -4428,6 +4430,9 @@ func decideLCABranchTSFromBranchDAG(
 		branchInfo.pathFromLCAToBaseTS = buildTSs(baseTSs)
 		branchInfo.pathFromLCAToBaseLineageOnly = dataBranchPathLineageOnly(dag, baseIDs)
 		if tblStuff.boundedPick {
+			if i, ok := firstDataBranchForkIndex(branchInfo.pathFromLCAToTarLineageOnly, len(tarIDs)); ok {
+				branchInfo.tarFirstFork = tarIDs[i]
+			}
 			for i := 1; i < len(baseIDs); i++ {
 				if branchInfo.pathFromLCAToBaseLineageOnly[i] {
 					continue

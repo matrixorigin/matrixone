@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"slices"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -59,19 +61,45 @@ func captureDataBranchForkKeys(
 	ledger := catalog.MO_CATALOG + "." + catalog.MO_BRANCH_FORK_KEYS
 	bh.ClearExecResultSet()
 	if fullImage {
-		pk := sqlquote.Ident(destination.Pkey.PkeyColName)
+		pk := "fork_image." + sqlquote.Ident(destination.Pkey.PkeyColName)
 		if destination.Pkey.CompPkeyCol == nil {
 			column := dataBranchColumnDefByName(destination, destination.Pkey.PkeyColName)
-			if types.T(column.Typ.Id) == types.T_enum {
-				// SQL serial normally binds ENUM to its display string; the key
-				// probe uses the stored ordinal.
-				pk = "cast(" + pk + " as smallint unsigned)"
-			}
-			pk = "serial(" + pk + ")"
+			pk = "serial(" + forkColumnValueSQL(column) + ")"
 		}
-		if err := bh.Exec(ownerCtx, fmt.Sprintf("insert into %s (table_id,key_bytes) select %d,%s from %s.%s",
-			ledger, receipt.dstTableID, pk, sqlquote.Ident(receipt.dstDb), sqlquote.Ident(receipt.dstTbl))); err != nil {
-			return err
+		tables := []string{receipt.dstTbl}
+		if partitions := ses.proc.GetPartitionService(); partitions.Enabled() && features.IsPartitioned(destination.FeatureFlag) {
+			// Read the same physical relations the clone wrote. The logical
+			// partition scan can omit their uncommitted objects.
+			metadata, err := partitions.GetPartitionMetadata(ownerCtx, receipt.dstTableID, txn)
+			if err != nil {
+				return err
+			}
+			if len(metadata.Partitions) == 0 {
+				return nil // An empty logical scan cannot certify the fork.
+			}
+			tables = make([]string, len(metadata.Partitions))
+			for i, partition := range metadata.Partitions {
+				tables[i] = partition.PartitionTableName
+			}
+		}
+		var join string
+		if columns := forkRowColumns(destination); len(columns) != 0 {
+			names := make([]string, len(columns))
+			for i, col := range columns {
+				names[i] = forkColumnValueSQL(col)
+			}
+			// The row proof includes the entire visible row, so identical
+			// writes made independently after a fork cannot hide conflicts.
+			pk = fmt.Sprintf("case fork_evidence.kind when 0 then %s else concat(x'%02x',unhex(sha2(serial_full(%s),256))) end",
+				pk, dataBranchForkRowProofPrefix, strings.Join(names, ","))
+			join = " cross join (select 0 as kind union all select 1) as fork_evidence"
+		}
+		for _, table := range tables {
+			from := sqlquote.Ident(receipt.dstDb) + "." + sqlquote.Ident(table) + " as fork_image" + join
+			if err := bh.Exec(ownerCtx, fmt.Sprintf("insert into %s (table_id,key_bytes) select %d,%s from %s",
+				ledger, receipt.dstTableID, pk, from)); err != nil {
+				return err
+			}
 		}
 	}
 	marker := "x''"
@@ -79,6 +107,75 @@ func captureDataBranchForkKeys(
 		marker = "null"
 	}
 	return bh.Exec(ownerCtx, fmt.Sprintf("insert into %s (table_id,key_bytes) values (%d,%s)", ledger, receipt.dstTableID, marker))
+}
+
+// Packed primary keys start with a tuple type byte. The reserved 0xff
+// prefix identifies SHA-256 row proofs without changing the ledger schema.
+const dataBranchForkRowProofPrefix = 0xff
+
+func forkColumnValueSQL(col *plan.ColDef) string {
+	name := "fork_image." + sqlquote.Ident(col.Name)
+	// Use the stored ordinal or bitmap, matching the probe vectors.
+	if types.T(col.Typ.Id) == types.T_enum {
+		return "cast(" + name + " as smallint unsigned)"
+	}
+	if col.Typ.Enumvalues != "" {
+		return "cast(" + name + " as bigint unsigned)"
+	}
+	return name
+}
+
+func forkRowColumns(def *plan.TableDef) []*plan.ColDef {
+	var columns []*plan.ColDef
+	for _, col := range def.Cols {
+		if !isDataBranchUserVisibleColumn(col) {
+			continue
+		}
+		oid := types.T(col.Typ.Id)
+		// Keep key evidence for domains without a common SQL and vector
+		// serialization.
+		if !function.SerialTypeSupported(oid) || oid == types.T_datalink {
+			return nil
+		}
+		columns = append(columns, col)
+	}
+	return columns
+}
+
+func lookupDataBranchForkRows(
+	ctx context.Context, ses *Session, bh BackgroundExec, tableID uint64, columns []*vector.Vector, length int,
+) ([]int64, error) {
+	// SQL binds ENUM functions to the display label unless explicitly
+	// cast. Use the same ordinal on both sides of the proof.
+	for i, col := range columns {
+		if col.GetType().Oid != types.T_enum {
+			continue
+		}
+		ordinals, err := dataBranchForkEnumOrdinals(col, ses.proc.Mp())
+		if err != nil {
+			return nil, err
+		}
+		defer ordinals.Free(ses.proc.Mp())
+		columns[i] = ordinals
+	}
+	serialized, err := function.RunFunctionDirectly(ses.proc, function.SerialFullFunctionEncodeID, columns, length)
+	if err != nil {
+		return nil, err
+	}
+	defer serialized.Free(ses.proc.Mp())
+	keys := vector.NewVec(types.T_varbinary.ToType(), ses.proc.Mp())
+	defer keys.Free(ses.proc.Mp())
+	for row := range length {
+		var proof [1 + sha256.Size]byte
+		proof[0] = dataBranchForkRowProofPrefix
+		sum := sha256.Sum256(serialized.GetBytesAt(row))
+		copy(proof[1:], sum[:])
+		if err := vector.AppendBytes(keys, proof[:], false, ses.proc.Mp()); err != nil {
+			return nil, err
+		}
+	}
+	found, _, _, err := lookupDataBranchForkKeys(ctx, ses, bh, tableID, keys, true)
+	return found, err
 }
 
 func forkNeedsFullImage(
@@ -114,17 +211,30 @@ func encodeDataBranchForkKeys(ses *Session, keys *vector.Vector, composite bool)
 		return keys, nil
 	}
 	if keys.GetType().Oid == types.T_enum {
-		ordinals := vector.NewVec(types.T_uint16.ToType(), ses.proc.Mp())
-		defer ordinals.Free(ses.proc.Mp())
-		for row := range keys.Length() {
-			ordinal := vector.GetFixedAtNoTypeCheck[types.Enum](keys, row)
-			if err := vector.AppendFixed(ordinals, uint16(ordinal), false, ses.proc.Mp()); err != nil {
-				return nil, err
-			}
+		ordinals, err := dataBranchForkEnumOrdinals(keys, ses.proc.Mp())
+		if err != nil {
+			return nil, err
 		}
+		defer ordinals.Free(ses.proc.Mp())
 		keys = ordinals
 	}
 	return function.RunFunctionDirectly(ses.proc, function.SerialFunctionEncodeID, []*vector.Vector{keys}, keys.Length())
+}
+
+func dataBranchForkEnumOrdinals(values *vector.Vector, mp *mpool.MPool) (*vector.Vector, error) {
+	ordinals := vector.NewVec(types.T_uint16.ToType(), mp)
+	for row := range values.Length() {
+		isNull := values.IsNull(uint64(row))
+		var ordinal uint16
+		if !isNull {
+			ordinal = uint16(vector.GetFixedAtNoTypeCheck[types.Enum](values, row))
+		}
+		if err := vector.AppendFixed(ordinals, ordinal, isNull, mp); err != nil {
+			ordinals.Free(mp)
+			return nil, err
+		}
+	}
+	return ordinals, nil
 }
 
 // lookupDataBranchForkKeys returns indexes in the input key vector. The
