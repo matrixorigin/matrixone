@@ -338,6 +338,8 @@ func performLock(
 		if len(group) > 1 {
 			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group, observation)
 		}
+		opts := DefaultLockOptions(lockOp.ctr.parker)
+		opts.requireExactRows = target.requireExactRows
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
@@ -349,8 +351,7 @@ func performLock(
 			target.primaryColumnIndexInBatch,
 			target.primaryColumnType,
 			target.partitionColumnIndexInBatch,
-			DefaultLockOptions(lockOp.ctr.parker).
-				withLockRead(lockReadRoot, observation).
+			opts.withLockRead(lockReadRoot, observation).
 				WithLockMode(target.mode).
 				WithFetchLockRowsFunc(fetchRows).
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
@@ -678,19 +679,29 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	// An internal catalog statement with a bounded key set must never acquire
+	// a covering range, even if an unexpected plan asks for a table lock.
+	if g != lock.Granularity_Row && opts.requireExactRows {
+		return false, false, timestamp.Timestamp{}, moerr.NewLockNeedUpgradeNoCtx()
+	}
+
 	if g == lock.Granularity_Row && len(rows) > 1 {
 		rows = dedupLockRows(rows)
 	}
 
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
-		Granularity:     g,
-		Policy:          proc.GetWaitPolicy(),
-		Mode:            opts.mode,
-		TableDefChanged: opts.changeDef,
-		Sharding:        opts.sharding,
-		Group:           opts.group,
-		SnapShotTs:      txnOp.CreateTS(),
+		Granularity:      g,
+		Policy:           proc.GetWaitPolicy(),
+		Mode:             opts.mode,
+		TableDefChanged:  opts.changeDef,
+		Sharding:         opts.sharding,
+		Group:            opts.group,
+		SnapShotTs:       txnOp.CreateTS(),
+		BypassLocalProxy: txnOp.TxnOptions().CatalogMaintenance(),
+	}
+	if opts.requireExactRows {
+		options = options.WithExactRows()
 	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
@@ -1065,7 +1076,7 @@ func LockWithMayUpgrade(
 		return lock.Result{}, err
 	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
-	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) || opts.requireExactRows {
 		return result, err
 	}
 
@@ -1377,6 +1388,7 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 			Mode:                 target.mode,
 			LockRows:             plan.DeepCopyExpr(target.lockRows),
 			LockTableAtTheEnd:    target.lockTableAtTheEnd,
+			RequireExactRows:     target.requireExactRows,
 			ObjRef:               plan.DeepCopyObjectRef(target.objRef),
 			PartitionColIdxInBat: target.partitionColumnIndexInBatch,
 		}
@@ -1407,6 +1419,7 @@ func (lockOp *LockOp) CopyTargetsFrom(src *LockOp) {
 			mode:                         t.mode,
 			lockRows:                     plan.DeepCopyExpr(t.lockRows),
 			lockTableAtTheEnd:            t.lockTableAtTheEnd,
+			requireExactRows:             t.requireExactRows,
 		}
 	}
 }
@@ -1431,6 +1444,15 @@ func (lockOp *LockOp) AddLockTarget(
 		refreshTimestampIndexInBatch,
 		lockRows,
 		lockTableAtTheEnd)
+}
+
+// RequireExactRows confines locks for this target to individual keys.
+func (lockOp *LockOp) RequireExactRows(tableID uint64) {
+	for i := range lockOp.targets {
+		if lockOp.targets[i].tableID == tableID {
+			lockOp.targets[i].requireExactRows = true
+		}
+	}
 }
 
 // AddLockTargetWithMode add lock target with lock mode
@@ -1750,6 +1772,9 @@ func lockTalbeIfLockCountIsZero(
 		} else {
 			if !target.lockTableAtTheEnd {
 				continue
+			}
+			if target.requireExactRows {
+				return moerr.NewLockNeedUpgradeNoCtx()
 			}
 			err := LockTableWithMode(
 				lockOp.engine, proc, target.tableID, target.primaryColumnType, target.mode, false)

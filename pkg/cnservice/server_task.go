@@ -97,7 +97,7 @@ func (s *service) initTaskServiceHolder() {
 func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
 	// Notify frontend to setup the special account used to task framework create and query async tasks.
 	// The account is always in the memory.
-	frontend.SetSpecialUser(command.User.Username, []byte(command.User.Password))
+	frontend.SetTaskServiceUser(command.User.Username, []byte(command.User.Password))
 
 	if err := s.task.holder.Create(*command); err != nil {
 		s.logger.Error("create task service failed", zap.Error(err))

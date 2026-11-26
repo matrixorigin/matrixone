@@ -61,7 +61,25 @@ func (lp *localLockTableProxy) lock(
 	rows [][]byte,
 	options LockOptions,
 	cb func(pb.Result, error)) {
-	if options.Mode != pb.LockMode_Shared {
+	// Restore goes directly to the owner from its first request, even when
+	// an ordinary shared request precedes an exact point in the same transaction.
+	// Otherwise a proxy Skip/ReplaceTo on unlock could strand a direct lock.
+	bind := lp.getBind()
+	h := txn.getHoldLocksLocked(bind.Group)
+	ownerOnly, routed := h.proxyOwnerOnly[bind.Table]
+	requiresOwner := options.ExactRows || options.BypassLocalProxy
+	if requiresOwner && routed && !ownerOnly {
+		cb(pb.Result{}, moerr.NewTxnNeedRetry(ctx))
+		return
+	}
+	if !routed && (requiresOwner || options.Mode == pb.LockMode_Shared) {
+		if h.proxyOwnerOnly == nil {
+			h.proxyOwnerOnly = make(map[uint64]bool)
+		}
+		ownerOnly = requiresOwner
+		h.proxyOwnerOnly[bind.Table] = ownerOnly
+	}
+	if ownerOnly || options.Mode != pb.LockMode_Shared {
 		lp.remote.lock(ctx, txn, rows, options, cb)
 		return
 	}
@@ -140,7 +158,6 @@ func (lp *localLockTableProxy) lock(
 	lp.mu.Lock()
 	r := v.result
 	lp.mu.Unlock()
-	bind := lp.getBind()
 	err := txn.lockAdded(bind.Group, bind, rows, lp.logger)
 	if err != nil {
 		lp.mu.Lock()
@@ -195,7 +212,7 @@ func (lp *localLockTableProxy) releaseLocks(
 	}
 
 	skipped := 0
-	n := rows.len()
+	n := rows.totalLen()
 	var remoteMutations []pb.ExtraMutation
 	var updates []holderUpdate
 	var newPending []string
@@ -288,10 +305,10 @@ func (lp *localLockTableProxy) releaseLocks(
 	// all skipped
 	var err error
 	if unlocker, ok := lp.remote.(contextUnlocker); ok {
-		if skipped != rows.len() {
+		if skipped != n {
 			err = unlocker.unlockWithContext(ctx, txn, ls, commitTS, remoteMutations...)
 		}
-	} else if skipped != rows.len() {
+	} else if skipped != n {
 		lp.remote.unlock(txn, ls, commitTS, remoteMutations...)
 	}
 	if err != nil {

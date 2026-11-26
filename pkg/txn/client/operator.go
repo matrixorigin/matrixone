@@ -111,6 +111,13 @@ func WithUserTxn() TxnOption {
 	}
 }
 
+// WithCatalogMaintenance retains the catalog maintenance lock policy across CN transaction snapshots.
+func WithCatalogMaintenance() TxnOption {
+	return func(tc *txnOperator) {
+		tc.opts.options = tc.opts.options.WithCatalogMaintenance(true)
+	}
+}
+
 // WithTxnReadyOnly setup readonly flag
 func WithTxnReadyOnly() TxnOption {
 	return func(tc *txnOperator) {
@@ -721,6 +728,8 @@ func (tc *txnOperator) initWithRunSQLGate(
 	tc.initReset(sealRunSQL)
 	tc.initProtectedFields(sealRunSQL)
 
+	// Lock routing is chosen for this transaction, including when the operator is reused.
+	tc.opts.options = tc.opts.options.WithCatalogMaintenance(false)
 	tc.mu.txn = txnMeta
 	tc.reset.txnID = txnMeta.ID
 	tc.lockAdmissionClosed.Store(false)

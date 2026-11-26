@@ -10739,6 +10739,7 @@ func (builder *QueryBuilder) collectLockTargets(nodeID int32, callerCtx *BindCon
 			pkPos, pkTyp := getPkPos(tableDef, false)
 			if pkPos >= 0 {
 				lockTarget := &plan.LockTarget{
+					RequireExactRows:   builder.requiresExactAccountRows(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName()),
 					TableId:            tableDef.TblId,
 					PrimaryColIdxInBat: int32(pkPos),
 					PrimaryColRelPos:   node.BindingTags[0],

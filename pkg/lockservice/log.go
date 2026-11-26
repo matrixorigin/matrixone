@@ -737,7 +737,7 @@ func logTxnUnlockTableCompleted(
 			getLogOptions(zap.DebugLevel),
 			txnField(txn),
 			zap.Uint64("table", table),
-			bytesArrayField("rows", locks.values[:locks.len()]),
+			bytesArrayField("rows", locks.all()),
 		)
 	}
 }

@@ -195,6 +195,7 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 		FilterColRelPos:      target.FilterColRelPos,
 		LockRows:             DeepCopyExpr(target.LockRows),
 		LockTableAtTheEnd:    target.LockTableAtTheEnd,
+		RequireExactRows:     target.RequireExactRows,
 		PartitionColIdxInBat: target.PartitionColIdxInBat,
 		HasPartitionCol:      target.HasPartitionCol,
 	}
