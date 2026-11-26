@@ -211,10 +211,10 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 	pendingDels := make(transferredDeleteSet)
 	defer func() {
 		if rowIDVec != nil {
-			rowIDVec.Close()
+			containers.ReleaseVector(rowIDVec)
 		}
 		if pkVec != nil {
-			pkVec.Close()
+			containers.ReleaseVector(pkVec)
 		}
 	}()
 	for i, obj := range entry.aobjMetas {
@@ -241,8 +241,8 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 		if bat == nil || bat.Length() == 0 {
 			continue
 		}
-		rowid := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector())
-		ts := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).GetDownstreamVector())
+		rowid := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr))
+		ts := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr))
 		deletesPK := bat.GetVectorByName(objectio.TombstoneAttr_PK_Attr)
 
 		count := len(rowid)
@@ -269,8 +269,8 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 				rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), entry.rt.VectorPool.Small.GetMPool())
 			}
 			rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*entry.createdObjHandle.GetID(), destpos.BlkIdx, destpos.RowIdx)
-			rowIDVec.Append(rowID, false)
-			pkVec.Append(deletesPK.Get(i), false)
+			containers.AppendValue(rowIDVec, rowID, false)
+			containers.AppendValue(pkVec, containers.GetValue(deletesPK, i), false)
 			pendingDels.add(rowid[i])
 			transCnt++
 		}

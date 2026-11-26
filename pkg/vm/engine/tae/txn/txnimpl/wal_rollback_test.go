@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -91,7 +92,7 @@ func TestOversizeWALAfterApplyAppendRollsBack(t *testing.T) {
 	readRel, err := readDB.GetRelationByName(schema.Name)
 	require.NoError(t, err)
 	pkIdx := schema.GetSingleSortKeyIdx()
-	pk := bat.Vecs[pkIdx].Get(0)
+	pk := containers.GetValue(bat.Vecs[pkIdx], 0)
 	value, isNull, err := readRel.GetValueByFilter(ctx, handle.NewEQFilter(pk), pkIdx)
 	require.NoError(t, err)
 	require.False(t, isNull)

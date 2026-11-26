@@ -387,9 +387,7 @@ func (bb *OneSchemaBatchBuffer) Close(mp *mpool.MPool) {
 
 func ToCNBatch(tnBat *Batch) *batch.Batch {
 	cnBat := batch.NewWithSize(len(tnBat.Attrs))
-	for i, vec := range tnBat.Vecs {
-		cnBat.Vecs[i] = vec.GetDownstreamVector()
-	}
+	copy(cnBat.Vecs, tnBat.Vecs)
 	cnBat.SetRowCount(tnBat.Length())
 	return cnBat
 }
@@ -399,39 +397,23 @@ func ToCNBatch(tnBat *Batch) *batch.Batch {
 func ToTNBatch(cnBat *batch.Batch, attrs []string, mp *mpool.MPool) *Batch {
 	tnBat := NewEmptyBatch()
 	for i, vec := range cnBat.Vecs {
-		v := ToTNVector(vec, mp)
-		tnBat.AddVector(attrs[i], v)
+		tnBat.AddVector(attrs[i], vec)
 	}
 	return tnBat
 }
 
-func ToTNVector(v *vector.Vector, mp *mpool.MPool) Vector {
-	vec := MakeVector(*v.GetType(), mp)
-	vec.setDownstreamVector(v)
-	return vec
-}
-
+// CloneVector copies src into a vector lent by vp, or owned by mp when vp is
+// nil.
 func CloneVector(src *vector.Vector, mp *mpool.MPool, vp *VectorPool) (Vector, error) {
-	var vec Vector
 	if vp != nil {
-		vec = vp.GetVector(src.GetType())
-		mp = vp.GetMPool()
-		if err := src.CloneWindowTo(
-			vec.GetDownstreamVector(), 0, src.Length(), mp,
-		); err != nil {
-			vec.Close()
+		vec := vp.GetVector(src.GetType())
+		if err := src.CloneWindowTo(vec, 0, src.Length(), vp.GetMPool()); err != nil {
+			ReleaseVector(vec)
 			return nil, err
 		}
-	} else {
-		vec = MakeVector(*src.GetType(), mp)
-		if v, err := src.CloneWindow(0, src.Length(), mp); err != nil {
-			vec.Close()
-			return nil, err
-		} else {
-			vec.setDownstreamVector(v)
-		}
+		return vec, nil
 	}
-	return vec, nil
+	return src.CloneWindow(0, src.Length(), mp)
 }
 
 // ### Get Functions
@@ -613,8 +595,7 @@ func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool
 func NewNonNullBatchWithSharedMemory(b *batch.Batch, attrs []string, mp *mpool.MPool) *Batch {
 	bat := NewBatch()
 	for i, attr := range attrs {
-		v := ToTNVector(b.Vecs[i], mp)
-		bat.AddVector(attr, v)
+		bat.AddVector(attr, b.Vecs[i])
 	}
 	return bat
 }
@@ -631,7 +612,7 @@ func ForeachVectorWindow(
 	sel *nulls.Nulls,
 ) (err error) {
 	typ := vec.GetType()
-	col := vec.GetDownstreamVector()
+	col := vec
 	if typ.IsVarlen() {
 		var op func([]byte, bool, int) error
 		if op1 != nil {

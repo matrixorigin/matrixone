@@ -41,70 +41,70 @@ func FillColumnRow(table *catalog.TableEntry, schema *catalog.Schema, attr strin
 	for i, colDef := range schema.ColDefs {
 		switch attr {
 		case pkgcatalog.SystemColAttr_UniqName:
-			colData.Append([]byte(fmt.Sprintf("%d-%s", tableID, colDef.Name)), false)
+			containers.AppendValue(colData, []byte(fmt.Sprintf("%d-%s", tableID, colDef.Name)), false)
 		case pkgcatalog.SystemColAttr_AccID:
-			colData.Append(schema.AcInfo.TenantID, false)
+			containers.AppendValue(colData, schema.AcInfo.TenantID, false)
 		case pkgcatalog.SystemColAttr_Name:
-			colData.Append([]byte(colDef.Name), false)
+			containers.AppendValue(colData, []byte(colDef.Name), false)
 		case pkgcatalog.SystemColAttr_Num:
-			colData.Append(int32(i+1), false)
+			containers.AppendValue(colData, int32(i+1), false)
 		case pkgcatalog.SystemColAttr_Type:
 			//colData.Append(int32(colDef.Type.Oid))
 			data, _ := types.Encode(&colDef.Type)
-			colData.Append(data, false)
+			containers.AppendValue(colData, data, false)
 		case pkgcatalog.SystemColAttr_DBID:
-			colData.Append(table.GetDB().GetID(), false)
+			containers.AppendValue(colData, table.GetDB().GetID(), false)
 		case pkgcatalog.SystemColAttr_DBName:
-			colData.Append([]byte(table.GetDB().GetName()), false)
+			containers.AppendValue(colData, []byte(table.GetDB().GetName()), false)
 		case pkgcatalog.SystemColAttr_RelID:
-			colData.Append(tableID, false)
+			containers.AppendValue(colData, tableID, false)
 		case pkgcatalog.SystemColAttr_RelName:
-			colData.Append([]byte(schema.Name), false)
+			containers.AppendValue(colData, []byte(schema.Name), false)
 		case pkgcatalog.SystemColAttr_ConstraintType:
 			if colDef.Primary {
-				colData.Append([]byte(pkgcatalog.SystemColPKConstraint), false)
+				containers.AppendValue(colData, []byte(pkgcatalog.SystemColPKConstraint), false)
 			} else {
-				colData.Append([]byte(pkgcatalog.SystemColNoConstraint), false)
+				containers.AppendValue(colData, []byte(pkgcatalog.SystemColNoConstraint), false)
 			}
 		case pkgcatalog.SystemColAttr_Length:
-			colData.Append(int32(colDef.Type.Width), false)
+			containers.AppendValue(colData, int32(colDef.Type.Width), false)
 		case pkgcatalog.SystemColAttr_NullAbility:
-			colData.Append(bool2i8(!colDef.NullAbility), false)
+			containers.AppendValue(colData, bool2i8(!colDef.NullAbility), false)
 		case pkgcatalog.SystemColAttr_HasExpr:
-			colData.Append(bool2i8(len(colDef.Default) > 0), false) // @imlinjunhong says always has Default, expect row_id
+			containers.AppendValue(colData, bool2i8(len(colDef.Default) > 0), false) // @imlinjunhong says always has Default, expect row_id
 		case pkgcatalog.SystemColAttr_DefaultExpr:
-			colData.Append(colDef.Default, false)
+			containers.AppendValue(colData, colDef.Default, false)
 		case pkgcatalog.SystemColAttr_IsDropped:
-			colData.Append(int8(0), false)
+			containers.AppendValue(colData, int8(0), false)
 		case pkgcatalog.SystemColAttr_IsHidden:
-			colData.Append(bool2i8(colDef.Hidden), false)
+			containers.AppendValue(colData, bool2i8(colDef.Hidden), false)
 		case pkgcatalog.SystemColAttr_IsUnsigned:
-			colData.Append(bool2i8(colDef.Type.IsUInt()), false)
+			containers.AppendValue(colData, bool2i8(colDef.Type.IsUInt()), false)
 		case pkgcatalog.SystemColAttr_IsAutoIncrement:
-			colData.Append(bool2i8(colDef.AutoIncrement), false)
+			containers.AppendValue(colData, bool2i8(colDef.AutoIncrement), false)
 		case pkgcatalog.SystemColAttr_Comment:
-			colData.Append([]byte(colDef.Comment), false)
+			containers.AppendValue(colData, []byte(colDef.Comment), false)
 		case pkgcatalog.SystemColAttr_HasUpdate:
-			colData.Append(bool2i8(len(colDef.OnUpdate) > 0), false)
+			containers.AppendValue(colData, bool2i8(len(colDef.OnUpdate) > 0), false)
 		case pkgcatalog.SystemColAttr_IsClusterBy:
-			colData.Append(bool2i8(colDef.IsClusterBy()), false)
+			containers.AppendValue(colData, bool2i8(colDef.IsClusterBy()), false)
 		case pkgcatalog.SystemColAttr_Update:
-			colData.Append(colDef.OnUpdate, false)
+			containers.AppendValue(colData, colDef.OnUpdate, false)
 		case pkgcatalog.SystemColAttr_Seqnum:
-			colData.Append(colDef.SeqNum, false)
+			containers.AppendValue(colData, colDef.SeqNum, false)
 		case pkgcatalog.SystemColAttr_EnumValues:
-			colData.Append([]byte(colDef.EnumValues), false)
+			containers.AppendValue(colData, []byte(colDef.EnumValues), false)
 		case pkgcatalog.SystemColAttr_HasGenerated:
-			colData.Append(bool2i8(len(colDef.GeneratedCol) > 0), false)
+			containers.AppendValue(colData, bool2i8(len(colDef.GeneratedCol) > 0), false)
 		case pkgcatalog.SystemColAttr_Generated:
-			colData.Append(colDef.GeneratedCol, false)
+			containers.AppendValue(colData, colDef.GeneratedCol, false)
 		case pkgcatalog.SystemColAttr_CPKey:
 			packer := types.NewPacker()
 			packer.EncodeUint32(schema.AcInfo.TenantID)
 			packer.EncodeStringType([]byte(table.GetDB().GetName()))
 			packer.EncodeStringType([]byte(schema.Name))
 			packer.EncodeStringType([]byte(colDef.Name))
-			colData.Append(packer.Bytes(), false)
+			containers.AppendValue(colData, packer.Bytes(), false)
 			packer.Close()
 		case pkgcatalog.Row_ID:
 		default:
@@ -116,54 +116,54 @@ func FillColumnRow(table *catalog.TableEntry, schema *catalog.Schema, attr strin
 func FillTableRow(table *catalog.TableEntry, schema *catalog.Schema, attr string, colData containers.Vector) {
 	switch attr {
 	case pkgcatalog.SystemRelAttr_ID:
-		colData.Append(table.GetID(), false)
+		containers.AppendValue(colData, table.GetID(), false)
 	case pkgcatalog.SystemRelAttr_Name:
-		colData.Append([]byte(schema.Name), false)
+		containers.AppendValue(colData, []byte(schema.Name), false)
 	case pkgcatalog.SystemRelAttr_DBName:
-		colData.Append([]byte(table.GetDB().GetName()), false)
+		containers.AppendValue(colData, []byte(table.GetDB().GetName()), false)
 	case pkgcatalog.SystemRelAttr_DBID:
-		colData.Append(table.GetDB().GetID(), false)
+		containers.AppendValue(colData, table.GetDB().GetID(), false)
 	case pkgcatalog.SystemRelAttr_Comment:
-		colData.Append([]byte(schema.Comment), false)
+		containers.AppendValue(colData, []byte(schema.Comment), false)
 	case pkgcatalog.SystemRelAttr_Partitioned:
-		colData.Append(schema.Partitioned, false)
+		containers.AppendValue(colData, schema.Partitioned, false)
 	case pkgcatalog.SystemRelAttr_Partition:
-		colData.Append([]byte(schema.Partition), false)
+		containers.AppendValue(colData, []byte(schema.Partition), false)
 	case pkgcatalog.SystemRelAttr_Persistence:
-		colData.Append([]byte(pkgcatalog.SystemPersistRel), false)
+		containers.AppendValue(colData, []byte(pkgcatalog.SystemPersistRel), false)
 	case pkgcatalog.SystemRelAttr_Kind:
-		colData.Append([]byte(schema.Relkind), false)
+		containers.AppendValue(colData, []byte(schema.Relkind), false)
 	case pkgcatalog.SystemRelAttr_CreateSQL:
-		colData.Append([]byte(schema.Createsql), false)
+		containers.AppendValue(colData, []byte(schema.Createsql), false)
 	case pkgcatalog.SystemRelAttr_ViewDef:
-		colData.Append([]byte(schema.View), false)
+		containers.AppendValue(colData, []byte(schema.View), false)
 	case pkgcatalog.SystemRelAttr_Owner:
-		colData.Append(schema.AcInfo.RoleID, false)
+		containers.AppendValue(colData, schema.AcInfo.RoleID, false)
 	case pkgcatalog.SystemRelAttr_Creator:
-		colData.Append(schema.AcInfo.UserID, false)
+		containers.AppendValue(colData, schema.AcInfo.UserID, false)
 	case pkgcatalog.SystemRelAttr_CreateAt:
-		colData.Append(schema.AcInfo.CreateAt, false)
+		containers.AppendValue(colData, schema.AcInfo.CreateAt, false)
 	case pkgcatalog.SystemRelAttr_AccID:
-		colData.Append(schema.AcInfo.TenantID, false)
+		containers.AppendValue(colData, schema.AcInfo.TenantID, false)
 	case pkgcatalog.SystemRelAttr_Constraint:
-		colData.Append(schema.Constraint, false)
+		containers.AppendValue(colData, schema.Constraint, false)
 	case pkgcatalog.SystemRelAttr_Version:
-		colData.Append(schema.Version, false)
+		containers.AppendValue(colData, schema.Version, false)
 	case pkgcatalog.SystemRelAttr_CatalogVersion:
-		colData.Append(schema.CatalogVersion, false)
+		containers.AppendValue(colData, schema.CatalogVersion, false)
 	case pkgcatalog.SystemRelAttr_CPKey:
 		packer := types.NewPacker()
 		packer.EncodeUint32(schema.AcInfo.TenantID)
 		packer.EncodeStringType([]byte(table.GetDB().GetName()))
 		packer.EncodeStringType([]byte(schema.Name))
-		colData.Append(packer.Bytes(), false)
+		containers.AppendValue(colData, packer.Bytes(), false)
 		packer.Close()
 	case pkgcatalog.Row_ID:
 		// fill outside of this func
 	case pkgcatalog.SystemRelAttr_ExtraInfo:
-		colData.Append(schema.MustGetExtraBytes(), false)
+		containers.AppendValue(colData, schema.MustGetExtraBytes(), false)
 	case pkgcatalog.SystemRelAttr_LogicalID:
-		colData.Append(table.GetID(), false)
+		containers.AppendValue(colData, table.GetID(), false)
 	default:
 		panic(fmt.Sprintf("unexpected colname %q. if add new catalog def, fill it in this switch", attr))
 	}
@@ -172,28 +172,28 @@ func FillTableRow(table *catalog.TableEntry, schema *catalog.Schema, attr string
 func FillDBRow(db *catalog.DBEntry, attr string, colData containers.Vector) {
 	switch attr {
 	case pkgcatalog.SystemDBAttr_ID:
-		colData.Append(db.GetID(), false)
+		containers.AppendValue(colData, db.GetID(), false)
 	case pkgcatalog.SystemDBAttr_Name:
-		colData.Append([]byte(db.GetName()), false)
+		containers.AppendValue(colData, []byte(db.GetName()), false)
 	case pkgcatalog.SystemDBAttr_CatalogName:
-		colData.Append([]byte(pkgcatalog.SystemCatalogName), false)
+		containers.AppendValue(colData, []byte(pkgcatalog.SystemCatalogName), false)
 	case pkgcatalog.SystemDBAttr_CreateSQL:
-		colData.Append([]byte(db.GetCreateSql()), false)
+		containers.AppendValue(colData, []byte(db.GetCreateSql()), false)
 	case pkgcatalog.SystemDBAttr_Owner:
-		colData.Append(db.GetRoleID(), false)
+		containers.AppendValue(colData, db.GetRoleID(), false)
 	case pkgcatalog.SystemDBAttr_Creator:
-		colData.Append(db.GetUserID(), false)
+		containers.AppendValue(colData, db.GetUserID(), false)
 	case pkgcatalog.SystemDBAttr_CreateAt:
-		colData.Append(db.GetCreateAt(), false)
+		containers.AppendValue(colData, db.GetCreateAt(), false)
 	case pkgcatalog.SystemDBAttr_AccID:
-		colData.Append(db.GetTenantID(), false)
+		containers.AppendValue(colData, db.GetTenantID(), false)
 	case pkgcatalog.SystemDBAttr_Type:
-		colData.Append([]byte(db.GetDatType()), false)
+		containers.AppendValue(colData, []byte(db.GetDatType()), false)
 	case pkgcatalog.SystemDBAttr_CPKey:
 		packer := types.NewPacker()
 		packer.EncodeUint32(db.GetTenantID())
 		packer.EncodeStringType([]byte(db.GetName()))
-		colData.Append(packer.Bytes(), false)
+		containers.AppendValue(colData, packer.Bytes(), false)
 		packer.Close()
 	case pkgcatalog.Row_ID:
 		// fill outside of this func

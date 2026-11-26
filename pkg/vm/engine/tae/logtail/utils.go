@@ -371,9 +371,9 @@ func LoadBlkColumnsByMeta(
 			if pkgVec.Length() == 0 {
 				vec = containers.MakeVector(colTypes[i], mp)
 			} else {
-				srcVec := containers.ToTNVector(pkgVec, mp)
-				defer srcVec.Close()
-				vec = srcVec.CloneWindow(0, srcVec.Length(), mp)
+				srcVec := pkgVec
+				defer containers.ReleaseVector(srcVec)
+				vec = containers.CloneWindow(srcVec, 0, srcVec.Length(), mp)
 			}
 			bat.AddVector(colNames[idx], vec)
 			bat.Vecs[i] = vec

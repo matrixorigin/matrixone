@@ -686,7 +686,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 }
 
 func GetSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row int) (v any) {
-	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(row)
+	v = containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], row)
 	return
 }
 

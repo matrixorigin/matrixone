@@ -254,12 +254,12 @@ func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter,
 	schema := h.table.GetLocalSchema(false)
 	pkDef := schema.GetPrimaryKey()
 	pkVec := makeWorkspaceVector(pkDef.Type)
-	defer pkVec.Close()
+	defer containers.ReleaseVector(pkVec)
 	pkVal, _, err := h.table.GetValue(ctx, id, row, uint16(pkDef.Idx), true)
 	if err != nil {
 		return err
 	}
-	pkVec.Append(pkVal, false)
+	containers.AppendValue(pkVec, pkVal, false)
 	bat := containers.NewBatch()
 	defer bat.Close()
 	for _, def := range schema.ColDefs {
@@ -278,7 +278,7 @@ func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter,
 			}
 		}
 		vec := makeWorkspaceVector(def.Type)
-		vec.Append(colVal, colValIsNull)
+		containers.AppendValue(vec, colVal, colValIsNull)
 		bat.AddVector(def.Name, vec)
 	}
 	if err = h.table.RangeDelete(id, row, row, pkVec, handle.DT_Normal); err != nil {
@@ -325,12 +325,12 @@ func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
 	schema := h.table.GetLocalSchema(false)
 	pkDef := schema.GetPrimaryKey()
 	pkVec := makeWorkspaceVector(pkDef.Type)
-	defer pkVec.Close()
+	defer containers.ReleaseVector(pkVec)
 	val, _, err := h.table.GetValue(h.table.store.ctx, id, row, uint16(pkDef.Idx), true)
 	if err != nil {
 		return err
 	}
-	pkVec.Append(val, false)
+	containers.AppendValue(pkVec, val, false)
 	return h.Txn.GetStore().RangeDelete(id, row, row, pkVec, handle.DT_Normal)
 }
 
@@ -341,13 +341,13 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.De
 	schema := h.table.GetLocalSchema(false)
 	pkDef := schema.GetPrimaryKey()
 	pkVec := h.table.store.rt.VectorPool.Small.GetVector(&pkDef.Type)
-	defer pkVec.Close()
+	defer containers.ReleaseVector(pkVec)
 	for row := start; row <= end; row++ {
 		pkVal, _, err := h.table.GetValue(h.table.store.GetContext(), id, row, uint16(pkDef.Idx), true)
 		if err != nil {
 			return err
 		}
-		pkVec.Append(pkVal, false)
+		containers.AppendValue(pkVec, pkVal, false)
 	}
 	return h.Txn.GetStore().RangeDelete(id, start, end, pkVec, dt)
 }

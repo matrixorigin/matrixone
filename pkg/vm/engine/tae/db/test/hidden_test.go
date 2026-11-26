@@ -58,7 +58,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			err := blk.Scan(ctx, &view, 0, []int{schema.PhyAddrKey.Idx}, common.DefaultAllocator)
 			assert.NoError(t, err)
 			fp := blk.Fingerprint()
-			_ = view.Vecs[0].Foreach(func(v any, _ bool, _ int) (err error) {
+			_ = containers.Foreach(view.Vecs[0], func(v any, _ bool, _ int) (err error) {
 				rid := v.(types.Rowid)
 				bid, offset := rid.Decode()
 				t.Logf("bid=%s,offset=%d", bid.String(), offset)
@@ -84,7 +84,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		offsets := make([]uint32, 0)
 		fp := blk.Fingerprint()
 		t.Log(fp.String())
-		_ = view.Vecs[0].Foreach(func(v any, _ bool, _ int) (err error) {
+		_ = containers.Foreach(view.Vecs[0], func(v any, _ bool, _ int) (err error) {
 			rid := v.(types.Rowid)
 			bid, offset := rid.Decode()
 			t.Logf(",bid=%s,offset=%d", bid, offset)
@@ -128,7 +128,7 @@ func TestHiddenWithPK1(t *testing.T) {
 				offsets := make([]uint32, 0)
 				meta := blk.GetMeta().(*catalog.ObjectEntry)
 				t.Logf("%v, blk %d", meta.String(), j)
-				_ = view.Vecs[0].Foreach(func(v any, _ bool, _ int) (err error) {
+				_ = containers.Foreach(view.Vecs[0], func(v any, _ bool, _ int) (err error) {
 					rid := v.(types.Rowid)
 					bid, offset := rid.Decode()
 					// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
@@ -173,7 +173,7 @@ func TestHiddenWithPK1(t *testing.T) {
 				meta := blk.GetMeta().(*catalog.ObjectEntry)
 				t.Log(meta.String())
 				t.Log(meta.String())
-				_ = view.Vecs[0].Foreach(func(v any, _ bool, _ int) (err error) {
+				_ = containers.Foreach(view.Vecs[0], func(v any, _ bool, _ int) (err error) {
 					rid := v.(types.Rowid)
 					bid, offset := rid.Decode()
 					// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
@@ -230,7 +230,7 @@ func TestHidden2(t *testing.T) {
 				hidden = view.Vecs[0]
 			}
 		}
-		_ = hidden.Foreach(func(key any, _ bool, _ int) (err error) {
+		_ = containers.Foreach(hidden, func(key any, _ bool, _ int) (err error) {
 			rid := key.(types.Rowid)
 			bid, offset := rid.Decode()
 			t.Logf(",bid=%s,offset=%d", bid, offset)
@@ -269,7 +269,7 @@ func TestHidden2(t *testing.T) {
 				hidden = view.Vecs[0]
 			}
 		}
-		_ = hidden.Foreach(func(key any, _ bool, _ int) (err error) {
+		_ = containers.Foreach(hidden, func(key any, _ bool, _ int) (err error) {
 			rid := key.(types.Rowid)
 			bid, offset := rid.Decode()
 			t.Logf(",bid=%s,offset=%d", bid, offset)

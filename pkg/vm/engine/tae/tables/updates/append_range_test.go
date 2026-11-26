@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,8 +47,8 @@ func warmAppendRangeHistory(t *testing.T, h *AppendMVCCHandle) {
 		selection, commits, aborts := h.CollectAppendLocked(types.TS{}, types.TS{}, mp)
 		h.RUnlock()
 		if commits != nil {
-			defer commits.Close()
-			defer aborts.Close()
+			defer containers.ReleaseVector(commits)
+			defer containers.ReleaseVector(aborts)
 		}
 		require.True(t, selection.IsEmpty())
 		require.Nil(t, commits)
@@ -78,15 +79,15 @@ func TestCollectAppendRangePhysicalOrder(t *testing.T) {
 			selection, commits, aborts := h.CollectAppendLocked(types.BuildTS(2, 0), types.BuildTS(3, 0), mp)
 			h.RUnlock()
 			require.NotNil(t, commits)
-			t.Cleanup(commits.Close)
-			t.Cleanup(aborts.Close)
+			t.Cleanup(func() { containers.ReleaseVector(commits) })
+			t.Cleanup(func() { containers.ReleaseVector(aborts) })
 			require.Equal(t, 2*count, commits.Length())
 			require.Equal(t, commits.Length(), aborts.Length())
 			for i := range count {
 				for j := range 2 {
 					require.True(t, selection.Contains(uint32(3*i+j)))
-					require.Equal(t, types.BuildTS(int64(12+i%2), 0), commits.Get(2*i+j))
-					require.Equal(t, i%3 == 0, aborts.Get(2*i+j))
+					require.Equal(t, types.BuildTS(int64(12+i%2), 0), containers.GetValue(commits, 2*i+j))
+					require.Equal(t, i%3 == 0, containers.GetValue(aborts, 2*i+j))
 				}
 				require.False(t, selection.Contains(uint32(3*i+2)))
 			}
@@ -121,8 +122,8 @@ func TestCollectAppendRangeBoundariesAndDeletion(t *testing.T) {
 				require.Nil(t, aborts)
 				return
 			}
-			t.Cleanup(commits.Close)
-			t.Cleanup(aborts.Close)
+			t.Cleanup(func() { containers.ReleaseVector(commits) })
+			t.Cleanup(func() { containers.ReleaseVector(aborts) })
 			require.Equal(t, c.rows, commits.Length())
 			require.Equal(t, c.rows, aborts.Length())
 		})
@@ -170,12 +171,12 @@ func TestCollectAppendRangeLifecycle(t *testing.T) {
 	h.RLock()
 	selection, commits, aborts := h.CollectAppendLocked(types.BuildTS(2, 0), types.BuildTS(5, 0), mp)
 	h.RUnlock()
-	t.Cleanup(commits.Close)
-	t.Cleanup(aborts.Close)
+	t.Cleanup(func() { containers.ReleaseVector(commits) })
+	t.Cleanup(func() { containers.ReleaseVector(aborts) })
 	require.Equal(t, uint32(2005), selection.MaxRow)
 	require.Equal(t, 5, commits.Length())
-	require.Equal(t, true, aborts.Get(1))
-	require.Equal(t, types.BuildTS(15, 0), commits.Get(4))
+	require.Equal(t, true, containers.GetValue(aborts, 1))
+	require.Equal(t, types.BuildTS(15, 0), containers.GetValue(commits, 4))
 	h.Lock()
 	h.DeleteAppendNodeLocked(nodes[2])
 	h.Unlock()
@@ -254,14 +255,14 @@ func TestCollectAppendRangeConcurrentReaders(t *testing.T) {
 					if !assert.NotNil(t, commits) {
 						return
 					}
-					defer commits.Close()
-					defer aborts.Close()
+					defer containers.ReleaseVector(commits)
+					defer containers.ReleaseVector(aborts)
 					assert.Equal(t, int(last-1), commits.Length())
 					assert.Zero(t, selection.MinRow)
 					assert.Equal(t, int(selection.MaxRow), commits.Length())
 					for row := range commits.Length() {
-						assert.Equal(t, types.BuildTS(int64(row+2), 0), commits.Get(row))
-						assert.Equal(t, false, aborts.Get(row))
+						assert.Equal(t, types.BuildTS(int64(row+2), 0), containers.GetValue(commits, row))
+						assert.Equal(t, false, containers.GetValue(aborts, row))
 					}
 				}()
 			}

@@ -47,12 +47,12 @@ func TestV9RollbackSentinelDoesNotReachPartitionState(t *testing.T) {
 	commitTSs := containers.MakeVector(types.T_TS.ToType(), mp)
 	var blockID types.Blockid
 	for row, key := range []int64{42, 7} {
-		primaryKeys.Append(key, false)
-		rowIDs.Append(types.NewRowid(&blockID, uint32(row)), false)
+		containers.AppendValue(primaryKeys, key, false)
+		containers.AppendValue(rowIDs, types.NewRowid(&blockID, uint32(row)), false)
 		if row == 0 {
-			commitTSs.Append(txnif.UncommitTS, false)
+			containers.AppendValue(commitTSs, txnif.UncommitTS, false)
 		} else {
-			commitTSs.Append(types.BuildTS(5, 0), false)
+			containers.AppendValue(commitTSs, types.BuildTS(5, 0), false)
 		}
 	}
 	src.AddVector("pk", primaryKeys)

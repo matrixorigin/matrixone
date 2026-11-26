@@ -122,9 +122,9 @@ func (node *persistedNode) Scan(
 	replaceCommitts := func(vecs []containers.Vector, i int) {
 		createTS := node.object.meta.Load().GetCreatedAt()
 		length := vecs[0].Length()
-		vecs[i].Close()
+		containers.ReleaseVector(vecs[i])
 		vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
-		vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, length, vecs[i].GetAllocator())
+		vector.AppendMultiFixed(vecs[i], createTS, false, length, vecs[i].MPool())
 	}
 	if err != nil {
 		return err
@@ -150,16 +150,16 @@ func (node *persistedNode) Scan(
 
 			// RelLogicalID COMPAT
 			if attr == pkgcatalog.SystemRelAttr_LogicalID && vecs[i].IsConstNull() {
-				dup, err := (*bat).GetVectorByName(pkgcatalog.SystemRelAttr_ID).GetDownstreamVector().Dup(mp)
+				dup, err := (*bat).GetVectorByName(pkgcatalog.SystemRelAttr_ID).Dup(mp)
 				if err != nil {
 					// vecs[:i] are in *bat, which the caller closes.
 					for _, v := range vecs[i:] {
-						v.Close()
+						containers.ReleaseVector(v)
 					}
 					return err
 				}
-				vecs[i].Close()
-				vecs[i] = containers.ToTNVector(dup, mp)
+				containers.ReleaseVector(vecs[i])
+				vecs[i] = dup
 			}
 			(*bat).AddVector(attr, vecs[i])
 		}
@@ -177,7 +177,7 @@ func (node *persistedNode) Scan(
 			if err != nil {
 				deletes.Free()
 				for _, v := range vecs {
-					v.Close()
+					containers.ReleaseVector(v)
 				}
 				if release != nil {
 					release()
@@ -208,7 +208,7 @@ func (node *persistedNode) Scan(
 			}
 			// RelLogicalID COMPAT
 			if attr == pkgcatalog.SystemRelAttr_LogicalID && vecs[i].IsConstNull() {
-				vecs[i].Close()
+				containers.ReleaseVector(vecs[i])
 				vecs[i] = tidvec
 			}
 
@@ -218,7 +218,7 @@ func (node *persistedNode) Scan(
 			// regular vector so Extend (which panics on const dest) works.
 			if destVec := (*bat).GetVectorByName(attr); destVec.IsConst() {
 				destIdx := (*bat).Nameidx[attr]
-				constInner := destVec.GetDownstreamVector()
+				constInner := destVec
 				length := constInner.Length()
 				newInner := vector.NewVec(*constInner.GetType(), mp)
 				if err = newInner.UnionBatch(constInner, 0, length, nil, mp); err != nil {
@@ -226,31 +226,31 @@ func (node *persistedNode) Scan(
 					// Close is idempotent, so closing every input vector
 					// (tidvec included) is safe whatever was closed already.
 					for _, v := range vecs {
-						v.Close()
+						containers.ReleaseVector(v)
 					}
 					if tidvec != nil {
-						tidvec.Close()
+						containers.ReleaseVector(tidvec)
 					}
 					if release != nil {
 						release()
 					}
 					return
 				}
-				destVec.Close()
-				(*bat).Vecs[destIdx] = containers.ToTNVector(newInner, mp)
+				containers.ReleaseVector(destVec)
+				(*bat).Vecs[destIdx] = newInner
 			}
-			(*bat).GetVectorByName(attr).Extend(vecs[i])
+			containers.Extend((*bat).GetVectorByName(attr), vecs[i])
 
 			// RelLogicalID COMPAT
 			if attr == pkgcatalog.SystemRelAttr_ID {
 				tidvec = vecs[i]
 				continue
 			}
-			vecs[i].Close()
+			containers.ReleaseVector(vecs[i])
 		}
 		// RelLogicalID COMPAT
 		if tidvec != nil {
-			tidvec.Close()
+			containers.ReleaseVector(tidvec)
 		}
 		// In zero-copy mode (needCopy=false), release frees the IOVector backing.
 		// Data has been Extend()ed (copied) into the existing batch, so the
@@ -337,13 +337,13 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		}
 		var commitTSs []types.TS
 		if !persistedByCN {
-			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](vecs[2].GetDownstreamVector())
+			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](vecs[2])
 			abortVec := vecs[3]
 			var aborts []bool
 			if !abortVec.IsConstNull() {
-				aborts = vector.MustFixedColWithTypeCheck[bool](abortVec.GetDownstreamVector())
+				aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
 			}
-			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
+			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0])
 			for i := 0; i < len(commitTSs); i++ {
 				if aborts != nil && aborts[i] {
 					continue
@@ -356,13 +356,13 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 						pkType := readSchema.ColDefs[pkIdx].GetType()
 						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
 					}
-					(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
-					(*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(vecs[1].Get(i), false)
-					(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Append(commitTS, false)
+					containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr), rowIDs[i], false)
+					containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr), containers.GetValue(vecs[1], i), false)
+					containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr), commitTS, false)
 				}
 			}
 		} else {
-			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
+			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0])
 			for i := 0; i < len(rowIDs); i++ {
 				if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
@@ -370,14 +370,14 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 						pkType := readSchema.ColDefs[pkIdx].GetType()
 						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
 					}
-					(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
-					(*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(vecs[1].Get(i), false)
-					(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Append(startTS, false)
+					containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr), rowIDs[i], false)
+					containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr), containers.GetValue(vecs[1], i), false)
+					containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr), startTS, false)
 				}
 			}
 		}
 		for i := range vecs {
-			vecs[i].Close()
+			containers.ReleaseVector(vecs[i])
 		}
 	}
 	return
@@ -442,7 +442,7 @@ func (node *persistedNode) FillBlockTombstones(
 		if err != nil {
 			return err
 		}
-		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
+		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0])
 		for i := 0; i < len(rowIDs); i++ {
 			if visibilityDeletes != nil && visibilityDeletes.Contains(uint64(i)) {
 				continue
@@ -459,7 +459,7 @@ func (node *persistedNode) FillBlockTombstones(
 		}
 		visibilityDeletes.Free()
 		for i := range vecs {
-			vecs[i].Close()
+			containers.ReleaseVector(vecs[i])
 		}
 	}
 	return nil

@@ -15,10 +15,11 @@
 package containers
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCloneConstNullWithReusedPoolVector(t *testing.T) {
@@ -28,29 +29,29 @@ func TestCloneConstNullWithReusedPoolVector(t *testing.T) {
 			pool := NewVectorPool(t.Name(), 2, WithMPool(mp))
 			t.Cleanup(pool.Destory)
 			seed := pool.GetVector(&typ)
-			t.Cleanup(seed.Close)
-			require.NoError(t, seed.PreExtend(2))
+			t.Cleanup(func() { ReleaseVector(seed) })
+			require.NoError(t, PreExtend(seed, 2))
 			allocated := mp.CurrNB()
 			require.Positive(t, allocated)
-			seed.Close()
+			ReleaseVector(seed)
 			src := NewConstNullVector(typ, 2, mp)
-			t.Cleanup(src.Close)
-			cloned := src.CloneWindowWithPool(0, 2, pool)
-			t.Cleanup(cloned.Close)
+			t.Cleanup(func() { ReleaseVector(src) })
+			cloned := CloneWindowWithPool(src, 0, 2, pool)
+			t.Cleanup(func() { ReleaseVector(cloned) })
 			require.True(t, cloned.IsConstNull())
 			require.Equal(t, 2, cloned.Length())
-			cloned.Close()
+			ReleaseVector(cloned)
 			require.Equal(t, int(allocated), pool.Allocated())
 			reused := pool.GetVector(&typ)
-			t.Cleanup(reused.Close)
+			t.Cleanup(func() { ReleaseVector(reused) })
 			if typ.IsVarlen() {
-				reused.Append([]byte("next"), false)
+				AppendValue(reused, []byte("next"), false)
 			} else {
-				reused.Append(int64(7), false)
+				AppendValue(reused, int64(7), false)
 			}
 			require.False(t, reused.IsNull(0))
 			require.Equal(t, allocated, mp.CurrNB())
-			reused.Close()
+			ReleaseVector(reused)
 			used, _ := pool.Used(false)
 			require.Zero(t, used)
 			pool.Destory()
@@ -65,13 +66,13 @@ func TestCloneConstNullPoolAllocationLimit(t *testing.T) {
 	t.Cleanup(pool.Destory)
 	typ := types.T_int64.ToType()
 	seed := pool.GetVector(&typ)
-	t.Cleanup(seed.Close)
+	t.Cleanup(func() { ReleaseVector(seed) })
 	// Keep this checkout alive so its storage can be used directly as the clone destination.
-	require.NoError(t, seed.PreExtend(1))
+	require.NoError(t, PreExtend(seed, 1))
 	src := NewConstNullVector(typ, 1, mp)
-	t.Cleanup(src.Close)
-	require.NoError(t, src.GetDownstreamVector().CloneWindowTo(seed.GetDownstreamVector(), 0, 1, mp))
-	seed.Close()
+	t.Cleanup(func() { ReleaseVector(src) })
+	require.NoError(t, src.CloneWindowTo(seed, 0, 1, mp))
+	ReleaseVector(seed)
 	used, _ := pool.Used(false)
 	require.Zero(t, used)
 	require.Zero(t, pool.Allocated())

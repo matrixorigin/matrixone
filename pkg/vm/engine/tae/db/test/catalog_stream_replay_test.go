@@ -69,7 +69,7 @@ func TestCatalogReplayStreamsPersistedSystemTables(t *testing.T) {
 			require.NoError(t, e)
 			if i == tableCount-1 {
 				bat := catalog.MockBatch(schema, 1)
-				savedKey = vector.GetFixedAtNoTypeCheck[int32](bat.GetVectorByName("mock_0").GetDownstreamVector(), 0)
+				savedKey = vector.GetFixedAtNoTypeCheck[int32](bat.GetVectorByName("mock_0"), 0)
 				e = rel.Append(ctx, bat)
 				bat.Close()
 				require.NoError(t, e)
@@ -104,7 +104,7 @@ func TestCatalogReplayStreamsPersistedSystemTables(t *testing.T) {
 		visible := 0
 		err := tables.ScanSysTable(ctx, colTable, readTxn, func(b *containers.Batch, row int) error {
 			blocks[b] = struct{}{}
-			if b.GetVectorByName(pkgcatalog.SystemColAttr_DBName).GetDownstreamVector().GetStringAt(row) == "stream_replay" {
+			if b.GetVectorByName(pkgcatalog.SystemColAttr_DBName).GetStringAt(row) == "stream_replay" {
 				visible++
 			}
 			return nil
@@ -260,13 +260,13 @@ func TestCatalogReplayReadFailureReleasesPools(t *testing.T) {
 	// Closing the DB must not invalidate a vector still owned by a caller.
 	typ := types.T_int64.ToType()
 	held := reopened.Runtime.VectorPool.Small.GetVector(&typ)
-	defer held.Close()
-	held.Append(int64(42), false)
+	defer containers.ReleaseVector(held)
+	containers.AppendValue(held, int64(42), false)
 	err = reopened.Close()
 	reopenedClosed = true
 	require.NoError(t, err)
-	require.Equal(t, int64(42), held.Get(0))
-	held.Close()
+	require.Equal(t, int64(42), containers.GetValue(held, 0))
+	containers.ReleaseVector(held)
 	require.Zero(t, reopened.Runtime.VectorPool.Small.Allocated())
 	require.Zero(t, reopened.Runtime.VectorPool.Transient.Allocated())
 }

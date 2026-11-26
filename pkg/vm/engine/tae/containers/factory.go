@@ -35,7 +35,7 @@ func BuildBatchWithPool(
 	for i, attr := range attrs {
 		vec := pool.GetVector(&colTypes[i])
 		if capacity > 0 {
-			vec.PreExtend(capacity)
+			PreExtend(vec, capacity)
 		}
 		bat.AddVector(attr, vec)
 	}

@@ -35,12 +35,12 @@ func PreparePhyAddrData(
 	id *objectio.Blockid, startRow, length uint32, pool *containers.VectorPool,
 ) (col containers.Vector, err error) {
 	col = pool.GetVector(&objectio.RowidType)
-	vec := col.GetDownstreamVector()
-	m := col.GetAllocator()
+	vec := col
+	m := col.MPool()
 	if err = objectio.ConstructRowidColumnTo(
 		vec, id, startRow, length, m,
 	); err != nil {
-		col.Close()
+		containers.ReleaseVector(col)
 		col = nil
 	}
 	return
@@ -85,7 +85,7 @@ func LoadPersistedColumnData(
 			if err != nil {
 				for _, existing := range vectors {
 					if existing != nil {
-						existing.Close()
+						containers.ReleaseVector(existing)
 					}
 				}
 				return nil, deletes, nil, err
@@ -128,17 +128,17 @@ func LoadPersistedColumnData(
 	if err != nil {
 		for _, vec := range vectors {
 			if vec != nil {
-				vec.Close()
+				containers.ReleaseVector(vec)
 			}
 		}
 		return nil, deletes, nil, err
 	}
 	if tsForAppendable != nil {
-		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[commitTSIdx].GetDownstreamVector())
+		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[commitTSIdx])
 		abortVec := vecs[abortIdx]
 		var aborts []bool
 		if !abortVec.IsConstNull() {
-			aborts = vector.MustFixedColNoTypeCheck[bool](abortVec.GetDownstreamVector())
+			aborts = vector.MustFixedColNoTypeCheck[bool](abortVec)
 		}
 		for i := range commits {
 			if commits[i].GT(tsForAppendable) || (aborts != nil && aborts[i]) {
@@ -149,12 +149,12 @@ func LoadPersistedColumnData(
 							release()
 						}
 						for _, vec := range vecs {
-							vec.Close()
+							containers.ReleaseVector(vec)
 						}
 						// Vectors made before the load, e.g. row IDs.
 						for _, vec := range vectors {
 							if vec != nil {
-								vec.Close()
+								containers.ReleaseVector(vec)
 							}
 						}
 						return nil, nil, nil, err
@@ -167,7 +167,7 @@ func LoadPersistedColumnData(
 	for i, vec := range vecs {
 		outputPos := outputPositions[i]
 		if outputPos == -1 {
-			vec.Close()
+			containers.ReleaseVector(vec)
 			continue
 		}
 		vectors[outputPos] = vec

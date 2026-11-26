@@ -618,13 +618,13 @@ func mockCheckpointV12_writeTo(
 func prepareCNMeta(meta map[uint64]*CheckpointMeta, mp *mpool.MPool) (bat *containers.Batch) {
 
 	bat = makeRespBatchFromSchema(MetaSchema, mp)
-	blkInsLoc := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector()
-	blkDelLoc := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).GetDownstreamVector()
-	dataObjectLoc := bat.GetVectorByName(SnapshotMetaAttr_DataObjectBatchLocation).GetDownstreamVector()
-	tombstoneObjectLoc := bat.GetVectorByName(SnapshotMetaAttr_TombstoneObjectBatchLocation).GetDownstreamVector()
-	tidVec := bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
-	usageInsLoc := bat.GetVectorByName(CheckpointMetaAttr_StorageUsageInsLocation).GetDownstreamVector()
-	usageDelLoc := bat.GetVectorByName(CheckpointMetaAttr_StorageUsageDelLocation).GetDownstreamVector()
+	blkInsLoc := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation)
+	blkDelLoc := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation)
+	dataObjectLoc := bat.GetVectorByName(SnapshotMetaAttr_DataObjectBatchLocation)
+	tombstoneObjectLoc := bat.GetVectorByName(SnapshotMetaAttr_TombstoneObjectBatchLocation)
+	tidVec := bat.GetVectorByName(SnapshotAttr_TID)
+	usageInsLoc := bat.GetVectorByName(CheckpointMetaAttr_StorageUsageInsLocation)
+	usageDelLoc := bat.GetVectorByName(CheckpointMetaAttr_StorageUsageDelLocation)
 
 	sortMeta := make([]int, 0, len(meta))
 	for tid := range meta {
@@ -680,8 +680,8 @@ func prepareTNMeta(
 	for i, blks := range objectBlocks {
 		for y, blk := range blks {
 			location := objectio.BuildLocation(checkpointNames[i], blk.GetExtent(), 0, blk.GetID())
-			dstBatch.GetVectorByName(CheckpointMetaAttr_BlockLocation).Append([]byte(location), false)
-			dstBatch.GetVectorByName(CheckpointMetaAttr_SchemaType).Append(schemaTypes[i][y], false)
+			containers.AppendValue(dstBatch.GetVectorByName(CheckpointMetaAttr_BlockLocation), []byte(location), false)
+			containers.AppendValue(dstBatch.GetVectorByName(CheckpointMetaAttr_SchemaType), schemaTypes[i][y], false)
 		}
 	}
 	return

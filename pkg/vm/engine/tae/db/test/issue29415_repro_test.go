@@ -147,11 +147,11 @@ func runReplayPromotionLateSettings(t *testing.T, tc replayPromotionCase) {
 				containers.Options{},
 			)
 			t.Cleanup(bat.Close)
-			bat.Vecs[0].Append(uint32(0), false)
-			bat.Vecs[1].Append(rel.ID(), false)
-			bat.Vecs[2].Append(uint32(merge.MergeSettingsVersion_Curr), false)
-			bat.Vecs[3].Append(encoded, false)
-			bat.Vecs[4].Append([]byte(""), false)
+			containers.AppendValue(bat.Vecs[0], uint32(0), false)
+			containers.AppendValue(bat.Vecs[1], rel.ID(), false)
+			containers.AppendValue(bat.Vecs[2], uint32(merge.MergeSettingsVersion_Curr), false)
+			containers.AppendValue(bat.Vecs[3], encoded, false)
+			containers.AppendValue(bat.Vecs[4], []byte(""), false)
 			require.NoError(t, settingsTable.Append(ctx, bat))
 		}
 	}

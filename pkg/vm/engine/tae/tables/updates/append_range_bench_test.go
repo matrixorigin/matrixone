@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 func benchmarkAppendHistory(count, pending int) *AppendMVCCHandle {
@@ -65,8 +66,8 @@ func BenchmarkCollectAppendWindow(b *testing.B) {
 						_, coldCommits, coldAborts := h.CollectAppendLocked(from, to, mp)
 						h.RUnlock()
 						if coldCommits != nil {
-							coldCommits.Close()
-							coldAborts.Close()
+							containers.ReleaseVector(coldCommits)
+							containers.ReleaseVector(coldAborts)
 						}
 					}
 					b.ReportAllocs()
@@ -75,8 +76,8 @@ func BenchmarkCollectAppendWindow(b *testing.B) {
 						_, commits, aborts := h.CollectAppendLocked(from, to, mp)
 						h.RUnlock()
 						if commits != nil {
-							commits.Close()
-							aborts.Close()
+							containers.ReleaseVector(commits)
+							containers.ReleaseVector(aborts)
 						}
 					}
 				})
@@ -133,8 +134,8 @@ func BenchmarkAppendRangeWriteAndCollect(b *testing.B) {
 						_, commits, aborts := h.CollectAppendLocked(types.BuildTS(int64(i-every+2), 0), txn.PrepareTS, mp)
 						h.RUnlock()
 						if commits != nil {
-							commits.Close()
-							aborts.Close()
+							containers.ReleaseVector(commits)
+							containers.ReleaseVector(aborts)
 						}
 					}
 				}
@@ -162,8 +163,8 @@ func BenchmarkAppendRangeStorage(b *testing.B) {
 						_, commits, aborts := handles[i].CollectAppendLocked(types.BuildTS(int64(n+1), 0), types.BuildTS(int64(n+1), 0), mp)
 						handles[i].RUnlock()
 						if commits != nil {
-							commits.Close()
-							aborts.Close()
+							containers.ReleaseVector(commits)
+							containers.ReleaseVector(aborts)
 						}
 					}
 				}
@@ -224,8 +225,8 @@ func benchmarkConcurrentAppendUnit(b *testing.B, mp *mpool.MPool, writes, reads 
 		_, commits, aborts := h.CollectAppendLocked(types.BuildTS(8193, 0), types.BuildTS(8193, 0), mp)
 		h.RUnlock()
 		if commits != nil {
-			commits.Close()
-			aborts.Close()
+			containers.ReleaseVector(commits)
+			containers.ReleaseVector(aborts)
 		}
 	}
 	var cutoff atomic.Int64
@@ -244,8 +245,8 @@ func benchmarkConcurrentAppendUnit(b *testing.B, mp *mpool.MPool, writes, reads 
 				_, commits, aborts := h.CollectAppendLocked(types.BuildTS(from, 0), types.BuildTS(to, 0), mp)
 				h.RUnlock()
 				if commits != nil {
-					commits.Close()
-					aborts.Close()
+					containers.ReleaseVector(commits)
+					containers.ReleaseVector(aborts)
 				}
 				reads.record(time.Since(started))
 				from = to + 1

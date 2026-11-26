@@ -337,7 +337,7 @@ func TestHandleCommitImportsMultipleObjects(t *testing.T) {
 		metaLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 		// The protobuf entry borrows the vector bytes through payload marshaling.
 		defer metaLocBat.Close()
-		metaLocBat.Vecs[0].Append([]byte(stat[:]), false)
+		containers.AppendValue(metaLocBat.Vecs[0], []byte(stat[:]), false)
 		metaLocMoBat := containers.ToCNBatch(metaLocBat)
 		addS3BlkEntry, err := makePBEntry(INSERT, dbTestID,
 			tbTestID, dbName, schema.Name, stat.ObjectName().String(), metaLocMoBat, attrs)
@@ -373,7 +373,7 @@ func TestHandleCommitImportsMultipleObjects(t *testing.T) {
 	require.NoError(t, err)
 	expected, actual := make(map[[2]int32]int), make(map[[2]int32]int)
 	for row := 0; row < taeBat.Length(); row++ {
-		expected[[2]int32{taeBat.Vecs[0].Get(row).(int32), taeBat.Vecs[1].Get(row).(int32)}]++
+		expected[[2]int32{containers.GetValue(taeBat.Vecs[0], row).(int32), containers.GetValue(taeBat.Vecs[1], row).(int32)}]++
 	}
 	objectCount := 0
 	testutil.ForEachObject(t, readRel, func(obj handle.Object) error {
@@ -390,7 +390,7 @@ func TestHandleCommitImportsMultipleObjects(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, view)
 				for row := 0; row < view.Length(); row++ {
-					actual[[2]int32{view.Vecs[0].Get(row).(int32), view.Vecs[1].Get(row).(int32)}]++
+					actual[[2]int32{containers.GetValue(view.Vecs[0], row).(int32), containers.GetValue(view.Vecs[1], row).(int32)}]++
 				}
 			}()
 		}
@@ -479,9 +479,9 @@ func TestApplyDeltaloc(t *testing.T) {
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
 		assert.NoError(t, err)
 		rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-		rowIDVec.Append(objectio.NewRowid(&id.BlockID, offset), false)
+		containers.AppendValue(rowIDVec, objectio.NewRowid(&id.BlockID, offset), false)
 		pkVec := containers.MakeVector(schema.GetPrimaryKey().GetType(), common.DefaultAllocator)
-		pkVec.Append(val, false)
+		containers.AppendValue(pkVec, val, false)
 		bat := containers.NewBatch()
 		bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
 		bat.AddVector(schema.GetPrimaryKey().GetName(), pkVec)
@@ -509,19 +509,19 @@ func TestApplyDeltaloc(t *testing.T) {
 	assert.NoError(t, txn0.Commit(context.Background()))
 
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-	defer pkVec.Close()
+	defer containers.ReleaseVector(pkVec)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	defer rowIDVec.Close()
+	defer containers.ReleaseVector(rowIDVec)
 	for i := 0; i < rowCount; i++ {
-		val := taeBat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		val := containers.GetValue(taeBat.Vecs[schema.GetSingleSortKeyIdx()], i)
 		if i%5 == 0 {
 			// try apply deltaloc
 			filter := handle.NewEQFilter(val)
 			id, offset, err := rel.GetByFilter(context.Background(), filter)
 			assert.NoError(t, err)
 			rowid := types.NewRowIDWithObjectIDBlkNumAndRowID(*id.ObjectID(), id.BlockID.Sequence(), offset)
-			pkVec.Append(val, false)
-			rowIDVec.Append(rowid, false)
+			containers.AppendValue(pkVec, val, false)
+			containers.AppendValue(rowIDVec, rowid, false)
 		} else {
 			// in memory deletes
 			makeDeleteTxnFn(val)
@@ -545,7 +545,7 @@ func TestApplyDeltaloc(t *testing.T) {
 	stats, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, rowIDVec, pkVec, schema, txn0)
 	assert.NoError(t, err)
 	require.False(t, stats.IsZero())
-	delLocBat.Vecs[0].Append(stats.Marshal(), false)
+	containers.AppendValue(delLocBat.Vecs[0], stats.Marshal(), false)
 	deleteS3Entry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "file", containers.ToCNBatch(delLocBat), delLocBat.Attrs)
 	assert.NoError(t, err)
 	deleteS3Txn := mock1PCTxn(h.db)

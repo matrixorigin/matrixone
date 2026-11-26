@@ -110,25 +110,25 @@ func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
 func (un EntryMVCCNode) AppendObjectTuple(bat *containers.Batch, create bool) {
 	startTSVec := bat.GetVectorByName(EntryNode_CreateAt)
 	vector.AppendFixed(
-		startTSVec.GetDownstreamVector(),
+		startTSVec,
 		un.CreatedAt,
 		false,
-		startTSVec.GetAllocator(),
+		startTSVec.MPool(),
 	)
 	if create {
 		vector.AppendFixed(
-			bat.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector(),
+			bat.GetVectorByName(EntryNode_DeleteAt),
 			types.TS{},
 			false,
-			startTSVec.GetAllocator(),
+			startTSVec.MPool(),
 		)
 		return
 	}
 	vector.AppendFixed(
-		bat.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector(),
+		bat.GetVectorByName(EntryNode_DeleteAt),
 		un.DeletedAt,
 		false,
-		startTSVec.GetAllocator(),
+		startTSVec.MPool(),
 	)
 }
 
@@ -139,20 +139,20 @@ func (un EntryMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, ts types.
 		createTS = ts
 	}
 	vector.AppendFixed(
-		startTSVec.GetDownstreamVector(),
+		startTSVec,
 		createTS,
 		false,
-		startTSVec.GetAllocator(),
+		startTSVec.MPool(),
 	)
 	deleteTS := un.DeletedAt
 	if deleteTS.Equal(&txnif.UncommitTS) {
 		deleteTS = ts
 	}
 	vector.AppendFixed(
-		bat.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector(),
+		bat.GetVectorByName(EntryNode_DeleteAt),
 		deleteTS,
 		false,
-		startTSVec.GetAllocator(),
+		startTSVec.MPool(),
 	)
 }
 

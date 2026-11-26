@@ -75,7 +75,7 @@ func TestMergeCommand(t *testing.T) {
 		index.UpdateZM(zm, types.EncodeInt32(&v1))
 		index.UpdateZM(zm, types.EncodeInt32(&v2))
 		objectio.SetObjectStatsSortKeyZoneMap(stats, zm)
-		vector.Append(stats.Marshal(), false)
+		containers.AppendValue(vector, stats.Marshal(), false)
 
 		id = objectio.NewObjectid()
 		stats = objectio.NewObjectStatsWithObjectID(&id, false, true, false)
@@ -85,7 +85,7 @@ func TestMergeCommand(t *testing.T) {
 		index.UpdateZM(zm, types.EncodeInt32(&v1))
 		index.UpdateZM(zm, types.EncodeInt32(&v2))
 		objectio.SetObjectStatsSortKeyZoneMap(stats, zm)
-		vector.Append(stats.Marshal(), false)
+		containers.AppendValue(vector, stats.Marshal(), false)
 	}
 	require.NoError(t, table.AddDataFiles(ctx, vector))
 	require.NoError(t, asyncTxn.Commit(context.Background()))

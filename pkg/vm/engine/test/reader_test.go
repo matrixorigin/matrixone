@@ -133,7 +133,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	expr := []*plan.Expr{
 		readutil.MakeFunctionExprForTest("=", []*plan.Expr{
 			readutil.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
-			plan2.MakePlan2Int64ConstExprWithType(bats[0].Vecs[primaryKeyIdx].Get(0).(int64)),
+			plan2.MakePlan2Int64ConstExprWithType(containers.GetValue(bats[0].Vecs[primaryKeyIdx], 0).(int64)),
 		}),
 	}
 	for _, e := range expr {
@@ -293,7 +293,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 
 		rowsCnt := 4000
 		bat := catalog2.MockBatch(schema, rowsCnt)
-		pkVec := bat.Vecs[primaryKeyIdx].GetDownstreamVector()
+		pkVec := bat.Vecs[primaryKeyIdx]
 		pkVec.CleanOnlyData()
 		for i := 0; i < rowsCnt; i++ {
 			buf := fmt.Sprintf("%s:%d", strings.Repeat("a", 200), i)

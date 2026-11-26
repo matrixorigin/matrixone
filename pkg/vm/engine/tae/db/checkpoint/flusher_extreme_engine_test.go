@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -55,7 +56,7 @@ func TestPartialFlushBusyTombstoneKeepsDeleteAcrossRestart(t *testing.T) {
 
 	deleteTxn, finishDelete := flushProgressTxn(t, ctx, engine)
 	deleteRel := flushProgressRelation(t, deleteTxn, schema.Name)
-	require.NoError(t, deleteRel.DeleteByFilter(ctx, handle.NewEQFilter(rows.Vecs[0].Get(0))))
+	require.NoError(t, deleteRel.DeleteByFilter(ctx, handle.NewEQFilter(containers.GetValue(rows.Vecs[0], 0))))
 	require.NoError(t, deleteTxn.Commit(ctx))
 	finishDelete()
 
@@ -102,7 +103,7 @@ func TestPartialFlushBusyTombstoneKeepsDeleteAcrossRestart(t *testing.T) {
 		readRel := flushProgressRelation(t, txn, schema.Name)
 		testutil.CheckAllColRowsByScan(t, readRel, 2, true)
 		for i := 0; i < 3; i++ {
-			_, _, lookupErr := readRel.GetByFilter(ctx, handle.NewEQFilter(rows.Vecs[0].Get(i)))
+			_, _, lookupErr := readRel.GetByFilter(ctx, handle.NewEQFilter(containers.GetValue(rows.Vecs[0], i)))
 			if i == 0 {
 				require.True(t, moerr.IsMoErrCode(lookupErr, moerr.ErrNotFound), "deleted key: %v", lookupErr)
 			} else {

@@ -50,11 +50,11 @@ func TestPersistedByteDedupSelectedProbes(t *testing.T) {
 					return key
 				}
 				data := containers.MakeVector(oid.ToType(), common.DefaultAllocator)
-				defer data.Close()
+				defer containers.ReleaseVector(data)
 				keys := containers.MakeVector(oid.ToType(), common.DefaultAllocator)
-				defer keys.Close()
+				defer containers.ReleaseVector(keys)
 				rows := containers.MakeVector(objectio.RowidType, common.DefaultAllocator)
-				defer rows.Close()
+				defer containers.ReleaseVector(rows)
 				loader := &commitTSLoader{loaded: true}
 				defer loader.close()
 				loader.commitTS = containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
@@ -65,9 +65,9 @@ func TestPersistedByteDedupSelectedProbes(t *testing.T) {
 					// Equal edges and length deliberately put distinct values in one bucket.
 					values[i] = keyFor(rng.IntN(8))
 					timestamps[i], aborted[i] = int64(rng.IntN(16)), rng.IntN(4) == 0
-					data.Append(values[i], false)
-					loader.commitTS.Append(types.BuildTS(timestamps[i], 0), false)
-					loader.abort.Append(aborted[i], false)
+					containers.AppendValue(data, values[i], false)
+					containers.AppendValue(loader.commitTS, types.BuildTS(timestamps[i], 0), false)
+					containers.AppendValue(loader.abort, aborted[i], false)
 				}
 				var selected nulls.Nulls
 				selected.Init(bitmapTestMP)
@@ -79,13 +79,13 @@ func TestPersistedByteDedupSelectedProbes(t *testing.T) {
 					if i >= 80 {
 						key = values[rng.IntN(len(values))]
 					}
-					keys.Append(key, false)
+					containers.AppendValue(keys, key, false)
 					want[i] = -1
 					if i%11 == 0 {
-						rows.Append(objectio.NewRowid(&types.Blockid{}, 999), false)
+						containers.AppendValue(rows, objectio.NewRowid(&types.Blockid{}, 999), false)
 						want[i] = 999
 					} else {
-						rows.Append(nil, true)
+						containers.AppendValue(rows, nil, true)
 					}
 					if i%3 == 0 {
 						continue
@@ -117,9 +117,9 @@ func TestPersistedByteDedupSelectedProbes(t *testing.T) {
 					require.NoError(t, err)
 				}
 				for i, row := range want {
-					require.Equal(t, row < 0, rows.IsNull(i), "probe %d", i)
+					require.Equal(t, row < 0, rows.IsNull(uint64(i)), "probe %d", i)
 					if row >= 0 {
-						rowID := rows.Get(i).(types.Rowid)
+						rowID := containers.GetValue(rows, i).(types.Rowid)
 						require.Equal(t, uint32(row), rowID.GetRowOffset(), "probe %d", i)
 					}
 				}
@@ -154,7 +154,7 @@ func TestPersistedByteDedupProbePaths(t *testing.T) {
 		for _, warmup := range []int{0, 32} {
 			t.Run(fmt.Sprintf("%s/warmup=%d", tc.name, warmup), func(t *testing.T) {
 				data := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-				defer data.Close()
+				defer containers.ReleaseVector(data)
 				for i := 0; i < 65; i++ {
 					key := filler
 					if i < 7 {
@@ -163,12 +163,12 @@ func TestPersistedByteDedupProbePaths(t *testing.T) {
 					if tc.empty && i >= 5 && i < 7 {
 						key = []byte{}
 					}
-					data.Append(key, tc.empty && i == 6)
+					containers.AppendValue(data, key, tc.empty && i == 6)
 				}
 				keys := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-				defer keys.Close()
+				defer containers.ReleaseVector(keys)
 				rows := containers.MakeVector(objectio.RowidType, common.DefaultAllocator)
-				defer rows.Close()
+				defer containers.ReleaseVector(rows)
 				for i := 0; i <= warmup; i++ {
 					key := []byte("absent")
 					if i == warmup && !tc.miss {
@@ -180,8 +180,8 @@ func TestPersistedByteDedupProbePaths(t *testing.T) {
 					if i == warmup && tc.colliding && tc.miss {
 						key = []byte("0123456789abcdefccccfedcba9876543210")
 					}
-					keys.Append(key, false)
-					rows.Append(nil, true)
+					containers.AppendValue(keys, key, false)
+					containers.AppendValue(rows, nil, true)
 				}
 				loads := 0
 				loader := &commitTSLoader{}
@@ -205,8 +205,8 @@ func TestPersistedByteDedupProbePaths(t *testing.T) {
 						case 0:
 							ts = types.BuildTS(12, 0)
 						}
-						loader.commitTS.Append(ts, i == 5 && !tc.empty)
-						loader.abort.Append(!tc.empty && (i == 6 || (i == 5 && tc.abortMissing)), false)
+						containers.AppendValue(loader.commitTS, ts, i == 5 && !tc.empty)
+						containers.AppendValue(loader.abort, !tc.empty && (i == 6 || (i == 5 && tc.abortMissing)), false)
 					}
 					return loader.commitTS, loader.abort, nil
 				}
@@ -233,18 +233,18 @@ func TestPersistedByteDedupProbePaths(t *testing.T) {
 					require.Equal(t, 1, loads)
 				}
 				for i := 0; i < warmup; i++ {
-					require.True(t, rows.IsNull(i))
+					require.True(t, rows.IsNull(uint64(i)))
 				}
 				if tc.wantRow < 0 {
-					require.True(t, rows.IsNull(warmup))
+					require.True(t, rows.IsNull(uint64(warmup)))
 				} else {
-					require.False(t, rows.IsNull(warmup))
-					rowID := rows.Get(warmup).(types.Rowid)
+					require.False(t, rows.IsNull(uint64(warmup)))
+					rowID := containers.GetValue(rows, warmup).(types.Rowid)
 					require.Equal(t, uint32(tc.wantRow), rowID.GetRowOffset())
 					// Later probes must not overwrite a row resolved by an earlier block.
-					keys.Update(warmup, filler, false)
+					containers.UpdateRow(keys, warmup, filler, false)
 					require.NoError(t, containers.ForeachVector(keys, op, nil))
-					require.Equal(t, rowID, rows.Get(warmup))
+					require.Equal(t, rowID, containers.GetValue(rows, warmup))
 					require.Equal(t, 1, loads)
 				}
 			})
@@ -263,11 +263,11 @@ func BenchmarkPersistedByteDedup(b *testing.B) {
 	} {
 		b.Run(fmt.Sprintf("rows=%d/probes=%d/bytes=%d/miss=%t", shape.rows, shape.probes, shape.width, shape.miss), func(b *testing.B) {
 			data := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-			b.Cleanup(data.Close)
+			b.Cleanup(func() { containers.ReleaseVector(data) })
 			keys := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-			b.Cleanup(keys.Close)
+			b.Cleanup(func() { containers.ReleaseVector(keys) })
 			rows := containers.MakeVector(objectio.RowidType, common.DefaultAllocator)
-			b.Cleanup(rows.Close)
+			b.Cleanup(func() { containers.ReleaseVector(rows) })
 			loader := &commitTSLoader{loaded: true}
 			b.Cleanup(loader.close)
 			loader.commitTS = containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
@@ -279,18 +279,18 @@ func BenchmarkPersistedByteDedup(b *testing.B) {
 				return key
 			}
 			for i := 0; i < shape.rows; i++ {
-				data.Append(keyFor(i, false), false)
-				loader.commitTS.Append(types.BuildTS(5, 0), false)
+				containers.AppendValue(data, keyFor(i, false), false)
+				containers.AppendValue(loader.commitTS, types.BuildTS(5, 0), false)
 			}
 			for i := 0; i < shape.probes; i++ {
-				keys.Append(keyFor(i, true), false)
-				rows.Append(nil, true)
+				containers.AppendValue(keys, keyFor(i, true), false)
+				containers.AppendValue(rows, nil, true)
 			}
 			txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				rows.NullMask().AddRange(0, uint64(rows.Length()))
+				rows.GetNulls().AddRange(0, uint64(rows.Length()))
 				op := containers.MakeForeachVectorOp(types.T_varchar, getRowIDAlkFunctions, data, rows, types.Blockid{}, loader, txn, types.TS{}, types.MaxTs())
 				if err := containers.ForeachVector(keys, op, nil); err != nil {
 					b.Fatal(err)
@@ -311,13 +311,13 @@ func TestPersistedByteDedupConstantBlock(t *testing.T) {
 			} else {
 				data = containers.NewConstBytes(types.T_varchar.ToType(), key, 65)
 			}
-			defer data.Close()
+			defer containers.ReleaseVector(data)
 			keys := containers.NewConstBytes(types.T_varchar.ToType(), key, 33)
-			defer keys.Close()
+			defer containers.ReleaseVector(keys)
 			rows := containers.MakeVector(objectio.RowidType, common.DefaultAllocator)
-			defer rows.Close()
+			defer containers.ReleaseVector(rows)
 			for range 33 {
-				rows.Append(nil, true)
+				containers.AppendValue(rows, nil, true)
 			}
 			loader := &commitTSLoader{loaded: true, commitTS: containers.NewConstFixed(types.T_TS.ToType(), types.BuildTS(5, 0), 65)}
 			defer loader.close()
@@ -325,8 +325,8 @@ func TestPersistedByteDedupConstantBlock(t *testing.T) {
 			op := containers.MakeForeachVectorOp(types.T_varchar, getRowIDAlkFunctions, data, rows, types.Blockid{}, loader, txn, types.TS{}, types.MaxTs())
 			require.NoError(t, containers.ForeachVector(keys, op, nil))
 			for i := range rows.Length() {
-				require.False(t, rows.IsNull(i))
-				rowID := rows.Get(i).(types.Rowid)
+				require.False(t, rows.IsNull(uint64(i)))
+				rowID := containers.GetValue(rows, i).(types.Rowid)
 				require.Equal(t, uint32(64), rowID.GetRowOffset())
 			}
 		})

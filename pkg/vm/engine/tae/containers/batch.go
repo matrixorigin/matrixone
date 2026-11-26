@@ -30,36 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-var EMPTY_VECTOR Vector
-
-func init() {
-	EMPTY_VECTOR = &emptyVector{
-		Vector: MakeVector(types.T_int8.ToType(), common.DefaultAllocator),
-	}
-}
-
-type emptyVector struct {
-	Vector
-}
-
-// do not close
-func (v *emptyVector) Close() {}
-
-func (v *emptyVector) Append(x any, isNull bool) {
-	panic("not implemented") // TODO: Implement
-}
-
-func (v *emptyVector) Compact(_ *roaring.Bitmap) {
-	panic("not implemented") // TODO: Implement
-}
-
-func (v *emptyVector) Extend(o Vector) {
-	panic("not implemented") // TODO: Implement
-}
-
-func (v *emptyVector) ExtendWithOffset(src Vector, srcOff int, srcLen int) {
-	panic("not implemented") // TODO: Implement
-}
+// EMPTY_VECTOR is the shared placeholder AppendPlaceholder puts in a batch.
+// It is never written to, and ReleaseVector leaves it alone.
+var EMPTY_VECTOR Vector = vector.NewVec(types.T_int8.ToType(), common.DefaultAllocator)
 
 func NewBatch() *Batch {
 	return &Batch{
@@ -108,7 +81,7 @@ func (bat *Batch) GetVectorByName(name string) Vector {
 func (bat *Batch) deletesMP() *mpool.MPool {
 	for _, vec := range bat.Vecs {
 		if vec != nil {
-			if mp := vec.GetAllocator(); mp != nil {
+			if mp := vec.MPool(); mp != nil {
 				return mp
 			}
 		}
@@ -178,7 +151,7 @@ func (bat *Batch) Compact() {
 		return
 	}
 	for _, vec := range bat.Vecs {
-		vec.CompactByBitmap(bat.Deletes)
+		CompactByBitmap(vec, bat.Deletes)
 	}
 	bat.ReleaseDeletes()
 }
@@ -190,7 +163,7 @@ func (bat *Batch) Length() int {
 func (bat *Batch) ApproxSize() int {
 	size := 0
 	for _, vec := range bat.Vecs {
-		size += vec.ApproxSize()
+		size += ApproxSize(vec)
 	}
 	return size
 }
@@ -198,7 +171,7 @@ func (bat *Batch) ApproxSize() int {
 func (bat *Batch) Allocated() int {
 	allocated := 0
 	for _, vec := range bat.Vecs {
-		allocated += vec.Allocated()
+		allocated += VectorAllocated(vec)
 	}
 	return allocated
 }
@@ -233,7 +206,7 @@ func (bat *Batch) Window(offset, length int) *Batch {
 	win.Deletes = bat.WindowDeletes(offset, length, false)
 	win.Vecs = make([]Vector, len(bat.Vecs))
 	for i := range win.Vecs {
-		win.Vecs[i] = bat.Vecs[i].Window(offset, length)
+		win.Vecs[i] = Window(bat.Vecs[i], offset, length)
 	}
 	return win
 }
@@ -249,7 +222,7 @@ func (bat *Batch) CloneWindowWithPool(offset, length int, pool *VectorPool) (clo
 	cloned.Deletes = bat.WindowDeletes(offset, length, true)
 	cloned.Vecs = make([]Vector, len(bat.Vecs))
 	for i := range cloned.Vecs {
-		cloned.Vecs[i] = bat.Vecs[i].CloneWindowWithPool(offset, length, pool)
+		cloned.Vecs[i] = CloneWindowWithPool(bat.Vecs[i], offset, length, pool)
 	}
 	return
 }
@@ -265,7 +238,13 @@ func (bat *Batch) CloneWindow(offset, length int, allocator ...*mpool.MPool) (cl
 	cloned.Deletes = bat.WindowDeletes(offset, length, true)
 	cloned.Vecs = make([]Vector, len(bat.Vecs))
 	for i := range cloned.Vecs {
-		cloned.Vecs[i] = bat.Vecs[i].CloneWindow(offset, length, allocator...)
+		mp := common.DefaultAllocator
+		if len(allocator) > 0 {
+			mp = allocator[0]
+		} else if vmp := bat.Vecs[i].MPool(); vmp != nil {
+			mp = vmp
+		}
+		cloned.Vecs[i] = CloneWindow(bat.Vecs[i], offset, length, mp)
 	}
 	return
 }
@@ -278,7 +257,7 @@ func (bat *Batch) PPString(num int) string {
 	var w bytes.Buffer
 	for i, vec := range bat.Vecs {
 		_, _ = w.WriteString(fmt.Sprintf("[Name=%s]", bat.Attrs[i]))
-		_, _ = w.WriteString(vec.PPString(num))
+		_, _ = w.WriteString(PPString(vec, num))
 		_ = w.WriteByte('\n')
 	}
 	return w.String()
@@ -292,7 +271,7 @@ func (bat *Batch) Close() {
 	}
 	for i, vec := range bat.Vecs {
 		if vec != nil {
-			vec.Close()
+			ReleaseVector(vec)
 			bat.Vecs[i] = nil
 		}
 	}
@@ -305,11 +284,11 @@ func (bat *Batch) Reset() {
 			newVec = bat.Pool.GetVector(vec.GetType())
 		} else {
 			opts := Options{
-				Allocator: vec.GetAllocator(),
+				Allocator: vec.MPool(),
 			}
 			newVec = NewVector(*vec.GetType(), opts)
 		}
-		vec.Close()
+		ReleaseVector(vec)
 		bat.Vecs[i] = newVec
 	}
 	bat.ReleaseDeletes()
@@ -318,7 +297,7 @@ func (bat *Batch) Reset() {
 func (bat *Batch) CleanOnlyData() {
 	bat.ReleaseDeletes()
 	for i := range bat.Vecs {
-		bat.Vecs[i].GetDownstreamVector().CleanOnlyData()
+		bat.Vecs[i].CleanOnlyData()
 	}
 }
 
@@ -336,7 +315,7 @@ func (bat *Batch) Equals(o *Batch) bool {
 		if bat.Attrs[i] != o.Attrs[i] {
 			return false
 		}
-		if !bat.Vecs[i].Equals(o.Vecs[i]) {
+		if !VectorEquals(bat.Vecs[i], o.Vecs[i]) {
 			return false
 		}
 	}
@@ -353,9 +332,9 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 	} else {
 		buffer = MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	}
-	defer buffer.Close()
-	mp := buffer.GetAllocator()
-	bufVec := buffer.GetDownstreamVector()
+	defer ReleaseVector(buffer)
+	mp := buffer.MPool()
+	bufVec := buffer
 	if err = vector.AppendBytes(bufVec, types.EncodeFixed(uint16(len(bat.Vecs))), false, mp); err != nil {
 		return
 	}
@@ -374,14 +353,14 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 			return
 		}
 	}
-	if tmpn, err = buffer.WriteTo(w); err != nil {
+	if tmpn, err = WriteVector(buffer, w); err != nil {
 		return
 	}
 	n += tmpn
 
 	// 3. Vectors
 	for _, vec := range bat.Vecs {
-		if tmpn, err = vec.WriteTo(w); err != nil {
+		if tmpn, err = WriteVector(vec, w); err != nil {
 			return
 		}
 		n += tmpn
@@ -419,9 +398,9 @@ func (bat *Batch) WriteToV2(w io.Writer) (n int64, err error) {
 	} else {
 		buffer = MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	}
-	defer buffer.Close()
-	mp := buffer.GetAllocator()
-	bufVec := buffer.GetDownstreamVector()
+	defer ReleaseVector(buffer)
+	mp := buffer.MPool()
+	bufVec := buffer
 	if err = vector.AppendBytes(bufVec, types.EncodeFixed(uint16(len(bat.Vecs))), false, mp); err != nil {
 		return
 	}
@@ -440,14 +419,14 @@ func (bat *Batch) WriteToV2(w io.Writer) (n int64, err error) {
 			return
 		}
 	}
-	if tmpn, err = buffer.WriteToV1(w); err != nil {
+	if tmpn, err = WriteVectorV1(buffer, w); err != nil {
 		return
 	}
 	n += tmpn
 
 	// 3. Vectors
 	for _, vec := range bat.Vecs {
-		if tmpn, err = vec.WriteToV1(w); err != nil {
+		if tmpn, err = WriteVectorV1(vec, w); err != nil {
 			return
 		}
 		n += tmpn
@@ -477,8 +456,8 @@ func (bat *Batch) WriteToV2(w io.Writer) (n int64, err error) {
 func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	var tmpn int64
 	buffer := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-	defer buffer.Close()
-	if tmpn, err = buffer.ReadFrom(r); err != nil {
+	defer ReleaseVector(buffer)
+	if tmpn, err = ReadVector(buffer, r); err != nil {
 		return
 	}
 	if err = validateBatchTypeMetadata(buffer); err != nil {
@@ -486,24 +465,24 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += tmpn
 	pos := 0
-	buf := buffer.Get(pos).([]byte)
+	buf := GetValue(buffer, pos).([]byte)
 	pos++
 	cnt := types.DecodeFixed[uint16](buf)
 	vecTypes := make([]types.Type, cnt)
 	bat.Attrs = make([]string, cnt)
 	for i := 0; i < int(cnt); i++ {
-		buf = buffer.Get(pos).([]byte)
+		buf = GetValue(buffer, pos).([]byte)
 		pos++
 		bat.Attrs[i] = string(buf)
 		bat.Nameidx[bat.Attrs[i]] = i
-		buf = buffer.Get(pos).([]byte)
+		buf = GetValue(buffer, pos).([]byte)
 		vecTypes[i] = types.DecodeType(buf)
 		pos++
 	}
 	for _, vecType := range vecTypes {
 		vec := MakeVector(vecType, common.DefaultAllocator)
-		if tmpn, err = vec.ReadFrom(r); err != nil {
-			vec.Close()
+		if tmpn, err = ReadVector(vec, r); err != nil {
+			ReleaseVector(vec)
 			return
 		}
 		bat.Vecs = append(bat.Vecs, vec)
@@ -540,7 +519,7 @@ func validateBatchTypeMetadata(buffer Vector) error {
 	if buffer.Length() == 0 {
 		return moerr.NewInvalidInputNoCtx("missing batch type metadata")
 	}
-	countBytes, ok := buffer.Get(0).([]byte)
+	countBytes, ok := GetValue(buffer, 0).([]byte)
 	if !ok || len(countBytes) != 2 {
 		return moerr.NewInvalidInputNoCtx("invalid batch type count")
 	}
@@ -549,11 +528,11 @@ func validateBatchTypeMetadata(buffer Vector) error {
 		return moerr.NewInvalidInputNoCtx("short batch type metadata")
 	}
 	for i := 0; i < count; i++ {
-		if _, ok := buffer.Get(1 + 2*i).([]byte); !ok || buffer.IsNull(1+2*i) {
+		if _, ok := GetValue(buffer, 1+2*i).([]byte); !ok || buffer.IsNull(uint64(1+2*i)) {
 			return moerr.NewInvalidInputNoCtx("invalid batch column name")
 		}
-		data, ok := buffer.Get(2 + 2*i).([]byte)
-		if !ok || buffer.IsNull(2+2*i) {
+		data, ok := GetValue(buffer, 2+2*i).([]byte)
+		if !ok || buffer.IsNull(uint64(2+2*i)) {
 			return moerr.NewInvalidInputNoCtx("invalid batch type metadata")
 		}
 		if _, err := types.DecodeTypeChecked(data); err != nil {
@@ -567,8 +546,8 @@ func validateBatchTypeMetadata(buffer Vector) error {
 func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
 	var tmpn int64
 	buffer := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-	defer buffer.Close()
-	if tmpn, err = buffer.ReadFromV1(r); err != nil {
+	defer ReleaseVector(buffer)
+	if tmpn, err = ReadVectorV1(buffer, r); err != nil {
 		return
 	}
 	if err = validateBatchTypeMetadata(buffer); err != nil {
@@ -576,24 +555,24 @@ func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
 	}
 	n += tmpn
 	pos := 0
-	buf := buffer.Get(pos).([]byte)
+	buf := GetValue(buffer, pos).([]byte)
 	pos++
 	cnt := types.DecodeFixed[uint16](buf)
 	vecTypes := make([]types.Type, cnt)
 	bat.Attrs = make([]string, cnt)
 	for i := 0; i < int(cnt); i++ {
-		buf = buffer.Get(pos).([]byte)
+		buf = GetValue(buffer, pos).([]byte)
 		pos++
 		bat.Attrs[i] = string(buf)
 		bat.Nameidx[bat.Attrs[i]] = i
-		buf = buffer.Get(pos).([]byte)
+		buf = GetValue(buffer, pos).([]byte)
 		vecTypes[i] = types.DecodeType(buf)
 		pos++
 	}
 	for _, vecType := range vecTypes {
 		vec := MakeVector(vecType, common.DefaultAllocator)
-		if tmpn, err = vec.ReadFromV1(r); err != nil {
-			vec.Close()
+		if tmpn, err = ReadVectorV1(vec, r); err != nil {
+			ReleaseVector(vec)
 			return
 		}
 		bat.Vecs = append(bat.Vecs, vec)
@@ -628,8 +607,8 @@ func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
 func (bat *Batch) ReadFromV2(r io.Reader) (n int64, err error) {
 	var tmpn int64
 	buffer := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-	defer buffer.Close()
-	if tmpn, err = buffer.ReadFromV1(r); err != nil {
+	defer ReleaseVector(buffer)
+	if tmpn, err = ReadVectorV1(buffer, r); err != nil {
 		return
 	}
 	if err = validateBatchTypeMetadata(buffer); err != nil {
@@ -637,24 +616,24 @@ func (bat *Batch) ReadFromV2(r io.Reader) (n int64, err error) {
 	}
 	n += tmpn
 	pos := 0
-	buf := buffer.Get(pos).([]byte)
+	buf := GetValue(buffer, pos).([]byte)
 	pos++
 	cnt := types.DecodeFixed[uint16](buf)
 	vecTypes := make([]types.Type, cnt)
 	bat.Attrs = make([]string, cnt)
 	for i := 0; i < int(cnt); i++ {
-		buf = buffer.Get(pos).([]byte)
+		buf = GetValue(buffer, pos).([]byte)
 		pos++
 		bat.Attrs[i] = string(buf)
 		bat.Nameidx[bat.Attrs[i]] = i
-		buf = buffer.Get(pos).([]byte)
+		buf = GetValue(buffer, pos).([]byte)
 		vecTypes[i] = types.DecodeType(buf)
 		pos++
 	}
 	for _, vecType := range vecTypes {
 		vec := MakeVector(vecType, common.DefaultAllocator)
-		if tmpn, err = vec.ReadFromV1(r); err != nil {
-			vec.Close()
+		if tmpn, err = ReadVectorV1(vec, r); err != nil {
+			ReleaseVector(vec)
 			return
 		}
 		bat.Vecs = append(bat.Vecs, vec)
@@ -727,7 +706,7 @@ func (bat *Batch) Split(cnt int) []*Batch {
 
 func (bat *Batch) Append(src *Batch) (err error) {
 	for i, vec := range bat.Vecs {
-		vec.Extend(src.Vecs[i])
+		Extend(vec, src.Vecs[i])
 	}
 	return
 }
@@ -737,7 +716,7 @@ func (bat *Batch) Extend(src *Batch) {
 	for i, vec := range bat.Vecs {
 		attr := bat.Attrs[i]
 		if idx, ok := src.Nameidx[attr]; ok {
-			vec.Extend(src.Vecs[idx])
+			Extend(vec, src.Vecs[idx])
 		}
 	}
 	src.Close()

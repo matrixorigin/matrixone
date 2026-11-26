@@ -525,14 +525,8 @@ func TestVacuumOpts(t *testing.T) {
 		)
 
 		for j := 2000 * i; j < 2000*(i+1); j++ {
-			bat.Vecs[0].Append(
-				types.NewRowIDWithObjectIDBlkNumAndRowID(*name.ObjectId(), 0, uint32(j)),
-				false,
-			)
-			bat.Vecs[1].Append(
-				int32(j),
-				false,
-			)
+			containers.AppendValue(bat.Vecs[0], types.NewRowIDWithObjectIDBlkNumAndRowID(*name.ObjectId(), 0, uint32(j)), false)
+			containers.AppendValue(bat.Vecs[1], int32(j), false)
 		}
 
 		tombwriter, err := ioutil.NewBlockWriterNew(

@@ -695,19 +695,19 @@ func TestExecuteIteration1(t *testing.T) {
 	pkIdx := schema.GetPrimaryKey().Idx
 	// Delete first 3 rows using primary key filter
 	// Get the primary key value from the first row of the batch
-	pkVal := bat.Vecs[pkIdx].Get(0)
+	pkVal := containers.GetValue(bat.Vecs[pkIdx], 0)
 	filter := handle.NewEQFilter(pkVal)
 	err = taeRel.DeleteByFilter(srcCtxWithTimeout, filter)
 	require.NoError(t, err)
 
 	// Delete second row
-	pkVal2 := bat.Vecs[pkIdx].Get(1)
+	pkVal2 := containers.GetValue(bat.Vecs[pkIdx], 1)
 	filter2 := handle.NewEQFilter(pkVal2)
 	err = taeRel.DeleteByFilter(srcCtxWithTimeout, filter2)
 	require.NoError(t, err)
 
 	// Delete third row
-	pkVal3 := bat.Vecs[pkIdx].Get(2)
+	pkVal3 := containers.GetValue(bat.Vecs[pkIdx], 2)
 	filter3 := handle.NewEQFilter(pkVal3)
 	err = taeRel.DeleteByFilter(srcCtxWithTimeout, filter3)
 	require.NoError(t, err)

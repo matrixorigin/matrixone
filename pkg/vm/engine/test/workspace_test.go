@@ -1354,8 +1354,8 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 	rowsCount := 30
 	bat := catalog2.MockBatch(schema, 0)
 	for i := range rowsCount {
-		bat.Vecs[0].Append(int32(i/10), false)
-		bat.Vecs[1].Append(int64(i), false)
+		containers.AppendValue(bat.Vecs[0], int32(i/10), false)
+		containers.AppendValue(bat.Vecs[1], int64(i), false)
 	}
 
 	// txn1 insert 0-30

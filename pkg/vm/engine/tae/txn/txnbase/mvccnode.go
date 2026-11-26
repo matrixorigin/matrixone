@@ -410,22 +410,22 @@ func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {
 func (un *TxnMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, commitTS types.TS) {
 	startTSVec := bat.GetVectorByName(SnapshotAttr_StartTS)
 	vector.AppendFixed(
-		startTSVec.GetDownstreamVector(),
+		startTSVec,
 		un.Start,
 		false,
-		startTSVec.GetAllocator(),
+		startTSVec.MPool(),
 	)
 	vector.AppendFixed(
-		bat.GetVectorByName(SnapshotAttr_PrepareTS).GetDownstreamVector(),
+		bat.GetVectorByName(SnapshotAttr_PrepareTS),
 		un.Prepare,
 		false,
-		startTSVec.GetAllocator(),
+		startTSVec.MPool(),
 	)
 	vector.AppendFixed(
-		bat.GetVectorByName(SnapshotAttr_CommitTS).GetDownstreamVector(),
+		bat.GetVectorByName(SnapshotAttr_CommitTS),
 		commitTS,
 		false,
-		startTSVec.GetAllocator(),
+		startTSVec.MPool(),
 	)
 }
 

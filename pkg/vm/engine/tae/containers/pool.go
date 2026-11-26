@@ -16,6 +16,7 @@ package containers
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	_ "unsafe"
 
@@ -67,7 +68,24 @@ type vectorPoolElement struct {
 	mp    *mpool.MPool
 	vec   *vector.Vector
 	inUse atomic.Bool
+	// lent is the vector holding vec's buffers while they are lent.
+	lent atomic.Pointer[vector.Vector]
 }
+
+// allocated is the memory of the element's buffers, lent or not. Reading a
+// lent vector's size races with its borrower; it is a statistic.
+func (e *vectorPoolElement) allocated() int {
+	if l := e.lent.Load(); l != nil {
+		return l.Allocated()
+	}
+	return e.vec.Allocated()
+}
+
+// lentVectors maps each vector a VectorPool has lent and not yet taken back
+// to its element. A lent vector is a fresh struct holding the element's
+// buffers (see lend), so a stale second release of it can never reach a
+// later borrower of the same buffers.
+var lentVectors sync.Map // *vector.Vector -> *vectorPoolElement
 
 func (e *vectorPoolElement) tryReuse(t *types.Type) bool {
 	if e.inUse.CompareAndSwap(false, true) {
@@ -75,6 +93,43 @@ func (e *vectorPoolElement) tryReuse(t *types.Type) bool {
 		return true
 	}
 	return false
+}
+
+// lend moves the element's buffers into a new vector struct and records it
+// as lent. The element must be in use (tryReuse).
+func (e *vectorPoolElement) lend() *vector.Vector {
+	lent := new(vector.Vector)
+	*lent = *e.vec
+	*e.vec = vector.Vector{}
+	e.lent.Store(lent)
+	lentVectors.Store(lent, e)
+	return lent
+}
+
+// takeBack moves a lent vector's buffers back into the element and leaves
+// the lent struct empty, then returns the element to the pool.
+func (e *vectorPoolElement) takeBack(lent *vector.Vector) {
+	*e.vec = *lent
+	*lent = vector.Vector{}
+	e.lent.Store(nil)
+	e.put()
+}
+
+// returnToPool returns vec to the VectorPool that lent it, and reports
+// whether it was lent by one.
+func returnToPool(vec *vector.Vector) bool {
+	e, ok := lentVectors.LoadAndDelete(vec)
+	if !ok {
+		return false
+	}
+	e.(*vectorPoolElement).takeBack(vec)
+	return true
+}
+
+// isLent reports whether vec was lent by a VectorPool and not yet returned.
+func isLent(vec *vector.Vector) bool {
+	_, ok := lentVectors.Load(vec)
+	return ok
 }
 
 func (e *vectorPoolElement) put() {
@@ -177,7 +232,9 @@ func (p *VectorPool) String() string {
 	return str
 }
 
-func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
+// GetVector lends a vector of type t; release it with ReleaseVector, which
+// returns it to the pool.
+func (p *VectorPool) GetVector(t *types.Type) Vector {
 	p.totalStats.Add(1)
 	if p.closed.Load() {
 		return NewVector(*t, Options{Allocator: p.mp})
@@ -189,11 +246,7 @@ func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 				element := p.fixSizedPool[idx]
 				if element.tryReuse(t) {
 					p.fixHitStats.Add(1)
-					return &vectorWrapper{
-						wrapped: element.vec,
-						mpool:   element.mp,
-						element: element,
-					}
+					return element.lend()
 				}
 			}
 		}
@@ -204,11 +257,7 @@ func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 				element := p.varlenPool[idx]
 				if element.tryReuse(t) {
 					p.varlenHitStats.Add(1)
-					return &vectorWrapper{
-						wrapped: element.vec,
-						mpool:   element.mp,
-						element: element,
-					}
+					return element.lend()
 				}
 			}
 		}
@@ -245,7 +294,7 @@ func (p *VectorPool) Allocated() int {
 func (p *VectorPool) FixedSizeAllocated() int {
 	size := 0
 	for _, element := range p.fixSizedPool {
-		size += element.vec.Allocated()
+		size += element.allocated()
 	}
 	return size
 }
@@ -253,7 +302,7 @@ func (p *VectorPool) FixedSizeAllocated() int {
 func (p *VectorPool) VarlenaSizeAllocated() int {
 	size := 0
 	for _, element := range p.varlenPool {
-		size += element.vec.Allocated()
+		size += element.allocated()
 	}
 	return size
 }
@@ -266,7 +315,7 @@ func (p *VectorPool) FixedSizeUsed(isUnsafe bool) (int, int) {
 			continue
 		}
 		if isUnsafe {
-			size += element.vec.Allocated()
+			size += element.allocated()
 		}
 		cnt++
 	}
@@ -281,7 +330,7 @@ func (p *VectorPool) VarlenUsed(isUnsafe bool) (int, int) {
 			continue
 		}
 		if isUnsafe {
-			size += element.vec.Allocated()
+			size += element.allocated()
 		}
 		cnt++
 	}

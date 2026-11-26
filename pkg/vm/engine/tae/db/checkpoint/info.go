@@ -66,32 +66,32 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batc
 		if !entry.IsFinished() && !entry.end.Equal(&end) {
 			continue
 		}
-		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start, false)
-		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end, false)
-		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()), false)
-		bat.GetVectorByName(CheckpointAttr_EntryType).Append(true, false)
-		bat.GetVectorByName(CheckpointAttr_Version).Append(entry.version, false)
-		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.tnLocation), false)
-		bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(entry.ckpLSN, false)
-		bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(entry.truncateLSN, false)
-		bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Incremental), false)
-		bat.GetVectorByName(CheckpointAttr_TableIDLocation).Append([]byte(entry.tableIDLocation), false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_StartTS), entry.start, false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_EndTS), entry.end, false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_MetaLocation), []byte(entry.GetLocation()), false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_EntryType), true, false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_Version), entry.version, false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_AllLocations), []byte(entry.tnLocation), false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_CheckpointLSN), entry.ckpLSN, false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_TruncateLSN), entry.truncateLSN, false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_Type), int8(ET_Incremental), false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_TableIDLocation), []byte(entry.tableIDLocation), false)
 	}
 	entries = r.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		if !entry.IsFinished() && !entry.end.Equal(&end) {
 			continue
 		}
-		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start, false)
-		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end, false)
-		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()), false)
-		bat.GetVectorByName(CheckpointAttr_EntryType).Append(false, false)
-		bat.GetVectorByName(CheckpointAttr_Version).Append(entry.version, false)
-		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.tnLocation), false)
-		bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(entry.ckpLSN, false)
-		bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(entry.truncateLSN, false)
-		bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Global), false)
-		bat.GetVectorByName(CheckpointAttr_TableIDLocation).Append([]byte(entry.tableIDLocation), false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_StartTS), entry.start, false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_EndTS), entry.end, false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_MetaLocation), []byte(entry.GetLocation()), false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_EntryType), false, false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_Version), entry.version, false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_AllLocations), []byte(entry.tnLocation), false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_CheckpointLSN), entry.ckpLSN, false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_TruncateLSN), entry.truncateLSN, false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_Type), int8(ET_Global), false)
+		containers.AppendValue(bat.GetVectorByName(CheckpointAttr_TableIDLocation), []byte(entry.tableIDLocation), false)
 	}
 	return bat
 }

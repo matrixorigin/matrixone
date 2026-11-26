@@ -133,16 +133,16 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 		fakePKProvided = fakePKProvided || def.FakePK
 		destVec := n.data.Vecs[def.Idx]
 		// logutil.Infof("destVec: %s, %d, %d", destVec.String(), cnt, data.Length())
-		destVec.ExtendWithOffset(data.Vecs[def.Idx], int(offset), int(an))
+		containers.ExtendWithOffset(destVec, data.Vecs[def.Idx], int(offset), int(an))
 	}
 	if schema.HasFakePK() && !fakePKProvided {
 		fakePK := n.data.Vecs[schema.GetPrimaryKey().Idx]
 		if err = cnvector.AppendMultiFixed(
-			fakePK.GetDownstreamVector(),
+			fakePK,
 			uint64(0),
 			false,
 			int(an),
-			fakePK.GetAllocator(),
+			fakePK.MPool(),
 		); err != nil {
 			return
 		}
@@ -161,15 +161,15 @@ func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	col := n.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	blkID := objectio.NewBlockidWithObjectID(n.meta.ID(), 0)
 	if err = objectio.ConstructRowidColumnTo(
-		col.GetDownstreamVector(),
+		col,
 		&blkID, startRow, length,
-		col.GetAllocator(),
+		col.MPool(),
 	); err != nil {
-		col.Close()
+		containers.ReleaseVector(col)
 		return
 	}
-	err = n.data.Vecs[n.table.GetLocalSchema(n.isTombstone).PhyAddrKey.Idx].ExtendVec(col.GetDownstreamVector())
-	col.Close()
+	err = containers.ExtendVec(n.data.Vecs[n.table.GetLocalSchema(n.isTombstone).PhyAddrKey.Idx], col)
+	containers.ReleaseVector(col)
 	return
 }
 
@@ -183,7 +183,7 @@ func (n *anode) Compact() {
 
 func (n *anode) GetValue(col int, row uint32) (any, bool, error) {
 	vec := n.data.Vecs[col]
-	return vec.Get(int(row)), vec.IsNull(int(row)), nil
+	return containers.GetValue(vec, int(row)), vec.IsNull(uint64(int(row))), nil
 }
 
 func (n *anode) RangeDelete(start, end uint32) error {
@@ -206,10 +206,10 @@ func (n *anode) WindowColumn(start, end uint32, pos int) (vec containers.Vector,
 	data := n.data
 	deletes := data.WindowDeletes(int(start), int(end-start), false)
 	if deletes != nil {
-		vec = data.Vecs[pos].CloneWindow(int(start), int(end-start))
-		vec.CompactByBitmap(deletes)
+		vec = containers.CloneWindow(data.Vecs[pos], int(start), int(end-start), data.Vecs[pos].MPool())
+		containers.CompactByBitmap(vec, deletes)
 	} else {
-		vec = data.Vecs[pos].Window(int(start), int(end-start))
+		vec = containers.Window(data.Vecs[pos], int(start), int(end-start))
 	}
 	return
 }
@@ -231,14 +231,14 @@ func (n *anode) Scan(ctx context.Context, bat **containers.Batch, colIdxes []int
 		for _, colIdx := range colIdxes {
 			orig := n.data.Vecs[colIdx]
 			attr := n.data.Attrs[colIdx]
-			(*bat).AddVector(attr, orig.CloneWindow(0, orig.Length(), mp))
+			(*bat).AddVector(attr, containers.CloneWindow(orig, 0, orig.Length(), mp))
 		}
 		return
 	}
 	for _, colIdx := range colIdxes {
 		orig := n.data.Vecs[colIdx]
 		attr := n.data.Attrs[colIdx]
-		(*bat).GetVectorByName(attr).Extend(orig)
+		containers.Extend((*bat).GetVectorByName(attr), orig)
 	}
 }
 

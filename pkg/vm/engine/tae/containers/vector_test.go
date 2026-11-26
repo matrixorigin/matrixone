@@ -35,7 +35,7 @@ func TestTnConst(t *testing.T) {
 	m := mpool.MustNewZero()
 	v := movec.NewConstNull(types.T_int32.ToType(), 20, m)
 	v.IsConstNull()
-	tnv := ToTNVector(v, m)
+	tnv := v
 	require.True(t, tnv.IsNull(2))
 }
 
@@ -49,18 +49,18 @@ func TestVectorShallowForeach(t *testing.T) {
 		vec := MakeVector(typ, common.DefaultAllocator)
 		for i := 0; i < 10; i++ {
 			if i%2 == 0 {
-				vec.Append(nil, true)
+				AppendValue(vec, nil, true)
 			} else {
 				switch typ.Oid {
 				case types.T_int32:
-					vec.Append(int32(i), false)
+					AppendValue(vec, int32(i), false)
 				case types.T_char:
-					vec.Append([]byte("test null"), false)
+					AppendValue(vec, []byte("test null"), false)
 				}
 			}
 		}
 
-		vec.Foreach(func(v any, isNull bool, row int) error {
+		Foreach(vec, func(v any, isNull bool, row int) error {
 			if row%2 == 0 {
 				assert.True(t, isNull)
 			}
@@ -72,23 +72,23 @@ func TestVectorShallowForeach(t *testing.T) {
 func TestVector1(t *testing.T) {
 	opt := withAllocator(Options{})
 	vec := NewVector(types.T_int32.ToType(), opt)
-	vec.Append(int32(12), false)
-	vec.Append(int32(32), false)
-	vec.AppendMany([]any{int32(1), int32(100)}, []bool{false, false})
+	AppendValue(vec, int32(12), false)
+	AppendValue(vec, int32(32), false)
+	AppendMany(vec, []any{int32(1), int32(100)}, []bool{false, false})
 	assert.Equal(t, 4, vec.Length())
-	assert.Equal(t, int32(12), vec.Get(0).(int32))
-	assert.Equal(t, int32(32), vec.Get(1).(int32))
-	assert.Equal(t, int32(1), vec.Get(2).(int32))
-	assert.Equal(t, int32(100), vec.Get(3).(int32))
+	assert.Equal(t, int32(12), GetValue(vec, 0).(int32))
+	assert.Equal(t, int32(32), GetValue(vec, 1).(int32))
+	assert.Equal(t, int32(1), GetValue(vec, 2).(int32))
+	assert.Equal(t, int32(100), GetValue(vec, 3).(int32))
 	vec2 := NewVector(types.T_int32.ToType())
-	vec2.Extend(vec)
+	Extend(vec2, vec)
 	assert.Equal(t, 4, vec2.Length())
-	assert.Equal(t, int32(12), vec2.Get(0).(int32))
-	assert.Equal(t, int32(32), vec2.Get(1).(int32))
-	assert.Equal(t, int32(1), vec2.Get(2).(int32))
-	assert.Equal(t, int32(100), vec2.Get(3).(int32))
-	vec.Close()
-	vec2.Close()
+	assert.Equal(t, int32(12), GetValue(vec2, 0).(int32))
+	assert.Equal(t, int32(32), GetValue(vec2, 1).(int32))
+	assert.Equal(t, int32(1), GetValue(vec2, 2).(int32))
+	assert.Equal(t, int32(100), GetValue(vec2, 3).(int32))
+	ReleaseVector(vec)
+	ReleaseVector(vec2)
 	// XXX MPOOL
 	// alloc := vec.GetMPool()
 	// assert.Equal(t, 0, alloc.CurrNB())
@@ -100,38 +100,38 @@ func TestVector2(t *testing.T) {
 	t.Log(vec.String())
 	now := time.Now()
 	for i := 10; i > 0; i-- {
-		vec.Append(int64(i), false)
+		AppendValue(vec, int64(i), false)
 	}
 	t.Log(time.Since(now))
 	assert.Equal(t, 10, vec.Length())
 	assert.False(t, vec.HasNull())
-	vec.Append(nil, true)
+	AppendValue(vec, nil, true)
 	assert.Equal(t, 11, vec.Length())
 	assert.True(t, vec.HasNull())
 	assert.True(t, vec.IsNull(10))
 
-	vec.Update(2, nil, true)
+	UpdateRow(vec, 2, nil, true)
 	assert.Equal(t, 11, vec.Length())
 	assert.True(t, vec.HasNull())
 	assert.True(t, vec.IsNull(10))
 	assert.True(t, vec.IsNull(2))
 
-	vec.Update(2, int64(22), false)
+	UpdateRow(vec, 2, int64(22), false)
 	assert.True(t, vec.HasNull())
 	assert.True(t, vec.IsNull(10))
 	assert.False(t, vec.IsNull(2))
-	assert.Equal(t, any(int64(22)), vec.Get(2))
+	assert.Equal(t, any(int64(22)), GetValue(vec, 2))
 
-	vec.Update(10, int64(100), false)
+	UpdateRow(vec, 10, int64(100), false)
 	assert.False(t, vec.HasNull())
 	assert.False(t, vec.IsNull(10))
 	assert.False(t, vec.IsNull(2))
-	assert.Equal(t, any(int64(22)), vec.Get(2))
-	assert.Equal(t, any(int64(100)), vec.Get(10))
+	assert.Equal(t, any(int64(22)), GetValue(vec, 2))
+	assert.Equal(t, any(int64(100)), GetValue(vec, 10))
 
 	t.Log(vec.String())
 
-	vec.Close()
+	ReleaseVector(vec)
 	assert.Zero(t, opt.Allocator.CurrNB())
 
 	// vec2 := compute.MockVec(vec.GetType(), 0, 0)
@@ -153,25 +153,25 @@ func TestVector3(t *testing.T) {
 	opts := withAllocator(Options{})
 	vec1 := NewVector(types.T_int32.ToType(), opts)
 	for i := 0; i < 100; i++ {
-		vec1.Append(int32(i), false)
+		AppendValue(vec1, int32(i), false)
 	}
 
 	w := new(bytes.Buffer)
-	_, err := vec1.WriteTo(w)
+	_, err := WriteVector(vec1, w)
 	assert.NoError(t, err)
 
 	r := bytes.NewBuffer(w.Bytes())
 
 	vec2 := NewVector(types.T_int32.ToType(), opts)
-	_, err = vec2.ReadFrom(r)
+	_, err = ReadVector(vec2, r)
 	assert.NoError(t, err)
 
-	assert.True(t, vec1.Equals(vec2))
+	assert.True(t, VectorEquals(vec1, vec2))
 
 	// t.Log(vec1.String())
 	// t.Log(vec2.String())
-	vec1.Close()
-	vec2.Close()
+	ReleaseVector(vec1)
+	ReleaseVector(vec2)
 	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
@@ -184,35 +184,35 @@ func TestVector5(t *testing.T) {
 		rows := make([]int, 0)
 		op := func(v any, _ bool, row int) (err error) {
 			rows = append(rows, row)
-			assert.Equal(t, vec.Get(row), v)
+			assert.Equal(t, GetValue(vec, row), v)
 			return
 		}
-		_ = vec.Foreach(op, nil)
+		_ = Foreach(vec, op, nil)
 		assert.Equal(t, 10, len(rows))
 		for i, e := range rows {
 			assert.Equal(t, i, e)
 		}
 
 		rows = rows[:0]
-		_ = vec.Foreach(op, sels)
+		_ = Foreach(vec, op, sels)
 		assert.Equal(t, 2, len(rows))
 		assert.Equal(t, 2, rows[0])
 		assert.Equal(t, 6, rows[1])
 
 		rows = rows[:0]
-		_ = vec.ForeachWindow(2, 6, op, nil)
+		_ = ForeachWindow(vec, 2, 6, op, nil)
 		assert.Equal(t, []int{2, 3, 4, 5, 6, 7}, rows)
 		rows = rows[:0]
-		_ = vec.ForeachWindow(2, 6, op, sels)
+		_ = ForeachWindow(vec, 2, 6, op, sels)
 		assert.Equal(t, []int{2, 6}, rows)
 		rows = rows[:0]
-		_ = vec.ForeachWindow(3, 6, op, sels)
+		_ = ForeachWindow(vec, 3, 6, op, sels)
 		assert.Equal(t, []int{6}, rows)
 		rows = rows[:0]
-		_ = vec.ForeachWindow(3, 3, op, sels)
+		_ = ForeachWindow(vec, 3, 3, op, sels)
 		assert.Equal(t, []int{}, rows)
 
-		vec.Close()
+		ReleaseVector(vec)
 	}
 }
 
@@ -223,78 +223,78 @@ func TestVector6(t *testing.T) {
 	f := func(vecType types.Type, nullable bool) {
 		vec := MockVector(vecType, 10, false, nil)
 		if nullable {
-			vec.Update(4, nil, true)
+			UpdateRow(vec, 4, nil, true)
 		}
 		bias := 0
-		win := vec.Window(bias, 8)
+		win := Window(vec, bias, 8)
 		assert.Equal(t, 8, win.Length())
 		rows := make([]int, 0)
 		op := func(v any, _ bool, row int) (err error) {
 			rows = append(rows, row)
-			assert.Equal(t, vec.Get(row+bias), v)
+			assert.Equal(t, GetValue(vec, row+bias), v)
 			return
 		}
-		_ = win.Foreach(op, nil)
+		_ = Foreach(win, op, nil)
 		assert.Equal(t, 8, len(rows))
 		assert.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7}, rows)
 		rows = rows[:0]
-		_ = win.ForeachWindow(2, 3, op, nil)
+		_ = ForeachWindow(win, 2, 3, op, nil)
 		assert.Equal(t, 3, len(rows))
 		assert.Equal(t, []int{2, 3, 4}, rows)
 
 		rows = rows[:0]
-		_ = win.Foreach(op, sels)
+		_ = Foreach(win, op, sels)
 		assert.Equal(t, 2, len(rows))
 		assert.Equal(t, 2, rows[0])
 		assert.Equal(t, 6, rows[1])
 
 		rows = rows[:0]
-		_ = win.ForeachWindow(2, 6, op, sels)
+		_ = ForeachWindow(win, 2, 6, op, sels)
 		assert.Equal(t, []int{2, 6}, rows)
 		rows = rows[:0]
-		_ = win.ForeachWindow(3, 4, op, sels)
+		_ = ForeachWindow(win, 3, 4, op, sels)
 		assert.Equal(t, []int{6}, rows)
 		rows = rows[:0]
-		_ = win.ForeachWindow(3, 3, op, sels)
+		_ = ForeachWindow(win, 3, 3, op, sels)
 		assert.Equal(t, []int{}, rows)
 
 		bias = 1
-		win = vec.Window(bias, 8)
+		win = Window(vec, bias, 8)
 
 		op2 := func(v any, _ bool, row int) (err error) {
 			rows = append(rows, row)
 			// t.Logf("row=%d,v=%v", row, v)
 			// t.Logf("row=%d, winv=%v", row, win.Get(row))
 			// t.Logf("row+bias=%d, rawv=%v", row+bias, vec.Get(row+bias))
-			assert.Equal(t, vec.Get(row+bias), v)
-			assert.Equal(t, win.Get(row), v)
+			assert.Equal(t, GetValue(vec, row+bias), v)
+			assert.Equal(t, GetValue(win, row), v)
 			return
 		}
 		rows = rows[:0]
-		_ = win.Foreach(op2, nil)
+		_ = Foreach(win, op2, nil)
 		assert.Equal(t, 8, len(rows))
 		assert.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7}, rows)
 		rows = rows[:0]
-		_ = win.ForeachWindow(2, 3, op, nil)
+		_ = ForeachWindow(win, 2, 3, op, nil)
 		assert.Equal(t, 3, len(rows))
 		assert.Equal(t, []int{2, 3, 4}, rows)
 		rows = rows[:0]
-		_ = win.Foreach(op, sels)
+		_ = Foreach(win, op, sels)
 		assert.Equal(t, 2, len(rows))
 		assert.Equal(t, 2, rows[0])
 		assert.Equal(t, 6, rows[1])
 
 		rows = rows[:0]
-		_ = win.ForeachWindow(2, 6, op, sels)
+		_ = ForeachWindow(win, 2, 6, op, sels)
 		assert.Equal(t, []int{2, 6}, rows)
 		rows = rows[:0]
-		_ = win.ForeachWindow(3, 4, op, sels)
+		_ = ForeachWindow(win, 3, 4, op, sels)
 		assert.Equal(t, []int{6}, rows)
 		rows = rows[:0]
-		_ = win.ForeachWindow(3, 3, op, sels)
+		_ = ForeachWindow(win, 3, 3, op, sels)
 		assert.Equal(t, []int{}, rows)
 
-		vec.Close()
+		ReleaseVector(vec)
 	}
 	for _, vecType := range vecTypes {
 		f(vecType, false)
@@ -307,22 +307,22 @@ func TestVector7(t *testing.T) {
 	testF := func(typ types.Type, nullable bool) {
 		vec := MockVector(typ, 10, false, nil)
 		if nullable {
-			vec.Append(nil, true)
+			AppendValue(vec, nil, true)
 		}
 		vec2 := MockVector(typ, 10, false, nil)
 		vec3 := MakeVector(typ, common.DefaultAllocator)
-		vec3.Extend(vec)
+		Extend(vec3, vec)
 		assert.Equal(t, vec.Length(), vec3.Length())
-		vec3.Extend(vec2)
+		Extend(vec3, vec2)
 		assert.Equal(t, vec.Length()+vec2.Length(), vec3.Length())
 		for i := 0; i < vec3.Length(); i++ {
 			if i >= vec.Length() {
-				assert.Equal(t, vec2.Get(i-vec.Length()), vec3.Get(i))
+				assert.Equal(t, GetValue(vec2, i-vec.Length()), GetValue(vec3, i))
 			} else {
-				if vec.IsNull(i) {
-					assert.Equal(t, true, vec3.IsNull(i))
+				if vec.IsNull(uint64(i)) {
+					assert.Equal(t, true, vec3.IsNull(uint64(i)))
 				} else {
-					assert.Equal(t, vec.Get(i), vec3.Get(i))
+					assert.Equal(t, GetValue(vec, i), GetValue(vec3, i))
 				}
 			}
 		}
@@ -332,17 +332,17 @@ func TestVector7(t *testing.T) {
 		if nullable {
 			cnt = 6
 		}
-		vec4.ExtendWithOffset(vec, 5, cnt)
+		ExtendWithOffset(vec4, vec, 5, cnt)
 		assert.Equal(t, cnt, vec4.Length())
 		// t.Log(vec4.String())
 		// t.Log(vec.String())
 		for i := 0; i < cnt; i++ {
-			assert.Equal(t, vec.Get(i+5), vec4.Get(i))
+			assert.Equal(t, GetValue(vec, i+5), GetValue(vec4, i))
 		}
 
-		vec.Close()
-		vec2.Close()
-		vec3.Close()
+		ReleaseVector(vec)
+		ReleaseVector(vec2)
+		ReleaseVector(vec3)
 	}
 	for _, typ := range vecTypes {
 		testF(typ, true)
@@ -352,26 +352,26 @@ func TestVector7(t *testing.T) {
 
 func TestVector8(t *testing.T) {
 	vec := MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer vec.Close()
-	vec.Append(int32(0), false)
-	vec.Append(int32(1), false)
-	vec.Append(int32(2), false)
-	vec.Append(nil, true)
-	vec.Append(int32(4), false)
-	vec.Append(int32(5), false)
+	defer ReleaseVector(vec)
+	AppendValue(vec, int32(0), false)
+	AppendValue(vec, int32(1), false)
+	AppendValue(vec, int32(2), false)
+	AppendValue(vec, nil, true)
+	AppendValue(vec, int32(4), false)
+	AppendValue(vec, int32(5), false)
 	assert.True(t, vec.IsNull(3))
-	vec.Delete(1)
+	DeleteRow(vec, 1)
 	assert.True(t, vec.IsNull(2))
-	vec.Delete(3)
+	DeleteRow(vec, 3)
 	assert.True(t, vec.IsNull(2))
-	vec.Update(1, nil, true)
+	UpdateRow(vec, 1, nil, true)
 	assert.True(t, vec.IsNull(1))
 	assert.True(t, vec.IsNull(2))
-	vec.Append(nil, true)
+	AppendValue(vec, nil, true)
 	assert.True(t, vec.IsNull(1))
 	assert.True(t, vec.IsNull(2))
 	assert.True(t, vec.IsNull(4))
-	vec.Compact(roaring.BitmapOf(0, 2))
+	Compact(vec, roaring.BitmapOf(0, 2))
 	assert.Equal(t, 3, vec.Length())
 	assert.True(t, vec.IsNull(0))
 	assert.True(t, vec.IsNull(2))
@@ -381,18 +381,18 @@ func TestVector8(t *testing.T) {
 func TestVector9(t *testing.T) {
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_varchar.ToType(), opts)
-	vec.Append([]byte("h1"), false)
-	vec.Append([]byte("h22"), false)
-	vec.Append([]byte("h333"), false)
-	vec.Append(nil, true)
-	vec.Append([]byte("h4444"), false)
+	AppendValue(vec, []byte("h1"), false)
+	AppendValue(vec, []byte("h22"), false)
+	AppendValue(vec, []byte("h333"), false)
+	AppendValue(vec, nil, true)
+	AppendValue(vec, []byte("h4444"), false)
 
-	cloned := vec.CloneWindow(2, 2)
+	cloned := CloneWindow(vec, 2, 2, vec.MPool() /* REVIEW: CloneWindow pool */)
 	assert.Equal(t, 2, cloned.Length())
-	assert.Equal(t, vec.Get(2), cloned.Get(0))
-	assert.Equal(t, vec.Get(3), cloned.Get(1))
-	cloned.Close()
-	vec.Close()
+	assert.Equal(t, GetValue(vec, 2), GetValue(cloned, 0))
+	assert.Equal(t, GetValue(vec, 3), GetValue(cloned, 1))
+	ReleaseVector(cloned)
+	ReleaseVector(vec)
 	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
@@ -400,55 +400,55 @@ func TestCompact(t *testing.T) {
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_varchar.ToType(), opts)
 
-	vec.Append(nil, true)
+	AppendValue(vec, nil, true)
 	t.Log(vec.String())
 	deletes := roaring.BitmapOf(0)
 	//{null}
-	vec.Compact(deletes)
+	Compact(vec, deletes)
 	//{}
 	assert.Equal(t, 0, vec.Length())
 
-	vec.Append(nil, true)
-	vec.Append(nil, true)
-	vec.Append(nil, true)
+	AppendValue(vec, nil, true)
+	AppendValue(vec, nil, true)
+	AppendValue(vec, nil, true)
 	deletes = roaring.BitmapOf(0, 1)
 	//{n,n,n}
-	vec.Compact(deletes)
+	Compact(vec, deletes)
 	//{n}
 	assert.Equal(t, 1, vec.Length())
 	assert.True(t, vec.IsNull(0))
 
-	vec.Append([]byte("var"), false)
-	vec.Append(nil, true)
-	vec.Append([]byte("var"), false)
-	vec.Append(nil, true)
+	AppendValue(vec, []byte("var"), false)
+	AppendValue(vec, nil, true)
+	AppendValue(vec, []byte("var"), false)
+	AppendValue(vec, nil, true)
 	//{null,var,null,var,null}
 	deletes = roaring.BitmapOf(1, 3)
-	vec.Compact(deletes)
+	Compact(vec, deletes)
 	//{null,null,null}
 	assert.Equal(t, 3, vec.Length())
 	assert.True(t, vec.IsNull(0))
 	assert.True(t, vec.IsNull(1))
 	assert.True(t, vec.IsNull(2))
-	vec.Close()
+	ReleaseVector(vec)
 }
 
 func BenchmarkVectorExtend(t *testing.B) {
 	vec1 := MockVector(types.T_int32.ToType(), 0, true, nil)
 	vec2 := MockVector(types.T_int32.ToType(), 1, true, nil)
-	defer vec1.Close()
-	defer vec2.Close()
+	defer ReleaseVector(vec1)
+	defer ReleaseVector(vec2)
 
 	t.ResetTimer()
 	for i := 0; i < t.N; i++ {
-		vec1.Extend(vec2)
+		Extend(vec1, vec2)
 	}
 }
 
 func TestForeachWindowFixed(t *testing.T) {
 	vec1 := MockVector(types.T_uint32.ToType(), 2, false, nil)
-	defer vec1.Close()
-	vec1.Append(nil, true)
+	defer ReleaseVector(vec1)
+	AppendValue(vec1, nil, true)
 
 	cnt := 0
 	op := func(v uint32, isNull bool, row int) (err error) {
@@ -457,18 +457,18 @@ func TestForeachWindowFixed(t *testing.T) {
 		if cnt == vec1.Length() {
 			assert.True(t, isNull)
 		} else {
-			assert.Equal(t, vec1.Get(row).(uint32), v)
+			assert.Equal(t, GetValue(vec1, row).(uint32), v)
 		}
 		return
 	}
-	ForeachWindowFixed(vec1.GetDownstreamVector(), 0, vec1.Length(), false, op, nil, nil)
+	ForeachWindowFixed(vec1, 0, vec1.Length(), false, op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
 func TestForeachWindowBytes(t *testing.T) {
 	vec1 := MockVector(types.T_varchar.ToType(), 2, false, nil)
-	defer vec1.Close()
-	vec1.Append(nil, true)
+	defer ReleaseVector(vec1)
+	AppendValue(vec1, nil, true)
 
 	cnt := 0
 	op := func(v []byte, isNull bool, row int) (err error) {
@@ -477,22 +477,22 @@ func TestForeachWindowBytes(t *testing.T) {
 		if cnt == vec1.Length() {
 			assert.True(t, isNull)
 		} else {
-			assert.Equal(t, 0, bytes.Compare(v, vec1.Get(row).([]byte)))
+			assert.Equal(t, 0, bytes.Compare(v, GetValue(vec1, row).([]byte)))
 		}
 		return
 	}
-	ForeachWindowVarlen(vec1.GetDownstreamVector(), 0, vec1.Length(), false, op, nil, nil)
+	ForeachWindowVarlen(vec1, 0, vec1.Length(), false, op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
 func BenchmarkForeachVector(b *testing.B) {
 	rows := 1000
 	int64s := MockVector2(types.T_int64.ToType(), rows, 0)
-	defer int64s.Close()
+	defer ReleaseVector(int64s)
 	b.Run("int64-old", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			int64s.Foreach(func(any, bool, int) error {
+			Foreach(int64s, func(any, bool, int) error {
 				return nil
 			}, nil)
 		}
@@ -507,11 +507,11 @@ func BenchmarkForeachVector(b *testing.B) {
 	})
 
 	chars := MockVector2(types.T_varchar.ToType(), rows, 0)
-	defer chars.Close()
+	defer ReleaseVector(chars)
 	b.Run("chars-old", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			chars.Foreach(func(any, bool, int) error {
+			Foreach(chars, func(any, bool, int) error {
 				return nil
 			}, nil)
 		}
@@ -529,11 +529,11 @@ func BenchmarkForeachVector(b *testing.B) {
 func BenchmarkForeachVectorBytes(b *testing.B) {
 	rows := 1000
 	vec := MockVector2(types.T_int64.ToType(), rows, 0)
-	defer vec.Close()
+	defer ReleaseVector(vec)
 	b.Run("int64-bytes", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			ForeachWindowBytes(vec.GetDownstreamVector(), 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
+			ForeachWindowBytes(vec, 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
 				return
 			}, nil)
 		}
@@ -541,7 +541,7 @@ func BenchmarkForeachVectorBytes(b *testing.B) {
 	b.Run("int64-old", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec.Foreach(func(any, bool, int) error {
+			Foreach(vec, func(any, bool, int) error {
 				return nil
 			}, nil)
 		}
@@ -561,7 +561,7 @@ func BenchmarkFunctions(b *testing.B) {
 		types.T_char:  testFunc[[]byte],
 	}
 	vec := MockVector2(types.T_char.ToType(), 1000, 0)
-	defer vec.Close()
+	defer ReleaseVector(vec)
 	b.Run("func-new", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -571,7 +571,7 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("func-old", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec.Foreach(func(any, bool, int) (err error) {
+			Foreach(vec, func(any, bool, int) (err error) {
 				return
 			}, nil)
 		}
@@ -639,7 +639,7 @@ func getOverload(typ types.T, t *testing.T, rows *roaring.Bitmap, vec Vector) an
 func overLoadFactory[T any](t *testing.T, rows *roaring.Bitmap, vec Vector) func(v T, _ bool, row int) error {
 	return func(v T, _ bool, row int) (err error) {
 		rows.Add(uint32(row))
-		assert.Equal(t, vec.Get(row), v)
+		assert.Equal(t, GetValue(vec, row), v)
 		return
 	}
 }
@@ -663,7 +663,7 @@ func TestForeachSelectBitmap(t *testing.T) {
 	}
 
 	vec2 := MockVector(types.T_int32.ToType(), 10, true, nil)
-	defer vec2.Close()
+	defer ReleaseVector(vec2)
 
 	_ = ForeachVectorWindow(vec2, 0, 5, nil, func(_ any, _ bool, _ int) (err error) {
 		return
@@ -689,7 +689,7 @@ func TestVectorPool(t *testing.T) {
 		types.T_varchar.ToType(),
 		types.T_json.ToType(),
 	}
-	vecs := make([]*vectorWrapper, 0, len(allTypes))
+	vecs := make([]Vector, 0, len(allTypes))
 	for _, typ := range allTypes {
 		vec := pool.GetVector(&typ)
 		assert.Equal(t, *vec.GetType(), typ)
@@ -699,7 +699,7 @@ func TestVectorPool(t *testing.T) {
 	assert.Equal(t, 0, pool.Allocated())
 
 	for _, vec := range vecs {
-		vec.PreExtend(100)
+		PreExtend(vec, 100)
 	}
 
 	allocated := pool.Allocated()
@@ -715,7 +715,7 @@ func TestVectorPool(t *testing.T) {
 	}
 
 	for _, vec := range vecs {
-		vec.Close()
+		ReleaseVector(vec)
 	}
 
 	t.Log(pool.String())
@@ -726,10 +726,10 @@ func TestVectorPool2(t *testing.T) {
 	pool := NewVectorPool(t.Name(), 10, WithAllocationLimit(1024))
 	typ := types.T_int32.ToType()
 	vec := pool.GetVector(&typ)
-	vec.PreExtend(300)
+	PreExtend(vec, 300)
 	t.Log(pool.String())
 	assert.Less(t, 1024, pool.Allocated())
-	vec.Close()
+	ReleaseVector(vec)
 	assert.Equal(t, 0, pool.Allocated())
 }
 
@@ -737,115 +737,115 @@ func TestVectorPool3(t *testing.T) {
 	pool := NewVectorPool(t.Name(), 10)
 	typ := types.T_int32.ToType()
 	vec1 := NewVector(typ)
-	vec1.Append(int32(1), false)
-	vec1.Append(int32(2), false)
-	vec1.Append(int32(3), false)
+	AppendValue(vec1, int32(1), false)
+	AppendValue(vec1, int32(2), false)
+	AppendValue(vec1, int32(3), false)
 
-	vec2 := vec1.CloneWindowWithPool(0, 3, pool)
-	t.Log(vec2.PPString(0))
-	vec1.Close()
-	vec2.Close()
+	vec2 := CloneWindowWithPool(vec1, 0, 3, pool)
+	t.Log(PPString(vec2, 0))
+	ReleaseVector(vec1)
+	ReleaseVector(vec2)
 }
 
 func TestConstNullVector(t *testing.T) {
 	vec := NewConstNullVector(types.T_int32.ToType(), 10, common.DefaultAllocator)
-	defer vec.Close()
+	defer ReleaseVector(vec)
 	assert.Equal(t, 10, vec.Length())
 	assert.True(t, vec.IsConstNull())
 
 	for i := 0; i < vec.Length(); i++ {
-		assert.True(t, vec.IsNull(i))
+		assert.True(t, vec.IsNull(uint64(i)))
 	}
 
 	var w bytes.Buffer
-	_, err := vec.WriteTo(&w)
+	_, err := WriteVector(vec, &w)
 	assert.NoError(t, err)
 
 	vec2 := MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer vec2.Close()
-	_, err = vec2.ReadFrom(&w)
+	defer ReleaseVector(vec2)
+	_, err = ReadVector(vec2, &w)
 	assert.NoError(t, err)
 	assert.Equal(t, 10, vec2.Length())
 	assert.True(t, vec2.IsConstNull())
 	for i := 0; i < vec2.Length(); i++ {
-		assert.True(t, vec2.IsNull(i))
+		assert.True(t, vec2.IsNull(uint64(i)))
 	}
 
-	vecw := vec.Window(0, 5)
+	vecw := Window(vec, 0, 5)
 	assert.Equal(t, 5, vecw.Length())
 	assert.True(t, vecw.IsConstNull())
 	for i := 0; i < vecw.Length(); i++ {
-		assert.True(t, vecw.IsNull(i))
+		assert.True(t, vecw.IsNull(uint64(i)))
 	}
 }
 
 func TestConstVector(t *testing.T) {
 	vec := NewConstFixed[int32](types.T_int32.ToType(), int32(1), 10)
-	defer vec.Close()
+	defer ReleaseVector(vec)
 
 	assert.Equal(t, 10, vec.Length())
 	assert.True(t, vec.IsConst())
 	assert.False(t, vec.IsConstNull())
 
 	for i := 0; i < vec.Length(); i++ {
-		v := vec.Get(i).(int32)
+		v := GetValue(vec, i).(int32)
 		assert.Equal(t, int32(1), v)
 	}
 
 	vec2 := NewConstBytes(types.T_char.ToType(), []byte("abc"), 10)
-	defer vec2.Close()
+	defer ReleaseVector(vec2)
 	assert.Equal(t, 10, vec2.Length())
 	assert.True(t, vec2.IsConst())
 	assert.False(t, vec2.IsConstNull())
 
 	for i := 0; i < vec2.Length(); i++ {
-		assert.Equal(t, []byte("abc"), vec2.Get(i).([]byte))
+		assert.Equal(t, []byte("abc"), GetValue(vec2, i).([]byte))
 	}
 
 	var w bytes.Buffer
-	_, err := vec.WriteTo(&w)
+	_, err := WriteVector(vec, &w)
 	assert.NoError(t, err)
 
 	vec3 := MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer vec3.Close()
-	_, err = vec3.ReadFrom(&w)
+	defer ReleaseVector(vec3)
+	_, err = ReadVector(vec3, &w)
 	assert.NoError(t, err)
 	assert.True(t, vec3.IsConst())
 	assert.False(t, vec3.IsConstNull())
 	assert.Equal(t, 10, vec3.Length())
 	for i := 0; i < vec3.Length(); i++ {
-		assert.Equal(t, int32(1), vec3.Get(i).(int32))
+		assert.Equal(t, int32(1), GetValue(vec3, i).(int32))
 	}
 
 	w.Reset()
-	_, err = vec2.WriteTo(&w)
+	_, err = WriteVector(vec2, &w)
 	assert.NoError(t, err)
 
 	vec4 := MakeVector(types.T_char.ToType(), common.DefaultAllocator)
-	defer vec4.Close()
-	_, err = vec4.ReadFrom(&w)
+	defer ReleaseVector(vec4)
+	_, err = ReadVector(vec4, &w)
 	assert.NoError(t, err)
 	assert.True(t, vec4.IsConst())
 	assert.False(t, vec4.IsConstNull())
 	assert.Equal(t, 10, vec4.Length())
 	for i := 0; i < vec4.Length(); i++ {
-		assert.Equal(t, []byte("abc"), vec4.Get(i).([]byte))
+		assert.Equal(t, []byte("abc"), GetValue(vec4, i).([]byte))
 	}
 
-	vecw := vec.Window(0, 5)
+	vecw := Window(vec, 0, 5)
 	assert.Equal(t, 5, vecw.Length())
 	assert.True(t, vecw.IsConst())
 	assert.False(t, vecw.IsConstNull())
 	for i := 0; i < vecw.Length(); i++ {
-		assert.Equal(t, int32(1), vecw.Get(i).(int32))
+		assert.Equal(t, int32(1), GetValue(vecw, i).(int32))
 	}
 
-	vecw4 := vec4.Window(0, 5)
+	vecw4 := Window(vec4, 0, 5)
 	assert.Equal(t, 5, vecw4.Length())
 	assert.True(t, vecw4.IsConst())
 	assert.False(t, vecw4.IsConstNull())
 	for i := 0; i < vecw4.Length(); i++ {
-		assert.Equal(t, []byte("abc"), vecw4.Get(i).([]byte))
+		assert.Equal(t, []byte("abc"), GetValue(vecw4, i).([]byte))
 	}
 
 }
@@ -855,30 +855,30 @@ func TestVectorWrapper_WriteTo_PreAllocation(t *testing.T) {
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int32.ToType(), opts)
-	defer vec.Close()
+	defer ReleaseVector(vec)
 
 	// Add data
 	for i := 0; i < 1000; i++ {
-		vec.Append(int32(i), false)
+		AppendValue(vec, int32(i), false)
 	}
 
 	// Get estimated size
-	estimatedSize := vec.ApproxSize()
+	estimatedSize := ApproxSize(vec)
 	require.Greater(t, estimatedSize, 0, "estimated size should be positive")
 	_ = estimatedSize // estimatedSize is used for validation only
 
 	// WriteTo should work correctly
 	var buf bytes.Buffer
-	n, err := vec.WriteTo(&buf)
+	n, err := WriteVector(vec, &buf)
 	require.NoError(t, err)
 	require.Greater(t, n, int64(0), "should write data")
 
 	// Verify data can be read back
 	vec2 := NewVector(types.T_int32.ToType(), opts)
-	defer vec2.Close()
-	_, err = vec2.ReadFrom(&buf)
+	defer ReleaseVector(vec2)
+	_, err = ReadVector(vec2, &buf)
 	require.NoError(t, err)
-	assert.True(t, vec.Equals(vec2), "serialized and deserialized vectors should be equal")
+	assert.True(t, VectorEquals(vec, vec2), "serialized and deserialized vectors should be equal")
 }
 
 // TestVectorWrapper_WriteTo_MultipleCalls tests that multiple WriteTo calls produce consistent results
@@ -886,21 +886,21 @@ func TestVectorWrapper_WriteTo_MultipleCalls(t *testing.T) {
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int64.ToType(), opts)
-	defer vec.Close()
+	defer ReleaseVector(vec)
 
 	// Add data
 	for i := 0; i < 500; i++ {
-		vec.Append(int64(i*2), false)
+		AppendValue(vec, int64(i*2), false)
 	}
 
 	// First WriteTo
 	var buf1 bytes.Buffer
-	n1, err := vec.WriteTo(&buf1)
+	n1, err := WriteVector(vec, &buf1)
 	require.NoError(t, err)
 
 	// Second WriteTo - should produce identical output
 	var buf2 bytes.Buffer
-	n2, err := vec.WriteTo(&buf2)
+	n2, err := WriteVector(vec, &buf2)
 	require.NoError(t, err)
 
 	// Results should be identical
@@ -925,25 +925,25 @@ func TestVectorWrapper_WriteTo_DifferentSizes(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			vec := NewVector(types.T_int32.ToType(), opts)
-			defer vec.Close()
+			defer ReleaseVector(vec)
 
 			// Add data
 			for i := 0; i < tc.count; i++ {
-				vec.Append(int32(i), false)
+				AppendValue(vec, int32(i), false)
 			}
 
 			// WriteTo
 			var buf bytes.Buffer
-			n, err := vec.WriteTo(&buf)
+			n, err := WriteVector(vec, &buf)
 			require.NoError(t, err, "WriteTo should succeed for %s data", tc.name)
 			require.Greater(t, n, int64(0), "should write data")
 
 			// Verify can read back
 			vec2 := NewVector(types.T_int32.ToType(), opts)
-			defer vec2.Close()
-			_, err = vec2.ReadFrom(&buf)
+			defer ReleaseVector(vec2)
+			_, err = ReadVector(vec2, &buf)
 			require.NoError(t, err)
-			assert.True(t, vec.Equals(vec2), "serialized and deserialized vectors should be equal for %s data", tc.name)
+			assert.True(t, VectorEquals(vec, vec2), "serialized and deserialized vectors should be equal for %s data", tc.name)
 		})
 	}
 }
@@ -963,20 +963,20 @@ func TestVectorWrapper_WriteTo_DifferentTypes(t *testing.T) {
 	for _, typ := range testTypes {
 		t.Run(typ.String(), func(t *testing.T) {
 			vec := MockVector(typ, 100, false, nil)
-			defer vec.Close()
+			defer ReleaseVector(vec)
 
 			// WriteTo
 			var buf bytes.Buffer
-			n, err := vec.WriteTo(&buf)
+			n, err := WriteVector(vec, &buf)
 			require.NoError(t, err, "WriteTo should succeed for type %s", typ.String())
 			require.Greater(t, n, int64(0), "should write data")
 
 			// Verify can read back
 			vec2 := MakeVector(typ, common.DefaultAllocator)
-			defer vec2.Close()
-			_, err = vec2.ReadFrom(&buf)
+			defer ReleaseVector(vec2)
+			_, err = ReadVector(vec2, &buf)
 			require.NoError(t, err)
-			assert.True(t, vec.Equals(vec2), "serialized and deserialized vectors should be equal for type %s", typ.String())
+			assert.True(t, VectorEquals(vec, vec2), "serialized and deserialized vectors should be equal for type %s", typ.String())
 		})
 	}
 }
@@ -986,29 +986,29 @@ func TestVectorWrapper_WriteTo_WithNulls(t *testing.T) {
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int32.ToType(), opts)
-	defer vec.Close()
+	defer ReleaseVector(vec)
 
 	// Add data with nulls
 	for i := 0; i < 100; i++ {
 		if i%3 == 0 {
-			vec.Append(nil, true)
+			AppendValue(vec, nil, true)
 		} else {
-			vec.Append(int32(i), false)
+			AppendValue(vec, int32(i), false)
 		}
 	}
 
 	// WriteTo
 	var buf bytes.Buffer
-	n, err := vec.WriteTo(&buf)
+	n, err := WriteVector(vec, &buf)
 	require.NoError(t, err)
 	require.Greater(t, n, int64(0))
 
 	// Verify can read back
 	vec2 := NewVector(types.T_int32.ToType(), opts)
-	defer vec2.Close()
-	_, err = vec2.ReadFrom(&buf)
+	defer ReleaseVector(vec2)
+	_, err = ReadVector(vec2, &buf)
 	require.NoError(t, err)
-	assert.True(t, vec.Equals(vec2), "serialized and deserialized vectors with nulls should be equal")
+	assert.True(t, VectorEquals(vec, vec2), "serialized and deserialized vectors with nulls should be equal")
 }
 
 // TestVectorWrapper_WriteTo_EmptyVector tests WriteTo with empty vector
@@ -1016,18 +1016,18 @@ func TestVectorWrapper_WriteTo_EmptyVector(t *testing.T) {
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int32.ToType(), opts)
-	defer vec.Close()
+	defer ReleaseVector(vec)
 
 	// WriteTo empty vector
 	var buf bytes.Buffer
-	n, err := vec.WriteTo(&buf)
+	n, err := WriteVector(vec, &buf)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, n, int64(8), "should write at least size header")
 
 	// Verify can read back
 	vec2 := NewVector(types.T_int32.ToType(), opts)
-	defer vec2.Close()
-	_, err = vec2.ReadFrom(&buf)
+	defer ReleaseVector(vec2)
+	_, err = ReadVector(vec2, &buf)
 	require.NoError(t, err)
 	assert.Equal(t, 0, vec2.Length(), "empty vector should deserialize to empty vector")
 }
@@ -1037,25 +1037,25 @@ func TestVectorWrapper_WriteToV1_PreAllocation(t *testing.T) {
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int32.ToType(), opts)
-	defer vec.Close()
+	defer ReleaseVector(vec)
 
 	// Add data
 	for i := 0; i < 1000; i++ {
-		vec.Append(int32(i), false)
+		AppendValue(vec, int32(i), false)
 	}
 
 	// WriteToV1 should work correctly
 	var buf bytes.Buffer
-	n, err := vec.WriteToV1(&buf)
+	n, err := WriteVectorV1(vec, &buf)
 	require.NoError(t, err)
 	require.Greater(t, n, int64(0), "should write data")
 
 	// Verify data can be read back
 	vec2 := NewVector(types.T_int32.ToType(), opts)
-	defer vec2.Close()
-	_, err = vec2.ReadFromV1(&buf)
+	defer ReleaseVector(vec2)
+	_, err = ReadVectorV1(vec2, &buf)
 	require.NoError(t, err)
-	assert.True(t, vec.Equals(vec2), "serialized and deserialized vectors should be equal")
+	assert.True(t, VectorEquals(vec, vec2), "serialized and deserialized vectors should be equal")
 }
 
 // TestVectorWrapper_WriteToV1_MultipleCalls tests that multiple WriteToV1 calls produce consistent results
@@ -1063,21 +1063,21 @@ func TestVectorWrapper_WriteToV1_MultipleCalls(t *testing.T) {
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int64.ToType(), opts)
-	defer vec.Close()
+	defer ReleaseVector(vec)
 
 	// Add data
 	for i := 0; i < 500; i++ {
-		vec.Append(int64(i*2), false)
+		AppendValue(vec, int64(i*2), false)
 	}
 
 	// First WriteToV1
 	var buf1 bytes.Buffer
-	n1, err := vec.WriteToV1(&buf1)
+	n1, err := WriteVectorV1(vec, &buf1)
 	require.NoError(t, err)
 
 	// Second WriteToV1 - should produce identical output
 	var buf2 bytes.Buffer
-	n2, err := vec.WriteToV1(&buf2)
+	n2, err := WriteVectorV1(vec, &buf2)
 	require.NoError(t, err)
 
 	// Results should be identical
@@ -1098,7 +1098,7 @@ func TestVectorWrapper_WriteTo_ConsistencyWithOriginal(t *testing.T) {
 				opts := withAllocator(Options{})
 				vec := NewVector(types.T_int32.ToType(), opts)
 				for i := 0; i < 100; i++ {
-					vec.Append(int32(i), false)
+					AppendValue(vec, int32(i), false)
 				}
 				return vec
 			},
@@ -1109,7 +1109,7 @@ func TestVectorWrapper_WriteTo_ConsistencyWithOriginal(t *testing.T) {
 				opts := withAllocator(Options{})
 				vec := NewVector(types.T_varchar.ToType(), opts)
 				for i := 0; i < 50; i++ {
-					vec.Append([]byte(fmt.Sprintf("value%d", i)), false)
+					AppendValue(vec, []byte(fmt.Sprintf("value%d", i)), false)
 				}
 				return vec
 			},
@@ -1121,9 +1121,9 @@ func TestVectorWrapper_WriteTo_ConsistencyWithOriginal(t *testing.T) {
 				vec := NewVector(types.T_int64.ToType(), opts)
 				for i := 0; i < 100; i++ {
 					if i%5 == 0 {
-						vec.Append(nil, true)
+						AppendValue(vec, nil, true)
 					} else {
-						vec.Append(int64(i), false)
+						AppendValue(vec, int64(i), false)
 					}
 				}
 				return vec
@@ -1134,16 +1134,16 @@ func TestVectorWrapper_WriteTo_ConsistencyWithOriginal(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			vec := tc.vec()
-			defer vec.Close()
+			defer ReleaseVector(vec)
 
 			// WriteTo (optimized version)
 			var buf1 bytes.Buffer
-			n1, err := vec.WriteTo(&buf1)
+			n1, err := WriteVector(vec, &buf1)
 			require.NoError(t, err)
 
 			// WriteToV1 (also optimized)
 			var buf2 bytes.Buffer
-			n2, err := vec.WriteToV1(&buf2)
+			n2, err := WriteVectorV1(vec, &buf2)
 			require.NoError(t, err)
 
 			// Both should write data
@@ -1154,16 +1154,16 @@ func TestVectorWrapper_WriteTo_ConsistencyWithOriginal(t *testing.T) {
 			vecType := *vec.GetType()
 			opts := withAllocator(Options{})
 			vec1 := NewVector(vecType, opts)
-			defer vec1.Close()
-			_, err = vec1.ReadFrom(&buf1)
+			defer ReleaseVector(vec1)
+			_, err = ReadVector(vec1, &buf1)
 			require.NoError(t, err)
-			assert.True(t, vec.Equals(vec1), "WriteTo should produce readable output")
+			assert.True(t, VectorEquals(vec, vec1), "WriteTo should produce readable output")
 
 			vec2 := NewVector(vecType, opts)
-			defer vec2.Close()
-			_, err = vec2.ReadFromV1(&buf2)
+			defer ReleaseVector(vec2)
+			_, err = ReadVectorV1(vec2, &buf2)
 			require.NoError(t, err)
-			assert.True(t, vec.Equals(vec2), "WriteToV1 should produce readable output")
+			assert.True(t, VectorEquals(vec, vec2), "WriteToV1 should produce readable output")
 		})
 	}
 }
@@ -1173,7 +1173,7 @@ func TestVectorWrapper_WriteTo_LargeData(t *testing.T) {
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_varchar.ToType(), opts)
-	defer vec.Close()
+	defer ReleaseVector(vec)
 
 	// Add large data
 	largeString := make([]byte, 10000)
@@ -1181,21 +1181,21 @@ func TestVectorWrapper_WriteTo_LargeData(t *testing.T) {
 		largeString[i] = byte('a' + (i % 26))
 	}
 	for i := 0; i < 100; i++ {
-		vec.Append(largeString, false)
+		AppendValue(vec, largeString, false)
 	}
 
 	// WriteTo should handle large data efficiently
 	var buf bytes.Buffer
-	n, err := vec.WriteTo(&buf)
+	n, err := WriteVector(vec, &buf)
 	require.NoError(t, err)
 	require.Greater(t, n, int64(1000000), "should write large amount of data")
 
 	// Verify can read back
 	vec2 := NewVector(types.T_varchar.ToType(), opts)
-	defer vec2.Close()
-	_, err = vec2.ReadFrom(&buf)
+	defer ReleaseVector(vec2)
+	_, err = ReadVector(vec2, &buf)
 	require.NoError(t, err)
-	assert.True(t, vec.Equals(vec2), "large data should serialize and deserialize correctly")
+	assert.True(t, VectorEquals(vec, vec2), "large data should serialize and deserialize correctly")
 }
 
 // TestVectorWrapper_WriteTo_ConstVector tests WriteTo with const vectors
@@ -1203,48 +1203,48 @@ func TestVectorWrapper_WriteTo_ConstVector(t *testing.T) {
 
 	// Test const fixed vector
 	vec1 := NewConstFixed[int32](types.T_int32.ToType(), int32(42), 100)
-	defer vec1.Close()
+	defer ReleaseVector(vec1)
 
 	var buf1 bytes.Buffer
-	n1, err := vec1.WriteTo(&buf1)
+	n1, err := WriteVector(vec1, &buf1)
 	require.NoError(t, err)
 	require.Greater(t, n1, int64(0))
 
 	vec1Read := MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer vec1Read.Close()
-	_, err = vec1Read.ReadFrom(&buf1)
+	defer ReleaseVector(vec1Read)
+	_, err = ReadVector(vec1Read, &buf1)
 	require.NoError(t, err)
-	assert.True(t, vec1.Equals(vec1Read), "const fixed vector should serialize correctly")
+	assert.True(t, VectorEquals(vec1, vec1Read), "const fixed vector should serialize correctly")
 
 	// Test const bytes vector
 	vec2 := NewConstBytes(types.T_char.ToType(), []byte("test"), 50)
-	defer vec2.Close()
+	defer ReleaseVector(vec2)
 
 	var buf2 bytes.Buffer
-	n2, err := vec2.WriteTo(&buf2)
+	n2, err := WriteVector(vec2, &buf2)
 	require.NoError(t, err)
 	require.Greater(t, n2, int64(0))
 
 	vec2Read := MakeVector(types.T_char.ToType(), common.DefaultAllocator)
-	defer vec2Read.Close()
-	_, err = vec2Read.ReadFrom(&buf2)
+	defer ReleaseVector(vec2Read)
+	_, err = ReadVector(vec2Read, &buf2)
 	require.NoError(t, err)
-	assert.True(t, vec2.Equals(vec2Read), "const bytes vector should serialize correctly")
+	assert.True(t, VectorEquals(vec2, vec2Read), "const bytes vector should serialize correctly")
 
 	// Test const null vector
 	vec3 := NewConstNullVector(types.T_int64.ToType(), 200, common.DefaultAllocator)
-	defer vec3.Close()
+	defer ReleaseVector(vec3)
 
 	var buf3 bytes.Buffer
-	n3, err := vec3.WriteTo(&buf3)
+	n3, err := WriteVector(vec3, &buf3)
 	require.NoError(t, err)
 	require.Greater(t, n3, int64(0))
 
 	vec3Read := MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
-	defer vec3Read.Close()
-	_, err = vec3Read.ReadFrom(&buf3)
+	defer ReleaseVector(vec3Read)
+	_, err = ReadVector(vec3Read, &buf3)
 	require.NoError(t, err)
-	assert.True(t, vec3.Equals(vec3Read), "const null vector should serialize correctly")
+	assert.True(t, VectorEquals(vec3, vec3Read), "const null vector should serialize correctly")
 }
 
 // TestVectorWrapper_WriteTo_ApproxSizeAccuracy tests that ApproxSize is used for pre-allocation
@@ -1252,20 +1252,20 @@ func TestVectorWrapper_WriteTo_ApproxSizeAccuracy(t *testing.T) {
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int32.ToType(), opts)
-	defer vec.Close()
+	defer ReleaseVector(vec)
 
 	// Add data
 	for i := 0; i < 1000; i++ {
-		vec.Append(int32(i), false)
+		AppendValue(vec, int32(i), false)
 	}
 
 	// Get ApproxSize
-	approxSize := vec.ApproxSize()
+	approxSize := ApproxSize(vec)
 	require.Greater(t, approxSize, 0)
 
 	// WriteTo
 	var buf bytes.Buffer
-	n, err := vec.WriteTo(&buf)
+	n, err := WriteVector(vec, &buf)
 	require.NoError(t, err)
 
 	// The written size should be close to ApproxSize (allowing for overhead)
@@ -1289,15 +1289,15 @@ func TestVectorWrapper_WriteTo_ConcurrentCalls(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			vec := NewVector(types.T_int32.ToType(), opts)
-			defer vec.Close()
+			defer ReleaseVector(vec)
 
 			// Add unique data for each goroutine
 			for j := 0; j < 100; j++ {
-				vec.Append(int32(idx*1000+j), false)
+				AppendValue(vec, int32(idx*1000+j), false)
 			}
 
 			var buf bytes.Buffer
-			_, err := vec.WriteTo(&buf)
+			_, err := WriteVector(vec, &buf)
 			errs[idx] = err
 			if err == nil {
 				results[idx] = buf.Bytes()

@@ -62,14 +62,14 @@ func TestValidatePersistedCommitTSVectors(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	valid := containers.MakeVector(types.T_TS.ToType(), mp)
-	valid.Append(types.BuildTS(1, 0), false)
+	containers.AppendValue(valid, types.BuildTS(1, 0), false)
 	got, err := validatePersistedCommitTSVectors(
 		"valid",
 		[]containers.Vector{valid},
 	)
 	require.NoError(t, err)
 	require.Same(t, valid, got)
-	got.Close()
+	containers.ReleaseVector(got)
 	require.Zero(t, mp.CurrNB())
 
 	for _, test := range []struct {
@@ -92,7 +92,7 @@ func TestValidatePersistedCommitTSVectors(t *testing.T) {
 			name: "wrong type is released",
 			vectors: func() []containers.Vector {
 				vec := containers.MakeVector(types.T_int64.ToType(), mp)
-				vec.Append(int64(1), false)
+				containers.AppendValue(vec, int64(1), false)
 				return []containers.Vector{vec}
 			},
 		},
@@ -242,10 +242,10 @@ func TestGetActiveRow(t *testing.T) {
 
 	// index uint8(1)-0,1
 	vec := containers.MakeVector(types.T_int8.ToType(), common.DefaultAllocator)
-	vec.Append(int8(1), false)
-	vec.Append(int8(1), false)
+	containers.AppendValue(vec, int8(1), false)
+	containers.AppendValue(vec, int8(1), false)
 	idx := indexwrapper.NewMutIndex(types.T_int8.ToType())
-	err := idx.BatchUpsert(vec.GetDownstreamVector(), 0)
+	err := idx.BatchUpsert(vec, 0)
 	assert.NoError(t, err)
 	blk.node.Load().MustMNode().pkIndex = idx
 
@@ -334,11 +334,11 @@ func TestWaitAppendCommittingBeforeSkipsSameTxn(t *testing.T) {
 	appendNode, _ := mvcc.AddAppendNodeLocked(txn, 0, 1)
 	require.NoError(t, appendNode.PrepareCommit())
 	keys := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer keys.Close()
-	keys.Append(int32(7), false)
-	require.NoError(t, mnode.pkIndex.BatchUpsert(keys.GetDownstreamVector(), 0))
+	defer containers.ReleaseVector(keys)
+	containers.AppendValue(keys, int32(7), false)
+	require.NoError(t, mnode.pkIndex.BatchUpsert(keys, 0))
 	keysZM := index.NewZM(types.T_int32, 0)
-	require.NoError(t, index.BatchUpdateZM(keysZM, keys.GetDownstreamVector()))
+	require.NoError(t, index.BatchUpdateZM(keysZM, keys))
 
 	// The transaction is still preparing. Without the same-txn guard this call
 	// waits on its own DoneCond forever.
@@ -386,17 +386,17 @@ func TestWaitAppendCommittingBeforeOnlyWaitsSelectedKeys(t *testing.T) {
 	require.NoError(t, an2.PrepareCommit())
 
 	indexed := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer indexed.Close()
-	indexed.Append(int32(10), false)
-	indexed.Append(int32(20), false)
-	require.NoError(t, mnode.pkIndex.BatchUpsert(indexed.GetDownstreamVector(), 0))
+	defer containers.ReleaseVector(indexed)
+	containers.AppendValue(indexed, int32(10), false)
+	containers.AppendValue(indexed, int32(20), false)
+	require.NoError(t, mnode.pkIndex.BatchUpsert(indexed, 0))
 
 	selected := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer selected.Close()
-	selected.Append(int32(10), false)
-	selected.Append(nil, true)
+	defer containers.ReleaseVector(selected)
+	containers.AppendValue(selected, int32(10), false)
+	containers.AppendValue(selected, nil, true)
 	selectedZM := index.NewZM(types.T_int32, 0)
-	require.NoError(t, index.BatchUpdateZM(selectedZM, selected.GetDownstreamVector()))
+	require.NoError(t, index.BatchUpdateZM(selectedZM, selected))
 
 	require.True(t, base.WaitAppendCommittingBefore(
 		types.MaxTs(), nil, selected, selectedZM,
@@ -446,9 +446,9 @@ func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
 	for row := range 129 {
 		for col, vec := range bat.Vecs {
 			if col == 0 {
-				vec.Append(int32(row), false)
+				containers.AppendValue(vec, int32(row), false)
 			} else {
-				vec.Append(nil, true)
+				containers.AppendValue(vec, nil, true)
 			}
 		}
 	}
@@ -463,8 +463,8 @@ func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
 	addedVec := mnode.data.GetVectorByName("added_flag")
 	require.Equal(t, bat.Length(), addedVec.Length())
 	for row := range bat.Length() {
-		require.True(t, addedVec.IsNull(row))
-		require.Equal(t, int32(row), mnode.data.Vecs[0].Get(row))
+		require.True(t, addedVec.IsNull(uint64(row)))
+		require.Equal(t, int32(row), containers.GetValue(mnode.data.Vecs[0], row))
 	}
 
 	pool := containers.NewVectorPool("upgrade-compat", 4, containers.WithMPool(common.DefaultAllocator))
@@ -510,9 +510,9 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	for row := range 4 {
 		for col, vec := range input.Vecs {
 			if col == 0 {
-				vec.Append(int32(10+row), false)
+				containers.AppendValue(vec, int32(10+row), false)
 			} else {
-				vec.Append(nil, true)
+				containers.AppendValue(vec, nil, true)
 			}
 		}
 	}
@@ -541,7 +541,7 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	require.NotNil(t, dense)
 	defer dense.Close()
 	require.Equal(t, 3, dense.Length(), "range readers only receive records with an append node")
-	require.Equal(t, int32(13), dense.Vecs[0].Get(2))
+	require.Equal(t, int32(13), containers.GetValue(dense.Vecs[0], 2))
 
 	flushBatches := make(map[uint32]*containers.BatchWithVersion)
 	err = mnode.getDataWindowOnWriteSchema(
@@ -557,10 +557,10 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	defer flushBatch.Close()
 	require.Contains(t, flushBatch.Seqnums, uint16(objectio.SEQNUM_ABORT))
 	aborts := vector.MustFixedColWithTypeCheck[bool](
-		flushBatch.GetVectorByName(objectio.TombstoneAttr_Abort_Attr).GetDownstreamVector(),
+		flushBatch.GetVectorByName(objectio.TombstoneAttr_Abort_Attr),
 	)
 	require.Equal(t, []bool{false, true, true, false}, aborts)
-	require.Equal(t, int32(13), flushBatch.Vecs[0].Get(3), "snapshot offsets must match the original object")
+	require.Equal(t, int32(13), containers.GetValue(flushBatch.Vecs[0], 3), "snapshot offsets must match the original object")
 
 	// During a rolling upgrade, the TN keeps the legacy layout and marks abort
 	// holes uncommitted so old readers hide them without shifting RowID offsets.
@@ -582,14 +582,14 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	require.Contains(t, legacyBatch.Seqnums, uint16(objectio.SEQNUM_COMMITTS))
 	require.Equal(t, 4, legacyBatch.Length())
 	legacyCommitTS := vector.MustFixedColWithTypeCheck[types.TS](
-		legacyBatch.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).GetDownstreamVector(),
+		legacyBatch.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr),
 	)
 	require.Equal(t, types.BuildTS(1, 0), legacyCommitTS[0])
 	require.Equal(t, txnif.UncommitTS, legacyCommitTS[1])
 	require.Equal(t, txnif.UncommitTS, legacyCommitTS[2])
 	require.True(t, legacyBatch.Vecs[0].IsNull(2))
 	require.Equal(t, types.BuildTS(4, 0), legacyCommitTS[3])
-	require.Equal(t, int32(13), legacyBatch.Vecs[0].Get(3))
+	require.Equal(t, int32(13), containers.GetValue(legacyBatch.Vecs[0], 3))
 
 	var output *containers.Batch
 	err = mnode.Scan(
@@ -644,11 +644,11 @@ func TestAppendableDuplicatedRowsTimestampWindow(t *testing.T) {
 				require.NoError(t, an.ApplyCommit(txn.ID))
 			}
 			keys := containers.MakeVector(types.T_int8.ToType(), common.DefaultAllocator)
-			defer keys.Close()
+			defer containers.ReleaseVector(keys)
 			for i := int8(0); i < 4; i++ {
-				keys.Append(i, false)
+				containers.AppendValue(keys, i, false)
 			}
-			require.NoError(t, node.pkIndex.BatchUpsert(keys.GetDownstreamVector(), 0))
+			require.NoError(t, node.pkIndex.BatchUpsert(keys, 0))
 			txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(100, 0))
 			for _, tc := range []struct {
 				name     string
@@ -663,15 +663,15 @@ func TestAppendableDuplicatedRowsTimestampWindow(t *testing.T) {
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					rows := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-					defer rows.Close()
+					defer containers.ReleaseVector(rows)
 					for i := 0; i < 4; i++ {
-						rows.Append(nil, true)
+						containers.AppendValue(rows, nil, true)
 					}
 					require.NoError(t, obj.GetDuplicatedRows(context.Background(), txn, keys, nil, tc.from, tc.to, rows, common.DefaultAllocator))
 					for i, visible := range tc.want {
-						require.Equal(t, !visible, rows.IsNull(i), "row %d", i)
+						require.Equal(t, !visible, rows.IsNull(uint64(i)), "row %d", i)
 						if visible {
-							rowID := rows.Get(i).(types.Rowid)
+							rowID := containers.GetValue(rows, i).(types.Rowid)
 							require.Equal(t, uint32(i), rowID.GetRowOffset())
 						}
 					}
@@ -713,14 +713,14 @@ func TestAppendableDuplicatedRowsChecksMatchingRows(t *testing.T) {
 		}
 	}
 	indexed := containers.MakeVector(types.T_int8.ToType(), common.DefaultAllocator)
-	defer indexed.Close()
+	defer containers.ReleaseVector(indexed)
 	for range 5 {
-		indexed.Append(int8(7), false)
+		containers.AppendValue(indexed, int8(7), false)
 	}
-	require.NoError(t, node.pkIndex.BatchUpsert(indexed.GetDownstreamVector(), 0))
+	require.NoError(t, node.pkIndex.BatchUpsert(indexed, 0))
 	query := containers.MakeVector(types.T_int8.ToType(), common.DefaultAllocator)
-	defer query.Close()
-	query.Append(int8(7), false)
+	defer containers.ReleaseVector(query)
+	containers.AppendValue(query, int8(7), false)
 	reader := txnbase.MockTxnReaderWithStartTS(types.BuildTS(100, 0))
 
 	for _, tc := range []struct {
@@ -735,12 +735,12 @@ func TestAppendableDuplicatedRowsChecksMatchingRows(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rows := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-			defer rows.Close()
-			rows.Append(nil, true)
+			defer containers.ReleaseVector(rows)
+			containers.AppendValue(rows, nil, true)
 			require.NoError(t, obj.GetDuplicatedRows(context.Background(), reader, query, nil, tc.from, tc.to, rows, common.DefaultAllocator))
 			require.Equal(t, tc.wantRow < 0, rows.IsNull(0))
 			if tc.wantRow >= 0 {
-				rowID := rows.Get(0).(types.Rowid)
+				rowID := containers.GetValue(rows, 0).(types.Rowid)
 				require.Equal(t, uint32(tc.wantRow), rowID.GetRowOffset())
 			}
 		})
@@ -765,9 +765,9 @@ func TestApplyAppendAtLockedOutOfOrder(t *testing.T) {
 				t.Cleanup(bat.Close)
 				for i, vec := range bat.Vecs {
 					if i == 0 {
-						vec.Append(value, value == nil)
+						containers.AppendValue(vec, value, value == nil)
 					} else {
-						vec.Append(nil, true)
+						containers.AppendValue(vec, nil, true)
 					}
 				}
 				return bat
@@ -777,14 +777,14 @@ func TestApplyAppendAtLockedOutOfOrder(t *testing.T) {
 			defer mnode.data.Close()
 			// A delayed earlier owner must not shrink or clear the later payload.
 			mnode.ReserveRowsLocked(1)
-			require.Equal(t, tc.values[2], mnode.data.Vecs[0].Get(2))
+			require.Equal(t, tc.values[2], containers.GetValue(mnode.data.Vecs[0], 2))
 			mnode.ReserveRowsLocked(4)   // Scalar growth remains unchanged.
 			mnode.ReserveRowsLocked(129) // Bulk NULLs cross bitmap word boundaries.
 			mnode.ReserveRowsLocked(129) // Repeated materialization is a no-op.
 			for _, vec := range mnode.data.Vecs {
 				require.Equal(t, 129, vec.Length())
 				for row := 3; row < 129; row++ {
-					require.True(t, vec.IsNull(row), "aborted trailing range retains a physical hole at %d", row)
+					require.True(t, vec.IsNull(uint64(row)), "aborted trailing range retains a physical hole at %d", row)
 				}
 			}
 			for row := 0; row < 2; row++ {
@@ -793,18 +793,18 @@ func TestApplyAppendAtLockedOutOfOrder(t *testing.T) {
 			vec := mnode.data.Vecs[0]
 			for row, value := range tc.values {
 				if value == nil {
-					require.True(t, vec.IsNull(row))
+					require.True(t, vec.IsNull(uint64(row)))
 				} else {
-					require.False(t, vec.IsNull(row))
-					require.Equal(t, value, vec.Get(row))
+					require.False(t, vec.IsNull(uint64(row)))
+					require.Equal(t, value, containers.GetValue(vec, row))
 				}
 			}
 			// Transfer reapply replaces the same destination without moving rows.
 			replacement := makeBatch(tc.values[2])
 			for range 2 {
 				require.NoError(t, mnode.ApplyAppendAtLocked(replacement, 0))
-				require.Equal(t, tc.values[2], vec.Get(0))
-				require.Equal(t, tc.values[2], vec.Get(2))
+				require.Equal(t, tc.values[2], containers.GetValue(vec, 0))
+				require.Equal(t, tc.values[2], containers.GetValue(vec, 2))
 				require.Equal(t, 129, vec.Length())
 			}
 		})
@@ -955,11 +955,11 @@ func TestReplayAppendPayloadPreservesLegacyLogicalID(t *testing.T) {
 				bat := containers.NewBatch()
 				t.Cleanup(bat.Close)
 				ids := containers.MakeVector(types.T_uint64.ToType(), common.DefaultAllocator)
-				ids.Append(id, false)
+				containers.AppendValue(ids, id, false)
 				bat.AddVector(pkgcatalog.SystemRelAttr_ID, ids)
 				if includeLogical {
 					logicalIDs := containers.MakeVector(types.T_uint64.ToType(), common.DefaultAllocator)
-					logicalIDs.Append(logical, logical == nil)
+					containers.AppendValue(logicalIDs, logical, logical == nil)
 					bat.AddVector(pkgcatalog.SystemRelAttr_LogicalID, logicalIDs)
 				}
 				return bat
@@ -971,32 +971,32 @@ func TestReplayAppendPayloadPreservesLegacyLogicalID(t *testing.T) {
 			require.NoError(t, err)
 			logical := n.MustMNode().data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID)
 			if tableID == pkgcatalog.MO_TABLES_ID {
-				require.Equal(t, uint64(11), logical.Get(0))
+				require.Equal(t, uint64(11), containers.GetValue(logical, 0))
 			} else {
 				require.True(t, logical.IsNull(0))
 			}
 			// A later modern payload must survive an earlier legacy replay.
 			require.NoError(t, obj.OnReplayAppendPayload(makeBatch(9, uint64(90), true), 4))
 			require.NoError(t, obj.OnReplayAppendPayload(makeBatch(7, nil, false), 2))
-			require.Equal(t, uint64(90), logical.Get(4))
+			require.Equal(t, uint64(90), containers.GetValue(logical, 4))
 			if tableID == pkgcatalog.MO_TABLES_ID {
 				require.False(t, logical.IsNull(2), "legacy system-table replay must derive logical ID from rel_id")
-				require.Equal(t, uint64(7), logical.Get(2))
+				require.Equal(t, uint64(7), containers.GetValue(logical, 2))
 			} else {
 				require.True(t, logical.IsNull(2), "user columns with catalog names do not enable compatibility rewriting")
 			}
 			for _, row := range []int{1, 3} {
-				require.True(t, logical.IsNull(row), "unwritten physical holes stay NULL")
+				require.True(t, logical.IsNull(uint64(row)), "unwritten physical holes stay NULL")
 			}
 			appender := newAppender(obj)
 			require.NoError(t, appender.ApplyAppendAt(makeBatch(8, nil, false), 2, nil))
 			if tableID == pkgcatalog.MO_TABLES_ID {
-				require.Equal(t, uint64(8), logical.Get(2))
+				require.Equal(t, uint64(8), containers.GetValue(logical, 2))
 			}
 			// An explicit NULL is supplied data, not an absent legacy column.
 			require.NoError(t, appender.ApplyAppendAt(makeBatch(10, nil, true), 2, nil))
 			require.True(t, logical.IsNull(2))
-			require.Equal(t, uint64(90), logical.Get(4))
+			require.Equal(t, uint64(90), containers.GetValue(logical, 4))
 			require.Equal(t, 5, logical.Length())
 		})
 	}

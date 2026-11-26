@@ -539,24 +539,29 @@ func MergeCkpMeta(
 			continue
 		}
 		var vec containers.Vector
-		if bats[0].Vecs[i].Length() == 0 {
+		if src := bats[0].Vecs[i]; src.Length() == 0 {
 			vec = containers.MakeVector(colTypes[i], common.CheckpointAllocator)
+		} else if src.IsReadOnly() {
+			// rows are appended below: copy a cache-backed vector first
+			if vec, err = src.Dup(common.CheckpointAllocator); err != nil {
+				return "", err
+			}
 		} else {
-			vec = containers.ToTNVector(bats[0].Vecs[i], common.CheckpointAllocator)
+			vec = src
 		}
 		bat.AddVector(colNames[i], vec)
 	}
 	last := bat.Vecs[0].Length() - 1
-	bat.GetVectorByName(CheckpointAttr_StartTS).Append(startTs, false)
-	bat.GetVectorByName(CheckpointAttr_EndTS).Append(ts, false)
-	bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(cnLocation), false)
-	bat.GetVectorByName(CheckpointAttr_EntryType).Append(true, false)
-	bat.GetVectorByName(CheckpointAttr_Version).Append(bat.GetVectorByName(CheckpointAttr_Version).Get(last), false)
-	bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(tnLocation), false)
-	bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(last), false)
-	bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(last), false)
-	bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Backup), false)
-	bat.GetVectorByName(CheckpointAttr_TableIDLocation).Append([]byte(tableIDLocation), false)
+	containers.AppendValue(bat.GetVectorByName(CheckpointAttr_StartTS), startTs, false)
+	containers.AppendValue(bat.GetVectorByName(CheckpointAttr_EndTS), ts, false)
+	containers.AppendValue(bat.GetVectorByName(CheckpointAttr_MetaLocation), []byte(cnLocation), false)
+	containers.AppendValue(bat.GetVectorByName(CheckpointAttr_EntryType), true, false)
+	containers.AppendValue(bat.GetVectorByName(CheckpointAttr_Version), containers.GetValue(bat.GetVectorByName(CheckpointAttr_Version), last), false)
+	containers.AppendValue(bat.GetVectorByName(CheckpointAttr_AllLocations), []byte(tnLocation), false)
+	containers.AppendValue(bat.GetVectorByName(CheckpointAttr_CheckpointLSN), containers.GetValue(bat.GetVectorByName(CheckpointAttr_CheckpointLSN), last), false)
+	containers.AppendValue(bat.GetVectorByName(CheckpointAttr_TruncateLSN), containers.GetValue(bat.GetVectorByName(CheckpointAttr_TruncateLSN), last), false)
+	containers.AppendValue(bat.GetVectorByName(CheckpointAttr_Type), int8(ET_Backup), false)
+	containers.AppendValue(bat.GetVectorByName(CheckpointAttr_TableIDLocation), []byte(tableIDLocation), false)
 	name := ioutil.EncodeCKPMetadataFullName(startTs, ts)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {
@@ -574,27 +579,27 @@ func MergeCkpMeta(
 func ReplayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entries []*CheckpointEntry, maxGlobalEnd types.TS) {
 	entries = make([]*CheckpointEntry, bat.Length())
 	for i := 0; i < bat.Length(); i++ {
-		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
-		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
-		cnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+		start := containers.GetValue(bat.GetVectorByName(CheckpointAttr_StartTS), i).(types.TS)
+		end := containers.GetValue(bat.GetVectorByName(CheckpointAttr_EndTS), i).(types.TS)
+		cnLoc := objectio.Location(containers.GetValue(bat.GetVectorByName(CheckpointAttr_MetaLocation), i).([]byte))
 		typ := ET_Global
 		if checkpointVersion > 2 {
-			typ = EntryType(bat.GetVectorByName(CheckpointAttr_Type).Get(i).(int8))
+			typ = EntryType(containers.GetValue(bat.GetVectorByName(CheckpointAttr_Type), i).(int8))
 		} else {
-			isIncremental := bat.GetVectorByName(CheckpointAttr_EntryType).Get(i).(bool)
+			isIncremental := containers.GetValue(bat.GetVectorByName(CheckpointAttr_EntryType), i).(bool)
 			if isIncremental {
 				typ = ET_Incremental
 			}
 		}
 		var tableIDLocation objectio.LocationSlice
 		if checkpointVersion > 3 {
-			tableIDLocation = objectio.LocationSlice(bat.GetVectorByName(CheckpointAttr_TableIDLocation).Get(i).([]byte))
+			tableIDLocation = objectio.LocationSlice(containers.GetValue(bat.GetVectorByName(CheckpointAttr_TableIDLocation), i).([]byte))
 		}
-		version := bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
-		tnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
+		version := containers.GetValue(bat.GetVectorByName(CheckpointAttr_Version), i).(uint32)
+		tnLoc := objectio.Location(containers.GetValue(bat.GetVectorByName(CheckpointAttr_AllLocations), i).([]byte))
 		var ckpLSN, truncateLSN uint64
-		ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
-		truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)
+		ckpLSN = containers.GetValue(bat.GetVectorByName(CheckpointAttr_CheckpointLSN), i).(uint64)
+		truncateLSN = containers.GetValue(bat.GetVectorByName(CheckpointAttr_TruncateLSN), i).(uint64)
 		checkpointEntry := &CheckpointEntry{
 			start:           start,
 			end:             end,

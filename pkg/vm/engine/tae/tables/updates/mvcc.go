@@ -359,14 +359,14 @@ func (n *AppendMVCCHandle) collectAppendLocked(
 		}
 		if preserveOffsets {
 			for row := selection.MaxRow; row < node.startRow; row++ {
-				commitTSVec.Append(txnif.UncommitTS, false)
-				abortVec.Append(true, false)
+				containers.AppendValue(commitTSVec, txnif.UncommitTS, false)
+				containers.AppendValue(abortVec, true, false)
 			}
 		}
 		selection.AddRange(node.startRow, node.maxRow)
 		for row := node.startRow; row < node.maxRow; row++ {
-			commitTSVec.Append(node.GetCommitTS(), false)
-			abortVec.Append(node.IsAborted(), false)
+			containers.AppendValue(commitTSVec, node.GetCommitTS(), false)
+			containers.AppendValue(abortVec, node.IsAborted(), false)
 		}
 	}
 	if dense {
@@ -409,17 +409,17 @@ func (n *AppendMVCCHandle) FillInCommitTSVecLocked(commitTSVec containers.Vector
 		// the commit-TS vector aligned with physical row offsets; scan selection
 		// holes delete these placeholder rows before they become visible.
 		for cursor < node.startRow {
-			commitTSVec.Append(txnif.UncommitTS, false)
+			containers.AppendValue(commitTSVec, txnif.UncommitTS, false)
 			cursor++
 		}
 		end := min(node.maxRow, maxrow)
 		for cursor < end {
-			commitTSVec.Append(node.GetCommitTS(), false)
+			containers.AppendValue(commitTSVec, node.GetCommitTS(), false)
 			cursor++
 		}
 	}
 	for cursor < maxrow {
-		commitTSVec.Append(txnif.UncommitTS, false)
+		containers.AppendValue(commitTSVec, txnif.UncommitTS, false)
 		cursor++
 	}
 }
@@ -431,7 +431,7 @@ func (n *AppendMVCCHandle) GetCommitTSVecInRange(start, end types.TS, mp *mpool.
 	for _, node := range n.rows {
 		if in, _ := node.PreparedIn(start, end); in {
 			for i := 0; i < int(node.maxRow-node.startRow); i++ {
-				commitTSVec.Append(node.GetCommitTS(), false)
+				containers.AppendValue(commitTSVec, node.GetCommitTS(), false)
 			}
 		}
 	}

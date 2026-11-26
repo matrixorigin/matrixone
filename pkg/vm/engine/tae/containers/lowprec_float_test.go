@@ -30,23 +30,23 @@ func TestLowPrecisionFloatBatchWALRoundTrip(t *testing.T) {
 	bat := NewBatch()
 	defer bat.Close()
 	id := MakeVector(types.T_int32.ToType(), mp)
-	id.Append(int32(1), false)
-	id.Append(int32(2), false)
+	AppendValue(id, int32(1), false)
+	AppendValue(id, int32(2), false)
 	bat.AddVector("id", id)
 	cols := map[string]types.T{"a": types.T_bf16, "b": types.T_float16, "c": types.T_float8, "d": types.T_float4}
 	for _, name := range []string{"a", "b", "c", "d"} {
 		vec := MakeVector(cols[name].ToType(), mp)
 		switch cols[name] {
 		case types.T_bf16:
-			vec.Append(types.BF16FromFloat32(1.5), false)
+			AppendValue(vec, types.BF16FromFloat32(1.5), false)
 		case types.T_float16:
-			vec.Append(types.Float16FromFloat32(1.5), false)
+			AppendValue(vec, types.Float16FromFloat32(1.5), false)
 		case types.T_float8:
-			vec.Append(types.Float8FromFloat32(1.5), false)
+			AppendValue(vec, types.Float8FromFloat32(1.5), false)
 		case types.T_float4:
-			vec.Append(types.Float4FromFloat32(1.5), false)
+			AppendValue(vec, types.Float4FromFloat32(1.5), false)
 		}
-		vec.Append(nil, true)
+		AppendValue(vec, nil, true)
 		bat.AddVector(name, vec)
 	}
 	var buf bytes.Buffer
@@ -63,7 +63,7 @@ func TestLowPrecisionFloatBatchWALRoundTrip(t *testing.T) {
 	for i, name := range got.Attrs {
 		require.Equal(t, bat.Vecs[i].GetType().Oid, got.Vecs[i].GetType().Oid, name)
 		require.Equal(t, 2, got.Vecs[i].Length(), name)
-		require.Equal(t, bat.Vecs[i].Get(0), got.Vecs[i].Get(0), name)
+		require.Equal(t, GetValue(bat.Vecs[i], 0), GetValue(got.Vecs[i], 0), name)
 		if name != "id" {
 			require.True(t, w.Vecs[i].IsNull(0), name)
 		}
@@ -84,20 +84,20 @@ func TestLowPrecisionFloatVectorGetUpdate(t *testing.T) {
 		{types.T_float4, types.Float4FromFloat32(1.5), types.Float4FromFloat32(2)},
 	} {
 		vec := MakeVector(tc.oid.ToType(), mp)
-		vec.Append(tc.one, false)
-		vec.Append(nil, true)
-		require.Equal(t, tc.one, vec.Get(0), tc.oid.String())
-		v, isNull := vec.ShallowGet(0), vec.IsNull(0)
+		AppendValue(vec, tc.one, false)
+		AppendValue(vec, nil, true)
+		require.Equal(t, tc.one, GetValue(vec, 0), tc.oid.String())
+		v, isNull := ShallowGetValue(vec, 0), vec.IsNull(0)
 		require.Equal(t, tc.one, v, tc.oid.String())
 		require.False(t, isNull, tc.oid.String())
-		vec.Update(0, tc.two, false)
-		require.Equal(t, tc.two, vec.Get(0), tc.oid.String())
-		vec.Update(1, tc.one, false)
+		UpdateRow(vec, 0, tc.two, false)
+		require.Equal(t, tc.two, GetValue(vec, 0), tc.oid.String())
+		UpdateRow(vec, 1, tc.one, false)
 		require.False(t, vec.IsNull(1), tc.oid.String())
-		require.Equal(t, tc.one, vec.Get(1), tc.oid.String())
-		vec.Update(0, nil, true)
+		require.Equal(t, tc.one, GetValue(vec, 1), tc.oid.String())
+		UpdateRow(vec, 0, nil, true)
 		require.True(t, vec.IsNull(0), tc.oid.String())
-		vec.Close()
+		ReleaseVector(vec)
 	}
 	require.Zero(t, mp.CurrNB())
 }

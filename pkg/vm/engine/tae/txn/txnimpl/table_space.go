@@ -217,7 +217,7 @@ func (space *tableSpace) prepareApplyANode(ctx context.Context, node *anode, sta
 		vec = space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		defer func() {
 			if err != nil {
-				vec.Close()
+				containers.ReleaseVector(vec)
 			}
 		}()
 	} else {
@@ -311,20 +311,20 @@ func (space *tableSpace) prepareApplyANode(ctx context.Context, node *anode, sta
 		col := space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
-			col.GetDownstreamVector(),
+			col,
 			&blkID,
 			anode.GetMaxRow()-toAppend,
 			toAppend,
-			col.GetAllocator(),
+			col.MPool(),
 		); err != nil {
-			col.Close()
+			containers.ReleaseVector(col)
 			return err
 		}
-		if err = vec.ExtendVec(col.GetDownstreamVector()); err != nil {
-			col.Close()
+		if err = containers.ExtendVec(vec, col); err != nil {
+			containers.ReleaseVector(col)
 			return err
 		}
-		col.Close()
+		containers.ReleaseVector(col)
 		id := appender.GetID()
 		space.table.store.warChecker.Insert(appender.GetMeta().(*catalog.ObjectEntry))
 		space.table.store.txn.GetMemo().AddObject(space.table.entry.GetDB().ID,
@@ -335,7 +335,7 @@ func (space *tableSpace) prepareApplyANode(ctx context.Context, node *anode, sta
 		}
 	}
 	if startOffset == 0 {
-		node.data.Vecs[space.table.GetLocalSchema(space.isTombstone).PhyAddrKey.Idx].Close()
+		containers.ReleaseVector(node.data.Vecs[space.table.GetLocalSchema(space.isTombstone).PhyAddrKey.Idx])
 		node.data.Vecs[space.table.GetLocalSchema(space.isTombstone).PhyAddrKey.Idx] = vec
 	}
 	return nil

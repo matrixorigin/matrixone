@@ -30,10 +30,10 @@ import (
 func BuildFilesEntry(files []string) (entry.Entry, error) {
 	vec := containers.NewVector(types.T_char.ToType())
 	for _, file := range files {
-		vec.Append([]byte(file), false)
+		containers.AppendValue(vec, []byte(file), false)
 	}
-	defer vec.Close()
-	buf, err := vec.GetDownstreamVector().MarshalBinary()
+	defer containers.ReleaseVector(vec)
+	buf, err := vec.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}

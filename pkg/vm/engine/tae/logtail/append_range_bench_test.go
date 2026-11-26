@@ -42,8 +42,8 @@ func (d *rangeBenchmarkObject) ScanInMemory(_ context.Context, _ map[uint32]*con
 	_, commits, aborts := d.history.CollectAppendLocked(start, end, mp)
 	d.history.RUnlock()
 	if commits != nil {
-		commits.Close()
-		aborts.Close()
+		containers.ReleaseVector(commits)
+		containers.ReleaseVector(aborts)
 	}
 	return nil
 }

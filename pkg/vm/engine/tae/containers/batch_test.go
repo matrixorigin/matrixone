@@ -34,12 +34,12 @@ func TestBatch1a(t *testing.T) {
 	opts := Options{}
 	opts.Capacity = 0
 	bat := BuildBatch(attrs, vecTypes, opts)
-	bat.Vecs[0].Append(int32(1), false)
-	bat.Vecs[0].Append(int32(2), false)
-	bat.Vecs[0].Append(int32(3), false)
-	bat.Vecs[1].Append(int64(11), false)
-	bat.Vecs[1].Append(int64(12), false)
-	bat.Vecs[1].Append(int64(13), false)
+	AppendValue(bat.Vecs[0], int32(1), false)
+	AppendValue(bat.Vecs[0], int32(2), false)
+	AppendValue(bat.Vecs[0], int32(3), false)
+	AppendValue(bat.Vecs[1], int64(11), false)
+	AppendValue(bat.Vecs[1], int64(12), false)
+	AppendValue(bat.Vecs[1], int64(13), false)
 
 	assert.Equal(t, 3, bat.Length())
 	assert.False(t, bat.HasDelete())
@@ -67,12 +67,12 @@ func TestBatch1b(t *testing.T) {
 	opts := Options{}
 	opts.Capacity = 0
 	bat := BuildBatch(attrs, vecTypes, opts)
-	bat.Vecs[0].Append([]byte("a"), false)
-	bat.Vecs[0].Append([]byte("b"), false)
-	bat.Vecs[0].Append([]byte("c"), false)
-	bat.Vecs[1].Append([]byte("1"), false)
-	bat.Vecs[1].Append([]byte("2"), false)
-	bat.Vecs[1].Append([]byte("3"), false)
+	AppendValue(bat.Vecs[0], []byte("a"), false)
+	AppendValue(bat.Vecs[0], []byte("b"), false)
+	AppendValue(bat.Vecs[0], []byte("c"), false)
+	AppendValue(bat.Vecs[1], []byte("1"), false)
+	AppendValue(bat.Vecs[1], []byte("2"), false)
+	AppendValue(bat.Vecs[1], []byte("3"), false)
 
 	assert.Equal(t, 3, bat.Length())
 	assert.False(t, bat.HasDelete())
@@ -234,18 +234,18 @@ func TestBatchSpliter(t *testing.T) {
 
 func TestApproxSize(t *testing.T) {
 	vec := MockVector(types.T_uint8.ToType(), 1024, false, nil)
-	t.Log(vec.ApproxSize())
-	defer vec.Close()
+	t.Log(ApproxSize(vec))
+	defer ReleaseVector(vec)
 
 	svec := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-	defer svec.Close()
+	defer ReleaseVector(svec)
 	sizeCnt := 0
 	for i := 0; i < 1024; i++ {
 		l := rand.Intn(100)
 		sizeCnt += l
-		svec.Append([]byte(strings.Repeat("x", l)), false)
+		AppendValue(svec, []byte(strings.Repeat("x", l)), false)
 	}
-	t.Log(svec.ApproxSize(), sizeCnt)
+	t.Log(ApproxSize(svec), sizeCnt)
 }
 
 func TestCompatibilityV2(t *testing.T) {
@@ -254,12 +254,12 @@ func TestCompatibilityV2(t *testing.T) {
 	opts := Options{}
 	opts.Capacity = 0
 	bat := BuildBatch(attrs, vecTypes, opts)
-	bat.Vecs[0].Append(int32(1), false)
-	bat.Vecs[0].Append(int32(2), false)
-	bat.Vecs[0].Append(int32(3), true)
-	bat.Vecs[1].Append(int64(11), false)
-	bat.Vecs[1].Append(int64(12), true)
-	bat.Vecs[1].Append(int64(13), false)
+	AppendValue(bat.Vecs[0], int32(1), false)
+	AppendValue(bat.Vecs[0], int32(2), false)
+	AppendValue(bat.Vecs[0], int32(3), true)
+	AppendValue(bat.Vecs[1], int64(11), false)
+	AppendValue(bat.Vecs[1], int64(12), true)
+	AppendValue(bat.Vecs[1], int64(13), false)
 
 	assert.Equal(t, 3, bat.Length())
 	assert.False(t, bat.HasDelete())

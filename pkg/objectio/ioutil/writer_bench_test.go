@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -39,7 +37,7 @@ func benchmarkHiddenColumnOverheadRows(b *testing.B, rows int) {
 			{name: "rowid", vec: buildBenchmarkRowIDVector(b, rows)},
 			{name: "ts", vec: buildBenchmarkTSVector(b, rows)},
 		} {
-			columnData := containers.ToTNVector(tc.vec, common.DefaultAllocator)
+			columnData := tc.vec
 			b.Run(tc.name+"/inspect", func(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
@@ -53,10 +51,10 @@ func benchmarkHiddenColumnOverheadRows(b *testing.B, rows int) {
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					zm := index.NewZM(tc.vec.GetType().Oid, tc.vec.GetType().Scale)
-					if err := index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
+					if err := index.BatchUpdateZM(zm, columnData); err != nil {
 						b.Fatal(err)
 					}
-					index.SetZMSum(zm, columnData.GetDownstreamVector())
+					index.SetZMSum(zm, columnData)
 				}
 			})
 			b.Run(tc.name+"/full", func(b *testing.B) {
@@ -66,10 +64,10 @@ func benchmarkHiddenColumnOverheadRows(b *testing.B, rows int) {
 					builder := NewObjectColumnMetasBuilder(1)
 					builder.InspectVector(0, columnData, false)
 					zm := index.NewZM(tc.vec.GetType().Oid, tc.vec.GetType().Scale)
-					if err := index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
+					if err := index.BatchUpdateZM(zm, columnData); err != nil {
 						b.Fatal(err)
 					}
-					index.SetZMSum(zm, columnData.GetDownstreamVector())
+					index.SetZMSum(zm, columnData)
 					builder.UpdateZm(0, zm)
 					_, _ = builder.Build()
 				}

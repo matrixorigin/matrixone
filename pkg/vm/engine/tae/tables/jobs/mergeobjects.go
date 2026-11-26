@@ -219,7 +219,7 @@ func (task *mergeObjectsTask) GetSortKeyType() types.Type {
 // impl DisposableVecPool
 func (task *mergeObjectsTask) GetVector(typ *types.Type) (*vector.Vector, func()) {
 	v := task.rt.VectorPool.Transient.GetVector(typ)
-	return v.GetDownstreamVector(), v.Close
+	return v, func() { containers.ReleaseVector(v) }
 }
 
 func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
@@ -291,7 +291,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 
 	if task.isTombstone {
 		mergeStartTS := task.txn.GetStartTS()
-		err = data.Vecs[0].Foreach(func(v any, isNull bool, row int) error {
+		err = containers.Foreach(data.Vecs[0], func(v any, isNull bool, row int) error {
 			rowID := v.(types.Rowid)
 			objectID := rowID.BorrowObjectID()
 			obj, err := task.tableEntry.GetObjectByID(objectID, false)
@@ -317,9 +317,9 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	for i, idx := range task.idxs {
 		if idx == objectio.SEQNUM_COMMITTS {
 			id := slices.Index(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
-			retBatch.Vecs[id] = data.Vecs[i].GetDownstreamVector()
+			retBatch.Vecs[id] = data.Vecs[i]
 		} else {
-			retBatch.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
+			retBatch.Vecs[idx] = data.Vecs[i]
 		}
 	}
 
@@ -327,9 +327,9 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	if task.tid == 2 && !task.isTombstone {
 		// reuse the rel_id column
 		logical_idx := slices.Index(task.attrs, pkgcatalog.SystemRelAttr_LogicalID)
-		if data.Vecs[logical_idx].GetDownstreamVector().IsConstNull() {
+		if data.Vecs[logical_idx].IsConstNull() {
 			tid_idx := slices.Index(task.attrs, pkgcatalog.SystemRelAttr_ID)
-			retBatch.Vecs[logical_idx] = data.Vecs[tid_idx].GetDownstreamVector()
+			retBatch.Vecs[logical_idx] = data.Vecs[tid_idx]
 			logutil.Info("LIDX-DEBUG vector sub", zap.Int("logical_id", data.Length()))
 		}
 	}

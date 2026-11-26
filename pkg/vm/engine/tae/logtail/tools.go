@@ -45,8 +45,8 @@ func ToStringTemplate(vec containers.Vector, printN int, opts ...common.TypePrin
 		if !first {
 			_ = w.WriteByte(',')
 		}
-		v := vec.Get(i)
-		vIsNull := vec.IsNull(i)
+		v := containers.GetValue(vec, i)
+		vIsNull := vec.IsNull(uint64(i))
 		_, _ = w.WriteString(common.TypeStringValue(*typ, v, vIsNull, opts...))
 		first = false
 	}
@@ -146,7 +146,7 @@ func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batc
 		for len(bat.Vecs) < 2+int(seqnum) {
 			bat.AppendPlaceholder()
 		}
-		bat.AddVector(src.Attrs[i], src.Vecs[i].TryConvertConst())
+		bat.AddVector(src.Attrs[i], containers.TryConvertConst(src.Vecs[i]))
 	}
 	return bat
 }
@@ -188,11 +188,11 @@ func filterAbortedLogtailRows(src *containers.BatchWithVersion) {
 	}
 	var aborts []bool
 	if abortPos != -1 && !src.Vecs[abortPos].IsConstNull() {
-		aborts = vector.MustFixedColWithTypeCheck[bool](src.Vecs[abortPos].GetDownstreamVector())
+		aborts = vector.MustFixedColWithTypeCheck[bool](src.Vecs[abortPos])
 	}
 	var commitTSs []types.TS
 	if commitTSPos != -1 && !src.Vecs[commitTSPos].IsConstNull() {
-		commitTSs = vector.MustFixedColWithTypeCheck[types.TS](src.Vecs[commitTSPos].GetDownstreamVector())
+		commitTSs = vector.MustFixedColWithTypeCheck[types.TS](src.Vecs[commitTSPos])
 	}
 	for row := 0; row < src.Length(); row++ {
 		if (row < len(aborts) && aborts[row]) ||

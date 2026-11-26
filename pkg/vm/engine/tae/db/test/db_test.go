@@ -512,7 +512,7 @@ func TestAppend4(t *testing.T) {
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		testutil.CheckAllColRowsByScan(t, rel, bat.Length(), false)
 
-		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+		v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 		filter := handle.NewEQFilter(v)
 		err := rel.DeleteByFilter(context.Background(), filter)
 		assert.NoError(t, err)
@@ -549,15 +549,15 @@ func testCRUD(t *testing.T, tae *db.DB, schema *catalog.Schema) {
 	err := rel.Append(context.Background(), bats[0])
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	testutil.CheckAllColRowsByScan(t, rel, bats[0].Length(), false)
-	v := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
+	v := containers.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 2)
 	filter := handle.NewEQFilter(v)
 	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 
-	oldv := bats[0].Vecs[updateColIdx].Get(5)
+	oldv := containers.GetValue(bats[0].Vecs[updateColIdx], 5)
 	oldvIsNull := bats[0].Vecs[updateColIdx].IsNull(5)
 
-	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(5)
+	v = containers.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 5)
 	ufilter := handle.NewEQFilter(v)
 	{
 		ot := reflect.ValueOf(&oldv).Elem()
@@ -585,7 +585,7 @@ func testCRUD(t *testing.T, tae *db.DB, schema *catalog.Schema) {
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-1, false)
-	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+	v = containers.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 3)
 	filter = handle.NewEQFilter(v)
 	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
@@ -700,7 +700,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		obj.UpdateStats(writer.Stats())
 		v, _, err := dataBlk.GetValue(context.Background(), txn, readSchema, 0, 4, 2, false, common.DefaultAllocator)
 		assert.Nil(t, err)
-		expectVal := bat.Vecs[2].Get(4)
+		expectVal := containers.GetValue(bat.Vecs[2], 4)
 		assert.Equal(t, expectVal, v)
 
 		var view *containers.Batch
@@ -717,10 +717,10 @@ func TestNonAppendableBlock(t *testing.T) {
 		pkVec := containers.MakeVector(pkDef.Type, common.DefaultAllocator)
 		val1, _, err := dataBlk.GetValue(ctx, txn, schema, 0, 1, pkDef.Idx, false, common.DefaultAllocator)
 		assert.NoError(t, err)
-		pkVec.Append(val1, false)
+		containers.AppendValue(pkVec, val1, false)
 		val2, _, err := dataBlk.GetValue(ctx, txn, schema, 0, 2, pkDef.Idx, false, common.DefaultAllocator)
 		assert.NoError(t, err)
-		pkVec.Append(val2, false)
+		containers.AppendValue(pkVec, val2, false)
 		err = rel.RangeDelete(obj.Fingerprint(), 1, 2, handle.DT_Normal)
 		assert.Nil(t, err)
 
@@ -849,13 +849,13 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		var view *containers.Batch
 		err = obj.Scan(ctx, &view, 0, []int{2}, common.DefaultAllocator)
 		assert.NoError(t, err)
-		assert.True(t, view.Vecs[0].Equals(bats[0].Vecs[2]))
+		assert.True(t, containers.VectorEquals(view.Vecs[0], bats[0].Vecs[2]))
 		view.Close()
 		view = nil
 
 		err = obj.Scan(ctx, &view, 1, []int{2}, common.DefaultAllocator)
 		assert.NoError(t, err)
-		assert.True(t, view.Vecs[0].Equals(bats[1].Vecs[2]))
+		assert.True(t, containers.VectorEquals(view.Vecs[0], bats[1].Vecs[2]))
 		view.Close()
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
@@ -869,16 +869,16 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		txn, _, rel := testutil.CreateRelationNoCommit(t, db, "db", schema, false)
 		txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
 		vec1 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-		vec1.Append(stats1[:], false)
-		defer vec1.Close()
+		containers.AppendValue(vec1, stats1[:], false)
+		defer containers.ReleaseVector(vec1)
 		err := rel.AddDataFiles(context.Background(), vec1)
 		assert.Nil(t, err)
 		err = rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
 
 		vec2 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-		vec2.Append(stats2[:], false)
-		defer vec1.Close()
+		containers.AppendValue(vec2, stats2[:], false)
+		defer containers.ReleaseVector(vec1)
 		err = rel.AddDataFiles(context.Background(), vec2)
 		assert.Nil(t, err)
 		err = rel.Append(context.Background(), bats[1])
@@ -901,9 +901,9 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 		assert.NotNil(t, err)
 
 		vec3 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-		vec3.Append(stats1[:], false)
-		vec3.Append(stats2[:], false)
-		defer vec1.Close()
+		containers.AppendValue(vec3, stats1[:], false)
+		containers.AppendValue(vec3, stats2[:], false)
+		defer containers.ReleaseVector(vec1)
 		err = rel.AddDataFiles(context.Background(), vec3)
 		assert.NotNil(t, err)
 
@@ -927,12 +927,12 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 			if bytes.Equal(metaLoc, metaLoc1) {
 				err := blk.Scan(ctx, &view, 0, []int{2}, common.DefaultAllocator)
 				assert.NoError(t, err)
-				assert.True(t, view.Vecs[0].Equals(bats[0].Vecs[2]))
+				assert.True(t, containers.VectorEquals(view.Vecs[0], bats[0].Vecs[2]))
 				view.Close()
 			} else {
 				err := blk.Scan(ctx, &view, 1, []int{3}, common.DefaultAllocator)
 				assert.NoError(t, err)
-				assert.True(t, view.Vecs[0].Equals(bats[1].Vecs[3]))
+				assert.True(t, containers.VectorEquals(view.Vecs[0], bats[1].Vecs[3]))
 				view.Close()
 
 			}
@@ -1012,7 +1012,7 @@ func TestCompactMemAlter(t *testing.T) {
 				assert.Equal(t, types.T_char.ToType().Oid, view.Vecs[0].GetType().Oid)
 			}
 			if i == 3 {
-				assert.True(t, view.Vecs[0].Equals(bat.Vecs[3]))
+				assert.True(t, containers.VectorEquals(view.Vecs[0], bat.Vecs[3]))
 			}
 			view.Close()
 		}
@@ -1057,8 +1057,8 @@ func TestFlushTableMergeOrder(t *testing.T) {
 			dedup[bb] = true
 		}
 		aa := int64(20000000 + bb)
-		bat.Vecs[0].Append(aa, false)
-		bat.Vecs[1].Append(bb, false)
+		containers.AppendValue(bat.Vecs[0], aa, false)
+		containers.AppendValue(bat.Vecs[1], bb, false)
 	}
 
 	defer bat.Close()
@@ -1130,8 +1130,8 @@ func TestFlushTableMergeOrderPK(t *testing.T) {
 		}
 		rows++
 		aa := int64(20000000 + bb)
-		bat.Vecs[0].Append(aa, false)
-		bat.Vecs[1].Append(bb, false)
+		containers.AppendValue(bat.Vecs[0], aa, false)
+		containers.AppendValue(bat.Vecs[1], bb, false)
 	}
 
 	defer bat.Close()
@@ -1222,7 +1222,7 @@ func TestFlushTableDroppedEntry(t *testing.T) {
 		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
 		dbH, _ := rel.GetDB()
 		did, tid = dbH.GetID(), rel.ID()
-		rel.DeleteByFilter(ctx, handle.NewEQFilter(bat.Vecs[1].Get(1)))
+		rel.DeleteByFilter(ctx, handle.NewEQFilter(containers.GetValue(bat.Vecs[1], 1)))
 		require.NoError(t, txn.Commit(ctx))
 	}
 
@@ -1363,7 +1363,7 @@ func TestFlushTableErrorHandle2(t *testing.T) {
 
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat1.Vecs[2].Get(1))))
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat1.Vecs[2], 1))))
 		assert.NoError(t, rel.Append(ctx, bat2))
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -1398,10 +1398,10 @@ func TestFlushTabletail(t *testing.T) {
 
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(1))))
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(19)))) // ab0 has 2
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(21)))) // ab1 has 1
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(45)))) // ab2 has 1
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat.Vecs[2], 1))))
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat.Vecs[2], 19)))) // ab0 has 2
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat.Vecs[2], 21)))) // ab1 has 1
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat.Vecs[2], 45)))) // ab2 has 1
 
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -1410,7 +1410,7 @@ func TestFlushTabletail(t *testing.T) {
 	{
 		var rel handle.Relation
 		commitDeleteAfterFlush, rel = testutil.GetDefaultRelation(t, tae.DB, schema.Name)
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(42)))) // expect to transfer to nablk1
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat.Vecs[2], 42)))) // expect to transfer to nablk1
 	}
 
 	flushTable := func() {
@@ -1430,7 +1430,7 @@ func TestFlushTabletail(t *testing.T) {
 	{
 		assert.NoError(t, commitDeleteAfterFlush.Commit(context.Background()))
 		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
-		_, _, err := rel.GetByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(42)))
+		_, _, err := rel.GetByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat.Vecs[2], 42)))
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 
 		assert.NoError(t, rel.Append(context.Background(), bat2))
@@ -1438,11 +1438,11 @@ func TestFlushTabletail(t *testing.T) {
 	}
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(15))))
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(20)))) // nab0 has 2
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(27)))) // nab1 has 2
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat2.Vecs[2].Get(11))))
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat2.Vecs[2].Get(15)))) // ab3 has 2, ab4 and ab5 has 0
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat.Vecs[2], 15))))
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat.Vecs[2], 20)))) // nab0 has 2
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat.Vecs[2], 27)))) // nab1 has 2
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat2.Vecs[2], 11))))
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat2.Vecs[2], 15)))) // ab3 has 2, ab4 and ab5 has 0
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -1450,9 +1450,9 @@ func TestFlushTabletail(t *testing.T) {
 
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[2].Get(10)))) // nab0 has 2+1, nab1 has 2
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat2.Vecs[2].Get(44))))
-		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(bat2.Vecs[2].Get(45)))) // nab5 has 2
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat.Vecs[2], 10)))) // nab0 has 2+1, nab1 has 2
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat2.Vecs[2], 44))))
+		assert.NoError(t, rel.DeleteByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat2.Vecs[2], 45)))) // nab5 has 2
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -1697,7 +1697,7 @@ func TestMVCC1(t *testing.T) {
 	assert.NoError(t, err)
 
 	row := 5
-	expectVal := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(row)
+	expectVal := containers.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], row)
 	filter := handle.NewEQFilter(expectVal)
 	actualVal, _, err := rel.GetValueByFilter(context.Background(), filter, schema.GetSingleSortKeyIdx())
 	assert.NoError(t, err)
@@ -1713,7 +1713,7 @@ func TestMVCC1(t *testing.T) {
 	err = rel2.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
 
-	val2 := bats[1].Vecs[schema.GetSingleSortKeyIdx()].Get(row)
+	val2 := containers.GetValue(bats[1].Vecs[schema.GetSingleSortKeyIdx()], row)
 	filter.Val = val2
 	actualVal, _, err = rel2.GetValueByFilter(context.Background(), filter, schema.GetSingleSortKeyIdx())
 	assert.NoError(t, err)
@@ -1770,7 +1770,7 @@ func TestMVCC2(t *testing.T) {
 		txn, _, rel := testutil.CreateRelationNoCommit(t, db, "db", schema, true)
 		err := rel.Append(context.Background(), bats[0])
 		assert.NoError(t, err)
-		val := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(5)
+		val := containers.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 5)
 		filter := handle.NewEQFilter(val)
 		_, _, err = rel.GetByFilter(context.Background(), filter)
 		assert.NoError(t, err)
@@ -1780,7 +1780,7 @@ func TestMVCC2(t *testing.T) {
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
 		err := rel.Append(context.Background(), bats[1])
 		assert.NoError(t, err)
-		val := bats[1].Vecs[schema.GetSingleSortKeyIdx()].Get(5)
+		val := containers.GetValue(bats[1].Vecs[schema.GetSingleSortKeyIdx()], 5)
 		filter := handle.NewEQFilter(val)
 		err = rel.DeleteByFilter(context.Background(), filter)
 		assert.NoError(t, err)
@@ -1899,7 +1899,7 @@ func TestUnload2(t *testing.T) {
 		txn, rel := testutil.GetDefaultRelation(t, db, schema1.Name)
 		for i := 0; i < len(bats); i += 2 {
 			data := bats[i]
-			v := data.Vecs[schema1.GetSingleSortKeyIdx()].Get(0)
+			v := containers.GetValue(data.Vecs[schema1.GetSingleSortKeyIdx()], 0)
 			filter := handle.NewEQFilter(v)
 			_, _, err := rel.GetByFilter(context.Background(), filter)
 			assert.NoError(t, err)
@@ -1909,7 +1909,7 @@ func TestUnload2(t *testing.T) {
 		assert.Nil(t, err)
 		for i := 1; i < len(bats); i += 2 {
 			data := bats[i]
-			v := data.Vecs[schema1.GetSingleSortKeyIdx()].Get(0)
+			v := containers.GetValue(data.Vecs[schema1.GetSingleSortKeyIdx()], 0)
 			filter := handle.NewEQFilter(v)
 			_, _, err := rel.GetByFilter(context.Background(), filter)
 			assert.NoError(t, err)
@@ -1934,7 +1934,7 @@ func TestDelete1(t *testing.T) {
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		pkCol := bat.Vecs[schema.GetSingleSortKeyIdx()]
-		pkVal := pkCol.Get(5)
+		pkVal := containers.GetValue(pkCol, 5)
 		filter := handle.NewEQFilter(pkVal)
 		var err error
 		id, row, err = rel.GetByFilter(context.Background(), filter)
@@ -1946,7 +1946,7 @@ func TestDelete1(t *testing.T) {
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		pkCol := bat.Vecs[schema.GetSingleSortKeyIdx()]
-		pkVal := pkCol.Get(5)
+		pkVal := containers.GetValue(pkCol, 5)
 		filter := handle.NewEQFilter(pkVal)
 		_, _, err := rel.GetByFilter(context.Background(), filter)
 		assert.Error(t, err)
@@ -1978,7 +1978,7 @@ func TestDelete1(t *testing.T) {
 		assert.NoError(t, err)
 		assert.True(t, view.Deletes.Contains(0))
 		view.Close()
-		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+		v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(context.Background(), filter)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
@@ -1993,7 +1993,7 @@ func TestDelete1(t *testing.T) {
 		defer view.Close()
 		assert.True(t, view.Deletes.Contains(0))
 		assert.Equal(t, bat.Vecs[0].Length()-1, view.Length())
-		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+		v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(context.Background(), filter)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
@@ -2031,7 +2031,7 @@ func TestLogIndex1(t *testing.T) {
 	var err error
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+		v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 		filter := handle.NewEQFilter(v)
 		id, offset, err = rel.GetByFilter(context.Background(), filter)
 		assert.Nil(t, err)
@@ -2240,13 +2240,13 @@ func TestScan2(t *testing.T) {
 	assert.NoError(t, err)
 	testutil.CheckAllColRowsByScan(t, rel, int(rows), false)
 
-	pkv := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(5)
+	pkv := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 5)
 	filter := handle.NewEQFilter(pkv)
 	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 	testutil.CheckAllColRowsByScan(t, rel, int(rows)-1, true)
 
-	pkv = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(8)
+	pkv = containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 8)
 	filter = handle.NewEQFilter(pkv)
 	updateV := int64(999)
 	err = rel.UpdateByFilter(context.Background(), filter, 3, updateV, false)
@@ -2274,7 +2274,7 @@ func TestADA(t *testing.T) {
 
 	// Delete a row from the block
 	txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
@@ -2377,7 +2377,7 @@ func TestUpdateByFilter(t *testing.T) {
 	testutil.CreateRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 
 	txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
+	v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 2)
 	filter := handle.NewEQFilter(v)
 	err := rel.UpdateByFilter(context.Background(), filter, 2, int32(2222), false)
 	assert.NoError(t, err)
@@ -2388,7 +2388,7 @@ func TestUpdateByFilter(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int32(2222), cv.(int32))
 
-	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+	v = containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 	filter = handle.NewEQFilter(v)
 
 	err = rel.UpdateByFilter(context.Background(), filter, uint16(schema.GetSingleSortKeyIdx()), int64(333333), false)
@@ -2416,7 +2416,7 @@ func TestGetByFilter(t *testing.T) {
 	testutil.CreateRelationAndAppend(t, 0, tae, "db", schema, bat, true)
 
 	// Step 2
-	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
+	v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 2)
 	filter := handle.NewEQFilter(v)
 
 	// Step 3
@@ -2464,7 +2464,7 @@ func TestChaos1(t *testing.T) {
 
 	testutil.CreateRelation(t, tae, "db", schema, true)
 
-	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	filter := handle.NewEQFilter(v)
 	var wg sync.WaitGroup
 	appendCnt := uint32(0)
@@ -2545,7 +2545,7 @@ func TestSnapshotIsolation1(t *testing.T) {
 	schema.Extra.BlockMaxRows = 100
 	bat := catalog.MockBatch(schema, 10)
 	defer bat.Close()
-	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+	v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 	filter := handle.NewEQFilter(v)
 
 	// Step 1
@@ -2604,7 +2604,7 @@ func TestSnapshotIsolation2(t *testing.T) {
 	schema.Extra.BlockMaxRows = 100
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
-	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	filter := handle.NewEQFilter(v)
 
 	testutil.CreateRelation(t, tae, "db", schema, true)
@@ -3197,13 +3197,18 @@ func TestNull1(t *testing.T) {
 	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*3+1))
 	defer bat.Close()
 	bats := bat.Split(4)
-	bats[0].Vecs[3].Update(2, nil, true)
+	// bats are windows of bat: update a copy
+	nullable, err := bats[0].Vecs[3].Dup(bat.Vecs[3].MPool())
+	assert.NoError(t, err)
+	defer containers.ReleaseVector(nullable)
+	bats[0].Vecs[3] = nullable
+	containers.UpdateRow(nullable, 2, nil, true)
 	tae.CreateRelAndAppend(bats[0], true)
 
 	txn, rel := tae.GetRelation()
 	blk := testutil.GetOneObject(rel)
 	var view *containers.Batch
-	err := blk.Scan(ctx, &view, 0, []int{3}, common.DefaultAllocator)
+	err = blk.Scan(ctx, &view, 0, []int{3}, common.DefaultAllocator)
 	assert.NoError(t, err)
 	//v := view.GetData().Get(2)
 	assert.True(t, view.Vecs[0].IsNull(2))
@@ -3402,13 +3407,13 @@ func TestGetColumnData(t *testing.T) {
 	blk = testutil.GetOneObject(rel)
 	blk.Scan(ctx, &view, 0, []int{2}, common.DefaultAllocator)
 	assert.NoError(t, err)
-	assert.True(t, view.Vecs[0].Equals(bats[1].Vecs[2]))
+	assert.True(t, containers.VectorEquals(view.Vecs[0], bats[1].Vecs[2]))
 	assert.NotZero(t, view.Vecs[0].Allocated())
 	view.Close()
 	view = nil
 	blk.Scan(ctx, &view, 0, []int{2}, common.DefaultAllocator)
 	assert.NoError(t, err)
-	assert.True(t, view.Vecs[0].Equals(bats[1].Vecs[2]))
+	assert.True(t, containers.VectorEquals(view.Vecs[0], bats[1].Vecs[2]))
 	assert.NotZero(t, view.Vecs[0].Allocated())
 	view.Close()
 	view = nil
@@ -3695,7 +3700,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 
 	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	for i := 0; i < bat.Length(); i++ {
-		rowIDs.Append(nil, true)
+		containers.AppendValue(rowIDs, nil, true)
 	}
 	err = meta.GetObjectData().GetDuplicatedRows(
 		context.Background(), txn, bat.Vecs[1], nil, types.TS{}, types.MaxTs(), rowIDs, common.DefaultAllocator,
@@ -3704,7 +3709,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	err = meta.GetObjectData().Contains(context.Background(), txn, rowIDs, nil, common.DebugAllocator)
 	assert.NoError(t, err)
 	duplicate := false
-	rowIDs.Foreach(func(v any, isNull bool, row int) error {
+	containers.Foreach(rowIDs, func(v any, isNull bool, row int) error {
 		if !isNull {
 			duplicate = true
 		}
@@ -4015,7 +4020,7 @@ func TestTombstoneMergeKeepsTargetDroppedAfterSnapshot(t *testing.T) {
 	tae.CreateRelAndAppend(rows, true)
 
 	deleteTxn, deleteRel := tae.GetRelation()
-	key := rows.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	key := containers.GetValue(rows.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	targetID, targetRow, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(key))
 	require.NoError(t, err)
 	require.NoError(t, deleteRel.RangeDelete(
@@ -4101,7 +4106,7 @@ func TestTransferredTombstonesSyncFailureRollsBack(t *testing.T) {
 	tae.CompactBlocks(true)
 
 	deleteTxn, deleteRel := tae.GetRelation()
-	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 1)
 	filter := handle.NewEQFilter(pk)
 	id, offset, err := deleteRel.GetByFilter(ctx, filter)
 	require.NoError(t, err)
@@ -4110,11 +4115,11 @@ func TestTransferredTombstonesSyncFailureRollsBack(t *testing.T) {
 	)
 	stats := func() objectio.ObjectStats {
 		pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-		defer pkVec.Close()
-		pkVec.Append(pk, false)
+		defer containers.ReleaseVector(pkVec)
+		containers.AppendValue(pkVec, pk, false)
 		rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-		defer rowIDVec.Close()
-		rowIDVec.Append(rowID, false)
+		defer containers.ReleaseVector(rowIDVec)
+		containers.AppendValue(rowIDVec, rowID, false)
 		stats, writeErr := testutil.MockCNDeleteInS3(
 			tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
 		)
@@ -4196,20 +4201,20 @@ func TestTransferredTombstonesPublishedBeforeConflictRollBack(t *testing.T) {
 	txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 	require.NoError(t, rel.Append(ctx, candidate))
 
-	pk := base.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	pk := containers.GetValue(base.Vecs[schema.GetSingleSortKeyIdx()], 1)
 	id, offset, err := rel.GetByFilter(ctx, handle.NewEQFilter(pk))
 	require.NoError(t, err)
 	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
 		*id.ObjectID(), id.BlockID.Sequence(), offset,
 	)
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-	pkVec.Append(pk, false)
+	containers.AppendValue(pkVec, pk, false)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	rowIDVec.Append(rowID, false)
+	containers.AppendValue(rowIDVec, rowID, false)
 	stats, err := testutil.MockCNDeleteInS3(tae.Runtime.Fs, rowIDVec, pkVec, schema, txn)
 	require.NoError(t, err)
-	pkVec.Close()
-	rowIDVec.Close()
+	containers.ReleaseVector(pkVec)
+	containers.ReleaseVector(rowIDVec)
 	require.False(t, stats.IsZero())
 
 	tae.MergeBlocks(true)
@@ -4283,7 +4288,7 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 
 	deleteTxn, deleteRel := tae.GetRelation()
 	sortKeyIdx := schema.GetSingleSortKeyIdx()
-	key := tail.Vecs[sortKeyIdx].Get(0)
+	key := containers.GetValue(tail.Vecs[sortKeyIdx], 0)
 	id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(key))
 	require.NoError(t, err)
 	require.Equal(t, uint32(3), offset, "both holes must retain their physical slots")
@@ -4315,7 +4320,7 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 		value, isNull, err := snapshotRel.GetValue(id, 4, uint16(sortKeyIdx), skipDeleteCheck)
 		require.NoError(t, err)
 		require.False(t, isNull)
-		require.Equal(t, rows.Vecs[sortKeyIdx].Get(3), value)
+		require.Equal(t, containers.GetValue(rows.Vecs[sortKeyIdx], 3), value)
 	}
 	var view *containers.Batch
 	err = tables.HybridScanByBlock(
@@ -4333,8 +4338,8 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 	defer view.Close()
 	view.Compact()
 	require.Equal(t, 2, view.Length())
-	require.Equal(t, rows.Vecs[sortKeyIdx].Get(0), view.Vecs[0].Get(0))
-	require.Equal(t, rows.Vecs[sortKeyIdx].Get(3), view.Vecs[0].Get(1))
+	require.Equal(t, containers.GetValue(rows.Vecs[sortKeyIdx], 0), containers.GetValue(view.Vecs[0], 0))
+	require.Equal(t, containers.GetValue(rows.Vecs[sortKeyIdx], 3), containers.GetValue(view.Vecs[0], 1))
 	require.NoError(t, snapshotTxn.Commit(ctx))
 }
 
@@ -4362,7 +4367,7 @@ func TestV9PersistedTombstoneContainsSkipsRollback(t *testing.T) {
 	tae.CreateRelAndAppend(rows, true)
 
 	abortTxn, abortRel := tae.GetRelation()
-	key := rows.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	key := containers.GetValue(rows.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	id, offset, err := abortRel.GetByFilter(ctx, handle.NewEQFilter(key))
 	require.NoError(t, err)
 	target := objectio.NewRowid(&id.BlockID, offset)
@@ -4372,7 +4377,7 @@ func TestV9PersistedTombstoneContainsSkipsRollback(t *testing.T) {
 	require.NoError(t, abortTxn.Rollback(ctx))
 
 	deleteTxn, deleteRel := tae.GetRelation()
-	committedKey := rows.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	committedKey := containers.GetValue(rows.Vecs[schema.GetSingleSortKeyIdx()], 1)
 	committedID, committedOffset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(committedKey))
 	require.NoError(t, err)
 	require.NoError(t, deleteRel.RangeDelete(committedID, committedOffset, committedOffset, handle.DT_Normal))
@@ -4400,8 +4405,8 @@ func TestV9PersistedTombstoneContainsSkipsRollback(t *testing.T) {
 	require.NotNil(t, persisted)
 
 	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	defer rowIDs.Close()
-	rowIDs.Append(target, false)
+	defer containers.ReleaseVector(rowIDs)
+	containers.AppendValue(rowIDs, target, false)
 	require.NoError(t, persisted.GetObjectData().Contains(ctx, readTxn, rowIDs, nil, common.DebugAllocator))
 	require.False(t, rowIDs.IsNull(0), "a rolled-back v9 tombstone must not hide its data row")
 	require.NoError(t, readTxn.Commit(ctx))
@@ -4477,8 +4482,8 @@ func TestIncrementalDedupChecksCNCreatedObject(t *testing.T) {
 	stats := writer.GetObjectStats(objectio.WithCNCreated())
 	require.True(t, stats.GetCNCreated())
 	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-	defer statsVec.Close()
-	statsVec.Append(stats[:], false)
+	defer containers.ReleaseVector(statsVec)
+	containers.AppendValue(statsVec, stats[:], false)
 
 	insertTxn, insertRel := tae.GetRelation()
 	insertTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
@@ -4748,9 +4753,9 @@ func TestTruncateZonemap(t *testing.T) {
 	trickyMinv := mockBytes(0, 33)                                        // smaller than minv, not in mut index but in immut index
 	maxv := mockBytes(0xff, 35, Mod{0, 0x61}, Mod{1, 0x62}, Mod{2, 0x63}) // abc0xff0xff...
 	trickyMaxv := []byte("abd")                                           // bigger than maxv, not in mut index but in immut index
-	bat.Vecs[12].Update(8, maxv, false)
-	bat.Vecs[12].Update(11, minv, false)
-	bat.Vecs[12].Update(22, []byte("abcc"), false)
+	containers.UpdateRow(bat.Vecs[12], 8, maxv, false)
+	containers.UpdateRow(bat.Vecs[12], 11, minv, false)
+	containers.UpdateRow(bat.Vecs[12], 22, []byte("abcc"), false)
 	defer bat.Close()
 
 	checkMinMax := func(rel handle.Relation, minvOffset, maxvOffset uint32) {
@@ -5829,7 +5834,7 @@ func TestICKPPreservesTableIDHistoryWhileGCKPIntentIsPending(t *testing.T) {
 
 	secondBat := catalog.MockBatch(schema, 4)
 	for i := 0; i < secondBat.Length(); i++ {
-		secondBat.Vecs[1].Update(i, int16(i+10), false)
+		containers.UpdateRow(secondBat.Vecs[1], i, int16(i+10), false)
 	}
 	t.Cleanup(secondBat.Close)
 	secondCommit := testutil.AppendWithCommitTS(
@@ -5898,7 +5903,7 @@ func TestReplacementChecksConcurrentDestinationKey(t *testing.T) {
 	tae.CreateRelAndAppend2(old, true)
 	updateTxn, updateRel := tae.GetRelation()
 	defer updateTxn.Rollback(ctx)
-	id, offset, err := updateRel.GetByFilter(ctx, handle.NewEQFilter(old.Vecs[0].Get(0)))
+	id, offset, err := updateRel.GetByFilter(ctx, handle.NewEQFilter(containers.GetValue(old.Vecs[0], 0)))
 	require.NoError(t, err)
 	require.NoError(t, updateRel.RangeDelete(id, offset, offset, handle.DT_Normal))
 	require.NoError(t, updateRel.Append(ctx, fresh))
@@ -5909,9 +5914,9 @@ func TestReplacementChecksConcurrentDestinationKey(t *testing.T) {
 	readTxn, readRel := tae.GetRelation()
 	defer readTxn.Rollback(ctx)
 	for _, row := range []*containers.Batch{old, fresh} {
-		value, _, err := readRel.GetValueByFilter(ctx, handle.NewEQFilter(row.Vecs[0].Get(0)), 1)
+		value, _, err := readRel.GetValueByFilter(ctx, handle.NewEQFilter(containers.GetValue(row.Vecs[0], 0)), 1)
 		require.NoError(t, err)
-		require.Equal(t, row.Vecs[1].Get(0), value)
+		require.Equal(t, containers.GetValue(row.Vecs[1], 0), value)
 	}
 	require.NoError(t, readTxn.Commit(ctx))
 }
@@ -5933,12 +5938,12 @@ func TestReplacementRejectsCompetingPredecessor(t *testing.T) {
 			tae.BindSchema(schema)
 			bat := catalog.MockBatch(schema, 1)
 			defer bat.Close()
-			bat.Vecs[1].Update(0, uint32(0), false)
+			containers.UpdateRow(bat.Vecs[1], 0, uint32(0), false)
 			tae.CreateRelAndAppend2(bat, true)
 			if transferred {
 				tae.CompactBlocks(false)
 			}
-			filter := handle.NewEQFilter(bat.Vecs[0].Get(0))
+			filter := handle.NewEQFilter(containers.GetValue(bat.Vecs[0], 0))
 			first, firstRel := tae.GetRelation()
 			defer first.Rollback(ctx)
 			second, secondRel := tae.GetRelation()
@@ -5952,7 +5957,7 @@ func TestReplacementRejectsCompetingPredecessor(t *testing.T) {
 				require.NoError(t, rel.RangeDelete(id, offset, offset, handle.DT_Normal))
 				clone := bat.CloneWindow(0, 1)
 				defer clone.Close()
-				clone.Vecs[1].Update(0, uint32(1), false)
+				containers.UpdateRow(clone.Vecs[1], 0, uint32(1), false)
 				require.NoError(t, rel.Append(ctx, clone))
 			}
 			stage(firstRel)
@@ -6013,14 +6018,14 @@ func TestDelete4(t *testing.T) {
 	schema.Extra.ObjectMaxBlocks = 5
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
-	bat.Vecs[1].Update(0, uint32(0), false)
+	containers.UpdateRow(bat.Vecs[1], 0, uint32(0), false)
 	defer bat.Close()
 	// Persist the system-catalog rows as well as the user row. Without them a
 	// restart cannot resolve the table and the replay test exercises an invalid
 	// fixture rather than the delete/append lifecycle.
 	tae.CreateRelAndAppend2(bat, true)
 
-	filter := handle.NewEQFilter(bat.Vecs[0].Get(0))
+	filter := handle.NewEQFilter(containers.GetValue(bat.Vecs[0], 0))
 	var wg sync.WaitGroup
 	var count atomic.Uint32
 	const (
@@ -6054,7 +6059,7 @@ func TestDelete4(t *testing.T) {
 					cloneBat.Close()
 					continue
 				}
-				cloneBat.Vecs[1].Update(0, newV, false)
+				containers.UpdateRow(cloneBat.Vecs[1], 0, newV, false)
 				if err := rel.Append(context.Background(), cloneBat); err != nil {
 					_ = txn.Rollback(context.Background())
 					cloneBat.Close()
@@ -6214,7 +6219,7 @@ func TestTransfer(t *testing.T) {
 
 	tae.CreateRelAndAppend(bat, true)
 
-	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
+	filter := handle.NewEQFilter(containers.GetValue(bat.Vecs[3], 3))
 
 	txn1, rel1 := tae.GetRelation()
 	err := rel1.DeleteByFilter(context.Background(), filter)
@@ -6233,8 +6238,8 @@ func TestTransfer(t *testing.T) {
 	_, _, err = rel2.GetValueByFilter(context.Background(), filter, 3)
 	t.Log(err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
-	v, _, err := rel2.GetValueByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[3].Get(4)), 2)
-	expectV := bat.Vecs[2].Get(4)
+	v, _, err := rel2.GetValueByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat.Vecs[3], 4)), 2)
+	expectV := containers.GetValue(bat.Vecs[2], 4)
 	assert.Equal(t, expectV, v)
 	assert.NoError(t, err)
 	_ = txn2.Commit(context.Background())
@@ -6256,7 +6261,7 @@ func TestTransfer2(t *testing.T) {
 
 	tae.CreateRelAndAppend(bat, true)
 
-	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
+	filter := handle.NewEQFilter(containers.GetValue(bat.Vecs[3], 3))
 
 	txn1, rel1 := tae.GetRelation()
 	err := rel1.DeleteByFilter(context.Background(), filter)
@@ -6273,8 +6278,8 @@ func TestTransfer2(t *testing.T) {
 	_, _, err = rel2.GetValueByFilter(context.Background(), filter, 3)
 	t.Log(err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
-	v, _, err := rel2.GetValueByFilter(context.Background(), handle.NewEQFilter(bat.Vecs[3].Get(4)), 2)
-	expectV := bat.Vecs[2].Get(4)
+	v, _, err := rel2.GetValueByFilter(context.Background(), handle.NewEQFilter(containers.GetValue(bat.Vecs[3], 4)), 2)
+	expectV := containers.GetValue(bat.Vecs[2], 4)
 	assert.Equal(t, expectV, v)
 	assert.NoError(t, err)
 	_ = txn2.Commit(context.Background())
@@ -6305,10 +6310,10 @@ func TestMergeBlocks3(t *testing.T) {
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
-	filter15 := handle.NewEQFilter(bat.Vecs[3].Get(15))
-	filter19 := handle.NewEQFilter(bat.Vecs[3].Get(19))
-	filter18 := handle.NewEQFilter(bat.Vecs[3].Get(18))
-	filter17 := handle.NewEQFilter(bat.Vecs[3].Get(17))
+	filter15 := handle.NewEQFilter(containers.GetValue(bat.Vecs[3], 15))
+	filter19 := handle.NewEQFilter(containers.GetValue(bat.Vecs[3], 19))
+	filter18 := handle.NewEQFilter(containers.GetValue(bat.Vecs[3], 18))
+	filter17 := handle.NewEQFilter(containers.GetValue(bat.Vecs[3], 17))
 	// delete all rows in first blk in obj1 and the 5th,9th rows in blk2
 	{
 		txn, rel := tae.GetRelation()
@@ -6399,7 +6404,7 @@ func TestTransfer3(t *testing.T) {
 
 	tae.CreateRelAndAppend(bat, true)
 
-	filter := handle.NewEQFilter(bat.Vecs[3].Get(3))
+	filter := handle.NewEQFilter(containers.GetValue(bat.Vecs[3], 3))
 
 	txn1, rel1 := tae.GetRelation()
 
@@ -6434,15 +6439,15 @@ func TestUpdate(t *testing.T) {
 
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
-	bat.Vecs[2].Update(0, int32(0), false)
+	containers.UpdateRow(bat.Vecs[2], 0, int32(0), false)
 
 	tae.CreateRelAndAppend(bat, true)
 
 	var wg sync.WaitGroup
 
 	var expectV atomic.Int32
-	expectV.Store(bat.Vecs[2].Get(0).(int32))
-	filter := handle.NewEQFilter(bat.Vecs[3].Get(0))
+	expectV.Store(containers.GetValue(bat.Vecs[2], 0).(int32))
+	filter := handle.NewEQFilter(containers.GetValue(bat.Vecs[3], 0))
 	updateFn := func() {
 		defer wg.Done()
 		txn, rel := tae.GetRelation()
@@ -6459,7 +6464,7 @@ func TestUpdate(t *testing.T) {
 		tuples := bat.CloneWindow(0, 1)
 		defer tuples.Close()
 		updatedV := v.(int32) + 1
-		tuples.Vecs[2].Update(0, updatedV, false)
+		containers.UpdateRow(tuples.Vecs[2], 0, updatedV, false)
 		err = rel.Append(context.Background(), tuples)
 		assert.NoError(t, err)
 
@@ -6517,8 +6522,8 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	assert.Equal(t, 1, len(blocks))
 	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	ss := writer.GetObjectStats()
-	statsVec.Append(ss[:], false)
-	defer statsVec.Close()
+	containers.AppendValue(statsVec, ss[:], false)
+	defer containers.ReleaseVector(statsVec)
 	{
 		txn, _ := tae.StartTxn(nil)
 		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
@@ -6546,7 +6551,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 				_ = txn.Rollback(context.Background())
 				return
 			}
-			tuples.Vecs[3].Update(0, int64(x), false)
+			containers.UpdateRow(tuples.Vecs[3], 0, int64(x), false)
 			err = rel.Append(context.Background(), tuples)
 			assert.NoError(t, err)
 			assert.NoError(t, txn.Commit(context.Background()))
@@ -6946,7 +6951,7 @@ func TestAlterFakePk(t *testing.T) {
 		require.NotNil(t, view)
 		defer view.Close()
 		require.Len(t, view.Vecs, 1)
-		err = view.Vecs[0].Foreach(func(v any, isNull bool, row int) error {
+		err = containers.Foreach(view.Vecs[0], func(v any, isNull bool, row int) error {
 			assert.True(t, isNull)
 			rows = append(rows, row)
 			return nil
@@ -6999,7 +7004,7 @@ func TestAlterFakePk(t *testing.T) {
 	for _, v := range tnInsBat.Vecs {
 		assert.Equal(t, 4, v.Length())
 	}
-	t.Log(tnInsBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
+	t.Log(containers.PPString(tnInsBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName), 10))
 
 	delBat, err := batch.ViewBinary(resp.Commands[3].Bat.Bytes())
 	assert.NoError(t, err)
@@ -7009,7 +7014,7 @@ func TestAlterFakePk(t *testing.T) {
 	for _, v := range tnDelBat.Vecs {
 		assert.Equal(t, 2, v.Length())
 	}
-	t.Log(tnDelBat.GetVectorByName(objectio.TombstoneAttr_PK_Attr).PPString(10))
+	t.Log(containers.PPString(tnDelBat.GetVectorByName(objectio.TombstoneAttr_PK_Attr), 10))
 
 }
 
@@ -7139,7 +7144,7 @@ func TestAutoIncrEpochCommitFence(t *testing.T) {
 		bat := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
 		defer bat.Close()
 		require.NoError(t, rel.Append(ctx, bat))
-		_, _, err := rel.GetByFilter(ctx, handle.NewEQFilter(bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)))
+		_, _, err := rel.GetByFilter(ctx, handle.NewEQFilter(containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)))
 		require.NoError(t, err)
 		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 20, version+1)))
 		require.NoError(t, txn.Commit(ctx))
@@ -7156,7 +7161,7 @@ func TestAutoIncrEpochCommitFence(t *testing.T) {
 		bat := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
 		defer bat.Close()
 		require.NoError(t, rel.Append(ctx, bat))
-		_, _, err := rel.GetByFilter(ctx, handle.NewEQFilter(bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)))
+		_, _, err := rel.GetByFilter(ctx, handle.NewEQFilter(containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)))
 		require.NoError(t, err)
 		require.NoError(t, txn.Commit(ctx))
 	})
@@ -7176,9 +7181,9 @@ func TestAutoIncrEpochCommitFence(t *testing.T) {
 		after := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 10)
 		defer after.Close()
 		require.NoError(t, rel.Append(ctx, after))
-		_, _, err := rel.GetByFilter(ctx, handle.NewEQFilter(before.Vecs[schema.GetSingleSortKeyIdx()].Get(0)))
+		_, _, err := rel.GetByFilter(ctx, handle.NewEQFilter(containers.GetValue(before.Vecs[schema.GetSingleSortKeyIdx()], 0)))
 		require.NoError(t, err)
-		_, _, err = rel.GetByFilter(ctx, handle.NewEQFilter(after.Vecs[schema.GetSingleSortKeyIdx()].Get(0)))
+		_, _, err = rel.GetByFilter(ctx, handle.NewEQFilter(containers.GetValue(after.Vecs[schema.GetSingleSortKeyIdx()], 0)))
 		require.NoError(t, err)
 		require.NoError(t, txn.Commit(ctx))
 	})
@@ -7703,14 +7708,14 @@ func appendSnapshotRecord(
 	}
 	data := containers.BuildBatch(attrs, vecTypes, containers.Options{})
 	defer data.Close()
-	data.Vecs[0].Append(uint64(0), false)
-	data.Vecs[1].Append(uint64(0), false)
-	data.Vecs[2].Append(snapshot.Physical(), false)
-	data.Vecs[3].Append(types.Enum(1), false)
-	data.Vecs[4].Append(uint64(0), false)
-	data.Vecs[5].Append(uint64(0), false)
-	data.Vecs[6].Append(uint64(0), false)
-	data.Vecs[7].Append(uint64(0), false)
+	containers.AppendValue(data.Vecs[0], uint64(0), false)
+	containers.AppendValue(data.Vecs[1], uint64(0), false)
+	containers.AppendValue(data.Vecs[2], snapshot.Physical(), false)
+	containers.AppendValue(data.Vecs[3], types.Enum(1), false)
+	containers.AppendValue(data.Vecs[4], uint64(0), false)
+	containers.AppendValue(data.Vecs[5], uint64(0), false)
+	containers.AppendValue(data.Vecs[6], uint64(0), false)
+	containers.AppendValue(data.Vecs[7], uint64(0), false)
 
 	dbHandle, err := txn.GetDatabase(databaseName)
 	require.NoError(t, err)
@@ -8008,18 +8013,18 @@ func TestSnapshotMeta(t *testing.T) {
 		opt := containers.Options{}
 		opt.Capacity = 0
 		data1 := containers.BuildBatch(attrs, vecTypes, opt)
-		data1.Vecs[0].Append(uint64(0), false)
-		data1.Vecs[1].Append(uint64(0), false)
-		data1.Vecs[2].Append(snapshot, false)
+		containers.AppendValue(data1.Vecs[0], uint64(0), false)
+		containers.AppendValue(data1.Vecs[1], uint64(0), false)
+		containers.AppendValue(data1.Vecs[2], snapshot, false)
 		if i == 0 {
-			data1.Vecs[3].Append(types.Enum(2), false)
+			containers.AppendValue(data1.Vecs[3], types.Enum(2), false)
 		} else {
-			data1.Vecs[3].Append(types.Enum(1), false)
+			containers.AppendValue(data1.Vecs[3], types.Enum(1), false)
 		}
-		data1.Vecs[4].Append(uint64(0), false)
-		data1.Vecs[5].Append(uint64(0), false)
-		data1.Vecs[6].Append(uint64(0), false)
-		data1.Vecs[7].Append(uint64(0), false)
+		containers.AppendValue(data1.Vecs[4], uint64(0), false)
+		containers.AppendValue(data1.Vecs[5], uint64(0), false)
+		containers.AppendValue(data1.Vecs[6], uint64(0), false)
+		containers.AppendValue(data1.Vecs[7], uint64(0), false)
 		txn1, _ := db.StartTxn(nil)
 		var database handle.Database
 		var id uint64
@@ -8141,36 +8146,36 @@ func TestPitrMeta(t *testing.T) {
 			opt := containers.Options{}
 			opt.Capacity = 0
 			data := containers.BuildBatch(attrs, vecTypes, opt)
-			data.Vecs[0].Append([]byte("db"), false)
-			data.Vecs[1].Append([]byte("rel"), false)
-			data.Vecs[2].Append(uint64(0), false)
-			data.Vecs[3].Append(uint64(0), false)
-			data.Vecs[4].Append(uint64(0), false)
+			containers.AppendValue(data.Vecs[0], []byte("db"), false)
+			containers.AppendValue(data.Vecs[1], []byte("rel"), false)
+			containers.AppendValue(data.Vecs[2], uint64(0), false)
+			containers.AppendValue(data.Vecs[3], uint64(0), false)
+			containers.AppendValue(data.Vecs[4], uint64(0), false)
 			if i == 0 {
-				data.Vecs[5].Append([]byte("cluster"), false)
-				data.Vecs[10].Append(uint64(0), false)
-				data.Vecs[11].Append(uint8(1), false)
-				data.Vecs[12].Append([]byte("h"), false)
+				containers.AppendValue(data.Vecs[5], []byte("cluster"), false)
+				containers.AppendValue(data.Vecs[10], uint64(0), false)
+				containers.AppendValue(data.Vecs[11], uint8(1), false)
+				containers.AppendValue(data.Vecs[12], []byte("h"), false)
 			} else if i == 1 {
-				data.Vecs[5].Append([]byte("account"), false)
-				data.Vecs[10].Append(uint64(0), false)
-				data.Vecs[11].Append(uint8(2), false)
-				data.Vecs[12].Append([]byte("h"), false)
+				containers.AppendValue(data.Vecs[5], []byte("account"), false)
+				containers.AppendValue(data.Vecs[10], uint64(0), false)
+				containers.AppendValue(data.Vecs[11], uint8(2), false)
+				containers.AppendValue(data.Vecs[12], []byte("h"), false)
 			} else if i == 2 {
-				data.Vecs[5].Append([]byte("database"), false)
-				data.Vecs[10].Append(uint64(database2.GetID()), false)
-				data.Vecs[11].Append(uint8(3), false)
-				data.Vecs[12].Append([]byte("h"), false)
+				containers.AppendValue(data.Vecs[5], []byte("database"), false)
+				containers.AppendValue(data.Vecs[10], uint64(database2.GetID()), false)
+				containers.AppendValue(data.Vecs[11], uint8(3), false)
+				containers.AppendValue(data.Vecs[12], []byte("h"), false)
 			} else {
-				data.Vecs[5].Append([]byte("table"), false)
-				data.Vecs[10].Append(uint64(rel3.ID()), false)
-				data.Vecs[11].Append(uint8(4), false)
-				data.Vecs[12].Append([]byte("h"), false)
+				containers.AppendValue(data.Vecs[5], []byte("table"), false)
+				containers.AppendValue(data.Vecs[10], uint64(rel3.ID()), false)
+				containers.AppendValue(data.Vecs[11], uint8(4), false)
+				containers.AppendValue(data.Vecs[12], []byte("h"), false)
 			}
-			data.Vecs[6].Append(uint64(0), false)
-			data.Vecs[7].Append([]byte("varchar"), false)
-			data.Vecs[8].Append([]byte("varchar"), false)
-			data.Vecs[9].Append([]byte("varchar"), false)
+			containers.AppendValue(data.Vecs[6], uint64(0), false)
+			containers.AppendValue(data.Vecs[7], []byte("varchar"), false)
+			containers.AppendValue(data.Vecs[8], []byte("varchar"), false)
+			containers.AppendValue(data.Vecs[9], []byte("varchar"), false)
 			txn1, _ := db.StartTxn(nil)
 			database, _ = txn1.GetDatabase(name)
 			rel, _ := database.GetRelationByID(id)
@@ -8399,20 +8404,20 @@ func TestIscpMeta(t *testing.T) {
 		data := containers.BuildBatch(attrs, vecTypes, opt)
 		defer data.Close()
 
-		data.Vecs[0].Append(accountID, false)                           // account_id
-		data.Vecs[1].Append(tableID, false)                             // table_id
-		data.Vecs[2].Append([]byte(jobName), false)                     // job_name
-		data.Vecs[3].Append(jobID, false)                               // job_id
-		data.Vecs[4].Append(jobSpecBytes, false)                        // job_spec
-		data.Vecs[5].Append(uint8(1), false)                            // job_state (active)
-		data.Vecs[6].Append([]byte(watermark), false)                   // watermark
-		data.Vecs[7].Append(jobStatusBytes, false)                      // job_status
-		data.Vecs[8].Append([]byte(tae.TxnMgr.Now().ToString()), false) // create_at
+		containers.AppendValue(data.Vecs[0], accountID, false)                           // account_id
+		containers.AppendValue(data.Vecs[1], tableID, false)                             // table_id
+		containers.AppendValue(data.Vecs[2], []byte(jobName), false)                     // job_name
+		containers.AppendValue(data.Vecs[3], jobID, false)                               // job_id
+		containers.AppendValue(data.Vecs[4], jobSpecBytes, false)                        // job_spec
+		containers.AppendValue(data.Vecs[5], uint8(1), false)                            // job_state (active)
+		containers.AppendValue(data.Vecs[6], []byte(watermark), false)                   // watermark
+		containers.AppendValue(data.Vecs[7], jobStatusBytes, false)                      // job_status
+		containers.AppendValue(data.Vecs[8], []byte(tae.TxnMgr.Now().ToString()), false) // create_at
 
 		if isDropped {
-			data.Vecs[9].Append([]byte(tae.TxnMgr.Now().ToString()), false) // drop_at (not null for dropped jobs)
+			containers.AppendValue(data.Vecs[9], []byte(tae.TxnMgr.Now().ToString()), false) // drop_at (not null for dropped jobs)
 		} else {
-			data.Vecs[9].Append(nil, true) // drop_at (null for active jobs)
+			containers.AppendValue(data.Vecs[9], nil, true) // drop_at (null for active jobs)
 		}
 
 		txn, _ := db.StartTxn(nil)
@@ -8624,7 +8629,7 @@ func TestMergeGC(t *testing.T) {
 	assert.NoError(t, err)
 	for i := 0; i < 10; i++ {
 		// Fixed #23368: bats is 99 bats each with length 1, so we need bats[i].Get(0)
-		filter := handle.NewEQFilter(bats[i].Vecs[2].Get(0))
+		filter := handle.NewEQFilter(containers.GetValue(bats[i].Vecs[2], 0))
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
 		assert.NoError(t, err)
 		_, _, err = rel.GetValue(id, offset, 2, false)
@@ -9984,9 +9989,9 @@ func TestCommitS3Blocks(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 50, len(blocks))
 		statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-		defer statsVec.Close()
+		defer containers.ReleaseVector(statsVec)
 		ss := writer.GetObjectStats()
-		statsVec.Append(ss[:], false)
+		containers.AppendValue(statsVec, ss[:], false)
 		statsVecs = append(statsVecs, statsVec)
 	}
 
@@ -10059,9 +10064,9 @@ func TestDedupSnapshot2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
 	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-	defer statsVec.Close()
+	defer containers.ReleaseVector(statsVec)
 	ss := writer.GetObjectStats()
-	statsVec.Append(ss[:], false)
+	containers.AppendValue(statsVec, ss[:], false)
 
 	nobjid = objectio.NewObjectid()
 	name2 := objectio.BuildObjectNameWithObjectID(&nobjid)
@@ -10074,9 +10079,9 @@ func TestDedupSnapshot2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
 	statsVec2 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-	defer statsVec2.Close()
+	defer containers.ReleaseVector(statsVec2)
 	ss = writer.GetObjectStats()
-	statsVec2.Append(ss[:], false)
+	containers.AppendValue(statsVec2, ss[:], false)
 
 	txn, rel := tae.GetRelation()
 	err = rel.AddDataFiles(context.Background(), statsVec)
@@ -10237,9 +10242,9 @@ func TestDeduplication(t *testing.T) {
 	assert.Equal(t, 1, len(blocks))
 
 	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-	defer statsVec.Close()
+	defer containers.ReleaseVector(statsVec)
 	ss := writer.GetObjectStats()
-	statsVec.Append(ss[:], false)
+	containers.AppendValue(statsVec, ss[:], false)
 
 	txn, rel := tae.GetRelation()
 	err = rel.AddDataFiles(context.Background(), statsVec)
@@ -10297,7 +10302,7 @@ func TestRW(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 
 	txn1, rel1 := tae.GetRelation()
-	v := bat.Vecs[2].Get(2)
+	v := containers.GetValue(bat.Vecs[2], 2)
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel1.GetByFilter(ctx, filter)
 	assert.NoError(t, err)
@@ -10309,7 +10314,7 @@ func TestRW(t *testing.T) {
 	cnt := 3
 	for i := 0; i < cnt; i++ {
 		txn2, rel2 := tae.GetRelation()
-		v = bat.Vecs[2].Get(i + 3)
+		v = containers.GetValue(bat.Vecs[2], i+3)
 		filter = handle.NewEQFilter(v)
 		id, row, err = rel2.GetByFilter(ctx, filter)
 		assert.NoError(t, err)
@@ -10388,7 +10393,7 @@ func TestApplyDeltalocation1(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 
 	// apply deleteloc fails on ablk
-	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	v1 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 1)
 	ok, err := tae.TryDeleteByDeltaloc([]any{v1})
 	assert.NoError(t, err)
 	assert.True(t, ok)
@@ -10401,14 +10406,14 @@ func TestApplyDeltalocation1(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	// apply deltaloc fails if there're persisted deletes
-	v2 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
+	v2 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 2)
 	ok, err = tae.TryDeleteByDeltaloc([]any{v2})
 	assert.NoError(t, err)
 	assert.True(t, ok)
 
 	// apply deltaloc fails if there're deletes in memory
 	tae.CompactBlocks(false)
-	v3 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+	v3 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 	filter = handle.NewEQFilter(v3)
 	txn, rel = tae.GetRelation()
 	id, offset, err := rel.GetByFilter(context.Background(), filter)
@@ -10417,7 +10422,7 @@ func TestApplyDeltalocation1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	v4 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(4)
+	v4 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 4)
 	ok, err = tae.TryDeleteByDeltaloc([]any{v4})
 	assert.NoError(t, err)
 	assert.True(t, ok)
@@ -10441,8 +10446,8 @@ func TestApplyDeltalocation2(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 	tae.CompactBlocks(false)
 
-	v3 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
-	v5 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(5)
+	v3 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
+	v5 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 5)
 	filter3 := handle.NewEQFilter(v3)
 	filter5 := handle.NewEQFilter(v5)
 
@@ -10503,12 +10508,12 @@ func TestApplyDeltalocation3(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 	tae.CompactBlocks(false)
 
-	v3 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+	v3 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 	filter3 := handle.NewEQFilter(v3)
 
 	// apply deltaloc failed if there're new deletes
 
-	v5 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(5)
+	v5 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 5)
 	filter5 := handle.NewEQFilter(v5)
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -10529,7 +10534,7 @@ func TestApplyDeltalocation3(t *testing.T) {
 	tae.CheckRowsByScan(8, true)
 
 	// delete v5
-	v4 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(4)
+	v4 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 4)
 	filter4 := handle.NewEQFilter(v4)
 	txn2, rel2 := tae.GetRelation()
 	err = rel2.DeleteByFilter(context.Background(), filter4)
@@ -10566,9 +10571,9 @@ func TestApplyDeltalocation4(t *testing.T) {
 
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	v5 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(5)
+	v5 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 5)
 	tae.TryDeleteByDeltalocWithTxn([]any{v5}, txn)
-	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	v1 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 1)
 	filter1 := handle.NewEQFilter(v1)
 	db, err := txn.GetDatabase("db")
 	assert.NoError(t, err)
@@ -10602,7 +10607,7 @@ func TestReplayPersistedDelete(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 	tae.CompactBlocks(false)
 
-	v3 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+	v3 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 	filter3 := handle.NewEQFilter(v3)
 	txn, rel := tae.GetRelation()
 	id, offset, err := rel.GetByFilter(context.Background(), filter3)
@@ -10859,7 +10864,7 @@ func TestCollectDeletesInRange1(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 
 	txn, rel := tae.GetRelation()
-	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	filter := handle.NewEQFilter(v)
 	err := rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
@@ -10867,7 +10872,7 @@ func TestCollectDeletesInRange1(t *testing.T) {
 	assert.NoError(t, err)
 
 	txn, rel = tae.GetRelation()
-	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	v = containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 1)
 	filter = handle.NewEQFilter(v)
 	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
@@ -10893,7 +10898,7 @@ func TestCollectDeletesInRangeWithActiveTombstoneDrop(t *testing.T) {
 	txn, rel := tae.GetRelation()
 	dataObj := testutil.GetOneObject(rel)
 	dataObjectID := *dataObj.GetID()
-	filter := handle.NewEQFilter(bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0))
+	filter := handle.NewEQFilter(containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0))
 	require.NoError(t, rel.DeleteByFilter(ctx, filter))
 	require.NoError(t, txn.Commit(ctx))
 
@@ -10938,7 +10943,7 @@ func TestCollectDeletesInRangeWithUninitializedTombstoneZoneMap(t *testing.T) {
 	deleteTxn, deleteRel := engine.GetRelation()
 	dataObject := testutil.GetOneObject(deleteRel)
 	dataObjectID := *dataObject.GetID()
-	filter := handle.NewEQFilter(rows.Vecs[schema.GetSingleSortKeyIdx()].Get(0))
+	filter := handle.NewEQFilter(containers.GetValue(rows.Vecs[schema.GetSingleSortKeyIdx()], 0))
 	require.NoError(t, deleteRel.DeleteByFilter(ctx, filter))
 	require.NoError(t, deleteTxn.Commit(ctx))
 	deleteTS := deleteTxn.GetCommitTS()
@@ -10974,14 +10979,14 @@ func TestCollectDeletesInRangeWithUninitializedTombstoneZoneMap(t *testing.T) {
 	require.Equal(
 		t,
 		types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjectID, 0, 0),
-		deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Get(0),
+		containers.GetValue(deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr), 0),
 	)
 	require.Equal(
 		t,
-		rows.Vecs[schema.GetPrimaryKey().Idx].Get(0),
-		deletes.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Get(0),
+		containers.GetValue(rows.Vecs[schema.GetPrimaryKey().Idx], 0),
+		containers.GetValue(deletes.GetVectorByName(objectio.TombstoneAttr_PK_Attr), 0),
 	)
-	require.Equal(t, deleteTS, deletes.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(0))
+	require.Equal(t, deleteTS, containers.GetValue(deletes.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr), 0))
 
 	// Preserve the range and target filters: unknown metadata must not make an
 	// unrelated object or an out-of-range delete visible.
@@ -11115,7 +11120,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*blk.GetID(), 0, uint32(i))
 		expectedRowIDs[i] = rowID
-		rowidVec.Append(rowID, false)
+		containers.AppendValue(rowidVec, rowID, false)
 	}
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
 	expectedPKs := make([]any, 4)
@@ -11123,14 +11128,14 @@ func TestCollectDeletesInRange2(t *testing.T) {
 		pk, _, err := rel.GetValue(blk.Fingerprint(), uint32(i), uint16(schema.GetPrimaryKey().Idx), true)
 		require.NoError(t, err)
 		expectedPKs[i] = pk
-		pkVec.Append(pk, false)
+		containers.AppendValue(pkVec, pk, false)
 	}
 	stats, err := testutil.MockCNDeleteInS3(
 		tae.Runtime.Fs, rowidVec, pkVec, schema, txn)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
-	pkVec.Close()
-	rowidVec.Close()
+	containers.ReleaseVector(pkVec)
+	containers.ReleaseVector(rowidVec)
 	assert.Equal(t, debugBaseline, common.DebugAllocator.CurrNB())
 
 	txn, rel = tae.GetRelation()
@@ -11159,9 +11164,9 @@ func TestCollectDeletesInRange2(t *testing.T) {
 		defer deletes.Close()
 		require.Equal(t, 4, deletes.Length())
 		for i := range expectedRowIDs {
-			require.Equal(t, expectedRowIDs[i], deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Get(i))
-			require.Equal(t, expectedPKs[i], deletes.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Get(i))
-			require.Equal(t, expectedCommitTS, deletes.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(i))
+			require.Equal(t, expectedRowIDs[i], containers.GetValue(deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr), i))
+			require.Equal(t, expectedPKs[i], containers.GetValue(deletes.GetVectorByName(objectio.TombstoneAttr_PK_Attr), i))
+			require.Equal(t, expectedCommitTS, containers.GetValue(deletes.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr), i))
 		}
 	}
 	validDeletes, err := tables.TombstoneRangeScanByObject(
@@ -11210,7 +11215,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = tae.GetRelation()
-	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(4)
+	v1 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 4)
 	filter := handle.NewEQFilter(v1)
 	err = rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
@@ -11491,7 +11496,7 @@ func TestDedupAndFlush(t *testing.T) {
 	{
 		// mock update
 		txn, rel := tae.GetRelation()
-		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+		v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 		filter := handle.NewEQFilter(v)
 		err := rel.DeleteByFilter(context.Background(), filter)
 		assert.NoError(t, err)
@@ -11527,7 +11532,7 @@ func TestTransferDeletes(t *testing.T) {
 	assert.NoError(t, err)
 
 	txn2, rel := tae.GetRelation()
-	filter := handle.NewEQFilter(bat.Vecs[0].Get(0))
+	filter := handle.NewEQFilter(containers.GetValue(bat.Vecs[0], 0))
 	assert.NoError(t, rel.UpdateByFilter(ctx, filter, 1, int32(3), false))
 	var wg sync.WaitGroup
 	txn.SetApplyCommitFn(func(at txnif.AsyncTxn) error {
@@ -11571,7 +11576,7 @@ func TestFreezeTransferIncludesMergeAtUpperBound(t *testing.T) {
 	// tombstone initially points at the source object.
 	updateTxn, updateRel := tae.GetRelation()
 	updateTxn.SetDedupType(txnif.DedupPolicy_CheckAll)
-	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	require.NoError(t, updateRel.UpdateByFilter(
 		ctx, handle.NewEQFilter(pk), 1, int32(42), false,
 	))
@@ -11609,7 +11614,7 @@ func TestFreezeConflictingUpdatesAfterMergeReturnWW(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 	tae.CompactBlocks(true)
 
-	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	stageUpdate := func(value int32) txnif.AsyncTxn {
 		txn, rel := tae.GetRelation()
 		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
@@ -11667,7 +11672,7 @@ func TestGetByFilterAfterMergeKeepsTheNewAppendBeforeMergeCommit(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 	tae.CompactBlocks(true)
 
-	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 
 	// Build the merge output before the update commits. The merge output still
 	// contains the old row; its PrepareCommit transfer phase will later see the
@@ -11732,7 +11737,7 @@ func TestFreezeMissedMergeTransferReturnsWW(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 	tae.CompactBlocks(true)
 
-	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	stageUpdate := func(value int32) txnif.AsyncTxn {
 		txn, rel := tae.GetRelation()
 		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
@@ -11799,7 +11804,7 @@ func TestCommitTransfersDeleteAcrossMergeAfterFreeze(t *testing.T) {
 
 	updateTxn, updateRel := tae.GetRelation()
 	updateTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
-	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	require.NoError(t, updateRel.UpdateByFilter(
 		ctx, handle.NewEQFilter(pk), 2, int32(42), false,
 	))
@@ -11855,7 +11860,7 @@ func TestMergePrepareCommitAppliesDeleteCreatedAfterFreeze(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, mergeTask.OnExec(ctx))
 
-	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	mergeTxn.SetFreezeFn(func(at txnif.AsyncTxn) error {
 		if err := at.GetStore().Freeze(ctx); err != nil {
 			return err
@@ -11893,18 +11898,18 @@ func TestPersistedDeleteTransfersWhenSourceDropsAfterTxnStart(t *testing.T) {
 
 	deleteTxn, deleteRel := tae.GetRelation()
 	deleteTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
-	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
 	require.NoError(t, err)
 	oldRowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
 		*id.ObjectID(), id.BlockID.Sequence(), offset,
 	)
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-	defer pkVec.Close()
-	pkVec.Append(pk, false)
+	defer containers.ReleaseVector(pkVec)
+	containers.AppendValue(pkVec, pk, false)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	defer rowIDVec.Close()
-	rowIDVec.Append(oldRowID, false)
+	defer containers.ReleaseVector(rowIDVec)
+	containers.AppendValue(rowIDVec, oldRowID, false)
 	stats, err := testutil.MockCNDeleteInS3(
 		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
 	)
@@ -11953,7 +11958,7 @@ func TestTPCCStockMultiRowUpdateAcrossMerge(t *testing.T) {
 	pkVec := bat.Vecs[schema.GetSingleSortKeyIdx()]
 	for i := 0; i < 15; i++ {
 		require.NoError(t, stockRel.UpdateByFilter(
-			ctx, handle.NewEQFilter(pkVec.Get(i)), 2, int32(1000+i), false,
+			ctx, handle.NewEQFilter(containers.GetValue(pkVec, i)), 2, int32(1000+i), false,
 		))
 	}
 
@@ -12013,7 +12018,7 @@ func TestTPCCStockOverlappingUpdatesAcrossMerge(t *testing.T) {
 		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 		for i := first; i < last; i++ {
 			require.NoError(t, rel.UpdateByFilter(
-				ctx, handle.NewEQFilter(pkVec.Get(i)), 2, valueBase+int32(i), false,
+				ctx, handle.NewEQFilter(containers.GetValue(pkVec, i)), 2, valueBase+int32(i), false,
 			))
 		}
 		return txn
@@ -12117,7 +12122,7 @@ func TestTPCCStockUpdateAfterConcurrentWinnerReturnsWW(t *testing.T) {
 		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 		for i := 0; i < 10; i++ {
 			require.NoError(t, rel.UpdateByFilter(
-				ctx, handle.NewEQFilter(pkVec.Get(i)), 2, valueBase+int32(i), false,
+				ctx, handle.NewEQFilter(containers.GetValue(pkVec, i)), 2, valueBase+int32(i), false,
 			))
 		}
 		return txn
@@ -12173,7 +12178,7 @@ func TestTPCCStockUpdateAcrossFlush(t *testing.T) {
 		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 		for i := 0; i < 15; i++ {
 			require.NoError(t, rel.UpdateByFilter(
-				ctx, handle.NewEQFilter(pkVec.Get(i)), 2, valueBase+int32(i), false,
+				ctx, handle.NewEQFilter(containers.GetValue(pkVec, i)), 2, valueBase+int32(i), false,
 			))
 		}
 		return txn
@@ -12209,7 +12214,7 @@ func TestFreezePersistedStaleRowIDAfterConcurrentUpdateReturnsWW(t *testing.T) {
 	// Start the victim first and retain the physical RowID visible at StartTS.
 	victimTxn, victimRel := tae.GetRelation()
 	victimTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
-	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	id, offset, err := victimRel.GetByFilter(ctx, handle.NewEQFilter(pk))
 	require.NoError(t, err)
 	oldRowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
@@ -12229,11 +12234,11 @@ func TestFreezePersistedStaleRowIDAfterConcurrentUpdateReturnsWW(t *testing.T) {
 	tae.CompactBlocks(true)
 
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-	defer pkVec.Close()
-	pkVec.Append(pk, false)
+	defer containers.ReleaseVector(pkVec)
+	containers.AppendValue(pkVec, pk, false)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	defer rowIDVec.Close()
-	rowIDVec.Append(oldRowID, false)
+	defer containers.ReleaseVector(rowIDVec)
+	containers.AppendValue(rowIDVec, oldRowID, false)
 	stats, err := testutil.MockCNDeleteInS3(
 		tae.Runtime.Fs, rowIDVec, pkVec, schema, victimTxn,
 	)
@@ -12382,7 +12387,7 @@ func testConcurrentUpdateByPreviousRowIDWithFlushMerge(
 		go func() {
 			defer workersWG.Done()
 			key := worker % keyCount
-			pk := keyBatches[key].Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+			pk := containers.GetValue(keyBatches[key].Vecs[schema.GetSingleSortKeyIdx()], 0)
 			for update := 0; update < updatesPerWorker; update++ {
 				committed := false
 				for attempt := 0; attempt < maxAttemptsPerTxn; attempt++ {
@@ -12516,8 +12521,8 @@ func TestTransferDeleteVectorRealloc(t *testing.T) {
 	// With the bug, object-B's transfer is skipped (poison read), so
 	// checkAll finds object-B still in readSet → r-w conflict.
 	txnDel, rel := tae.GetRelation()
-	assert.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(bats[0].Vecs[0].Get(0))))
-	assert.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(bats[1].Vecs[0].Get(0))))
+	assert.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(containers.GetValue(bats[0].Vecs[0], 0))))
+	assert.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(containers.GetValue(bats[1].Vecs[0], 0))))
 
 	// Merge both non-appendable objects → old objects become soft-deleted,
 	// transfer pages are created in Runtime.TransferDelsMap.
@@ -12806,7 +12811,7 @@ func TestTryDeleteByDeltaloc1(t *testing.T) {
 
 	// apply deleteloc fails on ablk
 	txn, _ := tae.StartTxn(nil)
-	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	v1 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 1)
 	ok, err := tae.TryDeleteByDeltalocWithTxn([]any{v1}, txn)
 	assert.NoError(t, err)
 	assert.True(t, ok)
@@ -12839,21 +12844,21 @@ func TestTryDeleteByDeltaloc2(t *testing.T) {
 
 	// apply deleteloc fails on ablk
 	txn, rel := tae.GetRelation()
-	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	v1 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 1)
 	filter := handle.NewEQFilter(v1)
 	id, offset, err := rel.GetByFilter(ctx, filter)
 	assert.NoError(t, err)
 	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*id.ObjectID(), id.BlockID.Sequence(), offset)
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-	pkVec.Append(v1, false)
+	containers.AppendValue(pkVec, v1, false)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	rowIDVec.Append(rowID, false)
+	containers.AppendValue(rowIDVec, rowID, false)
 	stats, err := testutil.MockCNDeleteInS3(
 		tae.Runtime.Fs, rowIDVec, pkVec, schema, txn)
 	assert.NoError(t, err)
 	require.False(t, stats.IsZero())
-	pkVec.Close()
-	rowIDVec.Close()
+	containers.ReleaseVector(pkVec)
+	containers.ReleaseVector(rowIDVec)
 	assert.Equal(t, debugBaseline, common.DebugAllocator.CurrNB())
 
 	tae.MergeBlocks(true)
@@ -12947,21 +12952,21 @@ func TestMergeBlocksWithConcurrentTombstoneMergeCommit(t *testing.T) {
 
 	deleteTxn, deleteRel := tae.GetRelation()
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-	defer pkVec.Close()
+	defer containers.ReleaseVector(pkVec)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	defer rowIDVec.Close()
+	defer containers.ReleaseVector(rowIDVec)
 	var dataID *common.ID
 	for i := 0; i < bat.Length(); i++ {
-		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], i)
 		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
 		require.NoError(t, err)
 		if dataID == nil {
 			dataID = id
 		}
-		rowIDVec.Append(types.NewRowIDWithObjectIDBlkNumAndRowID(
+		containers.AppendValue(rowIDVec, types.NewRowIDWithObjectIDBlkNumAndRowID(
 			*id.ObjectID(), id.BlockID.Sequence(), offset,
 		), false)
-		pkVec.Append(pk, false)
+		containers.AppendValue(pkVec, pk, false)
 	}
 	stats, err := testutil.MockCNDeleteInS3(
 		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
@@ -13073,21 +13078,21 @@ func TestMergeBlocksWithTombstoneMergeCommittedInsideTransferRange(t *testing.T)
 
 	deleteTxn, deleteRel := tae.GetRelation()
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-	defer pkVec.Close()
+	defer containers.ReleaseVector(pkVec)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	defer rowIDVec.Close()
+	defer containers.ReleaseVector(rowIDVec)
 	var dataID *common.ID
 	for i := 0; i < bat.Length(); i++ {
-		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], i)
 		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
 		require.NoError(t, err)
 		if dataID == nil {
 			dataID = id
 		}
-		rowIDVec.Append(types.NewRowIDWithObjectIDBlkNumAndRowID(
+		containers.AppendValue(rowIDVec, types.NewRowIDWithObjectIDBlkNumAndRowID(
 			*id.ObjectID(), id.BlockID.Sequence(), offset,
 		), false)
-		pkVec.Append(pk, false)
+		containers.AppendValue(pkVec, pk, false)
 	}
 	stats, err := testutil.MockCNDeleteInS3(
 		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
@@ -13147,21 +13152,21 @@ func TestMergeBlocksWithTombstoneMergeAfterCNDeleteRollback(t *testing.T) {
 
 	deleteTxn, deleteRel := tae.GetRelation()
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-	defer pkVec.Close()
+	defer containers.ReleaseVector(pkVec)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	defer rowIDVec.Close()
+	defer containers.ReleaseVector(rowIDVec)
 	var dataID *common.ID
 	for i := 0; i < bat.Length(); i++ {
-		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], i)
 		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
 		require.NoError(t, err)
 		if dataID == nil {
 			dataID = id
 		}
-		rowIDVec.Append(types.NewRowIDWithObjectIDBlkNumAndRowID(
+		containers.AppendValue(rowIDVec, types.NewRowIDWithObjectIDBlkNumAndRowID(
 			*id.ObjectID(), id.BlockID.Sequence(), offset,
 		), false)
-		pkVec.Append(pk, false)
+		containers.AppendValue(pkVec, pk, false)
 	}
 	stats, err := testutil.MockCNDeleteInS3(
 		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
@@ -13226,21 +13231,21 @@ func TestMergeBlocksWithCNRewrittenTombstoneInsideTransferRange(t *testing.T) {
 
 	deleteTxn, deleteRel := tae.GetRelation()
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-	defer pkVec.Close()
+	defer containers.ReleaseVector(pkVec)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	defer rowIDVec.Close()
+	defer containers.ReleaseVector(rowIDVec)
 	var dataID *common.ID
 	for i := 0; i < bat.Length(); i++ {
-		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], i)
 		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
 		require.NoError(t, err)
 		if dataID == nil {
 			dataID = id
 		}
-		rowIDVec.Append(types.NewRowIDWithObjectIDBlkNumAndRowID(
+		containers.AppendValue(rowIDVec, types.NewRowIDWithObjectIDBlkNumAndRowID(
 			*id.ObjectID(), id.BlockID.Sequence(), offset,
 		), false)
-		pkVec.Append(pk, false)
+		containers.AppendValue(pkVec, pk, false)
 	}
 	sourceStats, err := testutil.MockCNDeleteInS3(
 		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
@@ -13346,16 +13351,16 @@ func TestMergeBlocksWithCNRewriteAcrossTransferPhases(t *testing.T) {
 
 	deleteTxn, deleteRel := tae.GetRelation()
 	sourcePKVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-	defer sourcePKVec.Close()
+	defer containers.ReleaseVector(sourcePKVec)
 	sourceRowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	defer sourceRowIDVec.Close()
+	defer containers.ReleaseVector(sourceRowIDVec)
 	replacementPKVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-	defer replacementPKVec.Close()
+	defer containers.ReleaseVector(replacementPKVec)
 	replacementRowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	defer replacementRowIDVec.Close()
+	defer containers.ReleaseVector(replacementRowIDVec)
 	var dataID *common.ID
 	for i := 0; i < bat.Length(); i++ {
-		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], i)
 		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
 		require.NoError(t, err)
 		if dataID == nil {
@@ -13364,11 +13369,11 @@ func TestMergeBlocksWithCNRewriteAcrossTransferPhases(t *testing.T) {
 		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
 			*id.ObjectID(), id.BlockID.Sequence(), offset,
 		)
-		replacementRowIDVec.Append(rowID, false)
-		replacementPKVec.Append(pk, false)
+		containers.AppendValue(replacementRowIDVec, rowID, false)
+		containers.AppendValue(replacementPKVec, pk, false)
 		if i < bat.Length()/2 {
-			sourceRowIDVec.Append(rowID, false)
-			sourcePKVec.Append(pk, false)
+			containers.AppendValue(sourceRowIDVec, rowID, false)
+			containers.AppendValue(sourcePKVec, pk, false)
 		}
 	}
 	sourceStats, err := testutil.MockCNDeleteInS3(
@@ -13543,7 +13548,7 @@ func TestDeleteWithObjectStats(t *testing.T) {
 	assert.NoError(t, err)
 	vals := make([]any, 0)
 	for i := 0; i < 20; i += 2 {
-		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], i)
 		vals = append(vals, v)
 	}
 	ok, err := tae.TryDeleteByDeltalocWithTxn(vals, txn)
@@ -13623,7 +13628,7 @@ func TestTransferS3Deletes(t *testing.T) {
 
 	// apply deleteloc fails on ablk
 	txn, _ := tae.StartTxn(nil)
-	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	v1 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 1)
 	ok, err := tae.TryDeleteByDeltalocWithTxn([]any{v1}, txn)
 	{
 		tae.CompactBlocks(true)
@@ -13655,9 +13660,9 @@ func TestDeleteByPhyAddrKeys(t *testing.T) {
 	obj := testutil.GetOneBlockMeta(rel)
 	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*obj.ID(), 0, 0)
 	rowidVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	rowidVec.Append(rowID, false)
-	defer rowidVec.Close()
-	err := rel.DeleteByPhyAddrKeys(rowidVec, bat.Vecs[0].CloneWindow(0, 1), handle.DT_Normal)
+	containers.AppendValue(rowidVec, rowID, false)
+	defer containers.ReleaseVector(rowidVec)
+	err := rel.DeleteByPhyAddrKeys(rowidVec, containers.CloneWindow(bat.Vecs[0], 0, 1, bat.Vecs[0].MPool() /* REVIEW: CloneWindow pool */), handle.DT_Normal)
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit(ctx))
 }
@@ -13999,7 +14004,7 @@ func TestDeleteAndMerge2(t *testing.T) {
 	var appendTxn txnif.AsyncTxn
 	{
 		deleteTxn, deleteRel := tae.GetRelation()
-		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+		v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 		filter := handle.NewEQFilter(v)
 		err := deleteRel.DeleteByFilter(context.Background(), filter)
 		assert.NoError(t, err)
@@ -14032,7 +14037,7 @@ func TestTransferInMerge2(t *testing.T) {
 	tae.CompactBlocks(true)
 
 	txn, _ := tae.GetRelation()
-	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	v1 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 1)
 	ok, err := tae.TryDeleteByDeltalocWithTxn([]any{v1}, txn)
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -14140,7 +14145,7 @@ func TestS3TransferInMerge(t *testing.T) {
 	var wg sync.WaitGroup
 	{
 		deleteTxn, _ := tae.StartTxn(nil)
-		v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+		v1 := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 1)
 		ok, err := tae.TryDeleteByDeltalocWithTxn([]any{v1}, deleteTxn)
 		assert.True(t, ok)
 		assert.NoError(t, err)
@@ -14189,7 +14194,7 @@ func TestDedup5(t *testing.T) {
 
 	txn, rel := tae.GetRelation()
 	insertTxn, _ := tae.StartTxn(nil)
-	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	filter := handle.NewEQFilter(v)
 	err := rel.DeleteByFilter(context.Background(), filter)
 	assert.NoError(t, err)
@@ -14512,13 +14517,13 @@ func TestRW3(t *testing.T) {
 
 	txn, rel = tae.GetRelation()
 	pkVec := containers.MakeVector(types.T_uint64.ToType(), common.DefaultAllocator)
-	defer pkVec.Close()
+	defer containers.ReleaseVector(pkVec)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	defer rowIDVec.Close()
+	defer containers.ReleaseVector(rowIDVec)
 	for i, obj := range objs {
 		rowID := objectio.NewRowIDWithObjectIDBlkNumAndRowID(*obj.ID(), 0, 0)
-		rowIDVec.Append(rowID, false)
-		pkVec.Append(uint64(i), false)
+		containers.AppendValue(rowIDVec, rowID, false)
+		containers.AppendValue(pkVec, uint64(i), false)
 	}
 	err = rel.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
 	assert.NoError(t, err)
@@ -14566,7 +14571,7 @@ func TestFlushCommitAndSchedRace(t *testing.T) {
 	{
 		// prepare a tomebstone
 		txn, rel := tae.GetRelation()
-		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+		v := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 		filter := handle.NewEQFilter(v)
 		err := rel.DeleteByFilter(context.Background(), filter)
 		require.NoError(t, err)
@@ -15099,7 +15104,7 @@ func Test_RWDB3(t *testing.T) {
 	schema.Extra.BlockMaxRows = 5
 	schema.Extra.ObjectMaxBlocks = 256
 	bat := catalog.MockBatch(schema, 5)
-	pkv := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	pkv := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	filter := handle.NewEQFilter(pkv)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -15153,8 +15158,8 @@ func Test_RWDB3(t *testing.T) {
 						return err
 					}
 					defer view.Close()
-					pks := vector.MustFixedColNoTypeCheck[int32](view.Vecs[0].GetDownstreamVector())
-					vals := vector.MustFixedColNoTypeCheck[int64](view.Vecs[1].GetDownstreamVector())
+					pks := vector.MustFixedColNoTypeCheck[int32](view.Vecs[0])
+					vals := vector.MustFixedColNoTypeCheck[int64](view.Vecs[1])
 					for i, pk := range pks {
 						if pk == pkv && !view.Deletes.Contains(uint64(i)) {
 							if found {
@@ -15206,7 +15211,7 @@ func Test_RWDB4(t *testing.T) {
 	schema.Extra.BlockMaxRows = 5
 	schema.Extra.ObjectMaxBlocks = 256
 	bat := catalog.MockBatch(schema, 5)
-	pkv := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	pkv := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	filter := handle.NewEQFilter(pkv)
 
 	wTae.BindSchema(schema)
@@ -15265,8 +15270,8 @@ func Test_RWDB4(t *testing.T) {
 						return err
 					}
 					defer view.Close()
-					pks := vector.MustFixedColNoTypeCheck[int32](view.Vecs[0].GetDownstreamVector())
-					vals := vector.MustFixedColNoTypeCheck[int64](view.Vecs[1].GetDownstreamVector())
+					pks := vector.MustFixedColNoTypeCheck[int32](view.Vecs[0])
+					vals := vector.MustFixedColNoTypeCheck[int64](view.Vecs[1])
 					for i, pk := range pks {
 						if pk == pkv && !view.Deletes.Contains(uint64(i)) {
 							if found {
@@ -16012,7 +16017,7 @@ func TestGetByFilterAfterMergeKeepsTheNewAppend(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 	tae.CompactBlocks(true)
 
-	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	pk := containers.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 
 	// Build the merge output before the update commits. The merge output still
 	// contains the old row; its PrepareCommit transfer phase will later see the
@@ -16088,7 +16093,7 @@ func TestFlushLegacyAnyReturnsErrorAndWorkerContinues(t *testing.T) {
 	require.Len(t, metas, 1)
 	legacy := containers.NewBatch()
 	allocated := containers.MakeVector(types.T_int64.ToType(), ownedMP)
-	allocated.Append(int64(7), false)
+	containers.AppendValue(allocated, int64(7), false)
 	legacy.AddVector("supported", allocated)
 	legacy.AddVector("unresolved", containers.NewConstNullVector(types.T_any.ToType(), 1, ownedMP))
 	transferred := false
@@ -16117,10 +16122,10 @@ func TestFlushLegacyAnyReturnsErrorAndWorkerContinues(t *testing.T) {
 	require.NoError(t, valid.WaitDone(ctx), "same worker remains able to flush supported data")
 	require.NoError(t, txn.Commit(ctx))
 	txn, rel = testutil.GetDefaultRelation(t, tae.DB, schema.Name)
-	value, isNull, err := rel.GetValueByFilter(ctx, handle.NewEQFilter(bat.Vecs[2].Get(0)), 2)
+	value, isNull, err := rel.GetValueByFilter(ctx, handle.NewEQFilter(containers.GetValue(bat.Vecs[2], 0)), 2)
 	require.NoError(t, err)
 	require.False(t, isNull)
-	require.Equal(t, bat.Vecs[2].Get(0), value)
+	require.Equal(t, containers.GetValue(bat.Vecs[2], 0), value)
 	database, err := txn.GetDatabase("db")
 	require.NoError(t, err)
 	_, err = database.DropRelationByName(schema.Name)
@@ -16158,7 +16163,7 @@ func transferChainFixture(t *testing.T, expiry transferExpiry) (*testutil.TestEn
 	t.Cleanup(b.Close)
 	e.CreateRelAndAppend(b, true)
 	e.CompactBlocks(true)
-	f := handle.NewEQFilter(b.Vecs[0].Get(0))
+	f := handle.NewEQFilter(containers.GetValue(b.Vecs[0], 0))
 	w, r := e.GetRelation()
 	require.NoError(t, r.DeleteByFilter(ctx, f))
 	mem, disk := model.GetTTL(), model.GetDiskTTL()

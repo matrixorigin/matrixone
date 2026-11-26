@@ -238,7 +238,7 @@ func convertObjectToBatch(
 		if !ownershipTransferred {
 			for _, vec := range vecs {
 				if vec != nil {
-					vec.Close()
+					containers.ReleaseVector(vec)
 				}
 			}
 		}
@@ -259,7 +259,7 @@ func convertObjectToBatch(
 				if !ok {
 					if seqnum == objectio.SEQNUM_ABORT {
 						for range int(blkMeta.GetRows()) {
-							vecs[i].Append(false, false)
+							containers.AppendValue(vecs[i], false, false)
 						}
 						continue
 					}
@@ -272,7 +272,7 @@ func convertObjectToBatch(
 					// Generate null values for missing columns
 					length := int(blkMeta.GetRows())
 					for j := 0; j < length; j++ {
-						vecs[i].Append(nil, true)
+						containers.AppendValue(vecs[i], nil, true)
 					}
 					continue
 				}
@@ -300,7 +300,7 @@ func convertObjectToBatch(
 			vec := obj.(*vector.Vector)
 
 			// Extend result vector with this block's data
-			if err := vecs[i].ExtendVec(vec); err != nil {
+			if err := containers.ExtendVec(vecs[i], vec); err != nil {
 				return nil, moerr.NewInternalErrorf(ctx, "failed to extend vector: %v", err)
 			}
 		}
@@ -348,14 +348,14 @@ func filterBatchBySnapshotTS(
 	}
 
 	// Get commit TS values
-	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
+	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
 	var aborts []bool
 	if abortPos, ok := bat.Nameidx[objectio.TombstoneAttr_Abort_Attr]; ok {
 		abortVec := bat.Vecs[abortPos]
 		if abortVec.GetType().Oid != types.T_bool {
 			return nil, nil, moerr.NewInternalErrorf(ctx, "abort column has invalid type")
 		}
-		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec.GetDownstreamVector())
+		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
 		if len(aborts) != len(commitTSs) {
 			return nil, nil, moerr.NewInternalErrorf(
 				ctx,
@@ -385,7 +385,7 @@ func filterBatchBySnapshotTS(
 
 	// Compact all vectors to remove deleted rows
 	for _, vec := range bat.Vecs {
-		vec.Compact(deletes)
+		containers.Compact(vec, deletes)
 	}
 
 	return bat, originalRowOffsets, nil

@@ -286,12 +286,12 @@ func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNod
 		entry.EntryMVCCNode.AppendTupleWithCommitTS(batch, committs) // createAt and deleteAt for push
 	}
 	// two padding columns
-	batch.GetVectorByName(catalog.PhyAddrColumnName).Append(rowid, false)
-	batch.GetVectorByName(objectio.DefaultCommitTS_Attr).Append(committs, false)
+	containers.AppendValue(batch.GetVectorByName(catalog.PhyAddrColumnName), rowid, false)
+	containers.AppendValue(batch.GetVectorByName(objectio.DefaultCommitTS_Attr), committs, false)
 
-	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
-	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
-	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(entry.ObjectMVCCNode.ObjectStats[:], false)
+	containers.AppendValue(batch.GetVectorByName(SnapshotAttr_DBID), entry.GetTable().GetDB().ID, false)
+	containers.AppendValue(batch.GetVectorByName(SnapshotAttr_TID), entry.GetTable().ID, false)
+	containers.AppendValue(batch.GetVectorByName(ObjectAttr_ObjectStats), entry.ObjectMVCCNode.ObjectStats[:], false)
 	txnMVCCNode.AppendTupleWithCommitTS(batch, committs) // start prepare and commit ts
 }
 
