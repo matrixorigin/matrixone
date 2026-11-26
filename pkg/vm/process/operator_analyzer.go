@@ -715,6 +715,7 @@ type OperatorStats struct {
 	DiskIO          int64                         `json:"DiskIO,omitempty"`
 	ResourceQuality resource.QualityFlags         `json:"-"`
 	ResourceWaitNS  [resource.WaitKindCount]int64 `json:"-"`
+	startupResource *resource.Delta               // immutable canonical-only interval
 
 	InputBlocks  int64 `json:"InputBlocks,omitempty"`
 	ScanBytes    int64 `json:"-"`
@@ -850,7 +851,17 @@ func (ps *OperatorStats) ResourceDelta() resource.Delta {
 	add(ps.S3List, &delta.Usage.S3Requests[resource.S3List])
 	add(ps.S3Delete, &delta.Usage.S3Requests[resource.S3Delete])
 	add(ps.S3DeleteMul, &delta.Usage.S3Requests[resource.S3DeleteMulti])
+	if startup := ps.startupResource; startup != nil {
+		delta.Quality |= startup.Quality | resource.MergeUsage(&delta.Usage, startup.Usage)
+	}
 	return delta
+}
+
+// SetStartupResource records work that the legacy preparation phase already
+// covers. The canonical execution tally owns this interval independently of
+// the operator's Call count, active time, and wait fields.
+func (ps *OperatorStats) SetStartupResource(delta resource.Delta) {
+	ps.startupResource = &delta
 }
 
 func NewOperatorStats(operatorName string) *OperatorStats {

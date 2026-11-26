@@ -61,10 +61,14 @@ func (tableScan *TableScan) MeasureReaderStartup(
 ) error {
 	tableScan.resetAnalyzer()
 	tableScan.ctr.readerStartupMeasured = true
-	analyzer := tableScan.OpAnalyzer
-	analyzer.Start()
-	defer analyzer.Stop()
-	return read(perfcounter.WithCounterSet(ctx, analyzer.GetOpCounterSet()), analyzer)
+	owner := tableScan.OpAnalyzer.GetOpStats()
+	startup := process.NewTempAnalyzer()
+	startup.Start()
+	defer func() {
+		startup.Stop()
+		owner.SetStartupResource(startup.GetOpStats().ResourceDelta())
+	}()
+	return read(perfcounter.WithCounterSet(ctx, startup.GetOpCounterSet()), startup)
 }
 
 func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
