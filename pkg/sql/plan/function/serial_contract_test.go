@@ -34,6 +34,9 @@ func TestSerialEncodedTypeSizeBound(t *testing.T) {
 		want      uint64
 		supported bool
 	}{
+		{name: "vecf4", typ: types.New(types.T_array_float4, 33, 0), want: uint64(2*types.BlockScaledCellSize(types.BlockScaledNVFP4, 33) + 3), supported: true},
+		{name: "vecf8", typ: types.New(types.T_array_float8, 33, 0), want: uint64(2*types.BlockScaledCellSize(types.BlockScaledMXFP8, 33) + 3), supported: true},
+		{name: "geometry32", typ: types.T_geometry32.ToType(), want: 2*types.MaxBlobLen + 3, supported: true},
 		{name: "bool", typ: types.T_bool.ToType(), want: 1, supported: true},
 		{name: "int8", typ: types.T_int8.ToType(), want: 3, supported: true},
 		{name: "uint8", typ: types.T_uint8.ToType(), want: 3, supported: true},

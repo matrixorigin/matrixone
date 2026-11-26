@@ -108,7 +108,10 @@ func serialTypePayloadSizeBound(typ types.Type) (uint64, bool) {
 			dimension = types.MaxArrayDimension
 		}
 		return uint64(dimension) * uint64(typ.GetArrayElementSize()), true
-	case types.T_json, types.T_blob, types.T_text, types.T_geometry, types.T_datalink:
+	case types.T_array_float8, types.T_array_float4:
+		format, _ := typ.Oid.BlockScaledFormat()
+		return uint64(types.BlockScaledCellSize(format, int(declaredOr(types.MaxArrayDimension)))), true
+	case types.T_json, types.T_blob, types.T_text, types.T_geometry, types.T_geometry32, types.T_datalink:
 		bound := int64(types.MaxBlobLen)
 		if declared > bound {
 			bound = declared
@@ -151,10 +154,11 @@ func SerialTypeSupported(oid types.T) bool {
 		types.T_uuid,
 		types.T_json, types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_geometry,
+		types.T_geometry, types.T_geometry32,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
 		types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		return true
 	default:
@@ -180,10 +184,11 @@ func SerialEncodedValueSizeBound(
 	switch v.GetType().Oid {
 	case types.T_json, types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_geometry,
+		types.T_geometry, types.T_geometry32,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
 		types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		value := v.GetBytesAt(idx)
 		// string-type code + bytes code + terminator; every embedded zero

@@ -17,10 +17,10 @@ package frontend
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -284,54 +285,111 @@ func lookupDataBranchForkKeys(
 	if keys != raw {
 		defer keys.Free(ses.proc.Mp())
 	}
+	cache, _ := ctx.Value(forkImageCacheKey{}).(*forkImageCache)
+	if cache == nil {
+		cache = &forkImageCache{allocator: newBranchHashmapAllocator(dataBranchHashmapLimitRate)}
+		defer cache.close()
+	}
+	image, err := cache.load(ctx, ses, bh, tableID)
+	if err != nil {
+		return nil, false, false, err
+	}
+	view, err := keys.WindowByLogicalRows(0, keys.Length())
+	if err != nil {
+		return nil, false, false, err
+	}
+	view.SetType(types.T_varbinary.ToType())
+	matches, err := image.keys.GetByVectors([]*vector.Vector{view})
+	if err != nil {
+		return nil, false, false, err
+	}
+	for i, match := range matches {
+		if match.Exists {
+			found = append(found, int64(i))
+		}
+	}
+	return found, image.recorded, image.full, nil
+}
+
+type forkImageCacheKey struct{}
+
+type forkImage struct {
+	keys           databranchutils.BranchHashmap
+	recorded, full bool
+}
+
+// Each PICK reads a child image once. Its index shares the diff allocator
+// and spills through the ordinary branch hashmap when that budget is full.
+type forkImageCache struct {
+	mu        sync.Mutex
+	allocator *branchHashmapAllocator
+	images    map[uint64]*forkImage
+}
+
+func (c *forkImageCache) close() {
+	for _, image := range c.images {
+		image.keys.Close()
+	}
+}
+
+func (c *forkImageCache) load(ctx context.Context, ses *Session, bh BackgroundExec, tableID uint64) (*forkImage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if image := c.images[tableID]; image != nil {
+		return image, nil
+	}
+	keys, err := databranchutils.NewBranchHashmap(databranchutils.WithBranchHashmapAllocator(c.allocator))
+	if err != nil {
+		return nil, err
+	}
+	image := &forkImage{keys: keys}
 	ctx = context.WithValue(defines.AttachAccountId(ctx, catalog.System_Account), defines.BranchForkKeyAccess{}, true)
-	ledger := catalog.MO_CATALOG + "." + catalog.MO_BRANCH_FORK_KEYS
-	prefix := fmt.Sprintf("select key_bytes from %s where table_id=%d and (key_bytes in (x'',x'fe') or key_bytes in (", ledger, tableID)
-	for lo := 0; lo < keys.Length(); {
-		hi := lo
-		var query strings.Builder
-		query.WriteString(prefix)
-		for hi < keys.Length() {
-			key := keys.GetBytesAt(hi)
-			if hi > lo && (hi-lo >= dataBranchMetadataIDBatchSize || query.Len()+2*len(key)+4 > maxSqlBatchSize) {
-				break
-			}
-			if hi != lo {
-				query.WriteByte(',')
-			}
-			query.WriteString("x'")
-			query.WriteString(hex.EncodeToString(key))
-			query.WriteByte('\'')
-			hi++
-		}
-		query.WriteString("))")
-		result, err := runSql(ctx, ses, bh, query.String(), nil, nil)
+	// Seek by the (table_id, entry_id) primary key to bound SQL result memory.
+	const pageSize = 2048
+	var after string
+	for {
+		query := fmt.Sprintf("select key_bytes,entry_id from %s.%s where table_id=%d and key_bytes is not null%s order by entry_id limit %d",
+			catalog.MO_CATALOG, catalog.MO_BRANCH_FORK_KEYS, tableID, after, pageSize)
+		result, err := runSql(ctx, ses, bh, query, nil, nil)
 		if err != nil {
-			return nil, false, false, err
+			keys.Close()
+			return nil, err
 		}
-		present := make(map[string]struct{}, hi-lo)
+		var count int
+		var last types.Uuid
 		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-			for i := 0; i < rows; i++ {
-				switch key := string(cols[0].GetBytesAt(i)); key {
-				case "\xfe":
-					recorded, fullImage = true, true
+			if rows == 0 {
+				return true
+			}
+			for i := range rows {
+				switch string(cols[0].GetBytesAt(i)) {
 				case "":
-					recorded = true
-				default:
-					present[key] = struct{}{}
+					image.recorded = true
+				case "\xfe":
+					image.recorded, image.full = true, true
 				}
 			}
-			return true
+			count += rows
+			last = vector.GetFixedAtNoTypeCheck[types.Uuid](cols[1], rows-1)
+			cols[0].SetType(types.T_varbinary.ToType())
+			err = keys.PutByVectors(cols[:1], []int{0})
+			return err == nil
 		})
 		result.Close()
-		for i := lo; i < hi; i++ {
-			if _, ok := present[string(keys.GetBytesAt(i))]; ok {
-				found = append(found, int64(i))
-			}
+		if err != nil {
+			keys.Close()
+			return nil, err
 		}
-		lo = hi
+		if count < pageSize {
+			break
+		}
+		after = fmt.Sprintf(" and entry_id > cast('%s' as uuid)", last.String())
 	}
-	return found, recorded, fullImage, nil
+	if c.images == nil {
+		c.images = make(map[uint64]*forkImage)
+	}
+	c.images[tableID] = image
+	return image, nil
 }
 
 // pickForkHistory is scoped to a protected PICK. For missing destination

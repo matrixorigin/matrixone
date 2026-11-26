@@ -1059,6 +1059,12 @@ func diffMergeAgency(
 		}
 	}
 
+	if pickStmt != nil {
+		cache := &forkImageCache{allocator: tblStuff.hashmapAllocator}
+		ctx = context.WithValue(ctx, forkImageCacheKey{}, cache)
+		defer cache.close()
+	}
+
 	if err = prepareDataBranchWorker(diffStmt, pickStmt, &tblStuff); err != nil {
 		return
 	}

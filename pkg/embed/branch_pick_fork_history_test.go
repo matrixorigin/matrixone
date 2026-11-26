@@ -213,9 +213,9 @@ func TestBoundedPickForkCapture(t *testing.T) {
 		exec("create database bounded_fork_capture")
 		defer exec("drop database bounded_fork_capture")
 		exec("use bounded_fork_capture")
-		exec("create table root(k int primary key,v int,n bf16,f float16,g float8,h float4)")
+		exec("create table root(k int primary key,v int,n bf16,f float16,g float8,h float4,a vecf4(4),b vecf8(4),shape geometry32)")
 		exec("begin")
-		exec("insert into root values (2,20,1.5,null,1,1)")
+		exec("insert into root values (2,20,1.5,null,1,1,'[1,2,3,4]','[4,3,2,1]',cast(st_geomfromtext('POINT(1 2)') as geometry32))")
 		exec("data branch create table src from root")
 		for _, dst := range []string{"dst_fail", "dst_skip"} {
 			exec("data branch create table " + dst + " from root")
@@ -245,5 +245,43 @@ func TestBoundedPickForkCapture(t *testing.T) {
 		defer result.Close()
 		require.Len(t, result.Batches, 1)
 		require.EqualValues(t, 1, executor.GetFixedRows[int64](result.Batches[0].Vecs[0])[0])
+	})
+}
+
+func TestBoundedPickPagedForkImage(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db := recoverySQLClient(t, cn)
+		defer db.Close()
+		conn, err := db.Conn(t.Context())
+		require.NoError(t, err)
+		defer conn.Close()
+		exec := func(statement string) {
+			t.Helper()
+			_, err := conn.ExecContext(t.Context(), statement)
+			require.NoError(t, err, statement)
+		}
+		exec("create database pick_paged")
+		defer exec("drop database pick_paged")
+		exec("use pick_paged")
+		exec("create table root(k int primary key, v int)")
+		exec("begin")
+		exec("insert into root select result,result from generate_series(1,8000) g")
+		exec("data branch create table src from root")
+		exec("data branch create table dst from root")
+		exec("commit")
+		exec("create snapshot paged_lo for table pick_paged src")
+		defer exec("drop snapshot paged_lo")
+		exec("update src set v=k+1")
+		exec("create snapshot paged_hi for table pick_paged src")
+		defer exec("drop snapshot paged_hi")
+		start := time.Now()
+		exec("data branch pick src into dst between snapshot paged_lo and paged_hi when conflict fail")
+		t.Logf("8000-row full-image PICK took %s", time.Since(start))
+		var total, updated int
+		require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*),sum(v=k+1) from dst").Scan(&total, &updated))
+		require.Equal(t, 8000, total)
+		require.Equal(t, total, updated)
 	})
 }

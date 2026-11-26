@@ -3888,7 +3888,7 @@ func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.
 			ps.EncodeUuid(val)
 		}, nil
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_geometry,
+		types.T_geometry, types.T_geometry32,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_array_float8, types.T_array_float4,
@@ -4404,7 +4404,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 			}
 		}
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_geometry,
+		types.T_geometry, types.T_geometry32,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_array_float8, types.T_array_float4,
@@ -4530,7 +4530,7 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 
 	case types.T_json, types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry, types.T_geometry32,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_array_float8, types.T_array_float4,
