@@ -39,6 +39,7 @@ const (
 )
 
 func (c *Compile) bindODKUPriorData() error {
+	c.odkuResult = nil
 	var visit func(*Scope) error
 	seen := make(map[*preinsertunique.PreInsertUnique]struct{})
 	visit = func(s *Scope) error {
@@ -47,15 +48,24 @@ func (c *Compile) bindODKUPriorData() error {
 		}
 		err := vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
 			owner, ok := op.(*preinsertunique.PreInsertUnique)
-			if !ok || owner.PreInsertCtx.GetOdkuActions().GetPriorData() == nil {
+			if !ok || !owner.PreInsertCtx.GetOrderedOdku() {
 				return nil
 			}
 			if _, exists := seen[owner]; exists {
 				return nil
 			}
 			seen[owner] = struct{}{}
-			if s.IsRemote || !sameExecutionAddr(s.NodeInfo.Addr, c.addr) {
+			if s.IsRemote || s.NodeInfo.Mcpu > 1 || !sameExecutionAddr(s.NodeInfo.Addr, c.addr) {
 				return moerr.NewInternalError(c.proc.Ctx, "ODKU action owner must execute on the coordinator")
+			}
+			if c.odkuResult != nil {
+				return moerr.NewInternalError(c.proc.Ctx, "ODKU requires one action owner")
+			}
+			result := &odkuAttemptResult{}
+			c.odkuResult = result
+			owner.PublishAffectedRows = result.publish
+			if owner.PreInsertCtx.GetOdkuActions().GetPriorData() == nil {
+				return nil
 			}
 			if c.allocationAttempt == nil {
 				return moerr.NewInternalError(c.proc.Ctx, "ODKU prior data has no allocation attempt")
@@ -121,11 +131,18 @@ func (c *Compile) bindODKUPriorData() error {
 			return err
 		}
 	}
+	if query := c.pn.GetQuery(); query != nil && c.odkuResult == nil {
+		for _, node := range query.Nodes {
+			if node != nil && node.PreInsertUkCtx.GetOrderedOdku() {
+				return moerr.NewInternalError(c.proc.Ctx, "ODKU action owner is missing")
+			}
+		}
+	}
 	return nil
 }
 
 func (c *Compile) closeODKUPriorData() error {
-	if len(c.odkuViews) == 0 {
+	if len(c.odkuViews) == 0 && c.odkuResult == nil {
 		return nil
 	}
 	var result error
@@ -143,6 +160,7 @@ func (c *Compile) closeODKUPriorData() error {
 				if owner, ok := op.(*preinsertunique.PreInsertUnique); ok {
 					owner.PriorDataView = nil
 					owner.LockKeys = nil
+					owner.PublishAffectedRows = nil
 				}
 				return nil
 			})

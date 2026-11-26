@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestODKUScaledFloatKeyCodecMatchesGeneric(t *testing.T) {
+func TestODKUFloatKeysPreservePhysicalIdentity(t *testing.T) {
 	a, proc, b, _ := newODKUKeyFixture(t, 1)
 	typ := types.T_float32.ToType()
 	typ.Scale = 2
@@ -39,13 +39,21 @@ func TestODKUScaledFloatKeyCodecMatchesGeneric(t *testing.T) {
 	require.NoError(t, err)
 	itr := generic.NewIterator()
 	defer func() { hashmap.IteratorClearOwner(itr); generic.Free() }()
-	intGroups, intNonNull, err := a.ctr.acceptedKeys[0].iterator.Insert(0, 4, []*vector.Vector{b.Vecs[1]})
+	for row := range 4 {
+		require.NoError(t, a.claimODKUKey(proc, 0, row, int64(row)))
+	}
+	for row := range 4 {
+		owner, found, err := a.lookupODKUKeyIndex(proc, &a.ctr.acceptedKeys[0], row)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, int64(row), owner)
+	}
+	require.Equal(t, uint64(4), a.ctr.acceptedKeys[0].index.GroupCount())
+	// The SQL hashmap deliberately keeps its separate equality contract.
+	strGroups, _, err := itr.Insert(0, 4, []*vector.Vector{b.Vecs[1]})
 	require.NoError(t, err)
-	strGroups, strNonNull, err := itr.Insert(0, 4, []*vector.Vector{b.Vecs[1]})
-	require.NoError(t, err)
-	require.Equal(t, strGroups, intGroups)
-	require.Equal(t, strNonNull, intNonNull)
-	require.Equal(t, []uint64{1, 1, 2, 2}, intGroups)
+	require.Equal(t, []uint64{1, 1, 2, 2}, strGroups)
+
 }
 
 func TestODKUPhysicalTypeCompatibility(t *testing.T) {

@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -115,8 +114,7 @@ func TestCandidateReaderThroughRemoteEngineHandlers(t *testing.T) {
 			full, err := relation.Ranges(ctx, engine.RangesParam{Policy: engine.Policy_CollectCommittedData})
 			require.NoError(t, err)
 			typ := plan.Type{Id: int32(types.T_float32), Width: 8, Scale: 2}
-			lower, upper, ok := keycodec.NewFloat32Codec(2).FiniteEqualRange(float32(1.234))
-			require.True(t, ok)
+			lower, upper := float32(1.2), float32(1.3)
 			bound := func(value float32) *plan.Expr {
 				return &plan.Expr{Typ: typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: append([]byte(nil), types.EncodeFloat32(&value)...)}}}
 			}

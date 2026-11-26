@@ -46,11 +46,21 @@ func ValidateODKUContext(ctx *plan.PreInsertUkCtx) error {
 		uint64(c.InsertCheckConstraintCount) > uint64(len(c.InsertChecks)) {
 		return moerr.NewInternalErrorNoCtx("invalid ODKU action layout")
 	}
-
+	if c.ChangeCheckAssignmentCount == 0 || len(c.ChangeCheckColumns) == 0 || uint64(c.ChangeCheckAssignmentCount)+uint64(c.AutoUpdateAssignmentCount) > uint64(len(c.UpdateExprs)) {
+		return moerr.NewInternalErrorNoCtx("invalid ODKU update phases")
+	}
+	for _, column := range c.ChangeCheckColumns {
+		if column < 0 || int(column) >= len(c.OldColumns) {
+			return moerr.NewInternalErrorNoCtx("invalid ODKU change column")
+		}
+	}
 	for _, e := range c.SourceColumns {
 		if !odkuMaterializedColumn(e) {
 			return moerr.NewInternalErrorNoCtx("unmaterialized ODKU source column")
 		}
+	}
+	if p := c.PhysicalChangedColumn; p != 0 && (len(c.ForeignKeyChecks) == 0 || uint64(p) > uint64(len(c.SourceColumns)) || c.SourceColumns[p-1].Typ.Id != int32(types.T_bool)) {
+		return moerr.NewInternalErrorNoCtx("invalid ODKU physical change column")
 	}
 	for i, e := range c.OldColumns {
 		p := c.InputColumns[i]

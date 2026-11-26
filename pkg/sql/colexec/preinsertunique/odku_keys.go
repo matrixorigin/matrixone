@@ -49,7 +49,14 @@ func (preInsertUnique *PreInsertUnique) initODKUKey(proc *process.Process, slot 
 
 func (preInsertUnique *PreInsertUnique) initODKUKeyIndex(proc *process.Process, key *odkuKeyIndex) error {
 	key.keyType = *key.key[0].GetType()
-	if odkuIntKey(key.key[0]) {
+	if key.keyType.Oid == types.T_float32 || key.keyType.Oid == types.T_float64 {
+		var err error
+		key.identity, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_varbinary.ToType(), preInsertUnique.retainedAllocation)
+		if err != nil {
+			return err
+		}
+	}
+	if key.identity == nil && odkuIntKey(key.key[0]) {
 		h, err := hashmap.NewIntHashMapWithAllocation(false, proc.Mp(), preInsertUnique.hashAllocation)
 		if err != nil {
 			return err
@@ -66,6 +73,27 @@ func (preInsertUnique *PreInsertUnique) initODKUKeyIndex(proc *process.Process, 
 	var err error
 	key.rows, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), preInsertUnique.retainedAllocation)
 	return err
+}
+
+// Generic SQL hashmaps normalize floating values. Constraint owners instead
+// hash their existing physical bytes, with the raw typed key kept for locks,
+// retained images and duplicate errors. Scratch is owned and reused by this
+// index; borrowed vector metadata is never changed.
+func (preInsertUnique *PreInsertUnique) hashODKUKey(proc *process.Process, key *odkuKeyIndex, row int) (int, error) {
+	key.hashKey = key.key
+	if key.identity == nil {
+		return row, nil
+	}
+	key.identity.CleanOnlyData()
+	source := key.key[0]
+	if err := vector.AppendBytes(key.identity, source.GetRawBytesAt(row), source.IsNull(uint64(row)), proc.Mp()); err != nil {
+		return 0, err
+	}
+	if source.GetGrouping().Contains(uint64(row)) {
+		key.identity.GetGrouping().Add(0)
+	}
+	key.hashKey[0] = key.identity
+	return 0, nil
 }
 
 func (preInsertUnique *PreInsertUnique) newODKUKeyStrMap(proc *process.Process, key *odkuKeyIndex) error {
@@ -138,7 +166,11 @@ func (preInsertUnique *PreInsertUnique) lookupODKUKeyIndex(proc *process.Process
 	if key.rows != nil && key.rows.Length() == 0 {
 		return 0, false, nil
 	}
-	groups, nonNull, err := key.iterator.Find(row, 1, key.key[:])
+	hashRow, err := preInsertUnique.hashODKUKey(proc, key, row)
+	if err != nil {
+		return 0, false, err
+	}
+	groups, nonNull, err := key.iterator.Find(hashRow, 1, key.hashKey[:])
 	if err != nil {
 		return 0, false, err
 	}
@@ -170,12 +202,16 @@ func (preInsertUnique *PreInsertUnique) claimODKUKeyIndex(proc *process.Process,
 	if key.iterator == nil || key.rows == nil {
 		return moerr.NewInternalError(proc.Ctx, "invalid ODKU key claim")
 	}
-	isNew, err := key.iterator.DetectDup(key.key[:], row)
+	hashRow, err := preInsertUnique.hashODKUKey(proc, key, row)
+	if err != nil {
+		return err
+	}
+	isNew, err := key.iterator.DetectDup(key.hashKey[:], hashRow)
 	if err != nil {
 		return err
 	}
 	if !isNew {
-		groups, nonNull, e := key.iterator.Find(row, 1, key.key[:])
+		groups, nonNull, e := key.iterator.Find(hashRow, 1, key.hashKey[:])
 		if e != nil {
 			return e
 		}
@@ -210,7 +246,11 @@ func (preInsertUnique *PreInsertUnique) releaseODKUKey(proc *process.Process, sl
 	if err := preInsertUnique.ensureODKUKeyMap(proc, slot); err != nil {
 		return err
 	}
-	groups, nonNull, err := key.iterator.Find(row, 1, key.key[:])
+	hashRow, err := preInsertUnique.hashODKUKey(proc, key, row)
+	if err != nil {
+		return err
+	}
+	groups, nonNull, err := key.iterator.Find(hashRow, 1, key.hashKey[:])
 	if err != nil {
 		return err
 	}
@@ -276,6 +316,9 @@ func (key *odkuKeyIndex) free(proc *process.Process) {
 	}
 	if key.fixedKeys != nil {
 		key.fixedKeys.Free(proc.Mp())
+	}
+	if key.identity != nil {
+		key.identity.Free(proc.Mp())
 	}
 	if key.rows != nil {
 		key.rows.Free(proc.Mp())

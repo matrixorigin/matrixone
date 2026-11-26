@@ -48,8 +48,7 @@ const (
 	MORPCVersion10     int64 = 10 // bounded Sorted64 membership-filter wire format
 	MORPCVersion11     int64 = 11 // linearizable TN-ordered logtail read barrier
 	MORPCVersion12     int64 = 12 // current roles identity and closure
-	MORPCVersion13     int64 = 13 // ordered ODKU arbitration and action replay
-	MORPCLatestVersion       = MORPCVersion13
+	MORPCLatestVersion       = MORPCVersion12
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
