@@ -533,16 +533,24 @@ func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
 
 	substantiveErr := moerr.NewInternalErrorNoCtx("remote execution failed")
 	tests := []struct {
-		name        string
-		cancelQuery bool
-		cancelCause error
-		wantErr     error
-		wantEvent   process.PipelineEventType
-		poison      bool
+		name         string
+		cancelQuery  bool
+		stopPipeline bool
+		cancelCause  error
+		wantErr      error
+		wantEvent    process.PipelineEventType
+		poison       bool
 	}{
 		{
-			name:      "internal early stop is successful and reuses backend",
-			wantEvent: process.EventEnd,
+			name:         "internal early stop is successful and reuses backend",
+			stopPipeline: true,
+			wantEvent:    process.EventEnd,
+		},
+		{
+			name:      "unattributed pipeline cancellation is terminal",
+			wantErr:   context.Canceled,
+			wantEvent: process.EventError,
+			poison:    true,
 		},
 		{
 			name:        "query cancellation is terminal and poisons backend",
@@ -580,9 +588,12 @@ func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
 					message := request.(*pipeline.Message)
 					switch message.GetCmd() {
 					case pipeline.Method_PipelineMessage:
-						if tt.cancelQuery {
+						switch {
+						case tt.cancelQuery:
 							cancelQuery()
-						} else {
+						case tt.stopPipeline:
+							moerr.StopPipeline(proc.Cancel)
+						default:
 							proc.Cancel(tt.cancelCause)
 						}
 					case pipeline.Method_StopSending:

@@ -3514,7 +3514,7 @@ func TestReceiveMessageFromCnServerIfConnector_ReturnsOnBlockedReceiverCancel(t 
 	select {
 	case err := <-done:
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		<-s.RootOp.(*connector.Connector).Reg.Ch2
 		require.Fail(t, "receiveMessageFromCnServerIfConnector did not unblock after cancellation")
@@ -3545,7 +3545,7 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 	select {
 	case err := <-done:
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		<-forwardReg.Ch2
 		require.Fail(t, "receiveMsgAndForward did not unblock after cancellation")
@@ -3574,7 +3574,7 @@ func TestReceiveMsgAndForward_AcknowledgesBatchOnReceiverTerminal(t *testing.T) 
 
 	select {
 	case err := <-done:
-		require.NoError(t, err)
+		require.ErrorIs(t, err, forwardReg.Err())
 		require.Zero(t, sender.pendingBatchAck)
 		require.Len(t, stream.sent, 1)
 		ack := stream.sent[0].(*pipeline.Message)
@@ -3614,7 +3614,7 @@ func TestReceiveMessageFromCnServerIfConnector_AcknowledgesBatchOnReceiverTermin
 
 	select {
 	case err := <-done:
-		require.NoError(t, err)
+		require.ErrorIs(t, err, reg.Err())
 		require.Zero(t, sender.pendingBatchAck)
 		require.Len(t, stream.sent, 1)
 		ack := stream.sent[0].(*pipeline.Message)

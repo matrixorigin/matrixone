@@ -117,26 +117,21 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 		case BuildHashMap:
 			if err := hashBuild.build(proc, analyzer); err != nil {
-				err = TerminalBudgetError(proc.Ctx, err)
-				hashBuild.finalizeBuildFailure(proc, err)
-				return result, err
+				return result, hashBuild.finalizeBuildFailure(proc, TerminalBudgetError(proc.Ctx, err))
 			}
 
 			ctr.state = HandleRuntimeFilter
 
 		case HandleRuntimeFilter:
 			if err := hashBuild.handleRuntimeFilter(proc); err != nil {
-				err = TerminalBudgetError(proc.Ctx, err)
-				hashBuild.finalizeBuildFailure(proc, err)
-				return result, err
+				return result, hashBuild.finalizeBuildFailure(proc, TerminalBudgetError(proc.Ctx, err))
 			}
 
 			ctr.state = SendJoinMap
 
 		case SendJoinMap:
 			if err := hashBuild.sendJoinMap(proc); err != nil {
-				hashBuild.finalizeBuildFailure(proc, err)
-				return result, err
+				return result, hashBuild.finalizeBuildFailure(proc, err)
 			}
 			ctr.state = SendSucceed
 
@@ -225,7 +220,8 @@ func (hashBuild *HashBuild) sendJoinMap(proc *process.Process) error {
 // returns. Consumers may already be blocked in ReceiveJoinMap/RuntimeFilter;
 // deferring publication until Reset could deadlock a pipeline scheduler that
 // waits for those consumers before cleanup.
-func (hashBuild *HashBuild) finalizeBuildFailure(proc *process.Process, err error) {
+func (hashBuild *HashBuild) finalizeBuildFailure(proc *process.Process, err error) error {
+	err = moerr.PipelineIOError(proc.Ctx, err)
 	hashBuild.ctr.terminalMu.Lock()
 	defer hashBuild.ctr.terminalMu.Unlock()
 	hashBuild.publishBuildError(proc, err)
@@ -233,6 +229,7 @@ func (hashBuild *HashBuild) finalizeBuildFailure(proc *process.Process, err erro
 		message.FinalizeRuntimeFilterOnBuildError(hashBuild.RuntimeFilterSpec, proc.GetMessageBoard())
 		hashBuild.ctr.runtimeFilterDone = hashBuild.RuntimeFilterSpec != nil
 	}
+	return err
 }
 
 func (hashBuild *HashBuild) build(

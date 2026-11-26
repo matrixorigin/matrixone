@@ -257,7 +257,8 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 		},
 	}
 
-	compile, err := receiver.newCompile()
+	compile, cancelFragment, err := receiver.newCompile()
+	require.Nil(t, cancelFragment)
 	require.NoError(t, err)
 	require.NotNil(t, compile)
 	require.Equal(t, "test-addr", compile.addr)

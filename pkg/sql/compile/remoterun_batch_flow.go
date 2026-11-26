@@ -101,7 +101,7 @@ func (f *pipelineBatchFlow) reserve(
 		select {
 		case <-changed:
 		case <-messageCtx.Done():
-			return 0, moerr.AttachCause(messageCtx, messageCtx.Err())
+			return 0, moerr.PipelineContextError(messageCtx)
 		case <-connectionCtx.Done():
 			return 0, moerr.NewStreamClosed(messageCtx)
 		}
@@ -220,7 +220,7 @@ func (f *pipelineBatchFlow) waitUntilDrained(
 		select {
 		case <-changed:
 		case <-messageCtx.Done():
-			return moerr.AttachCause(messageCtx, messageCtx.Err())
+			return moerr.PipelineContextError(messageCtx)
 		case <-connectionCtx.Done():
 			return moerr.NewStreamClosed(messageCtx)
 		case <-delayC:

@@ -17,21 +17,22 @@ package moerr
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 )
 
 // PipelineStop marks cancellation by a downstream pipeline that has finished
-// taking input. Its lock covers propagation to the cancelled context's children.
+// taking input. It signals when the cancellation reaches the context's children.
 type PipelineStop struct {
-	propagation sync.Mutex
+	propagation sync.WaitGroup
 }
 
 func (*PipelineStop) Error() string { return "pipeline no longer needs input" }
 
 func StopPipeline(cancel context.CancelCauseFunc) {
 	stop := new(PipelineStop)
-	stop.propagation.Lock()
-	defer stop.propagation.Unlock()
+	stop.propagation.Add(1)
+	defer stop.propagation.Done()
 	cancel(stop)
 }
 
@@ -50,8 +51,7 @@ func PipelineStopCause(err error) *PipelineStop {
 // WaitForPropagation lets a dependency consumer distinguish a sibling whose
 // Done is still being propagated from a live consumer outside the stopped tree.
 func (s *PipelineStop) WaitForPropagation() {
-	s.propagation.Lock()
-	s.propagation.Unlock()
+	s.propagation.Wait()
 }
 
 type pipelineCancellationOrigin uint8
@@ -83,33 +83,77 @@ func PipelineContextError(ctx context.Context) error {
 	return PipelineContextCanceled
 }
 
-// PipelineIOError resolves a context-shaped error at the call that passed the
-// context to an external I/O implementation. Explicit terminal messages must
-// bypass this helper. Those messages already carry an execution decision.
-func PipelineIOError(ctx context.Context, err error) error {
-	if err == nil || ctx == nil {
-		return err
+type reportedPipelineError struct{ error }
+
+func (e reportedPipelineError) Unwrap() error { return e.error }
+
+// ReportedPipelineError fixes the origin of a cancellation-shaped error read
+// from an explicit failure signal or stored dependency outcome.
+func ReportedPipelineError(err error) error {
+	if err == context.Canceled {
+		return PipelineReportedCanceled
 	}
-	if ctxErr := ctx.Err(); ctxErr != nil && isPipelineIOCancellation(err, ctxErr) {
-		return PipelineContextError(ctx)
+	if isPipelineIOCancellation(err, nil, nil, false) {
+		return reportedPipelineError{err}
 	}
 	return err
 }
 
-func isPipelineIOCancellation(err, ctxErr error) bool {
+// PipelineIOError classifies a legacy cancellation at the point it returns
+// from execution or external I/O. If the context is live, freeze the error
+// before cleanup or forwarding can cancel that context.
+func PipelineIOError(ctx context.Context, err error) error {
+	return pipelineIOError(ctx, err, false)
+}
+
+// PipelineRPCIOError also accepts the error code legacy RPC transport uses
+// for cancellation. Explicit peer result frames bypass this path.
+func PipelineRPCIOError(ctx context.Context, err error) error {
+	return pipelineIOError(ctx, err, true)
+}
+
+func pipelineIOError(ctx context.Context, err error, legacyRPC bool) error {
+	if err == nil {
+		return nil
+	}
+	if ctx != nil {
+		ctxErr := ctx.Err()
+		var diagnostic error
+		if ctxErr == context.DeadlineExceeded && errors.Is(err, ctxErr) {
+			cause := context.Cause(ctx)
+			// AttachCause joins the exact timeout diagnostic supplied by
+			// this context. A different error in the same tree is a failure.
+			if cause != nil && cause != ctxErr && reflect.TypeOf(cause).Comparable() {
+				diagnostic = cause
+			}
+		}
+		if ctxErr != nil && isPipelineIOCancellation(err, ctxErr, diagnostic, legacyRPC) {
+			return PipelineContextError(ctx)
+		}
+	}
+	return ReportedPipelineError(err)
+}
+
+func isPipelineIOCancellation(err, ctxErr, diagnostic error, legacyRPC bool) bool {
 	switch e := err.(type) {
+	case nil, pipelineCancellationOrigin, reportedPipelineError:
+		return false
 	case interface{ Unwrap() []error }:
 		children := e.Unwrap()
 		for _, child := range children {
-			if !isPipelineIOCancellation(child, ctxErr) {
+			if !isPipelineIOCancellation(child, ctxErr, diagnostic, legacyRPC) {
 				return false
 			}
 		}
 		return len(children) != 0
 	case interface{ Unwrap() error }:
-		return isPipelineIOCancellation(e.Unwrap(), ctxErr)
+		return isPipelineIOCancellation(e.Unwrap(), ctxErr, diagnostic, legacyRPC)
 	default:
-		return errors.Is(err, ctxErr) || IsMoErrCode(err, ErrQueryInterrupted)
+		if ctxErr == nil {
+			return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+		}
+		return diagnostic != nil && err == diagnostic ||
+			errors.Is(err, ctxErr) || legacyRPC && IsMoErrCode(err, ErrQueryInterrupted)
 	}
 }
 

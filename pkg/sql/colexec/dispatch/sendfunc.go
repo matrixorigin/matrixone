@@ -436,7 +436,7 @@ func sendBatchToClientSession(
 	if wcs.ReserveBatch != nil {
 		batchSequence, err = wcs.ReserveBatch(ctx, uint64(len(encodeBatData)))
 		if err != nil {
-			return false, err
+			return false, moerr.PipelineRPCIOError(ctx, err)
 		}
 		defer func() {
 			if !batchSent && wcs.RollbackBatch != nil {
@@ -460,7 +460,7 @@ func sendBatchToClientSession(
 			msg.AcceptedBatchCreditBytes = wcs.ByteCredits
 		}
 		if err = wcs.Cs.Write(ctx, msg); err != nil {
-			return false, err
+			return false, moerr.PipelineRPCIOError(ctx, err)
 		}
 		batchSent = true
 		return false, nil
@@ -487,7 +487,7 @@ func sendBatchToClientSession(
 		}
 
 		if err = wcs.Cs.Write(ctx, msg); err != nil {
-			return false, err
+			return false, moerr.PipelineRPCIOError(ctx, err)
 		}
 		start = end
 	}

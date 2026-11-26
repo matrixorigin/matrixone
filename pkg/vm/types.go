@@ -378,11 +378,11 @@ func Exec(op Operator, proc *process.Process) (CallResult, error) {
 	defer analyzer.Stop()
 	result, err := op.Call(proc)
 	if err != nil {
-		return result, err
+		return result, moerr.PipelineIOError(proc.Ctx, err)
 	}
 	result.Batch, err = op.ExecProjection(proc, result.Batch)
 	analyzer.Output(result.Batch)
-	return result, err
+	return result, moerr.PipelineIOError(proc.Ctx, err)
 }
 
 func ChildrenCall(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {

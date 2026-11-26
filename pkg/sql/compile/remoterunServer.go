@@ -329,9 +329,12 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		return err
 
 	case pipeline.Method_PipelineMessage:
-		runCompile, errBuildCompile := receiver.newCompile()
+		runCompile, cancelFragment, errBuildCompile := receiver.newCompile()
 		if errBuildCompile != nil {
 			return errBuildCompile
+		}
+		if cancelFragment != nil {
+			defer cancelFragment(nil)
 		}
 		var allocationAttempt *statementAllocationAttempt
 		var allocationParticipant *remoteAllocationStatementParticipant
@@ -474,10 +477,8 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					),
 				)
 			}
-			// Capture the function value for this execution generation. Both the
-			// Compile and Process fields are reset after an early sibling returns;
-			// looking up proc.Cancel later could cancel an unrelated generation.
-			remoteCancel := runCompile.proc.Cancel
+			// The fragment context already exists, even if the RPC has not
+			// decoded and installed its pipeline tree yet.
 			allocationGroupKey = remoteAllocationStatementGroupKey(
 				runCompile.remoteExecutionID,
 				runCompile.addr,
@@ -486,11 +487,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				allocationGroupKey,
 				runCompile.MessageBoard,
 				expectedFragments,
-				func(cause error) {
-					if remoteCancel != nil {
-						remoteCancel(cause)
-					}
-				},
+				cancelFragment,
 			)
 			if runErr != nil {
 				return runErr
@@ -901,23 +898,29 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 }
 
 // newCompile make and return a new compile to run a pipeline.
-func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
+func (receiver *messageReceiverOnServer) newCompile() (*Compile, context.CancelCauseFunc, error) {
 	// A remote compile used to have an unlimited local pool. HashBuild could
 	// therefore grow until the CN was killed even though the process limitation
 	// was already present on the wire. Keep a finite physical backstop while the
 	// finer-grained HashBuild admission layer decides whether to spill or fail.
 	poolCap, err := resolveRemoteCompileMPoolCap(receiver.procBuildHelper.lim)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	mp, err := mpool.NewMPool("compile", poolCap, mpool.NoFixed)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
 
-	// required deadline.
-	runningCtx := defines.AttachAccountId(receiver.messageCtx, pHelper.accountId)
+	runningCtx := receiver.messageCtx
+	var cancelFragment context.CancelCauseFunc
+	if len(pHelper.remoteFragmentCounts) > 0 {
+		// Capture this generation's cancel function before any participant can
+		// abort the group. The request context still owns the RPC response.
+		runningCtx, cancelFragment = context.WithCancelCause(runningCtx)
+	}
+	runningCtx = defines.AttachAccountId(runningCtx, pHelper.accountId)
 	proc := process.NewTopProcess(
 		runningCtx,
 		mp,
@@ -946,7 +949,10 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		if err != nil {
 			proc.Free()
 			mpool.DeleteMPool(mp)
-			return nil, err
+			if cancelFragment != nil {
+				cancelFragment(nil)
+			}
+			return nil, nil, err
 		}
 		for i := range pHelper.prepareParams.Nulls {
 			if pHelper.prepareParams.Nulls[i] {
@@ -986,12 +992,12 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		err := receiver.sendBatch(b)
 		if err != nil && receiver.streamLifecycle != nil &&
 			receiver.streamLifecycle.batchFlow.wasStoppedByReceiver() {
-			return moerr.PipelineIOError(proc.Ctx, err)
+			return moerr.PipelineRPCIOError(proc.Ctx, err)
 		}
 		return moerr.PipelineIOError(receiver.messageCtx, err)
 	}
 
-	return c, nil
+	return c, cancelFragment, nil
 }
 
 func resolveRemoteCompileMPoolCap(lim process.Limitation) (int64, error) {

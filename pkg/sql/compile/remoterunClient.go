@@ -311,14 +311,15 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		}
 		connectorAnalyze.Network(bat)
 
-		var receiverDone bool
-		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil {
-			return err
+		receiverDone, forwardErr := forwardRemoteBatchWithContext(sender, nextReg, bat, mp)
+		// A terminal receiver discards the decoded batch, but the peer owns
+		// its credit until this ACK. Keep the receiver's error if ACK fails.
+		ackErr := sender.acknowledgeRemoteBatch()
+		if forwardErr != nil {
+			return forwardErr
 		}
-		// A stopped receiver intentionally discarded the decoded batch, but the
-		// remote sender still owns its credit until this ACK is sent.
-		if err = sender.acknowledgeRemoteBatch(); err != nil {
-			return err
+		if ackErr != nil {
+			return ackErr
 		}
 		if receiverDone {
 			return nil
@@ -753,7 +754,7 @@ func (sender *messageSenderOnClient) transportError(err error) error {
 }
 
 func pipelineTransportError(ctx context.Context, internalTimeout bool, err error) error {
-	err = moerr.PipelineIOError(ctx, err)
+	err = moerr.PipelineRPCIOError(ctx, err)
 	if err == context.DeadlineExceeded && internalTimeout && ctx.Err() == context.DeadlineExceeded {
 		return moerr.NewRPCTimeout(ctx)
 	}

@@ -215,7 +215,7 @@ func testPipelineOutcomeFailureOrdering(t *testing.T, coordinator, first, interr
 	// Both reads have produced their errors before the first Close can return.
 	// The remaining Close must be released by the coordinator's cancellation.
 	started.release = last.closing
-	var readers []*Scope
+	readers := make([]*Scope, 0, 2)
 	for _, reader := range []*pipelineOutcomeReader{started, last} {
 		scan := table_scan.NewArgument().WithTypes([]plan.Type{{Id: int32(types.T_int32)}})
 		defer scan.Release()

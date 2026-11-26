@@ -1283,7 +1283,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 						nil,
 					)
 					if err != nil {
-						closeWithError(moerr.PipelineIOError(s.Proc.Ctx, err), s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						closeWithError(moerr.PipelineRPCIOError(s.Proc.Ctx, err), s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 						return
 					}
 					message := cnclient.AcquireMessage()
@@ -1395,11 +1395,11 @@ func scopeRunQueryContext(proc *process.Process) context.Context {
 // cleanup is allowed to cancel its context. Reported failures, including
 // interruption from another pipeline or a peer, have already been decided.
 func scopeExecutionError(proc *process.Process, err error) error {
+	if proc != nil {
+		err = moerr.PipelineIOError(proc.Ctx, err)
+	}
 	if moerr.PipelineStopCause(err) != nil {
 		return moerr.PipelineContextError(scopeRunQueryContext(proc))
-	}
-	if err == context.Canceled {
-		return moerr.PipelineReportedCanceled
 	}
 	return err
 }
@@ -1411,14 +1411,15 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.Wai
 			return err
 		}
 
-		var receiverDone bool
-		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil {
-			return err
+		receiverDone, forwardErr := forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp)
+		// A terminal receiver discards the decoded batch, but the peer owns
+		// its credit until this ACK. Keep the receiver's error if ACK fails.
+		ackErr := sender.acknowledgeRemoteBatch()
+		if forwardErr != nil {
+			return forwardErr
 		}
-		// A stopped receiver intentionally discarded the decoded batch, but the
-		// remote sender still owns its credit until this ACK is sent.
-		if err = sender.acknowledgeRemoteBatch(); err != nil {
-			return err
+		if ackErr != nil {
+			return ackErr
 		}
 		if receiverDone {
 			return nil

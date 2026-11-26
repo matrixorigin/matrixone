@@ -126,7 +126,7 @@ func TestLocalDispatchDataSendsObserveCancellation(t *testing.T) {
 				if mode == "all" || mode == "any" {
 					require.NoError(t, err)
 				} else {
-					require.ErrorIs(t, err, context.Canceled)
+					require.ErrorIs(t, err, cause)
 				}
 			case <-time.After(time.Second):
 				t.Fatal("data publication ignored cancellation")

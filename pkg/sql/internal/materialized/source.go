@@ -430,7 +430,7 @@ func (s *Source) Finish(err error) {
 	}
 	if !s.done {
 		s.done = true
-		s.err = err
+		s.err = moerr.ReportedPipelineError(err)
 		s.wakeLocked()
 	}
 	s.producerReleased = true
@@ -480,7 +480,7 @@ func (s *Source) failLocked(err error) {
 		return
 	}
 	s.done = true
-	s.err = err
+	s.err = moerr.ReportedPipelineError(err)
 	s.wakeLocked()
 }
 

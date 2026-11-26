@@ -76,6 +76,7 @@ type MessageCenter struct {
 type MessageBoard struct {
 	reset         bool // for debug purpose
 	closed        bool
+	closeErr      error
 	drained       bool
 	multiCN       bool
 	stmtId        uuid.UUID
@@ -180,7 +181,23 @@ func (m *MessageBoard) Reset() *MessageBoard {
 // terminal owner must call CloseAndDrain after every producer and consumer is
 // quiescent. True identifies the call that first closed the board.
 func (m *MessageBoard) Close() bool {
-	return m.close(false)
+	return m.close(false, nil)
+}
+
+// CloseWithError aborts the board and gives blocked receivers the failure
+// that caused the abort. The first Close owns the terminal state.
+func (m *MessageBoard) CloseWithError(cause error) bool {
+	return m.close(false, moerr.ReportedPipelineError(cause))
+}
+
+func (m *MessageBoard) terminalError() error {
+	m.rwMutex.RLock()
+	cause := m.closeErr
+	m.rwMutex.RUnlock()
+	if cause != nil {
+		return cause
+	}
+	return moerr.NewInternalErrorNoCtx("message board is closed")
 }
 
 // CloseAndDrain is the terminal MessageBoard boundary for one execution
@@ -191,10 +208,10 @@ func (m *MessageBoard) Close() bool {
 // identifies the call that performed the drain, including a drain after an
 // earlier Close.
 func (m *MessageBoard) CloseAndDrain() bool {
-	return m.close(true)
+	return m.close(true, nil)
 }
 
-func (m *MessageBoard) close(drain bool) bool {
+func (m *MessageBoard) close(drain bool, cause error) bool {
 	if m == nil || m.rwMutex == nil {
 		return false
 	}
@@ -216,6 +233,7 @@ func (m *MessageBoard) close(drain bool) bool {
 	firstClose := !m.closed
 	if firstClose {
 		m.closed = true
+		m.closeErr = cause
 		m.reset = true
 		for _, waiter := range m.waiters {
 			if waiter == nil {
@@ -332,9 +350,7 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		return result, false, nil
 	}
 	if closed {
-		return result, false, moerr.NewInternalErrorNoCtx(
-			"message board is closed",
-		)
+		return result, false, mr.mb.terminalError()
 	}
 	if mr.waiter == nil {
 		mr.waiter = make(chan bool, 1)
@@ -346,9 +362,7 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 		}
 		mr.mb.rwMutex.Unlock()
 		if closed {
-			return result, false, moerr.NewInternalErrorNoCtx(
-				"message board is closed",
-			)
+			return result, false, mr.mb.terminalError()
 		}
 	}
 	for {
@@ -357,9 +371,7 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 			break
 		}
 		if closed {
-			return result, false, moerr.NewInternalErrorNoCtx(
-				"message board is closed",
-			)
+			return result, false, mr.mb.terminalError()
 		}
 		timeout := messageTimeout
 		if mr.debug {

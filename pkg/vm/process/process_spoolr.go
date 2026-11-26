@@ -152,7 +152,7 @@ func NewErrorSignal(err error) PipelineSignal {
 	return PipelineSignal{
 		typ:         GetDirectly,
 		EventType:   EventError,
-		terminalErr: err,
+		terminalErr: moerr.ReportedPipelineError(err),
 	}
 }
 
@@ -165,7 +165,7 @@ func NewAbortSignal(err error) PipelineSignal {
 	return PipelineSignal{
 		typ:         GetDirectly,
 		EventType:   EventAbort,
-		terminalErr: err,
+		terminalErr: moerr.ReportedPipelineError(err),
 	}
 }
 
@@ -473,7 +473,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 			// GetDirectly as a per-sender end signal.
 			receiver.removeIdxReceiver(chosen)
 			if info != nil {
-				return nil, info
+				return nil, moerr.ReportedPipelineError(info)
 			}
 			continue
 		}
@@ -482,7 +482,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 		if analyzer != nil {
 			analyzer.Input(content)
 		}
-		return content, info
+		return content, moerr.ReportedPipelineError(info)
 	}
 }
 
