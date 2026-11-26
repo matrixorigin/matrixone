@@ -260,6 +260,7 @@ where t.reldatabase=database() and t.relname='update_collision' and i.name='ix'`
 			affected        int64
 		}{
 			{"update update_collision set s=2 where id='ab'", "ab", 1},
+			{"insert into update_collision values ('ab',2,0) on duplicate key update s=values(s)", "ab", 2},
 			{"update update_collision set id='ac',s=2 where id='ab'", "ac", 1},
 			{"update update_collision t join update_aux p on p.id=1 set t.id='ac',t.s=2,p.n=p.n+1 where t.id='ab'", "ac", 2},
 		} {

@@ -185,6 +185,8 @@ executors, images, claims, eligibility, ordinals and result generation.
 
 Base and index writers consume the same effective final image. Old-index
 lookups use physical PK identity, including in fulltext, IVF and master indexes.
+When two base rows can share a regular index key, the lookup also compares the
+original base PK stored in the index entry. Each action then reaches the writers once.
 For mutable keys, all old regular-index reads and irregular delete preparation
 finish before any physical writer mutates data. A generated PK move updates
 hidden-index base-PK payloads even when their index keys do not change.

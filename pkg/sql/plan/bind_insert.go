@@ -2988,11 +2988,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
-			/*
-				In previous step, a delete pk projection has been added to the final project list.
-				now, we need to join the index table to fetch the right rowid.
-			*/
-
 			idxTag := builder.genNewBindTag()
 			builder.addNameByColRef(idxTag, idxTableDefs[i])
 
@@ -3006,43 +3001,44 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			idxTableNodeID := builder.appendNode(idxScanNode, bindCtx)
 
 			lookupColName := indexLookupColumnName(idxDef)
-			idxPkPos := idxTableDefs[i].Name2ColIndex[lookupColName]
-			pkTyp := idxTableDefs[i].Cols[idxPkPos].Typ
-
-			leftExpr := &plan.Expr{
-				Typ: pkTyp,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: idxTag,
-						ColPos: idxPkPos,
-					},
-				},
+			idxPkPos, err := builder.indexTableColumnPosition(idxTableDefs[i], lookupColName)
+			if err != nil {
+				return 0, err
 			}
-
+			pkTyp := idxTableDefs[i].Cols[idxPkPos].Typ
 			idxTableName := idxDef.IndexTableName
 			delColName2Idx[idxTableName+"."+catalog.Row_ID] = [2]int32{idxTag, idxTableDefs[i].Name2ColIndex[catalog.Row_ID]}
 			delPkIdx := delColName2Idx[idxTableName+"."+lookupColName]
-
-			rightExpr := &plan.Expr{
-				Typ: pkTyp,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: delPkIdx[0],
-						ColPos: delPkIdx[1],
-					},
-				},
+			indexKey := GetColExpr(pkTyp, idxTag, idxPkPos)
+			oldKey := GetColExpr(pkTyp, delPkIdx[0], delPkIdx[1])
+			keyCond, err := bindStoredKeyEquality(builder, indexKey, oldKey, pkTyp)
+			if err != nil {
+				return 0, err
 			}
-
-			joinCond, bindErr := bindStoredKeyEquality(builder, leftExpr, rightExpr, pkTyp)
-			if bindErr != nil {
-				return 0, bindErr
+			onList := []*plan.Expr{keyCond}
+			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+			if err != nil {
+				return 0, err
+			}
+			if indexNeedsOwnerMatch(tableDef, idxDef, prefixLengths) {
+				// The original primary key selects one entry when multiple rows share the old index key.
+				oldPK, ok := delColName2Idx[tableDef.Name+"."+pkName]
+				if !ok {
+					return 0, moerr.NewInternalError(builder.GetContext(), "missing ODKU original primary key projection")
+				}
+				baseOwner := GetColExpr(tableDef.Cols[tableDef.Name2ColIndex[pkName]].Typ, oldPK[0], oldPK[1])
+				ownerCond, err := builder.bindIndexOwnerProbe(baseOwner, idxScanNode, idxPkPos)
+				if err != nil {
+					return 0, err
+				}
+				onList = append(onList, ownerCond)
 			}
 
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: []int32{lastNodeID, idxTableNodeID},
 				JoinType: plan.Node_LEFT,
-				OnList:   []*plan.Expr{joinCond},
+				OnList:   onList,
 			}, bindCtx)
 		}
 	}
