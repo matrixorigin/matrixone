@@ -616,6 +616,7 @@ func collectCloneDatabaseSource(
 	}
 	schemaFkDeps, err := readTableDefinitionFKDeps(ctx, srcTblInfos, func(info *tableInfo, create *tree.CreateTable) {
 		info.batchCloneIndexCatalog = compile.CloneIndexCatalogCanBatch(create)
+		info.parallelClone = info.batchCloneIndexCatalog && create.PartitionOption == nil
 	})
 	if err != nil {
 		return source, err

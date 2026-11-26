@@ -68,3 +68,10 @@ func cloneTargetAdmissionForPlanning(ctx CompilerContext, database, table string
 	}
 	return cloneTargetAdmissionFor(ctx.GetContext(), ctx.GetProcess().GetTxnOperator(), account, database, table)
 }
+
+// IndependentCloneTarget requires both the exact admitted name and the frozen
+// absence of incoming foreign keys. Source dependencies are checked by clone.
+func IndependentCloneTarget(ctx context.Context, txn client.TxnOperator, account uint32, database, table string) bool {
+	a := cloneTargetAdmissionFor(ctx, txn, account, database, table)
+	return a != nil && a.noReferences
+}

@@ -68,6 +68,12 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 		exec(t, "insert into "+source+".child values (10,1)")
 		exec(t, "create table "+source+".native_index (id int primary key, score int, key ix_score(score) invisible)")
 		exec(t, "insert into "+source+".native_index values (1,7)")
+		// Independent native tables exercise concurrent CREATE catalog pairs
+		// and index buffers in the same atomic database-clone transaction.
+		for _, name := range []string{"native_peer_a", "native_peer_b", "native_peer_c"} {
+			exec(t, "create table "+source+"."+name+" (id int primary key, marker varchar(50), key ix_marker(marker) invisible)")
+			exec(t, "insert into "+source+"."+name+" values (1, '"+name+"')")
+		}
 		exec(t, "create snapshot "+snapshot+" for database "+source)
 		exec(t, "alter table "+source+".parent alter index idx_visibility visible")
 		exec(t, "insert into "+source+".parent values (99)")
@@ -123,6 +129,9 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 				require.NoError(t, conn.QueryRowContext(ctx, "show create table "+target+".native_index").Scan(&table, &ddl))
 				require.Contains(t, ddl, "INVISIBLE")
 				count(t, "select count(*) from "+target+".native_index where score=7", 1)
+				for _, name := range []string{"native_peer_a", "native_peer_b", "native_peer_c"} {
+					count(t, "select count(*) from "+target+"."+name+" where id=1 and marker='"+name+"'", 1)
+				}
 				count(t, "select count(*) from "+target+".parent", expectedParents)
 				count(t, "select count(*) from "+target+".child", expected)
 				insertAutoID(t, nextID)
@@ -197,6 +206,25 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 			exec(t, "drop database "+target)
 		})
 
+		t.Run("a failed independent table aborts all workers", func(t *testing.T) {
+			exec(t, "select enable_fault_injection()")
+			exec(t, "select add_fault_point('fj/cn/clone_fails',':::','echo',40,'"+target+".native_peer_b')")
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "select remove_fault_point('fj/cn/clone_fails')")
+			}()
+			_, err := conn.ExecContext(ctx, "create database "+target+" clone "+source)
+			require.ErrorContains(t, err, "injected table clone error")
+			exec(t, "select remove_fault_point('fj/cn/clone_fails')")
+			// Rollback must keep the source's shared immutable objects.
+			count(t, "select count(*) from "+source+".native_index where (id,score) in ((1,7),(2,80),(4,40))", 3)
+			count(t, "select count(*) from mo_catalog.mo_database where datname='"+target+"'", 0)
+			exec(t, "create database "+target+" clone "+source)
+			for _, name := range []string{"native_peer_a", "native_peer_b", "native_peer_c"} {
+				count(t, "select count(*) from "+target+"."+name+" where id=1 and marker='"+name+"'", 1)
+			}
+			exec(t, "drop database "+target)
+		})
+
 		t.Run("an orphan rolls back the entire database clone", func(t *testing.T) {
 			exec(t, "set foreign_key_checks = 0")
 			exec(t, "insert into "+source+".child values (40,999)")
@@ -209,6 +237,64 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 			exec(t, "create database "+target+" clone "+source)
 			count(t, "select count(*) from "+target+".child", 2)
 			exec(t, "drop database "+target)
+		})
+
+		t.Run("cross database foreign keys and nested views preserve dependency scope", func(t *testing.T) {
+			t.Cleanup(func() {
+				for _, statement := range []string{
+					"drop database if exists " + target,
+					"drop view if exists " + source + ".v_nested",
+					"drop view if exists " + source + ".v_external",
+					"drop view if exists " + source + ".v_qualified",
+					"drop view if exists " + source + ".v_local",
+					"drop table if exists " + source + ".outgoing",
+					"drop database if exists " + external,
+				} {
+					_, err := conn.ExecContext(ctx, statement)
+					assert.NoError(t, err, statement)
+				}
+			})
+			exec(t, "create database "+external)
+			exec(t, "create table "+external+".parent (id int primary key, label varchar(40))")
+			exec(t, "insert into "+external+".parent values (1,'external original')")
+			exec(t, "create table "+external+".incoming (id int primary key, parent_id int, foreign key (parent_id) references "+source+".native_peer_a(id))")
+			exec(t, "insert into "+external+".incoming values (1,1)")
+			exec(t, "create table "+source+".outgoing (id int primary key, local_id int, external_id int, "+
+				"constraint fk_local foreign key (local_id) references "+source+".parent(id), "+
+				"constraint fk_external foreign key (external_id) references "+external+".parent(id))")
+			exec(t, "insert into "+source+".outgoing values (1,1,1)")
+			exec(t, "use "+source)
+			exec(t, "create view "+source+".v_local as select id from parent")
+			exec(t, "create view "+source+".v_qualified as select id from "+source+".v_local")
+			exec(t, "create view "+external+".v_parent as select id,label from "+external+".parent")
+			exec(t, "create view "+source+".v_external as select id,label from "+external+".v_parent")
+			exec(t, "create view "+source+".v_nested as select l.id,e.label from "+source+".v_qualified l join "+source+".v_external e on l.id=e.id")
+
+			exec(t, "create database "+target+" clone "+source)
+			count(t, "select count(*) from "+target+".v_nested where id=1 and label='external original'", 1)
+			count(t, "select count(*) from mo_catalog.mo_foreign_keys where db_name='"+target+"' and table_name='outgoing' and constraint_name='fk_local' and refer_db_name='"+target+"' and refer_table_name='parent'", 1)
+			count(t, "select count(*) from mo_catalog.mo_foreign_keys where db_name='"+target+"' and table_name='outgoing' and constraint_name='fk_external' and refer_db_name='"+external+"' and refer_table_name='parent'", 1)
+			exec(t, "insert into "+target+".parent values (500)")
+			exec(t, "insert into "+target+".outgoing values (2,500,1)")
+			count(t, "select count(*) from "+target+".v_qualified where id=500", 1)
+			count(t, "select count(*) from "+source+".v_qualified where id=500", 0)
+			for _, statement := range []string{
+				"insert into " + source + ".outgoing values (2,500,1)",
+				"insert into " + target + ".outgoing values (3,999,1)",
+				"insert into " + target + ".outgoing values (3,500,999)",
+				"delete from " + target + ".parent where id=500",
+				"delete from " + source + ".native_peer_a where id=1",
+				"delete from " + external + ".parent where id=1",
+			} {
+				_, err := conn.ExecContext(ctx, statement)
+				require.ErrorContains(t, err, "foreign key constraint fails", statement)
+			}
+			// An incoming FK outside the cloned database still belongs to its
+			// original parent; the cloned parent must not inherit that reverse link.
+			exec(t, "delete from "+target+".native_peer_a where id=1")
+			count(t, "select count(*) from "+source+".native_peer_a where id=1 and marker='native_peer_a'", 1)
+			exec(t, "update "+external+".parent set label='external updated' where id=1")
+			count(t, "select count(*) from "+target+".v_nested where id=1 and label='external updated'", 1)
 		})
 
 		exec(t, "begin")

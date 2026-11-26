@@ -524,8 +524,14 @@ func (db *txnDatabase) createWithID(
 	var packer *types.Packer
 	put := db.getEng().packerPool.Get(&packer)
 	defer put.Put()
-	var compositePk []byte // Declared here to be accessible in both block 3 and block 5
-	{                      // 3. Write create table batch, update tbl.rowiod
+	var compositePk []byte // The logical-ID index keeps its own stable key.
+	var tableBatch *batch.Batch
+	defer func() {
+		if tableBatch != nil {
+			tableBatch.Clean(m)
+		}
+	}()
+	{ // 3. Write create table batch, update tbl.rowiod
 
 		db := tbl.db
 		if features.IsPartition(tbl.extraInfo.FeatureFlag) {
@@ -563,14 +569,7 @@ func (db *txnDatabase) createWithID(
 		// The logical-ID index still needs its own stable key bytes.
 		compositePk = bytes.Clone(bat.Vecs[catalog.MO_TABLES_CPKEY_IDX].GetBytesAt(0))
 
-		note := noteForCreate(tbl.tableId, tbl.tableName)
-		if useAlterNote {
-			note = noteForAlterIns(tbl.tableId, tbl.tableName)
-		}
-		err = txn.adoptCatalogInsert(note, catalog.MO_TABLES_ID, catalog.MO_TABLES, bat, catalog.MoTablesSchema)
-		if err != nil {
-			return err
-		}
+		tableBatch = bat
 	}
 
 	{ // 4. Write create column batch
@@ -584,8 +583,11 @@ func (db *txnDatabase) createWithID(
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
-		err = txn.adoptCatalogInsert(note, catalog.MO_COLUMNS_ID, catalog.MO_COLUMNS, bat, catalog.MoColumnsSchema)
-		if err != nil {
+		// The group consumes both batches, including on error. No other
+		// table's rows may split this pair in TN's CREATE protocol.
+		ownedTable := tableBatch
+		tableBatch = nil
+		if err = txn.adoptCatalogCreate(note, ownedTable, bat); err != nil {
 			return err
 		}
 	}

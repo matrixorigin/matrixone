@@ -240,6 +240,7 @@ type tableInfo struct {
 	viewDef                string
 	createSql              string
 	batchCloneIndexCatalog bool
+	parallelClone          bool
 	// unservable marks a view whose stored definition can never run -- the #27027 refusal,
 	// raised while the dependency sort plans it. Such a view is still visited by the restore
 	// loop so the object it would replace is DROPped; only the CREATE is skipped. Set by

@@ -1511,7 +1511,15 @@ func handleCloneDatabaseWithSource(
 		)
 	}
 
-	cloneTable := func(cloneCtx context.Context, dstDb, dstTbl, srcDb, srcTbl string, borrowWorkspace bool) error {
+	var fixedTableSnapshot *plan.Snapshot
+	if stmt.AtTsExpr == nil && restoreSnapshotTS != 0 {
+		fixedTableSnapshot, err = resolveSnapshot(ses, newMoTimestampHint(restoreSnapshotTS))
+		if err != nil {
+			return
+		}
+	}
+	cloneTable := func(cloneCtx context.Context, executor BackgroundExec, dstDb, dstTbl, srcDb, srcTbl string, borrowWorkspace bool) (cloneReceipt, error) {
+		bh := executor
 		defer trace.StartRegion(cloneCtx, "clone execute table").End()
 		srcTable := newQualifiedCloneTableName(srcDb, srcTbl, stmt.AtTsExpr)
 		if stmt.AtTsExpr == nil && restoreSnapshotTS != 0 {
@@ -1536,9 +1544,13 @@ func handleCloneDatabaseWithSource(
 				reqCtx: context.WithValue(cloneCtx, dataBranchCloneLockCtxKey{}, false),
 			}
 		)
-		tableSnapshot, resolveErr := resolveSnapshot(ses, cloneStmt.SrcTable.AtTsExpr)
-		if resolveErr != nil {
-			return resolveErr
+		tableSnapshot := fixedTableSnapshot
+		if tableSnapshot == nil {
+			var resolveErr error
+			tableSnapshot, resolveErr = resolveSnapshot(ses, cloneStmt.SrcTable.AtTsExpr)
+			if resolveErr != nil {
+				return receipt, resolveErr
+			}
 		}
 
 		if borrowWorkspace {
@@ -1550,18 +1562,18 @@ func handleCloneDatabaseWithSource(
 			defer back.ReplaceDerivedStmt(previous)
 		}
 
-		if receipt, err = handleCloneTable(
+		var cloneErr error
+		if receipt, cloneErr = handleCloneTable(
 			tempExecCtx, ses, cloneStmt, bh, &cloneAccountResolution{
 				opAccountId: source.opAccountId,
 				toAccountId: source.toAccountId,
 				snapshot:    tableSnapshot,
 			},
-		); err != nil {
-			return err
+		); cloneErr != nil {
+			return receipt, cloneErr
 		}
 
-		receipts = append(receipts, receipt)
-		return nil
+		return receipt, nil
 	}
 
 	trace.Log(reqCtx, "clone phase", "clone sequences")
@@ -1583,7 +1595,42 @@ func handleCloneDatabaseWithSource(
 		defer indexBatch.Close()
 	}
 
+	parallelDone := make(map[string]bool)
+	if ownsWorkspace && source.opAccountId == source.toAccountId {
+		var independent []*tableInfo
+		for _, table := range sourceTables {
+			if table.typ == view || isSequence(table) || !table.parallelClone {
+				continue
+			}
+			if _, depends := source.fkTableMap[genKey(table.dbName, table.tblName)]; depends {
+				continue
+			}
+			if plan.IndependentCloneTarget(ordinaryTableCloneCtx, admission.proc.GetTxnOperator(), source.toAccountId,
+				stmt.DstDatabase.String(), table.tblName) {
+				independent = append(independent, table)
+			}
+		}
+		if len(independent) > 1 {
+			cloned, cloneErr := cloneIndependentDatabaseTables(ordinaryTableCloneCtx, bh.(*backExec), admission.proc, independent,
+				func(ctx context.Context, worker BackgroundExec, table *tableInfo) (cloneReceipt, error) {
+					return cloneTable(ctx, worker, stmt.DstDatabase.String(), table.tblName,
+						stmt.SrcDatabase.String(), table.tblName, true)
+				})
+			if cloneErr != nil {
+				err = cloneErr
+				return
+			}
+			receipts = append(receipts, cloned...)
+			for _, table := range independent {
+				parallelDone[table.tblName] = true
+			}
+		}
+	}
+
 	for _, srcTbl := range sourceTables {
+		if parallelDone[srcTbl.tblName] {
+			continue
+		}
 
 		key := genKey(srcTbl.dbName, srcTbl.tblName)
 		if _, ok := source.fkTableMap[key]; ok {
@@ -1600,12 +1647,15 @@ func handleCloneDatabaseWithSource(
 		} else if err = indexBatch.Flush(); err != nil {
 			return
 		}
-		if err = cloneTable(
-			cloneCtx, stmt.DstDatabase.String(), srcTbl.tblName,
+		receipt, cloneErr := cloneTable(
+			cloneCtx, bh, stmt.DstDatabase.String(), srcTbl.tblName,
 			stmt.SrcDatabase.String(), srcTbl.tblName, ownsWorkspace && srcTbl.batchCloneIndexCatalog,
-		); err != nil {
+		)
+		if cloneErr != nil {
+			err = cloneErr
 			return
 		}
+		receipts = append(receipts, receipt)
 		if err = indexBatch.FinishTable(); err != nil {
 			return
 		}
@@ -1621,12 +1671,15 @@ func handleCloneDatabaseWithSource(
 			if !isCloneableCloneDatabaseTable(tblInfo) {
 				continue
 			}
-			if err = cloneTable(
-				tableCloneCtx, stmt.DstDatabase.String(), tblInfo.tblName,
+			receipt, cloneErr := cloneTable(
+				tableCloneCtx, bh, stmt.DstDatabase.String(), tblInfo.tblName,
 				stmt.SrcDatabase.String(), tblInfo.tblName, ownsWorkspace && tblInfo.batchCloneIndexCatalog,
-			); err != nil {
+			)
+			if cloneErr != nil {
+				err = cloneErr
 				return
 			}
+			receipts = append(receipts, receipt)
 		}
 	}
 

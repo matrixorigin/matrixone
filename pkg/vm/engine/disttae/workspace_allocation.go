@@ -15,6 +15,9 @@
 package disttae
 
 import (
+	"context"
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -200,4 +203,50 @@ func (txn *Transaction) adoptCatalogInsert(note string, tableID uint64, tableNam
 		catalog.MO_CATALOG, tableName, rows, attrs, txn.tnStores[0])
 	published = err == nil
 	return err
+}
+
+// adoptCatalogCreate consumes the catalog pair in one workspace critical
+// section. TN decodes CREATE from adjacent mo_tables and mo_columns entries.
+func (txn *Transaction) adoptCatalogCreate(note string, table, columns *batch.Batch) (err error) {
+	batches := []*batch.Batch{table, columns}
+	published := 0
+	defer func() {
+		for _, rows := range batches[published:] {
+			txn.takeWorkspaceCopy(rows)
+			rows.Clean(txn.workspaceMP())
+		}
+	}()
+	for _, rows := range batches {
+		txn.rememberWorkspaceCopy(rows)
+	}
+	ctx := context.Background()
+	if txn.proc != nil && txn.proc.Ctx != nil {
+		ctx = txn.proc.Ctx
+	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
+	txn.readOnly.Store(false)
+	txn.Lock()
+	defer txn.Unlock()
+	for i, tableID := range []uint64{catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID} {
+		name, attrs := catalog.MO_TABLES, catalog.MoTablesSchema
+		if tableID == catalog.MO_COLUMNS_ID {
+			name, attrs = catalog.MO_COLUMNS, catalog.MoColumnsSchema
+		}
+		_, err = txn.appendBatchLocked(Entry{
+			typ: INSERT, accountId: catalog.System_Account,
+			databaseId: catalog.MO_CATALOG_ID, tableId: tableID,
+			databaseName: catalog.MO_CATALOG, tableName: name,
+			bat: batches[i], attrs: slices.Clone(attrs), tnStore: txn.tnStores[0], note: note,
+			pkCheckPos: -1, pkCheckReady: true,
+		})
+		if err != nil {
+			return err
+		}
+		published++
+	}
+	return nil
 }
