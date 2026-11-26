@@ -77,10 +77,10 @@ type service struct {
 	fetchWhoWaitingListC  chan who
 	logger                *log.MOLogger
 	commitSequence        atomic.Uint64
+	forwardBindResolvers  atomic.Int32
 
 	allocatorVersionMu         sync.Mutex
-	lastAllocatorVersion       uint64
-	lastAllocatorID            string
+	lastAllocatorState         atomic.Pointer[allocatorState] // immutable snapshot for requests
 	supersededAllocatorIDs     map[string]struct{}
 	supersededAllocatorIDOrder []string
 
@@ -187,6 +187,9 @@ func (s *service) Lock(
 
 	admission, admitted := s.beginLockAdmission(txnID, options, tableID, rows, options.ForwardTo == "")
 	if !admitted {
+		if err := s.checkFencedTxn(txnID); err != nil {
+			return pb.Result{}, err
+		}
 		return pb.Result{}, moerr.NewNewTxnInCNRollingRestart()
 	}
 	defer func() {
@@ -236,7 +239,9 @@ func (s *service) Lock(
 		options.Group,
 		tableID,
 		rows,
-		options.Sharding)
+		options.Sharding,
+		txnID,
+		false)
 	if err != nil {
 		return pb.Result{}, err
 	}
@@ -273,10 +278,10 @@ func (s *service) Lock(
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrDeadLockDetected
 	}
-	if txn.bindChanged {
+	if txn.isFenced() {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
-		return pb.Result{}, ErrLockTableBindChanged
+		return pb.Result{}, moerr.NewLockTableBindChangedForFencedTxnNoCtx()
 	}
 	if err := ctx.Err(); err != nil {
 		txn.Unlock()
@@ -287,10 +292,15 @@ func (s *service) Lock(
 	// it needs to inc table bind ref when set restart cn
 	bind := l.getBind()
 	current := s.tableGroups.get(bind.Group, bind.Table)
-	if !sameLockTableForTxn(current, l) || txn.fenceReplacedLockTableLocked(bind, l, s.logger) {
+	if !sameLockTableForTxn(current, l) {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrLockTableBindChanged
+	}
+	if txn.fenceReplacedLockTableLocked(bind, l, s.logger) {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		return pb.Result{}, moerr.NewLockTableBindChangedForFencedTxnNoCtx()
 	}
 
 	if txn.lockTableBindTouched(bind, l) &&
@@ -1174,16 +1184,27 @@ func (s *service) getLockTable(
 	ctx context.Context,
 	group uint32,
 	tableID uint64) (lockTable, error) {
-	return s.getLockTableWithContext(ctx, group, tableID)
+	return s.getLockTableWithContext(ctx, group, tableID, nil)
 }
 
 func (s *service) getLockTableWithContext(
 	ctx context.Context,
 	group uint32,
-	tableID uint64) (lockTable, error) {
+	tableID uint64,
+	txnID []byte) (table lockTable, err error) {
 	if v := s.tableGroups.get(group, tableID); v != nil {
 		return v, nil
 	}
+	ctx, finish, err := s.bindLookupContext(ctx, txnID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		finish(&err)
+		if err != nil {
+			table = nil
+		}
+	}()
 	return s.waitLockTableBindWithContext(
 		ctx,
 		group,
@@ -1232,7 +1253,9 @@ func (s *service) getLockTableWithCreate(
 		group,
 		tableID,
 		rows,
-		sharding)
+		sharding,
+		nil,
+		false)
 }
 
 func (s *service) getLockTableWithCreateContext(
@@ -1240,7 +1263,9 @@ func (s *service) getLockTableWithCreateContext(
 	group uint32,
 	tableID uint64,
 	rows [][]byte,
-	sharding pb.Sharding) (lockTable, error) {
+	sharding pb.Sharding,
+	txnID []byte,
+	limitForwardBind bool) (table lockTable, err error) {
 	originTableID := tableID
 	if sharding == pb.Sharding_ByRow {
 		tableID = ShardingByRow(rows[0])
@@ -1252,12 +1277,30 @@ func (s *service) getLockTableWithCreateContext(
 		}
 		return v, nil
 	}
+	ctx, finish, err := s.bindLookupContext(ctx, txnID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		finish(&err)
+		if err != nil {
+			table = nil
+		}
+	}()
+
+	if limitForwardBind {
+		if err := s.acquireForwardBindSlot(ctx); err != nil {
+			return nil, err
+		}
+		defer s.forwardBindResolvers.Add(-1)
+	}
 
 	var c chan struct{}
 	fn := func() (lockTable, error) {
 		s.mu.Lock()
-		waitC := s.getAllocatingC(group, tableID, true)
-		if waitC != nil {
+		// A canceled allocator may leave no binding. Recheck ownership so
+		// only one of its awakened followers starts the replacement lookup.
+		for waitC := s.getAllocatingC(group, tableID, true); waitC != nil; waitC = s.getAllocatingC(group, tableID, true) {
 			s.mu.Unlock()
 			select {
 			case <-waitC:
@@ -1324,6 +1367,59 @@ func (s *service) getLockTableWithCreateContext(
 		bind,
 		allocator,
 		requestAllocator)
+}
+
+// Subscribe only when waiting for an allocator binding. The context belongs to one holder
+// generation and survives removal or reuse of the pooled activeTxn.
+func (s *service) bindLookupContext(ctx context.Context, txnID []byte) (context.Context, func(*error), error) {
+	if len(txnID) == 0 {
+		return ctx, func(*error) {}, nil
+	}
+	fence, release := s.activeTxnHolder.subscribeBindFence(txnID)
+	if err := bindFenceError(fence); err != nil {
+		if release != nil {
+			release()
+		}
+		return ctx, nil, err
+	}
+
+	waitCtx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(fence, cancel)
+	return waitCtx, func(err *error) {
+		stop()
+		cancel()
+		if release != nil {
+			release()
+		}
+		// Check the fence itself. The callback can lag behind caller
+		// cancellation or lose the race to set the wait context's cause.
+		if fenceErr := bindFenceError(fence); fenceErr != nil {
+			*err = fenceErr
+		}
+	}, nil
+}
+
+func bindFenceError(fence context.Context) error {
+	if fence == nil {
+		return moerr.NewLockTableBindChangedForFencedTxnNoCtx()
+	}
+	cause := context.Cause(fence)
+	if cause == ErrLockTableBindChanged {
+		return moerr.NewLockTableBindChangedForFencedTxnNoCtx()
+	}
+	return cause
+}
+
+// A cold binding may wait on another allocation or the allocator RPC. Do not
+// enter that wait for a transaction that is already fenced.
+func (s *service) checkFencedTxn(txnID []byte) error {
+	if len(txnID) == 0 {
+		return nil
+	}
+	if s.activeTxnHolder.isTxnFenced(txnID) {
+		return moerr.NewLockTableBindChangedForFencedTxnNoCtx()
+	}
+	return nil
 }
 
 func (s *service) publishLockTableBindFromAllocator(
@@ -1464,8 +1560,8 @@ func (s *service) checkBindChangedBeforeLockSuccess(
 	if txn.closing.Load() || !bytes.Equal(txn.txnID, txnID) {
 		return ErrTxnNotFound
 	}
-	if txn.bindChanged {
-		return ErrLockTableBindChanged
+	if txn.isFenced() {
+		return moerr.NewLockTableBindChangedForFencedTxnNoCtx()
 	}
 	bind := expected.getBind()
 	if !sameLockTableForTxn(s.tableGroups.get(bind.Group, bind.Table), expected) {
@@ -1511,8 +1607,8 @@ func (s *service) observeAllocatorStateLocked(
 		return 0, true
 	}
 
-	oldVersion := s.lastAllocatorVersion
-	oldID := s.lastAllocatorID
+	current := s.allocatorStateSnapshot()
+	oldVersion, oldID := current.version, current.id
 	allocatorChanged := observed.id != "" &&
 		observed.id != oldID &&
 		(oldID != "" || oldVersion != 0)
@@ -1561,14 +1657,17 @@ func (s *service) observeAllocatorStateLocked(
 }
 
 func (s *service) updateAllocatorStateLocked(observed allocatorState) {
-	if observed.id != "" {
-		if s.lastAllocatorID != "" && s.lastAllocatorID != observed.id {
-			s.addSupersededAllocatorIDLocked(s.lastAllocatorID)
-		}
-		s.lastAllocatorID = observed.id
+	current := s.allocatorStateSnapshot()
+	if observed.id == "" {
+		observed.id = current.id
+	} else if current.id != "" && current.id != observed.id {
+		s.addSupersededAllocatorIDLocked(current.id)
 	}
-	if observed.version != 0 {
-		s.lastAllocatorVersion = observed.version
+	if observed.version == 0 {
+		observed.version = current.version
+	}
+	if observed != current {
+		s.lastAllocatorState.Store(&observed)
 	}
 }
 
@@ -1595,12 +1694,10 @@ func (s *service) addSupersededAllocatorIDLocked(id string) {
 }
 
 func (s *service) allocatorStateSnapshot() allocatorState {
-	s.allocatorVersionMu.Lock()
-	defer s.allocatorVersionMu.Unlock()
-	return allocatorState{
-		id:      s.lastAllocatorID,
-		version: s.lastAllocatorVersion,
+	if current := s.lastAllocatorState.Load(); current != nil {
+		return *current
 	}
+	return allocatorState{}
 }
 
 func (s *service) isAllocatorStateRejectedLocked(
@@ -1678,14 +1775,15 @@ func (s *service) handleKeepBindFailed(
 	s.allocatorVersionMu.Lock()
 	defer s.allocatorVersionMu.Unlock()
 
+	current := s.allocatorStateSnapshot()
 	if s.isAllocatorStateRejectedLocked(
 		"keepalive-ok-false-epoch",
 		allocator,
 		requestAllocator,
 		true,
-		allocator.id != "" && allocator.id != s.lastAllocatorID && (s.lastAllocatorID != "" || s.lastAllocatorVersion != 0),
-		s.lastAllocatorID,
-		s.lastAllocatorVersion) {
+		allocator.id != "" && allocator.id != current.id && current != (allocatorState{}),
+		current.id,
+		current.version) {
 		return 0
 	}
 
@@ -1770,6 +1868,8 @@ type activeTxnHolder interface {
 	retireRemoteAdmission(txnID []byte, cutoff int64) bool
 	remoteAdmissionExpired(txnID []byte, cutoff int64) bool
 	hasActiveTxn(txnID []byte) bool
+	isTxnFenced(txnID []byte) bool
+	subscribeBindFence(txnID []byte) (context.Context, func())
 	deleteActiveTxn(txnID []byte) *activeTxn
 	restoreActiveTxn(txn *activeTxn) bool
 	fenceByBindChanged(bind pb.LockTable) int
@@ -1794,7 +1894,15 @@ type activeTxnEntry struct {
 	bindStamp     uint64
 	generation    uint64
 	txn           *activeTxn
+	pendingFence  *pendingBindFence
 	remoteService string
+}
+
+// A cold lookup may start before the active holder exists. Keep its fence
+// under the same shard lock so publication can adopt it without a gap.
+type pendingBindFence struct {
+	fence   *txnBindFence
+	waiters int
 }
 
 type activeTxnShard struct {
@@ -1892,7 +2000,7 @@ func (h *mapBasedTxnHolder) admitSourceTxn(txnID []byte) activeTxnEntry {
 	if entry.txn != nil {
 		return entry
 	}
-	if entry.pendingBinds == 0 {
+	if entry.bindStamp == 0 {
 		shard.nextBindStamp++
 		entry.bindStamp = shard.nextBindStamp
 		key = string(txnID)
@@ -1924,15 +2032,15 @@ func (h *mapBasedTxnHolder) discardSourceBind(txnID []byte, stamp uint64) {
 	shard.Lock()
 	defer shard.Unlock()
 	entry := shard.txns[key]
-	if entry.bindStamp != stamp || entry.txn != nil {
-		return
-	}
-	if entry.pendingBinds == 1 {
-		delete(shard.txns, key)
+	if entry.bindStamp != stamp || entry.txn != nil || entry.pendingBinds == 0 {
 		return
 	}
 	entry.pendingBinds--
-	shard.txns[key] = entry
+	if entry.pendingBinds == 0 && entry.pendingFence == nil {
+		delete(shard.txns, key)
+	} else {
+		shard.txns[key] = entry
+	}
 }
 
 func (h *mapBasedTxnHolder) lookupClosingTxn(txnID []byte) activeTxnEntry {
@@ -1941,7 +2049,7 @@ func (h *mapBasedTxnHolder) lookupClosingTxn(txnID []byte) activeTxnEntry {
 	shard.RLock()
 	entry := shard.txns[key]
 	shard.RUnlock()
-	if entry.pendingBinds == 0 {
+	if entry.pendingBinds == 0 && entry.pendingFence == nil {
 		return entry
 	}
 	stamp := entry.bindStamp
@@ -1951,8 +2059,9 @@ func (h *mapBasedTxnHolder) lookupClosingTxn(txnID []byte) activeTxnEntry {
 	if entry.bindStamp != stamp {
 		return activeTxnEntry{}
 	}
-	if entry.pendingBinds != 0 {
+	if entry.txn == nil {
 		delete(shard.txns, key)
+		entry.cancelPendingFence(ErrTxnNotFound)
 		return activeTxnEntry{}
 	}
 	return entry
@@ -1999,14 +2108,16 @@ func (h *mapBasedTxnHolder) publishHandoffTxns(targets map[string]*lockHandoffTa
 	}
 	for key, target := range targets {
 		if target.created {
-			if _, found := h.getActiveTxnShard(key).txns[key]; found {
+			entry := h.getActiveTxnShard(key).txns[key]
+			if entry.txn != nil || entry.pendingBinds != 0 {
 				return false
 			}
 		}
 	}
 	for key, target := range targets {
 		if target.created {
-			h.publishTxnLocked(h.getActiveTxnShard(key), target.txn, 0)
+			shard := h.getActiveTxnShard(key)
+			h.publishTxnLocked(shard, target.txn, shard.txns[key].bindStamp)
 			target.created = false
 		}
 	}
@@ -2072,6 +2183,9 @@ func (h *mapBasedTxnHolder) findOrCreateTxn(
 
 func (h *mapBasedTxnHolder) publishTxnLocked(shard *activeTxnShard, txn *activeTxn, stamp uint64) activeTxnEntry {
 	txnKey, remoteService := txn.txnKey, txn.remoteService
+	if pending := shard.txns[txnKey].pendingFence; pending != nil {
+		txn.bindFence.Store(pending.fence)
+	}
 	// Publish the transaction count before the map entry. This keeps empty()
 	// conservative while a create is in flight: count == 0 always means that
 	// every shard is empty, which is required by the service drain transition.
@@ -2097,9 +2211,74 @@ func (h *mapBasedTxnHolder) hasActiveTxn(txnID []byte) bool {
 	txnKey := util.UnsafeBytesToString(txnID)
 	shard := h.getActiveTxnShard(txnKey)
 	shard.RLock()
-	_, ok := shard.txns[txnKey]
+	entry := shard.txns[txnKey]
 	shard.RUnlock()
-	return ok
+	return entry.txn != nil || entry.pendingBinds != 0
+}
+
+// The shard read lock keeps the pooled transaction in this generation while
+// reading its fence. It never waits for the transaction's lock.
+func (h *mapBasedTxnHolder) isTxnFenced(txnID []byte) bool {
+	key := util.UnsafeBytesToString(txnID)
+	shard := h.getActiveTxnShard(key)
+	shard.RLock()
+	defer shard.RUnlock()
+	entry := shard.txns[key]
+	return entry.txn != nil && entry.txn.isFenced()
+}
+
+func (e activeTxnEntry) cancelPendingFence(cause error) {
+	if e.pendingFence != nil {
+		e.pendingFence.fence.cancel(cause)
+	}
+}
+
+func (h *mapBasedTxnHolder) subscribeBindFence(txnID []byte) (context.Context, func()) {
+	key := util.UnsafeBytesToString(txnID)
+	shard := h.getActiveTxnShard(key)
+	shard.RLock()
+	if entry := shard.txns[key]; entry.txn != nil {
+		ctx := entry.txn.bindFenceContext()
+		shard.RUnlock()
+		return ctx, nil
+	}
+	shard.RUnlock()
+
+	shard.Lock()
+	defer shard.Unlock()
+	entry := shard.txns[key]
+	if entry.txn != nil {
+		return entry.txn.bindFenceContext(), nil
+	}
+	key = string(txnID)
+	pending := entry.pendingFence
+	if pending == nil {
+		pending = &pendingBindFence{fence: newTxnBindFence()}
+		entry.pendingFence = pending
+		if entry.bindStamp == 0 {
+			shard.nextBindStamp++
+			entry.bindStamp = shard.nextBindStamp
+		}
+		shard.txns[key] = entry
+	}
+	pending.waiters++
+	return pending.fence.ctx, func() {
+		shard.Lock()
+		defer shard.Unlock()
+		entry := shard.txns[key]
+		if entry.pendingFence != pending {
+			return
+		}
+		pending.waiters--
+		if pending.waiters == 0 {
+			entry.pendingFence = nil
+			if entry.pendingBinds == 0 {
+				delete(shard.txns, key)
+			} else {
+				shard.txns[key] = entry
+			}
+		}
+	}
 }
 
 func (h *mapBasedTxnHolder) empty() bool {
@@ -2126,6 +2305,7 @@ func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
 	shard := h.getActiveTxnShard(txnKey)
 	shard.Lock()
 	entry, ok := shard.txns[txnKey]
+	entry.cancelPendingFence(ErrTxnNotFound)
 	if ok {
 		delete(shard.txns, txnKey)
 		if entry.txn != nil {
@@ -2147,6 +2327,11 @@ func (h *mapBasedTxnHolder) restoreActiveTxn(txn *activeTxn) bool {
 		shard.Unlock()
 		return entry.txn == txn
 	}
+	cause := ErrTxnNotFound
+	if txn.isFenced() {
+		cause = ErrLockTableBindChanged
+	}
+	entry.cancelPendingFence(cause)
 	h.activeTxnCount.Add(1)
 	shard.txns[txn.txnKey] = activeTxnEntry{txn: txn, remoteService: txn.remoteService, generation: txn.generation, bindStamp: entry.bindStamp}
 	shard.Unlock()
@@ -2397,6 +2582,7 @@ func (h *mapBasedTxnHolder) close() {
 	}
 	for i := range h.activeTxns {
 		for txnKey, entry := range h.activeTxns[i].txns {
+			entry.cancelPendingFence(ErrTxnNotFound)
 			if entry.txn != nil {
 				reuse.Free(entry.txn, nil)
 			}

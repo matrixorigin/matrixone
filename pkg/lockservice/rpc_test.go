@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -67,6 +69,104 @@ func (c *blockingCloseRPCClient) Close() error {
 
 func (c *blockingCloseRPCClient) CloseBackendFor(string) error {
 	return nil
+}
+
+type getBindQueueObserver struct {
+	morpc.RPCClient
+	table  uint64
+	queued chan *lock.Request
+}
+
+func (c *getBindQueueObserver) Send(ctx context.Context, address string, message morpc.Message) (*morpc.Future, error) {
+	req := message.(*lock.Request)
+	observe := req.Method == lock.Method_GetBind && req.GetBind.Table == c.table
+	f, err := c.RPCClient.Send(ctx, address, message)
+	if observe && err == nil {
+		c.queued <- req
+	}
+	return f, err
+}
+
+func TestFenceCancelsGetBindWhileWriterIsBlocked(t *testing.T) {
+	const held, blocker, target = 8001, 8002, 8003
+	writerEntered := make(chan struct{})
+	writerGate := make(chan struct{})
+	releaseWriter := sync.OnceFunc(func() { close(writerGate) })
+	runLockServiceTestsWithAdjustConfig(t, []string{"s1"}, 10*time.Second, func(_ *lockTableAllocator, services []*service) {
+		defer releaseWriter()
+		s := services[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		txnID := []byte("queued-get-bind")
+		_, err := s.Lock(ctx, held, [][]byte{{1}}, txnID, newTestRowExclusiveOptions())
+		require.NoError(t, err)
+		defer s.Unlock(ctx, txnID, timestamp.Timestamp{})
+		txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+		heldBind := s.tableGroups.get(0, held).getBind()
+		heldBind.Version++
+
+		base := s.remote.client.(*client)
+		observer := &getBindQueueObserver{
+			RPCClient: base.client,
+			table:     target,
+			queued:    make(chan *lock.Request, 1),
+		}
+		// Use the service's real transport without replacing a client that
+		// the service's background tasks may already be using.
+		c := &client{service: base.service, logger: base.logger, cluster: base.cluster, client: observer}
+		lookup := func(ctx context.Context, table uint64) error {
+			_, _, err := getLockTableBindWithContext(ctx, c, 0, table, table, s.serviceID, lock.Sharding_None)
+			return err
+		}
+		blockedWrite := make(chan error, 1)
+		go func() { blockedWrite <- lookup(ctx, blocker) }()
+		select {
+		case <-writerEntered:
+		case <-ctx.Done():
+			t.Fatal("writer did not reach the gate")
+		}
+
+		lookupCold := func() (err error) {
+			bindCtx, finish, err := s.bindLookupContext(ctx, txnID)
+			if err != nil {
+				return err
+			}
+			defer finish(&err)
+			return lookup(bindCtx, target)
+		}
+		done := make(chan error, 1)
+		go func() { done <- lookupCold() }()
+		var queued *lock.Request
+		select {
+		case queued = <-observer.queued:
+		case <-ctx.Done():
+			t.Fatal("second GetBind did not enqueue")
+		}
+		require.True(t, txn.fenceByBindChanged(heldBind, s.logger))
+		select {
+		case err := <-done:
+			require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
+		case <-ctx.Done():
+			t.Fatal("GetBind waited for a blocked write after the fence")
+		}
+		require.EqualValues(t, target, queued.GetBind.Table, "queued copy must outlive the caller")
+		releaseWriter()
+		require.NoError(t, <-blockedWrite)
+	}, func(c *Config) {
+		c.RPC.MaxConnections = 1
+		c.RPC.BackendOptions = append(c.RPC.BackendOptions,
+			morpc.WithBackendBatchSendSize(1),
+			morpc.WithBackendFilter(func(msg morpc.Message, _ string) bool {
+				req, ok := msg.(*lock.Request)
+				if ok && req.Method == lock.Method_GetBind && req.GetBind.Table == blocker {
+					close(writerEntered)
+					<-writerGate
+				}
+				return true
+			}),
+		)
+	})
 }
 
 type refreshOnDemandCluster struct {
@@ -255,6 +355,7 @@ func TestLockserviceRemoteRPCErrorType(t *testing.T) {
 		{"backend closed", moerr.NewBackendClosedNoCtx(), "backend_closed"},
 		{"unexpected eof", io.ErrUnexpectedEOF, "unexpected_eof"},
 		{"caller context deadline ignored", context.DeadlineExceeded, ""},
+		{"binding lookup deadline", moerr.CauseGetLockTableBind, "timeout"},
 		{"string timeout", moerr.NewInternalErrorNoCtx("read tcp 127.0.0.1:6003: i/o timeout"), "timeout"},
 		{"business error ignored", moerr.NewInternalErrorNoCtx("lock conflict"), ""},
 	}
