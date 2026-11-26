@@ -1030,6 +1030,22 @@ func (t *combinedTxnTable) CollectObjectList(
 	panic("not implemented")
 }
 
+func (t *combinedTxnTable) VisibleObjectCount(ctx context.Context) (int, error) {
+	tables, err := t.tablesFunc()
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, rel := range tables {
+		n, err := rel.VisibleObjectCount(ctx)
+		if err != nil {
+			return 0, err
+		}
+		count += n
+	}
+	return count, nil
+}
+
 func (t *combinedTxnTable) ApproxObjectsNum(ctx context.Context) int {
 	tables, err := t.tablesFunc()
 	if err != nil {
