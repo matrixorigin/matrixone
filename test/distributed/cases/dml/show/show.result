@@ -257,6 +257,7 @@ use mo_catalog;
 show tables;
 ➤ Tables_in_mo_catalog[12,-1,0]  𝄀
 mo_account  𝄀
+mo_branch_fork_keys  𝄀
 mo_branch_metadata  𝄀
 mo_cache  𝄀
 mo_ccpr_dbs  𝄀
@@ -319,7 +320,7 @@ mo_view_dependencies  𝄀
 mo_view_refresh
 show table_number from mo_catalog;
 ➤ Number of tables in mo_catalog[-5,64,0]  𝄀
-61
+62
 show column_number from mo_database;
 ➤ Number of columns in mo_database[-5,64,0]  𝄀
 9

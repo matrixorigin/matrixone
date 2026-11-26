@@ -41,6 +41,11 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 		require.ErrorAs(t, err, &sqlErr)
 		require.EqualValues(t, 1146, sqlErr.Number)
 
+		var noAutoIncrement bool
+		err = conn.QueryRowContext(t.Context(), "select auto_increment is null from information_schema.tables where table_schema='mo_catalog' and table_name='mo_branch_fork_keys'").Scan(&noAutoIncrement)
+		require.NoError(t, err)
+		require.True(t, noAutoIncrement)
+
 		for _, tc := range []struct {
 			name         string
 			setup        []string
