@@ -44,6 +44,46 @@ type selectionState struct {
 	// uses is the reader column policy for selected reads: the columns the
 	// scan outputs are borrowed (ReaderColumnRetain) instead of copied.
 	uses []engine.ReaderColumnUse
+	// gather holds a selection decoded into row positions, for gathers of
+	// several columns: one decode serves every column, where UnionByMask
+	// scans the bitmap once per column. It is reused across blocks.
+	gather []int64
+}
+
+// minRowListColumns is the number of columns from which a gather decodes
+// the selection into a row list once instead of reading the mask per column.
+const minRowListColumns = 2
+
+// gatherRows decodes the rows set in sel into the scan's row list. It returns
+// nil, and the caller gathers by mask, when sel has a row at or past rows.
+// The list is valid until the next call.
+func (s *selectionState) gatherRows(sel *bitmap.Bitmap, rows int) []int64 {
+	if n := sel.Len(); n > int64(rows) && sel.CountRange(uint64(rows), uint64(n)) != 0 {
+		return nil
+	}
+	s.gather = bitmap.AppendRows(sel, s.gather[:0])
+	return s.gather
+}
+
+// unionSelected appends the rows of src selected by sel to dst: through
+// rows when they are decoded, else by mask.
+func unionSelected(dst, src *vector.Vector, sel *bitmap.Bitmap, rows []int64, mp *mpool.MPool) error {
+	if rows != nil {
+		return dst.Union(src, rows, mp)
+	}
+	return dst.UnionByMask(src, sel, mp)
+}
+
+// countGathered is the number of vecs a selection gather copies: the
+// non-nil ones that are not left empty by the reader.
+func countGathered(vecs []*vector.Vector, physical int) int {
+	n := 0
+	for _, vec := range vecs {
+		if vec != nil && (vec.Length() != 0 || physical == 0) {
+			n++
+		}
+	}
+	return n
 }
 
 // borrowedUses returns columnUses with every owned column borrowed instead.
@@ -111,6 +151,10 @@ func (s *selectionState) compactInto(out *batch.Batch, mp *mpool.MPool) (*batch.
 	compact.CleanOnlyData()
 	physical := out.PhysicalRowCount()
 	sel := out.Selection()
+	var rows []int64
+	if countGathered(out.Vecs, physical) >= minRowListColumns {
+		rows = s.gatherRows(sel, physical)
+	}
 	for i, vec := range out.Vecs {
 		if vec == nil {
 			compact.Vecs[i] = nil
@@ -127,7 +171,7 @@ func (s *selectionState) compactInto(out *batch.Batch, mp *mpool.MPool) (*batch.
 		if vec.Length() == 0 && physical != 0 {
 			continue
 		}
-		if err := dst.UnionByMask(vec, sel, mp); err != nil {
+		if err := unionSelected(dst, vec, sel, rows, mp); err != nil {
 			return nil, err
 		}
 		dst.SetSorted(vec.GetSorted())
@@ -150,6 +194,7 @@ func (s *selectionState) free(mp *mpool.MPool) {
 	s.keep.Free()
 	s.pred.Free()
 	s.dep.Free()
+	s.gather = nil
 	s.freeCompact(mp)
 }
 

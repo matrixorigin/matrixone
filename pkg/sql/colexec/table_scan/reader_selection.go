@@ -134,7 +134,7 @@ func (tableScan *TableScan) selectPredicateMask(proc *process.Process, input *ba
 			return engine.ReaderFilterResult{Mask: keep}, nil
 		}
 		if i+1 < len(executors) {
-			next, err := gatherSelectedColumns(proc, input, loaded, keep, tableScan.OutputAllocation)
+			next, err := gatherSelectedColumns(proc, input, loaded, keep, s, tableScan.OutputAllocation)
 			if err != nil {
 				return engine.ReaderFilterResult{}, err
 			}
@@ -152,7 +152,10 @@ func (tableScan *TableScan) selectPredicateMask(proc *process.Process, input *ba
 
 // gatherSelectedColumns copies the selected rows of the loaded (or, for nil,
 // every populated) column into a private flat batch with input's schema.
-func gatherSelectedColumns(proc *process.Process, input *batch.Batch, loaded []int, rows *bitmap.Bitmap, allocation *mpool.MPool) (_ *batch.Batch, retErr error) {
+//
+// With several columns to copy, the selection is decoded once into the
+// scan's row list (s.gather) and every column is gathered through it.
+func gatherSelectedColumns(proc *process.Process, input *batch.Batch, loaded []int, rows *bitmap.Bitmap, s *selectionState, allocation *mpool.MPool) (_ *batch.Batch, retErr error) {
 	mp := proc.Mp()
 	if allocation != nil {
 		mp = allocation
@@ -163,6 +166,14 @@ func gatherSelectedColumns(proc *process.Process, input *batch.Batch, loaded []i
 			output.Clean(mp)
 		}
 	}()
+	columns := len(loaded)
+	if loaded == nil {
+		columns = countGathered(input.Vecs, input.RowCount())
+	}
+	var list []int64
+	if columns >= minRowListColumns {
+		list = s.gatherRows(rows, input.RowCount())
+	}
 	gather := func(pos int) error {
 		source := input.Vecs[pos]
 		if source == nil || (source.Length() == 0 && input.RowCount() != 0) {
@@ -170,10 +181,7 @@ func gatherSelectedColumns(proc *process.Process, input *batch.Batch, loaded []i
 		}
 		dst := vector.NewVec(*source.GetType(), mp)
 		output.Vecs[pos] = dst
-		if err := dst.UnionByMask(source, rows, mp); err != nil {
-			return err
-		}
-		return nil
+		return unionSelected(dst, source, rows, list, mp)
 	}
 	if loaded == nil {
 		for pos := range input.Vecs {
