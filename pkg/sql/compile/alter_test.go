@@ -329,17 +329,39 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 	})
 }
 
-func TestAlterCopySQLAtLineageSnapshot(t *testing.T) {
+func TestAlterCopySourceRead(t *testing.T) {
 	const sql = "insert into copy select * from source"
-	require.Equal(t, sql, alterCopySQLAtLineageSnapshot(sql, alterDataBranchLineagePlan{}))
-	require.Equal(t, sql, alterCopySQLAtLineageSnapshot(sql, alterDataBranchLineagePlan{
-		enabled: true,
-		cloneTS: 123,
+	snapshot := timestamp.Timestamp{PhysicalTime: 124, LogicalTime: 1}
+	for _, tc := range []struct {
+		name string
+		plan alterDataBranchLineagePlan
+		sql  string
+		ts   types.TS
+	}{
+		{name: "ordinary source", sql: sql, ts: types.BuildTS(124, 1)},
+		{name: "lineage with workspace history", plan: alterDataBranchLineagePlan{
+			enabled: true, cloneTS: 123,
+		}, sql: sql, ts: types.BuildTS(124, 1)},
+		{name: "fixed historical source", plan: alterDataBranchLineagePlan{
+			enabled: true, fixedCopyTS: true, cloneTS: 123,
+		}, sql: sql + " {MO_TS = 123}", ts: types.BuildTS(123, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readSQL, readTS := alterCopySourceRead(sql, tc.plan, snapshot)
+			require.Equal(t, tc.sql, readSQL)
+			require.Equal(t, tc.ts, readTS)
+		})
+	}
+}
+
+func TestAlterCopyValidationTS(t *testing.T) {
+	readTS := types.BuildTS(124, 1)
+	require.Equal(t, readTS, alterCopyValidationTS(readTS, alterDataBranchLineagePlan{cloneTS: 123}))
+	require.Equal(t, types.BuildTS(123, 0), alterCopyValidationTS(readTS, alterDataBranchLineagePlan{
+		enabled: true, cloneTS: 123,
 	}))
-	require.Equal(t, sql+" {MO_TS = 123}", alterCopySQLAtLineageSnapshot(sql, alterDataBranchLineagePlan{
-		enabled:     true,
-		fixedCopyTS: true,
-		cloneTS:     123,
+	require.Equal(t, readTS, alterCopyValidationTS(readTS, alterDataBranchLineagePlan{
+		enabled: true, cloneTS: 125,
 	}))
 }
 
@@ -3975,8 +3997,11 @@ func TestLockAlterCopySourceRetryContracts(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		optimistic    bool
+		rc            bool
+		temporary     bool
 		tableErr      error
 		relationErr   error
+		wantRetry     bool
 		wantLockCalls []string
 	}{
 		{
@@ -3986,11 +4011,33 @@ func TestLockAlterCopySourceRetryContracts(t *testing.T) {
 		{
 			name:          "catalog table retry is reported as definition change",
 			tableErr:      moerr.NewTxnNeedRetryNoCtx(),
+			wantRetry:     true,
 			wantLockCalls: []string{"database", "table", "relation"},
 		},
 		{
 			name:          "physical table retry is reported as definition change",
 			relationErr:   moerr.NewTxnNeedRetryNoCtx(),
+			wantRetry:     true,
+			wantLockCalls: []string{"database", "table", "relation"},
+		},
+		{
+			name:          "persistent RC source opts into refresh",
+			rc:            true,
+			wantLockCalls: []string{"database", "table", "refresh relation"},
+		},
+		{
+			name:          "persistent RC definition retry stays terminal",
+			rc:            true,
+			relationErr:   moerr.NewTxnNeedRetryWithDefChangedNoCtx(),
+			wantRetry:     true,
+			wantLockCalls: []string{"database", "table", "refresh relation"},
+		},
+		{
+			name:          "temporary RC source keeps pre-copy retry",
+			rc:            true,
+			temporary:     true,
+			relationErr:   moerr.NewTxnNeedRetryNoCtx(),
+			wantRetry:     true,
 			wantLockCalls: []string{"database", "table", "relation"},
 		},
 	} {
@@ -4002,9 +4049,13 @@ func TestLockAlterCopySourceRetryContracts(t *testing.T) {
 			if tc.optimistic {
 				txnMode = txn.TxnMode_Optimistic
 			}
+			isolation := txn.TxnIsolation_SI
+			if tc.rc {
+				isolation = txn.TxnIsolation_RC
+			}
 			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
 				Mode:      txnMode,
-				Isolation: txn.TxnIsolation_SI,
+				Isolation: isolation,
 			}).AnyTimes()
 			c.proc.Base.TxnOperator = txnOperator
 
@@ -4024,18 +4075,24 @@ func TestLockAlterCopySourceRetryContracts(t *testing.T) {
 					return tc.relationErr
 				},
 			)
+			stubs.Stub(&lockTableForSnapshotRefresh,
+				func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+					lockCalls = append(lockCalls, "refresh relation")
+					return tc.relationErr
+				},
+			)
 			t.Cleanup(stubs.Reset)
 
-			qry := &plan2.AlterTable{TableDef: &plan.TableDef{Name: "dept"}}
+			qry := &plan2.AlterTable{TableDef: &plan.TableDef{Name: "dept", IsTemporary: tc.temporary}}
 			err := c.lockAlterCopySource(
 				mock_frontend.NewMockDatabase(ctrl), "test", "dept",
 				mock_frontend.NewMockRelation(ctrl), qry,
 			)
 
-			if tc.optimistic {
-				require.NoError(t, err)
+			if tc.wantRetry {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
 			} else {
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+				require.NoError(t, err)
 			}
 			require.Equal(t, tc.wantLockCalls, lockCalls)
 		})
@@ -4257,7 +4314,7 @@ func TestAlterCopySkipsSourceChangesForRelationCreatedInCurrentTxn(t *testing.T)
 	compile := &Compile{proc: proc}
 	rel := &alterCopyCreatedInCurrentTxnRelation{}
 
-	changed, err := compile.alterCopySourceChangedSinceCopy(rel, 123456789)
+	changed, err := compile.alterCopySourceChangedSinceCopy(rel, types.BuildTS(123456789, 0))
 	require.NoError(t, err)
 	require.False(t, changed)
 	require.False(t, rel.sourceCommitTSCalled)
@@ -4268,7 +4325,7 @@ func TestAlterCopyChecksCommittedChangesDespiteTransactionLocalWrites(t *testing
 	compile := &Compile{proc: proc}
 	rel := &alterCopyTransactionLocalWritesRelation{}
 
-	changed, err := compile.alterCopySourceChangedSinceCopy(rel, 123456789)
+	changed, err := compile.alterCopySourceChangedSinceCopy(rel, types.BuildTS(123456789, 0))
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.True(t, rel.sourceCommitTSCalled)
@@ -4302,33 +4359,35 @@ func TestCompileInternalStatementOptionInheritsDisableLock(t *testing.T) {
 
 func TestAlterCopySourceChangedSinceCopyUsesSourceCommitTS(t *testing.T) {
 	compile := &Compile{proc: testutil.NewProcess(t)}
-	cases := []struct {
+	copyTS := types.BuildTS(123456789, 1)
+	for _, tc := range []struct {
 		name      string
-		sourceTS  func(types.TS) types.TS
+		sourceTS  types.TS
 		want      bool
 		wantError bool
 	}{
-		{name: "unchanged", sourceTS: func(ts types.TS) types.TS { return ts }},
-		{name: "changed", sourceTS: func(ts types.TS) types.TS { return ts.Next() }, want: true},
+		{name: "same physical time already copied", sourceTS: types.BuildTS(123456789, 0)},
+		{name: "inclusive read boundary", sourceTS: copyTS},
+		{name: "later logical commit", sourceTS: copyTS.Next(), want: true},
 		{name: "provider failure", wantError: true},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			rel := &alterCopySourceCommitTSRelation{
 				sourceCommitTS: func(_ context.Context, mustExceed types.TS) (types.TS, error) {
-					if testCase.sourceTS == nil {
+					require.Equal(t, copyTS, mustExceed)
+					if tc.wantError {
 						return types.TS{}, errors.New("source timestamp unavailable")
 					}
-					return testCase.sourceTS(mustExceed), nil
+					return tc.sourceTS, nil
 				},
 			}
-			changed, err := compile.alterCopySourceChangedSinceCopy(rel, 123456789)
-			if testCase.wantError {
+			changed, err := compile.alterCopySourceChangedSinceCopy(rel, copyTS)
+			if tc.wantError {
 				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, testCase.want, changed)
+			require.Equal(t, tc.want, changed)
 		})
 	}
 }
@@ -4339,7 +4398,7 @@ func TestAlterCopySourceChangedSinceCopyFailsClosedWithoutProvider(t *testing.T)
 	compile := &Compile{proc: testutil.NewProcess(t)}
 
 	_, err := compile.alterCopySourceChangedSinceCopy(
-		mock_frontend.NewMockRelation(ctrl), 123456789,
+		mock_frontend.NewMockRelation(ctrl), types.BuildTS(123456789, 0),
 	)
 	require.ErrorContains(t, err, "does not support source commit timestamp validation")
 }

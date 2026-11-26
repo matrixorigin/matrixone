@@ -15,6 +15,7 @@
 package issues
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -36,8 +37,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
@@ -49,6 +52,7 @@ type issue31401CopyObserver struct {
 	replicas sync.Map
 	// Optional barriers/failure injection operate at existing nested SQL calls.
 	hooksMu          sync.RWMutex
+	beforeCreate     func(context.Context, string, executor.Options) error
 	afterCopy        func(context.Context, int32) error
 	beforeRetire     func() error
 	beforeRecreate   func() error
@@ -358,9 +362,14 @@ func (o *issue31401CopyObserver) Exec(ctx context.Context, q string, opts execut
 	// Background SQL shares this observer with the test's hook updates. Snapshot
 	// callbacks under the lock, then release it before callbacks issue nested SQL.
 	o.hooksMu.RLock()
-	afterCopy, afterRetire := o.afterCopy, o.afterRetire
+	beforeCreate, afterCopy, afterRetire := o.beforeCreate, o.afterCopy, o.afterRetire
 	beforeRetire, beforeRecreate, beforeSourceDrop := o.beforeRetire, o.beforeRecreate, o.beforeSourceDrop
 	o.hooksMu.RUnlock()
+	if beforeCreate != nil && strings.HasPrefix(strings.ToLower(q), "create table ") {
+		if err := beforeCreate(ctx, q, opts); err != nil {
+			return executor.Result{}, err
+		}
+	}
 	copyOpt := opts.StatementOption().AlterCopyDedupOpt()
 	copySQL := copyOpt != nil && strings.HasPrefix(strings.ToLower(q), "insert into")
 	if copySQL {
@@ -611,5 +620,200 @@ func TestIssue31401AlterCopyWaitsForLoad(t *testing.T) {
 				require.Zero(t, queryIssue277xxInt(t, ctx, db, "select count(*) from mo_catalog.mo_tables where reldatabase=? and relname like 't_copy_%'", database))
 			})
 		}
+	})
+}
+
+func TestIssue32120AlterCopyWaitsForInsert(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		alterCN, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		writerCN, err := cluster.GetCNService(1)
+		require.NoError(t, err)
+		ddl := openIssue277xxDB(t, alterCN.GetServiceConfig().CN.Frontend.Port)
+		defer ddl.Close()
+		dml := openIssue277xxDB(t, writerCN.GetServiceConfig().CN.Frontend.Port)
+		defer dml.Close()
+
+		for _, tc := range []struct {
+			name, indexes, alter, column, columnType, read string
+			rows                                           [][3]int
+		}{
+			{
+				name: "add", alter: "add column d int default 7", column: "d", columnType: "int",
+				read: "select id,pad,d from %s order by id", rows: [][3]int{{1, 10, 7}, {2, 20, 7}, {3, 30, 7}},
+			},
+			{
+				name: "modify_indexed", indexes: ", key idx_pad(pad)", alter: "modify column pad bigint",
+				column: "pad", columnType: "bigint", read: "select id,pad,0 from %s force index (idx_pad) where pad between 10 and 30 order by id",
+				rows: [][3]int{{1, 10, 0}, {2, 20, 0}, {3, 30, 0}},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+				defer cancel()
+				dbName := "issue32120_" + tc.name
+				table := dbName + ".t"
+				resetIssue277xxDatabase(t, ctx, ddl, dbName)
+				defer func() {
+					clean, stop := context.WithTimeout(context.Background(), 10*time.Second)
+					defer stop()
+					_, _ = ddl.ExecContext(clean, "drop database if exists "+dbName)
+				}()
+				execSQLRequire(t, ctx, ddl, "create table "+table+"(id int primary key, pad int"+tc.indexes+")")
+				execSQLRequire(t, ctx, ddl, "insert into "+table+" values(1,10),(2,20)")
+				sourceID := queryIssue277xxInt(t, ctx, ddl,
+					"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='t'", dbName)
+				alterClient := alterCN.RawService().(cnservice.Service).GetTxnClient()
+				testutils.WaitLogtailApplied(t, alterClient.GetLatestCommitTS(), writerCN)
+				writer, err := dml.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				defer writer.Rollback()
+				_, err = writer.ExecContext(ctx, "insert into "+table+"(id,pad) values(3,30)")
+				require.NoError(t, err)
+				writerID := issue28934RequireExclusiveHolder(t, issue28934LockServices(cluster), uint64(sourceID))
+
+				queued := make(chan struct{}, 1)
+				restore := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, holderIDs [][]byte) {
+					if tableID != catalog.MO_TABLES_ID {
+						return
+					}
+					for _, holderID := range holderIDs {
+						if bytes.Equal(holderID, writerID) {
+							select {
+							case queued <- struct{}{}:
+							default:
+							}
+							return
+						}
+					}
+				})
+				defer restore()
+				observer := issue31401Observe(t, alterCN.ServiceID())
+				done := make(chan struct{})
+				var alterErr error
+				go func() {
+					defer close(done)
+					_, alterErr = ddl.ExecContext(ctx, "alter table "+table+" "+tc.alter)
+				}()
+				defer func() { cancel(); <-done }()
+				select {
+				case <-queued:
+				case <-done:
+					t.Fatalf("ALTER bypassed the writer: %v", alterErr)
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+				require.NoError(t, writer.Commit())
+				<-done
+				require.NoError(t, alterErr, "the first ALTER must finish after the writer commits")
+				require.EqualValues(t, 2, observer.copies.Load())
+				require.EqualValues(t, 1, observer.retired.Load())
+				require.Equal(t, tc.rows, issue31401Rows(t, ctx, ddl, fmt.Sprintf(tc.read, table)))
+				var dataType string
+				require.NoError(t, ddl.QueryRowContext(ctx, "select data_type from information_schema.columns "+
+					"where table_schema=? and table_name='t' and column_name=?", dbName, tc.column).Scan(&dataType))
+				require.Equal(t, tc.columnType, dataType)
+				require.Zero(t, queryIssue277xxInt(t, ctx, ddl,
+					"select count(*) from mo_catalog.mo_tables where reldatabase=? and relname like 't_copy_%'", dbName))
+			})
+		}
+	})
+}
+
+func TestIssue32120AlterCopyPreservesLateBranchDiff(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		alterCN, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		writerCN, err := cluster.GetCNService(1)
+		require.NoError(t, err)
+		ddl := openIssue277xxDB(t, alterCN.GetServiceConfig().CN.Frontend.Port)
+		defer ddl.Close()
+		dml := openIssue277xxDB(t, writerCN.GetServiceConfig().CN.Frontend.Port)
+		defer dml.Close()
+
+		const name = "issue32120_late_branch"
+		const source = name + ".t"
+		const branch = name + ".branch"
+		resetIssue277xxDatabase(t, ctx, ddl, name)
+		defer func() {
+			clean, stop := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stop()
+			_, _ = ddl.ExecContext(clean, "drop database if exists "+name)
+		}()
+		// The secondary index exercises broad publication admission.
+		execSQLRequire(t, ctx, ddl, "create table "+source+"(id int primary key, v int, key idx_v(v))")
+		execSQLRequire(t, ctx, ddl, "insert into "+source+" values(1,10),(2,20)")
+		alterClient := alterCN.RawService().(cnservice.Service).GetTxnClient()
+		testutils.WaitLogtailApplied(t, alterClient.GetLatestCommitTS(), writerCN)
+		writer, err := dml.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer writer.Rollback()
+		_, err = writer.ExecContext(ctx, "insert into "+source+" values(3,30)")
+		require.NoError(t, err)
+
+		creating, prepared, publish := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		committed := make(chan timestamp.Timestamp, 1)
+		observer := issue31401Observe(t, alterCN.ServiceID())
+		observer.hooksMu.Lock()
+		observer.beforeCreate = func(callCtx context.Context, query string, opts executor.Options) error {
+			if observer.copies.Load() != 0 || !strings.HasPrefix(query, "CREATE TABLE `"+name+"`.`t_copy_") {
+				return nil
+			}
+			close(creating)
+			select {
+			case commitTS := <-committed:
+				// Make the first COPY read the INSERT while its saved lineage
+				// cutoff still precedes the commit. Use the real workspace and
+				// applied logtail to select a snapshot for that read.
+				return opts.Txn().GetWorkspace().AdvanceSnapshot(callCtx, commitTS)
+			case <-callCtx.Done():
+				return callCtx.Err()
+			}
+		}
+		observer.afterCopy = func(callCtx context.Context, generation int32) error {
+			if generation != 1 {
+				return nil
+			}
+			close(prepared)
+			select {
+			case <-publish:
+				return nil
+			case <-callCtx.Done():
+				return callCtx.Err()
+			}
+		}
+		observer.hooksMu.Unlock()
+		done := make(chan struct{})
+		var alterErr error
+		go func() {
+			defer close(done)
+			_, alterErr = ddl.ExecContext(ctx, "alter table "+source+" add column d int")
+		}()
+		defer func() { cancel(); <-done }()
+		await := func(phase <-chan struct{}) {
+			t.Helper()
+			select {
+			case <-phase:
+			case <-done:
+				t.Fatalf("ALTER ended before the test barrier: %v", alterErr)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		}
+		await(creating)
+		require.NoError(t, writer.Commit())
+		commitTS := writerCN.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+		committed <- commitTS
+		await(prepared)
+		execSQLRequire(t, ctx, dml,
+			fmt.Sprintf("data branch create table %s from %s {MO_TS = %d}", branch, source, commitTS.PhysicalTime-1))
+		close(publish)
+		<-done
+		require.NoError(t, alterErr)
+		require.Equal(t, 3, queryIssue277xxInt(t, ctx, ddl, "select count(*) from "+source))
+		require.Equal(t, 2, queryIssue277xxInt(t, ctx, ddl, "select count(*) from "+branch))
+		require.Equal(t, 1, queryIssue277xxInt(t, ctx, ddl, "data branch diff "+source+" against "+branch+" output count"))
 	})
 }

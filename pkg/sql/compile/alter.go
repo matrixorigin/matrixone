@@ -95,11 +95,25 @@ type alterDataBranchLineageInspection struct {
 	plan         alterDataBranchLineagePlan
 }
 
-func alterCopySQLAtLineageSnapshot(sql string, plan alterDataBranchLineagePlan) string {
-	if !plan.enabled || !plan.fixedCopyTS {
-		return sql
+// alterCopySourceRead binds the freshness check to the snapshot used by the
+// source SELECT. The lineage timestamp is a physical-only historical boundary.
+func alterCopySourceRead(sql string, plan alterDataBranchLineagePlan, txnSnapshot timestamp.Timestamp) (string, types.TS) {
+	if plan.enabled && plan.fixedCopyTS {
+		return sql + fmt.Sprintf(" {MO_TS = %d}", plan.cloneTS), types.BuildTS(plan.cloneTS, 0)
 	}
-	return sql + fmt.Sprintf(" {MO_TS = %d}", plan.cloneTS)
+	return sql, types.TimestampToTS(txnSnapshot)
+}
+
+// alterCopyValidationTS requires both the replica and the published lineage
+// edge to cover every committed source mutation.
+func alterCopyValidationTS(readTS types.TS, lineage alterDataBranchLineagePlan) types.TS {
+	if lineage.enabled {
+		edgeTS := types.BuildTS(lineage.cloneTS, 0)
+		if edgeTS.LT(&readTS) {
+			return edgeTS
+		}
+	}
+	return readTS
 }
 
 func isExplicitAlterTxn(byBegin, autocommit bool) bool {
@@ -1222,7 +1236,8 @@ func (c *Compile) lockAlterCopySource(
 	originRel engine.Relation,
 	qry *plan.AlterTable,
 ) error {
-	if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
+	txn := c.proc.GetTxnOperator().Txn()
+	if !txn.IsPessimistic() {
 		return nil
 	}
 
@@ -1237,7 +1252,13 @@ func (c *Compile) lockAlterCopySource(
 		}
 		retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 	}
-	if err := lockTable(c.proc.Ctx, c.e, c.proc, originRel, dbName, true); err != nil {
+	lockSourceTable := lockTable
+	if txn.IsRCIsolation() && !qry.GetTableDef().GetIsTemporary() {
+		// The locked publication path revalidates and can rebuild a stale
+		// private copy. Retain definition-change errors from the lock fence.
+		lockSourceTable = lockTableForSnapshotRefresh
+	}
+	if err := lockSourceTable(c.proc.Ctx, c.e, c.proc, originRel, dbName, true); err != nil {
 		if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 			!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 			c.proc.Error(c.proc.Ctx, "lock origin table for alter table",
@@ -1284,9 +1305,8 @@ func (c *Compile) lockAlterCopySource(
 
 func (c *Compile) alterCopySourceChangedSinceCopy(
 	rel engine.Relation,
-	copyTS int64,
+	mustExceed types.TS,
 ) (bool, error) {
-	mustExceed := types.BuildTS(copyTS, 0)
 	if mustExceed.IsEmpty() {
 		mustExceed = mustExceed.Next()
 	}
@@ -1608,6 +1628,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	}
 
 	var newRel engine.Relation
+	var copyReadTS types.TS
 	copyTblName := qry.CopyTableDef.Name
 	replicaCreated := false
 	// Both generations use the same preparation, including index seeds and
@@ -1699,7 +1720,10 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			return err
 		}
 		opt := alterCopyStatementOption(alterCopyOpt)
-		insertTmpDataSQL := alterCopySQLAtLineageSnapshot(qry.InsertTmpDataSql, lineagePlan)
+		// The nested lock-free copy uses this transaction and does not open a
+		// new statement. Capture its snapshot before preparing each generation.
+		insertTmpDataSQL, readTS := alterCopySourceRead(qry.InsertTmpDataSql, lineagePlan, lineageTxnOp.SnapshotTS())
+		copyReadTS = readTS
 		err = func() error {
 			if !shouldEnableAlterCopyPipelineFlush(alterCopyOpt) {
 				return c.runSqlWithOptions(insertTmpDataSQL, opt)
@@ -1917,7 +1941,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			}
 		}
 		sourceChanged, sourceChangedErr := c.alterCopySourceChangedSinceCopy(
-			originRel, lineagePlan.cloneTS,
+			originRel, copyReadTS,
 		)
 		if sourceChangedErr != nil {
 			return c.alterCopyPostPublicationRetryConflict(sourceChangedErr)
@@ -1925,15 +1949,13 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		if sourceChanged && !c.isLifecycleRC() {
 			return c.alterCopyPostPublicationConflict("source data changed")
 		}
-		if sourceChanged {
-			// Once refresh starts, every later failure (including publication)
-			// must terminate the txn, never retry this COPY under retained locks.
-			defer func() {
-				if err != nil {
-					err = c.alterCopyStaleRefreshTerminatingError(err)
-				}
-			}()
-		}
+		// A stale replica (including a stale lineage edge discovered below)
+		// requires terminal cleanup if refresh or publication fails.
+		defer func() {
+			if sourceChanged && err != nil {
+				err = c.alterCopyStaleRefreshTerminatingError(err)
+			}
+		}()
 		sourceForeignKeys, sourceRefChildTbls, err = snapshotAlterCopyForeignKeyState(
 			c.proc.Ctx, originRel,
 		)
@@ -1960,15 +1982,34 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		}
 		publicationPlan.cloneTS = lineagePlan.cloneTS
 		publicationPlan.fixedCopyTS = lineagePlan.fixedCopyTS
+		// A branch or historical owner can appear during the unlocked copy.
+		// Its edge must describe the same source data as the replica.
+		if validationTS := alterCopyValidationTS(copyReadTS, publicationPlan); !sourceChanged && validationTS != copyReadTS {
+			sourceChanged, err = c.alterCopySourceChangedSinceCopy(originRel, validationTS)
+			if err != nil {
+				return c.alterCopyPostPublicationRetryConflict(err)
+			}
+			if sourceChanged && !c.isLifecycleRC() {
+				return c.alterCopyPostPublicationConflict("source data changed after the lineage snapshot")
+			}
+		}
+		if err = validateAlterDataBranchLineageColumnReplacement(qry, publicationPlan); err != nil {
+			return err
+		}
 		if sourceChanged {
 			publicationPlan.cloneTS = publicationCopyTS
 			publicationPlan.fixedCopyTS = publicationPlan.enabled &&
 				shouldUseFixedAlterCopySnapshot(true, txnHasWorkspaceHistory)
+			if publicationPlan.enabled {
+				// Move the physical lineage cut past all commits visible at the
+				// locked frontier. This also covers copies that read workspace data.
+				publicationPlan.cloneTS, err = c.advanceAlterDataBranchLineageSnapshot()
+				if err != nil {
+					return err
+				}
+			}
 		}
 		lineagePlan = publicationPlan
-		if err = validateAlterDataBranchLineageColumnReplacement(qry, lineagePlan); err != nil {
-			return err
-		}
 		if sourceChanged {
 			// G and all source locks are held. Retire the entire stale private
 			// generation and prepare once at the fresh frontier; never enter the
@@ -1996,7 +2037,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			if current.GetTableID(c.proc.Ctx) != oldId || current.GetTableDef(c.proc.Ctx).GetVersion() != sourceDefVersion {
 				return c.alterCopyPostPublicationConflict("source definition changed during rebuild")
 			}
-			changed, err := c.alterCopySourceChangedSinceCopy(current, lineagePlan.cloneTS)
+			changed, err := c.alterCopySourceChangedSinceCopy(current, alterCopyValidationTS(copyReadTS, lineagePlan))
 			if err != nil {
 				return err
 			}
