@@ -46,6 +46,12 @@ sudo ./mo-ha-deploy.sh --config node1.env --bootstrap --format-drbd --yes
 sudo ./mo-ha-deploy.sh --config node1.env --stages check --yes
 ```
 
+双端一致只在 `drbdadm status` 同时出现 `replication:Established`、本端 `disk:UpToDate` 和对端 `peer-disk:UpToDate` 时记为 PASS。对端 `connection:Connecting`、状态缺失或查询失败记为 FAIL：本机可能仍在单端服务，但没有双副本保护，不能把这次检查当成部署通过。
+
+正在同步时，check 会一直读取 `done:` 和 `out-of-sync:`，结果里持续显示 `[SYNC] DRBD 同步进度`。只有同步结束，并且状态变成 `replication:Established`、双方 `UpToDate` 之后，同一次检查才显示双端一致和「部署检查通过」。默认每 5 秒采样一次，可用 `DRBD_SYNC_INTERVAL` 调整。对端断开或状态查询失败会停止等待并记为 FAIL。
+
+`Failed Actions` 和 `Failed Resource Actions` 都是历史失败记录。资源当前已经 Started 时，检查仍会 FAIL，需要 `pcs resource cleanup` 后再查；读不到 `pcs status` 时不会报告“无失败”。
+
 `pkg` 阶段在两台节点安装随包提供的 MatrixOne 资源代理和 Python 3。已有集群如果已具备 Python 3 和支持 `config --format json` 的 Docker Compose 插件，可以在两台节点的部署目录单独安装代理。
 
 ```bash
