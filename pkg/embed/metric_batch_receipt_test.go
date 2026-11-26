@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"sync"
@@ -228,33 +229,52 @@ func TestMetricBatchReceiptSQL(t *testing.T) {
 			// A single CSV record can exceed an inline LOAD, and a
 			// character value can exceed the prepared parameter limit.
 			wideBatch := uuid.New()
-			wideNodes := []string{
-				uuid.NewString() + strings.Repeat("n", 894),
-				uuid.NewString() + strings.Repeat("你", 510),
+			wideRows := []struct {
+				node  string
+				value float64
+			}{
+				{uuid.NewString() + strings.Repeat("n", 891) + `\nX`, 3.25},
+				{uuid.NewString() + strings.Repeat("你", 510) + `\nX`, math.Inf(1)},
+				{uuid.NewString() + strings.Repeat("n", 894), math.Inf(-1)},
+				{uuid.NewString() + strings.Repeat("n", 894), math.NaN()},
 			}
 			t.Cleanup(func() {
 				cleanup, stop := context.WithTimeoutCause(context.Background(), 5*time.Second, moerr.CauseWriteRowRecords)
 				defer stop()
-				for _, name := range wideNodes {
-					_, err := pool.ExecContext(cleanup, "delete from "+relation+" where node = ?", name)
+				for _, fixture := range wideRows {
+					_, err := pool.ExecContext(cleanup, "delete from "+relation+" where node = ?", fixture.node)
 					require.NoError(t, err)
 				}
 				require.NoError(t, dbholder.DeleteMetricBatchReceipt(cleanup, pool, wideBatch))
 			})
 			var widePayload strings.Builder
-			for _, name := range wideNodes {
-				widePayload.WriteString(fmt.Sprintf("\\N,2026-11-25 09:36:01.123456,3,%s,CN,internal_sql\n", name))
+			for _, fixture := range wideRows {
+				widePayload.WriteString(fmt.Sprintf("\\N,2026-11-25 09:36:01.123456,%v,%s,CN,internal_sql\n", fixture.value, fixture.node))
+			}
+			checkWideRow := func(node string, value float64) {
+				t.Helper()
+				rows, err := pool.QueryContext(ctx, "select node, value, account from "+relation+" where node = ?", node)
+				require.NoError(t, err)
+				defer rows.Close()
+				require.True(t, rows.Next())
+				var gotNode string
+				var gotValue float64
+				var account sql.NullString
+				require.NoError(t, rows.Scan(&gotNode, &gotValue, &account))
+				require.Equal(t, []byte(node), []byte(gotNode))
+				if math.IsNaN(value) {
+					require.True(t, math.IsNaN(gotValue))
+				} else {
+					require.Equal(t, math.Float64bits(value), math.Float64bits(gotValue))
+				}
+				require.False(t, account.Valid)
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
 			}
 			for range 2 {
 				require.NoError(t, etl.ReplayMetricBatch(ctx, mometric.SqlStatementCUTable, []byte(widePayload.String()), wideBatch))
-				for _, name := range wideNodes {
-					var rows int
-					var sum float64
-					var nonNullAccounts int
-					require.NoError(t, pool.QueryRowContext(ctx, "select count(*), coalesce(sum(value), 0), count(account) from "+relation+" where node = ?", name).Scan(&rows, &sum, &nonNullAccounts))
-					require.Equal(t, 1, rows)
-					require.Equal(t, float64(3), sum)
-					require.Zero(t, nonNullAccounts)
+				for _, fixture := range wideRows {
+					checkWideRow(fixture.node, fixture.value)
 				}
 			}
 		})

@@ -184,15 +184,15 @@ type SQLFlusher struct {
 	ctx           context.Context
 	database      string
 	table         string
-	columnCount   int
+	columns       []table.Column
 	metricBatchID uuid.UUID
 }
 
 func NewSQLFlusher(tbl *table.Table) *SQLFlusher {
 	return &SQLFlusher{
-		database:    tbl.GetDatabase(),
-		table:       tbl.GetName(),
-		columnCount: len(tbl.Columns),
+		database: tbl.GetDatabase(),
+		table:    tbl.GetName(),
+		columns:  tbl.Columns,
 	}
 }
 

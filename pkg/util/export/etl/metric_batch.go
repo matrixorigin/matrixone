@@ -23,6 +23,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -117,7 +118,7 @@ func (f *SQLFlusher) replayMetricLoads(ctx context.Context, conn *sql.Conn, data
 	target := min(limit, metricReplaySQLTarget)
 	reader := csv.NewReader(bytes.NewReader(data))
 	reader.ReuseRecord = true
-	reader.FieldsPerRecord = f.columnCount
+	reader.FieldsPerRecord = len(f.columns)
 	start, end, size := 0, 0, overhead
 	for {
 		if err := ctx.Err(); err != nil {
@@ -157,16 +158,17 @@ func (f *SQLFlusher) replayMetricLoads(ctx context.Context, conn *sql.Conn, data
 }
 
 // insertMetricRecord binds the rare record that does not fit in an inline
-// LOAD. Decode it with LOAD's CSV dialect, including its escapes and NULLs.
+// LOAD. Decode it with the same CSV dialect as the inline LOAD above.
 func (f *SQLFlusher) insertMetricRecord(ctx context.Context, conn *sql.Conn, record []byte, packetLimit int) error {
 	cfg := csvparser.CSVConfig{
 		FieldsTerminatedBy: ",",
 		FieldsEnclosedBy:   tree.DefaultFieldsEnclosedBy,
-		FieldsEscapedBy:    tree.DefaultFieldsEscapedBy,
-		LinesTerminatedBy:  "\n",
-		Null:               []string{`\N`},
-		UnescapedQuote:     true,
-		Context:            ctx,
+		// Inline LOAD leaves CSV backslashes literal unless ESCAPED BY is set.
+		FieldsEscapedBy:   "",
+		LinesTerminatedBy: "\n",
+		Null:              []string{`\N`},
+		UnescapedQuote:    true,
+		Context:           ctx,
 	}
 	parser, err := csvparser.NewCSVParser(&cfg, bytes.NewReader(record), csvparser.ReadBlockSize, false)
 	if err != nil {
@@ -176,19 +178,30 @@ func (f *SQLFlusher) insertMetricRecord(ctx context.Context, conn *sql.Conn, rec
 	if err != nil {
 		return err
 	}
-	if len(fields) != f.columnCount || parser.Pos() != int64(len(record)) {
+	if len(fields) != len(f.columns) || parser.Pos() != int64(len(record)) {
 		return moerr.NewInvalidInputNoCtx("invalid metric CSV record for parameterized insert")
 	}
 
 	args := make([]any, 0, len(fields))
 	values := make([]string, 0, len(fields))
-	for _, field := range fields {
+	for i, field := range fields {
 		if field.IsNull {
 			values = append(values, "?")
 			args = append(args, nil)
 			continue
 		}
 		value := field.Val
+		if f.columns[i].ColType == table.TFloat64 {
+			// Match the DOUBLE conversion in LOAD. Binding a Go float
+			// gives the prepared parameter a numeric source type.
+			number, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+			if err != nil {
+				return moerr.NewInvalidInputNoCtx("invalid metric CSV floating-point value")
+			}
+			values = append(values, "?")
+			args = append(args, number)
+			continue
+		}
 		if len(value) <= packetLimit {
 			values = append(values, "?")
 			args = append(args, value)
