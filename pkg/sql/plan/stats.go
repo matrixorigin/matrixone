@@ -1761,6 +1761,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		currentBlockSel := 1.0
 		if s != nil {
 			filter.Selectivity = estimateExprSelectivity(filter, builder, s)
+			filter.Selectivity = builder.tightenIndexedEquality(node, filter, s.TableCnt)
 			currentBlockSel = estimateFilterBlockSelectivity(builder.GetContext(), filter, node.TableDef, s)
 		}
 		// overlap/选择率是成本估算，不是普通列缺少可用块统计的证明。
