@@ -12152,6 +12152,298 @@ func StWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}, selectList)
 }
 
+// geometryPayloadValidateShapeForEmpty validates the real shape and
+// coordinates of a payload whose row is about to take the empty-NULL branch.
+// Native WKB payloads were already fully parsed while computing the emptiness
+// verdict (geo.ReadWKB / geo.ReadWKBFloat32 inside the once-per-operand
+// decode in geometryPayloadEmptinessOnce), so nothing extra is needed for
+// them. Legacy materialized text must still satisfy the established
+// serialization parser: invalid coordinates or a pseudo-empty shape (for
+// example POINT()) surface their error instead of collapsing into SQL NULL.
+// Historical ring structure stays accepted, per the serialization parser's
+// own compatibility contract.
+func geometryPayloadValidateShapeForEmpty(payload []byte) error {
+	if payloadIsWKB(payload) {
+		return nil
+	}
+	s, _, _, err := decodeGeometryPayload(payload)
+	if err != nil {
+		return err
+	}
+	if _, err := geo.ParseWKTForSerialization(s); err != nil {
+		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	return nil
+}
+
+// geometryPayloadEmptinessOnce is the relation-predicate emptiness
+// classification. Native WKB (float64, or the float32 GEOMETRY32 form) is
+// decoded at most once per evaluated operand and classified on the decoded
+// values: no WKB-to-WKT round trip and no per-child re-decode of a whole
+// collection. Legacy text keeps the established text classification, whose
+// decode is cheap string work. Error classes and verdicts match the previous
+// geometryDistancePayloadEmpty path for every payload class (see
+// geometryDecodedEmptiness).
+func geometryPayloadEmptinessOnce(payload []byte) (bool, error) {
+	if !payloadIsWKB(payload) {
+		return geometryDistancePayloadEmpty(payload)
+	}
+	g, err := geo.ReadWKB(payload)
+	if err != nil {
+		g, err = geo.ReadWKBFloat32(payload)
+		if err != nil {
+			return false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+	}
+	return geometryDecodedEmptiness(g)
+}
+
+// geometryDecodedEmptiness mirrors the established text classification's
+// verdicts on an already-decoded geometry. Typed empty MULTI* members are
+// examined directly on the decoded values, which matches that classification's
+// behavior of typing a bare EMPTY member into an empty child before
+// recursing. Geometry collection children are well-typed, so they recurse
+// without error; the nesting bound is enforced by the WKB readers themselves
+// (depth > 64 fails the decode with the same wrapped invalid-input error as
+// before).
+func geometryDecodedEmptiness(g geo.Geometry) (bool, error) {
+	switch v := g.(type) {
+	case geo.Point:
+		return v.IsEmpty, nil
+	case geo.LineString:
+		return len(v.Points) == 0, nil
+	case geo.Polygon:
+		return len(v.Rings) == 0, nil
+	case geo.MultiPoint:
+		for _, member := range v.Points {
+			if !member.IsEmpty {
+				return false, nil
+			}
+		}
+		return true, nil
+	case geo.MultiLineString:
+		for _, member := range v.Lines {
+			if len(member.Points) != 0 {
+				return false, nil
+			}
+		}
+		return true, nil
+	case geo.MultiPolygon:
+		for _, member := range v.Polygons {
+			if len(member.Rings) != 0 {
+				return false, nil
+			}
+		}
+		return true, nil
+	case geo.GeometryCollection:
+		for _, member := range v.Geometries {
+			empty, err := geometryDecodedEmptiness(member)
+			if err != nil {
+				return false, err
+			}
+			if !empty {
+				return false, nil
+			}
+		}
+		return true, nil
+	default:
+		return false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+}
+
+// stBinaryGeometryRelation evaluates a binary spatial relation predicate row
+// by row. Per the MySQL 8.0 object-shape contract for spatial relation
+// functions, a row whose either operand is a valid empty geometry yields SQL
+// NULL instead of a predicate result. Both evaluated operands run the
+// established decode first, mirroring ST_DISTANCE's two-sided ordering, and
+// the empty branch additionally validates the real shape/coordinates of both
+// operands, so a malformed payload keeps its original error instead of
+// collapsing into NULL. Folding matches the opBinary WithErrorCheck template
+// that used to serve these predicates: a fully skipped batch performs no
+// evaluation, constant pairs are fetched and evaluated exactly once per
+// batch, and a one-sided constant is fetched once and validated lazily at its
+// first evaluated row, avoiding repeated reparse of the same payload while
+// keeping the template's row-driven error ordering.
+func stBinaryGeometryRelation(ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, srid uint32, predicate func([]byte, []byte) (bool, error)) error {
+	left := vector.GenerateFunctionStrParameter(ivecs[0])
+	right := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[bool](result)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		// Fully skipped batch: zero evaluations, one range-wide null pass.
+		rs.GetResultVector().GetNulls().AddRange(0, uint64(length))
+		return nil
+	}
+	masked := selectList != nil && !selectList.ShouldEvalAllRow()
+
+	// relationOfPair validates both operands through the established decode
+	// before the emptiness decision, then runs the selected predicate kernel.
+	relationOfPair := func(v1, v2 []byte) (bool, bool, error) {
+		emptyLeft, err := geometryPayloadEmptinessOnce(v1)
+		if err != nil {
+			return false, false, err
+		}
+		emptyRight, err := geometryPayloadEmptinessOnce(v2)
+		if err != nil {
+			return false, false, err
+		}
+		if emptyLeft || emptyRight {
+			// Both operands must be valid and at least one of them empty
+			// before the row may become SQL NULL.
+			if err := geometryPayloadValidateShapeForEmpty(v1); err != nil {
+				return false, false, err
+			}
+			if err := geometryPayloadValidateShapeForEmpty(v2); err != nil {
+				return false, false, err
+			}
+			return false, true, nil
+		}
+		r, err := geometryPredicateBySRID(srid, v1, v2, predicate)
+		if err != nil {
+			return false, false, err
+		}
+		return r, false, nil
+	}
+
+	c1, c2 := ivecs[0].IsConst(), ivecs[1].IsConst()
+
+	if c1 && c2 {
+		v1, n1 := left.GetStrValue(0)
+		v2, n2 := right.GetStrValue(0)
+		if n1 || n2 {
+			for i := uint64(0); i < uint64(length); i++ {
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		// The pair is invariant across the batch: evaluate it exactly once.
+		// Masked rows still receive the NULL the selection expects, like the
+		// template that writes the folded value and nulls masked rows.
+		r, isNull, err := relationOfPair(v1, v2)
+		if err != nil {
+			return err
+		}
+		for i := uint64(0); i < uint64(length); i++ {
+			rowNull := isNull || (masked && selectList.Contains(i))
+			if err := rs.Append(r, rowNull); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if c1 != c2 {
+		// One-sided constant: fetch the constant operand once and validate it
+		// lazily at its first evaluated row. Operand order into the predicate
+		// kernel is preserved.
+		constParam, varParam := left, right
+		constIsLeft := c1
+		if c2 {
+			constParam, varParam = right, left
+		}
+		cv, cn := constParam.GetStrValue(0)
+		if cn {
+			for i := uint64(0); i < uint64(length); i++ {
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		constEmpty, constValidated := false, false
+		constShapeValidated := false
+		var constShapeErr error
+		for i := uint64(0); i < uint64(length); i++ {
+			if masked && selectList.Contains(i) {
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+				continue
+			}
+			vv, vn := varParam.GetStrValue(i)
+			if vn {
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if !constValidated {
+				emptyConst, err := geometryPayloadEmptinessOnce(cv)
+				if err != nil {
+					return err
+				}
+				constEmpty, constValidated = emptyConst, true
+			}
+			emptyVar, err := geometryPayloadEmptinessOnce(vv)
+			if err != nil {
+				return err
+			}
+			if constEmpty || emptyVar {
+				// A row that takes the empty branch needs both operands valid
+				// and at least one of them empty before it may become SQL
+				// NULL. The constant side is fully validated at most once
+				// per batch; the varying operand is validated per evaluated
+				// row.
+				if !constShapeValidated {
+					constShapeErr = geometryPayloadValidateShapeForEmpty(cv)
+					constShapeValidated = true
+				}
+				if constShapeErr != nil {
+					return constShapeErr
+				}
+				if err := geometryPayloadValidateShapeForEmpty(vv); err != nil {
+					return err
+				}
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+				continue
+			}
+			var v1, v2 []byte
+			if constIsLeft {
+				v1, v2 = cv, vv
+			} else {
+				v1, v2 = vv, cv
+			}
+			r, err := geometryPredicateBySRID(srid, v1, v2, predicate)
+			if err != nil {
+				return err
+			}
+			if err := rs.Append(r, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if masked && selectList.Contains(i) {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v1, n1 := left.GetStrValue(i)
+		v2, n2 := right.GetStrValue(i)
+		if n1 || n2 {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		r, isNull, err := relationOfPair(v1, v2)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(r, isNull); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func StIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_INTERSECTS", ivecs, length, selectList)
 	if err != nil {
@@ -12161,9 +12453,7 @@ func StIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		return nil
 	}
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
-	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryPredicateBySRID(srid, v1, v2, geometryIntersects)
-	}, selectList)
+	return stBinaryGeometryRelation(ivecs, result, length, selectList, srid, geometryIntersects)
 }
 
 func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -12175,9 +12465,7 @@ func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return nil
 	}
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
-	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryPredicateBySRID(srid, v1, v2, geometryDisjoint)
-	}, selectList)
+	return stBinaryGeometryRelation(ivecs, result, length, selectList, srid, geometryDisjoint)
 }
 
 func StTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
