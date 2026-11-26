@@ -12,7 +12,7 @@ permissions:
 jobs:
   cs:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.pool == 'cs'
-    uses: matrixorigin/CI/.github/workflows/coverage-worker-cs.yaml@ec682772f13e21df189a0a2a4c0b4edbc66d3c46
+    uses: matrixorigin/CI/.github/workflows/coverage-worker-cs.yaml@746b0257a141f5ac935376bc947bf4cf73e49b74
     with:
       group: ${{ fromJSON(inputs.ticket).group }}
       source: ${{ fromJSON(inputs.ticket).source }}
