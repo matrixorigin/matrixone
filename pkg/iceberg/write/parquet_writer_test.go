@@ -39,7 +39,7 @@ import (
 func TestParquetDataWriterWritesFieldIDsMetricsAndPartition(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "name", "created_at"})
+	bat := batch.NewWithSize(3)
 	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int32](idVec, 1, false, mp))
 	require.NoError(t, vector.AppendFixed[int32](idVec, 2, false, mp))
@@ -73,7 +73,7 @@ func TestParquetDataWriterWritesFieldIDsMetricsAndPartition(t *testing.T) {
 		FilePath:      "s3://warehouse/sales/orders/data/created_month=677/part-1.parquet",
 	}, &buf)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, writer.WriteBatch(ctx, []string{"id", "name", "created_at"}, bat))
 	dataFile, err := writer.Close(ctx)
 	require.NoError(t, err)
 
@@ -101,7 +101,7 @@ func TestParquetDataWriterWritesFieldIDsMetricsAndPartition(t *testing.T) {
 func TestParquetDataWriterWritesNullPartitionValue(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "region"})
+	bat := batch.NewWithSize(2)
 	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](idVec, 1, false, mp))
 	bat.Vecs[0] = idVec
@@ -125,7 +125,7 @@ func TestParquetDataWriterWritesNullPartitionValue(t *testing.T) {
 		FilePath: "s3://warehouse/accounts/data/region=null/part-1.parquet",
 	}, &buf)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, writer.WriteBatch(ctx, []string{"id", "region"}, bat))
 	dataFile, err := writer.Close(ctx)
 	require.NoError(t, err)
 
@@ -138,7 +138,7 @@ func TestParquetDataWriterWritesNullPartitionValue(t *testing.T) {
 func TestParquetDataWriterFillsMissingNullableColumnWithNull(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id"})
+	bat := batch.NewWithSize(1)
 	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](idVec, 1, false, mp))
 	bat.Vecs[0] = idVec
@@ -159,7 +159,7 @@ func TestParquetDataWriterFillsMissingNullableColumnWithNull(t *testing.T) {
 		FilePath: "s3://warehouse/accounts/data/region=null/part-1.parquet",
 	}, &buf)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, writer.WriteBatch(ctx, []string{"id"}, bat))
 	dataFile, err := writer.Close(ctx)
 	require.NoError(t, err)
 
@@ -173,7 +173,7 @@ func TestParquetDataWriterFillsMissingNullableColumnWithNull(t *testing.T) {
 func TestParquetDataWriterRejectsMissingRequiredColumn(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id"})
+	bat := batch.NewWithSize(1)
 	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](idVec, 1, false, mp))
 	bat.Vecs[0] = idVec
@@ -190,7 +190,7 @@ func TestParquetDataWriterRejectsMissingRequiredColumn(t *testing.T) {
 		FilePath:      "s3://warehouse/accounts/data/part-1.parquet",
 	}, &buf)
 	require.NoError(t, err)
-	err = writer.WriteBatch(ctx, bat.Attrs, bat)
+	err = writer.WriteBatch(ctx, []string{"id"}, bat)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "required column is missing")
 }
@@ -198,7 +198,7 @@ func TestParquetDataWriterRejectsMissingRequiredColumn(t *testing.T) {
 func TestParquetDataWriterRejectsMultiplePartitionsInOneFile(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"created_at"})
+	bat := batch.NewWithSize(1)
 	dateVec := vector.NewVec(types.T_date.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[types.Date](dateVec, types.DateFromCalendar(2026, 6, 20), false, mp))
 	require.NoError(t, vector.AppendFixed[types.Date](dateVec, types.DateFromCalendar(2026, 7, 1), false, mp))
@@ -217,7 +217,7 @@ func TestParquetDataWriterRejectsMultiplePartitionsInOneFile(t *testing.T) {
 		FilePath: "s3://warehouse/sales/orders/data/part-1.parquet",
 	}, &buf)
 	require.NoError(t, err)
-	err = writer.WriteBatch(ctx, bat.Attrs, bat)
+	err = writer.WriteBatch(ctx, []string{"created_at"}, bat)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "multiple partition tuples")
 }
@@ -225,7 +225,7 @@ func TestParquetDataWriterRejectsMultiplePartitionsInOneFile(t *testing.T) {
 func TestParquetDataWriterWritesTimestampBounds(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"event_time", "event_instant"})
+	bat := batch.NewWithSize(2)
 	datetimeVec := vector.NewVec(types.T_datetime.ToType(), mp)
 	dt1 := types.DatetimeFromClock(2026, 6, 10, 1, 2, 3, 123456)
 	dt2 := types.DatetimeFromClock(2026, 6, 10, 2, 3, 4, 654321)
@@ -253,7 +253,7 @@ func TestParquetDataWriterWritesTimestampBounds(t *testing.T) {
 		FilePath:      "s3://warehouse/sales/events/data/part-1.parquet",
 	}, &buf)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, writer.WriteBatch(ctx, []string{"event_time", "event_instant"}, bat))
 	dataFile, err := writer.Close(ctx)
 	require.NoError(t, err)
 
@@ -271,7 +271,7 @@ func TestParquetDataWriterWritesTimestampBounds(t *testing.T) {
 func TestParquetDataWriterWritesDecimalAndMOTimestamp(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"fare_amount", "pickup_time"})
+	bat := batch.NewWithSize(2)
 	fareVec := vector.NewVec(types.New(types.T_decimal64, 12, 2), mp)
 	lowFare, err := types.ParseDecimal64("-5.67", 12, 2)
 	require.NoError(t, err)
@@ -302,7 +302,7 @@ func TestParquetDataWriterWritesDecimalAndMOTimestamp(t *testing.T) {
 		TimeZone:      time.UTC,
 	}, &buf)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, writer.WriteBatch(ctx, []string{"fare_amount", "pickup_time"}, bat))
 	dataFile, err := writer.Close(ctx)
 	require.NoError(t, err)
 
@@ -504,7 +504,7 @@ func TestSchemaFieldLookupPreservesCaseSensitiveColumns(t *testing.T) {
 func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "created_at"})
+	bat := batch.NewWithSize(2)
 	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	dateVec := vector.NewVec(types.T_date.ToType(), mp)
 	for i, date := range []types.Date{
@@ -536,7 +536,7 @@ func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {
 		TargetFileSizeBytes: 1,
 	}, factory)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, writer.WriteBatch(ctx, []string{"id", "created_at"}, bat))
 	files, err := writer.Close(ctx)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(files), 2)
@@ -563,7 +563,7 @@ func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {
 func TestFanoutParquetDataWriterWritesNullPartitionValue(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "region"})
+	bat := batch.NewWithSize(2)
 	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	regionVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, id := range []int64{1, 2} {
@@ -591,7 +591,7 @@ func TestFanoutParquetDataWriterWritesNullPartitionValue(t *testing.T) {
 		TargetFileSizeBytes: 1024 * 1024,
 	}, factory)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, writer.WriteBatch(ctx, []string{"id", "region"}, bat))
 	files, err := writer.Close(ctx)
 	require.NoError(t, err)
 	require.Len(t, files, 1)
@@ -603,7 +603,7 @@ func TestFanoutParquetDataWriterWritesNullPartitionValue(t *testing.T) {
 func TestFanoutParquetDataWriterFillsMissingNullablePartitionValue(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id"})
+	bat := batch.NewWithSize(1)
 	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, id := range []int64{1, 2} {
 		require.NoError(t, vector.AppendFixed[int64](idVec, id, false, mp))
@@ -628,7 +628,7 @@ func TestFanoutParquetDataWriterFillsMissingNullablePartitionValue(t *testing.T)
 		TargetFileSizeBytes: 1024 * 1024,
 	}, factory)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, writer.WriteBatch(ctx, []string{"id"}, bat))
 	files, err := writer.Close(ctx)
 	require.NoError(t, err)
 	require.Len(t, files, 1)
@@ -641,7 +641,7 @@ func TestFanoutParquetDataWriterFillsMissingNullablePartitionValue(t *testing.T)
 func TestFanoutParquetDataWriterAbortsSinkWhenWriterInitializationFails(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"unsupported"})
+	bat := batch.NewWithSize(1)
 	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](vec, 1, false, mp))
 	bat.Vecs[0] = vec
@@ -658,7 +658,7 @@ func TestFanoutParquetDataWriterAbortsSinkWhenWriterInitializationFails(t *testi
 		return sink, nil
 	}))
 	require.NoError(t, err)
-	require.Error(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.Error(t, writer.WriteBatch(ctx, []string{"unsupported"}, bat))
 	require.True(t, sink.aborted)
 	require.False(t, sink.closed, "abort-capable sinks must not be finalized on initialization failure")
 	require.Empty(t, writer.OrphanPaths(), "successful abort guarantees no object was published")
@@ -667,7 +667,7 @@ func TestFanoutParquetDataWriterAbortsSinkWhenWriterInitializationFails(t *testi
 func TestFanoutParquetDataWriterBoundsOpenPartitionWriters(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "region"})
+	bat := batch.NewWithSize(2)
 	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	regionVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for idx, region := range []string{"a", "b", "c"} {
@@ -693,7 +693,7 @@ func TestFanoutParquetDataWriterBoundsOpenPartitionWriters(t *testing.T) {
 		MaxOpenFiles:        2,
 	}, factory)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, writer.WriteBatch(ctx, []string{"id", "region"}, bat))
 	require.Len(t, writer.active, 2)
 	require.Len(t, writer.files, 1, "opening the third partition should close the least-recently-used writer")
 	var activeSize int64
@@ -768,7 +768,7 @@ func (s *abortTrackingDataFileSink) Abort() error {
 func TestParquetDataWriterCompressionAndDictionary(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"name"})
+	bat := batch.NewWithSize(1)
 	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	values := []string{"repeat", "repeat", "", "世界"}
 	for i := 0; i < 8193; i++ {
@@ -797,7 +797,7 @@ func TestParquetDataWriterCompressionAndDictionary(t *testing.T) {
 			var buf bytes.Buffer
 			writer, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "test.parquet", ParquetOptions: opts}, &buf)
 			require.NoError(t, err)
-			require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+			require.NoError(t, writer.WriteBatch(ctx, []string{"name"}, bat))
 			_, err = writer.Close(ctx)
 			require.NoError(t, err)
 			file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
@@ -840,7 +840,7 @@ func TestParquetDataWriterCompressionAndDictionary(t *testing.T) {
 func TestParquetDictionaryHighCardinalityAcrossRowGroups(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"name"})
+	bat := batch.NewWithSize(1)
 	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for i := 0; i < 8193; i++ {
 		require.NoError(t, vector.AppendBytes(vec, []byte(strconv.Itoa(i)), false, mp))
@@ -852,7 +852,7 @@ func TestParquetDictionaryHighCardinalityAcrossRowGroups(t *testing.T) {
 	var buf bytes.Buffer
 	writer, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "unique.parquet"}, &buf)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, writer.WriteBatch(ctx, []string{"name"}, bat))
 	_, err = writer.Close(ctx)
 	require.NoError(t, err)
 	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
@@ -877,7 +877,7 @@ func TestParquetDictionaryHighCardinalityAcrossRowGroups(t *testing.T) {
 func TestParquetRowGroupStringBudget(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"a", "b"})
+	bat := batch.NewWithSize(2)
 	a, b := vector.NewVec(types.T_varchar.ToType(), mp), vector.NewVec(types.T_varchar.ToType(), mp)
 	// The first two rows exactly fill the aggregate budget; the third crosses it.
 	valuesA := []string{strings.Repeat("a", (1<<19)-8), "", "z", strings.Repeat("x", (1<<20)+1), "tail"}
@@ -894,7 +894,7 @@ func TestParquetRowGroupStringBudget(t *testing.T) {
 	w, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "budget.parquet"}, &buf)
 	require.NoError(t, err)
 	for _, indexes := range [][]int{{0}, {1, 2}, {3}, {4}} {
-		require.NoError(t, w.WriteRows(ctx, bat.Attrs, bat, indexes))
+		require.NoError(t, w.WriteRows(ctx, []string{"a", "b"}, bat, indexes))
 	}
 	fileInfo, err := w.Close(ctx)
 	require.NoError(t, err)
@@ -931,7 +931,7 @@ func (failingParquetSink) Write([]byte) (int, error) { return 0, io.ErrClosedPip
 func TestParquetFlushFailureCannotCloseSuccessfully(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"name"})
+	bat := batch.NewWithSize(1)
 	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, []byte(strings.Repeat("x", (1<<20)+1)), false, mp))
 	bat.Vecs[0] = vec
@@ -940,7 +940,7 @@ func TestParquetFlushFailureCannotCloseSuccessfully(t *testing.T) {
 	schema := api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "name", Type: api.IcebergType{Kind: api.TypeString}}}}
 	w, err := NewParquetDataWriter(ctx, DataWriterConfig{Schema: schema, FilePath: "error.parquet", ParquetOptions: ParquetOptions{codec: "uncompressed"}}, failingParquetSink{})
 	require.NoError(t, err)
-	require.Error(t, w.WriteBatch(ctx, bat.Attrs, bat))
+	require.Error(t, w.WriteBatch(ctx, []string{"name"}, bat))
 	_, err = w.Close(ctx)
 	require.Error(t, err)
 }
@@ -972,7 +972,7 @@ func TestFanoutFlushFailureAndCancellationAbort(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			mp := mpool.MustNewZero()
-			bat := batch.New([]string{"name"})
+			bat := batch.NewWithSize(1)
 			vec := vector.NewVec(types.T_varchar.ToType(), mp)
 			// The first row forces a flush; the second observes cancellation after it.
 			require.NoError(t, vector.AppendBytes(vec, []byte(strings.Repeat("x", (1<<20)+1)), false, mp))
@@ -989,7 +989,7 @@ func TestFanoutFlushFailureAndCancellationAbort(t *testing.T) {
 				TableLocation: "s3://warehouse/test", ParquetOptions: ParquetOptions{codec: "uncompressed"},
 			}, DataFileOutputFactoryFunc(func(context.Context, string) (io.WriteCloser, error) { return sink, nil }))
 			require.NoError(t, err)
-			err = w.WriteBatch(ctx, bat.Attrs, bat)
+			err = w.WriteBatch(ctx, []string{"name"}, bat)
 			require.Error(t, err)
 			if mode == "cancel" {
 				require.ErrorIs(t, err, context.Canceled)
@@ -1018,7 +1018,7 @@ func (f *pressureDataFileFactory) AvailableMemory() (int64, bool) {
 func TestFanoutMemoryPressureRotatesUnpartitioned(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id"})
+	bat := batch.NewWithSize(1)
 	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	for i := int32(0); i < 3; i++ {
 		require.NoError(t, vector.AppendFixed[int32](vec, i, false, mp))
@@ -1033,7 +1033,7 @@ func TestFanoutMemoryPressureRotatesUnpartitioned(t *testing.T) {
 			TableLocation: "s3://warehouse/table",
 		}, factory)
 		require.NoError(t, err)
-		require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+		require.NoError(t, writer.WriteBatch(ctx, []string{"id"}, bat))
 		files, err := writer.Close(ctx)
 		require.NoError(t, err)
 		if limited {
@@ -1054,7 +1054,7 @@ func TestFanoutMemoryPressureRotatesUnpartitioned(t *testing.T) {
 func TestFanoutMemoryPressureClosesPartitionsInLRUOrder(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"region"})
+	bat := batch.NewWithSize(1)
 	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, value := range []string{"a", "b", "a"} {
 		require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
@@ -1069,7 +1069,7 @@ func TestFanoutMemoryPressureClosesPartitionsInLRUOrder(t *testing.T) {
 		TableLocation: "s3://warehouse/table",
 	}, factory)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, writer.WriteBatch(ctx, []string{"region"}, bat))
 	require.Len(t, writer.active, 2)
 	factory.limited, factory.remaining = true, 1
 	require.NoError(t, writer.relieveMemoryPressure(ctx))
@@ -1095,7 +1095,7 @@ func (s *failingAbortSink) Abort() error              { s.aborted = true; return
 func TestFanoutCloseEncodingFailurePreservesCleanupError(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id"})
+	bat := batch.NewWithSize(1)
 	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int32](vec, 1, false, mp))
 	bat.Vecs[0] = vec
@@ -1108,7 +1108,7 @@ func TestFanoutCloseEncodingFailurePreservesCleanupError(t *testing.T) {
 		TableLocation: "s3://warehouse/table",
 	}, DataFileOutputFactoryFunc(func(context.Context, string) (io.WriteCloser, error) { return sink, nil }))
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, writer.WriteBatch(ctx, []string{"id"}, bat))
 	_, err = writer.Close(ctx)
 	require.ErrorIs(t, err, writeErr)
 	require.ErrorIs(t, err, abortErr)
@@ -1131,7 +1131,7 @@ func TestFanoutMemoryPressureThresholdBoundary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			bat := batch.New([]string{"id"})
+			bat := batch.NewWithSize(1)
 			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 			defer bat.Clean(mp)
 			require.NoError(t, vector.AppendFixed[int32](bat.Vecs[0], 1, false, mp))
@@ -1140,7 +1140,7 @@ func TestFanoutMemoryPressureThresholdBoundary(t *testing.T) {
 			writer, err := NewFanoutParquetDataWriter(ctx, FanoutWriterConfig{Schema: api.Schema{Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeInt}}}}, TableLocation: "s3://warehouse/table"}, factory)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, writer.Abort(ctx)) })
-			require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+			require.NoError(t, writer.WriteBatch(ctx, []string{"id"}, bat))
 			active := writer.active[""]
 			require.NotNil(t, active)
 			size := active.writer.ApproxSize()
@@ -1181,7 +1181,7 @@ func TestFanoutActiveSizeSaturationRecovery(t *testing.T) {
 func TestFanoutActiveSizeAfterWriteFailure(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "missing"})
+	bat := batch.NewWithSize(2)
 	defer bat.Clean(mp)
 	for i := range bat.Vecs {
 		bat.Vecs[i] = vector.NewVec(types.T_int32.ToType(), mp)
@@ -1194,7 +1194,7 @@ func TestFanoutActiveSizeAfterWriteFailure(t *testing.T) {
 	}, &memoryDataFileFactory{objects: make(map[string]*bytes.Buffer)})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, writer.Abort(ctx)) })
-	require.Error(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.Error(t, writer.WriteBatch(ctx, []string{"id", "missing"}, bat))
 	require.Positive(t, writer.activeSize, "the first column was observed before conversion failed")
 	require.Equal(t, writer.active[""].writer.ApproxSize(), writer.activeSize)
 	require.NoError(t, writer.Abort(ctx))

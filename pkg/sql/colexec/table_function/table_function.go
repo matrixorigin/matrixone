@@ -247,7 +247,6 @@ func (tableFunction *TableFunction) cleanForPrepare(proc *process.Process) {
 
 func (tableFunction *TableFunction) createResultBatch(mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(tableFunction.Attrs))
-	bat.Attrs = tableFunction.Attrs
 	for i := range tableFunction.ctr.retSchema {
 		bat.Vecs[i] = vector.NewVec(tableFunction.ctr.retSchema[i], mp)
 	}

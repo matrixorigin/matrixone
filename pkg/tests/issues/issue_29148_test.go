@@ -98,6 +98,7 @@ func TestIssue29148PreparedOwnerPolicyLifecycle(t *testing.T) {
 					execSQLRequire(t, ctx, adminDB, "grant connect on account * to "+deniedRole)
 					execSQLRequire(t, ctx, adminDB, "grant insert on table "+dbName+".migration_seed to "+deniedRole)
 					execSQLRequire(t, ctx, adminDB, "create user "+deniedUser+" identified by '123456' default role "+deniedRole)
+					execSQLRequire(t, ctx, adminDB, "grant "+deniedRole+" to "+userName)
 				}
 
 				innerSQL := "select id from " + dbName + ".t order by id"
@@ -152,8 +153,19 @@ func TestIssue29148PreparedOwnerPolicyLifecycle(t *testing.T) {
 				assertRows("execute owner_handle", []int{1, 2})
 
 				if tc.migrate {
-					denied := openUser(targetCN, deniedUser, true)
-					target := migrateIssue29148PreparedConnection(t, ctx, sourceCN, targetCN, conn, denied, func() *sql.Conn {
+					commitTS := sourceCN.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+					require.False(t, commitTS.IsEmpty())
+					testutils.WaitLogtailApplied(t, commitTS, targetCN)
+					mismatched := openUser(targetCN, deniedUser, false)
+					restricted := openUser(targetCN, userName, true)
+					_, err := restricted.ExecContext(ctx, "set secondary role none")
+					require.NoError(t, err)
+					_, err = restricted.ExecContext(ctx, "set role "+deniedRole)
+					require.NoError(t, err)
+					var activeRole string
+					require.NoError(t, restricted.QueryRowContext(ctx, "select current_role()").Scan(&activeRole))
+					require.Equal(t, deniedRole, activeRole)
+					target := migrateIssue29148PreparedConnection(t, ctx, sourceCN, targetCN, conn, mismatched, restricted, func() *sql.Conn {
 						return openUser(targetCN, userName, false)
 					})
 					conn = target
@@ -188,11 +200,12 @@ func TestIssue29148PreparedOwnerPolicyLifecycle(t *testing.T) {
 	})
 }
 
-func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sourceCN, targetCN embed.ServiceOperator, source, denied *sql.Conn, openTarget func() *sql.Conn) *sql.Conn {
+func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sourceCN, targetCN embed.ServiceOperator, source, mismatched, restricted *sql.Conn, openTarget func() *sql.Conn) *sql.Conn {
 	t.Helper()
-	var sourceID, deniedID uint32
+	var sourceID, mismatchedID, restrictedID uint32
 	require.NoError(t, source.QueryRowContext(ctx, "select connection_id()").Scan(&sourceID))
-	require.NoError(t, denied.QueryRowContext(ctx, "select connection_id()").Scan(&deniedID))
+	require.NoError(t, mismatched.QueryRowContext(ctx, "select connection_id()").Scan(&mismatchedID))
+	require.NoError(t, restricted.QueryRowContext(ctx, "select connection_id()").Scan(&restrictedID))
 	inventory, err := clusterservice.GetMOClusterWithContext(ctx, sourceCN.ServiceID())
 	require.NoError(t, err)
 	refresher, ok := inventory.(clusterservice.AuthoritativeRefresher)
@@ -242,6 +255,7 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	defer client.Release(response)
 	snapshot := response.MigrateConnFromResponse
 	require.NotNil(t, snapshot)
+	require.NotNil(t, snapshot.Principal)
 	require.Len(t, snapshot.PrepareStmts, 1)
 	require.Equal(t, "owner_handle", snapshot.PrepareStmts[0].Name)
 	require.True(t, snapshot.PreparedStmtLongDataChecked)
@@ -254,7 +268,8 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	newTargetRequest := func(id uint32) *query.Request {
 		req := client.NewRequest(query.CmdMethod_MigrateConnTo)
 		req.MigrateConnToRequest = &query.MigrateConnToRequest{
-			ConnID: id, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
+			Principal: snapshot.Principal,
+			ConnID:    id, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
 			LastAffectedRows: snapshot.LastAffectedRows, LastInsertID: snapshot.LastInsertID,
 			LastInsertIDExported: snapshot.LastInsertIDExported, FoundRows: snapshot.FoundRows,
 			UserDefinedVars: snapshot.UserDefinedVars, UserDefinedVarsExported: snapshot.UserDefinedVarsExported,
@@ -264,25 +279,42 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 		}
 		return req
 	}
-	// Replay must run the target account's normal authorization checks.
-	failed, authErr := client.SendMessage(ctx, targetAddress, newTargetRequest(deniedID))
+	// Even a direct final import must reject a different user ID before
+	// replaying any exported session state or prepared statements.
+	failed, authErr := client.SendMessage(ctx, targetAddress, newTargetRequest(mismatchedID))
+	if failed != nil {
+		client.Release(failed)
+	}
+	require.True(t, moerr.IsMoErrCode(authErr, moerr.OkExpectedNotSafeToStartTransfer), "mismatched target principal must be rejected before replay: %v", authErr)
+	// Principal rejection leaves both sessions usable.
+	require.NoError(t, mismatched.PingContext(ctx))
+	assertSourceUsable()
+	t.Log("mismatched target principal rejected before replay; target and source sessions remain usable")
+	// The restricted target is the same user, so preflight succeeds. The
+	// final import must authorize PREPARE in the target's active role.
+	preflight := newTargetRequest(restrictedID)
+	preflight.MigrateConnToRequest.VerifyPrincipalOnly = true
+	verified, err := client.SendMessage(ctx, targetAddress, preflight)
+	require.NoError(t, err)
+	defer client.Release(verified)
+	require.NotNil(t, verified.MigrateConnToResponse)
+	require.True(t, verified.MigrateConnToResponse.PrincipalVerified)
+	failed, authErr = client.SendMessage(ctx, targetAddress, newTargetRequest(restrictedID))
 	if failed != nil {
 		client.Release(failed)
 	}
 	require.True(t, moerr.IsMoErrCode(authErr, moerr.ErrInternal), "replay authorization must be reached: %v", authErr)
 	require.ErrorContains(t, authErr, "do not have privilege to execute the statement")
-	// A direct RPC caller owns the failed target and must discard it, just as
-	// the proxy does after a replay error. Do not retry partially replayed state.
-	require.ErrorIs(t, denied.Raw(func(any) error { return driver.ErrBadConn }), driver.ErrBadConn)
-	require.Error(t, denied.PingContext(ctx))
+	// Discard the potentially partially replayed connection as the proxy does.
+	require.ErrorIs(t, restricted.Raw(func(any) error { return driver.ErrBadConn }), driver.ErrBadConn)
+	require.ErrorIs(t, restricted.PingContext(ctx), sql.ErrConnDone)
 	assertSourceUsable()
-	t.Log("authenticated replay authorization failed; caller discarded target and source rows [1,2] remained usable")
-	// Correct the privilege cause using a NEW authenticated target, not a
-	// same-ConnID retry after partially replayed state.
+
+	// Use a fresh connection with the default role for successful replay.
 	target := openTarget()
 	var targetID uint32
 	require.NoError(t, target.QueryRowContext(ctx, "select connection_id()").Scan(&targetID))
-	require.NotEqual(t, deniedID, targetID)
+	require.NotEqual(t, restrictedID, targetID)
 	request = newTargetRequest(targetID)
 	response, err = client.SendMessage(ctx, targetAddress, request)
 	// An unconfirmed replay is fatal here: require invokes this subtest's
@@ -291,6 +323,7 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	defer client.Release(response)
 	require.NotNil(t, response.MigrateConnToResponse)
 	require.True(t, response.MigrateConnToResponse.Success)
+	require.True(t, response.MigrateConnToResponse.PrincipalVerified)
 	t.Logf("prepared handle migrated from CN %s connection %d to CN %s connection %d", sourceCN.ServiceID(), sourceID, targetCN.ServiceID(), targetID)
 	return target
 }

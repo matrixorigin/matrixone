@@ -781,7 +781,6 @@ func TestSubscriptionMetadataStateProjectionAndLimit(t *testing.T) {
 
 	newState := func(result executor.Result, limited bool) *subscriptionMetadataState {
 		output := batch.NewWithSize(2)
-		output.Attrs = []string{"owner", "account_id"}
 		output.Vecs[0] = vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 		output.Vecs[1] = vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 		streamCh := make(chan executor.Result, 1)
@@ -854,7 +853,6 @@ func TestSubscriptionMetadataStateMalformedResultClosesResources(t *testing.T) {
 	result := executor.Result{Mp: internalMP, Batches: []*batch.Batch{malformed}}
 
 	output := batch.NewWithSize(1)
-	output.Attrs = []string{"account_id"}
 	output.Vecs[0] = vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 	streamCh := make(chan executor.Result, 1)
 	streamCh <- result

@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -182,13 +183,17 @@ func GetTombstonesByBlockId(
 	return
 }
 
+// FindTombstonesOfObject returns the positions in tombstoneObjects that may
+// hold tombstones of objectId, as a bitmap allocated from mp that the caller
+// frees.
 func FindTombstonesOfObject(
 	ctx context.Context,
 	objectId *objectio.ObjectId,
 	tombstoneObjects []objectio.ObjectStats,
 	fs fileservice.FileService,
+	mp *mpool.MPool,
 ) (sels bitmap.Bitmap, err error) {
-	return findTombstoneOfXXX(ctx, objectId[:], tombstoneObjects, fs)
+	return findTombstoneOfXXX(ctx, objectId[:], tombstoneObjects, fs, mp)
 }
 
 func findTombstoneOfXXX(
@@ -196,8 +201,16 @@ func findTombstoneOfXXX(
 	pattern []byte,
 	tombstoneObjects []objectio.ObjectStats,
 	fs fileservice.FileService,
+	mp *mpool.MPool,
 ) (sels bitmap.Bitmap, err error) {
-	sels.InitWithSize(int64(len(tombstoneObjects)))
+	if err = sels.InitWithSize(int64(len(tombstoneObjects)), mp); err != nil {
+		return
+	}
+	defer func() {
+		if err != nil {
+			sels.Free()
+		}
+	}()
 	var curr int
 	getTombstoneFile := func() (*objectio.ObjectStats, error) {
 		if curr >= len(tombstoneObjects) {
@@ -288,16 +301,21 @@ func CoarseFilterTombstoneObject(
 	nextDeletedDataObject func() *objectio.ObjectId,
 	tombstoneObjects []objectio.ObjectStats,
 	fs fileservice.FileService,
+	mp *mpool.MPool,
 ) (filtered []objectio.ObjectStats, err error) {
-	var bm, b bitmap.Bitmap
-	bm.InitWithSize(int64(len(tombstoneObjects)))
+	var bm bitmap.Bitmap
+	if err = bm.InitWithSize(int64(len(tombstoneObjects)), mp); err != nil {
+		return
+	}
+	defer bm.Free()
 	var objid *objectio.ObjectId
 	for objid = nextDeletedDataObject(); objid != nil; objid = nextDeletedDataObject() {
-		b, err = FindTombstonesOfObject(ctx, objid, tombstoneObjects, fs)
+		b, err := FindTombstonesOfObject(ctx, objid, tombstoneObjects, fs, mp)
 		if err != nil {
-			return
+			return nil, err
 		}
 		bm.Or(&b)
+		b.Free()
 	}
 	filtered = make([]objectio.ObjectStats, 0, bm.Count())
 	itr := bm.Iterator()

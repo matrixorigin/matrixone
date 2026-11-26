@@ -84,8 +84,8 @@ func newInsertTableHarness(
 
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().
-		Write(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, b *batch.Batch) error {
+		Write(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, b *batch.Batch, _ []string) error {
 			h.written = append(h.written, b)
 			return nil
 		}).AnyTimes()
@@ -111,7 +111,6 @@ func newInsertTableHarness(
 	// Pre-allocate the insertBuf only for the non-contiguous path. Contiguous
 	// path never reads it; passing it in keeps the call site's signature happy.
 	insertBuf := batch.NewWithSize(len(insertCols))
-	insertBuf.SetAttributes(attrs)
 	for i := range insertCols {
 		insertBuf.Vecs[i] = vector.NewVec(colTypes[i], mp)
 	}
@@ -132,8 +131,7 @@ func makeInputBatch(t *testing.T, mp *mpool.MPool, rowCount int) *batch.Batch {
 	c := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil, nil)
 	d := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil, nil)
 	bat := &batch.Batch{
-		Vecs:  []*vector.Vector{a, b, c, d},
-		Attrs: []string{"a", "b", "c", "d"},
+		Vecs: []*vector.Vector{a, b, c, d},
 	}
 	bat.SetRowCount(rowCount)
 	return bat
@@ -350,8 +348,7 @@ func TestInsertMainTableSkipNullPkRejectsZeroTemporalAfterFilter(t *testing.T) {
 	ids := testutil.MakeInt64Vector([]int64{0, 2}, []uint64{0}, proc.Mp())
 	values := testutil.NewInt32Vector(2, types.T_int32.ToType(), proc.Mp(), false, nil, nil)
 	input := &batch.Batch{
-		Vecs:  []*vector.Vector{dates, ids, values},
-		Attrs: []string{"a", "id", "b"},
+		Vecs: []*vector.Vector{dates, ids, values},
 	}
 	input.SetRowCount(2)
 	defer input.Clean(proc.Mp())
@@ -427,8 +424,8 @@ func newMainTablePkSecondHarness(t *testing.T, ctrl *gomock.Controller) (*MultiU
 	written := make([]*batch.Batch, 0, 1)
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().
-		Write(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, b *batch.Batch) error {
+		Write(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, b *batch.Batch, _ []string) error {
 			written = append(written, b)
 			return nil
 		}).AnyTimes()
@@ -462,7 +459,7 @@ func makePkSecondInputBatch(
 	aVec := testutil.MakeInt32Vector(aValues, aNulls, mp)
 	idVec := testutil.MakeInt64Vector(idValues, idNulls, mp)
 	bVec := testutil.MakeInt32Vector(bValues, bNulls, mp)
-	bat := batch.New([]string{"a", "id", "b"})
+	bat := batch.NewWithSize(3)
 	bat.SetVector(0, aVec)
 	bat.SetVector(1, idVec)
 	bat.SetVector(2, bVec)

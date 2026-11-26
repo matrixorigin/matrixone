@@ -40,7 +40,7 @@ func TestClusterReplayDispatcherBindsCatalogGeneration(t *testing.T) {
 	meta, err := catalog.GenCreateTableTuple(catalog.Table{AccountId: 7, DatabaseId: 10, DatabaseName: "db", TableId: 22, TableName: "metrics"}, mp, packer)
 	require.NoError(t, err)
 	defer meta.Clean(mp)
-	_, err = fillRandomRowidAndZeroTs(meta, mp)
+	_, err = fillRandomRowidAndZeroTs(meta, catalog.MoTablesSchema, mp)
 	require.NoError(t, err)
 	vector.MustFixedColWithTypeCheck[types.TS](meta.GetVector(cache.MO_TIMESTAMP_IDX))[0] = types.BuildTS(1, 0)
 	cc.InsertTable(meta)

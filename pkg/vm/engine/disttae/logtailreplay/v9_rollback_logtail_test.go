@@ -61,7 +61,7 @@ func TestV9RollbackSentinelDoesNotReachPartitionState(t *testing.T) {
 
 	logtailBatch := logtail.DataChangeToLogtailBatch(src)
 	require.Equal(t, 1, logtailBatch.Length())
-	protoBatch, err := batch.BatchToProtoBatch(containers.ToCNBatch(logtailBatch))
+	protoBatch, err := batch.BatchToProtoBatch(containers.ToCNBatch(logtailBatch), logtailBatch.Attrs)
 	require.NoError(t, err)
 
 	state := logtailreplay.NewPartitionState("test", false, 42, false)

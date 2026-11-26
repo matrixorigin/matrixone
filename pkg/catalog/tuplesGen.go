@@ -235,12 +235,35 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 	return cols, nil
 }
 
+// Column names of the batches the Gen*Tuple functions build, which carry no
+// names of their own. GenCreateDatabaseTuple, GenCreateTableTuple and
+// GenCreateColumnTuples build MoDatabaseSchema, MoTablesSchema and
+// MoColumnsSchema batches. The names travel beside the batch to the engine and
+// on to TN; these slices are shared and must not be modified.
+var (
+	DropDatabaseTupleAttrs = []string{Row_ID, CPrimaryKeyColName, MoDatabaseSchema[0], MoDatabaseSchema[1]}
+	TableAlterTupleAttrs   = []string{SystemRelAttr_Constraint}
+	DropColumnTuplesAttrs  = []string{Row_ID, CPrimaryKeyColName}
+	DropTableTupleAttrs    = []string{Row_ID, CPrimaryKeyColName,
+		MoTablesSchema[0], MoTablesSchema[1], MoTablesSchema[2], MoTablesSchema[3]}
+	LogicalIdIndexInsertAttrs = []string{IndexTableIndexColName, IndexTablePrimaryColName}
+	LogicalIdIndexDeleteAttrs = []string{Row_ID, IndexTableIndexColName}
+)
+
+// Column names of a batch of persisted objects: a data-object batch carries
+// one block info and one ObjectStats per row, a tombstone-object batch one
+// ObjectStats per row. Relation.Write and Relation.Delete recognize these
+// batches by these names. The slices are shared and must not be modified.
+var (
+	ObjectInsertAttrs = []string{BlockMeta_BlockInfo, ObjectMeta_ObjectStats}
+	ObjectDeleteAttrs = []string{ObjectMeta_ObjectStats}
+)
+
 func GenCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 	name string, databaseId uint64, typ string,
 	m *mpool.MPool, packer *types.Packer,
 ) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(MoDatabaseSchema))
-	bat.Attrs = append(bat.Attrs, MoDatabaseSchema...)
 	bat.SetRowCount(1)
 
 	packer.Reset()
@@ -319,7 +342,6 @@ func GenDropDatabaseTuple(
 	m *mpool.MPool, packer *types.Packer,
 ) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
-	bat.Attrs = append([]string{Row_ID, CPrimaryKeyColName}, MoDatabaseSchema[:2]...)
 	bat.SetRowCount(1)
 	var err error
 	packer.Reset()
@@ -363,7 +385,6 @@ func GenDropDatabaseTuple(
 
 func GenTableAlterTuple(constraint [][]byte, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(1)
-	bat.Attrs = append(bat.Attrs, SystemRelAttr_Constraint)
 	bat.SetRowCount(1)
 
 	var err error
@@ -386,7 +407,6 @@ func GenTableAlterTuple(constraint [][]byte, m *mpool.MPool) (*batch.Batch, erro
 // genCreateTableTuple yields a batch for insertion into mo_tables.
 func GenCreateTableTuple(tbl Table, m *mpool.MPool, packer *types.Packer) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(MoTablesSchema))
-	bat.Attrs = append(bat.Attrs, MoTablesSchema...)
 	bat.SetRowCount(1)
 
 	var err error
@@ -523,7 +543,6 @@ func GenCreateTableTuple(tbl Table, m *mpool.MPool, packer *types.Packer) (*batc
 // genCreateColumnTuples yields a batch for insertion into mo_columns.
 func GenCreateColumnTuples(cols []Column, m *mpool.MPool, packer *types.Packer) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(MoColumnsSchema))
-	bat.Attrs = append(bat.Attrs, MoColumnsSchema...)
 	bat.SetRowCount(len(cols))
 
 	var err error
@@ -662,7 +681,6 @@ func GenCreateColumnTuples(cols []Column, m *mpool.MPool, packer *types.Packer) 
 // the batch has rowid vector.
 func GenDropColumnTuples(rowids []types.Rowid, pks [][]byte, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{Row_ID, CPrimaryKeyColName}
 	bat.SetRowCount(len(rowids))
 
 	var err error
@@ -695,7 +713,6 @@ func GenDropColumnTuples(rowids []types.Rowid, pks [][]byte, m *mpool.MPool) (*b
 func GenDropTableTuple(rowid types.Rowid, accid uint32, id, databaseId uint64, name, databaseName string,
 	m *mpool.MPool, packer *types.Packer) (*batch.Batch, error) {
 	bat := batch.NewWithSize(6)
-	bat.Attrs = append([]string{Row_ID, CPrimaryKeyColName}, MoTablesSchema[:4]...)
 	bat.SetRowCount(1)
 
 	var err error
@@ -757,7 +774,6 @@ func GenLogicalIdIndexInsertBatch(
 	mp *mpool.MPool,
 ) (*batch.Batch, error) {
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{IndexTableIndexColName, IndexTablePrimaryColName}
 	bat.SetRowCount(1)
 
 	var err error
@@ -791,7 +807,6 @@ func GenLogicalIdIndexDeleteBatch(
 ) (*batch.Batch, error) {
 	bat := batch.NewWithSize(2)
 	// Index table's primary key is __mo_index_idx_col (logical_id, uint64)
-	bat.Attrs = []string{Row_ID, IndexTableIndexColName}
 	bat.SetRowCount(1)
 
 	var err error

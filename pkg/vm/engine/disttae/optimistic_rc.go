@@ -109,7 +109,7 @@ func validateOptimisticWriteEntry(ctx context.Context, tbl *txnTable, e Entry, f
 		} else {
 			pk := tbl.GetTableDef(ctx).Pkey
 			if pk != nil {
-				for n, attr := range e.bat.Attrs {
+				for n, attr := range e.attrs {
 					if attr == pk.PkeyColName {
 						pos = n
 						break

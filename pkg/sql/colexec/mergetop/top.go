@@ -185,7 +185,7 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 		if result.Batch.IsEmpty() {
 			continue
 		}
-		if len(result.Batch.ExtraBuf) != 0 {
+		if len(result.Batch.ExtraBuf()) != 0 {
 			return true, moerr.NewInternalError(proc.Ctx,
 				"merge top build should not have extra buffers")
 		}

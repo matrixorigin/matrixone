@@ -42,12 +42,6 @@ func newBatchWithAllocation(
 	if err != nil {
 		return nil, err
 	}
-	if len(source.Attrs) > 0 {
-		destination.Attrs = append(
-			make([]string, 0, len(source.Attrs)),
-			source.Attrs...,
-		)
-	}
 	return destination, nil
 }
 

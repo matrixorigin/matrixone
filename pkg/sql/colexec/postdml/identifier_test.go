@@ -30,7 +30,7 @@ import (
 func TestFulltextPostDMLQuotesIdentifiers(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
-	bat := batch.New([]string{"key`id"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	defer bat.Clean(proc.Mp())

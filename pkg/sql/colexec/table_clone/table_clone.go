@@ -428,7 +428,7 @@ func clone(
 		}
 
 		if dataObjBat.RowCount() != 0 {
-			if err = dstRel.Write(dstCtx, dataObjBat); err != nil {
+			if err = dstRel.Write(dstCtx, dataObjBat, colexec.CNS3ResultAttrs); err != nil {
 				return err
 			}
 		}
@@ -445,7 +445,7 @@ func clone(
 		}
 
 		if tombstoneObjBat.RowCount() != 0 {
-			if err = dstRel.Delete(dstCtx, tombstoneObjBat, ""); err != nil {
+			if err = dstRel.Delete(dstCtx, tombstoneObjBat, colexec.CNS3TombstoneResultAttrs, ""); err != nil {
 				return err
 			}
 		}

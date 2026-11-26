@@ -644,9 +644,6 @@ func BlockDataReadBackup(
 				loaded.Vecs[i] = nil
 			}
 			loaded.Vecs = loaded.Vecs[:requestedColumnCount]
-			if len(loaded.Attrs) > requestedColumnCount {
-				loaded.Attrs = loaded.Attrs[:requestedColumnCount]
-			}
 		}
 	}()
 	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
@@ -1048,7 +1045,7 @@ func blockDataReadWithFilter(
 		return err
 	}
 	cacheVectors.Free(mp)
-	stageMembership := phyAddrColumnPos < 0 && orderByLimit == nil && ds != nil && len(outputBat.ExtraBuf) == 0 &&
+	stageMembership := phyAddrColumnPos < 0 && orderByLimit == nil && ds != nil && len(outputBat.ExtraBuf()) == 0 &&
 		canReadMembership(ctx, info, columns, colTypes, storageSelectRows, earlyColumns, applyFilter)
 	if !stageMembership {
 		applyFilter.FreeMembership(mp)
@@ -1126,7 +1123,7 @@ func blockDataReadWithFilter(
 			}
 		}
 
-		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && applyFilter.PublishSelection == nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) {
+		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !applyFilter.PublishSelection && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf()) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) {
 			defer tombstones.Release()
 			return blockDataReadScopedOwned(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter, preFilterRows)
 		}
@@ -1143,9 +1140,9 @@ func blockDataReadWithFilter(
 				typs[i] = colTypes[pos]
 				dest[i] = outputBat.Vecs[pos]
 			}
-			// The output batch is the lender of every borrowed column: it holds the
-			// cache pins until its next CleanOnlyData/Clean.
-			_, err = ioutil.LoadColumnsDataIntoBorrowed(ctx, idxes, typs, fs, info.MetaLocation(), dest, mp, policy, applyFilter.BorrowColumns(earlyColumns, len(outputBat.Vecs)), outputBat)
+			// The request's owner is the lender of every borrowed column: the
+			// request pins the cache entries until the output batch is reused.
+			_, err = ioutil.LoadColumnsDataIntoBorrowed(ctx, idxes, typs, fs, info.MetaLocation(), dest, mp, policy, applyFilter.BorrowColumns(earlyColumns, len(outputBat.Vecs)), applyFilter.Pins())
 		} else {
 			deleteMask, err = materializeBlockColumnsAtPositions(
 				ctx,
@@ -1207,7 +1204,7 @@ func blockDataReadWithFilter(
 
 	var filterResult engine.ReaderFilterResult
 	selectedOutput := applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() &&
-		orderByLimit == nil && phyAddrColumnPos < 0 && len(outputBat.ExtraBuf) == 0
+		orderByLimit == nil && phyAddrColumnPos < 0 && len(outputBat.ExtraBuf()) == 0
 	if selectedOutput {
 		filterResult, err = applyFilter.Select(outputBat, earlyColumns)
 		if err != nil {
@@ -1223,11 +1220,13 @@ func blockDataReadWithFilter(
 		// The block's live rows are its physical rows only without deletes or
 		// a storage row selection. Then every column can stay a read-only
 		// reference to the cache and the batch carries the selection.
-		publishSelection := applyFilter.PublishSelection != nil && deleteMask.IsEmpty() &&
+		publishSelection := applyFilter.PublishSelection && deleteMask.IsEmpty() &&
 			physicalRows == nil
 		if !filterResult.All {
 			if publishSelection && len(filterResult.Sels) > 0 {
-				publishBatchSelection(outputBat, earlyColumns, filterResult.Sels, liveRows, applyFilter)
+				if err := publishBatchSelection(outputBat, earlyColumns, filterResult.Sels, liveRows, applyFilter, mp); err != nil {
+					return err
+				}
 				return loadBorrowedLateColumns(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter)
 			}
 			if err = publishReaderSelection(outputBat, earlyColumns, filterResult.Sels, applyFilter, mp); err != nil {
@@ -1617,7 +1616,8 @@ func BlockDataReadInner(
 				return err
 			}
 		}
-		_, err = materializeBlockData(
+		var ignored objectio.Bitmap
+		ignored, err = materializeBlockData(
 			ctx,
 			info,
 			columns,
@@ -1630,6 +1630,7 @@ func BlockDataReadInner(
 			mp,
 			fs,
 		)
+		ignored.Release()
 		return err
 	}
 
@@ -1947,7 +1948,8 @@ func materializeVectorTopNRows(
 }
 
 // buildTopInputRows constructs a slice of live row indices by excluding rows
-// present in the deleteMask. Returns nil when there is nothing to filter.
+// present in the deleteMask. Returns nil when no rows are deleted and a nonnil
+// empty slice when every row is deleted; callers use nil to mean all rows.
 func buildTopInputRows(length int, deleteMask objectio.Bitmap) []int64 {
 	if length <= 0 || deleteMask.IsEmpty() {
 		return nil

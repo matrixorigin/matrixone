@@ -29,13 +29,26 @@ import (
 )
 
 type IBatchBuffer interface {
-	// FetchWithSchema and Fetch return a batch whose vectors belong to mp.
-	FetchWithSchema([]string, []types.Type, *mpool.MPool) *batch.Batch
+	// FetchWithTypes and Fetch return a batch whose vectors belong to mp.
+	FetchWithTypes([]types.Type, *mpool.MPool) *batch.Batch
 	Fetch(*mpool.MPool) *batch.Batch
 	Putback(*batch.Batch, *mpool.MPool)
 	Close(*mpool.MPool)
 	Len() int
 	Usage() (int, int, int, int)
+}
+
+// MarkNull marks an existing row in an owned mutable vector as NULL. Unlike
+// UpdateValue, it returns bitmap allocation errors to the caller.
+func MarkNull(vec *vector.Vector, row uint32) error {
+	mask := vec.GetNulls()
+	if int64(row) >= mask.Len() {
+		if err := nulls.TryExpand(mask, int(row)+1); err != nil {
+			return err
+		}
+	}
+	mask.Add(uint64(row))
+	return nil
 }
 
 type GeneralBatchBuffer struct {
@@ -58,7 +71,7 @@ func (bb *GeneralBatchBuffer) Len() int {
 	return len(bb.fixedSizeVectors) + len(bb.varlenVectors)
 }
 
-func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type, mp *mpool.MPool) *batch.Batch {
+func (bb *GeneralBatchBuffer) FetchWithTypes(types []types.Type, mp *mpool.MPool) *batch.Batch {
 	bb.Lock()
 	defer bb.Unlock()
 
@@ -66,7 +79,6 @@ func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type
 	// either from the pool or by allocating fresh ones.  This avoids
 	// wasting vector allocations for positions that the pool can serve.
 	bat := batch.NewWithSize(len(types))
-	bat.Attrs = attrs
 
 	// if no vectors in buffer, allocate all fresh and return
 	if len(bb.fixedSizeVectors) == 0 && len(bb.varlenVectors) == 0 {
@@ -284,29 +296,31 @@ func NewOneSchemaBatchBuffer(
 	}
 }
 
+// Attrs returns the column names of the buffer's schema.
+func (bb *OneSchemaBatchBuffer) Attrs() []string {
+	return bb.attrs
+}
+
 func (bb *OneSchemaBatchBuffer) Len() int {
 	bb.Lock()
 	defer bb.Unlock()
 	return len(bb.buffer)
 }
 
-func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Type, mp *mpool.MPool) *batch.Batch {
+func (bb *OneSchemaBatchBuffer) FetchWithTypes(types []types.Type, mp *mpool.MPool) *batch.Batch {
 	bb.Lock()
 	defer bb.Unlock()
-	if len(attrs) != len(bb.attrs) || len(types) != len(bb.typs) {
-		panic(fmt.Sprintf("the length of attrs or types not match: bb.attrs=%v, bb.types=%v, attrs=%v, types=%v",
-			bb.attrs, bb.typs, attrs, types))
+	if len(types) != len(bb.typs) {
+		panic(fmt.Sprintf("the length of types not match: bb.types=%v, types=%v",
+			bb.typs, types))
 	}
-	for i, attr := range attrs {
-		if attr != bb.attrs[i] || types[i] != bb.typs[i] {
-			panic(fmt.Sprintf("attrs not match: %s %s", attr, bb.attrs[i]))
-		}
+	for i := range types {
 		if types[i].Oid != bb.typs[i].Oid {
 			panic(fmt.Sprintf("types not match: %s %s", types[i].String(), bb.typs[i].String()))
 		}
 	}
 	if len(bb.buffer) == 0 || !batchOfPool(bb.buffer[len(bb.buffer)-1], mp) {
-		return batch.NewWithSchema(bb.attrs, bb.typs, mp)
+		return batch.NewWithTypes(bb.typs, mp)
 	}
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
@@ -320,7 +334,7 @@ func (bb *OneSchemaBatchBuffer) Fetch(mp *mpool.MPool) *batch.Batch {
 	bb.Lock()
 	defer bb.Unlock()
 	if len(bb.buffer) == 0 || !batchOfPool(bb.buffer[len(bb.buffer)-1], mp) {
-		return batch.NewWithSchema(bb.attrs, bb.typs, mp)
+		return batch.NewWithTypes(bb.typs, mp)
 	}
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
@@ -372,7 +386,7 @@ func (bb *OneSchemaBatchBuffer) Close(mp *mpool.MPool) {
 // ### Shallow copy Functions
 
 func ToCNBatch(tnBat *Batch) *batch.Batch {
-	cnBat := batch.New(tnBat.Attrs)
+	cnBat := batch.NewWithSize(len(tnBat.Attrs))
 	for i, vec := range tnBat.Vecs {
 		cnBat.Vecs[i] = vec.GetDownstreamVector()
 	}
@@ -380,11 +394,13 @@ func ToCNBatch(tnBat *Batch) *batch.Batch {
 	return cnBat
 }
 
-func ToTNBatch(cnBat *batch.Batch, mp *mpool.MPool) *Batch {
+// ToTNBatch wraps cnBat's vectors in a TN batch whose columns are named by
+// attrs, one name per vector.
+func ToTNBatch(cnBat *batch.Batch, attrs []string, mp *mpool.MPool) *Batch {
 	tnBat := NewEmptyBatch()
 	for i, vec := range cnBat.Vecs {
 		v := ToTNVector(vec, mp)
-		tnBat.AddVector(cnBat.Attrs[i], v)
+		tnBat.AddVector(attrs[i], v)
 	}
 	return tnBat
 }
@@ -594,9 +610,9 @@ func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool
 
 // ### Only used in testcases
 
-func NewNonNullBatchWithSharedMemory(b *batch.Batch, mp *mpool.MPool) *Batch {
+func NewNonNullBatchWithSharedMemory(b *batch.Batch, attrs []string, mp *mpool.MPool) *Batch {
 	bat := NewBatch()
-	for i, attr := range b.Attrs {
+	for i, attr := range attrs {
 		v := ToTNVector(b.Vecs[i], mp)
 		bat.AddVector(attr, v)
 	}
