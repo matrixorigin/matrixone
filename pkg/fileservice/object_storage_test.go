@@ -231,16 +231,51 @@ func testObjectStorageWithParentContext[T ObjectStorage](
 	})
 }
 
+// Known provider endpoints keep their cross-SDK suites even if is-minio is set.
+func (s storageTestSpec) provider() string {
+	switch {
+	case s.scopedCS:
+		return "minio"
+	case strings.HasPrefix(strings.ToLower(s.args.Endpoint), "hdfs"):
+		return "hdfs"
+	case s.args.Endpoint == "disk":
+		return "disk"
+	}
+	for _, provider := range []string{"aliyun", "qcloud", "aws", "qiniu"} {
+		if strings.Contains(s.args.Endpoint, provider) {
+			return provider
+		}
+	}
+	if s.args.IsMinio {
+		return "minio"
+	}
+	return ""
+}
+
+func TestObjectStorageProviderSelection(t *testing.T) {
+	for _, provider := range []string{"aliyun", "qcloud", "aws", "qiniu"} {
+		spec := storageTestSpec{args: ObjectStorageArguments{Name: "cs-s3", Endpoint: provider + ".example.invalid", IsMinio: true}}
+		assert.Equal(t, provider, spec.provider())
+		spec.scopedCS = true
+		assert.Equal(t, "minio", spec.provider())
+	}
+	spec := storageTestSpec{args: ObjectStorageArguments{Endpoint: "example.invalid"}}
+	assert.Empty(t, spec.provider())
+	spec.args.IsMinio = true
+	assert.Equal(t, "minio", spec.provider())
+}
+
 func TestObjectStorages(t *testing.T) {
-	for _, args := range objectStorageArgumentsForTest("test", t) {
+	for _, spec := range prefixAwareStorageTestSpecs(t) {
+		args := spec.args
 
 		t.Run(args.Name, func(t *testing.T) {
 			specCtx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 			defer cancel()
 
-			switch {
+			switch spec.provider() {
 
-			case strings.HasPrefix(strings.ToLower(args.Endpoint), "hdfs"):
+			case "hdfs":
 				// HDFS
 				testObjectStorageWithParentContext(t, "hdfs", specCtx, func(t *testing.T, ctx context.Context) *HDFS {
 					storage, err := NewHDFS(ctx, args, nil)
@@ -250,7 +285,7 @@ func TestObjectStorages(t *testing.T) {
 					return storage
 				})
 
-			case args.Endpoint == "disk":
+			case "disk":
 				// disk
 				testObjectStorageWithParentContext(t, "disk", specCtx, func(t *testing.T, ctx context.Context) *diskObjectStorage {
 					storage, err := newDiskObjectStorage(ctx, args, nil)
@@ -260,8 +295,8 @@ func TestObjectStorages(t *testing.T) {
 					return storage
 				})
 
-			case args.IsMinio:
-				if args.Name == "cs-s3" {
+			case "minio":
+				if spec.scopedCS {
 					prepareCITestStorage(t, args)
 				}
 				testObjectStorageWithParentContext(t, "minio", specCtx, func(t *testing.T, ctx context.Context) *MinioSDK {
@@ -272,7 +307,7 @@ func TestObjectStorages(t *testing.T) {
 					return storage
 				}, args.KeyPrefix)
 
-			case strings.Contains(args.Endpoint, "aliyun"):
+			case "aliyun":
 				// aliyun
 				testObjectStorageWithParentContext(t, "aliyun", specCtx, func(t *testing.T, ctx context.Context) *AliyunSDK {
 					storage, err := NewAliyunSDK(ctx, args, nil)
@@ -298,7 +333,7 @@ func TestObjectStorages(t *testing.T) {
 					})
 				}
 
-			case strings.Contains(args.Endpoint, "qcloud"):
+			case "qcloud":
 				// qcloud
 				testObjectStorageWithParentContext(t, "aws", specCtx, func(t *testing.T, ctx context.Context) *AwsSDKv2 {
 					storage, err := NewAwsSDKv2(ctx, args, nil)
@@ -322,7 +357,7 @@ func TestObjectStorages(t *testing.T) {
 					return storage
 				})
 
-			case strings.Contains(args.Endpoint, "aws"):
+			case "aws":
 				// AWS
 				testObjectStorageWithParentContext(t, "aws", specCtx, func(t *testing.T, ctx context.Context) *AwsSDKv2 {
 					storage, err := NewAwsSDKv2(ctx, args, nil)
@@ -339,7 +374,7 @@ func TestObjectStorages(t *testing.T) {
 					return storage
 				})
 
-			case strings.Contains(args.Endpoint, "qiniu"):
+			case "qiniu":
 				// qiniu
 				testObjectStorageWithParentContext(t, "minio", specCtx, func(t *testing.T, ctx context.Context) *MinioSDK {
 					storage, err := NewMinioSDK(ctx, args, nil)

@@ -2807,10 +2807,10 @@ func BenchmarkS3FSAllocateCacheData(b *testing.B) {
 
 func TestS3FSFromSpecs(t *testing.T) {
 
-	for _, args := range objectStorageArgumentsForTest("test", t) {
-
+	for _, spec := range prefixAwareStorageTestSpecs(t) {
+		args := spec.args
 		t.Run(args.Name, func(t *testing.T) {
-			csPrefix := args.Name == "cs-s3"
+			csPrefix := spec.scopedCS
 			fixturePrefix := args.KeyPrefix
 			if csPrefix {
 				prepareCITestStorage(t, args)

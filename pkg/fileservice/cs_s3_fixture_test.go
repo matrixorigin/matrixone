@@ -127,10 +127,11 @@ func TestCSStoragePrefixScopedInitialization(t *testing.T) {
 	}))
 	defer server.Close()
 	t.Setenv("TEST_S3FS_CS", "name=cs,endpoint="+server.URL+",region=us-east-1,bucket=ci-test,key-id=id,key-secret=secret,is-minio=true,no-default-credentials=true")
-	for _, args := range objectStorageArgumentsForTest("test", t) {
-		if args.Name != "cs-s3" {
+	for _, spec := range prefixAwareStorageTestSpecs(t) {
+		if !spec.scopedCS {
 			continue
 		}
+		args := spec.args
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		sdk, err := NewMinioSDK(ctx, args, nil)
