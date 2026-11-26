@@ -496,7 +496,7 @@ func TestDiskCacheContentFillDoesNotFeedDownloadRate(t *testing.T) {
 }
 
 // A range read is timed only when the file service drains it itself.
-func TestS3FSRangeReadCostTimesOnlyDrainedReads(t *testing.T) {
+func TestS3FSRangeReadCostTimesDrainedReads(t *testing.T) {
 	ctx := context.Background()
 	rangeCosts(t, rangeReadCosts.get().latency, rangeReadCosts.get().bytesPerS)
 	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()},
@@ -514,7 +514,8 @@ func TestS3FSRangeReadCostTimesOnlyDrainedReads(t *testing.T) {
 	_, err = io.ReadAll(streamed)
 	require.NoError(t, err)
 	require.NoError(t, streamed.Close())
-	require.Equal(t, float64(sentinel), rangeReadCosts.get().latency, "a read streamed to the caller")
+	require.NotEqual(t, float64(sentinel), rangeReadCosts.get().latency, "a read streamed to the caller is drained by its fill")
+	rangeReadCosts.set(sentinel, rangeReadCosts.get().bytesPerS)
 
 	bufferVector := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1, Size: 100}}}
 	defer bufferVector.Release()

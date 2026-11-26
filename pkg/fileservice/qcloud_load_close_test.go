@@ -35,17 +35,28 @@ type cosProbeTransport func(*http.Request) (*http.Response, error)
 
 func (f cosProbeTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
+// cosProbeBody sends limit bytes, then waits for its request to end, as a body on a slow
+// network does; stalled is closed then.
 type cosProbeBody struct {
 	io.Reader
-	reads, bytes int
+	ctx          context.Context
+	limit        int
+	stalled      chan struct{}
+	reads, bytes atomic.Int64
 	size         int
 	closed       atomic.Bool // S3FS also retains a finalizer as a cleanup fallback.
 }
 
 func (b *cosProbeBody) Read(p []byte) (int, error) {
-	b.reads++
-	n, err := b.Reader.Read(p)
-	b.bytes += n
+	b.reads.Add(1)
+	left := b.limit - int(b.bytes.Load())
+	if left <= 0 {
+		close(b.stalled)
+		<-b.ctx.Done()
+		return 0, b.ctx.Err()
+	}
+	n, err := b.Reader.Read(p[:min(len(p), left)])
+	b.bytes.Add(int64(n))
 	return n, err
 }
 
@@ -77,12 +88,13 @@ type cosProbeCloser struct {
 }
 
 func (r *cosProbeCloser) Close() error {
-	reads, consumed := r.body.reads, r.body.bytes
+	<-r.body.stalled
+	reads, consumed := r.body.reads.Load(), r.body.bytes.Load()
 	// The fixture must actually leave a tail; otherwise a draining Close passes.
-	require.Less(r.t, consumed, r.body.size)
+	require.Less(r.t, consumed, int64(r.body.size))
 	err := r.ReadCloser.Close()
-	require.Equal(r.t, reads, r.body.reads, "probe Close must not read the COS response")
-	require.Equal(r.t, consumed, r.body.bytes, "probe Close must not download the tail")
+	require.Equal(r.t, reads, r.body.reads.Load(), "probe Close must not read the COS response")
+	require.Equal(r.t, consumed, r.body.bytes.Load(), "probe Close must not download the tail")
 	require.True(r.t, r.body.closed.Load())
 	return err
 }
@@ -108,7 +120,8 @@ func TestReadFileOffsetCOSCloseDoesNotReadTail(t *testing.T) {
 					require.Empty(t, end, "probe retains its unbounded range semantics")
 					offset, err := strconv.Atoi(start)
 					require.NoError(t, err)
-					body := &cosProbeBody{Reader: strings.NewReader(data[offset:]), size: len(data) - offset}
+					body := &cosProbeBody{Reader: strings.NewReader(data[offset:]), size: len(data) - offset,
+						ctx: req.Context(), limit: len(data) - offset - 1, stalled: make(chan struct{})}
 					bodies = append(bodies, body)
 					t.Cleanup(func() { _ = body.Close() })
 					return &http.Response{StatusCode: http.StatusPartialContent,

@@ -33,8 +33,8 @@ import (
 func TestS3FSPrefetchObjectDownloadsWhole(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	fs.diskCache.prefetched = prefetchedObjects{}
-	stats := &statCountingStorage{ObjectStorage: fs.storage}
-	fs.storage = stats
+	stats := &statCountingStorage{ObjectStorage: fs.governor.raw}
+	fs.governor.raw = stats
 	fs.prefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: int64(len(data))})
 	require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))))
 	require.Equal(t, int64(2), storage.reads.Load(), "the whole object in two parts")
@@ -307,9 +307,9 @@ func TestS3FSPrefetchPastFlightBytesFinishes(t *testing.T) {
 // downloaded.
 func TestS3FSColumnPrefetchFailureCountsFailed(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 256<<10, 300<<10)
-	storage := &failingRangeStorage{ObjectStorage: fs.storage}
+	storage := &failingRangeStorage{ObjectStorage: fs.governor.raw}
 	storage.fail.Store(true)
-	fs.storage = storage
+	fs.governor.raw = storage
 	downloaded := promtestutil.ToFloat64(metric.FSPrefetchDownloadedCounter)
 	failed := promtestutil.ToFloat64(metric.FSPrefetchFailedCounter)
 	fs.prefetchObject(context.Background(), ObjectPrefetch{
@@ -326,8 +326,8 @@ func TestS3FSColumnPrefetchFailureCountsFailed(t *testing.T) {
 func TestS3FSColumnPrefetchWaitsForFlightBytes(t *testing.T) {
 	fs, storage, _ := newPrefetchRangeFS(t, 256<<10, 300<<10)
 	fs.diskCache.prefetchFlightBytes = 10
-	held := &heldStorage{ObjectStorage: fs.storage, read: make(chan struct{}), released: make(chan struct{})}
-	fs.storage = held
+	held := &heldStorage{ObjectStorage: fs.governor.raw, read: make(chan struct{}), released: make(chan struct{})}
+	fs.governor.raw = held
 	ctx := context.Background()
 	first := make(chan struct{})
 	go func() {

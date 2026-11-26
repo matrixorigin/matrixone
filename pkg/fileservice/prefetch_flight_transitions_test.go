@@ -40,7 +40,7 @@ func prefetchBytes(fs *S3FS) int64 {
 // bytes once the connection frees.
 func TestFlightTransitionForegroundFileReadWaitsForConnection(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
-	fs.diskCache.conns.max = 1
+	fs.governor.setCapacity(2 * 1)
 	fs.diskCache.memoryPrefetchMax = 1
 	ranges := columnRanges(2, 40<<10, 1<<10)
 	held := make(chan struct{})
@@ -48,14 +48,14 @@ func TestFlightTransitionForegroundFileReadWaitsForConnection(t *testing.T) {
 	t.Cleanup(release)
 	var heldOffset atomic.Int64
 	heldOffset.Store(-1)
-	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return false })
+	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return false })
 	g.gated = func(_ string, offset int64) chan struct{} {
 		if heldOffset.CompareAndSwap(-1, offset) {
 			return held
 		}
 		return nil
 	}
-	fs.storage = g
+	fs.governor.raw = g
 	ctx := context.Background()
 	key := fs.pathToKey("object")
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
@@ -64,6 +64,7 @@ func TestFlightTransitionForegroundFileReadWaitsForConnection(t *testing.T) {
 	if heldOffset.Load() == r.Offset {
 		r = ranges[1]
 	}
+	freeForeground := occupy(t, fs.governor, foregroundRequest, 1)
 	type result struct {
 		got []byte
 		err error
@@ -79,6 +80,7 @@ func TestFlightTransitionForegroundFileReadWaitsForConnection(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	release()
+	freeForeground()
 	select {
 	case res := <-done:
 		require.NoError(t, res.err)
@@ -109,7 +111,7 @@ func TestFlightTransitionColumnReadReleasesCopiedFlight(t *testing.T) {
 			release := []func(){sync.OnceFunc(func() { close(gates[0]) }), sync.OnceFunc(func() { close(gates[1]) })}
 			defer release[0]()
 			defer release[1]()
-			g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return false })
+			g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return false })
 			g.gated = func(_ string, offset int64) chan struct{} {
 				for i := range gates {
 					if offset == ranges[i].Offset {
@@ -118,7 +120,7 @@ func TestFlightTransitionColumnReadReleasesCopiedFlight(t *testing.T) {
 				}
 				return nil
 			}
-			fs.storage = g
+			fs.governor.raw = g
 			ctx := context.Background()
 			key := fs.pathToKey("object")
 			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 << 10, Ranges: ranges[:2], Scan: &PrefetchScan{}}))
@@ -196,7 +198,7 @@ func TestFlightTransitionPrefetchReadReleasesCopiedFlight(t *testing.T) {
 	releaseX, releaseY := sync.OnceFunc(func() { close(gx) }), sync.OnceFunc(func() { close(gy) })
 	defer releaseX()
 	defer releaseY()
-	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return false })
+	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return false })
 	g.gated = func(_ string, offset int64) chan struct{} {
 		switch offset {
 		case 0:
@@ -206,7 +208,7 @@ func TestFlightTransitionPrefetchReadReleasesCopiedFlight(t *testing.T) {
 		}
 		return nil
 	}
-	fs.storage = g
+	fs.governor.raw = g
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	key := fs.pathToKey("object")
@@ -258,14 +260,14 @@ func TestFlightTransitionRangeReadReleasesEndedRun(t *testing.T) {
 	gate := make(chan struct{})
 	release := sync.OnceFunc(func() { close(gate) })
 	defer release()
-	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return false })
+	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return false })
 	g.gated = func(_ string, offset int64) chan struct{} {
 		if offset == 0 {
 			return gate
 		}
 		return nil
 	}
-	fs.storage = g
+	fs.governor.raw = g
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	key := fs.pathToKey("object")
@@ -342,8 +344,8 @@ func memoryWaiters(fs *S3FS, diskPath string) int {
 func TestFlightTransitionColumnReadJoinedFailedFlightFails(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	ranges := columnRanges(1, 40<<10, 1<<10)
-	s := &failOnceStorage{ObjectStorage: fs.storage, fail: ranges[0].Offset, gate: make(chan struct{})}
-	fs.storage = s
+	s := &failOnceStorage{ObjectStorage: fs.governor.raw, fail: ranges[0].Offset, gate: make(chan struct{})}
+	fs.governor.raw = s
 	ctx := context.Background()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 1 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
 	diskPath := fs.diskCache.objectKey("object")
@@ -364,8 +366,8 @@ func TestFlightTransitionColumnReadJoinedFailedFlightFails(t *testing.T) {
 // A range read joining a read-started flight whose storage read fails fails.
 func TestFlightTransitionRangeReadJoinedFailedFlightFails(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
-	s := &failOnceStorage{ObjectStorage: fs.storage, fail: 1000, gate: make(chan struct{})}
-	fs.storage = s
+	s := &failOnceStorage{ObjectStorage: fs.governor.raw, fail: 1000, gate: make(chan struct{})}
+	fs.governor.raw = s
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	read := func(offset, size int64) error {
@@ -393,8 +395,8 @@ func TestFlightTransitionRangeReadJoinedFailedFlightFails(t *testing.T) {
 func TestFlightTransitionPrefetchReadJoinedFailedFlightFails(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, _ := newPrefetchRangeFS(t, unit, 5*unit)
-	s := &failOnceStorage{ObjectStorage: fs.storage, fail: unit, gate: make(chan struct{})}
-	fs.storage = s
+	s := &failOnceStorage{ObjectStorage: fs.governor.raw, fail: unit, gate: make(chan struct{})}
+	fs.governor.raw = s
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	read := func(offset, size int64) error {
@@ -417,25 +419,25 @@ func TestFlightTransitionPrefetchReadJoinedFailedFlightFails(t *testing.T) {
 	assert.Error(t, errB, "the read that joined the flight")
 }
 
-// Budget and download connections return to zero after a background column prefetch, and
-// the connections never pass the bound.
+// Budget and room return to what they were after a background column prefetch, and the
+// background requests never pass their room.
 func TestFlightTransitionColumnPrefetchReturnsBudgetAndConns(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
-	fs.diskCache.conns.max = 16
-	holdConns(t, fs.diskCache, 14)
+	fs.governor.setCapacity(2 * 16)
+	defer occupy(t, fs.governor, backgroundRequest, 14)()
 	ranges := columnRanges(8, 20<<10, 1<<10)
 	fs.diskCache.prefetchFlightBytes = 3 * flightBufSize(ranges[0].Size)
-	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return true })
-	fs.storage = g
+	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
+	fs.governor.raw = g
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: 8 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
 	key := fs.pathToKey("object")
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 2 }, 5*time.Second, time.Millisecond)
-	require.LessOrEqual(t, fs.diskCache.conns.held.Load(), int64(16))
+	require.LessOrEqual(t, heldRoom(fs.governor), 16)
 	close(g.gate)
 	require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
 	fs.diskCache.prefetchObjects.reads.Wait()
 	require.Zero(t, prefetchBytes(fs))
-	require.Equal(t, int64(14), fs.diskCache.conns.held.Load())
+	require.Equal(t, 14, heldRoom(fs.governor))
 	_, most, total := g.counts(key)
 	require.Equal(t, len(ranges), total)
 	require.LessOrEqual(t, most, 2)
@@ -447,14 +449,14 @@ func TestFlightTransitionIdleFlightFreesBudgetAndConn(t *testing.T) {
 	shortIdle(t, 50*time.Millisecond)
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	ranges := columnRanges(1, 20<<10, 1<<10)
-	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return true })
-	fs.storage = g
+	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
+	fs.governor.raw = g
 	defer close(g.gate)
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: 1 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
 	key := fs.pathToKey("object")
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 1 }, 5*time.Second, time.Millisecond)
 	require.Eventually(t, func() bool {
-		return !fs.prefetcher.isRunning("object") && prefetchBytes(fs) == 0 && fs.diskCache.conns.held.Load() == 0
+		return !fs.prefetcher.isRunning("object") && prefetchBytes(fs) == 0 && heldRoom(fs.governor) == 0
 	}, 5*time.Second, time.Millisecond)
 	_, ok := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), ranges[0].Offset, ranges[0].Size)
 	require.False(t, ok)
@@ -465,8 +467,8 @@ func TestFlightTransitionIdleFlightFreesBudgetAndConn(t *testing.T) {
 func TestFlightTransitionDeleteStopsWaitingFlight(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	ranges := columnRanges(2, 20<<10, 1<<10)
-	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return true })
-	fs.storage = g
+	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
+	fs.governor.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	ctx := context.Background()
@@ -478,7 +480,7 @@ func TestFlightTransitionDeleteStopsWaitingFlight(t *testing.T) {
 	require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
 	fs.diskCache.prefetchObjects.reads.Wait()
 	require.Zero(t, prefetchBytes(fs))
-	require.Zero(t, fs.diskCache.conns.held.Load())
+	require.Zero(t, heldRoom(fs.governor))
 	rk := fs.diskCache.objectKey("object")
 	for _, r := range ranges {
 		_, ok := fs.diskCache.ranges.covering(rk, r.Offset, r.Size)
@@ -493,11 +495,17 @@ func TestFlightTransitionBudgetWaiterReturnsOnClose(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	ranges := columnRanges(2, 40<<10, 1<<10)
 	fs.diskCache.prefetchFlightBytes = flightBufSize(ranges[0].Size)
-	g := newBlackBoxStorage(fs.storage, func(_ string, offset int64) bool { return offset == ranges[0].Offset })
-	fs.storage = g
-	defer close(g.gate)
+	g := newBlackBoxStorage(fs.governor.raw, func(_ string, offset int64) bool { return offset == ranges[0].Offset })
+	fs.governor.raw = g
+	release := sync.OnceFunc(func() { close(g.gate) })
+	defer release()
 	ctx := context.Background()
-	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 1 << 10, Ranges: ranges[:1], Scan: &PrefetchScan{}}))
+	// A foreground read's flight holds the budget of foreground flights.
+	blocker := make(chan struct{})
+	go func() {
+		defer close(blocker)
+		_, _ = readColumnRange(ctx, fs, ranges[0])
+	}()
 	key := fs.pathToKey("object")
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 1 }, 5*time.Second, time.Millisecond)
 	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -521,6 +529,8 @@ func TestFlightTransitionBudgetWaiterReturnsOnClose(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the read waiting for budget did not return after close")
 	}
+	release()
+	<-blocker
 	require.Zero(t, prefetchBytes(fs))
 }
 
@@ -529,12 +539,17 @@ func TestFlightTransitionBudgetWaiterContextEnds(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	ranges := columnRanges(2, 40<<10, 1<<10)
 	fs.diskCache.prefetchFlightBytes = flightBufSize(ranges[0].Size)
-	g := newBlackBoxStorage(fs.storage, func(_ string, offset int64) bool { return offset == ranges[0].Offset })
-	fs.storage = g
+	g := newBlackBoxStorage(fs.governor.raw, func(_ string, offset int64) bool { return offset == ranges[0].Offset })
+	fs.governor.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	ctx := context.Background()
-	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 1 << 10, Ranges: ranges[:1], Scan: &PrefetchScan{}}))
+	// A foreground read's flight holds the budget of foreground flights.
+	blocker := make(chan struct{})
+	go func() {
+		defer close(blocker)
+		_, _ = readColumnRange(ctx, fs, ranges[0])
+	}()
 	key := fs.pathToKey("object")
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 1 }, 5*time.Second, time.Millisecond)
 	readCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
@@ -544,10 +559,10 @@ func TestFlightTransitionBudgetWaiterContextEnds(t *testing.T) {
 	_, _, total := g.counts(key)
 	require.Equal(t, 1, total)
 	release()
-	require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
+	<-blocker
 	fs.diskCache.prefetchObjects.reads.Wait()
 	require.Zero(t, prefetchBytes(fs))
-	require.Zero(t, fs.diskCache.conns.held.Load())
+	require.Zero(t, heldRoom(fs.governor))
 }
 
 func assertEventuallyBytes(t *testing.T, fs *S3FS, want int64) bool {

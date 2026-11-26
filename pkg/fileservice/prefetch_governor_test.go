@@ -59,8 +59,8 @@ func TestPrefetchMemoryBoundUnderConcurrentReads(t *testing.T) {
 	)
 	fs, _, data := newPrefetchRangeFS(t, unit, (units+waiting)*unit)
 	fs.diskCache.prefetchFlightBytes = budget
-	storage := &gateStorage{ObjectStorage: fs.storage, release: make(chan struct{})}
-	fs.storage = storage
+	storage := &gateStorage{ObjectStorage: fs.governor.raw, release: make(chan struct{})}
+	fs.governor.raw = storage
 	f := &fs.diskCache.prefetchObjects
 
 	var peak atomic.Int64
@@ -176,8 +176,8 @@ func (h *suffixGateStorage) Read(ctx context.Context, key string, min, max *int6
 func TestPrefetchBufferCountedUntilLastRelease(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
-	storage := &suffixGateStorage{ObjectStorage: fs.storage, from: 2 * unit, release: make(chan struct{})}
-	fs.storage = storage
+	storage := &suffixGateStorage{ObjectStorage: fs.governor.raw, from: 2 * unit, release: make(chan struct{})}
+	fs.governor.raw = storage
 	f := &fs.diskCache.prefetchObjects
 	bytes := func() int64 {
 		f.mu.Lock()
@@ -229,8 +229,8 @@ func TestPrefetchMemoryBoundForColdMultiRunRead(t *testing.T) {
 	)
 	fs, _, data := newPrefetchRangeFS(t, unit, 2*runs*unit)
 	fs.diskCache.prefetchFlightBytes = budget
-	storage := &gateStorage{ObjectStorage: fs.storage, release: make(chan struct{})}
-	fs.storage = storage
+	storage := &gateStorage{ObjectStorage: fs.governor.raw, release: make(chan struct{})}
+	fs.governor.raw = storage
 	f := &fs.diskCache.prefetchObjects
 
 	entries := make([]IOEntry, runs)
@@ -296,7 +296,7 @@ func TestColumnPrefetchMemoryBoundForColdRanges(t *testing.T) {
 	ctx := context.WithValue(context.Background(), downloadStartedKey{}, func() { started.Add(1) })
 	done := make(chan error, 1)
 	go func() {
-		ok, err := fs.diskCache.readRanges(ctx, "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, rs, open)
+		ok, err := fs.diskCache.readRanges(ctx, "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, rs, openerSource(open))
 		if err == nil && !ok {
 			err = errors.New("the ranges were not read")
 		}
@@ -396,8 +396,8 @@ func TestPrefetchConcurrentMultiRunReadsUnderTightBudget(t *testing.T) {
 func TestPrefetchReadOfJoinedBlockReleasesIt(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
-	storage := &suffixGateStorage{ObjectStorage: fs.storage, from: unit, release: make(chan struct{})}
-	fs.storage = storage
+	storage := &suffixGateStorage{ObjectStorage: fs.governor.raw, from: unit, release: make(chan struct{})}
+	fs.governor.raw = storage
 	f := &fs.diskCache.prefetchObjects
 	read := func(off, size int64, done chan<- error) {
 		vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
@@ -474,8 +474,8 @@ func TestPrefetchReadRunWaitingAcrossDeleteCachesNothing(t *testing.T) {
 		Policy: SkipDiskCache | SkipMemoryCache}))
 	fs.diskCache.prefetchFlightBytes = flightBufSize(unit)
 	otherKey := fs.pathToKey("other")
-	g := newBlackBoxStorage(keepOnDeleteStorage{fs.storage}, func(key string, _ int64) bool { return key == otherKey })
-	fs.storage = g
+	g := newBlackBoxStorage(keepOnDeleteStorage{fs.governor.raw}, func(key string, _ int64) bool { return key == otherKey })
+	fs.governor.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	read := func(name string, done chan<- error) {
@@ -540,7 +540,7 @@ func TestPrefetchReadAcrossDeleteReturnsNoBytes(t *testing.T) {
 		return io.NopCloser(bytes.NewReader(data[start:end])), nil
 	}
 	entries := []IOEntry{{Offset: 100, Size: 10}, {Offset: 2*unit + 100, Size: 10}}
-	_, _, ok, err := d.prefetchRead(context.Background(), "object", SkipFullFilePreloads|SkipMemoryCache, entries, 100, 2*unit+110, unit, open)
+	_, _, ok, err := d.prefetchRead(context.Background(), "object", SkipFullFilePreloads|SkipMemoryCache, entries, 100, 2*unit+110, unit, openerSource(open))
 	require.NoError(t, err)
 	require.Equal(t, int64(2), opens.Load())
 	require.False(t, ok, "no bytes read across a delete are returned")
@@ -559,8 +559,8 @@ func TestPrefetchMemoryExhaustedHoldsOneBuffer(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, unit, units*unit)
 	fs.diskCache.prefetchFlightBytes = 0
 	fs.diskCache.flightBudget.at.Store(0)
-	storage := &gateStorage{ObjectStorage: fs.storage, release: make(chan struct{})}
-	fs.storage = storage
+	storage := &gateStorage{ObjectStorage: fs.governor.raw, release: make(chan struct{})}
+	fs.governor.raw = storage
 	release := sync.OnceFunc(func() { close(storage.release) })
 	t.Cleanup(release)
 	f := &fs.diskCache.prefetchObjects

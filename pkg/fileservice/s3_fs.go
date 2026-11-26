@@ -22,6 +22,7 @@ import (
 	"io"
 	"iter"
 	"math"
+	"os"
 	pathpkg "path"
 	"runtime"
 	"slices"
@@ -42,8 +43,9 @@ import (
 
 // S3FS is a FileService implementation backed by S3
 type S3FS struct {
-	name       string
-	storage    ObjectStorage
+	name string
+	// governor makes every request to rawStorage.
+	governor   *governor
 	rawStorage ObjectStorage
 	keyPrefix  string
 
@@ -119,72 +121,55 @@ func NewS3FS(
 	}
 
 	var err error
+	var storage ObjectStorage
 	switch selectObjectStorageBackend(args) {
 
 	case objectStorageHDFS:
 		// HDFS
-		fs.storage, err = NewHDFS(ctx, args, perfCounterSets)
+		storage, err = NewHDFS(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	case objectStorageMinio:
 		// MinIO SDK
-		fs.storage, err = NewMinioSDK(ctx, args, perfCounterSets)
+		storage, err = NewMinioSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	case objectStorageQCloud:
 		// 腾讯云
-		fs.storage, err = NewQCloudSDK(ctx, args, perfCounterSets)
+		storage, err = NewQCloudSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	case objectStorageAliyun:
 		// 阿里云
-		fs.storage, err = NewAliyunSDK(ctx, args, perfCounterSets)
+		storage, err = NewAliyunSDK(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	case objectStorageDisk:
 		// disk based
-		fs.storage, err = newDiskObjectStorage(ctx, args, perfCounterSets)
+		storage, err = newDiskObjectStorage(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	default:
 		// AWS SDK
-		fs.storage, err = NewAwsSDKv2(ctx, args, perfCounterSets)
+		storage, err = NewAwsSDKv2(ctx, args, perfCounterSets)
 		if err != nil {
 			return nil, err
 		}
 
 	}
 
-	fs.rawStorage = fs.storage
-
-	// limit number of concurrent operations
-	concurrency := args.Concurrency
-	if concurrency == 0 {
-		concurrency = 1024
-	}
-	fs.storage = newObjectStorageSemaphore(
-		fs.storage,
-		concurrency,
-	)
-
-	// metrics
-	fs.storage = newObjectStorageMetrics(
-		fs.storage,
-		"s3",
-	)
-
-	// http trace
-	fs.storage = newObjectStorageHTTPTrace(fs.storage)
+	fs.rawStorage = storage
+	fs.governor = newGovernor(storage, min(cmp.Or(args.MaxConnsPerHost, maxConnsPerHost), int(cmp.Or(args.Concurrency, 1024))))
 
 	// cache
 	if !noCache {
@@ -192,8 +177,7 @@ func NewS3FS(
 			return nil, err
 		}
 		if fs.diskCache != nil {
-			// Downloads hold at most half of the smaller of the connections per host and the storage concurrency.
-			fs.diskCache.conns.max = min(int64(cmp.Or(args.MaxConnsPerHost, maxConnsPerHost)), concurrency) / 2
+			fs.diskCache.governor = fs.governor
 			workers := fs.diskCache.prefetchWorkers()
 			fs.prefetcher = newPrefetcher(workers, fs.prefetchQueueLimit(), fs.haveObject, fs.prefetchObject)
 		}
@@ -231,13 +215,12 @@ func (s *S3FS) CopyObject(
 	if err != nil {
 		return false, err
 	}
-	copier, ok := s.storage.(objectStorageCopier)
-	if !ok {
+	if _, ok := s.rawStorage.(objectStorageCopier); !ok {
 		return false, nil
 	}
 	srcKey := src.pathToKey(srcParsed.File)
 	dstKey := s.pathToKey(dstParsed.File)
-	exists, err := s.storage.Exists(ctx, dstKey)
+	exists, err := s.governor.exists(ctx, dstKey)
 	if err != nil {
 		return false, err
 	}
@@ -248,7 +231,7 @@ func (s *S3FS) CopyObject(
 		ctx,
 		"CopyObject",
 		func() (bool, error) {
-			return copier.CopyObject(ctx, src.rawStorage, srcKey, dstKey)
+			return s.governor.copyObject(ctx, src.rawStorage, srcKey, dstKey)
 		},
 		maxRetryAttemps,
 		IsRetryableError,
@@ -373,7 +356,7 @@ func (s *S3FS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, er
 			prefix += "/"
 		}
 
-		for entry, err := range s.storage.List(ctx, prefix) {
+		for entry, err := range s.governor.list(ctx, prefix) {
 			if err != nil {
 				yield(nil, err)
 				return
@@ -424,7 +407,7 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 	}
 	key := s.pathToKey(path.File)
 
-	size, err := s.storage.Stat(ctx, key)
+	size, err := s.governor.stat(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -444,11 +427,7 @@ func (s *S3FS) StatFileIdentity(ctx context.Context, filePath string) (ObjectIde
 	if err != nil {
 		return ObjectIdentity{}, err
 	}
-	storage, ok := s.storage.(objectStorageIdentityReader)
-	if !ok {
-		return ObjectIdentity{}, moerr.NewNotSupported(ctx, "object storage identity")
-	}
-	identity, err := storage.StatObjectIdentity(ctx, s.pathToKey(path.File))
+	identity, err := s.governor.statIdentity(ctx, s.pathToKey(path.File))
 	if err != nil {
 		return ObjectIdentity{}, err
 	}
@@ -475,17 +454,14 @@ func (s *S3FS) OpenReadWithIdentity(
 	if err != nil {
 		return nil, err
 	}
-	storage, ok := s.storage.(objectStorageIdentityReader)
-	if !ok {
+	if _, ok := s.rawStorage.(objectStorageIdentityReader); !ok {
 		return nil, moerr.NewNotSupported(ctx, "conditional object storage read")
 	}
-	min := offset
-	var max *int64
+	end := int64(-1)
 	if size > 0 {
-		end := offset + size
-		max = &end
+		end = offset + size
 	}
-	return storage.ReadObjectWithIdentity(ctx, s.pathToKey(path.File), &min, max, expected)
+	return s.openStream(ctx, rangeRead{key: s.pathToKey(path.File), start: offset, end: end, identity: &expected})
 }
 
 func (s *S3FS) WholeObjectPreloadSkipped(filePath string, group uint64) bool {
@@ -532,7 +508,7 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 		layout = s.cachedObjectSize(path.File)
 	}
 	if err := s.diskCache.fillFileTo(
-		withPrefetchFill(ctx), path.File,
+		withBackgroundRequests(withPrefetchFill(ctx)), path.File,
 		func(ctx context.Context) (io.ReadCloser, error) {
 			return s.newReadCloser(ctx, filePath)
 		},
@@ -551,10 +527,13 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 		return nil, err
 	}
 
-	key := s.pathToKey(filePath)
-	return &lazyObjectReader{ctx: ctx, read: func(ctx context.Context, min, max *int64) (io.ReadCloser, error) {
-		return s.storage.Read(ctx, key, min, max)
-	}}, nil
+	src := s.source(filePath)
+	return &src, nil
+}
+
+// source returns the whole object at filePath, read through the governor.
+func (s *S3FS) source(filePath string) objectSource {
+	return objectSource{g: s.governor, key: s.pathToKey(filePath), end: -1}
 }
 
 // readSources are the shared sources of its bytes a read may take them from instead of
@@ -680,7 +659,7 @@ func (s *S3FS) cachedObjectSize(file string) objectLayout {
 		if err == nil || !s.diskCache.ranges.startsAt0(s.diskCache.objectKey(file)) {
 			return size, splitAt, err
 		}
-		if size, err = s.storage.Stat(ctx, s.pathToKey(file)); err != nil {
+		if size, err = s.governor.stat(ctx, s.pathToKey(file)); err != nil {
 			return 0, 0, errObjectSizeUnknown
 		}
 		return size, 0, nil
@@ -714,7 +693,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 	existsStart := time.Now()
 	exists := false
 	if !exclusiveWrite(ctx) {
-		exists, err = s.storage.Exists(ctx, key)
+		exists, err = s.governor.exists(ctx, key)
 	}
 	metric.FSWriteDurationExists.Observe(time.Since(existsStart).Seconds())
 	if err != nil {
@@ -807,25 +786,11 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		)
 	}
 
-	if pmw, ok := s.storage.(ParallelMultipartWriter); ok && pmw.SupportsParallelMultipart() &&
-		enableParallel && !exclusiveWrite(ctx) {
-		opt := &ParallelMultipartOption{
-			PartSize:    defaultParallelMultipartPartSize,
-			Concurrency: runtime.NumCPU(),
-			Expire:      expire,
-		}
-		storageStart := time.Now()
-		if err := pmw.WriteMultipartParallel(ctx, key, reader, size, opt); err != nil {
-			return 0, err
-		}
-		metric.FSWriteDurationStorage.Observe(time.Since(storageStart).Seconds())
-	} else {
-		storageStart := time.Now()
-		if err := s.storage.Write(ctx, key, reader, size, expire); err != nil {
-			return 0, err
-		}
-		metric.FSWriteDurationStorage.Observe(time.Since(storageStart).Seconds())
+	storageStart := time.Now()
+	if err := s.writeObject(ctx, key, reader, size, expire, enableParallel && !exclusiveWrite(ctx)); err != nil {
+		return 0, err
 	}
+	metric.FSWriteDurationStorage.Observe(time.Since(storageStart).Seconds())
 	bytesWritten = int(n.Load())
 
 	// write to disk cache
@@ -847,6 +812,53 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 
 	return bytesWritten, nil
+}
+
+// writePartSize is the size of the parts S3FS writes an object in.
+var writePartSize int64 = defaultParallelMultipartPartSize
+
+// writeObject writes the size bytes of r, or all when size is nil, as the object key.
+// Object storage that writes in parts gets each part read from r before its request, at
+// once when parallel is set; the disk object storage gets r staged in its own temporary
+// file and published by one request; other object storage gets r copied into a temporary
+// file of the process first, then sent by one request.
+func (s *S3FS) writeObject(ctx context.Context, key string, r io.Reader, size *int64, expire *time.Time, parallel bool) error {
+	switch raw := s.governor.raw.(type) {
+	case multipartStorage:
+		concurrency := 1
+		if parallel {
+			concurrency = runtime.NumCPU()
+		}
+		return writeParts(ctx, s.governor, key, r, size, &ParallelMultipartOption{
+			PartSize: writePartSize, Concurrency: concurrency, Expire: expire,
+		})
+	case *diskObjectStorage:
+		tempPath, err := raw.stage(ctx, key, r, size)
+		if err != nil {
+			return err
+		}
+		if err := s.governor.publishStaged(ctx, key, tempPath); err != nil {
+			_ = os.Remove(tempPath)
+			return err
+		}
+		return nil
+	}
+	f, err := os.CreateTemp("", "mo-fs-write-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+	}()
+	n, err := io.Copy(f, r)
+	if err != nil {
+		return err
+	}
+	if size != nil && n != *size {
+		return moerr.NewSizeNotMatchNoCtx(key)
+	}
+	return s.governor.putFile(ctx, key, f, n, expire)
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
@@ -1388,57 +1400,24 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		}
 	}
 
-	// A range read is timed only when this function drains it.
-	timeRangeReads := true
-	for i := range vector.Entries {
-		if vector.Entries[i].streams() {
-			timeRangeReads = false
-			break
+	key := s.pathToKey(path.File)
+	// The earliest range has already succeeded, so a later 416 is a short object, just as
+	// it is for the original envelope read.
+	sparseErr := func(err error) error {
+		if status, ok := objectStorageStatusCode(err); laterSparseRange && ok && status == 416 {
+			return moerr.NewUnexpectedEOFNoCtx(path.File)
 		}
+		return err
 	}
-
-	// a function to get an io.ReadCloser
-	getReader := func(ctx context.Context, min *int64, max *int64) (io.ReadCloser, error) {
-		LogEvent(ctx, str_get_reader_begin)
-		t0 := time.Now()
-		defer func() {
-			LogEvent(ctx, str_get_reader_end)
-			metric.FSReadDurationGetReader.Observe(time.Since(t0).Seconds())
-		}()
-		bytesCounter := new(atomic.Int64)
-		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
-		defer spanR.End()
-		key := s.pathToKey(path.File)
-		r, err := s.storage.Read(ctx, key, min, max)
-		if err != nil {
-			// The earliest range has already succeeded, so a later 416 is a
-			// short object, just as it is for the original envelope read.
-			if status, ok := objectStorageStatusCode(err); laterSparseRange && ok && status == 416 {
-				return nil, moerr.NewUnexpectedEOFNoCtx(path.File)
-			}
-			return nil, err
+	// rangeOf returns the read of the bytes [min, max), to the end when max is nil.
+	rangeOf := func(min, max *int64) rangeRead {
+		rr := rangeRead{key: key, start: *min, end: -1}
+		if max != nil {
+			rr.end = *max
 		}
-		return &readCloser{
-			r: &countingReader{
-				R: r,
-				C: bytesCounter,
-			},
-			closeFunc: func() error {
-				LogEvent(ctx, str_reader_close)
-				metric.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
-				if max != nil && timeRangeReads {
-					size := *max
-					if min != nil {
-						size -= *min
-					}
-					if n := bytesCounter.Load(); n == size {
-						rangeReadCosts.observe(n, time.Since(t0))
-					}
-				}
-				return r.Close()
-			},
-		}, nil
+		return rr
 	}
+	src := objectSource{g: s.governor, key: key, end: -1}
 
 	if readFullObject && s.shouldStreamFullObjectToDiskCache(vector) {
 		if s.prefetcher != nil && s.prefetcher.isRunning(path.File) {
@@ -1446,7 +1425,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		} else {
 			metric.FSPrefetchReadOwnDownloadCounter.Inc()
 		}
-		done, err := s.readFullObjectToDiskCacheStreaming(ctx, vector, path.File, getReader)
+		done, err := s.readFullObjectToDiskCacheStreaming(ctx, vector, path.File, src)
 		if err != nil {
 			return err
 		}
@@ -1473,15 +1452,12 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	var prefetchContent []byte
 	var prefetchReads int
 	var fetchedUncached bool
-	src := s.sourcesFor(ctx, vector)
-	if !readFullObject && min != nil && max != nil && src.window {
+	sources := s.sourcesFor(ctx, vector)
+	if !readFullObject && min != nil && max != nil && sources.window {
 		if unit, ok := s.diskCache.prefetchUnit(vector); ok {
-			open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
-				return getReader(ctx, &start, &end)
-			}
-			content, reads, ok, err := s.diskCache.prefetchRead(ctx, path.File, vector.Policy, vector.Entries, *min, *max, unit, open)
+			content, reads, ok, err := s.diskCache.prefetchRead(ctx, path.File, vector.Policy, vector.Entries, *min, *max, unit, src)
 			if err != nil {
-				return err
+				return sparseErr(err)
 			}
 			prefetchReads = reads
 			if ok {
@@ -1512,37 +1488,26 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 			getContentDone = true
 		}()
 
-		reader, err := getReader(ctx, min, max)
-		if err != nil {
-			return nil, err
-		}
-		defer reader.Close()
 		tStart := time.Now()
-		LogEvent(ctx, str_io_readall_begin)
-		bs, err = io.ReadAll(reader)
-		LogEvent(ctx, str_io_readall_end, len(bs))
+		bs, _, err = s.governor.read(ctx, rangeOf(min, max))
 		metric.FSReadDurationIOReadAll.Observe(time.Since(tStart).Seconds())
 		if err != nil {
-			return nil, err
+			return nil, sparseErr(err)
 		}
-
 		return
 	}
 
 	// Any other range read takes its bytes from a prefetch object, which other reads of
 	// them join. A read that streams an entry to its caller opens its own reader.
-	if prefetchContent == nil && !readFullObject && min != nil && max != nil && src.fetch {
-		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
-			return getReader(ctx, &start, &end)
-		}
+	if prefetchContent == nil && !readFullObject && min != nil && max != nil && sources.fetch {
 		// The read caches its entries unless the prefetch object caches its bytes.
 		policy := vector.Policy
-		if src.tier != diskTier {
+		if sources.tier != diskTier {
 			policy |= SkipDiskCacheWrites
 		}
-		content, ok, cached, err := s.diskCache.fetchRange(ctx, path.File, policy, vector.indexTier, *min, *max, open)
+		content, ok, cached, err := s.diskCache.fetchRange(ctx, path.File, policy, vector.indexTier, *min, *max, src)
 		if err != nil {
-			return err
+			return sparseErr(err)
 		}
 		if ok {
 			prefetchContent, prefetchReads, fetchedUncached = content, 1, !cached
@@ -1626,17 +1591,15 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 				}
 
 			} else {
-				// get a reader and copy
-				min := &entry.Offset
-				var max *int64
-				if entry.Size > 0 {
-					max = ptrTo(entry.Offset + entry.Size)
-				}
-				reader, err := getReader(ctx, min, max)
+				// The range is read before the writer runs.
+				reader, err := s.openStream(ctx, rangeOf(entryRange(entry)))
 				if err != nil {
-					return err
+					return sparseErr(err)
 				}
 				defer reader.Close()
+				if err := reader.wait(ctx, true); err != nil {
+					return sparseErr(err)
+				}
 				var buf []byte
 				put := ioBufferPool.Get(&buf)
 				defer put.Put()
@@ -1662,25 +1625,11 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 				*ptr = io.NopCloser(bytes.NewReader(data))
 
 			} else {
-				// get a new reader
-				min := &entry.Offset
-				var max *int64
-				if entry.Size > 0 {
-					max = ptrTo(entry.Offset + entry.Size)
-				}
-				reader, err := getReader(ctx, min, max)
+				reader, err := s.openStream(ctx, rangeOf(entryRange(entry)))
 				if err != nil {
-					return err
+					return sparseErr(err)
 				}
-				ret := &readCloser{
-					r:         reader,
-					closeFunc: reader.Close,
-				}
-				// to avoid potential leaks
-				runtime.SetFinalizer(ret, func(_ *readCloser) {
-					_ = reader.Close() // ignore return
-				})
-				*ptr = ret
+				*ptr = reader
 			}
 		}
 
@@ -1724,6 +1673,14 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	}
 
 	return nil
+}
+
+// entryRange returns the range of entry in the object, to its end when max is nil.
+func entryRange(entry IOEntry) (min, max *int64) {
+	if entry.Size > 0 {
+		max = ptrTo(entry.Offset + entry.Size)
+	}
+	return &entry.Offset, max
 }
 
 func (s *S3FS) shouldStreamFullObjectToDiskCache(vector *IOVector) bool {
@@ -1828,7 +1785,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	ctx context.Context,
 	vector *IOVector,
 	file string,
-	getReader func(context.Context, *int64, *int64) (io.ReadCloser, error),
+	src objectSource,
 ) (done bool, err error) {
 	read := newFullObjectDiskCacheReader(vector)
 
@@ -1876,7 +1833,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 				}
 			}
 			started <- admitted
-			return &lazyObjectReader{ctx: ctx, read: getReader}, nil
+			return &src, nil
 		}, s.asyncUpdate, storageFill, s.prefetchedSize(file, firstNeeded(vector)), s.fillTarget(vector.Policy, vector.FilePath))
 		setDone <- err
 	}()
@@ -2130,7 +2087,7 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 	}
 
 	return errors.Join(
-		s.storage.Delete(ctx, keys...),
+		s.governor.delete(ctx, keys...),
 		func() error {
 			if s.memCache == nil {
 				return nil
@@ -2165,6 +2122,7 @@ func (s *S3FS) IndexFileCache() *IndexFileCache {
 }
 
 func (s *S3FS) Close(ctx context.Context) {
+	defer s.governor.close()
 	if s.prefetcher != nil {
 		s.prefetcher.close(ctx)
 	}

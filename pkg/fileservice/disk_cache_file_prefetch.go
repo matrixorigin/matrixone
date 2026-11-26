@@ -27,8 +27,7 @@ import (
 
 // filePrefetchObject is a FilePrefetchObject of the bytes [start, end) of an object: they
 // download to their cache file, which reads of them join while it downloads. One of a run
-// is created unregistered, waits for one of the connections downloads may hold, holding
-// nothing, then registers and downloads.
+// is created unregistered, then registers and downloads.
 type filePrefetchObject struct {
 	start, end int64
 	ctx        context.Context // of its download
@@ -51,8 +50,6 @@ type filePrefetchObject struct {
 	// copies its bytes: starterHeld while it holds one, starterDone once the read no longer
 	// needs it.
 	holdStarter, starterHeld, starterDone bool
-	// connOnce frees the connection it holds once registered.
-	connOnce sync.Once
 	// whole is set on the download of a whole object, [0, size) or [0, end of object);
 	// stopOnClose, set once it is registered, ends its stop on the closing of the cache.
 	whole       bool
@@ -77,12 +74,12 @@ func newFilePrefetchObject(ctx context.Context, start, end int64) *filePrefetchO
 }
 
 // newFileObject returns an unregistered FilePrefetchObject of the bytes [start, end) of
-// the object at filePath, downloaded through open under ctx with what needs asks for, a
-// connection downloads may hold and caching included.
-func (d *DiskCache) newFileObject(ctx context.Context, filePath string, start, end int64, open rangeOpener, needs flightNeeds) *filePrefetchObject {
+// the object at filePath, downloaded from src under ctx with what needs asks for, caching
+// included.
+func (d *DiskCache) newFileObject(ctx context.Context, filePath string, start, end int64, src objectSource, needs flightNeeds) *filePrefetchObject {
 	p := newFilePrefetchObject(ctx, start, end)
-	needs.conn, needs.caching = true, true
-	p.prefetchTarget = prefetchTarget{d: d, filePath: filePath, diskPath: d.objectKey(filePath), open: open, needs: needs}
+	needs.caching = true
+	p.prefetchTarget = prefetchTarget{d: d, filePath: filePath, diskPath: d.objectKey(filePath), src: src, needs: needs}
 	return p
 }
 
@@ -95,17 +92,15 @@ func withDeletesMark(ctx context.Context, mark uint64) context.Context {
 }
 
 // newWholeObject returns an unregistered FilePrefetchObject of the whole object at
-// diskPath, downloaded under ctx into the index-file cache when index is set. It needs a
-// connection downloads may hold, is not registered after a delete of the object since the
-// mark of ctx, or since now, and, while it waits, tells the prefetcher whose download ctx
-// is for that reads need not wait for it.
+// diskPath, downloaded under ctx into the index-file cache when index is set. It is not
+// registered after a delete of the object since the mark of ctx, or since now.
 func (d *DiskCache) newWholeObject(ctx context.Context, diskPath string, index bool) *filePrefetchObject {
 	p := newFilePrefetchObject(ctx, 0, math.MaxInt64)
 	deletes, ok := ctx.Value(deletesMarkKey{}).(uint64)
 	if !ok {
 		deletes = d.deletes.now()
 	}
-	needs := flightNeeds{conn: true, deletes: &deletes, waiting: func() { downloadStarted(ctx) }}
+	needs := flightNeeds{deletes: &deletes, waiting: func() { downloadStarted(ctx) }}
 	p.prefetchTarget = prefetchTarget{d: d, diskPath: diskPath, needs: needs, index: index}
 	p.whole = true
 	return p
@@ -174,8 +169,7 @@ func (p *filePrefetchObject) endAt(size int64) {
 	f.mu.Unlock()
 }
 
-// admitWhole waits until p, a whole-object download, holds its connection, then registers
-// it. It reports false when the download is skipped, or with why it stopped; a delete of
+// admitWhole registers p, a whole-object download. It reports false when the download is skipped, or with why it stopped; a delete of
 // the object or the closing of the cache stops it as a cancel does.
 func (p *filePrefetchObject) admitWhole() (bool, error) {
 	o, err := admit(p.ctx, p)
@@ -196,7 +190,6 @@ func (p *filePrefetchObject) endWhole(err error) {
 		return
 	}
 	p.stopOnClose()
-	p.releaseConn()
 	p.d.endFilePrefetch(p.diskPath, p)(err)
 	p.release()
 	p.d.prefetchObjects.reads.Done()
@@ -232,7 +225,7 @@ func (p *filePrefetchObject) joinLocked(now time.Time) prefetchObject {
 	return p.d.prefetchObjects.holdingLocked(p.diskPath, p.index, p.start, p.end, now, p.d.downloadMaxExtraWait)
 }
 
-// fitsLocked reports true: p needs only a connection.
+// fitsLocked reports true: p needs nothing.
 func (p *filePrefetchObject) fitsLocked() bool { return true }
 
 // registerLocked registers p, joinable once its download is registered.
@@ -243,24 +236,17 @@ func (p *filePrefetchObject) registerLocked(_, closing context.Context, _ time.T
 	f.reads.Add(1)
 }
 
-// run downloads the bytes of p, registered, to their cache file, frees the connection p
-// holds once its bytes are read, and ends p. The closing of the cache or a delete of the
-// object cancels it.
+// run downloads the bytes of p, registered, to their cache file, and ends p. The closing
+// of the cache or a delete of the object cancels it.
 func (p *filePrefetchObject) run() {
 	d := p.d
 	defer d.prefetchObjects.reads.Done()
 	defer context.AfterFunc(p.closing, p.cancelRead)()
-	defer p.releaseConn()
-	_, _ = d.downloadFile(p.ctx, p.closing, p.filePath, p.start, p.end, p.open, p.releaseConn, d.endFilePrefetch(p.diskPath, p))
+	_, _ = d.downloadFile(p.ctx, p.closing, p.filePath, p.start, p.end, p.src, d.endFilePrefetch(p.diskPath, p))
 }
 
 // abandon ends p, never registered.
 func (p *filePrefetchObject) abandon() { p.cancelRead() }
-
-// releaseConn frees the connection p holds, once.
-func (p *filePrefetchObject) releaseConn() {
-	p.connOnce.Do(func() { p.d.conns.release() })
-}
 
 // endFilePrefetch returns the function ending the registered FilePrefetchObject p of the
 // object at objectPath with why it cached nothing. One handed to an async finalize is
@@ -304,9 +290,9 @@ func (f *prefetchObjects) holdingLocked(objectPath string, index bool, start, en
 }
 
 // downloadFile downloads under ctx, the context of a FilePrefetchObject, its bytes [start,
-// end) of the object at filePath through open, calls copied once they are read, and ends
-// it through done. It publishes nothing once closing is done.
-func (d *DiskCache) downloadFile(ctx, closing context.Context, filePath string, start, end int64, open rangeOpener, copied func(), done func(error)) (bool, error) {
+// end) of the object at filePath from src, and ends it through done. It publishes nothing
+// once closing is done.
+func (d *DiskCache) downloadFile(ctx, closing context.Context, filePath string, start, end int64, src objectSource, done func(error)) (bool, error) {
 	var written bool
 	var err error
 	defer func() { done(err) }()
@@ -314,23 +300,12 @@ func (d *DiskCache) downloadFile(ctx, closing context.Context, filePath string, 
 	diskPath := d.pathForIOEntry(filePath, IOEntry{Offset: start, Size: end - start})
 	// objectEnd is where a source ended before its range did: the object's size.
 	var objectEnd atomic.Int64
-	openReader := func(ctx context.Context) (io.ReadCloser, error) {
-		return &lazyObjectReader{ctx: ctx, read: func(ctx context.Context, min, max *int64) (io.ReadCloser, error) {
-			from, to := start+*min, end
-			if max != nil {
-				to = start + *max
-			}
-			r, err := open(ctx, from, to)
-			if err != nil {
-				return nil, err
-			}
-			return &objectEndReader{ReadCloser: r, at: from, end: to, objectEnd: &objectEnd}, nil
-		}}, nil
-	}
+	src.start, src.end, src.objectEnd = start, end, &objectEnd
+	openReader := func(context.Context) (io.ReadCloser, error) { return &src, nil }
 	layout := func(context.Context) (int64, int64, error) { return end - start, 0, nil }
 	live := func() bool { return closing.Err() == nil }
 	written, err = d.publishUnlessDeleted(filePath, IOEntry{readDeletes: readDeletes}, live, func(claim func() bool) (bool, error) {
-		return d.writeFileTo(ctx, diskPath, openReader, false, claim, rangeFill, layout, nil, copied)
+		return d.writeFileTo(ctx, diskPath, openReader, false, claim, rangeFill, layout, nil)
 	})
 	if err != nil {
 		if size := objectEnd.Load(); size > start {
@@ -344,24 +319,6 @@ func (d *DiskCache) downloadFile(ctx, closing context.Context, filePath string, 
 		err = d.observeWriteResult(diskPath, nil)
 	}
 	return written, err
-}
-
-// objectEndReader reads a source of the bytes [at, end) of an object. A source that ends
-// before end fails the read, and objectEnd holds where it ended.
-type objectEndReader struct {
-	io.ReadCloser
-	at, end   int64
-	objectEnd *atomic.Int64
-}
-
-func (r *objectEndReader) Read(b []byte) (int, error) {
-	n, err := r.ReadCloser.Read(b)
-	r.at += int64(n)
-	if err == io.EOF && r.at < r.end {
-		r.objectEnd.Store(r.at)
-		err = errSourceShort
-	}
-	return n, err
 }
 
 // fileFill returns the live file fill of the object at objectPath, of the index-file cache

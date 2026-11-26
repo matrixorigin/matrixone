@@ -69,8 +69,8 @@ func TestPrefetchDiskTierAfterIndex(t *testing.T) {
 			ctx := context.Background()
 			fs, _, data := newIndexObjectFS(t, true)
 			req := ObjectPrefetch{FilePath: "object", Size: int64(len(data))}
-			storage := newBlackBoxStorage(fs.storage, func(string, int64) bool { return true })
-			fs.storage = storage
+			storage := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
+			fs.governor.raw = storage
 			resume := sync.OnceFunc(func() { close(storage.gate) })
 			defer resume()
 
@@ -144,8 +144,8 @@ func TestIndexPrefetchAfterAsyncDiskDownload(t *testing.T) {
 				ctx := context.Background()
 				fs, _, data := newIndexObjectFS(t, true)
 				fs.SetAsyncUpdate(true)
-				storage := newBlackBoxStorage(fs.storage, func(string, int64) bool { return true })
-				fs.storage = storage
+				storage := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
+				fs.governor.raw = storage
 				resumeStorage := sync.OnceFunc(func() { close(storage.gate) })
 				defer resumeStorage()
 				publicationEntered, publish := make(chan struct{}), make(chan struct{})

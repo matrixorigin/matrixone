@@ -228,8 +228,18 @@ func (d *diskObjectStorage) Stat(ctx context.Context, key string) (size int64, e
 }
 
 func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, sizeHint *int64, expire *time.Time) (err error) {
-	if err := ctx.Err(); err != nil {
+	tempPath, err := d.stage(ctx, key, r, sizeHint)
+	if err != nil {
 		return err
+	}
+	return d.publish(ctx, key, tempPath)
+}
+
+// stage writes the bytes of r, sizeHint when set, into a durable temporary file of d and
+// returns its path.
+func (d *diskObjectStorage) stage(ctx context.Context, key string, r io.Reader, sizeHint *int64) (tempPath string, err error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -238,55 +248,50 @@ func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, 
 
 	tempFile, err := os.CreateTemp(d.path, "*.mofstemp")
 	if err != nil {
-		return err
+		return "", err
 	}
-	tempPath := tempFile.Name()
-	tempClosed := false
-	tempRenamed := false
 	defer func() {
-		var cleanupErr error
-		if !tempClosed {
-			cleanupErr = tempFile.Close()
+		if closeErr := tempFile.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
+			err = errors.Join(err, closeErr)
 		}
-		if !tempRenamed {
-			if removeErr := os.Remove(tempPath); removeErr != nil && !os.IsNotExist(removeErr) {
-				cleanupErr = errors.Join(cleanupErr, removeErr)
+		if err != nil {
+			if removeErr := os.Remove(tempFile.Name()); removeErr != nil && !os.IsNotExist(removeErr) {
+				err = errors.Join(err, removeErr)
 			}
-		}
-		if cleanupErr != nil {
-			err = errors.Join(err, cleanupErr)
 		}
 	}()
 
-	n, err := io.Copy(
-		tempFile,
-		r,
-	)
+	n, err := io.Copy(tempFile, r)
 	if err != nil {
-		return err
+		return "", err
 	}
-
 	if sizeHint != nil && n != *sizeHint {
-		return moerr.NewSizeNotMatchNoCtx(key)
+		return "", moerr.NewSizeNotMatchNoCtx(key)
 	}
-
 	if err := tempFile.Sync(); err != nil {
-		return err
+		return "", err
 	}
 	fadviseDontNeed(tempFile, 0, 0)
-	tempClosed = true
 	if err := tempFile.Close(); err != nil {
+		return "", err
+	}
+	return tempFile.Name(), nil
+}
+
+// publish moves the file stage wrote at tempPath to key.
+func (d *diskObjectStorage) publish(ctx context.Context, key, tempPath string) (err error) {
+	renamed := false
+	defer func() {
+		if !renamed {
+			if removeErr := os.Remove(tempPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				err = errors.Join(err, removeErr)
+			}
+		}
+	}()
+	path := filepath.Join(d.path, key)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil && !os.IsExist(err) {
 		return err
 	}
-
-	path := filepath.Join(d.path, key)
-	err = os.MkdirAll(filepath.Dir(path), 0755)
-	if err != nil {
-		if !os.IsExist(err) {
-			return err
-		}
-	}
-
 	if exclusiveWrite(ctx) {
 		if err := os.Link(tempPath, path); err != nil {
 			if os.IsExist(err) {
@@ -294,12 +299,11 @@ func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, 
 			}
 			return err
 		}
-	} else {
-		if err := os.Rename(tempPath, path); err != nil {
-			return err
-		}
-		tempRenamed = true
+		return nil
 	}
-
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	renamed = true
 	return nil
 }

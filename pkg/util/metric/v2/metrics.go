@@ -144,6 +144,7 @@ func initFileServiceMetrics() {
 	registry.MustRegister(fsReadWriteDuration)
 	registry.MustRegister(fsMultipartInitCounter)
 	registry.MustRegister(FSObjectStorageOperations)
+	registry.MustRegister(FSObjectStorageRequestsGauge)
 
 	registry.MustRegister(FSHTTPTraceCounter)
 	registry.MustRegister(S3ConnActiveGauge)
@@ -153,7 +154,6 @@ func initFileServiceMetrics() {
 	registry.MustRegister(FSDiskCacheAsyncUpdateDroppedCounter)
 	registry.MustRegister(FSDiskCacheDownloadReadCounter)
 	registry.MustRegister(FSDiskCacheDownloadDeclinedBytesCounter)
-	registry.MustRegister(FSDiskCacheDownloadSkippedCounter)
 	registry.MustRegister(FSPrefetchObjectCounter)
 	registry.MustRegister(FSPrefetchObjectWaitingGauge)
 	registry.MustRegister(FSPrefetchObjectWaitDuration)

@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -80,8 +79,8 @@ func TestS3FSCopyObject(t *testing.T) {
 	ctx := context.Background()
 	srcStorage := &testObjectCopyStorage{}
 	dstStorage := &testObjectCopyStorage{}
-	src := &S3FS{name: "src", keyPrefix: "cluster", storage: srcStorage, rawStorage: srcStorage}
-	dst := &S3FS{name: "dst", keyPrefix: "fixture", storage: dstStorage, rawStorage: dstStorage}
+	src := &S3FS{name: "src", keyPrefix: "cluster", governor: newGovernor(srcStorage, 1024), rawStorage: srcStorage}
+	dst := &S3FS{name: "dst", keyPrefix: "fixture", governor: newGovernor(dstStorage, 1024), rawStorage: dstStorage}
 
 	copied, err := dst.CopyObject(ctx, src, "objects/a", "backup/objects/a")
 	require.NoError(t, err)
@@ -106,7 +105,7 @@ func TestS3FSCopyObject(t *testing.T) {
 	require.Equal(t, "cluster/objects/a", dstStorage.srcKey)
 	require.Equal(t, "fixture/objects/b", dstStorage.dstKey)
 
-	noCopier := &S3FS{name: "dst", storage: dummyObjectStorage{}}
+	noCopier := &S3FS{name: "dst", governor: newGovernor(dummyObjectStorage{}, 1024), rawStorage: dummyObjectStorage{}}
 	copied, err = noCopier.CopyObject(ctx, src, "objects/a", "objects/b")
 	require.NoError(t, err)
 	require.False(t, copied)
@@ -443,7 +442,7 @@ func testS3FS(
 			assert.Nil(t, err)
 
 			// to test continuation
-			switch storage := fs.storage.(type) {
+			switch storage := fs.governor.raw.(type) {
 			case *AwsSDKv2:
 				storage.listMaxKeys = 5
 			}
@@ -655,13 +654,7 @@ func TestDynamicMinio(t *testing.T) {
 }
 
 func baseStorage(t *testing.T, fs *S3FS) ObjectStorage {
-	trace, ok := fs.storage.(*objectStorageHTTPTrace)
-	assert.True(t, ok)
-	metrics, ok := trace.upstream.(*objectStorageMetrics)
-	assert.True(t, ok)
-	sem, ok := metrics.upstream.(*objectStorageSemaphore)
-	assert.True(t, ok)
-	return sem.upstream
+	return fs.governor.raw
 }
 
 func BenchmarkS3FS(b *testing.B) {
@@ -1251,8 +1244,8 @@ func TestS3FSReadPolicyPreservesFullObjectDefault(t *testing.T) {
 				Policy:   SkipDiskCache | SkipMemoryCache,
 			}))
 
-			recorder := &readRangeRecordingObjectStorage{ObjectStorage: fs.storage}
-			fs.storage = recorder
+			recorder := &readRangeRecordingObjectStorage{ObjectStorage: fs.governor.raw}
+			fs.governor.raw = recorder
 			vec := &IOVector{
 				FilePath: "foo/bar",
 				Policy:   tc.policy,
@@ -1413,9 +1406,9 @@ func TestS3FSRangeReadSkipsFullObjectIOMergeBeforeDiskCacheUpdate(t *testing.T) 
 	assert.Nil(t, err)
 
 	recorder := &readRangeRecordingObjectStorage{
-		ObjectStorage: fs.storage,
+		ObjectStorage: fs.governor.raw,
 	}
-	fs.storage = recorder
+	fs.governor.raw = recorder
 
 	fullObjectVec := &IOVector{
 		FilePath: "foo/bar",
@@ -1509,11 +1502,11 @@ func TestS3FSExpensiveRangeWaitsForFullObjectMergeUntilContextDeadline(t *testin
 	require.NoError(t, err)
 
 	storage := &blockingReadObjectStorage{
-		ObjectStorage: fs.storage,
+		ObjectStorage: fs.governor.raw,
 		readStarted:   make(chan struct{}),
 		releaseRead:   make(chan struct{}),
 	}
-	fs.storage = storage
+	fs.governor.raw = storage
 	vector := &IOVector{
 		FilePath: "foo/bar",
 		Entries: []IOEntry{
@@ -1570,7 +1563,7 @@ func TestS3FSExpensiveRangeHasBoundedPerEntryFallback(t *testing.T) {
 	require.NoError(t, err)
 
 	storage := &generatedRangeObjectStorage{}
-	fs.storage = storage
+	fs.governor.raw = storage
 	vector := &IOVector{
 		FilePath: "foo/bar",
 		Entries: []IOEntry{
@@ -1643,7 +1636,7 @@ func TestS3FSCacheFillDoesNotWaitForNonProducingLeader(t *testing.T) {
 		releaseFollower: make(chan struct{}),
 	}
 	releaseFollower := sync.OnceFunc(func() { close(storage.releaseFollower) })
-	fs.storage = storage
+	fs.governor.raw = storage
 	fs.rawStorage = storage
 	t.Cleanup(releaseFollower)
 
@@ -1744,7 +1737,7 @@ func TestS3FSRangeMergeWaitHasBoundedFallback(t *testing.T) {
 		readStarted:   make(chan struct{}),
 		releaseRead:   make(chan struct{}),
 	}
-	fs.storage = storage
+	fs.governor.raw = storage
 	vector := &IOVector{
 		FilePath: "foo/bar",
 		Policy:   SkipFullFilePreloads | SkipDiskCacheWrites,
@@ -1846,7 +1839,7 @@ func TestS3FSSingleEntryFallbackCoalescesExactRange(t *testing.T) {
 		readStarted:   make(chan struct{}),
 		releaseRead:   make(chan struct{}),
 	}
-	fs.storage = storage
+	fs.governor.raw = storage
 
 	newVector := func() *IOVector {
 		return &IOVector{
@@ -2003,7 +1996,7 @@ func TestS3FSSingleEntryFallbackDoesNotMergeDifferentRanges(t *testing.T) {
 		readStarted:   make(chan struct{}),
 		releaseRead:   make(chan struct{}),
 	}
-	fs.storage = storage
+	fs.governor.raw = storage
 
 	newVector := func(offset int64) *IOVector {
 		return &IOVector{
@@ -2172,10 +2165,10 @@ func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotOpenReaderWhenCacheExists(
 		ctx,
 		vector,
 		"foo/bar",
-		func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+		getterSource(func(context.Context, *int64, *int64) (io.ReadCloser, error) {
 			getReaderCalls++
 			return io.NopCloser(bytes.NewReader([]byte("backend"))), nil
-		},
+		}),
 	)
 	assert.Nil(t, err)
 	assert.False(t, done)
@@ -2214,9 +2207,9 @@ func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotWaitForAsyncFinalize(t *te
 			ctx,
 			vector,
 			"foo/bar",
-			func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+			getterSource(func(context.Context, *int64, *int64) (io.ReadCloser, error) {
 				return io.NopCloser(bytes.NewReader([]byte("hello world"))), nil
-			},
+			}),
 		)
 		readDone <- result{done: done, err: err}
 	}()
@@ -2449,12 +2442,12 @@ func TestS3FSReadFullObjectToDiskCacheStreamingReturnsReaderError(t *testing.T) 
 		ctx,
 		vector,
 		"foo/bar",
-		func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+		getterSource(func(context.Context, *int64, *int64) (io.ReadCloser, error) {
 			return &errorReadCloser{
 				reader: bytes.NewReader([]byte("hello world")),
 				err:    readerErr,
 			}, nil
-		},
+		}),
 	)
 
 	assert.True(t, done)
@@ -2478,7 +2471,7 @@ func streamFill(
 	vector := &IOVector{FilePath: "foo/bar", Entries: []IOEntry{{Offset: 1, Size: 3}}}
 	done := make(chan error, 1)
 	go func() {
-		ok, err := s3.readFullObjectToDiskCacheStreaming(ctx, vector, "foo/bar", getReader)
+		ok, err := s3.readFullObjectToDiskCacheStreaming(ctx, vector, "foo/bar", getterSource(getReader))
 		if err == nil && !ok {
 			err = errors.New("not done")
 		}
@@ -2616,9 +2609,9 @@ func TestS3FSReadFullObjectToDiskCacheStreamingReadToEnd(t *testing.T) {
 		ctx,
 		vector,
 		"foo/bar",
-		func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+		getterSource(func(context.Context, *int64, *int64) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader([]byte("hello world"))), nil
-		},
+		}),
 	)
 
 	assert.True(t, done)
@@ -2651,9 +2644,9 @@ func TestS3FSReadFullObjectToDiskCacheStreamingUnexpectedEOF(t *testing.T) {
 		ctx,
 		vector,
 		"foo/bar",
-		func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+		getterSource(func(context.Context, *int64, *int64) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader([]byte("hello world"))), nil
-		},
+		}),
 	)
 
 	assert.True(t, done)
@@ -2904,11 +2897,11 @@ func TestS3FSIOMerger(t *testing.T) {
 	}
 	fs.memCache.cache = cache
 	storage := &blockingReadObjectStorage{
-		ObjectStorage: fs.storage,
+		ObjectStorage: fs.governor.raw,
 		readStarted:   make(chan struct{}),
 		releaseRead:   make(chan struct{}),
 	}
-	fs.storage = storage
+	fs.governor.raw = storage
 	readCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	releaseRead := sync.OnceFunc(func() { close(storage.releaseRead) })
 	releaseUpdate := sync.OnceFunc(func() { close(cache.releaseUpdate) })
@@ -3140,10 +3133,7 @@ func TestS3FSReadWrapperOwnership(t *testing.T) {
 				return &readCloser{r: strings.NewReader("abc"), closeFunc: func() error { closes[1]++; return closeErr }}, nil
 			}, 0, func(err error) bool { return errors.Is(err, io.ErrUnexpectedEOF) })
 		}}
-		sem := newObjectStorageSemaphore(source, 1)
-		metrics := newObjectStorageMetrics(sem, t.Name())
-		fs := &S3FS{name: "test", storage: newObjectStorageHTTPTrace(metrics), ioMerger: NewIOMerger()}
-		activeBefore := testutil.ToFloat64(metrics.numActiveRead)
+		fs := &S3FS{name: "test", governor: newGovernor(source, 1), rawStorage: source, ioMerger: NewIOMerger()}
 		var reader io.ReadCloser
 		vector := IOVector{FilePath: "test:key", Policy: SkipAllCache | SkipFullFilePreloads, Entries: []IOEntry{{Size: 3, ReadCloserForRead: &reader}}}
 		t.Cleanup(vector.Release)
@@ -3154,12 +3144,10 @@ func TestS3FSReadWrapperOwnership(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "abc", string(data))
 		require.Equal(t, 2, opens)
-		require.Empty(t, sem.semaphore)
-		require.Equal(t, activeBefore+1, testutil.ToFloat64(metrics.numActiveRead))
+		require.Zero(t, heldRoom(fs.governor))
 		require.ErrorIs(t, reader.Close(), closeErr)
 		require.ErrorIs(t, reader.Close(), closeErr)
 		require.Equal(t, [2]int{1, 1}, closes)
-		require.Equal(t, activeBefore, testutil.ToFloat64(metrics.numActiveRead))
 	})
 	t.Run("conditional-lease", func(t *testing.T) {
 		var closes int
@@ -3172,10 +3160,7 @@ func TestS3FSReadWrapperOwnership(t *testing.T) {
 			require.Equal(t, &ObjectIdentity{ETag: "version1", Size: 8}, expected)
 			return &readCloser{r: strings.NewReader("abc"), closeFunc: func() error { closes++; return closeErr }}, nil
 		}}
-		sem := newObjectStorageSemaphore(source, 1)
-		metrics := newObjectStorageMetrics(sem, t.Name())
-		fs := &S3FS{name: "test", storage: newObjectStorageHTTPTrace(metrics)}
-		activeBefore := testutil.ToFloat64(metrics.numActiveRead)
+		fs := &S3FS{name: "test", governor: newGovernor(source, 1), rawStorage: source}
 		reader := NewLeasedRangeReader(fs).(ConditionalLeasedRangeReader)
 		identity, err := reader.StatIdentity(t.Context(), "test:key")
 		require.NoError(t, err)
@@ -3185,8 +3170,7 @@ func TestS3FSReadWrapperOwnership(t *testing.T) {
 		require.ErrorIs(t, err, ErrObjectChanged)
 		require.Zero(t, admission.committed.Load())
 		require.Equal(t, int64(3), admission.aborted.Load())
-		require.Empty(t, sem.semaphore)
-		require.Equal(t, activeBefore, testutil.ToFloat64(metrics.numActiveRead))
+		require.Zero(t, heldRoom(fs.governor))
 		require.Equal(t, 1, closes)
 		closeErr = nil
 		lease, err = reader.ReadRangeLeaseWithIdentity(t.Context(), "test:key", 1, 3, identity, admission)
@@ -3197,8 +3181,7 @@ func TestS3FSReadWrapperOwnership(t *testing.T) {
 		require.Equal(t, 2, closes)
 		lease.Release()
 		require.Equal(t, int64(3), admission.released.Load())
-		require.Empty(t, sem.semaphore)
-		require.Equal(t, activeBefore, testutil.ToFloat64(metrics.numActiveRead))
+		require.Zero(t, heldRoom(fs.governor))
 	})
 }
 
@@ -3320,7 +3303,7 @@ func TestS3FSOrdinarySparseRangeRead(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { fs.Close(context.Background()) })
 			storage := &generatedRangeObjectStorage{}
-			fs.storage = storage
+			fs.governor.raw = storage
 			vector := &IOVector{FilePath: "foo", Policy: SkipAllCache}
 			for _, offset := range tc.offsets {
 				vector.Entries = append(vector.Entries, IOEntry{Offset: offset, Size: 4096})
@@ -3407,7 +3390,7 @@ func TestS3FSOrdinarySparseHDFSSeekBounds(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { fs.Close(context.Background()) })
 			storage := &hdfsSeekStorage{size: tc.size}
-			fs.storage = storage
+			fs.governor.raw = storage
 			if tc.hdfs {
 				fs.rawStorage = &HDFS{}
 			} else {
@@ -3445,7 +3428,7 @@ func TestS3FSOrdinarySparseHDFSSeekBounds(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { fs.Close(context.Background()) })
 		storage := &hdfsSeekStorage{size: 8192}
-		fs.storage, fs.rawStorage = storage, &HDFS{}
+		fs.governor.raw, fs.rawStorage = storage, &HDFS{}
 		hit := &sparseFirstEntryCache{}
 		miss := &publicationVectorCache{}
 		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{hit, miss}, Entries: []IOEntry{
@@ -3489,7 +3472,7 @@ func TestS3FSSparseRangeFailure(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(context.Background()) })
 	storage := &sparseFailureStorage{err: rangeStatusError{}}
-	fs.storage = storage
+	fs.governor.raw = storage
 	cache := &publicationVectorCache{}
 	vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{cache}, Entries: []IOEntry{
 		{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096},
@@ -3509,7 +3492,7 @@ func TestS3FSSparseFailureDoesNotPopulateMemoryCache(t *testing.T) {
 	fs.SetAsyncUpdate(false)
 	t.Cleanup(func() { fs.Close(context.Background()) })
 	storage := &sparseFailureStorage{err: rangeStatusError{}}
-	fs.storage = storage
+	fs.governor.raw = storage
 	entry := func(offset int64) IOEntry {
 		return IOEntry{Offset: offset, Size: 4096, ToCacheData: CacheOriginalData}
 	}
@@ -3530,7 +3513,7 @@ func TestS3FSSparseFailureDoesNotPopulateDiskCache(t *testing.T) {
 	fs.SetAsyncUpdate(false)
 	t.Cleanup(func() { fs.Close(context.Background()) })
 	fs.diskCache.prefetchRange = prefetchRangeConfig{}
-	fs.storage = &sparseFailureStorage{err: rangeStatusError{}}
+	fs.governor.raw = &sparseFailureStorage{err: rangeStatusError{}}
 	entry := func(offset int64) IOEntry { return IOEntry{Offset: offset, Size: 4096, ToCacheData: CacheOriginalData} }
 	vector := &IOVector{FilePath: "foo", Policy: SkipFullFilePreloads, Entries: []IOEntry{entry(0), entry(16 << 20)}}
 	t.Cleanup(vector.Release)
@@ -3546,7 +3529,7 @@ func TestS3FSSparsePreservesConverterError(t *testing.T) {
 	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(context.Background()) })
-	fs.storage = &generatedRangeObjectStorage{}
+	fs.governor.raw = &generatedRangeObjectStorage{}
 	vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Entries: []IOEntry{
 		{Offset: 0, Size: 4096},
 		{Offset: 16 << 20, Size: 4096, ToCacheData: func(context.Context, io.Reader, []byte, CacheDataAllocator) (fscache.Data, error) {
@@ -3654,7 +3637,7 @@ func TestS3FSSparseReadLifecycle(t *testing.T) {
 			if tc.cancel {
 				storage.cancel = cancel
 			}
-			fs.storage = storage
+			fs.governor.raw = storage
 			releases := 0
 			convert := func(ctx context.Context, r io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
 				d, err := CacheOriginalData(ctx, r, data, allocator)
@@ -3705,7 +3688,7 @@ func TestS3FSSparsePartialCacheAndStreaming(t *testing.T) {
 	t.Cleanup(func() { fs.Close(context.Background()) })
 	t.Run("two misses in a larger vector", func(t *testing.T) {
 		storage := &sparseTrackingStorage{}
-		fs.storage = storage
+		fs.governor.raw = storage
 		cache := &callbackVectorCache{onRead: func(vector *IOVector) {
 			for pos := range vector.Entries[:4] {
 				vector.Entries[pos].Data = []byte("cached")
@@ -3736,7 +3719,7 @@ func TestS3FSSparsePartialCacheAndStreaming(t *testing.T) {
 	})
 	t.Run("one remaining miss", func(t *testing.T) {
 		storage := &sparseTrackingStorage{}
-		fs.storage = storage
+		fs.governor.raw = storage
 		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{&sparseFirstEntryCache{}}, Entries: []IOEntry{
 			{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096},
 		}}
@@ -3748,7 +3731,7 @@ func TestS3FSSparsePartialCacheAndStreaming(t *testing.T) {
 	})
 	t.Run("success updates original vector", func(t *testing.T) {
 		storage := &sparseTrackingStorage{}
-		fs.storage = storage
+		fs.governor.raw = storage
 		cache := &publicationVectorCache{}
 		buf := make([]byte, 4096)
 		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{cache}, Entries: []IOEntry{
@@ -3762,7 +3745,7 @@ func TestS3FSSparsePartialCacheAndStreaming(t *testing.T) {
 	})
 	t.Run("mixed read closer", func(t *testing.T) {
 		storage := &sparseTrackingStorage{}
-		fs.storage = storage
+		fs.governor.raw = storage
 		var reader io.ReadCloser
 		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Entries: []IOEntry{
 			{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096, ReadCloserForRead: &reader},
@@ -3778,7 +3761,7 @@ func TestS3FSSparsePartialCacheAndStreaming(t *testing.T) {
 	})
 	t.Run("mixed writer", func(t *testing.T) {
 		storage := &sparseTrackingStorage{}
-		fs.storage = storage
+		fs.governor.raw = storage
 		var output bytes.Buffer
 		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Entries: []IOEntry{
 			{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096, WriterForRead: &output},
@@ -3822,7 +3805,7 @@ func TestS3FSCacheUpdateErrorDoesNotAffectReadOrOtherUpdates(t *testing.T) {
 	require.NoError(t, err)
 	fs.SetAsyncUpdate(false)
 	t.Cleanup(func() { fs.Close(context.Background()) })
-	fs.storage = &generatedRangeObjectStorage{}
+	fs.governor.raw = &generatedRangeObjectStorage{}
 	first := &publicationVectorCache{}
 	failing := &sparseFailingUpdateCache{}
 	vector := &IOVector{FilePath: "foo", Policy: SkipFullFilePreloads, Caches: []IOVectorCache{first, failing}, Entries: []IOEntry{
@@ -3942,7 +3925,7 @@ func TestS3FSCacheUpdateUnwindRunsRemainingUpdates(t *testing.T) {
 			fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "unwind", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, false, false)
 			require.NoError(t, err)
 			t.Cleanup(func() { fs.Close(context.Background()) })
-			fs.storage = &generatedRangeObjectStorage{}
+			fs.governor.raw = &generatedRangeObjectStorage{}
 			calls := make(chan string, 6)
 			entered := make(chan struct{})
 			var key IOMergeKey
@@ -4025,7 +4008,7 @@ func TestS3FSCacheUpdatesPreserveRetryOrder(t *testing.T) {
 	t.Cleanup(func() { fs.Close(context.Background()) })
 	fs.SetAsyncUpdate(false)
 	fs.diskCache.prefetchRange = prefetchRangeConfig{}
-	fs.storage = &generatedRangeObjectStorage{}
+	fs.governor.raw = &generatedRangeObjectStorage{}
 	order := make(chan []string, 1)
 	first := &callbackVectorCache{onUpdate: func() {
 		record("vector1")
@@ -4124,7 +4107,7 @@ func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
 			{name: "same offset 416", first: 9 << 20, second: 9 << 20, secondErr: rangeStatusError{}, sameOffset: true, opens: 2, closes: 1},
 			// A source that ends short leaves the read to read the range itself.
 			{name: "short", first: 9 << 20, second: 25 << 20, short: true, ok: true, opens: 3, closes: 3, offsets: []int64{9 << 20, 25 << 20, 25 << 20}},
-			{name: "body 416", first: 9 << 20, second: 25 << 20, bodyError: true, opens: 2, closes: 2},
+			{name: "body 416", first: 9 << 20, second: 25 << 20, bodyError: true, unexpected: true, opens: 2, closes: 2},
 			{name: "cancel", first: 9 << 20, second: 25 << 20, cancel: true, opens: 1, closes: 1},
 			{name: "converter 416", first: 9 << 20, second: 25 << 20, convert: true, opens: 2, closes: 2},
 			{name: "stream first", first: 9 << 20, second: 25 << 20, stream: true, secondErr: rangeStatusError{}, opens: 2, closes: 1},
@@ -4161,7 +4144,7 @@ func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
 				if tc.cancel {
 					storage.cancel = cancel
 				}
-				fs.storage = storage
+				fs.governor.raw = storage
 				cache := &publicationVectorCache{}
 				hitCache := &sparseFirstEntryCache{}
 				first := IOEntry{Offset: tc.first, Size: 4096}

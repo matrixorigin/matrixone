@@ -322,3 +322,50 @@ func TestMinioSDKTianYiYun(t *testing.T) {
 	)
 	assert.Nil(t, err)
 }
+
+// A write in parts to MinIO puts a body that ends within its first part, uploads a longer
+// one in parts, and aborts the upload when the caller's reader fails.
+func TestMinioSDKWriteInParts(t *testing.T) {
+	cmd, err := startMinio(t.TempDir())
+	require.NoError(t, err)
+	if cmd == nil {
+		t.SkipNow()
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	ctx := context.Background()
+	sdk, err := NewMinioSDK(ctx, ObjectStorageArguments{
+		Endpoint: "http://localhost:9007", Bucket: "test", KeyID: "minioadmin", KeySecret: "minioadmin",
+	}, nil)
+	require.NoError(t, err)
+	g := newGovernor(sdk, 1)
+	opt := &ParallelMultipartOption{PartSize: minMultipartPartSize, Concurrency: 4}
+	read := func(key string) []byte {
+		data, _, err := g.read(ctx, rangeRead{key: key, end: -1})
+		require.NoError(t, err)
+		return data
+	}
+	small := []byte("one part")
+	require.NoError(t, writeParts(ctx, g, "small", bytes.NewReader(small), nil, opt))
+	require.Equal(t, small, read("small"))
+
+	large := bytes.Repeat([]byte("0123456789abcdef"), int(2*minMultipartPartSize/16)+3)
+	require.NoError(t, writeParts(ctx, g, "large", bytes.NewReader(large), nil, opt))
+	require.Equal(t, large, read("large"))
+	size := int64(len(large))
+	require.NoError(t, writeParts(ctx, g, "sized", bytes.NewReader(large), &size, opt))
+	require.Equal(t, large, read("sized"))
+
+	failing := io.MultiReader(bytes.NewReader(large[:minMultipartPartSize+1]), minioFailingReader{io.ErrClosedPipe})
+	require.ErrorIs(t, writeParts(ctx, g, "failed", failing, nil, opt), io.ErrClosedPipe)
+	exists, err := sdk.Exists(ctx, "failed")
+	require.NoError(t, err)
+	require.False(t, exists)
+	uploads, err := sdk.core.ListMultipartUploads(ctx, "test", "failed", "", "", "", 10)
+	require.NoError(t, err)
+	require.Empty(t, uploads.Uploads, "the upload is aborted")
+	require.Zero(t, heldRoom(g))
+}
+
+type minioFailingReader struct{ err error }
+
+func (r minioFailingReader) Read([]byte) (int, error) { return 0, r.err }

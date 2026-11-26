@@ -54,7 +54,7 @@ func BenchmarkSelectedDecode(b *testing.B) {
 			payload := append(bytes.Repeat([]byte{1}, 32), compressed[:n]...)
 			payload = append(payload, bytes.Repeat([]byte{2}, 128)...)
 			storage := &selectedDecodeBenchStorage{data: payload}
-			fs.storage = storage
+			fs.governor.raw = storage
 			if mode != "hot_cache" {
 				pinned := fs.AllocateCacheData(ctx, int(capacity))
 				b.Cleanup(pinned.Release)

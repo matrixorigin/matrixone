@@ -69,8 +69,8 @@ func newPrefetchRangeFS(t *testing.T, unit int64, size int) (*S3FS, *countingSto
 		data[i] = byte(i*7 + i/1021)
 	}
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache}))
-	storage := &countingStorage{ObjectStorage: fs.storage}
-	fs.storage = storage
+	storage := &countingStorage{ObjectStorage: fs.governor.raw}
+	fs.governor.raw = storage
 	return fs, storage, data
 }
 
@@ -120,10 +120,10 @@ func TestS3FSPrefetchRangeSkipsCanceledRead(t *testing.T) {
 	cancel()
 	var opens atomic.Int64
 	_, reads, ok, _ := fs.diskCache.prefetchRead(ctx, "object", 0, []IOEntry{{Offset: 5000, Size: 2}}, 5000, 5002, 4096,
-		func(context.Context, int64, int64) (io.ReadCloser, error) {
+		openerSource(func(context.Context, int64, int64) (io.ReadCloser, error) {
 			opens.Add(1)
 			return nil, context.Canceled
-		})
+		}))
 	fs.diskCache.prefetchObjects.reads.Wait()
 	require.False(t, ok)
 	require.Zero(t, reads)
@@ -228,9 +228,9 @@ func (b *blockingStorage) Read(ctx context.Context, key string, min, max *int64)
 // storage.
 func TestS3FSPrefetchRangeReadersShareTheRead(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 4096, 64<<10)
-	storage := &blockingStorage{ObjectStorage: fs.storage.(*countingStorage).ObjectStorage,
+	storage := &blockingStorage{ObjectStorage: fs.governor.raw.(*countingStorage).ObjectStorage,
 		started: make(chan struct{}), release: make(chan struct{})}
-	fs.storage = storage
+	fs.governor.raw = storage
 
 	first := make(chan []byte, 1)
 	go func() { first <- readRangeOf(t, fs, 0, 5000, 2) }()
@@ -256,9 +256,9 @@ func TestS3FSPrefetchRangeReadersShareTheRead(t *testing.T) {
 // a prefetch range under way.
 func TestS3FSCacheBypassReadSkipsActiveRange(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 4096, 64<<10)
-	storage := &blockingStorage{ObjectStorage: fs.storage.(*countingStorage).ObjectStorage,
+	storage := &blockingStorage{ObjectStorage: fs.governor.raw.(*countingStorage).ObjectStorage,
 		started: make(chan struct{}), release: make(chan struct{})}
-	fs.storage = storage
+	fs.governor.raw = storage
 	release := sync.OnceFunc(func() { close(storage.release) })
 	t.Cleanup(release)
 
@@ -299,6 +299,7 @@ func addFlight(d *DiskCache, diskPath string, start, end int64, began time.Time)
 	defer f.mu.Unlock()
 	fl := newMemoryPrefetchObject(start, end, began)
 	fl.buf = make([]byte, end-start)
+	fl.requested.Store(true)
 	f.registerLocked(diskPath, fl)
 	return fl
 }
@@ -314,7 +315,7 @@ func TestS3FSPrefetchRangeWaiterFallsBackOnFailure(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	diskPath := fs.diskCache.objectKey("object")
 	fl := addFlight(fs.diskCache, diskPath, 4096, 8192, time.Now())
-	storage := fs.storage.(*countingStorage)
+	storage := fs.governor.raw.(*countingStorage)
 	done := make(chan []byte, 1)
 	go func() { done <- readRangeOf(t, fs, 0, 5000, 2) }()
 	time.Sleep(20 * time.Millisecond)
@@ -439,7 +440,7 @@ func TestPrefetchFlightFailsWhenSourceStalls(t *testing.T) {
 	sourceIdleTimeout = 20 * time.Millisecond
 	t.Cleanup(func() { sourceIdleTimeout = idle0 })
 	fl := newMemoryPrefetchObject(0, 10, time.Now())
-	err := fl.read(context.Background(), func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+	err := readFlight(fl, func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 		return io.NopCloser(&stalledReader{ctx: ctx, data: []byte("abc")}), nil
 	})
 	require.ErrorIs(t, err, errSourceIdle)
@@ -453,7 +454,7 @@ func TestPrefetchFlightWaitedIsNotTimed(t *testing.T) {
 	release := make(chan struct{})
 	readErr := make(chan error, 1)
 	go func() {
-		readErr <- fl.read(context.Background(), func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+		readErr <- readFlight(fl, func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 			return io.NopCloser(&lateReader{ctx: ctx, release: release, data: []byte("abc")}), nil
 		})
 	}()
@@ -533,7 +534,7 @@ func TestPrefetchReadOutlivesItsReader(t *testing.T) {
 	var opened, ended atomic.Int64
 	open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 		opened.Add(1)
-		r, err := fs.storage.Read(ctx, "object", &start, &end)
+		r, err := fs.governor.raw.Read(ctx, "object", &start, &end)
 		if err != nil {
 			return nil, err
 		}
@@ -541,7 +542,7 @@ func TestPrefetchReadOutlivesItsReader(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	entries := []IOEntry{{Offset: 100, Size: 10}}
-	content, reads, ok, _ := d.prefetchRead(ctx, "object", SkipFullFilePreloads, entries, 100, 110, 128<<10, open)
+	content, reads, ok, _ := d.prefetchRead(ctx, "object", SkipFullFilePreloads, entries, 100, 110, 128<<10, openerSource(open))
 	require.True(t, ok)
 	require.Equal(t, 1, reads)
 	require.Equal(t, data[100:110], content)
@@ -597,8 +598,8 @@ func (b *stuckStorage) Read(ctx context.Context, key string, min, max *int64) (i
 // reads that start them.
 func TestCloseCancelsPrefetchRangeReads(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 4096, 64<<10)
-	storage := &stuckStorage{ObjectStorage: fs.storage, started: make(chan struct{}, 1), end: make(chan struct{})}
-	fs.storage = storage
+	storage := &stuckStorage{ObjectStorage: fs.governor.raw, started: make(chan struct{}, 1), end: make(chan struct{})}
+	fs.governor.raw = storage
 	t.Cleanup(func() { close(storage.end) })
 	readCtx, cancel := context.WithCancel(context.Background())
 	readDone := make(chan struct{})
@@ -679,8 +680,8 @@ func (r *stallingReader) Close() error { return r.r.Close() }
 func TestDeleteDropsPrefetchRangeUnderWay(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 64<<10, 256<<10)
 	ctx := context.Background()
-	storage := &stallingStorage{ObjectStorage: fs.storage, after: 4096, stalled: make(chan struct{}), release: make(chan struct{})}
-	fs.storage = storage
+	storage := &stallingStorage{ObjectStorage: fs.governor.raw, after: 4096, stalled: make(chan struct{}), release: make(chan struct{})}
+	fs.governor.raw = storage
 
 	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: 100, Size: 10}}}
 	require.NoError(t, fs.Read(ctx, vec))
@@ -732,7 +733,7 @@ func TestFlightBytesFollowAvailableMemory(t *testing.T) {
 	var calls int
 	avail := uint64(4 << 30)
 	memoryAvailable = func() (uint64, bool) { calls++; return avail, true }
-	d := &DiskCache{memoryPrefetchMax: 20 << 20, conns: connPool{max: 16}}
+	d := &DiskCache{memoryPrefetchMax: 20 << 20, governor: newGovernor(nil, 32)}
 	share := int64(avail / 100 * flightMemoryPercent)
 	require.Equal(t, share, d.flightBytes())
 	avail = 1 << 20
@@ -747,9 +748,6 @@ func TestFlightBytesFollowAvailableMemory(t *testing.T) {
 	d.flightBudget.at.Store(0)
 	require.Equal(t, int64(16*32<<20), d.flightBytes(), "at most a MemoryPrefetchObject's buffer per connection")
 	memoryAvailable = func() (uint64, bool) { return 0, false }
-	d.flightBudget.at.Store(0)
-	require.Equal(t, int64(prefetchFlightBytesMax), d.flightBytes())
-	d.conns.max = 0
 	d.flightBudget.at.Store(0)
 	require.Equal(t, int64(prefetchFlightBytesMax), d.flightBytes())
 	d.prefetchFlightBytes = 7
@@ -829,7 +827,7 @@ func TestPrefetchFlightFailsWhenOpenStalls(t *testing.T) {
 	fl := newMemoryPrefetchObject(0, 10, time.Now())
 	readErr := make(chan error, 1)
 	go func() {
-		readErr <- fl.read(context.Background(), func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+		readErr <- readFlight(fl, func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		})
@@ -871,7 +869,7 @@ func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := fs.diskCache.readRanges(context.Background(), "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open)
+		_, err := fs.diskCache.readRanges(context.Background(), "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, openerSource(open))
 		done <- err
 	}()
 	release := sync.OnceFunc(func() { close(gate) })
@@ -942,7 +940,7 @@ func TestReadRangesJoinableBeforeEveryRangeStarts(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := fs.diskCache.readRanges(ctx, "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch,
-			[]PrefetchRange{{Offset: 0, Size: 1 << 10}, {Offset: 32 << 10, Size: 1 << 10}}, g.open)
+			[]PrefetchRange{{Offset: 0, Size: 1 << 10}, {Offset: 32 << 10, Size: 1 << 10}}, openerSource(g.open))
 		done <- err
 	}()
 	select {
@@ -954,24 +952,14 @@ func TestReadRangesJoinableBeforeEveryRangeStarts(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
-// holdConns holds n of the connections downloads may hold, as other downloads do, until
-// the test ends.
-func holdConns(t *testing.T, d *DiskCache, n int64) {
-	d.conns.held.Add(n)
-	t.Cleanup(func() {
-		for range n {
-			d.conns.release()
-		}
-	})
-}
-
-// The flights of a background prefetch of ranges hold at most the connections downloads
-// may hold.
+// The flights of a background prefetch of ranges run at most as many requests as the
+// background room left.
 func TestReadRangesHoldDownloadConnections(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
-	fs.diskCache.conns.max = 16
-	holdConns(t, fs.diskCache, 14)
 	g := &gatedOpener{data: data, gate: make(chan struct{})}
+	src := openerSource(g.open)
+	src.g.setCapacity(32)
+	defer occupy(t, src.g, backgroundRequest, 14)()
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	ranges := make([]PrefetchRange, 0, 8)
@@ -980,7 +968,7 @@ func TestReadRangesHoldDownloadConnections(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := fs.diskCache.readRanges(context.Background(), "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, g.open)
+		_, err := fs.diskCache.readRanges(withBackgroundRequests(context.Background()), "object", fs.diskCache.deletes.now(), SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, src)
 		done <- err
 	}()
 	inFlight := func() int { cur, _, _ := g.counts(); return cur }
@@ -991,7 +979,7 @@ func TestReadRangesHoldDownloadConnections(t *testing.T) {
 	_, most, total := g.counts()
 	require.Equal(t, 2, most)
 	require.Equal(t, 8, total)
-	require.Equal(t, int64(14), fs.diskCache.conns.held.Load())
+	require.Equal(t, 14, heldRoom(src.g))
 }
 
 // A prefetch of ranges to files starts no range once its object was deleted.
@@ -1008,7 +996,7 @@ func TestPrefetchFilesStopAfterDelete(t *testing.T) {
 	deletes := fs.diskCache.deletes.now()
 	done := make(chan error, 1)
 	go func() {
-		_, err := fs.diskCache.readRanges(context.Background(), "object", deletes, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, g.open)
+		_, err := fs.diskCache.readRanges(context.Background(), "object", deletes, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, openerSource(g.open))
 		done <- err
 	}()
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(); return cur == fs.diskCache.prefetchShare() }, 5*time.Second, time.Millisecond)

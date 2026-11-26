@@ -39,6 +39,7 @@ type objectDownload struct {
 
 	mu          sync.Mutex
 	parts       []downloadPart // the ranges of the object written at once, in order
+	began       chan struct{}  // closed once a part began
 	ended       bool           // no more bytes will be written
 	complete    bool           // every byte of the object was written
 	err         error          // the failed read of object storage that ended it, or nil
@@ -105,6 +106,7 @@ func newObjectDownload(tempPath string, measured bool, bounds []int64) *objectDo
 		started:  time.Now(),
 		measured: measured,
 		parts:    []downloadPart{{end: -1}},
+		began:    make(chan struct{}),
 	}
 	if bounds != nil {
 		o.parts = o.parts[:0]
@@ -244,12 +246,32 @@ func (o *objectDownload) wakeLocked() {
 	o.waiters = keep
 }
 
+// hasBegun reports whether a part began.
+func (o *objectDownload) hasBegun() bool {
+	if o.began == nil {
+		return true
+	}
+	select {
+	case <-o.began:
+		return true
+	default:
+		return false
+	}
+}
+
 // begin records that the read of the part began.
 func (o *objectDownload) begin(part int) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.parts[part].began.IsZero() {
 		o.parts[part].began = time.Now()
+		if o.began != nil {
+			select {
+			case <-o.began:
+			default:
+				close(o.began)
+			}
+		}
 	}
 }
 
@@ -673,43 +695,22 @@ func (c objectSplitConfig) bounds(size, splitAt int64) []int64 {
 	return bounds
 }
 
-// rangeOpener opens the bytes [start, end) of an object, or the bytes from start on when
-// end is negative.
-type rangeOpener func(ctx context.Context, start, end int64) (io.ReadCloser, error)
-
-// lazyObjectReader reads a whole object through read from its first Read on, and opens
-// its ranges.
-type lazyObjectReader struct {
-	ctx  context.Context
-	read func(ctx context.Context, min, max *int64) (io.ReadCloser, error)
-	r    io.ReadCloser
+// objectSource is the object key that fills read through the governor g: its bytes from
+// start to end, or to the end of the object when end is negative. When a read of it ends
+// short, objectEnd, when set, holds where the object ended.
+type objectSource struct {
+	g          *governor
+	key        string
+	start, end int64
+	objectEnd  *atomic.Int64
 }
 
-func (l *lazyObjectReader) Read(b []byte) (int, error) {
-	if l.r == nil {
-		r, err := l.read(l.ctx, ptrTo[int64](0), nil)
-		if err != nil {
-			return 0, err
-		}
-		l.r = r
-	}
-	return l.r.Read(b)
-}
+var errObjectSourceRead = moerr.NewInternalErrorNoCtx("fileservice: an object source is read by its fill")
 
-func (l *lazyObjectReader) Close() error {
-	if l.r == nil {
-		return nil
-	}
-	return l.r.Close()
-}
+// Read fails: a fill reads an objectSource through its governor.
+func (*objectSource) Read([]byte) (int, error) { return 0, errObjectSourceRead }
 
-// openRange opens [start, end), or the bytes from start on when end is negative.
-func (l *lazyObjectReader) openRange(ctx context.Context, start, end int64) (io.ReadCloser, error) {
-	if end < 0 {
-		return l.read(ctx, &start, nil)
-	}
-	return l.read(ctx, &start, &end)
-}
+func (*objectSource) Close() error { return nil }
 
 // leadPart returns the part of bounds starting at the block of splitAt, or 0.
 func leadPart(bounds []int64, splitAt int64) int {
@@ -722,31 +723,37 @@ func leadPart(bounds []int64, splitAt int64) int {
 	return 0
 }
 
-// copyParts writes the parts of download between bounds into f at once, each read through
-// open, and returns the bytes written. Part lead holds the connection the download took,
-// which first frees once the part ends; each other part holds one conn takes, waiting for
-// it holding nothing, until it ends. A failed part fails the copy.
-func copyParts(ctx context.Context, f *os.File, download *objectDownload, open rangeOpener, bounds []int64, lead int, conn func(context.Context) (func(), error), first func()) (int64, error) {
+// copyParts writes the bytes of src into f through download, as one part when bounds is
+// nil, otherwise the parts between bounds at once, each its own request, the others once
+// lead began. It returns the bytes written; a failed part fails the copy.
+func copyParts(ctx context.Context, f *os.File, download *objectDownload, src *objectSource, bounds []int64, lead int) (int64, error) {
+	if bounds == nil {
+		end := int64(-1)
+		if src.end >= 0 {
+			end = src.end - src.start
+		}
+		return copyPart(ctx, f, download, src, 0, 0, end)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	errs := make([]error, len(bounds)-1)
 	var wg sync.WaitGroup
-	for i := range errs {
+	leadDone := make(chan struct{})
+	for k := range errs {
+		i := (lead + k) % len(errs)
+		if k == 1 {
+			select {
+			case <-download.began:
+			case <-leadDone:
+			}
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if i == lead {
-				defer first()
-			} else {
-				release, err := conn(ctx)
-				if err != nil {
-					errs[i] = err
-					cancel()
-					return
-				}
-				defer release()
+				defer close(leadDone)
 			}
-			if errs[i] = copyPart(ctx, f, download, open, i, bounds[i], bounds[i+1], i == len(bounds)-2); errs[i] != nil {
+			if _, errs[i] = copyPart(ctx, f, download, src, i, bounds[i], bounds[i+1]); errs[i] != nil {
 				cancel()
 			}
 		}()
@@ -765,37 +772,31 @@ func copyParts(ctx context.Context, f *os.File, download *objectDownload, open r
 	return bounds[len(bounds)-1], nil
 }
 
-func copyPart(ctx context.Context, f *os.File, download *objectDownload, open rangeOpener, part int, start, end int64, last bool) error {
-	download.begin(part)
-	// The last part reads to the object's end, so an object of another size fails the copy.
-	openEnd := end
-	if last {
-		openEnd = -1
+// copyPart writes the bytes [start, end) of src, to its end when end is negative, into f
+// at start in one request, recorded as the part of download. The last part of a whole
+// object reads to its end, so an object of another size fails the copy.
+func copyPart(ctx context.Context, f *os.File, download *objectDownload, src *objectSource, part int, start, end int64) (int64, error) {
+	readEnd := src.start + end
+	if src.end < 0 && part == len(download.parts)-1 || end < 0 {
+		readEnd = src.end
 	}
 	ctx, idle := newIdleReader(ctx)
 	defer idle.Close()
 	defer download.idle.add(idle)()
-	r, err := idle.open(func() (io.ReadCloser, error) { return open(ctx, start, openEnd) })
+	_, n, err := src.g.read(ctx, rangeRead{
+		key: src.key, start: src.start + start, end: readEnd,
+		file: f, offset: start, progress: fillProgress{download: download, part: part}, idle: idle,
+	})
 	if err != nil {
-		return &diskCacheSourceError{err: err}
+		return n, err
 	}
-	defer r.Close()
-	source := &diskCacheSourceReader{Reader: idle}
-	var buf []byte
-	put := ioBufferPool.Get(&buf)
-	defer put.Put()
-	dst := downloadProgressWriter{w: io.NewOffsetWriter(f, start), download: download, part: part}
-	n, err := io.CopyBuffer(dst, source, buf)
-	if err != nil {
-		if source.err != nil {
-			return &diskCacheSourceError{err: source.err}
+	if end >= 0 && n != end-start {
+		if src.objectEnd != nil {
+			src.objectEnd.Store(src.start + start + n)
 		}
-		return err
+		return n, &diskCacheSourceError{err: errSourceShort}
 	}
-	if n != end-start {
-		return &diskCacheSourceError{err: errSourceShort}
-	}
-	return nil
+	return n, nil
 }
 
 // downloadCount counts the downloads of file fills in flight.
@@ -860,78 +861,27 @@ func (d *DiskCache) downloading() int {
 	return int(d.prefetchObjects.downloads.n.Load())
 }
 
-// prefetchWorkers is the most prefetches run at once, a quarter of the connections
-// downloads may hold: past it more streams share the bandwidth without adding any. It is
-// at least 4, or each connection downloads may hold when fewer, and at least 1.
+// backgroundRequests is the most background requests the governor runs at once.
+func (d *DiskCache) backgroundRequests() int {
+	if d.governor == nil {
+		return maxConnsPerHost / 2
+	}
+	return d.governor.backgroundMax
+}
+
+// prefetchWorkers is the most prefetches run at once, a quarter of the background
+// requests: past it more streams share the bandwidth without adding any. It is at least
+// 4, or each background request when fewer, and at least 1.
 func (d *DiskCache) prefetchWorkers() int {
-	limit := d.conns.max
-	return int(max(limit/4, min(limit, 4), 1))
+	limit := d.backgroundRequests()
+	return max(limit/4, min(limit, 4), 1)
 }
 
 // prefetchShare is the most prefetch objects of one prefetch that wait for their resources
-// or read at once: the connections downloads may hold over the prefetch workers, so the
-// prefetches of all workers can read at once; at least 1, and prefetchShareUnbounded when
-// downloads hold no connection.
+// or read at once: the background requests over the prefetch workers, so the prefetches
+// of all workers can read at once; at least 1.
 func (d *DiskCache) prefetchShare() int {
-	if d.conns.max < 1 {
-		return prefetchShareUnbounded
-	}
-	return max(int(d.conns.max)/d.prefetchWorkers(), 1)
-}
-
-// prefetchShareUnbounded is prefetchShare when downloads hold no connection.
-const prefetchShareUnbounded = 4
-
-// connPool counts the object-storage connections downloads hold, at most max, half the
-// connections to the object storage host.
-type connPool struct {
-	max   int64
-	held  atomic.Int64
-	mu    sync.Mutex
-	freed freedSignal
-}
-
-// tryTake takes a connection, or reports that all are held.
-func (c *connPool) tryTake() bool {
-	for {
-		cur := c.held.Load()
-		if cur >= c.max {
-			return false
-		}
-		if c.held.CompareAndSwap(cur, cur+1) {
-			return true
-		}
-	}
-}
-
-// take takes a connection, waiting for it, and returns the function freeing it.
-func (c *connPool) take(ctx context.Context) (func(), error) {
-	for {
-		freed := c.waitFreed()
-		if c.tryTake() {
-			return c.release, nil
-		}
-		select {
-		case <-freed:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-}
-
-// release frees a connection and wakes the waiters for one.
-func (c *connPool) release() {
-	c.held.Add(-1)
-	c.mu.Lock()
-	c.freed.notifyLocked()
-	c.mu.Unlock()
-}
-
-// waitFreed returns a channel closed once a connection is freed.
-func (c *connPool) waitFreed() <-chan struct{} {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.freed.waitLocked()
+	return max(d.backgroundRequests()/d.prefetchWorkers(), 1)
 }
 
 // freedSignal wakes the waiters for a resource once some is freed. It is guarded by the
@@ -1121,18 +1071,6 @@ func (m *rangeReadCostModel) observe(n int64, d time.Duration) {
 			return c, false
 		}
 		c.bytesPerS = (1-costWeight)*c.bytesPerS + costWeight*float64(n)/transfer
-		return c, true
-	})
-}
-
-// observeLatency adds a sample of the latency of range reads: the time until a range
-// read starts to return bytes.
-func (m *rangeReadCostModel) observeLatency(d time.Duration) {
-	if d <= 0 {
-		return
-	}
-	m.update(func(c rangeReadCost) (rangeReadCost, bool) {
-		c.latency = (1-costWeight)*c.latency + costWeight*d.Seconds()
 		return c, true
 	})
 }

@@ -69,8 +69,9 @@ type DiskCache struct {
 	// memoryPrefetchMax is the most bytes of a MemoryPrefetchObject.
 	memoryPrefetchMax int64
 	prefetched        prefetchedObjects
-	conns             connPool
-	prefetchObjects   prefetchObjects
+	// governor makes the requests of fills; nil when the cache has no object storage.
+	governor        *governor
+	prefetchObjects prefetchObjects
 	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
 	// the largest whole-object file written.
 	wholeFills   atomic.Int64
@@ -226,7 +227,6 @@ func newDiskCache(
 		objectSplit:          opts.objectSplit,
 		memoryPrefetchMax:    cmp.Or(opts.memoryPrefetchMax, DefaultDiskPrefetchMemoryMax),
 		preloads:             newPreloadUsage(),
-		conns:                connPool{max: int64(maxConnsPerHost / 2)},
 	}
 	ret.trash.limit.Store(-1)
 
@@ -944,7 +944,7 @@ func (d *DiskCache) writeEntryAsync(ctx context.Context, filePath, diskPath stri
 	target := entryFillTarget{diskFillTarget: diskFillTarget{d: d, diskPath: diskPath}, filePath: filePath, readDeletes: entry.readDeletes}
 	_, err := d.writeFileTo(ctx, diskPath, func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(entry.Data)), nil
-	}, true, nil, notWholeFill, nil, target, nil)
+	}, true, nil, notWholeFill, nil, target)
 	if err != nil {
 		_ = d.observeWriteResult(diskPath, err)
 	}
@@ -1049,7 +1049,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	fill wholeFill,
 	objectSize objectLayout,
 ) (written bool, err error) {
-	return d.writeFileTo(ctx, diskPath, openReader, asyncFinalize, claimPublication, fill, objectSize, nil, nil)
+	return d.writeFileTo(ctx, diskPath, openReader, asyncFinalize, claimPublication, fill, objectSize, nil)
 }
 
 // writeFileTo writes the file of the object at diskPath and publishes it into target, the
@@ -1075,7 +1075,6 @@ func (d *DiskCache) writeFileTo(
 	fill wholeFill,
 	objectSize objectLayout,
 	target fillTarget,
-	copied func(),
 ) (written bool, err error) {
 	if target == nil {
 		target = diskFillTarget{d: d, diskPath: diskPath}
@@ -1097,7 +1096,6 @@ func (d *DiskCache) writeFileTo(
 	}
 	var w fileWrite
 	defer func() { d.endFileWrite(diskPath, &w, &err) }()
-	// The wait for an async slot holds no connection.
 	if asyncFinalize {
 		var deleted func() bool
 		if whole != nil {
@@ -1111,19 +1109,16 @@ func (d *DiskCache) writeFileTo(
 			return false, nil
 		}
 	}
-	// A whole-object download registers once it holds the connection of its first part,
-	// before it holds the path; each later part takes its own when it starts. A range
-	// download holds the connection its FilePrefetchObject took.
+	// A whole-object download registers before it holds the path; each of its parts is
+	// its own request.
 	var bounds []int64
 	lead, taken := 0, false
-	releaseConns := func() {}
 	if fill == storageFill {
 		var ok bool
 		if ok, err = whole.admitWhole(); !ok {
 			return false, err
 		}
-		ctx, releaseConns = whole.ctx, whole.releaseConn
-		w.releaseConns = releaseConns
+		ctx = whole.ctx
 		bounds, lead, taken = whole.splitParts(objectSize)
 		if t, ok := target.(*wholeFillTarget); ok && whole.end != math.MaxInt64 {
 			t.sizeAt(whole.end)
@@ -1191,8 +1186,6 @@ func (d *DiskCache) writeFileTo(
 			taken = false
 			w.owner.first(func() { d.finishDownload(download, own) })
 		}
-		// Its lead part holds the connection the download took.
-		download.begin(lead)
 		own.started(download)
 		downloadStarted(ctx)
 		dst = downloadProgressWriter{w: f, download: download}
@@ -1226,9 +1219,12 @@ func (d *DiskCache) writeFileTo(
 	target.reserve(ctx, forceEvict)
 
 	var n int64
-	if l, ok := from.(*lazyObjectReader); ok && len(bounds) > 2 {
-		n, err = copyParts(ctx, f, download, l.openRange, bounds, lead, d.conns.take, releaseConns)
+	if src, ok := from.(*objectSource); ok && download != nil {
+		n, err = copyParts(readCtx, f, download, src, bounds, lead)
 	} else {
+		if download != nil {
+			download.begin(0)
+		}
 		var buf []byte
 		put := ioBufferPool.Get(&buf)
 		defer put.Put()
@@ -1236,10 +1232,6 @@ func (d *DiskCache) writeFileTo(
 		if err != nil && source.err != nil {
 			err = &diskCacheSourceError{err: source.err}
 		}
-	}
-	releaseConns()
-	if copied != nil {
-		copied()
 	}
 	if download != nil {
 		download.endWith(err == nil, sourceFailure(readCtx, err))
@@ -1269,7 +1261,7 @@ func (d *DiskCache) writeFileTo(
 			whole.handedOff = true
 		}
 		d.scheduleReservedAsyncFileFinalize(diskPath, f, w.owner, target, deletes)
-		w = fileWrite{releaseConns: w.releaseConns}
+		w = fileWrite{}
 		return true, nil
 	}
 
@@ -1316,10 +1308,9 @@ func sourceStopped(err error) bool {
 // fileWrite is what a write of a cache file holds until it publishes the file or hands it
 // to an async finalize.
 type fileWrite struct {
-	slot         string // the pending key of an async finalize slot
-	owner        *pathOwner
-	file         *os.File
-	releaseConns func()
+	slot  string // the pending key of an async finalize slot
+	owner *pathOwner
+	file  *os.File
 }
 
 // endFileWrite releases what w holds, joining the errors into err.
@@ -1329,9 +1320,6 @@ func (d *DiskCache) endFileWrite(diskPath string, w *fileWrite, err *error) {
 	}
 	if w.owner != nil {
 		d.mergeWriteCleanupError(diskPath, err, w.owner.release())
-	}
-	if w.releaseConns != nil {
-		w.releaseConns()
 	}
 	if w.slot != "" {
 		d.releaseAsyncFileFinalizeReservation(w.slot)
@@ -1574,7 +1562,7 @@ func (d *DiskCache) fillFileTo(
 		d.wholeFills.Add(1)
 		defer d.wholeFills.Add(-1)
 	}
-	written, writeErr := d.writeFileTo(ctx, diskPath, openReader, asyncFinalize, nil, fill, objectSize, target, nil)
+	written, writeErr := d.writeFileTo(ctx, diskPath, openReader, asyncFinalize, nil, fill, objectSize, target)
 	if writeErr != nil {
 		return d.observeWriteResult(diskPath, writeErr)
 	}

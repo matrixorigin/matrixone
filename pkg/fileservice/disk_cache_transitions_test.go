@@ -38,8 +38,8 @@ func TestDiskCacheTransitionFileRunJoinsSlowWholeDownload(t *testing.T) {
 
 	key := fs.pathToKey("object")
 	// The whole-object download stalls on its first byte.
-	g := newBlackBoxStorage(fs.storage, func(k string, offset int64) bool { return k == key && offset == 0 })
-	fs.storage = g
+	g := newBlackBoxStorage(fs.governor.raw, func(k string, offset int64) bool { return k == key && offset == 0 })
+	fs.governor.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 
@@ -113,7 +113,7 @@ func TestDiskCacheTransitionAbandonedStalledDownloadFreesResources(t *testing.T)
 	shortIdle(t, 50*time.Millisecond)
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	fs.SetAsyncUpdate(true)
-	fs.storage = &probeStallStorage{ObjectStorage: fs.storage, n: 64 << 10}
+	fs.governor.raw = &probeStallStorage{ObjectStorage: fs.governor.raw, n: 64 << 10}
 	got, err := readFullObjectOf(fs, 10, 10)
 	require.NoError(t, err)
 	require.Equal(t, data[10:20], got)
@@ -123,7 +123,7 @@ func TestDiskCacheTransitionAbandonedStalledDownloadFreesResources(t *testing.T)
 		d.async.mu.Lock()
 		pending := len(d.async.mu.pending)
 		d.async.mu.Unlock()
-		return d.conns.held.Load() == 0 && !d.isUpdating(diskPath) && d.download(diskPath) == nil &&
+		return heldRoom(fs.governor) == 0 && !d.isUpdating(diskPath) && d.download(diskPath) == nil &&
 			pending == 0 && len(backgroundFills) == 0
 	}, 5*time.Second, time.Millisecond)
 	require.Empty(t, d.objectFiles("object"))

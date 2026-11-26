@@ -164,7 +164,7 @@ func TestExactReadDoesNotWidenRange(t *testing.T) {
 				offset.Store(from)
 				return false
 			})
-			fs.storage = tracked
+			fs.governor.raw = tracked
 			require.Equal(t, data[100:164], readIndexObjectRange(t, fs, tc.policy, 100, 64))
 			require.EqualValues(t, 1, storage.reads.Load())
 			require.EqualValues(t, 100, offset.Load(), "an exact read opens storage at the requested offset")
@@ -195,14 +195,14 @@ func TestIndexReadKeepsDownloadTierAcrossEntries(t *testing.T) {
 				})
 				diskFailure := errors.New("table download source failed")
 				probe := &probeStorage{
-					ObjectStorage: fs.storage, at: 0, gate: make(chan struct{}),
+					ObjectStorage: fs.governor.raw, at: 0, gate: make(chan struct{}),
 					answer: func(r io.ReadCloser) (io.ReadCloser, error) {
 						_ = r.Close()
 						return nil, diskFailure
 					},
 				}
 				probe.hit.Store(true) // Leave the initial index download unchanged.
-				fs.storage = probe
+				fs.governor.raw = probe
 				releaseDisk := sync.OnceFunc(func() { close(probe.gate) })
 				defer releaseDisk()
 

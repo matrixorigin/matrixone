@@ -114,8 +114,8 @@ func TestS3FSObjectSplitSkipsSharedLink(t *testing.T) {
 func TestS3FSObjectSplitNeedsKnownSize(t *testing.T) {
 	fs, counting, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	fs.diskCache.prefetched = prefetchedObjects{}
-	storage := &statCountingStorage{ObjectStorage: fs.storage}
-	fs.storage = storage
+	storage := &statCountingStorage{ObjectStorage: fs.governor.raw}
+	fs.governor.raw = storage
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)
@@ -127,9 +127,9 @@ func TestS3FSObjectSplitNeedsKnownSize(t *testing.T) {
 // A failed part fails the download, which publishes no whole object.
 func TestS3FSObjectSplitFailedPartPublishesNothing(t *testing.T) {
 	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
-	failing := &failingRangeStorage{ObjectStorage: fs.storage}
+	failing := &failingRangeStorage{ObjectStorage: fs.governor.raw}
 	failing.fail.Store(true)
-	fs.storage = failing
+	fs.governor.raw = failing
 	_, err := readFullObjectOf(fs, 10, 10)
 	require.Error(t, err)
 	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))))
@@ -233,56 +233,61 @@ func TestS3FSFullObjectReadSkipsMergeWait(t *testing.T) {
 	require.Less(t, time.Since(t0), 2*time.Second)
 }
 
-// The parts of a split download each hold a connection while they read: with one
-// connection free they read one after the other, and each releases it once it ends.
+// The parts of a split download are each a request: with room for one they read one after
+// the other, and each frees its room once it ends.
 func TestS3FSDownloadConnsReservedPerPart(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
-	d.conns.max = 2
-	d.conns.held.Store(1)
+	fs.governor.setCapacity(2)
+	defer occupy(t, fs.governor, foregroundRequest, 1)()
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)
 	require.Equal(t, int64(2), storage.reads.Load())
-	require.ElementsMatch(t, []int64{0, 192 << 10}, storage.starts, "the split stays with one connection free")
-	require.Equal(t, int64(1), d.conns.held.Load(), "its connections are released")
+	require.ElementsMatch(t, []int64{0, 192 << 10}, storage.starts, "the split stays with room for one")
+	require.Equal(t, 1, heldRoom(fs.governor), "its requests free their room")
 	require.True(t, d.cache.Contains(d.wholePath("object", int64(len(data)))))
 }
 
-// A download with no connection free waits for one, and downloads once one is released.
+// A download with no room free waits for room, and downloads once it is freed.
 func TestS3FSDownloadWaitsForConn(t *testing.T) {
 	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
-	d.conns.max = 1
-	d.conns.held.Store(1)
+	fs.governor.setCapacity(1)
+	free := occupy(t, fs.governor, foregroundRequest, 1)
 	done := make(chan []byte, 1)
 	go func() {
 		got, err := readFullObjectOf(fs, 100, 10)
 		require.NoError(t, err)
 		done <- got
 	}()
-	require.Eventually(t, func() bool {
-		d.conns.mu.Lock()
-		defer d.conns.mu.Unlock()
-		return d.conns.freed.ch != nil
-	}, 10*time.Second, time.Millisecond, "the download waits for a connection")
+	require.Eventually(t, func() bool { return waitingForConn(d, d.objectKey("object")) }, 10*time.Second, time.Millisecond,
+		"the download waits for room")
 	require.False(t, d.cache.Contains(d.wholePath("object", int64(len(data)))))
-	require.False(t, d.isUpdating(d.objectKey("object")), "waiting for a connection holds no update of the path")
-	d.conns.release()
+	free()
 	require.Equal(t, data[100:110], <-done)
 	require.True(t, d.cache.Contains(d.wholePath("object", int64(len(data)))))
-	require.Zero(t, d.conns.held.Load())
+	require.Zero(t, heldRoom(fs.governor))
 }
 
-// waitingForConn reports whether a whole-object download of the object at diskPath waits
-// for a connection.
+// waitingForConn reports whether a whole-object download of the object at diskPath is
+// registered and none of its parts began: its requests wait for room.
 func waitingForConn(d *DiskCache, diskPath string) bool {
 	f := &d.prefetchObjects
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for o := range f.waiting {
-		if p, ok := o.(*filePrefetchObject); ok && p.whole && p.diskPath == diskPath && p.state == objectWaitingConn {
-			return true
+	for _, o := range f.m[diskPath] {
+		p, ok := o.(*filePrefetchObject)
+		if !ok || !p.whole {
+			continue
+		}
+		if download := p.joinableDownload(); download != nil {
+			download.mu.Lock()
+			began := slices.ContainsFunc(download.parts, func(part downloadPart) bool { return !part.began.IsZero() })
+			download.mu.Unlock()
+			if !began {
+				return true
+			}
 		}
 	}
 	return false
@@ -294,10 +299,10 @@ func TestS3FSReadWaitingForConnectionEndsOnDeleteOrClose(t *testing.T) {
 	for _, end := range []string{"delete", "close"} {
 		t.Run(end, func(t *testing.T) {
 			fs, _, data := newObjectSplitFS(t, objectSplitConfig{}, 300<<10)
-			fs.storage = keepOnDeleteStorage{fs.storage}
+			fs.governor.raw = keepOnDeleteStorage{fs.governor.raw}
 			d := fs.diskCache
-			d.conns.max = 1
-			d.conns.held.Store(1)
+			fs.governor.setCapacity(2)
+			bystanders := occupy(t, fs.governor, foregroundRequest, 2)
 			diskPath := d.objectKey("object")
 			done := make(chan []byte, 1)
 			go func() {
@@ -307,17 +312,22 @@ func TestS3FSReadWaitingForConnectionEndsOnDeleteOrClose(t *testing.T) {
 			}()
 			require.Eventually(t, func() bool { return waitingForConn(d, diskPath) }, 10*time.Second, time.Millisecond)
 			if end == "delete" {
-				require.NoError(t, fs.Delete(context.Background(), "object"))
+				// The delete of the cached object; its request waits for the room the
+				// bystanders hold.
+				require.NoError(t, d.DeletePaths(context.Background(), []string{"object"}))
 			} else {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				d.closePrefetches(ctx)
 				require.NoError(t, ctx.Err(), "the close waits for no download")
 			}
+			require.Eventually(t, func() bool { return d.wholeFill(diskPath, false) == nil }, 5*time.Second, time.Millisecond,
+				"the download ends")
+			require.Equal(t, 2, heldRoom(fs.governor), "it took no room")
+			// The read's own range read waits for room of its own.
+			bystanders()
 			require.Equal(t, data[100:110], <-done)
-			require.False(t, waitingForConn(d, diskPath))
 			require.Empty(t, d.objectFiles("object"))
-			require.Equal(t, int64(1), d.conns.held.Load(), "it took no connection")
 		})
 	}
 }
@@ -326,7 +336,7 @@ func TestS3FSReadWaitingForConnectionEndsOnDeleteOrClose(t *testing.T) {
 // deleted ends, downloading nothing.
 func TestS3FSPrefetchWaitingForPublicationSlotEndsOnDelete(t *testing.T) {
 	fs, storage, _ := newObjectSplitFS(t, objectSplitConfig{}, 300<<10)
-	fs.storage = keepOnDeleteStorage{fs.storage}
+	fs.governor.raw = keepOnDeleteStorage{fs.governor.raw}
 	fs.SetAsyncUpdate(true)
 	d := fs.diskCache
 	a := &d.async
@@ -356,7 +366,7 @@ func TestS3FSPrefetchWaitingForPublicationSlotEndsOnDelete(t *testing.T) {
 	}
 	require.Zero(t, storage.reads.Load())
 	require.Empty(t, d.objectFiles("object"))
-	require.Zero(t, d.conns.held.Load())
+	require.Zero(t, heldRoom(fs.governor))
 }
 
 // A whole-object download of an object deleted since the mark of its context, before it
@@ -409,14 +419,14 @@ func TestPrefetchBeforeDeleteKeepsNoSize(t *testing.T) {
 	require.False(t, known, "a prefetch made before the delete does not store its size")
 }
 
-// Whole-object downloads hold at most half the connections per host, which are at least
-// minMaxConnsPerHost: one configured connection still caches whole objects.
+// Background requests run at most half the connections per host, which are at least
+// minMaxConnsPerHost: the fewest configured connections still cache whole objects.
 func TestS3FSConfiguredConnsBoundDownloads(t *testing.T) {
 	for _, tc := range []struct {
 		conns    int
-		limit    int64
+		limit    int
 		download bool
-	}{{minMaxConnsPerHost, int64(minMaxConnsPerHost / 2), true}, {256, 128, true}} {
+	}{{minMaxConnsPerHost, minMaxConnsPerHost / 2, true}, {256, 128, true}} {
 		ctx := context.Background()
 		fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir(), MaxConnsPerHost: tc.conns}, CacheConfig{
 			DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20),
@@ -429,7 +439,7 @@ func TestS3FSConfiguredConnsBoundDownloads(t *testing.T) {
 		d := fs.diskCache
 		d.objectSplit = objectSplitConfig{parts: 1}
 		d.prefetched.store(d.objectKey("object"), int64(len(data)))
-		require.Equal(t, tc.limit, d.conns.max, "conns %d", tc.conns)
+		require.Equal(t, tc.limit, fs.governor.backgroundMax, "conns %d", tc.conns)
 		got, err := readFullObjectOf(fs, 100, 10)
 		require.NoError(t, err)
 		require.Equal(t, data[100:110], got)
@@ -438,9 +448,8 @@ func TestS3FSConfiguredConnsBoundDownloads(t *testing.T) {
 	}
 }
 
-// More concurrent split downloads than the connections downloads may hold all cache their
-// objects: each part holds a connection only while it reads, so no download holds one
-// while it waits for another, and none stays held.
+// More concurrent split downloads than the governor has room for all cache their objects:
+// each part holds room only while it reads, and none stays held.
 func TestS3FSObjectSplitDownloadsShareFewConnections(t *testing.T) {
 	const (
 		objects = 6
@@ -448,7 +457,7 @@ func TestS3FSObjectSplitDownloadsShareFewConnections(t *testing.T) {
 	)
 	fs, _, _ := newPrefetchRangeFS(t, 0, 1)
 	fs.diskCache.objectSplit = objectSplitConfig{parts: 2, min: 128 << 10}
-	fs.diskCache.conns.max = 2
+	fs.governor.setCapacity(2)
 	ctx := context.Background()
 	contents := make([][]byte, objects)
 	for i := range objects {
@@ -480,18 +489,18 @@ func TestS3FSObjectSplitDownloadsShareFewConnections(t *testing.T) {
 			t.Fatal("a read did not return")
 		}
 	}
-	require.Eventually(t, func() bool { return fs.diskCache.conns.held.Load() == 0 }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return heldRoom(fs.governor) == 0 }, 5*time.Second, time.Millisecond)
 }
 
-// A read of bytes in a part of a split download that waits for a connection reads its own
-// range: no read waits for a part holding no connection.
+// A read of bytes in a part of a split download that waits for room reads its own range:
+// no read joins a part that has not begun.
 func TestS3FSReadOfPartWaitingForConnectionReadsItsRange(t *testing.T) {
 	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
-	d := fs.diskCache
-	d.conns.max = 1
+	fs.governor.setCapacity(2)
+	bystander := occupy(t, fs.governor, foregroundRequest, 1)
 	key := fs.pathToKey("object")
-	g := newBlackBoxStorage(fs.storage, func(k string, off int64) bool { return k == key && off == 0 })
-	fs.storage = g
+	g := newBlackBoxStorage(fs.governor.raw, func(k string, off int64) bool { return k == key && off == 0 })
+	fs.governor.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	whole := make(chan error, 1)
@@ -500,11 +509,18 @@ func TestS3FSReadOfPartWaitingForConnectionReadsItsRange(t *testing.T) {
 		whole <- err
 	}()
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 1 }, 5*time.Second, time.Millisecond,
-		"the first part holds the only connection")
+		"the first part holds the only free room")
+	require.Eventually(t, waitingFor(fs.governor, foregroundRequest, 1), 5*time.Second, time.Millisecond,
+		"the second part waits for room")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: 250 << 10, Size: 10}}}
-	require.NoError(t, fs.Read(ctx, vec))
+	read := make(chan error, 1)
+	go func() { read <- fs.Read(ctx, vec) }()
+	require.Eventually(t, waitingFor(fs.governor, foregroundRequest, 2), 2*time.Second, time.Millisecond,
+		"the read waits for room of its own")
+	bystander()
+	require.NoError(t, <-read)
 	require.Equal(t, data[250<<10:250<<10+10], vec.Entries[0].Data)
 	vec.Release()
 	release()
@@ -543,7 +559,7 @@ func TestS3FSReadEntryWriteWaitingForPublicationSlotEndsOnDelete(t *testing.T) {
 	for _, ev := range []string{"delete", "slot freed"} {
 		t.Run(ev, func(t *testing.T) {
 			fs, storage, data := newPrefetchRangeFS(t, 0, 300<<10)
-			fs.storage = keepOnDeleteStorage{storage}
+			fs.governor.raw = keepOnDeleteStorage{storage}
 			fs.SetAsyncUpdate(true)
 			ctx := context.Background()
 			a := &fs.diskCache.async

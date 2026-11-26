@@ -208,8 +208,8 @@ func TestS3FSReadDiskCacheAllocationFailure(t *testing.T) {
 					return io.NopCloser(strings.NewReader("xy")), nil
 				}))
 			}
-			storage := &readRangeRecordingObjectStorage{ObjectStorage: fs.storage}
-			fs.storage = storage
+			storage := &readRangeRecordingObjectStorage{ObjectStorage: fs.governor.raw}
+			fs.governor.raw = storage
 			converted := false
 			vector := &IOVector{FilePath: name, Policy: SkipFullFilePreloads, Entries: []IOEntry{{
 				Size: 2,
@@ -251,8 +251,8 @@ func TestS3FSReadDiskCacheShortReadFallsBack(t *testing.T) {
 		FilePath: name, Entries: []IOEntry{entry}, Policy: SkipFullFilePreloads,
 	}, false))
 	require.NoError(t, os.Truncate(fs.diskCache.pathForIOEntry(name, entry), 1))
-	storage := &readRangeRecordingObjectStorage{ObjectStorage: fs.storage}
-	fs.storage = storage
+	storage := &readRangeRecordingObjectStorage{ObjectStorage: fs.governor.raw}
+	fs.governor.raw = storage
 	vector := &IOVector{FilePath: name, Policy: SkipFullFilePreloads, Entries: []IOEntry{{Size: 2}}}
 	t.Cleanup(vector.Release)
 	require.NoError(t, fs.Read(ctx, vector))

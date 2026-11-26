@@ -55,9 +55,9 @@ func TestDownloadConnsAreHalfTheStorageConcurrency(t *testing.T) {
 	for _, tc := range []struct {
 		conns       int
 		concurrency int64
-		want        int64
+		want        int
 	}{
-		{0, 0, int64(maxConnsPerHost / 2)},
+		{0, 0, maxConnsPerHost / 2},
 		{64, 0, 32},
 		{256, 0, 128},
 		{0, 64, 32},
@@ -72,7 +72,8 @@ func TestDownloadConnsAreHalfTheStorageConcurrency(t *testing.T) {
 			Concurrency: tc.concurrency, MaxConnsPerHost: tc.conns,
 		}, CacheConfig{DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20), MemoryCapacity: ptrTo[toml.ByteSize](0)}, nil, false, false)
 		require.NoError(t, err)
-		require.Equal(t, tc.want, fs.diskCache.conns.max, "conns %d concurrency %d", tc.conns, tc.concurrency)
+		require.Equal(t, tc.want, fs.governor.backgroundMax, "conns %d concurrency %d", tc.conns, tc.concurrency)
+		require.Equal(t, 2*tc.want, fs.governor.capacity, "conns %d concurrency %d", tc.conns, tc.concurrency)
 		fs.Close(ctx)
 	}
 }
@@ -94,11 +95,9 @@ func newStorageSlotFS(t *testing.T, concurrency int64, conns int, paths []string
 			Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		}))
 	}
-	// Stall prefetch opens after the real storage semaphore admits them.
-	trace := fs.storage.(*objectStorageHTTPTrace)
-	semaphore := trace.upstream.(*objectStorageMetrics).upstream.(*objectStorageSemaphore)
-	gated := newBlackBoxStorage(semaphore.upstream, func(key string, _ int64) bool { return stalled(key) })
-	semaphore.upstream = gated
+	// Stall prefetch opens after the governor admits them.
+	gated := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return stalled(key) })
+	fs.governor.raw = gated
 	return fs, gated
 }
 
@@ -172,7 +171,7 @@ func TestStalledDownloadsLeaveStorageConcurrencyForForegroundRead(t *testing.T) 
 			cur, _, _ := gated.counts(path)
 			inFlight += cur
 		}
-		require.EqualValues(t, fs.diskCache.conns.max, inFlight, "stalled downloads hold every download connection")
+		require.EqualValues(t, fs.governor.backgroundMax, inFlight, "stalled downloads hold every background room")
 		requireForegroundReads(t, fs, gated, data, SkipAllCache|ExactColumnsRead)
 	})
 }

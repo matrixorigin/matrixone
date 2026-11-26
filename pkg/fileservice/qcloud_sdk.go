@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -27,7 +26,6 @@ import (
 	"net/url"
 	"os"
 	gotrace "runtime/trace"
-	"slices"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -416,14 +414,7 @@ func waitQCloudMultipartInitRetry(ctx context.Context, attempt int) error {
 	if delay > maxRetryInterval {
 		delay = maxRetryInterval
 	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
+	return waitRetry(ctx, delay)
 }
 
 func (a *QCloudSDK) initiateMultipartUpload(
@@ -506,116 +497,56 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	r io.Reader,
 	sizeHint *int64,
 	opt *ParallelMultipartOption,
-) (err error) {
-	defer wrapSizeMismatchErr(&err)
+) error {
+	return writeParts(ctx, storageParts{a}, key, r, sizeHint, opt)
+}
 
-	options := normalizeParallelOption(opt)
-	if sizeHint != nil {
-		r = &exactSizeReader{
-			R:        r,
-			Expected: *sizeHint,
-			Key:      key,
-		}
-		if *sizeHint < minMultipartPartSize {
-			return a.Write(ctx, key, r, sizeHint, options.Expire)
-		}
-		expectedParts := (*sizeHint + options.PartSize - 1) / options.PartSize
-		if expectedParts > maxMultipartParts {
-			return moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", expectedParts)
-		}
-	}
+var _ multipartStorage = new(QCloudSDK)
 
-	parentCtx := ctx
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	firstPart, err := readParallelUploadPart(ctx, r, options.PartSize)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	if firstPart == nil && errors.Is(err, io.EOF) {
-		size := int64(0)
-		return a.Write(ctx, key, bytes.NewReader(nil), &size, options.Expire)
-	}
-	if errors.Is(err, io.EOF) && int64(firstPart.n) < minMultipartPartSize {
-		data := make([]byte, firstPart.n)
-		copy(data, firstPart.buf[:firstPart.n])
-		size := int64(firstPart.n)
-		releaseParallelUploadPart(firstPart)
-		return a.Write(ctx, key, bytes.NewReader(data), &size, options.Expire)
-	}
-
+func (a *QCloudSDK) createMultipart(ctx context.Context, key string, expire *time.Time) (string, error) {
 	var expiresHeader string
-	if options.Expire != nil {
-		expiresHeader = options.Expire.UTC().Format(http.TimeFormat)
+	if expire != nil {
+		expiresHeader = expire.UTC().Format(http.TimeFormat)
 	}
-
-	initOpt := &cos.InitiateMultipartUploadOptions{
-		ObjectPutHeaderOptions: &cos.ObjectPutHeaderOptions{
-			Expires: expiresHeader,
-		},
-	}
-	output, createErr := a.initiateMultipartUpload(ctx, key, initOpt)
-	if createErr != nil {
-		releaseParallelUploadPart(firstPart)
-		return createErr
-	}
-
-	defer func() {
-		if err != nil {
-			// The upload context is normally canceled on the first part
-			// failure, but abort still needs a live context to remove the
-			// server-side multipart upload. Bound that detached cleanup so a
-			// broken COS endpoint cannot delay the original Write forever.
-			abortCtx, abortCancel := context.WithTimeoutCause(
-				context.WithoutCancel(parentCtx),
-				qcloudMultipartAbortTimeout,
-				context.DeadlineExceeded,
-			)
-			defer abortCancel()
-			if abortErr := a.abortMultipartUpload(abortCtx, key, output.UploadID); abortErr != nil {
-				logutil.Warn("failed to abort cos multipart upload",
-					zap.Error(abortErr))
-			}
-		}
-	}()
-
-	parts, err := uploadParallelParts(ctx, cancel, r, options, firstPart, func(ctx context.Context, num int32, part *parallelUploadPart) (cos.Object, error) {
-		uploadOpt := &cos.ObjectUploadPartOptions{ContentLength: int64(part.n)}
-		resp, uploadErr := DoWithRetryContext(ctx, "cos upload part", func() (*cos.Response, error) {
-			recordS3PutRequest(ctx, a.perfCounterSets...)
-			return a.client.Object.UploadPart(ctx, key, output.UploadID, int(num), bytes.NewReader(part.buf[:part.n]), uploadOpt)
-		}, maxRetryAttemps, IsRetryableError)
-		if uploadErr != nil {
-			return cos.Object{}, uploadErr
-		}
-		recordS3AcceptedBytes(ctx, int64(part.n), a.perfCounterSets...)
-		etag := ""
-		if resp != nil && resp.Header != nil {
-			etag = resp.Header.Get("ETag")
-		}
-		return cos.Object{PartNumber: int(num), ETag: etag}, nil
+	output, err := a.initiateMultipartUpload(ctx, key, &cos.InitiateMultipartUploadOptions{
+		ObjectPutHeaderOptions: &cos.ObjectPutHeaderOptions{Expires: expiresHeader},
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
+	return output.UploadID, nil
+}
 
-	slices.SortFunc(parts, func(a, b cos.Object) int {
-		return cmp.Compare(a.PartNumber, b.PartNumber)
-	})
-
-	completeOpt := &cos.CompleteMultipartUploadOptions{
-		Parts: parts,
-	}
-	_, err = DoWithRetryContext(ctx, "cos complete multipart upload", func() (*cos.CompleteMultipartUploadResult, error) {
-		res, _, e := a.client.Object.CompleteMultipartUpload(ctx, key, output.UploadID, completeOpt)
-		return res, e
+func (a *QCloudSDK) uploadPart(ctx context.Context, key, uploadID string, num int32, data []byte) (string, error) {
+	uploadOpt := &cos.ObjectUploadPartOptions{ContentLength: int64(len(data))}
+	resp, err := DoWithRetryContext(ctx, "cos upload part", func() (*cos.Response, error) {
+		recordS3PutRequest(ctx, a.perfCounterSets...)
+		return a.client.Object.UploadPart(ctx, key, uploadID, int(num), bytes.NewReader(data), uploadOpt)
 	}, maxRetryAttemps, IsRetryableError)
 	if err != nil {
-		return err
+		return "", err
 	}
+	recordS3AcceptedBytes(ctx, int64(len(data)), a.perfCounterSets...)
+	if resp != nil && resp.Header != nil {
+		return resp.Header.Get("ETag"), nil
+	}
+	return "", nil
+}
 
-	return nil
+func (a *QCloudSDK) completeMultipart(ctx context.Context, key, uploadID string, parts []multipartPart) error {
+	opt := &cos.CompleteMultipartUploadOptions{Parts: make([]cos.Object, len(parts))}
+	for i, p := range parts {
+		opt.Parts[i] = cos.Object{PartNumber: int(p.num), ETag: p.etag}
+	}
+	_, err := DoWithRetryContext(ctx, "cos complete multipart upload", func() (*cos.CompleteMultipartUploadResult, error) {
+		res, _, e := a.client.Object.CompleteMultipartUpload(ctx, key, uploadID, opt)
+		return res, e
+	}, maxRetryAttemps, IsRetryableError)
+	return err
+}
+
+func (a *QCloudSDK) abortMultipart(ctx context.Context, key, uploadID string) error {
+	return a.abortMultipartUpload(ctx, key, uploadID)
 }
 
 func (a *QCloudSDK) abortMultipartUpload(

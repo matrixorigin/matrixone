@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"iter"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizeParallelOption(t *testing.T) {
@@ -81,486 +82,123 @@ func TestNormalizeParallelOption(t *testing.T) {
 	}
 }
 
-type mockParallelStorage struct {
-	supports bool
-	exists   bool
+// partStorage is object storage that records the writes of an object in parts.
+type partStorage struct {
+	ObjectStorage
+	exists bool
 
-	writeCalled int
-	mpCalled    int
-
-	lastKey    string
-	lastData   []byte
-	lastSize   *int64
-	lastOpt    ParallelMultipartOption
-	lastExpire *time.Time
+	mu      sync.Mutex
+	puts    map[string][]byte
+	creates []*time.Time
+	parts   map[int32][]byte
+	done    []byte
+	cur     atomic.Int64
+	most    atomic.Int64
 }
 
-func (m *mockParallelStorage) List(ctx context.Context, prefix string) iter.Seq2[*DirEntry, error] {
-	return func(yield func(*DirEntry, error) bool) {}
+func newPartStorage() *partStorage {
+	return &partStorage{puts: map[string][]byte{}, parts: map[int32][]byte{}}
 }
 
-func (m *mockParallelStorage) Stat(ctx context.Context, key string) (int64, error) {
-	return 0, nil
+func (p *partStorage) Exists(context.Context, string) (bool, error) { return p.exists, nil }
+
+func (p *partStorage) Write(_ context.Context, key string, r io.Reader, _ *int64, _ *time.Time) error {
+	data, err := io.ReadAll(r)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.puts[key] = data
+	return err
 }
 
-func (m *mockParallelStorage) Exists(ctx context.Context, key string) (bool, error) {
-	return m.exists, nil
+func (p *partStorage) createMultipart(_ context.Context, _ string, expire *time.Time) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.creates = append(p.creates, expire)
+	return "upload", nil
 }
 
-func (m *mockParallelStorage) Write(ctx context.Context, key string, r io.Reader, sizeHint *int64, expire *time.Time) error {
-	m.writeCalled++
-	m.lastKey = key
-	m.lastSize = sizeHint
-	m.lastExpire = expire
-	b, _ := io.ReadAll(r)
-	m.lastData = b
+func (p *partStorage) uploadPart(_ context.Context, _, _ string, num int32, data []byte) (string, error) {
+	n := p.cur.Add(1)
+	defer p.cur.Add(-1)
+	for most := p.most.Load(); n > most && !p.most.CompareAndSwap(most, n); most = p.most.Load() {
+	}
+	time.Sleep(10 * time.Millisecond)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.parts[num] = bytes.Clone(data)
+	return "etag", nil
+}
+
+func (p *partStorage) completeMultipart(_ context.Context, _, _ string, parts []multipartPart) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, part := range parts {
+		p.done = append(p.done, p.parts[part.num]...)
+	}
 	return nil
 }
 
-func (m *mockParallelStorage) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(nil)), nil
+func (p *partStorage) abortMultipart(context.Context, string, string) error { return nil }
+
+func newPartFS(t *testing.T, storage ObjectStorage, mode ParallelMode, room int) *S3FS {
+	prev := writePartSize
+	writePartSize = minMultipartPartSize
+	t.Cleanup(func() { writePartSize = prev })
+	return &S3FS{name: "s3", governor: newGovernor(storage, room), rawStorage: storage, ioMerger: NewIOMerger(), asyncUpdate: true, parallelMode: mode}
 }
 
-func (m *mockParallelStorage) Delete(ctx context.Context, keys ...string) error {
-	return nil
-}
-
-func (m *mockParallelStorage) SupportsParallelMultipart() bool {
-	return m.supports
-}
-
-func (m *mockParallelStorage) WriteMultipartParallel(ctx context.Context, key string, r io.Reader, sizeHint *int64, opt *ParallelMultipartOption) error {
-	m.mpCalled++
-	m.lastKey = key
-	if opt != nil {
-		m.lastOpt = *opt
-	}
-	m.lastSize = sizeHint
-	b, _ := io.ReadAll(r)
-	m.lastData = b
-	return nil
-}
-
-func TestS3FSWriteUsesParallelWhenForced(t *testing.T) {
-	storage := &mockParallelStorage{supports: true}
-	fs := &S3FS{
-		name:         "s3",
-		storage:      storage,
-		ioMerger:     NewIOMerger(),
-		asyncUpdate:  true,
-		parallelMode: ParallelForce,
-	}
-
-	data := []byte("hello")
-	vector := IOVector{
-		FilePath: "obj",
-		Entries: []IOEntry{
-			{Offset: 0, Size: int64(len(data)), Data: data},
-		},
-	}
-
-	if err := fs.Write(context.Background(), vector); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if storage.mpCalled != 1 {
-		t.Fatalf("expected parallel write, got %d", storage.mpCalled)
-	}
-	if storage.writeCalled != 0 {
-		t.Fatalf("unexpected non-parallel write")
-	}
-	if storage.lastKey != "obj" {
-		t.Fatalf("unexpected key %s", storage.lastKey)
-	}
-	if string(storage.lastData) != "hello" {
-		t.Fatalf("unexpected data %s", string(storage.lastData))
-	}
-}
-
-func TestS3FSWriteDisableParallel(t *testing.T) {
-	storage := &mockParallelStorage{supports: true}
-	fs := &S3FS{
-		name:         "s3",
-		storage:      storage,
-		ioMerger:     NewIOMerger(),
-		asyncUpdate:  true,
-		parallelMode: ParallelOff,
-	}
-
-	data := bytes.Repeat([]byte("a"), int(minMultipartPartSize+1))
-	vector := IOVector{
-		FilePath: "large",
-		Entries: []IOEntry{
-			{Offset: 0, Size: int64(len(data)), Data: data},
-		},
-	}
-
-	if err := fs.Write(context.Background(), vector); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if storage.mpCalled != 0 {
-		t.Fatalf("parallel write should be disabled")
-	}
-	if storage.writeCalled != 1 {
-		t.Fatalf("expected single write, got %d", storage.writeCalled)
-	}
-	if storage.lastKey != "large" {
-		t.Fatalf("unexpected key %s", storage.lastKey)
-	}
-}
-
-func TestS3FSWriteUnknownSizeUsesParallelWhenForced(t *testing.T) {
-	storage := &mockParallelStorage{supports: true}
-	fs := &S3FS{
-		name:         "s3",
-		storage:      storage,
-		ioMerger:     NewIOMerger(),
-		asyncUpdate:  true,
-		parallelMode: ParallelForce,
-	}
-
-	reader := strings.NewReader("data")
-	vector := IOVector{
-		FilePath: "unknown",
-		Entries: []IOEntry{
-			{Offset: 0, Size: -1, ReaderForWrite: reader},
-		},
-	}
-
-	if err := fs.Write(context.Background(), vector); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if storage.mpCalled != 1 {
-		t.Fatalf("expected parallel write for unknown size")
-	}
-	if storage.lastSize != nil {
-		t.Fatalf("size hint should be nil for unknown size")
-	}
-}
-
-func TestS3FSWriteUnknownSizeDefaultNoParallel(t *testing.T) {
-	storage := &mockParallelStorage{supports: true}
-	fs := &S3FS{
-		name:         "s3",
-		storage:      storage,
-		ioMerger:     NewIOMerger(),
-		asyncUpdate:  true,
-		parallelMode: ParallelOff,
-	}
-
-	reader := strings.NewReader("data")
-	vector := IOVector{
-		FilePath: "unknown",
-		Entries: []IOEntry{
-			{Offset: 0, Size: -1, ReaderForWrite: reader},
-		},
-	}
-
-	if err := fs.Write(context.Background(), vector); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if storage.mpCalled != 0 {
-		t.Fatalf("parallel write should not be used by default")
-	}
-	if storage.writeCalled != 1 {
-		t.Fatalf("expected single write by default")
-	}
-}
-
-func TestS3FSWriteContextParallelModeOverridesFSMode(t *testing.T) {
-	storage := &mockParallelStorage{supports: true}
-	fs := &S3FS{
-		name:         "s3",
-		storage:      storage,
-		ioMerger:     NewIOMerger(),
-		asyncUpdate:  true,
-		parallelMode: ParallelAuto,
-	}
-
-	reader := strings.NewReader("streamed-data")
-	vector := IOVector{
-		FilePath: "unknown-context-off",
-		Entries: []IOEntry{
-			{Offset: 0, Size: -1, ReaderForWrite: reader},
-		},
-	}
-
-	ctx := WithParallelMode(context.Background(), ParallelOff)
-	if err := fs.Write(ctx, vector); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if storage.mpCalled != 0 {
-		t.Fatalf("parallel write should be disabled by context override")
-	}
-	if storage.writeCalled != 1 {
-		t.Fatalf("expected single write, got %d", storage.writeCalled)
-	}
-	if string(storage.lastData) != "streamed-data" {
-		t.Fatalf("unexpected data %q", string(storage.lastData))
-	}
-}
-
-func TestS3FSWriteContextParallelAutoEnablesUnknownSize(t *testing.T) {
-	storage := &mockParallelStorage{supports: true}
-	fs := &S3FS{
-		name:         "s3",
-		storage:      storage,
-		ioMerger:     NewIOMerger(),
-		asyncUpdate:  true,
-		parallelMode: ParallelOff,
-	}
-
-	reader := strings.NewReader("streamed-data")
-	vector := IOVector{
-		FilePath: "unknown-context-auto",
-		Entries: []IOEntry{
-			{Offset: 0, Size: -1, ReaderForWrite: reader},
-		},
-	}
-
-	ctx := WithParallelMode(context.Background(), ParallelAuto)
-	if err := fs.Write(ctx, vector); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if storage.mpCalled != 1 {
-		t.Fatalf("parallel write should be enabled by context auto override")
-	}
-	if storage.writeCalled != 0 {
-		t.Fatalf("unexpected single write")
-	}
-	if storage.lastSize != nil {
-		t.Fatalf("size hint should be nil for unknown-size stream")
-	}
-}
-
-func TestS3FSSmallSizeSkipsParallel(t *testing.T) {
-	storage := &mockParallelStorage{supports: true}
-	fs := &S3FS{
-		name:         "s3",
-		storage:      storage,
-		ioMerger:     NewIOMerger(),
-		asyncUpdate:  true,
-		parallelMode: ParallelAuto,
-	}
-
-	data := bytes.Repeat([]byte("b"), int(minMultipartPartSize-1))
-	vector := IOVector{
-		FilePath: "small",
-		Entries: []IOEntry{
-			{Offset: 0, Size: int64(len(data)), Data: data},
-		},
-	}
-
-	if err := fs.Write(context.Background(), vector); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if storage.writeCalled != 1 {
-		t.Fatalf("expected non-parallel write for small object")
-	}
-	if storage.mpCalled != 0 {
-		t.Fatalf("unexpected parallel write")
-	}
-}
-
-func TestS3FSLargeSizeDefaultNoParallel(t *testing.T) {
-	storage := &mockParallelStorage{supports: true}
-	fs := &S3FS{
-		name:         "s3",
-		storage:      storage,
-		ioMerger:     NewIOMerger(),
-		asyncUpdate:  true,
-		parallelMode: ParallelOff,
-	}
-
-	data := bytes.Repeat([]byte("d"), int(minMultipartPartSize+1))
-	vector := IOVector{
-		FilePath: "large-default",
-		Entries: []IOEntry{
-			{Offset: 0, Size: int64(len(data)), Data: data},
-		},
-	}
-
-	if err := fs.Write(context.Background(), vector); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if storage.mpCalled != 0 {
-		t.Fatalf("parallel write should be disabled by default")
-	}
-	if storage.writeCalled != 1 {
-		t.Fatalf("expected single write by default, got %d", storage.writeCalled)
-	}
-}
-
-func TestS3FSAutoUsesParallelForLarge(t *testing.T) {
-	storage := &mockParallelStorage{supports: true}
-	fs := &S3FS{
-		name:         "s3",
-		storage:      storage,
-		ioMerger:     NewIOMerger(),
-		asyncUpdate:  true,
-		parallelMode: ParallelAuto,
-	}
-
-	data := bytes.Repeat([]byte("p"), int(minMultipartPartSize+1))
-	vector := IOVector{
-		FilePath: "auto-large",
-		Entries: []IOEntry{
-			{Offset: 0, Size: int64(len(data)), Data: data},
-		},
-	}
-
-	if err := fs.Write(context.Background(), vector); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if storage.mpCalled != 1 {
-		t.Fatalf("expected parallel write with auto mode")
-	}
-}
-
-func TestS3FSForceParallelFallbackWhenUnsupported(t *testing.T) {
-	storage := &mockParallelStorage{supports: false}
-	fs := &S3FS{
-		name:         "s3",
-		storage:      storage,
-		ioMerger:     NewIOMerger(),
-		asyncUpdate:  true,
-		parallelMode: ParallelForce,
-	}
-
-	data := []byte("force")
-	vector := IOVector{
-		FilePath: "force",
-		Entries: []IOEntry{
-			{Offset: 0, Size: int64(len(data)), Data: data},
-		},
-	}
-
-	if err := fs.Write(context.Background(), vector); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if storage.mpCalled != 0 {
-		t.Fatalf("parallel write should not happen when unsupported")
-	}
-	if storage.writeCalled != 1 {
-		t.Fatalf("expected fallback single write")
-	}
-}
-
-func TestS3FSParallelPassesExpire(t *testing.T) {
-	storage := &mockParallelStorage{supports: true}
-	fs := &S3FS{
-		name:         "s3",
-		storage:      storage,
-		ioMerger:     NewIOMerger(),
-		asyncUpdate:  true,
-		parallelMode: ParallelForce,
-	}
-
-	data := bytes.Repeat([]byte("c"), int(minMultipartPartSize+1))
-	expire := time.Now().Add(time.Hour)
-	vector := IOVector{
-		FilePath: "with-expire",
-		ExpireAt: expire,
-		Entries: []IOEntry{
-			{Offset: 0, Size: int64(len(data)), Data: data},
-		},
-	}
-
-	if err := fs.Write(context.Background(), vector); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if storage.mpCalled != 1 {
-		t.Fatalf("expected parallel write")
-	}
-	if storage.lastOpt.Expire == nil || !storage.lastOpt.Expire.Equal(expire) {
-		t.Fatalf("expire not propagated")
+// A write that ends within its first part is one put; a longer one is a multipart upload
+// whose parts are uploaded at once only in parallel mode, and at most as many at once as
+// the governor has room for.
+func TestS3FSWriteInParts(t *testing.T) {
+	small := []byte("hello")
+	large := bytes.Repeat([]byte("abcdefg"), int(3*minMultipartPartSize/7)+2)
+	for _, c := range []struct {
+		name  string
+		mode  ParallelMode
+		room  int
+		data  []byte
+		size  bool
+		parts int
+		most  int64
+	}{
+		{"small", ParallelForce, 8, small, true, 0, 0},
+		{"small unknown size", ParallelForce, 8, small, false, 0, 0},
+		{"large parallel", ParallelForce, 8, large, true, 4, 4},
+		{"large unknown size", ParallelAuto, 8, large, false, 4, 4},
+		{"large serial", ParallelOff, 8, large, true, 4, 1},
+		{"large parallel in one room", ParallelForce, 1, large, true, 4, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			storage := newPartStorage()
+			fs := newPartFS(t, storage, c.mode, c.room)
+			entry := IOEntry{Size: int64(len(c.data)), Data: c.data}
+			if !c.size {
+				entry = IOEntry{Size: -1, ReaderForWrite: bytes.NewReader(c.data)}
+			}
+			expire := time.Now().Add(time.Hour)
+			require.NoError(t, fs.Write(context.Background(), IOVector{FilePath: "obj", ExpireAt: expire, Entries: []IOEntry{entry}}))
+			if c.parts == 0 {
+				require.Equal(t, c.data, storage.puts["obj"])
+				require.Empty(t, storage.creates)
+				return
+			}
+			require.Empty(t, storage.puts)
+			require.Equal(t, c.parts, len(storage.parts))
+			require.True(t, bytes.Equal(c.data, storage.done))
+			require.LessOrEqual(t, storage.most.Load(), c.most)
+			if c.most == 1 {
+				require.Equal(t, int64(1), storage.most.Load())
+			}
+			require.True(t, storage.creates[0].Equal(expire), "expire is passed")
+		})
 	}
 }
 
 func TestS3FSWriteFileExists(t *testing.T) {
-	storage := &mockParallelStorage{supports: true, exists: true}
-	fs := &S3FS{
-		name:         "s3",
-		storage:      storage,
-		ioMerger:     NewIOMerger(),
-		asyncUpdate:  true,
-		parallelMode: ParallelOff,
-	}
-	vector := IOVector{
-		FilePath: "dup",
-		Entries: []IOEntry{
-			{Offset: 0, Size: 1, Data: []byte("x")},
-		},
-	}
-	err := fs.Write(context.Background(), vector)
-	if err == nil {
-		t.Fatalf("expected file exists error")
-	}
-}
-
-type countingParallelStorage struct {
-	supports bool
-	current  atomic.Int64
-	max      atomic.Int64
-}
-
-func (c *countingParallelStorage) List(ctx context.Context, prefix string) iter.Seq2[*DirEntry, error] {
-	return func(yield func(*DirEntry, error) bool) {}
-}
-
-func (c *countingParallelStorage) Stat(ctx context.Context, key string) (int64, error) {
-	return 0, nil
-}
-
-func (c *countingParallelStorage) Exists(ctx context.Context, key string) (bool, error) {
-	return false, nil
-}
-
-func (c *countingParallelStorage) Write(ctx context.Context, key string, r io.Reader, sizeHint *int64, expire *time.Time) error {
-	return nil
-}
-
-func (c *countingParallelStorage) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
-	return io.NopCloser(strings.NewReader("")), nil
-}
-
-func (c *countingParallelStorage) Delete(ctx context.Context, keys ...string) error {
-	return nil
-}
-
-func (c *countingParallelStorage) SupportsParallelMultipart() bool {
-	return c.supports
-}
-
-func (c *countingParallelStorage) WriteMultipartParallel(ctx context.Context, key string, r io.Reader, sizeHint *int64, opt *ParallelMultipartOption) error {
-	cur := c.current.Add(1)
-	defer c.current.Add(-1)
-	for {
-		old := c.max.Load()
-		if cur <= old || c.max.CompareAndSwap(old, cur) {
-			break
-		}
-	}
-	time.Sleep(20 * time.Millisecond)
-	return nil
-}
-
-func TestObjectStorageSemaphoreLimitsParallel(t *testing.T) {
-	upstream := &countingParallelStorage{supports: true}
-	sem := newObjectStorageSemaphore(upstream, 1)
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		_ = sem.WriteMultipartParallel(context.Background(), "a", strings.NewReader("1"), nil, nil)
-	}()
-	go func() {
-		defer wg.Done()
-		_ = sem.WriteMultipartParallel(context.Background(), "b", strings.NewReader("2"), nil, nil)
-	}()
-	wg.Wait()
-
-	if upstream.max.Load() > 1 {
-		t.Fatalf("expected semaphore to cap concurrency at 1, got %d", upstream.max.Load())
-	}
+	storage := newPartStorage()
+	storage.exists = true
+	fs := newPartFS(t, storage, ParallelOff, 1)
+	err := fs.Write(context.Background(), IOVector{FilePath: "dup", Entries: []IOEntry{{Size: 1, Data: []byte("x")}}})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists), "got %v", err)
 }

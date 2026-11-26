@@ -96,8 +96,8 @@ func TestStreamedRangeReadWritesBeforeRangeArrives(t *testing.T) {
 			fs, _, data := newPrefetchRangeFS(t, 0, size)
 			fs.diskCache.memoryPrefetchMax = minDiskPrefetchMemoryMax
 			<-fs.diskCache.load.done
-			storage := &heldTailStorage{ObjectStorage: fs.storage, head: 64 << 10, proceed: make(chan struct{})}
-			fs.storage = storage
+			storage := &heldTailStorage{ObjectStorage: fs.governor.raw, head: 64 << 10, proceed: make(chan struct{})}
+			fs.governor.raw = storage
 			release := sync.OnceFunc(func() { close(storage.proceed) })
 			defer release()
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -127,10 +127,22 @@ func TestStreamedRangeReadWritesBeforeRangeArrives(t *testing.T) {
 				}
 				done <- err
 			}()
-			select {
-			case <-w.first:
-			case <-time.After(10 * time.Second):
-				t.Fatal("the streamed entry got no bytes before the rest of its range arrived")
+			if tc.writer {
+				// The range is read before the writer runs.
+				require.Never(t, func() bool {
+					select {
+					case <-w.first:
+						return true
+					default:
+						return false
+					}
+				}, 100*time.Millisecond, time.Millisecond)
+			} else {
+				select {
+				case <-w.first:
+				case <-time.After(10 * time.Second):
+					t.Fatal("the streamed entry got no bytes before the rest of its range arrived")
+				}
 			}
 			release()
 			require.NoError(t, <-done)

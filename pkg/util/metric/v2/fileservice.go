@@ -183,6 +183,20 @@ var (
 			"op",
 		},
 	)
+
+	// FSObjectStorageRequestsGauge is the requests of the object-storage governors running
+	// and waiting for room, by class.
+	FSObjectStorageRequestsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "object_storage_requests",
+			Help:      "Object-storage requests running and waiting for room, by class",
+		}, []string{"class", "state"})
+	FSObjectStorageRequestsForegroundRunning = FSObjectStorageRequestsGauge.WithLabelValues("foreground", "running")
+	FSObjectStorageRequestsForegroundWaiting = FSObjectStorageRequestsGauge.WithLabelValues("foreground", "waiting")
+	FSObjectStorageRequestsBackgroundRunning = FSObjectStorageRequestsGauge.WithLabelValues("background", "running")
+	FSObjectStorageRequestsBackgroundWaiting = FSObjectStorageRequestsGauge.WithLabelValues("background", "waiting")
 )
 
 var (
@@ -438,7 +452,7 @@ var (
 	FSPrefetchDroppedCounter    = FSPrefetchObjectCounter.WithLabelValues("dropped")
 
 	// FSPrefetchObjectWaitingGauge is the prefetch objects of runs waiting for their
-	// resources, by what they wait for: a slot of their prefetch, a buffer or a connection.
+	// resources, by what they wait for: a slot of their prefetch or a buffer.
 	FSPrefetchObjectWaitingGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
@@ -446,9 +460,8 @@ var (
 			Name:      "prefetch_object_waiting",
 			Help:      "Prefetch objects of runs waiting for their resources, by what they wait for",
 		}, []string{"for"})
-	FSPrefetchObjectWaitingSlot       = FSPrefetchObjectWaitingGauge.WithLabelValues("slot")
-	FSPrefetchObjectWaitingBuffer     = FSPrefetchObjectWaitingGauge.WithLabelValues("buffer")
-	FSPrefetchObjectWaitingConnection = FSPrefetchObjectWaitingGauge.WithLabelValues("connection")
+	FSPrefetchObjectWaitingSlot   = FSPrefetchObjectWaitingGauge.WithLabelValues("slot")
+	FSPrefetchObjectWaitingBuffer = FSPrefetchObjectWaitingGauge.WithLabelValues("buffer")
 
 	// FSPrefetchObjectWaitDuration is how long the prefetch objects of runs waited for their
 	// resources, each wait, however it ended.
@@ -459,16 +472,6 @@ var (
 			Name:      "prefetch_object_wait_duration_seconds",
 			Help:      "Time prefetch objects of runs waited for their resources, each wait",
 			Buckets:   getDurationBuckets(),
-		})
-
-	// FSDiskCacheDownloadSkippedCounter counts the whole-object downloads not started
-	// because the most downloads allowed were in flight.
-	FSDiskCacheDownloadSkippedCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "fs",
-			Name:      "disk_cache_download_skipped_total",
-			Help:      "Whole-object downloads not started because the most downloads allowed were in flight",
 		})
 
 	// FSDiskCacheAsyncUpdateDroppedCounter tracks optional cache fills that are

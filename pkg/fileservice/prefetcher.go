@@ -18,7 +18,6 @@ import (
 	"cmp"
 	"container/heap"
 	"context"
-	"io"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -828,6 +827,7 @@ func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 	if err != nil {
 		return
 	}
+	ctx = withBackgroundRequests(ctx)
 	// A request queued again after its object was deleted downloads nothing.
 	objectPath := s.diskCache.objectKey(path.File)
 	if s.diskCache.deletes.since(objectPath, req.deletes) {
@@ -872,12 +872,8 @@ func (s *S3FS) countPrefetch(req ObjectPrefetch, err error) {
 func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
 	ranges := s.rangesToDownload(req)
 	if path, err := parseFilePathAtService(req.FilePath, s.name); err == nil && len(ranges) > 0 {
-		key := s.pathToKey(path.File)
-		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
-			return s.storage.Read(ctx, key, &start, &end)
-		}
 		// Reads of the ranges join their flights instead of reading their bytes again.
-		if ok, err := s.diskCache.readRanges(ctx, path.File, req.deletes, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open); ok {
+		if ok, err := s.diskCache.readRanges(ctx, path.File, req.deletes, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, s.source(path.File)); ok {
 			s.countPrefetch(req, err)
 			return
 		}

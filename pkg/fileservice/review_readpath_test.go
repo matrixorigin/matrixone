@@ -50,10 +50,10 @@ func TestLargeReadPastDeclinedFilePrefetch(t *testing.T) {
 			<-d.load.done
 
 			var opens atomic.Int64
-			storage := newBlackBoxStorage(fs.storage, func(string, int64) bool {
+			storage := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool {
 				return opens.Add(1) == 1
 			})
-			fs.storage = storage
+			fs.governor.raw = storage
 			defer close(storage.gate)
 
 			ctx := context.Background()
@@ -103,8 +103,8 @@ func TestJoinedFileRangeWaitsForCaller(t *testing.T) {
 			d.downloadMaxExtraWait = 5 * time.Second
 			d.objectSplit.parts = 1
 			<-d.load.done
-			storage := newBlackBoxStorage(fs.storage, func(_ string, start int64) bool { return start == 0 })
-			fs.storage = storage
+			storage := newBlackBoxStorage(fs.governor.raw, func(_ string, start int64) bool { return start == 0 })
+			fs.governor.raw = storage
 			unblock := sync.OnceFunc(func() { close(storage.gate) })
 			defer unblock()
 			key := fs.pathToKey("object")
@@ -183,10 +183,10 @@ func TestConcurrentSplitAdmissionAtLimitOne(t *testing.T) {
 				case <-cancelStaging:
 				}
 			}
-			storage := newBlackBoxStorage(fs.storage, func(key string, _ int64) bool {
+			storage := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool {
 				return key == fs.pathToKey("object")
 			})
-			fs.storage = storage
+			fs.governor.raw = storage
 			allowSource := sync.OnceFunc(func() { close(storage.gate) })
 			var readers sync.WaitGroup
 			defer func() {

@@ -94,8 +94,8 @@ func newDownloadContractFS(t *testing.T, maxExtraWait time.Duration) (*S3FS, *ga
 		data[i] = byte(i*7 + i/1021)
 	}
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache}))
-	storage := &gatedStorage{ObjectStorage: fs.storage, gateAt: 1 << 20, release: make(chan struct{})}
-	fs.storage = storage
+	storage := &gatedStorage{ObjectStorage: fs.governor.raw, gateAt: 1 << 20, release: make(chan struct{})}
+	fs.governor.raw = storage
 	t.Cleanup(func() {
 		select {
 		case <-storage.release:

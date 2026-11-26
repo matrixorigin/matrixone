@@ -55,8 +55,8 @@ func TestFilePrefetchObjectReadsJoinOneDownload(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
 	fs.diskCache.memoryPrefetchMax = 16 << 10
-	storage := &gateStorage{ObjectStorage: fs.storage, release: make(chan struct{})}
-	fs.storage = storage
+	storage := &gateStorage{ObjectStorage: fs.governor.raw, release: make(chan struct{})}
+	fs.governor.raw = storage
 
 	type result struct {
 		data []byte
@@ -93,8 +93,8 @@ func TestFilePrefetchObjectOfEndedReadStops(t *testing.T) {
 	fs, storage, _ := newPrefetchRangeFS(t, unit, 4*unit)
 	d := fs.diskCache
 	d.memoryPrefetchMax = 16 << 10
-	d.conns.max = 1
-	d.conns.held.Store(1)
+	d.governor.setCapacity(1)
+	release := occupy(t, d.governor, foregroundRequest, 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -102,18 +102,15 @@ func TestFilePrefetchObjectOfEndedReadStops(t *testing.T) {
 		_, err := readUnit(ctx, fs, 100, 10)
 		done <- err
 	}()
-	require.Eventually(t, func() bool {
-		d.conns.mu.Lock()
-		defer d.conns.mu.Unlock()
-		return d.conns.freed.ch != nil
-	}, 10*time.Second, time.Millisecond, "the download waits for a connection")
+	require.Eventually(t, func() bool { _, waiting := d.governor.counts(); return waiting[foregroundRequest] > 0 },
+		10*time.Second, time.Millisecond, "the download waits for room")
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 	require.Eventually(t, func() bool { return fileObjects(d) == 0 }, 10*time.Second, time.Millisecond)
 	d.prefetchObjects.reads.Wait()
-	d.conns.release()
+	release()
 	require.Zero(t, storage.reads.Load())
-	require.Zero(t, d.conns.held.Load())
+	require.Zero(t, heldRoom(d.governor))
 }
 
 // A read that leaves caching to the prefetch range does not join a MemoryPrefetchObject
@@ -126,11 +123,11 @@ func TestPrefetchRangeDoesNotJoinUncachedObject(t *testing.T) {
 	opened := make(chan struct{})
 	fetched := make(chan error, 1)
 	go func() {
-		_, _, _, err := d.fetchRange(context.Background(), "object", 0, false, 0, unit, func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+		_, _, _, err := d.fetchRange(context.Background(), "object", 0, false, 0, unit, openerSource(func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 			close(opened)
 			<-held
-			return fs.storage.Read(ctx, "object", &start, &end)
-		})
+			return fs.governor.raw.Read(ctx, "object", &start, &end)
+		}))
 		fetched <- err
 	}()
 	<-opened

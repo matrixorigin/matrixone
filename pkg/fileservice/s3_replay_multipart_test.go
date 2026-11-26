@@ -17,21 +17,19 @@ package fileservice
 import (
 	"bytes"
 	"context"
-	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-// Reduce the part size only for this local-server test so two real AWS SDK
-// multipart requests do not require a 64 MiB object.
+// replaySmallPartsAWS is an AWS SDK written in parts of minMultipartPartSize for the
+// test, so two real AWS SDK multipart requests do not require a 64 MiB object.
 type replaySmallPartsAWS struct{ *AwsSDKv2 }
 
-func (s *replaySmallPartsAWS) WriteMultipartParallel(ctx context.Context, key string, r io.Reader, size *int64, options *ParallelMultipartOption) error {
-	local := *options
-	local.PartSize = minMultipartPartSize
-	local.Concurrency = 2
-	return s.AwsSDKv2.WriteMultipartParallel(ctx, key, r, size, &local)
+func smallWriteParts(t *testing.T) {
+	prev := writePartSize
+	writePartSize = minMultipartPartSize
+	t.Cleanup(func() { writePartSize = prev })
 }
 
 func TestReplayWriteAWSMultipartAndCache(t *testing.T) {
@@ -39,7 +37,8 @@ func TestReplayWriteAWSMultipartAndCache(t *testing.T) {
 	defer server.Close()
 	state.uploadID = "replay-multipart"
 	fs := newReplayWriteTestFS(t)
-	fs.storage = &replaySmallPartsAWS{AwsSDKv2: newTestAWSClient(t, server)}
+	fs.governor.raw = &replaySmallPartsAWS{AwsSDKv2: newTestAWSClient(t, server)}
+	smallWriteParts(t)
 	fs.parallelMode = ParallelForce
 
 	data := bytes.Repeat([]byte("abcdefgh"), int((minMultipartPartSize+(128<<10))/8))

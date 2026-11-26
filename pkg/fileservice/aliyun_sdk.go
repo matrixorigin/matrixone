@@ -321,7 +321,7 @@ func (a *AliyunSDK) Write(
 ) {
 	defer wrapSizeMismatchErr(&err)
 
-	if sizeHint != nil && *sizeHint < smallObjectThreshold {
+	if sizeHint != nil && *sizeHint <= smallObjectThreshold {
 		data, err := io.ReadAll(r)
 		if err != nil {
 			return err
@@ -340,19 +340,57 @@ func (a *AliyunSDK) Write(
 		}
 
 	} else {
-		err = a.putObject(
-			ctx,
-			key,
-			r,
-			sizeHint,
-			expire,
-		)
-		if err != nil {
-			return err
-		}
+		return writeParts(ctx, storageParts{a}, key, r, sizeHint, &ParallelMultipartOption{Concurrency: 1, Expire: expire})
 	}
 
 	return
+}
+
+var _ multipartStorage = new(AliyunSDK)
+
+func (a *AliyunSDK) multipart(key, uploadID string) oss.InitiateMultipartUploadResult {
+	return oss.InitiateMultipartUploadResult{Bucket: a.bucket.BucketName, Key: key, UploadID: uploadID}
+}
+
+func (a *AliyunSDK) createMultipart(ctx context.Context, key string, expire *time.Time) (string, error) {
+	opts := []oss.Option{oss.WithContext(ctx)}
+	if expire != nil {
+		opts = append(opts, oss.Expires(*expire))
+	}
+	result, err := DoWithRetryContext(ctx, "create multipart upload", func() (oss.InitiateMultipartUploadResult, error) {
+		return a.bucket.InitiateMultipartUpload(key, opts...)
+	}, maxRetryAttemps, IsRetryableError)
+	return result.UploadID, err
+}
+
+func (a *AliyunSDK) uploadPart(ctx context.Context, key, uploadID string, num int32, data []byte) (string, error) {
+	part, err := DoWithRetryContext(ctx, "upload part", func() (oss.UploadPart, error) {
+		recordS3PutRequest(ctx, a.perfCounterSets...)
+		return a.bucket.UploadPart(a.multipart(key, uploadID), bytes.NewReader(data), int64(len(data)), int(num), oss.WithContext(ctx))
+	}, maxRetryAttemps, IsRetryableError)
+	if err != nil {
+		return "", err
+	}
+	recordS3AcceptedBytes(ctx, int64(len(data)), a.perfCounterSets...)
+	return part.ETag, nil
+}
+
+func (a *AliyunSDK) completeMultipart(ctx context.Context, key, uploadID string, parts []multipartPart) error {
+	completed := make([]oss.UploadPart, len(parts))
+	for i, p := range parts {
+		completed[i] = oss.UploadPart{PartNumber: int(p.num), ETag: p.etag}
+	}
+	_, err := DoWithRetryContext(ctx, "complete multipart upload", func() (oss.CompleteMultipartUploadResult, error) {
+		return a.bucket.CompleteMultipartUpload(a.multipart(key, uploadID), completed, oss.WithContext(ctx))
+	}, maxRetryAttemps, IsRetryableError)
+	return err
+}
+
+func (a *AliyunSDK) abortMultipart(ctx context.Context, key, uploadID string) error {
+	_, err := DoWithRetryContext(ctx, "abort multipart upload", func() (bool, error) {
+		return true, a.bucket.AbortMultipartUpload(a.multipart(key, uploadID), oss.WithContext(ctx))
+	}, maxRetryAttemps, IsRetryableError)
+	return err
 }
 
 func (a *AliyunSDK) Read(

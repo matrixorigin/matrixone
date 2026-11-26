@@ -93,7 +93,7 @@ func joinedColumnRead(t *testing.T, fileBacked bool, r PrefetchRange, answer fun
 		fs.diskCache.downloadMaxExtraWait = time.Hour
 	}
 	s := &probeStorage{ObjectStorage: storage, at: r.Offset, gate: make(chan struct{}), answer: answer}
-	fs.storage = s
+	fs.governor.raw = s
 	release := sync.OnceFunc(func() { close(s.gate) })
 	t.Cleanup(release)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: r.Size, Ranges: []PrefetchRange{r}}))
@@ -179,8 +179,8 @@ func TestStreamedReadFallsBackOnUnreadableDownloadFile(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	d := fs.diskCache
 	<-d.load.done
-	storage := newBlackBoxStorage(fs.storage, func(_ string, offset int64) bool { return offset == 0 })
-	fs.storage = storage
+	storage := newBlackBoxStorage(fs.governor.raw, func(_ string, offset int64) bool { return offset == 0 })
+	fs.governor.raw = storage
 	release := sync.OnceFunc(func() { close(storage.gate) })
 	t.Cleanup(release)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -212,8 +212,8 @@ func TestStreamedReadFallsBackOnUnreadableDownloadFile(t *testing.T) {
 func stalledWholeDownload(t *testing.T, fs *S3FS) (*objectDownload, func()) {
 	d := fs.diskCache
 	<-d.load.done
-	storage := newBlackBoxStorage(fs.storage, func(_ string, offset int64) bool { return offset == 0 })
-	fs.storage = storage
+	storage := newBlackBoxStorage(fs.governor.raw, func(_ string, offset int64) bool { return offset == 0 })
+	fs.governor.raw = storage
 	release := sync.OnceFunc(func() { close(storage.gate) })
 	done := make(chan struct{})
 	go func() {
@@ -259,8 +259,8 @@ func TestPrefetchOfDeletedObjectEnds(t *testing.T) {
 		t.Run(map[bool]string{true: "whole", false: "ranges"}[whole], func(t *testing.T) {
 			fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 			<-fs.diskCache.load.done
-			storage := newBlackBoxStorage(fs.storage, func(string, int64) bool { return true })
-			fs.storage = storage
+			storage := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
+			fs.governor.raw = storage
 			t.Cleanup(func() { close(storage.gate) })
 			failed := promtestutil.ToFloat64(metric.FSPrefetchFailedCounter)
 			ended := promtestutil.ToFloat64(metric.FSPrefetchEndedCounter)
@@ -358,8 +358,8 @@ func TestSkippedWholeFillReadsCacheAgain(t *testing.T) {
 func TestExactReadJoinsQueuedRanges(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	<-fs.diskCache.load.done
-	storage := newBlackBoxStorage(fs.storage, func(string, int64) bool { return true })
-	fs.storage = storage
+	storage := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
+	fs.governor.raw = storage
 	t.Cleanup(func() { close(storage.gate) })
 	r := PrefetchRange{Offset: 4096, Size: 4096}
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: 300 << 10, Ranges: []PrefetchRange{r}}))
@@ -378,7 +378,7 @@ func TestReadOfDownloadJoinsNoPrefetchObject(t *testing.T) {
 			<-fs.diskCache.load.done
 			s := &probeStorage{ObjectStorage: storage, at: r.Offset, gate: make(chan struct{}),
 				answer: func(rc io.ReadCloser) (io.ReadCloser, error) { return rc, nil }}
-			fs.storage = s
+			fs.governor.raw = s
 			t.Cleanup(sync.OnceFunc(func() { close(s.gate) }))
 			require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: r.Size, Ranges: []PrefetchRange{r}}))
 			require.Eventually(t, s.hit.Load, 5*time.Second, time.Millisecond)
@@ -412,8 +412,8 @@ func TestIndexObjectReadSkippingDiskReadsJoinsIndexDownload(t *testing.T) {
 	fs, _, data := newIndexObjectFS(t, true)
 	d := fs.diskCache
 	d.downloadMaxExtraWait = time.Hour
-	storage := newBlackBoxStorage(fs.storage, func(_ string, offset int64) bool { return offset == 0 })
-	fs.storage = storage
+	storage := newBlackBoxStorage(fs.governor.raw, func(_ string, offset int64) bool { return offset == 0 })
+	fs.governor.raw = storage
 	release := sync.OnceFunc(func() { close(storage.gate) })
 	t.Cleanup(release)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -452,7 +452,7 @@ func TestUncachingReadJoinsUncachingFlight(t *testing.T) {
 	<-fs.diskCache.load.done
 	s := &probeStorage{ObjectStorage: storage, at: r.Offset, gate: make(chan struct{}),
 		answer: func(rc io.ReadCloser) (io.ReadCloser, error) { return rc, nil }}
-	fs.storage = s
+	fs.governor.raw = s
 	release := sync.OnceFunc(func() { close(s.gate) })
 	t.Cleanup(release)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -571,9 +571,9 @@ func (w *firstWriteSignal) Bytes() []byte {
 	return w.buf
 }
 
-// A streamed entry larger than a prefetch object buffers opens its own reader, and gets its
-// first bytes before a running range download that holds them sends its last; one of at
-// most that many bytes joins the download.
+// A streamed entry larger than a prefetch object buffers opens its own reader: a reader
+// gets its first bytes before a running range download that holds them sends its last, a
+// writer gets its range once it is read; one of at most that many bytes joins the download.
 func TestStreamedEntryPastPrefetchBufferReadsItself(t *testing.T) {
 	const max = minDiskPrefetchMemoryMax
 	for _, tc := range []struct {
@@ -595,8 +595,8 @@ func TestStreamedEntryPastPrefetchBufferReadsItself(t *testing.T) {
 			d.downloadMaxExtraWait = time.Hour
 			d.objectSplit.parts = 1
 			<-d.load.done
-			storage := &tailHeldStorage{ObjectStorage: fs.storage, gate: make(chan struct{})}
-			fs.storage = storage
+			storage := &tailHeldStorage{ObjectStorage: fs.governor.raw, gate: make(chan struct{})}
+			fs.governor.raw = storage
 			release := sync.OnceFunc(func() { close(storage.gate) })
 			t.Cleanup(release)
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -647,11 +647,14 @@ func TestStreamedEntryPastPrefetchBufferReadsItself(t *testing.T) {
 				require.NoError(t, stream.Close())
 				return
 			}
-			select {
-			case <-writer.first:
-			case <-ctx.Done():
-				t.Fatal("the writer got no bytes before the download's tail")
-			}
+			require.Never(t, func() bool {
+				select {
+				case <-writer.first:
+					return true
+				default:
+					return false
+				}
+			}, 100*time.Millisecond, time.Millisecond, "the writer runs once its range is read")
 			release()
 			require.NoError(t, <-result)
 			require.Equal(t, data[:tc.size], writer.Bytes())

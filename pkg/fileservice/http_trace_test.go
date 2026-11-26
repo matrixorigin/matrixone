@@ -199,7 +199,7 @@ func TestHTTPTraceLazyListUsesRequestScope(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, resp.Body.Close())
 	}}
-	seq := newObjectStorageHTTPTrace(storage).List(context.Background(), "")
+	seq := newGovernor(storage, 1).list(context.Background(), "")
 	require.Zero(t, calls)
 	for entry, err := range seq {
 		require.NoError(t, err)

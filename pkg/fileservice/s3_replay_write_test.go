@@ -127,11 +127,11 @@ func TestReplayWriteShortSuccessAndError(t *testing.T) {
 		for _, fail := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/fail-%t", mode, fail), func(t *testing.T) {
 				fs := newReplayWriteTestFS(t)
-				mock := &replayShortStorage{ObjectStorage: fs.storage, consume: 3}
+				mock := &replayShortStorage{ObjectStorage: fs.governor.raw, consume: 3}
 				if fail {
 					mock.fail = io.ErrUnexpectedEOF
 				}
-				fs.storage = mock
+				fs.governor.raw = mock
 				vector := IOVector{FilePath: "partial", Entries: []IOEntry{{Offset: 0, Size: 7, Data: []byte("1234567")}}}
 				var err error
 				if mode == "ordinary" {
@@ -144,7 +144,8 @@ func TestReplayWriteShortSuccessAndError(t *testing.T) {
 					require.Empty(t, fs.diskCache.objectFiles("partial"))
 				} else {
 					require.NoError(t, err)
-					require.Equal(t, []byte("123"), readReplayCache(t, fs, "partial"))
+					// The body is read from the entries before the request that sends it.
+					require.Equal(t, []byte("1234567"), readReplayCache(t, fs, "partial"))
 				}
 			})
 		}
@@ -234,7 +235,7 @@ func TestReplayWriteSkipCacheAndCanceledContext(t *testing.T) {
 	vector := IOVector{FilePath: "skip", Policy: SkipDiskCacheWrites, Entries: []IOEntry{{Offset: 0, Size: 4, Data: []byte("data")}}}
 	require.NoError(t, writeReplayableData(ctx, fs, vector))
 	require.Empty(t, fs.diskCache.objectFiles("skip"))
-	r, err := fs.storage.Read(ctx, fs.pathToKey("skip"), nil, nil)
+	r, err := fs.governor.raw.Read(ctx, fs.pathToKey("skip"), nil, nil)
 	require.NoError(t, err)
 	got, err := io.ReadAll(r)
 	require.NoError(t, err)
@@ -356,7 +357,7 @@ func TestReplayWriteCanceledDuringUpload(t *testing.T) {
 			fs := newReplayWriteTestFS(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			fs.storage = &replayCancelStorage{ObjectStorage: fs.storage, cancel: cancel}
+			fs.governor.raw = &replayCancelStorage{ObjectStorage: fs.governor.raw, cancel: cancel}
 			vector := IOVector{FilePath: "cancel-upload", Entries: []IOEntry{{Offset: 0, Size: 4, Data: []byte("data")}}}
 			var err error
 			if mode == "ordinary" {
@@ -366,39 +367,6 @@ func TestReplayWriteCanceledDuringUpload(t *testing.T) {
 			}
 			require.ErrorIs(t, err, context.Canceled)
 			require.Empty(t, fs.diskCache.objectFiles("cancel-upload"))
-		})
-	}
-}
-
-type replayMultipartStorage struct {
-	ObjectStorage
-	used bool
-}
-
-func (*replayMultipartStorage) SupportsParallelMultipart() bool { return true }
-func (s *replayMultipartStorage) WriteMultipartParallel(ctx context.Context, key string, r io.Reader, size *int64, opt *ParallelMultipartOption) error {
-	s.used = true
-	return s.ObjectStorage.Write(ctx, key, r, size, opt.Expire)
-}
-
-func TestReplayWriteParallelMultipart(t *testing.T) {
-	ctx := context.Background()
-	for _, mode := range []string{"ordinary", "replay"} {
-		t.Run(mode, func(t *testing.T) {
-			fs := newReplayWriteTestFS(t)
-			storage := &replayMultipartStorage{ObjectStorage: fs.storage}
-			fs.storage = storage
-			fs.parallelMode = ParallelForce
-			vector := IOVector{FilePath: "multipart", Entries: []IOEntry{{Offset: 0, Size: 4, Data: []byte("data")}}}
-			var err error
-			if mode == "ordinary" {
-				err = fs.Write(ctx, vector)
-			} else {
-				err = writeReplayableData(ctx, fs, vector)
-			}
-			require.NoError(t, err)
-			require.True(t, storage.used)
-			require.Equal(t, []byte("data"), readReplayCache(t, fs, "multipart"))
 		})
 	}
 }
@@ -427,7 +395,7 @@ func TestReplayWriteDiskCacheFailureParity(t *testing.T) {
 		_, cacheErr := os.Stat(cacheFile)
 		require.Error(t, cacheErr)
 		failures = append(failures, writeErr != nil)
-		r, err := fs.storage.Read(ctx, fs.pathToKey("readonly.mofscache/object"), nil, nil)
+		r, err := fs.governor.raw.Read(ctx, fs.pathToKey("readonly.mofscache/object"), nil, nil)
 		require.NoError(t, err)
 		got, err := io.ReadAll(r)
 		require.NoError(t, err)

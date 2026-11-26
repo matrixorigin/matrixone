@@ -36,7 +36,7 @@ func TestIndexPrefetchPreservesConcurrentDiskCacheFill(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			gated := newBlackBoxStorage(storage, func(_ string, offset int64) bool { return offset == 0 })
-			fs.storage = gated
+			fs.governor.raw = gated
 			unblock := sync.OnceFunc(func() { close(gated.gate) })
 			prefetchDone := make(chan struct{})
 			var prefetchErr error

@@ -65,13 +65,8 @@ func DoWithRetryContext[T any](
 		if sleep < maxRetryInterval {
 			sleep = time.Duration(float64(sleep) * retryIntervalFactor)
 		}
-		timer := time.NewTimer(sleep)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			err = ctx.Err()
+		if err = waitRetry(ctx, sleep); err != nil {
 			return
-		case <-timer.C:
 		}
 
 		numRetries++
@@ -82,4 +77,18 @@ func DoWithRetryContext[T any](
 			)
 		}
 	}
+}
+
+// waitRetry waits for d before a retry, freeing the room of the request ctx runs under
+// until it may make the request again.
+func waitRetry(ctx context.Context, d time.Duration) error {
+	r := pauseRequest(ctx)
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+	}
+	return r.resume(ctx)
 }

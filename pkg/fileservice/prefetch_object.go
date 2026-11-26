@@ -66,7 +66,18 @@ var (
 
 func (f *memoryPrefetchObject) span() (int64, int64) { return f.start, f.end }
 
-func (f *memoryPrefetchObject) joinable() bool { return true }
+// joinable reports whether reads join f: once its read holds room, or while its class has
+// room for it.
+func (f *memoryPrefetchObject) joinable() bool {
+	if f.requested.Load() {
+		return true
+	}
+	class := foregroundRequest
+	if f.background {
+		class = backgroundRequest
+	}
+	return f.src.g != nil && f.src.g.hasRoom(class)
+}
 
 func (f *memoryPrefetchObject) live() bool { return f.ctx == nil || f.ctx.Err() == nil }
 
@@ -134,8 +145,8 @@ func (p *filePrefetchObject) hold() {
 	p.mu.Unlock()
 }
 
-// release stops one a read started when no read uses it and its download is not
-// registered yet. It stops it under the lock joins take, so no join takes one that stops.
+// release stops one a read started when no read uses it and no part of its download
+// began. It stops it under the lock joins take, so no join takes one that stops.
 func (p *filePrefetchObject) release() {
 	if p.readStarted {
 		f := &p.d.prefetchObjects
@@ -144,7 +155,7 @@ func (p *filePrefetchObject) release() {
 	}
 	p.mu.Lock()
 	p.holds--
-	stop := p.readStarted && p.holds == 0 && p.download == nil
+	stop := p.readStarted && p.holds == 0 && (p.download == nil || !p.download.hasBegun())
 	p.mu.Unlock()
 	if stop {
 		p.cancelRead()

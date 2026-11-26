@@ -47,5 +47,6 @@ func TestDownloadConnsAreHalfTheConfiguredLimit(t *testing.T) {
 		CacheConfig{DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20), MemoryCapacity: ptrTo[toml.ByteSize](0)}, nil, false, false)
 	require.NoError(t, err)
 	defer fs.Close(ctx)
-	require.Equal(t, int64(50), fs.diskCache.conns.max)
+	require.Equal(t, 100, fs.governor.capacity)
+	require.Equal(t, 50, fs.governor.backgroundMax)
 }

@@ -16,18 +16,14 @@ package fileservice
 
 import (
 	"context"
-	"io"
 	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func filePrefetchOpener(fs *S3FS, file string) rangeOpener {
-	key := fs.pathToKey(file)
-	return func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
-		return fs.storage.Read(ctx, key, &start, &end)
-	}
+func filePrefetchOpener(fs *S3FS, file string) objectSource {
+	return fs.source(file)
 }
 
 // prefetchFileRange prefetches the bytes [start, end) of the object as a
@@ -43,8 +39,8 @@ func prefetchFileRange(ctx context.Context, fs *S3FS, start, end int64) error {
 // the download still runs.
 func TestFilePrefetchServesReadsWhileItDownloads(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 256<<10)
-	storage := &stallingStorage{ObjectStorage: fs.storage, after: 64 << 10, stalled: make(chan struct{}), release: make(chan struct{})}
-	fs.storage = storage
+	storage := &stallingStorage{ObjectStorage: fs.governor.raw, after: 64 << 10, stalled: make(chan struct{}), release: make(chan struct{})}
+	fs.governor.raw = storage
 	ctx := context.Background()
 	done := make(chan error, 1)
 	go func() {
@@ -69,8 +65,8 @@ func TestFilePrefetchServesReadsWhileItDownloads(t *testing.T) {
 // read after the object is recreated returns the new object.
 func TestDeleteCancelsFilePrefetch(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 256<<10)
-	storage := &stallingStorage{ObjectStorage: fs.storage, after: 4096, stalled: make(chan struct{}), release: make(chan struct{})}
-	fs.storage = storage
+	storage := &stallingStorage{ObjectStorage: fs.governor.raw, after: 4096, stalled: make(chan struct{}), release: make(chan struct{})}
+	fs.governor.raw = storage
 	ctx := context.Background()
 	done := make(chan error, 1)
 	go func() {

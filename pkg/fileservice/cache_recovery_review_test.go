@@ -147,7 +147,7 @@ func TestColumnReadPropagatesJoinedPrefetchSourceError(t *testing.T) {
 				fs.diskCache.downloadMaxExtraWait = time.Hour
 			}
 			s := &failOnceStorage{ObjectStorage: storage, fail: r.Offset, gate: make(chan struct{})}
-			fs.storage = s
+			fs.governor.raw = s
 			release := sync.OnceFunc(func() { close(s.gate) })
 			t.Cleanup(release)
 			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{
@@ -391,7 +391,7 @@ func TestReadStartedSplitDownloadWaitsForItsPart(t *testing.T) {
 	}
 }
 
-// A read that streams an entry gets its reader before the body is read.
+// A read that streams an entry gets its reader while the body is still being read.
 func TestReadCloserReturnsBeforeReadingBody(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -407,8 +407,8 @@ func TestReadCloserReturnsBeforeReadingBody(t *testing.T) {
 			// A streamed entry past the bytes a prefetch object buffers opens its own reader.
 			fs.diskCache.memoryPrefetchMax = 32
 			<-fs.diskCache.load.done
-			storage := &stallingStorage{ObjectStorage: fs.storage, stalled: make(chan struct{}), release: make(chan struct{})}
-			fs.storage = storage
+			storage := &stallingStorage{ObjectStorage: fs.governor.raw, stalled: make(chan struct{}), release: make(chan struct{})}
+			fs.governor.raw = storage
 			unblock := sync.OnceFunc(func() { close(storage.release) })
 			readDone := make(chan struct{})
 			defer func() {
@@ -433,15 +433,8 @@ func TestReadCloserReturnsBeforeReadingBody(t *testing.T) {
 			var got result
 			select {
 			case got = <-results:
-			case <-storage.stalled:
-				unblock()
-				got = <-results
-				if got.reader != nil {
-					_ = got.reader.Close()
-				}
-				t.Fatal("Read consumed the remote body before handing the ReadCloser to the caller")
 			case <-ctx.Done():
-				t.Fatal(ctx.Err())
+				t.Fatal("Read waited for the remote body before handing the ReadCloser to the caller")
 			}
 			require.NoError(t, got.err)
 			require.NotNil(t, got.reader)

@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -27,7 +26,6 @@ import (
 	"net/url"
 	"os"
 	gotrace "runtime/trace"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -449,76 +447,7 @@ func (a *AwsSDKv2) Write(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		content, readErr := io.ReadAll(io.LimitReader(r, 64*(1<<20)))
-		if readErr != nil {
-			return readErr
-		}
-		if len(content) == 0 {
-			size := int64(0)
-			return a.Write(ctx, key, bytes.NewReader(nil), &size, expire)
-		}
-
-		// multipart
-		output, createErr := DoWithRetryContext(ctx, "create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
-			return a.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-				Bucket:  ptrTo(a.bucket),
-				Key:     ptrTo(key),
-				Expires: expire,
-			})
-		}, maxRetryAttemps, IsRetryableError)
-		if createErr != nil {
-			return createErr
-		}
-
-		defer func() {
-			// abort
-			if err != nil {
-				abortErr := a.abortMultipartUpload(ctx, key, output.UploadId, awsMultipartAbortTimeout)
-				err = errors.Join(err, abortErr)
-			}
-		}()
-
-		// upload
-		num := int32(1)
-		completed := new(types.CompletedMultipartUpload)
-		for len(content) > 0 {
-			uploadOutput, uploadErr := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
-				recordS3PutRequest(ctx, a.perfCounterSets...)
-				return a.client.UploadPart(ctx, &s3.UploadPartInput{
-					Bucket:     ptrTo(a.bucket),
-					Key:        ptrTo(key),
-					PartNumber: &num,
-					UploadId:   output.UploadId,
-					Body:       bytes.NewReader(content),
-				})
-			}, maxRetryAttemps, IsRetryableError)
-			if uploadErr != nil {
-				return uploadErr
-			}
-			recordS3AcceptedBytes(ctx, int64(len(content)), a.perfCounterSets...)
-			completed.Parts = append(completed.Parts, types.CompletedPart{
-				ETag:       uploadOutput.ETag,
-				PartNumber: ptrTo(num),
-			})
-			num++
-			content, err = io.ReadAll(io.LimitReader(r, 64*(1<<20)))
-			if err != nil {
-				return err
-			}
-		}
-
-		// complete
-		_, err = DoWithRetryContext(ctx, "complete multipart upload", func() (*s3.CompleteMultipartUploadOutput, error) {
-			return a.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
-				Bucket:          ptrTo(a.bucket),
-				Key:             ptrTo(key),
-				UploadId:        output.UploadId,
-				MultipartUpload: completed,
-			})
-		}, maxRetryAttemps, IsRetryableError)
-		if err != nil {
-			return err
-		}
+		return writeParts(ctx, storageParts{a}, key, r, nil, &ParallelMultipartOption{Concurrency: 1, Expire: expire})
 
 	} else if *sizeHint < smallObjectThreshold || exclusiveWrite(ctx) {
 		data, err := io.ReadAll(r)
@@ -600,102 +529,62 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 	r io.Reader,
 	sizeHint *int64,
 	opt *ParallelMultipartOption,
-) (err error) {
-	defer wrapSizeMismatchErr(&err)
+) error {
+	return writeParts(ctx, storageParts{a}, key, r, sizeHint, opt)
+}
 
-	options := normalizeParallelOption(opt)
-	if sizeHint != nil {
-		r = &exactSizeReader{
-			R:        r,
-			Expected: *sizeHint,
-			Key:      key,
-		}
-		if *sizeHint < minMultipartPartSize {
-			return a.Write(ctx, key, r, sizeHint, options.Expire)
-		}
-		expectedParts := (*sizeHint + options.PartSize - 1) / options.PartSize
-		if expectedParts > maxMultipartParts {
-			return moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", expectedParts)
-		}
-	}
+var _ multipartStorage = new(AwsSDKv2)
 
-	parentCtx := ctx
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	firstPart, err := readParallelUploadPart(ctx, r, options.PartSize)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	if firstPart == nil && errors.Is(err, io.EOF) {
-		size := int64(0)
-		return a.Write(ctx, key, bytes.NewReader(nil), &size, options.Expire)
-	}
-	if errors.Is(err, io.EOF) && int64(firstPart.n) < minMultipartPartSize {
-		data := make([]byte, firstPart.n)
-		copy(data, firstPart.buf[:firstPart.n])
-		size := int64(firstPart.n)
-		releaseParallelUploadPart(firstPart)
-		return a.Write(ctx, key, bytes.NewReader(data), &size, options.Expire)
-	}
-
-	output, createErr := DoWithRetryContext(ctx, "create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
+func (a *AwsSDKv2) createMultipart(ctx context.Context, key string, expire *time.Time) (string, error) {
+	output, err := DoWithRetryContext(ctx, "create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
 		return a.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 			Bucket:  ptrTo(a.bucket),
 			Key:     ptrTo(key),
-			Expires: options.Expire,
+			Expires: expire,
 		})
 	}, maxRetryAttemps, IsRetryableError)
-	if createErr != nil {
-		releaseParallelUploadPart(firstPart)
-		return createErr
-	}
-
-	defer func() {
-		if err != nil {
-			abortErr := a.abortMultipartUpload(parentCtx, key, output.UploadId, awsMultipartAbortTimeout)
-			err = errors.Join(err, abortErr)
-		}
-	}()
-
-	parts, err := uploadParallelParts(ctx, cancel, r, options, firstPart, func(ctx context.Context, num int32, part *parallelUploadPart) (types.CompletedPart, error) {
-		uploadOutput, uploadErr := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
-			recordS3PutRequest(ctx, a.perfCounterSets...)
-			return a.client.UploadPart(ctx, &s3.UploadPartInput{
-				Bucket:     ptrTo(a.bucket),
-				Key:        ptrTo(key),
-				PartNumber: &num,
-				UploadId:   output.UploadId,
-				Body:       bytes.NewReader(part.buf[:part.n]),
-			})
-		}, maxRetryAttemps, IsRetryableError)
-		if uploadErr != nil {
-			return types.CompletedPart{}, uploadErr
-		}
-		recordS3AcceptedBytes(ctx, int64(part.n), a.perfCounterSets...)
-		return types.CompletedPart{ETag: uploadOutput.ETag, PartNumber: ptrTo(num)}, nil
-	})
 	if err != nil {
-		return err
+		return "", err
 	}
+	return aws.ToString(output.UploadId), nil
+}
 
-	slices.SortFunc(parts, func(a, b types.CompletedPart) int {
-		return cmp.Compare(*a.PartNumber, *b.PartNumber)
-	})
+func (a *AwsSDKv2) uploadPart(ctx context.Context, key, uploadID string, num int32, data []byte) (string, error) {
+	output, err := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
+		recordS3PutRequest(ctx, a.perfCounterSets...)
+		return a.client.UploadPart(ctx, &s3.UploadPartInput{
+			Bucket:     ptrTo(a.bucket),
+			Key:        ptrTo(key),
+			PartNumber: &num,
+			UploadId:   &uploadID,
+			Body:       bytes.NewReader(data),
+		})
+	}, maxRetryAttemps, IsRetryableError)
+	if err != nil {
+		return "", err
+	}
+	recordS3AcceptedBytes(ctx, int64(len(data)), a.perfCounterSets...)
+	return aws.ToString(output.ETag), nil
+}
 
-	_, err = DoWithRetryContext(ctx, "complete multipart upload", func() (*s3.CompleteMultipartUploadOutput, error) {
+func (a *AwsSDKv2) completeMultipart(ctx context.Context, key, uploadID string, parts []multipartPart) error {
+	completed := make([]types.CompletedPart, len(parts))
+	for i, p := range parts {
+		completed[i] = types.CompletedPart{ETag: ptrTo(p.etag), PartNumber: ptrTo(p.num)}
+	}
+	_, err := DoWithRetryContext(ctx, "complete multipart upload", func() (*s3.CompleteMultipartUploadOutput, error) {
 		return a.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 			Bucket:          ptrTo(a.bucket),
 			Key:             ptrTo(key),
-			UploadId:        output.UploadId,
-			MultipartUpload: &types.CompletedMultipartUpload{Parts: parts},
+			UploadId:        &uploadID,
+			MultipartUpload: &types.CompletedMultipartUpload{Parts: completed},
 		})
 	}, maxRetryAttemps, IsRetryableError)
-	if err != nil {
-		return err
-	}
+	return err
+}
 
-	return nil
+func (a *AwsSDKv2) abortMultipart(ctx context.Context, key, uploadID string) error {
+	return a.abortMultipartUpload(ctx, key, &uploadID, awsMultipartAbortTimeout)
 }
 
 func (a *AwsSDKv2) Read(

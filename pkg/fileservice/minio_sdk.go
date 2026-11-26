@@ -436,7 +436,7 @@ func (a *MinioSDK) Write(
 		}
 	}
 
-	if sizeHint != nil && (*sizeHint < smallObjectThreshold || exclusiveWrite(ctx)) {
+	if sizeHint != nil && (*sizeHint <= smallObjectThreshold || exclusiveWrite(ctx)) {
 		data, err := io.ReadAll(r)
 		if err != nil {
 			return err
@@ -455,16 +455,7 @@ func (a *MinioSDK) Write(
 		}
 
 	} else {
-		_, err = a.putObject(
-			ctx,
-			key,
-			r,
-			sizeHint,
-			expire,
-		)
-		if err != nil {
-			return err
-		}
+		return writeParts(ctx, storageParts{a}, key, r, sizeHint, &ParallelMultipartOption{Concurrency: 1, Expire: expire})
 	}
 
 	if sizeHint != nil && n.Load() != *sizeHint {
@@ -594,7 +585,10 @@ func (a *MinioSDK) putObject(
 	if sizeHint != nil {
 		size = *sizeHint
 	}
-	opts := minio.PutObjectOptions{}
+	opts := minio.PutObjectOptions{DisableMultipart: sizeHint != nil}
+	if expire != nil {
+		opts.Expires = *expire
+	}
 	if exclusiveWrite(ctx) {
 		opts.DisableMultipart = true
 		opts.SetMatchETagExcept("*")
@@ -614,6 +608,48 @@ func (a *MinioSDK) putObject(
 		err = moerr.NewFileAlreadyExistsNoCtx(key)
 	}
 	return info, err
+}
+
+var _ multipartStorage = new(MinioSDK)
+
+func (a *MinioSDK) createMultipart(ctx context.Context, key string, expire *time.Time) (string, error) {
+	opts := minio.PutObjectOptions{}
+	if expire != nil {
+		opts.Expires = *expire
+	}
+	return DoWithRetryContext(ctx, "create multipart upload", func() (string, error) {
+		return a.core.NewMultipartUpload(ctx, a.bucket, key, opts)
+	}, maxRetryAttemps, IsRetryableError)
+}
+
+func (a *MinioSDK) uploadPart(ctx context.Context, key, uploadID string, num int32, data []byte) (string, error) {
+	part, err := DoWithRetryContext(ctx, "upload part", func() (minio.ObjectPart, error) {
+		recordS3PutRequest(ctx, a.perfCounterSets...)
+		return a.core.PutObjectPart(ctx, a.bucket, key, uploadID, int(num), bytes.NewReader(data), int64(len(data)), minio.PutObjectPartOptions{})
+	}, maxRetryAttemps, IsRetryableError)
+	if err != nil {
+		return "", err
+	}
+	recordS3AcceptedBytes(ctx, int64(len(data)), a.perfCounterSets...)
+	return part.ETag, nil
+}
+
+func (a *MinioSDK) completeMultipart(ctx context.Context, key, uploadID string, parts []multipartPart) error {
+	completed := make([]minio.CompletePart, len(parts))
+	for i, p := range parts {
+		completed[i] = minio.CompletePart{PartNumber: int(p.num), ETag: p.etag}
+	}
+	_, err := DoWithRetryContext(ctx, "complete multipart upload", func() (minio.UploadInfo, error) {
+		return a.core.CompleteMultipartUpload(ctx, a.bucket, key, uploadID, completed, minio.PutObjectOptions{})
+	}, maxRetryAttemps, IsRetryableError)
+	return err
+}
+
+func (a *MinioSDK) abortMultipart(ctx context.Context, key, uploadID string) error {
+	_, err := DoWithRetryContext(ctx, "abort multipart upload", func() (bool, error) {
+		return true, a.core.AbortMultipartUpload(ctx, a.bucket, key, uploadID)
+	}, maxRetryAttemps, IsRetryableError)
+	return err
 }
 
 func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {

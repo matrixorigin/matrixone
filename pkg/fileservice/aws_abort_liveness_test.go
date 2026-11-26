@@ -20,7 +20,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -62,13 +61,15 @@ func (t *awsAbortObservingTransport) RoundTrip(r *http.Request) (*http.Response,
 }
 
 func awsCanceledMultipartWrite(ctx context.Context, sdk *AwsSDKv2, parallel bool) error {
+	data := bytes.Repeat([]byte("x"), int(minMultipartPartSize)+1)
 	if !parallel {
-		return sdk.Write(ctx, "key", strings.NewReader("nonempty"), nil, nil)
+		return sdk.WriteMultipartParallel(ctx, "key", bytes.NewReader(data), nil, &ParallelMultipartOption{
+			PartSize: minMultipartPartSize, Concurrency: 1,
+		})
 	}
-	data := bytes.Repeat([]byte("x"), int(minMultipartPartSize))
 	size := int64(len(data))
 	return sdk.WriteMultipartParallel(ctx, "key", bytes.NewReader(data), &size, &ParallelMultipartOption{
-		PartSize: size, Concurrency: 1,
+		PartSize: minMultipartPartSize, Concurrency: 2,
 	})
 }
 

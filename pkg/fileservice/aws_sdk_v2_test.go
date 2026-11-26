@@ -294,9 +294,12 @@ func TestAwsSDKv2WriteUnknownSizeMultipartCompletes(t *testing.T) {
 	defer server.Close()
 
 	sdk := newTestAWSClient(t, server)
-	err := sdk.Write(context.Background(), "large", bytes.NewReader([]byte("non-empty")), nil, nil)
+	data := bytes.Repeat([]byte("non-empty"), int(minMultipartPartSize/9)+1)
+	err := sdk.WriteMultipartParallel(context.Background(), "large", bytes.NewReader(data), nil, &ParallelMultipartOption{
+		PartSize: minMultipartPartSize, Concurrency: 1,
+	})
 	require.NoError(t, err)
-	require.Equal(t, 1, uploadedParts)
+	require.Equal(t, 2, uploadedParts)
 	require.True(t, completed)
 }
 
@@ -354,7 +357,7 @@ func TestAwsSDKv2WriteUnknownSizeEmptyCreatesObject(t *testing.T) {
 	exists, err := sdk.Exists(context.Background(), "empty")
 	require.NoError(t, err)
 	require.True(t, exists, "success must mean the zero-byte object exists")
-	fs := &S3FS{name: "s3", storage: sdk, rawStorage: sdk, ioMerger: NewIOMerger(), asyncUpdate: true, parallelMode: ParallelOff}
+	fs := &S3FS{name: "s3", governor: newGovernor(sdk, 1024), rawStorage: sdk, ioMerger: NewIOMerger(), asyncUpdate: true, parallelMode: ParallelOff}
 	vector := IOVector{FilePath: "from-fs", Entries: []IOEntry{{Offset: 0, Size: -1, ReaderForWrite: bytes.NewReader(nil)}}}
 	require.NoError(t, fs.Write(context.Background(), vector))
 	entry, err := fs.StatFile(context.Background(), "from-fs")
@@ -398,7 +401,10 @@ func TestAwsSDKv2WriteUnknownSizePartFailureAborts(t *testing.T) {
 	defer server.Close()
 
 	sdk := newTestAWSClient(t, server)
-	err := sdk.Write(context.Background(), "failed", strings.NewReader("non-empty"), nil, nil)
+	data := bytes.Repeat([]byte("non-empty"), int(minMultipartPartSize/9)+1)
+	err := sdk.WriteMultipartParallel(context.Background(), "failed", bytes.NewReader(data), nil, &ParallelMultipartOption{
+		PartSize: minMultipartPartSize, Concurrency: 1,
+	})
 	require.Error(t, err)
 	mu.Lock()
 	defer mu.Unlock()

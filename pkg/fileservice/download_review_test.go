@@ -117,15 +117,16 @@ func TestSplitReadReservesFirstConnectionForNeededPart(t *testing.T) {
 			fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 			d := fs.diskCache
 			<-d.load.done
-			bystanders := d.conns.max - 1
-			d.conns.held.Store(bystanders)
+			fs.governor.setCapacity(4)
+			bystanders := 3
+			defer occupy(t, fs.governor, foregroundRequest, bystanders)()
 
 			opened := make(chan int64, 2)
-			storage := newBlackBoxStorage(fs.storage, func(_ string, start int64) bool {
+			storage := newBlackBoxStorage(fs.governor.raw, func(_ string, start int64) bool {
 				opened <- start
 				return true
 			})
-			fs.storage = storage
+			fs.governor.raw = storage
 			unblock := sync.OnceFunc(func() { close(storage.gate) })
 			defer unblock()
 
@@ -146,11 +147,11 @@ func TestSplitReadReservesFirstConnectionForNeededPart(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
 			}
-			require.Equal(t, d.conns.max, d.conns.held.Load())
+			require.Equal(t, fs.governor.capacity, heldRoom(fs.governor))
 			unblock()
 			require.NoError(t, <-result)
-			require.Equal(t, bystanders, d.conns.held.Load())
-			require.Equal(t, offset, first, "with one connection available the read's part must start first")
+			require.Equal(t, bystanders, heldRoom(fs.governor))
+			require.Equal(t, offset, first, "with room for one the read's part must start first")
 		})
 	}
 }
@@ -176,14 +177,14 @@ func TestFileRangeRespectsZeroExtraWait(t *testing.T) {
 
 			open := make(chan struct{})
 			opened := sync.OnceFunc(func() { close(open) })
-			storage := newBlackBoxStorage(fs.storage, func(_ string, offset int64) bool {
+			storage := newBlackBoxStorage(fs.governor.raw, func(_ string, offset int64) bool {
 				if offset != 0 {
 					return false
 				}
 				opened()
 				return true
 			})
-			fs.storage = storage
+			fs.governor.raw = storage
 			unblock := sync.OnceFunc(func() { close(storage.gate) })
 			defer unblock()
 			const size = 192 << 10
@@ -276,14 +277,14 @@ func TestExactReadsShareLargeRange(t *testing.T) {
 			// Exact column reads skip the grid. Use distinct start offsets so the
 			// identical-request I/O merger leaves deduplication to the range owner.
 			started := make(chan struct{}, 2)
-			gate := newBlackBoxStorage(fs.storage, func(string, int64) bool {
+			gate := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool {
 				select {
 				case started <- struct{}{}:
 				default:
 				}
 				return true
 			})
-			fs.storage = gate
+			fs.governor.raw = gate
 			unblock := sync.OnceFunc(func() { close(gate.gate) })
 			defer unblock()
 			read := func(offset, size int64, result chan<- error) {
