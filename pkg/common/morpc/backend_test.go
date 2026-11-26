@@ -124,11 +124,96 @@ func TestSendFailureKeepsRequestOwnership(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	future, err := rb.Send(ctx, newTestMessage(1))
-	require.ErrorIs(t, err, backendClosed)
-	require.Nil(t, future)
-	require.Zero(t, released.Load(),
-		"a request that was not enqueued remains owned by the caller")
+	for _, sendCtx := range []context.Context{
+		ctx,
+		WithRequestRelease(ctx, func(Message) { released.Add(1) }),
+	} {
+		future, err := rb.Send(sendCtx, newTestMessage(1))
+		require.ErrorIs(t, err, backendClosed)
+		require.Nil(t, future)
+		require.Zero(t, released.Load(),
+			"a request that was not enqueued remains owned by the caller")
+	}
+}
+
+func TestOwnedRequestCancelsWhileQueuedBehindWriter(t *testing.T) {
+	blocker := newTestMessage(1)
+	request := newTestMessage(2)
+	writerEntered := make(chan struct{})
+	unblockWriter := make(chan struct{})
+	releaseWriter := sync.OnceFunc(func() { close(unblockWriter) })
+	released := make(chan Message, 2)
+	socketDir, err := os.MkdirTemp("", "mo-morpc-owned-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(socketDir)) })
+	unixFile := filepath.Join(socketDir, "rpc.sock")
+	addr := "unix://" + unixFile
+	app := newTestAppWithAddr(t, addr, unixFile,
+		func(conn goetty.IOSession, message interface{}, _ uint64) error {
+			return conn.Write(message, goetty.WriteOptions{Flush: true})
+		})
+	require.NoError(t, app.Start())
+	defer func() { require.NoError(t, app.Stop()) }()
+	testBackendSendWithoutServer(t, addr,
+		func(b *remoteBackend) {
+			defer releaseWriter()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			inFlight, err := b.Send(ctx, blocker)
+			require.NoError(t, err)
+			defer inFlight.Close()
+			select {
+			case <-writerEntered:
+			case <-ctx.Done():
+				t.Fatal("writer did not reach gate")
+			}
+
+			waitCtx, cancelWait := context.WithCancel(ctx)
+			defer cancelWait()
+			f, err := b.Send(WithRequestRelease(waitCtx, func(m Message) { released <- m }), request)
+			require.NoError(t, err)
+			done := make(chan error, 1)
+			go func() {
+				_, err := f.Get()
+				f.Close()
+				done <- err
+			}()
+			cancelWait()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-ctx.Done():
+				t.Fatal("queued request waited for the blocked writer")
+			}
+			select {
+			case <-released:
+				t.Fatal("request was released while still queued")
+			default:
+			}
+			releaseWriter()
+			select {
+			case m := <-released:
+				require.Same(t, request, m)
+			case <-ctx.Done():
+				t.Fatal("writer did not release the canceled request")
+			}
+			_, err = inFlight.Get()
+			require.NoError(t, err)
+			select {
+			case <-released:
+				t.Fatal("request released twice")
+			default:
+			}
+		},
+		WithBackendBatchSendSize(1),
+		WithBackendFilter(func(m Message, _ string) bool {
+			if m == blocker {
+				close(writerEntered)
+				<-unblockWriter
+			}
+			return true
+		}),
+	)
 }
 
 func TestSuccessfulSendReleasesOwnedRequest(t *testing.T) {

@@ -383,10 +383,7 @@ func TestGetLockHolderRemoteDoesNotBlockAllocatorEpochPurge(t *testing.T) {
 			remote.allocatorStateProvider = l.allocatorStateSnapshot
 			remote.allocatorBindChangedHandler = l.handleBindChangedFromAllocator
 
-			l.allocatorVersionMu.Lock()
-			l.lastAllocatorID = oldAllocator.id
-			l.lastAllocatorVersion = oldAllocator.version
-			l.allocatorVersionMu.Unlock()
+			l.lastAllocatorState.Store(&oldAllocator)
 			l.tableGroups.set(bind.Group, bind.Table, remote)
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -587,7 +584,7 @@ func TestForceRefreshLockTableBinds(t *testing.T) {
 		_, err = owner.Lock(ctx, table, newTestRows(3), fresh, opts)
 		require.NoError(t, err)
 		_, err = owner.Lock(ctx, table, newTestRows(1), localID, opts)
-		require.ErrorIs(t, err, ErrLockTableBindChanged)
+		require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
 		_, err = source.Lock(ctx, table, newTestRows(2), remoteID, opts)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged), "%v", err)
 		require.NoError(t, source.Unlock(ctx, remoteID, timestamp.Timestamp{}))
