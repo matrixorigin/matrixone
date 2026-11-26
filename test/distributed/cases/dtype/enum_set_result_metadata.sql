@@ -65,4 +65,11 @@ set @n=1;
 -- @metacmp(true)
 execute fields using @n;
 deallocate prepare fields;
+
+-- Ordinary IF over explicitly typed enum ordinals still materializes a
+-- numeric column; the internal UPDATE guard must not change CTAS schema.
+create table if_input (k int primary key);
+insert into if_input values (1),(2);
+create table if_ctas as select k,if(k=1,cast(1 as enum('blue','red')),cast(2 as enum('blue','red'))) as v from if_input;
+select k from if_ctas where v=k and v+0=k and exists (select 1 from information_schema.columns where table_schema='jdbc_enum_set_fields' and table_name='if_ctas' and column_name='v' and column_type='smallint unsigned') order by k;
 drop database jdbc_enum_set_fields;

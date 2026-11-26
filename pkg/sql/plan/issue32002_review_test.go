@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,6 +28,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReplaceValuesSQLModeLookupDoesNotScaleWithRows(t *testing.T) {
+	for _, mode := range []string{"STRICT_TRANS_TABLES", ""} {
+		for _, verb := range []string{"replace", "insert"} {
+			lookups := func(rowCount int) int {
+				proc := newPlanTestProcess(t)
+				count := 0
+				proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+					if name == "sql_mode" {
+						count++
+						return mode, nil
+					}
+					return nil, nil
+				})
+				mock := NewMockOptimizer(false, proc)
+				mock.ctxt.SetSqlModeOverride(mode)
+				created, err := runOneStmt(mock, t, "create table values_mode_t (id int primary key, amount decimal(6,2), delivery datetime, info char(24))")
+				require.NoError(t, err)
+				table := created.GetDdl().GetCreateTable().TableDef
+				table.TblId = 33282
+				table.TableType = catalog.SystemOrdinaryRel
+				table.Cols = append(table.Cols, &planpb.ColDef{
+					Name: catalog.Row_ID, Typ: types.T_Rowid.ToType().PlanType(), Hidden: true,
+				})
+				mock.ctxt.tables["values_mode_t"] = table
+				mock.ctxt.objects["values_mode_t"] = &planpb.ObjectRef{
+					SchemaName: "tpch", ObjName: "values_mode_t", Obj: 33282,
+				}
+				count = 0
+				rows := make([]string, rowCount)
+				for i := range rows {
+					rows[i] = fmt.Sprintf("(%d,12.34,'2026-11-26 01:00:00','ABCDEFGHIJKLMNOPQRSTUVWX')", i+1)
+				}
+				_, err = runOneStmt(mock, t, verb+" into values_mode_t values "+strings.Join(rows, ","))
+				require.NoError(t, err)
+				return count
+			}
+			single, many := lookups(1), lookups(32)
+			require.LessOrEqual(t, many-single, 2, "%s SQL mode resolution should be bounded per VALUES plan", verb)
+		}
+	}
+}
 
 type issue32002WarningSink struct{ codes []uint16 }
 
