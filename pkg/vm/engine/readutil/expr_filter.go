@@ -16,6 +16,7 @@ package readutil
 
 import (
 	"context"
+	"math"
 	"sort"
 	"time"
 
@@ -28,6 +29,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
+
+// NaN bounds and absent float zone maps cannot exclude finite candidates.
+func floatZoneMapUnknown(zm index.ZM) bool {
+	if !zm.IsInited() {
+		return true
+	}
+	switch zm.GetType() {
+	case types.T_float32:
+		return math.IsNaN(float64(types.DecodeFloat32(zm.GetMinBuf()))) || math.IsNaN(float64(types.DecodeFloat32(zm.GetMaxBuf())))
+	case types.T_float64:
+		return math.IsNaN(types.DecodeFloat64(zm.GetMinBuf())) || math.IsNaN(types.DecodeFloat64(zm.GetMaxBuf()))
+	}
+	return false
+}
 
 type FastFilterOp func(*objectio.ObjectStats) (bool, error)
 type LoadOp = func(
@@ -982,12 +997,14 @@ func compileFilterExpr(
 			}
 			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			_, isSorted := isSortedKey(colDef)
+			isFloat := types.T(colDef.Typ.Id).IsFloat()
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() || !obj.SortKeyZoneMap().IsInited() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().AnyLEByValue(vals[0]), nil
+					zm := obj.SortKeyZoneMap()
+					return (isFloat && floatZoneMapUnknown(zm)) || zm.AnyLEByValue(vals[0]), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -998,13 +1015,13 @@ func compileFilterExpr(
 				}
 				dataMeta := meta.MustDataMeta()
 				zm := dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				return !zm.IsInited() || zm.AnyLEByValue(vals[0]), nil
+				return !zm.IsInited() || (isFloat && floatZoneMapUnknown(zm)) || zm.AnyLEByValue(vals[0]), nil
 			}
 			blockFilterOp = func(
 				blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				ok := !zm.IsInited() || zm.AnyLEByValue(vals[0])
+				ok := !zm.IsInited() || (isFloat && floatZoneMapUnknown(zm)) || zm.AnyLEByValue(vals[0])
 				if orderedBlockSearch(isSorted, colDef) {
 					return !ok, ok, nil
 				}
@@ -1018,12 +1035,14 @@ func compileFilterExpr(
 			}
 			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			_, isSorted := isSortedKey(colDef)
+			isFloat := types.T(colDef.Typ.Id).IsFloat()
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() || !obj.SortKeyZoneMap().IsInited() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().AnyGEByValue(vals[0]), nil
+					zm := obj.SortKeyZoneMap()
+					return (isFloat && floatZoneMapUnknown(zm)) || zm.AnyGEByValue(vals[0]), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -1034,13 +1053,13 @@ func compileFilterExpr(
 				}
 				dataMeta := meta.MustDataMeta()
 				zm := dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				return !zm.IsInited() || zm.AnyGEByValue(vals[0]), nil
+				return !zm.IsInited() || (isFloat && floatZoneMapUnknown(zm)) || zm.AnyGEByValue(vals[0]), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				return false, !zm.IsInited() || zm.AnyGEByValue(vals[0]), nil
+				return false, !zm.IsInited() || (isFloat && floatZoneMapUnknown(zm)) || zm.AnyGEByValue(vals[0]), nil
 			}
 			if orderedBlockSearch(isSorted, colDef) {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
@@ -1513,12 +1532,14 @@ func compileFilterExpr(
 			_ = vec.UnmarshalBinary(val)
 			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
+			isFloat := types.T(colDef.Typ.Id).IsFloat()
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() || !obj.SortKeyZoneMap().IsInited() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().AnyIn(vec), nil
+					zm := obj.SortKeyZoneMap()
+					return (isFloat && floatZoneMapUnknown(zm)) || zm.AnyIn(vec), nil
 				}
 			}
 			if isPK && !isFloatColumn(colDef) {
@@ -1536,7 +1557,7 @@ func compileFilterExpr(
 				}
 				dataMeta := meta.MustDataMeta()
 				zm := dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				return !zm.IsInited() || zm.AnyIn(vec), nil
+				return !zm.IsInited() || (isFloat && floatZoneMapUnknown(zm)) || zm.AnyIn(vec), nil
 			}
 			vecHasNull := vec.IsConstNull() || vec.GetNulls().Any()
 			var maxVal []byte
@@ -1553,7 +1574,8 @@ func compileFilterExpr(
 				if orderedBlockSearch(isSorted, colDef) && maxVal != nil && !zm.AnyLEByValue(maxVal) {
 					return true, false, nil
 				}
-				if !zm.AnyIn(vec) {
+				unknown := isFloat && floatZoneMapUnknown(zm)
+				if !unknown && !zm.AnyIn(vec) {
 					return false, false, nil
 				}
 				if isPK && !isFloatColumn(colDef) {
@@ -1562,7 +1584,10 @@ func compileFilterExpr(
 					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
 						return false, false, err
 					}
-					lowerBound, upperBound := zm.SubVecIn(vec)
+					lowerBound, upperBound := 0, vec.Length()
+					if !unknown {
+						lowerBound, upperBound = zm.SubVecIn(vec)
+					}
 					if exist := blkBfIdx.MayContainsAny(vec, lowerBound, upperBound); !exist {
 						return false, false, nil
 					}

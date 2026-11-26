@@ -168,10 +168,14 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertUkCtx{
-		Columns:  slices.Clone(ctx.Columns),
-		PkColumn: ctx.PkColumn,
-		PkType:   ctx.PkType,
-		UkType:   ctx.UkType,
+		Columns:     slices.Clone(ctx.Columns),
+		PkColumn:    ctx.PkColumn,
+		PkType:      ctx.PkType,
+		UkType:      ctx.UkType,
+		OrderedOdku: ctx.OrderedOdku,
+	}
+	if ctx.OdkuActions != nil {
+		newCtx.OdkuActions = proto.Clone(ctx.OdkuActions).(*plan.OdkuActionCtx)
 	}
 
 	return newCtx
@@ -221,8 +225,6 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 	}
 	newCtx := &plan.DedupJoinCtx{
 		OldColList:         slices.Clone(ctx.OldColList),
-		UpdateColIdxList:   slices.Clone(ctx.UpdateColIdxList),
-		UpdateColExprList:  DeepCopyExprList(ctx.UpdateColExprList),
 		OldColCaptureList:  slices.Clone(ctx.OldColCaptureList),
 		DedupBuildKeepLast: ctx.DedupBuildKeepLast,
 	}
@@ -248,6 +250,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		Children:        slices.Clone(node.Children),
 		JoinType:        node.JoinType,
 		IsRightJoin:     node.IsRightJoin,
+		FilterIsBarrier: node.FilterIsBarrier,
 		BindingTags:     slices.Clone(node.BindingTags),
 		Limit:           DeepCopyExpr(node.Limit),
 		Offset:          DeepCopyExpr(node.Offset),

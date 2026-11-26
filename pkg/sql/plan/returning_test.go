@@ -165,13 +165,19 @@ func TestRecordReturningIrregularMaintenance(t *testing.T) {
 		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id"},
 	}
 	builder := NewQueryBuilder(planpb.Query_DELETE, NewMockCompilerContext(true), false, true)
-	builder.returningSourceStep = 7
+	builder.qry.Nodes = []*planpb.Node{{NodeType: planpb.Node_SINK, ProjectList: []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(10), makePlan2Int64ConstExprWithType(20), makePlan2Int64ConstExprWithType(30),
+		{Typ: tableDef.Cols[0].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 9, ColPos: 3}}},
+	}}}
+	builder.qry.Steps = []int32{0}
+	builder.returningSourceStep = 0
 
 	require.NoError(t, builder.recordReturningIrregularMaintenance(nil, tableDef, objRef, 3, false))
 	require.NoError(t, builder.recordReturningIrregularMaintenance(indexes, tableDef, objRef, 3, true))
-	require.Equal(t, int32(7), builder.irregularMaintSourceStep)
-	require.Equal(t, int32(7), builder.irregularMaintDeleteStep)
-	require.Equal(t, int32(3), builder.irregularMaintDeletePkPos)
+	require.Equal(t, int32(0), builder.irregularMaintSourceStep)
+	require.Equal(t, int32(0), builder.irregularMaintDeleteStep)
+	require.Equal(t, [2]int32{9, 3}, builder.irregularMaintDeletePkRef)
+	require.Equal(t, int32(-1), builder.irregularMaintDeletePkPos)
 	require.Equal(t, indexes, builder.irregularMaintIndexes)
 	require.Equal(t, objRef, builder.irregularMaintObjRef)
 	require.True(t, builder.irregularMaintSkipInsert)

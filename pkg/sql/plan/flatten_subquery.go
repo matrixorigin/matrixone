@@ -97,6 +97,9 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 	if expr == nil {
 		return nodeID, nil, nil
 	}
+	if builder.odkuValidationParams != nil {
+		return nodeID, expr, nil
+	}
 	var err error
 
 	switch exprImpl := expr.Expr.(type) {

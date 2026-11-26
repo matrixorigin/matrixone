@@ -15,6 +15,7 @@
 package keycodec
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
@@ -37,6 +38,38 @@ func TestFloat32CodecContract(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
 	require.Equal(t, uint32(0), unscaled.CanonicalBits(negativeZero))
 	require.Equal(t, scaled.CanonicalBits(float32(0)), scaled.CanonicalBits(negativeZero))
+}
+
+func TestFloat32CanonicalRangeContainsCompleteFiniteClass(t *testing.T) {
+	packer := types.NewPacker()
+	defer packer.Close()
+	packed := func(value float32) []byte {
+		packer.Reset()
+		packer.EncodeFloat32(value)
+		return append([]byte(nil), packer.Bytes()...)
+	}
+	for _, scale := range []int32{0, 1, 2, 7, 23} {
+		codec := NewFloat32Codec(scale)
+		for _, value := range []float32{0, math.Float32frombits(1 << 31), math.SmallestNonzeroFloat32, -math.SmallestNonzeroFloat32, 1.234, -1.234, 0.005, -0.005, math.MaxFloat32, -math.MaxFloat32} {
+			lower, upper, ok := codec.FiniteEqualRange(value)
+			require.True(t, ok, "scale=%d value=%g", scale, value)
+			want := codec.CanonicalBits(value)
+			require.Equal(t, want, codec.CanonicalBits(lower))
+			require.Equal(t, want, codec.CanonicalBits(upper))
+			require.NotEqual(t, want, codec.CanonicalBits(math.Nextafter32(lower, float32(math.Inf(-1)))))
+			require.NotEqual(t, want, codec.CanonicalBits(math.Nextafter32(upper, float32(math.Inf(1)))))
+			require.LessOrEqual(t, bytes.Compare(packed(lower), packed(value)), 0)
+			require.LessOrEqual(t, bytes.Compare(packed(value), packed(upper)), 0)
+			if want == 0 {
+				require.LessOrEqual(t, bytes.Compare(packed(lower), packed(math.Float32frombits(1<<31))), 0)
+				require.GreaterOrEqual(t, bytes.Compare(packed(upper), packed(0)), 0)
+			}
+		}
+		for _, value := range []float32{float32(math.Inf(-1)), float32(math.Inf(1)), math.Float32frombits(0x7fa00001), math.Float32frombits(0xffc00001)} {
+			_, _, ok := codec.FiniteEqualRange(value)
+			require.False(t, ok)
+		}
+	}
 }
 
 func TestSupportsExactRawRuntimeFilter(t *testing.T) {

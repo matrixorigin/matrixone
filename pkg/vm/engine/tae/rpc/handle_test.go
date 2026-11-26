@@ -21,9 +21,24 @@ import (
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEffectivePKCheckPreservesExplicitPolicies(t *testing.T) {
+	for _, tc := range []struct {
+		mode txn.TxnMode
+		want []cmd_util.PKCheckType
+	}{
+		{txn.TxnMode_Pessimistic, []cmd_util.PKCheckType{cmd_util.IncrementalDedup, cmd_util.FullSkipWorkspaceDedup, cmd_util.FullDedup, cmd_util.SkipAllDedup}},
+		{txn.TxnMode_Optimistic, []cmd_util.PKCheckType{cmd_util.FullSkipWorkspaceDedup, cmd_util.FullSkipWorkspaceDedup, cmd_util.FullDedup, cmd_util.SkipAllDedup}},
+	} {
+		for requested, want := range tc.want {
+			require.Equal(t, want, effectivePKCheck(txn.TxnMeta{Mode: tc.mode}, cmd_util.PKCheckType(requested)), "mode=%v requested=%d", tc.mode, requested)
+		}
+	}
+}
 
 type closeErrorQueryClient struct {
 	client.QueryClient

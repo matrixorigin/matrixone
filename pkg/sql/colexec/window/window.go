@@ -86,6 +86,11 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 		}
 	}
 
+	if window.streamingRowNumber() {
+		ctr.runtimeFrames = runtimeFrames
+		ctr.ordinalCount = 0
+		return nil
+	}
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]colexec.ExprEvalVector, len(window.Aggs))
 		for i, ag := range window.Aggs {
@@ -192,6 +197,13 @@ func (ctr *container) frameAt(idx int, planned *plan.FrameClause) *plan.FrameCla
 }
 
 func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
+	if window.streamingRowNumber() {
+		result, err := window.callRowNumber(proc)
+		if mpool.AllocationFailureReasonOf(err) == mpool.AllocationFailureCapacity && !mpool.IsMPoolCapacityFailure(err) {
+			err = moerr.NewResourceExhaustedf(proc.Ctx, "ROW_NUMBER memory budget exceeded")
+		}
+		return result, err
+	}
 	analyzer := window.OpAnalyzer
 
 	var err error

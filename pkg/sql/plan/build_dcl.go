@@ -412,6 +412,22 @@ func prepareSchemaRefWithSnapshot(
 	return ref
 }
 
+func samePrepareSchema(left, right *plan.ObjectRef) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	sameTenant := (left.PubInfo == nil && right.PubInfo == nil) ||
+		(left.PubInfo != nil && right.PubInfo != nil &&
+			left.PubInfo.GetTenantId() == right.PubInfo.GetTenantId())
+	sameSubscription := left.SubscriptionName == right.SubscriptionName
+	sameSnapshot := proto.Equal(left.Snapshot, right.Snapshot)
+	sameID := sameTenant && sameSubscription && sameSnapshot &&
+		left.Obj != 0 && right.Obj != 0 && left.Db == right.Db && left.Obj == right.Obj
+	sameName := sameTenant && sameSubscription && sameSnapshot &&
+		left.SchemaName == right.SchemaName && left.ObjName == right.ObjName
+	return sameID || sameName
+}
+
 func appendPrepareSchemas(schemas []*plan.ObjectRef, refs ...*plan.ObjectRef) []*plan.ObjectRef {
 	for _, ref := range refs {
 		if ref == nil {
@@ -419,16 +435,7 @@ func appendPrepareSchemas(schemas []*plan.ObjectRef, refs ...*plan.ObjectRef) []
 		}
 		duplicate := false
 		for _, schema := range schemas {
-			sameTenant := (schema.PubInfo == nil && ref.PubInfo == nil) ||
-				(schema.PubInfo != nil && ref.PubInfo != nil &&
-					schema.PubInfo.GetTenantId() == ref.PubInfo.GetTenantId())
-			sameSubscription := schema.SubscriptionName == ref.SubscriptionName
-			sameSnapshot := proto.Equal(schema.Snapshot, ref.Snapshot)
-			sameID := sameTenant && sameSubscription && sameSnapshot &&
-				schema.Obj != 0 && ref.Obj != 0 && schema.Db == ref.Db && schema.Obj == ref.Obj
-			sameName := sameTenant && sameSubscription && sameSnapshot &&
-				schema.SchemaName == ref.SchemaName && schema.ObjName == ref.ObjName
-			if sameID || sameName {
+			if samePrepareSchema(schema, ref) {
 				duplicate = true
 				break
 			}

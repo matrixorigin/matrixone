@@ -76,6 +76,11 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 			wantBatchRows: []int{12, 1, 12, 1},
 		},
 		{
+			name: "left-unique-continuation", joinType: plan.Node_LEFT,
+			probeKeys: []int64{11, 99, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12}, usePK: true,
+			wantBatchRows: []int{13, 1},
+		},
+		{
 			name: "left-residual-continuation", joinType: plan.Node_LEFT, probeKeys: []int64{1, 2, 3, 4},
 			useResidual: true, wantBatchRows: []int{11, 5},
 		},
@@ -119,7 +124,7 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 			t.Cleanup(func() { probeChild.Free(proc, false, nil) })
 			arg := &HashJoin{
 				JoinType: tc.joinType, JoinMapTag: 1, NumCPU: 1, IsMerger: true,
-				HashOnPK: tc.usePK, IsRightJoin: tc.usePK,
+				HashOnPK: tc.usePK, IsRightJoin: tc.joinType == plan.Node_RIGHT,
 				LeftTypes: []types.Type{keyType}, RightTypes: []types.Type{keyType, keyType, textType},
 				ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 1}, {Rel: 1, Pos: 2}},
 				EqConds:    [][]*plan.Expr{{key}, {key}},
@@ -263,6 +268,12 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				want[joinedRow{4, -1}] = true
 			} else if !tc.usePK {
 				want[joinedRow{2, -1}] = true
+			} else if tc.joinType == plan.Node_LEFT {
+				for _, key := range tc.probeKeys {
+					if key >= int64(buildRows) {
+						want[joinedRow{key, -1}] = true
+					}
+				}
 			}
 
 			var batchRows []int
@@ -278,6 +289,9 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				}
 				out := result.Batch
 				batchRows = append(batchRows, out.RowCount())
+				for _, vec := range out.Vecs {
+					require.Equal(t, out.RowCount(), vec.Length())
+				}
 				require.LessOrEqual(t, int64(len(out.Vecs[2].GetArea())), mpool.MaxAllocationSize())
 				keys := vector.MustFixedColNoTypeCheck[int64](out.Vecs[0])
 				ids := vector.MustFixedColNoTypeCheck[int64](out.Vecs[1])

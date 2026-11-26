@@ -17,10 +17,24 @@ package colexec
 import (
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
+
+// ValidateDedupAction rejects plans from the removed grouped ODKU path before
+// either side starts producing data. Ordered updates have a single action owner.
+func ValidateDedupAction(action plan.Node_OnDuplicateAction) error {
+	switch action {
+	case plan.Node_FAIL, plan.Node_IGNORE:
+		return nil
+	case plan.Node_UPDATE:
+		return moerr.NewNotSupportedNoCtx("ODKU requires the ordered action operator")
+	default:
+		return moerr.NewInternalErrorNoCtx("invalid dedup action")
+	}
+}
 
 // FormatDedupKey formats a duplicate key from the expression vector used by a
 // DEDUP join. FLOAT/DOUBLE primary-key identity expressions are serial(...)

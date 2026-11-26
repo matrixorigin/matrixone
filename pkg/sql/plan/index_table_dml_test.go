@@ -15,14 +15,55 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIrregularDeleteKeyUsesPhysicalSinkChild(t *testing.T) {
+	for _, keyPos := range []int32{1, 5} {
+		t.Run(fmt.Sprintf("original_column_%d", keyPos), func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+			bindCtx := NewBindContext(builder, nil)
+			leaf := builder.appendNode(&planpb.Node{NodeType: planpb.Node_VALUE_SCAN}, bindCtx)
+			const tag = int32(17)
+			exprs := make([]*planpb.Expr, 0, 6)
+			for i := range 6 {
+				exprs = append(exprs, makePlan2Int64ConstExprWithType(int64(100+i)))
+			}
+			producer := builder.appendNode(&planpb.Node{
+				NodeType: planpb.Node_PROJECT, Children: []int32{leaf},
+				BindingTags: []int32{tag}, ProjectList: exprs,
+			}, bindCtx)
+			sink := appendSinkNodeWithTag(builder, bindCtx, producer, tag)
+			step := builder.appendStep(sink)
+			require.NoError(t, builder.recordIrregularDeleteKey(step, keyPos))
+			// Other consumers retain additional physical columns that are absent
+			// from this sink's compact metadata projection. All have the same type.
+			refs := map[[2]int32]int{{tag, 0}: 1, {tag, 2}: 1, {tag, 4}: 1}
+			needed := map[[2]int32]bool{{step, keyPos}: true}
+			_, err := builder.remapAllColRefs(sink, step, refs, needed, make(map[[2]int32]int))
+			require.NoError(t, err)
+			require.Len(t, builder.qry.Nodes[sink].ProjectList, 1)
+			physicalPos := builder.irregularMaintDeletePkPos
+			require.Positive(t, physicalPos)
+			key, err := builder.appendIrregularDeleteKey(bindCtx)
+			require.NoError(t, err)
+			builder.appendStep(key)
+			reduceSinkSinkScanNodes(builder.qry)
+			// Sink reduction removes the identity scan, but leaves the executable
+			// key projection selecting the correct physical producer column.
+			require.Equal(t, []int32{producer}, builder.qry.Nodes[key].Children)
+			selected := builder.qry.Nodes[key].ProjectList[0].GetCol().ColPos
+			require.Equal(t, physicalPos, selected)
+			require.Equal(t, int64(100+keyPos), builder.qry.Nodes[producer].ProjectList[selected].GetLit().GetI64Val())
+		})
+	}
+}
 
 // only use in developing
 func TestSingleSQLQuery(t *testing.T) {
@@ -132,7 +173,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMater
 	require.True(t, forced)
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, nil,
 	)
 	require.NoError(t, err)
 }
@@ -164,7 +205,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *t
 	delete(colName2Idx, tableDef.Name+".dname")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = dname")
@@ -188,6 +229,12 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	require.NoError(t, err)
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
+	// This fixture calls the append helper directly, bypassing bindTable's
+	// normal initialization of the base table's derived column map.
+	tableDef.Name2ColIndex = make(map[string]int32, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		tableDef.Name2ColIndex[col.Name] = int32(i)
+	}
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
@@ -197,15 +244,17 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	for i, idxDef := range dmlCtx.tableDefs[0].Indexes {
 		if idxDef.Unique && len(idxDef.Parts) > 1 {
 			skipUniqueIdx[i] = false
-			lockColName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
-			colName2Idx[lockColName] = 0
 		}
 	}
+
+	// Preserve a real, correctly typed lock key while testing the later
+	// missing source-column check in unique-index projection.
+	require.NoError(t, builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, builder.qry.Nodes[lastNodeID]))
 
 	delete(colName2Idx, tableDef.Name+".job")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = job")
@@ -244,7 +293,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	delete(colName2Idx, tableDef.Name+".job")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = job")
@@ -268,6 +317,12 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t
 	require.NoError(t, err)
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
+	// This fixture calls the append helper directly, bypassing bindTable's
+	// normal initialization of the base table's derived column map.
+	tableDef.Name2ColIndex = make(map[string]int32, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		tableDef.Name2ColIndex[col.Name] = int32(i)
+	}
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
@@ -277,7 +332,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t
 	delete(colName2Idx, tableDef.Name+".loc")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = loc")

@@ -40,9 +40,9 @@ func hasVersionedPrepareParamMetadata(param pb.ReadParam) bool {
 func (s *service) validateRemoteReadCompatibility(
 	ctx context.Context,
 	shard pb.TableShard,
-	param pb.ReadParam,
+	req ReadRequest,
 ) error {
-	if !hasVersionedPrepareParamMetadata(param) {
+	if !req.RequireSameCommit && !hasVersionedPrepareParamMetadata(req.Param) {
 		return nil
 	}
 
@@ -55,7 +55,8 @@ func (s *service) validateRemoteReadCompatibility(
 		clusterservice.NewServiceIDSelector(target),
 		func(cn metadata.CNService) bool {
 			found = true
-			compatible = cn.CommitID == version.CommitID
+			compatible = cn.CommitID == version.CommitID &&
+				(!req.RequireSameCommit || (version.CommitID != "" && version.CommitID != "unknown"))
 			return false
 		},
 	)
@@ -65,10 +66,14 @@ func (s *service) validateRemoteReadCompatibility(
 	if found && compatible {
 		return nil
 	}
+	feature := "prepared-parameter metadata"
+	if req.RequireSameCommit {
+		feature = "statement-key candidate filters"
+	}
 	return moerr.NewInternalErrorf(
 		ctx,
-		"cannot send prepared-parameter metadata to shard replica %s with an incompatible or unknown commit",
-		target,
+		"cannot send %s to shard replica %s with an incompatible or unknown commit",
+		feature, target,
 	)
 }
 
@@ -144,7 +149,7 @@ func (s *service) Read(
 			if opts.adjust != nil {
 				opts.adjust(shard)
 			}
-			if e := s.validateRemoteReadCompatibility(ctx, *shard, req.Param); e != nil {
+			if e := s.validateRemoteReadCompatibility(ctx, *shard, req); e != nil {
 				return false, e
 			}
 		}
@@ -176,6 +181,16 @@ func (s *service) Read(
 		v2.ReplicaRemoteReadCounter.Add(float64(remote))
 
 		var buffer *morpc.Buffer
+		applyFailed := false
+		apply := func(data []byte) {
+			if applyFailed {
+				return
+			}
+			if applyErr := req.Apply(data); applyErr != nil {
+				err = errors.Join(err, applyErr)
+				applyFailed = true
+			}
+		}
 		for _, i := range selected.local {
 			if opts.adjust != nil {
 				opts.adjust(&selected.values[i])
@@ -195,7 +210,7 @@ func (s *service) Read(
 				buffer,
 			)
 			if e == nil {
-				req.Apply(v)
+				apply(v)
 				continue
 			}
 			s.maybeRemoveReadCache(req.TableID, e)
@@ -211,7 +226,7 @@ func (s *service) Read(
 				resp, e = s.unwrapError(resp, e)
 			}
 			if e == nil {
-				req.Apply(resp.ShardRead.Payload)
+				apply(resp.ShardRead.Payload)
 				s.remote.pool.ReleaseResponse(resp)
 			} else {
 				s.maybeRemoveReadCache(req.TableID, e)

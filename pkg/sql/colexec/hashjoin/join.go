@@ -557,6 +557,10 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 	leftRowCnt := ctr.leftBat.RowCount()
 	resRowCnt := 0
 	outputLimit := ctr.maxOutputRows()
+	probeColumnsCopied, err := ctr.copyUniqueLeftProbeColumns(hashJoin, proc, outputLimit)
+	if err != nil {
+		return err
+	}
 	var localAreas [8]outputArea
 	areas := ctr.outputAreas(localAreas[:0], ctr.checkBuildArea || ctr.checkProbeArea)
 	full := false
@@ -569,7 +573,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 		}
 
 		resRowCnt++
-		return ctr.appendOutputRow(hashJoin, proc, row)
+		return ctr.appendOutputRow(hashJoin, proc, row, probeColumnsCopied)
 	}
 	if ctr.pendingOutput.left != nil {
 		row := ctr.pendingOutput

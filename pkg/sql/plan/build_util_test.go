@@ -68,6 +68,28 @@ func Test_replaceFuncId(t *testing.T) {
 	assert.NotNil(t, case1Expr)
 }
 
+func TestImplicitNullDefaultRetainsTypeParameters(t *testing.T) {
+	for _, typ := range []plan.Type{
+		{Id: int32(types.T_varchar), Width: 128},
+		{Id: int32(types.T_decimal64), Width: 10, Scale: 2},
+		{Id: int32(types.T_datetime), Scale: 6},
+		{Id: int32(types.T_enum), Enumvalues: "red,blue"},
+		{Id: int32(types.T_int64), AutoIncr: true, NotNullable: true},
+	} {
+		col := &plan.ColDef{Typ: typ, Default: &plan.Default{NullAbility: !typ.NotNullable}}
+		expr, err := getDefaultExpr(context.Background(), col)
+		require.NoError(t, err)
+		require.True(t, expr.GetLit().Isnull)
+		require.Equal(t, typ.Id, expr.Typ.Id)
+		require.Equal(t, typ.Width, expr.Typ.Width)
+		require.Equal(t, typ.Scale, expr.Typ.Scale)
+		require.Equal(t, typ.Enumvalues, expr.Typ.Enumvalues)
+		require.False(t, expr.Typ.NotNullable)
+		require.False(t, expr.Typ.AutoIncr)
+		require.Equal(t, typ, col.Typ)
+	}
+}
+
 // TestRewriteCountNotNullColToStarcount ensures plan-level rewrite sets both ObjName and Obj
 // so runtime uses countStarExec; regression test for count(not_null_col) performance fix.
 func TestRewriteCountNotNullColToStarcount(t *testing.T) {

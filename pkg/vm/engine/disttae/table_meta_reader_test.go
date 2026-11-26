@@ -46,7 +46,7 @@ type loadCleanupFileService struct {
 	release        chan struct{}
 }
 
-func (f *loadCleanupFileService) Delete(ctx context.Context, _ ...string) error {
+func (f *loadCleanupFileService) Delete(ctx context.Context, names ...string) error {
 	f.deleteCalled = true
 	if f.entered != nil {
 		close(f.entered)
@@ -54,7 +54,6 @@ func (f *loadCleanupFileService) Delete(ctx context.Context, _ ...string) error 
 	if f.release != nil {
 		select {
 		case <-f.release:
-			return f.err
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -63,7 +62,10 @@ func (f *loadCleanupFileService) Delete(ctx context.Context, _ ...string) error 
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	return f.err
+	if f.err != nil {
+		return f.err
+	}
+	return f.FileService.Delete(ctx, names...)
 }
 
 func TestTableMetaReaderRecordsCloneObjectOwnership(t *testing.T) {
@@ -726,8 +728,8 @@ func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
 
 	txn.FinalizeCommitWithUnknownResult(ctx)
 	require.True(t, txn.removed)
-	require.NotNil(t, txn.writes[0].bat)
-	require.Empty(t, txn.writes[0].bat.Vecs)
+	require.Nil(t, txn.writes[0].bat)
+	require.Zero(t, txn.workspaceSize)
 	require.False(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
 	require.True(t, objectExistsInFS(ctx, fs, name))
 }

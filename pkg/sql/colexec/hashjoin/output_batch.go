@@ -15,10 +15,13 @@
 package hashjoin
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -157,8 +160,63 @@ func (ctr *container) fitGroupOutput(
 	return count, false
 }
 
-func (ctr *container) appendOutputRow(hashJoin *HashJoin, proc *process.Process, row outputRow) error {
+// A unique left join with no residual emits one row for each probe row. Copy
+// the probe columns together only when the entire input fits one output batch.
+// Matching, build projection and publication still use the normal probe loop.
+func (ctr *container) copyUniqueLeftProbeColumns(hashJoin *HashJoin, proc *process.Process, outputLimit int) (bool, error) {
+	count := ctr.leftBat.RowCount()
+	if hashJoin.JoinType != plan.Node_LEFT || hashJoin.IsRightJoin || !ctr.probeHashOnPK ||
+		hashJoin.NonEqCond != nil || ctr.spillEngine != nil || ctr.outputTarget > 0 ||
+		ctr.checkBuildArea || ctr.checkProbeArea || ctr.probeState != psNextBatch ||
+		ctr.lastIdx != 0 || count == 0 || count > outputLimit {
+		return false, nil
+	}
 	for i, column := range hashJoin.ResultCols {
+		if column.Rel != 0 {
+			continue
+		}
+		if column.Pos < 0 || int(column.Pos) >= len(ctr.leftBat.Vecs) {
+			return false, nil
+		}
+		src, dst := ctr.leftBat.Vecs[column.Pos], ctr.resBat.Vecs[i]
+		if src == nil || dst == nil || dst.Length() != 0 || *src.GetType() != *dst.GetType() ||
+			(!src.IsConst() && src.Length() != count) {
+			return false, nil
+		}
+	}
+	for i, column := range hashJoin.ResultCols {
+		if column.Rel != 0 {
+			continue
+		}
+		if err := context.Cause(proc.Ctx); err != nil {
+			return false, err
+		}
+		src, dst := ctr.leftBat.Vecs[column.Pos], ctr.resBat.Vecs[i]
+		if src.CanCopyWholeVarlenaArea() && len(src.GetArea()) > 0 {
+			// A whole-vector copy includes dead payload left by overwrites.
+			// Copy only live values when the physical area exceeds that payload.
+			live := src.WindowSize(0, count) - int64(count)*int64(src.GetType().TypeSize())
+			if int64(len(src.GetArea())) > live {
+				for row := range count {
+					if err := dst.UnionOne(src, int64(row), proc.Mp()); err != nil {
+						return false, err
+					}
+				}
+				continue
+			}
+		}
+		if err := dst.UnionBatch(src, 0, count, nil, proc.Mp()); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func (ctr *container) appendOutputRow(hashJoin *HashJoin, proc *process.Process, row outputRow, probeColumnsCopied bool) error {
+	for i, column := range hashJoin.ResultCols {
+		if probeColumnsCopied && column.Rel == 0 {
+			continue
+		}
 		dst := ctr.resBat.Vecs[i]
 		if column.Rel == -1 {
 			if err := vector.AppendFixed(dst, row.markValue, row.markNull, proc.Mp()); err != nil {

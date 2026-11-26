@@ -4140,6 +4140,65 @@ func TestIncrementalDedupChecksCNCreatedObject(t *testing.T) {
 	require.NoError(t, insertTxn.Rollback(ctx))
 }
 
+func TestPersistedReplacementDedupKeepsDataAndTombstoneFrontiers(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := t.Context()
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	defer tae.Close()
+	for i, tc := range []struct {
+		name   string
+		policy txnif.DedupPolicy
+	}{{"strict", txnif.DedupPolicy_CheckAll}, {"skip_workspace", txnif.DedupPolicy_SkipWorkspace}} {
+		t.Run(tc.name, func(t *testing.T) {
+			schema := catalog.MockSchemaAll(3, 2)
+			schema.Name = "replacement_" + tc.name
+			tae.BindSchema(schema)
+			rows := catalog.MockBatch(schema, 2)
+			defer rows.Close()
+			seed := rows.CloneWindow(0, 1)
+			defer seed.Close()
+			incoming := rows.CloneWindow(1, 1)
+			defer incoming.Close()
+			tae.CreateRelAndAppend(seed, i == 0)
+
+			writeObject := func() objectio.ObjectStats {
+				id := objectio.NewObjectid()
+				writer, e := ioutil.NewBlockWriterNew(tae.Runtime.Fs, objectio.BuildObjectNameWithObjectID(&id), 0, nil, false)
+				require.NoError(t, e)
+				writer.SetPrimaryKey(uint16(schema.GetSingleSortKeyIdx()))
+				_, e = writer.WriteBatch(containers.ToCNBatch(incoming))
+				require.NoError(t, e)
+				_, _, e = writer.Sync(ctx)
+				require.NoError(t, e)
+				return writer.GetObjectStats(objectio.WithCNCreated())
+			}
+			stats := writeObject()
+			statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+			defer statsVec.Close()
+			statsVec.Append(stats[:], false)
+
+			first, relation := tae.GetRelation()
+			defer first.Rollback(ctx)
+			first.SetDedupType(tc.policy)
+			pk := schema.GetPrimaryKey().Name
+			require.NoError(t, relation.DeleteByFilter(ctx, handle.NewEQFilter(seed.GetVectorByName(pk).Get(0))))
+			require.NoError(t, relation.AddDataFiles(ctx, statsVec))
+			// Publish a competing key after the first transaction's data and
+			// original-row tombstone have both entered its workspace.
+			second, competing := tae.GetRelation()
+			defer second.Rollback(ctx)
+			otherStats := writeObject()
+			otherVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+			defer otherVec.Close()
+			otherVec.Append(otherStats[:], false)
+			require.NoError(t, competing.AddDataFiles(ctx, otherVec))
+			require.NoError(t, second.Commit(ctx))
+			err := first.PrePrepare(ctx)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), "%v", err)
+		})
+	}
+}
+
 func TestStrictDedupIgnoresOldRowsInTNRewrite(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
