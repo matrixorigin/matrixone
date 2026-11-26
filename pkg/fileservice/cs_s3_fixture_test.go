@@ -62,7 +62,7 @@ func listCITestPrefix(ctx context.Context, client *minio.Client, bucket, prefix 
 	// the iterator so rejecting an unsafe result cannot strand its worker.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var keys []string
+	keys := make([]string, 0, 16)
 	for object := range client.ListObjectsIter(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
 		if object.Err != nil {
 			return nil, ciTestS3Error("list fixture prefix", object.Err)
