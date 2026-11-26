@@ -796,45 +796,77 @@ func fillNullableStr(
 		}
 		return
 	}
-	float32Codec := keycodec.NewFloat32Codec(vec.GetType().Scale)
-	for i := 0; i < n; i++ {
-		row := start + i
-		if vec.GetNulls().Contains(uint64(row)) {
-			if itr.mp.hasNull {
-				keys[i] = append(keys[i], byte(1))
-			} else {
-				itr.zValues[i] = 0
+	// Resolve the vector's type, representation and NULLs once, then run a
+	// loop typed for it: nothing below is re-dispatched per row.
+	nsp := vec.GetNulls()
+	keepNull := itr.mp.hasNull
+	isConst := vec.IsConst()
+	typ := *vec.GetType()
+	valueRow := func(row int) int {
+		if isConst {
+			return 0
+		}
+		return row
+	}
+	switch {
+	case typ.Oid == types.T_float32:
+		codec := keycodec.NewFloat32Codec(typ.Scale)
+		values := vector.MustFixedColNoTypeCheck[float32](vec)
+		for i := 0; i < n; i++ {
+			row := start + i
+			if nsp.Contains(uint64(row)) {
+				itr.appendNullKey(i, keepNull)
+				continue
 			}
-			continue
+			value := codec.CanonicalBytes(values[valueRow(row)])
+			keys[i] = append(append(keys[i], byte(0)), value[:]...)
 		}
-		keys[i] = append(keys[i], byte(0))
-		valueRow := row
-		if vec.IsConst() {
-			valueRow = 0
+	case typ.Oid == types.T_float64:
+		values := vector.MustFixedColNoTypeCheck[float64](vec)
+		for i := 0; i < n; i++ {
+			row := start + i
+			if nsp.Contains(uint64(row)) {
+				itr.appendNullKey(i, keepNull)
+				continue
+			}
+			value := keycodec.CanonicalFloat64Bytes(values[valueRow(row)])
+			keys[i] = append(append(keys[i], byte(0)), value[:]...)
 		}
-		switch vec.GetType().Oid {
-		case types.T_float32:
-			values := vector.MustFixedColNoTypeCheck[float32](vec)
-			value := float32Codec.CanonicalBytes(values[valueRow])
-			keys[i] = append(keys[i], value[:]...)
-			continue
-		case types.T_float64:
-			values := vector.MustFixedColNoTypeCheck[float64](vec)
-			value := keycodec.CanonicalFloat64Bytes(values[valueRow])
-			keys[i] = append(keys[i], value[:]...)
-			continue
+	case typ.IsFixedLen():
+		size := typ.TypeSize()
+		data := vec.GetData()
+		for i := 0; i < n; i++ {
+			row := start + i
+			if nsp.Contains(uint64(row)) {
+				itr.appendNullKey(i, keepNull)
+				continue
+			}
+			at := valueRow(row) * size
+			keys[i] = append(append(keys[i], byte(0)), data[at:at+size]...)
 		}
-		if vec.GetType().IsFixedLen() {
-			size := vec.GetType().TypeSize()
-			data := vec.GetData()
-			value := data[valueRow*size : (valueRow+1)*size]
+	default:
+		for i := 0; i < n; i++ {
+			row := start + i
+			if nsp.Contains(uint64(row)) {
+				itr.appendNullKey(i, keepNull)
+				continue
+			}
+			value := canonicalVarlenaHashValueForType(typ, vec.GetBytesAt(valueRow(row)))
+			length := uint32(len(value))
+			keys[i] = append(keys[i], byte(0))
+			keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 			keys[i] = append(keys[i], value...)
-			continue
 		}
-		value := canonicalVarlenaHashValueForType(*vec.GetType(), vec.GetBytesAt(valueRow))
-		length := uint32(len(value))
-		keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
-		keys[i] = append(keys[i], value...)
+	}
+}
+
+// appendNullKey encodes a NULL key column of row i: the NULL domain byte when
+// the map keeps NULL keys, otherwise it marks the row as not inserted.
+func (itr *strHashmapIterator) appendNullKey(i int, keepNull bool) {
+	if keepNull {
+		itr.keys[i] = append(itr.keys[i], byte(1))
+	} else {
+		itr.zValues[i] = 0
 	}
 }
 
