@@ -221,6 +221,37 @@ func TestProxySharedLockCancellationWhileFirstRemoteLockInFlight(t *testing.T) {
 	}
 }
 
+func TestProxySharedLockFenceAppliesOnlyToLeader(t *testing.T) {
+	bind := pb.LockTable{ServiceID: "remote", Table: 1, Valid: true, Version: 1}
+	remote := &blockingProxyLockTable{bind: bind, started: make(chan struct{}, 1), release: make(chan struct{}), err: moerr.NewLockTableBindChangedForFencedTxnNoCtx()}
+	proxy := newLockTableProxy("local", remote, getLogger("")).(*localLockTableProxy)
+	rows := [][]byte{[]byte("row")}
+	options := LockOptions{LockOptions: newTestRowSharedOptions()}
+	first := newActiveTxn([]byte("first"), "first", newFixedSlicePool(4), "")
+	second := newActiveTxn([]byte("second"), "second", newFixedSlicePool(4), "")
+	firstDone := make(chan error, 1)
+	secondDone := make(chan error, 1)
+	lock := func(txn *activeTxn, done chan<- error) {
+		txn.Lock()
+		defer txn.Unlock()
+		proxy.lock(context.Background(), txn, rows, options, func(_ pb.Result, err error) { done <- err })
+	}
+	go lock(first, firstDone)
+	<-remote.started
+	go lock(second, secondDone)
+	require.Eventually(t, func() bool {
+		proxy.mu.Lock()
+		defer proxy.mu.Unlock()
+		ops := proxy.mu.holders[string(rows[0])]
+		return ops != nil && len(ops.txns) == 2 && ops.waiters[1] != nil
+	}, time.Second, time.Millisecond)
+	close(remote.release)
+	require.True(t, moerr.IsLockTableBindChangedForFencedTxn(<-firstDone))
+	err := <-secondDone
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+	require.False(t, moerr.IsLockTableBindChangedForFencedTxn(err))
+}
+
 func TestProxySharedLock(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -1057,7 +1088,8 @@ func TestHandoffReplacementKeepsOriginalTableInstance(t *testing.T) {
 		}()
 		continueAdoption()
 		require.NoError(t, <-handedOff)
-		require.ErrorIs(t, <-locked, ErrLockTableBindChanged)
+		err = <-locked
+		require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
 		_, held, err := owner.GetLockHolder(ctx, table, nextRows[0], opts)
 		require.NoError(t, err)
 		require.False(t, held)

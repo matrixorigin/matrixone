@@ -299,6 +299,10 @@ const (
 	ErrLockWaitTimeout uint16 = 20710
 	// ErrRemoteLockAdmissionExpired asks the source to renew its admission window.
 	ErrRemoteLockAdmissionExpired uint16 = 20711
+	// ErrForwardBindBusy means the coordinator did not start a cold lookup.
+	ErrForwardBindBusy uint16 = 20712
+	// ErrLockTableBindLookupTimeout means a binding RPC exhausted its own deadline.
+	ErrLockTableBindLookupTimeout uint16 = 20713
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -588,6 +592,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRemoteLockAdmissionExpired: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote lock admission expired"},
 	ErrRemoteLockWaitTimeout:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote lock wait timeout"},
 	ErrLockWaitTimeout:            {ER_LOCK_WAIT_TIMEOUT, []string{MySQLDefaultSqlState}, "Lock wait timeout exceeded; try restarting transaction"},
+	ErrForwardBindBusy:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "coordinator is busy resolving forwarded lock bindings"},
+	ErrLockTableBindLookupTimeout: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table binding lookup timed out"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -683,6 +689,7 @@ type Error struct {
 	message   string
 	sqlState  string
 	detail    string
+	txnFence  moerrpb.TxnFence
 }
 
 func (e *Error) Error() string {
@@ -724,6 +731,7 @@ func (e *Error) MarshalBinary() ([]byte, error) {
 		MysqlCode: e.mysqlCode,
 		Message:   e.message,
 		SqlState:  e.sqlState,
+		TxnFence:  e.txnFence,
 	}
 	data := make([]byte, ee.ProtoSize())
 	if _, err := ee.MarshalToSizedBuffer(data); err != nil {
@@ -743,7 +751,36 @@ func (e *Error) UnmarshalBinary(data []byte) error {
 	e.mysqlCode = ee.MysqlCode
 	e.message = ee.Message
 	e.sqlState = ee.SqlState
+	e.txnFence = ee.TxnFence
 	return nil
+}
+
+// NewLockTableBindChangedForFencedTxnNoCtx marks an irreversible transaction
+// fence while preserving the public lock-table-bind-changed error identity.
+func NewLockTableBindChangedForFencedTxnNoCtx() *Error {
+	err := NewLockTableBindChangedNoCtx()
+	err.txnFence = moerrpb.TxnFence_FENCED
+	return err
+}
+
+// IsLockTableBindChangedForFencedTxn distinguishes a fenced transaction from
+// a transient lock table binding change.
+func IsLockTableBindChangedForFencedTxn(err error) bool {
+	e, ok := err.(*Error)
+	return ok && e.code == ErrLockTableBindChanged && e.txnFence != moerrpb.TxnFence_NONE
+}
+
+// NewFencedTxnLockRejectedNoCtx marks a fence reply that proves this Lock
+// request did not reach acquisition.
+func NewFencedTxnLockRejectedNoCtx() *Error {
+	err := NewLockTableBindChangedNoCtx()
+	err.txnFence = moerrpb.TxnFence_REJECTED_BEFORE_LOCK
+	return err
+}
+
+func IsFencedTxnLockRejected(err error) bool {
+	e, ok := err.(*Error)
+	return ok && e.code == ErrLockTableBindChanged && e.txnFence == moerrpb.TxnFence_REJECTED_BEFORE_LOCK
 }
 
 func IsMoErrCode(e error, rc uint16) bool {
@@ -871,13 +908,13 @@ func (e *Error) IsRealError() bool {
 //
 // They are both fast, one with less typing and the other is consistent
 // with other error code checking.
-var errOkStopCurrRecur = Error{OkStopCurrRecur, 0, "StopCurrRecur", "00000", ""}
-var errOkExpectedEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000", ""}
-var errOkExpectedEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000", ""}
-var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000", ""}
-var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000", ""}
-var errOkExpectedNotSafeToStartTransfer = Error{OkExpectedNotSafeToStartTransfer, 0, "OkExpectedNotSafeToStartTransfer", "00000", ""}
-var errMysqlClientQuit = Error{MysqlClientQuit, 0, "MysqlClientQuit", "00000", ""}
+var errOkStopCurrRecur = Error{code: OkStopCurrRecur, message: "StopCurrRecur", sqlState: "00000"}
+var errOkExpectedEOF = Error{code: OkExpectedEOF, message: "ExpectedEOF", sqlState: "00000"}
+var errOkExpectedEOB = Error{code: OkExpectedEOB, message: "ExpectedEOB", sqlState: "00000"}
+var errOkExpectedDup = Error{code: OkExpectedDup, message: "ExpectedDup", sqlState: "00000"}
+var errOkExpectedPossibleDup = Error{code: OkExpectedPossibleDup, message: "OkExpectedPossibleDup", sqlState: "00000"}
+var errOkExpectedNotSafeToStartTransfer = Error{code: OkExpectedNotSafeToStartTransfer, message: "OkExpectedNotSafeToStartTransfer", sqlState: "00000"}
+var errMysqlClientQuit = Error{code: MysqlClientQuit, message: "MysqlClientQuit", sqlState: "00000"}
 
 /*
 GetOk is useless in general, should just use nil.
@@ -1622,6 +1659,10 @@ func NewRemoteLockAdmissionExpired(ctx context.Context) *Error {
 
 func NewRemoteLockWaitTimeout(ctx context.Context) *Error {
 	return newError(ctx, ErrRemoteLockWaitTimeout)
+}
+
+func NewForwardBindBusy(ctx context.Context) *Error {
+	return newError(ctx, ErrForwardBindBusy)
 }
 
 func NewLockWaitTimeout(ctx context.Context) *Error {

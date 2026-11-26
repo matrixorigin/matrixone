@@ -1142,7 +1142,7 @@ func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
 			keeper.doKeepRemoteLock(context.Background(), nil, nil)
 
 			txn.Lock()
-			require.True(t, txn.bindChanged)
+			require.True(t, txn.isFenced())
 			txn.Unlock()
 			require.Equal(t, newBind, svc.tableGroups.get(newBind.Group, newBind.Table).getBind())
 
@@ -1272,10 +1272,10 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 					keeper.doKeepRemoteLock(context.Background(), nil, nil)
 
 					oldTxn.Lock()
-					require.True(t, oldTxn.bindChanged)
+					require.True(t, oldTxn.isFenced())
 					oldTxn.Unlock()
 					unrelatedTxn.Lock()
-					require.False(t, unrelatedTxn.bindChanged)
+					require.False(t, unrelatedTxn.isFenced())
 					unrelatedTxn.Unlock()
 					require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
 					require.Equal(
@@ -1373,7 +1373,7 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 			keeper.doKeepRemoteLock(context.Background(), nil, nil)
 
 			txn.Lock()
-			require.True(t, txn.bindChanged)
+			require.True(t, txn.isFenced())
 			txn.Unlock()
 			require.Equal(t, newBind, svc.tableGroups.get(newBind.Group, newBind.Table).getBind())
 
@@ -1429,8 +1429,7 @@ func TestKeepRemoteLockRefreshRejectsSupersededAllocatorBind(t *testing.T) {
 			svc.remote.client = c
 			svc.tableGroups = &lockTableHolders{service: svc.serviceID, logger: logger, holders: map[uint32]*lockTableHolder{}}
 			svc.allocatorVersionMu.Lock()
-			svc.lastAllocatorID = newAllocator.id
-			svc.lastAllocatorVersion = newAllocator.version
+			svc.lastAllocatorState.Store(&newAllocator)
 			svc.addSupersededAllocatorIDLocked(oldAllocator.id)
 			svc.allocatorVersionMu.Unlock()
 
@@ -1443,8 +1442,8 @@ func TestKeepRemoteLockRefreshRejectsSupersededAllocatorBind(t *testing.T) {
 			keeper.maybeHandleRemoteBindChanged(context.Background(), oldBind, false)
 
 			require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
-			require.Equal(t, newAllocator.id, svc.lastAllocatorID)
-			require.Equal(t, newAllocator.version, svc.lastAllocatorVersion)
+			require.Equal(t, newAllocator.id, svc.allocatorStateSnapshot().id)
+			require.Equal(t, newAllocator.version, svc.allocatorStateSnapshot().version)
 		},
 	)
 }
@@ -1513,8 +1512,7 @@ func TestKeepRemoteLockLateNewBindDoesNotRepublishSupersededAllocator(t *testing
 				logger:  logger,
 				holders: map[uint32]*lockTableHolder{},
 			}
-			svc.lastAllocatorID = oldAllocator.id
-			svc.lastAllocatorVersion = oldAllocator.version
+			svc.lastAllocatorState.Store(&oldAllocator)
 			svc.tableGroups.set(
 				oldBind.Group,
 				oldBind.Table,
@@ -1558,8 +1556,8 @@ func TestKeepRemoteLockLateNewBindDoesNotRepublishSupersededAllocator(t *testing
 			got := svc.tableGroups.get(currentBind.Group, currentBind.Table)
 			require.NotNil(t, got)
 			require.Equal(t, currentBind, got.getBind())
-			require.Equal(t, newAllocator.id, svc.lastAllocatorID)
-			require.Equal(t, newAllocator.version, svc.lastAllocatorVersion)
+			require.Equal(t, newAllocator.id, svc.allocatorStateSnapshot().id)
+			require.Equal(t, newAllocator.version, svc.allocatorStateSnapshot().version)
 		},
 	)
 }
@@ -1633,7 +1631,7 @@ func TestKeepRemoteLockIgnoresNonBindResponseErrors(t *testing.T) {
 			require.Equal(t, uint64(0), getBindCalls.Load())
 
 			txn.Lock()
-			require.False(t, txn.bindChanged)
+			require.False(t, txn.isFenced())
 			txn.Unlock()
 			require.Equal(t, oldBind, svc.tableGroups.get(oldBind.Group, oldBind.Table).getBind())
 

@@ -215,3 +215,13 @@ func TestPreExecutionRollbackIsGuarded(t *testing.T) {
 
 	require.NoError(t, ses.SetSessionSysVar(ctx, "mo_rollback_txn_on_error", int64(0)))
 }
+
+func TestJoinedFenceRollsBackWholeTxn(t *testing.T) {
+	fence := moerr.NewLockTableBindChangedForFencedTxnNoCtx()
+	for _, cleanup := range []error{nil, errors.New("result cleanup failed")} {
+		err := errors.Join(fence, cleanup)
+		require.True(t, isErrorRollbackWholeTxn(err))
+	}
+	require.False(t, isErrorRollbackWholeTxn(errors.Join(moerr.NewDuplicateEntryNoCtx("1", "a"), nil)))
+	require.False(t, isErrorRollbackWholeTxn(context.Canceled))
+}
