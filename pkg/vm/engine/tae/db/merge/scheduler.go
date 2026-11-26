@@ -1092,16 +1092,16 @@ func (a *MergeScheduler) nextManualRetryDue(supp *todoSupporter, now time.Time) 
 	return due, !due.IsZero()
 }
 
-func (supp *todoSupporter) requeueManualRetry(retry *MMsgTaskTrigger) {
+func (m *todoSupporter) requeueManualRetry(retry *MMsgTaskTrigger) {
 	// One-shot triggers are taken from the end. Put this denied retry before
 	// the other one-shots so each live request gets an admission attempt.
 	index := 0
-	if len(supp.triggers) > 0 && !supp.triggers[0].expire.IsZero() {
+	if len(m.triggers) > 0 && !m.triggers[0].expire.IsZero() {
 		index = 1 // keep the policy patch at the front
 	}
-	supp.triggers = append(supp.triggers, nil)
-	copy(supp.triggers[index+1:], supp.triggers[index:])
-	supp.triggers[index] = retry
+	m.triggers = append(m.triggers, nil)
+	copy(m.triggers[index+1:], m.triggers[index:])
+	m.triggers[index] = retry
 }
 
 func (a *MergeScheduler) handleTaskTrigger(
