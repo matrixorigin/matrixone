@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -40,10 +41,10 @@ func TestIsCacheRoutableStarCount(t *testing.T) {
 	}{
 		{name: "single table", want: true},
 		{name: "found rows having", edit: func(query *plan.Query, _ *plan.Node) {
-			query.Nodes[1].FilterList = []*plan.Expr{zmAggFuncExpr("found_rows", zmAggConstExpr(), 0)}
+			query.Nodes[1].FilterList = []*plan.Expr{zmAggFuncExpr("found_rows", zmAggConstExpr(), function.EncodeOverloadID(function.FOUND_ROWS, 0))}
 		}},
 		{name: "advisory lock having", edit: func(query *plan.Query, _ *plan.Node) {
-			query.Nodes[1].FilterList = []*plan.Expr{zmAggFuncExpr("is_free_lock", zmAggConstExpr(), 0)}
+			query.Nodes[1].FilterList = []*plan.Expr{zmAggFuncExpr("is_free_lock", zmAggConstExpr(), function.EncodeOverloadID(function.IS_FREE_LOCK, 0))}
 		}},
 		{name: "ordinary having", edit: func(query *plan.Query, _ *plan.Node) {
 			query.Nodes[1].FilterList = []*plan.Expr{zmAggLitExpr(1)}
@@ -52,12 +53,12 @@ func TestIsCacheRoutableStarCount(t *testing.T) {
 			query.Nodes = append(query.Nodes, &plan.Node{
 				NodeType:    plan.Node_PROJECT,
 				Children:    []int32{1},
-				ProjectList: []*plan.Expr{zmAggFuncExpr("found_rows", zmAggConstExpr(), 0)},
+				ProjectList: []*plan.Expr{zmAggFuncExpr("found_rows", zmAggConstExpr(), function.EncodeOverloadID(function.FOUND_ROWS, 0))},
 			})
 			query.Steps[0] = 2
 		}},
 		{name: "coordinator projection on scan", edit: func(_ *plan.Query, scan *plan.Node) {
-			scan.ProjectList = []*plan.Expr{zmAggFuncExpr("is_free_lock", zmAggConstExpr(), 0)}
+			scan.ProjectList = []*plan.Expr{zmAggFuncExpr("is_free_lock", zmAggConstExpr(), function.EncodeOverloadID(function.IS_FREE_LOCK, 0))}
 		}},
 		{name: "ordinary projection above aggregate", want: true, edit: func(query *plan.Query, _ *plan.Node) {
 			query.Nodes = append(query.Nodes, &plan.Node{
