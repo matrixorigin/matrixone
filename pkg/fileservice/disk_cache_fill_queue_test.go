@@ -179,3 +179,52 @@ func waitObjectsEnd(d *DiskCache, filePath string) {
 		}
 	}
 }
+
+// keyRecorder records the key of each read of object storage.
+type keyRecorder struct {
+	ObjectStorage
+	mu   sync.Mutex
+	keys []string
+}
+
+func (k *keyRecorder) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
+	k.mu.Lock()
+	k.keys = append(k.keys, key)
+	k.mu.Unlock()
+	return k.ObjectStorage.Read(ctx, key, min, max)
+}
+
+// The waiting fills start one at a time in order: a larger share first, an unknown share as
+// the whole, then the sooner due time, then arrival.
+func TestFillsStartInOrder(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 0, 4<<10)
+	ctx := context.Background()
+	names := []string{"partial", "late", "unknown", "first", "second"}
+	for _, name := range names {
+		require.NoError(t, fs.Write(ctx, IOVector{FilePath: name, Entries: []IOEntry{{Size: 1 << 10, Data: data[:1<<10]}},
+			Policy: SkipDiskCache | SkipMemoryCache}))
+	}
+	release := busyFills(t, fs)
+	rec := &keyRecorder{ObjectStorage: fs.governor.raw}
+	fs.governor.raw = rec
+	add := func(name string, due int64, reads, blocks int) {
+		require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: name, Size: 1 << 10, Due: due, Reads: reads, Blocks: blocks,
+			Ranges: []PrefetchRange{{Offset: 0, Size: 1 << 10}}}))
+	}
+	add("partial", 1, 1, 10)
+	add("late", 30, 10, 10)
+	add("unknown", 20, 0, 10)
+	add("first", 10, 10, 10)
+	add("second", 10, 10, 10)
+	release()
+	for _, name := range names {
+		waitFillsEnd(fs.diskCache, name)
+	}
+	want := []string{"first", "second", "unknown", "late", "partial"}
+	for i := range want {
+		want[i] = fs.pathToKey(want[i])
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	require.Equal(t, want, rec.keys)
+}
