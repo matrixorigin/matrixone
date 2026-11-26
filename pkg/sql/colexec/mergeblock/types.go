@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -50,6 +51,7 @@ type MergeBlock struct {
 	AddAffectedRows bool
 	Engine          engine.Engine
 	Ref             *plan.ObjectRef
+	LocalObjects    *colexec.LocalInsertObjects
 	container       Container
 
 	vm.OperatorBase

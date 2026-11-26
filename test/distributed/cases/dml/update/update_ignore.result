@@ -2,7 +2,7 @@ drop table if exists update_ignore_regression;
 create table update_ignore_regression (
 id int primary key,
 a int unique,
-v int
+v int not null
 );
 insert into update_ignore_regression values (1, 10, 0), (2, 20, 0);
 update ignore update_ignore_regression set id = id, v = v + 1 where id = 1;
@@ -20,6 +20,40 @@ select * from update_ignore_regression order by id;
 id    a    v
 1    10    1
 2    20    1
+update update_ignore_regression x join update_ignore_regression y on x.id = 1 and y.id = 2
+set x.a = 40, x.v = x.v + 1, y.a = 40, y.v = 99;
+Duplicate entry '40' for key '__mo_index_idx_col'
+select id,a,v from update_ignore_regression order by id;
+id    a    v
+1    10    1
+2    20    1
+select id,a from update_ignore_regression force index(a) where a in (10, 20, 40) order by id;
+id    a
+1    10
+2    20
+update ignore update_ignore_regression x join update_ignore_regression y on x.id = 1 and y.id = 2
+set x.a = 40, x.v = x.v + 1, y.a = 40, y.v = 99;
+select id,a,v from update_ignore_regression order by id;
+id    a    v
+1    40    2
+2    20    1
+select id,a from update_ignore_regression force index(a) where a in (10, 20, 40) order by id;
+id    a
+1    40
+2    20
+update ignore update_ignore_regression x join update_ignore_regression y on x.id = 1 and y.id = 2
+set x.a = 20, x.v = null, y.v = 30;
+select id,a,v from update_ignore_regression force index(a) where a in (20, 40, 50) order by id;
+id    a    v
+1    40    2
+2    20    30
+update ignore update_ignore_regression x join update_ignore_regression y on x.id = 1 and y.id = 2
+set x.a = 50, x.v = null, y.v = 31;
+constraint violation: Column 'v' cannot be null
+select id,a,v from update_ignore_regression order by id;
+id    a    v
+1    40    2
+2    20    30
 drop table update_ignore_regression;
 drop table if exists update_ignore_multi_unique;
 create table update_ignore_multi_unique (

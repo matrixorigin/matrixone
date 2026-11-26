@@ -180,6 +180,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "preinsert", nil
 	case plan.Node_PRE_INSERT_UK:
 		return "preinsert_uk", nil
+	case plan.Node_UPDATE_UNIQUE:
+		return "update_unique", nil
 	case plan.Node_PRE_INSERT_SK:
 		return "preinsert_sk", nil
 	case plan.Node_SINK:
@@ -517,6 +519,9 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Pre_InsertUk, //"pre insert uk",
 			Value: []string{},
 		})
+	case plan.Node_UPDATE_UNIQUE:
+		// This node appends an admission bit; its inputs are visible through
+		// the ordinary output-column labels.
 	case plan.Node_PRE_INSERT_SK:
 		labels = append(labels, models.Label{
 			Name:  Label_Pre_InsertSk, //"pre insert sk",
