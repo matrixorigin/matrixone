@@ -58,13 +58,6 @@ type dmlTableInfo struct {
 	alias          map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
 }
 
-var constTextType plan.Type
-
-func init() {
-	typ := types.T_text.ToType()
-	constTextType = makePlan2Type(&typ)
-}
-
 // deleteSource distinguishes explicit aliases from implicit table names when
 // validating a qualified DELETE target, without losing the source's CTE scope.
 type deleteSource struct {
