@@ -2378,7 +2378,7 @@ func TestHandleOrderByLimitAllNullVectors(t *testing.T) {
 	bat.SetRowCount(5)
 
 	// Shuffle with empty sels does nothing — batch retains row count.
-	err = bat.Shuffle(sels, mp)
+	err = bat.Permute(sels, mp)
 	require.NoError(t, err)
 	require.Equal(t, 5, bat.RowCount(), "Shuffle with empty sels should NOT reset row count")
 

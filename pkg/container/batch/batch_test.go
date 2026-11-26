@@ -1998,3 +1998,34 @@ func TestBatchUnionRows(t *testing.T) {
 	src.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 }
+
+// Permute reorders every column once, even when a vector appears in two
+// columns, and an empty list leaves the batch alone.
+func TestBatchPermute(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := New([]string{"a", "b", "c"})
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	for i := 0; i < 5; i++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), i == 3, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(fmt.Sprintf("value-%d-long-enough-to-spill-out", i)), false, mp))
+	}
+	bat.Vecs[2] = bat.Vecs[0]
+	bat.SetRowCount(5)
+	require.NoError(t, bat.Permute(nil, mp))
+	require.Equal(t, 5, bat.RowCount())
+
+	rows := []int64{4, 3, 3, 0}
+	require.NoError(t, bat.Permute(rows, mp))
+	require.Equal(t, 4, bat.RowCount())
+	for i, r := range rows {
+		require.Equal(t, r == 3, bat.Vecs[0].IsNull(uint64(i)))
+		if r != 3 {
+			require.Equal(t, r, vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[2], i))
+		}
+		require.Equal(t, fmt.Sprintf("value-%d-long-enough-to-spill-out", r), bat.Vecs[1].GetStringAt(i))
+	}
+	bat.Vecs[2] = nil
+	bat.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}

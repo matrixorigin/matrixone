@@ -100,7 +100,7 @@ func TestBlockScaledVectorOps(t *testing.T) {
 
 			shuffled, err := vec.Dup(mp)
 			require.NoError(t, err)
-			require.NoError(t, shuffled.Shuffle([]int64{3, 1, 2}, mp))
+			require.NoError(t, shuffled.Permute([]int64{3, 1, 2}, mp))
 			requireBlockScaledRows(t, shuffled, []string{texts[3], texts[1], texts[2]})
 			shuffled.Free(mp)
 

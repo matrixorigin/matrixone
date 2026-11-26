@@ -163,3 +163,65 @@ func TestUnionRowsEmptyAndPoolMismatch(t *testing.T) {
 	src.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
+
+// Permute reorders a vector in place, NULLs with their rows, and matches
+// building the same rows with UnionOne: for every width, NULL rate, and
+// lists that repeat, drop or add rows. PermuteWithScratch agrees whenever the
+// row count is kept.
+func TestPermuteMatchesUnionOne(t *testing.T) {
+	mp := mpool.MustNewZero()
+	rng := rand.New(rand.NewSource(10))
+	for _, typ := range gatherTestTypes {
+		for _, rate := range []float64{0, 0.3, 1} {
+			for _, n := range []int{0, 1, 64, 300, 700} {
+				for _, scratch := range []bool{false, true} {
+					v := unionMaskSource(t, rng, typ, 300, rate, mp)
+					rows := randomGatherRows(rng, n, v.Length())
+					want := NewVec(typ, mp)
+					for _, r := range rows {
+						require.NoError(t, want.UnionOne(v, r, mp))
+					}
+					if scratch {
+						var buf []byte
+						require.NoError(t, v.PermuteWithScratch(rows, mp, &buf))
+					} else {
+						require.NoError(t, v.Permute(rows, mp))
+					}
+					requireSameRows(t, want, v)
+					v.Free(mp)
+					want.Free(mp)
+				}
+			}
+		}
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+// A sorted vector stays sorted only under a nondecreasing list; constants are
+// left alone; a vector from another pool is rejected and left unchanged.
+func TestPermuteSortedConstAndPool(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v := NewVec(types.T_int64.ToType(), mp)
+	require.NoError(t, AppendFixedList(v, []int64{1, 2, 3}, nil, mp))
+	v.SetSorted(true)
+	require.NoError(t, v.Permute([]int64{0, 0, 2}, mp))
+	require.True(t, v.GetSorted())
+	require.NoError(t, v.Permute([]int64{2, 0}, mp))
+	require.False(t, v.GetSorted())
+	require.Equal(t, []int64{3, 1}, MustFixedColWithTypeCheck[int64](v))
+
+	other := mpool.MustNewZero()
+	require.Error(t, v.Permute([]int64{0}, other))
+	var buf []byte
+	require.Error(t, v.PermuteWithScratch([]int64{1, 0}, other, &buf))
+	require.Equal(t, []int64{3, 1}, MustFixedColWithTypeCheck[int64](v))
+	v.Free(mp)
+
+	c, err := NewConstFixed(types.T_int64.ToType(), int64(5), 3, mp)
+	require.NoError(t, err)
+	require.NoError(t, c.Permute([]int64{0}, mp))
+	require.NoError(t, c.PermuteWithScratch([]int64{0, 1, 2}, mp, &buf))
+	require.Equal(t, 3, c.Length())
+	c.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}

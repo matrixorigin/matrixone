@@ -363,7 +363,7 @@ func (ctr *container) eval(limit uint64, proc *process.Process, analyzer process
 	if err != nil {
 		return err
 	}
-	if err := ctr.bat.Shuffle(ctr.sels, retainedMP); err != nil {
+	if err := ctr.bat.Permute(ctr.sels, retainedMP); err != nil {
 		return err
 	}
 	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {

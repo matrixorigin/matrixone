@@ -269,7 +269,7 @@ func SortColumnsByIndexWithBuf(
 	}
 	sort.Sort(false, false, true, sortedIdx, sortKey)
 	for i := 0; i < len(cols); i++ {
-		err = cols[i].ShuffleWithBuf(sortedIdx, mp, shuffleBuf)
+		err = cols[i].PermuteWithScratch(sortedIdx, mp, shuffleBuf)
 		if err != nil {
 			return
 		}

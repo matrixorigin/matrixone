@@ -22,52 +22,40 @@ import (
 )
 
 // BenchmarkPermute applies a sort permutation to one 8192-row vector, as
-// order and top do. Shuffle allocates new values and remaps the NULLs with
-// nulls.Filter; GatherSwap gathers with Union into a scratch vector the owner
-// reuses and swaps it in.
+// order and top do. Permute allocates new values from the pool;
+// PermuteWithScratch gathers into a reused Go-heap buffer and copies back.
 func BenchmarkPermute(b *testing.B) {
 	perm := gatherBenchRowLists()["perm"]
 	for _, tc := range gatherBenchTypes {
-		b.Run(tc.name+"/Shuffle", func(b *testing.B) {
-			mp := mpool.MustNewZero()
-			src := gatherBenchSource(b, tc.typ, gatherBenchRows, tc.nullEvery, mp)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				v, err := src.Dup(mp)
-				require.NoError(b, err)
-				b.StartTimer()
-				if err := v.Shuffle(perm, mp); err != nil {
-					b.Fatal(err)
-				}
-				b.StopTimer()
-				v.Free(mp)
-				b.StartTimer()
+		for _, withScratch := range []bool{false, true} {
+			name := tc.name + "/Permute"
+			if withScratch {
+				name = tc.name + "/PermuteWithScratch"
 			}
-		})
-		b.Run(tc.name+"/GatherSwap", func(b *testing.B) {
-			mp := mpool.MustNewZero()
-			src := gatherBenchSource(b, tc.typ, gatherBenchRows, tc.nullEvery, mp)
-			scratch := NewVec(tc.typ, mp)
-			require.NoError(b, scratch.Union(src, perm, mp))
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				v, err := src.Dup(mp)
-				require.NoError(b, err)
-				b.StartTimer()
-				scratch.CleanOnlyData()
-				if err := scratch.Union(v, perm, mp); err != nil {
-					b.Fatal(err)
+			b.Run(name, func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				src := gatherBenchSource(b, tc.typ, gatherBenchRows, tc.nullEvery, mp)
+				var scratch []byte
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					b.StopTimer()
+					v, err := src.Dup(mp)
+					require.NoError(b, err)
+					b.StartTimer()
+					if withScratch {
+						err = v.PermuteWithScratch(perm, mp, &scratch)
+					} else {
+						err = v.Permute(perm, mp)
+					}
+					if err != nil {
+						b.Fatal(err)
+					}
+					b.StopTimer()
+					v.Free(mp)
+					b.StartTimer()
 				}
-				// The owner swaps scratch and v; the swap is two pointer
-				// moves, not part of the cost measured here.
-				b.StopTimer()
-				v.Free(mp)
-				b.StartTimer()
-			}
-		})
+			})
+		}
 	}
 }

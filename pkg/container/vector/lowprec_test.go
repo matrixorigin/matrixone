@@ -269,7 +269,7 @@ func TestLowPrecFloatGetMinMaxSkipsNaN(t *testing.T) {
 
 // TestLowPrecFloatAccessMovement exercises the access/movement/string switches for the
 // scalar low-precision float types (bf16/float16/float8/float4) so each per-type arm is
-// covered: GetAny/AppendAny round-trip, ShrinkByRows, ShrinkByMask, Shuffle, ShuffleWithBuf,
+// covered: GetAny/AppendAny round-trip, ShrinkByRows, ShrinkByMask, Permute, PermuteWithScratch,
 // String, RowToString, and NewFunctionResultWrapper (#20567).
 func TestLowPrecFloatAccessMovement(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
@@ -303,18 +303,18 @@ func TestLowPrecFloatAccessMovement(t *testing.T) {
 			require.NotNil(t, rw)
 			rw.Free()
 
-			// Shuffle reorders in place.
-			require.NoError(t, v.Shuffle([]int64{3, 2, 1, 0}, mp))
+			// Permute reorders in place.
+			require.NoError(t, v.Permute([]int64{3, 2, 1, 0}, mp))
 			require.Equal(t, c.mk(4.0), GetAny(v, 0, true))
 			v.Free(mp)
 
-			// ShuffleWithBuf.
+			// PermuteWithScratch.
 			v2 := NewVec(c.oid.ToType(), mp)
 			for _, f := range []float32{1.0, 2.0, 3.0} {
 				require.NoError(t, AppendAny(v2, c.mk(f), false, mp))
 			}
 			var buf []byte
-			require.NoError(t, v2.ShuffleWithBuf([]int64{2, 1, 0}, mp, &buf))
+			require.NoError(t, v2.PermuteWithScratch([]int64{2, 1, 0}, mp, &buf))
 			require.Equal(t, c.mk(3.0), GetAny(v2, 0, true))
 			v2.Free(mp)
 

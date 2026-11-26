@@ -84,7 +84,7 @@ func TestJqConstResultPreservesCardinalityAndReuse(t *testing.T) {
 	resultBatch := batch.NewWithSize(1)
 	resultBatch.Vecs[0] = result
 	resultBatch.SetRowCount(3)
-	require.NoError(t, resultBatch.Shuffle([]int64{2, 1, 0}, proc.Mp()))
+	require.NoError(t, resultBatch.Permute([]int64{2, 1, 0}, proc.Mp()))
 	require.Equal(t, 3, resultBatch.RowCount())
 }
 

@@ -15,6 +15,8 @@
 package vector
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -172,22 +174,147 @@ func gatherRows(v, w *Vector, sels []int64, mp *mpool.MPool) error {
 }
 
 // gatherFixedValues copies the fixed-width values of w's rows sels to v's
-// rows oldLen, oldLen+1, ... One typed loop per width serves every type.
-// v and w may be the same vector when sels is ascending and oldLen is 0:
-// each row is then read before it is overwritten.
+// rows oldLen, oldLen+1, ... v and w may be the same vector when sels is
+// ascending and oldLen is 0: each row is then read before it is overwritten.
 func gatherFixedValues(v, w *Vector, oldLen int, sels []int64) {
-	switch tlen := v.GetType().TypeSize(); tlen {
+	width := v.GetType().TypeSize()
+	gatherFixedBytes(v.data[oldLen*width:(oldLen+len(sels))*width], w.data[:w.length*width], width, sels)
+}
+
+// gatherFixedBytes sets value i of target to value sels[i] of source, both
+// packed arrays of width-byte values. One typed loop per width serves every
+// type.
+func gatherFixedBytes(target, source []byte, width int, sels []int64) {
+	switch width {
 	case 8:
-		unionFixedSelected[uint64](v.data[oldLen*8:(oldLen+len(sels))*8], w.data, sels)
+		unionFixedSelected[uint64](target, source, sels)
 	case 4:
-		unionFixedSelected[uint32](v.data[oldLen*4:(oldLen+len(sels))*4], w.data, sels)
+		unionFixedSelected[uint32](target, source, sels)
 	case 2:
-		unionFixedSelected[uint16](v.data[oldLen*2:(oldLen+len(sels))*2], w.data, sels)
+		unionFixedSelected[uint16](target, source, sels)
 	case 1:
-		unionFixedSelected[uint8](v.data[oldLen:oldLen+len(sels)], w.data, sels)
+		unionFixedSelected[uint8](target, source, sels)
+	case 12:
+		unionFixedSelected[types.TS](target, source, sels)
+	case 16:
+		unionFixedSelected[types.Decimal128](target, source, sels)
+	case 20:
+		unionFixedSelected[types.Blockid](target, source, sels)
+	case 24:
+		unionFixedSelected[types.Rowid](target, source, sels)
+	case 32:
+		unionFixedSelected[types.Decimal256](target, source, sels)
 	default:
-		unionWideFixedSelected(v, w, oldLen, sels, tlen)
+		for i, sel := range sels {
+			copy(target[i*width:(i+1)*width], source[int(sel)*width:(int(sel)+1)*width])
+		}
 	}
+}
+
+// Permute reorders v in place: row i becomes v's old row rows[i]. Rows may be
+// in any order, may repeat, and may be fewer or more than v has. This is how
+// a sort applies its permutation: Identity, sort the rows, Permute. Varlena
+// values keep their bytes in v's area; only the headers move. mp must be v's
+// pool. On an error v is unchanged.
+func (v *Vector) Permute(rows []int64, mp *mpool.MPool) error {
+	if v.IsConst() || isIdentity(rows, v.length) {
+		return nil
+	}
+	n := len(rows)
+	width := v.typ.TypeSize()
+	data, err := v.alloc(mp, n*width)
+	if err != nil {
+		return err
+	}
+	var nsp nulls.Nulls
+	hasNulls := v.nsp.Any()
+	if hasNulls {
+		if err = nsp.InitWithSize(n, v.mp); err == nil {
+			err = gatherNulls(&nsp, 0, &v.nsp, rows)
+		}
+		if err != nil {
+			nsp.Free()
+			mp.Free(data)
+			return err
+		}
+	}
+	gatherFixedBytes(data[:n*width], v.data[:v.length*width], width, rows)
+	mp.Free(v.data[:v.length*width])
+	v.data = data
+	v.length = n
+	// A sorted vector stays sorted under a nondecreasing selection.
+	v.sorted = v.sorted && slices.IsSorted(rows)
+	if hasNulls {
+		v.nsp, nsp = nsp, v.nsp
+		nsp.Free()
+	}
+	return nil
+}
+
+// PermuteWithScratch is Permute for a permutation that keeps the row count.
+// It gathers into *scratch, a Go-heap buffer the caller keeps across calls,
+// and copies the result back, so v's data is not reallocated. A vector on a
+// view pool, whose memory must stay accounted, and a permutation that changes
+// the row count use Permute instead. A scratch that overlaps v's data is
+// replaced.
+func (v *Vector) PermuteWithScratch(rows []int64, mp *mpool.MPool, scratch *[]byte) error {
+	if v.IsConst() {
+		return nil
+	}
+	if mp.IsView() || len(rows) != v.length {
+		return v.Permute(rows, mp)
+	}
+	if err := v.checkMP(mp); err != nil {
+		return err
+	}
+	if isIdentity(rows, v.length) {
+		return nil
+	}
+	width := v.typ.TypeSize()
+	need := len(rows) * width
+	if cap(*scratch) >= need && byteSlicesOverlap((*scratch)[:need], v.data[:need]) {
+		// The gather reads v while it writes the scratch, so they must not
+		// share memory. Replace the scratch instead of keeping the alias.
+		*scratch = nil
+	}
+	if cap(*scratch) < need {
+		*scratch = make([]byte, need)
+	}
+	*scratch = (*scratch)[:need]
+	buf := *scratch
+	// Remap the NULLs first: it can fail allocating, and v is still intact.
+	if v.nsp.Any() {
+		var nsp nulls.Nulls
+		err := nsp.InitWithSize(len(rows), v.mp)
+		if err == nil {
+			err = gatherNulls(&nsp, 0, &v.nsp, rows)
+		}
+		if err != nil {
+			nsp.Free()
+			return err
+		}
+		v.nsp, nsp = nsp, v.nsp
+		nsp.Free()
+	}
+	gatherFixedBytes(buf, v.data[:need], width, rows)
+	copy(v.data[:need], buf)
+	v.sorted = v.sorted && slices.IsSorted(rows)
+	return nil
+}
+
+// isIdentity reports whether rows is 0, 1, ..., n-1: the permutation of an
+// input that is already in order, common when a sort sees sorted data. It
+// stops at the first row out of place.
+func isIdentity(rows []int64, n int) bool {
+	if len(rows) != n {
+		return false
+	}
+	for i, r := range rows {
+		if r != int64(i) {
+			return false
+		}
+	}
+	return true
 }
 
 // gatherNulls sets dst row base+i when src row rows[i] is NULL. It builds

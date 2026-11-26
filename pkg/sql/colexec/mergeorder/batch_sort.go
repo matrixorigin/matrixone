@@ -354,14 +354,14 @@ func (ctr *container) appendSortedChunk(
 		sels[i] = int64(i)
 	}
 	mosort.SortByVectorsWithTypes(sels, orderCols, desc, nullsLast, ctr.orderTypes)
-	if err = chunk.Shuffle(sels, ctr.sortAllocator(proc)); err != nil {
+	if err = chunk.Permute(sels, ctr.sortAllocator(proc)); err != nil {
 		freeOrderColumns(proc.Mp(), chunk, orderCols)
 		chunk.Clean(ctr.sortAllocator(proc))
 		return err
 	}
 	for _, vec := range orderCols {
 		if vec != nil && !batchContainsVector(chunk, vec) {
-			if err = vec.Shuffle(sels, vec.MPool()); err != nil {
+			if err = vec.Permute(sels, vec.MPool()); err != nil {
 				freeOrderColumns(proc.Mp(), chunk, orderCols)
 				chunk.Clean(ctr.sortAllocator(proc))
 				return err

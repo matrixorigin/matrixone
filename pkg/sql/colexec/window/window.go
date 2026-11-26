@@ -3124,7 +3124,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		ctr.os = nil
 	}
 
-	if err := bat.Shuffle(ctr.sels, vecMP); err != nil {
+	if err := bat.Permute(ctr.sels, vecMP); err != nil {
 		return false, err
 	}
 
@@ -3132,7 +3132,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	for k := idx; k < len(ctr.aggVecs); k++ {
 		for v := range ctr.aggVecs[k].Vec {
 			if ctr.aggVecs[k].Vec[v] != nil && !ctr.aggVecs[k].Vec[v].IsConst() {
-				if err := ctr.aggVecs[k].Vec[v].Shuffle(ctr.sels, vecMP); err != nil {
+				if err := ctr.aggVecs[k].Vec[v].Permute(ctr.sels, vecMP); err != nil {
 					return false, err
 				}
 			}
@@ -3141,7 +3141,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 
 	t := len(ctr.orderVecs) - 1
 	if len(ctr.orderVecs[t].Vec) > 0 {
-		if err := ctr.orderVecs[t].Vec[0].Shuffle(ctr.sels, vecMP); err != nil {
+		if err := ctr.orderVecs[t].Vec[0].Permute(ctr.sels, vecMP); err != nil {
 			return false, err
 		}
 	}

@@ -1037,7 +1037,7 @@ func (ctr *container) evalInMemory(limit uint64, n int, proc *process.Process, r
 	if err != nil {
 		return err
 	}
-	if err := ctr.bat.Shuffle(ctr.sels, retainedMP); err != nil {
+	if err := ctr.bat.Permute(ctr.sels, retainedMP); err != nil {
 		return err
 	}
 	ctr.releaseSelectionState(proc)

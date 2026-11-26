@@ -652,7 +652,7 @@ func sortBatchByPrimaryKeyAndTS(bat *batch.Batch, pkIdx int, mp *mpool.MPool) er
 		return timestamps[left].LT(&timestamps[right])
 	})
 	for _, vec := range bat.Vecs {
-		if err := vec.Shuffle(sels, mp); err != nil {
+		if err := vec.Permute(sels, mp); err != nil {
 			return err
 		}
 	}
@@ -4203,7 +4203,7 @@ func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 	}
 	sort.Sort(false, false, true, sortedIdx, bat.Vecs[sortIdx])
 	for i := 0; i < len(bat.Vecs); i++ {
-		err := bat.Vecs[i].Shuffle(sortedIdx, mp)
+		err := bat.Vecs[i].Permute(sortedIdx, mp)
 		if err != nil {
 			return err
 		}

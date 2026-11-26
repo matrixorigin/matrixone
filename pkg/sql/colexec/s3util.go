@@ -697,7 +697,7 @@ func SortByKey(
 		}
 	}
 	if needSort {
-		return bat.Shuffle(sels, m)
+		return bat.Permute(sels, m)
 	}
 	return nil
 }

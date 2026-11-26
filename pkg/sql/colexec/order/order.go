@@ -101,7 +101,7 @@ func (ctr *container) retainedOrderBytes() uint64 {
 }
 
 // recoveryCapacityTarget bounds the allocations required after the input has
-// been retained but before the sorted run can be returned. Shuffle replaces
+// been retained but before the sorted run can be returned. Permute replaces
 // the logical vector payload and may temporarily duplicate accounted bitmap
 // and row-metadata storage. Sort selectors and multi-key scratch can each grow
 // to at most twice their requested size. Allocated bytes, rather than logical
@@ -255,7 +255,7 @@ func (ctr *container) shouldSortCurrentRun() (bool, error) {
 	if existing := ctr.orderScratchBytes(); requiredScratch > existing {
 		additionalScratch = requiredScratch - existing
 	}
-	// Shuffle replaces vectors one at a time, so at most one further retained
+	// Permute replaces vectors one at a time, so at most one further retained
 	// payload overlaps the already allocated batch.
 	peak := addOrderBytes(current, data)
 	peak = addOrderBytes(peak, additionalScratch)
@@ -430,7 +430,7 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 		if err = ctr.allocationViews(ctr.bufMP); err != nil {
 			return err
 		}
-		err = ctr.batWaitForSort.Shuffle(ctr.resultOrderList, ctr.runMP())
+		err = ctr.batWaitForSort.Permute(ctr.resultOrderList, ctr.runMP())
 		if err != nil {
 			return err
 		}

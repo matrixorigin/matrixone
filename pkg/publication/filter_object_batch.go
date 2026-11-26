@@ -455,7 +455,7 @@ func createObjectFromBatch(
 	}
 
 	for i := 0; i < len(cnBat.Vecs); i++ {
-		if err := cnBat.Vecs[i].Shuffle(sortedIdx, mp); err != nil {
+		if err := cnBat.Vecs[i].Permute(sortedIdx, mp); err != nil {
 			return objectio.ObjectStats{}, nil, moerr.NewInternalErrorf(ctx, "failed to shuffle vector: %v", err)
 		}
 	}

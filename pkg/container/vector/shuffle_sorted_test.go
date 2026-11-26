@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShuffleSorted(t *testing.T) {
+func TestPermuteSorted(t *testing.T) {
 	cases := []struct {
 		name         string
 		sels         []int64
@@ -44,9 +44,9 @@ func TestShuffleSorted(t *testing.T) {
 				var buf []byte
 				var err error
 				if buffered {
-					err = v.ShuffleWithBuf(tc.sels, mp, &buf)
+					err = v.PermuteWithScratch(tc.sels, mp, &buf)
 				} else {
-					err = v.Shuffle(tc.sels, mp)
+					err = v.Permute(tc.sels, mp)
 				}
 				require.NoError(t, err)
 				require.Equal(t, tc.want, v.GetSorted())
@@ -62,9 +62,9 @@ func TestShuffleSorted(t *testing.T) {
 			v.SetSorted(true)
 			var buf []byte
 			if buffered {
-				err = v.ShuffleWithBuf([]int64{2, 0}, mp, &buf)
+				err = v.PermuteWithScratch([]int64{2, 0}, mp, &buf)
 			} else {
-				err = v.Shuffle([]int64{2, 0}, mp)
+				err = v.Permute([]int64{2, 0}, mp)
 			}
 			require.NoError(t, err)
 			require.True(t, v.GetSorted())
@@ -111,9 +111,9 @@ func TestShuffleSortedGather(t *testing.T) {
 					var buf []byte
 					var err error
 					if buffered {
-						err = v.ShuffleWithBuf(tc.sels, mp, &buf)
+						err = v.PermuteWithScratch(tc.sels, mp, &buf)
 					} else {
-						err = v.Shuffle(tc.sels, mp)
+						err = v.Permute(tc.sels, mp)
 					}
 					require.NoError(t, err)
 					require.Equal(t, tc.want, v.GetSorted())
@@ -130,84 +130,78 @@ func TestShuffleSortedGather(t *testing.T) {
 	}
 }
 
-func TestShuffleWithBufIdentityAlias(t *testing.T) {
-	for _, tc := range []struct {
-		name                     string
-		offset, length, capacity int
-		grow                     bool
-	}{
-		{"same", 0, 32, 32, false}, {"offset", 8, 32, 32, false},
-		{"last byte", 31, 32, 32, false}, {"adjacent", 32, 32, 32, false},
-		{"zero length", 8, 0, 32, false}, {"grow", 8, 0, 8, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			v := NewVec(types.T_int64.ToType(), mp)
-			t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
-			require.NoError(t, v.PreExtend(8, mp))
-			require.NoError(t, AppendFixedList(v, []int64{1, 2, 3, 4}, nil, mp))
-			v.SetSorted(true)
-			backing := v.GetData()[:64]
-			before := append([]byte(nil), backing...)
-			model := append([]byte(nil), before...)
-			if !tc.grow {
-				copy(model[tc.offset:tc.offset+32], model[:32])
-				copy(model[:32], model[tc.offset:tc.offset+32])
-			}
-			buf := backing[tc.offset : tc.offset+tc.length : tc.offset+tc.capacity]
-			require.NoError(t, v.ShuffleWithBuf([]int64{0, 1, 2, 3}, mp, &buf))
-			require.Equal(t, []int64{1, 2, 3, 4}, MustFixedColWithTypeCheck[int64](v))
-			require.True(t, v.GetSorted())
-			require.Equal(t, 4, v.Length())
-			require.Len(t, buf, 32)
-			require.Equal(t, model, backing)
-			if !tc.grow {
-				require.Equal(t, model[tc.offset:tc.offset+32], buf)
-				require.Equal(t, tc.capacity, cap(buf))
-			}
-		})
+// A scratch that overlaps v's own data is replaced, so v ends up right for
+// any permutation and the caller does not keep the alias.
+func TestPermuteWithScratchAliasFallsBack(t *testing.T) {
+	for _, perm := range [][]int64{{0, 1, 2, 3}, {3, 1, 2, 0}} {
+		for _, tc := range []struct {
+			name                     string
+			offset, length, capacity int
+		}{
+			{"same", 0, 32, 32}, {"offset", 8, 32, 32}, {"last byte", 31, 32, 32}, {"zero length", 8, 0, 32},
+		} {
+			t.Run(fmt.Sprintf("%v/%s", perm, tc.name), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				v := NewVec(types.T_int64.ToType(), mp)
+				t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
+				require.NoError(t, v.PreExtend(8, mp))
+				require.NoError(t, AppendFixedList(v, []int64{1, 2, 3, 4}, nil, mp))
+				v.SetSorted(true)
+				backing := v.GetData()[:64]
+				buf := backing[tc.offset : tc.offset+tc.length : tc.offset+tc.capacity]
+				require.NoError(t, v.PermuteWithScratch(perm, mp, &buf))
+				want := make([]int64, len(perm))
+				for i, r := range perm {
+					want[i] = r + 1
+				}
+				require.Equal(t, want, MustFixedColWithTypeCheck[int64](v))
+				require.Equal(t, perm[0] == 0, v.GetSorted())
+				if perm[0] != 0 {
+					// A scratch that was written no longer aliases v.
+					require.False(t, byteSlicesOverlap(buf, v.GetData()[:cap(v.GetData())]))
+				}
+			})
+		}
 	}
 }
 
-func TestShuffleWithBufIdentityVarlenAlias(t *testing.T) {
+func TestPermuteWithScratchVarlenAlias(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := NewVec(types.T_text.ToType(), mp)
 	t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
 	require.NoError(t, v.PreExtend(5, mp))
 	values := [][]byte{[]byte("first value exceeding the inline storage limit"), []byte("second value exceeding the inline storage limit"), []byte("third value exceeding the inline storage limit"), []byte("fourth value exceeding the inline storage limit")}
 	require.NoError(t, AppendBytesList(v, values, nil, mp))
-	v.SetSorted(true)
 	sz := v.GetType().TypeSize()
-	backing := v.GetData()[:5*sz]
-	model := append([]byte(nil), backing...)
-	copy(model[sz:5*sz], model[:4*sz])
-	copy(model[:4*sz], model[sz:5*sz])
-	buf := backing[sz : 5*sz]
-	require.NoError(t, v.ShuffleWithBuf([]int64{0, 1, 2, 3}, mp, &buf))
+	buf := v.GetData()[sz : 5*sz]
+	require.NoError(t, v.PermuteWithScratch([]int64{3, 2, 1, 0}, mp, &buf))
 	for i := range values {
-		require.Equal(t, values[i], v.GetBytesAt(i))
+		require.Equal(t, values[3-i], v.GetBytesAt(i))
 	}
-	require.True(t, v.GetSorted())
-	require.Equal(t, model, backing)
-	require.Equal(t, model[sz:5*sz], buf)
 }
 
-func TestShuffleWithBufIdentityReuse(t *testing.T) {
+// The scratch is kept and reused across calls.
+func TestPermuteWithScratchReuse(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
 	require.NoError(t, AppendFixedList(v, []int64{1, 2, 3, 4}, nil, mp))
 	v.SetSorted(true)
+	data := &v.GetData()[0]
 	buf := make([]byte, 0, 32)
-	require.NoError(t, v.ShuffleWithBuf([]int64{0, 1, 2, 3}, mp, &buf))
-	require.Equal(t, v.GetData()[:32], buf)
+	// The identity permutation of sorted input changes nothing.
+	require.NoError(t, v.PermuteWithScratch([]int64{0, 1, 2, 3}, mp, &buf))
+	require.True(t, v.GetSorted())
+	require.Empty(t, buf)
+	require.NoError(t, v.PermuteWithScratch([]int64{1, 0, 2, 3}, mp, &buf))
 	first := &buf[0]
-	require.NoError(t, v.ShuffleWithBuf([]int64{3, 1, 2, 0}, mp, &buf))
+	require.NoError(t, v.PermuteWithScratch([]int64{3, 0, 2, 1}, mp, &buf))
 	require.Equal(t, []int64{4, 2, 3, 1}, MustFixedColWithTypeCheck[int64](v))
 	require.False(t, v.GetSorted())
 	require.Len(t, buf, 32)
 	require.True(t, first == &buf[0])
-	require.Equal(t, v.GetData()[:32], buf)
+	// v's data was not reallocated.
+	require.True(t, data == &v.GetData()[0])
 }
 
 func TestByteSlicesOverlapBoundaries(t *testing.T) {
@@ -225,7 +219,7 @@ func TestByteSlicesOverlapBoundaries(t *testing.T) {
 	}
 }
 
-func TestShuffleWithBufStringMetadata(t *testing.T) {
+func TestPermuteWithScratchStringMetadata(t *testing.T) {
 	for _, typ := range []types.Type{types.T_text.ToType(), types.T_varbinary.ToType()} {
 		for _, identity := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/identity=%v", typ.Oid, identity), func(t *testing.T) {
@@ -245,7 +239,7 @@ func TestShuffleWithBufStringMetadata(t *testing.T) {
 					v.SetSorted(true)
 				}
 				var buf []byte
-				require.NoError(t, v.ShuffleWithBuf(sels, mp, &buf))
+				require.NoError(t, v.PermuteWithScratch(sels, mp, &buf))
 				for row, source := range sels {
 					require.Equal(t, values[source], v.GetBytesAt(row))
 					require.Equal(t, source == 1, v.IsNull(uint64(row)))
@@ -258,9 +252,9 @@ func TestShuffleWithBufStringMetadata(t *testing.T) {
 	}
 }
 
-// BenchmarkShuffle measures reusable-buffer and allocation paths with equal values,
+// BenchmarkPermuteSorted measures reusable-buffer and allocation paths with equal values,
 // so each iteration starts with a legitimately sorted vector without rebuilding it.
-func BenchmarkShuffle(b *testing.B) {
+func BenchmarkPermuteSorted(b *testing.B) {
 	for _, n := range []int{64, 8192} {
 		for _, varlen := range []bool{false, true} {
 			for _, buffered := range []bool{false, true} {
@@ -295,7 +289,7 @@ func BenchmarkShuffle(b *testing.B) {
 						}
 						var buf []byte
 						if buffered {
-							if err := v.ShuffleWithBuf(sels, mp, &buf); err != nil {
+							if err := v.PermuteWithScratch(sels, mp, &buf); err != nil {
 								b.Fatal(err)
 							}
 						}
@@ -305,9 +299,9 @@ func BenchmarkShuffle(b *testing.B) {
 							v.SetSorted(order != "unsorted")
 							var err error
 							if buffered {
-								err = v.ShuffleWithBuf(sels, mp, &buf)
+								err = v.PermuteWithScratch(sels, mp, &buf)
 							} else {
-								err = v.Shuffle(sels, mp)
+								err = v.Permute(sels, mp)
 							}
 							if err != nil {
 								b.Fatal(err)

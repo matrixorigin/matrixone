@@ -1025,7 +1025,7 @@ func (r *reader) read(
 			// explicitly; otherwise rowCount can stay > 0 while distVec is empty.
 			if len(sels) == 0 {
 				outBatch.CleanOnlyData()
-			} else if err := outBatch.Shuffle(sels, mp); err != nil {
+			} else if err := outBatch.Permute(sels, mp); err != nil {
 				return false, false, err
 			}
 

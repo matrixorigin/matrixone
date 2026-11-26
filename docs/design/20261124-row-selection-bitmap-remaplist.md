@@ -226,6 +226,26 @@ Measured, pinned to one core, minimum of five or more runs (old is PR 7, which s
 
 The whole-operator numbers are within 2.5%: the split is a small part of a spill scatter or a partition. The partition's counting sort alone costs the same as before (271 µs before, 277 µs after, for 65536 rows in 1024 groups).
 
+**Sorts (PR 9).** `Vector.Permute(rows, mp)` and `Batch.Permute` apply a sort's permutation in place on the gather kernel: the value loop per payload width, NULLs a word at a time. They replace `Shuffle` and `Batch.Shuffle`; every caller already had `[]int64` rows, so `pkg/sort` and the callers' row lists are unchanged. `Vector.PermuteWithScratch` replaces `ShuffleWithBuf` for the TN merge sort: it gathers into a Go-heap scratch the caller keeps and copies back, so the column is not reallocated per sort. A scratch that overlaps the vector's own data is replaced rather than kept (the old code handled that alias only for the identity permutation). The identity permutation of the full length is a no-op, the common case when a sort sees data that is already in order.
+
+Measured, pinned to one core, minimum of five runs, PR 8 → PR 9:
+
+| benchmark | old | new |
+| --- | --- | --- |
+| permute 8192 rows, random order, int64 / int64 with NULLs | 3.5 / 8.6 µs | 3.5 / 8.7 µs |
+| same, decimal128 / varchar with NULLs | 22.6 / 28.9 µs | 22.7 / 29.0 µs |
+| same with a reused scratch (`PermuteWithScratch`), decimal128 / varchar | — | 10.9 / 13.4 µs |
+| scratch permute of already sorted input, int64 / varchar | 2.7 / 4.3 µs | 1.1 / 1.1 µs |
+| scratch permute in reverse order, int64 / varchar | 2.9 / 6.7 µs | 2.7 / 6.8 µs |
+| `BenchmarkTopUnaccountedResident` / `TopAccountedResident` | 1124 / 1139 µs | 1114 / 1126 µs |
+| `BenchmarkReviewSmallVarlenTop` | 5783 µs | 5694 µs |
+| mergetop, `BenchmarkMergeTopUnaccountedResident` | 15.9 ms | 16.0 ms |
+| order, `BenchmarkOrderUnaccountedResident` | 8.79 ms | 8.81 ms |
+| mergeorder, `BenchmarkOrder` / `MergeOrderUnaccountedResident` | 3029 / 724 µs | 3016 / 723 µs |
+| TN `BenchmarkSortBlockColumns` | 636 µs | 638 µs |
+
+The operators are flat: the permutation is a small part of a sort. (`order`'s `BenchmarkOrder` panics with "mismatched multi-column semantic types" before and after this change, so it is left out.)
+
 ## Implementation plan
 
 Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a duplicate and each measured with its own benchmark. The tracks are independent until the last cleanup.
@@ -241,7 +261,7 @@ Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a 
 | 6b | Bitmap | Remove function select list | delete `FunctionSelectList`, the kernels' masking paths and the kernel parameter | build and full test run |
 | 7 | RemapList | Type and gather | new package `pkg/common/remaplist` with `remaplist.List`; one gather kernel behind `Vector.Union` / `Batch.Union` with the null remap in the same pass | gather microbenchmarks against `Union` and `Shuffle` |
 | 8 | RemapList | Buckets | spill, hash-build spill, group spill, the complete-key shuffle and partition use the one counting sort (`SplitBuckets` / `BuildBuckets`); the typed shuffle kernels keep their fused append (measured); their `int32` lists become `int64` and `UnionInt32` goes away | shuffle and spill benchmarks |
-| 9 | RemapList | Sorts | order, mergeorder, top, mergetop, window, mergesort and logtail sorts use `Identity` → sort → permute with the gather kernel; remove `Shuffle` and `ShuffleWithBuf` | sort and top-k benchmarks |
+| 9 | RemapList | Sorts | order, mergeorder, top, mergetop, window, mergesort, logtail and publication sorts apply their permutation with `Permute` / `PermuteWithScratch` on the gather kernel; remove `Shuffle` and `ShuffleWithBuf` | sort and top-k benchmarks |
 | 10 | RemapList | Joins | probe and build gathers use RemapList with global row ids; `TryUnionFlatFixedRows` goes away | hash-join benchmarks; TPC-H join queries |
 | 11 | RemapList | Inverse maps | mergesort and transfer use `InvertInto` | merge benchmarks |
 

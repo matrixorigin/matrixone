@@ -388,7 +388,7 @@ func rewriteTombstoneRowids(
 
 	// Shuffle all vectors in the batch using the sorted index
 	for i := 0; i < len(bat.Vecs); i++ {
-		if err := bat.Vecs[i].GetDownstreamVector().Shuffle(sortedIdx, mp); err != nil {
+		if err := bat.Vecs[i].GetDownstreamVector().Permute(sortedIdx, mp); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to shuffle tombstone column %d: %v", i, err)
 		}
 	}

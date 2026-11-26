@@ -4783,7 +4783,7 @@ func TestLoadFileDatalinkCardinality(t *testing.T) {
 		resultBatch := batch.NewWithSize(1)
 		resultBatch.Vecs[0] = result
 		resultBatch.SetRowCount(2)
-		require.NoError(t, resultBatch.Shuffle([]int64{1, 0}, proc.Mp()))
+		require.NoError(t, resultBatch.Permute([]int64{1, 0}, proc.Mp()))
 	})
 
 	t.Run("constant empty expands to batch length", func(t *testing.T) {

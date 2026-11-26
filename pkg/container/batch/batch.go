@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1227,20 +1228,22 @@ func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, 
 	return nil
 }
 
-func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
-	if len(sels) > 0 {
-		mp := make(map[*vector.Vector]uint8)
-		for _, vec := range bat.Vecs {
-			if _, ok := mp[vec]; ok {
-				continue
-			}
-			mp[vec]++
-			if err := vec.Shuffle(sels, m); err != nil {
-				return err
-			}
-		}
-		bat.rowCount = len(sels)
+// Permute reorders every column of bat in place: row i becomes old row
+// rows[i] (see Vector.Permute). A vector that appears in several columns is
+// permuted once.
+func (bat *Batch) Permute(rows []int64, m *mpool.MPool) error {
+	if len(rows) == 0 {
+		return nil
 	}
+	for i, vec := range bat.Vecs {
+		if slices.Contains(bat.Vecs[:i], vec) {
+			continue
+		}
+		if err := vec.Permute(rows, m); err != nil {
+			return err
+		}
+	}
+	bat.rowCount = len(rows)
 	return nil
 }
 

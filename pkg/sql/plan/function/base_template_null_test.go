@@ -126,7 +126,7 @@ func TestUnaryFixedToStrConstNullPreservesResultCardinality(t *testing.T) {
 	resultBatch := batch.NewWithSize(1)
 	resultBatch.Vecs[0] = testCase.GetResultVectorDirectly()
 	resultBatch.SetRowCount(2)
-	require.NoError(t, resultBatch.Shuffle([]int64{1, 0}, proc.Mp()))
+	require.NoError(t, resultBatch.Permute([]int64{1, 0}, proc.Mp()))
 	require.Equal(t, 2, resultBatch.RowCount())
 	require.True(t, resultBatch.Vecs[0].IsNull(0))
 	require.True(t, resultBatch.Vecs[0].IsNull(1))

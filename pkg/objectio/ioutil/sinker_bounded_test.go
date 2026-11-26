@@ -156,8 +156,8 @@ func TestSortedRunSizeAccountsForAliasesAndDeadArea(t *testing.T) {
 	input.SetRowCount(2)
 	descriptors := 2 * (typs[0].TypeSize() + typs[1].TypeSize() + typs[2].TypeSize())
 	require.Equal(t, descriptors+1000+1400, materializedBatchSize(input))
-	require.NoError(t, input.Vecs[1].Shuffle([]int64{1, 0}, mp))
-	require.NoError(t, input.Vecs[2].Shuffle([]int64{1, 0}, mp))
+	require.NoError(t, input.Vecs[1].Permute([]int64{1, 0}, mp))
+	require.NoError(t, input.Vecs[2].Permute([]int64{1, 0}, mp))
 	require.Equal(t, descriptors+1000+1400, materializedBatchSize(input), "sorting cannot change accounting")
 }
 

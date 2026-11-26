@@ -38,9 +38,9 @@ func TestBetweenAfterShuffleInvalidatesSorted(t *testing.T) {
 			if buffered {
 				sels = []int64{2, 0, 1}
 				var buf []byte
-				require.NoError(t, v.ShuffleWithBuf(sels, mp, &buf))
+				require.NoError(t, v.PermuteWithScratch(sels, mp, &buf))
 			} else {
-				require.NoError(t, v.Shuffle(sels, mp))
+				require.NoError(t, v.Permute(sels, mp))
 			}
 			n := len(sels)
 			lower, err := vector.NewConstFixed(typ, int64(1), n, mp)
@@ -95,9 +95,9 @@ func TestSortedConsumersAfterShuffle(t *testing.T) {
 				for _, v := range []*vector.Vector{ints, strs} {
 					if buffered {
 						var buf []byte
-						require.NoError(t, v.ShuffleWithBuf(tc.sels, mp, &buf))
+						require.NoError(t, v.PermuteWithScratch(tc.sels, mp, &buf))
 					} else {
-						require.NoError(t, v.Shuffle(tc.sels, mp))
+						require.NoError(t, v.Permute(tc.sels, mp))
 					}
 					require.Equal(t, tc.sorted, v.GetSorted())
 				}
