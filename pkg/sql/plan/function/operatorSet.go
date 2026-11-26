@@ -1323,15 +1323,6 @@ func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 		}
 
 		source := []types.Type{inputs[1], inputs[2]}
-		if (source[0].Oid == types.T_enum || source[0].Oid == types.T_geometry ||
-			source[0].Oid == types.T_geometry32) && source[0].Eq(source[1]) {
-			// A joined UPDATE guards typed assignments with IF. Preserve
-			// the stored ordinal or WKB when the types already match.
-			if needCast {
-				return newCheckResultWithCast(0, []types.Type{conditionType, source[0], source[1]})
-			}
-			return newCheckResultWithSuccess(0)
-		}
 		if retType, ok := CommonMediumIntType(source); ok {
 			finalTypes := []types.Type{conditionType, retType, retType}
 			shouldCast := needCast ||

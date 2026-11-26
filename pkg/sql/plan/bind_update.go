@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -5095,18 +5096,25 @@ func (builder *QueryBuilder) guardTargetLocalExpr(
 	newExpr *plan.Expr,
 	oldExpr *plan.Expr,
 ) (*plan.Expr, error) {
-	value, err := BindFuncExprImplByPlanExpr(
-		builder.GetContext(),
-		"if",
-		[]*plan.Expr{DeepCopyExpr(targetSelected), newExpr, DeepCopyExpr(oldExpr)},
-	)
-	if err != nil {
-		return nil, err
+	args := []*plan.Expr{DeepCopyExpr(targetSelected), newExpr, DeepCopyExpr(oldExpr)}
+	newType, oldType := newExpr.Typ, oldExpr.Typ
+	sameLabels := isEnumOrSetPlanType(&newType) && isEnumOrSetPlanType(&oldType) &&
+		newType.Id == oldType.Id && newType.Enumvalues == oldType.Enumvalues
+	sameGeometry := isGeometryPlanType(&newType) && isGeometryPlanType(&oldType) &&
+		makeTypeByPlan2Type(newType).Eq(makeTypeByPlan2Type(oldType))
+	if sameLabels || sameGeometry {
+		// Both arms are already normalized to the destination storage
+		// type. Select the exact value without ordinary SQL IF coercion.
+		newType.NotNullable = newType.NotNullable && oldType.NotNullable
+		return &plan.Expr{
+			Typ: newType,
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.IFF, 0), ObjName: "if"},
+				Args: args,
+			}},
+		}, nil
 	}
-	if isEnumOrSetPlanType(&newExpr.Typ) && value.Typ.Id == newExpr.Typ.Id {
-		value.Typ.Enumvalues = newExpr.Typ.Enumvalues
-	}
-	return value, nil
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), "if", args)
 }
 
 func (builder *QueryBuilder) appendSelectedTargetNotNullAssertions(
