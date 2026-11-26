@@ -310,3 +310,73 @@ func TestEncodeEntryRoundTrip(t *testing.T) {
 	require.Zero(t, got.Bat.Len())
 	require.Empty(t, got.Bat.Bytes())
 }
+
+// Encode trusts its batch: a varlen area that the checked codec would
+// rewrite (here two rows share one span) is sent as is and still decodes to
+// the same values, through both views.
+func TestEncodeSendsTrustedAreaAsIs(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
+	long := func(c byte) []byte { return bytes.Repeat([]byte{c}, types.VarlenaInlineSize+8) }
+	for _, c := range []byte("abc") {
+		require.NoError(t, vector.AppendBytes(vec, long(c), false, mp))
+	}
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	descriptors := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
+	descriptors[2] = descriptors[0]
+	require.False(t, vec.VarlenaAreaIsDisjoint())
+
+	checked, err := MarshalVectors([]*vector.Vector{vec})
+	require.NoError(t, err)
+	encoded, err := EncodeVectors([]*vector.Vector{vec})
+	require.NoError(t, err)
+	require.Greater(t, encoded.Len(), len(checked), "the area is sent whole, unreferenced bytes included")
+
+	for name, view := range map[string]func([]byte) (*Batch, error){
+		"checked": ViewBinary, "trusted": ViewTrustedBinary,
+	} {
+		got, err := view(encoded.Bytes())
+		require.NoError(t, err, name)
+		require.Equal(t, long('a'), got.Vecs[0].GetBytesAt(0), name)
+		require.Equal(t, long('b'), got.Vecs[0].GetBytesAt(1), name)
+		require.Equal(t, long('a'), got.Vecs[0].GetBytesAt(2), name)
+	}
+}
+
+// The trusted view skips value checks but not framing or row counts.
+func TestViewTrustedBinaryChecksFraming(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := newEncodeTestBatch(t, mp, 10)
+	defer func() {
+		bat.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	encoded, err := Encode(bat)
+	require.NoError(t, err)
+	data := encoded.Bytes()
+
+	view, err := ViewTrustedBinary(data)
+	require.NoError(t, err)
+	require.Equal(t, 10, view.RowCount())
+	require.Len(t, view.Vecs, len(bat.Vecs))
+	for i := range bat.Vecs {
+		require.Equal(t, *bat.Vecs[i].GetType(), *view.Vecs[i].GetType())
+		require.Nil(t, view.Vecs[i].MPool(), "views own no memory")
+	}
+	require.Equal(t, bat.Vecs[1].GetBytesAt(9), view.Vecs[1].GetBytesAt(9))
+	require.True(t, view.Vecs[0].IsNull(7))
+
+	_, err = ViewTrustedBinary(data[:len(data)-1])
+	require.Error(t, err, "truncated")
+	_, err = ViewTrustedBinary(append(bytes.Clone(data), 0))
+	require.Error(t, err, "trailing bytes")
+	wrongRows := bytes.Clone(data)
+	copy(wrongRows, types.EncodeInt64(new(int64(11))))
+	_, err = ViewTrustedBinary(wrongRows)
+	require.ErrorContains(t, err, "row count")
+	_, err = ViewTrustedBinary(nil)
+	require.Error(t, err)
+}

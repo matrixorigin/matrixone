@@ -60,9 +60,10 @@ func IsTransferredDels(name string) bool {
 }
 
 // mustViewEntryBatch decodes the batch of a logtail entry as read-only views
-// of data. A malformed entry is a TN bug, and replay cannot continue past it.
+// of data. TN encodes the entry from its own valid batches, so the payload is
+// trusted; a malformed frame is a TN bug, and replay cannot continue past it.
 func mustViewEntryBatch(data []byte) *batch.Batch {
-	bat, err := batch.ViewBinary(data)
+	bat, err := batch.ViewTrustedBinary(data)
 	if err != nil {
 		panic(err)
 	}

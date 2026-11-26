@@ -129,10 +129,10 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, 
 }
 
 func (bat *Batch) MarshalBinarySize() (int, error) {
-	return bat.prepareMarshalBinary(nil)
+	return bat.prepareMarshalBinary(nil, false)
 }
 
-func (bat *Batch) prepareMarshalBinary(plans []vector.MarshalBinaryPlan) (int, error) {
+func (bat *Batch) prepareMarshalBinary(plans []vector.MarshalBinaryPlan, trusted bool) (int, error) {
 	if bat == nil {
 		return 0, moerr.NewInvalidInputNoCtx("invalid batch for marshal")
 	}
@@ -163,7 +163,13 @@ func (bat *Batch) prepareMarshalBinary(plans []vector.MarshalBinaryPlan) (int, e
 				"cannot marshal a nil batch vector",
 			)
 		}
-		plan, err := vec.PrepareMarshalBinary()
+		var plan vector.MarshalBinaryPlan
+		var err error
+		if trusted {
+			plan, err = vec.PrepareMarshalBinaryTrusted()
+		} else {
+			plan, err = vec.PrepareMarshalBinary()
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -187,6 +193,10 @@ func (bat *Batch) prepareMarshalBinary(plans []vector.MarshalBinaryPlan) (int, e
 }
 
 func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
+	return bat.marshalBinaryTo(w, false)
+}
+
+func (bat *Batch) marshalBinaryTo(w io.Writer, trusted bool) error {
 	if bat == nil || w == nil {
 		return io.ErrClosedPipe
 	}
@@ -200,11 +210,13 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	} else {
 		plans = make([]vector.MarshalBinaryPlan, len(bat.Vecs))
 	}
-	size, err := bat.prepareMarshalBinary(plans)
+	size, err := bat.prepareMarshalBinary(plans, trusted)
 	if err != nil {
 		return err
 	}
-	if sized, ok := w.(interface {
+	if parts, ok := w.(*partsWriter); ok {
+		parts.reserve(bat, plans)
+	} else if sized, ok := w.(interface {
 		Len() int
 		EnsureCapacity(int) error
 	}); ok {
@@ -321,6 +333,13 @@ func (c *batchUnmarshalCursor) readUint32() (uint32, error) {
 }
 
 func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
+	return bat.unmarshalBinary(data, mp, true)
+}
+
+// unmarshalBinary decodes data. Without validateValues it trusts data to
+// come from MarshalBinary of a valid batch: the framing and sizes are still
+// checked, but not the null bitmaps or varlen payloads.
+func (bat *Batch) unmarshalBinary(data []byte, mp *mpool.MPool, validateValues bool) (err error) {
 	cursor := batchUnmarshalCursor{data: data}
 	rowCount, err := cursor.readInt64()
 	if err != nil {
@@ -408,7 +427,12 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		} else {
 			vecs[i].Free(mp)
 		}
-		if err := vecs[i].UnmarshalBinary(vecData); err != nil {
+		if validateValues {
+			err = vecs[i].UnmarshalBinary(vecData)
+		} else {
+			err = vecs[i].UnmarshalBinaryTrusted(vecData)
+		}
+		if err != nil {
 			return err
 		}
 	}

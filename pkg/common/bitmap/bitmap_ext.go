@@ -381,7 +381,14 @@ func (n *Bitmap) MarshalTo(w io.Writer) error {
 		}
 		return types.WriteFull(w, types.EncodeSlice(n.data))
 	}
-	if err := types.WriteFull(w, types.EncodeInt64(&n.popCount)); err != nil {
+	return n.marshalHeaderAndWordsTo(w, bitLength, dataLength)
+}
+
+// marshalHeaderAndWordsTo is MarshalTo for a plain io.Writer. It is separate
+// so the header values escape to the heap only on this path.
+func (n *Bitmap) marshalHeaderAndWordsTo(w io.Writer, bitLength, dataLength uint64) error {
+	popCount := n.popCount
+	if err := types.WriteFull(w, types.EncodeInt64(&popCount)); err != nil {
 		return err
 	}
 	if err := types.WriteFull(w, types.EncodeUint64(&bitLength)); err != nil {

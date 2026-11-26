@@ -27,12 +27,17 @@ import (
 //
 // After Unmarshal it holds one part, its own copy of the message bytes.
 type EncodedBatch struct {
+	// data is the encoding when it is one part; parts is nil then.
+	data  []byte
 	parts [][]byte
 	size  int
 }
 
 // NewEncodedBatch returns the encoding made of parts, in order.
 func NewEncodedBatch(parts ...[]byte) EncodedBatch {
+	if len(parts) == 1 {
+		return EncodedBatch{data: parts[0], size: len(parts[0])}
+	}
 	size := 0
 	for _, part := range parts {
 		size += len(part)
@@ -45,7 +50,7 @@ func NewEncodedBatch(parts ...[]byte) EncodedBatch {
 func (b EncodedBatch) Bytes() []byte {
 	switch len(b.parts) {
 	case 0:
-		return nil
+		return b.data
 	case 1:
 		return b.parts[0]
 	}
@@ -70,6 +75,9 @@ func (b EncodedBatch) Marshal() ([]byte, error) {
 }
 
 func (b EncodedBatch) MarshalTo(data []byte) (int, error) {
+	if b.parts == nil {
+		return copy(data, b.data), nil
+	}
 	n := 0
 	for _, part := range b.parts {
 		n += copy(data[n:], part)
@@ -80,7 +88,7 @@ func (b EncodedBatch) MarshalTo(data []byte) (int, error) {
 // Unmarshal copies data: gogoproto passes a view of the message buffer,
 // which the caller may reuse. Decoders then borrow from the copy.
 func (b *EncodedBatch) Unmarshal(data []byte) error {
-	*b = NewEncodedBatch(bytes.Clone(data))
+	*b = EncodedBatch{data: bytes.Clone(data), size: len(data)}
 	return nil
 }
 

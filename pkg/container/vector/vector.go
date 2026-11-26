@@ -1099,7 +1099,35 @@ func (p MarshalBinaryPlan) Size() int {
 	return p.size
 }
 
+// CopiedSize bounds the bytes MarshalTo copies into a types.BorrowingWriter
+// that borrows every buffer of at least minBorrowed bytes. It is exact
+// unless the varlen area is written value by value.
+func (p MarshalBinaryPlan) CopiedSize(minBorrowed int) int {
+	copied := p.size
+	if !p.canonicalVarlen {
+		if int(p.dataLength) >= minBorrowed {
+			copied -= int(p.dataLength)
+		}
+		if int(p.areaLength) >= minBorrowed {
+			copied -= int(p.areaLength)
+		}
+	}
+	return copied
+}
+
 func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
+	return v.prepareMarshalBinary(false)
+}
+
+// PrepareMarshalBinaryTrusted is PrepareMarshalBinary for a vector known to
+// be valid, such as one an engine built. It skips the linear check that
+// decides whether the varlen area can be sent as is, and always sends it as
+// is: a valid vector's descriptors all point inside its area.
+func (v *Vector) PrepareMarshalBinaryTrusted() (MarshalBinaryPlan, error) {
+	return v.prepareMarshalBinary(true)
+}
+
+func (v *Vector) prepareMarshalBinary(trusted bool) (MarshalBinaryPlan, error) {
 	if v == nil || v.length < 0 {
 		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx("invalid vector for marshal")
 	}
@@ -1128,7 +1156,7 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		dataLength = 0
 	}
 	areaLength := uint64(len(v.area))
-	canonicalVarlen := v.requiresCanonicalVarlenMarshal(dataLength)
+	canonicalVarlen := !trusted && v.requiresCanonicalVarlenMarshal(dataLength)
 	if dataLength > uint64(len(v.data)) {
 		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
 			"vector data is shorter than its marshal length",

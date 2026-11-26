@@ -486,7 +486,8 @@ func (h *Handle) apiEntryToWriteEntry(
 	prefetch bool,
 ) *cmd_util.WriteReq {
 
-	moBat, err := batch.ViewBinary(pe.Bat.Bytes())
+	// The CN encodes the entry from its own valid workspace batch.
+	moBat, err := batch.ViewTrustedBinary(pe.Bat.Bytes())
 	if err != nil {
 		panic(err)
 	}

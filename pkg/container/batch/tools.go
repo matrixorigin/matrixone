@@ -49,9 +49,12 @@ func EncodeVectors(vecs []*vector.Vector) (api.EncodedBatch, error) {
 // borrows its vectors' data and area buffers and its extra buffer: only the
 // headers and null bitmaps are copied. bat must stay unchanged until the
 // result is marshaled or dropped.
+//
+// bat must be valid, as an engine's batches are: Encode sends each varlen
+// area as is, without the codec's linear check of its descriptors.
 func Encode(bat *Batch) (api.EncodedBatch, error) {
 	var w partsWriter
-	if err := bat.MarshalBinaryTo(&w); err != nil {
+	if err := bat.marshalBinaryTo(&w, true); err != nil {
 		return api.EncodedBatch{}, err
 	}
 	return api.NewEncodedBatch(w.finish()...), nil
@@ -65,21 +68,26 @@ const minBorrowedPart = 256
 // its own buffer and keeps borrowed buffers by reference.
 type partsWriter struct {
 	binaryAppender
-	segments []partSegment
-	// owned is where the owned bytes not yet in a segment begin.
+	parts [][]byte
+	// owned is where the owned bytes not yet in a part begin.
 	owned int
 }
 
-// partSegment is a borrowed buffer, or owned bytes [start, end) when
-// borrowed is nil.
-type partSegment struct {
-	borrowed   []byte
-	start, end int
+// reserve sizes the owned buffer and the part list for bat, so the encoding
+// allocates each once.
+func (w *partsWriter) reserve(bat *Batch, plans []vector.MarshalBinaryPlan) {
+	copied := 8 + 4 + 4 + 4 + 4
+	for _, plan := range plans {
+		copied += 4 + plan.CopiedSize(minBorrowedPart)
+	}
+	if len(bat.extraBuf) < minBorrowedPart {
+		copied += len(bat.extraBuf)
+	}
+	w.buf = make([]byte, 0, copied)
+	// Each vector borrows at most its data and area, each followed by owned
+	// bytes; the extra buffer adds one more pair.
+	w.parts = make([][]byte, 0, 4*len(plans)+3)
 }
-
-// EnsureCapacity ignores the encoding's total size: most of it is
-// borrowed, not copied.
-func (w *partsWriter) EnsureCapacity(int) error { return nil }
 
 func (w *partsWriter) WriteBorrowed(data []byte) error {
 	if len(data) < minBorrowedPart {
@@ -87,38 +95,51 @@ func (w *partsWriter) WriteBorrowed(data []byte) error {
 		return err
 	}
 	w.closeOwned()
-	w.segments = append(w.segments, partSegment{borrowed: data})
+	w.parts = append(w.parts, data)
 	return nil
 }
 
+// closeOwned ends the current owned part. The part stays valid if the owned
+// buffer grows later: its bytes are final and stay in the old array.
 func (w *partsWriter) closeOwned() {
 	if end := len(w.buf); end > w.owned {
-		w.segments = append(w.segments, partSegment{start: w.owned, end: end})
+		w.parts = append(w.parts, w.buf[w.owned:end:end])
 		w.owned = end
 	}
 }
 
-// finish returns the parts in order. Owned segments are resolved only
-// now, after the owned buffer has stopped growing.
 func (w *partsWriter) finish() [][]byte {
 	w.closeOwned()
-	parts := make([][]byte, len(w.segments))
-	for i, segment := range w.segments {
-		if segment.borrowed != nil {
-			parts[i] = segment.borrowed
-		} else {
-			parts[i] = w.buf[segment.start:segment.end:segment.end]
-		}
-	}
-	return parts
+	return w.parts
 }
 
 // ViewBinary decodes data, a MarshalBinary encoding, into a new batch whose
 // vectors and extra buffer are read-only views of data. Every vector must
 // hold the batch's row count.
 func ViewBinary(data []byte) (*Batch, error) {
+	return viewBinary(data, true)
+}
+
+// ViewTrustedBinary is ViewBinary for data that Encode produced from a valid
+// batch, such as an api.Entry from a peer of the same cluster. It checks the
+// framing, sizes and row counts, but not the null bitmaps or varlen payloads.
+func ViewTrustedBinary(data []byte) (*Batch, error) {
+	return viewBinary(data, false)
+}
+
+func viewBinary(data []byte, validateValues bool) (*Batch, error) {
 	bat := NewWithSize(0)
-	if err := bat.UnmarshalBinary(data); err != nil {
+	// The vectors are views, so they can share one allocation.
+	if len(data) >= 12 {
+		if n := int(types.DecodeInt32(data[8:12])); n > 0 && n <= (len(data)-12)/4 {
+			views := make([]vector.Vector, n)
+			bat.Vecs = make([]*vector.Vector, n)
+			for i := range views {
+				bat.Vecs[i] = &views[i]
+			}
+		}
+	}
+	if err := bat.unmarshalBinary(data, nil, validateValues); err != nil {
 		return nil, err
 	}
 	if err := bat.CheckLength(); err != nil {
