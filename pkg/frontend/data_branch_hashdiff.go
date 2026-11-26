@@ -265,7 +265,7 @@ func lcaProbeTableDefAtSnapshot(
 	)
 }
 
-// Resolve tombstones against the LCA, retaining only misses in tombstones.
+// handleDelsOnLCA resolves tombstones and retains only missing keys in tBat.
 func handleDelsOnLCA(
 	ctx context.Context,
 	ses *Session,
@@ -274,6 +274,9 @@ func handleDelsOnLCA(
 	tblStuff tableStuff,
 	snapshot timestamp.Timestamp,
 ) (*batch.Batch, error) {
+	if snapshot.PhysicalTime == 0 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid branch ts: %s", snapshot.DebugString())
+	}
 	var keys *vector.Vector
 	if tombstones != nil {
 		keys = tombstones.Vecs[0]
@@ -300,9 +303,6 @@ func probeDataBranchRows(
 	snapshot timestamp.Timestamp,
 ) (dBat *batch.Batch, missing []int64, err error) {
 
-	if snapshot.PhysicalTime == 0 {
-		return nil, nil, moerr.NewInternalErrorNoCtxf("invalid branch ts: %s", snapshot.DebugString())
-	}
 	if keys == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("data branch probe is missing its primary key vector")
 	}
@@ -341,7 +341,11 @@ func probeDataBranchRows(
 	forceReaderProbe := lcaOwnerMismatch ||
 		(tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load())
 	var sqlReady bool
-	if !forceReaderProbe {
+	if snapshot.IsEmpty() {
+		// Apply-time existence checks must observe the current write transaction.
+		lcaTblDef = tblStuff.lcaRel.GetTableDef(ctx)
+		sqlReady = true
+	} else if !forceReaderProbe {
 		lcaSnapshotRel, lcaTblDef, sqlReady, err = lcaProbeTableDefAtSnapshot(ctx, ses, tblStuff, snapshotTS)
 		if err != nil {
 			return nil, nil, err
@@ -375,7 +379,10 @@ func probeDataBranchRows(
 		// created for the corresponding account/db/table, catalog lookup at that
 		// timestamp may fail with unknown db/table even though the caller already
 		// knows the stable table ID.
-		mots := fmt.Sprintf("{MO_TS='%s'} ", snapshotTS.ToString())
+		var mots string
+		if !snapshot.IsEmpty() {
+			mots = fmt.Sprintf("{MO_TS='%s'} ", snapshotTS.ToString())
+		}
 		var pkNames []string
 		if tblStuff.def.pkKind == fakeKind {
 			// The synthetic hash column is internal and cannot be renamed.
@@ -513,7 +520,7 @@ func probeDataBranchRows(
 				zap.String("snapshot-ts", snapshotTS.ToString()),
 				zap.Error(err),
 			)
-			if shouldUseLCAReaderFallback(err) {
+			if !snapshot.IsEmpty() && shouldUseLCAReaderFallback(err) {
 				if tblStuff.lcaReaderProbeMode != nil {
 					tblStuff.lcaReaderProbeMode.Store(true)
 				}
@@ -1116,7 +1123,7 @@ func hashDiff(
 	// ancestor has none. It can classify deletes at any destination depth.
 	useWindowBefore := copt.preservePickConflicts && tblStuff.boundedPick &&
 		tblStuff.pickWindowStart != nil && tblStuff.def.pkKind != fakeKind
-	if !dagInfo.hasLCA() || (tblStuff.lcaHasZeroHistory && !useWindowBefore) {
+	if (!dagInfo.hasLCA() || tblStuff.lcaHasZeroHistory && !useWindowBefore) && tblStuff.tarClearBaseline == nil {
 		if tblStuff.pickWindowStart != nil && tblStuff.def.pkKind != fakeKind &&
 			tarDataHashmap.ItemCount() > 0 && tarTombstoneHashmap.ItemCount() > 0 {
 			if err = pruneUnchangedPickRowsWithoutLCA(
@@ -1136,7 +1143,7 @@ func hashDiff(
 		if err = hashDiffIfHasLCA(
 			ctx, ses, bh, dagInfo, tblStuff, copt, emit,
 			tarDataHashmap, tarTombstoneHashmap,
-			baseDataHashmap, baseTombstoneHashmap,
+			baseDataHashmap, baseTombstoneHashmap, pickKeyHashmap,
 		); err != nil {
 			return
 		}
@@ -1204,7 +1211,7 @@ func dataBranchPickWindowProbe(
 			}
 		}
 	}
-	if !crossesCollapsedFork && start.tableID != tblStuff.tarRel.GetTableID(ctx) {
+	if !crossesCollapsedFork && start.upperColumns == nil && start.tableID != tblStuff.tarRel.GetTableID(ctx) {
 		// A COPY ALTER can place the endpoint in a different generation.
 		// Resolve each edge before using the starting generation's own
 		// physical column identity to walk from that edge back to lo.
@@ -1260,6 +1267,11 @@ func dataBranchPickWindowProbe(
 		}
 		tarCol := dataBranchColumnDefByName(tarDef, name)
 		startCol := tarCol
+		if start.upperColumns != nil {
+			// The upper layout already follows any COPY and renames after hi.
+			// Within this generation, match its columns back to lo by physical ID.
+			startCol = start.upperColumns[i]
+		}
 		if crossesCollapsedFork {
 			_, startCol, _ = dataBranchColumnReachesLCA(pathDefs, lineageOnly, startCol, renameProof)
 		}
@@ -1411,6 +1423,7 @@ func hashDiffIfHasLCA(
 	tarTombstoneHashmap databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
 	baseTombstoneHashmap databranchutils.BranchHashmap,
+	pickKeyHashmap databranchutils.BranchHashmap,
 ) (err error) {
 
 	tarSP, baseSP := tblStuff.resolvedSnapshots(ses)
@@ -1427,8 +1440,9 @@ func hashDiffIfHasLCA(
 			baseLCAProbe = tblStuff.lcaCTS
 		}
 	}
+	boundedClearPick := tblStuff.tarClearBaseline != nil && copt.preservePickConflicts && tblStuff.def.pkKind != fakeKind
 	tarProbeStuff := tblStuff
-	if tblStuff.pickWindowStart != nil && tarTombstoneHashmap.ItemCount() > 0 {
+	if !boundedClearPick && tblStuff.pickWindowStart != nil && tarTombstoneHashmap.ItemCount() > 0 {
 		// A row can change within the PICK window back to its value at the
 		// fork. Comparing against the fork would silently discard that update.
 		// The destination still uses its own fork for conflict detection.
@@ -1452,6 +1466,55 @@ func hashDiffIfHasLCA(
 		sourceNativeUpdateKeys               = make(map[string]struct{})
 	)
 
+	// Clear scans can produce a whole snapshot of changes. Group rows by
+	// operation so conflict matching can probe only keys in the source batch.
+	const (
+		clearDelete = iota
+		clearUpdateOld
+		clearUpdate
+		clearNativeUpdate
+	)
+	var baseClearChanges [4]struct {
+		meta batchWithKind
+		rows databranchutils.BranchHashmap
+	}
+	defer func() {
+		for _, change := range baseClearChanges {
+			if change.rows != nil {
+				if closeErr := change.rows.Close(); closeErr != nil {
+					err = errors.Join(err, closeErr)
+				}
+			}
+		}
+	}()
+	clearKeyIdxes := []int{tblStuff.def.pkColIdx}
+	var baseClearMatches databranchutils.BranchHashmap
+	if tblStuff.baseVisibleState && tblStuff.def.pkKind == fakeKind {
+		clearKeyIdxes = fakePKVisibleKeyIdxes(tblStuff)
+		if copt.expandUpdate && (tblStuff.tarVisibleState || tarTombstoneHashmap.ItemCount() != 0) {
+			// Retain live identities for copies which matched the LCA.
+			if baseClearMatches, err = databranchutils.NewBranchHashmap(
+				databranchutils.WithBranchHashmapAllocator(tblStuff.hashmapAllocator),
+			); err != nil {
+				return err
+			}
+			defer func() {
+				if closeErr := baseClearMatches.Close(); closeErr != nil {
+					err = errors.Join(err, closeErr)
+				}
+			}()
+		}
+	}
+	defer func() {
+		for _, list := range [][]batchWithKind{baseDeleteBatches, baseUpdateBatches} {
+			for _, w := range list {
+				if w.batch != nil {
+					tblStuff.retPool.releaseRetBatch(w.batch, false)
+				}
+			}
+		}
+	}()
+
 	rememberDestinationChangedIndexedSpecialKeys := func(wrapped batchWithKind) error {
 		if copt.conflictOpt == nil || copt.conflictOpt.Opt != tree.CONFLICT_ACCEPT ||
 			!copt.expandUpdate || !wrapped.fromUpdate || !wrapped.requiresNativeUpdate ||
@@ -1470,6 +1533,37 @@ func hashDiffIfHasLCA(
 
 	handleBaseDeleteAndUpdates := func(wrapped batchWithKind) error {
 		wrapped.side = diffSideBase
+		if tblStuff.baseVisibleState {
+			defer tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			slot := clearUpdate
+			switch {
+			case wrapped.kind == diffDelete && !wrapped.fromUpdate:
+				slot = clearDelete
+			case wrapped.kind == diffDelete:
+				slot = clearUpdateOld
+			case wrapped.requiresNativeUpdate:
+				slot = clearNativeUpdate
+			}
+			change := &baseClearChanges[slot]
+			if change.rows == nil {
+				rows, err := databranchutils.NewBranchHashmap(
+					databranchutils.WithBranchHashmapAllocator(tblStuff.hashmapAllocator),
+				)
+				if err != nil {
+					return err
+				}
+				change.rows, change.meta = rows, wrapped
+				change.meta.batch = nil
+			}
+			return change.rows.PutByVectors(wrapped.batch.Vecs, clearKeyIdxes)
+		}
+		retained := false
+		defer func() {
+			if !retained {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			}
+		}()
+
 		if err2 := sortDataBranchBatchByPrimaryKey(
 			wrapped.batch, tblStuff.def.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
@@ -1484,6 +1578,7 @@ func hashDiffIfHasLCA(
 			baseUpdateBatches = append(baseUpdateBatches, wrapped)
 		}
 
+		retained = true
 		return nil
 	}
 
@@ -1491,7 +1586,11 @@ func hashDiffIfHasLCA(
 	// already visible at its fork. Window deletes reconcile those separately.
 	var inheritedAt types.TS
 	baseProbeStuff := sideTableStuffForLCAProbe(tblStuff, copt, dagInfo, tarSP, baseSP, true)
-	if tblStuff.lcaHasZeroHistory {
+	if boundedClearPick {
+		if !tblStuff.baseVisibleState && tarLCAProbe.LT(&baseLCAProbe) {
+			inheritedAt = baseLCAProbe
+		}
+	} else if tblStuff.lcaHasZeroHistory {
 		// The destination's first committed image can classify its later
 		// changes and prove an absent row was deleted. It cannot establish
 		// that an existing row was inherited from the source.
@@ -1530,7 +1629,7 @@ func hashDiffIfHasLCA(
 
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
 		wrapped.side = diffSideTarget
-		if (tblStuff.boundedPick || tblStuff.pickWindowStart != nil) && copt.conflictOpt != nil &&
+		if !boundedClearPick && (tblStuff.boundedPick || tblStuff.pickWindowStart != nil) && copt.conflictOpt != nil &&
 			((wrapped.kind == diffDelete && !wrapped.fromUpdate) ||
 				(wrapped.kind == diffInsert && wrapped.fromUpdate)) &&
 			wrapped.batch.RowCount() > 0 &&
@@ -1544,6 +1643,21 @@ func hashDiffIfHasLCA(
 			}
 		}
 		var pickConflictBat *batch.Batch
+		defer func() {
+			if wrapped.batch != nil {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			}
+			if pickConflictBat != nil {
+				tblStuff.retPool.releaseRetBatch(pickConflictBat, false)
+			}
+		}()
+		emitTarget := func() error {
+			out := wrapped
+			wrapped.batch = nil
+			_, err := emitBatch(emit, out, false, tblStuff.retPool)
+			return err
+		}
+
 		if wrapped.kind == diffInsert && wrapped.fromUpdate && len(restoreMissingKeys) > 0 {
 			var keep []int64
 			restoreBat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
@@ -1568,22 +1682,52 @@ func hashDiffIfHasLCA(
 				out := wrapped
 				out.batch, out.restoreMissing = restoreBat, true
 				if stop, e := emitBatch(emit, out, false, tblStuff.retPool); e != nil {
-					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 					return e
 				} else if stop {
-					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 					return nil
 				}
 			} else {
 				tblStuff.retPool.releaseRetBatch(restoreBat, false)
 			}
 			if len(keep) == 0 {
-				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return nil
 			}
 			if err := wrapped.batch.Shrink(keep, false, ses.proc.Mp()); err != nil {
-				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return err
+			}
+		}
+		if boundedClearPick && wrapped.kind == diffInsert && wrapped.fromUpdate {
+			// Pairing lo and hi identifies a source update even for a key
+			// that the destination never contained. Route those replacements
+			// through the same insert path as independently deleted rows.
+			probeStuff := dataBranchHistoricalProbeStuff(ctx, tblStuff, tblStuff.baseRel)
+			_, baseIdent := tblStuff.endpointIdentities(ctx, ses)
+			probeStuff.lcaIdent = &baseIdent
+			keys := wrapped.batch.Vecs[tblStuff.def.pkColIdx]
+			found, missing, err := probeDataBranchRows(ctx, ses, bh, keys, probeStuff, timestamp.Timestamp{})
+			if err != nil {
+				return err
+			}
+			tblStuff.retPool.releaseRetBatch(found, false)
+			if len(missing) == wrapped.batch.RowCount() {
+				wrapped.restoreMissing = true
+				return emitTarget()
+			}
+			if len(missing) > 0 {
+				out := wrapped
+				out.restoreMissing = true
+				out.batch = tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
+				mp := ses.proc.Mp()
+				if err := out.batch.Union(wrapped.batch, missing, mp); err != nil {
+					tblStuff.retPool.releaseRetBatch(out.batch, false)
+					return err
+				}
+				if stop, err := emitBatch(emit, out, false, tblStuff.retPool); err != nil || stop {
+					return err
+				}
+				if err := wrapped.batch.Shrink(missing, true, mp); err != nil {
+					return err
+				}
 			}
 		}
 		if copt.conflictOpt != nil && copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT &&
@@ -1599,14 +1743,12 @@ func hashDiffIfHasLCA(
 				}
 			}
 		}
-		if len(baseUpdateBatches) == 0 && len(baseDeleteBatches) == 0 && len(sourceNativeUpdateKeys) == 0 {
-			// no need to check conflict
-			if stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool); e != nil {
-				return e
-			} else if stop {
-				return nil
-			}
-			return nil
+		probeBaseInsert := tblStuff.tarClearBaseline != nil && copt.conflictOpt != nil &&
+			tblStuff.def.pkKind != fakeKind && wrapped.kind == diffDelete && baseDataHashmap.ItemCount() != 0
+		rekeyFakeDelete := baseClearMatches != nil && wrapped.kind == diffDelete
+		if len(baseUpdateBatches) == 0 && len(baseDeleteBatches) == 0 && len(sourceNativeUpdateKeys) == 0 &&
+			!probeBaseInsert && !tblStuff.baseVisibleState && !rekeyFakeDelete {
+			return emitTarget()
 		}
 
 		if err2 = sortDataBranchBatchByPrimaryKey(
@@ -1690,6 +1832,13 @@ func hashDiffIfHasLCA(
 						if err3 = appendPickConflict(baseWrapped, j); err3 != nil {
 							return
 						}
+						if copt.preservePickConflicts && tarWrapped.kind == diffDelete && !tarWrapped.fromUpdate &&
+							baseWrapped.kind == diffInsert && !baseWrapped.fromUpdate {
+							// ACCEPT applies the marker as the one delete.
+							// FAIL and SKIP consume it as a conflict.
+							sels1 = append(sels1, int64(i))
+						}
+
 						// only keep the rows from tar
 						sels2 = append(sels2, int64(j))
 						i++
@@ -1756,6 +1905,67 @@ func hashDiffIfHasLCA(
 			return
 		}
 
+		probeBaseRows := func(rows databranchutils.BranchHashmap, meta batchWithKind, preserveUnmatched bool, inheritedAt types.TS) error {
+			if rows == nil || rows.ItemCount() == 0 || wrapped.batch.RowCount() == 0 ||
+				(copt.conflictOpt == nil && wrapped.kind != meta.kind) {
+				return nil
+			}
+			matches := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
+			defer tblStuff.retPool.releaseRetBatch(matches, false)
+			pk := wrapped.batch.Vecs[tblStuff.def.pkColIdx]
+			_, err := rows.PopByVectorsStream([]*vector.Vector{pk}, false, func(_ int, _ []byte, row []byte) error {
+				tuple, _, err := rows.DecodeRow(row)
+				if err != nil {
+					return err
+				}
+				// The change range includes LCA writes up to the later
+				// destination fork. A surviving version from that interval
+				// was inherited, even when its value differs from the source's.
+				if !inheritedAt.IsEmpty() && len(tuple) == len(tblStuff.def.colNames)+2 {
+					commitTS := types.TS(tuple[len(tuple)-1].([]byte))
+					if commitTS.LE(&inheritedAt) {
+						return nil
+					}
+				}
+				return appendTupleToBat(ses, matches, tuple, tblStuff)
+			})
+			if err != nil || matches.RowCount() == 0 {
+				return err
+			}
+			if err := sortDataBranchBatchByPrimaryKey(matches, tblStuff.def.pkColIdx, ses.proc.Mp()); err != nil {
+				return err
+			}
+			meta.batch = matches
+			if wrapped.kind == diffDelete && wrapped.fromUpdate {
+				if err := rememberDestinationChangedIndexedSpecialKeys(meta); err != nil {
+					return err
+				}
+			}
+			if err := foo([]batchWithKind{meta}); err != nil {
+				return err
+			}
+			// In DIFF, distinct updates for the same key must both be
+			// emitted. Put back only the probed destination rows left over.
+			if preserveUnmatched && matches.RowCount() != 0 {
+				return rows.PutByVectors(matches.Vecs, clearKeyIdxes)
+			}
+			return nil
+		}
+		if tblStuff.def.pkKind == fakeKind {
+			if deletes := baseClearChanges[clearDelete].rows; deletes != nil && wrapped.kind == diffDelete {
+				// Cancel the same visible copy on each side regardless
+				// of which LCA duplicate each scan matched.
+				if err2 = matchDataBranchFakeClearDeletes(ctx, ses, tblStuff, wrapped, deletes, clearKeyIdxes, false, copt.conflictOpt); err2 != nil {
+					return
+				}
+			}
+		} else {
+			for _, change := range baseClearChanges {
+				if err2 = probeBaseRows(change.rows, change.meta, copt.conflictOpt == nil, types.TS{}); err2 != nil {
+					return
+				}
+			}
+		}
 		if err2 = foo(baseDeleteBatches); err2 != nil {
 			return
 		}
@@ -1780,9 +1990,24 @@ func hashDiffIfHasLCA(
 			return false
 		})
 
+		if probeBaseInsert {
+			if err2 = probeBaseRows(baseDataHashmap, batchWithKind{
+				kind: diffInsert, name: tblStuff.baseRel.GetTableName(), side: diffSideBase,
+			}, false, inheritedAt); err2 != nil {
+				return
+			}
+		}
+		if rekeyFakeDelete {
+			if err2 = matchDataBranchFakeClearDeletes(ctx, ses, tblStuff, wrapped, baseClearMatches, clearKeyIdxes, true, nil); err2 != nil {
+				return
+			}
+		}
+
 		if pickConflictBat != nil {
+			out := pickConflictBat
+			pickConflictBat = nil
 			if stop, e := emitBatch(emit, batchWithKind{
-				batch:          pickConflictBat,
+				batch:          out,
 				kind:           diffDelete,
 				name:           tblStuff.baseRel.GetTableName(),
 				side:           diffSideBase,
@@ -1806,75 +2031,145 @@ func hashDiffIfHasLCA(
 				nativeWrapped.batch = nativeUpdateBat
 				nativeWrapped.requiresNativeUpdate = true
 				if stop, e := emitBatch(emit, nativeWrapped, false, tblStuff.retPool); e != nil {
-					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 					return e
 				} else if stop {
-					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 					return nil
 				}
 			}
 		}
 		if wrapped.batch.RowCount() == 0 {
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 			return nil
 		}
 
-		stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool)
-		if e != nil {
-			return e
-		}
-		if stop {
-			return nil
-		}
-
-		return
+		return emitTarget()
 	}
 
 	newCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Select a relation, layout and snapshot together for either execution path.
-	stepHandler := func(forBase bool) (err2 error) {
+	findSideChanges := func(ctx context.Context, forBase bool, deliver func(batchWithKind) error, parallelism int) error {
 		sideStuff := baseProbeStuff
-		name, side, branchTS := tblStuff.baseRel.GetTableName(), diffSideBase, baseLCAProbe
-		hashmap1, hashmap2, handle := baseDataHashmap, baseTombstoneHashmap, handleBaseDeleteAndUpdates
 		var windowStart *tableStuff
+		name, side, branchTS := tblStuff.baseRel.GetTableName(), diffSideBase, baseLCAProbe
+		data, tombstones := baseDataHashmap, baseTombstoneHashmap
+		cleared := tblStuff.baseVisibleState
 		if !forBase {
-			sideStuff = sideTableStuffForLCAProbe(tblStuff, copt, dagInfo, tarSP, baseSP, false)
 			name, side, branchTS = tblStuff.tarRel.GetTableName(), diffSideTarget, tarLCAProbe
-			hashmap1, hashmap2, handle = tarDataHashmap, tarTombstoneHashmap, handleTarDeleteAndUpdates
+			data, tombstones = tarDataHashmap, tarTombstoneHashmap
+			cleared = tblStuff.tarVisibleState
+			sideStuff = sideTableStuffForLCAProbe(tblStuff, copt, dagInfo, tarSP, baseSP, false)
 			if tblStuff.pickWindowStart != nil {
 				windowStart = &tarProbeStuff
 			}
 		}
-		if copt.onlineApply {
-			// Delivery owns the batch even on failure. Held batches remain in
-			// retPool until the agency unwinds; handlers release emitted failures.
-			return findDeleteAndUpdateBat(ctx, ses, bh, sideStuff, windowStart, name, side,
-				handle, branchTS, copt.expandUpdate, hashmap1, hashmap2, 1)
+		if cleared {
+			baseline := dataBranchSnapshotRelation{
+				rel: tblStuff.lcaRel, at: branchTS, ident: tblStuff.resolvedLCAIdentity(ctx, ses),
+			}
+			layoutNames := sideStuff.def.lcaColNames
+			path, pathTS, defs, names, lineageOnly := dagInfo.pathFromLCAToTar, dagInfo.pathFromLCAToTarTS,
+				tblStuff.tarPathDefs, tblStuff.def.colNames, dagInfo.pathFromLCAToTarLineageOnly
+			endpoint := tblStuff.tarRel
+			endpointSP, baseRelSP := tblStuff.resolvedRelSnapshots(ses)
+			owner, otherOwner := tblStuff.endpointIdentities(ctx, ses)
+			if forBase {
+				path, pathTS = dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS
+				defs, names, lineageOnly = tblStuff.basePathDefs, tblStuff.def.baseColNames, dagInfo.pathFromLCAToBaseLineageOnly
+				endpoint, endpointSP = tblStuff.baseRel, baseRelSP
+				owner, otherOwner = otherOwner, owner
+			}
+			if tblStuff.tarClearBaseline != nil && (!forBase || !dagInfo.hasLCA() || tblStuff.lcaHasZeroHistory) {
+				baseline = *tblStuff.tarClearBaseline
+				layoutNames = nil
+				if forBase && !dagInfo.hasLCA() {
+					// The source's lower image aligns live destination rows;
+					// it cannot prove that the independent destination deleted a row.
+					destinationDeliver := deliver
+					deliver = func(wrapped batchWithKind) error {
+						if wrapped.kind == diffDelete && !wrapped.fromUpdate {
+							tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+							return nil
+						}
+						return destinationDeliver(wrapped)
+					}
+				}
+			} else if baseline.rel != nil {
+				rel, exactDef, _, err := lcaProbeTableDefAtSnapshot(ctx, ses, sideStuff, branchTS)
+				if err != nil {
+					return err
+				}
+				baseline.rel = rel
+				if i := slices.Index(path, rel.GetTableID(identityCtx(ctx, baseline.ident))); i >= 0 &&
+					len(defs) == len(path) && len(pathTS) == len(path) && len(lineageOnly) == len(path) {
+					// Each cached definition is anchored at the end of its
+					// generation, not necessarily at this side's fork. Walk
+					// from that definition back to the exact snapshot by
+					// physical identity, without dropping introduction defaults.
+					owners := dedupeBranchIdentities(owner, otherOwner)
+					forkDefs, forkEdges, err := dataBranchClearCreationSchemas(ctx, ses, bh, owners,
+						endpoint, endpointSP, defs[i:], pathTS[i:], lineageOnly[i:], false)
+					if err != nil {
+						return err
+					}
+					forkDefs = append([]*plan2.TableDef{exactDef}, forkDefs...)
+					forkEdges = append([]bool{false}, forkEdges...)
+					baseline.columns = resolveDataBranchClearColumns(names, forkDefs, forkEdges)
+				}
+			}
+			var retainMatch func(*batch.Batch) error
+			if forBase && baseClearMatches != nil {
+				retainMatch = func(matches *batch.Batch) error {
+					return baseClearMatches.PutByVectors(matches.Vecs, clearKeyIdxes)
+				}
+			}
+			return reconcileDataBranchClear(ctx, ses, tblStuff, baseline, layoutNames, name, side,
+				copt.expandUpdate, data, pickKeyHashmap, retainMatch, deliver)
 		}
+		return findDeleteAndUpdateBat(ctx, ses, bh, sideStuff, windowStart, name, side, deliver,
+			branchTS, copt.expandUpdate, data, tombstones, parallelism)
+	}
 
-		tmpCh := make(chan batchWithKind, 1)
+	asyncDelsAndUpdatesHandler := func(forBase bool, tmpCh chan batchWithKind) (err2 error) {
 		wg.Add(1)
 		if err2 = tblStuff.worker.Submit(func() {
-			defer wg.Done()
-			defer close(tmpCh)
-			if err3 := findDeleteAndUpdateBat(
-				newCtx, ses, bh, sideStuff, windowStart, name, side,
-				func(wrapped batchWithKind) error {
-					select {
-					case <-newCtx.Done():
-						tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-						return newCtx.Err()
-					case tmpCh <- wrapped:
-						return nil
-					}
-				}, branchTS, copt.expandUpdate, hashmap1, hashmap2, -1,
-			); err3 != nil {
+			defer func() {
+				close(tmpCh)
+				tmpCh = nil
+				wg.Done()
+			}()
+
+			if err3 := findSideChanges(newCtx, forBase, func(wrapped batchWithKind) error {
+				select {
+				case <-newCtx.Done():
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					return newCtx.Err()
+				case tmpCh <- wrapped:
+					return nil
+				}
+			}, -1); err3 != nil {
 				atomicErr.Store(err3)
 			}
 		}); err2 != nil {
 			wg.Done()
+			return
+		}
+		return nil
+	}
+
+	stepHandler := func(forBase bool) (err2 error) {
+		if copt.onlineApply {
+			handle := handleBaseDeleteAndUpdates
+			if !forBase {
+				handle = handleTarDeleteAndUpdates
+			}
+			return findSideChanges(ctx, forBase, handle, 1)
+		}
+
+		var (
+			tmpCh = make(chan batchWithKind, 1)
+		)
+
+		if err2 = asyncDelsAndUpdatesHandler(forBase, tmpCh); err2 != nil {
 			return err2
 		}
 
@@ -1983,41 +2278,94 @@ func hashDiffIfHasLCA(
 
 	// what can I do with these left base updates/inserts ?
 	if copt.conflictOpt == nil {
-		stopped := false
-		for i, w := range baseUpdateBatches {
-			var stop bool
-			if stop, err = emitBatch(emit, w, false, tblStuff.retPool); err != nil {
-				return err
-			}
-			if stop {
-				stopped = true
-				for j := i + 1; j < len(baseUpdateBatches); j++ {
-					tblStuff.retPool.releaseRetBatch(baseUpdateBatches[j].batch, false)
-				}
-				for _, bw := range baseDeleteBatches {
-					tblStuff.retPool.releaseRetBatch(bw.batch, false)
-				}
-				break
-			}
-		}
-
-		if !stopped {
-			for i, w := range baseDeleteBatches {
-				var stop bool
-				if stop, err = emitBatch(emit, w, false, tblStuff.retPool); err != nil {
+		for _, list := range [][]batchWithKind{baseUpdateBatches, baseDeleteBatches} {
+			for i, w := range list {
+				list[i].batch = nil
+				stop, err := emitBatch(emit, w, false, tblStuff.retPool)
+				if err != nil || stop {
 					return err
 				}
-				if stop {
-					for j := i + 1; j < len(baseDeleteBatches); j++ {
-						tblStuff.retPool.releaseRetBatch(baseDeleteBatches[j].batch, false)
-					}
-					break
-				}
+			}
+		}
+		for _, slot := range []int{clearUpdate, clearNativeUpdate, clearUpdateOld, clearDelete} {
+			change := baseClearChanges[slot]
+			if change.rows == nil {
+				continue
+			}
+			stop, err := emitDataBranchClearChanges(ctx, ses, tblStuff, change.rows, change.meta, emit)
+			if err != nil || stop {
+				return err
 			}
 		}
 	}
 
-	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
+	var baseUpdates []databranchutils.BranchHashmap
+	if copt.preservePickConflicts && tblStuff.def.pkKind != fakeKind && tarDataHashmap.ItemCount() != 0 {
+		// Updates consumed by phase 2 are no longer needed. The remaining
+		// ones can conflict with source inserts that have no old row in the
+		// PICK window, so include their live values in the final key match.
+		for _, slot := range []int{clearUpdate, clearNativeUpdate} {
+			if rows := baseClearChanges[slot].rows; rows != nil && rows.ItemCount() != 0 {
+				baseUpdates = append(baseUpdates, rows)
+			}
+		}
+		if len(baseUpdateBatches) != 0 {
+			rows, createErr := databranchutils.NewBranchHashmap(
+				databranchutils.WithBranchHashmapAllocator(tblStuff.hashmapAllocator),
+			)
+			if createErr != nil {
+				return createErr
+			}
+			defer func() { err = errors.Join(err, rows.Close()) }()
+			for _, update := range baseUpdateBatches {
+				if err := rows.PutByVectors(update.batch.Vecs, clearKeyIdxes); err != nil {
+					return err
+				}
+			}
+			baseUpdates = append(baseUpdates, rows)
+		}
+		if boundedClearPick || (tblStuff.boundedPick && tblStuff.baseVisibleState) {
+			var deletions []databranchutils.BranchHashmap
+			if rows := baseClearChanges[clearDelete].rows; rows != nil && rows.ItemCount() != 0 {
+				deletions = append(deletions, rows)
+			}
+			var deletedKeys databranchutils.BranchHashmap
+			defer func() {
+				if deletedKeys != nil {
+					err = errors.Join(err, deletedKeys.Close())
+				}
+			}()
+			for _, deleted := range baseDeleteBatches {
+				if deleted.fromUpdate {
+					continue
+				}
+				if deletedKeys == nil {
+					deletedKeys, err = databranchutils.NewBranchHashmap(
+						databranchutils.WithBranchHashmapAllocator(tblStuff.hashmapAllocator))
+					if err != nil {
+						return err
+					}
+					deletions = append(deletions, deletedKeys)
+				}
+				if err = deletedKeys.PutByVectors([]*vector.Vector{deleted.batch.Vecs[tblStuff.def.pkColIdx]}, []int{0}); err != nil {
+					return err
+				}
+			}
+			destination := dataBranchHistoricalProbeStuff(ctx, tblStuff, tblStuff.baseRel)
+			_, baseIdent := tblStuff.endpointIdentities(ctx, ses)
+			destination.lcaIdent = &baseIdent
+			originalEmit := emit
+			emit = func(wrapped batchWithKind) (bool, error) {
+				if wrapped.side == diffSideTarget && wrapped.kind == diffInsert &&
+					!wrapped.fromUpdate && wrapped.batch.RowCount() != 0 {
+					return reconcileBoundedClearPickInserts(ctx, ses, bh, tblStuff, destination,
+						deletions, wrapped, originalEmit)
+				}
+				return originalEmit(wrapped)
+			}
+		}
+	}
+	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap, baseUpdates)
 }
 
 // A destination insert may survive the fork probe in baseDataHashmap,
@@ -2798,7 +3146,7 @@ func hashDiffIfNoLCA(
 	// In particular, a bounded UPDATE produces a same-commit data+tombstone
 	// pair; removing the data merely because the marker remains would erase the
 	// update before the two independent tables are compared.
-	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
+	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap, nil)
 }
 
 func compareRowInWrappedBatches(
@@ -2845,15 +3193,13 @@ func compareRowInWrappedBatches(
 }
 
 func compareTupleWithBatchRow(
-	tblStuff tableStuff,
-	tuple types.Tuple,
-	bat *batch.Batch,
-	rowIdx int,
-	skipPKCols bool,
+	tblStuff tableStuff, tuple types.Tuple, bat *batch.Batch, rowIdx int, skipPKCols bool, compareIdxes []int,
 ) (int, error) {
-	compareIdxes := tblStuff.def.commonIdxes
-	if len(compareIdxes) == 0 {
-		compareIdxes = tblStuff.def.visibleIdxes // backward compat when commonIdxes not set
+	if compareIdxes == nil {
+		compareIdxes = tblStuff.def.commonIdxes
+		if len(compareIdxes) == 0 {
+			compareIdxes = tblStuff.def.visibleIdxes // backward compat when commonIdxes not set
+		}
 	}
 	for _, colIdx := range compareIdxes {
 		if skipPKCols && slices.Index(tblStuff.def.pkColIdxes, colIdx) != -1 {
@@ -2998,7 +3344,7 @@ func pruneUnchangedPickWindowRows(
 		if err != nil {
 			return err
 		}
-		cmp, err := compareTupleWithBatchRow(tables, tuple, before, i, tables.def.pkKind != fakeKind)
+		cmp, err := compareTupleWithBatchRow(tables, tuple, before, i, tables.def.pkKind != fakeKind, nil)
 		if err != nil {
 			return err
 		}
@@ -3100,8 +3446,8 @@ func findDeleteAndUpdateBat(
 		)
 
 		processBatch := func(tombBat *batch.Batch) error {
+			defer tblStuff.retPool.releaseRetBatch(tombBat, true)
 			if tombBat.RowCount() == 0 {
-				tblStuff.retPool.releaseRetBatch(tombBat, true)
 				return nil
 			}
 
@@ -3111,21 +3457,18 @@ func findDeleteAndUpdateBat(
 			}
 			dBat, err2 := handleDelsOnLCA(ctx, ses, bh, tombBat, probeStuff, probeTS.ToTimestamp())
 			if err2 != nil {
-				tblStuff.retPool.releaseRetBatch(tombBat, true)
 				return err2
 			}
+			defer tblStuff.retPool.releaseRetBatch(dBat, false)
 
-			// merge inserts and deletes on the tar
-			// this deletes is not on the lca
+			// The remaining tombstones refer to rows absent at the LCA.
+			// Cancel only the matching physical row versions.
 			if tombBat.RowCount() > 0 {
-				removedLiveRows := 0
 				tombRowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](tombBat.Vecs[1])
 				for i := 0; i < tombBat.RowCount(); i++ {
 					keyBytes := tombBat.Vecs[2].GetBytesAt(i)
 					var dataRet databranchutils.GetResult
 					if dataRet, err2 = dataHashmap.GetByEncodedKey(keyBytes); err2 != nil {
-						tblStuff.retPool.releaseRetBatch(tombBat, true)
-						tblStuff.retPool.releaseRetBatch(dBat, false)
 						return err2
 					}
 					if !dataRet.Exists {
@@ -3135,8 +3478,6 @@ func findDeleteAndUpdateBat(
 					for _, row := range dataRet.Rows {
 						var liveTuple types.Tuple
 						if liveTuple, _, err2 = dataHashmap.DecodeRow(row); err2 != nil {
-							tblStuff.retPool.releaseRetBatch(tombBat, true)
-							tblStuff.retPool.releaseRetBatch(dBat, false)
 							return err2
 						}
 						liveRowIDBytes, ok := liveTuple[0].([]uint8)
@@ -3153,196 +3494,20 @@ func findDeleteAndUpdateBat(
 					if matchedRow == nil {
 						continue
 					}
-					var removed int
-					if removed, err2 = dataHashmap.PopByEncodedKeyValue(keyBytes, matchedRow, false); err2 != nil {
-						tblStuff.retPool.releaseRetBatch(tombBat, true)
-						tblStuff.retPool.releaseRetBatch(dBat, false)
+					if _, err2 = dataHashmap.PopByEncodedKeyValue(keyBytes, matchedRow, false); err2 != nil {
 						return err2
 					}
-					removedLiveRows += removed
 				}
-				tblStuff.retPool.releaseRetBatch(tombBat, true)
 			}
 
 			if windowStart != nil {
-				if err2 = pruneUnchangedPickWindowRows(ses, tblStuff, dBat, dataHashmap); err2 != nil {
-					tblStuff.retPool.releaseRetBatch(dBat, false)
-					return err2
+				if err := pruneUnchangedPickWindowRows(ses, tblStuff, dBat, dataHashmap); err != nil {
+					return err
 				}
 			}
-
-			// find update
-			if dBat.RowCount() > 0 {
-				pkVecLen := dBat.Vecs[tblStuff.def.pkColIdx].Length()
-				if pkVecLen != dBat.RowCount() {
-					logutil.Error(
-						"DataBranch-findDeleteAndUpdateBat-VecLenMismatch",
-						zap.String("table-name", tblName),
-						zap.Int("dBat-row-count", dBat.RowCount()),
-						zap.Int("pkVec-length", pkVecLen),
-						zap.Int("pkColIdx", tblStuff.def.pkColIdx),
-						zap.Int("vec-count", dBat.VectorCount()),
-					)
-				}
-				tBat2 := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
-				seen := make([]bool, dBat.RowCount())
-				var stagedUpdateBat *batch.Batch
-				var nativeUpdateBat *batch.Batch
-				var updateDeleteBat *batch.Batch
-				if _, err2 = dataHashmap.PopByVectorsStream(
-					[]*vector.Vector{dBat.Vecs[tblStuff.def.pkColIdx]}, false,
-					func(idx int, _ []byte, row []byte) error {
-						seen[idx] = true
-
-						if tuple, _, err2 = dataHashmap.DecodeRow(row); err2 != nil {
-							return err2
-						}
-
-						if windowStart == nil {
-							cmp, err := compareTupleWithBatchRow(tblStuff, tuple, dBat, idx, tblStuff.def.pkKind != fakeKind)
-							if err != nil || cmp == 0 {
-								return err
-							}
-						}
-
-						// delete on lca and insert into tar ==> update
-						requiresNativeUpdate := false
-						if expandUpdate {
-							var updateErr error
-							requiresNativeUpdate, updateErr = dataBranchUpdateRequiresNativeUpdateFromBatch(
-								tblStuff, tuple, dBat, idx,
-							)
-							if updateErr != nil {
-								return updateErr
-							}
-						}
-						updateBat := stagedUpdateBat
-						if requiresNativeUpdate {
-							updateBat = nativeUpdateBat
-						}
-						if updateBat == nil {
-							updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
-							if requiresNativeUpdate {
-								nativeUpdateBat = updateBat
-							} else {
-								stagedUpdateBat = updateBat
-							}
-						}
-						if expandUpdate && updateDeleteBat == nil {
-							updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
-						}
-						if expandUpdate {
-							if err2 = updateDeleteBat.UnionOne(dBat, int64(idx), ses.proc.Mp()); err2 != nil {
-								return err2
-							}
-						}
-						if err2 = appendTupleToBat(ses, updateBat, tuple, tblStuff); err2 != nil {
-							return err2
-						}
-						return nil
-					},
-				); err2 != nil {
-					tblStuff.retPool.releaseRetBatch(dBat, false)
-					tblStuff.retPool.releaseRetBatch(tBat2, false)
-					if stagedUpdateBat != nil {
-						tblStuff.retPool.releaseRetBatch(stagedUpdateBat, false)
-					}
-					if nativeUpdateBat != nil {
-						tblStuff.retPool.releaseRetBatch(nativeUpdateBat, false)
-					}
-					if updateDeleteBat != nil {
-						tblStuff.retPool.releaseRetBatch(updateDeleteBat, false)
-					}
-					return err2
-				}
-
-				for i := 0; i < dBat.RowCount(); i++ {
-					if seen[i] {
-						continue
-					}
-					// delete on lca
-					if err2 = tBat2.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
-						tblStuff.retPool.releaseRetBatch(dBat, false)
-						tblStuff.retPool.releaseRetBatch(tBat2, false)
-						if stagedUpdateBat != nil {
-							tblStuff.retPool.releaseRetBatch(stagedUpdateBat, false)
-						}
-						if nativeUpdateBat != nil {
-							tblStuff.retPool.releaseRetBatch(nativeUpdateBat, false)
-						}
-						if updateDeleteBat != nil {
-							tblStuff.retPool.releaseRetBatch(updateDeleteBat, false)
-						}
-						return err2
-					}
-				}
-
-				tblStuff.retPool.releaseRetBatch(dBat, false)
-				tBat2.SetRowCount(tBat2.Vecs[0].Length())
-
-				if stagedUpdateBat != nil || nativeUpdateBat != nil {
-					if expandUpdate {
-						updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
-						if err2 = deliver(batchWithKind{
-							name:       tblName,
-							side:       side,
-							fromUpdate: true,
-							batch:      updateDeleteBat,
-							kind:       diffDelete,
-						}); err2 != nil {
-							return err2
-						}
-						for _, update := range []struct {
-							bat                  *batch.Batch
-							requiresNativeUpdate bool
-						}{
-							{bat: stagedUpdateBat},
-							{bat: nativeUpdateBat, requiresNativeUpdate: true},
-						} {
-							if update.bat == nil {
-								continue
-							}
-							update.bat.SetRowCount(update.bat.Vecs[0].Length())
-							if err2 = deliver(batchWithKind{
-								name:                 tblName,
-								side:                 side,
-								batch:                update.bat,
-								kind:                 diffInsert,
-								fromUpdate:           tblStuff.def.pkKind != fakeKind,
-								requiresNativeUpdate: update.requiresNativeUpdate,
-							}); err2 != nil {
-								return err2
-							}
-						}
-					} else {
-						if stagedUpdateBat == nil {
-							stagedUpdateBat = nativeUpdateBat
-						}
-						stagedUpdateBat.SetRowCount(stagedUpdateBat.Vecs[0].Length())
-						if err2 = deliver(batchWithKind{
-							name:  tblName,
-							side:  side,
-							batch: stagedUpdateBat,
-							kind:  diffUpdate,
-						}); err2 != nil {
-							return err2
-						}
-					}
-				}
-
-				if err2 = deliver(batchWithKind{
-					name:  tblName,
-					side:  side,
-					batch: tBat2,
-					kind:  diffDelete,
-				}); err2 != nil {
-					return err2
-				}
-				return nil
-			}
-
-			tblStuff.retPool.releaseRetBatch(dBat, false)
-			return nil
+			return reconcileDataBranchBaselineRows(
+				ctx, ses, tblStuff, dBat, tblName, side, expandUpdate, dataHashmap, nil, nil, "", nil, deliver,
+			)
 		}
 
 		if err2 = cursor.ForEach(func(key []byte, row []byte) error {
@@ -3452,10 +3617,7 @@ func getTupleColumnValue(tuple types.Tuple, tblStuff tableStuff, colIdx int) (an
 }
 
 func fakePKTupleKeyIdxes(tblStuff tableStuff) []int {
-	keyColIdxes := tblStuff.def.commonVisibleIdxes
-	if len(keyColIdxes) == 0 {
-		keyColIdxes = tblStuff.def.visibleIdxes
-	}
+	keyColIdxes := fakePKVisibleKeyIdxes(tblStuff)
 
 	idxes := make([]int, len(keyColIdxes))
 	for i, colIdx := range keyColIdxes {
@@ -3648,6 +3810,7 @@ func diffDataHelper(
 	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
+	baseUpdates []databranchutils.BranchHashmap,
 ) (err error) {
 
 	parallelism := -1
@@ -3668,22 +3831,30 @@ func diffDataHelper(
 	}()
 
 	if tblStuff.def.pkKind == fakeKind {
-		var (
-			keyIdxes   = fakePKTupleKeyIdxes(tblStuff)
-			newHashmap databranchutils.BranchHashmap
-		)
-
-		if newHashmap, err = migrateAndCloseSourceHashmap(baseDataHashmap, keyIdxes, -1); err != nil {
-			return err
+		keyIdxes := fakePKTupleKeyIdxes(tblStuff)
+		if !tblStuff.baseVisibleState {
+			if baseDataHashmap, err = migrateAndCloseSourceHashmap(baseDataHashmap, keyIdxes, -1); err != nil {
+				return err
+			}
+			migratedHashmaps = append(migratedHashmaps, baseDataHashmap)
 		}
-		baseDataHashmap = newHashmap
-		migratedHashmaps = append(migratedHashmaps, baseDataHashmap)
-
-		if newHashmap, err = migrateAndCloseSourceHashmap(tarDataHashmap, keyIdxes, -1); err != nil {
-			return err
+		if !tblStuff.tarVisibleState {
+			if tarDataHashmap, err = migrateAndCloseSourceHashmap(tarDataHashmap, keyIdxes, -1); err != nil {
+				return err
+			}
+			migratedHashmaps = append(migratedHashmaps, tarDataHashmap)
 		}
-		tarDataHashmap = newHashmap
-		migratedHashmaps = append(migratedHashmaps, tarDataHashmap)
+	}
+
+	compareIdxes := tblStuff.def.commonIdxes
+	if len(compareIdxes) == 0 {
+		compareIdxes = tblStuff.def.visibleIdxes
+	}
+	if baseline := tblStuff.tarClearBaseline; baseline != nil && baseline.upperColumns != nil {
+		// NULL padding for columns absent at hi is not a source value.
+		compareIdxes = slices.DeleteFunc(slices.Clone(compareIdxes), func(idx int) bool {
+			return baseline.upperColumns[idx] == nil
+		})
 	}
 
 	if err = tarDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
@@ -3717,12 +3888,18 @@ func diffDataHelper(
 			default:
 			}
 
-			if tblStuff.def.pkKind == fakeKind {
-				if checkRet, err2 = baseDataHashmap.PopByEncodedKey(key, false); err2 != nil {
-					return err2
+			matchedRows := baseDataHashmap
+			checkRet, err2 = matchedRows.PopByEncodedKey(key, false)
+			if err2 != nil {
+				return err2
+			}
+			for _, updates := range baseUpdates {
+				if checkRet.Exists {
+					break
 				}
-			} else {
-				if checkRet, err2 = baseDataHashmap.PopByEncodedKey(key, false); err2 != nil {
+				matchedRows = updates
+				checkRet, err2 = matchedRows.PopByEncodedKey(key, false)
+				if err2 != nil {
 					return err2
 				}
 			}
@@ -3747,15 +3924,11 @@ func diffDataHelper(
 						return err2
 					}
 
-					if baseTuple, _, err2 = baseDataHashmap.DecodeRow(checkRet.Rows[0]); err2 != nil {
+					if baseTuple, _, err2 = matchedRows.DecodeRow(checkRet.Rows[0]); err2 != nil {
 						return err2
 					}
 
 					notSame := false
-					compareIdxes := tblStuff.def.commonIdxes
-					if len(compareIdxes) == 0 {
-						compareIdxes = tblStuff.def.visibleIdxes // backward compat when commonIdxes not set
-					}
 					for _, idx := range compareIdxes {
 						if slices.Index(tblStuff.def.pkColIdxes, idx) != -1 {
 							// pk columns already compared
@@ -3832,11 +4005,12 @@ func diffDataHelper(
 
 		if baseDeleteBat != nil {
 			if stop, err3 := emitBatch(emit, batchWithKind{
-				batch:      baseDeleteBat,
-				kind:       diffDelete,
-				name:       tblStuff.baseRel.GetTableName(),
-				side:       diffSideBase,
-				fromUpdate: true,
+				batch:          baseDeleteBat,
+				kind:           diffDelete,
+				name:           tblStuff.baseRel.GetTableName(),
+				side:           diffSideBase,
+				fromUpdate:     true,
+				hasReplacement: copt.preservePickConflicts,
 			}, false, tblStuff.retPool); err3 != nil {
 				return err3
 			} else if stop {
@@ -4067,6 +4241,12 @@ func buildHashmapForTable(
 		return
 	}
 
+	dataKeyIdxes := []int{tblStuff.def.pkColIdx + 1}
+	if tblStuff.def.pkKind == fakeKind &&
+		((side == "base" && tblStuff.baseVisibleState) || (side == "target" && tblStuff.tarVisibleState)) {
+		dataKeyIdxes = fakePKTupleKeyIdxes(*tblStuff)
+	}
+
 	putVectors := func(bat *batch.Batch, isTombstone bool) error {
 		if bat == nil {
 			return nil
@@ -4125,7 +4305,7 @@ func buildHashmapForTable(
 				if isTombstone {
 					taskErr = tombstoneHashmap.PutByVectors(bat.Vecs[:ll], []int{1})
 				} else {
-					taskErr = dataHashmap.PutByVectors(bat.Vecs[:ll], []int{tblStuff.def.pkColIdx + 1})
+					taskErr = dataHashmap.PutByVectors(bat.Vecs[:ll], dataKeyIdxes)
 				}
 			}
 			if taskErr != nil {
@@ -4182,11 +4362,15 @@ func buildHashmapForTable(
 				return
 			}
 
-			if err = putVectors(dataBat, false); err != nil {
+			data := dataBat
+			dataBat = nil
+			if err = putVectors(data, false); err != nil {
 				return
 			}
 
-			if err = putVectors(tombstoneBat, true); err != nil {
+			tombstones := tombstoneBat
+			tombstoneBat = nil
+			if err = putVectors(tombstones, true); err != nil {
 				return
 			}
 		}
@@ -4384,7 +4568,7 @@ func buildHashmapForTable(
 		}
 		return nil
 	}, -1); err != nil {
-		return nil, nil, err
+		return
 	}
 
 	return
@@ -4433,25 +4617,31 @@ func dataBranchSourceColToTargetIdx(
 	excludeTargetOnly bool,
 	historical ...[]*plan2.ColDef,
 ) ([]int, error) {
+	var cols []*plan2.ColDef
+	if len(historical) > 0 {
+		cols = historical[0]
+	}
+	return dataBranchHistoricalColToTargetIdx(sourceDef, targetDef, targetColNames, targetOnlyIdxes, cols, excludeTargetOnly)
+}
+
+func dataBranchHistoricalColToTargetIdx(
+	sourceDef, targetDef *plan2.TableDef,
+	targetColNames []string,
+	targetOnlyIdxes []int,
+	historicalColumns []*plan2.ColDef,
+	excludeTargetOnly bool,
+) ([]int, error) {
 	if sourceDef == nil || targetDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing schema for historical data branch projection")
-	}
-	var sourceColumns map[*plan2.ColDef]int
-	if len(historical) != 0 {
-		sourceColumns = make(map[*plan2.ColDef]int, len(historical[0]))
-		for idx, col := range historical[0] {
-			if col != nil {
-				sourceColumns[col] = idx
-			}
-		}
 	}
 	if err := checkDataBranchPrimaryKeyCompatibilityWithResolver(
 		targetDef,
 		sourceDef,
 		func(targetCol *plan2.ColDef) *plan2.ColDef {
-			if sourceColumns != nil {
-				if idx := dataBranchColumnIndexByName(targetColNames, targetCol.Name); idx >= 0 {
-					return historical[0][idx]
+			if historicalColumns != nil {
+				idx := dataBranchColumnIndexByName(targetColNames, targetCol.Name)
+				if idx >= 0 {
+					return historicalColumns[idx]
 				}
 				return nil
 			}
@@ -4500,15 +4690,17 @@ func dataBranchSourceColToTargetIdx(
 		}
 		var targetCol *plan2.ColDef
 		targetIdx := -1
-		if sourceColumns != nil {
-			if idx, ok := sourceColumns[col]; ok {
-				targetIdx = idx
-				targetCol = dataBranchColumnDefByName(targetDef, targetColNames[idx])
-			}
-		} else {
+		if historicalColumns == nil {
 			targetCol = dataBranchEndpointColumnDef(targetDef, col)
 			if targetCol != nil {
 				targetIdx = dataBranchColumnIndexByName(targetColNames, targetCol.Name)
+			}
+		} else {
+			targetIdx = slices.IndexFunc(historicalColumns, func(historical *plan2.ColDef) bool {
+				return historical != nil && historical.Name == col.Name
+			})
+			if targetIdx >= 0 {
+				targetCol = dataBranchColumnDefByName(targetDef, targetColNames[targetIdx])
 			}
 		}
 		_, isTargetOnly := targetOnly[targetIdx]
@@ -4698,6 +4890,7 @@ func hydrateHistoricalDataBranchBatch(
 	endpointIdent branchIdentity,
 	endpointRel engine.Relation,
 	endpointSnapshot, endpointRelSnapshot types.TS,
+	endpointColumns []*plan2.ColDef,
 ) (err error) {
 	if projected == nil || projected.RowCount() == 0 {
 		return nil
@@ -4719,6 +4912,20 @@ func hydrateHistoricalDataBranchBatch(
 	tBat.SetRowCount(projected.RowCount())
 
 	probeStuff := dataBranchHistoricalProbeStuff(ctx, tblStuff, endpointRel)
+	if endpointColumns != nil {
+		// Bounded PICK probes the upper generation by historical name,
+		// then overlays the returned values in the current source layout.
+		probeStuff.tarRel = tblStuff.tarRel
+		probeStuff.def.lcaColNames = make([]string, len(endpointColumns))
+		probeStuff.def.tarOnlyIdxes = nil
+		for idx, col := range endpointColumns {
+			if col == nil {
+				probeStuff.def.tarOnlyIdxes = append(probeStuff.def.tarOnlyIdxes, idx)
+			} else {
+				probeStuff.def.lcaColNames[idx] = col.Name
+			}
+		}
+	}
 	probeStuff.lcaIdent = &endpointIdent
 	probeStuff.lcaRelSnapshot = endpointRelSnapshot
 	probe, err := runLCAProbeWithReaderFallback(
@@ -4777,6 +4984,7 @@ type historicalDataBranchChangesHandle struct {
 	endpointRel         engine.Relation
 	endpointSnapshot    types.TS
 	endpointRelSnapshot types.TS
+	endpointColumns     []*plan2.ColDef
 	// endpointIdent is the physical owner identity endpointRel was opened
 	// under (design §6); hydration probes the endpoint under it.
 	endpointIdent branchIdentity
@@ -4796,7 +5004,7 @@ func (h *historicalDataBranchChangesHandle) Next(
 		return data, tombstone, hint, nil
 	}
 	if err = hydrateHistoricalDataBranchBatch(
-		ctx, h.ses, data, h.tblStuff, h.endpointIdent, h.endpointRel, h.endpointSnapshot, h.endpointRelSnapshot,
+		ctx, h.ses, data, h.tblStuff, h.endpointIdent, h.endpointRel, h.endpointSnapshot, h.endpointRelSnapshot, h.endpointColumns,
 	); err != nil {
 		data.Clean(mp)
 		if tombstone != nil {

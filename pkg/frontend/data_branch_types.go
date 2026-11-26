@@ -89,6 +89,7 @@ type collectRange struct {
 	forkBefore        []*dataBranchPickWindowStart
 	zeroHistoryStarts []dataBranchPickWindowStart
 	firstCommitted    dataBranchPickWindowStart
+	clearAt           []types.TS
 	// idents carries the physical identity each segment was opened under
 	// (design §6): the walking side's endpoint identity for the endpoint
 	// segment and the winning candidate identity for reopened lineage
@@ -125,6 +126,23 @@ func (r collectRange) hasCollapsedFork() bool {
 		}
 	}
 	return false
+}
+
+func (r collectRange) crossesClear() bool {
+	for _, at := range r.clearAt {
+		if !at.IsEmpty() {
+			return true
+		}
+	}
+	return false
+}
+
+type dataBranchSnapshotRelation struct {
+	rel          engine.Relation
+	ident        branchIdentity
+	at           types.TS
+	columns      *dataBranchClearColumns
+	upperColumns []*plan.ColDef // nil when the upper boundary uses the endpoint schema
 }
 
 // branchMetaInfo describes the lineage relationship between the two
@@ -175,14 +193,20 @@ type branchMetaInfo struct {
 
 	pathFromLCAToTar   []uint64
 	pathFromLCAToTarTS []types.TS
-	// LineageOnly[i] marks an ALTER copy-and-swap edge into path[i]. Such
+	// LineageOnly[i] marks a physical rebuild edge into path[i]. Such
 	// edges split physical collection ranges but do not represent a branch
 	// fork for LCA probing/conflict semantics.
 	pathFromLCAToTarLineageOnly  []bool
+	pathFromLCAToTarClearsRows   []bool
 	pathFromLCAToBase            []uint64
 	pathFromLCAToBaseTS          []types.TS
 	pathFromLCAToBaseLineageOnly []bool
 	baseForks                    []dataBranchFork
+	pathFromLCAToBaseClearsRows  []bool
+	// The source's physical lineage continues above the LCA when a bounded
+	// PICK needs to read a lower snapshot from before that ancestor.
+	tarRebuildChain   []uint64
+	tarRebuildChainTS []types.TS
 }
 
 // hasLCA reports whether tar and base share a common ancestor in the
@@ -289,6 +313,15 @@ type tableStuff struct {
 	lcaHasZeroHistory     bool
 	zeroHistoryBaseStarts []dataBranchPickWindowStart
 	pickOrigin            *dataBranchPickOrigin
+	// A side crossing a truncate is collected as visible rows at its upper
+	// boundary. A bounded source also carries its own lower snapshot image.
+	tarVisibleState, baseVisibleState bool
+
+	tarClearBaseline          *dataBranchSnapshotRelation
+	tarPathDefs, basePathDefs []*plan.TableDef
+	// Bounded PICK copies source values without firing destination ON UPDATE
+	// expressions for columns its generated UPDATE leaves unchanged.
+	pickOnUpdateNames []string
 	// lcaIdent is the winning owner identity lcaRel was reopened under
 	// (design §6.4). Nil when the LCA is an endpoint of a legacy
 	// local-local diff; identity accessors fall back to the session.
@@ -382,6 +415,7 @@ type dataBranchPickWindowStart struct {
 	snapshot      types.TS
 	identity      branchIdentity
 	collapsedFork bool
+	upperColumns  []*plan.ColDef // non-nil when both window bounds use this physical generation
 }
 
 // resolvedSnapshots returns the effective per-side snapshot timestamps:

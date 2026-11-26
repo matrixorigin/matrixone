@@ -250,9 +250,9 @@ func TestInstallDataBranchCloneContextRestoresRequestContext(t *testing.T) {
 	require.Nil(t, execCtx.reqCtx.Value(defines.DatTypKey{}))
 }
 
-func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootAlterLineage(t *testing.T) {
+func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootRebuilds(t *testing.T) {
 	require.Equal(t,
-		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter'",
+		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level not in ('alter', 'truncate')",
 		branchQuotaUsageSQL(7),
 	)
 }
@@ -2925,7 +2925,7 @@ func TestDataBranchDiffRejectsSnapshotBeforeLCACreation(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	err := diffOnBase(ctx, ses, nil, &wg, info, tables, compositeOption{}, nil, nil, nil, nil, nil)
+	err := diffOnBase(ctx, ses, nil, &wg, info, tables, compositeOption{}, nil, nil, nil, nil, nil, nil)
 	require.ErrorContains(t, err, "LCA table 1 was created after an endpoint snapshot")
 	// Both the compound-key lookup and the ID fallback miss at the old snapshot.
 	require.Equal(t, []types.TS{old, old, now}, tableScans)
@@ -3034,7 +3034,7 @@ func TestDataBranchDiffSameTableUsesOlderEndpointWhenLCAReopenFails(t *testing.T
 	}
 	// Use the serial hash-diff path so the scan assertions run on this goroutine.
 	err = diffOnBase(ctx, ses, nil, &wg, branchMetaInfo{lcaTableId: tableID}, tables,
-		compositeOption{onlineApply: true}, emit, nil, nil, nil, nil)
+		compositeOption{onlineApply: true}, emit, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, []capturedBatch{{kind: diffDelete, side: diffSideTarget, rows: [][]any{{int64(1), int64(10), "h1"}}}}, emitted)
 }
@@ -3078,7 +3078,7 @@ func collectPickCopyAlterGap(
 			{tableID: oldID, database: "db1", table: "old", snapshot: cloneTS}: types.BuildTS(11, 0),
 		},
 	})
-	tarHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, tables, dag, nil, nil, &lo, &hi)
+	tarHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, tables, dag, nil, nil, &lo, &hi, nil)
 	require.NoError(t, err)
 	require.Len(t, tarHandles, 1)
 	require.Empty(t, baseHandles)
@@ -3182,7 +3182,7 @@ func TestDataBranchPickWindowForkBoundary(t *testing.T) {
 				dag.pathFromLCAToTarTS = []types.TS{{}, srcFork, nestedFork}
 				dag.pathFromLCAToTarLineageOnly = []bool{false, false, false}
 			}
-			tarHandles, baseHandles, err := constructChangeHandle(ctx, ses, nil, &tables, &dag, nil, nil, &lo, &hi)
+			tarHandles, baseHandles, err := constructChangeHandle(ctx, ses, nil, &tables, &dag, nil, nil, &lo, &hi, nil)
 			require.NoError(t, err)
 			for _, handle := range append(tarHandles, baseHandles...) {
 				defer handle.Close()

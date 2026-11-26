@@ -1066,7 +1066,7 @@ func diffMergeAgency(
 
 	tblStuff.boundedPick = pickStmt != nil && pickStmt.BetweenFrom != "" && pickStmt.BetweenTo != ""
 	if dagInfo, err = decideLCABranchTSFromBranchDAG(
-		ctx, ses, bh, tblStuff,
+		ctx, ses, bh, tblStuff, pickStmt != nil && pickStmt.BetweenFrom != "",
 	); err != nil {
 		return
 	}
@@ -1157,18 +1157,20 @@ func diffMergeAgency(
 	}
 
 	if diffStmt == nil {
-		// The apply owner prepares stages before production and consumes each
-		// batch inline. A retry must never cancel a concurrent LCA probe.
+		// The apply owner prepares stages before opening change handles and
+		// consumes each batch inline. A retry must never cancel a concurrent probe.
 		copt.onlineApply = true
-		produce := func(emit emitFunc) error {
+		produce := func(emit emitFunc, preparePick pickApplySetup) error {
 			wg.Add(1)
 			return diffOnBase(ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit,
-				pkFilter, pickKeyHashmap, betweenFrom, betweenTo)
+				pkFilter, pickKeyHashmap, betweenFrom, betweenTo, preparePick)
 		}
 		if pickStmt != nil {
 			return pickMergeDiffs(ctx, cancel, ses, bh, pickStmt, tblStuff, produce)
 		}
-		return mergeDiffs(ctx, cancel, ses, bh, tblStuff, produce)
+		return mergeDiffs(ctx, cancel, ses, bh, tblStuff, func(emit emitFunc) error {
+			return produce(emit, nil)
+		})
 	}
 
 	retBatCh = make(chan batchWithKind, 10)
@@ -1205,7 +1207,7 @@ func diffMergeAgency(
 
 	if err = diffOnBase(
 		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter, pickKeyHashmap,
-		betweenFrom, betweenTo,
+		betweenFrom, betweenTo, nil,
 	); err != nil {
 		// If the DIFF consumer cancelled the context (e.g., an output failure),
 		// wait for it to finish and prefer its real error over context.Canceled.
@@ -1468,6 +1470,7 @@ func reconcileDataBranchEndpointSchema(
 		if err != nil {
 			return err
 		}
+		tables.tarPathDefs, tables.basePathDefs = tarDefs, baseDefs
 		tarEdges, baseEdges := dagInfo.pathFromLCAToTarLineageOnly, dagInfo.pathFromLCAToBaseLineageOnly
 		if tables.boundedPick {
 			tables.pickForkColumns = make(dataBranchForkColumns)
@@ -1496,6 +1499,22 @@ func reconcileDataBranchEndpointSchema(
 			tables.pickSourceDefs, tables.pickSourceEdges = tarDefs, tarEdges
 			tables.pickBaseDefs, tables.pickBaseEdges = baseDefs, baseEdges
 			tables.pickBasePath, tables.pickBasePathTS = dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS
+		} else if slices.Contains(dagInfo.pathFromLCAToTarClearsRows, true) ||
+			slices.Contains(dagInfo.pathFromLCAToBaseClearsRows, true) {
+			// A child can rename columns in place after its fork. Walk through
+			// its creation schema before matching the two endpoint layouts.
+			tarDefs, tarEdges, err = dataBranchClearCreationSchemas(ctx, ses, bh,
+				dedupeBranchIdentities(tarIdent, baseIdent), tables.tarRel, tarSP, tarDefs,
+				dagInfo.pathFromLCAToTarTS, tarEdges, true)
+			if err != nil {
+				return err
+			}
+			baseDefs, baseEdges, err = dataBranchClearCreationSchemas(ctx, ses, bh,
+				dedupeBranchIdentities(baseIdent, tarIdent), tables.baseRel, baseSP, baseDefs,
+				dagInfo.pathFromLCAToBaseTS, baseEdges, true)
+			if err != nil {
+				return err
+			}
 		}
 		renameProof := newDataBranchRenameProof(tables.pickForkColumns)
 		endpointColumns, err := dataBranchLineageEndpointColumns(tarDefs, tarEdges, baseDefs, baseEdges, renameProof)
@@ -1713,6 +1732,7 @@ func diffOnBase(
 	pkFilter *engine.PKFilter,
 	pickKeyHashmap databranchutils.BranchHashmap,
 	betweenFrom, betweenTo *types.TS,
+	preparePick pickApplySetup,
 ) (err error) {
 
 	defer func() {
@@ -1841,7 +1861,7 @@ func diffOnBase(
 	}
 
 	if tarHandle, baseHandle, err = constructChangeHandle(
-		ctx, ses, bh, &tblStuff, &dagInfo, pkFilter, pickKeyHashmap, betweenFrom, betweenTo,
+		ctx, ses, bh, &tblStuff, &dagInfo, pkFilter, pickKeyHashmap, betweenFrom, betweenTo, preparePick,
 	); err != nil {
 		return
 	}
@@ -2394,6 +2414,7 @@ func constructChangeHandle(
 	pkFilter *engine.PKFilter,
 	pickKeyHashmap databranchutils.BranchHashmap,
 	betweenFrom, betweenTo *types.TS,
+	preparePick pickApplySetup,
 ) (
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
@@ -2441,11 +2462,10 @@ func constructChangeHandle(
 	tarRelSp, baseRelSp := tables.resolvedRelSnapshots(ses)
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
 
-	// BETWEEN SNAPSHOT: intersect the target collect range with [betweenFrom.Next(), betweenTo].
-	// This narrows the time window on the source side so only changes within the
-	// snapshot range are collected.  The base (destination) side is not narrowed.
+	var candidates []branchIdentity
 	if betweenFrom != nil && betweenTo != nil {
 		tables.boundedPick = true
+		candidates = dedupeBranchIdentities(tarIdent, baseIdent)
 		bFrom := betweenFrom.Next()
 		bTo := *betweenTo
 		// The shared prefix before the first divergence is still handled
@@ -2515,8 +2535,18 @@ func constructChangeHandle(
 				if tarRange.forkBefore != nil {
 					forkBefore = append(forkBefore, tarRange.forkBefore[i])
 				}
+				if tarRange.clearAt != nil {
+					at := tarRange.clearAt[i]
+					if at.LT(&bFrom) || at.GT(&bTo) {
+						at = types.TS{}
+					}
+					tarRange.clearAt[j] = at
+				}
 				j++
 			}
+		}
+		if tarRange.clearAt != nil {
+			tarRange.clearAt = tarRange.clearAt[:j]
 		}
 		tarRange.from = tarRange.from[:j]
 		tarRange.end = tarRange.end[:j]
@@ -2552,15 +2582,97 @@ func constructChangeHandle(
 	tarHydrationSnapshot := tarSnapshot
 	tarHydrationRelSnapshot := tarRelSp
 	tarHydrationIdent := tarIdent
-	if betweenTo != nil && betweenTo.LT(&tarHydrationSnapshot) && len(tarRange.rel) > 0 {
-		// PICK BETWEEN observes the target as of betweenTo, not as of the
-		// statement's later endpoint snapshot. The last surviving range is the
-		// physical generation that was active at that boundary.
-		last := len(tarRange.rel) - 1
-		tarHydrationRel = tarRange.rel[last]
-		tarHydrationSnapshot = *betweenTo
-		tarHydrationRelSnapshot = tarRange.segmentSnapshot(last, tarRelSp)
-		tarHydrationIdent = tarRange.segmentIdentity(last, tarIdent)
+	var boundedUpperColumns *dataBranchClearColumns
+	tables.tarVisibleState, tables.baseVisibleState = tarRange.crossesClear(), baseRange.crossesClear()
+	if tables.tarVisibleState {
+		if betweenFrom != nil && betweenTo != nil {
+			// The surviving segments may start after lo because the destination
+			// already inherited the source prefix at its fork.
+			last := tarRange.rel[len(tarRange.rel)-1]
+			baselineAt := *betweenFrom
+			if first := tarRange.from[0].Prev(); first.GT(&baselineAt) {
+				baselineAt = first
+			}
+			if tables.tarClearBaseline, err = dataBranchSourceAt(
+				ctx, ses, bh, candidates, branchInfo, last, baselineAt,
+			); err != nil {
+				return
+			}
+			if tables.tarClearBaseline.rel != nil {
+				if tables.tarClearBaseline.columns, err = boundedDataBranchClearColumns(
+					ctx, ses, bh, candidates, *tables, branchInfo, *tables.tarClearBaseline, tarSnapshot,
+				); err != nil {
+					return
+				}
+			}
+			if betweenTo.LT(&tarSnapshot) {
+				var endpoint *dataBranchSnapshotRelation
+				if endpoint, err = dataBranchSourceAt(ctx, ses, bh, candidates, branchInfo, last, *betweenTo); err != nil {
+					return
+				}
+				if endpoint.rel == nil {
+					err = moerr.NewInternalErrorNoCtx("data branch source is missing at the upper snapshot")
+					return
+				}
+				tarHydrationRel, tarHydrationSnapshot, tarHydrationIdent = endpoint.rel, endpoint.at, endpoint.ident
+				tarHydrationRelSnapshot = endpoint.at
+				if boundedUpperColumns, err = boundedDataBranchClearColumns(
+					ctx, ses, bh, candidates, *tables, branchInfo, *endpoint, tarSnapshot,
+				); err != nil {
+					return
+				}
+				tables.tarClearBaseline.upperColumns = boundedUpperColumns.present
+			}
+		}
+		// The endpoint image contains only surviving rows from the last clear
+		// and its successors, including rows materialized by later COPY ALTERs.
+		tarRange = dataBranchVisibleRange(tarHydrationRel, tarHydrationSnapshot, tarHydrationIdent)
+	} else if betweenTo != nil && betweenTo.LT(&tarHydrationSnapshot) && len(tarRange.rel) > 0 {
+		// The collection relation can have been opened after the upper
+		// snapshot, even for ordinary DML on the same table ID.
+		var endpoint *dataBranchSnapshotRelation
+		last := tarRange.rel[len(tarRange.rel)-1]
+		if endpoint, err = dataBranchSourceAt(ctx, ses, bh, candidates, branchInfo, last, *betweenTo); err != nil {
+			return
+		}
+		if endpoint.rel == nil {
+			err = moerr.NewInternalErrorNoCtx("data branch source is missing at the upper snapshot")
+			return
+		}
+		tarHydrationRel, tarHydrationSnapshot, tarHydrationIdent = endpoint.rel, endpoint.at, endpoint.ident
+		tarHydrationRelSnapshot = endpoint.at
+		if boundedUpperColumns, err = boundedDataBranchClearColumns(
+			ctx, ses, bh, candidates, *tables, branchInfo, *endpoint, tarSnapshot,
+		); err != nil {
+			return
+		}
+	}
+	if start := tables.pickWindowStart; start != nil && boundedUpperColumns != nil &&
+		len(tables.pickForkColumns) == 0 && start.tableID == tarHydrationRel.GetTableID(ctx) {
+		start.upperColumns = boundedUpperColumns.present
+	}
+	if tables.tarClearBaseline != nil && (!branchInfo.hasLCA() || tables.lcaHasZeroHistory) {
+		// An unrelated destination has no fork baseline. Compare its visible
+		// rows to the source's lower snapshot when matching picked changes.
+		tables.baseVisibleState = true
+	}
+	if tables.tarVisibleState && branchInfo.hasLCA() && tables.def.pkKind == fakeKind {
+		// Once a clear invalidates the source's hidden row identities, both
+		// sides must match duplicates by value and retain live destination
+		// identities for any excess source deletions.
+		tables.baseVisibleState = true
+	}
+	if tables.baseVisibleState {
+		baseRange = dataBranchVisibleRange(tables.baseRel, baseSnapshot, baseIdent)
+	}
+	if preparePick != nil {
+		var upperColumns []*plan.ColDef
+		if boundedUpperColumns != nil {
+			upperColumns = boundedUpperColumns.present
+		}
+		if err = preparePick(upperColumns); err != nil {
+			return
+		}
 	}
 	targetDef := tables.tarRel.GetTableDef(ctx)
 	resolveForkColumns := tables.boundedPick && (tables.lcaHasZeroHistory || len(tables.pickForkColumns) > 0)
@@ -2594,14 +2706,33 @@ func constructChangeHandle(
 
 	for i := range tarRange.rel {
 		collectStart := time.Now()
+		segRel := tarRange.rel[i]
 		tarSegIdent := tarRange.segmentIdentity(i, tarIdent)
-		segDef := tarRange.rel[i].GetTableDef(identityCtx(ctx, tarSegIdent))
+		var historicalColumns []*plan.ColDef
+		if boundedUpperColumns != nil {
+			if segRel.GetTableID(ctx) == tarHydrationRel.GetTableID(ctx) {
+				segRel, tarSegIdent = tarHydrationRel, tarHydrationIdent
+				historicalColumns = boundedUpperColumns.present
+			} else {
+				segment := dataBranchSnapshotRelation{rel: segRel, ident: tarSegIdent, at: tarRange.segmentSnapshot(i, tarRelSp)}
+				var columns *dataBranchClearColumns
+				if columns, err = boundedDataBranchClearColumns(
+					ctx, ses, bh, candidates, *tables, branchInfo, segment, tarSnapshot,
+				); err != nil {
+					return
+				}
+				historicalColumns = columns.present
+			}
+		}
+		segDef := segRel.GetTableDef(identityCtx(ctx, tarSegIdent))
 		var (
 			sourceMapping   []int
 			needsProjection bool
 		)
-		if segDef.TblId != targetDef.TblId || resolveForkColumns && segDef.Version != targetDef.Version {
-			if resolveForkColumns {
+		if historicalColumns != nil || segDef.TblId != targetDef.TblId || resolveForkColumns && segDef.Version != targetDef.Version {
+			if historicalColumns != nil && (!resolveForkColumns || tables.tarVisibleState) {
+				sourceMapping, err = dataBranchHistoricalColToTargetIdx(segDef, targetDef, tables.def.colNames, tables.def.tarOnlyIdxes, historicalColumns, false)
+			} else if resolveForkColumns {
 				var cols []*plan.ColDef
 				cols, err = pickSegmentColumns(segDef, targetDef, tables.pickSourceDefs, tables.pickSourceEdges,
 					tables.def.colNames, renameProof)
@@ -2627,7 +2758,7 @@ func constructChangeHandle(
 		}
 		if handle, err = collectFn(
 			collectCtx,
-			tarRange.rel[i],
+			segRel,
 			tarRange.from[i],
 			tarRange.end[i],
 			ses.proc.Mp(),
@@ -2636,7 +2767,7 @@ func constructChangeHandle(
 		}
 		logutil.Info("DataBranch-CollectChanges-Open",
 			zap.String("side", "target"),
-			zap.Uint64("table-id", tarRange.rel[i].GetTableID(ctx)),
+			zap.Uint64("table-id", segRel.GetTableID(ctx)),
 			zap.String("from", tarRange.from[i].ToString()),
 			zap.String("to", tarRange.end[i].ToString()),
 			zap.Bool("has-handle", handle != nil),
@@ -2646,7 +2777,7 @@ func constructChangeHandle(
 		if handle != nil {
 			handle = scopeChangesHandleToSegmentOwner(handle, tarSegIdent)
 			if needsProjection {
-				handle = &historicalDataBranchChangesHandle{
+				historical := &historicalDataBranchChangesHandle{
 					inner:               handle,
 					sourceMapping:       sourceMapping,
 					tblStuff:            *tables,
@@ -2655,9 +2786,13 @@ func constructChangeHandle(
 					endpointSnapshot:    tarHydrationSnapshot,
 					endpointRelSnapshot: tarHydrationRelSnapshot,
 					endpointIdent:       tarHydrationIdent,
-					hydrate: tarRange.rel[i].GetTableID(ctx) !=
+					hydrate: segRel.GetTableID(ctx) !=
 						tarHydrationRel.GetTableID(ctx),
 				}
+				if boundedUpperColumns != nil {
+					historical.endpointColumns = boundedUpperColumns.present
+				}
+				handle = historical
 			}
 			tarHandle = append(tarHandle, handle)
 		}
@@ -2808,6 +2943,147 @@ func dataBranchSchemaPathFrom(
 		return nil, nil
 	}
 	return append([]*plan.TableDef{segment}, defs[first:]...), append([]bool{false}, edges[first:]...)
+}
+
+func dataBranchVisibleRange(rel engine.Relation, at types.TS, ident branchIdentity) collectRange {
+	return collectRange{
+		from: []types.TS{types.MinTs()}, end: []types.TS{at},
+		rel: []engine.Relation{rel}, idents: []branchIdentity{ident},
+	}
+}
+
+// dataBranchSourceAt resolves the source's physical generations first.
+// Before the source fork, only the retained segment and the path it inherited
+// can contribute a window image. Clamp each ancestor to its captured horizon.
+func dataBranchSourceAt(
+	ctx context.Context, ses *Session, bh BackgroundExec, candidates []branchIdentity,
+	info *branchMetaInfo, lastRetained engine.Relation, at types.TS,
+) (*dataBranchSnapshotRelation, error) {
+	for _, id := range info.tarRebuildChain {
+		rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, candidates, id, at)
+		if err == nil {
+			return &dataBranchSnapshotRelation{rel: rel, ident: ident, at: at}, nil
+		}
+		if !isMissingDataBranchRelationByID(err) {
+			return nil, err
+		}
+	}
+	path, snapshots := info.pathFromLCAToTar, info.pathFromLCAToTarTS
+	for i := slices.Index(path, lastRetained.GetTableID(ctx)); i >= 0; i-- {
+		segmentAt := at
+		if i+1 < len(path) && snapshots[i+1].LT(&segmentAt) {
+			segmentAt = snapshots[i+1]
+		}
+		rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, candidates, path[i], segmentAt)
+		if err == nil {
+			return &dataBranchSnapshotRelation{rel: rel, ident: ident, at: segmentAt}, nil
+		}
+		if !isMissingDataBranchRelationByID(err) {
+			return nil, err
+		}
+	}
+	return &dataBranchSnapshotRelation{at: at}, nil
+}
+
+// Resolve the schema along the source path from a bounded snapshot to the
+// endpoint. Within a generation the snapshot can predate an in-place
+// rename or DROP/ADD, so include both definitions and compare their stable IDs.
+func boundedDataBranchClearColumns(
+	ctx context.Context, ses *Session, bh BackgroundExec, candidates []branchIdentity, tables tableStuff,
+	info *branchMetaInfo, historical dataBranchSnapshotRelation, endpointSP types.TS,
+) (*dataBranchClearColumns, error) {
+	id := historical.rel.GetTableID(ctx)
+	endpointID := tables.tarRel.GetTableID(ctx)
+	var defs []*plan.TableDef
+	var pathTS []types.TS
+	var lineageOnly []bool
+	if id == endpointID {
+		defs = []*plan.TableDef{tables.tarRel.GetTableDef(ctx)}
+	} else {
+		var path []uint64
+		if i := slices.Index(info.pathFromLCAToTar, id); i >= 0 {
+			path, pathTS = info.pathFromLCAToTar[i:], info.pathFromLCAToTarTS[i:]
+			lineageOnly = info.pathFromLCAToTarLineageOnly[i:]
+			if len(tables.tarPathDefs) == len(info.pathFromLCAToTar) {
+				defs = tables.tarPathDefs[i:]
+			}
+		} else if i := slices.Index(info.tarRebuildChain, id); i >= 0 && i < len(info.tarRebuildChainTS) {
+			path, pathTS = slices.Clone(info.tarRebuildChain[:i+1]), slices.Clone(info.tarRebuildChainTS[:i+1])
+			slices.Reverse(path)
+			slices.Reverse(pathTS)
+		}
+		if defs == nil {
+			var err error
+			defs, _, err = dataBranchPathTableDefs(ctx, ses, bh, candidates, tables.tarRel, endpointSP, path, pathTS)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if lineageOnly == nil {
+		lineageOnly = make([]bool, len(defs))
+		for i := 1; i < len(lineageOnly); i++ {
+			lineageOnly[i] = true
+		}
+	}
+	if len(defs) > 1 {
+		var err error
+		defs, lineageOnly, err = dataBranchClearCreationSchemas(ctx, ses, bh, candidates,
+			tables.tarRel, endpointSP, defs, pathTS, lineageOnly, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+	older := historical.rel.GetTableDef(identityCtx(ctx, historical.ident))
+	return resolveDataBranchClearColumns(tables.def.colNames, append([]*plan.TableDef{older}, defs...),
+		append([]bool{false}, lineageOnly...)), nil
+}
+
+// Use a versioned generation's creation schema before its final schema. An
+// in-place ALTER may have changed the name or default without rewriting rows.
+// Bounded PICK can also consume a logical parent's historical segment.
+func dataBranchClearCreationSchemas(
+	ctx context.Context, ses *Session, bh BackgroundExec, owners []branchIdentity,
+	endpoint engine.Relation, endpointSP types.TS, defs []*plan.TableDef, pathTS []types.TS, edges []bool,
+	includeForks bool,
+) ([]*plan.TableDef, []bool, error) {
+	out := make([]*plan.TableDef, 0, len(defs))
+	outEdges := make([]bool, 0, len(defs))
+	for i, def := range defs {
+		if i != 0 && (edges[i] || includeForks) && def.Version != 0 && defs[i-1].TblId != def.TblId {
+			rel, owner, at := endpoint, owners[0], endpointSP
+			if i+1 < len(defs) {
+				var err error
+				at = pathTS[i+1]
+				rel, owner, err = reopenDataBranchNodeByID(ctx, ses, bh, owners, def.TblId, at)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			createdAt, err := getTablesCreationCommitTS(ctx, ses, owner, rel, owner, rel, []types.TS{at, at})
+			if err != nil {
+				return nil, nil, err
+			}
+			created, owner, err := reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{owner}, def.TblId, createdAt[0])
+			if err != nil {
+				return nil, nil, err
+			}
+			creationDef := created.GetTableDef(identityCtx(ctx, owner))
+			if creationDef.Version != 0 {
+				// The catalog lookup can fall back to a rewritten row when
+				// history is unavailable. Its default is not the introduction value.
+				return nil, nil, moerr.NewNotSupportedNoCtxf(
+					"DATA BRANCH cannot establish the creation schema for table %d across a clear", def.TblId,
+				)
+			}
+			out = append(out, creationDef)
+			outEdges = append(outEdges, edges[i])
+			out, outEdges = append(out, def), append(outEdges, true)
+			continue
+		}
+		out, outEdges = append(out, def), append(outEdges, edges[i])
+	}
+	return out, outEdges, nil
 }
 
 func dataBranchPathTableDefs(
@@ -3038,6 +3314,23 @@ func dataBranchSameCommitForkColumns(previous, current *plan.TableDef) (map[stri
 		return nil, err
 	}
 	return columns, nil
+}
+
+func dataBranchPreviousLineageColumn(previousDef, currentDef *plan.TableDef, current *plan.ColDef, lineageOnly bool) *plan.ColDef {
+	if previousDef.TblId != 0 && previousDef.TblId == currentDef.TblId {
+		return dataBranchColumnDefByIdentity(previousDef, current)
+	}
+	if previous := dataBranchColumnDefByName(previousDef, current.Name); previous != nil {
+		return previous
+	}
+	if !lineageOnly {
+		if previous := dataBranchColumnDefByLogicalName(previousDef, current); previous != nil {
+			return previous
+		}
+	}
+	// COPY ALTER identifiers are table-local. A rename can use them only
+	// when the schema on this edge proves the correspondence.
+	return dataBranchColumnDefByRenameIdentity(previousDef, currentDef, current)
 }
 
 func dataBranchColumnDefByRenameIdentity(
@@ -3355,15 +3648,15 @@ func decideCollectRange(
 	if dagInfo.lcaTableId == 0 {
 		if tarCollectRange, _, err = buildSideCollectRange(
 			ctx, ses, bh, tables, dedupeBranchIdentities(tarIdent, baseIdent), tarSp, tarCTS,
-			dagInfo.pathFromLCAToTar, dagInfo.pathFromLCAToTarTS,
-			nil, nil, nil, types.TS{}, true,
+			dagInfo.pathFromLCAToTar, dagInfo.pathFromLCAToTarTS, dagInfo.pathFromLCAToTarLineageOnly, dagInfo.pathFromLCAToTarClearsRows,
+			nil, nil, types.TS{}, true,
 		); err != nil {
 			return
 		}
 		if baseCollectRange, _, err = buildSideCollectRange(
 			ctx, ses, bh, tables, dedupeBranchIdentities(baseIdent, tarIdent), baseSp, baseCTS,
-			dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS,
-			nil, nil, nil, types.TS{}, true,
+			dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS, dagInfo.pathFromLCAToBaseLineageOnly, dagInfo.pathFromLCAToBaseClearsRows,
+			nil, nil, types.TS{}, true,
 		); err != nil {
 			return
 		}
@@ -3482,13 +3775,13 @@ func decideCollectRange(
 	var tarHasZeroHistory, baseHasZeroHistory bool
 	if tarCollectRange, tarHasZeroHistory, err = buildSideCollectRange(
 		ctx, ses, bh, tables, dedupeBranchIdentities(tarIdent, baseIdent), tarSp, tarCTS,
-		tarPath, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, baseSp, false,
+		tarPath, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, dagInfo.pathFromLCAToTarClearsRows, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, baseSp, false,
 	); err != nil {
 		return
 	}
 	if baseCollectRange, baseHasZeroHistory, err = buildSideCollectRange(
 		ctx, ses, bh, tables, dedupeBranchIdentities(baseIdent, tarIdent), baseSp, baseCTS,
-		basePath, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, tarSp, false,
+		basePath, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, dagInfo.pathFromLCAToBaseClearsRows, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, tarSp, false,
 	); err != nil {
 		return
 	}
@@ -3498,7 +3791,7 @@ func decideCollectRange(
 		// materializes that intermediate's complete state, including writes made
 		// before the clone. Compare both endpoint histories directly so inherited
 		// rows cancel while those writes remain visible in the diff.
-		if !tables.boundedPick || tarHasZeroHistory && !tables.lcaHasZeroHistory && !tarCollectRange.hasCollapsedFork() {
+		if !tarCollectRange.crossesClear() && (!tables.boundedPick || tarHasZeroHistory && !tables.lcaHasZeroHistory && !tarCollectRange.hasCollapsedFork()) {
 			tarCollectRange = collectRange{
 				from:           []types.TS{types.MinTs()},
 				end:            []types.TS{tarSp},
@@ -3508,7 +3801,7 @@ func decideCollectRange(
 				firstCommitted: tarCollectRange.firstCommitted,
 			}
 		}
-		if !tables.boundedPick || tables.lcaHasZeroHistory || baseHasZeroHistory && !baseCollectRange.hasCollapsedFork() {
+		if !baseCollectRange.crossesClear() && (!tables.boundedPick || tables.lcaHasZeroHistory || baseHasZeroHistory && !baseCollectRange.hasCollapsedFork()) {
 			baseCollectRange = collectRange{
 				from:              []types.TS{types.MinTs()},
 				end:               []types.TS{baseSp},
@@ -3589,6 +3882,7 @@ func buildSideCollectRange(
 	selfPath []uint64,
 	selfPathTS []types.TS,
 	selfPathLineageOnly []bool,
+	selfPathClearsRows []bool,
 	otherPathTS []types.TS,
 	otherPathLineageOnly []bool,
 	otherSP types.TS,
@@ -3614,6 +3908,9 @@ func buildSideCollectRange(
 		cr.end = append(cr.end, to)
 		cr.idents = append(cr.idents, ident)
 		cr.startBoundaryRel = append(cr.startBoundaryRel, previousRel)
+		if len(selfPathClearsRows) > 0 {
+			cr.clearAt = append(cr.clearAt, types.TS{})
+		}
 		if before != nil && cr.forkBefore == nil {
 			cr.forkBefore = make([]*dataBranchPickWindowStart, len(cr.rel)-1, len(selfPath)+1)
 		}
@@ -3621,6 +3918,7 @@ func buildSideCollectRange(
 			cr.forkBefore = append(cr.forkBefore, before)
 		}
 	}
+	restartWholeHistory := false
 	for i, nodeID := range selfPath {
 		var (
 			rel             engine.Relation
@@ -3677,7 +3975,8 @@ func buildSideCollectRange(
 						(pendingFork || previousPoint.snapshot.EQ(&selfPathTS[i])) {
 						pendingFork = true
 					} else {
-						if !tables.boundedPick || !tables.lcaHasZeroHistory {
+						restartWholeHistory = slices.Contains(selfPathClearsRows, true)
+						if !restartWholeHistory && (!tables.boundedPick || !tables.lcaHasZeroHistory) {
 							return
 						}
 						previousRel = nil
@@ -3735,7 +4034,7 @@ func buildSideCollectRange(
 				cr.zeroHistoryStarts = append(cr.zeroHistoryStarts, image)
 			}
 		}
-		if wholeHistory && i == 0 {
+		if (wholeHistory && i == 0) || restartWholeHistory {
 			windowFrom = types.MinTs()
 		} else if hasZeroHistory && len(cr.rel) == 0 {
 			windowFrom = nodeCTS
@@ -3758,6 +4057,13 @@ func buildSideCollectRange(
 			}
 		}
 
+		var clearAt types.TS
+		if i > 0 && i < len(selfPathClearsRows) && selfPathClearsRows[i] {
+			// clone_ts is the protected parent snapshot. The clear becomes
+			// visible at the replacement commit, even with no subsequent DML.
+			clearAt = nodeCTS
+			windowFrom = nodeCTS
+		}
 		continuesFork := pendingFork && (pendingForkCommit.IsEmpty() || nodeCTS.EQ(&pendingForkCommit))
 		if collectForkWrites && previousRel != nil && logicalFork(i) &&
 			(continuesFork || previousPoint.snapshot.EQ(&selfPathTS[i])) {
@@ -3782,6 +4088,10 @@ func buildSideCollectRange(
 		pendingForkCommit = types.TS{}
 		if windowFrom.LE(&windowEnd) {
 			appendSegment(rel, relationSnapshot, windowFrom, windowEnd, segIdent, nil)
+			if !clearAt.IsEmpty() {
+				cr.clearAt[len(cr.clearAt)-1] = clearAt
+			}
+			restartWholeHistory = false
 		}
 		previousRel = rel
 		previousPoint = dataBranchPickWindowStart{tableID: nodeID, snapshot: relationSnapshot, identity: segIdent}
@@ -4404,6 +4714,7 @@ func decideLCABranchTSFromBranchDAG(
 	ses *Session,
 	bh BackgroundExec,
 	tblStuff tableStuff,
+	boundedPick bool,
 ) (
 	branchInfo branchMetaInfo,
 	err error,
@@ -4426,6 +4737,18 @@ func decideLCABranchTSFromBranchDAG(
 		return
 	}
 
+	if boundedPick {
+		branchInfo.tarRebuildChain = dag.RebuildChain(tarLineageID)
+		if _, cloneTSs, ok := dag.PathFromRoot(tarLineageID); ok {
+			pathTS := buildTSs(cloneTSs)
+			branchInfo.tarRebuildChainTS = pathTS[len(pathTS)-len(branchInfo.tarRebuildChain):]
+			slices.Reverse(branchInfo.tarRebuildChainTS)
+		}
+		if len(branchInfo.tarRebuildChain) == 0 {
+			branchInfo.tarRebuildChain = []uint64{tarTableID}
+		}
+	}
+
 	if lcaTableID, _, _, hasLca := dag.FindLCA(tarLineageID, baseLineageID); hasLca {
 		tarIDs, tarTSs, ok := dag.PathFromAncestor(tarLineageID, lcaTableID)
 		if !ok {
@@ -4444,10 +4767,10 @@ func decideLCABranchTSFromBranchDAG(
 		branchInfo.lcaTableId = lcaTableID
 		branchInfo.pathFromLCAToTar = tarIDs
 		branchInfo.pathFromLCAToTarTS = buildTSs(tarTSs)
-		branchInfo.pathFromLCAToTarLineageOnly = dataBranchPathLineageOnly(dag, tarIDs)
+		branchInfo.pathFromLCAToTarLineageOnly, branchInfo.pathFromLCAToTarClearsRows = dataBranchPathEdges(dag, tarIDs)
 		branchInfo.pathFromLCAToBase = baseIDs
 		branchInfo.pathFromLCAToBaseTS = buildTSs(baseTSs)
-		branchInfo.pathFromLCAToBaseLineageOnly = dataBranchPathLineageOnly(dag, baseIDs)
+		branchInfo.pathFromLCAToBaseLineageOnly, branchInfo.pathFromLCAToBaseClearsRows = dataBranchPathEdges(dag, baseIDs)
 		if tblStuff.boundedPick {
 			for i := 1; i < len(baseIDs); i++ {
 				if branchInfo.pathFromLCAToBaseLineageOnly[i] {
@@ -4466,28 +4789,31 @@ func decideLCABranchTSFromBranchDAG(
 		return
 	}
 
-	wholePath := func(lineageID, endpointID uint64) ([]uint64, []types.TS, []bool, error) {
+	wholePath := func(lineageID, endpointID uint64) ([]uint64, []types.TS, []bool, []bool, error) {
 		ids, cloneTSs, ok := dag.PathFromRoot(lineageID)
 		if !ok {
-			return []uint64{endpointID}, []types.TS{{}}, []bool{false}, nil
+			return []uint64{endpointID}, []types.TS{{}}, []bool{false}, nil, nil
 		}
 		if len(ids) == 0 || ids[len(ids)-1] != endpointID {
-			return nil, nil, nil, moerr.NewInternalErrorNoCtxf(
+			return nil, nil, nil, nil, moerr.NewInternalErrorNoCtxf(
 				"data branch: lineage endpoint %d does not match table %d", lineageID, endpointID,
 			)
 		}
-		return ids, buildTSs(cloneTSs), dataBranchPathLineageOnly(dag, ids), nil
+		lineageOnly, clearsRows := dataBranchPathEdges(dag, ids)
+		return ids, buildTSs(cloneTSs), lineageOnly, clearsRows, nil
 	}
 	if tarTableID != baseTableID {
 		if branchInfo.pathFromLCAToTar,
 			branchInfo.pathFromLCAToTarTS,
 			branchInfo.pathFromLCAToTarLineageOnly,
+			branchInfo.pathFromLCAToTarClearsRows,
 			err = wholePath(tarLineageID, tarTableID); err != nil {
 			return
 		}
 		if branchInfo.pathFromLCAToBase,
 			branchInfo.pathFromLCAToBaseTS,
 			branchInfo.pathFromLCAToBaseLineageOnly,
+			branchInfo.pathFromLCAToBaseClearsRows,
 			err = wholePath(baseLineageID, baseTableID); err != nil {
 			return
 		}
@@ -4509,12 +4835,18 @@ func decideLCABranchTSFromBranchDAG(
 	return
 }
 
-func dataBranchPathLineageOnly(dag *databranchutils.DataBranchDAG, path []uint64) []bool {
-	ret := make([]bool, len(path))
+func dataBranchPathEdges(dag *databranchutils.DataBranchDAG, path []uint64) (lineageOnly, clearsRows []bool) {
+	lineageOnly = make([]bool, len(path))
 	for i := 1; i < len(path); i++ {
-		ret[i] = dag.IsLineageOnly(path[i])
+		lineageOnly[i] = dag.IsLineageOnly(path[i])
+		if dag.ClearsRows(path[i]) {
+			if clearsRows == nil {
+				clearsRows = make([]bool, len(path))
+			}
+			clearsRows[i] = true
+		}
 	}
-	return ret
+	return
 }
 
 func dataBranchLineageTableID(
@@ -4618,7 +4950,8 @@ func constructBranchDAGWithLock(
 				PTableID:     pTblIds[i],
 				TableDeleted: tableDeleted[i],
 				Creator:      creators[i],
-				LineageOnly:  databranchutils.IsAlterLineageLevel(levels[i]),
+				LineageOnly:  databranchutils.IsRebuildLineageLevel(levels[i]),
+				ClearsRows:   databranchutils.IsTruncateLineageLevel(levels[i]),
 			})
 		}
 		return true

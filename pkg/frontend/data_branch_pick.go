@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -142,7 +143,11 @@ func validateDataBranchPickOptions(
 	return nil
 }
 
-// pickMergeDiffs is the consumer goroutine for PICK. It receives diff batches
+// pickApplySetup binds the writer to the historical source layout before the
+// producer opens change handles. Nil columns mean the current source layout.
+type pickApplySetup func([]*plan.ColDef) error
+
+// pickMergeDiffs is the inline consumer for PICK. It receives diff batches
 // from the hashDiff producer (which uses ACCEPT internally), filters rows whose
 // PK is in the KEYS set, and applies INSERT/DELETE SQL to the destination table.
 //
@@ -160,7 +165,7 @@ func pickMergeDiffs(
 	bh BackgroundExec,
 	stmt *tree.DataBranchPick,
 	tblStuff tableStuff,
-	produce func(emitFunc) error,
+	produce func(emitFunc, pickApplySetup) error,
 ) (err error) {
 
 	var (
@@ -192,20 +197,53 @@ func pickMergeDiffs(
 		skipSet = make(map[string]struct{})
 	}
 
-	appender := newSQLValuesAppender(
-		ctx, ses, bh, tblStuff, dataBranchApplyModeOnlinePKOnly,
-		&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil,
-	)
+	var appender sqlValuesAppender
+	prepared := false
+	prepare := func(upperColumns []*plan.ColDef) error {
+		if upperColumns != nil {
+			for _, idx := range tblStuff.def.pkColIdxes {
+				if upperColumns[idx] == nil {
+					return moerr.NewNotSupportedNoCtx("DATA BRANCH PICK cannot resolve the destination key at the upper snapshot")
+				}
+			}
+			// Inserts use destination defaults for absent columns. Updates
+			// leave those columns untouched, rather than writing padding NULLs.
+			present := func(idxes []int) []int {
+				out := make([]int, 0, len(idxes))
+				for _, idx := range idxes {
+					if upperColumns[idx] != nil {
+						out = append(out, idx)
+					}
+				}
+				return out
+			}
+			tblStuff.def.writableIdxes = present(tblStuff.def.writableIdxes)
+			tblStuff.def.commonWritableIdxes = present(tblStuff.def.commonWritableIdxes)
+		}
+		if stmt.BetweenFrom != "" && stmt.BetweenTo != "" {
+			for _, col := range tblStuff.baseRel.GetTableDef(ctx).Cols {
+				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
+					tblStuff.pickOnUpdateNames = append(tblStuff.pickOnUpdateNames, col.Name)
+				}
+			}
+		}
+		appender = newSQLValuesAppender(ctx, ses, bh, tblStuff, dataBranchApplyModeOnlinePKOnly,
+			&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil)
+		if err := initApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
+			return err
+		}
+		prepared = true
+		return nil
+	}
 	var acceptedDirectUpdateKeys map[string]struct{}
 	if tblStuff.def.pkKind != fakeKind && stmt.ConflictOpt != nil && stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT {
 		acceptedDirectUpdateKeys = make(map[string]struct{})
 	}
-	if err = initApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
-		return err
-	}
 	defer func() {
-		if err2 := dropApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err2 != nil && err == nil {
-			err = err2
+		if prepared {
+			if err2 := dropApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err2 != nil && err == nil {
+				err = err2
+			}
 		}
 	}()
 
@@ -229,7 +267,7 @@ func pickMergeDiffs(
 		}
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 		return false, nil
-	}); err != nil {
+	}, prepare); err != nil {
 		return err
 	}
 	if len(acceptedDirectUpdateKeys) != 0 {

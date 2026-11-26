@@ -188,7 +188,7 @@ func TestCompactHistoricalAlterLineageWithBH(t *testing.T) {
 		historicalSnapshotSourceSQL(),
 		historicalPitrSourceSQL(),
 		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')",
-		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%' or level = 'truncate' or level like 'truncate:%')",
 	}, bh.executedSQLs)
 }
 
@@ -243,7 +243,7 @@ func TestCompactHistoricalAlterLineageWithBHReclaimsDeletedRowsWithoutEdges(t *t
 		historicalSnapshotSourceSQL(),
 		historicalPitrSourceSQL(),
 		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2','__mo_branch_3')",
-		"delete from mo_catalog.mo_branch_metadata where table_id in (2,3) and (level = 'alter' or level like 'alter:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2,3) and (level = 'alter' or level like 'alter:%' or level = 'truncate' or level like 'truncate:%')",
 	}, bh.executedSQLs)
 }
 
@@ -263,7 +263,7 @@ func TestCompactHistoricalAlterLineageWithBHPropagatesDeleteError(t *testing.T) 
 	)
 	require.ErrorIs(t, err, wantErr)
 	require.NotContains(t, bh.executedSQLs,
-		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%' or level = 'truncate' or level like 'truncate:%')",
 	)
 }
 
@@ -315,7 +315,7 @@ func TestDoDropSnapshotRollsBackCompactionFailure(t *testing.T) {
 	require.Contains(t, bh.executedSQLs, "rollback;")
 	require.NotContains(t, bh.executedSQLs, "commit;")
 	require.NotContains(t, bh.executedSQLs,
-		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%' or level = 'truncate' or level like 'truncate:%')",
 	)
 }
 

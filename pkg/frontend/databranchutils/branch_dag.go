@@ -22,6 +22,7 @@ type DataBranchMetadata struct {
 	Level        string
 	TableDeleted bool
 	LineageOnly  bool
+	ClearsRows   bool
 }
 
 type dagNode struct {
@@ -29,9 +30,10 @@ type dagNode struct {
 	CloneTS  int64
 	ParentID uint64
 	Creator  uint64
-	// LineageOnly marks copy-and-swap generations (for example ALTER)
+	// LineageOnly marks physical rebuilds (COPY ALTER and TRUNCATE)
 	// that preserve one logical branch rather than creating a new fork.
 	LineageOnly bool
+	ClearsRows  bool
 
 	Parent *dagNode
 	Depth  int
@@ -68,6 +70,7 @@ func NewDAG(rows []DataBranchMetadata) *DataBranchDAG {
 		node1.ParentID = row.PTableID
 		node1.Creator = row.Creator
 		node1.LineageOnly = row.LineageOnly
+		node1.ClearsRows = row.ClearsRows
 
 		if _, ok = dag.nodes[row.PTableID]; !ok {
 			node2 = &dagNode{
@@ -151,6 +154,23 @@ func (d *DataBranchDAG) Exists(tableID uint64) bool {
 func (d *DataBranchDAG) IsLineageOnly(tableID uint64) bool {
 	node, ok := d.nodes[tableID]
 	return ok && node.LineageOnly
+}
+
+func (d *DataBranchDAG) ClearsRows(tableID uint64) bool {
+	node, ok := d.nodes[tableID]
+	return ok && node.ClearsRows
+}
+
+// RebuildChain returns the table's physical generations, newest first.
+func (d *DataBranchDAG) RebuildChain(tableID uint64) []uint64 {
+	var ids []uint64
+	for node := d.nodes[tableID]; node != nil; node = node.Parent {
+		ids = append(ids, node.TableID)
+		if !node.LineageOnly {
+			break
+		}
+	}
+	return ids
 }
 
 func (d *DataBranchDAG) HasParent(tableID uint64) bool {
