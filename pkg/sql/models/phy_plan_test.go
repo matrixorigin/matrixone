@@ -96,14 +96,13 @@ func newPhyPlanExportCloneFixture() (*PhyPlan, *process.OperatorStats) {
 			}},
 		}},
 	}
-	stats.SetStartupResource(resource.Delta{
-		Usage: resource.Usage{
-			ExclusiveActiveNS: 31,
-			WaitNS:            [resource.WaitKindCount]uint64{resource.WaitFilesystem: 37},
-			S3Requests:        [resource.S3OpCount]uint64{resource.S3Get: 1},
-			S3ReadBytes:       41,
-		},
-		Quality: resource.QualityPartial,
+	stats.RecordReaderStartup(&process.OperatorStats{
+		TimeConsumed:     31,
+		WaitTimeConsumed: 37,
+		ResourceWaitNS:   [resource.WaitKindCount]int64{resource.WaitFilesystem: 37},
+		S3Get:            1,
+		S3ReadSize:       41,
+		ResourceQuality:  resource.QualityPartial,
 	})
 	sharedChild := &PhyOperator{
 		OpName:  "child",

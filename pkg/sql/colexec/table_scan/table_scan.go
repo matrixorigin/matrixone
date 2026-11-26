@@ -66,7 +66,7 @@ func (tableScan *TableScan) MeasureReaderStartup(
 	startup.Start()
 	defer func() {
 		startup.Stop()
-		owner.SetStartupResource(startup.GetOpStats().ResourceDelta())
+		owner.RecordReaderStartup(startup.GetOpStats())
 	}()
 	return read(perfcounter.WithCounterSet(ctx, startup.GetOpCounterSet()), startup)
 }

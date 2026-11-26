@@ -715,7 +715,7 @@ type OperatorStats struct {
 	DiskIO          int64                         `json:"DiskIO,omitempty"`
 	ResourceQuality resource.QualityFlags         `json:"-"`
 	ResourceWaitNS  [resource.WaitKindCount]int64 `json:"-"`
-	startupResource *resource.Delta               // immutable canonical-only interval
+	startupResource *resource.Delta               // immutable canonical-only timing interval
 
 	InputBlocks  int64 `json:"InputBlocks,omitempty"`
 	ScanBytes    int64 `json:"-"`
@@ -861,10 +861,33 @@ func (ps *OperatorStats) ResourceDelta() resource.Delta {
 	return delta
 }
 
-// SetStartupResource records work that the legacy preparation phase already
-// covers. The canonical execution tally owns this interval independently of
-// the operator's Call count, active time, and wait fields.
-func (ps *OperatorStats) SetStartupResource(delta resource.Delta) {
+// RecordReaderStartup transfers the startup I/O to the scan's normal counters.
+// Scope preparation already accounts for the elapsed time in legacy reports.
+func (ps *OperatorStats) RecordReaderStartup(startup *OperatorStats) {
+	ps.S3List += startup.S3List
+	ps.S3Head += startup.S3Head
+	ps.S3Put += startup.S3Put
+	ps.S3Get += startup.S3Get
+	ps.S3Delete += startup.S3Delete
+	ps.S3DeleteMul += startup.S3DeleteMul
+	ps.S3ReadSize += startup.S3ReadSize
+	ps.S3WriteSize += startup.S3WriteSize
+	ps.ReadSize += startup.ReadSize
+	ps.DiskReadSize += startup.DiskReadSize
+	ps.CacheRead += startup.CacheRead
+	ps.CacheHit += startup.CacheHit
+	ps.CacheMemoryRead += startup.CacheMemoryRead
+	ps.CacheMemoryHit += startup.CacheMemoryHit
+	ps.CacheDiskRead += startup.CacheDiskRead
+	ps.CacheDiskHit += startup.CacheDiskHit
+	ps.CacheRemoteRead += startup.CacheRemoteRead
+	ps.CacheRemoteHit += startup.CacheRemoteHit
+
+	// ResourceDelta also aggregates the scan's normal I/O fields.
+	delta := startup.ResourceDelta()
+	delta.Usage.S3Requests = [resource.S3OpCount]uint64{}
+	delta.Usage.S3ReadBytes = 0
+	delta.Usage.S3WriteBytes = 0
 	ps.startupResource = &delta
 }
 

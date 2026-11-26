@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -26,9 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -267,8 +270,11 @@ type starCountBlockedMetadataFS struct {
 
 func (fs starCountBlockedMetadataFS) Read(ctx context.Context, _ *fileservice.IOVector) error {
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.Head.Add(1)
 		counter.FileService.S3.Get.Add(1)
 		counter.FileService.S3ReadSize.Add(64)
+		counter.FileService.ReadSize.Add(64)
+		counter.FileService.Cache.Read.Add(1)
 	})
 	fs.entered <- ctx
 	<-ctx.Done()
@@ -288,8 +294,8 @@ func TestScopeSealedCountIOUsesScannerCancellationAndAccounting(t *testing.T) {
 
 	c := NewMockCompile(t)
 	t.Cleanup(c.proc.Free)
-	s := &Scope{Proc: &process.Process{Ctx: child}}
 	scan := &table_scan.TableScan{}
+	s := &Scope{Proc: &process.Process{Ctx: child}, RootOp: scan}
 	entered := make(chan context.Context, 1)
 	result := make(chan error, 1)
 	done := make(chan struct{})
@@ -298,6 +304,7 @@ func TestScopeSealedCountIOUsesScannerCancellationAndAccounting(t *testing.T) {
 	name := objectio.BuildObjectNameWithObjectID(&id)
 	loc := objectio.BuildLocation(name, objectio.NewExtent(0, 0, 64, 64), 1, 0)
 
+	prepareStart := time.Now()
 	go func() {
 		defer close(done)
 		result <- scan.MeasureReaderStartup(s.countSealedBlocksContext(c, topCtx), func(ctx context.Context, analyzer process.Analyzer) error {
@@ -329,6 +336,8 @@ func TestScopeSealedCountIOUsesScannerCancellationAndAccounting(t *testing.T) {
 		t.Fatal("the scope cancellation did not wake the metadata read")
 	}
 	require.NoError(t, topCtx.Err())
+	prepareNS := time.Since(prepareStart).Nanoseconds()
+	stats.AddScopePrepareDuration(prepareNS)
 
 	owner := scan.OpAnalyzer.GetOpStats()
 	startup := owner.ResourceDelta()
@@ -339,25 +348,58 @@ func TestScopeSealedCountIOUsesScannerCancellationAndAccounting(t *testing.T) {
 	require.Zero(t, owner.CallNum)
 	require.Zero(t, owner.TimeConsumed)
 	require.Zero(t, owner.WaitTimeConsumed)
-	require.Zero(t, owner.S3Get)
+	require.Equal(t, int64(1), owner.S3Get)
+	require.Equal(t, int64(1), owner.S3Head)
+	require.Equal(t, int64(64), owner.S3ReadSize)
+	require.Equal(t, int64(64), owner.ReadSize)
+	require.Equal(t, int64(1), owner.CacheRead)
+	require.Zero(t, stats.PrepareRunStage.ScopePrepareS3Request.Get)
 	require.NoError(t, scan.Prepare(c.proc))
 	t.Cleanup(func() { scan.Free(c.proc, false, nil) })
 	require.Equal(t, startup, owner.ResourceDelta())
 	require.Zero(t, owner.CallNum)
 
 	// The ordinary reader reports its own interval on the same owner.
-	owner.CallNum = 1
-	owner.TimeConsumed = 100
-	owner.WaitTimeConsumed = 200
-	owner.ResourceWaitNS[resource.WaitFilesystem] = 200
-	owner.S3Get = 2
-	owner.S3ReadSize = 128
+	scan.OpAnalyzer.Start()
+	perfcounter.Update(perfcounter.WithCounterSet(child, scan.OpAnalyzer.GetOpCounterSet()), func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.Get.Add(2)
+		counter.FileService.S3ReadSize.Add(128)
+	})
+	scan.OpAnalyzer.WaitDurationKind(time.Nanosecond, resource.WaitFilesystem)
+	scan.OpAnalyzer.Stop()
 	combined := owner.ResourceDelta()
-	require.Equal(t, startup.Usage.ExclusiveActiveNS+100, combined.Usage.ExclusiveActiveNS)
-	require.Equal(t, startup.Usage.WaitNS[resource.WaitFilesystem]+200, combined.Usage.WaitNS[resource.WaitFilesystem])
+	require.Equal(t, startup.Usage.ExclusiveActiveNS+uint64(owner.TimeConsumed), combined.Usage.ExclusiveActiveNS)
+	require.Equal(t, startup.Usage.WaitNS[resource.WaitFilesystem]+1, combined.Usage.WaitNS[resource.WaitFilesystem])
 	require.Equal(t, uint64(3), combined.Usage.S3Requests[resource.S3Get])
 	require.Equal(t, uint64(192), combined.Usage.S3ReadBytes)
 	require.Equal(t, 1, owner.CallNum)
+	require.Equal(t, int64(1), owner.WaitTimeConsumed)
+
+	// A separate prepare operation contributes only through scope statistics.
+	stats.AddScopePrepareS3Request(statistic.S3Request{Get: 2})
+	root := resource.NewRoot(resource.ConnExternal)
+	recorder := newExecutionResourceRecorder(resource.ContextWithRoot(topCtx, root), true)
+	recorder.finishAttempt(0, prepareStart, 0, 0, stats, []*Scope{s}, nil, "", false)
+	recorder.publish()
+	summary := root.PreResponseSummary()
+	require.Equal(t, combined.Usage.ExclusiveActiveNS, summary.Usage.ExclusiveActiveNS)
+	require.Equal(t, combined.Usage.WaitNS, summary.Usage.WaitNS)
+	require.Equal(t, uint64(5), summary.Usage.S3Requests[resource.S3Get])
+	require.Equal(t, uint64(1), summary.Usage.S3Requests[resource.S3Head])
+	require.Equal(t, uint64(192), summary.Usage.S3ReadBytes)
+
+	operator := &models.PhyOperator{OpName: vm.OperatorToStrMap[vm.TableScan], OpStats: owner}
+	qry := &plan.Query{Nodes: []*plan.Node{{}}}
+	applyOpStatsToNode(operator, qry, qry.Nodes, NewParallelScopeInfo())
+	require.Equal(t, int64(3), qry.Nodes[0].AnalyzeInfo.S3Get)
+	require.Equal(t, int64(192), qry.Nodes[0].AnalyzeInfo.S3ReadSize)
+	explain := models.ExplainPhyPlan(&models.PhyPlan{
+		LocalScope: []models.PhyScope{{RootOperator: operator, PrepareTimeConsumed: prepareNS}},
+		Resource:   &summary,
+	}, stats, models.AnalyzeOption)
+	require.Contains(t, explain, "S3Head:1, S3Put:0, S3Get:5,")
+	require.Contains(t, explain, "S3Head:1 S3Get:3 ReadSize:64bytes S3ReadSize:192bytes")
+	require.Contains(t, explain, fmt.Sprintf("Total CPU Time: %dns", owner.TimeConsumed+prepareNS))
 
 	require.NoError(t, scan.Prepare(c.proc))
 	require.Empty(t, owner.ResourceDelta(), "reusing the scan must clear the startup interval")
