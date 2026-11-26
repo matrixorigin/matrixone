@@ -270,8 +270,8 @@ The flight memory budget (decision 2026-11-26):
 The stream memory bound (decision 2026-11-26):
 
 - A stream frees its buffer only when its caller closes it, so streams never charge the
-  flight budget. Their buffers are charged to a bound of their own, the same size as the
-  flight budget.
+  flight budget. Their buffers are charged to a bound of their own: the memory limit
+  (`disk-prefetch-memory-max`, 32 MiB by default) for all streams together.
 - A stream is memory-backed only when it is at most the memory limit, its size is known,
   and its buffer fits the bound when it opens; otherwise it reads into its temporary file.
   Nothing waits for stream memory.

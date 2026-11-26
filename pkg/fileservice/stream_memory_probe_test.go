@@ -86,7 +86,7 @@ func TestStreamProbeStreamBytesWithinBound(t *testing.T) {
 	const size = 1 << 10
 	buf := flightBufSize(size)
 	bound := 2 * buf
-	fs.diskCache.prefetchFlightBytes = bound
+	fs.diskCache.memoryPrefetchMax = bound
 
 	streams := openProbeStreams(t, fs, 6, size)
 	require.Equal(t, bound, probeStreamBytes(fs), "the streams that fit take buffers")

@@ -87,7 +87,7 @@ func (s *S3FS) openStream(ctx context.Context, rr rangeRead) (*streamReader, err
 
 // streamBuffer returns a buffer of size bytes charged to the stream memory of the disk
 // cache, and the function freeing it, or nil when there is no disk cache or it does not
-// fit. The stream memory is at most the flight budget and is apart from it.
+// fit. The stream memory is at most the memory limit and is apart from the flight budget.
 func (s *S3FS) streamBuffer(size int64) ([]byte, func()) {
 	d := s.diskCache
 	if d == nil || size > d.memoryPrefetchMax {
@@ -96,7 +96,7 @@ func (s *S3FS) streamBuffer(size int64) ([]byte, func()) {
 	f := &d.prefetchObjects
 	charge := flightBufSize(size)
 	f.mu.Lock()
-	if f.streamBytes+charge > d.flightBytes() {
+	if f.streamBytes+charge > d.memoryPrefetchMax {
 		f.mu.Unlock()
 		return nil, nil
 	}
