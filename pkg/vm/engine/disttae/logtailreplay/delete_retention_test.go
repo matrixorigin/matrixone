@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -95,4 +96,107 @@ func TestReplayDeleteKeepsOnlyOwnedPrimaryKey(t *testing.T) {
 			require.Nil(t, kept.Vecs[0].MPool(), "and owned by the Go heap, like replayed rows")
 		})
 	}
+}
+
+// Insert replay keeps the user columns in one allocation of their own:
+// neither the received batch, which may be a view of the client's reused
+// receive buffer, nor its row-id and timestamp columns, which RowEntry
+// holds, stay reachable from the rows.
+func TestReplayInsertKeepsOnlyOwnedUserColumns(t *testing.T) {
+	pool := mpool.MustNewZero()
+	packer := types.NewPacker()
+	defer packer.Close()
+	const rows = 1000
+	attrs := []string{"rowid", "ts", "pk", "name"}
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+	nameVec := vector.NewVec(types.T_varchar.ToType(), pool)
+	name := func(i int) []byte { return bytes.Repeat([]byte{byte('a' + i%26)}, 30+i%7) }
+	for i := 0; i < rows; i++ {
+		require.NoError(t, vector.AppendFixed(rowIDVec, types.RandomRowid(), false, pool))
+		require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(10, 0), false, pool))
+		require.NoError(t, vector.AppendFixed(pkVec, int64(i), false, pool))
+		require.NoError(t, vector.AppendBytes(nameVec, name(i), i%5 == 0, pool))
+	}
+	input := mustMarshalVectors(rowIDVec, tsVec, pkVec, nameVec)
+	for _, vec := range []*vector.Vector{rowIDVec, tsVec, pkVec, nameVec} {
+		vec.Free(pool)
+	}
+	require.Zero(t, pool.CurrNB())
+
+	checkRows := func(t *testing.T, state *PartitionState) *ReplayBatch {
+		iter := state.NewRowsIter(types.BuildTS(11, 0), nil, false)
+		defer iter.Close()
+		seen := 0
+		var kept *ReplayBatch
+		for iter.Next() {
+			entry := iter.Entry()
+			i := int(entry.Offset)
+			require.Equal(t, int64(i), vector.GetFixedAtNoTypeCheck[int64](entry.Batch.Vecs[2], i))
+			nameCol := entry.Batch.Vecs[3]
+			require.Equal(t, i%5 == 0, nameCol.IsNull(uint64(i)))
+			if i%5 != 0 {
+				require.Equal(t, name(i), nameCol.GetBytesAt(i))
+			}
+			if kept == nil {
+				kept = entry.Batch
+			}
+			require.Same(t, kept, entry.Batch, "the rows share one kept batch")
+			seen++
+		}
+		require.Equal(t, rows, seen)
+		require.Equal(t, attrs, kept.Attrs)
+		require.Len(t, kept.Vecs, 4, "column positions are kept")
+		require.Zero(t, kept.Vecs[0].Length(), "RowEntry holds the row id")
+		require.Zero(t, kept.Vecs[1].Length(), "and the commit time")
+		require.Equal(t, types.T_Rowid, kept.Vecs[0].GetType().Oid)
+		require.Equal(t, types.T_TS, kept.Vecs[1].GetType().Oid)
+		require.Equal(t, rows, kept.RowCount())
+		for _, vec := range kept.Vecs[2:] {
+			require.Nil(t, vec.MPool(), "owned by the Go heap, like replayed rows")
+		}
+		return kept
+	}
+
+	t.Run("received", func(t *testing.T) {
+		// Receive the batch as the client does: a view of the wire buffer.
+		wire, err := (&api.Entry{
+			EntryType: api.Entry_Insert,
+			TableName: "t",
+			Attrs:     attrs,
+			Bat:       api.NewEncodedBatch(input),
+		}).Marshal()
+		require.NoError(t, err)
+		var received api.Entry
+		require.NoError(t, received.Unmarshal(wire))
+		require.True(t, received.Bat.IsView())
+		state := NewPartitionState("", false, 42, false)
+		state.HandleLogtailEntry(t.Context(), nil, &received, 0, packer, pool)
+		received.Reset()
+		clear(wire) // the client reuses the buffer
+		checkRows(t, state)
+	})
+
+	t.Run("not a view of the input", func(t *testing.T) {
+		in := bytes.Clone(input)
+		state := NewPartitionState("", false, 42, false)
+		state.HandleRowsInsert(t.Context(), in, attrs, 0, packer, pool)
+		kept := checkRows(t, state)
+		for _, vec := range kept.Vecs[2:] {
+			require.False(t, overlaps(vec.GetData(), in), "a view would pin the row-id and timestamp columns")
+			require.False(t, overlaps(vec.GetArea(), in))
+		}
+	})
+}
+
+// overlaps reports whether the backing arrays of a and b share a byte.
+func overlaps(a, b []byte) bool {
+	if cap(a) == 0 || cap(b) == 0 {
+		return false
+	}
+	a, b = a[:cap(a)], b[:cap(b)]
+	aStart := reflect.ValueOf(a).Pointer()
+	bStart := reflect.ValueOf(b).Pointer()
+	return aStart < bStart+uintptr(len(b)) && bStart < aStart+uintptr(len(a))
 }

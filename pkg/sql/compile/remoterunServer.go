@@ -1381,8 +1381,11 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	if out.closed {
 		return moerr.NewInternalErrorNoCtx("remote batch stream is closed")
 	}
-	// The messages of the previous batch are done: Write has returned.
-	out.buf.Reset()
+	// Every Write below returns only once its message is encoded or dropped,
+	// so the messages are done with the buffer when sendBatch returns. Reset
+	// it then: one larger than the retention bound is freed before the
+	// stream waits for its next batch or the receiver's acknowledgement.
+	defer out.buf.Reset()
 	if err := b.MarshalBinaryTo(&out.buf); err != nil {
 		return err
 	}

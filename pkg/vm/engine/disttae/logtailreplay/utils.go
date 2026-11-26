@@ -77,6 +77,33 @@ func ownReplayVector(vec *vector.Vector) *vector.Vector {
 	return owned
 }
 
+// ownReplayRows returns the batch inserted rows keep: a copy of src's user
+// columns, src.Vecs[2:], in one allocation of their own. RowEntry holds the
+// row ID and commit time, so their columns stay empty, keeping their types
+// and positions for column readers; a view of src would pin them.
+func ownReplayRows(src *batch.Batch) *batch.Batch {
+	rows := src.RowCount()
+	kept := batch.NewWithSize(len(src.Vecs))
+	kept.Vecs[0] = vector.NewVec(*src.Vecs[0].GetType(), nil)
+	kept.Vecs[1] = vector.NewVec(*src.Vecs[1].GetType(), nil)
+	if len(src.Vecs) > 2 {
+		user := batch.NewWithSize(len(src.Vecs) - 2)
+		copy(user.Vecs, src.Vecs[2:])
+		user.SetRowCount(rows)
+		data, err := user.MarshalBinary()
+		if err != nil {
+			panic(err)
+		}
+		owned, err := batch.ViewTrustedBinary(data)
+		if err != nil {
+			panic(err)
+		}
+		copy(kept.Vecs[2:], owned.Vecs)
+	}
+	kept.SetRowCount(rows)
+	return kept
+}
+
 // objectListViews pools the view batches of object-list entries, whose
 // batches are read only while the entry is handled.
 var objectListViews = sync.Pool{New: func() any { return new(batch.Batch) }}

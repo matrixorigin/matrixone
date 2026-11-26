@@ -682,9 +682,9 @@ func (p *PartitionState) HandleLogtailEntry(
 			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-MEM-INS")
 			}
-			// The rows outlive the receive buffer, which the client reuses:
-			// they keep bytes of their own, copied unless already detached.
-			p.HandleRowsInsert(ctx, entry.Bat.Detach().Bytes(), entry.Attrs, primarySeqnum, packer, pool, keys...)
+			// Insert replay keeps only an owned copy of the user columns, so
+			// it reads the bytes in place.
+			p.HandleRowsInsert(ctx, entry.Bat.Bytes(), entry.Attrs, primarySeqnum, packer, pool, keys...)
 		}
 
 	case api.Entry_Delete:
@@ -1025,8 +1025,8 @@ func (p *PartitionState) HandleRowsDelete(
 }
 
 // HandleRowsInsert replays an encoded batch of inserted rows whose columns
-// attrs names. The partition state keeps read-only views of input, so input
-// must not be modified afterwards.
+// attrs names. It reads input only during the call: the rows keep a copy of
+// the user columns in bytes of their own.
 func (p *PartitionState) HandleRowsInsert(
 	ctx context.Context,
 	input []byte,
@@ -1046,7 +1046,10 @@ func (p *PartitionState) HandleRowsInsert(
 	sourceBatch := mustViewEntryBatch(input)
 	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[0])
 	timeVector := vector.MustFixedColWithTypeCheck[types.TS](sourceBatch.Vecs[1])
-	replayed := &ReplayBatch{Batch: sourceBatch, Attrs: attrs}
+	var replayed *ReplayBatch
+	if !p.noData {
+		replayed = &ReplayBatch{Batch: ownReplayRows(sourceBatch), Attrs: attrs}
+	}
 	primaryKeys = readutil.EncodePrimaryKeyVector(
 		sourceBatch.Vecs[2+primarySeqnum],
 		packer,
@@ -1103,15 +1106,6 @@ func (p *PartitionState) HandleRowsInsert(
 			p.rowClusterIndex.Set(pe)
 		}
 	}
-	if !p.noData {
-		// The decoded vectors are views of the input bytes. RowEntry owns
-		// the physical RowID and commit time, so release the decoded vectors'
-		// references after the entire replay loop has consumed them. Their
-		// types and positions remain for existing in-memory column readers.
-		sourceBatch.Vecs[0].Free(nil)
-		sourceBatch.Vecs[1].Free(nil)
-	}
-
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 	})
 

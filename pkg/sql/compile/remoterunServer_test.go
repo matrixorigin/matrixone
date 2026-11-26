@@ -1192,6 +1192,65 @@ func TestRemoteBatchBufferIsReusedAndClosed(t *testing.T) {
 	require.Error(t, receiver.sendBatch(bat))
 }
 
+// A send resets the stream's buffer once its Writes return: a buffer larger
+// than the retention bound is freed before the stream waits for the next
+// batch or an acknowledgement, and a smaller one is kept for reuse.
+func TestRemoteBatchBufferFreesOversizedBufferAfterSend(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	bufPool := mpool.MustNewZero()
+	var assembled []byte
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
+		func(_ context.Context, message any) error {
+			require.NotZero(t, bufPool.CurrNB(), "the message points into the buffer while Write runs")
+			assembled = append(assembled, message.(*pipeline.Message).Data...)
+			return nil
+		})
+	mp := mpool.MustNewZero()
+	small := newRemoteSendTestBatch(t, mp, 0, 2)
+	defer small.Clean(mp)
+	large := newRemoteSendTestBatch(t, mp, 0, 200)
+	defer large.Clean(mp)
+	smallData, err := small.MarshalBinary()
+	require.NoError(t, err)
+	largeData, err := large.MarshalBinary()
+	require.NoError(t, err)
+
+	// Capacity rounds up, so bound well above the small batch and below the
+	// large one.
+	bound := 4 * len(smallData)
+	require.Greater(t, len(largeData), 2*bound)
+	out := &remoteBatchBuffer{buf: mpool.NewMessageBuffer(bufPool, bound)}
+	defer func() {
+		out.close()
+		require.Zero(t, bufPool.CurrNB())
+	}()
+	receiver := &messageReceiverOnServer{
+		batchOut:        out,
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  64,
+	}
+
+	require.NoError(t, receiver.sendBatch(large))
+	require.Equal(t, largeData, assembled)
+	require.Zero(t, bufPool.CurrNB(), "an oversized buffer is freed when the send returns")
+	require.Zero(t, out.buf.Len())
+
+	assembled = nil
+	require.NoError(t, receiver.sendBatch(small))
+	require.Equal(t, smallData, assembled)
+	require.NotZero(t, bufPool.CurrNB(), "a buffer within the bound is kept")
+	require.Zero(t, out.buf.Len(), "and reset")
+
+	assembled = nil
+	require.NoError(t, receiver.sendBatch(large))
+	require.Equal(t, largeData, assembled)
+	require.Zero(t, bufPool.CurrNB(), "a buffer grown past the bound is freed again")
+}
+
 func newRemoteSendTestBatch(t *testing.T, mp *mpool.MPool, base int64, rows int) *batch.Batch {
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
