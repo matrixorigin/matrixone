@@ -225,16 +225,19 @@ func inferViewColumns(
 	viewName string,
 	forAuthoring bool,
 ) (*viewColumnInference, error) {
-	if stored, ok := ctx.(*viewRegenerationContext); ok {
+	stored, hasStoredDefinition := ctx.(*viewRegenerationContext)
+	if hasStoredDefinition || !forAuthoring {
 		previous := ctx.GetContext()
-		ctx.SetContext(function.WithViewPowerBinding(previous, !stored.powerNullOnNonFinite))
-		defer ctx.SetContext(previous)
-	}
-	if !forAuthoring {
-		// Description and regeneration rebind a stored definition, not the
-		// caller's SQL namespace. Authoring must still reject temporary sources.
-		previous := ctx.GetContext()
-		ctx.SetContext(defines.WithPersistentViewBinding(previous))
+		binding := previous
+		if hasStoredDefinition {
+			binding = function.WithViewPowerBinding(binding, !stored.powerNullOnNonFinite)
+		}
+		if !forAuthoring {
+			// Description and regeneration resolve names in the stored view.
+			// Authoring, including restore-owned CREATE, checks temporary sources.
+			binding = defines.WithPersistentViewBinding(binding)
+		}
+		ctx.SetContext(binding)
 		defer ctx.SetContext(previous)
 	}
 	dependencyCapture := newViewDependencyCaptureContext(ctx)

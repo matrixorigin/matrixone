@@ -21,6 +21,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -229,8 +231,18 @@ func TestBuildCreateViewPreservesRestoredDefinition(t *testing.T) {
 	}
 }
 
+type viewPowerContextRecorder struct {
+	*MockCompilerContext
+	contexts []context.Context
+}
+
+func (c *viewPowerContextRecorder) SetContext(ctx context.Context) {
+	c.contexts = append(c.contexts, ctx)
+	c.MockCompilerContext.SetContext(ctx)
+}
+
 func TestStoredViewPowerBinding(t *testing.T) {
-	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	compiler := &viewPowerContextRecorder{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t))}
 	compiler.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 	compiler.tables["nation"].Cols[0].Typ.NotNullable = true
 	previous := t.Context()
@@ -253,11 +265,25 @@ func TestStoredViewPowerBinding(t *testing.T) {
 		compiler.tables[name] = def
 		compiler.objects[name] = &ObjectRef{SchemaName: "tpch", ObjName: name, Obj: int64(def.TblId)}
 	}
+	checkScope := func(t *testing.T, before int, caller context.Context, stored bool, overload int32) {
+		t.Helper()
+		transitions := compiler.contexts[before:]
+		require.Len(t, transitions, 2, "publish and restore one binding context")
+		require.Equal(t, stored, defines.IsPersistentViewBinding(transitions[0]))
+		require.Same(t, caller, transitions[1])
+		float := types.T_float64.ToType()
+		resolved, err := function.GetFunctionByName(transitions[0], "power", []types.Type{float, float})
+		require.NoError(t, err)
+		require.Equal(t, function.EncodeOverloadID(function.POW, overload), resolved.GetEncodedOverloadID())
+	}
 	const oldSQL = "create view old_v as select power(n_nationkey, 0.5) as x from nation"
 	const newSQL = "create view new_v as select pow(n_nationkey, 0.5) as x from nation"
 	const legacy = `{"DefaultDatabase":"tpch"}`
-	compiler.SetContext(WithRestoredViewDefinition(previous, "tpch", "old_v", legacy, oldSQL))
+	restoreContext := WithRestoredViewDefinition(previous, "tpch", "old_v", legacy, oldSQL)
+	compiler.SetContext(restoreContext)
+	before := len(compiler.contexts)
 	oldView := build(oldSQL).GetDdl().GetCreateView().TableDef
+	checkScope(t, before, restoreContext, false, 0)
 	require.True(t, oldView.Cols[0].Typ.NotNullable, "restore inference uses the released semantics")
 	require.NotContains(t, oldView.ViewSql.View, "power_null_on_non_finite")
 	compiler.SetContext(previous)
@@ -269,13 +295,28 @@ func TestStoredViewPowerBinding(t *testing.T) {
 
 	for _, name := range []string{"old_v", "new_v"} {
 		t.Run("regenerate/"+name, func(t *testing.T) {
+			before := len(compiler.contexts)
 			def, err := RegenerateViewDefinition(compiler, compiler.tables[name].ViewSql.View)
 			require.NoError(t, err)
 			require.Equal(t, name == "old_v", def.TableDef.Cols[0].Typ.NotNullable)
 			require.Equal(t, name == "old_v", !strings.Contains(def.TableDef.ViewSql.View, "power_null_on_non_finite"))
+			overload := int32(1)
+			if name == "old_v" {
+				overload = 0
+			}
+			checkScope(t, before, previous, true, overload)
 			require.Same(t, previous, compiler.GetContext())
 		})
 	}
+
+	t.Run("restore caller after binding failure", func(t *testing.T) {
+		before := len(compiler.contexts)
+		_, err := DescribeViewColumns(compiler,
+			`{"Stmt":"create view invalid_v as select pow(missing_column, 0.5) from nation","DefaultDatabase":"tpch"}`)
+		require.ErrorContains(t, err, "missing_column")
+		checkScope(t, before, previous, true, 0)
+		require.Same(t, previous, compiler.GetContext())
+	})
 
 	const nestedSQL = "create view outer_v as select pow(x, 0.5) as x from new_v"
 	nested := build(nestedSQL).GetDdl().GetCreateView().TableDef
