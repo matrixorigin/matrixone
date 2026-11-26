@@ -2402,6 +2402,8 @@ type privilege struct {
 	needMatchedRole          bool
 	// databases that may be written by statement-level DDL or account/database operations
 	writeDatabaseTargets []string
+	// Index DDL can use the ownership grant for its new table in the user transaction.
+	transactionTableOwner *transactionTableOwner
 }
 
 func (p *privilege) objectType() objectType {
@@ -7194,7 +7196,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		} else if p.GetDdl().GetCreateIndex() != nil {
 			createIndex := p.GetDdl().GetCreateIndex()
 			appendPt(privilegeTips{
-				typ:                   PrivilegeTypeDropTable,
+				typ:                   PrivilegeTypeIndex,
 				objType:               objectTypeTable,
 				databaseName:          createIndex.GetDatabase(),
 				tableName:             createIndex.GetTable(),
@@ -7203,7 +7205,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		} else if p.GetDdl().GetDropIndex() != nil {
 			dropIndex := p.GetDdl().GetDropIndex()
 			appendPt(privilegeTips{
-				typ:                   PrivilegeTypeDropTable,
+				typ:                   PrivilegeTypeIndex,
 				objType:               objectTypeTable,
 				databaseName:          dropIndex.GetDatabase(),
 				tableName:             dropIndex.GetTable(),
@@ -7815,7 +7817,10 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							}
 
 							if viewAllowed {
-								if skipBaseCheck {
+								owner := priv.transactionTableOwner
+								if skipBaseCheck || (owner != nil && tempEntry.objType == objectTypeTable &&
+									mi.privilegeTyp == PrivilegeTypeIndex && owner.roleID == checkRoleId &&
+									owner.database == mi.dbName && owner.table == mi.tableName) {
 									yes = true
 								} else {
 									useCache := usePrivilegeCache && cache != nil && checkRoleId == roleId

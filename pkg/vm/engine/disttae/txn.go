@@ -3151,6 +3151,11 @@ func (c *dbOpsChain) rollbackLastStatement(statementId int) {
 	}
 }
 
+// IsTableCreatedInTxn reports whether a resolved relation ID was allocated in this transaction.
+func (txn *Transaction) IsTableCreatedInTxn(tableID uint64) bool {
+	return txn.tableOps != nil && txn.tableOps.existCreatedInTxn(tableID)
+}
+
 func newTableOps() *tableOpsChain {
 	return &tableOpsChain{
 		names:       make(map[tableKey][]tableOp),

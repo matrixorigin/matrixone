@@ -769,3 +769,46 @@ func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {
 	rewritten.GetF().AggConfig[0] = 9
 	require.Equal(t, byte(1), source.GetF().AggConfig[0])
 }
+
+func TestExplicitUTF8MB4ColumnType(t *testing.T) {
+	charset := &tree.AttributeCharset{Charset: "UTF8MB4"}
+	binaryCollation := &tree.AttributeCollate{Collate: "utf8mb4_bin"}
+	for _, tc := range []struct {
+		name     string
+		oid      types.T
+		attrs    []tree.ColumnAttribute
+		accepted bool
+		marked   bool
+	}{
+		{name: "implicit", oid: types.T_text, accepted: true},
+		{name: "explicit text", oid: types.T_text, attrs: []tree.ColumnAttribute{charset, binaryCollation}, accepted: true, marked: true},
+		{name: "charset only", oid: types.T_varchar, attrs: []tree.ColumnAttribute{charset}, accepted: true, marked: true},
+		{name: "unsupported collation", oid: types.T_char, attrs: []tree.ColumnAttribute{charset, &tree.AttributeCollate{Collate: "utf8mb4_general_ci"}}},
+		{name: "numeric", oid: types.T_int32, attrs: []tree.ColumnAttribute{charset}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := plan.Type{Id: int32(tc.oid)}
+			require.Equal(t, tc.accepted, applyColumnCharset(&typ, tc.attrs))
+			require.Equal(t, tc.marked, hasExplicitUTF8MB4Bin(&typ))
+			if !tc.marked {
+				require.Zero(t, typ.Scale)
+			}
+		})
+	}
+}
+
+func TestColumnStorageScalesEqual(t *testing.T) {
+	for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		legacy := plan.Type{Id: int32(oid)}
+		explicit := plan.Type{Id: int32(oid), Scale: types.UTF8MB4BinColumnScale}
+		require.True(t, ColumnStorageScalesEqual(&legacy, &explicit))
+		require.True(t, ColumnStorageScalesEqual(&explicit, &legacy))
+		unknown := plan.Type{Id: int32(oid), Scale: 2}
+		require.False(t, ColumnStorageScalesEqual(&legacy, &unknown))
+		require.False(t, ColumnStorageScalesEqual(&explicit, &unknown))
+	}
+	decimal := plan.Type{Id: int32(types.T_decimal64)}
+	scaledDecimal := plan.Type{Id: int32(types.T_decimal64), Scale: 1}
+	require.False(t, ColumnStorageScalesEqual(&decimal, &scaledDecimal))
+	require.False(t, ColumnStorageScalesEqual(&decimal, &plan.Type{Id: int32(types.T_varchar)}))
+}

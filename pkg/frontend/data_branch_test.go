@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -1747,6 +1748,50 @@ func TestDataBranchGeneratedColumnsLogicallyEqualBoundaries(t *testing.T) {
 	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
 		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
 	))
+}
+
+func TestDataBranchGeneratedTextCharsetCompatibility(t *testing.T) {
+	sourceType := plan.Type{Id: int32(types.T_varchar), Width: 20}
+	table := &plan.TableDef{Cols: []*plan.ColDef{{Name: "payload", Typ: sourceType}}}
+	newGenerated := func(t *testing.T, width, scale int32) *plan.ColDef {
+		t.Helper()
+		source := &plan.Expr{
+			Typ:  sourceType,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}
+		target := plan.Type{Id: sourceType.Id, Width: width, Scale: scale}
+		expr, err := plan2.MakePlan2AssignmentCastExpr(t.Context(), source, target)
+		require.NoError(t, err)
+		return &plan.ColDef{
+			Name: "generated_payload",
+			Typ:  target,
+			GeneratedCol: &plan.GeneratedCol{
+				Expr: expr, OriginString: "payload", IsStored: true,
+			},
+		}
+	}
+	resolve := func(col *plan.ColDef) *plan.ColDef {
+		return dataBranchColumnDefByLogicalName(table, col)
+	}
+
+	for _, tc := range []struct {
+		name          string
+		legacyWidth   int32
+		explicitWidth int32
+		want          bool
+	}{
+		{name: "selector-only assignment cast", legacyWidth: 20, explicitWidth: 20, want: true},
+		{name: "same width conversion on both sides", legacyWidth: 10, explicitWidth: 10, want: true},
+		{name: "different width conversions", legacyWidth: 10, explicitWidth: 12},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			legacy := newGenerated(t, tc.legacyWidth, 0)
+			explicit := newGenerated(t, tc.explicitWidth, types.UTF8MB4BinColumnScale)
+
+			require.Equal(t, tc.want, dataBranchGeneratedColumnsLogicallyEqual(explicit, legacy, table, table, resolve))
+			require.EqualValues(t, types.UTF8MB4BinColumnScale, explicit.GeneratedCol.Expr.Typ.Scale)
+		})
+	}
 }
 
 func TestCheckSchemaCompatibility_StoredGeneratedPrimaryKey(t *testing.T) {

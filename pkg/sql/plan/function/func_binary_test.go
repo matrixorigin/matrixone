@@ -13807,6 +13807,24 @@ func TestConvertTzKeepsBatchShapeForInvalidRows(t *testing.T) {
 	}
 }
 
+func TestAddAndSubTimeReturnTypeWithExplicitCharset(t *testing.T) {
+	for _, name := range []string{"addtime", "subtime"} {
+		for _, temporalOID := range []types.T{types.T_time, types.T_datetime, types.T_timestamp} {
+			for _, textOID := range []types.T{types.T_char, types.T_varchar} {
+				t.Run(fmt.Sprintf("%s/%s/%s", name, temporalOID, textOID), func(t *testing.T) {
+					interval := types.New(textOID, 16, types.UTF8MB4BinColumnScale)
+					for _, scale := range []int32{0, 6} {
+						temporal := types.New(temporalOID, 0, scale)
+						bound, err := GetFunctionByName(t.Context(), name, []types.Type{temporal, interval})
+						require.NoError(t, err)
+						require.Equal(t, temporal, bound.GetReturnType())
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestAddAndSubTimeZeroTemporalReturnsNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	zeroDatetime := NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil)

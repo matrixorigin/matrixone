@@ -3135,11 +3135,8 @@ func addTimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[types.Time](result)
 
-	// Determine scale from input
-	scale := int32(ivecs[0].GetType().Scale)
-	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
-		scale = scale2
-	}
+	// The interval is text. Its charset selector carries no temporal precision.
+	scale := ivecs[0].GetType().Scale
 	rs.TempSetType(types.New(types.T_time, 0, scale))
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -3196,11 +3193,8 @@ func addTimeToDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[types.Datetime](result)
 
-	// Determine scale from input
-	scale := int32(ivecs[0].GetType().Scale)
-	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
-		scale = scale2
-	}
+	// The interval is text. Its charset selector carries no temporal precision.
+	scale := ivecs[0].GetType().Scale
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -3246,11 +3240,8 @@ func addTimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 	loc := proc.GetSessionInfo().TimeZone
 
-	// Determine scale from input
-	scale := int32(ivecs[0].GetType().Scale)
-	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
-		scale = scale2
-	}
+	// The interval is text. Its charset selector carries no temporal precision.
+	scale := ivecs[0].GetType().Scale
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -3387,11 +3378,8 @@ func subTimeFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[types.Time](result)
 
-	// Determine scale from input
-	scale := int32(ivecs[0].GetType().Scale)
-	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
-		scale = scale2
-	}
+	// The interval is text. Its charset selector carries no temporal precision.
+	scale := ivecs[0].GetType().Scale
 	rs.TempSetType(types.New(types.T_time, 0, scale))
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -3448,11 +3436,8 @@ func subTimeFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWra
 	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[types.Datetime](result)
 
-	// Determine scale from input
-	scale := int32(ivecs[0].GetType().Scale)
-	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
-		scale = scale2
-	}
+	// The interval is text. Its charset selector carries no temporal precision.
+	scale := ivecs[0].GetType().Scale
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -3498,11 +3483,8 @@ func subTimeFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWr
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 	loc := proc.GetSessionInfo().TimeZone
 
-	// Determine scale from input
-	scale := int32(ivecs[0].GetType().Scale)
-	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
-		scale = scale2
-	}
+	// The interval is text. Its charset selector carries no temporal precision.
+	scale := ivecs[0].GetType().Scale
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -6759,13 +6741,6 @@ func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		return nil
 	}
 	unit := functionUtil.QuickBytesToStr(v1)
-	// For string input, use scale 6 to ensure fractional seconds are correctly parsed
-	// This is critical for EXTRACT(MICROSECOND FROM DATE_ADD(...)) where DATE_ADD returns a string
-	scale := p2.GetType().Scale
-	if scale == 0 {
-		// If scale is 0 (default for VARCHAR), use scale 6 to preserve microsecond precision
-		scale = 6
-	}
 	for i := uint64(0); i < uint64(length); i++ {
 		v2, null2 := p2.GetStrValue(i)
 		if null2 {
@@ -6773,7 +6748,7 @@ func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				return err
 			}
 		} else {
-			res, err := extractFromVarchar(unit, functionUtil.QuickBytesToStr(v2), scale)
+			res, err := extractFromVarchar(unit, functionUtil.QuickBytesToStr(v2))
 			if err != nil {
 				return err
 			}
@@ -6786,7 +6761,10 @@ func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func extractFromVarchar(unit string, t string, scale int32) (string, error) {
+func extractFromVarchar(unit, t string) (string, error) {
+	// VARCHAR scale can encode the charset selector. Parse the string at
+	// full fractional precision so the declaration preserves its value.
+	const scale = 6
 	var result string
 	if len(t) == 0 {
 		result = t

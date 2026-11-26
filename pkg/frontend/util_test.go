@@ -1759,6 +1759,30 @@ func Test_mysqlDecimalColTypeInvalidScalePrecision(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestColDef2MysqlColumnDecimalScale(t *testing.T) {
+	tests := []struct {
+		oid   types.T
+		scale int32
+		want  uint8
+	}{
+		{oid: types.T_char, scale: 1},
+		{oid: types.T_varchar, scale: 1},
+		{oid: types.T_text, scale: 1},
+		{oid: types.T_decimal64, scale: 2, want: 2},
+		{oid: types.T_datetime, scale: 6, want: 6},
+	}
+	for _, tt := range tests {
+		t.Run(tt.oid.String(), func(t *testing.T) {
+			col, err := colDef2MysqlColumn(t.Context(), &plan2.ColDef{
+				Name: "value",
+				Typ:  plan2.Type{Id: int32(tt.oid), Width: 10, Scale: tt.scale},
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.want, col.Decimal())
+		})
+	}
+}
+
 func Test_setMysqlColumnTypeMetadataDecimalLength(t *testing.T) {
 	cases := []struct {
 		name   string

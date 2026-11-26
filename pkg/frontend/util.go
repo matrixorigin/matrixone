@@ -1682,7 +1682,14 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	} else {
 		setColLength(col, typ.Width)
 	}
-	col.SetDecimal(typ.Scale)
+	// Text scale can carry a charset selector. The wire decimals field is
+	// reserved for numeric and temporal precision.
+	switch typ.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		col.SetDecimal(0)
+	default:
+		col.SetDecimal(typ.Scale)
+	}
 }
 
 // errCodeRollbackWholeTxn denotes that the error code
@@ -2282,8 +2289,6 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 		return nil, err
 	}
 	setColFlag(c)
-
-	c.SetDecimal(col.Typ.Scale)
 
 	// For TIMESTAMPADD function compatibility with MySQL:
 	// GetResultColumnsFromPlan sets the return type based on input type and unit:
