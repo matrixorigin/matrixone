@@ -21,6 +21,11 @@ set @rebuild_after_truncate = (
   select rel_id from mo_catalog.mo_tables
   where reldatabase = 'issue26064_rebuild' and relname = 'rebuild_branch'
 );
+select p_table_id = @rebuild_before_truncate
+  and level = 'truncate:table'
+  and not table_deleted as active_truncate_branch
+  from mo_catalog.mo_branch_metadata
+ where table_id = @rebuild_after_truncate;
 delete from rebuild_branch;
 set @rebuild_after_delete = (
   select rel_id from mo_catalog.mo_tables
@@ -35,7 +40,7 @@ select count(*) as retired_rebuild_generations
  where table_id in (@rebuild_before_truncate, @rebuild_after_truncate)
    and table_deleted;
 select p_table_id = @rebuild_after_truncate
-  and level = 'alter:table'
+  and level = 'truncate:table'
   and not table_deleted as active_rebuild_branch
   from mo_catalog.mo_branch_metadata
  where table_id = @rebuild_after_delete;

@@ -182,7 +182,7 @@ update t1 set b=25 where a=1;
 data branch pick t1 into t2 between snapshot sp_nolca_from and sp_nolca_to when conflict accept;
 select * from t2 order by a asc;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
-1  ¦  15  ¦  null  𝄀
+1  ¦  15  ¦  7  𝄀
 2  ¦  200  ¦  7
 select * from t1 order by a asc;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
@@ -210,7 +210,7 @@ update t1 set b=25,c=18,d=19 where a=1;
 data branch pick t1 into t2 between snapshot sp_double_from and sp_double_to when conflict accept;
 select * from t2 order by a asc;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  ¦  d[4,32,0]  𝄀
-1  ¦  15  ¦  8  ¦  null  𝄀
+1  ¦  15  ¦  8  ¦  90  𝄀
 2  ¦  200  ¦  71  ¦  91
 select * from t1 order by a asc;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  ¦  d[4,32,0]  𝄀
