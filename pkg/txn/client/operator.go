@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	gotrace "runtime/trace"
 	"slices"
 	"strings"
 	"sync"
@@ -1111,6 +1112,7 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 }
 
 func (tc *txnOperator) commitOwned(ctx context.Context) (err error) {
+	defer gotrace.StartRegion(ctx, "txn client commit").End()
 	if err := tc.sealAndWaitRunningSQLWithSQL(ctx, "<commit>"); err != nil {
 		tc.scheduleRollbackAfterRunningSQL(err)
 		return err

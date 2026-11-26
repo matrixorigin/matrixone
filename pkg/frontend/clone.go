@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime/trace"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,6 +36,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -42,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -509,6 +513,86 @@ func cloneCatalogLockBatch(
 	bat := batch.NewWithSize(1)
 	bat.SetVector(0, encoded)
 	return bat, nil
+}
+
+// cloneTableNameLockBatch encodes the composite mo_tables keys used for
+// both source and destination admission. Names arrive in admission order.
+func cloneTableNameLockBatch(proc *process.Process, account uint32, database string, names []string) (*batch.Batch, error) {
+	mp := proc.Mp()
+	accounts, err := vector.NewConstFixed(types.T_uint32.ToType(), account, len(names), mp)
+	if err != nil {
+		return nil, err
+	}
+	defer accounts.Free(mp)
+	databases, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(database), len(names), mp)
+	if err != nil {
+		return nil, err
+	}
+	defer databases.Free(mp)
+	tablesVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	defer tablesVec.Free(mp)
+	for _, name := range names {
+		if err := vector.AppendBytes(tablesVec, []byte(name), false, mp); err != nil {
+			return nil, err
+		}
+	}
+	encoded, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID,
+		[]*vector.Vector{accounts, databases, tablesVec}, len(names))
+	if err != nil {
+		return nil, err
+	}
+	keys := batch.NewWithSize(1)
+	keys.SetVector(0, encoded)
+	return keys, nil
+}
+
+// admitCloneTargetTables captures incoming FK state after pinning the new
+// database's ordinary table names. A concurrent CREATE or ALTER that introduces
+// a forward reference must acquire the parent name lock as well.
+func (a *lifecycleRCAdmission) admitCloneTargetTables(
+	ctx context.Context, ses *Session, bh BackgroundExec, target branchCloneDatabase,
+	source cloneDatabaseSource,
+) (context.Context, error) {
+	tables := make(map[string]struct{})
+	for _, table := range source.srcTblInfos {
+		if !isCloneableCloneDatabaseTable(table) || table.typ == view || isSequence(table) {
+			continue
+		}
+		if _, depends := source.fkTableMap[genKey(table.dbName, table.tblName)]; !depends {
+			tables[table.tblName] = struct{}{}
+		}
+	}
+	if len(tables) == 0 {
+		return ctx, nil
+	}
+	names := make([]string, 0, len(tables))
+	for name := range tables {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	keys, err := cloneTableNameLockBatch(a.proc, target.account, target.name, names)
+	if err != nil {
+		return nil, err
+	}
+	targetCtx := defines.AttachAccountId(ctx, target.account)
+	if err := a.lockKey(catalog.MO_TABLES, targetCtx, keys, lock.LockMode_Exclusive, target.account, lock.WaitPolicy_FastFail); err != nil {
+		return nil, err
+	}
+	if err := a.finish(ctx, ses, bh); err != nil {
+		return nil, err
+	}
+
+	bh.ClearExecResultSet()
+	defer bh.ClearExecResultSet()
+	if err := bh.Exec(targetCtx, "select 1 from mo_catalog.mo_foreign_keys where refer_db_name = "+quoteSQLStringLiteral(target.name)+" limit 1"); err != nil {
+		return nil, err
+	}
+	references, err := getResultSet(targetCtx, bh)
+	if err != nil {
+		return nil, err
+	}
+	return plan.WithCloneTargetAdmission(ctx, a.proc.GetTxnOperator(), target.account, target.name, tables,
+		!execResultArrayHasData(references)), nil
 }
 
 func lockDataBranchCloneDatabaseSources(
@@ -1126,6 +1210,10 @@ func handleCloneDatabaseWithSource(
 		accounts   cloneDatabaseAccountResolution
 	)
 
+	reqCtx, traceTask := trace.NewTask(reqCtx, "database clone")
+	defer traceTask.End()
+	trace.Log(reqCtx, "clone phase", "prepare accounts")
+
 	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()
 	defer func() {
 		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
@@ -1147,9 +1235,15 @@ func handleCloneDatabaseWithSource(
 		}
 
 		if admission != nil {
-			defer finishDataBranchComponent(reqCtx, deferred, &err)
+			defer func() {
+				defer trace.StartRegion(reqCtx, "clone finish transaction").End()
+				finishDataBranchComponent(reqCtx, deferred, &err)
+			}()
 		} else {
-			defer func() { err = deferred(err) }()
+			defer func() {
+				defer trace.StartRegion(reqCtx, "clone finish transaction").End()
+				err = deferred(err)
+			}()
 		}
 	}
 	if resolvedSource != nil {
@@ -1177,6 +1271,7 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
+	trace.Log(reqCtx, "clone phase", "read source catalog")
 	if resolvedSource != nil {
 		source = *resolvedSource
 	} else {
@@ -1220,11 +1315,13 @@ func handleCloneDatabaseWithSource(
 			}
 		}
 		var dag databranchutils.BranchReclaimDag
+		trace.Log(reqCtx, "clone phase", "admit source tables")
 		dag, err = admission.admitBranchCloneRC(reqCtx, ses, bh, requests,
 			branchCloneDatabase{accounts.toAccountId, stmt.DstDatabase.String()}, "", true, afterDomains)
 		if err != nil || noOp {
 			return
 		}
+		trace.Log(reqCtx, "clone phase", "recheck source catalog")
 		current, readErr := collectCloneDatabaseSource(reqCtx, ses, bh, stmt, &accounts)
 		if readErr != nil {
 			err = readErr
@@ -1239,6 +1336,7 @@ func handleCloneDatabaseWithSource(
 		err = sourceErr
 		return
 	}
+	trace.Log(reqCtx, "clone phase", "authorize and fence source")
 	if resolvedSource == nil {
 		if _, systemDB := sysDatabases[strings.ToLower(source.srcResolveDBName)]; systemDB && source.opAccountId != sysAccountID {
 			err = moerr.NewInternalErrorNoCtxf("non-sys account cannot clone data from system database")
@@ -1306,6 +1404,7 @@ func handleCloneDatabaseWithSource(
 		}()
 	}
 
+	trace.Log(reqCtx, "clone phase", "create target database")
 	ctx1 = cloneTargetContext(reqCtx, ses.GetTenantInfo().GetTenantID(), source.toAccountId)
 	if err = bh.Exec(ctx1,
 		appendDatabaseDefaultsSQL(fmt.Sprintf("create database %s", quoteIdentifierForSQL(stmt.DstDatabase.String())), source.defaults),
@@ -1313,6 +1412,20 @@ func handleCloneDatabaseWithSource(
 		return
 	}
 
+	trace.Log(reqCtx, "clone phase", "admit target tables")
+	tableCloneCtx := plan.WithCloneIndexVisibility(reqCtx)
+	// Only the normal table pass uses the pre-admitted names. The dependency
+	// pass retains individual admission for its additional FK endpoints.
+	ordinaryTableCloneCtx := tableCloneCtx
+	if admission != nil {
+		ordinaryTableCloneCtx, err = admission.admitCloneTargetTables(
+			tableCloneCtx, ses, bh, branchCloneDatabase{source.toAccountId, stmt.DstDatabase.String()}, source)
+		if err != nil {
+			return
+		}
+	}
+
+	trace.Log(reqCtx, "clone phase", "advance snapshot")
 	if stmt.AtTsExpr == nil {
 		// consider the following example:
 		// (within a session)
@@ -1333,6 +1446,42 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 	restoreSnapshotTS := generatedCloneRestoreSnapshotTS(ses, snapshotTS)
+	sourceTables := source.cloneableTableInfos()
+	if admission != nil && restoreSnapshotTS != 0 && source.snapshot == nil && fromAccountID == source.toAccountId {
+		if storage, distributed := admission.proc.GetSessionInfo().StorageEngine.(*disttae.Engine); distributed {
+			sourceTxn := admission.proc.GetTxnOperator().CloneSnapshotOp(timestamp.Timestamp{PhysicalTime: restoreSnapshotTS})
+			pending := make([]string, 0, len(sourceTables))
+			for _, info := range sourceTables {
+				if info.typ != view && !isSequence(info) {
+					pending = append(pending, info.tblName)
+				}
+			}
+			if len(pending) > 1 {
+				loadCtx, cancelLoad := context.WithCancel(defines.AttachAccountId(reqCtx, fromAccountID))
+				loaded := make(chan error, 1)
+				go func() {
+					readErr, _ := ExecuteFuncWithRecover(func() error {
+						defer trace.StartRegion(loadCtx, "clone source logtail").End()
+						return storage.LoadDatabaseCloneSources(loadCtx, sourceTxn, source.srcResolveDBName, pending)
+					})
+					loaded <- readErr
+				}()
+				// Finish the read-only workers before the owning clone commits
+				// or rolls back. The table reader remains the snapshot fence.
+				defer func() {
+					if err != nil {
+						cancelLoad()
+					}
+					readErr := <-loaded
+					cancelLoad()
+					if err == nil {
+						err = readErr
+					}
+				}()
+			}
+		}
+	}
+
 	sequenceSnapshotTS := restoreSnapshotTS
 	if source.snapshot != nil && source.snapshot.TS != nil {
 		sequenceSnapshotTS = source.snapshot.TS.PhysicalTime
@@ -1362,7 +1511,8 @@ func handleCloneDatabaseWithSource(
 		)
 	}
 
-	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
+	cloneTable := func(cloneCtx context.Context, dstDb, dstTbl, srcDb, srcTbl string, borrowWorkspace bool) error {
+		defer trace.StartRegion(cloneCtx, "clone execute table").End()
 		srcTable := newQualifiedCloneTableName(srcDb, srcTbl, stmt.AtTsExpr)
 		if stmt.AtTsExpr == nil && restoreSnapshotTS != 0 {
 			srcTable.AtTsExpr = newMoTimestampHint(restoreSnapshotTS)
@@ -1383,12 +1533,21 @@ func handleCloneDatabaseWithSource(
 			tempExecCtx = &ExecCtx{
 				// Database clone already holds every source-row lock in sorted
 				// order, so nested table clones must not acquire them again.
-				reqCtx: context.WithValue(reqCtx, dataBranchCloneLockCtxKey{}, false),
+				reqCtx: context.WithValue(cloneCtx, dataBranchCloneLockCtxKey{}, false),
 			}
 		)
 		tableSnapshot, resolveErr := resolveSnapshot(ses, cloneStmt.SrcTable.AtTsExpr)
 		if resolveErr != nil {
 			return resolveErr
+		}
+
+		if borrowWorkspace {
+			// The private database clone rolls back on any child failure.
+			// Native table clones share its workspace. FK admission and
+			// validation still run for each dependency in order.
+			back := bh.(*backExec).backSes
+			previous := back.ReplaceDerivedStmt(true)
+			defer back.ReplaceDerivedStmt(previous)
 		}
 
 		if receipt, err = handleCloneTable(
@@ -1405,7 +1564,8 @@ func handleCloneDatabaseWithSource(
 		return nil
 	}
 
-	for _, srcTbl := range source.cloneableTableInfos() {
+	trace.Log(reqCtx, "clone phase", "clone sequences")
+	for _, srcTbl := range sourceTables {
 		if isSequence(srcTbl) {
 			if err = cloneSequence(srcTbl); err != nil {
 				return
@@ -1413,7 +1573,17 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
-	for _, srcTbl := range source.cloneableTableInfos() {
+	ownsWorkspace := admission != nil && restoreSnapshotTS != 0 && source.snapshot == nil &&
+		!ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN)
+
+	trace.Log(reqCtx, "clone phase", "clone ordinary tables")
+	var indexBatch *compile.CloneIndexCatalogBatch
+	if admission != nil {
+		indexBatch = compile.NewCloneIndexCatalogBatch(ctx1, admission.proc)
+		defer indexBatch.Close()
+	}
+
+	for _, srcTbl := range sourceTables {
 
 		key := genKey(srcTbl.dbName, srcTbl.tblName)
 		if _, ok := source.fkTableMap[key]; ok {
@@ -1424,14 +1594,27 @@ func handleCloneDatabaseWithSource(
 			continue
 		}
 
+		cloneCtx := ordinaryTableCloneCtx
+		if admission != nil && srcTbl.batchCloneIndexCatalog {
+			cloneCtx = indexBatch.TableContext(cloneCtx)
+		} else if err = indexBatch.Flush(); err != nil {
+			return
+		}
 		if err = cloneTable(
-			stmt.DstDatabase.String(), srcTbl.tblName,
-			stmt.SrcDatabase.String(), srcTbl.tblName,
+			cloneCtx, stmt.DstDatabase.String(), srcTbl.tblName,
+			stmt.SrcDatabase.String(), srcTbl.tblName, ownsWorkspace && srcTbl.batchCloneIndexCatalog,
 		); err != nil {
 			return
 		}
+		if err = indexBatch.FinishTable(); err != nil {
+			return
+		}
+	}
+	if err = indexBatch.Flush(); err != nil {
+		return
 	}
 
+	trace.Log(reqCtx, "clone phase", "clone foreign key tables")
 	// clone foreign key related table
 	for _, key := range source.sortedFkTbls {
 		if tblInfo := source.fkTableMap[key]; tblInfo != nil {
@@ -1439,14 +1622,15 @@ func handleCloneDatabaseWithSource(
 				continue
 			}
 			if err = cloneTable(
-				stmt.DstDatabase.String(), tblInfo.tblName,
-				stmt.SrcDatabase.String(), tblInfo.tblName,
+				tableCloneCtx, stmt.DstDatabase.String(), tblInfo.tblName,
+				stmt.SrcDatabase.String(), tblInfo.tblName, ownsWorkspace && tblInfo.batchCloneIndexCatalog,
 			); err != nil {
 				return
 			}
 		}
 	}
 
+	trace.Log(reqCtx, "clone phase", "clone views and routines")
 	lowerCaseTableNames := parserLowerCaseTableNames(ses)
 	// Build one omission closure before sorting views. Views and routines can
 	// depend on each other, so filtering routines after view planning would

@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"runtime/trace"
 	"slices"
 	"strings"
 
@@ -33,6 +34,7 @@ func buildCloneTable(
 	stmt *tree.CloneTable,
 	ctx CompilerContext,
 ) (*Plan, error) {
+	defer trace.StartRegion(ctx.GetContext(), "clone plan table").End()
 
 	var (
 		err       error

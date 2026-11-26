@@ -21,6 +21,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -366,5 +367,43 @@ func TestWorkspaceMergeAdoptsRegeneratedRowids(t *testing.T) {
 		require.Zero(t, txn.workspaceAccount.Snapshot().Used)
 		require.Zero(t, budget.AggregateUsed())
 		parent.Close()
+	}
+}
+
+func TestWorkspaceCatalogInsertOwnsSuccessAndFailure(t *testing.T) {
+	for _, rows := range []int{1, 1024} {
+		t.Run(fmt.Sprintf("rows=%d", rows), func(t *testing.T) {
+			colexec.NewServer("")
+			txn := newTransactionWithActivePKTableForTest(t, "pk")
+			issue25590InitDumpableFixture(t, txn)
+			budget := process.MustNewExecutionResourceBudget(4096, 4096)
+			parent, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			require.NoError(t, txn.proc.SetExecutionResourceBudgetForTesting(parent))
+			defer parent.Close()
+			defer txn.delTransaction()
+
+			view, err := txn.workspaceAllocation()
+			require.NoError(t, err)
+			input := batch.NewWithSize(1)
+			input.Attrs = []string{"payload"}
+			input.Vecs[0] = vector.NewVec(types.T_int8.ToType(), view)
+			for range rows {
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int8(42), false, view))
+			}
+			input.SetRowCount(rows)
+			err = txn.adoptCatalogInsert("catalog insert", catalog.MO_COLUMNS_ID, catalog.MO_COLUMNS, input)
+			if rows == 1024 {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				require.Empty(t, txn.writes)
+				require.Zero(t, txn.workspaceAccount.Snapshot().Used)
+			} else {
+				require.NoError(t, err)
+				require.Same(t, input, txn.writes[0].bat)
+				require.Equal(t, int8(42), vector.GetFixedAtNoTypeCheck[int8](txn.writes[0].bat.Vecs[1], 0))
+				require.NoError(t, txn.checkWorkspaceAccountingLocked())
+			}
+			require.Empty(t, txn.workspaceCopies)
+		})
 	}
 }

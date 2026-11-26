@@ -29,14 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
 
@@ -176,49 +174,28 @@ func reconcileIndexVisibility(
 		return nil
 	}
 
-	result, err := runSqlWithSnapshot(ctx, fmt.Sprintf(
-		"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = %d",
-		tableID,
-	), snapshot)
+	visibility, err := cloneSnapshotIndexVisibility(ctx, tableDef, snapshot)
 	if err != nil {
 		return err
 	}
-	defer result.Close()
-
-	visibility := make(map[string]bool)
-	var readErr error
-	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if len(cols) != 2 {
-			readErr = moerr.NewInternalErrorf(ctx.GetContext(),
-				"invalid mo_indexes visibility result: expected 2 columns, got %d", len(cols))
-			return false
+	if visibility == nil {
+		visibility, err = readIndexVisibility(ctx, snapshot,
+			fmt.Sprintf("SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = %d", tableID), tableID, false)
+		if err != nil {
+			return err
 		}
-		names := executor.GetStringRows(cols[0])
-		visible := executor.GetFixedRows[int8](cols[1])
-		if len(names) != rows || len(visible) != rows {
-			readErr = moerr.NewInternalErrorf(ctx.GetContext(),
-				"invalid mo_indexes visibility result: expected %d rows", rows)
-			return false
+	}
+	var names map[string]bool
+	if table := visibility[tableID]; table != nil {
+		if table.conflict != nil {
+			return table.conflict
 		}
-		for i, name := range names {
-			value := visible[i] != 0
-			key := indexNameKey(name)
-			if previous, ok := visibility[key]; ok && previous != value {
-				readErr = moerr.NewInternalErrorf(ctx.GetContext(),
-					"inconsistent visibility metadata for index '%s'", name)
-				return false
-			}
-			visibility[key] = value
-		}
-		return true
-	})
-	if readErr != nil {
-		return readErr
+		names = table.names
 	}
 
 	resolvedVisibility := make([]bool, len(tableDef.Indexes))
 	for i, indexDef := range tableDef.Indexes {
-		visible, ok := visibility[indexNameKey(indexDef.IndexName)]
+		visible, ok := names[indexNameKey(indexDef.IndexName)]
 		if !ok {
 			return moerr.NewInternalErrorf(ctx.GetContext(),
 				"missing visibility metadata for index %q on table %d", indexDef.IndexName, tableID)

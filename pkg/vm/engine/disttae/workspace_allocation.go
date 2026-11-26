@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,9 +34,8 @@ func (txn *Transaction) workspaceAllocation() (*mpool.MPool, error) {
 
 // workspaceMP is the workspace's pool: every txn.writes batch, staged copy
 // and workspace rowid vector is created with it and operated through it. It
-// is the workspace view once it exists; batches only enter the workspace as
-// copies made through workspaceAllocation, so no workspace batch exists
-// before the view.
+// is the workspace view once it exists. Batches are copied or generated
+// through workspaceAllocation before entering the workspace.
 func (txn *Transaction) workspaceMP() *mpool.MPool {
 	txn.workspaceAllocationMu.Lock()
 	defer txn.workspaceAllocationMu.Unlock()
@@ -153,7 +153,7 @@ func (txn *Transaction) copyWorkspaceBatchForTable(src *batch.Batch, database st
 }
 
 // Batches carry no allocation account, so the workspace remembers which
-// batches it copied itself. A remembered batch is workspace-owned: INSERT
+// batches it generated or copied itself. A remembered batch is workspace-owned: INSERT
 // adopts its workspace-charged rowids. A raw caller batch is not, and gets an
 // independent rowid copy.
 func (txn *Transaction) rememberWorkspaceCopy(bat *batch.Batch) {
@@ -181,4 +181,23 @@ func (txn *Transaction) takeWorkspaceCopy(bat *batch.Batch) bool {
 	_, ok := txn.workspaceCopies[bat]
 	delete(txn.workspaceCopies, bat)
 	return ok
+}
+
+// adoptCatalogInsert consumes a catalog tuple built with workspaceAllocation.
+// Allocation authority and ownership already belong to the transaction, so
+// WriteBatch only adds its rowids and records it. The failure owner releases
+// the tuple before it has entered txn.writes.
+func (txn *Transaction) adoptCatalogInsert(note string, tableID uint64, tableName string, rows *batch.Batch, attrs []string) (err error) {
+	txn.rememberWorkspaceCopy(rows)
+	published := false
+	defer func() {
+		if !published {
+			txn.takeWorkspaceCopy(rows)
+			rows.Clean(txn.workspaceMP())
+		}
+	}()
+	_, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, tableID,
+		catalog.MO_CATALOG, tableName, rows, attrs, txn.tnStores[0])
+	published = err == nil
+	return err
 }

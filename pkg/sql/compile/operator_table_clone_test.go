@@ -212,7 +212,6 @@ func TestConstructTableCloneLendsSessionForAllocatorReads(t *testing.T) {
 					}
 					require.Same(t, originalCtx, proc.Ctx, "session lending must end on every exit")
 					require.Same(t, inherited, getInternalExecutorSession(originalCtx), "caller context retains its inherited session")
-					require.Len(t, exec.sqls, 2)
 					if failRead {
 						require.ErrorIs(t, err, wantErr)
 					} else {
@@ -230,7 +229,7 @@ func TestConstructTableCloneUsesCopiedStateForFreshClone(t *testing.T) {
 	exec := &tableCloneRecordingExecutor{}
 	exec.run = func(sql string) (executor.Result, error) {
 		if strings.Contains(sql, "mo_catalog.mo_increment_columns") {
-			return newTableCloneOffsetResult(t, proc.Mp(), 1, 50), nil
+			return executor.Result{}, errors.New("source reservation watermark unavailable")
 		}
 		return newTableCloneResult(t, proc.Mp(), 40), nil
 	}

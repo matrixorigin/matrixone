@@ -425,7 +425,10 @@ func (db *txnDatabase) createWithID(
 	}
 	roleId := getDDLOwnerRoleId(ctx)
 	txn := db.getTxn()
-	m := txn.proc.Mp()
+	m, err := txn.workspaceAllocation()
+	if err != nil {
+		return err
+	}
 
 	// 1. inspect and **modify** defs, and construct columns
 	cols, err := catalog.GenColumnsFromDefs(accountId, name, db.databaseName, tableId, db.databaseId, defs)
@@ -556,18 +559,15 @@ func (db *txnDatabase) createWithID(
 		if err != nil {
 			return err
 		}
-		// WriteBatch copies the rows into the workspace; the batch stays ours.
-		defer bat.Clean(m)
-
-		// Clone: the key is used after bat is freed.
+		// The generated tuple is already charged to the workspace.
+		// The logical-ID index still needs its own stable key bytes.
 		compositePk = bytes.Clone(bat.Vecs[catalog.MO_TABLES_CPKEY_IDX].GetBytesAt(0))
 
 		note := noteForCreate(tbl.tableId, tbl.tableName)
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
-		_, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat, catalog.MoTablesSchema, txn.tnStores[0])
+		err = txn.adoptCatalogInsert(note, catalog.MO_TABLES_ID, catalog.MO_TABLES, bat, catalog.MoTablesSchema)
 		if err != nil {
 			return err
 		}
@@ -580,14 +580,11 @@ func (db *txnDatabase) createWithID(
 		if err != nil {
 			return err
 		}
-		defer bat.Clean(m)
 		note := noteForCreate(tbl.tableId, tbl.tableName)
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
-		_, err = txn.WriteBatch(
-			INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, catalog.MoColumnsSchema, txn.tnStores[0])
+		err = txn.adoptCatalogInsert(note, catalog.MO_COLUMNS_ID, catalog.MO_COLUMNS, bat, catalog.MoColumnsSchema)
 		if err != nil {
 			return err
 		}
@@ -739,7 +736,10 @@ func (db *txnDatabase) syncLogicalIdIndexInsert(
 	replaceLogicalIdIndex bool,
 ) error {
 	txn := db.getTxn()
-	m := txn.proc.Mp()
+	m, err := txn.workspaceAllocation()
+	if err != nil {
+		return err
+	}
 
 	// A metadata recreation preserves the logical ID, so replace the index row
 	// that deleteTable(forAlter=true) deliberately kept.
@@ -754,14 +754,8 @@ func (db *txnDatabase) syncLogicalIdIndexInsert(
 	if err != nil {
 		return err
 	}
-	// WriteBatch copies the rows into the workspace; the batch stays ours.
-	defer bat.Clean(m)
-
 	note := fmt.Sprintf("sync logical_id index insert %d", logicalId)
-	_, err = txn.WriteBatch(
-		INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME, bat, catalog.LogicalIdIndexInsertAttrs, txn.tnStores[0])
-	return err
+	return txn.adoptCatalogInsert(note, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME, bat, catalog.LogicalIdIndexInsertAttrs)
 }
 
 // syncLogicalIdIndexDelete synchronizes the logical_id index table for DELETE operations

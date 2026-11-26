@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1032,18 +1033,8 @@ func TestIssue25590InsertDumpWriteFailureRetainsEveryStagedSource(t *testing.T) 
 // so a dump can stage two distinct tables in one round.
 const secondIssue25590TableID = uint64(43)
 
-// TestIssue25590InsertDumpSyncFailurePartialPublication pins the partial
-// multi-table publication the round-3 review demands: when an admission
-// dump publishes several tables and the storage fails partway, the exactly
-// one table published before the failure is retired into its file entry,
-// while the failing table's staged sources are retained untouched. The
-// frontend's statement rollback on the admission error, continued
-// execution, and the eventual full publication must preserve every
-// successful statement of BOTH tables.
-func TestIssue25590InsertDumpSyncFailurePartialPublication(t *testing.T) {
-	colexec.NewServer("")
-	txn := newTransactionWithActivePKTableForTest(t, "pk")
-	issue25590InitDumpableFixture(t, txn)
+func addSecondIssue25590DumpTable(t *testing.T, txn *Transaction) {
+	t.Helper()
 	// The second table resolves through the same created database the
 	// dump's pre-resolution pass consults.
 	dbv := txn.databaseOps.existAndActive(genDatabaseKey(1, "db"))
@@ -1065,6 +1056,21 @@ func TestIssue25590InsertDumpSyncFailurePartialPublication(t *testing.T) {
 			},
 		},
 	)
+}
+
+// TestIssue25590InsertDumpSyncFailurePartialPublication pins the partial
+// multi-table publication the round-3 review demands: when an admission
+// dump publishes several tables and the storage fails partway, the exactly
+// one table published before the failure is retired into its file entry,
+// while the failing table's staged sources are retained untouched. The
+// frontend's statement rollback on the admission error, continued
+// execution, and the eventual full publication must preserve every
+// successful statement of BOTH tables.
+func TestIssue25590InsertDumpSyncFailurePartialPublication(t *testing.T) {
+	colexec.NewServer("")
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	issue25590InitDumpableFixture(t, txn)
+	addSecondIssue25590DumpTable(t, txn)
 	defer func() {
 		for i := range txn.writes {
 			txn.releaseWorkspaceEntryBatchLocked(i)
@@ -1192,6 +1198,81 @@ func TestIssue25590InsertDumpSyncFailurePartialPublication(t *testing.T) {
 	require.Empty(t, txn.batchSelectList)
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 	txn.EndStatement()
+}
+
+func TestCommitWorkspaceSpillKeepsOwnershipOnPartialFailure(t *testing.T) {
+	colexec.NewServer("")
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	issue25590InitDumpableFixture(t, txn)
+	addSecondIssue25590DumpTable(t, txn)
+	txn.engine.fillDefaults()
+	txn.commitWorkspaceThreshold = 0
+	failFS := issue25590SwapProcSharedFS(t, txn)
+	txn.engine.fs = failFS
+	pool, err := ants.NewPool(GCPoolSize)
+	require.NoError(t, err)
+	t.Cleanup(pool.Release)
+	require.NoError(t, txn.engine.ResetGCWorkerPool(pool))
+
+	first := issue25590AppendInsertEntry(t, txn, 1, 2)
+	second := newIssue25590InsertBatchWithPKsForTest(t, txn, []int64{7})
+	appendWorkspaceEntryForTest(t, txn, Entry{
+		typ: INSERT, accountId: 1, databaseId: issue25590DBID, tableId: secondIssue25590TableID,
+		databaseName: "db", tableName: "tbl2", bat: second,
+	})
+
+	// Both table writers must reach the store before either can return.
+	// Fail one write after it lands so its physical object must be collected.
+	var began atomic.Int32
+	together := make(chan struct{})
+	failFS.writeHook = func(ctx context.Context) error {
+		if began.Add(1) == 2 {
+			close(together)
+		}
+		select {
+		case <-together:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	failFS.armPostPersistFailure(func() bool { return true })
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	txn.Lock()
+	err = txn.dumpBatchLocked(ctx, -1)
+	txn.Unlock()
+	require.ErrorContains(t, err, "post-persist fs write failure")
+
+	files := failFS.persistedSnapshot()
+	orphans := make(map[string]bool)
+	for _, pending := range txn.pendingObjectCleanup {
+		orphans[pending.name] = true
+	}
+	require.True(t, orphans[failFS.failedAtName()])
+	for _, name := range files {
+		require.True(t, orphans[name] || txn.hasRecordedUnpublishedObjectName(name), name)
+	}
+	for _, write := range txn.writes {
+		if write.fileName == "" {
+			if write.tableId == issue25590TableID {
+				require.Same(t, first, write.bat)
+			} else {
+				require.Same(t, second, write.bat)
+			}
+		}
+	}
+	require.NoError(t, txn.checkWorkspaceAccountingLocked())
+
+	require.NoError(t, txn.Rollback(ctx))
+	require.Eventually(t, func() bool {
+		for _, name := range files {
+			if _, err := failFS.StatFile(t.Context(), name); !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				return false
+			}
+		}
+		return true
+	}, 8*time.Second, 10*time.Millisecond)
 }
 
 // TestIssue25590DeleteDumpFailureRetainsEveryStagedSource pins the same

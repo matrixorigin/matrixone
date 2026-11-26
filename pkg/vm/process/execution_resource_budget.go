@@ -2106,6 +2106,38 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 	return proc.getExecutionResourceBudget(true)
 }
 
+// ExecutionAllocationBudget exposes the memory authority needed to open a
+// statement allocation account.
+type ExecutionAllocationBudget interface {
+	mpool.AllocationCapacityController
+	AllocationAccountRegistry() (*mpool.AllocationAccountRegistry, error)
+	Cap() uint64
+	Closed() bool
+}
+
+// GetExecutionAllocationBudget opens the statement's memory budget without
+// inspecting the spill filesystem. Spill-capable operators can promote the
+// same generation through GetExecutionResourceBudget.
+func (proc *Process) GetExecutionAllocationBudget() (ExecutionAllocationBudget, error) {
+	generation, err := proc.getExecutionResourceBudget(false)
+	if err != nil {
+		return nil, err
+	}
+	return generation, nil
+}
+
+// ExecutionResourceSnapshot observes the current statement generation without
+// opening a generation or initializing its spill filesystem.
+func (proc *Process) ExecutionResourceSnapshot() ExecutionResourceGenerationSnapshot {
+	proc.Base.executionResourceBudgetMu.Lock()
+	generation := proc.Base.executionResourceBudget
+	proc.Base.executionResourceBudgetMu.Unlock()
+	if generation == nil {
+		return ExecutionResourceGenerationSnapshot{}
+	}
+	return generation.Snapshot()
+}
+
 // GetExecutionTransientMemoryAdmission captures only memory authority from the
 // existing statement generation. It does not expose a spill-capable handle or
 // sample the spill filesystem. A later full-budget request promotes the same
