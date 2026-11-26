@@ -311,4 +311,66 @@ data branch pick touch_dml_src into touch_dml_dst between snapshot issue32003_to
 select k from touch_dml_dst where tag='new' and ((k=1 and touched='2001-01-01 00:00:00' and optional_touch='2001-01-01 00:00:00') or (k=2 and touched='2000-01-01 00:00:00' and optional_touch is null)) order by k;
 drop snapshot issue32003_touch_dml_hi;
 drop snapshot issue32003_touch_dml_lo;
+
+-- Batch the ordinary unique keys before applying special-column assignments.
+create table touch_swap_root (k int primary key, u int unique, tag enum('old','new'), touched timestamp not null default '2000-01-01 00:00:00' on update current_timestamp);
+insert into touch_swap_root (k,u,tag) values (1,10,'old'),(2,20,'old');
+data branch create table touch_swap_src from touch_swap_root;
+data branch create table touch_swap_dst from touch_swap_root;
+create snapshot issue32003_touch_swap_lo for account sys;
+update touch_swap_src set u=30 where k=1;
+update touch_swap_src set u=10,tag='new',touched='2001-01-01 00:00:00' where k=2;
+update touch_swap_src set u=20,tag='new',touched='2001-01-01 00:00:00' where k=1;
+create snapshot issue32003_touch_swap_hi for account sys;
+data branch pick touch_swap_src into touch_swap_dst between snapshot issue32003_touch_swap_lo and issue32003_touch_swap_hi when conflict accept;
+select k,u from touch_swap_dst where tag='new' and touched='2001-01-01 00:00:00' order by k;
+drop snapshot issue32003_touch_swap_hi;
+drop snapshot issue32003_touch_swap_lo;
+create snapshot issue32003_touch_swap_clear_lo for account sys;
+truncate table touch_swap_src;
+insert into touch_swap_src values (1,10,'old','2002-01-01 00:00:00'),(2,20,'old','2002-01-01 00:00:00');
+create snapshot issue32003_touch_swap_clear_hi for account sys;
+data branch pick touch_swap_src into touch_swap_dst between snapshot issue32003_touch_swap_clear_lo and issue32003_touch_swap_clear_hi when conflict accept;
+select k,u from touch_swap_dst where tag='old' and touched='2002-01-01 00:00:00' order by k;
+drop snapshot issue32003_touch_swap_clear_hi;
+drop snapshot issue32003_touch_swap_clear_lo;
+
+-- The upper snapshot precedes the source fork and belongs to its parent.
+create table touch_fork_root (k int primary key, tag enum('old','new'));
+insert into touch_fork_root values (1,'old');
+data branch create table touch_fork_dst from touch_fork_root;
+create snapshot issue32003_touch_fork_lo for account sys;
+insert into touch_fork_root values (2,'new'),(3,'new');
+create snapshot issue32003_touch_fork_hi for account sys;
+data branch create table touch_fork_src from touch_fork_root;
+insert into touch_fork_dst values (2,'old');
+alter table touch_fork_src add column touched timestamp not null default '2000-01-01 00:00:00' on update current_timestamp;
+alter table touch_fork_dst add column touched timestamp not null default '2000-01-01 00:00:00' on update current_timestamp;
+update touch_fork_dst set touched='2001-01-01 00:00:00' where k=2;
+data branch pick touch_fork_src into touch_fork_dst between snapshot issue32003_touch_fork_lo and issue32003_touch_fork_hi when conflict accept;
+select k from touch_fork_dst where (k=1 and tag='old' and touched='2000-01-01 00:00:00') or (k=2 and tag='new' and touched='2001-01-01 00:00:00') or (k=3 and tag='new' and touched='2000-01-01 00:00:00') order by k;
+drop snapshot issue32003_touch_fork_hi;
+drop snapshot issue32003_touch_fork_lo;
+
+-- COPY and subsequent renames must still map the upper columns by lineage.
+create table touch_alias_root (k int primary key, a int, b int);
+insert into touch_alias_root values (1,10,20);
+data branch create table touch_alias_src from touch_alias_root;
+data branch create table touch_alias_dst from touch_alias_root;
+create snapshot issue32003_touch_alias_lo for account sys;
+update touch_alias_src set a=11 where k=1;
+insert into touch_alias_src values (2,12,22);
+create snapshot issue32003_touch_alias_hi for account sys;
+alter table touch_alias_src add column x int default 7, algorithm=copy;
+alter table touch_alias_dst add column x int default 7, algorithm=copy;
+alter table touch_alias_src rename column a to a0;
+alter table touch_alias_src rename column b to a;
+alter table touch_alias_src rename column a0 to b;
+alter table touch_alias_dst rename column a to a0;
+alter table touch_alias_dst rename column b to a;
+alter table touch_alias_dst rename column a0 to b;
+data branch pick touch_alias_src into touch_alias_dst between snapshot issue32003_touch_alias_lo and issue32003_touch_alias_hi when conflict accept;
+select k,a,b,x from touch_alias_dst order by k;
+drop snapshot issue32003_touch_alias_hi;
+drop snapshot issue32003_touch_alias_lo;
 drop database issue32003;

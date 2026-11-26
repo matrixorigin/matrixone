@@ -153,7 +153,7 @@ type applyBatchInfo struct {
 	stagedUpdateNames      []string
 	specialUpdateNames     []string
 	preserveOnUpdateNames  []string
-	nativeUpdateOnly       bool
+	specialUpdateIdxes     []int // bounded PICK assigns these after the staged UPDATE JOIN
 	updateValueIdxes       []int
 	disableInsertStage     bool
 	insertRowsIndividually bool
@@ -259,6 +259,18 @@ func newApplyBatchInfo(
 		baseDef = tblStuff.baseRel.GetTableDef(ctx)
 	}
 	stagedUpdateNames, specialUpdateNames := dataBranchStagedUpdateColumnNames(tblStuff, baseDef, writableIdxes)
+	var specialUpdateIdxes []int
+	if len(tblStuff.pickOnUpdateNames) > 0 && len(specialUpdateNames) > 0 {
+		// ODKU can fire ON UPDATE a second time and rejects identity
+		// assignments to secondary unique keys. Apply only the special
+		// columns individually, after ordinary columns have moved together.
+		for _, idx := range writableIdxes {
+			if slices.Contains(specialUpdateNames, tblStuff.def.baseColNames[idx]) {
+				specialUpdateIdxes = append(specialUpdateIdxes, idx)
+			}
+		}
+		specialUpdateNames = nil
+	}
 	var preserveOnUpdateNames []string
 	for _, name := range tblStuff.pickOnUpdateNames {
 		if !slices.Contains(stagedUpdateNames, name) {
@@ -272,22 +284,19 @@ func newApplyBatchInfo(
 	seq := atomic.AddUint64(&diffTempTableSeq, 1)
 	sessionTag := strings.ReplaceAll(ses.GetUUIDString(), "-", "")
 	return &applyBatchInfo{
-		dbName:                tblStuff.baseRel.GetTableDef(ctx).DbName,
-		baseTable:             tblStuff.baseRel.GetTableName(),
-		deleteTable:           fmt.Sprintf(dataBranchApplyTablePrefix+"del_%s_%d", sessionTag, seq),
-		insertTable:           fmt.Sprintf(dataBranchApplyTablePrefix+"ins_%s_%d", sessionTag, seq),
-		updateTable:           fmt.Sprintf(dataBranchApplyTablePrefix+"upd_%s_%d", sessionTag, seq),
-		deleteKeyNames:        deleteKeyNames,
-		deleteStageNames:      deleteStageNames,
-		deleteKeyTypes:        deleteKeyTypes,
-		writableNames:         writableNames,
-		stagedUpdateNames:     stagedUpdateNames,
-		specialUpdateNames:    specialUpdateNames,
-		preserveOnUpdateNames: preserveOnUpdateNames,
-		// A native UPDATE can write both sets of columns at once. A split
-		// UPDATE JOIN/ODKU can fire ON UPDATE twice, and ODKU rejects
-		// even identity assignments to secondary unique keys.
-		nativeUpdateOnly:       len(specialUpdateNames) > 0 && len(tblStuff.pickOnUpdateNames) > 0,
+		dbName:                 tblStuff.baseRel.GetTableDef(ctx).DbName,
+		baseTable:              tblStuff.baseRel.GetTableName(),
+		deleteTable:            fmt.Sprintf(dataBranchApplyTablePrefix+"del_%s_%d", sessionTag, seq),
+		insertTable:            fmt.Sprintf(dataBranchApplyTablePrefix+"ins_%s_%d", sessionTag, seq),
+		updateTable:            fmt.Sprintf(dataBranchApplyTablePrefix+"upd_%s_%d", sessionTag, seq),
+		deleteKeyNames:         deleteKeyNames,
+		deleteStageNames:       deleteStageNames,
+		deleteKeyTypes:         deleteKeyTypes,
+		writableNames:          writableNames,
+		stagedUpdateNames:      stagedUpdateNames,
+		specialUpdateNames:     specialUpdateNames,
+		preserveOnUpdateNames:  preserveOnUpdateNames,
+		specialUpdateIdxes:     specialUpdateIdxes,
 		updateValueIdxes:       updateValueIdxes,
 		disableInsertStage:     disableInsertStage,
 		insertRowsIndividually: insertRowsIndividually,
@@ -2066,6 +2075,14 @@ func appendDataBranchApplyRowAsSQLValues(
 		}
 	}
 
+	if kind == diffUpdate && len(appender.batchInfo.specialUpdateIdxes) > 0 {
+		var specialBuf bytes.Buffer
+		qualifiedName := qualifiedTableName(appender.batchInfo.dbName, appender.batchInfo.baseTable)
+		if err = writeDataBranchUpdateSQL(ses, tblStuff, row, &specialBuf, qualifiedName, appender.batchInfo.specialUpdateIdxes); err != nil {
+			return err
+		}
+		return appender.appendUpdateRow(tmpValsBuffer.Bytes(), specialBuf.String())
+	}
 	return appender.appendRow(kind, tmpValsBuffer.Bytes())
 }
 
@@ -2138,8 +2155,7 @@ func dataBranchStagesUpdate(
 	directUpdate, requiresNativeUpdate, restoreMissing bool,
 ) bool {
 	return directUpdate && !requiresNativeUpdate && !restoreMissing && appender.batchInfo != nil &&
-		!appender.batchInfo.disableInsertStage && !appender.batchInfo.nativeUpdateOnly &&
-		!appender.batchInfo.deleteNeedsExactFloatKeyMatch()
+		!appender.batchInfo.disableInsertStage && !appender.batchInfo.deleteNeedsExactFloatKeyMatch()
 }
 
 // dataBranchStagedUpdateColumnNames partitions writable non-key columns by
@@ -2303,7 +2319,29 @@ func dataBranchDirectUpdateSQL(
 		tblStuff.baseRel.GetTableDef(ctx).Name,
 	)
 
+	if !restoreMissing {
+		buf.Reset()
+		if err := writeDataBranchUpdateSQL(ses, tblStuff, row, buf, qualifiedName, writableIdxes); err != nil {
+			return nil, err
+		}
+		return []string{buf.String()}, nil
+	}
+
 	buf.Reset()
+	buf.WriteString("insert into ")
+	buf.WriteString(qualifiedName)
+	buf.WriteString(" (")
+	buf.WriteString(strings.Join(quotedBaseColumnNamesByIdxes(tblStuff, writableIdxes), ","))
+	buf.WriteString(") values ")
+	if err := writeInsertRowValues(ses, tblStuff, row, buf, writableIdxes); err != nil {
+		return nil, err
+	}
+	return []string{buf.String()}, nil
+}
+
+func writeDataBranchUpdateSQL(
+	ses *Session, tblStuff tableStuff, row []any, buf *bytes.Buffer, qualifiedName string, writableIdxes []int,
+) error {
 	buf.WriteString("update ")
 	buf.WriteString(qualifiedName)
 	buf.WriteString(" set ")
@@ -2318,12 +2356,12 @@ func dataBranchDirectUpdateSQL(
 		buf.WriteString(quoteIdentifierForSQL(tblStuff.def.baseColNames[idx]))
 		buf.WriteString(" = ")
 		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
-			return nil, err
+			return err
 		}
 		written++
 	}
 	if written == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("Data Branch update has no writable non-key columns")
+		return moerr.NewInternalErrorNoCtx("Data Branch update has no writable non-key columns")
 	}
 	for _, name := range tblStuff.pickOnUpdateNames {
 		if slices.ContainsFunc(writableIdxes, func(idx int) bool {
@@ -2339,24 +2377,10 @@ func dataBranchDirectUpdateSQL(
 	}
 	buf.WriteString(" where ")
 	if err := writeExactDataBranchKeyPredicate(ses, tblStuff, row, buf); err != nil {
-		return nil, err
+		return err
 	}
 	buf.WriteString(" limit 1")
-	updateSQL := buf.String()
-	if !restoreMissing {
-		return []string{updateSQL}, nil
-	}
-
-	buf.Reset()
-	buf.WriteString("insert into ")
-	buf.WriteString(qualifiedName)
-	buf.WriteString(" (")
-	buf.WriteString(strings.Join(quotedBaseColumnNamesByIdxes(tblStuff, writableIdxes), ","))
-	buf.WriteString(") values ")
-	if err := writeInsertRowValues(ses, tblStuff, row, buf, writableIdxes); err != nil {
-		return nil, err
-	}
-	return []string{buf.String()}, nil
+	return nil
 }
 
 func writeExactDataBranchKeyPredicate(
@@ -2728,8 +2752,10 @@ type sqlValuesAppender struct {
 }
 
 type dataBranchUpdateBuffer struct {
-	cnt int
-	buf bytes.Buffer
+	cnt             int
+	buf             bytes.Buffer
+	specialSQL      []string
+	specialSQLBytes int
 }
 
 func (sva sqlValuesAppender) flushAll() error {
@@ -2754,12 +2780,15 @@ func (sva sqlValuesAppender) flushUpdates() error {
 		return err
 	}
 	if err := flushStagedUpdateValues(
-		sva.ctx, sva.ses, sva.bh, sva.updateState.buf.Bytes(), sva.batchInfo, sva.writeFile,
+		sva.ctx, sva.ses, sva.bh, sva.updateState.buf.Bytes(), sva.batchInfo, sva.writeFile, sva.updateState.specialSQL...,
 	); err != nil {
 		return err
 	}
 	sva.updateState.cnt = 0
 	sva.updateState.buf.Reset()
+	clear(sva.updateState.specialSQL)
+	sva.updateState.specialSQL = sva.updateState.specialSQL[:0]
+	sva.updateState.specialSQLBytes = 0
 	return nil
 }
 
@@ -2846,7 +2875,7 @@ func writeDeleteRowValuesWithColIdxes(
 
 func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
 	if kind == diffUpdate {
-		return sva.appendUpdateRow(rowValues)
+		return sva.appendUpdateRow(rowValues, "")
 	}
 	if sva.updateState != nil && sva.updateState.cnt > 0 {
 		if err := sva.flushUpdates(); err != nil {
@@ -2900,7 +2929,7 @@ func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
 	return nil
 }
 
-func (sva sqlValuesAppender) appendUpdateRow(rowValues []byte) error {
+func (sva sqlValuesAppender) appendUpdateRow(rowValues []byte, specialSQL string) error {
 	if sva.updateState == nil {
 		return moerr.NewInternalErrorNoCtx("Data Branch update buffer is not initialized")
 	}
@@ -2917,7 +2946,7 @@ func (sva sqlValuesAppender) appendUpdateRow(rowValues []byte) error {
 	if sva.updateState.buf.Len() > 0 {
 		newValsLen++
 	}
-	if sva.updateState.buf.Len()+newValsLen >= maxSqlBatchSize ||
+	if sva.updateState.buf.Len()+newValsLen+sva.updateState.specialSQLBytes+len(specialSQL) >= maxSqlBatchSize ||
 		sva.updateState.cnt+1 >= maxSqlBatchCnt {
 		if err := sva.flushUpdates(); err != nil {
 			return err
@@ -2927,6 +2956,10 @@ func (sva sqlValuesAppender) appendUpdateRow(rowValues []byte) error {
 		sva.updateState.buf.WriteString(",")
 	}
 	sva.updateState.buf.Write(rowValues)
+	if specialSQL != "" {
+		sva.updateState.specialSQL = append(sva.updateState.specialSQL, specialSQL)
+		sva.updateState.specialSQLBytes += len(specialSQL)
+	}
 	sva.updateState.cnt++
 	return nil
 }
@@ -3085,6 +3118,7 @@ func flushStagedUpdateValues(
 	values []byte,
 	batchInfo *applyBatchInfo,
 	writeFile func([]byte) error,
+	nativeSpecialUpdates ...string,
 ) error {
 	if len(values) == 0 {
 		return nil
@@ -3105,12 +3139,13 @@ func flushStagedUpdateValues(
 	}
 	specialUpdateStmts := batchInfo.stagedSpecialUpsertSQL(baseTable, updateTable)
 	clearStmt := fmt.Sprintf("delete from %s", updateTable)
-	stmts := make([]string, 0, 2+len(specialUpdateStmts))
+	stmts := make([]string, 0, 3+len(specialUpdateStmts)+len(nativeSpecialUpdates))
 	stmts = append(stmts, insertStmt)
 	if updateStmt != "" {
 		stmts = append(stmts, updateStmt)
 	}
 	stmts = append(stmts, specialUpdateStmts...)
+	stmts = append(stmts, nativeSpecialUpdates...)
 	stmts = append(stmts, clearStmt)
 	return execRetryableSQLStatements(ctx, ses, bh, writeFile, stmts)
 }

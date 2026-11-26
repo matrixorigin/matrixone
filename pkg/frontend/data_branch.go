@@ -2297,9 +2297,11 @@ func constructChangeHandle(
 	tarRelSp, baseRelSp := tables.resolvedRelSnapshots(ses)
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
 
+	var candidates []branchIdentity
 	if betweenFrom != nil && betweenTo != nil {
 		tables.boundedPick = true
 		tarRange.restrict(*betweenFrom, *betweenTo)
+		candidates = dedupeBranchIdentities(tarIdent, baseIdent)
 	}
 	tarHydrationRel := tables.tarRel
 	tarHydrationSnapshot := tarSnapshot
@@ -2309,7 +2311,6 @@ func constructChangeHandle(
 	tables.tarVisibleState, tables.baseVisibleState = tarRange.crossesClear(), baseRange.crossesClear()
 	if tables.tarVisibleState {
 		if betweenFrom != nil && betweenTo != nil {
-			candidates := dedupeBranchIdentities(tarIdent, baseIdent)
 			// The surviving segments may start after lo because the destination
 			// already inherited the source prefix at its fork.
 			baselineAt := *betweenFrom
@@ -2323,7 +2324,7 @@ func constructChangeHandle(
 			}
 			if tables.tarClearBaseline.rel != nil {
 				if tables.tarClearBaseline.columns, err = boundedDataBranchClearColumns(
-					ctx, ses, bh, candidates, *tables, branchInfo, *tables.tarClearBaseline, tarSnapshot, true,
+					ctx, ses, bh, candidates, *tables, branchInfo, *tables.tarClearBaseline, tarSnapshot,
 				); err != nil {
 					return
 				}
@@ -2340,7 +2341,7 @@ func constructChangeHandle(
 				tarHydrationRel, tarHydrationSnapshot, tarHydrationIdent = endpoint.rel, endpoint.at, endpoint.ident
 				tarHydrationRelSnapshot = endpoint.at
 				if boundedUpperColumns, err = boundedDataBranchClearColumns(
-					ctx, ses, bh, candidates, *tables, branchInfo, *endpoint, tarSnapshot, false,
+					ctx, ses, bh, candidates, *tables, branchInfo, *endpoint, tarSnapshot,
 				); err != nil {
 					return
 				}
@@ -2351,24 +2352,31 @@ func constructChangeHandle(
 		// and its successors, including rows materialized by later COPY ALTERs.
 		tarRange = dataBranchVisibleRange(tarHydrationRel, tarHydrationSnapshot, tarHydrationIdent)
 	} else if betweenTo != nil && betweenTo.LT(&tarHydrationSnapshot) && len(tarRange.rel) > 0 {
-		last := len(tarRange.rel) - 1
-		tarHydrationRel = tarRange.rel[last]
-		tarHydrationSnapshot = *betweenTo
-		tarHydrationRelSnapshot = tarRange.segmentSnapshot(last, tarRelSp)
-		tarHydrationIdent = tarRange.segmentIdentity(last, tarIdent)
 		// The collection relation can have been opened after the upper
 		// snapshot, even for ordinary DML on the same table ID.
-		candidates := dedupeBranchIdentities(tarIdent, baseIdent)
 		var endpoint *dataBranchSnapshotRelation
 		if endpoint, err = dataBranchSourceAt(ctx, ses, bh, candidates, branchInfo, *betweenTo); err != nil {
 			return
 		}
-		if endpoint.rel != nil {
-			if boundedUpperColumns, err = boundedDataBranchClearColumns(
-				ctx, ses, bh, candidates, *tables, branchInfo, *endpoint, tarSnapshot, false,
-			); err != nil {
+		if endpoint.rel == nil {
+			// Before the source fork, the last retained segment owns the
+			// historical changes and has the applicable schema.
+			last := len(tarRange.rel) - 1
+			endpoint.at = tarRange.end[last]
+			owner := tarRange.segmentIdentity(last, tarIdent)
+			endpoint.rel, endpoint.ident, err = reopenDataBranchNodeByID(
+				ctx, ses, bh, []branchIdentity{owner}, tarRange.rel[last].GetTableID(ctx), endpoint.at,
+			)
+			if err != nil {
 				return
 			}
+		}
+		tarHydrationRel, tarHydrationSnapshot, tarHydrationIdent = endpoint.rel, endpoint.at, endpoint.ident
+		tarHydrationRelSnapshot = endpoint.at
+		if boundedUpperColumns, err = boundedDataBranchClearColumns(
+			ctx, ses, bh, candidates, *tables, branchInfo, *endpoint, tarSnapshot,
+		); err != nil {
+			return
 		}
 	}
 	if tables.tarClearBaseline != nil && (!branchInfo.hasLCA() || tables.lcaHasZeroHistory) {
@@ -2417,17 +2425,31 @@ func constructChangeHandle(
 
 	for i := range tarRange.rel {
 		collectStart := time.Now()
+		segRel := tarRange.rel[i]
+		tarSegIdent := tarRange.segmentIdentity(i, tarIdent)
+		var historicalColumns []*plan.ColDef
+		if boundedUpperColumns != nil {
+			if segRel.GetTableID(ctx) == tarHydrationRel.GetTableID(ctx) {
+				segRel, tarSegIdent = tarHydrationRel, tarHydrationIdent
+				historicalColumns = boundedUpperColumns.present
+			} else {
+				segment := dataBranchSnapshotRelation{rel: segRel, ident: tarSegIdent, at: tarRange.segmentSnapshot(i, tarRelSp)}
+				var columns *dataBranchClearColumns
+				if columns, err = boundedDataBranchClearColumns(
+					ctx, ses, bh, candidates, *tables, branchInfo, segment, tarSnapshot,
+				); err != nil {
+					return
+				}
+				historicalColumns = columns.present
+			}
+		}
 		var (
 			sourceMapping   []int
 			needsProjection bool
 		)
-		if tables.tarVisibleState && boundedUpperColumns != nil || tarRange.rel[i].GetTableID(ctx) != tables.tarRel.GetTableID(ctx) {
-			var historicalColumns []*plan.ColDef
-			if tables.tarVisibleState && boundedUpperColumns != nil {
-				historicalColumns = boundedUpperColumns.present
-			}
+		if historicalColumns != nil || segRel.GetTableID(ctx) != tables.tarRel.GetTableID(ctx) {
 			if sourceMapping, err = dataBranchHistoricalColToTargetIdx(
-				tarRange.rel[i].GetTableDef(ctx), targetDef, tables.def.colNames,
+				segRel.GetTableDef(identityCtx(ctx, tarSegIdent)), targetDef, tables.def.colNames,
 				tables.def.tarOnlyIdxes, historicalColumns, false,
 			); err != nil {
 				return
@@ -2436,7 +2458,6 @@ func constructChangeHandle(
 				sourceMapping, len(tables.def.colNames),
 			)
 		}
-		tarSegIdent := tarRange.segmentIdentity(i, tarIdent)
 		collectCtx := identityCtx(ctx, tarSegIdent)
 		if startBoundary := tarRange.startBoundary(i); startBoundary != nil {
 			collectCtx = engine.WithVisibleStateStartRelation(
@@ -2445,7 +2466,7 @@ func constructChangeHandle(
 		}
 		if handle, err = collectFn(
 			collectCtx,
-			tarRange.rel[i],
+			segRel,
 			tarRange.from[i],
 			tarRange.end[i],
 			ses.proc.Mp(),
@@ -2454,7 +2475,7 @@ func constructChangeHandle(
 		}
 		logutil.Info("DataBranch-CollectChanges-Open",
 			zap.String("side", "target"),
-			zap.Uint64("table-id", tarRange.rel[i].GetTableID(ctx)),
+			zap.Uint64("table-id", segRel.GetTableID(ctx)),
 			zap.String("from", tarRange.from[i].ToString()),
 			zap.String("to", tarRange.end[i].ToString()),
 			zap.Bool("has-handle", handle != nil),
@@ -2464,7 +2485,7 @@ func constructChangeHandle(
 		if handle != nil {
 			handle = scopeChangesHandleToSegmentOwner(handle, tarSegIdent)
 			if needsProjection {
-				handle = &historicalDataBranchChangesHandle{
+				historical := &historicalDataBranchChangesHandle{
 					inner:               handle,
 					sourceMapping:       sourceMapping,
 					tblStuff:            *tables,
@@ -2473,9 +2494,13 @@ func constructChangeHandle(
 					endpointSnapshot:    tarHydrationSnapshot,
 					endpointRelSnapshot: tarHydrationRelSnapshot,
 					endpointIdent:       tarHydrationIdent,
-					hydrate: tarRange.rel[i].GetTableID(ctx) !=
+					hydrate: segRel.GetTableID(ctx) !=
 						tarHydrationRel.GetTableID(ctx),
 				}
+				if boundedUpperColumns != nil {
+					historical.endpointColumns = boundedUpperColumns.present
+				}
+				handle = historical
 			}
 			tarHandle = append(tarHandle, handle)
 		}
@@ -2573,23 +2598,25 @@ func dataBranchSourceAt(
 	return &dataBranchSnapshotRelation{at: at}, nil
 }
 
-// Resolve the schema at a bounded snapshot through only the source's physical
-// generations. Within its own generation the snapshot can predate an in-place
+// Resolve the schema along the source path from a bounded snapshot to the
+// endpoint. Within a generation the snapshot can predate an in-place
 // rename or DROP/ADD, so include both definitions and compare their stable IDs.
 func boundedDataBranchClearColumns(
 	ctx context.Context, ses *Session, bh BackgroundExec, candidates []branchIdentity, tables tableStuff,
-	info *branchMetaInfo, historical dataBranchSnapshotRelation, endpointSP types.TS, needDefaults bool,
+	info *branchMetaInfo, historical dataBranchSnapshotRelation, endpointSP types.TS,
 ) (*dataBranchClearColumns, error) {
 	id := historical.rel.GetTableID(ctx)
 	endpointID := tables.tarRel.GetTableID(ctx)
 	var defs []*plan.TableDef
 	var pathTS []types.TS
+	var lineageOnly []bool
 	if id == endpointID {
 		defs = []*plan.TableDef{tables.tarRel.GetTableDef(ctx)}
 	} else {
 		var path []uint64
 		if i := slices.Index(info.pathFromLCAToTar, id); i >= 0 {
 			path, pathTS = info.pathFromLCAToTar[i:], info.pathFromLCAToTarTS[i:]
+			lineageOnly = info.pathFromLCAToTarLineageOnly[i:]
 			if len(tables.tarPathDefs) == len(info.pathFromLCAToTar) {
 				defs = tables.tarPathDefs[i:]
 			}
@@ -2606,14 +2633,16 @@ func boundedDataBranchClearColumns(
 			}
 		}
 	}
-	lineageOnly := make([]bool, len(defs))
-	for i := 1; i < len(lineageOnly); i++ {
-		lineageOnly[i] = true
+	if lineageOnly == nil {
+		lineageOnly = make([]bool, len(defs))
+		for i := 1; i < len(lineageOnly); i++ {
+			lineageOnly[i] = true
+		}
 	}
-	if needDefaults && len(defs) > 1 {
+	if len(defs) > 1 {
 		var err error
 		defs, lineageOnly, err = dataBranchClearCreationSchemas(ctx, ses, bh, candidates,
-			tables.tarRel, endpointSP, defs, pathTS, lineageOnly)
+			tables.tarRel, endpointSP, defs, pathTS, lineageOnly, true)
 		if err != nil {
 			return nil, err
 		}
@@ -2623,16 +2652,18 @@ func boundedDataBranchClearColumns(
 		append([]bool{false}, lineageOnly...)), nil
 }
 
-// Use a versioned physical generation's creation schema before its final
-// schema. An in-place ALTER may have changed a default without rewriting rows.
+// Use a versioned generation's creation schema before its final schema. An
+// in-place ALTER may have changed the name or default without rewriting rows.
+// Bounded PICK can also consume a logical parent's historical segment.
 func dataBranchClearCreationSchemas(
 	ctx context.Context, ses *Session, bh BackgroundExec, owners []branchIdentity,
 	endpoint engine.Relation, endpointSP types.TS, defs []*plan.TableDef, pathTS []types.TS, edges []bool,
+	includeForks bool,
 ) ([]*plan.TableDef, []bool, error) {
 	out := make([]*plan.TableDef, 0, len(defs))
 	outEdges := make([]bool, 0, len(defs))
 	for i, def := range defs {
-		if i != 0 && edges[i] && def.Version != 0 && defs[i-1].TblId != def.TblId {
+		if i != 0 && (edges[i] || includeForks) && def.Version != 0 && defs[i-1].TblId != def.TblId {
 			rel, owner, at := endpoint, owners[0], endpointSP
 			if i+1 < len(defs) {
 				var err error
@@ -2660,6 +2691,8 @@ func dataBranchClearCreationSchemas(
 			}
 			out = append(out, creationDef)
 			outEdges = append(outEdges, edges[i])
+			out, outEdges = append(out, def), append(outEdges, true)
+			continue
 		}
 		out, outEdges = append(out, def), append(outEdges, edges[i])
 	}

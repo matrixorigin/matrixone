@@ -1787,7 +1787,7 @@ func hashDiffIfHasLCA(
 					// physical identity, without dropping introduction defaults.
 					owners := dedupeBranchIdentities(owner, otherOwner)
 					forkDefs, forkEdges, err := dataBranchClearCreationSchemas(ctx, ses, bh, owners,
-						endpoint, endpointSP, defs[i:], pathTS[i:], lineageOnly[i:])
+						endpoint, endpointSP, defs[i:], pathTS[i:], lineageOnly[i:], false)
 					if err != nil {
 						return err
 					}
@@ -3639,6 +3639,7 @@ func hydrateHistoricalDataBranchBatch(
 	endpointIdent branchIdentity,
 	endpointRel engine.Relation,
 	endpointSnapshot, endpointRelSnapshot types.TS,
+	endpointColumns []*plan2.ColDef,
 ) (err error) {
 	if projected == nil || projected.RowCount() == 0 {
 		return nil
@@ -3660,6 +3661,20 @@ func hydrateHistoricalDataBranchBatch(
 	tBat.SetRowCount(projected.RowCount())
 
 	probeStuff := dataBranchHistoricalProbeStuff(ctx, tblStuff, endpointRel)
+	if endpointColumns != nil {
+		// Bounded PICK probes the upper generation by historical name,
+		// then overlays the returned values in the current source layout.
+		probeStuff.tarRel = tblStuff.tarRel
+		probeStuff.def.lcaColNames = make([]string, len(endpointColumns))
+		probeStuff.def.tarOnlyIdxes = nil
+		for idx, col := range endpointColumns {
+			if col == nil {
+				probeStuff.def.tarOnlyIdxes = append(probeStuff.def.tarOnlyIdxes, idx)
+			} else {
+				probeStuff.def.lcaColNames[idx] = col.Name
+			}
+		}
+	}
 	probeStuff.lcaIdent = &endpointIdent
 	probeStuff.lcaRelSnapshot = endpointRelSnapshot
 	probe, err := runLCAProbeWithReaderFallback(
@@ -3718,6 +3733,7 @@ type historicalDataBranchChangesHandle struct {
 	endpointRel         engine.Relation
 	endpointSnapshot    types.TS
 	endpointRelSnapshot types.TS
+	endpointColumns     []*plan2.ColDef
 	// endpointIdent is the physical owner identity endpointRel was opened
 	// under (design §6); hydration probes the endpoint under it.
 	endpointIdent branchIdentity
@@ -3737,7 +3753,7 @@ func (h *historicalDataBranchChangesHandle) Next(
 		return data, tombstone, hint, nil
 	}
 	if err = hydrateHistoricalDataBranchBatch(
-		ctx, h.ses, data, h.tblStuff, h.endpointIdent, h.endpointRel, h.endpointSnapshot, h.endpointRelSnapshot,
+		ctx, h.ses, data, h.tblStuff, h.endpointIdent, h.endpointRel, h.endpointSnapshot, h.endpointRelSnapshot, h.endpointColumns,
 	); err != nil {
 		data.Clean(mp)
 		if tombstone != nil {

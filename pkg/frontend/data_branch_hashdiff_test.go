@@ -1759,7 +1759,7 @@ func TestDataBranchHistoricalHydrationRejectsMismatchedRelationSnapshot(t *testi
 	projected := buildIntDataBatch(t, mp, []string{catalog.Row_ID, "id"},
 		[]types.Type{types.T_Rowid.ToType(), types.T_int64.ToType()}, [][]any{{types.Rowid{}, int64(1)}})
 	defer projected.Clean(mp)
-	err := hydrateHistoricalDataBranchBatch(ctx, ses, projected, tables, branchIdentity{}, segment, betweenTo, alterBoundary)
+	err := hydrateHistoricalDataBranchBatch(ctx, ses, projected, tables, branchIdentity{}, segment, betweenTo, alterBoundary, nil)
 	require.ErrorIs(t, err, lookupErr)
 }
 
