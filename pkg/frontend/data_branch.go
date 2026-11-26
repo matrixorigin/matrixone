@@ -2369,6 +2369,21 @@ func validateDataBranchNamedSnapshotScope(
 	)
 }
 
+// An intermediate child may have been dropped before commit. Its durable
+// fork image still has to prove that the row passed through each branch.
+func pickForksThrough(path []uint64, lineageOnly []bool, child uint64) []uint64 {
+	var forks []uint64
+	for i := 1; i < len(path); i++ {
+		if i >= len(lineageOnly) || !lineageOnly[i] {
+			forks = append(forks, path[i])
+		}
+		if path[i] == child {
+			return forks
+		}
+	}
+	return nil
+}
+
 func constructChangeHandle(
 	ctx context.Context,
 	ses *Session,
@@ -2410,13 +2425,15 @@ func constructChangeHandle(
 		return
 	}
 	tables.zeroHistoryBaseStarts = baseRange.zeroHistoryStarts
-	if branchInfo.tarFirstFork != 0 && len(branchInfo.baseForks) != 0 &&
-		tarRange.firstCommitted.tableID == branchInfo.tarFirstFork &&
-		baseRange.firstCommitted.tableID == branchInfo.baseForks[0].child &&
-		tarRange.firstCommitted.snapshot.EQ(&baseRange.firstCommitted.snapshot) &&
-		(!tables.lcaHasZeroHistory || tables.lcaRel != nil && tarRange.firstCommitted.snapshot.EQ(&tables.lcaCTS)) {
-		tables.pickOrigin = &dataBranchPickOrigin{
-			source: tarRange.firstCommitted, destination: baseRange.firstCommitted,
+	if branchInfo.hasLCA() && tarRange.firstCommitted.tableID != 0 &&
+		tarRange.firstCommitted.snapshot.EQ(&baseRange.firstCommitted.snapshot) {
+		sourceForks := pickForksThrough(branchInfo.pathFromLCAToTar, branchInfo.pathFromLCAToTarLineageOnly, tarRange.firstCommitted.tableID)
+		destinationForks := pickForksThrough(branchInfo.pathFromLCAToBase, branchInfo.pathFromLCAToBaseLineageOnly, baseRange.firstCommitted.tableID)
+		if len(sourceForks) != 0 && len(destinationForks) != 0 {
+			tables.pickOrigin = &dataBranchPickOrigin{
+				source: tarRange.firstCommitted, destination: baseRange.firstCommitted,
+				sourceForks: sourceForks, destinationForks: destinationForks,
+			}
 		}
 	}
 	tarSnapshot, baseSnapshot := tables.resolvedSnapshots(ses)
@@ -3482,11 +3499,12 @@ func decideCollectRange(
 		// rows cancel while those writes remain visible in the diff.
 		if !tables.boundedPick || tarHasZeroHistory && !tables.lcaHasZeroHistory && !tarCollectRange.hasCollapsedFork() {
 			tarCollectRange = collectRange{
-				from:        []types.TS{types.MinTs()},
-				end:         []types.TS{tarSp},
-				rel:         []engine.Relation{tables.tarRel},
-				relSnapshot: []types.TS{tarRelSp},
-				idents:      []branchIdentity{tarIdent},
+				from:           []types.TS{types.MinTs()},
+				end:            []types.TS{tarSp},
+				rel:            []engine.Relation{tables.tarRel},
+				relSnapshot:    []types.TS{tarRelSp},
+				idents:         []branchIdentity{tarIdent},
+				firstCommitted: tarCollectRange.firstCommitted,
 			}
 		}
 		if !tables.boundedPick || tables.lcaHasZeroHistory || baseHasZeroHistory && !baseCollectRange.hasCollapsedFork() {
@@ -4430,9 +4448,6 @@ func decideLCABranchTSFromBranchDAG(
 		branchInfo.pathFromLCAToBaseTS = buildTSs(baseTSs)
 		branchInfo.pathFromLCAToBaseLineageOnly = dataBranchPathLineageOnly(dag, baseIDs)
 		if tblStuff.boundedPick {
-			if i, ok := firstDataBranchForkIndex(branchInfo.pathFromLCAToTarLineageOnly, len(tarIDs)); ok {
-				branchInfo.tarFirstFork = tarIDs[i]
-			}
 			for i := 1; i < len(baseIDs); i++ {
 				if branchInfo.pathFromLCAToBaseLineageOnly[i] {
 					continue

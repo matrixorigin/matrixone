@@ -2086,9 +2086,24 @@ func reconcilePickWindowDestinationInsert(
 	}
 	matches.SetRowCount(len(srcRows))
 	conflicting := make([]int64, 0, len(srcRows))
-	if tables.lcaHasZeroHistory {
-		// A destination row is safe to change when it equals the source
-		// before-image. An equal update result has already converged.
+	if tables.lcaHasZeroHistory && copt.protectMissingPickHistory {
+		// Full destination history includes the fork image as well as all
+		// later writes. An equal source before-image cannot distinguish them.
+		for i, srcRow := range srcRows {
+			if src.fromUpdate {
+				cmp, err := compareRowInWrappedBatches(ctx, ses, tables, int(srcRow), i, true,
+					src, batchWithKind{batch: matches})
+				if err != nil {
+					return false, err
+				}
+				if cmp == 0 {
+					continue // The update result has already converged.
+				}
+			}
+			conflicting = append(conflicting, int64(i))
+		}
+	} else if tables.lcaHasZeroHistory {
+		// ACCEPT also reconciles live rows for the apply plan.
 		var beforeRows *batch.Batch
 		var missing []int64
 		if src.fromUpdate {
@@ -2233,7 +2248,14 @@ func excludeInheritedPickRows(
 	sourceIdent, baseIdent := tables.endpointIdentities(ctx, ses)
 	sourceDef := tables.tarRel.GetTableDef(identityCtx(ctx, sourceIdent))
 	baseDef := tables.baseRel.GetTableDef(identityCtx(ctx, baseIdent))
-	for _, image := range []dataBranchPickWindowStart{origin.source, origin.destination} {
+	for _, side := range []struct {
+		image dataBranchPickWindowStart
+		forks []uint64
+	}{
+		{origin.source, origin.sourceForks},
+		{origin.destination, origin.destinationForks},
+	} {
+		image := side.image
 		rel, ident, err := reopenDataBranchNodeByID(
 			ctx, ses, bh, []branchIdentity{image.identity}, image.tableID, image.snapshot,
 		)
@@ -2257,22 +2279,66 @@ func excludeInheritedPickRows(
 		if err != nil {
 			return nil, err
 		}
+		proofCols := forkRowColumns(def)
+		if len(proofCols) == 0 {
+			return conflicts, nil
+		}
 		probe := tables
+		probe.tarRel = rel
 		probe.lcaRel, probe.lcaIdent, probe.lcaRelSnapshot = rel, &ident, image.snapshot
 		probe.lcaProbeTableId = 0
-		probe.def.lcaColNames = make([]string, len(columns))
+		probe.def.colNames = make([]string, 0, len(proofCols)+1)
+		probe.def.colTypes = make([]types.Type, 0, len(proofCols)+1)
+		probe.def.lcaColNames = nil
 		probe.def.tarOnlyIdxes = nil
+		probe.retPool = &retBatchList{}
+		defer probe.retPool.freeAllRetBatches(ses.proc.Mp())
+
+		// Read the complete original image for hashing even when the
+		// current endpoints have dropped one of its columns.
+		for _, col := range proofCols {
+			probe.def.colNames = append(probe.def.colNames, col.Name)
+			probe.def.colTypes = append(probe.def.colTypes, types.MustTypeFromPlan(col.Typ))
+		}
+		pk := def.Pkey.PkeyColName
+		probe.def.pkColIdx = slices.Index(probe.def.colNames, pk)
+		pkCols := def.Pkey.Names
+		if probe.def.pkKind == compositeKind {
+			probe.def.pkColIdx = len(probe.def.colNames)
+			probe.def.colNames = append(probe.def.colNames, pk)
+			probe.def.colTypes = append(probe.def.colTypes, *keys.GetType())
+		} else {
+			pkCols = []string{pk}
+		}
+		probe.def.pkColIdxes = make([]int, len(pkCols))
+		for i, name := range pkCols {
+			idx := slices.Index(probe.def.colNames, name)
+			if idx < 0 {
+				return conflicts, nil
+			}
+			probe.def.pkColIdxes[i] = idx
+		}
+
+		projected := batch.NewWithSize(len(columns))
+		originalIdxes := make([]int, len(columns))
+		compareIdxes := tables.def.commonIdxes
+		if len(compareIdxes) == 0 {
+			compareIdxes = tables.def.visibleIdxes
+		}
 		for i, col := range columns {
-			if !slices.Contains(tables.def.commonIdxes, i) &&
-				!slices.Contains(tables.def.pkColIdxes, i) && i != tables.def.pkColIdx {
-				probe.def.tarOnlyIdxes = append(probe.def.tarOnlyIdxes, i)
+			if !slices.Contains(compareIdxes, i) || slices.Contains(tables.def.pkColIdxes, i) || i == tables.def.pkColIdx {
+				originalIdxes[i] = -1
 				continue
 			}
 			targetCol := dataBranchColumnDefByName(sourceDef, tables.def.colNames[i])
 			if col == nil || targetCol == nil || !isDataBranchLogicalTypeEquivalent(col.Typ, targetCol.Typ) {
 				return conflicts, nil
 			}
-			probe.def.lcaColNames[i] = col.Name
+			idx := slices.Index(probe.def.colNames, col.Name)
+			if idx < 0 {
+				return conflicts, nil
+			}
+			originalIdxes[i] = idx
 		}
 
 		keys.CleanOnlyData()
@@ -2285,29 +2351,20 @@ func excludeInheritedPickRows(
 		if err != nil {
 			return nil, err
 		}
-		if rows == nil {
+		if rows == nil || rows.RowCount() == 0 {
 			return conflicts, nil
 		}
-		if rows.RowCount() == 0 {
-			tables.retPool.releaseRetBatch(rows, false)
-			return conflicts, nil
-		}
-		var proofColumns []*vector.Vector
-		for _, col := range forkRowColumns(def) {
-			idx := slices.Index(probe.def.lcaColNames, col.Name)
-			if idx < 0 {
-				proofColumns = nil
-				break
+		for i, idx := range originalIdxes {
+			if idx >= 0 {
+				projected.Vecs[i] = rows.Vecs[idx]
 			}
-			proofColumns = append(proofColumns, rows.Vecs[idx])
 		}
-		if len(proofColumns) == 0 {
-			tables.retPool.releaseRetBatch(rows, false)
-			return conflicts, nil
-		}
-		proven, err := lookupDataBranchForkRows(ctx, ses, bh, image.tableID, proofColumns, rows.RowCount())
+		projected.SetRowCount(rows.RowCount())
+		// The probe owns these vectors. The hashing helper can replace
+		// ENUM inputs with temporary ordinal vectors.
+		proofVectors := slices.Clone(rows.Vecs[:len(proofCols)])
+		proven, err := lookupDataBranchForkRows(ctx, ses, bh, side.forks, proofVectors, rows.RowCount())
 		if err != nil {
-			tables.retPool.releaseRetBatch(rows, false)
 			return nil, err
 		}
 		kept := inherited[:0]
@@ -2322,9 +2379,8 @@ func excludeInheritedPickRows(
 				continue
 			}
 			cmp, err := compareRowInWrappedBatches(ctx, ses, tables, int(candidate), row, true,
-				batchWithKind{batch: matches}, batchWithKind{batch: rows})
+				batchWithKind{batch: matches}, batchWithKind{batch: projected})
 			if err != nil {
-				tables.retPool.releaseRetBatch(rows, false)
 				return nil, err
 			}
 			row++
@@ -2332,7 +2388,6 @@ func excludeInheritedPickRows(
 				kept = append(kept, candidate)
 			}
 		}
-		tables.retPool.releaseRetBatch(rows, false)
 		inherited = kept
 		if len(inherited) == 0 {
 			return conflicts, nil

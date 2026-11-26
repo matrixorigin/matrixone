@@ -104,7 +104,7 @@ func captureDataBranchForkKeys(
 	}
 	marker := "x''"
 	if fullImage {
-		marker = "null"
+		marker = "x'fe'"
 	}
 	return bh.Exec(ownerCtx, fmt.Sprintf("insert into %s (table_id,key_bytes) values (%d,%s)", ledger, receipt.dstTableID, marker))
 }
@@ -134,7 +134,7 @@ func forkRowColumns(def *plan.TableDef) []*plan.ColDef {
 		oid := types.T(col.Typ.Id)
 		// Keep key evidence for domains without a common SQL and vector
 		// serialization.
-		if !function.SerialTypeSupported(oid) || oid == types.T_datalink {
+		if !function.SerialTypeSupported(oid) {
 			return nil
 		}
 		columns = append(columns, col)
@@ -143,7 +143,7 @@ func forkRowColumns(def *plan.TableDef) []*plan.ColDef {
 }
 
 func lookupDataBranchForkRows(
-	ctx context.Context, ses *Session, bh BackgroundExec, tableID uint64, columns []*vector.Vector, length int,
+	ctx context.Context, ses *Session, bh BackgroundExec, forks []uint64, columns []*vector.Vector, length int,
 ) ([]int64, error) {
 	// SQL binds ENUM functions to the display label unless explicitly
 	// cast. Use the same ordinal on both sides of the proof.
@@ -174,8 +174,25 @@ func lookupDataBranchForkRows(
 			return nil, err
 		}
 	}
-	found, _, _, err := lookupDataBranchForkKeys(ctx, ses, bh, tableID, keys, true)
-	return found, err
+	var inherited []int64
+	for i, tableID := range forks {
+		found, _, _, err := lookupDataBranchForkKeys(ctx, ses, bh, tableID, keys, true)
+		if err != nil {
+			return nil, err
+		}
+		if i == 0 {
+			inherited = found
+		} else {
+			inherited = slices.DeleteFunc(inherited, func(row int64) bool {
+				_, present := slices.BinarySearch(found, row)
+				return !present
+			})
+		}
+		if len(inherited) == 0 {
+			break
+		}
+	}
+	return inherited, nil
 }
 
 func forkNeedsFullImage(
@@ -238,7 +255,9 @@ func dataBranchForkEnumOrdinals(values *vector.Vector, mp *mpool.MPool) (*vector
 }
 
 // lookupDataBranchForkKeys returns indexes in the input key vector. The
-// marker distinguishes an empty captured fork from a legacy fork.
+// marker distinguishes an empty captured fork from a legacy fork. Old
+// NULL markers cannot prove absence because a partition scan could be empty
+// before its clone transaction committed.
 func lookupDataBranchForkKeys(
 	ctx context.Context, ses *Session, bh BackgroundExec, tableID uint64,
 	keys *vector.Vector, composite bool,
@@ -253,7 +272,7 @@ func lookupDataBranchForkKeys(
 	}
 	ctx = context.WithValue(defines.AttachAccountId(ctx, catalog.System_Account), defines.BranchForkKeyAccess{}, true)
 	ledger := catalog.MO_CATALOG + "." + catalog.MO_BRANCH_FORK_KEYS
-	prefix := fmt.Sprintf("select key_bytes from %s where table_id=%d and (key_bytes is null or key_bytes=x'' or key_bytes in (", ledger, tableID)
+	prefix := fmt.Sprintf("select key_bytes from %s where table_id=%d and (key_bytes in (x'',x'fe') or key_bytes in (", ledger, tableID)
 	for lo := 0; lo < keys.Length(); {
 		hi := lo
 		var query strings.Builder
@@ -279,12 +298,13 @@ func lookupDataBranchForkKeys(
 		present := make(map[string]struct{}, hi-lo)
 		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
-				if cols[0].IsNull(uint64(i)) {
+				switch key := string(cols[0].GetBytesAt(i)); key {
+				case "\xfe":
 					recorded, fullImage = true, true
-				} else if key := cols[0].GetBytesAt(i); len(key) == 0 {
+				case "":
 					recorded = true
-				} else {
-					present[string(key)] = struct{}{}
+				default:
+					present[key] = struct{}{}
 				}
 			}
 			return true
@@ -357,11 +377,12 @@ func (h *pickForkHistory) emitMissingConflicts(
 		if err != nil {
 			return false, err
 		}
-		if !full {
-			found, err = historicalForkMembers(ctx, ses, bh, tables, fork, keys, uncertain, proof, recorded)
+		if !full && len(found) < keys.Length() {
+			historical, err := historicalForkMembers(ctx, ses, bh, tables, fork, keys, uncertain, proof, recorded)
 			if err != nil {
 				return false, err
 			}
+			found = append(found, historical...)
 		}
 		for _, i := range found {
 			if !matches[i] {

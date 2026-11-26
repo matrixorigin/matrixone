@@ -422,9 +422,9 @@ var (
     	primary key(table_id)
 	)`, catalog.MO_BRANCH_METADATA)
 
-	// A NULL key marks a complete fork image. An empty byte string marks
-	// a fork whose parent image is available at a committed snapshot. The primary key orders rows by child ID. Explicit UUIDs
-	// avoid tenant-local auto-increment allocation during cross-owner capture.
+	// The reserved byte 0xfe marks a complete fork image. An empty byte
+	// string marks a fork backed by a committed parent snapshot. The primary
+	// key groups rows by child ID without tenant-local auto-increment state.
 	MoCatalogBranchForkKeysDDL = fmt.Sprintf(`create table mo_catalog.%s(
 		table_id bigint unsigned not null,
 		entry_id uuid not null default uuid(),

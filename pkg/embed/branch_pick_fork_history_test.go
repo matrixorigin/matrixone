@@ -46,6 +46,7 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 			setup        []string
 			evidenceRows int
 			windowWrite  string
+			legacyMarker bool
 		}{
 			{"transaction-local parent", []string{
 				"begin", "create table root(k int primary key, v int)",
@@ -53,7 +54,7 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 				"data branch create table src from root",
 				"data branch create table dst from root",
 				"delete from dst where k=2", "commit",
-			}, 5, "update src set v=52 where k=2"},
+			}, 5, "update src set v=52 where k=2", false},
 			{"parent key restored in the fork commit", []string{
 				"create table root(k int primary key, v int)",
 				"insert into root values(1,10),(2,20)", "begin",
@@ -61,7 +62,7 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 				"data branch create table dst from root",
 				"insert into root values(2,20)",
 				"data branch create table src from root", "commit",
-			}, 3, "update src set v=52 where k=2"},
+			}, 3, "update src set v=52 where k=2", false},
 			{"window insert after an unobservable fork", []string{
 				"begin", "create table root(k int primary key, v int)",
 				"insert into root values(1,10),(2,20)",
@@ -69,7 +70,14 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 				"data branch create table dst from root",
 				"delete from src where k=2", "delete from dst where k=2",
 				"drop table root", "commit",
-			}, 5, "insert into src values(2,52)"},
+			}, 5, "insert into src values(2,52)", false},
+			{"old partition completeness marker", []string{
+				"create table root(k int primary key, v int) partition by hash(k) partitions 2",
+				"insert into root values(1,10)", "begin", "insert into root values(2,20)",
+				"data branch create table src from root",
+				"data branch create table dst from root", "commit",
+				"delete from dst where k=2",
+			}, 5, "update src set v=52 where k=2", true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				run := func(statements ...string) {
@@ -103,6 +111,16 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 				require.NoError(t, err)
 				result.Close()
 				require.EqualValues(t, tc.evidenceRows, result.AffectedRows)
+				if tc.legacyMarker {
+					// An old partition clone could claim completeness
+					// even though its pre-commit scan returned no keys.
+					result, err = cn.RawService().(cnservice.Service).GetSQLExecutor().Exec(ctx,
+						"insert into mo_catalog.mo_branch_fork_keys(table_id,key_bytes) select rel_id,null from mo_catalog.mo_tables where reldatabase='pick_fork_evidence' and relname='dst'",
+						executor.Options{})
+					require.NoError(t, err)
+					result.Close()
+					require.EqualValues(t, 1, result.AffectedRows)
+				}
 
 				const pick = "data branch pick src into dst between snapshot fork_evidence_lo and fork_evidence_hi keys(2,3) when conflict "
 				_, err = conn.ExecContext(t.Context(), pick+"skip")

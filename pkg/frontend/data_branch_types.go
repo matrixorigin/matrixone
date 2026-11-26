@@ -183,7 +183,6 @@ type branchMetaInfo struct {
 	pathFromLCAToBaseTS          []types.TS
 	pathFromLCAToBaseLineageOnly []bool
 	baseForks                    []dataBranchFork
-	tarFirstFork                 uint64
 }
 
 // hasLCA reports whether tar and base share a common ancestor in the
@@ -372,7 +371,8 @@ func (t tableStuff) lcaFallbackRangeRel(snapshotTS types.TS) engine.Relation {
 // The initial images of two sibling forks can be compared when the children
 // first became visible in the same commit.
 type dataBranchPickOrigin struct {
-	source, destination dataBranchPickWindowStart
+	source, destination           dataBranchPickWindowStart
+	sourceForks, destinationForks []uint64
 }
 
 type dataBranchPickWindowStart struct {
