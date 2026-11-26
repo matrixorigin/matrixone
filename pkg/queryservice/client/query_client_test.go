@@ -216,6 +216,7 @@ func TestCacheProbeRequestOwnership(t *testing.T) {
 		rejected = req
 		_, err := c.SendMessage(ctx, addr, req)
 		require.ErrorIs(t, err, errCacheProbeBusy)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
 	}
 	require.Same(t, rejected, pool.AcquireRequest())
 	require.Empty(t, transport.enqueued, "repeated probes must not grow the shared queue")

@@ -16,7 +16,6 @@ package client
 
 import (
 	"context"
-	"errors"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -76,7 +75,7 @@ type queryClient struct {
 	cacheProbes sync.Map
 }
 
-var errCacheProbeBusy = errors.New("query cache probe already pending for peer")
+var errCacheProbeBusy = moerr.NewInvalidStateNoCtx("query cache probe already pending for peer")
 
 type QueryClient interface {
 	ServiceID() string
