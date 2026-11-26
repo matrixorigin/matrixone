@@ -2356,6 +2356,20 @@ func constructChangeHandle(
 		tarHydrationSnapshot = *betweenTo
 		tarHydrationRelSnapshot = tarRange.segmentSnapshot(last, tarRelSp)
 		tarHydrationIdent = tarRange.segmentIdentity(last, tarIdent)
+		// The collection relation can have been opened after the upper
+		// snapshot, even for ordinary DML on the same table ID.
+		candidates := dedupeBranchIdentities(tarIdent, baseIdent)
+		var endpoint *dataBranchSnapshotRelation
+		if endpoint, err = dataBranchSourceAt(ctx, ses, bh, candidates, branchInfo, *betweenTo); err != nil {
+			return
+		}
+		if endpoint.rel != nil {
+			if boundedUpperColumns, err = boundedDataBranchClearColumns(
+				ctx, ses, bh, candidates, *tables, branchInfo, *endpoint, tarSnapshot, false,
+			); err != nil {
+				return
+			}
+		}
 	}
 	if tables.tarClearBaseline != nil && (!branchInfo.hasLCA() || tables.lcaHasZeroHistory) {
 		// An unrelated destination has no fork baseline. Compare its visible
@@ -2407,9 +2421,9 @@ func constructChangeHandle(
 			sourceMapping   []int
 			needsProjection bool
 		)
-		if boundedUpperColumns != nil || tarRange.rel[i].GetTableID(ctx) != tables.tarRel.GetTableID(ctx) {
+		if tables.tarVisibleState && boundedUpperColumns != nil || tarRange.rel[i].GetTableID(ctx) != tables.tarRel.GetTableID(ctx) {
 			var historicalColumns []*plan.ColDef
-			if boundedUpperColumns != nil {
+			if tables.tarVisibleState && boundedUpperColumns != nil {
 				historicalColumns = boundedUpperColumns.present
 			}
 			if sourceMapping, err = dataBranchHistoricalColToTargetIdx(
@@ -4105,6 +4119,9 @@ func decideLCABranchTSFromBranchDAG(
 			pathTS := buildTSs(cloneTSs)
 			branchInfo.tarRebuildChainTS = pathTS[len(pathTS)-len(branchInfo.tarRebuildChain):]
 			slices.Reverse(branchInfo.tarRebuildChainTS)
+		}
+		if len(branchInfo.tarRebuildChain) == 0 {
+			branchInfo.tarRebuildChain = []uint64{tarTableID}
 		}
 	}
 

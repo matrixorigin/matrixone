@@ -315,19 +315,21 @@ select k,v from later_dst order by k;
 2  ¦  22
 drop snapshot issue32003_later_hi;
 drop snapshot issue32003_later_lo;
-create table touch_root (k int primary key, v int, color enum('red','green','blue') unique, tag enum('old','new'));
-insert into touch_root values (1,10,'red','old'),(2,20,'green','old');
+create table touch_root (k int primary key, v int, color enum('red','green','blue') unique, tag enum('old','new'), historical_touch timestamp not null default '2000-01-01 00:00:00');
+insert into touch_root (k,v,color,tag) values (1,10,'red','old'),(2,20,'green','old');
 data branch create table touch_src from touch_root;
 data branch create table touch_dst from touch_root;
+data branch create table touch_unique_dst from touch_root;
 create snapshot issue32003_touch_lo for account sys;
 truncate table touch_src;
-insert into touch_src values (1,11,'red','new'),(2,21,'blue','new'),(3,31,'green','new');
+insert into touch_src values (1,11,'red','new','2002-01-01 00:00:00'),(2,21,'blue','new','2002-01-01 00:00:00'),(3,31,'green','new','2002-01-01 00:00:00');
 create snapshot issue32003_touch_hi for account sys;
 alter table touch_src add column touched timestamp not null default '2000-01-01 00:00:00' on update current_timestamp;
 alter table touch_dst add column touched timestamp not null default '2000-01-01 00:00:00' on update current_timestamp;
+alter table touch_dst modify column historical_touch timestamp not null default '2000-01-01 00:00:00' on update current_timestamp;
 update touch_dst set touched='2001-01-01 00:00:00' where k in (1,2);
 data branch pick touch_src into touch_dst between snapshot issue32003_touch_lo and issue32003_touch_hi when conflict accept;
-select k,v from touch_dst where tag='new' and color=case k when 1 then 'red' when 2 then 'blue' when 3 then 'green' end order by k;
+select k,v from touch_dst where tag='new' and color=case k when 1 then 'red' when 2 then 'blue' when 3 then 'green' end and historical_touch='2002-01-01 00:00:00' order by k;
 ➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  11  𝄀
 2  ¦  21  𝄀
@@ -337,6 +339,48 @@ select k from touch_dst where (k in (1,2) and touched='2001-01-01 00:00:00') or 
 1  𝄀
 2  𝄀
 3
+alter table touch_unique_dst add column touched timestamp not null default '2000-01-01 00:00:00' on update current_timestamp;
+update touch_unique_dst set touched='2001-01-01 00:00:00' where k=1;
+create unique index ix_touched on touch_unique_dst(touched);
+data branch pick touch_src into touch_unique_dst between snapshot issue32003_touch_lo and issue32003_touch_hi keys(1) when conflict accept;
+select k,v from touch_unique_dst where tag='new' and touched='2001-01-01 00:00:00' order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  11
 drop snapshot issue32003_touch_hi;
 drop snapshot issue32003_touch_lo;
+create table touch_key_root (k timestamp primary key, v int);
+insert into touch_key_root values ('2001-01-01 00:00:00',10);
+data branch create table touch_key_src from touch_key_root;
+data branch create table touch_key_dst from touch_key_root;
+create snapshot issue32003_touch_key_lo for account sys;
+truncate table touch_key_src;
+insert into touch_key_src values ('2001-01-01 00:00:00',11);
+create snapshot issue32003_touch_key_hi for account sys;
+alter table touch_key_dst modify column k timestamp not null on update current_timestamp;
+data branch pick touch_key_src into touch_key_dst between snapshot issue32003_touch_key_lo and issue32003_touch_key_hi when conflict accept;
+select v from touch_key_dst where k='2001-01-01 00:00:00';
+➤ v[4,32,0]  𝄀
+11
+drop snapshot issue32003_touch_key_hi;
+drop snapshot issue32003_touch_key_lo;
+create table touch_dml_root (k int primary key, tag enum('old','new'));
+insert into touch_dml_root values (1,'old');
+data branch create table touch_dml_src from touch_dml_root;
+data branch create table touch_dml_dst from touch_dml_root;
+create snapshot issue32003_touch_dml_lo for account sys;
+update touch_dml_src set tag='new' where k=1;
+insert into touch_dml_src values (2,'new');
+create snapshot issue32003_touch_dml_hi for account sys;
+alter table touch_dml_src add column touched timestamp not null default '2000-01-01 00:00:00' on update current_timestamp;
+alter table touch_dml_dst add column touched timestamp not null default '2000-01-01 00:00:00' on update current_timestamp;
+alter table touch_dml_src add column optional_touch timestamp null on update current_timestamp;
+alter table touch_dml_dst add column optional_touch timestamp null on update current_timestamp;
+update touch_dml_dst set touched='2001-01-01 00:00:00',optional_touch='2001-01-01 00:00:00' where k=1;
+data branch pick touch_dml_src into touch_dml_dst between snapshot issue32003_touch_dml_lo and issue32003_touch_dml_hi when conflict accept;
+select k from touch_dml_dst where tag='new' and ((k=1 and touched='2001-01-01 00:00:00' and optional_touch='2001-01-01 00:00:00') or (k=2 and touched='2000-01-01 00:00:00' and optional_touch is null)) order by k;
+➤ k[4,32,0]  𝄀
+1  𝄀
+2
+drop snapshot issue32003_touch_dml_hi;
+drop snapshot issue32003_touch_dml_lo;
 drop database issue32003;

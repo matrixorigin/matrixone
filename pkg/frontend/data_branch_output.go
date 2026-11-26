@@ -153,6 +153,7 @@ type applyBatchInfo struct {
 	stagedUpdateNames      []string
 	specialUpdateNames     []string
 	preserveOnUpdateNames  []string
+	nativeUpdateOnly       bool
 	updateValueIdxes       []int
 	disableInsertStage     bool
 	insertRowsIndividually bool
@@ -258,6 +259,12 @@ func newApplyBatchInfo(
 		baseDef = tblStuff.baseRel.GetTableDef(ctx)
 	}
 	stagedUpdateNames, specialUpdateNames := dataBranchStagedUpdateColumnNames(tblStuff, baseDef, writableIdxes)
+	var preserveOnUpdateNames []string
+	for _, name := range tblStuff.pickOnUpdateNames {
+		if !slices.Contains(stagedUpdateNames, name) {
+			preserveOnUpdateNames = append(preserveOnUpdateNames, name)
+		}
+	}
 	updateValueIdxes := make([]int, 0, len(writableIdxes)+len(deleteKeyColIdxes))
 	updateValueIdxes = append(updateValueIdxes, writableIdxes...)
 	updateValueIdxes = append(updateValueIdxes, deleteKeyColIdxes...)
@@ -265,18 +272,22 @@ func newApplyBatchInfo(
 	seq := atomic.AddUint64(&diffTempTableSeq, 1)
 	sessionTag := strings.ReplaceAll(ses.GetUUIDString(), "-", "")
 	return &applyBatchInfo{
-		dbName:                 tblStuff.baseRel.GetTableDef(ctx).DbName,
-		baseTable:              tblStuff.baseRel.GetTableName(),
-		deleteTable:            fmt.Sprintf(dataBranchApplyTablePrefix+"del_%s_%d", sessionTag, seq),
-		insertTable:            fmt.Sprintf(dataBranchApplyTablePrefix+"ins_%s_%d", sessionTag, seq),
-		updateTable:            fmt.Sprintf(dataBranchApplyTablePrefix+"upd_%s_%d", sessionTag, seq),
-		deleteKeyNames:         deleteKeyNames,
-		deleteStageNames:       deleteStageNames,
-		deleteKeyTypes:         deleteKeyTypes,
-		writableNames:          writableNames,
-		stagedUpdateNames:      stagedUpdateNames,
-		specialUpdateNames:     specialUpdateNames,
-		preserveOnUpdateNames:  tblStuff.pickPreserveOnUpdateNames,
+		dbName:                tblStuff.baseRel.GetTableDef(ctx).DbName,
+		baseTable:             tblStuff.baseRel.GetTableName(),
+		deleteTable:           fmt.Sprintf(dataBranchApplyTablePrefix+"del_%s_%d", sessionTag, seq),
+		insertTable:           fmt.Sprintf(dataBranchApplyTablePrefix+"ins_%s_%d", sessionTag, seq),
+		updateTable:           fmt.Sprintf(dataBranchApplyTablePrefix+"upd_%s_%d", sessionTag, seq),
+		deleteKeyNames:        deleteKeyNames,
+		deleteStageNames:      deleteStageNames,
+		deleteKeyTypes:        deleteKeyTypes,
+		writableNames:         writableNames,
+		stagedUpdateNames:     stagedUpdateNames,
+		specialUpdateNames:    specialUpdateNames,
+		preserveOnUpdateNames: preserveOnUpdateNames,
+		// A native UPDATE can write both sets of columns at once. A split
+		// UPDATE JOIN/ODKU can fire ON UPDATE twice, and ODKU rejects
+		// even identity assignments to secondary unique keys.
+		nativeUpdateOnly:       len(specialUpdateNames) > 0 && len(tblStuff.pickOnUpdateNames) > 0,
 		updateValueIdxes:       updateValueIdxes,
 		disableInsertStage:     disableInsertStage,
 		insertRowsIndividually: insertRowsIndividually,
@@ -377,14 +388,10 @@ func (batchInfo *applyBatchInfo) stagedSpecialUpsertSQL(baseTable, updateTable s
 	}
 
 	columns := joinQuotedColumnNames(batchInfo.writableNames)
-	assignments := make([]string, 0, len(batchInfo.specialUpdateNames)+len(batchInfo.preserveOnUpdateNames))
+	assignments := make([]string, 0, len(batchInfo.specialUpdateNames))
 	for _, name := range batchInfo.specialUpdateNames {
 		quotedName := quoteIdentifierForSQL(name)
 		assignments = append(assignments, fmt.Sprintf("%s = values(%s)", quotedName, quotedName))
-	}
-	for _, name := range batchInfo.preserveOnUpdateNames {
-		quotedName := quoteIdentifierForSQL(name)
-		assignments = append(assignments, quotedName+" = "+quotedName)
 	}
 	return []string{fmt.Sprintf(
 		"insert into %s (%s) select %s from %s on duplicate key update %s",
@@ -2131,7 +2138,8 @@ func dataBranchStagesUpdate(
 	directUpdate, requiresNativeUpdate, restoreMissing bool,
 ) bool {
 	return directUpdate && !requiresNativeUpdate && !restoreMissing && appender.batchInfo != nil &&
-		!appender.batchInfo.disableInsertStage && !appender.batchInfo.deleteNeedsExactFloatKeyMatch()
+		!appender.batchInfo.disableInsertStage && !appender.batchInfo.nativeUpdateOnly &&
+		!appender.batchInfo.deleteNeedsExactFloatKeyMatch()
 }
 
 // dataBranchStagedUpdateColumnNames partitions writable non-key columns by
@@ -2317,7 +2325,12 @@ func dataBranchDirectUpdateSQL(
 	if written == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("Data Branch update has no writable non-key columns")
 	}
-	for _, name := range tblStuff.pickPreserveOnUpdateNames {
+	for _, name := range tblStuff.pickOnUpdateNames {
+		if slices.ContainsFunc(writableIdxes, func(idx int) bool {
+			return !slices.Contains(tblStuff.def.pkColIdxes, idx) && tblStuff.def.baseColNames[idx] == name
+		}) {
+			continue
+		}
 		quotedName := quoteIdentifierForSQL(name)
 		buf.WriteString(",")
 		buf.WriteString(quotedName)

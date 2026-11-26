@@ -22,7 +22,6 @@ import (
 	"math"
 	"math/big"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -220,19 +219,11 @@ func pickMergeDiffs(
 			}
 			tblStuff.def.writableIdxes = present(tblStuff.def.writableIdxes)
 			tblStuff.def.commonWritableIdxes = present(tblStuff.def.commonWritableIdxes)
-			// Omitting an ON UPDATE column from SQL does not preserve its value.
-			writable := tblStuff.def.writableIdxes
-			if len(tblStuff.def.tarOnlyIdxes) != 0 {
-				writable = tblStuff.def.commonWritableIdxes
-			}
+		}
+		if stmt.BetweenFrom != "" && stmt.BetweenTo != "" {
 			for _, col := range tblStuff.baseRel.GetTableDef(ctx).Cols {
-				if col.OnUpdate == nil || col.OnUpdate.Expr == nil {
-					continue
-				}
-				if !slices.ContainsFunc(writable, func(idx int) bool {
-					return tblStuff.def.baseColNames[idx] == col.Name
-				}) {
-					tblStuff.pickPreserveOnUpdateNames = append(tblStuff.pickPreserveOnUpdateNames, col.Name)
+				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
+					tblStuff.pickOnUpdateNames = append(tblStuff.pickOnUpdateNames, col.Name)
 				}
 			}
 		}
