@@ -17,12 +17,14 @@ package service
 import (
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/require"
@@ -56,6 +58,11 @@ func createOwnedTask(t *testing.T, ctx context.Context, svc taskservice.TaskServ
 	t.Helper()
 	metadata := task.TaskMetadata{ID: name, Executor: task.TaskCode_TestOnly}
 	require.NoError(t, svc.CreateAsyncTask(ctx, metadata))
+	return requireTaskByMetadata(t, ctx, svc, metadata)
+}
+
+func requireTaskByMetadata(t *testing.T, ctx context.Context, svc taskservice.TaskService, metadata task.TaskMetadata) task.AsyncTask {
+	t.Helper()
 	rows, err := svc.QueryAsyncTask(ctx, taskservice.WithTaskMetadataId(taskservice.EQ, metadata.ID), taskservice.WithTaskExecutorCond(taskservice.EQ, metadata.Executor))
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -130,6 +137,31 @@ func retryTaskFailoverRead(err error) bool {
 		return false
 	}
 	return errors.Is(err, taskservice.ErrNotReady) || morpc.IsConnectionError(err)
+}
+
+// The post-failover INSERT may reach a stale lock binding even after the
+// expired task disappears. Retry only the server response that rolls back
+// the entire transaction. A task metadata ID alone does not deduplicate inserts.
+func createTaskAfterFailover(ctx context.Context, create func(context.Context, task.TaskMetadata) error, metadata task.TaskMetadata) error {
+	var lastErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(err, lastErr)
+		}
+		lastErr = create(ctx, metadata)
+		sqlErr, ok := lastErr.(*mysql.MySQLError)
+		if !ok || sqlErr.Number != moerr.ErrLockTableBindChanged {
+			return lastErr
+		}
+
+		timer := time.NewTimer(300 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.Join(ctx.Err(), lastErr)
+		case <-timer.C:
+		}
+	}
 }
 
 func TestTaskServiceCanCreate(t *testing.T) {
@@ -222,7 +254,9 @@ func TestTaskSchedulerExpiresLostRunnerWithoutReplay(t *testing.T) {
 	require.True(t, ok)
 	// Expired work is failed and truncated; it must not be replayed on another CN.
 	waitTaskExpired(t, ctx, svc, running)
-	followup := createOwnedTask(t, ctx, svc, "survivor-after-expiry")
+	followupMetadata := task.TaskMetadata{ID: "survivor-after-expiry", Executor: task.TaskCode_TestOnly}
+	require.NoError(t, createTaskAfterFailover(ctx, svc.CreateAsyncTask, followupMetadata))
+	followup := requireTaskByMetadata(t, ctx, svc, followupMetadata)
 	require.NotEqual(t, original.ID, followup.ID)
 	active := waitTaskScheduled(t, ctx, svc, followup, survivor.ID())
 	require.Equal(t, uint32(1), active.Epoch)
