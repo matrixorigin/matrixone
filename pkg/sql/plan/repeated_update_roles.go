@@ -118,13 +118,14 @@ func bindRepeatedAssignment(
 		return -1, nil, err
 	}
 	value = role.restoreExpr(value)
-	if explicit {
-		if isDefaultValExpr(value) {
-			value, err = getDefaultExpr(builder.GetContext(), col)
-			if err != nil {
-				return -1, nil, err
-			}
+	if explicit && isDefaultValExpr(value) {
+		value, err = getDefaultExpr(builder.GetContext(), col)
+		if err != nil {
+			return -1, nil, err
 		}
+	}
+	// UpdateUnique checks NOT NULL for the roles admitted by UPDATE IGNORE.
+	if explicit && !isIgnore {
 		if err = checkNotNull(builder.GetContext(), value, table, col); err != nil {
 			return -1, nil, err
 		}

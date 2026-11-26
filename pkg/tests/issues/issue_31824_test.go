@@ -625,17 +625,25 @@ func TestIssue31824RepeatedUpdate(t *testing.T) {
 				_, e := conn.ExecContext(ctx, q)
 				require.NoError(t, e, q)
 			}
-			for _, keyword := range []string{"", "ignore "} {
-				_, e := conn.ExecContext(ctx, "update "+keyword+"notnull_t x join notnull_t y on x.id=1 and y.id=1 set x.v=if(x.w=100,null,2),y.v=3")
-				require.ErrorContains(t, e, "Column 'v' cannot be null")
-				require.Equal(t, []string{"1,10,10,100", "2,20,20,200"}, read(t, "select id,k,v,w from notnull_t order by id", 4))
+			const rows = "select id,k,v,w from notnull_t order by id"
+			values := []string{"if(x.w=100,null,2)", "null"}
+			for _, value := range values {
+				for _, keyword := range []string{"", "ignore "} {
+					_, e := conn.ExecContext(ctx, "update "+keyword+"notnull_t x join notnull_t y on x.id=1 and y.id=1 set x.v="+value+",y.v=3")
+					require.ErrorContains(t, e, "Column 'v' cannot be null")
+					require.Equal(t, []string{"1,10,10,100", "2,20,20,200"}, read(t, rows, 4))
+				}
 			}
-			res, e := conn.ExecContext(ctx, "update ignore notnull_t x join notnull_t y on x.id=1 and y.id=1 set x.k=20,x.v=if(x.w=100,null,2),y.v=30")
-			require.NoError(t, e)
-			n, e := res.RowsAffected()
-			require.NoError(t, e)
-			require.EqualValues(t, 1, n)
-			require.Equal(t, []string{"1,10,30,100", "2,20,20,200"}, read(t, "select id,k,v,w from notnull_t order by id", 4))
+			for i, value := range values {
+				want := 30 + i
+				query := fmt.Sprintf("update ignore notnull_t x join notnull_t y on x.id=1 and y.id=1 set x.k=20,x.v=%s,y.v=%d", value, want)
+				res, e := conn.ExecContext(ctx, query)
+				require.NoError(t, e, query)
+				n, e := res.RowsAffected()
+				require.NoError(t, e)
+				require.EqualValues(t, 1, n)
+				require.Equal(t, []string{fmt.Sprintf("1,10,%d,100", want), "2,20,20,200"}, read(t, rows, 4))
+			}
 		})
 		t.Run("strict_temporal_checks_and_prepared_mode", func(t *testing.T) {
 			for _, q := range []string{"set session sql_mode=''", "create table temporal_t(id int primary key,d date,v date,payload int)", "insert into temporal_t values(1,'2001-01-01','0000-00-00',0)", "set session sql_mode=default"} {

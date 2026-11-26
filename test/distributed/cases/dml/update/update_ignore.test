@@ -4,7 +4,7 @@ drop table if exists update_ignore_regression;
 create table update_ignore_regression (
     id int primary key,
     a int unique,
-    v int
+    v int not null
 );
 insert into update_ignore_regression values (1, 10, 0), (2, 20, 0);
 
@@ -33,6 +33,16 @@ update ignore update_ignore_regression x join update_ignore_regression y on x.id
     set x.a = 40, x.v = x.v + 1, y.a = 40, y.v = 99;
 select id,a,v from update_ignore_regression order by id;
 select id,a from update_ignore_regression force index(a) where a in (10, 20, 40) order by id;
+
+-- A rejected alias cannot invalidate an accepted alias's update.
+update ignore update_ignore_regression x join update_ignore_regression y on x.id = 1 and y.id = 2
+    set x.a = 20, x.v = null, y.v = 30;
+select id,a,v from update_ignore_regression force index(a) where a in (20, 40, 50) order by id;
+
+-- An admitted alias still fails its NOT NULL check.
+update ignore update_ignore_regression x join update_ignore_regression y on x.id = 1 and y.id = 2
+    set x.a = 50, x.v = null, y.v = 31;
+select id,a,v from update_ignore_regression order by id;
 
 drop table update_ignore_regression;
 

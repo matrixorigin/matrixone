@@ -105,20 +105,15 @@ func TestLocalInsertObjectsHandoffAndRetry(t *testing.T) {
 
 func TestLocalInsertObjectsTimeoutDoesNotStarveOtherDeletes(t *testing.T) {
 	ctx := t.Context()
-	workerCtx, stopWorker := context.WithCancel(ctx)
-	stopWorker()
 	blocked, healthy := objectio.MockObjectName(), objectio.MockObjectName()
 	attempt, cancel := context.WithCancel(ctx)
 	defer cancel()
 	fs := &blockedObjectDelete{blocked: blocked.String(), cancel: cancel}
-	registry := NewLocalInsertObjectRegistry(workerCtx, fs, 2)
-	stream := registry.NewStream()
-	for _, name := range []objectio.ObjectName{blocked, healthy} {
-		require.NoError(t, stream.Begin(ctx))
-		require.NoError(t, stream.Reserve(ctx, *name.ObjectId()))
-		require.Equal(t, 1, stream.Finish())
-	}
-	<-registry.done
+	registry := NewLocalInsertObjectRegistry(ctx, fs, 2)
+	// Start with the timed-out delete first and exercise the collector directly.
+	registry.garbage.PushBack(*blocked.ObjectId())
+	registry.garbage.PushBack(*healthy.ObjectId())
+	registry.used = registry.garbage.Len()
 	require.Equal(t, 2, registry.collect(attempt))
 	nextAttempt, nextCancel := context.WithCancel(ctx)
 	defer nextCancel()
