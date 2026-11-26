@@ -20,6 +20,8 @@ import (
 	"io"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -105,11 +107,18 @@ func (rw *reactWriter) AddAfter(hook table.AckHook) {
 func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, enableSqlWriter bool) table.WriterFactory {
 	cfg := table.FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: table.CsvExtension}
 	factory := func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
-		options := []etl.FSWriterOption{
-			etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
+		filePath := cfg.LogsFilePathFactory(account, tbl, ts)
+		var batchID uuid.UUID
+		if tbl.UsesMetricBatchReceipt() {
+			batchID = uuid.New()
+			filePath = table.MetricBatchPath(filePath, batchID)
 		}
+		options := []etl.FSWriterOption{etl.WithFilePath(filePath)}
 		cw := etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
 		if enableSqlWriter {
+			if batchID != uuid.Nil {
+				return newWriter(ctx, etl.NewMetricContentWriter(ctx, tbl, cw, batchID))
+			}
 			return newWriter(ctx, etl.NewContentWriter(ctx, tbl, cw))
 		}
 		return newWriter(ctx, cw)

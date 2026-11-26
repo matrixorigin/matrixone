@@ -365,6 +365,9 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 
 	// Step 3. do simple merge
 	var uploadFile = func(ctx context.Context, fp *FileMeta) error {
+		if m.table.UsesMetricBatchReceipt() {
+			return m.mergeMetricFile(ctx, fp.FilePath)
+		}
 		row := m.table.GetRow(ctx)
 		defer row.Free()
 		// open reader
@@ -481,7 +484,11 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err = uploadFile(ctx, fp); err != nil {
+		uploadErr := uploadFile(ctx, fp)
+		if uploadErr == errMetricFileRetained {
+			continue
+		}
+		if err = uploadErr; err != nil {
 			// Back off while the database recovers, but let task-runner shutdown
 			// interrupt the wait and retain remaining files for the next run.
 			retry := time.NewTimer(10 * time.Second)

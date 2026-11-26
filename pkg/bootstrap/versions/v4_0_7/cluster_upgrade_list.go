@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	dbholder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
@@ -40,6 +41,15 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	addSQLTaskRunClaim,
 	addSQLTaskScheduleGeneration,
 	addSQLTaskRunningIndex,
+	{
+		Schema:    "system_metrics",
+		TableName: dbholder.MetricBatchReceiptTable,
+		UpgType:   versions.CREATE_NEW_TABLE,
+		UpgSql:    dbholder.CreateMetricBatchReceipt,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDefinition(txn, accountID, "system_metrics", dbholder.MetricBatchReceiptTable)
+		},
+	},
 }
 
 // EnsureViewMetadataCatalogs prepares the metadata required by CN admission.

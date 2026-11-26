@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"strings"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -57,12 +59,22 @@ type ContentWriter struct {
 }
 
 func NewContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher) *ContentWriter {
+	return newContentWriter(ctx, tbl, fileFlusher, uuid.Nil)
+}
+
+func NewMetricContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher, id uuid.UUID) *ContentWriter {
+	return newContentWriter(ctx, tbl, fileFlusher, id)
+}
+
+func newContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher, id uuid.UUID) *ContentWriter {
+	sqlFlusher := NewSQLFlusher(tbl)
+	sqlFlusher.metricBatchID = id
 	return &ContentWriter{
 		ctx: ctx,
 		tbl: tbl,
 		// buf dependent on SetContent to set.
 
-		sqlFlusher: NewSQLFlusher(tbl),
+		sqlFlusher: sqlFlusher,
 		csvFlusher: NewFileContentFlusher(fileFlusher),
 	}
 }
@@ -169,8 +181,9 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 var _ table.Flusher = (*SQLFlusher)(nil)
 
 type SQLFlusher struct {
-	database string
-	table    string
+	database      string
+	table         string
+	metricBatchID uuid.UUID
 }
 
 func NewSQLFlusher(tbl *table.Table) *SQLFlusher {
@@ -181,6 +194,15 @@ func NewSQLFlusher(tbl *table.Table) *SQLFlusher {
 }
 
 func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
+	if f.metricBatchID != uuid.Nil {
+		if buf.Len() == 0 {
+			return 0, nil
+		}
+		ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseWriteRowRecords)
+		defer cancel()
+		return 0, f.flushMetricBatch(ctx, buf.Bytes(), f.metricBatchID, true)
+	}
+
 	forceNewConn := !db_holder.DBConnErrCount.Check()
 	conn, err := db_holder.GetOrInitDBConn(forceNewConn, true)
 	if err != nil {
@@ -194,7 +216,17 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 		return 0, err
 	}
 
-	src := buf.Bytes()
+	loadSQL := f.loadSQL(buf.Bytes())
+	_, err = conn.Exec(loadSQL)
+	if err != nil {
+		_ = db_holder.DBConnErrCount.Count()
+	} else {
+		db_holder.DBConnErrCount.Reset()
+	}
+	return 0, err
+}
+
+func (f *SQLFlusher) loadSQL(src []byte) string {
 	extraEscapes := 0
 	for _, c := range src {
 		if c == '\\' || c == '\'' {
@@ -225,17 +257,10 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 	loadSQLStr := loadSQL.String()
 	v2.TraceMOLoggerExportSqlHistogram.Observe(float64(len(loadSQLStr)))
 
-	_, err = conn.Exec(loadSQLStr)
 	if len(loadSQLStr) > 10*mpool.MB {
-		logutil.Info("generate req sql", zap.String("type", f.table), zap.Int("csv", buf.Len()), zap.Int("sql", len(loadSQLStr)))
+		logutil.Info("generate req sql", zap.String("type", f.table), zap.Int("csv", len(src)), zap.Int("sql", len(loadSQLStr)))
 	}
-	if err != nil {
-		_ = db_holder.DBConnErrCount.Count()
-	} else {
-		db_holder.DBConnErrCount.Reset()
-	}
-
-	return 0, err
+	return loadSQLStr
 }
 
 var _ table.Flusher = (*FileFlusher)(nil)
