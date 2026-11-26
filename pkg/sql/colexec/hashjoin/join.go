@@ -573,7 +573,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 		}
 
 		resRowCnt++
-		return ctr.appendOutputRow(hashJoin, proc, row, probeColumnsCopied)
+		return ctr.appendOutputRow(hashJoin, proc, row)
 	}
 	if ctr.pendingOutput.left != nil {
 		row := ctr.pendingOutput
@@ -595,6 +595,14 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				)
 				if err != nil {
 					return err
+				}
+				if probeColumnsCopied {
+					if err := ctr.copyUniqueLeftBuildColumns(hashJoin, proc); err != nil {
+						return err
+					}
+					ctr.lastIdx += hashBatch
+					resRowCnt += hashBatch
+					continue
 				}
 				ctr.vsIdx = 0
 				ctr.probeState = psBatchRow

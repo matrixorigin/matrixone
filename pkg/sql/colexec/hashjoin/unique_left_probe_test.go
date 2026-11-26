@@ -87,6 +87,12 @@ func TestUniqueLeftProbeCopiesOwnedColumns(t *testing.T) {
 		for _, residual := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d/%s/outputBytes=%d/residual=%t", tc.count, tc.storage, tc.outputBytes, residual), func(t *testing.T) {
 				arg, build, proc, _ := uniqueLeftProbeFixture(t, residual)
+				arg.RightTypes = append(arg.RightTypes, types.T_varchar.ToType())
+				arg.ResultCols = append(arg.ResultCols, colexec.ResultPos{Rel: 1, Pos: 1})
+				payload := strings.Repeat("retained", 64)
+				probeKey := func(row int) int64 {
+					return [...]int64{2, 4, 4, 2, 1, 3, 3, 1}[row%8]
+				}
 				if tc.outputBytes > 0 {
 					proc.Base.ImportMemory = &process.ImportMemory{UnitBytes: tc.outputBytes}
 				}
@@ -101,7 +107,7 @@ func TestUniqueLeftProbeCopiesOwnedColumns(t *testing.T) {
 					require.NoError(t, err)
 					b.Vecs[2].GetGrouping().Add(1)
 					for row := range count {
-						require.NoError(t, vector.AppendFixed(b.Vecs[0], int64(row%4+1), row%7 == 0, proc.Mp()))
+						require.NoError(t, vector.AppendFixed(b.Vecs[0], probeKey(row), row%7 == 0, proc.Mp()))
 						value := strings.Repeat(fmt.Sprintf("%02d", row%13), 20)
 						require.NoError(t, vector.AppendBytes(b.Vecs[1], []byte(value), row%5 == 0, proc.Mp()))
 						require.NoError(t, vector.AppendFixed(b.Vecs[3], math.Copysign(0, float64(row%2)-0.5), row%11 == 0, proc.Mp()))
@@ -132,8 +138,12 @@ func TestUniqueLeftProbeCopiesOwnedColumns(t *testing.T) {
 				probe := makeProbe(tc.count)
 				next := makeProbe(3)
 				arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probe, next}))
-				right := batch.NewWithSize(1)
+				right := batch.NewWithSize(2)
 				right.Vecs[0] = testutil.MakeInt64Vector([]int64{2, 4}, nil, proc.Mp())
+				right.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+				require.NoError(t, vector.AppendBytes(right.Vecs[1], []byte(payload), false, proc.Mp()))
+				require.NoError(t, vector.AppendBytes(right.Vecs[1], nil, true, proc.Mp()))
+				right.Vecs[1].GetGrouping().Add(1)
 				right.SetRowCount(2)
 				build.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{right}))
 				require.NoError(t, arg.Prepare(proc))
@@ -175,7 +185,7 @@ func TestUniqueLeftProbeCopiesOwnedColumns(t *testing.T) {
 							require.Equal(t, i%period == 0, out.Batch.Vecs[col].IsNull(uint64(row)))
 						}
 						if i%7 != 0 {
-							require.Equal(t, int64(i%4+1), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[0], row))
+							require.Equal(t, probeKey(i), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[0], row))
 						}
 						if i%5 != 0 {
 							expected := strings.Repeat(fmt.Sprintf("%02d", i%13), 20)
@@ -188,10 +198,16 @@ func TestUniqueLeftProbeCopiesOwnedColumns(t *testing.T) {
 						if i%11 != 0 {
 							require.Equal(t, math.Float64bits(math.Copysign(0, float64(i%2)-0.5)), math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](out.Batch.Vecs[3], row)))
 						}
-						matched := i%7 != 0 && (i%4+1)%2 == 0
+						matched := i%7 != 0 && probeKey(i)%2 == 0
 						require.Equal(t, !matched, out.Batch.Vecs[4].IsNull(uint64(row)))
 						if matched {
-							require.Equal(t, int64(i%4+1), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[4], row))
+							require.Equal(t, probeKey(i), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[4], row))
+						}
+						buildPayload := out.Batch.Vecs[6]
+						require.Equal(t, !matched || probeKey(i) == 4, buildPayload.IsNull(uint64(row)))
+						require.Equal(t, matched && probeKey(i) == 4, buildPayload.GetGrouping().Contains(uint64(row)))
+						if matched && probeKey(i) == 2 {
+							require.Equal(t, payload, string(buildPayload.GetBytesAt(row)))
 						}
 					}
 					seen += out.Batch.RowCount()
@@ -219,23 +235,34 @@ func (c *cancelAfterProbeColumn) Err() error {
 }
 
 func TestUniqueLeftProbePartialCopyDoesNotPublish(t *testing.T) {
-	for _, stop := range []string{"admission", "cancel"} {
+	for _, stop := range []string{"probe_admission", "build_admission", "cancel"} {
 		t.Run(stop, func(t *testing.T) {
 			arg, build, proc, account := uniqueLeftProbeFixture(t, false)
+			payload := []byte(strings.Repeat("x", 4096))
+			probePayload := payload
+			if stop == "build_admission" {
+				arg.RightTypes = append(arg.RightTypes, types.T_varchar.ToType())
+				arg.ResultCols = append(arg.ResultCols, colexec.ResultPos{Rel: 1, Pos: 1})
+				probePayload = []byte("small")
+			}
 			probe := batch.NewWithSize(4)
 			for i, typ := range arg.LeftTypes {
 				probe.Vecs[i] = vector.NewVec(typ)
 			}
 			for range 32 {
 				require.NoError(t, vector.AppendFixed(probe.Vecs[0], int64(2), false, proc.Mp()))
-				require.NoError(t, vector.AppendBytes(probe.Vecs[1], []byte(strings.Repeat("x", 4096)), false, proc.Mp()))
+				require.NoError(t, vector.AppendBytes(probe.Vecs[1], probePayload, false, proc.Mp()))
 				require.NoError(t, vector.AppendBytes(probe.Vecs[2], []byte("constant"), false, proc.Mp()))
 				require.NoError(t, vector.AppendFixed(probe.Vecs[3], 0.0, false, proc.Mp()))
 			}
 			probe.SetRowCount(32)
 			arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probe}))
-			right := batch.NewWithSize(1)
+			right := batch.NewWithSize(len(arg.RightTypes))
 			right.Vecs[0] = testutil.MakeInt64Vector([]int64{2}, nil, proc.Mp())
+			if stop == "build_admission" {
+				right.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+				require.NoError(t, vector.AppendBytes(right.Vecs[1], payload, false, proc.Mp()))
+			}
 			right.SetRowCount(1)
 			build.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{right}))
 			require.NoError(t, arg.Prepare(proc))
@@ -249,7 +276,7 @@ func TestUniqueLeftProbePartialCopyDoesNotPublish(t *testing.T) {
 				}
 			}()
 			cause := moerr.NewInternalErrorNoCtx("cancel after first probe column")
-			if stop == "admission" {
+			if stop != "cancel" {
 				filler, err = proc.Mp().AllocAccounted(int(account.Snapshot().Limit-account.Snapshot().Used-32768), account, mpool.AllocationOwnerMin, 1)
 				require.NoError(t, err)
 			} else {
@@ -262,7 +289,10 @@ func TestUniqueLeftProbePartialCopyDoesNotPublish(t *testing.T) {
 			require.Nil(t, out.Batch)
 			require.Equal(t, 32, arg.ctr.resBat.Vecs[0].Length(), "failure occurs after the first real column copy")
 			require.Zero(t, arg.ctr.resBat.RowCount(), "partial vectors remain private")
-			if stop == "admission" {
+			if stop == "build_admission" {
+				require.Equal(t, 32, arg.ctr.resBat.Vecs[4].Length(), "failure occurs while gathering the build payload")
+			}
+			if stop != "cancel" {
 				require.True(t, mpool.AllocationFailureReasonOf(err) == mpool.AllocationFailureCapacity || moerr.IsMoErrCode(err, moerr.ErrOOM), "%v", err)
 			} else {
 				require.Same(t, cause, err)
