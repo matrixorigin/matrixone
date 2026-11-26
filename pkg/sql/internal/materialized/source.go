@@ -484,7 +484,7 @@ func (s *Source) appendSpillRecordLocked(
 			} else if n != 1 {
 				return io.ErrShortWrite
 			}
-			return bat.MarshalBinaryForSpillTo(w)
+			return bat.MarshalFramedTo(w)
 		},
 	)
 }
@@ -634,7 +634,7 @@ func unmarshalSpillBatch(
 	switch data[0] {
 	case spillPayloadBatch:
 		decoded = batch.NewWithSize(0)
-		err = decoded.UnmarshalFromReaderForSpill(r, allocation)
+		err = decoded.UnmarshalFramedFrom(r, allocation)
 	case spillPayloadSelectedRange:
 		decoded, err = unmarshalSelectedSpillBatchFrom(r, mp, allocation)
 	default:
@@ -980,7 +980,7 @@ func spillBatchSizeWithLimit(
 	if bat == nil {
 		return 0, 0, moerr.NewInternalErrorNoCtx("nil materialized sink spill batch")
 	}
-	serialized = 1 + 8 + 4 + 4 + 4 + 4 + 4
+	serialized = 1 + 8 + 4 + 4 + 4 + 4
 	if len(bat.Vecs) > math.MaxInt32 || len(bat.ExtraBuf()) > math.MaxInt32 {
 		return 0, 0, moerr.NewInternalErrorNoCtx("materialized sink spill batch exceeds encoding limit")
 	}
@@ -1036,7 +1036,7 @@ func spillBatchSizeWithLimit(
 	if err != nil {
 		return 0, 0, err
 	}
-	// The spill-only wrapper frames the stable batch payload with its size.
+	// MarshalFramedTo frames the batch with its size.
 	serialized, err = checkedAdd(serialized, 8)
 	if err != nil {
 		return 0, 0, err

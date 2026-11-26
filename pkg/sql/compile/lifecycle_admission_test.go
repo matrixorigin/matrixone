@@ -24,7 +24,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -179,7 +178,7 @@ func TestTransactionLocalReplacementRequiresBothGenerations(t *testing.T) {
 }
 
 func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
-	for _, mode := range []string{"unknown_binding", "stable_binding", "changed_domain", "canceled", "ctas_refresh", "unsupported_temporal", "unsupported_ctas", "unsupported_temporary_ctas", "ctas_rollback"} {
+	for _, mode := range []string{"unknown_binding", "stable_binding", "changed_domain", "canceled", "ctas_refresh"} {
 		t.Run(mode, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
@@ -228,20 +227,14 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 			original := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{DdlType: plan.DataDefinition_CREATE_TABLE, Definition: &plan.DataDefinition_CreateTable{CreateTable: q}}}}
 			var source tree.Statement
 			var planner *plan2.MockCompilerContext
-			if mode == "ctas_refresh" || strings.HasPrefix(mode, "unsupported_") || mode == "ctas_rollback" {
+			if mode == "ctas_refresh" {
 				var err error
 				sql := "create table db.t as select a + 1 from select_test.bind_select"
-				if strings.HasPrefix(mode, "unsupported_") || mode == "ctas_rollback" {
-					sql = "create table db.t as select timestamp(granted_time) from mo_catalog.mo_role_privs"
-				}
-				if mode == "unsupported_temporary_ctas" {
-					sql = strings.Replace(sql, "create table", "create temporary table", 1)
-				}
 				source, err = parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
 				defer source.Free()
 				planner = plan2.NewMockCompilerContext(true, testutil.NewProcess(t))
-				original, err = plan2.BuildPlan(planner, source, mode == "unsupported_temporal", nil)
+				original, err = plan2.BuildPlan(planner, source, false, nil)
 				require.NoError(t, err)
 			}
 			builds := 0
@@ -267,26 +260,9 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 				proc.Ctx = ctx
 				proc.ReplaceTopCtx(ctx)
 			}
-			if strings.HasPrefix(mode, "unsupported_") || mode == "ctas_rollback" {
-				rt := moruntime.ServiceRuntime(proc.GetService())
-				old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-				t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, old) })
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion121)
-				if mode == "ctas_rollback" {
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
-				} else {
-					eng.dbErr = errors.New("catalog accessed before temporal admission")
-				}
-			}
 			err := c.Compile(proc.Ctx, original, nil)
 			got := c.GetPlan()
 			switch mode {
-			case "unsupported_temporal", "unsupported_ctas", "unsupported_temporary_ctas":
-				require.ErrorContains(t, err, "version 122")
-				require.NotErrorIs(t, err, eng.dbErr, "unsupported CTAS must not access catalog names")
-				require.Zero(t, builds)
-				require.Zero(t, advances)
-				require.Zero(t, locks)
 			case "canceled":
 				require.ErrorIs(t, err, context.Canceled)
 				require.Zero(t, builds)
@@ -310,13 +286,6 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 			if mode == "ctas_refresh" {
 				require.Equal(t, "a + 1", got.GetDdl().GetCreateTable().TableDef.Cols[0].Name)
 				require.Equal(t, original.GetDdl().GetCreateTable().CreateAsSelectSql, got.GetDdl().GetCreateTable().CreateAsSelectSql)
-			}
-			if mode == "ctas_rollback" {
-				before := locks
-				moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion121)
-				_, runErr := c.Run(0)
-				require.ErrorContains(t, runErr, "version 122")
-				require.Equal(t, before, locks)
 			}
 			// No workspace rollback, statement increment or token cancellation method
 			// is expected on these mocks: planning is not an execution retry.

@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -68,8 +67,7 @@ func TestMergeDelete(t *testing.T) {
 			}, nil, proc.Mp()),
 		},
 	}
-	// Names an older CN wrote on the wire are skipped, never used.
-	bytes, err := metaLocBat0.MarshalBinaryWithNames([]string{"wire-name-ignored"})
+	bytes, err := metaLocBat0.MarshalBinary()
 	require.Nil(t, err)
 
 	vcu32, _ := vector.NewConstFixed(types.T_uint32.ToType(), uint32(15), 1, proc.GetMPool())
@@ -106,7 +104,7 @@ func TestMergeDelete(t *testing.T) {
 			}, nil, proc.Mp()),
 		},
 	}
-	bytes1, err := metaLocBat1.MarshalBinaryWithNames([]string{catalog.Row_ID})
+	bytes1, err := metaLocBat1.MarshalBinary()
 	require.Nil(t, err)
 
 	metaLocBat2 := &batch.Batch{
@@ -114,7 +112,7 @@ func TestMergeDelete(t *testing.T) {
 			testutil.MakeInt64Vector([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, nil, proc.Mp()),
 		},
 	}
-	bytes2, err := metaLocBat2.MarshalBinaryWithNames([]string{catalog.BlockMetaOffset})
+	bytes2, err := metaLocBat2.MarshalBinary()
 	require.Nil(t, err)
 
 	metaLocBat3 := &batch.Batch{
@@ -122,7 +120,7 @@ func TestMergeDelete(t *testing.T) {
 			testutil.MakeTextVector([]string{"d:magic:15"}, nil, proc.Mp()),
 		},
 	}
-	bytes3, err := metaLocBat3.MarshalBinaryWithNames([]string{catalog.BlockMeta_DeltaLoc})
+	bytes3, err := metaLocBat3.MarshalBinary()
 	require.Nil(t, err)
 
 	vcu32_2, _ := vector.NewConstFixed(types.T_uint32.ToType(), uint32(45), 3, proc.GetMPool())
@@ -158,8 +156,7 @@ func TestMergeDelete(t *testing.T) {
 	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), argument1.GetAffectedRows())
-	// Delete is named from the blob's layout (a row delete), not from the
-	// names written on the wire.
+	// Delete is named from the blob's layout: a row delete.
 	require.Equal(t, [][]string{colexec.DeleteRowsAttrs},
 		argument1.ctr.delSource.(*mockRelation).attrs)
 

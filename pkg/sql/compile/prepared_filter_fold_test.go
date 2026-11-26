@@ -81,7 +81,7 @@ func TestFoldedHexBitFilterRemoteRoundTrip(t *testing.T) {
 	require.NoError(t, err, "scan folding must not invalidate private CAST metadata")
 	remote := new(pipeline.Pipeline)
 	require.NoError(t, remote.Unmarshal(data))
-	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, remote))
+	require.NoError(t, validateRemoteExpressionPipeline(c.proc, remote))
 	remoteHex := remote.DataSource.Expr.GetF().Args[0].GetF()
 	require.NotNil(t, remoteHex.Args[0].GetF().Args[1].GetT())
 	decoded, err := decodeScope(data, c.proc, true, nil)
