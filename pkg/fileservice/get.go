@@ -116,6 +116,22 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 	return getForETLWithParsedPath(ctx, fs, path, fsPath)
 }
 
+// OwnsETLPath reports whether GetForETL creates a file service of its own for path: a
+// path without a service, or a service with arguments.
+func OwnsETLPath(path Path) bool {
+	return path.Service == "" || len(path.ServiceArguments) > 0
+}
+
+// CloseOwnedETL closes fs if GetForETL created it for path, and leaves a named service open.
+func CloseOwnedETL(ctx context.Context, path string, fs FileService) {
+	if fs == nil {
+		return
+	}
+	if parsed, err := ParsePath(path); err == nil && OwnsETLPath(parsed) {
+		fs.Close(ctx)
+	}
+}
+
 // GetForETLWithParsedPath verifies the raw target against its supplied parse.
 // Construction uses the authoritative parse and the current SQL policy.
 func GetForETLWithParsedPath(ctx context.Context, fs FileService, rawPath string, fsPath Path) (res ETLFileService, readPath string, err error) {

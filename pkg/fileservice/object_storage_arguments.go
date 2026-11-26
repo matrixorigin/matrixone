@@ -33,6 +33,8 @@ import (
 type ObjectStorageArguments struct {
 	// Set only by the SQL acquisition owner, never parsed from provider options.
 	callerCredentialsOnly bool
+	// transports collects the transports of the HTTP clients made with these arguments.
+	transports *httpTransports
 	// misc
 	Name                 string `toml:"name"`
 	KeyPrefix            string `toml:"key-prefix"`

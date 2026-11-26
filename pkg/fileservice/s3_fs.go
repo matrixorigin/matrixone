@@ -60,6 +60,7 @@ type S3FS struct {
 
 	ioMerger     *IOMerger
 	decodedReads *decodedReadRegistry
+	transports   *httpTransports
 
 	parallelMode ParallelMode
 }
@@ -123,7 +124,9 @@ func NewS3FS(
 		perfCounterSets: perfCounterSets,
 		ioMerger:        NewIOMerger(),
 		parallelMode:    args.ParallelMode,
+		transports:      new(httpTransports),
 	}
+	args.transports = fs.transports
 
 	var err error
 	var storage ObjectStorage
@@ -2117,6 +2120,7 @@ func (s *S3FS) IndexFileCache() *IndexFileCache {
 }
 
 func (s *S3FS) Close(ctx context.Context) {
+	defer s.transports.closeIdleConnections()
 	defer s.server.close()
 	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache, index: s.indexFileCache}
 	if s.decodedReads != nil {

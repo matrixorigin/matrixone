@@ -205,6 +205,7 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 
 	// Each client has a transport of its own, shared with no other.
 	transport := newHTTPTransport(cmp.Or(args.MaxConnsPerHost, maxConnsPerHost))
+	args.transports.add(transport)
 
 	// client
 	client := &http.Client{
@@ -212,4 +213,33 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 	}
 
 	return client
+}
+
+// httpTransports holds the transports of the HTTP clients of one file service.
+type httpTransports struct {
+	mu         sync.Mutex
+	transports []http.RoundTripper
+}
+
+func (t *httpTransports) add(transport http.RoundTripper) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.transports = append(t.transports, transport)
+}
+
+// closeIdleConnections closes the idle connections of every transport.
+func (t *httpTransports) closeIdleConnections() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, transport := range t.transports {
+		if c, ok := transport.(interface{ CloseIdleConnections() }); ok {
+			c.CloseIdleConnections()
+		}
+	}
 }

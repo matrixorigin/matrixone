@@ -121,6 +121,13 @@ type profilerRoundTripper[T http.RoundTripper] struct {
 	upstream T
 }
 
+// CloseIdleConnections closes the idle connections of the upstream.
+func (p *profilerRoundTripper[T]) CloseIdleConnections() {
+	if c, ok := any(p.upstream).(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
+}
+
 type ctxKeyConnsProfileSample struct{}
 
 var CtxKeyConnsProfileSample ctxKeyConnsProfileSample
