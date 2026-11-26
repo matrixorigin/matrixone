@@ -659,13 +659,35 @@ func TestScopeSealedCountIOUsesScannerCancellationAndAccounting(t *testing.T) {
 	}
 	require.NoError(t, topCtx.Err())
 
-	snapshot := scan.OpAnalyzer.GetOpStats().ResourceDelta()
-	require.Positive(t, snapshot.Usage.WaitNS[resource.WaitFilesystem])
-	require.Equal(t, int64(1), scan.OpAnalyzer.GetOpStats().S3Get)
-	require.Equal(t, int64(64), scan.OpAnalyzer.GetOpStats().S3ReadSize)
+	owner := scan.OpAnalyzer.GetOpStats()
+	startup := owner.ResourceDelta()
+	require.Positive(t, startup.Usage.ExclusiveActiveNS)
+	require.Positive(t, startup.Usage.WaitNS[resource.WaitFilesystem])
+	require.Equal(t, uint64(1), startup.Usage.S3Requests[resource.S3Get])
+	require.Equal(t, uint64(64), startup.Usage.S3ReadBytes)
+	require.Zero(t, owner.CallNum)
+	require.Zero(t, owner.TimeConsumed)
+	require.Zero(t, owner.WaitTimeConsumed)
+	require.Zero(t, owner.S3Get)
 	require.NoError(t, scan.Prepare(c.proc))
 	t.Cleanup(func() { scan.Free(c.proc, false, nil) })
-	require.Equal(t, snapshot.Usage, scan.OpAnalyzer.GetOpStats().ResourceDelta().Usage)
+	require.Equal(t, startup, owner.ResourceDelta())
+	require.Zero(t, owner.CallNum)
+
+	// The ordinary reader reports its own interval on the same owner.
+	owner.CallNum = 1
+	owner.TimeConsumed = 100
+	owner.WaitTimeConsumed = 200
+	owner.ResourceWaitNS[resource.WaitFilesystem] = 200
+	owner.S3Get = 2
+	owner.S3ReadSize = 128
+	combined := owner.ResourceDelta()
+	require.Equal(t, startup.Usage.ExclusiveActiveNS+100, combined.Usage.ExclusiveActiveNS)
+	require.Equal(t, startup.Usage.WaitNS[resource.WaitFilesystem]+200, combined.Usage.WaitNS[resource.WaitFilesystem])
+	require.Equal(t, uint64(3), combined.Usage.S3Requests[resource.S3Get])
+	require.Equal(t, uint64(192), combined.Usage.S3ReadBytes)
+	require.Equal(t, 1, owner.CallNum)
+
 	require.NoError(t, scan.Prepare(c.proc))
-	require.Zero(t, scan.OpAnalyzer.GetOpStats().S3Get, "reader startup counters are consumed once")
+	require.Empty(t, owner.ResourceDelta(), "reusing the scan must clear the startup interval")
 }
