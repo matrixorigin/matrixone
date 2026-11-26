@@ -361,6 +361,11 @@ message DependentExpr {
   repeated Expr inputs = 5;
   repeated Expr lhs = 6;
   Expr comparison = 7;
+  // Plan-owned guarded-payload admission stamp (default-off): set ONLY by the
+  // specialized Iceberg MERGE rewrite on the occurrence and producer it
+  // coordinates, and consumed by the dependent runtime as exact memoization
+  // membership. Every other consumer-visible subquery stays unset.
+  bool guarded_merge_payload = 8;
 }
 
 message CorrelationProgram {

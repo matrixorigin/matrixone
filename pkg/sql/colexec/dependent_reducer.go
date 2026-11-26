@@ -257,6 +257,49 @@ func (r *DependentReducer) Finish() (*batch.Batch, error) {
 	return r.result, nil
 }
 
+// tupleCost returns the exact resource cost the constructor charged for the
+// SCALAR output tuple (an unchanged-size batch.Batch plus one vector.Vector
+// per output column), so ownership can be transferred precisely.
+func (r *DependentReducer) tupleCost() uint64 {
+	if r == nil {
+		return 0
+	}
+	// The SCALAR output tuple's charged width equals its live vector count
+	// (the constructor charged one batch.Batch plus one vector.Vector per
+	// output column); read it off the tuple the caller is transferring.
+	return uint64(unsafe.Sizeof(batch.Batch{})) + uint64(len(r.tuple.Vecs))*uint64(unsafe.Sizeof(vector.Vector{})+unsafe.Sizeof((*vector.Vector)(nil)))
+}
+
+// TupleCost reports the exact resource cost the constructor charged for the
+// SCALAR output tuple WITHOUT mutating any state: the caller reserves this
+// cost before any ownership change.
+func (r *DependentReducer) TupleCost() uint64 {
+	if r == nil || r.tuple == nil {
+		return 0
+	}
+	return r.tupleCost()
+}
+
+// DetachTuple removes the reducer's reference to the finalized tuple WITHOUT
+// cleaning it and RELEASES the tuple's accounting from this reducer's budget,
+// returning the exact transferred cost. It is called only AFTER the receiving
+// owner has successfully reserved that cost, so the transfer is guaranteed and
+// no failure path can leave the tuple owned by neither cleanup owner.
+func (r *DependentReducer) DetachTuple() uint64 {
+	if r == nil || r.closed || r.tuple == nil {
+		return 0
+	}
+	cost := r.tupleCost()
+	r.budget.ReleaseAllocationCapacity(cost)
+	if r.charged >= cost {
+		r.charged -= cost
+	} else {
+		r.charged = 0
+	}
+	r.tuple = nil
+	return cost
+}
+
 func (r *DependentReducer) Close() {
 	if r == nil || r.closed {
 		return

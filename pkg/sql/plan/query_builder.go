@@ -12301,12 +12301,23 @@ func (builder *QueryBuilder) appendProjectionNode(
 	notCacheable bool,
 ) (newNodeID int32, err error) {
 	for i, proj := range ctx.projects {
-		if nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx); err != nil {
+		// SCRATCH glm80 (review #6031303617): admission is bound to THIS
+		// BindContext's own registration (buildIcebergMergePlan sets it on
+		// the merge select's context) and to ONE expression at a time: the
+		// active flag is saved, set only when this slot is a registered
+		// clause payload, and restored on BOTH the success and the error
+		// path. A nested derived SELECT binds under its own child context
+		// with no registration, and a WHEN slot never matches the payload
+		// set, so neither can inherit the admission.
+		savedActive := ctx.icebergMergePayloadActive
+		ctx.icebergMergePayloadActive = ctx.icebergMergePayloadSlots != nil && ctx.icebergMergePayloadSlots[i]
+		nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx)
+		ctx.icebergMergePayloadActive = savedActive
+		if err != nil {
 			return
 		}
 		ctx.projects[i] = proj
 	}
-
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType:     plan.Node_PROJECT,
 		ProjectList:  ctx.projects,

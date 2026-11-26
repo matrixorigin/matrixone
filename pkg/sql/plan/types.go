@@ -395,6 +395,7 @@ type updateTargetScope struct {
 }
 
 type QueryBuilder struct {
+
 	// mixedDomainCoalesce is set when the statement binds a binary-typed
 	// COALESCE that can return a text value; see coalesce_text_domain.go.
 	mixedDomainCoalesce bool
@@ -938,7 +939,12 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
-	builder *QueryBuilder
+	// SCRATCH glm80 (review #6031303617): MERGE clause-payload slot
+	// registration OWNED BY THIS BIND CONTEXT (the merge select itself), and
+	// a per-expression active flag set only around one expression's flatten.
+	icebergMergePayloadSlots  map[int]bool
+	icebergMergePayloadActive bool
+	builder                   *QueryBuilder
 	// Internal UPDATE/DELETE target projections need the persisted value for
 	// old secondary-index keys. The user predicate in the same SELECT still
 	// observes the session's virtual-column value.
