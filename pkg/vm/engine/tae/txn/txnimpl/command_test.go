@@ -78,7 +78,7 @@ func TestLegacyRenameAppendRequiresExactLayout(t *testing.T) {
 
 func TestRecoverCheckpointAppendNames(t *testing.T) {
 	typ := types.T_int64.ToType()
-	for _, scenario := range []string{"rename", "rename_then_comment", "swap", "sparse", "evolved", "wrong_type", "duplicate_name", "incomplete"} {
+	for _, scenario := range []string{"rename", "rename_then_comment", "swap", "swap_after_drop", "sparse", "evolved", "wrong_type", "duplicate_name", "incomplete"} {
 		t.Run(scenario, func(t *testing.T) {
 			previous := catalog.NewEmptySchema("checkpoint_rename")
 			require.NoError(t, previous.AppendPKCol("id", typ, 0))
@@ -88,13 +88,20 @@ func TestRecoverCheckpointAppendNames(t *testing.T) {
 			} else {
 				require.NoError(t, previous.AppendCol("price", typ))
 			}
+			if scenario == "swap_after_drop" {
+				require.NoError(t, previous.AppendCol("retired", typ))
+			}
 			require.NoError(t, previous.Finalize(false))
+			if scenario == "swap_after_drop" {
+				require.NoError(t, previous.ApplyAlterTable(api.NewRemoveColumnReq(0, 0, 2, 2)))
+				require.EqualValues(t, 3, previous.Extra.NextColSeqnum)
+			}
 			current := previous.Clone()
 			rename := func(old, new string, seq uint16) {
 				t.Helper()
 				require.NoError(t, current.ApplyAlterTable(api.NewRenameColumnReq(0, 0, old, new, uint32(seq))))
 			}
-			if scenario == "swap" {
+			if scenario == "swap" || scenario == "swap_after_drop" {
 				rename("id", "tmp", 0)
 				rename("price", "id", 1)
 				rename("tmp", "price", 0)
@@ -129,13 +136,23 @@ func TestRecoverCheckpointAppendNames(t *testing.T) {
 				delete(bat.Nameidx, "price")
 				original[1] = "id"
 			}
-			recoverCheckpointAppendNames(bat, current)
+			err := recoverCheckpointAppendNames(bat, current)
 			if scenario == "rename" || scenario == "rename_then_comment" || scenario == "swap" {
+				require.NoError(t, err)
 				require.Equal(t, current.AllNames(), bat.Attrs)
 				require.Equal(t, int64(1), bat.GetVectorByName(current.ColDefs[0].Name).Get(0))
 				require.Equal(t, int64(42), bat.GetVectorByName(current.ColDefs[1].Name).Get(0))
 			} else {
+				require.Error(t, err)
 				require.Equal(t, original, bat.Attrs)
+				if scenario == "swap_after_drop" {
+					// Both old names and types still look valid in the checkpoint.
+					// Their positions expose the ambiguity before any row is installed.
+					require.ElementsMatch(t, current.AllNames(), bat.Attrs)
+					require.False(t, walColumnsInSchemaOrder(bat.Attrs, current))
+					require.Equal(t, int64(1), bat.GetVectorByName("id").Get(0))
+					require.Equal(t, int64(42), bat.GetVectorByName("price").Get(0))
+				}
 			}
 		})
 	}

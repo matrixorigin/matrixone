@@ -256,7 +256,10 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, txn txnif.TxnReade
 		startTS := txn.GetStartTS()
 		if fromCheckpoint && !pkgcatalog.IsSystemTable(table.ID) && startTS.LT(&store.checkpointEnd) &&
 			!walColumnsInSchemaOrder(bat.Attrs, source) {
-			recoverCheckpointAppendNames(bat, source)
+			if err = recoverCheckpointAppendNames(bat, source); err != nil {
+				panic(moerr.NewInternalErrorNoCtxf("cannot resolve WAL append columns for table %d (checkpoint schema version %d): %v",
+					id.TableID, source.Version, err))
+			}
 		}
 		if err = blk.GetObjectData().OnReplayAppendPayload(bat, info.GetDestOff(), source); err != nil || sarg != "" {
 			logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
@@ -272,20 +275,21 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, txn txnif.TxnReade
 // sequence could have been retired or inserted since the writer's snapshot:
 // an ADD would change the width, and a DROP would leave a sequence gap or a
 // larger allocation watermark. Sparse and evolved layouts require the source
-// schema and remain subject to the normal name and sequence validation.
-func recoverCheckpointAppendNames(bat *containers.Batch, schema *catalog.Schema) {
+// schema. Reject an unproven mapping even if all names and types match,
+// because a rename can permute names without changing the physical layout.
+func recoverCheckpointAppendNames(bat *containers.Batch, schema *catalog.Schema) error {
 	n := len(schema.ColDefs)
 	if schema.Version == 0 || schema.ColumnReadSpec() != nil ||
 		schema.PhyAddrKey == nil || schema.PhyAddrKey.Idx != n-1 ||
 		int(schema.Extra.NextColSeqnum) != n-1 || len(bat.Attrs) != n || len(bat.Vecs) != n ||
 		len(bat.Nameidx) != n || bat.Attrs[n-1] != schema.PhyAddrKey.Name {
-		return
+		return moerr.NewInternalErrorNoCtx("cannot prove a complete dense WAL column layout")
 	}
 	for i, col := range schema.ColDefs {
 		pos, ok := bat.Nameidx[bat.Attrs[i]]
 		if !ok || pos != i || bat.Attrs[i] == "" || bat.Vecs[i] == nil ||
 			!col.Type.Eq(*bat.Vecs[i].GetType()) || (!col.PhyAddr && int(col.SeqNum) != i) {
-			return
+			return moerr.NewInternalErrorNoCtxf("invalid WAL column layout at position %d", i)
 		}
 	}
 	clear(bat.Nameidx)
@@ -293,6 +297,7 @@ func recoverCheckpointAppendNames(bat *containers.Batch, schema *catalog.Schema)
 		bat.Attrs[i] = col.Name
 		bat.Nameidx[col.Name] = i
 	}
+	return nil
 }
 
 func walColumnsInSchemaOrder(attrs []string, schema *catalog.Schema) bool {
