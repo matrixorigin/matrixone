@@ -297,8 +297,9 @@ three warmups and seven measurements per workload; choose sufficient samples
 to cover warm-engine behavior and prefer interleaved/ABBA process order. Include
 INSERT, conflict and no-op, narrow and 512-byte data, representative 8192-row
 batches and hot keys. Keep reset/setup/verification outside timed SQL execution.
-The common-correct gate includes all ten maintained cases in
-`BenchmarkOrderedODKU`; the generated-key case is reported separately.
+The common-correct gate includes the ten original multi-unique cases, the
+physical-PK-only insert and conflict cases, and the ordinary INSERT control
+in `BenchmarkOrderedODKU`. Report the generated-key case separately.
 
 Both target and candidate same-version process-median spread must be <=2.5%
 for singleton workloads and <=5% for batches. Point-median regression must be

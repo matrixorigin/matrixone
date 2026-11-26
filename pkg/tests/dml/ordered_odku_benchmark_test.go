@@ -99,6 +99,11 @@ func BenchmarkOrderedODKU(b *testing.B) {
 			{name: "varlen512_insert_8192", actions: 8192, outputRows: 8192, payloadBytes: 512},
 			{name: "varlen512_existing_8192", actions: 8192, seedRows: 8192, outputRows: 8192, payloadBytes: 512},
 			{name: "varlen512_hot_8192_100keys", actions: 8192, seedRows: 100, outputRows: 100, hotKeys: 100, payloadBytes: 512},
+			{name: "pk_single_insert", actions: 1, outputRows: 1, pkOnly: true},
+			{name: "pk_single_conflict", actions: 1, seedRows: 1, outputRows: 1, pkOnly: true},
+			{name: "pk_bulk_insert_8192", actions: 8192, outputRows: 8192, pkOnly: true},
+			{name: "pk_bulk_existing_8192", actions: 8192, seedRows: 8192, outputRows: 8192, pkOnly: true},
+			{name: "ordinary_bulk_insert_8192", actions: 8192, outputRows: 8192, plainInsert: true},
 			{name: "generated_unique_512", actions: 512, seedRows: 512, outputRows: 512, generated: true},
 		}
 		for index, tc := range cases {
@@ -113,10 +118,13 @@ func BenchmarkOrderedODKU(b *testing.B) {
 					generated = ",g bigint as (id*100000+v) stored,unique key uk_g(g)"
 					insertTarget += " (id,u1,u2,v,payload)"
 				}
+				unique := ",unique key uk_u1(u1),unique key uk_u2(u2)"
+				if tc.pkOnly {
+					unique = ""
+				}
 				orderedODKUBenchExec(b, ctx, conn, "create table `"+table+"` ("+
 					"id bigint primary key,u1 bigint not null,u2 bigint not null,"+
-					"v bigint not null,payload varchar(4096) not null,"+
-					"unique key uk_u1(u1),unique key uk_u2(u2)"+generated+")")
+					"v bigint not null,payload varchar(4096) not null"+unique+generated+")")
 				defer func() {
 					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cleanupCancel()
@@ -141,9 +149,16 @@ func BenchmarkOrderedODKU(b *testing.B) {
 				if tc.hotKeys != 0 {
 					key = fmt.Sprintf("(1+((result-1)%%%d))", tc.hotKeys)
 				}
-				statement := fmt.Sprintf("insert into %s select 1000000+result,(%s)*10,(%s)*100,1,'%s' from generate_series(1,%d) g order by result on duplicate key update v=values(v),payload=values(payload)", insertTarget, key, key, payload, tc.actions)
+				idOffset := 1000000
+				if tc.pkOnly && tc.seedRows != 0 {
+					idOffset = 0 // No secondary unique key can select a different owner.
+				}
+				statement := fmt.Sprintf("insert into %s select %d+result,(%s)*10,(%s)*100,1,'%s' from generate_series(1,%d) g order by result", insertTarget, idOffset, key, key, payload, tc.actions)
 				if tc.actions == 1 {
-					statement = fmt.Sprintf("insert into `%s` values (1000001,10,100,1,'%s') on duplicate key update v=values(v),payload=values(payload)", table, payload)
+					statement = fmt.Sprintf("insert into `%s` values (%d,10,100,1,'%s')", table, idOffset+1, payload)
+				}
+				if !tc.plainInsert {
+					statement += " on duplicate key update v=values(v),payload=values(payload)"
 				}
 				reset := func() {
 					orderedODKUBenchExec(b, ctx, conn, "truncate table `"+table+"`")
@@ -231,6 +246,8 @@ type orderedODKUBenchmarkCase struct {
 	payloadBytes int
 	noop         bool
 	generated    bool
+	pkOnly       bool
+	plainInsert  bool
 }
 
 func orderedODKUBenchExec(b *testing.B, ctx context.Context, conn *sql.Conn, statement string) {
