@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -1639,6 +1640,13 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 			estimatedTombstoneRows, err := rel.EstimateCommittedTombstoneCount(ctx)
 			if err != nil {
 				return err
+			}
+			// 仅在测试域中按表覆盖分支估计，实际封存块和删除仍由存储层读取。
+			if fault.StatusOfDomain(fault.DomainTest) {
+				name := "starcount_tombstone_estimate:" + s.DataSource.SchemaName + "." + s.DataSource.RelationName
+				if estimate, _, ok := fault.TriggerFaultInDomainWithContext(ctx, fault.DomainTest, name); ok {
+					estimatedTombstoneRows = int(estimate)
+				}
 			}
 			metricv2.StarcountEstimateTombstoneRowsHistogram.Observe(float64(estimatedTombstoneRows))
 
