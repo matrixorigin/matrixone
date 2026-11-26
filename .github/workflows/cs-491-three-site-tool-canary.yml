@@ -1,0 +1,68 @@
+name: CI 491 build tools smoke on MTY MNL2 RUH
+on:
+  push:
+    branches: [weilu-runner-test]
+    paths: ['.github/workflows/cs-491-three-site-tool-canary.yml']
+permissions:
+  contents: read
+jobs:
+  canary:
+    if: >-
+      github.repository == 'matrixorigin/matrixone' &&
+      github.actor == 'Ariznawlll' && github.run_attempt == 1 &&
+      github.event.before == '848e37199682123cf76a46eeaa1807e2b7cc59a0'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {site: mty, label: cs-mty-nc-n1-pr-v1}
+          - {site: mnl2, label: cs-mnl2-nc-n1-pr-v1}
+          - {site: ruh, label: cs-ruh-nc-n1-pr-v1}
+    name: ${{ matrix.site }} node1 / build tools and C/C++ smoke
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 15
+    steps:
+      - name: Verify assigned site and show initial tool inventory
+        env:
+          ASSIGNED_RUNNER: ${{ runner.name }}
+          SITE_LABEL: ${{ matrix.label }}
+        run: |
+          set -euo pipefail
+          [[ "$ASSIGNED_RUNNER" =~ ^"${SITE_LABEL}"-[a-z0-9]+-runner-[a-z0-9]+$ ]]
+          echo "Assigned runner: $ASSIGNED_RUNNER"
+          for tool in gcc g++ make pkg-config cmake python3 python; do
+            command -v "$tool" || printf 'Initially missing: %s\n' "$tool"
+          done
+      - name: Check out only the CI 491 installer at its reviewed SHA
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: matrixorigin/CI
+          ref: 746b0257a141f5ac935376bc947bf4cf73e49b74
+          path: candidate
+          sparse-checkout: scripts/coverage_cs_build_tools.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Install missing dependencies on this ephemeral runner
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = 746b0257a141f5ac935376bc947bf4cf73e49b74
+          bash candidate/scripts/coverage_cs_build_tools.sh
+      - name: Compile and execute C and C++ and verify Python alias
+        env:
+          SITE: ${{ matrix.site }}
+        run: |
+          set -euo pipefail
+          python -c 'import sys; assert sys.version_info.major == 3; print(sys.version)'
+          for tool in gcc g++ make pkg-config cmake; do "$tool" --version; done
+          smoke=$(mktemp -d "$RUNNER_TEMP/ci491-smoke.XXXXXXXX")
+          cd "$smoke"
+          printf '%s\n' '#include <stdio.h>' 'int main(void) { return puts("C:42") < 0; }' |
+            gcc -std=c11 -Wall -Werror -x c -o c-smoke -
+          c_result=$(./c-smoke)
+          test "$c_result" = 'C:42'
+          printf '%s\n' '#include <iostream>' 'int main() { std::cout << "C++:" << 6*7 << "\n"; }' |
+            g++ -std=c++17 -Wall -Werror -x c++ -o cxx-smoke -
+          cxx_result=$(./cxx-smoke)
+          test "$cxx_result" = 'C++:42'
+          printf 'site=%s compiled and ran: %s, %s\n' "$SITE" "$c_result" "$cxx_result" | tee -a "$GITHUB_STEP_SUMMARY"
