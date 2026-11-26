@@ -33,6 +33,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -40,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -871,12 +873,15 @@ func handleCloneDatabaseWithSource(
 	}
 
 	if bh == nil {
-		if bh, deferred, err = getBackExecutor(reqCtx, ses); err != nil {
+		if bh, deferred, err = getBackExecutor(reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true}); err != nil {
 			return
 		}
 
 		defer func() {
 			if deferred != nil {
+				if failure := recover(); failure != nil {
+					err = moerr.ConvertPanicError(reqCtx, failure)
+				}
 				err = deferred(err)
 			}
 		}()
@@ -961,7 +966,94 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
-	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
+	privateWorkspace := deferred != nil && !ses.proc.GetTxnOperator().TxnOptions().ByBegin
+	var indexBatch *compile.CloneIndexCatalogBatch
+	var catalogProc *process.Process
+	var independent []*tableInfo
+	if privateWorkspace {
+		back := bh.(*backExec).backSes
+		catalogProc = newCloneCatalogProcess(ctx1, back)
+		proc := catalogProc
+		defer proc.Free()
+		indexBatch = compile.NewCloneIndexCatalogBatch(ctx1, proc)
+		defer indexBatch.Close()
+		if source.snapshot == nil && source.opAccountId == source.toAccountId && proc.GetTxnOperator().Txn().IsPessimistic() {
+			names := make([]string, 0, len(source.srcTblInfos))
+			for _, info := range source.srcTblInfos {
+				_, dependent := source.fkTableMap[genKey(info.dbName, info.tblName)]
+				if info.parallelClone && !dependent {
+					independent = append(independent, info)
+					names = append(names, info.tblName)
+				}
+			}
+			if len(independent) > 1 {
+				sort.Strings(names)
+				if err = compile.LockCloneTargetNames(proc, source.toAccountId, stmt.DstDatabase.String(), names); err != nil {
+					return
+				}
+				if snapshotTS, err = tryToIncreaseTxnPhysicalTS(reqCtx, proc.GetTxnOperator()); err != nil {
+					return
+				}
+				bh.ClearExecResultSet()
+				if err = bh.Exec(ctx1, "select 1 from mo_catalog.mo_foreign_keys where refer_db_name="+quoteSQLStringLiteral(stmt.DstDatabase.String())+" limit 1"); err != nil {
+					return
+				}
+				references, readErr := getResultSet(ctx1, bh)
+				if readErr != nil {
+					err = readErr
+					return
+				}
+				for _, result := range references {
+					if result.GetRowCount() != 0 {
+						independent = nil
+						break
+					}
+				}
+				bh.ClearExecResultSet()
+			}
+		}
+		if snapshotTS != 0 && source.snapshot == nil && source.opAccountId == source.toAccountId {
+			if storage, ok := proc.GetSessionInfo().StorageEngine.(*disttae.Engine); ok {
+				names := make([]string, 0, len(source.srcTblInfos))
+				for _, info := range source.srcTblInfos {
+					if info.typ != view && info.relKind == catalog.SystemOrdinaryRel {
+						names = append(names, info.tblName)
+					}
+				}
+				if len(names) > 1 {
+					readCtx, cancel := context.WithCancel(defines.AttachAccountId(reqCtx, fromAccountID))
+					loaded := make(chan error, 1)
+					snapshot := proc.GetTxnOperator().CloneSnapshotOp(timestamp.Timestamp{PhysicalTime: snapshotTS})
+					go func() {
+						readErr, _ := ExecuteFuncWithRecover(func() error {
+							return storage.LoadDatabaseCloneSources(readCtx, snapshot, source.srcResolveDBName, names)
+						})
+						loaded <- readErr
+					}()
+					defer func() {
+						if err != nil {
+							cancel()
+						}
+						readErr := <-loaded
+						cancel()
+						if err == nil {
+							err = readErr
+						}
+					}()
+				}
+			}
+		}
+	}
+
+	var fixedTableSnapshot *plan2.Snapshot
+	if stmt.AtTsExpr == nil && snapshotTS != 0 {
+		fixedTableSnapshot, err = resolveSnapshot(ses, newMoTimestampHint(snapshotTS))
+		if err != nil {
+			return
+		}
+	}
+	cloneTable := func(cloneCtx context.Context, executor BackgroundExec, dstDb, dstTbl, srcDb, srcTbl string, borrowWorkspace bool) (cloneReceipt, error) {
+		bh := executor
 		srcTable := newQualifiedCloneTableName(srcDb, srcTbl, stmt.AtTsExpr)
 		if stmt.AtTsExpr == nil && snapshotTS != 0 {
 			srcTable.AtTsExpr = newMoTimestampHint(snapshotTS)
@@ -982,29 +1074,58 @@ func handleCloneDatabaseWithSource(
 			tempExecCtx = &ExecCtx{
 				// Database clone already holds every source-row lock in sorted
 				// order, so nested table clones must not acquire them again.
-				reqCtx: context.WithValue(reqCtx, dataBranchCloneLockCtxKey{}, false),
+				reqCtx: context.WithValue(cloneCtx, dataBranchCloneLockCtxKey{}, false),
 			}
 		)
-		tableSnapshot, resolveErr := resolveSnapshot(ses, cloneStmt.SrcTable.AtTsExpr)
-		if resolveErr != nil {
-			return resolveErr
+		tableSnapshot := fixedTableSnapshot
+		if tableSnapshot == nil {
+			var resolveErr error
+			tableSnapshot, resolveErr = resolveSnapshot(ses, cloneStmt.SrcTable.AtTsExpr)
+			if resolveErr != nil {
+				return receipt, resolveErr
+			}
 		}
 
-		if receipt, err = handleCloneTable(
+		if borrowWorkspace {
+			back := bh.(*backExec).backSes
+			previous := back.ReplaceDerivedStmt(true)
+			defer back.ReplaceDerivedStmt(previous)
+		}
+
+		var cloneErr error
+		if receipt, cloneErr = handleCloneTable(
 			tempExecCtx, ses, cloneStmt, bh, &cloneAccountResolution{
 				opAccountId: source.opAccountId,
 				toAccountId: source.toAccountId,
 				snapshot:    tableSnapshot,
 			},
-		); err != nil {
-			return err
+		); cloneErr != nil {
+			return receipt, cloneErr
 		}
 
-		receipts = append(receipts, receipt)
-		return nil
+		return receipt, nil
+	}
+
+	parallelDone := make(map[string]bool)
+	if len(independent) > 1 {
+		cloned, cloneErr := cloneIndependentDatabaseTables(reqCtx, bh.(*backExec), catalogProc, independent,
+			func(ctx context.Context, worker BackgroundExec, table *tableInfo) (cloneReceipt, error) {
+				return cloneTable(ctx, worker, stmt.DstDatabase.String(), table.tblName, stmt.SrcDatabase.String(), table.tblName, true)
+			})
+		if cloneErr != nil {
+			err = cloneErr
+			return
+		}
+		receipts = append(receipts, cloned...)
+		for _, table := range independent {
+			parallelDone[table.tblName] = true
+		}
 	}
 
 	for _, srcTbl := range source.srcTblInfos {
+		if parallelDone[srcTbl.tblName] {
+			continue
+		}
 
 		key := genKey(srcTbl.dbName, srcTbl.tblName)
 		if _, ok := source.fkTableMap[key]; ok {
@@ -1015,23 +1136,41 @@ func handleCloneDatabaseWithSource(
 			continue
 		}
 
-		if err = cloneTable(
-			stmt.DstDatabase.String(), srcTbl.tblName,
-			stmt.SrcDatabase.String(), srcTbl.tblName,
-		); err != nil {
+		cloneCtx := reqCtx
+		if indexBatch != nil && srcTbl.batchCloneIndexCatalog {
+			cloneCtx = indexBatch.TableContext(cloneCtx)
+		} else if err = indexBatch.Flush(); err != nil {
 			return
 		}
+		receipt, cloneErr := cloneTable(
+			cloneCtx, bh, stmt.DstDatabase.String(), srcTbl.tblName,
+			stmt.SrcDatabase.String(), srcTbl.tblName, privateWorkspace && srcTbl.batchCloneIndexCatalog,
+		)
+		if cloneErr != nil {
+			err = cloneErr
+			return
+		}
+		receipts = append(receipts, receipt)
+		if err = indexBatch.FinishTable(); err != nil {
+			return
+		}
+	}
+	if err = indexBatch.Flush(); err != nil {
+		return
 	}
 
 	// clone foreign key related table
 	for _, key := range source.sortedFkTbls {
 		if tblInfo := source.fkTableMap[key]; tblInfo != nil {
-			if err = cloneTable(
-				stmt.DstDatabase.String(), tblInfo.tblName,
-				stmt.SrcDatabase.String(), tblInfo.tblName,
-			); err != nil {
+			receipt, cloneErr := cloneTable(
+				reqCtx, bh, stmt.DstDatabase.String(), tblInfo.tblName,
+				stmt.SrcDatabase.String(), tblInfo.tblName, privateWorkspace && tblInfo.batchCloneIndexCatalog,
+			)
+			if cloneErr != nil {
+				err = cloneErr
 				return
 			}
+			receipts = append(receipts, receipt)
 		}
 	}
 

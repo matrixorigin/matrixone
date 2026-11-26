@@ -18,8 +18,10 @@ import (
 	"context"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -104,7 +106,10 @@ func (source *cloneDatabaseSource) collectTables(ctx context.Context, sid string
 	if err != nil {
 		return err
 	}
-	schemaFkDeps, err := getFkDepsFromTableInfos(ctx, srcTblInfos)
+	schemaFkDeps, err := readTableDefinitionFKDeps(ctx, srcTblInfos, func(info *tableInfo, create *tree.CreateTable) {
+		info.batchCloneIndexCatalog = info.relKind == catalog.SystemOrdinaryRel && compile.CloneIndexCatalogCanBatch(create)
+		info.parallelClone = info.batchCloneIndexCatalog && create.PartitionOption == nil
+	})
 	if err != nil {
 		return err
 	}

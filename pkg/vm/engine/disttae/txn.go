@@ -375,6 +375,27 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 
 	txn.Lock()
 	defer txn.Unlock()
+	return txn.appendBatchLocked(Entry{
+		typ:                typ,
+		accountId:          accountId,
+		bat:                bat,
+		tableId:            tableId,
+		databaseId:         databaseId,
+		tableName:          tableName,
+		databaseName:       databaseName,
+		tnStore:            tnStore,
+		autoIncrEpoch:      autoIncrEpoch,
+		autoIncrEpochKnown: autoIncrEpochKnown,
+		note:               note,
+		pkCheckPos:         pkCheckPos,
+		pkCheckReady:       pkCheckReady,
+	})
+}
+
+// appendBatchLocked is the common workspace publication boundary.
+func (txn *Transaction) appendBatchLocked(e Entry) (genRowidVec *vector.Vector, err error) {
+	typ, bat := e.typ, e.bat
+	databaseName, tableName, tableId := e.databaseName, e.tableName, e.tableId
 	// generate rowid for insert
 	// TODO(aptend): move this outside WriteBatch? Call twice for the same batch will generate different rowid
 	if typ == INSERT {
@@ -449,7 +470,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		}
 	}
 
-	if typ == DELETE && !catalog.IsSystemTable(tableId) &&
+	if typ == DELETE && !catalog.IsSystemTable(e.tableId) &&
 		bat != nil && bat.RowCount() > 1 {
 
 		// attr: row_id, pk
@@ -461,21 +482,6 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		bat.Vecs[1].SetSorted(true)
 	}
 
-	e := Entry{
-		typ:                typ,
-		accountId:          accountId,
-		bat:                bat,
-		tableId:            tableId,
-		databaseId:         databaseId,
-		tableName:          tableName,
-		databaseName:       databaseName,
-		tnStore:            tnStore,
-		autoIncrEpoch:      autoIncrEpoch,
-		autoIncrEpochKnown: autoIncrEpochKnown,
-		note:               note,
-		pkCheckPos:         pkCheckPos,
-		pkCheckReady:       pkCheckReady,
-	}
 	txn.appendWorkspaceEntryLocked(e)
 	txn.pkCount += bat.RowCount()
 
@@ -2492,7 +2498,7 @@ func (txn *Transaction) unprotectUnreferencedTxnLocalSharedFilesLocked(
 	statsList []objectio.ObjectStats,
 	ignoreEntry func(Entry) bool,
 ) {
-	if !txn.isCloneTxn ||
+	if !txn.isCloneTxn.Load() ||
 		txn.op == nil ||
 		txn.engine == nil ||
 		txn.engine.cloneTxnCache == nil {
@@ -2963,9 +2969,9 @@ func (txn *Transaction) delTransaction() {
 		return
 	}
 
-	if txn.isCloneTxn {
+	if txn.isCloneTxn.Load() {
 		txn.engine.cloneTxnCache.DeleteTxn(txn.op.Txn().ID)
-		txn.isCloneTxn = false
+		txn.isCloneTxn.Store(false)
 	}
 
 	for i := range txn.writes {

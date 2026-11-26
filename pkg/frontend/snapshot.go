@@ -195,12 +195,14 @@ type snapshotRecord struct {
 }
 
 type tableInfo struct {
-	dbName    string
-	tblName   string
-	typ       tableType
-	relKind   string
-	viewDef   string
-	createSql string
+	dbName                 string
+	tblName                string
+	typ                    tableType
+	relKind                string
+	viewDef                string
+	batchCloneIndexCatalog bool
+	parallelClone          bool
+	createSql              string
 }
 
 type accountRecord struct {
@@ -2598,6 +2600,10 @@ func getFkDepsFromTableInfos(
 	ctx context.Context,
 	tableInfos []*tableInfo,
 ) (map[string][]string, error) {
+	return readTableDefinitionFKDeps(ctx, tableInfos, nil)
+}
+
+func readTableDefinitionFKDeps(ctx context.Context, tableInfos []*tableInfo, inspect func(*tableInfo, *tree.CreateTable)) (map[string][]string, error) {
 	deps := make(map[string][]string)
 	for _, info := range tableInfos {
 		if info == nil || info.typ == view || info.createSql == "" {
@@ -2625,6 +2631,9 @@ func getFkDepsFromTableInfos(
 				info.tblName,
 			)
 		}
+		if inspect != nil {
+			inspect(info, createTable)
+		}
 		childKey := genKey(info.dbName, info.tblName)
 		for _, tableDef := range createTable.Defs {
 			foreignKey, ok := tableDef.(*tree.ForeignKey)
@@ -2638,6 +2647,7 @@ func getFkDepsFromTableInfos(
 			parentTable := string(foreignKey.Refer.TableName.ObjectName)
 			deps[childKey] = append(deps[childKey], genKey(parentDB, parentTable))
 		}
+		createTable.Free()
 	}
 	return deps, nil
 }

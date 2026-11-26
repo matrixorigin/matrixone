@@ -1936,18 +1936,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
-		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.proc.Ctx, c.proc, dbSource, newRelation)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.Error(err),
-			)
-			return err
+		staged, err := c.stageCloneIndexCatalogInsert(qry, dbSource, newRelation)
+		var insertSQL string
+		if err == nil && !staged {
+			insertSQL, err = makeInsertMultiIndexSQL(c.e, c.proc.Ctx, c.proc, dbSource, newRelation)
+			if err == nil {
+				err = c.runSqlWithOptions(insertSQL, executor.StatementOption{}.WithDisableLog())
+			}
 		}
-		err = c.runSqlWithOptions(
-			insertSQL, executor.StatementOption{}.WithDisableLog(),
-		)
 		if err != nil {
 			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("insertSQL", insertSQL),

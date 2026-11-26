@@ -230,7 +230,7 @@ func TestBuildInsertIndexMetaBatchUsesExistingMoIndexesLayout(t *testing.T) {
 		},
 	}
 
-	bat, err := buildInsertIndexMetaBatch(272464, 123456, ct, mockEngine, proc)
+	bat, err := BuildInsertIndexMetaBatch(272464, 123456, ct, nil, mockEngine, proc, nil)
 	require.NoError(t, err)
 	defer bat.Clean(proc.Mp())
 

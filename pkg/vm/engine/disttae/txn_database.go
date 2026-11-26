@@ -500,8 +500,14 @@ func (db *txnDatabase) createWithID(
 	var packer *types.Packer
 	put := db.getEng().packerPool.Get(&packer)
 	defer put.Put()
-	var compositePk []byte // Declared here to be accessible in both block 3 and block 5
-	{                      // 3. Write create table batch, update tbl.rowiod
+	var compositePk []byte
+	var tableBatch *batch.Batch
+	defer func() {
+		if tableBatch != nil {
+			tableBatch.Clean(m)
+		}
+	}()
+	{ // 3. Write create table batch, update tbl.rowiod
 
 		db := tbl.db
 		if features.IsPartition(tbl.extraInfo.FeatureFlag) {
@@ -533,16 +539,7 @@ func (db *txnDatabase) createWithID(
 
 		compositePk = bat.Vecs[catalog.MO_TABLES_CPKEY_IDX].GetBytesAt(0)
 
-		note := noteForCreate(tbl.tableId, tbl.tableName)
-		if useAlterNote {
-			note = noteForAlterIns(tbl.tableId, tbl.tableName)
-		}
-		_, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat, txn.tnStores[0])
-		if err != nil {
-			bat.Clean(m)
-			return err
-		}
+		tableBatch = bat
 	}
 
 	{ // 4. Write create column batch
@@ -556,11 +553,9 @@ func (db *txnDatabase) createWithID(
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
-		_, err = txn.WriteBatch(
-			INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, txn.tnStores[0])
-		if err != nil {
-			bat.Clean(m)
+		ownedTable := tableBatch
+		tableBatch = nil
+		if err = txn.adoptCatalogCreate(note, ownedTable, bat); err != nil {
 			return err
 		}
 	}
