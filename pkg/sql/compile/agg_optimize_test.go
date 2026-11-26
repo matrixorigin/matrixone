@@ -248,7 +248,7 @@ func TestScopeAggOptimizeWithSeparateAggregateKeepsInput(t *testing.T) {
 	data := readutil.NewBlockListRelationData(0)
 	data.AppendBlockInfo(&objectio.EmptyBlockInfo)
 	data.AppendBlockInfo(&objectio.BlockInfo{BlockID: types.Blockid{1}})
-	node := zmAggNode(nil, zmAggFuncExpr("starcount", zmAggConstExpr(), 0))
+	node := &plan.Node{AggList: []*plan.Expr{zmAggFuncExpr("starcount", zmAggConstExpr(), 0)}}
 	s := &Scope{
 		DataSource: &Source{node: node},
 		NodeInfo:   engine.Node{Mcpu: 1, Data: data},

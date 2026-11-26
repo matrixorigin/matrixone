@@ -107,7 +107,7 @@ func TestCountSealedBlocksMatchesOrdinaryBlockRead(t *testing.T) {
 	var dataReads int
 	injected := errors.New("tombstone read failed")
 	failTombstones := false
-	countFS := tombstoneReadFS{FileService: fs, read: func(ctx context.Context, vec *fileservice.IOVector) error {
+	countFS := countSealedReadFS{FileService: fs, read: func(ctx context.Context, vec *fileservice.IOVector) error {
 		if failTombstones && vec.FilePath == tomb.ObjectName().String() {
 			return injected
 		}
@@ -182,4 +182,13 @@ func TestCountSealedBlocksMatchesOrdinaryBlockRead(t *testing.T) {
 	_, remaining, err = CountSealedBlocks(ctx, tbl, ranges, 0, analyzer)
 	require.ErrorIs(t, err, injected)
 	require.Nil(t, remaining)
+}
+
+type countSealedReadFS struct {
+	fileservice.FileService
+	read func(context.Context, *fileservice.IOVector) error
+}
+
+func (fs countSealedReadFS) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	return fs.read(ctx, vector)
 }

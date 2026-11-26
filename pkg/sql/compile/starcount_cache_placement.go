@@ -27,8 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -43,12 +43,10 @@ func isCacheRoutableStarCount(q *plan.Query, scan *plan.Node) bool {
 		len(scan.OrderBy) != 0 || len(scan.RuntimeFilterProbeList) != 0 ||
 		len(scan.LockTargets) != 0 || scan.Stats.GetForceOneCN() ||
 		scan.TableDef.GetTableType() != catalog.SystemOrdinaryRel ||
-		scan.ObjRef == nil || scan.ObjRef.PubInfo != nil ||
-		scan.ValuesWarningRow() != 0 || starCountRequiresCoordinator(scan) {
+		scan.ObjRef == nil || scan.ObjRef.PubInfo != nil || starCountRequiresCoordinator(scan) {
 		return false
 	}
-	if q == nil || q.StmtType != plan.Query_SELECT || len(q.Steps) != 1 ||
-		len(q.SelectLockReferences) != 0 || q.Correlation != nil {
+	if q == nil || q.StmtType != plan.Query_SELECT || len(q.Steps) != 1 {
 		return false
 	}
 	for id := q.Steps[0]; id >= 0 && int(id) < len(q.Nodes); {
@@ -62,7 +60,7 @@ func isCacheRoutableStarCount(q *plan.Query, scan *plan.Node) bool {
 			id = child
 		case plan.Node_AGG:
 			return child >= 0 && int(child) < len(q.Nodes) && q.Nodes[child] == scan &&
-				len(node.GroupingFlag) == 0 && !plan2.IsSortRollupOption(node.ExtraOptions) &&
+				len(node.GroupingFlag) == 0 &&
 				isSingleStarCountNoFilterNoGroupBy(node)
 		default:
 			return false
@@ -72,7 +70,42 @@ func isCacheRoutableStarCount(q *plan.Query, scan *plan.Node) bool {
 }
 
 func starCountRequiresCoordinator(node *plan.Node) bool {
-	return nodeHasUserLevelLockFunction(node) || nodeHasCoordinatorSessionFunction(node)
+	if nodeHasUserLevelLockFunction(node) ||
+		starCountHasFoundRows(node.ProjectList) || starCountHasFoundRows(node.AggList) ||
+		starCountHasFoundRows(node.BlockFilterList) {
+		return true
+	}
+	for _, spec := range node.OrderBy {
+		if starCountExprHasFoundRows(spec.GetExpr()) {
+			return true
+		}
+	}
+	return starCountExprHasFoundRows(node.Limit) || starCountExprHasFoundRows(node.Offset)
+}
+
+func starCountHasFoundRows(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if starCountExprHasFoundRows(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func starCountExprHasFoundRows(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F != nil && e.F.Func != nil {
+			id, _ := function.DecodeOverloadID(e.F.Func.Obj)
+			return id == function.FOUND_ROWS || starCountHasFoundRows(e.F.Args)
+		}
+	case *plan.Expr_List:
+		return e.List != nil && starCountHasFoundRows(e.List.List)
+	}
+	return false
 }
 
 func (c *Compile) placeStarCountByCache(
@@ -84,7 +117,6 @@ func (c *Compile) placeStarCountByCache(
 ) (schedule.ScanDecision, error) {
 	if !isCacheRoutableStarCount(c.pn.GetQuery(), node) ||
 		c.isPrepare || c.isInternal || c.getHaveDDL() ||
-		executor.RequiresLocalExecution(ctx) || executor.RequiresLocalExecution(c.proc.Ctx) ||
 		c.queryPlacement.CurrentCNPolicy == schedule.CurrentCNRequired ||
 		len(fallback.Workers) != 1 || !c.canUseLocalExecutionRoute(fallback.Workers[0]) {
 		return fallback, nil

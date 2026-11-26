@@ -107,7 +107,7 @@ enum CmdMethod {
   IcebergCacheInvalidate = 38;
   // MongoDBClientRetire drains obsolete MongoDB driver clients after catalog DDL.
   MongoDBClientRetire = 39;
-  // Keep the command number aligned with main across mixed-version peers.
+  // Uses the wire number assigned on main.
   CountCachedObjectFiles = 47;
 }
 

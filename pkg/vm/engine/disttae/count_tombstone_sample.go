@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 func (tbl *txnTableDelegate) PrepareCountTombstoneSample(ctx context.Context) (func(context.Context, int) ([][]byte, error), error) {
@@ -45,18 +44,11 @@ func (tbl *txnTable) PrepareCountTombstoneSample(ctx context.Context) (func(cont
 		return nil, nil
 	}
 
-	// Reuse a ready partition on the hot path. On first access the scan
-	// requires ordinary snapshot admission even if every CN is cold.
+	// Use 4.2's ordinary admission, including its subscribed-state shortcut.
 	snapshot := tbl.db.op.SnapshotTS()
-	part, _, available := txn.engine.PushClient().planningInputSnapshot(
-		tbl.db.databaseId, tbl.tableId, client.CatalogReadStamp{Snapshot: snapshot},
-	)
-	if !available {
-		var err error
-		part, err = tbl.getPartitionState(ctx)
-		if err != nil {
-			return nil, err
-		}
+	part, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
 	}
 	if part.ApproxTombstoneObjectsNum() == 0 {
 		return nil, nil

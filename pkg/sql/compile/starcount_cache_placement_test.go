@@ -74,7 +74,7 @@ func TestIsCacheRoutableStarCount(t *testing.T) {
 		{name: "filtered", edit: func(_ *plan.Query, scan *plan.Node) { scan.FilterList = []*plan.Expr{{}} }},
 		{name: "writer", edit: func(query *plan.Query, _ *plan.Node) { query.StmtType = plan.Query_INSERT }},
 		{name: "join", edit: func(query *plan.Query, _ *plan.Node) { query.Nodes[1].NodeType = plan.Node_JOIN }},
-		{name: "locked", edit: func(query *plan.Query, _ *plan.Node) { query.SelectLockReferences = []*plan.SelectLockReference{{}} }},
+		{name: "locked", edit: func(query *plan.Query, _ *plan.Node) { query.Nodes[0].LockTargets = []*plan.LockTarget{{}} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			scan := &plan.Node{
@@ -190,7 +190,7 @@ func TestStarCountCachePlacementFallback(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, fallback, actual)
 
-	_, txn = newTestTxnClientAndOp(gomock.NewController(t), &readonlyWorkspaceForScheduling{Ws: &Ws{}})
+	_, txn = newTestTxnClientAndOp(gomock.NewController(t), &readonlyStarCountWorkspace{Ws: &Ws{}})
 	c.proc.Base.TxnOperator = txn
 	actual, err = c.placeStarCountByCache(ctx, scan, nil, req, fallback)
 	require.ErrorIs(t, err, context.Canceled)
@@ -250,7 +250,7 @@ func TestStarCountCacheDiscoversCandidatesOnlyForHeavyCounts(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(t.Context()) })
 	c.proc.Base.FileService = fs
-	_, txn := newTestTxnClientAndOp(gomock.NewController(t), &readonlyWorkspaceForScheduling{Ws: &Ws{}})
+	_, txn := newTestTxnClientAndOp(gomock.NewController(t), &readonlyStarCountWorkspace{Ws: &Ws{}})
 	c.proc.Base.TxnOperator = txn
 	discoverer := &schedulerProviderTestEngine{
 		schedulerTestEngine: &schedulerTestEngine{},
@@ -287,4 +287,24 @@ func TestStarCountCacheDiscoversCandidatesOnlyForHeavyCounts(t *testing.T) {
 			}
 		})
 	}
+}
+
+type readonlyStarCountWorkspace struct{ *Ws }
+
+func (*readonlyStarCountWorkspace) Readonly() bool { return true }
+
+func zmAggLitExpr(v int64) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: v}}}}
+}
+
+func zmAggConstExpr() *plan.Expr { return zmAggLitExpr(0) }
+
+func zmAggColExpr(pos int32) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+}
+
+func zmAggFuncExpr(name string, arg *plan.Expr, overload int64) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: name, Obj: overload}, Args: []*plan.Expr{arg},
+	}}}
 }

@@ -108,7 +108,7 @@ const (
 	CmdMethod_IcebergCacheInvalidate CmdMethod = 38
 	// MongoDBClientRetire drains obsolete MongoDB driver clients after catalog DDL.
 	CmdMethod_MongoDBClientRetire CmdMethod = 39
-	// Keep the command number aligned with main across mixed-version peers.
+	// Uses the wire number assigned on main.
 	CmdMethod_CountCachedObjectFiles CmdMethod = 47
 )
 

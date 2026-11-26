@@ -16,14 +16,12 @@ package disttae
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/require"
 )
@@ -43,13 +41,9 @@ func TestSampleCountTombstoneObjects(t *testing.T) {
 	op.EXPECT().GetWorkspace().Return(txn).AnyTimes()
 	snapshot := types.BuildTS(5, 0).ToTimestamp()
 	op.EXPECT().SnapshotTS().Return(snapshot).AnyTimes()
-	eng.pClient.eng = eng
-	eng.pClient.subscribed.m = map[uint64]*subEntry{tableID: {dbID: dbID, state: Subscribed}}
-	eng.pClient.receivedLogTailTime.ready.Store(true)
-	eng.pClient.receivedLogTailTime.tList = make([]atomic.Value, 1)
-	eng.pClient.receivedLogTailTime.tList[0].Store(snapshot.Prev())
 
 	tbl := &txnTable{
+		eng:     eng,
 		db:      &txnDatabase{databaseId: dbID, op: op},
 		tableId: tableID,
 		fake:    true,
@@ -111,12 +105,6 @@ func TestSampleCountTombstoneObjects(t *testing.T) {
 	cancel()
 	_, err = sampleCountTombstoneObjectsForTest(cancelled, tbl, 0)
 	require.ErrorIs(t, err, context.Canceled)
-
-	eng.pClient.receivedLogTailTime.tList[0].Store(timestamp.Timestamp{})
-	sample, err = sampleCountTombstoneObjectsForTest(ctx, rel, 5_000_000)
-	require.NoError(t, err)
-	require.Equal(t, again, sample, "a missing ready snapshot must use ordinary local admission")
-	eng.pClient.receivedLogTailTime.tList[0].Store(snapshot.Prev())
 
 	txn.readOnly.Store(false)
 	sample, err = sampleCountTombstoneObjectsForTest(ctx, tbl, 0)
