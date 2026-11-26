@@ -189,7 +189,10 @@ func TestBitmapConstructWindowFrames(t *testing.T) {
 				bat: input, ps: []int64{0, 5},
 				aggVecs: []colexec.ExprEvalVector{{Vec: input.Vecs}},
 			}
-			t.Cleanup(func() { ctr.freeFullPartitionResults(proc) })
+			t.Cleanup(func() {
+				ctr.freeFullPartitionResults(proc)
+				ctr.allocation.FreePool()
+			})
 			check := func(start, end int) {
 				t.Helper()
 				out, err := ctr.processAggregateFuncRange(0, arg, proc, start, end)
