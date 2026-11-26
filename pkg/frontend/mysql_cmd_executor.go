@@ -4552,9 +4552,9 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		}
 		for i := range p.Query.Nodes {
 			node := p.Query.Nodes[i]
-			// table_changes has a synthetic output schema. Its source is
-			// validated through CatalogDependencies below.
-			if def := node.TableDef; def != nil && !isTableChangesScan(node) {
+			// Source-resolving functions expose a synthetic output schema. Their
+			// source versions are validated through CatalogDependencies below.
+			if def := node.TableDef; def != nil && !plan2.IsSourceResolvingTableFunction(node) {
 				flag, err := checkFn(node.ObjRef, def, node.ScanSnapshot)
 				if err != nil || flag {
 					return true, err
