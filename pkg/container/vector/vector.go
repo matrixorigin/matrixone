@@ -2252,75 +2252,11 @@ func (v *Vector) ShrinkByRows(sels []int64, mp *mpool.MPool) error {
 	if err := v.checkMP(mp); err != nil {
 		return err
 	}
-	switch v.typ.Oid {
-	case types.T_bool:
-		shrinkFixed[bool](v, sels)
-	case types.T_bit:
-		shrinkFixed[uint64](v, sels)
-	case types.T_int8:
-		shrinkFixed[int8](v, sels)
-	case types.T_int16:
-		shrinkFixed[int16](v, sels)
-	case types.T_int32:
-		shrinkFixed[int32](v, sels)
-	case types.T_int64:
-		shrinkFixed[int64](v, sels)
-	case types.T_uint8:
-		shrinkFixed[uint8](v, sels)
-	case types.T_uint16:
-		shrinkFixed[uint16](v, sels)
-	case types.T_uint32:
-		shrinkFixed[uint32](v, sels)
-	case types.T_uint64:
-		shrinkFixed[uint64](v, sels)
-	case types.T_float32:
-		shrinkFixed[float32](v, sels)
-	case types.T_float64:
-		shrinkFixed[float64](v, sels)
-	case types.T_bf16:
-		shrinkFixed[types.BF16](v, sels)
-	case types.T_float16:
-		shrinkFixed[types.Float16](v, sels)
-	case types.T_float8:
-		shrinkFixed[types.Float8](v, sels)
-	case types.T_float4:
-		shrinkFixed[types.Float4](v, sels)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
-		// XXX shrink varlena, but did not shrink area.  For our vector, this
-		// may well be the right thing.  If want to shrink area as well, we
-		// have to copy each varlena value and swizzle pointer.
-		shrinkFixed[types.Varlena](v, sels)
-	case types.T_date:
-		shrinkFixed[types.Date](v, sels)
-	case types.T_datetime:
-		shrinkFixed[types.Datetime](v, sels)
-	case types.T_time:
-		shrinkFixed[types.Time](v, sels)
-	case types.T_timestamp:
-		shrinkFixed[types.Timestamp](v, sels)
-	case types.T_year:
-		shrinkFixed[types.MoYear](v, sels)
-	case types.T_enum:
-		shrinkFixed[types.Enum](v, sels)
-	case types.T_decimal64:
-		shrinkFixed[types.Decimal64](v, sels)
-	case types.T_decimal128:
-		shrinkFixed[types.Decimal128](v, sels)
-	case types.T_decimal256:
-		shrinkFixed[types.Decimal256](v, sels)
-	case types.T_uuid:
-		shrinkFixed[types.Uuid](v, sels)
-	case types.T_TS:
-		shrinkFixed[types.TS](v, sels)
-	case types.T_Rowid:
-		shrinkFixed[types.Rowid](v, sels)
-	case types.T_Blockid:
-		shrinkFixed[types.Blockid](v, sels)
-	default:
-		panic(fmt.Sprintf("unexpect type %s for function vector.ShrinkByRows", v.typ))
-	}
-
+	// The gather's value loop, in place. A varlena keeps its area: only the
+	// descriptors move.
+	gatherFixedValues(v, v, 0, sels)
+	nulls.FilterInPlaceOrdered(&v.nsp, sels)
+	v.length = len(sels)
 	return nil
 }
 
@@ -4129,200 +4065,16 @@ func (v *Vector) unionMultiFlat(w *Vector, sel int64, cnt int, mp *mpool.MPool) 
 	return nil
 }
 
+// Union appends rows of w to v: output row v.Length()+i is w row sels[i].
+// Rows may be in any order and may repeat; this is how a remaplist.List is
+// applied. NULLs move with their rows.
 func (v *Vector) Union(w *Vector, sels []int64, mp *mpool.MPool) error {
-	return unionT[int64](v, w, sels, mp)
+	return gatherRows[int64](v, w, sels, mp)
 }
+
+// UnionInt32 is Union for the callers whose row lists are still []int32.
 func (v *Vector) UnionInt32(w *Vector, sels []int32, mp *mpool.MPool) error {
-	return unionT[int32](v, w, sels, mp)
-}
-
-func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
-
-	if len(sels) == 0 {
-		return nil
-	}
-	if v.dataAliases(w) {
-		// Keep source row indices unchanged, including reordered selections.
-		return v.withClonedSource(w, 0, w.length, mp, func(source *Vector) error {
-			return unionT(v, source, sels, mp)
-		})
-	}
-	// Classify the source cheaply before considering a reused destination.
-	// Metadata-bearing, nullable and constant sources keep the ordinary path.
-	if cap(v.data) > 0 && w.class == FLAT && w.nsp.IsEmpty() {
-		width := v.typ.TypeSize()
-		if (width == 4 || width == 8) && v.class == FLAT && v.typ == w.typ &&
-			len(sels) <= cap(v.data)/width-v.length && v.nsp.IsEmpty() {
-			oldLen := v.length
-			v.data = v.data[:cap(v.data)]
-			if width == 8 {
-				unionFixedSelected[uint64](v.data[oldLen*8:(oldLen+len(sels))*8], w.data, sels)
-			} else {
-				unionFixedSelected[uint32](v.data[oldLen*4:(oldLen+len(sels))*4], w.data, sels)
-			}
-			v.length = oldLen + len(sels)
-			return nil
-		}
-	}
-	if err := v.checkMP(mp); err != nil {
-		return err
-	}
-
-	if err := extendWithBitmaps(
-		v,
-		len(sels),
-		mp,
-		w.IsConstNull() || !w.nsp.IsEmpty(),
-	); err != nil {
-		return err
-	}
-
-	oldLen := v.length
-	v.setLengthAfterExtend(v.length + len(sels))
-	if w.IsConst() {
-		if w.IsConstNull() {
-			v.nsp.AddRange(uint64(oldLen), uint64(oldLen+len(sels)))
-		} else if v.GetType().IsVarlen() {
-			var err error
-			var va types.Varlena
-			var ws []types.Varlena
-			ToSliceNoTypeCheck(w, &ws)
-			err = BuildVarlenaFromVarlena(v, &va, &ws[0], &w.area, mp)
-			if err != nil {
-				return err
-			}
-			var col []types.Varlena
-			ToSliceNoTypeCheck(v, &col)
-			fillSlice(col, oldLen, v.length, va)
-		} else {
-			tlen := v.GetType().TypeSize()
-			dst := v.data[oldLen*tlen : v.length*tlen]
-			copy(dst[:tlen], w.data[:tlen])
-			broadcastFixed(dst, tlen)
-		}
-
-		return nil
-	}
-
-	if v.GetType().IsVarlen() {
-		var err error
-		var vCol, wCol []types.Varlena
-		ToSliceNoTypeCheck(v, &vCol)
-		ToSliceNoTypeCheck(w, &wCol)
-		// pre-grow the area once for the selected non-inline, non-null rows so the
-		// per-row BuildVarlenaNoInline appends below never realloc. Null rows are NOT
-		// copied (the loop below skips them via w.nsp), and a reused vector can retain
-		// a stale non-inline header in a null slot — counting those would reserve area
-		// for dead payload (large needless mp.Grow / alloc failure), so exclude them.
-		total := 0
-		hasNull := !w.GetNulls().IsEmpty()
-		// With both areas empty, valid non-NULL descriptors are either inline
-		// or empty non-inline values at offset zero. Neither needs area growth
-		// or rebasing, so copy them directly without a separate sizing pass.
-		emptyAreas := !hasNull && len(w.area) == 0 && len(v.area) == 0
-		if !emptyAreas {
-			for _, sel := range sels {
-				if hasNull && w.nsp.Contains(uint64(sel)) {
-					continue
-				}
-				if !wCol[sel].IsSmall() {
-					_, l := wCol[sel].OffsetLen()
-					total += int(l)
-				}
-			}
-			if err = pregrowVarlenaArea(v, total, mp); err != nil {
-				return err
-			}
-		}
-		// Reuse the area sizing pass to select an inline-copy batch. The small
-		// check still handles non-inline zero-length descriptors correctly.
-		// Mixed/area payloads keep the original loops.
-		if emptyAreas {
-			target := vCol[oldLen : oldLen+len(sels)]
-			for i, sel := range sels {
-				target[i] = wCol[sel]
-			}
-		} else if total == 0 {
-			if hasNull {
-				for i, sel := range sels {
-					if w.nsp.Contains(uint64(sel)) {
-						v.nsp.Add(uint64(oldLen + i))
-						continue
-					}
-					if wCol[sel].IsSmall() {
-						vCol[oldLen+i] = wCol[sel]
-					} else if err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp); err != nil {
-						return err
-					}
-				}
-			} else {
-				for i, sel := range sels {
-					if wCol[sel].IsSmall() {
-						vCol[oldLen+i] = wCol[sel]
-					} else if err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp); err != nil {
-						return err
-					}
-				}
-			}
-		} else if hasNull {
-			for i, sel := range sels {
-				if w.nsp.Contains(uint64(sel)) {
-					v.nsp.Add(uint64(oldLen + i))
-					continue
-				}
-				err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
-				if err != nil {
-					return err
-				}
-			}
-		} else {
-			for i, sel := range sels {
-				err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
-				if err != nil {
-					return err
-				}
-			}
-		}
-		// Selection materialization copies every non-inline value into a fresh
-		// destination range. It cannot introduce aliases for a non-const source,
-		// even when source rows repeat or arrive out of order.
-	} else {
-		tlen := v.GetType().TypeSize()
-		if !w.nsp.IsEmpty() {
-			for i, sel := range sels {
-				if w.nsp.Contains(uint64(sel)) {
-					v.nsp.Add(uint64(oldLen + i))
-					continue
-				}
-				dstOffset, srcOffset := (oldLen+i)*tlen, int(sel)*tlen
-				copy(v.data[dstOffset:dstOffset+tlen], w.data[srcOffset:srcOffset+tlen])
-			}
-		} else {
-			// Cases are payload widths in bytes; len(sels) is the output row count.
-			// Typed carriers copy physical bits without per-row byte offsets.
-			// Logical type and metadata remain owned by this append path.
-			switch tlen {
-			case 8:
-				unionFixedSelected[uint64](v.data[oldLen*8:(oldLen+len(sels))*8], w.data, sels)
-			case 4:
-				unionFixedSelected[uint32](v.data[oldLen*4:(oldLen+len(sels))*4], w.data, sels)
-			case 2:
-				for i, sel := range sels {
-					p1 := unsafe.Pointer(&v.data[(oldLen+i)*2])
-					p2 := unsafe.Pointer(&w.data[int(sel)*2])
-					*(*int16)(p1) = *(*int16)(p2)
-				}
-			case 1:
-				for i, sel := range sels {
-					v.data[(oldLen + i)] = w.data[int(sel)]
-				}
-			default:
-				unionWideFixedSelected(v, w, oldLen, sels, tlen)
-			}
-		}
-	}
-
-	return nil
+	return gatherRows[int32](v, w, sels, mp)
 }
 
 // unionWideFixedSelected handles widths that otherwise require a dynamic copy
@@ -4350,7 +4102,7 @@ func unionWideFixedSelected[S int32 | int64](v, w *Vector, oldLen int, sels []S,
 	}
 }
 
-// unionFixedSelected copies physical values only. unionT owns capacity,
+// unionFixedSelected copies physical values only. gatherRows owns capacity,
 // logical length and metadata; the representative type has the selected width,
 // but need not be the vector's logical SQL type (e.g. UUID and Decimal128).
 func unionFixedSelected[T types.FixedSizeT, S int32 | int64](target, source []byte, sels []S) {
@@ -6177,15 +5929,6 @@ func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bo
 		}
 	}
 	return nil
-}
-
-func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64) {
-	vs := MustFixedColNoTypeCheck[T](v)
-	for i, sel := range sels {
-		vs[i] = vs[sel]
-	}
-	nulls.FilterInPlaceOrdered(&v.nsp, sels)
-	v.length = len(sels)
 }
 
 func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negate bool, offset uint64) {

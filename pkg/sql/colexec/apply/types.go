@@ -47,7 +47,7 @@ type container struct {
 	tfFinish            bool
 	tfNull              bool
 	preserveSourceBatch bool
-	sels                []int32
+	sels                []int64
 }
 
 type Apply struct {

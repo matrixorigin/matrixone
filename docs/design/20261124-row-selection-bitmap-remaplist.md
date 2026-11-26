@@ -157,8 +157,8 @@ Every list that reorders or repeats rows does one of five things, and the first 
 // Rows may be in any order and may repeat. Optional bucket offsets split it into
 // contiguous runs, one per bucket.
 type List struct {
-    rows []int32        // source row per output row; words from mp
-    offs []int32        // bucket boundaries; nil when there are no buckets
+    rows []int64        // source row per output row; words from mp
+    offs []int64        // bucket boundaries; nil when there are no buckets
     mp   *mpool.MPool   // owner's pool; allocated once, reused, freed once
 }
 
@@ -166,26 +166,43 @@ func (r *List) Init(mp *mpool.MPool, capacity int) error
 func (r *List) Free()
 func (r *List) Reset()                    // length 0, keep capacity
 func (r *List) Identity(n int) error      // 0..n-1, the starting point for a sort
-func (r *List) Append(row int32) error
-func (r *List) Repeat(row int32, n int) error
-func (r *List) Rows() []int32             // pkg/sort sorts this in place
+func (r *List) Append(row int64) error
+func (r *List) Repeat(row int64, n int) error
+func (r *List) Rows() []int64             // pkg/sort sorts this in place
 func (r *List) BuildBuckets(hashes []uint64, buckets int, shift uint64) error // the one counting sort
-func (r *List) Bucket(b int) []int32
+func (r *List) Bucket(b int) []int64
 func (r *List) InvertInto(srcRows int, dst *List) error // old→new with -1, for mergesort/transfer
 ```
 
 `InvertInto` writes into another list the caller owns, so the inverse map follows the same allocate-once rule instead of taking a heap slice.
 
-**Consumers.** One `Vector.Gather(src, rows []int32, mp)` per type, plus `Batch.Gather`, replaces `Union`, `UnionInt32` and the gather inside `Shuffle`, and remaps the null bitmap in the same pass so `nulls.Filter(sels)` disappears. An in-place permutation is a gather into scratch followed by a swap, which is what `Shuffle` does today. `BatchSet.Union`, the spill scatter and partition's materialization take `Bucket(b)`.
+**Consumers.** One gather, `Vector.Union(src, rows []int64, mp)` plus `Batch.Union`, replaces `UnionInt32` and the gather inside `Shuffle`, and remaps the null bitmap in the same pass so `nulls.Filter(sels)` disappears. An in-place permutation is a gather into scratch followed by a swap, which is what `Shuffle` does today. `BatchSet.Union`, the spill scatter and partition's materialization take `Bucket(b)`.
 
 **Choices.**
 
-- **Element type `int32`.** Per-batch lists are bounded at 8192 rows, and the hashmap and spill already use `int32`. Whole-input sorts (order, window, partition) use `int64` today; with `int32` they cap at 2^31 rows per sort, past the point where they must spill. `Append` and `Identity` return an overflow error instead of keeping two element types.
-- **`pkg/sort` sorts `[]int32`** (or becomes generic over `int32 | int64`). About 15 callers change mechanically.
+- **Element type `int64`.** The row index's width does not change speed, measured pinned to one core: gathering 8192 `int64` values in random order takes 7.5 µs with `int32` rows and 7.1 µs with `int64` rows (2.17 and 2.21 ms for 1M rows), and sorting a permutation of 8192 rows takes 456 and 457 µs (109 ms for 1M rows either way). The cost is in the data moved and compared, not in the index. `int64` has no 2^31-row cap on whole-input sorts (order, window, partition), and it is what most code already uses: `pkg/sort`, `Union`, every `Shuffle` caller, the top heaps. `int32` would save only memory, 32 KB per 8192-row list. The few `int32` lists (spill row ids, shuffle buckets, `UnionInt32`) move to `int64`.
+- **`pkg/sort` stays as it is**, sorting `[]int64`.
 - **Many-source gathers use global row ids** (`batch<<13 | row`, as `JoinBatches` decodes them) instead of `[]FixedSourceRow`.
 - **Inverse maps get only `InvertInto`.** They point the other way and are used only by TN merge and transfer, so their structure stays.
-- **Location: its own package, `pkg/common/remaplist`.** Putting it next to bitmap would share the pool-ownership helpers, but would mix "which rows survive" with "which rows go where". The few lines of pool handling (allocate `int32` words from `mp`, free them) are duplicated instead. The package stays outside the Gobra proof.
+- **Location: its own package, `pkg/common/remaplist`.** Putting it next to bitmap would share the pool-ownership helpers, but would mix "which rows survive" with "which rows go where". The few lines of pool handling (allocate `int64` words from `mp`, free them) are duplicated instead. The package stays outside the Gobra proof.
 - **Ownership** follows the bitmap rule: one owner allocates once per query, re-initializes per batch, frees in `Free`. Lists for whole-input sorts are sized once, when the input is complete.
+
+**The type and the gather (PR 7).** `pkg/common/remaplist` has `List` with `Init`, `Free`, `Reset`, `Identity`, `Append`, `Repeat`, `Len` and `Rows`. `BuildBuckets`/`Bucket` come with their first user in PR 8, and `InvertInto` in PR 11. `Vector.Union(src, rows []int64, mp)` and `Batch.Union` are the one gather kernel. `UnionInt32` is the same kernel for the `int32` lists until PR 8 moves them, and `ShrinkByRows` uses its value loop in place, which replaces ShrinkByRows' per-type switch.
+
+- **Values.** Fixed-width values are copied by one typed loop per payload width (1, 2, 4, 8 and the wide 12–32 byte types), NULL rows included. A NULL row's value is never read, so copying it keeps the loop branch-free.
+- **NULLs.** `gatherNulls` builds each output word of the NULL bitmap in a register, 64 output rows at a time, reading the source words directly. It publishes the word with the new Gobra-verified `Bitmap.OrWord`, instead of a `Contains` and an `Add` per row. The varlena loops read the destination's new NULL words inline to skip NULL rows. A read-only (view) source bitmap is read through `Word`.
+
+`BenchmarkUnionRows`: 8192 source rows, gathered into a reused destination, µs (PR 6b → PR 7), the minimum of five interleaved runs pinned to one core. The machine was shared with another load, so read the ratios rather than the times. One row in ten is NULL in the `-null` cases. `perm` is a random permutation; `half` keeps a random half in order.
+
+| column | perm | half |
+| --- | --- | --- |
+| int64, no NULLs | 5.92 → 6.01 | 2.61 → 2.61 |
+| int64 | 60.6 → 17.6 | 31.3 → 7.7 |
+| int32 | 59.8 → 16.2 | 31.0 → 8.0 |
+| decimal128 | 63.3 → 21.5 | 32.1 → 11.2 |
+| varchar (inline) | 93.1 → 48.0 | 45.8 → 22.3 |
+
+`BenchmarkPermute` puts the same 8192 rows in a random order in place, µs: `Shuffle` against a `Union` into a scratch vector and a swap. The gather is as fast as Shuffle or faster for every type except int32, where they are within noise: int64 8.7 → 5.7, int64 with NULLs 21.1 → 18.0, int32 15.6 → 16.6, decimal128 25.4 → 10.1, varchar 33.0 → 23.5. That is the case for PR 9 replacing `Shuffle` with the gather kernel.
 
 ## Implementation plan
 
@@ -200,9 +217,9 @@ Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a 
 | 5 | Bitmap | Remaining selections | DML operators, join finalize, set operators' `[]uint8` flags, frontend loops; contiguous ranges become window copies | per-operator benchmarks; BVT |
 | 6 | Bitmap | Remove list APIs | delete `Shrink([]int64)` and the negate form of `FilterInPlaceOrdered`; a keep-only `ShrinkByRows` stays for search and TopN lists | build and full test run |
 | 6b | Bitmap | Remove function select list | delete `FunctionSelectList`, the kernels' masking paths and the kernel parameter | build and full test run |
-| 7 | RemapList | Type and gather | new package `pkg/common/remaplist` with `remaplist.List`; generic `Vector.Gather` / `Batch.Gather` with the null remap in the same pass | gather microbenchmarks against `Union` and `Shuffle` |
-| 8 | RemapList | Buckets | shuffle, spill and partition use `BuildBuckets` | shuffle and spill benchmarks |
-| 9 | RemapList | Sorts | order, mergeorder, top, mergetop, window, mergesort and logtail sorts use `Identity` → sort → `Gather`; remove `Shuffle`, `ShuffleWithBuf`, `UnionInt32` | sort and top-k benchmarks |
+| 7 | RemapList | Type and gather | new package `pkg/common/remaplist` with `remaplist.List`; one gather kernel behind `Vector.Union` / `Batch.Union` with the null remap in the same pass | gather microbenchmarks against `Union` and `Shuffle` |
+| 8 | RemapList | Buckets | shuffle, spill and partition use `BuildBuckets`; their `int32` lists become `int64` and `UnionInt32` goes away | shuffle and spill benchmarks |
+| 9 | RemapList | Sorts | order, mergeorder, top, mergetop, window, mergesort and logtail sorts use `Identity` → sort → permute with the gather kernel; remove `Shuffle` and `ShuffleWithBuf` | sort and top-k benchmarks |
 | 10 | RemapList | Joins | probe and build gathers use RemapList with global row ids; `TryUnionFlatFixedRows` goes away | hash-join benchmarks; TPC-H join queries |
 | 11 | RemapList | Inverse maps | mergesort and transfer use `InvertInto` | merge benchmarks |
 
@@ -238,6 +255,5 @@ Decision 1 therefore does not cover storage search results for now: they are spa
 
 - **Silent wrong rows.** A selection that was not really ascending, now applied as a bitmap, keeps the wrong rows without an error. Mitigation: the race-build ascending assertion on every converted site, and the three known exceptions (join left rows, TopN with `dists`, `data_branch_hashdiff.go:573`) handled explicitly.
 - **Sparse selections.** A point lookup is 1 element as a list and 128 words as a bitmap. That is bounded, but hot loops must iterate words, not bits.
-- **The `int32` cap.** Whole-input sorts above 2^31 rows would now fail instead of running. Open question: is there any path that sorts that many rows in memory without spilling?
 - **Dependency on #33144.** The ownership rule assumes pool-owned bitmaps with an explicit `Free`. If #33144 changes, the allocation details here change with it.
 - **Join hot path.** PR 10 touches the most performance-sensitive code; it goes last and only with a benchmark showing no regression.

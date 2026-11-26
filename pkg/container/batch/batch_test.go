@@ -1967,3 +1967,34 @@ func shrinkRows(t testing.TB, bat *Batch, rows []int64, negate bool, mp *mpool.M
 	require.NoError(t, mask.InitWithRows(int64(bat.RowCount()), rows, mp))
 	return bat.ShrinkByMask(&mask, negate, 0, mp)
 }
+
+// Union applies one row list to every column; rows may repeat and come in
+// any order.
+func TestBatchUnionRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	src := New([]string{"a", "b"})
+	src.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	src.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	for i := 0; i < 100; i++ {
+		require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(i), i%10 == 0, mp))
+		require.NoError(t, vector.AppendBytes(src.Vecs[1], []byte(fmt.Sprintf("row-%03d-long-enough-to-spill", i)), false, mp))
+	}
+	src.SetRowCount(100)
+	rows := []int64{99, 0, 50, 50, 7, 10}
+
+	dst := New([]string{"a", "b"})
+	dst.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	dst.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	require.NoError(t, dst.Union(src, rows, mp))
+	require.Equal(t, len(rows), dst.RowCount())
+	for i, r := range rows {
+		require.Equal(t, r%10 == 0, dst.Vecs[0].IsNull(uint64(i)))
+		if r%10 != 0 {
+			require.Equal(t, r, vector.GetFixedAtNoTypeCheck[int64](dst.Vecs[0], i))
+		}
+		require.Equal(t, fmt.Sprintf("row-%03d-long-enough-to-spill", r), dst.Vecs[1].GetStringAt(i))
+	}
+	dst.Clean(mp)
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}

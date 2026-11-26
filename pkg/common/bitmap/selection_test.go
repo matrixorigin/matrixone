@@ -310,3 +310,32 @@ func TestOrShifted(t *testing.T) {
 	}
 	require.Zero(t, mp.CurrNB())
 }
+
+// OrWord sets a word's bits on top of the rows already set, and keeps the
+// set-row count.
+func TestOrWord(t *testing.T) {
+	mp := mpool.MustNewZero()
+	rng := rand.New(rand.NewSource(12))
+	for iter := 0; iter < 500; iter++ {
+		length := 1 + rng.Intn(300)
+		rows := randomBools(rng, length, rng.Float64()*0.3)
+		n := selOwnedFrom(t, rows, mp)
+		i := rng.Intn((length + 63) / 64)
+		mask := rng.Uint64()
+		if rem := length - 64*i; rem < 64 {
+			mask &= uint64(1)<<rem - 1
+		}
+		n.OrWord(i, mask)
+		want := 0
+		for r := 0; r < length; r++ {
+			set := rows[r] || (r/64 == i && mask>>(r%64)&1 != 0)
+			require.Equal(t, set, n.Contains(uint64(r)), "row %d", r)
+			if set {
+				want++
+			}
+		}
+		require.Equal(t, want, n.Count())
+		n.Free()
+	}
+	require.Zero(t, mp.CurrNB())
+}

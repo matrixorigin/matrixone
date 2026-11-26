@@ -1657,6 +1657,9 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	return bat.Clone(mp)
 }
 
+// Union appends rows of bat2 to every column of bat: output row
+// bat.RowCount()+i is bat2 row sels[i]. Rows may be in any order and may
+// repeat; this is how a remaplist.List is applied to a batch.
 func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
 	for i, vec := range bat.Vecs {
 		if err := vec.Union(bat2.Vecs[i], sels, m); err != nil {

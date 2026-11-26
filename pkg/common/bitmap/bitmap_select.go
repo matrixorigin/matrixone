@@ -51,6 +51,20 @@ func (n *Bitmap) NumWords() (res int) {
 	return int((n.Len() + 63) / 64)
 }
 
+// OrWord sets the bits of mask in word i (i < NumWords): bit b is row 64i+b. Every row it
+// sets must be below Len. A gather that builds 64 output rows at a time
+// publishes them with one call instead of one Add per row.
+// @ requires n.Inv() && 0 <= i && int64(64*i) < n.Len()
+// @ requires forall b int :: {bits.Bit(mask, b)} 0 <= b && b < 64 && int64(64*i+b) >= n.Len() ==> !bits.Bit(mask, b)
+// @ ensures n.Inv() && n.Len() == old(n.Len())
+// @ ensures forall r int :: {n.Has(r)} n.Has(r) == (old(n.Has(r)) ||
+// @ 	(0 <= r && r < int(n.Len()) && r/64 == i && bits.Bit(mask, r%64)))
+// @ decreases
+func (n *Bitmap) OrWord(i int, mask uint64) {
+	n.mustWrite()
+	n.orWord(uint64(i), mask)
+}
+
 // depositBits places the low bits of s, in order, at the set bits of w: the
 // set bit b of w is kept when bit PcUpTo(w, b) of s, its rank among w's set
 // bits, is set.
