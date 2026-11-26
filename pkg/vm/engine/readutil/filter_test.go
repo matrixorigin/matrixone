@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -308,6 +309,89 @@ func TestCompileTemporalFilterExprUsesSessionTimezone(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, selected)
 	})
+}
+
+func TestCompileTemporalFilterExprUsesCompositeClusterZoneMap(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	clusterKey := util.BuildCompositeClusterByColumnName([]string{"v", "suffix"})
+	column := MakeColExprForTest(0, types.T_datetime, "v")
+	column.Typ.Scale = 6
+	table := &plan.TableDef{
+		ClusterBy:     &plan.ClusterByDef{Name: clusterKey},
+		Name2ColIndex: map[string]int32{"v": 0},
+		Cols:          []*plan.ColDef{{Name: "v", Typ: column.Typ}},
+	}
+	compile := func(zone *time.Location, cutoff string) FastFilterOp {
+		t.Helper()
+		bound, err := types.ParseTimestamp(zone, cutoff, 0)
+		require.NoError(t, err)
+		cutoffExpr := plan2.MakePlan2TimestampConstExprWithType(int64(bound))
+		cutoffExpr.Typ.Scale = 0
+		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, ">=", []*plan.Expr{column, cutoffExpr})
+		require.NoError(t, err)
+		foldExpressionForTest(t, proc, expr)
+		fast, _, _, _, _, compiled, _ := compileFilterExpr(expr, table, nil, zone)
+		require.True(t, compiled)
+		return fast
+	}
+	makeStats := func(values ...string) *objectio.ObjectStats {
+		t.Helper()
+		zm := index.NewZM(types.T_varchar, 0)
+		packer := types.NewPacker()
+		defer packer.Close()
+		for _, value := range values {
+			dt, err := types.ParseDatetime(value, 6)
+			require.NoError(t, err)
+			packer.Reset()
+			packer.EncodeDatetime(dt)
+			packer.EncodeInt32(1)
+			index.UpdateZM(zm, packer.GetBuf())
+		}
+		stats := objectio.NewObjectStats()
+		require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
+		return stats
+	}
+
+	zone := time.FixedZone("UTC+08", 8*3600)
+	fast := compile(zone, "2026-08-10 12:00:01")
+	require.NotNil(t, fast)
+	for _, tc := range []struct {
+		name string
+		rows []string
+		keep bool
+	}{
+		{"below cutoff", []string{"2026-08-10 11:00:00", "2026-08-10 12:00:00.499999"}, false},
+		{"rounds to cutoff", []string{"2026-08-10 11:00:00", "2026-08-10 12:00:00.500000"}, true},
+		{"missing zone map", nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keep, err := fast(makeStats(tc.rows...))
+			require.NoError(t, err)
+			require.Equal(t, tc.keep, keep)
+		})
+	}
+
+	t.Run("partial datetime prefix", func(t *testing.T) {
+		stats := makeStats("2026-08-10 11:00:00")
+		zm := index.NewZM(types.T_varchar, 0)
+		index.UpdateZM(zm, stats.SortKeyZoneMap().GetMinBuf()[:2])
+		require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
+		keep, err := fast(stats)
+		require.NoError(t, err)
+		require.True(t, keep)
+	})
+
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	fast = compile(newYork, "2024-11-03 03:00:00")
+	require.NotNil(t, fast)
+	keep, err := fast(makeStats("2024-11-03 01:00:00", "2024-11-03 02:00:00"))
+	require.NoError(t, err)
+	require.True(t, keep, "a range crossing a DST fold cannot prove exclusion")
+
+	table.ClusterBy.Name = util.BuildCompositeClusterByColumnName([]string{"suffix", "v"})
+	require.Nil(t, compile(zone, "2026-08-10 12:00:01"), "the suffix cannot use the sort-key prefix")
 }
 
 func TestConstructBasePKFilterRejectsMixedTemporalEncoding(t *testing.T) {
