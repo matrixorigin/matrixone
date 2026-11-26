@@ -1587,9 +1587,8 @@ func reconcileDataBranchEndpointSchema(
 	return nil
 }
 
-// Record an in-place schema change as a same-table step after the logical
-// fork. The column identities at creation, not the child endpoint names,
-// map to the parent at the fork.
+// Insert the creation schema before later in-place changes. The logical
+// fork or COPY edge must be matched using the child's names on that edge.
 func pickForkSchemaPath(
 	ctx context.Context, ses *Session, bh BackgroundExec, defs []*plan.TableDef, edges []bool,
 	path []uint64, snapshots []types.TS, endpoint engine.Relation, endpointSP types.TS,
@@ -1599,7 +1598,7 @@ func pickForkSchemaPath(
 	outEdges := make([]bool, 0, len(defs))
 	for i, def := range defs {
 		sameGeneration := false
-		if i != 0 && !edges[i] && def.Version != 0 && defs[i-1] != def {
+		if i != 0 && def.Version != 0 && defs[i-1] != def {
 			rel, ident, at := endpoint, owners[0], endpointSP
 			if i+1 < len(defs) {
 				var err error
@@ -1613,7 +1612,11 @@ func pickForkSchemaPath(
 			if err != nil {
 				return nil, nil, err
 			}
-			out, outEdges = append(out, created), append(outEdges, false)
+			if created.Version != 0 {
+				return nil, nil, moerr.NewNotSupportedNoCtxf(
+					"DATA BRANCH PICK cannot establish the creation schema for table %d", path[i])
+			}
+			out, outEdges = append(out, created), append(outEdges, edges[i])
 			sameGeneration = true
 		}
 		out, outEdges = append(out, def), append(outEdges, sameGeneration || edges[i])
@@ -2826,6 +2829,31 @@ func dataBranchLineageEndpointColumns(
 	}
 	tarEndpoint := tarDefs[len(tarDefs)-1]
 	baseEndpoint := baseDefs[len(baseDefs)-1]
+	type ancestry struct {
+		column    *plan.ColDef
+		reaches   bool
+		redefined bool
+	}
+	baseAncestry := make(map[*plan.ColDef]ancestry, len(baseEndpoint.Cols))
+	baseByAncestor := make(map[*plan.ColDef]*plan.ColDef, len(baseEndpoint.Cols))
+	var ambiguousAncestors map[*plan.ColDef]bool
+	for _, col := range baseEndpoint.Cols {
+		if !isDataBranchUserVisibleColumn(col) {
+			continue
+		}
+		reaches, ancestor, redefined := dataBranchColumnReachesLCA(baseDefs, baseLineageOnly, col)
+		baseAncestry[col] = ancestry{column: ancestor, reaches: reaches, redefined: redefined}
+		if reaches && !redefined {
+			if _, exists := baseByAncestor[ancestor]; exists {
+				if ambiguousAncestors == nil {
+					ambiguousAncestors = make(map[*plan.ColDef]bool)
+				}
+				ambiguousAncestors[ancestor] = true
+			} else {
+				baseByAncestor[ancestor] = col
+			}
+		}
+	}
 	endpointColumns := make(map[string]*plan.ColDef, len(tarEndpoint.Cols))
 	seenTargetKeys := make(map[string]string, len(tarEndpoint.Cols))
 	for _, tarCol := range tarEndpoint.Cols {
@@ -2844,29 +2872,22 @@ func dataBranchLineageEndpointColumns(
 			tarDefs, tarLineageOnly, tarCol,
 		)
 		var baseCol *plan.ColDef
+		var baseAncestor *plan.ColDef
 		if tarReachesLCA && !tarRedefined {
-			// A rename without OriginName can only be proved by both endpoint
-			// columns reaching the same logical LCA column. Endpoint-local
-			// ColId/Seqnum values alone are insufficient because sibling ALTERs
-			// and hidden columns can independently reuse them.
-			for _, candidate := range baseEndpoint.Cols {
-				if !isDataBranchUserVisibleColumn(candidate) {
-					continue
-				}
-				candidateReachesLCA, candidateLCACol, candidateRedefined :=
-					dataBranchColumnReachesLCA(baseDefs, baseLineageOnly, candidate)
-				if candidateRedefined || !candidateReachesLCA ||
-					dataBranchEndpointColumnDef(baseDefs[0], tarLCACol) != candidateLCACol {
-					continue
-				}
-				if baseCol != nil {
-					return nil, moerr.NewInternalErrorNoCtxf(
-						"schema compatibility check: column '%s' has ambiguous lineage",
-						tarCol.Name,
-					)
-				}
-				baseCol = candidate
+			// The two fork snapshots can have different names for the
+			// same physical ancestor column.
+			if tarDefs[0] == baseDefs[0] {
+				baseAncestor = tarLCACol
+			} else if tarDefs[0].TblId != 0 && tarDefs[0].TblId == baseDefs[0].TblId {
+				baseAncestor = dataBranchColumnDefByIdentity(baseDefs[0], tarLCACol)
+			} else {
+				baseAncestor = dataBranchEndpointColumnDef(baseDefs[0], tarLCACol)
 			}
+			if ambiguousAncestors[baseAncestor] {
+				return nil, moerr.NewInternalErrorNoCtxf(
+					"schema compatibility check: column '%s' has ambiguous lineage", tarCol.Name)
+			}
+			baseCol = baseByAncestor[baseAncestor]
 		}
 		if baseCol == nil {
 			baseCol = dataBranchColumnDefByLogicalName(baseEndpoint, tarCol)
@@ -2874,14 +2895,12 @@ func dataBranchLineageEndpointColumns(
 		if baseCol == nil || !isDataBranchUserVisibleColumn(baseCol) {
 			continue
 		}
-		baseReachesLCA, baseLCACol, baseRedefined := dataBranchColumnReachesLCA(
-			baseDefs, baseLineageOnly, baseCol,
-		)
-		identityMismatch := tarRedefined || baseRedefined || tarReachesLCA != baseReachesLCA
-		if tarReachesLCA && baseReachesLCA {
-			identityMismatch = dataBranchEndpointColumnDef(baseDefs[0], tarLCACol) != baseLCACol
+		baseLineage := baseAncestry[baseCol]
+		identityMismatch := tarRedefined || baseLineage.redefined || tarReachesLCA != baseLineage.reaches
+		if tarReachesLCA && baseLineage.reaches {
+			identityMismatch = baseAncestor != baseLineage.column
 		}
-		if !tarReachesLCA && !baseReachesLCA {
+		if !tarReachesLCA && !baseLineage.reaches {
 			// Independently added same-name columns are compatible when the
 			// LCA did not contain that logical column. If it did, both sides
 			// dropped and recreated the name, so old values are not lineage-

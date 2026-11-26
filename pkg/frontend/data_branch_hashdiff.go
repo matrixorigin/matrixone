@@ -1112,13 +1112,11 @@ func hashDiff(
 	buildTargetCost = time.Since(buildTargetStart)
 
 	diffStart := time.Now()
-	// A direct child of a zero-history ancestor has a committed inherited
-	// image at its own creation. Use it for bounded PICK, not live-row-only
-	// reconciliation intended for independent tables.
-	useMaterializedFork := tblStuff.lcaHasZeroHistory && copt.preservePickConflicts &&
-		tblStuff.boundedPick && tblStuff.pickWindowStart != nil && tblStuff.def.pkKind != fakeKind &&
-		len(dagInfo.pathFromLCAToBase) == 2
-	if !dagInfo.hasLCA() || (tblStuff.lcaHasZeroHistory && !useMaterializedFork) {
+	// The source window has a committed before-image even when the common
+	// ancestor has none. It can classify deletes at any destination depth.
+	useWindowBefore := copt.preservePickConflicts && tblStuff.boundedPick &&
+		tblStuff.pickWindowStart != nil && tblStuff.def.pkKind != fakeKind
+	if !dagInfo.hasLCA() || (tblStuff.lcaHasZeroHistory && !useWindowBefore) {
 		if tblStuff.pickWindowStart != nil && tblStuff.def.pkKind != fakeKind &&
 			tarDataHashmap.ItemCount() > 0 && tarTombstoneHashmap.ItemCount() > 0 {
 			if err = pruneUnchangedPickRowsWithoutLCA(
@@ -1478,13 +1476,15 @@ func hashDiffIfHasLCA(
 	var inheritedAt types.TS
 	baseProbeStuff := sideTableStuffForLCAProbe(tblStuff, copt, dagInfo, tarSP, baseSP, true)
 	if tblStuff.lcaHasZeroHistory {
+		// The destination's first committed image can classify its later
+		// changes. It cannot establish which rows were inherited.
 		_, ident := tblStuff.endpointIdentities(ctx, ses)
 		cts, err := getTablesCreationCommitTS(ctx, ses, ident, tblStuff.baseRel, ident, tblStuff.baseRel,
 			[]types.TS{baseSP, baseSP})
 		if err != nil {
 			return err
 		}
-		baseLCAProbe, inheritedAt = cts[0], cts[0]
+		baseLCAProbe = cts[0]
 		baseProbeStuff = dataBranchHistoricalProbeStuff(ctx, tblStuff, tblStuff.baseRel)
 		baseProbeStuff.lcaIdent = &ident
 	} else if tblStuff.boundedPick && tarLCAProbe.LT(&baseLCAProbe) {
@@ -1499,7 +1499,8 @@ func hashDiffIfHasLCA(
 			((wrapped.kind == diffDelete && !wrapped.fromUpdate) ||
 				(wrapped.kind == diffInsert && wrapped.fromUpdate)) &&
 			wrapped.batch.RowCount() > 0 && baseDataHashmap.ItemCount() > 0 {
-			stop, err := reconcilePickWindowDestinationInsert(ctx, ses, bh, baseProbeStuff, copt, emit, wrapped, baseDataHashmap, inheritedAt)
+			stop, err := reconcilePickWindowDestinationInsert(ctx, ses, bh, baseProbeStuff, tarProbeStuff,
+				copt, emit, wrapped, baseDataHashmap, inheritedAt)
 			if stop || err != nil || wrapped.batch.RowCount() == 0 {
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return err
@@ -1979,7 +1980,7 @@ func hashDiffIfHasLCA(
 // outside the destination delete/update batches. Match it against both
 // deletes and window replacements before emitting their writes.
 func reconcilePickWindowDestinationInsert(
-	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff, copt compositeOption,
+	ctx context.Context, ses *Session, bh BackgroundExec, tables, sourceBefore tableStuff, copt compositeOption,
 	emit emitFunc, src batchWithKind, baseDataHashmap databranchutils.BranchHashmap, inheritedAt types.TS,
 ) (bool, error) {
 	var matches *batch.Batch
@@ -2008,7 +2009,45 @@ func reconcilePickWindowDestinationInsert(
 	}
 	matches.SetRowCount(len(srcRows))
 	conflicting := make([]int64, 0, len(srcRows))
-	if src.fromUpdate && !tables.lcaHasZeroHistory {
+	if tables.lcaHasZeroHistory {
+		// A destination row is safe to change when it equals the source
+		// before-image. An equal update result has already converged.
+		var beforeRows *batch.Batch
+		var missing []int64
+		if src.fromUpdate {
+			beforeRows, missing, err = probeDataBranchRows(ctx, ses, bh, matches.Vecs[pkIdx],
+				sourceBefore, sourceBefore.pickWindowStart.snapshot.ToTimestamp())
+			if err != nil {
+				return false, err
+			}
+			defer tables.retPool.releaseRetBatch(beforeRows, false)
+		}
+		beforeRow, miss := 0, 0
+		for i, srcRow := range srcRows {
+			cmp, err := compareRowInWrappedBatches(ctx, ses, tables, int(srcRow), i, true,
+				src, batchWithKind{batch: matches})
+			if err != nil {
+				return false, err
+			}
+			if src.fromUpdate {
+				if miss < len(missing) && missing[miss] == int64(i) {
+					miss++
+				} else {
+					if cmp != 0 {
+						cmp, err = compareRowInWrappedBatches(ctx, ses, sourceBefore, beforeRow, i, true,
+							batchWithKind{batch: beforeRows}, batchWithKind{batch: matches})
+						if err != nil {
+							return false, err
+						}
+					}
+					beforeRow++
+				}
+			}
+			if cmp != 0 {
+				conflicting = append(conflicting, int64(i))
+			}
+		}
+	} else if src.fromUpdate {
 		for i, srcRow := range srcRows {
 			cmp, err := compareRowInWrappedBatches(ctx, ses, tables, int(srcRow), i, true,
 				src, batchWithKind{batch: matches})
