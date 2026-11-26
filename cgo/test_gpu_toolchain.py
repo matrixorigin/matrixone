@@ -138,15 +138,16 @@ class GPUContractTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return result.stdout
 
-        source.write_text("initial")
+        # Use even-sized members so BSD ar and GNU ar return identical bytes.
+        source.write_bytes(b"initial\n")
         build()
         # Leave a definite timestamp gap even on a coarse-resolution filesystem.
         for product in (cuda / "cuda.o", cuvs / "helper.o", cuvs / "libmocuvs.so", root / "libmo.a"):
             os.utime(product, (1, 1))
-        source.write_text("updated")
+        source.write_bytes(b"updated\n")
         build()
         member = subprocess.check_output(["ar", "p", "libmo.a", "helper.o"], cwd=root)
-        self.assertEqual(member, b"updated")
+        self.assertEqual(member, b"updated\n")
         self.assertNotIn("ar -rcs libmo.a", build())
 
     def test_shell_consumer_uses_link_only_stubs(self):
