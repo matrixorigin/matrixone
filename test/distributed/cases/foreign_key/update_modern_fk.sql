@@ -121,6 +121,25 @@ update child_cascade set note = 'd' where id = 10;
 insert into child_cascade values (40, 11, 'a');
 select * from child_cascade order by id;
 
+-- An explicit utf8mb4_bin declaration shares the legacy text key representation.
+create table parent_text_cascade (
+    id varchar(10) character set utf8mb4 collate utf8mb4_bin primary key
+);
+create table child_text_cascade (
+    id int primary key,
+    parent_id varchar(10),
+    constraint fk_parent_text_cascade foreign key (parent_id)
+        references parent_text_cascade(id) on update cascade
+);
+insert into parent_text_cascade values ('old');
+insert into child_text_cascade values (1, 'old');
+begin;
+update parent_text_cascade set id = 'new' where id = 'old';
+commit;
+select p.id, c.parent_id from parent_text_cascade p cross join child_text_cascade c;
+drop table child_text_cascade;
+drop table parent_text_cascade;
+
 create table parent_set_null (
     id int primary key
 );

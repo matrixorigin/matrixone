@@ -499,6 +499,18 @@ func New(oid T, width, scale int32) Type {
 	return typ
 }
 
+// UTF8MB4BinColumnScale records an explicit utf8mb4_bin declaration.
+const UTF8MB4BinColumnScale = 1
+
+// TextStorageScale omits the charset selector when comparing text storage.
+// Explicit utf8mb4_bin and implicit UTF-8 text share the same representation.
+func TextStorageScale(oid T, scale int32) int32 {
+	if scale == UTF8MB4BinColumnScale && (oid == T_char || oid == T_varchar || oid == T_text) {
+		return 0
+	}
+	return scale
+}
+
 func CharsetType(oid T) uint8 {
 	switch oid {
 	case T_blob, T_varbinary, T_binary, T_geometry, T_geometry32:
