@@ -88,6 +88,7 @@ type collectRange struct {
 	startBoundaryRel  []engine.Relation
 	forkBefore        []*dataBranchPickWindowStart
 	zeroHistoryStarts []dataBranchPickWindowStart
+	firstCommitted    dataBranchPickWindowStart
 	// idents carries the physical identity each segment was opened under
 	// (design §6): the walking side's endpoint identity for the endpoint
 	// segment and the winning candidate identity for reopened lineage
@@ -286,6 +287,7 @@ type tableStuff struct {
 	lcaCTS                types.TS
 	lcaHasZeroHistory     bool
 	zeroHistoryBaseStarts []dataBranchPickWindowStart
+	pickOrigin            *dataBranchPickOrigin
 	// lcaIdent is the winning owner identity lcaRel was reopened under
 	// (design §6.4). Nil when the LCA is an endpoint of a legacy
 	// local-local diff; identity accessors fall back to the session.
@@ -363,6 +365,12 @@ func (t tableStuff) lcaFallbackRangeRel(snapshotTS types.TS) engine.Relation {
 		return t.lcaRel
 	}
 	return nil
+}
+
+// The first committed images can confirm common rows when both forks
+// preceded the retained ancestor's commit.
+type dataBranchPickOrigin struct {
+	source, destination dataBranchPickWindowStart
 }
 
 type dataBranchPickWindowStart struct {

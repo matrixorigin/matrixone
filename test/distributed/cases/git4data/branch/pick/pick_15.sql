@@ -1045,3 +1045,65 @@ select k,a,b from dst order by k;
 drop snapshot pick_window_hi;
 drop snapshot pick_window_lo;
 drop database pick_window;
+
+-- @testcase: A retained ancestor changed after both forks does not change the shared first image
+create database pick_window;
+use pick_window;
+begin;
+create table root(k int primary key,v int);
+insert into root values(1,10),(2,20);
+data branch create table dst from root;
+data branch create table src from root;
+update root set v=77 where k=2;
+commit;
+update src set v=51 where k=2;
+create snapshot pick_window_lo for account sys;
+delete from src where k=2;
+insert into src values(3,80);
+create snapshot pick_window_hi for account sys;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi keys(2,3) when conflict fail;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: A source-only update before the window leaves the destination inherited
+create database pick_window;
+use pick_window;
+begin;
+create table root(k int primary key,v int);
+insert into root values(1,10),(2,20);
+data branch create table dst from root;
+data branch create table src from root;
+commit;
+update src set v=51 where k=2;
+create snapshot pick_window_lo for account sys;
+update src set v=52 where k=2;
+insert into src values(3,80);
+create snapshot pick_window_hi for account sys;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi keys(2,3) when conflict fail;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: Different first committed values still protect the destination from a source delete
+create database pick_window;
+use pick_window;
+begin;
+create table root(k int primary key,v int);
+insert into root values(1,10),(2,20);
+data branch create table dst from root;
+data branch create table src from root;
+update dst set v=121 where k=2;
+commit;
+update src set v=51 where k=2;
+create snapshot pick_window_lo for account sys;
+delete from src where k=2;
+insert into src values(3,80);
+create snapshot pick_window_hi for account sys;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi keys(2,3) when conflict skip;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;

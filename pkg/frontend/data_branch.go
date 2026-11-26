@@ -2409,6 +2409,13 @@ func constructChangeHandle(
 		return
 	}
 	tables.zeroHistoryBaseStarts = baseRange.zeroHistoryStarts
+	if tables.lcaHasZeroHistory && tables.lcaRel != nil &&
+		tarRange.firstCommitted.tableID != 0 && baseRange.firstCommitted.tableID != 0 &&
+		tarRange.firstCommitted.snapshot.EQ(&tables.lcaCTS) && baseRange.firstCommitted.snapshot.EQ(&tables.lcaCTS) {
+		tables.pickOrigin = &dataBranchPickOrigin{
+			source: tarRange.firstCommitted, destination: baseRange.firstCommitted,
+		}
+	}
 	tarSnapshot, baseSnapshot := tables.resolvedSnapshots(ses)
 	tarRelSp, baseRelSp := tables.resolvedRelSnapshots(ses)
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
@@ -3475,6 +3482,7 @@ func decideCollectRange(
 				relSnapshot:       []types.TS{baseRelSp},
 				idents:            []branchIdentity{baseIdent},
 				zeroHistoryStarts: baseCollectRange.zeroHistoryStarts,
+				firstCommitted:    baseCollectRange.firstCommitted,
 			}
 		}
 		logutil.Info("DataBranch-CollectRange-Fallback-WholeHistory",
@@ -3683,11 +3691,14 @@ func buildSideCollectRange(
 		}
 
 		// Window lower bound.
-		if tables.boundedPick && tables.lcaHasZeroHistory && hasZeroHistory &&
-			nodeID != endpointID && nodeCTS.LE(&windowEnd) {
-			cr.zeroHistoryStarts = append(cr.zeroHistoryStarts, dataBranchPickWindowStart{
-				tableID: nodeID, snapshot: nodeCTS, identity: segIdent,
-			})
+		if tables.boundedPick && tables.lcaHasZeroHistory && hasZeroHistory && nodeCTS.LE(&windowEnd) {
+			image := dataBranchPickWindowStart{tableID: nodeID, snapshot: nodeCTS, identity: segIdent}
+			if cr.firstCommitted.tableID == 0 {
+				cr.firstCommitted = image
+			}
+			if nodeID != endpointID {
+				cr.zeroHistoryStarts = append(cr.zeroHistoryStarts, image)
+			}
 		}
 		if wholeHistory && i == 0 {
 			windowFrom = types.MinTs()

@@ -2090,6 +2090,12 @@ func reconcilePickWindowDestinationInsert(
 				conflicting = append(conflicting, int64(i))
 			}
 		}
+		if tables.pickOrigin != nil && len(conflicting) != 0 {
+			conflicting, err = excludeInheritedPickRows(ctx, ses, bh, tables, matches, conflicting)
+			if err != nil {
+				return false, err
+			}
+		}
 	} else if src.fromUpdate {
 		for i, srcRow := range srcRows {
 			cmp, err := compareRowInWrappedBatches(ctx, ses, tables, int(srcRow), i, true,
@@ -2177,6 +2183,103 @@ func reconcilePickWindowDestinationInsert(
 	}
 	matches = nil // emitBatch transfers or releases the batch.
 	return emitBatch(emit, wrapped, false, tables.retPool)
+}
+
+// Both branches committed with the retained ancestor. Their first committed
+// images establish the values they agreed on at that point, including when
+// the ancestor itself was changed after the forks.
+func excludeInheritedPickRows(
+	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
+	matches *batch.Batch, conflicts []int64,
+) ([]int64, error) {
+	origin := tables.pickOrigin
+	proof := newDataBranchRenameProof(tables.pickForkColumns)
+	keys := vector.NewVec(*matches.Vecs[tables.def.pkColIdx].GetType(), ses.proc.Mp())
+	defer keys.Free(ses.proc.Mp())
+	inherited := slices.Clone(conflicts)
+	sourceIdent, baseIdent := tables.endpointIdentities(ctx, ses)
+	sourceDef := tables.tarRel.GetTableDef(identityCtx(ctx, sourceIdent))
+	baseDef := tables.baseRel.GetTableDef(identityCtx(ctx, baseIdent))
+	for _, image := range []dataBranchPickWindowStart{origin.source, origin.destination} {
+		rel, ident, err := reopenDataBranchNodeByID(
+			ctx, ses, bh, []branchIdentity{image.identity}, image.tableID, image.snapshot,
+		)
+		if err != nil {
+			if isMissingDataBranchRelationByID(err) {
+				return conflicts, nil
+			}
+			return nil, err
+		}
+		def := rel.GetTableDef(identityCtx(ctx, ident))
+		endpoint := sourceDef
+		path, edges, names := tables.pickSourceDefs, tables.pickSourceEdges, tables.def.colNames
+		if image.tableID == origin.destination.tableID {
+			endpoint = baseDef
+			path, edges, names = tables.pickBaseDefs, tables.pickBaseEdges, tables.def.baseColNames
+		}
+		if len(historicalPickPrimaryKeyNames(def, path, edges, proof)) == 0 {
+			return conflicts, nil
+		}
+		columns, err := pickSegmentColumns(def, endpoint, path, edges, names, proof)
+		if err != nil {
+			return nil, err
+		}
+		probe := tables
+		probe.lcaRel, probe.lcaIdent, probe.lcaRelSnapshot = rel, &ident, image.snapshot
+		probe.lcaProbeTableId = 0
+		probe.def.lcaColNames = make([]string, len(columns))
+		probe.def.tarOnlyIdxes = nil
+		for i, col := range columns {
+			if !slices.Contains(tables.def.commonIdxes, i) &&
+				!slices.Contains(tables.def.pkColIdxes, i) && i != tables.def.pkColIdx {
+				probe.def.tarOnlyIdxes = append(probe.def.tarOnlyIdxes, i)
+				continue
+			}
+			targetCol := dataBranchColumnDefByName(sourceDef, tables.def.colNames[i])
+			if col == nil || targetCol == nil || !isDataBranchLogicalTypeEquivalent(col.Typ, targetCol.Typ) {
+				return conflicts, nil
+			}
+			probe.def.lcaColNames[i] = col.Name
+		}
+
+		keys.CleanOnlyData()
+		for _, row := range inherited {
+			if err := keys.UnionOne(matches.Vecs[tables.def.pkColIdx], row, ses.proc.Mp()); err != nil {
+				return nil, err
+			}
+		}
+		rows, missing, err := probeDataBranchRows(ctx, ses, bh, keys, probe, image.snapshot.ToTimestamp())
+		if err != nil {
+			return nil, err
+		}
+		kept := inherited[:0]
+		row, miss := 0, 0
+		for i, candidate := range inherited {
+			if miss < len(missing) && missing[miss] == int64(i) {
+				miss++
+				continue
+			}
+			cmp, err := compareRowInWrappedBatches(ctx, ses, tables, int(candidate), row, true,
+				batchWithKind{batch: matches}, batchWithKind{batch: rows})
+			if err != nil {
+				tables.retPool.releaseRetBatch(rows, false)
+				return nil, err
+			}
+			row++
+			if cmp == 0 {
+				kept = append(kept, candidate)
+			}
+		}
+		tables.retPool.releaseRetBatch(rows, false)
+		inherited = kept
+		if len(inherited) == 0 {
+			return conflicts, nil
+		}
+	}
+	return slices.DeleteFunc(conflicts, func(row int64) bool {
+		_, found := slices.BinarySearch(inherited, row)
+		return found
+	}), nil
 }
 
 // A currently absent key that existed in a committed destination generation
