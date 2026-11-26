@@ -123,10 +123,20 @@ func (b *ProjectionBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32,
 }
 
 func (b *ProjectionBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	role := b.ctx.repeatedUpdateRole
+	if role != nil {
+		b.ctx.repeatedUpdateRole = nil
+		defer func() { b.ctx.repeatedUpdateRole = role }()
+	}
 	return b.havingBinder.BindAggFunc(funcName, astExpr, depth, isRoot)
 }
 
 func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	role := b.ctx.repeatedUpdateRole
+	if role != nil {
+		b.ctx.repeatedUpdateRole = nil
+		defer func() { b.ctx.repeatedUpdateRole = role }()
+	}
 	return bindWindowFuncExpr(b, b.ctx, funcName, astExpr, depth, isRoot)
 }
 

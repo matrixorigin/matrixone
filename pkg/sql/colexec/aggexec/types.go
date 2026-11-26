@@ -235,6 +235,8 @@ func makeSpecialAggExec(
 		return makeStdDevSampleExec(mp, id, isDistinct, params[0]), true, nil
 	case AggIdOfAny:
 		return makeAnyValueExec(mp, id, params[0]), true, nil
+	case AggIdOfFirstRow:
+		return makeFirstRowExec(mp, id, params[0]), true, nil
 	case AggIdOfMin:
 		return makeMinMaxExec(mp, id, true, params[0]), true, nil
 	case AggIdOfMax:

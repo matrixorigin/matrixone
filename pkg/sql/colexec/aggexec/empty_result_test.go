@@ -29,7 +29,7 @@ func TestGetEmptyResultKind(t *testing.T) {
 		{
 			name: "null",
 			ids: []int64{
-				AggIdOfAny, AggIdOfAvg, AggIdOfGroupConcat, AggIdOfJsonArrayAgg,
+				AggIdOfAny, AggIdOfFirstRow, AggIdOfAvg, AggIdOfGroupConcat, AggIdOfJsonArrayAgg,
 				AggIdOfJsonObjectAgg, AggIdOfMax, AggIdOfMaxBy, AggIdOfMaxByNonNull,
 				AggIdOfMedian, AggIdOfMin, AggIdOfApproxPercentile, AggIdOfStdDevPop,
 				AggIdOfStdDevSample, AggIdOfSum, AggIdOfVarPop, AggIdOfVarSample,

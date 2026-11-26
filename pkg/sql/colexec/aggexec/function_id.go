@@ -58,4 +58,5 @@ const (
 	AggIdOfApproxPercentile    int64 = 557 << 32
 	AggIdOfMaxBy               int64 = 559 << 32
 	AggIdOfMaxByNonNull        int64 = 560 << 32
+	AggIdOfFirstRow            int64 = 637 << 32
 )

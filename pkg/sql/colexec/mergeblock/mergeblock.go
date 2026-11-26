@@ -17,6 +17,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -87,6 +88,13 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 			return mergeBlock.container.source.Write(newCtx, mergeBlock.container.mp[0])
 		}); err != nil {
 			return input, err
+		}
+		if owner := mergeBlock.LocalObjects; owner != nil {
+			stats := mergeBlock.container.mp[0].Vecs[1]
+			for i := 0; i < stats.Length(); i++ {
+				obj := objectio.ObjectStats(stats.GetBytesAt(i))
+				owner.Adopt(*obj.ObjectName().ObjectId())
+			}
 		}
 		analyzer.AddWrittenRows(int64(mergeBlock.container.mp[0].RowCount()))
 	}

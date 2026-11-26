@@ -203,7 +203,7 @@ delete from t1 where b = 2;
 
 
 ---delete or update rows on fk self table
-drop table if exists p1;
+drop table t1;
 create table t1(a int primary key,b int,constraint `c1` foreign key fk1(b) references t1(a));
 show tables;
 show create table t1;
@@ -218,19 +218,21 @@ delete A from t1 as A,  t1 as B where A.a = B.b;
 delete A,B from t1 as A,  t1 as B where A.a = B.b;
 
 --error
-update t1 as A,t1 as B set A.a = 4 where A.a = B.b;
+update t1 as A,t1 as B set A.a = 4 where A.a = B.b and A.a = 1 and B.a = 2;
 
---error
+-- Both aliases are writable and the statement changes a referenced key.
 update t1 as A,t1 as B set A.a = 4, B.b = 3 where A.a = B.b;
+select a,b from t1 order by a;
 
 --error
-update t1 as A,t1 as B set A.a = 4, A.b = 3 where A.a = B.b;
+update t1 as A,t1 as B set A.a = 4, A.b = 3 where A.a = B.b and A.a = 1 and B.a = 2;
 
 --error
-update t1 as A,t1 as B set B.a = 4 where A.a = B.b;
+update t1 as A,t1 as B set B.a = 4 where A.a = B.b and A.a = 1 and B.a = 2;
 
 --no error
 update t1 as A,t1 as B set A.a = 4 where A.a = 3;
+select a,b from t1 order by a;
 
 --error
 update t1 as A set A.a = 3, A.b = 3 where A.a = A.b;

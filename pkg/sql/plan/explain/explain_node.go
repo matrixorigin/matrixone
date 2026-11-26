@@ -139,6 +139,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreInsert"
 	case plan.Node_PRE_INSERT_UK:
 		pname = "PreInsert UniqueKey"
+	case plan.Node_UPDATE_UNIQUE:
+		pname = "Update Unique Admission"
 	case plan.Node_PRE_INSERT_SK:
 		pname = "PreInsert SecondaryKey"
 	case plan.Node_FUZZY_FILTER:
