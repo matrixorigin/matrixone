@@ -3265,6 +3265,25 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 	return fileservice.GetForETL(param.Ctx, fs, target)
 }
 
+// OwnsETLWithType reports whether GetForETLWithType creates a file service of its own for
+// prefix.
+func OwnsETLWithType(param *tree.ExternParam, prefix string) bool {
+	target, err := etlPathWithType(param, prefix)
+	if err != nil {
+		return false
+	}
+	parsed, err := fileservice.ParsePath(target)
+	return err == nil && fileservice.OwnsETLPath(parsed)
+}
+
+// CloseETLWithType closes fs if GetForETLWithType created it for prefix, and leaves a named
+// service open.
+func CloseETLWithType(param *tree.ExternParam, prefix string, fs fileservice.FileService) {
+	if fs != nil && OwnsETLWithType(param, prefix) {
+		fs.Close(context.Background())
+	}
+}
+
 func StatFile(param *tree.ExternParam) error {
 	filePath := strings.TrimSpace(param.Filepath)
 	if strings.HasPrefix(filePath, "etl:") {
@@ -3277,12 +3296,48 @@ func StatFile(param *tree.ExternParam) error {
 	if err != nil {
 		return err
 	}
+	defer CloseETLWithType(param, filePath, fs)
 	st, err := fs.StatFile(param.Ctx, readPath)
 	if err != nil {
 		return err
 	}
 	param.Ctx = nil
 	param.FileSize = st.Size
+	return nil
+}
+
+// readDirEntries pushes to l the paths of the entries of the directory prefix that match
+// pattern, files if last and directories otherwise, and to l2 the sizes of the files.
+func readDirEntries(param *tree.ExternParam, prefix, pattern string, last bool, l, l2 *list.List) error {
+	fs, readPath, err := GetForETLWithType(param, prefix)
+	if err != nil {
+		return err
+	}
+	defer CloseETLWithType(param, prefix, fs)
+	entries := fs.List(param.Ctx, readPath)
+	// Dot-prefixed components explicitly select hidden local entries.
+	// Keep ordinary glob discovery (and other List consumers) unchanged.
+	if local, ok := fs.(*fileservice.LocalETLFS); ok && strings.HasPrefix(pattern, ".") {
+		entries = local.ListWithHidden(param.Ctx, readPath)
+	}
+	for entry, err := range entries {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir != last {
+			matched, err := path.Match(pattern, entry.Name)
+			if err != nil {
+				return err
+			}
+			if !matched {
+				continue
+			}
+			l.PushBack(path.Join(prefix, entry.Name))
+			if !entry.IsDir {
+				l2.PushBack(entry.Size)
+			}
+		}
+	}
 	return nil
 }
 
@@ -3309,37 +3364,8 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 		length := l.Len()
 		for j := 0; j < length; j++ {
 			prefix := l.Front().Value.(string)
-			fs, readPath, err := GetForETLWithType(param, prefix)
-			if err != nil {
+			if err := readDirEntries(param, prefix, pathDir[i], i+1 == len(pathDir), l, l2); err != nil {
 				return nil, nil, err
-			}
-			entries := fs.List(param.Ctx, readPath)
-			// Dot-prefixed components explicitly select hidden local entries.
-			// Keep ordinary glob discovery (and other List consumers) unchanged.
-			if local, ok := fs.(*fileservice.LocalETLFS); ok && strings.HasPrefix(pathDir[i], ".") {
-				entries = local.ListWithHidden(param.Ctx, readPath)
-			}
-			for entry, err := range entries {
-				if err != nil {
-					return nil, nil, err
-				}
-				if !entry.IsDir && i+1 != len(pathDir) {
-					continue
-				}
-				if entry.IsDir && i+1 == len(pathDir) {
-					continue
-				}
-				matched, err := path.Match(pathDir[i], entry.Name)
-				if err != nil {
-					return nil, nil, err
-				}
-				if !matched {
-					continue
-				}
-				l.PushBack(path.Join(l.Front().Value.(string), entry.Name))
-				if !entry.IsDir {
-					l2.PushBack(entry.Size)
-				}
 			}
 			l.Remove(l.Front())
 		}

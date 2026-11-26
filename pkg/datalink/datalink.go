@@ -324,7 +324,7 @@ func (d Datalink) StatFile(proc *process.Process) (*fileservice.DirEntry, error)
 }
 
 func (d Datalink) ownsService(path fileservice.Path) bool {
-	return path.Service == "" || len(path.ServiceArguments) > 0
+	return fileservice.OwnsETLPath(path)
 }
 
 func (d Datalink) parsedPath() (fileservice.Path, error) {

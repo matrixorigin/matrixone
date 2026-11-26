@@ -592,6 +592,7 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 	if err != nil {
 		return nil, err
 	}
+	defer plan2.CloseETLWithType(param, param.Filepath, fs)
 	// A field token can hide a physical line terminator, including one
 	// completed by the following field. Keep such files in one range so
 	// the CSV tokenizer retains the context needed to consume that token.

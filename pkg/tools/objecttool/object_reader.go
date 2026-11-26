@@ -62,6 +62,8 @@ type ObjectReader struct {
 	info      *ObjectInfo
 	cols      []ColInfo
 	mp        *mpool.MPool
+	// ownsFS is set when Close closes fs.
+	ownsFS    bool
 	closeOnce sync.Once
 }
 
@@ -92,7 +94,13 @@ func OpenWithKind(ctx context.Context, path string, kind string) (*ObjectReader,
 		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
 	}
 
-	return OpenWithFS(ctx, fs, filename, path)
+	r, err := OpenWithFS(ctx, fs, filename, path)
+	if err != nil {
+		fs.Close(ctx)
+		return nil, err
+	}
+	r.ownsFS = true
+	return r, nil
 }
 
 // OpenWithFS opens an object file from an existing file service.
@@ -336,6 +344,9 @@ func (r *ObjectReader) BlockCount() uint32 {
 func (r *ObjectReader) Close() error {
 	r.closeOnce.Do(func() {
 		mpool.DeleteMPool(r.mp)
+		if r.ownsFS {
+			r.fs.Close(context.Background())
+		}
 	})
 	return nil
 }

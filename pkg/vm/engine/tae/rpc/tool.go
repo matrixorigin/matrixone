@@ -334,6 +334,13 @@ func (c *moObjStatArg) Run() (err error) {
 	if c.ctx != nil {
 		c.fs = c.ctx.db.Runtime.Fs
 	}
+	if c.fs == nil {
+		defer func() {
+			if c.fs != nil {
+				c.fs.Close(ctx)
+			}
+		}()
+	}
 
 	if err = c.InitReader(ctx, c.name); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader %v", err))
@@ -691,6 +698,13 @@ func (c *objGetArg) Run() (err error) {
 
 	if c.ctx != nil {
 		c.fs = c.ctx.db.Runtime.Fs
+	}
+	if c.fs == nil {
+		defer func() {
+			if c.fs != nil {
+				c.fs.Close(ctx)
+			}
+		}()
 	}
 
 	if err = c.InitReader(ctx, c.name); err != nil {
@@ -1274,6 +1288,7 @@ func (c *storageCkpStatArg) runOffline() (err error) {
 	if err = c.initOfflineFS(context.Background()); err != nil {
 		return
 	}
+	defer c.fs.Close(context.Background())
 	var entries []*checkpoint.CheckpointEntry
 	if ioutil.IsMetadataName(c.name) {
 		if entries, err = c.getEntriesFromMeta(context.Background()); err != nil {
@@ -1363,6 +1378,7 @@ func (c *storageCkpListArg) runOffline() (err error) {
 	if err = c.initOfflineFS(ctx); err != nil {
 		return
 	}
+	defer c.fs.Close(ctx)
 	var entries []*checkpoint.CheckpointEntry
 	if ioutil.IsMetadataName(c.name) {
 		if entries, err = c.getEntriesFromMeta(ctx); err != nil {

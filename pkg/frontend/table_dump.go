@@ -141,7 +141,7 @@ func openTableDumpFS(
 		if err != nil {
 			return nil, nil, err
 		}
-		return fileservice.SubPath(etlFS, root), func() { etlFS.Close(ctx) }, nil
+		return fileservice.SubPath(etlFS, root), func() { fileservice.CloseOwnedETL(ctx, decoded, etlFS) }, nil
 	}
 	// This branch always opens a local directory. Filename spelling must not
 	// reclassify its provider through the generic ETL service-path parser.

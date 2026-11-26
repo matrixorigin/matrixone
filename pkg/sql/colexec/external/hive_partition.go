@@ -247,29 +247,40 @@ type HivePartSegment struct {
 // ListDirFunc abstracts directory listing for testability and S3/local duality.
 type ListDirFunc func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error]
 
-// NewListDirFunc creates a ListDirFunc backed by GetForETLWithType.
-func NewListDirFunc(param *tree.ExternParam) ListDirFunc {
+// NewListDirFunc creates a ListDirFunc backed by GetForETLWithType, and the func that closes
+// the file service it holds.
+func NewListDirFunc(param *tree.ExternParam) (ListDirFunc, func()) {
 	if param.ScanType == tree.S3 {
 		basePath := normalizeExternalPath(param.Filepath)
 		fs, baseReadPath, initErr := plan2.GetForETLWithType(param, basePath)
 		return func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
-			if initErr != nil {
-				return func(yield func(*fileservice.DirEntry, error) bool) {
-					yield(nil, initErr)
+				if initErr != nil {
+					return func(yield func(*fileservice.DirEntry, error) bool) {
+						yield(nil, initErr)
+					}
+				}
+				return fs.List(ctx, deriveHiveListReadPath(basePath, baseReadPath, prefix))
+			}, func() {
+				if initErr == nil {
+					plan2.CloseETLWithType(param, basePath, fs)
 				}
 			}
-			return fs.List(ctx, deriveHiveListReadPath(basePath, baseReadPath, prefix))
-		}
 	}
 	return func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
-		fs, readPath, err := plan2.GetForETLWithType(param, prefix)
-		if err != nil {
-			return func(yield func(*fileservice.DirEntry, error) bool) {
+		return func(yield func(*fileservice.DirEntry, error) bool) {
+			fs, readPath, err := plan2.GetForETLWithType(param, prefix)
+			if err != nil {
 				yield(nil, err)
+				return
+			}
+			defer plan2.CloseETLWithType(param, prefix, fs)
+			for entry, err := range fs.List(ctx, readPath) {
+				if !yield(entry, err) {
+					return
+				}
 			}
 		}
-		return fs.List(ctx, readPath)
-	}
+	}, func() {}
 }
 
 func deriveHiveListReadPath(basePath, baseReadPath, prefix string) string {

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -527,6 +528,8 @@ func CSVConfigForLoad(extern *tree.ExternParam) *csvparser.CSVConfig {
 }
 
 type ParquetHandler struct {
+	// ownedFS is the file service openFile created for the file, closed by closeFS.
+	ownedFS fileservice.FileService
 	// LOAD owns a subsequent assignment projection; foreign reads retain their
 	// existing target-scale conversion policy.
 	timeAssignment bool

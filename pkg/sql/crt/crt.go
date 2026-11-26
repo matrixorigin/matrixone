@@ -74,6 +74,7 @@ func GetIOReadCloser(proc *process.Process, param *tree.ExternParam, data string
 	if err != nil {
 		return nil, err
 	}
+	owned := plan2.OwnsETLWithType(param, data)
 
 	var r io.ReadCloser
 	vec := fileservice.IOVector{
@@ -96,13 +97,21 @@ func GetIOReadCloser(proc *process.Process, param *tree.ExternParam, data string
 		vec.Entries[0].Size = fileOffsets[1] - fileOffsets[0]
 	}
 	if vec.Entries[0].Size == 0 || vec.Entries[0].Offset >= fileSizeMax {
+		if owned {
+			fs.Close(proc.Ctx)
+		}
 		return nil, nil
 	}
 
 	// XXX: read the file, old code uses param.Ctx, but WHY do we need a
 	// context in param?   Use proc.Ctx instead.
-	err = fs.Read(proc.Ctx, &vec)
-	return r, err
+	if err = fs.Read(proc.Ctx, &vec); err != nil || r == nil || !owned {
+		if owned {
+			fs.Close(proc.Ctx)
+		}
+		return r, err
+	}
+	return fileservice.NewReadCloserWithOwnedFileService(proc.Ctx, r, fs), nil
 }
 
 // GetCompressType reports how a load source is compressed; see

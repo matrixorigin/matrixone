@@ -2899,7 +2899,8 @@ func (c *Compile) getHivePartitionFileList(node *plan.Node, param *tree.ExternPa
 
 	pruneExpr := external.ExtractPartitionPruneExprFromExprs(node.TableDef, partFilters, partColSet)
 
-	listDir := external.NewListDirFunc(param)
+	listDir, closeListDir := external.NewListDirFunc(param)
+	defer closeListDir()
 	options, err := c.getHivePartitionDiscoverOptions(param)
 	if err != nil {
 		return nil, nil, err
@@ -3950,7 +3951,12 @@ func (c *Compile) planArrowCompileRuntime(
 	if err != nil {
 		return nil, err
 	}
+	var openFS fileservice.FileService
+	var openPath string
+	defer func() { plan2.CloseETLWithType(param, openPath, openFS) }()
 	for fileIndex, filePath := range fileList {
+		plan2.CloseETLWithType(param, openPath, openFS)
+		openFS = nil
 		if fileIndex >= len(fileSize) || fileSize[fileIndex] < 0 {
 			return nil, moerr.NewInvalidInputf(ctx, "Arrow file %d has no valid planned size", fileIndex)
 		}
@@ -3958,6 +3964,7 @@ func (c *Compile) planArrowCompileRuntime(
 		if err != nil {
 			return nil, err
 		}
+		openFS, openPath = fs, filePath
 		identityFS, ok := fs.(fileservice.ObjectIdentityFileService)
 		if !ok {
 			if param.ScanType == tree.S3 {
@@ -4491,7 +4498,12 @@ func (c *Compile) readLoadParquetRowGroupMetadata(
 	start := time.Now()
 	stats := parquetFooterStats{Files: len(fileList)}
 	metas := make([]parquetRowGroupMeta, 0)
+	var openFS fileservice.FileService
+	var openPath string
+	defer func() { plan2.CloseETLWithType(param, openPath, openFS) }()
 	for fileIdx, filePath := range fileList {
+		plan2.CloseETLWithType(param, openPath, openFS)
+		openFS = nil
 		size := hiveFileSizeAt(fileSize, fileIdx)
 		var reader io.ReaderAt
 		var footerReader *compileParquetFooterReaderAt
@@ -4503,6 +4515,7 @@ func (c *Compile) readLoadParquetRowGroupMetadata(
 			if err != nil {
 				return nil, stats, err
 			}
+			openFS, openPath = fs, filePath
 			if size <= 0 {
 				st, err := fs.StatFile(ctx, readPath)
 				if err != nil {

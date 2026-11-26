@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -474,4 +475,38 @@ func TestPathFormStageRoot(t *testing.T) {
 	result, err := UrlToStageDef("stage:///path", proc)
 	require.NoError(t, err)
 	require.Equal(t, "/tmp/root", result.Url.Path)
+}
+
+type closeCountingETLFS struct {
+	fileservice.ETLFileService
+	closed int
+}
+
+func (c *closeCountingETLFS) Close(context.Context) { c.closed++ }
+
+// Deleting, listing and stating a file of a named service leave that shared service open.
+func TestStageFilesOfNamedServiceLeaveItOpen(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
+	dir := t.TempDir()
+	local, err := fileservice.NewLocalETLFS("etl", dir)
+	require.NoError(t, err)
+	shared := &closeCountingETLFS{ETLFileService: local}
+	services, err := fileservice.NewFileServices("etl", shared)
+	require.NoError(t, err)
+	proc.Base.FileService = services
+	for _, name := range []string{"a.txt", "b.txt"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name), 0600))
+	}
+
+	ctx := process.SQLFileAccessContext(t.Context(), proc)
+	deleted, err := deleteStageFile(ctx, proc, "etl", "/a.txt", false)
+	require.NoError(t, err)
+	require.Equal(t, 1, deleted)
+	_, err = StageListWithPattern("etl", "/*.txt", proc)
+	require.NoError(t, err)
+	_, err = StageStatFile("etl", "/b.txt", proc)
+	require.NoError(t, err)
+	require.Zero(t, shared.closed)
 }

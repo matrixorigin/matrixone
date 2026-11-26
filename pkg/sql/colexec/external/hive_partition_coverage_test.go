@@ -40,7 +40,8 @@ import (
 func TestNewListDirFunc_InfileETL(t *testing.T) {
 	param := &tree.ExternParam{}
 	param.Filepath = "/nonexistent/hive/root"
-	fn := NewListDirFunc(param)
+	fn, closeFn := NewListDirFunc(param)
+	defer closeFn()
 	require.NotNil(t, fn)
 	// Iterating an ETL path that mo cannot resolve should surface an error
 	// (either from GetForETLWithType or from fs.List). Either way the

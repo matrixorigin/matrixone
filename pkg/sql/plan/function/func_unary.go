@@ -6053,7 +6053,7 @@ func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 }
 
 func readFromParsedPath(ctx context.Context, rawPath string, path fileservice.Path, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
-	ownsService := path.Service == "" || len(path.ServiceArguments) > 0
+	ownsService := fileservice.OwnsETLPath(path)
 	fs, readPath, err := fileservice.GetForETLWithParsedPath(ctx, fs, rawPath, path)
 	if fs == nil || err != nil {
 		if fs != nil && ownsService {

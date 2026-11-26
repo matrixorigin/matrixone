@@ -213,10 +213,11 @@ func icebergDeleteApplyStates(states map[string]*icebergdelete.ApplyState, dataF
 }
 
 func loadIcebergPositionDeleteFile(ctx context.Context, param *ExternalParam, state *icebergdelete.ApplyState, task *pipeline.IcebergDeleteFileTask) error {
-	file, err := openIcebergDeleteParquet(ctx, param, state, task.DeleteFilePath)
+	file, closeFS, err := openIcebergDeleteParquet(ctx, param, state, task.DeleteFilePath)
 	if err != nil {
 		return err
 	}
+	defer closeFS()
 	filePathCol, ok := icebergmetadata.ParquetColumnIndexByName(file, "file_path", "file")
 	if !ok {
 		return icebergapi.ToMOErr(ctx, icebergapi.NewError(icebergapi.ErrMetadataInvalid, "Iceberg position delete file is missing file_path column", map[string]string{
@@ -255,10 +256,11 @@ func loadIcebergEqualityDeleteFile(proc *process.Process, param *ExternalParam, 
 	if proc != nil && proc.Ctx != nil {
 		ctx = proc.Ctx
 	}
-	file, err := openIcebergDeleteParquet(ctx, param, state, task.DeleteFilePath)
+	file, closeFS, err := openIcebergDeleteParquet(ctx, param, state, task.DeleteFilePath)
 	if err != nil {
 		return err
 	}
+	defer closeFS()
 	columns, err := equalityDeleteColumns(ctx, file, task, param.IcebergColumns)
 	if err != nil {
 		return err
@@ -277,29 +279,40 @@ func loadIcebergEqualityDeleteFile(proc *process.Process, param *ExternalParam, 
 	})
 }
 
-func openIcebergDeleteParquet(ctx context.Context, param *ExternalParam, state *icebergdelete.ApplyState, location string) (*parquet.File, error) {
+// openIcebergDeleteParquet opens the delete file at location, and returns the func that
+// closes the file service it reads through.
+func openIcebergDeleteParquet(ctx context.Context, param *ExternalParam, state *icebergdelete.ApplyState, location string) (_ *parquet.File, _ func(), err error) {
 	fs, readPath, err := icebergFileServiceForLocation(ctx, param, location)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	closeFS := func() {}
+	if strings.TrimSpace(param.IcebergObjectIORef) == "" && plan2.OwnsETLWithType(param.Extern, location) {
+		closeFS = func() { fs.Close(context.Background()) }
+	}
+	defer func() {
+		if err != nil {
+			closeFS()
+		}
+	}()
 	stat, err := fs.StatFile(ctx, readPath)
 	if err != nil {
-		return nil, icebergapi.ToMOErr(ctx, icebergapi.WrapError(icebergapi.ErrObjectIO, "Iceberg delete file stat failed", map[string]string{
+		return nil, nil, icebergapi.ToMOErr(ctx, icebergapi.WrapError(icebergapi.ErrObjectIO, "Iceberg delete file stat failed", map[string]string{
 			"delete_file": icebergapi.RedactPath(location),
 		}, err))
 	}
 	reader := &fsReaderAt{fs: fs, readPath: readPath, ctx: ctx, param: param}
 	retainedMemory, memoryOpts := icebergDeleteFooterMemory(state, param)
 	if err := validateIcebergDeleteParquetFooter(ctx, reader, stat.Size, retainedMemory, memoryOpts, location); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	file, err := parquet.OpenFile(reader, stat.Size)
 	if err != nil {
-		return nil, icebergapi.ToMOErr(ctx, icebergapi.WrapError(icebergapi.ErrObjectIO, "Iceberg delete file open failed", map[string]string{
+		return nil, nil, icebergapi.ToMOErr(ctx, icebergapi.WrapError(icebergapi.ErrObjectIO, "Iceberg delete file open failed", map[string]string{
 			"delete_file": icebergapi.RedactPath(location),
 		}, err))
 	}
-	return file, nil
+	return file, closeFS, nil
 }
 
 func icebergDeleteFooterMemory(state *icebergdelete.ApplyState, param *ExternalParam) (retained int64, opts icebergdelete.Options) {

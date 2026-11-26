@@ -146,6 +146,7 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 	if err != nil {
 		return 0, err
 	}
+	defer CloseETLWithType(param, param.Filepath, fs)
 	var r io.ReadCloser
 	vec := fileservice.IOVector{
 		FilePath: readPath,
@@ -475,6 +476,7 @@ func readExternalFirstLineSize(param *tree.ExternParam, inputSize int64, offset 
 	if err != nil {
 		return 0
 	}
+	defer CloseETLWithType(param, param.Filepath, fs)
 	var r io.ReadCloser
 	vec := fileservice.IOVector{
 		FilePath: readPath,

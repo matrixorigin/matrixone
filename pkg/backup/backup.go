@@ -57,15 +57,18 @@ func Backup(
 		// restore reads it in the cluster's format. DISK-V2 cluster -> raw
 		// archive; legacy DISK cluster -> CRC archive.
 		backend := fileservice.LocalBackendOf(cfg.SharedFs)
-		cfg.GeneralDir, _, err = setupFilesystem(ctx, bs.Dir, true, backend)
+		var closeFS func()
+		cfg.GeneralDir, closeFS, err = setupFilesystem(ctx, bs.Dir, true, backend)
 		if err != nil {
 			return err
 		}
+		defer closeFS()
 		// for tae hakeeper
-		cfg.TaeDir, _, err = setupFilesystem(ctx, bs.Dir, false, backend)
+		cfg.TaeDir, closeFS, err = setupFilesystem(ctx, bs.Dir, false, backend)
 		if err != nil {
 			return err
 		}
+		defer closeFS()
 		// for parallel backup
 		parallel, err := strconv.ParseUint(bs.Parallelism, 10, 16)
 		if err != nil {
@@ -77,14 +80,17 @@ func Backup(
 		if err != nil {
 			return err
 		}
-		cfg.GeneralDir, _, err = setupS3(ctx, s3Conf, true)
+		var closeFS func()
+		cfg.GeneralDir, closeFS, err = setupS3(ctx, s3Conf, true)
 		if err != nil {
 			return err
 		}
-		cfg.TaeDir, _, err = setupS3(ctx, s3Conf, false)
+		defer closeFS()
+		cfg.TaeDir, closeFS, err = setupS3(ctx, s3Conf, false)
 		if err != nil {
 			return err
 		}
+		defer closeFS()
 		cfg.Parallelism = s3Conf.parallelism
 		cfg.copyFiles.statSource = s3Conf.isMinio
 	}

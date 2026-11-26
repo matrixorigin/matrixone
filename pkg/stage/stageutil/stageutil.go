@@ -310,14 +310,6 @@ func UrlToStageDefForExport(furl string, proc *process.Process) (s stage.StageDe
 	return s, nil
 }
 
-// closeOwnedETLFS closes the file service GetForETL built for p: one for a local path or a path
-// with service arguments, which no other caller shares.
-func closeOwnedETLFS(ctx context.Context, p string, etlfs fileservice.ETLFileService) {
-	if parsed, err := fileservice.ParsePath(p); err == nil && (parsed.Service == "" || len(parsed.ServiceArguments) > 0) {
-		etlfs.Close(ctx)
-	}
-}
-
 func stageListWithWildcard(service string, pattern string, proc *process.Process) (entries []fileservice.DirEntry, err error) {
 	const wildcards = "*?["
 	const sep = "/"
@@ -349,30 +341,8 @@ func stageListWithWildcard(service string, pattern string, proc *process.Process
 		length := l.Len()
 		for j := 0; j < length; j++ {
 			prefix := l.Front().Value.(fileservice.DirEntry).Name
-			p := fileservice.JoinPath(service, prefix)
-			etlfs, readpath, err := fileservice.GetForETL(process.SQLFileAccessContext(proc.Ctx, proc), fs, p)
-			if err != nil {
+			if err := stageListDir(proc, fs, service, prefix, pathDir[i], i+1 == len(pathDir), l); err != nil {
 				return nil, err
-			}
-			defer closeOwnedETLFS(proc.Ctx, p, etlfs)
-			for entry, err := range etlfs.List(proc.Ctx, readpath) {
-				if err != nil {
-					return nil, err
-				}
-				if !entry.IsDir && i+1 != len(pathDir) {
-					continue
-				}
-				if entry.IsDir && i+1 == len(pathDir) {
-					continue
-				}
-				matched, err := path.Match(pathDir[i], entry.Name)
-				if err != nil {
-					return nil, err
-				}
-				if !matched {
-					continue
-				}
-				l.PushBack(fileservice.DirEntry{Name: path.Join(prefix, entry.Name), IsDir: entry.IsDir, Size: entry.Size})
 			}
 			l.Remove(l.Front())
 		}
@@ -383,6 +353,33 @@ func stageListWithWildcard(service string, pattern string, proc *process.Process
 	return entries, nil
 }
 
+// stageListDir pushes to l the entries of the directory prefix that match pattern: files if
+// last, directories otherwise.
+func stageListDir(proc *process.Process, fs fileservice.FileService, service, prefix, pattern string, last bool, l *list.List) error {
+	p := fileservice.JoinPath(service, prefix)
+	etlfs, readpath, err := fileservice.GetForETL(process.SQLFileAccessContext(proc.Ctx, proc), fs, p)
+	if err != nil {
+		return err
+	}
+	defer fileservice.CloseOwnedETL(proc.Ctx, p, etlfs)
+	for entry, err := range etlfs.List(proc.Ctx, readpath) {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir == last {
+			continue
+		}
+		matched, err := path.Match(pattern, entry.Name)
+		if err != nil {
+			return err
+		}
+		if matched {
+			l.PushBack(fileservice.DirEntry{Name: path.Join(prefix, entry.Name), IsDir: entry.IsDir, Size: entry.Size})
+		}
+	}
+	return nil
+}
+
 func stageListWithoutWildcard(service string, pattern string, proc *process.Process) (entries []fileservice.DirEntry, err error) {
 
 	fs := proc.GetFileService()
@@ -391,7 +388,7 @@ func stageListWithoutWildcard(service string, pattern string, proc *process.Proc
 	if err != nil {
 		return nil, err
 	}
-	defer closeOwnedETLFS(proc.Ctx, p, etlfs)
+	defer fileservice.CloseOwnedETL(proc.Ctx, p, etlfs)
 	for entry, err := range etlfs.List(proc.Ctx, readpath) {
 		if err != nil {
 			return nil, err
@@ -435,7 +432,7 @@ func StageStatFile(service string, pattern string, proc *process.Process) (*file
 	if err != nil {
 		return nil, err
 	}
-	defer closeOwnedETLFS(proc.Ctx, p, etlfs)
+	defer fileservice.CloseOwnedETL(proc.Ctx, p, etlfs)
 	entry, err := etlfs.StatFile(proc.Ctx, readpath)
 	if err != nil {
 		return nil, err
@@ -530,7 +527,7 @@ func deleteStageFile(ctx context.Context, proc *process.Process, service string,
 	if err != nil {
 		return 0, err
 	}
-	defer etlFS.Close(ctx)
+	defer fileservice.CloseOwnedETL(ctx, fullPath, etlFS)
 
 	_, err = etlFS.StatFile(ctx, targetPath)
 	if err != nil {

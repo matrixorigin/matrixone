@@ -70,6 +70,12 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 		icebergDMLDataFilePathColIndex: -1,
 		icebergDMLRowOrdinalColIndex:   -1,
 	}
+	opened := false
+	defer func() {
+		if !opened {
+			h.closeFS()
+		}
+	}()
 	err := h.openFile(param, hasPhysicalParquetAttrs(param))
 	if err != nil {
 		return nil, err
@@ -107,7 +113,16 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 		return nil, err
 	}
 
+	opened = true
 	return &h, nil
+}
+
+// closeFS closes the file service openFile created, if any.
+func (h *ParquetHandler) closeFS() {
+	if h.ownedFS != nil {
+		h.ownedFS.Close(context.Background())
+		h.ownedFS = nil
+	}
 }
 
 func (h *ParquetHandler) initRowGroupSelection(param *ExternalParam) error {
@@ -207,6 +222,9 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 		if err != nil {
 			return err
 		}
+		if parquetOwnsFileService(param) {
+			h.ownedFS = fs
+		}
 		// Validate FileIndex to avoid out-of-bounds access
 		if param.Fileparam.FileIndex <= 0 || param.Fileparam.FileIndex > len(param.FileSize) {
 			return moerr.NewInternalErrorf(param.Ctx, "invalid FileIndex %d for FileSize length %d",
@@ -273,6 +291,12 @@ func parquetFileServiceForCurrentFile(param *ExternalParam) (fileservice.ETLFile
 		return icebergio.ResolveObjectIORef(param.Ctx, param.IcebergObjectIORef, param.Fileparam.Filepath)
 	}
 	return plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
+}
+
+// parquetOwnsFileService reports whether parquetFileServiceForCurrentFile creates the file
+// service of the current file.
+func parquetOwnsFileService(param *ExternalParam) bool {
+	return strings.TrimSpace(param.IcebergObjectIORef) == "" && plan2.OwnsETLWithType(param.Extern, param.Fileparam.Filepath)
 }
 
 func shouldPrefetchS3Parquet(scanType int, prefetchS3 bool, fileSize int64, hasRowGroupShards, parallelLoadFileFanout bool) bool {
