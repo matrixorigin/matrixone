@@ -599,8 +599,11 @@ func (fs starCountBlockedMetadataFS) Read(ctx context.Context, _ *fileservice.IO
 		counter.FileService.S3.Get.Add(1)
 		counter.FileService.S3ReadSize.Add(64)
 	})
+	wait := fileservice.ReadWaitTrackerFromContext(ctx)
+	start := wait.Start()
 	fs.entered <- ctx
 	<-ctx.Done()
+	wait.Stop(start)
 	return ctx.Err()
 }
 
@@ -630,9 +633,9 @@ func TestScopeSealedCountIOUsesScannerCancellationAndAccounting(t *testing.T) {
 	go func() {
 		defer close(done)
 		result <- scan.MeasureReaderStartup(s.countSealedBlocksContext(c, topCtx), func(ctx context.Context, analyzer process.Analyzer) error {
-			_, err := process.MeasureFilesystemWait(analyzer, func() (objectio.ObjectMeta, error) {
-				return objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
-			})
+			ctx, finish := process.WithFilesystemReadWait(ctx, analyzer)
+			defer finish()
+			_, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
 			return err
 		})
 	}()

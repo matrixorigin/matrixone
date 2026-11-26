@@ -50,18 +50,19 @@ func CountSealedBlocks(
 	if tbl.db.op.IsSnapOp() || data.DataCnt() == 0 {
 		return 0, nil, nil
 	}
+	ctx, finish := process.WithFilesystemReadWait(ctx, analyzer)
+	defer finish()
 	source, err := tbl.buildLocalDataSource(ctx, txnOffset, data, engine.Policy_CheckAll, engine.GeneralLocalDataSource)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer source.Close()
 
-	return countSealedBlocks(ctx, data, source, tbl.getTxn().engine.fs, analyzer)
+	return countSealedBlocks(ctx, data, source, tbl.getTxn().engine.fs)
 }
 
 func countSealedBlocks(
 	ctx context.Context, data engine.RelData, source engine.DataSource, fs fileservice.FileService,
-	analyzer process.Analyzer,
 ) (int64, engine.RelData, error) {
 	remaining := data.BuildEmptyRelData(1)
 	if err := remaining.AttachTombstones(data.GetTombstones()); err != nil {
@@ -85,9 +86,7 @@ func countSealedBlocks(
 		// Range expansion can estimate block sizes from object stats. Read the
 		// block header for the exact count, without prefetching ordinary columns.
 		if object := loc.ObjectId(); !haveMeta || object != lastObject {
-			loaded, err := process.MeasureFilesystemWait(analyzer, func() (objectio.ObjectMeta, error) {
-				return objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
-			})
+			loaded, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
 			if err != nil {
 				return false, err
 			}
@@ -101,9 +100,7 @@ func countSealedBlocks(
 			return true, nil
 		}
 		rows := meta.GetBlockMeta(id).GetRows()
-		deleted, err := process.MeasureFilesystemWait(analyzer, func() (objectio.Bitmap, error) {
-			return source.GetTombstones(ctx, &blk.BlockID)
-		})
+		deleted, err := source.GetTombstones(ctx, &blk.BlockID)
 		if err != nil {
 			return false, err
 		}

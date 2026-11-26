@@ -15,6 +15,7 @@
 package process
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
@@ -140,6 +142,20 @@ func stopAnalyzerWaitDuration(analyzer Analyzer, duration time.Duration, kind re
 		return
 	}
 	stopAnalyzerWait(analyzer, time.Now().Add(-duration), kind)
+}
+
+// WithFilesystemReadWait attributes blocking storage reads under ctx to the
+// analyzer. Call finish when the synchronous read path exits.
+func WithFilesystemReadWait(ctx context.Context, analyzer Analyzer) (context.Context, func()) {
+	if analyzer == nil {
+		return ctx, func() {}
+	}
+	ctx, tracker := fileservice.WithReadWaitTracking(ctx)
+	return ctx, func() {
+		if duration := tracker.Elapsed(); duration > 0 {
+			stopAnalyzerWaitDuration(analyzer, duration, resource.WaitFilesystem)
+		}
+	}
 }
 
 // MeasureFilesystemWait records the complete duration of a storage boundary,

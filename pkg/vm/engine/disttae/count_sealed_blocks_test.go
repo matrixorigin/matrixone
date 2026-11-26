@@ -27,7 +27,9 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -42,7 +44,7 @@ func TestCountSealedBlocksMatchesOrdinaryBlockRead(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()
 	t.Cleanup(proc.Free)
-	fs, err := fileservice.NewMemoryFS("count-sealed-blocks", fileservice.DisabledCacheConfig, nil)
+	fs, err := fileservice.NewLocalFS(ctx, "count-sealed-blocks", t.TempDir(), fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(ctx) })
 
@@ -139,8 +141,16 @@ func TestCountSealedBlocksMatchesOrdinaryBlockRead(t *testing.T) {
 	ranges.AppendBlockInfo(&appendable)
 
 	analyzer := process.NewAnalyzer(0, true, false, "test_scan")
-	count, remaining, err := CountSealedBlocks(ctx, &txnTableDelegate{origin: tbl}, ranges, 0, analyzer)
+	analyzer.Start()
+	countCtx := perfcounter.WithCounterSet(ctx, analyzer.GetOpCounterSet())
+	count, remaining, err := CountSealedBlocks(countCtx, &txnTableDelegate{origin: tbl}, ranges, 0, analyzer)
+	analyzer.Stop()
 	require.NoError(t, err)
+	cold := analyzer.GetOpStats().ResourceDelta()
+	require.Positive(t, cold.Usage.WaitNS[resource.WaitFilesystem])
+	require.Positive(t, analyzer.GetOpStats().DiskReadSize)
+	require.Positive(t, cold.Usage.ExclusiveActiveNS)
+	require.Zero(t, cold.Quality&resource.QualityInvariantFailure)
 	require.Equal(t, int64(2), count)
 	require.Zero(t, dataReads, "COUNT must not load ordinary columns")
 	require.Equal(t, 2, remaining.DataCnt())
@@ -164,6 +174,25 @@ func TestCountSealedBlocksMatchesOrdinaryBlockRead(t *testing.T) {
 	// A local workspace delete is visible. An offset past the end of the
 	// block must not contribute to its cardinality.
 	txn.deletedBlocks.addDeletedBlocks(tbl.tableId, &second.BlockID, []int64{1, 9})
+	t.Run("cached metadata and workspace deletes are active", func(t *testing.T) {
+		state := logtailreplay.NewPartitionState("", true, 0, false)
+		ranges := readutil.NewBlockListRelationData(0, readutil.WithPartitionState(state))
+		ranges.AppendBlockInfo(&first)
+		ranges.AppendBlockInfo(&second)
+		analyzer := process.NewTempAnalyzer()
+		analyzer.Start()
+		ctx := perfcounter.WithCounterSet(ctx, analyzer.GetOpCounterSet())
+		count, remaining, err := CountSealedBlocks(ctx, tbl, ranges, 0, analyzer)
+		analyzer.Stop()
+
+		require.NoError(t, err)
+		require.Equal(t, int64(2), count)
+		require.Zero(t, remaining.DataCnt())
+		usage := analyzer.GetOpStats().ResourceDelta().Usage
+		require.Positive(t, usage.ExclusiveActiveNS)
+		require.Zero(t, usage.WaitNS[resource.WaitFilesystem])
+		require.Zero(t, analyzer.GetOpStats().DiskReadSize)
+	})
 	count, _, err = CountSealedBlocks(ctx, tbl, ranges, 0, analyzer)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), count)
@@ -182,4 +211,15 @@ func TestCountSealedBlocksMatchesOrdinaryBlockRead(t *testing.T) {
 	_, remaining, err = CountSealedBlocks(ctx, tbl, ranges, 0, analyzer)
 	require.ErrorIs(t, err, injected)
 	require.Nil(t, remaining)
+
+	// A genuine failed disk access still contributes a filesystem interval.
+	failTombstones = false
+	require.NoError(t, fs.Delete(ctx, tomb.ObjectName().String()))
+	analyzer = process.NewTempAnalyzer()
+	analyzer.Start()
+	_, remaining, err = CountSealedBlocks(ctx, tbl, ranges, 0, analyzer)
+	analyzer.Stop()
+	require.Error(t, err)
+	require.Nil(t, remaining)
+	require.Positive(t, analyzer.GetOpStats().ResourceDelta().Usage.WaitNS[resource.WaitFilesystem])
 }
