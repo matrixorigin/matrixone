@@ -1,0 +1,55 @@
+name: JED Coverage build tools install canary
+on:
+  push:
+    branches: [weilu-runner-test]
+    paths: ['.github/workflows/cs-jed-build-tools-canary.yml']
+permissions:
+  contents: read
+jobs:
+  canary:
+    name: Verify build tool install on fresh JED node1 runner
+    if: >-
+      github.repository == 'matrixorigin/matrixone' &&
+      github.actor == 'Ariznawlll' && github.run_attempt == 1 &&
+      github.event.before == 'f14296c04febac08eb65847ba4f61b1c6f222388'
+    runs-on: cs-jed-nc-n1-pr-v1
+    timeout-minutes: 13
+    steps:
+      - name: Verify JED node and initial tool inventory
+        env:
+          ASSIGNED_RUNNER: ${{ runner.name }}
+        run: |
+          set -eu
+          [[ "$ASSIGNED_RUNNER" =~ ^cs-jed-nc-n1-pr-v1-[a-z0-9]+-runner-[a-z0-9]+$ ]]
+          for tool in gcc g++ make pkg-config cmake python python3; do
+            command -v "$tool" || printf 'Initially missing: %s\n' "$tool"
+          done
+      - name: Load exact candidate from the CI repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: matrixorigin/CI
+          ref: 746b0257a141f5ac935376bc947bf4cf73e49b74
+          path: candidate
+          sparse-checkout: scripts/coverage_cs_build_tools.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Install missing tools in this ephemeral runner only
+        timeout-minutes: 10
+        run: bash candidate/scripts/coverage_cs_build_tools.sh
+      - name: Compile and run C and C++ smoke programs
+        run: |
+          set -euo pipefail
+          python --version
+          python -c 'import sys; assert sys.version_info.major == 3'
+          gcc --version | head -1
+          g++ --version | head -1
+          make --version | head -1
+          pkg-config --version
+          cmake --version | head -1
+          printf 'int main(void) { return 0; }\n' |
+            gcc -x c -o "$RUNNER_TEMP/cs-build-tools-smoke-c" -
+          printf 'int main() { return 0; }\n' |
+            g++ -x c++ -o "$RUNNER_TEMP/cs-build-tools-smoke-cxx" -
+          "$RUNNER_TEMP/cs-build-tools-smoke-c"
+          "$RUNNER_TEMP/cs-build-tools-smoke-cxx"
+          echo 'JED build toolchain canary passed.'
