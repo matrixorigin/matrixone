@@ -40,6 +40,7 @@ type odkuActions struct {
 	fkChanges                            [][]colexec.ExpressionExecutor
 	incoming, current, old, nullImage    *batch.Batch
 	image, before, proposed, inputImage  *batch.Batch
+	updateInputs                         [2]*batch.Batch
 	keys, lastFKEligibility              *batch.Batch
 	eligible                             []bool
 	priorImage, priorKeys, priorProposed *batch.Batch
@@ -236,6 +237,7 @@ func (preInsertUnique *PreInsertUnique) prepareODKUActions(proc *process.Process
 	for _, b := range []*batch.Batch{a.image, a.before, a.inputImage, a.proposed, a.keys} {
 		b.SetRowCount(1)
 	}
+	a.updateInputs = [2]*batch.Batch{a.image, a.incoming}
 	return nil
 }
 
@@ -501,11 +503,11 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 		}
 		copy(a.before.Vecs, a.image.Vecs)
 		prefix := int(c.ChangeCheckAssignmentCount)
-		if err := odkueval.EvaluateUpdate(a.assignments[:prefix], c.UpdateColumns[:prefix], nil, a.image, a.incoming, proc); err != nil {
+		if err := odkueval.EvaluateUpdate(a.assignments[:prefix], c.UpdateColumns[:prefix], nil, a.updateInputs[:], proc); err != nil {
 			return err
 		}
 		var err error
-		changed, err = odkueval.UpdateChanged(a.changeExecs, a.before, a.image, proc)
+		changed, err = odkueval.UpdateChanged(a.changeExecs, c.ChangeCheckColumns, a.before, a.image, proc)
 		if err != nil {
 			return err
 		}
@@ -513,7 +515,7 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 		if !changed {
 			remaining += int(c.AutoUpdateAssignmentCount)
 		}
-		if err := odkueval.EvaluateUpdate(a.assignments[remaining:], c.UpdateColumns[remaining:], a.updateChecks, a.image, a.incoming, proc); err != nil {
+		if err := odkueval.EvaluateUpdate(a.assignments[remaining:], c.UpdateColumns[remaining:], a.updateChecks, a.updateInputs[:], proc); err != nil {
 			return err
 		}
 		if !changed {
@@ -638,6 +640,14 @@ func (preInsertUnique *PreInsertUnique) odkuOutputVector(column int) *vector.Vec
 func (preInsertUnique *PreInsertUnique) finalODKUOutputCount() int {
 	a, c, rows, out := preInsertUnique.ctr.actions, preInsertUnique.PreInsertCtx.OdkuActions, preInsertUnique.ctr.actionRows, preInsertUnique.ctr.buf
 	count := min(rows.images.RowCount()-a.finalRow, colexec.DefaultBatchSize-out.RowCount())
+	if c.PhysicalChangedColumn == 0 {
+		for n := 0; n < count; n++ {
+			if !preInsertUnique.physicalODKUChange(a.finalRow + n) {
+				count = n
+				break
+			}
+		}
+	}
 	remaining, fixed := max(0, (1<<20)-out.Size()), 0
 	hasVarlen := false
 	for _, v := range out.Vecs {
@@ -651,9 +661,6 @@ func (preInsertUnique *PreInsertUnique) finalODKUOutputCount() int {
 		return count
 	}
 	for n := 0; n < count; n++ {
-		if c.PhysicalChangedColumn == 0 && !preInsertUnique.physicalODKUChange(a.finalRow+n) {
-			return n
-		}
 		remaining = max(0, remaining-fixed)
 		for col, v := range out.Vecs {
 			if !v.GetType().IsVarlen() || col == int(c.ActionFinalColumn) {

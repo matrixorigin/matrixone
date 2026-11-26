@@ -1,20 +1,11 @@
-# PR 31979 — ordered ODKU contract repair
+# Ordered ODKU execution and storage identity (4.2)
 
-- Design revision: 2, 2026-11-06; source head
-  `c1c2bcebb2f403fea5351827af2e03a390dde561`, target
-  `02fcfbc898f595b4f8eeb3545c6970e6d3711e85`, merge base
-  `ebf03dc42bf25ba00018da019783e1037299d1ae`.
-- Authoring/review model: `gpt-6.1-terra`, reasoning effort `max`.
-  Versioned artifact: `docs/design/ordered-odku-4.2.md`.
-  This design-first decision covers MatrixOne 4.2 PR 31979; it is not a claim
-  that the present implementation passes. The root design challenge was
-  resolved in revision 2 and the design decision is **PASS**. Implementation
-  and delivery remain gated by the evidence and review below. Material
-  deviations require design review.
-- Gate trigger: major execution/ownership refactor spanning planner, operators,
-  storage, transactions and writers, with distributed concurrency, persistence
-  and hot-path consequences. The review covers the complete PR, not just the
-  correction. E01–E04 refer to the baseline/candidate public SQL observations summarized below; detailed local evidence is retained in the task record.
+Design revision 5, 2026-11-07. This design covers PR 31979 against the 4.2-dev
+storage and SQL contracts. It preserves direct primary/unique-key assignment
+restrictions and generated-key moves already accepted by MatrixOne. It does
+not promise general MySQL constraint compatibility or repair existing corrupt
+rows/indexes. Revisions 3 and 4 clarify shutdown-upgrade and deferred cleanup
+ownership below.
 
 ## Contract, evidence, and decisions
 
@@ -50,10 +41,10 @@ The contract has **two distinct equality domains**:
    constraint identity and FK comparison. Do not implement a new family of
    hand-written type comparators as a substitute.
 
-E01/E02 show binary-protocol +0/-0 DOUBLE values can coexist across separate
+Public probes against the 4.2 target and the pre-repair PR candidate show binary-protocol +0/-0 DOUBLE values can coexist across separate
 INSERTs in a PK and a single-column unique index, although SQL equality is
 true, and an existing negative-zero owner is reachable by ODKU. The original
-baseline's same-batch unique case returns 1062 and rolls back; c1 instead
+baseline's same-batch unique case returns 1062 and rolls back; that candidate instead
 silently combines two different physical identities into one row. The selected
 repair uses physical identity consistently inside ordered ODKU and its directly
 affected duplicate checks and index-maintenance comparison boundaries. For two
@@ -69,15 +60,14 @@ of general MySQL PK/UNIQUE compatibility, NaN SQL support, or a general change
 to numeric equality. Base's direct PK and unique-column ODKU assignment
 restrictions remain; generated-key moves already accepted by MO remain supported.
 
-E01/E02 also show c1 fixes a baseline stale unique-index payload after a
+Those probes also show the pre-repair candidate fixes a baseline stale unique-index payload after a
 generated-PK move and a wrong owner after a generated-unique key is vacated.
-Keep these fixes. E03 identifies c1's regression when an automatic ON UPDATE
+Keep these fixes. Action counterexamples identify the candidate's regression when an automatic ON UPDATE
 column feeds a generated key: a true no-op can fail 1062. The PR's historical
 results show a 16.43% batch no-op and 12.19% 512-byte insert regression on an
-earlier candidate against the merge base; c1's bitmap change has not been
-measured. Those historical numbers are not final-target performance evidence.
+earlier candidate against the merge base; those historical timings do not measure the final implementation. Those historical numbers are not final-target performance evidence.
 
-### Causal path
+### Pre-repair causal path
 
 - `bind_insert.go` appends implicit ON UPDATE expressions, then generated
   assignments and the composite PK. `odku_actions.go` calls
@@ -298,7 +288,7 @@ the same committed effective image; a generated PK move updates every hidden
 index's base-PK payload even if its index key did not change. Do not add an
 all-deletes-first escape path.
 
-The c1 TN change advances separate data/tombstone dedup frontiers only after all
+The TN change advances separate data/tombstone dedup frontiers only after all
 eligible persisted and in-memory source scans complete; cancellation, bloom,
 storage and close errors must not advance the frontier. Inspect and retain only
 the minimum correct common implementation. The PR's RPC normalization is wider:
@@ -308,12 +298,14 @@ ownership. Incremental skips old targets and persisted sources under assumptions
 which include CN key locks; optimistic mode supplies no such lock. Thus a full
 skip-workspace policy is a plausible necessary correctness fix for persisted
 sources, and the configured `incremental-dedup=false` mode already uses it.
-This rationale is **not** proof the global change is harmless. Retain it only
-with independent real non-ODKU optimistic INSERT/UPDATE/DELETE, same-txn
-replacement/deletion, persisted-CN source, distinct/concurrent keys, tombstone,
-DDL/catalog and explicit-policy controls, compared against baseline and
-disabled-incremental behavior. Prove conflicts, successful non-conflicts and
-correct final state at real commit, not just enum mapping. Check its cost. If
+The acceptance evidence combines independent ordinary optimistic
+INSERT/UPDATE/DELETE commits, same-transaction replacement, primary and unique
+conflicts, successful disjoint writes and an explicit full-policy control with
+the ODKU competition controls and a direct TAE persisted-object witness. The
+shared per-domain scan loop and its terminal frontier advancement also require
+source review. Additional tombstone-domain late-source faults, direct Bloom
+faults and mixed-policy/DDL combinations are untested limits, rather than a
+claim of exhaustive coverage. If
 these expose an unrelated compatibility or performance regression, do not
 paper over it or weaken tests: remove/narrow the RPC change and use an existing
 per-write FullSkipWorkspace policy propagated for the ODKU transaction if its
@@ -340,7 +332,8 @@ and row images O(touched rows × projected width); neither is assumed constant.
 Admission is finite; return the existing resource error when exhausted. Output
 is at most 8192 rows and a soft 1 MiB quota, with at most one row overshoot.
 Existing bounded disk/FD spill ownership remains with materialized writer
-sources. No new goroutine, unbounded queue, network retry or per-key cache.
+sources. No per-query goroutine, unbounded queue or per-key cache. Revision 4 below
+adds one lazy engine cleanup worker for charged detached objects.
 
 Prior views retain pinned workspace batches/files and copied tombstone
 selections; any promotion/index failure is terminal. Close readers and release
@@ -372,7 +365,7 @@ plan incompatibility without a specific persisted surface and input.
 
 | Alternative | Correctness / compatibility | Cost and decision |
 |---|---|---|
-| Keep c1 and adjust the downstream no-op filter or add signed-zero special cases | Too late: keys and candidate images already published; still wrong for generated/JSON and promoted prior maps; special cases miss scaled floats and other representations | Reject: multiple semantic owners and regression recurrence |
+| Keep the earlier candidate and adjust the downstream no-op filter or add signed-zero special cases | Too late: keys and candidate images already published; still wrong for generated/JSON and promoted prior maps; special cases miss scaled floats and other representations | Reject: multiple semantic owners and regression recurrence |
 | Serialize/replay every action through existing physical writers | Could mimic sequential committed actions but alters write ordering, error/rollback and lock behavior; old index payloads, checks and intermediate FKs still need a coordinator | Reject: expensive writes and broader distributed protocol; cannot guarantee current transactional writer guarantees |
 | Global physical equality in generic SQL hashmaps, or an always-on prior-data view | Global hashmap change breaks SQL equality/grouping; an always-captured view has substantial memory/I/O for immutable keys and still needs effective-action handling | Reject: unrelated semantic and performance blast radius |
 | Chosen: existing ordered owner, pre-publication effective action, localized physical identities, attempt-scoped count | Maintains source order and existing physical writer/storage contracts with explicit lock/FK boundaries | Slightly more planner metadata and per-action comparison; confines cost to affected paths and can retain the immutable fast path |
@@ -387,9 +380,9 @@ process counter.
 
 ## Optimization and cleanup
 
-First profile c1 and the corrected head versus the verified current PR target
-`02fcfbc898f595b4f8eeb3545c6970e6d3711e85` with the same workload and plan;
-do not assume c1's bitmap work fixed the earlier regression. The merge base
+Compare the corrected implementation with target
+`02fcfbc898f595b4f8eeb3545c6970e6d3711e85` using the same workload and plan.
+Profile regressions before selecting an optimization. The merge base
 `ebf03dc42b` remains the delivery-diff and incremental-SCA reference, not the
 final performance baseline; no rebase is required for this comparison.
 Measure CPU and allocations for source numbering/sort, initial lookup JOINs,
@@ -413,7 +406,7 @@ a second count, duplicate key histories, or a test that merely repeats a helper.
 
 ## Validation and acceptance map
 
-Use E01/E02 as baseline observations, not final pass evidence. Reuse exact-head
+Use the public probes above as baseline observations, not final pass evidence. Reuse exact-head
 CI only when relevant inputs/mode remain identical; any changed production,
 test, plan codec or dependency invalidates affected evidence. The existing
 `TestODKUSystematicSQL` fixture in `pkg/tests/dml/ordered_odku_test.go`
@@ -429,7 +422,7 @@ already exercises the real frontend; reuse it instead of starting a new cluster.
 | Prior view | First sparse workspace probe, promoted index, flushed/workspace/committed reads, vacated key and hidden-index payload -> base RowID, raw bit residual and conservative zero/exception pruning; remote/sharded relation and deletes when applicable. Assert same physical owner before/after promotion; cancellation and typed primary error, close/reset/pin/account cleanup. |
 | Key movement and concurrency | Real generated PK/UK move, reuse of vacated key, two-owner collision/rollback, NULL transition and unchanged-UK payload update; force base and each index. Barrier-controlled pessimistic resolved-row lock fix 31957 and optimistic competing original/final-key commits; prove retry or one rejected commit, never dual success. |
 | CHECK/FK and writer order | Existing explicit-input CHECK order and update candidate checks; intermediate and final FK missing/valid/unchanged/no-op paths; writer dependency barrier, index producer failure before mutation; regular/fulltext/IVF consumers where affected. Preserve exact typed primary errors and rollback. |
-| TN/global policy | Focused policy and frontier UT (both data/tombstone, mixed sources, cancellation/storage/bloom error leaves frontier), plus real non-ODKU optimistic commit matrix described above with valid baseline/control. Explicit policies and pessimistic unchanged; no borrowed request mutation. |
+| TN/global policy | Focused policy/frontier UT, real ordinary and ODKU optimistic commit controls, direct TAE persisted-object witness and shared-loop/error-propagation source review as described above. Nonzero explicit policies and pessimistic defaults unchanged; no borrowed request mutation. Additional fault/DDL combinations remain explicit limits. |
 | Compatibility and shape | Typed plan phases/visitors/deep copy/codec; structurally invalid layouts fail before producers; normal homogeneous shutdown-upgrade assumptions and existing catalog data; remove only PR-introduced gate. No artificial mixed-version test. |
 | Resources/operator | Fault injection at allocation, key transition, prior lookup, source close, writer wait and cancellation; assert account, reservations, reader/view cleanup, no partial emitted success, reusable Reset and bounded lock/key history. Focus race on credible shared-state/lifecycle paths, then owning packages once under `-race`. |
 
@@ -480,29 +473,120 @@ closure; (e) remove dead guard and v12-only gate, update plan/docs/generated
 files; (f) focused then mapped normal/race/SCA/public tests and performance;
 (g) overall independent review, remediate, revalidate, commit/push/update PR.
 
-Unproven evidence, not design permission to guess: the required two-insert
-same-batch signed-zero outcome through the writer/TN, all global-policy
-non-ODKU compatibility controls, and final benchmark measurements. These are
-delivery blockers until the prescribed tests pass. If a documented writer/TN
+Regression coverage must assert the two-insert same-batch signed-zero outcome
+through the writer/TN, independent ordinary optimistic DML controls, and the
+performance budgets above. If a documented writer/TN
 constraint contradicts the selected outcome, return with that evidence for a
 design decision before making broader semantic/storage changes.
 
-### Root challenge resolution and design decision
+### Design decisions
 
 - The verified PR target `02fcfbc898` is the performance baseline;
   `ebf03dc42b` remains the merge base for the delivery diff and incremental
   SCA. Rebase is not required.
 - Distinct +0/-0 physical identities in a valid same-batch ODKU must result in
-  two inserts. Baseline 1062 and c1's redirected update both fail this contract.
+  two inserts. Baseline 1062 and the earlier candidate's redirected update both fail this contract.
 - Final write equivalence covers the proven mutable stored-column closure and
   raw PK, excluding non-stored execution metadata. No-op rows with final FK
   obligations carry a typed physical-write flag through the parent-lock check.
-- The root accepted the Compile-owned count slot under single-local-owner,
-  attempt-generation, EOF and successful-completion constraints. Preserve
+- The Compile-owned count slot requires a single local owner, a fresh attempt
+  generation, terminal EOF and successful pipeline completion. Preserve
   4.2's currently advertised-but-unimplemented `CLIENT_FOUND_ROWS` behavior;
   do not add capability support in this PR.
 
-**Decision: PASS.** Revision 2 is the reviewed design for implementation.
-Testing, performance, incremental SCA, and final overall review remain separate
-delivery gates and have not passed merely because this design passed.
+## Design revision 3 clarification
 
+The overall gpt-6.1-terra/max review of implementation 892cb69c96 approved
+removing the PR-added RequireSameCommit build-ID gate as well as version 12.
+Build identity is not the captured MVCC snapshot or RowID identity. Homogeneous
+shutdown upgrades require neither check, including for builds with unknown
+commit IDs. Keep pre-existing prepared-parameter compatibility checks, typed
+response errors, real remote range pruning and transaction snapshot validation.
+A generated-column DEFAULT assignment can leave an empty pre-change phase and
+comparison set; that is a valid no-op, with required generated/check obligations
+still evaluated. Fixed-width and variable-width final batches both stop at any
+owner that requires no physical write. A missing-EOF result error closes views,
+finishes the allocation account and aborts a RETURNING sink before returning.
+
+
+## Design revision 4 — deferred object progress
+
+Canceled views can enqueue detached rollback objects without another query
+ever draining them; concurrent closes can also lose the last drain notification. One lazy worker per engine owns this existing quota-charged
+queue, independently of SQL contexts and the ordinary GC pool. A buffered wake
+and queue check under the same mutex prevent lost wakeups. Transfers append a
+linked chain after transaction/pin locks are released. There is no per-object
+generic job allocation or goroutine.
+
+The worker deletes bounded chunks with a five-second IO context. Failed chunks
+remain fully charged, move to the FIFO tail, and retry individually to isolate
+a bad object; an interruptible exponential backoff bounds failure traffic.
+Successful deletion alone returns the pin charge, once. Absent-name deletion
+is idempotent, so an ambiguous partial failure can safely retry all its names.
+No IO, retry wait or shutdown join holds transaction, view or queue mutexes.
+
+View admission registers with the engine before capture. Its final close
+atomically enqueues its detached objects and releases that registration after
+all view resources are cleaned. Engine shutdown rejects new admission and
+waits for zero live views, an empty queue and no in-flight delete, then stops
+and joins the worker. A narrow idempotent CN shutdown hook runs after pipeline
+handlers join and before IO teardown; Engine.Close uses the same hook.
+
+Shutdown uses the existing bounded cleanup budget. A deadline marks terminal
+failure before canceling IO, retains the error and all unconfirmed charges,
+and reports failure without claiming a completed join. Late registered views
+may still transfer records, but terminal shutdown never restarts a worker
+against torn-down services. Repeated shutdown returns the stored failure.
+After failed terminal shutdown, retained records require process/external
+cleanup; this is not a live-engine retry or a successful cleanup claim.
+
+Validation uses channel-controlled Delete, canceled captured views, closed and
+saturated GC pools, empty/wake handoff, partial and persistent failure, FIFO
+isolation, late releases, blocked cancellation and idempotent shutdown. Assert
+physical object lifetime, typed SQL errors, exact quota ownership, single
+Delete ownership and worker joining under normal and race instrumentation.
+
+
+### Validation boundaries
+
+SI commit responses need not wait for CN logtail application. Competing-commit
+SQL fixtures fence on the actual CN client's nonempty commit frontier and wait
+for a later applied timestamp before asserting exact base and forced-index
+contents. A session choice alone is not the fixture's visibility guarantee.
+
+The generated-key benchmark retains a strict forced-index result oracle. The
+4.2 target fails that oracle for the generated-UNIQUE move workload, so its
+runtime is not a valid performance comparator. Report the corrected path's
+standalone cost separately; apply the matched A/A and ABBA budgets to the ten
+common-correct singleton and batch workloads. Do not weaken the index oracle
+or report a speed ratio against an incorrect result.
+
+The cleanup tests enqueue during Delete and after observing an empty queue.
+The exact internal empty-check-to-wait interval is covered by the common-mutex
+and buffered-wake source proof rather than a production test hook.
+
+
+## Design revision 5 — action comparison cost
+
+Profiles of repeated hot-key actions identify allocation in the pure SQL
+comparison executor. For bool, bit, signed/unsigned integers, enum and byte
+string types, identical non-NULL stored bytes are a sufficient proof of the
+existing MO `<=>` result; both NULLs are equal and one NULL differs. The action
+comparison may short-circuit those proven cases after checking one-row shape
+and matching actual OIDs and canonical physical sizes. Width/Scale do not
+affect these approved SQL operators. Unequal bytes and every other type continue through
+the existing typed executor, including FLOAT, JSON, arrays and temporal types.
+This is a sufficient equality check, not a replacement comparator. It leaves
+assignment, CHECK, FK, key/owner publication, source metadata, locks and counts
+unchanged. Differential tests use the actual compiled `<=>` as the oracle and
+observe fallback calls. The insert-path performance breach remains a separate
+measurement/design question; speculative batch admission is not part of this
+optimization.
+
+
+The action owner also holds one stable two-batch RHS input frame after both
+scratch batches are created. Evaluators synchronously borrow this frame and
+still observe each earlier assignment through the image batch; they do not
+mutate or retain the slice. Free executors before inputs and clear the frame
+with the action state on Reset/Free. This removes per-RHS temporary slice
+allocation, with only two bounded per-owner pointers and no new row state.

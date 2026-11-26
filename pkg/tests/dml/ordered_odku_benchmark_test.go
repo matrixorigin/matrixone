@@ -99,6 +99,7 @@ func BenchmarkOrderedODKU(b *testing.B) {
 			{name: "varlen512_insert_8192", actions: 8192, outputRows: 8192, payloadBytes: 512},
 			{name: "varlen512_existing_8192", actions: 8192, seedRows: 8192, outputRows: 8192, payloadBytes: 512},
 			{name: "varlen512_hot_8192_100keys", actions: 8192, seedRows: 100, outputRows: 100, hotKeys: 100, payloadBytes: 512},
+			{name: "generated_unique_512", actions: 512, seedRows: 512, outputRows: 512, generated: true},
 		}
 		for index, tc := range cases {
 			b.Run(tc.name, func(b *testing.B) {
@@ -106,10 +107,16 @@ func BenchmarkOrderedODKU(b *testing.B) {
 				ctx, cancel := context.WithTimeout(b.Context(), 10*time.Minute)
 				defer cancel()
 				table := fmt.Sprintf("case_%02d", index)
+				generated := ""
+				insertTarget := "`" + table + "`"
+				if tc.generated {
+					generated = ",g bigint as (id*100000+v) stored,unique key uk_g(g)"
+					insertTarget += " (id,u1,u2,v,payload)"
+				}
 				orderedODKUBenchExec(b, ctx, conn, "create table `"+table+"` ("+
 					"id bigint primary key,u1 bigint not null,u2 bigint not null,"+
 					"v bigint not null,payload varchar(4096) not null,"+
-					"unique key uk_u1(u1),unique key uk_u2(u2))")
+					"unique key uk_u1(u1),unique key uk_u2(u2)"+generated+")")
 				defer func() {
 					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cleanupCancel()
@@ -129,12 +136,12 @@ func BenchmarkOrderedODKU(b *testing.B) {
 					seedPayload = payload
 				}
 				// All literals below are fixed fixture constants, never external SQL.
-				seedSQL := fmt.Sprintf("insert into `%s` select result,result*10,result*100,%d,'%s' from generate_series(1,%d) g", table, seedValue, seedPayload, tc.seedRows)
+				seedSQL := fmt.Sprintf("insert into %s select result,result*10,result*100,%d,'%s' from generate_series(1,%d) g", insertTarget, seedValue, seedPayload, tc.seedRows)
 				key := "result"
 				if tc.hotKeys != 0 {
 					key = fmt.Sprintf("(1+((result-1)%%%d))", tc.hotKeys)
 				}
-				statement := fmt.Sprintf("insert into `%s` select 1000000+result,(%s)*10,(%s)*100,1,'%s' from generate_series(1,%d) g order by result on duplicate key update v=values(v),payload=values(payload)", table, key, key, payload, tc.actions)
+				statement := fmt.Sprintf("insert into %s select 1000000+result,(%s)*10,(%s)*100,1,'%s' from generate_series(1,%d) g order by result on duplicate key update v=values(v),payload=values(payload)", insertTarget, key, key, payload, tc.actions)
 				if tc.actions == 1 {
 					statement = fmt.Sprintf("insert into `%s` values (1000001,10,100,1,'%s') on duplicate key update v=values(v),payload=values(payload)", table, payload)
 				}
@@ -157,6 +164,16 @@ func BenchmarkOrderedODKU(b *testing.B) {
 					}
 					if count != int64(tc.outputRows) || distinctIDs != count || minID != offset+1 || maxID != offset+int64(tc.outputRows) || minV != 1 || maxV != 1 || minPayload != payload || maxPayload != payload {
 						b.Fatalf("invalid benchmark result: rows=%d distinct_ids=%d id_range=[%d,%d] value_range=[%d,%d] payload_lengths=[%d,%d]; expected rows=%d id_range=[%d,%d] and constant v=1/payload", count, distinctIDs, minID, maxID, minV, maxV, len(minPayload), len(maxPayload), tc.outputRows, offset+1, offset+int64(tc.outputRows))
+					}
+					if tc.generated {
+						var found int
+						query := "select count(*) from `" + table + "` force index(uk_g) where g in (100001," + fmt.Sprint(tc.outputRows*100000+1) + ")"
+						if err := conn.QueryRowContext(ctx, query).Scan(&found); err != nil {
+							b.Fatal(err)
+						}
+						if found != 2 {
+							b.Fatalf("generated unique index has %d boundary owners; want 2", found)
+						}
 					}
 				}
 
@@ -213,6 +230,7 @@ type orderedODKUBenchmarkCase struct {
 	hotKeys      int
 	payloadBytes int
 	noop         bool
+	generated    bool
 }
 
 func orderedODKUBenchExec(b *testing.B, ctx context.Context, conn *sql.Conn, statement string) {

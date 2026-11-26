@@ -41,6 +41,7 @@ type statementObjectPin struct {
 	refs      int
 	pendingGC bool
 	name      string
+	retryOne  bool
 	next      *statementObjectPin
 }
 
@@ -49,81 +50,6 @@ type statementObjectPin struct {
 // record, with no allocation at the last-reader handoff.
 // Computed once from the record layout; every pin uses the same fixed charge.
 var statementObjectPinQuota = int64(reflect.TypeFor[statementObjectPin]().Size()) + 128
-
-func (e *Engine) deferStatementObject(pin *statementObjectPin) {
-	e.statementGC.Lock()
-	pin.next = e.statementGC.head
-	e.statementGC.head = pin
-	e.statementGC.Unlock()
-}
-
-// drainStatementObjects does no IO under a view, transaction or pin mutex.
-// Opportunistic callers leave an active drain to its owner; engine shutdown
-// joins that owner under the same bounded cleanup budget before trying again.
-func (e *Engine) drainStatementObjects(wait bool) error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultLoadFileCleanupTimeout)
-	defer cancel()
-	for {
-		e.statementGC.Lock()
-		if active := e.statementGC.active; active != nil {
-			e.statementGC.Unlock()
-			if !wait {
-				return nil
-			}
-			select {
-			case <-active:
-				continue
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
-		}
-		if e.statementGC.head == nil {
-			e.statementGC.Unlock()
-			return nil
-		}
-		e.statementGC.active = make(chan struct{})
-		e.statementGC.Unlock()
-		break
-	}
-	defer func() {
-		e.statementGC.Lock()
-		close(e.statementGC.active)
-		e.statementGC.active = nil
-		e.statementGC.Unlock()
-	}()
-	for {
-		if err := context.Cause(ctx); err != nil {
-			return err
-		}
-		var names [GCBatchOfFileCount]string
-		var pins [GCBatchOfFileCount]*statementObjectPin
-		e.statementGC.Lock()
-		n := 0
-		for n < len(pins) && e.statementGC.head != nil {
-			pin := e.statementGC.head
-			e.statementGC.head = pin.next
-			pin.next = nil
-			pins[n], names[n] = pin, pin.name
-			n++
-		}
-		e.statementGC.Unlock()
-		if n == 0 {
-			return nil
-		}
-		if err := e.fs.Delete(ctx, names[:n]...); err != nil {
-			// Delete may have partially succeeded. Both file-service backends
-			// accept absent names, so retry the entire still-charged chunk.
-			e.statementGC.Lock()
-			for _, pin := range pins[:n] {
-				pin.next = e.statementGC.head
-				e.statementGC.head = pin
-			}
-			e.statementGC.Unlock()
-			return err
-		}
-		e.ReleaseQuota(int64(n) * statementObjectPinQuota)
-	}
-}
 
 func (txn *Transaction) batchPinned(b *batch.Batch) bool {
 	p := txn.statementKeyPins.Load()
@@ -184,7 +110,7 @@ func (txn *Transaction) deferPinnedObjectGC(names []string) []string {
 	return out
 }
 
-func (v *statementKeyView) releasePins() {
+func (v *statementKeyView) releasePins() (head, tail *statementObjectPin) {
 	txn := v.txn
 	txn.Lock()
 	p := txn.statementKeyPins.Load()
@@ -206,7 +132,12 @@ func (v *statementKeyView) releasePins() {
 		pin.refs--
 		if pin.refs == 0 {
 			if pin.pendingGC {
-				txn.engine.deferStatementObject(pin)
+				if tail == nil {
+					head = pin
+				} else {
+					tail.next = pin
+				}
+				tail = pin
 			} else {
 				txn.engine.ReleaseQuota(statementObjectPinQuota)
 			}
@@ -228,6 +159,7 @@ func (v *statementKeyView) releasePins() {
 		reservation.Release()
 	}
 	v.reservations = nil
+	return head, tail
 }
 
 func statementViewCause(ctx context.Context, v *statementKeyView) error {
