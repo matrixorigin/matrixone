@@ -35,8 +35,9 @@ func unionMaskSource(t *testing.T, rng *rand.Rand, typ types.Type, n int, nullRa
 		var err error
 		if typ.IsVarlen() {
 			// Mix inline (short) and out-of-line (long) values.
+			// T_text sources hold only inline values (no area).
 			s := fmt.Sprintf("v%d", i)
-			if i%3 == 0 {
+			if i%3 == 0 && typ.Oid != types.T_text {
 				s = strings.Repeat(s, 10)
 			}
 			err = AppendBytes(v, []byte(s), isNull, mp)
@@ -91,11 +92,11 @@ func TestUnionByMaskMatchesUnion(t *testing.T) {
 	typs := []types.Type{
 		types.T_bool.ToType(), types.T_int16.ToType(), types.T_int32.ToType(),
 		types.T_int64.ToType(), types.T_decimal128.ToType(), types.T_decimal256.ToType(),
-		types.T_Rowid.ToType(), types.T_varchar.ToType(),
+		types.T_Rowid.ToType(), types.T_varchar.ToType(), types.T_text.ToType(),
 	}
 	for _, typ := range typs {
 		for _, n := range []int{1, 63, 64, 65, 200, 8192} {
-			for _, p := range []float64{0, 0.02, 0.5, 1} {
+			for _, p := range []float64{0, 0.02, 0.5, 0.9, 1} {
 				for _, nullRate := range []float64{0, 0.3} {
 					name := fmt.Sprintf("%s/n=%d/p=%v/null=%v", typ.String(), n, p, nullRate)
 					src := unionMaskSource(t, rng, typ, n, nullRate, mp)
@@ -128,6 +129,37 @@ func TestUnionByMaskMatchesUnion(t *testing.T) {
 			}
 		}
 	}
+	require.Zero(t, mp.CurrNB())
+}
+
+// A NULL row of an inline-only source may hold a stale descriptor; the
+// gathered row must not keep it.
+func TestUnionByMaskInlineNullDescriptor(t *testing.T) {
+	mp := mpool.MustNewZero()
+	src := NewVec(types.T_varchar.ToType(), mp)
+	for i := 0; i < 70; i++ {
+		require.NoError(t, AppendBytes(src, fmt.Appendf(nil, "s%d", i), i%5 == 0, mp))
+	}
+	var col []types.Varlena
+	ToSliceNoTypeCheck(src, &col)
+	stale := col[1]
+	col[5] = stale // row 5 is NULL
+	mask := new(bitmap.Bitmap)
+	require.NoError(t, mask.InitWithSize(70, mp))
+	mask.AddRange(0, 70)
+	mask.Remove(3)
+	dst := NewVec(types.T_varchar.ToType(), mp)
+	require.NoError(t, dst.UnionByMask(src, mask, mp))
+	require.Equal(t, 69, dst.Length())
+	var out []types.Varlena
+	ToSliceNoTypeCheck(dst, &out)
+	// Row 5 of src is row 4 of dst (row 3 is not selected).
+	require.True(t, dst.IsNull(4))
+	require.Equal(t, types.Varlena{}, out[4])
+	require.Equal(t, "s6", dst.GetStringAt(5))
+	dst.Free(mp)
+	src.Free(mp)
+	mask.Free()
 	require.Zero(t, mp.CurrNB())
 }
 

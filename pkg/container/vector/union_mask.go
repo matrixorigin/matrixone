@@ -169,19 +169,42 @@ func unionNullsByMask(v, w *Vector, mask *bitmap.Bitmap, rows, out int) {
 
 func (v *Vector) unionVarlenByMask(w *Vector, mask *bitmap.Bitmap, rows, cnt int, hasNull bool, mp *mpool.MPool) error {
 	vCol := toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+cnt)
+	if len(w.area) == 0 {
+		// Every value of w is inline (or empty), so a descriptor is a plain
+		// 24-byte value: gather them as fixed-width rows, then mark the NULL
+		// rows and clear their descriptors, which may be stale.
+		out := v.length
+		gatherFixedByMask[types.Varlena](v, w, mask, rows, out, cnt)
+		if hasNull {
+			forSelectedRows(mask, rows, func(r int) {
+				if w.nsp.Contains(uint64(r)) {
+					vCol[out] = types.Varlena{}
+					v.nsp.Add(uint64(out))
+				}
+				out++
+			})
+		}
+		v.setLengthAfterExtend(v.length + cnt)
+		return nil
+	}
 	var wCol []types.Varlena
 	ToSliceNoTypeCheck(w, &wCol)
-	// Grow the area once for the selected non-NULL, non-inline values.
-	total := 0
-	forSelectedRows(mask, rows, func(r int) {
-		if hasNull && w.nsp.Contains(uint64(r)) {
-			return
-		}
-		if s := &wCol[r]; !s.IsSmall() {
-			_, l := s.OffsetLen()
-			total += int(l)
-		}
-	})
+	// Grow the area once for the selected non-NULL, non-inline values. When
+	// most rows are selected, w's whole area is a close bound and saves a
+	// pass over the selection.
+	total := len(w.area)
+	if 4*cnt < 3*rows {
+		total = 0
+		forSelectedRows(mask, rows, func(r int) {
+			if hasNull && w.nsp.Contains(uint64(r)) {
+				return
+			}
+			if s := &wCol[r]; !s.IsSmall() {
+				_, l := s.OffsetLen()
+				total += int(l)
+			}
+		})
+	}
 	if err := pregrowVarlenaArea(v, total, mp); err != nil {
 		return err
 	}

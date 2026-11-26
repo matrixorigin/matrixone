@@ -122,17 +122,9 @@ func (n *Bitmap) lbitsFrom(pos int64) uint64 {
 	return w
 }
 
-// shiftedContains and shiftedCountRange serve every read-only bitmap: its
+// shiftedNextSet and shiftedCountRange serve every read-only bitmap: its
 // words may be shifted, and may cover fewer or more rows than Len.
-func (n *Bitmap) shiftedContains(row uint64) bool {
-	if row >= uint64(n.numBits) {
-		return false
-	}
-	bit := row + n.shift
-	j := int(bit / 64)
-	return j < len(n.data) && n.data[j]&(uint64(1)<<(bit%64)) != 0
-}
-
+// (Contains handles both forms in one expression.)
 func (n *Bitmap) shiftedNextSet(i uint64) uint64 {
 	end := uint64(n.numBits)
 	if i >= end {

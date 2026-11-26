@@ -624,11 +624,13 @@ func (n *Bitmap) Remove(row uint64) {
 // @ decreases
 // @ pure
 func (n *Bitmap) Contains(row uint64) (res bool) {
-	// A pure function is a single expression, so the read-only dispatch is
-	// the second disjunct; it compiles to the same branch.
-	return /*@ unfolding acc(n.Inv(), _) in unfolding acc(n.Mem(), _) in @*/ n.mp != nil &&
-		row < uint64(n.numBits) && n.data[row/64]&(uint64(1)<<(row%64)) != 0 ||
-		n.mp == nil && n.shiftedContains(row)
+	// One formula for owned bitmaps and read-only views: an owned bitmap has
+	// shift 0 and a word for every row, so the word check never fails for it.
+	// Keeping it one branch-free expression lets Contains, and Nulls.Contains
+	// around it, inline into per-row loops.
+	return /*@ unfolding acc(n.Inv(), _) in unfolding acc(n.Mem(), _) in @*/ row < uint64(n.numBits) &&
+		(row+n.shift)/64 < uint64(len(n.data)) &&
+		n.data[(row+n.shift)/64]&(uint64(1)<<((row+n.shift)%64)) != 0
 }
 
 // AddRange sets rows [start, end); end must not exceed Len. An empty range
