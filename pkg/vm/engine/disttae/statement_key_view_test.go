@@ -356,7 +356,7 @@ func TestStatementKeyViewInterleavedWorkspace(t *testing.T) {
 
 func TestStatementKeyViewOwnsPriorWorkspaceUntilClose(t *testing.T) {
 	colexec.NewServer("")
-	for _, terminal := range []string{"capture cancelled", "capture budget", "new selection", "statement rollback", "transaction rollback", "LOAD deleted", "LOAD delete error", "remote read error", "remote read cancelled", "remote view close", "remote close error", "remote data owned", "GC pool closed", "GC pool saturated", "GC delete retry", "GC quota"} {
+	for _, terminal := range []string{"capture cancelled", "cancel after reservation", "capture budget", "new selection", "statement rollback", "transaction rollback", "LOAD deleted", "LOAD delete error", "remote read error", "remote read cancelled", "remote view close", "remote close error", "remote data owned", "GC pool closed", "GC pool saturated", "GC delete retry", "GC quota"} {
 		t.Run(terminal, func(t *testing.T) {
 			txn, tbl := newDumpInsertTxnForTest(t)
 			quota := int64(1 << 20)
@@ -580,11 +580,15 @@ func TestStatementKeyViewOwnsPriorWorkspaceUntilClose(t *testing.T) {
 				if e != nil {
 					return nil, e
 				}
-				return g.ReserveMemory(ctx, n)
+				reservation, err := g.ReserveMemory(ctx, n)
+				if terminal == "cancel after reservation" && err == nil {
+					cancel(cause)
+				}
+				return reservation, err
 			}
 			view, err := delegate.NewStatementKeyView(ctx, []engine.Relation{delegate}, txn.proc, account, reserve)
-			if terminal == "capture cancelled" || terminal == "capture budget" || terminal == "GC quota" {
-				if terminal == "capture cancelled" {
+			if terminal == "capture cancelled" || terminal == "cancel after reservation" || terminal == "capture budget" || terminal == "GC quota" {
+				if terminal == "capture cancelled" || terminal == "cancel after reservation" {
 					require.ErrorIs(t, err, cause)
 				} else {
 					require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)

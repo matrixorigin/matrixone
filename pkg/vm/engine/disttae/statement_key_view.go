@@ -209,7 +209,7 @@ func (v *statementKeyView) captureTable(ctx context.Context, d *txnTableDelegate
 }
 
 // workspaceTable matches writes to the captured physical target family.
-func (v *statementKeyView) workspaceTable(e Entry) *statementKeyTable {
+func (v *statementKeyView) workspaceTable(e *Entry) *statementKeyTable {
 	t := v.tables[e.tableId]
 	if t == nil || e.databaseId != t.table.db.databaseId || e.bat == nil {
 		return nil
@@ -217,42 +217,59 @@ func (v *statementKeyView) workspaceTable(e Entry) *statementKeyTable {
 	return t
 }
 
-// captureWorkspace publishes one immutable target-family capture. Defers release
-// both mutexes before the constructor's partial-capture cleanup can run.
-func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(uint64) (engine.StatementViewReservation, error)) error {
+// countNewObjectPins estimates admission before quota can be acquired outside
+// the transaction and pin locks. Existing pins need no additional admission.
+func (v *statementKeyView) countNewObjectPins(ctx context.Context) (uint64, error) {
 	txn := v.txn
-	if err := statementViewCause(ctx, v); err != nil {
-		return err
-	}
-	// The small pin record can outlive this query after rollback. Admit it to
-	// the existing engine quota outside transaction/view locks. Count references
-	// conservatively; shared pins return unused admission below.
 	txn.Lock()
+	defer txn.Unlock()
 	var objectRefs uint64
 	pins := txn.statementKeyPins.Load()
 	if pins != nil {
 		pins.Lock()
+		defer pins.Unlock()
 	}
-	for _, entry := range txn.writes {
+	for i := range txn.writes {
+		if i%hashmap.UnitLimit == 0 {
+			if err := statementViewCause(ctx, v); err != nil {
+				return 0, err
+			}
+		}
+		entry := &txn.writes[i]
 		if v.workspaceTable(entry) == nil {
 			continue
 		}
 		if pos := slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats); pos >= 0 {
+			if pins == nil {
+				objectRefs += uint64(entry.bat.Vecs[pos].Length())
+				continue
+			}
 			for i := range entry.bat.Vecs[pos].Length() {
-				if pins != nil {
-					stats := objectio.ObjectStats(entry.bat.Vecs[pos].GetBytesAt(i))
-					if pins.objects[stats.ObjectName().String()] != nil {
-						continue
+				if i%hashmap.UnitLimit == 0 {
+					if err := statementViewCause(ctx, v); err != nil {
+						return 0, err
 					}
 				}
-				objectRefs++
+				stats := objectio.ObjectStats(entry.bat.Vecs[pos].GetBytesAt(i))
+				if pins.objects[stats.ObjectName().String()] == nil {
+					objectRefs++
+				}
 			}
 		}
 	}
-	if pins != nil {
-		pins.Unlock()
+	return objectRefs, statementViewCause(ctx, v)
+}
+
+// captureWorkspace publishes one immutable target-family capture. Defers release
+// both mutexes before the constructor's partial-capture cleanup can run.
+func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(uint64) (engine.StatementViewReservation, error)) error {
+	txn := v.txn
+	// A pin can outlive the query after rollback. Shared pins return any unused
+	// admission below, because the preflight counts references conservatively.
+	objectRefs, err := v.countNewObjectPins(ctx)
+	if err != nil {
+		return err
 	}
-	txn.Unlock()
 	if objectRefs > uint64(math.MaxInt64/statementObjectPinQuota) {
 		return mpool.ErrAllocationAccountCapacity
 	}
@@ -265,6 +282,9 @@ func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(ui
 	}
 	txn.Lock()
 	defer txn.Unlock()
+	if err := statementViewCause(ctx, v); err != nil {
+		return err
+	}
 	if txn.removed || !txn.op.SnapshotTS().Equal(v.snapshot) {
 		return moerr.NewTxnNeedRetryNoCtx()
 	}
@@ -285,7 +305,13 @@ func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(ui
 		add(uint64(len(parts)), uint64(reflect.TypeFor[*statementKeyTable]().Size()))
 	}
 	add(uint64(len(v.tables)), uint64(reflect.TypeFor[statementKeyTable]().Size()))
-	for _, e := range txn.writes {
+	for i := range txn.writes {
+		if i%hashmap.UnitLimit == 0 {
+			if err := statementViewCause(ctx, v); err != nil {
+				return err
+			}
+		}
+		e := &txn.writes[i]
 		t := v.workspaceTable(e)
 		if t == nil {
 			continue
@@ -321,7 +347,10 @@ func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(ui
 		return moerr.NewInternalError(ctx, "nil statement view reservation")
 	}
 	v.reservations = append(v.reservations, reservation)
-	pins = txn.statementKeyPins.Load()
+	if err := statementViewCause(ctx, v); err != nil {
+		return err
+	}
+	pins := txn.statementKeyPins.Load()
 	if pins == nil {
 		pins = &statementKeyPins{batches: make(map[*batch.Batch]*statementBatchPin), objects: make(map[string]*statementObjectPin), views: make(map[*statementKeyView]struct{})}
 		txn.statementKeyPins.Store(pins)
@@ -334,7 +363,13 @@ func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(ui
 	}
 	// Follow workspace order so each table retains its own original write
 	// order without scanning the full workspace for every physical member.
-	for _, e := range txn.writes {
+	for i := range txn.writes {
+		if i%hashmap.UnitLimit == 0 {
+			if err := statementViewCause(ctx, v); err != nil {
+				return err
+			}
+		}
+		e := &txn.writes[i]
 		t := v.workspaceTable(e)
 		if t == nil {
 			continue
@@ -368,7 +403,7 @@ func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(ui
 				}
 			}
 		}
-		t.entries = append(t.entries, e) // Entry values survive Adjust's reordering.
+		t.entries = append(t.entries, *e) // Entry values survive Adjust's reordering.
 		t.columnPositions = append(t.columnPositions, columns)
 		pin := pins.batches[e.bat]
 		if pin == nil {
@@ -387,7 +422,7 @@ func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(ui
 		if e.typ == DELETE && e.fileName == "" {
 			_ = tomb.AppendInMemory(vector.MustFixedColWithTypeCheck[types.Rowid](e.bat.Vecs[0])...)
 		}
-		for _, stats := range collectObjectStatsFromEntry(e) {
+		for _, stats := range collectObjectStatsFromEntry(*e) {
 			name := stats.ObjectName().String()
 			if _, exists := v.objects[name]; !exists {
 				op := pins.objects[name]
@@ -427,7 +462,7 @@ func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(ui
 		tomb.SortInMemory()
 	}
 
-	return nil
+	return statementViewCause(ctx, v)
 }
 
 func (v *statementKeyView) validateSnapshot(ctx context.Context) error {
@@ -452,35 +487,40 @@ func (v *statementKeyView) Validate(ctx context.Context) error {
 	if txn.removed || txn.rollbackCount != v.rollbackCount {
 		return moerr.NewTxnNeedRetryNoCtx()
 	}
-	// The transaction lock keeps the entry pointers stable until validation
-	// ends; keep only references rather than duplicating workspace entries.
-	currentByTable := make(map[uint64]map[*batch.Batch]*Entry)
+	// Adjust can reorder writes. Compare batch identities and keep pointers
+	// only while the transaction lock makes the current workspace stable.
+	type workspaceBatch struct {
+		tableID uint64
+		batch   *batch.Batch
+	}
+	current := make(map[workspaceBatch]*Entry)
 	for i := range txn.writes {
+		if i%hashmap.UnitLimit == 0 {
+			if err := statementViewCause(ctx, v); err != nil {
+				return err
+			}
+		}
 		e := &txn.writes[i]
-		t := v.workspaceTable(*e)
+		t := v.workspaceTable(e)
 		if t == nil {
 			continue
 		}
-		current := currentByTable[e.tableId]
-		if current == nil {
-			current = make(map[*batch.Batch]*Entry, len(t.entries))
-			currentByTable[e.tableId] = current
+		if _, exists := t.selections[e.bat]; !exists {
+			return moerr.NewTxnNeedRetryNoCtx()
 		}
-		current[e.bat] = e
+		current[workspaceBatch{e.tableId, e.bat}] = e
 	}
 	for id, t := range v.tables {
 		if _, dropped := txn.tablesInVain[id]; dropped {
 			return moerr.NewTxnNeedRetryNoCtx()
 		}
-		current := currentByTable[id]
-		if len(current) != len(t.entries) {
-			return moerr.NewTxnNeedRetryNoCtx()
-		}
 		for _, e := range t.entries {
-			now, exists := current[e.bat]
-			if !exists || now.typ != e.typ || now.fileName != e.fileName || !slices.Equal(txn.batchSelectList[e.bat], t.selections[e.bat]) {
+			key := workspaceBatch{id, e.bat}
+			now := current[key]
+			if now == nil || now.typ != e.typ || now.fileName != e.fileName || !slices.Equal(txn.batchSelectList[e.bat], t.selections[e.bat]) {
 				return moerr.NewTxnNeedRetryNoCtx()
 			}
+			delete(current, key)
 		}
 		changed, observed := false, 0
 		txn.deletedBlocks.iterTable(t.table.tableId, func(bid types.Blockid, offsets []int64) bool {
@@ -498,7 +538,7 @@ func (v *statementKeyView) Validate(ctx context.Context) error {
 			return moerr.NewTxnNeedRetryNoCtx()
 		}
 	}
-	return nil
+	return statementViewCause(ctx, v)
 }
 
 func (v *statementKeyView) Lookup(ctx context.Context, tableID uint64, key *vector.Vector, row int) (result *batch.Batch, err error) {
