@@ -44,7 +44,6 @@ func TestOrderedODKULayoutRoundTripAndValidation(t *testing.T) {
 	}
 	pre := preinsertunique.NewArgument()
 	pre.PreInsertCtx = odkuProtocolLayout()
-	c := pre.PreInsertCtx.OdkuActions
 	for _, op := range []vm.Operator{pre} {
 		s := newScope(Normal)
 		s.Proc = proc
@@ -71,7 +70,7 @@ func TestOrderedODKULayoutRoundTripAndValidation(t *testing.T) {
 	require.NoError(t, e)
 	r, e := decodeScope(data, proc, false, nil)
 	require.NoError(t, e)
-	require.False(t, r.RootOp.(*preinsertunique.PreInsertUnique).PreInsertCtx.OrderedOdku)
+	require.Nil(t, r.RootOp.(*preinsertunique.PreInsertUnique).PreInsertCtx.OdkuActions)
 	r.release()
 
 	// Reject removed UPDATE and inconsistent current metadata before either side starts.
@@ -90,17 +89,15 @@ func TestOrderedODKULayoutRoundTripAndValidation(t *testing.T) {
 	badRight := rightdedupjoin.NewArgument()
 	badRight.OnDuplicateAction = plan.Node_OnDuplicateAction(123)
 	badRight.Conditions = [][]*plan.Expr{{col(0, 0)}, {col(0, 0)}}
-	oldTarget := preinsertunique.NewArgument()
-	oldTarget.PreInsertCtx = &plan.PreInsertUkCtx{OrderedOdku: true}
-	missingMarker := preinsertunique.NewArgument()
-	missingMarker.PreInsertCtx = &plan.PreInsertUkCtx{OdkuActions: c}
+	emptyLayout := preinsertunique.NewArgument()
+	emptyLayout.PreInsertCtx = &plan.PreInsertUkCtx{OdkuActions: &plan.OdkuActionCtx{}}
 	for _, tc := range []struct {
 		op   vm.Operator
 		code uint16
 	}{
 		{oldUpdate, moerr.ErrNotSupported}, {oldBuild, moerr.ErrNotSupported},
 		{oldRight, moerr.ErrNotSupported}, {badRight, moerr.ErrInternal},
-		{oldTarget, moerr.ErrNotSupported}, {missingMarker, moerr.ErrNotSupported},
+		{emptyLayout, moerr.ErrInternal},
 	} {
 		func() {
 			s := newScope(Normal)
@@ -161,7 +158,7 @@ func odkuProtocolLayout() *plan.PreInsertUkCtx {
 		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rel, ColPos: pos}}}
 	}
 	truth := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: true}}}}
-	ctx := &plan.PreInsertUkCtx{OrderedOdku: true, OdkuActions: &plan.OdkuActionCtx{
+	ctx := &plan.PreInsertUkCtx{OdkuActions: &plan.OdkuActionCtx{
 		SourceColumns: []*plan.Expr{col(0, 0), col(0, 1), col(0, 2), col(0, 3), col(0, 4)},
 		OldColumns:    []*plan.Expr{col(0, 5), col(0, 6), col(0, 7)}, InputColumns: []int32{0, 1, -1},
 		PkColumn: 0, RowIdColumn: 2, UpdateColumns: []int32{1}, UpdateExprs: []*plan.Expr{col(1, 1)},
@@ -214,7 +211,7 @@ func TestOrderedODKUPlanOutputLayout(t *testing.T) {
 
 func TestOrderedODKULocalPreflightBeforeProducers(t *testing.T) {
 	for _, location := range []string{"plan", "scope", "decoded plan", "prescope plan"} {
-		for _, kind := range []string{"missing ordered payload", "missing image", "prior nil image", "ordinal relation", "assignment relation", "old output width"} {
+		for _, kind := range []string{"empty ordered layout", "missing image", "prior nil image", "ordinal relation", "assignment relation", "old output width"} {
 			if location == "scope" && kind == "old output width" {
 				continue // An instruction-only scope carries no output layout.
 			}
@@ -224,9 +221,8 @@ func TestOrderedODKULocalPreflightBeforeProducers(t *testing.T) {
 				ctx := odkuProtocolLayout()
 				want := moerr.ErrInternal
 				switch kind {
-				case "missing ordered payload":
-					ctx = &plan.PreInsertUkCtx{OrderedOdku: true}
-					want = moerr.ErrNotSupported
+				case "empty ordered layout":
+					ctx.OdkuActions = &plan.OdkuActionCtx{}
 				case "missing image":
 					ctx.OdkuActions.OldColumns = nil
 				case "prior nil image":
@@ -306,7 +302,6 @@ func TestOrderedODKUWireFieldAssignments(t *testing.T) {
 	var unrelated plan.PreInsertUkCtx
 	// Main's INSERT IGNORE and target-column fields have different meanings.
 	require.NoError(t, unrelated.Unmarshal([]byte{0x28, 0x01, 0x52, 0x01, 0x02}))
-	require.False(t, unrelated.OrderedOdku)
 	require.Nil(t, unrelated.OdkuActions)
 	original := odkuProtocolLayout()
 	wire, err := original.Marshal()

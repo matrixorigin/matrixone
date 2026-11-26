@@ -86,7 +86,6 @@ func (preInsertUnique *PreInsertUnique) resolveODKUKey(proc *process.Process, sl
 	if err = preInsertUnique.copyODKURow(proc, a.old, original, 0, nil); err != nil {
 		return 0, false, err
 	}
-	copy(a.priorImage.Vecs, a.old.Vecs)
 	copy(a.priorProposed.Vecs, a.incoming.Vecs)
 	for i, p := range c.InputColumns {
 		if p >= 0 {
@@ -94,7 +93,7 @@ func (preInsertUnique *PreInsertUnique) resolveODKUKey(proc *process.Process, sl
 		}
 	}
 	for i, exec := range a.priorKeyExecs {
-		value, e := exec.Eval(proc, []*batch.Batch{a.priorImage, a.incoming}, nil)
+		value, e := exec.Eval(proc, []*batch.Batch{a.old, a.incoming}, nil)
 		if e != nil {
 			return 0, false, e
 		}

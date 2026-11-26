@@ -108,7 +108,7 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		// into an unsupported target can still use the existing fallback.
 		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) &&
 			len(stmt.OnDuplicateUpdate) == 0 {
-			return buildInsert(stmt, ctx, false, isPrepareStmt)
+			return buildInsert(stmt, ctx, isPrepareStmt)
 		}
 		return nil, err
 	}

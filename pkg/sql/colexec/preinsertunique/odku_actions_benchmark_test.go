@@ -86,7 +86,7 @@ func BenchmarkODKUBulkActions(b *testing.B) {
 					InputKey: ref(0, int32(i), types.T_int64), PriorTarget: ref(0, int32(i+6), types.T_int64), CurrentKey: ref(0, int32(i), types.T_int64),
 				})
 			}
-			arg.PreInsertCtx = &plan.PreInsertUkCtx{OrderedOdku: true, OdkuActions: c}
+			arg.PreInsertCtx = &plan.PreInsertUkCtx{OdkuActions: c}
 			for i := range input.Vecs {
 				typ := types.T_int64
 				if i == 4 || i == 13 {

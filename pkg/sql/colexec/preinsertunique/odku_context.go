@@ -29,16 +29,10 @@ func odkuMaterializedColumn(e *plan.Expr) bool {
 // executor or reading data. Compiler preflight and operator Prepare share this
 // authority. Actual child vector types and lengths are checked when they arrive.
 func ValidateODKUContext(ctx *plan.PreInsertUkCtx) error {
-	if ctx == nil {
+	c := ctx.GetOdkuActions()
+	if c == nil {
 		return nil
 	}
-	if ctx.OrderedOdku != (ctx.OdkuActions != nil) {
-		return moerr.NewNotSupportedNoCtx("ODKU requires the ordered action operator")
-	}
-	if !ctx.OrderedOdku {
-		return nil
-	}
-	c := ctx.OdkuActions
 	if len(c.SourceColumns) == 0 || len(c.OldColumns) == 0 || len(c.InputColumns) != len(c.OldColumns) || len(c.Constraints) == 0 ||
 		len(c.UpdateColumns) == 0 || len(c.UpdateColumns) != len(c.UpdateExprs) || c.PkColumn < 0 || int(c.PkColumn) >= len(c.OldColumns) ||
 		c.RowIdColumn < 0 || int(c.RowIdColumn) >= len(c.OldColumns) ||

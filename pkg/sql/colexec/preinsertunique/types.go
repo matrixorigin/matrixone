@@ -109,7 +109,7 @@ func (preInsertUnique *PreInsertUnique) Release() {
 func (preInsertUnique *PreInsertUnique) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	preInsertUnique.freeAcceptedState(proc)
 	if preInsertUnique.ctr.buf != nil {
-		if preInsertUnique.PreInsertCtx.GetOrderedOdku() {
+		if preInsertUnique.PreInsertCtx.GetOdkuActions() != nil {
 			preInsertUnique.ctr.buf.Clean(proc.Mp())
 			preInsertUnique.ctr.buf = nil
 		} else {
@@ -149,7 +149,7 @@ const (
 // preprocessing and INSERT IGNORE retain their existing lifecycle.
 func (preInsertUnique *PreInsertUnique) ActivatesAllocationAccountLifecycle() bool {
 	return preInsertUnique != nil && preInsertUnique.PreInsertCtx != nil &&
-		preInsertUnique.PreInsertCtx.GetOrderedOdku()
+		preInsertUnique.PreInsertCtx.GetOdkuActions() != nil
 }
 
 func (preInsertUnique *PreInsertUnique) SetAllocationAccount(

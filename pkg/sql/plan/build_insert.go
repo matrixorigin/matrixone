@@ -31,14 +31,11 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepareStmt bool) (p *Plan, err error) {
+func buildInsert(stmt *tree.Insert, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildInsertHistogram.Observe(time.Since(start).Seconds())
 	}()
-	if isReplace {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
-	}
 
 	tbl := stmt.Table.(*tree.TableName)
 	dbName := string(tbl.SchemaName)
@@ -63,23 +60,11 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, err
 	}
 	rewriteInfo := &dmlSelectInfo{
-		typ:     "insert",
 		rootId:  -1,
 		tblInfo: tblInfo,
 	}
 	tableDef := tblInfo.tableDefs[0]
-	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// if len(stmt.OnDuplicateUpdate) > 0 && clusterTable.IsClusterTable {
-	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
-	// }
-
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
-	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
-	// CHAR/VARCHAR writes to truncation instead of rejection.
-	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
 	if stmt.IsRestore {
 		builder.isRestore = true
 		if stmt.IsRestoreByTs {
@@ -119,12 +104,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		} else if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); !ok {
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "insert into read-only external table %s", tblName)
 		}
-		if len(stmt.OnDuplicateUpdate) > 0 {
-			if isIcebergMapping {
-				return nil, moerr.NewNotSupported(ctx.GetContext(), "ON DUPLICATE KEY UPDATE on Iceberg table mapping")
-			}
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "ON DUPLICATE KEY UPDATE on external table")
-		}
 		if stmt.Overwrite && !isIcebergMapping {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT OVERWRITE on non-Iceberg external table")
 		}
@@ -138,10 +117,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT PARTITION value syntax currently supports Iceberg INSERT OVERWRITE only")
 	}
 
-	replaceStmt := getRewriteToReplaceStmt(tableDef, stmt, rewriteInfo, isPrepareStmt)
-	if replaceStmt != nil {
-		return bindAndOptimizeReplaceQuery(ctx, replaceStmt, isPrepareStmt, false)
-	}
 	lastNodeId := rewriteInfo.rootId
 	sourceStep := builder.appendStep(lastNodeId)
 	query, err := builder.createQuery()
@@ -151,11 +126,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
 	objRef := tblInfo.objRef[0]
-	if len(rewriteInfo.onDuplicateIdx) > 0 {
-		// ON DUPLICATE KEY UPDATE is fully handled by the modern insert path
-		// and must never reach the legacy builder.
-		return nil, moerr.NewInternalError(ctx.GetContext(), "ON DUPLICATE KEY UPDATE should be handled by the modern insert path")
-	}
 	if tableDef.TableType == catalog.SystemExternalRel {
 		if isIcebergMapping {
 			extraOptions := ""
@@ -675,50 +645,4 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	}
 
 	return []*Expr{filterExpr}, nil
-}
-
-func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSelectInfo, isPrepareStmt bool) *tree.Replace {
-	if len(info.onDuplicateIdx) == 0 {
-		return nil
-	}
-	if _, ok := stmt.Rows.Select.(*tree.ValuesClause); !ok {
-		return nil
-	}
-	if isPrepareStmt {
-		return nil
-	}
-	canUpdateCols := make([]string, 0, len(tableDef.Cols))
-	for _, col := range tableDef.Cols {
-		if col.Hidden {
-			continue
-		}
-		canUpdateCols = append(canUpdateCols, col.Name)
-	}
-	if len(info.onDuplicateExpr) != len(canUpdateCols) {
-		return nil
-	}
-
-	for colName, colExpr := range info.onDuplicateExpr {
-		isUpdateSelf := false
-		if expr, ok := colExpr.Expr.(*plan.Expr_F); ok {
-			if expr.F.Func.GetObjName() == "values" {
-				if cExpr, ok := expr.F.Args[0].Expr.(*plan.Expr_Col); ok {
-					if cExpr.Col.Name == colName {
-						isUpdateSelf = true
-					}
-				}
-			}
-		}
-		if !isUpdateSelf {
-			return nil
-		}
-	}
-
-	replaceStmt := &tree.Replace{
-		Table:          stmt.Table,
-		PartitionNames: stmt.PartitionNames,
-		Columns:        stmt.Columns,
-		Rows:           stmt.Rows,
-	}
-	return replaceStmt
 }

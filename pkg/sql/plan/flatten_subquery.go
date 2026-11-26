@@ -310,7 +310,7 @@ func (builder *QueryBuilder) scalarSubqueryPlanMayVary(rootID int32) bool {
 		for _, exprs := range [][]*plan.Expr{
 			node.ProjectList, node.FilterList, node.OnList, node.GroupBy, node.AggList,
 			node.WinSpecList, node.TblFuncExprList, node.BlockFilterList, node.FillVal,
-			node.OnUpdateExprs, node.TimeWindowPartitionBy,
+			node.TimeWindowPartitionBy,
 			{node.Limit, node.Offset, node.Interval, node.Sliding, node.Timestamp, node.WEnd},
 		} {
 			for _, expr := range exprs {

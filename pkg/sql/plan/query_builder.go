@@ -3054,11 +3054,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_PRE_INSERT_UK:
-		c := node.PreInsertUkCtx
-		if c == nil || !c.OrderedOdku || c.OdkuActions == nil {
+		actions := node.PreInsertUkCtx.GetOdkuActions()
+		if actions == nil {
 			return nil, moerr.NewNotSupported(builder.GetContext(), "ODKU requires the ordered action operator")
 		}
-		exprs := append(append([]*plan.Expr{}, node.ProjectList...), odkuSourceExpressions(c.OdkuActions)...)
+		exprs := append(append([]*plan.Expr{}, node.ProjectList...), odkuSourceExpressions(actions)...)
 		for _, expr := range exprs {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}

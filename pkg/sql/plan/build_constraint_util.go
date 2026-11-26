@@ -38,17 +38,8 @@ const (
 )
 
 type dmlSelectInfo struct {
-	typ string
-
-	projectList    []*Expr
-	tblInfo        *dmlTableInfo
-	idx            int32
-	rootId         int32
-	derivedTableId int32
-
-	onDuplicateIdx      []int32
-	onDuplicateExpr     map[string]*Expr
-	onDuplicateIsIgnore bool
+	tblInfo *dmlTableInfo
+	rootId  int32
 }
 
 type dmlTableInfo struct {
@@ -605,7 +596,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// var uniqueCheckOnAutoIncr string
 	var insertColumns []string
 	tableDef := info.tblInfo.tableDefs[0]
-	tableObjRef := info.tblInfo.objRef[0]
 	colToIdx := make(map[string]int)
 	oldColPosMap := make(map[string]int)
 	tableDef.Name2ColIndex = make(map[string]int32)
@@ -662,7 +652,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault && syntaxHasColumnNames {
 			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate)
+		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx)
 		if err != nil {
 			return false, nil, nil, err
 		}
@@ -744,7 +734,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
-	info.derivedTableId = info.rootId
 	oldProject := append([]*Expr{}, lastNode.ProjectList...)
 
 	insertColToExpr := make(map[string]*Expr)
@@ -871,190 +860,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		Children:    []int32{info.rootId},
 		BindingTags: []int32{lastTag},
 	}, projectCtx)
-
-	info.projectList = make([]*Expr, 0, len(projectList))
-	info.derivedTableId = info.rootId
-	for i, e := range projectList {
-		info.projectList = append(info.projectList, &plan.Expr{
-			Typ: e.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: lastTag,
-					ColPos: int32(i),
-				},
-			},
-		})
-	}
-	info.idx = int32(len(info.projectList))
-
-	// if insert with on duplicate key . need append a join node
-	// create table t1 (a int primary key, b int unique key, c int);
-	// insert into t1 values (1,1,3),(2,2,3) on duplicate key update a=a+1, b=b-2;
-	// rewrite to : select _t.*, t1.a, t1.b，t1.c, t1.row_id from
-	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
-	if len(stmt.OnDuplicateUpdate) > 0 {
-		isIgnore := len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
-		if isIgnore {
-			stmt.OnDuplicateUpdate = nil
-		}
-
-		rightTableDef := CloneTableDefForPlan(tableDef, true)
-		rightObjRef := DeepCopyObjectRef(tableObjRef)
-		uniqueCols, uniqueColNames := GetUniqueColAndIdxFromTableDef(rightTableDef)
-		if rightTableDef.Pkey != nil && rightTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			// rightTableDef.Cols = append(rightTableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
-			rightTableDef.Cols = append(rightTableDef.Cols, rightTableDef.Pkey.CompPkeyCol)
-		}
-		if rightTableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(rightTableDef.ClusterBy.Name) {
-			// rightTableDef.Cols = append(rightTableDef.Cols, MakeHiddenColDefByName(rightTableDef.ClusterBy.Name))
-			rightTableDef.Cols = append(rightTableDef.Cols, rightTableDef.ClusterBy.CompCbkeyCol)
-		}
-		rightTableDef.Cols = append(rightTableDef.Cols, MakeRowIdColDef())
-		rightTableDef.Name2ColIndex = map[string]int32{}
-		for i, col := range rightTableDef.Cols {
-			rightTableDef.Name2ColIndex[col.Name] = int32(i)
-		}
-
-		// if table have unique columns, we do the rewrite. if not, do nothing(do not throw error)
-		if len(uniqueCols) > 0 {
-
-			joinCtx := NewBindContext(builder, bindCtx)
-			rightCtx := NewBindContext(builder, joinCtx)
-			rightId := builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_TABLE_SCAN,
-				ObjRef:      rightObjRef,
-				TableDef:    rightTableDef,
-				BindingTags: []int32{builder.genNewBindTag()},
-			}, rightCtx)
-			rightTag := builder.qry.Nodes[rightId].BindingTags[0]
-			baseNodeTag := builder.qry.Nodes[info.rootId].BindingTags[0]
-
-			// get update cols
-			updateCols := make(map[string]tree.Expr)
-			for _, updateExpr := range stmt.OnDuplicateUpdate {
-				col := updateExpr.Names[0].ColName()
-				updateCols[col] = updateExpr.Expr
-				if _, ok := uniqueColNames[col]; ok {
-					return false, nil, nil, moerr.NewInternalError(builder.GetContext(), "do not support update primary key/unique key for on duplicate key update")
-				}
-			}
-
-			var defExpr *Expr
-			idxs := make([]int32, len(rightTableDef.Cols))
-			updateExprs := make(map[string]*Expr)
-			binder := NewUpdateBinder(builder.GetContext(), builder, nil, rightTableDef.Cols)
-			for i, col := range rightTableDef.Cols {
-				info.idx = info.idx + 1
-				idxs[i] = info.idx
-				if updateExpr, exists := updateCols[col.Name]; exists {
-					if _, ok := updateExpr.(*tree.DefaultVal); ok {
-						defExpr, err = getDefaultExpr(builder.GetContext(), col)
-						if err != nil {
-							return false, nil, nil, err
-						}
-					} else {
-						defExpr, err = binder.BindExpr(updateExpr, 0, true)
-						if err != nil {
-							return false, nil, nil, err
-						}
-					}
-					defExpr, err = builder.forceAssignmentCastExpr(defExpr, col.Typ, builder.isInsertIgnore)
-					if err != nil {
-						return false, nil, nil, err
-					}
-					updateExprs[col.Name] = defExpr
-				}
-				info.projectList = append(info.projectList, &plan.Expr{
-					Typ: col.Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: rightTag,
-							ColPos: int32(i),
-						},
-					},
-				})
-			}
-
-			// get join condition
-			var joinConds *Expr
-			joinIdx := 0
-			for _, uniqueColMap := range uniqueCols {
-				var condExpr *Expr
-				condIdx := int(0)
-				for _, colIdx := range uniqueColMap {
-					col := rightTableDef.Cols[colIdx]
-					leftExpr := &Expr{
-						Typ: col.Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: baseNodeTag,
-								ColPos: int32(colIdx),
-							},
-						},
-					}
-					rightExpr := &plan.Expr{
-						Typ: col.Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: rightTag,
-								ColPos: int32(colIdx),
-							},
-						},
-					}
-					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
-					if err != nil {
-						return false, nil, nil, err
-					}
-					if condIdx == 0 {
-						condExpr = eqExpr
-					} else {
-						condExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, eqExpr})
-						if err != nil {
-							return false, nil, nil, err
-						}
-					}
-					condIdx++
-				}
-
-				if joinIdx == 0 {
-					joinConds = condExpr
-				} else {
-					joinConds, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{joinConds, condExpr})
-					if err != nil {
-						return false, nil, nil, err
-					}
-				}
-				joinIdx++
-			}
-
-			// append join node
-			leftCtx := builder.ctxByNode[info.rootId]
-			err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
-			if err != nil {
-				return false, nil, nil, err
-			}
-			newRootId := builder.appendNode(&plan.Node{
-				NodeType: plan.Node_JOIN,
-				Children: []int32{info.rootId, rightId},
-				JoinType: plan.Node_LEFT,
-				OnList:   []*Expr{joinConds},
-			}, joinCtx)
-			bindCtx.binder = NewTableBinder(builder, bindCtx)
-			info.rootId = newRootId
-			info.onDuplicateIdx = idxs
-			info.onDuplicateExpr = updateExprs
-			info.onDuplicateIsIgnore = isIgnore
-
-			// append ProjectNode
-			info.rootId = builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_PROJECT,
-				ProjectList: info.projectList,
-				Children:    []int32{info.rootId},
-				BindingTags: []int32{builder.genNewBindTag()},
-			}, bindCtx)
-			bindCtx.results = info.projectList
-		}
-	}
 
 	return existAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil
 }
@@ -1881,7 +1686,6 @@ func buildValueScan(
 	slt *tree.ValuesClause,
 	updateColumns []string,
 	colToIdx map[string]int,
-	OnDuplicateUpdate tree.UpdateExprs,
 ) error {
 	var err error
 
@@ -2007,55 +1811,14 @@ func buildValueScan(
 		projectList[i] = expr
 	}
 
-	onUpdateExprs := make([]*plan.Expr, 0)
-	if builder.isPrepareStatement && !(len(OnDuplicateUpdate) == 1 && OnDuplicateUpdate[0] == nil) {
-		for _, expr := range OnDuplicateUpdate {
-			var updateExpr *plan.Expr
-			col := tableDef.Cols[colToIdx[expr.Names[0].ColName()]]
-			if nv, ok := expr.Expr.(*tree.ParamExpr); ok {
-				updateExpr = &plan.Expr{
-					Typ: constTextType,
-					Expr: &plan.Expr_P{
-						P: &plan.ParamRef{
-							Pos: int32(nv.Offset),
-						},
-					},
-				}
-			} else if nv, ok := expr.Expr.(*tree.FuncExpr); ok {
-				if checkExprHasParamExpr(nv.Exprs) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-					binder.builder = builder
-					binder.ctx = bindCtx
-					updateExpr, err = binder.BindExpr(nv, 0, true)
-					if err != nil {
-						return err
-					}
-				}
-			} else if nv, ok := expr.Expr.(*tree.BinaryExpr); ok {
-				if checkExprHasParamExpr([]tree.Expr{nv.Right}) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-					binder.builder = builder
-					binder.ctx = bindCtx
-					updateExpr, err = binder.BindExpr(nv.Right, 0, true)
-					if err != nil {
-						return err
-					}
-				}
-			}
-			if updateExpr != nil {
-				onUpdateExprs = append(onUpdateExprs, updateExpr)
-			}
-		}
-	}
 	rowsetData.RowCount = int32(len(slt.Rows))
 	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
-		NodeType:      plan.Node_VALUE_SCAN,
-		RowsetData:    rowsetData,
-		TableDef:      valueScanTableDef,
-		BindingTags:   []int32{lastTag},
-		Uuid:          nodeId[:],
-		OnUpdateExprs: onUpdateExprs,
+		NodeType:    plan.Node_VALUE_SCAN,
+		RowsetData:  rowsetData,
+		TableDef:    valueScanTableDef,
+		BindingTags: []int32{lastTag},
+		Uuid:        nodeId[:],
 	}
 
 	info.rootId = builder.appendNode(scanNode, bindCtx)

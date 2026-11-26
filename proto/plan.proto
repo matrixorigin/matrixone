@@ -950,7 +950,7 @@ message Node {
   SampleFuncSpec sample_func = 53;
 
   int32 window_idx = 54;
-  repeated Expr onUpdateExprs = 55;
+  reserved 55;
   OriginTableMessageForFuzzy fuzzymessage = 56;
   bool ifInsertFromUnique = 57;
 
@@ -1236,7 +1236,7 @@ message PreInsertUkCtx {
   Type pk_type = 3 [(gogoproto.nullable) = false];
   Type uk_type = 4 [(gogoproto.nullable) = false];
   // Fields 5 through 19 are assigned on main; keep numbering coordinated.
-  bool ordered_odku = 20;
+  reserved 20;
   OdkuActionCtx odku_actions = 21;
 }
 

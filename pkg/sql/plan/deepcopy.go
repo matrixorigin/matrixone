@@ -168,11 +168,10 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertUkCtx{
-		Columns:     slices.Clone(ctx.Columns),
-		PkColumn:    ctx.PkColumn,
-		PkType:      ctx.PkType,
-		UkType:      ctx.UkType,
-		OrderedOdku: ctx.OrderedOdku,
+		Columns:  slices.Clone(ctx.Columns),
+		PkColumn: ctx.PkColumn,
+		PkType:   ctx.PkType,
+		UkType:   ctx.UkType,
 	}
 	if ctx.OdkuActions != nil {
 		newCtx.OdkuActions = proto.Clone(ctx.OdkuActions).(*plan.OdkuActionCtx)
@@ -289,7 +288,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		IsEnd:                  node.IsEnd,
 		ExternScan:             deepCopyExternScan(node.ExternScan),
 		SampleFunc:             DeepCopySampleFuncSpec(node.SampleFunc),
-		OnUpdateExprs:          DeepCopyExprList(node.OnUpdateExprs),
 		DedupColName:           node.DedupColName,
 		DedupColTypes:          slices.Clone(node.DedupColTypes),
 		UpdateCtxList:          DeepCopyUpdateCtxList(node.UpdateCtxList),

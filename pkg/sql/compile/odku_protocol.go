@@ -31,7 +31,7 @@ func validateODKUPlanNode(n *plan.Node) error {
 		if err := preinsertunique.ValidateODKUContext(n.PreInsertUkCtx); err != nil {
 			return err
 		}
-		if c := n.PreInsertUkCtx.GetOdkuActions(); n.PreInsertUkCtx.GetOrderedOdku() &&
+		if c := n.PreInsertUkCtx.GetOdkuActions(); c != nil &&
 			len(n.ProjectList) != len(c.SourceColumns)+len(c.OldColumns) {
 			return moerr.NewInternalErrorNoCtx("invalid ODKU output layout")
 		}
@@ -41,20 +41,54 @@ func validateODKUPlanNode(n *plan.Node) error {
 	}
 	return nil
 }
-func validateODKUQueryProtocol(q *plan.Query) error {
-	if q != nil {
-		for _, n := range q.Nodes {
-			if err := validateODKUPlanNode(n); err != nil {
-				return err
-			}
+
+// validateODKUQueryProtocol also identifies queries that need an action owner.
+func validateODKUQueryProtocol(q *plan.Query) (bool, error) {
+	ordered := false
+	for _, n := range q.GetNodes() {
+		if err := validateODKUPlanNode(n); err != nil {
+			return false, err
+		}
+		ordered = ordered || n.GetPreInsertUkCtx().GetOdkuActions() != nil
+	}
+	return ordered, nil
+}
+
+func (c *Compile) preflightODKU() (*preinsertunique.PreInsertUnique, error) {
+	q := c.pn.GetQuery()
+	ordered, err := validateODKUQueryProtocol(q)
+	if err != nil {
+		return nil, err
+	}
+	var owner *preinsertunique.PreInsertUnique
+	checkOwner := func(s *Scope, candidate *preinsertunique.PreInsertUnique) error {
+		if candidate == owner {
+			return nil
+		}
+		if s.IsRemote || s.NodeInfo.Mcpu > 1 || !sameExecutionAddr(s.NodeInfo.Addr, c.addr) {
+			return moerr.NewInternalError(c.proc.Ctx, "ODKU action owner must execute on the coordinator")
+		}
+		if owner != nil {
+			return moerr.NewInternalError(c.proc.Ctx, "ODKU requires one action owner")
+		}
+		owner = candidate
+		return nil
+	}
+	validated := map[*plan.Query]struct{}{q: {}}
+	for _, scope := range c.scopes {
+		if err := validateODKUScopeProtocol(scope, validated, checkOwner); err != nil {
+			return nil, err
 		}
 	}
-	return nil
+	if ordered && owner == nil {
+		return nil, moerr.NewInternalError(c.proc.Ctx, "ODKU action owner is missing")
+	}
+	return owner, nil
 }
 
 // Root scopes of a compiled statement normally share the same query. Check
 // each distinct query once, without skipping validation of any operator tree.
-func validateODKUScopeProtocol(s *Scope, validated map[*plan.Query]struct{}) error {
+func validateODKUScopeProtocol(s *Scope, validated map[*plan.Query]struct{}, checkOwner func(*Scope, *preinsertunique.PreInsertUnique) error) error {
 	if s == nil {
 		return nil
 	}
@@ -65,8 +99,15 @@ func validateODKUScopeProtocol(s *Scope, validated map[*plan.Query]struct{}) err
 		}
 		switch x := op.(type) {
 		case *preinsertunique.PreInsertUnique:
-			if err := preinsertunique.ValidateODKUContext(x.PreInsertCtx); err != nil {
-				return err
+			if x.PreInsertCtx.GetOdkuActions() != nil {
+				if err := preinsertunique.ValidateODKUContext(x.PreInsertCtx); err != nil {
+					return err
+				}
+				if checkOwner != nil {
+					if err := checkOwner(s, x); err != nil {
+						return err
+					}
+				}
 			}
 		case *dedupjoin.DedupJoin:
 			if e := colexec.ValidateDedupAction(x.OnDuplicateAction); e != nil {
@@ -95,7 +136,7 @@ func validateODKUScopeProtocol(s *Scope, validated map[*plan.Query]struct{}) err
 	}
 	if q := s.Plan.GetQuery(); q != nil {
 		if _, ok := validated[q]; !ok {
-			if err := validateODKUQueryProtocol(q); err != nil {
+			if _, err := validateODKUQueryProtocol(q); err != nil {
 				return err
 			}
 			validated[q] = struct{}{}
@@ -103,7 +144,7 @@ func validateODKUScopeProtocol(s *Scope, validated map[*plan.Query]struct{}) err
 	}
 
 	for _, c := range s.PreScopes {
-		if e := validateODKUScopeProtocol(c, validated); e != nil {
+		if e := validateODKUScopeProtocol(c, validated, checkOwner); e != nil {
 			return e
 		}
 	}
@@ -113,7 +154,7 @@ func validateODKUPipelineProtocol(p *pipeline.Pipeline) error {
 	if p == nil {
 		return nil
 	}
-	if err := validateODKUQueryProtocol(p.Qry.GetQuery()); err != nil {
+	if _, err := validateODKUQueryProtocol(p.Qry.GetQuery()); err != nil {
 		return err
 	}
 

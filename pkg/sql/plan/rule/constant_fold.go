@@ -118,9 +118,6 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 	// 	n.FillVal[i] = r.constantFold(n.FillVal[i], proc)
 	// }
 
-	for i := range node.OnUpdateExprs {
-		node.OnUpdateExprs[i] = r.constantFold(node.OnUpdateExprs[i], proc)
-	}
 }
 
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {

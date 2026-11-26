@@ -1841,8 +1841,7 @@ func TestResetWithNilPointers(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	hb := newTestHashmapBuilder(t)
 
-	// Test case 1: curVecs with nil pointers and needDupVec = true
-	hb.needDupVec = true
+	// Borrowed key vectors can be incomplete after an evaluation failure.
 	hb.curVecs = make([]*vector.Vector, 2)
 	hb.curVecs[0] = nil
 	hb.curVecs[1] = nil
@@ -1860,27 +1859,22 @@ func TestResetWithNilPointers(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-// TestResetWithMixedNilAndValidPointers tests Reset() with a mix of nil and valid vectors
-func TestResetWithMixedNilAndValidPointers(t *testing.T) {
+func TestResetClearsBorrowedKeysAndFreesOwnedKeys(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	hb := newTestHashmapBuilder(t)
+	borrowed := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+	defer borrowed.Free(proc.Mp())
+	borrowedBytes := proc.Mp().CurrNB()
 
-	// Create some valid vectors
-	vec1 := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
-	vec2 := testutil.MakeInt32Vector([]int32{4, 5, 6}, nil, proc.Mp())
+	owned := testutil.MakeInt32Vector([]int32{4, 5, 6}, nil, proc.Mp())
+	hb.curVecs = []*vector.Vector{borrowed, nil}
+	hb.uniqueKeys.first.vecs = []*vector.Vector{owned, nil}
 
-	// Test case: curVecs with mix of nil and valid vectors
-	hb.needDupVec = true
-	hb.curVecs = []*vector.Vector{vec1, nil, vec2}
-
-	// Test case: UniqueJoinKeys with mix of nil and valid vectors
-	hb.uniqueKeys.first.vecs = []*vector.Vector{nil}
-
-	// Reset should free valid vectors and not panic on nil
 	hb.Reset(proc, true)
 	require.Nil(t, hb.curVecs)
 	require.Nil(t, hb.uniqueKeys.first.vecs)
-	require.Equal(t, int64(0), proc.Mp().CurrNB())
+	require.Equal(t, borrowedBytes, proc.Mp().CurrNB())
+	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColWithTypeCheck[int32](borrowed))
 }
 
 // TestFreeWithNilPointers tests that Free() handles nil pointers gracefully

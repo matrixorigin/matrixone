@@ -57,7 +57,7 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 		preInsertUnique.OpAnalyzer.Reset()
 	}
 
-	if c := preInsertUnique.PreInsertCtx; c != nil && c.OrderedOdku {
+	if preInsertUnique.PreInsertCtx.GetOdkuActions() != nil {
 		if preInsertUnique.allocationAccount == nil {
 			return mpool.ErrAllocationAccountInvalid
 		}
@@ -98,7 +98,7 @@ func (preInsertUnique *PreInsertUnique) initBuf(bat *batch.Batch, uniqueColumnPo
 
 func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := preInsertUnique.OpAnalyzer
-	if preInsertUnique.PreInsertCtx.GetOrderedOdku() && preInsertUnique.ctr.failed {
+	if preInsertUnique.PreInsertCtx.GetOdkuActions() != nil && preInsertUnique.ctr.failed {
 		return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "ODKU actions require Reset after a failed attempt")
 	}
 	if preInsertUnique.PreInsertCtx.GetOdkuActions() != nil {

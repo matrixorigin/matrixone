@@ -38,105 +38,63 @@ const (
 	materializedWriterSiteGrouping
 )
 
-func (c *Compile) bindODKUPriorData() error {
+func (c *Compile) bindODKUPriorData(owner *preinsertunique.PreInsertUnique) error {
 	c.odkuResult = nil
-	var visit func(*Scope) error
-	seen := make(map[*preinsertunique.PreInsertUnique]struct{})
-	visit = func(s *Scope) error {
-		if s == nil {
-			return nil
-		}
-		err := vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
-			owner, ok := op.(*preinsertunique.PreInsertUnique)
-			if !ok || !owner.PreInsertCtx.GetOrderedOdku() {
-				return nil
-			}
-			if _, exists := seen[owner]; exists {
-				return nil
-			}
-			seen[owner] = struct{}{}
-			if s.IsRemote || s.NodeInfo.Mcpu > 1 || !sameExecutionAddr(s.NodeInfo.Addr, c.addr) {
-				return moerr.NewInternalError(c.proc.Ctx, "ODKU action owner must execute on the coordinator")
-			}
-			if c.odkuResult != nil {
-				return moerr.NewInternalError(c.proc.Ctx, "ODKU requires one action owner")
-			}
-			result := &odkuAttemptResult{}
-			c.odkuResult = result
-			owner.PublishAffectedRows = result.publish
-			if owner.PreInsertCtx.GetOdkuActions().GetPriorData() == nil {
-				return nil
-			}
-			if c.allocationAttempt == nil {
-				return moerr.NewInternalError(c.proc.Ctx, "ODKU prior data has no allocation attempt")
-			}
-			actions := owner.PreInsertCtx.OdkuActions
-			refs := []*plan.ObjectRef{actions.PriorData.Ref}
-			for _, key := range actions.Constraints {
-				refs = append(refs, key.LookupRef)
-			}
-			relations := make([]engine.Relation, 0, len(refs))
-			byID := make(map[int64]engine.Relation, len(refs))
-			for _, ref := range refs {
-				if byID[ref.Obj] != nil {
-					continue
-				}
-				relation, e := colexec.GetRelAndPartitionRelsByObjRef(c.proc.Ctx, c.proc, c.e, ref)
-				if e != nil {
-					return e
-				}
-				if relation.GetTableID(c.proc.Ctx) != uint64(ref.Obj) {
-					return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
-				}
-				byID[ref.Obj] = relation
-				relations = append(relations, relation)
-			}
-			provider, ok := relations[0].(engine.StatementKeyViewProvider)
-			if !ok {
-				return moerr.NewNotSupported(c.proc.Ctx, "engine does not support a statement key view")
-			}
-			view, e := provider.NewStatementKeyView(c.proc.Ctx, relations, c.proc, c.allocationAttempt.account, func(bytes uint64) (engine.StatementViewReservation, error) {
-				generation, err := c.proc.GetHashBuildBudget()
-				if err != nil {
-					return nil, err
-				}
-				return generation.ReserveMemory(c.proc.Ctx, bytes)
-			})
-			if e != nil {
-				return e
-			}
-			c.odkuViews = append(c.odkuViews, view)
-			owner.PriorDataView = view
-			owner.LockKeys = func(proc *process.Process, slot int, keys *vector.Vector) error {
-				ref := actions.Constraints[slot].LookupRef
-				b := batch.NewWithSize(1)
-				b.Vecs[0] = keys
-				b.SetRowCount(keys.Length())
-				return lockop.LockRows(c.e, proc, byID[ref.Obj], uint64(ref.Obj), b, 0, *keys.GetType(), lock.LockMode_Exclusive, lock.Sharding_None, 0)
-			}
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-		for _, pre := range s.PreScopes {
-			if err = visit(pre); err != nil {
-				return err
-			}
-		}
+	if owner == nil {
 		return nil
 	}
-	for _, s := range c.scopes {
-		if err := visit(s); err != nil {
-			return err
-		}
+	result := &odkuAttemptResult{}
+	c.odkuResult = result
+	owner.PublishAffectedRows = result.publish
+	if owner.PreInsertCtx.GetOdkuActions().GetPriorData() == nil {
+		return nil
 	}
-	if query := c.pn.GetQuery(); query != nil && c.odkuResult == nil {
-		for _, node := range query.Nodes {
-			if node != nil && node.PreInsertUkCtx.GetOrderedOdku() {
-				return moerr.NewInternalError(c.proc.Ctx, "ODKU action owner is missing")
-			}
+	if c.allocationAttempt == nil {
+		return moerr.NewInternalError(c.proc.Ctx, "ODKU prior data has no allocation attempt")
+	}
+	actions := owner.PreInsertCtx.OdkuActions
+	refs := []*plan.ObjectRef{actions.PriorData.Ref}
+	for _, key := range actions.Constraints {
+		refs = append(refs, key.LookupRef)
+	}
+	relations := make([]engine.Relation, 0, len(refs))
+	byID := make(map[int64]engine.Relation, len(refs))
+	for _, ref := range refs {
+		if byID[ref.Obj] != nil {
+			continue
 		}
+		relation, e := colexec.GetRelAndPartitionRelsByObjRef(c.proc.Ctx, c.proc, c.e, ref)
+		if e != nil {
+			return e
+		}
+		if relation.GetTableID(c.proc.Ctx) != uint64(ref.Obj) {
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		byID[ref.Obj] = relation
+		relations = append(relations, relation)
+	}
+	provider, ok := relations[0].(engine.StatementKeyViewProvider)
+	if !ok {
+		return moerr.NewNotSupported(c.proc.Ctx, "engine does not support a statement key view")
+	}
+	view, e := provider.NewStatementKeyView(c.proc.Ctx, relations, c.proc, c.allocationAttempt.account, func(bytes uint64) (engine.StatementViewReservation, error) {
+		generation, err := c.proc.GetHashBuildBudget()
+		if err != nil {
+			return nil, err
+		}
+		return generation.ReserveMemory(c.proc.Ctx, bytes)
+	})
+	if e != nil {
+		return e
+	}
+	c.odkuViews = append(c.odkuViews, view)
+	owner.PriorDataView = view
+	owner.LockKeys = func(proc *process.Process, slot int, keys *vector.Vector) error {
+		ref := actions.Constraints[slot].LookupRef
+		b := batch.NewWithSize(1)
+		b.Vecs[0] = keys
+		b.SetRowCount(keys.Length())
+		return lockop.LockRows(c.e, proc, byID[ref.Obj], uint64(ref.Obj), b, 0, *keys.GetType(), lock.LockMode_Exclusive, lock.Sharding_None, 0)
 	}
 	return nil
 }

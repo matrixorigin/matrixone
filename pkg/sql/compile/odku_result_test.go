@@ -56,16 +56,19 @@ func TestODKUAttemptResultBindingAndRetry(t *testing.T) {
 	defer scope.release()
 	owner.PreInsertCtx = odkuProtocolLayout()
 	c := &Compile{proc: proc, addr: "local", scopes: []*Scope{scope}}
-	require.NoError(t, c.bindODKUPriorData())
+	boundOwner, err := c.preflightODKU()
+	require.NoError(t, err)
+	require.Same(t, owner, boundOwner)
+	require.NoError(t, c.bindODKUPriorData(boundOwner))
 	first, delayed := c.odkuResult, owner.PublishAffectedRows
 	require.NotNil(t, first)
 	require.NoError(t, c.closeODKUPriorData())
 	require.Nil(t, owner.PublishAffectedRows)
-	require.NoError(t, c.bindODKUPriorData())
+	require.NoError(t, c.bindODKUPriorData(boundOwner))
 	require.NotSame(t, first, c.odkuResult)
 	// Even an old callback cannot publish into a prepared/retried generation.
 	require.NoError(t, delayed(11))
-	_, err := c.odkuResult.result()
+	_, err = c.odkuResult.result()
 	require.Error(t, err)
 	require.NoError(t, owner.PublishAffectedRows(3))
 	got, err := c.odkuResult.result()
@@ -73,7 +76,8 @@ func TestODKUAttemptResultBindingAndRetry(t *testing.T) {
 	require.Equal(t, uint64(3), got)
 	require.NoError(t, c.closeODKUPriorData())
 	scope.NodeInfo.Mcpu = 2
-	require.Error(t, c.bindODKUPriorData(), "the action owner cannot be replicated")
+	_, err = c.preflightODKU()
+	require.ErrorContains(t, err, "ODKU action owner must execute on the coordinator")
 }
 
 func TestODKUMissingEOFFinalizesAttemptAndAbortsSink(t *testing.T) {

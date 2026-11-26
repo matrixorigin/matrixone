@@ -39,11 +39,11 @@ type odkuActions struct {
 	insertChecks, updateChecks           []odkueval.Check
 	fkChanges                            [][]colexec.ExpressionExecutor
 	incoming, current, old, nullImage    *batch.Batch
-	image, before, proposed, inputImage  *batch.Batch
+	image, before, proposed              *batch.Batch
 	updateInputs                         [2]*batch.Batch
 	keys, lastFKEligibility              *batch.Batch
 	eligible                             []bool
-	priorImage, priorKeys, priorProposed *batch.Batch
+	priorKeys, priorProposed             *batch.Batch
 	touchedKeys                          []*vector.Vector
 	groupCounts                          []uint64
 	priorValidated                       bool
@@ -210,8 +210,6 @@ func (preInsertUnique *PreInsertUnique) prepareODKUActions(proc *process.Process
 		if a.priorKeyExecs, err = hashbuild.NewExpressionExecutors(proc, keys, preInsertUnique.allocationAccount); err != nil {
 			return err
 		}
-		a.priorImage = batch.NewWithSize(len(left))
-		a.priorImage.SetRowCount(1)
 		a.priorKeys = batch.NewWithSize(len(keys))
 		a.priorKeys.SetRowCount(1)
 		a.priorProposed = batch.NewWithSize(len(right))
@@ -234,9 +232,9 @@ func (preInsertUnique *PreInsertUnique) prepareODKUActions(proc *process.Process
 		}
 	}
 	a.nullImage.SetRowCount(1)
-	a.image, a.before, a.inputImage = batch.NewWithSize(len(left)), batch.NewWithSize(len(left)), batch.NewWithSize(len(left))
+	a.image, a.before = batch.NewWithSize(len(left)), batch.NewWithSize(len(left))
 	a.proposed, a.keys = batch.NewWithSize(len(right)), batch.NewWithSize(len(keys))
-	for _, b := range []*batch.Batch{a.image, a.before, a.inputImage, a.proposed, a.keys} {
+	for _, b := range []*batch.Batch{a.image, a.before, a.proposed, a.keys} {
 		b.SetRowCount(1)
 	}
 	a.updateInputs = [2]*batch.Batch{a.image, a.incoming}
@@ -477,12 +475,11 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 	owner := a.target
 	freshOriginal := a.staticKeys && owner >= 0 && owner == int64(preInsertUnique.ctr.actionRows.images.RowCount())
 	for i, p := range c.InputColumns {
-		a.inputImage.Vecs[i] = a.nullImage.Vecs[i]
+		a.image.Vecs[i] = a.nullImage.Vecs[i]
 		if p >= 0 {
-			a.inputImage.Vecs[i] = a.incoming.Vecs[p]
+			a.image.Vecs[i] = a.incoming.Vecs[p]
 		}
 	}
-	copy(a.image.Vecs, a.inputImage.Vecs)
 	insert := owner < 0
 	changed := insert
 	if insert {
@@ -497,7 +494,7 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 			return err
 		}
 	} else {
-		if err := odkueval.EvaluateChecks(a.insertChecks[:c.InsertCheckConstraintCount], a.inputImage, a.incoming, proc); err != nil {
+		if err := odkueval.EvaluateChecks(a.insertChecks[:c.InsertCheckConstraintCount], a.image, a.incoming, proc); err != nil {
 			return err
 		}
 		if done, err := preInsertUnique.tryDirectNoop(proc, owner); done || err != nil {

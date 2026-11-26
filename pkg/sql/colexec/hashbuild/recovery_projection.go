@@ -76,7 +76,6 @@ func (ctr *container) ensureRecoveryCapacity(
 			proc,
 			exprs,
 			projection.maxRows,
-			ctr.hashmapBuilder.needDupVec,
 		)
 		if err != nil {
 			return err

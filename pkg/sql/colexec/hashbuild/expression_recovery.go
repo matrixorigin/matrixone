@@ -29,14 +29,13 @@ func expressionRecoveryBytes(
 	proc *process.Process,
 	exprs []*plan.Expr,
 	rows int,
-	duplicate bool,
 ) (uint64, error) {
 	if rows < 0 || len(exprs) == 0 {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
 	var total, replacement uint64
 	for _, expr := range exprs {
-		peak, err := expressionVectorPeak(proc, expr, rows, duplicate)
+		peak, _, err := expressionTreePeakWithSelection(proc, expr, uint64(rows), false)
 		if err != nil {
 			return 0, err
 		}
@@ -49,28 +48,6 @@ func expressionRecoveryBytes(
 		}
 	}
 	return recoveryCheckedAdd(total, replacement)
-}
-
-// expressionVectorPeak is an execution-before-allocation upper bound for one
-// expression executor tree based on the declared SQL result types.
-func expressionVectorPeak(
-	proc *process.Process,
-	expr *plan.Expr,
-	rows int,
-	duplicate bool,
-) (uint64, error) {
-	if expr == nil || rows < 0 {
-		return 0, process.ErrHashBuildBudgetInvalid
-	}
-	total, root, err := expressionTreePeakWithSelection(
-		proc, expr, uint64(rows), false)
-	if err != nil {
-		return 0, err
-	}
-	if duplicate {
-		return recoveryCheckedAdd(total, root)
-	}
-	return total, nil
 }
 
 func expressionTreePeakWithSelection(

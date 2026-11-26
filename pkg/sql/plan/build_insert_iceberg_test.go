@@ -30,7 +30,7 @@ func TestBuildInsertBuildsIcebergAppendIntentBeforeExternalReadOnlyCheck(t *test
 	stmt, err := mysql.ParseOne(context.Background(), "insert into gold_orders values (1)", 1)
 	require.NoError(t, err)
 
-	p, err := buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false, false)
+	p, err := buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false)
 	require.NoError(t, err)
 
 	var insertNode *pbplan.Node
@@ -52,7 +52,7 @@ func TestBuildInsertOverwriteBuildsIcebergOverwriteIntent(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "insert overwrite gold_orders select 1", 1)
 	require.NoError(t, err)
 
-	p, err := buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false, false)
+	p, err := buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false)
 	require.NoError(t, err)
 
 	var insertNode *pbplan.Node
@@ -71,7 +71,7 @@ func TestBuildInsertOverwritePartitionBuildsIcebergOverwriteIntent(t *testing.T)
 	stmt, err := mysql.ParseOne(context.Background(), "insert overwrite gold_orders partition(region = 'ksa', day = 20260624) select 1", 1)
 	require.NoError(t, err)
 
-	p, err := buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false, false)
+	p, err := buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false)
 	require.NoError(t, err)
 
 	var insertNode *pbplan.Node
@@ -95,7 +95,7 @@ func TestBuildInsertOverwriteRejectsOrdinaryTable(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "insert overwrite dim_orders select 1", 1)
 	require.NoError(t, err)
 
-	_, err = buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false, false)
+	_, err = buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false)
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "INSERT OVERWRITE currently supports Iceberg table mappings"), err.Error())
 }
@@ -104,7 +104,7 @@ func TestBuildInsertRejectsPartitionValueSyntaxOutsideIcebergOverwrite(t *testin
 	stmt, err := mysql.ParseOne(context.Background(), "insert into gold_orders partition(region = 'ksa') select 1", 1)
 	require.NoError(t, err)
 
-	_, err = buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false, false)
+	_, err = buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false)
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "INSERT PARTITION value syntax currently supports Iceberg INSERT OVERWRITE only"), err.Error())
 }
@@ -113,7 +113,7 @@ func TestBuildInsertOverwriteRejectsPartitionScope(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "insert overwrite gold_orders partition(p0) select 1", 1)
 	require.NoError(t, err)
 
-	_, err = buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false, false)
+	_, err = buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false)
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "PARTITION name syntax cannot express an Iceberg partition tuple"), err.Error())
 }

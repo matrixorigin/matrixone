@@ -161,13 +161,6 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
-	for i := range node.OnUpdateExprs {
-		node.OnUpdateExprs[i], err = rule.ApplyExpr(node.OnUpdateExprs[i])
-		if err != nil {
-			return err
-		}
-	}
-
 	for i := range node.TblFuncExprList {
 		node.TblFuncExprList[i], err = rule.ApplyExpr(node.TblFuncExprList[i])
 		if err != nil {

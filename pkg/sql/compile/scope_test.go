@@ -3230,7 +3230,10 @@ func TestCompileODKUArbiterPreservesSingleLocalOwner(t *testing.T) {
 				other.RootOp = projection.NewArgument()
 				inputs = append(inputs, other)
 			}
-			node := &plan.Node{PreInsertUkCtx: &plan.PreInsertUkCtx{OrderedOdku: !tc.ordinary}}
+			node := &plan.Node{PreInsertUkCtx: &plan.PreInsertUkCtx{}}
+			if !tc.ordinary {
+				node.PreInsertUkCtx.OdkuActions = &plan.OdkuActionCtx{}
+			}
 			result := c.compilePreInsertUk(node, inputs)
 			require.Len(t, result, 1)
 			t.Cleanup(func() { ReleaseScopes(result) })

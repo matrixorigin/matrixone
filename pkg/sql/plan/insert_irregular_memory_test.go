@@ -84,7 +84,7 @@ func TestInsertIrregularMaintenanceAction(t *testing.T) {
 					}
 					seen[id] = true
 					n := b.qry.Nodes[id]
-					if n.PreInsertUkCtx.GetOrderedOdku() {
+					if n.PreInsertUkCtx.GetOdkuActions() != nil {
 						orderedOwners++
 					}
 					if n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP {

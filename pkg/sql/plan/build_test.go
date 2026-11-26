@@ -422,11 +422,6 @@ func nodeHasTextToCharOrVarcharCast(node *plan.Node) bool {
 			}
 		}
 	}
-	for _, expr := range node.OnUpdateExprs {
-		if exprHasTextToCharOrVarcharCast(expr) {
-			return true
-		}
-	}
 	if node.RowsetData != nil {
 		for _, col := range node.RowsetData.Cols {
 			for _, data := range col.Data {
@@ -521,11 +516,6 @@ func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width in
 				if visit(expr) {
 					return true
 				}
-			}
-		}
-		for _, expr := range node.OnUpdateExprs {
-			if visit(expr) {
-				return true
 			}
 		}
 		if node.RowsetData != nil {

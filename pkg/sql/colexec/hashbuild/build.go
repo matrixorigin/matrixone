@@ -287,7 +287,7 @@ func (hashBuild *HashBuild) build(
 		// Build-key executors are producer scratch. No consumer reads them after
 		// build() returns, so release their retained vectors here instead of
 		// holding them until pipeline Reset.
-		ctr.hashmapBuilder.FreeTemporaryVectors(proc)
+		ctr.hashmapBuilder.ClearEvaluatedKeys()
 		ctr.hashmapBuilder.FreeExecutors()
 		ctr.dropSpillScratchBuffers()
 		if err := hashBuild.releaseRecoveryCapacity(

@@ -78,7 +78,7 @@ func (builder *QueryBuilder) appendODKUActions(bindCtx *BindContext, child int32
 	}
 	node := &plan.Node{
 		NodeType: plan.Node_PRE_INSERT_UK, Children: []int32{child}, BindingTags: []int32{tag}, ProjectList: project,
-		PreInsertUkCtx: &plan.PreInsertUkCtx{OrderedOdku: true, OdkuActions: actions},
+		PreInsertUkCtx: &plan.PreInsertUkCtx{OdkuActions: actions},
 	}
 	return builder.appendNode(node, bindCtx), tag, node
 }

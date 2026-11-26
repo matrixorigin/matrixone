@@ -638,15 +638,9 @@ func (c *Compile) prePipelineInitializer() (err error) {
 	}
 	// Validate local and remote-bound plans before locks, data-source setup or
 	// any MergeRun prescope can begin evaluating source expressions.
-	q := c.pn.GetQuery()
-	if err = validateODKUQueryProtocol(q); err != nil {
+	owner, err := c.preflightODKU()
+	if err != nil {
 		return err
-	}
-	validated := map[*plan.Query]struct{}{q: {}}
-	for _, scope := range c.scopes {
-		if err = validateODKUScopeProtocol(scope, validated); err != nil {
-			return err
-		}
 	}
 	// do table lock.
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
@@ -656,7 +650,7 @@ func (c *Compile) prePipelineInitializer() (err error) {
 		return err
 	}
 
-	if err = c.bindODKUPriorData(); err != nil {
+	if err = c.bindODKUPriorData(owner); err != nil {
 		return err
 	}
 
@@ -4279,8 +4273,7 @@ func nodeHasUserLevelLockFunction(node *plan.Node) bool {
 		exprHasUserLevelLockFunction(node.Sliding) ||
 		exprHasUserLevelLockFunction(node.Timestamp) ||
 		exprHasUserLevelLockFunction(node.WEnd) ||
-		hasUserLevelLockFunction(node.FillVal) ||
-		hasUserLevelLockFunction(node.OnUpdateExprs) {
+		hasUserLevelLockFunction(node.FillVal) {
 		return true
 	}
 	if node.IndexReaderParam != nil {
@@ -5962,7 +5955,7 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 }
 
 func (c *Compile) compilePreInsertUk(node *plan.Node, ss []*Scope) []*Scope {
-	if node.PreInsertUkCtx != nil && node.PreInsertUkCtx.OrderedOdku {
+	if node.PreInsertUkCtx.GetOdkuActions() != nil {
 		if len(ss) == 1 && c.canInlineODKUArbiter(ss[0]) {
 			// Keep concurrent dependency scheduling even though this single
 			// local stream needs no additional merge/connector boundary.

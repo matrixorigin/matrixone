@@ -46,7 +46,7 @@ func TestODKUMetadataProjectionRewrite(t *testing.T) {
 		Constraints:                []*plan.OdkuConstraint{{InputKey: ref(7, 3), PriorTarget: ref(7, 4), CurrentKey: ref(0, 0)}},
 		ForeignKeyChecks:           []*plan.OdkuForeignKeyCheck{{Columns: []plan.ColRef{{RelPos: 0, ColPos: 1}}, Eligibility: ref(1, 1)}},
 	}
-	node := &plan.Node{PreInsertUkCtx: &plan.PreInsertUkCtx{OrderedOdku: true, OdkuActions: c}}
+	node := &plan.Node{PreInsertUkCtx: &plan.PreInsertUkCtx{OdkuActions: c}}
 	replacements := make(map[[2]int32]*plan.Expr)
 	for i := range 5 {
 		replacements[[2]int32{7, int32(i)}] = ref(8, int32(i+10))

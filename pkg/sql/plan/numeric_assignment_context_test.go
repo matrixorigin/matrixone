@@ -1203,9 +1203,6 @@ func collectUniquePlanParamTypes(t *testing.T, queryPlan *Plan) map[int32]planpb
 		for _, expr := range node.AggList {
 			collectExprParamTypesByPos(t, expr, result)
 		}
-		for _, expr := range node.OnUpdateExprs {
-			collectExprParamTypesByPos(t, expr, result)
-		}
 		if c := node.PreInsertUkCtx.GetOdkuActions(); c != nil {
 			for _, expr := range c.UpdateExprs {
 				collectExprParamTypesByPos(t, expr, result)
