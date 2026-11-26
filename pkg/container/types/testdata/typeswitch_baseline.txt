@@ -166,8 +166,6 @@ pkg/sql/plan/base_binder.go	resetDateFunctionArgs	float	3
 pkg/sql/plan/base_binder.go	resetDateFunctionArgs	float chain	1
 pkg/sql/plan/base_binder.go	resetIntervalFunctionArgs	float chain	1
 pkg/sql/plan/build_alter_add_column.go	checkTypeCapSize	vector chain	1
-pkg/sql/plan/build_constraint_util.go	MakeInsertValueConstExpr	float	1
-pkg/sql/plan/build_constraint_util.go	MakeInsertValueConstExpr	vector	1
 pkg/sql/plan/build_constraint_util.go	appendPrimaryConstraintPlan	float chain	1
 pkg/sql/plan/build_constraint_util.go	bindPrimaryKeyIdentityExpr	float chain	1
 pkg/sql/plan/build_ddl.go	buildTableDefs	vector chain	1
