@@ -26,6 +26,10 @@ select col2, bitmap_count(bitmap_construct_agg(bitmap_bit_position(col2)) over (
     partition by bitmap_bucket_number(col2) order by col2 rows between 1 preceding and current row)) as cnt
 from bitmappanic order by col2;
 
+-- Every row sees the same exact bitmap in the whole partition.
+select col2, hex(bitmap_construct_agg(bitmap_bit_position(col2)) over ()) as whole_bitmap
+from bitmappanic order by col2;
+
 drop table if EXISTS bitmappanic;
 -- Materialize overlapping non-empty bitmaps, then compare the exact window unions.
 drop table if exists bitmap_window_union_input;

@@ -106,6 +106,8 @@ func FullPartitionWindowAggregate(id int64) bool {
 		return true
 	case AggIdOfBitmapOr:
 		return true
+	case AggIdOfBitmapConstruct:
+		return true
 	}
 	return false
 }

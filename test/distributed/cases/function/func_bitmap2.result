@@ -25,6 +25,14 @@ from bitmappanic order by col2;
 65537  ¦  2  𝄀
 65538  ¦  2  𝄀
 131072  ¦  1
+select col2, hex(bitmap_construct_agg(bitmap_bit_position(col2)) over ()) as whole_bitmap
+from bitmappanic order by col2;
+➤ col2[4,32,0]  ¦  whole_bitmap[-1,16383,0]  𝄀
+0  ¦  3A300000010000000000020010000000000001000200  𝄀
+65536  ¦  3A300000010000000000020010000000000001000200  𝄀
+65537  ¦  3A300000010000000000020010000000000001000200  𝄀
+65538  ¦  3A300000010000000000020010000000000001000200  𝄀
+131072  ¦  3A300000010000000000020010000000000001000200
 drop table if EXISTS bitmappanic;
 drop table if exists bitmap_window_union_input;
 drop table if exists bitmap_window_union_seed;

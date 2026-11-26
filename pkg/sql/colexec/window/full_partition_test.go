@@ -81,6 +81,143 @@ func TestBitmapOrWindowFillWork(t *testing.T) {
 	require.Equal(t, rows, seen)
 }
 
+func TestBitmapConstructWindowBudget(t *testing.T) {
+	const rows, budget = 1600, 1 << 20
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	t.Cleanup(func() {
+		proc.Free()
+		t.Logf("after child/process release: pool bytes=%d", mp.CurrNB())
+		require.Zero(t, mp.CurrNB())
+	})
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	require.NoError(t, err)
+	account, err := registry.Open(budget)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		terminal, _, err := registry.CompleteTerminal(account)
+		require.NoError(t, err)
+		t.Logf("after terminal completion: used=%d live allocations=%d", terminal.Used, terminal.LiveAllocations)
+		require.Zero(t, terminal.Used)
+		require.Zero(t, terminal.LiveAllocations)
+	})
+
+	input := batch.NewWithSize(1)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	t.Cleanup(func() { child.Free(proc, false, nil) })
+	typ := types.T_uint64.ToType()
+	input.Vecs[0] = vector.NewVec(typ, mp)
+	want := make([]uint32, rows)
+	for row := range rows {
+		want[row] = uint32(row)
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], uint64(row), false, mp))
+	}
+	input.SetRowCount(rows)
+	spec := makeAggWindowSpec("bitmap_construct_agg")
+	// RANGE UNBOUNDED PRECEDING TO CURRENT ROW without ordering is OVER().
+	spec.GetW().Frame.Type = plan.FrameClause_RANGE
+	spec.GetW().Frame.End = &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW}
+	arg := newBitmapConstructWindow(spec, typ)
+	arg.AppendChild(child)
+	var callErr error
+	t.Cleanup(func() {
+		arg.Reset(proc, callErr != nil, callErr)
+		t.Logf("after Window.Reset: used=%d", account.Snapshot().Used)
+		require.Zero(t, account.Snapshot().Used)
+	})
+	require.NoError(t, arg.SetAllocationAccount(account))
+	require.NoError(t, arg.Prepare(proc))
+
+	seen := 0
+	for {
+		result, err := arg.Call(proc)
+		callErr = err
+		if err != nil {
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Nil(t, result.Batch)
+			require.Zero(t, seen)
+			t.Fatalf("Window.Call rejected the %d-byte budget with nil batch and %d output rows: %v", budget, seen, err)
+		}
+		if result.Status == vm.ExecStop {
+			require.Nil(t, result.Batch)
+			break
+		}
+		require.NotNil(t, result.Batch)
+		count := result.Batch.RowCount()
+		require.Positive(t, count)
+		require.LessOrEqual(t, seen+count, rows)
+		for row := range count {
+			checkBitmapWindowRow(t, result.Batch.Vecs[1], row, want)
+		}
+		seen += count
+	}
+	require.Equal(t, rows, seen)
+}
+
+func TestBitmapConstructWindowFrames(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		full bool
+		want [][]uint32
+	}{
+		{name: "whole partitions", full: true, want: [][]uint32{{7, 9}, {7, 9}, {7, 9}, {7, 9}, {7, 9}, nil, nil}},
+		{name: "finite sliding", want: [][]uint32{{7}, {7}, {9}, {9}, nil, nil, nil}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, mp.CurrNB()) })
+			typ := types.T_uint64.ToType()
+			input := batch.NewWithSize(1)
+			t.Cleanup(func() { input.Clean(mp) })
+			input.Vecs[0] = vector.NewVec(typ, mp)
+			// In physical ROWS order: [7, NULL, 9, NULL, NULL] | [NULL, NULL].
+			for _, value := range []uint64{7, 0, 9, 0, 0, 0, 0} {
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], value, value == 0, mp))
+			}
+			input.SetRowCount(7)
+			spec := makeAggWindowSpec("bitmap_construct_agg")
+			if !tc.full {
+				spec.GetW().Frame = &plan.FrameClause{
+					Type:  plan.FrameClause_ROWS,
+					Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 1}}}}},
+					End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+				}
+			}
+			arg := newBitmapConstructWindow(spec, typ)
+			ctr := &container{
+				bat: input, ps: []int64{0, 5},
+				aggVecs: []colexec.ExprEvalVector{{Vec: input.Vecs}},
+			}
+			t.Cleanup(func() { ctr.freeFullPartitionResults(proc) })
+			check := func(start, end int) {
+				t.Helper()
+				out, err := ctr.processAggregateFuncRange(0, arg, proc, start, end)
+				require.NoError(t, err)
+				defer out.Free(out.MPool())
+				require.Equal(t, end-start, out.Length())
+				for row, want := range tc.want[start:end] {
+					checkBitmapWindowRow(t, out, row, want)
+				}
+			}
+			check(0, 2) // The first partition is still partially emitted.
+			if tc.full {
+				require.NotNil(t, ctr.fullPartitionResults)
+			} else {
+				require.Nil(t, ctr.fullPartitionResults)
+			}
+			check(2, len(tc.want))
+			require.Nil(t, ctr.fullPartitionResults)
+		})
+	}
+}
+
+func newBitmapConstructWindow(spec *plan.Expr, typ types.Type) *Window {
+	return &Window{WinSpecList: []*plan.Expr{spec}, Aggs: []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfBitmapConstruct, false, []*plan.Expr{newColExprWithType(0, typ)}, nil),
+	}}
+}
+
 func TestFullPartitionSumAcrossChunksAndNullPartitions(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) }()
