@@ -262,6 +262,11 @@ func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vecto
 			d := types.Decimal128{B0_63: common.NextGlobalSeqNum(), B64_127: 0}
 			AppendValue(vec, d, false)
 		}
+	case types.T_decimal256:
+		for i := int32(1); i <= int32(rows); i++ {
+			d := types.Decimal256{B0_63: common.NextGlobalSeqNum()}
+			AppendValue(vec, d, false)
+		}
 	case types.T_TS:
 		for i := int32(1); i <= int32(rows); i++ {
 			AppendValue(vec, types.BuildTS(int64(i+1), uint32(i%16)), false)
@@ -356,6 +361,11 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 	case types.T_decimal128:
 		for i := 0; i < rows; i++ {
 			d := types.Decimal128{B0_63: uint64(i + offset), B64_127: 0}
+			AppendValue(vec, d, false)
+		}
+	case types.T_decimal256:
+		for i := 0; i < rows; i++ {
+			d := types.Decimal256{B0_63: uint64(i + offset)}
 			AppendValue(vec, d, false)
 		}
 	case types.T_timestamp:

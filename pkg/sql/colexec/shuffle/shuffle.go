@@ -921,6 +921,48 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch, partition *
 				}
 			}
 		}
+	case types.T_decimal256:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Decimal256](groupByVec)
+		{
+			routingRows := len(groupByCol)
+			if routingRows > 0 {
+				var routedBucket uint64
+				{
+					row := 0
+					v := groupByCol[row]
+
+					regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127^v.B128_191^v.B192_255), bucketNum)
+					routedBucket = regIndex
+
+				}
+				firstBucket := routedBucket
+				partition.first = firstBucket
+				row := 1
+				for ; row < routingRows; row++ {
+					v := groupByCol[row]
+
+					regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127^v.B128_191^v.B192_255), bucketNum)
+					routedBucket = regIndex
+
+					if routedBucket != firstBucket {
+						break
+					}
+				}
+				if row < routingRows {
+					partition.startMixed(row)
+					sels := partition.sels
+					sels[routedBucket] = append(sels[routedBucket], int32(row))
+					for row++; row < routingRows; row++ {
+						v := groupByCol[row]
+
+						regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127^v.B128_191^v.B192_255), bucketNum)
+						routedBucket = regIndex
+
+						sels[routedBucket] = append(sels[routedBucket], int32(row))
+					}
+				}
+			}
+		}
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)

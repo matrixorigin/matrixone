@@ -1,6 +1,5 @@
 # Untagged partial type switches that predate TestTypeSwitchFamilies:
 # file	function	family	count	members they miss. Fix or tag an entry, then regenerate; never add one.
-pkg/catalog/tuplesParse.go	GenRows	decimal	1	T_decimal256
 pkg/catalog/tuplesParse.go	GenRows	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/catalog/tuplesParse.go	GenRows	temporal	1	T_year
 pkg/catalog/tuplesParse.go	GenRows	vector	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
@@ -98,7 +97,6 @@ pkg/objectio/exact_scan_filter.go	selectRows	decimal	1	T_decimal128,T_decimal256
 pkg/objectio/exact_scan_filter.go	selectRows	temporal	1	T_datetime,T_time,T_timestamp,T_year
 pkg/objectio/mergeutil/types.go	MergeSortBatches	float chain	1	T_bf16,T_float16,T_float4,T_float8
 pkg/objectio/types.go	NewReadFilterSearch	vector	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
-pkg/objectio/utils.go	NewVector	decimal	1	T_decimal256
 pkg/objectio/utils.go	NewVector	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/objectio/utils.go	NewVector	temporal	1	T_year
 pkg/objectio/utils.go	NewVector	vector	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
@@ -212,7 +210,6 @@ pkg/sql/colexec/postdml/postdml.go	runPostDml	vector	1	T_array_bf16,T_array_floa
 pkg/sql/colexec/productl2/product_l2.go	build	vector	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
 pkg/sql/colexec/productl2/product_l2.go	newMat	vector	1	T_array_float32,T_array_float4,T_array_float8
 pkg/sql/colexec/runtimefilter/contract.go	CloseFloatSignedZero	float	1	T_bf16,T_float16,T_float4,T_float8
-pkg/sql/colexec/shuffle/shuffle.go	getShuffledSelsByHashWithoutNull	decimal	1	T_decimal256
 pkg/sql/colexec/table_function/filter_helper_gpu.go	filterColTypeFromOid	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/colexec/table_function/generate_series.go	call	temporal	1	T_date,T_time,T_timestamp,T_year
 pkg/sql/colexec/table_function/generate_series.go	start	temporal	1	T_date,T_time,T_timestamp,T_year
@@ -392,14 +389,10 @@ pkg/sql/plan/function/func_cast.go	arrayToArrayDispatch	vector	1	T_array_float4,
 pkg/sql/plan/function/func_cast.go	arrayTypeToOthers	vector	1	T_array_float4,T_array_float8
 pkg/sql/plan/function/func_cast.go	bitToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	bitToOthers	temporal	1	T_date,T_datetime,T_year
-pkg/sql/plan/function/func_cast.go	boolToOthers	decimal	1	T_decimal256
 pkg/sql/plan/function/func_cast.go	boolToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	boolToOthers	temporal	1	T_date,T_datetime,T_time,T_timestamp
 pkg/sql/plan/function/func_cast.go	castToDecimal256	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	castToJSON	float	1	T_bf16,T_float16,T_float4,T_float8
-pkg/sql/plan/function/func_cast.go	dateToOthers	decimal	1	T_decimal256
-pkg/sql/plan/function/func_cast.go	datetimeToOthers	decimal	1	T_decimal256
-pkg/sql/plan/function/func_cast.go	decimal128ToOthers	decimal	1	T_decimal256
 pkg/sql/plan/function/func_cast.go	decimal128ToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	decimal128ToOthers	temporal	1	T_date
 pkg/sql/plan/function/func_cast.go	decimal256ToOthersWithContext	float	1	T_bf16,T_float16,T_float4,T_float8
@@ -411,9 +404,7 @@ pkg/sql/plan/function/func_cast.go	decimalToInt64Explicit	vector list	1	T_array_
 pkg/sql/plan/function/func_cast.go	enumToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	explicitNumericToDecimalTarget	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	explicitNumericToDecimalTarget	temporal	2	T_year
-pkg/sql/plan/function/func_cast.go	float32ToOthers	decimal	1	T_decimal256
 pkg/sql/plan/function/func_cast.go	float32ToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
-pkg/sql/plan/function/func_cast.go	float64ToOthers	decimal	1	T_decimal256
 pkg/sql/plan/function/func_cast.go	float64ToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	int16ToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	int16ToOthers	temporal	1	T_date,T_datetime
@@ -424,21 +415,15 @@ pkg/sql/plan/function/func_cast.go	int64ToOthers	temporal	1	T_date,T_datetime
 pkg/sql/plan/function/func_cast.go	int8ToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	int8ToOthers	temporal	1	T_date,T_datetime
 pkg/sql/plan/function/func_cast.go	jsonAppendDecimalText	decimal	1	T_decimal256
-pkg/sql/plan/function/func_cast.go	jsonAppendNull	decimal	1	T_decimal256
 pkg/sql/plan/function/func_cast.go	jsonAppendNull	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	jsonAppendValue	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	jsonToNumeric	decimal	1	T_decimal256
-pkg/sql/plan/function/func_cast.go	jsonToOthers	decimal	1	T_decimal256
 pkg/sql/plan/function/func_cast.go	jsonToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	newCast	decimal chain	1	T_decimal256
 pkg/sql/plan/function/func_cast.go	newCast	temporal	2	T_time,T_timestamp,T_year
-pkg/sql/plan/function/func_cast.go	scalarNullToOthers	decimal	1	T_decimal256
-pkg/sql/plan/function/func_cast.go	strTypeToOthers	decimal	1	T_decimal256
 pkg/sql/plan/function/func_cast.go	strTypeToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	strTypeToOthers	vector	2	T_array_float4,T_array_float8
-pkg/sql/plan/function/func_cast.go	timeToOthers	decimal	1	T_decimal256
 pkg/sql/plan/function/func_cast.go	timeToOthers	temporal	1	T_timestamp,T_year
-pkg/sql/plan/function/func_cast.go	timestampToOthers	decimal	1	T_decimal256
 pkg/sql/plan/function/func_cast.go	tsToOthers	temporal	1	T_date,T_datetime,T_time,T_year
 pkg/sql/plan/function/func_cast.go	uint16ToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	uint16ToOthers	temporal	1	T_date,T_datetime
@@ -449,7 +434,6 @@ pkg/sql/plan/function/func_cast.go	uint64ToOthers	temporal	1	T_date,T_datetime
 pkg/sql/plan/function/func_cast.go	uint8ToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast.go	uint8ToOthers	temporal	1	T_date,T_datetime
 pkg/sql/plan/function/func_cast.go	widenDecimal256Batch	decimal	1	T_decimal256
-pkg/sql/plan/function/func_cast.go	yearToOthers	decimal	1	T_decimal256
 pkg/sql/plan/function/func_cast.go	yearToOthers	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast_lowprec_float.go	init	float list	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/plan/function/func_cast_temporal_integer.go	NewTemporalCastInteger	temporal	1	T_date,T_year
@@ -645,7 +629,6 @@ pkg/sql/util/index_util.go	compactSingleIndexCol	float	1	T_bf16,T_float16,T_floa
 pkg/sql/util/index_util.go	compactSingleIndexCol	vector	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
 pkg/sql/util/index_util.go	serialWithCompacted	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/util/index_util.go	serialWithCompacted	vector	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
-pkg/testutil/util_new.go	NewVectorWithNulls	decimal	1	T_decimal256
 pkg/testutil/util_new.go	NewVectorWithNulls	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/testutil/util_new.go	NewVectorWithNulls	temporal	1	T_year
 pkg/testutil/util_new.go	NewVectorWithNulls	vector	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
@@ -701,11 +684,9 @@ pkg/vectorindex/sqlexec/bloomfilter.go	AppendVectorSQLLiteral	temporal	1	T_year
 pkg/vm/engine/disttae/stats.go	collectTableStats	decimal	3	T_decimal256
 pkg/vm/engine/disttae/stats.go	tryGetMinMaxValueByFloat64	decimal	1	T_decimal256
 pkg/vm/engine/disttae/stats.go	tryGetMinMaxValueByFloat64	float	1	T_bf16,T_float16,T_float4,T_float8
-pkg/vm/engine/disttae/txn.go	checkPKDup	decimal	1	T_decimal256
 pkg/vm/engine/disttae/txn.go	checkPKDup	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/vm/engine/disttae/txn.go	checkPKDup	temporal	1	T_year
 pkg/vm/engine/disttae/txn.go	checkPKDup	vector	1	T_array_float4,T_array_float8
-pkg/vm/engine/disttae/util.go	LinearSearchOffsetByValFactory	decimal	2	T_decimal256
 pkg/vm/engine/disttae/util.go	LinearSearchOffsetByValFactory	float	2	T_bf16,T_float16,T_float4,T_float8
 pkg/vm/engine/disttae/util.go	LinearSearchOffsetByValFactory	vector	2	T_array_float4,T_array_float8
 pkg/vm/engine/readutil/datasource.go	UsableOrderZoneMap	decimal chain	1	T_decimal256
@@ -724,15 +705,12 @@ pkg/vm/engine/tae/common/print.go	MoVectorToString	decimal	1	T_decimal256
 pkg/vm/engine/tae/common/print.go	MoVectorToString	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/vm/engine/tae/common/print.go	TypeStringValue	decimal	1	T_decimal256
 pkg/vm/engine/tae/common/print.go	TypeStringValue	float	1	T_bf16,T_float16,T_float4,T_float8
-pkg/vm/engine/tae/compute/compute.go	GetOffsetByVal	decimal	1	T_decimal256
 pkg/vm/engine/tae/compute/compute.go	GetOffsetByVal	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/vm/engine/tae/compute/compute.go	GetOffsetByVal	temporal	1	T_year
 pkg/vm/engine/tae/compute/compute.go	GetOffsetByVal	vector	1	T_array_float4,T_array_float8
-pkg/vm/engine/tae/containers/mock.go	MockVector	decimal	1	T_decimal256
 pkg/vm/engine/tae/containers/mock.go	MockVector	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/vm/engine/tae/containers/mock.go	MockVector	temporal	1	T_year
 pkg/vm/engine/tae/containers/mock.go	MockVector	vector	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
-pkg/vm/engine/tae/containers/mock.go	MockVector2	decimal	1	T_decimal256
 pkg/vm/engine/tae/containers/mock.go	MockVector2	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/vm/engine/tae/containers/mock.go	MockVector2	temporal	1	T_year
 pkg/vm/engine/tae/containers/mock.go	MockVector2	vector	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
@@ -748,10 +726,8 @@ pkg/vm/engine/tae/index/zm.go	decodeSum	decimal	1	T_decimal128,T_decimal256
 pkg/vm/engine/tae/index/zm.go	hasNaNBound	float	1	T_float4
 pkg/vm/engine/tae/tables/functions.go		float list	2	T_bf16,T_float16,T_float4,T_float8
 pkg/vm/engine/tae/tables/functions.go		vector list	2	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
-pkg/vm/engine/tae/txn/txnimpl/index.go	BatchDedup	decimal	1	T_decimal256
 pkg/vm/engine/tae/txn/txnimpl/index.go	BatchDedup	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/vm/engine/tae/txn/txnimpl/index.go	BatchDedup	vector	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
-pkg/vm/engine/tae/txn/txnimpl/index.go	BatchInsert	decimal	1	T_decimal256
 pkg/vm/engine/tae/txn/txnimpl/index.go	BatchInsert	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/vm/engine/tae/txn/txnimpl/index.go	BatchInsert	vector	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
 pkg/vm/engine/tae/txn/txnimpl/index.go	KeyToVector	vector	1	T_array_float4,T_array_float8
