@@ -102,7 +102,7 @@ func (c *Compile) placeStarCountByCache(
 		return fallback, err
 	}
 	sampler, ok := rel.(interface {
-		SampleCountTombstoneObjects(context.Context, int) ([][]byte, error)
+		PrepareCountTombstoneSample(context.Context) (func(context.Context, int) ([][]byte, error), error)
 	})
 	if !ok {
 		return fallback, nil
@@ -110,14 +110,18 @@ func (c *Compile) placeStarCountByCache(
 	if c.execType == plan2.ExecTypeAP_MULTICN && len(req.QueryWorkers) <= 1 {
 		return fallback, nil
 	}
-	// Snapshot admission also belongs to the ordinary scan. Start the
-	// advisory network budget only after the local threshold has qualified.
-	objects, err := sampler.SampleCountTombstoneObjects(ctx, defaultStarCountTombstoneThreshold)
-	if err != nil || len(objects) == 0 {
+	// Ordinary snapshot admission can subscribe on first access. Once the
+	// snapshot is available, all optional work shares one deadline.
+	sample, err := sampler.PrepareCountTombstoneSample(ctx)
+	if err != nil || sample == nil {
 		return fallback, ctx.Err()
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, starCountCacheProbeTimeout)
 	defer cancel()
+	objects, err := sample(probeCtx, defaultStarCountTombstoneThreshold)
+	if err != nil || probeCtx.Err() != nil || len(objects) == 0 {
+		return fallback, ctx.Err()
+	}
 	fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
 	if err != nil {
 		return fallback, ctx.Err()

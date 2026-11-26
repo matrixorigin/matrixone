@@ -199,17 +199,28 @@ func TestStarCountCachePlacementFallback(t *testing.T) {
 
 type starCountSamplingRelation struct {
 	engine.Relation
-	tombstoneRows int
-	samples       int
+	tombstoneRows    int
+	samples          int
+	admissionContext context.Context
+	expireProbe      bool
+	sampleErr        error
 }
 
-func (r *starCountSamplingRelation) SampleCountTombstoneObjects(_ context.Context, threshold int) ([][]byte, error) {
-	r.samples++
-	if r.tombstoneRows <= threshold {
-		return nil, nil
-	}
-	id := objectio.NewObjectid()
-	return [][]byte{id[:]}, nil
+func (r *starCountSamplingRelation) PrepareCountTombstoneSample(ctx context.Context) (func(context.Context, int) ([][]byte, error), error) {
+	r.admissionContext = ctx
+	return func(ctx context.Context, threshold int) ([][]byte, error) {
+		r.samples++
+		if r.expireProbe {
+			<-ctx.Done()
+			r.sampleErr = ctx.Err()
+			return nil, r.sampleErr
+		}
+		if r.tombstoneRows <= threshold {
+			return nil, nil
+		}
+		id := objectio.NewObjectid()
+		return [][]byte{id[:]}, nil
+	}, nil
 }
 
 func TestStarCountCacheDiscoversCandidatesOnlyForHeavyCounts(t *testing.T) {
@@ -251,20 +262,29 @@ func TestStarCountCacheDiscoversCandidatesOnlyForHeavyCounts(t *testing.T) {
 		name           string
 		rows           int
 		discoveryCalls int
+		expireProbe    bool
 	}{
 		{name: "empty"},
 		{name: "below threshold", rows: defaultStarCountTombstoneThreshold - 1},
 		{name: "at threshold", rows: defaultStarCountTombstoneThreshold},
 		{name: "heavy", rows: defaultStarCountTombstoneThreshold + 1, discoveryCalls: 1},
+		{name: "sample budget expired", rows: defaultStarCountTombstoneThreshold + 1, expireProbe: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			discoverer.discoveryCalls = 0
-			rel := &starCountSamplingRelation{tombstoneRows: tc.rows}
-			actual, err := c.placeStarCountByCache(t.Context(), scan, rel, req, fallback)
+			rel := &starCountSamplingRelation{tombstoneRows: tc.rows, expireProbe: tc.expireProbe}
+			queryCtx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			actual, err := c.placeStarCountByCache(queryCtx, scan, rel, req, fallback)
 			require.NoError(t, err)
+			require.NoError(t, queryCtx.Err(), "optional sampling must not cancel SQL")
+			require.Same(t, queryCtx, rel.admissionContext)
 			require.Equal(t, fallback, actual)
 			require.Equal(t, 1, rel.samples)
 			require.Equal(t, tc.discoveryCalls, discoverer.discoveryCalls)
+			if tc.expireProbe {
+				require.ErrorIs(t, rel.sampleErr, context.DeadlineExceeded)
+			}
 		})
 	}
 }
