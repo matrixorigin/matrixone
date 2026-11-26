@@ -20,7 +20,6 @@ import (
 	"runtime/trace"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/sync/errgroup"
@@ -68,29 +67,27 @@ func cloneIndependentDatabaseTables(
 	var next atomic.Uint64
 	for i := range workers {
 		worker := &workers[i]
-		group.Go(func() (err error) {
-			defer func() {
-				if p := recover(); p != nil {
-					err = moerr.ConvertPanicError(workCtx, p)
+		group.Go(func() error {
+			err, _ := ExecuteFuncWithRecover(func() error {
+				for {
+					if err := workCtx.Err(); err != nil {
+						return err
+					}
+					index := int(next.Add(1) - 1)
+					if index >= len(tables) {
+						return worker.indexes.Flush()
+					}
+					receipt, err := clone(worker.indexes.TableContext(worker.ctx), worker.exec, tables[index])
+					if err != nil {
+						return err
+					}
+					if err = worker.indexes.FinishTable(); err != nil {
+						return err
+					}
+					results[index] = receipt
 				}
-			}()
-			for {
-				if err := workCtx.Err(); err != nil {
-					return err
-				}
-				index := int(next.Add(1) - 1)
-				if index >= len(tables) {
-					return worker.indexes.Flush()
-				}
-				receipt, err := clone(worker.indexes.TableContext(worker.ctx), worker.exec, tables[index])
-				if err != nil {
-					return err
-				}
-				if err = worker.indexes.FinishTable(); err != nil {
-					return err
-				}
-				results[index] = receipt
-			}
+			})
+			return err
 		})
 	}
 	if err := group.Wait(); err != nil {

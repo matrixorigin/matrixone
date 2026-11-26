@@ -474,9 +474,9 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 	proc *process.Process,
 ) error {
 
-	if tc.Ctx.SrcAutoIncrMaxValues == nil &&
-		tc.Ctx.SrcAutoIncrOffsets == nil &&
-		len(tc.Ctx.IndexAutoIncrStates) == 0 {
+	resetMain := !tc.Ctx.MainAutoIncrementSeeded &&
+		(tc.Ctx.SrcAutoIncrMaxValues != nil || tc.Ctx.SrcAutoIncrOffsets != nil)
+	if !resetMain && len(tc.Ctx.IndexAutoIncrStates) == 0 {
 		return nil
 	}
 	if !engine.TxnSupportsAutoIncrEpochFence(proc.GetTxnOperator()) {
@@ -486,15 +486,12 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 		)
 	}
 
-	if tc.Ctx.SrcAutoIncrMaxValues != nil || tc.Ctx.SrcAutoIncrOffsets != nil {
+	if resetMain {
 		if err := updateRelationAutoIncrement(
 			dstCtx,
 			proc,
 			tc.dstMasterRel,
-			AutoIncrementState{
-				MaxValues: tc.Ctx.SrcAutoIncrMaxValues,
-				Offsets:   tc.Ctx.SrcAutoIncrOffsets,
-			},
+			tc.Ctx.MainAutoIncrementState(),
 			tc.Ctx.RequestedAutoIncrOffset,
 			true,
 		); err != nil {
@@ -550,19 +547,8 @@ func updateRelationAutoIncrement(
 		return nil
 	}
 
-	for _, col := range incrservice.GetUserAutoColumnFromDef(def) {
-		name := strings.ToLower(col.ColName)
-		if err := setOffset(col, max(requestedOffset, state.MaxValues[name], state.Offsets[name])); err != nil {
-			return err
-		}
-	}
-	for _, col := range incrservice.GetInternalAutoColumnFromDef(def) {
-		name := strings.ToLower(col.ColName)
-		offset, ok := state.Offsets[name]
-		if !ok {
-			continue
-		}
-		if err := setOffset(col, offset); err != nil {
+	for _, col := range state.MainColumns(def, requestedOffset) {
+		if err := setOffset(col, col.Offset); err != nil {
 			return err
 		}
 	}

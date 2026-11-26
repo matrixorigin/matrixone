@@ -3004,6 +3004,8 @@ func Test_restoreViews(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+		ses.GetTxnCompileCtx().SetExecCtx(&ExecCtx{reqCtx: ctx, ses: ses})
+		ses.GetTxnCompileCtx().SetDatabase("before_dependency_sort")
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -3070,6 +3072,9 @@ func Test_restoreViews(t *testing.T) {
 		_, err = sortedViewInfos(
 			ctx, ses, bh, "sp01", nil, viewMap, 0, 0)
 		assert.Error(t, err)
+		require.Same(t, ctx, ses.GetTxnCompileCtx().GetContext())
+		require.Equal(t, "before_dependency_sort", ses.GetTxnCompileCtx().GetDatabase())
+		require.Nil(t, ses.GetTxnCompileCtx().GetSnapshot())
 		//
 		//err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews)
 		//assert.Error(t, err)

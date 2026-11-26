@@ -303,5 +303,48 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 		count(t, indexMetadata, 0)
 		count(t, "select count(*) from mo_catalog.mo_database where datname = '"+target+"'", 0)
 		count(t, "select count(*) from mo_catalog.mo_foreign_keys where db_name = '"+target+"'", 0)
+
+		t.Run("system catalog copies remain cloneable", func(t *testing.T) {
+			const first, second = "clone_inventory_catalog_first", "clone_inventory_catalog_second"
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				for _, database := range []string{second, first} {
+					_, err := conn.ExecContext(cleanupCtx, "drop database if exists "+database)
+					assert.NoError(t, err)
+				}
+			}()
+			exec(t, "create database "+first+" clone mo_catalog")
+			exec(t, "create database "+second+" clone "+first)
+			count(t, "select count(*) from "+second+".mo_database where datname='"+source+"'", 1)
+		})
+
+		t.Run("subscribed views retain the source account", func(t *testing.T) {
+			const database, account, publication = "clone_inventory_view_source", "clone_inventory_view_account", "clone_inventory_view_publication"
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				for _, statement := range []string{"drop account if exists " + account, "drop publication if exists " + publication, "drop database if exists " + database} {
+					_, err := conn.ExecContext(cleanupCtx, statement)
+					assert.NoError(t, err)
+				}
+			}()
+			exec(t, "create database "+database)
+			exec(t, "create table "+database+".t(id int primary key)")
+			exec(t, "insert into "+database+".t values (7)")
+			exec(t, "create view "+database+".v as select * from "+database+".t")
+			exec(t, "create account "+account+" admin_name rootv identified by '111'")
+			exec(t, "create publication "+publication+" database "+database+" account "+account)
+			subscriber, err := sql.Open("mysql", fmt.Sprintf("%s#rootv:111@tcp(127.0.0.1:%d)/", account, cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			defer subscriber.Close()
+			for _, statement := range []string{"create database subscribed from sys publication " + publication, "create database copied clone subscribed"} {
+				_, err := subscriber.ExecContext(ctx, statement)
+				require.NoError(t, err, statement)
+			}
+			var id int
+			require.NoError(t, subscriber.QueryRowContext(ctx, "select id from copied.v").Scan(&id))
+			require.Equal(t, 7, id)
+		})
 	})
 }
