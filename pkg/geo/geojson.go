@@ -15,6 +15,7 @@
 package geo
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 	"strconv"
@@ -22,6 +23,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
+
+type geoJSONGeometryObject struct {
+	Type        string          `json:"type"`
+	Coordinates json.RawMessage `json:"coordinates"`
+	Geometries  json.RawMessage `json:"geometries"`
+}
 
 // WriteGeoJSON renders g as an RFC 7946 GeoJSON geometry object. When maxDec is
 // >= 0 every coordinate is rounded to at most that many decimal places; a
@@ -188,18 +195,25 @@ func geoJSONFractionDigits(s string) int {
 // ParseGeoJSON decodes an RFC 7946 GeoJSON geometry object. Feature and
 // FeatureCollection objects are not geometries and are rejected.
 func ParseGeoJSON(data []byte) (Geometry, error) {
-	var raw struct {
-		Type        string            `json:"type"`
-		Coordinates json.RawMessage   `json:"coordinates"`
-		Geometries  []json.RawMessage `json:"geometries"`
-	}
+	var raw geoJSONGeometryObject
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON: %v", err)
 	}
 	return parseGeoJSONObj(raw.Type, raw.Coordinates, raw.Geometries)
 }
 
-func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage) (Geometry, error) {
+func parseGeoJSONObj(typ string, coords, geoms json.RawMessage) (Geometry, error) {
+	if typ == "GeometryCollection" {
+		if isNullOrMissingGeoJSONMember(geoms) {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON GeometryCollection: missing geometries")
+		}
+	} else if typ == "Point" || typ == "LineString" || typ == "Polygon" ||
+		typ == "MultiPoint" || typ == "MultiLineString" || typ == "MultiPolygon" {
+		if isNullOrMissingGeoJSONMember(coords) {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON %s: missing coordinates", typ)
+		}
+	}
+
 	switch typ {
 	case "Point":
 		var c []float64
@@ -277,13 +291,13 @@ func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage
 		}
 		return MultiPolygon{Polygons: polys}, nil
 	case "GeometryCollection":
-		subs := make([]Geometry, 0, len(geoms))
-		for _, rg := range geoms {
-			var sub struct {
-				Type        string            `json:"type"`
-				Coordinates json.RawMessage   `json:"coordinates"`
-				Geometries  []json.RawMessage `json:"geometries"`
-			}
+		var rawGeoms []json.RawMessage
+		if err := json.Unmarshal(geoms, &rawGeoms); err != nil {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON GeometryCollection: %v", err)
+		}
+		subs := make([]Geometry, 0, len(rawGeoms))
+		for _, rg := range rawGeoms {
+			var sub geoJSONGeometryObject
 			if err := json.Unmarshal(rg, &sub); err != nil {
 				return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON GeometryCollection: %v", err)
 			}
@@ -299,6 +313,11 @@ func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage
 	default:
 		return nil, moerr.NewInvalidInputNoCtxf("unsupported GeoJSON type %q", typ)
 	}
+}
+
+func isNullOrMissingGeoJSONMember(data json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(data)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
 }
 
 func parseCoordSeq(data json.RawMessage) ([]Coord, error) {
