@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -31,7 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	dbholder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 )
 
 func TestMetricBatchReceiptSQL(t *testing.T) {
@@ -89,6 +92,12 @@ func TestMetricBatchReceiptSQL(t *testing.T) {
 					}
 				})
 				loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s FIELDS TERMINATED BY ','", fixture.csv(node), relation)
+				load := func(query string) func(*sql.Conn) error {
+					return func(conn *sql.Conn) error {
+						_, err := conn.ExecContext(ctx, query)
+						return err
+					}
+				}
 				count := func(want int) {
 					t.Helper()
 					var rows int
@@ -97,7 +106,7 @@ func TestMetricBatchReceiptSQL(t *testing.T) {
 				}
 
 				// A failed LOAD must roll back its receipt as well.
-				require.Error(t, dbholder.CommitMetricBatch(ctx, pool, batchID, "LOAD DATA bad syntax"))
+				require.Error(t, dbholder.CommitMetricBatch(ctx, pool, batchID, load("LOAD DATA bad syntax")))
 				count(0)
 				var receiptCount int
 				require.NoError(t, pool.QueryRowContext(ctx, "select count(*) from system_metrics.metric_batch_receipt where batch_id = ?", batchID.String()).Scan(&receiptCount))
@@ -119,7 +128,7 @@ func TestMetricBatchReceiptSQL(t *testing.T) {
 				count(0)
 				retry := make(chan error, 1)
 				worker.Go(func() {
-					retry <- dbholder.CommitMetricBatch(ctx, pool, batchID, loadSQL)
+					retry <- dbholder.CommitMetricBatch(ctx, pool, batchID, load(loadSQL))
 				})
 				require.Eventually(t, func() bool {
 					found := false
@@ -143,7 +152,7 @@ func TestMetricBatchReceiptSQL(t *testing.T) {
 				require.NoError(t, first.Commit())
 				require.NoError(t, <-retry)
 				count(2)
-				require.NoError(t, dbholder.CommitMetricBatch(ctx, pool, batchID, loadSQL))
+				require.NoError(t, dbholder.CommitMetricBatch(ctx, pool, batchID, load(loadSQL)))
 				count(2)
 				func() {
 					rows, err := pool.QueryContext(ctx, "select role, value from "+relation+" where node = ? order by role", node)
@@ -162,9 +171,57 @@ func TestMetricBatchReceiptSQL(t *testing.T) {
 				}()
 
 				// Independent collections can have identical samples.
-				require.NoError(t, dbholder.CommitMetricBatch(ctx, pool, otherID, loadSQL))
+				require.NoError(t, dbholder.CommitMetricBatch(ctx, pool, otherID, load(loadSQL)))
 				count(4)
 			})
 		}
+
+		t.Run("packet_limited_replay", func(t *testing.T) {
+			// Use the same packet accounting as a production driver
+			// that negotiated a 1024-byte server limit.
+			limitedCfg := cfg.Clone()
+			limitedCfg.MaxAllowedPacket = 1023
+			limitedCfg.Params = map[string]string{"max_allowed_packet": "1024"}
+			limitedPool, err := sql.Open("mysql", limitedCfg.FormatDSN())
+			require.NoError(t, err)
+			defer limitedPool.Close()
+			var limit int
+			require.NoError(t, limitedPool.QueryRowContext(ctx, "SELECT @@session.max_allowed_packet").Scan(&limit))
+			require.Equal(t, 1024, limit)
+
+			node := uuid.NewString()
+			id := uuid.New()
+			const relation = "system_metrics.sql_statement_cu"
+			t.Cleanup(func() {
+				cleanup, stop := context.WithTimeoutCause(context.Background(), 5*time.Second, moerr.CauseWriteRowRecords)
+				defer stop()
+				_, err := pool.ExecContext(cleanup, "delete from "+relation+" where node = ?", node)
+				require.NoError(t, err)
+				require.NoError(t, dbholder.DeleteMetricBatchReceipt(cleanup, pool, id))
+			})
+			const rowCount = 32
+			row := fmt.Sprintf("sys,2026-11-25 09:36:01.123456,2,%s,CN,internal_sql\n", node)
+			payload := strings.Repeat(row, rowCount)
+			err = dbholder.CommitMetricBatch(ctx, limitedPool, id, func(conn *sql.Conn) error {
+				_, err := conn.ExecContext(ctx, "LOAD DATA INLINE FORMAT='csv', DATA='"+payload+"' INTO TABLE "+relation+" FIELDS TERMINATED BY ','")
+				return err
+			})
+			require.ErrorIs(t, err, mysql.ErrPktTooLarge)
+			count := func(want int) {
+				t.Helper()
+				var rows int
+				var sum float64
+				require.NoError(t, pool.QueryRowContext(ctx, "select count(*), coalesce(sum(value), 0) from "+relation+" where node = ?", node).Scan(&rows, &sum))
+				require.Equal(t, want, rows)
+				require.Equal(t, float64(2*want), sum)
+			}
+			count(0)
+			dbholder.SetDBConn(limitedPool)
+			defer dbholder.SetDBConn(nil)
+			for range 2 {
+				require.NoError(t, etl.ReplayMetricBatch(ctx, mometric.SqlStatementCUTable, []byte(payload), id))
+				count(rowCount)
+			}
+		})
 	})
 }

@@ -62,9 +62,7 @@ func (m *Merge) mergeMetricFile(ctx context.Context, filePath string) error {
 		m.logger.Warn("retain incompatible metric file", logutil.PathField(filePath), zap.Error(err))
 		return errMetricFileRetained
 	}
-	writeCtx, cancel := context.WithTimeoutCause(ctx, MAX_MERGE_INSERT_TIME, moerr.CauseWriteRowRecords)
-	defer cancel()
-	if err := etl.ReplayMetricBatch(writeCtx, m.table, payload, id); err != nil {
+	if err := etl.ReplayMetricBatch(ctx, m.table, payload, id); err != nil {
 		v2.TraceETLMergeWriteFailedCounter.Inc()
 		return err
 	}

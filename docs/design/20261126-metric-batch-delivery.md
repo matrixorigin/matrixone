@@ -16,6 +16,12 @@ with a batch UUID. The filename retains the existing path and CSV body layout.
 
 Both write paths insert the UUID into the primary key of
 system_metrics.metric_batch_receipt and load the rows in the same transaction.
+Replay splits LOAD statements at CSV record boundaries using the connection's
+packet limit. Partial loads are rolled back together with the receipt.
+The operation deadline covers CN discovery, connection acquisition, SQL and
+the wait for COMMIT. An interrupted COMMIT leaves the file available for
+receipt-based adjudication. A connection error or operation deadline marks
+that pool for CN reselection even if the next replay runs minutes later.
 A rollback removes both effects. When the insert or commit reports a
 duplicate key, the writer checks the receipt from a new SQL statement after
 releasing the failed transaction. A visible receipt proves that a previous
@@ -60,13 +66,11 @@ importer leaves unversioned CSV in place and reports the path for
 reconciliation. A new batch UUID cannot establish the outcome of an old
 transaction.
 
-Where the deployment can verify that its pending legacy CSV was produced
-without SQL writes and has never been imported, let the old cluster drain
-that backlog before shutdown. Keep the task runner and fileservice
-available until a scheduled ETL run finishes, verify file removal and the
-expected rows, and inventory both metric directories again after all old
-producers stop. Keep remaining files for reconciliation. Do not use the
-old importer to drain an ambiguous SQL fallback backlog.
+Keep the old importer stopped once the legacy backlog is inventoried. Stop
+all old producers and take the final inventory before starting the upgraded
+cluster. Leave the files untouched during the transition. A drain by the old
+importer could commit and then lose its response or fail to delete the file,
+leaving a subsequent old ETL run free to insert the same batch again.
 
 After upgrade, operators can recover a verified undelivered batch using
 the new importer. Record the original object key, target key and a fresh

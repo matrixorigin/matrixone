@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"strings"
-	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
@@ -69,6 +68,7 @@ func NewMetricContentWriter(ctx context.Context, tbl *table.Table, fileFlusher t
 func newContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher, id uuid.UUID) *ContentWriter {
 	sqlFlusher := NewSQLFlusher(tbl)
 	sqlFlusher.metricBatchID = id
+	sqlFlusher.ctx = ctx
 	return &ContentWriter{
 		ctx: ctx,
 		tbl: tbl,
@@ -181,6 +181,7 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 var _ table.Flusher = (*SQLFlusher)(nil)
 
 type SQLFlusher struct {
+	ctx           context.Context
 	database      string
 	table         string
 	metricBatchID uuid.UUID
@@ -198,9 +199,7 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 		if buf.Len() == 0 {
 			return 0, nil
 		}
-		ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseWriteRowRecords)
-		defer cancel()
-		return 0, f.flushMetricBatch(ctx, buf.Bytes(), f.metricBatchID, true)
+		return 0, f.flushMetricBatch(f.ctx, buf.Bytes(), f.metricBatchID, true, metricBatchTimeout)
 	}
 
 	forceNewConn := !db_holder.DBConnErrCount.Check()
@@ -226,7 +225,13 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 	return 0, err
 }
 
-func (f *SQLFlusher) loadSQL(src []byte) string {
+const loadInlineCSVPrefix = "LOAD DATA INLINE FORMAT='csv', DATA='"
+
+func (f *SQLFlusher) loadSuffix() string {
+	return "' INTO TABLE " + f.database + "." + f.table + " FIELDS TERMINATED BY ','"
+}
+
+func countInlineSQLEscapes(src []byte) int {
 	extraEscapes := 0
 	for _, c := range src {
 		if c == '\\' || c == '\'' {
@@ -234,10 +239,14 @@ func (f *SQLFlusher) loadSQL(src []byte) string {
 		}
 	}
 
+	return extraEscapes
+}
+
+func (f *SQLFlusher) loadSQL(src []byte) string {
+	suffix := f.loadSuffix()
 	var loadSQL strings.Builder
-	loadSQL.Grow(len("LOAD DATA INLINE FORMAT='csv', DATA='' INTO TABLE . FIELDS TERMINATED BY ','") +
-		len(src) + extraEscapes + len(f.database) + len(f.table))
-	loadSQL.WriteString("LOAD DATA INLINE FORMAT='csv', DATA='")
+	loadSQL.Grow(len(loadInlineCSVPrefix) + len(src) + countInlineSQLEscapes(src) + len(suffix))
+	loadSQL.WriteString(loadInlineCSVPrefix)
 	for i := 0; i < len(src); i++ {
 		c := src[i]
 		// case \: mo sql NEED quote '\'
@@ -249,11 +258,7 @@ func (f *SQLFlusher) loadSQL(src []byte) string {
 		}
 		loadSQL.WriteByte(c)
 	}
-	loadSQL.WriteString("' INTO TABLE ")
-	loadSQL.WriteString(f.database)
-	loadSQL.WriteByte('.')
-	loadSQL.WriteString(f.table)
-	loadSQL.WriteString(" FIELDS TERMINATED BY ','")
+	loadSQL.WriteString(suffix)
 	loadSQLStr := loadSQL.String()
 	v2.TraceMOLoggerExportSqlHistogram.Observe(float64(len(loadSQLStr)))
 

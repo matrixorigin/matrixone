@@ -45,12 +45,13 @@ var (
 	sqlWriterDBUser atomic.Value
 	dbAddressFunc   atomic.Value
 
-	db            atomic.Pointer[sql.DB]
-	dbRefreshTime time.Time
+	db                 atomic.Pointer[sql.DB]
+	dbRefreshTime      time.Time
+	metricDBConnFailed bool
 
-	dbMux        sync.Mutex
-	dbRebuildMux sync.Mutex
-	openDBConn   = sql.Open
+	dbMux         sync.Mutex
+	dbRebuildSlot = make(chan struct{}, 1)
+	openDBConn    = sql.Open
 
 	DBConnErrCount = NewReConnectionBackOff(time.Minute, DBConnRetryThreshold)
 )
@@ -99,6 +100,7 @@ func GetSQLWriterDBAddressFunc() func(context.Context, bool) (string, error) {
 
 func setDBConnLocked(conn *sql.DB) *sql.DB {
 	old := db.Swap(conn)
+	metricDBConnFailed = false
 	if conn == nil {
 		dbRefreshTime = time.Time{}
 	} else {
@@ -111,8 +113,8 @@ func setDBConnLocked(conn *sql.DB) *sql.DB {
 }
 
 func SetDBConn(conn *sql.DB) {
-	dbRebuildMux.Lock()
-	defer dbRebuildMux.Unlock()
+	dbRebuildSlot <- struct{}{}
+	defer func() { <-dbRebuildSlot }()
 
 	dbMux.Lock()
 	defer dbMux.Unlock()
@@ -120,8 +122,8 @@ func SetDBConn(conn *sql.DB) {
 }
 
 func CloseDBConn() {
-	dbRebuildMux.Lock()
-	defer dbRebuildMux.Unlock()
+	dbRebuildSlot <- struct{}{}
+	defer func() { <-dbRebuildSlot }()
 
 	dbMux.Lock()
 	dbConn := setDBConnLocked(nil)
@@ -146,15 +148,15 @@ func closeStaleDBConn(dbConn *sql.DB) {
 	})
 }
 
-func getDBConnSnapshot() (*sql.DB, bool) {
+func getDBConnSnapshot() (*sql.DB, bool, bool) {
 	dbMux.Lock()
 	defer dbMux.Unlock()
 
 	dbConn := db.Load()
-	return dbConn, dbConn != nil && time.Now().After(dbRefreshTime)
+	return dbConn, dbConn != nil && time.Now().After(dbRefreshTime), metricDBConnFailed
 }
 
-func buildDBConn(randomCN bool) (*sql.DB, error) {
+func buildDBConn(ctx context.Context, randomCN bool) (*sql.DB, error) {
 	dbUser, _ := GetSQLWriterDBUser()
 	if dbUser == nil {
 		return nil, errNotReady
@@ -165,7 +167,7 @@ func buildDBConn(randomCN bool) (*sql.DB, error) {
 	if addressFunc == nil {
 		return nil, errNotReady
 	}
-	dbAddress, err := addressFunc(context.Background(), randomCN)
+	dbAddress, err := addressFunc(ctx, randomCN)
 	if err != nil {
 		return nil, err
 	}
@@ -183,22 +185,71 @@ func buildDBConn(randomCN bool) (*sql.DB, error) {
 	newDBConn.SetConnMaxLifetime(45 * time.Second)
 	newDBConn.SetMaxOpenConns(MaxConnectionNumber)
 	newDBConn.SetMaxIdleConns(MaxConnectionNumber)
-	if err = newDBConn.Ping(); err != nil {
+	if err = newDBConn.PingContext(ctx); err != nil {
 		closeDBConn(newDBConn)
 		return nil, err
 	}
 	return newDBConn, nil
 }
 
-func rebuildDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
-	current, refreshDue := getDBConnSnapshot()
-	if current != nil && !forceNewConn && !refreshDue {
+// GetOrInitDBConn retains the connection policy used by the older exporters.
+var GetOrInitDBConn = func(forceNewConn, randomCN bool) (*sql.DB, error) {
+	return getOrInitDBConn(context.Background(), forceNewConn, randomCN, false)
+}
+
+func GetOrInitMetricDBConn(ctx context.Context) (*sql.DB, error) {
+	// A cold start can also fail against a bad CN, before there is a
+	// pool to mark. Rediscover a random eligible CN on the next attempt.
+	return getOrInitDBConn(ctx, false, true, true)
+}
+
+// MarkMetricDBConnFailed requests a new CN on the next metric attempt, even
+// when the next ETL run falls outside the shared error counter's window.
+func MarkMetricDBConnFailed(conn *sql.DB) {
+	dbMux.Lock()
+	defer dbMux.Unlock()
+	if conn != nil && db.Load() == conn {
+		metricDBConnFailed = true
+	}
+}
+
+func getOrInitDBConn(ctx context.Context, forceNewConn, randomCN, metric bool) (*sql.DB, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	current, refreshDue, failed := getDBConnSnapshot()
+	force := forceNewConn || (metric && failed)
+	switch {
+	case current != nil && !force && !refreshDue:
+		return current, nil
+	case current != nil && !force:
+		// A scheduled refresh must not stall callers that can use the pool.
+		select {
+		case dbRebuildSlot <- struct{}{}:
+		default:
+			return current, nil
+		}
+	default:
+		select {
+		case dbRebuildSlot <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	defer func() { <-dbRebuildSlot }()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// A concurrent rebuild may have already replaced the failed or old pool.
+	current, refreshDue, failed = getDBConnSnapshot()
+	force = (forceNewConn && !DBConnErrCount.Check()) || (metric && failed)
+	if current != nil && !force && !refreshDue {
 		return current, nil
 	}
-
-	newDBConn, err := buildDBConn(randomCN)
+	newDBConn, err := buildDBConn(ctx, randomCN || force)
 	if err != nil {
-		if current != nil && !forceNewConn {
+		if current != nil && !force && ctx.Err() == nil {
 			return current, nil
 		}
 		return nil, err
@@ -208,40 +259,10 @@ func rebuildDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	oldDBConn := setDBConnLocked(newDBConn)
 	dbMux.Unlock()
 	closeStaleDBConn(oldDBConn)
-	if forceNewConn {
+	if force {
 		DBConnErrCount.Reset()
 	}
-
 	return newDBConn, nil
-}
-
-// GetOrInitDBConn get the target cn to do the load query.
-// if @forceNewConn is true, it will re-find new cn and replace the old db conn after the new one is ready.
-// The reconnect decision is rechecked after acquiring the rebuild lock, so callers queued behind a successful
-// reconnect reuse the fresh current db conn instead of serially rebuilding more pools.
-// if @forceNewConn is false, it will normally fetch the current db connection. BUT in 1 cases, it will re-find the cn:
-//  1. DBRefreshTime interval, it will try to fetch the 'new' ob-sys cn.
-var GetOrInitDBConn = func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
-	current, refreshDue := getDBConnSnapshot()
-	if current != nil && !forceNewConn && !refreshDue {
-		return current, nil
-	}
-	if current != nil && !forceNewConn && refreshDue && !dbRebuildMux.TryLock() {
-		return current, nil
-	}
-	if current == nil || forceNewConn || !refreshDue {
-		dbRebuildMux.Lock()
-	}
-	defer dbRebuildMux.Unlock()
-
-	if forceNewConn {
-		current, _ = getDBConnSnapshot()
-		if current != nil && DBConnErrCount.Check() {
-			return current, nil
-		}
-	}
-
-	return rebuildDBConn(forceNewConn, randomCN)
 }
 
 func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration) (int, error) {

@@ -17,6 +17,7 @@ package db_holder
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 
 	"github.com/go-sql-driver/mysql"
@@ -33,8 +34,8 @@ const metricBatchReceiptRelation = "system_metrics." + MetricBatchReceiptTable
 const CreateMetricBatchReceipt = "CREATE TABLE IF NOT EXISTS " + metricBatchReceiptRelation +
 	" (batch_id varchar(36) primary key, created_at datetime(6) not null default current_timestamp(6))"
 
-func CommitMetricBatch(ctx context.Context, db *sql.DB, id uuid.UUID, loadSQL string) error {
-	err := insertMetricBatch(ctx, db, id.String(), loadSQL)
+func CommitMetricBatch(ctx context.Context, db *sql.DB, id uuid.UUID, load func(*sql.Conn) error) error {
+	err := insertMetricBatch(ctx, db, id.String(), load)
 	if err == nil {
 		return nil
 	}
@@ -58,20 +59,45 @@ func CommitMetricBatch(ctx context.Context, db *sql.DB, id uuid.UUID, loadSQL st
 	return err
 }
 
-func insertMetricBatch(ctx context.Context, db *sql.DB, id string, loadSQL string) error {
-	tx, err := db.BeginTx(ctx, nil)
+func insertMetricBatch(ctx context.Context, db *sql.DB, id string, load func(*sql.Conn) error) error {
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer conn.Close()
 
-	if _, err = tx.ExecContext(ctx, "insert into "+metricBatchReceiptRelation+" (batch_id) values (?)", id); err != nil {
+	discard := func() {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
+	// Pin one connection and use context-aware commands through COMMIT.
+	// ExecContext on sql.Conn never retries a COMMIT on another connection.
+	if _, err = conn.ExecContext(ctx, "START TRANSACTION"); err != nil {
+		discard()
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, loadSQL); err != nil {
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if ctx.Err() == nil {
+			if _, rollbackErr := conn.ExecContext(ctx, "ROLLBACK"); rollbackErr == nil {
+				return
+			}
+		}
+		// Canceled or unclean transactions cannot return to the shared pool.
+		discard()
+	}()
+
+	if _, err = conn.ExecContext(ctx, "insert into "+metricBatchReceiptRelation+" (batch_id) values (?)", id); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = load(conn); err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, "COMMIT")
+	committed = err == nil
+	return err
 }
 
 func DeleteMetricBatchReceipt(ctx context.Context, db *sql.DB, id uuid.UUID) error {

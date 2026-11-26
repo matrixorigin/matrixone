@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -54,24 +56,47 @@ func metricDeliveryDB(t *testing.T) sqlmock.Sqlmock {
 	provider, backoff := dbholder.GetOrInitDBConn, dbholder.DBConnErrCount
 	dbholder.GetOrInitDBConn = func(bool, bool) (*sql.DB, error) { return db, nil }
 	dbholder.DBConnErrCount = dbholder.NewReConnectionBackOff(time.Minute, dbholder.DBConnRetryThreshold)
+	dbholder.SetDBConn(db)
 	t.Cleanup(func() {
+		dbholder.SetDBConn(nil)
 		dbholder.GetOrInitDBConn, dbholder.DBConnErrCount = provider, backoff
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 	return mock
 }
 
-func expectMetricLoad(mock sqlmock.Sqlmock, tbl *table.Table, id uuid.UUID, csv string) {
-	mock.ExpectBegin()
+func expectMetricLoad(mock sqlmock.Sqlmock, tbl *table.Table, id uuid.UUID, csv string, replay bool) {
+	mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
-	query := "LOAD DATA INLINE FORMAT='csv', DATA='" + csv + "' INTO TABLE " + tbl.GetIdentify() + " FIELDS TERMINATED BY ','"
+	if replay {
+		expectMetricPacket(mock, 1<<20)
+	}
+	expectMetricLoadSQL(mock, tbl, csv)
+}
+
+func expectMetricPacket(mock sqlmock.Sqlmock, limit int) {
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT @@session.max_allowed_packet")).
+		WillReturnRows(sqlmock.NewRows([]string{"limit"}).AddRow(limit))
+}
+
+func expectMetricCommit(mock sqlmock.Sqlmock) {
+	mock.ExpectExec("^COMMIT$").WillReturnResult(sqlmock.NewResult(0, 0))
+}
+
+func expectMetricRollback(mock sqlmock.Sqlmock) {
+	mock.ExpectExec("^ROLLBACK$").WillReturnResult(sqlmock.NewResult(0, 0))
+}
+
+func expectMetricLoadSQL(mock sqlmock.Sqlmock, tbl *table.Table, csv string) {
+	escaped := strings.NewReplacer("\\", "\\\\", "'", "''").Replace(csv)
+	query := "LOAD DATA INLINE FORMAT='csv', DATA='" + escaped + "' INTO TABLE " + tbl.GetIdentify() + " FIELDS TERMINATED BY ','"
 	mock.ExpectExec(regexp.QuoteMeta(query)).WillReturnResult(sqlmock.NewResult(0, 1))
 }
 
 func expectCommittedReceipt(mock sqlmock.Sqlmock, id uuid.UUID) {
-	mock.ExpectBegin()
+	mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnError(&mysql.MySQLError{Number: moerr.ER_DUP_ENTRY})
-	mock.ExpectRollback()
+	mock.ExpectExec("^ROLLBACK$").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(regexp.QuoteMeta(selectReceipt)).WithArgs(id.String()).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 }
 
@@ -99,11 +124,13 @@ func TestMetricFallbackDelivery(t *testing.T) {
 				writer := etl.NewMetricContentWriter(ctx, tbl, etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, etl.WithFilePath(file))), id)
 				writer.SetBuffer(bytes.NewBufferString(fixture.csv), nil)
 
-				expectMetricLoad(mock, tbl, id, fixture.csv)
+				expectMetricLoad(mock, tbl, id, fixture.csv, false)
 				if committed {
-					mock.ExpectCommit().WillReturnError(commitUnknown)
+					mock.ExpectExec("^COMMIT$").WillReturnError(commitUnknown)
+					expectMetricRollback(mock)
 				} else {
-					mock.ExpectCommit().WillReturnError(&mysql.MySQLError{Number: 1213})
+					mock.ExpectExec("^COMMIT$").WillReturnError(&mysql.MySQLError{Number: 1213})
+					expectMetricRollback(mock)
 				}
 				_, err := writer.FlushAndClose()
 				require.NoError(t, err)
@@ -116,8 +143,8 @@ func TestMetricFallbackDelivery(t *testing.T) {
 				if committed {
 					expectCommittedReceipt(mock, id)
 				} else {
-					expectMetricLoad(mock, tbl, id, fixture.csv)
-					mock.ExpectCommit()
+					expectMetricLoad(mock, tbl, id, fixture.csv, true)
+					expectMetricCommit(mock)
 				}
 				require.NoError(t, m.doMergeFiles(ctx, []*FileMeta{{FilePath: file, FileSize: info.Size}}))
 				_, err = fs.StatFile(ctx, file)
@@ -144,8 +171,9 @@ func TestMetricMergeRecoversCommitAndDeleteFailures(t *testing.T) {
 	merge, err := NewMerge(ctx, "", WithTable(tbl), WithFileService(wrapped))
 	require.NoError(t, err)
 	t.Cleanup(merge.Stop)
-	expectMetricLoad(mock, tbl, id, payload)
-	mock.ExpectCommit().WillReturnError(commitUnknown)
+	expectMetricLoad(mock, tbl, id, payload, true)
+	mock.ExpectExec("^COMMIT$").WillReturnError(commitUnknown)
+	expectMetricRollback(mock)
 	require.ErrorIs(t, merge.mergeMetricFile(ctx, file), commitUnknown)
 	_, err = fs.StatFile(ctx, file)
 	require.NoError(t, err)
@@ -165,31 +193,78 @@ func TestMetricMergeRecoversCommitAndDeleteFailures(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }
 
-func TestMetricReplaySwitchesCNAfterDeadline(t *testing.T) {
+func TestMetricReplayChunksRollBackTogether(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewFS(t)
 	t.Cleanup(func() { fs.Close(ctx) })
-	healthy := metricDeliveryDB(t)
-	getHealthy := dbholder.GetOrInitDBConn
-	stalledDB, stalled, err := sqlmock.New()
+	mock := metricDeliveryDB(t)
+	tbl := mometric.SqlStatementCUTable
+	id := uuid.New()
+	file := table.MetricBatchPath("etl:sys/logs/chunks.csv", id)
+	// A record has an embedded newline and extra SQL escaping. Its
+	// encoded length, rather than its line length, controls the split.
+	first := "sys," + sampleTime + ",1,\"cn'\\\nnode\",CN,internal_sql\n"
+	second := "sys," + sampleTime + ",2,cn,CN,external_sql\n"
+	payload := first + second
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: file, Entries: []fileservice.IOEntry{{Size: int64(len(payload)), Data: []byte(payload)}},
+	}))
+	merge, err := NewMerge(ctx, "", WithTable(tbl), WithFileService(fs))
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = stalledDB.Close() })
+	t.Cleanup(merge.Stop)
 
-	forced := 0
-	dbholder.GetOrInitDBConn = func(forceNew, randomCN bool) (*sql.DB, error) {
-		if forceNew {
-			require.True(t, randomCN)
-			forced++
-			dbholder.DBConnErrCount.Reset()
-		}
-		if forced == 0 {
-			return stalledDB, nil
-		}
-		return getHealthy(forceNew, randomCN)
+	expectBegin := func() {
+		mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
+		expectMetricPacket(mock, 195)
+		expectMetricLoadSQL(mock, tbl, first)
 	}
+	chunkErr := &mysql.MySQLError{Number: 1213}
+	expectBegin()
+	mock.ExpectExec("LOAD DATA INLINE.*external_sql").WillReturnError(chunkErr)
+	expectMetricRollback(mock)
+	require.ErrorIs(t, merge.mergeMetricFile(ctx, file), chunkErr)
+	_, err = fs.StatFile(ctx, file)
+	require.NoError(t, err)
+
+	expectBegin()
+	expectMetricLoadSQL(mock, tbl, second)
+	expectMetricCommit(mock)
+	require.NoError(t, merge.mergeMetricFile(ctx, file))
+	_, err = fs.StatFile(ctx, file)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+}
+
+func TestMetricReplayReselectsAfterConnectionError(t *testing.T) {
+	mock := metricDeliveryDB(t)
+	dbholder.SetSQLWriterDBUser("test", "test")
+	address := dbholder.GetSQLWriterDBAddressFunc()
+	t.Cleanup(func() { dbholder.SetSQLWriterDBAddressFunc(address) })
+	reselected := errors.New("CN selection attempted")
+	dbholder.SetSQLWriterDBAddressFunc(func(_ context.Context, random bool) (string, error) {
+		require.True(t, random)
+		return "", reselected
+	})
+	id := uuid.New()
+	tbl := mometric.SingleMetricTable
+	payload := []byte("m," + sampleTime + ",1,cn-1,CN,sys,0,\n")
+	mock.ExpectExec("^START TRANSACTION$").WillReturnError(mysql.ErrInvalidConn)
+	mock.ExpectClose()
+	require.ErrorIs(t, etl.ReplayMetricBatch(t.Context(), tbl, payload, id), mysql.ErrInvalidConn)
+
+	// Reproduce the state of a lone file after the normal retry window.
+	dbholder.DBConnErrCount.Reset()
+	require.ErrorIs(t, etl.ReplayMetricBatch(t.Context(), tbl, payload, id), reselected)
+}
+
+func TestMetricReplayCanceledDuringCommitRetainsFile(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(ctx) })
+	mock := metricDeliveryDB(t)
 	tbl := mometric.SingleMetricTable
 	id := uuid.New()
-	file := table.MetricBatchPath("etl:sys/logs/reconnect.csv", id)
+	file := table.MetricBatchPath("etl:sys/logs/cancel-commit.csv", id)
 	payload := "m," + sampleTime + ",1,cn-1,CN,sys,0,\n"
 	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
 		FilePath: file, Entries: []fileservice.IOEntry{{Size: int64(len(payload)), Data: []byte(payload)}},
@@ -198,33 +273,17 @@ func TestMetricReplaySwitchesCNAfterDeadline(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(merge.Stop)
 
-	// A stopped task should leave the connection failure count unchanged.
-	canceled, stop := context.WithCancel(ctx)
-	stop()
-	require.ErrorIs(t, etl.ReplayMetricBatch(canceled, tbl, []byte(payload), id), context.Canceled)
-	require.True(t, dbholder.DBConnErrCount.Check())
-
-	// Simulate the transaction deadline used by the merge path, without
-	// spending ten seconds waiting for each attempt against the stalled CN.
-	for i := 0; i <= dbholder.DBConnRetryThreshold; i++ {
-		stalled.ExpectBegin().WillDelayFor(time.Second)
-		attempt, cancel := context.WithTimeoutCause(ctx, 50*time.Millisecond, moerr.CauseWriteRowRecords)
-		require.Error(t, etl.ReplayMetricBatch(attempt, tbl, []byte(payload), id))
-		require.ErrorIs(t, attempt.Err(), context.DeadlineExceeded)
-		cancel()
-	}
-	require.NoError(t, stalled.ExpectationsWereMet())
+	expectMetricLoad(mock, tbl, id, payload, true)
+	mock.ExpectExec("^COMMIT$").WillDelayFor(10 * time.Second).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectClose()
+	start := time.Now()
+	taskCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	require.Error(t, merge.mergeMetricFile(taskCtx, file))
+	require.ErrorIs(t, taskCtx.Err(), context.DeadlineExceeded)
+	require.Less(t, time.Since(start), 5*time.Second)
 	_, err = fs.StatFile(ctx, file)
 	require.NoError(t, err)
-	require.Zero(t, forced)
-	require.False(t, dbholder.DBConnErrCount.Check())
-
-	expectMetricLoad(healthy, tbl, id, payload)
-	healthy.ExpectCommit()
-	require.NoError(t, merge.mergeMetricFile(ctx, file))
-	require.Equal(t, 1, forced)
-	_, err = fs.StatFile(ctx, file)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }
 
 func TestMetricMergeDeliversTAE(t *testing.T) {
@@ -288,8 +347,8 @@ func TestMetricMergePreservesIncompatibleFiles(t *testing.T) {
 	merge, err := NewMerge(ctx, "", WithTable(tbl), WithFileService(fs))
 	require.NoError(t, err)
 	t.Cleanup(merge.Stop)
-	expectMetricLoad(mock, tbl, goodID, valid)
-	mock.ExpectCommit()
+	expectMetricLoad(mock, tbl, goodID, valid, true)
+	expectMetricCommit(mock)
 	require.NoError(t, merge.doMergeFiles(ctx, group))
 	for _, file := range group[:3] {
 		_, err := fs.StatFile(ctx, file.FilePath)
@@ -305,8 +364,8 @@ func TestMetricMergePreservesIncompatibleFiles(t *testing.T) {
 	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
 		FilePath: recovered, Entries: []fileservice.IOEntry{{Size: int64(len(valid)), Data: []byte(valid)}},
 	}))
-	expectMetricLoad(mock, tbl, recoveryID, valid)
-	mock.ExpectCommit()
+	expectMetricLoad(mock, tbl, recoveryID, valid, true)
+	expectMetricCommit(mock)
 	require.NoError(t, merge.doMergeFiles(ctx, []*FileMeta{{FilePath: recovered, FileSize: int64(len(valid))}}))
 	_, err = fs.StatFile(ctx, recovered)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
