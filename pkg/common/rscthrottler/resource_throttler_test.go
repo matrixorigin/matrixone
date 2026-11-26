@@ -15,10 +15,8 @@
 package rscthrottler
 
 import (
-	"math/rand"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/require"
@@ -84,41 +82,46 @@ func TestBasic(t *testing.T) {
 }
 
 func TestParallel(t *testing.T) {
-	throttler := NewMemThrottler("TestParallel", 50.0/100.0)
+	const workers, rounds = 8, 4
+	const limit int64 = workers * (workers + 1) / 2
+	throttler := admissionFixture(limit, 2*limit, 0, 0, false)
 
-	throttler.PrintUsage()
-	available := throttler.Available()
-
-	wg := sync.WaitGroup{}
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-
+	var acquired, done sync.WaitGroup
+	acquired.Add(workers)
+	done.Add(workers)
+	start, churn := make(chan struct{}), make(chan struct{})
+	var successful [workers]int
+	for i := range workers {
 		go func() {
-			defer func() {
-				wg.Done()
-			}()
-
-			for j := 0; j < 1000*10; j++ {
-				avail := throttler.Available()
-				rnd := rand.Intn(int(avail+5)/5) + 1000
-
-				for {
-					if _, ok := throttler.Acquire(int64(rnd)); ok {
-						break
-					}
+			defer done.Done()
+			ask := int64(i + 1)
+			<-start
+			_, granted := throttler.Acquire(ask)
+			acquired.Done()
+			<-churn
+			for round := 0; granted && round < rounds; round++ {
+				successful[i]++
+				throttler.Release(ask)
+				if round+1 < rounds {
+					_, granted = throttler.Acquire(ask)
 				}
-
-				time.Sleep(time.Microsecond)
-				throttler.Release(int64(rnd))
 			}
 		}()
 	}
+	close(start)
+	acquired.Wait()
+	reservedAtCapacity, availableAtCapacity := throttler.reserved.Load(), throttler.Available()
+	// Always release the barrier and join before reporting an assertion failure.
+	close(churn)
+	done.Wait()
 
-	wg.Wait()
-
-	throttler.PrintUsage()
-	available2 := throttler.Available()
-	require.Equal(t, available, available2)
+	require.Equal(t, limit, reservedAtCapacity)
+	require.Zero(t, availableAtCapacity)
+	for i, count := range successful {
+		require.Equal(t, rounds, count, "worker %d", i)
+	}
+	require.Zero(t, throttler.reserved.Load())
+	require.Equal(t, limit, throttler.Available())
 }
 
 func BenchmarkThrottler(b *testing.B) {
