@@ -16,12 +16,14 @@ package disttae
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/require"
 )
@@ -39,18 +41,20 @@ func TestSampleCountTombstoneObjects(t *testing.T) {
 	op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 	op.EXPECT().IsSnapOp().Return(false).AnyTimes()
 	op.EXPECT().GetWorkspace().Return(txn).AnyTimes()
-	op.EXPECT().SnapshotTS().Return(types.BuildTS(5, 0).ToTimestamp()).AnyTimes()
+	snapshot := types.BuildTS(5, 0).ToTimestamp()
+	op.EXPECT().SnapshotTS().Return(snapshot).AnyTimes()
+	eng.pClient.eng = eng
+	eng.pClient.subscribed.m = map[uint64]*subEntry{tableID: {dbID: dbID, state: Subscribed}}
+	eng.pClient.receivedLogTailTime.ready.Store(true)
+	eng.pClient.receivedLogTailTime.tList = make([]atomic.Value, 1)
+	eng.pClient.receivedLogTailTime.tList[0].Store(snapshot.Prev())
 
-	// Use a locally supplied partition state to exercise snapshot sampling
-	// without a logtail service.
 	tbl := &txnTable{
 		db:      &txnDatabase{databaseId: dbID, op: op},
 		tableId: tableID,
-		fake:    true,
-		relKind: "v",
 	}
 	rel := &txnTableDelegate{origin: tbl}
-	sample, err := SampleCountTombstoneObjects(ctx, rel, 5_000_000)
+	sample, err := rel.SampleCountTombstoneObjects(ctx, 5_000_000)
 	require.NoError(t, err)
 	require.Empty(t, sample)
 
@@ -77,7 +81,7 @@ func TestSampleCountTombstoneObjects(t *testing.T) {
 	}
 	publish()
 
-	sample, err = SampleCountTombstoneObjects(ctx, rel, 5_000_000)
+	sample, err = rel.SampleCountTombstoneObjects(ctx, 5_000_000)
 	require.NoError(t, err)
 	require.Len(t, sample, objectio.MaxObjectCacheProbeIDs)
 	for _, id := range sample {
@@ -85,21 +89,27 @@ func TestSampleCountTombstoneObjects(t *testing.T) {
 		require.True(t, visible[oid], "the sample may only include distinct visible objects")
 		delete(visible, oid)
 	}
-	again, err := SampleCountTombstoneObjects(ctx, tbl, 5_000_000)
+	again, err := tbl.SampleCountTombstoneObjects(ctx, 5_000_000)
 	require.NoError(t, err)
 	require.Equal(t, sample, again)
 
-	sample, err = SampleCountTombstoneObjects(ctx, tbl, totalVisible*1_000_000)
+	sample, err = tbl.SampleCountTombstoneObjects(ctx, totalVisible*1_000_000)
 	require.NoError(t, err)
 	require.Empty(t, sample, "the threshold is strict and excludes later objects")
 
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	_, err = SampleCountTombstoneObjects(cancelled, tbl, 0)
+	_, err = tbl.SampleCountTombstoneObjects(cancelled, 0)
 	require.ErrorIs(t, err, context.Canceled)
 
+	eng.pClient.receivedLogTailTime.tList[0].Store(timestamp.Timestamp{})
+	sample, err = rel.SampleCountTombstoneObjects(ctx, 0)
+	require.NoError(t, err)
+	require.Empty(t, sample, "advisory scheduling must skip a snapshot whose logtail is behind")
+	eng.pClient.receivedLogTailTime.tList[0].Store(snapshot.Prev())
+
 	txn.readOnly.Store(false)
-	sample, err = SampleCountTombstoneObjects(ctx, tbl, 0)
+	sample, err = tbl.SampleCountTombstoneObjects(ctx, 0)
 	require.NoError(t, err)
 	require.Empty(t, sample)
 }

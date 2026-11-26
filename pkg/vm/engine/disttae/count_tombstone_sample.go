@@ -20,36 +20,40 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
-// SampleCountTombstoneObjects returns a bounded sample from the same committed
-// snapshot used by a single-CN COUNT scan, once it crosses the per-block threshold.
-func SampleCountTombstoneObjects(ctx context.Context, rel engine.Relation, minRows int) ([][]byte, error) {
-	var tbl *txnTable
-	switch r := rel.(type) {
-	case *txnTable:
-		tbl = r
-	case *txnTableDelegate:
-		if r.combined.is || r.shard.is {
-			return nil, nil
-		}
-		tbl = r.origin
-	default:
+func (tbl *txnTableDelegate) SampleCountTombstoneObjects(ctx context.Context, minRows int) ([][]byte, error) {
+	if tbl.combined.is || tbl.shard.is {
 		return nil, nil
 	}
-	if tbl.db.op.IsSnapOp() || !tbl.getTxn().ReadOnly() {
+	return tbl.origin.SampleCountTombstoneObjects(ctx, minRows)
+}
+
+// SampleCountTombstoneObjects returns a bounded sample from an already
+// available committed snapshot, once it crosses the per-block threshold.
+func (tbl *txnTable) SampleCountTombstoneObjects(ctx context.Context, minRows int) ([][]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if tbl.db.op.IsSnapOp() {
+		return nil, nil
+	}
+	txn := tbl.getTxn()
+	if !txn.ReadOnly() {
 		return nil, nil
 	}
 
-	part, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if part.ApproxTombstoneObjectsNum() == 0 {
+	// This advisory check should never subscribe, wait for logtail, or fetch
+	// checkpoints. The ordinary scan still owns snapshot admission.
+	snapshot := tbl.db.op.SnapshotTS()
+	part, _, available := txn.engine.PushClient().planningInputSnapshot(
+		tbl.db.databaseId, tbl.tableId, client.CatalogReadStamp{Snapshot: snapshot},
+	)
+	if !available || part.ApproxTombstoneObjectsNum() == 0 {
 		return nil, nil
 	}
-	iter, err := part.NewObjectsIter(types.TimestampToTS(tbl.db.op.SnapshotTS()), true, true)
+	iter, err := part.NewObjectsIter(types.TimestampToTS(snapshot), true, true)
 	if err != nil {
 		return nil, err
 	}

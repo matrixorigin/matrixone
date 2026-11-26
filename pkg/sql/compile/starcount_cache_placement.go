@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 const (
@@ -99,8 +98,33 @@ func (c *Compile) placeStarCountByCache(
 		return fallback, nil
 	}
 
+	if err := ctx.Err(); err != nil {
+		return fallback, err
+	}
+	sampler, ok := rel.(interface {
+		SampleCountTombstoneObjects(context.Context, int) ([][]byte, error)
+	})
+	if !ok {
+		return fallback, nil
+	}
+	if c.execType == plan2.ExecTypeAP_MULTICN && len(req.QueryWorkers) <= 1 {
+		return fallback, nil
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, starCountCacheProbeTimeout)
 	defer cancel()
+	objects, err := sampler.SampleCountTombstoneObjects(probeCtx, defaultStarCountTombstoneThreshold)
+	if err != nil || len(objects) == 0 {
+		return fallback, ctx.Err()
+	}
+	fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
+	if err != nil {
+		return fallback, ctx.Err()
+	}
+	localHits, err := objectio.CountCachedObjectFiles(probeCtx, fs, objects)
+	if err != nil || localHits == len(objects) {
+		return fallback, ctx.Err()
+	}
+
 	workers := req.QueryWorkers
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		// The query remains single-CN. Discover eligible workers for this
@@ -123,19 +147,6 @@ func (c *Compile) placeStarCountByCache(
 		}
 	}
 	if len(targets) == 0 {
-		return fallback, ctx.Err()
-	}
-
-	objects, err := disttae.SampleCountTombstoneObjects(probeCtx, rel, defaultStarCountTombstoneThreshold)
-	if err != nil || len(objects) == 0 {
-		return fallback, ctx.Err()
-	}
-	fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
-	if err != nil {
-		return fallback, ctx.Err()
-	}
-	localHits, err := objectio.CountCachedObjectFiles(probeCtx, fs, objects)
-	if err != nil || localHits == len(objects) {
 		return fallback, ctx.Err()
 	}
 
