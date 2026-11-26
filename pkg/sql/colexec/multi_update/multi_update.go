@@ -345,8 +345,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			if err := batBufs[actionDelete].UnmarshalBinaryWithAnyMp(blob, proc.Mp()); err != nil {
 				return input, err
 			}
-			// The blob's layout names it; names written on the wire (by
-			// an older CN) are never read.
+			// The blob's layout names it.
 			attrs := colexec.RelayedDeleteAttrs(batBufs[actionDelete])
 			// For REPLACE INTO, we don't count DELETE rows in affected rows
 			// REPLACE INTO should only return the number of INSERT rows

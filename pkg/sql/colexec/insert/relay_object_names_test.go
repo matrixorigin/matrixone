@@ -49,9 +49,6 @@ func TestIssue25590InsertRelayObjectNames(t *testing.T) {
 		want = append(want, stats.ObjectName().String())
 	}
 	bat.SetRowCount(bat.Vecs[1].Length())
-	// The result batch carries no names: the layout alone is recognized.
-	require.Equal(t, colexec.CNS3ResultAttrs, RelayWireNames(bat))
-
 	names, ok, err := TryExtractS3InsertObjectNames(bat)
 	require.NoError(t, err)
 	require.True(t, ok, "the standalone insert result layout adopts")
@@ -82,7 +79,6 @@ func TestIssue25590InsertRelayObjectNames(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok,
 		"a layout the producer never emits never looks like ownership metadata")
-	require.Nil(t, RelayWireNames(foreign))
 
 	// A stats value too short to carry an ObjectStats rejects the ack.
 	broken := colexec.AllocCNS3ResultBat(false, proc.Mp())

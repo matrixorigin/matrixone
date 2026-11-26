@@ -986,15 +986,13 @@ func TestSourceNodeForRemoteRunStampsSessionKnobs(t *testing.T) {
 	require.Equal(t, uint64(900), node.IndexSearchScan.MaxInternalTopk, "the BY RANK option wins")
 	require.Equal(t, uint64(32), node.IndexSearchScan.MaxNprobe)
 	require.Zero(t, source.node.IndexSearchScan.InternalTopk, "the reusable node is not changed")
-	require.Equal(t, vectorscan.SearchKnobsProtocolVersion, vectorscan.RequiredProtocolVersion(node.IndexSearchScan))
 
-	// a fulltext search takes no vector knob and keeps the IndexSearchScan protocol
+	// a fulltext search takes no vector knob
 	node, err = sourceNodeForRemoteRun(&Source{node: &plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN,
 		IndexSearchScan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgo: catalog.MOIndexFullTextAlgo.ToString()}}}}, c.proc)
 	require.NoError(t, err)
 	require.Zero(t, node.IndexSearchScan.InternalTopk)
 	require.Zero(t, node.IndexSearchScan.MaxNprobe)
-	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, vectorscan.RequiredProtocolVersion(node.IndexSearchScan))
 
 	node, err = sourceNodeForRemoteRun(&Source{node: &plan.Node{NodeType: plan.Node_TABLE_SCAN}}, c.proc)
 	require.NoError(t, err)

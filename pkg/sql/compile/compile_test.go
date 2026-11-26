@@ -39,7 +39,6 @@ import (
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -59,7 +58,6 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -67,7 +65,6 @@ import (
 	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
-	orderop "github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -2038,13 +2035,12 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	// binding to a newer transaction process must not recapture its snapshot.
 	c.SetPlanGenerationReused(true)
 	currentSnapshot = timestamp.Timestamp{PhysicalTime: 20}
-	serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
 	require.NoError(t, c.Reset(proc, time.Now(), nil, "execute prepared_stmt"))
 	got, ok = proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
 	require.True(t, proc.PlanGenerationReused())
-	require.Equal(t, process.StringShuffleHashLegacy, proc.StringShuffleHashAlgorithm())
+	require.Equal(t, process.StringShuffleHashComplete, proc.StringShuffleHashAlgorithm())
 	// The prior execution's already-created child remains immutable until the
 	// prepared scope is explicitly reset for the next execution.
 	require.Equal(t, process.StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
@@ -2054,7 +2050,7 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
 	require.True(t, child.PlanGenerationReused())
-	require.Equal(t, process.StringShuffleHashLegacy, child.StringShuffleHashAlgorithm())
+	require.Equal(t, process.StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
 
 	// A data-only retry recompiles pipelines from the same logical plan. It
 	// retains the original binding even after the transaction snapshot moves.
@@ -2066,7 +2062,7 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
 	require.True(t, proc.PlanGenerationReused())
-	require.Equal(t, process.StringShuffleHashLegacy, proc.StringShuffleHashAlgorithm())
+	require.Equal(t, process.StringShuffleHashComplete, proc.StringShuffleHashAlgorithm())
 
 	// A definition-change retry rebuilds the logical plan and starts a new plan
 	// generation at the transaction's refreshed snapshot. The old prepared
@@ -2107,71 +2103,6 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	got, ok = proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 5}, got)
-}
-
-func TestStringShuffleHashCaptureIgnoresParticipantRuntimeAfterAdmission(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	const (
-		coordinatorID = "string-shuffle-v33-coordinator"
-		participantID = "string-shuffle-v32-participant"
-	)
-	coordinatorRuntime := runtime.NewRuntime(
-		metadata.ServiceType_CN, coordinatorID, zap.NewNop())
-	participantRuntime := runtime.NewRuntime(
-		metadata.ServiceType_CN, participantID, zap.NewNop())
-	runtime.SetupServiceBasedRuntime(coordinatorID, coordinatorRuntime)
-	runtime.SetupServiceBasedRuntime(participantID, participantRuntime)
-	coordinatorRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion33)
-	participantRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
-
-	coordinatorProc := testutil.NewProcess(t)
-	participantProc := testutil.NewProcess(t)
-	defer coordinatorProc.Free()
-	defer participantProc.Free()
-	coordinatorLock := mock_lock.NewMockLockService(ctrl)
-	participantLock := mock_lock.NewMockLockService(ctrl)
-	coordinatorLock.EXPECT().GetConfig().Return(
-		lockservice.Config{ServiceID: coordinatorID}).AnyTimes()
-	participantLock.EXPECT().GetConfig().Return(
-		lockservice.Config{ServiceID: participantID}).AnyTimes()
-	coordinatorProc.Base.LockService = coordinatorLock
-	participantProc.Base.LockService = participantLock
-
-	compile := &Compile{proc: coordinatorProc}
-	compile.captureStringShuffleHashAlgorithm()
-	require.Equal(t, process.StringShuffleHashComplete,
-		coordinatorProc.StringShuffleHashAlgorithm())
-	require.False(t, supportsStableStringShuffleHash(participantProc.GetService()))
-
-	// Model the ProcessInfo decoder's copy of the coordinator's exact selection
-	// (its codec round trip is covered separately). A new participant must
-	// consume that value instead of consulting its v32 local gate during Prepare
-	// or remote-pipeline reconstruction.
-	participantProc.CopyStringShuffleHashAlgorithmFrom(coordinatorProc)
-	require.Equal(t, process.StringShuffleHashComplete,
-		participantProc.StringShuffleHashAlgorithm())
-	arg := shuffle.NewArgument()
-	defer arg.Release()
-	arg.ShuffleType = int32(plan.ShuffleType_Hash)
-	arg.StringHashKey = true
-	_, instruction, err := convertToPipelineInstruction(
-		arg, participantProc, &scopeContext{}, 1)
-	require.NoError(t, err)
-	require.Equal(t, int32(vm.ShuffleStable), instruction.Op)
-
-	// A rollout gate change applies only to the next execution. It cannot alter
-	// either process already admitted into this one.
-	coordinatorRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
-	require.Equal(t, process.StringShuffleHashComplete,
-		coordinatorProc.StringShuffleHashAlgorithm())
-	require.Equal(t, process.StringShuffleHashComplete,
-		participantProc.StringShuffleHashAlgorithm())
-	next := &Compile{proc: coordinatorProc}
-	next.captureStringShuffleHashAlgorithm()
-	require.Equal(t, process.StringShuffleHashLegacy,
-		coordinatorProc.StringShuffleHashAlgorithm())
-	require.Equal(t, process.StringShuffleHashComplete,
-		participantProc.StringShuffleHashAlgorithm())
 }
 
 func TestShuffleConstructionMarksOnlyStringHashKeys(t *testing.T) {
@@ -3037,406 +2968,6 @@ func TestCompileShuffleGroupSupportsOrderedGroupConcat(t *testing.T) {
 	require.IsType(t, &shuffle.Shuffle{}, result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
 }
 
-func TestCompileShuffleGroupGatesOrderedAggregateByProtocolVersion(t *testing.T) {
-	c := newCompileForShuffleGroupTest(t)
-	aggNode, _ := newShuffleGroupTestNodes(16)
-	aggNode.AggList = []*plan.Expr{{
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{
-				ObjName: plan2.NameGroupConcat,
-			},
-			AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
-		}},
-	}}
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
-	require.False(t, c.supportsRemoteOrderedAggregates())
-	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"mixed-version clusters must keep the final ordered aggregate local")
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
-	require.True(t, c.supportsRemoteOrderedAggregates())
-	require.True(t, c.canCompileShuffleGroup(aggNode))
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
-	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"rollback must disable the v6 pipeline field before contacting old CNs")
-
-	aggNode.AggList = nil
-	require.True(t, c.canCompileShuffleGroup(aggNode),
-		"legacy shuffle aggregates remain safe on protocol v5")
-}
-
-func TestCompileShuffleGroupGatesVarianceByProtocolVersion(t *testing.T) {
-	c := newCompileForShuffleGroupTest(t)
-	aggNode, _ := newShuffleGroupTestNodes(16)
-	aggNode.AggList = []*plan.Expr{{
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{Obj: int64(function.VAR_POP) << 32},
-		}},
-	}}
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion34)
-	require.False(t, c.supportsRemoteVarianceAggregates())
-	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"mixed-version clusters must keep exponent-scaled variance state local")
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
-	require.True(t, c.supportsRemoteVarianceAggregates())
-	require.True(t, c.canCompileShuffleGroup(aggNode))
-}
-
-func TestCompileShuffleGroupGatesWidenedDecimalSumByProtocolVersion(t *testing.T) {
-	c := newCompileForShuffleGroupTest(t)
-	aggNode, _ := newShuffleGroupTestNodes(16)
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	for _, input := range []types.Type{
-		types.New(types.T_decimal64, 18, 2),
-		types.New(types.T_decimal128, 38, 2),
-		types.New(types.T_decimal256, 65, 2),
-	} {
-		aggNode.AggList = []*plan.Expr{{
-			Expr: &plan.Expr_F{F: &plan.Function{
-				Func: &plan.ObjectRef{Obj: aggexec.AggIdOfSum},
-				Args: []*plan.Expr{{Typ: plan.Type{
-					Id:    int32(input.Oid),
-					Width: input.Width,
-					Scale: input.Scale,
-				}}},
-			}},
-		}}
-
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
-		require.True(t, hasWidenedDecimalSum(aggNode))
-		require.False(t, c.supportsRemoteWidenedDecimalSum())
-		require.False(t, c.canCompileShuffleGroup(aggNode),
-			"mixed-version clusters must finalize widened decimal SUM on the coordinator")
-
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
-		require.True(t, c.supportsRemoteWidenedDecimalSum())
-		require.True(t, c.canCompileShuffleGroup(aggNode))
-	}
-
-	// DECIMAL(16,2) SUM stays Decimal128 and therefore keeps the established
-	// final shuffle result type on both sides of a v72/v73 rolling upgrade.
-	aggNode.AggList[0].GetF().Args[0].Typ.Width = 16
-	aggNode.AggList[0].GetF().Args[0].Typ.Id = int32(types.T_decimal64)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
-	require.False(t, hasWidenedDecimalSum(aggNode))
-	require.True(t, c.canCompileShuffleGroup(aggNode))
-}
-
-func TestCompileShuffleGroupGatesOrderedSetPercentileByProtocolVersion(t *testing.T) {
-	c := newCompileForShuffleGroupTest(t)
-	aggNode, _ := newShuffleGroupTestNodes(16)
-	aggNode.AggList = []*plan.Expr{{
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{
-				ObjName: plan2.NamePercentileCont,
-			},
-			Args: []*plan.Expr{
-				aggNode.GroupBy[0],
-				plan2.MakePlan2Float64ConstExprWithType(0.5),
-			},
-		}},
-	}}
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
-	require.False(t, c.supportsRemoteOrderedSetAggregates())
-	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"mixed-version clusters must keep ordered-set percentile aggregates local")
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
-	require.True(t, c.supportsRemoteOrderedSetAggregates())
-	require.True(t, c.canCompileShuffleGroup(aggNode))
-}
-
-func TestCompileShuffleGroupGatesApproxPercentileByProtocolVersion(t *testing.T) {
-	c := newCompileForShuffleGroupTest(t)
-	aggNode, nodes := newShuffleGroupTestNodes(16)
-	aggNode.AggList = []*plan.Expr{{
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: plan2.NameApproxPercentile},
-			Args: []*plan.Expr{
-				aggNode.GroupBy[0],
-				plan2.MakePlan2Float64ConstExprWithType(0.5),
-			},
-		}},
-	}}
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
-	require.True(t, hasApproxPercentile(aggNode))
-	require.False(t, c.supportsRemoteApproxPercentile())
-	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"mixed-version clusters must keep changed approx_percentile state local")
-	local := c.compileGroupWithoutShuffle(
-		aggNode,
-		[]*Scope{newShuffleGroupInputScope(t, 1)},
-		nodes,
-		false,
-	)
-	require.Len(t, local, 1)
-	require.True(t, local[0].RootOp.(*group.Group).NeedEval,
-		"unsupported remote state must use one local aggregate owner")
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
-	require.False(t, c.supportsRemoteApproxPercentile())
-	require.False(t, c.canCompileShuffleGroup(aggNode))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
-	require.False(t, c.supportsRemoteApproxPercentile(),
-		"v74 is reserved for HEX and must keep the legacy approx_percentile state")
-	require.False(t, c.canCompileShuffleGroup(aggNode))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
-	require.False(t, c.supportsRemoteApproxPercentile())
-	require.False(t, c.canCompileShuffleGroup(aggNode))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
-	require.True(t, c.supportsRemoteApproxPercentile())
-	require.True(t, c.canCompileShuffleGroup(aggNode))
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
-	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"rollback must disable the v76 approx_percentile state before exchange")
-}
-
-func TestCompileShuffleGroupGatesHLLByProtocolVersion(t *testing.T) {
-	c := newCompileForShuffleGroupTest(t)
-	aggNode, nodes := newShuffleGroupTestNodes(16)
-	aggNode.AggList = []*plan.Expr{{
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: "approx_count"},
-			Args: []*plan.Expr{aggNode.GroupBy[0]},
-		}},
-	}}
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
-	require.True(t, hasHLLAggregate(aggNode))
-	require.False(t, c.supportsRemoteHLL())
-	require.False(t, c.canCompileShuffleGroup(aggNode))
-	local := c.compileGroupWithoutShuffle(
-		aggNode,
-		[]*Scope{newShuffleGroupInputScope(t, 1)},
-		nodes,
-		false,
-	)
-	require.Len(t, local, 1)
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
-	require.False(t, c.supportsRemoteHLL(),
-		"v73 peers must not receive the v4 typed-key HLL state")
-	require.False(t, c.canCompileShuffleGroup(aggNode))
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
-	require.False(t, c.supportsRemoteHLL(),
-		"v74 peers must not receive the v4 typed-key HLL state")
-	require.False(t, c.canCompileShuffleGroup(aggNode))
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
-	require.False(t, c.supportsRemoteHLL(),
-		"v75 peers must not receive the v4 typed-key HLL state")
-	require.False(t, c.canCompileShuffleGroup(aggNode))
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
-	require.False(t, c.supportsRemoteHLL())
-	require.False(t, c.canCompileShuffleGroup(aggNode))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
-	require.True(t, c.supportsRemoteHLL())
-	require.True(t, c.canCompileShuffleGroup(aggNode))
-
-	vectorHLL := &plan.Expr{
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: "hll_add_agg"},
-			Args: []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_array_float32)}}},
-		}},
-	}
-	aggNode.AggList = []*plan.Expr{vectorHLL}
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
-	require.False(t, c.supportsRemoteCanonicalHLLAdd())
-	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"vector HLL_ADD_AGG must stay local before MORPC v88")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
-	require.True(t, c.supportsRemoteCanonicalHLLAdd())
-	require.True(t, c.canCompileShuffleGroup(aggNode))
-}
-
-func TestCompileShuffleGroupGatesCanonicalHLLAddByProtocolVersion(t *testing.T) {
-	c := newCompileForShuffleGroupTest(t)
-	aggNode, nodes := newShuffleGroupTestNodes(16)
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	for _, tc := range []struct {
-		name      string
-		typ       types.Type
-		canonical bool
-	}{
-		{name: "char", typ: types.New(types.T_char, 4, 0), canonical: true},
-		{name: "json", typ: types.T_json.ToType(), canonical: true},
-		{name: "varchar-control", typ: types.New(types.T_varchar, 4, 0)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			arg := &plan.Expr{Typ: plan.Type{
-				Id:    int32(tc.typ.Oid),
-				Width: tc.typ.Width,
-				Scale: tc.typ.Scale,
-			}}
-			aggNode.AggList = []*plan.Expr{{
-				Expr: &plan.Expr_F{F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "hll_add_agg"},
-					Args: []*plan.Expr{arg},
-				}},
-			}}
-
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
-			require.Equal(t, tc.canonical, hasCanonicalHLLAddAggregate(aggNode))
-			require.Equal(t, !tc.canonical, c.canCompileShuffleGroup(aggNode))
-			if tc.canonical {
-				local := c.compileGroupWithoutShuffle(
-					aggNode,
-					[]*Scope{newShuffleGroupInputScope(t, 1)},
-					nodes,
-					false,
-				)
-				require.Len(t, local, 1)
-				require.True(t, local[0].RootOp.(*group.Group).NeedEval)
-			}
-
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
-			require.True(t, c.supportsRemoteCanonicalHLLAdd())
-			require.Equal(t, !tc.canonical, c.canCompileShuffleGroup(aggNode))
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion90)
-			require.False(t, c.supportsRemoteCanonicalTextHLLAdd())
-			require.Equal(t, !tc.canonical, c.canCompileShuffleGroup(aggNode))
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
-			require.True(t, c.supportsRemoteCanonicalTextHLLAdd())
-			require.True(t, c.canCompileShuffleGroup(aggNode))
-		})
-	}
-}
-
-func TestCompileShuffleGroupGatesScalarFloatHLLAddByProtocolVersion(t *testing.T) {
-	c := newCompileForShuffleGroupTest(t)
-	aggNode, _ := newShuffleGroupTestNodes(16)
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	makeAgg := func(typ types.T) *plan.Expr {
-		return &plan.Expr{
-			Expr: &plan.Expr_F{F: &plan.Function{
-				Func: &plan.ObjectRef{ObjName: "hll_add_agg"},
-				Args: []*plan.Expr{{Typ: plan.Type{Id: int32(typ)}}},
-			}},
-		}
-	}
-	aggNode.AggList = []*plan.Expr{makeAgg(types.T_float32)}
-	require.Equal(t, defines.MORPCVersion92, canonicalHLLAddRequiredVersion(aggNode))
-	for _, version := range []int64{defines.MORPCVersion91, defines.MORPCVersion92} {
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
-		require.Equal(t, version >= defines.MORPCVersion92,
-			c.supportsRemoteCanonicalFloatHLLAdd())
-		require.Equal(t, version >= defines.MORPCVersion92,
-			c.canCompileShuffleGroup(aggNode))
-	}
-
-	// The requirement is the maximum across all HLL_ADD_AGG expressions; a
-	// later scalar FLOAT must not be hidden by an earlier CHAR expression.
-	aggNode.AggList = []*plan.Expr{makeAgg(types.T_char), makeAgg(types.T_float64)}
-	require.Equal(t, defines.MORPCVersion92, canonicalHLLAddRequiredVersion(aggNode))
-}
-
-func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {
-	c := newCompileForShuffleGroupTest(t)
-	aggNode, _ := newShuffleGroupTestNodes(16)
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	aggNode.GroupBy[0].Typ = plan.Type{
-		Id:    int32(types.T_varchar),
-		Width: 2,
-	}
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
-	require.True(t, hasVariableLengthGroupKey(aggNode))
-	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"short variable-length group keys must stay local before MORPC v78")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion78)
-	require.True(t, c.canCompileShuffleGroup(aggNode))
-
-	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 2}}
-	aggNode.AggList = []*plan.Expr{{
-		Typ: plan.Type{Id: int32(types.T_int64)},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{
-				Obj:     int64(uint64(function.EncodeOverloadID(function.COUNT, 0)) | uint64(function.Distinct)),
-				ObjName: "count",
-			},
-			Args: []*plan.Expr{arg},
-		}},
-	}}
-	require.True(t, hasCanonicalDistinctKeyWire(aggNode))
-	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"canonical opaque DISTINCT keys must stay local before MORPC v79")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
-	require.True(t, c.canCompileShuffleGroup(aggNode))
-
-	floatArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}}
-	aggNode.AggList = []*plan.Expr{{
-		Typ: plan.Type{Id: int32(types.T_int64)},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{
-				Obj:     int64(uint64(function.EncodeOverloadID(function.COUNT, 0)) | uint64(function.Distinct)),
-				ObjName: "count",
-			},
-			Args: []*plan.Expr{floatArg},
-		}},
-	}}
-	require.True(t, hasLegacyFloatDistinctKeyWire(aggNode))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion78)
-	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"fixed FLOAT DISTINCT must stay local before MORPC v79")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
-	require.True(t, c.canCompileShuffleGroup(aggNode))
-}
-
-func TestRemoteApproxPercentileAndHLLCapabilitiesDefaultClosed(t *testing.T) {
-	service := "missing-protocol-" + t.Name()
-	rt := runtime.NewRuntime(metadata.ServiceType_CN, service, nil)
-	runtime.SetupServiceBasedRuntime(service, rt)
-	require.True(t, rt.CompareAndDeleteGlobalVariables(
-		runtime.MOProtocolVersion, defines.MORPCLatestVersion))
-	require.False(t, supportsRemoteApproxPercentile(service))
-	require.False(t, supportsRemoteHLL(service))
-}
-
-func TestCompilePartitionTopNGatedByProtocolVersion(t *testing.T) {
-	c := newCompileForShuffleGroupTest(t)
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
-	require.False(t, c.supportsRemotePartitionTopN())
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion19)
-	require.True(t, c.supportsRemotePartitionTopN())
-	require.False(t, c.supportsRemotePartitionTopNWithTies())
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
-	require.True(t, c.supportsRemotePartitionTopNWithTies())
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
-	require.False(t, c.supportsRemotePartitionTopN(), "rollback must select the legacy partition path")
-}
-
 func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 	newNode := func() *plan.Node {
 		return &plan.Node{
@@ -3468,39 +2999,6 @@ func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 		require.True(t, physicalWindow.PartitionTopN)
 	})
 
-	t.Run("v17 keeps legacy window contract", func(t *testing.T) {
-		c := newCompileForShuffleGroupTest(t)
-		rt := runtime.ServiceRuntime(c.proc.GetService())
-		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
-
-		partitionScopes := c.compilePartition(newNode(), []*Scope{newShuffleGroupInputScope(t, 1)})
-		physicalPartition := partitionScopes[0].RootOp.(*partitionop.Partition)
-		require.Nil(t, physicalPartition.Limit)
-		windowScopes := c.compileWin(&plan.Node{}, partitionScopes)
-		physicalWindow := windowScopes[0].RootOp.(*windowop.Window)
-		require.False(t, physicalWindow.PartitionTopN)
-	})
-
-	t.Run("rank with ties requires v68", func(t *testing.T) {
-		c := newCompileForShuffleGroupTest(t)
-		rt := runtime.ServiceRuntime(c.proc.GetService())
-		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-		node := newNode()
-		node.PartitionTopNWithTies = true
-
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion68)
-		legacyScopes := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
-		legacyPartition := legacyScopes[0].RootOp.(*partitionop.Partition)
-		require.Nil(t, legacyPartition.Limit)
-		require.False(t, legacyPartition.WithTies)
-
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
-		boundedScopes := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
-		boundedPartition := boundedScopes[0].RootOp.(*partitionop.Partition)
-		require.NotNil(t, boundedPartition.Limit)
-		require.True(t, boundedPartition.WithTies)
-	})
 }
 
 func TestCompileHashPartitionPhysicalTopology(t *testing.T) {
@@ -3529,29 +3027,6 @@ func TestCompileHashPartitionPhysicalTopology(t *testing.T) {
 		// leave that previous root untouched instead of adding local Order.
 		require.IsType(t, &colexec.MockOperator{}, input.RootOp.GetOperatorBase().GetChildren(0))
 	}
-}
-
-func TestCompileHashPartitionGatedByProtocolVersion(t *testing.T) {
-	c := newCompileForShuffleGroupTest(t)
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion46)
-	require.False(t, c.supportsRemoteHashPartition())
-	node := &plan.Node{
-		NodeType:           plan.Node_PARTITION,
-		PartitionAlgorithm: plan.Node_PARTITION_ALGORITHM_HASH,
-		OrderBy: []*plan.OrderBySpec{{
-			Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
-		}},
-	}
-	legacy := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
-	require.Len(t, legacy, 1)
-	require.Equal(t, plan.Node_PARTITION_ALGORITHM_SORT, legacy[0].RootOp.(*partitionop.Partition).Algorithm)
-	require.IsType(t, &orderop.Order{}, legacy[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion47)
-	require.True(t, c.supportsRemoteHashPartition())
 }
 
 func TestCompileOrderedSetPercentileUsesSingleStageForNonShuffleMerge(t *testing.T) {

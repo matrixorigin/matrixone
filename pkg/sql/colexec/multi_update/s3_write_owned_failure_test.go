@@ -21,7 +21,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -228,11 +227,6 @@ func TestDeleteOutputRetainsAllObjectStats(t *testing.T) {
 	defer decoded.Clean(proc.Mp())
 	require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(writer.outputBat.Vecs[4].GetBytesAt(0), proc.Mp()))
 	require.Equal(t, 3, decoded.RowCount())
-	// The tail is self-describing: an older CN reads these names back as
-	// the decoded batch's Attrs.
-	wireNames, err := batch.WireNames(writer.outputBat.Vecs[4].GetBytesAt(0))
-	require.NoError(t, err)
-	require.Equal(t, []string{catalog.ObjectMeta_ObjectStats}, wireNames)
 	var got []string
 	for row := 0; row < decoded.RowCount(); row++ {
 		var stats objectio.ObjectStats

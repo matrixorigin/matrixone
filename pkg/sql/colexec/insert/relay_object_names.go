@@ -43,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 )
 
 // ProducesRemotePersistedObjectMetadata is the mode-authenticated
@@ -75,16 +74,6 @@ func isS3InsertResultLayout(bat *batch.Batch) bool {
 		bat.Vecs[0] != nil && bat.Vecs[1] != nil &&
 		bat.Vecs[0].GetType().Oid == types.T_text &&
 		bat.Vecs[1].GetType().Oid == types.T_binary
-}
-
-// RelayWireNames returns the column names an older coordinator expects on
-// the wire for bat when bat has the insert writer's result layout, and nil
-// otherwise. Older coordinators recognize the result batch by these names.
-func RelayWireNames(bat *batch.Batch) []string {
-	if isS3InsertResultLayout(bat) {
-		return colexec.CNS3ResultAttrs
-	}
-	return nil
 }
 
 // TryExtractS3InsertObjectNames returns ok=true only for a batch

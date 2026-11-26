@@ -225,7 +225,7 @@ func (s *returningSpool) Replay(ctx context.Context, consume func(*batch.Batch, 
 		}
 		readBatch.CleanOnlyData()
 		limited := &io.LimitedReader{R: reader, N: int64(size)}
-		if err = readBatch.UnmarshalFromReaderWithMetadata(limited, int64(size), s.mp); err != nil {
+		if err = readBatch.UnmarshalSizedFrom(limited, int64(size), s.mp); err != nil {
 			return err
 		}
 		if limited.N != 0 {
