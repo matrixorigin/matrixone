@@ -93,10 +93,10 @@ func (f *failingHeads) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (f *failingHeads) statHoldingAllOtherRoom(raw ObjectStorage) (int64, int32, error) {
 	f.g = newGovernor(raw, minRequestRoom)
 	defer occupy(f.t, f.g, foregroundRequest, minRequestRoom-1)()
-	size, err := f.g.stat(context.Background(), "object")
+	res, err := f.g.Do(context.Background(), statRequest{key: "object"})
 	ranWith := <-f.ranWith
 	require.Zero(f.t, heldRoom(f.g))
-	return size, ranWith, err
+	return res.n, ranWith, err
 }
 
 // requireRetriedWithoutRoom requires that the stat retried the failed HEAD once, and that

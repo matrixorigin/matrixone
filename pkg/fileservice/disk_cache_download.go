@@ -783,10 +783,11 @@ func copyPart(ctx context.Context, f *os.File, download *objectDownload, src *ob
 	ctx, idle := newIdleReader(ctx)
 	defer idle.Close()
 	defer download.idle.add(idle)()
-	_, n, err := src.g.read(ctx, rangeRead{
+	res, err := src.g.Do(ctx, rangeRead{
 		key: src.key, start: src.start + start, end: readEnd,
 		file: f, offset: start, progress: fillProgress{download: download, part: part}, idle: idle,
 	})
+	n := res.n
 	if err != nil {
 		return n, err
 	}

@@ -1391,7 +1391,7 @@ func (f *memoryPrefetchObject) read(ctx context.Context) error {
 	ctx, idle := newIdleReader(ctx)
 	defer idle.Close()
 	defer f.idle.add(idle)()
-	_, _, err := f.src.g.read(ctx, rangeRead{key: f.src.key, start: f.start, end: f.end, buf: buf, progress: fillProgress{flight: f}, idle: idle})
+	_, err := f.src.g.Do(ctx, rangeRead{key: f.src.key, start: f.start, end: f.end, buf: buf, progress: fillProgress{flight: f}, idle: idle})
 	return err
 }
 

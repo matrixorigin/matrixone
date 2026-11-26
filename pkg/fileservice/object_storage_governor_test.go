@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"io"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -233,7 +234,7 @@ func (panicStorage) Stat(context.Context, string) (int64, error) { panic("stat")
 func TestGovernorPanicFreesRoom(t *testing.T) {
 	g := newGovernor(panicStorage{}, minRequestRoom)
 	defer occupy(t, g, foregroundRequest, minRequestRoom-1)()
-	require.Panics(t, func() { _, _ = g.stat(context.Background(), "key") })
+	require.Panics(t, func() { _, _ = g.Do(context.Background(), statRequest{key: "key"}) })
 	require.Zero(t, heldRoom(g))
 	release, ok := admitted(g, foregroundRequest)
 	require.True(t, ok)
@@ -285,14 +286,14 @@ func TestGovernorRetryWaitsWithoutRoom(t *testing.T) {
 	ctx := context.Background()
 	freeOne := occupy(t, g, foregroundRequest, 1)
 	defer occupy(t, g, foregroundRequest, minRequestRoom-1)()
-	type result struct {
+	type statResult struct {
 		size int64
 		err  error
 	}
-	statDone := make(chan result, 1)
+	statDone := make(chan statResult, 1)
 	go func() {
-		size, err := g.stat(ctx, "key")
-		statDone <- result{size, err}
+		res, err := g.Do(ctx, statRequest{key: "key"})
+		statDone <- statResult{res.n, err}
 	}()
 	require.Eventually(t, waitingFor(g, foregroundRequest, 1), 5*time.Second, time.Millisecond)
 	attemptsBefore := make(chan int, 1)
@@ -333,4 +334,14 @@ func (g getterStorage) Read(ctx context.Context, _ string, min, max *int64) (io.
 // getterSource returns the source of a whole object whose ranges open through get.
 func getterSource(get func(ctx context.Context, min, max *int64) (io.ReadCloser, error)) objectSource {
 	return objectSource{g: newGovernor(getterStorage{get: get}, 1024), key: "object", end: -1}
+}
+
+// No request type has a function-typed field.
+func TestGovernorRequestsHoldNoFunctions(t *testing.T) {
+	for _, req := range requestTypes {
+		typ := reflect.TypeOf(req)
+		for i := range typ.NumField() {
+			require.NotEqual(t, reflect.Func, typ.Field(i).Type.Kind(), "%s.%s", typ.Name(), typ.Field(i).Name)
+		}
+	}
 }

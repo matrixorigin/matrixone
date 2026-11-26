@@ -340,9 +340,9 @@ func TestMinioSDKWriteInParts(t *testing.T) {
 	g := newGovernor(sdk, minRequestRoom)
 	opt := &ParallelMultipartOption{PartSize: minMultipartPartSize, Concurrency: 4}
 	read := func(key string) []byte {
-		data, _, err := g.read(ctx, rangeRead{key: key, end: -1})
+		res, err := g.Do(ctx, rangeRead{key: key, end: -1})
 		require.NoError(t, err)
-		return data
+		return res.data
 	}
 	small := []byte("one part")
 	require.NoError(t, writeParts(ctx, g, "small", bytes.NewReader(small), nil, opt))

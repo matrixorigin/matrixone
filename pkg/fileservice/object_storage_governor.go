@@ -214,9 +214,9 @@ func waitingGauge(c requestClass) prometheus.Gauge {
 	return metric.FSObjectStorageRequestsForegroundWaiting
 }
 
-// request is one request of a governor: it holds room while it runs and while a retry of
+// requestRoom is the room of a request: held while the request runs and while a retry of
 // it does not wait.
-type request struct {
+type requestRoom struct {
 	g     *governor
 	class requestClass
 
@@ -226,19 +226,8 @@ type request struct {
 
 type requestKey struct{}
 
-// begin waits for room for a request under ctx and returns the context the request runs
-// under, and the request, which end ends.
-func (g *governor) begin(ctx context.Context, op objectStorageOp) (context.Context, *request, error) {
-	r := &request{g: g, class: requestClassOf(ctx)}
-	if err := r.resume(ctx); err != nil {
-		return nil, nil, err
-	}
-	g.ops[op].Inc()
-	return context.WithValue(withHTTPTrace(ctx), requestKey{}, r), r, nil
-}
-
 // resume waits for room for r, unless r holds room.
-func (r *request) resume(ctx context.Context) error {
+func (r *requestRoom) resume(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
@@ -261,7 +250,7 @@ func (r *request) resume(ctx context.Context) error {
 }
 
 // end frees the room r holds.
-func (r *request) end() {
+func (r *requestRoom) end() {
 	if r == nil {
 		return
 	}
@@ -274,9 +263,9 @@ func (r *request) end() {
 }
 
 // pauseRequest frees the room of the request ctx runs under, for a retry to wait, and
-// returns the request to resume, or nil.
-func pauseRequest(ctx context.Context) *request {
-	r, _ := ctx.Value(requestKey{}).(*request)
+// returns the room to resume, or nil.
+func pauseRequest(ctx context.Context) *requestRoom {
+	r, _ := ctx.Value(requestKey{}).(*requestRoom)
 	r.end()
 	return r
 }
@@ -295,91 +284,171 @@ const (
 
 var opNames = [opCount]string{"read", "write", "delete", "list", "exists", "stat"}
 
-func (g *governor) stat(ctx context.Context, key string) (int64, error) {
-	ctx, r, err := g.begin(ctx, opStat)
-	if err != nil {
-		return 0, err
-	}
-	defer r.end()
-	return g.raw.Stat(ctx, key)
+// request is a request Do makes; its unexported method closes it to other packages.
+type request interface {
+	op() objectStorageOp
 }
 
-func (g *governor) exists(ctx context.Context, key string) (bool, error) {
-	ctx, r, err := g.begin(ctx, opExists)
-	if err != nil {
-		return false, err
+var requestTypes = []request{statRequest{}, existsRequest{}, deleteRequest{}, copyRequest{}, statIdentityRequest{},
+	listRequest{}, rangeRead{}, putRequest{}, putFileRequest{}, publishRequest{}, createMultipartRequest{},
+	uploadPartRequest{}, completeMultipartRequest{}, abortMultipartRequest{}}
+
+type (
+	statRequest   struct{ key string }
+	existsRequest struct{ key string }
+	deleteRequest struct{ keys []string }
+	// copyRequest copies srcKey of src into dstKey of raw on the provider.
+	copyRequest struct {
+		src            ObjectStorage
+		srcKey, dstKey string
 	}
-	defer r.end()
-	return g.raw.Exists(ctx, key)
+	statIdentityRequest struct{ key string }
+	// listRequest takes the next entry of l.
+	listRequest struct{ l *listing }
+	putRequest  struct {
+		key    string
+		data   []byte
+		expire *time.Time
+	}
+	// putFileRequest writes the size bytes of file as key.
+	putFileRequest struct {
+		key    string
+		file   *os.File
+		size   int64
+		expire *time.Time
+	}
+	// publishRequest publishes the file a disk object storage staged at tempPath as key.
+	publishRequest         struct{ key, tempPath string }
+	createMultipartRequest struct {
+		key    string
+		expire *time.Time
+	}
+	uploadPartRequest struct {
+		key, uploadID string
+		num           int32
+		data          []byte
+	}
+	completeMultipartRequest struct {
+		key, uploadID string
+		parts         []multipartPart
+	}
+	abortMultipartRequest struct{ key, uploadID string }
+)
+
+func (statRequest) op() objectStorageOp              { return opStat }
+func (existsRequest) op() objectStorageOp            { return opExists }
+func (deleteRequest) op() objectStorageOp            { return opDelete }
+func (copyRequest) op() objectStorageOp              { return opWrite }
+func (statIdentityRequest) op() objectStorageOp      { return opStat }
+func (listRequest) op() objectStorageOp              { return opCount }
+func (rangeRead) op() objectStorageOp                { return opRead }
+func (putRequest) op() objectStorageOp               { return opWrite }
+func (putFileRequest) op() objectStorageOp           { return opWrite }
+func (publishRequest) op() objectStorageOp           { return opWrite }
+func (createMultipartRequest) op() objectStorageOp   { return opWrite }
+func (uploadPartRequest) op() objectStorageOp        { return opWrite }
+func (completeMultipartRequest) op() objectStorageOp { return opWrite }
+func (abortMultipartRequest) op() objectStorageOp    { return opWrite }
+
+// result is what a request returns.
+type result struct {
+	n        int64          // the size of a stat; the bytes a read read
+	ok       bool           // whether a key exists; whether raw copied; false at a listing's end
+	identity ObjectIdentity // of a statIdentity
+	entry    *DirEntry      // of a list
+	data     []byte         // of a read into neither buf nor file
+	id       string         // the upload of a createMultipart; the etag of an uploadPart
 }
 
-func (g *governor) delete(ctx context.Context, keys ...string) error {
-	ctx, r, err := g.begin(ctx, opDelete)
-	if err != nil {
-		return err
+// Do waits for room for req in the class of ctx, makes req on raw, and frees the room.
+func (g *governor) Do(ctx context.Context, req request) (result, error) {
+	switch req.(type) {
+	case copyRequest:
+		if _, ok := g.raw.(objectStorageCopier); !ok {
+			return result{}, nil
+		}
+	case statIdentityRequest:
+		if _, ok := g.raw.(objectStorageIdentityReader); !ok {
+			return result{}, moerr.NewNotSupported(ctx, "object storage identity")
+		}
+	}
+	r := &requestRoom{g: g, class: requestClassOf(ctx)}
+	if q, ok := req.(listRequest); ok {
+		r = q.l.room
+	}
+	if err := r.resume(ctx); err != nil {
+		return result{}, err
 	}
 	defer r.end()
-	return g.raw.Delete(ctx, keys...)
+	if op := req.op(); op < opCount {
+		g.ops[op].Inc()
+	}
+	return makeRequest(context.WithValue(withHTTPTrace(ctx), requestKey{}, r), g.raw, req)
 }
 
-// copyObject copies srcKey of src into dstKey of raw on the provider, reporting false when
-// raw cannot.
-func (g *governor) copyObject(ctx context.Context, src ObjectStorage, srcKey, dstKey string) (bool, error) {
-	copier, ok := g.raw.(objectStorageCopier)
-	if !ok {
-		return false, nil
+// makeRequest makes req on raw.
+func makeRequest(ctx context.Context, raw ObjectStorage, req request) (res result, err error) {
+	switch q := req.(type) {
+	case statRequest:
+		res.n, err = raw.Stat(ctx, q.key)
+	case existsRequest:
+		res.ok, err = raw.Exists(ctx, q.key)
+	case deleteRequest:
+		err = raw.Delete(ctx, q.keys...)
+	case copyRequest:
+		res.ok, err = raw.(objectStorageCopier).CopyObject(ctx, q.src, q.srcKey, q.dstKey)
+	case statIdentityRequest:
+		res.identity, err = raw.(objectStorageIdentityReader).StatObjectIdentity(ctx, q.key)
+	case listRequest:
+		res.entry, err, res.ok = q.l.next()
+	case rangeRead:
+		res.data, res.n, err = readRangeBody(ctx, raw, q)
+	case putRequest:
+		size := int64(len(q.data))
+		err = raw.Write(ctx, q.key, bytes.NewReader(q.data), &size, q.expire)
+	case putFileRequest:
+		err = raw.Write(ctx, q.key, io.NewSectionReader(q.file, 0, q.size), &q.size, q.expire)
+	case publishRequest:
+		err = raw.(*diskObjectStorage).publish(ctx, q.key, q.tempPath)
+	case createMultipartRequest:
+		res.id, err = raw.(multipartStorage).createMultipart(ctx, q.key, q.expire)
+	case uploadPartRequest:
+		res.id, err = raw.(multipartStorage).uploadPart(ctx, q.key, q.uploadID, q.num, q.data)
+	case completeMultipartRequest:
+		err = raw.(multipartStorage).completeMultipart(ctx, q.key, q.uploadID, q.parts)
+	case abortMultipartRequest:
+		err = raw.(multipartStorage).abortMultipart(ctx, q.key, q.uploadID)
 	}
-	ctx, r, err := g.begin(ctx, opWrite)
-	if err != nil {
-		return false, err
-	}
-	defer r.end()
-	return copier.CopyObject(ctx, src, srcKey, dstKey)
+	return res, err
 }
 
-func (g *governor) statIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
-	reader, ok := g.raw.(objectStorageIdentityReader)
-	if !ok {
-		return ObjectIdentity{}, moerr.NewNotSupported(ctx, "object storage identity")
-	}
-	ctx, r, err := g.begin(ctx, opStat)
-	if err != nil {
-		return ObjectIdentity{}, err
-	}
-	defer r.end()
-	return reader.StatObjectIdentity(ctx, key)
+// listing is a listing of raw whose entries listRequests take under room.
+type listing struct {
+	room *requestRoom
+	next func() (*DirEntry, error, bool)
 }
 
-// list lists prefix. Each entry is taken from the listing holding room, so the request
-// that reads a page holds room while it runs, and the entry is yielded with no room held.
+// list lists prefix. Each entry is taken by a listRequest, so the request that reads a page
+// holds room while it runs, and the entry is yielded with no room held.
 func (g *governor) list(ctx context.Context, prefix string) iter.Seq2[*DirEntry, error] {
 	return func(yield func(*DirEntry, error) bool) {
-		r := &request{g: g, class: requestClassOf(ctx)}
-		listCtx := context.WithValue(withHTTPTrace(ctx), requestKey{}, r)
-		next, stop := iter.Pull2(g.raw.List(listCtx, prefix))
+		l := &listing{room: &requestRoom{g: g, class: requestClassOf(ctx)}}
+		next, stop := iter.Pull2(g.raw.List(context.WithValue(withHTTPTrace(ctx), requestKey{}, l.room), prefix))
 		defer stop()
+		l.next = next
 		g.ops[opList].Inc()
 		for {
-			entry, err, ok := g.listNext(ctx, r, next)
-			if !ok || !yield(entry, err) || err != nil {
+			res, err := g.Do(ctx, listRequest{l: l})
+			if err == nil && !res.ok || !yield(res.entry, err) || err != nil {
 				return
 			}
 		}
 	}
 }
 
-// listNext takes the next entry from next holding the room of r.
-func (g *governor) listNext(ctx context.Context, r *request, next func() (*DirEntry, error, bool)) (*DirEntry, error, bool) {
-	if err := r.resume(ctx); err != nil {
-		return nil, err, true
-	}
-	defer r.end()
-	return next()
-}
-
 // rangeRead is a read of the bytes [start, end) of key, to the end of the object when end
 // is negative: into buf, filled as far as the bytes go; or into file at offset, a source
-// error then wrapped as a diskCacheSourceError; or, with neither, into bytes read returns.
+// error then wrapped as a diskCacheSourceError; or, with neither, into the bytes returned.
 // Each write into buf or file is recorded in progress; idle, when set, times the source.
 type rangeRead struct {
 	key        string
@@ -392,17 +461,12 @@ type rangeRead struct {
 	idle       *idleReader
 }
 
-// read makes the read rr and returns the bytes it read into neither buf nor file, and how
+// readRangeBody makes rr and returns the bytes it read into neither buf nor file, and how
 // many it read.
-func (g *governor) read(ctx context.Context, rr rangeRead) ([]byte, int64, error) {
-	ctx, r, err := g.begin(ctx, opRead)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer r.end()
+func readRangeBody(ctx context.Context, raw ObjectStorage, rr rangeRead) ([]byte, int64, error) {
 	rr.progress.began()
 	t0 := time.Now()
-	body, err := g.open(ctx, rr)
+	body, err := open(ctx, raw, rr)
 	if err != nil {
 		if rr.file != nil {
 			err = &diskCacheSourceError{err: err}
@@ -431,7 +495,7 @@ func (g *governor) read(ctx context.Context, rr rangeRead) ([]byte, int64, error
 	return data, n, err
 }
 
-func (g *governor) open(ctx context.Context, rr rangeRead) (io.ReadCloser, error) {
+func open(ctx context.Context, raw ObjectStorage, rr rangeRead) (io.ReadCloser, error) {
 	min, max := &rr.start, (*int64)(nil)
 	if rr.end >= 0 {
 		max = &rr.end
@@ -442,13 +506,13 @@ func (g *governor) open(ctx context.Context, rr rangeRead) (io.ReadCloser, error
 	var body io.ReadCloser
 	var err error
 	if rr.identity != nil {
-		reader, ok := g.raw.(objectStorageIdentityReader)
+		reader, ok := raw.(objectStorageIdentityReader)
 		if !ok {
 			return nil, moerr.NewNotSupported(ctx, "conditional object storage read")
 		}
 		body, err = reader.ReadObjectWithIdentity(ctx, rr.key, min, max, *rr.identity)
 	} else {
-		body, err = g.raw.Read(ctx, rr.key, min, max)
+		body, err = raw.Read(ctx, rr.key, min, max)
 	}
 	if rr.idle == nil {
 		return body, err
@@ -547,73 +611,6 @@ func (p fillProgress) wrote(n int64) {
 	case p.stream != nil:
 		p.stream.wrote(n)
 	}
-}
-
-// put writes data as the object key in one request.
-func (g *governor) put(ctx context.Context, key string, data []byte, expire *time.Time) error {
-	ctx, r, err := g.begin(ctx, opWrite)
-	if err != nil {
-		return err
-	}
-	defer r.end()
-	size := int64(len(data))
-	return g.raw.Write(ctx, key, bytes.NewReader(data), &size, expire)
-}
-
-// putFile writes the size bytes of f as the object key in one request.
-func (g *governor) putFile(ctx context.Context, key string, f *os.File, size int64, expire *time.Time) error {
-	ctx, r, err := g.begin(ctx, opWrite)
-	if err != nil {
-		return err
-	}
-	defer r.end()
-	return g.raw.Write(ctx, key, io.NewSectionReader(f, 0, size), &size, expire)
-}
-
-// publishStaged publishes the file a disk object storage staged at tempPath as key.
-func (g *governor) publishStaged(ctx context.Context, key, tempPath string) error {
-	ctx, r, err := g.begin(ctx, opWrite)
-	if err != nil {
-		return err
-	}
-	defer r.end()
-	return g.raw.(*diskObjectStorage).publish(ctx, key, tempPath)
-}
-
-func (g *governor) createMultipart(ctx context.Context, key string, expire *time.Time) (string, error) {
-	ctx, r, err := g.begin(ctx, opWrite)
-	if err != nil {
-		return "", err
-	}
-	defer r.end()
-	return g.raw.(multipartStorage).createMultipart(ctx, key, expire)
-}
-
-func (g *governor) uploadPart(ctx context.Context, key, uploadID string, num int32, data []byte) (string, error) {
-	ctx, r, err := g.begin(ctx, opWrite)
-	if err != nil {
-		return "", err
-	}
-	defer r.end()
-	return g.raw.(multipartStorage).uploadPart(ctx, key, uploadID, num, data)
-}
-
-func (g *governor) completeMultipart(ctx context.Context, key, uploadID string, parts []multipartPart) error {
-	ctx, r, err := g.begin(ctx, opWrite)
-	if err != nil {
-		return err
-	}
-	defer r.end()
-	return g.raw.(multipartStorage).completeMultipart(ctx, key, uploadID, parts)
-}
-
-func (g *governor) abortMultipart(ctx context.Context, key, uploadID string) error {
-	ctx, r, err := g.begin(ctx, opWrite)
-	if err != nil {
-		return err
-	}
-	defer r.end()
-	return g.raw.(multipartStorage).abortMultipart(ctx, key, uploadID)
 }
 
 // httpTraceKey marks the context of a request; its HTTP requests are traced at RoundTrip.

@@ -15,7 +15,6 @@
 package fileservice
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -321,10 +320,9 @@ type multipartPart struct {
 	etag string
 }
 
-// partWriter makes the requests of a write in parts; put writes a whole object.
+// partWriter makes the requests of a write in parts.
 type partWriter interface {
-	put(ctx context.Context, key string, data []byte, expire *time.Time) error
-	multipartStorage
+	Do(ctx context.Context, req request) (result, error)
 }
 
 // storageParts makes the requests of a write in parts on s itself.
@@ -335,25 +333,8 @@ type storageParts struct {
 	}
 }
 
-func (p storageParts) put(ctx context.Context, key string, data []byte, expire *time.Time) error {
-	size := int64(len(data))
-	return p.s.Write(ctx, key, bytes.NewReader(data), &size, expire)
-}
-
-func (p storageParts) createMultipart(ctx context.Context, key string, expire *time.Time) (string, error) {
-	return p.s.createMultipart(ctx, key, expire)
-}
-
-func (p storageParts) uploadPart(ctx context.Context, key, uploadID string, num int32, data []byte) (string, error) {
-	return p.s.uploadPart(ctx, key, uploadID, num, data)
-}
-
-func (p storageParts) completeMultipart(ctx context.Context, key, uploadID string, parts []multipartPart) error {
-	return p.s.completeMultipart(ctx, key, uploadID, parts)
-}
-
-func (p storageParts) abortMultipart(ctx context.Context, key, uploadID string) error {
-	return p.s.abortMultipart(ctx, key, uploadID)
+func (p storageParts) Do(ctx context.Context, req request) (result, error) {
+	return makeRequest(ctx, p.s, req)
 }
 
 const multipartAbortTimeout = 30 * time.Second
@@ -372,7 +353,8 @@ func writeParts(ctx context.Context, w partWriter, key string, r io.Reader, size
 	first, err := readFirstPart(ctx, r, sizeHint, options.PartSize)
 	if errors.Is(err, io.EOF) {
 		defer releaseParallelUploadPart(first)
-		return w.put(ctx, key, first.buf[:first.n], options.Expire)
+		_, err = w.Do(ctx, putRequest{key: key, data: first.buf[:first.n], expire: options.Expire})
+		return err
 	}
 	if err != nil {
 		return err
@@ -380,27 +362,30 @@ func writeParts(ctx context.Context, w partWriter, key string, r io.Reader, size
 	parentCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	uploadID, err := w.createMultipart(ctx, key, options.Expire)
+	created, err := w.Do(ctx, createMultipartRequest{key: key, expire: options.Expire})
 	if err != nil {
 		releaseParallelUploadPart(first)
 		return err
 	}
+	uploadID := created.id
 	defer func() {
 		if err != nil {
 			abortCtx, abortCancel := context.WithTimeout(context.WithoutCancel(parentCtx), multipartAbortTimeout)
 			defer abortCancel()
-			err = errors.Join(err, w.abortMultipart(abortCtx, key, uploadID))
+			_, abortErr := w.Do(abortCtx, abortMultipartRequest{key: key, uploadID: uploadID})
+			err = errors.Join(err, abortErr)
 		}
 	}()
 	parts, err := uploadParallelParts(ctx, cancel, r, options, first, func(ctx context.Context, num int32, part *parallelUploadPart) (multipartPart, error) {
-		etag, err := w.uploadPart(ctx, key, uploadID, num, part.buf[:part.n])
-		return multipartPart{num: num, etag: etag}, err
+		res, err := w.Do(ctx, uploadPartRequest{key: key, uploadID: uploadID, num: num, data: part.buf[:part.n]})
+		return multipartPart{num: num, etag: res.id}, err
 	})
 	if err != nil {
 		return err
 	}
 	slices.SortFunc(parts, func(a, b multipartPart) int { return cmp.Compare(a.num, b.num) })
-	return w.completeMultipart(ctx, key, uploadID, parts)
+	_, err = w.Do(ctx, completeMultipartRequest{key: key, uploadID: uploadID, parts: parts})
+	return err
 }
 
 // readFirstPart reads the first part of r, at most partSize bytes, with io.EOF when r

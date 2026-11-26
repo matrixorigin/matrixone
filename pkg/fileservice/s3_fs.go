@@ -221,18 +221,19 @@ func (s *S3FS) CopyObject(
 	}
 	srcKey := src.pathToKey(srcParsed.File)
 	dstKey := s.pathToKey(dstParsed.File)
-	exists, err := s.governor.exists(ctx, dstKey)
+	res, err := s.governor.Do(ctx, existsRequest{key: dstKey})
 	if err != nil {
 		return false, err
 	}
-	if exists {
+	if res.ok {
 		return false, moerr.NewFileAlreadyExistsNoCtx(dstPath)
 	}
 	return DoWithRetryContext(
 		ctx,
 		"CopyObject",
 		func() (bool, error) {
-			return s.governor.copyObject(ctx, src.rawStorage, srcKey, dstKey)
+			res, err := s.governor.Do(ctx, copyRequest{src: src.rawStorage, srcKey: srcKey, dstKey: dstKey})
+			return res.ok, err
 		},
 		maxRetryAttemps,
 		IsRetryableError,
@@ -408,7 +409,7 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 	}
 	key := s.pathToKey(path.File)
 
-	size, err := s.governor.stat(ctx, key)
+	res, err := s.governor.Do(ctx, statRequest{key: key})
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +417,7 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 	return &DirEntry{
 		Name:  pathpkg.Base(filePath),
 		IsDir: false,
-		Size:  size,
+		Size:  res.n,
 	}, nil
 }
 
@@ -428,14 +429,14 @@ func (s *S3FS) StatFileIdentity(ctx context.Context, filePath string) (ObjectIde
 	if err != nil {
 		return ObjectIdentity{}, err
 	}
-	identity, err := s.governor.statIdentity(ctx, s.pathToKey(path.File))
+	res, err := s.governor.Do(ctx, statIdentityRequest{key: s.pathToKey(path.File)})
 	if err != nil {
 		return ObjectIdentity{}, err
 	}
-	if err := identity.Validate(); err != nil {
+	if err := res.identity.Validate(); err != nil {
 		return ObjectIdentity{}, err
 	}
-	return identity, nil
+	return res.identity, nil
 }
 
 func (s *S3FS) OpenReadWithIdentity(
@@ -660,10 +661,11 @@ func (s *S3FS) cachedObjectSize(file string) objectLayout {
 		if err == nil || !s.diskCache.ranges.startsAt0(s.diskCache.objectKey(file)) {
 			return size, splitAt, err
 		}
-		if size, err = s.governor.stat(ctx, s.pathToKey(file)); err != nil {
+		res, err := s.governor.Do(ctx, statRequest{key: s.pathToKey(file)})
+		if err != nil {
 			return 0, 0, errObjectSizeUnknown
 		}
-		return size, 0, nil
+		return res.n, 0, nil
 	}
 }
 
@@ -694,7 +696,9 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 	existsStart := time.Now()
 	exists := false
 	if !exclusiveWrite(ctx) {
-		exists, err = s.governor.exists(ctx, key)
+		var res result
+		res, err = s.governor.Do(ctx, existsRequest{key: key})
+		exists = res.ok
 	}
 	metric.FSWriteDurationExists.Observe(time.Since(existsStart).Seconds())
 	if err != nil {
@@ -838,7 +842,7 @@ func (s *S3FS) writeObject(ctx context.Context, key string, r io.Reader, size *i
 		if err != nil {
 			return err
 		}
-		if err := s.governor.publishStaged(ctx, key, tempPath); err != nil {
+		if _, err := s.governor.Do(ctx, publishRequest{key: key, tempPath: tempPath}); err != nil {
 			_ = os.Remove(tempPath)
 			return err
 		}
@@ -859,7 +863,8 @@ func (s *S3FS) writeObject(ctx context.Context, key string, r io.Reader, size *i
 	if size != nil && n != *size {
 		return moerr.NewSizeNotMatchNoCtx(key)
 	}
-	return s.governor.putFile(ctx, key, f, n, expire)
+	_, err = s.governor.Do(ctx, putFileRequest{key: key, file: f, size: n, expire: expire})
+	return err
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
@@ -1490,7 +1495,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		}()
 
 		tStart := time.Now()
-		bs, _, err = s.governor.read(ctx, rangeOf(min, max))
+		var res result
+		res, err = s.governor.Do(ctx, rangeOf(min, max))
+		bs = res.data
 		metric.FSReadDurationIOReadAll.Observe(time.Since(tStart).Seconds())
 		if err != nil {
 			return nil, sparseErr(err)
@@ -2087,8 +2094,9 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 		}
 	}
 
+	_, err := s.governor.Do(ctx, deleteRequest{keys: keys})
 	return errors.Join(
-		s.governor.delete(ctx, keys...),
+		err,
 		func() error {
 			if s.memCache == nil {
 				return nil
