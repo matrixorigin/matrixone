@@ -1220,6 +1220,7 @@ message LockTarget {
   ObjectRef obj_ref = 15;
   int32 partition_col_idx_in_bat = 16;
   bool has_partition_col = 17;
+  bool require_exact_rows = 18;
 }
 
 message PreInsertUkCtx {

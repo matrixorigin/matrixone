@@ -997,6 +997,7 @@ func TestSnapshotTxnOperator(t *testing.T) {
 
 		tc2 := newTxnOperatorWithSnapshot(tc.logger, tc.sender, v)
 		assert.True(t, tc2.mu.txn.Mirror)
+		assert.True(t, tc2.TxnOptions().CatalogMaintenance())
 
 		tc2.mu.txn.Mirror = false
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
@@ -1004,7 +1005,7 @@ func TestSnapshotTxnOperator(t *testing.T) {
 		tc2.opts.coordinator = true
 		assert.Equal(t, tc.opts.options, tc2.opts.options)
 		assert.Equal(t, 1, len(tc2.mu.lockTables))
-	}, WithTxnReadyOnly())
+	}, WithTxnReadyOnly(), WithCatalogMaintenance())
 }
 
 func TestApplySnapshotTxnOperator(t *testing.T) {

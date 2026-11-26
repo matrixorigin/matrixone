@@ -857,6 +857,9 @@ func constructLockOp(node *plan.Node, eng engine.Engine) (*lockop.LockOp, error)
 		}
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
 		arg.AddLockTargetWithMode(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+		if target.RequireExactRows {
+			arg.RequireExactRows(target.TableId)
+		}
 	}
 	for _, target := range node.LockTargets {
 		if target.LockTable {

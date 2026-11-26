@@ -29,8 +29,13 @@ import (
 // model for a transaction.
 type cowSlice struct {
 	fsp *fixedSlicePool
-	fs  *atomic.Value // *fixedSlice
-	v   *atomic.Uint64
+	// Populated by the single writer only after exact keys outgrow one segment.
+	exactKeys map[string]struct{}
+	// Set on the requesting CN once this table has seen an exact lock request.
+	// Only the owner knows which keys remain after a range merge.
+	remoteExactRows bool
+	fs              *atomic.Value // *fixedSlice
+	v               *atomic.Uint64
 
 	// just for testing
 	hack struct {
@@ -55,23 +60,84 @@ func newCowSlice(
 
 func (cs *cowSlice) append(values [][]byte) error {
 	old := cs.mustGet()
+	if len(values) > cs.fsp.maxSize()-old.totalLen() {
+		return moerr.NewLockNeedUpgradeNoCtx()
+	}
+	cs.appendToTail(old, values)
+	if cs.exactKeys != nil {
+		for _, key := range values {
+			cs.exactKeys[string(key)] = struct{}{}
+		}
+	}
+	return nil
+}
+
+// Exact catalog rows cannot escalate. Keep full segments immutable and grow
+// only the tail. A retained tail pins its predecessors for concurrent readers.
+func (cs *cowSlice) appendExact(values [][]byte) {
+	old := cs.mustGet()
+	if cs.exactKeys == nil {
+		if len(values) <= cs.fsp.maxSize()-old.totalLen() {
+			cs.appendToTail(old, values)
+			return
+		}
+		// A remote caller records request keys even when the owner already
+		// held them. Repeated batches must not allocate more and more segments.
+		cs.exactKeys = make(map[string]struct{}, old.totalLen())
+		old.iter(func(key []byte) bool {
+			cs.exactKeys[string(key)] = struct{}{}
+			return true
+		})
+	}
+	start := 0
+	for i, key := range values {
+		if _, ok := cs.exactKeys[string(key)]; ok {
+			cs.appendSegments(values[start:i])
+			start = i + 1
+			continue
+		}
+		cs.exactKeys[string(key)] = struct{}{}
+	}
+	cs.appendSegments(values[start:])
+}
+
+func (cs *cowSlice) appendSegments(values [][]byte) {
+	maxSize := cs.fsp.maxSize()
+	for len(values) > 0 {
+		old := cs.mustGet()
+		n := min(maxSize-old.len(), len(values))
+		if n > 0 {
+			cs.appendToTail(old, values[:n])
+		} else {
+			n = min(maxSize, len(values))
+			next := cs.fsp.get(n)
+			old.retain()
+			next.prev, next.prefixLen = old, old.totalLen()
+			next.append(values[:n])
+			cs.replace(old, next)
+		}
+		values = values[n:]
+	}
+}
+
+func (cs *cowSlice) appendToTail(old *fixedSlice, values [][]byte) {
 	capacity := old.cap()
 	newLen := len(values) + old.len()
 	if capacity >= newLen {
 		old.append(values)
-		return nil
+		return
 	}
 
 	// COW(copy-on-write), which needs to be copied once for each expansion, but for
 	// [][]byte lock information, only the []byte pointer needs to be copied and the
 	// overhead can be ignored.
-	new, err := cs.fsp.acquire(newLen)
-	if err != nil {
-		return err
+	new := cs.fsp.get(newLen)
+	if old.prev != nil {
+		old.prev.retain()
+		new.prev, new.prefixLen = old.prev, old.prefixLen
 	}
 	new.join(old, values)
 	cs.replace(old, new)
-	return nil
 }
 
 func (cs *cowSlice) replace(old, new *fixedSlice) {
@@ -123,16 +189,26 @@ func (cs *cowSlice) mustGet() *fixedSlice {
 
 // fixedSlice is fixed capacity [][]byte slice
 type fixedSlice struct {
-	values [][]byte
-	sp     *fixedSlicePool
-	atomic struct {
+	prev      *fixedSlice // immutable, full segments in acquisition order
+	prefixLen int
+	values    [][]byte
+	sp        *fixedSlicePool
+	atomic    struct {
 		len atomic.Uint32
 		ref atomic.Int32
 	}
 }
 
 func (s *fixedSlice) all() [][]byte {
-	return s.values[:s.len()]
+	if s.prev == nil {
+		return s.values[:s.len()]
+	}
+	values := make([][]byte, 0, s.totalLen())
+	s.iter(func(key []byte) bool {
+		values = append(values, key)
+		return true
+	})
+	return values
 }
 
 func (s *fixedSlice) join(
@@ -154,12 +230,31 @@ func (s *fixedSlice) append(values [][]byte) {
 }
 
 func (s *fixedSlice) iter(fn func([]byte) bool) {
-	n := s.len()
-	for i := 0; i < n; i++ {
-		if !fn(s.values[i]) {
-			return
+	if s.prev != nil {
+		var previous []*fixedSlice
+		for p := s.prev; p != nil; p = p.prev {
+			previous = append(previous, p)
+		}
+		for i := len(previous) - 1; i >= 0; i-- {
+			if !previous[i].iterSegment(fn) {
+				return
+			}
 		}
 	}
+	s.iterSegment(fn)
+}
+
+func (s *fixedSlice) iterSegment(fn func([]byte) bool) bool {
+	for _, key := range s.values[:s.len()] {
+		if !fn(key) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *fixedSlice) totalLen() int {
+	return s.prefixLen + s.len()
 }
 
 func (s *fixedSlice) len() int {
@@ -176,6 +271,13 @@ func (s *fixedSlice) initRef() {
 	}
 }
 
+// retain pins a live segment while the writer still owns a reference to it.
+func (s *fixedSlice) retain() {
+	if !s.tryRef() {
+		panic("BUG: retaining a retired segment")
+	}
+}
+
 func (s *fixedSlice) tryRef() bool {
 	for {
 		v := s.atomic.ref.Load()
@@ -189,13 +291,18 @@ func (s *fixedSlice) tryRef() bool {
 }
 
 func (s *fixedSlice) unref() {
-	n := s.atomic.ref.Add(-1)
-	if n == 0 {
+	for s != nil {
+		n := s.atomic.ref.Add(-1)
+		if n > 0 {
+			return
+		}
+		if n < 0 {
+			panic("BUG: invalid ref count")
+		}
+		prev := s.prev
+		s.prev, s.prefixLen = nil, 0
 		s.close()
-		return
-	}
-	if n < 0 {
-		panic("BUG: invalid ref count")
+		s = prev
 	}
 }
 
@@ -230,19 +337,27 @@ func newFixedSlicePool(max int) *fixedSlicePool {
 	return sp
 }
 
+func (sp *fixedSlicePool) maxSize() int {
+	return 1 << (len(sp.slices) - 1)
+}
+
 func (sp *fixedSlicePool) acquire(n int) (*fixedSlice, error) {
 	if n == 0 {
-		n = 4
+		n = min(4, sp.maxSize())
 	}
-	sp.acquireV.Add(1)
-	n = roundUp(n)
-	i := int(math.Log2(float64(n)))
-	if i >= len(sp.slices) {
+	if n > sp.maxSize() {
 		return nil, moerr.NewLockNeedUpgradeNoCtx()
 	}
+	return sp.get(n), nil
+}
+
+// get takes a nonempty segment whose requested size fits the pool.
+func (sp *fixedSlicePool) get(n int) *fixedSlice {
+	sp.acquireV.Add(1)
+	i := int(math.Log2(float64(roundUp(n))))
 	s := sp.slices[i].Get().(*fixedSlice)
 	s.initRef()
-	return s, nil
+	return s
 }
 
 func (sp *fixedSlicePool) release(s *fixedSlice) error {

@@ -296,7 +296,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 	}
 
 	pubName := string(cp.Name)
-	if err = lockPublicationTargetAccounts(ctx, bh, subAccounts); err != nil {
+	if err = lockPublicationTargetAccounts(ctx, bh, subAccounts, cp.AccountsSet.All); err != nil {
 		return err
 	}
 	dbName := string(cp.Database)
@@ -511,7 +511,11 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		}
 	}
 
-	if err = lockPublicationTargetAccounts(ctx, bh, newSubAccounts); err != nil {
+	all := pub.SubAccountsStr == pubsub.AccountAll
+	if ap.AccountsSet != nil {
+		all = ap.AccountsSet.All
+	}
+	if err = lockPublicationTargetAccounts(ctx, bh, newSubAccounts, all); err != nil {
 		return err
 	}
 	// alter comment
@@ -2377,7 +2381,7 @@ func insertMoSubs(ctx context.Context, bh BackgroundExec, subInfo *pubsub.SubInf
 
 // Keep the resolved subscriber IDs alive through catalog fanout. A name can be
 // dropped and recreated between target selection and the mo_subs insert.
-func lockPublicationTargetAccounts(ctx context.Context, bh BackgroundExec, targets map[int32]*pubsub.AccountInfo) error {
+func lockPublicationTargetAccounts(ctx context.Context, bh BackgroundExec, targets map[int32]*pubsub.AccountInfo, all bool) error {
 	if len(targets) == 0 {
 		return nil
 	}
@@ -2386,21 +2390,33 @@ func lockPublicationTargetAccounts(ctx context.Context, bh BackgroundExec, targe
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	bh.ClearExecResultSet()
-	if err := bh.Exec(sysCtx, "select account_id from mo_catalog.mo_account where account_id in ("+pubsub.JoinAccountIds(ids)+") for share"); err != nil {
-		return err
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	batchSize := len(ids)
+	// For named recipients the locking read must stay on the specified keys.
+	// Size each IN list to fit one lock request and hold all chunks until commit.
+	if !all {
+		ctx = defines.WithExactCatalogRows(ctx)
+		if pu := getPuIfPresent(bh.Service()); pu != nil && pu.LockService != nil {
+			batchSize = int(pu.LockService.GetConfig().MaxLockRowCount)
+		}
 	}
-	rs, err := getResultSet(sysCtx, bh)
-	if err != nil {
-		return err
-	}
-	var n uint64
-	for _, r := range rs {
-		n += r.GetRowCount()
-	}
-	if n != uint64(len(ids)) {
-		return moerr.NewTxnNeedRetry(ctx)
+	for chunk := range slices.Chunk(ids, batchSize) {
+		bh.ClearExecResultSet()
+		sql := "select account_id from mo_catalog.mo_account where account_id in (" + pubsub.JoinAccountIds(chunk) + ") for share"
+		if err := bh.Exec(ctx, sql); err != nil {
+			return err
+		}
+		rs, err := getResultSet(ctx, bh)
+		if err != nil {
+			return err
+		}
+		var n uint64
+		for _, r := range rs {
+			n += r.GetRowCount()
+		}
+		if n != uint64(len(chunk)) {
+			return moerr.NewTxnNeedRetry(ctx)
+		}
 	}
 	return nil
 }

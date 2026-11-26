@@ -995,8 +995,9 @@ func TestRestartTxnAfterSuccessfulWriteAndCommit(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		client := c.(*txnClient)
-		op, err := c.New(ctx, timestamp.Timestamp{})
+		op, err := c.New(ctx, timestamp.Timestamp{}, WithCatalogMaintenance())
 		require.NoError(t, err)
+		require.True(t, op.TxnOptions().CatalogMaintenance())
 		result, err := op.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
 		require.NoError(t, err)
 		if result != nil {
@@ -1005,6 +1006,7 @@ func TestRestartTxnAfterSuccessfulWriteAndCommit(t *testing.T) {
 
 		restarted, err := client.RestartTxn(ctx, op, timestamp.Timestamp{})
 		require.NoError(t, err)
+		require.False(t, restarted.TxnOptions().CatalogMaintenance())
 		require.NoError(t, restarted.Rollback(ctx))
 	})
 }
