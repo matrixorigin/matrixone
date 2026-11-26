@@ -260,7 +260,7 @@ func TestVersionedStatsPublicationLinearizesWithCatalogChange(t *testing.T) {
 			Version:      1,
 		}, e.mp, types.NewPacker())
 		require.NoError(t, err)
-		_, err = fillRandomRowidAndZeroTs(alterTuple, catalog.MoTablesSchema, e.mp)
+		_, _, err = fillRandomRowidAndZeroTs(alterTuple, catalog.MoTablesSchema, e.mp)
 		require.NoError(t, err)
 		defer alterTuple.Clean(e.mp)
 

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -252,7 +251,7 @@ func makeCreateTableEntries(
 }
 
 func toPBEntry(e Entry) (*api.Entry, error) {
-	bat, err := toPBBatch(e.bat, e.attrs)
+	bat, err := toPBBatch(e.bat)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +260,8 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		typ = api.Entry_Delete
 	}
 	return &api.Entry{
-		Bat:          bat,
+		Attrs:        e.attrs,
+		Bat:          api.NewEncodedBatch(bat),
 		EntryType:    typ,
 		TableId:      e.tableId,
 		DatabaseId:   e.databaseId,
@@ -271,15 +271,8 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	}, nil
 }
 
-func toPBBatch(bat *batch.Batch, attrs []string) (*api.Batch, error) {
-	rbat := new(api.Batch)
-	rbat.Attrs = attrs
-	for _, vec := range bat.Vecs {
-		pbVector, err := vector.VectorToProtoVector(vec)
-		if err != nil {
-			return nil, err
-		}
-		rbat.Vecs = append(rbat.Vecs, pbVector)
-	}
-	return rbat, nil
+// toPBBatch encodes bat's vectors for an api.Entry. The bytes are a copy:
+// the entry does not alias bat.
+func toPBBatch(bat *batch.Batch) ([]byte, error) {
+	return batch.MarshalVectors(bat.Vecs)
 }

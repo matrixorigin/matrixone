@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -66,8 +67,55 @@ func (bat *Batch) CheckLength() error {
 // run the same binary (shutdown upgrade only) and the bytes are never
 // persisted, so the format carries no version or legacy sections.
 func (bat *Batch) MarshalBinary() ([]byte, error) {
-	var w bytes.Buffer
-	return bat.MarshalBinaryWithBuffer(&w, false)
+	var w binaryAppender
+	if err := bat.MarshalBinaryTo(&w); err != nil {
+		return nil, err
+	}
+	return w.buf, nil
+}
+
+// binaryAppender is the writer MarshalBinary encodes into. MarshalBinaryTo
+// sizes it exactly through EnsureCapacity, and the typed writes keep the
+// small headers from escaping to the heap through io.Writer.
+type binaryAppender struct {
+	buf []byte
+}
+
+func (a *binaryAppender) Len() int { return len(a.buf) }
+
+func (a *binaryAppender) EnsureCapacity(n int) error {
+	a.buf = slices.Grow(a.buf, n-len(a.buf))
+	return nil
+}
+
+func (a *binaryAppender) Write(p []byte) (int, error) {
+	a.buf = append(a.buf, p...)
+	return len(p), nil
+}
+
+func (a *binaryAppender) WriteByte(v byte) error {
+	a.buf = append(a.buf, v)
+	return nil
+}
+
+func (a *binaryAppender) WriteUint32(v uint32) error {
+	a.buf = binary.NativeEndian.AppendUint32(a.buf, v)
+	return nil
+}
+
+func (a *binaryAppender) WriteInt32(v int32) error {
+	a.buf = binary.NativeEndian.AppendUint32(a.buf, uint32(v))
+	return nil
+}
+
+func (a *binaryAppender) WriteUint64(v uint64) error {
+	a.buf = binary.NativeEndian.AppendUint64(a.buf, v)
+	return nil
+}
+
+func (a *binaryAppender) WriteInt64(v int64) error {
+	a.buf = binary.NativeEndian.AppendUint64(a.buf, uint64(v))
+	return nil
 }
 
 func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, error) {
@@ -81,10 +129,10 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, 
 }
 
 func (bat *Batch) MarshalBinarySize() (int, error) {
-	return bat.prepareMarshalBinary(nil)
+	return bat.prepareMarshalBinary(nil, false)
 }
 
-func (bat *Batch) prepareMarshalBinary(plans []vector.MarshalBinaryPlan) (int, error) {
+func (bat *Batch) prepareMarshalBinary(plans []vector.MarshalBinaryPlan, trusted bool) (int, error) {
 	if bat == nil {
 		return 0, moerr.NewInvalidInputNoCtx("invalid batch for marshal")
 	}
@@ -115,7 +163,13 @@ func (bat *Batch) prepareMarshalBinary(plans []vector.MarshalBinaryPlan) (int, e
 				"cannot marshal a nil batch vector",
 			)
 		}
-		plan, err := vec.PrepareMarshalBinary()
+		var plan vector.MarshalBinaryPlan
+		var err error
+		if trusted {
+			plan, err = vec.PrepareMarshalBinaryTrusted()
+		} else {
+			plan, err = vec.PrepareMarshalBinary()
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -152,7 +206,7 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	} else {
 		plans = make([]vector.MarshalBinaryPlan, len(bat.Vecs))
 	}
-	size, err := bat.prepareMarshalBinary(plans)
+	size, err := bat.prepareMarshalBinary(plans, false)
 	if err != nil {
 		return err
 	}
@@ -196,6 +250,64 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 		return err
 	}
 	return writeBatchMarshalInt32(w, bat.ShuffleIDX)
+}
+
+// marshalTrustedSize is MarshalBinarySize for a valid batch; see
+// vector.PrepareMarshalBinaryTrusted. It allocates nothing.
+func (bat *Batch) marshalTrustedSize() (int, error) {
+	return bat.prepareMarshalBinary(nil, true)
+}
+
+// errBatchChanged reports a batch that no longer matches the size its
+// encoding was given: it changed while borrowed.
+func errBatchChanged() error {
+	return moerr.NewInvalidInputNoCtx("batch changed while marshaling")
+}
+
+// marshalTrustedTo writes MarshalBinary's encoding of a valid batch into dst,
+// which must hold exactly marshalTrustedSize bytes. It allocates nothing.
+func (bat *Batch) marshalTrustedTo(dst []byte) error {
+	if bat == nil {
+		return io.ErrClosedPipe
+	}
+	dst = dst[:len(dst):len(dst)]
+	if bat.selection != nil {
+		return errSelectedBatch()
+	}
+	if len(dst) < 12 {
+		return errBatchChanged()
+	}
+	binary.NativeEndian.PutUint64(dst, uint64(bat.rowCount))
+	binary.NativeEndian.PutUint32(dst[8:], uint32(len(bat.Vecs)))
+	n := 12
+	for _, vec := range bat.Vecs {
+		if vec == nil {
+			return moerr.NewInvalidInputNoCtx("cannot marshal a nil batch vector")
+		}
+		plan, err := vec.PrepareMarshalBinaryTrusted()
+		if err != nil {
+			return err
+		}
+		if len(dst)-n < 4+plan.Size() {
+			return errBatchChanged()
+		}
+		binary.NativeEndian.PutUint32(dst[n:], uint32(plan.Size()))
+		end := n + 4 + plan.Size()
+		written, err := plan.MarshalToBytes(dst[n+4 : end : end])
+		if err != nil {
+			return err
+		}
+		n += 4 + written
+	}
+	if len(dst)-n != 4+len(bat.extraBuf)+8 {
+		return errBatchChanged()
+	}
+	binary.NativeEndian.PutUint32(dst[n:], uint32(len(bat.extraBuf)))
+	n += 4
+	n += copy(dst[n:], bat.extraBuf)
+	binary.NativeEndian.PutUint32(dst[n:], uint32(bat.Recursive))
+	binary.NativeEndian.PutUint32(dst[n+4:], uint32(bat.ShuffleIDX))
+	return nil
 }
 
 type batchPrimitiveWriter interface {
@@ -273,6 +385,13 @@ func (c *batchUnmarshalCursor) readUint32() (uint32, error) {
 }
 
 func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
+	return bat.unmarshalBinary(data, mp, true)
+}
+
+// unmarshalBinary decodes data. Without validateValues it trusts data to
+// come from MarshalBinary of a valid batch: the framing and sizes are still
+// checked, but not the null bitmaps or varlen payloads.
+func (bat *Batch) unmarshalBinary(data []byte, mp *mpool.MPool, validateValues bool) (err error) {
 	cursor := batchUnmarshalCursor{data: data}
 	rowCount, err := cursor.readInt64()
 	if err != nil {
@@ -360,7 +479,12 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		} else {
 			vecs[i].Free(mp)
 		}
-		if err := vecs[i].UnmarshalBinary(vecData); err != nil {
+		if validateValues {
+			err = vecs[i].UnmarshalBinary(vecData)
+		} else {
+			err = vecs[i].UnmarshalBinaryTrusted(vecData)
+		}
+		if err != nil {
 			return err
 		}
 	}
