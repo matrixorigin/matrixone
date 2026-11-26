@@ -561,7 +561,7 @@ read_disk_cache:
 				return
 			}
 			t0 := time.Now()
-			err = l.diskCache.Update(ctx, vector, l.asyncUpdate)
+			err = l.diskCache.updateAfterRead(ctx, vector, l.asyncUpdate)
 			metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
 		}()
 	}

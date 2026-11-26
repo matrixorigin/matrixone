@@ -469,11 +469,12 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	// load to disk cache
-	if err := s.diskCache.SetFile(
+	if err := s.diskCache.setFile(
 		ctx, path.File,
 		func(ctx context.Context) (io.ReadCloser, error) {
 			return s.newReadCloser(ctx, filePath)
 		},
+		s.asyncUpdate,
 	); err != nil {
 		return err
 	}
@@ -647,8 +648,10 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 			}
 		}
 		diskCacheStart := time.Now()
-		if err := s.diskCache.SetFile(ctx, vector.FilePath, openReader); err != nil {
-			return 0, err
+		if err := s.diskCache.setFile(ctx, vector.FilePath, openReader, s.asyncUpdate); err != nil {
+			// Object storage has already accepted the write. A failed cache replay
+			// cannot turn it into a failed upload.
+			logutil.Debug("skip disk cache after upload", zap.Error(err))
 		}
 		metric.FSWriteDurationDiskCacheSet.Observe(time.Since(diskCacheStart).Seconds())
 	}
@@ -675,6 +678,9 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	// A merge leader must not wake its waiters until caller-visible cache work
 	// has completed. Cache updates are deferred below, so register this defer
 	// first and let their later defers run before the merge is marked done.
+	// Async disk finalization is intentionally outside this generation: the
+	// foreground read only admits that bounded work, and subsequent disk-cache
+	// readers use their own bounded wait before falling back to object storage.
 	var finishMerge func()
 	defer func() {
 		if finishMerge != nil {
@@ -830,7 +836,7 @@ read_disk_cache:
 				}
 				t0 := time.Now()
 				LogEvent(ctx, str_update_disk_cache_Caches_begin)
-				err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
+				err = s.diskCache.updateAfterRead(ctx, vector, s.asyncUpdate)
 				LogEvent(ctx, str_update_disk_cache_Caches_end)
 				metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
 			}()
@@ -1400,9 +1406,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, mode s3ReadMode) (err
 		!vector.Policy.Any(SkipDiskCacheWrites) {
 		t0 := time.Now()
 		LogEvent(ctx, str_disk_cache_setfile_begin)
-		err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		err := s.diskCache.setFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(contentBytes)), nil
-		})
+		}, s.asyncUpdate)
 		LogEvent(ctx, str_disk_cache_setfile_end)
 		metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
 		if err != nil {
@@ -1507,7 +1513,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 
 	t0 := time.Now()
 	LogEvent(ctx, str_disk_cache_setfile_begin)
-	err = s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+	err = s.diskCache.setFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 		reader, err := getReader(ctx, ptrTo[int64](0), nil)
 		if err != nil {
 			return nil, err
@@ -1515,7 +1521,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		stream = newFullObjectDiskCacheReader(vector)
 		stream.reader = reader
 		return stream, nil
-	})
+	}, s.asyncUpdate)
 	LogEvent(ctx, str_disk_cache_setfile_end)
 	metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
 	if err != nil {
@@ -1711,6 +1717,9 @@ func (s *S3FS) Close(ctx context.Context) {
 func (s *S3FS) FlushCache(ctx context.Context) {
 	if s.memCache != nil {
 		s.memCache.Flush(ctx)
+	}
+	if s.diskCache != nil {
+		s.diskCache.Flush(ctx)
 	}
 }
 
