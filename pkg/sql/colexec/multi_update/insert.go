@@ -21,9 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -280,42 +280,12 @@ func checkZeroTemporalInStrictMode(reject bool, proc *process.Process, bat *batc
 	if proc == nil || bat == nil {
 		return nil
 	}
-
 	for _, vec := range bat.Vecs {
 		if vec == nil {
 			continue
 		}
-		switch vec.GetType().Oid {
-		case types.T_timestamp:
-		case types.T_date, types.T_datetime:
-			if !reject {
-				continue
-			}
-		default:
-			continue
-		}
-		for row := 0; row < vec.Length(); row++ {
-			if vec.IsNull(uint64(row)) {
-				continue
-			}
-			switch vec.GetType().Oid {
-			case types.T_date:
-				if reject && vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "date", "0000-00-00", "value", row+1)
-				}
-			case types.T_datetime:
-				if reject && vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
-				}
-			case types.T_timestamp:
-				timestamp := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
-				if !types.ValidTimestamp(timestamp) {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", fmt.Sprintf("%d", int64(timestamp)), "value", row+1)
-				}
-				if reject && timestamp == types.ZeroTimestamp {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
-				}
-			}
+		if err := colexec.CheckZeroTemporalVector(proc.Ctx, vec, reject); err != nil {
+			return err
 		}
 	}
 	return nil
