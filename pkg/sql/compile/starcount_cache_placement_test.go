@@ -19,8 +19,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/stretchr/testify/require"
 )
@@ -115,4 +117,48 @@ func TestBestStarCountCacheWorker(t *testing.T) {
 			require.False(t, ok)
 		})
 	}
+}
+
+func TestStarCountCachePlacementFallback(t *testing.T) {
+	scan := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{TableType: catalog.SystemOrdinaryRel},
+		ObjRef:   &plan.ObjectRef{},
+		AggList:  []*plan.Expr{zmAggFuncExpr("starcount", zmAggConstExpr(), 0)},
+	}
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{1},
+		Nodes:    []*plan.Node{scan, {NodeType: plan.Node_AGG, Children: []int32{0}, AggList: scan.AggList}},
+	}
+	current := schedule.Worker{ID: "local", Addr: "local:6001", Route: schedule.WorkerRouteLocal}
+	fallback := schedule.ScanDecision{
+		Workers: schedule.Workers{current}, Reason: schedule.ReasonScanForceSingle, LocalOnly: true,
+	}
+	req := schedule.ScanRequest{
+		CurrentCN:    current,
+		QueryWorkers: schedule.Workers{current, {ID: "remote", Addr: "remote:6001", Route: schedule.WorkerRouteRemote}},
+	}
+	c := NewMockCompile(t)
+	t.Cleanup(c.proc.Free)
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}
+	c.addr = current.Addr
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.proc.Base.QueryClient = fakeQueryClient{}
+
+	// A cancelled context reaches the probe boundary for a read-only query.
+	// A writable workspace must return before candidate or cache probing.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, txn := newTestTxnClientAndOp(gomock.NewController(t), &Ws{})
+	c.proc.Base.TxnOperator = txn
+	actual, err := c.placeStarCountByCache(ctx, scan, nil, req, fallback)
+	require.NoError(t, err)
+	require.Equal(t, fallback, actual)
+
+	_, txn = newTestTxnClientAndOp(gomock.NewController(t), &readonlyWorkspaceForScheduling{Ws: &Ws{}})
+	c.proc.Base.TxnOperator = txn
+	actual, err = c.placeStarCountByCache(ctx, scan, nil, req, fallback)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, fallback, actual)
 }

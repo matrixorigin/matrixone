@@ -1199,7 +1199,7 @@ func TestIsWholeObjectCachedOnlyCountsFullFiles(t *testing.T) {
 	require.False(t, IsWholeObjectCached(fs, path), "a cached range is insufficient")
 
 	require.NoError(t, cache.SetFile(ctx, path, func(context.Context) (io.ReadCloser, error) {
-		return io.NopCloser(strings.NewReader("abc")), nil
+		return io.NopCloser(bytes.NewBufferString("abc")), nil
 	}))
 	require.True(t, IsWholeObjectCached(fs, path))
 	require.NoError(t, cache.removeOnePath(ctx, path))
