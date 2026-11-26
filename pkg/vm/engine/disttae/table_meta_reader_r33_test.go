@@ -40,6 +40,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -82,7 +83,6 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 	// One real readable source object, written by an UNHOOKED writer -
 	// the committed source state owns it.
 	srcRows := batch.NewWithSize(3)
-	srcRows.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a", "v"})
 	srcRowids := make([]types.Rowid, 16)
 	srcPKs := make([]int64, 16)
 	for i := range srcRowids {
@@ -115,7 +115,7 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 	// tombstone phase materializes it exactly the production clone
 	// path does.
 	delBat := batch.NewWithSize(2)
-	delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
+	delBatAttrs := []string{objectio.PhysicalAddr_Attr, "a"}
 	delRowids := make([]types.Rowid, 16)
 	delPKs := make([]int64, 16)
 	for i := range delRowids {
@@ -137,6 +137,7 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 		databaseName: "db",
 		tableName:    tbl.tableName,
 		bat:          delBat,
+		attrs:        delBatAttrs,
 	})
 
 	// The ACTUAL exported constructor - entering here, not a struct
@@ -270,7 +271,7 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 		mp, false, recBat, false, matStats))
 	require.NoError(t, txn.WriteFile(
 		INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-		boundName, recBat, txn.tnStores[0]))
+		boundName, recBat, catalog.ObjectInsertAttrs, txn.tnStores[0]))
 	_, reserved = txn.UnsettledCleanupOwnershipForTest()
 	require.Empty(t, reserved, "the record converted the bound reservation")
 	_, live, inFlight = e.InspectUnpublishedPendingForTest()

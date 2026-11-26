@@ -47,7 +47,7 @@ func Test_visitTableDdl_GoodPath(t *testing.T) {
 
 		// Test 1: Normal table - success case
 		convey.Convey("normal table DDL generation", func() {
-			bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+			bat := batch.NewWithSize(4)
 			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
@@ -72,7 +72,7 @@ func Test_visitTableDdl_GoodPath(t *testing.T) {
 
 		// Test 2: View table - should be skipped (return nil without adding row)
 		convey.Convey("view table is skipped", func() {
-			bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+			bat := batch.NewWithSize(4)
 			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
@@ -92,7 +92,7 @@ func Test_visitTableDdl_GoodPath(t *testing.T) {
 
 		// Test 3: Table with existing PropFromPublication property
 		convey.Convey("table with existing PropFromPublication property", func() {
-			bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+			bat := batch.NewWithSize(4)
 			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
@@ -144,7 +144,7 @@ func Test_visitDatabaseDdl_GoodPath(t *testing.T) {
 		convey.Convey("single table specified", func() {
 			mockRel := mock_frontend.NewMockRelation(ctrl)
 
-			bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+			bat := batch.NewWithSize(4)
 			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
@@ -173,7 +173,7 @@ func Test_visitDatabaseDdl_GoodPath(t *testing.T) {
 			mockRel1 := mock_frontend.NewMockRelation(ctrl)
 			mockRel2 := mock_frontend.NewMockRelation(ctrl)
 
-			bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+			bat := batch.NewWithSize(4)
 			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
@@ -423,7 +423,7 @@ func Test_FillDdlMysqlResultSet_GoodPath(t *testing.T) {
 		mp := mpool.MustNewZero()
 
 		// Create a batch with test data
-		bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat := batch.NewWithSize(4)
 		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)

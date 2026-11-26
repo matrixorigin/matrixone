@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -48,15 +47,6 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 	if len(result.Backing) > siriusbridge.WindowBytes {
 		return nil, moerr.NewInvalidInputNoCtx("Sirius output backing exceeds native result window")
 	}
-	accounted := bytes
-	if uint64(len(result.Backing)) > accounted {
-		accounted = uint64(len(result.Backing))
-	}
-	lease, err := bufferlease.NewRefCounted(result.Backing, int64(accounted), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer lease.Release()
 	bat = batch.NewWithSize(len(result.Vectors))
 	defer func() {
 		if err != nil {
@@ -64,17 +54,14 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 			bat = nil
 		}
 	}()
-	bat.Attrs = request.Headings
 	bat.SetRowCount(int(result.Rows))
-	// The batch is the lender of the native window its vectors alias; the
-	// window stays valid for the callback that consumes and cleans the batch.
-	if err = bat.HoldLease(lease); err != nil {
-		return bat, err
-	}
+	// The vectors borrow the native result window. The window belongs to the
+	// query callback and stays valid until it returns, and the callback
+	// consumes and cleans the batch before that, so nothing needs pinning.
 	for i, v := range result.Vectors {
 		t := request.OutputTypes[i]
 		typ := types.New(types.T(t.Id), t.Width, t.Scale)
-		// A read-only reference to the native window the batch holds.
+		// A read-only reference to the native result window.
 		var area []byte
 		if len(v.Area) > 0 {
 			area = v.Area

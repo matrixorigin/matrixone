@@ -500,9 +500,7 @@ func (w *GCWindow) writeMetaForRemainings(
 			w.abandonPrepared()
 		}
 	}()
-	ret := batch.NewWithSchema(
-		ObjectTableMetaAttrs, ObjectTableMetaTypes, w.mp,
-	)
+	ret := batch.NewWithTypes(ObjectTableMetaTypes, w.mp)
 	defer ret.Clean(w.mp)
 	for _, s := range stats {
 		if err := vector.AppendBytes(
@@ -869,7 +867,7 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 			return nil, context.Cause(ctx)
 		default:
 		}
-		done, err := sourcer.Read(ctx, bat.Attrs, nil, mp, bat)
+		done, err := sourcer.Read(ctx, buffer.Attrs(), nil, mp, bat)
 		if err != nil {
 			return nil, err
 		}

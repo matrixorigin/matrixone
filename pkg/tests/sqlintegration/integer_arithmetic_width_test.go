@@ -200,6 +200,7 @@ func TestIntegerArithmeticWidth(t *testing.T) {
 							count := len(want)
 							query(t, "select count(distinct rn),min(rn),max(rn),sum(rn) from "+table, nil, [][]string{{fmt.Sprint(count), "1", fmt.Sprint(count), fmt.Sprint(count * (count + 1) / 2)}})
 						}
+						exec("drop table " + table)
 					}
 				}
 			}
@@ -216,7 +217,13 @@ func TestIntegerArithmeticWidth(t *testing.T) {
 				require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema=? and table_name=? and column_name='x'", schema, table).Scan(&typ))
 				require.Equal(t, "bigint", typ, selectSQL)
 				query(t, "select x from "+table+" order by x", []string{"BIGINT"}, [][]string{{"NULL"}, {"-2097152"}, {"1000000"}})
+				exec("drop table " + table)
 			}
+			var transientTables int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select count(*) from information_schema.tables where table_schema=? and left(table_name,8)='grouped_'", schema).
+				Scan(&transientTables))
+			require.Zero(t, transientTables, "transient grouping tables must be released before database teardown")
 		})
 
 		exec("create table c(b tinyint,m mediumint,u mediumint unsigned)")

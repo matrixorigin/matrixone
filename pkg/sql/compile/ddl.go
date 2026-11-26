@@ -1718,9 +1718,6 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		case *plan.AlterTable_Action_AlterRenameColumn:
 			hasDefReplace = true
 			checks := qry.GetCopyTableDef().GetChecks()
-			if err := c.requireCheckRenameProtocol(checks); err != nil {
-				return err
-			}
 			// When the same ALTER also renames the table, this request must
 			// already carry the final CHECK names; it overwrites the catalog
 			// checks below, so the separate rename-table rewrite must not be
@@ -3433,16 +3430,12 @@ func (c *Compile) advanceIndexDDLSnapshot() error {
 		frontier timestamp.Timestamp
 		err      error
 	)
-	if supportsLogtailReadBarrier(c.proc.GetService()) {
-		barrier, ok := getLogtailReadBarrier(c.e)
-		if !ok {
-			return moerr.NewInternalError(c.proc.Ctx,
-				"CREATE INDEX logtail read barrier is unavailable")
-		}
-		frontier, err = barrier.AcquireLogtailReadBarrier(c.proc.Ctx)
-	} else {
-		frontier, err = c.createIndexLegacyLogtailFrontier()
+	barrier, ok := getLogtailReadBarrier(c.e)
+	if !ok {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"CREATE INDEX logtail read barrier is unavailable")
 	}
+	frontier, err = barrier.AcquireLogtailReadBarrier(c.proc.Ctx)
 	if err != nil {
 		return err
 	}
@@ -3460,40 +3453,6 @@ func (c *Compile) advanceIndexDDLSnapshot() error {
 			"CREATE INDEX transaction snapshot did not advance past the logtail frontier")
 	}
 	return nil
-}
-
-// createIndexLegacyLogtailFrontier is the rolling-upgrade fallback for TNs
-// that predate the ordered logtail read barrier. Waiting beyond the local HLC
-// uncertainty bound makes every earlier remote commit visible on this CN.
-func (c *Compile) createIndexLegacyLogtailFrontier() (timestamp.Timestamp, error) {
-	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	if rt == nil || rt.Clock() == nil {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"missing transaction clock for CREATE INDEX snapshot refresh")
-	}
-	if rt.Clock().MaxOffset() < 0 {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"negative transaction clock offset for CREATE INDEX snapshot refresh")
-	}
-	_, upperBound := rt.Clock().Now()
-	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"CREATE INDEX snapshot refresh timestamp overflow")
-	}
-	minimum := timestamp.Timestamp{PhysicalTime: upperBound.PhysicalTime + 1}
-	if c.proc.Base.TxnClient == nil {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"missing transaction client for CREATE INDEX snapshot refresh")
-	}
-	applied, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, minimum)
-	if err != nil {
-		return timestamp.Timestamp{}, err
-	}
-	if applied.Less(minimum) {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"CREATE INDEX snapshot refresh did not reach the required timestamp")
-	}
-	return applied, nil
 }
 
 func (s *Scope) doCreateIndex(
@@ -5363,7 +5322,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		err = rel.Write(c.proc.Ctx, bat)
+		err = rel.Write(c.proc.Ctx, bat, plan2.Sequence_cols_name)
 		if err != nil {
 			return err
 		}
@@ -5485,7 +5444,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		if rel == nil {
 			return moerr.NewLockTableNotFound(c.proc.Ctx)
 		}
-		err = rel.Write(c.proc.Ctx, bat)
+		err = rel.Write(c.proc.Ctx, bat, plan2.Sequence_cols_name)
 		if err != nil {
 			return err
 		}
@@ -5700,11 +5659,6 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 	var def plan2.AlterSequenceEffectiveDefinition
 	var bat batch.Batch
 	bat.SetRowCount(1)
-	attrs := make([]string, len(plan2.Sequence_cols_name))
-	for i := range attrs {
-		attrs[i] = plan2.Sequence_cols_name[i]
-	}
-	bat.Attrs = attrs
 
 	// typ is sequenece's type now
 	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
@@ -5737,11 +5691,6 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
 	var bat batch.Batch
 	bat.SetRowCount(1)
-	attrs := make([]string, len(plan2.Sequence_cols_name))
-	for i := range attrs {
-		attrs[i] = plan2.Sequence_cols_name[i]
-	}
-	bat.Attrs = attrs
 
 	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
 	sequence_cols_num := 7
@@ -6645,26 +6594,6 @@ func maybeResetAutoIncrement(
 		}
 	}
 
-	return nil
-}
-
-// requireCheckRenameProtocol is the sender-side safety boundary for the v15
-// AlterTableRenameCol.checks field. Planner checks provide an earlier error,
-// while this check prevents a synthesized or cached plan from sending required
-// CHECK metadata to a receiver whose alter handler cannot apply it.
-func (c *Compile) requireCheckRenameProtocol(checks []*plan.CheckDef) error {
-	if len(checks) == 0 {
-		return nil
-	}
-	value, ok := moruntime.ServiceRuntime(c.proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion15 {
-		return moerr.NewNotSupported(
-			c.proc.Ctx,
-			"renaming a column in a table with CHECK constraints requires all services to support protocol version 15",
-		)
-	}
 	return nil
 }
 

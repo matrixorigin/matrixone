@@ -112,11 +112,9 @@ func prepareTestDeleteBatchs(
 		rows := makeTestPkArray(int64(affectRows), rowCount)
 		columnA := testutil.MakeInt64Vector(rows, nil, mp)
 		columnRowID := makeTestRowIDVector(mp, &mainObjectID, uint16(i), rowCount)
-		attrs := []string{"main_rowid", "a"}
 
 		bat := &batch.Batch{
-			Vecs:  []*vector.Vector{columnRowID, columnA},
-			Attrs: attrs,
+			Vecs: []*vector.Vector{columnRowID, columnA},
 		}
 
 		if hasUniqueKey {
@@ -124,7 +122,6 @@ func prepareTestDeleteBatchs(
 			columnPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil, nil)
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnPk)
-			bat.Attrs = append(bat.Attrs, "uk_rowid", "uk_pk")
 		}
 
 		if hasSecondaryKey {
@@ -132,7 +129,6 @@ func prepareTestDeleteBatchs(
 			columnPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil, nil)
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnPk)
-			bat.Attrs = append(bat.Attrs, "sk_rowid", "sk_pk")
 		}
 
 		bat.SetRowCount(bat.Vecs[0].Length())

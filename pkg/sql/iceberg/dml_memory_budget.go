@@ -106,7 +106,7 @@ func retainedDMLBatchBytes(bat *batch.Batch) int64 {
 	if bat == nil {
 		return 0
 	}
-	return saturatingDMLAdd(int64(bat.Size()), int64(128+len(bat.Vecs)*64+len(bat.Attrs)*16))
+	return saturatingDMLAdd(int64(bat.Size()), int64(128+len(bat.Vecs)*64))
 }
 
 func retainedDMLCollectorBatchBytes(bat *batch.Batch, equalityFields int) int64 {

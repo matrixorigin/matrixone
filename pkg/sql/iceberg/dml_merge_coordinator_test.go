@@ -87,52 +87,9 @@ func TestDMLMergeCoordinatorCollectsActionsAndCommits(t *testing.T) {
 	require.Equal(t, "dee", committer.insertName)
 }
 
-func TestDMLMergeCoordinatorResolvesReorderedBatchAttrsByName(t *testing.T) {
-	bat, cleanup := newReorderedMergeActionScanBatch(t)
-	defer cleanup()
-
-	committer := &recordingDMLMergeCommitter{}
-	coord := NewDMLMergeCoordinator(DMLMergeCoordinatorSpec{
-		Committer:      committer,
-		Base:           dml.CommitBase{BaseSnapshotID: 30, IdempotencyKey: "stmt-merge", StatementID: "stmt-merge"},
-		Schema:         api.Schema{SchemaID: 9},
-		DeleteSchemaID: 9,
-		ObjectWriter:   &recordingDMLDeleteObjectWriter{},
-		DataFiles:      dmlDeleteCoordinatorDataFiles(),
-	})
-	req := icebergwrite.AppendRequest{
-		Operation:               icebergwrite.OperationMerge,
-		Namespace:               "sales",
-		Table:                   "orders",
-		DefaultRef:              "main",
-		Attrs:                   []string{"id", "name", api.DMLDataFilePathColumnName, api.DMLRowOrdinalColumnName, api.DMLMergeActionColumnName},
-		DataFilePathColumnIndex: 2,
-		RowOrdinalColumnIndex:   3,
-		MergeActionColumnIndex:  4,
-	}
-	require.NoError(t, coord.Begin(context.Background(), req))
-
-	mp := mpool.MustNewZero()
-	proc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	require.NoError(t, coord.AppendWithProcess(proc, bat))
-	require.NoError(t, coord.Commit(context.Background()))
-
-	require.Len(t, committer.requests, 1)
-	commitReq := committer.requests[0]
-	require.Len(t, commitReq.MatchedDeletes, 1)
-	require.Equal(t, int64(40), commitReq.MatchedDeletes[0].PositionRows[0].Pos)
-	require.Len(t, commitReq.MatchedUpdates, 1)
-	require.Equal(t, int64(10), commitReq.MatchedUpdates[0].DeleteTarget.PositionRows[0].Pos)
-	require.Equal(t, int32(7), committer.updateID)
-	require.Equal(t, "alice-new", committer.updateName)
-	require.Equal(t, int32(12), committer.insertID)
-	require.Equal(t, "dee", committer.insertName)
-}
-
 func TestDMLMergeCoordinatorSplitsExecutionBatchWithoutAttrs(t *testing.T) {
 	bat, cleanup := newMergeActionScanBatch(t)
 	defer cleanup()
-	bat.Attrs = nil
 
 	committer := &recordingDMLMergeCommitter{}
 	coord := NewDMLMergeCoordinator(DMLMergeCoordinatorSpec{
@@ -205,13 +162,7 @@ func TestDMLMergeCoordinatorRejectsDuplicateMatchedTargetRows(t *testing.T) {
 func newMergeActionScanBatch(t *testing.T) (*batch.Batch, func()) {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{
-		"id",
-		"name",
-		api.DMLDataFilePathColumnName,
-		api.DMLRowOrdinalColumnName,
-		api.DMLMergeActionColumnName,
-	})
+	bat := batch.NewWithSize(5)
 	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	pathVec := vector.NewVec(types.T_varchar.ToType(), mp)
@@ -247,13 +198,7 @@ func newMergeActionScanBatch(t *testing.T) (*batch.Batch, func()) {
 func newDuplicateMergeMatchBatch(t *testing.T) (*batch.Batch, func()) {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{
-		"id",
-		"name",
-		api.DMLDataFilePathColumnName,
-		api.DMLRowOrdinalColumnName,
-		api.DMLMergeActionColumnName,
-	})
+	bat := batch.NewWithSize(5)
 	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	pathVec := vector.NewVec(types.T_varchar.ToType(), mp)
@@ -278,48 +223,6 @@ func newDuplicateMergeMatchBatch(t *testing.T) (*batch.Batch, func()) {
 	bat.Vecs[3] = ordinalVec
 	bat.Vecs[4] = actionVec
 	bat.SetRowCount(2)
-	return bat, func() { bat.Clean(mp) }
-}
-
-func newReorderedMergeActionScanBatch(t *testing.T) (*batch.Batch, func()) {
-	t.Helper()
-	mp := mpool.MustNewZero()
-	bat := batch.New([]string{
-		api.DMLMergeActionColumnName,
-		api.DMLDataFilePathColumnName,
-		"name",
-		api.DMLRowOrdinalColumnName,
-		"id",
-	})
-	actionVec := vector.NewVec(types.T_varchar.ToType(), mp)
-	pathVec := vector.NewVec(types.T_varchar.ToType(), mp)
-	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
-	ordinalVec := vector.NewVec(types.T_int64.ToType(), mp)
-	idVec := vector.NewVec(types.T_int32.ToType(), mp)
-	for _, row := range []struct {
-		id      int32
-		name    string
-		path    string
-		ordinal int64
-		action  string
-	}{
-		{7, "alice-new", "s3://warehouse/gold/orders/data/a.parquet", 10, api.DMLMergeActionUpdate},
-		{9, "cyd", "s3://warehouse/gold/orders/data/b.parquet", 40, api.DMLMergeActionDelete},
-		{12, "dee", "", 0, api.DMLMergeActionInsert},
-		{14, "erin", "s3://warehouse/gold/orders/data/a.parquet", 60, api.DMLMergeActionNoop},
-	} {
-		require.NoError(t, vector.AppendBytes(actionVec, []byte(row.action), false, mp))
-		require.NoError(t, vector.AppendBytes(pathVec, []byte(row.path), false, mp))
-		require.NoError(t, vector.AppendBytes(nameVec, []byte(row.name), false, mp))
-		require.NoError(t, vector.AppendFixed[int64](ordinalVec, row.ordinal, false, mp))
-		require.NoError(t, vector.AppendFixed[int32](idVec, row.id, false, mp))
-	}
-	bat.Vecs[0] = actionVec
-	bat.Vecs[1] = pathVec
-	bat.Vecs[2] = nameVec
-	bat.Vecs[3] = ordinalVec
-	bat.Vecs[4] = idVec
-	bat.SetRowCount(4)
 	return bat, func() { bat.Clean(mp) }
 }
 

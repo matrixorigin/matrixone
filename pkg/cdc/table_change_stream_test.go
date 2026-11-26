@@ -2771,7 +2771,7 @@ func (h *tableStreamHarness) NewActiveRoutine() *ActiveRoutine {
 // Helper types and functions for integration tests
 
 func createTestBatch(t *testing.T, mp *mpool.MPool, ts types.TS, ids []int32) *batch.Batch {
-	bat := batch.New([]string{"id", "ts"})
+	bat := batch.NewWithSize(2)
 	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
 

@@ -2538,6 +2538,8 @@ func constructChangeHandle(
 					hydrate: baseRange.rel[i].GetTableID(ctx) !=
 						tables.baseRel.GetTableID(ctx),
 				}
+			} else if baseRange.rel[i].GetTableID(ctx) == tables.baseRel.GetTableID(ctx) {
+				handle = &currentBaseChangesHandle{inner: handle, tblStuff: *tables}
 			}
 			baseHandle = append(baseHandle, handle)
 		}
@@ -4045,25 +4047,10 @@ func packCatalogCPKey(accountID uint32, values ...string) []byte {
 }
 
 // locateColumnsInChangeBatch finds rel_id and commit_ts column indices
-// in a CollectChanges data batch.  Named attrs are tried first; when
-// absent (aobj path), positional access is used.
+// in a CollectChanges data batch of mo_tables: rel_id at
+// MO_TABLES_REL_ID_IDX, commit_ts at the last vector.
 func locateColumnsInChangeBatch(data *batch.Batch) (relIDIdx, commitTSIdx int) {
-	relIDIdx, commitTSIdx = -1, -1
-	for i, attr := range data.Attrs {
-		switch attr {
-		case catalog.SystemRelAttr_ID:
-			relIDIdx = i
-		case objectio.DefaultCommitTS_Attr:
-			commitTSIdx = i
-		}
-	}
-	if relIDIdx < 0 || commitTSIdx < 0 {
-		// aobj batches lack Attrs; use positional access:
-		// rel_id at MO_TABLES_REL_ID_IDX, commit_ts at last vector.
-		relIDIdx = catalog.MO_TABLES_REL_ID_IDX
-		commitTSIdx = len(data.Vecs) - 1
-	}
-	return
+	return catalog.MO_TABLES_REL_ID_IDX, len(data.Vecs) - 1
 }
 
 // decideLCABranchTSFromBranchDAG resolves the lineage relationship

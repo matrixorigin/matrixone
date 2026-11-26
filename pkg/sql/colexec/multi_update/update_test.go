@@ -727,10 +727,8 @@ func prepareUpdateTestBatchs(
 		columnD := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil, nil)
 		columnRowID := makeTestRowIDVector(mp, &mainObjectID, uint16(i), rowCount)
 
-		attrs := []string{"a", "b", "c", "d", catalog.Row_ID}
 		bat := &batch.Batch{
-			Vecs:  []*vector.Vector{columnA, columnB, columnC, columnD, columnRowID},
-			Attrs: attrs,
+			Vecs: []*vector.Vector{columnA, columnB, columnC, columnD, columnRowID},
 		}
 
 		if hasUniqueKey {
@@ -740,7 +738,6 @@ func prepareUpdateTestBatchs(
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnOldPk)
 			bat.Vecs = append(bat.Vecs, columnNewPk)
-			bat.Attrs = append(bat.Attrs, "uk_rowid", "uk_old_pk", "uk_new_pk")
 		}
 
 		if hasSecondaryKey {
@@ -750,7 +747,6 @@ func prepareUpdateTestBatchs(
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnOldPk)
 			bat.Vecs = append(bat.Vecs, columnNewPk)
-			bat.Attrs = append(bat.Attrs, "sk_rowid", "sk_old_pk", "sk_new_pk")
 		}
 
 		bat.SetRowCount(bat.Vecs[0].Length())

@@ -696,6 +696,5 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) []*batch.Batch
 	bat := testutil.NewBatch(ts, false, int(rows), proc.Mp())
 	pkAttr := make([]string, 1)
 	pkAttr[0] = "pkCol"
-	bat.SetAttributes(pkAttr)
 	return []*batch.Batch{bat, nil}
 }

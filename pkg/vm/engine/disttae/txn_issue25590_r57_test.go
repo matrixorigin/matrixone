@@ -49,6 +49,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -97,7 +98,7 @@ func TestIssue25590SharedEngineReRecordKeepsLedgerCapacityThroughTransfer(t *tes
 	// 1 - the fragment's own record claims the object's capacity once.
 	require.NoError(t, writer.WriteFile(
 		INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-		name, recBat, writer.tnStores[0]))
+		name, recBat, catalog.ObjectInsertAttrs, writer.tnStores[0]))
 	require.Equal(t, int64(1), liveOwned(),
 		"the fragment's record claims one capacity unit for the transferred object")
 
@@ -109,7 +110,7 @@ func TestIssue25590SharedEngineReRecordKeepsLedgerCapacityThroughTransfer(t *tes
 	// capacity unit - one obligation, two workspace claims.
 	require.NoError(t, recorder.WriteFile(
 		INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-		name, recBat, writer.tnStores[0]))
+		name, recBat, catalog.ObjectInsertAttrs, writer.tnStores[0]))
 	require.Equal(t, int64(1), liveOwned(),
 		"a same-engine re-record of an already-counted object claims no second capacity unit")
 

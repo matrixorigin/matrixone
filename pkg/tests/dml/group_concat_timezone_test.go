@@ -23,8 +23,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -105,13 +103,6 @@ func TestGroupConcatNamedTimeZoneRemoteOwner(t *testing.T) {
 					require.Equal(t, test.want, got)
 				}()
 			}
-			peerRuntime := moruntime.ServiceRuntime(peer.ServiceID())
-			oldVersion, _ := peerRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
-			peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion66)
-			defer peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-			physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
-			require.NoError(t, err)
-			require.NotContains(t, physical.Text, peerAddr, "old workers must not own named-zone rendering")
 			var value string
 			require.NoError(t, db.QueryRowContext(ctx, "select group_concat(ts) from seasonal where id=2").Scan(&value))
 			require.Equal(t, "2024-06-30 20:00:00", value)

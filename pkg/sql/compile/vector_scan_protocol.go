@@ -15,118 +15,18 @@
 package compile
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// A fragment's bound handshake must cover every nested index search scan. Any
-// IndexSearchScan, as a data source or in APPLY, needs vectorscan.IndexSearchScanProtocolVersion; it also
-// covers required distributed PRE (103) and coordinator-independent partition
-// ownership (96).
-func minimumRemoteVectorProtocol(p *pipeline.Pipeline) int64 {
-	if p == nil {
-		return 0
-	}
-	var required int64
-	if p.DataSource != nil && p.DataSource.Node != nil &&
-		p.DataSource.Node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
-		required = vectorscan.RequiredProtocolVersion(p.DataSource.Node.IndexSearchScan)
-	}
-	for _, in := range p.InstructionList {
-		if spec := in.GetApply().GetIndexSearchScan(); spec != nil {
-			required = max(required, vectorscan.RequiredProtocolVersion(spec))
-		}
-	}
-	for _, child := range p.Children {
-		required = max(required, minimumRemoteVectorProtocol(child))
-	}
-	return required
-}
-
-func validateRemoteVectorPartitionProtocol(proc *process.Process, p *pipeline.Pipeline) error {
-	required := minimumRemoteVectorProtocol(p)
-	if required == 0 {
-		return nil
-	}
-	if proc != nil {
-		version, known := remoteMORPCProtocolVersion(proc.GetService())
-		if known && version >= required {
-			if hasIndexSearchScanWithoutAlgoOptions(p) {
-				return moerr.NewNotSupportedNoCtx("index search scan from an older version is not supported")
-			}
-			return nil
-		}
-	}
-	return moerr.NewNotSupportedNoCtx(fmt.Sprintf("remote vector partition requires MORPC protocol version %d", required))
-}
-
-// hasIndexSearchScanWithoutAlgoOptions reports whether p holds an index search
-// scan without algo_options. Every planner of this version sets them, so such a
-// scan was planned by an older version, whose node fields this version reserves.
-func hasIndexSearchScanWithoutAlgoOptions(p *pipeline.Pipeline) bool {
-	if p == nil {
-		return false
-	}
-	if p.DataSource != nil && p.DataSource.Node != nil &&
-		p.DataSource.Node.NodeType == plan.Node_INDEX_SEARCH_SCAN &&
-		len(p.DataSource.Node.GetIndexSearchScan().GetAlgoOptions()) == 0 {
-		return true
-	}
-	for _, in := range p.InstructionList {
-		if spec := in.GetApply().GetIndexSearchScan(); spec != nil && len(spec.GetAlgoOptions()) == 0 {
-			return true
-		}
-	}
-	for _, child := range p.Children {
-		if hasIndexSearchScanWithoutAlgoOptions(child) {
-			return true
-		}
-	}
-	return false
-}
-
-func validateVectorPartitionDestination(proc *process.Process, p *pipeline.Pipeline) error {
-	return validateVectorPartitionDestinationWithResult(proc, p, nil)
-}
-
-func validateVectorPartitionDestinationWithResult(proc *process.Process, p *pipeline.Pipeline, requiredVectorProtocol *int64) error {
-	required := minimumRemoteVectorProtocol(p)
-	if requiredVectorProtocol != nil {
-		*requiredVectorProtocol = required
-	}
-	if required == 0 {
-		return nil
-	}
-	// Use the actual transport destination, including for scans nested below
-	// a merge. Re-probe before sending: compilation may predate a rollback.
-	if p.Node != nil {
-		supported, err := remoteWorkersSupportProtocol(proc,
-			engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, required)
-		if err != nil {
-			return err
-		}
-		if supported {
-			return nil
-		}
-	}
-	return moerr.NewNotSupportedNoCtx(fmt.Sprintf("remote destination does not support vector partition (MORPC version %d)", required))
-}
 
 // Required PRE can only use workers that can receive the complete local domain
 // and honor a CPU centroid route. A GPU route, a non-coordinator ingress or a
-// write transaction falls back as a whole query; a worker without
-// vectorscan.IndexSearchScanProtocolVersion is an error.
+// write transaction falls back as a whole query.
 func (c *Compile) constrainRequiredIVFWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
@@ -162,32 +62,10 @@ func (c *Compile) constrainRequiredIVFWorkers(qry *plan.Query) error {
 		device = brute_force.DispatchesToDevice[float32](gpu)
 	}
 	if coordinator && readonly && !device {
-		requiredVersion, err := c.indexSearchScanProtocolVersion(spec)
-		if err != nil {
-			return err
-		}
-		supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, requiredVersion)
-		if err != nil {
-			return err
-		}
-		if !supported {
-			return moerr.NewNotSupportedNoCtxf(
-				"index search scan requires MORPC protocol version %d on every CN", requiredVersion)
-		}
 		return nil
 	}
 	var err error
 	c.execType = plan2.ExecTypeAP_ONECN
 	c.cnList, err = c.scheduleQueryWorkers()
 	return err
-}
-
-// indexSearchScanProtocolVersion returns the MORPC protocol version every CN needs to run
-// spec once its unset knobs are filled from the session variables.
-func (c *Compile) indexSearchScanProtocolVersion(spec *plan.IndexSearchScan) (int64, error) {
-	stamped := plan2.DeepCopyIndexSearchScan(spec)
-	if err := vectorscan.StampSessionKnobs(stamped, c.proc.GetResolveVariableFunc()); err != nil {
-		return 0, err
-	}
-	return vectorscan.RequiredProtocolVersion(stamped), nil
 }

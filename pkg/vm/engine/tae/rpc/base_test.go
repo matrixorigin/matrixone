@@ -115,7 +115,8 @@ type Entry struct {
 	//object name for s3 file
 	fileName string
 	// update or delete tuples
-	bat *batch.Batch
+	bat   *batch.Batch
+	attrs []string
 }
 
 func makePBEntry(
@@ -125,7 +126,8 @@ func makePBEntry(
 	dbName,
 	tbName,
 	file string,
-	bat *batch.Batch) (pe *api.Entry, err error) {
+	bat *batch.Batch,
+	attrs []string) (pe *api.Entry, err error) {
 	e := Entry{
 		typ:          typ,
 		databaseName: dbName,
@@ -134,6 +136,7 @@ func makePBEntry(
 		tableId:      tableId,
 		fileName:     file,
 		bat:          bat,
+		attrs:        attrs,
 	}
 	return toPBEntry(e)
 }
@@ -169,7 +172,7 @@ func makeCreateDatabaseEntries(
 		catalog.MO_CATALOG,
 		catalog.MO_DATABASE,
 		"",
-		createDbBat,
+		createDbBat, catalog.MoDatabaseSchema,
 	)
 	if err != nil {
 		return nil, err
@@ -225,7 +228,7 @@ func makeCreateTableEntries(
 		}
 		createTbEntry, err := makePBEntry(INSERT,
 			catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, "", bat)
+			catalog.MO_CATALOG, catalog.MO_TABLES, "", bat, catalog.MoTablesSchema)
 		if err != nil {
 			return nil, err
 		}
@@ -239,7 +242,7 @@ func makeCreateTableEntries(
 		createColumnEntry, err := makePBEntry(
 			INSERT, catalog.MO_CATALOG_ID,
 			catalog.MO_COLUMNS_ID, catalog.MO_CATALOG,
-			catalog.MO_COLUMNS, "", bat)
+			catalog.MO_COLUMNS, "", bat, catalog.MoColumnsSchema)
 		if err != nil {
 			return nil, err
 		}
@@ -249,7 +252,7 @@ func makeCreateTableEntries(
 }
 
 func toPBEntry(e Entry) (*api.Entry, error) {
-	bat, err := toPBBatch(e.bat)
+	bat, err := toPBBatch(e.bat, e.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -268,9 +271,9 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	}, nil
 }
 
-func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
+func toPBBatch(bat *batch.Batch, attrs []string) (*api.Batch, error) {
 	rbat := new(api.Batch)
-	rbat.Attrs = bat.Attrs
+	rbat.Attrs = attrs
 	for _, vec := range bat.Vecs {
 		pbVector, err := vector.VectorToProtoVector(vec)
 		if err != nil {

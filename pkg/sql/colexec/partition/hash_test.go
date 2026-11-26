@@ -89,7 +89,7 @@ func TestHashPartitionMemoryFallbackIsExact(t *testing.T) {
 
 func TestHashPartitionMemoryFallbackIncludesRetainedBatch(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	input := batch.New([]string{"k", "payload", "id"})
+	input := batch.NewWithSize(3)
 	input.Vecs = []*vector.Vector{
 		vector.NewVec(types.T_int32.ToType(), proc.Mp()),
 		vector.NewVec(types.T_varchar.ToType(), proc.Mp()),
@@ -158,7 +158,7 @@ func TestHashPartitionFallbackRejectsAdditionalOverBudgetInput(t *testing.T) {
 
 func TestHashPartitionCompositeNullableKey(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	input := batch.New([]string{"k1", "k2", "v"})
+	input := batch.NewWithSize(3)
 	input.Vecs = []*vector.Vector{
 		vector.NewVec(types.T_int32.ToType(), proc.Mp()),
 		vector.NewVec(types.T_int32.ToType(), proc.Mp()),
@@ -204,7 +204,7 @@ func TestHashPartitionCompositeVariableLengthKeysAreFramed(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	varchar := types.T_varchar.ToType()
 	varchar.Width = 2
-	input := batch.New([]string{"k1", "k2", "v"})
+	input := batch.NewWithSize(3)
 	input.Vecs = []*vector.Vector{
 		vector.NewVec(varchar, proc.Mp()),
 		vector.NewVec(varchar, proc.Mp()),
@@ -575,7 +575,7 @@ func TestUnicodeCollationHashConsumerRelease(t *testing.T) {
 func makeStringHashPartitionBatch(t testing.TB, proc *process.Process, size, rows int, charset uint8) *batch.Batch {
 	t.Helper()
 	typ := types.NewWithCharset(types.T_varchar, int32(size), 0, charset)
-	bat := batch.New([]string{"k", "v"})
+	bat := batch.NewWithSize(2)
 	key := vector.NewVec(typ, proc.Mp())
 	values := make([][]byte, rows)
 	for row := range values {
@@ -715,12 +715,10 @@ func makeWindowPartitionBenchmarkInput(
 	varlen bool,
 ) (*batch.Batch, []*plan.OrderBySpec) {
 	t.Helper()
-	bat := batch.New(nil)
-	bat.Attrs = make([]string, 0, keyCount+1)
+	bat := batch.NewWithSize(0)
 	bat.Vecs = make([]*vector.Vector, 0, keyCount+1)
 	specs := make([]*plan.OrderBySpec, 0, keyCount)
 	for key := 0; key < keyCount; key++ {
-		bat.Attrs = append(bat.Attrs, fmt.Sprintf("k%d", key))
 		if varlen {
 			vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			values := make([][]byte, rows)
@@ -741,7 +739,6 @@ func makeWindowPartitionBenchmarkInput(
 		bat.Vecs = append(bat.Vecs, vec)
 		specs = append(specs, &plan.OrderBySpec{Expr: newExpression(int32(key), types.T_int32)})
 	}
-	bat.Attrs = append(bat.Attrs, "v")
 	payload := make([]int64, rows)
 	for row := range payload {
 		payload[row] = int64(row)
@@ -771,7 +768,7 @@ func makeHashPartitionBatch(
 	payload []int64,
 ) *batch.Batch {
 	t.Helper()
-	bat := batch.New([]string{"k", "v"})
+	bat := batch.NewWithSize(2)
 	bat.Vecs = []*vector.Vector{vector.NewVec(types.T_int32.ToType(), proc.Mp()), vector.NewVec(types.T_int64.ToType(), proc.Mp())}
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], keys, nulls, proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], payload, nil, proc.Mp()))
@@ -781,7 +778,7 @@ func makeHashPartitionBatch(
 
 func makeWideHashPartitionBatch(t testing.TB, proc *process.Process, start int) *batch.Batch {
 	t.Helper()
-	bat := batch.New([]string{"k", "payload", "id"})
+	bat := batch.NewWithSize(3)
 	bat.Vecs = []*vector.Vector{
 		vector.NewVec(types.T_int32.ToType(), proc.Mp()),
 		vector.NewVec(types.T_varchar.ToType(), proc.Mp()),

@@ -967,10 +967,7 @@ func TestExportWorkerBatchEndsStatementAllocationOwnership(t *testing.T) {
 	selection, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
-	source := batch.NewWithSchema(
-		[]string{"value"},
-		[]types.Type{types.T_int64.ToType()}, selection,
-	)
+	source := batch.NewWithTypes([]types.Type{types.T_int64.ToType()}, selection)
 	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, selection))
 	source.SetRowCount(1)
 	usedBefore := account.Snapshot().Used

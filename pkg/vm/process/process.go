@@ -465,7 +465,6 @@ func (proc *Process) NewBatchFromSrcWithAllocation(
 			bat.Clean(mp)
 		}
 	}()
-	bat.SetAttributes(src.Attrs)
 	bat.Recursive = src.Recursive
 	for i := range bat.Vecs {
 		if src.Vecs[i] == nil {

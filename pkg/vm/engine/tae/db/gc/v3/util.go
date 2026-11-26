@@ -54,7 +54,7 @@ func MakeLoadFunc(
 		}
 	}
 	return func(
-		ctx context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, bat *batch.Batch,
+		ctx context.Context, attrs []string, _ *plan.Expr, mp *mpool.MPool, bat *batch.Batch,
 	) (bool, error) {
 		if cursor < len(tail) {
 			if _, err := bat.AppendWithCopy(ctx, mp, tail[cursor]); err != nil {
@@ -64,7 +64,7 @@ func MakeLoadFunc(
 			return false, nil
 		}
 		if reader != nil {
-			return reader.Read(ctx, bat.Attrs, nil, mp, bat)
+			return reader.Read(ctx, attrs, nil, mp, bat)
 		}
 		return true, nil
 	}, releaseFn

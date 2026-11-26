@@ -37,6 +37,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -46,7 +47,6 @@ import (
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1378,7 +1378,7 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 		return nil, nil, err
 	}
 	//1. make vector type
-	bat := batch.New(colNames)
+	bat := batch.NewWithSize(len(colNames))
 	// On error, free the vectors already built in pool.
 	defer func() {
 		if err != nil {
@@ -1388,17 +1388,10 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 	//2. make batch
 	cnt := len(rows)
 	bat.SetRowCount(cnt)
-	// nsp collects one column's NULL rows before they are copied into the
-	// vector; the last one is freed on return, the others as they are
-	// replaced.
-	var nsp *nulls.Nulls
-	defer func() { nsp.Free() }()
 	for colIndex, typ := range colTyps {
-		bat.Vecs[colIndex] = vector.NewVec(typ, pool)
-		nsp.Free()
-		if nsp, err = nulls.NewWithSize(cnt, pool); err != nil {
-			return nil, nil, err
-		}
+		vec := vector.NewVec(typ, pool)
+		bat.Vecs[colIndex] = vec
+		mask := vec.GetNulls().GetBitmap()
 
 		// typeswitch:partial colTyps come from mysqlColDef2PlanResultColDef, which maps MySQL FLOAT/DOUBLE only to T_float32/T_float64
 		switch typ.Oid {
@@ -1409,11 +1402,13 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val []byte
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					val = textRowValueBytes(row[colIndex])
 				}
-				err := vector.AppendBytes(bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendBytes(vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1423,11 +1418,13 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val int8
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					val = row[colIndex].(int8)
 				}
-				err := vector.AppendFixed[int8](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[int8](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1436,12 +1433,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val int16
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					val = row[colIndex].(int16)
 				}
 
-				err := vector.AppendFixed[int16](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[int16](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1450,12 +1449,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val types.MoYear
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					val = row[colIndex].(types.MoYear)
 				}
 
-				err := vector.AppendFixed[types.MoYear](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.MoYear](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1464,12 +1465,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val int32
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					val = row[colIndex].(int32)
 				}
 
-				err := vector.AppendFixed[int32](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[int32](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1478,12 +1481,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val int64
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					val = row[colIndex].(int64)
 				}
 
-				err := vector.AppendFixed[int64](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[int64](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1492,7 +1497,9 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val uint8
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					unchecked, uerr := getUnsignedRowValue(row[colIndex])
 					if uerr != nil {
@@ -1504,7 +1511,7 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 					val = uint8(unchecked)
 				}
 
-				err := vector.AppendFixed[uint8](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[uint8](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1513,7 +1520,9 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val uint16
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					unchecked, uerr := getUnsignedRowValue(row[colIndex])
 					if uerr != nil {
@@ -1525,7 +1534,7 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 					val = uint16(unchecked)
 				}
 
-				err := vector.AppendFixed[uint16](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[uint16](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1534,7 +1543,9 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val uint32
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					unchecked, uerr := getUnsignedRowValue(row[colIndex])
 					if uerr != nil {
@@ -1546,7 +1557,7 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 					val = uint32(unchecked)
 				}
 
-				err := vector.AppendFixed[uint32](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[uint32](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1555,12 +1566,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val uint64
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else if val, err = getUnsignedRowValue(row[colIndex]); err != nil {
 					return nil, nil, err
 				}
 
-				err := vector.AppendFixed[uint64](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[uint64](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1569,12 +1582,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val float64
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					val = row[colIndex].(float64)
 				}
 
-				err := vector.AppendFixed[float64](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[float64](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1583,12 +1598,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val float32
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					val = row[colIndex].(float32)
 				}
 
-				err := vector.AppendFixed[float32](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[float32](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1597,12 +1614,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val types.Date
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else if val, err = getDateFromRowValue(row[colIndex]); err != nil {
 					return nil, nil, err
 				}
 
-				err := vector.AppendFixed[types.Date](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Date](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1611,12 +1630,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val types.Time
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else if val, err = getTimeFromRowValue(row[colIndex], typ.Scale); err != nil {
 					return nil, nil, err
 				}
 
-				err := vector.AppendFixed[types.Time](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Time](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1625,12 +1646,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val types.Datetime
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else if val, err = getDatetimeFromRowValue(row[colIndex], typ.Scale); err != nil {
 					return nil, nil, err
 				}
 
-				err := vector.AppendFixed[types.Datetime](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Datetime](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1639,7 +1662,9 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val types.Timestamp
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					timeStampRowVal := row[colIndex]
 					switch v := timeStampRowVal.(type) {
@@ -1654,7 +1679,7 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 						return nil, nil, moerr.NewInternalErrorNoCtxf("%v can't convert to timestamp type", v)
 					}
 				}
-				err := vector.AppendFixed[types.Timestamp](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Timestamp](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1663,12 +1688,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val types.Decimal64
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else if val, err = getDecimal64FromRowValue(row[colIndex], typ); err != nil {
 					return nil, nil, err
 				}
 
-				err := vector.AppendFixed[types.Decimal64](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Decimal64](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1677,12 +1704,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val types.Decimal128
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else if val, err = getDecimal128FromRowValue(row[colIndex], typ); err != nil {
 					return nil, nil, err
 				}
 
-				err := vector.AppendFixed[types.Decimal128](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Decimal128](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1691,12 +1720,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val types.Decimal256
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else if val, err = getDecimal256FromRowValue(row[colIndex], typ); err != nil {
 					return nil, nil, err
 				}
 
-				err := vector.AppendFixed[types.Decimal256](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Decimal256](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1705,12 +1736,14 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			for rowIdx, row := range rows {
 				var val types.Enum
 				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
+					if err = markResultNull(mask, rowIdx, cnt); err != nil {
+						return nil, nil, err
+					}
 				} else {
 					val = row[colIndex].(types.Enum)
 				}
 
-				err := vector.AppendFixed[types.Enum](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Enum](vec, val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1718,10 +1751,22 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 		default:
 			return nil, nil, moerr.NewInternalErrorNoCtxf("unsupported type %d", typ.Oid)
 		}
-
-		bat.Vecs[colIndex].SetNulls(nsp)
 	}
 	return bat, planColDefs, nil
+}
+
+// markResultNull extends the owned mask through the current word, requiring
+// the same backing capacity as extending to row alone.
+func markResultNull(mask *bitmap.Bitmap, row, rowCount int) error {
+	if int64(row) >= mask.Len() {
+		const rowsPerWord = 64
+		end := row + min(rowCount-row, rowsPerWord-row%rowsPerWord)
+		if err := mask.TryExpandWithSize(end); err != nil {
+			return err
+		}
+	}
+	mask.Add(uint64(row))
+	return nil
 }
 
 // textRowValueBytes renders a hand-built result row value as the exact bytes
@@ -2501,7 +2546,7 @@ func (ui *UserInput) isInternalSQLSource(ses FeSession) bool {
 	tenant := ses.GetTenantInfo()
 	internal := ui.isInternal() || tenant == nil || strings.HasPrefix(ui.getSql(), cmdFieldListSql)
 	if tenant != nil {
-		special, _, _ := isSpecialUser(tenant.GetUser())
+		special := authenticatedSpecialUser(tenant)
 		internal = internal || special || tenant.GetTenant() == sysAccountName && tenant.GetUser() == "internal"
 	}
 	return internal

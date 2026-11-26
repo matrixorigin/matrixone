@@ -82,7 +82,6 @@ func TestCopyBatchCopiesMixedShapes(t *testing.T) {
 	t.Cleanup(func() { defer mpool.DeleteMPool(sourceMP); require.Zero(t, sourceMP.CurrNB()) })
 
 	source := batch.NewWithSize(5)
-	source.Attrs = []string{"fixed", "nil", "varlen", "const", "alias"}
 	fixed := vector.NewVec(types.T_int64.ToType(), sourceMP)
 	require.NoError(t, vector.AppendFixedList(fixed, []int64{1, 2, 3}, nil, sourceMP))
 	fixed.SetSorted(true)
@@ -108,7 +107,6 @@ func TestCopyBatchCopiesMixedShapes(t *testing.T) {
 	require.True(t, owned)
 	require.True(t, aliased)
 
-	require.Equal(t, source.Attrs, copied.Attrs)
 	require.Equal(t, rows, copied.RowCount())
 	require.Equal(t, source.Recursive, copied.Recursive)
 	require.Equal(t, source.ShuffleIDX, copied.ShuffleIDX)
@@ -160,6 +158,32 @@ func TestCopyBatchFailureReleasesPartialCopy(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 	cache.free()
 	require.Equal(t, bytes.Repeat([]byte{1}, 64), source.Vecs[0].GetBytesAt(0))
+}
+
+func TestCopyBatchCopiesAllNullAny(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	source := batch.NewWithSize(1)
+	t.Cleanup(func() { source.Clean(mp) })
+	source.Vecs[0] = vector.NewVec(types.T_any.ToType(), mp)
+	for range 3 {
+		require.NoError(t, vector.AppendNull(source.Vecs[0], mp))
+	}
+	source.SetRowCount(3)
+	cache := newBatchCache(mp, 1)
+	t.Cleanup(cache.free)
+	for range 2 {
+		copied, owned, aliased, err := cache.copyBatch(source)
+		require.NoError(t, err)
+		require.True(t, owned)
+		require.Equal(t, 3, copied.RowCount())
+		require.Equal(t, types.T_any.ToType(), *copied.Vecs[0].GetType())
+		require.True(t, copied.Vecs[0].AllNull())
+		cache.put(copied, aliased)
+	}
 }
 
 func newWideSpoolSource(tb testing.TB, mp *mpool.MPool, rows int) *batch.Batch {

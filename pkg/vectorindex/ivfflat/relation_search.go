@@ -307,7 +307,6 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 			}
 		}
 		bat.Vecs = out
-		bat.Attrs = append([]string{catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, "vec_dist"}, includeCols...)
 	}
 	return res, nil
 }

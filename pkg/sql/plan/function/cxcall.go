@@ -20,6 +20,7 @@ package function
 import "C"
 import (
 	"fmt"
+	"runtime"
 	"unsafe"
 
 	_ "github.com/matrixorigin/matrixone/cgo"
@@ -69,10 +70,13 @@ func c_xcall(f *XCallFunction, mp *mpool.MPool, length int, result *vector.Vecto
 		f.args = make([]xcallArgs, len(argvecs)+1)
 	}
 
-	result.FillRawPtrLen(f.args[0].ptrLens[0:6])
+	// Copies of read-only null bitmaps, which C reads through raw pointers.
+	keepAlive := make([][]uint64, 0, len(argvecs)+1)
+	keepAlive = append(keepAlive, result.FillRawPtrLen(f.args[0].ptrLens[0:6]))
 	for i, argvec := range argvecs {
-		argvec.FillRawPtrLen(f.args[i+1].ptrLens[0:6])
+		keepAlive = append(keepAlive, argvec.FillRawPtrLen(f.args[i+1].ptrLens[0:6]))
 	}
+	defer runtime.KeepAlive(keepAlive)
 
 	if f.clHost == "CGO" {
 		f.ErrStr[0] = 0

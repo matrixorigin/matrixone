@@ -146,7 +146,7 @@ func transferTombstoneObjects(
 					DELETE,
 					tbl.accountId, tbl.db.databaseId, tbl.tableId,
 					tbl.db.databaseName, writeName, fileName,
-					bat, txn.tnStores[0],
+					bat, catalog.ObjectDeleteAttrs, txn.tnStores[0],
 					tbl.extraInfo.AutoIncrEpoch,
 				); err != nil {
 					return err
@@ -575,7 +575,7 @@ func doTransferRowids(
 		*readPKColumn.GetType(),
 		objectio.RowidType,
 	}
-	bat := batch.NewWithSchema(attrs, attrTypes, mp)
+	bat := batch.NewWithTypes(attrTypes, mp)
 	defer func() {
 		bat.Clean(mp)
 	}()

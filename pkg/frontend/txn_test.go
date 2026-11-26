@@ -966,6 +966,67 @@ func TestCancellableBackgroundTxnCreationUsesRequestContext(t *testing.T) {
 	}
 }
 
+func TestPrincipalNamespaceDDLBoundsTxnCreation(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		rollbackOnBeginError bool
+		run                  func(context.Context, *Session) error
+	}{
+		{"create user", true, func(ctx context.Context, ses *Session) error {
+			return InitUser(ctx, ses, ses.GetTenantInfo(), &createUser{Users: []*user{{Username: "new_user"}}})
+		}},
+		{"create role", true, func(ctx context.Context, ses *Session) error {
+			return InitRole(ctx, ses, ses.GetTenantInfo(), &tree.CreateRole{Roles: []*tree.Role{{UserName: "new_role"}}})
+		}},
+		{"alter role", true, func(ctx context.Context, ses *Session) error {
+			return doAlterRole(ctx, ses, &tree.AlterRole{OldName: "old_role", NewName: "new_role"})
+		}},
+		{"rename user", false, func(ctx context.Context, ses *Session) error {
+			return doRenameUser(ctx, ses, renameStatement("old_user", "new_user"))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+
+			const creationTimeout = time.Minute
+			configuredTimeout := &getPu(ses.GetService()).SV.CreateTxnOpTimeout.Duration
+			previousTimeout := *configuredTimeout
+			*configuredTimeout = creationTimeout
+			t.Cleanup(func() { *configuredTimeout = previousTimeout })
+			reqCtx, cancel := context.WithTimeout(
+				defines.AttachAccountId(context.Background(), sysAccountID), time.Hour)
+			defer cancel()
+
+			wantErr := errors.New("injected transaction creation failure")
+			var beginCtx context.Context
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			var opts *BackgroundExecOption
+			stubSetDefaultRoleBackgroundExec(t, bh, &opts)
+			started := time.Now()
+			lastCall := bh.EXPECT().Exec(gomock.Any(), "begin;").DoAndReturn(func(ctx context.Context, _ string) error {
+				beginCtx = ctx
+				return wantErr
+			})
+			// RENAME USER only installs its rollback after BEGIN succeeds.
+			if tc.rollbackOnBeginError {
+				lastCall = bh.EXPECT().Exec(reqCtx, "rollback;").Return(nil).After(lastCall)
+			}
+			bh.EXPECT().Close().After(lastCall)
+
+			require.ErrorIs(t, tc.run(reqCtx, ses), wantErr)
+			require.True(t, opts.cancelTxnCreateWithRequest)
+			deadline, ok := beginCtx.Deadline()
+			require.True(t, ok)
+			require.False(t, deadline.Before(started.Add(creationTimeout)))
+			require.False(t, deadline.After(time.Now().Add(creationTimeout)))
+			require.ErrorIs(t, beginCtx.Err(), context.Canceled)
+			require.NoError(t, reqCtx.Err())
+		})
+	}
+}
+
 func TestOrdinaryBackgroundTxnCreationKeepsCreateTxnTimeout(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
