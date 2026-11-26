@@ -40,6 +40,15 @@ type Message interface {
 	Unmarshal(data []byte) error
 }
 
+type requestReleaseKey struct{}
+
+// WithRequestRelease applies writer ownership to one Send. After successful
+// enqueue, release runs once when the backend no longer accesses the request.
+// If Send fails before enqueue, the caller still owns the request.
+func WithRequestRelease(ctx context.Context, release func(Message)) context.Context {
+	return context.WithValue(ctx, requestReleaseKey{}, release)
+}
+
 // PayloadMessage is similar message, but has a large payload field. To avoid redundant copy of
 // memory, the encoding is msgTotalSize(4 bytes) + flag(1 byte) + messageWithoutPayloadSize(4 bytes)
 // + messageWithoutPayload + payload, all fields except payload will be written to the buffer of
