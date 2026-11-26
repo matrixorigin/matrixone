@@ -88,16 +88,16 @@ func forkSourceHasUncommittedData(
 	if err != nil {
 		return false, err
 	}
-	if creation, ok := source.(engine.RelationCreatedInCurrentTxn); ok {
-		created, err := creation.CreatedInCurrentTxn(sourceCtx)
-		if err != nil || created {
-			return created, err
-		}
+	provider, ok := source.(engine.HistoricalSourceProvider)
+	if !ok {
+		return true, nil
 	}
-	if workspace, ok := source.(engine.RelationWithUncommittedData); ok {
-		return workspace.HasUncommittedData()
+	visible, err := provider.SourceVisibleAtSnapshot(sourceCtx)
+	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+		// The engine cannot prove a committed image for this relation.
+		return true, nil
 	}
-	return false, nil
+	return !visible, err
 }
 
 func encodeDataBranchForkKeys(ses *Session, keys *vector.Vector, composite bool) (*vector.Vector, error) {

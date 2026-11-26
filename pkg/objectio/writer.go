@@ -363,7 +363,7 @@ func (w *objectWriterV1) Write(batch *batch.Batch) (BlockObject, error) {
 	if col := len(w.seqnums.Seqs); col == 0 {
 		w.seqnums.InitWithColCnt(len(batch.Vecs))
 	} else if col != len(batch.Vecs) {
-		panic(fmt.Sprintf("Unmatched Write Batch, expect %d, get %d, %v", col, len(batch.Vecs), batch.Attrs))
+		panic(fmt.Sprintf("Unmatched Write Batch, expect %d, get %d", col, len(batch.Vecs)))
 	}
 	block := NewBlock(w.seqnums)
 	if _, err := w.AddBlock(block, batch, w.seqnums); err != nil {
@@ -877,11 +877,7 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		if i == 0 {
 			rows = vec.Length()
 		} else if rows != vec.Length() {
-			attr := "unknown"
-			if len(bat.Attrs) > i {
-				attr = bat.Attrs[i]
-			}
-			logutil.Debugf("%s unmatched length, expect %d, get %d", attr, rows, vec.Length())
+			logutil.Debugf("column %d unmatched length, expect %d, get %d", i, rows, vec.Length())
 		}
 		// Use the arena's serialization buffer when available so it is
 		// reused across write cycles (avoids a fresh bytes.Buffer growth

@@ -165,10 +165,12 @@ func TestCRC32AndPlainPreparedMigrateBetweenCNs(t *testing.T) {
 		require.False(t, snapshot.UserDefinedVarsSnapshotTooLarge)
 		require.False(t, snapshot.SystemVariablesSnapshotTooLarge)
 		require.Empty(t, snapshot.UserLevelLocks)
+		require.NotNil(t, snapshot.Principal)
+		principal := *snapshot.Principal
 
 		request = client.NewRequest(query.CmdMethod_MigrateConnTo)
 		request.MigrateConnToRequest = &query.MigrateConnToRequest{
-			ConnID: targetID, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
+			ConnID: targetID, Principal: &principal, DB: snapshot.DB, PrepareStmts: snapshot.PrepareStmts,
 			LastAffectedRows: snapshot.LastAffectedRows, LastInsertID: snapshot.LastInsertID,
 			LastInsertIDExported: snapshot.LastInsertIDExported, FoundRows: snapshot.FoundRows,
 			UserDefinedVars: snapshot.UserDefinedVars, UserDefinedVarsExported: snapshot.UserDefinedVarsExported,

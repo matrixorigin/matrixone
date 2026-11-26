@@ -1404,7 +1404,7 @@ func jsonObjectAggColExpr(t *testing.T, keyPos, valPos int32) aggexec.AggFuncExe
 // makeKeyValBatch builds a batch of (varchar key, int32 value) columns for
 // json_objectagg tests. keyNullPos lists the NULL key row positions (may be nil).
 func makeKeyValBatch(mp *mpool.MPool, keys []string, keyNullPos []uint64, vals []int32) *batch.Batch {
-	bat := batch.New([]string{"k", "v"})
+	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = testutil.MakeVarcharVector(keys, keyNullPos, mp)
 	bat.Vecs[1] = testutil.MakeInt32Vector(vals, nil, mp)
 	bat.SetRowCount(len(keys))
@@ -5237,6 +5237,16 @@ func TestWindowTimestampRangeFoldMembership(t *testing.T) {
 			wantRows: []int{0, 1, 3, 4},
 		},
 		{
+			name: "asc preceding overflow produces an empty frame across the fold",
+			frame: &plan.FrameClause{
+				Type:  plan.FrameClause_RANGE,
+				Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: intervalExpr(math.MaxInt64, types.MicroSecond)},
+				End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			},
+			rowIdx:   4,
+			wantRows: []int{},
+		},
+		{
 			name:     "asc following includes both repeated upper wall times",
 			frame:    followingFrame,
 			rowIdx:   1,
@@ -6121,6 +6131,112 @@ func BenchmarkWindowTimestampRangeFoldUnboundedValue(b *testing.B) {
 				result.Free(result.MPool())
 			}
 		})
+	}
+}
+
+func TestTemporalPrecedingOverflowBoundaries(t *testing.T) {
+	firstDay := types.DatetimeFromClock(1, 1, 1, 0, 0, 0, 0)
+	for _, tc := range []struct {
+		name       string
+		key        types.Datetime
+		unit       types.IntervalType
+		comparable int64
+	}{
+		{"microsecond", firstDay, types.MicroSecond, 31622400000000},
+		{"microsecond with clock", firstDay + 1000000, types.MicroSecond, 31622401000000},
+		{"second", firstDay, types.Second, 31622400},
+		{"minute", firstDay, types.Minute, 527040},
+		{"hour", firstDay, types.Hour, 8784},
+		{"day", firstDay, types.Day, 366},
+		{"week", firstDay, types.Week, 52},
+		{"month", firstDay, types.Month, 12},
+		{"quarter", firstDay, types.Quarter, 4},
+		{"year", firstDay, types.Year, 1},
+		{"normalized year_month", firstDay, types.Year_Month, 12},
+		{"midyear month end", types.DatetimeFromClock(1, 7, 31, 0, 0, 0, 0), types.Month, 18},
+		{"leap day", types.DatetimeFromClock(4, 2, 29, 0, 0, 0, 0), types.Year, 4},
+		{"stored zero date", types.ZeroDatetime, types.Day, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			order, err := vector.NewConstFixed(types.T_datetime.ToType(), tc.key, 4, mp)
+			require.NoError(t, err)
+			defer order.Free(mp)
+			ctr := &container{orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{order}}}}
+			frame := &plan.FrameClause{
+				Type:  plan.FrameClause_RANGE,
+				Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: intervalExpr(tc.comparable, tc.unit)},
+				End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			}
+			left, right, err := ctr.buildRangeInterval(2, 1, 4, frame)
+			require.NoError(t, err)
+			require.Equal(t, [2]int{1, 4}, [2]int{left, right}, "comparable lower bound")
+
+			frame.Start.Val = intervalExpr(tc.comparable+1, tc.unit)
+			left, right, err = ctr.buildRangeInterval(2, 1, 4, frame)
+			require.NoError(t, err)
+			require.Equal(t, [2]int{1, 1}, [2]int{left, right}, "one interval unit past the lower bound")
+		})
+	}
+}
+
+func TestTemporalPrecedingOverflowSliding(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) }()
+	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 3, 4, 5, 6})
+	defer bat.Clean(proc.Mp())
+	order := vector.NewVec(types.T_date.ToType(), proc.Mp())
+	defer order.Free(proc.Mp())
+	for row, key := range []types.Date{
+		0, 0, types.ZeroDate, types.DateFromCalendar(1, 1, 1),
+		types.DateFromCalendar(1, 1, 2), types.DateFromCalendar(3, 1, 1),
+	} {
+		require.NoError(t, vector.AppendFixed(order, key, row < 2, proc.Mp()))
+	}
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: intervalExpr(2, types.Year)},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	ctr := &container{
+		bat:       bat,
+		ps:        []int64{0},
+		os:        []int64{0, 2, 3, 4, 5},
+		orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{order}}},
+		aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+	defer ctr.freeRunningAgg()
+	require.True(t, boundedSlidingRangeFrame(frame, ctr.orderVecs))
+	arg := makeWindowWithFrame(frame)
+
+	// The NULL peer and all overflow rows meet at the same boundary. The
+	// final valid frame can reach back before the last overflow row.
+	for _, chunk := range []struct {
+		start, end int
+		want       []int64 // zero denotes NULL in this positive-valued fixture
+	}{
+		{0, 1, []int64{3}},
+		{1, 4, []int64{3, 0, 0}},
+		{4, 6, []int64{0, 15}},
+	} {
+		func() {
+			result, err := ctr.processAggregateFuncRange(0, arg, proc, chunk.start, chunk.end)
+			require.NoError(t, err)
+			defer result.Free(result.MPool())
+			require.Equal(t, len(chunk.want), result.Length())
+			values := vector.MustFixedColWithTypeCheck[types.Decimal128](result)
+			for i, want := range chunk.want {
+				require.Equal(t, want == 0, result.IsNull(uint64(i)), "row %d", chunk.start+i)
+				if want != 0 {
+					require.Equal(t, types.Decimal128FromInt64(want), values[i], "row %d", chunk.start+i)
+				}
+			}
+		}()
+		if chunk.end < bat.RowCount() {
+			require.NotNil(t, ctr.runningAgg, "sliding aggregate must survive output chunks")
+		} else {
+			require.Nil(t, ctr.runningAgg)
+		}
 	}
 }
 

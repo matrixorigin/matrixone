@@ -72,7 +72,7 @@ func TestBuildDMLMatchedDeleteTargetFromBatchCollectsPositionAndEqualityRows(t *
 func TestBuildDMLMatchedDeleteTargetFromBatchEmptyBatchKeepsDataFileOnly(t *testing.T) {
 	target, err := BuildDMLMatchedDeleteTargetFromBatch(context.Background(), DMLMatchedRowsBatchRequest{
 		DataFile: api.DataFile{FilePath: "s3://warehouse/gold/orders/data/empty.parquet"},
-		Batch:    batch.New([]string{"id"}),
+		Batch:    batch.NewWithSize(1),
 	})
 	if err != nil {
 		t.Fatalf("empty matched batch: %v", err)
@@ -236,7 +236,7 @@ func TestDMLMatchedBatchColumnHelpersCoverTypesAndErrors(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 
-	bat := batch.New([]string{"id", "name", "extra"})
+	bat := batch.NewWithSize(3)
 	bat.Vecs = []*vector.Vector{
 		vector.NewVec(types.T_int32.ToType(), mp),
 		vector.NewVec(types.T_varchar.ToType(), mp),
@@ -260,15 +260,11 @@ func TestDMLMatchedBatchColumnHelpersCoverTypesAndErrors(t *testing.T) {
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
 
-	indexes, err := dmlReplacementColumnIndexes(ctx, bat, []string{"name", "id"}, []int{2, 1})
-	if err != nil || indexes[0] != 1 || indexes[1] != 0 {
-		t.Fatalf("name-based replacement indexes failed indexes=%v err=%v", indexes, err)
-	}
 	fallbackBatch := batch.NewWithSize(2)
 	fallbackBatch.Vecs[0] = bat.Vecs[2]
 	fallbackBatch.Vecs[1] = bat.Vecs[0]
 	fallbackBatch.SetRowCount(1)
-	indexes, err = dmlReplacementColumnIndexes(ctx, fallbackBatch, []string{"extra", "id"}, []int{0, 1})
+	indexes, err := dmlReplacementColumnIndexes(ctx, fallbackBatch, []string{"extra", "id"}, []int{0, 1})
 	if err != nil || indexes[0] != 0 || indexes[1] != 1 {
 		t.Fatalf("fallback replacement indexes failed indexes=%v err=%v", indexes, err)
 	}
@@ -285,7 +281,7 @@ func TestDMLMatchedBatchColumnHelpersCoverTypesAndErrors(t *testing.T) {
 		t.Fatalf("nil batch vector count = %d", got)
 	}
 	if _, err := dmlBatchColumnIndexByNameOrError(ctx, fallbackBatch, "missing", 7, "test"); err == nil {
-		t.Fatalf("expected column index by name error")
+		t.Fatalf("expected column index out of range error")
 	}
 }
 
@@ -399,7 +395,7 @@ func TestDMLVectorValueCoversSupportedTypes(t *testing.T) {
 func newMatchedDeleteBatch(t *testing.T) (*batch.Batch, func()) {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "name"})
+	bat := batch.NewWithSize(2)
 	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, row := range []struct {
@@ -425,7 +421,7 @@ func newMatchedDeleteBatch(t *testing.T) (*batch.Batch, func()) {
 func newMatchedScanBatch(t *testing.T) (*batch.Batch, func()) {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "name", "_iceberg_data_file", "_iceberg_row_ordinal"})
+	bat := batch.NewWithSize(4)
 	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	pathVec := vector.NewVec(types.T_varchar.ToType(), mp)

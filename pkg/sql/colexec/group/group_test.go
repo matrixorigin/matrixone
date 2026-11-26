@@ -607,7 +607,7 @@ func cloneBatch(t *testing.T, proc *process.Process, bat *batch.Batch) *batch.Ba
 
 	cloned, err := bat.Dup(proc.Mp())
 	require.NoError(t, err)
-	cloned.ExtraBuf = append(cloned.ExtraBuf[:0], bat.ExtraBuf...)
+	require.NoError(t, cloned.SetExtraBuf(proc.Mp(), bat.ExtraBuf()))
 	return cloned
 }
 
@@ -693,18 +693,6 @@ func setGroupProtocolVersionForTest(t *testing.T, proc *process.Process, version
 	})
 }
 
-func TestExplicitTextWireRequiresMORPCVersion23(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	setGroupProtocolVersionForTest(t, proc, defines.MORPCVersion22)
-	require.False(t, explicitTextWireEnabled(proc),
-		"version 22 predates aggregate explicit-text provenance")
-
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
-	require.True(t, explicitTextWireEnabled(proc))
-}
-
 func mergePreparedMinPartial(
 	t *testing.T,
 	proc *process.Process,
@@ -771,88 +759,33 @@ func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
-// legacyRowMetadataTrailerForTest is the retired trailer an older writer
-// appended to a one-aggregate partial: a v1 record with an observed Float
-// category.
-func legacyRowMetadataTrailerForTest() []byte {
-	nAggs := int32(1)
-	trailer := []byte{
-		rowMetadataTrailerMagic0,
-		rowMetadataTrailerMagic1,
-		rowMetadataTrailerMagic2,
-		rowMetadataTrailerVersion,
-	}
-	trailer = append(trailer, types.EncodeInt32(&nAggs)...)
-	return append(trailer, 3)
-}
-
-func TestMergeGroupPartialWireCompatibility(t *testing.T) {
-	tests := []struct {
-		name          string
-		writerVersion int64
-		readerVersion int64
-		legacyTrailer bool
-		wantErr       string
-	}{
-		{
-			name:          "current writer and v12 reader",
-			writerVersion: defines.MORPCVersion12,
-			readerVersion: defines.MORPCVersion12,
-		},
-		{
-			name:          "current writer and legacy reader",
-			writerVersion: defines.MORPCVersion12,
-			readerVersion: defines.MORPCVersion11,
-		},
-		{
-			name:          "old trailer writer and v12 reader",
-			writerVersion: defines.MORPCVersion12,
-			readerVersion: defines.MORPCVersion12,
-			legacyTrailer: true,
-		},
-		{
-			name:          "old trailer writer and legacy reader",
-			writerVersion: defines.MORPCVersion12,
-			readerVersion: defines.MORPCVersion11,
-			legacyTrailer: true,
-			wantErr:       "aggregate row metadata trailer requires MORPCVersion12",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+// A current partial carries nothing after its aggregate states; MergeGroup
+// rejects a partial that does.
+func TestMergeGroupPartialRejectsTrailingBytes(t *testing.T) {
+	for _, trailing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("trailing=%t", trailing), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			t.Cleanup(func() {
 				require.Zero(t, proc.Mp().CurrNB())
 				proc.Free()
 			})
-			setGroupProtocolVersionForTest(t, proc, tc.writerVersion)
 			partial := buildPreparedMinPartial(t, proc, preparedPartialSpec{rows: 1})
-			require.Equal(t, -1, bytes.LastIndex(partial.ExtraBuf, []byte{
-				rowMetadataTrailerMagic0,
-				rowMetadataTrailerMagic1,
-				rowMetadataTrailerMagic2,
-			}), "current writers must not emit the retired trailer")
-			if tc.legacyTrailer {
-				partial.ExtraBuf = append(partial.ExtraBuf, legacyRowMetadataTrailerForTest()...)
-			}
-			moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-				moruntime.MOProtocolVersion, tc.readerVersion)
-
-			if tc.wantErr != "" {
-				child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
-				t.Cleanup(func() { child.Free(proc, false, nil) })
-				merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
-				merge.AppendChild(child)
-				t.Cleanup(func() { merge.Free(proc, true, nil) })
-				require.NoError(t, merge.Prepare(proc))
-				result, err := vm.Exec(merge, proc)
-				require.Nil(t, result.Batch)
-				require.ErrorContains(t, err, tc.wantErr)
+			if !trailing {
+				output := mergePreparedMinPartial(t, proc, partial)
+				require.Equal(t, "5", output.Vecs[0].GetStringAt(0))
 				return
 			}
-			output := mergePreparedMinPartial(t, proc, partial)
-			require.Equal(t, "5", output.Vecs[0].GetStringAt(0))
+			require.NoError(t, partial.SetExtraBuf(proc.Mp(),
+				append(append([]byte(nil), partial.ExtraBuf()...), 'P', 'P', 'K', 1)))
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
+			t.Cleanup(func() { child.Free(proc, false, nil) })
+			merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
+			merge.AppendChild(child)
+			t.Cleanup(func() { merge.Free(proc, true, nil) })
+			require.NoError(t, merge.Prepare(proc))
+			result, err := vm.Exec(merge, proc)
+			require.Nil(t, result.Batch)
+			require.ErrorContains(t, err, "unexpected bytes after the aggregate partial")
 		})
 	}
 }
@@ -871,7 +804,7 @@ func TestOrdinaryGroupPartialKeepsLegacyWireFormat(t *testing.T) {
 	current := buildPartialH0Batch(t, proc, []int32{1, 2})
 	t.Cleanup(func() { current.Clean(proc.Mp()) })
 
-	require.Equal(t, legacy.ExtraBuf, current.ExtraBuf)
+	require.Equal(t, legacy.ExtraBuf(), current.ExtraBuf())
 }
 
 func TestPartialMergeFollowsAllAggregateStates(t *testing.T) {
@@ -912,89 +845,6 @@ func TestPartialMergeFollowsAllAggregateStates(t *testing.T) {
 			countIndex := 1 - tc.minIndex
 			require.Equal(t, int64(2),
 				vector.MustFixedColNoTypeCheck[int64](output.Vecs[countIndex])[0])
-		})
-	}
-}
-
-func TestMergeGroupRejectsInvalidLegacyRowMetadataTrailer(t *testing.T) {
-	tests := []struct {
-		name    string
-		mutate  func([]byte, int) []byte
-		wantErr string
-	}{
-		{
-			name: "invalid magic",
-			mutate: func(extra []byte, trailerOffset int) []byte {
-				extra[trailerOffset] = 'X'
-				return extra
-			},
-			wantErr: "invalid aggregate row metadata trailer",
-		},
-		{
-			name: "unsupported version",
-			mutate: func(extra []byte, trailerOffset int) []byte {
-				extra[trailerOffset+3] = 5
-				return extra
-			},
-			wantErr: "unsupported aggregate row metadata trailer version 5",
-		},
-		{
-			name: "aggregate count mismatch",
-			mutate: func(extra []byte, trailerOffset int) []byte {
-				count := int32(2)
-				copy(extra[trailerOffset+4:trailerOffset+8], types.EncodeInt32(&count))
-				return extra
-			},
-			wantErr: "aggregate row metadata count 2 does not match 1",
-		},
-		{
-			name: "out-of-range state",
-			mutate: func(extra []byte, trailerOffset int) []byte {
-				extra[trailerOffset+8] = 6
-				return extra
-			},
-			wantErr: "invalid aggregate row metadata state 6",
-		},
-		{
-			name: "truncated state",
-			mutate: func(extra []byte, trailerOffset int) []byte {
-				return extra[:trailerOffset+8]
-			},
-			wantErr: "EOF",
-		},
-		{
-			name: "unexpected trailing bytes",
-			mutate: func(extra []byte, _ int) []byte {
-				return append(extra, 0)
-			},
-			wantErr: "unexpected aggregate row metadata trailer bytes",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			t.Cleanup(func() {
-				require.Zero(t, proc.Mp().CurrNB())
-				proc.Free()
-			})
-			setGroupProtocolVersionForTest(t, proc, defines.MORPCVersion12)
-
-			partial := buildPreparedMinPartial(t, proc, preparedPartialSpec{rows: 1})
-			trailerOffset := len(partial.ExtraBuf)
-			partial.ExtraBuf = append(partial.ExtraBuf, legacyRowMetadataTrailerForTest()...)
-			partial.ExtraBuf = tc.mutate(partial.ExtraBuf, trailerOffset)
-
-			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
-			t.Cleanup(func() { child.Free(proc, false, nil) })
-			merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
-			merge.AppendChild(child)
-			t.Cleanup(func() { merge.Free(proc, true, nil) })
-			require.NoError(t, merge.Prepare(proc))
-
-			result, err := vm.Exec(merge, proc)
-			require.Nil(t, result.Batch)
-			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
 }
@@ -2153,7 +2003,7 @@ func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 	require.NoError(t, err)
 	partials[1].Clean(proc.Mp())
 	partials[1] = batch.NewWithSize(0)
-	require.NoError(t, partials[1].UnmarshalBinaryForPipeline(wire.Bytes(), proc.Mp()))
+	require.NoError(t, partials[1].UnmarshalBinaryWithAnyMp(wire.Bytes(), proc.Mp()))
 
 	mergeChild := colexec.NewMockOperator().WithBatchs(partials)
 	t.Cleanup(func() { mergeChild.Free(proc, false, nil) })
@@ -2892,7 +2742,7 @@ func TestGroupStreamingDoesNotPublishAfterInputCancellation(t *testing.T) {
 	require.Equal(t, vm.Eval, g.ctr.state)
 	require.Zero(t, g.ctr.currBatchIdx)
 	require.NotEmpty(t, g.ctr.groupByBatches)
-	require.Empty(t, g.ctr.groupByBatches[0].ExtraBuf)
+	require.Empty(t, g.ctr.groupByBatches[0].ExtraBuf())
 
 	g.Reset(proc, true, context.Canceled)
 	require.Nil(t, g.ctr.mp)
@@ -3403,60 +3253,6 @@ func TestGroupHashWidthUsesGlobalNullability(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
-func TestRemoteShortVarlenaGroupKeepsLegacyH8BeforeProtocolV78(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	groupBy := []*plan.Expr{{
-		Typ:  plan.Type{Id: int32(types.T_varchar), Width: 2},
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-	}}
-
-	setGroupProtocolVersionForTest(t, proc, defines.MORPCVersion77)
-	legacy := newGroupOp(proc, groupBy, nil)
-	require.NoError(t, legacy.Prepare(proc))
-	require.Equal(t, int32(H8), legacy.ctr.mtyp)
-	legacy.Free(proc, false, nil)
-
-	setGroupProtocolVersionForTest(t, proc, defines.MORPCVersion78)
-	current := newGroupOp(proc, groupBy, nil)
-	require.NoError(t, current.Prepare(proc))
-	require.Equal(t, int32(HStr), current.ctr.mtyp)
-	current.Free(proc, false, nil)
-}
-
-func TestRemoteShortCharH8PreservesLegacyPadding(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	setGroupProtocolVersionForTest(t, proc, defines.MORPCVersion77)
-
-	charType := types.New(types.T_char, 2, 0)
-	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(charType, proc.Mp())
-	input.Vecs[1] = vector.NewVec(charType, proc.Mp())
-	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("a "), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("ab"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("bc"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("c "), false, proc.Mp()))
-	input.SetRowCount(2)
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	groupBy := []*plan.Expr{
-		{Typ: plan.Type{Id: int32(types.T_char), Width: 2}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
-		{Typ: plan.Type{Id: int32(types.T_char), Width: 2}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
-	}
-	g := newGroupOp(proc, groupBy, nil)
-	g.AppendChild(child)
-	require.NoError(t, g.Prepare(proc))
-	require.Equal(t, int32(H8), g.ctr.mtyp)
-	outputs := collectBatches(t, g, proc)
-	require.Len(t, outputs, 1)
-	require.Equal(t, 2, outputs[0].RowCount(),
-		"pre-v78 H8 must retain raw CHAR padding when fields are concatenated")
-	g.Free(proc, false, nil)
-	child.Free(proc, false, nil)
-}
-
 func TestGroupCompositeShortCharKeysPreserveFieldBoundaries(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -3486,82 +3282,6 @@ func TestGroupCompositeShortCharKeysPreserveFieldBoundaries(t *testing.T) {
 	child.Free(proc, false, nil)
 }
 
-func TestMergeGroupNormalizesLegacyH8VarlenaMetadata(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-
-	varcharType := types.New(types.T_varchar, 2, 0)
-	partial := batch.NewWithSize(2)
-	partial.Vecs[0] = vector.NewVec(varcharType, proc.Mp())
-	partial.Vecs[1] = vector.NewVec(varcharType, proc.Mp())
-	// These rows are already separate partial rows. A legacy H8 producer could
-	// have collapsed the same tuple boundary before serialization, which a
-	// receiver cannot recover. When separate rows do arrive, the new receiver
-	// must normalize the metadata and preserve their field boundaries.
-	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("a"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("ab"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("bc"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("c"), false, proc.Mp()))
-	partial.SetRowCount(2)
-	var extra bytes.Buffer
-	mtyp := int32(H8)
-	extra.Write(types.EncodeInt32(&mtyp))
-	nullable := false
-	extra.Write(types.EncodeBool(&nullable))
-	nAggs := int32(0)
-	extra.Write(types.EncodeInt32(&nAggs))
-	partial.ExtraBuf = extra.Bytes()
-
-	merge := newMergeGroupOp(nil)
-	t.Cleanup(func() {
-		merge.Free(proc, false, nil)
-		partial.Clean(proc.Mp())
-	})
-	require.NoError(t, merge.Prepare(proc))
-	needSpill, err := merge.buildOneBatch(proc, partial)
-	require.NoError(t, err)
-	require.False(t, needSpill)
-	require.Equal(t, int32(HStr), merge.ctr.mtyp)
-	require.Equal(t, uint64(2), merge.ctr.hr.Hash.GroupCount())
-}
-
-func TestMergeGroupKeepsLegacyShortCharH8PaddingBeforeV78(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	setGroupProtocolVersionForTest(t, proc, defines.MORPCVersion77)
-
-	charType := types.New(types.T_char, 2, 0)
-	partial := batch.NewWithSize(2)
-	partial.Vecs[0] = vector.NewVec(charType, proc.Mp())
-	partial.Vecs[1] = vector.NewVec(charType, proc.Mp())
-	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("a "), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("ab"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("bc"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("c "), false, proc.Mp()))
-	partial.SetRowCount(2)
-	var extra bytes.Buffer
-	mtyp := int32(H8)
-	extra.Write(types.EncodeInt32(&mtyp))
-	nullable := false
-	extra.Write(types.EncodeBool(&nullable))
-	nAggs := int32(0)
-	extra.Write(types.EncodeInt32(&nAggs))
-	partial.ExtraBuf = extra.Bytes()
-
-	merge := newMergeGroupOp(nil)
-	t.Cleanup(func() {
-		merge.Free(proc, false, nil)
-		partial.Clean(proc.Mp())
-	})
-	require.NoError(t, merge.Prepare(proc))
-	needSpill, err := merge.buildOneBatch(proc, partial)
-	require.NoError(t, err)
-	require.False(t, needSpill)
-	require.Equal(t, int32(H8), merge.ctr.mtyp)
-	require.Equal(t, uint64(2), merge.ctr.hr.Hash.GroupCount())
-}
-
 func TestMergeGroupKeepsLegacyLongHStrCompatibleBeforeV78(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -3581,7 +3301,7 @@ func TestMergeGroupKeepsLegacyLongHStrCompatibleBeforeV78(t *testing.T) {
 	extra.Write(types.EncodeBool(&nullable))
 	nAggs := int32(0)
 	extra.Write(types.EncodeInt32(&nAggs))
-	partial.ExtraBuf = extra.Bytes()
+	require.NoError(t, partial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 
 	merge := newMergeGroupOp(nil)
 	t.Cleanup(func() {
@@ -3669,7 +3389,7 @@ func TestMergeGroupRejectsHashMetadataIncompatibleWithVectors(t *testing.T) {
 		extra.Write(types.EncodeInt32(&mtyp))
 		extra.Write(types.EncodeBool(&nullable))
 		extra.Write(types.EncodeInt32(&nAggs))
-		partial.ExtraBuf = extra.Bytes()
+		require.NoError(t, partial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 		return partial
 	}
 	makePartial := func(vectors ...*vector.Vector) *batch.Batch {
@@ -3768,7 +3488,7 @@ func TestMergeGroupAcceptsNotNullableGroupingPartial(t *testing.T) {
 			remotePartial.Clean(proc.Mp())
 		}
 	})
-	require.NoError(t, remotePartial.UnmarshalBinaryForPipeline(wire.Bytes(), proc.Mp()))
+	require.NoError(t, remotePartial.UnmarshalBinaryWithAnyMp(wire.Bytes(), proc.Mp()))
 	partial.Clean(proc.Mp())
 	partial = remotePartial
 	remotePartial = nil
@@ -4040,7 +3760,7 @@ func TestMergeGroupHonorsCancellationAfterInput(t *testing.T) {
 	extra.Write(types.EncodeInt32(&mtyp))
 	extra.Write(types.EncodeBool(&nullable))
 	extra.Write(types.EncodeInt32(&nAggs))
-	partial.ExtraBuf = extra.Bytes()
+	require.NoError(t, partial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	proc.Ctx = ctx
@@ -4069,7 +3789,7 @@ func TestMergeGroupHonorsCancellationAfterInput(t *testing.T) {
 	freshPartial := batch.NewWithSize(1)
 	freshPartial.Vecs[0] = testutil.MakeInt32Vector([]int32{3, 1, 2}, nil, proc.Mp())
 	freshPartial.SetRowCount(3)
-	freshPartial.ExtraBuf = append(freshPartial.ExtraBuf[:0], extra.Bytes()...)
+	require.NoError(t, freshPartial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 	child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{freshPartial})
 	merge.Children = nil
 	merge.AppendChild(child)
@@ -4094,7 +3814,7 @@ func TestMergeGroupSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
 	extra.Write(types.EncodeInt32(&mtyp))
 	extra.Write(types.EncodeBool(&nullable))
 	extra.Write(types.EncodeInt32(&nAggs))
-	partial.ExtraBuf = extra.Bytes()
+	require.NoError(t, partial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 
 	ctx, cancel := context.WithCancel(baseCtx)
 	proc.Ctx = ctx
@@ -4167,7 +3887,7 @@ func TestMergeGroupRejectsAggregateStateRowCountMismatch(t *testing.T) {
 	twoRows.Clean(proc.Mp())
 	require.Len(t, partials, 2)
 
-	partials[0].ExtraBuf = append(partials[0].ExtraBuf[:0], partials[1].ExtraBuf...)
+	require.NoError(t, partials[0].SetExtraBuf(proc.Mp(), partials[1].ExtraBuf()))
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
 	require.NoError(t, merge.Prepare(proc))
 	_, err := merge.buildOneBatch(proc, partials[0])
@@ -4235,13 +3955,13 @@ func TestMergeGroupRejectsMissingOrChangedPartialMetadataAcrossSpill(t *testing.
 	first.Clean(proc.Mp())
 	second.Clean(proc.Mp())
 	require.Len(t, partials, 2)
-	require.GreaterOrEqual(t, len(partials[1].ExtraBuf), 4)
-	firstType := int32(binary.LittleEndian.Uint32(partials[0].ExtraBuf[:4]))
+	require.GreaterOrEqual(t, len(partials[1].ExtraBuf()), 4)
+	firstType := int32(binary.LittleEndian.Uint32(partials[0].ExtraBuf()[:4]))
 	changedType := int32(H8)
 	if firstType == changedType {
 		changedType = HStr
 	}
-	binary.LittleEndian.PutUint32(partials[1].ExtraBuf[:4], uint32(changedType))
+	binary.LittleEndian.PutUint32(partials[1].ExtraBuf()[:4], uint32(changedType))
 
 	merge = newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
 	merge.SpillMem = 1
@@ -4324,259 +4044,6 @@ func TestMakeAggListFreesPartialOnExtraConfigError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRemoteTextMinMaxUsesLegacyComparatorBeforeProtocolV14(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
-	require.True(t, useLegacyTextMinMaxForRemote(proc))
-
-	argType := types.New(types.T_varchar, 10, 0)
-	arg := &plan.Expr{Typ: plan.Type{
-		Id:      int32(argType.Oid),
-		Width:   argType.Width,
-		Charset: uint32(argType.Charset),
-	}}
-	ctr := &container{mp: proc.Mp(), mtyp: H0, legacyTextMinMax: true}
-	aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
-		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, []*plan.Expr{arg}, nil),
-	})
-	require.NoError(t, err)
-	defer freeAggList(aggs)
-	_, resultType := aggs[0].TypesInfo()
-	require.Equal(t, types.CharsetUTF8, resultType.Charset,
-		"compatibility comparator must not change result metadata")
-
-	vec := vector.NewVec(argType, proc.Mp())
-	defer vec.Free(proc.Mp())
-	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(vec, []byte("B"), false, proc.Mp()))
-	require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{vec}))
-	results, err := aggs[0].Flush()
-	require.NoError(t, err)
-	defer results[0].Free(proc.Mp())
-	require.Equal(t, "B", string(results[0].GetBytesAt(0)))
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
-	require.False(t, useLegacyTextMinMaxForRemote(proc))
-}
-
-func TestRemoteVarianceUsesLegacyStateBeforeProtocolV35(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion33)
-	require.True(t, useLegacyVarianceStateForRemote(proc))
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion34)
-	require.True(t, useLegacyVarianceStateForRemote(proc))
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion35)
-	require.False(t, useLegacyVarianceStateForRemote(proc))
-}
-
-func TestDecimalSumUsesLegacyStateBeforeProtocolV73(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	// The coordinator-side MergeGroup is intentionally gated too; it can read
-	// a partial emitted by an older CN even though its process is not remote.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion72)
-	require.True(t, useLegacyDecimalSumState(proc))
-	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	require.True(t, useLegacyDecimalSumState(proc))
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
-	require.False(t, useLegacyDecimalSumState(proc))
-}
-
-func TestRemoteFinalDecimalSumPreservesOldCoordinatorResult(t *testing.T) {
-	tests := []struct {
-		name      string
-		param     types.Type
-		appendOne func(*vector.Vector, *mpool.MPool) error
-	}{
-		{
-			name:  "wide decimal64",
-			param: types.New(types.T_decimal64, 18, 0),
-			appendOne: func(vec *vector.Vector, mp *mpool.MPool) error {
-				return vector.AppendFixed(vec, types.Decimal64(1), false, mp)
-			},
-		},
-		{
-			name:  "decimal128",
-			param: types.New(types.T_decimal128, 38, 0),
-			appendOne: func(vec *vector.Vector, mp *mpool.MPool) error {
-				return vector.AppendFixed(vec, types.Decimal128FromInt64(1), false, mp)
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			for _, protocol := range []struct {
-				name    string
-				version int64
-				want    types.T
-			}{
-				{name: "old coordinator v72", version: defines.MORPCVersion72, want: types.T_decimal128},
-				{name: "new coordinator v73", version: defines.MORPCVersion73, want: types.T_decimal256},
-			} {
-				t.Run(protocol.name, func(t *testing.T) {
-					proc := testutil.NewProcess(t)
-					proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-					rt := moruntime.ServiceRuntime(proc.GetService())
-					previous, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, protocol.version)
-
-					input := batch.NewWithSize(1)
-					input.Vecs[0] = vector.NewVec(test.param, proc.Mp())
-					require.NoError(t, test.appendOne(input.Vecs[0], proc.Mp()))
-					input.SetRowCount(1)
-					child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-					arg := &plan.Expr{
-						Typ:  plan.Type{Id: int32(test.param.Oid), Width: test.param.Width, Scale: test.param.Scale},
-						Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-					}
-					group := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
-						aggexec.MakeAggFunctionExpression(aggexec.AggIdOfSum, false, []*plan.Expr{arg}, nil),
-					})
-					group.AppendChild(child)
-					t.Cleanup(func() {
-						group.Free(proc, false, nil)
-						child.Free(proc, false, nil)
-						proc.Free()
-						rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
-					})
-
-					require.NoError(t, group.Prepare(proc))
-					require.True(t, group.ctr.legacyDecimalSumState == (protocol.version < defines.MORPCVersion73))
-					require.True(t, group.ctr.legacyDecimalSumResult == (protocol.version < defines.MORPCVersion73))
-					outputs := collectBatches(t, group, proc)
-					require.Len(t, outputs, 1)
-					require.Len(t, outputs[0].Vecs, 1)
-					require.Equal(t, protocol.want, outputs[0].Vecs[0].GetType().Oid)
-					switch protocol.want {
-					case types.T_decimal128:
-						require.Equal(t, "1", vector.GetFixedAtNoTypeCheck[types.Decimal128](outputs[0].Vecs[0], 0).Format(0))
-					case types.T_decimal256:
-						require.Equal(t, "1", vector.GetFixedAtNoTypeCheck[types.Decimal256](outputs[0].Vecs[0], 0).Format(0))
-					}
-				})
-			}
-		})
-	}
-}
-
-func TestRemoteApproxPercentileUsesLegacyStateBeforeProtocolV76(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
-	require.True(t, useLegacyApproxPercentileStateForRemote(proc))
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
-	require.True(t, useLegacyApproxPercentileStateForRemote(proc))
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
-	require.True(t, useLegacyApproxPercentileStateForRemote(proc),
-		"v74 HEX peers must keep the legacy approx_percentile state")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
-	require.True(t, useLegacyApproxPercentileStateForRemote(proc))
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
-	require.False(t, useLegacyApproxPercentileStateForRemote(proc))
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
-	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)}}
-	ctr := &container{
-		mp:                          proc.Mp(),
-		mtyp:                        H0,
-		legacyApproxPercentileState: useLegacyApproxPercentileStateForRemote(proc),
-	}
-	aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
-		aggexec.MakeAggFunctionExpression(
-			aggexec.AggIdOfApproxPercentile, false, []*plan.Expr{arg}, []byte("0")),
-	})
-	require.NoError(t, err)
-	defer freeAggList(aggs)
-	values := vector.NewVec(types.T_float32.ToType(), proc.Mp())
-	defer values.Free(proc.Mp())
-	require.NoError(t, vector.AppendFixed(values, float32(1), false, proc.Mp()))
-	require.NoError(t, vector.AppendFixed(values, float32(math.NaN()), false, proc.Mp()))
-	require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
-	results, err := aggs[0].Flush()
-	require.NoError(t, err)
-	defer results[0].Free(proc.Mp())
-	require.True(t, math.IsNaN(vector.GetFixedAtNoTypeCheck[float64](results[0], 0)))
-}
-
-func TestRemoteDistinctFloatUsesProtocolKeyPolicy(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}}
-	for _, tc := range []struct {
-		name       string
-		version    int64
-		legacyWire bool
-		wantBits   uint64
-	}{
-		{
-			name:       "pre-v79",
-			version:    defines.MORPCVersion78,
-			legacyWire: true,
-			wantBits:   0x7ff8000000000001,
-		},
-		{
-			name:       "v79",
-			version:    defines.MORPCVersion79,
-			legacyWire: false,
-			wantBits:   0x7ff8000000000000,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.version)
-			legacyWire := !canonicalDistinctKeyWireEnabled(proc)
-			require.Equal(t, tc.legacyWire, legacyWire)
-			ctr := &container{
-				mp:                      proc.Mp(),
-				mtyp:                    H8,
-				legacyDistinctFloatKeys: legacyWire,
-			}
-			aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
-				aggexec.MakeAggFunctionExpression(
-					aggexec.AggIdOfCountColumn, true, []*plan.Expr{arg}, nil),
-			})
-			require.NoError(t, err)
-			require.Equal(t, !tc.legacyWire,
-				aggexec.RequiresModernDistinctFloatKeyWire(aggs[0]))
-			require.NoError(t, aggs[0].GroupGrow(aggexec.AggBatchSize/8))
-
-			values := testutil.NewFloat64Vector(
-				1, types.T_float64.ToType(), proc.Mp(), false, nil,
-				[]float64{math.Float64frombits(0x7ff8000000000001)})
-			require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
-			var wire bytes.Buffer
-			require.NoError(t, aggs[0].SaveIntermediateResultOfChunk(0, &wire))
-			got := binary.LittleEndian.Uint64(wire.Bytes()[20:28])
-			require.Equal(t, tc.wantBits, got)
-
-			values.Free(proc.Mp())
-			freeAggList(aggs)
-		})
-	}
-}
-
 func TestRemoteDistinctFloatLegacyStateKeepsLegacyWireAfterGateAdvance(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
@@ -4645,349 +4112,17 @@ func TestRemoteDistinctFloatLegacyStateKeepsLegacyWireAfterGateAdvance(t *testin
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
-func TestRemoteDistinctFloatDowngradeRejectsModernState(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	previous, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	require.True(t, ok)
-	t.Cleanup(func() {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
-		proc.Free()
-	})
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion79)
-	input := batch.NewWithSize(1)
-	input.Vecs[0] = testutil.NewFloat64Vector(
-		1, types.T_float64.ToType(), proc.Mp(), false, nil,
-		[]float64{math.Float64frombits(0x7ff8000000000001)})
-	input.SetRowCount(1)
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	group := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
-		aggexec.MakeAggFunctionExpression(
-			aggexec.AggIdOfCountColumn,
-			true,
-			[]*plan.Expr{colExpr(0, types.T_float64)},
-			nil,
-		),
-	})
-	group.NeedEval = false
-	group.AppendChild(child)
-	t.Cleanup(func() {
-		group.Free(proc, false, nil)
-		child.Free(proc, false, nil)
-		require.Zero(t, proc.Mp().CurrNB())
-	})
-
-	require.NoError(t, group.Prepare(proc))
-	require.Len(t, group.ctr.aggList, 1)
-	require.True(t,
-		aggexec.RequiresModernDistinctFloatKeyWire(group.ctr.aggList[0]))
-	// The state was admitted while the deployment gate was new. A later
-	// capability downgrade must fail at the partial-output boundary instead of
-	// sending a canonicalized state to a legacy receiver.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion78)
-	result, err := vm.Exec(group, proc)
-	require.Nil(t, result.Batch)
-	require.ErrorContains(t, err, "requires MORPCVersion79")
-}
-
-func TestRemoteHLLStateRetainsCompatibilityAcrossProtocolVersions(t *testing.T) {
+// GROUP_CONCAT partials carry source rows only when the statement trusts
+// their provenance.
+func TestGroupConcatSourceRowWire(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	scalarArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)}}
-	vectorArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_array_float32)}}
-	makeVersion := func(aggID int64, arg *plan.Expr) byte {
-		ctr := &container{
-			mp:                     proc.Mp(),
-			mtyp:                   H0,
-			legacyHLLState:         useLegacyHLLStateForRemote(proc),
-			floatZeroHLLState:      useFloatZeroHLLStateForRemote(proc),
-			legacyVectorHLLState:   useLegacyVectorHLLStateForRemote(proc),
-			legacyTextHLLAddState:  useLegacyTextHLLAddStateForRemote(proc),
-			legacyFloatHLLAddState: useLegacyFloatHLLAddStateForRemote(proc),
-		}
-		aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
-			aggexec.MakeAggFunctionExpression(
-				aggID, false, []*plan.Expr{arg}, nil),
-		})
-		require.NoError(t, err)
-		values := vector.NewVec(types.T(arg.Typ.Id).ToType(), proc.Mp())
-		if types.T(arg.Typ.Id) == types.T_array_float32 {
-			require.NoError(t, vector.AppendBytes(values,
-				types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}),
-				false, proc.Mp()))
-		} else {
-			require.NoError(t, vector.AppendFixed(
-				values, float32(math.Copysign(0, -1)), false, proc.Mp()))
-		}
-		require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
-		var intermediate bytes.Buffer
-		require.NoError(t, aggs[0].SaveIntermediateResultOfChunk(0, &intermediate))
-		wire := intermediate.Bytes()
-		require.GreaterOrEqual(t, len(wire), 21)
-		stateSize := int(binary.LittleEndian.Uint32(wire[16:20]))
-		require.GreaterOrEqual(t, len(wire), 20+stateSize)
-		version := wire[20]
-		values.Free(proc.Mp())
-		freeAggList(aggs)
-		return version
-	}
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
-	require.True(t, useLegacyHLLStateForRemote(proc))
-	require.True(t, useLegacyVectorHLLStateForRemote(proc))
-	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
-		"pre-v76 peers must receive the raw-value v2 HLL state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
-		"pre-v88 peers must receive the raw-value vector HLL state")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
-	require.True(t, useLegacyHLLStateForRemote(proc),
-		"v73 peers must receive a compatibility HLL state")
-	require.True(t, useLegacyVectorHLLStateForRemote(proc))
-	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
-		"v73 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
-		"v73 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
-	require.True(t, useLegacyHLLStateForRemote(proc),
-		"v74 peers must receive a compatibility HLL state")
-	require.True(t, useLegacyVectorHLLStateForRemote(proc))
-	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfApproxCount, scalarArg),
-		"v74 peers must receive the base-compatible v2 APPROX_COUNT state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
-		"v74 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
-		"v74 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
-	require.True(t, useLegacyHLLStateForRemote(proc))
-	require.True(t, useLegacyVectorHLLStateForRemote(proc))
-	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfApproxCount, scalarArg),
-		"v75 peers must receive the raw-value v2 APPROX_COUNT state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
-		"v75 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
-		"v75 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
-	require.True(t, useLegacyHLLStateForRemote(proc))
-	require.True(t, useLegacyVectorHLLStateForRemote(proc))
-	require.True(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(3), makeVersion(aggexec.AggIdOfApproxCount, scalarArg),
-		"v76 peers must receive the signed-zero-compatible APPROX_COUNT state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
-		"v76 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
-		"v76 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion77)
-	require.False(t, useLegacyHLLStateForRemote(proc))
-	require.True(t, useLegacyVectorHLLStateForRemote(proc))
-	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(4), makeVersion(aggexec.AggIdOfApproxCount, scalarArg),
-		"v77 peers may receive the typed-key v4 APPROX_COUNT state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
-		"persisted HLL_ADD_AGG must retain the raw-value v2 state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
-		"v77 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
-	require.True(t, useLegacyVectorHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
-		"v87 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion88)
-	require.False(t, useLegacyVectorHLLStateForRemote(proc))
-	require.Equal(t, byte(4), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
-		"v88 peers may receive the canonical vector HLL state")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion91)
-	require.True(t, useLegacyFloatHLLAddStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
-		"v91 peers must keep scalar FLOAT HLL_ADD_AGG on the raw-value v2 state")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion92)
-	require.False(t, useLegacyFloatHLLAddStateForRemote(proc))
-	require.Equal(t, byte(4), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
-		"v92 peers may receive the canonical scalar FLOAT HLL state")
-}
-
-func TestRemoteCanonicalHLLAddStateGate(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	jsonValue, err := types.ParseStringToByteJson("1.0")
-	require.NoError(t, err)
-	jsonBytes, err := types.EncodeJson(jsonValue)
-	require.NoError(t, err)
-	for _, tc := range []struct {
-		name  string
-		typ   types.Type
-		value []byte
-	}{
-		{name: "char", typ: types.New(types.T_char, 4, 0), value: []byte("a ")},
-		{name: "json", typ: types.T_json.ToType(), value: jsonBytes},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			for _, version := range []struct {
-				protocol int64
-				wire     byte
-			}{
-				{protocol: defines.MORPCVersion88, wire: 2},
-				{protocol: defines.MORPCVersion90, wire: 2},
-				{protocol: defines.MORPCVersion91, wire: 4},
-			} {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version.protocol)
-				arg := &plan.Expr{Typ: plan.Type{
-					Id:    int32(tc.typ.Oid),
-					Width: tc.typ.Width,
-					Scale: tc.typ.Scale,
-				}}
-				ctr := &container{
-					mp:                    proc.Mp(),
-					mtyp:                  H0,
-					legacyTextHLLAddState: useLegacyTextHLLAddStateForRemote(proc),
-				}
-				aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
-					aggexec.MakeAggFunctionExpression(
-						aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
-				})
-				require.NoError(t, err)
-				values := vector.NewVec(tc.typ, proc.Mp())
-				require.NoError(t, vector.AppendBytes(values, tc.value, false, proc.Mp()))
-				require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
-				var intermediate bytes.Buffer
-				require.NoError(t, aggs[0].SaveIntermediateResultOfChunk(0, &intermediate))
-				wireData := intermediate.Bytes()
-				require.GreaterOrEqual(t, len(wireData), 21)
-				require.Equal(t, version.wire, wireData[20])
-				values.Free(proc.Mp())
-				freeAggList(aggs)
-			}
-		})
-	}
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion90)
-	// The aggregate expression is exercised above with real input vectors. Keep
-	// this lifecycle check expression-free: a synthetic CHAR argument without a
-	// column reference cannot be prepared by the expression executor.
-	group := newGroupOp(proc, nil, nil)
-	require.NoError(t, group.Prepare(proc))
-	require.True(t, group.ctr.legacyTextHLLAddState,
-		"Group.Prepare must apply the pre-v91 CHAR/JSON HLL_ADD compatibility mode")
-	group.Free(proc, false, nil)
-
-	merge := newMergeGroupOp(nil)
-	require.NoError(t, merge.Prepare(proc))
-	require.True(t, merge.ctr.legacyTextHLLAddState,
-		"MergeGroup.Prepare must apply the pre-v91 CHAR/JSON HLL_ADD compatibility mode")
-	merge.Free(proc, false, nil)
-}
-
-func TestRemoteFloatHLLAddStateGate(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	for _, typ := range []types.Type{types.T_float32.ToType(), types.T_float64.ToType()} {
-		for _, version := range []struct {
-			protocol int64
-			wire     byte
-		}{
-			{protocol: defines.MORPCVersion91, wire: 2},
-			{protocol: defines.MORPCVersion92, wire: 4},
-		} {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version.protocol)
-			arg := &plan.Expr{Typ: plan.Type{Id: int32(typ.Oid)}}
-			ctr := &container{
-				mp:                     proc.Mp(),
-				mtyp:                   H0,
-				legacyFloatHLLAddState: useLegacyFloatHLLAddStateForRemote(proc),
-			}
-			aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
-				aggexec.MakeAggFunctionExpression(
-					aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
-			})
-			require.NoError(t, err)
-			values := vector.NewVec(typ, proc.Mp())
-			if typ.Oid == types.T_float32 {
-				require.NoError(t, vector.AppendFixedList(values,
-					[]float32{0, float32(math.Copysign(0, -1))}, nil, proc.Mp()))
-			} else {
-				require.NoError(t, vector.AppendFixedList(values,
-					[]float64{0, math.Copysign(0, -1)}, nil, proc.Mp()))
-			}
-			require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
-			var intermediate bytes.Buffer
-			require.NoError(t, aggs[0].SaveIntermediateResultOfChunk(0, &intermediate))
-			require.Equal(t, version.wire, intermediate.Bytes()[20])
-			values.Free(proc.Mp())
-			freeAggList(aggs)
-		}
-	}
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion91)
-	group := newGroupOp(proc, nil, nil)
-	require.NoError(t, group.Prepare(proc))
-	require.True(t, group.ctr.legacyFloatHLLAddState)
-	group.Free(proc, false, nil)
-
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion92)
-	group = newGroupOp(proc, nil, nil)
-	require.NoError(t, group.Prepare(proc))
-	require.False(t, group.ctr.legacyFloatHLLAddState)
-	group.Free(proc, false, nil)
-}
-
-func TestLegacyHLLStateRequiresRemoteProcess(t *testing.T) {
-	require.False(t, useLegacyHLLStateForRemote(nil))
-	require.False(t, useLegacyVectorHLLStateForRemote(nil))
-	require.False(t, useLegacyTextHLLAddStateForRemote(nil))
-	require.False(t, useLegacyFloatHLLAddStateForRemote(nil))
-	require.False(t, useLegacyApproxPercentileStateForRemote(nil))
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	require.False(t, useLegacyHLLStateForRemote(proc))
-	require.False(t, useLegacyVectorHLLStateForRemote(proc))
-	require.False(t, useLegacyTextHLLAddStateForRemote(proc))
-	require.False(t, useLegacyFloatHLLAddStateForRemote(proc))
-}
-
-func TestGroupConcatSourceRowProtocolGates(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	for _, test := range []struct {
-		name           string
-		version        int64
-		payloadEnabled bool
-		markerEnabled  bool
-	}{
-		{name: "legacy v64", version: defines.MORPCVersion64},
-		{name: "ascii v65", version: defines.MORPCVersion65},
-		{name: "group concat v66", version: defines.MORPCVersion66, payloadEnabled: true, markerEnabled: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
-			proc.SetGroupConcatSourceRowProvenanceTrusted(true)
-			require.Equal(t, test.payloadEnabled, groupConcatSourceRowWireEnabled(proc))
-			require.Equal(t, test.markerEnabled, groupConcatSourceRowProvenanceWireEnabled(proc))
-
-			proc.SetGroupConcatSourceRowProvenanceTrusted(false)
-			require.False(t, groupConcatSourceRowWireEnabled(proc),
-				"independent producers must not send source ordinals")
-			require.Equal(t, test.markerEnabled, groupConcatSourceRowProvenanceWireEnabled(proc),
-				"remote producers still need the v66 trust marker")
-		})
-	}
+	proc.SetGroupConcatSourceRowProvenanceTrusted(true)
+	require.True(t, groupConcatSourceRowWireEnabled(proc))
+	proc.SetGroupConcatSourceRowProvenanceTrusted(false)
+	require.False(t, groupConcatSourceRowWireEnabled(proc),
+		"independent producers must not send source ordinals")
+	require.False(t, groupConcatSourceRowWireEnabled(nil))
 }
 
 func TestJSONMinMaxGroupAndMergeGroupPhysicalSpillReload(t *testing.T) {

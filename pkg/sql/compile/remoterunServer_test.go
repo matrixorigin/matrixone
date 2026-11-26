@@ -995,7 +995,7 @@ func TestMessageReceiverSendBatchCarriesStaticBinaryType(t *testing.T) {
 	require.NotNil(t, sent)
 	decoded := batch.NewWithSize(0)
 	defer decoded.Clean(mp)
-	require.NoError(t, decoded.UnmarshalBinaryWithMetadata(sent.Data, mp))
+	require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(sent.Data, mp))
 	require.Equal(t, types.T_varbinary, decoded.Vecs[0].GetType().Oid)
 	require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(*decoded.Vecs[0].GetType()))
 	require.Equal(t, "raw", decoded.Vecs[0].GetStringAt(0))

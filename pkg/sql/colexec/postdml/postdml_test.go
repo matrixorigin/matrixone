@@ -60,8 +60,8 @@ func TestFullText(t *testing.T) {
 	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).AnyTimes()
 
 	relation := mock_frontend.NewMockRelation(ctrl)
-	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	relation.EXPECT().Write(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
 
@@ -224,7 +224,7 @@ func TestAuditFullTextStringKeyPreservesQuotedLiteral(t *testing.T) {
 				ctr: container{},
 			}
 
-			bat := batch.New([]string{"pk"})
+			bat := batch.NewWithSize(1)
 			bat.Vecs[0] = testutil.MakeVarcharVector([]string{tc.pk}, nil, proc.Mp())
 			bat.SetRowCount(1)
 

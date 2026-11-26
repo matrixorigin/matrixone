@@ -59,13 +59,12 @@ func TestTableMetaReaderMaterializesVisibleRows(t *testing.T) {
 	appendDelete := func(tableID uint64, id types.Rowid, key int64) {
 		b := batch.NewWithSize(2)
 		t.Cleanup(func() { b.Clean(txn.workspaceMP()) })
-		b.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
 		b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 		b.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(b.Vecs[0], id, false, mp))
 		require.NoError(t, vector.AppendFixed(b.Vecs[1], key, false, mp))
 		b.SetRowCount(1)
-		appendWorkspaceEntryForTest(t, txn, Entry{typ: DELETE, accountId: 1, databaseId: tbl.db.databaseId, tableId: tableID, databaseName: "db", tableName: "r32tbl", bat: b})
+		appendWorkspaceEntryForTest(t, txn, Entry{typ: DELETE, accountId: 1, databaseId: tbl.db.databaseId, tableId: tableID, databaseName: "db", tableName: "r32tbl", bat: b, attrs: []string{objectio.PhysicalAddr_Attr, "a"}})
 	}
 	materialize := func(offset int) []int64 {
 		r := &TableMetaReader{table: tbl, fs: fs, snapshot: types.BuildTS(2, 0), txnOffset: offset, pState: state, sinkerOption: txn.SinkerCapacityOption()}
@@ -192,7 +191,6 @@ func TestTableMetaReaderMaterializesAppendableVisibility(t *testing.T) {
 	del := batch.NewWithSize(2)
 	// The workspace entry adopts del (see appendWorkspaceEntryForTest).
 	defer func() { del.Clean(txn.workspaceMP()) }()
-	del.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
 	del.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	del.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(del.Vecs[0], id, false, mp))
@@ -200,7 +198,7 @@ func TestTableMetaReaderMaterializesAppendableVisibility(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(del.Vecs[0], sharedID, false, mp))
 	require.NoError(t, vector.AppendFixed(del.Vecs[1], int64(1), false, mp))
 	del.SetRowCount(2)
-	appendWorkspaceEntryForTest(t, txn, Entry{typ: DELETE, accountId: 1, databaseId: tbl.db.databaseId, tableId: r32TableID, databaseName: "db", tableName: "r32tbl", bat: del})
+	appendWorkspaceEntryForTest(t, txn, Entry{typ: DELETE, accountId: 1, databaseId: tbl.db.databaseId, tableId: r32TableID, databaseName: "db", tableName: "r32tbl", bat: del, attrs: []string{objectio.PhysicalAddr_Attr, "a"}})
 	state := newTestMaterializedSnapshotPartitionState(t, mp, nil)
 	require.NoError(t, state.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{ObjectStats: stats, CreateTime: types.BuildTS(1, 0)}, false))
 	require.NoError(t, state.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{ObjectStats: shared, CreateTime: types.BuildTS(1, 0)}, false))

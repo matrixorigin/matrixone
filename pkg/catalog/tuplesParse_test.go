@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -38,9 +39,10 @@ func TestGenCreateTableTuplePreservesExplicitCreatedTime(t *testing.T) {
 		vector.MustFixedColNoTypeCheck[types.Timestamp](bat.Vecs[MO_TABLES_CREATED_TIME_IDX])[0])
 }
 
-func mustToPBBatch(bat *batch.Batch) *api.Batch {
+func mustToPBBatch(bat *batch.Batch, attrs []string) *api.Batch {
 	rbat := new(api.Batch)
-	rbat.Attrs = bat.Attrs
+	// Tests mutate the names; never alias the shared schema slices.
+	rbat.Attrs = slices.Clone(attrs)
 	for _, vec := range bat.Vecs {
 		pbVector, err := vector.VectorToProtoVector(vec)
 		if err != nil {
@@ -66,7 +68,7 @@ func TestParseError(t *testing.T) {
 			EntryType:  api.Entry_Alter,
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    MO_TABLES_ID,
-			Bat:        mustToPBBatch(bat1),
+			Bat:        mustToPBBatch(bat1, MoTablesSchema),
 		}
 		_, _, err := ParseEntryList([]*api.Entry{e})
 		t.Log(err)
@@ -90,7 +92,7 @@ func TestParseError(t *testing.T) {
 			EntryType:  api.Entry_Insert,
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    MO_COLUMNS_ID,
-			Bat:        mustToPBBatch(bat2),
+			Bat:        mustToPBBatch(bat2, MoColumnsSchema),
 		}
 
 		_, _, err := ParseEntryList([]*api.Entry{e2})
@@ -103,7 +105,7 @@ func TestParseError(t *testing.T) {
 			EntryType:  api.Entry_Insert,
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    MO_TABLES_ID,
-			Bat:        mustToPBBatch(bat1),
+			Bat:        mustToPBBatch(bat1, MoTablesSchema),
 		}
 		typ := types.T_int64.ToType()
 		typBytes, _ := types.Encode(&typ)
@@ -124,7 +126,7 @@ func TestParseError(t *testing.T) {
 			EntryType:  api.Entry_Insert,
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    100000, // bad target table id
-			Bat:        mustToPBBatch(bat2),
+			Bat:        mustToPBBatch(bat2, MoColumnsSchema),
 		}
 		_, _, err := ParseEntryList([]*api.Entry{e1, e2})
 		require.Error(t, err) // mismatched column batch
@@ -142,7 +144,7 @@ func TestParseError(t *testing.T) {
 			EntryType:  api.Entry_Insert,
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    MO_COLUMNS_ID,
-			Bat:        mustToPBBatch(bat2),
+			Bat:        mustToPBBatch(bat2, MoColumnsSchema),
 		}
 		_, _, err = ParseEntryList([]*api.Entry{e1, e3})
 		t.Log(err)
@@ -181,7 +183,6 @@ func TestGenRowsGeometry(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{"g"}
 	vec := vector.NewVec(types.T_geometry.ToType(), mp)
 	require.NoError(t, vector.AppendBytesList(vec, [][]byte{
 		[]byte("POINT(1 1)"),
@@ -205,14 +206,16 @@ func TestParseDatabaseEntryRejectsMalformedTuple(t *testing.T) {
 		t.Helper()
 		var bat *batch.Batch
 		var err error
+		attrs := DropDatabaseTupleAttrs
 		if kind == api.Entry_Insert {
+			attrs = MoDatabaseSchema
 			bat, err = GenCreateDatabaseTuple("", 0, 0, 0, "catalog_guard_database_long_name", 123, "", m, packer)
 		} else {
 			bat, err = GenDropDatabaseTuple(types.Rowid{}, 0, 123, "catalog_guard_database_long_name", m, packer)
 		}
 		require.NoError(t, err)
 		defer bat.Clean(m)
-		protoBatch := mustToPBBatch(bat)
+		protoBatch := mustToPBBatch(bat, attrs)
 		for i := range protoBatch.Vecs {
 			v := &protoBatch.Vecs[i]
 			v.Data = append([]byte(nil), v.Data...)

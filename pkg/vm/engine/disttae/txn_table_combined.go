@@ -72,25 +72,6 @@ func (t *combinedTxnTable) CreatedInCurrentTxn(ctx context.Context) (bool, error
 	return t.primary.CreatedInCurrentTxn(ctx)
 }
 
-func (t *combinedTxnTable) HasUncommittedData() (bool, error) {
-	if t.primary.hasUncommittedData() {
-		return true, nil
-	}
-	tables, err := t.tablesFunc()
-	if err != nil {
-		return false, err
-	}
-	for _, table := range tables {
-		if workspace, ok := table.(engine.RelationWithUncommittedData); ok {
-			has, err := workspace.HasUncommittedData()
-			if err != nil || has {
-				return has, err
-			}
-		}
-	}
-	return false, nil
-}
-
 func filterNilRelations(relations []engine.Relation) []engine.Relation {
 	for i, rel := range relations {
 		if rel == nil {
@@ -1005,7 +986,6 @@ func appendChangesAtCommitTS(dst **batch.Batch, src **batch.Batch, offset *int, 
 
 func newChangeBatch(src *batch.Batch, mp *mpool.MPool) *batch.Batch {
 	dst := batch.NewWithSize(len(src.Vecs))
-	dst.Attrs = append(dst.Attrs, src.Attrs...)
 	for i, vec := range src.Vecs {
 		dst.Vecs[i] = vector.NewVec(*vec.GetType(), mp)
 	}
@@ -1052,6 +1032,22 @@ func (t *combinedTxnTable) CollectObjectList(
 	mp *mpool.MPool,
 ) error {
 	panic("not implemented")
+}
+
+func (t *combinedTxnTable) VisibleObjectCount(ctx context.Context) (int, error) {
+	tables, err := t.tablesFunc()
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, rel := range tables {
+		n, err := rel.VisibleObjectCount(ctx)
+		if err != nil {
+			return 0, err
+		}
+		count += n
+	}
+	return count, nil
 }
 
 func (t *combinedTxnTable) ApproxObjectsNum(ctx context.Context) int {
@@ -1186,11 +1182,11 @@ func (t *combinedTxnTable) PrimaryKeysMayBeModified(
 	return changed, err
 }
 
-func (t *combinedTxnTable) Write(context.Context, *batch.Batch) error {
+func (t *combinedTxnTable) Write(context.Context, *batch.Batch, []string) error {
 	panic("BUG: cannot write data to partition primary table")
 }
 
-func (t *combinedTxnTable) Delete(context.Context, *batch.Batch, string) error {
+func (t *combinedTxnTable) Delete(context.Context, *batch.Batch, []string, string) error {
 	panic("BUG: cannot delete data to partition primary table")
 }
 

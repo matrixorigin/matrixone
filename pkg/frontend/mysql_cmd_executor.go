@@ -4224,7 +4224,7 @@ func parseExplainBool(value string) (bool, bool) {
 }
 
 func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill outputCallBackFunc) error {
-	bat := batch.New([]string{explainColName})
+	bat := batch.NewWithSize(1)
 	rs := buffer.Lines
 	vs := make([][]byte, len(rs))
 
@@ -4258,7 +4258,7 @@ func buildMoExplainPhyPlan(
 	fill outputCallBackFunc,
 	trace schedule.Trace,
 ) error {
-	bat := batch.New([]string{explainColName})
+	bat := batch.NewWithSize(1)
 	vs := make([][]byte, 0)
 	count := 0
 	for {
@@ -4552,9 +4552,9 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		}
 		for i := range p.Query.Nodes {
 			node := p.Query.Nodes[i]
-			// table_changes has a synthetic output schema. Its source is
-			// validated through CatalogDependencies below.
-			if def := node.TableDef; def != nil && !isTableChangesScan(node) {
+			// Source-resolving functions expose a synthetic output schema. Their
+			// source versions are validated through CatalogDependencies below.
+			if def := node.TableDef; def != nil && !plan2.IsSourceResolvingTableFunction(node) {
 				flag, err := checkFn(node.ObjRef, def, node.ScanSnapshot)
 				if err != nil || flag {
 					return true, err
@@ -6431,9 +6431,6 @@ func executeStmt(ses *Session,
 		ses.SetShowStmtType(ShowTableStatus)
 		ses.SetData(nil)
 	case *tree.ShowGrants:
-		if len(st.Username) == 0 {
-			st.Username = execCtx.userName
-		}
 		if len(st.Hostname) == 0 || st.Hostname == "%" {
 			st.Hostname = rootHost
 		}

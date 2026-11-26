@@ -250,7 +250,7 @@ func TestMongoScanExplicitFilterUsesFindAndPopulatesQueryColumn(t *testing.T) {
 	require.NotNil(t, result.Batch)
 	require.Equal(t, int64(11), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 0))
 	require.Equal(t, source, result.Batch.Vecs[1].GetStringAt(0))
-	require.Equal(t, []string{"value", "__mo_query"}, result.Batch.Attrs)
+	require.Len(t, result.Batch.Vecs, 2)
 	require.Len(t, collection.findSpecs, 1)
 	require.Empty(t, collection.aggregateSpecs)
 	filter, ok := collection.findSpecs[0].Filter.(bson.D)

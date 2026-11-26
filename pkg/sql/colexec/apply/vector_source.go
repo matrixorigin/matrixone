@@ -121,7 +121,6 @@ func (s *vectorSource) ApplyCall(proc *process.Process) (vm.CallResult, error) {
 	}
 	if s.output == nil {
 		s.output = batch.NewWithSize(len(s.attrs))
-		s.output.Attrs = append(s.output.Attrs, s.attrs...)
 		for i := range s.types {
 			s.output.Vecs[i] = vector.NewVec(s.types[i], proc.Mp())
 		}

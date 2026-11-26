@@ -317,7 +317,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			}
 			if _, err := txn.WriteBatch(
 				DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-				catalog.MO_CATALOG, catalog.MO_TABLES, bat, txn.tnStores[0]); err != nil {
+				catalog.MO_CATALOG, catalog.MO_TABLES, bat, catalog.DropTableTupleAttrs, txn.tnStores[0]); err != nil {
 				return err
 			}
 		}
@@ -351,7 +351,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			}
 			if _, err = txn.WriteBatch(
 				DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, txn.tnStores[0]); err != nil {
+				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, catalog.DropColumnTuplesAttrs, txn.tnStores[0]); err != nil {
 				return err
 			}
 		}
@@ -575,7 +575,7 @@ func (db *txnDatabase) createWithID(
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
 		}
 		_, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat, txn.tnStores[0])
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, catalog.MoTablesSchema, txn.tnStores[0])
 		if err != nil {
 			return err
 		}
@@ -595,7 +595,7 @@ func (db *txnDatabase) createWithID(
 		}
 		_, err = txn.WriteBatch(
 			INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, txn.tnStores[0])
+			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, catalog.MoColumnsSchema, txn.tnStores[0])
 		if err != nil {
 			return err
 		}
@@ -768,7 +768,7 @@ func (db *txnDatabase) syncLogicalIdIndexInsert(
 	note := fmt.Sprintf("sync logical_id index insert %d", logicalId)
 	_, err = txn.WriteBatch(
 		INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME, bat, txn.tnStores[0])
+		catalog.MO_CATALOG, catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME, bat, catalog.LogicalIdIndexInsertAttrs, txn.tnStores[0])
 	return err
 }
 
@@ -815,7 +815,7 @@ func (db *txnDatabase) syncLogicalIdIndexDelete(
 		note := fmt.Sprintf("sync logical_id index delete %d", logicalId)
 		if _, err = txn.WriteBatch(
 			DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME, bat, txn.tnStores[0]); err != nil {
+			catalog.MO_CATALOG, catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME, bat, catalog.LogicalIdIndexDeleteAttrs, txn.tnStores[0]); err != nil {
 			return err
 		}
 	}

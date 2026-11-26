@@ -50,8 +50,8 @@ func TestInsertIndexMetadata(t *testing.T) {
 
 	indexes_relation := mock_frontend.NewMockRelation(ctrl)
 	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
-	indexes_relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	indexes_relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	indexes_relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	indexes_relation.EXPECT().Write(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, b, c interface{}, bat *batch.Batch) (bool, error) {
@@ -142,8 +142,8 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 
 	indexes_relation := mock_frontend.NewMockRelation(ctrl)
 	indexes_relation.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
-	indexes_relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	indexes_relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	indexes_relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	indexes_relation.EXPECT().Write(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Close().Return(nil).AnyTimes()
@@ -251,7 +251,8 @@ func TestBuildInsertIndexMetaBatchUsesExistingMoIndexesLayout(t *testing.T) {
 		MO_INDEX_OPTIONS,
 		MO_INDEX_TABLE_NAME,
 		MO_INDEX_PRIKEY,
-	}, bat.Attrs)
+	}, InsertIndexMetaAttrs)
+	require.Len(t, bat.Vecs, len(InsertIndexMetaAttrs))
 	require.Equal(t, 1, bat.RowCount())
 	require.Equal(t, [][]byte{[]byte(`{"included_columns":"title,category","lists":"2","op_type":"vector_l2_ops"}`)}, vector.InefficientMustBytesCol(bat.Vecs[7]))
 	require.Equal(t, []int8{1}, vector.MustFixedColWithTypeCheck[int8](bat.Vecs[8]))

@@ -797,7 +797,7 @@ func readClusterTaeRange(
 
 	attrs := []string{"tenant_id", "device_id", "metric_id", "event_ts", "value"}
 	out := batch.NewWithSize(len(attrs))
-	out.Attrs = attrs
+	outAttrs := attrs
 	for i := range attrs {
 		switch attrs[i] {
 		case "tenant_id", "device_id", "metric_id":
@@ -813,7 +813,7 @@ func readClusterTaeRange(
 	res := realClusterReadResult{}
 	for {
 		out.CleanOnlyData()
-		isEnd, err := reader.Read(qryCtx, out.Attrs, nil, mp, out)
+		isEnd, err := reader.Read(qryCtx, outAttrs, nil, mp, out)
 		require.NoError(t, err)
 		if isEnd {
 			break

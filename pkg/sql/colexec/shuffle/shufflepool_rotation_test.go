@@ -36,7 +36,7 @@ func smallShuffleRetryFixture(t *testing.T) (*process.Process, *ShufflePool, *ba
 		defer proc.Free()
 		require.Zero(t, mp.CurrNB())
 	})
-	input := batch.NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, mp)
+	input := batch.NewWithTypes([]types.Type{types.T_int64.ToType()}, mp)
 	t.Cleanup(func() { input.Clean(mp) })
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}, nil, mp))
 	input.SetRowCount(14)

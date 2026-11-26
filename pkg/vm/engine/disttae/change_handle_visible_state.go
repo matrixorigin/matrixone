@@ -650,7 +650,6 @@ func (h *VisibleStateChangesHandle) normalizeOutput(data, tombstone *batch.Batch
 
 func newVisibleStateScanBatch(scan *visibleStateSnapshotScan, mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(scan.attrs))
-	bat.SetAttributes(scan.attrs)
 	for i := range scan.attrs {
 		bat.Vecs[i] = vector.NewVec(scan.types[i], mp)
 	}
@@ -667,7 +666,6 @@ func (h *VisibleStateChangesHandle) newDataBatch() *batch.Batch {
 	attrs = append(attrs, h.dataAttrs...)
 	attrs = append(attrs, objectio.DefaultCommitTS_Attr)
 	bat := batch.NewWithSize(len(attrs))
-	bat.SetAttributes(attrs)
 	if h.retainRowID {
 		bat.Vecs[0] = vector.NewVec(h.rowIDType, h.mp)
 	}
@@ -684,7 +682,6 @@ func (h *VisibleStateChangesHandle) newTombstoneBatch() *batch.Batch {
 		attrs = append([]string{catalog.Row_ID}, attrs...)
 	}
 	bat := batch.NewWithSize(len(attrs))
-	bat.SetAttributes(attrs)
 	idx := 0
 	if h.retainRowID {
 		bat.Vecs[0] = vector.NewVec(h.rowIDType, h.mp)

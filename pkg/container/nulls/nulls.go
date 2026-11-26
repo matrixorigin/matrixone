@@ -196,7 +196,8 @@ func (nsp *Nulls) GetBitmap() (res *bitmap.Bitmap) {
 
 // Or performs union operation on Nulls nsp,m and store the result in r.
 // r keeps its own rows, except that when nsp and m are both empty, r is
-// reset to length 0. r may alias nsp or m.
+// cleared. Its length and storage are kept, so a result that reserved its
+// validity can still set NULL rows in place afterwards. r may alias nsp or m.
 // @ requires r != nil && r.np.Inv()
 // @ requires nsp != nil && nsp != r ==> acc(nsp.np.Inv(), 1/2)
 // @ requires m != nil && m != r ==> acc(m.np.Inv(), 1/2)
@@ -205,14 +206,13 @@ func (nsp *Nulls) GetBitmap() (res *bitmap.Bitmap) {
 // @ ensures m != nil && m != r ==> acc(m.np.Inv(), 1/2)
 // @ ensures nsp != r ==> forall x int :: {nsp.Has(x)} nsp.Has(x) == old(nsp.Has(x))
 // @ ensures m != r ==> forall x int :: {m.Has(x)} m.Has(x) == old(m.Has(x))
-// @ ensures old(nsp.IsEmpty()) && old(m.IsEmpty()) ==> r.NLen() == 0 && forall x int :: {r.Has(x)} !r.Has(x)
+// @ ensures old(nsp.IsEmpty()) && old(m.IsEmpty()) ==> r.NLen() == old(r.NLen()) && forall x int :: {r.Has(x)} !r.Has(x)
 // @ ensures !(old(nsp.IsEmpty()) && old(m.IsEmpty())) ==>
 // @ 	forall x int :: {r.Has(x)} r.Has(x) == (old(r.Has(x)) || old(nsp.Has(x)) || old(m.Has(x)))
 // @ decreases
 func Or(nsp, m, r *Nulls) {
 	if nsp.IsEmpty() && m.IsEmpty() {
-		// @ r.np.Release()
-		r.Reset()
+		r.Clear()
 		return
 	}
 

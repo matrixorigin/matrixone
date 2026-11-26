@@ -36,6 +36,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBoundNDVByExactIntegerSpan(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		typ          types.T
+		lo, hi, want float64
+	}{
+		{"signed-cross-zero", types.T_int64, -100, 100, 201},
+		{"unsigned", types.T_uint64, 1, 20000, 20000},
+		{"last-supported-endpoint", types.T_int64, 1<<52 - 5, 1<<52 - 1, 5},
+		{"outside-supported-endpoints", types.T_int64, 1<<52 - 4, 1 << 52, 60144},
+		{"negative-unsigned", types.T_uint64, -1, 100, 60144},
+		{"rounded-signed", types.T_int64, 1 << 53, 1<<53 + 4, 60144},
+		{"rounded-unsigned", types.T_uint64, 1 << 53, 1<<53 + 4, 60144},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, boundNDVByExactIntegerSpan(60144, tc.typ, tc.lo, tc.hi, false))
+		})
+	}
+}
+
 func TestValidationCarriersDoNotAffectScheduling(t *testing.T) {
 	query := &planpb.Query{Nodes: []*planpb.Node{
 		{NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{}},

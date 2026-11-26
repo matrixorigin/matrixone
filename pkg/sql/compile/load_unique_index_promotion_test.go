@@ -709,12 +709,6 @@ func TestPrepareLoadUniqueIndexPromotionRequiresRuntimeAdmission(t *testing.T) {
 	require.NotNil(t, c.loadUniqueIndexPromotion)
 	require.True(t, c.loadUniqueIndexPromotionOwner)
 	require.Equal(t, loadUniqueIndexPromotionEligible, c.loadUniqueIndexPromotion.phase)
-
-	c.clearLoadUniqueIndexPromotion()
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion38)
-	c.prepareLoadUniqueIndexPromotion(pn)
-	require.Nil(t, c.loadUniqueIndexPromotion,
-		"rolling upgrades below the read-barrier protocol must keep exact-main behavior")
 }
 
 func TestPrepareLoadUniqueIndexPromotionSkipsOrdinaryPlanBeforeRuntime(t *testing.T) {

@@ -315,7 +315,7 @@ func TestAccountedOrderVariableProjectionAcrossBatches(t *testing.T) {
 	require.NoError(t, err)
 
 	newInput := func(ids []int64) *batch.Batch {
-		logical := batch.New(nil)
+		logical := batch.NewWithSize(0)
 		logical.SetRowCount(len(ids))
 		zone, evalErr := variable.Eval(proc, []*batch.Batch{logical}, nil)
 		require.NoError(t, evalErr)
@@ -960,7 +960,7 @@ func TestAccountedOrderRejectsExtraBufferBeforeRetainingInput(t *testing.T) {
 	)
 	state := installOrderTestAllocation(t, op, 64<<20, nil)
 	input := newOrderPairBatch(t, proc, []int64{1}, []int64{2})
-	input.ExtraBuf = []byte("aggregate payload")
+	require.NoError(t, input.SetExtraBuf(proc.Mp(), []byte("aggregate payload")))
 	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
 	require.NoError(t, op.Prepare(proc))
 

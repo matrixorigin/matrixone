@@ -505,13 +505,11 @@ func TestVisibleStateChangesHandleIgnoresCompactionRowIDRewrite(t *testing.T) {
 	defer data.Clean(mp)
 	defer tombstone.Clean(mp)
 
-	require.Equal(t, []string{"__mo_rowid", "id", "v", objectio.DefaultCommitTS_Attr}, data.Attrs)
 	require.Equal(t, afterRowIDs[1:], vector.MustFixedColWithTypeCheck[types.Rowid](data.Vecs[0]))
 	require.Equal(t, []int32{2, 3}, vector.MustFixedColWithTypeCheck[int32](data.Vecs[1]))
 	require.Equal(t, []int32{21, 30}, vector.MustFixedColWithTypeCheck[int32](data.Vecs[2]))
 	require.Equal(t, []types.TS{h.end, h.end}, vector.MustFixedColWithTypeCheck[types.TS](data.Vecs[3]))
 
-	require.Equal(t, []string{"__mo_rowid", objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}, tombstone.Attrs)
 	require.Equal(t, []types.Rowid{beforeRowIDs[1], beforeRowIDs[2]}, vector.MustFixedColWithTypeCheck[types.Rowid](tombstone.Vecs[0]))
 	require.Equal(t, []int32{2, 4}, vector.MustFixedColWithTypeCheck[int32](tombstone.Vecs[1]))
 	require.Equal(t, []types.TS{h.end, h.end}, vector.MustFixedColWithTypeCheck[types.TS](tombstone.Vecs[2]))
@@ -553,7 +551,7 @@ func TestVisibleStateChangesHandleProjectsHistoricalSchema(t *testing.T) {
 
 	data, tombstone, _, err := h.Next(context.Background(), mp)
 	require.NoError(t, err)
-	require.Equal(t, []string{"id", "branch_only", "v", objectio.DefaultCommitTS_Attr}, data.Attrs)
+	require.Len(t, data.Vecs, 4)
 	require.Equal(t, []int32{2}, vector.MustFixedColWithTypeCheck[int32](data.Vecs[0]))
 	require.Equal(t, []int32{7}, vector.MustFixedColWithTypeCheck[int32](data.Vecs[1]))
 	require.Equal(t, []int32{21}, vector.MustFixedColWithTypeCheck[int32](data.Vecs[2]))
@@ -576,7 +574,6 @@ func TestVisibleStateChangesHandleCloseNilMPoolAndTypedNilReader(t *testing.T) {
 		beforeRows: newTestVisibleStateStore(),
 		currentAfter: func() *batch.Batch {
 			bat := batch.NewWithSize(1)
-			bat.SetAttributes([]string{"a"})
 			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), nil)
 			bat.SetRowCount(0)
 			return bat
@@ -594,7 +591,6 @@ func makeInt32Batch(t *testing.T, mp *mpool.MPool, rows [][2]int32) *batch.Batch
 	t.Helper()
 
 	bat := batch.NewWithSize(2)
-	bat.SetAttributes([]string{"a", "b"})
 	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for _, row := range rows {
@@ -615,7 +611,6 @@ func makeVisibleStateBatch(
 	require.Len(t, rowIDs, len(rows))
 
 	bat := batch.NewWithSize(3)
-	bat.SetAttributes([]string{"__mo_rowid", "id", "v"})
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
@@ -631,7 +626,6 @@ func makeVisibleStateBatch(
 func makeSchemaEvolutionBatch(t *testing.T, mp *mpool.MPool, rows [][3]int32) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(4)
-	bat.SetAttributes([]string{catalog.Row_ID, "id", "branch_only", "v"})
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
@@ -741,7 +735,6 @@ func putVisibleStateBatch(t *testing.T, h *VisibleStateChangesHandle, bat *batch
 func makeNullableRowIDBatch(t *testing.T, mp *mpool.MPool, rowIDIsNull bool) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(3)
-	bat.SetAttributes([]string{catalog.Row_ID, "id", "v"})
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)

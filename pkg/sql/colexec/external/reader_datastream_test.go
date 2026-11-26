@@ -102,7 +102,7 @@ func newDatastreamTestParam(t *testing.T, host string, port int32, filter string
 			Filter:    &FilterParam{},
 		},
 	}
-	bat := batch.New([]string{"a", "s"})
+	bat := batch.NewWithSize(2)
 	for i := range cols {
 		bat.Vecs[i] = vector.NewVec(makeType(&cols[i].Typ, false), proc.Mp())
 	}
