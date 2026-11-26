@@ -1335,7 +1335,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 			ss = c.compileShuffleGroup(node, ss, nodes)
 		} else {
 			remoteScalarCount := len(ss) == 1 && ss[0].HasPartialResults &&
-				isSingleStarCountNoFilterNoGroupBy(childNode) && !sameExecutionAddr(ss[0].NodeInfo.Addr, c.addr)
+				isSingleStarCountNoFilterNoGroupBy(nodes[node.Children[0]]) && !sameExecutionAddr(ss[0].NodeInfo.Addr, c.addr)
 			ss = c.compileGroupWithoutShuffle(node, ss, nodes, distinctRequiresSingleStage)
 			if remoteScalarCount {
 				// Final projection and statement output remain on the coordinator.

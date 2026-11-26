@@ -48,7 +48,7 @@ func TestCountSealedBlocksMatchesOrdinaryBlockRead(t *testing.T) {
 
 	typ := types.T_int64.ToType()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(typ, mp)
+	bat.Vecs[0] = vector.NewVec(typ)
 	defer bat.Clean(mp)
 	id := objectio.NewObjectid()
 	name := objectio.BuildObjectNameWithObjectID(&id)
@@ -75,9 +75,9 @@ func TestCountSealedBlocksMatchesOrdinaryBlockRead(t *testing.T) {
 	first, second := blockFor(0), blockFor(1)
 
 	deletes := batch.NewWithSize(3)
-	deletes.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
-	deletes.Vecs[1] = vector.NewVec(typ, mp)
-	deletes.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
+	deletes.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	deletes.Vecs[1] = vector.NewVec(typ)
+	deletes.Vecs[2] = vector.NewVec(types.T_TS.ToType())
 	defer deletes.Clean(mp)
 	for _, entry := range []struct {
 		block *types.Blockid
