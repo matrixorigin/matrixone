@@ -100,28 +100,36 @@ func forkSourceHasUncommittedData(
 	return false, nil
 }
 
+func encodeDataBranchForkKeys(ses *Session, keys *vector.Vector, composite bool) (*vector.Vector, error) {
+	if composite {
+		return keys, nil
+	}
+	if keys.GetType().Oid == types.T_enum {
+		ordinals := vector.NewVec(types.T_uint16.ToType(), ses.proc.Mp())
+		defer ordinals.Free(ses.proc.Mp())
+		for row := range keys.Length() {
+			ordinal := vector.GetFixedAtNoTypeCheck[types.Enum](keys, row)
+			if err := vector.AppendFixed(ordinals, uint16(ordinal), false, ses.proc.Mp()); err != nil {
+				return nil, err
+			}
+		}
+		keys = ordinals
+	}
+	return function.RunFunctionDirectly(ses.proc, function.SerialFunctionEncodeID, []*vector.Vector{keys}, keys.Length())
+}
+
 // lookupDataBranchForkKeys returns indexes in the input key vector. The
 // marker distinguishes an empty captured fork from a legacy fork.
 func lookupDataBranchForkKeys(
 	ctx context.Context, ses *Session, bh BackgroundExec, tableID uint64,
 	keys *vector.Vector, composite bool,
 ) (found []int64, recorded, fullImage bool, err error) {
-	if !composite {
-		if keys.GetType().Oid == types.T_enum {
-			ordinals := vector.NewVec(types.T_uint16.ToType(), ses.proc.Mp())
-			defer ordinals.Free(ses.proc.Mp())
-			for row := range keys.Length() {
-				ordinal := vector.GetFixedAtNoTypeCheck[types.Enum](keys, row)
-				if err := vector.AppendFixed(ordinals, uint16(ordinal), false, ses.proc.Mp()); err != nil {
-					return nil, false, false, err
-				}
-			}
-			keys = ordinals
-		}
-		keys, err = function.RunFunctionDirectly(ses.proc, function.SerialFunctionEncodeID, []*vector.Vector{keys}, keys.Length())
-		if err != nil {
-			return nil, false, false, err
-		}
+	raw := keys
+	keys, err = encodeDataBranchForkKeys(ses, keys, composite)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if keys != raw {
 		defer keys.Free(ses.proc.Mp())
 	}
 	ctx = context.WithValue(defines.AttachAccountId(ctx, catalog.System_Account), defines.BranchForkKeyAccess{}, true)
@@ -367,35 +375,117 @@ func historicalForkMembers(
 		markUnknown()
 		return nil, nil
 	}
-	var beforeCommit, afterCommit []int64
+	touched := make([]bool, keys.Length())
 	if !recorded {
-		if beforeCommit, available, err = probe(parentOwner, commits[0].Prev()); err != nil {
+		if err := legacyForkParentChanges(ctx, ses, bh, fork.parent, parentOwner, commits[0], keys,
+			tables.def.pkKind == compositeKind, touched); err != nil {
 			return nil, err
-		}
-		if !available {
-			markUnknown()
-			return nil, nil
-		}
-		if afterCommit, available, err = probe(parentOwner, commits[0]); err != nil {
-			return nil, err
-		}
-		if !available {
-			markUnknown()
-			return nil, nil
 		}
 	}
+
 	var found []int64
 	for i := range keys.Length() {
 		key := int64(i)
-		_, before := slices.BinarySearch(beforeCommit, key)
-		_, after := slices.BinarySearch(afterCommit, key)
-		if before != after {
+		if touched[i] {
 			uncertain[i] = true
 		} else if _, absent := slices.BinarySearch(atFork, key); !absent {
 			found = append(found, key)
+		} else if !recorded && fromUpdate {
+			// An insert followed by a delete in the parent workspace can
+			// disappear from committed history even if the clone inherited
+			// the key between those writes.
+			uncertain[i] = true
 		}
 	}
 	return found, nil
+}
+
+// Inspect versions written by the child's transaction. Membership can be
+// unchanged across the commit when the parent deleted and reinserted a key.
+func legacyForkParentChanges(
+	ctx context.Context, ses *Session, bh BackgroundExec, parent uint64, owner branchIdentity, commit types.TS,
+	keys *vector.Vector, composite bool, touched []bool,
+) error {
+	rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{owner}, parent, commit)
+	if isMissingDataBranchRelationByID(err) {
+		for i := range touched {
+			touched[i] = true
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	ctx = identityCtx(ctx, ident)
+	def := rel.GetTableDef(ctx)
+	if def.Pkey == nil {
+		return moerr.NewInternalErrorNoCtx("legacy fork parent has no primary key")
+	}
+	keyColumn := 1 // Leading row ID in change data.
+	for _, col := range def.Cols {
+		if col.Name == def.Pkey.PkeyColName {
+			break
+		}
+		if col.Name != catalog.Row_ID {
+			keyColumn++
+		}
+	}
+	packed, err := encodeDataBranchForkKeys(ses, keys, composite)
+	if err != nil {
+		return err
+	}
+	mp := ses.proc.Mp()
+	if packed != keys {
+		defer packed.Free(mp)
+	}
+	selected := make(map[string]int, keys.Length())
+	for row := range keys.Length() {
+		selected[string(packed.GetBytesAt(row))] = row
+	}
+	mark := func(values *vector.Vector) error {
+		bytes, err := encodeDataBranchForkKeys(ses, values, composite)
+		if err != nil {
+			return err
+		}
+		if bytes != values {
+			defer bytes.Free(mp)
+		}
+		for i := range bytes.Length() {
+			if row, found := selected[string(bytes.GetBytesAt(i))]; found {
+				touched[row] = true
+			}
+		}
+		return nil
+	}
+	ctx = engine.WithRetainRowID(ctx, true)
+	ctx = engine.WithCollectChangesPreserveAllVersions(ctx)
+	ctx = engine.WithCollectChangesKeepTrailingDeletes(ctx)
+	changes, err := rel.CollectChanges(ctx, commit, commit, false, mp)
+	if err != nil || changes == nil {
+		return err
+	}
+	defer changes.Close()
+	for {
+		data, deleted, _, err := changes.Next(ctx, mp)
+		if err != nil || data == nil && deleted == nil {
+			return err
+		}
+		if data != nil {
+			if data.RowCount() != 0 {
+				err = mark(data.Vecs[keyColumn])
+			}
+			data.Clean(mp)
+		}
+		if deleted != nil {
+			if err == nil && deleted.RowCount() != 0 {
+				err = mark(deleted.Vecs[deleted.VectorCount()-2])
+			}
+			deleted.Clean(mp)
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // A fork comparison can synthesize a deletion using a row that was removed

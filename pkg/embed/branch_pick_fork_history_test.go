@@ -36,59 +36,78 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 		conn, err := db.Conn(t.Context())
 		require.NoError(t, err)
 		defer conn.Close()
-		execSQL := func(sql string) {
-			t.Helper()
-			_, err := conn.ExecContext(t.Context(), sql)
-			require.NoError(t, err, sql)
-		}
-		checkDestination := func(want string) {
-			t.Helper()
-			var rows string
-			require.NoError(t, conn.QueryRowContext(t.Context(),
-				"select group_concat(concat_ws(':',k,v) order by k) from dst").Scan(&rows))
-			require.Equal(t, want, rows)
-		}
-		for _, sql := range []string{
-			"create database pick_fork_evidence",
-			"use pick_fork_evidence",
-			"begin",
-			"create table root(k int primary key, v int)",
-			"insert into root values(1,10),(2,20)",
-			"data branch create table src from root",
-			"data branch create table dst from root",
-			"delete from dst where k=2",
-			"commit",
-			"create snapshot fork_evidence_lo for account sys",
-			"update src set v=52 where k=2",
-			"insert into src values(3,80)",
-			"create snapshot fork_evidence_hi for account sys",
-		} {
-			execSQL(sql)
-		}
 		_, err = conn.ExecContext(t.Context(), "select key_bytes from mo_catalog.mo_branch_fork_keys")
 		var sqlErr *mysql.MySQLError
 		require.ErrorAs(t, err, &sqlErr)
 		require.EqualValues(t, 1146, sqlErr.Number)
 
-		// Simulate a branch created by a binary that did not persist fork keys.
-		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
-		defer cancel()
-		ctx = context.WithValue(defines.AttachAccountId(ctx, 0), defines.BranchForkKeyAccess{}, true)
-		result, err := cn.RawService().(cnservice.Service).GetSQLExecutor().Exec(ctx,
-			"delete from mo_catalog.mo_branch_fork_keys where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='pick_fork_evidence' and relname='dst')",
-			executor.Options{})
-		require.NoError(t, err)
-		result.Close()
-		require.EqualValues(t, 3, result.AffectedRows)
+		for _, tc := range []struct {
+			name         string
+			setup        []string
+			evidenceRows int
+		}{
+			{"transaction-local parent", []string{
+				"begin", "create table root(k int primary key, v int)",
+				"insert into root values(1,10),(2,20)",
+				"data branch create table src from root",
+				"data branch create table dst from root",
+				"delete from dst where k=2", "commit",
+			}, 3},
+			{"parent key restored in the fork commit", []string{
+				"create table root(k int primary key, v int)",
+				"insert into root values(1,10),(2,20)", "begin",
+				"delete from root where k=2",
+				"data branch create table dst from root",
+				"insert into root values(2,20)",
+				"data branch create table src from root", "commit",
+			}, 2},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				run := func(statements ...string) {
+					t.Helper()
+					for _, statement := range statements {
+						_, err := conn.ExecContext(t.Context(), statement)
+						require.NoError(t, err, statement)
+					}
+				}
+				checkDestination := func(want string) {
+					t.Helper()
+					var rows string
+					require.NoError(t, conn.QueryRowContext(t.Context(),
+						"select group_concat(concat_ws(':',k,v) order by k) from dst").Scan(&rows))
+					require.Equal(t, want, rows)
+				}
 
-		const pick = "data branch pick src into dst between snapshot fork_evidence_lo and fork_evidence_hi keys(2,3) when conflict "
-		for _, policy := range []string{"fail", "skip"} {
-			_, err := conn.ExecContext(t.Context(), pick+policy)
-			require.ErrorContains(t, err, "cannot distinguish an inherited deletion from an absent key without fork history")
-			checkDestination("1:10")
+				run("create database pick_fork_evidence", "use pick_fork_evidence")
+				run(tc.setup...)
+				run("create snapshot fork_evidence_lo for account sys",
+					"update src set v=52 where k=2", "insert into src values(3,80)",
+					"create snapshot fork_evidence_hi for account sys")
+
+				// Simulate a branch created without a fork ledger.
+				ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+				defer cancel()
+				ctx = context.WithValue(defines.AttachAccountId(ctx, 0), defines.BranchForkKeyAccess{}, true)
+				result, err := cn.RawService().(cnservice.Service).GetSQLExecutor().Exec(ctx,
+					"delete from mo_catalog.mo_branch_fork_keys where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='pick_fork_evidence' and relname='dst')",
+					executor.Options{})
+				require.NoError(t, err)
+				result.Close()
+				require.EqualValues(t, tc.evidenceRows, result.AffectedRows)
+
+				const pick = "data branch pick src into dst between snapshot fork_evidence_lo and fork_evidence_hi keys(2,3) when conflict "
+				_, err = conn.ExecContext(t.Context(), pick+"skip")
+				require.ErrorContains(t, err, "cannot distinguish an inherited deletion from an absent key without fork history")
+				checkDestination("1:10")
+				_, err = conn.ExecContext(t.Context(), pick+"fail")
+				require.ErrorAs(t, err, &sqlErr)
+				require.Contains(t, []uint16{20105, 22501}, sqlErr.Number)
+				checkDestination("1:10")
+				run(pick + "accept")
+				checkDestination("1:10,2:52,3:80")
+				run("drop snapshot fork_evidence_hi", "drop snapshot fork_evidence_lo", "drop database pick_fork_evidence")
+			})
 		}
-		execSQL(pick + "accept")
-		checkDestination("1:10,2:52,3:80")
 	})
 }
 
