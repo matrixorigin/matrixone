@@ -213,8 +213,8 @@ func TestSingleMustPhraseTopK(t *testing.T) {
 		{int64(4), []byte("共和国")},
 	}, ParserNgram)
 	require.NoError(t, err)
-	allow := ordSet{1: {}, 2: {}}
-	for _, pattern := range []string{"+中华人民共和国", "+共和国"} {
+	allow := ordSet{0: {}, 2: {}}
+	for _, pattern := range []string{"+中华人民共和国", "+中华人", "+共和国"} {
 		q, err := buildBooleanQuery(pattern, ParserNgram)
 		require.NoError(t, err)
 		require.Len(t, q.must, 1)

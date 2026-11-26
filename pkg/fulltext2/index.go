@@ -490,13 +490,13 @@ func (gs *globalStats) idfFor(seg *Segment, term string, pl *termPostings) float
 	return idfSquared(gs.n, gs.df(term))
 }
 
-// phraseDf returns the corpus-global LIVE document frequency of a phrase (the number of LIVE
-// docs matching the contiguous phrase, summed over segments), memoizing only the COUNT. Each
-// segment's matchPhrase slice is counted and immediately discarded (count-and-discard), so the
-// df scan holds at most one segment's hits at a time — never the whole corpus. Only live ords
-// are counted (mirrors the live term df above and streamPhrase's pass 1), so a dirty tail does
-// not inflate the phrase idf relative to the compacted corpus.
+// phraseDf memoizes the corpus-global LIVE document count for a phrase.
+// Exact slots stream through positional cursors. Prefix slots use the fallback
+// matcher one segment at a time. Both paths exclude superseded ordinals.
 func (gs *globalStats) phraseDf(slots []phraseSlot) int {
+	if len(slots) == 1 && !slots[0].star {
+		return gs.df(slots[0].term)
+	}
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	key := slotsKey(slots)
