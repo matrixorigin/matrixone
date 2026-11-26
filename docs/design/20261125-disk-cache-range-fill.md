@@ -131,47 +131,68 @@ indexes it like any range. A whole object is the range `[0, size)`: there is no 
 whole-file name. A read finds cached bytes in one index, whether a whole object, a range,
 or several ranges that together cover its bytes.
 
-### Every connection from the governor (decision 2026-11-25)
+### The governor owns connections and memory (decision 2026-11-26)
 
-The governor allows as many requests to object storage at once as the configured
-connections per host or the storage concurrency, whichever is smaller, and never fewer
-than 64: a smaller configured value is raised to 64, with a warning that names it.
+One governor admits every object-storage request of a connection pool, with the
+connections and the memory the request needs, together.
 
+- **One governor per connection pool.** File services that share a connection pool share
+  its governor; a file service with a pool of its own has a governor of its own. A request
+  never waits for a connection inside the pool.
+- **Room.** The governor runs as many requests at once as the pool's connections per host
+  or the storage concurrency, whichever is smaller, and never fewer than 64: a smaller
+  configured value is raised to 64, with a warning that names it. There is no upper
+  bound; a request costs a small, fixed amount of memory of its own.
 - **The governor makes every request.** It offers a fixed set of requests: read a range
   into a buffer, read a range into a fill's file, write a part from a buffer, read a page
-  of a listing, stat, delete, copy. It waits for room, makes the request itself, and
-  frees the room when the request ends. No other code reaches object storage, and no
-  code is passed to the governor: a request is data, never a function.
+  of a listing, stat, delete, copy. A request is data, never a function. No other code
+  reaches object storage.
+- **Room and memory are granted together.** A request that needs a buffer waits holding
+  nothing, and is admitted when both its room and its buffer fit. Its room is freed when
+  the request ends; its buffer is freed when the file service is done with the bytes.
 - **Nothing else runs while a request holds room.** A request moves bytes between object
   storage and memory or a file that were ready before it began. The only thing it calls
   is a fill's progress record, which notes the bytes written and wakes their readers
-  without waiting. Buffers, files, the registry, paths, eviction, the publisher and the
-  caller's code are dealt with before the request starts or after it ends.
-- **Order.** Waiting requests are admitted foreground first, then background, then in
-  arrival order. Background requests hold at most half of the room, so at least 32. A
-  running request is never stopped to make room. A background request whose fill is made
-  foreground while it waits waits from then as a foreground one.
+  without waiting. Files, the registry, paths, eviction, the publisher and the caller's
+  code are dealt with before the request starts or after it ends.
+- **Order.** One order for room and memory: foreground first, then background, then by
+  share, due time and arrival. Background requests hold at most half of the room and at
+  most half of the memory that can be waited for. A running request is never stopped.
+  Making a fill foreground makes its waiting requests and its buffer foreground.
 - **Every wait ends with the waiter's own context.** A retry the file service makes
-  waits with no room held.
+  waits with nothing held.
 - **The file service retries; the SDK does not.** A call the file service retries makes
   one attempt in the object storage SDK, and is retried on every error the SDK would
-  retry, at least as often as the SDK would. A call the file service does not retry keeps the SDK's own retries, where the
-  SDK has them, and they wait holding room: a provider copy, the abort of a multipart
-  upload, the bucket check, and a MinIO object read, whose request starts at its first
-  read.
+  retry, at least as often as the SDK would. A call the file service does not retry keeps
+  the SDK's own retries, where the SDK has them, and they wait holding room: a provider
+  copy, the abort of a multipart upload, the bucket check, and a MinIO object read, whose
+  request starts at its first read.
+
+Memory comes in two kinds, by what frees it:
+
+| Memory | Freed by | Can a request wait for it? |
+|---|---|---|
+| A fill's buffer | the file service, once the download ends and its readers have copied | yes |
+| A stream's buffer | the caller closing the stream | no: if it does not fit when the stream opens, the stream reads into a temporary file |
+| A write part read from the caller's reader | the file service, but it is filled by caller code | no: if it does not fit when the part is read, the part is read into a temporary file |
+
+A write whose bytes are already in memory sends those bytes as they are and takes no
+memory of the governor.
 
 No deadlock is possible: a request that holds room waits only for object storage, which
-ends with its bytes, an error, its context, or the idle timeout; nothing that holds room
-ever waits for anything else, so nothing can wait in a cycle. This holds for every caller,
-whatever it does while it waits, because a caller never holds room.
+ends with its bytes, an error, its context, or the idle timeout; a request that waits holds
+nothing; and a request waits only for room and for memory the file service frees by
+itself, never for memory whose release needs caller code. Nothing waits in a cycle, for
+every caller, whatever it does while it waits.
 
 Where caller code meets object storage:
 
 | Caller code | How it runs with no room held |
 |---|---|
-| reads a stream (`ReadCloserForRead`) | The stream is read in one request into memory, when its bytes fit the stream memory bound, or into the file service's own temporary file; the caller reads it as bytes arrive. |
+| reads a stream (`ReadCloserForRead`) | The stream is read in one request into memory, when its buffer fits at once, or into the file service's own temporary file; the caller reads it as bytes arrive. |
 | receives bytes (`WriterForRead`, `ToCacheData`) | The range is read first; the caller's writer or decoder runs after the request ends. |
-| supplies a write (`ReaderForWrite`) | Each part is read from the caller into a buffer first; then one request writes it. |
+| supplies a write (`ReaderForWrite`) | Each part is read from the caller into a buffer, when it fits at once, or a temporary file first; then one request writes it. |
+| writes bytes it holds (`Data`) | One request sends the caller's bytes as they are, with no copy. |
 | handles listed entries (`List`) | One request per page; entries are handed to the caller between pages. |
 
 ### The queue is the waiting fills (decision 2026-11-25)
@@ -184,11 +205,9 @@ Where caller code meets object storage:
   waiting fill of the same cache already holds merges into it: the sooner due time, the
   larger share, and both scans. Bytes a running fill holds need nothing more. Other bytes
   of the same object get fills of their own at once.
-- The first waiting fill in order starts: class, then share, then due time, then
-  arrival. It starts once it is foreground, or once fewer background fills run than the
-  governor's background room and no foreground flight waits for a buffer, and, when it is
-  held in memory, once its buffer fits. A fill that cannot start keeps the fills after it
-  waiting. A started fill checks the cache first and ends without downloading when its
+- The governor admits the first waiting fill in its one order (class, then share, then
+  due time, then arrival) once its room and, when it is held in memory, its buffer fit. A
+  fill that cannot be admitted keeps the fills after it waiting. A started fill checks the cache first and ends without downloading when its
   bytes are cached, or held by a fill under way.
 - A started fill of ranges is, from the step that starts it, the prefetch objects it
   registers; a started fill of a whole object stays registered until reads can join its
@@ -244,43 +263,26 @@ startup removes them as stale cache. The cache refills them on use.
 
 ## Bounds and ownership of resources
 
-Memory-backed fills count against the flight memory budget, memory-backed streams against
-the stream memory bound, file-backed fills against the disk cache, waiting background
-fills against the queue's byte bound, and every object-storage request against the
-governor's room. Each bound is charged in one place, because there is one kind of fill and
-one way to open a connection.
+The governor of a connection pool holds the room and the memory of every request it
+admits; file-backed fills count against the disk cache, and waiting background fills
+against the queue's byte bound. Each bound is charged in one place.
 
-The flight memory budget (decision 2026-11-26):
+Memory (decision 2026-11-26):
 
-- Only fills charge the budget, and a fill frees its buffer when its download ends and
-  the reads copying from it have copied; no caller code runs while a buffer is held.
-- The buffers of memory-backed fills under way never exceed the budget.
+- The memory of the governor is one budget. Memory that cannot be waited for, the buffers
+  of streams and of write parts read from callers, holds at most a fixed share of it; the
+  rest is memory requests may wait for, and is always freed by the file service alone.
 - A fill is memory-backed only when it is at most the memory limit and its buffer fits its
-  class's share of the budget: all of it for foreground, half of it for background.
-  Otherwise it is file-backed.
-- A buffer is taken only when it fits: with the buffers under way within the budget and,
-  for a background buffer, with the background buffers within half of it while no
-  foreground flight waits for a buffer.
-- A waiting background fill takes its buffer only as it starts, never while it waits. A
-  foreground flight waits for a buffer holding nothing; a read whose buffer no longer fits
-  its share reads its bytes itself.
-- Making a fill foreground moves its buffer from the background charge to the foreground
-  charge.
+  class's share of the memory that can be waited for: all of it for foreground, half for
+  background. Otherwise it is file-backed.
+- A waiting fill takes its buffer only as it is admitted, never while it waits.
+- Peak memory is the governor's budget, plus a small, fixed amount for each request
+  running.
 
-The stream memory bound (decision 2026-11-26):
-
-- A stream frees its buffer only when its caller closes it, so streams never charge the
-  flight budget. Their buffers are charged to a bound of their own: the memory limit
-  (`disk-prefetch-memory-max`, 32 MiB by default) for all streams together.
-- A stream is memory-backed only when it is at most the memory limit, its size is known,
-  and its buffer fits the bound when it opens; otherwise it reads into its temporary file.
-  Nothing waits for stream memory.
-- Peak memory of fills and streams is the flight budget plus the stream memory bound.
-
-No wait holds a resource another wait needs: a waiting fill holds nothing, a started fill
-takes its buffer, file and registration before it asks for room, a request that holds room
-waits only for object storage, and a read waits only for a fill, a fill's buffer or room,
-none of which waits for a read or for caller code.
+No wait holds a resource another wait needs: a waiting fill or request holds nothing, a
+started fill takes its file and registration before it asks the governor, a request that
+holds room waits only for object storage, and a read waits only for a fill or the
+governor, neither of which waits for a read or for caller code.
 
 ## Alternatives
 
@@ -322,4 +324,7 @@ follow-up PR.
 
 ## Open questions
 
-None.
+- The default room: today the pool's connections per host default to 128, so the room is
+  128 when neither setting is configured. Raising the default, for example to 1024, also
+  raises the default connections of the shared pool.
+- The size of the governor's memory budget and of its share that cannot be waited for.
