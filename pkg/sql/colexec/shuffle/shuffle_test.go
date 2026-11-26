@@ -875,16 +875,16 @@ func TestBucketSelectionsDefersAndBackfills(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		buckets []uint64
-		want    [][]int32
+		want    [][]int64
 		mixed   bool
 	}{
-		{"single", []uint64{1, 1, 1, 1}, [][]int32{nil, nil}, false},
-		{"early", []uint64{1, 0, 1, 0}, [][]int32{{1, 3}, {0, 2}}, true},
-		{"middle", []uint64{1, 1, 0, 1}, [][]int32{{2}, {0, 1, 3}}, true},
-		{"last", []uint64{1, 1, 1, 0}, [][]int32{{3}, {0, 1, 2}}, true},
+		{"single", []uint64{1, 1, 1, 1}, [][]int64{nil, nil}, false},
+		{"early", []uint64{1, 0, 1, 0}, [][]int64{{1, 3}, {0, 2}}, true},
+		{"middle", []uint64{1, 1, 0, 1}, [][]int64{{2}, {0, 1, 3}}, true},
+		{"last", []uint64{1, 1, 1, 0}, [][]int64{{3}, {0, 1, 2}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			part := bucketSelections{sels: make([][]int32, 2)}
+			part := bucketSelections{sels: make([][]int64, 2)}
 			var valuesForBucket [2]int64
 			for bucket := range valuesForBucket {
 				for value := int64(0); ; value++ {
@@ -1073,7 +1073,7 @@ func TestAppendStringHashSelsCompleteKeysAndNulls(t *testing.T) {
 	const bucketNum = uint64(8)
 	arg := &Shuffle{}
 	arg.ctr.stableStringHash = true
-	sels := make([][]int32, bucketNum)
+	sels := make([][]int64, bucketNum)
 	col, area := vector.MustVarlenaRawData(vec)
 	appendStringHashSels(arg, sels, vec, col, area, bucketNum, true)
 
@@ -1082,7 +1082,7 @@ func TestAppendStringHashSelsCompleteKeysAndNulls(t *testing.T) {
 		if row != 2 {
 			expectedBucket = plan2.StableCharHashToRange(value, bucketNum)
 		}
-		require.Contains(t, sels[expectedBucket], int32(row))
+		require.Contains(t, sels[expectedBucket], int64(row))
 	}
 }
 
@@ -1101,7 +1101,7 @@ func TestAppendStringHashSelsUsesUnicodeComparisonDomain(t *testing.T) {
 		t.Run(fmt.Sprintf("stable=%t", stable), func(t *testing.T) {
 			arg := &Shuffle{}
 			arg.ctr.stableStringHash = stable
-			sels := make([][]int32, 8)
+			sels := make([][]int64, 8)
 			appendStringHashSels(arg, sels, vec, col, area, uint64(len(sels)), false)
 			seenBucket := -1
 			for bucket, rows := range sels {
@@ -1113,7 +1113,7 @@ func TestAppendStringHashSelsUsesUnicodeComparisonDomain(t *testing.T) {
 				}
 				seenBucket = bucket
 				require.Len(t, rows, 2)
-				require.Equal(t, []int32{0, 1}, rows)
+				require.Equal(t, []int64{0, 1}, rows)
 			}
 			require.GreaterOrEqual(t, seenBucket, 0)
 		})
@@ -1145,7 +1145,7 @@ func BenchmarkAppendStringHashSelsByKeyLength(b *testing.B) {
 		} {
 			arg := &Shuffle{}
 			arg.ctr.stableStringHash = mode.stable
-			sels := make([][]int32, 16)
+			sels := make([][]int64, 16)
 			appendStringHashSels(arg, sels, vec, col, area, uint64(len(sels)), false)
 
 			b.Run(fmt.Sprintf("%s/%dB/%drows", mode.name, keyLength, rows), func(b *testing.B) {
@@ -1813,7 +1813,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 
 	newArg := func() *Shuffle {
 		ap := &Shuffle{ShuffleColIdx: 0, BucketNum: 8}
-		ap.ctr.sels = make([][]int32, ap.BucketNum)
+		ap.ctr.sels = make([][]int64, ap.BucketNum)
 		return ap
 	}
 	batchOf := func(vec *vector.Vector) *batch.Batch {
@@ -1821,7 +1821,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 		bat.Vecs[0] = vec
 		return bat
 	}
-	bucketOf := func(sels [][]int32, row int32) int {
+	bucketOf := func(sels [][]int64, row int64) int {
 		for b, sel := range sels {
 			for _, r := range sel {
 				if r == row {
@@ -1952,7 +1952,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 }
 
 // Materialize the routing decision only for legacy selector-based test oracles.
-func appendStringHashSels(ap *Shuffle, sels [][]int32, vec *vector.Vector, col []types.Varlena, area []byte, buckets uint64, withNull bool) {
+func appendStringHashSels(ap *Shuffle, sels [][]int64, vec *vector.Vector, col []types.Varlena, area []byte, buckets uint64, withNull bool) {
 	partition := bucketSelections{sels: sels}
 	appendStringHashBuckets(ap, &partition, vec, col, area, buckets, withNull)
 	if !partition.mixed && len(col) > 0 {

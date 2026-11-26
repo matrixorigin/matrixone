@@ -159,7 +159,7 @@ func TestOrderedPercentileAccountedPartialMergeAndGuards(t *testing.T) {
 			var out bytes.Buffer
 			require.Error(t, dst.SaveIntermediateResultOfChunk(0, &out))
 			require.Error(t, dst.SaveIntermediateResult(1, [][]uint8{{1}}, &out))
-			require.Error(t, dst.SaveSpillIntermediateRows(0, []int32{0}, &out))
+			require.Error(t, dst.SaveSpillIntermediateRows(0, []int64{0}, &out))
 			require.Zero(t, out.Len())
 			require.Error(t, src.PreflightBatchMerge(dst, 0, []uint64{1}))
 			require.Error(t, src.Merge(dst, 0, 0))

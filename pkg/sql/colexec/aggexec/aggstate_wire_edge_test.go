@@ -89,7 +89,7 @@ func TestAccountedAggregateStableAndSpillWireRejectTruncation(t *testing.T) {
 				2, [][]uint8{{1, 1}}, &stable))
 			var spill bytes.Buffer
 			require.NoError(t, source.SaveSpillIntermediateRows(
-				0, []int32{0, 1}, &spill))
+				0, []int64{0, 1}, &spill))
 			baseline := account.Snapshot().Used
 
 			assertTruncations := func(
@@ -296,7 +296,7 @@ func TestAccountedAggregateWireWriterFailuresAndPolicyEdges(t *testing.T) {
 	var chunk bytes.Buffer
 	require.NoError(t, exec.SaveIntermediateResultOfChunk(0, &chunk))
 	var spill bytes.Buffer
-	require.NoError(t, exec.SaveSpillIntermediateRows(0, []int32{0, 1}, &spill))
+	require.NoError(t, exec.SaveSpillIntermediateRows(0, []int64{0, 1}, &spill))
 	baseline := account.Snapshot().Used
 
 	writes := []struct {
@@ -311,7 +311,7 @@ func TestAccountedAggregateWireWriterFailuresAndPolicyEdges(t *testing.T) {
 			return exec.SaveIntermediateResultOfChunk(0, w)
 		}},
 		{name: "spill", payload: spill.Bytes(), write: func(w io.Writer) error {
-			return exec.SaveSpillIntermediateRows(0, []int32{0, 1}, w)
+			return exec.SaveSpillIntermediateRows(0, []int64{0, 1}, w)
 		}},
 	}
 	for _, tc := range writes {
@@ -328,8 +328,8 @@ func TestAccountedAggregateWireWriterFailuresAndPolicyEdges(t *testing.T) {
 	require.Error(t, exec.SaveIntermediateResult(1, [][]uint8{{1}, {1}}, io.Discard))
 	require.Error(t, exec.SaveIntermediateResultOfChunk(-1, io.Discard))
 	require.Error(t, exec.SaveIntermediateResultOfChunk(2, io.Discard))
-	require.Error(t, exec.SaveSpillIntermediateRows(-1, []int32{0}, io.Discard))
-	require.Error(t, exec.SaveSpillIntermediateRows(0, []int32{0, 1, 2}, io.Discard))
+	require.Error(t, exec.SaveSpillIntermediateRows(-1, []int64{0}, io.Discard))
+	require.Error(t, exec.SaveSpillIntermediateRows(0, []int64{0, 1, 2}, io.Discard))
 	require.Error(t, exec.UnmarshalFromReader(nil, mp))
 	require.Error(t, exec.UnmarshalSpillFromReader(nil, mp))
 	require.Equal(t, 2, exec.GetNumGroups())

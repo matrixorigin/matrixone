@@ -212,7 +212,7 @@ func TestCountDistinctLegacyFloatPartialAndSpillRoundTrip(t *testing.T) {
 
 	var spill bytes.Buffer
 	require.NoError(t, legacySource.SaveSpillIntermediateRows(
-		0, []int32{0}, &spill))
+		0, []int64{0}, &spill))
 	restored := newExec(false, 1)
 	require.NoError(t, restored.UnmarshalSpillFromReader(
 		bytes.NewReader(spill.Bytes()), mp))

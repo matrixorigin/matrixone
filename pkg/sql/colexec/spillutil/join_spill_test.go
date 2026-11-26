@@ -21,6 +21,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -214,19 +215,23 @@ func TestClassifyRowsConservesRows(t *testing.T) {
 	for i := range hashes {
 		hashes[i] = uint64(i%7) | (uint64(i&3) << 5)
 	}
-	rowIDs := make([]int32, len(hashes))
-	counts := make([]int32, SpillNumBuckets)
-	offsets := make([]int32, SpillNumBuckets+1)
+	rowIDs := make([]int64, len(hashes))
+	offsets := make([]int64, SpillNumBuckets+1)
 	for _, shift := range []uint64{0, 5} {
+		ids := slices.Clone(hashes)
 		require.NoError(t, classifyRows(
-			hashes,
+			ids,
 			SpillNumBuckets,
 			shift,
 			rowIDs,
-			counts,
 			offsets,
 		))
-		require.Equal(t, int32(len(hashes)), offsets[SpillNumBuckets])
+		for b := 0; b < SpillNumBuckets; b++ {
+			for _, rowID := range rowIDs[offsets[b]:offsets[b+1]] {
+				require.Equal(t, uint64(b), (hashes[rowID]>>shift)&(SpillNumBuckets-1))
+			}
+		}
+		require.Equal(t, int64(len(hashes)), offsets[SpillNumBuckets])
 		seen := make([]bool, len(hashes))
 		for _, rowID := range rowIDs {
 			row := int(rowID)
@@ -240,9 +245,8 @@ func TestClassifyRowsConservesRows(t *testing.T) {
 		[]uint64{0},
 		SpillNumBuckets*2,
 		0,
-		make([]int32, 1),
-		make([]int32, SpillNumBuckets*2),
-		make([]int32, SpillNumBuckets*2+1),
+		make([]int64, 1),
+		make([]int64, SpillNumBuckets*2+1),
 	), process.ErrExecutionResourceInvalid)
 }
 

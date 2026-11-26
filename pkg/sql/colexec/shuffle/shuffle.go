@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	moerr "github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/remaplist"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -117,11 +118,11 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 				return err
 			}
 			shuffle.ctr.selectionMetadata = reservation
-			shuffle.ctr.selectionOffsets = make([]int, int(shuffle.BucketNum)*2)
+			shuffle.ctr.selectionOffsets = make([]int64, int(shuffle.BucketNum)+1)
 		}
 	}
 	if shuffle.ctr.sels == nil {
-		shuffle.ctr.sels = make([][]int32, shuffle.BucketNum)
+		shuffle.ctr.sels = make([][]int64, shuffle.BucketNum)
 	}
 
 	if shuffle.ShuffleExpr != nil && shuffle.ctr.exprExec == nil {
@@ -492,7 +493,7 @@ func (shuffle *Shuffle) enqueueBySels(bat *batch.Batch, proc *process.Process) e
 // bucketSelections defers identity indices until a row differs from the first
 // bucket. The source rows are visited in order and are never re-evaluated.
 type bucketSelections struct {
-	sels  [][]int32
+	sels  [][]int64
 	first uint64
 	mixed bool
 }
@@ -501,7 +502,7 @@ func (s *bucketSelections) startMixed(row int) {
 	prefix := slices.Grow(s.sels[s.first], row)
 	prefix = prefix[:row]
 	for i := range prefix {
-		prefix[i] = int32(i)
+		prefix[i] = int64(i)
 	}
 	s.sels[s.first] = prefix
 	s.mixed = true
@@ -578,14 +579,14 @@ func (shuffle *Shuffle) shuffleCompleteKey(bat *batch.Batch, proc *process.Proce
 			if row < routingRows {
 				partition.startMixed(row)
 				sels := partition.sels
-				sels[routedBucket] = append(sels[routedBucket], int32(row))
+				sels[routedBucket] = append(sels[routedBucket], int64(row))
 				for row++; row < routingRows; row++ {
 					hash := hashes[row]
 
 					idx := hash % uint64(shuffle.BucketNum)
 					routedBucket = idx
 
-					sels[routedBucket] = append(sels[routedBucket], int32(row))
+					sels[routedBucket] = append(sels[routedBucket], int64(row))
 				}
 			}
 		}
@@ -596,26 +597,31 @@ func (shuffle *Shuffle) shuffleCompleteKey(bat *batch.Batch, proc *process.Proce
 	return nil, shuffle.enqueueBySels(bat, proc)
 }
 
-// enqueueOwnedKey builds bucket views in a single charged row-index buffer.
+// enqueueOwnedKey builds bucket views in a single charged row-index buffer
+// with the shared counting sort. It overwrites hashes with bucket numbers.
 // The input and these views remain live until flushPending finishes.
 func (shuffle *Shuffle) enqueueOwnedKey(bat *batch.Batch, hashes []uint64, proc *process.Process) error {
 	rows := bat.RowCount()
 	if rows > math.MaxInt32 {
 		return moerr.NewInternalError(proc.Ctx, "complete-key shuffle batch exceeds index range")
 	}
-	buckets := int(shuffle.BucketNum)
-	counts, positions := shuffle.ctr.selectionOffsets[:buckets], shuffle.ctr.selectionOffsets[buckets:]
-	clear(counts)
-	for _, hash := range hashes {
-		counts[hash%uint64(buckets)]++
-	}
-	for bucket, count := range counts {
-		if count == rows && rows > 0 {
-			return shuffle.enqueueWholeBucket(bat, int32(bucket), proc)
+	buckets := uint64(shuffle.BucketNum)
+	if rows > 0 {
+		// Replace each hash with its bucket, noting whether any row leaves the
+		// first row's bucket.
+		first := hashes[0] % buckets
+		var diff uint64
+		for i, hash := range hashes {
+			bucket := hash % buckets
+			hashes[i] = bucket
+			diff |= bucket ^ first
+		}
+		if diff == 0 {
+			return shuffle.enqueueWholeBucket(bat, int32(first), proc)
 		}
 	}
 	if cap(shuffle.ctr.selectionBacking) < rows {
-		next, err := mpool.MakeSliceAccounted[int32](rows, proc.Mp(), shuffle.allocationAccount, mpool.AllocationOwnerSet, 13)
+		next, err := mpool.MakeSliceAccounted[int64](rows, proc.Mp(), shuffle.allocationAccount, mpool.AllocationOwnerSet, 13)
 		if err != nil {
 			return err
 		}
@@ -625,17 +631,13 @@ func (shuffle *Shuffle) enqueueOwnedKey(bat *batch.Batch, hashes []uint64, proc 
 		shuffle.ctr.selectionBacking = next
 	}
 	backing := shuffle.ctr.selectionBacking[:rows]
-	start := 0
-	for i, count := range counts {
-		end := start + count
-		shuffle.ctr.sels[i] = backing[start:end:end]
-		positions[i] = start
-		start = end
+	offs := shuffle.ctr.selectionOffsets
+	if err := remaplist.SplitBuckets(hashes, backing, offs); err != nil {
+		return err
 	}
-	for row, hash := range hashes {
-		i := hash % uint64(buckets)
-		backing[positions[i]] = int32(row)
-		positions[i]++
+	for i := range shuffle.ctr.sels {
+		start, end := offs[i], offs[i+1]
+		shuffle.ctr.sels[i] = backing[start:end:end]
 	}
 	// Even a single bucket is copied, so the borrowed input is never relabelled
 	// or retained as an accounted output.
@@ -730,7 +732,7 @@ func (shuffle *Shuffle) handleRuntimeFilter(proc *process.Process) error {
 	return nil
 }
 
-func (shuffle *Shuffle) clearSels() [][]int32 {
+func (shuffle *Shuffle) clearSels() [][]int64 {
 	for i := range shuffle.ctr.sels {
 		if len(shuffle.ctr.sels[i]) > 0 {
 			shuffle.ctr.sels[i] = shuffle.ctr.sels[i][:0]
@@ -835,7 +837,7 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch, partition *buc
 				if row < routingRows {
 					partition.startMixed(row)
 					sels := partition.sels
-					sels[routedBucket] = append(sels[routedBucket], int32(row))
+					sels[routedBucket] = append(sels[routedBucket], int64(row))
 					for row++; row < routingRows; row++ {
 						v := groupByCol[row]
 
@@ -845,7 +847,7 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch, partition *buc
 						}
 						routedBucket = regIndex
 
-						sels[routedBucket] = append(sels[routedBucket], int32(row))
+						sels[routedBucket] = append(sels[routedBucket], int64(row))
 					}
 				}
 			}
@@ -909,14 +911,14 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch, partition *
 				if row < routingRows {
 					partition.startMixed(row)
 					sels := partition.sels
-					sels[routedBucket] = append(sels[routedBucket], int32(row))
+					sels[routedBucket] = append(sels[routedBucket], int64(row))
 					for row++; row < routingRows; row++ {
 						v := groupByCol[row]
 
 						regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127), bucketNum)
 						routedBucket = regIndex
 
-						sels[routedBucket] = append(sels[routedBucket], int32(row))
+						sels[routedBucket] = append(sels[routedBucket], int64(row))
 					}
 				}
 			}
@@ -955,14 +957,14 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch, partition *
 				if row < routingRows {
 					partition.startMixed(row)
 					sels := partition.sels
-					sels[routedBucket] = append(sels[routedBucket], int32(row))
+					sels[routedBucket] = append(sels[routedBucket], int64(row))
 					for row++; row < routingRows; row++ {
 						v := groupByCol[row]
 
 						regIndex := plan2.SimpleInt64HashToRange(uuidHash(v), bucketNum)
 						routedBucket = regIndex
 
-						sels[routedBucket] = append(sels[routedBucket], int32(row))
+						sels[routedBucket] = append(sels[routedBucket], int64(row))
 					}
 				}
 			}
@@ -993,10 +995,10 @@ func partitionIntegerHash[T shuffleInteger](values []T, buckets uint64, partitio
 	}
 	partition.startMixed(row)
 	sels := partition.sels
-	sels[bucket] = append(sels[bucket], int32(row))
+	sels[bucket] = append(sels[bucket], int64(row))
 	for row++; row < len(values); row++ {
 		bucket = plan2.SimpleInt64HashToRange(uint64(values[row]), buckets)
-		sels[bucket] = append(sels[bucket], int32(row))
+		sels[bucket] = append(sels[bucket], int64(row))
 	}
 }
 
@@ -1200,14 +1202,14 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch, partition 
 						if row < routingRows {
 							partition.startMixed(row)
 							sels := partition.sels
-							sels[routedBucket] = append(sels[routedBucket], int32(row))
+							sels[routedBucket] = append(sels[routedBucket], int64(row))
 							for row++; row < routingRows; row++ {
 
 								v := plan2.VarlenaToUint64Inline(&groupByCol[row])
 								regIndex := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
 								routedBucket = regIndex
 
-								sels[routedBucket] = append(sels[routedBucket], int32(row))
+								sels[routedBucket] = append(sels[routedBucket], int64(row))
 							}
 						}
 					}
@@ -1241,14 +1243,14 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch, partition 
 						if row < routingRows {
 							partition.startMixed(row)
 							sels := partition.sels
-							sels[routedBucket] = append(sels[routedBucket], int32(row))
+							sels[routedBucket] = append(sels[routedBucket], int64(row))
 							for row++; row < routingRows; row++ {
 
 								v := plan2.VarlenaToUint64Inline(&groupByCol[row])
 								regIndex := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
 								routedBucket = regIndex
 
-								sels[routedBucket] = append(sels[routedBucket], int32(row))
+								sels[routedBucket] = append(sels[routedBucket], int64(row))
 							}
 						}
 					}
@@ -1284,14 +1286,14 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch, partition 
 						if row < routingRows {
 							partition.startMixed(row)
 							sels := partition.sels
-							sels[routedBucket] = append(sels[routedBucket], int32(row))
+							sels[routedBucket] = append(sels[routedBucket], int64(row))
 							for row++; row < routingRows; row++ {
 
 								v := plan2.VarlenaToUint64(&groupByCol[row], area)
 								regIndex := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
 								routedBucket = regIndex
 
-								sels[routedBucket] = append(sels[routedBucket], int32(row))
+								sels[routedBucket] = append(sels[routedBucket], int64(row))
 							}
 						}
 					}
@@ -1325,14 +1327,14 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch, partition 
 						if row < routingRows {
 							partition.startMixed(row)
 							sels := partition.sels
-							sels[routedBucket] = append(sels[routedBucket], int32(row))
+							sels[routedBucket] = append(sels[routedBucket], int64(row))
 							for row++; row < routingRows; row++ {
 
 								v := plan2.VarlenaToUint64(&groupByCol[row], area)
 								regIndex := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
 								routedBucket = regIndex
 
-								sels[routedBucket] = append(sels[routedBucket], int32(row))
+								sels[routedBucket] = append(sels[routedBucket], int64(row))
 							}
 						}
 					}
@@ -1428,7 +1430,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch, partition *bu
 						if row < routingRows {
 							partition.startMixed(row)
 							sels := partition.sels
-							sels[routedBucket] = append(sels[routedBucket], int32(row))
+							sels[routedBucket] = append(sels[routedBucket], int64(row))
 							for row++; row < routingRows; row++ {
 
 								var regIndex uint64 = 0
@@ -1438,7 +1440,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch, partition *bu
 								}
 								routedBucket = regIndex
 
-								sels[routedBucket] = append(sels[routedBucket], int32(row))
+								sels[routedBucket] = append(sels[routedBucket], int64(row))
 							}
 						}
 					}
@@ -1478,7 +1480,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch, partition *bu
 						if row < routingRows {
 							partition.startMixed(row)
 							sels := partition.sels
-							sels[routedBucket] = append(sels[routedBucket], int32(row))
+							sels[routedBucket] = append(sels[routedBucket], int64(row))
 							for row++; row < routingRows; row++ {
 
 								var regIndex uint64 = 0
@@ -1488,7 +1490,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch, partition *bu
 								}
 								routedBucket = regIndex
 
-								sels[routedBucket] = append(sels[routedBucket], int32(row))
+								sels[routedBucket] = append(sels[routedBucket], int64(row))
 							}
 						}
 					}
@@ -1530,7 +1532,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch, partition *bu
 						if row < routingRows {
 							partition.startMixed(row)
 							sels := partition.sels
-							sels[routedBucket] = append(sels[routedBucket], int32(row))
+							sels[routedBucket] = append(sels[routedBucket], int64(row))
 							for row++; row < routingRows; row++ {
 
 								var regIndex uint64 = 0
@@ -1540,7 +1542,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch, partition *bu
 								}
 								routedBucket = regIndex
 
-								sels[routedBucket] = append(sels[routedBucket], int32(row))
+								sels[routedBucket] = append(sels[routedBucket], int64(row))
 							}
 						}
 					}
@@ -1580,7 +1582,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch, partition *bu
 						if row < routingRows {
 							partition.startMixed(row)
 							sels := partition.sels
-							sels[routedBucket] = append(sels[routedBucket], int32(row))
+							sels[routedBucket] = append(sels[routedBucket], int64(row))
 							for row++; row < routingRows; row++ {
 
 								var regIndex uint64 = 0
@@ -1590,7 +1592,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch, partition *bu
 								}
 								routedBucket = regIndex
 
-								sels[routedBucket] = append(sels[routedBucket], int32(row))
+								sels[routedBucket] = append(sels[routedBucket], int64(row))
 							}
 						}
 					}
@@ -1785,7 +1787,7 @@ func rangeShuffleVec(ap *Shuffle, partition *bucketSelections, vec *vector.Vecto
 						if row < routingRows {
 							partition.startMixed(row)
 							sels := partition.sels
-							sels[routedBucket] = append(sels[routedBucket], int32(row))
+							sels[routedBucket] = append(sels[routedBucket], int64(row))
 							for row++; row < routingRows; row++ {
 
 								if vec.IsNull(uint64(row)) {
@@ -1796,7 +1798,7 @@ func rangeShuffleVec(ap *Shuffle, partition *bucketSelections, vec *vector.Vecto
 									routedBucket = idx
 								}
 
-								sels[routedBucket] = append(sels[routedBucket], int32(row))
+								sels[routedBucket] = append(sels[routedBucket], int64(row))
 							}
 						}
 					}
@@ -1838,7 +1840,7 @@ func rangeShuffleVec(ap *Shuffle, partition *bucketSelections, vec *vector.Vecto
 						if row < routingRows {
 							partition.startMixed(row)
 							sels := partition.sels
-							sels[routedBucket] = append(sels[routedBucket], int32(row))
+							sels[routedBucket] = append(sels[routedBucket], int64(row))
 							for row++; row < routingRows; row++ {
 
 								if vec.IsNull(uint64(row)) {
@@ -1849,7 +1851,7 @@ func rangeShuffleVec(ap *Shuffle, partition *bucketSelections, vec *vector.Vecto
 									routedBucket = idx
 								}
 
-								sels[routedBucket] = append(sels[routedBucket], int32(row))
+								sels[routedBucket] = append(sels[routedBucket], int64(row))
 							}
 						}
 					}
@@ -1893,7 +1895,7 @@ func rangeShuffleVec(ap *Shuffle, partition *bucketSelections, vec *vector.Vecto
 						if row < routingRows {
 							partition.startMixed(row)
 							sels := partition.sels
-							sels[routedBucket] = append(sels[routedBucket], int32(row))
+							sels[routedBucket] = append(sels[routedBucket], int64(row))
 							for row++; row < routingRows; row++ {
 
 								if vec.IsNull(uint64(row)) {
@@ -1904,7 +1906,7 @@ func rangeShuffleVec(ap *Shuffle, partition *bucketSelections, vec *vector.Vecto
 									routedBucket = idx
 								}
 
-								sels[routedBucket] = append(sels[routedBucket], int32(row))
+								sels[routedBucket] = append(sels[routedBucket], int64(row))
 							}
 						}
 					}
@@ -1946,7 +1948,7 @@ func rangeShuffleVec(ap *Shuffle, partition *bucketSelections, vec *vector.Vecto
 						if row < routingRows {
 							partition.startMixed(row)
 							sels := partition.sels
-							sels[routedBucket] = append(sels[routedBucket], int32(row))
+							sels[routedBucket] = append(sels[routedBucket], int64(row))
 							for row++; row < routingRows; row++ {
 
 								if vec.IsNull(uint64(row)) {
@@ -1957,7 +1959,7 @@ func rangeShuffleVec(ap *Shuffle, partition *bucketSelections, vec *vector.Vecto
 									routedBucket = idx
 								}
 
-								sels[routedBucket] = append(sels[routedBucket], int32(row))
+								sels[routedBucket] = append(sels[routedBucket], int64(row))
 							}
 						}
 					}
@@ -2073,7 +2075,7 @@ func appendStringHashBuckets(
 			if row < routingRows {
 				partition.startMixed(row)
 				sels := partition.sels
-				sels[routedBucket] = append(sels[routedBucket], int32(row))
+				sels[routedBucket] = append(sels[routedBucket], int64(row))
 				for row++; row < routingRows; row++ {
 
 					regIndex := uint64(0)
@@ -2082,7 +2084,7 @@ func appendStringHashBuckets(
 					}
 					routedBucket = regIndex
 
-					sels[routedBucket] = append(sels[routedBucket], int32(row))
+					sels[routedBucket] = append(sels[routedBucket], int64(row))
 				}
 			}
 		}

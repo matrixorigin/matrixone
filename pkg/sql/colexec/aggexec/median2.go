@@ -1392,7 +1392,7 @@ func (exec *medianColumnExecSelf[T, R]) preflightBatchMerge(
 }
 
 func (exec *medianColumnExecSelf[T, R]) SaveSpillIntermediateRows(
-	chunk int, rows []int32, writer io.Writer,
+	chunk int, rows []int64, writer io.Writer,
 ) error {
 	if exec.accounted == nil {
 		return moerr.NewNotSupportedNoCtx("median has no bounded spill state")
@@ -1417,7 +1417,7 @@ func (exec *medianColumnExecSelf[T, R]) UnmarshalSpillFromReader(
 
 func (exec *medianColumnExecSelf[T, R]) saveDenseMedianSpillRows(
 	chunk int,
-	rows []int32,
+	rows []int64,
 	writer io.Writer,
 ) error {
 	if !exec.usesDenseAccountedState() || writer == nil || len(rows) != 1 ||
@@ -1430,7 +1430,7 @@ func (exec *medianColumnExecSelf[T, R]) saveDenseMedianSpillRows(
 		groupBase += int(exec.accounted.state[i].length)
 	}
 	for _, row := range rows {
-		if row < 0 || row >= state.length || groupBase+int(row) >= len(exec.groups) {
+		if row < 0 || row >= int64(state.length) || groupBase+int(row) >= len(exec.groups) {
 			return moerr.NewInvalidInputNoCtx("invalid median spill row")
 		}
 	}

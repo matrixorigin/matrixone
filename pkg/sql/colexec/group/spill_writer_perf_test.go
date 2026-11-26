@@ -209,10 +209,10 @@ func TestGroupSpillWriterCoalescesSelectedFixedRowsWithoutChangingWire(t *testin
 	pool := mpool.MustNewZero()
 	source := vector.NewVec(types.T_int64.ToType(), pool)
 	values := make([]int64, 8192)
-	rows := make([]int32, 0, len(values))
+	rows := make([]int64, 0, len(values))
 	for i := range values {
 		values[i] = int64(i*19 - 5)
-		rows = append(rows, int32(len(values)-1-i))
+		rows = append(rows, int64(len(values)-1-i))
 	}
 	require.NoError(t, vector.AppendFixedList(source, values, nil, pool))
 
@@ -243,11 +243,11 @@ func BenchmarkGroupSpillSelectedFixedRows(b *testing.B) {
 	pool := mpool.MustNewZero()
 	source := vector.NewVec(types.T_int64.ToType(), pool)
 	values := make([]int64, 8192)
-	rows := make([]int32, 0, 256)
+	rows := make([]int64, 0, 256)
 	for i := range values {
 		values[i] = int64(i)
 		if i%32 == 0 {
-			rows = append(rows, int32(i))
+			rows = append(rows, int64(i))
 		}
 	}
 	require.NoError(b, vector.AppendFixedList(source, values, nil, pool))
@@ -342,7 +342,7 @@ func TestGroupSpillVarlenaWriterMatchesReference(t *testing.T) {
 	require.NoError(t, vector.AppendStringList(source, []string{"", "short",
 		string(bytes.Repeat([]byte("x"), 23)), string(bytes.Repeat([]byte("y"), 24)),
 		string(bytes.Repeat([]byte("large"), spillWrBufSize/5+1))}, nil, pool))
-	rows := []int32{3, 1, 4, 0, 2, 3}
+	rows := []int64{3, 1, 4, 0, 2, 3}
 	var reference bytes.Buffer
 	require.NoError(t, source.MarshalSelectedRowsTo(&reference, rows))
 	for _, direct := range []bool{false, true} {
@@ -401,11 +401,11 @@ func BenchmarkGroupSpillSelectedVarlenaRows(b *testing.B) {
 		require.True(b, first)
 	})
 	values := make([]string, 8192)
-	rows := make([]int32, 0, 256)
+	rows := make([]int64, 0, 256)
 	for i := range values {
 		values[i] = fmt.Sprintf("product-%060d", i)
 		if i%32 == 0 {
-			rows = append(rows, int32(i))
+			rows = append(rows, int64(i))
 		}
 	}
 	require.NoError(b, vector.AppendStringList(source, values, nil, pool))

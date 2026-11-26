@@ -52,13 +52,13 @@ func partitionNullableIntegerHash[T shuffleInteger](values []T, buckets uint64, 
 	}
 	partition.startMixed(row)
 	sels := partition.sels
-	sels[bucket] = append(sels[bucket], int32(row))
+	sels[bucket] = append(sels[bucket], int64(row))
 	for row++; row < len(values); row++ {
 		bucket = 0
 		if !nullVec.IsNull(uint64(row)) {
 			bucket = plan2.SimpleInt64HashToRange(uint64(values[row]), buckets)
 		}
-		sels[bucket] = append(sels[bucket], int32(row))
+		sels[bucket] = append(sels[bucket], int64(row))
 	}
 }
 
@@ -85,10 +85,10 @@ func partitionSignedRangeMinMax[T shuffleInteger](values []T, minimum, maximum i
 	}
 	partition.startMixed(row)
 	sels := partition.sels
-	sels[bucket] = append(sels[bucket], int32(row))
+	sels[bucket] = append(sels[bucket], int64(row))
 	for row++; row < len(values); row++ {
 		bucket = plan2.GetRangeShuffleIndexSignedMinMax(minimum, maximum, int64(values[row]), buckets)
-		sels[bucket] = append(sels[bucket], int32(row))
+		sels[bucket] = append(sels[bucket], int64(row))
 	}
 }
 
@@ -121,13 +121,13 @@ func partitionSignedRangeMinMaxNullable[T shuffleInteger](values []T, minimum, m
 	}
 	partition.startMixed(row)
 	sels := partition.sels
-	sels[bucket] = append(sels[bucket], int32(row))
+	sels[bucket] = append(sels[bucket], int64(row))
 	for row++; row < len(values); row++ {
 		bucket = 0
 		if !nullVec.IsNull(uint64(row)) {
 			bucket = plan2.GetRangeShuffleIndexSignedMinMax(minimum, maximum, int64(values[row]), buckets)
 		}
-		sels[bucket] = append(sels[bucket], int32(row))
+		sels[bucket] = append(sels[bucket], int64(row))
 	}
 }
 
@@ -154,10 +154,10 @@ func partitionSignedRangeSlice[T shuffleInteger](values []T, boundaries []int64,
 	}
 	partition.startMixed(row)
 	sels := partition.sels
-	sels[bucket] = append(sels[bucket], int32(row))
+	sels[bucket] = append(sels[bucket], int64(row))
 	for row++; row < len(values); row++ {
 		bucket = plan2.GetRangeShuffleIndexSignedSlice(boundaries, int64(values[row]))
-		sels[bucket] = append(sels[bucket], int32(row))
+		sels[bucket] = append(sels[bucket], int64(row))
 	}
 }
 
@@ -190,13 +190,13 @@ func partitionSignedRangeSliceNullable[T shuffleInteger](values []T, boundaries 
 	}
 	partition.startMixed(row)
 	sels := partition.sels
-	sels[bucket] = append(sels[bucket], int32(row))
+	sels[bucket] = append(sels[bucket], int64(row))
 	for row++; row < len(values); row++ {
 		bucket = 0
 		if !nullVec.IsNull(uint64(row)) {
 			bucket = plan2.GetRangeShuffleIndexSignedSlice(boundaries, int64(values[row]))
 		}
-		sels[bucket] = append(sels[bucket], int32(row))
+		sels[bucket] = append(sels[bucket], int64(row))
 	}
 }
 
@@ -223,10 +223,10 @@ func partitionUnsignedRangeMinMax[T shuffleInteger](values []T, minimum, maximum
 	}
 	partition.startMixed(row)
 	sels := partition.sels
-	sels[bucket] = append(sels[bucket], int32(row))
+	sels[bucket] = append(sels[bucket], int64(row))
 	for row++; row < len(values); row++ {
 		bucket = plan2.GetRangeShuffleIndexUnsignedMinMax(minimum, maximum, uint64(values[row]), buckets)
-		sels[bucket] = append(sels[bucket], int32(row))
+		sels[bucket] = append(sels[bucket], int64(row))
 	}
 }
 
@@ -259,13 +259,13 @@ func partitionUnsignedRangeMinMaxNullable[T shuffleInteger](values []T, minimum,
 	}
 	partition.startMixed(row)
 	sels := partition.sels
-	sels[bucket] = append(sels[bucket], int32(row))
+	sels[bucket] = append(sels[bucket], int64(row))
 	for row++; row < len(values); row++ {
 		bucket = 0
 		if !nullVec.IsNull(uint64(row)) {
 			bucket = plan2.GetRangeShuffleIndexUnsignedMinMax(minimum, maximum, uint64(values[row]), buckets)
 		}
-		sels[bucket] = append(sels[bucket], int32(row))
+		sels[bucket] = append(sels[bucket], int64(row))
 	}
 }
 
@@ -292,10 +292,10 @@ func partitionUnsignedRangeSlice[T shuffleInteger](values []T, boundaries []uint
 	}
 	partition.startMixed(row)
 	sels := partition.sels
-	sels[bucket] = append(sels[bucket], int32(row))
+	sels[bucket] = append(sels[bucket], int64(row))
 	for row++; row < len(values); row++ {
 		bucket = plan2.GetRangeShuffleIndexUnsignedSlice(boundaries, uint64(values[row]))
-		sels[bucket] = append(sels[bucket], int32(row))
+		sels[bucket] = append(sels[bucket], int64(row))
 	}
 }
 
@@ -328,12 +328,12 @@ func partitionUnsignedRangeSliceNullable[T shuffleInteger](values []T, boundarie
 	}
 	partition.startMixed(row)
 	sels := partition.sels
-	sels[bucket] = append(sels[bucket], int32(row))
+	sels[bucket] = append(sels[bucket], int64(row))
 	for row++; row < len(values); row++ {
 		bucket = 0
 		if !nullVec.IsNull(uint64(row)) {
 			bucket = plan2.GetRangeShuffleIndexUnsignedSlice(boundaries, uint64(values[row]))
 		}
-		sels[bucket] = append(sels[bucket], int32(row))
+		sels[bucket] = append(sels[bucket], int64(row))
 	}
 }

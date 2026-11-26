@@ -53,7 +53,7 @@ func TestAggregateCollationAdmission(t *testing.T) {
 					source.(aggregateBaseCarrier).aggregateBase().state[0].vecs[0].GetType().CollationVersion = revision
 					var wire bytes.Buffer
 					if spill {
-						require.NoError(t, source.(SpillStateCodec).SaveSpillIntermediateRows(0, []int32{0}, &wire))
+						require.NoError(t, source.(SpillStateCodec).SaveSpillIntermediateRows(0, []int64{0}, &wire))
 					} else {
 						require.NoError(t, source.SaveIntermediateResultOfChunk(0, &wire))
 					}

@@ -200,7 +200,7 @@ func TestFixedMinMaxScalarMerge(t *testing.T) {
 				// Spill sources have compact logical rows, not destination-sized
 				// arrays. Scalar merge must retain the chunkRows source contract.
 				var encoded bytes.Buffer
-				require.NoError(t, source.(SpillStateCodec).SaveSpillIntermediateRows(0, []int32{0, 1, 2, 3}, &encoded))
+				require.NoError(t, source.(SpillStateCodec).SaveSpillIntermediateRows(0, []int64{0, 1, 2, 3}, &encoded))
 				compact := makeState()
 				require.NoError(t, compact.(SpillStateCodec).UnmarshalSpillFromReader(&encoded, mp))
 				compactBefore := snapshot(compact, 1)

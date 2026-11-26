@@ -359,7 +359,7 @@ func TestMaxBySpillPreservesValuesAcrossGroups(t *testing.T) {
 	require.NoError(t, source.Fill(1, 1, inputs))
 	var spill bytes.Buffer
 	require.NoError(t, source.SaveSpillIntermediateRows(
-		0, []int32{0, 1}, &spill))
+		0, []int64{0, 1}, &spill))
 
 	restored := makeMaxByExec(mp, AggIdOfMaxBy, false, params).(*maxByExec)
 	require.NoError(t, restored.UnmarshalSpillFromReader(

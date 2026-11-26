@@ -251,7 +251,7 @@ func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
 			0, []uint64{1, 1}, vectors))
 		var spill bytes.Buffer
 		require.NoError(t, source.SaveSpillIntermediateRows(
-			0, []int32{0}, &spill))
+			0, []int64{0}, &spill))
 		source.Free()
 		freeVectors()
 
@@ -292,7 +292,7 @@ func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
 		require.NoError(t, source.BatchFill(0, []uint64{1, 1}, vectors))
 		var spill bytes.Buffer
 		require.NoError(t, source.SaveSpillIntermediateRows(
-			0, []int32{0}, &spill))
+			0, []int64{0}, &spill))
 		freeVectors()
 		usedBefore := account.Snapshot().Used
 
@@ -332,7 +332,7 @@ func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
 		require.True(t, source.state[0].distinctFixedDeferred)
 		var spill bytes.Buffer
 		require.NoError(t, source.SaveSpillIntermediateRows(
-			0, []int32{0}, &spill))
+			0, []int64{0}, &spill))
 		values.Free(mp)
 
 		usedBefore := account.Snapshot().Used

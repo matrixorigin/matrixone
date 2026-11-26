@@ -133,7 +133,7 @@ func TestAccountedBitmapPortableWireAndLifecycle(t *testing.T) {
 			var spill bytes.Buffer
 			codec := exec.(SpillStateCodec)
 			require.NoError(t, codec.SaveSpillIntermediateRows(
-				0, []int32{0}, &spill))
+				0, []int64{0}, &spill))
 			restored, err := MakeAgg(mp, aggregateID, false, param)
 			require.NoError(t, err)
 			restoredOwner := restored.(AllocationAccountOwner)

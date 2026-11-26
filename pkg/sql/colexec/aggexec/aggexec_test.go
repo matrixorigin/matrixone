@@ -259,7 +259,7 @@ func TestAggExecSpillDecodeUsesExactSourceCapacity(t *testing.T) {
 	require.NoError(t, source.GroupGrow(2))
 	var encoded bytes.Buffer
 	require.NoError(t, source.SaveSpillIntermediateRows(
-		0, []int32{0, 1}, &encoded))
+		0, []int64{0, 1}, &encoded))
 	source.Free()
 
 	target := newExec()
@@ -291,7 +291,7 @@ func TestAggExecSpillDecodeUsesExactSourceCapacity(t *testing.T) {
 		require.NoError(t, f.exec.PreflightBatchFill(0, groups, []*vector.Vector{input}))
 		require.NoError(t, f.exec.BatchFill(0, groups, []*vector.Vector{input}))
 		var encoded bytes.Buffer
-		require.NoError(t, f.exec.(SpillStateCodec).SaveSpillIntermediateRows(0, []int32{0, 1, 2}, &encoded))
+		require.NoError(t, f.exec.(SpillStateCodec).SaveSpillIntermediateRows(0, []int64{0, 1, 2}, &encoded))
 		decoded := makeMinMaxExec(f.mp, AggIdOfMax, false, types.T_float64.ToType())
 		t.Cleanup(func() {
 			if decoded != nil {
@@ -305,12 +305,12 @@ func TestAggExecSpillDecodeUsesExactSourceCapacity(t *testing.T) {
 		require.Equal(t, float64(9), vector.GetFixedAtNoTypeCheck[float64](decodedState, 2))
 		require.True(t, decodedState.IsNull(1))
 		var before, after bytes.Buffer
-		require.NoError(t, decoded.(SpillStateCodec).SaveSpillIntermediateRows(0, []int32{0, 1, 2}, &before))
+		require.NoError(t, decoded.(SpillStateCodec).SaveSpillIntermediateRows(0, []int64{0, 1, 2}, &before))
 		merged := makeMinMaxExec(f.mp, AggIdOfMax, false, types.T_float64.ToType())
 		t.Cleanup(func() { merged.Free() })
 		require.NoError(t, merged.GroupGrow(3))
 		require.NoError(t, merged.BatchMerge(decoded, 0, []uint64{1, 2, 3}))
-		require.NoError(t, decoded.(SpillStateCodec).SaveSpillIntermediateRows(0, []int32{0, 1, 2}, &after))
+		require.NoError(t, decoded.(SpillStateCodec).SaveSpillIntermediateRows(0, []int64{0, 1, 2}, &after))
 		require.Equal(t, before.Bytes(), after.Bytes(), "merge source must remain immutable")
 		decoded.Free()
 		decoded = nil // consumer owns its result after the compact source is freed
@@ -340,9 +340,9 @@ func TestAggExecSpillDecodeReusesLargeSmallLargeCapacity(t *testing.T) {
 	encode := func(rows int) []byte {
 		source := newExec()
 		require.NoError(t, source.GroupGrow(rows))
-		selected := make([]int32, rows)
+		selected := make([]int64, rows)
 		for i := range selected {
-			selected[i] = int32(i)
+			selected[i] = int64(i)
 		}
 		var encoded bytes.Buffer
 		require.NoError(t, source.SaveSpillIntermediateRows(
@@ -383,7 +383,7 @@ func TestAggExecSpillRejectsSelectionBeyondStateRows(t *testing.T) {
 
 	var encoded bytes.Buffer
 	err := exec.SaveSpillIntermediateRows(
-		0, []int32{1}, &encoded)
+		0, []int64{1}, &encoded)
 	require.ErrorContains(t, err, "spill row 1 exceeds state row count 1")
 
 	exec.Free()

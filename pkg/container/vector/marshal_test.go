@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// After a selection (UnionInt32) or row copy (UnionOne), the marshal plan takes
+// After a selection (Union) or row copy (UnionOne), the marshal plan takes
 // the bulk path when every varlena payload has its own area range, and the
 // canonical path when payloads are shared (const broadcasts); either way the
 // wire decodes to the selected rows.
@@ -50,9 +50,9 @@ func TestUnionSelectionPreservesOwnedDisjointVarlenaLayout(t *testing.T) {
 
 	selected := NewVec(types.T_varchar.ToType(), mp)
 	defer selected.Free(mp)
-	sels := []int32{3, 0, 1, 3, 2}
+	sels := []int64{3, 0, 1, 3, 2}
 	require.NoError(t, selected.PreExtend(len(sels), mp))
-	require.NoError(t, selected.UnionInt32(source, sels, mp))
+	require.NoError(t, selected.Union(source, sels, mp))
 	require.True(t, selected.VarlenaAreaIsDisjoint())
 	plan, err := selected.PrepareMarshalBinary()
 	require.NoError(t, err)
@@ -138,7 +138,7 @@ func TestUnionOneConstVarlenaCopiesIndependentPayloads(t *testing.T) {
 	// Existing const broadcasts share an offset. A later deep copy cannot
 	// make those earlier descriptors independent.
 	destination.ResetWithSameType()
-	require.NoError(t, destination.UnionInt32(source, []int32{0, 0}, mp))
+	require.NoError(t, destination.Union(source, []int64{0, 0}, mp))
 	require.NoError(t, destination.UnionOne(source, 1, mp))
 	require.False(t, destination.VarlenaAreaIsDisjoint())
 	plan, err := destination.PrepareMarshalBinary()
@@ -738,16 +738,16 @@ func BenchmarkMarshalBinaryOwnedVarlena(b *testing.B) {
 }
 
 // BenchmarkMarshalBinarySelectedVarlena covers shuffle and hash-build spill
-// batches, which materialize bucket selections through UnionInt32 before
+// batches, which materialize bucket selections through Union before
 // serialization.
 func BenchmarkMarshalBinarySelectedVarlena(b *testing.B) {
 	const rows = 8192
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_varchar.ToType(), mp)
 	value := bytes.Repeat([]byte{'x'}, 49)
-	sels := make([]int32, rows)
+	sels := make([]int64, rows)
 	for row := 0; row < rows; row++ {
-		sels[row] = int32(row)
+		sels[row] = int64(row)
 		if err := AppendBytes(source, value, false, mp); err != nil {
 			b.Fatal(err)
 		}
@@ -758,7 +758,7 @@ func BenchmarkMarshalBinarySelectedVarlena(b *testing.B) {
 	if err := selected.PreExtend(rows, mp); err != nil {
 		b.Fatal(err)
 	}
-	if err := selected.UnionInt32(source, sels, mp); err != nil {
+	if err := selected.Union(source, sels, mp); err != nil {
 		b.Fatal(err)
 	}
 	defer selected.Free(mp)

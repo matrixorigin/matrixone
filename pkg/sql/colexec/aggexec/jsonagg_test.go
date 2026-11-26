@@ -121,7 +121,7 @@ func TestAccountedJSONAggregatesLifecycleAndSpill(t *testing.T) {
 
 			var spill bytes.Buffer
 			require.NoError(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
-				0, []int32{0}, &spill))
+				0, []int64{0}, &spill))
 			restored, err := MakeAgg(mp, tc.id, tc.distinct, tc.params...)
 			require.NoError(t, err)
 			restoredOwner := restored.(AllocationAccountOwner)

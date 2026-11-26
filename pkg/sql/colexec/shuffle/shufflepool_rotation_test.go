@@ -67,7 +67,7 @@ func TestShufflePoolRotatedMixedResume(t *testing.T) {
 			if tc.closed >= 0 {
 				sp.closeConsumer(tc.closed, proc.Mp())
 			}
-			sels := [][]int32{{13, 12, 11, 10, 9, 8}, {5, 1, 4, 0, 3, 2}, {7, 6}}
+			sels := [][]int64{{13, 12, 11, 10, 9, 8}, {5, 1, 4, 0, 3, 2}, {7, 6}}
 			got := make([][]int64, 3)
 			consume := func(bucket int32, output *batch.Batch) {
 				t.Helper()

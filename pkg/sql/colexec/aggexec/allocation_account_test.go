@@ -280,7 +280,7 @@ func TestAccountedDistinctGroupConcatDeduplicatesAndMerges(t *testing.T) {
 	require.NoError(t, left.BatchMerge(right, 0, []uint64{1}))
 	var encoded bytes.Buffer
 	require.NoError(t, left.(SpillStateCodec).SaveSpillIntermediateRows(
-		0, []int32{0}, &encoded))
+		0, []int64{0}, &encoded))
 	restored := makeExec()
 	require.NoError(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
 		bytes.NewReader(encoded.Bytes()), mp))
@@ -642,7 +642,7 @@ func TestAccountedHLLPreflightRollbackAndSpillRoundTrip(t *testing.T) {
 	var encoded bytes.Buffer
 	codec := exec.(SpillStateCodec)
 	require.NoError(t, codec.SaveSpillIntermediateRows(
-		0, []int32{0, 1}, &encoded))
+		0, []int64{0, 1}, &encoded))
 	restored, err := MakeAgg(
 		mp, AggIdOfApproxCount, false, types.T_int64.ToType())
 	require.NoError(t, err)
@@ -738,10 +738,10 @@ func TestAccountedOpaqueSpillStateReplacementReleasesPreviousState(t *testing.T)
 
 				var encoded bytes.Buffer
 				require.NoError(t, exec.SaveSpillIntermediateRows(
-					0, func() []int32 {
-						rows := make([]int32, rows)
+					0, func() []int64 {
+						rows := make([]int64, rows)
 						for i := range rows {
-							rows[i] = int32(i)
+							rows[i] = int64(i)
 						}
 						return rows
 					}(), &encoded))
@@ -771,14 +771,14 @@ func TestAccountedOpaqueSpillStateReplacementReleasesPreviousState(t *testing.T)
 			require.Equal(t, 2, target.GetNumGroups())
 			var firstState bytes.Buffer
 			require.NoError(t, codec.SaveSpillIntermediateRows(
-				0, []int32{0, 1}, &firstState))
+				0, []int64{0, 1}, &firstState))
 			require.NoError(t, codec.UnmarshalSpillFromReader(
 				bytes.NewReader(second), mp))
 			require.Equal(t, firstUsed, account.Snapshot().Used)
 			require.Equal(t, 2, target.GetNumGroups())
 			var secondState bytes.Buffer
 			require.NoError(t, codec.SaveSpillIntermediateRows(
-				0, []int32{0, 1}, &secondState))
+				0, []int64{0, 1}, &secondState))
 			require.NotEqual(t, firstState.Bytes(), secondState.Bytes(),
 				"replacement must publish the new opaque state, not only release the old one")
 
@@ -906,7 +906,7 @@ func TestAccountedApproxPercentilePreflightAndSpillRoundTrip(t *testing.T) {
 	var encoded bytes.Buffer
 	codec := exec.(SpillStateCodec)
 	require.NoError(t, codec.SaveSpillIntermediateRows(
-		0, []int32{0}, &encoded))
+		0, []int64{0}, &encoded))
 	restored, err := MakeAgg(
 		mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
 	require.NoError(t, err)

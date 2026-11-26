@@ -21,9 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// gatherRows is the one row-list gather of the vector package, behind Union
-// and UnionInt32; ShrinkByRows uses its value loop in place.
-func gatherRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
+// gatherRows is the one row-list gather of the vector package, behind Union;
+// ShrinkByRows uses its value loop in place.
+func gatherRows(v, w *Vector, sels []int64, mp *mpool.MPool) error {
 	if len(sels) == 0 {
 		return nil
 	}
@@ -175,7 +175,7 @@ func gatherRows[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error 
 // rows oldLen, oldLen+1, ... One typed loop per width serves every type.
 // v and w may be the same vector when sels is ascending and oldLen is 0:
 // each row is then read before it is overwritten.
-func gatherFixedValues[T int32 | int64](v, w *Vector, oldLen int, sels []T) {
+func gatherFixedValues(v, w *Vector, oldLen int, sels []int64) {
 	switch tlen := v.GetType().TypeSize(); tlen {
 	case 8:
 		unionFixedSelected[uint64](v.data[oldLen*8:(oldLen+len(sels))*8], w.data, sels)
@@ -193,7 +193,7 @@ func gatherFixedValues[T int32 | int64](v, w *Vector, oldLen int, sels []T) {
 // gatherNulls sets dst row base+i when src row rows[i] is NULL. It builds
 // each output word in a register, 64 rows at a time, and publishes it with
 // one OrWord, instead of a Contains and an Add per row.
-func gatherNulls[T int32 | int64](dst *nulls.Nulls, base int, src *nulls.Nulls, rows []T) error {
+func gatherNulls(dst *nulls.Nulls, base int, src *nulls.Nulls, rows []int64) error {
 	out := dst.GetBitmap()
 	if err := out.TryExpandWithSize(base + len(rows)); err != nil {
 		return err

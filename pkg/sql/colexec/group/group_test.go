@@ -488,14 +488,14 @@ func TestGroupSpillSaveArgCodecObservesCancellationWithinOneGroup(t *testing.T) 
 	target := &cancelAfterWriteWriter{cancel: cancel}
 	writer, err := newGroupSpillWriter(&g.ctr, target, ctx, nil)
 	require.NoError(t, err)
-	err = codec.SaveSpillIntermediateRows(0, []int32{0}, writer)
+	err = codec.SaveSpillIntermediateRows(0, []int64{0}, writer)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, 1, target.writes)
 	writer.Free()
 
 	var encoded bytes.Buffer
 	require.NoError(t, codec.SaveSpillIntermediateRows(
-		0, []int32{0}, &encoded))
+		0, []int64{0}, &encoded))
 	file, err := os.CreateTemp(t.TempDir(), "group-spill-cancel-read-*")
 	require.NoError(t, err)
 	defer file.Close()

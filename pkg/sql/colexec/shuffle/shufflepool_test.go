@@ -31,14 +31,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func writeSelectionsForTest(sp *ShufflePool, src *batch.Batch, sels [][]int32, proc *process.Process) (bool, error) {
+func writeSelectionsForTest(sp *ShufflePool, src *batch.Batch, sels [][]int64, proc *process.Process) (bool, error) {
 	return writeSelectionsForProducerForTest(sp, src, sels, 0, proc)
 }
 
 func writeSelectionsForProducerForTest(
 	sp *ShufflePool,
 	src *batch.Batch,
-	sels [][]int32,
+	sels [][]int64,
 	producer int32,
 	proc *process.Process,
 ) (bool, error) {
@@ -47,10 +47,10 @@ func writeSelectionsForProducerForTest(
 }
 
 func writeBatchToBucketForTest(sp *ShufflePool, src *batch.Batch, proc *process.Process, bucket int32) (bool, error) {
-	sels := make([][]int32, sp.bucketNum)
-	sels[bucket] = make([]int32, src.RowCount())
+	sels := make([][]int64, sp.bucketNum)
+	sels[bucket] = make([]int64, src.RowCount())
 	for i := range sels[bucket] {
-		sels[bucket][i] = int32(i)
+		sels[bucket][i] = int64(i)
 	}
 	return writeSelectionsForTest(sp, src, sels, proc)
 }
@@ -202,10 +202,10 @@ func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
 
 	rows := objectio.BlockMaxRows * 4
 	input := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, false, rows, proc.Mp())
-	sels := make([][]int32, 1)
-	sels[0] = make([]int32, rows)
+	sels := make([][]int64, 1)
+	sels[0] = make([]int64, rows)
 	for i := range sels[0] {
-		sels[0][i] = int32(i)
+		sels[0][i] = int64(i)
 	}
 
 	bucket, offset, waiter, done, err := sp.tryWrite(input, sels, 0, 0, 0, proc)
@@ -312,7 +312,7 @@ func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	sels := [][]int32{{0, 1}}
+	sels := [][]int64{{0, 1}}
 	for producer, input := range inputs {
 		done, writeErr := writeSelectionsForProducerForTest(
 			sp, input, sels, int32(producer), proc,
@@ -332,7 +332,7 @@ func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
 	}
 	require.Nil(t, sp.getLastBatch(0))
 
-	fullSels := make([]int32, objectio.BlockMaxRows)
+	fullSels := make([]int64, objectio.BlockMaxRows)
 	for producer, input := range inputs {
 		for row := 2; row < objectio.BlockMaxRows; row++ {
 			require.NoError(t, vector.AppendFixed(
@@ -342,11 +342,11 @@ func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
 		input.SetRowCount(objectio.BlockMaxRows)
 	}
 	for row := range fullSels {
-		fullSels[row] = int32(row)
+		fullSels[row] = int64(row)
 	}
 	for producer, input := range inputs {
 		done, writeErr := writeSelectionsForProducerForTest(
-			sp, input, [][]int32{fullSels}, int32(producer), proc,
+			sp, input, [][]int64{fullSels}, int32(producer), proc,
 		)
 		require.NoError(t, writeErr)
 		require.True(t, done)
@@ -382,9 +382,9 @@ func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
 			}
 			input := batch.NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, proc.Mp())
 			defer input.Clean(proc.Mp())
-			sels := make([]int32, objectio.BlockMaxRows)
+			sels := make([]int64, objectio.BlockMaxRows)
 			for row := range sels {
-				sels[row] = int32(row)
+				sels[row] = int64(row)
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(row), false, proc.Mp()))
 			}
 			input.SetRowCount(objectio.BlockMaxRows)
@@ -397,7 +397,7 @@ func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
 					start := producer * objectio.BlockMaxRows / producers
 					end := (producer + 1) * objectio.BlockMaxRows / producers
 					_, err := writeSelectionsForProducerForTest(
-						sp, input, [][]int32{sels[start:end]}, int32(producer), proc)
+						sp, input, [][]int64{sels[start:end]}, int32(producer), proc)
 					writeErrors <- err
 				}()
 			}
@@ -425,7 +425,7 @@ func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
 			// The shared tail must also participate in final draining and early close.
 			for _, closeConsumer := range []bool{false, true} {
 				done, err := writeSelectionsForProducerForTest(
-					sp, input, [][]int32{{0}}, producers-1, proc)
+					sp, input, [][]int64{{0}}, producers-1, proc)
 				require.NoError(t, err)
 				require.True(t, done)
 				if closeConsumer {
@@ -462,10 +462,10 @@ func TestShufflePoolFixedBucketsHaveIndependentBackpressure(t *testing.T) {
 	// credit pool, this also exhausted the credits needed by every other bucket.
 	var bucket0Waiter <-chan struct{}
 	for attempts := 0; attempts <= sp.readyLimit; attempts++ {
-		sels := make([][]int32, sp.bucketNum)
-		sels[0] = make([]int32, input.RowCount())
+		sels := make([][]int64, sp.bucketNum)
+		sels[0] = make([]int64, input.RowCount())
 		for i := range sels[0] {
-			sels[0][i] = int32(i)
+			sels[0][i] = int64(i)
 		}
 		_, _, waiter, done, err := sp.tryWrite(input, sels, 0, 0, 0, proc)
 		require.NoError(t, err)
@@ -850,10 +850,10 @@ func BenchmarkShufflePoolProducerTails(b *testing.B) {
 				inputs[producer].SetRowCount(rowsPerBatch)
 			}
 
-			sels := make([][]int32, bucketCount)
+			sels := make([][]int64, bucketCount)
 			for row := range rowsPerBatch {
 				bucket := row % bucketCount
-				sels[bucket] = append(sels[bucket], int32(row))
+				sels[bucket] = append(sels[bucket], int64(row))
 			}
 			sp := NewShufflePool(bucketCount, producerCount, false)
 
@@ -913,8 +913,8 @@ func benchmarkShufflePoolTryWrite(
 	input := testutil.NewBatch(
 		[]types.Type{types.T_int64.ToType()}, false, 1, proc.Mp())
 	defer input.Clean(proc.Mp())
-	sels := make([][]int32, bucketNum)
-	oneRow := []int32{0}
+	sels := make([][]int64, bucketNum)
+	oneRow := []int64{0}
 	previousBucket := int32(-1)
 
 	b.ReportAllocs()
@@ -960,10 +960,10 @@ func benchmarkShufflePoolTryWriteParallel(b *testing.B) {
 	input := testutil.NewBatch(
 		[]types.Type{types.T_int64.ToType()}, false, 1, proc.Mp())
 	defer input.Clean(proc.Mp())
-	selsByWorker := make([][][]int32, workers)
+	selsByWorker := make([][][]int64, workers)
 	for worker := range workers {
-		selsByWorker[worker] = make([][]int32, sp.bucketNum)
-		selsByWorker[worker][worker] = []int32{0}
+		selsByWorker[worker] = make([][]int64, sp.bucketNum)
+		selsByWorker[worker][worker] = []int64{0}
 	}
 
 	b.ReportAllocs()
@@ -1081,11 +1081,11 @@ func TestShufflePoolRetainsOwnershipWhenBatchSetWriteFails(t *testing.T) {
 		{
 			name: "union transfers consumed reuse buffer to batch set",
 			write: func(sp *ShufflePool, input *batch.Batch, proc *process.Process) error {
-				sels := make([]int32, 512)
+				sels := make([]int64, 512)
 				for i := range sels {
-					sels[i] = int32(i * 2)
+					sels[i] = int64(i * 2)
 				}
-				_, err := writeSelectionsForTest(sp, input, [][]int32{sels}, proc)
+				_, err := writeSelectionsForTest(sp, input, [][]int64{sels}, proc)
 				return err
 			},
 			check: func(t *testing.T, sp *ShufflePool) {

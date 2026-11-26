@@ -457,7 +457,7 @@ func TestDiscardableGroupScratchRetriesAtExactFinalCapacity(t *testing.T) {
 		recoveryCapacityClass: class,
 	}
 
-	rowIDs, err := resizeDiscardableGroupScratch[int32](
+	rowIDs, err := resizeDiscardableGroupScratch[int64](
 		&ctr, nil, 1, GroupAllocationSiteSpillRows)
 	require.NoError(t, err)
 

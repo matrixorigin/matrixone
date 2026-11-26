@@ -2186,7 +2186,7 @@ func (exec *vectorMatmulExec) SaveIntermediateResultOfChunk(chunk int, writer io
 	return exec.aggExec.SaveIntermediateResultOfChunk(chunk, writer)
 }
 
-func (exec *vectorMatmulExec) SaveSpillIntermediateRows(chunk int, rows []int32, writer io.Writer) error {
+func (exec *vectorMatmulExec) SaveSpillIntermediateRows(chunk int, rows []int64, writer io.Writer) error {
 	if err := exec.drain(); err != nil {
 		return err
 	}

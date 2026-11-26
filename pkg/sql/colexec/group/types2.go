@@ -357,7 +357,7 @@ type container struct {
 	// reusable buffers for spill to avoid per-call allocations
 	spillFlagFlat   []uint8           // scratch 0/1 flags for one batch's rows during spill
 	spillHashCodes  []uint64          // reused buffer for AllGroupHash output
-	spillBucketRows []int32           // counting-partitioned row ids, total capacity O(batch rows)
+	spillBucketRows []int64           // counting-partitioned row ids, total capacity O(batch rows)
 	spillReader     *groupSpillReader // reused across loadSpilledData calls
 	spillGbBatch    *batch.Batch      // reused staging batch across spillDataToDisk calls
 

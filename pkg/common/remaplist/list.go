@@ -13,8 +13,8 @@
 // limitations under the License.
 
 // Package remaplist holds List, the one type for row lists that reorder or
-// repeat rows: sort permutations, gathers with repeats, and (later) bucket
-// splits. A selection that only keeps rows in order is a bitmap instead. See
+// repeat rows: sort permutations, gathers with repeats, and bucket splits. A
+// selection that only keeps rows in order is a bitmap instead. See
 // docs/design/20261124-row-selection-bitmap-remaplist.md, "Design: RemapList".
 package remaplist
 
@@ -35,6 +35,7 @@ import (
 // a batch needs more room than any before it.
 type List struct {
 	rows []int64
+	offs []int64 // bucket boundaries of the last BuildBuckets, else empty
 	mp   *mpool.MPool
 }
 
@@ -52,11 +53,13 @@ func (r *List) Free() {
 		r.mp.Free(int64Bytes(r.rows[:1]))
 	}
 	r.rows = nil
+	r.freeOffs()
 }
 
 // Reset sets the length to zero and keeps the capacity.
 func (r *List) Reset() {
 	r.rows = r.rows[:0]
+	r.offs = r.offs[:0]
 }
 
 // Len is the number of output rows.
@@ -78,6 +81,7 @@ func (r *List) Identity(n int) error {
 		return moerr.NewInternalErrorNoCtxf("remaplist: Identity(%d)", n)
 	}
 	r.rows = r.rows[:0]
+	r.offs = r.offs[:0]
 	if err := r.reserve(n); err != nil {
 		return err
 	}
@@ -120,7 +124,7 @@ func (r *List) reserve(n int) error {
 		return nil
 	}
 	if r.mp == nil {
-		return moerr.NewInternalErrorNoCtx("remaplist: List used before Init")
+		return errNoInit
 	}
 	if n > math.MaxInt/8 {
 		return moerr.NewInternalErrorNoCtxf("remaplist: %d rows do not fit in memory", n)
@@ -139,6 +143,8 @@ func (r *List) reserve(n int) error {
 	r.rows = rows
 	return nil
 }
+
+var errNoInit = moerr.NewInternalErrorNoCtx("remaplist: List used before Init")
 
 func int64Bytes(rows []int64) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(rows))), cap(rows)*8)

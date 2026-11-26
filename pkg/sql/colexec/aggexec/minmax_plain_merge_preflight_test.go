@@ -57,7 +57,7 @@ func TestFixedMinMaxPlainMergeMetadataPreflight(t *testing.T) {
 				if mode == "spill-source" {
 					var encoded bytes.Buffer
 					require.NoError(t, source.exec.(SpillStateCodec).SaveSpillIntermediateRows(
-						0, []int32{0, 1, 2, 3, 4, 5, 6}, &encoded))
+						0, []int64{0, 1, 2, 3, 4, 5, 6}, &encoded))
 					source = newFixedMetadataPreflightFixture(t, id, types.T_int64.ToType())
 					require.NoError(t, source.exec.(SpillStateCodec).UnmarshalSpillFromReader(&encoded, source.mp))
 					require.Equal(t, 7, source.exec.GetNumGroups())

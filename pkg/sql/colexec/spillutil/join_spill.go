@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/remaplist"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -682,36 +683,20 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 	keycodec.ComputeXXHash(keyVecs, hashValues, seed)
 }
 
-// classifyRows computes bucket counts, prefix offsets, and one contiguous row
-// id array in two linear passes. This replaces the historical bucket-by-bucket
-// scan of hashValues (which revisited every row once for each bucket).
-func classifyRows(hashValues []uint64, bucketCount int, shift uint64, rowIDs []int32, counts []int32, offsets []int32) error {
+// classifyRows splits the rows into buckets by bits shift..shift+log2(bucketCount)
+// of their hash: bucket b is rowIDs[offsets[b]:offsets[b+1]]. It overwrites
+// hashValues with the bucket of each row, then runs the shared counting sort.
+func classifyRows(hashValues []uint64, bucketCount int, shift uint64, rowIDs []int64, offsets []int64) error {
 	if bucketCount <= 0 || bucketCount > SpillNumBuckets ||
 		bucketCount&(bucketCount-1) != 0 || shift >= 64 ||
-		len(rowIDs) < len(hashValues) || len(counts) < bucketCount ||
-		len(offsets) < bucketCount+1 {
+		len(rowIDs) < len(hashValues) || len(offsets) < bucketCount+1 {
 		return process.ErrExecutionResourceInvalid
 	}
-	for i := 0; i < bucketCount; i++ {
-		counts[i] = 0
-	}
 	mask := uint64(bucketCount - 1)
-	for _, hash := range hashValues {
-		counts[int((hash>>shift)&mask)]++
+	for i, hash := range hashValues {
+		hashValues[i] = (hash >> shift) & mask
 	}
-	offsets[0] = 0
-	for i := 0; i < bucketCount; i++ {
-		offsets[i+1] = offsets[i] + counts[i]
-	}
-	var writePos [SpillNumBuckets]int32
-	copy(writePos[:bucketCount], offsets[:bucketCount])
-	for row, hash := range hashValues {
-		bucket := int((hash >> shift) & mask)
-		pos := writePos[bucket]
-		rowIDs[pos] = int32(row)
-		writePos[bucket] = pos + 1
-	}
-	return nil
+	return remaplist.SplitBuckets(hashValues, rowIDs, offsets[:bucketCount+1])
 }
 
 // scatterBatchBounded writes one bucket at a time. It keeps one selected batch
@@ -810,7 +795,7 @@ func (e *SpillEngine) scatterBatchBounded(
 	if cap(e.keyVecs) < len(keyVecs) {
 		e.keyVecs = make([]*vector.Vector, len(keyVecs))
 	}
-	if err := classifyRows(hashValues, len(writers), shift, e.scatterBucketRowIds, e.scatterBucketCounts[:], e.scatterBucketOffsets[:]); err != nil {
+	if err := classifyRows(hashValues, len(writers), shift, e.scatterBucketRowIds, e.scatterBucketOffsets[:]); err != nil {
 		return err
 	}
 	for bucketID := range writers {
@@ -836,7 +821,7 @@ func (e *SpillEngine) scatterBatchBounded(
 				sels := e.scatterBucketRowIds[cursor:attemptEnd]
 				var scatterErr error
 				for j, vec := range bat.Vecs {
-					if scatterErr = selected.Vecs[j].UnionInt32(
+					if scatterErr = selected.Vecs[j].Union(
 						vec,
 						sels,
 						selectedMP,
@@ -867,7 +852,7 @@ func (e *SpillEngine) scatterBatchBounded(
 				}
 				n := int(attemptEnd - cursor)
 				if n > 1 {
-					attemptEnd = cursor + int32((n+1)/2)
+					attemptEnd = cursor + int64((n+1)/2)
 					analyzer.GetOpStats().AddExtraStat(
 						"JoinSpillBatchReductions",
 						1,
@@ -1399,9 +1384,6 @@ func (e *SpillEngine) releaseScatterScratch() {
 		e.scatterAccountedWriteBuf.Free()
 		e.scatterAccountedWriteBuf = nil
 	}
-	for i := range e.scatterBucketCounts {
-		e.scatterBucketCounts[i] = 0
-	}
 	for i := range e.scatterBucketOffsets {
 		e.scatterBucketOffsets[i] = 0
 	}
@@ -1522,9 +1504,8 @@ type SpillEngine struct {
 
 	// Reusable scatter buffers to avoid per-batch allocations.
 	scatterHashValues            []uint64
-	scatterBucketRowIds          []int32
-	scatterBucketCounts          [SpillNumBuckets]int32
-	scatterBucketOffsets         [SpillNumBuckets + 1]int32
+	scatterBucketRowIds          []int64
+	scatterBucketOffsets         [SpillNumBuckets + 1]int64
 	scatterAccountedWriteBuf     *mpool.AccountedBuffer
 	scatterAccountedWriteBuffers [SpillNumBuckets]*mpool.AccountedBuffer
 	scatterCoalesceDisabled      bool

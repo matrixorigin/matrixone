@@ -98,7 +98,7 @@ func TestBatchSetChargesCopiesToCallerView(t *testing.T) {
 	second := newInput(srcView, 3, 4)
 	sourceUsed := source.Snapshot().Used
 	require.Equal(t, 1, queue.ReadyDeltaFor(second, second.RowCount()))
-	_, err = queue.Union(dstView, second, []int32{0, 1}, nil)
+	_, err = queue.Union(dstView, second, []int64{0, 1}, nil)
 	require.NoError(t, err)
 	require.Equal(t, sourceUsed, source.Snapshot().Used, "copies must not charge the input's account")
 	require.Equal(t, 1, queue.ReadyCount())
@@ -106,7 +106,7 @@ func TestBatchSetChargesCopiesToCallerView(t *testing.T) {
 	require.Equal(t, []int64{1, 2, 3, 4}, vector.MustFixedColNoTypeCheck[int64](full.Vecs[0]))
 
 	third := newInput(mp, 5, 6, 7)
-	consumed, err := queue.Union(dstView, third, []int32{0, 2}, full)
+	consumed, err := queue.Union(dstView, third, []int64{0, 2}, full)
 	require.NoError(t, err)
 	require.True(t, consumed, "a matching owned batch can be recycled")
 	require.Equal(t, []int64{5, 7}, vector.MustFixedColNoTypeCheck[int64](queue.Get(0).Vecs[0]))
@@ -140,12 +140,12 @@ func TestBatchSetOwnedDestinationAllocationFailure(t *testing.T) {
 func TestBatchSetSortedMetadataAfterAppend(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		sels []int32
+		sels []int64
 		vals []int64
 		push bool
 	}{
 		{name: "extend", vals: []int64{1, 2}},
-		{name: "partial union", vals: []int64{1, 2, 3}, sels: []int32{0, 1}},
+		{name: "partial union", vals: []int64{1, 2, 3}, sels: []int64{0, 1}},
 		{name: "push overflow", vals: []int64{1, 2, 3, 4, 5, 6, 7}, push: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -340,21 +340,21 @@ func TestBatchSetUnion(t *testing.T) {
 	bat1 := makeTestBatch(50, mp)
 	bat2 := makeTestBatch(8192, mp)
 
-	_, err := queue.Union(mp, bat1, []int32{}, nil)
+	_, err := queue.Union(mp, bat1, []int64{}, nil)
 	require.NoError(t, err)
 
-	_, err = queue.Union(mp, bat1, []int32{1, 2, 3, 4, 5}, nil)
+	_, err = queue.Union(mp, bat1, []int64{1, 2, 3, 4, 5}, nil)
 	require.NoError(t, err)
 	require.Equal(t, 5, queue.RowCount())
 
-	_, err = queue.Union(mp, bat1, []int32{1, 2, 3, 4, 5}, nil)
+	_, err = queue.Union(mp, bat1, []int64{1, 2, 3, 4, 5}, nil)
 	require.NoError(t, err)
 	require.Equal(t, 10, queue.RowCount())
 	require.Equal(t, 1, queue.Length())
 
-	var sels []int32
+	var sels []int64
 	for i := 0; i < 8192; i++ {
-		sels = append(sels, int32(i))
+		sels = append(sels, int64(i))
 	}
 	_, err = queue.Union(mp, bat2, sels, nil)
 	require.NoError(t, err)
@@ -363,21 +363,21 @@ func TestBatchSetUnion(t *testing.T) {
 
 	sels = nil
 	for i := 0; i < 8182; i++ {
-		sels = append(sels, int32(i))
+		sels = append(sels, int64(i))
 	}
 	_, err = queue.Union(mp, bat2, sels, nil)
 	require.NoError(t, err)
 	require.Equal(t, 8192+10+8182, queue.RowCount())
 	require.Equal(t, 2, queue.Length())
 
-	_, err = queue.Union(mp, bat1, []int32{1, 2, 3, 4, 5}, nil)
+	_, err = queue.Union(mp, bat1, []int64{1, 2, 3, 4, 5}, nil)
 	require.NoError(t, err)
 	require.Equal(t, 8192+10+8182+5, queue.RowCount())
 	require.Equal(t, 3, queue.Length())
 
 	sels = nil
 	for i := 0; i < 8190; i++ {
-		sels = append(sels, int32(i))
+		sels = append(sels, int64(i))
 	}
 	_, err = queue.Union(mp, bat2, sels, nil)
 	require.NoError(t, err)
@@ -395,9 +395,9 @@ func TestBatchSetUnionLargeSels(t *testing.T) {
 
 	// Test case 1: Union with selsLen > batchMaxRow when queue.Length() == 0
 	bat1 := makeTestBatch(20000, mp) // Create a large batch
-	var sels []int32
+	var sels []int64
 	for i := 0; i < 15000; i++ {
-		sels = append(sels, int32(i))
+		sels = append(sels, int64(i))
 	}
 	_, err := queue.Union(mp, bat1, sels, nil)
 	require.NoError(t, err)
@@ -427,7 +427,7 @@ func TestBatchSetUnionLargeSels(t *testing.T) {
 	bat2 := makeTestBatch(TestBatchMaxRow, mp)
 	sels = nil
 	for i := 0; i < TestBatchMaxRow; i++ {
-		sels = append(sels, int32(i))
+		sels = append(sels, int64(i))
 	}
 	_, err = queue.Union(mp, bat2, sels, nil)
 	require.NoError(t, err)
@@ -444,7 +444,7 @@ func TestBatchSetUnionLargeSels(t *testing.T) {
 	bat3 := makeTestBatch(TestBatchMaxRow, mp)
 	sels = nil
 	for i := 0; i < TestBatchMaxRow; i++ {
-		sels = append(sels, int32(i))
+		sels = append(sels, int64(i))
 	}
 	// Fill first batch to full
 	_, err = queue.Union(mp, bat3, sels, nil)
@@ -456,7 +456,7 @@ func TestBatchSetUnionLargeSels(t *testing.T) {
 	bat4 := makeTestBatch(20000, mp)
 	sels = nil
 	for i := 0; i < 10000; i++ {
-		sels = append(sels, int32(i))
+		sels = append(sels, int64(i))
 	}
 	_, err = queue.Union(mp, bat4, sels, nil)
 	require.NoError(t, err)
@@ -479,7 +479,7 @@ func TestBatchSetUnionLargeSels(t *testing.T) {
 	bat5 := makeTestBatch(10000, mp)
 	sels = nil
 	for i := 0; i < 5000; i++ {
-		sels = append(sels, int32(i))
+		sels = append(sels, int64(i))
 	}
 	// First Union: creates batch with 5000 rows
 	_, err = queue.Union(mp, bat5, sels, nil)
@@ -490,7 +490,7 @@ func TestBatchSetUnionLargeSels(t *testing.T) {
 	// Second Union: with 10000 sels, should fill first batch to 8192, then create new batch
 	sels = nil
 	for i := 0; i < 10000; i++ {
-		sels = append(sels, int32(i))
+		sels = append(sels, int64(i))
 	}
 	_, err = queue.Union(mp, bat5, sels, nil)
 	require.NoError(t, err)
@@ -565,7 +565,7 @@ func TestBatchSetUnionReuseBuf(t *testing.T) {
 	queue := NewBatchSet(TestBatchMaxRow)
 	src := makeTestBatch(20, mp)
 	reuse := makeTestBatch(5, mp)
-	sels := []int32{0, 1, 2, 3, 4}
+	sels := []int64{0, 1, 2, 3, 4}
 	consumed, err := queue.Union(mp, src, sels, reuse)
 	require.NoError(t, err)
 	require.True(t, consumed)
@@ -584,7 +584,7 @@ func TestBatchSetReadinessAndOffHeapGrowth(t *testing.T) {
 	require.Equal(t, 1, queue.ReadyDelta(TestBatchMaxRow))
 
 	src := makeTestBatch(1, mp)
-	consumed, err := queue.Union(mp, src, []int32{0}, nil)
+	consumed, err := queue.Union(mp, src, []int64{0}, nil)
 	require.NoError(t, err)
 	require.False(t, consumed)
 	require.Zero(t, queue.ReadyCount())

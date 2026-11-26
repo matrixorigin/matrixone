@@ -131,9 +131,8 @@ type container struct {
 	// input batch.  spillBucketOffsets identifies each bucket's sub-slice;
 	// keeping one array avoids the 32 independent append/growth paths used by
 	// the old scatter implementation.
-	spillBucketRowIds      []int32
-	spillBucketCounts      [spillNumBuckets]int32
-	spillBucketOffsets     [spillNumBuckets + 1]int32
+	spillBucketRowIds      []int64
+	spillBucketOffsets     [spillNumBuckets + 1]int64
 	spillBucketWriteRows   [spillNumBuckets]int64
 	spillKeyVecs           []*vector.Vector
 	spillBatchAllocation   *mpool.AccountBinding

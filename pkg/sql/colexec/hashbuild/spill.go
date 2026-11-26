@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/remaplist"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -64,9 +65,6 @@ func (ctr *container) dropSpillScratchBuffers() {
 	}
 	ctr.spillHashValues = nil
 	ctr.spillBucketRowIds = nil
-	for i := range ctr.spillBucketCounts {
-		ctr.spillBucketCounts[i] = 0
-	}
 	for i := range ctr.spillBucketOffsets {
 		ctr.spillBucketOffsets[i] = 0
 	}
@@ -406,27 +404,15 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
 	}
-	counts := ctr.spillBucketCounts[:]
-	for i := range counts {
-		counts[i] = 0
-	}
-	for _, hash := range hashes {
-		counts[int(hash&(spillNumBuckets-1))]++
+	// Replace each hash with its bucket (the low bits) and split the rows with
+	// the shared counting sort. The offsets stay stable while each bucket is
+	// materialized.
+	for i, hash := range hashes {
+		hashes[i] = hash & (spillNumBuckets - 1)
 	}
 	offsets := ctr.spillBucketOffsets[:]
-	offsets[0] = 0
-	for bucket := 0; bucket < spillNumBuckets; bucket++ {
-		offsets[bucket+1] = offsets[bucket] + counts[bucket]
-	}
-	// Reuse counts as write cursors only through a stack-local copy. The
-	// original prefix offsets remain stable while each bucket is materialized.
-	var writePos [spillNumBuckets]int32
-	copy(writePos[:], offsets[:spillNumBuckets])
-	for row, hash := range hashes {
-		bucket := int(hash & (spillNumBuckets - 1))
-		pos := writePos[bucket]
-		ctr.spillBucketRowIds[pos] = int32(row)
-		writePos[bucket] = pos + 1
+	if err := remaplist.SplitBuckets(hashes, ctr.spillBucketRowIds, offsets); err != nil {
+		return err
 	}
 
 	for bucket := 0; bucket < spillNumBuckets; bucket++ {
@@ -463,7 +449,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 					if spillErr = selected.Vecs[i].PreExtend(n, selectedMP); spillErr != nil {
 						break
 					}
-					if spillErr = selected.Vecs[i].UnionInt32(vec, sels, selectedMP); spillErr != nil {
+					if spillErr = selected.Vecs[i].Union(vec, sels, selectedMP); spillErr != nil {
 						break
 					}
 				}
@@ -489,7 +475,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 					return err
 				}
 				if n > 1 {
-					attemptEnd = cursor + int32((n+1)/2)
+					attemptEnd = cursor + int64((n+1)/2)
 					analyzer.GetOpStats().AddExtraStat(
 						"HashBuildSpillBatchReductions",
 						1,

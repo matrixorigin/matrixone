@@ -56,7 +56,7 @@ func TestGroupSpillRowCodecAndWriterEdges(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("beta"), false, mp))
 	bat.SetRowCount(2)
 	var encoded bytes.Buffer
-	require.NoError(t, appendSpillGroupByRows(&encoded, bat, []int32{1, 0}))
+	require.NoError(t, appendSpillGroupByRows(&encoded, bat, []int64{1, 0}))
 
 	for cut := 0; cut < encoded.Len(); cut++ {
 		target := batch.NewWithSize(1)

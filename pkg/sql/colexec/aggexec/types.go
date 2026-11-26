@@ -302,7 +302,7 @@ type BatchCapacityPreflight interface {
 // stream selected physical rows without first allocating a selection Vector.
 // MakeGroupAgg admits only executors that implement this closed spill contract.
 type SpillStateCodec interface {
-	SaveSpillIntermediateRows(chunk int, rows []int32, writer io.Writer) error
+	SaveSpillIntermediateRows(chunk int, rows []int64, writer io.Writer) error
 	UnmarshalSpillFromReader(reader io.Reader, mp *mpool.MPool) error
 }
 

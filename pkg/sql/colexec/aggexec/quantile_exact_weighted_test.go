@@ -716,7 +716,7 @@ func TestQuantileExactWeightedDistinctTypedPairs(t *testing.T) {
 		require.NoError(t, source.BulkFill(0, []*vector.Vector{values, weights}))
 		// (2, 2) twice collapses once; W = 2 + 1 = 3, k = 2 selects 2.
 		var spill bytes.Buffer
-		require.NoError(t, source.SaveSpillIntermediateRows(0, []int32{0}, &spill))
+		require.NoError(t, source.SaveSpillIntermediateRows(0, []int64{0}, &spill))
 
 		restored := makeWeightedExecForTest(t, mp, true,
 			types.T_float64.ToType(), types.T_float32.ToType(), "0.5")

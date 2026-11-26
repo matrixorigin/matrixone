@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/remaplist"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -243,52 +244,39 @@ func (ctr *hashContainer) finalize(proc *process.Process, analyzer process.Analy
 	if groupCount == 0 || len(ctr.groupIDs) != ctr.retained.RowCount() {
 		return moerr.NewInternalErrorNoCtx("invalid hash window partition cardinality")
 	}
-	positions, err := mpool.MakeSlice[int64](groupCount, proc.Mp(), true)
-	if err != nil {
+	// Group ids are 1-based, so the counting sort splits into groupCount+1
+	// buckets. It rejects an id above groupCount, and bucket 0 must stay
+	// empty: together that validates every group id in the same pass.
+	if err := checkCanceled(proc, 0); err != nil {
 		return err
 	}
-	defer mpool.FreeSlice(proc.Mp(), positions)
-	positionsMemory := int64(cap(positions)) * int64(unsafe.Sizeof(int64(0)))
-	ctr.scratchMemory += positionsMemory
-	defer func() { ctr.scratchMemory -= positionsMemory }()
-	for i, groupID := range ctr.groupIDs {
-		if err := checkCanceled(proc, i); err != nil {
-			return err
-		}
-		if groupID == 0 || groupID > uint64(groupCount) {
-			return moerr.NewInternalErrorNoCtx("invalid hash window partition group")
-		}
-		positions[groupID-1]++
+	var rows remaplist.List
+	if err := rows.Init(proc.Mp(), len(ctr.groupIDs)); err != nil {
+		return err
 	}
+	defer rows.Free()
+	rowsMemory := int64(len(ctr.groupIDs)+groupCount+2) * int64(unsafe.Sizeof(int64(0)))
+	ctr.scratchMemory += rowsMemory
+	defer func() { ctr.scratchMemory -= rowsMemory }()
+	ctr.accountMemory(analyzer)
+	if err := rows.BuildBuckets(ctr.groupIDs, groupCount+1); err != nil {
+		return err
+	}
+	if len(rows.Bucket(0)) != 0 {
+		return moerr.NewInternalErrorNoCtx("invalid hash window partition group")
+	}
+	var err error
 	ctr.groupBoundaries, err = mpool.MakeSlice[int64](groupCount, proc.Mp(), true)
 	if err != nil {
 		return err
 	}
 	ctr.accountMemory(analyzer)
 	total := int64(0)
-	for i, count := range positions {
-		positions[i] = total
-		total += count
-		ctr.groupBoundaries[i] = total
+	for group := range ctr.groupBoundaries {
+		total += int64(len(rows.Bucket(group + 1)))
+		ctr.groupBoundaries[group] = total
 	}
-	selections, err := mpool.MakeSlice[int64](len(ctr.groupIDs), proc.Mp(), true)
-	if err != nil {
-		return err
-	}
-	defer mpool.FreeSlice(proc.Mp(), selections)
-	selectionsMemory := int64(cap(selections)) * int64(unsafe.Sizeof(int64(0)))
-	ctr.scratchMemory += selectionsMemory
-	defer func() { ctr.scratchMemory -= selectionsMemory }()
-	ctr.accountMemory(analyzer)
-	for row, groupID := range ctr.groupIDs {
-		if err := checkCanceled(proc, row); err != nil {
-			return err
-		}
-		group := int(groupID - 1)
-		selections[int(positions[group])] = int64(row)
-		positions[group]++
-	}
-	if err := ctr.shuffleRetained(proc, analyzer, selections); err != nil {
+	if err := ctr.shuffleRetained(proc, analyzer, rows.Rows()); err != nil {
 		return err
 	}
 	ctr.freeGroupIDs(proc.Mp())

@@ -35,7 +35,7 @@ func TestUnicodeCollationShuffleConsumerRelease(t *testing.T) {
 				col, area := vector.MustVarlenaRawData(vec)
 				arg := &Shuffle{}
 				arg.ctr.stableStringHash = true
-				sels := make([][]int32, 16)
+				sels := make([][]int64, 16)
 				appendStringHashSels(arg, sels, vec, col, area, uint64(len(sels)), false)
 				vec.Free(mp)
 				require.Zero(t, mp.CurrNB(), "shuffle consumer retained bytes for charset %d", charset)
@@ -71,7 +71,7 @@ func BenchmarkUnicodeCollationShuffleConsumers(b *testing.B) {
 				col, area := vector.MustVarlenaRawData(vec)
 				arg := &Shuffle{}
 				arg.ctr.stableStringHash = true
-				sels := make([][]int32, 16)
+				sels := make([][]int64, 16)
 				b.ReportAllocs()
 				b.SetBytes(int64(size * rows))
 				b.ResetTimer()

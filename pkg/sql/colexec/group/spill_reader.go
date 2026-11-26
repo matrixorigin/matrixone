@@ -314,7 +314,7 @@ func (w *groupSpillWriter) Write(value []byte) (int, error) {
 func (w *groupSpillWriter) WriteSelectedFixedRows(
 	data []byte,
 	width int,
-	rows []int32,
+	rows []int64,
 ) (int, error) {
 	if w == nil || w.target == nil {
 		return 0, io.ErrClosedPipe
@@ -391,7 +391,7 @@ func (w *groupSpillWriter) WriteSelectedFixedRows(
 func (w *groupSpillWriter) WriteSelectedVarlenaRows(
 	values []types.Varlena,
 	area []byte,
-	rows []int32,
+	rows []int64,
 ) (int, error) {
 	if w == nil || w.target == nil {
 		return 0, io.ErrClosedPipe

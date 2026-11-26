@@ -330,7 +330,7 @@ func (c *distinctSpillController) writeRecordWithRepresentative(
 	if err := types.WriteInt32(c.record, int32(aggregate)); err != nil {
 		return 0, err
 	}
-	if err := appendSpillGroupByRows(c.record, groups, []int32{row}); err != nil {
+	if err := appendSpillGroupByRows(c.record, groups, []int64{int64(row)}); err != nil {
 		return 0, err
 	}
 	if err := types.WriteSizeBytes(payload, c.record); err != nil {
@@ -572,7 +572,7 @@ func (c *distinctSpillController) writeContribution(
 	if err := types.WriteInt32(c.record, int32(aggregate)); err != nil {
 		return err
 	}
-	if err := appendSpillGroupByRows(c.record, groups, []int32{row}); err != nil {
+	if err := appendSpillGroupByRows(c.record, groups, []int64{int64(row)}); err != nil {
 		return err
 	}
 	if err := types.WriteUint64(c.record, count); err != nil {

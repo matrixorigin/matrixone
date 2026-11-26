@@ -636,7 +636,7 @@ func TestOwnedShuffleSelectionAndOutputFailure(t *testing.T) {
 			arg.ctr.keyHashesMP = testOutputMP(t, arg, proc)
 			require.NoError(t, arg.ctr.keyHashes.PreExtend(128, testOutputMP(t, arg, proc)))
 			if failure == "output" {
-				arg.ctr.selectionBacking, err = mpool.MakeSliceAccounted[int32](128, proc.Mp(), account, mpool.AllocationOwnerSet, 13)
+				arg.ctr.selectionBacking, err = mpool.MakeSliceAccounted[int64](128, proc.Mp(), account, mpool.AllocationOwnerSet, 13)
 				require.NoError(t, err)
 			}
 			input := batch.NewWithSize(1)

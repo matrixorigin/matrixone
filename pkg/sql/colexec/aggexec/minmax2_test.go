@@ -199,7 +199,7 @@ func TestMinMaxJSONStableAndSpillCodecRoundTrip(t *testing.T) {
 			stableFollowup.Free(mp)
 
 			var spill bytes.Buffer
-			require.NoError(t, source.(SpillStateCodec).SaveSpillIntermediateRows(0, []int32{0, 1}, &spill))
+			require.NoError(t, source.(SpillStateCodec).SaveSpillIntermediateRows(0, []int64{0, 1}, &spill))
 			spillTarget := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
 			require.NoError(t, spillTarget.(SpillStateCodec).UnmarshalSpillFromReader(bytes.NewReader(spill.Bytes()), mp))
 			spillFollowup := vector.NewVec(typ, mp)

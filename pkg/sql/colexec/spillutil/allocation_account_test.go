@@ -414,7 +414,7 @@ func TestSpillAllocationAccountScatterScratchLifecycle(t *testing.T) {
 	require.Greater(
 		t,
 		snapshot.Used,
-		uint64(source.RowCount()*(8+4)),
+		uint64(source.RowCount()*(8+8)),
 	)
 	require.Greater(t, snapshot.Peak, snapshot.Used)
 	require.NoError(t, engine.flushScatterBuffers(proc, writers, analyzer))
@@ -695,7 +695,7 @@ func TestSpillAllocationAccountScatterFailureCleanup(t *testing.T) {
 	)
 	defer proc.Free()
 	const rows = 8
-	state := newTestSpillAllocationAccount(t, rows*(8+4), 8)
+	state := newTestSpillAllocationAccount(t, rows*(8+8), 8)
 	engine, err := newSpillEngine(
 		SpillEngineConfig{Budget: state.generation},
 		state.allocation,
@@ -732,7 +732,7 @@ func TestSpillAllocationAccountScatterFailureCleanup(t *testing.T) {
 		hashbuild.MemoryPressureMinimumUnit,
 		hashbuild.MemoryPressureReasonOf(err),
 	)
-	require.Equal(t, uint64(rows*(8+4)), state.account.Snapshot().Used)
+	require.Equal(t, uint64(rows*(8+8)), state.account.Snapshot().Used)
 
 	engine.releaseScatterScratch()
 	require.Zero(t, state.account.Snapshot().Used)

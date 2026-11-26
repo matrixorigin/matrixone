@@ -236,7 +236,7 @@ func (bs *BatchSet) Extend(mpool *mpool.MPool, inBatch *Batch, reuseBuf *Batch) 
 }
 
 // Union  union some data from one batch to BatchSet, returns whether reuseBuf was consumed
-func (bs *BatchSet) Union(mpool *mpool.MPool, inBatch *Batch, sels []int32, reuseBuf *Batch) (bool, error) {
+func (bs *BatchSet) Union(mpool *mpool.MPool, inBatch *Batch, sels []int64, reuseBuf *Batch) (bool, error) {
 	selsLen := len(sels)
 	if selsLen == 0 {
 		return false, nil
@@ -276,7 +276,7 @@ func (bs *BatchSet) Union(mpool *mpool.MPool, inBatch *Batch, sels []int32, reus
 			// Take ownership before writing so an allocation error cannot orphan tmpBat.
 			bs.batches = append(bs.batches, tmpBat)
 			for i := range tmpBat.Vecs {
-				err := tmpBat.Vecs[i].UnionInt32(inBatch.Vecs[i], tmpSels, mpool)
+				err := tmpBat.Vecs[i].Union(inBatch.Vecs[i], tmpSels, mpool)
 				if err != nil {
 					return consumed, err
 				}
@@ -299,7 +299,7 @@ func (bs *BatchSet) Union(mpool *mpool.MPool, inBatch *Batch, sels []int32, reus
 			// Different input batches need not be ordered relative to one another.
 			lastBat.Vecs[i].SetSorted(false)
 		}
-		err := lastBat.Vecs[i].UnionInt32(inBatch.Vecs[i], firstSels, mpool)
+		err := lastBat.Vecs[i].Union(inBatch.Vecs[i], firstSels, mpool)
 		if err != nil {
 			return consumed, err
 		}
@@ -324,7 +324,7 @@ func (bs *BatchSet) Union(mpool *mpool.MPool, inBatch *Batch, sels []int32, reus
 		// Take ownership before writing so an allocation error cannot orphan tmpBat.
 		bs.batches = append(bs.batches, tmpBat)
 		for i := range tmpBat.Vecs {
-			err := tmpBat.Vecs[i].UnionInt32(inBatch.Vecs[i], tmpSels, mpool)
+			err := tmpBat.Vecs[i].Union(inBatch.Vecs[i], tmpSels, mpool)
 			if err != nil {
 				return consumed, err
 			}
@@ -422,7 +422,7 @@ func (bs *BatchSet) extendWithNewProvenance(
 func (bs *BatchSet) unionWithNewProvenance(
 	mp *mpool.MPool,
 	inBatch *Batch,
-	sels []int32,
+	sels []int64,
 	reuseBuf *Batch,
 ) (bool, error) {
 	consumed := false
@@ -438,7 +438,7 @@ func (bs *BatchSet) unionWithNewProvenance(
 		bs.batches = append(bs.batches, tmpBat)
 		count := min(bs.batchMaxRow, len(sels)-start)
 		for i := range tmpBat.Vecs {
-			if err := tmpBat.Vecs[i].UnionInt32(
+			if err := tmpBat.Vecs[i].Union(
 				inBatch.Vecs[i], sels[start:start+count], mp,
 			); err != nil {
 				return consumed, err

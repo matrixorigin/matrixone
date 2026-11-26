@@ -893,7 +893,7 @@ func (sp *ShufflePool) notifyAnyBatch() {
 // blocked chunk, so the operator can safely retain and resume the child batch.
 func (sp *ShufflePool) tryWrite(
 	srcBatch *batch.Batch,
-	sels [][]int32,
+	sels [][]int64,
 	producer int32,
 	startPosition int,
 	startOffset int,
@@ -904,7 +904,7 @@ func (sp *ShufflePool) tryWrite(
 
 func (sp *ShufflePool) tryWriteMode(
 	srcBatch *batch.Batch,
-	sels [][]int32,
+	sels [][]int64,
 	producer int32,
 	startPosition, startOffset int,
 	wholeBucket bool,
@@ -955,7 +955,7 @@ func (sp *ShufflePool) tryWriteMode(
 	offset := startOffset
 	for {
 		for ; bucket < limit; bucket++ {
-			var current []int32
+			var current []int64
 			count := srcBatch.RowCount()
 			if !wholeBucket {
 				current = sels[bucket]

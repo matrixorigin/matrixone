@@ -97,7 +97,7 @@ func (shuffle *Shuffle) Release() {
 type container struct {
 	ending             bool
 	pendingWholeBucket bool
-	sels               [][]int32
+	sels               [][]int64
 	buf                *batch.Batch
 	pendingBat         *batch.Batch
 	// Mixed input saves a visit ordinal; whole input saves its physical bucket.
@@ -126,8 +126,8 @@ type container struct {
 	keyHashes     *vector.Vector
 	// keyHashesMP is the pool keyHashes was created with.
 	keyHashesMP       *mpool.MPool
-	selectionBacking  []int32
-	selectionOffsets  []int
+	selectionBacking  []int64
+	selectionOffsets  []int64
 	selectionMetadata *process.ExecutionTransientMemoryReservation
 }
 

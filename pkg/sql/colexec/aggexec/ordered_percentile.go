@@ -867,7 +867,7 @@ func (exec *orderedPercentileExec[T, R]) SaveIntermediateResult(
 }
 
 func (exec *orderedPercentileExec[T, R]) SaveSpillIntermediateRows(
-	chunk int, rows []int32, writer io.Writer,
+	chunk int, rows []int64, writer io.Writer,
 ) error {
 	if exec.hasSpillRuns() {
 		return moerr.NewInternalErrorNoCtx("spilled ordered percentile cannot be serialized as a partial result")

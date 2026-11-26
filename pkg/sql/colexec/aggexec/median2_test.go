@@ -385,7 +385,7 @@ func TestAccountedMedianResidentAndSpillRoundTrip(t *testing.T) {
 			var encoded bytes.Buffer
 			codec := exec.(SpillStateCodec)
 			require.NoError(t, codec.SaveSpillIntermediateRows(
-				0, []int32{0, 1, 2}, &encoded))
+				0, []int64{0, 1, 2}, &encoded))
 
 			restored, err := MakeAgg(
 				mp, AggIdOfMedian, distinct, types.T_int64.ToType())
@@ -481,13 +481,13 @@ func TestAccountedMedianRetainsOrdinaryInputWithoutSavedArgumentIndex(t *testing
 
 	var spill bytes.Buffer
 	require.Error(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
-		0, []int32{0, 0}, io.Discard))
+		0, []int64{0, 0}, io.Discard))
 	require.Error(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
-		-1, []int32{0}, io.Discard))
+		-1, []int64{0}, io.Discard))
 	require.Error(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
-		0, []int32{-1}, io.Discard))
+		0, []int64{-1}, io.Discard))
 	require.NoError(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
-		0, []int32{0}, &spill))
+		0, []int64{0}, &spill))
 	retainedBytes := 0
 	for _, vec := range median.groups[0].vecs {
 		require.Equal(t, vec.Length()*types.T_int64.ToType().TypeSize(),

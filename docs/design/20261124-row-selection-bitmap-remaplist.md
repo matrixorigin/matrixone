@@ -169,7 +169,7 @@ func (r *List) Identity(n int) error      // 0..n-1, the starting point for a so
 func (r *List) Append(row int64) error
 func (r *List) Repeat(row int64, n int) error
 func (r *List) Rows() []int64             // pkg/sort sorts this in place
-func (r *List) BuildBuckets(hashes []uint64, buckets int, shift uint64) error // the one counting sort
+func (r *List) BuildBuckets(ids []uint64, buckets int) error // the one counting sort; ids[i] is row i's bucket
 func (r *List) Bucket(b int) []int64
 func (r *List) InvertInto(srcRows int, dst *List) error // old→new with -1, for mergesort/transfer
 ```
@@ -204,6 +204,28 @@ func (r *List) InvertInto(srcRows int, dst *List) error // old→new with -1, fo
 
 `BenchmarkPermute` puts the same 8192 rows in a random order in place, µs: `Shuffle` against a `Union` into a scratch vector and a swap. The gather is as fast as Shuffle or faster for every type except int32, where they are within noise: int64 8.7 → 5.7, int64 with NULLs 21.1 → 18.0, int32 15.6 → 16.6, decimal128 25.4 → 10.1, varchar 33.0 → 23.5. That is the case for PR 9 replacing `Shuffle` with the gather kernel.
 
+**Buckets (PR 8).** The counting sort is `remaplist.SplitBuckets(ids, rows, offs)`: `ids[i]` is the bucket of row i, and it writes the rows grouped by bucket, ascending within each bucket, with the boundaries in `offs`. `List.BuildBuckets(ids, buckets)` and `Bucket(b)` run it on List-owned storage. The function form exists because spill and shuffle charge their row buffers to an allocation account (`GrowAccountedSlice`, `MakeSliceAccounted`), which a List's plain pool allocation would bypass. The ids replace the hashes in place, so no extra buffer is needed.
+
+- **Spill** (`classifyRows`) turns each hash into `(hash>>shift)&mask` and calls `SplitBuckets`. The scatter gathers each bucket with `Union`.
+- **Hash-build spill** had its own copy of the same counting sort; it now turns each hash into its low bits and calls `SplitBuckets`.
+- **Group spill** had a third copy. `computeBucketIndex` already overwrites the hashes with bucket numbers, so it calls `SplitBuckets` on them directly.
+- **Shuffle, complete key** (`enqueueOwnedKey`) turns each hash into `hash % buckets`, which also tells it when every row is in one bucket. It used to take the modulo twice per row.
+- **Partition** (`finalize`) calls `List.BuildBuckets` on its 1-based group ids with `groupCount+1` buckets. The sort rejects an id above the group count and bucket 0 must stay empty, which validates every id in the same pass; the separate validation pass is gone. It gathers with `Batch.Union`.
+- **The typed shuffle kernels keep appending per bucket.** They compute a bucket per row and append the row straight to that bucket's slice. Writing the bucket ids first and then sorting was slower in a prototype: 8192 random `int64` keys, 4–256 buckets, 19.2–19.7 µs appending against 25.5–32.0 µs. The appends overlap with the hash computation, while a separate pass cannot. A counting sort pays only when the ids exist before the split.
+- **The `int32` row lists become `int64`:** shuffle's buckets (the kernels, `ShufflePool.tryWrite`, `BatchSet.Union`), the spill row ids, and group spill's rows through the aggregate spill writers (`SaveSpillIntermediateRows`, `MarshalSelectedRowsTo`, `WriteSelected*Rows`). Group spill's recovery floor now reserves 8 bytes per row id. `UnionInt32` is gone, and the gather kernel takes only `[]int64`.
+
+Measured, pinned to one core, minimum of five or more runs (old is PR 7, which still had `int32` row ids here):
+
+| step | old | new |
+| --- | --- | --- |
+| split 4096 hashes into 32 buckets, alone | 8.1 µs | 5.6 µs |
+| split 4096 hashes into 4 buckets, alone | 8.4 µs | 8.6 µs |
+| complete-key shuffle split, 8192 rows, 4 / 24 / 64 buckets | 37.9 / 40.0 / 38.9 µs | 32.0 / 26.3 / 26.1 µs |
+| `BenchmarkSpillScatterAccounting` (whole scatter) | 231–233 µs | 230–234 µs |
+| `BenchmarkHashPartition` (whole operator, 64K rows, 1 / 64 / 1024 groups) | 1.78 / 2.06 / 2.09 ms | 1.76 / 2.07 / 2.14 ms |
+
+The whole-operator numbers are within 2.5%: the split is a small part of a spill scatter or a partition. The partition's counting sort alone costs the same as before (271 µs before, 277 µs after, for 65536 rows in 1024 groups).
+
 ## Implementation plan
 
 Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a duplicate and each measured with its own benchmark. The tracks are independent until the last cleanup.
@@ -218,7 +240,7 @@ Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a 
 | 6 | Bitmap | Remove list APIs | delete `Shrink([]int64)` and the negate form of `FilterInPlaceOrdered`; a keep-only `ShrinkByRows` stays for search and TopN lists | build and full test run |
 | 6b | Bitmap | Remove function select list | delete `FunctionSelectList`, the kernels' masking paths and the kernel parameter | build and full test run |
 | 7 | RemapList | Type and gather | new package `pkg/common/remaplist` with `remaplist.List`; one gather kernel behind `Vector.Union` / `Batch.Union` with the null remap in the same pass | gather microbenchmarks against `Union` and `Shuffle` |
-| 8 | RemapList | Buckets | shuffle, spill and partition use `BuildBuckets`; their `int32` lists become `int64` and `UnionInt32` goes away | shuffle and spill benchmarks |
+| 8 | RemapList | Buckets | spill, hash-build spill, group spill, the complete-key shuffle and partition use the one counting sort (`SplitBuckets` / `BuildBuckets`); the typed shuffle kernels keep their fused append (measured); their `int32` lists become `int64` and `UnionInt32` goes away | shuffle and spill benchmarks |
 | 9 | RemapList | Sorts | order, mergeorder, top, mergetop, window, mergesort and logtail sorts use `Identity` → sort → permute with the gather kernel; remove `Shuffle` and `ShuffleWithBuf` | sort and top-k benchmarks |
 | 10 | RemapList | Joins | probe and build gathers use RemapList with global row ids; `TryUnionFlatFixedRows` goes away | hash-join benchmarks; TPC-H join queries |
 | 11 | RemapList | Inverse maps | mergesort and transfer use `InvertInto` | merge benchmarks |

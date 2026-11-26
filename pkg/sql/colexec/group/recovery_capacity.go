@@ -22,7 +22,7 @@ import (
 
 const (
 	groupSpillHashBytes  = uint64(8)
-	groupSpillRowIDBytes = uint64(4)
+	groupSpillRowIDBytes = uint64(8)
 )
 
 func groupRecoveryAdd(left, right uint64) (uint64, error) {
@@ -41,7 +41,7 @@ func groupRecoveryMul(left, right uint64) (uint64, error) {
 
 // ensureRecoveryCapacity reserves the minimum reusable headroom needed to
 // partition all state that can exist after the next input chunk. Spill needs
-// exactly one uint64 hash per resident group plus one int32 row id for the
+// exactly one uint64 hash per resident group plus one int64 row id for the
 // largest aggregate chunk. The row ids implement an O(rows) counting
 // partition and are also the selection consumed directly by the accounted
 // spill codec; keeping them in the floor avoids an unaccounted 32*8K stack

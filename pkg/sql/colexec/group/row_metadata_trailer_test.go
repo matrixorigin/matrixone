@@ -75,7 +75,7 @@ func TestGroupSpillGroupKeyCodec(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	rows := []int32{0, 1}
+	rows := []int64{0, 1}
 	newDestination := func() *batch.Batch {
 		decoded := batch.NewWithSize(1)
 		decoded.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)

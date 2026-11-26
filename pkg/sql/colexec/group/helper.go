@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/remaplist"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -57,7 +58,7 @@ func validateDecodedAggregateGroupCount(
 func appendSpillGroupByRows(
 	writer io.Writer,
 	gbBatch *batch.Batch,
-	rows []int32,
+	rows []int64,
 ) error {
 	if writer == nil || gbBatch == nil {
 		return io.ErrClosedPipe
@@ -109,13 +110,13 @@ func (w *spillRecordWriter) Write(value []byte) (int, error) {
 func (w *spillRecordWriter) WriteSelectedFixedRows(
 	data []byte,
 	width int,
-	rows []int32,
+	rows []int64,
 ) (int, error) {
 	if w == nil || w.target == nil {
 		return 0, io.ErrClosedPipe
 	}
 	fastWriter, ok := w.target.(interface {
-		WriteSelectedFixedRows([]byte, int, []int32) (int, error)
+		WriteSelectedFixedRows([]byte, int, []int64) (int, error)
 	})
 	if !ok {
 		if width < 0 || (width != 0 && len(data)%width != 0) {
@@ -153,13 +154,13 @@ func (w *spillRecordWriter) WriteSelectedFixedRows(
 func (w *spillRecordWriter) WriteSelectedVarlenaRows(
 	values []types.Varlena,
 	area []byte,
-	rows []int32,
+	rows []int64,
 ) (int, error) {
 	if w == nil || w.target == nil {
 		return 0, io.ErrClosedPipe
 	}
 	if fast, ok := w.target.(interface {
-		WriteSelectedVarlenaRows([]types.Varlena, []byte, []int32) (int, error)
+		WriteSelectedVarlenaRows([]types.Varlena, []byte, []int64) (int, error)
 	}); ok {
 		n, err := fast.WriteSelectedVarlenaRows(values, area, rows)
 		w.written += int64(n)
@@ -601,7 +602,7 @@ func (ctr *container) writeSpillRecord(
 	gb *batch.Batch,
 	nthBatch int,
 	bucket int,
-	rows []int32,
+	rows []int64,
 	bktFlags []uint8,
 ) (int64, int64, error) {
 	if len(rows) == 0 {
@@ -873,24 +874,14 @@ func (ctr *container) spillDataToDiskWithInput(proc *process.Process, opAnalyzer
 			clear(bktFlags)
 		}
 
-		// Partition the batch in two linear passes. Only the counts/cursors are
+		// batchHC already holds each row's bucket (computeBucketIndex), so the
+		// shared counting sort splits the rows directly. Only the offsets are
 		// fixed-size; row ids occupy exactly O(rc) accounted recovery scratch.
-		var bucketCounts [spillMaxNumBuckets]int
-		var bucketOffsets [spillMaxNumBuckets + 1]int
-		var bucketCursors [spillMaxNumBuckets]int
-		for _, hash := range batchHC {
-			bucketCounts[int(hash&uint64(bucketCount-1))]++
+		var bucketOffsets [spillMaxNumBuckets + 1]int64
+		if err := remaplist.SplitBuckets(batchHC, ctr.spillBucketRows, bucketOffsets[:bucketCount+1]); err != nil {
+			return 0, 0, err
 		}
-		for bucket, count := range bucketCounts[:bucketCount] {
-			bucketOffsets[bucket+1] = bucketOffsets[bucket] + count
-			bucketCursors[bucket] = bucketOffsets[bucket]
-		}
-		for row, hash := range batchHC {
-			bucket := int(hash & uint64(bucketCount-1))
-			ctr.spillBucketRows[bucketCursors[bucket]] = int32(row)
-			bucketCursors[bucket]++
-		}
-		writeRows := func(bucket int, rows []int32) error {
+		writeRows := func(bucket int, rows []int64) error {
 			if err, canceled := vm.CancelCheck(proc); canceled {
 				return err
 			}
@@ -908,14 +899,12 @@ func (ctr *container) spillDataToDiskWithInput(proc *process.Process, opAnalyzer
 			}
 			return nil
 		}
-		for bucket, selected := range bucketCounts[:bucketCount] {
-			if selected > 0 {
-				end := bucketOffsets[bucket+1]
-				for start := bucketOffsets[bucket]; start < end; start += hashmap.UnitLimit {
-					rows := ctr.spillBucketRows[start:min(start+hashmap.UnitLimit, end)]
-					if err := writeRows(bucket, rows); err != nil {
-						return 0, 0, err
-					}
+		for bucket := range bucketCount {
+			end := bucketOffsets[bucket+1]
+			for start := bucketOffsets[bucket]; start < end; start += hashmap.UnitLimit {
+				rows := ctr.spillBucketRows[start:min(start+hashmap.UnitLimit, end)]
+				if err := writeRows(bucket, rows); err != nil {
+					return 0, 0, err
 				}
 			}
 		}

@@ -1246,7 +1246,7 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 func (ag *aggState) writeSpillStateRows(
 	mp *mpool.MPool,
 	info *aggInfo,
-	rows []int32,
+	rows []int64,
 	writer io.Writer,
 ) (int32, error) {
 	if len(rows) > AggBatchSize {
@@ -1255,7 +1255,7 @@ func (ag *aggState) writeSpillStateRows(
 			len(rows), AggBatchSize)
 	}
 	for _, row := range rows {
-		if row < 0 || row >= ag.length {
+		if row < 0 || row >= int64(ag.length) {
 			return 0, moerr.NewInvalidInputNoCtxf(
 				"aggregate spill row %d exceeds state row count %d",
 				row, ag.length)
@@ -1310,7 +1310,7 @@ func (ag *aggState) writeSpillStateRows(
 		return 0, moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 	}
 	for _, row := range rows {
-		if err := ag.writeStateArg(mp, row, writer, info, true, false, true); err != nil {
+		if err := ag.writeStateArg(mp, int32(row), writer, info, true, false, true); err != nil {
 			return 0, err
 		}
 	}
@@ -2955,7 +2955,7 @@ func (ae *aggExec) saveIntermediateResult(
 
 func (ae *aggExec) SaveSpillIntermediateRows(
 	chunk int,
-	rows []int32,
+	rows []int64,
 	writer io.Writer,
 ) error {
 	if ae == nil || writer == nil {

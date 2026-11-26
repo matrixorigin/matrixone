@@ -2142,7 +2142,7 @@ func TestSumDecimal256WideIntermediateRoundTrip(t *testing.T) {
 
 				if tc.spill {
 					require.NoError(t, source.(SpillStateCodec).SaveSpillIntermediateRows(
-						0, []int32{0}, &wire))
+						0, []int64{0}, &wire))
 				} else {
 					require.NoError(t, source.SaveIntermediateResult(1, [][]uint8{{1}}, &wire))
 				}

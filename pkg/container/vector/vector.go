@@ -4069,17 +4069,12 @@ func (v *Vector) unionMultiFlat(w *Vector, sel int64, cnt int, mp *mpool.MPool) 
 // Rows may be in any order and may repeat; this is how a remaplist.List is
 // applied. NULLs move with their rows.
 func (v *Vector) Union(w *Vector, sels []int64, mp *mpool.MPool) error {
-	return gatherRows[int64](v, w, sels, mp)
-}
-
-// UnionInt32 is Union for the callers whose row lists are still []int32.
-func (v *Vector) UnionInt32(w *Vector, sels []int32, mp *mpool.MPool) error {
-	return gatherRows[int32](v, w, sels, mp)
+	return gatherRows(v, w, sels, mp)
 }
 
 // unionWideFixedSelected handles widths that otherwise require a dynamic copy
 // per row.
-func unionWideFixedSelected[S int32 | int64](v, w *Vector, oldLen int, sels []S, width int) {
+func unionWideFixedSelected(v, w *Vector, oldLen int, sels []int64, width int) {
 	// Bound the byte ranges before constructing typed views. The backing
 	// allocation can contain padding, especially for 12/20/24-byte values.
 	source := w.data[:w.length*width]
@@ -4105,7 +4100,7 @@ func unionWideFixedSelected[S int32 | int64](v, w *Vector, oldLen int, sels []S,
 // unionFixedSelected copies physical values only. gatherRows owns capacity,
 // logical length and metadata; the representative type has the selected width,
 // but need not be the vector's logical SQL type (e.g. UUID and Decimal128).
-func unionFixedSelected[T types.FixedSizeT, S int32 | int64](target, source []byte, sels []S) {
+func unionFixedSelected[T types.FixedSizeT](target, source []byte, sels []int64) {
 	var value T
 	width := int(unsafe.Sizeof(value))
 	src := util.UnsafeSlice[T](unsafe.Pointer(unsafe.SliceData(source)), len(source)/width)

@@ -168,7 +168,7 @@ func TestLegacyDistinctWireKeepsRawRepresentative(t *testing.T) {
 		require.NoError(t, source.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
 		SetCanonicalDistinctKeyWire(source, false)
 		var spill bytes.Buffer
-		require.NoError(t, source.SaveSpillIntermediateRows(0, []int32{0}, &spill))
+		require.NoError(t, source.SaveSpillIntermediateRows(0, []int64{0}, &spill))
 
 		restored := newCountColumnExec(
 			mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
@@ -422,7 +422,7 @@ func TestCanonicalDistinctSpillRestorePreservesMembershipKey(t *testing.T) {
 				bytes.NewReader(canonical.Bytes()), mp))
 			var spill bytes.Buffer
 			require.NoError(t, decoded.SaveSpillIntermediateRows(
-				0, []int32{0}, &spill))
+				0, []int64{0}, &spill))
 
 			SetCanonicalDistinctKeyWire(restored, true)
 			require.NoError(t, restored.UnmarshalSpillFromReader(
