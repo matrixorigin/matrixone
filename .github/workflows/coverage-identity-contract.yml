@@ -33,10 +33,17 @@ jobs:
           set -euo pipefail
           prefix="Coverage standby / $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
           key="${GITHUB_SHA}000000000000000000000000"
-          endpoint="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100"
+          endpoint="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100"
+          jobs="$RUNNER_TEMP/coverage-identity-jobs.json"
           for delay in 0 2 3 5 5 5; do
             sleep "$delay"
-            jobs=$(gh api "$endpoint")
+            status=$(curl --silent --show-error --output "$jobs" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GH_TOKEN" "$endpoint")
+            case "$status" in
+              200) ;;
+              404) echo "Attempt jobs endpoint returned HTTP 404" >&2; continue ;;
+              *) echo "Attempt jobs endpoint returned HTTP $status" >&2; exit 1 ;;
+            esac
             if jq -e --arg prefix "$prefix" --arg sha "$GITHUB_SHA" --arg key "$key" \
                 --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" '
               [.jobs[] | select(.name | endswith(" / Run identity"))] as $m
@@ -45,9 +52,12 @@ jobs:
                   and .status == "completed" and .conclusion == "skipped")
                 and ([$m[].name] | sort) == [
                   ($prefix+"/0/"+$sha+"/cs/"+$key+" / Run identity"),
-                  ($prefix+"/1/"+$sha+"/idc/"+$key+" / Run identity")]' <<<"$jobs"; then
+                  ($prefix+"/1/"+$sha+"/idc/"+$key+" / Run identity")]' "$jobs"; then
               exit 0
             fi
           done
-          jq -c '.jobs[] | {name, run_id, run_attempt, status, conclusion}' <<<"$jobs"
+          echo "Coverage identity was not verified within the retry budget (last HTTP $status)" >&2
+          if [[ "$status" == 200 ]]; then
+            jq -c '.jobs[] | {name, run_id, run_attempt, status, conclusion}' "$jobs"
+          fi
           exit 1
