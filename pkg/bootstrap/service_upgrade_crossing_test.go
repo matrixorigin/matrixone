@@ -260,10 +260,22 @@ func (db *crossingFakeDB) mutations() []string {
 	return out
 }
 
+// The frozen-v4.0.7 restart tests model that binary's final catalog
+// identity, even after a later version has been registered.
+func initFrozenV407Upgrade(s *service) {
+	s.initUpgrade()
+	for i, handler := range s.handles {
+		if handler == v4_0_7.Handler {
+			s.handles = s.handles[:i+1]
+			return
+		}
+	}
+}
+
 func newCrossingService(t *testing.T, db *crossingFakeDB) *service {
 	t.Helper()
 	s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, db,
-		(*service).initUpgrade)
+		initFrozenV407Upgrade)
 	t.Cleanup(s.stopper.Stop)
 	return s
 }

@@ -137,7 +137,7 @@ func TestLegacyCDCAdmissionEmptyCatalogAdmitsSourceOnward(t *testing.T) {
 				return executor.Result{}, nil
 			}
 		}, &testTxnOperator{})
-		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, initFrozenV407Upgrade)
 		t.Cleanup(s.stopper.Stop)
 		require.NoError(t, s.doCheckUpgrade(t.Context()))
 		require.Len(t, routes, 1)

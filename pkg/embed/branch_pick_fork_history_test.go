@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -64,7 +65,9 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 			execSQL(sql)
 		}
 		_, err = conn.ExecContext(t.Context(), "select key_bytes from mo_catalog.mo_branch_fork_keys")
-		require.ErrorContains(t, err, "no such table")
+		var sqlErr *mysql.MySQLError
+		require.ErrorAs(t, err, &sqlErr)
+		require.EqualValues(t, 1146, sqlErr.Number)
 
 		// Simulate a branch created by a binary that did not persist fork keys.
 		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
