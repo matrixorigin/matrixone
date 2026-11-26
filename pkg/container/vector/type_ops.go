@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -37,7 +38,8 @@ type typeOps struct {
 	varlen bool
 
 	getAny         func(v *Vector, i int, deepCopy bool) any
-	appendAny      func(v *Vector, val any, mp *mpool.MPool) error // a non-null value
+	appendAny      func(v *Vector, val any, mp *mpool.MPool) error        // a non-null value
+	setAny         func(v *Vector, i int, val any, mp *mpool.MPool) error // a non-null value
 	shrink         func(v *Vector, sels []int64, negate bool)
 	shrinkByMask   func(v *Vector, sels *bitmap.Bitmap, negate bool, offset uint64)
 	shuffle        func(v *Vector, sels []int64, mp *mpool.MPool) error
@@ -58,6 +60,9 @@ func fixedOps[T types.FixedSizeT]() typeOps {
 		},
 		appendAny: func(v *Vector, val any, mp *mpool.MPool) error {
 			return appendOneFixed(v, val.(T), false, mp)
+		},
+		setAny: func(v *Vector, i int, val any, _ *mpool.MPool) error {
+			return SetFixedAtNoTypeCheck(v, i, val.(T))
 		},
 		shrink:         shrinkFixed[T],
 		shrinkByMask:   shrinkFixedByMask[T],
@@ -88,6 +93,9 @@ func varlenOps() typeOps {
 	}
 	ops.appendAny = func(v *Vector, val any, mp *mpool.MPool) error {
 		return appendOneBytes(v, val.([]byte), false, mp)
+	}
+	ops.setAny = func(v *Vector, i int, val any, mp *mpool.MPool) error {
+		return SetBytesAt(v, i, val.([]byte), mp)
 	}
 	ops.unionAll = unionAllVarlen
 	ops.appendBytes = func(vec *Vector) func([]byte, bool, *mpool.MPool) error {
@@ -196,4 +204,22 @@ func buildTypeOps(rows []typeOpsRow) (tbl [256]typeOps) {
 func opsOf(v *Vector) (*typeOps, bool) {
 	ops := &vectorTypeOps[v.typ.Oid]
 	return ops, ops.supported
+}
+
+// SupportsAny reports whether GetAny, AppendAny and SetAny handle values of
+// type oid: every type id in the table above.
+func SupportsAny(oid types.T) bool {
+	return vectorTypeOps[oid].supported
+}
+
+// SetAny sets row i of vec to val, which must be the Go type that stores
+// vec's type ([]byte for a varlena type). It does not change the row's NULL
+// bit. It returns an error for a type SupportsAny rejects, or when vec cannot
+// be written.
+func SetAny(vec *Vector, i int, val any, mp *mpool.MPool) error {
+	ops, ok := opsOf(vec)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("SetAny: unsupported type %s", vec.typ.String())
+	}
+	return ops.setAny(vec, i, val, mp)
 }

@@ -418,175 +418,32 @@ func CloneVector(src *vector.Vector, mp *mpool.MPool, vp *VectorPool) (Vector, e
 
 // ### Get Functions
 
-// getNonNullValue Please don't merge it with GetValue(). Used in Vector for getting NonNullValue.
+// getNonNullValue returns row row of col as a value, without copying a
+// varlena value and without looking at its NULL bit. Please don't merge it
+// with GetValue(): Vector uses it for getting a non-null value.
 func getNonNullValue(col *vector.Vector, row uint32) any {
-
-	switch col.GetType().Oid {
-	case types.T_bool:
-		return vector.GetFixedAtNoTypeCheck[bool](col, int(row))
-	case types.T_bit:
-		return vector.GetFixedAtNoTypeCheck[uint64](col, int(row))
-	case types.T_int8:
-		return vector.GetFixedAtNoTypeCheck[int8](col, int(row))
-	case types.T_int16:
-		return vector.GetFixedAtNoTypeCheck[int16](col, int(row))
-	case types.T_int32:
-		return vector.GetFixedAtNoTypeCheck[int32](col, int(row))
-	case types.T_int64:
-		return vector.GetFixedAtNoTypeCheck[int64](col, int(row))
-	case types.T_uint8:
-		return vector.GetFixedAtNoTypeCheck[uint8](col, int(row))
-	case types.T_uint16:
-		return vector.GetFixedAtNoTypeCheck[uint16](col, int(row))
-	case types.T_uint32:
-		return vector.GetFixedAtNoTypeCheck[uint32](col, int(row))
-	case types.T_uint64:
-		return vector.GetFixedAtNoTypeCheck[uint64](col, int(row))
-	case types.T_decimal64:
-		return vector.GetFixedAtNoTypeCheck[types.Decimal64](col, int(row))
-	case types.T_decimal128:
-		return vector.GetFixedAtNoTypeCheck[types.Decimal128](col, int(row))
-	case types.T_uuid:
-		return vector.GetFixedAtNoTypeCheck[types.Uuid](col, int(row))
-	case types.T_float32:
-		return vector.GetFixedAtNoTypeCheck[float32](col, int(row))
-	case types.T_float64:
-		return vector.GetFixedAtNoTypeCheck[float64](col, int(row))
-	case types.T_bf16:
-		return vector.GetFixedAtNoTypeCheck[types.BF16](col, int(row))
-	case types.T_float16:
-		return vector.GetFixedAtNoTypeCheck[types.Float16](col, int(row))
-	case types.T_float8:
-		return vector.GetFixedAtNoTypeCheck[types.Float8](col, int(row))
-	case types.T_float4:
-		return vector.GetFixedAtNoTypeCheck[types.Float4](col, int(row))
-	case types.T_date:
-		return vector.GetFixedAtNoTypeCheck[types.Date](col, int(row))
-	case types.T_time:
-		return vector.GetFixedAtNoTypeCheck[types.Time](col, int(row))
-	case types.T_datetime:
-		return vector.GetFixedAtNoTypeCheck[types.Datetime](col, int(row))
-	case types.T_timestamp:
-		return vector.GetFixedAtNoTypeCheck[types.Timestamp](col, int(row))
-	case types.T_enum:
-		return vector.GetFixedAtNoTypeCheck[types.Enum](col, int(row))
-	case types.T_year:
-		return vector.GetFixedAtNoTypeCheck[types.MoYear](col, int(row))
-	case types.T_TS:
-		return vector.GetFixedAtNoTypeCheck[types.TS](col, int(row))
-	case types.T_Rowid:
-		return vector.GetFixedAtNoTypeCheck[types.Rowid](col, int(row))
-	case types.T_Blockid:
-		return vector.GetFixedAtNoTypeCheck[types.Blockid](col, int(row))
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
-		types.T_array_float8, types.T_array_float4, types.T_datalink:
-		return col.GetBytesAt(int(row))
-	default:
-		//return vector.ErrVecTypeNotSupport
+	if !vector.SupportsAny(col.GetType().Oid) {
 		panic(any("No Support"))
 	}
+	return vector.GetAny(col, int(row), false)
 }
 
 // ### Update Function
 
-func GenericUpdateFixedValue[T types.FixedSizeT](
-	vec *vector.Vector, row uint32, v any, isNull bool, _ *mpool.MPool,
-) {
-	if isNull {
-		vec.GetNulls().Add(uint64(row))
-	} else {
-		err := vector.SetFixedAtNoTypeCheck(vec, int(row), v.(T))
-		if err != nil {
-			panic(err)
-		}
-		if vec.GetNulls().Contains(uint64(row)) {
-			vec.GetNulls().Unset(uint64(row))
-		}
-	}
-}
-
-func GenericUpdateBytes(
-	vec *vector.Vector, row uint32, v any, isNull bool, mp *mpool.MPool,
-) {
-	if isNull {
-		vec.GetNulls().Add(uint64(row))
-	} else {
-		err := vector.SetBytesAt(vec, int(row), v.([]byte), mp)
-		if err != nil {
-			panic(err)
-		}
-		if vec.GetNulls().Contains(uint64(row)) {
-			vec.GetNulls().Unset(uint64(row))
-		}
-	}
-}
-
+// UpdateValue sets row row of col to val, or to NULL.
 func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool.MPool) {
-	switch col.GetType().Oid {
-	case types.T_bool:
-		GenericUpdateFixedValue[bool](col, row, val, isNull, mp)
-	case types.T_bit:
-		GenericUpdateFixedValue[uint64](col, row, val, isNull, mp)
-	case types.T_int8:
-		GenericUpdateFixedValue[int8](col, row, val, isNull, mp)
-	case types.T_int16:
-		GenericUpdateFixedValue[int16](col, row, val, isNull, mp)
-	case types.T_int32:
-		GenericUpdateFixedValue[int32](col, row, val, isNull, mp)
-	case types.T_int64:
-		GenericUpdateFixedValue[int64](col, row, val, isNull, mp)
-	case types.T_uint8:
-		GenericUpdateFixedValue[uint8](col, row, val, isNull, mp)
-	case types.T_uint16:
-		GenericUpdateFixedValue[uint16](col, row, val, isNull, mp)
-	case types.T_uint32:
-		GenericUpdateFixedValue[uint32](col, row, val, isNull, mp)
-	case types.T_uint64:
-		GenericUpdateFixedValue[uint64](col, row, val, isNull, mp)
-	case types.T_decimal64:
-		GenericUpdateFixedValue[types.Decimal64](col, row, val, isNull, mp)
-	case types.T_decimal128:
-		GenericUpdateFixedValue[types.Decimal128](col, row, val, isNull, mp)
-	case types.T_float32:
-		GenericUpdateFixedValue[float32](col, row, val, isNull, mp)
-	case types.T_float64:
-		GenericUpdateFixedValue[float64](col, row, val, isNull, mp)
-	case types.T_bf16:
-		GenericUpdateFixedValue[types.BF16](col, row, val, isNull, mp)
-	case types.T_float16:
-		GenericUpdateFixedValue[types.Float16](col, row, val, isNull, mp)
-	case types.T_float8:
-		GenericUpdateFixedValue[types.Float8](col, row, val, isNull, mp)
-	case types.T_float4:
-		GenericUpdateFixedValue[types.Float4](col, row, val, isNull, mp)
-	case types.T_date:
-		GenericUpdateFixedValue[types.Date](col, row, val, isNull, mp)
-	case types.T_time:
-		GenericUpdateFixedValue[types.Time](col, row, val, isNull, mp)
-	case types.T_datetime:
-		GenericUpdateFixedValue[types.Datetime](col, row, val, isNull, mp)
-	case types.T_timestamp:
-		GenericUpdateFixedValue[types.Timestamp](col, row, val, isNull, mp)
-	case types.T_enum:
-		GenericUpdateFixedValue[types.Enum](col, row, val, isNull, mp)
-	case types.T_uuid:
-		GenericUpdateFixedValue[types.Uuid](col, row, val, isNull, mp)
-	case types.T_TS:
-		GenericUpdateFixedValue[types.TS](col, row, val, isNull, mp)
-	case types.T_Rowid:
-		GenericUpdateFixedValue[types.Rowid](col, row, val, isNull, mp)
-	case types.T_Blockid:
-		GenericUpdateFixedValue[types.Blockid](col, row, val, isNull, mp)
-	case types.T_varchar, types.T_char, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
-		types.T_array_float8, types.T_array_float4, types.T_datalink:
-		GenericUpdateBytes(col, row, val, isNull, mp)
-	default:
+	if !vector.SupportsAny(col.GetType().Oid) {
 		panic(moerr.NewInternalErrorNoCtxf("%v not supported", col.GetType()))
+	}
+	if isNull {
+		col.GetNulls().Add(uint64(row))
+		return
+	}
+	if err := vector.SetAny(col, int(row), val, mp); err != nil {
+		panic(err)
+	}
+	if col.GetNulls().Contains(uint64(row)) {
+		col.GetNulls().Unset(uint64(row))
 	}
 }
 
