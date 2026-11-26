@@ -80,6 +80,83 @@ func TestPersistedUnixTimestampDefaultRetainsReleasedOverload(t *testing.T) {
 	require.Equal(t, int64(32536771198), evaluate(restored.Cols[1]))
 }
 
+func TestTableDumpV1UnixTimestampDefaultWithStableLiteral(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	compiler := NewMockCompilerContext(false, proc)
+	stmt, err := mysql.ParseOne(t.Context(),
+		"create table t(a bigint default (unix_timestamp('1971-01-01 00:00:00')))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false, nil)
+	require.NoError(t, err)
+	current := built.GetDdl().GetCreateTable().GetTableDef()
+	legacy := proto.Clone(current).(*planpb.TableDef)
+	changed := false
+	require.NoError(t, planpb.VisitExprTree(legacy.Cols[0].Default.Expr, func(expr *planpb.Expr) error {
+		if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "unix_timestamp" {
+			id, overload := function.DecodeOverloadID(fn.Func.Obj)
+			require.Equal(t, int32(function.UNIX_TIMESTAMP), id)
+			require.Equal(t, int32(6), overload)
+			fn.Func.Obj = function.EncodeOverloadID(id, 2)
+			changed = true
+		}
+		return nil
+	}))
+	require.True(t, changed)
+
+	for _, tc := range []struct {
+		name string
+		def  *planpb.TableDef
+	}{{"current", current}, {"legacy", legacy}} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := proto.Clone(tc.def)
+			_, err := AnalyzeTableDumpBindings(compiler, tc.def, tc.def)
+			require.NoError(t, err)
+			sensitive, err := AnalyzeTableDumpBindings(compiler, tc.def, nil)
+			require.NoError(t, err)
+			require.False(t, sensitive, "v1 restore has no bound payload, but these overloads agree for the literal")
+			require.True(t, proto.Equal(before, tc.def))
+		})
+	}
+}
+
+func TestTableDumpV1UnixTimestampBoundaryRemainsSensitive(t *testing.T) {
+	for _, value := range []string{"1970-01-01 00:00:00", "3001-01-20 00:00:00"} {
+		t.Run(value, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			proc.GetSessionInfo().TimeZone = time.UTC
+			compiler := NewMockCompilerContext(false, proc)
+			stmt, err := mysql.ParseOne(t.Context(),
+				"create table t(a bigint default (unix_timestamp('"+value+"')))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(compiler, stmt, false, nil)
+			require.NoError(t, err)
+			def := built.GetDdl().GetCreateTable().GetTableDef()
+			sensitive, err := AnalyzeTableDumpBindings(compiler, def, nil)
+			require.NoError(t, err)
+			require.True(t, sensitive, "v1 has no payload to distinguish the changed range semantics")
+		})
+	}
+}
+
+func TestTableDumpV1UnixTimestampDatetimeRemainsSensitive(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	compiler := NewMockCompilerContext(false, proc)
+	stmt, err := mysql.ParseOne(t.Context(),
+		"create table t(a bigint default (unix_timestamp(cast('1971-01-01 00:00:00' as datetime))))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false, nil)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef()
+	sensitive, err := AnalyzeTableDumpBindings(compiler, def, nil)
+	require.NoError(t, err)
+	require.True(t, sensitive, "v1 cannot distinguish the earlier DATETIME-to-string binding")
+}
+
 func TestTableDumpReleasedUnixTimestampDatetimeOverload(t *testing.T) {
 	proc := newPlanTestProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC

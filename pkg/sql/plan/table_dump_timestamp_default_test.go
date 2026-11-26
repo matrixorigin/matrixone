@@ -602,7 +602,7 @@ func TestTableDumpCurrentMonthAbbrevLargeExpressionNearZoneBoundary(t *testing.T
 		}
 		return "", nil
 	}
-	defaultSQL := "concat(date_format(from_unixtime(1709251200), '%b %Y-%m-%d %H:%i')" +
+	defaultSQL := "concat('Donnerstag:', date_format(from_unixtime(1709251200), '%b %Y-%m-%d %H:%i')" +
 		strings.Repeat(", 'x'", 290) + ")"
 	stmt, err := mysql.ParseOne(t.Context(), "create table t(a varchar(2048) default ("+defaultSQL+"))", 1)
 	require.NoError(t, err)
@@ -616,6 +616,42 @@ func TestTableDumpCurrentMonthAbbrevLargeExpressionNearZoneBoundary(t *testing.T
 	_, err = AnalyzeTableDumpBindings(compiler, def, def)
 	require.NoError(t, err)
 	require.True(t, proto.Equal(before, def))
+}
+
+func TestTableDumpGermanDefaultNearZoneBoundaryWithinBudget(t *testing.T) {
+	for _, verb := range []string{"%M", "%b"} {
+		t.Run(verb, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			proc.GetSessionInfo().TimeZone = time.FixedZone("creation zone", 13*3600+47*60)
+			proc.GetSessionInfo().LCTimeNames = "de_DE"
+			compiler := NewMockCompilerContext(false, proc)
+			compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+				switch name {
+				case "lc_time_names":
+					return "de_DE", nil
+				case "div_precision_increment":
+					return int64(0), nil
+				case "explicit_defaults_for_timestamp":
+					return true, nil
+				}
+				return "", nil
+			}
+			defaultSQL := "concat(date_format(from_unixtime(1709251200), '" + verb + " %Y-%m-%d %H:%i')" +
+				strings.Repeat(", 'x'", 180) + ")"
+			stmt, err := mysql.ParseOne(t.Context(), "create table t(a varchar(2048) default ("+defaultSQL+"))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(compiler, stmt, false, nil)
+			require.NoError(t, err)
+			def := built.GetDdl().GetCreateTable().GetTableDef()
+			before := proto.Clone(def)
+			proc.GetSessionInfo().TimeZone = time.UTC
+			proc.GetSessionInfo().LCTimeNames = "en_US"
+			_, err = AnalyzeTableDumpBindings(compiler, def, def)
+			require.NoError(t, err)
+			require.True(t, proto.Equal(before, def))
+		})
+	}
 }
 
 func TestTableDumpSharedTimezoneWitnessAcrossDefaults(t *testing.T) {

@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -703,6 +704,45 @@ func sameTableDumpBoundExpression(a, b *planpb.Expr) bool {
 	return sameProjectedBoundExpression(a, b, boundExpressionNormalized)
 }
 
+// Version-one archives carry no bound-expression payload. For a literal well
+// inside the common UNIX_TIMESTAMP range, the old and new string overloads
+// have the same execution semantics even though their persisted IDs differ.
+// Normalize only those IDs, then compare the complete trees as usual.
+func sameTableDumpV1UnixTimestampBinding(a, b *planpb.Expr) bool {
+	if sameTableDumpBoundExpression(a, b) {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	normalize := func(expr *planpb.Expr) *planpb.Expr {
+		copy := proto.Clone(expr).(*planpb.Expr)
+		if err := planpb.VisitExprTree(copy, func(node *planpb.Expr) error {
+			fn := node.GetF()
+			if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.ObjName, "unix_timestamp") || len(fn.Args) == 0 {
+				return nil
+			}
+			id, overload := function.DecodeOverloadID(fn.Func.Obj)
+			if id != int32(function.UNIX_TIMESTAMP) || (overload != 2 && overload != 3 && overload != 6 && overload != 7) {
+				return nil
+			}
+			literal := fn.Args[0].GetLit()
+			if literal == nil || !function.UnixTimestampLiteralStableAcrossTimeZones(literal.GetSval()) {
+				return nil
+			}
+			if overload == 6 || overload == 7 {
+				fn.Func.Obj = function.EncodeOverloadID(id, overload-4)
+			}
+			return nil
+		}); err != nil {
+			return nil
+		}
+		return copy
+	}
+	left, right := normalize(a), normalize(b)
+	return left != nil && right != nil && sameTableDumpBoundExpression(left, right)
+}
+
 func sameTableDumpBoundType(a, b planpb.Type) bool {
 	return sameTableDumpBoundExpression(&planpb.Expr{Typ: a}, &planpb.Expr{Typ: b})
 }
@@ -847,28 +887,90 @@ type tableDumpSessionCandidate struct {
 	folded, stored bool
 }
 
+func tableDumpFoldedStringSimilarity(want, candidate *planpb.Expr) int {
+	if want == nil || candidate == nil || want.GetLit() == nil || candidate.GetLit() == nil {
+		return 0
+	}
+	wantValue, wantOK := want.GetLit().Value.(*planpb.Literal_Sval)
+	candidateValue, candidateOK := candidate.GetLit().Value.(*planpb.Literal_Sval)
+	if !wantOK || !candidateOK {
+		return 0
+	}
+	maskNumbers := func(value string) []rune {
+		result := []rune(strings.ToLower(value))
+		for i, char := range result {
+			if unicode.IsDigit(char) {
+				result[i] = '#'
+			}
+		}
+		return result
+	}
+	left, right := maskNumbers(wantValue.Sval), maskNumbers(candidateValue.Sval)
+	limit := min(len(left), len(right))
+	var prefix, suffix int
+	for prefix < limit && left[prefix] == right[prefix] {
+		prefix++
+	}
+	for suffix < limit-prefix && left[len(left)-1-suffix] == right[len(right)-1-suffix] {
+		suffix++
+	}
+	return prefix + suffix
+}
+
 // Try all cheap locale witnesses before any exhaustive timezone search. The bind
 // callback owns cancellation/budget checks and returns only fatal proof errors.
 func matchTableDumpSessions(want *planpb.Expr, zone *time.Location, locale string,
 	timeZones func(func(*time.Location) bool), sessions []tableDumpSessionCandidate,
 	bind func(tableDumpSessionCandidate, *time.Location, string) (*planpb.Expr, error),
 	match func(tableDumpSessionCandidate, *planpb.Expr) bool) (bool, error) {
+	locales := []string{locale}
+	if locale != "ja_JP" {
+		locales = append(locales, "ja_JP")
+	}
+	for _, other := range function.TemporalLocaleNames() {
+		if other != locale && other != "ja_JP" {
+			locales = append(locales, other)
+		}
+	}
+	// A folded literal may include arbitrary constant text from its SQL origin.
+	// Rank locales by complete rebindings at a few fixed zones, so a word in
+	// that constant text cannot mislead the search. Numeric clock fields are
+	// ignored for ranking only; acceptance still compares the full expression.
+	if want.GetLit() != nil {
+		var sample *tableDumpSessionCandidate
+		for i := range sessions {
+			if sessions[i].dependency.locale && sessions[i].mode&tableDumpBindingLegacyJapaneseMonthAbbrev == 0 {
+				sample = &sessions[i]
+				break
+			}
+		}
+		if sample != nil {
+			scores := make(map[string]int, len(locales))
+			zones := []*time.Location{zone,
+				time.FixedZone("table dump locale probe", 14*3600),
+				time.FixedZone("table dump locale probe", -(13*3600 + 59*60))}
+			for _, lc := range locales {
+				for _, tz := range zones {
+					candidate, err := bind(*sample, tz, lc)
+					if err != nil {
+						return false, err
+					}
+					scores[lc] = max(scores[lc], tableDumpFoldedStringSimilarity(want, candidate))
+				}
+			}
+			sort.SliceStable(locales, func(i, j int) bool {
+				return scores[locales[i]] > scores[locales[j]]
+			})
+		}
+	}
 	localesFor := func(search tableDumpSessionCandidate) []string {
 		if search.mode&tableDumpBindingLegacyJapaneseMonthAbbrev != 0 {
 			return []string{"ja_JP"}
 		}
-		locales := []string{locale}
 		if search.dependency.locale {
-			if locale != "ja_JP" {
-				locales = append(locales, "ja_JP")
-			}
-			for _, other := range function.TemporalLocaleNames() {
-				if other != locale && other != "ja_JP" {
-					locales = append(locales, other)
-				}
-			}
+			return locales
 		}
-		return locales
+		return []string{locale}
 	}
 	legacy := false
 	for _, search := range sessions {
@@ -884,7 +986,10 @@ func matchTableDumpSessions(want *planpb.Expr, zone *time.Location, locale strin
 		})
 	}
 	for _, search := range sessions {
-		for _, other := range localesFor(search)[1:] {
+		for _, other := range localesFor(search) {
+			if other == locale {
+				continue
+			}
 			rebound, err := bind(search, zone, other)
 			if err != nil {
 				return false, err
@@ -1307,7 +1412,8 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 						sensitive = true
 					} else if first == nil {
 						first = candidate
-					} else if !sameTableDumpBoundExpression(first, candidate) {
+					} else if !sameTableDumpBoundExpression(first, candidate) &&
+						(supplied != nil || !visit.hasUnixTimestamp || !sameTableDumpV1UnixTimestampBinding(first, candidate)) {
 						sensitive = true
 					}
 					if !matched {

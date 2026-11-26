@@ -3158,6 +3158,24 @@ func currentUnixTimestampBounds() unixTimestampBounds {
 	}
 }
 
+// UnixTimestampLiteralStableAcrossTimeZones reports whether the old and new
+// string overloads agree for this constant under every supported session
+// timezone. A two-day margin covers fixed offsets and named-zone transitions;
+// values near either changed range boundary remain version-sensitive.
+func UnixTimestampLiteralStableAcrossTimeZones(value string) bool {
+	timestamp, invalid := parseTimestampForUnix(time.UTC, value)
+	if invalid {
+		return false
+	}
+	if timestamp == types.ZeroTimestamp {
+		return false
+	}
+	bounds := currentUnixTimestampBounds()
+	micro, _ := bounds.microseconds(timestamp)
+	const margin = 48 * 60 * 60 * types.MicroSecsPerSec
+	return micro >= bounds.lower+margin && micro <= bounds.upper-margin
+}
+
 func legacyUnixTimestampBounds() unixTimestampBounds {
 	return unixTimestampBounds{lower: 0, upper: math.MaxInt64}
 }
