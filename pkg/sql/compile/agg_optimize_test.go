@@ -361,19 +361,22 @@ func TestScopeSealedCountIOUsesScannerCancellationAndAccounting(t *testing.T) {
 
 	// The ordinary reader reports its own interval on the same owner.
 	scan.OpAnalyzer.Start()
-	perfcounter.Update(perfcounter.WithCounterSet(child, scan.OpAnalyzer.GetOpCounterSet()), func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Get.Add(2)
-		counter.FileService.S3ReadSize.Add(128)
-	})
-	scan.OpAnalyzer.WaitDurationKind(time.Nanosecond, resource.WaitFilesystem)
+	readCtx := perfcounter.WithCounterSet(child, scan.OpAnalyzer.GetOpCounterSet())
+	require.NoError(t, process.MeasureFilesystemWaitErr(scan.OpAnalyzer, func() error {
+		perfcounter.Update(readCtx, func(counter *perfcounter.CounterSet) {
+			counter.FileService.S3.Get.Add(2)
+			counter.FileService.S3ReadSize.Add(128)
+		})
+		return nil
+	}))
 	scan.OpAnalyzer.Stop()
 	combined := owner.ResourceDelta()
 	require.Equal(t, startup.Usage.ExclusiveActiveNS+uint64(owner.TimeConsumed), combined.Usage.ExclusiveActiveNS)
-	require.Equal(t, startup.Usage.WaitNS[resource.WaitFilesystem]+1, combined.Usage.WaitNS[resource.WaitFilesystem])
+	require.Positive(t, owner.WaitTimeConsumed)
+	require.Equal(t, startup.Usage.WaitNS[resource.WaitFilesystem]+uint64(owner.WaitTimeConsumed), combined.Usage.WaitNS[resource.WaitFilesystem])
 	require.Equal(t, uint64(3), combined.Usage.S3Requests[resource.S3Get])
 	require.Equal(t, uint64(192), combined.Usage.S3ReadBytes)
 	require.Equal(t, 1, owner.CallNum)
-	require.Equal(t, int64(1), owner.WaitTimeConsumed)
 
 	// A separate prepare operation contributes only through scope statistics.
 	stats.AddScopePrepareS3Request(statistic.S3Request{Get: 2})
