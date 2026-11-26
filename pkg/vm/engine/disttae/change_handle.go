@@ -64,7 +64,7 @@ func (tbl *txnTable) CollectChanges(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
-	if engine.CollectChangesVisibleDiffFromContext(ctx) {
+	if _, forced := engine.CollectChangesVisibleDiffFromContext(ctx); forced {
 		return NewVisibleStateChangesHandle(ctx, tbl, from, to, skipDeletes, objectio.BlockMaxRows, mp,
 			engine.VisibleStateRecoveryResourcesFromContext(ctx), engine.VisibleStateStartRelationFromContext(ctx))
 	}

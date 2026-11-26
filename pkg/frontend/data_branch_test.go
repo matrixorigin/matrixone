@@ -3078,7 +3078,7 @@ func collectPickCopyAlterGap(
 			{tableID: oldID, database: "db1", table: "old", snapshot: cloneTS}: types.BuildTS(11, 0),
 		},
 	})
-	tarHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, tables, dag, nil, &lo, &hi)
+	tarHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, tables, dag, nil, nil, &lo, &hi)
 	require.NoError(t, err)
 	require.Len(t, tarHandles, 1)
 	require.Empty(t, baseHandles)
@@ -3182,7 +3182,7 @@ func TestDataBranchPickWindowForkBoundary(t *testing.T) {
 				dag.pathFromLCAToTarTS = []types.TS{{}, srcFork, nestedFork}
 				dag.pathFromLCAToTarLineageOnly = []bool{false, false, false}
 			}
-			tarHandles, baseHandles, err := constructChangeHandle(ctx, ses, nil, &tables, &dag, nil, &lo, &hi)
+			tarHandles, baseHandles, err := constructChangeHandle(ctx, ses, nil, &tables, &dag, nil, nil, &lo, &hi)
 			require.NoError(t, err)
 			for _, handle := range append(tarHandles, baseHandles...) {
 				defer handle.Close()

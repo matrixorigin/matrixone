@@ -1482,6 +1482,7 @@ func reconcileDataBranchEndpointSchema(
 				return err
 			}
 			tables.pickSourceDefs, tables.pickSourceEdges = tarDefs, tarEdges
+			tables.pickBaseDefs, tables.pickBaseEdges = baseDefs, baseEdges
 		}
 		renameProof := make(dataBranchRenameProof)
 		endpointColumns, err := dataBranchLineageEndpointColumns(tarDefs, tarEdges, baseDefs, baseEdges, renameProof)
@@ -1777,7 +1778,7 @@ func diffOnBase(
 	}
 
 	if tarHandle, baseHandle, err = constructChangeHandle(
-		ctx, ses, bh, &tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo,
+		ctx, ses, bh, &tblStuff, &dagInfo, pkFilter, pickKeyHashmap, betweenFrom, betweenTo,
 	); err != nil {
 		return
 	}
@@ -2313,6 +2314,7 @@ func constructChangeHandle(
 	tables *tableStuff,
 	branchInfo *branchMetaInfo,
 	pkFilter *engine.PKFilter,
+	pickKeyHashmap databranchutils.BranchHashmap,
 	betweenFrom, betweenTo *types.TS,
 ) (
 	tarHandle []engine.ChangesHandle,
@@ -2490,6 +2492,13 @@ func constructChangeHandle(
 		return databranchutils.CollectChanges(ctx, rel, from, end, mp)
 	}
 
+	var selectKeys engine.VisibleStateKeySelector
+	if pickKeyHashmap != nil {
+		selectKeys = func(keys *vector.Vector) ([]int64, error) {
+			return dataBranchPickedKeyRows(pickKeyHashmap, keys)
+		}
+	}
+
 	for i := range tarRange.rel {
 		collectStart := time.Now()
 		tarSegIdent := tarRange.segmentIdentity(i, tarIdent)
@@ -2525,7 +2534,7 @@ func constructChangeHandle(
 			)
 		}
 		if i < len(tarRange.forkBefore) && tarRange.forkBefore[i] != nil {
-			collectCtx = engine.WithCollectChangesVisibleDiff(collectCtx)
+			collectCtx = engine.WithCollectChangesVisibleDiff(collectCtx, selectKeys)
 		}
 		if handle, err = collectFn(
 			collectCtx,
@@ -2635,14 +2644,10 @@ func constructChangeHandle(
 func zeroHistoryPickSourceColumns(
 	tables tableStuff, segment, endpoint *plan.TableDef, proof dataBranchRenameProof,
 ) ([]*plan.ColDef, error) {
-	first := slices.IndexFunc(tables.pickSourceDefs, func(def *plan.TableDef) bool {
-		return def.TblId == segment.TblId && def.Version >= segment.Version
-	})
-	if first < 0 {
+	defs, edges := dataBranchSchemaPathFrom(segment, tables.pickSourceDefs, tables.pickSourceEdges)
+	if defs == nil {
 		return nil, moerr.NewInternalErrorNoCtxf("DATA BRANCH PICK has no source schema path for table %d", segment.TblId)
 	}
-	defs := append([]*plan.TableDef{segment}, tables.pickSourceDefs[first:]...)
-	edges := append([]bool{false}, tables.pickSourceEdges[first:]...)
 	cols := make([]*plan.ColDef, len(tables.def.colNames))
 	for idx, name := range tables.def.colNames {
 		col := dataBranchColumnDefByName(endpoint, name)
@@ -2655,6 +2660,20 @@ func zeroHistoryPickSourceColumns(
 		}
 	}
 	return cols, nil
+}
+
+// Use the definition actually visible at the starting snapshot before
+// following the remaining schema and fork edges to the current endpoint.
+func dataBranchSchemaPathFrom(
+	segment *plan.TableDef, defs []*plan.TableDef, edges []bool,
+) ([]*plan.TableDef, []bool) {
+	first := slices.IndexFunc(defs, func(def *plan.TableDef) bool {
+		return def.TblId == segment.TblId && def.Version >= segment.Version
+	})
+	if first < 0 {
+		return nil, nil
+	}
+	return append([]*plan.TableDef{segment}, defs[first:]...), append([]bool{false}, edges[first:]...)
 }
 
 func dataBranchPathTableDefs(
@@ -3375,6 +3394,12 @@ func buildSideCollectRange(
 	tarRelSp, baseRelSp := tables.resolvedRelSnapshots(ses)
 	var previousRel engine.Relation
 	var previousPoint dataBranchPickWindowStart
+	var pendingFork bool
+	var pendingForkCommit types.TS
+	collectForkWrites := tables.boundedPick && tables.lcaHasZeroHistory && endpointID == tables.tarRel.GetTableID(ctx)
+	logicalFork := func(i int) bool {
+		return i > 0 && i < len(selfPathLineageOnly) && !selfPathLineageOnly[i]
+	}
 	appendSegment := func(rel engine.Relation, openedAt, from, to types.TS, ident branchIdentity, before *dataBranchPickWindowStart) {
 		cr.rel = append(cr.rel, rel)
 		cr.relSnapshot = append(cr.relSnapshot, openedAt)
@@ -3441,7 +3466,17 @@ func buildSideCollectRange(
 					if !tables.boundedPick || !tables.lcaHasZeroHistory {
 						return
 					}
-					previousRel = nil
+					// A fork from a table with no committed generation read
+					// its transaction-local state. Keep the last committed
+					// parent image until the first observable child.
+					if collectForkWrites && previousRel != nil && logicalFork(i) && logicalFork(i+1) &&
+						(pendingFork || previousPoint.snapshot.EQ(&selfPathTS[i])) {
+						pendingFork = true
+					} else {
+						previousRel = nil
+						pendingFork = false
+						pendingForkCommit = types.TS{}
+					}
 					continue
 				}
 				relationSnapshot = endpointCTS
@@ -3505,14 +3540,27 @@ func buildSideCollectRange(
 			}
 		}
 
-		if hasZeroHistory && previousRel != nil && endpointID == tables.tarRel.GetTableID(ctx) &&
-			i < len(selfPathLineageOnly) && !selfPathLineageOnly[i] &&
-			previousPoint.snapshot.EQ(&selfPathTS[i]) && nodeCTS.LE(&windowEnd) {
-			// The parent's fork image excludes inherited rows from the
-			// child creation commit while preserving its own writes.
-			before := previousPoint
-			appendSegment(rel, nodeCTS, nodeCTS, nodeCTS, segIdent, &before)
+		continuesFork := pendingFork && (pendingForkCommit.IsEmpty() || nodeCTS.EQ(&pendingForkCommit))
+		if collectForkWrites && hasZeroHistory && previousRel != nil && logicalFork(i) &&
+			(continuesFork || previousPoint.snapshot.EQ(&selfPathTS[i])) {
+			if nodeCTSResolved && nodeCTS.GT(&windowEnd) && logicalFork(i+1) {
+				// The next fork read this table within its creation transaction.
+				// The final child contains the writes inherited from intermediate
+				// nodes at their fork points.
+				pendingFork = true
+				pendingForkCommit = nodeCTS
+				continue
+			}
+			if nodeCTS.LE(&windowEnd) {
+				before := previousPoint
+				appendSegment(rel, nodeCTS, nodeCTS, nodeCTS, segIdent, &before)
+			}
 		}
+		if pendingFork && !continuesFork {
+			previousRel = nil
+		}
+		pendingFork = false
+		pendingForkCommit = types.TS{}
 		if windowFrom.LE(&windowEnd) {
 			appendSegment(rel, relationSnapshot, windowFrom, windowEnd, segIdent, nil)
 		}

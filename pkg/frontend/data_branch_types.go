@@ -288,6 +288,8 @@ type tableStuff struct {
 	pickWindowStart *dataBranchPickWindowStart
 	pickSourceDefs  []*plan.TableDef
 	pickSourceEdges []bool
+	pickBaseDefs    []*plan.TableDef
+	pickBaseEdges   []bool
 
 	def struct {
 		colNames      []string     // all columns

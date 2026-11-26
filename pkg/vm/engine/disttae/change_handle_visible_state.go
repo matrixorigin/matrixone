@@ -60,6 +60,7 @@ type VisibleStateChangesHandle struct {
 	coarseMaxRow uint32
 	mp           *mpool.MPool
 	retainRowID  bool
+	selectKeys   engine.VisibleStateKeySelector
 
 	beforeScan visibleStateSnapshotScan
 	afterScan  visibleStateSnapshotScan
@@ -109,10 +110,12 @@ func NewVisibleStateChangesHandle(
 		return nil, moerr.NewInternalErrorNoCtx("visible-state changes handle requires a non-nil mpool")
 	}
 
+	selectKeys, _ := engine.CollectChangesVisibleDiffFromContext(ctx)
 	h := &VisibleStateChangesHandle{
 		tbl: tbl, start: start, end: end, skipDeletes: skipDeletes,
 		coarseMaxRow: coarseMaxRow, mp: effectiveMP,
 		retainRowID: engine.RetainRowIDFromContext(ctx),
+		selectKeys:  selectKeys,
 		beforeScan:  visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 		afterScan:   visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 	}
@@ -412,6 +415,14 @@ func (h *VisibleStateChangesHandle) loadVisibleRows(ctx context.Context) error {
 				readBatch.Clean(h.mp)
 				break
 			}
+			if err = h.selectSnapshotKeys(readBatch, h.beforeScan.pkIdx); err != nil {
+				readBatch.Clean(h.mp)
+				return err
+			}
+			if readBatch.RowCount() == 0 {
+				readBatch.Clean(h.mp)
+				continue
+			}
 			entries := make([]engine.VisibleStateEntry, readBatch.RowCount())
 			for row := 0; row < readBatch.RowCount(); row++ {
 				pkBytes, rowBytes := h.encodeSnapshotRow(readBatch, row, &h.beforeScan)
@@ -494,10 +505,25 @@ func (h *VisibleStateChangesHandle) ensureAfterBatch(ctx context.Context) error 
 			h.afterScan.readerIdx++
 			continue
 		}
+		if err = h.selectSnapshotKeys(readBatch, h.afterScan.pkIdx); err != nil {
+			readBatch.Clean(h.mp)
+			return err
+		}
 		h.currentAfter = readBatch
 		h.currentRow = 0
 	}
 	return nil
+}
+
+func (h *VisibleStateChangesHandle) selectSnapshotKeys(rows *batch.Batch, pkIdx int) error {
+	if h.selectKeys == nil || rows.RowCount() == 0 {
+		return nil
+	}
+	selected, err := h.selectKeys(rows.Vecs[pkIdx])
+	if err != nil {
+		return err
+	}
+	return rows.Shrink(selected, false, h.mp)
 }
 
 func (h *VisibleStateChangesHandle) encodeSnapshotRow(src *batch.Batch, row int, scan *visibleStateSnapshotScan) ([]byte, []byte) {

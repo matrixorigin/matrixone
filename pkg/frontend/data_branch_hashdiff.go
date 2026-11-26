@@ -2167,6 +2167,32 @@ func reconcilePickWindowDestinationInsert(
 
 // A currently absent key that existed in a committed destination generation
 // is a deletion even if a later destination fork inherited that absence.
+// A row under a different historical key is not evidence of a deletion.
+// Resolve each current key component by column identity before probing.
+func historicalPickPrimaryKeyNames(
+	historical *plan2.TableDef, defs []*plan2.TableDef, edges []bool, proof dataBranchRenameProof,
+) []string {
+	path, pathEdges := dataBranchSchemaPathFrom(historical, defs, edges)
+	if path == nil {
+		return nil
+	}
+	current := path[len(path)-1]
+	oldKind, oldNames := dataBranchPrimaryKeyColumns(historical)
+	kind, names := dataBranchPrimaryKeyColumns(current)
+	if oldKind != kind || len(oldNames) != len(names) {
+		return nil
+	}
+	for i, name := range names {
+		col := dataBranchColumnDefByName(current, name)
+		reaches, oldCol, redefined := dataBranchColumnReachesLCA(path, pathEdges, col, proof)
+		if !reaches || redefined || oldCol == nil || oldCol.Name != oldNames[i] ||
+			!isDataBranchLogicalTypeEquivalent(oldCol.Typ, col.Typ) {
+			return nil
+		}
+	}
+	return oldNames
+}
+
 func emitPreviouslyPresentPickKeys(
 	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
 	keys *vector.Vector, creation types.TS, emit emitFunc,
@@ -2174,14 +2200,17 @@ func emitPreviouslyPresentPickKeys(
 	starts := append([]dataBranchPickWindowStart{
 		{tableID: tables.baseRel.GetTableID(ctx), snapshot: creation, identity: tables.resolvedLCAIdentity(ctx, ses)},
 	}, tables.zeroHistoryBaseStarts...)
+	proof := make(dataBranchRenameProof)
 	for _, start := range starts {
 		rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{start.identity}, start.tableID, start.snapshot)
 		if err != nil {
 			return false, err
 		}
-		kind, names := dataBranchPrimaryKeyColumns(rel.GetTableDef(identityCtx(ctx, ident)))
-		if kind != tables.def.pkKind || len(names) != len(tables.def.pkColIdxes) {
-			return false, moerr.NewNotSupportedNoCtx("DATA BRANCH PICK cannot resolve the historical destination primary key")
+		names := historicalPickPrimaryKeyNames(
+			rel.GetTableDef(identityCtx(ctx, ident)), tables.pickBaseDefs, tables.pickBaseEdges, proof,
+		)
+		if len(names) == 0 {
+			continue
 		}
 		probe := tables
 		probe.lcaRel, probe.lcaIdent, probe.lcaRelSnapshot = rel, &ident, start.snapshot
@@ -3422,6 +3451,20 @@ func migrateAndCloseSourceHashmap(
 	return newHashmap, nil
 }
 
+func dataBranchPickedKeyRows(keys databranchutils.BranchHashmap, pk *vector.Vector) ([]int64, error) {
+	results, err := keys.GetByVectors([]*vector.Vector{pk})
+	if err != nil {
+		return nil, err
+	}
+	var rows []int64
+	for i, result := range results {
+		if result.Exists {
+			rows = append(rows, int64(i))
+		}
+	}
+	return rows, nil
+}
+
 func buildHashmapForTable(
 	ctx context.Context,
 	mp *mpool.MPool,
@@ -3533,19 +3576,11 @@ func buildHashmapForTable(
 					} else {
 						pkIdx++
 					}
-					var results []databranchutils.GetResult
-					results, taskErr = pickKeyHashmap.GetByVectors(
-						[]*vector.Vector{bat.Vecs[pkIdx]},
-					)
+					var sels []int64
+					sels, taskErr = dataBranchPickedKeyRows(pickKeyHashmap, bat.Vecs[pkIdx])
 					if taskErr != nil {
 						atomicErr.Store(taskErr)
 						return
-					}
-					var sels []int64
-					for i, r := range results {
-						if r.Exists {
-							sels = append(sels, int64(i))
-						}
 					}
 					if len(sels) == 0 {
 						return // all rows filtered out
