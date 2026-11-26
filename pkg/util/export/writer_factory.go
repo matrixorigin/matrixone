@@ -111,7 +111,7 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ena
 		var batchID uuid.UUID
 		if tbl.UsesMetricBatchReceipt() {
 			batchID = uuid.New()
-			filePath = cfg.MetricBatchLogPath(account, tbl, ts, batchID)
+			filePath = table.MetricBatchLogPath(account, tbl, ts, batchID)
 		} else {
 			filePath = cfg.LogsFilePathFactory(account, tbl, ts)
 		}

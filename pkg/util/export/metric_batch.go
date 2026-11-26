@@ -57,7 +57,10 @@ func (m *Merge) mergeMetricFile(ctx context.Context, filePath string) error {
 	}
 
 	payload := vec.Entries[0].Data
-	if err := validateMetricCSV(payload, m.table); err != nil {
+	if err := validateMetricCSV(ctx, payload, m.table); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		v2.TraceETLMergeParseFailedCounter.Inc()
 		m.logger.Warn("retain incompatible metric file", logutil.PathField(filePath), zap.Error(err))
 		return errMetricFileRetained
@@ -74,12 +77,15 @@ func (m *Merge) mergeMetricFile(ctx context.Context, filePath string) error {
 	return nil
 }
 
-func validateMetricCSV(payload []byte, tbl *table.Table) error {
+func validateMetricCSV(ctx context.Context, payload []byte, tbl *table.Table) error {
 	reader := csv.NewReader(bytes.NewReader(payload))
 	reader.FieldsPerRecord = len(tbl.Columns)
 	reader.ReuseRecord = true
 	hasRows := false
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		fields, err := reader.Read()
 		if errors.Is(err, io.EOF) {
 			if !hasRows {

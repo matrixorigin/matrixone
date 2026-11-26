@@ -13,14 +13,18 @@ The writer factory assigns one random UUID to a batch for either
 system_metrics.metric or system_metrics.sql_statement_cu. The SQL writer and
 the CSV filename carry this UUID. SQL-disabled writers also name their CSV
 with a batch UUID. The table directory and CSV body layout stay the same.
-When appending the UUID would make a filename longer than 245 bytes, use a
-hash for the node portion. The remaining 10 bytes allow for the disk cache's
-filename suffix. The original node identifier stays in the CSV.
+The filename is `!<uuid>.csv`, with the full 16-byte UUID encoded as 22
+unpadded URL-safe Base64 characters. The 27-byte name avoids growing the
+object key and leaves room for the disk-cache suffix. The original node
+identifier and timestamp stay in the CSV.
 
 Both write paths insert the UUID into the primary key of
 system_metrics.metric_batch_receipt and load the rows in the same transaction.
 Replay splits LOAD statements at CSV record boundaries using the connection's
-packet limit. Partial loads are rolled back together with the receipt.
+packet limit. A record too wide for a single inline LOAD uses a prepared
+INSERT in that same transaction. Large field values are split at UTF-8
+boundaries and concatenated in SQL when a single parameter would exceed
+the connection limit. Partial loads are rolled back with the receipt.
 Replay observes task cancellation throughout the transaction. CN discovery,
 connection acquisition, each SQL statement and COMMIT each get a fresh
 10-second deadline, so a large file can finish while its statements make
@@ -81,15 +85,16 @@ leaving a subsequent old ETL run free to insert the same batch again.
 
 After upgrade, operators can recover a verified undelivered batch using
 the new importer. Record the original object key, target key and a fresh
-lowercase UUID once. Publish the unchanged CSV in the same table directory
-with the suffix `-batch-<uuid>.csv`. Use the original stem if it fits.
-If the filename would exceed 245 bytes, choose a shorter stem and record
-the exact target key before publishing. On a local fileservice, set
-`source` and `target` to those recorded paths:
+UUID once. Publish the unchanged CSV in the same table directory. Compute
+the compact basename from the recorded UUID:
 
 ```sh
-mv -n -- "$source" "$target"
+python3 -c 'import base64, sys, uuid; print("!" + base64.urlsafe_b64encode(uuid.UUID(sys.argv[1]).bytes).decode().rstrip("=") + ".csv")' "$batch_uuid"
 ```
+
+Record the full target key before publishing. In a local fileservice, set
+`source` and `target` to the recorded paths and run `mv -n -- "$source" "$target"`.
+The importer also accepts filenames ending in `-batch-<uuid>.csv`.
 
 On object storage, copy to the recorded key and keep the source until the
 receipt is visible. Use the same target key and UUID if the copy result

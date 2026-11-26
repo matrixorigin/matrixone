@@ -15,8 +15,7 @@
 package table
 
 import (
-	"crypto/sha256"
-	"fmt"
+	"encoding/base64"
 	"path"
 	"strings"
 	"time"
@@ -25,27 +24,31 @@ import (
 )
 
 const metricBatchSuffix = "-batch-"
+const compactMetricBatchPrefix = "!"
 
-// The disk cache appends .mofscache to each nested object's filename.
-const maxMetricFilenameBytes = 255 - len(".mofscache")
+// MetricBatchLogPath stores the whole UUID in a 27-byte filename. The short
+// component leaves room for the object-store prefix and the disk-cache suffix.
+func MetricBatchLogPath(account string, tbl *Table, ts time.Time, id uuid.UUID) string {
+	dir := tbl.PathBuilder.Build(account, MergeLogTypeLogs, ts, tbl.Database, tbl.Table)
+	name := compactMetricBatchPrefix + base64.RawURLEncoding.EncodeToString(id[:]) + CsvExtension
+	return path.Join(dir, name)
+}
 
-func (c FilePathCfg) MetricBatchLogPath(account string, tbl *Table, ts time.Time, id uuid.UUID) string {
-	filePath := MetricBatchPath(c.LogsFilePathFactory(account, tbl, ts), id)
-	if len(path.Base(filePath)) <= maxMetricFilenameBytes {
-		return filePath
+func compactMetricBatchID(name string) (uuid.UUID, bool) {
+	encoded, ok := strings.CutPrefix(name, compactMetricBatchPrefix)
+	if !ok || len(encoded) != base64.RawURLEncoding.EncodedLen(len(uuid.Nil)) {
+		return uuid.Nil, false
 	}
-	// Hash only the node portion so the log format and the entire batch
-	// UUID fit in one filesystem component, including in the disk cache.
-	c.NodeUUID = fmt.Sprintf("%x", sha256.Sum256([]byte(c.NodeUUID)))
-	return MetricBatchPath(c.LogsFilePathFactory(account, tbl, ts), id)
+	var id uuid.UUID
+	n, err := base64.RawURLEncoding.Strict().Decode(id[:], []byte(encoded))
+	return id, err == nil && n == len(id) && id != uuid.Nil && base64.RawURLEncoding.EncodeToString(id[:]) == encoded
 }
 
 func (tbl *Table) UsesMetricBatchReceipt() bool {
 	return tbl.Database == "system_metrics" && (tbl.Table == "metric" || tbl.Table == "sql_statement_cu")
 }
 
-// MetricBatchPath keeps the existing four-part log filename and CSV body.
-// Older filenames have no batch identity and cannot prove the first write.
+// MetricBatchPath attaches a batch ID to a verified undelivered legacy CSV.
 func MetricBatchPath(filePath string, id uuid.UUID) string {
 	return strings.TrimSuffix(filePath, CsvExtension) + metricBatchSuffix + id.String() + CsvExtension
 }
@@ -54,6 +57,9 @@ func MetricBatchID(filePath string) (uuid.UUID, bool) {
 	name, ok := strings.CutSuffix(path.Base(filePath), CsvExtension)
 	if !ok {
 		return uuid.Nil, false
+	}
+	if strings.HasPrefix(name, compactMetricBatchPrefix) {
+		return compactMetricBatchID(name)
 	}
 	index := strings.LastIndex(name, metricBatchSuffix)
 	if index < 0 {

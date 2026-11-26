@@ -224,6 +224,39 @@ func TestMetricBatchReceiptSQL(t *testing.T) {
 				require.NoError(t, etl.ReplayMetricBatch(ctx, mometric.SqlStatementCUTable, []byte(payload), id))
 				count(rowCount)
 			}
+
+			// A single CSV record can exceed an inline LOAD, and a
+			// character value can exceed the prepared parameter limit.
+			wideBatch := uuid.New()
+			wideNodes := []string{
+				uuid.NewString() + strings.Repeat("n", 894),
+				uuid.NewString() + strings.Repeat("你", 510),
+			}
+			t.Cleanup(func() {
+				cleanup, stop := context.WithTimeoutCause(context.Background(), 5*time.Second, moerr.CauseWriteRowRecords)
+				defer stop()
+				for _, name := range wideNodes {
+					_, err := pool.ExecContext(cleanup, "delete from "+relation+" where node = ?", name)
+					require.NoError(t, err)
+				}
+				require.NoError(t, dbholder.DeleteMetricBatchReceipt(cleanup, pool, wideBatch))
+			})
+			var widePayload strings.Builder
+			for _, name := range wideNodes {
+				widePayload.WriteString(fmt.Sprintf("\\N,2026-11-25 09:36:01.123456,3,%s,CN,internal_sql\n", name))
+			}
+			for range 2 {
+				require.NoError(t, etl.ReplayMetricBatch(ctx, mometric.SqlStatementCUTable, []byte(widePayload.String()), wideBatch))
+				for _, name := range wideNodes {
+					var rows int
+					var sum float64
+					var nonNullAccounts int
+					require.NoError(t, pool.QueryRowContext(ctx, "select count(*), coalesce(sum(value), 0), count(account) from "+relation+" where node = ?", name).Scan(&rows, &sum, &nonNullAccounts))
+					require.Equal(t, 1, rows)
+					require.Equal(t, float64(3), sum)
+					require.Zero(t, nonNullAccounts)
+				}
+			}
 		})
 
 		t.Run("reselect_after_rolling_restart", func(t *testing.T) {

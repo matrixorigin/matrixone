@@ -20,6 +20,9 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -262,6 +265,78 @@ func TestMetricFallbackWithLongNodeID(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestMetricFallbackFitsMinIOObjectKey(t *testing.T) {
+	ctx := t.Context()
+	uploads := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodHead:
+			w.WriteHeader(http.StatusNotFound)
+		case http.MethodPut:
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("ETag", `"d41d8cd98f00b204e9800998ecf8427e"`)
+			uploads <- strings.TrimPrefix(r.URL.Path, "/test-bucket/")
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	prefix := strings.TrimSuffix(strings.Repeat(strings.Repeat("p", 229)+"/", 4), "/")
+	fs, err := fileservice.NewS3FS(ctx, fileservice.ObjectStorageArguments{
+		Name: "etl", IsMinio: true, Endpoint: server.URL, Bucket: "test-bucket",
+		Region: "us-east-1", NoBucketValidation: true, KeyPrefix: prefix, KeyID: "dummy", KeySecret: "dummy",
+	}, fileservice.CacheConfig{}, nil, true, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+
+	const node = "1328de0e-9fcf-484c-92fe-8efaf31113aa"
+	now := time.Unix(1795599361, 0)
+	mock := metricDeliveryDB(t)
+	for _, tbl := range []*table.Table{mometric.SingleMetricTable, mometric.SqlStatementCUTable} {
+		receipt := &metricReceiptArgument{}
+		mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(receipt).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("^LOAD DATA INLINE").WillReturnError(&mysql.MySQLError{Number: 1213})
+		expectMetricRollback(mock)
+
+		writer := GetWriterFactory(fs, node, "CN", true).GetRowWriter(ctx, "sys", tbl, now)
+		writer.(table.BufferSettable).SetBuffer(bytes.NewBufferString("fallback payload\n"), nil)
+		_, err := writer.FlushAndClose()
+		require.NoError(t, err)
+		select {
+		case key := <-uploads:
+			require.Equal(t, path.Join(prefix, table.MetricBatchLogPath("sys", tbl, now, receipt.id)), key)
+			require.LessOrEqual(t, len(key), 1024)
+		default:
+			t.Fatal("successful flush did not upload a fallback object")
+		}
+	}
+}
+
+type cancelAfterMetricRead struct {
+	fileservice.FileService
+	cancel context.CancelFunc
+}
+
+func (fs *cancelAfterMetricRead) Read(_ context.Context, vec *fileservice.IOVector) error {
+	vec.Entries[0].Data = []byte("invalid CSV row\n")
+	fs.cancel()
+	return nil
+}
+
+func TestMetricMergeStopsAfterReadCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	fs := &cancelAfterMetricRead{FileService: testutil.NewFS(t), cancel: cancel}
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	merge, err := NewMerge(ctx, "", WithFileService(fs), WithTable(mometric.SingleMetricTable))
+	require.NoError(t, err)
+	t.Cleanup(merge.Stop)
+	err = merge.mergeMetricFile(ctx, table.MetricBatchPath("pending.csv", uuid.New()))
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestMetricMergeRecoversCommitAndDeleteFailures(t *testing.T) {

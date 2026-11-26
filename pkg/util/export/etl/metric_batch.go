@@ -23,6 +23,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
@@ -31,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	dbholder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
@@ -113,6 +117,7 @@ func (f *SQLFlusher) replayMetricLoads(ctx context.Context, conn *sql.Conn, data
 	target := min(limit, metricReplaySQLTarget)
 	reader := csv.NewReader(bytes.NewReader(data))
 	reader.ReuseRecord = true
+	reader.FieldsPerRecord = f.columnCount
 	start, end, size := 0, 0, overhead
 	for {
 		if err := ctx.Err(); err != nil {
@@ -128,9 +133,6 @@ func (f *SQLFlusher) replayMetricLoads(ctx context.Context, conn *sql.Conn, data
 
 		next := int(reader.InputOffset())
 		rowSize := next - end + countInlineSQLEscapes(data[end:next])
-		if overhead+rowSize > limit {
-			return moerr.NewInvalidInputf(ctx, "metric CSV record needs %d SQL bytes, exceeding the %d byte limit", overhead+rowSize, limit)
-		}
 		// Slice the original bytes at CSV record boundaries, including
 		// records with embedded newlines. Keep all LOADs in this transaction.
 		if start != end && size+rowSize > target {
@@ -139,10 +141,82 @@ func (f *SQLFlusher) replayMetricLoads(ctx context.Context, conn *sql.Conn, data
 			}
 			start, size = end, overhead
 		}
+		if overhead+rowSize > limit {
+			if err := f.insertMetricRecord(ctx, conn, data[end:next], packetLimit); err != nil {
+				return err
+			}
+			start, end, size = next, next, overhead
+			continue
+		}
 		end, size = next, size+rowSize
 	}
 	if start != end {
 		return f.loadMetricCSV(ctx, conn, data[start:end])
 	}
 	return nil
+}
+
+// insertMetricRecord binds the rare record that does not fit in an inline
+// LOAD. Decode it with LOAD's CSV dialect, including its escapes and NULLs.
+func (f *SQLFlusher) insertMetricRecord(ctx context.Context, conn *sql.Conn, record []byte, packetLimit int) error {
+	cfg := csvparser.CSVConfig{
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   tree.DefaultFieldsEnclosedBy,
+		FieldsEscapedBy:    tree.DefaultFieldsEscapedBy,
+		LinesTerminatedBy:  "\n",
+		Null:               []string{`\N`},
+		UnescapedQuote:     true,
+		Context:            ctx,
+	}
+	parser, err := csvparser.NewCSVParser(&cfg, bytes.NewReader(record), csvparser.ReadBlockSize, false)
+	if err != nil {
+		return err
+	}
+	fields, err := parser.Read(nil)
+	if err != nil {
+		return err
+	}
+	if len(fields) != f.columnCount || parser.Pos() != int64(len(record)) {
+		return moerr.NewInvalidInputNoCtx("invalid metric CSV record for parameterized insert")
+	}
+
+	args := make([]any, 0, len(fields))
+	values := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if field.IsNull {
+			values = append(values, "?")
+			args = append(args, nil)
+			continue
+		}
+		value := field.Val
+		if len(value) <= packetLimit {
+			values = append(values, "?")
+			args = append(args, value)
+			continue
+		}
+
+		// MO enforces max_allowed_packet on the total length of each
+		// prepared parameter, even if the driver sends several packets.
+		// Reassemble longer character values on the server.
+		var placeholders []string
+		for len(value) > 0 {
+			end := min(len(value), packetLimit)
+			for end < len(value) && !utf8.RuneStart(value[end]) {
+				end--
+			}
+			if end <= 0 {
+				return moerr.NewInvalidInputNoCtx("metric CSV value cannot fit in a prepared parameter")
+			}
+			placeholders = append(placeholders, "?")
+			args = append(args, value[:end])
+			value = value[end:]
+		}
+		values = append(values, "CONCAT("+strings.Join(placeholders, ",")+")")
+	}
+
+	query := "INSERT INTO " + f.database + "." + f.table + " VALUES (" + strings.Join(values, ",") + ")"
+	return dbholder.WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
+		_, err := conn.ExecContext(opCtx, query, args...)
+		return err
+	})
 }
