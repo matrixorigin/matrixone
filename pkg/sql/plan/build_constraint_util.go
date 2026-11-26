@@ -2301,6 +2301,8 @@ func makeInsertValueConstExprWithMode(proc *process.Process, numVal *tree.NumVal
 		numVal.ValType == tree.P_decimal || numVal.ValType == tree.P_float64) {
 		return bindIntegerAssignmentLiteral(proc, numVal, colType, isIgnore)
 	}
+	// typeswitch:partial only float32/64 and vecf32/vecf64 have this literal
+	// fast path; low-precision floats and other vectors use generic binding.
 	switch colType.Oid {
 	case types.T_bool:
 		canInsert, num, err := util.SetInsertValueBool(proc, numVal)
