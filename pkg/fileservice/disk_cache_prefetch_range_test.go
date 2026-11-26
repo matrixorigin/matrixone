@@ -15,7 +15,6 @@
 package fileservice
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
