@@ -2313,12 +2313,13 @@ func constructChangeHandle(
 		if betweenFrom != nil && betweenTo != nil {
 			// The surviving segments may start after lo because the destination
 			// already inherited the source prefix at its fork.
+			last := tarRange.rel[len(tarRange.rel)-1]
 			baselineAt := *betweenFrom
 			if first := tarRange.from[0].Prev(); first.GT(&baselineAt) {
 				baselineAt = first
 			}
 			if tables.tarClearBaseline, err = dataBranchSourceAt(
-				ctx, ses, bh, candidates, branchInfo, baselineAt,
+				ctx, ses, bh, candidates, branchInfo, last, baselineAt,
 			); err != nil {
 				return
 			}
@@ -2331,7 +2332,7 @@ func constructChangeHandle(
 			}
 			if betweenTo.LT(&tarSnapshot) {
 				var endpoint *dataBranchSnapshotRelation
-				if endpoint, err = dataBranchSourceAt(ctx, ses, bh, candidates, branchInfo, *betweenTo); err != nil {
+				if endpoint, err = dataBranchSourceAt(ctx, ses, bh, candidates, branchInfo, last, *betweenTo); err != nil {
 					return
 				}
 				if endpoint.rel == nil {
@@ -2355,21 +2356,13 @@ func constructChangeHandle(
 		// The collection relation can have been opened after the upper
 		// snapshot, even for ordinary DML on the same table ID.
 		var endpoint *dataBranchSnapshotRelation
-		if endpoint, err = dataBranchSourceAt(ctx, ses, bh, candidates, branchInfo, *betweenTo); err != nil {
+		last := tarRange.rel[len(tarRange.rel)-1]
+		if endpoint, err = dataBranchSourceAt(ctx, ses, bh, candidates, branchInfo, last, *betweenTo); err != nil {
 			return
 		}
 		if endpoint.rel == nil {
-			// Before the source fork, the last retained segment owns the
-			// historical changes and has the applicable schema.
-			last := len(tarRange.rel) - 1
-			endpoint.at = tarRange.end[last]
-			owner := tarRange.segmentIdentity(last, tarIdent)
-			endpoint.rel, endpoint.ident, err = reopenDataBranchNodeByID(
-				ctx, ses, bh, []branchIdentity{owner}, tarRange.rel[last].GetTableID(ctx), endpoint.at,
-			)
-			if err != nil {
-				return
-			}
+			err = moerr.NewInternalErrorNoCtx("data branch source is missing at the upper snapshot")
+			return
 		}
 		tarHydrationRel, tarHydrationSnapshot, tarHydrationIdent = endpoint.rel, endpoint.at, endpoint.ident
 		tarHydrationRelSnapshot = endpoint.at
@@ -2580,16 +2573,31 @@ func dataBranchVisibleRange(rel engine.Relation, at types.TS, ident branchIdenti
 	}
 }
 
-// dataBranchSourceAt follows only physical rebuilds of the PICK source.
-// A logical fork's parent is not the source table at an earlier snapshot.
+// dataBranchSourceAt resolves the source's physical generations first.
+// Before the source fork, only the retained segment and the path it inherited
+// can contribute a window image. Clamp each ancestor to its captured horizon.
 func dataBranchSourceAt(
 	ctx context.Context, ses *Session, bh BackgroundExec, candidates []branchIdentity,
-	info *branchMetaInfo, at types.TS,
+	info *branchMetaInfo, lastRetained engine.Relation, at types.TS,
 ) (*dataBranchSnapshotRelation, error) {
 	for _, id := range info.tarRebuildChain {
 		rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, candidates, id, at)
 		if err == nil {
 			return &dataBranchSnapshotRelation{rel: rel, ident: ident, at: at}, nil
+		}
+		if !isMissingDataBranchRelationByID(err) {
+			return nil, err
+		}
+	}
+	path, snapshots := info.pathFromLCAToTar, info.pathFromLCAToTarTS
+	for i := slices.Index(path, lastRetained.GetTableID(ctx)); i >= 0; i-- {
+		segmentAt := at
+		if i+1 < len(path) && snapshots[i+1].LT(&segmentAt) {
+			segmentAt = snapshots[i+1]
+		}
+		rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, candidates, path[i], segmentAt)
+		if err == nil {
+			return &dataBranchSnapshotRelation{rel: rel, ident: ident, at: segmentAt}, nil
 		}
 		if !isMissingDataBranchRelationByID(err) {
 			return nil, err

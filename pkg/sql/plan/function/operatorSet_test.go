@@ -685,6 +685,20 @@ func TestIffCheck_PreservesVectorResultTypes(t *testing.T) {
 	}
 }
 
+func TestIffCheckPreservesMatchingStoredTypes(t *testing.T) {
+	for _, typ := range []types.Type{
+		types.T_enum.ToType(),
+		types.New(types.T_geometry, 4326, 1),
+		types.New(types.T_geometry32, 4326, 1),
+	} {
+		t.Run(typ.Oid.String(), func(t *testing.T) {
+			args := []types.Type{types.T_bool.ToType(), typ, typ}
+			require.Equal(t, succeedMatched, iffCheck(nil, args).status)
+			require.Equal(t, typ, iffReturnType(args))
+		})
+	}
+}
+
 func TestMediumIntCommonResultTypeIsOrderIndependent(t *testing.T) {
 	medium := types.New(types.T_int32, 24, -1)
 	ordinary := types.New(types.T_int32, 32, -1)

@@ -1323,6 +1323,15 @@ func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 		}
 
 		source := []types.Type{inputs[1], inputs[2]}
+		if (source[0].Oid == types.T_enum || source[0].Oid == types.T_geometry ||
+			source[0].Oid == types.T_geometry32) && source[0].Eq(source[1]) {
+			// A joined UPDATE guards typed assignments with IF. Preserve
+			// the stored ordinal or WKB when the types already match.
+			if needCast {
+				return newCheckResultWithCast(0, []types.Type{conditionType, source[0], source[1]})
+			}
+			return newCheckResultWithSuccess(0)
+		}
 		if retType, ok := CommonMediumIntType(source); ok {
 			finalTypes := []types.Type{conditionType, retType, retType}
 			shouldCast := needCast ||
@@ -1613,6 +1622,7 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return generalIffFn[types.Enum](parameters, result, proc, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_blob, types.T_text, types.T_datalink, types.T_json,
+		types.T_geometry, types.T_geometry32,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_array_float8, types.T_array_float4:

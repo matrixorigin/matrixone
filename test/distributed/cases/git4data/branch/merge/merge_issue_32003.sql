@@ -312,26 +312,29 @@ select k from touch_dml_dst where tag='new' and ((k=1 and touched='2001-01-01 00
 drop snapshot issue32003_touch_dml_hi;
 drop snapshot issue32003_touch_dml_lo;
 
--- Batch the ordinary unique keys before applying special-column assignments.
+-- Swap unique keys and their ENUM foreign-key components in a single update.
+create table touch_swap_parent (u int, tag enum('old','new'), primary key (u,tag));
+insert into touch_swap_parent values (10,'old'),(20,'new');
 create table touch_swap_root (k int primary key, u int unique, tag enum('old','new'), touched timestamp not null default '2000-01-01 00:00:00' on update current_timestamp);
-insert into touch_swap_root (k,u,tag) values (1,10,'old'),(2,20,'old');
+insert into touch_swap_root (k,u,tag) values (1,10,'old'),(2,20,'new');
 data branch create table touch_swap_src from touch_swap_root;
 data branch create table touch_swap_dst from touch_swap_root;
+alter table touch_swap_dst add constraint fk_touch_swap foreign key (u,tag) references touch_swap_parent (u,tag);
 create snapshot issue32003_touch_swap_lo for account sys;
 update touch_swap_src set u=30 where k=1;
-update touch_swap_src set u=10,tag='new',touched='2001-01-01 00:00:00' where k=2;
+update touch_swap_src set u=10,tag='old',touched='2001-01-01 00:00:00' where k=2;
 update touch_swap_src set u=20,tag='new',touched='2001-01-01 00:00:00' where k=1;
 create snapshot issue32003_touch_swap_hi for account sys;
 data branch pick touch_swap_src into touch_swap_dst between snapshot issue32003_touch_swap_lo and issue32003_touch_swap_hi when conflict accept;
-select k,u from touch_swap_dst where tag='new' and touched='2001-01-01 00:00:00' order by k;
+select k,u from touch_swap_dst where tag=case k when 1 then 'new' when 2 then 'old' end and touched='2001-01-01 00:00:00' order by k;
 drop snapshot issue32003_touch_swap_hi;
 drop snapshot issue32003_touch_swap_lo;
 create snapshot issue32003_touch_swap_clear_lo for account sys;
 truncate table touch_swap_src;
-insert into touch_swap_src values (1,10,'old','2002-01-01 00:00:00'),(2,20,'old','2002-01-01 00:00:00');
+insert into touch_swap_src values (1,10,'old','2002-01-01 00:00:00'),(2,20,'new','2002-01-01 00:00:00');
 create snapshot issue32003_touch_swap_clear_hi for account sys;
 data branch pick touch_swap_src into touch_swap_dst between snapshot issue32003_touch_swap_clear_lo and issue32003_touch_swap_clear_hi when conflict accept;
-select k,u from touch_swap_dst where tag='old' and touched='2002-01-01 00:00:00' order by k;
+select k,u from touch_swap_dst where tag=case k when 1 then 'old' when 2 then 'new' end and touched='2002-01-01 00:00:00' order by k;
 drop snapshot issue32003_touch_swap_clear_hi;
 drop snapshot issue32003_touch_swap_clear_lo;
 
@@ -373,4 +376,31 @@ data branch pick touch_alias_src into touch_alias_dst between snapshot issue3200
 select k,a,b,x from touch_alias_dst order by k;
 drop snapshot issue32003_touch_alias_hi;
 drop snapshot issue32003_touch_alias_lo;
+
+-- Both bounds may belong to different committed generations of a parent.
+create table touch_fork_clear_root (k int primary key, tag enum('old','new'));
+insert into touch_fork_clear_root values (1,'old');
+data branch create table touch_fork_clear_dst from touch_fork_clear_root;
+create snapshot issue32003_touch_fork_clear_lo for account sys;
+truncate table touch_fork_clear_root;
+insert into touch_fork_clear_root values (2,'new');
+create snapshot issue32003_touch_fork_clear_hi for account sys;
+data branch create table touch_fork_clear_src from touch_fork_clear_root;
+data branch pick touch_fork_clear_src into touch_fork_clear_dst between snapshot issue32003_touch_fork_clear_lo and issue32003_touch_fork_clear_hi when conflict accept;
+select k from touch_fork_clear_dst order by k;
+drop snapshot issue32003_touch_fork_clear_hi;
+drop snapshot issue32003_touch_fork_clear_lo;
+
+-- The same joined write preserves typed ENUM, SET and geometry values.
+create table touch_types_root (k int primary key, tag enum('','new'), flags set('a','b'), loc geometry, touched timestamp not null default '2000-01-01 00:00:00' on update current_timestamp);
+insert into touch_types_root (k,tag,flags,loc) values (1,'new','a',st_geomfromtext('POINT(1 1)'));
+data branch create table touch_types_src from touch_types_root;
+data branch create table touch_types_dst from touch_types_root;
+create snapshot issue32003_touch_types_lo for account sys;
+update touch_types_src set tag='',flags='a,b',loc=st_geomfromtext('POINT(2 2)'),touched='2001-01-01 00:00:00' where k=1;
+create snapshot issue32003_touch_types_hi for account sys;
+data branch pick touch_types_src into touch_types_dst between snapshot issue32003_touch_types_lo and issue32003_touch_types_hi when conflict accept;
+select k from touch_types_dst where tag='' and flags='a,b' and st_astext(loc)='POINT(2 2)' and touched='2001-01-01 00:00:00';
+drop snapshot issue32003_touch_types_hi;
+drop snapshot issue32003_touch_types_lo;
 drop database issue32003;
