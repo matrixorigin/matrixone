@@ -54,11 +54,17 @@ func (ctr *container) retainedOutputBatch(index int64) *batch.Batch {
 	return ctr.rightBats[index]
 }
 
+// outputAreaTarget bounds the external payload per result column so that
+// growing a vector leaves room for both the old and new buffers.
+func outputAreaTarget() int64 {
+	return min(mpool.MaxAllocationSize(), 64*mpool.MB)
+}
+
 // needsOutputAreaCheck only chooses whether projection needs to count bytes.
 // Even a build value that never matches can enable the check, but only payloads
 // selected for output use up the result batch's physical area.
 func needsOutputAreaCheck(columns []colexec.ResultPos, source *batch.Batch, relation int32, copyFlatPayloadOnce bool) bool {
-	limit := mpool.MaxAllocationSize()
+	limit := outputAreaTarget()
 	threshold := limit / colexec.DefaultBatchSize
 	for _, column := range columns {
 		if column.Rel != relation || column.Pos < 0 || int(column.Pos) >= len(source.Vecs) {
@@ -86,7 +92,7 @@ func (hashJoin *HashJoin) prepareBuildOutputAreaCheck() {
 	if hashJoin.AsofBuildLeft {
 		relation, buildTypes = 0, hashJoin.LeftTypes
 	}
-	threshold := mpool.MaxAllocationSize() / colexec.DefaultBatchSize
+	threshold := outputAreaTarget() / colexec.DefaultBatchSize
 	for _, column := range hashJoin.ResultCols {
 		if column.Rel == relation && column.Pos >= 0 && int(column.Pos) < len(buildTypes) &&
 			buildTypes[column.Pos].IsVarlen() && ctr.mp.BuildPayloadExceeds(int(column.Pos), threshold) {
@@ -105,7 +111,7 @@ type outputAreas []outputArea
 
 func (ctr *container) outputAreas(areas outputAreas, check bool) outputAreas {
 	if check {
-		limit := mpool.MaxAllocationSize()
+		limit := outputAreaTarget()
 		for i, dst := range ctr.resBat.Vecs {
 			if dst.GetType().IsVarlen() {
 				areas = append(areas, outputArea{column: i, remaining: limit})
@@ -137,8 +143,8 @@ func (areas outputAreas) reserve(columns []colexec.ResultPos, row, previous outp
 		if area.remaining < 0 && haveRows {
 			return false
 		}
-		// An oversized first value has no smaller batch to move to. Let the
-		// vector append report the allocator error through the usual path.
+		// Admit a first value larger than the batch target. The vector
+		// append still enforces the allocator limit.
 	}
 	return true
 }
