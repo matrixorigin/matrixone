@@ -638,11 +638,13 @@ func (c *Compile) prePipelineInitializer() (err error) {
 	}
 	// Validate local and remote-bound plans before locks, data-source setup or
 	// any MergeRun prescope can begin evaluating source expressions.
-	if err = validateODKUQueryProtocol(c.pn, c.proc); err != nil {
+	q := c.pn.GetQuery()
+	if err = validateODKUQueryProtocol(q); err != nil {
 		return err
 	}
+	validated := map[*plan.Query]struct{}{q: {}}
 	for _, scope := range c.scopes {
-		if err = validateODKUScopeProtocol(scope); err != nil {
+		if err = validateODKUScopeProtocol(scope, validated); err != nil {
 			return err
 		}
 	}

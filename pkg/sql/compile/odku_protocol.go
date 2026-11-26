@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func validateODKUPlanNode(n *plan.Node) error {
@@ -42,8 +41,8 @@ func validateODKUPlanNode(n *plan.Node) error {
 	}
 	return nil
 }
-func validateODKUQueryProtocol(pn *plan.Plan, proc *process.Process) error {
-	if q := pn.GetQuery(); q != nil {
+func validateODKUQueryProtocol(q *plan.Query) error {
+	if q != nil {
 		for _, n := range q.Nodes {
 			if err := validateODKUPlanNode(n); err != nil {
 				return err
@@ -53,7 +52,9 @@ func validateODKUQueryProtocol(pn *plan.Plan, proc *process.Process) error {
 	return nil
 }
 
-func validateODKUScopeProtocol(s *Scope) error {
+// Root scopes of a compiled statement normally share the same query. Check
+// each distinct query once, without skipping validation of any operator tree.
+func validateODKUScopeProtocol(s *Scope, validated map[*plan.Query]struct{}) error {
 	if s == nil {
 		return nil
 	}
@@ -92,22 +93,27 @@ func validateODKUScopeProtocol(s *Scope) error {
 	if e := visit(s.RootOp); e != nil {
 		return e
 	}
-	if err := validateODKUQueryProtocol(s.Plan, s.Proc); err != nil {
-		return err
+	if q := s.Plan.GetQuery(); q != nil {
+		if _, ok := validated[q]; !ok {
+			if err := validateODKUQueryProtocol(q); err != nil {
+				return err
+			}
+			validated[q] = struct{}{}
+		}
 	}
 
 	for _, c := range s.PreScopes {
-		if e := validateODKUScopeProtocol(c); e != nil {
+		if e := validateODKUScopeProtocol(c, validated); e != nil {
 			return e
 		}
 	}
 	return nil
 }
-func validateODKUPipelineProtocol(p *pipeline.Pipeline, proc *process.Process) error {
+func validateODKUPipelineProtocol(p *pipeline.Pipeline) error {
 	if p == nil {
 		return nil
 	}
-	if err := validateODKUQueryProtocol(p.Qry, proc); err != nil {
+	if err := validateODKUQueryProtocol(p.Qry.GetQuery()); err != nil {
 		return err
 	}
 
@@ -132,7 +138,7 @@ func validateODKUPipelineProtocol(p *pipeline.Pipeline, proc *process.Process) e
 		}
 	}
 	for _, c := range p.Children {
-		if e := validateODKUPipelineProtocol(c, proc); e != nil {
+		if e := validateODKUPipelineProtocol(c); e != nil {
 			return e
 		}
 	}

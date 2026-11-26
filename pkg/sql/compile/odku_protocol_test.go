@@ -118,7 +118,7 @@ func TestOrderedODKULayoutRoundTripAndValidation(t *testing.T) {
 			r, e := decodeScope(data, proc, false, nil)
 			require.True(t, moerr.IsMoErrCode(e, tc.code), "%v", e)
 			require.Nil(t, r)
-			e = validateODKUPipelineProtocol(&pipeline.Pipeline{Children: []*pipeline.Pipeline{p}}, proc)
+			e = validateODKUPipelineProtocol(&pipeline.Pipeline{Children: []*pipeline.Pipeline{p}})
 			require.True(t, moerr.IsMoErrCode(e, tc.code), "%v", e)
 		}()
 	}
@@ -127,7 +127,7 @@ func TestOrderedODKULayoutRoundTripAndValidation(t *testing.T) {
 		{NodeType: plan.Node_FILTER, FilterIsBarrier: true},
 		{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, OnDuplicateAction: plan.Node_UPDATE},
 	}}}}}
-	e = validateODKUPipelineProtocol(p, proc)
+	e = validateODKUPipelineProtocol(p)
 	require.True(t, moerr.IsMoErrCode(e, moerr.ErrNotSupported), "%v", e)
 	require.ErrorContains(t, e, "ODKU requires the ordered action operator")
 }
@@ -213,7 +213,7 @@ func TestOrderedODKUPlanOutputLayout(t *testing.T) {
 }
 
 func TestOrderedODKULocalPreflightBeforeProducers(t *testing.T) {
-	for _, location := range []string{"plan", "scope", "decoded plan"} {
+	for _, location := range []string{"plan", "scope", "decoded plan", "prescope plan"} {
 		for _, kind := range []string{"missing ordered payload", "missing image", "prior nil image", "ordinal relation", "assignment relation", "old output width"} {
 			if location == "scope" && kind == "old output width" {
 				continue // An instruction-only scope carries no output layout.
@@ -263,7 +263,13 @@ func TestOrderedODKULocalPreflightBeforeProducers(t *testing.T) {
 						node.ProjectList = append(node.ProjectList, actions.OldColumns[actions.PkColumn])
 						node.ProjectList = append(node.ProjectList, actions.OldColumns...)
 					}
-					c.pn.GetQuery().Nodes = []*plan.Node{node}
+					if location == "prescope plan" {
+						root.Plan = c.pn
+						root.PreScopes[0].Plan = c.pn
+						root.PreScopes[1].Plan = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{node}}}}
+					} else {
+						c.pn.GetQuery().Nodes = []*plan.Node{node}
+					}
 					if location == "decoded plan" {
 						encoded, e := c.pn.Marshal()
 						require.NoError(t, e)

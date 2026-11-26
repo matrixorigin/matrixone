@@ -86,7 +86,7 @@ import (
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
 func encodeScope(s *Scope) ([]byte, error) {
-	if err := validateODKUScopeProtocol(s); err != nil {
+	if err := validateODKUScopeProtocol(s, make(map[*plan.Query]struct{})); err != nil {
 		return nil, err
 	}
 	p, err := fillPipeline(s)
@@ -153,7 +153,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	if err != nil {
 		return nil, err
 	}
-	if err := validateODKUPipelineProtocol(p, proc); err != nil {
+	if err := validateODKUPipelineProtocol(p); err != nil {
 		return nil, err
 	}
 	ctx := &scopeContext{
