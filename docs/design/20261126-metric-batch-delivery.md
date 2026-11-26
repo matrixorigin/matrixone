@@ -24,7 +24,10 @@ Replay splits LOAD statements at CSV record boundaries using the connection's
 packet limit. A record too wide for a single inline LOAD uses a prepared
 INSERT in that same transaction. Large field values are split at UTF-8
 boundaries and concatenated in SQL when a single parameter would exceed
-the connection limit. Partial loads are rolled back with the receipt.
+the connection limit. Inline LOAD encodes backslashes according to the
+writer connection's SQL mode. Replay reads that mode with the packet
+limit and uses it to size each statement. Partial loads are rolled back
+with the receipt.
 Replay observes task cancellation throughout the transaction. CN discovery,
 connection acquisition, each SQL statement and COMMIT each get a fresh
 10-second deadline, so a large file can finish while its statements make

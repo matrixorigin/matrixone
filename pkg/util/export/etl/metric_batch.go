@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	dbholder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
@@ -65,7 +66,17 @@ func (f *SQLFlusher) flushMetricBatch(parent context.Context, data []byte, id uu
 	}
 	err = dbholder.CommitMetricBatch(ctx, db, id, func(conn *sql.Conn) error {
 		if firstWrite {
-			return f.loadMetricCSV(ctx, conn, data)
+			if bytes.IndexByte(data, '\\') == -1 {
+				return f.loadMetricCSV(ctx, conn, data, false)
+			}
+			var mode string
+			err := dbholder.WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
+				return conn.QueryRowContext(opCtx, "SELECT @@session.sql_mode").Scan(&mode)
+			})
+			if err != nil {
+				return err
+			}
+			return f.loadMetricCSV(ctx, conn, data, metricSQLEscapesBackslashes(mode))
 		}
 		return f.replayMetricLoads(ctx, conn, data)
 	})
@@ -96,8 +107,12 @@ func shouldReselectMetricCN(err error) bool {
 			mysqlErr.Number == moerr.ErrNewTxnInCNRollingRestart || mysqlErr.Number == moerr.ErrRetryForCNRollingRestart))
 }
 
-func (f *SQLFlusher) loadMetricCSV(ctx context.Context, conn *sql.Conn, data []byte) error {
-	query := f.loadSQL(data)
+func metricSQLEscapesBackslashes(mode string) bool {
+	return !mysqlparser.ParseSQLModeFlags(mode).Has(mysqlparser.SQLModeNoBackslashEscapes)
+}
+
+func (f *SQLFlusher) loadMetricCSV(ctx context.Context, conn *sql.Conn, data []byte, escapeBackslashes bool) error {
+	query := f.loadSQL(data, escapeBackslashes)
 	return dbholder.WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
 		_, err := conn.ExecContext(opCtx, query)
 		return err
@@ -106,8 +121,9 @@ func (f *SQLFlusher) loadMetricCSV(ctx context.Context, conn *sql.Conn, data []b
 
 func (f *SQLFlusher) replayMetricLoads(ctx context.Context, conn *sql.Conn, data []byte) error {
 	var packetLimit int
+	var mode string
 	if err := dbholder.WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
-		return conn.QueryRowContext(opCtx, "SELECT @@session.max_allowed_packet").Scan(&packetLimit)
+		return conn.QueryRowContext(opCtx, "SELECT @@session.max_allowed_packet, @@session.sql_mode").Scan(&packetLimit, &mode)
 	}); err != nil {
 		return err
 	}
@@ -116,6 +132,7 @@ func (f *SQLFlusher) replayMetricLoads(ctx context.Context, conn *sql.Conn, data
 	overhead := len(loadInlineCSVPrefix) + len(f.loadSuffix())
 	limit := packetLimit - 2
 	target := min(limit, metricReplaySQLTarget)
+	escapeBackslashes := metricSQLEscapesBackslashes(mode)
 	reader := csv.NewReader(bytes.NewReader(data))
 	reader.ReuseRecord = true
 	reader.FieldsPerRecord = len(f.columns)
@@ -133,11 +150,11 @@ func (f *SQLFlusher) replayMetricLoads(ctx context.Context, conn *sql.Conn, data
 		}
 
 		next := int(reader.InputOffset())
-		rowSize := next - end + countInlineSQLEscapes(data[end:next])
+		rowSize := next - end + countInlineSQLEscapes(data[end:next], escapeBackslashes)
 		// Slice the original bytes at CSV record boundaries, including
 		// records with embedded newlines. Keep all LOADs in this transaction.
 		if start != end && size+rowSize > target {
-			if err := f.loadMetricCSV(ctx, conn, data[start:end]); err != nil {
+			if err := f.loadMetricCSV(ctx, conn, data[start:end], escapeBackslashes); err != nil {
 				return err
 			}
 			start, size = end, overhead
@@ -152,7 +169,7 @@ func (f *SQLFlusher) replayMetricLoads(ctx context.Context, conn *sql.Conn, data
 		end, size = next, size+rowSize
 	}
 	if start != end {
-		return f.loadMetricCSV(ctx, conn, data[start:end])
+		return f.loadMetricCSV(ctx, conn, data[start:end], escapeBackslashes)
 	}
 	return nil
 }

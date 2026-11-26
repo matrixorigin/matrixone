@@ -78,13 +78,20 @@ func expectMetricLoad(mock sqlmock.Sqlmock, tbl *table.Table, id uuid.UUID, csv 
 	mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
 	if replay {
 		expectMetricPacket(mock, 1<<20)
+	} else if strings.ContainsRune(csv, '\\') {
+		expectMetricSQLMode(mock)
 	}
 	expectMetricLoadSQL(mock, tbl, csv)
 }
 
+func expectMetricSQLMode(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT @@session.sql_mode")).
+		WillReturnRows(sqlmock.NewRows([]string{"mode"}).AddRow(""))
+}
+
 func expectMetricPacket(mock sqlmock.Sqlmock, limit int) {
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT @@session.max_allowed_packet")).
-		WillReturnRows(sqlmock.NewRows([]string{"limit"}).AddRow(limit))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT @@session.max_allowed_packet, @@session.sql_mode")).
+		WillReturnRows(sqlmock.NewRows([]string{"limit", "mode"}).AddRow(limit, ""))
 }
 
 func expectMetricCommit(mock sqlmock.Sqlmock) {
@@ -113,7 +120,7 @@ func TestMetricFallbackDelivery(t *testing.T) {
 		tbl *table.Table
 		csv string
 	}{
-		{mometric.SingleMetricTable, "m," + sampleTime + ",1,cn-1,CN,sys,0,\n" + "m," + sampleTime + ",1,tn-1,TN,tenant,1,select\n"},
+		{mometric.SingleMetricTable, "m," + sampleTime + ",1,cn\\n1,CN,sys,0,\n" + "m," + sampleTime + ",1,tn-1,TN,tenant,1,select\n"},
 		{mometric.SqlStatementCUTable, "sys," + sampleTime + ",1,cn-1,CN,internal_sql\n" + "sys," + sampleTime + ",1,cn-1,CN,external_sql\n"},
 	} {
 		for _, committed := range []bool{false, true} {
@@ -418,6 +425,22 @@ func TestMetricReplayChunksRollBackTogether(t *testing.T) {
 	require.NoError(t, merge.mergeMetricFile(ctx, file))
 	_, err = fs.StatFile(ctx, file)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+}
+
+func TestMetricReplayFitsPacketWithoutBackslashEscapes(t *testing.T) {
+	mock := metricDeliveryDB(t)
+	tbl := mometric.SingleMetricTable
+	id := uuid.New()
+	row := "m," + sampleTime + ",1,cn" + strings.Repeat("\\x", 30) + ",CN,sys,0,select\n"
+	query := "LOAD DATA INLINE FORMAT='csv', DATA='" + row + "' INTO TABLE " + tbl.GetIdentify() + " FIELDS TERMINATED BY ','"
+	mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT @@session.max_allowed_packet, @@session.sql_mode")).
+		WillReturnRows(sqlmock.NewRows([]string{"limit", "mode"}).AddRow(len(query)+2, "NO_BACKSLASH_ESCAPES"))
+	mock.ExpectExec(regexp.QuoteMeta(query)).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMetricCommit(mock)
+
+	require.NoError(t, etl.ReplayMetricBatch(t.Context(), tbl, []byte(row), id))
 }
 
 func TestMetricReplayRenewsDeadlinePerLoad(t *testing.T) {

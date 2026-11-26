@@ -217,7 +217,7 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 		return 0, err
 	}
 
-	loadSQL := f.loadSQL(buf.Bytes())
+	loadSQL := f.loadSQL(buf.Bytes(), true)
 	_, err = conn.Exec(loadSQL)
 	if err != nil {
 		_ = db_holder.DBConnErrCount.Count()
@@ -233,10 +233,14 @@ func (f *SQLFlusher) loadSuffix() string {
 	return "' INTO TABLE " + f.database + "." + f.table + " FIELDS TERMINATED BY ','"
 }
 
-func countInlineSQLEscapes(src []byte) int {
+func needsInlineSQLEscape(c byte, escapeBackslashes bool) bool {
+	return c == '\'' || (escapeBackslashes && c == '\\')
+}
+
+func countInlineSQLEscapes(src []byte, escapeBackslashes bool) int {
 	extraEscapes := 0
 	for _, c := range src {
-		if c == '\\' || c == '\'' {
+		if needsInlineSQLEscape(c, escapeBackslashes) {
 			extraEscapes++
 		}
 	}
@@ -244,18 +248,14 @@ func countInlineSQLEscapes(src []byte) int {
 	return extraEscapes
 }
 
-func (f *SQLFlusher) loadSQL(src []byte) string {
+func (f *SQLFlusher) loadSQL(src []byte, escapeBackslashes bool) string {
 	suffix := f.loadSuffix()
 	var loadSQL strings.Builder
-	loadSQL.Grow(len(loadInlineCSVPrefix) + len(src) + countInlineSQLEscapes(src) + len(suffix))
+	loadSQL.Grow(len(loadInlineCSVPrefix) + len(src) + countInlineSQLEscapes(src, escapeBackslashes) + len(suffix))
 	loadSQL.WriteString(loadInlineCSVPrefix)
 	for i := 0; i < len(src); i++ {
 		c := src[i]
-		// case \: mo sql NEED quote '\'
-		// case ': sql (load data inline ... DATA='' ...) quotes inline CSV with "'"
-		if c == '\\' || c == '\'' {
-			// \ -> \\
-			// ' -> ''
+		if needsInlineSQLEscape(c, escapeBackslashes) {
 			loadSQL.WriteByte(c)
 		}
 		loadSQL.WriteByte(c)

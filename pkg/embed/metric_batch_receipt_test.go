@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -33,10 +34,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	dbholder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 )
 
@@ -178,6 +182,10 @@ func TestMetricBatchReceiptSQL(t *testing.T) {
 				count(4)
 			})
 		}
+
+		t.Run("no_backslash_escapes", func(t *testing.T) {
+			testMetricReplayNoBackslashEscapes(t, ctx, cfg, pool)
+		})
 
 		t.Run("packet_limited_replay", func(t *testing.T) {
 			// Use the same packet accounting as a production driver
@@ -323,4 +331,114 @@ func TestMetricBatchReceiptSQL(t *testing.T) {
 			require.Equal(t, 1, reselections)
 		})
 	})
+}
+
+func testMetricReplayNoBackslashEscapes(t *testing.T, ctx context.Context, cfg *mysql.Config, queryPool *sql.DB) {
+	t.Helper()
+	open := func(limit int) *sql.DB {
+		t.Helper()
+		modeCfg := cfg.Clone()
+		modeCfg.MaxAllowedPacket = limit - 1
+		modeCfg.Params = map[string]string{
+			"max_allowed_packet": fmt.Sprint(limit),
+			"sql_mode":           "'STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES'",
+		}
+		pool, err := sql.Open("mysql", modeCfg.FormatDSN())
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = pool.Close() })
+		var mode string
+		var actualLimit int
+		require.NoError(t, pool.QueryRowContext(ctx, "SELECT @@session.sql_mode, @@session.max_allowed_packet").Scan(&mode, &actualLimit))
+		require.Contains(t, mode, "NO_BACKSLASH_ESCAPES")
+		require.Equal(t, limit, actualLimit)
+		return pool
+	}
+	regular, limited := open(1<<20), open(1024)
+	defer dbholder.SetDBConn(nil)
+
+	for _, fixture := range []struct {
+		tbl *table.Table
+		row string
+	}{
+		{mometric.SingleMetricTable, "test_receipt,2026-11-25 09:36:01.123456,3.25,%s,CN,\\N,0,select\n"},
+		{mometric.SqlStatementCUTable, "\\N,2026-11-25 09:36:01.123456,3.25,%s,CN,internal_sql\n"},
+	} {
+		t.Run(fixture.tbl.Table, func(t *testing.T) {
+			nodePrefix := uuid.NewString()
+			node := nodePrefix + strings.Repeat("n", 920) + "'\\nX"
+			payload := []byte(fmt.Sprintf(fixture.row, node))
+			relation := fixture.tbl.GetIdentify()
+			deleteRows := func() {
+				t.Helper()
+				_, err := queryPool.ExecContext(ctx, "delete from "+relation+" where left(node,36) = ?", nodePrefix)
+				require.NoError(t, err)
+			}
+			t.Cleanup(deleteRows)
+
+			fs, err := fileservice.NewLocalETLFS("etl", t.TempDir())
+			require.NoError(t, err)
+			defer fs.Close(context.Background())
+			factory := export.GetWriterFactory(fs, "test-writer", "CN", true)
+			now := time.Now()
+			dir := fixture.tbl.PathBuilder.Build("sys", table.MergeLogTypeLogs, now, fixture.tbl.Database, fixture.tbl.Table)
+			firstWrite := func(pool *sql.DB) {
+				t.Helper()
+				dbholder.SetDBConn(pool)
+				writer := factory.GetRowWriter(ctx, "sys", fixture.tbl, now)
+				writer.(table.BufferSettable).SetBuffer(bytes.NewBuffer(payload), nil)
+				_, err := writer.FlushAndClose()
+				require.NoError(t, err)
+			}
+			checkRow := func(wantCount int) {
+				t.Helper()
+				var count, nonNullAccounts int
+				var gotNode string
+				query := "select count(*), coalesce(max(node),''), count(account) from " + relation + " where left(node,36) = ?"
+				require.NoError(t, queryPool.QueryRowContext(ctx, query, nodePrefix).Scan(&count, &gotNode, &nonNullAccounts))
+				require.Equal(t, wantCount, count)
+				require.Zero(t, nonNullAccounts)
+				if wantCount == 1 {
+					require.Equal(t, []byte(node), []byte(gotNode))
+				}
+			}
+
+			firstWrite(regular)
+			checkRow(1)
+			for _, err := range fs.List(ctx, dir) {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+			}
+			deleteRows()
+
+			firstWrite(limited)
+			checkRow(0)
+			filePaths := make([]string, 0, 1)
+			for entry, err := range fs.List(ctx, dir) {
+				require.NoError(t, err)
+				filePaths = append(filePaths, path.Join(dir, entry.Name))
+			}
+			require.Len(t, filePaths, 1)
+			filePath := filePaths[0]
+			id, ok := table.MetricBatchID(filePath)
+			require.True(t, ok)
+			t.Cleanup(func() { require.NoError(t, dbholder.DeleteMetricBatchReceipt(ctx, queryPool, id)) })
+
+			merge, err := export.NewMerge(ctx, "", export.WithFileService(fs), export.WithTable(fixture.tbl))
+			require.NoError(t, err)
+			defer merge.Stop()
+			for attempt := range 2 {
+				if attempt > 0 {
+					require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+						FilePath: filePath, Entries: []fileservice.IOEntry{{Size: int64(len(payload)), Data: payload}},
+					}))
+				}
+				require.NoError(t, merge.Main(ctx))
+				checkRow(1)
+				var receipts int
+				require.NoError(t, queryPool.QueryRowContext(ctx, "select count(*) from system_metrics.metric_batch_receipt where batch_id = ?", id.String()).Scan(&receipts))
+				require.Equal(t, 1, receipts)
+				_, err := fs.StatFile(ctx, filePath)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+			}
+		})
+	}
 }
