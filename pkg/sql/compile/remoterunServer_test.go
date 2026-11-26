@@ -781,7 +781,7 @@ func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
 		maxMessageSize:  1 << 20,
 		streamLifecycle: lifecycle,
 	}
-	require.NoError(t, receiver.sendBatch(batch.NewWithSize(0)))
+	require.NoError(t, receiver.sendBatch(receiver.messageCtx, batch.NewWithSize(0)))
 	require.NotNil(t, sent)
 	require.Equal(t, uint64(1), sent.GetBatchSequence())
 	require.Equal(t, uint32(2), sent.GetAcceptedBatchCreditCount())
@@ -823,7 +823,7 @@ func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *test
 		maxMessageSize:  len(data) - 1,
 		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
 	}
-	err = receiver.sendBatch(bat)
+	err = receiver.sendBatch(receiver.messageCtx, bat)
 	require.ErrorIs(t, err, wantErr)
 	require.Equal(t, 2, writes)
 	flow.mu.Lock()
@@ -858,7 +858,7 @@ func TestMessageReceiverSendFragmentedBatchKeepsCreditUntilAck(t *testing.T) {
 		maxMessageSize:  len(data) - 1,
 		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
 	}
-	require.NoError(t, receiver.sendBatch(bat))
+	require.NoError(t, receiver.sendBatch(receiver.messageCtx, bat))
 	require.Equal(t, 2, writes)
 	flow.mu.Lock()
 	require.Len(t, flow.pending, 1)

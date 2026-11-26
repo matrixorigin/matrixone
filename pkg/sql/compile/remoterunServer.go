@@ -266,6 +266,13 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
+		defer func() {
+			// Notification results enter the RPC codec directly. Preserve
+			// the handler's existing error form at this terminal boundary.
+			if err == moerr.PipelineContextCanceled || err == moerr.PipelineReportedCanceled {
+				err = context.Canceled
+			}
+		}()
 		dispatchProc, dispatchNotifyCh, err := receiver.GetProcByUuid(receiver.messageUuid)
 		if err != nil {
 			return err
@@ -989,12 +996,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, context.CancelC
 	// a method to send back.
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.fill = func(b *batch.Batch, counter *perfcounter.CounterSet) error {
-		err := receiver.sendBatch(b)
-		if err != nil && receiver.streamLifecycle != nil &&
-			receiver.streamLifecycle.batchFlow.wasStoppedByReceiver() {
-			return moerr.PipelineRPCIOError(proc.Ctx, err)
-		}
-		return moerr.PipelineIOError(receiver.messageCtx, err)
+		return receiver.sendBatch(proc.Ctx, b)
 	}
 
 	return c, cancelFragment, nil
@@ -1065,7 +1067,7 @@ func (receiver *messageReceiverOnServer) sendError(
 }
 
 func (receiver *messageReceiverOnServer) sendBatch(
-	b *batch.Batch) error {
+	ctx context.Context, b *batch.Batch) error {
 	// there's no need to send the nil batch.
 	if b == nil {
 		return nil
@@ -1086,11 +1088,11 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		flow.sendMu.Lock()
 		defer flow.sendMu.Unlock()
 		batchSequence, err = flow.reserve(
-			receiver.messageCtx,
+			ctx,
 			receiver.connectionCtx,
 			uint64(len(data)))
 		if err != nil {
-			return err
+			return moerr.PipelineRPCIOError(ctx, err)
 		}
 		defer func() {
 			if !batchSent {
@@ -1109,9 +1111,9 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		m.SetData(data)
 		m.SetSid(pipeline.Status_Last)
 		m.BatchSequence = batchSequence
-		err = receiver.clientSession.Write(receiver.messageCtx, m)
+		err = receiver.clientSession.Write(ctx, m)
 		batchSent = err == nil
-		return err
+		return moerr.PipelineRPCIOError(ctx, err)
 	}
 	// if data is too large, cut and send
 	for start, end := 0, 0; start < dataLen; start = end {
@@ -1130,8 +1132,8 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		m.SetData(data[start:end])
 		m.BatchSequence = batchSequence
 
-		if err = receiver.clientSession.Write(receiver.messageCtx, m); err != nil {
-			return err
+		if err = receiver.clientSession.Write(ctx, m); err != nil {
+			return moerr.PipelineRPCIOError(ctx, err)
 		}
 	}
 	batchSent = true

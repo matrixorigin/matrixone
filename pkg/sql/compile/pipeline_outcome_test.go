@@ -135,6 +135,8 @@ type pipelineOutcomeReader struct {
 	mockReaderForParallelOrderBy
 	err        error
 	readCtxErr error
+	reading    chan struct{}
+	readAfter  <-chan struct{}
 	closing    chan struct{}
 	release    <-chan struct{}
 	watchdog   context.Context
@@ -143,7 +145,16 @@ type pipelineOutcomeReader struct {
 
 func (r *pipelineOutcomeReader) Read(ctx context.Context, _ []string, _ *plan.Expr, _ *mpool.MPool, _ *batch.Batch) (bool, error) {
 	r.readCtxErr = ctx.Err()
-	return true, r.err
+	close(r.reading)
+	select {
+	case <-r.readAfter:
+		if ctx.Err() != nil {
+			return true, moerr.ReportedPipelineError(r.err)
+		}
+		return true, r.err
+	case <-r.watchdog.Done():
+		return true, r.watchdog.Err()
+	}
 }
 
 func (r *pipelineOutcomeReader) Close() error {
@@ -207,13 +218,18 @@ func testPipelineOutcomeFailureOrdering(t *testing.T, coordinator, first, interr
 	if interrupt == "encoded" {
 		interrupted = moerr.NewQueryInterrupted(query)
 	}
-	started := &pipelineOutcomeReader{err: interrupted, closing: make(chan struct{}), watchdog: watchdog}
-	last := &pipelineOutcomeReader{err: moerr.NewErrFKNoReferencedRow2(query), closing: make(chan struct{}), watchdog: watchdog}
+	started := &pipelineOutcomeReader{
+		err: interrupted, reading: make(chan struct{}), closing: make(chan struct{}), watchdog: watchdog,
+	}
+	last := &pipelineOutcomeReader{
+		err: moerr.NewErrFKNoReferencedRow2(query), reading: make(chan struct{}), closing: make(chan struct{}), watchdog: watchdog,
+	}
 	if first == "foreign-key-first" {
 		started, last = last, started
 	}
-	// Both reads have produced their errors before the first Close can return.
-	// The remaining Close must be released by the coordinator's cancellation.
+	// Both readers decide their error while active. The first reader cannot
+	// finish cleanup until the other reader wakes up from cancellation.
+	started.readAfter = last.reading
 	started.release = last.closing
 	readers := make([]*Scope, 0, 2)
 	for _, reader := range []*pipelineOutcomeReader{started, last} {
@@ -240,7 +256,8 @@ func testPipelineOutcomeFailureOrdering(t *testing.T, coordinator, first, interr
 	for _, scope := range c.scopes {
 		scope.buildContextFromParentCtx(c.proc.Ctx)
 	}
-	last.release = waiter.Proc.Ctx.Done()
+	last.readAfter = waiter.Proc.Ctx.Done()
+	last.release = last.readAfter
 	err := c.runOnce()
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2), "%v", err)
 	require.NoError(t, started.readCtxErr)

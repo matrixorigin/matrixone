@@ -524,6 +524,15 @@ func preferPrimaryScopeError(current, candidate error) error {
 	return current
 }
 
+// stopExecutionScopes notifies this Compile's current execution tree before
+// operator cleanup can wait on another scope. The query context and the
+// contexts of separate internal statements retain their own owners.
+func (c *Compile) stopExecutionScopes(err error) {
+	if err != nil && c != nil && c.proc != nil && c.proc.Cancel != nil {
+		c.proc.Cancel(err)
+	}
+}
+
 func (c *Compile) canRetry(err error) bool {
 	if c.disableRetry {
 		return false

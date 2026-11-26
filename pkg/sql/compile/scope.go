@@ -330,6 +330,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("error", err.Error()))
 		}
 		err = scopeExecutionError(s.Proc, err)
+		c.stopExecutionScopes(err)
 		if p != nil {
 			err = cleanupScopePipeline(p, s.Proc, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
@@ -498,8 +499,9 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		// build routine failed.
 		if submitPreScope != nil {
 			wg.Done() // this is necessary, because the submitPreScope may panic.
-			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
+			c.stopExecutionScopes(submitPreScope)
 			s.cancelMergeSiblingsOnError(submitPreScope)
+			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
 			preScopeResultReceiveChan <- submitPreScope
 		}
 	}
@@ -631,6 +633,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	sender, err := s.remoteRun(c)
 
 	runErr := scopeExecutionError(s.Proc, err)
+	c.stopExecutionScopes(runErr)
 	if runErr != nil && s.Proc.Cancel != nil {
 		s.Proc.Cancel(runErr)
 	}
@@ -644,14 +647,13 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			sender.prepareForLocalCleanup()
 		}
 		runErr = preferPrimaryScopeError(runErr, sender.close())
+		c.stopExecutionScopes(runErr)
 	}
 	return runErr
 }
 
 func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
-	if c != nil && c.proc != nil && c.proc.Cancel != nil {
-		c.proc.Cancel(err)
-	}
+	c.stopExecutionScopes(err)
 	cleanPipelineWitchStartFail(s, err, c.isPrepare)
 	return err
 }
@@ -766,6 +768,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 					s, rawErr, err, moerr.PipelineStopCause(rawErr) != nil, scopeRunQueryContext(s.Proc),
 				)
 			}
+			c.stopExecutionScopes(err)
 			err = cleanupScopePipeline(pipeline.NewMerge(s.RootOp), s.Proc, c.isPrepare, err)
 		}
 	}()
