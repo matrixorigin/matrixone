@@ -25,15 +25,17 @@ import (
 )
 
 const metricBatchSuffix = "-batch-"
-const maxMetricFilenameBytes = 255
+
+// The disk cache appends .mofscache to each nested object's filename.
+const maxMetricFilenameBytes = 255 - len(".mofscache")
 
 func (c FilePathCfg) MetricBatchLogPath(account string, tbl *Table, ts time.Time, id uuid.UUID) string {
 	filePath := MetricBatchPath(c.LogsFilePathFactory(account, tbl, ts), id)
 	if len(path.Base(filePath)) <= maxMetricFilenameBytes {
 		return filePath
 	}
-	// Local ETL files must fit in one filesystem component. Hash only the
-	// node portion so the log format and the entire batch UUID survive.
+	// Hash only the node portion so the log format and the entire batch
+	// UUID fit in one filesystem component, including in the disk cache.
 	c.NodeUUID = fmt.Sprintf("%x", sha256.Sum256([]byte(c.NodeUUID)))
 	return MetricBatchPath(c.LogsFilePathFactory(account, tbl, ts), id)
 }

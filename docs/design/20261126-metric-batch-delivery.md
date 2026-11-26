@@ -13,8 +13,9 @@ The writer factory assigns one random UUID to a batch for either
 system_metrics.metric or system_metrics.sql_statement_cu. The SQL writer and
 the CSV filename carry this UUID. SQL-disabled writers also name their CSV
 with a batch UUID. The table directory and CSV body layout stay the same.
-When appending the UUID would make a filename longer than 255 bytes, use a
-hash for the node portion. The original node identifier stays in the CSV.
+When appending the UUID would make a filename longer than 245 bytes, use a
+hash for the node portion. The remaining 10 bytes allow for the disk cache's
+filename suffix. The original node identifier stays in the CSV.
 
 Both write paths insert the UUID into the primary key of
 system_metrics.metric_batch_receipt and load the rows in the same transaction.
@@ -82,7 +83,7 @@ After upgrade, operators can recover a verified undelivered batch using
 the new importer. Record the original object key, target key and a fresh
 lowercase UUID once. Publish the unchanged CSV in the same table directory
 with the suffix `-batch-<uuid>.csv`. Use the original stem if it fits.
-If the filename would exceed 255 bytes, choose a shorter stem and record
+If the filename would exceed 245 bytes, choose a shorter stem and record
 the exact target key before publishing. On a local fileservice, set
 `source` and `target` to those recorded paths:
 

@@ -21,6 +21,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -41,6 +42,7 @@ import (
 	dbholder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 const (
@@ -175,57 +177,90 @@ func (arg *metricReceiptArgument) Match(value driver.Value) bool {
 }
 
 func TestMetricFallbackWithLongNodeID(t *testing.T) {
-	node := strings.Repeat("c", 200)
-	for _, fixture := range []struct {
-		tbl     *table.Table
-		payload string
+	for _, backend := range []struct {
+		name      string
+		nodeBytes int
+		diskCache bool
 	}{
-		{mometric.SingleMetricTable, "m," + sampleTime + ",1," + node + ",CN,sys,0,\n"},
-		{mometric.SqlStatementCUTable, "sys," + sampleTime + ",1," + node + ",CN,internal_sql\n"},
+		{name: "local", nodeBytes: 200},
+		{name: "s3_disk_cache", nodeBytes: 180, diskCache: true},
 	} {
-		t.Run(fixture.tbl.Table, func(t *testing.T) {
-			ctx := t.Context()
-			fs, err := fileservice.NewLocalETLFS("etl", t.TempDir())
-			require.NoError(t, err)
-			t.Cleanup(func() { fs.Close(context.Background()) })
-			mock := metricDeliveryDB(t)
-			receipt := &metricReceiptArgument{}
-			mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
-			mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(receipt).WillReturnResult(sqlmock.NewResult(0, 1))
-			mock.ExpectExec("^LOAD DATA INLINE").WillReturnError(&mysql.MySQLError{Number: 1213})
-			expectMetricRollback(mock)
-
-			now := time.Unix(1795599361, 0)
-			writer := GetWriterFactory(fs, node, "CN", true).GetRowWriter(ctx, "sys", fixture.tbl, now)
-			writer.(table.BufferSettable).SetBuffer(bytes.NewBufferString(fixture.payload), nil)
-			_, err = writer.FlushAndClose()
-			require.NoError(t, err)
-
-			dir := fixture.tbl.PathBuilder.Build("sys", table.MergeLogTypeLogs, now, fixture.tbl.Database, fixture.tbl.Table)
-			files := make([]*FileMeta, 0, 1)
-			for file, err := range fs.List(ctx, dir) {
+		node := strings.Repeat("c", backend.nodeBytes)
+		for _, fixture := range []struct {
+			tbl     *table.Table
+			payload string
+		}{
+			{mometric.SingleMetricTable, "m," + sampleTime + ",1," + node + ",CN,sys,0,\n"},
+			{mometric.SqlStatementCUTable, "sys," + sampleTime + ",1," + node + ",CN,internal_sql\n"},
+		} {
+			t.Run(backend.name+"/"+fixture.tbl.Table, func(t *testing.T) {
+				ctx := t.Context()
+				var fs fileservice.FileService
+				var cache *fileservice.S3FS
+				var cacheDir string
+				var err error
+				if backend.diskCache {
+					cacheDir = t.TempDir()
+					capacity := toml.ByteSize(16 * mpool.MB)
+					cache, err = fileservice.NewS3FS(ctx,
+						fileservice.ObjectStorageArguments{Name: "etl", Bucket: t.TempDir(), Endpoint: "disk"},
+						fileservice.CacheConfig{DiskPath: &cacheDir, DiskCapacity: &capacity}, nil, false, true)
+					fs = cache
+				} else {
+					fs, err = fileservice.NewLocalETLFS("etl", t.TempDir())
+				}
 				require.NoError(t, err)
-				require.False(t, file.IsDir)
-				require.LessOrEqual(t, len(file.Name), 255)
-				filePath := path.Join(dir, file.Name)
-				id, ok := table.MetricBatchID(filePath)
-				require.True(t, ok)
-				require.Equal(t, receipt.id, id)
-				parsed, err := fixture.tbl.PathBuilder.ParsePath(ctx, filePath)
+				t.Cleanup(func() { fs.Close(context.Background()) })
+				mock := metricDeliveryDB(t)
+				receipt := &metricReceiptArgument{}
+				mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(receipt).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("^LOAD DATA INLINE").WillReturnError(&mysql.MySQLError{Number: 1213})
+				expectMetricRollback(mock)
+
+				now := time.Unix(1795599361, 0)
+				writer := GetWriterFactory(fs, node, "CN", true).GetRowWriter(ctx, "sys", fixture.tbl, now)
+				writer.(table.BufferSettable).SetBuffer(bytes.NewBufferString(fixture.payload), nil)
+				_, err = writer.FlushAndClose()
 				require.NoError(t, err)
-				require.Equal(t, fixture.tbl.Table, parsed.Table())
-				files = append(files, &FileMeta{FilePath: filePath, FileSize: file.Size})
-			}
-			require.Len(t, files, 1)
-			expectMetricLoad(mock, fixture.tbl, receipt.id, fixture.payload, true)
-			expectMetricCommit(mock)
-			merge, err := NewMerge(ctx, "", WithFileService(fs), WithTable(fixture.tbl))
-			require.NoError(t, err)
-			t.Cleanup(merge.Stop)
-			require.NoError(t, merge.doMergeFiles(ctx, files))
-			_, err = fs.StatFile(ctx, files[0].FilePath)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
-		})
+
+				dir := fixture.tbl.PathBuilder.Build("sys", table.MergeLogTypeLogs, now, fixture.tbl.Database, fixture.tbl.Table)
+				filePaths := make([]string, 0, 1)
+				for file, err := range fs.List(ctx, dir) {
+					require.NoError(t, err)
+					require.False(t, file.IsDir)
+					require.LessOrEqual(t, len(file.Name), 245)
+					filePath := path.Join(dir, file.Name)
+					id, ok := table.MetricBatchID(filePath)
+					require.True(t, ok)
+					require.Equal(t, receipt.id, id)
+					parsed, err := fixture.tbl.PathBuilder.ParsePath(ctx, filePath)
+					require.NoError(t, err)
+					require.Equal(t, fixture.tbl.Table, parsed.Table())
+					filePaths = append(filePaths, filePath)
+				}
+				require.Len(t, filePaths, 1)
+				var cacheFiles []string
+				if cache != nil {
+					cache.FlushCache(ctx)
+					relative := filepath.FromSlash("full" + filePaths[0] + ".mofscache")
+					cacheFiles, err = filepath.Glob(filepath.Join(cacheDir, "*", relative))
+					require.NoError(t, err)
+				}
+				expectMetricLoad(mock, fixture.tbl, receipt.id, fixture.payload, true)
+				expectMetricCommit(mock)
+				merge, err := NewMerge(ctx, "", WithFileService(fs), WithTable(fixture.tbl))
+				require.NoError(t, err)
+				t.Cleanup(merge.Stop)
+				require.NoError(t, merge.mergeMetricFile(ctx, filePaths[0]))
+				_, err = fs.StatFile(ctx, filePaths[0])
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+				if cache != nil {
+					require.Len(t, cacheFiles, 1, "the CSV must have been present in the disk cache")
+					require.NoFileExists(t, cacheFiles[0])
+				}
+			})
+		}
 	}
 }
 
