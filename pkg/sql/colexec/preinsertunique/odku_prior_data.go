@@ -68,13 +68,10 @@ func (preInsertUnique *PreInsertUnique) resolveODKUKey(proc *process.Process, sl
 			return 0, false, moerr.NewInternalError(proc.Ctx, "invalid ODKU input vector")
 		}
 	}
-	if err = preInsertUnique.copyODKURow(proc, a.old, original, 0, nil); err != nil {
-		return 0, false, err
-	}
-	if a.old.Vecs[c.RowIdColumn].IsNull(0) || a.old.Vecs[c.PkColumn].IsNull(0) {
+	if original.Vecs[c.RowIdColumn].IsNull(0) || original.Vecs[c.PkColumn].IsNull(0) {
 		return 0, false, moerr.NewInternalError(proc.Ctx, "ODKU prior row is missing its identity")
 	}
-	owner, found, err = preInsertUnique.lookupODKUOrigin(proc, a.old.Vecs[c.RowIdColumn], 0)
+	owner, found, err = preInsertUnique.lookupODKUOrigin(proc, original.Vecs[c.RowIdColumn], 0)
 	if err != nil {
 		return 0, false, err
 	}
@@ -83,6 +80,11 @@ func (preInsertUnique *PreInsertUnique) resolveODKUKey(proc *process.Process, sl
 		// vacated. Its RowID remains known, but it is no longer a conflict claim.
 		matches := sameODKUKey(preInsertUnique.ctr.actionRows.keys.Vecs[slot], int(owner), key, row)
 		return owner, matches, nil
+	}
+	// Only a newly discovered original needs owned scratch. Known RowIDs,
+	// including vacated keys, already have immutable originals and current images.
+	if err = preInsertUnique.copyODKURow(proc, a.old, original, 0, nil); err != nil {
+		return 0, false, err
 	}
 	copy(a.priorImage.Vecs, a.old.Vecs)
 	copy(a.priorProposed.Vecs, a.incoming.Vecs)

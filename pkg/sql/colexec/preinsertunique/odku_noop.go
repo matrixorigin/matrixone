@@ -79,20 +79,28 @@ func directNoopOrdinal(c *plan.OdkuActionCtx, a *odkuActions) int32 {
 
 // tryDirectNoop preserves the sole action owner. Its read-only proof either
 // declines before executing any RHS, or every verified RHS executes once and
-// only the latest source ordinal needs publication. Original images/keys stay
-// authoritative; a fresh original still takes normal registration/checks.
+// only an existing owner's latest source ordinal needs publication. An
+// unchanged, unregistered original remains authoritative in the frozen snapshot:
+// static keys and deferred output let later actions resolve it there again.
 func (preInsertUnique *PreInsertUnique) tryDirectNoop(proc *process.Process, owner int64) (bool, error) {
 	a, c, rows := preInsertUnique.ctr.actions, preInsertUnique.PreInsertCtx.OdkuActions, preInsertUnique.ctr.actionRows
-	if a.noopOrdinal < 0 || rows == nil || owner < 0 || owner >= int64(rows.images.RowCount()) {
+	if a.noopOrdinal < 0 || rows == nil || owner < 0 || owner > int64(rows.images.RowCount()) {
 		return false, nil
+	}
+	image, row := rows.images, int(owner)
+	fresh := row == rows.images.RowCount()
+	if fresh {
+		// registerODKUOriginal has validated the original and assembled this
+		// source-layout image before any RHS or update check executes.
+		image, row = a.proposed, 0
 	}
 	for i, expr := range c.UpdateExprs {
 		incoming := a.incoming.Vecs[expr.GetCol().ColPos]
 		if incoming.IsConst() || incoming.Length() != 1 {
 			return false, nil
 		}
-		current := rows.images.Vecs[c.InputColumns[c.UpdateColumns[i]]]
-		equal, known := odkueval.IdenticalUpdateValueAt(current, int(owner), incoming, 0)
+		current := image.Vecs[c.InputColumns[c.UpdateColumns[i]]]
+		equal, known := odkueval.IdenticalUpdateValueAt(current, row, incoming, 0)
 		if !known || !equal {
 			return false, nil
 		}
@@ -102,14 +110,16 @@ func (preInsertUnique *PreInsertUnique) tryDirectNoop(proc *process.Process, own
 			return true, err
 		}
 	}
-	if err := odkueval.EvaluateDirectNotNullChecksAt(a.updateChecks, rows.images, c.InputColumns, int(owner), proc); err != nil {
+	if err := odkueval.EvaluateDirectNotNullChecksAt(a.updateChecks, image, c.InputColumns, row, proc); err != nil {
 		return true, err
 	}
 	if err := context.Cause(proc.Ctx); err != nil {
 		return true, err
 	}
-	if err := rows.copyInto(proc, rows.images, a.incoming, int(owner), false, rows.deadImageArea, []int32{a.noopOrdinal}, preInsertUnique); err != nil {
-		return true, err
+	if !fresh {
+		if err := rows.copyInto(proc, rows.images, a.incoming, int(owner), false, rows.deadImageArea, []int32{a.noopOrdinal}, preInsertUnique); err != nil {
+			return true, err
+		}
 	}
 	return true, preInsertUnique.finishODKUAction(proc, 0)
 }
