@@ -1,0 +1,28 @@
+name: CS alternate-site runner probe (RUH)
+on:
+  push:
+    branches: [weilu-runner-test]
+    paths: ['.github/workflows/cs-ruh-capacity-probe.yml']
+permissions: {}
+jobs:
+  probe:
+    name: Verify RUH Coverage runner
+    if: >-
+      github.repository == 'matrixorigin/matrixone' &&
+      github.ref == 'refs/heads/weilu-runner-test' &&
+      github.actor == 'Ariznawlll' && github.run_attempt == 1 &&
+      github.event.before == 'b61305660f2f15c1585a3142ed4fe9add775f1a4'
+    runs-on: [cs-node-cache-7c14g, cs-ruh-node-cache-all]
+    timeout-minutes: 4
+    steps:
+      - name: Verify site and work filesystem without checking out code
+        env:
+          ASSIGNED_RUNNER: ${{ runner.name }}
+        run: |
+          set -euo pipefail
+          [[ "$ASSIGNED_RUNNER" =~ ^cs-ruh-nc-n[012]-pr-v1-[a-z0-9]+-runner-[a-z0-9]+$ ]]
+          df -Pk "$RUNNER_TEMP" | awk 'NR==2 {
+            printf "Work filesystem: %.1f GiB total, %.1f GiB free\n", $2/1048576, $4/1048576
+            if ($2 < 75*1048576) exit 1
+          }'
+          printf 'Verified RUH runner: %s\n' "$ASSIGNED_RUNNER"
