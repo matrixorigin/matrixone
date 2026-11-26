@@ -205,7 +205,19 @@ func filterAbortedLogtailRows(src *containers.BatchWithVersion) {
 	}
 }
 
-func containersBatchToProtoBatch(bat *containers.Batch) (*api.Batch, error) {
-	mobat := containers.ToCNBatch(bat)
-	return batch.BatchToProtoBatch(mobat, bat.Attrs)
+// marshalContainersBatch encodes bat for an api.Entry, whose attrs are
+// bat.Attrs. The encoding borrows bat's buffers: the builders close their
+// batches only through the callback that runs after the response is sent.
+//
+// A dropped column's placeholder (AppendPlaceholder) is an empty vector; it
+// is encoded as a constant null of the batch's length, so every vector of
+// the entry holds its row count and the column keeps its seqnum position.
+func marshalContainersBatch(bat *containers.Batch) (api.EncodedBatch, error) {
+	cnBat := containers.ToCNBatch(bat)
+	for i, vec := range bat.Vecs {
+		if vec == containers.EMPTY_VECTOR {
+			cnBat.Vecs[i] = vector.NewConstNull(*vec.GetType(), bat.Length(), nil)
+		}
+	}
+	return batch.Encode(cnBat)
 }

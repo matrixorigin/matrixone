@@ -595,9 +595,9 @@ func TestPushClient_DoGCPartitionState(t *testing.T) {
 		},
 	}
 	rowBatch.SetRowCount(3)
-	ibat, err := fillRandomRowidAndZeroTs(rowBatch, []string{"varchar_column"}, m)
+	ibat, iattrs, err := fillRandomRowidAndZeroTs(rowBatch, []string{"varchar_column"}, m)
 	assert.NoError(t, err)
-	state.HandleRowsInsert(ctx, ibat, 0, packer, m)
+	state.HandleRowsInsert(ctx, ibat, iattrs, 0, packer, m)
 	assert.Equal(t, 3, state.ApproxInMemRows())
 	state.UpdateDuration(types.BuildTS(10, 10), types.MaxTs())
 	c.eng.partitions[[2]uint64{200, 300}] = ps
@@ -985,7 +985,7 @@ func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
 
 	e := &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 8)},
+		globalStats: &GlobalStats{tailC: make(chan statsLogtail, 8)},
 		mp:          mp,
 		packerPool: fileservice.NewPool(1,
 			func() *types.Packer { return packer },
@@ -1007,7 +1007,7 @@ func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
 	}
 	t.Cleanup(func() { rowBatch.Clean(mp) })
 	rowBatch.SetRowCount(1)
-	rows, err := fillRandomRowidAndZeroTs(rowBatch, []string{"pk"}, mp)
+	rows, rowAttrs, err := fillRandomRowidAndZeroTs(rowBatch, []string{"pk"}, mp)
 	require.NoError(t, err)
 
 	recRoutines := newTestRoutineControllers(8)
@@ -1016,9 +1016,9 @@ func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
 		To: &to,
 		LogtailList: []logtail.TableLogtail{
 			{Table: &api.TableID{DbId: 10, TbId: 101, DbName: "db", TbName: "t1"},
-				Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 101, TableName: "t1", Bat: rows}}},
+				Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 101, TableName: "t1", Attrs: rowAttrs, Bat: api.NewEncodedBatch(rows)}}},
 			{Table: &api.TableID{DbId: 10, TbId: 105, DbName: "db", TbName: "t2"},
-				Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 105, TableName: "t2", Bat: rows}}},
+				Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 105, TableName: "t2", Attrs: rowAttrs, Bat: api.NewEncodedBatch(rows)}}},
 		},
 	}
 	require.NoError(t, dispatchUpdateResponse(ctx, e, response, recRoutines, time.Now()))
@@ -1109,7 +1109,7 @@ func TestWaitCanServeTableSnapshotWaitsForPendingUpdate(t *testing.T) {
 
 	e := &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 8)},
+		globalStats: &GlobalStats{tailC: make(chan statsLogtail, 8)},
 	}
 	e.pClient.eng = e
 	e.pClient.subscribed = subscribedTable{
@@ -3879,7 +3879,7 @@ func TestDispatchCatalogUpdateOrdersTablesBeforeColumns(t *testing.T) {
 			packer := types.NewPacker()
 			t.Cleanup(packer.Close)
 			e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition),
-				globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 16)}, mp: mp,
+				globalStats: &GlobalStats{tailC: make(chan statsLogtail, 16)}, mp: mp,
 				packerPool: fileservice.NewPool(1, func() *types.Packer { return packer }, func(p *types.Packer) { p.Reset() }, nil)}
 			e.catalog.Store(cache.NewCatalog())
 			e.pClient.receivedLogTailTime.initLogTailTimestamp(tw)
@@ -3889,17 +3889,18 @@ func TestDispatchCatalogUpdateOrdersTablesBeforeColumns(t *testing.T) {
 			routines := newTestRoutineControllers(16)
 			makeTail := func(bat *batch.Batch, id uint64, name string, seq uint32, at int64) logtail.TableLogtail {
 				t.Helper()
-				filled, err := fillRandomRowidAndZeroTs(bat, catalogTupleAttrsForTest(id), mp)
+				_, attrs, err := fillRandomRowidAndZeroTs(bat, catalogTupleAttrsForTest(id), mp)
 				require.NoError(t, err)
 				ts := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[cache.MO_TIMESTAMP_IDX])
 				for i := range ts {
 					ts[i] = types.BuildTS(at, 0)
 				}
-				encoded, err := batch.BatchToProtoBatch(bat, filled.Attrs)
+				// Re-encode: the commit timestamps changed after the fill.
+				encoded, err := batch.MarshalVectors(bat.Vecs)
 				require.NoError(t, err)
 				t.Cleanup(func() { bat.Clean(mp) })
 				return logtail.TableLogtail{Table: &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: id, DbName: catalog.MO_CATALOG, TbName: name, PrimarySeqnum: seq},
-					Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: id, TableName: name, DatabaseId: catalog.MO_CATALOG_ID, DatabaseName: catalog.MO_CATALOG, Bat: encoded}}}
+					Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: id, TableName: name, DatabaseId: catalog.MO_CATALOG_ID, DatabaseName: catalog.MO_CATALOG, Attrs: attrs, Bat: api.NewEncodedBatch(encoded)}}}
 			}
 			cols, err := catalog.GenColumnsFromDefs(7, "t", "db", 90, 80, []engine.TableDef{&engine.AttributeDef{Attr: engine.Attribute{Name: "n", Type: types.T_uint64.ToType()}}})
 			require.NoError(t, err)

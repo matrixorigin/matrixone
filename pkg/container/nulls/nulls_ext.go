@@ -97,6 +97,15 @@ func (nsp *Nulls) MarshalTo(w io.Writer) error {
 	return nsp.np.MarshalTo(w)
 }
 
+// MarshalToBytes writes MarshalTo's encoding into dst, which must hold at
+// least MarshalSize bytes, and returns the bytes written.
+func (nsp *Nulls) MarshalToBytes(dst []byte) int {
+	if nsp.IsEmpty() {
+		return 0
+	}
+	return nsp.np.MarshalToBytes(dst)
+}
+
 // ShowV1 in version 1, bitmap is v1
 func (nsp *Nulls) ShowV1() ([]byte, error) {
 	if nsp.IsEmpty() {

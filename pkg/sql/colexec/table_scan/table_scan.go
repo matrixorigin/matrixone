@@ -16,6 +16,7 @@ package table_scan
 
 import (
 	"bytes"
+	"context"
 	"time"
 	"unicode/utf8"
 
@@ -46,11 +47,37 @@ func (tableScan *TableScan) OpType() vm.OpType {
 	return vm.TableScan
 }
 
-func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
+func (tableScan *TableScan) resetAnalyzer() {
 	if tableScan.OpAnalyzer == nil {
 		tableScan.OpAnalyzer = process.NewAnalyzer(tableScan.GetIdx(), tableScan.IsFirst, tableScan.IsLast, "table_scan")
 	} else {
 		tableScan.OpAnalyzer.Reset()
+	}
+}
+
+// MeasureReaderStartup records reads that are part of this scan but must
+// finish before its reader and partial aggregate input can be constructed.
+func (tableScan *TableScan) MeasureReaderStartup(
+	ctx context.Context,
+	read func(context.Context, process.Analyzer) error,
+) error {
+	tableScan.resetAnalyzer()
+	tableScan.ctr.readerStartupMeasured = true
+	owner := tableScan.OpAnalyzer.GetOpStats()
+	startup := process.NewTempAnalyzer()
+	startup.Start()
+	defer func() {
+		startup.Stop()
+		owner.SetStartupResource(startup.GetOpStats().ResourceDelta())
+	}()
+	return read(perfcounter.WithCounterSet(ctx, startup.GetOpCounterSet()), startup)
+}
+
+func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
+	if tableScan.ctr.readerStartupMeasured {
+		tableScan.ctr.readerStartupMeasured = false
+	} else {
+		tableScan.resetAnalyzer()
 	}
 	if tableScan.ctr.padCharToFullLength, err = process.ResolvePadCharToFullLength(proc); err != nil {
 		return err

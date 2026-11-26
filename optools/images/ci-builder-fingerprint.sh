@@ -25,11 +25,9 @@ hash_files() {
 hash_thirdparties() {
 	(
 		cd thirdparties
-		# Include source-side CUDA headers and every other checked-in native
-		# input, while excluding generated install/build output.
-		find . -type f \
-			-not -path './install/*' \
-			-not -path './_*' -print0 |
+		# The native thirdparties build does not consume the Sirius SDK.
+		find . \( -path './sirius' -o -path './install' -o -path './_*' \) -prune \
+			-o -type f -print0 |
 			LC_ALL=C sort -z |
 			xargs -r -0 sha256sum
 	) | sha256sum | awk '{print $1}'

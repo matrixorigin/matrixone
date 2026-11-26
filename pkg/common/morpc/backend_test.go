@@ -143,9 +143,9 @@ func TestSendFailureKeepsRequestOwnership(t *testing.T) {
 		waitWriteC: make(chan struct{}, 1),
 		writeC:     make(chan *Future, 1),
 	}
-	rb.options.releaseRequest = func(Message) {
+	WithBackendRequestRelease(func(Message) {
 		released.Add(1)
-	}
+	})(rb)
 	rb.stateMu.state = stateStopped
 	rb.mu.futures = make(map[uint64]*Future)
 	rb.pool.futures = &sync.Pool{
@@ -457,7 +457,8 @@ func TestFailAllWaitingCloseAndPoolReuseRace(t *testing.T) {
 }
 
 func TestSuccessfulSendReleasesOwnedRequest(t *testing.T) {
-	released := make(chan Message, 1)
+	released := make(chan Message, 2)
+	owned := newTestMessage(1)
 	testBackendSend(
 		t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
@@ -466,21 +467,32 @@ func TestSuccessfulSendReleasesOwnedRequest(t *testing.T) {
 		func(b *remoteBackend) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			f, err := b.Send(ctx, newTestMessage(1))
+			f, err := b.Send(ctx, owned)
 			require.NoError(t, err)
 			defer f.Close()
 			_, err = f.Get()
 			require.NoError(t, err)
 			select {
 			case request := <-released:
+				require.Same(t, owned, request)
 				require.Equal(t, f.getSendMessageID(), request.GetID())
 			case <-ctx.Done():
 				t.Fatal("writer did not release the owned request")
 			}
+
+			unowned := newTestMessage(2)
+			f2, err := b.Send(ctx, unowned)
+			require.NoError(t, err)
+			defer f2.Close()
+			resp, err := f2.Get()
+			require.NoError(t, err)
+			require.Equal(t, unowned, resp)
+			require.Empty(t, released, "only the owned request was released, exactly once")
 		},
-		WithBackendRequestRelease(func(message Message) {
-			released <- message
-		}),
+		WithBackendRequestReleaseFor(
+			func(message Message) bool { return message == owned },
+			func(message Message) { released <- message },
+		),
 	)
 }
 

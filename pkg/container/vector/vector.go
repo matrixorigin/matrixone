@@ -1091,8 +1091,11 @@ type MarshalBinaryPlan struct {
 	nullLength           uint32
 	canonicalVarlen      bool
 	normalizedVarlenData []byte
-	canonicalOffset      []uint32
-	canonicalFirst       []bool
+	// zeroNullVarlen asks MarshalToBytes to clear the descriptors of null
+	// rows in place of normalizedVarlenData, which trusted plans skip.
+	zeroNullVarlen  bool
+	canonicalOffset []uint32
+	canonicalFirst  []bool
 }
 
 func (p MarshalBinaryPlan) Size() int {
@@ -1100,6 +1103,19 @@ func (p MarshalBinaryPlan) Size() int {
 }
 
 func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
+	return v.prepareMarshalBinary(false)
+}
+
+// PrepareMarshalBinaryTrusted is PrepareMarshalBinary for a vector known to
+// be valid, such as one an engine built. It skips the linear check that
+// decides whether the varlen area can be sent as is, and always sends it as
+// is: a valid vector's descriptors all point inside its area. It allocates
+// nothing; write the plan with MarshalToBytes.
+func (v *Vector) PrepareMarshalBinaryTrusted() (MarshalBinaryPlan, error) {
+	return v.prepareMarshalBinary(true)
+}
+
+func (v *Vector) prepareMarshalBinary(trusted bool) (MarshalBinaryPlan, error) {
 	if v == nil || v.length < 0 {
 		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx("invalid vector for marshal")
 	}
@@ -1128,7 +1144,7 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		dataLength = 0
 	}
 	areaLength := uint64(len(v.area))
-	canonicalVarlen := v.requiresCanonicalVarlenMarshal(dataLength)
+	canonicalVarlen := !trusted && v.requiresCanonicalVarlenMarshal(dataLength)
 	if dataLength > uint64(len(v.data)) {
 		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
 			"vector data is shorter than its marshal length",
@@ -1181,7 +1197,13 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		}
 	}
 	normalizeNullVarlen := false
-	if !canonicalVarlen && isVarlenaMarshalType(v.typ.Oid) &&
+	zeroNullVarlen := false
+	if trusted {
+		// Clearing every null row's descriptor while writing gives the same
+		// bytes as normalizing only when a stale one exists, without the scan.
+		zeroNullVarlen = isVarlenaMarshalType(v.typ.Oid) && v.HasNull() &&
+			dataLength%types.VarlenaSize == 0
+	} else if !canonicalVarlen && isVarlenaMarshalType(v.typ.Oid) &&
 		v.HasNull() && dataLength%types.VarlenaSize == 0 {
 		descriptors := MustFixedColNoTypeCheck[types.Varlena](v)
 		if uint64(len(descriptors))*types.VarlenaSize == dataLength {
@@ -1243,6 +1265,7 @@ func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
 		normalizedVarlenData: normalizedVarlenData,
 		canonicalOffset:      canonicalOffset,
 		canonicalFirst:       canonicalFirst,
+		zeroNullVarlen:       zeroNullVarlen,
 	}, nil
 }
 
@@ -1363,6 +1386,76 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 		return writeVectorMarshalByte(w, 1)
 	}
 	return writeVectorMarshalByte(w, 0)
+}
+
+// MarshalToBytes writes the plan's encoding into dst, which must hold at
+// least Size bytes, and returns the bytes written. It allocates nothing. The
+// plan must come from PrepareMarshalBinaryTrusted: the canonical varlen
+// layout is written only by MarshalTo.
+func (p MarshalBinaryPlan) MarshalToBytes(dst []byte) (int, error) {
+	v := p.vector
+	if v == nil {
+		return 0, io.ErrClosedPipe
+	}
+	if p.canonicalVarlen {
+		return 0, moerr.NewInvalidInputNoCtx("canonical varlen plan cannot marshal to bytes")
+	}
+	if len(dst) < p.size {
+		return 0, io.ErrShortBuffer
+	}
+	// The plan is a snapshot: a vector whose layout changed since must not
+	// write past Size, so the destination is capped and checked first.
+	if v.nsp.MarshalSize() != int(p.nullLength) ||
+		uint64(len(v.data)) < uint64(p.dataLength) ||
+		uint64(len(v.area)) < uint64(p.areaLength) {
+		return 0, moerr.NewInvalidInputNoCtx("vector changed while marshaling")
+	}
+	dst = dst[:p.size:p.size]
+	dst[0] = uint8(v.class)
+	n := 1
+	n += copy(dst[n:], types.EncodeType(&v.typ))
+	binary.NativeEndian.PutUint32(dst[n:], uint32(v.length))
+	binary.NativeEndian.PutUint32(dst[n+4:], p.dataLength)
+	n += 8
+	if p.dataLength > 0 {
+		data := dst[n : n+int(p.dataLength)]
+		if p.normalizedVarlenData != nil {
+			copy(data, p.normalizedVarlenData)
+		} else {
+			copy(data, v.data[:p.dataLength])
+		}
+		if p.zeroNullVarlen {
+			descriptors := unsafe.Slice(
+				(*types.Varlena)(unsafe.Pointer(&data[0])),
+				len(data)/types.VarlenaSize,
+			)
+			iterator := v.nsp.GetBitmap().IteratorValue()
+			for iterator.HasNext() {
+				row := iterator.Next()
+				if row >= uint64(len(descriptors)) {
+					break
+				}
+				descriptors[row] = types.Varlena{}
+			}
+		}
+		n += int(p.dataLength)
+	}
+	binary.NativeEndian.PutUint32(dst[n:], p.areaLength)
+	n += 4
+	n += copy(dst[n:], v.area[:p.areaLength])
+	binary.NativeEndian.PutUint32(dst[n:], p.nullLength)
+	n += 4
+	if p.nullLength > 0 {
+		n += v.nsp.MarshalToBytes(dst[n:])
+	}
+	if n != p.size-1 {
+		return 0, moerr.NewInvalidInputNoCtx("vector changed while marshaling")
+	}
+	dst[n] = 0
+	if v.sorted {
+		dst[n] = 1
+	}
+	return p.size, nil
 }
 
 type vectorPrimitiveWriter interface {

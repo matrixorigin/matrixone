@@ -1183,3 +1183,25 @@ func TestDiskCacheLoadIndexesFilesAsOldest(t *testing.T) {
 	require.True(t, cache.cache.Contains(live))
 	require.False(t, cache.cache.Contains(old))
 }
+
+func TestIsWholeObjectCachedOnlyCountsFullFiles(t *testing.T) {
+	ctx := t.Context()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { cache.Close(ctx) })
+
+	const path = "test-object"
+	fs := &S3FS{diskCache: cache}
+	require.False(t, IsWholeObjectCached(fs, path))
+	require.NoError(t, cache.Update(ctx, &IOVector{FilePath: path, Entries: []IOEntry{
+		{Offset: 0, Size: 1, Data: []byte("a")},
+	}}, false))
+	require.False(t, IsWholeObjectCached(fs, path), "a cached range is insufficient")
+
+	require.NoError(t, cache.SetFile(ctx, path, func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewBufferString("abc")), nil
+	}))
+	require.True(t, IsWholeObjectCached(fs, path))
+	require.NoError(t, cache.removeOnePath(ctx, path))
+	require.False(t, IsWholeObjectCached(fs, path))
+}

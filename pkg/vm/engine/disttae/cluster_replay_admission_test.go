@@ -40,7 +40,7 @@ func TestClusterReplayDispatcherBindsCatalogGeneration(t *testing.T) {
 	meta, err := catalog.GenCreateTableTuple(catalog.Table{AccountId: 7, DatabaseId: 10, DatabaseName: "db", TableId: 22, TableName: "metrics"}, mp, packer)
 	require.NoError(t, err)
 	defer meta.Clean(mp)
-	_, err = fillRandomRowidAndZeroTs(meta, catalog.MoTablesSchema, mp)
+	_, _, err = fillRandomRowidAndZeroTs(meta, catalog.MoTablesSchema, mp)
 	require.NoError(t, err)
 	vector.MustFixedColWithTypeCheck[types.TS](meta.GetVector(cache.MO_TIMESTAMP_IDX))[0] = types.BuildTS(1, 0)
 	cc.InsertTable(meta)
@@ -49,8 +49,8 @@ func TestClusterReplayDispatcherBindsCatalogGeneration(t *testing.T) {
 	// A complete declared schema is installed before dispatch, as after the
 	// catalog bootstrap/column publication boundary. No batch name declares it.
 	installClusterReplaySchema(t, item, "")
-	input, _ := clusterReplaySpecBatch(t, mp, packer, []clusterRowSpec{{device: 0, metric: 0, tsOrdinal: 18, value: 19}}, 5, 0, clusterReplayBatchOptions{})
-	frame := &logtail.TableLogtail{Table: &api.TableID{AccId: 7, DbId: 10, TbId: 22, TbName: "metrics", DbName: "db"}, Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 22, TableName: "metrics", Bat: input}}}
+	input, inputAttrs, _ := clusterReplaySpecBatch(t, mp, packer, []clusterRowSpec{{device: 0, metric: 0, tsOrdinal: 18, value: 19}}, 5, 0, clusterReplayBatchOptions{})
+	frame := &logtail.TableLogtail{Table: &api.TableID{AccId: 7, DbId: 10, TbId: 22, TbName: "metrics", DbName: "db"}, Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 22, TableName: "metrics", Attrs: inputAttrs, Bat: api.NewEncodedBatch(input)}}}
 	through := types.BuildTS(20, 0).ToTimestamp()
 	require.Nil(t, eng.captureReplayClusterKey(frame, through), "bootstrap is not complete")
 	eng.pClient.dcaConfirmAndApply()
@@ -91,8 +91,8 @@ func TestClusterReplayDispatcherBindsCatalogGeneration(t *testing.T) {
 	require.True(t, partition.Snapshot().ClusterIndexReadyFor(*captured))
 	previous := partition.Snapshot()
 	state, publish = partition.MutateState()
-	newer, _ := clusterReplaySpecBatch(t, mp, packer, []clusterRowSpec{{device: 0, metric: 0, tsOrdinal: 19, value: 20}}, 6, 1, clusterReplayBatchOptions{})
-	state.HandleRowsInsert(t.Context(), newer, 6, packer, mp, next)
+	newer, newerAttrs, _ := clusterReplaySpecBatch(t, mp, packer, []clusterRowSpec{{device: 0, metric: 0, tsOrdinal: 19, value: 20}}, 6, 1, clusterReplayBatchOptions{})
+	state.HandleRowsInsert(t.Context(), newer, newerAttrs, 6, packer, mp, next)
 	publish()
 	require.False(t, partition.Snapshot().WantsClusterKeyMetadata())
 	require.Nil(t, eng.captureReplayClusterKey(frame, through), "disabled published state skips metadata")

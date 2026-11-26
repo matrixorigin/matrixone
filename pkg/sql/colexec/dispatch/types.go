@@ -15,8 +15,6 @@
 package dispatch
 
 import (
-	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/google/uuid"
@@ -71,12 +69,14 @@ type container struct {
 
 	batchCnt []int
 	rowCnt   []int
-
-	marshalBuf bytes.Buffer
 }
 
 type Dispatch struct {
-	ctr               *container
+	ctr *container
+	// sendBuf is the marshal buffer of the batches sent to remote receivers.
+	// It outlives each execution, so the operator reuses it every time it
+	// runs, and is freed by Free or Release.
+	sendBuf           mpool.MessageBuffer
 	cleanupSpool      *pSpool.PipelineSpool
 	allocationAccount *mpool.AllocationAccount
 
@@ -204,6 +204,7 @@ func NewArgument() *Dispatch {
 
 func (dispatch *Dispatch) Release() {
 	if dispatch != nil {
+		dispatch.sendBuf.Free()
 		reuse.Free[Dispatch](dispatch, nil)
 	}
 }
@@ -312,4 +313,5 @@ func (dispatch *Dispatch) CleanupDeferredSpool() {
 }
 
 func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {
+	dispatch.sendBuf.Free()
 }

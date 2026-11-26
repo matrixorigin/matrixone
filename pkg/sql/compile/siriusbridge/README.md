@@ -46,7 +46,7 @@ bounded prefetch; this bridge milestone does not implement that SQL path.
   NVIDIA driver and GPU, and [Pixi](https://pixi.sh). CUDA, cuDF, cuVS, RMM,
   compilers, and `patchelf` come from Sirius's frozen `mo` Pixi environment;
   `/usr/local/cuda` is not required.
-- The Sirius commit pinned by MatrixOne at `third_party/sirius`. For a release,
+- The Sirius commit pinned by MatrixOne at `thirdparties/sirius`. For a release,
   that commit must be merged into `matrixorigin/sirius:perf/embedded-mo-scan`; the
   `SIRIUS_MERGED_REF` used below must contain the exact SDK source revision.
   An unmerged pin requires an explicit development build and is not a release
@@ -61,10 +61,10 @@ tree artifact, so regenerate it after changing Sirius source or its Pixi lock:
 
 ```sh
 export MO_SRC=/absolute/path/to/matrixone
-export SIRIUS_SRC="$MO_SRC/third_party/sirius"
+export SIRIUS_SRC="$MO_SRC/thirdparties/sirius"
 # Capture the repository-supported Go installation before Pixi activation.
 export MO_GO_ROOT="$(go env GOROOT)"
-git -C "$MO_SRC" submodule update --init third_party/sirius
+git -C "$MO_SRC" submodule update --init thirdparties/sirius
 cd "$SIRIUS_SRC"
 git fetch origin perf/embedded-mo-scan
 git submodule update --init duckdb substrait cucascade tae-scanner vcpkg
