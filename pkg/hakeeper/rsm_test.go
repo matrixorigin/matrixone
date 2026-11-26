@@ -972,6 +972,78 @@ func TestGetCommandBatch(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestLogStartDeliveryUsesCurrentMembership(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	const store = "returning-store"
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{
+		ShardID: 1, Epoch: 9, Replicas: map[uint64]string{3: store, 5: "other-store"},
+		NonVotingReplicas: map[uint64]string{4: store},
+	}
+	start := func(kind pb.ConfigChangeType, shard, id uint64) pb.ScheduleCommand {
+		return pb.ScheduleCommand{UUID: store, ServiceType: pb.LogService, ConfigChange: &pb.ConfigChange{
+			ChangeType: kind, Replica: pb.Replica{UUID: store, ShardID: shard, ReplicaID: id},
+		}}
+	}
+	shutdown := pb.ScheduleCommand{UUID: store, ServiceType: pb.LogService, ShutdownStore: &pb.ShutdownStore{StoreID: store}}
+	voter := start(pb.StartReplica, 1, 3)
+	learner := start(pb.StartNonVotingReplica, 1, 4)
+	first := start(pb.StartReplica, 2, 6)
+	rsm.state.ScheduleCommands[store] = pb.CommandBatch{Commands: []pb.ScheduleCommand{
+		shutdown, start(pb.StartReplica, 1, 2), start(pb.StartReplica, 1, 5),
+		start(pb.StartNonVotingReplica, 1, 3), voter, learner, first,
+	}}
+	var delivered pb.CommandBatch
+	result := rsm.getCommandBatch(store)
+	require.NoError(t, delivered.Unmarshal(result.Data))
+	require.Zero(t, voter.ConfigChange.Replica.Epoch)
+	require.Zero(t, learner.ConfigChange.Replica.Epoch)
+	voter.ConfigChange.Replica.Epoch = 9
+	learner.ConfigChange.Replica.Epoch = 9
+	require.Equal(t, []pb.ScheduleCommand{shutdown, voter, learner, first}, delivered.Commands)
+	require.Empty(t, rsm.getCommandBatch(store).Data, "ordinary starts are consumed once")
+}
+
+func TestLogBootstrapStartDeliveryChecksLifecycle(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	const store = "bootstrapping-store"
+	start := pb.ScheduleCommand{UUID: store, ServiceType: pb.LogService, Bootstrapping: true,
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.StartReplica, InitialMembers: map[uint64]string{1: "first", 2: "second", 3: store},
+			Replica: pb.Replica{UUID: store, ShardID: 1, ReplicaID: 3},
+		}}
+	queued := pb.CommandBatch{Term: 1, Commands: []pb.ScheduleCommand{start}}
+	rsm.state.ScheduleCommands[store] = queued
+	deliver := func() []pb.ScheduleCommand {
+		t.Helper()
+		var batch pb.CommandBatch
+		result := rsm.getCommandBatch(store)
+		require.NoError(t, batch.Unmarshal(result.Data))
+		require.Equal(t, queued, rsm.state.ScheduleCommands[store], "reply preparation must not rewrite the pending command")
+		require.Zero(t, start.ConfigChange.Replica.Epoch)
+		return batch.Commands
+	}
+
+	rsm.state.State = pb.HAKeeperBootstrapCommandsReceived
+	require.Equal(t, []pb.ScheduleCommand{start}, deliver())
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 1, Replicas: map[uint64]string{1: "first"}}
+	require.Equal(t, []pb.ScheduleCommand{start}, deliver(), "the first initial entry does not exclude later voters")
+	rsm.state.State = pb.HAKeeperRunning
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 2, Replicas: map[uint64]string{1: "first", 2: "second"}}
+	require.Equal(t, []pb.ScheduleCommand{start}, deliver(), "a reported majority may finish bootstrap before the last voter reports")
+	delete(rsm.state.LogState.Shards, 1)
+	require.Empty(t, deliver(), "unknown membership cannot authorize an initial Start after bootstrap")
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 1, Replicas: map[uint64]string{3: store}}
+	require.Empty(t, deliver(), "an out-of-order membership is not an initial prefix")
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 8, Replicas: map[uint64]string{3: store}}
+	confirmed := *start.ConfigChange
+	confirmed.Replica.Epoch = 8
+	reply := start
+	reply.ConfigChange = &confirmed
+	require.Equal(t, []pb.ScheduleCommand{reply}, deliver(), "a known member can still finish starting after bootstrap")
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 9, Replicas: map[uint64]string{4: "replacement"}}
+	require.Empty(t, deliver())
+}
+
 func TestBootstrapReplicaCommandsRetriedUntilHeartbeatAcknowledges(t *testing.T) {
 	const (
 		storeID   = "store-1"

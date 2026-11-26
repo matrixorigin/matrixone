@@ -997,6 +997,7 @@ func TestSnapshotTxnOperator(t *testing.T) {
 
 		tc2 := newTxnOperatorWithSnapshot(tc.logger, tc.sender, v)
 		assert.True(t, tc2.mu.txn.Mirror)
+		assert.True(t, tc2.TxnOptions().CatalogMaintenance())
 
 		tc2.mu.txn.Mirror = false
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
@@ -1004,7 +1005,7 @@ func TestSnapshotTxnOperator(t *testing.T) {
 		tc2.opts.coordinator = true
 		assert.Equal(t, tc.opts.options, tc2.opts.options)
 		assert.Equal(t, 1, len(tc2.mu.lockTables))
-	}, WithTxnReadyOnly())
+	}, WithTxnReadyOnly(), WithCatalogMaintenance())
 }
 
 func TestApplySnapshotTxnOperator(t *testing.T) {
@@ -2702,4 +2703,56 @@ func TestWithTxnLockWaitTimeout(t *testing.T) {
 		},
 		WithTxnLockWaitTimeout(60*time.Second),
 	)
+}
+
+type rollbackCleanupTestService struct {
+	unknownCommitResolverLockService
+}
+
+func (s *rollbackCleanupTestService) ResolveRollbackCleanup(txnID []byte, onResolved func()) (bool, error) {
+	return true, s.ResolveCommitUnknown(txnID, time.Time{}, 0, onResolved)
+}
+
+func TestRollbackTransferRetainsUserAdmissionUntilOwnerRelease(t *testing.T) {
+	resolver := &rollbackCleanupTestService{}
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		op, err := c.New(ctx, newTestTimestamp(0), WithUserTxn(), WithTxnMode(txn.TxnMode_Pessimistic))
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		id := append([]byte(nil), tc.Txn().ID...)
+		require.NoError(t, tc.AddLockTable(lock.LockTable{Group: 0, Table: 1, Valid: true}))
+		require.NoError(t, tc.Rollback(ctx))
+
+		resolver.mu.Lock()
+		require.Equal(t, id, resolver.resolvedTxnID)
+		require.Empty(t, resolver.unlockedTxnID)
+		resolver.mu.Unlock()
+
+		activated := make(chan error, 1)
+		go func() {
+			next, err := c.New(ctx, newTestTimestamp(0), WithUserTxn(), WithTxnMode(txn.TxnMode_Optimistic))
+			if err == nil {
+				err = next.Rollback(ctx)
+			}
+			activated <- err
+		}()
+		require.Eventually(t, func() bool {
+			users, active, waiting := txnAdmissionCounts(c)
+			return users == 1 && active == 0 && waiting == 1
+		}, time.Second, time.Millisecond)
+
+		resolver.completeResolution()
+		select {
+		case err := <-activated:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatal("owner cleanup did not free the retained user admission")
+		}
+		users, active, waiting := txnAdmissionCounts(c)
+		require.Zero(t, users)
+		require.Zero(t, active)
+		require.Zero(t, waiting)
+	}, WithLockService(resolver), WithMaxActiveTxn(1))
 }

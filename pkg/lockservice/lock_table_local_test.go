@@ -188,7 +188,7 @@ func TestCloseLocalLockTableNotifiesOutsideTableMutex(t *testing.T) {
 								handled <- struct{}{}
 							},
 						},
-						eventC: events.eventC,
+						queue: events,
 					}
 					lock.addWaiter(logger, w)
 					waiters = append(waiters, w)
@@ -271,7 +271,7 @@ func TestRemoveLocalLockTableClosesOutsideHolderMutex(t *testing.T) {
 								handled <- struct{}{}
 							},
 						},
-						eventC: events.eventC,
+						queue: events,
 					}
 					lock.addWaiter(logger, w)
 					waiters = append(waiters, w)
@@ -2791,4 +2791,56 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 			})
 		},
 	)
+}
+
+func TestExactRowDoesNotJoinSharedRange(t *testing.T) {
+	const table = uint64(15)
+	for _, remote := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remote=%t", remote), func(t *testing.T) {
+			runner := getRunner(remote)
+			runner(t, table, func(ctx context.Context, s *service, _ *localLockTable) {
+				rangeOpts := pb.LockOptions{Granularity: pb.Granularity_Range, Mode: pb.LockMode_Shared}
+				rangeTxn := newTestTxnID(4)
+				_, err := s.Lock(ctx, table, [][]byte{{1}, {5}}, rangeTxn, rangeOpts)
+				require.NoError(t, err)
+				pointOpts := newTestRowSharedOptions().WithExactRows()
+				pointOpts.Policy = pb.WaitPolicy_FastFail
+				for _, key := range []byte{1, 3, 5} {
+					txn := newTestTxnID(key + 10)
+					_, err := s.Lock(ctx, table, [][]byte{{key}}, txn, pointOpts)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockConflict), "key %d: %v", key, err)
+					require.NoError(t, s.Unlock(ctx, txn, timestamp.Timestamp{}))
+				}
+				require.NoError(t, s.Unlock(ctx, rangeTxn, timestamp.Timestamp{}))
+				pointTxn := newTestTxnID(20)
+				_, err = s.Lock(ctx, table, [][]byte{{3}}, pointTxn, pointOpts)
+				require.NoError(t, err)
+				peer := newTestTxnID(22)
+				_, err = s.Lock(ctx, table, [][]byte{{3}}, peer, pointOpts)
+				require.NoError(t, err)
+				require.NoError(t, s.Unlock(ctx, peer, timestamp.Timestamp{}))
+				gapTxn := newTestTxnID(21)
+				_, err = s.Lock(ctx, table, [][]byte{{4}}, gapTxn, newTestRowExclusiveOptions())
+				require.NoError(t, err)
+				require.NoError(t, s.Unlock(ctx, gapTxn, timestamp.Timestamp{}))
+				require.NoError(t, s.Unlock(ctx, pointTxn, timestamp.Timestamp{}))
+			})
+		})
+	}
+}
+
+func TestExactRowWireMode(t *testing.T) {
+	for _, mode := range []pb.LockMode{pb.LockMode_Shared, pb.LockMode_Exclusive} {
+		for _, exact := range []bool{false, true} {
+			sent := pb.LockOptions{Mode: mode, ExactRows: exact, BypassLocalProxy: true}
+			for _, method := range []pb.Method{pb.Method_Lock, pb.Method_ForwardLock} {
+				req := pb.Request{Method: method, Lock: pb.LockRequest{Options: sent}}
+				payload, err := req.Marshal()
+				require.NoError(t, err)
+				var received pb.Request
+				require.NoError(t, received.Unmarshal(payload))
+				require.Equal(t, sent, received.Lock.Options)
+			}
+		}
+	}
 }

@@ -197,15 +197,10 @@ func singletonUniqueScan(scan, source *plan.Node) bool {
 			continue
 		}
 		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(index.IndexAlgoParams)
-		if err != nil || prefixLengths[source.TableDef.Pkey.PkeyColName] > 0 {
+		if err != nil {
 			return false
 		}
-		for _, part := range index.Parts {
-			if catalog.ResolveAlias(part) == source.TableDef.Pkey.PkeyColName {
-				unique = true
-				break
-			}
-		}
+		unique = classifyIndexPKPart(index.Parts, source.TableDef.Pkey.PkeyColName, prefixLengths) == indexPKPartFull
 	}
 	return matched && unique
 }

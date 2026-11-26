@@ -297,6 +297,8 @@ const (
 	ErrRemoteLockWaitTimeout uint16 = 20709
 	// ErrLockWaitTimeout a lock waiter exceeded its configured wait budget
 	ErrLockWaitTimeout uint16 = 20710
+	// ErrRemoteLockAdmissionExpired asks the source to renew its admission window.
+	ErrRemoteLockAdmissionExpired uint16 = 20711
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -575,16 +577,17 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrSyncProtectionExpired:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection expired: job %s validTS %d < prepareTS %d"},
 
 	// Group 7: lock service
-	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
-	ErrLockTableBindChanged:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
-	ErrLockTableNotFound:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
-	ErrDeadlockCheckBusy:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
-	ErrCannotCommitOrphan:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction"},
-	ErrLockConflict:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
-	ErrLockNeedUpgrade:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
-	ErrCannotCommitOnInvalidCN: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction on invalid cn"},
-	ErrRemoteLockWaitTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote lock wait timeout"},
-	ErrLockWaitTimeout:         {ER_LOCK_WAIT_TIMEOUT, []string{MySQLDefaultSqlState}, "Lock wait timeout exceeded; try restarting transaction"},
+	ErrDeadLockDetected:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
+	ErrLockTableBindChanged:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
+	ErrLockTableNotFound:          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
+	ErrDeadlockCheckBusy:          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
+	ErrCannotCommitOrphan:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction"},
+	ErrLockConflict:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
+	ErrLockNeedUpgrade:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
+	ErrCannotCommitOnInvalidCN:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction on invalid cn"},
+	ErrRemoteLockAdmissionExpired: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote lock admission expired"},
+	ErrRemoteLockWaitTimeout:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote lock wait timeout"},
+	ErrLockWaitTimeout:            {ER_LOCK_WAIT_TIMEOUT, []string{MySQLDefaultSqlState}, "Lock wait timeout exceeded; try restarting transaction"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -1611,6 +1614,10 @@ func NewLockTableNotFound(ctx context.Context) *Error {
 
 func NewLockConflict(ctx context.Context) *Error {
 	return newError(ctx, ErrLockConflict)
+}
+
+func NewRemoteLockAdmissionExpired(ctx context.Context) *Error {
+	return newError(ctx, ErrRemoteLockAdmissionExpired)
 }
 
 func NewRemoteLockWaitTimeout(ctx context.Context) *Error {

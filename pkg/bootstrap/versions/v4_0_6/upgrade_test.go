@@ -29,7 +29,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 4)
+	require.Len(t, tenantUpgEntries, 5)
 	require.Len(t, clusterUpgEntries, 1)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
@@ -50,11 +50,17 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSets.UpgSql)
 	require.Contains(t, strings.ToLower(characterSets.PreSql), "delete from information_schema.character_sets")
 
+	columnCharset := tenantUpgEntries[4]
+	require.Equal(t, sysview.InformationDBConst, columnCharset.Schema)
+	require.Equal(t, "COLUMNS", columnCharset.TableName)
+	require.Equal(t, versions.MODIFY_VIEW, columnCharset.UpgType)
+	require.Equal(t, sysview.InformationSchemaColumnsUTF8MB4DDL(), columnCharset.UpgSql)
+
 	meta := Handler.Metadata()
 	require.Equal(t, "4.0.6", meta.Version)
 	require.Equal(t, "4.0.5", meta.MinUpgradeVersion)
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
-	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries)), meta.VersionOffset)
+	require.Equal(t, uint32(5), meta.VersionOffset)
 }
 
 func TestEnsureInformationSchemaCharacterSetsTableIsIdempotent(t *testing.T) {

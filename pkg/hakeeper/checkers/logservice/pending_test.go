@@ -86,7 +86,7 @@ func TestPendingAddSlotsAndStepProgress(t *testing.T) {
 	cfg.Fill()
 	fields := hakeeper.NewCheckerCommonFields("", cfg, nil, pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 2}}}, pb.TaskTableUser{}, 1)
 	shard := pb.LogShardInfo{ShardID: 1, Epoch: 1, LeaderID: 1, Replicas: map[uint64]string{1: "a"}}
-	state := pb.LogState{Shards: map[uint64]pb.LogShardInfo{1: shard}, Stores: map[string]pb.LogStoreInfo{"a": {Tick: 1}, "b": {Tick: 1}, "c": {Tick: 1}}}
+	state := pb.LogState{Shards: map[uint64]pb.LogShardInfo{1: shard}, Stores: map[string]pb.LogStoreInfo{"a": {Tick: 1, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 1}}}, "b": {Tick: 1}, "c": {Tick: 1}}}
 	add := operator.AddLogService{Target: "a", Replica: operator.Replica{UUID: "b", ShardID: 1, ReplicaID: 2, Epoch: 1}}
 	start := operator.StartLogService{Replica: operator.Replica{UUID: "b", ShardID: 1, ReplicaID: 2}}
 	op := operator.NewOperator("", 1, 1, add, start)

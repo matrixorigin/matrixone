@@ -75,10 +75,11 @@ import (
 )
 
 type TenantInfo struct {
-	mu          sync.Mutex
-	Tenant      string
-	User        string
-	DefaultRole string
+	taskServiceUser bool // internal task-storage connection, assigned at registration
+	mu              sync.Mutex
+	Tenant          string
+	User            string
+	DefaultRole     string
 
 	TenantID      uint32
 	UserID        uint32
@@ -109,6 +110,7 @@ func (ti *TenantInfo) Copy() *TenantInfo {
 	ti.mu.Lock()
 	defer ti.mu.Unlock()
 	return &TenantInfo{
+		taskServiceUser:     ti.taskServiceUser,
 		Tenant:              ti.Tenant,
 		User:                ti.User,
 		DefaultRole:         ti.DefaultRole,
@@ -485,13 +487,24 @@ func setSpecialUser(userName string, user *initUser) {
 // SetSpecialUser saves the user for initialization
 // !!!NOTE: userName must not contain Colon ':'
 func SetSpecialUser(username string, password []byte) {
+	registerSpecialUser(username, password, false)
+}
+
+// SetTaskServiceUser identifies the SQL connection that maintains task catalogs,
+// including CDC cleanup performed in a separate transaction during account removal.
+func SetTaskServiceUser(username string, password []byte) {
+	registerSpecialUser(username, password, true)
+}
+
+func registerSpecialUser(username string, password []byte, taskService bool) {
 	acc := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          username,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        math.MaxUint32,
-		DefaultRoleID: moAdminRoleID,
+		taskServiceUser: taskService,
+		Tenant:          sysAccountName,
+		User:            username,
+		DefaultRole:     moAdminRoleName,
+		TenantID:        sysAccountID,
+		UserID:          math.MaxUint32,
+		DefaultRoleID:   moAdminRoleID,
 	}
 
 	user := &initUser{
@@ -2403,6 +2416,8 @@ type privilege struct {
 	needMatchedRole          bool
 	// databases that may be written by statement-level DDL or account/database operations
 	writeDatabaseTargets []string
+	// Index DDL can use the ownership grant for its new table in the user transaction.
+	transactionTableOwner *transactionTableOwner
 }
 
 func (p *privilege) objectType() objectType {
@@ -4166,7 +4181,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		// Publication fanout holds shared locks on these same immutable IDs.
 		// Exclude new grants before inspecting or deleting any subscriptions.
 		bh.ClearExecResultSet()
-		if rtnErr = bh.Exec(ctx, fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update", accountId)); rtnErr != nil {
+		if rtnErr = bh.Exec(defines.WithExactCatalogRows(ctx), fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update", accountId)); rtnErr != nil {
 			return rtnErr
 		}
 
@@ -4355,7 +4370,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			return rtnErr
 		}
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
-		rtnErr = bh.Exec(ctx, sql)
+		rtnErr = bh.Exec(defines.WithExactCatalogRows(ctx), sql)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7419,7 +7434,7 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 		} else if p.GetDdl().GetCreateIndex() != nil {
 			createIndex := p.GetDdl().GetCreateIndex()
 			appendPt(privilegeTips{
-				typ:                   PrivilegeTypeDropTable,
+				typ:                   PrivilegeTypeIndex,
 				objType:               objectTypeTable,
 				databaseName:          createIndex.GetDatabase(),
 				tableName:             createIndex.GetTable(),
@@ -7428,7 +7443,7 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 		} else if p.GetDdl().GetDropIndex() != nil {
 			dropIndex := p.GetDdl().GetDropIndex()
 			appendPt(privilegeTips{
-				typ:                   PrivilegeTypeDropTable,
+				typ:                   PrivilegeTypeIndex,
 				objType:               objectTypeTable,
 				databaseName:          dropIndex.GetDatabase(),
 				tableName:             dropIndex.GetTable(),
@@ -8089,6 +8104,12 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									}
 									candidates, count := planPrivilegeCandidates(tempEntry, entry.compound.perObjectCovers)
 									for _, candidate := range candidates[:count] {
+										if owner := priv.transactionTableOwner; candidate == PrivilegeTypeTableOwnership &&
+											mi.privilegeTyp == PrivilegeTypeIndex && owner != nil &&
+											owner.roleID == checkRoleId && owner.database == mi.dbName && owner.table == mi.tableName {
+											yes = true
+											break
+										}
 										candidateEntry := tempEntry
 										candidateEntry.privilegeId = candidate
 										yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, candidateEntry, pls, useCache)

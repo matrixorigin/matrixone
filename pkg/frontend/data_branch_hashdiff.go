@@ -213,7 +213,7 @@ func lcaProbeColumnLayout(
 			lcaDef, targetDef, lcaCol, targetCol,
 		)
 		if lcaCol.Name == catalog.Row_ID ||
-			(!isDataBranchLogicalTypeEquivalent(lcaCol.Typ, targetCol.Typ) &&
+			(!isDataBranchStorageTypeEquivalent(lcaCol.Typ, targetCol.Typ) &&
 				!(derivedCompositePK && lcaCol.Typ.Id == targetCol.Typ.Id)) {
 			return lcaProbeLayout{}, moerr.NewNotSupportedNoCtxf(
 				"LCA data branch column %s has a different type from the endpoint schema",

@@ -402,9 +402,10 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	if execCtx.resper != nil {
 		connectionID = execCtx.resper.GetU32(CONNID)
 	}
-	if execCtx.ses.GetTenantInfo() != nil {
-		accountID = execCtx.ses.GetTenantInfo().TenantID
-		userName = execCtx.ses.GetTenantInfo().User
+	tenant := execCtx.ses.GetTenantInfo()
+	if tenant != nil {
+		accountID = tenant.TenantID
+		userName = tenant.User
 	}
 	sessionInfo := execCtx.ses.GetDebugString()
 	opts = append(opts,
@@ -416,6 +417,13 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		txnclient.WithSessionInfo(sessionInfo),
 		txnclient.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit),
 		txnclient.WithFootPrints(&th.footPrints))
+
+	// The task service performs CDC cleanup over its own SQL transaction
+	// during account removal. It shares catalog metadata with the restore.
+	back, _ := execCtx.ses.(*backSession)
+	if (back != nil && back.GetRestore()) || (tenant != nil && tenant.taskServiceUser) {
+		opts = append(opts, txnclient.WithCatalogMaintenance())
+	}
 
 	if execCtx.ses.GetFromRealUser() {
 		opts = append(opts,
