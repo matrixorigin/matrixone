@@ -165,7 +165,8 @@ func TestSQLTaskOwnershipUpgradeFromReleasedCatalog(t *testing.T) {
 			return err
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())
 	}
-	ownershipStart := v4_0_7.Handler.ClusterUpgradeEntryCount() - 3
+	// The 4.0.7 cluster upgrade list assigns entries 14 through 16 to task ownership.
+	const ownershipStart, ownershipEnd = 14, 17
 	_, err = taskDB.ExecContext(ctx, "alter table mo_task.sql_task add column schedule_generation bigint not null default 2")
 	require.NoError(t, err)
 	require.ErrorContains(t, applyEntry(ownershipStart+1), "incompatible definition")
@@ -196,7 +197,7 @@ func TestSQLTaskOwnershipUpgradeFromReleasedCatalog(t *testing.T) {
 		require.Equal(t, "4.0.6", steps[0].FromVersion)
 		require.Equal(t, "4.0.7", steps[0].ToVersion)
 		require.Equal(t, versions.StateReady, steps[0].State)
-		for index := ownershipStart; index < v4_0_7.Handler.ClusterUpgradeEntryCount(); index++ {
+		for index := ownershipStart; index < ownershipEnd; index++ {
 			require.NoError(t, applyEntry(index), "replaying a completed migration must be idempotent")
 		}
 
