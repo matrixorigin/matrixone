@@ -20,9 +20,11 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -182,29 +184,38 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 			}
 		}
 	}
-	copyExpr := func(expr *planpb.Expr, positions map[int32]int32) *planpb.Expr {
+	copyExpression := func(expr *planpb.Expr, positions map[int32]int32, retainedCheck bool) *planpb.Expr {
 		if expr == nil {
 			return nil
 		}
 		copy := DeepCopyExpr(expr)
-		var valid func(*planpb.Expr) bool
-		valid = func(e *planpb.Expr) bool {
+		var valid func(*planpb.Expr, bool) bool
+		valid = func(e *planpb.Expr, legacyPowerOperand bool) bool {
 			if e == nil {
 				return true
 			}
 			if ref := e.GetCol(); ref != nil && ref.RelPos == 0 {
 				if !compatible[ref.ColPos] {
-					target, ok := characterTypes[ref.ColPos]
-					if !ok {
+					if typ, ok := characterTypes[ref.ColPos]; ok {
+						e.Typ.Charset = typ.Charset
+						e.Typ.CollationVersion = typ.CollationVersion
+						e.Typ.PadSpace = typ.PadSpace
+					} else if rawPos, ok := rawPositions[ref.ColPos]; ok && legacyPowerOperand &&
+						e.Typ.Id == int32(types.T_float64) && exactLegacyPowerInput(types.T(target.Cols[rawPos].Typ.Id)) {
+						// These operands widen exactly to the released POW
+						// overload's DOUBLE input. Other dependency changes
+						// need an explicitly re-authored CHECK.
+						typ := target.Cols[rawPos].Typ
+						e.Typ.Id, e.Typ.Width, e.Typ.Scale = typ.Id, typ.Width, typ.Scale
+					} else {
 						return false
 					}
-					e.Typ.Charset = target.Charset
-					e.Typ.CollationVersion = target.CollationVersion
-					e.Typ.PadSpace = target.PadSpace
 				}
 				ref.ColPos = positions[ref.ColPos]
 			}
 			if f := e.GetF(); f != nil {
+				fid, overload := function.DecodeOverloadID(f.GetFunc().GetObj())
+				legacyPower := retainedCheck && fid == function.POW && overload == 0
 				changed := false
 				for _, arg := range f.Args {
 					if arg == nil {
@@ -217,7 +228,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 						// Coordinate-only remapping is not a new operand type contract.
 						remapGeneratedColExprPositions(beforeList, positions)
 					}
-					if !valid(arg) {
+					if !valid(arg, legacyPower) {
 						return false
 					}
 					changed = changed || !proto.Equal(&before, &arg.Typ) ||
@@ -245,7 +256,11 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 								return false
 							}
 						}
-						bound, err := BindFuncExprImplByPlanExpr(ctx, f.Func.ObjName, f.Args)
+						bindingCtx := ctx
+						if legacyPower {
+							bindingCtx = function.WithLegacyPowerForTableDump(ctx)
+						}
+						bound, err := BindFuncExprImplByPlanExpr(bindingCtx, f.Func.ObjName, f.Args)
 						if err != nil {
 							replay.err = err
 							return false
@@ -257,17 +272,20 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 			}
 			if list := e.GetList(); list != nil {
 				for _, item := range list.List {
-					if !valid(item) {
+					if !valid(item, false) {
 						return false
 					}
 				}
 			}
 			return true
 		}
-		if !valid(copy) {
+		if !valid(copy, false) {
 			return nil
 		}
 		return copy
+	}
+	copyExpr := func(expr *planpb.Expr, positions map[int32]int32) *planpb.Expr {
+		return copyExpression(expr, positions, false)
 	}
 	// CONVERT may add a destination assignment around an otherwise unchanged
 	// typed expression. Prove that exact transformation before preserving it;
@@ -363,7 +381,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		if !checkReferencesPreservedByColID(oldCheck.Check, original.Cols, originalIsCluster, targetByID) {
 			continue
 		}
-		if expr := copyExpr(oldCheck.Check, visiblePositions); expr != nil {
+		if expr := copyExpression(oldCheck.Check, visiblePositions, true); expr != nil {
 			copy := proto.Clone(newCheck).(*planpb.CheckDef)
 			copy.Check = expr
 			replay.checks[strings.ToLower(copy.Name)] = copy
@@ -394,4 +412,28 @@ func ddlReplayForTable(ctx context.Context, tableName string) *persistedDDLRepla
 		return nil
 	}
 	return replay
+}
+
+// exactLegacyPowerInput reports whether the complete source type domain can
+// be represented in the released POW overload's DOUBLE argument.
+func exactLegacyPowerInput(typ types.T) bool {
+	if typ == types.T_float32 {
+		return true
+	}
+	// The largest value of any 32-bit-or-smaller integer storage type
+	// fits in DOUBLE's 53-bit significand.
+	numeric, ok := typ.TryToType()
+	return ok && numeric.IsIntOrUint() && numeric.Size <= 4
+}
+
+// retainedCheckReplayError prevents COPY from falling back to the current
+// binder when it cannot retain a released expression's function contract.
+func retainedCheckReplayError(ctx context.Context, check *planpb.CheckDef) error {
+	if containsLegacyCRC32(check.GetCheck()) {
+		return moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
+	}
+	if tableDumpHasPower(check.GetCheck(), true) {
+		return moerr.NewNotSupported(ctx, "changing a check constraint with legacy POW requires explicitly redefining the constraint")
+	}
+	return nil
 }

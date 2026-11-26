@@ -532,14 +532,15 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	// replay will preserve their bound identity in the internal CREATE.
 	var checkReplay *persistedDDLReplay
 	for _, check := range copyTableDef.Checks {
-		if !containsLegacyCRC32(check.GetCheck()) {
+		replayErr := retainedCheckReplayError(ctx, check)
+		if replayErr == nil {
 			continue
 		}
 		if checkReplay == nil {
 			checkReplay = ddlReplayForTable(WithPersistedDDLReplay(ctx, tableDef, copyTableDef), copyTableDef.Name)
 		}
 		if checkReplay == nil || checkReplay.checks[strings.ToLower(check.Name)] == nil {
-			return nil, moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
+			return nil, replayErr
 		}
 	}
 

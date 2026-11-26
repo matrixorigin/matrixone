@@ -884,6 +884,9 @@ func historicalFloatDefaultFolding(ctx context.Context) bool {
 func floatStringProofProcess(ctx context.Context, proc *process.Process) *process.Process {
 	child := proc.NewNoContextChildProc(0)
 	child.Ctx = proc.Ctx
+	if function.LegacyPowerForTableDump(ctx) {
+		child.Ctx = function.WithLegacyPowerForTableDump(child.Ctx)
+	}
 	if function.LegacyFloatStringFormatting(ctx) {
 		child.Ctx = function.WithLegacyFloatStringFormatting(child.Ctx)
 	}

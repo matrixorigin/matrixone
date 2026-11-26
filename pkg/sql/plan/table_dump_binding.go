@@ -264,6 +264,11 @@ const tableDumpBindingLegacyFloatFormatting tableDumpBindingMode = 1 << 12
 const tableDumpBindingFrozenFloatDefaults tableDumpBindingMode = 1 << 13
 const tableDumpBindingPreJSONFolding tableDumpBindingMode = 1 << 14
 
+type tableDumpReleasedPowerProof struct {
+	expr                      *planpb.Expr
+	found, matched, ambiguous bool
+}
+
 type tableDumpDefaultSession struct {
 	timeZone, locale, folded     bool
 	observed, incompleteTemporal bool
@@ -272,6 +277,7 @@ type tableDumpDefaultSession struct {
 	captureUnfolded              bool
 	floatFormatting              bool
 	opaqueJSONFolding            bool
+	releasedPower                bool
 }
 
 // Inspect the unfolded source: folding removes the registry and width witness.
@@ -572,11 +578,21 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 			purpose = defaultExprForPersistedLegacyZero
 		}
 		var unfolded *planpb.Expr
-		bound, err := buildDefaultExprWithColumnsObserved(bindCtx, col, item.col.Typ, floatStringProofProcess(bindCtx, proc), def.Cols, purpose, func(source, assigned *planpb.Expr) {
+		columns := def.Cols
+		if mode&tableDumpBindingPrePowerNullResults != 0 {
+			// Released DEFAULT could not refer to other columns in the row.
+			columns = nil
+		}
+		bound, err := buildDefaultExprWithColumnsObserved(bindCtx, col, item.col.Typ, floatStringProofProcess(bindCtx, proc), columns, purpose, func(source, assigned *planpb.Expr) {
 			// Observe before assignment/folding can fail in the reading zone.
 			// Inspect the resolved source, not the assignment cast's target type:
 			// a plain NULL/zero TIMESTAMP needs no timezone reconstruction.
 			session.observed = true
+			if mode&tableDumpBindingPrePowerNullResults != 0 {
+				// Folding may erase the function ID. Record the identity from
+				// the checked SQL binding before the folder sees the value.
+				session.releasedPower = tableDumpHasPower(source, true)
+			}
 			session.incompleteTemporal = tableDumpIncompleteTemporalBinding(source)
 			if features, err := planpb.RequiredRemoteExpressionFeatures(assigned); err == nil {
 				session.opaqueJSONFolding = features.JSONOpaqueTextContracts
@@ -798,12 +814,20 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 	return analyzeTableDumpBindingsWithCandidateVisitLimit(ctx, target, supplied, tableDumpMaxCandidateVisits)
 }
 
+// ProveTableDumpReleasedPower verifies the complete supplied bindings and
+// reports whether at least one matches a released POW binding.
+func ProveTableDumpReleasedPower(ctx CompilerContext, target, supplied *planpb.TableDef) (bool, error) {
+	releasedPower := false
+	_, err := analyzeTableDumpBindings(ctx, target, supplied, tableDumpMaxCandidateVisits, nil, &releasedPower)
+	return releasedPower && err == nil, err
+}
+
 // RecoverTableDumpV1Bindings reconstructs the released POW bindings that a
 // v1 manifest could not store. It returns an owned replacement when a CHECK
-// or generated expression changes, plus whether a released binding was proved.
+// or column expression changes, plus whether a released binding was proved.
 func RecoverTableDumpV1Bindings(ctx CompilerContext, target *planpb.TableDef) (*planpb.TableDef, bool, error) {
 	recovered := make(map[int]*planpb.Expr)
-	sensitive, err := analyzeTableDumpBindings(ctx, target, nil, tableDumpMaxCandidateVisits, recovered)
+	sensitive, err := analyzeTableDumpBindings(ctx, target, nil, tableDumpMaxCandidateVisits, recovered, nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -829,6 +853,8 @@ func RecoverTableDumpV1Bindings(ctx CompilerContext, target *planpb.TableDef) (*
 		switch owner := owners[i]; owner.kind {
 		case "check":
 			owner.check.Check = expr
+		case "default":
+			owner.col.Default.Expr = expr
 		case "generated":
 			owner.col.GeneratedCol.Expr = expr
 		}
@@ -962,23 +988,33 @@ func tableDumpDDLColumnScope(target *planpb.TableDef) *planpb.TableDef {
 	return ddlScope
 }
 
-// A release CREATE bound generated expressions before the catalog attached
-// the relation name to plan column types. Rebuild that input scope without
-// changing the stored declarations or projecting fields out of bound trees.
-func tableDumpV1GeneratedColumn(col *planpb.ColDef, table string) *planpb.ColDef {
-	if col == nil || col.Typ.Table == "" || col.Typ.Table != table {
+// Released CREATE bound these expressions using SQL column types. The
+// catalog later added the relation name and nullability from the column's
+// Default metadata. Remove those derived fields only from the proof inputs.
+func tableDumpV1ReleaseColumn(col *planpb.ColDef, table string) *planpb.ColDef {
+	if col == nil {
+		return col
+	}
+	catalogTable := col.Typ.Table != "" && col.Typ.Table == table
+	catalogNotNullable := col.Typ.NotNullable && col.Default != nil && !col.Default.NullAbility
+	if !catalogTable && !catalogNotNullable {
 		return col
 	}
 	decl := *col
-	decl.Typ.Table = ""
+	if catalogTable {
+		decl.Typ.Table = ""
+	}
+	if catalogNotNullable {
+		decl.Typ.NotNullable = false
+	}
 	return &decl
 }
 
-func tableDumpV1GeneratedScope(target *planpb.TableDef) *planpb.TableDef {
+func tableDumpV1ReleaseScope(target *planpb.TableDef) *planpb.TableDef {
 	scope := *target
 	scope.Cols = append([]*planpb.ColDef(nil), target.Cols...)
 	for i, col := range scope.Cols {
-		scope.Cols[i] = tableDumpV1GeneratedColumn(col, target.Name)
+		scope.Cols[i] = tableDumpV1ReleaseColumn(col, target.Name)
 	}
 	return &scope
 }
@@ -997,11 +1033,11 @@ func tableDumpBindingScope(target, ddlScope *planpb.TableDef, item tableDumpExpr
 }
 
 func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target, supplied *planpb.TableDef, candidateVisitLimit int) (bool, error) {
-	return analyzeTableDumpBindings(ctx, target, supplied, candidateVisitLimit, nil)
+	return analyzeTableDumpBindings(ctx, target, supplied, candidateVisitLimit, nil, nil)
 }
 
 func analyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.TableDef, candidateVisitLimit int,
-	recoverExpressions map[int]*planpb.Expr,
+	recoverExpressions map[int]*planpb.Expr, matchedReleasedPower *bool,
 ) (bool, error) {
 	if ctx == nil || target == nil {
 		return false, moerr.NewInvalidInputNoCtx("table dump binding context is unavailable")
@@ -1034,7 +1070,7 @@ func analyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 	budget := &tableDumpBindingBudget{}
 	timeZones := newTableDumpTimeZones(time.LoadLocation)
 	var sensitive bool
-	var v1GeneratedScope, v1GeneratedDDLScope *planpb.TableDef
+	var v1ReleaseScope *planpb.TableDef
 	for i, item := range items {
 		if err := ctx.GetContext().Err(); err != nil {
 			return false, err
@@ -1059,20 +1095,12 @@ func analyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 		}
 		var matched bool
 		var parsed bool
-		recoverPower := recoverExpressions != nil && (item.kind == "check" || item.kind == "generated") &&
-			tableDumpHasPower(item.expr, false)
-		itemScope, itemDDLScope := target, ddlScope
-		bindItem := item
-		if recoverPower && item.kind == "generated" {
-			if v1GeneratedScope == nil {
-				v1GeneratedScope = tableDumpV1GeneratedScope(target)
-				v1GeneratedDDLScope = tableDumpDDLColumnScope(v1GeneratedScope)
-			}
-			itemScope, itemDDLScope = v1GeneratedScope, v1GeneratedDDLScope
-			bindItem.col = tableDumpV1GeneratedColumn(item.col, target.Name)
-		}
-		var releasedExpr *planpb.Expr
-		var foundReleasedPower bool
+		recoverPower := false
+		recoverPowerOwner := recoverExpressions != nil &&
+			(item.kind == "default" || (item.kind == "check" || item.kind == "generated") && tableDumpHasPower(item.expr, false))
+		// The released CREATE and ALTER paths could bind against declared
+		// types or read-back catalog types respectively.
+		var releasedDeclaration, releasedCatalog tableDumpReleasedPowerProof
 		for _, mode := range tableDumpParserModesForOrigin(item.origin) {
 			stmt, ast, visit, err := parseTableDumpExpression(ctx.GetContext(), item.origin, mode)
 			if err != nil {
@@ -1083,6 +1111,13 @@ func analyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			if budget.nodes > tableDumpMaxExpressionNodes {
 				stmt.Free()
 				return false, moerr.NewInvalidInputNoCtx("table dump expression AST exceeds limit")
+			}
+			proveReleasedPower := recoverPowerOwner && visit.hasPower
+			recoverPower = recoverPower || proveReleasedPower
+			if proveReleasedPower {
+				if v1ReleaseScope == nil {
+					v1ReleaseScope = tableDumpV1ReleaseScope(target)
+				}
 			}
 			maxIncrement := int64(0)
 			if visit.hasDivision {
@@ -1170,7 +1205,7 @@ func analyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 					modes = append(modes, mode|tableDumpBindingPreIncompleteTemporal)
 				}
 			}
-			if itemDDLScope != nil && visit.hasColumn {
+			if ddlScope != nil && visit.hasColumn {
 				for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
 					modes = append(modes, mode|tableDumpBindingDDLColumnScope)
 				}
@@ -1222,7 +1257,15 @@ func analyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 				}
 				proc.GetSessionInfo().TimeZone = tz
 				proc.GetSessionInfo().LCTimeNames = lc
-				scope, declaration, bindingMode := tableDumpBindingScope(itemScope, itemDDLScope, bindItem, mode)
+				scope, declaration, bindingMode := tableDumpBindingScope(target, ddlScope, item, mode)
+				if proveReleasedPower {
+					if mode&tableDumpBindingDDLColumnScope == 0 {
+						scope = v1ReleaseScope
+						declaration.col = tableDumpV1ReleaseColumn(item.col, target.Name)
+					} else {
+						scope, declaration = target, item
+					}
+				}
 				result, err := bindTableDumpExpression(ctx, scope, declaration, ast, increment, bindingMode, &dependency)
 				if fatal = ctx.GetContext().Err(); fatal != nil {
 					return nil, fatal
@@ -1347,7 +1390,44 @@ func analyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 						stmt.Free()
 						return false, fatal
 					}
-					if err != nil {
+					if matchedReleasedPower != nil && !*matchedReleasedPower && mode&tableDumpBindingPrePowerNullResults != 0 && err == nil &&
+						(dependency.releasedPower || tableDumpHasPower(candidate, true)) && sameTableDumpBoundExpression(want, candidate) {
+						*matchedReleasedPower = true
+					}
+					if proveReleasedPower {
+						proof := &releasedDeclaration
+						if mode&tableDumpBindingDDLColumnScope != 0 {
+							proof = &releasedCatalog
+						}
+						if err != nil {
+							proof.ambiguous = true
+						} else {
+							if proof.expr == nil {
+								proof.expr = candidate
+							} else if !proto.Equal(proof.expr, candidate) {
+								proof.ambiguous = true
+							}
+							proof.found = proof.found || dependency.releasedPower || tableDumpHasPower(candidate, true)
+							if !proof.matched {
+								proof.matched = sameTableDumpBoundExpression(want, candidate)
+								if !proof.matched {
+									// Both the released binding and the corresponding
+									// current binding must use the same DDL scope. The
+									// stored target selects a scope by complete match.
+									legacyDependency := dependency
+									dependency = tableDumpDefaultSession{}
+									current, currentErr := bind(increment, mode&^tableDumpBindingPrePowerNullResults, zone, locale)
+									dependency = legacyDependency
+									if fatal != nil {
+										stmt.Free()
+										return false, fatal
+									}
+									proof.matched = currentErr == nil && sameTableDumpBoundExpression(want, current)
+								}
+								matched = matched || proof.matched
+							}
+						}
+					} else if err != nil {
 						// An unavailable era (for example, before protocol promotion)
 						// cannot prove that the successful bindings are independent.
 						// Still require an exact successful match before capture.
@@ -1356,19 +1436,6 @@ func analyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 						first = candidate
 					} else if !sameTableDumpBoundExpression(first, candidate) {
 						sensitive = true
-					}
-					if recoverPower && err == nil {
-						// A v1 manifest has no payload to disambiguate
-						// different complete trees across parser modes.
-						if releasedExpr == nil {
-							releasedExpr = candidate
-						} else if !proto.Equal(releasedExpr, candidate) {
-							sensitive = true
-						}
-						if !foundReleasedPower && tableDumpHasPower(candidate, true) {
-							foundReleasedPower = true
-							matched = true
-						}
 					}
 					if !matched {
 						var matchErr error
@@ -1460,8 +1527,22 @@ func analyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 				break
 			}
 		}
-		if foundReleasedPower {
-			recoverExpressions[i] = releasedExpr
+		if releasedDeclaration.matched || releasedCatalog.matched {
+			sensitive = sensitive || releasedDeclaration.ambiguous || releasedCatalog.ambiguous
+			// The v1 archive could have been produced from either scope.
+			// Only catalog-derived type annotations may differ between the
+			// complete released trees, even if only one matches the target.
+			if releasedDeclaration.expr != nil && releasedCatalog.expr != nil &&
+				!sameProjectedBoundExpression(releasedDeclaration.expr, releasedCatalog.expr, boundExpressionCatalogColumnScope) {
+				sensitive = true
+			}
+			if releasedDeclaration.matched && releasedDeclaration.found {
+				recoverExpressions[i] = releasedDeclaration.expr
+			}
+			if releasedCatalog.matched && releasedCatalog.found && (recoverExpressions[i] == nil ||
+				proto.Equal(item.expr, releasedCatalog.expr)) {
+				recoverExpressions[i] = releasedCatalog.expr
+			}
 		}
 		if !parsed || !matched {
 			return false, moerr.NewInvalidInputNoCtxf("table dump cannot verify bound %s expression %s", item.kind, item.name)

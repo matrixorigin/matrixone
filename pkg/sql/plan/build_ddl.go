@@ -4959,11 +4959,12 @@ func appendCheckDef(
 	}
 	if replay := ddlReplayForTable(ctx.GetContext(), tableDef.Name); replay != nil && replay.target != nil {
 		for _, check := range replay.target.Checks {
-			if strings.EqualFold(check.Name, checkName) && containsLegacyCRC32(check.Check) {
+			if strings.EqualFold(check.Name, checkName) {
 				// Raw catalog coordinates belong to the old schema. Only replay
 				// can preserve them after a reorder and verify input compatibility.
-				// Neither copying them nor rebinding display SQL is a safe fallback.
-				return moerr.NewNotSupported(ctx.GetContext(), "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
+				if err := retainedCheckReplayError(ctx.GetContext(), check); err != nil {
+					return err
+				}
 			}
 		}
 	}

@@ -1888,12 +1888,14 @@ func TestTableDumpV1PowerSchemaFingerprint(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, sql, checkName, origin, hash string
-		exponentColumn                     bool
+		exponentColumn, dateColumn         bool
 	}{
 		{"fp", "create table fp (id int primary key, b double, p double, constraint ck_pow check (pow(b,p)>0))",
-			"ck_pow", "pow(`b`, `p`) > 0", "a9121361cef78612eb171598e9ec72ebfc423b899c696f06254512980499d92a", true},
+			"ck_pow", "pow(`b`, `p`) > 0", "a9121361cef78612eb171598e9ec72ebfc423b899c696f06254512980499d92a", true, false},
 		{"mp", "create table mp (id int primary key, b double, check (power(b,0.5)>0))",
-			"mp_chk_1", "power(`b`, 0.5) > 0", "9dac0a8d3fbcc08e0a42eb070a4e9e71fef211047905d27009c01ff842c06a31", false},
+			"mp_chk_1", "power(`b`, 0.5) > 0", "9dac0a8d3fbcc08e0a42eb070a4e9e71fef211047905d27009c01ff842c06a31", false, false},
+		{"stamp", "create table stamp (id int primary key, b double, d date, constraint ck check (power(b,0.5)>0))",
+			"ck", "power(`b`, 0.5) > 0", "9242b7a90403698b8361dc5e262423f492ffe839d4025a293ad3aaeb6e2b0b7a", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// The hashes came from official v4.2.9 full and metadata-only archives.
@@ -1908,11 +1910,14 @@ func TestTableDumpV1PowerSchemaFingerprint(t *testing.T) {
 			if tc.exponentColumn {
 				def.Cols = append(def.Cols, column("p", types.T_float64, true))
 			}
+			if tc.dateColumn {
+				def.Cols = append(def.Cols, column("d", types.T_date, true))
+			}
 			manifest := &tableDumpManifest{Version: 1, SourceTable: tc.name, CreateSQL: tc.sql, SchemaHash: tc.hash}
 			normal, err := tableSchemaHash(def)
 			require.NoError(t, err)
 			require.NotEqual(t, tc.hash, normal)
-			hash, err := tableDumpV1PowerSchemaHash(t.Context(), def, manifest)
+			hash, err := tableDumpReleasedPowerSchemaHash(t.Context(), def, manifest)
 			require.NoError(t, err)
 			require.Equal(t, tc.hash, hash)
 			require.Equal(t, tc.checkName, def.Checks[0].Name)
@@ -1943,7 +1948,7 @@ func TestTableDumpV1PowerSchemaFingerprint(t *testing.T) {
 				t.Run(name, func(t *testing.T) {
 					changed := proto.Clone(def).(*plan.TableDef)
 					change(changed)
-					hash, err := tableDumpV1PowerSchemaHash(t.Context(), changed, manifest)
+					hash, err := tableDumpReleasedPowerSchemaHash(t.Context(), changed, manifest)
 					require.NoError(t, err)
 					require.NotEqual(t, tc.hash, hash)
 				})
@@ -1952,7 +1957,56 @@ func TestTableDumpV1PowerSchemaFingerprint(t *testing.T) {
 	}
 }
 
-func TestTableDumpV1NumericExpression(t *testing.T) {
+func TestTableDumpReleasedPowerBoundMainFingerprint(t *testing.T) {
+	// The bound re-dump of v4.2.9 defconst keeps the released DDL hash in
+	// the header and in both main relation fields.
+	const sql = "create table defconst (id int primary key,g double default (power(2,3)))"
+	const releasedHash = "86da098f1e929c4b5d09358fc0af8fe58e72ebba8910de47057724d81d520eac"
+	def := &plan.TableDef{
+		Name: "defconst", Createsql: sql, DefaultCharset: uint32(types.CharsetUTF8),
+		Cols: []*plan.ColDef{
+			{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, Default: &plan.Default{}},
+			{Name: "g", Typ: plan.Type{Id: int32(types.T_float64), Scale: -1},
+				Default: &plan.Default{NullAbility: true, OriginString: "(power(2, 3))",
+					Expr: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 8}}}}}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	manifest := tableDumpManifest{
+		Version: tableDumpBoundFormatVersion, SourceTable: def.Name, CreateSQL: sql, SchemaHash: releasedHash,
+		Relations: []tableDumpRelation{{Role: "main", SchemaHash: releasedHash, LogicalSchemaHash: releasedHash}},
+	}
+	normal, err := tableSchemaHash(def)
+	require.NoError(t, err)
+	require.NotEqual(t, releasedHash, normal)
+	candidate, err := tableDumpReleasedPowerMainHash(t.Context(), def, &manifest)
+	require.NoError(t, err)
+	require.Equal(t, releasedHash, candidate)
+	for _, tc := range []struct {
+		name string
+		edit func(*tableDumpManifest, *plan.TableDef)
+	}{
+		{"different header", func(m *tableDumpManifest, _ *plan.TableDef) { m.SchemaHash = normal }},
+		{"different relation fingerprint", func(m *tableDumpManifest, _ *plan.TableDef) { m.Relations[0].SchemaHash = normal }},
+		{"different logical fingerprint", func(m *tableDumpManifest, _ *plan.TableDef) { m.Relations[0].LogicalSchemaHash = normal }},
+		{"missing logical fingerprint", func(m *tableDumpManifest, _ *plan.TableDef) { m.Relations[0].LogicalSchemaHash = "" }},
+		{"explicit source collation", func(m *tableDumpManifest, _ *plan.TableDef) { m.CreateSQL += " COLLATE utf8mb4_general_ci" }},
+		{"explicit target collation", func(_ *tableDumpManifest, d *plan.TableDef) { d.Createsql += " COLLATE utf8mb4_general_ci" }},
+		{"different column type", func(_ *tableDumpManifest, d *plan.TableDef) { d.Cols[0].Typ.Id = int32(types.T_int64) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := manifest
+			m.Relations = append([]tableDumpRelation(nil), manifest.Relations...)
+			d := proto.Clone(def).(*plan.TableDef)
+			tc.edit(&m, d)
+			candidate, err := tableDumpReleasedPowerMainHash(t.Context(), d, &m)
+			require.NoError(t, err)
+			require.Empty(t, candidate)
+		})
+	}
+}
+
+func TestTableDumpV1CollationIndependentExpression(t *testing.T) {
 	bind := func(name string, args ...*plan.Expr) *plan.Expr {
 		t.Helper()
 		expr, err := sqlplan.BindFuncExprImplByPlanExpr(t.Context(), name, args)
@@ -1980,12 +2034,15 @@ func TestTableDumpV1NumericExpression(t *testing.T) {
 	}{
 		{"decimal cast from a string token", exponent, true},
 		{"ordinary numeric CHECK", numericCheck, true},
+		{"native datetime comparison", bind("=", &plan.Expr{Typ: types.T_datetime.ToType().PlanType(),
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}, &plan.Expr{Typ: types.T_datetime.ToType().PlanType(),
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}}), true},
 		{"string comparison", textCheck, false},
 		{"NULL in numeric list", list(base, null), true},
 		{"string in list", list(base, text), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.safe, tableDumpV1NumericExpression(tc.expr))
+			require.Equal(t, tc.safe, tableDumpV1CollationIndependentExpression(tc.expr))
 		})
 	}
 	def := &plan.TableDef{
@@ -2010,12 +2067,12 @@ func TestTableDumpV1NumericExpression(t *testing.T) {
 					GeneratedCol: &plan.GeneratedCol{Expr: power, OriginString: "pow(b, 0.5)", IsStored: true}},
 			},
 		}
-		hash, err := tableDumpV1PowerSchemaHash(t.Context(), target, manifest)
+		hash, err := tableDumpReleasedPowerSchemaHash(t.Context(), target, manifest)
 		require.NoError(t, err)
 		require.Equal(t, want, hash, "a numeric table with only a generated POW owner can match the released hash")
 		require.Equal(t, uint32(types.CharsetUTF8), target.DefaultCharset)
 		target.Cols[2].GeneratedCol.IsStored = false
-		hash, err = tableDumpV1PowerSchemaHash(t.Context(), target, manifest)
+		hash, err = tableDumpReleasedPowerSchemaHash(t.Context(), target, manifest)
 		require.NoError(t, err)
 		require.NotEqual(t, want, hash, "changing STORED to VIRTUAL changes the fingerprint")
 	})

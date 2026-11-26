@@ -1698,10 +1698,10 @@ var lockTableDumpLoadTargets = func(
 	return nil
 }
 
-// tableDumpV1PowerSchemaHash reconstructs the released fingerprint for a
-// proved v1 POW expression. The original DDL must confirm any automatic CHECK
-// name and implicit table collation before either representation can be changed.
-func tableDumpV1PowerSchemaHash(ctx context.Context, target *plan.TableDef, manifest *tableDumpManifest) (string, error) {
+// tableDumpReleasedPowerSchemaHash reconstructs the released fingerprint
+// for v1 LOAD or for a bound re-dump of a released table. The original DDL
+// must confirm the implicit table collation or automatic CHECK name.
+func tableDumpReleasedPowerSchemaHash(ctx context.Context, target *plan.TableDef, manifest *tableDumpManifest) (string, error) {
 	if !canReconstructTableSchema(target) {
 		return "", nil
 	}
@@ -1720,15 +1720,34 @@ func tableDumpV1PowerSchemaHash(ctx context.Context, target *plan.TableDef, mani
 			return "", nil
 		}
 		copy := *check
-		if sourceNames[i] == "" && check.Name == fmt.Sprintf("%s_chk_%d", target.Name, i+1) {
+		if manifest.Version == tableDumpFormatVersion && sourceNames[i] == "" &&
+			check.Name == fmt.Sprintf("%s_chk_%d", target.Name, i+1) {
 			copy.Name = fmt.Sprintf("__mo_chk_%d", i+1)
 		}
 		legacy.Checks[i] = &copy
 	}
 	if sourceImplicit && targetImplicit && tableDumpV1CollationIndependent(target) {
 		legacy.DefaultCharset = uint32(types.CharsetLegacy)
+	} else if manifest.Version == tableDumpBoundFormatVersion {
+		return "", nil
 	}
 	return tableSchemaHashWithResolver(ctx, &legacy, nil)
+}
+
+// A compatibility match requires the same full fingerprint in the header
+// and in the main relation. Index relations keep their normal checks.
+func tableDumpReleasedPowerMainHash(ctx context.Context, target *plan.TableDef, manifest *tableDumpManifest) (string, error) {
+	hash, err := tableDumpReleasedPowerSchemaHash(ctx, target, manifest)
+	if hash == "" || hash != manifest.SchemaHash || err != nil {
+		return "", err
+	}
+	for _, relation := range manifest.Relations {
+		if relation.Role == "main" && relation.SchemaHash == hash &&
+			(relation.LogicalSchemaHash == hash || relation.LogicalSchemaHash == "" && manifest.Version == tableDumpFormatVersion) {
+			return hash, nil
+		}
+	}
+	return "", nil
 }
 
 func tableDumpV1CheckDeclarations(ctx context.Context, sql, name string) (names []string, implicitCharset, ok bool) {
@@ -1763,14 +1782,19 @@ func tableDumpV1CheckDeclarations(ctx context.Context, sql, name string) (names 
 	return names, implicitCharset, true
 }
 
+func tableDumpV1CollationIndependentType(typ types.T) bool {
+	// Numeric, boolean and date/time keys compare their native values.
+	return typ.ToType().IsNumeric() || typ == types.T_bool || typ.IsDateRelate()
+}
+
 func tableDumpV1CollationIndependent(def *plan.TableDef) bool {
 	for _, col := range def.Cols {
-		if !col.Hidden && !types.T(col.Typ.Id).ToType().IsNumeric() && types.T(col.Typ.Id) != types.T_bool {
+		if !col.Hidden && !tableDumpV1CollationIndependentType(types.T(col.Typ.Id)) {
 			return false
 		}
 	}
 	err := plan.VisitExpressionsInOwner(def, func(expr *plan.Expr) error {
-		if !tableDumpV1NumericExpression(expr) {
+		if !tableDumpV1CollationIndependentExpression(expr) {
 			return moerr.NewInvalidInputNoCtx("table expression may depend on collation")
 		}
 		return nil
@@ -1778,12 +1802,12 @@ func tableDumpV1CollationIndependent(def *plan.TableDef) bool {
 	return err == nil
 }
 
-func tableDumpV1NumericExpression(expr *plan.Expr) bool {
+func tableDumpV1CollationIndependentExpression(expr *plan.Expr) bool {
 	if expr == nil {
 		return true
 	}
 	typ := types.T(expr.Typ.Id)
-	if !typ.ToType().IsNumeric() && typ != types.T_bool && typ != types.T_any {
+	if !tableDumpV1CollationIndependentType(typ) && typ != types.T_any {
 		return false
 	}
 	if fn := expr.GetF(); fn != nil {
@@ -1793,17 +1817,17 @@ func tableDumpV1NumericExpression(expr *plan.Expr) bool {
 			if i == 0 && fn.Func.GetObjName() == "cast" && typ.IsDecimal() && arg.GetLit().GetSval() != "" {
 				continue
 			}
-			if !tableDumpV1NumericExpression(arg) {
+			if !tableDumpV1CollationIndependentExpression(arg) {
 				return false
 			}
 		}
 	}
 	for _, arg := range expr.GetList().GetList() {
-		if !tableDumpV1NumericExpression(arg) {
+		if !tableDumpV1CollationIndependentExpression(arg) {
 			return false
 		}
 	}
-	return tableDumpV1NumericExpression(expr.GetLit().GetSrc())
+	return tableDumpV1CollationIndependentExpression(expr.GetLit().GetSrc())
 }
 
 func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (err error) {
@@ -1838,6 +1862,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	}
 	var restoredDef *plan.TableDef
 	var restoreExpressions bool
+	var releasedHash string
 	if manifest.Version == tableDumpFormatVersion && tableDumpHasBoundExpressions(targetDef) {
 		var releasedPower bool
 		restoredDef, releasedPower, err = sqlplan.RecoverTableDumpV1Bindings(ses.GetTxnCompileCtx(), targetDef)
@@ -1846,18 +1871,19 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		}
 		restoreExpressions = restoredDef != nil
 		if releasedPower && targetRefs[0].SchemaHash != manifest.SchemaHash {
-			legacyHash, hashErr := tableDumpV1PowerSchemaHash(ctx, targetDef, manifest)
-			if hashErr != nil {
-				return hashErr
-			}
-			if legacyHash != "" && legacyHash == manifest.SchemaHash {
-				// The same verified fingerprint is used for the main entry in
-				// Relations. All index fingerprints keep their regular checks.
-				targetRefs[0].SchemaHash = legacyHash
+			releasedHash, err = tableDumpReleasedPowerMainHash(ctx, targetDef, manifest)
+			if err != nil {
+				return err
 			}
 		}
 	}
-	if targetRefs[0].SchemaHash != manifest.SchemaHash {
+	if manifest.Version == tableDumpBoundFormatVersion && targetRefs[0].SchemaHash != manifest.SchemaHash {
+		releasedHash, err = tableDumpReleasedPowerMainHash(ctx, targetDef, manifest)
+		if err != nil {
+			return err
+		}
+	}
+	if targetRefs[0].SchemaHash != manifest.SchemaHash && releasedHash == "" {
 		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
 	}
 	if manifest.Version == tableDumpLegacyBoundFormatVersion || manifest.Version == tableDumpBoundFormatVersion {
@@ -1866,9 +1892,23 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		if err != nil {
 			return err
 		}
-		if _, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, restoredDef); err != nil {
-			return err
+		if releasedHash == "" {
+			if _, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, restoredDef); err != nil {
+				return err
+			}
+		} else {
+			releasedPower, proofErr := sqlplan.ProveTableDumpReleasedPower(ses.GetTxnCompileCtx(), targetDef, restoredDef)
+			if proofErr != nil {
+				return proofErr
+			}
+			if !releasedPower {
+				return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
+			}
 		}
+	}
+	if releasedHash != "" {
+		targetRefs[0].SchemaHash = releasedHash
+		targetRefs[0].LogicalSchemaHash = releasedHash
 	}
 	if len(targetRefs) != len(manifest.Relations) {
 		return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")
