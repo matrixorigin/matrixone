@@ -1495,6 +1495,7 @@ func reconcileDataBranchEndpointSchema(
 			}
 			tables.pickSourceDefs, tables.pickSourceEdges = tarDefs, tarEdges
 			tables.pickBaseDefs, tables.pickBaseEdges = baseDefs, baseEdges
+			tables.pickBasePath, tables.pickBasePathTS = dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS
 		}
 		renameProof := newDataBranchRenameProof(tables.pickForkColumns)
 		endpointColumns, err := dataBranchLineageEndpointColumns(tarDefs, tarEdges, baseDefs, baseEdges, renameProof)

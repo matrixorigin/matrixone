@@ -302,6 +302,8 @@ type tableStuff struct {
 	pickSourceEdges []bool
 	pickBaseDefs    []*plan.TableDef
 	pickBaseEdges   []bool
+	pickBasePath    []uint64
+	pickBasePathTS  []types.TS
 	pickForkColumns dataBranchForkColumns
 
 	def struct {

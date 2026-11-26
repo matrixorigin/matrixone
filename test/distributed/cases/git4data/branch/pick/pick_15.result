@@ -1783,3 +1783,67 @@ select k,v,tag from dst order by k;
 drop snapshot pick_window_hi;
 drop snapshot pick_window_lo;
 drop database pick_window;
+
+create database pick_window;
+use pick_window;
+begin;
+create table root(k int primary key,v int);
+insert into root values(1,10),(2,20),(3,20);
+data branch create table dst from root;
+data branch create table src from root;
+commit;
+alter table dst add column tag int default 7;
+alter table src add column tag int default 7;
+alter table dst alter column tag set default null;
+alter table src alter column tag set default null;
+update dst set tag=null where k in (2,3);
+create snapshot pick_window_lo for account sys;
+update src set v=52 where k=2;
+delete from src where k=3;
+insert into src(k,v) values(4,80);
+create snapshot pick_window_hi for account sys;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+-- @regex("conflict:.*pk\([23]\)", true)
+conflict: src INSERT and dst INSERT on pk(2) with different values
+select k,v,tag from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  ¦  tag[4,32,0]  𝄀
+1  ¦  10  ¦  7  𝄀
+2  ¦  20  ¦  null  𝄀
+3  ¦  20  ¦  null
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v,tag from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  ¦  tag[4,32,0]  𝄀
+1  ¦  10  ¦  7  𝄀
+2  ¦  20  ¦  null  𝄀
+3  ¦  20  ¦  null  𝄀
+4  ¦  80  ¦  null
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+create database pick_window;
+use pick_window;
+begin;
+create table root(k int primary key,v int);
+insert into root values(1,10),(2,20),(3,20);
+data branch create table dst from root;
+data branch create table src from root;
+commit;
+alter table dst add column tag int default null;
+alter table src add column tag int default null;
+alter table dst alter column tag set default 7;
+alter table src alter column tag set default 7;
+create snapshot pick_window_lo for account sys;
+update src set v=52 where k=2;
+delete from src where k=3;
+insert into src(k,v) values(4,80);
+create snapshot pick_window_hi for account sys;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v,tag from dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  ¦  tag[4,32,0]  𝄀
+1  ¦  10  ¦  null  𝄀
+2  ¦  52  ¦  null  𝄀
+4  ¦  80  ¦  7
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;

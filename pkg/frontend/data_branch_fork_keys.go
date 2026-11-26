@@ -480,7 +480,7 @@ func historicalForkMembers(
 	}
 	probe := func(identity branchIdentity, at types.TS) (missing []int64, available bool, err error) {
 		start := dataBranchPickWindowStart{tableID: fork.parent, snapshot: at, identity: identity}
-		rows, absent, err := probePickKeyMembership(ctx, ses, bh, tables, keys, start, tables.pickBaseDefs, tables.pickBaseEdges, proof)
+		rows, absent, err := probePickHistoricalColumns(ctx, ses, bh, tables, keys, start, tables.pickBaseDefs, tables.pickBaseEdges, proof, nil)
 		if isMissingDataBranchRelationByID(err) {
 			return nil, false, nil
 		}

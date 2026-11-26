@@ -2249,6 +2249,101 @@ func dataBranchSchemaPathTo(image *plan2.TableDef, defs []*plan2.TableDef) []*pl
 	return append(slices.Clone(defs[:i]), image)
 }
 
+// A COPY that introduced a column has a committed image of the values
+// materialized into the existing rows. Later defaults cannot describe it.
+func pickAddedColumnImage(
+	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
+	origin *plan2.TableDef, col *plan2.ColDef, proof dataBranchRenameProof,
+) (dataBranchPickWindowStart, string, error) {
+	defs, edges := dataBranchSchemaPathFrom(origin, tables.pickBaseDefs, tables.pickBaseEdges)
+	for i := len(defs) - 1; i > 0; i-- {
+		previous, birth := defs[i-1], defs[i]
+		reaches, parent, redefined := dataBranchColumnReachesLCA(defs[i-1:i+1], edges[i-1:i+1], col, proof)
+		if reaches && !redefined && isDataBranchLogicalTypeEquivalent(col.Typ, parent.Typ) {
+			col = parent
+			continue
+		}
+		if reaches || redefined || !edges[i] || previous.TblId == birth.TblId ||
+			!dataBranchCopyPreservesColumnOrder(previous, birth) {
+			break
+		}
+		idx := slices.Index(tables.pickBasePath, birth.TblId)
+		if idx < 0 {
+			break
+		}
+		_, at := tables.resolvedSnapshots(ses)
+		if idx+1 < len(tables.pickBasePath) {
+			at = tables.pickBasePathTS[idx+1]
+		}
+		source, dest := tables.endpointIdentities(ctx, ses)
+		rel, owner, err := reopenDataBranchNodeByID(ctx, ses, bh, dedupeBranchIdentities(dest, source), birth.TblId, at)
+		if isMissingDataBranchRelationByID(err) {
+			break
+		}
+		if err != nil {
+			return dataBranchPickWindowStart{}, "", err
+		}
+		commits, err := getTablesCreationCommitTS(ctx, ses, owner, rel, owner, rel, []types.TS{at, at})
+		if err != nil {
+			return dataBranchPickWindowStart{}, "", err
+		}
+		start := dataBranchPickWindowStart{tableID: birth.TblId, identity: owner, snapshot: commits[0]}
+		rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{owner}, birth.TblId, start.snapshot)
+		if isMissingDataBranchRelationByID(err) {
+			break
+		}
+		if err != nil {
+			return dataBranchPickWindowStart{}, "", err
+		}
+		created := rel.GetTableDef(identityCtx(ctx, ident))
+		atCreation := dataBranchColumnDefByIdentity(created, col)
+		if atCreation == nil || !isDataBranchLogicalTypeEquivalent(atCreation.Typ, col.Typ) {
+			break
+		}
+		return start, atCreation.Name, nil
+	}
+	return dataBranchPickWindowStart{}, "", nil
+}
+
+func matchPickAddedColumns(
+	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
+	start dataBranchPickWindowStart, columns map[int]string, proof dataBranchRenameProof,
+	keys *vector.Vector, matches *batch.Batch, candidates []int64, unchanged []bool,
+) error {
+	rows, missing, err := probePickHistoricalColumns(ctx, ses, bh, tables, keys, start,
+		tables.pickBaseDefs, tables.pickBaseEdges, proof, columns)
+	if isMissingDataBranchRelationByID(err) || err == nil && rows == nil {
+		clear(unchanged)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer tables.retPool.releaseRetBatch(rows, false)
+	miss, row := 0, 0
+	for i, candidate := range candidates {
+		if miss < len(missing) && missing[miss] == int64(i) {
+			unchanged[i] = false
+			miss++
+			continue
+		}
+		if unchanged[i] {
+			for idx := range columns {
+				cmp, err := compareSingleValInVector(ctx, ses, int(candidate), row, matches.Vecs[idx], rows.Vecs[idx])
+				if err != nil {
+					return err
+				}
+				if cmp != 0 {
+					unchanged[i] = false
+					break
+				}
+			}
+		}
+		row++
+	}
+	return nil
+}
+
 // Exclude only rows whose current destination values match the initial
 // destination image, with matching fork evidence along both paths. Source
 // writes after cloning may already be visible in its first committed image.
@@ -2374,6 +2469,13 @@ func excludeInheritedPickRows(
 	if len(compareIdxes) == 0 {
 		compareIdxes = tables.def.visibleIdxes
 	}
+	comparison := tables
+	comparison.def.commonIdxes, comparison.def.visibleIdxes = nil, nil
+	type addedColumnImage struct {
+		start   dataBranchPickWindowStart
+		columns map[int]string
+	}
+	addedColumns := make(map[uint64]addedColumnImage)
 	for _, i := range compareIdxes {
 		if slices.Contains(tables.def.pkColIdxes, i) || i == tables.def.pkColIdx {
 			continue
@@ -2383,23 +2485,30 @@ func excludeInheritedPickRows(
 		if current == nil {
 			return conflicts, nil
 		}
-		defaultExpr := current.Default.GetExpr()
-		if col == nil && !dataBranchLCASchemaContainsColumn(def, current) &&
-			current.Default.GetNullAbility() && (defaultExpr == nil || defaultExpr.GetLit().GetIsnull()) {
-			// A column introduced after this fork has no inherited value.
-			// Compare it to NULL so independently written non-NULL values
-			// still protect the destination.
-			projected.Vecs[i] = vector.NewConstNull(tables.def.colTypes[i], rows.RowCount(), ses.proc.Mp())
-			defer projected.Vecs[i].Free(ses.proc.Mp())
+		if col == nil {
+			start, name, err := pickAddedColumnImage(ctx, ses, bh, tables, def, current, proof)
+			if err != nil {
+				return nil, err
+			}
+			if name == "" {
+				return conflicts, nil
+			}
+			image, exists := addedColumns[start.tableID]
+			if !exists {
+				image = addedColumnImage{start: start, columns: make(map[int]string)}
+				addedColumns[start.tableID] = image
+			}
+			image.columns[i] = name
 			continue
 		}
-		if col == nil || !isDataBranchLogicalTypeEquivalent(col.Typ, current.Typ) {
+		if !isDataBranchLogicalTypeEquivalent(col.Typ, current.Typ) {
 			return conflicts, nil
 		}
 		idx := slices.Index(probe.def.colNames, col.Name)
 		if idx < 0 {
 			return conflicts, nil
 		}
+		comparison.def.commonIdxes = append(comparison.def.commonIdxes, i)
 		projected.Vecs[i] = rows.Vecs[idx]
 	}
 	projected.SetRowCount(rows.RowCount())
@@ -2423,6 +2532,18 @@ func excludeInheritedPickRows(
 		return nil, err
 	}
 
+	var addedUnchanged []bool
+	if len(addedColumns) != 0 {
+		addedUnchanged = make([]bool, len(conflicts))
+		for i := range addedUnchanged {
+			addedUnchanged[i] = true
+		}
+		for _, image := range addedColumns {
+			if err := matchPickAddedColumns(ctx, ses, bh, tables, image.start, image.columns, proof, keys, matches, conflicts, addedUnchanged); err != nil {
+				return nil, err
+			}
+		}
+	}
 	inherited := make([]int64, 0, len(conflicts))
 	row, miss := 0, 0
 	for i, candidate := range conflicts {
@@ -2432,8 +2553,8 @@ func excludeInheritedPickRows(
 		}
 		_, sourceInherits := slices.BinarySearch(sourceProof, int64(row))
 		_, destInherits := slices.BinarySearch(destinationProof, int64(row))
-		if sourceInherits && destInherits {
-			cmp, err := compareRowInWrappedBatches(ctx, ses, tables, int(candidate), row, true,
+		if sourceInherits && destInherits && (addedUnchanged == nil || addedUnchanged[i]) {
+			cmp, err := compareRowInWrappedBatches(ctx, ses, comparison, int(candidate), row, true,
 				batchWithKind{batch: matches}, batchWithKind{batch: projected})
 			if err != nil {
 				return nil, err
@@ -2557,13 +2678,13 @@ func historicalPickPrimaryKeyNames(
 	return oldNames
 }
 
-// probePickKeyMembership probes a historical generation only if its primary
-// key still denotes the same columns as the current key. Nil means the key
-// has changed, so this generation cannot provide membership evidence.
-func probePickKeyMembership(
+// probePickHistoricalColumns reads the primary key and requested extra
+// columns. Nil means this generation has a different primary key and cannot
+// provide membership or value evidence for the current key.
+func probePickHistoricalColumns(
 	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
 	keys *vector.Vector, start dataBranchPickWindowStart, defs []*plan2.TableDef, edges []bool,
-	proof dataBranchRenameProof,
+	proof dataBranchRenameProof, columns map[int]string,
 ) (*batch.Batch, []int64, error) {
 	rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{start.identity}, start.tableID, start.snapshot)
 	if err != nil {
@@ -2581,6 +2702,9 @@ func probePickKeyMembership(
 	probe.def.tarOnlyIdxes = nil
 	for i, idx := range probe.def.pkColIdxes {
 		probe.def.lcaColNames[idx] = names[i]
+	}
+	for idx, name := range columns {
+		probe.def.lcaColNames[idx] = name
 	}
 	for idx, name := range probe.def.lcaColNames {
 		if name == "" && idx != probe.def.pkColIdx {
@@ -2605,8 +2729,8 @@ func emitPreviouslyPresentPickKeys(
 		}, false, tables.retPool)
 	}
 	for _, start := range starts {
-		prior, missing, err := probePickKeyMembership(ctx, ses, bh, tables, keys, start,
-			tables.pickBaseDefs, tables.pickBaseEdges, proof)
+		prior, missing, err := probePickHistoricalColumns(ctx, ses, bh, tables, keys, start,
+			tables.pickBaseDefs, tables.pickBaseEdges, proof, nil)
 		if err != nil {
 			return false, err
 		}
