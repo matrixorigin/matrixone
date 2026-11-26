@@ -583,15 +583,15 @@ func TestBootstrapChecksInitialReplicaMissingFromMetadata(t *testing.T) {
 	getShardMembershipFn = func(_ context.Context, _, _ string, shardID uint64) (map[uint64]string, bool, error) {
 		checked = append(checked, shardID)
 		if shardID == hakeeper.DefaultHAKeeperShardID {
-			return map[uint64]string{newID: "10.0.0.2:32001"}, true, nil
+			return map[uint64]string{newID: "10.0.0.1:32001", newID + 1: "10.0.0.2:32001"}, true, nil
 		}
-		return map[uint64]string{2: "10.0.0.2:32001"}, true, nil
+		return map[uint64]string{2: "10.0.0.1:32001", 3: "10.0.0.2:32001"}, true, nil
 	}
 
 	restarted, err := NewService(cfg, files, nil)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, restarted.Close()) }()
-	require.Equal(t, []uint64{hakeeper.DefaultHAKeeperShardID, 1}, checked,
+	require.Equal(t, []uint64{hakeeper.DefaultHAKeeperShardID, hakeeper.DefaultHAKeeperShardID, 1}, checked,
 		"bootstrap membership must be checked before data shards exhaust the startup budget")
 	require.True(t, restarted.store.isSkippedZombie(hakeeper.DefaultHAKeeperShardID, oldID))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

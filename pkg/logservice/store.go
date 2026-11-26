@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -330,10 +331,13 @@ func classifyZombiesFromHAKeeperState(
 // motivated this fix is specific to voting members. Non-voting zombies
 // remain subject to HAKeeper's existing checkZombie cleanup path.
 //
-// For each voting record the probe normally iterates every configured concrete
-// service address, skipping addresses that resolve to this store's own
-// logservice listener — probing self is useless because startReplicas runs
-// before the RPC server has started.
+// For each voting record the configured concrete service addresses are seeds,
+// not a complete voter list. Probe the members named by their replies too.
+// An absence is actionable only when at least two distinct member addresses
+// answer with the same absent membership. A missing address or reply leaves
+// the decision uncertain, allowing a valid replica to start without a leader.
+// Addresses that resolve to this store's own listener are skipped because
+// startReplicas runs before its RPC server has started.
 //
 // Discovery-only deployments cannot establish the concrete-peer unanimity
 // rule through a reverse proxy. In that mode the check instead uses discovery
@@ -345,8 +349,8 @@ func classifyZombiesFromHAKeeperState(
 // partial set of replies cannot establish absence: the only answering peer
 // might not have learned that this replica joined. The replicated HAKeeper
 // membership can also lag that ADD because it comes from asynchronous
-// heartbeats, so it cannot resolve the partial result. Even unanimous gossip
-// can lag a recent membership change; this remains a best-effort check.
+// heartbeats, so it cannot resolve the partial result. Even matching gossip
+// from all reported members can lag a recent change; this remains best effort.
 //
 // The check is best-effort: if neither gossip nor the HAKeeper leader can
 // confirm removal, the shard is treated as "not a zombie" so legitimate
@@ -388,6 +392,11 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 	logger := l.runtime.Logger()
 	ctx, cancel := context.WithTimeout(ctx, zombieSelfCheckTimeout)
 	defer cancel()
+	selfAddrs := map[string]struct{}{
+		l.cfg.LogServiceListenAddr():  {},
+		l.cfg.LogServiceServiceAddr(): {},
+	}
+	delete(selfAddrs, "")
 	for _, rec := range shards {
 		if ctx.Err() != nil {
 			break
@@ -395,16 +404,25 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 		if rec.NonVoting {
 			continue
 		}
-		var completeReplies, presentReplies int
-		for i, address := range addresses {
+		pending := append([]string(nil), addresses...)
+		queued := make(map[string]struct{}, len(pending))
+		for _, address := range pending {
+			queued[address] = struct{}{}
+		}
+		var expectedMembers map[uint64]string
+		memberAddresses := make(map[string]struct{})
+		completeReplies := 0
+		uncertain, present := false, false
+		for i := 0; i < len(pending); i++ {
 			if ctx.Err() != nil {
 				break
 			}
+			address := pending[i]
 			// Divide the remaining gossip time among peers, so an isolated
 			// address cannot prevent probing the later healthy addresses.
 			deadline, _ := ctx.Deadline()
 			probeCtx, cancelProbe := context.WithTimeout(
-				ctx, time.Until(deadline)/time.Duration(len(addresses)-i),
+				ctx, time.Until(deadline)/time.Duration(len(pending)-i),
 			)
 			members, ok, err := getShardMembershipFn(probeCtx, l.cfg.UUID, address, rec.ShardID)
 			cancelProbe()
@@ -414,17 +432,57 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 					zap.Uint64("shardID", rec.ShardID),
 					zap.Uint64("replicaID", rec.ReplicaID),
 					zap.Error(err))
+				uncertain = true
 				continue
 			}
 			if !ok {
+				uncertain = true
 				continue
 			}
 			completeReplies++
-			if _, present := members[rec.ReplicaID]; present {
-				presentReplies++
+			if _, memberPresent := members[rec.ReplicaID]; memberPresent {
+				present = true
+				break
 			}
+			if len(members) < 2 {
+				uncertain = true
+			}
+			if expectedMembers == nil {
+				expectedMembers = make(map[uint64]string, len(members))
+				for replicaID, memberAddress := range members {
+					expectedMembers[replicaID] = memberAddress
+				}
+			} else {
+				if len(members) != len(expectedMembers) {
+					uncertain = true
+				}
+				for replicaID, memberAddress := range members {
+					if expectedAddress, found := expectedMembers[replicaID]; !found || expectedAddress != memberAddress {
+						uncertain = true
+					}
+				}
+			}
+			var discovered []string
+			for _, memberAddress := range members {
+				if memberAddress == "" {
+					uncertain = true
+					continue
+				}
+				if _, self := selfAddrs[memberAddress]; self {
+					uncertain = true
+					continue
+				}
+				memberAddresses[memberAddress] = struct{}{}
+				if _, seen := queued[memberAddress]; !seen {
+					queued[memberAddress] = struct{}{}
+					discovered = append(discovered, memberAddress)
+				}
+			}
+			sort.Strings(discovered)
+			pending = append(pending, discovered...)
 		}
-		if completeReplies == len(addresses) && presentReplies == 0 {
+		if !uncertain && !present && completeReplies == len(pending) &&
+			len(expectedMembers) >= 2 && len(memberAddresses) >= 2 {
 			zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = struct{}{}
 		}
 	}

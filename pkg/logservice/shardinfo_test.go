@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -29,31 +30,59 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func TestNewClientDiscoveryHonorsContextDeadline(t *testing.T) {
+func TestNewClientDiscoveryHonorsContextCancellation(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer listener.Close()
 	stop := make(chan struct{})
-	defer close(stop)
+	t.Cleanup(func() {
+		close(stop)
+		listener.Close()
+	})
+	accepted := make(chan struct{})
 	go func() {
 		conn, err := listener.Accept()
 		if err == nil {
+			close(accepted)
 			<-stop
 			conn.Close()
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	start := time.Now()
-	client, err := NewClient(ctx, "", ClientConfig{
-		LogShardID: 1, TNReplicaID: 1,
-		DiscoveryAddress: listener.Addr().String(),
-	})
-	if client != nil {
-		defer client.Close()
+	type result struct {
+		client Client
+		err    error
 	}
-	require.Error(t, err)
-	require.Less(t, time.Since(start), 300*time.Millisecond)
+	resultCh := make(chan result, 1)
+	go func() {
+		client, err := NewClient(ctx, "", ClientConfig{
+			LogShardID: 1, TNReplicaID: 1,
+			DiscoveryAddress: listener.Addr().String(),
+		})
+		resultCh <- result{client: client, err: err}
+	}()
+	select {
+	case <-accepted:
+	case got := <-resultCh:
+		if got.client != nil {
+			got.client.Close()
+		}
+		t.Fatalf("discovery returned before the stalled connection was accepted: %v", got.err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("discovery did not connect to the stalled listener")
+	}
+	start := time.Now()
+	cancel()
+	select {
+	case got := <-resultCh:
+		if got.client != nil {
+			defer got.client.Close()
+		}
+		require.True(t, errors.Is(got.err, context.Canceled), "got %v", got.err)
+		require.Less(t, time.Since(start), 300*time.Millisecond)
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("discovery did not stop promptly after cancellation")
+	}
 }
 
 func TestGetShardInfo(t *testing.T) {

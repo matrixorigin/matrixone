@@ -103,3 +103,59 @@ func TestRestartKeepsLiveReplicaWhenOnlyStaleGossipPeerAnswers(t *testing.T) {
 	require.False(t, s3c.store.isSkippedZombie(1, 3))
 	require.True(t, s3c.store.localReplicaPresent(1, 3))
 }
+
+// A configured address is only a discovery seed. If that seed's gossip view
+// omits a persisted HAKeeper voter while another reported voter is down, the
+// restarting voter must run so the two available voters can regain quorum.
+func TestHAKeeperRestartWithSingleStaleSeedRegainsQuorum(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	logger, _ := captureLogger()
+	s1, s2, s3, cfg1, cfg2, cfg3 := buildZombieCluster(t, logger)
+	services := []*Service{s1, s2, s3}
+	configs := []Config{cfg1, cfg2, cfg3}
+	closed := [3]bool{}
+	defer func() {
+		for i, s := range services {
+			if !closed[i] {
+				require.NoError(t, s.Close())
+			}
+			vfs.ReportLeakedFD(configs[i].FS, t)
+		}
+	}()
+	waitLeader(t, []*store{s1.store, s2.store, s3.store}, 10*time.Second)
+	transferLeaderTo(t, s2.store, 2)
+	require.NoError(t, s3.Close())
+	closed[2] = true
+	require.NoError(t, s1.Close())
+	closed[0] = true
+
+	cfg3.HAKeeperClientConfig.ServiceAddresses = []string{cfg2.LogServiceServiceAddr()}
+	original := getShardMembershipFn
+	defer func() { getShardMembershipFn = original }()
+	var probed []string
+	getShardMembershipFn = func(_ context.Context, _, address string, shardID uint64) (map[uint64]string, bool, error) {
+		require.Equal(t, hakeeper.DefaultHAKeeperShardID, shardID)
+		probed = append(probed, address)
+		if address == cfg2.LogServiceServiceAddr() {
+			return map[uint64]string{
+				1: cfg1.LogServiceServiceAddr(),
+				2: cfg2.LogServiceServiceAddr(),
+			}, true, nil
+		}
+		require.Equal(t, cfg1.LogServiceServiceAddr(), address)
+		return nil, false, context.DeadlineExceeded
+	}
+	s3b := restartService3(t, cfg3, logger)
+	services[2] = s3b
+	closed[2] = false
+	getShardMembershipFn = original
+	require.Equal(t, []string{cfg2.LogServiceServiceAddr(), cfg1.LogServiceServiceAddr()}, probed)
+	require.False(t, s3b.store.isSkippedZombie(hakeeper.DefaultHAKeeperShardID, 3))
+	require.True(t, s3b.store.localReplicaPresent(hakeeper.DefaultHAKeeperShardID, 3))
+	require.Eventually(t, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err := s2.store.getCheckerStateWithContext(ctx)
+		return err == nil
+	}, 10*time.Second, 100*time.Millisecond, "voters 2 and 3 should restore HAKeeper reads")
+}

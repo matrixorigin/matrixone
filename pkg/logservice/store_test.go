@@ -2131,7 +2131,7 @@ func TestCheckZombieReplicas_PartialGossipDefersStaleHAKeeperState(t *testing.T)
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		queried = append(queried, address)
 		if address == "10.0.0.1:32001" {
-			return map[uint64]string{8: "other"}, true, nil
+			return map[uint64]string{8: "10.0.0.2:32001"}, true, nil
 		}
 		return nil, false, moerr.NewInternalErrorNoCtx("peer unavailable")
 	}
@@ -2264,7 +2264,7 @@ func TestCheckZombieReplicas_SkipsSelfAddress(t *testing.T) {
 	defer func() { getShardMembershipFn = orig }()
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		probed = append(probed, address)
-		return map[uint64]string{8: "10.0.0.2:1"}, true, nil
+		return map[uint64]string{8: "10.0.0.2:32001", 9: "10.0.0.3:32001"}, true, nil
 	}
 
 	l := &store{cfg: Config{
@@ -2284,8 +2284,8 @@ func TestCheckZombieReplicas_SkipsSelfAddress(t *testing.T) {
 	}}
 	zombies := l.checkZombieReplicas(context.Background(), shards)
 	_, isZombie := zombies[zombieKey{shardID: 3, replicaID: 7}]
-	assert.True(t, isZombie, "peer's authoritative answer must still classify the replica as zombie")
-	assert.Equal(t, []string{"10.0.0.2:32001"}, probed,
+	assert.True(t, isZombie, "two peers that agree on the absent membership classify the replica as zombie")
+	assert.Equal(t, []string{"10.0.0.2:32001", "10.0.0.3:32001"}, probed,
 		"self address must be filtered out before dialing")
 }
 
@@ -2304,7 +2304,7 @@ func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 		case "10.0.0.2:32001":
 			return nil, false, nil // peer doesn't know the shard
 		case "10.0.0.3:32001":
-			return map[uint64]string{8: "10.0.0.3:1"}, true, nil // authoritative absent
+			return map[uint64]string{8: "10.0.0.3:32001"}, true, nil // absent in this view
 		}
 		t.Fatalf("unexpected address %q", address)
 		return nil, false, nil
@@ -2350,7 +2350,7 @@ func TestCheckZombieReplicas_ProbesAllAddresses(t *testing.T) {
 	defer func() { getShardMembershipFn = orig }()
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		probed = append(probed, address)
-		return map[uint64]string{7: "10.0.0.1:1"}, true, nil
+		return map[uint64]string{8: "10.0.0.1:32001", 9: "10.0.0.2:32001"}, true, nil
 	}
 
 	l := &store{cfg: Config{
@@ -2366,7 +2366,7 @@ func TestCheckZombieReplicas_ProbesAllAddresses(t *testing.T) {
 		ReplicaID:      7,
 	}}
 	zombies := l.checkZombieReplicas(context.Background(), shards)
-	assert.Empty(t, zombies)
+	assert.Contains(t, zombies, zombieKey{shardID: 3, replicaID: 7})
 	assert.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001", "10.0.0.3:32001"}, probed,
 		"every address must be probed even after an authoritative answer, so the "+
 			"unanimous-absence rule is provable")
@@ -2384,11 +2384,11 @@ func TestCheckZombieReplicas_DisagreeingPeersKeepReplica(t *testing.T) {
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		switch address {
 		case "10.0.0.1:32001":
-			// This peer has observed the ADD and lists replica 7.
-			return map[uint64]string{7: "10.0.0.7:1", 8: "10.0.0.8:1"}, true, nil
-		case "10.0.0.2:32001":
 			// This peer has not yet observed the ADD; replica 7 is absent.
-			return map[uint64]string{8: "10.0.0.8:1"}, true, nil
+			return map[uint64]string{8: "10.0.0.2:32001"}, true, nil
+		case "10.0.0.2:32001":
+			// This peer has observed the ADD and lists replica 7.
+			return map[uint64]string{7: "10.0.0.1:32001", 8: "10.0.0.2:32001"}, true, nil
 		}
 		t.Fatalf("unexpected address %q", address)
 		return nil, false, nil
@@ -2575,11 +2575,11 @@ func TestStartReplicas_SkipsZombie(t *testing.T) {
 	store.addMetadata(1, 2, false)
 	store.addMetadata(1, 99, false)
 
-	// Stub getShardMembership: shard 1 membership contains only replica 2.
+	// Stub two distinct members that agree replica 99 is absent.
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
-		return map[uint64]string{2: "127.0.0.1:1"}, true, nil
+		return map[uint64]string{2: "127.0.0.1:1", 3: "127.0.0.1:2"}, true, nil
 	}
 
 	// Configure a service address so checkZombieReplicas actually queries.
