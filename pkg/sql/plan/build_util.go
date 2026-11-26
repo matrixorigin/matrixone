@@ -43,30 +43,51 @@ import (
 // 	return nodeID
 // }
 
+// Only the account table itself needs point locks. A DELETE also locks its
+// unique index and the compiler acquires separate catalog metadata locks.
+func (builder *QueryBuilder) requiresExactAccountRows(database, table string) bool {
+	return database == catalog.MO_CATALOG && table == catalog.MOAccountTable &&
+		defines.ExactCatalogRows(builder.compCtx.GetProcess().Ctx)
+}
+
+func estimatedLockRowLimit(builder *QueryBuilder) (float64, bool) {
+	proc := builder.compCtx.GetProcess()
+	if proc.Base.LockService == nil {
+		return 0, false
+	}
+	return float64(proc.Base.LockService.GetConfig().MaxLockRowCount), true
+}
+
 // reCheckifNeedLockWholeTable checks if the whole table needs to be locked based on the last node's statistics.
 // It returns true if the out count of the last node is greater than the maximum lock count, otherwise it returns false.
 func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
-	lockService := builder.compCtx.GetProcess().Base.LockService
-	if lockService == nil {
-		// MockCompilerContext
+	maxRows, ok := estimatedLockRowLimit(builder)
+	if !ok {
 		return
 	}
-	lockconfig := lockService.GetConfig()
 
 	for _, n := range builder.qry.Nodes {
 		if n.NodeType != plan.Node_LOCK_OP {
 			continue
 		}
-		if !n.LockTargets[0].LockTable {
-			reCheckIfNeed := n.Stats.Outcnt > float64(lockconfig.MaxLockRowCount)
-			if reCheckIfNeed {
-				logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
-				logutil.Infof("the outcnt stats is %f", n.Stats.Outcnt)
-				for _, target := range n.LockTargets {
-					target.LockTable = reCheckIfNeed
-				}
-			}
+		builder.upgradeEstimatedRowLocks(n, maxRows)
+	}
+}
+
+func (builder *QueryBuilder) upgradeEstimatedRowLocks(node *plan.Node, maxRows float64) {
+	if node.LockTargets[0].LockTable || !(node.Stats.Outcnt > maxRows) {
+		return
+	}
+	upgraded := false
+	for _, target := range node.LockTargets {
+		if !target.LockTable && !target.RequireExactRows {
+			target.LockTable = true
+			upgraded = true
 		}
+	}
+	if upgraded {
+		logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
+		logutil.Infof("the outcnt stats is %f", node.Stats.Outcnt)
 	}
 }
 
@@ -327,6 +348,46 @@ func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs 
 	}
 	colType.Width = encodeGeometrySRIDWidth(srid, sridDefined)
 	return nil
+}
+
+func supportsColumnCharset(typ *plan.Type) bool {
+	return typ.Id == int32(types.T_char) || typ.Id == int32(types.T_varchar) || typ.Id == int32(types.T_text)
+}
+
+// ColumnStorageScalesEqual compares scales for storage compatibility. In 4.2,
+// an explicit utf8mb4_bin declaration uses the legacy text representation.
+func ColumnStorageScalesEqual(left, right *plan.Type) bool {
+	return left.Id == right.Id &&
+		types.TextStorageScale(types.T(left.Id), left.Scale) == types.TextStorageScale(types.T(right.Id), right.Scale)
+}
+
+func hasExplicitUTF8MB4Bin(typ *plan.Type) bool {
+	return supportsColumnCharset(typ) && typ.Scale == types.UTF8MB4BinColumnScale
+}
+
+func applyColumnCharset(typ *plan.Type, attrs []tree.ColumnAttribute) bool {
+	var explicit bool
+	for _, attr := range attrs {
+		switch a := attr.(type) {
+		case *tree.AttributeCharset:
+			if !strings.EqualFold(a.Charset, "utf8mb4") {
+				return false
+			}
+			explicit = true
+		case *tree.AttributeCollate:
+			if !strings.EqualFold(a.Collate, "utf8mb4_bin") {
+				return false
+			}
+			explicit = true
+		}
+	}
+	if explicit {
+		if !supportsColumnCharset(typ) {
+			return false
+		}
+		typ.Scale = types.UTF8MB4BinColumnScale
+	}
+	return true
 }
 
 func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {

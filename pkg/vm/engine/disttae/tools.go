@@ -107,6 +107,9 @@ func genWriteReqs(
 	if len(entries) == 0 {
 		return nil, nil
 	}
+	if len(tn.Shards) == 0 {
+		return nil, moerr.NewServiceUnavailable(ctx, fmt.Sprintf("TN %s has no reported shard", tnID))
+	}
 	trace.GetService(txnCommit.proc.GetService()).TxnCommit(op, entries)
 	reqs := make([]txn.TxnRequest, 0, len(entries))
 	payload, err := types.Encode(&api.PrecommitWriteCmd{

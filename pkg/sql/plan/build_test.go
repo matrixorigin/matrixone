@@ -5553,9 +5553,28 @@ func TestReplaceAndChildInsertUseCanonicalForeignKeyLockOrder(t *testing.T) {
 		"REPLACE must lock the base table first and hidden unique indexes by physical table name")
 }
 
+func TestExactAccountLockScope(t *testing.T) {
+	ctx := NewEmptyCompilerContext()
+	proc := &process.Process{Ctx: t.Context()}
+	ctx.GetProcessFunc = func() *process.Process { return proc }
+	builder := &QueryBuilder{compCtx: ctx}
+	require.False(t, builder.requiresExactAccountRows(catalog.MO_CATALOG, catalog.MOAccountTable))
+	proc.Ctx = defines.WithExactCatalogRows(proc.Ctx)
+	require.True(t, builder.requiresExactAccountRows(catalog.MO_CATALOG, catalog.MOAccountTable))
+	require.False(t, builder.requiresExactAccountRows("app", catalog.MOAccountTable))
+	require.False(t, builder.requiresExactAccountRows(catalog.MO_CATALOG, catalog.MO_TABLES))
+
+	account, index := &plan.LockTarget{RequireExactRows: true}, &plan.LockTarget{}
+	node := &plan.Node{Stats: &plan.Stats{Outcnt: 2}, LockTargets: []*plan.LockTarget{account, index}}
+	builder.upgradeEstimatedRowLocks(node, 1)
+	require.False(t, account.LockTable)
+	require.True(t, index.LockTable)
+}
+
 func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 	assert.Nil(t, DeepCopyLockTarget(nil))
 	target := &plan.LockTarget{
+		RequireExactRows:     true,
 		TableId:              42,
 		ObjRef:               &plan.ObjectRef{Obj: 42, ObjName: "parent"},
 		Mode:                 lockpb.LockMode_Shared,
@@ -5571,6 +5590,7 @@ func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 		assert.Equal(t, int32(11), copied.PrimaryColRelPos)
 		assert.Equal(t, int32(12), copied.FilterColRelPos)
 		assert.Equal(t, int32(13), copied.PartitionColIdxInBat)
+		assert.True(t, copied.RequireExactRows)
 		assert.True(t, copied.HasPartitionCol)
 	}
 

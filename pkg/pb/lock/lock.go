@@ -134,6 +134,12 @@ func (m LockOptions) WithGranularity(granularity Granularity) LockOptions {
 	return m
 }
 
+// WithExactRows requires point locks in the current mode.
+func (m LockOptions) WithExactRows() LockOptions {
+	m.ExactRows = true
+	return m
+}
+
 // WithMode set lock mode, the default mode is Exclusive.
 func (m LockOptions) WithMode(mode LockMode) LockOptions {
 	m.Mode = mode

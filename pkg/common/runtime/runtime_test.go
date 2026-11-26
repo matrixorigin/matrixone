@@ -15,11 +15,29 @@
 package runtime
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 )
+
+type methodVersionTestMethod int32
+
+func (methodVersionTestMethod) String() string { return "test" }
+
+type methodVersionTestRequest struct{ method methodVersionTestMethod }
+
+func (r methodVersionTestRequest) GetMethod() methodVersionTestMethod { return r.method }
+
+func TestCheckMethodVersionWithUnavailableRuntime(t *testing.T) {
+	versionMap := map[methodVersionTestMethod]int64{1: 1}
+	req := methodVersionTestRequest{method: 1}
+	err := CheckMethodVersionWithRuntime(context.Background(), nil, versionMap, req)
+	assert.ErrorContains(t, err, "service runtime is unavailable")
+	err = CheckMethodVersion(context.Background(), t.Name(), versionMap, req)
+	assert.ErrorContains(t, err, "service runtime is unavailable")
+}
 
 func TestRuntime(t *testing.T) {
 	rt := NewRuntime(metadata.ServiceType_CN, "cn0", nil)

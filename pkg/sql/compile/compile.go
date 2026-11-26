@@ -4431,6 +4431,12 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+	if node.Stats.HashmapStats.Shuffle && scopesContainWindow(probeScopes, buildScopes) {
+		probeScopes = c.singleCoordinatorJoinInput(probeScopes)
+		buildScopes = c.singleCoordinatorJoinInput(buildScopes)
+		node.Stats.HashmapStats.Shuffle = false
+		node.Stats.HashmapStats.ShuffleColIdx = -1
+	}
 	if node.Stats.HashmapStats.Shuffle {
 		if node.JoinType == plan.Node_MARK && !canUseShuffleHashMarkJoinWithInputs(node, left, right) {
 			node.Stats.HashmapStats.Shuffle = false
@@ -4440,7 +4446,20 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		}
 	}
 
-	rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
+	isEq := plan2.IsEquiJoin2(node.OnList)
+	// Protect coordinator-owned input before reducing the probe stage. A
+	// forced-single probe may then have a different owner; check its build
+	// again before installing the process-local JoinMap operators.
+	if broadcastJoinForcesOneCN(node, isEq) {
+		probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
+		probeScopes = c.forceSingleCNBroadcastProbe(probeScopes)
+	}
+	if len(probeScopes) > 1 {
+		probeScopes, buildScopes = c.placeMultiProbeBroadcastBuild(probeScopes, buildScopes)
+	} else {
+		probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
+	}
+	rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes, isEq)
 	return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
 }
 
@@ -4610,14 +4629,11 @@ func (c *Compile) compileDistributedShuffleJoin(
 
 	return shuffleJoins
 }
-func (c *Compile) newProbeScopeListForBroadcastJoin(probeScopes []*Scope, forceOneCN bool) []*Scope {
-	if forceOneCN { // for right join, we have to merge these input for now
-		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, false)
-		if len(probeScopes) > 1 {
-			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
-		}
+func (c *Compile) forceSingleCNBroadcastProbe(probeScopes []*Scope) []*Scope {
+	probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, false)
+	if len(probeScopes) > 1 {
+		return []*Scope{c.newMergeScope(probeScopes)}
 	}
-	// don't need to break pipelines for probe side of broadcast join
 	return probeScopes
 }
 
@@ -4739,10 +4755,7 @@ func hashMarkOperandRel(expr *plan.Expr) (int32, bool) {
 	return relPos, singleRel && relPos >= 0
 }
 
-func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, probeScopes []*Scope) []*Scope {
-	var rs []*Scope
-	isEq := plan2.IsEquiJoin2(node.OnList)
-
+func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, rs []*Scope, isEq bool) []*Scope {
 	rightTypes := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
 		rightTypes[i] = dupType(&expr.Typ)
@@ -4755,7 +4768,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 
 	switch node.JoinType {
 	case plan.Node_INNER:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		if len(node.OnList) == 0 {
 			for i := range rs {
@@ -4778,7 +4790,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		}
 		c.anal.isFirst = false
 	case plan.Node_L2:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			op := constructProductL2(node, c.proc)
@@ -4794,7 +4805,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		}
 		c.anal.isFirst = false
 	case plan.Node_INDEX:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			op := constructIndexJoin(node, c.proc)
@@ -4803,7 +4813,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		}
 		c.anal.isFirst = false
 	case plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, isEq && node.IsRightJoin)
 		currentFirstFlag := c.anal.isFirst
 		if isEq {
 			for i := range rs {
@@ -4820,11 +4829,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		}
 		c.anal.isFirst = false
 	case plan.Node_OUTER:
-		// FULL OUTER JOIN: equi → hashjoin (Phase 1); non-equi → loopjoin
-		// (Phase 4). IsRightJoin=true (set in stats.go for Node_OUTER) routes
-		// the probe scope through forceOneCN, avoiding distributed
-		// double-emission of unmatched-build rows.
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+		// The single probe CN emits unmatched-build rows once.
 		currentFirstFlag := c.anal.isFirst
 		if isEq {
 			for i := range rs {
@@ -4842,7 +4847,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		c.anal.isFirst = false
 	case plan.Node_DEDUP:
 		if node.IsRightJoin {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructRightDedupJoin(node, leftTypes, rightTypes, c.proc)
@@ -4852,7 +4856,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			}
 			c.anal.isFirst = false
 		} else {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructDedupJoin(node, leftTypes, rightTypes, c.proc)
@@ -4862,7 +4865,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			c.anal.isFirst = false
 		}
 	case plan.Node_MARK:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			var op vm.Operator
@@ -5963,6 +5965,9 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
 	for _, tbl := range node.LockTargets {
+		if tbl.RequireExactRows && tbl.LockTable {
+			return nil, moerr.NewLockNeedUpgradeNoCtx()
+		}
 		if c.shouldPrePipelineLockTable(tbl) {
 			c.lockTables[tbl.TableId] = tbl
 		} else {

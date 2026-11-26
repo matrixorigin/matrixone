@@ -525,11 +525,19 @@ func (c *Compile) evaluateQueryPlacement(
 	}
 	isIvfEntriesScan := queryHasIvfSearchEntriesInternalScan(qry)
 	// The local partition is the only one that can see the coordinator's
-	// appendable IVF ranges. Keep it at partition zero; persisted ranges remain
-	// distributed by ObjectID across all selected workers.
+	// appendable IVF ranges. Keep it at partition zero; immutable objects
+	// remain distributed by ObjectID across all selected workers.
 	if isIvfEntriesScan {
 		req.CurrentCNPolicy = schedule.CurrentCNRequired
 		req.CurrentCNOrdinalZero = true
+	}
+	// A remote CN rebuilds its own workspace from the committed snapshot.
+	// AP PREPARE does not retain a physical plan; check the workspace at EXECUTE.
+	if !c.isPrepare && c.proc != nil && c.proc.Base != nil {
+		if txn := c.proc.GetTxnOperator(); txn != nil {
+			ws := txn.GetWorkspace()
+			req.RequireWorkspaceOwner = ws != nil && !ws.Readonly()
+		}
 	}
 	return schedule.DecideQueryPlacement(req), "", nil
 }

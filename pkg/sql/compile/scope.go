@@ -1025,20 +1025,16 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 				return err
 			}
 		}
+		// Relation handles are not serialized. The executing CN opened this
+		// relation and owns the entire singleton scan, including the memory
+		// sentinel from Policy_CollectAllData.
+		if s.IsRemote {
+			s.DataSource.Rel = engine.NewRelationHandle(rel)
+		}
 		return nil
 	}
 
-	//need to shuffle blocks when cncnt>1
-	rsp := &engine.RangesShuffleParam{
-		Node:              s.DataSource.node,
-		CNCNT:             s.NodeInfo.CNCNT,
-		CNIDX:             s.NodeInfo.CNIDX,
-		ShuffleByObjectID: plan2.IsIvfSearchEntriesInternalScan(s.DataSource.node),
-		Init:              false,
-	}
-	if !s.IsRemote { // this is local CN
-		rsp.IsLocalCN = true
-	}
+	rsp := s.rangesShuffleParam()
 
 	policyForLocal := localRangesPolicy(s.DataSource.node, s.NodeInfo.CNIDX)
 	policyForRemote := engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData)
@@ -1076,6 +1072,20 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	}
 
 	return err
+}
+
+func (s *Scope) rangesShuffleParam() *engine.RangesShuffleParam {
+	node := s.DataSource.node
+	ivf := plan2.IsIvfSearchEntriesInternalScan(node)
+	return &engine.RangesShuffleParam{
+		Node:              node,
+		CNCNT:             s.NodeInfo.CNCNT,
+		CNIDX:             s.NodeInfo.CNIDX,
+		ShuffleByObjectID: ivf,
+		// The entries query runs locally inside each outer table-function
+		// worker. Physical locality alone does not identify the memtable owner.
+		IsLocalCN: !s.IsRemote && (!ivf || s.NodeInfo.CNIDX == 0),
+	}
 }
 
 func localRangesPolicy(node *plan.Node, cnidx int32) engine.DataCollectPolicy {
@@ -1807,8 +1817,10 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	}
 
 	switch {
-	// If this was a remote-run pipeline. Reader should be generated from Engine.
-	case s.IsRemote:
+	// Distributed remote workers own only their assigned persisted ranges.
+	// A single remote worker owns the whole relation; using the block-reader
+	// path for it would discard the in-memory sentinel instead.
+	case s.IsRemote && (s.NodeInfo.CNCNT != 1 || s.DataSource.Rel == nil):
 		// this cannot use c.proc.Ctx directly, please refer to `default case`.
 		ctx := s.readerContext(c)
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
@@ -1847,9 +1859,21 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if err != nil {
 			return
 		}
-	// Reader can be generated from local relation.
+	// Reader can be generated from the relation on the executing CN.
 	case s.DataSource.Rel != nil:
 		ctx := s.readerContext(c)
+		if s.IsRemote {
+			if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
+				ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+			}
+			account := s.DataSource.AccountId
+			if account == nil && s.DataSource.node != nil && s.DataSource.node.ObjRef != nil {
+				account = s.DataSource.node.ObjRef.PubInfo
+			}
+			if account != nil {
+				ctx = defines.AttachAccountId(ctx, uint32(account.GetTenantId()))
+			}
+		}
 		stats := statistic.StatsInfoFromContext(ctx)
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
@@ -1869,10 +1893,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.MembershipFilterBytes = bf
-				}
+			if s.IsRemote {
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			}
+			if len(hint.MembershipFilterBytes) == 0 {
+				hint.MembershipFilterBytes, _ = c.proc.Ctx.Value(defines.FulltextMembershipFilter{}).([]byte)
 			}
 		}
 

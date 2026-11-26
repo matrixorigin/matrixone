@@ -1466,9 +1466,9 @@ func TestCheckZombieReplicas_ReplicaPresent(t *testing.T) {
 	// Stub getShardMembership to report that replicaID 7 is a live member of shard 3.
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
 		assert.Equal(t, uint64(3), shardID)
-		return map[uint64]string{7: "127.0.0.1:1"}, true, nil
+		return map[uint64]string{7: "127.0.0.1:1"}, 0, true, nil
 	}
 
 	l := &store{cfg: Config{
@@ -1491,9 +1491,9 @@ func TestCheckZombieReplicas_ReplicaAbsent(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
 		// Membership contains replicaID 8 and 9; local metadata claims 7.
-		return map[uint64]string{8: "127.0.0.1:2", 9: "127.0.0.1:3"}, true, nil
+		return map[uint64]string{8: "127.0.0.1:2", 9: "127.0.0.1:3"}, 0, true, nil
 	}
 
 	l := &store{cfg: Config{
@@ -1518,8 +1518,8 @@ func TestCheckZombieReplicas_RPCFails(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
-		return nil, false, moerr.NewInternalErrorNoCtx("boom")
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
+		return nil, 0, false, moerr.NewInternalErrorNoCtx("boom")
 	}
 
 	l := &store{cfg: Config{
@@ -1542,8 +1542,8 @@ func TestCheckZombieReplicas_ShardUnknown(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
-		return nil, false, nil
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
+		return nil, 0, false, nil
 	}
 
 	l := &store{cfg: Config{
@@ -1567,9 +1567,9 @@ func TestCheckZombieReplicas_NoAddresses(t *testing.T) {
 	called := false
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
 		called = true
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
 
 	l := &store{cfg: Config{
@@ -1592,9 +1592,9 @@ func TestCheckZombieReplicas_DiscoveryOnlyIsNotChecked(t *testing.T) {
 	called := false
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
 		called = true
-		return map[uint64]string{8: "10.0.0.8:1"}, true, nil
+		return map[uint64]string{8: "10.0.0.8:1"}, 0, true, nil
 	}
 
 	l := &store{cfg: Config{
@@ -1625,9 +1625,9 @@ func TestCheckZombieReplicas_SkipsSelfAddress(t *testing.T) {
 	var probed []string
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
 		probed = append(probed, address)
-		return map[uint64]string{8: "10.0.0.2:1"}, true, nil
+		return map[uint64]string{8: "10.0.0.2:1"}, 0, true, nil
 	}
 
 	l := &store{cfg: Config{
@@ -1663,18 +1663,18 @@ func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 	var probed []string
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
 		probed = append(probed, address)
 		switch address {
 		case "10.0.0.1:32001":
-			return nil, false, moerr.NewInternalErrorNoCtx("rpc failed")
+			return nil, 0, false, moerr.NewInternalErrorNoCtx("rpc failed")
 		case "10.0.0.2:32001":
-			return nil, false, nil // peer doesn't know the shard
+			return nil, 0, false, nil // peer doesn't know the shard
 		case "10.0.0.3:32001":
-			return map[uint64]string{8: "10.0.0.3:1"}, true, nil // authoritative absent
+			return map[uint64]string{8: "10.0.0.3:1"}, 0, true, nil // authoritative absent
 		}
 		t.Fatalf("unexpected address %q", address)
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
 
 	l := &store{cfg: Config{
@@ -1707,9 +1707,9 @@ func TestCheckZombieReplicas_ProbesAllAddresses(t *testing.T) {
 	var probed []string
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
 		probed = append(probed, address)
-		return map[uint64]string{7: "10.0.0.1:1"}, true, nil
+		return map[uint64]string{7: "10.0.0.1:1"}, 0, true, nil
 	}
 
 	l := &store{cfg: Config{
@@ -1740,17 +1740,17 @@ func TestCheckZombieReplicas_DisagreeingPeersKeepReplica(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
 		switch address {
 		case "10.0.0.1:32001":
 			// This peer has observed the ADD and lists replica 7.
-			return map[uint64]string{7: "10.0.0.7:1", 8: "10.0.0.8:1"}, true, nil
+			return map[uint64]string{7: "10.0.0.7:1", 8: "10.0.0.8:1"}, 0, true, nil
 		case "10.0.0.2:32001":
 			// This peer has not yet observed the ADD; replica 7 is absent.
-			return map[uint64]string{8: "10.0.0.8:1"}, true, nil
+			return map[uint64]string{8: "10.0.0.8:1"}, 0, true, nil
 		}
 		t.Fatalf("unexpected address %q", address)
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
 
 	l := &store{cfg: Config{
@@ -1778,8 +1778,8 @@ func TestCheckZombieReplicas_UnanimousAbsenceClassifies(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
-		return map[uint64]string{8: "10.0.0.8:1", 9: "10.0.0.9:1"}, true, nil
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
+		return map[uint64]string{8: "10.0.0.8:1", 9: "10.0.0.9:1"}, 0, true, nil
 	}
 
 	l := &store{cfg: Config{
@@ -1814,9 +1814,9 @@ func TestCheckZombieReplicas_NonVotingIsNotChecked(t *testing.T) {
 	called := false
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
 		called = true
-		return map[uint64]string{8: "10.0.0.8:1"}, true, nil
+		return map[uint64]string{8: "10.0.0.8:1"}, 0, true, nil
 	}
 
 	l := &store{cfg: Config{
@@ -1843,10 +1843,10 @@ func TestCheckZombieReplicas_StopsWhenStartupBudgetExpires(t *testing.T) {
 	var probed []string
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
 		probed = append(probed, address)
 		<-ctx.Done()
-		return nil, false, ctx.Err()
+		return nil, 0, false, ctx.Err()
 	}
 
 	l := &store{cfg: Config{
@@ -1885,10 +1885,10 @@ func TestCheckZombieReplicas_StopsWhenParentContextCanceled(t *testing.T) {
 	var probed []string
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
 		probed = append(probed, address)
 		cancel()
-		return nil, false, ctx.Err()
+		return nil, 0, false, ctx.Err()
 	}
 
 	l := &store{cfg: Config{
@@ -1935,8 +1935,8 @@ func TestStartReplicas_SkipsZombie(t *testing.T) {
 	// Stub getShardMembership: shard 1 membership contains only replica 2.
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
-		return map[uint64]string{2: "127.0.0.1:1"}, true, nil
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
+		return map[uint64]string{2: "127.0.0.1:1"}, 0, true, nil
 	}
 
 	// Configure a service address so checkZombieReplicas actually queries.

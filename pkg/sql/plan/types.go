@@ -283,6 +283,7 @@ type QueryBuilder struct {
 	nameByColRef                     map[[2]int32]string
 	protectedScans                   map[int32]int
 	projectSpecialGuards             map[int32]*specialIndexGuard
+	indexOwnerProbes                 map[int32]indexOwnerProbe
 	vectorCandidateAuto              *vectorCandidateAutoSummary
 	mysqlSpecialStorageByDisplayNode map[[2]int32]int32
 	indexHintsByScan                 map[int32]*indexHintSet
@@ -387,6 +388,11 @@ type QueryBuilder struct {
 	// populated lazily so unused CTE bodies retain their existing lazy-binding
 	// semantics.
 	cteRefs []*CTERef
+}
+
+type indexOwnerProbe struct {
+	keyCol   int32
+	ownerCol int32
 }
 
 type OptimizerHints struct {
@@ -744,6 +750,8 @@ type Binding struct {
 	db      string
 	table   string
 	tableID uint64
+	// Index backfill expressions consume the physical values of this binding.
+	indexBackfillRaw bool
 	// lower case: used for binding/lookup
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)

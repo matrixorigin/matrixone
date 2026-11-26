@@ -69,7 +69,8 @@ func (ctr *container) boundedMatchCount(join *HashJoin, leftRow int64, limit int
 	count := 0
 	for count < limit {
 		selected := ctr.sels[count]
-		next := ctr.outputRowBytes(join, leftRow, int64(selected/8192), int64(selected%8192), true)
+		batchIdx, rowIdx := ctr.locateBuildRow(int64(selected))
+		next := ctr.outputRowBytes(join, leftRow, batchIdx, rowIdx, true)
 		if count > 0 && next > ctr.outputTarget-ctr.outputBytes-bytes {
 			break
 		}

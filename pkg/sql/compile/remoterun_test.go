@@ -426,6 +426,7 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		original := lockop.NewArgumentByEngine(nil)
 		original.AddLockTargetWithMode(43, nil, lockpb.LockMode_Shared, 0,
 			types.T_int64.ToType(), -1, -1, nil, false)
+		original.RequireExactRows(43)
 
 		restored := roundTrip(t, original)
 		defer restored.Release()
@@ -433,6 +434,7 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.True(t, ok)
 		targets := restoredLock.CopyToPipelineTarget()
 		require.Len(t, targets, 1)
+		require.True(t, targets[0].RequireExactRows)
 		require.False(t, targets[0].LockTable)
 		require.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
 	})

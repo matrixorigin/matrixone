@@ -1465,6 +1465,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err := applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
 				return err
 			}
+			// Keep CREATE's historical acceptance of other charset declarations.
+			// Preserve the supported pair so SHOW CREATE and ALTER COPY round trip.
+			applyColumnCharset(&colType, def.Attributes)
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
 				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 				if colType.GetWidth() > types.MaxStringSize {
