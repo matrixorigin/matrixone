@@ -3378,3 +3378,86 @@ func TestS3FSBufferedReadCancellationAfterDelivery(t *testing.T) {
 		})
 	}
 }
+
+type cancelAfterStorageDelete struct {
+	ObjectStorage
+	cancel context.CancelFunc
+}
+
+func (s cancelAfterStorageDelete) Delete(ctx context.Context, keys ...string) error {
+	err := s.ObjectStorage.Delete(ctx, keys...)
+	if err == nil {
+		s.cancel()
+	}
+	return err
+}
+
+func TestS3FSCommittedDeleteSurvivesCancellation(t *testing.T) {
+	ctx, stop := context.WithTimeout(t.Context(), diskCacheLifecycleTestTimeout)
+	defer stop()
+	fs := newReplayWriteTestFS(t)
+	write := func(path, value string) {
+		t.Helper()
+		require.NoError(t, fs.Write(ctx, IOVector{FilePath: path, Policy: SkipAllCache,
+			Entries: []IOEntry{{Size: int64(len(value)), Data: []byte(value)}}}))
+	}
+	for _, key := range []string{"published", "pending", "queued", "keep"} {
+		write(key, "old")
+	}
+	for _, key := range []string{"published", "keep"} {
+		require.NoError(t, fs.PrefetchFile(ctx, key))
+		require.Equal(t, []byte("old"), readReplayCache(t, fs, key))
+	}
+
+	// Hold a full-file fill before rename. A range fill for another deleted
+	// object must then still be in the worker queue at the time of deletion.
+	started, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	fs.diskCache.beforeFilePublication = sync.OnceFunc(func() { close(started); <-resume })
+	require.NoError(t, fs.PrefetchFile(ctx, "pending"))
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("pending fill did not reach publication")
+	}
+	entry := IOEntry{Size: 3, Data: []byte("old")}
+	require.NoError(t, fs.diskCache.Update(ctx, &IOVector{FilePath: "queued", Entries: []IOEntry{entry}}, true))
+
+	request, cancel := context.WithCancel(ctx)
+	defer cancel()
+	fs.storage = cancelAfterStorageDelete{fs.storage, cancel}
+	require.ErrorIs(t, fs.Delete(request, "replay:published", "pending", "queued"), context.Canceled)
+	require.NoFileExists(t, fs.diskCache.pathForFile("published"))
+	check := func(key string, policy Policy, want string) {
+		t.Helper()
+		v := &IOVector{FilePath: key, Policy: policy, Entries: []IOEntry{{Size: 3}}}
+		defer v.Release()
+		err := fs.Read(ctx, v)
+		if want == "" {
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%s: %q, %v", key, v.Entries[0].Data, err)
+			return
+		}
+		require.NoError(t, err)
+		require.Equal(t, want, string(v.Entries[0].Data))
+		if policy == SkipMemoryCache {
+			require.Same(t, fs.diskCache, v.Entries[0].fromCache)
+		}
+	}
+	for _, key := range []string{"published", "pending", "queued"} {
+		check(key, SkipAllCache, "")
+		check(key, SkipMemoryCache, "")
+		write(key, "new")
+	}
+	check("keep", SkipMemoryCache, "old")
+	release()
+	fs.FlushCache(ctx)
+	require.NoFileExists(t, fs.diskCache.pathForFile("pending"))
+	require.NoFileExists(t, fs.diskCache.pathForIOEntry("queued", entry))
+	for _, key := range []string{"published", "pending", "queued"} {
+		check(key, SkipAllCache, "new")
+		require.NoError(t, fs.PrefetchFile(ctx, key))
+		fs.FlushCache(ctx)
+		check(key, SkipMemoryCache, "new")
+	}
+}

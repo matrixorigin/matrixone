@@ -86,7 +86,7 @@ type diskCacheAsyncState struct {
 	}
 }
 
-// done is allocated only if a delete observes this admission.
+// A non-nil done revokes publication and signals when the admission drains.
 type diskCacheAdmission struct {
 	object string // canonical object path of a range update
 	done   chan struct{}
@@ -405,15 +405,15 @@ func (d *DiskCache) scheduleReservedAsyncFileFinalize(
 	a.submitters.Done()
 }
 
-func (d *DiskCache) claimAsyncPublication() bool {
+func (d *DiskCache) claimAsyncPublication(diskPath string) bool {
 	a := &d.async
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	// This mutex is the publication/Close linearization boundary. If Close
-	// sealed first, the temp file stays private and is cleaned up. If this claim
-	// wins first, publication belongs to the admitted generation; a Close whose
-	// context expires may return before that already-claimed operation drains.
-	return !a.mu.closed
+	// Close seals the whole instance; Delete revokes only the observed
+	// admission. If publication already won, the path owner completes the
+	// deletion before it lets a reader or another writer enter.
+	admission, ok := a.mu.pending[diskPath]
+	return ok && !a.mu.closed && admission.done == nil
 }
 
 func (a *diskCacheAsyncState) dropAsyncUpdateLocked() {
@@ -430,23 +430,24 @@ func (d *DiskCache) runAsyncUpdates() {
 		case job := <-d.async.jobs:
 			retainForCallbacks := false
 			if d.async.ctx.Err() == nil {
+				claim := func() bool { return d.claimAsyncPublication(job.diskPath) }
 				if job.finalize != nil {
 					job.finalize.attempted = true
 					job.finalize.err = d.finalizeFile(
 						d.async.ctx,
 						job.diskPath,
 						job.finalize.file,
-						d.claimAsyncPublication,
+						claim,
 					)
 					if isDiskFull(job.finalize.err) {
-						d.cache.ForceEvict(d.async.ctx, d.capacityFunc()/10)
+						d.cache.ForceEvictWithWait(d.async.ctx, d.capacityFunc()/10)
 					}
 				} else {
 					written, _ := d.writeEntry(
 						d.async.ctx,
 						job.diskPath,
 						job.entry,
-						d.claimAsyncPublication,
+						claim,
 					)
 					retainForCallbacks = written && len(job.callbacks) > 0
 				}

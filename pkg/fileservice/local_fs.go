@@ -1051,7 +1051,7 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 			if l.diskCache == nil {
 				return nil
 			}
-			return l.diskCache.DeletePaths(ctx, filePaths)
+			return l.diskCache.deletePathsAfterStorage(ctx, filePaths)
 		}(),
 		func() error {
 			if l.remoteCache == nil {

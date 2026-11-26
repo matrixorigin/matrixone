@@ -357,14 +357,14 @@ func TestDiskCacheCleanupKeepsSamePathExcluded(t *testing.T) {
 
 	waitCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err := cache.startUpdateContext(waitCtx, "same")
+	_, err := cache.startUpdateWithCleanupContext(waitCtx, "same", nil)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 
 	close(releaseCleanup)
 	require.NoError(t, <-firstDone)
-	doneSecond, err := cache.startUpdateContext(context.Background(), "same")
+	doneSecond, err := cache.startUpdateWithCleanupContext(context.Background(), "same", nil)
 	require.NoError(t, err)
-	doneSecond()
+	require.NoError(t, doneSecond())
 }
 
 func TestDiskCacheEvictionTransfersToCleanupOwner(t *testing.T) {
@@ -1254,7 +1254,7 @@ func TestDiskCachePublicationClaimWinsBeforeClose(t *testing.T) {
 			diskPath,
 			tempFile,
 			func() bool {
-				claimed := cache.claimAsyncPublication()
+				claimed := cache.claimAsyncPublication(diskPath)
 				close(claimReached)
 				<-releaseClaim
 				return claimed
@@ -1682,4 +1682,93 @@ func TestDiskCacheWriterToSourceErrorAndExpiredAdmission(t *testing.T) {
 	files, err := os.ReadDir(cache.path)
 	require.NoError(t, err)
 	require.Empty(t, files)
+}
+
+func TestDiskCacheQuotaEvictionDrainsBeforeClose(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), diskCacheLifecycleTestTimeout)
+	defer cancel()
+	cache := newLifecycleTestDiskCache(t)
+	require.NoError(t, cache.SetFile(ctx, "victim", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("old")), nil
+	}))
+	entered, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	capacity := cache.capacityFunc
+	cache.capacityFunc = func() int64 { close(entered); <-resume; return capacity() }
+	quota := errors.New("disk quota exceeded")
+	result := make(chan error, 1)
+	exited := make(chan struct{})
+	defer func() { release(); <-exited }()
+	go func() {
+		defer close(exited)
+		result <- cache.setFile(ctx, "failed", func(context.Context) (io.ReadCloser, error) {
+			return nil, quota
+		}, true)
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("quota eviction did not start")
+	}
+
+	// Seal admission while the old eviction can still unlink the victim.
+	expired, expire := context.WithCancel(ctx)
+	expire()
+	cache.Close(expired)
+	cache.async.mu.Lock()
+	_, admitted := cache.async.mu.pending[cache.pathForFile("failed")]
+	cache.async.mu.Unlock()
+	require.True(t, admitted, "Close lost ownership of an unfinished eviction")
+	wait := &waitStartedContext{Context: ctx, started: make(chan struct{})}
+	closed := make(chan struct{})
+	go func() { cache.Close(wait); close(closed) }()
+	select {
+	case <-wait.started:
+	case <-ctx.Done():
+		t.Fatal("Close did not reach the drain")
+	}
+	release()
+	select {
+	case <-closed:
+	case <-ctx.Done():
+		t.Fatal("Close did not join quota eviction")
+	}
+	require.NoError(t, ctx.Err())
+	require.NoFileExists(t, cache.pathForFile("victim"))
+	require.ErrorIs(t, <-result, quota)
+}
+
+func TestDiskCacheDeleteAfterPublicationClaim(t *testing.T) {
+	ctx, stop := context.WithTimeout(t.Context(), diskCacheLifecycleTestTimeout)
+	defer stop()
+	cache := newLifecycleTestDiskCache(t)
+	path := cache.pathForFile("obj")
+	claimed, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	finished := make(chan error, 1)
+	go func() {
+		_, err := cache.writeFileWithFinalizeMode(ctx, path, func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader("old")), nil
+		}, false, func() bool {
+			close(claimed)
+			<-resume
+			return true
+		})
+		finished <- err
+	}()
+	select {
+	case <-claimed:
+	case <-ctx.Done():
+		t.Fatal("writer did not reach publication")
+	}
+	request, cancel := context.WithCancel(ctx)
+	cancel()
+	for range 2 {
+		require.ErrorIs(t, cache.deletePathsAfterStorage(request, []string{"obj"}), context.Canceled)
+	}
+	release()
+	require.NoError(t, <-finished)
+	require.NoFileExists(t, path)
+	require.False(t, cache.cache.Contains(path))
 }

@@ -1682,7 +1682,7 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 			if s.diskCache == nil {
 				return nil
 			}
-			return s.diskCache.DeletePaths(ctx, filePaths)
+			return s.diskCache.deletePathsAfterStorage(ctx, filePaths)
 		}(),
 		func() error {
 			if s.remoteCache == nil {

@@ -78,6 +78,12 @@ type DiskCache struct {
 type diskCachePathUpdate struct {
 	_               byte
 	evictionPending bool
+	deletion        *diskCachePathDeletion
+}
+
+type diskCachePathDeletion struct {
+	done chan struct{}
+	err  error // visible after done closes
 }
 
 // readGenerations contains only the current generation while at least one Read
@@ -679,12 +685,6 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	asyncFinalize bool,
 	claimPublication func() bool,
 ) (written bool, err error) {
-	// evict if disk is full
-	defer func() {
-		if isDiskFull(err) {
-			d.cache.ForceEvict(ctx, d.capacityFunc()/10)
-		}
-	}()
 	asyncSlotOwned := false
 	if asyncFinalize {
 		if !d.tryReserveAsyncFileFinalize(diskPath) {
@@ -697,6 +697,14 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 			}
 		}()
 	}
+
+	// Register after the admission release so quota recovery and its unlink
+	// callbacks finish before Close can hand the directory to another instance.
+	defer func() {
+		if isDiskFull(err) {
+			d.cache.ForceEvictWithWait(ctx, d.capacityFunc()/10)
+		}
+	}()
 
 	cleanup := func() error { return d.removeUnindexedFile(diskPath) }
 	var doneUpdate func() error
@@ -1038,16 +1046,6 @@ func (d *DiskCache) startUpdateWithCleanup(path string, cleanup func() error) (d
 	return done
 }
 
-func (d *DiskCache) startUpdateContext(ctx context.Context, path string) (done func(), err error) {
-	doneWithError, err := d.startUpdateWithCleanupContext(ctx, path, nil)
-	if err != nil {
-		return nil, err
-	}
-	return func() {
-		_ = doneWithError()
-	}, nil
-}
-
 func (d *DiskCache) startUpdateWithCleanupContext(
 	ctx context.Context,
 	path string,
@@ -1142,6 +1140,14 @@ func (d *DiskCache) finishPathUpdate(path string, update *diskCachePathUpdate) (
 			d.updatingPaths.L.Unlock()
 			return err
 		}
+		if deletion := update.deletion; deletion != nil {
+			update.deletion = nil
+			d.updatingPaths.L.Unlock()
+			deletion.err = d.unlinkDiskPath(path)
+			close(deletion.done)
+			err = errors.Join(err, deletion.err)
+			continue
+		}
 		if !update.evictionPending {
 			delete(d.updatingPaths.m, path)
 			d.updatingPaths.Broadcast()
@@ -1219,42 +1225,71 @@ func (d *DiskCache) DeletePaths(
 	ctx context.Context,
 	paths []string,
 ) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return d.deletePathsAfterStorage(ctx, paths)
+}
+
+// Once storage has deleted a path, cancellation can only stop the wait.
+// First revoke publication for queued fills and transfer physical removal to
+// the current path owner. Readers cannot open that path until removal finishes.
+func (d *DiskCache) deletePathsAfterStorage(ctx context.Context, paths []string) error {
 	canonical, err := canonicalFilePaths(paths)
 	if err != nil {
 		return err
 	}
-	// A range job may still be queued without owning a path update, and a
-	// full-file submitter may still be acquiring its update. Take a snapshot
-	// of matching admissions before unlinking either kind of cache file.
-	for diskPath, done := range d.diskPathsForDelete(canonical) {
+	targets := d.diskPathsForDelete(canonical)
+	deletions := make([]*diskCachePathDeletion, 0, len(targets))
+	for path := range targets {
+		deletions = append(deletions, d.beginPathDeletion(path))
+	}
+	for _, deletion := range deletions {
+		select {
+		case <-deletion.done:
+			err = errors.Join(err, deletion.err)
+		case <-ctx.Done():
+			return errors.Join(err, ctx.Err())
+		}
+	}
+	for _, done := range targets {
 		if done != nil {
 			select {
 			case <-done:
 			case <-ctx.Done():
-				return ctx.Err()
+				return errors.Join(err, ctx.Err())
 			}
 		}
-		if err := d.removeDiskPath(ctx, diskPath); err != nil {
-			return err
-		}
 	}
-	return nil
+	return errors.Join(err, ctx.Err())
 }
 
-func (d *DiskCache) removeDiskPath(ctx context.Context, diskPath string) (err error) {
-	doneUpdate, err := d.startUpdateContext(ctx, diskPath)
-	if err != nil {
+func (d *DiskCache) beginPathDeletion(path string) *diskCachePathDeletion {
+	d.updatingPaths.L.Lock()
+	d.invalidatePathReadsLocked(path)
+	update := d.updatingPaths.m[path]
+	ownPath := update == nil
+	if ownPath {
+		update = new(diskCachePathUpdate)
+		d.updatingPaths.m[path] = update
+	}
+	if update.deletion == nil {
+		update.deletion = &diskCachePathDeletion{done: make(chan struct{})}
+	}
+	deletion := update.deletion
+	d.updatingPaths.L.Unlock()
+	if ownPath {
+		_ = d.finishPathUpdate(path, update)
+	}
+	return deletion
+}
+
+func (d *DiskCache) unlinkDiskPath(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	defer doneUpdate()
-	if err = os.Remove(diskPath); err != nil {
-		if !os.IsNotExist(err) {
-			return
-		}
-		err = nil
-	}
-	d.cache.Delete(ctx, diskPath)
-	return
+	d.cache.Delete(context.Background(), path)
+	return nil
 }
 
 func (d *DiskCache) Evict(ctx context.Context, done chan int64) {

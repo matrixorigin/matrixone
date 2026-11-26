@@ -503,3 +503,37 @@ func TestLocalFSOpenFile(t *testing.T) {
 	f2, err = fs.OpenFile(ctx, "aaa2.txt")
 	assert.NotNil(t, err)
 }
+
+type cancelOnMemoryInvalidation struct {
+	fscache.DataCache
+	cancel context.CancelFunc
+}
+
+func (c cancelOnMemoryInvalidation) DeletePaths(ctx context.Context, paths []string) {
+	c.DataCache.DeletePaths(ctx, paths)
+	c.cancel()
+}
+
+func TestLocalFSCommittedDeleteSurvivesCancellation(t *testing.T) {
+	ctx := t.Context()
+	local, err := NewLocalFS(ctx, "local", t.TempDir(), CacheConfig{
+		MemoryCapacity: ptrTo[toml.ByteSize](1 << 20), DiskPath: ptrTo(t.TempDir()),
+		DiskCapacity: ptrTo[toml.ByteSize](1 << 20), enableDiskCacheForLocalFS: true,
+	}, nil)
+	require.NoError(t, err)
+	defer local.Close(context.Background())
+	require.NoError(t, local.Write(ctx, IOVector{FilePath: "obj", Entries: []IOEntry{{Size: 3, Data: []byte("old")}}}))
+	require.NoError(t, local.diskCache.SetFile(ctx, "obj", func(ctx context.Context) (io.ReadCloser, error) {
+		return local.NewReader(ctx, "obj")
+	}))
+	cached := local.diskCache.pathForFile("obj")
+	require.FileExists(t, cached)
+
+	// LocalFS invalidates memory after unlink and before invalidating disk.
+	request, cancel := context.WithCancel(ctx)
+	defer cancel()
+	local.memCache.cache = cancelOnMemoryInvalidation{local.memCache.cache, cancel}
+	require.ErrorIs(t, local.Delete(request, "local:obj"), context.Canceled)
+	require.NoFileExists(t, local.toNativeFilePath("obj"))
+	require.NoFileExists(t, cached)
+}
