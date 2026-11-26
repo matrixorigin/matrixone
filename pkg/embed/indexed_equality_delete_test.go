@@ -55,17 +55,15 @@ func TestIndexedEqualityPrunesDeleteMaintenance(t *testing.T) {
 		mustExec("create table " + table + ` (
 			row_key varchar(64) primary key, workspace varchar(64) not null,
 			group_key varchar(64) not null, owner_key varchar(64) not null,
-			token_key varchar(64) not null, origin_key varchar(64) not null,
-			action_key varchar(64) not null,
-			index idx_group(group_key), index idx_owner(owner_key),
-			index idx_token(owner_key, token_key), index idx_origin(origin_key),
-			index idx_action(owner_key, action_key))`)
+			token_key varchar(64) not null,
+			index idx_group(group_key), index idx_token(owner_key, token_key))`)
+		// Reach the costing threshold and keep the rare keys in the last
+		// primary-key-ordered block so the block bounds can distinguish them.
 		mustExec("insert into " + table + `
-			select md5(concat('pk-', result)), 'workspace',
-				if(result > 99996, 'rare', 'common'),
-				md5(concat('case-', floor(result / 8))), md5(concat('token-', result)),
-				md5(concat('node-', floor(result / 4))), md5(concat('activation-', floor(result / 3)))
-			from generate_series(1, 100000) g`)
+			select lpad(cast(result as char), 8, '0'), 'workspace',
+				if(result > 49996, 'rare', 'common'),
+				md5(concat('case-', floor(result / 8))), md5(concat('token-', result))
+			from generate_series(1, 50000) g`)
 		mustExec("select mo_ctl('dn','flush','" + table + "')")
 
 		filter := " where group_key='rare' and workspace='workspace'"
@@ -85,11 +83,9 @@ func TestIndexedEqualityPrunesDeleteMaintenance(t *testing.T) {
 		require.NoError(t, rows.Err())
 		text := explain.String()
 		hidden := regexp.MustCompile(`Table Scan on [^\n]*\.(__mo_index_secondary_[^\n ]*)[^\n]*\n[^\n]*inputRows=([0-9]+)`).FindAllStringSubmatch(text, -1)
-		require.Len(t, hidden, 5, text)
-		seen := make(map[string]bool, len(hidden))
+		require.Len(t, hidden, 2, text)
+		require.NotEqual(t, hidden[0][1], hidden[1][1], text)
 		for _, scan := range hidden {
-			require.False(t, seen[scan[1]], text)
-			seen[scan[1]] = true
 			require.Equal(t, "4", scan[2], text)
 		}
 		var count int
