@@ -82,7 +82,7 @@ type TableMetaReader struct {
 	// constructor; an unbound reader keeps the pre-fix unhooked writers,
 	// exactly like the other producer families' forward-compat stance.
 	sinkerOption   ioutil.SinkerOption
-	writeCloneRows func(*batch.Batch) error
+	writeCloneRows func(*batch.Batch, []string) error
 }
 
 // UseCloneRowWrites stages rewritten rows in the destination transaction,
@@ -105,8 +105,8 @@ func (r *TableMetaReader) UseCloneRowWrites(ctx context.Context, destination eng
 			return
 		}
 	}
-	r.writeCloneRows = func(rows *batch.Batch) error {
-		return destination.Write(ctx, rows)
+	r.writeCloneRows = func(rows *batch.Batch, attrs []string) error {
+		return destination.Write(ctx, rows, attrs)
 	}
 }
 
@@ -549,7 +549,9 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 
 	defer dataReader.Close()
 	if r.writeCloneRows != nil {
-		err = readCloneBatches(ctx, dataReader, mp, attrs, colTypes, r.writeCloneRows)
+		err = readCloneBatches(ctx, dataReader, mp, attrs, colTypes, func(rows *batch.Batch) error {
+			return r.writeCloneRows(rows, attrs)
+		})
 		return zap.Skip(), err
 	}
 
@@ -728,7 +730,7 @@ func readCloneBatches(
 	if reader == nil {
 		return nil
 	}
-	data := batch.New(attrs)
+	data := batch.NewWithSize(len(attrs))
 	for i, typ := range colTypes {
 		data.Vecs[i] = vector.NewVec(typ, mp)
 	}

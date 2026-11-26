@@ -2985,7 +2985,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			publishErr = txn.writeFileLockedWithAutoIncrEpochKnown(
 				INSERT, table.accountId, table.db.databaseId, table.tableId,
 				table.db.databaseName, table.tableName, candidate.location,
-				candidate.batch, table.getTxn().tnStores[0],
+				candidate.batch, catalog.ObjectInsertAttrs, table.getTxn().tnStores[0],
 				key.autoIncrEpoch, key.autoIncrEpochKnown,
 			)
 			if publishErr != nil {

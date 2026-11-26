@@ -386,13 +386,12 @@ func TestWorkspaceCatalogInsertOwnsSuccessAndFailure(t *testing.T) {
 			view, err := txn.workspaceAllocation()
 			require.NoError(t, err)
 			input := batch.NewWithSize(1)
-			input.Attrs = []string{"payload"}
 			input.Vecs[0] = vector.NewVec(types.T_int8.ToType(), view)
 			for range rows {
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], int8(42), false, view))
 			}
 			input.SetRowCount(rows)
-			err = txn.adoptCatalogInsert("catalog insert", catalog.MO_COLUMNS_ID, catalog.MO_COLUMNS, input)
+			err = txn.adoptCatalogInsert("catalog insert", catalog.MO_COLUMNS_ID, catalog.MO_COLUMNS, input, []string{"payload"})
 			if rows == 1024 {
 				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 				require.Empty(t, txn.writes)
