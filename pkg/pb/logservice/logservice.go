@@ -238,6 +238,29 @@ func NewLogState() LogState {
 	}
 }
 
+// IsInitialMembershipPrefix recognizes Dragonboat's initial AddNode entries,
+// whose configuration indexes run from 1 through the initial voter count.
+func IsInitialMembershipPrefix(initial, voters, nonVoters map[uint64]string, epoch uint64) bool {
+	if epoch == 0 || epoch >= uint64(len(initial)) || epoch != uint64(len(voters)) || len(nonVoters) != 0 {
+		return false
+	}
+	var last uint64
+	for id, store := range voters {
+		if owner, ok := initial[id]; !ok || owner != store {
+			return false
+		}
+		last = max(last, id)
+	}
+	for id := range initial {
+		if id < last {
+			if _, ok := voters[id]; !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // Update applies the incoming heartbeat message to the LogState with the
 // specified tick used as the timestamp.
 func (s *LogState) Update(hb LogStoreHeartbeat, tick uint64) {

@@ -143,7 +143,7 @@ func newTNService(
 	fs fileservice.FileService,
 	opts tnOptions,
 ) (TNService, error) {
-	svc, err := tnservice.NewService(cfg, rt, fs, nil, opts...)
+	svc, err := tnservice.NewService(cfg, rt, fs, opts...)
 	if err != nil {
 		return nil, err
 	}

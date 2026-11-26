@@ -191,11 +191,17 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 		if op == nil || op.IsEnd() {
 			continue
 		}
-		if owned != nil {
+		if emitted != nil {
 			if emitted[op] {
 				continue
 			}
 			emitted[op] = true
+		}
+		step := op.Check(logState, tnState, cnState, proxyState)
+		if c.startConflictsWithRemoval(step, logState) {
+			continue
+		}
+		if owned != nil {
 			if !owned[op] {
 				c.operators[op.shardID] = append(c.operators[op.shardID], op)
 				owned[op] = true
@@ -203,11 +209,53 @@ func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 		} else {
 			c.operators[op.shardID] = append(c.operators[op.shardID], op)
 		}
-		if step := op.Check(logState, tnState, cnState, proxyState); step != nil && !op.IsEnd() {
+		if step != nil && !op.IsEnd() {
 			commands = append(commands, generateScheduleCommand(step))
 		}
 	}
 	return
+}
+
+// An earlier membership proposal may still commit even after the checker
+// stops retrying it. Leave the slot alone while that operator owns removal.
+func (c *Controller) startConflictsWithRemoval(step OpStep, state pb.LogState) bool {
+	var replica Replica
+	nonVoting := false
+	switch start := step.(type) {
+	case StartLogService:
+		replica = start.Replica
+	case StartNonVotingLogService:
+		replica, nonVoting = start.Replica, true
+	default:
+		return false
+	}
+	epoch := state.Shards[replica.ShardID].Epoch
+	for _, op := range c.operators[replica.ShardID] {
+		if op.IsEnd() {
+			continue
+		}
+		for _, step := range op.steps {
+			var target Replica
+			switch remove := step.(type) {
+			case RemoveLogService:
+				if nonVoting {
+					continue
+				}
+				target = remove.Replica
+			case RemoveNonVotingLogService:
+				if !nonVoting {
+					continue
+				}
+				target = remove.Replica
+			default:
+				continue
+			}
+			if target.ReplicaID == replica.ReplicaID && target.UUID == replica.UUID && target.Epoch == epoch {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func generateScheduleCommand(step OpStep) pb.ScheduleCommand {
@@ -238,10 +286,6 @@ func generateScheduleCommand(step OpStep) pb.ScheduleCommand {
 		return addTnReplica(st)
 	case RemoveTnReplica:
 		return removeTnReplica(st)
-	case StopTnStore:
-		return stopTnStore(st)
-	case StopLogStore:
-		return stopLogStore(st)
 	case CreateTaskService:
 		return createTaskService(st)
 	case DeleteCNStore:
@@ -423,26 +467,6 @@ func removeTnReplica(st RemoveTnReplica) pb.ScheduleCommand {
 			ChangeType: pb.StopReplica,
 		},
 		ServiceType: pb.TNService,
-	}
-}
-
-func stopTnStore(st StopTnStore) pb.ScheduleCommand {
-	return pb.ScheduleCommand{
-		UUID: st.StoreID,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: st.StoreID,
-		},
-		ServiceType: pb.TNService,
-	}
-}
-
-func stopLogStore(st StopLogStore) pb.ScheduleCommand {
-	return pb.ScheduleCommand{
-		UUID: st.StoreID,
-		ShutdownStore: &pb.ShutdownStore{
-			StoreID: st.StoreID,
-		},
-		ServiceType: pb.LogService,
 	}
 }
 

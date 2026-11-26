@@ -130,6 +130,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		for _, col := range tableDef.Cols {
 			oldColName2Idx[alias+"."+col.Name] = int32(len(selectList))
 			e := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			e.StoredValue = isEnumOrSetPlanType(&col.Typ)
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: e,
 			})
@@ -292,15 +293,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					}
 				}
 
-				// The updated column's OLD value was appended to the project list as
-				// the raw column scan, which for ENUM/SET/geometry columns is a
-				// VARCHAR display value (cast_index_to_value for ENUM). Index tables
-				// store the typed value (e.g. the T_enum index), and INSERT casts the
-				// value before building index keys (bind_insert.go). Cast the OLD
-				// value the same way so UPDATE index-maintenance joins build keys in
-				// the stored typed representation; otherwise the join compares VARCHAR
-				// against the typed index key and either fails to bind (nil-pointer
-				// panic) or silently misses the row (update does not take effect).
+				// The generated OLD projection retains the physical ENUM/SET value.
+				// Keep it aligned with the column type used for index maintenance.
 				if oldPos, ok := oldColName2Idx[alias+"."+col.Name]; ok && oldPos != colPos {
 					oldExpr := selectNode.ProjectList[oldPos]
 					if isEnumPlanType(&col.Typ) {
@@ -879,6 +873,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 
 			var leftExpr *plan.Expr
+			var prefixLengths map[string]int
 			if isSpatialIndexDef(idxDef) {
 				colPos := oldColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]
 				leftExpr = &plan.Expr{
@@ -893,7 +888,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			} else {
 				args := make([]*plan.Expr, len(idxDef.Parts))
 
-				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				prefixLengths, err = catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 				if err != nil {
 					return 0, err
 				}
@@ -937,6 +932,21 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				rightExpr,
 			})
 
+			joinConditions := []*plan.Expr{joinCond}
+			if indexNeedsOwnerMatch(tableDef, idxDef, prefixLengths) {
+				pkName := tableDef.Pkey.PkeyColName
+				basePos, ok := oldColName2Idx[alias+"."+pkName]
+				if !ok || basePos < 0 || int(basePos) >= len(selectNode.ProjectList) {
+					return 0, moerr.NewInternalErrorf(builder.GetContext(), "UPDATE cannot locate old primary key %s", pkName)
+				}
+				baseOwner := GetColExpr(selectNode.ProjectList[basePos].Typ, selectNodeTag, basePos)
+				ownerCond, err := builder.bindIndexOwnerProbe(baseOwner, idxScanNodes[i][j], rightPkPos)
+				if err != nil {
+					return 0, err
+				}
+				joinConditions = append(joinConditions, ownerCond)
+			}
+
 			joinType := plan.Node_LEFT
 			if !idxDef.Unique && !isSpatialIndexDef(idxDef) {
 				joinType = plan.Node_INNER
@@ -945,7 +955,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				NodeType: plan.Node_JOIN,
 				Children: []int32{lastNodeID, idxTableNodeID},
 				JoinType: joinType,
-				OnList:   []*plan.Expr{joinCond},
+				OnList:   joinConditions,
 			}, bindCtx)
 		}
 	}

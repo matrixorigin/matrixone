@@ -309,6 +309,10 @@ func (b *Builder) buildToAddNonVotingSteps() *Builder {
 }
 
 func (b *Builder) buildSteps() error {
+	if len(b.originPeers) == 0 || len(b.targetPeers) == 0 {
+		return moerr.NewInternalErrorNoCtx("log membership change requires a voting executor before and after")
+	}
+
 	b.buildToRemoveSteps().
 		buildToAddSteps().
 		buildToRemoveNonVotingSteps().

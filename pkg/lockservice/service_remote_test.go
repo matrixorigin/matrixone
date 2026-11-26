@@ -1638,34 +1638,30 @@ func TestLockWithBindNotFound(t *testing.T) {
 	)
 }
 
-func TestUnlockWithBindNotFound(t *testing.T) {
-	runBindChangedTests(
-		t,
-		false,
-		func(
-			ctx context.Context,
-			alloc *lockTableAllocator,
-			l1, l2, l3 *service,
-			table uint64) {
+func TestUnlockReleasesOriginalOwnerAfterCacheRebind(t *testing.T) {
+	runLockServiceTests(t, []string{"owner", "source", "new-cache-route"}, func(_ *lockTableAllocator, nodes []*service) {
+		owner, source, newRoute := nodes[0], nodes[1], nodes[2]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table = 1023
+		row := []byte{2}
+		rows := [][]byte{row}
+		opts := newTestRowExclusiveOptions()
+		seed, id := []byte("seed"), []byte("remote-holder")
+		_, err := owner.Lock(ctx, table, rows, seed, opts)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, seed, timestamp.Timestamp{}))
+		_, err = source.Lock(ctx, table, rows, id, opts)
+		require.NoError(t, err)
 
-			// change l2's bind to s3, no bind in s3
-			l2.handleBindChanged(pb.LockTable{
-				Table:       table,
-				ServiceID:   l3.serviceID,
-				Valid:       true,
-				Version:     alloc.version,
-				OriginTable: table,
-			})
-
-			txnID2 := []byte("txn2")
-			l2.Unlock(ctx, txnID2, timestamp.Timestamp{})
-
-			checkBind(
-				t,
-				pb.LockTable{Table: table, ServiceID: l3.serviceID, Valid: true, Version: alloc.version, OriginTable: table},
-				l2)
-		},
-	)
+		bind := source.tableGroups.get(0, table).getBind()
+		bind.ServiceID = newRoute.serviceID
+		source.handleBindChanged(bind)
+		require.NoError(t, source.Unlock(ctx, id, timestamp.Timestamp{}))
+		_, held, err := owner.GetLockHolder(ctx, table, row, opts)
+		require.NoError(t, err)
+		require.False(t, held, "physical release must target the original owner")
+	})
 }
 
 func TestGetLockWithBindNotFound(t *testing.T) {

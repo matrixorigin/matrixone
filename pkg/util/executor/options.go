@@ -501,6 +501,17 @@ func (opts StatementOption) WithInheritedEnums(domains map[string]plan.Type) Sta
 	return opts
 }
 
+// IndexBackfillSourceID identifies the source of an internally generated
+// index backfill or duplicate check. Zero leaves ordinary SQL binding intact.
+func (opts StatementOption) IndexBackfillSourceID() uint64 {
+	return opts.indexBackfillSourceID
+}
+
+func (opts StatementOption) WithIndexBackfillSourceID(tableID uint64) StatementOption {
+	opts.indexBackfillSourceID = tableID
+	return opts
+}
+
 func (opts StatementOption) KeepLogicalId() uint64 {
 	return opts.keepLogicalId
 }

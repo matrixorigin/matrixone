@@ -207,7 +207,7 @@ func TestPrecheckAndInsertUniqueIndexTableUsesSkipDedupAndPipelineFlush(t *testi
 		Unique:         true,
 	}
 
-	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL)
+	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL, 42)
 	require.ErrorIs(t, err, insertErr)
 	require.Equal(t, []string{checkSQL, insertSQL}, spyExec.executedSQLs)
 
@@ -221,6 +221,7 @@ func TestPrecheckAndInsertUniqueIndexTableUsesSkipDedupAndPipelineFlush(t *testi
 	require.NotNil(t, opt)
 	require.True(t, opt.SkipPkDedup)
 	require.Equal(t, indexDef.IndexTableName, opt.TargetTableName)
+	require.EqualValues(t, 42, spyExec.insertOption.IndexBackfillSourceID())
 
 	require.Same(t, topCtx, proc.Ctx)
 	require.NotEqual(t, true, proc.Ctx.Value(ioutil.PipelineFlushKey))
@@ -252,7 +253,7 @@ func TestPrecheckAndInsertUniqueIndexTableRejectsDuplicateBeforeInsert(t *testin
 		Unique:         true,
 	}
 
-	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL)
+	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL, 42)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	require.Contains(t, err.Error(), "Duplicate entry '7' for key '__mo_index_idx_col'")
@@ -290,7 +291,7 @@ func TestPrecheckAndInsertUniqueIndexTableFormatsCompoundDuplicate(t *testing.T)
 		Unique:         true,
 	}
 
-	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL)
+	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL, 42)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	require.Contains(t, err.Error(), "Duplicate entry '(1,2)' for key '__mo_index_idx_col'")

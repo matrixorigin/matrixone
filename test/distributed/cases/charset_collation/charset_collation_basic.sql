@@ -434,8 +434,23 @@ ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4;
 SHOW CREATE TABLE t_alter;
 
 -- Alter column collation
-ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t_alter VALUES (1, '😀');
+ALTER TABLE t_alter MODIFY COLUMN name LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT 'Publish Error Message';
 SHOW CREATE TABLE t_alter;
+SHOW FULL COLUMNS FROM t_alter LIKE 'name';
+SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'charset_test' AND TABLE_NAME = 't_alter' AND COLUMN_NAME = 'name';
+SELECT HEX(name), CHAR_LENGTH(name) FROM t_alter;
+
+-- A later COPY must preserve the explicit declaration.
+ALTER TABLE t_alter ALGORITHM=COPY, ADD COLUMN extra INT;
+SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'charset_test' AND TABLE_NAME = 't_alter' AND COLUMN_NAME = 'name';
+
+ALTER TABLE t_alter CHANGE COLUMN name renamed LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT 'Publish Error Message';
+SELECT HEX(renamed), CHAR_LENGTH(renamed) FROM t_alter;
+SELECT COLUMN_NAME, CHARACTER_SET_NAME, COLLATION_NAME, COLUMN_COMMENT FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'charset_test' AND TABLE_NAME = 't_alter' AND COLUMN_NAME IN ('name', 'renamed');
 
 -- @case
 -- @desc: Test index with different collations
@@ -601,6 +616,38 @@ INSERT INTO t_edge_cases VALUES (9, '  test  ');
 
 SELECT * FROM t_edge_cases ORDER BY id;
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_edge_cases ORDER BY id;
+
+-- @case
+-- @desc: Temporal extraction preserves microseconds with an explicit charset
+-- @label:bvt
+CREATE TABLE t_extract_charset (legacy_text VARCHAR(32), explicit_text VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin);
+INSERT INTO t_extract_charset VALUES ('2025-01-02 03:04:05.123456', '2025-01-02 03:04:05.123456');
+SELECT EXTRACT(MICROSECOND FROM legacy_text) AS legacy_us, EXTRACT(MICROSECOND FROM explicit_text) AS explicit_us FROM t_extract_charset;
+
+-- @case
+-- @desc: Text interval declarations preserve typed temporal precision
+-- @label:bvt
+CREATE TABLE t_interval_charset (dt DATETIME(0), legacy_text VARCHAR(32), explicit_text VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin);
+INSERT INTO t_interval_charset VALUES ('2025-01-02 03:04:05', '00:00:00.123456', '00:00:00.123456');
+SELECT ADDTIME(dt, legacy_text) AS legacy_add, ADDTIME(dt, explicit_text) AS explicit_add, SUBTIME(dt, legacy_text) AS legacy_sub, SUBTIME(dt, explicit_text) AS explicit_sub FROM t_interval_charset;
+
+-- @case
+-- @desc: Widen VARCHAR in place across equivalent text charset declarations
+-- @label:bvt
+CREATE TABLE t_inplace_charset (id INT PRIMARY KEY, payload VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin);
+INSERT INTO t_inplace_charset VALUES (1, '😀');
+ALTER TABLE t_inplace_charset MODIFY COLUMN payload VARCHAR(20), ALGORITHM=INPLACE;
+SELECT CONCAT(CHARACTER_SET_NAME, '/', COLLATION_NAME, '/', CHARACTER_MAXIMUM_LENGTH) AS column_metadata FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_inplace_charset' AND COLUMN_NAME = 'payload';
+ALTER TABLE t_inplace_charset MODIFY COLUMN payload VARCHAR(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, ALGORITHM=INPLACE;
+SELECT CONCAT(CHARACTER_SET_NAME, '/', COLLATION_NAME, '/', CHARACTER_MAXIMUM_LENGTH) AS column_metadata FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_inplace_charset' AND COLUMN_NAME = 'payload';
+SELECT HEX(payload) AS payload_hex FROM t_inplace_charset;
+
+-- An added column uses the same charset metadata as a modified column.
+ALTER TABLE t_inplace_charset ADD COLUMN added LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT 'Added payload';
+UPDATE t_inplace_charset SET added = payload WHERE id = 1;
+SELECT COLUMN_NAME, CHARACTER_SET_NAME, COLLATION_NAME, COLUMN_COMMENT FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_inplace_charset' AND COLUMN_NAME = 'added';
+SELECT HEX(added) AS payload_hex FROM t_inplace_charset;
 
 -- @case
 -- @desc: Cleanup

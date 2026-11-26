@@ -42,7 +42,7 @@ var (
 	}
 	InitInformationSchemaSysTables = []string{
 		InformationSchemaKeyColumnUsageDDL,
-		InformationSchemaColumnsDDL,
+		InformationSchemaColumnsUTF8MB4DDL(),
 		InformationSchemaProfilingDDL,
 		InformationSchemaProcesslistDDL,
 		InformationSchemaUserPrivilegesDDL,

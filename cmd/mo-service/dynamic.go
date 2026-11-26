@@ -45,19 +45,18 @@ func startDynamicCluster(
 	ctx context.Context,
 	cfg *LaunchConfig,
 	stopper *stopper.Stopper,
-	shutdownC chan struct{},
 ) error {
-	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, shutdownC); err != nil {
+	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper); err != nil {
 		return err
 	}
-	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC); err != nil {
+	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper); err != nil {
 		return err
 	}
 	if err := startDynamicCNServices("./mo-data", cfg.Dynamic); err != nil {
 		return err
 	}
 	if *withProxy {
-		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, shutdownC); err != nil {
+		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper); err != nil {
 			return err
 		}
 	}
