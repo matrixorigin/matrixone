@@ -211,9 +211,9 @@ func TestDecimal128ValidityAdmissionFailure(t *testing.T) {
 			require.EqualValues(t, 64, account.Snapshot().Used)
 			require.Zero(t, out.GetNulls().GetBitmap().CapWords())
 			input.Vecs[0].SetNull(0)
-			out, err = executor.Eval(proc, []*batch.Batch{input}, nil)
-			require.NoError(t, err, "the NULL bitmap is Go-owned and is not admitted")
-			require.True(t, out.IsNull(0))
+			_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity,
+				"a nullable result reserves its NULL bitmap against the account")
 			require.EqualValues(t, 64, account.Snapshot().Used)
 			input.Vecs[0].GetNulls().Reset()
 			_, err = executor.Eval(proc, []*batch.Batch{input}, nil)

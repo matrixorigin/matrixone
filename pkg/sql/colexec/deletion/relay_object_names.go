@@ -31,13 +31,15 @@
 // released its local owner, and a cancellation before the coordinator's
 // record left the tombstone files enumerable nowhere.
 //
-// The recognizer is attribute-anchored and excludes the row-only class
+// The recognizer is layout-anchored (a batch carries no names) and excludes the row-only class
 // by the producer's own Type discriminator; a DeltaLoc that cannot
 // decode rejects the ack instead of adopting a subset of the tombstones
 // the delete persisted.
 package deletion
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -68,6 +70,20 @@ func (op *PartitionDelete) ProducesRemotePersistedObjectMetadata() bool {
 	return op.raw != nil && op.raw.RemoteDelete
 }
 
+// isRemoteDeleteLayout reports whether bat has makeDelRemoteBatch's
+// leading layout (blk id, DeltaLoc, Type, Partition).
+func isRemoteDeleteLayout(bat *batch.Batch) bool {
+	if bat == nil || len(bat.Vecs) < 4 {
+		return false
+	}
+	for i, oid := range [4]types.T{types.T_text, types.T_text, types.T_int8, types.T_int32} {
+		if bat.Vecs[i] == nil || bat.Vecs[i].GetType().Oid != oid {
+			return false
+		}
+	}
+	return true
+}
+
 // TryExtractRemoteDeleteObjectNames returns ok=true only for a batch
 // carrying the standalone deletion operator's remote layout, with one
 // canonical name per flushed tombstone object, or an error when a
@@ -75,20 +91,7 @@ func (op *PartitionDelete) ProducesRemotePersistedObjectMetadata() bool {
 func TryExtractRemoteDeleteObjectNames(
 	bat *batch.Batch, mp *mpool.MPool,
 ) (names []string, ok bool, err error) {
-	if bat == nil || len(bat.Vecs) < 4 || bat.Vecs[0].Length() == 0 {
-		return nil, false, nil
-	}
-	if len(bat.Attrs) < 4 ||
-		bat.Attrs[0] != catalog.BlockMeta_Delete_ID ||
-		bat.Attrs[1] != catalog.BlockMeta_DeltaLoc ||
-		bat.Attrs[2] != catalog.BlockMeta_Type ||
-		bat.Attrs[3] != catalog.BlockMeta_Partition {
-		return nil, false, nil
-	}
-	if bat.Vecs[0].GetType().Oid != types.T_text ||
-		bat.Vecs[1].GetType().Oid != types.T_text ||
-		bat.Vecs[2].GetType().Oid != types.T_int8 ||
-		bat.Vecs[3].GetType().Oid != types.T_int32 {
+	if !isRemoteDeleteLayout(bat) || bat.Vecs[0].Length() == 0 {
 		return nil, false, nil
 	}
 	classes := vector.MustFixedColNoTypeCheck[int8](bat.Vecs[2])
@@ -111,14 +114,10 @@ func TryExtractRemoteDeleteObjectNames(
 		if err := inner.UnmarshalBinaryWithAnyMp(blob, mp); err != nil {
 			return nil, false, err
 		}
-		statsVec := -1
-		for j, attr := range inner.Attrs {
-			if attr == catalog.ObjectMeta_ObjectStats {
-				statsVec = j
-				break
-			}
-		}
-		if statsVec < 0 || inner.Vecs[statsVec].Length() == 0 {
+		// The producer's fixed layout (TombstoneObjectStatsAttrs) places
+		// the stats column; names written on the wire are never read.
+		statsVec := slices.Index(TombstoneObjectStatsAttrs, catalog.ObjectMeta_ObjectStats)
+		if statsVec >= len(inner.Vecs) || inner.Vecs[statsVec].Length() == 0 {
 			return nil, false, moerr.NewInternalErrorNoCtx(
 				"issue #25590: a flushed tombstone row's stats batch carries no object-stats column")
 		}

@@ -31,7 +31,7 @@ import (
 func TestToPBBatchPreservesRepresentation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(4)
-	bat.Attrs = []string{"fixed", "varlen", "const", "null"}
+	batAttrs := []string{"fixed", "varlen", "const", "null"}
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
@@ -42,18 +42,16 @@ func TestToPBBatchPreservesRepresentation(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(bat.Vecs[3], int64(0), true, mp))
 	t.Cleanup(func() { bat.Clean(mp) })
 
-	pb, err := toPBBatch(bat)
+	pb, err := toPBBatch(bat, batAttrs)
 	require.NoError(t, err)
 	require.Len(t, pb.Vecs, 4)
 	require.Equal(t, len(pb.Vecs), cap(pb.Vecs))
-	require.Equal(t, bat.Attrs, pb.Attrs)
+	require.Equal(t, batAttrs, pb.Attrs)
 	require.True(t, pb.Vecs[2].IsConst)
 	require.False(t, pb.Vecs[3].IsConst)
 	require.NotEmpty(t, bat.Vecs[1].GetArea())
 	require.Equal(t, bat.Vecs[1].GetArea(), pb.Vecs[1].Area)
 
-	bat.Attrs[0] = "changed"
-	require.Equal(t, "changed", pb.Attrs[0])
 	pb.Vecs[0].Data[0] = 1
 	require.Equal(t, byte(1), bat.Vecs[0].GetData()[0])
 	pb.Vecs[1].Area[0] = 'x'
@@ -64,7 +62,7 @@ func TestToPBBatchPreservesRepresentation(t *testing.T) {
 }
 
 func TestToPBBatchKeepsNilVecsForEmptyBatch(t *testing.T) {
-	pb, err := toPBBatch(new(batch.Batch))
+	pb, err := toPBBatch(new(batch.Batch), nil)
 	require.NoError(t, err)
 	require.Nil(t, pb.Vecs)
 }
@@ -76,7 +74,9 @@ func BenchmarkToPBBatchPreallocation(b *testing.B) {
 			benchmarkToPBBatch(b, bat, toPBBatchAppend)
 		})
 		b.Run(fmt.Sprintf("vectors=%d/exact", size), func(b *testing.B) {
-			benchmarkToPBBatch(b, bat, toPBBatch)
+			benchmarkToPBBatch(b, bat, func(bat *batch.Batch) (*api.Batch, error) {
+				return toPBBatch(bat, nil)
+			})
 		})
 	}
 }
@@ -105,7 +105,6 @@ func benchmarkToPBBatch(b *testing.B, bat *batch.Batch, convert func(*batch.Batc
 
 func toPBBatchAppend(bat *batch.Batch) (*api.Batch, error) {
 	rbat := new(api.Batch)
-	rbat.Attrs = bat.Attrs
 	for _, vec := range bat.Vecs {
 		pbVector, err := vector.VectorToProtoVector(vec)
 		if err != nil {

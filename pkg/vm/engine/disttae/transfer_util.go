@@ -141,7 +141,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 	logs = append(logs, zap.Int("origin-tombstoneObjects", len(tombstoneObjects)))
 
 	if tombstoneObjects, err = ioutil.CoarseFilterTombstoneObject(
-		ctx, deletedObjectsIter, tombstoneObjects, fs); err != nil {
+		ctx, deletedObjectsIter, tombstoneObjects, fs, mp); err != nil {
 		return nil, logs, err
 	} else if len(tombstoneObjects) == 0 {
 		return nil, logs, nil
@@ -286,7 +286,7 @@ func (flow *TransferFlow) Process(ctx context.Context) error {
 	for {
 		buffer := flow.getBuffer()
 		defer flow.putBuffer(buffer)
-		done, err := flow.sourcer.Read(ctx, buffer.Attrs, nil, flow.mp, buffer)
+		done, err := flow.sourcer.Read(ctx, flow.buffer.Attrs(), nil, flow.mp, buffer)
 		if err != nil {
 			return err
 		}

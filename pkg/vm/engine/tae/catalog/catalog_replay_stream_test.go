@@ -126,7 +126,7 @@ func TestReplaySystemTablesOwnsRowsAcrossBlocks(t *testing.T) {
 	}
 	scan := func(ctx context.Context, entry *TableEntry, _ txnif.AsyncTxn, visit func(*containers.Batch, int) error) error {
 		for _, source := range blocks[entry.ID] {
-			b := containers.ToTNBatch(source, mp)
+			b := containers.ToTNBatch(source, catalogTupleAttrsForTest(entry.ID), mp)
 			if source == legacyLabel {
 				delete(b.Nameidx, pkgcatalog.SystemColAttr_Seqnum)
 			}
@@ -224,7 +224,7 @@ func TestReplaySystemTablesStopsOnScannerError(t *testing.T) {
 			return want
 		}
 		require.NoError(t, err)
-		b := containers.ToTNBatch(source, mp)
+		b := containers.ToTNBatch(source, catalogTupleAttrsForTest(entry.ID), mp)
 		defer b.Close()
 		return visit(b, 0)
 	}
@@ -325,7 +325,7 @@ func TestReplaySystemTablesRejectsIncompleteCatalog(t *testing.T) {
 					}
 				}
 				require.NoError(t, e)
-				b := containers.ToTNBatch(source, mp)
+				b := containers.ToTNBatch(source, catalogTupleAttrsForTest(entry.ID), mp)
 				defer b.Close()
 				for row := 0; row < b.Length(); row++ {
 					if err := visit(b, row); err != nil {
@@ -344,5 +344,18 @@ func TestReplaySystemTablesRejectsIncompleteCatalog(t *testing.T) {
 				require.Empty(t, replayer.jobs)
 			}
 		})
+	}
+}
+
+// catalogTupleAttrsForTest names the columns of a catalog tuple batch built
+// for the catalog table id.
+func catalogTupleAttrsForTest(id uint64) []string {
+	switch id {
+	case pkgcatalog.MO_DATABASE_ID:
+		return pkgcatalog.MoDatabaseSchema
+	case pkgcatalog.MO_TABLES_ID:
+		return pkgcatalog.MoTablesSchema
+	default:
+		return pkgcatalog.MoColumnsSchema
 	}
 }

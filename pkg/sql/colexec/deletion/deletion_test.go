@@ -79,8 +79,8 @@ func prepareDeletionTest(
 	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).AnyTimes()
 
 	relation := mock_frontend.NewMockRelation(ctrl)
-	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	relation.EXPECT().Write(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	factory := &relationHandleFactory{Relation: relation, handle: relation}
 	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(factory, nil).AnyTimes()
 

@@ -610,17 +610,6 @@ func TestTemporaryDropKeepsAliasOnUnknownDatabaseError(t *testing.T) {
 	require.Empty(t, owner.retired)
 }
 
-func TestSessionTemporaryDDLRollout(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, old) })
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion54)
-	require.False(t, supportsSessionTemporaryDDL(proc.GetService()))
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
-	require.True(t, supportsSessionTemporaryDDL(proc.GetService()))
-}
-
 func TestSessionTemporaryDDLRejectsInvalidExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)

@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"strconv"
@@ -259,8 +260,70 @@ func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, err
 }
 
 func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (tree.Statement, error) {
-	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
+	return ParseOneWithSQLModeFlags(ctx, sql, lower, ParseSQLModeFlags(sqlMode))
+}
+
+// ParseOneWithSQLModeFlags parses one statement with the given lexer flags.
+func ParseOneWithSQLModeFlags(ctx context.Context, sql string, lower int64, flags SQLModeFlags) (tree.Statement, error) {
+	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, flags)
 	defer PutScanner(lexer.scanner)
+	return parseOne(ctx, lexer)
+}
+
+// WhereSource identifies a WHERE expression in the original SQL. Its offsets
+// include trivia between WHERE and the first expression token.
+type WhereSource struct {
+	start, end                   int
+	startInComment, endInComment bool
+}
+
+// Split returns independently embeddable SQL before, inside, and after the
+// predicate. MySQL executable comments can cross either grammar boundary.
+func (w WhereSource) Split(sql string, keepWhere bool) (prefix, predicate, suffix string, ok bool) {
+	if w.start < len("where") || w.end <= w.start || w.end > len(sql) ||
+		!strings.EqualFold(sql[w.start-len("where"):w.start], "where") {
+		return "", "", "", false
+	}
+	prefixEnd := w.start
+	if !keepWhere {
+		prefixEnd -= len("where")
+	}
+	return balanceExecutableComment(sql[:prefixEnd], false, w.startInComment),
+		balanceExecutableComment(sql[w.start:w.end], w.startInComment, w.endInComment),
+		balanceExecutableComment(sql[w.end:], w.endInComment, false), true
+}
+
+// rewriteMergeName folds names consumed by case-insensitive SQL catalogs.
+func (l *Lexer) rewriteMergeName(name string) string {
+	if l.whereSources != nil {
+		return strings.ToLower(name)
+	}
+	return name
+}
+
+// ParseOneForRewriteMerge parses comparison trees and records WHERE source ranges.
+// Mode 1 folds identifier tokens for shape comparison. Literals retain their type and bytes.
+func ParseOneForRewriteMerge(ctx context.Context, sql string, lower int64, mode SQLModeFlags) (tree.Statement, map[*tree.Where]WhereSource, error) {
+	l := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, mode)
+	defer PutScanner(l.scanner)
+	l.whereSources = make(map[*tree.Where]WhereSource)
+	stmt, err := parseOne(ctx, l)
+	return stmt, l.whereSources, err
+}
+
+func (l *Lexer) whereClause(expr tree.Expr, start int, lookahead bool) *tree.Where {
+	w := &tree.Where{Type: tree.AstWhere, Expr: expr}
+	if l.whereSources != nil {
+		end, inside := l.scanner.Pos, l.scanner.CommentFlag
+		if lookahead {
+			end, inside = l.beforeLookahead, l.beforeInComment
+		}
+		l.whereSources[w] = WhereSource{start, end, l.whereInComment[start], inside}
+	}
+	return w
+}
+
+func parseOne(ctx context.Context, lexer *Lexer) (tree.Statement, error) {
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
 			s.Free()
@@ -299,6 +362,10 @@ type Lexer struct {
 	parseFirst            bool
 	stopLexing            bool
 	statementEnd          int
+	whereSources          map[*tree.Where]WhereSource
+	whereInComment        map[int]bool
+	beforeLookahead       int
+	beforeInComment       bool
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -403,6 +470,9 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if l.stopLexing {
 		return 0
 	}
+	if l.whereSources != nil {
+		l.beforeLookahead, l.beforeInComment = l.scanner.Pos, l.scanner.CommentFlag
+	}
 	var typ int
 	var str string
 	if l.lastToken == int('.') {
@@ -411,6 +481,12 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		typ, str = l.scanner.Scan()
 	}
 	lval.pos = l.scanner.Pos
+	if l.whereSources != nil && typ == WHERE && l.scanner.CommentFlag {
+		if l.whereInComment == nil {
+			l.whereInComment = make(map[int]bool)
+		}
+		l.whereInComment[lval.pos] = true
+	}
 	l.scanner.LastToken = str
 	// yacc precedence is static, so HIGH_NOT_PRECEDENCE uses a distinct token
 	// that the grammar places at the unary-operator precedence.
@@ -486,6 +562,30 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		typ = ADMIN
 	}
 
+	icebergRefName := l.previousToken == FOR_ICEBERG && l.lastToken == REF
+	if l.whereSources != nil && !icebergRefName {
+		// Both binary introducer forms bind as the same category, even when
+		// the byte string is empty. This token never goes back into the SQL.
+		if typ == STRING && l.lastToken == UNDERSCORE_BINARY {
+			typ, str = HEXNUM, "0x"+hex.EncodeToString([]byte(str))
+		}
+		switch {
+		case typ == HEXNUM:
+			// Binding pads a partial byte without removing leading zero bytes.
+			if len(str)%2 != 0 {
+				str = "0x0" + str[2:]
+			}
+			str = strings.ToLower(str)
+		case typ == BIT_LITERAL:
+			digits := str[2:]
+			padding := (8 - len(digits)%8) % 8
+			str = "0b" + strings.Repeat("0", padding) + digits
+		case l.lower == 1 && (typ == ID || typ == QUOTE_ID):
+			str = tree.NewCStr(str, 1).Compare()
+		case l.lower == 1 && typ != 0 && keywords[strings.ToLower(str)] == typ:
+			str = strings.ToLower(str)
+		}
+	}
 	l.previousToken = l.lastToken
 	l.lastToken = typ
 	lval.str = str

@@ -296,10 +296,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 			objectID := rowID.BorrowObjectID()
 			obj, err := task.tableEntry.GetObjectByID(objectID, false)
 			if err != nil || canPruneTombstoneTarget(obj, mergeStartTS) {
-				if data.Deletes == nil {
-					data.Deletes = &nulls.Nulls{}
-				}
-				data.Deletes.Add(uint64(row))
+				data.Delete(row)
 				return nil
 			}
 			return nil
@@ -314,7 +311,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	task.nMergedBlk[objIdx]++
 
 	if retBatch == nil {
-		retBatch = batch.New(task.attrs)
+		retBatch = batch.NewWithSize(len(task.attrs))
 	}
 	// Re-wire CN batch vectors to the new TN batch's downstream vectors.
 	for i, idx := range task.idxs {

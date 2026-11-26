@@ -43,7 +43,7 @@ func BenchmarkTemporalConstantEvaluation(b *testing.B) {
 				b.Fatal(err)
 			}
 			defer executor.Free()
-			batchInput := batch.New(nil)
+			batchInput := batch.NewWithSize(0)
 			batchInput.SetRowCount(tc.rows)
 			batches := []*batch.Batch{batchInput}
 			if _, err = executor.Eval(proc, batches, nil); err != nil {

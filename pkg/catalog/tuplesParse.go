@@ -57,9 +57,9 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 			return nil, nil, err
 		}
 		if e.EntryType == api.Entry_Insert {
-			return &CreateDatabaseReq{Bat: bat, Cmds: genCreateDatabases(GenRows(bat))}, es[1:], nil
+			return &CreateDatabaseReq{Bat: bat, Attrs: e.Bat.Attrs, Cmds: genCreateDatabases(GenRows(bat))}, es[1:], nil
 		}
-		return &DropDatabaseReq{Bat: bat, Cmds: genDropDatabases(GenRows(bat))}, es[1:], nil
+		return &DropDatabaseReq{Bat: bat, Attrs: e.Bat.Attrs, Cmds: genDropDatabases(GenRows(bat))}, es[1:], nil
 	}
 
 	if e.DatabaseId == MO_CATALOG_ID && e.TableId == MO_TABLES_ID {
@@ -78,13 +78,17 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 			}
 			if e.EntryType == api.Entry_Insert {
 				return &CreateTableReq{
-					TableBat:  bat,
-					ColumnBat: []*batch.Batch{colBat},
+					TableBat:    bat,
+					ColumnBat:   []*batch.Batch{colBat},
+					TableAttrs:  e.Bat.Attrs,
+					ColumnAttrs: [][]string{es[1].Bat.Attrs},
 				}, es[2:], nil
 			} else {
 				return &DropTableReq{
-					TableBat:  bat,
-					ColumnBat: []*batch.Batch{colBat},
+					TableBat:    bat,
+					ColumnBat:   []*batch.Batch{colBat},
+					TableAttrs:  e.Bat.Attrs,
+					ColumnAttrs: [][]string{es[1].Bat.Attrs},
 				}, es[2:], nil
 			}
 		}
@@ -190,17 +194,21 @@ func parseDeleteTable(es []*api.Entry) (any, []*api.Entry, error) {
 	}
 	cmds := genDropTables(GenRows(bat))
 	colBatch := make([]*batch.Batch, 0, len(cmds))
+	colAttrs := make([][]string, 0, len(cmds))
 	for i := 0; i < len(cmds); i++ {
 		cbat, err := getColumnBatch(es[i+1])
 		if err != nil {
 			return nil, nil, err
 		}
 		colBatch = append(colBatch, cbat)
+		colAttrs = append(colAttrs, es[i+1].Bat.Attrs)
 	}
 	req := &DropTableReq{
-		Cmds:      cmds,
-		TableBat:  bat,
-		ColumnBat: colBatch,
+		Cmds:        cmds,
+		TableBat:    bat,
+		ColumnBat:   colBatch,
+		TableAttrs:  es[0].Bat.Attrs,
+		ColumnAttrs: colAttrs,
 	}
 
 	return req, es[len(cmds)+1:], nil
@@ -214,17 +222,21 @@ func parseCreateTable(es []*api.Entry) (any, []*api.Entry, error) {
 	cmds := genCreateTables(GenRows(bat))
 
 	colBatch := make([]*batch.Batch, 0, len(cmds))
+	colAttrs := make([][]string, 0, len(cmds))
 	for i := 0; i < len(cmds); i++ {
 		cbat, err := collectInsertColBatch(es[i+1], &cmds[i])
 		if err != nil {
 			return nil, nil, err
 		}
 		colBatch = append(colBatch, cbat)
+		colAttrs = append(colAttrs, es[i+1].Bat.Attrs)
 	}
 	req := &CreateTableReq{
-		Cmds:      cmds,
-		TableBat:  bat,
-		ColumnBat: colBatch,
+		Cmds:        cmds,
+		TableBat:    bat,
+		ColumnBat:   colBatch,
+		TableAttrs:  es[0].Bat.Attrs,
+		ColumnAttrs: colAttrs,
 	}
 
 	return req, es[len(cmds)+1:], nil

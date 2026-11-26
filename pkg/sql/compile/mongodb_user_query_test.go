@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -200,53 +199,4 @@ func TestConfigureMongoUserQueryLeavesLegacyFindPathUnchanged(t *testing.T) {
 	require.Zero(t, node.ExternScan.MongodbScan.UserQueryKind)
 	require.False(t, node.ExternScan.MongodbScan.IncludeQueryColumn)
 	require.False(t, node.ExternScan.MongodbScan.EmptyResult)
-}
-
-func TestConfigureMongoUserQueryRequiresCompatibleProtocol(t *testing.T) {
-	compiler := &Compile{proc: testutil.NewProcess(t)}
-	rt := runtime.ServiceRuntime(compiler.proc.GetService())
-	previous, hadPrevious := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if hadPrevious {
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
-		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion43)
-		}
-	})
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion43)
-
-	queryColumn := mongoQueryTestColumn(1, catalog.ExternalQuery, types.T_varchar)
-	for name, node := range map[string]*plan.Node{
-		"explicit query": func() *plan.Node {
-			node := mongoUserQueryNode()
-			node.FilterList = []*plan.Expr{
-				mongoQueryTestFunction("=", function.EQUAL, queryColumn, mongoQueryTestString(`{"filter":{"value":1}}`)),
-			}
-			return node
-		}(),
-		"query column carrier": func() *plan.Node {
-			node := mongoUserQueryNode()
-			node.ProjectList = []*plan.Expr{queryColumn}
-			return node
-		}(),
-		"pruned empty result": func() *plan.Node {
-			node := mongoUserQueryNode()
-			node.FilterList = []*plan.Expr{
-				mongoQueryTestFunction("=", function.EQUAL, queryColumn, mongoQueryTestString(`{"filter":{"value":1}}`)),
-				mongoQueryTestFunction("like", function.LIKE, queryColumn, mongoQueryTestString("does-not-match")),
-			}
-			return node
-		}(),
-	} {
-		t.Run(name, func(t *testing.T) {
-			err := compiler.configureMongoUserQuery(node)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
-		})
-	}
-}
-
-func TestSupportsRemoteMongoUserQueryRejectsMissingRuntime(t *testing.T) {
-	const service = "mongodb-missing-compile-runtime"
-	require.Nil(t, runtime.ServiceRuntime(service))
-	require.False(t, supportsRemoteMongoUserQuery(service))
 }

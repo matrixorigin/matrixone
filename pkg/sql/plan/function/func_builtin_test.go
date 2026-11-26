@@ -1377,7 +1377,7 @@ func nullsFromBools(nullList []bool) *nulls.Nulls {
 	if len(nullList) == 0 {
 		return nil
 	}
-	nsp := nulls.NewWithSize(len(nullList))
+	nsp := mustNullsOK(nulls.NewWithSize(len(nullList), bitmapTestMP))
 	for i, isNull := range nullList {
 		if isNull {
 			nsp.Set(uint64(i))

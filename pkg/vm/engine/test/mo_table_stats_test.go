@@ -329,6 +329,7 @@ func TestHandleGetChangedList(t *testing.T) {
 	dbBatch := catalog.MockBatch(schema, rowsCnt)
 	defer dbBatch.Close()
 	bat := containers.ToCNBatch(dbBatch)
+	batAttrs := dbBatch.Attrs
 
 	dbName := "db1"
 	tblNames := []string{"test1", "test2", "test3"}
@@ -344,7 +345,7 @@ func TestHandleGetChangedList(t *testing.T) {
 		schema.Name = tblNames[i]
 		txnop = p.StartCNTxn()
 		rel := p.CreateTableInDB(txnop, dbName, schema)
-		require.NoError(t, rel.Write(p.Ctx, bat))
+		require.NoError(t, rel.Write(p.Ctx, bat, batAttrs))
 		require.NoError(t, txnop.Commit(p.Ctx))
 
 		// The original data size exercises CN-created multi-block objects.

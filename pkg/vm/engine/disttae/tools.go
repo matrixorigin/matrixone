@@ -70,7 +70,7 @@ func genWriteReqs(
 			e.typ == INSERT &&
 			e.databaseId == catalog.MO_CATALOG_ID &&
 			e.tableId == catalog.MO_DATABASE_ID {
-			consumeCreatedDatabaseWrites(pendingDatabaseCreates, e.bat)
+			consumeCreatedDatabaseWrites(pendingDatabaseCreates, e.bat, e.attrs)
 		}
 		// --sql
 		// create table t (a int);
@@ -150,25 +150,26 @@ func requiresAutoIncrEpochFenceCommit(entries []*api.Entry) bool {
 }
 
 func toPBEntry(e Entry) (*api.Entry, error) {
-	var ebat *batch.Batch
+	var (
+		ebat   *batch.Batch
+		eattrs []string
+	)
 
 	if e.typ == INSERT {
 		ebat = batch.NewWithSize(0)
-		if e.bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
-			ebat.Vecs = e.bat.Vecs
-			ebat.Attrs = e.bat.Attrs
-
+		if e.attrs[0] == catalog.BlockMeta_BlockInfo {
 			// no need to commit the blk info to tn
-			ebat.Vecs = ebat.Vecs[1:]
-			ebat.Attrs = e.bat.Attrs[1:]
+			ebat.Vecs = e.bat.Vecs[1:]
+			eattrs = e.attrs[1:]
 			ebat.SetRowCount(ebat.Vecs[0].Length())
 		} else {
 			//e.bat.Vecs[0] is rowid vector
 			ebat.Vecs = e.bat.Vecs[1:]
-			ebat.Attrs = e.bat.Attrs[1:]
+			eattrs = e.attrs[1:]
 		}
 	} else {
 		ebat = e.bat
+		eattrs = e.attrs
 	}
 	typ := api.Entry_Insert
 	if e.typ == DELETE {
@@ -184,10 +185,10 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 						"database name = %s, table name = %s", e.databaseName, e.tableName))
 				}
 				ebat.Vecs = e.bat.Vecs[:2]
-				ebat.Attrs = e.bat.Attrs[:2]
+				eattrs = e.attrs[:2]
 			} else {
 				ebat.Vecs = e.bat.Vecs[:1]
-				ebat.Attrs = e.bat.Attrs[:1]
+				eattrs = e.attrs[:1]
 			}
 		}
 
@@ -196,8 +197,9 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	} else if e.typ == SOFT_DELETE_OBJECT {
 		typ = api.Entry_Delete
 		ebat = e.bat
+		eattrs = e.attrs
 	}
-	bat, err := toPBBatch(ebat)
+	bat, err := toPBBatch(ebat, eattrs)
 	if err != nil {
 		return nil, err
 	}
@@ -215,9 +217,9 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	}, nil
 }
 
-func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
+func toPBBatch(bat *batch.Batch, attrs []string) (*api.Batch, error) {
 	rbat := new(api.Batch)
-	rbat.Attrs = bat.Attrs
+	rbat.Attrs = attrs
 	if len(bat.Vecs) > 0 {
 		rbat.Vecs = make([]api.Vector, len(bat.Vecs))
 	}
@@ -287,7 +289,8 @@ func genTableKey(
 
 // PXU TODO: optimize me
 // fillRandomRowidAndZeroTs modifies the input batch and returns the proto batch as a shallow copy.
-func fillRandomRowidAndZeroTs(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
+// batAttrs names bat's columns.
+func fillRandomRowidAndZeroTs(bat *batch.Batch, batAttrs []string, m *mpool.MPool) (*api.Batch, error) {
 	var attrs []string
 	vecs := make([]*vector.Vector, 0, 2)
 
@@ -318,8 +321,7 @@ func fillRandomRowidAndZeroTs(bat *batch.Batch, m *mpool.MPool) (*api.Batch, err
 		attrs = append(attrs, catalog.TableTailAttrCommitTs)
 	}
 	bat.Vecs = append(vecs, bat.Vecs...)
-	bat.Attrs = append(attrs, bat.Attrs...)
-	return batch.BatchToProtoBatch(bat)
+	return batch.BatchToProtoBatch(bat, append(attrs, batAttrs...))
 }
 
 // PXU TODO: refactor me

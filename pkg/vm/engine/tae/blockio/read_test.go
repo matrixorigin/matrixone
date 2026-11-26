@@ -20,8 +20,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -789,7 +787,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			allocation, err := queryMP.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			freeTestBatchWithOwnPools(output)
-			output = batch.NewWithSchema(nil, colTypes, allocation)
+			output = batch.NewWithTypes(colTypes, allocation)
 			original := append([]*vector.Vector(nil), output.Vecs...)
 			predicates := []int{1}
 			if tc.keyPredicate {
@@ -810,7 +808,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				require.Zero(t, account.Snapshot().Used)
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
-				output = batch.NewWithSchema(nil, colTypes, allocation)
+				output = batch.NewWithTypes(colTypes, allocation)
 			})
 			failure := moerr.NewInvalidInputNoCtx("ordered membership callback error")
 			memberCalls, predicateCalls := 0, 0
@@ -976,7 +974,8 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		for i := range colTypes {
 			out.Vecs[i] = vector.NewVec(colTypes[i], allocation)
 		}
-		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+		// The test is the lender of the retained columns: borrowing is opt-in.
+		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnRetain}, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 			t.Fatal("selected reader must not rerun Apply")
 			return engine.ReaderFilterResult{}, nil
 		}, Select: func(b *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
@@ -984,6 +983,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.True(t, b.Vecs[1].IsReadOnly(), "sealed cached input must retain its byte owner")
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}
+		t.Cleanup(request.ReleasePins)
 		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "retained-cache-read", out, cacheVectors, queryMP, fs, []int{0, 1}, request)
 		require.NoError(t, err)
 		require.Equal(t, 3, out.RowCount())
@@ -1010,13 +1010,14 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		for i := range colTypes {
 			out.Vecs[i] = vector.NewVec(colTypes[i], allocation)
 		}
-		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+		var request *engine.ReaderFilterRequest
+		request = &engine.ReaderFilterRequest{OutputAllocation: allocation, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 			t.Fatal("selected read must not rerun Apply")
 			return engine.ReaderFilterResult{}, nil
 		}, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}, Select: func(b *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			require.Equal(t, 8, b.RowCount())
 			require.Equal(t, 8, b.Vecs[1].Length())
-			require.Zero(t, out.HeldLeases(), "owned/unused demand must avoid cache leases")
+			require.Zero(t, request.Pins().Len(), "owned/unused demand must avoid cache pins")
 			require.True(t, b.Vecs[1].IsReadOnly(), "validated varlen input should stay pinned only in the callback")
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}
@@ -1122,6 +1123,36 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		require.Zero(t, genericCalls)
 		require.Equal(t, 1, observed)
 		require.Equal(t, []int32{2, 4, 5, 6, 7}, vector.MustFixedColNoTypeCheck[int32](target.Vecs[0]))
+	})
+	t.Run("exact selection treats a fully tombstoned block as empty", func(t *testing.T) {
+		intType := colTypes[0]
+		target := batch.NewWithSize(1)
+		target.Vecs[0] = vector.NewVec(intType, queryMP)
+		t.Cleanup(func() { target.Clean(queryMP) })
+		state := objectio.NewExactScanState(objectio.NewExactScanFilter([]objectio.ExactScanPredicate{{Column: 0, Type: intType, Op: objectio.ExactScanGE, Value: 0}}))
+		t.Cleanup(state.Close)
+		deleted := make([]uint64, 8)
+		for row := range deleted {
+			deleted[row] = uint64(row)
+		}
+		observed := 0
+		request := &engine.ReaderFilterRequest{
+			Exact: state,
+			Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+				t.Fatal("eligible exact filtering must not fall back to the generic filter")
+				return engine.ReaderFilterResult{}, nil
+			},
+			Observe: func(stats objectio.ExactScanStats) {
+				observed++
+				require.Zero(t, stats.InputRows)
+				require.Zero(t, stats.OutputRows)
+			},
+		}
+		_, err := BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{deleted: deleted}, []uint16{0}, []types.Type{intType}, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "exact-all-tombstones-test", target, cacheVectors, queryMP, fs, []int{0}, request)
+		require.NoError(t, err)
+		require.Equal(t, 1, observed)
+		require.Zero(t, target.RowCount())
+		require.Zero(t, target.Vecs[0].Length())
 	})
 	t.Run("exact unsupported projection reuses generic filtering", func(t *testing.T) {
 		// Earlier subtests left output vectors of their own (now sealed)
@@ -2638,13 +2669,12 @@ func TestBlockDataReadWithFilterPublishesSelection(t *testing.T) {
 			require.NoError(t, err)
 			allocation, err := queryMP.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
-			output := batch.NewWithSchema(nil, colTypes, allocation)
+			output := batch.NewWithTypes(colTypes, allocation)
 			cacheVectors := containers.NewVectors(len(colTypes) + 2)
-			var sel bitmap.Bitmap
 			request := &engine.ReaderFilterRequest{
 				OutputAllocation: allocation,
 				ColumnUses:       []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnRetain},
-				PublishSelection: &sel,
+				PublishSelection: true,
 				Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 					t.Fatal("a Select read must not call Apply")
 					return engine.ReaderFilterResult{}, nil
@@ -2678,7 +2708,10 @@ func TestBlockDataReadWithFilterPublishesSelection(t *testing.T) {
 				require.Equal(t, []int32{0, 2, 4, 6}, vector.MustFixedColNoTypeCheck[int32](output.Vecs[0]))
 				require.Equal(t, "a payload longer than the inline varlena-6", output.Vecs[1].GetStringAt(3))
 			}
+			// The test, the lender, releases the pins once it is done with
+			// the batch.
 			output.CleanOnlyData()
+			request.ReleasePins()
 			freeTestBatchWithOwnPools(output)
 			cacheVectors.Free(queryMP)
 			require.Zero(t, account.Snapshot().Used)

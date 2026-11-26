@@ -29,11 +29,7 @@ import (
 )
 
 func MakeMetadataBatch(mp *mpool.MPool) *batch.Batch {
-	return batch.NewWithSchema(
-		CheckpointSchema.Attrs(),
-		CheckpointSchema.Types(),
-		mp,
-	)
+	return batch.NewWithTypes(CheckpointSchema.Types(), mp)
 }
 
 func MakeCKPMetaDirReader(
