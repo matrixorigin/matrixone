@@ -1995,6 +1995,30 @@ func TestTableDumpV1NumericExpression(t *testing.T) {
 	require.True(t, tableDumpV1CollationIndependent(def))
 	def.Checks[0].Check = textCheck
 	require.False(t, tableDumpV1CollationIndependent(def), "numeric columns do not make a string expression collation-independent")
+
+	t.Run("generated-only schema fingerprint", func(t *testing.T) {
+		// SQL and fingerprint are from the v4.2.9 gen_m metadata-only archive.
+		const sql = "create table gen_m (id int primary key, b double, g double generated always as (pow(b,0.5)) stored)"
+		const want = "b27065f0ec368fdabf2268edc9ab7da6a47b7b7da005f8d64addd9a94a902324"
+		manifest := &tableDumpManifest{Version: 1, SourceTable: "gen_m", CreateSQL: sql, SchemaHash: want}
+		target := &plan.TableDef{
+			Name: "gen_m", Createsql: sql, DefaultCharset: uint32(types.CharsetUTF8),
+			Cols: []*plan.ColDef{
+				{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, Default: &plan.Default{}},
+				{Name: "b", Typ: base.Typ, Default: &plan.Default{NullAbility: true}},
+				{Name: "g", Typ: base.Typ, Default: &plan.Default{NullAbility: true},
+					GeneratedCol: &plan.GeneratedCol{Expr: power, OriginString: "pow(b, 0.5)", IsStored: true}},
+			},
+		}
+		hash, err := tableDumpV1PowerSchemaHash(t.Context(), target, manifest)
+		require.NoError(t, err)
+		require.Equal(t, want, hash, "a numeric table with only a generated POW owner can match the released hash")
+		require.Equal(t, uint32(types.CharsetUTF8), target.DefaultCharset)
+		target.Cols[2].GeneratedCol.IsStored = false
+		hash, err = tableDumpV1PowerSchemaHash(t.Context(), target, manifest)
+		require.NoError(t, err)
+		require.NotEqual(t, want, hash, "changing STORED to VIRTUAL changes the fingerprint")
+	})
 }
 
 func TestTableDumpV1CheckDeclarations(t *testing.T) {

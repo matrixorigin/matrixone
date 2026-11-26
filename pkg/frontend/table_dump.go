@@ -1699,8 +1699,8 @@ var lockTableDumpLoadTargets = func(
 }
 
 // tableDumpV1PowerSchemaHash reconstructs the released fingerprint for a
-// proved v1 POW CHECK. The original DDL must confirm any automatic CHECK name
-// and implicit table collation before either representation can be changed.
+// proved v1 POW expression. The original DDL must confirm any automatic CHECK
+// name and implicit table collation before either representation can be changed.
 func tableDumpV1PowerSchemaHash(ctx context.Context, target *plan.TableDef, manifest *tableDumpManifest) (string, error) {
 	if !canReconstructTableSchema(target) {
 		return "", nil
