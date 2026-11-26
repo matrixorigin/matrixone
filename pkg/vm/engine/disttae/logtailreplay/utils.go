@@ -19,6 +19,8 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 func IsMetaEntry(tblName string) bool {
@@ -58,6 +60,21 @@ func matchesObjectListName(name, suffix string) bool {
 
 func IsTransferredDels(name string) bool {
 	return strings.HasPrefix(name, "trans_del")
+}
+
+// ownReplayVector returns a read-only copy of vec in bytes of its own. A
+// vector the partition state keeps must not be a view: that would keep the
+// whole encoding it was decoded from alive, columns replay discards included.
+func ownReplayVector(vec *vector.Vector) *vector.Vector {
+	data, err := vec.MarshalBinary()
+	if err != nil {
+		panic(err)
+	}
+	owned := vector.NewVec(types.T_any.ToType(), nil)
+	if err := owned.UnmarshalBinaryTrusted(data); err != nil {
+		panic(err)
+	}
+	return owned
 }
 
 // objectListViews pools the view batches of object-list entries, whose

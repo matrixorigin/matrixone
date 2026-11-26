@@ -691,7 +691,9 @@ func (p *PartitionState) HandleLogtailEntry(
 		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 			p.LogEntry(entry, "INJECT-TRACE-PS-MEM-DEL")
 		}
-		p.HandleRowsDelete(ctx, entry.Bat.Detach().Bytes(), packer, pool)
+		// Delete replay keeps only an owned copy of the primary key, so it
+		// reads the bytes in place.
+		p.HandleRowsDelete(ctx, entry.Bat.Bytes(), packer, pool)
 	case api.Entry_DataObject:
 		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 			p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-INS")
@@ -919,6 +921,10 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	})
 }
 
+// HandleRowsDelete replays an encoded batch of deleted rows. It reads input
+// only during the call: the rows keep their own copy of the primary key,
+// the one column they retain, so input — and the row ids and timestamps it
+// also holds — can be reused or collected afterwards.
 func (p *PartitionState) HandleRowsDelete(
 	ctx context.Context,
 	input []byte,
@@ -1006,12 +1012,12 @@ func (p *PartitionState) HandleRowsDelete(
 	}
 	if !p.noData {
 		// No reader can observe this mutable replay state until the handler
-		// returns. Reuse its batch header and vector slice, but clear every
-		// reference beyond the PK before shortening the slice: GC scans the
-		// entire backing array, including elements past len.
-		sourceBatch.Vecs[0] = sourceBatch.Vecs[2]
-		clear(sourceBatch.Vecs[1:])
-		sourceBatch.Vecs = sourceBatch.Vecs[:1]
+		// returns. The rows keep a batch of the primary key alone, in bytes
+		// of its own: a view would pin the whole encoding it came from.
+		kept := batch.NewWithSize(1)
+		kept.Vecs[0] = ownReplayVector(sourceBatch.Vecs[2])
+		kept.SetRowCount(sourceBatch.RowCount())
+		replayed.Batch = kept
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
