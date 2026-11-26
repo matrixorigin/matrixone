@@ -89,6 +89,7 @@ var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 
 	plan2.Node_PRE_INSERT:    "Pre Insert",
 	plan2.Node_PRE_INSERT_UK: "Pre Insert Unique",
+	plan2.Node_UPDATE_UNIQUE: "Update Unique Admission",
 	plan2.Node_PRE_INSERT_SK: "Pre Insert 2nd Key",
 
 	plan2.Node_TIME_WINDOW:  "Time window",

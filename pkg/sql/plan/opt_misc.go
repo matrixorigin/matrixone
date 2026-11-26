@@ -119,6 +119,25 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			}
 		}
 
+	case plan.Node_APPLY:
+		leftParent := node.NodeType
+		right := builder.qry.Nodes[node.Children[1]]
+		if right.NodeType == plan.Node_FUNCTION_SCAN && right.GetTableDef().GetTblFunc().GetName() == UpdateRolesTableFunction {
+			// The function arguments refer to the match projection. Keep that
+			// binding until APPLY remaps its correlated input expressions.
+			leftParent = plan.Node_UNKNOWN
+		}
+		newLeft, leftMap := builder.removeSimpleProjections(node.Children[0], leftParent, flag, colRefCnt)
+		node.Children[0] = newLeft
+		for ref, expr := range leftMap {
+			projMap[ref] = expr
+		}
+		newRight, rightMap := builder.removeSimpleProjections(node.Children[1], node.NodeType, flag, colRefCnt)
+		node.Children[1] = newRight
+		for ref, expr := range rightMap {
+			projMap[ref] = expr
+		}
+
 	case plan.Node_LOCK_OP:
 		childParentType := node.NodeType
 		if _, preserve := builder.preserveLockProjection[nodeID]; preserve {

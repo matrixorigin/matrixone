@@ -294,6 +294,7 @@ type QueryBuilder struct {
 	preserveInsertProjection         map[int32]struct{}
 	preserveScanProjection           map[int32]struct{}
 	positionalSinkScans              map[int32]struct{}
+	repeatedUpdateStats              map[int32]repeatedUpdateStatsHint
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -473,6 +474,13 @@ type aliasItem struct {
 
 type BindContext struct {
 	binder Binder
+	// repeatedUpdateRole is set only while binding one repeated-target UPDATE
+	// role. Correlated binders reach it through the ordinary parent binder.
+	repeatedUpdateRole *repeatedUpdateRole
+	// repeatedUpdateAssignments is present only on the match query for a
+	// repeated-target UPDATE. Its assignment slots are evaluated later, once
+	// each target role has selected a complete joined row.
+	repeatedUpdateAssignments *repeatedUpdateAssignments
 
 	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
 	// display value.  It is planner-local semantic provenance: only a pure
