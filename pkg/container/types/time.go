@@ -54,6 +54,25 @@ func (t Time) String() string {
 
 // Format: hh:mm:ss.msec
 func (t Time) String2(scale int32) string {
+	h, m, s, ms, isNeg := t.ClockFormat()
+	if h > 99 || ms > 999999 {
+		return timeString2Slow(t, scale)
+	}
+	var buf [24]byte
+	b := buf[:0]
+	if isNeg {
+		b = append(b, '-')
+	}
+	b = appendClock(b, int(h), int(m), int(s))
+	if scale > 0 {
+		b = appendFraction(b, int64(ms), min(scale, 9))
+	}
+	return string(b)
+}
+
+// timeString2Slow is String2 through fmt, for hours of three or more digits
+// and values whose microseconds are out of range.
+func timeString2Slow(t Time, scale int32) string {
 	var symbol string
 	h, m, s, ms, isNeg := t.ClockFormat()
 	if isNeg {
