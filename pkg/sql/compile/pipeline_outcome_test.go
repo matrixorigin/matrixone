@@ -26,11 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -265,5 +267,54 @@ func testPipelineOutcomeFailureOrdering(t *testing.T, coordinator, first, interr
 	require.False(t, started.timedOut)
 	require.False(t, last.timedOut, "the waiter should wake from the first result before the last one can finish")
 	require.ErrorIs(t, waiter.Proc.Ctx.Err(), context.Canceled)
+	require.NoError(t, query.Err())
+}
+
+func TestPipelineOutcomeWakesCrossTreeProducerBeforeReceiverCleanup(t *testing.T) {
+	c, query := newPipelineOutcomeCompile(t)
+	consumer := newPipelineOutcomeChild(t, c, 1)
+	producer := newPipelineOutcomeChild(t, c, 0)
+	watchdog, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	waiting := make(chan struct{})
+	producerStopped := make(chan error, 1)
+	source := colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{colexec.MakeMockBatchs(producer.Mp())}).
+		WithEndOfDataCallback(func() {
+			close(waiting)
+			select {
+			case <-producer.Ctx.Done():
+				producerStopped <- moerr.PipelineContextError(producer.Ctx)
+			case <-watchdog.Done():
+				producerStopped <- watchdog.Err()
+			}
+		})
+	send := connector.NewArgument().WithReg(consumer.Reg.MergeReceivers[0])
+	defer send.Release()
+	send.AppendChild(source)
+	recv := merge.NewArgument()
+	defer recv.Release()
+	fail := moerr.NewQueryInterrupted(query)
+	sink := output.NewArgument().WithFunc(func(_ *batch.Batch, _ *perfcounter.CounterSet) error {
+		select {
+		case <-waiting:
+			return fail
+		case <-watchdog.Done():
+			return watchdog.Err()
+		}
+	})
+	defer sink.Release()
+	sink.AppendChild(recv)
+	c.scopes = []*Scope{
+		{Magic: Normal, Proc: consumer, RootOp: sink},
+		{Magic: Normal, Proc: producer, RootOp: send},
+	}
+	for _, scope := range c.scopes {
+		scope.buildContextFromParentCtx(c.proc.Ctx)
+	}
+	err := c.runOnce()
+	require.ErrorIs(t, <-producerStopped, fail, "failure must reach the other tree before Merge.Reset finishes")
+	require.ErrorIs(t, err, fail)
 	require.NoError(t, query.Err())
 }

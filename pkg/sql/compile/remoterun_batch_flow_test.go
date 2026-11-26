@@ -321,3 +321,42 @@ func TestHandlePipelineBatchAck(t *testing.T) {
 		require.Equal(t, 1, session.closeCalls)
 	})
 }
+
+func TestRemoteBatchCreditWaitKeepsStopDeadlineAndPeerFailureDistinct(t *testing.T) {
+	base := context.Background()
+	stopCtx, stop := context.WithCancelCause(base)
+	moerr.StopPipeline(stop)
+	deadline, cancel := context.WithTimeoutCause(base, 0, moerr.CauseInternalExecutorExec)
+	defer cancel()
+	peer := moerr.NewErrFKNoReferencedRow2(base)
+	for _, tc := range []struct {
+		name     string
+		ctx      context.Context
+		peerErr  error
+		want     error
+		wireCode uint16
+	}{
+		{"normal stop", stopCtx, nil, context.Cause(stopCtx), moerr.Ok},
+		{"query deadline", deadline, nil, context.DeadlineExceeded, moerr.ErrRPCTimeout},
+		{"explicit peer failure", stopCtx, peer, peer, moerr.ErrFKNoReferencedRow2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flow := newPipelineBatchFlow(1, 32)
+			_, err := flow.reserve(base, base, 16)
+			require.NoError(t, err)
+			if tc.peerErr != nil {
+				flow.abort(tc.peerErr)
+			}
+			_, err = flow.reserve(tc.ctx, base, 16)
+			require.ErrorIs(t, err, tc.want)
+			for range 2 {
+				var frame pipeline.Message
+				frame.SetMoError(base, err)
+				decoded, hasError := frame.TryToGetMoErr()
+				require.Equal(t, tc.wireCode != moerr.Ok, hasError)
+				require.True(t, moerr.IsMoErrCode(decoded, tc.wireCode), "%v", decoded)
+				err = decoded
+			}
+		})
+	}
+}

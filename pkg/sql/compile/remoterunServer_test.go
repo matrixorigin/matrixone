@@ -310,9 +310,15 @@ func TestGroupedRemoteFragmentStopsIOAndPreservesBoardFailure(t *testing.T) {
 			txnOp.EXPECT().Txn().Return(txn.TxnMeta{ID: make([]byte, 16)}).AnyTimes()
 
 			const addr = "remote-cn:6002"
+			flow := newPipelineBatchFlow(1, 1)
+			_, err := flow.reserve(request, context.Background(), 1)
+			require.NoError(t, err)
+			creditWaitContext := &fragmentWaitContext{Context: context.Background(), started: make(chan struct{})}
 			receiver := &messageReceiverOnServer{
-				messageCtx:    request,
-				cnInformation: cnInformation{cnAddr: addr, storeEngine: engine},
+				messageCtx:      request,
+				connectionCtx:   creditWaitContext,
+				streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
+				cnInformation:   cnInformation{cnAddr: addr, storeEngine: engine},
 				procBuildHelper: processHelper{
 					StmtId:               uuid.New(),
 					txnOperator:          txnOp,
@@ -352,11 +358,21 @@ func TestGroupedRemoteFragmentStopsIOAndPreservesBoardFailure(t *testing.T) {
 				t.Fatal("fragment did not enter its JoinMap wait")
 			}
 
+			creditWait := make(chan error, 1)
+			go func() { creditWait <- b.fill(batch.EmptyBatch, nil) }()
+			select {
+			case <-creditWaitContext.started:
+			case <-request.Done():
+				<-creditWait
+				t.Fatal("data write did not enter the occupied credit window")
+			}
+
 			reported := moerr.NewQueryInterrupted(request)
 			terminal, err := first.finish(reported)
 			require.NoError(t, err)
 			require.False(t, terminal.complete)
 			require.ErrorIs(t, <-joinMapWait, reported)
+			require.ErrorIs(t, <-creditWait, reported, "the data write must use the fragment context")
 			// A reader arriving at the closed board must see the same failure
 			// even without inheriting B's canceled context.
 			_, err = message.ReceiveJoinMap(123, false, 0, b.MessageBoard, context.Background())
