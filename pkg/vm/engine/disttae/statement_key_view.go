@@ -66,6 +66,12 @@ type statementKeyView struct {
 	closed             bool
 }
 
+type statementKeyTombstones interface {
+	engine.Tombstoner
+	AppendInMemory(...types.Rowid) error
+	AppendFiles(...objectio.ObjectStats) error
+}
+
 type statementKeyTable struct {
 	relation                                *txnTableDelegate
 	table                                   *txnTable
@@ -79,7 +85,7 @@ type statementKeyTable struct {
 	columnPositions                         [][]int
 	selections                              map[*batch.Batch][]int64
 	objects                                 []objectio.ObjectStats
-	tombstones                              engine.Tombstoner
+	tombstones                              statementKeyTombstones
 	cnDeletes                               map[types.Blockid][]int64
 	index                                   hashmap.HashMap
 	iterator                                hashmap.Iterator
@@ -202,6 +208,15 @@ func (v *statementKeyView) captureTable(ctx context.Context, d *txnTableDelegate
 	return t, nil
 }
 
+// workspaceTable matches writes to the captured physical target family.
+func (v *statementKeyView) workspaceTable(e Entry) *statementKeyTable {
+	t := v.tables[e.tableId]
+	if t == nil || e.databaseId != t.table.db.databaseId || e.bat == nil {
+		return nil
+	}
+	return t
+}
+
 // captureWorkspace publishes one immutable target-family capture. Defers release
 // both mutexes before the constructor's partial-capture cleanup can run.
 func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(uint64) (engine.StatementViewReservation, error)) error {
@@ -219,7 +234,7 @@ func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(ui
 		pins.Lock()
 	}
 	for _, entry := range txn.writes {
-		if table := v.tables[entry.tableId]; table == nil || entry.databaseId != table.table.db.databaseId || entry.bat == nil {
+		if v.workspaceTable(entry) == nil {
 			continue
 		}
 		if pos := slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats); pos >= 0 {
@@ -269,25 +284,26 @@ func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(ui
 		add(1, 128)
 		add(uint64(len(parts)), uint64(reflect.TypeFor[*statementKeyTable]().Size()))
 	}
-	for _, t := range v.tables {
-		add(1, uint64(reflect.TypeFor[statementKeyTable]().Size()))
-		for _, e := range txn.writes {
-			if e.tableId != t.table.tableId || e.databaseId != t.table.db.databaseId || e.bat == nil {
-				continue
-			}
-			add(1, uint64(max(e.bat.Allocated(), e.bat.Size())))
-			add(1, uint64(reflect.TypeFor[Entry]().Size())+256)
-			add(uint64(len(t.attrs)), 8)
-			add(uint64(len(txn.batchSelectList[e.bat])), 8+types.RowidSize)
-			if e.typ == DELETE && e.fileName == "" {
-				add(uint64(e.bat.RowCount()), types.RowidSize)
-			}
-			if pos := slices.Index(e.bat.Attrs, catalog.ObjectMeta_ObjectStats); pos >= 0 {
-				// Copied stats plus object-name/reference-map metadata, in
-				// addition to the pinned metadata batch itself.
-				add(uint64(e.bat.Vecs[pos].Length()), uint64(objectio.ObjectStatsLen+256))
-			}
+	add(uint64(len(v.tables)), uint64(reflect.TypeFor[statementKeyTable]().Size()))
+	for _, e := range txn.writes {
+		t := v.workspaceTable(e)
+		if t == nil {
+			continue
 		}
+		add(1, uint64(max(e.bat.Allocated(), e.bat.Size())))
+		add(1, uint64(reflect.TypeFor[Entry]().Size())+256)
+		add(uint64(len(t.attrs)), 8)
+		add(uint64(len(txn.batchSelectList[e.bat])), 8+types.RowidSize)
+		if e.typ == DELETE && e.fileName == "" {
+			add(uint64(e.bat.RowCount()), types.RowidSize)
+		}
+		if pos := slices.Index(e.bat.Attrs, catalog.ObjectMeta_ObjectStats); pos >= 0 {
+			// Copied stats plus object-name/reference-map metadata, in
+			// addition to the pinned metadata batch itself.
+			add(uint64(e.bat.Vecs[pos].Length()), uint64(objectio.ObjectStatsLen+256))
+		}
+	}
+	for _, t := range v.tables {
 		txn.deletedBlocks.iterTable(t.table.tableId, func(_ types.Blockid, offsets []int64) bool {
 			add(uint64(len(offsets)), 8+types.RowidSize)
 			add(1, 128)
@@ -314,82 +330,89 @@ func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(ui
 	defer pins.Unlock()
 	pins.views[v] = struct{}{}
 	for _, t := range v.tables {
-		tomb := readutil.NewEmptyTombstoneData()
-		for _, e := range txn.writes {
-			if e.tableId != t.table.tableId || e.databaseId != t.table.db.databaseId || e.bat == nil {
-				continue
-			}
-			var columns []int
-			if e.typ == INSERT && e.fileName == "" && !e.bat.IsEmpty() {
-				columns = make([]int, len(t.attrs))
-				for i, name := range t.attrs {
-					columns[i] = -1
-					for pos, attr := range e.bat.Attrs {
-						if strings.EqualFold(name, attr) {
-							columns[i] = pos
-							break
-						}
-					}
-					pos := columns[i]
-					if pos < 0 || pos >= len(e.bat.Vecs) || e.bat.Vecs[pos] == nil {
-						return moerr.NewInternalErrorf(ctx, "missing statement workspace column %s.%s", t.def.Name, name)
-					}
-					actual := e.bat.Vecs[pos].GetType()
-					// Workspace UPDATE buffers may widen VARCHAR metadata. The
-					// writer has already enforced the schema's value width; copying
-					// the bytes into the declared type must preserve that value.
-					sameType := actual.Eq(t.colTypes[i])
-					if t.colTypes[i].IsVarlen() {
-						sameType = actual.Oid == t.colTypes[i].Oid
-					}
-					if !sameType || actual.TypeSize() != t.colTypes[i].TypeSize() {
-						return moerr.NewInternalErrorf(ctx, "invalid statement workspace type %s.%s: %d/%d/%d vs %d/%d/%d", t.def.Name, name, actual.Oid, actual.Width, actual.Scale, t.colTypes[i].Oid, t.colTypes[i].Width, t.colTypes[i].Scale)
+		t.tombstones = readutil.NewEmptyTombstoneData()
+	}
+	// Follow workspace order so each table retains its own original write
+	// order without scanning the full workspace for every physical member.
+	for _, e := range txn.writes {
+		t := v.workspaceTable(e)
+		if t == nil {
+			continue
+		}
+		tomb := t.tombstones
+		var columns []int
+		if e.typ == INSERT && e.fileName == "" && !e.bat.IsEmpty() {
+			columns = make([]int, len(t.attrs))
+			for i, name := range t.attrs {
+				columns[i] = -1
+				for pos, attr := range e.bat.Attrs {
+					if strings.EqualFold(name, attr) {
+						columns[i] = pos
+						break
 					}
 				}
-			}
-			t.entries = append(t.entries, e) // Entry values survive Adjust's reordering.
-			t.columnPositions = append(t.columnPositions, columns)
-			pin := pins.batches[e.bat]
-			if pin == nil {
-				pin = &statementBatchPin{}
-				pins.batches[e.bat] = pin
-			}
-			pin.refs++
-			sels := slices.Clone(txn.batchSelectList[e.bat])
-			t.selections[e.bat] = sels
-			if len(sels) > 0 {
-				ids := vector.MustFixedColWithTypeCheck[types.Rowid](e.bat.Vecs[0])
-				for _, s := range sels {
-					_ = tomb.AppendInMemory(ids[s])
+				pos := columns[i]
+				if pos < 0 || pos >= len(e.bat.Vecs) || e.bat.Vecs[pos] == nil {
+					return moerr.NewInternalErrorf(ctx, "missing statement workspace column %s.%s", t.def.Name, name)
 				}
-			}
-			if e.typ == DELETE && e.fileName == "" {
-				_ = tomb.AppendInMemory(vector.MustFixedColWithTypeCheck[types.Rowid](e.bat.Vecs[0])...)
-			}
-			for _, stats := range collectObjectStatsFromEntry(e) {
-				name := stats.ObjectName().String()
-				if _, exists := v.objects[name]; !exists {
-					op := pins.objects[name]
-					if op == nil {
-						if unusedQuota < statementObjectPinQuota {
-							// Workspace objects grew while admission was outside
-							// txn.Lock. No uncharged record may be published.
-							return moerr.NewTxnNeedRetryNoCtx()
-						}
-						op = &statementObjectPin{name: name}
-						unusedQuota -= statementObjectPinQuota
-						pins.objects[name] = op
-					}
-					v.objects[name] = struct{}{}
-					op.refs++
+				actual := e.bat.Vecs[pos].GetType()
+				// Workspace UPDATE buffers may widen VARCHAR metadata. The
+				// writer has already enforced the schema's value width; copying
+				// the bytes into the declared type must preserve that value.
+				sameType := actual.Eq(t.colTypes[i])
+				if t.colTypes[i].IsVarlen() {
+					sameType = actual.Oid == t.colTypes[i].Oid
 				}
-				if e.typ == INSERT {
-					t.objects = append(t.objects, stats)
-				} else if e.typ == DELETE {
-					_ = tomb.AppendFiles(stats)
+				if !sameType || actual.TypeSize() != t.colTypes[i].TypeSize() {
+					return moerr.NewInternalErrorf(ctx, "invalid statement workspace type %s.%s: %d/%d/%d vs %d/%d/%d", t.def.Name, name, actual.Oid, actual.Width, actual.Scale, t.colTypes[i].Oid, t.colTypes[i].Width, t.colTypes[i].Scale)
 				}
 			}
 		}
+		t.entries = append(t.entries, e) // Entry values survive Adjust's reordering.
+		t.columnPositions = append(t.columnPositions, columns)
+		pin := pins.batches[e.bat]
+		if pin == nil {
+			pin = &statementBatchPin{}
+			pins.batches[e.bat] = pin
+		}
+		pin.refs++
+		sels := slices.Clone(txn.batchSelectList[e.bat])
+		t.selections[e.bat] = sels
+		if len(sels) > 0 {
+			ids := vector.MustFixedColWithTypeCheck[types.Rowid](e.bat.Vecs[0])
+			for _, s := range sels {
+				_ = tomb.AppendInMemory(ids[s])
+			}
+		}
+		if e.typ == DELETE && e.fileName == "" {
+			_ = tomb.AppendInMemory(vector.MustFixedColWithTypeCheck[types.Rowid](e.bat.Vecs[0])...)
+		}
+		for _, stats := range collectObjectStatsFromEntry(e) {
+			name := stats.ObjectName().String()
+			if _, exists := v.objects[name]; !exists {
+				op := pins.objects[name]
+				if op == nil {
+					if unusedQuota < statementObjectPinQuota {
+						// Workspace objects grew while admission was outside
+						// txn.Lock. No uncharged record may be published.
+						return moerr.NewTxnNeedRetryNoCtx()
+					}
+					op = &statementObjectPin{name: name}
+					unusedQuota -= statementObjectPinQuota
+					pins.objects[name] = op
+				}
+				v.objects[name] = struct{}{}
+				op.refs++
+			}
+			if e.typ == INSERT {
+				t.objects = append(t.objects, stats)
+			} else if e.typ == DELETE {
+				_ = tomb.AppendFiles(stats)
+			}
+		}
+	}
+	for _, t := range v.tables {
+		tomb := t.tombstones
 		txn.deletedBlocks.iterTable(t.table.tableId, func(bid types.Blockid, offsets []int64) bool {
 			summary := txn.cnObjsSummary[t.table.tableId][*bid.Object()]
 			if _, exists := t.selections[summary.objBat]; exists {
@@ -402,7 +425,6 @@ func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(ui
 			return true
 		})
 		tomb.SortInMemory()
-		t.tombstones = tomb
 	}
 
 	return nil
@@ -430,16 +452,27 @@ func (v *statementKeyView) Validate(ctx context.Context) error {
 	if txn.removed || txn.rollbackCount != v.rollbackCount {
 		return moerr.NewTxnNeedRetryNoCtx()
 	}
-	for _, t := range v.tables {
-		if _, dropped := txn.tablesInVain[t.table.tableId]; dropped {
+	// The transaction lock keeps the entry pointers stable until validation
+	// ends; keep only references rather than duplicating workspace entries.
+	currentByTable := make(map[uint64]map[*batch.Batch]*Entry)
+	for i := range txn.writes {
+		e := &txn.writes[i]
+		t := v.workspaceTable(*e)
+		if t == nil {
+			continue
+		}
+		current := currentByTable[e.tableId]
+		if current == nil {
+			current = make(map[*batch.Batch]*Entry, len(t.entries))
+			currentByTable[e.tableId] = current
+		}
+		current[e.bat] = e
+	}
+	for id, t := range v.tables {
+		if _, dropped := txn.tablesInVain[id]; dropped {
 			return moerr.NewTxnNeedRetryNoCtx()
 		}
-		current := make(map[*batch.Batch]Entry, len(t.entries))
-		for _, e := range txn.writes {
-			if e.tableId == t.table.tableId && e.databaseId == t.table.db.databaseId && e.bat != nil {
-				current[e.bat] = e
-			}
-		}
+		current := currentByTable[id]
 		if len(current) != len(t.entries) {
 			return moerr.NewTxnNeedRetryNoCtx()
 		}

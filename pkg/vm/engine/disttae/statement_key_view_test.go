@@ -271,6 +271,89 @@ func TestStatementKeyViewRemoteRangesHaveReaderLifetime(t *testing.T) {
 	}
 }
 
+func TestStatementKeyViewInterleavedWorkspace(t *testing.T) {
+	txn, first := newDumpInsertTxnForTest(t)
+	t.Cleanup(func() { cleanTxnWritesForTest(txn) })
+	op := txn.op.(*mock_frontend.MockTxnOperator)
+	op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	op.EXPECT().IsSnapOp().Return(false).AnyTimes()
+	txn.engine.partitions = make(map[[2]uint64]*logtailreplay.Partition)
+	makePhysical := func(tbl *txnTable) *txnTableDelegate {
+		tbl.eng = txn.engine
+		txn.tableOps.addCreatedInTxn(tbl.tableId, 0)
+		tbl.proc.Store(txn.proc)
+		tbl.tableDef = &plan.TableDef{TblId: tbl.tableId, Name: tbl.tableName, DbName: "db",
+			Pkey:          &plan.PrimaryKeyDef{PkeyColName: "pk", Names: []string{"pk"}},
+			Name2ColIndex: map[string]int32{"pk": 0, catalog.Row_ID: 1},
+			Cols: []*plan.ColDef{
+				{Name: "pk", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: catalog.Row_ID, Typ: plan.Type{Id: int32(types.T_Rowid)}, Seqnum: objectio.SEQNUM_ROWID},
+			},
+		}
+		return &txnTableDelegate{origin: tbl, isLocal: func() (bool, error) { return true, nil }}
+	}
+	physical := []engine.Relation{
+		makePhysical(first),
+		makePhysical(&txnTable{db: first.db, tableId: 43, tableName: "other_partition"}),
+		makePhysical(&txnTable{db: first.db, tableId: 44, tableName: "empty_partition"}),
+	}
+	logical := &txnTableDelegate{origin: &txnTable{db: first.db, tableId: 100}}
+	logical.combined.is = true
+	logical.combined.tbl = &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) { return physical, nil }}
+
+	write := func(db, table uint64, key int64) *batch.Batch {
+		b := newInsertBatchWithRowIDForTest(t, txn.proc, []int64{key})
+		txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: db, tableId: table, bat: b})
+		return b
+	}
+	firstWrite := write(7, 42, 1)
+	foreign := write(8, 42, 2)
+	secondPartition := write(7, 43, 3)
+	laterWrite := write(7, 42, 4)
+	write(7, 99, 5)
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	account, err := registry.Open(16 << 20)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, account.Seal().Used)
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	})
+	generation, err := txn.proc.GetHashBuildBudget()
+	require.NoError(t, err)
+	view, err := logical.NewStatementKeyView(t.Context(), []engine.Relation{logical}, txn.proc, account, func(n uint64) (engine.StatementViewReservation, error) {
+		return generation.ReserveMemory(t.Context(), n)
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, view.Close()) })
+	members := view.(*statementKeyView).partitionTables[100]
+	require.Len(t, members, 3)
+	require.Len(t, members[0].entries, 2)
+	require.Same(t, firstWrite, members[0].entries[0].bat)
+	require.Same(t, laterWrite, members[0].entries[1].bat)
+	require.Len(t, members[1].entries, 1)
+	require.Same(t, secondPartition, members[1].entries[0].bat)
+	require.Empty(t, members[2].entries)
+	require.NotContains(t, txn.statementKeyPins.Load().batches, foreign)
+	require.NoError(t, view.Validate(t.Context()))
+
+	// Repeated references are compared by batch identity, not raw write count.
+	writes := txn.writes
+	txn.writes = append(txn.writes, txn.writes[0])
+	err = view.Validate(t.Context())
+	txn.writes = writes
+	require.NoError(t, err)
+
+	// An originally empty member still takes part in the final write fence.
+	write(7, 44, 6)
+	require.True(t, moerr.IsMoErrCode(view.Validate(t.Context()), moerr.ErrTxnNeedRetry))
+	require.NoError(t, view.Close())
+	require.Nil(t, txn.statementKeyPins.Load())
+	require.Zero(t, generation.Snapshot().Used)
+}
+
 func TestStatementKeyViewOwnsPriorWorkspaceUntilClose(t *testing.T) {
 	colexec.NewServer("")
 	for _, terminal := range []string{"capture cancelled", "capture budget", "new selection", "statement rollback", "transaction rollback", "LOAD deleted", "LOAD delete error", "remote read error", "remote read cancelled", "remote view close", "remote close error", "remote data owned", "GC pool closed", "GC pool saturated", "GC delete retry", "GC quota"} {
