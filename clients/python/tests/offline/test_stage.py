@@ -244,6 +244,20 @@ class TestStageSQLConsistency(unittest.TestCase):
         self.assertEqual(sync_sql, expected_sql)
         self.assertEqual(session_sql, expected_sql)
 
+    def test_session_stage_helpers_keep_session_executor(self):
+        """Stage helpers returned by a session must stay in its transaction."""
+        stage_result = Mock(rows=[['test_stage', 'file:///tmp/', 'enabled', None, None]])
+        acknowledged = object()
+        self.session.execute = Mock(side_effect=[stage_result, acknowledged, acknowledged])
+
+        stage = self.session_manager.get('test_stage')
+
+        self.assertIs(stage.load_csv('rows.csv', 'target_table'), acknowledged)
+        self.assertIs(stage.export_to_csv('out.csv', 'SELECT * FROM target_table'), acknowledged)
+        self.client.execute.assert_not_called()
+        self.assertIn('LOAD DATA', self.session.execute.call_args_list[1].args[0])
+        self.assertIn('INTO OUTFILE', self.session.execute.call_args_list[2].args[0])
+
 
 class TestAsyncStageSQLConsistency(unittest.IsolatedAsyncioTestCase):
     """Test SQL generation consistency for async versions"""
@@ -360,6 +374,20 @@ class TestAsyncStageSQLConsistency(unittest.IsolatedAsyncioTestCase):
         expected_sql = "SELECT stage_name, url, stage_status, comment, created_time FROM mo_catalog.mo_stages"
         self.assertEqual(async_sql, expected_sql)
         self.assertEqual(async_session_sql, expected_sql)
+
+    async def test_async_session_stage_helpers_keep_session_executor(self):
+        """Async Stage helpers returned by a session must keep its executor."""
+        stage_result = Mock(rows=[['test_stage', 'file:///tmp/', 'enabled', None, None]])
+        acknowledged = object()
+        self.session.execute = AsyncMock(side_effect=[stage_result, acknowledged, acknowledged])
+
+        stage = await self.async_session_manager.get('test_stage')
+
+        self.assertIs(await stage.load_csv('rows.csv', 'target_table'), acknowledged)
+        self.assertIs(await stage.export_to_csv('out.csv', 'SELECT * FROM target_table'), acknowledged)
+        self.client.execute.assert_not_called()
+        self.assertIn('LOAD DATA', self.session.execute.call_args_list[1].args[0])
+        self.assertIn('INTO OUTFILE', self.session.execute.call_args_list[2].args[0])
 
 
 if __name__ == '__main__':

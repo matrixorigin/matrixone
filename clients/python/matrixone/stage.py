@@ -53,6 +53,7 @@ class Stage:
     created_time: Optional[datetime] = None
     modified_time: Optional[datetime] = None
     _client: Optional[Any] = field(default=None, repr=False)  # Reference to client for load_data
+    _executor: Optional[Any] = field(default=None, repr=False)
 
     def __repr__(self):
         return f"Stage(name='{self.name}', url='{self.url}', status='{self.status}')"
@@ -81,7 +82,9 @@ class Stage:
             raise ValueError("Stage object must be associated with a client to load data")
         from .load_data import LoadDataManager
 
-        return LoadDataManager(self._client).read_csv_stage(self.name, filepath, table, **kwargs)
+        return LoadDataManager(self._client, executor=self._executor).read_csv_stage(
+            self.name, filepath, table, **kwargs
+        )
 
     def load_tsv(self, filepath: str, table: Any, **kwargs) -> Any:
         """
@@ -99,7 +102,9 @@ class Stage:
             raise ValueError("Stage object must be associated with a client to load data")
         from .load_data import LoadDataManager
 
-        return LoadDataManager(self._client).read_csv_stage(self.name, filepath, table, sep='\t', **kwargs)
+        return LoadDataManager(self._client, executor=self._executor).read_csv_stage(
+            self.name, filepath, table, sep='\t', **kwargs
+        )
 
     def load_json(self, filepath: str, table: Any, **kwargs) -> Any:
         """
@@ -117,7 +122,9 @@ class Stage:
             raise ValueError("Stage object must be associated with a client to load data")
         from .load_data import LoadDataManager
 
-        return LoadDataManager(self._client).read_json_stage(self.name, filepath, table, **kwargs)
+        return LoadDataManager(self._client, executor=self._executor).read_json_stage(
+            self.name, filepath, table, **kwargs
+        )
 
     def load_parquet(self, filepath: str, table: Any, **kwargs) -> Any:
         """
@@ -135,7 +142,9 @@ class Stage:
             raise ValueError("Stage object must be associated with a client to load data")
         from .load_data import LoadDataManager
 
-        return LoadDataManager(self._client).read_parquet_stage(self.name, filepath, table, **kwargs)
+        return LoadDataManager(self._client, executor=self._executor).read_parquet_stage(
+            self.name, filepath, table, **kwargs
+        )
 
     def load_files(self, file_mappings: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         """
@@ -178,7 +187,7 @@ class Stage:
 
                     from ._utils import stage_file_uri
 
-                    results[filepath] = LoadDataManager(self._client).from_file(
+                    results[filepath] = LoadDataManager(self._client, executor=self._executor).from_file(
                         stage_file_uri(self.name, filepath), table_model, **kwargs
                     )
             except Exception as e:
@@ -210,7 +219,7 @@ class Stage:
             raise ValueError("Stage object must be associated with a client to export data")
         from .export import ExportManager
 
-        return ExportManager(self._client).to_csv_stage(self.name, filename, query, **kwargs)
+        return ExportManager(self._executor or self._client).to_csv_stage(self.name, filename, query, **kwargs)
 
     def export_to_jsonl(self, filename: str, query: Any, **kwargs) -> Any:
         """
@@ -232,7 +241,7 @@ class Stage:
             raise ValueError("Stage object must be associated with a client to export data")
         from .export import ExportManager
 
-        return ExportManager(self._client).to_jsonl_stage(self.name, filename, query, **kwargs)
+        return ExportManager(self._executor or self._client).to_jsonl_stage(self.name, filename, query, **kwargs)
 
 
 class BaseStageManager:
@@ -358,6 +367,8 @@ class BaseStageManager:
             url=row[1],
             status=row[2] if len(row) > 2 else None,
             comment=row[3] if len(row) > 3 else None,
+            _client=self.client,
+            _executor=self._get_executor(),
         )
 
     def _prepare_create(
@@ -384,6 +395,7 @@ class BaseStageManager:
             comment=comment,
             created_time=datetime.now(),
             _client=self.client,
+            _executor=self._get_executor(),
         )
         return sql, stage
 
@@ -447,6 +459,7 @@ class BaseStageManager:
             comment=row[3] if len(row) > 3 else None,
             created_time=row[4] if len(row) > 4 else None,
             _client=self.client,
+            _executor=self._get_executor(),
         )
 
     def _process_list_result(self, rows) -> List[Stage]:
@@ -462,6 +475,7 @@ class BaseStageManager:
                 comment=row[3] if len(row) > 3 else None,
                 created_time=row[4] if len(row) > 4 else None,
                 _client=self.client,
+                _executor=self._get_executor(),
             )
             stages.append(stage)
         return stages
@@ -838,6 +852,7 @@ class StageManager(BaseStageManager):
                 comment=row[3] if len(row) > 3 else None,
                 created_time=row[4] if len(row) > 4 else None,
                 _client=self.client,
+                _executor=self._get_executor(),
             )
             stages.append(stage)
 
@@ -1293,6 +1308,7 @@ class AsyncStageManager(BaseStageManager):
                 comment=row[3] if len(row) > 3 else None,
                 created_time=row[4] if len(row) > 4 else None,
                 _client=self.client,
+                _executor=self._get_executor(),
             )
             stages.append(stage)
         return stages
