@@ -65,6 +65,7 @@ func waitForIOGeneration(
 	metric.IOMergerCounterWait.Add(1)
 	t0 := time.Now()
 	defer func() {
+		ReadWaitTrackerFromContext(ctx).Stop(t0)
 		metric.IOMergerDurationWait.Observe(time.Since(t0).Seconds())
 	}()
 
