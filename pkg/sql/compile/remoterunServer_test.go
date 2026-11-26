@@ -279,6 +279,123 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.Nil(t, remoteParams.GetArea())
 }
 
+type fragmentWaitContext struct {
+	context.Context
+	started chan struct{}
+	once    sync.Once
+}
+
+func (ctx *fragmentWaitContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.started) })
+	return ctx.Context.Done()
+}
+
+func TestGroupedRemoteFragmentStopsIOAndPreservesBoardFailure(t *testing.T) {
+	for _, withForeignKey := range []bool{false, true} {
+		name := "interruption"
+		if withForeignKey {
+			name = "later-foreign-key"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			request, cancelRequest := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancelRequest()
+			engine := mock_frontend.NewMockEngine(ctrl)
+			center := &message.MessageCenter{
+				StmtIDToBoard: make(map[uuid.UUID]*message.MessageBoard),
+				RwMutex:       &sync.Mutex{},
+			}
+			engine.EXPECT().GetMessageCenter().Return(center).AnyTimes()
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().Txn().Return(txn.TxnMeta{ID: make([]byte, 16)}).AnyTimes()
+
+			const addr = "remote-cn:6002"
+			receiver := &messageReceiverOnServer{
+				messageCtx:    request,
+				cnInformation: cnInformation{cnAddr: addr, storeEngine: engine},
+				procBuildHelper: processHelper{
+					StmtId:               uuid.New(),
+					txnOperator:          txnOp,
+					remoteExecutionID:    uuid.New(),
+					remoteFragmentCounts: map[string]uint32{addr: 2},
+				},
+			}
+			newFragment := func() (*Compile, context.CancelCauseFunc, *remoteAllocationStatementParticipant) {
+				fragment, cancelFragment, err := receiver.newCompile()
+				require.NoError(t, err)
+				require.NotNil(t, cancelFragment)
+				t.Cleanup(fragment.Release)
+				t.Cleanup(func() { cancelFragment(nil) })
+				p, err := acquireRemoteAllocationStatementParticipant(
+					remoteAllocationStatementGroupKey(fragment.remoteExecutionID, addr),
+					fragment.MessageBoard, 2, cancelFragment,
+				)
+				require.NoError(t, err)
+				t.Cleanup(func() { _, _ = p.finish(nil) })
+				return fragment, cancelFragment, p
+			}
+			_, _, first := newFragment()
+			b, previousCancel, last := newFragment()
+			// The server registers the participant before constructing the
+			// pipeline tree. Its cancel must govern I/O even after initialization.
+			b.InitPipelineContextToExecuteQuery()
+			waitCtx := &fragmentWaitContext{Context: b.proc.Ctx, started: make(chan struct{})}
+			joinMapWait := make(chan error, 1)
+			go func() {
+				_, err := message.ReceiveJoinMap(123, false, 0, b.MessageBoard, waitCtx)
+				joinMapWait <- err
+			}()
+			select {
+			case <-waitCtx.started:
+			case <-request.Done():
+				<-joinMapWait
+				t.Fatal("fragment did not enter its JoinMap wait")
+			}
+
+			reported := moerr.NewQueryInterrupted(request)
+			terminal, err := first.finish(reported)
+			require.NoError(t, err)
+			require.False(t, terminal.complete)
+			require.ErrorIs(t, <-joinMapWait, reported)
+			// A reader arriving at the closed board must see the same failure
+			// even without inheriting B's canceled context.
+			_, err = message.ReceiveJoinMap(123, false, 0, b.MessageBoard, context.Background())
+			require.ErrorIs(t, err, reported)
+			select {
+			case <-b.proc.Ctx.Done():
+				require.ErrorIs(t, context.Cause(b.proc.Ctx), reported)
+			default:
+				t.Fatal("group abort did not release a waiter that only observes the pipeline context")
+			}
+			require.NoError(t, request.Err())
+
+			wantCode := moerr.ErrQueryInterrupted
+			if withForeignKey {
+				err = moerr.NewErrFKNoReferencedRow2(request)
+				wantCode = moerr.ErrFKNoReferencedRow2
+			}
+			terminal, err = last.finish(err)
+			require.True(t, terminal.complete)
+			for range 2 {
+				var frame pipeline.Message
+				frame.SetMoError(request, err)
+				var ok bool
+				err, ok = frame.TryToGetMoErr()
+				require.True(t, ok)
+				require.True(t, moerr.IsMoErrCode(err, wantCode), "%v", err)
+			}
+
+			// Reuse the same process with completely new execution contexts.
+			// A retained callback from the previous group can only touch its old
+			// captured parent.
+			b.proc.ReplaceTopCtx(request)
+			b.InitPipelineContextToExecuteQuery()
+			previousCancel(moerr.NewInternalErrorNoCtx("late abort from previous generation"))
+			require.NoError(t, b.proc.Ctx.Err())
+		})
+	}
+}
+
 func TestHandlePipelineMessage_ReleasesCompileOnDecodeError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
