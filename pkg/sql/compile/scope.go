@@ -1847,7 +1847,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 	if node != nil && len(node.AggList) > 0 {
 		// Partial results can replace input rows only when this scope also
 		// owns the matching Group and MergeGroup over its TableScan.
-		mergeGroup := findMergeGroup(s.RootOp)
+		mergeGroup, scan := findScanMergeGroup(s.RootOp)
 		// Fast path: single starcount without filter/groupby — only call rel.StarCount(), no scan.
 		if isSingleStarCountNoFilterNoGroupBy(node) {
 			if mergeGroup == nil {
@@ -1862,7 +1862,14 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 			if estimatedTombstoneRows > defaultStarCountTombstoneThreshold {
 				metricv2.StarcountPathPerBlockCounter.Inc()
 				if len(node.RuntimeFilterProbeList) == 0 && node.Limit == nil && node.Offset == nil {
-					rows, remaining, err := disttae.CountSealedBlocks(ctx, rel, s.NodeInfo.Data, s.TxnOffset)
+					var rows int64
+					var remaining engine.RelData
+					err := scan.MeasureReaderStartup(s.countSealedBlocksContext(c, ctx),
+						func(ctx context.Context, analyzer process.Analyzer) error {
+							var readErr error
+							rows, remaining, readErr = disttae.CountSealedBlocks(ctx, rel, s.NodeInfo.Data, s.TxnOffset, analyzer)
+							return readErr
+						})
 					if err != nil {
 						return err
 					}
@@ -1946,28 +1953,41 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 	return nil
 }
 
-// find scan->group->mergegroup
-func findMergeGroup(op vm.Operator) *group.MergeGroup {
-	if op == nil {
-		return nil
-	}
-	base := op.GetOperatorBase()
-	if base == nil || base.NumChildren() == 0 {
-		return nil
-	}
-	if mergeGroup, ok := op.(*group.MergeGroup); ok {
+// findScanMergeGroup finds the matching scan and aggregate owners in this scope.
+func findScanMergeGroup(op vm.Operator) (*group.MergeGroup, *table_scan.TableScan) {
+	for op != nil {
+		base := op.GetOperatorBase()
+		if base == nil || base.NumChildren() == 0 {
+			break
+		}
 		child := base.GetChildren(0)
-		if _, ok = child.(*group.Group); ok {
-			childBase := child.GetOperatorBase()
-			if childBase != nil && childBase.NumChildren() > 0 {
-				child = childBase.GetChildren(0)
-				if _, ok = child.(*table_scan.TableScan); ok {
-					return mergeGroup
+		if mergeGroup, ok := op.(*group.MergeGroup); ok {
+			if groupOp, ok := child.(*group.Group); ok && groupOp.NumChildren() == 1 {
+				if scan, ok := groupOp.GetChildren(0).(*table_scan.TableScan); ok {
+					return mergeGroup, scan
 				}
 			}
 		}
+		op = child
 	}
-	return findMergeGroup(base.GetChildren(0))
+	return nil, nil
+}
+
+// Count using the snapshot already bound to the opened relation, under the
+// scan's cancellation and with the relation's effective tenant and statement
+// statistics (which may differ from the scan's inherited values).
+func (s *Scope) countSealedBlocksContext(c *Compile, relationCtx context.Context) context.Context {
+	ctx := s.readerContext(c)
+	if ctx == nil {
+		return relationCtx
+	}
+	if accountID, ok := relationCtx.Value(defines.TenantIDKey{}).(uint32); ok {
+		ctx = defines.AttachAccountId(ctx, accountID)
+	}
+	if stats := statistic.StatsInfoFromContext(relationCtx); stats != nil {
+		ctx = statistic.ContextWithStatsInfo(ctx, stats)
+	}
+	return ctx
 }
 
 func (s *Scope) readerContext(c *Compile) context.Context {

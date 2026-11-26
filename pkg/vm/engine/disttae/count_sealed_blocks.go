@@ -21,13 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // CountSealedBlocks counts blocks whose rows require no per-row MVCC check.
 // remaining contains precisely the original ranges still owned by the reader.
 // A nil remaining means this relation cannot use this optimization.
 func CountSealedBlocks(
-	ctx context.Context, rel engine.Relation, data engine.RelData, txnOffset int,
+	ctx context.Context, rel engine.Relation, data engine.RelData, txnOffset int, analyzer process.Analyzer,
 ) (count int64, remaining engine.RelData, err error) {
 	var tbl *txnTable
 	switch r := rel.(type) {
@@ -55,11 +56,12 @@ func CountSealedBlocks(
 	}
 	defer source.Close()
 
-	return countSealedBlocks(ctx, data, source, tbl.getTxn().engine.fs)
+	return countSealedBlocks(ctx, data, source, tbl.getTxn().engine.fs, analyzer)
 }
 
 func countSealedBlocks(
 	ctx context.Context, data engine.RelData, source engine.DataSource, fs fileservice.FileService,
+	analyzer process.Analyzer,
 ) (int64, engine.RelData, error) {
 	remaining := data.BuildEmptyRelData(1)
 	if err := remaining.AttachTombstones(data.GetTombstones()); err != nil {
@@ -83,7 +85,9 @@ func countSealedBlocks(
 		// Range expansion can estimate block sizes from object stats. Read the
 		// block header for the exact count, without prefetching ordinary columns.
 		if object := loc.ObjectId(); !haveMeta || object != lastObject {
-			loaded, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+			loaded, err := process.MeasureFilesystemWait(analyzer, func() (objectio.ObjectMeta, error) {
+				return objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+			})
 			if err != nil {
 				return false, err
 			}
@@ -97,7 +101,9 @@ func countSealedBlocks(
 			return true, nil
 		}
 		rows := meta.GetBlockMeta(id).GetRows()
-		deleted, err := source.GetTombstones(ctx, &blk.BlockID)
+		deleted, err := process.MeasureFilesystemWait(analyzer, func() (objectio.Bitmap, error) {
+			return source.GetTombstones(ctx, &blk.BlockID)
+		})
 		if err != nil {
 			return false, err
 		}
