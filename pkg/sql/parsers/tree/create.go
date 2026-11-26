@@ -121,6 +121,12 @@ func init() {
 		reuse.DefaultOptions[AttributeComment](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[AttributeCharset](
+		func() *AttributeCharset { return &AttributeCharset{} },
+		func(a *AttributeCharset) { *a = AttributeCharset{} },
+		reuse.DefaultOptions[AttributeCharset](),
+	)
+
 	reuse.CreatePool[AttributeCollate](
 		func() *AttributeCollate { return &AttributeCollate{} },
 		func(a *AttributeCollate) { a.reset() },
@@ -1318,6 +1324,8 @@ func (node *ColumnTableDef) reset() {
 				opt.Free()
 			case *AttributeComment:
 				opt.Free()
+			case *AttributeCharset:
+				opt.Free()
 			case *AttributeCollate:
 				opt.Free()
 			case *AttributeColumnFormat:
@@ -1569,6 +1577,28 @@ func NewAttributeComment(c Expr) *AttributeComment {
 	ac := reuse.Alloc[AttributeComment](nil)
 	ac.CMT = c
 	return ac
+}
+
+type AttributeCharset struct {
+	columnAttributeImpl
+	Charset string
+}
+
+func (node *AttributeCharset) Format(ctx *FmtCtx) {
+	ctx.WriteString("character set ")
+	ctx.WriteString(node.Charset)
+}
+
+func (node AttributeCharset) TypeName() string { return "tree.AttributeCharset" }
+
+func (node *AttributeCharset) Free() {
+	reuse.Free[AttributeCharset](node, nil)
+}
+
+func NewAttributeCharset(charset string) *AttributeCharset {
+	node := reuse.Alloc[AttributeCharset](nil)
+	node.Charset = charset
+	return node
 }
 
 type AttributeCollate struct {

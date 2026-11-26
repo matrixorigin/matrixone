@@ -17,10 +17,12 @@ package lockservice
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
@@ -341,7 +343,7 @@ func TestProxySharedUnlock(t *testing.T) {
 	)
 }
 
-func TestProxyUnlockCleansBookkeepingAfterContextExpiry(t *testing.T) {
+func TestUnknownCommitYieldsWithoutChangingProxyHolder(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1", "s2"},
@@ -381,28 +383,22 @@ func TestProxyUnlockCleansBookkeepingAfterContextExpiry(t *testing.T) {
 			}
 			s2.unknownCommitResolver.mu.Unlock()
 
-			// Expire the resolver context while the unknown-commit resolver is
-			// waiting on the source txn mutex. It must leave both proxy and owner
-			// on the old holder so a later orphan cleanup cannot release a lock
-			// that the proxy still treats as held by survivor.
+			// The resolver must yield while the source transaction is busy,
+			// preserving the proxy and owner holder for its next attempt.
 			timedOut.Lock()
-			unlockCtx, unlockCancel := context.WithCancel(context.Background())
-			defer unlockCancel()
+			releaseTxn := sync.OnceFunc(timedOut.Unlock)
+			defer releaseTxn()
 			unlocked := make(chan error, 1)
 			go func() {
-				unlocked <- s2.unlockUnknownCommit(
-					unlockCtx,
-					timedOutTxn,
-					timestamp.Timestamp{},
-				)
+				unlocked <- s2.unlockUnknownCommit(ctx, timedOutTxn, timestamp.Timestamp{})
 			}()
-			require.Eventually(t, func() bool {
-				return s2.activeTxnHolder.hasActiveTxn(timedOutTxn)
-			}, time.Second, time.Millisecond)
-			unlockCancel()
-			timedOut.Unlock()
-
-			require.ErrorIs(t, <-unlocked, context.Canceled)
+			select {
+			case err := <-unlocked:
+				require.ErrorIs(t, err, ErrLockTimeout)
+			case <-ctx.Done():
+				t.Fatal("unknown-commit cleanup waited for the source transaction mutex")
+			}
+			releaseTxn()
 
 			// The failed handoff cannot publish survivor as the remote holder.
 			// Keeping the old source txn active makes CheckActiveTxn report it as
@@ -545,9 +541,10 @@ func TestProxyLostLastHolderResponseRoutesLateSharerThroughOwner(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, ok)
 			proxy.mu.RLock()
-			_, pending := proxy.mu.pendingLastHolderUnlocks[string(row)]
+			pendingValue, pendingUnlock := proxy.mu.pendingRemoteHolders[string(row)]
 			proxy.mu.RUnlock()
-			require.True(t, pending)
+			require.True(t, pendingUnlock)
+			require.Nil(t, pendingValue)
 
 			// An owner-local exclusive can acquire before the proxy retries.
 			_, err = s1.Lock(ctx, tableID, [][]byte{row}, exclusiveTxn, newTestRowExclusiveOptions())
@@ -571,9 +568,9 @@ func TestProxyLostLastHolderResponseRoutesLateSharerThroughOwner(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, exclusiveTxn, holder.TxnID)
 			proxy.mu.RLock()
-			_, pending = proxy.mu.pendingLastHolderUnlocks[string(row)]
+			_, pendingUnlock = proxy.mu.pendingRemoteHolders[string(row)]
 			proxy.mu.RUnlock()
-			require.False(t, pending)
+			require.False(t, pendingUnlock)
 
 			require.NoError(t, s1.Unlock(ctx, exclusiveTxn, timestamp.Timestamp{}))
 			select {
@@ -834,4 +831,241 @@ func TestProxyRetryPreservesAppliedHandoffRepresentative(t *testing.T) {
 			require.NoError(t, s1.Unlock(ctx, exclusiveTxn, timestamp.Timestamp{}))
 		},
 	)
+}
+
+func TestSameOwnerProxyHandoffSurvivesOrdinaryTableRelease(t *testing.T) {
+	runLockServiceTests(t, []string{"owner", "source"}, func(_ *lockTableAllocator, services []*service) {
+		owner, source := services[0], services[1]
+		source.cfg.EnableRemoteLocalProxy = true
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const ordinary, shared = 990, 991
+		row := []byte("same-row")
+		rows := [][]byte{row}
+		exclusive := newTestRowExclusiveOptions()
+		exclusive.Policy = pb.WaitPolicy_FastFail
+		for _, table := range []uint64{ordinary, shared} {
+			_, err := owner.Lock(ctx, table, rows, []byte("seed"), exclusive)
+			require.NoError(t, err)
+			require.NoError(t, owner.Unlock(ctx, []byte("seed"), timestamp.Timestamp{}))
+		}
+
+		representative, surviving := []byte("representative"), []byte("surviving")
+		_, err := source.Lock(ctx, ordinary, rows, representative, exclusive)
+		require.NoError(t, err)
+		_, err = source.Lock(ctx, shared, rows, representative, newTestRowSharedOptions())
+		require.NoError(t, err)
+		_, err = source.Lock(ctx, shared, rows, surviving, newTestRowSharedOptions())
+		require.NoError(t, err)
+		require.NoError(t, source.Unlock(ctx, representative, timestamp.Timestamp{}))
+
+		holder, held, err := owner.GetLockHolder(ctx, shared, row, exclusive)
+		require.NoError(t, err)
+		require.True(t, held)
+		require.Equal(t, surviving, holder.TxnID)
+		owner.mu.RLock()
+		refs := owner.mu.lockTableRef[0][shared]
+		owner.mu.RUnlock()
+		require.EqualValues(t, 1, refs)
+		_, err = owner.Lock(ctx, shared, rows, []byte("challenger"), exclusive)
+		require.Error(t, err)
+		require.NoError(t, owner.Unlock(ctx, []byte("challenger"), timestamp.Timestamp{}))
+
+		require.NoError(t, source.Unlock(ctx, surviving, timestamp.Timestamp{}))
+		_, err = owner.Lock(ctx, shared, rows, []byte("challenger"), exclusive)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, []byte("challenger"), timestamp.Timestamp{}))
+	})
+}
+
+func TestHandoffStagesAllReplacementLedgersBeforeChangingOwner(t *testing.T) {
+	runLockServiceTests(t, []string{"owner"}, func(_ *lockTableAllocator, nodes []*service) {
+		s := nodes[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table = 1032
+		a, b, c := []byte("old"), []byte("replacement-1"), []byte("replacement-2")
+		row1, row2, row3 := []byte{1}, []byte{2}, []byte{3}
+		opts := newTestRowSharedOptions()
+		_, err := s.Lock(ctx, table, [][]byte{row1, row2}, a, opts)
+		require.NoError(t, err)
+		_, err = s.Lock(ctx, table, [][]byte{row3}, c, opts)
+		require.NoError(t, err)
+		bind := s.tableGroups.get(0, table).getBind()
+		cTxn := s.activeTxnHolder.getActiveTxn(c, false, "")
+		request := pb.UnlockRequest{TxnID: a, Mutations: []pb.ExtraMutation{
+			{Key: row1, ReplaceTo: b},
+			{Key: row2, ReplaceTo: c},
+		}}
+		check := func(row, expected []byte) {
+			holder, ok, err := s.GetLockHolder(ctx, table, row, opts)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, expected, holder.TxnID)
+		}
+
+		cTxn.Lock()
+		err = s.unlockRemoteTable(ctx, bind, request)
+		cTxn.Unlock()
+		require.ErrorIs(t, err, ErrLockTimeout)
+		require.False(t, s.activeTxnHolder.hasActiveTxn(b), "failed preflight registered an empty holder")
+		check(row1, a)
+		check(row2, a)
+
+		cTxn.Lock()
+		originalPool := cTxn.fsp
+		cTxn.fsp = newFixedSlicePool(1)
+		cTxn.Unlock()
+		err = s.unlockRemoteTable(ctx, bind, request)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade), "%v", err)
+		require.False(t, s.activeTxnHolder.hasActiveTxn(b), "failed reservation registered an empty holder")
+		check(row1, a)
+		check(row2, a)
+
+		cTxn.Lock()
+		cTxn.fsp = originalPool
+		cTxn.Unlock()
+		require.NoError(t, s.unlockRemoteTable(ctx, bind, request))
+		check(row1, b)
+		check(row2, c)
+		require.NoError(t, s.unlockRemoteTable(ctx, bind, pb.UnlockRequest{TxnID: b}))
+		require.NoError(t, s.unlockRemoteTable(ctx, bind, pb.UnlockRequest{TxnID: c}))
+		for _, row := range [][]byte{row1, row2, row3} {
+			_, held, err := s.GetLockHolder(ctx, table, row, opts)
+			require.NoError(t, err)
+			require.False(t, held)
+		}
+	})
+}
+
+type handoffReservationProbe struct {
+	Client
+	rejected chan struct{}
+}
+
+func (c *handoffReservationProbe) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	resp, err := c.Client.Send(ctx, req)
+	if req.Method == pb.Method_Unlock && moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+		select {
+		case c.rejected <- struct{}{}:
+		default:
+		}
+	}
+	return resp, err
+}
+
+func TestProxyHandoffCapacityAllowsReplacementCleanup(t *testing.T) {
+	runLockServiceTests(t, []string{"owner", "source"}, func(_ *lockTableAllocator, nodes []*service) {
+		owner, source := nodes[0], nodes[1]
+		source.cfg.EnableRemoteLocalProxy = true
+		probe := &handoffReservationProbe{Client: source.remote.client, rejected: make(chan struct{}, 1)}
+		source.remote.client = probe
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table = 1033
+		a, b := []byte("old-holder"), []byte("replacement")
+		row1, row2 := []byte{1}, []byte{2}
+		opts := newTestRowSharedOptions()
+		_, err := owner.Lock(ctx, table, [][]byte{row1}, []byte("seed"), opts)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, []byte("seed"), timestamp.Timestamp{}))
+
+		_, err = source.Lock(ctx, table, [][]byte{row2}, b, opts)
+		require.NoError(t, err)
+		_, err = source.Lock(ctx, table, [][]byte{row1}, a, opts)
+		require.NoError(t, err)
+		_, err = source.Lock(ctx, table, [][]byte{row1}, b, opts)
+		require.NoError(t, err)
+
+		bOwner := owner.activeTxnHolder.getActiveTxn(b, false, "")
+		bOwner.Lock()
+		bOwner.fsp = newFixedSlicePool(1)
+		bOwner.Unlock()
+
+		aDone := make(chan error, 1)
+		go func() { aDone <- source.Unlock(ctx, a, timestamp.Timestamp{}) }()
+		select {
+		case <-probe.rejected:
+		case <-ctx.Done():
+			t.Fatal("handoff did not reach the owner capacity limit")
+		}
+		bDone := make(chan error, 1)
+		go func() { bDone <- source.Unlock(ctx, b, timestamp.Timestamp{}) }()
+		for _, done := range []chan error{bDone, aDone} {
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-ctx.Done():
+				t.Fatal("proxy blocked cleanup of a replacement after definite rejection")
+			}
+		}
+		for _, row := range [][]byte{row1, row2} {
+			_, held, err := owner.GetLockHolder(ctx, table, row, opts)
+			require.NoError(t, err)
+			require.False(t, held)
+		}
+	})
+}
+
+func TestHandoffReplacementKeepsOriginalTableInstance(t *testing.T) {
+	runLockServiceTests(t, []string{"owner"}, func(_ *lockTableAllocator, nodes []*service) {
+		owner := nodes[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table = 1790
+		oldID, replacementID := []byte("old"), []byte("replacement")
+		opts := newTestRowSharedOptions()
+		rows := newTestRows(1)
+		_, err := owner.Lock(ctx, table, rows, oldID, opts)
+		require.NoError(t, err)
+		old := owner.tableGroups.get(0, table).(*localLockTable)
+		oldTxn := owner.activeTxnHolder.getActiveTxn(oldID, false, "")
+		adopting, resume := make(chan struct{}), make(chan struct{})
+		continueAdoption := sync.OnceFunc(func() { close(resume) })
+		defer continueAdoption()
+		handedOff := make(chan error, 1)
+		go func() {
+			oldTxn.Lock()
+			defer oldTxn.Unlock()
+			keys := oldTxn.lockHolders[0].tableKeys[table]
+			handedOff <- old.releaseLocks(oldTxn, keys, timestamp.Timestamp{}, handoffLocalUnlock,
+				func(group uint32, table uint64) {
+					close(adopting)
+					<-resume
+					owner.incRef(group, table)
+				}, pb.ExtraMutation{Key: rows[0], ReplaceTo: replacementID})
+		}()
+		select {
+		case <-adopting:
+		case <-ctx.Done():
+			t.Fatal("handoff did not reach reference adoption")
+		}
+		// Retirement can proceed once the physical handoff releases the table
+		// mutex. The new instance must see the replacement's old intent.
+		removed, err := owner.CloseRemoteLockTable(0, table, old.bind.Version)
+		require.NoError(t, err)
+		require.True(t, removed)
+		nextRows := newTestRows(2)
+		recreated, err := owner.getLockTableWithCreate(ctx, 0, table, nextRows, opts.Sharding)
+		require.NoError(t, err)
+		require.NotSame(t, old, recreated)
+		require.True(t, old.bind.Equal(recreated.getBind()))
+		locked := make(chan error, 1)
+		go func() {
+			_, err := owner.Lock(ctx, table, nextRows, replacementID, opts)
+			locked <- err
+		}()
+		continueAdoption()
+		require.NoError(t, <-handedOff)
+		require.ErrorIs(t, <-locked, ErrLockTableBindChanged)
+		_, held, err := owner.GetLockHolder(ctx, table, nextRows[0], opts)
+		require.NoError(t, err)
+		require.False(t, held)
+		require.NoError(t, owner.Unlock(ctx, oldID, timestamp.Timestamp{}))
+		require.NoError(t, owner.Unlock(ctx, replacementID, timestamp.Timestamp{}))
+		owner.mu.RLock()
+		refs := owner.mu.lockTableRef[0][table]
+		owner.mu.RUnlock()
+		require.Zero(t, refs)
+	})
 }

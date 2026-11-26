@@ -72,7 +72,7 @@ func TestWaiterEventsTimeoutDoesNotSendToFullOwnEventChannel(t *testing.T) {
 			resultC <- c.w.wait(context.Background(), logger).err
 		},
 	}
-	w.event = event{c: c, eventC: events.eventC}
+	w.event = event{c: c, queue: events}
 	events.addToLazyCheckDeadlockC(w)
 
 	checked := make(chan struct{})
@@ -113,19 +113,29 @@ func TestWaiterEventsCloseDropsBlockedWaiters(t *testing.T) {
 
 func TestWaiterEventsCloseDrainsAdmittedContextsWithoutWorkers(t *testing.T) {
 	events := newWaiterEvents(0, nil, nil, time.Second, nil, getLogger(""))
-	handled := make(chan struct{}, 1)
-	events.eventC <- &lockContext{
-		txn: &activeTxn{RWMutex: &sync.RWMutex{}},
-		lockFunc: func(_ *lockContext, _ bool) {
-			handled <- struct{}{}
-		},
+	events.eventC = make(chan *lockContext, 1)
+	handled := make(chan int, 3)
+	notified := make(chan struct{})
+	go func() {
+		defer close(notified)
+		for i := 0; i < cap(handled); i++ {
+			events.enqueue(&lockContext{
+				txn: &activeTxn{RWMutex: &sync.RWMutex{}},
+				lockFunc: func(_ *lockContext, _ bool) {
+					handled <- i
+				},
+			})
+		}
+	}()
+	select {
+	case <-notified:
+	case <-time.After(time.Second):
+		t.Fatal("notification blocked while the event channel was full")
 	}
 
 	events.close()
-
-	select {
-	case <-handled:
-	default:
-		t.Fatal("waiter events close left an admitted lock context unhandled")
+	require.Len(t, handled, 3)
+	for i := 0; i < cap(handled); i++ {
+		require.Equal(t, i, <-handled)
 	}
 }

@@ -384,6 +384,17 @@ func (client *txnClient) getActiveTxn(txnID string) (*txnOperator, bool) {
 	return op, ok
 }
 
+// CanAdmitForwardedLock checks the local transaction generation while its
+// registry entry is pinned, without acquiring the frontend transaction mutex.
+func (client *txnClient) CanAdmitForwardedLock(txnID []byte) bool {
+	key := string(txnID)
+	shard := client.getActiveTxnShard(key)
+	shard.RLock()
+	defer shard.RUnlock()
+	op, ok := shard.txns[key]
+	return ok && !op.lockAdmissionClosed.Load()
+}
+
 // forEachActiveTxn iterates over all active transactions.
 // The callback is called with each shard's lock held (read lock).
 func (client *txnClient) forEachActiveTxn(fn func(op *txnOperator) bool) {

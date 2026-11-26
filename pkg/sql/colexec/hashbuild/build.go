@@ -79,6 +79,9 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 		return TerminalBudgetError(proc.Ctx, err)
 	}
 	hashBuild.ctr.hashmapBuilder.setBudget(budget)
+	// Key-only consumers also stage input batches while building the hash map.
+	hashBuild.ctr.hashmapBuilder.boundBatchAllocations = !hashBuild.IsShuffle &&
+		hashBuild.NeedHashMap && !hashBuild.IsDedup
 	if hashBuild.ctr.hashmapBuilder.mapAllocationAccount == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
@@ -118,7 +121,11 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := hashBuild.build(proc, analyzer); err != nil {
+			err := hashBuild.build(proc, analyzer)
+			if err == nil && hashBuild.NeedBatches && ctr.hashmapBuilder.boundBatchAllocations {
+				err = ctr.hashmapBuilder.prepareBatchRowEnds(proc)
+			}
+			if err != nil {
 				err = TerminalBudgetError(proc.Ctx, err)
 				hashBuild.finalizeBuildFailure(proc, err)
 				return result, err

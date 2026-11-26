@@ -42,6 +42,10 @@ func updateNewColumnInTableDef(
 		return false, err
 	}
 
+	if !applyColumnCharset(&nTy, nColSpec.Attributes) {
+		return false, moerr.NewNotSupported(ctx, "only utf8mb4 and utf8mb4_bin are supported on CHAR, VARCHAR and TEXT columns")
+	}
+
 	if err = checkTypeCapSize(ctx, &nTy, nColSpec.Name.ColName()); err != nil {
 		return false, err
 	}

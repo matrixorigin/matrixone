@@ -773,21 +773,13 @@ func storageAgnosticType(
 
 	oTy := oCol.Typ
 
-	if oTy.Id != nTy.Id {
-		return
-	}
-
 	if nTy.Id != int32(types.T_varchar) && nTy.Id != int32(types.T_char) {
 		return
 	}
 
-	// leave autoInrement check to storage agnostic attrs because the autoInrement
-	// in nTy should be determined by nCol.Attributes
-
-	scaleMatch := oTy.Scale == nTy.Scale
-	enumMatch := sameTypeMemberDomain(&oTy, &nTy)
-
-	if !scaleMatch || !enumMatch {
+	if !applyColumnCharset(&nTy, nCol.Attributes) ||
+		!ColumnStorageScalesEqual(&oTy, &nTy) ||
+		!sameTypeMemberDomain(&oTy, &nTy) {
 		return
 	}
 
@@ -830,6 +822,8 @@ func storageAgnosticAttrs(
 		case *tree.AttributeComment, *tree.AttributeDefault:
 			// keep ok true, we don't care about what comment or default is
 			ok = true
+		case *tree.AttributeCharset, *tree.AttributeCollate:
+			// storageAgnosticType validates supported text declarations.
 		default:
 			// key, primary key, unique key, auto increment, reference etc.
 			// all of these involve third party constraint tables

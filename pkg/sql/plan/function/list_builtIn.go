@@ -1483,11 +1483,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_time, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					scale := parameters[0].Scale
-					if parameters[1].Scale > scale {
-						scale = parameters[1].Scale
-					}
-					return types.New(types.T_time, 0, scale)
+					return types.New(types.T_time, 0, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return AddTime
@@ -1497,11 +1493,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_time, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					scale := parameters[0].Scale
-					if parameters[1].Scale > scale {
-						scale = parameters[1].Scale
-					}
-					return types.New(types.T_time, 0, scale)
+					return types.New(types.T_time, 0, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return AddTime
@@ -1511,11 +1503,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_datetime, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					scale := parameters[0].Scale
-					if parameters[1].Scale > scale {
-						scale = parameters[1].Scale
-					}
-					return types.New(types.T_datetime, 0, scale)
+					return types.New(types.T_datetime, 0, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return AddTime
@@ -1525,11 +1513,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_datetime, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					scale := parameters[0].Scale
-					if parameters[1].Scale > scale {
-						scale = parameters[1].Scale
-					}
-					return types.New(types.T_datetime, 0, scale)
+					return types.New(types.T_datetime, 0, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return AddTime
@@ -1539,11 +1523,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_timestamp, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					scale := parameters[0].Scale
-					if parameters[1].Scale > scale {
-						scale = parameters[1].Scale
-					}
-					return types.New(types.T_timestamp, 0, scale)
+					return types.New(types.T_timestamp, 0, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return AddTime
@@ -1553,11 +1533,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_timestamp, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					scale := parameters[0].Scale
-					if parameters[1].Scale > scale {
-						scale = parameters[1].Scale
-					}
-					return types.New(types.T_timestamp, 0, scale)
+					return types.New(types.T_timestamp, 0, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return AddTime
@@ -1608,11 +1584,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_time, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					scale := parameters[0].Scale
-					if parameters[1].Scale > scale {
-						scale = parameters[1].Scale
-					}
-					return types.New(types.T_time, 0, scale)
+					return types.New(types.T_time, 0, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubTime
@@ -1622,11 +1594,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_time, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					scale := parameters[0].Scale
-					if parameters[1].Scale > scale {
-						scale = parameters[1].Scale
-					}
-					return types.New(types.T_time, 0, scale)
+					return types.New(types.T_time, 0, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubTime
@@ -1636,11 +1604,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_datetime, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					scale := parameters[0].Scale
-					if parameters[1].Scale > scale {
-						scale = parameters[1].Scale
-					}
-					return types.New(types.T_datetime, 0, scale)
+					return types.New(types.T_datetime, 0, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubTime
@@ -1650,11 +1614,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_datetime, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					scale := parameters[0].Scale
-					if parameters[1].Scale > scale {
-						scale = parameters[1].Scale
-					}
-					return types.New(types.T_datetime, 0, scale)
+					return types.New(types.T_datetime, 0, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubTime
@@ -1664,11 +1624,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_timestamp, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					scale := parameters[0].Scale
-					if parameters[1].Scale > scale {
-						scale = parameters[1].Scale
-					}
-					return types.New(types.T_timestamp, 0, scale)
+					return types.New(types.T_timestamp, 0, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubTime
@@ -1678,11 +1634,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_timestamp, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					scale := parameters[0].Scale
-					if parameters[1].Scale > scale {
-						scale = parameters[1].Scale
-					}
-					return types.New(types.T_timestamp, 0, scale)
+					return types.New(types.T_timestamp, 0, parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubTime

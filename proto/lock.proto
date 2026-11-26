@@ -200,6 +200,8 @@ message LockRequest {
   repeated  bytes     Rows        = 3;
   // LockOptions lock options
   LockOptions         Options     = 4 [(gogoproto.nullable) = false];
+  // AdmissionDeadline limits remote holder creation, independently of row wait.
+  int64               AdmissionDeadline = 5;
 }
 
 // LockResponse lock response
@@ -255,6 +257,10 @@ message UnlockRequest {
   // roll backed
   timestamp.Timestamp    CommitTS  = 2 [(gogoproto.nullable) = false];
   repeated ExtraMutation Mutations = 3 [(gogoproto.nullable) = false];
+  // AdmissionDeadline is the maximum deadline of a possibly unprocessed Lock.
+  int64                  AdmissionDeadline = 4;
+  // TableScoped applies cleanup and proxy mutations only to Request.LockTable.
+  bool                   TableScoped = 5;
 }
 
 // UnlockResponse unlock lock on remote lock service response. CN -> CN

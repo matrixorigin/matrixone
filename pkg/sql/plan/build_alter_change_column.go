@@ -231,6 +231,8 @@ func buildColumnAndConstraint(
 				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
+		case *tree.AttributeCharset, *tree.AttributeCollate:
+			// Already applied to the new column type.
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
