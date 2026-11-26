@@ -37,16 +37,6 @@ func probeWaiting(fs *S3FS, filePath string) []probeFill {
 	return out
 }
 
-// probeJoined reports whether a read joined a fill of the object at filePath.
-func probeJoined(fs *S3FS, filePath string) bool {
-	for _, q := range fs.diskCache.waitingFillsOf(filePath) {
-		if q.joiners > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // probeJoinedRunning reports whether a read joined a started fill of the object at
 // filePath whose prefetch object is not registered yet.
 func probeJoinedRunning(fs *S3FS, filePath string) bool {

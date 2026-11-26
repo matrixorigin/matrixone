@@ -228,9 +228,6 @@ func (p *filePrefetchObject) joinLocked(now time.Time) prefetchObject {
 	return p.d.prefetchObjects.holdingLocked(p.diskPath, p.index, p.start, p.end, now, p.d.downloadMaxExtraWait)
 }
 
-// fitsLocked reports true: p needs nothing.
-func (p *filePrefetchObject) fitsLocked() bool { return true }
-
 // registerLocked registers p, joinable once its download is registered.
 func (p *filePrefetchObject) registerLocked(_, closing context.Context, _ time.Time) {
 	f := &p.d.prefetchObjects
