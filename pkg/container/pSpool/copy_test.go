@@ -160,6 +160,32 @@ func TestCopyBatchFailureReleasesPartialCopy(t *testing.T) {
 	require.Equal(t, bytes.Repeat([]byte{1}, 64), source.Vecs[0].GetBytesAt(0))
 }
 
+func TestCopyBatchCopiesAllNullAny(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	source := batch.NewWithSize(1)
+	t.Cleanup(func() { source.Clean(mp) })
+	source.Vecs[0] = vector.NewVec(types.T_any.ToType(), mp)
+	for range 3 {
+		require.NoError(t, vector.AppendNull(source.Vecs[0], mp))
+	}
+	source.SetRowCount(3)
+	cache := newBatchCache(mp, 1)
+	t.Cleanup(cache.free)
+	for range 2 {
+		copied, owned, aliased, err := cache.copyBatch(source)
+		require.NoError(t, err)
+		require.True(t, owned)
+		require.Equal(t, 3, copied.RowCount())
+		require.Equal(t, types.T_any.ToType(), *copied.Vecs[0].GetType())
+		require.True(t, copied.Vecs[0].AllNull())
+		cache.put(copied, aliased)
+	}
+}
+
 func newWideSpoolSource(tb testing.TB, mp *mpool.MPool, rows int) *batch.Batch {
 	tb.Helper()
 	source := batch.NewWithSize(3)
