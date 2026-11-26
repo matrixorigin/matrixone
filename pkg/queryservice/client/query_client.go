@@ -40,11 +40,13 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_RemoveRemoteLockTable: defines.MORPCVersion1,
 	pb.CmdMethod_GetLatestBind:         defines.MORPCVersion1,
 	pb.CmdMethod_UnsubscribeTable:      defines.MORPCVersion1,
-	pb.CmdMethod_GetCacheData:          defines.MORPCVersion1,
-	pb.CmdMethod_GetStatsInfo:          defines.MORPCVersion1,
-	pb.CmdMethod_GetPipelineInfo:       defines.MORPCVersion1,
-	pb.CmdMethod_GetProtocolVersion:    defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
-	pb.CmdMethod_SetProtocolVersion:    defines.MORPCMinVersion,
+	// Optional cache hint; old peers may reject the command.
+	pb.CmdMethod_CountCachedObjectFiles: defines.MORPCMinVersion,
+	pb.CmdMethod_GetCacheData:           defines.MORPCVersion1,
+	pb.CmdMethod_GetStatsInfo:           defines.MORPCVersion1,
+	pb.CmdMethod_GetPipelineInfo:        defines.MORPCVersion1,
+	pb.CmdMethod_GetProtocolVersion:     defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
+	pb.CmdMethod_SetProtocolVersion:     defines.MORPCMinVersion,
 	// Sys-admin vector-index cache knobs: gated so a mixed-version cluster rejects the call
 	// cluster-wide until every CN is upgraded, instead of dispatching to a CN with no handler.
 	pb.CmdMethod_SetVectorIndexFreshnessInterval: defines.MORPCVersion102,

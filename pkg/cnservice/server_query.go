@@ -156,6 +156,7 @@ func (s *service) initQueryCommandHandler() {
 	s.addQueryCommandHandler(query.CmdMethod_RunTask, s.handleRunTask)
 	s.addQueryCommandHandler(query.CmdMethod_RemoveRemoteLockTable, s.handleRemoveRemoteLockTable)
 	s.addQueryCommandHandler(query.CmdMethod_UnsubscribeTable, s.handleUnsubscribeTable)
+	s.addQueryCommandHandler(query.CmdMethod_CountCachedObjectFiles, s.handleCountCachedObjectFiles)
 	s.addQueryCommandHandler(query.CmdMethod_GetCacheData, s.handleGetCacheData)
 	s.addQueryCommandHandler(query.CmdMethod_GetStatsInfo, s.handleGetStatsInfo)
 	s.addQueryCommandHandler(query.CmdMethod_GetPipelineInfo, s.handleGetPipelineInfo)
@@ -644,6 +645,23 @@ func (s *service) handleUnsubscribeTable(ctx context.Context, req *query.Request
 	resp.UnsubscribeTable = &query.UnsubscribeTableResponse{
 		Success: true,
 	}
+	return nil
+}
+
+func (s *service) handleCountCachedObjectFiles(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	probe := req.CountCachedObjectFilesRequest
+	if probe == nil {
+		return moerr.NewInvalidInput(ctx, "missing object cache probe")
+	}
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
+	hits, err := objectio.CountCachedObjectFiles(ctx, fs, probe.ObjectIds)
+	if err != nil {
+		return err
+	}
+	resp.CountCachedObjectFilesResponse = &query.CountCachedObjectFilesResponse{Hits: uint32(hits)}
 	return nil
 }
 

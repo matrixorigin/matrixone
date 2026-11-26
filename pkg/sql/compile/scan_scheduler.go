@@ -62,6 +62,12 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 		OneCNBlockThreshold:  int32(plan2.BlockThresholdForOneCN),
 	}
 	scanPlacement := schedule.DecideScanPlacement(scanRequest)
+	if forceSingle && !createdInTxn && scanPlacement.LocalOnly {
+		scanPlacement, err = c.placeStarCountByCache(ctx, node, rel, scanRequest, scanPlacement)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if createdInTxn && len(scanPlacement.Workers) > 0 &&
 		!c.canUseLocalExecutionRoute(scanPlacement.Workers[0]) {
 		return nil, moerr.NewInternalError(ctx,
@@ -70,6 +76,13 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 	c.schedulingTrace.RecordScan(c.schedulingAttempt, scanRequest, scanPlacement)
 	c.recordScanSchedulingMetrics(scanPlacement, stats, forceSingle)
 	c.maybeLogScanPlacement(scanPlacement, stats, forceSingle)
+	if scanPlacement.Reason == schedule.ReasonScanStarCountCache {
+		// The selected CN rebuilds the complete relation at the shipped
+		// snapshot. There is no ingress workspace data to attach.
+		engNode := c.materializeScheduledWorker(scanPlacement.Workers[0])
+		engNode.Mcpu, engNode.CNCNT = 1, 1
+		return engine.Nodes{engNode}, nil
+	}
 	if scanPlacement.LocalOnly {
 		return c.localScanNodes(scanPlacement.Workers, stats, forceSingle, node, rel)
 	}
