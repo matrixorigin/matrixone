@@ -16,7 +16,6 @@ package plan
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	iscpmeta "github.com/matrixorigin/matrixone/pkg/iscp/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -143,33 +143,17 @@ func showIndexStatusSql(dbName string, defs []*TableDef, tableNames []string, jo
 // watermarkPhysical returns the physical time of a watermark "physical-logical", or 0 when it
 // is not a time the index is synced to: a job stopped before its first sync records the
 // largest timestamp.
-func watermarkPhysical(watermark string) int64 {
-	physical, _, ok := strings.Cut(watermark, "-")
+func watermarkPhysical(value string) int64 {
+	ts, ok := iscpmeta.ParseWatermark(value)
 	if !ok {
 		return 0
 	}
-	n, err := strconv.ParseInt(physical, 10, 64)
-	if err != nil || n == math.MaxInt64 {
-		return 0
-	}
-	return n
+	return ts.Physical()
 }
 
-// indexJobName is the name of the sync job of index name.
-func indexJobName(name string) string {
-	return "index_" + name
-}
+func indexJobName(name string) string { return iscpmeta.IndexJobName(name) }
 
-// stateName is how SHOW INDEX STATUS shows the state of a job.
-func (j indexJob) stateName() string {
-	switch {
-	case j.state == catalog.MoISCPJobStateError:
-		return "stopped"
-	case j.errCode != 0:
-		return "retrying"
-	}
-	return "running"
-}
+func (j indexJob) stateName() string { return iscpmeta.StateName(j.state, j.errCode) }
 
 // loadIndexJobs reads the latest sync job of each index of the tables defs from mo_iscp_log,
 // which the system account keeps for every account.
