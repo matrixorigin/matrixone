@@ -259,7 +259,7 @@ func buildBatch(t *testing.T, mp *mpool.MPool, pkVals []int32, ts types.TS) *bat
 		return nil
 	}
 
-	bat := batch.New([]string{"pk", "ts"})
+	bat := batch.NewWithSize(2)
 	pkVec := vector.NewVec(types.T_int32.ToType(), mp)
 	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
 
@@ -368,7 +368,7 @@ func TestDataProcessor_ProcessChange_Snapshot(t *testing.T) {
 	dp.SetTransactionRange(fromTs, toTs)
 
 	// Create a non-empty batch (empty batch is skipped after Bug #4 fix)
-	bat := batch.New([]string{"id"})
+	bat := batch.NewWithSize(1)
 	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	_ = vector.AppendFixed(vec, int32(1), false, mp)
 	bat.Vecs[0] = vec
@@ -420,7 +420,7 @@ func TestDataProcessor_ProcessChange_Snapshot_WithSplitTxn(t *testing.T) {
 	dp.SetTransactionRange(fromTs, toTs)
 
 	// Create a non-empty batch (empty batch is skipped after Bug #4 fix)
-	bat := batch.New([]string{"id"})
+	bat := batch.NewWithSize(1)
 	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	_ = vector.AppendFixed(vec, int32(1), false, mp)
 	bat.Vecs[0] = vec

@@ -6757,40 +6757,51 @@ func TestQueryBuilderIcebergComposesWithProjectionFilterJoinAggregate(t *testing
 func TestQueryBuilderIcebergTimeTravelSnapshot(t *testing.T) {
 	ctx := newIcebergTestCompilerContext(t, time.UTC)
 
-	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg snapshot 78124581230123")
-	require.NoError(t, err)
+	for _, spelling := range []string{"78124581230123", "'78124581230123'"} {
+		p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg snapshot "+spelling)
+		require.NoError(t, err)
 
-	scan := requireIcebergScan(t, p)
-	require.Equal(t, int64(78124581230123), scan.SnapshotId)
-	require.Zero(t, scan.TimestampAsOf)
-	require.Equal(t, "main", scan.Ref)
+		scan := requireIcebergScan(t, p)
+		require.Equal(t, int64(78124581230123), scan.SnapshotId)
+		require.Zero(t, scan.TimestampAsOf)
+		require.Equal(t, "main", scan.Ref)
+	}
 }
 
 func TestQueryBuilderIcebergTimeTravelTimestampUsesSessionTimezone(t *testing.T) {
-	loc := time.FixedZone("KSA", 3*60*60)
-	ctx := newIcebergTestCompilerContext(t, loc)
-
-	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg timestamp as of timestamp '2026-06-01 00:00:00'")
-	require.NoError(t, err)
-
-	ts, err := types.ParseTimestamp(loc, "2026-06-01 00:00:00", 6)
-	require.NoError(t, err)
-	expectedMS := (int64(ts) - int64(types.UnixToTimestamp(0))) / 1000
-	scan := requireIcebergScan(t, p)
-	require.Zero(t, scan.SnapshotId)
-	require.Equal(t, expectedMS, scan.TimestampAsOf)
+	for _, loc := range []*time.Location{time.UTC, time.FixedZone("UTC+8", 8*60*60)} {
+		t.Run(loc.String(), func(t *testing.T) {
+			ctx := newIcebergTestCompilerContext(t, loc)
+			ts, err := types.ParseTimestamp(loc, "2026-06-01 00:00:00", 6)
+			require.NoError(t, err)
+			expectedMS := (int64(ts) - int64(types.UnixToTimestamp(0))) / 1000
+			for _, tc := range []struct {
+				suffix string
+				delta  int64
+			}{{"", 0}, {".000", 0}, {".000999", 0}, {".001", 1}} {
+				sql := "select id from gold_orders for iceberg timestamp as of timestamp '2026-06-01 00:00:00" + tc.suffix + "'"
+				p, err := buildIcebergTestPlan(t, ctx, sql)
+				require.NoError(t, err)
+				scan := requireIcebergScan(t, p)
+				require.Zero(t, scan.SnapshotId)
+				require.Equal(t, expectedMS+tc.delta, scan.TimestampAsOf, tc.suffix)
+			}
+		})
+	}
 }
 
 func TestQueryBuilderIcebergNamedRef(t *testing.T) {
 	ctx := newIcebergTestCompilerContext(t, time.UTC)
 
-	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg ref audit_branch")
-	require.NoError(t, err)
+	for _, tc := range [][2]string{{"audit_branch", "audit_branch"}, {"`Audit`", "Audit"}, {"'Audit'", "Audit"}, {"`audit`", "audit"}} {
+		p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg ref "+tc[0])
+		require.NoError(t, err)
 
-	scan := requireIcebergScan(t, p)
-	require.Zero(t, scan.SnapshotId)
-	require.Zero(t, scan.TimestampAsOf)
-	require.Equal(t, "audit_branch", scan.Ref)
+		scan := requireIcebergScan(t, p)
+		require.Zero(t, scan.SnapshotId)
+		require.Zero(t, scan.TimestampAsOf)
+		require.Equal(t, tc[1], scan.Ref)
+	}
 }
 
 func TestQueryBuilderIcebergTimeTravelRejectsNativeSnapshotMix(t *testing.T) {

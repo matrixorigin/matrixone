@@ -49,9 +49,6 @@ func TestIssue25590InsertRelayObjectNames(t *testing.T) {
 		want = append(want, stats.ObjectName().String())
 	}
 	bat.SetRowCount(bat.Vecs[1].Length())
-	require.NotEmpty(t, bat.Attrs[0])
-	require.NotEmpty(t, bat.Attrs[1])
-
 	names, ok, err := TryExtractS3InsertObjectNames(bat)
 	require.NoError(t, err)
 	require.True(t, ok, "the standalone insert result layout adopts")
@@ -66,11 +63,12 @@ func TestIssue25590InsertRelayObjectNames(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok, "a zero-row batch is ordinary for the intake: nothing to adopt")
 
-	// Foreign attributes are ordinary data rows, not ownership metadata.
+	// A foreign layout is ordinary data rows, not ownership metadata: a
+	// batch carries no names, so the writer's vector types identify it
+	// (and only inside a scope running the writer, which compile checks).
 	foreign := batch.NewWithSize(2)
-	foreign.SetAttributes([]string{"user_col_a", "user_col_b"})
 	foreign.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
-	foreign.Vecs[1] = vector.NewVec(types.T_binary.ToType(), proc.Mp())
+	foreign.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer foreign.Clean(proc.Mp())
 	require.NoError(t, vector.AppendBytes(
 		foreign.Vecs[0], []byte("committed_object_name"), false, proc.Mp()))
@@ -80,7 +78,7 @@ func TestIssue25590InsertRelayObjectNames(t *testing.T) {
 	_, ok, err = TryExtractS3InsertObjectNames(foreign)
 	require.NoError(t, err)
 	require.False(t, ok,
-		"attributes the producer never emits never look like ownership metadata")
+		"a layout the producer never emits never looks like ownership metadata")
 
 	// A stats value too short to carry an ObjectStats rejects the ack.
 	broken := colexec.AllocCNS3ResultBat(false, proc.Mp())

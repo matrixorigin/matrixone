@@ -127,7 +127,7 @@ func marshalSpillRecordAccounted(
 	}
 	cnt := int64(bat.RowCount())
 	buf.Reset()
-	batchSize, err := bat.MarshalBinaryForSpillSize()
+	batchSize, err := bat.MarshalFramedSize()
 	if err != nil || batchSize > math.MaxInt-24 {
 		if err != nil {
 			return 0, err
@@ -145,7 +145,7 @@ func marshalSpillRecordAccounted(
 		return 0, err
 	}
 	batchStart := buf.Len()
-	if err := bat.MarshalBinaryForSpillTo(buf); err != nil {
+	if err := bat.MarshalFramedTo(buf); err != nil {
 		return 0, err
 	}
 	serializedSize := int64(buf.Len() - batchStart)

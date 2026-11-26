@@ -313,6 +313,166 @@ set enable_remap_hint = 1;
 select * from db2.t2 order by a;
 -- @session
 
+-- A leading-zero code must remain distinct from its unpadded spelling.
+create table db1.t_rule_text(id int, code varchar(20));
+insert into db1.t_rule_text values (1, '0001'), (2, '1'), (3, '销售订单'), (4, 'O''Brien');
+grant select on table db1.t_rule_text to test_rule_role_inherit_a;
+grant select on table db1.t_rule_text to test_rule_role_inherit_b;
+alter role test_rule_role_inherit_a add rule "select * from db1.t_rule_text where code = '0001'" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id from db1.t_rule_text order by id;
+-- @session
+alter role test_rule_role_inherit_b add rule "select * from db1.t_rule_text where trim(code) = '销售订单'" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id from db1.t_rule_text order by id;
+-- @session
+alter role test_rule_role_inherit_b add rule "select * from db1.t_rule_text where code = 'O''Brien'" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id from db1.t_rule_text order by id;
+-- @session
+
+-- Persisted nested predicates preserve quoted lookup values across role merging.
+create table db1.t_rule_lookup(code varchar(20));
+insert into db1.t_rule_lookup values ('0001'), ('1');
+grant select on table db1.t_rule_lookup to test_rule_role_inherit_a;
+alter role test_rule_role_inherit_a add rule "select * from db1.t_rule_text where code in (select code from db1.t_rule_lookup where code in ('0001'))" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select * from db1.t_rule_text where code = '销售订单'" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id, code from db1.t_rule_text order by id;
+-- @session
+
+-- Double quotes denote a string or an identifier depending on the reader.
+alter role test_rule_role_inherit_a add rule 'select "code" as x from db1.t_rule_text where (select true)' on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select 'code' as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+set session sql_mode = '';
+select x, count(*) from db1.t_rule_text group by x;
+set session sql_mode = 'ANSI_QUOTES';
+select x, count(*) from db1.t_rule_text group by x;
+set session sql_mode = '';
+select x, count(*) from db1.t_rule_text group by x;
+-- @session
+
+-- Restore SQL mode even when the active role rule cannot parse in that mode.
+alter role test_rule_role_inherit_b drop rule on table db1.t_rule_text;
+alter role test_rule_role_inherit_a add rule "select * from db1.t_rule_text where code = 'O\\'Brien'" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id from db1.t_rule_text;
+set session sql_mode = 'NO_BACKSLASH_ESCAPES';
+select id from db1.t_rule_text;
+commit;
+rollback;
+set session sql_mode = '';
+select id from db1.t_rule_text;
+-- @session
+
+-- Quoted names referring to the same charset and collation keep both roles' rows.
+alter role test_rule_role_inherit_a add rule "select id, cast(code as char character set 'UTF8MB4') collate 'UTF8MB4_BIN' as code from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, cast(code as char character set 'utf8mb4') collate 'utf8mb4_bin' as code from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id, code from db1.t_rule_text order by id;
+-- @session
+
+-- Quoted and unquoted references to the same column keep both roles' rows.
+alter role test_rule_role_inherit_a add rule "select trim(`Code`) as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select trim(code) as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select x from db1.t_rule_text order by x;
+-- @session
+
+-- Role-rule output names must stay bindable through the derived result.
+alter role test_rule_role_inherit_a add rule "select _binary 'A' from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select _binary 0x41 from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select count(`0x41`), min(hex(`0x41`)) from db1.t_rule_text;
+-- @session
+alter role test_rule_role_inherit_a add rule "select _binary 'A' as code from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select _binary 0x41 as code from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select count(code), min(hex(code)) from db1.t_rule_text;
+-- @session
+
+-- An odd hex digit count pads one nibble, without dropping a zero byte.
+alter role test_rule_role_inherit_a add rule "select id, _binary 0xA as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, _binary 0x0A as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id, hex(x) from db1.t_rule_text order by id;
+-- @session
+alter role test_rule_role_inherit_b add rule "select id, _binary 0x00A as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id, hex(x) from db1.t_rule_text order by id;
+-- @session
+
+-- Equal byte values within one literal category retain both roles' rows.
+alter role test_rule_role_inherit_a add rule "select id, 0xA as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, 0x0A as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
+-- @session
+alter role test_rule_role_inherit_a add rule "select id, b'1010' as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, 0b00001010 as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
+-- @session
+alter role test_rule_role_inherit_a add rule "select id, _binary '' as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, _binary X'' as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
+-- @session
+
+set @role_rule_saved_lctn = @@global.lower_case_table_names;
+set global lower_case_table_names = 1;
+
+-- The table alias must bind in the reader's table-name mode.
+alter role test_rule_role_inherit_a add rule "select id from db1.t_rule_text as `X` where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id from db1.t_rule_text as x where x.id = 3" on table db1.t_rule_text;
+-- @session:id=33&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id from db1.t_rule_text order by id;
+-- @session
+set global lower_case_table_names = 0;
+-- @session:id=32&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select @@lower_case_table_names;
+select id from db1.t_rule_text order by id;
+-- @session
+set global lower_case_table_names = 1;
+
+-- System catalog source names compare without case in every table-name mode.
+grant select on table information_schema.character_sets to test_rule_role_inherit_a;
+alter role test_rule_role_inherit_a add rule "select character_set_name, maxlen from information_schema.character_sets where maxlen = 1" on table information_schema.character_sets;
+alter role test_rule_role_inherit_b add rule "select character_set_name, maxlen from INFORMATION_SCHEMA.CHARACTER_SETS where INFORMATION_SCHEMA.CHARACTER_SETS.maxlen = 4" on table information_schema.character_sets;
+-- @session:id=33&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+-- @session
+set global lower_case_table_names = 0;
+-- @session:id=29&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select @@lower_case_table_names;
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+-- @session
+-- Only a missing inner qualifier may resolve in the outer scope.
+-- @session:id=31&user=sys:dump&password=111
+select (select ChArAcTeR_SeTs.maxlen from (select 1 as marker) as n) as maxlen from (select 73 as maxlen) as ChArAcTeR_SeTs;
+select (select ChArAcTeR_SeTs.maxlen from information_schema.character_sets where character_set_name = 'binary') as maxlen from (select 73 as maxlen) as ChArAcTeR_SeTs;
+select (select ChArAcTeR_SeTs.maxlen from information_schema.character_sets cross join INFORMATION_SCHEMA.CHARACTER_SETS where character_sets.character_set_name = 'binary' and CHARACTER_SETS.character_set_name = 'binary') as maxlen from (select 73 as maxlen) as ChArAcTeR_SeTs;
+-- @session
+set global lower_case_table_names = 2;
+-- @session:id=30&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select @@lower_case_table_names;
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+-- @session
+-- Unqualified system-table sources use the current database.
+alter role test_rule_role_inherit_a add rule "select character_set_name, maxlen from character_sets where maxlen = 1" on table information_schema.character_sets;
+alter role test_rule_role_inherit_b add rule "select character_set_name, maxlen from CHARACTER_SETS where maxlen = 4" on table information_schema.character_sets;
+-- @session:id=30&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+use information_schema;
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+-- @session
+set global lower_case_table_names = 0;
+-- @session:id=29&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+use information_schema;
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+-- @session
+set global lower_case_table_names = @role_rule_saved_lctn;
+
 -- 14. Invalid rewrite SQL is rejected before overwriting existing rule
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;

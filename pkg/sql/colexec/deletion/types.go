@@ -359,7 +359,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 			}
 
 			for _, stats := range statsList {
-				bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
+				bat := batch.NewWithSize(1)
 				bat.SetVector(0, vector.NewVec(types.T_text.ToType(), proc.Mp()))
 				if err = vector.AppendBytes(
 					bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
@@ -466,22 +466,34 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 	return nil
 }
 
-func makeDelBatch(pkType types.Type, mp *mpool.MPool) *batch.Batch {
-	bat := batch.New([]string{catalog.Row_ID, "pk"})
-	bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType(), mp))
-	bat.SetVector(1, vector.NewVec(pkType, mp))
-	return bat
-}
-
-func makeDelRemoteBatch(mp *mpool.MPool) *batch.Batch {
-	bat := batch.NewWithSize(5)
-	bat.Attrs = []string{
+// Column names of the batches deletion builds. A batch carries no names:
+// these travel beside it to Relation.Delete, and fix the layouts the relay
+// recognizers read by position. Shared; do not modify.
+var (
+	// DelBatchAttrs names makeDelBatch's row-delete batch.
+	DelBatchAttrs = colexec.DeleteRowsAttrs
+	// TombstoneObjectStatsAttrs names a batch of CN-flushed tombstone
+	// object stats.
+	TombstoneObjectStatsAttrs = []string{catalog.ObjectMeta_ObjectStats}
+	// DelRemoteBatchAttrs names makeDelRemoteBatch's remote-row layout.
+	DelRemoteBatchAttrs = []string{
 		catalog.BlockMeta_Delete_ID,
 		catalog.BlockMeta_DeltaLoc,
 		catalog.BlockMeta_Type,
 		catalog.BlockMeta_Partition,
 		catalog.BlockMeta_Deletes_Length,
 	}
+)
+
+func makeDelBatch(pkType types.Type, mp *mpool.MPool) *batch.Batch {
+	bat := batch.NewWithSize(2)
+	bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType(), mp))
+	bat.SetVector(1, vector.NewVec(pkType, mp))
+	return bat
+}
+
+func makeDelRemoteBatch(mp *mpool.MPool) *batch.Batch {
+	bat := batch.NewWithSize(len(DelRemoteBatchAttrs))
 	bat.SetVector(0, vector.NewVec(types.T_text.ToType(), mp))
 	bat.SetVector(1, vector.NewVec(types.T_text.ToType(), mp))
 	bat.SetVector(2, vector.NewVec(types.T_int8.ToType(), mp))

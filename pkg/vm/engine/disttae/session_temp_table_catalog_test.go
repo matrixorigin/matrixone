@@ -76,7 +76,7 @@ func insertTempCatalogDatabase(t *testing.T, eng *Engine, txn *Transaction, ts t
 		txn.proc.Mp(), packer,
 	)
 	require.NoError(t, err)
-	_, err = fillRandomRowidAndZeroTs(bat, txn.proc.Mp())
+	_, err = fillRandomRowidAndZeroTs(bat, catalog.MoDatabaseSchema, txn.proc.Mp())
 	require.NoError(t, err)
 	vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(cache.MO_TIMESTAMP_IDX))[0] = ts
 	eng.GetLatestCatalogCache().InsertDatabase(bat)
@@ -89,7 +89,7 @@ func insertTempCatalogTable(t *testing.T, eng *Engine, txn *Transaction, item ca
 	defer packer.Close()
 	bat, err := catalog.GenCreateTableTuple(item, txn.proc.Mp(), packer)
 	require.NoError(t, err)
-	_, err = fillRandomRowidAndZeroTs(bat, txn.proc.Mp())
+	_, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, txn.proc.Mp())
 	require.NoError(t, err)
 	vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(cache.MO_TIMESTAMP_IDX))[0] = ts
 	eng.GetLatestCatalogCache().InsertTable(bat)

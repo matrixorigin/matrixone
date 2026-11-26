@@ -962,10 +962,10 @@ func (sp *ShufflePool) tryWriteMode(
 				count = len(current)
 			}
 			for offset < count {
-				// BatchSet historically assumed its maximum was at least the input
-				// batch size. Producer-local lanes deliberately use a smaller maximum
-				// at high DOP, so split selections at that boundary before Union. This
-				// keeps ReadyDeltaFor and the batches actually published in lockstep.
+				// Write at most one lane batch of rows per step, so a step reserves
+				// at most two ready batches and backpressure can stop the write
+				// between steps. Producer-local lanes use a smaller maximum at
+				// high DOP.
 				end := min(offset+maxRows, count)
 				sp.batchLocks[bucket].Lock()
 				if sp.closed[bucket] {
@@ -973,7 +973,7 @@ func (sp *ShufflePool) tryWriteMode(
 					break
 				}
 				batchSet := sp.batchSets[bucket][lane]
-				readyDelta := batchSet.ReadyDeltaFor(srcBatch, end-offset)
+				readyDelta := batchSet.ReadyDelta(srcBatch, writeMP, end-offset)
 				wait, ok := sp.reserveReady(int32(bucket), readyDelta)
 				if !ok {
 					sp.batchLocks[bucket].Unlock()
@@ -986,9 +986,9 @@ func (sp *ShufflePool) tryWriteMode(
 				var consumed bool
 				var writeErr error
 				if wholeBucket {
-					consumed, writeErr = batchSet.UnionRange(writeMP, srcBatch, offset, end-offset, buf)
+					consumed, writeErr = batchSet.Append(writeMP, srcBatch, offset, end-offset, buf)
 				} else {
-					consumed, writeErr = batchSet.Union(writeMP, srcBatch, current[offset:end], buf)
+					consumed, writeErr = batchSet.AppendSels(writeMP, srcBatch, current[offset:end], buf)
 				}
 				if !consumed && buf != nil {
 					sp.putBatchToPool(buf, proc.Mp())

@@ -52,8 +52,9 @@ func CreateRelation(
 	return err
 }
 
-func AppendDataToTable(ctx context.Context, rel handle.Relation, bat *batch.Batch) (err error) {
-	tnBat := containers.ToTNBatch(bat, common.WorkspaceAllocator)
+// AppendDataToTable appends bat, whose columns attrs names, to rel.
+func AppendDataToTable(ctx context.Context, rel handle.Relation, bat *batch.Batch, attrs []string) (err error) {
+	tnBat := containers.ToTNBatch(bat, attrs, common.WorkspaceAllocator)
 	defer tnBat.Close()
 	err = rel.Append(ctx, tnBat)
 	return

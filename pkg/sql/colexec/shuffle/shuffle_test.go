@@ -1817,7 +1817,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 		return ap
 	}
 	batchOf := func(vec *vector.Vector) *batch.Batch {
-		bat := batch.New([]string{"k"})
+		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vec
 		return bat
 	}

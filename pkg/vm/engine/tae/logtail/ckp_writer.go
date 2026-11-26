@@ -824,7 +824,7 @@ func syncTableIDBatch(
 			err = errors.Join(err, cleanupErr)
 		}
 	}()
-	bat := batch.NewWithSchema(TableIDAttrs, TableIDTypes, mp)
+	bat := batch.NewWithTypes(TableIDTypes, mp)
 	defer bat.Clean(mp)
 
 	tableBatchStart := types.MaxTs()
@@ -1106,7 +1106,7 @@ func MockTableIDBatch(
 		ioutil.WithMemorySizeThreshold(sinkerThreshold),
 	)
 	defer sinker.Close()
-	bat := batch.NewWithSchema(TableIDAttrs, TableIDTypes, mp)
+	bat := batch.NewWithTypes(TableIDTypes, mp)
 	defer bat.Clean(mp)
 
 	for i := 0; i < rowCount; i++ {

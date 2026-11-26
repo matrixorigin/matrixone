@@ -24,9 +24,9 @@ import (
 func Test_container_reset(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
-	bat := batch.New([]string{"id"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
-	buildBat := batch.New([]string{"id"})
+	buildBat := batch.NewWithSize(1)
 	buildBat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
 
 	c := &container{

@@ -262,12 +262,9 @@ func sortBatchWithColumns(
 	combined.Vecs = append(combined.Vecs[:0], input.Vecs...)
 	combined.Vecs = append(combined.Vecs, orderCols...)
 	combined.Vecs = append(combined.Vecs, extra...)
-	combined.Attrs = make([]string, len(combined.Vecs))
-	copy(combined.Attrs, input.Attrs)
 	combined.Recursive = input.Recursive
 	combined.SetRowCount(input.RowCount())
 	dataCols := len(input.Vecs)
-	inputAttrs := append([]string(nil), input.Attrs...)
 
 	sorted, err := sortBatch(proc, combined, fs, threshold, analyzer, inputConsumed, mp)
 	if err != nil {
@@ -284,7 +281,6 @@ func sortBatchWithColumns(
 	sortedOrder := append([]*vector.Vector(nil), sorted.Vecs[dataCols:dataCols+orderCount]...)
 	sortedExtra := append([]*vector.Vector(nil), sorted.Vecs[dataCols+orderCount:]...)
 	sorted.Vecs = sorted.Vecs[:dataCols]
-	sorted.Attrs = inputAttrs
 	return sorted, sortedOrder, sortedExtra, nil
 }
 

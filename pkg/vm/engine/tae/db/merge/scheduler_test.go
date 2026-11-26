@@ -134,7 +134,7 @@ func (c *dummyCatalogSource) InitSource() iter.Seq[catalog.MergeTable] {
 func (c *dummyCatalogSource) SetMergeNotifier(catalog.MergeNotifierOnCatalog) {}
 
 var oneGoodOneBad = func() (*batch.Batch, func()) {
-	bat := batch.New([]string{"account_id", "tid", "version", "settings"})
+	bat := batch.NewWithSize(4)
 	// first row with bad settings leading to parse error
 	bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType(), common.MergeAllocator)
 	vector.AppendFixed[uint32](bat.Vecs[0], 0, false, common.MergeAllocator)
