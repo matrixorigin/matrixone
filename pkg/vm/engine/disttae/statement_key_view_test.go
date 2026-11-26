@@ -42,7 +42,6 @@ import (
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -72,16 +71,7 @@ func TestStatementKeyProbePreservesPhysicalBits(t *testing.T) {
 			filter, err := readutil.ConstructBasePKFilter(expr, def, proc.Mp())
 			require.NoError(t, err)
 			defer filter.Cleanup()
-			require.True(t, filter.Valid)
-			require.Equal(t, types.T_float32, filter.Oid)
-			if value == 0 {
-				require.Equal(t, function.BETWEEN, filter.Op)
-				require.Equal(t, uint32(1<<31), math.Float32bits(types.DecodeFloat32(filter.LB)))
-				require.Zero(t, math.Float32bits(types.DecodeFloat32(filter.UB)))
-			} else {
-				require.Equal(t, function.IN, filter.Op)
-				require.Equal(t, 1, filter.Vec.Length())
-			}
+			require.False(t, filter.Valid, "scalar FLOAT lookup uses the reader fallback")
 		}()
 	}
 }
@@ -747,7 +737,7 @@ func (f *statementGCFileService) Delete(ctx context.Context, names ...string) er
 	return f.delete(ctx, names...)
 }
 
-func TestStatementKeyProbeZeroRangeReachesBothPackedRows(t *testing.T) {
+func TestStatementKeyProbeFloatFallbackKeepsBothZeroOwners(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 	for _, oid := range []types.T{types.T_float32, types.T_float64} {
@@ -776,7 +766,6 @@ func TestStatementKeyProbeZeroRangeReachesBothPackedRows(t *testing.T) {
 			}
 			packer := types.NewPacker()
 			defer packer.Close()
-			pool := fileservice.NewPool(1, func() *types.Packer { return packer }, func(p *types.Packer) { p.Reset() }, func(*types.Packer) {})
 			state := logtailreplay.NewPartitionState("", false, 42, false)
 			state.HandleRowsInsert(t.Context(), &input, 0, packer, proc.Mp())
 			for _, row := range []int{1, 2} {
@@ -786,20 +775,17 @@ func TestStatementKeyProbeZeroRangeReachesBothPackedRows(t *testing.T) {
 				require.NoError(t, err)
 				base, err := readutil.ConstructBasePKFilter(expr, def, proc.Mp())
 				require.NoError(t, err)
-				mem, err := readutil.NewMemPKFilter(def, timestamp.Timestamp{}, pool, base, engine.FilterHint{})
-				require.NoError(t, err)
-				require.True(t, mem.Valid())
-				require.Equal(t, function.BETWEEN, mem.Op())
-				require.Len(t, mem.Keys(), 2)
-				iter := state.NewPrimaryKeyIterWithFilters(types.BuildTS(2, 0), mem.Specs())
+				require.False(t, base.Valid)
+				iter := state.NewRowsIter(types.BuildTS(2, 0), nil, false)
 				var got []types.Rowid
 				for iter.Next() {
-					got = append(got, iter.Entry().RowID)
+					entry := iter.Entry()
+					if sameStatementKey(key, 0, pk, int(entry.Offset)) {
+						got = append(got, entry.RowID)
+					}
 				}
 				require.NoError(t, iter.Close())
-				require.Equal(t, []types.Rowid{{0: 17, 23: 1}, {0: 17, 23: 2}}, got, "the actual packed iterator keeps both zero encodings")
-				require.True(t, sameStatementKey(key, 0, pk, row))
-				require.False(t, sameStatementKey(key, 0, pk, 3-row), "physical residual selects its original zero")
+				require.Equal(t, []types.Rowid{{0: 17, 23: byte(row)}}, got, "the physical residual selects only the owner with the same bits")
 				base.Cleanup()
 				key.Free(proc.Mp())
 			}
@@ -810,7 +796,7 @@ func TestStatementKeyProbeZeroRangeReachesBothPackedRows(t *testing.T) {
 func TestStatementKeyViewFiniteFloatProbeDoesNotRetainCommittedImages(t *testing.T) {
 	colexec.NewServer("")
 	var peaks []uint64
-	for _, count := range []int{1000, 10000} {
+	for _, count := range []int{objectio.BlockMaxRows, 3 * objectio.BlockMaxRows} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			txn, tbl := newDumpInsertTxnForTest(t)
 			t.Cleanup(func() { cleanTxnWritesForTest(txn) })
@@ -843,10 +829,13 @@ func TestStatementKeyViewFiniteFloatProbeDoesNotRetainCommittedImages(t *testing
 			for col, typ := range []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), typ, types.New(types.T_varchar, 0, 0)} {
 				stored.Vecs[col] = vector.NewVec(typ)
 			}
-			payload := []byte(strings.Repeat("p", 1200))
-			block := types.Blockid{0: 17}
+			payload := []byte(strings.Repeat("p", 64))
+			rowID := func(row int) types.Rowid {
+				block := types.Blockid{0: 17, 19: byte(row / objectio.BlockMaxRows)}
+				return types.NewRowid(&block, uint32(row%objectio.BlockMaxRows))
+			}
 			for row := range count {
-				require.NoError(t, vector.AppendFixed(stored.Vecs[0], types.NewRowid(&block, uint32(row)), false, txn.proc.Mp()))
+				require.NoError(t, vector.AppendFixed(stored.Vecs[0], rowID(row), false, txn.proc.Mp()))
 				require.NoError(t, vector.AppendFixed(stored.Vecs[1], types.BuildTS(1, 0), false, txn.proc.Mp()))
 				require.NoError(t, vector.AppendFixed(stored.Vecs[2], float32(row+1)+0.001, false, txn.proc.Mp()))
 				require.NoError(t, vector.AppendBytes(stored.Vecs[3], payload, false, txn.proc.Mp()))
@@ -870,7 +859,9 @@ func TestStatementKeyViewFiniteFloatProbeDoesNotRetainCommittedImages(t *testing
 			txn.tableOps.addCreateTable(genTableKey(1, "base", 7, "db"), 0, base)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 			require.NoError(t, err)
-			account, err := registry.Open(256 << 10)
+			// An unfiltered committed read may hold one full frame, including arena
+			// growth. Three frames would exceed this budget if retained together.
+			account, err := registry.Open(1536 << 10)
 			require.NoError(t, err)
 			t.Cleanup(func() {
 				require.Zero(t, account.Seal().Used)
@@ -885,8 +876,9 @@ func TestStatementKeyViewFiniteFloatProbeDoesNotRetainCommittedImages(t *testing
 			})
 			require.NoError(t, err)
 			defer func() { require.NoError(t, view.Close()) }()
-			var usage uint64
-			for i, wanted := range []int{count / 2, count, count + 1} {
+			usage := generation.Snapshot().Used
+			native := account.Snapshot().Used
+			for _, wanted := range []int{count / 2, count, count + 1} {
 				key := vector.NewVec(typ)
 				require.NoError(t, vector.AppendFixed(key, float32(wanted)+0.001, false, txn.proc.Mp()))
 				row, err := view.Lookup(t.Context(), 42, key, 0)
@@ -896,13 +888,11 @@ func TestStatementKeyViewFiniteFloatProbeDoesNotRetainCommittedImages(t *testing
 					require.Nil(t, row)
 				} else {
 					require.NotNil(t, row)
-					require.Equal(t, types.NewRowid(&block, uint32(wanted-1)), vector.GetFixedAtNoTypeCheck[types.Rowid](row.Vecs[2], 0))
+					require.Equal(t, rowID(wanted-1), vector.GetFixedAtNoTypeCheck[types.Rowid](row.Vecs[2], 0))
 					require.Equal(t, payload, row.Vecs[1].GetBytesAt(0))
 					row.Clean(txn.proc.Mp())
 				}
-				if i == 0 {
-					usage = generation.Snapshot().Used
-				}
+				require.Equal(t, native, account.Snapshot().Used, "completed probes retain no native buffers")
 				require.Equal(t, usage, generation.Snapshot().Used, "completed probes retain no committed row images")
 			}
 			peaks = append(peaks, account.Snapshot().Peak)
@@ -912,5 +902,5 @@ func TestStatementKeyViewFiniteFloatProbeDoesNotRetainCommittedImages(t *testing
 		})
 	}
 	require.Len(t, peaks, 2)
-	require.Equal(t, peaks[0], peaks[1], "ten times more committed data does not grow retained probe images")
+	require.Equal(t, peaks[0], peaks[1], "more committed blocks do not increase peak probe memory")
 }

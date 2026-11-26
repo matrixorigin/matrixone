@@ -173,8 +173,10 @@ func TestODKUSystematicSQL(t *testing.T) {
 				exec(t, "create table physical_zero_workspace(id int primary key,a double,g double generated always as(a) stored,v int,unique key ug(g))")
 				exec(t, "begin")
 				t.Cleanup(func() { cleanupODKUSQL(t, conn, "rollback") })
-				affected(t, 1, "insert into physical_zero_workspace(id,a,v) values(?,?,?)", 1, float64(0), 0)
-				affected(t, 1, "insert into physical_zero_workspace(id,a,v) values(?,?,?)", 2, math.Copysign(0, -1), 0)
+				// Seed both physical keys in one ordered statement before capturing them
+				// as prior workspace rows in the statement under test.
+				affected(t, 2, "insert into physical_zero_workspace(id,a,v) values(?,?,?),(?,?,?) on duplicate key update v=values(v)", 1, float64(0), 0, 2, math.Copysign(0, -1), 0)
+				require.Equal(t, []string{"1|0", "2|0"}, rows(t, "select id,v from physical_zero_workspace order by id"))
 				affected(t, 4, "insert into physical_zero_workspace(id,a,v) values(?,?,?),(?,?,?) on duplicate key update a=values(a),v=v+values(v)", 9, float64(0), 1, 10, math.Copysign(0, -1), 1)
 				require.Equal(t, []string{"1|1", "2|1"}, rows(t, "select id,v from physical_zero_workspace order by id"))
 				exec(t, "rollback")

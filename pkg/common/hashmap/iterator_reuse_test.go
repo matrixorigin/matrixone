@@ -177,27 +177,36 @@ func TestIntIteratorReuseAfterAdmissionFailure(t *testing.T) {
 	})
 	itr := h.NewIterator()
 	itr.ensureCapacity(UnitLimit)
-	itr.keys = make([]uint64, UnitLimit, UnitLimit+1)
+	keys := make([]uint64, UnitLimit+1)
+	const canary = 0x1122334455667788
+	keys[UnitLimit] = canary
+	itr.keys = keys[:UnitLimit]
 	failedAt := -1
 	vecs := []*vector.Vector{v}
 	for start := 0; start+UnitLimit <= rows; start += UnitLimit {
 		_, _, err = itr.Find(start, UnitLimit, vecs)
 		require.NoError(t, err)
+		groups, cardinality := h.GroupCount(), h.Cardinality()
 		_, _, err = itr.Insert(start, UnitLimit, vecs)
 		if err != nil {
+			require.Equal(t, groups, h.GroupCount())
+			require.Equal(t, cardinality, h.Cardinality())
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			failedAt = start
 			break
 		}
 	}
 	require.NotEqual(t, -1, failedAt)
-	for _, off := range itr.keyOffs {
-		require.Zero(t, off, "failed encoding must release its scratch state")
-	}
+	require.Equal(t, uint64(canary), keys[UnitLimit], "denied insertion must not write past the active key buffer")
 	h.SetResizeAdmission(nil)
 	ids, _, err := itr.Insert(failedAt, UnitLimit, vecs)
 	require.NoError(t, err)
 	for n, id := range ids {
 		require.Equal(t, uint64(failedAt+n+1), id)
 	}
+	inserted := append([]uint64(nil), ids...)
+	ids, _, err = itr.Find(failedAt, UnitLimit, vecs)
+	require.NoError(t, err)
+	require.Equal(t, inserted, ids)
+	require.Equal(t, uint64(canary), keys[UnitLimit], "iterator reuse must stay within the active key buffer")
 }
