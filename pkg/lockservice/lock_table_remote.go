@@ -179,8 +179,12 @@ func (l *remoteLockTable) lock(
 		// have published a holder. An earlier ambiguous request still keeps
 		// its original positive cutoff.
 		txn.retainRemoteCleanup(l, 0)
-		if txn.bindChanged || txn.closing.Load() {
-			cb(pb.Result{}, ErrLockTableBindChanged)
+		if txn.isFenced() {
+			cb(pb.Result{}, moerr.NewLockTableBindChangedForFencedTxnNoCtx())
+			return
+		}
+		if txn.closing.Load() {
+			cb(pb.Result{}, ErrTxnNotFound)
 			return
 		}
 		waitDeadline := time.Unix(0, opts.LockWaitDeadline)
@@ -200,8 +204,12 @@ func (l *remoteLockTable) lock(
 		err = lockWaitContextError(waitCtx, err)
 		cancel()
 		txn.Lock()
-		if txn.bindChanged || txn.closing.Load() {
-			cb(pb.Result{}, ErrLockTableBindChanged)
+		if txn.isFenced() {
+			cb(pb.Result{}, moerr.NewLockTableBindChangedForFencedTxnNoCtx())
+			return
+		}
+		if txn.closing.Load() {
+			cb(pb.Result{}, ErrTxnNotFound)
 			return
 		}
 		if err != nil {
@@ -230,7 +238,7 @@ func (l *remoteLockTable) lock(
 		_ = txn.recordRemoteLocks(l.bind, rows, l.logger, false, opts.ExactRows)
 	}
 
-	if txn.bindChanged || txn.closing.Load() {
+	if txn.isFenced() || txn.closing.Load() {
 		if err == nil {
 			defer releaseResponse(resp)
 			if resp.NewBind == nil {
@@ -239,7 +247,11 @@ func (l *remoteLockTable) lock(
 				}
 			}
 		}
-		cb(pb.Result{}, ErrLockTableBindChanged)
+		if txn.isFenced() {
+			cb(pb.Result{}, moerr.NewLockTableBindChangedForFencedTxnNoCtx())
+		} else {
+			cb(pb.Result{}, ErrTxnNotFound)
+		}
 		return
 	}
 
@@ -247,18 +259,20 @@ func (l *remoteLockTable) lock(
 		defer releaseResponse(resp)
 		if resp.NewBind != nil {
 			txn.Unlock()
-			err = l.maybeHandleBindChanged(ctx, resp)
+			// Keep the owner's rejection for rollback even when cancellation
+			// interrupts the allocator refresh.
+			l.maybeHandleBindChanged(ctx, resp)
 			txn.Lock()
-			if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+			if txn.closing.Load() || !bytes.Equal(req.Lock.TxnID, txn.txnID) {
 				cb(pb.Result{}, ErrTxnNotFound)
 				return
 			}
-			if txn.bindChanged {
-				cb(pb.Result{}, ErrLockTableBindChanged)
+			if txn.isFenced() {
+				cb(pb.Result{}, moerr.NewLockTableBindChangedForFencedTxnNoCtx())
 				return
 			}
-			logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
-			cb(pb.Result{}, err)
+			logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, ErrLockTableBindChanged)
+			cb(pb.Result{}, ErrLockTableBindChanged)
 			return
 		}
 
@@ -283,12 +297,17 @@ func (l *remoteLockTable) lock(
 	txn.Unlock()
 	e := l.handleErrorWithContext(ctx, err, true)
 	txn.Lock()
-	if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+	if txn.closing.Load() || !bytes.Equal(req.Lock.TxnID, txn.txnID) {
 		cb(pb.Result{}, ErrTxnNotFound)
 		return
 	}
-	if txn.bindChanged {
-		cb(pb.Result{}, ErrLockTableBindChanged)
+	if txn.isFenced() {
+		cb(pb.Result{}, moerr.NewLockTableBindChangedForFencedTxnNoCtx())
+		return
+	}
+	if moerr.IsMoErrCode(originalErr, moerr.ErrLockTableBindChanged) {
+		// Keep the owner's binding error, including any terminal fence marker.
+		cb(pb.Result{}, originalErr)
 		return
 	}
 	if e != nil {
@@ -310,7 +329,8 @@ func (l *remoteLockTable) lock(
 }
 
 func remoteLockRejectedBeforeAdmission(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart)
+	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+		moerr.IsFencedTxnLockRejected(err)
 }
 
 func remoteLockResponseCompleted(err error) bool {

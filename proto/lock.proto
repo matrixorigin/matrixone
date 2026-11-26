@@ -129,6 +129,8 @@ enum Method {
   GetLockHolder      = 18;
   // CheckActiveTxn checks whether a txn is still active on the lock service
   CheckActiveTxn     = 19;
+  // ResolveForwardBind resolves a mirror's cold binding without admitting a lock.
+  ResolveForwardBind = 20;
 }
 
 enum Status {
