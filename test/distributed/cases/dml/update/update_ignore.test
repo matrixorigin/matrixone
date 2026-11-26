@@ -20,6 +20,20 @@ select * from update_ignore_regression order by id;
 update ignore update_ignore_regression set id = 2, v = 99 where id = 1;
 select * from update_ignore_regression order by id;
 
+
+-- Two writable aliases propose the same new UNIQUE key.
+-- @regex("Duplicate entry '40' for key",true)
+update update_ignore_regression x join update_ignore_regression y on x.id = 1 and y.id = 2
+    set x.a = 40, x.v = x.v + 1, y.a = 40, y.v = 99;
+select id,a,v from update_ignore_regression order by id;
+select id,a from update_ignore_regression force index(a) where a in (10, 20, 40) order by id;
+
+-- IGNORE applies the first alias and skips every assignment of the conflicting alias.
+update ignore update_ignore_regression x join update_ignore_regression y on x.id = 1 and y.id = 2
+    set x.a = 40, x.v = x.v + 1, y.a = 40, y.v = 99;
+select id,a,v from update_ignore_regression order by id;
+select id,a from update_ignore_regression force index(a) where a in (10, 20, 40) order by id;
+
 drop table update_ignore_regression;
 
 -- A row that is ignored by a later unique-key check must not release its old
