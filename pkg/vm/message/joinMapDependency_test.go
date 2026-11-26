@@ -120,6 +120,24 @@ func TestJoinMapBuildErrorPreservesCancellationSemantics(t *testing.T) {
 	}
 }
 
+func TestJoinMapBuildErrorPreservesReportedInterruption(t *testing.T) {
+	ctx := context.Background()
+	plain := moerr.NewQueryInterrupted(ctx)
+	reported := plain.AsReportedInterruption()
+	for _, tree := range []error{errors.Join(plain, context.Canceled, reported), errors.Join(reported, plain)} {
+		err := PreserveExplicitPipelineFailure(ctx, tree)
+		require.Same(t, reported, err)
+		snapshot := NewJoinMapBuildError(tree).AsMoErr()
+		require.True(t, snapshot.IsReportedInterruption())
+		require.False(t, plain.IsReportedInterruption())
+		data, err := snapshot.MarshalBinary()
+		require.NoError(t, err)
+		require.NoError(t, snapshot.UnmarshalBinary(data))
+		require.False(t, snapshot.IsReportedInterruption())
+		require.True(t, moerr.IsMoErrCode(snapshot, moerr.ErrQueryInterrupted))
+	}
+}
+
 func TestJoinMapBuildErrorPrefersSubstantiveError(t *testing.T) {
 	t.Run("moerr", func(t *testing.T) {
 		oom := moerr.NewOOM(context.Background())

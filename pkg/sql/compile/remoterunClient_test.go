@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -656,7 +658,27 @@ func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
 				runErr = s.RemoteRun(c)
 			}
 			if tt.remoteError {
-				require.True(t, moerr.IsMoErrCode(runErr, moerr.ErrInternal))
+				// A second CN sends the final fragment error before the group result.
+				for _, interruptedLast := range []bool{true, false} {
+					board := message.NewMessageBoard()
+					first, err := acquireRemoteAllocationStatementTestParticipant(t, board, 2, nil)
+					require.NoError(t, err)
+					second, err := acquireRemoteAllocationStatementTestParticipant(t, board, 2, nil)
+					require.NoError(t, err)
+					var a, b error = moerr.NewErrFKNoReferencedRow2(queryCtx), runErr
+					if !interruptedLast {
+						a, b = b, a
+					}
+					_, err = first.finish(a)
+					require.NoError(t, err)
+					_, groupErr := second.finish(b)
+					var response pipeline.Message
+					response.SetMoError(queryCtx, errors.Join(b, groupErr))
+					decoded, ok := response.TryToGetMoErr()
+					require.True(t, ok)
+					require.True(t, moerr.IsMoErrCode(decoded, moerr.ErrFKNoReferencedRow2), "%v", decoded)
+				}
+				require.True(t, moerr.IsMoErrCode(runErr, moerr.ErrQueryInterrupted))
 			} else if tt.wantErr == nil {
 				require.NoError(t, runErr)
 			} else {

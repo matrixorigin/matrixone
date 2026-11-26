@@ -680,6 +680,19 @@ type Error struct {
 	message   string
 	sqlState  string
 	detail    string
+	// Local provenance, deliberately not part of the wire error code.
+	reportedInterruption bool
+}
+
+// AsReportedInterruption returns a copy of a decoded interruption known to
+// be a peer's terminal decision, rather than a local observation of ctx.Done.
+func (e Error) AsReportedInterruption() *Error {
+	e.reportedInterruption = true
+	return &e
+}
+
+func (e *Error) IsReportedInterruption() bool {
+	return e.code == ErrQueryInterrupted && e.reportedInterruption
 }
 
 func (e *Error) Error() string {
@@ -736,6 +749,7 @@ func (e *Error) UnmarshalBinary(data []byte) error {
 	if err := ee.Unmarshal(data); err != nil {
 		return ConvertGoError(Context(), err)
 	}
+	e.reportedInterruption = false
 	e.code = ee.Code
 	e.mysqlCode = ee.MysqlCode
 	e.message = ee.Message
@@ -868,13 +882,13 @@ func (e *Error) IsRealError() bool {
 //
 // They are both fast, one with less typing and the other is consistent
 // with other error code checking.
-var errOkStopCurrRecur = Error{OkStopCurrRecur, 0, "StopCurrRecur", "00000", ""}
-var errOkExpectedEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000", ""}
-var errOkExpectedEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000", ""}
-var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000", ""}
-var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000", ""}
-var errOkExpectedNotSafeToStartTransfer = Error{OkExpectedNotSafeToStartTransfer, 0, "OkExpectedNotSafeToStartTransfer", "00000", ""}
-var errMysqlClientQuit = Error{MysqlClientQuit, 0, "MysqlClientQuit", "00000", ""}
+var errOkStopCurrRecur = Error{code: OkStopCurrRecur, message: "StopCurrRecur", sqlState: "00000"}
+var errOkExpectedEOF = Error{code: OkExpectedEOF, message: "ExpectedEOF", sqlState: "00000"}
+var errOkExpectedEOB = Error{code: OkExpectedEOB, message: "ExpectedEOB", sqlState: "00000"}
+var errOkExpectedDup = Error{code: OkExpectedDup, message: "ExpectedDup", sqlState: "00000"}
+var errOkExpectedPossibleDup = Error{code: OkExpectedPossibleDup, message: "OkExpectedPossibleDup", sqlState: "00000"}
+var errOkExpectedNotSafeToStartTransfer = Error{code: OkExpectedNotSafeToStartTransfer, message: "OkExpectedNotSafeToStartTransfer", sqlState: "00000"}
+var errMysqlClientQuit = Error{code: MysqlClientQuit, message: "MysqlClientQuit", sqlState: "00000"}
 
 /*
 GetOk is useless in general, should just use nil.

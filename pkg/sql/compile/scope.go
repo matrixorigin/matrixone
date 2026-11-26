@@ -1308,6 +1308,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 						return
 					}
+					sender.queryCtx = scopeRunQueryContext(s.Proc)
 					message := cnclient.AcquireMessage()
 					message.SetID(sender.streamSender.ID())
 					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
@@ -1437,6 +1438,9 @@ func isScopeCancellationError(err error) bool {
 			return isScopeCancellationError(child)
 		}
 	}
+	if me, ok := err.(*moerr.Error); ok && me.IsReportedInterruption() {
+		return false
+	}
 	return errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) ||
 		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
@@ -1462,6 +1466,9 @@ func isScopeCancellationFrom(err error, contextErr error) bool {
 		if child := wrapped.Unwrap(); child != nil {
 			return isScopeCancellationFrom(child, contextErr)
 		}
+	}
+	if me, ok := err.(*moerr.Error); ok && me.IsReportedInterruption() {
+		return false
 	}
 	return errors.Is(err, contextErr) ||
 		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)

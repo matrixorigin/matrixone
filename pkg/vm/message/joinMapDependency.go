@@ -66,8 +66,11 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	}
 	classification := classifyBuildError(err)
 	if classification.pureCancellation {
-		contextErr := classification.contextError()
 		typed := classification.interrupted
+		if typed != nil && typed.IsReportedInterruption() {
+			return &JoinMapBuildError{err: cloneMoErr(typed)}
+		}
+		contextErr := classification.contextError()
 		if contextErr != nil {
 			buildErr := &JoinMapBuildError{contextErr: contextErr, message: err.Error()}
 			// Preserve the stable moerr detail for compatibility even though the
@@ -95,6 +98,9 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 // Callers must have observed an explicit failure event, not just ctx.Done().
 func PreserveExplicitPipelineFailure(ctx context.Context, err error) error {
 	c := classifyBuildError(err)
+	if c.pureCancellation && c.interrupted != nil && c.interrupted.IsReportedInterruption() {
+		return c.interrupted
+	}
 	if c.pureCancellation && !c.deadline {
 		return moerr.NewInternalError(ctx, err.Error())
 	}
@@ -140,7 +146,7 @@ func classifyBuildError(err error) buildErrorClassification {
 			result.pureCancellation = result.pureCancellation && item.pureCancellation
 			result.canceled = result.canceled || item.canceled
 			result.deadline = result.deadline || item.deadline
-			if result.interrupted == nil {
+			if result.interrupted == nil || (item.interrupted != nil && item.interrupted.IsReportedInterruption()) {
 				result.interrupted = item.interrupted
 			}
 			if result.substantive == nil {
@@ -176,19 +182,10 @@ func cloneMoErr(src *moerr.Error) *moerr.Error {
 	if src == nil {
 		return moerr.NewInternalErrorNoCtx("hash build failed without an error")
 	}
-	data, err := src.MarshalBinary()
-	if err != nil {
-		return moerr.NewInternalErrorNoCtx(src.Error())
-	}
-	dst := new(moerr.Error)
-	if err := dst.UnmarshalBinary(data); err != nil {
-		return moerr.NewInternalErrorNoCtx(src.Error())
-	}
-	// moerr's binary form intentionally omits Detail.  Keep it as part of the
-	// immutable snapshot because memory-admission errors often put useful,
-	// safe metadata there.
-	dst.SetDetail(src.Detail())
-	return dst
+	// Error contains only scalar values and immutable strings. A local copy
+	// preserves detail and receipt provenance, which are not wire fields.
+	dst := *src
+	return &dst
 }
 
 func (e *JoinMapBuildError) Error() string {

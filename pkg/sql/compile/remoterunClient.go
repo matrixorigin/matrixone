@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -422,7 +421,7 @@ type messageSenderOnClient struct {
 	// sender's context
 	// and cancel function (it exists if this context was recreated by us).
 	ctx                context.Context
-	queryCtx           context.Context // Only set for RemoteRun; separate from the stream/pipeline lifetime.
+	queryCtx           context.Context // Query lifetime, independent of pipeline/stream cleanup.
 	ctxCancel          context.CancelFunc
 	useInternalTimeout bool
 
@@ -692,8 +691,9 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		if info, get := m.TryToGetMoErr(); get {
 			sender.markTerminal(m, false)
 			// A peer-reported error is not the local stream observing ctx.Done.
-			if sender.queryCtx != nil && sender.queryCtx.Err() == nil {
-				info = message.PreserveExplicitPipelineFailure(sender.queryCtx, info)
+			if me, ok := info.(*moerr.Error); ok && me.ErrorCode() == moerr.ErrQueryInterrupted &&
+				sender.queryCtx != nil && sender.queryCtx.Err() == nil {
+				info = me.AsReportedInterruption()
 			}
 			return nil, false, info
 		}

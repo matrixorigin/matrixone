@@ -2631,6 +2631,33 @@ func TestSendNotifyMessageLegacyRetryWaitsPastFormerAdmissionLimit(t *testing.T)
 	require.Equal(t, int32(2), attempts.Load())
 }
 
+func TestNotifyPeerInterruptionSurvivesScopeCancellation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	query := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+	proc.BuildPipelineContext(query)
+	s := &Scope{Proc: proc.NewContextChildProc(1), RemoteReceivRegInfos: []RemoteReceivRegInfo{{Idx: 0, Uuid: uuid.Must(uuid.NewV7()), FromAddr: "remote-cn"}}}
+	factory := func(ctx context.Context, _, _ string, mp *mpool.MPool, _ *AnalyzeModule) (*messageSenderOnClient, error) {
+		response := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+		response.SetMoError(ctx, context.Canceled)
+		ch := make(chan morpc.Message, 1)
+		ch <- response
+		return &messageSenderOnClient{ctx: ctx, mp: mp, streamSender: &fakeStreamSender{}, receiveCh: ch, safeToClose: true}, nil
+	}
+	var wg sync.WaitGroup
+	results := make(chan notifyMessageResult, 1)
+	s.sendNotifyMessageWithFactory(&wg, results, factory)
+	wg.Wait() // notify has already canceled the scope before Merge starts
+	result := <-results
+	defer result.clean(s.Proc)
+	require.NoError(t, query.Err())
+	require.ErrorIs(t, s.Proc.Ctx.Err(), context.Canceled)
+	_, edgeErr := (<-s.Proc.Reg.MergeReceivers[0].Ch2).Action()
+	for _, err := range []error{result.err, edgeErr, s.Proc.Ctx.Err()} {
+		r, _ := newScopeRunResult(err, s).resolveCancelCause()
+		require.True(t, moerr.IsMoErrCode(r.err, moerr.ErrQueryInterrupted), "%v", r.err)
+	}
+}
+
 func TestSendNotifyMessageSuccessfulAttachUsesQueryContext(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.BuildPipelineContext(context.Background())
