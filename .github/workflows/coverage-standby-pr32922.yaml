@@ -1,4 +1,4 @@
-name: PR 33199 / CI 487 label-free CS Coverage UT (isolated)
+name: PR 33176 / CI 491 Coverage UT (isolated)
 on:
   push:
     branches: [weilu-runner-test]
@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   authorize:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == 'de7b14c4e25a1647ab8a2b32cf679e1399c479ec' && github.ref == 'refs/heads/weilu-runner-test'
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == '77e3187e32d1988a71a7233cfda44d9523d494aa' && github.ref == 'refs/heads/weilu-runner-test'
     runs-on: ubuntu-latest
     environment: ci
     permissions:
@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: matrixorigin/CI
-          ref: fcd1f2ffe4119e412c78902728c17eda2febc394
+          ref: 746b0257a141f5ac935376bc947bf4cf73e49b74
           path: fixed-ci
           sparse-checkout: |
             scripts/coverage_cache_preflight.py
@@ -38,7 +38,7 @@ jobs:
             scripts
             config
           persist-credentials: false
-      - name: Validate the frozen refactor PR with the CI 487 trust rules
+      - name: Verify the JED canary, frozen PR, and production eligibility
         id: auth
         env:
           CS_PR_METADATA_TOKEN: ${{ secrets.TOKEN_ACTION }}
@@ -49,11 +49,12 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/fixed-ci/scripts:$GITHUB_WORKSPACE/reviewed/scripts" python3 - <<'PY'
           import json, os, urllib.request
           from pathlib import Path
-          from coverage_pr_entry import ENTRY, PROJECT, route
+          from coverage_pr_entry import ENTRY, PROJECT, has_s3_fixture, route
           import node_cache_real_pr_gate as approved
 
-          number, run_id, preflight = 33199, 45536014729, 138942810231
-          head, source, author = "d14b540e84d87cefa1a48cb15967e0eea7d4aaa5", "fengttt/matrixone", "fengttt"
+          number, run_id, preflight = 33176, 45801565374, 139845911163
+          canary, canary_sha = 45818613257, "77e3187e32d1988a71a7233cfda44d9523d494aa"
+          head, source, author = "78aa93fc7e1b5620f6218cdd5c9a436a7e7fa343", "Ariznawlll/matrixone", "Ariznawlll"
           def check(ok, message):
               if not ok:
                   raise SystemExit(message)
@@ -61,7 +62,7 @@ jobs:
               def redirect_request(self, *args, **kwargs):
                   return None
           def actions_record(path):
-              check(path in (f"actions/runs/{run_id}", f"actions/jobs/{preflight}"),
+              check(path in (f"actions/runs/{run_id}", f"actions/jobs/{preflight}", f"actions/runs/{canary}"),
                     "Unapproved Actions provenance path")
               request = urllib.request.Request(f"https://api.github.com/repos/{PROJECT}/{path}",
                   headers={"Authorization": "Bearer " + os.environ["API_TOKEN"],
@@ -73,12 +74,18 @@ jobs:
                   return json.loads(raw)
           code, p = approved.read(f"repos/{PROJECT}/pulls/{number}", token=os.environ["CS_PR_METADATA_TOKEN"])
           check(code == 200, "Required PR record unavailable")
+          c = actions_record(f"actions/runs/{canary}")
+          check(c["repository"]["full_name"] == PROJECT and c["head_repository"]["full_name"] == PROJECT
+                and c["event"] == "push" and c["path"] == ".github/workflows/cs-jed-build-tools-canary.yml"
+                and c["head_sha"] == canary_sha and c["head_branch"] == "weilu-runner-test"
+                and c["run_attempt"] == 1 and c["status"] == "completed" and c["conclusion"] == "success",
+                "The exact JED installation canary did not pass")
           r = actions_record(f"actions/runs/{run_id}")
           j = actions_record(f"actions/jobs/{preflight}")
           check(p["user"]["login"] == author and p["base"]["ref"] == "main"
-                and p["head"]["repo"]["full_name"] == source and p["head"]["sha"] == head,
+                and p["head"]["repo"]["full_name"] == source and p["head"]["sha"] == head
+                and p["state"] == "open" and not p["draft"],
                 "PR no longer matches the authorized trial subject")
-          check(not any(x["name"] == "kind/test-ci" for x in p["labels"]), "trial subject must have no CI type label")
           check(r["repository"]["full_name"] == PROJECT and r["event"] == "pull_request_target"
                 and r["path"] == ".github/workflows/entrypoint.yaml" and r["head_sha"] == head
                 and r["head_repository"]["full_name"] == source and r["head_branch"] == p["head"]["ref"]
@@ -87,9 +94,10 @@ jobs:
                 == (run_id, 1, head, "CI preflight", "success"), "official PR preflight did not pass")
           member, checks = approved.membership(author, os.environ["CS_CACHE_READ_TOKEN"], os.environ["CS_PR_METADATA_TOKEN"])
           result = route((PROJECT, "pull_request_target", ENTRY),
-                         {"number": number, "action": "opened", "pull_request": p}, p, member)
+                         {"number": number, "action": "opened", "pull_request": p}, p, member,
+                         lambda src, rev: has_s3_fixture(src, rev, os.environ["CS_PR_METADATA_TOKEN"]))
           check(result == {"route": "cache", "allowed": "true", "head_sha": head, "head_repository": source},
-                "CI 487 did not authorize the fixed refactor PR")
+                "CI 491 did not authorize the exact PR and fixtures")
           receipt = dict(schema=2, allowed="true", pr_number=str(number), author=author, base_ref="main",
                          head_sha=head, head_repository=source, verified_membership_http_status=member,
                          membership_checks=checks, project_cache_namespace=PROJECT)
@@ -97,7 +105,7 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               for key, value in result.items():
                   print(f"{key}={value}", file=out)
-          print("Authorized the organization member's refactor PR #33199 without a CI type label")
+          print("Verified the JED canary and authorized fixed MatrixOne PR #33176")
           PY
       - name: Check Coverage S3 configuration names
         env:
@@ -113,7 +121,7 @@ jobs:
               exit 1
             fi
           done
-      - name: Run CI 487 cache preflight with the production read credential
+      - name: Check durable cache grants with the production read credential
         env:
           CS_CACHE_READ_TOKEN: ${{ secrets.CS_COVERAGE_CACHE_READ_TOKEN || github.token }}
         run: PYTHONPATH="$GITHUB_WORKSPACE/reviewed/scripts" python3 fixed-ci/scripts/coverage_cache_preflight.py reviewed/config

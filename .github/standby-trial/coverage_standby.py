@@ -107,8 +107,8 @@ def parent_identity(t, p):
         "head_repository.full_name": REPO, "head_sha": os.environ["GITHUB_SHA"],
         "head_branch": WORKER_REF, "actor.login": "Ariznawlll",
     }
-    for field, value in {"pr": 33199, "source": "fengttt/matrixone",
-                         "head": "d14b540e84d87cefa1a48cb15967e0eea7d4aaa5"}.items():
+    for field, value in {"pr": 33176, "source": "Ariznawlll/matrixone",
+                         "head": "78aa93fc7e1b5620f6218cdd5c9a436a7e7fa343"}.items():
         check(t.get(field) == value, f"trial PR identity mismatch: {field}")
     for field, value in expected.items():
         actual = p

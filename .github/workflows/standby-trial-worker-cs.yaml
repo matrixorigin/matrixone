@@ -65,16 +65,18 @@ jobs:
         [[ "$site:$node" != mty:2 && "$site" == "${CS_CACHE_ENV:-}" ]]
         [[ "mo-standard-$node" == "${CS_CACHE_NODE:-}" && "$CS_CACHE_NODE" == "${CS_CACHE_EXPECTED_NODE:-}" ]]
         echo "site=$site" >> "$GITHUB_OUTPUT"
+    - name: Load the exact JED-verified CI 491 dependency installer
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
+        repository: matrixorigin/CI
+        ref: 746b0257a141f5ac935376bc947bf4cf73e49b74
+        path: .build-tools
+        sparse-checkout: scripts/coverage_cs_build_tools.sh
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
     - name: Install CS runner build dependencies
       timeout-minutes: 10
-      run: |
-        set -euo pipefail
-        if command -v gcc && command -v g++ && command -v make && command -v pkg-config && command -v cmake && command -v python; then
-          echo 'Build dependencies are already available.'
-        else
-          sudo apt-get -o Acquire::ForceIPv4=true update
-          sudo apt-get -o Acquire::ForceIPv4=true install -y build-essential cmake pkg-config python3 python-is-python3
-        fi
+      run: bash .build-tools/scripts/coverage_cs_build_tools.sh
     - name: Checkout MatrixOne source
       timeout-minutes: 10
       uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
