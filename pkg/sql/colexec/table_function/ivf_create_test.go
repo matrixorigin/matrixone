@@ -157,7 +157,7 @@ func TestIvfCreateStart_Error(t *testing.T) {
 			params: `{"lists":"1", "op_type":"vector_l2_ops"}`,
 			tblCfg: defaultTblCfg,
 			sqlFn: func(p *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-				bat := batch.New([]string{"v"})
+				bat := batch.NewWithSize(1)
 				vec := vector.NewVec(types.T_int32.ToType(), p.Proc.Mp())
 				vector.AppendFixed(vec, int32(1), false, p.Proc.Mp())
 				bat.SetVector(0, vec)
@@ -171,7 +171,7 @@ func TestIvfCreateStart_Error(t *testing.T) {
 			params: `{"lists":"1", "op_type":"vector_l2_ops"}`,
 			tblCfg: defaultTblCfg,
 			sqlFn: func(p *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-				bat := batch.New([]string{"v"})
+				bat := batch.NewWithSize(1)
 				typ := types.T_array_float32.ToType()
 				typ.Width = 2
 				vec := vector.NewVec(typ, p.Proc.Mp())
@@ -267,7 +267,7 @@ func TestIvfCreateEndUnstorableSample(t *testing.T) {
 				}
 				typ := tc.typ.ToType()
 				typ.Width = 2
-				bat := batch.New([]string{"v"})
+				bat := batch.NewWithSize(1)
 				vec := vector.NewVec(typ, p.Proc.Mp())
 				bat.SetVector(0, vec)
 				for _, row := range tc.rows {

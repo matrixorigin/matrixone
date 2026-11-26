@@ -251,7 +251,7 @@ func TestSequenceInitBatchPersistsExactInt16Boundaries(t *testing.T) {
 		bat.Clean(proc.Mp())
 		require.Equal(t, baseline, proc.Mp().CurrNB(), "all batch vectors must be released")
 	}()
-	require.Equal(t, []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called"}, bat.Attrs)
+	require.Len(t, bat.Vecs, 7)
 	for i, want := range []int16{32767, -32768, 32767, 32767} {
 		require.Equal(t, types.T_int16, bat.Vecs[i].GetType().Oid)
 		require.Equal(t, []int16{want}, vector.MustFixedColWithTypeCheck[int16](bat.Vecs[i]))

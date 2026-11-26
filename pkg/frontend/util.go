@@ -1378,7 +1378,7 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 		return nil, nil, err
 	}
 	//1. make vector type
-	bat := batch.New(colNames)
+	bat := batch.NewWithSize(len(colNames))
 	// On error, free the vectors already built in pool.
 	defer func() {
 		if err != nil {
@@ -2546,7 +2546,7 @@ func (ui *UserInput) isInternalSQLSource(ses FeSession) bool {
 	tenant := ses.GetTenantInfo()
 	internal := ui.isInternal() || tenant == nil || strings.HasPrefix(ui.getSql(), cmdFieldListSql)
 	if tenant != nil {
-		special, _, _ := isSpecialUser(tenant.GetUser())
+		special := authenticatedSpecialUser(tenant)
 		internal = internal || special || tenant.GetTenant() == sysAccountName && tenant.GetUser() == "internal"
 	}
 	return internal

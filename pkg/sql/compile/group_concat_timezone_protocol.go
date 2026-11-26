@@ -17,12 +17,10 @@ package compile
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -73,45 +71,29 @@ func pipelineRequiresGroupConcatTimeZone(p *pipeline.Pipeline) bool {
 	}
 	return false
 }
+
+// constrainGroupConcatTimeZoneWorkers keeps on one CN a query whose GROUP_CONCAT
+// formats TIMESTAMPs in a session time zone that cannot travel to another CN.
 func (c *Compile) constrainGroupConcatTimeZoneWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
 	}
-	named, local, err := groupConcatTimeZoneRequirement(c.proc, qry)
-	if err != nil {
+	_, local, err := groupConcatTimeZoneRequirement(c.proc, qry)
+	if err != nil || !local {
 		return err
-	}
-	if named && !local {
-		var supported bool
-		supported, err = remoteWorkersSupportProtocolForPlacement(c.proc, c.cnList, defines.MORPCVersion67)
-		if err != nil {
-			return err
-		}
-		local = !supported
-	}
-	if !local {
-		return nil
 	}
 	c.execType = plan2.ExecTypeAP_ONECN
 	c.cnList, err = c.scheduleQueryWorkers()
 	return err
 }
+
 func validateGroupConcatTimeZoneDestination(proc *process.Process, p *pipeline.Pipeline) error {
-	named, local, err := groupConcatTimeZoneRequirement(proc, p)
+	_, local, err := groupConcatTimeZoneRequirement(proc, p)
 	if err != nil {
 		return err
 	}
-	if !named && !local {
-		return nil
+	if local {
+		return moerr.NewNotSupportedNoCtx("remote GROUP_CONCAT requires a portable time zone")
 	}
-	if !local && p != nil && p.Node != nil {
-		supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion67)
-		if err != nil {
-			return err
-		}
-		if supported {
-			return nil
-		}
-	}
-	return moerr.NewNotSupportedNoCtx("remote GROUP_CONCAT requires a portable time zone and MORPC version 67")
+	return nil
 }

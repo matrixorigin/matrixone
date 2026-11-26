@@ -501,6 +501,7 @@ func (h *Handle) apiEntryToWriteEntry(
 		AutoIncrEpochKnown: pe.GetAutoIncrEpochKnown(),
 		FileName:           pe.GetFileName(),
 		Batch:              moBat,
+		Attrs:              pe.GetBat().GetAttrs(),
 		PkCheck:            cmd_util.PKCheckType(pe.GetPkCheckByTn()),
 	}
 
@@ -764,7 +765,7 @@ func (h *Handle) HandleCreateDatabase(
 	// Write to mo_database table
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	databaseTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_DATABASE_ID)
-	err = AppendDataToTable(ctx, databaseTbl, req.Bat)
+	err = AppendDataToTable(ctx, databaseTbl, req.Bat, req.Attrs)
 
 	return
 }
@@ -829,12 +830,12 @@ func (h *Handle) HandleCreateRelation(
 
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	tablesTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_TABLES_ID)
-	if err := AppendDataToTable(ctx, tablesTbl, req.TableBat); err != nil {
+	if err := AppendDataToTable(ctx, tablesTbl, req.TableBat, req.TableAttrs); err != nil {
 		return err
 	}
 	columnsTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
-	for _, bat := range req.ColumnBat {
-		if err := AppendDataToTable(ctx, columnsTbl, bat); err != nil {
+	for i, bat := range req.ColumnBat {
+		if err := AppendDataToTable(ctx, columnsTbl, bat, req.ColumnAttrs[i]); err != nil {
 			return err
 		}
 	}
@@ -983,7 +984,7 @@ func (h *Handle) HandleWrite(
 			postFunc = append(postFunc, parse_merge_settings_set(req.Batch, h.db.MergeScheduler))
 		}
 
-		err = AppendDataToTable(ctx, tb, req.Batch)
+		err = AppendDataToTable(ctx, tb, req.Batch, req.Attrs)
 		return
 	}
 

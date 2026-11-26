@@ -265,7 +265,6 @@ type MergeTaskHost interface {
 
 func getSimilarBatch(bat *batch.Batch, capacity int, vpool DisposableVecPool) (*batch.Batch, func()) {
 	newBat := batch.NewWithSize(len(bat.Vecs))
-	newBat.Attrs = bat.Attrs
 	rfs := make([]func(), len(bat.Vecs))
 	releaseF := func() {
 		for _, f := range rfs {

@@ -17,7 +17,6 @@ package preinsert
 import (
 	"bytes"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -40,9 +39,6 @@ import (
 )
 
 const opName = "preinsert"
-
-const autoIncrementGeneratedAttr = "__mo_auto_increment_generated"
-const odkuInputOrdinalAttr = "__mo_odku_input_ordinal"
 
 func (preInsert *PreInsert) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -155,7 +151,6 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 			preInsert.ctr.buf = batch.NewWithSize(len(bat.Vecs))
 		} else {
 			preInsert.ctr.buf = batch.NewWithSize(len(preInsert.Attrs))
-			preInsert.ctr.buf.Attrs = slices.Clone(preInsert.Attrs)
 		}
 	} else {
 		preInsert.ctr.buf.SetRowCount(0)
@@ -248,7 +243,6 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 			preInsert.ctr.canFreeVecIdx[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.ownedVecSlots[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, vec)
-			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.CPrimaryKeyColName)
 		}
 		if preInsert.ctr.clusterByExecutor != nil {
 			vec, err := preInsert.ctr.clusterByExecutor.Eval(proc, []*batch.Batch{preInsert.ctr.buf}, nil)
@@ -258,11 +252,9 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 			preInsert.ctr.canFreeVecIdx[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.ownedVecSlots[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, vec)
-			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.TableDef.ClusterBy.Name)
 		}
 		if preInsert.IsOldUpdate {
 			rowIdIdx := len(bat.Vecs) - 1
-			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.Row_ID)
 			rowIdVec := vector.NewVec(*bat.GetVector(int32(rowIdIdx)).GetType(), proc.Mp())
 			err = rowIdVec.UnionBatch(bat.Vecs[rowIdIdx], 0, bat.Vecs[rowIdIdx].Length(), nil, proc.Mp())
 			if err != nil {
@@ -671,7 +663,6 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 		preInsert.ctr.ownedVecSlots[markerPos] = true
 		preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs,
 			vector.NewVec(types.T_bool.ToType(), proc.Mp()))
-		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, autoIncrementGeneratedAttr)
 		if preInsert.TrackODKUResult {
 			ordinalPos := int(preInsert.ODKUOrdinalColumn)
 			if ordinalPos != len(preInsert.ctr.buf.Vecs) {
@@ -683,7 +674,6 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 			preInsert.ctr.ownedVecSlots[ordinalPos] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs,
 				vector.NewVec(types.T_uint64.ToType(), proc.Mp()))
-			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, odkuInputOrdinalAttr)
 		}
 	} else {
 		if markerPos >= len(preInsert.ctr.buf.Vecs) {

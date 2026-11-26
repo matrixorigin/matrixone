@@ -42,7 +42,7 @@ func (mock *MockTxnExecutor) LockTable(table string) error {
 }
 
 func (mock *MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
-	bat := batch.New([]string{"a", "b", "c", "d", "e", "f", "g", "h"})
+	bat := batch.NewWithSize(8)
 	bat.Vecs[0] = testutil.MakeVarcharVector([]string{"PubName"}, nil, mock.mp)
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"DbName"}, nil, mock.mp)
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, mock.mp)

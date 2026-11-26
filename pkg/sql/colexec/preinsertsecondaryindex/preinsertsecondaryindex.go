@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,11 +62,9 @@ func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColum
 
 	if isUpdate {
 		preInsertSecIdx.ctr.buf = batch.NewWithSize(3)
-		preInsertSecIdx.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
 		preInsertSecIdx.ctr.buf.Vecs[2] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	} else {
 		preInsertSecIdx.ctr.buf = batch.NewWithSize(2)
-		preInsertSecIdx.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 	}
 
 	if len(secondaryColumnPos) == 1 {

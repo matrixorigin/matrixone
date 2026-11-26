@@ -50,7 +50,7 @@ func TestDeferredJoinConstantDiagnosticActivationAndReuse(t *testing.T) {
 	require.NoError(t, err)
 	executor := executors[0]
 	defer executor.Free()
-	input := batch.New(nil)
+	input := batch.NewWithSize(0)
 	input.SetRowCount(3)
 
 	// Empty probe: HashBuild's key calculation must not publish its warning.
@@ -89,7 +89,7 @@ func TestDeferredJoinConstantSemanticErrorActivation(t *testing.T) {
 		typ:      types.T_int64.ToType(),
 	}
 	defer executor.Free()
-	input := batch.New(nil)
+	input := batch.NewWithSize(0)
 	input.SetRowCount(1)
 	value, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
@@ -145,7 +145,7 @@ func TestDeferredJoinTemporalWarningActivation(t *testing.T) {
 	execs, err := NewJoinBuildExpressionExecutors(proc, []*plan.Expr{expr}, nil, owner)
 	require.NoError(t, err)
 	defer execs[0].Free()
-	b := batch.New(nil)
+	b := batch.NewWithSize(0)
 	b.SetRowCount(2)
 	_, err = execs[0].Eval(proc, []*batch.Batch{b}, nil)
 	require.NoError(t, err)

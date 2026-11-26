@@ -956,6 +956,7 @@ func (p *PartitionState) HandleRowsDelete(
 	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[0])
 	timeVector := vector.MustFixedColWithTypeCheck[types.TS](sourceBatch.Vecs[1])
 	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[3])
+	replayed := &ReplayBatch{Batch: sourceBatch}
 
 	var primaryKeys [][]byte
 	if len(input.Vecs) > 2 {
@@ -994,7 +995,7 @@ func (p *PartitionState) HandleRowsDelete(
 			entry.PrimaryIndexBytes = primaryKeys[i]
 		}
 		if !p.noData {
-			entry.Batch = sourceBatch
+			entry.Batch = replayed
 			entry.Offset = int64(i)
 		}
 		p.rows.Set(entry)
@@ -1035,7 +1036,6 @@ func (p *PartitionState) HandleRowsDelete(
 		sourceBatch.Vecs[0] = sourceBatch.Vecs[2]
 		clear(sourceBatch.Vecs[1:])
 		sourceBatch.Vecs = sourceBatch.Vecs[:1]
-		sourceBatch.Attrs = nil
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
@@ -1078,11 +1078,12 @@ func (p *PartitionState) replayImmutableInsert(
 	}
 	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[0])
 	timeVector := vector.MustFixedColWithTypeCheck[types.TS](sourceBatch.Vecs[1])
+	replayed := &ReplayBatch{Batch: sourceBatch, Attrs: input.Attrs}
 	primaryKeys = readutil.EncodePrimaryKeyVector(
 		sourceBatch.Vecs[2+primarySeqnum],
 		packer,
 	)
-	clusterKeys := p.encodeClusterKeys(sourceBatch, packer, keys)
+	clusterKeys := p.encodeClusterKeys(sourceBatch, input.Attrs, packer, keys)
 
 	var numInserted int64
 	for i, rowID := range rowIDVector {
@@ -1104,7 +1105,7 @@ func (p *PartitionState) replayImmutableInsert(
 		}
 
 		if !p.noData {
-			entry.Batch = sourceBatch
+			entry.Batch = replayed
 			entry.Offset = int64(i)
 		}
 		entry.PrimaryIndexBytes = primaryKeys[i]
@@ -1160,7 +1161,9 @@ func (p *PartitionState) disableClusterIndex() {
 	p.rowClusterIndex = nil
 }
 
-func (p *PartitionState) encodeClusterKeys(bat *batch.Batch, packer *types.Packer, keys []*readutil.ClusterKeyDescriptor) [][]byte {
+// encodeClusterKeys encodes the cluster-key column of bat, whose columns attrs
+// names.
+func (p *PartitionState) encodeClusterKeys(bat *batch.Batch, attrs []string, packer *types.Packer, keys []*readutil.ClusterKeyDescriptor) [][]byte {
 	if p.clusterIndexDisabled || p.noData {
 		return nil
 	}
@@ -1178,15 +1181,15 @@ func (p *PartitionState) encodeClusterKeys(bat *batch.Batch, packer *types.Packe
 		return nil
 	}
 	pos := int(key.Seqnum) + 2
-	if pos < 2 || pos >= len(bat.Attrs) || pos >= len(bat.Vecs) ||
-		bat.Attrs[pos] != key.Name || bat.Vecs[pos] == nil ||
+	if pos < 2 || pos >= len(attrs) || pos >= len(bat.Vecs) ||
+		attrs[pos] != key.Name || bat.Vecs[pos] == nil ||
 		bat.Vecs[pos].GetType().Oid != types.T_varchar ||
 		bat.Vecs[pos].Length() != bat.Vecs[0].Length() || (bat.Vecs[pos].IsConstNull() || bat.Vecs[pos].GetNulls().Any()) {
 		p.disableClusterIndex()
 		return nil
 	}
 	matches := 0
-	for _, name := range bat.Attrs {
+	for _, name := range attrs {
 		if name == key.Name {
 			matches++
 		}
@@ -1225,9 +1228,11 @@ func (p *PartitionState) deleteRowIndexes(entry *RowEntry, packer *types.Packer)
 	if p.rowClusterIndex == nil || entry.Deleted {
 		return
 	}
+	// The row's batch passed encodeClusterKeys's name check when it was
+	// inserted: a non-empty batch that fails it disables the index for good.
 	pos := int(p.clusterKey.Seqnum) + 2
-	if entry.Batch == nil || pos >= len(entry.Batch.Vecs) || pos >= len(entry.Batch.Attrs) ||
-		entry.Batch.Attrs[pos] != p.clusterKey.Name || entry.Batch.Vecs[pos] == nil || entry.Offset < 0 ||
+	if entry.Batch == nil || pos >= len(entry.Batch.Vecs) ||
+		entry.Batch.Vecs[pos] == nil || entry.Offset < 0 ||
 		entry.Batch.Vecs[pos].GetType().Oid != types.T_varchar ||
 		entry.Offset >= int64(entry.Batch.Vecs[pos].Length()) {
 		p.disableClusterIndex()

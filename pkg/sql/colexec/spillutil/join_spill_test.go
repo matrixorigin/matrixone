@@ -643,7 +643,6 @@ func TestReSpillOmitsUnusedBatchMetadata(t *testing.T) {
 		values[i] = int32(i)
 	}
 	build := makeInt32Batch(proc, values)
-	build.Attrs = []string{"key"}
 	defer build.Clean(proc.Mp())
 	engine := newExactTestSpillEngine(t, SpillEngineConfig{
 		BuildKeyExprs:           makeTestKeyExpr(),
@@ -668,9 +667,6 @@ func TestReSpillOmitsUnusedBatchMetadata(t *testing.T) {
 			continue
 		}
 		found = true
-		for _, bat := range jm.GetBatches() {
-			require.Empty(t, bat.Attrs)
-		}
 		jm.Free()
 	}
 	require.True(t, found)

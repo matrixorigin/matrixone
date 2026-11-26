@@ -140,7 +140,7 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	t.Cleanup(proc.Free)
 	typs := []types.Type{types.T_int32.ToType(), types.T_int32.ToType()}
-	input := batch.NewWithSchema(nil, typs, mp)
+	input := batch.NewWithTypes(typs, mp)
 	t.Cleanup(func() { input.Clean(mp) })
 	for row := range 8 {
 		for col, v := range input.Vecs {
@@ -198,7 +198,7 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 				})
 				allocation, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
-				output := batch.NewWithSchema(nil, typs, allocation)
+				output := batch.NewWithTypes(typs, allocation)
 				t.Cleanup(func() { freeTestBatchWithOwnPools(output) })
 				original := append([]*vector.Vector(nil), output.Vecs...)
 				request := &engine.ReaderFilterRequest{
