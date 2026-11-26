@@ -43,7 +43,8 @@ func cloneIndependentDatabaseTables(
 		indexes *compile.CloneIndexCatalogBatch
 		ctx     context.Context
 	}
-	var workers []worker
+	workerCount := min(4, runtime.GOMAXPROCS(0), len(tables))
+	workers := make([]worker, 0, workerCount)
 	defer func() {
 		cancel()
 		// No rollback or buffer release may race a still-running producer.
@@ -54,7 +55,7 @@ func cloneIndependentDatabaseTables(
 			worker.proc.Free()
 		}
 	}()
-	for range min(4, runtime.GOMAXPROCS(0), len(tables)) {
+	for range workerCount {
 		child := owner.backSes.InitBackExec(proc.GetTxnOperator(), "", backSesOutputCallback).(*backExec)
 		child.backSes.setResponser(&NullResp{database: owner.backSes.GetDatabaseName()})
 		child.backSes.cloneSnapshotUsesBackgroundTxn = true
