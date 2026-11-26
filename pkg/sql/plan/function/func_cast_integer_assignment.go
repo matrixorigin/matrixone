@@ -60,6 +60,10 @@ func clampIntegerAssignmentSource(proc *process.Process, source *vector.Vector, 
 		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint32](source), target, result, length, selection)
 	case types.T_uint64, types.T_bit:
 		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[uint64](source), target, result, length, selection)
+	case types.T_year:
+		// #33228: YEAR is stored as a small integer; clip it like any other
+		// integer source instead of letting the Go conversion wrap.
+		return clampIntegerAssignmentTarget(proc, vector.GenerateFunctionFixedTypeParameter[types.MoYear](source), target, result, length, selection)
 	}
 	return moerr.NewInternalError(proc.Ctx, "unsupported integer assignment source")
 }
@@ -245,6 +249,8 @@ func integerAssignmentMagnitude[S constraints.Integer](value S) (negative bool, 
 		return signedIntegerMagnitude(int64(v))
 	case int64:
 		return signedIntegerMagnitude(v)
+	case types.MoYear:
+		return signedIntegerMagnitude(int64(v))
 	case uint8:
 		return false, uint64(v)
 	case uint16:

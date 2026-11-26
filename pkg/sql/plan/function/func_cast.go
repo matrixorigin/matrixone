@@ -1258,7 +1258,8 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			vector.MustFunctionResult[types.Date](result), length, selectList, mode)
 	}
 	if (mode == castModeAssignment || mode == castModeAssignmentIgnore) &&
-		(isStorageIntegerOid(fromType.Oid) || fromType.Oid == types.T_bit) && isStorageIntegerOid(toType.Oid) {
+		(isStorageIntegerOid(fromType.Oid) || fromType.Oid == types.T_bit || fromType.Oid == types.T_year) &&
+		isStorageIntegerOid(toType.Oid) {
 		return clampIntegerAssignmentSource(proc, from, toType.Oid, result, length, selectList)
 	}
 	if mode.isAssignment() && toType.Oid.IsInteger() {
@@ -11797,12 +11798,38 @@ func yearToNumeric[T constraints.Integer | constraints.Float](ctx context.Contex
 				return err
 			}
 		} else {
-			if err := rs.Append(T(v), false); err != nil {
+			converted := T(v)
+			// #33228: a narrow integer target such as TINYINT cannot hold
+			// most YEAR values; report out of range instead of wrapping.
+			if int64(converted) != int64(v) {
+				return moerr.NewOutOfRangef(ctx, yearIntegerTargetName(rs.GetType().Oid), "value '%v'", int64(v))
+			}
+			if err := rs.Append(converted, false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func yearIntegerTargetName(oid types.T) string {
+	switch oid {
+	case types.T_int8:
+		return "int8"
+	case types.T_uint8:
+		return "uint8"
+	case types.T_int16:
+		return "int16"
+	case types.T_uint16:
+		return "uint16"
+	case types.T_int32:
+		return "int32"
+	case types.T_uint32:
+		return "uint32"
+	case types.T_uint64:
+		return "uint64"
+	}
+	return "int64"
 }
 
 func yearToDecimal64(
