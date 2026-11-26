@@ -568,6 +568,68 @@ func TestBackendCreateQueueTimeoutInvalidatesExactState(t *testing.T) {
 	client.mu.Unlock()
 }
 
+func TestPoolReturnDuringQueuedExpansion(t *testing.T) {
+	c := &client{}
+	state := newBackendCreateState(&backendGeneration{})
+	defer state.stop()
+	a, b := &remoteBackend{}, &remoteBackend{}
+	for _, rb := range []*remoteBackend{a, b} {
+		rb.atomic.lastActiveTime.Store(time.Now())
+		rb.Lock()
+	}
+	pool := []Backend{a, b}
+	state.watchPoolUnlockLocked(pool)
+	first := state.reuse.Load()
+	require.NotNil(t, first)
+	state.watchPoolUnlockLocked(pool)
+	require.Same(t, first, state.reuse.Load())
+
+	// Two releases can publish the same hint. The factory is still queued
+	// and must neither start its peer-health clock nor be canceled by reuse.
+	unlocked := make(chan struct{})
+	go func() {
+		a.Unlock()
+		close(unlocked)
+	}()
+	b.Unlock()
+	<-unlocked
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	var start time.Time
+	require.NoError(t, c.waitBackendChange(ctx, "remote", &start, state, 0))
+	require.True(t, start.IsZero())
+	require.NoError(t, state.ctx.Err())
+	// If a competitor consumed both, the next cohort must not spin on the
+	// old closed signal. An invalidated old cohort cannot wake the new one.
+	a.Lock()
+	b.Lock()
+	state.watchPoolUnlockLocked(pool)
+	next := state.reuse.Load()
+	require.NotSame(t, first, next)
+	select {
+	case <-next.done:
+		t.Fatal("stale return notified the next cohort")
+	default:
+	}
+	cancel()
+	require.ErrorIs(t, c.waitBackendChange(ctx, "remote", &start, state, 0), context.Canceled)
+	a.Unlock()
+	b.Unlock()
+	a.atomic.draining.Store(true)
+	b.atomic.lastActiveTime.Store(time.Time{})
+	state.watchPoolUnlockLocked(pool)
+	require.Nil(t, state.reuse.Load(), "no eligible old connection remains")
+
+	// Simulate an unlock between the caller's pool miss and subscription.
+	b.atomic.lastActiveTime.Store(time.Now())
+	state.watchPoolUnlockLocked(pool)
+	select {
+	case <-state.reuse.Load().done:
+	default:
+		t.Fatal("missed an already returned backend")
+	}
+}
+
 func TestRetryQueueSharesOriginalFactoryBudget(t *testing.T) {
 	const factoryTimeout = time.Minute
 

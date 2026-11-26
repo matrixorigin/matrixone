@@ -1197,6 +1197,9 @@ func (c *client) getBackendForOperation(
 			generation,
 		)
 		if queued {
+			if hasBackends {
+				backendCreate.watchPoolUnlockLocked(c.mu.backends[backend])
+			}
 			unlock()
 			return nil, backendCreate, ErrBackendCreating
 		}
@@ -1496,6 +1499,48 @@ type backendCreateState struct {
 	// setting it, so local invalidation remains distinct from factory evidence.
 	factoryErr    error
 	queueTimedOut bool
+	// Only armed on expansion of a nonempty pool, under c.mu. Waiters may
+	// observe a newer signal if a competitor already reclaimed the backend.
+	reuse atomic.Pointer[backendReuseSignal]
+}
+
+// A hint to repeat normal pool admission, not ownership of a backend.
+// Multiple backends may return concurrently; none retains a client or waiter.
+type backendReuseSignal struct {
+	once sync.Once
+	done chan struct{}
+}
+
+func (s *backendReuseSignal) notify() {
+	s.once.Do(func() { close(s.done) })
+}
+
+// Called after selection misses, with c.mu held. Recheck the stream lock
+// while subscribing so an unlock between lookup and registration isn't lost.
+func (s *backendCreateState) watchPoolUnlockLocked(backends []Backend) {
+	if prev := s.reuse.Load(); prev != nil {
+		select {
+		case <-prev.done:
+		default:
+			return // this cohort is already watching the existing connections
+		}
+	}
+	var signal *backendReuseSignal
+	for _, b := range backends {
+		rb, ok := b.(*remoteBackend)
+		if !ok || rb.LastActiveTime().IsZero() || !rb.admissionAvailable() {
+			continue
+		}
+		if signal == nil {
+			signal = &backendReuseSignal{done: make(chan struct{})}
+		}
+		if rb.watchUnlock(signal) {
+			break // already selectable
+		}
+	}
+	// If the old pool drained in the meantime, stop advertising its already
+	// closed signal: the factory is now the only source of new capacity.
+	s.reuse.Store(signal)
 }
 
 func newBackendCreateState(
@@ -2060,7 +2105,10 @@ func (c *client) waitBackendChange(
 			backend,
 			creationStart,
 			backendCreate,
-		); err != nil {
+		); err == errBackendReturned {
+			// Do not read factoryErr here: the factory may still be running.
+			return ctx.Err()
+		} else if err != nil {
 			return err
 		}
 		if backendCreate.factoryErr == nil {
@@ -2071,17 +2119,24 @@ func (c *client) waitBackendChange(
 	return c.waitBackendRetryBackoff(ctx, backend, *creationStart, backoff)
 }
 
+var errBackendReturned = errors.New("pooled backend returned")
+
 func (c *client) waitBackendCreateCompletion(
 	ctx context.Context,
 	backend string,
 	creationStart *time.Time,
 	backendCreate *backendCreateState,
 ) error {
+	var returned <-chan struct{}
+	if signal := backendCreate.reuse.Load(); signal != nil {
+		returned = signal.done
+	}
 	startedAt, started, err := c.waitBackendCreateAdmission(
 		ctx,
 		backend,
 		*creationStart,
 		backendCreate,
+		returned,
 	)
 	if err != nil || !started {
 		return err
@@ -2094,6 +2149,7 @@ func (c *client) waitBackendCreateCompletion(
 		backend,
 		*creationStart,
 		backendCreate,
+		returned,
 	)
 }
 
@@ -2106,6 +2162,7 @@ func (c *client) waitBackendCreateAdmission(
 	backend string,
 	creationStart time.Time,
 	state *backendCreateState,
+	returned <-chan struct{},
 ) (time.Time, bool, error) {
 	if startedAt, ok := state.startTime(); ok {
 		return startedAt, true, nil
@@ -2118,10 +2175,21 @@ func (c *client) waitBackendCreateAdmission(
 		creationStart,
 		state,
 	)
+	onReturn := func() (time.Time, bool, error) {
+		if startedAt, ok := state.startTime(); ok {
+			return startedAt, true, nil // observe the factory's original budget
+		}
+		if backendCreateDone(state) {
+			return c.backendCreateAdmissionResult(state)
+		}
+		return time.Time{}, false, errBackendReturned
+	}
 	if deadline.IsZero() {
 		select {
 		case <-ctx.Done():
 			return time.Time{}, false, ctx.Err()
+		case <-returned:
+			return onReturn()
 		case <-state.started:
 			return state.startedAt, true, nil
 		case <-state.done:
@@ -2143,6 +2211,11 @@ func (c *client) waitBackendCreateAdmission(
 	select {
 	case <-ctx.Done():
 		return time.Time{}, false, ctx.Err()
+	case <-returned:
+		if time.Now().Before(deadline) {
+			return onReturn()
+		}
+		return c.handleBackendCreateAdmissionDeadline(backend, creationStart, state, deadlineKind)
 	case <-state.started:
 		return state.startedAt, true, nil
 	case <-state.done:
@@ -2266,12 +2339,18 @@ func (c *client) waitBackendFactoryCompletion(
 	backend string,
 	creationStart time.Time,
 	state *backendCreateState,
+	returned <-chan struct{},
 ) error {
 	timeout := c.options.autoCreateWaitTimeout
 	if timeout <= 0 {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-returned:
+			if backendCreateDone(state) {
+				return definitiveBackendCreateError(state.factoryErr)
+			}
+			return errBackendReturned
 		case <-state.done:
 			return definitiveBackendCreateError(state.factoryErr)
 		}
@@ -2329,6 +2408,12 @@ func (c *client) waitBackendFactoryCompletion(
 		case <-ctx.Done():
 			timer.Stop()
 			return ctx.Err()
+		case <-returned:
+			timer.Stop()
+			if !backendCreateDone(state) && time.Now().Before(deadline) {
+				return errBackendReturned
+			}
+			returned = nil // classify the original deadline/completion above
 		case <-state.done:
 			timer.Stop()
 			return c.classifyBackendFactoryCompletion(

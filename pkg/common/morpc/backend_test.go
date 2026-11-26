@@ -2824,6 +2824,86 @@ func TestLockedStream(t *testing.T) {
 	)
 }
 
+// Start with one ordinary pooled transport. Hold only expansion at its
+// context-aware factory boundary, so closing the client also releases the test.
+type gatedExpansionFactory struct {
+	ContextBackendFactory
+	calls     atomic.Int32
+	expanding chan struct{}
+}
+
+func (f *gatedExpansionFactory) CreateWithContext(ctx context.Context, addr string, opts ...BackendOption) (Backend, error) {
+	attempt := f.calls.Add(1)
+	if attempt == 1 {
+		return f.ContextBackendFactory.CreateWithContext(ctx, addr, opts...)
+	}
+	if attempt == 2 {
+		close(f.expanding)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestNewStreamReusesBackendDuringExpansion(t *testing.T) {
+	// Keep the Unix socket path short even with a long test name.
+	dir, err := os.MkdirTemp("", "mo-morpc-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+	path := filepath.Join(dir, "s")
+	addr := "unix://" + path
+	app := newTestAppWithAddr(t, addr, path, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+		return conn.Write(msg, goetty.WriteOptions{Flush: true})
+	})
+	require.NoError(t, app.Start())
+	t.Cleanup(func() { require.NoError(t, app.Stop()) })
+	factory := &gatedExpansionFactory{
+		ContextBackendFactory: NewGoettyBasedBackendFactory(newTestCodec()).(ContextBackendFactory),
+		expanding:             make(chan struct{}),
+	}
+	rc, err := NewClient(t.Name(), factory, WithClientInitBackends([]string{addr}, []int{1}),
+		WithClientMaxBackendPerHost(2), WithClientEnableAutoCreateBackend(), WithClientAutoCreateWaitTimeout(time.Second))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rc.Close()) })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	holder, err := rc.NewStream(ctx, addr, true)
+	require.NoError(t, err)
+
+	type result struct {
+		stream Stream
+		err    error
+	}
+	waiter := make(chan result, 1)
+	go func() {
+		s, err := rc.NewStream(ctx, addr, true)
+		waiter <- result{s, err}
+	}()
+	select {
+	case <-factory.expanding:
+	case <-ctx.Done():
+		t.Fatal("expansion did not reach the factory")
+	}
+	require.NoError(t, holder.Close(false))
+	select {
+	case got := <-waiter:
+		require.NoError(t, got.err)
+		defer got.stream.Close(false)
+		msg := newTestMessage(got.stream.ID())
+		require.NoError(t, got.stream.Send(ctx, msg))
+		replies, err := got.stream.Receive()
+		require.NoError(t, err)
+		select {
+		case reply := <-replies:
+			require.Equal(t, msg, reply)
+		case <-ctx.Done():
+			t.Fatal("no response on the reused backend")
+		}
+	case <-ctx.Done():
+		t.Fatal("waiter did not finish")
+	}
+	require.EqualValues(t, 2, factory.calls.Load())
+}
+
 func TestIssue7678(t *testing.T) {
 	s := &stream{}
 	s.lastReceivedSequence = 10
