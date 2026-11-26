@@ -60,7 +60,12 @@ func CompileUpdateChanges(columns []int32, imageTypes []types.Type, proc *proces
 // Both inputs remain borrowed; no expression is re-evaluated here.
 func UpdateChanged(execs []colexec.ExpressionExecutor, columns []int32, before, after *batch.Batch, proc *process.Process) (bool, error) {
 	for i, exec := range execs {
-		if equal, known := identicalUpdateValue(before.Vecs[columns[i]], after.Vecs[columns[i]]); known {
+		left, right := before.Vecs[columns[i]], after.Vecs[columns[i]]
+		equal, known := false, false
+		if left.Length() == 1 && right.Length() == 1 {
+			equal, known = IdenticalUpdateValueAt(left, 0, right, 0)
+		}
+		if known {
 			if !equal {
 				return true, nil
 			}
@@ -77,11 +82,12 @@ func UpdateChanged(execs []colexec.ExpressionExecutor, columns []int32, before, 
 	return false, nil
 }
 
-// This is only a sufficient equality proof for the exact primitive/string
+// IdenticalUpdateValueAt is only a sufficient equality proof for the primitive/string
 // operators in nullSafeEqualFn. Other types and unequal bytes retain the SQL
 // executor, including its floating scale, JSON/array and error semantics.
-func identicalUpdateValue(left, right *vector.Vector) (equal, known bool) {
-	if left.Length() != 1 || right.Length() != 1 || left.GetType().Oid != right.GetType().Oid {
+func IdenticalUpdateValueAt(left *vector.Vector, leftRow int, right *vector.Vector, rightRow int) (equal, known bool) {
+	if left == nil || right == nil || leftRow < 0 || rightRow < 0 || leftRow >= left.Length() || rightRow >= right.Length() ||
+		left.GetType().Oid != right.GetType().Oid {
 		return false, false
 	}
 	switch left.GetType().Oid {
@@ -99,11 +105,11 @@ func identicalUpdateValue(left, right *vector.Vector) (equal, known bool) {
 		if left.GetType().TypeSize() != size || right.GetType().TypeSize() != size {
 			return false, false
 		}
-		ln, rn := left.IsNull(0), right.IsNull(0)
+		ln, rn := left.IsNull(uint64(leftRow)), right.IsNull(uint64(rightRow))
 		if ln || rn {
 			return ln == rn, true
 		}
-		if bytes.Equal(left.GetRawBytesAt(0), right.GetRawBytesAt(0)) {
+		if bytes.Equal(left.GetRawBytesAt(leftRow), right.GetRawBytesAt(rightRow)) {
 			return true, true
 		}
 	}

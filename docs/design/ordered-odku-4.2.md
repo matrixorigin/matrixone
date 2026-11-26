@@ -1,6 +1,6 @@
 # Ordered ODKU execution and storage identity (4.2)
 
-Design revision 5, 2026-11-07. This design covers PR 31979 against the 4.2-dev
+Design revision 6, 2026-11-07. This design covers PR 31979 against the 4.2-dev
 storage and SQL contracts. It preserves direct primary/unique-key assignment
 restrictions and generated-key moves already accepted by MatrixOne. It does
 not promise general MySQL constraint compatibility or repair existing corrupt
@@ -590,3 +590,25 @@ still observe each earlier assignment through the image batch; they do not
 mutate or retain the slice. Free executors before inputs and clear the frame
 with the action state on Reset/Free. This removes per-RHS temporary slice
 allocation, with only two bounded per-owner pointers and no new row state.
+
+
+## Design revision 6 — proven static no-op actions
+
+A prepared immutable-key action may avoid rebuilding the same table image only
+for an already registered owner, without a prior view, FK/deferred output or
+automatic/generated phase. Every RHS must be an actual incoming-column plan
+and executor; all compared columns must be covered by those assignments. All
+update checks must be native NOT NULL checks with valid target mappings, and
+the source layout must contain exactly the mapped table fields and one source
+ordinal. Other plans use the existing action path.
+
+A read-only, row-aware sufficient equality probe uses revision 5's approved
+types and canonical sizes. If any operand is unknown or differs, fall back
+before evaluating an RHS. On success, execute each verified column RHS once in
+AST order, evaluate native checks against the identical retained target, check
+cancellation, and copy the latest ordinal through the normal accounted copy
+path. Preserve original identity, table bytes, key claims and locks. Both paths
+share ordinal/count finalization, with logical weight zero for this action.
+No new per-row cache or second replay owner is introduced. Validate the actual
+prepared workload shape and differential fallbacks, metadata, errors, resources
+and reuse before accepting any performance result.
