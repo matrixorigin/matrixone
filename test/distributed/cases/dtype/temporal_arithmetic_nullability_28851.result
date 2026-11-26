@@ -37,7 +37,7 @@ timestamp_added is null as timestamp_null
 from materialized order by id;
 ➤ id[4,32,0]  ¦  direct_null[-7,1,0]  ¦  direct_dt_null[-7,1,0]  ¦  add_null[-7,1,0]  ¦  sub_null[-7,1,0]  ¦  diff_null[-7,1,0]  ¦  date_add_null[-7,1,0]  ¦  date_sub_null[-7,1,0]  ¦  make_null[-7,1,0]  ¦  timestamp_null[-7,1,0]  𝄀
 0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  𝄀
-1  ¦  0  ¦  0  ¦  0  ¦  0  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1
+1  ¦  0  ¦  0  ¦  0  ¦  0  ¦  1  ¦  1  ¦  1  ¦  0  ¦  1
 create view computed as
 select id, addtime(t, '00:00:01') as added,
 timestampadd(second, 1, dt) as timestamp_added from src;

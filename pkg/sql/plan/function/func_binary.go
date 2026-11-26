@@ -9498,23 +9498,54 @@ func makeTimeFromInt64(hour, minute, second int64, microsecond uint32, rs *vecto
 		return rs.Append(types.Time(0), true)
 	}
 
+	// #32605: like MySQL, an hour outside the TIME range clamps the result to
+	// +-838:59:59 with warning 1292 instead of returning NULL. Only invalid
+	// minute or second values produce NULL.
 	maxTime := types.TimeFromClock(false, 838, 59, 59, 0)
+	isNegative := hour < 0
 	if hour > 838 || hour < -838 {
-		appendTimeIntervalOverflowWarning(proc)
-		return rs.Append(0, true)
+		appendMakeTimeTruncatedWarning(proc, hour, minute, second, microsecond)
+		if isNegative {
+			return rs.Append(-maxTime, false)
+		}
+		return rs.Append(maxTime, false)
 	}
 
-	isNegative := hour < 0
 	if isNegative {
 		hour = -hour
 	}
 	timeValue := types.TimeFromClock(isNegative, uint64(hour), uint8(minute), uint8(second), microsecond)
 	if timeValue > maxTime || timeValue < -maxTime {
-		appendTimeIntervalOverflowWarning(proc)
-		return rs.Append(0, true)
+		if isNegative {
+			hour = -hour
+		}
+		appendMakeTimeTruncatedWarning(proc, hour, minute, second, microsecond)
+		if isNegative {
+			return rs.Append(-maxTime, false)
+		}
+		return rs.Append(maxTime, false)
 	}
 
 	return rs.Append(timeValue, false)
+}
+
+// appendMakeTimeTruncatedWarning reports MySQL's 1292 warning for a MAKETIME
+// result that was clamped to the TIME boundary, e.g.
+// "Truncated incorrect time value: '850:00:00'".
+func appendMakeTimeTruncatedWarning(proc *process.Process, hour, minute, second int64, microsecond uint32) {
+	if proc == nil {
+		return
+	}
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	value := fmt.Sprintf("%d:%02d:%02d", hour, minute, second)
+	if microsecond != 0 {
+		value += strings.TrimRight(fmt.Sprintf(".%06d", microsecond), "0")
+	}
+	appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
+		fmt.Sprintf("Truncated incorrect time value: '%s'", value))
 }
 
 func makeTimeSignedIntegerGetter[T constraints.Signed](vec *vector.Vector) func(uint64) (int64, bool) {

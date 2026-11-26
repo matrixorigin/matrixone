@@ -11289,7 +11289,7 @@ func TestMakeTimeFractionAndSign(t *testing.T) {
 				0,
 				0,
 			},
-			[]bool{false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true}),
+			[]bool{false, false, false, false, false, false, false, true, true, true, false, false, false, false, true, true, true, true}),
 		MakeTime)
 
 	s, info := fcTC.RunAndFree()
@@ -11315,7 +11315,7 @@ func TestMakeTimeUnsignedHourOverflow(t *testing.T) {
 				types.TimeFromClock(false, 838, 34, 56, 0),
 				types.TimeFromClock(false, 838, 59, 59, 0),
 			},
-			[]bool{false, true}),
+			[]bool{false, false}),
 		MakeTime)
 
 	s, info := fcTC.RunAndFree()
@@ -11364,7 +11364,7 @@ func TestMakeTimeSignedHourOverflow(t *testing.T) {
 				types.TimeFromClock(false, 838, 59, 59, 0),
 				types.TimeFromClock(true, 838, 59, 59, 0),
 			},
-			[]bool{true, true}),
+			[]bool{false, false}),
 		MakeTime)
 
 	s, info := fcTC.RunAndFree()
@@ -11411,7 +11411,7 @@ func TestMakeTimeFloatHourRounding(t *testing.T) {
 				types.TimeFromClock(true, 14, 0, 0, 0),
 				types.TimeFromClock(false, 838, 59, 59, 0),
 			},
-			[]bool{false, false, false, false, false, true}),
+			[]bool{false, false, false, false, false, false}),
 		MakeTime)
 
 	s, info := fcTC.RunAndFree()

@@ -17,6 +17,11 @@ SELECT MAKETIME(838, 59, 59) AS time7;
 SELECT MAKETIME(100, 0, 0) AS time8;
 SELECT MAKETIME(839, 0, 0) AS oversized_positive_hour;
 SELECT MAKETIME(-839, 0, 0) AS oversized_negative_hour;
+# Issue #32605: out-of-range results clamp with warning 1292 instead of NULL
+SELECT CAST(MAKETIME(850, 0, 0) AS VARCHAR) AS clamp_positive, CAST(MAKETIME(-850, 0, 0) AS VARCHAR) AS clamp_negative;
+SHOW WARNINGS;
+SELECT CAST(MAKETIME(838, 59, 59.5) AS VARCHAR) AS clamp_fraction;
+SELECT MAKETIME(12, 60, 0) IS NULL AS invalid_minute_still_null;
 
 # Negative hours are valid; other invalid values return NULL
 SELECT CAST(MAKETIME(-1, 15, 30) AS VARCHAR) AS negative_hour;

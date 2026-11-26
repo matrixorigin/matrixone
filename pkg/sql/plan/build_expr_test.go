@@ -1193,7 +1193,7 @@ func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
 	}{
 		{name: "hex hour", sql: "select cast(maketime(X'0102', 0, 0) as varchar)", want: "258:00:00"},
 		{name: "hex hour empty", sql: "select cast(maketime(X'', 0, 0) as varchar)", want: "00:00:00"},
-		{name: "hex hour max int64", sql: "select cast(maketime(X'7FFFFFFFFFFFFFFF', 0, 0) as varchar)", wantNull: true},
+		{name: "hex hour max int64", sql: "select cast(maketime(X'7FFFFFFFFFFFFFFF', 0, 0) as varchar)", want: "838:59:59"},
 		{name: "hex hour max int64 plus one", sql: "select cast(maketime(X'8000000000000000', 0, 0) as varchar)", wantOverflow: true},
 		{name: "hex hour uint64 overflow", sql: "select cast(maketime(X'FFFFFFFFFFFFFFFF', 0, 0) as varchar)", wantOverflow: true},
 		{name: "hex hour wider than uint64", sql: "select cast(maketime(X'FFFFFFFFFFFFFFFFFF', 0, 0) as varchar)", wantOverflow: true},

@@ -592,13 +592,13 @@ subtime(time '-838:59:59', '00:00:01') is null as sub_null,
 timediff('838:59:59','-00:00:01') is null as diff_null,
 maketime(839,0,0) is null as make_null;
 ➤ add_null[-7,1,0]  ¦  sub_null[-7,1,0]  ¦  diff_null[-7,1,0]  ¦  make_null[-7,1,0]  𝄀
-0  ¦  0  ¦  1  ¦  1
+0  ¦  0  ¦  1  ¦  0
 show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1441  ¦  Datetime function: time field overflow  𝄀
 Warning  ¦  1441  ¦  Datetime function: time field overflow  𝄀
 Warning  ¦  1441  ¦  Datetime function: time field overflow  𝄀
-Warning  ¦  1441  ¦  Datetime function: time field overflow
+Warning  ¦  1292  ¦  Truncated incorrect time value: '839:00:00'
 select subtime(cast('0001-01-01' as datetime(6)), '00:00:01') is null as below_calendar,
 addtime(cast('9999-12-31 23:59:59.999999' as datetime(6)), '00:00:00.000001') is null as above_calendar;
 ➤ below_calendar[-7,1,0]  ¦  above_calendar[-7,1,0]  𝄀
@@ -813,6 +813,7 @@ execute temporal_join_make using @temporal_join_value;
 0
 show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '839:00:00'  𝄀
 Warning  ¦  1441  ¦  Datetime function: time field overflow
 delete from temporal_join_left;
 execute temporal_join_make using @temporal_join_value;
@@ -820,7 +821,7 @@ execute temporal_join_make using @temporal_join_value;
 0
 show count(*) warnings;
 ➤ @@session.warning_count[-5,0,0]  𝄀
-0
+1
 insert into temporal_join_left values (2, '00:00:00');
 set @temporal_join_value = 0;
 execute temporal_join_make using @temporal_join_value;
@@ -891,7 +892,7 @@ execute temporal_join_where using @temporal_join_value;
 0
 show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
-Warning  ¦  1441  ¦  Datetime function: time field overflow
+Warning  ¦  1292  ¦  Truncated incorrect time value: '839:00:00'
 deallocate prepare temporal_join_where;
 prepare temporal_join_two_markers from 'select count(*) from temporal_join_pk_left a join temporal_join_pk_right b on a.k=b.k and a.v=time(?) where a.k=?';
 set @temporal_join_value = '00:00:00';
