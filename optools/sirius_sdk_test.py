@@ -85,7 +85,7 @@ class SDKTest(unittest.TestCase):
     def test_sdk_must_match_matrixone_submodule_pin(self):
         with tempfile.TemporaryDirectory() as directory:
             mo_root = Path(directory)
-            source = mo_root / "third_party" / "sirius"
+            source = mo_root / "thirdparties" / "sirius"
             source.mkdir(parents=True)
             self.fixture(source)
             with patch.object(
@@ -94,7 +94,7 @@ class SDKTest(unittest.TestCase):
                 sirius_sdk.validate(source, "development", "", mo_root)
                 self.assertEqual(
                     command.call_args_list[0].args,
-                    ("git", "-C", str(mo_root), "rev-parse", "HEAD:third_party/sirius"),
+                    ("git", "-C", str(mo_root), "rev-parse", "HEAD:thirdparties/sirius"),
                 )
             with patch.object(sirius_sdk, "run", return_value="b" * 40):
                 with self.assertRaisesRegex(ValueError, "submodule pin"):
@@ -449,7 +449,7 @@ class SDKTest(unittest.TestCase):
             (sdk / "link.json").write_text(
                 json.dumps(
                     {
-                        "source_directory": str(root / "third_party" / "sirius"),
+                        "source_directory": str(root / "thirdparties" / "sirius"),
                         "source_revision": "a" * 40,
                     }
                 )
