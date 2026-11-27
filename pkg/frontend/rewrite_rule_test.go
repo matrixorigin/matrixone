@@ -1978,6 +1978,8 @@ func TestHandleAlterRoleDropRuleMatchesTargetInSessionCaseMode(t *testing.T) {
 		{"case preserving", 2, "t1", "'db1.T1', 'db1. t1'"},
 		{"case sensitive legacy whitespace", 0, "t1", "'db1. t1'"},
 		{"missing target", 1, "t2", ""},
+		{"dotted legacy key", 1, "t.with.dot", "'db1.t.with.dot'"},
+		{"no case folding for ambiguous keys", 1, "t.with.other.dot", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
@@ -1991,10 +1993,14 @@ func TestHandleAlterRoleDropRuleMatchesTargetInSessionCaseMode(t *testing.T) {
 			require.NoError(t, err)
 			bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
 			const keysSQL = "select rule_name from mo_catalog.mo_role_rule where role_id = 10"
-			bh.sql2result[keysSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"db1.T1"}, {"db1. t1"}})
+			bh.sql2result[keysSQL] = newMrsForSqlForShowDatabases([][]interface{}{
+				{"db1.T1"}, {"db1. t1"}, {"db1.t.with.dot"}, {"db1.T.With.Dot"}, {"db1.T.With.Other.Dot"},
+			})
 
-			stmt := tree.NewAlterRoleDropRule("role10", "db1", tc.target)
-			err = handleAlterRoleDropRule(ses, &ExecCtx{reqCtx: ctx, ses: ses}, stmt)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "alter role role10 drop rule on table db1.`"+tc.target+"`", tc.lower)
+			require.NoError(t, err)
+			defer stmt.Free()
+			err = handleAlterRoleDropRule(ses, &ExecCtx{reqCtx: ctx, ses: ses}, stmt.(*tree.AlterRoleDropRule))
 			expectedSQL := []string{"begin;", "select 1", roleSQL, keysSQL}
 			if tc.wantKeys == "" {
 				require.ErrorContains(t, err, "does not exist for role 'role10'")

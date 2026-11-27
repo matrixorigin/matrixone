@@ -1262,6 +1262,14 @@ func loadRuleCache(ctx context.Context, ses *Session, lower int64) (_ map[string
 		if err != nil {
 			return nil, nil, err
 		}
+		if _, _, ok := parsers.SplitRewriteKey(ruleName); !ok {
+			// Older releases could persist an ambiguous key by joining two
+			// identifiers that themselves contain dots. Keep the raw entry
+			// so rewrite validation still rejects data statements, while
+			// the existing recovery statements can bypass the rewrite.
+			rules[ruleName] = rule
+			continue
+		}
 		if rulesByRole[roleID] == nil {
 			rulesByRole[roleID] = make(map[string]string)
 		}
@@ -2013,9 +2021,13 @@ func deleteMatchingRoleRuleKeys(ctx context.Context, bh BackgroundExec, roleID i
 		if err != nil {
 			return false, err
 		}
-		if canonical, _, _, err := parsers.NormalizeRewriteKey(ctx, stored, lowerCaseTableNames); err == nil && canonical == ruleName {
-			matches = append(matches, escapeSQLString(stored))
+		if stored != ruleName {
+			canonical, _, _, err := parsers.NormalizeRewriteKey(ctx, stored, lowerCaseTableNames)
+			if err != nil || canonical != ruleName {
+				continue
+			}
 		}
+		matches = append(matches, escapeSQLString(stored))
 	}
 	if len(matches) == 0 {
 		return false, nil
@@ -2139,9 +2151,14 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 	roleID := vr.id
 
 	lowerCaseTableNames := parserLowerCaseTableNames(ses)
-	ruleName, _, _, err := parsers.NormalizeRewriteKey(ctx, stmt.DbName+"."+stmt.TblName, lowerCaseTableNames)
-	if err != nil {
-		return err
+	ruleName := stmt.DbName + "." + stmt.TblName
+	// The released writer joined the identifier parts as-is. When either
+	// identifier contains a dot, only the exact legacy key can be removed.
+	if !strings.Contains(stmt.DbName, ".") && !strings.Contains(stmt.TblName, ".") {
+		ruleName, _, _, err = parsers.NormalizeRewriteKey(ctx, ruleName, lowerCaseTableNames)
+		if err != nil {
+			return err
+		}
 	}
 	deleted, err := deleteMatchingRoleRuleKeys(ctx, bh, roleID, ruleName, lowerCaseTableNames)
 	if err != nil {

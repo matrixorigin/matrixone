@@ -21,10 +21,80 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRoleRuleDottedLegacyKeyRecovery(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		admin, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer admin.Close()
+		defer cleanupSQLIntegration(t, cn,
+			"drop user if exists dotted_rule_reader",
+			"drop role if exists dotted_rule_owner, dotted_rule_neighbor",
+			"drop database if exists dotted_rule_db",
+		)
+
+		execSQLRequire(t, ctx, admin, "create database dotted_rule_db")
+		execSQLRequire(t, ctx, admin, "create table dotted_rule_db.`t.with.dot` (id int)")
+		execSQLRequire(t, ctx, admin, "insert into dotted_rule_db.`t.with.dot` values (1)")
+		execSQLRequire(t, ctx, admin, "create role dotted_rule_owner, dotted_rule_neighbor")
+		execSQLRequire(t, ctx, admin, "create user dotted_rule_reader identified by 'DottedRulePass01' default role dotted_rule_owner")
+		execSQLRequire(t, ctx, admin, "grant connect on account * to dotted_rule_owner")
+		execSQLRequire(t, ctx, admin, "grant select on table dotted_rule_db.`t.with.dot` to dotted_rule_owner")
+
+		reader, err := sql.Open("mysql", fmt.Sprintf(
+			"sys#dotted_rule_reader#dotted_rule_owner:DottedRulePass01@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer reader.Close()
+		conn, err := reader.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		const query = "select id from dotted_rule_db.`t.with.dot`"
+		var id int
+		require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&id))
+		require.Equal(t, 1, id)
+		prepared, err := conn.PrepareContext(ctx, query)
+		require.NoError(t, err)
+		defer prepared.Close()
+		_, err = conn.ExecContext(ctx, "begin")
+		require.NoError(t, err)
+
+		// The v4.2.8 writer stored dbName+"."+tblName even when an
+		// identifier contained a dot. Seed those same catalog bytes.
+		const key = "dotted_rule_db.t.with.dot"
+		testutils.ExecSQL(t, "", cn,
+			"insert into mo_catalog.mo_role_rule (role_id, rule_name, `rule`) "+
+				"select role_id, '"+key+"', '"+query+"' from mo_catalog.mo_role "+
+				"where role_name in ('dotted_rule_owner','dotted_rule_neighbor')")
+		_, err = conn.ExecContext(ctx, "rollback")
+		require.NoError(t, err)
+		var mysqlErr *mysql.MySQLError
+		require.ErrorAs(t, conn.QueryRowContext(ctx, query).Scan(&id), &mysqlErr)
+		require.Equal(t, moerr.ER_PARSE_ERROR, mysqlErr.Number)
+		require.ErrorAs(t, prepared.QueryRowContext(ctx).Scan(&id), &mysqlErr)
+		require.Equal(t, moerr.ER_NEED_REPREPARE, mysqlErr.Number)
+
+		const drop = "alter role dotted_rule_owner drop rule on table dotted_rule_db.`t.with.dot`"
+		execSQLRequire(t, ctx, admin, drop)
+		var remaining string
+		require.NoError(t, admin.QueryRowContext(ctx,
+			"select r.role_name from mo_catalog.mo_role_rule p join mo_catalog.mo_role r on p.role_id = r.role_id "+
+				"where p.rule_name = ?", key).Scan(&remaining))
+		require.Equal(t, "dotted_rule_neighbor", remaining)
+		require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&id))
+		require.Equal(t, 1, id)
+	})
+}
 
 func TestCTASCarriesRoleRuleAcrossSQLModesAndRemap(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
