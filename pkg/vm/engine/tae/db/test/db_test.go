@@ -5407,11 +5407,18 @@ func TestReadCheckpoint(t *testing.T) {
 
 	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	require.NotEmpty(t, entries)
+	finishedReadCount := 0
 	for _, entry := range entries {
+		if !entry.IsFinished() {
+			t.Logf("skipping unfinished checkpoint entry: %s", entry.String())
+			continue
+		}
 		t.Log(entry.String())
 		t.Log(entry.JsonString())
 		readCheckpoint(entry)
+		finishedReadCount++
 	}
+	require.Positive(t, finishedReadCount, "no finished checkpoint entry was read")
 
 	tae.Restart(ctx)
 	replayed := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
@@ -12320,9 +12327,17 @@ func TestRollbackMergeInQueue(t *testing.T) {
 	tae.DB.Runtime.BigDeleteHinter.DeleteBigDel(rel.ID())
 	err = task.OnExec(context.Background())
 	require.NoError(t, err)
+	created := objectio.ObjectStats(task.GetCommitEntry().CreatedObjs[0])
+	outputName := created.ObjectName().String()
+	_, err = tae.Runtime.Fs.StatFile(ctx, outputName)
+	require.NoError(t, err)
 
 	tae.DB.Runtime.BigDeleteHinter.RecordBigDel([]uint64{rel.ID()}, startTS.Next())
 	require.Error(t, txn.Commit(ctx)) // rollback
+	require.Eventually(t, func() bool {
+		_, err := tae.Runtime.Fs.StatFile(ctx, outputName)
+		return moerr.IsMoErrCode(err, moerr.ErrFileNotFound)
+	}, 30*time.Second, 20*time.Millisecond, "merge output %s survived rollback", outputName)
 
 	_, rel = tae.GetRelation()
 	objH, err := rel.GetObject(obj.ID(), false)
@@ -12495,6 +12510,11 @@ func TestRollbackMergeBeforeRegistrationCleansTransferState(t *testing.T) {
 	require.ErrorContains(t, task.OnExec(ctx), injectedErr)
 
 	created := objectio.ObjectStats(task.GetCommitEntry().CreatedObjs[0])
+	outputName := created.ObjectName().String()
+	require.Eventually(t, func() bool {
+		_, statErr := tae.Runtime.Fs.StatFile(ctx, outputName)
+		return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)
+	}, 30*time.Second, 20*time.Millisecond, "merge output %s survived failed task", outputName)
 	createdBlk := objectio.NewBlockidWithObjectID(created.ObjectName().ObjectId(), 0)
 	require.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(createdBlk))
 
@@ -13301,15 +13321,8 @@ func TestCheckpointV2(t *testing.T) {
 	assert.NoError(t, err)
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
-			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
-			return
-		}, &objlistReplayer{},
-	)
-	for _, fn := range closeFn {
-		fn()
-	}
+	err = catalog2.ReplayFromSysTableObjects(ctx, readTxn, tables.ScanSysTable, &objlistReplayer{})
+	require.NoError(t, err)
 	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
 	assert.NoError(t, err)
 
@@ -13452,24 +13465,11 @@ func TestCheckpointCompatibility(t *testing.T) {
 	assert.NoError(t, err)
 	err = logtail.ReplayCheckpoint(ctx, catalog2, true, reader)
 	assert.NoError(t, err)
-	sortFunc := func(cols []containers.Vector, pkidx int) (err2 error) {
-		_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
-		return
-	}
-
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx,
-		readTxn,
-		tables.ReadSysTableBatch,
-		sortFunc,
-		&objlistReplayer{},
-	)
+	err = catalog2.ReplayFromSysTableObjects(ctx, readTxn, tables.ScanSysTable, &objlistReplayer{})
+	require.NoError(t, err)
 	assert.NoError(t, readTxn.Commit(ctx))
-	for _, fn := range closeFn {
-		fn()
-	}
 
 	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
 	assert.NoError(t, err)

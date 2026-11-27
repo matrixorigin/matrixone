@@ -75,6 +75,29 @@ func newInternalStatementContext(parent context.Context) context.Context {
 		statistic.NewStatsInfo())
 }
 
+func markIndexBackfillSource(ctx context.Context, stmts []tree.Statement, tableID uint64) error {
+	if tableID == 0 {
+		return nil
+	}
+	if len(stmts) != 1 {
+		return moerr.NewInternalError(ctx, "index backfill requires one SELECT or INSERT SELECT")
+	}
+	var selectStmt *tree.Select
+	switch stmt := stmts[0].(type) {
+	case *tree.Insert:
+		selectStmt = stmt.Rows
+	case *tree.Select:
+		selectStmt = stmt
+	}
+	if selectStmt != nil {
+		if clause, ok := selectStmt.Select.(*tree.SelectClause); ok {
+			clause.InternalIndexBackfillSourceID = tableID
+			return nil
+		}
+	}
+	return moerr.NewInternalError(ctx, "index backfill requires a SELECT clause")
+}
+
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
 func NewSQLExecutor(
 	addr string,
@@ -367,6 +390,20 @@ func (exec *txnExecutor) Exec(
 		}
 	}()
 	if err != nil {
+		return executor.Result{}, err
+	}
+
+	if domains := statementOption.InheritedEnums(); len(domains) > 0 {
+		if len(stmts) != 1 {
+			return executor.Result{}, moerr.NewInternalError(exec.ctx, "inherited ENUM definitions require one CREATE TABLE")
+		}
+		create, ok := stmts[0].(*tree.CreateTable)
+		if !ok {
+			return executor.Result{}, moerr.NewInternalError(exec.ctx, "inherited ENUM definitions require CREATE TABLE")
+		}
+		create.InheritedEnums = domains
+	}
+	if err := markIndexBackfillSource(exec.ctx, stmts, statementOption.IndexBackfillSourceID()); err != nil {
 		return executor.Result{}, err
 	}
 

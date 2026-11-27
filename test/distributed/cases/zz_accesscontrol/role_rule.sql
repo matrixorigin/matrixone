@@ -33,8 +33,8 @@ drop database if exists ctas_remap_db;
 create database db1;
 create table db1.t1(a int, age int);
 insert into db1.t1 values (1,1),(2,2),(100,30);
-create table db1.t_dup(a int, marker int);
-insert into db1.t_dup values (1,1),(1,2),(2,3);
+create table db1.t_dup(a int, marker int, code varchar(16));
+insert into db1.t_dup values (1,1,'0001'),(1,2,'O''Brien'),(2,3,'1');
 
 -- 1. ADD RULE normal case + SHOW RULES verification
 create role test_rule_role;
@@ -314,8 +314,8 @@ select * from db1.t1 order by a;
 -- 18. Partial projections keep duplicate projected values from distinct visible rows
 create role test_rule_role_dup_projection_a;
 create role test_rule_role_dup_projection_b;
-alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where marker = 1" on table db1.t_dup;
-alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where marker = 2" on table db1.t_dup;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O''Brien'" on table db1.t_dup;
 create user test_rule_user_dup_projection identified by '123456' default role test_rule_role_dup_projection_a;
 grant connect on account * to test_rule_role_dup_projection_a;
 grant select on table db1.t_dup to test_rule_role_dup_projection_a;
@@ -326,6 +326,114 @@ set enable_remap_hint = 1;
 select count(*) from db1.t_dup;
 set secondary role all;
 select a, count(*) from db1.t_dup group by a order by a;
+select count(*) from db1.t_dup;
+-- @session
+
+-- Re-saving a rule and rebuilding the merged rule in a new session keeps the same visible rows.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+-- @session:id=18&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+select a, count(*) from db1.t_dup group by a order by a;
+-- @session
+
+-- The same cached roles must follow the current statement's string escape mode.
+set @rule_saved_mode = @@sql_mode;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where trim(leading from concat(' ',code)) = '0001' and 'A\B' = concat('A',char(92),'B')" on table db1.t_dup;
+set sql_mode = @rule_saved_mode;
+-- @session:id=19&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = '';
+select count(*) from db1.t_dup;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select count(*) from db1.t_dup;
+set sql_mode = '';
+select count(*) from db1.t_dup;
+-- @session
+
+-- A mode that rejects a stored rule must reject reads but allow recovery on the same connection.
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where code = '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O\\'Brien'" on table db1.t_dup;
+-- @session:id=20&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = '';
+select count(*) from db1.t_dup;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select count(*) from db1.t_dup;
+set secondary role none;
+select count(*) from db1.t_dup;
+set sql_mode = '';
+set secondary role all;
+select count(*) from db1.t_dup;
+-- @session
+
+-- Refresh the cached rules after writes are pending in two open transactions.
+create table db1.t_rule_txn(id int primary key);
+create table db1.t_rule_commit_refresh(id int);
+create table db1.t_rule_rollback_refresh(id int);
+grant insert, select on table db1.t_rule_txn to test_rule_role_dup_projection_a;
+grant drop table on database db1 to test_rule_role_dup_projection_a;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O''Brien'" on table db1.t_dup;
+-- @session:id=24&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+begin;
+insert into db1.t_rule_txn values (1);
+-- @session
+-- @session:id=25&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+begin;
+insert into db1.t_rule_txn values (2);
+-- @session
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where code = 'O\\'Brien'" on table db1.t_dup;
+-- DROP TABLE clears each session's rule cache while leaving its transaction open.
+-- @session:id=24&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+drop table db1.t_rule_commit_refresh;
+select count(*) from db1.t_dup;
+-- @session
+select count(*) as visible_before_commit from db1.t_rule_txn;
+-- @session:id=24&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+commit;
+-- @session
+-- @session:id=25&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+drop table db1.t_rule_rollback_refresh;
+select count(*) from db1.t_dup;
+rollback;
+-- @session
+select id from db1.t_rule_txn order by id;
+
+-- Quoted identifiers and binary literals survive merging under ANSI_QUOTES.
+alter table db1.t_dup rename column code to `part-code`;
+alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where `part-code` = _binary '0001'" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select a from db1.t_dup where `part-code` = _binary 0x4f27427269656e" on table db1.t_dup;
+-- @session:id=21&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set sql_mode = 'ANSI_QUOTES';
+set enable_remap_hint = 1;
+set secondary role all;
+select a, count(*) from db1.t_dup group by a order by a;
+-- @session
+
+-- A column and a literal that spells its quoted name are different projections.
+alter role test_rule_role_dup_projection_a add rule "select '`marker`' as x from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select marker as x from db1.t_dup where marker = 2" on table db1.t_dup;
+-- @session:id=22&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+select x from db1.t_dup order by x;
+-- @session
+
+-- ENUM member case matters for projection compatibility; the higher-priority rule wins.
+alter role test_rule_role_dup_projection_a add rule "select cast(1 as enum('East')) as x from db1.t_dup where marker = 1" on table db1.t_dup;
+alter role test_rule_role_dup_projection_b add rule "select cast(1 as enum('east')) as x from db1.t_dup where marker = 2" on table db1.t_dup;
+-- @session:id=23&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
 select count(*) from db1.t_dup;
 -- @session
 

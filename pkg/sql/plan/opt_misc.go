@@ -75,8 +75,8 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 
 	switch node.NodeType {
 	case plan.Node_JOIN:
-		leftFlag := flag || node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_OUTER
-		rightFlag := flag || node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER
+		leftFlag := flag || nodeNullExtendsChild(node, 0)
+		rightFlag := flag || nodeNullExtendsChild(node, 1)
 
 		newChildID, childProjMap := builder.removeSimpleProjections(node.Children[0], plan.Node_JOIN, leftFlag, colRefCnt)
 		node.Children[0] = newChildID
@@ -117,6 +117,25 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
 			}
+		}
+
+	case plan.Node_APPLY:
+		leftParent := node.NodeType
+		right := builder.qry.Nodes[node.Children[1]]
+		if right.NodeType == plan.Node_FUNCTION_SCAN && right.GetTableDef().GetTblFunc().GetName() == UpdateRolesTableFunction {
+			// The function arguments refer to the match projection. Keep that
+			// binding until APPLY remaps its correlated input expressions.
+			leftParent = plan.Node_UNKNOWN
+		}
+		newLeft, leftMap := builder.removeSimpleProjections(node.Children[0], leftParent, flag, colRefCnt)
+		node.Children[0] = newLeft
+		for ref, expr := range leftMap {
+			projMap[ref] = expr
+		}
+		newRight, rightMap := builder.removeSimpleProjections(node.Children[1], node.NodeType, flag, colRefCnt)
+		node.Children[1] = newRight
+		for ref, expr := range rightMap {
+			projMap[ref] = expr
 		}
 
 	case plan.Node_LOCK_OP:

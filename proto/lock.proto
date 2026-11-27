@@ -62,6 +62,10 @@ message LockOptions {
   timestamp.Timestamp SnapShotTs        = 9 [(gogoproto.nullable) = false];
   int64               LockWaitTimeout   = 10;
   int64               LockWaitDeadline  = 11;
+  // Internal catalog DDL must acquire individual rows even under contention.
+  bool                ExactRows         = 12;
+  // This transaction uses the remote lock owner throughout catalog maintenance.
+  bool                BypassLocalProxy  = 13;
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -125,6 +129,8 @@ enum Method {
   GetLockHolder      = 18;
   // CheckActiveTxn checks whether a txn is still active on the lock service
   CheckActiveTxn     = 19;
+  // ResolveForwardBind resolves a mirror's cold binding without admitting a lock.
+  ResolveForwardBind = 20;
 }
 
 enum Status {
@@ -200,6 +206,8 @@ message LockRequest {
   repeated  bytes     Rows        = 3;
   // LockOptions lock options
   LockOptions         Options     = 4 [(gogoproto.nullable) = false];
+  // AdmissionDeadline limits remote holder creation, independently of row wait.
+  int64               AdmissionDeadline = 5;
 }
 
 // LockResponse lock response
@@ -255,6 +263,10 @@ message UnlockRequest {
   // roll backed
   timestamp.Timestamp    CommitTS  = 2 [(gogoproto.nullable) = false];
   repeated ExtraMutation Mutations = 3 [(gogoproto.nullable) = false];
+  // AdmissionDeadline is the maximum deadline of a possibly unprocessed Lock.
+  int64                  AdmissionDeadline = 4;
+  // TableScoped applies cleanup and proxy mutations only to Request.LockTable.
+  bool                   TableScoped = 5;
 }
 
 // UnlockResponse unlock lock on remote lock service response. CN -> CN
@@ -418,7 +430,7 @@ message Result {
   uint32              Waiters         = 9;  
   // NewLockAdd if true means new lock added, false means lock is added before by current 
   // txn
-  bool                NewLockAdd      = 10;                
+  bool                NewLockAdd      = 10;
 }
 
 message ExtraMutation {

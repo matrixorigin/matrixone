@@ -129,7 +129,7 @@ func (s *Scope) runVectorQueryScope(c *Compile) (err error) {
 	done := [3]chan struct{}{make(chan struct{}), make(chan struct{}), make(chan struct{})}
 	finish := func(i int, branchErr error) {
 		s.cancelMergeSiblingsOnError(branchErr)
-		results[i] = newScopeRunResult(branchErr, s.PreScopes[i])
+		results[i] = scopeRunResult{err: branchErr, classified: true}
 		close(done[i])
 	}
 	start := func(i int) error {
@@ -137,6 +137,11 @@ func (s *Scope) runVectorQueryScope(c *Compile) (err error) {
 			return moerr.NewInternalErrorNoCtx("invalid vector query branch activation")
 		}
 		branch := s.PreScopes[i]
+		failStart := func(err error) {
+			terminal, _ := normalizeScopeRunError(err, branch.Proc.Ctx, scopeRunQueryContext(branch.Proc))
+			cleanUnstartedVectorScope(branch, c, err)
+			finish(i, terminal)
+		}
 		startErr := context.Cause(s.Proc.Ctx)
 		if startErr == nil {
 			startErr = func() (initErr error) {
@@ -152,8 +157,7 @@ func (s *Scope) runVectorQueryScope(c *Compile) (err error) {
 		// 等待尚未启动的 producer，形成清理之间的环形等待。
 		claimed[i] = true
 		if startErr != nil {
-			cleanUnstartedVectorScope(branch, c, startErr)
-			finish(i, startErr)
+			failStart(startErr)
 			return startErr
 		}
 		wg.Add(1)
@@ -175,8 +179,7 @@ func (s *Scope) runVectorQueryScope(c *Compile) (err error) {
 		})
 		if startErr != nil {
 			wg.Done()
-			cleanUnstartedVectorScope(branch, c, startErr)
-			finish(i, startErr)
+			failStart(startErr)
 		}
 		return startErr
 	}
@@ -207,7 +210,7 @@ func (s *Scope) runVectorQueryScope(c *Compile) (err error) {
 		// 未启动 reader 不会 Prepare，不能靠它的上一代 released 标记
 		// 释放本代所有权。确认全部分支清理完成后由执行域关闭本代 source。
 		selector.Source.Close()
-		result := newScopeRunResultForProcess(err, s.Proc)
+		result := scopeRunResult{err: err, classified: true}
 		for i := range claimed {
 			if claimed[i] {
 				result = preferPrimaryScopeResult(result, results[i])

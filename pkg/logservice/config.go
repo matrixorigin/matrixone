@@ -53,6 +53,8 @@ const (
 	DefaultListenHost     = "0.0.0.0"
 	DefaultServiceHost    = "127.0.0.1"
 	DefaultLogServicePort = 32001
+	// DefaultRPCMaxMessageSize is the Log Service receiver's RPC body limit.
+	DefaultRPCMaxMessageSize = defaultMaxMessageSize
 
 	defaultRestoreFilePath = "hk_data"
 )
@@ -170,7 +172,7 @@ type Config struct {
 	MembershipImmovable bool `toml:"membership-immovable"`
 
 	RPC struct {
-		// MaxMessageSize is the max size for RPC message. The default value is 10MiB.
+		// MaxMessageSize is the max size for RPC message. The default value is 100 MiB.
 		MaxMessageSize toml.ByteSize `toml:"max-message-size"`
 		// EnableCompress enable compress
 		EnableCompress bool `toml:"enable-compress"`

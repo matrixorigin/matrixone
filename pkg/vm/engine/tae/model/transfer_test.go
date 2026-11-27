@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTransferPage(t *testing.T) {
@@ -126,6 +127,46 @@ func TestTransferTable(t *testing.T) {
 	assert.Equal(t, int64(1), pinned.Item().RefCount())
 	pinned.Close()
 	assert.Equal(t, int64(0), pinned.Item().RefCount())
+}
+
+func TestTransferTableRollbackRetryKeepsNewPage(t *testing.T) {
+	ctx := context.Background()
+	tmpFS, err := fileservice.NewTmpFileService("tmp", t.TempDir(), fileservice.TmpFileGCInterval)
+	require.NoError(t, err)
+	defer tmpFS.Close(ctx)
+
+	id := common.ID{BlockID: *objectio.NewBlockid(objectio.NewSegmentid(), 1, 0)}
+	table := &HashPageTable{pages: make(map[common.ID]*common.PinnedItem[*TransferHashPage])}
+	oldPage := NewTransferHashPage(&id, time.Now(), false, tmpFS, ttl, diskTTL, nil)
+	require.False(t, table.AddPage(oldPage))
+	require.True(t, table.DeletePage(&id))
+
+	newPage := NewTransferHashPage(&id, time.Now(), false, tmpFS, ttl, diskTTL, nil)
+	require.False(t, table.AddPage(newPage))
+	table.RunTTL()
+	require.Zero(t, oldPage.RefCount())
+	require.Equal(t, 1, table.Len())
+	pinned, err := table.Pin(id)
+	require.NoError(t, err)
+	require.Same(t, newPage, pinned.Item())
+	pinned.Close()
+	table.Close()
+	require.Zero(t, newPage.RefCount())
+}
+
+func TestTransferTableCloseReleasesDeletedPage(t *testing.T) {
+	ctx := context.Background()
+	tmpFS, err := fileservice.NewTmpFileService("tmp", t.TempDir(), fileservice.TmpFileGCInterval)
+	require.NoError(t, err)
+	defer tmpFS.Close(ctx)
+
+	id := common.ID{BlockID: *objectio.NewBlockid(objectio.NewSegmentid(), 1, 0)}
+	table := &HashPageTable{pages: make(map[common.ID]*common.PinnedItem[*TransferHashPage])}
+	page := NewTransferHashPage(&id, time.Now(), false, tmpFS, ttl, diskTTL, nil)
+	require.False(t, table.AddPage(page))
+	require.True(t, table.DeletePage(&id))
+	table.Close()
+	require.Zero(t, page.RefCount())
 }
 
 func TestTransferPageTrainDetachedOwnsCopy(t *testing.T) {

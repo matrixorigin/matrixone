@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -178,6 +179,9 @@ func (tcc *TxnCompilerContext) GetSession() FeSession {
 func (tcc *TxnCompilerContext) GetTxnHandler() *TxnHandler {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
+	if reader := tcc.execCtx.showMetadataRead; reader != nil {
+		return reader.backSes.GetTxnHandler()
+	}
 	return tcc.execCtx.ses.GetTxnHandler()
 }
 
@@ -1145,6 +1149,9 @@ func (tcc *TxnCompilerContext) getOrCreateBackExec(ctx context.Context) Backgrou
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 
+	if reader := tcc.execCtx.showMetadataRead; reader != nil {
+		return reader
+	}
 	currentTxn := tcc.execCtx.ses.GetTxnHandler().GetTxn()
 
 	if tcc.cachedBackExec != nil {
@@ -1189,4 +1196,41 @@ func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName stri
 
 func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 	return checkTimeStampValid(tcc.GetContext(), tcc.GetSession(), ts)
+}
+
+// SamplePointIndexMatches is optional for compiler contexts that own a local
+// transaction and its file service. The plan may discard the observation.
+func (tcc *TxnCompilerContext) SamplePointIndexMatches(db, table uint64, rows int, candidates [][]engine.IndexPointKey) (engine.IndexPointSample, bool) {
+	proc := tcc.GetProcess()
+	if proc == nil || proc.Base == nil || proc.Mp() == nil {
+		return engine.IndexPointSample{}, false
+	}
+	th := tcc.GetTxnHandler()
+	storage := th.GetStorage()
+	if wrapped, ok := storage.(*engine.EntireEngine); ok {
+		storage = wrapped.Engine
+	}
+	observer, ok := storage.(interface {
+		SamplePointIndexMatches(context.Context, TxnOperator, uint64, uint64, int, [][]engine.IndexPointKey, *mpool.MPool) (engine.IndexPointSample, bool)
+	})
+	if !ok {
+		return engine.IndexPointSample{}, false
+	}
+	return observer.SamplePointIndexMatches(tcc.GetContext(), th.GetTxn(), db, table, rows, candidates, proc.Mp())
+}
+
+// BoundEqualityRows only uses metadata already present on the planning CN.
+func (tcc *TxnCompilerContext) BoundEqualityRows(table *plan.TableDef, column *plan.ColDef, filter *plan.Expr) (candidates, total uint64) {
+	th := tcc.GetTxnHandler()
+	storage := th.GetStorage()
+	if wrapped, ok := storage.(*engine.EntireEngine); ok {
+		storage = wrapped.Engine
+	}
+	observer, ok := storage.(interface {
+		BoundEqualityRows(context.Context, TxnOperator, *process.Process, *plan.TableDef, *plan.ColDef, *plan.Expr) (candidates, total uint64)
+	})
+	if !ok {
+		return 0, 0
+	}
+	return observer.BoundEqualityRows(tcc.GetContext(), th.GetTxn(), tcc.GetProcess(), table, column, filter)
 }

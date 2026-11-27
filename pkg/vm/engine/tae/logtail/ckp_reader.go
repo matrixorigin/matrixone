@@ -24,6 +24,7 @@ import (
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -282,6 +283,9 @@ func (reader *CKPReader) GetTableRanges(
 func (reader *CKPReader) ReadMeta(
 	ctx context.Context,
 ) (err error) {
+	if reader.location.IsEmpty() {
+		return moerr.NewInvalidInput(ctx, "checkpoint meta location is empty")
+	}
 	if reader.version <= CheckpointVersion12 {
 		if reader.withTableID {
 			reader.dataLocations, reader.tombstoneLocations, err = readMetaForV12WithTableID(
@@ -479,66 +483,100 @@ func readMetaWithTableID(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (dataRanges, tombstoneRanges []ckputil.TableRange, err error) {
-	var metaBatch *batch.Batch
-	var release func()
-	if metaBatch, release, err = readMetaBatch(ctx, location, mp, fs); err != nil {
-		return
+	metaBatch := ckputil.NewMetaBatch()
+	defer metaBatch.Clean(mp)
+	// Read all columns in one IOVector so a cold cache does not fetch the
+	// checkpoint object twice. Only the selected rows become owned copies.
+	rows, err := ioutil.LoadColumnsDataByUint64Key(
+		ctx, ckputil.MetaSeqnums, ckputil.MetaTypes, fs, location,
+		metaBatch.Vecs, tableID, mp, 0,
+	)
+	if err != nil || rows == 0 {
+		return nil, nil, err
 	}
-	defer release()
+	for _, vec := range metaBatch.Vecs {
+		if vec.IsConstNull() || vec.GetNulls().Any() {
+			return nil, nil, moerr.NewInvalidInput(ctx, "null checkpoint table range metadata")
+		}
+	}
+	stats := metaBatch.Vecs[ckputil.MetaAttr_ObjectStats_Idx]
+	for i := range rows {
+		if len(stats.GetBytesAt(i)) != objectio.ObjectStatsLen {
+			return nil, nil, moerr.NewInvalidInput(ctx, "invalid checkpoint object statistics length")
+		}
+	}
+	metaBatch.SetRowCount(rows)
 	dataRanges = ckputil.ExportToTableRangesByFilter(metaBatch, tableID, ckputil.ObjectType_Data)
 	tombstoneRanges = ckputil.ExportToTableRangesByFilter(metaBatch, tableID, ckputil.ObjectType_Tombstone)
 	return
 }
 
 func (reader *CKPReader) GetLocations() []objectio.Location {
+	locationCount := len(reader.ckpDataObjectStats) + len(reader.dataRanges) + len(reader.tombstoneRanges) +
+		len(reader.dataLocations) + len(reader.tombstoneLocations)
+	locations := make([]objectio.Location, 0, locationCount)
+	reader.visitLocations(true, func(loc objectio.Location) {
+		locations = append(locations, loc)
+	})
+	return locations
+}
+
+func (reader *CKPReader) visitLocations(byBlock bool, visit func(objectio.Location)) {
 	if reader.version <= CheckpointVersion12 {
-		locations := make([]objectio.Location, 0, len(reader.dataLocations)+len(reader.dataLocations))
 		for _, loc := range reader.dataLocations {
-			locations = append(locations, loc)
+			visit(loc)
 		}
 		for _, loc := range reader.tombstoneLocations {
-			locations = append(locations, loc)
+			visit(loc)
 		}
-		return locations
-	} else {
-		if reader.withTableID {
-			locations := make([]objectio.Location, 0, len(reader.dataRanges)+len(reader.tombstoneRanges))
-			for _, tableRange := range reader.dataRanges {
-				obj := tableRange.ObjectStats
-				for i := 0; i < int(obj.BlkCnt()); i++ {
-					loc := obj.ObjectLocation()
-					loc.SetID(uint16(i))
-					locations = append(locations, loc)
-				}
+		return
+	}
+	visitObject := func(obj objectio.ObjectStats) {
+		blocks := int(obj.BlkCnt())
+		if !byBlock {
+			if blocks > 0 {
+				visit(obj.ObjectLocation())
 			}
-			for _, tableRange := range reader.tombstoneRanges {
-				obj := tableRange.ObjectStats
-				for i := 0; i < int(obj.BlkCnt()); i++ {
-					loc := obj.ObjectLocation()
-					loc.SetID(uint16(i))
-					locations = append(locations, loc)
-				}
-			}
-			return locations
-		} else {
-			locations := make([]objectio.Location, 0, len(reader.ckpDataObjectStats))
-			for _, obj := range reader.ckpDataObjectStats {
-				for i := 0; i < int(obj.BlkCnt()); i++ {
-					loc := obj.ObjectLocation()
-					loc.SetID(uint16(i))
-					locations = append(locations, loc)
-				}
-			}
-			return locations
+			return
 		}
+		for i := range blocks {
+			loc := obj.ObjectLocation()
+			loc.SetID(uint16(i))
+			visit(loc)
+		}
+	}
+	if reader.withTableID {
+		for _, tableRange := range reader.dataRanges {
+			visitObject(tableRange.ObjectStats)
+		}
+		for _, tableRange := range reader.tombstoneRanges {
+			visitObject(tableRange.ObjectStats)
+		}
+		return
+	}
+	for _, obj := range reader.ckpDataObjectStats {
+		visitObject(obj)
 	}
 }
 
 func (reader *CKPReader) PrefetchData(sid string) {
-	locations := reader.GetLocations()
-	for _, loc := range locations {
+	// The pipeline prefetches a whole file. Enqueue each file once, even
+	// when it holds many blocks or appears in multiple checkpoint ranges.
+	reader.visitFiles(func(loc objectio.Location) {
 		ioutil.Prefetch(sid, reader.fs, loc)
-	}
+	})
+}
+
+func (reader *CKPReader) visitFiles(visit func(objectio.Location)) {
+	seen := make(map[string]struct{})
+	reader.visitLocations(false, func(loc objectio.Location) {
+		name := loc.Name().String()
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		visit(loc)
+	})
 }
 
 func (reader *CKPReader) GetCheckpointData(ctx context.Context) (ckpData *batch.Batch, err error) {

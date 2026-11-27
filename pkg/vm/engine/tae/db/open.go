@@ -120,7 +120,7 @@ func Open(
 
 	logutil.Info(Phase_Open + "-open-wal-start")
 	if opts.WalClientFactory != nil {
-		db.Wal = wal.NewLogserviceHandle(opts.WalClientFactory)
+		db.Wal = wal.NewLogserviceHandle(opts.WalClientFactory, opts.MaxWALRecordSize)
 	} else {
 		db.Wal = wal.NewLocalHandle(dirname, WALDir, nil)
 	}
@@ -134,6 +134,10 @@ func Open(
 	)
 	rollbackSteps.Add("rollback open scheduler", func() error {
 		scheduler.Stop()
+		if db.Runtime != nil {
+			db.Runtime.VectorPool.Small.Close()
+			db.Runtime.VectorPool.Transient.Close()
+		}
 		return nil
 	})
 

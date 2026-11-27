@@ -109,6 +109,8 @@ type StatementOption struct {
 	disableDropAutoIncrement bool
 	keepAutoIncrement        uint64
 	keepLogicalId            uint64
+	inheritedEnums           map[string]plan.Type
+	indexBackfillSourceID    uint64
 	disableLock              bool
 }
 

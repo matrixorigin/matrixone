@@ -191,8 +191,8 @@ func (dispatch *Dispatch) AdoptCleanupState(from *Dispatch) {
 // sendTerminalSignalsToLocalRegs sends terminalSignal to each local receiver.
 // It first tries non-blocking sends via TrySendPipelineSignal, then retries
 // any pending receivers with the caller-provided cleanup context.
-// Timeout failures are logged via WarnPipelineCleanupf.
-func sendTerminalSignalsToLocalRegs(ctx context.Context, proc *process.Process, localRegs []*process.WaitRegister, signal process.PipelineSignal, pipelineFailed bool, err error) []bool {
+// Signals that do not enter the channel are reported with the edge state.
+func sendTerminalSignalsToLocalRegs(ctx context.Context, proc *process.Process, localRegs []*process.WaitRegister, signal process.PipelineSignal) []bool {
 	if ctx == nil {
 		ctx = context.TODO()
 	}
@@ -213,18 +213,7 @@ func sendTerminalSignalsToLocalRegs(ctx context.Context, proc *process.Process, 
 			delivered[i] = true
 			continue
 		}
-		chLen, chCap := process.WaitRegisterChannelState(localRegs[i])
-		process.WarnPipelineCleanupf(
-			proc,
-			"dispatch_cleanup_send_terminal_signal",
-			"dispatch cleanup timed out sending terminal %s signal: timeout=%s local_reg_idx=%d channel_len=%d channel_cap=%d pipeline_failed=%t err=%v",
-			signal.EventType.String(),
-			process.PipelineSignalSendTimeout,
-			i,
-			chLen,
-			chCap,
-			pipelineFailed,
-			err)
+		process.LogPipelineTerminalNotEnqueued(proc, "dispatch_cleanup_send_terminal_signal", localRegs[i], signal)
 	}
 	return delivered
 }
@@ -250,16 +239,7 @@ func sendAbortSignalsToFailedLocalRegs(ctx context.Context, proc *process.Proces
 		if process.SendPipelineSignalWithContext(ctx, localRegs[i], fallbackSignal) {
 			continue
 		}
-		chLen, chCap := process.WaitRegisterChannelState(localRegs[i])
-		process.WarnPipelineCleanupf(
-			proc,
-			"dispatch_cleanup_send_fallback_abort_signal",
-			"dispatch cleanup timed out sending fallback abort signal after end delivery failure: timeout=%s local_reg_idx=%d channel_len=%d channel_cap=%d err=%v",
-			process.PipelineSignalSendTimeout,
-			i,
-			chLen,
-			chCap,
-			err)
+		process.LogPipelineTerminalNotEnqueued(proc, "dispatch_cleanup_send_fallback_abort_signal", localRegs[i], fallbackSignal)
 	}
 }
 
@@ -314,7 +294,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		sp := dispatch.ctr.sp
 
 		// Send typed terminal signals to all local receivers.
-		terminalDelivered := sendTerminalSignalsToLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalSignal, pipelineFailed, terminalErr)
+		terminalDelivered := sendTerminalSignalsToLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalSignal)
 
 		if terminalSignal.EventType == process.EventEnd && allTerminalSignalsDelivered(terminalDelivered) {
 			dispatch.cleanupSpool = sp
@@ -335,7 +315,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		dispatch.ctr.sp = nil
 	} else {
 		// No spool: send typed terminal signals directly.
-		terminalDelivered := sendTerminalSignalsToLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalSignal, pipelineFailed, terminalErr)
+		terminalDelivered := sendTerminalSignalsToLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalSignal)
 		if terminalSignal.EventType == process.EventEnd && !allTerminalSignalsDelivered(terminalDelivered) {
 			fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
 			sendAbortSignalsToFailedLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalDelivered, fallbackErr)

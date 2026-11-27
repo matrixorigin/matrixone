@@ -110,7 +110,15 @@ type Limitation struct {
 }
 
 // SessionInfo session information
+// CurrentRoleContext is the immutable identity selected for one statement.
+// Mode zero means no identity was supplied; one selects the primary role and two all secondary roles.
+type CurrentRoleContext struct {
+	Mode, AccountID, UserID, PrimaryRoleID uint32
+	AccountName, UserName                  string
+}
+
 type SessionInfo struct {
+	CurrentRoleContext  CurrentRoleContext
 	Account             string
 	User                string
 	Host                string

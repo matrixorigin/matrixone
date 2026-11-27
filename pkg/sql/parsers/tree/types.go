@@ -15,6 +15,7 @@
 package tree
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"strconv"
 	"strings"
 
@@ -184,9 +185,13 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 		if len(node.EnumValues) > 0 {
 			ctx.WriteByte('(')
 			for i, enum := range node.EnumValues {
-				ctx.WriteByte('"')
-				ctx.WriteString(enum)
-				ctx.WriteByte('"')
+				if ctx.singleQuoteString {
+					ctx.writeSQLStringLiteral(sqlquote.StringWithMode(enum, ctx.NoBackslashEscape()))
+				} else {
+					ctx.WriteByte('"')
+					ctx.WriteString(enum)
+					ctx.WriteByte('"')
+				}
 				if i < len(node.EnumValues)-1 {
 					ctx.WriteByte(',')
 				}

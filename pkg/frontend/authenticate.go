@@ -75,10 +75,11 @@ import (
 )
 
 type TenantInfo struct {
-	mu          sync.Mutex
-	Tenant      string
-	User        string
-	DefaultRole string
+	taskServiceUser bool // internal task-storage connection, assigned at registration
+	mu              sync.Mutex
+	Tenant          string
+	User            string
+	DefaultRole     string
 
 	TenantID      uint32
 	UserID        uint32
@@ -109,6 +110,7 @@ func (ti *TenantInfo) Copy() *TenantInfo {
 	ti.mu.Lock()
 	defer ti.mu.Unlock()
 	return &TenantInfo{
+		taskServiceUser:     ti.taskServiceUser,
 		Tenant:              ti.Tenant,
 		User:                ti.User,
 		DefaultRole:         ti.DefaultRole,
@@ -485,13 +487,24 @@ func setSpecialUser(userName string, user *initUser) {
 // SetSpecialUser saves the user for initialization
 // !!!NOTE: userName must not contain Colon ':'
 func SetSpecialUser(username string, password []byte) {
+	registerSpecialUser(username, password, false)
+}
+
+// SetTaskServiceUser identifies the SQL connection that maintains task catalogs,
+// including CDC cleanup performed in a separate transaction during account removal.
+func SetTaskServiceUser(username string, password []byte) {
+	registerSpecialUser(username, password, true)
+}
+
+func registerSpecialUser(username string, password []byte, taskService bool) {
 	acc := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          username,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        math.MaxUint32,
-		DefaultRoleID: moAdminRoleID,
+		taskServiceUser: taskService,
+		Tenant:          sysAccountName,
+		User:            username,
+		DefaultRole:     moAdminRoleName,
+		TenantID:        sysAccountID,
+		UserID:          math.MaxUint32,
+		DefaultRoleID:   moAdminRoleID,
 	}
 
 	user := &initUser{
@@ -2403,6 +2416,8 @@ type privilege struct {
 	needMatchedRole          bool
 	// databases that may be written by statement-level DDL or account/database operations
 	writeDatabaseTargets []string
+	// Index DDL can use the ownership grant for its new table in the user transaction.
+	transactionTableOwner *transactionTableOwner
 }
 
 func (p *privilege) objectType() objectType {
@@ -4163,6 +4178,13 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			return
 		}
 
+		// Publication fanout holds shared locks on these same immutable IDs.
+		// Exclude new grants before inspecting or deleting any subscriptions.
+		bh.ClearExecResultSet()
+		if rtnErr = bh.Exec(defines.WithExactCatalogRows(ctx), fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update", accountId)); rtnErr != nil {
+			return rtnErr
+		}
+
 		// drop tables of the tenant
 		// NOTE!!!: single DDL drop statement per single transaction
 		// SWITCH TO THE CONTEXT of the deleted context
@@ -4348,7 +4370,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			return rtnErr
 		}
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
-		rtnErr = bh.Exec(ctx, sql)
+		rtnErr = bh.Exec(defines.WithExactCatalogRows(ctx), sql)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -6513,7 +6535,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		canExecInRestricted = true
-	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase,
+	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		dbName, _, _, _ = showMetadataTarget(stmt)
+		canExecInRestricted = true
+	case *tree.ShowCreateView, *tree.ShowCreateDatabase,
 		*tree.ShowCreatePublications:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -7047,8 +7074,14 @@ func (pota privilegeTipsArray) String() string {
 
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
 func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
+	tips, _ := extractPrivilegeTipsAndInsertTarget(p)
+	return tips
+}
+
+func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *plan.ObjectRef) {
 	// NOTE: the pts may be nil when the plan does operate any table.
 	var pts privilegeTipsArray
+	var insertTarget *plan.ObjectRef
 	appendPt := func(pt privilegeTips) {
 		pts = append(pts, pt)
 	}
@@ -7091,7 +7124,10 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		}
 
 		for _, node := range q.Nodes {
-			if node.NodeType == plan.Node_TABLE_SCAN {
+			if node.NodeType == plan.Node_TABLE_SCAN ||
+				(node.NodeType == plan.Node_EXTERNAL_SCAN &&
+					node.GetTableDef().GetTableType() == catalog.SystemExternalRel &&
+					node.GetExternScan().GetType() == int32(plan.ExternType_EXTERNAL_TB)) {
 				if node.ObjRef != nil {
 					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
 						clusterTable = true
@@ -7125,7 +7161,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
 					scanSnapshot := node.GetScanSnapshot()
-					if !isIndexTable(node.ObjRef.GetObjName()) {
+					if node.NodeType == plan.Node_EXTERNAL_SCAN || !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
 							typ:                   scanTyp,
 							objType:               objectTypeTable,
@@ -7222,15 +7258,19 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					}
 				}
 			} else if node.NodeType == plan.Node_INSERT {
-				if q.StmtType == plan.Query_MERGE &&
-					node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
-					continue
-				}
 				var objRef *plan.ObjectRef
 				if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
 					objRef = node.InsertCtx.Ref
 				} else if node.ObjRef != nil {
 					objRef = node.ObjRef
+				}
+				if insertTarget == nil && node.GetInsertCtx().GetAddAffectedRows() &&
+					objRef.GetSchemaName() != "" && objRef.GetObjName() != "" {
+					insertTarget = objRef
+				}
+				if q.StmtType == plan.Query_MERGE &&
+					node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+					continue
 				}
 				if objRef != nil {
 					dbName := objRef.GetSchemaName()
@@ -7241,11 +7281,12 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					if tableName == "" && node.TableDef != nil && node.TableDef.Name != "" {
 						tableName = node.TableDef.Name
 					}
-					// do not check the privilege of the index table
+					// Skip internal index targets. External tables are independent catalog
+					// objects even when their names use the internal index prefix.
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
 					scanSnapshot := node.GetScanSnapshot()
-					if !isIndexTable(tableName) {
+					if (q.StmtType == plan.Query_INSERT && node.GetTableDef().GetTableType() == catalog.SystemExternalRel) || !isIndexTable(tableName) {
 						insertClusterTable := isClusterTable(dbName, tableName)
 						appendPt(privilegeTips{
 							typ:                   PrivilegeTypeInsert,
@@ -7282,6 +7323,13 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					}
 				}
 			} else if node.NodeType == plan.Node_MULTI_UPDATE {
+				// The INSERT binder orders the statement target before its index updates.
+				if insertTarget == nil && q.StmtType == plan.Query_INSERT && len(node.UpdateCtxList) > 0 {
+					ref := node.UpdateCtxList[0].GetObjRef()
+					if ref.GetSchemaName() != "" && ref.GetObjName() != "" {
+						insertTarget = ref
+					}
+				}
 				for _, updateCtx := range node.UpdateCtxList {
 					if updateCtx == nil || updateCtx.ObjRef == nil || updateCtx.TableDef == nil {
 						continue
@@ -7386,7 +7434,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		} else if p.GetDdl().GetCreateIndex() != nil {
 			createIndex := p.GetDdl().GetCreateIndex()
 			appendPt(privilegeTips{
-				typ:                   PrivilegeTypeDropTable,
+				typ:                   PrivilegeTypeIndex,
 				objType:               objectTypeTable,
 				databaseName:          createIndex.GetDatabase(),
 				tableName:             createIndex.GetTable(),
@@ -7395,7 +7443,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		} else if p.GetDdl().GetDropIndex() != nil {
 			dropIndex := p.GetDdl().GetDropIndex()
 			appendPt(privilegeTips{
-				typ:                   PrivilegeTypeDropTable,
+				typ:                   PrivilegeTypeIndex,
 				objType:               objectTypeTable,
 				databaseName:          dropIndex.GetDatabase(),
 				tableName:             dropIndex.GetTable(),
@@ -7403,7 +7451,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			})
 		}
 	}
-	return pts
+	return pts, insertTarget
 }
 
 func addReplaceDeletePrivilegeTips(arr privilegeTipsArray, p *plan2.Plan) privilegeTipsArray {
@@ -8056,6 +8104,12 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									}
 									candidates, count := planPrivilegeCandidates(tempEntry, entry.compound.perObjectCovers)
 									for _, candidate := range candidates[:count] {
+										if owner := priv.transactionTableOwner; candidate == PrivilegeTypeTableOwnership &&
+											mi.privilegeTyp == PrivilegeTypeIndex && owner != nil &&
+											owner.roleID == checkRoleId && owner.database == mi.dbName && owner.table == mi.tableName {
+											yes = true
+											break
+										}
 										candidateEntry := tempEntry
 										candidateEntry.privilegeId = candidate
 										yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, candidateEntry, pls, useCache)
@@ -8668,6 +8722,16 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		return false, stats, err
 	}
 	stats.Add(&delta)
+	objectAdmission := showMetadataObjectAdmission(stmt)
+	if objectAdmission != nil {
+		*objectAdmission = false
+	}
+	if st, yes := stmt.(*tree.ShowTables); yes {
+		st.Admission = tree.ShowTablesUnadmitted
+		if ok {
+			st.Admission = tree.ShowTablesDatabaseAdmitted
+		}
+	}
 	if ok {
 		setDDLOwnerRole(ses, stmt, roleID)
 	}
@@ -8676,6 +8740,22 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		ok, delta, err = authenticateMultiDropTableTargets(ctx, ses, st)
 		stats.Add(&delta)
 		return ok, stats, err
+	}
+
+	// Object visibility is a fallback only after a successful database privilege check.
+	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil {
+		if _, _, _, supported := showMetadataTarget(stmt); supported {
+			allowed, delta, err := authenticateShowMetadata(ctx, ses, stmt)
+			if allowed && err == nil {
+				if st, yes := stmt.(*tree.ShowTables); yes {
+					st.Admission = tree.ShowTablesObjectAdmitted
+				} else if objectAdmission != nil {
+					*objectAdmission = true
+				}
+			}
+			stats.Add(&delta)
+			return allowed, stats, err
+		}
 	}
 
 	// double check privilege of drop table

@@ -462,13 +462,21 @@ func (c *Compile) evaluateQueryPlacement(
 	ctx context.Context,
 	mode queryCandidateMode,
 ) (schedule.QueryDecision, string, error) {
+	return c.evaluateQueryPlacementForExecType(ctx, mode, c.execType)
+}
+
+func (c *Compile) evaluateQueryPlacementForExecType(
+	ctx context.Context,
+	mode queryCandidateMode,
+	execType plan2.ExecType,
+) (schedule.QueryDecision, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	currentCN := c.currentCNWorker()
 	intent := c.effectiveQuerySchedulingIntent()
 	req := schedule.QueryRequest{
-		ExecKind:        toScheduleExecKind(c.execType),
+		ExecKind:        toScheduleExecKind(execType),
 		CurrentCN:       currentCN,
 		CurrentCNPolicy: intent.CurrentCNPolicy,
 		Intent:          intent,
@@ -476,7 +484,7 @@ func (c *Compile) evaluateQueryPlacement(
 	if schedule.ValidateSchedulingIntent(intent) != "" {
 		return schedule.DecideQueryPlacement(req), "", nil
 	}
-	if c.execType != plan2.ExecTypeAP_MULTICN {
+	if execType != plan2.ExecTypeAP_MULTICN {
 		req.CandidateResolution = schedule.CandidateResolution{
 			DiscoverySource: schedule.CandidateSourceNotRequired,
 			PoolResolution:  schedule.PoolResolutionNotRequired,
@@ -525,11 +533,19 @@ func (c *Compile) evaluateQueryPlacement(
 	}
 	isIvfEntriesScan := queryHasIvfSearchEntriesInternalScan(qry)
 	// The local partition is the only one that can see the coordinator's
-	// appendable IVF ranges. Keep it at partition zero; persisted ranges remain
-	// distributed by ObjectID across all selected workers.
+	// appendable IVF ranges. Keep it at partition zero; immutable objects
+	// remain distributed by ObjectID across all selected workers.
 	if isIvfEntriesScan {
 		req.CurrentCNPolicy = schedule.CurrentCNRequired
 		req.CurrentCNOrdinalZero = true
+	}
+	// A remote CN rebuilds its own workspace from the committed snapshot.
+	// AP PREPARE does not retain a physical plan; check the workspace at EXECUTE.
+	if !c.isPrepare && c.proc != nil && c.proc.Base != nil {
+		if txn := c.proc.GetTxnOperator(); txn != nil {
+			ws := txn.GetWorkspace()
+			req.RequireWorkspaceOwner = ws != nil && !ws.Readonly()
+		}
 	}
 	return schedule.DecideQueryPlacement(req), "", nil
 }

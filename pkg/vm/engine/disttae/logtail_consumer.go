@@ -136,6 +136,9 @@ type PushClient struct {
 
 	// Record the subscription status of a tables.
 	subscribed subscribedTable
+	// Preserve replay capacity without holding the subscription state lock over I/O.
+	// Initialized under subscribed.rw and retained across transport reconnects.
+	checkpointReplay chan struct{}
 
 	// timestampWaiter is used to notify the latest commit timestamp
 	timestampWaiter client.TimestampWaiter
@@ -188,7 +191,7 @@ func (c *PushClient) dcaReset() {
 	c.dca.Lock()
 	defer c.dca.Unlock()
 	c.dca.replayed = false
-	c.dca.flist = c.dca.flist[:0]
+	c.dca.flist = nil
 }
 
 func (c *PushClient) dcaTryDelay(isSub bool, f func()) (delayed bool) {
@@ -212,7 +215,7 @@ func (c *PushClient) dcaConfirmAndApply() {
 	for _, f := range c.dca.flist {
 		f()
 	}
-	c.dca.flist = c.dca.flist[:0]
+	c.dca.flist = nil
 }
 
 type State struct {
@@ -1112,89 +1115,78 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 	if err != nil {
 		return err
 	}
-	defer func() {
-		//same timeout value as it in frontend
-		ctx2, cancel := context.WithTimeoutCause(ctx, e.Hints().CommitOrRollbackTimeout, moerr.CauseReplayCatalogCache)
-		defer cancel()
-		if err != nil {
-			_ = op.Rollback(ctx2)
-		} else {
-			_ = op.Commit(ctx2)
-		}
-	}()
+	defer func() { finishReplayTransaction(ctx, e.Hints().CommitOrRollbackTimeout, op, err) }()
 	err = e.New(ctx, op)
 	if err != nil {
 		return err
 	}
 
-	// read databases
-	result, err = execReadSql(ctx, op, catalog.MoDatabaseBatchQuery, true)
-	if err != nil {
-		return err
-	}
 	rowCntF := func(bat []*batch.Batch) string {
 		return stringifySlice(bat, func(b any) string {
+			if b.(*batch.Batch) == nil {
+				return "nil"
+			}
 			return fmt.Sprintf("%d", b.(*batch.Batch).RowCount())
 		})
 	}
-	logutil.Infof("FIND_TABLE read mo_catalog.mo_databases %v rows", rowCntF(result.Batches))
-	defer result.Close()
-	for _, b := range result.Batches {
-		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
+	readStage := func(query string, insert func(*batch.Batch)) error {
+		result, err := execReadSql(ctx, op, query, true)
+		if err != nil {
 			return err
 		}
-		ccache.InsertDatabase(b)
+		defer result.Close()
+		logutil.Infof("FIND_TABLE read catalog %v rows", rowCntF(result.Batches))
+		for _, b := range result.Batches {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
+				return err
+			}
+			insert(b)
+		}
+		return nil
 	}
-
-	// read tables
-	result, err = execReadSql(ctx, op, catalog.MoTablesBatchQuery, true)
-	if err != nil {
+	if err = readStage(catalog.MoDatabaseBatchQuery, ccache.InsertDatabase); err != nil {
 		return err
 	}
-	logutil.Infof("FIND_TABLE read mo_catalog.mo_tables %v rows", rowCntF(result.Batches))
-	defer result.Close()
-	for _, b := range result.Batches {
-		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
-			return err
-		}
+	if err = readStage(catalog.MoTablesBatchQuery, func(b *batch.Batch) {
 		e.tryAdjustSysTablesCreatedTimeWithBatch(b)
 		ccache.InsertTable(b)
+	}); err != nil {
+		return err
 	}
-
-	// read columns
 	result, err = execReadSql(ctx, op, catalog.MoColumnsBatchQuery, true)
 	if err != nil {
 		return err
 	}
-	defer result.Close()
 	logutil.Infof("FIND_TABLE read mo_catalog.mo_columns %v rows", rowCntF(result.Batches))
-
-	if isColumnsBatchPerfectlySplitted(result.Batches) {
-		for _, b := range result.Batches {
-			if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
-				return err
-			}
-			ccache.InsertColumns(b)
-		}
-	} else {
-		logutil.Info("FIND_TABLE merge mo_columns results")
-		bat := result.Batches[0]
-		for _, b := range result.Batches[1:] {
-			bat, err = bat.Append(ctx, result.Mp, b)
-			if err != nil {
-				return err
-			}
-		}
-		if err = fillTsVecForSysTableQueryBatch(bat, typeTs, result.Mp); err != nil {
-			return err
-		}
-		ccache.InsertColumns(bat)
+	if err = consumeReplayColumns(ctx, result.Batches, result.Mp, typeTs, ccache.InsertColumns); err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
+		return err
 	}
 
 	ccache.UpdateDuration(typeTs, types.MaxTs())
 	c.dcaConfirmAndApply()
 	return nil
 
+}
+
+func finishReplayTransaction(ctx context.Context, timeout time.Duration, op client.TxnOperator, replayErr error) {
+	if replayErr != nil {
+		// Rollback must still be able to reach the transaction service when
+		// replay failed because its context was canceled.
+		ctx = context.WithoutCancel(ctx)
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseReplayCatalogCache)
+	defer cancel()
+	if replayErr != nil {
+		_ = op.Rollback(ctx)
+	} else {
+		_ = op.Commit(ctx)
+	}
 }
 
 func (c *PushClient) connect(ctx context.Context, e *Engine) {
@@ -1736,7 +1728,7 @@ func (s *subscribedTable) setTablePendingUpdate(dbId, tblId uint64, to timestamp
 	}
 	s.rw.RLock()
 	ent, exist := s.m[tblId]
-	if exist && ent.dbID == dbId && ent.state == Subscribed {
+	if exist && ent.dbID == dbId && (ent.state == Subscribed || ent.state == SubRspReceived) {
 		ts := to
 		ent.pendingTo.Store(&ts)
 	}
@@ -1789,37 +1781,86 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 ) (SubscribeState, error) {
 
 	c.subscribed.rw.Lock()
-	defer c.subscribed.rw.Unlock()
-	ent, exist := c.subscribed.m[tableID]
-	if exist && (ent.state == SubRspReceived || ent.state == Subscribed) {
-		part, err := c.eng.LazyLoadLatestCkp(ctx, accId, tableID, tableName, dbID, dbName)
-		if err != nil {
+	if c.checkpointReplay == nil {
+		c.checkpointReplay = make(chan struct{}, 1)
+	}
+	gate := c.checkpointReplay
+	c.subscribed.rw.Unlock()
+	select {
+	case gate <- struct{}{}:
+		defer func() { <-gate }()
+	case <-ctx.Done():
+		return InvalidSubState, ctx.Err()
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
 			return InvalidSubState, err
 		}
-		//update state and timestamp
-		if ent.partition != part {
-			c.subscribed.nextIncarnation++
-			ent.incarnation = c.subscribed.nextIncarnation
-			ent.partition = part
+		c.subscribed.rw.Lock()
+		ent, exist := c.subscribed.m[tableID]
+		if exist && ent.dbID != dbID {
+			c.subscribed.rw.Unlock()
+			return InvalidSubState, moerr.NewInternalErrorf(ctx, "subscription database mismatch for table %d", tableID)
 		}
-		ent.state = Subscribed
-		ent.lastTs.Store(time.Now().UnixNano())
-		return Subscribed, nil
+		if exist && (ent.state == SubRspReceived || ent.state == Subscribed) {
+			// Pin the partition under the subscription generation, before I/O.
+			incarnation := ent.incarnation
+			part := c.eng.GetOrCreateLatestPart(ctx, accId, dbID, tableID)
+			c.subscribed.rw.Unlock()
+			err := c.eng.consumeLatestCkp(ctx, part, tableID, tableName, dbID, dbName)
+			c.subscribed.rw.Lock()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				c.subscribed.rw.Unlock()
+				return InvalidSubState, ctxErr
+			}
+			current := c.subscribed.m[tableID]
+			if current != ent || ent.incarnation != incarnation || (ent.state != SubRspReceived && ent.state != Subscribed) {
+				c.subscribed.rw.Unlock()
+				continue
+			}
+			// Local partition cleanup can replace it without replacing the entry.
+			c.eng.Lock()
+			if c.eng.partitions[[2]uint64{dbID, tableID}] != part {
+				c.eng.Unlock()
+				c.subscribed.rw.Unlock()
+				continue
+			}
+			if err != nil {
+				c.eng.Unlock()
+				c.subscribed.rw.Unlock()
+				return InvalidSubState, err
+			}
+			if ent.partition != part {
+				c.subscribed.nextIncarnation++
+				ent.incarnation = c.subscribed.nextIncarnation
+				ent.partition = part
+			}
+			ent.state = Subscribed
+			ent.lastTs.Store(time.Now().UnixNano())
+			c.eng.Unlock()
+			c.subscribed.rw.Unlock()
+			return Subscribed, nil
+		}
+		// If cleared during replay, use the existing subscribe-start transition.
+		if !exist {
+			if !c.subscriber.ready() {
+				c.subscribed.rw.Unlock()
+				return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+			}
+			c.subscribed.m[tableID] = c.subscribed.newEntry(dbID, tableID, Subscribing)
+			if err := c.subscribeTable(ctx, api.TableID{DbId: dbID, TbId: tableID}); err != nil {
+				delete(c.subscribed.m, tableID)
+				c.subscribed.rw.Unlock()
+				return Unsubscribed, err
+			}
+			c.subscribed.rw.Unlock()
+			return Subscribing, nil
+		}
+		state := ent.state
+		c.subscribed.rw.Unlock()
+		return state, nil
 	}
-	//if unsubscribed, need to subscribe table.
-	if !exist {
-		if !c.subscriber.ready() {
-			return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
-		}
-		c.subscribed.m[tableID] = c.subscribed.newEntry(dbID, tableID, Subscribing)
-		if err := c.subscribeTable(ctx, api.TableID{DbId: dbID, TbId: tableID}); err != nil {
-			//restore the table status.
-			delete(c.subscribed.m, tableID)
-			return Unsubscribed, err
-		}
-		return Subscribing, nil
-	}
-	return ent.state, nil
 }
 
 func (c *PushClient) waitUntilSubscribingChanged(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {

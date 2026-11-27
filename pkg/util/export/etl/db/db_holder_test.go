@@ -315,6 +315,7 @@ func TestGetOrInitDBConn_ForceReconnectSuccessResetsBackoff(t *testing.T) {
 		got, err := GetOrInitDBConn(true, true)
 		require.NoError(t, err)
 		require.Same(t, newDBConn, got)
+		require.Equal(t, MaxConnectionNumber+1, got.Stats().MaxOpenConnections)
 		require.True(t, DBConnErrCount.Check())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})

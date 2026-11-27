@@ -462,6 +462,12 @@ func (s *service) closeService() error {
 			s.server.Close,
 			s.stopRPCs,
 			s.waitPipelineHandlers,
+			func() error {
+				if storage, ok := s.storeEngine.(*disttae.Engine); ok {
+					return storage.CloseLocalInsertObjects()
+				}
+				return nil
+			},
 			s.closeIncrService,
 			s.closeTxnTraceService,
 			func() error {
@@ -1220,6 +1226,7 @@ func (s *service) initIncrService() {
 	store, err := incrservice.NewSQLStore(
 		s.sqlExecutor,
 		s.lockService,
+		s._txnClient.WaitLogTailAppliedAt,
 	)
 	if err != nil {
 		panic(err)

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,14 +29,52 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLockMetaKeyBatches(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+	keys := vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { keys.Free(mp) })
+	for _, key := range []string{"a", "b", "c", "d", "e"} {
+		require.NoError(t, vector.AppendBytes(keys, []byte(key), false, mp))
+	}
+	collect := func(stopAt string) ([]string, error) {
+		var batches []string
+		err := lockMetaKeyBatches(keys, 2, mp, func(window *vector.Vector) error {
+			var batch string
+			for i := 0; i < window.Length(); i++ {
+				batch += string(window.GetBytesAt(i))
+			}
+			batches = append(batches, batch)
+			if batch == stopAt {
+				return context.Canceled
+			}
+			return nil
+		})
+		return batches, err
+	}
+	batches, err := collect("")
+	require.NoError(t, err)
+	require.Equal(t, []string{"ab", "cd", "e"}, batches)
+	batches, err = collect("cd")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, []string{"ab", "cd"}, batches)
+}
 
 // Optimistic LockRows is inert: this fixture isolates key ownership and catalog
 // handle rebinding. Public pessimistic tests prove actual lock admission.
@@ -54,6 +93,8 @@ func newLockMetaTestOwner(t testing.TB, account uint32) (*LockMeta, *process.Pro
 		db.EXPECT().Relation(gomock.Any(), name, gomock.Any()).Return(rel, nil).AnyTimes()
 		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(i + 1)).AnyTimes()
 		rel.EXPECT().Reset(gomock.Any()).DoAndReturn(func(client.TxnOperator) error { *calls++; return *resetErr }).AnyTimes()
+		rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{DbName: catalog.MO_CATALOG}).AnyTimes()
+		rel.EXPECT().GetTableName().Return(name).AnyTimes()
 	}
 	l := NewLockMeta()
 	t.Cleanup(func() {
@@ -82,6 +123,73 @@ func unpackLockMetaKeys(t *testing.T, vec *vector.Vector) [][]interface{} {
 		keys = append(keys, row)
 	}
 	return keys
+}
+
+func TestLockReadPrePipelineCatalogTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stmt tree.Statement
+		typ  plan.Query_StatementType
+	}{
+		{name: "locking select", stmt: &tree.Select{}, typ: plan.Query_SELECT},
+		{name: "update", stmt: &tree.Update{}, typ: plan.Query_UPDATE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			meta, proc, eng, _, _ := newLockMetaTestOwner(t, 7)
+			meta.appendMetaTables(&plan.ObjectRef{SchemaName: "db", ObjName: "t"})
+			root := resource.NewRoot(resource.ConnExternal)
+			root.EnableLockRead()
+			proc.ReplaceTopCtx(resource.ContextWithRoot(proc.GetTopContext(), root))
+
+			ctrl := gomock.NewController(t)
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			txnID := []byte{1}
+			op.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, ID: txnID}).AnyTimes()
+			op.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+			op.EXPECT().NextSequence().Return(uint64(1))
+			op.EXPECT().CreateTS().Return(timestamp.Timestamp{})
+			op.EXPECT().AddWaitLock(uint64(2), gomock.Any(), gomock.Any()).Return(uint64(1))
+			op.EXPECT().RemoveWaitLock(uint64(1))
+			proc.Base.TxnOperator = op
+
+			service := mock_lock.NewMockLockService(ctrl)
+			service.EXPECT().GetConfig().Return(lockservice.Config{MaxLockRowCount: 16}).AnyTimes()
+			service.EXPECT().GetServiceID().Return("")
+			holder := []byte("catalog-lock-txn")
+			service.EXPECT().Lock(gomock.Any(), uint64(2), gomock.Any(), txnID, gomock.Any()).
+				DoAndReturn(func(ctx context.Context, _ uint64, keys [][]byte, _ []byte, opts lock.LockOptions) (lock.Result, error) {
+					require.Equal(t, lock.LockMode_Shared, opts.Mode)
+					require.Len(t, keys, 1)
+					resource.ObserveLocalLockConflict(ctx, [][]byte{holder})
+					return lock.Result{}, lockservice.ErrLockTimeout
+				})
+			proc.Base.LockService = service
+
+			c := &Compile{
+				proc: proc, e: eng, lockMeta: meta, stmt: tc.stmt, counterSet: &perfcounter.CounterSet{},
+				pn: &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+					StmtType: tc.typ, Nodes: []*plan.Node{{NodeType: plan.Node_LOCK_OP}},
+				}}},
+				resourceAttemptOwnerEligible: true,
+			}
+			c.InitPipelineContextToExecuteQuery()
+			require.ErrorIs(t, c.prePipelineInitializer(), lockservice.ErrLockTimeout)
+
+			_, snapshot := root.SealWithLockRead(uint64(100 * time.Millisecond))
+			require.Equal(t, tc.typ == plan.Query_SELECT, snapshot.Qualifies(100*time.Millisecond, time.Second))
+			d := snapshot.Diagnostic([16]byte{}, 1, true)
+			if tc.typ == plan.Query_SELECT {
+				require.Positive(t, d.AcquisitionNS)
+				require.Equal(t, "acquisition", d.LastIncomplete)
+				require.True(t, d.Conflict)
+				require.Equal(t, fmt.Sprintf("%x", holder), d.ObservedConflictTxnID)
+				require.Zero(t, d.LogtailNS)
+				require.Zero(t, d.PKCheckNS)
+			} else {
+				require.Zero(t, d.Seen)
+			}
+		})
+	}
 }
 
 type failingLockMetaExpression struct {

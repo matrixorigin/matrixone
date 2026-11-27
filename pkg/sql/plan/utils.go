@@ -784,18 +784,18 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 			return nil
 		}
 
-		// Verify all remaining arguments either:
-		// 1. Don't contain any column references (literals/constants), OR
-		// 2. Contain the same column reference as the first argument
-		for i := 1; i < len(args); i++ {
-			otherCol := extractColRefInFilter(args[i])
-			if otherCol != nil {
-				// If this argument has a column reference, it must match the first argument's column
-				if col.RelPos != otherCol.RelPos || col.ColPos != otherCol.ColPos {
-					return nil
-				}
+		// A nil extraction can also mean multiple columns or an unsupported
+		// expression, not just a constant. Check the entire remaining subtree.
+		allowed := map[[2]int32]bool{{col.RelPos, col.ColPos}: true}
+		for _, arg := range args[1:] {
+			// Prepared IN keeps its parameters in a list until execution.
+			// Column-bearing lists cannot be rewritten by substituteMatchColumn.
+			if list := arg.GetList(); list != nil && len(list.List) > 0 && isRuntimeConstExpr(arg) {
+				continue
 			}
-			// If otherCol is nil, the argument is a literal/constant (no column reference), which is acceptable
+			if !exprColRefsSubsetOf(arg, allowed) {
+				return nil
+			}
 		}
 
 		return col
@@ -2989,6 +2989,19 @@ func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) 
 		}
 	}
 	return paramTypes, nil
+}
+
+// ProjectHasMoCtrl identifies control calls checked by frontend authorization.
+func ProjectHasMoCtrl(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_PROJECT {
+		return false
+	}
+	for _, expr := range node.ProjectList {
+		if expr != nil && HasMoCtrl(expr) {
+			return true
+		}
+	}
+	return false
 }
 
 // HasMoCtrl checks whether the expression has mo_ctrl(..,..,..)

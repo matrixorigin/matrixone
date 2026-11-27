@@ -282,33 +282,6 @@ func TestSendPipelineSignalWithTimeoutReturnsWhenChannelIsFull(t *testing.T) {
 	}
 }
 
-func TestCleanupWarnLimiterSuppressesStorm(t *testing.T) {
-	limiter := newCleanupWarnLimiter()
-
-	for i := int64(1); i <= pipelineCleanupWarnBurstCount; i++ {
-		allowed, occurrence, suppressed := limiter.allow("storm")
-		if !allowed || occurrence != i || suppressed != 0 {
-			t.Fatalf("unexpected burst decision: allowed=%t occurrence=%d suppressed=%d", allowed, occurrence, suppressed)
-		}
-	}
-
-	for i := pipelineCleanupWarnBurstCount + 1; i < pipelineCleanupWarnSampleInterval; i++ {
-		allowed, _, _ := limiter.allow("storm")
-		if allowed {
-			t.Fatalf("unexpected log allowed before sample interval at occurrence %d", i)
-		}
-	}
-
-	allowed, occurrence, suppressed := limiter.allow("storm")
-	if !allowed || occurrence != pipelineCleanupWarnSampleInterval {
-		t.Fatalf("sample log was not allowed: allowed=%t occurrence=%d", allowed, occurrence)
-	}
-	wantSuppressed := pipelineCleanupWarnSampleInterval - pipelineCleanupWarnBurstCount - 1
-	if suppressed != wantSuppressed {
-		t.Fatalf("unexpected suppressed count: got %d, want %d", suppressed, wantSuppressed)
-	}
-}
-
 func TestWarnPipelineCleanupfNilProcessIsSafe(t *testing.T) {
 	WarnPipelineCleanupf(nil, "nil_proc_cleanup", "cleanup warning with nil process")
 }

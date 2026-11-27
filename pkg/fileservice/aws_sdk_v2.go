@@ -25,6 +25,7 @@ import (
 	"math"
 	nethttp "net/http"
 	"net/url"
+	"os"
 	gotrace "runtime/trace"
 	"slices"
 	"strings"
@@ -997,7 +998,7 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 			defer LogEvent(ctx, str_retryable_reader_new_reader_end)
 			var rang string
 			if max != nil {
-				rang = fmt.Sprintf("bytes=%d-%d", offset, *max)
+				rang = fmt.Sprintf("bytes=%d-%d", offset, *max-1) // HTTP includes the last byte
 			} else {
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
@@ -1089,11 +1090,19 @@ func (a *AwsSDKv2) mapError(err error, path string) error {
 	return err
 }
 
-// explicitAWSConfig never consults process environment or shared configuration.
+// explicitAWSConfig only consults the environment for the non-secret region.
 // S3 and STS share this mode so role refresh cannot rediscover another principal.
 func explicitAWSConfig(o ObjectStorageArguments, provider aws.CredentialsProvider, client *nethttp.Client) aws.Config {
+	region := o.Region
+	if region == "" {
+		// Preserve region compatibility without discovering environment credentials.
+		region = os.Getenv("AWS_REGION")
+		if region == "" {
+			region = os.Getenv("AWS_DEFAULT_REGION")
+		}
+	}
 	return aws.Config{
-		Region: o.Region, Credentials: provider, HTTPClient: client,
+		Region: region, Credentials: provider, HTTPClient: client,
 		Logger: logutil.GetS3Logger(), Retryer: func() aws.Retryer { return newAWSRetryer() },
 	}
 }

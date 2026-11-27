@@ -3404,6 +3404,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
 	builder.hintQueryType()
+	if err := builder.finalizeZeroScalarAuthorizationSources(); err != nil {
+		return nil, err
+	}
 	return builder.qry, nil
 }
 
@@ -6689,6 +6692,13 @@ func (builder *QueryBuilder) bindSelectClause(
 	if nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot); err != nil {
 		return
 	}
+	if sourceID := clause.InternalIndexBackfillSourceID; sourceID != 0 {
+		if len(ctx.bindings) != 1 || ctx.bindings[0] == nil || ctx.bindings[0].tableID != sourceID {
+			err = moerr.NewInternalError(builder.GetContext(), "index backfill source does not match its table binding")
+			return
+		}
+		ctx.bindings[0].indexBackfillRaw = true
+	}
 
 	ctx.binder = NewWhereBinder(builder, ctx)
 	// unfold stars and generate headings
@@ -8643,6 +8653,12 @@ func bindProjectionList(
 	projectionBinder *ProjectionBinder,
 	selectList tree.SelectExprs) error {
 	ctx.binder = projectionBinder
+	bindExpr := func(ast tree.Expr, pos int) (*plan.Expr, error) {
+		if ctx.repeatedUpdateAssignments != nil {
+			return ctx.repeatedUpdateAssignments.bindProjection(ctx, projectionBinder, ast, pos)
+		}
+		return bindProjectionExprWithNumericTarget(ctx, projectionBinder, ast, pos)
+	}
 
 	sampleRangeLeft, sampleRangeRight := ctx.sampleFunc.start, ctx.sampleFunc.start+ctx.sampleFunc.offset
 	if ctx.sampleFunc.hasSampleFunc {
@@ -8653,7 +8669,7 @@ func bindProjectionList(
 		}
 
 		for i := range selectList[:sampleRangeLeft] {
-			expr, err := bindProjectionExprWithNumericTarget(ctx, projectionBinder, selectList[i].Expr, i)
+			expr, err := bindExpr(selectList[i].Expr, i)
 			if err != nil {
 				return err
 			}
@@ -8664,17 +8680,18 @@ func bindProjectionList(
 
 	for i := range selectList[sampleRangeRight:] {
 		projectIdx := sampleRangeRight + i
-		expr, err := bindProjectionExprWithNumericTarget(
-			ctx,
-			projectionBinder,
-			selectList[projectIdx].Expr,
-			projectIdx,
-		)
+		expr, err := bindExpr(selectList[projectIdx].Expr, projectIdx)
 		if err != nil {
 			return err
 		}
 
 		ctx.projects = append(ctx.projects, expr)
+	}
+	if assignments := ctx.repeatedUpdateAssignments; assignments != nil {
+		if len(ctx.projects) != assignments.width {
+			return moerr.NewInternalErrorNoCtx("invalid repeated UPDATE projection width")
+		}
+		ctx.projects = append(ctx.projects, assignments.source.project.ProjectList[assignments.width:]...)
 	}
 	return nil
 }
@@ -10264,6 +10281,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = b(builder, tbl, ctx, exprs, nil)
 	} else {
 		switch id {
+		case "mo_current_roles":
+			nodeId, err = builder.buildCurrentRoles(tbl, ctx, exprs, nil)
 		case "unnest":
 			nodeId, err = builder.buildUnnest(tbl, ctx, exprs, nil)
 		case "generate_series":
@@ -10727,6 +10746,7 @@ func (builder *QueryBuilder) collectLockTargets(nodeID int32, callerCtx *BindCon
 			pkPos, pkTyp := getPkPos(tableDef, false)
 			if pkPos >= 0 {
 				lockTarget := &plan.LockTarget{
+					RequireExactRows:   builder.requiresExactAccountRows(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName()),
 					TableId:            tableDef.TblId,
 					PrimaryColIdxInBat: int32(pkPos),
 					PrimaryColRelPos:   node.BindingTags[0],

@@ -481,3 +481,33 @@ func TestAlterCopyDefaultUsesInternalParserMode(t *testing.T) {
 		})
 	}
 }
+
+func TestAlterCopyRedefinesLegacyEmptyEnum(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	source, err := buildTestCreateTableStmt(mock, "create table old_empty(id int primary key, e enum(''))")
+	require.NoError(t, err)
+	legacy := &FindColumn(source.Cols, "e").Typ
+	legacy.Enumvalues, legacy.EnumEncoding = "", types.EnumEncodingLegacy
+	mock.ctxt.tables[source.Name] = source
+	mock.ctxt.objects[source.Name] = &ObjectRef{SchemaName: mock.ctxt.DefaultDatabase(), ObjName: source.Name}
+
+	for _, tc := range []struct {
+		clause   string
+		payload  string
+		encoding uint32
+	}{
+		{"add column extra int", "", types.EnumEncodingLegacy},
+		{"modify e enum('') default ''", "1#0:", types.EnumEncodingFramed},
+	} {
+		t.Run(tc.clause, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), "alter table old_empty "+tc.clause, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(&mock.ctxt, stmt, false)
+			require.NoError(t, err)
+			col := FindColumn(built.GetDdl().GetAlterTable().GetCopyTableDef().Cols, "e")
+			require.Equal(t, tc.payload, col.Typ.Enumvalues)
+			require.Equal(t, tc.encoding, col.Typ.EnumEncoding)
+		})
+	}
+}

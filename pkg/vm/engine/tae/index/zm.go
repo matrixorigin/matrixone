@@ -785,7 +785,20 @@ func (zm ZM) InRange(lb, ub []byte, hint uint8) bool {
 	}
 }
 
+// PrefixIn accepts the sorted, prefix-free, non-null byte candidates prepared
+// by vector.UnmarshalPrefixInVector. Overlapping prefixes make the binary-search
+// predicate nonmonotonic; canonicality is established once, not per zone.
 func (zm ZM) PrefixIn(vec *vector.Vector) bool {
+	if vec == nil || !vec.GetType().Oid.IsMySQLString() || vec.Length() < 0 {
+		return true
+	}
+	if vec.Length() == 0 {
+		return false
+	}
+	if vec.IsConstNull() || vec.GetNulls().Any() ||
+		!zm.Valid() || !zm.GetType().IsMySQLString() || zm.MaxTruncated() {
+		return true
+	}
 	col, area := vector.MustVarlenaRawData(vec)
 	minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()
 	lowerBound := sort.Search(len(col), func(i int) bool {

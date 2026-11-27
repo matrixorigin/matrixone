@@ -21,9 +21,10 @@ var (
 	// Bit 3 used to disable the obsolete distributed 1PC optimization.
 	// Keep it unused so snapshots that contain later feature bits retain their
 	// interpretation.
-	txnFeatureCheckDup          = uint32(1 << 4)
-	txnFeatureDisableTrace      = uint32(1 << 5)
-	txnFeatureDisableWaitPaused = uint32(1 << 6)
+	txnFeatureCheckDup           = uint32(1 << 4)
+	txnFeatureDisableTrace       = uint32(1 << 5)
+	txnFeatureDisableWaitPaused  = uint32(1 << 6)
+	txnFeatureCatalogMaintenance = uint32(1 << 7)
 )
 
 func (m TxnOptions) WithDisableWaitPaused() TxnOptions {
@@ -54,6 +55,18 @@ func (m TxnOptions) WithReadOnly() TxnOptions {
 func (m TxnOptions) WithUserTxn() TxnOptions {
 	m.Features |= txnFeatureUserTxn
 	return m
+}
+
+func (m TxnOptions) WithCatalogMaintenance(enabled bool) TxnOptions {
+	m.Features &^= txnFeatureCatalogMaintenance
+	if enabled {
+		m.Features |= txnFeatureCatalogMaintenance
+	}
+	return m
+}
+
+func (m TxnOptions) CatalogMaintenance() bool {
+	return m.featureEnabled(txnFeatureCatalogMaintenance)
 }
 
 func (m TxnOptions) CacheWriteEnabled() bool {

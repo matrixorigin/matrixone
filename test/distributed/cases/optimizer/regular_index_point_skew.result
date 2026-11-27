@@ -1,0 +1,140 @@
+drop database if exists regular_index_point_skew;
+create database regular_index_point_skew;
+use regular_index_point_skew;
+create table runs (
+id bigint primary key,
+workspace_id int not null,
+workflow_id int not null,
+task_id int not null,
+created_at bigint not null,
+body varchar(256) not null,
+index ix_flow (workspace_id, workflow_id),
+index ix_task (task_id)
+);
+insert into runs
+select result,
+case when result <> 4 and mod(result * 79, 50000) < 37500 then 1 else result end,
+case when result <> 5 and mod(result * 79, 50000) < 37500 then 1 else result end,
+case when result = 6000 then 100010
+when mod(result * 79, 50000) < 5500 then 7
+else mod(result * 79, 256) + 10 end,
+case when result in (4, 5) then -1
+when result in (2, 3) then 0 else mod(result * 173, 20003) + 1 end,
+repeat('x', 200)
+from generate_series(1, 50000) g;
+select sum(workspace_id), sum(workflow_id), sum(task_id) from runs;
+➤ sum(workspace_id)[3,32,0]  ¦  sum(workflow_id)[3,32,0]  ¦  sum(task_id)[3,32,0]  𝄀
+315518753  ¦  315518754  ¦  6256922
+explain select * from runs
+where workspace_id = 1 and workflow_id = 1 and task_id = 100010
+order by created_at, id limit 1;
+-- @regex("Index Table Scan on runs[.]ix_task", true)
+-- @regex("Join Type: INDEX", true)
+-- @regex("Filter Cond: prefix_eq[(]__mo_index_idx_col[)]", true)
+-- @regex("Sort Key: runs[.]created_at INTERNAL, runs[.]id INTERNAL", true)
+-- @regex("Limit: 1", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: runs.created_at INTERNAL, runs.id INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (runs.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on regular_index_point_skew.runs [ForceOneCN]  𝄀
+                    Filter Cond: (runs.workflow_id = 1), (runs.workspace_id = 1), (runs.task_id = 100010)  𝄀
+                    Block Filter Cond: (runs.workflow_id = 1), (runs.workspace_id = 1), (runs.task_id = 100010)  𝄀
+                    Runtime Filter Probe: runs.id  𝄀
+              ->  Index Table Scan on runs.ix_task [ForceOneCN]  𝄀
+                    Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+                    Block Filter Cond: prefix_eq(__mo_index_idx_col)
+select * from runs
+where workspace_id = 1 and workflow_id = 1 and task_id = 100010
+order by created_at, id limit 1;
+➤ id[-5,64,0]  ¦  workspace_id[4,32,0]  ¦  workflow_id[4,32,0]  ¦  task_id[4,32,0]  ¦  created_at[-5,64,0]  ¦  body[12,256,0]  𝄀
+6000  ¦  1  ¦  1  ¦  100010  ¦  17848  ¦  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+select * from runs ignore index (ix_flow)
+where workspace_id = 1 and workflow_id = 1 and task_id = 100010
+order by created_at, id limit 1;
+➤ id[-5,64,0]  ¦  workspace_id[4,32,0]  ¦  workflow_id[4,32,0]  ¦  task_id[4,32,0]  ¦  created_at[-5,64,0]  ¦  body[12,256,0]  𝄀
+6000  ¦  1  ¦  1  ¦  100010  ¦  17848  ¦  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+explain select * from runs
+where workspace_id = 1 and workflow_id = 1 and task_id = 7
+order by created_at, id limit 1;
+-- @regex("Sort Key: runs[.]created_at INTERNAL, runs[.]id INTERNAL", true)
+-- @regex("Limit: 1", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: runs.created_at INTERNAL, runs.id INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (runs.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on regular_index_point_skew.runs [ForceOneCN]  𝄀
+                    Filter Cond: (runs.workflow_id = 1), (runs.workspace_id = 1), (runs.task_id = 7)  𝄀
+                    Block Filter Cond: (runs.workflow_id = 1), (runs.workspace_id = 1), (runs.task_id = 7)  𝄀
+                    Runtime Filter Probe: runs.id  𝄀
+              ->  Index Table Scan on runs.ix_task [ForceOneCN]  𝄀
+                    Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+                    Block Filter Cond: prefix_eq(__mo_index_idx_col)
+select * from runs
+where workspace_id = 1 and workflow_id = 1 and task_id = 7
+order by created_at, id limit 1;
+➤ id[-5,64,0]  ¦  workspace_id[4,32,0]  ¦  workflow_id[4,32,0]  ¦  task_id[4,32,0]  ¦  created_at[-5,64,0]  ¦  body[12,256,0]  𝄀
+2  ¦  1  ¦  1  ¦  7  ¦  0  ¦  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+select * from runs ignore index (ix_flow)
+where workspace_id = 1 and workflow_id = 1 and task_id = 7
+order by created_at, id limit 1;
+➤ id[-5,64,0]  ¦  workspace_id[4,32,0]  ¦  workflow_id[4,32,0]  ¦  task_id[4,32,0]  ¦  created_at[-5,64,0]  ¦  body[12,256,0]  𝄀
+2  ¦  1  ¦  1  ¦  7  ¦  0  ¦  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+truncate table runs;
+insert into runs
+select result,
+case when result in (4, 6000) or mod(result * 79, 50000) < 20000 then 1 else mod(result, 16) + 2 end,
+case when result in (4, 6000) or mod(result * 79, 50000) between 20000 and 39999 then 1 else mod(result, 16) + 2 end,
+case when result = 4 then 100011
+when result = 6000 or mod(result * 79, 50000) < 37500 then 100010 else result + 200000 end,
+case when result = 4 then 0 else mod(result * 173, 20003) + 1 end,
+repeat('x', 200)
+from generate_series(1, 50000) g;
+select sum(workspace_id), sum(workflow_id), sum(task_id) from runs;
+➤ sum(workspace_id)[3,32,0]  ¦  sum(workflow_id)[3,32,0]  ¦  sum(task_id)[3,32,0]  𝄀
+304999  ¦  304995  ¦  6565856251
+explain select * from runs
+where workspace_id = 1 and workflow_id = 1 and task_id = 100010
+order by created_at, id limit 1;
+-- @regex("Index Table Scan on runs[.]ix_flow", true)
+-- @regex("Join Type: INDEX", true)
+-- @regex("Filter Cond: prefix_eq[(]__mo_index_idx_col[)]", true)
+-- @regex("Sort Key: runs[.]created_at INTERNAL, runs[.]id INTERNAL", true)
+-- @regex("Limit: 1", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: runs.created_at INTERNAL, runs.id INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (runs.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on regular_index_point_skew.runs [ForceOneCN]  𝄀
+                    Filter Cond: (runs.task_id = 100010), (runs.workspace_id = 1), (runs.workflow_id = 1)  𝄀
+                    Block Filter Cond: (runs.task_id = 100010), (runs.workspace_id = 1), (runs.workflow_id = 1)  𝄀
+                    Runtime Filter Probe: runs.id  𝄀
+              ->  Index Table Scan on runs.ix_flow [ForceOneCN]  𝄀
+                    Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+                    Block Filter Cond: prefix_eq(__mo_index_idx_col)
+select * from runs
+where workspace_id = 1 and workflow_id = 1 and task_id = 100010
+order by created_at, id limit 1;
+➤ id[-5,64,0]  ¦  workspace_id[4,32,0]  ¦  workflow_id[4,32,0]  ¦  task_id[4,32,0]  ¦  created_at[-5,64,0]  ¦  body[12,256,0]  𝄀
+6000  ¦  1  ¦  1  ¦  100010  ¦  17848  ¦  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+select * from runs ignore index (ix_task)
+where workspace_id = 1 and workflow_id = 1 and task_id = 100010
+order by created_at, id limit 1;
+➤ id[-5,64,0]  ¦  workspace_id[4,32,0]  ¦  workflow_id[4,32,0]  ¦  task_id[4,32,0]  ¦  created_at[-5,64,0]  ¦  body[12,256,0]  𝄀
+6000  ¦  1  ¦  1  ¦  100010  ¦  17848  ¦  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+drop database regular_index_point_skew;

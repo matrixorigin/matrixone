@@ -105,7 +105,9 @@ func (s *store) handleCommands(cmds []logservicepb.ScheduleCommand) {
 				s.handleRemoveReplica(cmd)
 			}
 		} else if cmd.GetShutdownStore() != nil {
-			s.handleShutdownStore(cmd)
+			// Old global shutdowns must not prevent recovery. Other commands
+			// in the same heartbeat still need to be applied.
+			continue
 		} else if cmd.CreateTaskService != nil {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
@@ -136,13 +138,5 @@ func (s *store) handleRemoveReplica(cmd logservicepb.ScheduleCommand) {
 	defer s.mu.Unlock()
 	if err := s.removeReplicaLocked(shardID); err != nil {
 		s.rt.Logger().Error("failed to remove replica", zap.Error(err))
-	}
-}
-
-func (s *store) handleShutdownStore(_ logservicepb.ScheduleCommand) {
-	// notify main routine that have received shutdown cmd
-	select {
-	case s.shutdownC <- struct{}{}:
-	default:
 	}
 }

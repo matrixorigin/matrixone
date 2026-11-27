@@ -28,6 +28,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetFunctionByIdWithoutErrorRejectsInvalidOverload(t *testing.T) {
+	_, ok := GetFunctionByIdWithoutError(EncodeOverloadID(PLUS, 0))
+	require.True(t, ok)
+	_, ok = GetFunctionByIdWithoutError(EncodeOverloadID(PLUS, 1<<30))
+	require.False(t, ok)
+	_, ok = GetFunctionByIdWithoutError((int64(PLUS) << 32) | int64(^uint32(0)))
+	require.False(t, ok)
+}
+
 func Test_fixedTypeCastRule1(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool

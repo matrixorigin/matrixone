@@ -16,6 +16,8 @@ package lockservice
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -38,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -566,6 +569,78 @@ func TestRowLockWithWaitQueue(t *testing.T) {
 				})
 		})
 	}
+}
+
+func TestLockReadWitnessAfterHolderHandoff(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, ss []*service) {
+		s := ss[0]
+		ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		const table = 10
+		rows := newTestRows(1)
+		options := newTestRowExclusiveOptions()
+		first, next, waiting := []byte("first-holder-txn"), []byte("next-holder--txn"), []byte("waiting-read-txn")
+		var workers sync.WaitGroup
+		defer func() {
+			stop()
+			workers.Wait()
+			for _, txn := range [][]byte{first, next, waiting} {
+				assert.NoError(t, s.Unlock(context.Background(), txn, timestamp.Timestamp{}))
+			}
+		}()
+
+		_, err := s.Lock(ctx, table, rows, first, options)
+		require.NoError(t, err)
+		lockTable, err := s.getLockTable(ctx, 0, table)
+		require.NoError(t, err)
+		lt := lockTable.(*localLockTable)
+		nextAcquired := make(chan error, 1)
+		workers.Go(func() {
+			_, err := s.Lock(ctx, table, rows, next, options)
+			nextAcquired <- err
+		})
+		require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
+
+		waitCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		observation := &resource.LockReadObservation{}
+		waitCtx = resource.ContextWithLockReadAcquisition(waitCtx, observation)
+		waitDone := make(chan error, 1)
+		workers.Go(func() {
+			start := observation.Start()
+			result, err := s.Lock(waitCtx, table, rows, waiting, options)
+			observation.Finish(waitCtx, resource.LockReadAcquisition, start, err)
+			observation.ObserveAcquisitionConflict(result.HasConflict, err)
+			waitDone <- err
+		})
+		require.NoError(t, waitLocalWaiters(lt, rows[0], 2))
+		require.NoError(t, s.Unlock(ctx, first, timestamp.Timestamp{}))
+		select {
+		case err := <-nextAcquired:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatal("second transaction did not acquire the lock")
+		}
+		require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
+
+		cancel()
+		select {
+		case err := <-waitDone:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-ctx.Done():
+			t.Fatal("canceled lock wait did not return")
+		}
+		checkLock(t, lt, rows[0], [][]byte{next}, nil, nil)
+		root := resource.NewRoot(resource.ConnExternal)
+		root.MergeLockRead(observation)
+		_, snapshot := root.SealWithLockRead(0)
+		diagnostic := snapshot.Diagnostic([16]byte{}, 1, true)
+		require.True(t, diagnostic.Conflict)
+		require.Equal(t, "acquisition", diagnostic.LastIncomplete)
+		wire, err := json.Marshal(diagnostic)
+		require.NoError(t, err)
+		require.Contains(t, string(wire), `"observed_conflict_txn_id":"`+hex.EncodeToString(first)+`"`)
+		require.NotContains(t, string(wire), `"conflict_txn_id":`)
+	})
 }
 
 func TestRangeLockWithWaitQueue(t *testing.T) {
@@ -1636,13 +1711,12 @@ func TestUnlockWithContextKeepsTxnForRetryAfterRemoteTimeout(t *testing.T) {
 			localTable := l1.tableGroups.get(0, 0)
 			bind := localTable.getBind()
 			client := &blockingUnlockClient{unlockStarted: make(chan struct{}, 1)}
-			l1.tableGroups.Lock()
-			l1.tableGroups.holders[0].tables[0] = &remoteLockTable{
-				bind:   bind,
-				client: client,
-				logger: l1.logger,
-			}
-			l1.tableGroups.Unlock()
+			txn := l1.activeTxnHolder.getActiveTxn(txnID, false, "")
+			txn.Lock()
+			txn.lockHolders[0].tableBindIntents[0] = lockTableIntent{bind: bind, table: &remoteLockTable{
+				bind: bind, client: client, logger: l1.logger,
+			}}
+			txn.Unlock()
 
 			unlockCtx, unlockCancel := context.WithTimeout(context.Background(), time.Millisecond*50)
 			defer unlockCancel()
@@ -1650,9 +1724,9 @@ func TestUnlockWithContextKeepsTxnForRetryAfterRemoteTimeout(t *testing.T) {
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 			require.NotNil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
 
-			l1.tableGroups.Lock()
-			l1.tableGroups.holders[0].tables[0] = localTable
-			l1.tableGroups.Unlock()
+			txn.Lock()
+			txn.lockHolders[0].tableBindIntents[0] = lockTableIntent{bind: bind, table: localTable}
+			txn.Unlock()
 			require.NoError(t, l1.Unlock(ctx, txnID, timestamp.Timestamp{}))
 			require.Nil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
 		},
@@ -2482,10 +2556,13 @@ func TestCheckTxnTimeout(t *testing.T) {
 				[]byte("txn2"),
 				option)
 			require.NoError(t, err)
-			l1.tableGroups.removeWithFilter(func(_ uint64, v lockTable) bool {
-				return true
-			}, closeReasonBindChanged)
-			require.NoError(t, l1.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+			// Simulate loss of source transaction state without an Unlock
+			// request reaching the owner.
+			txn := l1.activeTxnHolder.deleteActiveTxn([]byte("txn2"))
+			require.NotNil(t, txn)
+			txn.Lock()
+			reuse.Free(txn, nil)
+			txn.Unlock()
 
 			require.False(t, l2.activeTxnHolder.empty())
 
@@ -3463,11 +3540,11 @@ func TestAllocatorVersionZeroKeepsLocalBinds(t *testing.T) {
 			lt := l1.tableGroups.get(0, table)
 			require.NotNil(t, lt)
 			bind := lt.getBind()
-			lastVersion := l1.lastAllocatorVersion
+			lastVersion := l1.allocatorStateSnapshot().version
 
 			removed := l1.observeAllocatorVersion("compat-test", 0)
 			require.Zero(t, removed)
-			require.Equal(t, lastVersion, l1.lastAllocatorVersion)
+			require.Equal(t, lastVersion, l1.allocatorStateSnapshot().version)
 			require.Equal(t, bind, l1.tableGroups.get(0, table).getBind())
 		},
 	)
@@ -3496,9 +3573,7 @@ func TestAllocatorObserverDoesNotPurgeSameEpochBindVersions(t *testing.T) {
 			bindB.Version = bindA.Version + 1
 			l1.tableGroups.set(0, tableB, l1.createLockTableByBind(bindB))
 
-			l1.allocatorVersionMu.Lock()
-			l1.lastAllocatorVersion = 0
-			l1.allocatorVersionMu.Unlock()
+			l1.lastAllocatorState.Store(&allocatorState{id: l1.allocatorStateSnapshot().id})
 
 			removed := l1.observeAllocatorVersion("same-epoch-test", bindA.Version)
 			require.Zero(t, removed)
@@ -3569,10 +3644,7 @@ func TestGetBindPurgesStaleBindWhenAllocatorIDChangesWithRegressedVersion(t *tes
 			oldAllocatorID := staleBind.AllocatorID
 			require.NotEmpty(t, oldAllocatorID)
 
-			l1.allocatorVersionMu.Lock()
-			l1.lastAllocatorID = oldAllocatorID
-			l1.lastAllocatorVersion = staleBind.Version
-			l1.allocatorVersionMu.Unlock()
+			l1.lastAllocatorState.Store(&allocatorState{id: oldAllocatorID, version: staleBind.Version})
 
 			alloc.mu.Lock()
 			alloc.mu.services = make(map[string]*serviceBinds)
@@ -3586,8 +3658,8 @@ func TestGetBindPurgesStaleBindWhenAllocatorIDChangesWithRegressedVersion(t *tes
 			_, err = l1.getLockTableWithCreate(context.Background(), 0, freshTable, newTestRows(2), pb.Sharding_None)
 			require.NoError(t, err)
 			require.Nil(t, l1.tableGroups.get(0, staleTable))
-			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
-			require.Equal(t, restartedAllocatorID, l1.lastAllocatorID)
+			require.Equal(t, restartedVersion, l1.allocatorStateSnapshot().version)
+			require.Equal(t, restartedAllocatorID, l1.allocatorStateSnapshot().id)
 			freshBind := l1.tableGroups.get(0, freshTable).getBind()
 			require.Equal(t, restartedVersion, freshBind.Version)
 			require.Equal(t, restartedAllocatorID, freshBind.AllocatorID)
@@ -3623,7 +3695,7 @@ func TestKeepaliveEpochPurgeKeepsGroupMovePop(t *testing.T) {
 
 			require.Nil(t, l1.topGroupTables())
 			require.Nil(t, l1.tableGroups.get(0, table))
-			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
+			require.Equal(t, restartedVersion, l1.allocatorStateSnapshot().version)
 		},
 	)
 }
@@ -3643,10 +3715,7 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 			oldAllocatorID := alloc.allocatorID
 			alloc.mu.Unlock()
 
-			l1.allocatorVersionMu.Lock()
-			l1.lastAllocatorID = oldAllocatorID
-			l1.lastAllocatorVersion = oldVersion
-			l1.allocatorVersionMu.Unlock()
+			l1.lastAllocatorState.Store(&allocatorState{id: oldAllocatorID, version: oldVersion})
 
 			staleLocalTable := uint64(21501)
 			staleRemoteTable := uint64(21502)
@@ -3725,8 +3794,8 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 			preserved := l1.tableGroups.get(0, currentProxyTable)
 			require.NotNil(t, preserved)
 			require.Equal(t, currentProxyBind, preserved.getBind())
-			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
-			require.Equal(t, restartedAllocatorID, l1.lastAllocatorID)
+			require.Equal(t, restartedVersion, l1.allocatorStateSnapshot().version)
+			require.Equal(t, restartedAllocatorID, l1.allocatorStateSnapshot().id)
 		},
 		func(cfg *Config) {
 			cfg.EnableRemoteLocalProxy = true
@@ -3763,7 +3832,7 @@ func TestKeepaliveOKFalseFencesActiveTxn(t *testing.T) {
 			txn := l1.activeTxnHolder.getActiveTxn(txnID, false, "")
 			require.NotNil(t, txn)
 			txn.Lock()
-			require.True(t, txn.bindChanged)
+			require.True(t, txn.isFenced())
 			txn.Unlock()
 
 			_, err = l1.Lock(ctx, table, newTestRows(2), txnID, option)
@@ -3784,10 +3853,7 @@ func TestAllocatorObserverRejectsSupersededGetBindResponse(t *testing.T) {
 			newAllocator := allocatorState{id: "new-allocator", version: 90}
 			staleTable := uint64(21512)
 
-			l1.allocatorVersionMu.Lock()
-			l1.lastAllocatorID = oldAllocator.id
-			l1.lastAllocatorVersion = oldAllocator.version
-			l1.allocatorVersionMu.Unlock()
+			l1.lastAllocatorState.Store(&oldAllocator)
 
 			requestAllocator := l1.allocatorStateSnapshot()
 			_, accepted := l1.observeAllocatorStateWithHoldersFromSnapshot(
@@ -3797,8 +3863,8 @@ func TestAllocatorObserverRejectsSupersededGetBindResponse(t *testing.T) {
 				false,
 				l1.tableGroups)
 			require.True(t, accepted)
-			require.Equal(t, newAllocator.id, l1.lastAllocatorID)
-			require.Equal(t, newAllocator.version, l1.lastAllocatorVersion)
+			require.Equal(t, newAllocator.id, l1.allocatorStateSnapshot().id)
+			require.Equal(t, newAllocator.version, l1.allocatorStateSnapshot().version)
 
 			_, accepted = l1.observeAllocatorStateWithHoldersFromSnapshot(
 				"reject-stale-get-bind-test",
@@ -3807,8 +3873,8 @@ func TestAllocatorObserverRejectsSupersededGetBindResponse(t *testing.T) {
 				true,
 				l1.tableGroups)
 			require.False(t, accepted)
-			require.Equal(t, newAllocator.id, l1.lastAllocatorID)
-			require.Equal(t, newAllocator.version, l1.lastAllocatorVersion)
+			require.Equal(t, newAllocator.id, l1.allocatorStateSnapshot().id)
+			require.Equal(t, newAllocator.version, l1.allocatorStateSnapshot().version)
 
 			if accepted {
 				staleBind := pb.LockTable{
@@ -3847,10 +3913,7 @@ func TestAllocatorPublishRejectsStaleBindAfterNewAllocatorObserved(t *testing.T)
 				AllocatorID: oldAllocator.id,
 			}
 
-			l1.allocatorVersionMu.Lock()
-			l1.lastAllocatorID = oldAllocator.id
-			l1.lastAllocatorVersion = oldAllocator.version
-			l1.allocatorVersionMu.Unlock()
+			l1.lastAllocatorState.Store(&oldAllocator)
 			l1.tableGroups.set(0, staleTable, l1.createLockTableByBind(staleBind))
 			requestAllocator := l1.allocatorStateSnapshot()
 
@@ -3874,8 +3937,8 @@ func TestAllocatorPublishRejectsStaleBindAfterNewAllocatorObserved(t *testing.T)
 			require.ErrorIs(t, err, ErrLockTableBindChanged)
 			require.Nil(t, lt)
 			require.Nil(t, l1.tableGroups.get(0, staleTable))
-			require.Equal(t, newAllocator.id, l1.lastAllocatorID)
-			require.Equal(t, newAllocator.version, l1.lastAllocatorVersion)
+			require.Equal(t, newAllocator.id, l1.allocatorStateSnapshot().id)
+			require.Equal(t, newAllocator.version, l1.allocatorStateSnapshot().version)
 		},
 	)
 }
@@ -3902,10 +3965,7 @@ func TestAllocatorPublishRejectsOverwriteAfterConcurrentBindChanged(t *testing.T
 			freshBind.ServiceID = "fresh-service"
 			freshBind.Version++
 
-			l1.allocatorVersionMu.Lock()
-			l1.lastAllocatorID = allocator.id
-			l1.lastAllocatorVersion = allocator.version
-			l1.allocatorVersionMu.Unlock()
+			l1.lastAllocatorState.Store(&allocator)
 			requestAllocator := l1.allocatorStateSnapshot()
 			l1.handleBindChanged(freshBind)
 
@@ -3920,8 +3980,8 @@ func TestAllocatorPublishRejectsOverwriteAfterConcurrentBindChanged(t *testing.T
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 			require.Nil(t, lt)
 			require.Equal(t, freshBind, l1.tableGroups.get(0, table).getBind())
-			require.Equal(t, allocator.id, l1.lastAllocatorID)
-			require.Equal(t, allocator.version, l1.lastAllocatorVersion)
+			require.Equal(t, allocator.id, l1.allocatorStateSnapshot().id)
+			require.Equal(t, allocator.version, l1.allocatorStateSnapshot().version)
 		},
 	)
 }
@@ -3967,16 +4027,15 @@ func TestGetLatestLockTableBindRejectsSupersededAllocator(t *testing.T) {
 			svc.remote.client = c
 			svc.tableGroups = &lockTableHolders{service: svc.serviceID, logger: logger, holders: map[uint32]*lockTableHolder{}}
 			svc.allocatorVersionMu.Lock()
-			svc.lastAllocatorID = newAllocator.id
-			svc.lastAllocatorVersion = newAllocator.version
+			svc.lastAllocatorState.Store(&newAllocator)
 			svc.addSupersededAllocatorIDLocked(oldAllocator.id)
 			svc.allocatorVersionMu.Unlock()
 
 			latest, err := svc.GetLatestLockTableBind(oldBind)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 			require.Equal(t, pb.LockTable{}, latest)
-			require.Equal(t, newAllocator.id, svc.lastAllocatorID)
-			require.Equal(t, newAllocator.version, svc.lastAllocatorVersion)
+			require.Equal(t, newAllocator.id, svc.allocatorStateSnapshot().id)
+			require.Equal(t, newAllocator.version, svc.allocatorStateSnapshot().version)
 		},
 	)
 }
@@ -4006,8 +4065,7 @@ func TestAllocatorObserverBoundsSupersededAllocatorIDs(t *testing.T) {
 	svc.tableGroups.set(currentBind.Group, currentBind.Table, newRemoteLockTable(
 		svc.serviceID, time.Second, currentBind, nil, svc.handleBindChanged, logger,
 	))
-	svc.lastAllocatorID = currentBind.AllocatorID
-	svc.lastAllocatorVersion = currentBind.Version
+	svc.lastAllocatorState.Store(&allocatorState{id: currentBind.AllocatorID, version: currentBind.Version})
 
 	var previous allocatorState
 	for i := 1; i <= maxSupersededAllocatorIDs+3; i++ {
@@ -4164,7 +4222,7 @@ func TestAllocatorObserverConcurrentKeepaliveAndGetBind(t *testing.T) {
 			close(errC)
 			require.NoError(t, <-errC)
 			require.Nil(t, l1.tableGroups.get(0, staleTable))
-			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
+			require.Equal(t, restartedVersion, l1.allocatorStateSnapshot().version)
 		},
 	)
 }
@@ -5251,6 +5309,279 @@ func TestIssue2128(t *testing.T) {
 	)
 }
 
+func TestFenceInterruptsColdBindingWait(t *testing.T) {
+	for _, lookupOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("lookupOnly=%t", lookupOnly), func(t *testing.T) {
+			runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+				s := services[0]
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				const held, cold = 253, 254
+				id := []byte("in-flight-cold-bind")
+				rows := [][]byte{{1}}
+				opts := newTestRowExclusiveOptions()
+				_, err := s.Lock(ctx, held, rows, id, opts)
+				require.NoError(t, err)
+				defer func() {
+					require.NoError(t, s.Unlock(context.Background(), id, timestamp.Timestamp{}))
+				}()
+				txn := s.activeTxnHolder.getActiveTxn(id, false, "")
+				allocation := make(chan struct{})
+				s.mu.Lock()
+				s.mu.allocating[0] = map[uint64]chan struct{}{cold: allocation}
+				s.mu.Unlock()
+				defer func() {
+					s.mu.Lock()
+					delete(s.mu.allocating[0], cold)
+					close(allocation)
+					s.mu.Unlock()
+				}()
+
+				lookup := func(ctx context.Context) error {
+					if lookupOnly {
+						_, err := s.getLockTableWithContext(ctx, 0, cold, id)
+						return err
+					}
+					_, err := s.Lock(ctx, cold, rows, id, opts)
+					return err
+				}
+				// Observe registration before fencing. The allocation remains
+				// blocked until teardown; it cannot explain a successful wakeup.
+				done := make(chan error, 1)
+				go func() { done <- lookup(ctx) }()
+				require.Eventually(t, func() bool {
+					return txn.bindFence.Load() != nil
+				}, time.Second, time.Millisecond)
+				bind := s.tableGroups.get(0, held).getBind()
+				bind.Version++
+				require.True(t, txn.fenceByBindChanged(bind, s.logger))
+				select {
+				case err := <-done:
+					require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
+				case <-ctx.Done():
+					t.Fatal("binding wait did not wake on fence")
+				}
+				require.Equal(t, allocation, s.getAllocatingC(0, cold, false))
+			})
+		})
+	}
+}
+
+func TestForwardLockRecreatesMissingColdBinding(t *testing.T) {
+	runLockServiceTests(t, []string{"s1", "s2"}, func(_ *lockTableAllocator, services []*service) {
+		owner, caller := services[0], services[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const held, cold = 255, 256
+		id := []byte("forwarded-cold-bind")
+		rows := [][]byte{{1}}
+		opts := newTestRowExclusiveOptions()
+		_, err := owner.Lock(ctx, held, rows, id, opts)
+		require.NoError(t, err)
+		defer owner.Unlock(ctx, id, timestamp.Timestamp{})
+		_, err = caller.getLockTableWithCreate(ctx, 0, cold, rows, pb.Sharding_None)
+		require.NoError(t, err)
+		opts.ForwardTo = owner.serviceID
+
+		gate := make(chan struct{})
+		owner.mu.Lock()
+		owner.mu.allocating[0] = map[uint64]chan struct{}{cold: gate}
+		owner.mu.Unlock()
+		release := sync.OnceFunc(func() {
+			owner.mu.Lock()
+			delete(owner.mu.allocating[0], cold)
+			close(gate)
+			owner.mu.Unlock()
+		})
+		defer release()
+
+		type result struct {
+			lock pb.Result
+			err  error
+		}
+		done := make(chan result, 1)
+		go func() {
+			r, err := caller.Lock(ctx, cold, rows, id, opts)
+			done <- result{r, err}
+		}()
+		txn := owner.activeTxnHolder.getActiveTxn(id, false, "")
+		require.Eventually(t, func() bool { return txn.bindFence.Load() != nil }, time.Second, time.Millisecond)
+		release()
+		r := <-done
+		require.NoError(t, r.err)
+		require.EqualValues(t, cold, r.lock.LockedOn.Table)
+		require.True(t, r.lock.LockedOn.Valid)
+		require.NotNil(t, owner.tableGroups.get(0, cold))
+	})
+}
+
+func TestForwardLockReconcilesBindingBeforeGrant(t *testing.T) {
+	for _, tc := range []struct {
+		name                                 string
+		staleCoordinator, fenceDuringRefresh bool
+	}{
+		{"stale-caller", false, false}, {"stale-coordinator", true, false}, {"fenced-refresh", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockServiceTests(t, []string{"s1", "s2"}, func(alloc *lockTableAllocator, services []*service) {
+				coordinator, mirror := services[0], services[1]
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				const table = 257
+				id := []byte("stale-mirror-first-lock")
+				rows := [][]byte{{1}}
+				opts := newTestRowExclusiveOptions()
+				old, err := mirror.getLockTableWithCreate(ctx, 0, table, rows, pb.Sharding_None)
+				require.NoError(t, err)
+				oldBind := old.getBind()
+				if tc.staleCoordinator {
+					_, err := coordinator.getLockTableWithCreate(ctx, 0, table, rows, pb.Sharding_None)
+					require.NoError(t, err)
+				}
+				newBind := oldBind
+				newBind.ServiceID = coordinator.serviceID
+				newBind.Version++
+				alloc.mu.Lock()
+				alloc.mu.lockTables[0][table] = newBind
+				alloc.mu.Unlock()
+				if tc.staleCoordinator {
+					mirror.handleBindChanged(newBind)
+				}
+				opts.ForwardTo = coordinator.serviceID
+
+				if tc.fenceDuringRefresh {
+					heldOptions := newTestRowExclusiveOptions()
+					const heldTable = 258
+					_, err := coordinator.Lock(ctx, heldTable, rows, id, heldOptions)
+					require.NoError(t, err)
+					defer coordinator.Unlock(ctx, id, timestamp.Timestamp{})
+					txn := coordinator.activeTxnHolder.getActiveTxn(id, false, "")
+					heldBind := coordinator.tableGroups.get(0, heldTable).getBind()
+					heldBind.Version++
+
+					alloc.mu.Lock()
+					release := sync.OnceFunc(alloc.mu.Unlock)
+					defer release()
+					done := make(chan error, 1)
+					go func() {
+						_, err := mirror.Lock(ctx, table, rows, id, opts)
+						done <- err
+					}()
+					require.Eventually(t, func() bool { return txn.bindFence.Load() != nil }, time.Second, time.Millisecond)
+					require.True(t, txn.fenceByBindChanged(heldBind, coordinator.logger))
+					select {
+					case err := <-done:
+						require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
+					case <-ctx.Done():
+						t.Fatal("fenced forwarded refresh waited for the allocator")
+					}
+					return
+				}
+
+				_, err = mirror.Lock(ctx, table, rows, id, opts)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged), "%v", err)
+				require.False(t, coordinator.activeTxnHolder.hasActiveTxn(id), "stale request must not admit a lock")
+				require.False(t, coordinator.activeTxnHolder.hasRemoteLockBind(mirror.serviceID, oldBind, time.Second))
+				require.Equal(t, newBind, mirror.tableGroups.get(0, table).getBind())
+				require.Equal(t, newBind, coordinator.tableGroups.get(0, table).getBind())
+
+				got, err := mirror.Lock(ctx, table, rows, id, opts)
+				require.NoError(t, err)
+				defer coordinator.Unlock(ctx, id, timestamp.Timestamp{})
+				require.Equal(t, newBind, got.LockedOn)
+				require.True(t, coordinator.activeTxnHolder.hasRemoteLockBind(mirror.serviceID, newBind, time.Second))
+			})
+		})
+	}
+}
+
+func TestFencedTxnSkipsColdBindWait(t *testing.T) {
+	for _, forward := range []bool{false, true} {
+		t.Run(fmt.Sprintf("forward=%t", forward), func(t *testing.T) {
+			runLockServiceTests(t, []string{"s1", "s2"}, func(_ *lockTableAllocator, services []*service) {
+				coordinator, caller := services[0], services[0]
+				if forward {
+					caller = services[1]
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				const hotTable, coldTable uint64 = 251, 252
+				txnID := []byte("fenced-cold-bind")
+				options := newTestRowExclusiveOptions()
+				_, err := coordinator.Lock(ctx, hotTable, [][]byte{{1}}, txnID, options)
+				require.NoError(t, err)
+				txn := coordinator.activeTxnHolder.getActiveTxn(txnID, false, "")
+				newBind := coordinator.tableGroups.get(0, hotTable).getBind()
+				newBind.Version++
+				require.True(t, txn.fenceByBindChanged(newBind, coordinator.logger))
+				if forward {
+					_, err = caller.getLockTableWithCreate(ctx, 0, coldTable, [][]byte{{2}}, pb.Sharding_None)
+					require.NoError(t, err)
+					options.ForwardTo = coordinator.serviceID
+				}
+
+				block := func(s *service) func() {
+					gate := make(chan struct{})
+					s.mu.Lock()
+					if s.mu.allocating[0] == nil {
+						s.mu.allocating[0] = make(map[uint64]chan struct{})
+					}
+					s.mu.allocating[0][coldTable] = gate
+					s.mu.Unlock()
+					var once sync.Once
+					return func() {
+						once.Do(func() {
+							s.mu.Lock()
+							delete(s.mu.allocating[0], coldTable)
+							close(gate)
+							s.mu.Unlock()
+						})
+					}
+				}
+				releaseCoordinator := block(coordinator)
+				defer releaseCoordinator()
+				done := make(chan error, 1)
+				func() {
+					// Concurrent rollback can hold this mutex while releasing remote
+					// locks. Fence detection must not wait for it.
+					txn.Lock()
+					defer txn.Unlock()
+					go func() {
+						_, err := caller.Lock(ctx, coldTable, [][]byte{{2}}, txnID, options)
+						done <- err
+					}()
+					select {
+					case err := <-done:
+						require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
+					case <-time.After(time.Second):
+						t.Fatal("fenced transaction waited for a cold binding or txn mutex")
+					}
+				}()
+				if forward {
+					releaseCoordinator()
+					require.NoError(t, coordinator.Unlock(ctx, txnID, timestamp.Timestamp{}))
+					return
+				}
+
+				// A healthy transaction must still wait for the same allocation.
+				go func() {
+					_, err := caller.Lock(ctx, coldTable, [][]byte{{3}}, []byte("healthy-cold-bind"), options)
+					done <- err
+				}()
+				select {
+				case err := <-done:
+					t.Fatalf("healthy transaction skipped allocation: %v", err)
+				case <-time.After(50 * time.Millisecond):
+				}
+				releaseCoordinator()
+				require.NoError(t, <-done)
+				require.NoError(t, coordinator.Unlock(ctx, txnID, timestamp.Timestamp{}))
+				require.NoError(t, coordinator.Unlock(ctx, []byte("healthy-cold-bind"), timestamp.Timestamp{}))
+			})
+		})
+	}
+}
+
 func TestBindChangedFencesActiveTxnHoldingOldBind(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -5276,6 +5607,7 @@ func TestBindChangedFencesActiveTxnHoldingOldBind(t *testing.T) {
 
 			_, err = s.Lock(ctx, 1, [][]byte{{2}}, txn1, option)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err))
 
 			_, err = s.Lock(ctx, 1, [][]byte{{2}}, txn2, option)
 			require.NoError(t, err)
@@ -5311,6 +5643,7 @@ func TestBindChangedFencesActiveTxnAfterOldTableRemoved(t *testing.T) {
 
 			_, err = s.Lock(ctx, 1, [][]byte{{1}}, txnID, newTestRowExclusiveOptions())
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err))
 			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
 		},
 	)
@@ -5352,6 +5685,7 @@ func TestBindChangedBeforeLockSuccessReturnsBindChanged(t *testing.T) {
 
 			_, err := s.Lock(ctx, 0, [][]byte{{1}}, txnID, newTestRowExclusiveOptions())
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err))
 			require.Eventually(t, func() bool {
 				select {
 				case <-fenceDone:
@@ -5983,6 +6317,145 @@ func TestLockWaitTimeoutExpiresDuringLockTableBindRPC(t *testing.T) {
 			require.NoError(t, s.Unlock(context.Background(), txnID, timestamp.Timestamp{}))
 		},
 	)
+}
+
+func TestRollbackFencesFirstLockWaitingForBind(t *testing.T) {
+	runLockServiceTests(t, []string{"owner", "source"}, func(alloc *lockTableAllocator, services []*service) {
+		owner, source := services[0], services[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table, nextTable = 24917, 24918
+		row := []byte{1}
+		rows := [][]byte{row}
+		options := newTestRowExclusiveOptions()
+		seed := []byte("owner-seed")
+		_, err := owner.Lock(ctx, table, rows, seed, options)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, seed, timestamp.Timestamp{}))
+		_, err = source.Lock(ctx, nextTable, rows, seed, options)
+		require.NoError(t, err)
+		require.NoError(t, source.Unlock(ctx, seed, timestamp.Timestamp{}))
+
+		entered, release := make(chan struct{}), make(chan struct{})
+		notifyEntered := sync.OnceFunc(func() { close(entered) })
+		resume := sync.OnceFunc(func() { close(release) })
+		defer resume()
+		alloc.server.RegisterMethodHandler(pb.Method_GetBind,
+			func(ctx context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+				if req.GetBind.Table == table && req.GetBind.ServiceID == source.serviceID {
+					notifyEntered()
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return
+					}
+				}
+				alloc.handleGetBind(ctx, cancel, req, resp, cs)
+			})
+		id := []byte("rollback-first-bind")
+		defer func() { require.NoError(t, source.Unlock(ctx, id, timestamp.Timestamp{})) }()
+		lockDone := make(chan error, 1)
+		go func() {
+			_, err := source.Lock(ctx, table, rows, id, options)
+			lockDone <- err
+		}()
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("first Lock did not reach GetBind")
+		}
+		peerCtx, cancelPeer := context.WithCancel(ctx)
+		defer cancelPeer()
+		observedPeer := &doneObservedContext{Context: peerCtx, doneObserved: make(chan struct{})}
+		peerDone := make(chan error, 1)
+		go func() {
+			_, err := source.Lock(observedPeer, table, rows, id, options)
+			peerDone <- err
+		}()
+		select {
+		case <-observedPeer.doneObserved:
+		case <-ctx.Done():
+			t.Fatal("second Lock did not enter binding")
+		}
+		cancelPeer()
+		select {
+		case err := <-peerDone:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-ctx.Done():
+			t.Fatal("canceled Lock waited for the other binding")
+		}
+		require.True(t, source.activeTxnHolder.hasActiveTxn(id))
+
+		pending, err := source.ResolveRollbackCleanup(id, nil)
+		require.NoError(t, err)
+		require.False(t, pending)
+		require.False(t, source.activeTxnHolder.hasActiveTxn(id))
+
+		// Bind another peer for the reused ID, then promote that generation
+		// with a Lock which is blocked on the already-bound local table.
+		nextPeerCtx, cancelNextPeer := context.WithCancel(ctx)
+		defer cancelNextPeer()
+		nextPeer := &doneObservedContext{Context: nextPeerCtx, doneObserved: make(chan struct{})}
+		nextPeerDone := make(chan error, 1)
+		go func() {
+			_, err := source.Lock(nextPeer, table, rows, id, options)
+			nextPeerDone <- err
+		}()
+		select {
+		case <-nextPeer.doneObserved:
+		case <-ctx.Done():
+			t.Fatal("new generation did not enter binding")
+		}
+		local := source.tableGroups.get(0, nextTable).(*localLockTable)
+		local.mu.Lock()
+		releaseLocal := sync.OnceFunc(local.mu.Unlock)
+		defer releaseLocal()
+		nextLockDone := make(chan error, 1)
+		go func() {
+			_, err := source.Lock(ctx, nextTable, rows, id, options)
+			nextLockDone <- err
+		}()
+		require.Eventually(t, func() bool {
+			txn := source.activeTxnHolder.getActiveTxn(id, false, "")
+			if txn == nil {
+				return false
+			}
+			if txn.TryLock() {
+				txn.Unlock()
+				return false
+			}
+			return true
+		}, time.Second, time.Millisecond)
+
+		cancelNextPeer()
+		select {
+		case err := <-nextPeerDone:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-ctx.Done():
+			t.Fatal("canceled bind waited for a promoted holder's mutex")
+		}
+		releaseLocal()
+		select {
+		case err := <-nextLockDone:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatal("new generation did not acquire its own table")
+		}
+		resume()
+		select {
+		case err := <-lockDone:
+			require.ErrorIs(t, err, ErrTxnNotFound)
+		case <-ctx.Done():
+			t.Fatal("first Lock did not return after GetBind")
+		}
+		_, held, err := owner.GetLockHolder(ctx, table, row, options)
+		require.NoError(t, err)
+		require.False(t, held)
+		holder, held, err := source.GetLockHolder(ctx, nextTable, row, options)
+		require.NoError(t, err)
+		require.True(t, held)
+		require.Equal(t, id, holder.TxnID)
+	})
 }
 
 func TestLockWaitTimeoutCallerContextBeforeCeiling(t *testing.T) {
@@ -6665,13 +7138,13 @@ func TestPostGateAdmissionsDoNotBlockDrainSnapshot(t *testing.T) {
 			_, err := s.Lock(context.Background(), table, newTestRows(1), txnID, options)
 			require.NoError(t, err)
 
-			preDrain, admitted := s.beginLockAdmission(txnID, options, table, newTestRows(1))
+			preDrain, admitted := s.beginLockAdmission(txnID, options, table, newTestRows(1), false)
 			require.True(t, admitted)
 			require.True(t, preDrain.preDrain)
 			s.checkCanMoveGroupTables()
 
 			for range 100 {
-				postDrain, admitted := s.beginLockAdmission(txnID, options, table, newTestRows(1))
+				postDrain, admitted := s.beginLockAdmission(txnID, options, table, newTestRows(1), false)
 				require.True(t, admitted)
 				require.False(t, postDrain.preDrain)
 				s.endLockAdmission(postDrain)
@@ -6749,7 +7222,7 @@ func TestDrainWaitsForTxnCloseLinearization(t *testing.T) {
 			txnID := []byte("blocking-drain-close")
 			txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
 			txn.Lock()
-			require.True(t, txn.lockTableBindTouched(bind))
+			require.True(t, txn.lockTableBindTouched(bind, nil))
 			s.incRef(bind.Group, bind.Table)
 			require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, s.logger))
 			txn.Unlock()
@@ -6785,7 +7258,7 @@ func TestRetryableUnknownCommitCloseReleasesAllDrainRefs(t *testing.T) {
 			txn.Lock()
 			for table, lt := range tables {
 				s.tableGroups.set(0, table, lt)
-				require.True(t, txn.lockTableBindTouched(lt.bind))
+				require.True(t, txn.lockTableBindTouched(lt.bind, lt))
 				s.incRef(lt.bind.Group, lt.bind.Table)
 				require.NoError(t, txn.lockAdded(0, lt.bind, [][]byte{{byte(table)}}, s.logger))
 			}
@@ -7011,4 +7484,122 @@ func TestServiceCloseSealsCancelsAndJoinsOperationAdmission(t *testing.T) {
 			require.False(t, admitted)
 			require.False(t, s.beginLockTablePublication())
 		})
+}
+
+func TestSameBindingReplacementFencesPriorTransaction(t *testing.T) {
+	runLockServiceTests(t, []string{"owner"}, func(_ *lockTableAllocator, nodes []*service) {
+		s := nodes[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table = 1787
+		id := []byte("replacement")
+		opts := newTestRowExclusiveOptions()
+		_, err := s.Lock(ctx, table, newTestRows(1), id, opts)
+		require.NoError(t, err)
+		old := s.tableGroups.get(0, table)
+		removed, err := s.CloseRemoteLockTable(0, table, old.getBind().Version)
+		require.NoError(t, err)
+		require.True(t, removed)
+		current, err := s.getLockTableWithCreate(ctx, 0, table, newTestRows(2), opts.Sharding)
+		require.NoError(t, err)
+		require.NotSame(t, old, current)
+		require.True(t, old.getBind().Equal(current.getBind()))
+		_, err = s.Lock(ctx, table, newTestRows(2), id, opts)
+		require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
+		require.NoError(t, s.Unlock(ctx, id, timestamp.Timestamp{}))
+		_, held, err := s.GetLockHolder(ctx, table, newTestRows(2)[0], opts)
+		require.NoError(t, err)
+		require.False(t, held)
+		other := []byte("fresh")
+		_, err = s.Lock(ctx, table, newTestRows(2), other, opts)
+		require.NoError(t, err)
+		require.NoError(t, s.Unlock(ctx, other, timestamp.Timestamp{}))
+	})
+}
+
+func TestFenceInterruptsColdBindingStartedBeforeTxnRegistration(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+		s := services[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const held, cold = 261, 262
+		id := []byte("fence-after-registration")
+		rows := [][]byte{{1}}
+		opts := newTestRowExclusiveOptions()
+
+		gate := make(chan struct{})
+		s.mu.Lock()
+		s.mu.allocating[0] = map[uint64]chan struct{}{cold: gate}
+		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			delete(s.mu.allocating[0], cold)
+			close(gate)
+			s.mu.Unlock()
+		}()
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := s.Lock(ctx, cold, rows, id, opts)
+			done <- err
+		}()
+		holder := s.activeTxnHolder.(*mapBasedTxnHolder)
+		shard := holder.getActiveTxnShard(string(id))
+		require.Eventually(t, func() bool {
+			shard.RLock()
+			defer shard.RUnlock()
+			return shard.txns[string(id)].pendingFence != nil
+		}, time.Second, time.Millisecond)
+		require.True(t, holder.empty())
+
+		_, err := s.Lock(ctx, held, rows, id, opts)
+		require.NoError(t, err)
+		defer s.Unlock(context.Background(), id, timestamp.Timestamp{})
+
+		bind := s.tableGroups.get(0, held).getBind()
+		bind.Version++
+		s.handleBindChanged(bind)
+
+		select {
+		case err := <-done:
+			require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
+		case <-ctx.Done():
+			t.Fatal("cold lookup did not observe fence after registration")
+		}
+		require.Equal(t, gate, s.getAllocatingC(0, cold, false))
+	})
+}
+
+func TestColdBindFenceRetirementIsGenerationScoped(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+		holder := services[0].activeTxnHolder.(*mapBasedTxnHolder)
+		id := []byte("cold-fence-generation")
+		key := string(id)
+		shard := holder.getActiveTxnShard(key)
+
+		first, release := holder.subscribeBindFence(id)
+		releaseFirst := sync.OnceFunc(release)
+		defer releaseFirst()
+		second, releaseSecond := holder.subscribeBindFence(id)
+		require.Same(t, first, second)
+		releaseSecond()
+		require.NoError(t, context.Cause(first))
+		require.Nil(t, holder.deleteActiveTxn(id))
+		require.ErrorIs(t, context.Cause(first), ErrTxnNotFound)
+
+		replacement, releaseReplacement := holder.subscribeBindFence(id)
+		releaseFirst()
+		shard.RLock()
+		pending := shard.txns[key].pendingFence
+		shard.RUnlock()
+		require.NotNil(t, pending)
+		require.Same(t, replacement, pending.fence.ctx)
+		releaseReplacement()
+
+		shard.RLock()
+		pending = shard.txns[key].pendingFence
+		shard.RUnlock()
+		require.Nil(t, pending)
+		require.True(t, holder.empty())
+	})
 }

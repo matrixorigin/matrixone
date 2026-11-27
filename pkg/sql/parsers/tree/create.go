@@ -20,6 +20,8 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func init() {
@@ -118,6 +120,12 @@ func init() {
 		func(a *AttributeComment) { a.reset() },
 		reuse.DefaultOptions[AttributeComment](), //.
 	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeCharset](
+		func() *AttributeCharset { return &AttributeCharset{} },
+		func(a *AttributeCharset) { *a = AttributeCharset{} },
+		reuse.DefaultOptions[AttributeCharset](),
+	)
 
 	reuse.CreatePool[AttributeCollate](
 		func() *AttributeCollate { return &AttributeCollate{} },
@@ -952,6 +960,24 @@ type CreateTable struct {
 	IsAsLike           bool
 	LikeTableName      TableName
 	SubscriptionOption *SubscriptionOption
+
+	// InheritedEnums carries typed metadata for internally reconstructed DDL.
+	InheritedEnums map[string]planpb.Type
+}
+
+// InheritedEnumTypes extracts the typed ENUM definitions from an existing
+// table or the final schema of a table being rebuilt.
+func InheritedEnumTypes(table *planpb.TableDef) map[string]planpb.Type {
+	var inherited map[string]planpb.Type
+	for _, col := range table.GetCols() {
+		if col != nil && !col.Hidden && col.Typ.Id == int32(types.T_enum) {
+			if inherited == nil {
+				inherited = make(map[string]planpb.Type)
+			}
+			inherited[strings.ToLower(col.Name)] = col.Typ
+		}
+	}
+	return inherited
 }
 
 func NewCreateTable() *CreateTable {
@@ -1298,6 +1324,8 @@ func (node *ColumnTableDef) reset() {
 				opt.Free()
 			case *AttributeComment:
 				opt.Free()
+			case *AttributeCharset:
+				opt.Free()
 			case *AttributeCollate:
 				opt.Free()
 			case *AttributeColumnFormat:
@@ -1549,6 +1577,28 @@ func NewAttributeComment(c Expr) *AttributeComment {
 	ac := reuse.Alloc[AttributeComment](nil)
 	ac.CMT = c
 	return ac
+}
+
+type AttributeCharset struct {
+	columnAttributeImpl
+	Charset string
+}
+
+func (node *AttributeCharset) Format(ctx *FmtCtx) {
+	ctx.WriteString("character set ")
+	ctx.WriteString(node.Charset)
+}
+
+func (node AttributeCharset) TypeName() string { return "tree.AttributeCharset" }
+
+func (node *AttributeCharset) Free() {
+	reuse.Free[AttributeCharset](node, nil)
+}
+
+func NewAttributeCharset(charset string) *AttributeCharset {
+	node := reuse.Alloc[AttributeCharset](nil)
+	node.Charset = charset
+	return node
 }
 
 type AttributeCollate struct {

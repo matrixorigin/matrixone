@@ -124,11 +124,96 @@ func TestSendFailureKeepsRequestOwnership(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	future, err := rb.Send(ctx, newTestMessage(1))
-	require.ErrorIs(t, err, backendClosed)
-	require.Nil(t, future)
-	require.Zero(t, released.Load(),
-		"a request that was not enqueued remains owned by the caller")
+	for _, sendCtx := range []context.Context{
+		ctx,
+		WithRequestRelease(ctx, func(Message) { released.Add(1) }),
+	} {
+		future, err := rb.Send(sendCtx, newTestMessage(1))
+		require.ErrorIs(t, err, backendClosed)
+		require.Nil(t, future)
+		require.Zero(t, released.Load(),
+			"a request that was not enqueued remains owned by the caller")
+	}
+}
+
+func TestOwnedRequestCancelsWhileQueuedBehindWriter(t *testing.T) {
+	blocker := newTestMessage(1)
+	request := newTestMessage(2)
+	writerEntered := make(chan struct{})
+	unblockWriter := make(chan struct{})
+	releaseWriter := sync.OnceFunc(func() { close(unblockWriter) })
+	released := make(chan Message, 2)
+	socketDir, err := os.MkdirTemp("", "mo-morpc-owned-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(socketDir)) })
+	unixFile := filepath.Join(socketDir, "rpc.sock")
+	addr := "unix://" + unixFile
+	app := newTestAppWithAddr(t, addr, unixFile,
+		func(conn goetty.IOSession, message interface{}, _ uint64) error {
+			return conn.Write(message, goetty.WriteOptions{Flush: true})
+		})
+	require.NoError(t, app.Start())
+	defer func() { require.NoError(t, app.Stop()) }()
+	testBackendSendWithoutServer(t, addr,
+		func(b *remoteBackend) {
+			defer releaseWriter()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			inFlight, err := b.Send(ctx, blocker)
+			require.NoError(t, err)
+			defer inFlight.Close()
+			select {
+			case <-writerEntered:
+			case <-ctx.Done():
+				t.Fatal("writer did not reach gate")
+			}
+
+			waitCtx, cancelWait := context.WithCancel(ctx)
+			defer cancelWait()
+			f, err := b.Send(WithRequestRelease(waitCtx, func(m Message) { released <- m }), request)
+			require.NoError(t, err)
+			done := make(chan error, 1)
+			go func() {
+				_, err := f.Get()
+				f.Close()
+				done <- err
+			}()
+			cancelWait()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-ctx.Done():
+				t.Fatal("queued request waited for the blocked writer")
+			}
+			select {
+			case <-released:
+				t.Fatal("request was released while still queued")
+			default:
+			}
+			releaseWriter()
+			select {
+			case m := <-released:
+				require.Same(t, request, m)
+			case <-ctx.Done():
+				t.Fatal("writer did not release the canceled request")
+			}
+			_, err = inFlight.Get()
+			require.NoError(t, err)
+			select {
+			case <-released:
+				t.Fatal("request released twice")
+			default:
+			}
+		},
+		WithBackendBatchSendSize(1),
+		WithBackendFilter(func(m Message, _ string) bool {
+			if m == blocker {
+				close(writerEntered)
+				<-unblockWriter
+			}
+			return true
+		}),
+	)
 }
 
 func TestSuccessfulSendReleasesOwnedRequest(t *testing.T) {
@@ -395,22 +480,85 @@ func TestSkippedRequestDoesNotDrainHealthyBackend(t *testing.T) {
 	)
 }
 
+// manuallyExpiringContext keeps the transport deadline separate from the
+// response timeout, which the test triggers only after the peer accepts it.
+type manuallyExpiringContext struct {
+	context.Context
+	deadline time.Time
+	done     chan struct{}
+	once     sync.Once
+}
+
+func newManuallyExpiringContext() *manuallyExpiringContext {
+	return &manuallyExpiringContext{
+		Context:  context.Background(),
+		deadline: time.Now().Add(time.Hour),
+		done:     make(chan struct{}),
+	}
+}
+
+func (c *manuallyExpiringContext) Deadline() (time.Time, bool) { return c.deadline, true }
+func (c *manuallyExpiringContext) Done() <-chan struct{}       { return c.done }
+func (c *manuallyExpiringContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+func (c *manuallyExpiringContext) expire() { c.once.Do(func() { close(c.done) }) }
+
+// blackholeUserRequests acknowledges peer receipt without sending a response.
+func blackholeUserRequests(accepted chan<- struct{}) func(goetty.IOSession, interface{}, uint64) error {
+	return func(_ goetty.IOSession, value interface{}, _ uint64) error {
+		request := value.(RPCMessage)
+		if request.Cancel != nil {
+			defer request.Cancel()
+		}
+		if !request.internal {
+			accepted <- struct{}{}
+		}
+		return nil
+	}
+}
+
+func sendTimedOutRequestAfterAcceptance(t *testing.T, b *remoteBackend, accepted <-chan struct{}) error {
+	t.Helper()
+	ctx := newManuallyExpiringContext()
+	defer ctx.expire()
+	f, err := b.Send(ctx, newTestMessage(1))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("peer did not accept the user request")
+	}
+	ctx.expire()
+	_, err = f.Get()
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	return nil
+}
+
 func TestTimedOutRequestStillDrainsBlackholedBackend(t *testing.T) {
+	accepted := make(chan struct{}, 1)
 	probed := make(chan struct{}, 1)
 	testBackendSend(t,
-		func(goetty.IOSession, interface{}, uint64) error {
-			// Simulate a request accepted by the peer whose data response path
-			// never makes progress.
-			return nil
-		},
+		blackholeUserRequests(accepted),
 		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-			defer cancel()
-			f, err := b.Send(ctx, newTestMessage(1))
-			require.NoError(t, err)
-			_, err = f.Get()
-			require.ErrorIs(t, err, context.DeadlineExceeded)
-			f.Close()
+			require.NoError(t, sendTimedOutRequestAfterAcceptance(t, b, accepted))
+			require.Eventually(t, func() bool {
+				b.mu.RLock()
+				futureCount := len(b.mu.futures)
+				b.mu.RUnlock()
+				return futureCount == 0 && b.dataPendingSince() != 0
+			}, time.Second, time.Millisecond)
+			require.True(t, b.admissionAvailable(), "backend must not drain before the read loop starts")
+			b.inactiveReadLoop()
+			b.activeReadLoop(false)
 
 			select {
 			case <-probed:
@@ -422,13 +570,21 @@ func TestTimedOutRequestStillDrainsBlackholedBackend(t *testing.T) {
 			}, time.Second, time.Millisecond)
 			retryCtx, retryCancel := context.WithTimeout(context.Background(), time.Second)
 			defer retryCancel()
-			_, err = b.Send(retryCtx, newTestMessage(2))
+			retry, err := b.Send(retryCtx, newTestMessage(2))
+			if retry != nil {
+				defer retry.Close()
+			}
 			require.ErrorIs(t, err, backendDraining,
 				"latched user traffic must seal the blackholed data generation")
 		},
+		// Defer the reader until the timed-out Future has left the map.
+		func(b *remoteBackend) { b.stateMu.readLoopActive = true },
 		WithBackendReadTimeout(50*time.Millisecond),
 		WithBackendLivenessProbe(func(context.Context, string) error {
-			probed <- struct{}{}
+			select {
+			case probed <- struct{}{}:
+			default:
+			}
 			return nil
 		}),
 	)
@@ -437,36 +593,38 @@ func TestTimedOutRequestStillDrainsBlackholedBackend(t *testing.T) {
 func TestContinuousTimedOutRequestsCannotPostponeProbe(t *testing.T) {
 	var probes atomic.Int32
 	probeCalled := make(chan struct{}, 1)
+	accepted := make(chan struct{}, 1)
 	testBackendSend(t,
-		func(goetty.IOSession, interface{}, uint64) error {
-			return nil
-		},
+		blackholeUserRequests(accepted),
 		func(b *remoteBackend) {
-			deadline := time.Now().Add(time.Second)
+			waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			// Preserve the original 5ms request cadence without making the
+			// transport deadline depend on writer scheduling.
+			ticker := time.NewTicker(5 * time.Millisecond)
+			defer ticker.Stop()
 			probeObserved := false
-			for !probeObserved && time.Now().Before(deadline) {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
-				f, err := b.Send(ctx, newTestMessage(1))
-				if err == nil {
-					_, _ = f.Get()
-					f.Close()
-				} else {
-					require.Truef(
-						t,
-						errors.Is(err, context.DeadlineExceeded) || errors.Is(err, backendDraining),
-						"unexpected request error before draining publication: %v",
-						err,
-					)
-				}
-				cancel()
+			for !probeObserved {
 				select {
 				case <-probeCalled:
 					probeObserved = true
-				default:
+					continue
+				case <-waitCtx.Done():
+					t.Fatal("new short requests postponed the liveness probe")
+				case <-ticker.C:
+				}
+				err := sendTimedOutRequestAfterAcceptance(t, b, accepted)
+				if err != nil {
+					require.ErrorIs(t, err, backendDraining,
+						"unexpected request error before draining publication")
+					select {
+					case <-probeCalled:
+						probeObserved = true
+					case <-waitCtx.Done():
+						t.Fatal("draining backend did not run a liveness probe")
+					}
 				}
 			}
-			require.True(t, probeObserved,
-				"new short requests must not move the oldest unprogressed write epoch")
 			require.Positive(t, probes.Load())
 			require.Eventually(t, func() bool {
 				return !b.admissionAvailable()
@@ -474,7 +632,10 @@ func TestContinuousTimedOutRequestsCannotPostponeProbe(t *testing.T) {
 
 			retryCtx, retryCancel := context.WithTimeout(context.Background(), time.Second)
 			defer retryCancel()
-			_, err := b.Send(retryCtx, newTestMessage(2))
+			retry, err := b.Send(retryCtx, newTestMessage(2))
+			if retry != nil {
+				defer retry.Close()
+			}
 			require.ErrorIs(t, err, backendDraining,
 				"durably drained backend must reject new user traffic")
 		},

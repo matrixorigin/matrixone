@@ -1215,12 +1215,9 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 	leftRows = offsets
 
-	s3FlushedDeletes := ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
-
 	var tombstones []objectio.ObjectStats
-	s3FlushedDeletes.Range(func(key, value any) bool {
-		tombstones = append(tombstones, key.(objectio.ObjectStats))
-		return true
+	ls.table.getTxn().flushedTombstones.forEach(ls.table.tableId, func(stats objectio.ObjectStats) {
+		tombstones = append(tombstones, stats)
 	})
 
 	if len(tombstones) == 0 {
@@ -1276,7 +1273,8 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 	rawRowIdDeletes.RWMutex.RLock()
 	defer rawRowIdDeletes.RWMutex.RUnlock()
 
-	readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, rawRowIdDeletes.offsets[*bid])
+	deleted := rawRowIdDeletes.offsets[ls.table.tableId]
+	readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, deleted[*bid])
 
 	return leftRows
 }

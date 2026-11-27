@@ -95,6 +95,8 @@ const (
 	HashBuildAllocationSiteDedupDeleteOnlyGrouping
 )
 
+const HashBuildAllocationSiteBatchRowEnds mpool.AllocationSite = 61
+
 type container struct {
 	state           int
 	runtimeFilterIn bool
@@ -542,6 +544,7 @@ func (hb *HashmapBuilder) ClearAllocationAccount(
 	}
 	if builder.IntHashMap != nil || builder.StrHashMap != nil ||
 		len(builder.Batches.Buf) != 0 || builder.Sels.Size() != 0 ||
+		builder.batchRowEnds != nil ||
 		len(builder.executors) != 0 || len(builder.curVecs) != 0 ||
 		len(builder.uniqueKeys.first.vecs) != 0 ||
 		len(builder.uniqueKeys.rest) != 0 || builder.uniqueKeys.directory != nil ||

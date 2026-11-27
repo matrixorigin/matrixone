@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -147,13 +148,10 @@ type store struct {
 	mu struct {
 		sync.Mutex
 		metadata metadata.LogStore
-		// skippedZombies is the set of (shardID, replicaID) pairs that
-		// startReplicas decided not to start because the cluster membership
-		// no longer listed them. Persisted here so later bootstrap paths
-		// (BootstrapHAKeeper in particular) can honor the same decision
-		// and do not re-start a replica we have already classified as
-		// removed.
-		skippedZombies map[zombieKey]struct{}
+		// skippedZombies records the newest absence observed at startup for
+		// each skipped local replica. Keep it while this store is open so a
+		// delayed Start cannot undo a Kill that leaves Raft files behind.
+		skippedZombies map[zombieKey]startupAbsence
 	}
 	shardSnapshotInfo shardSnapshotInfo
 	snapshotMgr       *snapshotManager
@@ -253,6 +251,13 @@ type zombieKey struct {
 // HAKeeper has no elected leader.
 var getShardMembershipFn = getShardMembership
 
+type startupAbsence struct {
+	epoch uint64
+	// genesisPrefixOnly applies to the configured HAKeeper voter with a
+	// retained Raft record and no MatrixOne replica metadata.
+	genesisPrefixOnly bool
+}
+
 var zombieSelfCheckTimeout = 2 * time.Second
 
 // checkZombieReplicas queries live shard membership for each locally-known
@@ -294,8 +299,8 @@ var zombieSelfCheckTimeout = 2 * time.Second
 // are not blocked. The whole sweep is bounded by zombieSelfCheckTimeout;
 // if the budget expires, any replicas not already classified are treated as
 // not-a-zombie and normal startup continues.
-func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogShard) map[zombieKey]struct{} {
-	zombies := make(map[zombieKey]struct{})
+func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogShard) map[zombieKey]startupAbsence {
+	zombies := make(map[zombieKey]startupAbsence)
 	if len(shards) == 0 {
 		return zombies
 	}
@@ -305,6 +310,10 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 		return zombies
 	}
 
+	var initial map[uint64]string
+	if l.cfg.BootstrapConfig.BootstrapCluster && l.getReplicaID(hakeeper.DefaultHAKeeperShardID) == -1 {
+		initial, _ = l.cfg.GetInitHAKeeperMembers()
+	}
 	logger := l.runtime.Logger()
 	ctx, cancel := context.WithTimeout(ctx, zombieSelfCheckTimeout)
 	defer cancel()
@@ -316,11 +325,14 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 			continue
 		}
 		var authoritative, presentReplies int
+		var absence startupAbsence
+		owner, configured := initial[rec.ReplicaID]
+		absence.genesisPrefixOnly = rec.ShardID == hakeeper.DefaultHAKeeperShardID && configured && owner == l.cfg.UUID
 		for _, address := range addresses {
 			if ctx.Err() != nil {
 				return zombies
 			}
-			members, ok, err := getShardMembershipFn(ctx, l.cfg.UUID, address, rec.ShardID)
+			members, epoch, ok, err := getShardMembershipFn(ctx, l.cfg.UUID, address, rec.ShardID)
 			if err != nil {
 				logger.Warn("zombie self-check: getShardMembership failed",
 					zap.String("address", address),
@@ -333,12 +345,15 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 				continue
 			}
 			authoritative++
+			absence.epoch = max(absence.epoch, epoch)
 			if _, present := members[rec.ReplicaID]; present {
 				presentReplies++
 			}
+			absence.genesisPrefixOnly = absence.genesisPrefixOnly &&
+				pb.IsInitialMembershipPrefix(initial, members, nil, epoch)
 		}
 		if authoritative > 0 && presentReplies == 0 {
-			zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = struct{}{}
+			zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = absence
 		}
 	}
 	return zombies
@@ -385,22 +400,128 @@ func (l *store) zombieCheckAddresses() []string {
 // start it. Used by bootstrap paths to honor the same decision rather
 // than re-starting a replica we have deemed removed.
 func (l *store) isSkippedZombie(shardID, replicaID uint64) bool {
+	_, skipped := l.skippedZombie(shardID, replicaID)
+	return skipped
+}
+
+func (l *store) skippedZombie(shardID, replicaID uint64) (startupAbsence, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.mu.skippedZombies == nil {
+	absence, skipped := l.mu.skippedZombies[zombieKey{shardID: shardID, replicaID: replicaID}]
+	return absence, skipped
+}
+
+func (l *store) canBootstrapHAKeeper(replicaID uint64, members map[uint64]string) bool {
+	key := zombieKey{shardID: hakeeper.DefaultHAKeeperShardID, replicaID: replicaID}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	absence, skipped := l.mu.skippedZombies[key]
+	if !skipped {
+		return true
+	}
+	if !absence.genesisPrefixOnly {
 		return false
 	}
-	_, ok := l.mu.skippedZombies[zombieKey{shardID: shardID, replicaID: replicaID}]
-	return ok
+
+	initial, err := l.cfg.GetInitHAKeeperMembers()
+	if err != nil || members[replicaID] != l.id() || !maps.Equal(initial, members) {
+		return false
+	}
+	if registry, ok := l.nh.GetNodeHostRegistry(); ok {
+		if shard, ok := registry.GetShardInfo(key.shardID); ok && shard.ConfigChangeIndex >= absence.epoch {
+			if shard.Nodes[replicaID] != l.id() &&
+				!pb.IsInitialMembershipPrefix(members, shard.Nodes, shard.NonVotingNodes, shard.ConfigChangeIndex) {
+				return false
+			}
+		}
+	}
+	// Keep the absence epoch for scheduled Starts. Only the startup caller
+	// may try the original bootstrap once; Dragonboat validates the complete
+	// configured map against the retained files.
+	absence.genesisPrefixOnly = false
+	l.mu.skippedZombies[key] = absence
+	return true
+}
+
+// A newer local gossip view can correct a stale startup observation. Older
+// views must not let a delayed Start reopen the skipped replica.
+func (l *store) canStartScheduledReplica(replica pb.Replica, nonVoting, persisted bool, initialMembers map[uint64]string) bool {
+	shardID, replicaID := replica.ShardID, replica.ReplicaID
+	absence, skipped := l.skippedZombie(shardID, replicaID)
+	epoch := absence.epoch
+	initialSize := uint64(len(initialMembers))
+	if !skipped && replica.Epoch == 0 && initialSize == 0 {
+		if !persisted {
+			return true
+		}
+		// Released Starts carry no membership epoch. Dragonboat may
+		// retain bootstrap data after MO removes its replica record.
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		for _, record := range l.mu.metadata.Shards {
+			if record.ShardID == shardID && record.ReplicaID == replicaID && record.NonVoting == nonVoting {
+				return true
+			}
+		}
+		return false
+	}
+
+	// A committed heartbeat can confirm an orphan even after quorum is lost.
+	// If local gossip already knows a later configuration, honor that view.
+	// A non-voter can be present at an index where it was absent as a voter.
+	initialConfirmed := initialSize != 0
+	if skipped && initialConfirmed {
+		// Dragonboat applies the initial AddNode entries in replica ID order.
+		rank := uint64(1)
+		for id := range initialMembers {
+			if id < replicaID {
+				rank++
+			}
+		}
+		initialConfirmed = epoch < rank
+	}
+	confirmed := initialConfirmed || replica.Epoch > epoch ||
+		nonVoting && replica.Epoch != 0 && replica.Epoch == epoch
+	registry, ok := l.nh.GetNodeHostRegistry()
+	if !ok {
+		return confirmed
+	}
+	shard, ok := registry.GetShardInfo(shardID)
+	if !ok || shard.ConfigChangeIndex < replica.Epoch ||
+		shard.ConfigChangeIndex < epoch || shard.ConfigChangeIndex == epoch && !nonVoting {
+		return confirmed
+	}
+	if shard.ConfigChangeIndex < initialSize {
+		return pb.IsInitialMembershipPrefix(initialMembers, shard.Nodes, shard.NonVotingNodes, shard.ConfigChangeIndex) &&
+			(confirmed || shard.Nodes[replicaID] == l.id())
+	}
+	members := shard.Nodes
+	if nonVoting {
+		members = shard.NonVotingNodes
+	}
+	return members[replicaID] == l.id()
 }
 
 func (l *store) startReplicas(ctx context.Context) error {
-	l.mu.Lock()
-	shards := make([]metadata.LogShard, 0)
-	shards = append(shards, l.mu.metadata.Shards...)
-	l.mu.Unlock()
-
-	zombies := l.checkZombieReplicas(ctx, shards)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	shards := l.getShards()
+	probes := append([]metadata.LogShard(nil), shards...)
+	local := make(map[zombieKey]struct{}, len(shards))
+	for _, rec := range shards {
+		local[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = struct{}{}
+	}
+	// Kill and stale cleanup can leave bootstrap records behind. Include
+	// their voting membership in the existing bounded startup check.
+	for _, node := range l.nh.GetNodeHostInfo(dragonboat.DefaultNodeHostInfoOption).LogInfo {
+		if _, ok := local[zombieKey{shardID: node.ShardID, replicaID: node.ReplicaID}]; !ok {
+			probes = append(probes, metadata.LogShard{
+				LogShardRecord: metadata.LogShardRecord{ShardID: node.ShardID}, ReplicaID: node.ReplicaID,
+			})
+		}
+	}
+	zombies := l.checkZombieReplicas(ctx, probes)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -484,43 +605,43 @@ func (l *store) startHAKeeperNonVotingReplica(replicaID uint64,
 
 func (l *store) startReplica(shardID uint64, replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target, join bool) error {
+	return l.startDataReplica(shardID, replicaID, initialReplicas, join, false)
+}
+
+func (l *store) startNonVotingReplica(shardID uint64, replicaID uint64,
+	initialReplicas map[uint64]dragonboat.Target, join bool) error {
+	return l.startDataReplica(shardID, replicaID, initialReplicas, join, true)
+}
+
+func (l *store) startDataReplica(shardID, replicaID uint64,
+	initialReplicas map[uint64]dragonboat.Target, join, nonVoting bool) error {
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		return moerr.NewInvalidInputNoCtxf("shardID %d does not match DefaultHAKeeperShardID %d", shardID, hakeeper.DefaultHAKeeperShardID)
 	}
-	cfg := getRaftConfig(shardID, replicaID)
-	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
-		panic(err)
-	}
-	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
+	if err := l.openDataReplica(shardID, replicaID, initialReplicas, join, nonVoting); err != nil {
 		return err
 	}
-	l.addMetadata(shardID, replicaID, false)
 	if l.onReplicaChanged != nil {
 		l.onReplicaChanged(shardID, replicaID, AddReplica)
 	}
 	return nil
 }
 
-func (l *store) startNonVotingReplica(shardID uint64, replicaID uint64,
-	initialReplicas map[uint64]dragonboat.Target, join bool) error {
-	if shardID == hakeeper.DefaultHAKeeperShardID {
-		return moerr.NewInvalidInputNoCtx(fmt.Sprintf(
-			"shardID %d does not match DefaultHAKeeperShardID %d",
-			shardID, hakeeper.DefaultHAKeeperShardID),
-		)
-	}
+func (l *store) openDataReplica(shardID, replicaID uint64,
+	initialReplicas map[uint64]dragonboat.Target, join, nonVoting bool) error {
+	// Publish the NodeHost claim and metadata together with respect to stale
+	// replica cleanup. The external replica callback runs after unlocking.
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	cfg := getRaftConfig(shardID, replicaID)
-	cfg.IsNonVoting = true
+	cfg.IsNonVoting = nonVoting
 	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
 		panic(err)
 	}
 	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
 		return err
 	}
-	l.addMetadata(shardID, replicaID, true)
-	if l.onReplicaChanged != nil {
-		l.onReplicaChanged(shardID, replicaID, AddReplica)
-	}
+	l.addMetadataLocked(shardID, replicaID, nonVoting)
 	return nil
 }
 

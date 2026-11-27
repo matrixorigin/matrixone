@@ -349,6 +349,10 @@ func (back *backExec) ExecStmt(ctx context.Context, statement tree.Statement) er
 	if statement == nil {
 		return moerr.NewInvalidInput(ctx, "statement is nil")
 	}
+	if _, ok := statement.(*tree.CreateTable); ok {
+		sql := tree.StringWithOpts(statement, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString())
+		return back.exec(ctx, sql, "", false, statement)
+	}
 	return back.exec(ctx, tree.String(statement, dialect.MYSQL), "", false, statement)
 }
 
@@ -609,6 +613,9 @@ func refreshBackgroundStatementScopedSessionInfo(backSes *backSession, input *Us
 	backSes.effectiveMatrixOneNativeMode = nativeMode
 	backSes.hasEffectiveMatrixOneNativeMode = true
 	refreshStatementScopedSessionInfoWithNativeMode(nativeMode, proc)
+	if proc != nil && proc.Base != nil {
+		proc.Base.SessionInfo.CurrentRoleContext = backSes.currentRoleContext
+	}
 }
 
 func appendNestedCallResults(ctx context.Context, backSes *backSession, results []ExecResult) error {
@@ -1066,6 +1073,7 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 }
 
 type backSession struct {
+	currentRoleContext process.CurrentRoleContext
 	feSessionImpl
 	parentBackSession *backSession
 	protectedPolicy   *derivedProtectedPolicy
@@ -1108,6 +1116,7 @@ func (backSes *backSession) initFeSes(
 	backSes.buf = buffer.New()
 	backSes.stmtProfile = process.StmtProfile{}
 	backSes.tenant = nil
+	backSes.currentRoleContext = process.CurrentRoleContext{}
 	backSes.txnHandler = txnHandler
 	backSes.txnCompileCtx = InitTxnCompilerContext(db)
 	backSes.mrs = nil
@@ -1123,6 +1132,7 @@ func (backSes *backSession) initFeSes(
 	backSes.service = ses.GetService()
 	if parent, ok := ses.(*backSession); ok {
 		backSes.parentBackSession = parent
+		backSes.currentRoleContext = parent.currentRoleContext
 		if parent.hasRoutingIntent {
 			backSes.routingIntent = parent.routingIntent
 			backSes.hasRoutingIntent = true
@@ -1133,6 +1143,7 @@ func (backSes *backSession) initFeSes(
 		// active; otherwise a later background task could borrow a stale hint
 		// from the previous client statement.
 		if proc := parent.GetProc(); proc != nil && proc.Base != nil {
+			backSes.currentRoleContext = proc.GetSessionInfo().CurrentRoleContext
 			backSes.routingIntent = proc.GetSessionInfo().QuerySchedulingIntent
 			backSes.hasRoutingIntent = true
 		}

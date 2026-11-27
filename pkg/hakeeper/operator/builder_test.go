@@ -223,3 +223,13 @@ func TestRemoveNonVotingBuild(t *testing.T) {
 		},
 	}, build.steps[0])
 }
+
+func TestBuildRejectsMembershipChangeWithoutVotingExecutor(t *testing.T) {
+	empty := logservice.LogShardInfo{ShardID: 1}
+	_, err := NewBuilder("", empty).AddPeer("a", 1).Build()
+	assert.Error(t, err)
+
+	single := logservice.LogShardInfo{ShardID: 1, Replicas: map[uint64]string{1: "a"}}
+	_, err = NewBuilder("", single).RemovePeer("a").Build()
+	assert.Error(t, err)
+}

@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"net"
 	"slices"
@@ -33,6 +34,7 @@ import (
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -44,11 +46,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -322,6 +327,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	var p *pipeline.Pipeline
+	phase := "run_pipeline"
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
@@ -330,6 +336,10 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("error", err.Error()))
 		}
 		if p != nil {
+			// Cleanup cancels the pipeline even when the failure came from a
+			// dependency. Classify the result while its context still reflects
+			// what happened during execution.
+			err = s.finishRunError(phase, err)
 			err = cleanupScopePipeline(p, s.Proc, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
 			// scope is retained for reuse, so do not keep its closed reader
@@ -368,6 +378,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				readers, err := s.buildReaders(c)
 				stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 				if err != nil {
+					phase = "build_serial_reader"
 					return err
 				}
 
@@ -384,7 +395,83 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
-	err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+	return err
+}
+
+var scopeCancellationFailure = logutil.Event{
+	Name:    "pipeline.scope.cancellation_failure",
+	Message: "scope returned a cancellation-related error",
+}
+
+func (s *Scope) finishRunError(phase string, rawErr error) error {
+	if rawErr == nil {
+		return nil
+	}
+	proc := s.Proc
+	queryCtx := scopeRunQueryContext(proc)
+	err, normalized := normalizeScopeRunError(rawErr, proc.Ctx, queryCtx)
+	if err != nil && isScopeCancellationError(rawErr) {
+		// Observe the contexts before Cleanup cancels the pipeline. Context
+		// state at this boundary does not identify the first cancellation.
+		scopeCancellationFailure.WarnLazy(func() []zap.Field {
+			pipelineErr, pipelineCause := scopeCancellationContextState(proc.Ctx)
+			var activeQueryCtx context.Context
+			if proc.Base != nil {
+				activeQueryCtx, _ = process.GetQueryCtxFromProc(proc)
+			}
+			queryErr, queryCause := scopeCancellationContextState(activeQueryCtx)
+			fields := []zap.Field{
+				zap.String("phase", phase),
+				zap.Bool("normalized", normalized),
+				zap.NamedError("raw_error", rawErr),
+				zap.Error(err),
+				zap.NamedError("pipeline_error", pipelineErr),
+				zap.NamedError("pipeline_cause", pipelineCause),
+				zap.Bool("query_context_available", activeQueryCtx != nil),
+				zap.NamedError("query_error", queryErr),
+				zap.NamedError("query_cause", queryCause),
+			}
+			if s.NodeInfo.Addr != "" {
+				fields = append(fields, zap.String("node_addr", s.NodeInfo.Addr))
+			}
+			span := trace.SpanFromContext(proc.Ctx).SpanContext()
+			if proc.Base != nil {
+				topCtx := proc.GetTopContext()
+				topErr, topCause := scopeCancellationContextState(topCtx)
+				fields = append(fields, zap.NamedError("top_error", topErr), zap.NamedError("top_cause", topCause))
+				if span.IsEmpty() {
+					span = trace.SpanFromContext(topCtx).SpanContext()
+				}
+				if service := proc.GetService(); service != "" {
+					fields = append(fields, zap.String("service", service))
+				}
+				if queryID := proc.QueryId(); queryID != "" {
+					fields = append(fields, zap.String("query_id", queryID))
+				}
+				profile := proc.GetStmtProfile()
+				if id := profile.GetStmtId(); id != uuid.Nil {
+					fields = append(fields, logutil.StatementIdField(id.String()))
+				}
+				if id := profile.GetTxnId(); id != uuid.Nil {
+					fields = append(fields, logutil.TxnIdField(hex.EncodeToString(id[:])))
+				} else if txn := proc.GetTxnOperator(); txn != nil {
+					if id := txn.Txn().ID; len(id) != 0 {
+						fields = append(fields, logutil.TxnIdField(hex.EncodeToString(id)))
+					}
+				}
+			}
+			if !span.IsEmpty() {
+				fields = append(fields, trace.SpanField(span))
+			}
+			op := s.RootOp.GetOperatorBase()
+			fields = append(fields,
+				zap.Stringer("root_operator", s.RootOp.OpType()),
+				zap.Int32("operator_id", op.GetOperatorID()),
+				zap.Int32("parallel_id", op.GetParalleID()),
+			)
+			return fields
+		})
+	}
 	return err
 }
 
@@ -444,6 +531,17 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 //	3. run itself.
 //	4. listen to all running pipelines, once any error occurs, stop the NormalMergeRun asap.
 func (s *Scope) MergeRun(c *Compile) (err error) {
+	if s.localInsertObjects != nil {
+		if err = s.localInsertObjects.Begin(s.Proc.Ctx); err != nil {
+			return err
+		}
+		// The pre-scope join below runs before retiring the object owner.
+		defer func() {
+			if n := s.localInsertObjects.Finish(); n != 0 && err == nil {
+				err = moerr.NewInternalErrorf(s.Proc.Ctx, "%d local INSERT objects were not adopted by the workspace", n)
+			}
+		}()
+	}
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -468,6 +566,22 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	// Merge Run normally.
 	var wg sync.WaitGroup
 	preScopeResultReceiveChan := make(chan scopeRunResult, len(s.PreScopes))
+	var notifyMessageResultReceiveChan chan notifyMessageResult
+	defer func() {
+		if p := recover(); p != nil {
+			if s.localInsertObjects != nil {
+				s.cancelMergeSiblingsOnError(moerr.ConvertPanicError(s.Proc.Ctx, p))
+				wg.Wait()
+			}
+			panic(p)
+		}
+		wg.Wait()
+		err = collectMergeRunResults(
+			s.Proc,
+			scopeRunResult{err: err, classified: true},
+			preScopeResultReceiveChan,
+			notifyMessageResultReceiveChan)
+	}()
 
 	// step 1.
 	for i := range s.PreScopes {
@@ -505,23 +619,12 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	}
 
 	// step 2.
-	var notifyMessageResultReceiveChan chan notifyMessageResult
 	if len(s.RemoteReceivRegInfos) > 0 {
 		notifyMessageResultReceiveChan = make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
 		s.sendNotifyMessage(&wg, notifyMessageResultReceiveChan)
 	}
 
 	// step 3.
-	defer func() {
-		// should wait all the notify-message-routine and preScopes done.
-		wg.Wait()
-		err = collectMergeRunResults(
-			s.Proc,
-			newScopeRunResultForProcess(err, s.Proc),
-			preScopeResultReceiveChan,
-			notifyMessageResultReceiveChan)
-	}()
-
 	preScopeCount := len(s.PreScopes)
 	remoteScopeCount := len(s.RemoteReceivRegInfos)
 	//after parallelRun, prescope count may change. we need to save this before parallelRun
@@ -582,7 +685,7 @@ func collectMergeRunResults(
 	}
 	for len(notifyResults) > 0 {
 		result := <-notifyResults
-		current = preferPrimaryScopeResult(current, newScopeRunResultForProcess(result.err, proc))
+		current = preferPrimaryScopeResult(current, scopeRunResult{err: result.err, classified: true})
 		result.clean(proc)
 	}
 	current, _ = current.resolveCancelCause()
@@ -591,10 +694,14 @@ func collectMergeRunResults(
 
 // cancelMergeSiblingsOnError breaks the wait-for cycle between a failed
 // pipeline, its sibling goroutines, and remote receiver registration. It must
-// run before MergeRun waits for those siblings to exit.
+// run before MergeRun waits for those siblings to exit. The execution owner
+// classifies the error before cleanup, so a benign local stop arrives as nil.
 func (s *Scope) cancelMergeSiblingsOnError(err error) error {
-	if err != nil && s != nil && s.Proc != nil && s.Proc.Cancel != nil {
-		s.Proc.Cancel(err)
+	if err != nil && s != nil && s.Proc != nil {
+		table_function.CloseCurrentRolesExecutionCache(s.Proc.Ctx, err)
+		if s.Proc.Cancel != nil {
+			s.Proc.Cancel(err)
+		}
 	}
 	return err
 }
@@ -732,7 +839,11 @@ func reportParallelScopeBuildCancellation(
 	if s.RootOp != nil {
 		rootOp = s.RootOp.OpType().String()
 	}
-	process.WarnPipelineCleanupf(
+	logCleanup := process.WarnPipelineCleanupf
+	if normalized && normalizedErr == nil {
+		logCleanup = process.DebugPipelineCleanupf
+	}
+	logCleanup(
 		s.Proc,
 		key,
 		"parallel scope build cleanup classified cancellation: classification=%s phase=build_parallel_scope query_id=%s node_id=%s node_addr=%s mcpu=%d root_op=%s normalized=%t terminal=%s raw_err=%v normalized_err=%v pipeline_err=%v pipeline_cause=%v query_err=%v query_cause=%v",
@@ -931,20 +1042,16 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 				return err
 			}
 		}
+		// Relation handles are not serialized. The executing CN opened this
+		// relation and owns the entire singleton scan, including the memory
+		// sentinel from Policy_CollectAllData.
+		if s.IsRemote {
+			s.DataSource.Rel = engine.NewRelationHandle(rel)
+		}
 		return nil
 	}
 
-	//need to shuffle blocks when cncnt>1
-	rsp := &engine.RangesShuffleParam{
-		Node:              s.DataSource.node,
-		CNCNT:             s.NodeInfo.CNCNT,
-		CNIDX:             s.NodeInfo.CNIDX,
-		ShuffleByObjectID: plan2.IsIvfSearchEntriesInternalScan(s.DataSource.node),
-		Init:              false,
-	}
-	if !s.IsRemote { // this is local CN
-		rsp.IsLocalCN = true
-	}
+	rsp := s.rangesShuffleParam()
 
 	policyForLocal := localRangesPolicy(s.DataSource.node, s.NodeInfo.CNIDX)
 	policyForRemote := engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData)
@@ -982,6 +1089,20 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	}
 
 	return err
+}
+
+func (s *Scope) rangesShuffleParam() *engine.RangesShuffleParam {
+	node := s.DataSource.node
+	ivf := plan2.IsIvfSearchEntriesInternalScan(node)
+	return &engine.RangesShuffleParam{
+		Node:              node,
+		CNCNT:             s.NodeInfo.CNCNT,
+		CNIDX:             s.NodeInfo.CNIDX,
+		ShuffleByObjectID: ivf,
+		// The entries query runs locally inside each outer table-function
+		// worker. Physical locality alone does not identify the memtable owner.
+		IsLocalCN: !s.IsRemote && (!ivf || s.NodeInfo.CNIDX == 0),
+	}
 }
 
 func localRangesPolicy(node *plan.Node, cnidx int32) engine.DataCollectPolicy {
@@ -1352,13 +1473,7 @@ func sendRemoteNotifyCleanupTerminal(proc *process.Process, reg *process.WaitReg
 	if process.SendPipelineSignalWithContext(signalCtx, reg, terminalSignal) {
 		return true
 	}
-	logRemoteNotifyCleanupSendFailure(
-		proc,
-		reg,
-		terminalSignal,
-		"remote_notify_cleanup_send_terminal_signal",
-		"remote notify cleanup timed out sending terminal %s signal: timeout=%s channel_len=%d channel_cap=%d err=%v",
-		err)
+	process.LogPipelineTerminalNotEnqueued(proc, "remote_notify_cleanup_send_terminal_signal", reg, terminalSignal)
 
 	if terminalSignal.EventType != process.EventEnd {
 		return false
@@ -1369,34 +1484,8 @@ func sendRemoteNotifyCleanupTerminal(proc *process.Process, reg *process.WaitReg
 	if process.SendPipelineSignalWithContext(signalCtx, reg, fallbackSignal) {
 		return false
 	}
-	logRemoteNotifyCleanupSendFailure(
-		proc,
-		reg,
-		fallbackSignal,
-		"remote_notify_cleanup_send_fallback_abort_signal",
-		"remote notify cleanup timed out sending fallback %s signal after end delivery failure: timeout=%s channel_len=%d channel_cap=%d err=%v",
-		fallbackErr)
+	process.LogPipelineTerminalNotEnqueued(proc, "remote_notify_cleanup_send_fallback_abort_signal", reg, fallbackSignal)
 	return false
-}
-
-func logRemoteNotifyCleanupSendFailure(
-	proc *process.Process,
-	reg *process.WaitRegister,
-	signal process.PipelineSignal,
-	key string,
-	format string,
-	err error,
-) {
-	chLen, chCap := process.WaitRegisterChannelState(reg)
-	process.WarnPipelineCleanupf(
-		proc,
-		key,
-		format,
-		signal.EventType.String(),
-		process.PipelineSignalSendTimeout,
-		chLen,
-		chCap,
-		err)
 }
 
 func scopeRunQueryContext(proc *process.Process) context.Context {
@@ -1556,17 +1645,50 @@ func isSingleStarCountNoFilterNoGroupBy(node *plan.Node) bool {
 func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
 	node := s.DataSource.node
 	if node != nil && len(node.AggList) > 0 {
+		// Partial results can replace input rows only when this scope also
+		// owns the matching Group and MergeGroup over its TableScan.
+		mergeGroup, scan := findScanMergeGroup(s.RootOp)
 		// Fast path: single starcount without filter/groupby — only call rel.StarCount(), no scan.
 		if isSingleStarCountNoFilterNoGroupBy(node) {
+			if mergeGroup == nil {
+				return nil
+			}
 			estimatedTombstoneRows, err := rel.EstimateCommittedTombstoneCount(ctx)
 			if err != nil {
 				return err
+			}
+			// 仅在测试域中按表覆盖分支估计，实际封存块和删除仍由存储层读取。
+			if fault.StatusOfDomain(fault.DomainTest) {
+				name := "starcount_tombstone_estimate:" + s.DataSource.SchemaName + "." + s.DataSource.RelationName
+				if estimate, _, ok := fault.TriggerFaultInDomainWithContext(ctx, fault.DomainTest, name); ok {
+					estimatedTombstoneRows = int(estimate)
+				}
 			}
 			metricv2.StarcountEstimateTombstoneRowsHistogram.Observe(float64(estimatedTombstoneRows))
 
 			if estimatedTombstoneRows > defaultStarCountTombstoneThreshold {
 				metricv2.StarcountPathPerBlockCounter.Inc()
-				// Fall through to per-block aggOptimize (only scan blocks with tombstones)
+				if len(node.RuntimeFilterProbeList) == 0 && node.Limit == nil && node.Offset == nil {
+					var rows int64
+					var remaining engine.RelData
+					err := scan.MeasureReaderStartup(s.countSealedBlocksContext(c, ctx),
+						func(ctx context.Context, analyzer process.Analyzer) error {
+							var readErr error
+							rows, remaining, readErr = disttae.CountSealedBlocks(ctx, rel, s.NodeInfo.Data, s.TxnOffset, analyzer)
+							return readErr
+						})
+					if err != nil {
+						return err
+					}
+					if remaining != nil {
+						s.NodeInfo.Data = remaining
+						mergeGroup.PartialResults = []any{rows}
+						mergeGroup.PartialResultTypes = []types.T{types.T_int64}
+						s.StarCountMergeGroup = mergeGroup
+						return nil
+					}
+				}
+				// Fall through to the generic block aggregate optimization.
 			} else {
 				metricv2.StarcountPathFastCounter.Inc()
 				fastStart := time.Now()
@@ -1581,21 +1703,16 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 				s.NodeInfo.Data = newRelData
 				partialResults := []any{int64(totalRows)}
 				partialResultTypes := []types.T{types.T_int64}
-				mergeGroup := findMergeGroup(s.RootOp)
-				if mergeGroup != nil {
-					mergeGroup.PartialResults = partialResults
-					mergeGroup.PartialResultTypes = partialResultTypes
-					s.StarCountMergeGroup = mergeGroup
-				} else {
-					panic("can't find merge group operator for agg optimize!")
-				}
+				mergeGroup.PartialResults = partialResults
+				mergeGroup.PartialResultTypes = partialResultTypes
+				s.StarCountMergeGroup = mergeGroup
 				s.StarCountOnly = true
 				return nil
 			}
 		}
 
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(node)
-		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
+		if partialResults != nil && mergeGroup != nil && s.NodeInfo.Data.DataCnt() > 1 {
 			//append first empty block
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
 			newRelData.AppendBlockInfo(&objectio.EmptyBlockInfo)
@@ -1635,42 +1752,49 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 
 			if partialResults != nil {
 				s.NodeInfo.Data = newRelData
-				//find the last mergegroup
-				mergeGroup := findMergeGroup(s.RootOp)
-				if mergeGroup != nil {
-					mergeGroup.PartialResults = partialResults
-					mergeGroup.PartialResultTypes = partialResultTypes
-				} else {
-					panic("can't find merge group operator for agg optimize!")
-				}
+				mergeGroup.PartialResults = partialResults
+				mergeGroup.PartialResultTypes = partialResultTypes
 			}
 		}
 	}
 	return nil
 }
 
-// find scan->group->mergegroup
-func findMergeGroup(op vm.Operator) *group.MergeGroup {
-	if op == nil {
-		return nil
-	}
-	base := op.GetOperatorBase()
-	if base == nil || base.NumChildren() == 0 {
-		return nil
-	}
-	if mergeGroup, ok := op.(*group.MergeGroup); ok {
+// findScanMergeGroup finds the matching scan and aggregate owners in this scope.
+func findScanMergeGroup(op vm.Operator) (*group.MergeGroup, *table_scan.TableScan) {
+	for op != nil {
+		base := op.GetOperatorBase()
+		if base == nil || base.NumChildren() == 0 {
+			break
+		}
 		child := base.GetChildren(0)
-		if _, ok = child.(*group.Group); ok {
-			childBase := child.GetOperatorBase()
-			if childBase != nil && childBase.NumChildren() > 0 {
-				child = childBase.GetChildren(0)
-				if _, ok = child.(*table_scan.TableScan); ok {
-					return mergeGroup
+		if mergeGroup, ok := op.(*group.MergeGroup); ok {
+			if groupOp, ok := child.(*group.Group); ok && groupOp.NumChildren() == 1 {
+				if scan, ok := groupOp.GetChildren(0).(*table_scan.TableScan); ok {
+					return mergeGroup, scan
 				}
 			}
 		}
+		op = child
 	}
-	return findMergeGroup(base.GetChildren(0))
+	return nil, nil
+}
+
+// Count using the snapshot already bound to the opened relation, under the
+// scan's cancellation and with the relation's effective tenant and statement
+// statistics (which may differ from the scan's inherited values).
+func (s *Scope) countSealedBlocksContext(c *Compile, relationCtx context.Context) context.Context {
+	ctx := s.readerContext(c)
+	if ctx == nil {
+		return relationCtx
+	}
+	if accountID, ok := relationCtx.Value(defines.TenantIDKey{}).(uint32); ok {
+		ctx = defines.AttachAccountId(ctx, accountID)
+	}
+	if stats := statistic.StatsInfoFromContext(relationCtx); stats != nil {
+		ctx = statistic.ContextWithStatsInfo(ctx, stats)
+	}
+	return ctx
 }
 
 func (s *Scope) readerContext(c *Compile) context.Context {
@@ -1745,8 +1869,10 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	}
 
 	switch {
-	// If this was a remote-run pipeline. Reader should be generated from Engine.
-	case s.IsRemote:
+	// Distributed remote workers own only their assigned persisted ranges.
+	// A single remote worker owns the whole relation; using the block-reader
+	// path for it would discard the in-memory sentinel instead.
+	case s.IsRemote && (s.NodeInfo.CNCNT != 1 || s.DataSource.Rel == nil):
 		// this cannot use c.proc.Ctx directly, please refer to `default case`.
 		ctx := s.readerContext(c)
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
@@ -1785,9 +1911,21 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if err != nil {
 			return
 		}
-	// Reader can be generated from local relation.
+	// Reader can be generated from the relation on the executing CN.
 	case s.DataSource.Rel != nil:
 		ctx := s.readerContext(c)
+		if s.IsRemote {
+			if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
+				ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+			}
+			account := s.DataSource.AccountId
+			if account == nil && s.DataSource.node != nil && s.DataSource.node.ObjRef != nil {
+				account = s.DataSource.node.ObjRef.PubInfo
+			}
+			if account != nil {
+				ctx = defines.AttachAccountId(ctx, uint32(account.GetTenantId()))
+			}
+		}
 		stats := statistic.StatsInfoFromContext(ctx)
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
@@ -1807,10 +1945,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.MembershipFilterBytes = bf
-				}
+			if s.IsRemote {
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			}
+			if len(hint.MembershipFilterBytes) == 0 {
+				hint.MembershipFilterBytes, _ = c.proc.Ctx.Value(defines.FulltextMembershipFilter{}).([]byte)
 			}
 		}
 

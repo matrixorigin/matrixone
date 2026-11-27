@@ -15,7 +15,6 @@
 package disttae
 
 import (
-	"bytes"
 	"context"
 	"math"
 	"math/rand"
@@ -155,7 +154,7 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 	t.Run("statement rollback removes create and tuple together", func(t *testing.T) {
 		txn := newCatalogCreateTxnForTest(t)
 		txn.isCCPRTxn = true
-		txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+		txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 		txn.tableCache = new(sync.Map)
 		txn.tableOps = newTableOps()
 		txn.batchSelectList = make(map[*batch.Batch][]int64)
@@ -172,6 +171,52 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 		reqs, err := genWriteReqs(context.Background(), txn)
 		require.NoError(t, err)
 		require.Nil(t, reqs)
+	})
+}
+
+func TestGenWriteReqsRequiresReportedTNShardForWrites(t *testing.T) {
+	t.Run("DML", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		defer cleanTxnWritesForTest(txn)
+		txn.haveDDL.Store(false)
+		bat := newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1})
+		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, catalogCreateTNStoreForTest())
+		require.NoError(t, err)
+
+		reqs, err := genWriteReqs(context.Background(), txn)
+		require.NoError(t, err)
+		require.Len(t, reqs, 1)
+		require.Len(t, decodePrecommitWriteCmdForTest(t, reqs[0]).EntryList, 1)
+
+		txn.writes[0].tnStore.Shards = nil
+		reqs, err = genWriteReqs(context.Background(), txn)
+		require.Nil(t, reqs)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable), "%v", err)
+		require.ErrorContains(t, err, "TN tn-test has no reported shard")
+
+		txn.writes[0].bat.SetRowCount(0)
+		reqs, err = genWriteReqs(context.Background(), txn)
+		require.NoError(t, err)
+		require.Empty(t, reqs)
+	})
+
+	t.Run("DDL", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		defer cleanTxnWritesForTest(txn)
+		addActiveDatabaseCreateForTest(txn, 7, "db", 42, 1)
+		appendCreateDatabaseTupleForTest(t, txn, 7, "db", 42, 7, "db", false)
+		txn.writes[0].tnStore.Shards = nil
+
+		reqs, err := genWriteReqs(context.Background(), txn)
+		require.Nil(t, reqs)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable), "%v", err)
+	})
+
+	t.Run("no writes", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		reqs, err := genWriteReqs(context.Background(), txn)
+		require.NoError(t, err)
+		require.Empty(t, reqs)
 	})
 }
 
@@ -460,43 +505,41 @@ func TestWorkspaceFlushKeySeparatesAutoIncrEpochs(t *testing.T) {
 	require.Len(t, batches, 2)
 }
 
-func Test_GetUncommittedS3Tombstone(t *testing.T) {
-	var statsList []objectio.ObjectStats
-	for i := 0; i < 3; i++ {
-		row := types.RandomRowid()
-		stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), false, false, true)
-		objectio.SetObjectStatsRowCnt(stats, uint32(10+i*10))
-		statsList = append(statsList, *stats)
+func TestWorkspaceFlushedTombstoneOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	rowID := types.RandomRowid()
+	stats := objectio.NewObjectStatsWithObjectID(rowID.BorrowObjectID(), false, false, true)
+	bat := batch.NewWithSize(1)
+	bat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType())
+	defer bat.Clean(mp)
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats[:], false, mp))
+	bat.SetRowCount(1)
+
+	var txn Transaction
+	a := Entry{typ: DELETE, tableId: 1, fileName: "tombstone", bat: bat}
+	b := Entry{typ: DELETE, tableId: 2, fileName: "tombstone", bat: bat}
+	duplicate := a
+	txn.accountWorkspaceEntryLocked(&a)
+	txn.accountWorkspaceEntryLocked(&duplicate)
+	txn.accountWorkspaceEntryLocked(&b)
+	collect := func(tableID uint64) []objectio.ObjectStats {
+		var result []objectio.ObjectStats
+		txn.flushedTombstones.forEach(tableID, func(stats objectio.ObjectStats) {
+			result = append(result, stats)
+		})
+		return result
 	}
-
-	txn := &Transaction{
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
-	}
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[0], nil)
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[1], nil)
-	txn.cn_flushed_s3_tombstone_object_stats_list.Store(statsList[2], nil)
-
-	objectSlice := objectio.ObjectStatsSlice{}
-
-	require.NoError(t, txn.getUncommittedS3Tombstone(func(stats *objectio.ObjectStats) {
-		objectSlice.Append(stats[:])
-	}))
-	require.Equal(t, len(statsList), objectSlice.Len())
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.Range(func(key, value any) bool {
-		ss := key.(objectio.ObjectStats)
-		found := false
-		for i := range objectSlice.Len() {
-			if bytes.Equal(ss[:], objectSlice.Get(i)[:]) {
-				found = true
-				break
-			}
-		}
-
-		require.True(t, found)
-		return true
-	})
+	require.Equal(t, []objectio.ObjectStats{*stats}, collect(1))
+	require.Equal(t, []objectio.ObjectStats{*stats}, collect(2))
+	require.Empty(t, collect(3))
+	txn.unaccountWorkspaceEntryLocked(&duplicate)
+	require.Equal(t, []objectio.ObjectStats{*stats}, collect(1))
+	txn.unaccountWorkspaceEntryLocked(&a)
+	require.Empty(t, collect(1))
+	require.Equal(t, []objectio.ObjectStats{*stats}, collect(2))
+	txn.unaccountWorkspaceEntryLocked(&b)
+	require.Empty(t, collect(2))
 }
 
 func Test_BatchAllocNewRowIds(t *testing.T) {
@@ -1022,7 +1065,7 @@ func TestMergeTxnWorkspaceDeduplicatesDeleteSelections(t *testing.T) {
 	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{10, 20, 30, 40})
 	txn := &Transaction{
 		proc:            proc,
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 		batchSelectList: make(map[*batch.Batch][]int64),
 	}
 	txn.appendWorkspaceEntryLocked(Entry{
@@ -1058,7 +1101,7 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 		tableOps:        newTableOps(),
 		databaseOps:     newDbOps(),
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 		isCCPRTxn:       true,
 	}
 
@@ -1090,7 +1133,7 @@ func TestIssue25589MergeTxnWorkspaceRestoresAccountingForTablesInVain(t *testing
 		proc:            proc,
 		tablesInVain:    map[uint64]int{42: 1},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 	}
 	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
 
@@ -1109,7 +1152,7 @@ func TestIssue25589MergeTxnWorkspaceRestoresAccountingAfterShrink(t *testing.T) 
 		proc:            proc,
 		tablesInVain:    make(map[uint64]int),
 		batchSelectList: map[*batch.Batch][]int64{bat: {1, 3}},
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 	}
 	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
 
@@ -1129,7 +1172,7 @@ func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *t
 		proc:            proc,
 		tablesInVain:    make(map[uint64]int),
 		batchSelectList: make(map[*batch.Batch][]int64),
-		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 	}
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
@@ -1162,8 +1205,8 @@ func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 	txn.tnStores = []DNStore{{}}
 	txn.batchSelectList = make(map[*batch.Batch][]int64)
 	txn.tablesInVain = make(map[uint64]int)
-	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
-	txn.cnObjsSummary = make(map[types.Objectid]Summary)
+	txn.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
+	txn.cnObjsSummary = make(map[uint64]map[types.Objectid]Summary)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	txn.appendWorkspaceEntryLocked(Entry{
 		typ:          INSERT,

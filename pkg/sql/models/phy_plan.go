@@ -92,8 +92,12 @@ func (p *PhyPlan) CloneForExport() *PhyPlan {
 	clone.LocalScope = cloner.cloneScopes(p.LocalScope)
 	clone.RemoteScope = cloner.cloneScopes(p.RemoteScope)
 	if p.Resource != nil {
-		resource := *p.Resource
-		clone.Resource = &resource
+		summary := *p.Resource
+		if summary.LockRead != nil {
+			diagnostic := *summary.LockRead
+			summary.LockRead = &diagnostic
+		}
+		clone.Resource = &summary
 	}
 	return &clone
 }

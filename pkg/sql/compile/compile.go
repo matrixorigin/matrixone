@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -60,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -74,6 +76,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/updateunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
@@ -177,15 +180,20 @@ func txnOffsetOfCompile(proc *process.Process) int {
 }
 
 func (c *Compile) Release() {
+	c.releaseToPool(nil)
+}
+
+func (c *Compile) releaseToPool(pool reuse.Pool[Compile, *Compile]) {
 	if c == nil {
 		return
 	}
+	c.closeCurrentRolesExecutionCache()
 	c.SetSchedulingTraceRecorder(nil)
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 		c.proc.ResetCloneTxnOperator()
 	}
-	doCompileRelease(c)
+	doCompileRelease(c, pool)
 }
 
 func (c *Compile) TypeName() string {
@@ -216,6 +224,7 @@ func (c *Compile) GetPlan() *plan.Plan {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+	c.closeCurrentRolesExecutionCache()
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
@@ -500,14 +509,19 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 type scopeRunResult struct {
-	err      error
-	ctx      context.Context
-	queryCtx context.Context
+	err        error
+	ctx        context.Context
+	queryCtx   context.Context
+	classified bool // The execution owner classified the error before cleanup.
 }
 
 func newScopeRunResult(err error, scope *Scope) scopeRunResult {
 	if scope == nil {
 		return scopeRunResult{err: err}
+	}
+	switch scope.Magic {
+	case Normal, Merge, MergeInsert, MergeDelete, Remote:
+		return scopeRunResult{err: err, classified: true}
 	}
 	return newScopeRunResultForProcess(err, scope.Proc)
 }
@@ -523,6 +537,9 @@ func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResul
 }
 
 func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
+	if r.classified {
+		return r, r.err != nil
+	}
 	var normalized bool
 	r.err, normalized = normalizeScopeRunError(r.err, r.ctx, r.queryCtx)
 	return r, normalized
@@ -757,6 +774,10 @@ func (c *Compile) runOnce() (err error) {
 
 			// cancel this query if the first error occurs.
 			if e != nil && resultToThrowOut.err == nil {
+				// Unblock a shared catalog loader before waiting for other roots.
+				if c.currentRolesCache != nil {
+					c.currentRolesCache.Close()
+				}
 
 				// cancel all scope tree.
 				for j := range c.scopes {
@@ -1315,7 +1336,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileShuffleGroup(node, ss, nodes)
 		} else {
+			remoteScalarCount := len(ss) == 1 && ss[0].HasPartialResults &&
+				isSingleStarCountNoFilterNoGroupBy(nodes[node.Children[0]]) && !sameExecutionAddr(ss[0].NodeInfo.Addr, c.addr)
 			ss = c.compileGroupWithoutShuffle(node, ss, nodes, distinctRequiresSingleStage)
+			if remoteScalarCount {
+				// Final projection and statement output remain on the coordinator.
+				ss = []*Scope{c.newMergeScope(ss)}
+			}
 		}
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 		return ss, nil
@@ -1500,6 +1527,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compilePreInsertUk(node, ss)
 		return ss, nil
+	case plan.Node_UPDATE_UNIQUE:
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		return c.compileUpdateUnique(node, ss)
 	case plan.Node_PRE_INSERT_SK:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -4412,6 +4446,12 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+	if node.Stats.HashmapStats.Shuffle && scopesContainWindow(probeScopes, buildScopes) {
+		probeScopes = c.singleCoordinatorJoinInput(probeScopes)
+		buildScopes = c.singleCoordinatorJoinInput(buildScopes)
+		node.Stats.HashmapStats.Shuffle = false
+		node.Stats.HashmapStats.ShuffleColIdx = -1
+	}
 	if node.Stats.HashmapStats.Shuffle {
 		if node.JoinType == plan.Node_MARK && !canUseShuffleHashMarkJoinWithInputs(node, left, right) {
 			node.Stats.HashmapStats.Shuffle = false
@@ -4421,7 +4461,20 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		}
 	}
 
-	rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
+	isEq := plan2.IsEquiJoin2(node.OnList)
+	// Protect coordinator-owned input before reducing the probe stage. A
+	// forced-single probe may then have a different owner; check its build
+	// again before installing the process-local JoinMap operators.
+	if broadcastJoinForcesOneCN(node, isEq) {
+		probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
+		probeScopes = c.forceSingleCNBroadcastProbe(probeScopes)
+	}
+	if len(probeScopes) > 1 {
+		probeScopes, buildScopes = c.placeMultiProbeBroadcastBuild(probeScopes, buildScopes)
+	} else {
+		probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
+	}
+	rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes, isEq)
 	return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
 }
 
@@ -4591,14 +4644,11 @@ func (c *Compile) compileDistributedShuffleJoin(
 
 	return shuffleJoins
 }
-func (c *Compile) newProbeScopeListForBroadcastJoin(probeScopes []*Scope, forceOneCN bool) []*Scope {
-	if forceOneCN { // for right join, we have to merge these input for now
-		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, false)
-		if len(probeScopes) > 1 {
-			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
-		}
+func (c *Compile) forceSingleCNBroadcastProbe(probeScopes []*Scope) []*Scope {
+	probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, false)
+	if len(probeScopes) > 1 {
+		return []*Scope{c.newMergeScope(probeScopes)}
 	}
-	// don't need to break pipelines for probe side of broadcast join
 	return probeScopes
 }
 
@@ -4720,10 +4770,7 @@ func hashMarkOperandRel(expr *plan.Expr) (int32, bool) {
 	return relPos, singleRel && relPos >= 0
 }
 
-func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, probeScopes []*Scope) []*Scope {
-	var rs []*Scope
-	isEq := plan2.IsEquiJoin2(node.OnList)
-
+func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, rs []*Scope, isEq bool) []*Scope {
 	rightTypes := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
 		rightTypes[i] = dupType(&expr.Typ)
@@ -4736,7 +4783,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 
 	switch node.JoinType {
 	case plan.Node_INNER:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		if len(node.OnList) == 0 {
 			for i := range rs {
@@ -4759,7 +4805,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		}
 		c.anal.isFirst = false
 	case plan.Node_L2:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			op := constructProductL2(node, c.proc)
@@ -4775,7 +4820,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		}
 		c.anal.isFirst = false
 	case plan.Node_INDEX:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			op := constructIndexJoin(node, c.proc)
@@ -4784,7 +4828,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		}
 		c.anal.isFirst = false
 	case plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, isEq && node.IsRightJoin)
 		currentFirstFlag := c.anal.isFirst
 		if isEq {
 			for i := range rs {
@@ -4801,11 +4844,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		}
 		c.anal.isFirst = false
 	case plan.Node_OUTER:
-		// FULL OUTER JOIN: equi → hashjoin (Phase 1); non-equi → loopjoin
-		// (Phase 4). IsRightJoin=true (set in stats.go for Node_OUTER) routes
-		// the probe scope through forceOneCN, avoiding distributed
-		// double-emission of unmatched-build rows.
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+		// The single probe CN emits unmatched-build rows once.
 		currentFirstFlag := c.anal.isFirst
 		if isEq {
 			for i := range rs {
@@ -4823,7 +4862,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		c.anal.isFirst = false
 	case plan.Node_DEDUP:
 		if node.IsRightJoin {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructRightDedupJoin(node, leftTypes, rightTypes, c.proc)
@@ -4833,7 +4871,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			}
 			c.anal.isFirst = false
 		} else {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructDedupJoin(node, leftTypes, rightTypes, c.proc)
@@ -4843,7 +4880,6 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			c.anal.isFirst = false
 		}
 	case plan.Node_MARK:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			var op vm.Operator
@@ -5730,10 +5766,19 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 			dataScope.setRootOperator(dispatchArg)
 		}
 		dataScope.IsEnd = true
+		var localObjects *colexec.LocalInsertObjects
+		eng, _ := unwrapSchedulingEngine(c.e)
+		storage, _ := eng.(*disttae.Engine)
 		for i := range scopes {
 			insertArg, err := constructInsert(c.proc, node, c.e, true)
 			if err != nil {
 				return nil, err
+			}
+			if op, ok := insertArg.(*insert.Insert); ok && storage != nil {
+				if localObjects == nil {
+					localObjects = storage.NewLocalInsertObjectStream()
+				}
+				op.InsertCtx.LocalObjects = localObjects
 			}
 
 			insertArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -5744,6 +5789,8 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		rs.PreScopes = append(rs.PreScopes, dataScope)
 		rs.Magic = MergeInsert
 		mergeInsertArg := constructMergeblock(c.e, node)
+		rs.localInsertObjects = localObjects
+		mergeInsertArg.LocalObjects = localObjects
 		mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(mergeInsertArg)
 		ss = []*Scope{rs}
@@ -5882,6 +5929,58 @@ func (c *Compile) compilePreInsertUk(node *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
+func (c *Compile) compileUpdateUnique(node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	ctx := node.UpdateUniqueCtx
+	if ctx == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing repeated UPDATE admission context")
+	}
+	keys := make([]updateunique.Key, len(ctx.Keys))
+	for i, key := range ctx.Keys {
+		keys[i] = updateunique.Key{
+			Original: int(key.Original), Current: int(key.Current),
+			Proposed: int(key.Proposed), SnapshotHit: int(key.SnapshotHit),
+		}
+	}
+	values := make([]updateunique.Value, len(ctx.Values))
+	for i, value := range ctx.Values {
+		values[i] = updateunique.Value{Current: int(value.Current), Proposed: int(value.Proposed)}
+	}
+	checks := make([]updateunique.Check, len(ctx.Checks))
+	for i, check := range ctx.Checks {
+		checks[i] = updateunique.Check{Column: int(check.Column), Name: check.Name, NotNull: check.NotNull}
+	}
+	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(c.proc)
+	if err != nil {
+		return nil, err
+	}
+	localInput := len(ss) == 1 && ss[0] != nil && ss[0].Magic == Merge && !ss[0].IsRemote &&
+		ss[0].NodeInfo.Mcpu == 1 && sameExecutionNode(ss[0].NodeInfo, toEngineNode(c.currentCNWorker()))
+	if len(keys) > 0 || !localInput {
+		ss = c.mergeShuffleScopesIfNeeded(ss, false)
+		ss = []*Scope{c.newMergeScope(ss)}
+	}
+	for _, scope := range ss {
+		op := &updateunique.UpdateUnique{
+			RowID: int(ctx.RowId), Active: int(ctx.Active), Keys: keys, Values: values, Checks: checks,
+			RejectZeroTemporal: rejectZeroTemporal,
+			SpillConfig: materialized.SpillConfig{
+				FileFactory: func(name string) (*os.File, error) {
+					spillFS, err := c.proc.GetSpillFileService()
+					if err != nil {
+						return nil, err
+					}
+					return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
+				},
+				Budget: newMaterializedSpillBudget(c.proc),
+			},
+		}
+		op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		scope.setRootOperator(op)
+	}
+	c.anal.isFirst = false
+	return c.compileProjection(node, ss), nil
+}
+
 func (c *Compile) compilePreInsertSK(node *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -5944,6 +6043,9 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
 	for _, tbl := range node.LockTargets {
+		if tbl.RequireExactRows && tbl.LockTable {
+			return nil, moerr.NewLockNeedUpgradeNoCtx()
+		}
 		if c.shouldPrePipelineLockTable(tbl) {
 			c.lockTables[tbl.TableId] = tbl
 		} else {
@@ -6083,17 +6185,25 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 
 	materializedSource := c.getMaterializedSource(step)
 	var rs *Scope
-	if materializedSource != nil {
-		// The materialized source is process-local state. Always terminate the
-		// producer at a local merge scope so it is never serialized as part of a
-		// remote scope without its consumers. Group same-CN shuffle buckets first
-		// so every remote producer scope is independently executable.
+	if materializedSource != nil || node.UpdateCountCtx != nil {
+		// Materialized sources and the count callback are local state. Terminate
+		// their producer on the coordinator, grouping same-CN shuffle buckets so
+		// every remote producer scope remains independently executable.
 		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		rs = c.newMergeScope(ss)
 	} else if c.IsSingleScope(ss) {
 		rs = ss[0]
 	} else {
 		rs = c.newMergeScope(ss)
+	}
+	if node.UpdateCountCtx != nil {
+		if node.RecursiveSink || node.RecursiveCte {
+			return nil, moerr.NewInternalErrorNoCtx("recursive repeated UPDATE count source")
+		}
+		count := &updateunique.Count{Column: int(node.UpdateCountCtx.Column), Publish: c.addAffectedRows}
+		count.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(count)
+		c.anal.isFirst = false
 	}
 
 	currentFirstFlag := c.anal.isFirst

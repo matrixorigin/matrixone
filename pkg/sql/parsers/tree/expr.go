@@ -1028,7 +1028,18 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 	}
 
 	switch strings.ToLower(node.FuncName.Origin()) {
-	case "timestampdiff", "extract":
+	case "convert":
+		if len(node.Exprs) == 2 {
+			// CONVERT's charset is stored as a function argument for the
+			// binder, but SQL accepts it after USING, not a comma.
+			node.Exprs[0].Format(ctx)
+			ctx.WriteString(" using ")
+			node.Exprs[1].Format(ctx)
+			return
+		}
+		node.Exprs.Format(ctx)
+	case "timestampdiff", "timestampadd", "extract", "get_format":
+		// This grammar slot is a keyword, even when represented as a NumVal.
 		formatExprWithSingleQuoteDisabled(ctx, node.Exprs[0])
 		if len(node.Exprs) > 1 {
 			ctx.WriteString(", ")
@@ -1129,11 +1140,11 @@ func trimExprsFormat(ctx *FmtCtx, exprs Exprs) {
 		ctx.WriteString(" from ")
 		exprs[3].Format(ctx)
 	case "2":
-		exprs[1].Format(ctx)
+		formatExprWithSingleQuoteDisabled(ctx, exprs[1])
 		ctx.WriteString(" from ")
 		exprs[3].Format(ctx)
 	case "3":
-		exprs[1].Format(ctx)
+		formatExprWithSingleQuoteDisabled(ctx, exprs[1])
 		ctx.WriteString(" ")
 		exprs[2].Format(ctx)
 		ctx.WriteString(" from ")

@@ -381,6 +381,7 @@ func TestAppendIndexPrefixProjection(t *testing.T) {
 			map[string]int{"body": 1},
 			useColumns,
 			nil,
+			false,
 		)
 
 		require.NoError(t, err)
@@ -401,6 +402,7 @@ func TestAppendIndexPrefixProjection(t *testing.T) {
 			map[string]int{"id": 0, "body": 1},
 			[]int32{1},
 			map[string]int{"body": 8},
+			false,
 		)
 
 		require.NoError(t, err)
@@ -444,12 +446,27 @@ func TestAppendIndexPrefixProjection(t *testing.T) {
 			map[string]int{"id": 0, "body": 1},
 			useColumns,
 			map[string]int{"missing": 4, "id": 0},
+			false,
 		)
 
 		require.NoError(t, err)
 		require.Equal(t, lastNodeID, gotNodeID)
 		require.Equal(t, useColumns, gotUseColumns)
 		require.Len(t, builder.qry.Nodes, 1)
+	})
+
+	t.Run("update prefix retains row identity last", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+		builder.qry.Nodes[lastNodeID].ProjectList = append(builder.qry.Nodes[lastNodeID].ProjectList,
+			&plan.Expr{Typ: plan.Type{Id: int32(types.T_Rowid)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: catalog.Row_ID, ColPos: 2}}})
+		nodeID, columns, err := appendIndexPrefixProjection(builder, bindCtx, &plan.TableDef{Name: "t"}, lastNodeID,
+			[]string{"body"}, map[string]int{"id": 0, "body": 1}, []int32{1}, map[string]int{"body": 8}, true)
+		require.NoError(t, err)
+		require.Equal(t, []int32{2}, columns)
+		project := builder.qry.Nodes[nodeID].ProjectList
+		require.Len(t, project, 4)
+		require.Equal(t, int32(types.T_Rowid), project[3].Typ.Id)
+		require.EqualValues(t, 2, project[3].GetCol().ColPos)
 	})
 }
 
@@ -555,6 +572,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
+			nil,
 			true,
 		)
 
@@ -578,6 +596,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
+			nil,
 			false,
 		)
 
@@ -607,6 +626,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
+			nil,
 			true,
 		)
 
@@ -678,6 +698,11 @@ func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
 	singleIdxIndexTable := mock.ctxt.tables[singleIdx.Indexes[0].IndexTableName]
 	require.NotNil(t, singleIdxIndexTable)
 	singleIdxIndexTable.Cols[0].Typ = plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	// Real index table definitions expose both physical key and owner positions.
+	singleIdxIndexTable.Name2ColIndex = make(map[string]int32, len(singleIdxIndexTable.Cols))
+	for i, col := range singleIdxIndexTable.Cols {
+		singleIdxIndexTable.Name2ColIndex[col.Name] = int32(i)
+	}
 	assertPlanHasPrefixCount(t, "insert into constraint_test.single_idx_t values (1, 'abcdef-long') on duplicate key update val = values(val)", "val", 2)
 	assertPlanHasPrefixCount(t, "update constraint_test.single_idx_t set val = 'abcdef-long' where id = 1", "val", 2)
 	assertPlanHasPrefixCount(t, "delete from constraint_test.single_idx_t where id = 1", "val", 1)

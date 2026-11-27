@@ -863,6 +863,18 @@ func TestRewriteInDomainCastEqualOrListBecomesStringIn(t *testing.T) {
 	requireStringInValues(t, singleFilter(t, builder), "2", "3")
 }
 
+func TestMergeEqualsInOrIgnoresNoOpInExpansion(t *testing.T) {
+	ctx, builder, _, colExpr := setupStringInDomainRewriteTest(t)
+	colExpr.Typ.Width = 1
+
+	predicate := makeStringInExpr(t, ctx, colExpr, "aa", "bb")
+	require.Equal(t, "or", predicate.GetF().Func.ObjName)
+
+	merged, changed := builder.mergeEqualsInOr(predicate)
+	require.False(t, changed)
+	require.Same(t, predicate, merged)
+}
+
 func TestRewriteInDomainCastSkippedForNonIntegralString(t *testing.T) {
 	ctx, builder, tag, colExpr := setupStringInDomainRewriteTest(t)
 

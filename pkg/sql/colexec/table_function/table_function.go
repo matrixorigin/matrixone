@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -142,6 +143,10 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	tblArg.ctr.retSchema = retSchema
 
 	switch tblArg.FuncName {
+	case plan2.UpdateRolesTableFunction:
+		tblArg.ctr.state, err = updateRolesPrepare(proc, tblArg)
+	case "mo_current_roles":
+		tblArg.ctr.state, err = currentRolesPrepare(proc, tblArg)
 	case "unnest":
 		tblArg.ctr.state, err = unnestPrepare(proc, tblArg)
 	case "generate_series":

@@ -116,6 +116,7 @@ func (proc *Process) BuildProcessInfo(
 			SqlMode:               resolveSqlMode(proc),
 			CnLabels:              maps.Clone(proc.Base.SessionInfo.CNLabels),
 			QuerySchedulingIntent: encodeQuerySchedulingIntent(proc.Base.SessionInfo.QuerySchedulingIntent),
+			CurrentRoleContext:    encodeCurrentRoleContext(proc.Base.SessionInfo.CurrentRoleContext),
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
@@ -345,6 +346,7 @@ func ConvertToProcessSessionInfo(
 		SqlMode:                             sei.SqlMode,
 		CNLabels:                            maps.Clone(sei.CnLabels),
 		QuerySchedulingIntent:               decodeQuerySchedulingIntent(sei.QuerySchedulingIntent),
+		CurrentRoleContext:                  decodeCurrentRoleContext(sei.CurrentRoleContext),
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
@@ -462,4 +464,17 @@ func lockWaitTimeoutSeconds(v any) int64 {
 		}
 	}
 	return 0
+}
+
+func encodeCurrentRoleContext(c CurrentRoleContext) *pipeline.CurrentRoleContext {
+	if c.Mode == 0 {
+		return nil
+	}
+	return &pipeline.CurrentRoleContext{Mode: c.Mode, AccountId: c.AccountID, UserId: c.UserID, PrimaryRoleId: c.PrimaryRoleID, AccountName: c.AccountName, UserName: c.UserName}
+}
+func decodeCurrentRoleContext(c *pipeline.CurrentRoleContext) CurrentRoleContext {
+	if c == nil {
+		return CurrentRoleContext{}
+	}
+	return CurrentRoleContext{Mode: c.Mode, AccountID: c.AccountId, UserID: c.UserId, PrimaryRoleID: c.PrimaryRoleId, AccountName: c.AccountName, UserName: c.UserName}
 }

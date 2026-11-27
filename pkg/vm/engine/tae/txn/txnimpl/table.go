@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"runtime/trace"
 	"slices"
@@ -1512,9 +1513,7 @@ func (tbl *txnTable) PrepareRollback() (err error) {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
 		}
-		if err = txnEntry.PrepareRollback(); err != nil {
-			break
-		}
+		err = combineTxnLifecycleErrors(err, txnEntry.PrepareRollback())
 	}
 	return
 }
@@ -1674,17 +1673,27 @@ func isAppendableObjectCreateEntry(entry txnif.TxnEntry) bool {
 }
 
 func (tbl *txnTable) ApplyRollback() (err error) {
-	csn := tbl.csnStart
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
 		}
-		if err = node.ApplyRollback(); err != nil {
-			break
+		if _, isCatalogTable := node.(*catalog.TableEntry); isCatalogTable {
+			// PrepareRollback has already detached this MVCC version.
+			continue
 		}
-		csn++
+		err = combineTxnLifecycleErrors(err, node.ApplyRollback())
 	}
 	return
+}
+
+func combineTxnLifecycleErrors(first, next error) error {
+	if first == nil {
+		return next
+	}
+	if next == nil {
+		return first
+	}
+	return errors.Join(first, next)
 }
 
 func (tbl *txnTable) CleanUp() {

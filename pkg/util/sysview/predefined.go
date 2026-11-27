@@ -16,6 +16,7 @@ package sysview
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
@@ -154,6 +155,15 @@ var (
 
 // `information_schema` database
 // They are all Tenant level system tables/system views
+// InformationSchemaColumnsUTF8MB4DDL projects the explicit selector while keeping
+// the original view definition available to released catalog migrations.
+func InformationSchemaColumnsUTF8MB4DDL() string {
+	return strings.NewReplacer(
+		"WHEN 1 then 'utf8' else NULL", "WHEN 1 then 'utf8mb4' else NULL",
+		"WHEN 1 then 'utf8_bin' else NULL", "WHEN 1 then 'utf8mb4_bin' else NULL",
+	).Replace(InformationSchemaColumnsDDL)
+}
+
 var (
 	InformationSchemaKeyColumnUsageDDL = "CREATE TABLE information_schema.KEY_COLUMN_USAGE (" +
 		"CONSTRAINT_CATALOG varchar(64)," +

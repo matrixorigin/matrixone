@@ -56,6 +56,11 @@ from grouped_values group by e order by e + 0;
 select s + 0, (select 1 in (select grouped_values.s))
 from grouped_values group by s order by s + 0;
 
+-- A correlated scalar with its own FROM retains grouped numeric provenance.
+select o.id, o.e + 0, (select o.e + 0 from grouped_values i where i.id = o.id and i.id <> 2),
+       o.s + 0, (select o.s + 0 from grouped_values i where i.id = o.id and i.id <> 2)
+from grouped_values o group by o.id, o.e, o.s order by o.id;
+
 select 1 in (select e from grouped_values group by e);
 select 1 not in (select e from grouped_values group by e);
 select 99 not in (select e from grouped_values group by e);
@@ -71,6 +76,103 @@ order by d.e + 0;
 create table encoded_values (e enum('a,b','c'));
 insert into encoded_values values ('a,b'),('a,b'),('c'),(null);
 select e,e+0,count(*) from encoded_values group by e order by e+0;
+select o.e + 0, (select o.e + 0 from grouped_values i where i.id = 1)
+from encoded_values o group by o.e order by o.e + 0;
+
+-- Numeric-looking labels must still recover their definition positions.
+create table numeric_labels (id int primary key, e enum('1','01','red'), s set('1','2','red'));
+insert into numeric_labels values (1,'1','1'),(2,'01','1,red'),(3,'red','2'),(4,null,null);
+select o.id, (select o.e + 0 from numeric_labels i where i.id = o.id),
+       (select o.s + 0 from numeric_labels i where i.id = o.id)
+from numeric_labels o group by o.id, o.e, o.s order by o.id;
+
+-- A singleton without FROM retains its column's numeric contract. The same
+-- scalar in a lexical context keeps its display value.
+select o.id, (select o.e) + 0, (select o.s) + 0,
+       cast((select o.e) as signed), (select o.e) = 2,
+       (select o.e) in (1, 2), (select o.e) = '01', concat((select o.e), ''),
+       o.e + o.s, (select o.e) + (select o.s)
+from numeric_labels o group by o.id, o.e, o.s order by o.id;
+select o.id, (select o.e) + 0, (select o.s) + 0,
+       (select o.e) + (select o.s) from numeric_labels o order by o.id;
+select o.id, (select o.e) in (1,null), (select o.e) not in (1,null),
+       (select o.s) in (5,null), (select o.s) not in (5,null)
+from numeric_labels o group by o.id,o.e,o.s order by o.id;
+-- Correlated row-level columns retain their raw ordinal/bitmap for numeric IN.
+select o.id, (select o.e in (1,2,null)), (select o.e not in (1,2,null)),
+       (select o.s in (1,5,null)), (select o.s not in (1,5,null))
+from numeric_labels o order by o.id;
+-- Tuple IN is the existing owner of left-operand expansion. Grouped recovery
+-- remains valid for each candidate; lexical and row-level raw comparisons
+-- continue through their existing paths.
+select o.id, ((select o.e),o.id) in ((1,1),(2,2)) as matched
+from numeric_labels o group by o.id,o.e order by o.id;
+select o.id, ((select o.e),o.id) not in ((1,1),(2,2)) as matched
+from numeric_labels o group by o.id,o.e order by o.id;
+select o.id, (cast((select o.e) as signed),o.id) in ((1,1),(2,2)) as matched
+from numeric_labels o group by o.id,o.e order by o.id;
+select o.id, (0+(select o.e),o.id) in ((1,1),(2,2)) as matched
+from numeric_labels o group by o.id,o.e order by o.id;
+select o.id, ((select o.e),o.id) in ((2,2)) from numeric_labels o group by o.id,o.e order by o.id;
+select o.id, ((select o.e),o.id) in (('1',1),('01',2)) from numeric_labels o group by o.id,o.e order by o.id;
+select o.id, ((select o.e),o.id) in ((1,1),(2,2)) from numeric_labels o order by o.id;
+-- @regex("numeric scalar IN list needs a proven lossless shared type",true)
+select (select o.e) in (1.5,2,null) from numeric_labels o group by o.e;
+-- @regex("numeric scalar IN list needs a proven lossless shared type",true)
+select (select o.e) not in (1.5,2,null) from numeric_labels o group by o.e;
+-- @regex("correlated special IN comparison requires a proven numeric contract",true)
+select (select o.e in (2,'x') from grouped_values i where i.id=o.id)
+from numeric_labels o group by o.id,o.e;
+select (select o.e from grouped_values i where i.id = 1) + 0
+from numeric_labels o where o.id = 2 group by o.e;
+select (select o.e limit 0) + 0 from numeric_labels o where o.id = 2;
+prepare scalar_numeric from 'select (select o.e) + ? from numeric_labels o where o.id = 2 group by o.e';
+set @scalar_arg = 3;
+execute scalar_numeric using @scalar_arg;
+set @scalar_arg = 8;
+execute scalar_numeric using @scalar_arg;
+deallocate prepare scalar_numeric;
+select (select o.e in (select 2) from grouped_values i where i.id=o.id),
+       (select 2 in (select o.e) from grouped_values i where i.id=o.id)
+from numeric_labels o where o.id=2 group by o.id,o.e;
+-- @regex("dynamic quantified comparison with correlated ENUM/SET display",true)
+prepare scalar_quantified from 'select (select o.e in (select ?) from grouped_values i where i.id=o.id) from numeric_labels o group by o.id,o.e';
+-- @regex("dynamic quantified comparison with correlated ENUM/SET display",true)
+prepare scalar_quantified_reverse from 'select (select ? in (select o.e) from grouped_values i where i.id=o.id) from numeric_labels o group by o.id,o.e';
+
+-- An empty member makes grouped displays ambiguous with the zero value.
+create table ambiguous_labels (id int, e enum('', '1'), s set('', '1'));
+insert into ambiguous_labels values (1,'1','1'),(2,'',''),(3,null,null);
+select (select a.e) + 0, (select a.s) + 0 from ambiguous_labels a where id=1;
+-- @regex("numeric scalar with non-reversible ENUM/SET display",true)
+select (select a.e) + 0 from ambiguous_labels a group by a.e;
+-- @regex("correlated special IN comparison requires a proven numeric contract",true)
+select (select a.e in (1,2) from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.e;
+-- @regex("correlated special IN comparison requires a proven numeric contract",true)
+select (select a.e in (2,'x') from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.e;
+-- @regex("correlated special IN comparison requires a proven numeric contract",true)
+select (select 1 in (a.e,3) from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.e;
+-- @regex("numeric scalar IN list needs a proven lossless shared type",true)
+select 2 in ((select a.e),3) from ambiguous_labels a group by a.e;
+-- @regex("numeric correlated value with non-reversible ENUM/SET display",true)
+select (select a.e in (select 2) from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.e;
+-- @regex("numeric correlated value with non-reversible ENUM/SET display",true)
+select (select 2 in (select a.e) from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.e;
+-- @regex("numeric scalar IN list needs a proven lossless shared type",true)
+select (select a.e) in (2,'x') from ambiguous_labels a group by a.e;
+select (select a.e) in ('1','x') from ambiguous_labels a where id=1 group by a.e;
+select (select a.e='1' from grouped_values i where i.id=a.id)
+from ambiguous_labels a where a.id=1 group by a.id,a.e;
+-- @regex("numeric correlated value with non-reversible ENUM/SET display",true)
+select (select cast(a.s as unsigned) from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.s;
+select a.id, (select concat(a.e,'') from grouped_values i where i.id=a.id)
+from ambiguous_labels a group by a.id,a.e order by a.id;
 
 -- Explicit numeric casts must use the same grouped provenance.
 select cast(e as signed), count(*) from grouped_values group by e order by e+0;

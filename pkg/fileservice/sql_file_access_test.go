@@ -173,6 +173,50 @@ func TestSQLFileCredentialsDoNotDiscoverServerIdentity(t *testing.T) {
 	require.Equal(t, 4, calls)
 }
 
+func TestSQLFileS3UsesEnvironmentRegionWhenNotSpecified(t *testing.T) {
+	t.Setenv("AWS_REGION", "us-east-2")
+	t.Setenv("AWS_DEFAULT_REGION", "us-west-1")
+	t.Setenv("AWS_ACCESS_KEY_ID", "ambient-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "ambient-secret")
+	old := httpRoundTripper
+	t.Cleanup(func() { httpRoundTripper = old })
+	calls := 0
+	httpRoundTripper = sqlCredentialTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		assert.Equal(t, http.MethodHead, r.Method)
+		authorization := r.Header.Get("Authorization")
+		assert.Contains(t, authorization, "Credential=caller-key/")
+		assert.Contains(t, authorization, "/us-east-2/s3/aws4_request")
+		assert.NotContains(t, authorization, "ambient")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Length": []string{"0"}, "Last-Modified": []string{"Mon, 02 Jan 2006 15:04:05 GMT"}, "Etag": []string{`"owned"`}},
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    r,
+		}, nil
+	})
+
+	ctx := WithSQLFileAccess(t.Context(), "tenant", "public")
+	spec := "s3-opts,endpoint=https://owned.invalid,bucket=owned-bucket-123456,key=caller-key,secret=caller-secret:object"
+	fs, path, err := GetForETL(ctx, nil, spec)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	_, err = fs.StatFile(ctx, path)
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+}
+
+func TestExplicitAWSConfigRegionFallback(t *testing.T) {
+	t.Setenv("AWS_REGION", "us-east-2")
+	t.Setenv("AWS_DEFAULT_REGION", "us-west-1")
+	require.Equal(t, "us-east-2", explicitAWSConfig(ObjectStorageArguments{}, nil, nil).Region)
+
+	t.Setenv("AWS_REGION", "")
+	require.Equal(t, "us-west-1", explicitAWSConfig(ObjectStorageArguments{}, nil, nil).Region)
+
+	require.Equal(t, "eu-west-1", explicitAWSConfig(ObjectStorageArguments{Region: "eu-west-1"}, nil, nil).Region)
+}
+
 func TestSQLFileRoleFailureCannotFallBack(t *testing.T) {
 	old := httpRoundTripper
 	t.Cleanup(func() { httpRoundTripper = old })

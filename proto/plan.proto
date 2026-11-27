@@ -804,6 +804,7 @@ message Node {
     TABLE_CLONE = 56;
     VECTOR_QUERY_TOP = 58;
     VECTOR_QUERY_SOURCE = 59;
+    UPDATE_UNIQUE = 60;
   }
 
   enum JoinType {
@@ -1002,6 +1003,9 @@ message Node {
 
   // Statement-local scalar vector source; field number matches main.
   int32 vector_query_source_id = 93;
+
+  UpdateUniqueCtx update_unique_ctx = 98;
+  UpdateCountCtx update_count_ctx = 99;
 }
 
 message SnapshotExtraInfo {
@@ -1220,6 +1224,7 @@ message LockTarget {
   ObjectRef obj_ref = 15;
   int32 partition_col_idx_in_bat = 16;
   bool has_partition_col = 17;
+  bool require_exact_rows = 18;
 }
 
 message PreInsertUkCtx {
@@ -2028,4 +2033,35 @@ enum AlterPartitionType {
 message RankOption {
   string mode = 1; // "pre", "post", "force", or "auto"
   int64 nprobe = 2; // Query-level base probe count; zero uses the session default.
+}
+
+// Positional inputs to one coordinator-owned repeated UPDATE admission stage.
+message UpdateUniqueKey {
+  int32 original = 1;
+  int32 current = 2;
+  int32 proposed = 3;
+  int32 snapshot_hit = 4;
+}
+
+message UpdateUniqueCtx {
+  int32 row_id = 1;
+  int32 active = 2;
+  repeated UpdateUniqueKey keys = 3 [(gogoproto.nullable) = false];
+  repeated UpdateUniqueValue values = 4 [(gogoproto.nullable) = false];
+  repeated UpdateUniqueCheck checks = 5 [(gogoproto.nullable) = false];
+}
+
+message UpdateCountCtx {
+  int32 column = 1;
+}
+
+message UpdateUniqueValue {
+  int32 current = 1;
+  int32 proposed = 2;
+}
+
+message UpdateUniqueCheck {
+  int32 column = 1;
+  string name = 2;
+  bool not_null = 3;
 }

@@ -21,14 +21,18 @@ import (
 )
 
 func allocateNewCompile(proc *process.Process) *Compile {
-	runningCompile := reuse.Alloc[Compile](nil)
+	return allocateNewCompileFromPool(proc, nil)
+}
+
+func allocateNewCompileFromPool(proc *process.Process, pool reuse.Pool[Compile, *Compile]) *Compile {
+	runningCompile := reuse.Alloc[Compile](pool)
 	runningCompile.proc = proc
 	return runningCompile
 }
 
-func doCompileRelease(c *Compile) {
+func doCompileRelease(c *Compile, pool reuse.Pool[Compile, *Compile]) {
 	if !c.isPrepare {
-		reuse.Free[Compile](c, nil)
+		reuse.Free[Compile](c, pool)
 	}
 }
 

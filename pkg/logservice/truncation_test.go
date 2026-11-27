@@ -28,6 +28,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTruncationExportSnapshot(t *testing.T) {
@@ -162,6 +163,7 @@ func TestTruncationCleansSkippedZombieReplicaMetadata(t *testing.T) {
 	tests := []struct {
 		name    string
 		skipped bool
+		pending bool
 	}{
 		{
 			name:    "skipped zombie without active replacement",
@@ -169,6 +171,11 @@ func TestTruncationCleansSkippedZombieReplicaMetadata(t *testing.T) {
 		},
 		{
 			name: "ordinary metadata without active replica",
+		},
+		{
+			name:    "startup skip followed by a pending local start",
+			skipped: true,
+			pending: true,
 		},
 	}
 
@@ -183,20 +190,27 @@ func TestTruncationCleansSkippedZombieReplicaMetadata(t *testing.T) {
 				s.store.mu.Lock()
 				s.store.mu.metadata.Shards = []metadata.LogShard{logShard}
 				if tc.skipped {
-					s.store.mu.skippedZombies = map[zombieKey]struct{}{
-						{shardID: shardID, replicaID: staleReplica}: {},
+					s.store.mu.skippedZombies = map[zombieKey]startupAbsence{
+						{shardID: shardID, replicaID: staleReplica}: {epoch: 1},
 					}
 				}
 				s.store.mu.Unlock()
 
+				if tc.pending {
+					require.NoError(t, s.store.startReplica(shardID, staleReplica, nil, true))
+					node, err := s.store.nh.GetNodeUser(shardID)
+					require.NoError(t, err)
+					require.Equal(t, staleReplica, node.ReplicaID())
+					require.Empty(t, s.store.startedReplicaIDs()[shardID], "the local claim is still pending")
+				}
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 				defer cancel()
 				assert.NoError(t, s.store.processTruncateLog(ctx))
 
-				if tc.skipped {
+				if tc.skipped && !tc.pending {
 					assert.Equal(t, int64(-1), s.store.getReplicaID(shardID))
 					assert.Equal(t, 0, s.store.snapshotMgr.Count(shardID, staleReplica))
-					assert.False(t, s.store.isSkippedZombie(shardID, staleReplica))
+					assert.True(t, s.store.isSkippedZombie(shardID, staleReplica), "retain the startup decision after cleanup")
 					return
 				}
 				assert.Equal(t, int64(staleReplica), s.store.getReplicaID(shardID))

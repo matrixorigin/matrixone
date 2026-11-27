@@ -16,11 +16,14 @@ package plan
 
 import (
 	"math"
+	"strings"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -42,6 +45,220 @@ type correlatedPaginationBoundary struct {
 	preds []*plan.Expr
 }
 
+func zeroLimitScalarHasControlFunction(statement tree.SelectStatement) bool {
+	var selectNode *tree.Select
+	switch stmt := statement.(type) {
+	case *tree.ParenSelect:
+		if stmt != nil {
+			selectNode = stmt.Select
+		}
+	case *tree.Select:
+		selectNode = stmt
+	}
+	if selectNode == nil || selectNode.Limit == nil || !zeroLimitLiteral(selectNode.Limit.Count) {
+		return false
+	}
+
+	found := false
+	walkGroupingSetOrderByExpr(&tree.Subquery{Select: statement}, func(expr tree.Expr) bool {
+		if found {
+			return false
+		}
+		fn, ok := expr.(*tree.FuncExpr)
+		if ok && fn.FuncName != nil {
+			name := strings.ToLower(fn.FuncName.Origin())
+			found = name == "mo_ctl" || name == "fault_inject"
+		}
+		return !found
+	})
+	return found
+}
+
+// zeroLimitScalarSourceSafe checks the original SQL tree before binding can
+// inline SQL UDFs or fold away their unused arguments. The planner rewrite is
+// limited to a one-column SELECT over one direct ordinary-table reference.
+func zeroLimitScalarSourceSafe(statement tree.SelectStatement, ctx *BindContext) bool {
+	if ctx == nil || ctx.remapOption != nil || ctx.snapshot != nil {
+		return false
+	}
+
+	var selectNode *tree.Select
+	switch stmt := statement.(type) {
+	case *tree.ParenSelect:
+		if stmt == nil {
+			return false
+		}
+		selectNode = stmt.Select
+	case *tree.Select:
+		selectNode = stmt
+	default:
+		return false
+	}
+	if selectNode == nil || selectNode.IsPerform || selectNode.RewriteOption != nil ||
+		selectNode.TimeWindow != nil || selectNode.RankOption != nil ||
+		selectNode.With != nil || selectNode.Ep != nil || selectNode.SelectLockInfo != nil ||
+		selectNode.Limit == nil || !zeroLimitLiteral(selectNode.Limit.Count) ||
+		!nonNegativeIntegerLiteralOrNil(selectNode.Limit.Offset) {
+		return false
+	}
+	clause, ok := selectNode.Select.(*tree.SelectClause)
+	if !ok || clause == nil || clause.Distinct || clause.GroupBy != nil ||
+		clause.Having != nil || clause.Option != 0 || clause.From == nil ||
+		len(clause.From.Tables) != 1 || len(clause.Exprs) != 1 ||
+		clause.Exprs[0].Expr == nil {
+		return false
+	}
+	if !zeroLimitSourceExprSafe(clause.Exprs[0].Expr, true, 0) {
+		return false
+	}
+	if clause.Where != nil && !zeroLimitSourceExprSafe(clause.Where.Expr, true, 0) {
+		return false
+	}
+	// Bound-expression validation below still rejects unsafe sort keys.
+	for _, order := range selectNode.OrderBy {
+		if order == nil || !zeroLimitSourceExprSafe(order.Expr, false, 0) {
+			return false
+		}
+	}
+
+	var tableExpr tree.TableExpr = clause.From.Tables[0]
+	if join, ok := tableExpr.(*tree.JoinTableExpr); ok {
+		if join == nil || join.Right != nil || join.Cond != nil || join.Option != "" ||
+			(join.JoinType != "" && join.JoinType != tree.JOIN_TYPE_CROSS) {
+			return false
+		}
+		tableExpr = join.Left
+	}
+	aliased, ok := tableExpr.(*tree.AliasedTableExpr)
+	if !ok || aliased == nil || len(aliased.IndexHints) != 0 || len(aliased.As.Cols) != 0 {
+		return false
+	}
+	table, ok := aliased.Expr.(*tree.TableName)
+	if !ok || table == nil || table.AtTsExpr != nil || table.IcebergRef != nil || table.ExplicitCatalog {
+		return false
+	}
+	if table.Schema() == "" && ctx.findCTE(string(table.ObjectName)) != nil {
+		return false
+	}
+	return true
+}
+
+func zeroLimitLiteral(expr tree.Expr) bool {
+	value, ok := expr.(*tree.NumVal)
+	if !ok || value == nil || value.Negative() ||
+		(value.ValType != tree.P_int64 && value.ValType != tree.P_uint64) {
+		return false
+	}
+	limit, ok := value.Uint64()
+	return ok && limit == 0
+}
+
+func nonNegativeIntegerLiteralOrNil(expr tree.Expr) bool {
+	if expr == nil {
+		return true
+	}
+	value, ok := expr.(*tree.NumVal)
+	if !ok || value == nil || value.Negative() ||
+		(value.ValType != tree.P_int64 && value.ValType != tree.P_uint64) {
+		return false
+	}
+	_, ok = value.Uint64()
+	return ok
+}
+
+// This explicit, bounded AST walker is intentionally smaller than the SQL
+// expression grammar. Unknown expression kinds fail closed; tree.Expr.Accept
+// is not safe here because several parser nodes leave it unimplemented.
+func zeroLimitSourceExprSafe(expr tree.Expr, allowValueOps bool, depth int) bool {
+	if expr == nil || depth > 128 {
+		return false
+	}
+	next := depth + 1
+	switch node := expr.(type) {
+	case *tree.NumVal:
+		return node != nil && node.ValType != tree.P_any && node.ValType != tree.P_star
+	case *tree.ParamExpr:
+		return node != nil
+	case *tree.StrVal:
+		return node != nil
+	case *tree.UnresolvedName:
+		return node != nil && !node.Star && node.NumParts > 0 &&
+			node.NumParts <= len(node.CStrParts) && node.ColName() != ""
+	case *tree.ParenExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.AndExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Left, allowValueOps, next) &&
+			zeroLimitSourceExprSafe(node.Right, allowValueOps, next)
+	case *tree.OrExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Left, allowValueOps, next) &&
+			zeroLimitSourceExprSafe(node.Right, allowValueOps, next)
+	case *tree.NotExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNullExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotNullExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.ComparisonExpr:
+		return node != nil && node.SubOp == 0 && node.Escape == nil &&
+			zeroLimitSourceExprSafe(node.Left, allowValueOps, next) &&
+			zeroLimitSourceExprSafe(node.Right, allowValueOps, next)
+	case *tree.IsTrueExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsFalseExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotTrueExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotFalseExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsUnknownExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.IsNotUnknownExpr:
+		return node != nil && zeroLimitSourceExprSafe(node.Expr, allowValueOps, next)
+	case *tree.BinaryExpr:
+		return allowValueOps && node != nil &&
+			(node.Op == tree.PLUS || node.Op == tree.MINUS || node.Op == tree.MULTI ||
+				node.Op == tree.DIV || node.Op == tree.INTEGER_DIV || node.Op == tree.MOD) &&
+			zeroLimitSourceExprSafe(node.Left, true, next) &&
+			zeroLimitSourceExprSafe(node.Right, true, next)
+	case *tree.UnaryExpr:
+		return allowValueOps && node != nil &&
+			(node.Op == tree.UNARY_PLUS || node.Op == tree.UNARY_MINUS) &&
+			zeroLimitSourceExprSafe(node.Expr, true, next)
+	case *tree.CastExpr:
+		if !allowValueOps || node == nil {
+			return false
+		}
+		typ, typeOK := node.Type.(*tree.T)
+		return typeOK && typ != nil &&
+			zeroLimitSourceExprSafe(node.Expr, true, next)
+	case *tree.FuncExpr:
+		if !allowValueOps || node == nil || node.FuncName == nil ||
+			node.Type != tree.FUNC_TYPE_DEFAULT || node.AggType != 0 ||
+			node.WindowSpec != nil || len(node.OrderBy) != 0 {
+			return false
+		}
+		name := strings.ToLower(node.FuncName.Origin())
+		switch name {
+		case "concat", "char", "coalesce", "ifnull":
+		default:
+			return false
+		}
+		if ref, ok := node.Func.FunctionReference.(*tree.UnresolvedName); !ok ||
+			ref == nil || ref.NumParts != 1 || ref.Star ||
+			!strings.EqualFold(ref.ColName(), name) {
+			return false
+		}
+		for _, arg := range node.Exprs {
+			if !zeroLimitSourceExprSafe(arg, true, next) {
+				return false
+			}
+		}
+		return len(node.Exprs) > 0
+	default:
+		return false
+	}
+}
+
 // A LIMIT 0 at the semantic root makes the entire subquery empty. Do not
 // cross aggregates, filters or other row-changing nodes when locating it.
 func (builder *QueryBuilder) subqueryRootLimitIsZero(nodeID int32) bool {
@@ -60,6 +277,297 @@ func (builder *QueryBuilder) subqueryRootLimitIsZero(nodeID int32) bool {
 		}
 		nodeID = node.Children[0]
 	}
+}
+
+// emptyCorrelatedScalarScan admits only a simple, already-bound relation.
+// Replacing an entire subquery with a bare NULL would lose the reachable
+// TABLE_SCAN used by authorization and prepared-schema validation.
+func (builder *QueryBuilder) emptyCorrelatedScalarScan(root int32, subquery *plan.SubqueryRef, ctx *BindContext) (*plan.Node, bool) {
+	if subquery.Typ != plan.SubqueryRef_SCALAR || subquery.Child != nil ||
+		ctx == nil || !ctx.zeroScalarRootSourceSafe || len(ctx.results) != 1 || ctx.results[0] == nil ||
+		len(ctx.projects) == 0 || ctx.projects[0] == nil || !hasCorrCol(ctx.projects[0]) {
+		return nil, false
+	}
+	topRoot := root
+	seen := make(map[int32]struct{})
+	foundZero := false
+	for {
+		if root < 0 || int(root) >= len(builder.qry.Nodes) {
+			return nil, false
+		}
+		if _, ok := seen[root]; ok {
+			return nil, false
+		}
+		seen[root] = struct{}{}
+		if int(root) >= len(builder.ctxByNode) || builder.ctxByNode[root] != ctx {
+			return nil, false
+		}
+		node := builder.qry.Nodes[root]
+		if node == nil {
+			return nil, false
+		}
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			if !foundZero || len(node.Children) != 0 || len(node.BindingTags) != 1 ||
+				node.TableDef == nil || node.TableDef.TableType != catalog.SystemOrdinaryRel ||
+				node.TableDef.Partition != nil || node.TableDef.ViewSql != nil || node.TableDef.TblFunc != nil ||
+				node.ObjRef == nil || node.ObjRef.Server != 0 || node.ObjRef.ServerName != "" ||
+				node.ObjRef.SubscriptionName != "" || node.ObjRef.PubInfo != nil ||
+				node.ObjRef.Snapshot != nil || node.ObjRef.NotLockMeta {
+				return nil, false
+			}
+			// A fresh binding tag on the scan is safe only if no other field
+			// can refer to its old tag or hide a dependency. Keep its complete
+			// table and object metadata; reject unproved scan variants.
+			rest := *node
+			rest.NodeType, rest.NodeId = 0, 0
+			rest.Stats, rest.AnalyzeInfo = nil, nil
+			rest.Children, rest.BindingTags = nil, nil
+			rest.TableDef, rest.ObjRef = nil, nil
+			if !proto.Equal(&rest, &plan.Node{}) {
+				return nil, false
+			}
+			return node, true
+		}
+		if node.NodeType != plan.Node_PROJECT && node.NodeType != plan.Node_FILTER && node.NodeType != plan.Node_SORT {
+			return nil, false
+		}
+		if len(node.Children) != 1 {
+			return nil, false
+		}
+		if node.Limit != nil {
+			value, literal := getLiteralUint64(node.Limit)
+			if foundZero || !literal || value != 0 {
+				return nil, false
+			}
+			foundZero = true
+		}
+		if node.Offset != nil {
+			if node.Limit == nil {
+				return nil, false
+			}
+			if _, literal := getLiteralUint64(node.Offset); !literal {
+				return nil, false
+			}
+		}
+		for index, expr := range node.ProjectList {
+			visibleProjection := node.NodeType == plan.Node_PROJECT && index == 0 &&
+				len(node.BindingTags) > 0 && node.BindingTags[0] == ctx.projectTag
+			if node.NodeId == topRoot || visibleProjection {
+				if !emptyCorrelatedScalarResultSafe(expr) {
+					return nil, false
+				}
+			} else if !emptyCorrelatedScalarExpressionSafe(expr) {
+				return nil, false
+			}
+		}
+		for _, expr := range node.FilterList {
+			if !emptyCorrelatedScalarResultSafe(expr) {
+				return nil, false
+			}
+		}
+		for _, order := range node.OrderBy {
+			if order == nil || !emptyCorrelatedScalarExpressionSafe(order.Expr) {
+				return nil, false
+			}
+		}
+		// Fail closed for node fields that are not part of this simple
+		// projection/filter/sort relation, including source steps and views.
+		rest := *node
+		rest.NodeType, rest.NodeId = 0, 0
+		rest.Stats, rest.AnalyzeInfo = nil, nil
+		rest.Children, rest.BindingTags = nil, nil
+		rest.ProjectList, rest.FilterList, rest.OrderBy = nil, nil, nil
+		rest.Limit, rest.Offset = nil, nil
+		if !proto.Equal(&rest, &plan.Node{}) {
+			return nil, false
+		}
+		root = node.Children[0]
+	}
+}
+
+// Unlike the pagination-movement proof, this proof must reject parameters
+// that would disappear from a prepared plan and unsupported expression forms.
+func emptyCorrelatedScalarResultSafe(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_T:
+		return item.T != nil
+	case *plan.Expr_Col:
+		return item.Col != nil
+	case *plan.Expr_Corr:
+		return item.Corr != nil && item.Corr.Depth == 1
+	case *plan.Expr_Lit:
+		return item.Lit != nil && item.Lit.Src == nil
+	case *plan.Expr_List:
+		if item.List == nil {
+			return false
+		}
+		for _, arg := range item.List.List {
+			if !emptyCorrelatedScalarResultSafe(arg) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_F:
+		if item.F == nil || item.F.Func == nil {
+			return false
+		}
+		fid, _ := function.DecodeOverloadID(item.F.Func.Obj)
+		overload, exists := function.GetFunctionByIdWithoutError(item.F.Func.Obj)
+		if !exists || overload.IsAgg() || overload.IsWin() {
+			return false
+		}
+		expectedName := ""
+		switch fid {
+		case function.CAST:
+			expectedName = "cast"
+			if len(item.F.Args) != 2 || item.F.Args[1] == nil || item.F.Args[1].GetT() == nil {
+				return false
+			}
+		case function.CONCAT:
+			expectedName = "concat"
+		case function.CHAR:
+			expectedName = "char"
+		case function.UNARY_PLUS:
+			expectedName = "unary_plus"
+			if len(item.F.Args) != 1 {
+				return false
+			}
+		case function.UNARY_MINUS:
+			expectedName = "unary_minus"
+			if len(item.F.Args) != 1 {
+				return false
+			}
+		case function.PLUS:
+			expectedName = "+"
+		case function.MINUS:
+			expectedName = "-"
+		case function.MULTI:
+			expectedName = "*"
+		case function.DIV:
+			expectedName = "/"
+		case function.INTEGER_DIV:
+			expectedName = "div"
+		case function.MOD:
+			expectedName = "%"
+		case function.COALESCE:
+			expectedName = "coalesce"
+		case function.IFNULL:
+			expectedName = "ifnull"
+			if len(item.F.Args) != 2 {
+				return false
+			}
+		case function.CASE:
+			// IFNULL is lowered by the binder to CASE WHEN ISNULL(x) THEN y ELSE x.
+			expectedName = "case"
+			if len(item.F.Args) != 3 {
+				return false
+			}
+		case function.ISNULL:
+			expectedName = "isnull"
+			if len(item.F.Args) != 1 {
+				return false
+			}
+		case function.ISNOTTRUE:
+			expectedName = "isnottrue"
+		case function.ISNOTFALSE:
+			expectedName = "isnotfalse"
+		case function.ISNOTNULL:
+			expectedName = "isnotnull"
+		default:
+			// Reuse the boolean operator whitelist, but check its operands
+			// under omission rules because the root LIMIT is zero.
+			if !paginationBooleanOperator(item.F.Func.ObjName) {
+				return false
+			}
+		}
+		if len(item.F.Args) == 0 || (expectedName != "" && !strings.EqualFold(item.F.Func.ObjName, expectedName)) {
+			return false
+		}
+		for _, arg := range item.F.Args {
+			if !emptyCorrelatedScalarResultSafe(arg) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func emptyCorrelatedScalarExpressionSafe(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_T:
+		return item.T != nil
+	case *plan.Expr_Col:
+		return item.Col != nil
+	case *plan.Expr_Corr:
+		return item.Corr != nil && item.Corr.Depth == 1
+	case *plan.Expr_Lit:
+		return item.Lit != nil && item.Lit.Src == nil
+	case *plan.Expr_List:
+		if item.List == nil {
+			return false
+		}
+		for _, arg := range item.List.List {
+			if !emptyCorrelatedScalarExpressionSafe(arg) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_F:
+		if item.F == nil || item.F.Func == nil || !paginationExpressionSafe(expr) {
+			return false
+		}
+		for _, arg := range item.F.Args {
+			if !emptyCorrelatedScalarExpressionSafe(arg) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func (builder *QueryBuilder) flattenEmptyCorrelatedScalar(nodeID int32, scan *plan.Node, subCtx, ctx *BindContext) (int32, *plan.Expr) {
+	builder.zeroScalarRewriteGeneration++
+	if subCtx != nil {
+		subCtx.zeroScalarRewriteInPlan = true
+	}
+	if ctx != nil {
+		ctx.zeroScalarRewriteInPlan = true
+	}
+	// Clone rather than mutate a scan that might also be referenced by another
+	// plan. Admission above proved that no expression refers to its old tag.
+	retainedScan := proto.Clone(scan).(*plan.Node)
+	retainedScan.BindingTags = []int32{builder.genNewBindTag()}
+	scanID := builder.appendNode(retainedScan, subCtx)
+
+	value := makePlan2NullConstExprWithType()
+	value.Typ = subCtx.results[0].Typ
+	value.Typ.NotNullable = false
+	tag := builder.genNewBindTag()
+	projectID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{scanID},
+		BindingTags: []int32{tag},
+		ProjectList: []*plan.Expr{value},
+		Limit:       makePlan2Uint64ConstExprWithType(0),
+	}, subCtx)
+	builder.zeroScalarScanIDs = append(builder.zeroScalarScanIDs, scanID)
+	nodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_SINGLE,
+		Children: []int32{nodeID, projectID},
+		SpillMem: builder.joinSpillMem,
+	}, ctx)
+	return nodeID, GetColExpr(value.Typ, tag, 0)
 }
 
 func (builder *QueryBuilder) emptySubqueryResult(nodeID int32, ctx *BindContext, subquery *plan.SubqueryRef) (int32, *plan.Expr, error) {
@@ -426,8 +934,10 @@ func paginationExpressionSafeWithLiteralCasts(expr *plan.Expr, allowLiteralCasts
 		switch item.F.Func.ObjName {
 		case "cast":
 			return (paginationCastConversionSafe(expr) || allowLiteralCasts && paginationIntegerLiteralCastSafe(expr)) && paginationExpressionSafeWithLiteralCasts(item.F.Args[0], allowLiteralCasts)
-		case "coalesce", "ifnull", "case", "isnull", "istrue", "isfalse", "not",
-			"and", "or", "=", "<=>", "<>", "!=", "<", "<=", ">", ">=":
+		default:
+			if !paginationBooleanOperator(item.F.Func.ObjName) {
+				return false
+			}
 			for _, arg := range item.F.Args {
 				if !paginationExpressionSafeWithLiteralCasts(arg, allowLiteralCasts) {
 					return false
@@ -437,6 +947,16 @@ func paginationExpressionSafeWithLiteralCasts(expr *plan.Expr, allowLiteralCasts
 		}
 	}
 	return false
+}
+
+func paginationBooleanOperator(name string) bool {
+	switch name {
+	case "coalesce", "ifnull", "case", "isnull", "istrue", "isfalse", "not",
+		"and", "or", "=", "<=>", "<>", "!=", "<", "<=", ">", ">=":
+		return true
+	default:
+		return false
+	}
 }
 
 func paginationIntegerLiteralCastSafe(expr *plan.Expr) bool {
@@ -493,11 +1013,23 @@ func paginationAggregateSafe(expr *plan.Expr) bool {
 // Direct-outer projection normalization can discard sorting or pagination.
 // Only discard it when expressions beneath it are safe to move or omit.
 func (builder *QueryBuilder) paginationSubtreeExpressionsSafe(nodeID int32, allowAggregate bool) bool {
+	return builder.paginationSubtreeExpressionsSafeExceptProjection(nodeID, allowAggregate, -1)
+}
+
+func (builder *QueryBuilder) paginationSubtreeExpressionsSafeExceptProjection(nodeID int32, allowAggregate bool, skipProjection int32) bool {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_AGG && !allowAggregate {
 		return false
 	}
-	for _, exprs := range [][]*plan.Expr{node.ProjectList, node.FilterList, node.OnList, node.GroupBy} {
+	for i, expr := range node.ProjectList {
+		if nodeID == skipProjection && i == 0 {
+			continue
+		}
+		if !paginationExpressionSafe(expr) {
+			return false
+		}
+	}
+	for _, exprs := range [][]*plan.Expr{node.FilterList, node.OnList, node.GroupBy} {
 		for _, expr := range exprs {
 			if !paginationExpressionSafe(expr) {
 				return false
@@ -510,7 +1042,7 @@ func (builder *QueryBuilder) paginationSubtreeExpressionsSafe(nodeID int32, allo
 		}
 	}
 	for _, child := range node.Children {
-		if !builder.paginationSubtreeExpressionsSafe(child, allowAggregate) {
+		if !builder.paginationSubtreeExpressionsSafeExceptProjection(child, allowAggregate, skipProjection) {
 			return false
 		}
 	}
@@ -935,6 +1467,7 @@ func (builder *QueryBuilder) nullExtendScalarValue(marker, value *plan.Expr) (*p
 	if !makeTypeByPlan2Expr(result).Eq(makeTypeByPlan2Expr(value)) {
 		return nil, moerr.NewNYI(builder.GetContext(), "correlated pagination result type")
 	}
+	result.Typ = value.Typ
 	result.Typ.NotNullable = false
 	return result, nil
 }
@@ -943,13 +1476,19 @@ func (builder *QueryBuilder) nullExtendScalarValue(marker, value *plan.Expr) (*p
 // outer row. The right-side marker distinguishes a real NULL value from the
 // NULL-extended row produced by a LEFT JOIN.
 func (builder *QueryBuilder) flattenPostJoinPagination(
-	outerID, subID int32, subCtx *BindContext, preds []*plan.Expr, ctx *BindContext, pagination *postJoinPagination,
+	outerID, subID int32, subCtx *BindContext, preds []*plan.Expr, ctx *BindContext, pagination *postJoinPagination, lifted *plan.Expr,
 ) (int32, *plan.Expr, error) {
 	filters, joins := decreaseDepthAndDispatch(preds)
 	if !pagination.crossed || len(filters) != 0 || len(subCtx.results) != 1 {
 		return 0, nil, moerr.NewNYI(builder.GetContext(), "deep or incomplete correlated pagination")
 	}
 	value := GetColExpr(subCtx.results[0].Typ, subCtx.topTag(), 0)
+	if lifted != nil {
+		if pagination.marker == nil || pagination.offset != 0 {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "lifted correlated pagination without a safe match marker")
+		}
+		value = lifted
+	}
 	value.Typ.NotNullable = false
 	if pagination.marker != nil {
 		var err error

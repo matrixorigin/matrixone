@@ -3440,7 +3440,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	tableDef := rel.GetTableDef(c.proc.Ctx)
 	oldLogicalId := tableDef.GetLogicalId()
 	dropOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental()
-	createOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental()
+	createOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental().
+		WithInheritedEnums(tree.InheritedEnumTypes(tableDef))
 	if oldLogicalId != 0 {
 		createOpts = createOpts.WithKeepLogicalId(oldLogicalId)
 	}

@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,6 +37,10 @@ type ZonemapReader struct {
 	param       *ExternalParam
 	zoneparam   *ZonemapFileparam
 	blockReader *ioutil.BlockReader
+	// Scratch belongs to one Open generation and its exact allocation pool.
+	zms  []objectio.ZoneMap
+	vecs []*vector.Vector
+	mp   *mpool.MPool
 }
 
 // NewZonemapReader creates a ZonemapReader.
@@ -50,6 +55,7 @@ func NewZonemapReader(param *ExternalParam, proc *process.Process) *ZonemapReade
 }
 
 func (r *ZonemapReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty bool, err error) {
+	_ = r.Close()
 	r.param = param
 	// Block metadata (zone maps, null counts) is indexed by physical file
 	// column, but param.Filter.columnMap was resolved against the (possibly
@@ -59,6 +65,7 @@ func (r *ZonemapReader) Open(param *ExternalParam, proc *process.Process) (fileE
 	r.blockReader, err = ioutil.NewFileReader(
 		param.Extern.FileService, param.Fileparam.Filepath)
 	if err != nil {
+		_ = r.Close()
 		return false, err
 	}
 	r.zoneparam.offset = 0
@@ -126,6 +133,7 @@ func (r *ZonemapReader) ReadBatch(
 }
 
 func (r *ZonemapReader) Close() error {
+	r.clearZoneMapScratch()
 	r.blockReader = nil
 	r.zoneparam.bs = nil
 	r.zoneparam.offset = 0
@@ -149,18 +157,26 @@ func (r *ZonemapReader) needRead(ctx context.Context, proc *process.Process) boo
 
 	meta := r.zoneparam.bs[r.zoneparam.offset]
 	columnMap := r.param.Filter.columnMap
-	var (
-		zms  []objectio.ZoneMap
-		vecs []*vector.Vector
-	)
-
-	if r.param.Filter.AuxIdCnt > 0 {
-		zms = make([]objectio.ZoneMap, r.param.Filter.AuxIdCnt)
-		vecs = make([]*vector.Vector, r.param.Filter.AuxIdCnt)
+	if r.mp != proc.Mp() {
+		r.clearZoneMapScratch()
+		r.mp = proc.Mp()
+		if r.param.Filter.AuxIdCnt > 0 {
+			r.zms = make([]objectio.ZoneMap, r.param.Filter.AuxIdCnt)
+			r.vecs = make([]*vector.Vector, r.param.Filter.AuxIdCnt)
+		}
 	}
 
 	return colexec.EvaluateFilterByZoneMap(
-		notReportErrCtx, proc, expr, meta, columnMap, zms, vecs)
+		notReportErrCtx, proc, expr, meta, columnMap, r.zms, r.vecs)
+}
+
+func (r *ZonemapReader) clearZoneMapScratch() {
+	for _, vec := range r.vecs {
+		if vec != nil {
+			vec.Free(r.mp)
+		}
+	}
+	r.zms, r.vecs, r.mp = nil, nil, nil
 }
 
 // getBatchFromZonemapFile reads one block from the zonemap file into bat.

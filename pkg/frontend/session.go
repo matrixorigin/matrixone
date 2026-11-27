@@ -173,8 +173,8 @@ type Session struct {
 	errInfo *errInfo
 
 	cache       *privilegeCache
-	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
-	ruleCacheMu sync.RWMutex      // protects ruleCache
+	ruleCache   *roleRuleCache // nil means not loaded
+	ruleCacheMu sync.RWMutex   // protects ruleCache
 
 	// foreignConns caches connections to foreign data sources (Elasticsearch,
 	// external SQL databases) opened by esql_tvf_connect / sql_tvf_connect and
@@ -1190,6 +1190,9 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 	if len(opts) > 0 && opts[0] != nil {
 		be.backSes.fromRealUser = opts[0].fromRealUser
 		be.backSes.forcePessimisticRC = opts[0].forcePessimisticRC
+		if opts[0].currentRoleContext != nil {
+			be.backSes.currentRoleContext = *opts[0].currentRoleContext
+		}
 		be.backSes.readSnapshot = opts[0].readSnapshot
 	}
 	return be

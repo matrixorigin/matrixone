@@ -842,6 +842,49 @@ func (v *Vector) VarlenaAreaIsDisjoint() bool {
 	return v != nil && v.typ.IsVarlen() && !v.IsConst() && v.areaDisjoint
 }
 
+// CanCopyWholeVarlenaArea reports whether a full UnionBatch can copy the
+// complete physical area without inspecting individual descriptors.
+func (v *Vector) CanCopyWholeVarlenaArea() bool {
+	return v.VarlenaAreaIsDisjoint() && !v.cantFreeArea
+}
+
+// VarlenaPayloadSize returns the external bytes a selected non-NULL value
+// contributes when it is copied to a flat vector.
+func VarlenaPayloadSize(v *Vector, row int) int64 {
+	if v.IsNull(uint64(row)) {
+		return 0
+	}
+	value := GetFixedAtNoTypeCheck[types.Varlena](v, row)
+	if value.IsSmall() {
+		return 0
+	}
+	_, size := value.OffsetLen()
+	return int64(size)
+}
+
+// VarlenaPayloadExceeds reports whether any non-NULL value contributes more
+// external bytes than limit when copied to a flat vector.
+func VarlenaPayloadExceeds(v *Vector, limit int64) bool {
+	if v == nil || !v.typ.IsVarlen() || v.Length() == 0 || v.IsConstNull() {
+		return false
+	}
+	areaBytes := len(v.area)
+
+	if int64(areaBytes) <= limit {
+		return false
+	}
+	rows := v.Length()
+	if v.IsConst() {
+		rows = 1
+	}
+	for row := range rows {
+		if VarlenaPayloadSize(v, row) > limit {
+			return true
+		}
+	}
+	return false
+}
+
 func (v *Vector) GetData() []byte {
 	return v.data
 }
@@ -2088,7 +2131,8 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	}
 }
 
-// Shuffle use to shrink vectors, sels can be disordered
+// Shuffle selects rows in sels order. It preserves ascending metadata only for
+// nondecreasing selections; arbitrary permutations cannot certify value order.
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
@@ -2097,6 +2141,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		return nil
 	}
 
+	// sels can share the input data, so check before replacing it.
+	clearSorted := v.sorted && !slices.IsSorted(sels)
 	switch v.typ.Oid {
 	case types.T_bool:
 		err = shuffleFixedNoTypeCheck[bool](v, sels, mp)
@@ -2155,6 +2201,10 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
 	}
 
+	if err == nil && clearSorted {
+		v.sorted = false
+	}
+
 	return err
 }
 
@@ -2180,6 +2230,7 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 		return v.Shuffle(sels, mp)
 	}
 
+	clearSorted := v.sorted && !slices.IsSorted(sels)
 	switch v.typ.Oid {
 	case types.T_bool:
 		err = shuffleFixedNoTypeCheckWithBuf[bool](v, sels, buf)
@@ -2236,6 +2287,10 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 		err = shuffleFixedNoTypeCheckWithBuf[types.Blockid](v, sels, buf)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.ShuffleWithBuf", v.typ))
+	}
+
+	if err == nil && clearSorted {
+		v.sorted = false
 	}
 
 	return err
@@ -4567,7 +4622,7 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 	// whole vector. SetLength and aliasing operations clear areaDisjoint; a
 	// borrowed Window is identified by cantFreeArea and must scan its descriptors
 	// because it retains the parent's complete area.
-	if offset == 0 && cnt == w.length && w.areaDisjoint && !w.cantFreeArea {
+	if offset == 0 && cnt == w.length && w.CanCopyWholeVarlenaArea() {
 		areaEnd = len(w.area)
 		hasArea = areaEnd > 0
 	} else {
@@ -5266,9 +5321,10 @@ func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64,
 	ws := util.UnsafeSliceCastToLength[T](*buf, ns)
 
 	shuffle.FixedLengthShuffle(vs, ws, sels)
-	copy(v.data[:needed], *buf)
+	// Consume selectors before copying over data they may reference.
 	nulls.Filter(&v.gsp, sels, false)
 	nulls.Filter(&v.nsp, sels, false)
+	copy(v.data[:needed], *buf)
 	v.length = ns
 	return nil
 }

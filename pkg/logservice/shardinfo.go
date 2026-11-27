@@ -60,11 +60,21 @@ func GetShardInfo(
 	shardID uint64,
 	excludeHardDownReplicaAddresses ...bool,
 ) (ShardInfo, bool, error) {
+	return getShardInfoWithContext(context.Background(), sid, address, shardID, excludeHardDownReplicaAddresses...)
+}
+
+func getShardInfoWithContext(
+	ctx context.Context,
+	sid string,
+	address string,
+	shardID uint64,
+	excludeHardDownReplicaAddresses ...bool,
+) (ShardInfo, bool, error) {
 	excludeHardDown := true
 	if len(excludeHardDownReplicaAddresses) > 0 {
 		excludeHardDown = excludeHardDownReplicaAddresses[0]
 	}
-	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID, false, excludeHardDown)
+	si, ok, err := queryShardInfoRawFn(ctx, sid, address, shardID, false, excludeHardDown)
 	if err != nil || !ok {
 		return ShardInfo{}, false, err
 	}
@@ -114,7 +124,7 @@ func GetShardInfo(
 var queryShardInfoRawFn = queryShardInfoRaw
 
 // getShardMembership returns the live membership of the given shard as the
-// queried peer sees it. Unlike GetShardInfo it does NOT require an elected
+// queried peer sees it, mapping replica IDs to store UUIDs. Unlike GetShardInfo it does NOT require an elected
 // leader: as long as the peer's gossip registry knows the shard, ok=true is
 // returned with whatever members the peer has on file. This is the form the
 // zombie self-check needs, because the scenario that produces zombies is
@@ -124,16 +134,16 @@ func getShardMembership(
 	sid string,
 	address string,
 	shardID uint64,
-) (map[uint64]string, bool, error) {
+) (map[uint64]string, uint64, bool, error) {
 	si, ok, err := queryShardInfoRawFn(ctx, sid, address, shardID, true, false)
 	if err != nil || !ok {
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	members := make(map[uint64]string, len(si.Replicas))
 	for replicaID, info := range si.Replicas {
-		members[replicaID] = info.ServiceAddress
+		members[replicaID] = info.UUID
 	}
-	return members, true, nil
+	return members, si.Epoch, true, nil
 }
 
 // queryShardInfoRaw issues the GET_SHARD_INFO RPC and returns the raw response

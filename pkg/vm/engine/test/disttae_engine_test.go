@@ -1791,9 +1791,10 @@ func Test_SubUnsubTable(t *testing.T) {
 		inValidTableID   = rel.GetTableID(ctx) + 1
 		inValidTableName = "invalid_table"
 	)
-	// Keep the repeated mock-RPC coverage, but do not sleep or log an expected
-	// permanent error between attempts as the positive-subscription helper does.
-	for attempt := range 1000 {
+	// Use the same missing table again to verify that the first response
+	// cleared its subscription. The disttae unit test stress-tests cleanup
+	// without round trips through the mock logtail server.
+	for attempt := range 2 {
 		err := subscribeMissingTable(ctx, func(ctx context.Context) error {
 			return disttaeEngine.Engine.TryToSubscribeTable(ctx, uint64(accountId), rel.GetDBID(ctx), inValidTableID, databaseName, inValidTableName)
 		})

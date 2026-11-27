@@ -36,6 +36,86 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPhysicalSharedLockRetainsLatestCommitForWaiter(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		rangeLock  bool
+		waitFirst  bool
+		lastCommit timestamp.Timestamp
+	}{
+		{name: "row-waiter-before-commit", waitFirst: true, lastCommit: timestamp.Timestamp{PhysicalTime: 10}},
+		{name: "row-waiter-after-commit", lastCommit: timestamp.Timestamp{}},
+		{name: "range-waiter-before-commit", rangeLock: true, waitFirst: true, lastCommit: timestamp.Timestamp{PhysicalTime: 10}},
+		{name: "range-waiter-after-commit", rangeLock: true, lastCommit: timestamp.Timestamp{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+				s := services[0]
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				const tableID = uint64(10)
+				row := []byte("m")
+				rows, waitKey := [][]byte{row}, row
+				shared := newTestRowSharedOptions()
+				if tc.rangeLock {
+					rows, waitKey = [][]byte{[]byte("a"), []byte("z")}, []byte("z")
+					shared = newTestRangeSharedOptions()
+				}
+
+				v, err := s.getLockTableWithCreate(ctx, 0, tableID, rows, pb.Sharding_None)
+				require.NoError(t, err)
+				lt := v.(*localLockTable)
+				lt.mu.Lock()
+				lt.mu.tableCommittedAt = timestamp.Timestamp{PhysicalTime: 1}
+				lt.mu.Unlock()
+
+				txn1, txn2, waiterTxn := newTestTxnID(1), newTestTxnID(2), newTestTxnID(3)
+				defer func() {
+					cancel()
+					for _, txn := range [][]byte{txn1, txn2, waiterTxn} {
+						_ = s.Unlock(context.Background(), txn, timestamp.Timestamp{})
+					}
+				}()
+				_, err = s.Lock(ctx, tableID, rows, txn1, shared)
+				require.NoError(t, err)
+				_, err = s.Lock(ctx, tableID, rows, txn2, shared)
+				require.NoError(t, err)
+
+				type lockResult struct {
+					result pb.Result
+					err    error
+				}
+				result := make(chan lockResult, 1)
+				startWaiter := func() {
+					go func() {
+						r, err := s.Lock(ctx, tableID, [][]byte{row}, waiterTxn, newTestRowExclusiveOptions())
+						result <- lockResult{r, err}
+					}()
+					waitWaiters(t, s, tableID, waitKey, 1)
+				}
+				if tc.waitFirst {
+					startWaiter()
+				}
+				require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{PhysicalTime: 20}))
+				if !tc.waitFirst {
+					startWaiter()
+				}
+				require.NoError(t, s.Unlock(ctx, txn2, tc.lastCommit))
+				select {
+				case got := <-result:
+					require.NoError(t, got.err)
+					require.True(t, got.result.HasConflict)
+					require.True(t, got.result.HasPrevCommit)
+					require.Equal(t, timestamp.Timestamp{PhysicalTime: 20}, got.result.Timestamp)
+				case <-ctx.Done():
+					t.Fatal("waiter did not acquire the released lock")
+				}
+				require.NoError(t, s.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+			})
+		})
+	}
+}
+
 func TestCloseLocalLockTable(t *testing.T) {
 	table := uint64(10)
 	getRunner(false)(
@@ -108,7 +188,7 @@ func TestCloseLocalLockTableNotifiesOutsideTableMutex(t *testing.T) {
 								handled <- struct{}{}
 							},
 						},
-						eventC: events.eventC,
+						queue: events,
 					}
 					lock.addWaiter(logger, w)
 					waiters = append(waiters, w)
@@ -191,7 +271,7 @@ func TestRemoveLocalLockTableClosesOutsideHolderMutex(t *testing.T) {
 								handled <- struct{}{}
 							},
 						},
-						eventC: events.eventC,
+						queue: events,
 					}
 					lock.addWaiter(logger, w)
 					waiters = append(waiters, w)
@@ -2711,4 +2791,56 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 			})
 		},
 	)
+}
+
+func TestExactRowDoesNotJoinSharedRange(t *testing.T) {
+	const table = uint64(15)
+	for _, remote := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remote=%t", remote), func(t *testing.T) {
+			runner := getRunner(remote)
+			runner(t, table, func(ctx context.Context, s *service, _ *localLockTable) {
+				rangeOpts := pb.LockOptions{Granularity: pb.Granularity_Range, Mode: pb.LockMode_Shared}
+				rangeTxn := newTestTxnID(4)
+				_, err := s.Lock(ctx, table, [][]byte{{1}, {5}}, rangeTxn, rangeOpts)
+				require.NoError(t, err)
+				pointOpts := newTestRowSharedOptions().WithExactRows()
+				pointOpts.Policy = pb.WaitPolicy_FastFail
+				for _, key := range []byte{1, 3, 5} {
+					txn := newTestTxnID(key + 10)
+					_, err := s.Lock(ctx, table, [][]byte{{key}}, txn, pointOpts)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockConflict), "key %d: %v", key, err)
+					require.NoError(t, s.Unlock(ctx, txn, timestamp.Timestamp{}))
+				}
+				require.NoError(t, s.Unlock(ctx, rangeTxn, timestamp.Timestamp{}))
+				pointTxn := newTestTxnID(20)
+				_, err = s.Lock(ctx, table, [][]byte{{3}}, pointTxn, pointOpts)
+				require.NoError(t, err)
+				peer := newTestTxnID(22)
+				_, err = s.Lock(ctx, table, [][]byte{{3}}, peer, pointOpts)
+				require.NoError(t, err)
+				require.NoError(t, s.Unlock(ctx, peer, timestamp.Timestamp{}))
+				gapTxn := newTestTxnID(21)
+				_, err = s.Lock(ctx, table, [][]byte{{4}}, gapTxn, newTestRowExclusiveOptions())
+				require.NoError(t, err)
+				require.NoError(t, s.Unlock(ctx, gapTxn, timestamp.Timestamp{}))
+				require.NoError(t, s.Unlock(ctx, pointTxn, timestamp.Timestamp{}))
+			})
+		})
+	}
+}
+
+func TestExactRowWireMode(t *testing.T) {
+	for _, mode := range []pb.LockMode{pb.LockMode_Shared, pb.LockMode_Exclusive} {
+		for _, exact := range []bool{false, true} {
+			sent := pb.LockOptions{Mode: mode, ExactRows: exact, BypassLocalProxy: true}
+			for _, method := range []pb.Method{pb.Method_Lock, pb.Method_ForwardLock} {
+				req := pb.Request{Method: method, Lock: pb.LockRequest{Options: sent}}
+				payload, err := req.Marshal()
+				require.NoError(t, err)
+				var received pb.Request
+				require.NoError(t, received.Unmarshal(payload))
+				require.Equal(t, sent, received.Lock.Options)
+			}
+		}
+	}
 }

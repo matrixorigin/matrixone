@@ -506,6 +506,18 @@ func TestPreparedDDLNeedsCatalogRefresh(t *testing.T) {
 	}
 }
 
+func TestPreparedShowNeedsCatalogRefresh(t *testing.T) {
+	for _, stmt := range []tree.Statement{
+		&tree.ShowCreateDatabase{}, &tree.ShowCreateTable{}, &tree.ShowCreateView{},
+		&tree.ShowTables{}, &tree.ShowColumns{}, &tree.ShowTableStatus{}, &tree.ShowIndex{},
+		&tree.ShowTableNumber{}, &tree.ShowColumnNumber{}, &tree.ShowTableValues{},
+	} {
+		require.True(t, preparedShowNeedsCatalogRefresh(stmt), "%T", stmt)
+	}
+	require.False(t, preparedShowNeedsCatalogRefresh(&tree.ShowDatabases{}))
+	require.False(t, preparedShowNeedsCatalogRefresh(&tree.Select{}))
+}
+
 func TestPrepareSchemaAccountID(t *testing.T) {
 	require.Equal(t, uint32(7), prepareSchemaAccountID(7, &plan.ObjectRef{SchemaName: "db", ObjName: "t"}))
 	require.Equal(t, uint32(11), prepareSchemaAccountID(7, &plan.ObjectRef{
@@ -1182,4 +1194,23 @@ func TestTxnComputationWrapperDoesNotPersistNormalLocalTraceOnCompileError(t *te
 	cwft.recordSchedulingTraceOnCompileError(context.Background())
 	assert.Nil(t, stmt.ExecPlan)
 	assert.True(t, motrace.StatementInfoFilter(stmt))
+}
+
+func TestRebuildPreparedShowRefreshesAdmission(t *testing.T) {
+	ses, prepared, _, execCtx := newPreparedExecuteEnv(t, 107)
+	prepared.PrepareStmt.Free()
+	prepared.PrepareStmt = tree.NewShowTables(false, false, "db", nil, nil)
+	prepared.Sql = "show tables from db"
+	defer prepared.Close()
+	show := prepared.PrepareStmt.(*tree.ShowTables)
+	show.Admission = tree.ShowTablesDatabaseAdmitted
+	for range 2 {
+		_, err := rebuildPreparePlan(execCtx, ses, prepared, func(_ context.Context, _ FeSession, _ plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+			inner := stmt.(*tree.PrepareStmt).Stmt.(*tree.ShowTables)
+			require.Equal(t, tree.ShowTablesUnadmitted, inner.Admission)
+			inner.Admission = tree.ShowTablesObjectAdmitted
+			return &plan2.Plan{}, nil
+		})
+		require.NoError(t, err)
+	}
 }

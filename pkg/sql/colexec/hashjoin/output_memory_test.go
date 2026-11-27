@@ -89,7 +89,7 @@ func TestJoinOutputBudgetScope(t *testing.T) {
 				wantBytes := int64(3*types.VarlenaSize + 40)
 				switch branch {
 				case "unmatched":
-					require.NoError(t, join.ctr.appendOneNotMatch(join, proc, 0))
+					require.NoError(t, join.ctr.appendOutputRow(join, proc, outputRow{left: join.ctr.leftBat}))
 				case "empty":
 					require.NoError(t, join.ctr.emptyProbe(join, proc, &result))
 					if controlled {

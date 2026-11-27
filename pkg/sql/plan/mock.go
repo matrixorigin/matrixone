@@ -396,6 +396,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"datname", types.T_varchar, false, 50, 0},
 			{"account_id", types.T_uint32, false, 0, 0},
 			{"dat_createsql", types.T_varchar, false, 1024, 0},
+			{"dat_id", types.T_uint64, false, 0, 0},
+			{"owner", types.T_uint32, false, 0, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},
@@ -421,6 +423,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"rel_version", types.T_uint32, false, 32, 0},
 			{"catalog_version", types.T_uint32, false, 32, 0},
 			{"extra_info", types.T_varchar, false, 0, 0},
+			{"rel_logical_id", types.T_uint64, false, 0, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0, 1},
@@ -488,6 +491,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"privilege_id", types.T_int32, false, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{3, 2, 1, 9, 0},
 	}
 	moSchema["mo_user_defined_function"] = &Schema{
 		cols: []col{

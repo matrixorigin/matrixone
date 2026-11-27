@@ -59,6 +59,20 @@ var PipelineFlushKey = pipelineFlushKeyType{}
 
 type SinkerOption func(*Sinker)
 
+// WithObjectReservation delegates unpublished object cleanup to the owner
+// that reserves each output before the built-in file sinker uploads it.
+func WithObjectReservation(reserve func(context.Context, objectio.ObjectId) error) SinkerOption {
+	return func(s *Sinker) {
+		factory := s.fSinker.factory
+		s.fSinker.factory = func(mp *mpool.MPool, fs fileservice.FileService) FileSinker {
+			writer := factory(mp, fs).(*FSinkerImpl)
+			writer.reserveObject = reserve
+			return writer
+		}
+		s.externalObjectCleanup = true
+	}
+}
+
 func WithAllMergeSorted() SinkerOption {
 	return func(sinker *Sinker) {
 		sinker.config.allMergeSorted = true
@@ -147,6 +161,8 @@ type FSinkerImpl struct {
 	mp     *mpool.MPool
 	fs     fileservice.FileService
 
+	reserveObject func(context.Context, objectio.ObjectId) error
+
 	sortKeyPos      int
 	isPrimaryKey    bool
 	isTombstone     bool
@@ -195,6 +211,11 @@ func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 }
 
 func (s *FSinkerImpl) Sync(ctx context.Context) (*objectio.ObjectStats, error) {
+	if s.reserveObject != nil {
+		if err := s.reserveObject(ctx, *s.writer.GetName().ObjectId()); err != nil {
+			return nil, err
+		}
+	}
 	if _, _, err := s.writer.Sync(ctx); err != nil {
 		return nil, err
 	}
@@ -399,6 +420,9 @@ func (s *sinkerStats) updateBytes(n int) {
 
 type Sinker struct {
 	closed bool
+
+	externalObjectCleanup bool
+
 	// Worker-owned sources keep their bitmap charge until destruction.
 	pipelineBitmapBytes atomic.Int64
 	schema              struct {
@@ -853,6 +877,10 @@ func (sinker *Sinker) cleanupUnpublishedRun(ctx context.Context) error {
 		sinker.staged.persisted = append(sinker.staged.persisted, sinker.pipe.result.persisted...)
 		sinker.pipe.result.persisted = nil
 		sinker.pipe.result.mu.Unlock()
+	}
+	if sinker.externalObjectCleanup {
+		sinker.staged.persisted = sinker.staged.persisted[:0]
+		return nil
 	}
 	names := make([]string, 0, len(sinker.staged.persisted))
 	for i := range sinker.staged.persisted {

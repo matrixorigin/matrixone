@@ -111,6 +111,13 @@ func WithUserTxn() TxnOption {
 	}
 }
 
+// WithCatalogMaintenance retains the catalog maintenance lock policy across CN transaction snapshots.
+func WithCatalogMaintenance() TxnOption {
+	return func(tc *txnOperator) {
+		tc.opts.options = tc.opts.options.WithCatalogMaintenance(true)
+	}
+}
+
 // WithTxnReadyOnly setup readonly flag
 func WithTxnReadyOnly() TxnOption {
 	return func(tc *txnOperator) {
@@ -269,13 +276,14 @@ func WithFootPrints(fp *footPrints) TxnOption {
 }
 
 type txnOperator struct {
-	sid             string
-	logger          *log.MOLogger
-	sender          rpc.TxnSender
-	clock           clock.Clock
-	lockService     lockservice.LockService
-	timestampWaiter TimestampWaiter
-	terminalCall    atomic.Uint32
+	sid                 string
+	logger              *log.MOLogger
+	sender              rpc.TxnSender
+	clock               clock.Clock
+	lockService         lockservice.LockService
+	timestampWaiter     TimestampWaiter
+	terminalCall        atomic.Uint32
+	lockAdmissionClosed atomic.Bool
 
 	mu struct {
 		sync.RWMutex
@@ -720,8 +728,11 @@ func (tc *txnOperator) initWithRunSQLGate(
 	tc.initReset(sealRunSQL)
 	tc.initProtectedFields(sealRunSQL)
 
+	// Lock routing is chosen for this transaction, including when the operator is reused.
+	tc.opts.options = tc.opts.options.WithCatalogMaintenance(false)
 	tc.mu.txn = txnMeta
 	tc.reset.txnID = txnMeta.ID
+	tc.lockAdmissionClosed.Store(false)
 	tc.reset.createAt = time.Now()
 	tc.reset.createTs, _ = tc.clock.Now()
 	for _, opt := range options {
@@ -1991,10 +2002,32 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 }
 
 func (tc *txnOperator) unlock(ctx context.Context) error {
-	if tc.reset.workspace != nil &&
-		tc.reset.workspace.Readonly() &&
-		len(tc.mu.lockTables) == 0 {
-		return nil
+	tc.lockAdmissionClosed.Store(true)
+	readOnlyWithoutLocks := tc.reset.workspace != nil &&
+		tc.reset.workspace.Readonly() && len(tc.mu.lockTables) == 0
+	if !tc.reset.commitNeedsResolution && (readOnlyWithoutLocks || tc.inRollback()) {
+		if resolver, ok := tc.lockService.(lockservice.RollbackCleanupResolver); ok {
+			internal := !tc.opts.options.UserTxn()
+			resolved := tc.reset.unknownCommitResolved
+			if internal && !tc.reset.internalUnknownCommitAdmissionHeld {
+				if tc.reset.tryAcquireUnknownCommit == nil || !tc.reset.tryAcquireUnknownCommit() {
+					// Preserve cleanup ownership when internal admission is full.
+					return tc.lockService.Unlock(ctx, tc.mu.txn.ID, timestamp.Timestamp{})
+				}
+				tc.reset.internalUnknownCommitAdmissionHeld = true
+			}
+			scheduled, err := resolver.ResolveRollbackCleanup(tc.mu.txn.ID, resolved)
+			if scheduled && err == nil {
+				tc.reset.unknownCommitResolutionTransferred = true
+				tc.reset.internalUnknownCommitAdmissionHeld = false
+			} else if internal {
+				tc.releaseInternalUnknownCommitAdmission()
+			}
+			return err
+		}
+		if readOnlyWithoutLocks {
+			return nil
+		}
 	}
 
 	if tc.reset.commitNeedsResolution {

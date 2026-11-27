@@ -21,7 +21,11 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,13 +33,16 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tencentyun/cos-go-sdk-v5"
 	"go.uber.org/zap"
 )
 
@@ -898,6 +905,7 @@ func TestS3PrefetchFile(t *testing.T) {
 		false,
 	)
 	assert.Nil(t, err)
+	defer fs.Close(ctx)
 
 	data := bytes.Repeat([]byte("abcd"), 2<<20)
 
@@ -919,6 +927,7 @@ func TestS3PrefetchFile(t *testing.T) {
 	assert.Nil(t, err)
 	err = fs.PrefetchFile(ctx, "foo/bar")
 	assert.Nil(t, err)
+	fs.FlushCache(ctx)
 
 	// read
 	lastHit := int64(0)
@@ -939,6 +948,158 @@ func TestS3PrefetchFile(t *testing.T) {
 		lastHit++
 	}
 
+}
+
+func TestS3PrefetchFileDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
+	ctx := context.Background()
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 20),
+		},
+		nil,
+		false,
+		false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{{
+			Size: 11,
+			Data: []byte("hello world"),
+		}},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	}))
+
+	syncStarted, unblock := installBlockedDiskCacheFileSync(fs.diskCache)
+	t.Cleanup(func() {
+		unblock()
+		fs.Close(ctx)
+	})
+
+	prefetchDone := make(chan error, 1)
+	go func() {
+		prefetchDone <- fs.PrefetchFile(ctx, "foo/bar")
+	}()
+	select {
+	case <-syncStarted:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async prefetch finalizer did not start")
+	}
+	select {
+	case err := <-prefetchDone:
+		require.NoError(t, err)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		unblock()
+		t.Fatalf("prefetch waited for disk finalization: %v", <-prefetchDone)
+	}
+
+	diskPath := fs.diskCache.pathForFile("foo/bar")
+	_, err = os.Stat(diskPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.True(t, fs.diskCache.isUpdating(diskPath))
+
+	unblock()
+	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
+	defer cancel()
+	fs.FlushCache(flushCtx)
+	require.NoError(t, flushCtx.Err())
+	data, err := os.ReadFile(diskPath)
+	require.NoError(t, err)
+	require.Equal(t, []byte("hello world"), data)
+}
+
+func TestS3FSWriteDiskCacheFinalizeMode(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		async bool
+	}{
+		{name: "async", async: true},
+		{name: "sync", async: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			fs, err := NewS3FS(
+				ctx,
+				ObjectStorageArguments{
+					Name:      "s3",
+					Endpoint:  "disk",
+					Bucket:    t.TempDir(),
+					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+				},
+				CacheConfig{
+					DiskPath:     ptrTo(t.TempDir()),
+					DiskCapacity: ptrTo[toml.ByteSize](1 << 20),
+				},
+				nil,
+				false,
+				false,
+			)
+			require.NoError(t, err)
+			fs.SetAsyncUpdate(test.async)
+
+			syncStarted, unblock := installBlockedDiskCacheFileSync(fs.diskCache)
+			t.Cleanup(func() {
+				unblock()
+				fs.Close(ctx)
+			})
+
+			writeDone := make(chan error, 1)
+			go func() {
+				writeDone <- fs.Write(ctx, IOVector{
+					FilePath: "foo/bar",
+					Entries: []IOEntry{{
+						Size: 11,
+						Data: []byte("hello world"),
+					}},
+				})
+			}()
+			select {
+			case <-syncStarted:
+			case <-time.After(diskCacheLifecycleTestTimeout):
+				t.Fatal("disk-cache finalization did not start")
+			}
+
+			diskPath := fs.diskCache.pathForFile("foo/bar")
+			require.True(t, fs.diskCache.isUpdating(diskPath))
+			if test.async {
+				select {
+				case err := <-writeDone:
+					require.NoError(t, err)
+				case <-time.After(diskCacheLifecycleTestTimeout):
+					unblock()
+					t.Fatalf("async write waited for disk finalization: %v", <-writeDone)
+				}
+				_, err = os.Stat(diskPath)
+				require.ErrorIs(t, err, os.ErrNotExist)
+			} else {
+				select {
+				case err := <-writeDone:
+					t.Fatalf("synchronous write returned before disk finalization: %v", err)
+				case <-time.After(50 * time.Millisecond):
+				}
+			}
+
+			unblock()
+			if !test.async {
+				require.NoError(t, <-writeDone)
+			}
+			flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
+			defer cancel()
+			fs.FlushCache(flushCtx)
+			require.NoError(t, flushCtx.Err())
+			data, err := os.ReadFile(diskPath)
+			require.NoError(t, err)
+			require.Equal(t, []byte("hello world"), data)
+		})
+	}
 }
 
 func TestS3FSFullObjectDiskCacheFillDoesNotRetainWholeObjectBuffer(t *testing.T) {
@@ -993,6 +1154,13 @@ func TestS3FSFullObjectDiskCacheFillDoesNotRetainWholeObjectBuffer(t *testing.T)
 	assert.Less(t, cap(vec.Entries[0].Data), len(data)/16)
 	assert.Equal(t, int64(1), pcSet.FileService.S3.Get.Load())
 	vec.Release()
+
+	// A read in async-update mode guarantees cache admission, not publication.
+	// Wait on the explicit barrier before asserting that a later read hits disk.
+	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
+	defer cancel()
+	fs.FlushCache(flushCtx)
+	require.NoError(t, flushCtx.Err())
 
 	hitVec := &IOVector{
 		FilePath: "foo/bar",
@@ -1068,6 +1236,95 @@ func TestS3FSFullObjectDiskCacheFillDoesNotReturnWholeObjectDataWithCachedData(t
 	vec.Release()
 }
 
+type diskCacheWaitLocker struct {
+	sync.Mutex
+	unlocked chan struct{}
+}
+
+func (l *diskCacheWaitLocker) Unlock() {
+	l.Mutex.Unlock()
+	select {
+	case l.unlocked <- struct{}{}:
+	default:
+	}
+}
+
+func TestS3FSRangeCacheWaitStopsOnCancel(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy Policy
+	}{
+		{name: "reading the cache entry"},
+		{name: "filling the cache entry", policy: SkipDiskCacheReads},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			store, err := NewS3FS(
+				ctx,
+				ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()},
+				CacheConfig{DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](1 << 20)},
+				nil, false, false,
+			)
+			require.NoError(t, err)
+			defer store.Close(ctx)
+			store.SetAsyncUpdate(false) // exercise caller cancellation while a synchronous fill waits
+
+			const path = "history/object"
+			require.NoError(t, store.Write(ctx, IOVector{
+				FilePath: path,
+				Entries:  []IOEntry{{Size: 5, Data: []byte("abcde")}},
+				Policy:   SkipAllCache,
+			}))
+
+			cache := store.diskCache
+			locker := &diskCacheWaitLocker{unlocked: make(chan struct{}, 1)}
+			cache.updatingPaths.Cond = sync.NewCond(locker)
+			vector := &IOVector{
+				FilePath: path,
+				Entries:  []IOEntry{{Offset: 1, Size: 3}},
+				Policy:   tc.policy | SkipFullFilePreloads,
+			}
+			diskPath := cache.pathForIOEntry(path, vector.Entries[0])
+			release := holdDiskCacheUpdate(t, cache, diskPath)
+			<-locker.unlocked
+			readCtx, cancel := context.WithCancel(ctx)
+			done := make(chan struct{})
+			var readErr error
+			go func() {
+				defer close(done)
+				readErr = store.Read(readCtx, vector)
+			}()
+			defer func() {
+				cancel()
+				release()
+				<-done
+				vector.Release()
+			}()
+
+			select {
+			case <-locker.unlocked:
+			case <-done:
+				t.Fatalf("read returned before encountering the held range: %v", readErr)
+			case <-time.After(2 * time.Second):
+				t.Fatal("read did not reach the held disk-cache range")
+			}
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("cancellation left the read waiting for the cache writer")
+			}
+			if tc.policy.Any(SkipDiskCacheReads) {
+				require.NoError(t, readErr)
+				require.Equal(t, []byte("bcd"), vector.Entries[0].Data)
+			} else {
+				require.ErrorIs(t, readErr, context.Canceled)
+			}
+			require.True(t, cache.isUpdating(diskPath), "cancelling a waiter must not release the writer")
+		})
+	}
+}
+
 func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 	ctx := context.Background()
 	fs, err := NewS3FS(
@@ -1103,7 +1360,7 @@ func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 	assert.Nil(t, err)
 
 	updatingPath := fs.diskCache.pathForFile("foo/bar")
-	doneUpdate := fs.diskCache.startUpdate(updatingPath)
+	doneUpdate := holdDiskCacheUpdate(t, fs.diskCache, updatingPath)
 	released := false
 	release := func() {
 		if !released {
@@ -1553,6 +1810,9 @@ func TestS3FSRangeMergeWaitHasBoundedFallback(t *testing.T) {
 		false,
 	)
 	require.NoError(t, err)
+	// This virtual clock measures the merger wait. An async disk worker
+	// created inside the bubble would wait on channels owned outside it.
+	fs.SetAsyncUpdate(false)
 	safeToRelease := true
 	t.Cleanup(func() {
 		if safeToRelease {
@@ -1945,6 +2205,534 @@ func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotOpenReaderWhenCacheExists(
 	assert.Nil(t, err)
 	assert.False(t, done)
 	assert.Zero(t, getReaderCalls)
+}
+
+// Count bytes consumed, not just the ranges passed to ObjectStorage.Read.
+// The fixture drives prefetch and foreground reads serially.
+type cacheFillReadMeter struct {
+	ObjectStorage
+	bytes         atomic.Int64
+	opens, closes int
+	beforeOpen    func() error
+	afterClose    func()
+}
+
+func (m *cacheFillReadMeter) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
+	if m.beforeOpen != nil {
+		if err := m.beforeOpen(); err != nil {
+			return nil, err
+		}
+	}
+	r, err := m.ObjectStorage.Read(ctx, key, min, max)
+	if err != nil {
+		return nil, err
+	}
+	m.opens++
+	return &readCloser{r: &countingReader{R: r, C: &m.bytes}, closeFunc: func() error {
+		m.closes++
+		err := r.Close()
+		if m.afterClose != nil {
+			m.afterClose()
+		}
+		return err
+	}}, nil
+}
+
+func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
+	const far = 9 << 20
+	data := make([]byte, far+4096)
+	for i := range data {
+		data[i] = byte(i*31 + i/251)
+	}
+	injected := errors.New("second range read failed")
+	for _, tc := range []struct {
+		name                    string
+		second, size, wantBytes int64
+		wantOpens               int
+		wantErr                 error
+	}{
+		{"many-published", far, 1, 0, 0, nil},
+		{"many-missing", far, 1, far - 4096 + 1, 1, nil},
+		{"partly-published", far, 17, 17, 1, nil},
+		{"sparse", far, 17, 30, 2, nil},
+		{"dense", 4112, 17, 33, 1, nil},
+		{"to-end", far, -1, 4096, 1, nil},
+		{"second-range-error", far, 17, 13, 1, injected},
+		{"cancel-between-ranges", far, 17, 13, 1, context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var counter perfcounter.CounterSet
+			ctx = perfcounter.WithCounterSet(ctx, &counter)
+			fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{
+				DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](32 << 20), MemoryCapacity: ptrTo[toml.ByteSize](0),
+			}, nil, false, true)
+			require.NoError(t, err)
+			defer fs.Close(t.Context())
+			const path = "object"
+			require.NoError(t, fs.Write(ctx, IOVector{FilePath: path, Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache}))
+			m := &cacheFillReadMeter{ObjectStorage: fs.storage}
+			fs.storage = m
+			v := &IOVector{FilePath: path, Entries: []IOEntry{{Offset: 4096, Size: 13}, {Offset: tc.second, Size: tc.size}}}
+			defer v.Release()
+			if tc.size < 0 {
+				v.Entries = v.Entries[1:]
+			}
+			if strings.HasPrefix(tc.name, "many-") {
+				v.Entries = nil
+				for i := int64(0); i < 64; i++ {
+					v.Entries = append(v.Entries, IOEntry{Offset: 4096 + i*(far-4096)/63, Size: 1})
+				}
+			}
+			// Preserve a real partial cache hit in the sparse fallback.
+			if tc.name == "sparse" {
+				hit := IOEntry{Offset: 100, Size: 3, Data: data[100:103]}
+				require.NoError(t, fs.diskCache.Update(ctx, &IOVector{FilePath: path, Entries: []IOEntry{hit}}, false))
+				v.Entries = append([]IOEntry{{Offset: hit.Offset, Size: hit.Size}}, v.Entries...)
+			}
+			// Disk lookup precedes remote lookup. Publish synchronously at this
+			// boundary: the foreground request missed the file but its SetFile
+			// will find it. No sleeps or production scheduling hooks are needed.
+			readDone := make(chan struct{})
+			var updateDone chan struct{}
+			var updateGuardExpired bool
+			finishRead := sync.OnceFunc(func() {
+				close(readDone)
+				if updateDone != nil {
+					<-updateDone
+				}
+			})
+			defer finishRead()
+			fs.remoteCache = NewRemoteCache(nil, func() client.KeyRouter[fscache.CacheKey] {
+				require.NoError(t, fs.PrefetchFile(ctx, path))
+				fs.diskCache.Flush(ctx)
+				require.Equal(t, int64(len(data)), m.bytes.Load())
+				require.Equal(t, 1, m.opens)
+				require.Equal(t, 1, m.closes)
+				if tc.name == "many-published" && updateDone == nil {
+					// This update started after the initial disk lookup. Reusing
+					// the full file must not wait for an unrelated entry writer.
+					entryPath := fs.diskCache.pathForIOEntry(path, v.Entries[0])
+					finish := holdDiskCacheUpdate(t, fs.diskCache, entryPath)
+					updateDone = make(chan struct{})
+					go func() {
+						defer close(updateDone)
+						defer finish()
+						timer := time.NewTimer(5 * time.Second)
+						defer timer.Stop()
+						select {
+						case <-readDone:
+						case <-timer.C:
+							updateGuardExpired = true
+						}
+					}()
+				}
+				if tc.name != "many-published" {
+					// A short local file cannot satisfy the requested ranges. SetFile
+					// still skips it; the foreground request must fall back to storage.
+					usable := int64(3)
+					if tc.name == "partly-published" {
+						usable = 4109
+					} // covers only the first missing entry
+					require.NoError(t, os.Truncate(fs.diskCache.pathForFile(path), usable))
+				}
+				if tc.wantErr == context.Canceled {
+					m.afterClose = cancel
+					m.beforeOpen = func() error {
+						require.NoError(t, ctx.Err(), "must not attempt another read after cancellation")
+						return nil
+					}
+				} else if tc.wantErr != nil {
+					m.beforeOpen = func() error {
+						if m.opens == 2 {
+							return injected
+						}
+						return nil
+					}
+				}
+				return nil
+			})
+			err = fs.Read(ctx, v)
+			finishRead()
+			require.False(t, updateGuardExpired, "full file recheck waited for an entry update")
+			if tc.wantErr == nil {
+				require.NoError(t, err)
+				for _, e := range v.Entries {
+					require.Equal(t, data[e.Offset:e.Offset+e.Size], e.Data)
+				}
+			} else {
+				require.ErrorIs(t, err, tc.wantErr)
+				require.Equal(t, data[4096:4109], v.Entries[0].Data)
+				require.Empty(t, v.Entries[1].Data)
+			}
+			require.Equal(t, tc.wantBytes, m.bytes.Load()-int64(len(data)), "foreground bytes consumed")
+			require.Equal(t, tc.wantOpens, m.opens-1)
+			require.Equal(t, m.opens, m.closes)
+			if tc.name == "many-published" {
+				require.NotNil(t, updateDone, "fixture must park an entry update")
+				require.EqualValues(t, 64, counter.FileService.DiskReadSize.Load())
+				require.Zero(t, counter.FileService.S3ReadSize.Load())
+			}
+			if tc.name == "partly-published" {
+				require.EqualValues(t, 13, counter.FileService.DiskReadSize.Load())
+				require.EqualValues(t, 17, counter.FileService.S3ReadSize.Load())
+			}
+			warm := &IOVector{FilePath: path, Entries: []IOEntry{{Offset: 0, Size: 3}}}
+			defer warm.Release()
+			require.NoError(t, fs.Read(t.Context(), warm))
+			require.Equal(t, data[:3], warm.Entries[0].Data)
+			require.Equal(t, tc.wantOpens, m.opens-1, "a new read should hit the published file")
+		})
+	}
+}
+
+// Count the HTTP body written by the endpoint, including bytes the SDK drains
+// on Close, rather than bytes returned by ObjectStorage.Read to S3FS.
+type rangeResponseWriter struct {
+	http.ResponseWriter
+	n      int64
+	status int
+}
+
+func (w *rangeResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *rangeResponseWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	w.n += int64(n)
+	return n, err
+}
+
+func TestS3FSSkippedFillHTTPRanges(t *testing.T) {
+	const far = 9 << 20
+	data := make([]byte, 16<<20)
+	data[0], data[far] = 'a', 'b'
+	for _, backend := range []string{"minio", "aws", "cos", "oss"} {
+		for _, mode := range []string{"sparse", "at-eof", "past-eof-fixed", "not-found"} {
+			t.Run(backend+"/"+mode, func(t *testing.T) {
+				var mu sync.Mutex
+				var ranges []string
+				var statuses []int
+				var bodyBytes int64
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("ETag", `"test"`)
+					out := &rangeResponseWriter{ResponseWriter: w}
+					defer func() {
+						if r.Method == http.MethodGet {
+							mu.Lock()
+							defer mu.Unlock()
+							ranges = append(ranges, r.Header.Get("Range"))
+							statuses = append(statuses, out.status)
+							bodyBytes += out.n
+						}
+					}()
+					if mode == "not-found" || mode == "at-eof" || mode == "past-eof-fixed" {
+						w.Header().Set("Content-Type", "application/xml")
+						if mode == "not-found" {
+							out.WriteHeader(http.StatusNotFound)
+							_, _ = io.WriteString(out, `<Error><Code>NoSuchKey</Code><Message>Not found</Message></Error>`)
+						} else {
+							out.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+							_, _ = io.WriteString(out, `<Error><Code>InvalidRange</Code><Message>Outside object</Message></Error>`)
+						}
+						return
+					}
+					http.ServeContent(out, r, "object", time.Unix(1, 0), bytes.NewReader(data))
+				}))
+				defer srv.Close()
+				ctx := t.Context()
+				fs, err := NewS3FS(ctx, ObjectStorageArguments{
+					Name: "s3", Endpoint: srv.URL, Bucket: "bucket", Region: "us-east-1", IsMinio: backend == "minio",
+					NoBucketValidation: true, KeyID: "id", KeySecret: "secret",
+				}, CacheConfig{
+					DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](32 << 20), MemoryCapacity: ptrTo[toml.ByteSize](0),
+				}, nil, false, true)
+				require.NoError(t, err)
+				defer fs.Close(ctx)
+				// The production router recognizes vendor hostnames; point the real
+				// clients directly at the loopback endpoint instead.
+				switch backend {
+				case "cos":
+					u, err := url.Parse(srv.URL)
+					require.NoError(t, err)
+					c := cos.NewClient(&cos.BaseURL{BucketURL: u}, srv.Client())
+					c.Conf.RetryOpt.Count = 0
+					fs.storage = &QCloudSDK{client: c}
+				case "oss":
+					c, err := oss.New(srv.URL, "id", "secret", oss.UseCname(true), oss.HTTPClient(srv.Client()))
+					require.NoError(t, err)
+					b, err := c.Bucket("bucket")
+					require.NoError(t, err)
+					fs.storage = &AliyunSDK{bucket: b}
+				}
+				fs.remoteCache = NewRemoteCache(nil, func() client.KeyRouter[fscache.CacheKey] {
+					require.NoError(t, fs.diskCache.SetFile(ctx, "object", func(context.Context) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(nil)), nil }))
+					return nil
+				})
+				v := IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 0, Size: 1}, {Offset: far, Size: 1}}}
+				defer v.Release()
+				if mode == "at-eof" || mode == "not-found" {
+					v.Entries = []IOEntry{{Offset: int64(len(data)), Size: -1}}
+				} else if mode == "past-eof-fixed" {
+					v.Entries = []IOEntry{{Offset: int64(len(data)) + 1, Size: 1}}
+				}
+				err = fs.Read(ctx, &v)
+				srv.Close() // join handlers before inspecting byte counts
+				switch mode {
+				case "sparse":
+					require.NoError(t, err)
+					require.Equal(t, []byte{'a'}, v.Entries[0].Data)
+					require.Equal(t, []byte{'b'}, v.Entries[1].Data)
+					require.Equal(t, int64(2), bodyBytes, "HTTP response body bytes")
+					require.Equal(t, []string{"bytes=0-0", "bytes=9437184-9437184"}, ranges)
+				case "at-eof":
+					require.Equal(t, []int{http.StatusRequestedRangeNotSatisfiable}, statuses)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrEmptyRange), "%v", err)
+				case "past-eof-fixed":
+					require.Equal(t, []int{http.StatusRequestedRangeNotSatisfiable}, statuses)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF), "%v", err)
+				case "not-found":
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotWaitForAsyncFinalize(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+
+	syncStarted, unblock := installBlockedDiskCacheFileSync(cache)
+	t.Cleanup(func() {
+		unblock()
+		cache.Close(ctx)
+	})
+
+	s3 := &S3FS{
+		diskCache:   cache,
+		asyncUpdate: true,
+	}
+	vector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{{
+			Offset: 1,
+			Size:   4,
+		}},
+	}
+	type result struct {
+		done bool
+		err  error
+	}
+	readDone := make(chan result, 1)
+	go func() {
+		done, err := s3.readFullObjectToDiskCacheStreaming(
+			ctx,
+			vector,
+			"foo/bar",
+			func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader([]byte("hello world"))), nil
+			},
+		)
+		readDone <- result{done: done, err: err}
+	}()
+
+	select {
+	case <-syncStarted:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async full-object finalizer did not start")
+	}
+	select {
+	case result := <-readDone:
+		require.NoError(t, result.err)
+		require.True(t, result.done)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		unblock()
+		result := <-readDone
+		t.Fatalf("full-object read waited for disk finalization: %v", result.err)
+	}
+	require.Equal(t, []byte("ello"), vector.Entries[0].Data)
+	// The streaming helper fills Data but leaves done unchanged for its caller,
+	// matching the existing full-object streaming contract.
+	require.False(t, vector.Entries[0].done)
+	require.True(t, cache.isUpdating(cache.pathForFile("foo/bar")))
+
+	unblock()
+	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
+	defer cancel()
+	cache.Flush(flushCtx)
+	require.NoError(t, flushCtx.Err())
+}
+
+func TestS3FSReadIOMergerReleaseMatchesDiskFinalizeMode(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		async bool
+	}{
+		{name: "async", async: true},
+		{name: "sync", async: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			fs, err := NewS3FS(
+				ctx,
+				ObjectStorageArguments{
+					Name:      "s3",
+					Endpoint:  "disk",
+					Bucket:    t.TempDir(),
+					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+				},
+				CacheConfig{
+					DiskPath:     ptrTo(t.TempDir()),
+					DiskCapacity: ptrTo[toml.ByteSize](1 << 20),
+				},
+				nil,
+				false,
+				false,
+			)
+			require.NoError(t, err)
+			require.NoError(t, fs.Write(ctx, IOVector{
+				FilePath: "foo/bar",
+				Entries: []IOEntry{{
+					Size: 11,
+					Data: []byte("hello world"),
+				}},
+				Policy: SkipDiskCache | SkipMemoryCache,
+			}))
+			fs.SetAsyncUpdate(test.async)
+
+			syncStarted, unblock := installBlockedDiskCacheFileSync(fs.diskCache)
+			t.Cleanup(func() {
+				unblock()
+				fs.Close(ctx)
+			})
+
+			vector := &IOVector{
+				FilePath: "foo/bar",
+				Entries:  []IOEntry{{Offset: 1, Size: 4}},
+			}
+			t.Cleanup(vector.Release)
+			mergeKey := fs.readMergeKey(vector)
+			readDone := make(chan error, 1)
+			go func() { readDone <- fs.Read(ctx, vector) }()
+			select {
+			case <-syncStarted:
+			case <-time.After(diskCacheLifecycleTestTimeout):
+				t.Fatal("full-object disk-cache finalization did not start")
+			}
+
+			if test.async {
+				select {
+				case err := <-readDone:
+					require.NoError(t, err)
+				case <-time.After(diskCacheLifecycleTestTimeout):
+					unblock()
+					t.Fatalf("async full-object read waited for disk finalization: %v", <-readDone)
+				}
+				require.False(t, fs.ioMerger.IsMerging(mergeKey))
+				require.True(t, fs.diskCache.isUpdating(fs.diskCache.pathForFile("foo/bar")))
+			} else {
+				require.True(t, fs.ioMerger.IsMerging(mergeKey))
+				select {
+				case err := <-readDone:
+					t.Fatalf("synchronous full-object read returned before disk finalization: %v", err)
+				case <-time.After(50 * time.Millisecond):
+				}
+			}
+
+			unblock()
+			if !test.async {
+				require.NoError(t, <-readDone)
+			}
+			require.Equal(t, []byte("ello"), vector.Entries[0].Data)
+			flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
+			defer cancel()
+			fs.FlushCache(flushCtx)
+			require.NoError(t, flushCtx.Err())
+			require.False(t, fs.ioMerger.IsMerging(mergeKey))
+		})
+	}
+}
+
+func TestS3FSRangeFollowerDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
+	originalShortWait := shortIOWaitDuration
+	shortIOWaitDuration = 5 * time.Millisecond
+	t.Cleanup(func() { shortIOWaitDuration = originalShortWait })
+
+	var pcSet perfcounter.CounterSet
+	ctx := perfcounter.WithCounterSet(context.Background(), &pcSet)
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 20),
+		},
+		nil,
+		false,
+		false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries:  []IOEntry{{Size: 11, Data: []byte("hello world")}},
+		Policy:   SkipDiskCache | SkipMemoryCache,
+	}))
+
+	syncStarted, unblock := installBlockedDiskCacheFileSync(fs.diskCache)
+	t.Cleanup(func() {
+		unblock()
+		fs.Close(ctx)
+	})
+
+	newVector := func() *IOVector {
+		return &IOVector{
+			FilePath: "foo/bar",
+			Entries:  []IOEntry{{Offset: 1, Size: 4}},
+			Policy:   SkipFullFilePreloads,
+		}
+	}
+	leader := newVector()
+	defer leader.Release()
+	require.NoError(t, fs.Read(ctx, leader))
+	require.Equal(t, []byte("ello"), leader.Entries[0].Data)
+	select {
+	case <-syncStarted:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async range finalizer did not start")
+	}
+
+	follower := newVector()
+	defer follower.Release()
+	followerDone := make(chan error, 1)
+	go func() { followerDone <- fs.Read(ctx, follower) }()
+	select {
+	case err := <-followerDone:
+		require.NoError(t, err)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		unblock()
+		<-followerDone
+		t.Fatal("range follower waited for async disk finalization")
+	}
+	require.Equal(t, []byte("ello"), follower.Entries[0].Data)
+	require.Equal(t, int64(2), pcSet.FileService.S3.Get.Load())
+	diskPath := fs.diskCache.pathForIOEntry("foo/bar", follower.Entries[0])
+	require.True(t, fs.diskCache.isUpdating(diskPath))
+
+	unblock()
+	flushCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	fs.FlushCache(flushCtx)
+	require.NoError(t, flushCtx.Err())
 }
 
 func TestS3FSReadFullObjectToDiskCacheStreamingReturnsReaderError(t *testing.T) {
@@ -2418,13 +3206,22 @@ func BenchmarkS3FSAllocateCacheData(b *testing.B) {
 
 func TestS3FSFromSpecs(t *testing.T) {
 
-	for _, args := range objectStorageArgumentsForTest("test", t) {
-
+	for _, spec := range prefixAwareStorageTestSpecs(t) {
+		args := spec.args
 		t.Run(args.Name, func(t *testing.T) {
+			csPrefix := spec.scopedCS
+			fixturePrefix := args.KeyPrefix
+			if csPrefix {
+				prepareCITestStorage(t, args)
+			}
 
 			testFileServiceWithContext(t, 0, func(ctx context.Context, name string) FileService {
 				args.Name = name
-				args.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
+				if csPrefix {
+					args.KeyPrefix = path.Join(fixturePrefix, time.Now().Format("2006-01-02.15:04:05.000000"))
+				} else {
+					args.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
+				}
 
 				fs, err := NewS3FS(
 					ctx,
@@ -2449,4 +3246,293 @@ func TestS3FSFromSpecs(t *testing.T) {
 
 	}
 
+}
+
+func TestS3FSCloseDrainsDiskBeforeDirectoryReuse(t *testing.T) {
+	for _, mode := range []string{"active decode", "retry after expired close"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), diskCacheLifecycleTestTimeout)
+			defer cancel()
+			args := ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}
+			config := CacheConfig{
+				MemoryCapacity: ptrTo[toml.ByteSize](1 << 20),
+				DiskCapacity:   ptrTo[toml.ByteSize](1 << 20),
+				DiskPath:       ptrTo(t.TempDir()),
+			}
+			openFS := func() *S3FS {
+				fs, err := NewS3FS(ctx, args, config, nil, false, false)
+				require.NoError(t, err)
+				t.Cleanup(func() { fs.Close(context.Background()) })
+				return fs
+			}
+
+			old := openFS()
+			if mode == "active decode" {
+				// Hold the same scope that S3FS.Read releases after a shared decode.
+				require.True(t, old.decodedReads.beginRead())
+				t.Cleanup(old.decodedReads.endRead)
+			}
+			started, release := installBlockedDiskCacheFileSync(old.diskCache)
+			t.Cleanup(release)
+			require.NoError(t, old.Write(ctx, IOVector{FilePath: "obj", Policy: SkipAllCache, Entries: []IOEntry{{Size: 3, Data: []byte("old")}}}))
+			require.NoError(t, old.PrefetchFile(ctx, "obj"))
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal("old file sync did not start")
+			}
+			if mode == "retry after expired close" {
+				expired, stop := context.WithDeadline(ctx, time.Unix(1, 0))
+				defer stop()
+				old.Close(expired)
+			}
+			wait := &waitStartedContext{Context: ctx, started: make(chan struct{})}
+			done := make(chan struct{})
+			go func() { old.Close(wait); close(done) }()
+			select {
+			case <-wait.started:
+				release()
+			case <-done:
+				t.Fatal("Close returned with an old disk publication still blocked")
+			case <-ctx.Done():
+				t.Fatal("Close did not reach its disk drain")
+			}
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Fatal("Close did not join the released worker")
+			}
+			require.NoError(t, ctx.Err())
+
+			next := openFS()
+			next.SetAsyncUpdate(false)
+			require.NoError(t, next.Delete(ctx, "obj"))
+			require.NoError(t, next.Write(ctx, IOVector{FilePath: "obj", Entries: []IOEntry{{Size: 3, Data: []byte("new")}}}))
+			for _, policy := range []Policy{SkipAllCache, SkipMemoryCache} {
+				v := &IOVector{FilePath: "obj", Policy: policy, Entries: []IOEntry{{Size: 3}}}
+				t.Cleanup(v.Release)
+				require.NoError(t, next.Read(ctx, v))
+				require.Equal(t, "new", string(v.Entries[0].Data))
+				if policy == SkipMemoryCache {
+					require.Same(t, next.diskCache, v.Entries[0].fromCache)
+				}
+			}
+		})
+	}
+}
+
+func TestS3FSPrefetchCanonicalObject(t *testing.T) {
+	for _, path := range []string{"foo/bar", "replay:foo/bar"} {
+		t.Run(path, func(t *testing.T) {
+			fs := newReplayWriteTestFS(t)
+			ctx := t.Context()
+			require.NoError(t, fs.Write(ctx, IOVector{
+				FilePath: "replay:foo/bar", Policy: SkipAllCache, Entries: []IOEntry{{Size: 3, Data: []byte("abc")}},
+			}))
+			require.NoError(t, fs.PrefetchFile(ctx, path))
+			require.Equal(t, []byte("abc"), readReplayCache(t, fs, "foo/bar"))
+			require.True(t, moerr.IsMoErrCode(fs.PrefetchFile(ctx, "replay:missing"), moerr.ErrFileNotFound))
+			require.True(t, moerr.IsMoErrCode(fs.PrefetchFile(ctx, "elsewhere:foo/bar"), moerr.ErrWrongService))
+		})
+	}
+}
+
+type cancelingReadWriter struct {
+	bytes.Buffer
+	cancel context.CancelFunc
+	err    error
+}
+
+func (w *cancelingReadWriter) Write(p []byte) (int, error) {
+	defer w.cancel()
+	if w.err != nil {
+		return 0, w.err
+	}
+	return w.Buffer.Write(p)
+}
+
+func TestS3FSBufferedReadCancellationAfterDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		writerErr error
+		missing   bool
+	}{
+		{name: "delivered"},
+		{name: "writer failed", writerErr: io.ErrClosedPipe},
+		{name: "source missing", missing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := newReplayWriteTestFS(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if !tc.missing {
+				require.NoError(t, fs.Write(ctx, IOVector{FilePath: "obj", Policy: SkipAllCache, Entries: []IOEntry{{Size: 3, Data: []byte("abc")}}}))
+			}
+			w := &cancelingReadWriter{cancel: cancel, err: tc.writerErr}
+			v := &IOVector{FilePath: "obj", Entries: []IOEntry{{Size: 1}, {Offset: 1, Size: 2, WriterForRead: w}}}
+			defer v.ReleaseReadResultOnError()
+			err := fs.Read(ctx, v)
+			if tc.missing {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+				require.NoError(t, ctx.Err(), "writer must not run on source failure")
+				return
+			}
+			require.Equal(t, "a", string(v.Entries[0].Data))
+			require.ErrorIs(t, ctx.Err(), context.Canceled)
+			if tc.writerErr != nil {
+				require.ErrorIs(t, err, tc.writerErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "bc", w.String())
+		})
+	}
+}
+
+type cancelAfterStorageDelete struct {
+	ObjectStorage
+	cancel context.CancelFunc
+}
+
+func (s cancelAfterStorageDelete) Delete(ctx context.Context, keys ...string) error {
+	err := s.ObjectStorage.Delete(ctx, keys...)
+	if err == nil {
+		s.cancel()
+	}
+	return err
+}
+
+func TestS3FSCommittedDeleteSurvivesCancellation(t *testing.T) {
+	ctx, stop := context.WithTimeout(t.Context(), diskCacheLifecycleTestTimeout)
+	defer stop()
+	fs := newReplayWriteTestFS(t)
+	write := func(path, value string) {
+		t.Helper()
+		require.NoError(t, fs.Write(ctx, IOVector{FilePath: path, Policy: SkipAllCache,
+			Entries: []IOEntry{{Size: int64(len(value)), Data: []byte(value)}}}))
+	}
+	for _, key := range []string{"published", "pending", "queued", "keep"} {
+		write(key, "old")
+	}
+	for _, key := range []string{"published", "keep"} {
+		require.NoError(t, fs.PrefetchFile(ctx, key))
+		require.Equal(t, []byte("old"), readReplayCache(t, fs, key))
+	}
+
+	// Hold a full-file fill before rename. A range fill for another deleted
+	// object must then still be in the worker queue at the time of deletion.
+	started, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	fs.diskCache.beforeFilePublication = sync.OnceFunc(func() { close(started); <-resume })
+	require.NoError(t, fs.PrefetchFile(ctx, "pending"))
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("pending fill did not reach publication")
+	}
+	entry := IOEntry{Size: 3, Data: []byte("old")}
+	require.NoError(t, fs.diskCache.Update(ctx, &IOVector{FilePath: "queued", Entries: []IOEntry{entry}}, true))
+
+	request, cancel := context.WithCancel(ctx)
+	defer cancel()
+	fs.storage = cancelAfterStorageDelete{fs.storage, cancel}
+	require.ErrorIs(t, fs.Delete(request, "replay:published", "pending", "queued"), context.Canceled)
+	require.NoFileExists(t, fs.diskCache.pathForFile("published"))
+	check := func(key string, policy Policy, want string) {
+		t.Helper()
+		v := &IOVector{FilePath: key, Policy: policy, Entries: []IOEntry{{Size: 3}}}
+		defer v.Release()
+		err := fs.Read(ctx, v)
+		if want == "" {
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%s: %q, %v", key, v.Entries[0].Data, err)
+			return
+		}
+		require.NoError(t, err)
+		require.Equal(t, want, string(v.Entries[0].Data))
+		if policy == SkipMemoryCache {
+			require.Same(t, fs.diskCache, v.Entries[0].fromCache)
+		}
+	}
+	for _, key := range []string{"published", "pending", "queued"} {
+		check(key, SkipAllCache, "")
+		check(key, SkipMemoryCache, "")
+		write(key, "new")
+	}
+	check("keep", SkipMemoryCache, "old")
+	release()
+	fs.FlushCache(ctx)
+	require.NoFileExists(t, fs.diskCache.pathForFile("pending"))
+	require.NoFileExists(t, fs.diskCache.pathForIOEntry("queued", entry))
+	for _, key := range []string{"published", "pending", "queued"} {
+		check(key, SkipAllCache, "new")
+		require.NoError(t, fs.PrefetchFile(ctx, key))
+		fs.FlushCache(ctx)
+		check(key, SkipMemoryCache, "new")
+	}
+}
+
+func TestS3FSPrefetchBoundsStagedFullFiles(t *testing.T) {
+	const capacity = 1 << 20
+	ctx, cancel := context.WithTimeout(t.Context(), diskCacheLifecycleTestTimeout)
+	defer cancel()
+	dir := t.TempDir()
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{
+		DiskPath: &dir, DiskCapacity: ptrTo[toml.ByteSize](capacity),
+	}, nil, false, false)
+	require.NoError(t, err)
+	defer fs.Close(context.Background())
+
+	data := bytes.Repeat([]byte("abcd"), capacity/16)
+	keys := strings.Fields("a b c d e f g h i j k l m n o p")
+	for _, key := range keys {
+		require.NoError(t, fs.Write(ctx, IOVector{FilePath: key, Policy: SkipAllCache,
+			Entries: []IOEntry{{Size: int64(len(data)), Data: data}}}))
+	}
+
+	started, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	blockFirst := sync.OnceFunc(func() { close(started); <-resume })
+	fs.diskCache.fileSync = func(*os.File) error { blockFirst(); return nil }
+	require.NoError(t, fs.PrefetchFile(ctx, keys[0]))
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("prefetch did not reach sync")
+	}
+	for _, key := range keys[1:] {
+		require.NoError(t, fs.PrefetchFile(ctx, key))
+	}
+
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	var staged int64
+	for _, f := range files {
+		require.True(t, strings.HasSuffix(f.Name(), cacheFileTempSuffix))
+		info, err := f.Info()
+		require.NoError(t, err)
+		staged += info.Size()
+	}
+	require.Zero(t, fs.diskCache.cache.Used())
+	require.Equal(t, int64(capacity), staged, "temporary files must share the disk budget")
+
+	// An optional fill under pressure must still deliver all requested bytes
+	// from a single source GET, and a successful upload must stay readable.
+	var counters perfcounter.CounterSet
+	v := &IOVector{FilePath: "p", Entries: []IOEntry{{Offset: 17, Size: 3}}}
+	defer v.Release()
+	require.NoError(t, fs.Read(perfcounter.WithCounterSet(ctx, &counters), v))
+	require.Equal(t, data[17:20], v.Entries[0].Data)
+	require.EqualValues(t, 1, counters.FileService.S3.Get.Load())
+	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "upload", Policy: ReplayDataForDiskCache,
+		Entries: []IOEntry{{Size: int64(len(data)), Data: data}}}))
+
+	release()
+	fs.FlushCache(ctx)
+	require.NoError(t, ctx.Err())
+	require.NoFileExists(t, fs.diskCache.pathForFile("p"))
+	require.NoFileExists(t, fs.diskCache.pathForFile("upload"))
+	require.NoError(t, fs.PrefetchFile(ctx, "upload"))
+	require.Equal(t, data, readReplayCache(t, fs, "upload"))
 }

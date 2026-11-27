@@ -55,6 +55,13 @@ func TestIcebergRedactionDisablesGeneratedStringers(t *testing.T) {
 	}
 }
 
+func TestPipelineDescriptorCanonicalName(t *testing.T) {
+	file := decodePipelineFileDescriptor(t)
+	if file.GetName() != "pipeline.proto" {
+		t.Fatalf("descriptor name = %q, want pipeline.proto", file.GetName())
+	}
+}
+
 func decodePipelineFileDescriptor(t *testing.T) *descriptor.FileDescriptorProto {
 	t.Helper()
 	compressed := proto.FileDescriptor("pipeline.proto")

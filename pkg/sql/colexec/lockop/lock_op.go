@@ -18,13 +18,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -190,18 +193,7 @@ func mergeableLockTargets(left, right lockTarget) bool {
 		left.refreshTimestampIndexInBatch == right.refreshTimestampIndexInBatch
 }
 
-// getHasNewVersionInRangeFunc returns the configured checker when one is
-// supplied, and otherwise uses the normal lock checker. The callback is
-// optional for lock operators created by the planner; merged targets must not
-// dereference a nil callback while checking each target's relation.
-func (lockOp *LockOp) getHasNewVersionInRangeFunc() hasNewVersionInRangeFunc {
-	if lockOp.ctr.hasNewVersionInRange != nil {
-		return lockOp.ctr.hasNewVersionInRange
-	}
-	return hasNewVersionInRange
-}
-
-func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int) hasNewVersionInRangeFunc {
+func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int, observation *resource.LockReadObservation) hasNewVersionInRangeFunc {
 	return func(
 		proc *process.Process,
 		_ engine.Relation,
@@ -214,10 +206,10 @@ func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int) hasNewVersionI
 		from timestamp.Timestamp,
 		to timestamp.Timestamp,
 	) (bool, error) {
-		hasNewVersionInRange := lockOp.getHasNewVersionInRangeFunc()
+		opts := LockOptions{hasNewVersionInRangeFunc: lockOp.ctr.hasNewVersionInRange, lockRead: observation}
 		for _, groupIdx := range group {
 			groupTarget := lockOp.targets[groupIdx]
-			changed, err := hasNewVersionInRange(
+			changed, err := opts.checkPKVersions(
 				proc,
 				lockOp.ctr.relations[groupIdx],
 				analyzer,
@@ -339,10 +331,17 @@ func performLock(
 		// order. Use one full-domain range lock for the group. This keeps the
 		// operator streaming and bounds memory independently of input size.
 		lockTable := target.lockTable || len(group) > 1
-		hasNewVersionInRangeFunc := lockOp.getHasNewVersionInRangeFunc()
-		if len(group) > 1 {
-			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group)
+		lockReadRoot := resource.LockReadRootFromContext(proc.Ctx)
+		var observation *resource.LockReadObservation
+		if lockReadRoot != nil {
+			observation = &resource.LockReadObservation{}
 		}
+		hasNewVersionInRangeFunc := lockOp.ctr.hasNewVersionInRange
+		if len(group) > 1 {
+			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group, observation)
+		}
+		opts := DefaultLockOptions(lockOp.ctr.parker)
+		opts.requireExactRows = target.requireExactRows
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
@@ -354,7 +353,7 @@ func performLock(
 			target.primaryColumnIndexInBatch,
 			target.primaryColumnType,
 			target.partitionColumnIndexInBatch,
-			DefaultLockOptions(lockOp.ctr.parker).
+			opts.withLockRead(lockReadRoot, observation).
 				WithLockMode(target.mode).
 				WithFetchLockRowsFunc(fetchRows).
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
@@ -480,6 +479,7 @@ func lockTableWithModeAndContext(
 	}()
 
 	opts := DefaultLockOptions(parker).
+		withLockRead(resource.LockReadRootFromContext(ctx), nil).
 		WithLockMode(mode).
 		WithLockTable(true, changeDef).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
@@ -521,7 +521,8 @@ func LockTableForSnapshotRefreshWithContext(
 	return lockTableWithModeAndContext(ctx, eng, proc, tableID, pkType, mode, changeDef, false)
 }
 
-// LockRow lock rows in table, rows will be locked, and wait current txn closed.
+// LockRows locks rows for the lifetime of the current transaction. When the
+// query context opts in, pre-pipeline acquisitions contribute to its diagnostic.
 func LockRows(
 	eng engine.Engine,
 	proc *process.Process,
@@ -564,6 +565,7 @@ func LockRows(
 	}()
 
 	opts := DefaultLockOptions(parker).
+		withLockRead(resource.LockReadRootFromContext(proc.Ctx), nil).
 		WithLockTable(false, false).
 		WithLockSharding(sharding).
 		WithLockMode(lockMode).
@@ -679,19 +681,29 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	// An internal catalog statement with a bounded key set must never acquire
+	// a covering range, even if an unexpected plan asks for a table lock.
+	if g != lock.Granularity_Row && opts.requireExactRows {
+		return false, false, timestamp.Timestamp{}, moerr.NewLockNeedUpgradeNoCtx()
+	}
+
 	if g == lock.Granularity_Row && len(rows) > 1 {
 		rows = dedupLockRows(rows)
 	}
 
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
-		Granularity:     g,
-		Policy:          proc.GetWaitPolicy(),
-		Mode:            opts.mode,
-		TableDefChanged: opts.changeDef,
-		Sharding:        opts.sharding,
-		Group:           opts.group,
-		SnapShotTs:      txnOp.CreateTS(),
+		Granularity:      g,
+		Policy:           proc.GetWaitPolicy(),
+		Mode:             opts.mode,
+		TableDefChanged:  opts.changeDef,
+		Sharding:         opts.sharding,
+		Group:            opts.group,
+		SnapShotTs:       txnOp.CreateTS(),
+		BypassLocalProxy: txnOp.TxnOptions().CatalogMaintenance(),
+	}
+	if opts.requireExactRows {
+		options = options.WithExactRows()
 	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
@@ -723,8 +735,16 @@ func doLock(
 		table = lockservice.ShardingByRow(rows[0])
 	}
 
+	if opts.lockReadRoot != nil {
+		if opts.lockRead == nil {
+			opts.lockRead = &resource.LockReadObservation{}
+		}
+		defer opts.lockReadRoot.MergeLockRead(opts.lockRead)
+	}
+	lockCtx := resource.ContextWithLockReadAcquisition(ctx, opts.lockRead)
+	acquisitionStart := opts.lockRead.Start()
 	result, err := lockWithRetry(
-		ctx,
+		lockCtx,
 		lockService,
 		table,
 		rows,
@@ -736,6 +756,8 @@ func doLock(
 		opts,
 		pkType,
 	)
+	opts.lockRead.Finish(lockCtx, resource.LockReadAcquisition, acquisitionStart, err)
+	opts.lockRead.ObserveAcquisitionConflict(result.HasConflict, err)
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -792,18 +814,13 @@ func doLock(
 		txnOp.Txn().IsRCIsolation() {
 
 		start = time.Now()
-		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		newSnapshotTS, err := waitLockReadLogtail(ctx, txnClient, lockedTS, opts.lockRead)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
 		analyzeLockWaitTime(analyzer, start)
 
-		fn := opts.hasNewVersionInRangeFunc
-		if fn == nil {
-			fn = hasNewVersionInRange
-		}
-
-		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
+		changed, err := opts.checkPKVersions(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -855,18 +872,13 @@ func doLock(
 
 	if needsExtraCheck && snapshotTS.LessEq(lockedTS) && txnOp.Txn().IsRCIsolation() {
 		start = time.Now()
-		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		newSnapshotTS, err := waitLockReadLogtail(ctx, txnClient, lockedTS, opts.lockRead)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
 		analyzeLockWaitTime(analyzer, start)
 
-		fn := opts.hasNewVersionInRangeFunc
-		if fn == nil {
-			fn = hasNewVersionInRange
-		}
-
-		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
+		changed, err := opts.checkPKVersions(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -900,18 +912,13 @@ func doLock(
 
 	// HasConflict=true, HasPrevCommit=true, RC isolation - check hasNewVersionInRange
 	start = time.Now()
-	newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+	newSnapshotTS, err := waitLockReadLogtail(ctx, txnClient, lockedTS, opts.lockRead)
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
 	analyzeLockWaitTime(analyzer, start)
 
-	fn := opts.hasNewVersionInRangeFunc
-	if fn == nil {
-		fn = hasNewVersionInRange
-	}
-
-	changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
+	changed, err := opts.checkPKVersions(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -941,6 +948,7 @@ func doLock(
 
 type lockRetryState struct {
 	backendRetryDeadline time.Time
+	forwardBindBackoff   time.Duration
 	useMemoryRetrySlot   bool
 }
 
@@ -1027,26 +1035,28 @@ func lockWithRetry(
 	var result lock.Result
 	var err error
 	retryState := lockRetryState{}
+	var bindChanged error
 
 	options, err = refreshLockWaitOptions(options)
 	if err != nil {
 		return result, err
 	}
 	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
-	if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
-		return result, getLockRetryExitError(ctx, err)
-	}
-
-	for {
+	for canRetryLock(ctx, tableID, txnOp, err, &retryState, options.LockWaitDeadline) {
+		if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+			bindChanged = err
+		}
 		options, err = refreshLockWaitOptions(options)
 		if err != nil {
 			return result, err
 		}
-		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
-		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
-			return result, getLockRetryExitError(ctx, err)
+		attemptCtx := ctx
+		if !retryState.backendRetryDeadline.IsZero() {
+			attemptCtx = morpc.WithBackendWaitDeadline(ctx, retryState.backendRetryDeadline)
 		}
+		result, err = lockService.Lock(attemptCtx, tableID, rows, txnID, options)
 	}
+	return result, getLockRetryExitError(ctx, err, bindChanged, options)
 }
 
 func LockWithMayUpgrade(
@@ -1067,7 +1077,7 @@ func LockWithMayUpgrade(
 		return lock.Result{}, err
 	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
-	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) || opts.requireExactRows {
 		return result, err
 	}
 
@@ -1097,8 +1107,9 @@ func canRetryLock(
 	txn client.TxnOperator,
 	err error,
 	retryState *lockRetryState,
+	lockWaitDeadline int64,
 ) bool {
-	if ctx.Err() != nil || !isRetryLockError(err) {
+	if ctx.Err() != nil || !isRetryLockError(err) || moerr.IsLockTableBindChangedForFencedTxn(err) {
 		return false
 	}
 	if !shouldBypassHeldLockTableCheck(err) &&
@@ -1114,6 +1125,11 @@ func canRetryLock(
 	if !ok {
 		logLockRetryBudgetStop(err, table, txn, *retryState)
 		return false
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrForwardBindBusy) && lockWaitDeadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, time.Unix(0, lockWaitDeadline))
+		defer cancel()
 	}
 	return waitToRetryLock(ctx, wait, retryState)
 }
@@ -1195,37 +1211,54 @@ func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration,
 		}
 		return lockRetryMemoryBackoff, true
 	}
-	if remaining < defaultWaitTimeOnRetryLock {
-		return remaining, true
+	wait := defaultWaitTimeOnRetryLock
+	if moerr.IsMoErrCode(err, moerr.ErrForwardBindBusy) && wait > 0 {
+		// A short cold burst can clear long before the normal backend retry
+		// interval. Back off to that interval if the coordinator stays busy.
+		backoff := max(20*time.Millisecond, 2*retryState.forwardBindBackoff)
+		retryState.forwardBindBackoff = min(wait, backoff)
+		if backoff < wait {
+			wait = min(wait, backoff+rand.N(backoff/2))
+		}
 	}
-	return defaultWaitTimeOnRetryLock, true
+	return min(remaining, wait), true
 }
 
-func getLockRetryExitError(ctx context.Context, err error) error {
-	if ctxErr := ctx.Err(); ctxErr != nil && isRetryLockError(err) {
-		if isBoundedRetryLockError(err) {
-			// Preserve the backend failure so explicit txns do not survive on a raw
-			// context error after backend retry has already proven the path unhealthy.
-			return err
+func getLockRetryExitError(ctx context.Context, err, bindChanged error, options lock.LockOptions) error {
+	if err == nil {
+		return nil
+	}
+	ctxErr := ctx.Err()
+	busy := moerr.IsMoErrCode(err, moerr.ErrForwardBindBusy)
+	if busy && ctxErr == nil {
+		if _, waitErr := refreshLockWaitOptions(options); waitErr != nil {
+			return waitErr
 		}
-		return ctxErr
+	}
+	if ctxErr != nil && (busy || moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound)) {
+		err = ctxErr
+	}
+	if bindChanged != nil && (busy || (ctxErr != nil && errors.Is(err, ctxErr)) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockTableBindLookupTimeout)) {
+		// The retry ended before the known stale binding could be reconciled.
+		return bindChanged
 	}
 	return err
 }
 
 func isRetryLockError(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
-		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) ||
+	return moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) ||
 		isBoundedRetryLockError(err)
 }
 
 func shouldBypassHeldLockTableCheck(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart)
+	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+		moerr.IsMoErrCode(err, moerr.ErrForwardBindBusy)
 }
 
 func isBoundedRetryLockError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
-		moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+		shouldBypassHeldLockTableCheck(err) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
 		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend)
@@ -1379,6 +1412,7 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 			Mode:                 target.mode,
 			LockRows:             plan.DeepCopyExpr(target.lockRows),
 			LockTableAtTheEnd:    target.lockTableAtTheEnd,
+			RequireExactRows:     target.requireExactRows,
 			ObjRef:               plan.DeepCopyObjectRef(target.objRef),
 			PartitionColIdxInBat: target.partitionColumnIndexInBatch,
 		}
@@ -1409,6 +1443,7 @@ func (lockOp *LockOp) CopyTargetsFrom(src *LockOp) {
 			mode:                         t.mode,
 			lockRows:                     plan.DeepCopyExpr(t.lockRows),
 			lockTableAtTheEnd:            t.lockTableAtTheEnd,
+			requireExactRows:             t.requireExactRows,
 		}
 	}
 }
@@ -1433,6 +1468,15 @@ func (lockOp *LockOp) AddLockTarget(
 		refreshTimestampIndexInBatch,
 		lockRows,
 		lockTableAtTheEnd)
+}
+
+// RequireExactRows confines locks for this target to individual keys.
+func (lockOp *LockOp) RequireExactRows(tableID uint64) {
+	for i := range lockOp.targets {
+		if lockOp.targets[i].tableID == tableID {
+			lockOp.targets[i].requireExactRows = true
+		}
+	}
 }
 
 // AddLockTargetWithMode add lock target with lock mode
@@ -1648,6 +1692,37 @@ func getRowsFilter(
 	}
 }
 
+func (opts LockOptions) withLockRead(root *resource.Root, observation *resource.LockReadObservation) LockOptions {
+	opts.lockReadRoot = root
+	opts.lockRead = observation
+	return opts
+}
+
+func waitLockReadLogtail(ctx context.Context, txnClient client.TxnClient, target timestamp.Timestamp, observation *resource.LockReadObservation) (timestamp.Timestamp, error) {
+	start := observation.Start()
+	ts, err := txnClient.WaitLogTailAppliedAt(ctx, target)
+	observation.Finish(ctx, resource.LockReadLogtail, start, err)
+	return ts, err
+}
+
+func (opts LockOptions) checkPKVersions(
+	proc *process.Process,
+	rel engine.Relation,
+	analyzer process.Analyzer,
+	tableID uint64,
+	eng engine.Engine,
+	bat *batch.Batch,
+	idx int32,
+	partitionIdx int32,
+	from, to timestamp.Timestamp,
+) (bool, error) {
+	if opts.hasNewVersionInRangeFunc != nil {
+		return opts.hasNewVersionInRangeFunc(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, from, to)
+	}
+
+	return hasNewVersionInRange(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, from, to, opts.lockRead)
+}
+
 // [from, to].
 // 1. if has a mvcc record <= from, return false, means no changed
 // 2. otherwise return true, changed
@@ -1661,6 +1736,7 @@ func hasNewVersionInRange(
 	idx int32,
 	partitionIdx int32,
 	from, to timestamp.Timestamp,
+	observation *resource.LockReadObservation,
 ) (bool, error) {
 	if bat == nil {
 		return false, nil
@@ -1680,12 +1756,16 @@ func hasNewVersionInRange(
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	newCtx = resource.ContextWithLockReadPK(newCtx, observation)
 
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
 
 	changed, err := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
-		return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+		start := observation.Start()
+		changed, err := rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+		observation.Finish(newCtx, resource.LockReadPKCheck, start, err)
+		return changed, err
 	})
 
 	return changed, err
@@ -1716,6 +1796,9 @@ func lockTalbeIfLockCountIsZero(
 		} else {
 			if !target.lockTableAtTheEnd {
 				continue
+			}
+			if target.requireExactRows {
+				return moerr.NewLockNeedUpgradeNoCtx()
 			}
 			err := LockTableWithMode(
 				lockOp.engine, proc, target.tableID, target.primaryColumnType, target.mode, false)

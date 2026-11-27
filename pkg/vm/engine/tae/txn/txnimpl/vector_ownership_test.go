@@ -248,3 +248,94 @@ func TestPrepareApplyANodeVectorOwnership(t *testing.T) {
 		})
 	}
 }
+
+type extendingAppendOwnershipAppender struct {
+	data.ObjectAppender
+	meta        *catalog.ObjectEntry
+	id          *common.ID
+	appendNode  *updates.AppendNode
+	nextRow     uint32
+	applyOffset uint32
+}
+
+type extendingAppendOwnershipTableHandle struct {
+	data.TableHandle
+	appender data.ObjectAppender
+}
+
+func (h extendingAppendOwnershipTableHandle) GetAppender() (data.ObjectAppender, error) {
+	return h.appender, nil
+}
+
+func (a *extendingAppendOwnershipAppender) GetID() *common.ID    { return a.id }
+func (a *extendingAppendOwnershipAppender) GetMeta() any         { return a.meta }
+func (*extendingAppendOwnershipAppender) LockFreeze()            {}
+func (*extendingAppendOwnershipAppender) UnlockFreeze()          {}
+func (*extendingAppendOwnershipAppender) CheckFreeze() bool      { return false }
+func (*extendingAppendOwnershipAppender) IsSameColumns(any) bool { return true }
+func (*extendingAppendOwnershipAppender) IsAppendable() bool     { return true }
+func (*extendingAppendOwnershipAppender) Close()                 {}
+
+func (a *extendingAppendOwnershipAppender) PrepareAppend(_ bool, rows uint32, txn txnif.AsyncTxn) (txnif.AppendNode, bool, uint32, error) {
+	count := min(rows, uint32(1))
+	created := a.appendNode == nil
+	if created {
+		a.appendNode = updates.NewAppendNode(txn, a.nextRow, a.nextRow+count, false, nil)
+	} else {
+		a.appendNode.SetMaxRow(a.nextRow + count)
+	}
+	a.nextRow += count
+	return a.appendNode, created, count, nil
+}
+
+func (a *extendingAppendOwnershipAppender) ApplyAppend(bat *containers.Batch, _ txnif.AsyncTxn) (int, error) {
+	offset := a.applyOffset
+	a.applyOffset += uint32(bat.Length())
+	return int(offset), nil
+}
+
+func TestPrepareApplyUsesImmutableReservedOffsets(t *testing.T) {
+	schema := catalog.MockSchemaAll(4, 3)
+	dbEntry := catalog.MockDBEntryWithAccInfo(0, 1)
+	tableEntry := catalog.MockTableEntryWithDB(dbEntry, 2)
+
+	mp := mpool.MustNewZero()
+	pool := containers.NewVectorPool(t.Name(), 2, containers.WithMPool(mp), containers.WithFixedSizeRatio(1))
+	t.Cleanup(pool.Destory)
+	txn := txnbase.NewTxn(nil, &txnbase.NoopTxnStore{}, []byte("append-offset"), types.BuildTS(1, 0), types.TS{})
+	store := &txnStore{
+		txn:        txn,
+		rt:         dbutils.NewRuntime(dbutils.WithRuntimeSmallPool(pool)),
+		warChecker: newWarChecker(txn, nil),
+	}
+	table := &txnTable{entry: tableEntry, store: store, txnEntries: newTxnEntries()}
+	table.dataTable = newBaseTable(schema, false, table)
+
+	objID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objID, false, false, false)
+	meta := catalog.MockObjectEntry(tableEntry, stats, false, nil, types.BuildTS(2, 0))
+	appender := &extendingAppendOwnershipAppender{meta: meta, id: meta.AsCommonID()}
+	space := &tableSpace{table: table, tableHandle: extendingAppendOwnershipTableHandle{appender: appender}}
+	bat := containers.NewBatch()
+	t.Cleanup(bat.Close)
+	for i, typ := range schema.AllTypes() {
+		bat.AddVector(schema.ColDefs[i].Name, containers.MakeVector(typ, mp))
+	}
+	for _, vec := range bat.Vecs {
+		vec.Append(nil, true)
+		vec.Append(nil, true)
+	}
+	node := &anode{data: bat, rows: 2}
+	require.NoError(t, space.prepareApplyANode(node, 0))
+	require.Len(t, space.appends, 2)
+	require.Same(t, space.appends[0].anode, space.appends[1].anode)
+	require.Equal(t, uint32(0), space.appends[0].destOff)
+	require.Equal(t, uint32(1), space.appends[1].destOff)
+	infos := node.GetAppends()
+	require.Len(t, infos, 2)
+	require.Equal(t, uint32(0), infos[0].GetDestOff())
+	require.Equal(t, uint32(1), infos[1].GetDestOff())
+	space.tableHandle = nil
+	require.NoError(t, space.ApplyAppend())
+	require.Equal(t, uint32(2), appender.applyOffset)
+}

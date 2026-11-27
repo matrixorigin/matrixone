@@ -19,9 +19,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -74,6 +76,61 @@ func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 	require.NoError(t, op.Close())
 	require.Equal(t, int32(1), svc.closeCount.Load())
 	require.False(t, op.needsCleanup())
+}
+
+func TestUnixSocketPath(t *testing.T) {
+	dataPath := filepath.Join("/tmp", strings.Repeat("d", 200))
+	value := &cluster{id: 42}
+	value.options.dataPath = dataPath
+	require.Equal(t, filepath.Join(dataPath, "mysql3.sock"), value.unixSocketPath(3))
+
+	value.options.testing = true
+	socket := value.unixSocketPath(3)
+	require.NotEmpty(t, value.socketID)
+	require.Equal(t, fmt.Sprintf("/tmp/mo-test-%s-mysql3.sock", value.socketID), socket)
+	require.Less(t, len(socket), 100)
+	require.Equal(t, socket, value.unixSocketPath(3))
+	require.NotEqual(t, socket, value.unixSocketPath(4))
+
+	other := &cluster{id: 42}
+	other.options.testing = true
+	require.NotEqual(t, socket, other.unixSocketPath(3))
+}
+
+func TestUnixSocketPathPreservesNonTestingSymlinkParent(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "actual", "child")
+	require.NoError(t, os.MkdirAll(target, 0755))
+	require.NoError(t, os.Symlink(target, filepath.Join(root, "link")))
+
+	dataPath := filepath.Join(root, "link") + "/../data"
+	value := &cluster{}
+	value.options.dataPath = dataPath
+	socket := value.unixSocketPath(0)
+	require.Equal(t, dataPath+"/mysql0.sock", socket)
+	require.NotEqual(t, filepath.Join(dataPath, "mysql0.sock"), socket)
+}
+
+func TestUnixSocketPathAvoidsStaleFile(t *testing.T) {
+	old := &cluster{id: 42}
+	old.options.testing = true
+	stale := old.unixSocketPath(0)
+	require.NoError(t, os.WriteFile(stale, []byte("stale"), 0600))
+	t.Cleanup(func() { _ = os.Remove(stale) })
+
+	current := &cluster{id: 42}
+	current.options.testing = true
+	socket := current.unixSocketPath(0)
+	require.NotEqual(t, stale, socket)
+	listener, err := net.Listen("unix", socket)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	conn, err := net.Dial("unix", socket)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	require.NoError(t, listener.Close())
+	_, err = os.Stat(socket)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestBasicCluster(t *testing.T) {

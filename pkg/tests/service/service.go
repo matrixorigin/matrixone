@@ -627,14 +627,12 @@ func (c *testCluster) CNStoreExpiredIndexed(index int) (bool, error) {
 func (c *testCluster) IsClusterHealthy() bool {
 	hkcfg := c.GetHAKeeperConfig()
 	state := c.getClusterState()
-	_, healthy := syshealth.Check(
+	return syshealth.Healthy(
 		hkcfg,
 		state.GetClusterInfo(),
-		state.GetTNState(),
 		state.GetLogState(),
 		state.GetTick(),
 	)
-	return healthy
 }
 
 // --------------------------------------------------------------

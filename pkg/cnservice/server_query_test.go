@@ -1529,3 +1529,35 @@ func (h *fakeIcebergCacheInvalidationHandler) InvalidateIcebergCache(ctx context
 	h.req = req
 	return h.removed, nil
 }
+
+func TestHandleCountCachedObjectFiles(t *testing.T) {
+	ctx := t.Context()
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	s := &service{fileService: fs}
+
+	var resp query.Response
+	require.Error(t, s.handleCountCachedObjectFiles(ctx, &query.Request{}, &resp, nil))
+	id := objectio.NewObjectid()
+	req := &query.Request{
+		CmdMethod:                     query.CmdMethod_CountCachedObjectFiles,
+		CountCachedObjectFilesRequest: &query.CountCachedObjectFilesRequest{ObjectIds: [][]byte{id[:]}},
+	}
+	wire, err := req.Marshal()
+	require.NoError(t, err)
+	var decoded query.Request
+	require.NoError(t, decoded.Unmarshal(wire))
+	require.Equal(t, req, &decoded)
+
+	require.NoError(t, s.handleCountCachedObjectFiles(ctx, &decoded, &resp, nil))
+	wire, err = resp.Marshal()
+	require.NoError(t, err)
+	var decodedResponse query.Response
+	require.NoError(t, decodedResponse.Unmarshal(wire))
+	require.NotNil(t, decodedResponse.CountCachedObjectFilesResponse)
+	require.Zero(t, decodedResponse.CountCachedObjectFilesResponse.Hits)
+
+	req.CountCachedObjectFilesRequest.ObjectIds[0] = []byte{1}
+	require.Error(t, s.handleCountCachedObjectFiles(ctx, req, &query.Response{}, nil))
+}

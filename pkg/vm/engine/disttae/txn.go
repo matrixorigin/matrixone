@@ -89,6 +89,7 @@ func (txn *Transaction) accountWorkspaceEntryLocked(entry *Entry) {
 
 	entry.accountedSize = uint64(entry.bat.Size())
 	txn.workspaceSize += entry.accountedSize
+	txn.adjustFlushedTombstonesLocked(entry, 1)
 	if entry.fileName != "" || catalog.IsSystemTable(entry.tableId) {
 		return
 	}
@@ -117,6 +118,7 @@ func (txn *Transaction) unaccountWorkspaceEntryLocked(entry *Entry) {
 	}
 
 	txn.workspaceSize -= entry.accountedSize
+	txn.adjustFlushedTombstonesLocked(entry, -1)
 	if entry.fileName == "" && !catalog.IsSystemTable(entry.tableId) {
 		switch entry.typ {
 		case INSERT:
@@ -134,6 +136,13 @@ func (txn *Transaction) unaccountWorkspaceEntryLocked(entry *Entry) {
 		}
 	}
 	entry.accountedSize = 0
+}
+
+func (txn *Transaction) adjustFlushedTombstonesLocked(entry *Entry, delta int) {
+	if entry.typ == DELETE && entry.fileName != "" {
+		// File-backed DELETE entries store object stats in the first vector.
+		txn.flushedTombstones.adjust(entry.tableId, entry.bat.Vecs[0], delta)
+	}
 }
 
 func (txn *Transaction) appendWorkspaceEntryLocked(entry Entry) {
@@ -1552,13 +1561,19 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 func (txn *Transaction) registerCNObjects(
 	objId types.Objectid,
 	accountId uint32,
+	tableId uint64,
 	objBat *batch.Batch,
 	dbName string,
 	tbName string,
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) {
-	txn.cnObjsSummary[objId] = Summary{
+	objects := txn.cnObjsSummary[tableId]
+	if objects == nil {
+		objects = make(map[types.Objectid]Summary)
+		txn.cnObjsSummary[tableId] = objects
+	}
+	objects[objId] = Summary{
 		objBat:             objBat,
 		accountId:          accountId,
 		dbName:             dbName,
@@ -1635,19 +1650,11 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 			sid := oid.Segment()
 
 			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
-			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
+			txn.registerCNObjects(*oid, accountId, tableId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
 		}
 	}
 
 	txn.readOnly.Store(false)
-
-	if typ == DELETE {
-		col, area := vector.MustVarlenaRawData(copied.Vecs[0])
-		for i := range col {
-			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
-			txn.StashFlushedTombstones(stats)
-		}
-	}
 
 	entry := Entry{
 		typ:                typ,
@@ -1749,19 +1756,11 @@ func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
 			sid := oid.Segment()
 
 			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
-			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
+			txn.registerCNObjects(*oid, accountId, tableId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
 		}
 	}
 
 	txn.readOnly.Store(false)
-
-	if typ == DELETE {
-		col, area := vector.MustVarlenaRawData(copied.Vecs[0])
-		for i := range col {
-			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
-			txn.StashFlushedTombstones(stats)
-		}
-	}
 
 	entry := Entry{
 		typ:                typ,
@@ -1891,7 +1890,7 @@ func (txn *Transaction) deleteBatch(
 		rowOffset := rowid.GetRowOffset()
 
 		if server.GetCnSegmentType(rowid.BorrowSegmentID(), tableId, txn.op.Txn().ID) == colexec.TxnWorkspaceUnCommitType {
-			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
+			txn.deletedBlocks.addDeletedBlocks(tableId, &blkid, []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
 		}
@@ -2233,8 +2232,8 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 		var missing []tableKey
 		seen := make(map[tableKey]bool)
 		txn.deletedBlocks.iter(
-			func(blkId *types.Blockid, offsets []int64) bool {
-				summary := txn.cnObjsSummary[*blkId.Object()]
+			func(key deletedBlockKey, _ []int64) bool {
+				summary := txn.cnObjsSummary[key.tableID][*key.blockID.Object()]
 				k := tableKey{
 					accountId: summary.accountId,
 					dbName:    summary.dbName,
@@ -2281,32 +2280,37 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		return nil
 	}
 
-	// object --> blk id --> deletion
-	objBlkDeletion := make(map[objectio.ObjectId]map[objectio.Blockid][]int64)
-	objTables := make(map[objectio.ObjectId]workspaceTableKey)
+	// Group deletes by logical table as well as physical object.
+	objBlkDeletion := make(map[cnObjectKey]map[objectio.Blockid][]int64)
+	objTables := make(map[cnObjectKey]workspaceTableKey)
 
-	affectedBats := make(map[*batch.Batch]struct{})
+	type tableBatch struct {
+		tableID uint64
+		batch   *batch.Batch
+	}
+	affectedBats := make(map[tableBatch]struct{})
 
 	defer func() {
 		txn.deletedBlocks.clean()
 	}()
 
 	txn.deletedBlocks.iter(
-		func(blkId *types.Blockid, offsets []int64) bool {
-			summary := txn.cnObjsSummary[*blkId.Object()]
+		func(block deletedBlockKey, offsets []int64) bool {
+			key := cnObjectKey{tableID: block.tableID, objectID: *block.blockID.Object()}
+			summary := txn.cnObjsSummary[key.tableID][key.objectID]
 
-			affectedBats[summary.objBat] = struct{}{}
+			affectedBats[tableBatch{key.tableID, summary.objBat}] = struct{}{}
 
-			blkDel := objBlkDeletion[*blkId.Object()]
+			blkDel := objBlkDeletion[key]
 			if blkDel == nil {
-				objBlkDeletion[*blkId.Object()] = make(map[objectio.Blockid][]int64)
-				blkDel = objBlkDeletion[*blkId.Object()]
+				objBlkDeletion[key] = make(map[objectio.Blockid][]int64)
+				blkDel = objBlkDeletion[key]
 			}
 
-			blkDel[*blkId] = offsets
+			blkDel[block.blockID] = offsets
 
-			if _, ok := objTables[*blkId.Object()]; !ok {
-				objTables[*blkId.Object()] = workspaceTableKey{
+			if _, ok := objTables[key]; !ok {
+				objTables[key] = workspaceTableKey{
 					tableKey: tableKey{
 						accountId: summary.accountId,
 						dbName:    summary.dbName,
@@ -2323,15 +2327,12 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	waiter := sync.WaitGroup{}
 	locker := sync.Mutex{}
 
-	compactFunc := func(stats objectio.ObjectStats) {
+	compactFunc := func(key cnObjectKey, stats objectio.ObjectStats) {
 		defer func() {
 			waiter.Done()
 		}()
 
-		// need to rewrite the whole object
-		objId := stats.ObjectName().ObjectId()
-
-		tbKey := objTables[*objId]
+		tbKey := objTables[key]
 
 		panicWhenFailed := func(err error, hint string) {
 			logutil.Panic(hint,
@@ -2362,7 +2363,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		tbl.ensureSeqnumsAndTypesExpectRowid()
 		locker.Unlock()
 
-		bat, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[*objId])
+		bat, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[key])
 		if err != nil {
 			panicWhenFailed(err, "rewrite object by deletion failed")
 		}
@@ -2389,7 +2390,11 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		bat.Clean(txn.proc.Mp())
 	}
 
-	dirtyObject := make([]objectio.ObjectStats, 0, 1)
+	type dirtyObject struct {
+		key   cnObjectKey
+		stats objectio.ObjectStats
+	}
+	var dirtyObjects []dirtyObject
 
 	ll := len(txn.writes)
 	for i, entry := range txn.writes[:ll] {
@@ -2402,7 +2407,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			continue
 		}
 
-		if _, ok := affectedBats[entry.bat]; !ok {
+		if _, ok := affectedBats[tableBatch{entry.tableId, entry.bat}]; !ok {
 			if injected, _ := objectio.LogWorkspaceInjected(
 				entry.databaseName, entry.tableName); !injected {
 				continue
@@ -2414,7 +2419,8 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		for j := range len(col) {
 			stats := objectio.ObjectStats(col[j].GetByteSlice(area))
 
-			if objBlkDeletion[*stats.ObjectName().ObjectId()] == nil {
+			key := cnObjectKey{tableID: entry.tableId, objectID: *stats.ObjectName().ObjectId()}
+			if objBlkDeletion[key] == nil {
 				// clean object, no deletion on it
 				bat := colexec.AllocCNS3ResultBat(false)
 				if err := bat.Vecs[0].UnionBatch(entry.bat.Vecs[0],
@@ -2449,7 +2455,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				bat.Clean(txn.proc.Mp())
 
 			} else {
-				dirtyObject = append(dirtyObject, stats)
+				dirtyObjects = append(dirtyObjects, dirtyObject{key, stats})
 			}
 
 			offset += int(stats.BlkCnt())
@@ -2466,16 +2472,18 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		}()
 	}
 
-	for _, stats := range dirtyObject {
+	retiredStats := make([]objectio.ObjectStats, 0, len(dirtyObjects))
+	for _, object := range dirtyObjects {
+		retiredStats = append(retiredStats, object.stats)
 		waiter.Add(1)
 		txn.compactWorker.Submit(func() {
-			compactFunc(stats)
+			compactFunc(object.key, object.stats)
 		})
 	}
 
 	waiter.Wait()
-	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(dirtyObject, nil)
-	_ = txn.GCObjsByStats(dirtyObject...)
+	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(retiredStats, nil)
+	_ = txn.GCObjsByStats(retiredStats...)
 
 	return nil
 }
@@ -2545,20 +2553,6 @@ func collectObjectStatsFromEntry(entry Entry) []objectio.ObjectStats {
 		statsList = append(statsList, objectio.ObjectStats(vec.GetBytesAt(i)))
 	}
 	return statsList
-}
-
-// TODO::remove it after workspace refactor.
-func (txn *Transaction) getUncommittedS3Tombstone(
-	appendTo func(stats *objectio.ObjectStats),
-) (err error) {
-
-	txn.cn_flushed_s3_tombstone_object_stats_list.Range(func(k, v any) bool {
-		ss := k.(objectio.ObjectStats)
-		appendTo(&ss)
-		return true
-	})
-
-	return nil
 }
 
 // TODO:: refactor in next PR, to make it more efficient and include persisted deletes in S3
@@ -2987,7 +2981,6 @@ func (txn *Transaction) delTransaction() {
 	txn.tableOps = nil
 	txn.databaseOps = nil
 
-	txn.cn_flushed_s3_tombstone_object_stats_list = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
 	colexec.MustGetServer(txn.engine.service).DeleteTxnSegmentIds(txn.op.Txn().ID)
@@ -3073,11 +3066,10 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 		tableOps:     newTableOps(),
 		tablesInVain: make(map[uint64]int),
 		deletedBlocks: &deletedBlocks{
-			offsets: map[types.Blockid][]int64{},
+			offsets: map[uint64]map[types.Blockid][]int64{},
 		},
-		cnObjsSummary:   map[types.Objectid]Summary{},
+		cnObjsSummary:   map[uint64]map[types.Objectid]Summary{},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 
 		commitWorkspaceThreshold: txn.commitWorkspaceThreshold,
 		writeWorkspaceThreshold:  txn.writeWorkspaceThreshold,
@@ -3155,6 +3147,11 @@ func (c *dbOpsChain) rollbackLastStatement(statementId int) {
 			c.names[k] = v[:i+1]
 		}
 	}
+}
+
+// IsTableCreatedInTxn reports whether a resolved relation ID was allocated in this transaction.
+func (txn *Transaction) IsTableCreatedInTxn(tableID uint64) bool {
+	return txn.tableOps != nil && txn.tableOps.existCreatedInTxn(tableID)
 }
 
 func newTableOps() *tableOpsChain {

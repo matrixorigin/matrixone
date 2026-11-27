@@ -16,27 +16,56 @@ package rpc
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/require"
 )
 
 type checkpointRunnerWithMax struct {
 	checkpoint.Runner
-	entry *checkpoint.CheckpointEntry
+	entry   *checkpoint.CheckpointEntry
+	entries []*checkpoint.CheckpointEntry
 }
 
 func (r *checkpointRunnerWithMax) MaxCheckpoint() *checkpoint.CheckpointEntry {
 	return r.entry
+}
+
+func (r *checkpointRunnerWithMax) GetAllCheckpoints() []*checkpoint.CheckpointEntry {
+	if r.entries != nil {
+		return r.entries
+	}
+	return r.Runner.GetAllCheckpoints()
+}
+
+type checkpointDataFailingFileService struct {
+	fileservice.FileService
+	failPath string
+	err      error
+	failures atomic.Int64
+}
+
+func (fs *checkpointDataFailingFileService) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	if vector.FilePath == fs.failPath {
+		fs.failures.Add(1)
+		return fs.err
+	}
+	return fs.FileService.Read(ctx, vector)
 }
 
 // TestHandleTTLChecker exercises the disk-cleaner TTL checker predicate built
@@ -195,6 +224,116 @@ func TestHandleGetChangedTableListCollectChangedUsesIndexWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, historyStart.ToTimestamp(), *resp.Oldest)
 	require.Contains(t, resp.TableIds, uint64(1000))
+}
+
+// A legacy checkpoint has no table-ID index, so its data must be read before
+// the handler can publish a complete changed-table list.
+func TestHandleGetChangedTableListLegacyCheckpointReadError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	t.Cleanup(cancel)
+	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
+	t.Cleanup(func() { require.NoError(t, h.HandleClose(context.Background())) })
+	fs := h.db.Runtime.Fs
+
+	cat := catalog.MockCatalog(nil)
+	t.Cleanup(func() { require.NoError(t, cat.Close()) })
+	dbEntry, err := cat.CreateDBEntry("checkpoint_read_error", "", "", nil)
+	require.NoError(t, err)
+	// Database resolution belongs to the live handle; the checkpoint fixture
+	// itself needs no table storage or background merge work.
+	liveDB, err := h.db.Catalog.CreateDBEntry("checkpoint_read_error", "", "", nil)
+	require.NoError(t, err)
+	require.Equal(t, dbEntry.ID, liveDB.ID)
+	table, err := dbEntry.CreateTableEntry(catalog.MockSchema(2, 0), nil, nil)
+	require.NoError(t, err)
+	addObject := func(ts types.TS) {
+		stats := objectio.NewObjectStats()
+		require.NoError(t, objectio.SetObjectStatsObjectName(stats, objectio.MockObjectName()))
+		_, err := table.CreateCommittedObject(ts, &objectio.CreateObjOpt{Stats: stats}, nil)
+		require.NoError(t, err)
+	}
+	writeCheckpoint := func(start, end types.TS) (*checkpoint.CheckpointEntry, string) {
+		collector := logtail.NewBaseCollector_V2(start, end, 0, fs)
+		defer collector.Close()
+		require.NoError(t, collector.Collect(cat))
+		data := collector.OrphanData()
+		defer data.Close()
+		location, _, err := data.Sync(ctx, fs)
+		require.NoError(t, err)
+		reader, err := logtail.GetCheckpointReader(ctx, h.db.Runtime.SID(), fs, location, logtail.CheckpointCurrentVersion)
+		require.NoError(t, err)
+		require.Len(t, reader.GetLocations(), 1)
+		entry := checkpoint.NewCheckpointEntry(h.db.Runtime.SID(), start, end, checkpoint.ET_Incremental,
+			checkpoint.WithStateEntryOption(checkpoint.ST_Finished))
+		entry.SetLocation(location, objectio.Location{})
+		indexLocations := entry.GetTableIDLocation()
+		require.Zero(t, indexLocations.Len(), "exercise the legacy data fallback")
+		return entry, reader.GetLocations()[0].Name().UnsafeString()
+	}
+
+	from, middle, to := types.BuildTS(1, 0), types.BuildTS(2, 0), types.BuildTS(3, 0)
+	addObject(from)
+	first, firstPath := writeCheckpoint(from, middle)
+	addObject(middle)
+	second, secondPath := writeCheckpoint(middle, to)
+	originalRunner := h.db.BGCheckpointRunner
+	h.db.BGCheckpointRunner = &checkpointRunnerWithMax{
+		Runner: originalRunner, entry: second, entries: []*checkpoint.CheckpointEntry{first, second},
+	}
+	t.Cleanup(func() { h.db.BGCheckpointRunner = originalRunner })
+
+	readErr := errors.New("checkpoint data read failure")
+	for _, test := range []struct {
+		name        string
+		failPath    string
+		wantPartial bool
+	}{
+		{name: "successful complete list"},
+		{name: "first data read fails", failPath: firstPath},
+		{name: "data read fails after partial list", failPath: secondPath, wantPartial: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			failingFS := &checkpointDataFailingFileService{FileService: fs, failPath: test.failPath, err: readErr}
+			h.db.Runtime.Fs = failingFS
+			t.Cleanup(func() { h.db.Runtime.Fs = fs })
+			_, _, tableIDs, _, checkpointErr := getChangedListFromCheckpoints(ctx, from, to, h.Handle,
+				func(existing []uint64, tableID uint64, _ types.TS) bool {
+					return len(existing) == 0 && tableID == table.ID
+				},
+				func([]uint64, uint64, types.TS, types.TS) bool { return false })
+
+			fromTS, toTS := from.ToTimestamp(), to.ToTimestamp()
+			resp := &cmd_util.GetChangedTableListResp{}
+			failuresBefore := failingFS.failures.Load()
+			_, err := h.HandleGetChangedTableList(ctx, txn.TxnMeta{}, &cmd_util.GetChangedTableListReq{
+				Type: cmd_util.CollectChanged, TS: []*timestamp.Timestamp{&fromTS, &toTS},
+			}, resp)
+			if test.failPath == "" {
+				require.NoError(t, err)
+				require.Equal(t, []uint64{table.ID}, resp.TableIds)
+				require.Equal(t, []uint64{dbEntry.ID}, resp.DatabaseIds)
+			} else {
+				require.ErrorIs(t, err, readErr)
+				require.Greater(t, failingFS.failures.Load(), failuresBefore, "the handler reached the failing data read")
+				require.Empty(t, resp.TableIds, "a failed read must not publish an empty or partial list as success")
+				require.Empty(t, resp.DatabaseIds)
+				require.Empty(t, resp.AccIds)
+				require.Nil(t, resp.Oldest)
+			}
+
+			if test.failPath == "" {
+				require.NoError(t, checkpointErr)
+				require.Equal(t, []uint64{table.ID}, tableIDs)
+			} else {
+				require.ErrorIs(t, checkpointErr, readErr)
+				if test.wantPartial {
+					require.Equal(t, []uint64{table.ID}, tableIDs, "a previous checkpoint was read before the error")
+				} else {
+					require.Empty(t, tableIDs)
+				}
+			}
+		})
+	}
 }
 
 func TestHandleDiskCleaner_AddCheckerTTL(t *testing.T) {

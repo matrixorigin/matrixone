@@ -501,9 +501,11 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 			if applied {
 				continue
 			}
-			deliver = append(deliver, cmd)
 			if retryable {
 				pending = append(pending, cmd)
+			}
+			if candidate, ok := s.logStartForDelivery(cmd); ok {
+				deliver = append(deliver, candidate)
 			}
 		}
 
@@ -524,6 +526,39 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 	}
 	return sm.Result{}
 
+}
+
+// logStartForDelivery binds a Start reply to known membership or to an
+// active initial bootstrap. It leaves the retained command unchanged.
+func (s *stateMachine) logStartForDelivery(cmd pb.ScheduleCommand) (pb.ScheduleCommand, bool) {
+	change := cmd.ConfigChange
+	if cmd.ServiceType != pb.LogService || change == nil {
+		return cmd, true
+	}
+	if change.ChangeType != pb.StartReplica && change.ChangeType != pb.StartNonVotingReplica {
+		return cmd, true
+	}
+	shard, known := s.state.LogState.Shards[change.Replica.ShardID]
+	if !known || shard.Epoch == 0 {
+		return cmd, !cmd.Bootstrapping || s.state.State == pb.HAKeeperBootstrapCommandsReceived
+	}
+	if cmd.Bootstrapping && change.ChangeType == pb.StartReplica &&
+		shard.Epoch < uint64(len(change.InitialMembers)) {
+		// A majority can be reported before the last initial AddNode.
+		active := s.state.State == pb.HAKeeperBootstrapCommandsReceived || s.state.State == pb.HAKeeperRunning
+		return cmd, active && pb.IsInitialMembershipPrefix(change.InitialMembers, shard.Replicas, shard.NonVotingReplicas, shard.Epoch)
+	}
+	members := shard.Replicas
+	if change.ChangeType == pb.StartNonVotingReplica {
+		members = shard.NonVotingReplicas
+	}
+	if target, ok := members[change.Replica.ReplicaID]; !ok || target != cmd.UUID {
+		return cmd, false
+	}
+	confirmed := *change
+	confirmed.Replica.Epoch = shard.Epoch
+	cmd.ConfigChange = &confirmed
+	return cmd, true
 }
 
 // bootstrapReplicaCommandStatus returns whether a bootstrap command must be

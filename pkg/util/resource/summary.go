@@ -226,6 +226,8 @@ const (
 // algebra. Serialization and plan diagnostics consume this value but never add
 // resources independently.
 type StatementResourceSummary struct {
+	LockRead *LockReadDiagnostic `json:"lock_read,omitempty"`
+
 	Usage      Usage
 	Memory     MemoryTotals
 	Allocation AllocationAccountTotals

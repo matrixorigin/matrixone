@@ -17,10 +17,11 @@ package objectio
 import (
 	"context"
 	"errors"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/assert"
 )
@@ -163,49 +164,82 @@ func TestDedupLoadWaiterTimeoutWhileOwnerStillLoading(t *testing.T) {
 	assert.NoError(t, <-ownerDone)
 }
 
-func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
-	oldMetaCache := metaCache
-	metaCache = newMetaCache(fscache.ConstCapacity(1024))
-	defer func() {
-		metaCache = oldMetaCache
-	}()
+type dedupLoadWaiterContext struct {
+	context.Context
+	admitted chan struct{}
+	once     sync.Once
+}
 
-	var key mataCacheKey
-	key[0] = 2
+const dedupLoadWaiterAdmissionTimeout = time.Second
+
+// dedupLoad calls Done only after it finds an existing load call. Observing
+// that call gives these tests a phase barrier without relying on scheduling.
+func (c *dedupLoadWaiterContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.admitted) })
+	return c.Context.Done()
+}
+
+func newDedupLoadWaiterContext() (*dedupLoadWaiterContext, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
-	started := make(chan struct{})
-	ownerDone := make(chan error, 1)
+	return &dedupLoadWaiterContext{
+		Context:  ctx,
+		admitted: make(chan struct{}),
+	}, cancel
+}
 
-	go func() {
-		_, err := dedupLoad(ctx, key, func() ([]byte, error) {
-			close(started)
-			<-ctx.Done()
-			return nil, ctx.Err()
-		})
-		ownerDone <- err
-	}()
-	<-started
+func waitForDedupLoadWaiterAdmission(
+	t *testing.T,
+	waiterCtx *dedupLoadWaiterContext,
+	waiterDone <-chan struct{},
+	ownerDone <-chan struct{},
+	releaseOwner func(),
+	cancelWaiter context.CancelFunc,
+) {
+	t.Helper()
 
-	var waiterLoadCount atomic.Int32
-	waiterDone := make(chan error, 1)
-	go func() {
-		_, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
-			waiterLoadCount.Add(1)
-			return nil, errors.New("unexpected waiter load")
-		})
-		waiterDone <- err
-	}()
+	timer := time.NewTimer(dedupLoadWaiterAdmissionTimeout)
+	defer timer.Stop()
 
-	time.Sleep(10 * time.Millisecond)
-	cancel()
-	assert.ErrorIs(t, <-ownerDone, context.Canceled)
-	assert.ErrorIs(t, <-waiterDone, context.Canceled)
-	assert.Zero(t, waiterLoadCount.Load())
+	select {
+	case <-waiterCtx.admitted:
+		return
+	case <-waiterDone:
+		cancelWaiter()
+		releaseOwner()
+		drainDedupLoadAfterAdmissionFailure(t, ownerDone, waiterDone)
+		t.Fatalf("dedup load waiter completed before admission")
+	case <-timer.C:
+		cancelWaiter()
+		releaseOwner()
+		drainDedupLoadAfterAdmissionFailure(t, ownerDone, waiterDone)
+		t.Fatalf("timed out waiting for dedup load waiter admission")
+	}
+}
 
-	metaLoadMu.Lock()
-	_, ok := metaLoadCalls[key]
-	metaLoadMu.Unlock()
-	assert.False(t, ok)
+func drainDedupLoadAfterAdmissionFailure(
+	t *testing.T,
+	ownerDone <-chan struct{},
+	waiterDone <-chan struct{},
+) {
+	t.Helper()
+	if !waitForDedupLoadCompletion(ownerDone) {
+		t.Errorf("dedup load owner did not exit after admission failure")
+	}
+	if !waitForDedupLoadCompletion(waiterDone) {
+		t.Errorf("dedup load waiter did not exit after admission failure")
+	}
+}
+
+func waitForDedupLoadCompletion(done <-chan struct{}) bool {
+	timer := time.NewTimer(dedupLoadWaiterAdmissionTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 func TestEvictCacheToCapacityPercent(t *testing.T) {
@@ -275,4 +309,34 @@ func TestMetaCachePressureAdmissionExpires(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("1"), v)
 	assert.Equal(t, int64(1), metaCache.Used())
+}
+
+func TestObjectMetadataReadersRejectEmptyLocation(t *testing.T) {
+	ctx := context.Background()
+
+	_, err := FastLoadObjectMeta(ctx, nil, false, nil)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+
+	for _, test := range []struct {
+		name     string
+		location Location
+	}{
+		{name: "missing encoding"},
+		{
+			name:     "truncated encoding",
+			location: append(Location{1}, make(Location, LocationLen-2)...),
+		},
+		{name: "zero object name", location: make(Location, LocationLen)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := FastLoadObjectMeta(ctx, &test.location, false, nil)
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+
+			_, err = FastLoadBF(ctx, test.location, false, nil)
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+
+			_, err = LoadBFWithMeta(ctx, nil, test.location, nil)
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+		})
+	}
 }

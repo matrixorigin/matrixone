@@ -39,12 +39,12 @@ func LoadColumnsData(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (dataMeta objectio.ObjectDataMeta, release func(), fromCache bool, err error) {
-	name := location.Name().UnsafeString()
 	var meta objectio.ObjectMeta
 	var vectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
+	name := location.Name().UnsafeString()
 	dataMeta = meta.MustGetMeta(objectio.SchemaData)
 	if vectors, err = objectio.ReadOneBlock(
 		ctx,
@@ -114,11 +114,11 @@ func readColumnsData(
 		readTypes = append(readTypes, objectio.TSType)
 	}
 
-	name := location.Name().UnsafeString()
 	meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 	if err != nil {
 		return ioVectors, false, err
 	}
+	name := location.Name().UnsafeString()
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	ioVectors, err = objectio.ReadOneBlock(
 		ctx,
@@ -268,6 +268,81 @@ func LoadColumnsDataInto(
 		}
 	}
 	return
+}
+
+// LoadColumnsDataByUint64Key reads the columns together and copies only rows
+// matching key in the first, sorted uint64 column. Destinations must be empty.
+// The caller owns the destinations, including any partial copies on error.
+func LoadColumnsDataByUint64Key(
+	ctx context.Context,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	destinations []*vector.Vector,
+	key uint64,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(columns) == 0 || len(columns) != len(destinations) ||
+		len(columns) != len(typs) || typs[0].Oid != types.T_uint64 || m == nil {
+		return 0, moerr.NewInvalidInputNoCtx("invalid sorted uint64 column selection")
+	}
+	for _, dst := range destinations {
+		if dst == nil || dst.Length() != 0 {
+			return 0, moerr.NewInvalidInputNoCtx("sorted uint64 column selection requires empty destinations")
+		}
+	}
+	ioVectors, _, err := readColumnsData(ctx, columns, typs, fs, location, nil, m, policy)
+	if err != nil {
+		return 0, err
+	}
+	defer objectio.ReleaseIOVector(&ioVectors)
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	var keys vector.Vector
+	if err := objectio.MustVectorToCached(&keys, ioVectors.Entries[0].CachedData); err != nil {
+		return 0, err
+	}
+	defer keys.Free(nil)
+	if keys.GetType().Oid != types.T_uint64 || keys.IsConstNull() || keys.GetNulls().Any() {
+		return 0, moerr.NewInvalidInputNoCtx("sorted uint64 key column is missing or invalid")
+	}
+	values := vector.MustFixedColNoTypeCheck[uint64](&keys)
+	start := vector.OrderedFindFirstIndexInSortedSlice(key, values)
+	if start < 0 {
+		return 0, ctx.Err()
+	}
+	end := start + 1
+	if keys.IsConst() {
+		end = keys.Length()
+	} else {
+		for end < len(values) && values[end] == key {
+			end++
+		}
+	}
+
+	sels := make([]int64, end-start)
+	for i := range sels {
+		sels[i] = int64(start + i)
+	}
+	for i, dst := range destinations {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if err := objectio.CopyCachedVectorRows(dst, ioVectors.Entries[i].CachedData, sels, m); err != nil {
+			return 0, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return len(sels), nil
 }
 
 // LoadColumnDataBySearch executes a fixed supported varlen search while the
@@ -434,12 +509,12 @@ func LoadColumnsData2(
 	needCopy bool,
 	vPool *containers.VectorPool,
 ) (vectors []containers.Vector, release func(), err error) {
-	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
+	name := location.Name()
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.UnsafeString(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return
@@ -585,4 +660,25 @@ func LoadOneBlockWithIndex(
 	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
 		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
 	return bat, sortKey, err
+}
+
+// LoadBlocks loads the given blocks from one object with a single FileService
+// read. Block IDs must have been grouped using their physical column ranges.
+func LoadBlocks(
+	ctx context.Context,
+	fs fileservice.FileService,
+	key objectio.Location,
+	blockIDs []uint16,
+	mp *mpool.MPool,
+) ([]*batch.Batch, error) {
+	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
+	if err != nil {
+		return nil, err
+	}
+	data := meta.MustGetMeta(objectio.SchemaData)
+	cols := make([]uint16, data.BlockHeader().ColumnCount())
+	for i := range cols {
+		cols[i] = uint16(i)
+	}
+	return objectio.ReadBlocksAllColumns(ctx, &data, key.Name().String(), blockIDs, cols, fileservice.SkipAllCache, fs, mp)
 }

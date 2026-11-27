@@ -67,7 +67,7 @@ func EncodeEnumMembers(members []string) (string, uint32, error) {
 	}
 	size := uint64(len(strconv.Itoa(len(members))) + 1)
 	for _, member := range members {
-		size += uint64(len(strconv.Itoa(len(member))) + 1 + len(member))
+		size += uint64(len(strconv.Itoa(len(member)))+1) + uint64(len(member))
 		if size > math.MaxUint32 {
 			return "", 0, moerr.NewInvalidInputNoCtx("ENUM member definition is too large")
 		}
