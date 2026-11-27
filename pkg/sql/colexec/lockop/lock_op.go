@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"time"
@@ -946,6 +948,7 @@ func doLock(
 
 type lockRetryState struct {
 	backendRetryDeadline time.Time
+	forwardBindBackoff   time.Duration
 	useMemoryRetrySlot   bool
 }
 
@@ -1032,17 +1035,17 @@ func lockWithRetry(
 	var result lock.Result
 	var err error
 	retryState := lockRetryState{}
+	var bindChanged error
 
 	options, err = refreshLockWaitOptions(options)
 	if err != nil {
 		return result, err
 	}
 	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
-	if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
-		return result, getLockRetryExitError(ctx, err)
-	}
-
-	for {
+	for canRetryLock(ctx, tableID, txnOp, err, &retryState, options.LockWaitDeadline) {
+		if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+			bindChanged = err
+		}
 		options, err = refreshLockWaitOptions(options)
 		if err != nil {
 			return result, err
@@ -1052,10 +1055,8 @@ func lockWithRetry(
 			attemptCtx = morpc.WithBackendWaitDeadline(ctx, retryState.backendRetryDeadline)
 		}
 		result, err = lockService.Lock(attemptCtx, tableID, rows, txnID, options)
-		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
-			return result, getLockRetryExitError(ctx, err)
-		}
 	}
+	return result, getLockRetryExitError(ctx, err, bindChanged, options)
 }
 
 func LockWithMayUpgrade(
@@ -1106,8 +1107,9 @@ func canRetryLock(
 	txn client.TxnOperator,
 	err error,
 	retryState *lockRetryState,
+	lockWaitDeadline int64,
 ) bool {
-	if ctx.Err() != nil || !isRetryLockError(err) {
+	if ctx.Err() != nil || !isRetryLockError(err) || moerr.IsLockTableBindChangedForFencedTxn(err) {
 		return false
 	}
 	if !shouldBypassHeldLockTableCheck(err) &&
@@ -1123,6 +1125,11 @@ func canRetryLock(
 	if !ok {
 		logLockRetryBudgetStop(err, table, txn, *retryState)
 		return false
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrForwardBindBusy) && lockWaitDeadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, time.Unix(0, lockWaitDeadline))
+		defer cancel()
 	}
 	return waitToRetryLock(ctx, wait, retryState)
 }
@@ -1204,37 +1211,54 @@ func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration,
 		}
 		return lockRetryMemoryBackoff, true
 	}
-	if remaining < defaultWaitTimeOnRetryLock {
-		return remaining, true
+	wait := defaultWaitTimeOnRetryLock
+	if moerr.IsMoErrCode(err, moerr.ErrForwardBindBusy) && wait > 0 {
+		// A short cold burst can clear long before the normal backend retry
+		// interval. Back off to that interval if the coordinator stays busy.
+		backoff := max(20*time.Millisecond, 2*retryState.forwardBindBackoff)
+		retryState.forwardBindBackoff = min(wait, backoff)
+		if backoff < wait {
+			wait = min(wait, backoff+rand.N(backoff/2))
+		}
 	}
-	return defaultWaitTimeOnRetryLock, true
+	return min(remaining, wait), true
 }
 
-func getLockRetryExitError(ctx context.Context, err error) error {
-	if ctxErr := ctx.Err(); ctxErr != nil && isRetryLockError(err) {
-		if isBoundedRetryLockError(err) {
-			// Preserve the backend failure so explicit txns do not survive on a raw
-			// context error after backend retry has already proven the path unhealthy.
-			return err
+func getLockRetryExitError(ctx context.Context, err, bindChanged error, options lock.LockOptions) error {
+	if err == nil {
+		return nil
+	}
+	ctxErr := ctx.Err()
+	busy := moerr.IsMoErrCode(err, moerr.ErrForwardBindBusy)
+	if busy && ctxErr == nil {
+		if _, waitErr := refreshLockWaitOptions(options); waitErr != nil {
+			return waitErr
 		}
-		return ctxErr
+	}
+	if ctxErr != nil && (busy || moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound)) {
+		err = ctxErr
+	}
+	if bindChanged != nil && (busy || (ctxErr != nil && errors.Is(err, ctxErr)) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockTableBindLookupTimeout)) {
+		// The retry ended before the known stale binding could be reconciled.
+		return bindChanged
 	}
 	return err
 }
 
 func isRetryLockError(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
-		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) ||
+	return moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) ||
 		isBoundedRetryLockError(err)
 }
 
 func shouldBypassHeldLockTableCheck(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart)
+	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+		moerr.IsMoErrCode(err, moerr.ErrForwardBindBusy)
 }
 
 func isBoundedRetryLockError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
-		moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+		shouldBypassHeldLockTableCheck(err) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
 		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend)

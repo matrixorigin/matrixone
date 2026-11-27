@@ -109,6 +109,7 @@ type InsertCtx struct {
 	AddAffectedRows bool     // for hidden table, should not update affect Rows
 	Attrs           []string // letter case: origin
 	TableDef        *plan.TableDef
+	LocalObjects    *colexec.LocalInsertObjects
 
 	// ExternalConfig is populated at compile time when the target is a writable
 	// external table; consumed by the operator to build an ExternalWriter.

@@ -181,13 +181,34 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 	for _, q := range []string{
 		"update changed_sources set p2=p2,status=8 where id=1",
 		"update changed_sources set p1=" + sqlquote.String(local) + ",status=8 where id=1",
-		"update changed_sources a join changed_sources b on a.id=b.id set a.status=3,b.status=4 where a.id=1",
 	} {
 		_, err = conn.ExecContext(t.Context(), q)
 		require.ErrorContains(t, err, "asynchronous indexes require remote Datalink sources", q)
 		require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from changed_sources where status=1").Scan(&count))
 		require.Equal(t, 2, count, "rejected assignments roll back all database effects")
 	}
+	result, err := conn.ExecContext(t.Context(), "update changed_sources a join changed_sources b on a.id=b.id set a.status=3,b.status=4 where a.id=1")
+	require.NoError(t, err)
+	affected, err := result.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 2, affected)
+	var mergedStatus int
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select status from changed_sources where id=1").Scan(&mergedStatus))
+	require.Equal(t, 4, mergedStatus)
+	exec("update changed_sources set status=1 where id=1")
+
+	// The rejected role cannot cause its retained old source to be checked.
+	result, err = conn.ExecContext(t.Context(), "update ignore changed_sources a join changed_sources b on a.id=b.id set a.id=2,a.p2="+sqlquote.String(stable)+",b.p1="+sqlquote.String(stable)+",b.status=4 where a.id=1")
+	require.NoError(t, err)
+	affected, err = result.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, affected)
+	var mergedP1, mergedP2 string
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select p1,p2,status from changed_sources where id=1").Scan(&mergedP1, &mergedP2, &mergedStatus))
+	require.Equal(t, stable, mergedP1)
+	require.Equal(t, remote, mergedP2)
+	require.Equal(t, 4, mergedStatus)
+	exec("update changed_sources set status=1 where id=1")
 	// Validate the assigned source independently of a carried, invalidated peer.
 	exec("update changed_sources set p1=" + sqlquote.String(stable) + ",status=2 where id=1")
 	var storedP1, storedP2 string

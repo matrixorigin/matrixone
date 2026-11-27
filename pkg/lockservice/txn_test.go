@@ -178,7 +178,7 @@ func TestLockTableBindTouchedTracksFenceIntentOnly(t *testing.T) {
 		changed := bind
 		changed.Version++
 		assert.True(t, txn.fenceByBindChanged(changed, getLogger("")))
-		assert.True(t, txn.bindChanged)
+		assert.True(t, txn.isFenced())
 
 		txn.reset()
 		assert.Empty(t, txn.lockHolders)

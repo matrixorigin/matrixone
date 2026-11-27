@@ -187,6 +187,9 @@ func (s *controlledS3) ensureWriter() {
 	}
 	opts := []ioutil.SinkerOption{ioutil.WithMemoryWorkspace(s.memory.WorkingSet),
 		ioutil.WithBufferBytes(s.bufferBytes), ioutil.WithRetainedRelease(s.sourceReleased), ioutil.WithPipelineFlush()}
+	if owner := s.owner.InsertCtx.LocalObjects; owner != nil {
+		opts = append(opts, ioutil.WithObjectReservation(owner.Reserve))
+	}
 	s.writer = colexec.NewCNS3DataWriter(s.dataMP, s.fs, s.owner.InsertCtx.TableDef, int(s.bufferBytes), false, opts...)
 }
 

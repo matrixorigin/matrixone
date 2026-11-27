@@ -561,7 +561,7 @@ read_disk_cache:
 				return
 			}
 			t0 := time.Now()
-			err = l.diskCache.Update(ctx, vector, l.asyncUpdate)
+			err = l.diskCache.updateAfterRead(ctx, vector, l.asyncUpdate)
 			metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
 		}()
 	}
@@ -1051,7 +1051,7 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 			if l.diskCache == nil {
 				return nil
 			}
-			return l.diskCache.DeletePaths(ctx, filePaths)
+			return l.diskCache.deletePathsAfterStorage(ctx, filePaths)
 		}(),
 		func() error {
 			if l.remoteCache == nil {

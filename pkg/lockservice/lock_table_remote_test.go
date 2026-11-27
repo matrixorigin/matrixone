@@ -17,10 +17,12 @@ package lockservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -513,58 +515,332 @@ func TestLockRemote(t *testing.T) {
 	)
 }
 
-func TestLockRemoteChecksBindChangedAfterRPC(t *testing.T) {
-	reqArrived := make(chan struct{})
-	releaseResp := make(chan struct{})
+func TestLockRemoteFencedErrorRetainsCleanup(t *testing.T) {
+	for _, failRefresh := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refresh-fails=%t", failRefresh), func(t *testing.T) {
+			binding := pb.LockTable{ServiceID: "s1", Table: 1, Valid: true, Version: 1}
+			unlockCalled := make(chan struct{}, 1)
+			var getBindCalls atomic.Int32
+			runRemoteLockTableTests(
+				t,
+				binding,
+				func(s Server) {
+					s.RegisterMethodHandler(pb.Method_Lock, func(ctx context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+						writeResponse(getLogger(""), cancel, resp, moerr.NewLockTableBindChangedForFencedTxnNoCtx(), cs)
+					})
+					s.RegisterMethodHandler(pb.Method_Unlock, func(ctx context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+						unlockCalled <- struct{}{}
+						writeResponse(getLogger(""), cancel, resp, nil, cs)
+					})
+					s.RegisterMethodHandler(pb.Method_GetBind, func(ctx context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+						getBindCalls.Add(1)
+						if failRefresh {
+							writeResponse(getLogger(""), cancel, resp, moerr.NewInternalErrorNoCtx("allocator unavailable"), cs)
+							return
+						}
+						resp.GetBind.LockTable = binding
+						writeResponse(getLogger(""), cancel, resp, nil, cs)
+					})
+				},
+				func(l *remoteLockTable, _ Server) {
+					txnID := []byte("txn-fenced")
+					txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					txn.Lock()
+					defer txn.Unlock()
+					l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(_ pb.Result, err error) {
+						require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
+					})
+					require.EqualValues(t, 1, getBindCalls.Load())
+					holder := txn.getHoldLocksLocked(l.bind.Group)
+					require.Contains(t, holder.uncertainLockKeys[l.bind.Table], string([]byte{1}))
+					require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+						return l, nil
+					}, l.logger))
+					select {
+					case <-unlockCalled:
+					default:
+						t.Fatal("expected remote unlock")
+					}
+				},
+				func(pb.LockTable) { t.Error("same allocator bind must not be published as changed") },
+			)
+		})
+	}
+}
+
+func TestLockRemoteFencedErrorSurvivesCallerCancellationDuringRefresh(t *testing.T) {
+	getBindStarted := make(chan struct{})
+	releaseGetBind := make(chan struct{})
+	getBindDone := make(chan struct{})
+	unlockCalled := make(chan struct{}, 1)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseGetBind) }) }
 	runRemoteLockTableTests(
 		t,
 		pb.LockTable{ServiceID: "s1", Table: 1, Valid: true, Version: 1},
 		func(s Server) {
-			s.RegisterMethodHandler(
-				pb.Method_Lock,
-				func(
-					ctx context.Context,
-					cancel context.CancelFunc,
-					req *pb.Request,
-					resp *pb.Response,
-					cs morpc.ClientSession) {
-					close(reqArrived)
-					<-releaseResp
-					writeResponse(getLogger(""), cancel, resp, nil, cs)
-				},
-			)
+			s.RegisterMethodHandler(pb.Method_Lock, func(ctx context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+				writeResponse(getLogger(""), cancel, resp, moerr.NewLockTableBindChangedForFencedTxnNoCtx(), cs)
+			})
+			s.RegisterMethodHandler(pb.Method_GetBind, func(ctx context.Context, cancel context.CancelFunc, _ *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+				defer close(getBindDone)
+				close(getBindStarted)
+				select {
+				case <-releaseGetBind:
+				case <-ctx.Done():
+				}
+				writeResponse(getLogger(""), cancel, resp, context.Canceled, cs)
+			})
+			s.RegisterMethodHandler(pb.Method_Unlock, func(ctx context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+				unlockCalled <- struct{}{}
+				writeResponse(getLogger(""), cancel, resp, nil, cs)
+			})
 		},
-		func(l *remoteLockTable, s Server) {
-			txnID := []byte("txn1")
+		func(l *remoteLockTable, _ Server) {
+			txnID := []byte("txn-fenced-cancel")
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
-			defer reuse.Free(txn, nil)
-
-			errC := make(chan error, 1)
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-				defer cancel()
-				txn.Lock()
-				defer txn.Unlock()
-				l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
-					errC <- err
-				})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer func() {
+				cancel()
+				release()
 			}()
-
-			<-reqArrived
+			go func() {
+				select {
+				case <-getBindStarted:
+					cancel()
+					release()
+				case <-ctx.Done():
+				}
+			}()
 			txn.Lock()
-			txn.bindChanged = true
-			txn.Unlock()
-			close(releaseResp)
-
-			err := <-errC
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
-			txn.Lock()
-			require.Equal(t, l.bind.Table, txn.getHoldLocksLocked(0).tableBinds[l.bind.Table].Table)
-			require.NotEmpty(t, txn.getHoldLocksLocked(0).uncertainLockKeys[l.bind.Table])
-			txn.Unlock()
+			defer txn.Unlock()
+			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(_ pb.Result, err error) {
+				require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
+			})
+			select {
+			case <-getBindDone:
+			case <-time.After(time.Second):
+				t.Fatal("GetBind handler did not exit")
+			}
+			require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+				return l, nil
+			}, l.logger))
+			select {
+			case <-unlockCalled:
+			default:
+				t.Fatal("expected remote unlock")
+			}
 		},
-		func(lt pb.LockTable) {},
+		func(pb.LockTable) { t.Error("unchanged bind must not be published") },
 	)
+}
+
+// delayLockResponse lets the real owner acquire a lock before the caller
+// processes its response.
+type delayLockResponse struct {
+	Client
+	acquired chan struct{}
+	release  chan struct{}
+}
+
+func (c *delayLockResponse) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	resp, err := c.Client.Send(ctx, req)
+	if req.Method == pb.Method_Lock && err == nil {
+		close(c.acquired)
+		select {
+		case <-c.release:
+		case <-ctx.Done():
+		}
+	}
+	return resp, err
+}
+
+func TestLockRemoteChecksBindChangedAfterRPC(t *testing.T) {
+	runLockServiceTests(t, []string{"s1", "s2"}, func(_ *lockTableAllocator, services []*service) {
+		origin, owner := services[0], services[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		options := newTestRowExclusiveOptions()
+		txnID := []byte("txn-fenced-during-rpc")
+		row := []byte("row")
+		const tableA, tableB uint64 = 201, 202
+
+		// The transaction has an old binding to A, while B is owned remotely.
+		_, err := origin.Lock(ctx, tableA, [][]byte{{1}}, txnID, options)
+		require.NoError(t, err)
+		_, err = owner.Lock(ctx, tableB, [][]byte{row}, []byte("seed"), options)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, []byte("seed"), timestamp.Timestamp{}))
+		l, err := origin.getLockTableWithCreate(ctx, 0, tableB, [][]byte{row}, pb.Sharding_None)
+		require.NoError(t, err)
+		bindB := l.getBind()
+		require.Equal(t, owner.serviceID, bindB.ServiceID)
+		client := &delayLockResponse{Client: origin.remote.client, acquired: make(chan struct{}), release: make(chan struct{})}
+		remote := newRemoteLockTable(origin.serviceID, time.Second, bindB, client, origin.handleBindChanged, origin.logger)
+		txn := origin.activeTxnHolder.getActiveTxn(txnID, false, "")
+		require.NotNil(t, txn)
+		done := make(chan error, 1)
+		go func() {
+			txn.Lock()
+			defer txn.Unlock()
+			remote.lock(ctx, txn, [][]byte{row}, LockOptions{LockOptions: options}, func(_ pb.Result, e error) { done <- e })
+		}()
+		select {
+		case <-client.acquired:
+		case <-ctx.Done():
+			t.Fatal("remote lock did not complete")
+		}
+		holder, found, err := owner.GetLockHolder(ctx, tableB, row, options)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, txnID, holder.TxnID)
+
+		changedA := origin.tableGroups.get(0, tableA).getBind()
+		changedA.Version++
+		require.True(t, txn.fenceByBindChanged(changedA, origin.logger))
+		close(client.release)
+		require.True(t, moerr.IsLockTableBindChangedForFencedTxn(<-done))
+		require.NoError(t, origin.Unlock(ctx, txnID, timestamp.Timestamp{}))
+		// Cleanup of a lock granted before its fenced response is a separate
+		// lifecycle issue; the fixture owns the owner-side lock here.
+		require.NoError(t, owner.Unlock(ctx, txnID, timestamp.Timestamp{}))
+	})
+}
+
+type countingLockClient struct {
+	Client
+	lockRequests atomic.Int32
+}
+
+func (c *countingLockClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	if req.Method == pb.Method_Lock {
+		c.lockRequests.Add(1)
+	}
+	return c.Client.Send(ctx, req)
+}
+
+func (c *countingLockClient) AsyncSend(ctx context.Context, req *pb.Request) (*morpc.Future, error) {
+	return c.Client.AsyncSend(ctx, req)
+}
+
+type cancelAfterGetBindClient struct {
+	Client
+	cancel context.CancelFunc
+	done   atomic.Bool
+}
+
+func (c *cancelAfterGetBindClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	resp, err := c.Client.Send(ctx, req)
+	if req.Method == pb.Method_GetBind && err == nil && c.done.CompareAndSwap(false, true) {
+		c.cancel()
+	}
+	return resp, err
+}
+
+func (c *cancelAfterGetBindClient) AsyncSend(ctx context.Context, req *pb.Request) (*morpc.Future, error) {
+	return c.Client.AsyncSend(ctx, req)
+}
+
+func TestFencedRemoteLockRefreshesBindingBeforeReturning(t *testing.T) {
+	runLockServiceTests(t, []string{"source", "old-owner", "new-owner"}, func(alloc *lockTableAllocator, services []*service) {
+		source, oldOwner, newOwner := services[0], services[1], services[2]
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		const fenceTable, targetTable = 197101, 197102
+		opts := newTestRowExclusiveOptions()
+		fencedID := []byte("fenced-txn")
+		_, err := oldOwner.Lock(ctx, fenceTable, [][]byte{[]byte("fence")}, fencedID, opts)
+		require.NoError(t, err)
+		_, err = oldOwner.Lock(ctx, targetTable, [][]byte{[]byte("seed")}, []byte("seed"), opts)
+		require.NoError(t, err)
+		require.NoError(t, oldOwner.Unlock(ctx, []byte("seed"), timestamp.Timestamp{}))
+
+		client := &countingLockClient{Client: source.remote.client}
+		source.remote.client = client
+		_, err = source.getLockTableWithCreate(ctx, 0, targetTable, [][]byte{[]byte("warm")}, pb.Sharding_None)
+		require.NoError(t, err)
+		oldBind := source.tableGroups.get(0, targetTable).getBind()
+		require.Equal(t, oldOwner.serviceID, oldBind.ServiceID)
+
+		// The allocator has advanced, but the source and old owner have not
+		// observed the new target bind yet.
+		alloc.mu.Lock()
+		newBind := alloc.getLockTablesLocked(0)[targetTable]
+		newBind.ServiceID = newOwner.serviceID
+		newBind.Version++
+		alloc.getLockTablesLocked(0)[targetTable] = newBind
+		alloc.mu.Unlock()
+
+		fenceBind := oldOwner.tableGroups.get(0, fenceTable).getBind()
+		fenceBind.Version++
+		oldOwner.fenceByBindChanged(fenceBind)
+		_, err = source.Lock(ctx, targetTable, [][]byte{[]byte("first")}, fencedID, opts)
+		require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
+		require.EqualValues(t, 1, client.lockRequests.Load(), "the fenced txn must not retry Lock")
+		require.True(t, oldBind.Changed(source.tableGroups.get(0, targetTable).getBind()))
+		require.Equal(t, newBind, source.tableGroups.get(0, targetTable).getBind())
+		require.NoError(t, source.Unlock(ctx, fencedID, timestamp.Timestamp{}))
+
+		result, err := source.Lock(ctx, targetTable, [][]byte{[]byte("successor")}, []byte("successor-txn"), opts)
+		require.NoError(t, err)
+		require.Equal(t, newOwner.serviceID, result.LockedOn.ServiceID)
+		require.NoError(t, source.Unlock(ctx, []byte("successor-txn"), timestamp.Timestamp{}))
+		require.NoError(t, oldOwner.Unlock(ctx, fencedID, timestamp.Timestamp{}))
+	})
+}
+
+func TestFencedRemoteLockKeepsTerminalErrorIfRefreshFencesBeforeCancel(t *testing.T) {
+	runLockServiceTests(t, []string{"source", "old-owner", "new-owner"}, func(alloc *lockTableAllocator, services []*service) {
+		source, oldOwner, newOwner := services[0], services[1], services[2]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const fenceTable, targetTable = 197111, 197112
+		opts := newTestRowExclusiveOptions()
+		txnID := []byte("fenced-cancel-txn")
+		_, err := oldOwner.Lock(context.Background(), fenceTable, [][]byte{[]byte("fence")}, txnID, opts)
+		require.NoError(t, err)
+		_, err = oldOwner.Lock(context.Background(), targetTable, [][]byte{[]byte("seed")}, []byte("seed"), opts)
+		require.NoError(t, err)
+		require.NoError(t, oldOwner.Unlock(context.Background(), []byte("seed"), timestamp.Timestamp{}))
+
+		_, err = source.getLockTableWithCreate(context.Background(), 0, targetTable, [][]byte{[]byte("warm")}, pb.Sharding_None)
+		require.NoError(t, err)
+		oldBind := source.tableGroups.get(0, targetTable).getBind()
+		counting := &countingLockClient{Client: source.remote.client}
+		client := &cancelAfterGetBindClient{Client: counting, cancel: cancel}
+		source.remote.client = client
+		l := source.tableGroups.get(0, targetTable).(*remoteLockTable)
+		l.client = client
+		alloc.mu.Lock()
+		newBind := alloc.getLockTablesLocked(0)[targetTable]
+		newBind.ServiceID = newOwner.serviceID
+		newBind.Version++
+		alloc.getLockTablesLocked(0)[targetTable] = newBind
+		alloc.mu.Unlock()
+		fenceBind := oldOwner.tableGroups.get(0, fenceTable).getBind()
+		fenceBind.Version++
+		oldOwner.fenceByBindChanged(fenceBind)
+
+		txn := source.activeTxnHolder.getActiveTxn(txnID, true, "")
+		func() {
+			txn.Lock()
+			defer txn.Unlock()
+			l.lock(ctx, txn, [][]byte{[]byte("first")}, LockOptions{LockOptions: opts}, func(_ pb.Result, lockErr error) {
+				require.True(t, moerr.IsLockTableBindChangedForFencedTxn(lockErr), "%v", lockErr)
+			})
+			require.True(t, errors.Is(ctx.Err(), context.Canceled))
+			require.True(t, oldBind.Changed(source.tableGroups.get(0, targetTable).getBind()))
+			require.Equal(t, newBind, source.tableGroups.get(0, targetTable).getBind())
+			require.EqualValues(t, 1, counting.lockRequests.Load())
+		}()
+
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		require.NoError(t, source.Unlock(cleanupCtx, txnID, timestamp.Timestamp{}))
+		require.NoError(t, oldOwner.Unlock(cleanupCtx, txnID, timestamp.Timestamp{}))
+	})
 }
 
 func TestIssue20747(t *testing.T) {
@@ -817,8 +1093,7 @@ func TestRemoteNewBindFromNewAllocatorPurgesStaleBinds(t *testing.T) {
 				logger:  logger,
 				holders: map[uint32]*lockTableHolder{},
 			}
-			svc.lastAllocatorID = oldAllocator.id
-			svc.lastAllocatorVersion = oldAllocator.version
+			svc.lastAllocatorState.Store(&oldAllocator)
 			svc.tableGroups.set(staleA.Group, staleA.Table, newRemoteLockTable(
 				svc.serviceID,
 				time.Second,
@@ -854,8 +1129,8 @@ func TestRemoteNewBindFromNewAllocatorPurgesStaleBinds(t *testing.T) {
 			require.Nil(t, svc.tableGroups.get(staleA.Group, staleA.Table))
 			require.NotNil(t, svc.tableGroups.get(currentA.Group, currentA.Table))
 			require.NotNil(t, svc.tableGroups.get(newB.Group, newB.Table))
-			require.Equal(t, newAllocator.id, svc.lastAllocatorID)
-			require.Equal(t, newAllocator.version, svc.lastAllocatorVersion)
+			require.Equal(t, newAllocator.id, svc.allocatorStateSnapshot().id)
+			require.Equal(t, newAllocator.version, svc.allocatorStateSnapshot().version)
 
 			removed, accepted := svc.observeAllocatorStateWithHoldersFromSnapshot(
 				"remote-new-bind-same-epoch",
@@ -915,8 +1190,7 @@ func TestRemoteLateNewBindDoesNotRepublishSupersededAllocator(t *testing.T) {
 				holders: map[uint32]*lockTableHolder{},
 			}
 			svc.allocatorVersionMu.Lock()
-			svc.lastAllocatorID = newAllocator.id
-			svc.lastAllocatorVersion = newAllocator.version
+			svc.lastAllocatorState.Store(&newAllocator)
 			svc.addSupersededAllocatorIDLocked(oldAllocator.id)
 			svc.allocatorVersionMu.Unlock()
 
@@ -939,8 +1213,8 @@ func TestRemoteLateNewBindDoesNotRepublishSupersededAllocator(t *testing.T) {
 			got := svc.tableGroups.get(currentBind.Group, currentBind.Table)
 			require.NotNil(t, got)
 			require.Equal(t, currentBind, got.getBind())
-			require.Equal(t, newAllocator.id, svc.lastAllocatorID)
-			require.Equal(t, newAllocator.version, svc.lastAllocatorVersion)
+			require.Equal(t, newAllocator.id, svc.allocatorStateSnapshot().id)
+			require.Equal(t, newAllocator.version, svc.allocatorStateSnapshot().version)
 		},
 	)
 }
@@ -1209,8 +1483,7 @@ func TestRemoteBindRefreshRejectsSupersededAllocatorBind(t *testing.T) {
 			}
 			svc.tableGroups = &lockTableHolders{service: svc.serviceID, logger: logger, holders: map[uint32]*lockTableHolder{}}
 			svc.allocatorVersionMu.Lock()
-			svc.lastAllocatorID = newAllocator.id
-			svc.lastAllocatorVersion = newAllocator.version
+			svc.lastAllocatorState.Store(&newAllocator)
 			svc.addSupersededAllocatorIDLocked(oldAllocator.id)
 			svc.allocatorVersionMu.Unlock()
 
@@ -1221,8 +1494,8 @@ func TestRemoteBindRefreshRejectsSupersededAllocatorBind(t *testing.T) {
 			err := l.handleErrorWithContext(context.Background(), moerr.NewRPCTimeoutNoCtx(), true)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 			require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
-			require.Equal(t, newAllocator.id, svc.lastAllocatorID)
-			require.Equal(t, newAllocator.version, svc.lastAllocatorVersion)
+			require.Equal(t, newAllocator.id, svc.allocatorStateSnapshot().id)
+			require.Equal(t, newAllocator.version, svc.allocatorStateSnapshot().version)
 		},
 	)
 }

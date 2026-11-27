@@ -1751,18 +1751,12 @@ func sessionRollsBackTxnOnError(ses FeSession, inputErr error) bool {
 }
 
 func isErrorRollbackWholeTxn(inputErr error) bool {
-	if inputErr == nil {
+	me, ok := errors.AsType[*moerr.Error](inputErr)
+	if !ok || me == nil {
 		return false
 	}
-	me, ok := inputErr.(*moerr.Error)
-	if !ok {
-		// This is not a moerr
-		return false
-	}
-	if _, has := errCodeRollbackWholeTxn[me.ErrorCode()]; has {
-		return true
-	}
-	return false
+	_, rollback := errCodeRollbackWholeTxn[me.ErrorCode()]
+	return rollback
 }
 
 func getRandomErrorRollbackWholeTxn() error {

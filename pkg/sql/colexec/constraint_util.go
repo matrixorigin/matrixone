@@ -110,9 +110,61 @@ func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan
 		if vecs[j] == nil {
 			continue
 		}
-		nsp := vecs[j].GetNulls()
-		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility && nulls.Any(nsp) {
-			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", attrs[j]))
+		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility {
+			if err := CheckNotNull(ctx, vecs[j], nil, 0, attrs[j]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// CheckNotNull and CheckZeroTemporal validate selected rows without taking
+// ownership of their vectors. A nil selection means every row is selected.
+func CheckNotNull(ctx context.Context, vec, selected *vector.Vector, offset int, name string) error {
+	if vec == nil || !nulls.Any(vec.GetNulls()) {
+		return nil
+	}
+	for row := 0; row < vec.Length(); row++ {
+		if selected != nil && !vector.GetFixedAtNoTypeCheck[bool](selected, offset+row) {
+			continue
+		}
+		if vec.IsNull(uint64(row)) {
+			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", name))
+		}
+	}
+	return nil
+}
+
+func CheckZeroTemporal(ctx context.Context, vec, selected *vector.Vector, offset int, rejectZero bool) error {
+	if vec == nil {
+		return nil
+	}
+	typ := vec.GetType().Oid
+	if typ != types.T_timestamp && (typ != types.T_date && typ != types.T_datetime || !rejectZero) {
+		return nil
+	}
+	for row := 0; row < vec.Length(); row++ {
+		if selected != nil && !vector.GetFixedAtNoTypeCheck[bool](selected, offset+row) || vec.IsNull(uint64(row)) {
+			continue
+		}
+		switch typ {
+		case types.T_date:
+			if vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
+				return moerr.NewTruncatedValueForField(ctx, "date", "0000-00-00", "value", row+1)
+			}
+		case types.T_datetime:
+			if vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
+				return moerr.NewTruncatedValueForField(ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+			}
+		case types.T_timestamp:
+			timestamp := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
+			if !types.ValidTimestamp(timestamp) {
+				return moerr.NewTruncatedValueForField(ctx, "datetime", fmt.Sprintf("%d", int64(timestamp)), "value", row+1)
+			}
+			if rejectZero && timestamp == types.ZeroTimestamp {
+				return moerr.NewTruncatedValueForField(ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+			}
 		}
 	}
 	return nil

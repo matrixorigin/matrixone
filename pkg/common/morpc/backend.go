@@ -381,7 +381,11 @@ func (rb *remoteBackend) getFuture(ctx context.Context, request Message, interna
 	f := rb.newFuture()
 	f.init(RPCMessage{Ctx: ctx, Message: request, internal: internal})
 	if !internal {
-		f.setSendRelease(rb.options.releaseRequest)
+		release := rb.options.releaseRequest
+		if perRequest, ok := ctx.Value(requestReleaseKey{}).(func(Message)); ok && perRequest != nil {
+			release = perRequest
+		}
+		f.setSendRelease(release)
 		f.setResponseRelease(rb.options.freeResponse)
 	}
 	rb.addFuture(f)
