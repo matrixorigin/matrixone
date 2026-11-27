@@ -207,9 +207,9 @@ func TestTransferFlowStagesOnlyObjectsDeletedInWindow(t *testing.T) {
 	liveBatch.Vecs[6], err = vector.NewConstFixed(types.T_TS.ToType(), types.TS{}, 1, mp)
 	require.NoError(t, err)
 	liveBatch.SetRowCount(1)
-	liveProto, err := batch.BatchToProtoBatch(liveBatch, nil)
+	liveEncoded, err := liveBatch.MarshalBinary()
 	require.NoError(t, err)
-	state.HandleDataObjectList(ctx, &api.Entry{Bat: liveProto}, nil, mp)
+	state.HandleDataObjectList(ctx, &api.Entry{Bat: api.NewEncodedBatch(liveEncoded)}, nil, mp)
 	_, exists := state.GetObject(*liveAppendableStats.ObjectShortName())
 	require.False(t, exists)
 

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
+	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -83,7 +84,7 @@ func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (bool, string, error) {
 	}
 	logutil.Infof("[idxcron][ftv2] Updatable index=%s: tag=1 tail chunks=%d threshold=%d",
 		in.IndexName, count, TailChunkThreshold)
-	if count < TailChunkThreshold {
+	if !tailReady(count) {
 		return false, fmt.Sprintf("tag=1 tail chunks %d < threshold %d", count, TailChunkThreshold), nil
 	}
 	return true, "", nil
@@ -161,4 +162,47 @@ func countSourceRows(sqlproc *sqlexec.SqlProcess, db, table string) (int64, erro
 		}
 	}
 	return 0, nil
+}
+
+func tailReady(chunks int64) bool { return chunks >= TailChunkThreshold }
+
+var _ idxcronplugin.HealthInspector = Hooks{}
+
+// IndexHealth uses exactly the scheduler owner's trigger and mode policies;
+// observing them never registers or runs a maintenance task.
+func (Hooks) IndexHealth(sp *sqlexec.SqlProcess, cfg indexstats.Config) (map[string]any, []indexstats.Suggestion, error) {
+	tc := fulltext2.TableConfig{DbName: cfg.Database, IndexTable: cfg.Entries, MetadataTable: cfg.Metadata}
+	tail, err := fulltext2.ReadTailUsage(sp, tc)
+	if err != nil {
+		return nil, nil, err
+	}
+	base, err := fulltext2.SumBaseNrow(sp, tc)
+	if err != nil {
+		return nil, nil, err
+	}
+	live, err := countSourceRows(sp, cfg.Database, cfg.Table)
+	if err != nil {
+		return nil, nil, err
+	}
+	metrics, advice := maintenanceHealth(tail, live, base)
+	return metrics, advice, nil
+}
+
+func maintenanceHealth(tail fulltext2.TailUsage, live, base int64) (map[string]any, []indexstats.Suggestion) {
+	metrics := map[string]any{"tail_chunk_count": tail.Chunks, "tail_size_bytes": tail.Bytes}
+	if tail.Frames != nil {
+		metrics["tail_frame_count"] = *tail.Frames
+	}
+	if base > 0 {
+		metrics["base_dead_ratio"] = max(0, 1-float64(live)/float64(base))
+	}
+	advice := make([]indexstats.Suggestion, 0)
+	if tailReady(tail.Chunks) {
+		mode, reason := "MERGE", "tail_chunk_threshold"
+		if reindexOptionForCounts(live, base) == "" {
+			mode, reason = "REBUILD", "base_dead_fraction"
+		}
+		advice = indexstats.AddReindex(advice, reason, map[string]any{"mode": mode})
+	}
+	return metrics, advice
 }

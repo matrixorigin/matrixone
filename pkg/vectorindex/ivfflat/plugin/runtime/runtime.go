@@ -39,6 +39,15 @@ import (
 // whose tests import the IVF-FLAT idxcron hook directly.
 const actionIvfflatReindex = "ivfflat_reindex"
 
+// TrainingSampleLimit is the SQL LIMIT used to train IVF-FLAT centroids.
+func TrainingSampleLimit(rows int64, lists uint, percent float64) uint {
+	limit := lists * 50
+	if rows > 0 {
+		limit = min(limit, uint((percent/100)*float64(rows)))
+	}
+	return max(10000, limit)
+}
+
 // Compile-time interface check.
 var _ catalogplugin.Hooks = CatalogHooks{}
 

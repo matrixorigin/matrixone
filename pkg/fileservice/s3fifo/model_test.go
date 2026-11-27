@@ -215,19 +215,25 @@ func TestMatchesModel(t *testing.T) {
 				c.Set(k, newValue(k, &misuse), size)
 				m.set(k, size)
 			}
-			require.Equal(t, m.used(), c.Used(), "capacity %d, op %d", capacity, i)
-			require.Equal(t, m.smallBytes(), c.smallBytes.Load(), "capacity %d, op %d", capacity, i)
-			require.Equal(t, m.mainBytes(), c.mainBytes.Load(), "capacity %d, op %d", capacity, i)
+			small, main := m.smallBytes(), m.mainBytes()
+			require.Equal(t, small+main, c.Used(), "capacity %d, op %d", capacity, i)
+			require.Equal(t, small, c.smallBytes.Load(), "capacity %d, op %d", capacity, i)
+			require.Equal(t, main, c.mainBytes.Load(), "capacity %d, op %d", capacity, i)
 			require.Equal(t, m.ghostBytes(), c.ghostBytes.Load(), "capacity %d, op %d", capacity, i)
-			// Keep the exhaustive membership oracle after every operation. The
-			// 32 million successful boolean comparisons need no reflection or
-			// testing helper bookkeeping; retain full coordinates on failure.
-			for k := 0; k < 400; k++ {
-				want := m.objects[k] != nil
-				if got := c.Contains(k); got != want {
-					t.Fatalf("capacity %d, op %d, key %d: contains = %t, want %t", capacity, i, k, got, want)
+			require.Equal(t, m.objects[k] != nil, c.Contains(k), "capacity %d, op %d, key %d", capacity, i, k)
+
+			// This test is sequential. Check the complete resident set after
+			// each operation without locking for every absent key.
+			residents := 0
+			for shard := range c.index {
+				for key, entry := range c.index[shard].index {
+					if entry == nil || m.objects[key] == nil || c.indexOf(c.opts.Hash(key)) != &c.index[shard] {
+						t.Fatalf("capacity %d, op %d: unexpected key %d in shard %d", capacity, i, key, shard)
+					}
+					residents++
 				}
 			}
+			require.Equal(t, len(m.objects), residents, "capacity %d, op %d: resident count", capacity, i)
 		}
 	}
 	require.Zero(t, misuse.Load())

@@ -1006,6 +1006,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <roles> role_spec_list using_roles_opt
 %type <role> role_spec
 %type <cstr> role_name
+%type <str> id_only_bare_name
 %type <usernameRecord> user_name
 %type <user> user_spec drop_user_spec user_spec_with_identified
 %type <users> user_spec_list drop_user_spec_list user_spec_list_of_create_user
@@ -10046,8 +10047,15 @@ role_spec:
         )
     }
 
-role_name:
+// These bitmap names were bare IDs before they needed dedicated tokens for
+// window calls. Keep other keyword tokens out of role and Iceberg ref names.
+id_only_bare_name:
     ID
+|   BITMAP_CONSTRUCT_AGG
+|   BITMAP_OR_AGG
+
+role_name:
+    id_only_bare_name
 	{
 		$$ = tree.NewCStr($1, 1)
     }
@@ -12375,7 +12383,7 @@ iceberg_ref_opt:
     }
 
 iceberg_ref_name:
-    ID
+    id_only_bare_name
     {
         $$ = $1
     }
@@ -17573,7 +17581,9 @@ not_keyword:
 |   BIT_CAST
 |   BITMAP_BIT_POSITION
 |   BITMAP_BUCKET_NUMBER
+|   BITMAP_CONSTRUCT_AGG
 |   BITMAP_COUNT
+|   BITMAP_OR_AGG
 |   PERCENTILE_CONT
 |   PERCENTILE_DISC
 |   EWM_MEAN
