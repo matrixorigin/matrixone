@@ -25,6 +25,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	cagracompile "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/compile"
 	ivfpqcompile "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/compile"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,11 +97,30 @@ func TestAlterCopyIndexLifecycle(t *testing.T) {
 			return err == nil && state == iscp.ISCPJobState_Completed && wm != "0-0" && s.LSN > 0 && s.ErrorCode == 0
 		}, 60*time.Second, 100*time.Millisecond)
 	}
+	// Wait until the durable index includes the completed write before the first
+	// index read. A read before this point can cache an older model for minutes.
+	waitThrough := func(t *testing.T, after time.Time) {
+		t.Helper()
+		target := types.BuildTS(after.UnixNano(), 0)
+		require.EventuallyWithT(t, func(check *assert.CollectT) {
+			state, wm, status, err := readJob()
+			if !assert.NoError(check, err) {
+				return
+			}
+			assert.Equal(check, int8(iscp.ISCPJobState_Completed), state)
+			assert.Zero(check, status.ErrorCode)
+			watermark := types.StringToTS(wm)
+			assert.True(check, watermark.GE(&target), "watermark %s has not reached %s", wm, target.ToString())
+		}, 60*time.Second, 100*time.Millisecond)
+	}
 	nearest := func(t *testing.T, want int64) {
 		t.Helper()
-		require.Eventually(t, func() bool {
+		require.EventuallyWithT(t, func(check *assert.CollectT) {
 			var id int64
-			return conn.QueryRowContext(ctx, "select id from h order by l2_distance(v,'[0,0,0]') limit 1").Scan(&id) == nil && id == want
+			err := conn.QueryRowContext(ctx, "select id from h order by l2_distance(v,'[0,0,0]') limit 1").Scan(&id)
+			if assert.NoError(check, err) {
+				assert.Equal(check, want, id)
+			}
 		}, 45*time.Second, 100*time.Millisecond)
 	}
 	create := func(t *testing.T) {
@@ -121,9 +142,9 @@ func TestAlterCopyIndexLifecycle(t *testing.T) {
 		exec(t, "alter table h algorithm=copy,change a a bigint")
 		waitComplete(t)
 		exec(t, "insert into h(a,v) values(3,'[0,0,0]')")
-		nearest(t, 6)
 		exec(t, "delete from h where a=3")
 		exec(t, "update h set v='[0,0,0]' where a=2")
+		waitThrough(t, time.Now())
 		nearest(t, 4)
 		exec(t, "drop table h")
 	})
@@ -149,9 +170,11 @@ func TestAlterCopyIndexLifecycle(t *testing.T) {
 		}, 60*time.Second, 100*time.Millisecond, "failed Save+progress transaction must not advance the cursor")
 		exec(t, "delete from h where a=2")
 		exec(t, "insert into h(a,v) values(3,'[0,0,0]')")
+		written := time.Now()
 		_, err := fault.RemoveFaultPoint(ctx, objectio.FJ_ISCPIndexWatermarkErr)
 		require.NoError(t, err)
 		waitComplete(t)
+		waitThrough(t, written)
 		nearest(t, 6)
 		rows, err := conn.QueryContext(ctx, "select id from h order by l2_distance(v,'[0,0,0]') limit 10")
 		require.NoError(t, err)
@@ -202,6 +225,7 @@ func TestAlterCopyIndexLifecycle(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from h").Scan(&count))
 		require.Zero(t, count)
 		exec(t, "insert into h(a,v) values(1,'[0,0,0]')")
+		waitThrough(t, time.Now())
 		nearest(t, 2)
 		exec(t, "drop table h")
 	})
@@ -220,6 +244,7 @@ func TestAlterCopyIndexLifecycle(t *testing.T) {
 		exec(t, "alter table h algorithm=copy,change a a bigint")
 		exec(t, "rollback")
 		exec(t, "insert into h(a,v) values(3,'[0,0,0]')")
+		waitThrough(t, time.Now())
 		nearest(t, 6)
 		exec(t, "drop table h")
 	})
