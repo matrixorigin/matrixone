@@ -1253,3 +1253,41 @@ func (*countingDataCache) Flush(context.Context) {}
 func (*countingDataCache) Evict(context.Context, chan int64) {}
 
 func (*countingDataCache) EvictToTargetWithWait(context.Context, int64) int64 { return 0 }
+
+func TestIsWholeObjectCachedOnlyCountsFullFiles(t *testing.T) {
+	ctx := t.Context()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { cache.Close(ctx) })
+
+	const path = "test-object"
+	fs := &S3FS{diskCache: cache}
+	checkRead := func(offset, size int64, want string) {
+		t.Helper()
+		vector := &IOVector{
+			FilePath: path,
+			Entries:  []IOEntry{{Offset: offset, Size: size}},
+		}
+		defer vector.Release()
+		require.NoError(t, cache.Read(ctx, vector))
+		require.Equal(t, want != "", vector.Entries[0].done)
+		require.Equal(t, want, string(vector.Entries[0].Data))
+	}
+	require.False(t, IsWholeObjectCached(fs, path))
+	require.NoError(t, cache.Update(ctx, &IOVector{FilePath: path, Entries: []IOEntry{
+		{Offset: 0, Size: 1, Data: []byte("a")},
+	}}, false))
+	require.False(t, IsWholeObjectCached(fs, path), "a cached range is insufficient")
+	checkRead(0, 1, "a")
+	checkRead(1, 2, "")
+
+	require.NoError(t, cache.SetFile(ctx, path, func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewBufferString("abc")), nil
+	}))
+	require.True(t, IsWholeObjectCached(fs, path))
+	checkRead(1, 2, "bc")
+
+	require.NoError(t, cache.DeletePaths(ctx, []string{path}))
+	require.False(t, IsWholeObjectCached(fs, path))
+	checkRead(1, 2, "")
+}
