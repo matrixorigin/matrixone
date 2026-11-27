@@ -129,4 +129,43 @@ func TestGeoJSONRequiredMember(t *testing.T) {
 		rejectGeoJSON(t, `{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1,2],"geometries":{"a":1}}]}`)
 		rejectGeoJSON(t, `{"type":"GeometryCollection","geometries":[{"type":"LineString","coordinates":[[0,0],[1,1]],"geometries":false}]}`)
 	})
+
+	// The required member names are exact, case-sensitive names. A member that
+	// differs only in case is a foreign member: it never substitutes the
+	// canonical value, never turns a canonical null or missing required member
+	// into a success, at any depth and whatever the member order. Duplicate
+	// exact member names keep the decoder's own duplicate-name behavior; this
+	// test adds no separate policy for them.
+	t.Run("ExactCaseMemberNames", func(t *testing.T) {
+		// A null required member stays invalid even when a differently-cased
+		// member case-folds onto the same field, before or after it.
+		rejectGeoJSON(t, `{"type":"Point","coordinates":null,"Coordinates":[1,2]}`)
+		rejectGeoJSON(t, `{"type":"Point","Coordinates":[1,2],"coordinates":null}`)
+		rejectGeoJSON(t, `{"type":"GeometryCollection","geometries":null,"Geometries":[{"type":"Point","coordinates":[1,2]}]}`)
+		// A missing required member is not supplied by a differently-cased
+		// member, and a differently-cased type member is not the type either.
+		rejectGeoJSON(t, `{"type":"Point","Coordinates":[1,2]}`)
+		rejectGeoJSON(t, `{"type":"GeometryCollection","Geometries":[{"type":"Point","coordinates":[1,2]}]}`)
+		rejectGeoJSON(t, `{"Type":"Point","coordinates":[1,2]}`)
+		rejectGeoJSON(t, `{"type":"Bogus","Type":"Point","coordinates":[1,2]}`)
+
+		// A valid canonical member wins over a differently-cased member.
+		require.Equal(t, "POINT(5 6)",
+			WriteWKT(parseGeoJSONOrFatal(t, `{"type":"Point","coordinates":[5,6],"Coordinates":[9,9]}`)))
+		// Exact-member EMPTY acceptance is not shadowed by a differently-cased
+		// member either, at the top level or inside a collection.
+		require.Equal(t, "POINT EMPTY",
+			WriteWKT(parseGeoJSONOrFatal(t, `{"type":"Point","coordinates":[],"Coordinates":[1,2]}`)))
+		require.Equal(t, "GEOMETRYCOLLECTION EMPTY",
+			WriteWKT(parseGeoJSONOrFatal(t, `{"type":"GeometryCollection","geometries":[],"Geometries":[{"type":"Point","coordinates":[1,2]}]}`)))
+		require.Equal(t, "GEOMETRYCOLLECTION(POINT(1 2))",
+			WriteWKT(parseGeoJSONOrFatal(t, `{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1,2]}],"Geometries":[]}`)))
+
+		// The same rule holds for nested child objects, including collections
+		// inside collections.
+		rejectGeoJSON(t, `{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":null,"Coordinates":[1,2]}]}`)
+		rejectGeoJSON(t, `{"type":"GeometryCollection","geometries":[{"type":"GeometryCollection","geometries":null,"Geometries":[]}]}`)
+		require.Equal(t, "GEOMETRYCOLLECTION(POINT(1 2))",
+			WriteWKT(parseGeoJSONOrFatal(t, `{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1,2],"Coordinates":[0,0]}]}`)))
+	})
 }
