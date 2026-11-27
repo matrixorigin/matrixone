@@ -140,9 +140,10 @@ jobs:
     permissions:
       contents: read
       actions: write
-    uses: matrixorigin/CI/.github/workflows/coverage-ut-standby.yaml@27887597968a080f78e942fc54636e5b9354033c
+    uses: matrixorigin/CI/.github/workflows/coverage-ut-standby.yaml@7e509aefb5807ffc8a7b3583efb8bfc96f0f3416
     with:
       bvt_generation: ${{ needs.preflight.outputs.generation }}
+      enable_4_2_dev: ${{ github.base_ref == '4.2-dev' }}
     secrets: inherit
 
   matrixone-upgrade-ci:
