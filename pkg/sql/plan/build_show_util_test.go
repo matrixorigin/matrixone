@@ -288,7 +288,7 @@ func TestCreateAndAlterCopyTablePreserveIndexVisibility(t *testing.T) {
 	require.True(t, visibility["idx_visible"])
 	require.False(t, visibility["uq_invisible"])
 
-	got, _, err := constructCreateTableSQL(
+	got, _, _, err := constructCreateTableSQL(
 		&mock.ctxt, tableDef, nil, true, nil, true, nil,
 		false, "",
 	)
@@ -487,6 +487,38 @@ func Test_ShowCreateTableQuotesIncludedColumns(t *testing.T) {
 	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
 	require.NoError(t, err)
 	require.Contains(t, got, "INCLUDE (`status`)")
+}
+
+func Test_ShowCreateTableRendersApostropheIncludeColumns(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	tableDef, err := buildTestCreateTableStmt(mock, "CREATE TABLE vector_src_apostrophe (\n\tid INT NOT NULL,\n\tembedding VECF32(3),\n\t`pay'load` INT,\n\tPRIMARY KEY (id)\n)")
+	require.NoError(t, err)
+
+	tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+		IndexName:       "idx_vec_apostrophe",
+		Parts:           []string{"embedding"},
+		IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexAlgoParams: `{"lists":"1","op_type":"vector_l2_ops"}`,
+		IncludedColumns: []string{"pay'load"},
+	})
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	// Apostrophes are ordinary identifier bytes inside backticks; doubling
+	// them is string-literal escaping and would replay as `pay''load`.
+	require.Contains(t, got, "INCLUDE (`pay'load`)")
+	require.NotContains(t, got, "pay''load")
+}
+
+func Test_ShowCreateTableRendersApostropheCheckName(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	tableDef, err := buildTestCreateTableStmt(mock, "CREATE TABLE check_src_apostrophe (\n\tid INT NOT NULL,\n\tv INT,\n\tPRIMARY KEY (id),\n\tCONSTRAINT `c'k` CHECK (v >= 0)\n)")
+	require.NoError(t, err)
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "CONSTRAINT `c'k` CHECK")
+	require.NotContains(t, got, "c''k")
 }
 
 func Test_ShowCreateTableRendersSingleIncludeWhenAlgoParamsAlsoCarryIncludeColumns(t *testing.T) {

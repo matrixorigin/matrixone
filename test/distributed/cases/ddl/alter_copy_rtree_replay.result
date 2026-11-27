@@ -1,0 +1,70 @@
+drop database if exists alter_copy_rtree_replay;
+create database alter_copy_rtree_replay;
+use alter_copy_rtree_replay;
+create table t_inline(id int primary key, g point not null, key idx_g using rtree(g));
+insert into t_inline values (1, ST_GeomFromText('POINT(1 2)'));
+alter table t_inline algorithm=copy, add column lead int default 7 first;
+select id, lead, ST_AsText(g) from t_inline;
+➤ id[4,32,0]  ¦  lead[4,32,0]  ¦  ST_AsText(g)[12,65535,0]  𝄀
+1  ¦  7  ¦  POINT(1 2)
+select id from t_inline where ST_Intersects(g, ST_GeomFromText('POINT(1 2)'));
+➤ id[4,32,0]  𝄀
+1
+show create table t_inline;
+➤ Table[12,8,0]  ¦  Create Table[12,144,0]  𝄀
+t_inline  ¦  CREATE TABLE `t_inline` (
+  `lead` int DEFAULT 7,
+  `id` int NOT NULL,
+  `g` point NOT NULL,
+  PRIMARY KEY (`id`),
+  SPATIAL KEY `idx_g` (`g`)
+)
+insert into t_inline (id, g) values (2, ST_GeomFromText('POINT(10 20)'));
+update t_inline set g = ST_GeomFromText('POINT(30 40)') where id = 1;
+delete from t_inline where ST_Intersects(g, ST_GeomFromText('POINT(10 20)'));
+select id, lead, ST_AsText(g) from t_inline order by id;
+➤ id[4,32,0]  ¦  lead[4,32,0]  ¦  ST_AsText(g)[12,65535,0]  𝄀
+1  ¦  7  ¦  POINT(30 40)
+create table t_standalone(id int primary key, g point not null);
+create spatial index idx_g on t_standalone(g);
+alter table t_standalone algorithm=copy, add column lead int default 7 first;
+select count(*) from t_standalone;
+➤ count(*)[-5,64,0]  𝄀
+0
+show create table t_standalone;
+➤ Table[12,12,0]  ¦  Create Table[12,148,0]  𝄀
+t_standalone  ¦  CREATE TABLE `t_standalone` (
+  `lead` int DEFAULT 7,
+  `id` int NOT NULL,
+  `g` point NOT NULL,
+  PRIMARY KEY (`id`),
+  SPATIAL KEY `idx_g` (`g`)
+)
+create table t_empty(id int primary key, g point not null, key idx_g using rtree(g));
+alter table t_empty algorithm=copy, add column lead int default 7 first;
+select count(*) from t_empty;
+➤ count(*)[-5,64,0]  𝄀
+0
+show create table t_empty;
+➤ Table[12,7,0]  ¦  Create Table[12,143,0]  𝄀
+t_empty  ¦  CREATE TABLE `t_empty` (
+  `lead` int DEFAULT 7,
+  `id` int NOT NULL,
+  `g` point NOT NULL,
+  PRIMARY KEY (`id`),
+  SPATIAL KEY `idx_g` (`g`)
+)
+create table c_geo(id int primary key, g point not null);
+insert into c_geo values (1, ST_GeomFromText('POINT(3 4)'));
+alter table c_geo algorithm=copy, add column lead int default 7 first;
+select id, lead, ST_AsText(g) from c_geo;
+➤ id[4,32,0]  ¦  lead[4,32,0]  ¦  ST_AsText(g)[12,65535,0]  𝄀
+1  ¦  7  ¦  POINT(3 4)
+create table c_int(id int primary key, v int, key idx_v(v));
+insert into c_int values (1, 10), (2, 20);
+alter table c_int algorithm=copy, add column lead int default 7 first;
+select id, lead from c_int order by id;
+➤ id[4,32,0]  ¦  lead[4,32,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  7
+drop database if exists alter_copy_rtree_replay;
