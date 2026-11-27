@@ -60,7 +60,7 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "4.0.6", meta.Version)
 	require.Equal(t, "4.0.5", meta.MinUpgradeVersion)
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
-	require.Equal(t, uint32(5), meta.VersionOffset)
+	require.Equal(t, uint32(6), meta.VersionOffset)
 }
 
 func TestEnsureInformationSchemaCharacterSetsTableIsIdempotent(t *testing.T) {

@@ -944,10 +944,8 @@ func makeMySQLSpecialNumericValue(
 		}
 		// A reversible ENUM definition has no empty label, so an empty grouped
 		// display uniquely represents the error member at ordinal zero. The
-		// legacy parser cannot convert that display, so feed it a valid label
-		// first and restore ordinal zero after parsing. This keeps the serialized
-		// legacy domains on the two-argument overload understood by old workers.
-		// Framed domains use the existing encoding-aware overload.
+		// text parser cannot convert that display, so feed it a valid label
+		// first and restore ordinal zero after parsing.
 		emptyDisplay, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
 			DeepCopyExpr(displayExpr), makePlan2StringConstExprWithType(""),
 		})
@@ -967,7 +965,7 @@ func makeMySQLSpecialNumericValue(
 		if err != nil {
 			return nil, err
 		}
-		numericExpr, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, mysqlSpecialTypeArgs(storageType, safeDisplay))
+		numericExpr, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, enumValueToIndexArgs(storageType, safeDisplay))
 		if err != nil {
 			return nil, err
 		}

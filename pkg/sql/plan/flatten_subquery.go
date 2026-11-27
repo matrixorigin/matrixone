@@ -1054,24 +1054,30 @@ func scalarSpecialValueConversion(expr *plan.Expr, id, overloadIndex int32) bool
 	}
 	switch id {
 	case function.CAST_VALUE_TO_INDEX:
-		var encoding uint32
-		switch {
-		case overloadIndex == 0 && len(f.Args) == 2:
-		case overloadIndex == 1 && len(f.Args) == 3 && f.Args[2] != nil && types.T(f.Args[2].Typ.Id) == types.T_int64:
-			tag := f.Args[2].GetLit()
+		if !isEnumPlanType(&expr.Typ) || expr.Typ.Enumvalues != value.Sval {
+			return false
+		}
+		expected := enumValueToIndexArgs(&expr.Typ, f.Args[1])
+		// The ENUM cast overloads append encoding for framed domains and
+		// encoding plus collation for explicitly collated domains.
+		if len(f.Args) != len(expected) || overloadIndex != int32(len(expected)-2) {
+			return false
+		}
+		for i := 2; i < len(f.Args); i++ {
+			arg := f.Args[i]
+			if arg == nil || types.T(arg.Typ.Id) != types.T_int64 {
+				return false
+			}
+			tag := arg.GetLit()
 			if tag == nil || tag.Isnull || tag.Src != nil {
 				return false
 			}
-			v, valid := tag.Value.(*plan.Literal_I64Val)
-			if !valid || v.I64Val < 0 || v.I64Val > int64(types.EnumEncodingFramed) {
+			v, ok := tag.Value.(*plan.Literal_I64Val)
+			if !ok || v.I64Val != expected[i].GetLit().GetI64Val() {
 				return false
 			}
-			encoding = uint32(v.I64Val)
-		default:
-			return false
 		}
-		return types.T(expr.Typ.Id) == types.T_enum && expr.Typ.Enumvalues == value.Sval &&
-			expr.Typ.EnumEncoding == encoding && mysqlSpecialOrderTypeReversible(&expr.Typ)
+		return mysqlSpecialOrderTypeReversible(&expr.Typ)
 	case function.CAST_SET_VALUE_TO_INDEX:
 		if overloadIndex != 0 || len(f.Args) != 2 || types.T(expr.Typ.Id) != types.T_uint64 ||
 			expr.Typ.Enumvalues != "" || expr.Typ.EnumEncoding != 0 {

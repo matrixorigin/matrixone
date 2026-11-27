@@ -48,9 +48,19 @@ assignments use an explicit four-argument overload. Exact supported names are
 This change does not switch codecs, change ENUM comparison operators, enforce
 new general-CI duplicate rules, repair old rows, or redesign physical index
 keys. Copies of an existing typed index column retain the new metadata; COPY's
-key optimization is conservative across changed identities. Independent
-DUMP/LOAD manifest, checkpoint SQL, views, CDC compatibility, database/table
-default persistence, and 4.2-to-main upgrade work are not bundled here.
+key optimization is conservative across changed identities. SHOW FULL COLUMNS and INFORMATION_SCHEMA.COLUMNS expose the effective identity
+for typed ENUM columns. The tenant upgrade refreshes existing COLUMNS views.
+
+DUMP/LOAD TABLE v1 accepts legacy ENUM columns only. The manifest's
+`create_sql` describes the source DDL and can include declarations ignored by
+the release that wrote it. LOAD validates the existing target's catalog
+identity before copying any data. For checkpoint exports, generated DDL
+preserves the effective collation, and `--no-load` can produce DDL alone.
+A restore script with LOAD DATA rejects typed ENUM columns because the CSV
+represents ordinals as text, which can also match numeric labels.
+
+CDC compatibility, database/table default persistence, support for restoring
+typed ENUM data, and the 4.2-to-main upgrade bridge are separate work.
 Do not release a build that authors this metadata before validating the
 stopped upgrade bridge and recovery paths. This PR does not support mixed
 old/new binaries or metadata downgrade.

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
@@ -59,6 +60,16 @@ func TestBinaryEnumAssignment32814(t *testing.T) {
 		db, err = sql.Open("mysql", dsn)
 		require.NoError(t, err)
 		require.EventuallyWithT(t, func(ch *assert.CollectT) { conn, err = db.Conn(ctx); assert.NoError(ch, err) }, 30*time.Second, 250*time.Millisecond)
+		// Login can succeed before the CN's cluster snapshot reports the TN shard.
+		clusterState, err := clusterservice.GetMOClusterWithContext(ctx, c.ServiceID())
+		require.NoError(t, err)
+		require.EventuallyWithT(t, func(ch *assert.CollectT) {
+			clusterState.ForceRefresh(false)
+			stores := clusterState.GetAllTNServices()
+			if assert.Len(ch, stores, 1) {
+				assert.NotEmpty(ch, stores[0].Shards)
+			}
+		}, 30*time.Second, 250*time.Millisecond)
 	}
 	closeConnect := func() {
 		if conn != nil {
@@ -111,6 +122,68 @@ func TestBinaryEnumAssignment32814(t *testing.T) {
 	mk(t, "seed", src)
 	exec(t, "insert into seed values(1,1),(2,2)")
 	require.Equal(t, seeds, read(t, "seed"), "numeric input seeds both stored ordinals independently of text lookup")
+	t.Run("grouped numeric conversion", func(t *testing.T) {
+		rows, err := conn.QueryContext(ctx, "select e+0 from seed group by e order by 1")
+		require.NoError(t, err)
+		defer rows.Close()
+		var positions []int
+		for rows.Next() {
+			var position int
+			require.NoError(t, rows.Scan(&position))
+			positions = append(positions, position)
+		}
+		require.NoError(t, rows.Err())
+		require.Equal(t, []int{1, 2}, positions)
+	})
+	t.Run("column metadata", func(t *testing.T) {
+		exec(t, "create table meta (b enum('A','a')"+opt+
+			", g enum('A','Other') collate utf8mb4_general_ci, e enum('A','Other'), s varchar(5)"+opt+")")
+		want := map[string]string{"b": "utf8mb4_bin", "g": "utf8mb4_general_ci", "e": "", "s": "utf8mb4_bin"}
+		rows, err := conn.QueryContext(ctx, "show full columns from meta")
+		require.NoError(t, err)
+		defer rows.Close()
+		got := make(map[string]string)
+		for rows.Next() {
+			var name string
+			var collation sql.NullString
+			var discard sql.RawBytes
+			require.NoError(t, rows.Scan(&name, &discard, &collation, &discard, &discard, &discard, &discard, &discard, &discard))
+			got[name] = collation.String
+		}
+		require.NoError(t, rows.Err())
+		require.Equal(t, want, got)
+
+		rows, err = conn.QueryContext(ctx, "select column_name, character_set_name, collation_name from information_schema.columns where table_schema = database() and table_name = 'meta' and column_name in ('b','g','e','s')")
+		require.NoError(t, err)
+		defer rows.Close()
+		got = make(map[string]string)
+		for rows.Next() {
+			var name string
+			var charset, collation sql.NullString
+			require.NoError(t, rows.Scan(&name, &charset, &collation))
+			if want[name] == "" {
+				require.False(t, charset.Valid)
+				require.False(t, collation.Valid)
+			} else {
+				require.Equal(t, "utf8mb4", charset.String)
+			}
+			got[name] = collation.String
+		}
+		require.NoError(t, rows.Err())
+		require.Equal(t, want, got)
+	})
+	t.Run("dump and load v1", func(t *testing.T) {
+		exec(t, "create stage enum_stage url = 'file://"+t.TempDir()+"/'")
+		mk(t, "legacy_dump", "enum('2','1')")
+		mk(t, "legacy_load", "enum('2','1')")
+		mk(t, "explicit_load", "enum('2','1')"+opt)
+		exec(t, "dump table legacy_dump to 'stage://enum_stage/legacy' metadata only")
+		exec(t, "load table legacy_load from 'stage://enum_stage/legacy'")
+		_, err := conn.ExecContext(ctx, "load table explicit_load from 'stage://enum_stage/legacy'")
+		require.ErrorContains(t, err, "explicit ENUM collation")
+		_, err = conn.ExecContext(ctx, "dump table explicit_load to 'stage://enum_stage/typed' metadata only")
+		require.ErrorContains(t, err, "explicit ENUM collation")
+	})
 	t.Run("literal", func(t *testing.T) {
 		mk(t, "literal_dst", dst)
 		exec(t, "insert into literal_dst values(1,'A'),(2,'a')")

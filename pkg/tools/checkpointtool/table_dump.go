@@ -126,6 +126,7 @@ type TableColumn struct {
 	ClusterBy        bool
 	EnumValues       string
 	EnumEncoding     uint32
+	EnumCollation    uint32
 }
 
 type TableUniqueKey struct {
@@ -497,7 +498,7 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 		sb.WriteString("  ")
 		sb.WriteString(quoteDDLIdent(col.Name))
 		sqlType := renderColumnSQLType(col)
-		if col.EnumEncoding != 0 && sqlType == "" {
+		if (col.EnumEncoding != 0 || col.EnumCollation != 0) && sqlType == "" {
 			return ""
 		}
 		if sqlType != "" {
@@ -608,8 +609,9 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 func renderColumnSQLType(col TableColumn) string {
 	sqlType := strings.TrimSpace(col.SQLType)
 	upperType := strings.ToUpper(sqlType)
-	if col.EnumEncoding != 0 {
-		if upperType != "ENUM" {
+	if col.EnumEncoding != 0 || col.EnumCollation != types.EnumCollationLegacy {
+		collation := types.EnumCollationName(col.EnumCollation)
+		if upperType != "ENUM" || (col.EnumCollation != types.EnumCollationLegacy && collation == "") {
 			return ""
 		}
 		members, err := types.DecodeEnumMembers(col.EnumValues, col.EnumEncoding)
@@ -620,7 +622,11 @@ func renderColumnSQLType(col TableColumn) string {
 		for i, member := range members {
 			quoted[i] = sqlquote.String(member)
 		}
-		return "ENUM(" + strings.Join(quoted, ",") + ")"
+		sqlType = "ENUM(" + strings.Join(quoted, ",") + ")"
+		if collation != "" {
+			sqlType += " CHARACTER SET utf8mb4 COLLATE " + collation
+		}
+		return sqlType
 	}
 	enumValues := strings.TrimSpace(col.EnumValues)
 	if enumValues == "" {
@@ -1639,6 +1645,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 				ClusterBy:        col.ClusterBy,
 				EnumValues:       strings.Clone(col.EnumValues),
 				EnumEncoding:     col.EnumEncoding,
+				EnumCollation:    col.EnumCollation,
 			}
 		}
 	}
@@ -3935,6 +3942,7 @@ func buildColumnsFromMoColumnsRowsAt(
 				var nativeType types.Type
 				if err := types.Decode([]byte(row[typCol]), &nativeType); err == nil && nativeType.Oid == types.T_enum {
 					col.EnumEncoding = nativeType.GetEnumEncoding()
+					col.EnumCollation = nativeType.GetEnumCollation()
 				}
 			} else {
 				typeDecodeFailures++

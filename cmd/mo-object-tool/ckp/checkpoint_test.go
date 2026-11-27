@@ -1250,20 +1250,42 @@ func TestWriteRestoreScriptForView(t *testing.T) {
 	require.NotContains(t, string(script), "LOAD DATA")
 }
 
+func TestWriteRestoreScriptWithExplicitEnumCollation(t *testing.T) {
+	dir := t.TempDir()
+	table := checkpointtool.TableCatalogEntry{
+		TableID: 8, DatabaseName: "db", TableName: "t", RelKind: "r",
+	}
+	data := map[uint64]*checkpointtool.TableDumpData{table.TableID: {
+		TableID: table.TableID, IndexesPrepared: true,
+		Schema: &checkpointtool.TableSchema{Columns: []checkpointtool.TableColumn{{
+			Name: "e", SQLType: "ENUM", EnumValues: "2,1",
+			EnumCollation: types.EnumCollationUTF8Bin, Position: 1,
+		}}},
+	}}
+	require.ErrorContains(t, validateRestoreLoadData(true, table, data[table.TableID]), "cannot load checkpoint CSV for ENUM column")
+	require.NoError(t, validateRestoreLoadData(false, table, data[table.TableID]))
+	path, err := writeRestoreScript(t.Context(), nil, &dumpOutput{}, []checkpointtool.TableCatalogEntry{table},
+		data, types.BuildTS(1, 0), dir, dir, loadDataPathResolver{}, false, true)
+	require.NoError(t, err)
+	script, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(script), "ENUM('2','1') CHARACTER SET utf8mb4 COLLATE utf8mb4_bin")
+	require.NotContains(t, string(script), "LOAD DATA")
+}
+
 func TestWriteRestoreScriptRejectsMissingDatabase(t *testing.T) {
 	ctx := context.Background()
 	dumpOut, err := openDumpOutput(ctx, toolfs.StorageOptions{})
 	require.NoError(t, err)
 	_, err = writeRestoreScript(ctx, nil, dumpOut, []checkpointtool.TableCatalogEntry{{TableID: 7, TableName: "t"}}, nil, types.BuildTS(1, 0), t.TempDir(), t.TempDir(), loadDataPathResolver{}, true, true)
 	require.ErrorContains(t, err, "empty database name")
+}
 
-	_, err = writeRestoreScript(ctx, nil, dumpOut, []checkpointtool.TableCatalogEntry{{
-		TableID:      8,
-		DatabaseName: "db",
-		TableName:    "missing_data",
-		RelKind:      "r",
-	}}, nil, types.BuildTS(1, 0), t.TempDir(), t.TempDir(), loadDataPathResolver{}, true, true)
-	require.ErrorContains(t, err, "missing prepared dump data")
+func TestValidateRestoreLoadDataRejectsMissingSchema(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		TableID: 8, DatabaseName: "db", TableName: "missing_data", RelKind: "r",
+	}
+	require.ErrorContains(t, validateRestoreLoadData(true, table, nil), "missing prepared dump schema")
 }
 
 func TestPackageExternalTableSourceCopiesAndRewritesFilepath(t *testing.T) {

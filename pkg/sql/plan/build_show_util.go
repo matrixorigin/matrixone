@@ -1159,11 +1159,8 @@ func skipBlockComment(s string, start int) int {
 // ColumnCharsetClause returns the explicit charset clause with its leading space.
 func ColumnCharsetClause(typ *plan.Type) string {
 	if typ.Id == int32(types.T_enum) {
-		switch typ.EnumCollation {
-		case types.EnumCollationUTF8Bin:
-			return " CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"
-		case types.EnumCollationGeneralCI:
-			return " CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
+		if name := types.EnumCollationName(typ.EnumCollation); name != "" {
+			return " CHARACTER SET utf8mb4 COLLATE " + name
 		}
 	}
 	if hasExplicitUTF8MB4Bin(typ) {

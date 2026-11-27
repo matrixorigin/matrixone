@@ -159,8 +159,8 @@ var (
 // the original view definition available to released catalog migrations.
 func InformationSchemaColumnsUTF8MB4DDL() string {
 	return strings.NewReplacer(
-		"WHEN 1 then 'utf8' else NULL", "WHEN 1 then 'utf8mb4' else NULL",
-		"WHEN 1 then 'utf8_bin' else NULL", "WHEN 1 then 'utf8mb4_bin' else NULL",
+		"WHEN 1 then 'utf8' else NULL", "WHEN 1 then 'utf8mb4' WHEN 2 then 'utf8mb4' WHEN 3 then 'utf8mb4' else NULL",
+		"WHEN 1 then 'utf8_bin' else NULL", "WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'utf8mb4_bin' WHEN 3 then 'utf8mb4_general_ci' else NULL",
 	).Replace(InformationSchemaColumnsDDL)
 }
 

@@ -316,8 +316,15 @@ func validateTableDumpSchema(def *plan.TableDef) error {
 		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with partitions")
 	}
 	for _, col := range def.Cols {
-		if col != nil && col.Typ.AutoIncr {
+		if col == nil {
+			continue
+		}
+		if col.Typ.AutoIncr {
 			return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with auto-increment columns")
+		}
+		// The v1 schema hash does not distinguish ENUM assignment identities.
+		if col.Typ.Id == int32(types.T_enum) && col.Typ.EnumCollation != types.EnumCollationLegacy {
+			return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with explicit ENUM collation")
 		}
 	}
 	if len(def.Fkeys) != 0 || len(def.RefChildTbls) != 0 {

@@ -258,13 +258,18 @@ func TestGroupedNumericFramedEnumPlan(t *testing.T) {
 
 func TestGroupedEnumNumericExecution(t *testing.T) {
 	for _, domain := range []struct {
-		name    string
-		members []string
-	}{{"legacy", []string{"2", "red"}}, {"framed", []string{"a,b", "red"}}} {
+		name      string
+		members   []string
+		collation uint32
+	}{
+		{"legacy", []string{"2", "red"}, types.EnumCollationLegacy},
+		{"framed", []string{"a,b", "red"}, types.EnumCollationLegacy},
+		{"binary", []string{"A", "a"}, types.EnumCollationUTF8Bin},
+	} {
 		t.Run(domain.name, func(t *testing.T) {
 			payload, encoding, err := types.EncodeEnumMembers(domain.members)
 			require.NoError(t, err)
-			typ := &planpb.Type{Id: int32(types.T_enum), Enumvalues: payload, EnumEncoding: encoding}
+			typ := &planpb.Type{Id: int32(types.T_enum), Enumvalues: payload, EnumEncoding: encoding, EnumCollation: domain.collation}
 			proc := testutil.NewProcess(t)
 			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 			null := makePlan2NullConstExprWithType()
@@ -277,7 +282,7 @@ func TestGroupedEnumNumericExecution(t *testing.T) {
 			}{
 				{"zero", makePlan2StringConstExprWithType(""), 0, false},
 				{"first", makePlan2StringConstExprWithType(domain.members[0]), 1, false},
-				{"second", makePlan2StringConstExprWithType("red"), 2, false},
+				{"second", makePlan2StringConstExprWithType(domain.members[1]), 2, false},
 				{"null", null, 0, true},
 			} {
 				t.Run(tc.name, func(t *testing.T) {

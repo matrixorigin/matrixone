@@ -31,6 +31,18 @@ const (
 	EnumCollationGeneralCI uint32 = 3
 )
 
+// EnumCollationName returns the SQL name of a supported explicit identity.
+func EnumCollationName(id uint32) string {
+	switch id {
+	case EnumCollationUTF8Bin:
+		return "utf8mb4_bin"
+	case EnumCollationGeneralCI:
+		return "utf8mb4_general_ci"
+	default:
+		return ""
+	}
+}
+
 func ValidateEnumCollation(id uint32) error {
 	switch id {
 	case EnumCollationLegacy, EnumCollationUTF8Bin, EnumCollationGeneralCI:

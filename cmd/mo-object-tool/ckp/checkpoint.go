@@ -647,15 +647,27 @@ Examples:
 				if len(tables) == 0 {
 					return fmt.Errorf("no checkpoint tables match database-id-set=%v database-id=%d account-id-set=%v account-id=%d", databaseIDSet, databaseID, accountIDSet, accountID)
 				}
-				if err := dumpOut.MkdirAll(outputDir); err != nil {
-					return fmt.Errorf("create output dir: %w", err)
-				}
 				var dumpPlans []tableDumpPlan
 				if loadScript || !noLoad {
 					dumpPlans, err = prepareTableDumpPlans(ctx, reader, tables, snapshotTS)
 					if err != nil {
 						return err
 					}
+				}
+				var scriptTables []checkpointtool.TableCatalogEntry
+				var scriptData map[uint64]*checkpointtool.TableDumpData
+				var skippedSystemTables int
+				if loadScript {
+					scriptTables, skippedSystemTables = filterAccountRestoreScriptTables(tablesFromDumpPlans(dumpPlans), accountIDSet)
+					scriptData = dumpDataByTableID(dumpPlans)
+					for _, table := range scriptTables {
+						if err := validateRestoreLoadData(!noLoad, table, scriptData[table.TableID]); err != nil {
+							return err
+						}
+					}
+				}
+				if err := dumpOut.MkdirAll(outputDir); err != nil {
+					return fmt.Errorf("create output dir: %w", err)
 				}
 				if !noLoad {
 					if jobs < 1 {
@@ -670,8 +682,7 @@ Examples:
 					fmt.Fprintf(cmd.OutOrStdout(), "Dumped %d tables to %s\n", len(dumpPlans), outputDir)
 				}
 				if loadScript {
-					scriptTables, skippedSystemTables := filterAccountRestoreScriptTables(tablesFromDumpPlans(dumpPlans), accountIDSet)
-					scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, scriptTables, dumpDataByTableID(dumpPlans), snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
+					scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, scriptTables, scriptData, snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
 					if err != nil {
 						return err
 					}
@@ -689,12 +700,15 @@ Examples:
 				if err != nil {
 					return err
 				}
-				if err := dumpOut.MkdirAll(outputDir); err != nil {
-					return fmt.Errorf("create output dir: %w", err)
-				}
 				dumpData, err := reader.PrepareTableDumpData(ctx, tableEntry.TableID, snapshotTS)
 				if err != nil {
 					return fmt.Errorf("prepare table %d (%s.%s): %w", tableEntry.TableID, tableEntry.DatabaseName, tableEntry.TableName, err)
+				}
+				if err := validateRestoreLoadData(!noLoad, tableEntry, dumpData); err != nil {
+					return err
+				}
+				if err := dumpOut.MkdirAll(outputDir); err != nil {
+					return fmt.Errorf("create output dir: %w", err)
 				}
 				if !noLoad {
 					if err := dumpOneTable(ctx, reader, dumpOut, tableDumpPlan{table: tableEntry, data: dumpData}, snapshotTS, outputDir, parsedRowOrder, metaComments, effectiveHeader, cmd.OutOrStdout(), &sync.Mutex{}); err != nil {
@@ -893,9 +907,6 @@ func writeRestoreScript(
 
 		omitForeignKeys := restoreOrder.cyclicFKTables[table.TableID]
 		dumpData := dumpDataByTable[table.TableID]
-		if shouldWriteLoadData(includeLoad, table) && dumpData == nil {
-			return "", fmt.Errorf("restore script table %d (%s.%s): missing prepared dump data", table.TableID, table.DatabaseName, table.TableName)
-		}
 		ddl, err := restoreCreateTableDDLWithOptions(ctx, reader, table, dumpData, snapshotTS, restoreCreateTableDDLOptions{
 			omitForeignKeys: omitForeignKeys,
 		})
@@ -1478,6 +1489,23 @@ func byteSQLString(value byte) string {
 		return ""
 	}
 	return string([]byte{value})
+}
+
+func validateRestoreLoadData(includeLoad bool, table checkpointtool.TableCatalogEntry, dumpData *checkpointtool.TableDumpData) error {
+	if !shouldWriteLoadData(includeLoad, table) {
+		return nil
+	}
+	if dumpData == nil || dumpData.Schema == nil {
+		return fmt.Errorf("restore script table %d (%s.%s): missing prepared dump schema", table.TableID, table.DatabaseName, table.TableName)
+	}
+	// Checkpoint CSV stores ENUM ordinals. LOAD DATA can interpret an
+	// ordinal written as text as a declared member label.
+	for _, col := range dumpData.Schema.Columns {
+		if col.EnumCollation != types.EnumCollationLegacy {
+			return fmt.Errorf("restore script table %d (%s.%s): cannot load checkpoint CSV for ENUM column %q with explicit assignment collation; use --no-load for DDL only", table.TableID, table.DatabaseName, table.TableName, col.Name)
+		}
+	}
+	return nil
 }
 
 func shouldWriteLoadData(includeLoad bool, table checkpointtool.TableCatalogEntry) bool {
