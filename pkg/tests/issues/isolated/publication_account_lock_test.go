@@ -144,6 +144,10 @@ func TestAlterPublicationExplicitTargetLockScope(t *testing.T) {
 			target := tc.targets[len(tc.targets)-1]
 			deletedID := number(t, accountID, target)
 			exec(t, "create publication "+pub+" database scope_db account scope_first")
+			// ALTER runs on the other CN and must see the committed publication.
+			var synced string
+			require.NoError(t, left.QueryRowContext(t.Context(), "select mo_ctl('cn','syncCommit','')").Scan(&synced))
+			require.Contains(t, synced, "sync 2 cn services")
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			var wg sync.WaitGroup
 			defer wg.Wait()
