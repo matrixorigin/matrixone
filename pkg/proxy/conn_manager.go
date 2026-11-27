@@ -290,7 +290,10 @@ func (m *connManager) disconnect(cn *CNServer, t *tunnel) {
 		}
 		delete(m.cnTunnels[cn.uuid], t)
 	}
-	delete(m.connIDServers, cn.connID)
+	// A migration can have multiple backend connections with the same ID.
+	if m.connIDServers[cn.connID] == cn {
+		delete(m.connIDServers, cn.connID)
+	}
 	eventProxyBackendDisconnected.DebugLazy(func() []zap.Field {
 		fields := logutil.StringFingerprintFields("cn", cn.uuid)
 		return append(fields, zap.Uint32("connection-id", cn.connID))
