@@ -450,7 +450,7 @@ func TestScopedChangedTablesReadsIncrementalAppendableHistory(t *testing.T) {
 	require.NoError(t, err)
 	deleteRelation, err = database.GetRelationByName(deleteSchema.Name)
 	require.NoError(t, err)
-	filter := handle.NewEQFilter(rows.Vecs[deleteSchema.GetPrimaryKey().Idx].Get(0))
+	filter := handle.NewEQFilter(rows.Vecs[deleteSchema.GetPrimaryKey().Idx].GetValue(0))
 	require.NoError(t, deleteRelation.DeleteByFilter(ctx, filter))
 	require.NoError(t, remove.Commit(ctx))
 	require.True(t, remove.GetMemo().HasTableDataChanges(deleteScope.TableID))

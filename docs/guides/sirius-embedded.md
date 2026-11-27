@@ -7,29 +7,10 @@ It is opt-in. Ordinary CPU builds and unhinted SQL remain unchanged.
 
 ## Build
 
-Initialize the pinned dependencies and build the SDK with Sirius's frozen MO
-Pixi profile:
-
-```sh
-git submodule update --init --recursive
-git -C thirdparties/sirius fetch origin perf/embedded-mo-scan
-cd thirdparties/sirius
-pixi run --frozen -e mo mo-build-embedding-sdk
-cd ../..
-pixi run --frozen --manifest-path thirdparties/sirius/pixi.toml -e mo \
-  make -j8 MO_SIRIUS=1 MO_CL_CUDA=1 \
-  SIRIUS_SDK="$PWD/thirdparties/sirius/build/mo/extension/sirius/embedding-sdk" \
-  SIRIUS_MERGED_REF=origin/perf/embedded-mo-scan
-```
-
-The release build verifies that the pinned Sirius revision is contained in
-`SIRIUS_MERGED_REF`; this ref is resolved inside the Sirius submodule, not MO.
-
-`MO_CL_CUDA=1` also enables MO's GPU vector operations. Omit it for a
-Sirius-enabled build without those operators. Combined builds must use the
-same activated Pixi prefix. Do not supply system CUDA paths. The host NVIDIA
-driver and access to the GPU remain runtime requirements. Routine local
-verification needs no Docker image build.
+Follow the [MatrixOne and Sirius build guide](../../Sirius.md) to initialize
+the pinned submodules, build the embedding SDK, and verify the packaged
+`mo-service`. Use `MO_SIRIUS=1` for embedding and `MO_CL_CUDA=1` to enable
+MatrixOne's GPU vector operators in the same binary.
 
 ## Configure and query
 
@@ -96,7 +77,7 @@ run the native tests through the same Pixi environment used for the build:
 ```sh
 pixi run --frozen --manifest-path thirdparties/sirius/pixi.toml -e mo \
   env MO_SIRIUS=1 MO_CL_CUDA=1 \
-  SIRIUS_SDK="$PWD/thirdparties/sirius/build/mo/extension/sirius/embedding-sdk" \
+  SIRIUS_SDK="$PWD/thirdparties/sirius/build/mo/embedding-sdk" \
   MO_SIRIUS_TEST_CONFIG="/absolute/path/to/sirius.yaml" \
   .agents/skills/mo-dev/scripts/mo-cgo-test \
   -tags sirius_integration -count=1 -timeout=180s \

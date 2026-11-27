@@ -143,10 +143,12 @@ function workflowJobs(filename) {
 
 const entrypointJobs = () => workflowJobs('entrypoint.yaml');
 
-test('coverage dispatcher and both standby pools use the same pinned ticket protocol', () => {
+test('coverage standby opts in only for the 4.2-dev base and pins the worker protocol', () => {
+  const dispatcher = entrypointJobs()['matrixone-ut-coverage'];
+  assert.match(dispatcher, /^      enable_4_2_dev: \$\{\{ github\.base_ref == '4\.2-dev' \}\}$/m);
   const worker = workflowJobs('coverage-standby-worker.yaml');
   const calls = [
-    [entrypointJobs()['matrixone-ut-coverage'], 'coverage-ut-standby'],
+    [dispatcher, 'coverage-ut-standby'],
     [worker.cs, 'coverage-worker-cs'],
     [worker.idc, 'coverage-worker-idc'],
   ];

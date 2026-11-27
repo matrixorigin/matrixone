@@ -198,7 +198,7 @@ func (obj *baseObject) WaitAppendCommittingBefore(
 	var txns map[string]txnif.TxnReader
 	obj.RLock()
 	err := node.MustMNode().pkIndex.ForeachRowsByKeys(
-		keys.GetDownstreamVector(), keysZM,
+		keys, keysZM,
 		func(row uint32) {
 			appendNode := obj.appendMVCC.GetAppendNodeByRowLocked(row)
 			if appendNode == nil || appendNode.IsAborted() {
@@ -258,7 +258,7 @@ func (obj *baseObject) loadPersistedCommitTS(
 ) (vec containers.Vector, err error) {
 	vec, abort, err := obj.loadPersistedMVCC(ctx, bid)
 	if abort != nil {
-		abort.Close()
+		containers.ReleaseVector(abort)
 	}
 	return vec, err
 }
@@ -297,7 +297,7 @@ func (obj *baseObject) loadPersistedMVCC(
 		vectors[0].Length() != vectors[1].Length() {
 		for _, vec := range vectors {
 			if vec != nil {
-				vec.Close()
+				containers.ReleaseVector(vec)
 			}
 		}
 		err = moerr.NewInternalErrorNoCtxf(
@@ -320,7 +320,7 @@ func validatePersistedCommitTSVectors(
 	}
 	for _, vector := range vectors {
 		if vector != nil {
-			vector.Close()
+			containers.ReleaseVector(vector)
 		}
 	}
 	return nil, moerr.NewInternalErrorNoCtxf(
@@ -730,9 +730,9 @@ func (obj *baseObject) GetValue(
 			err = moerr.NewNotFoundNoCtx()
 			return
 		}
-		isNull = bat.Vecs[0].IsNull(row)
+		isNull = bat.Vecs[0].IsNull(uint64(row))
 		if !isNull {
-			v = bat.Vecs[0].Get(row)
+			v = bat.Vecs[0].GetValue(row)
 		}
 		return
 	}
@@ -746,9 +746,9 @@ func (obj *baseObject) GetValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	isNull = bat.Vecs[0].IsNull(row)
+	isNull = bat.Vecs[0].IsNull(uint64(row))
 	if !isNull {
-		v = bat.Vecs[0].Get(row)
+		v = bat.Vecs[0].GetValue(row)
 	}
 	bat.Close()
 	return

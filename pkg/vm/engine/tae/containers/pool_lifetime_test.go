@@ -31,30 +31,30 @@ func TestVectorPoolClosePreservesBorrowers(t *testing.T) {
 	other := NewVectorPool(t.Name()+"-other", 2, WithMPool(mp))
 	fixedType, bytesType := types.T_int64.ToType(), types.T_varchar.ToType()
 	idle := pool.GetVector(&fixedType)
-	idle.Append(int64(42), false)
-	idle.Close()
+	idle.MustAppendValue(int64(42), false)
+	ReleaseVector(idle)
 	held := pool.GetVector(&bytesType)
-	held.Append([]byte("still valid"), false)
+	held.MustAppendValue([]byte("still valid"), false)
 	independent := other.GetVector(&fixedType)
-	independent.Append(int64(17), false)
+	independent.MustAppendValue(int64(17), false)
 	before := mp.CurrNB()
 
 	pool.Close()
 	pool.Close()
 	require.Less(t, mp.CurrNB(), before)
-	require.Equal(t, []byte("still valid"), held.Get(0))
-	require.Equal(t, int64(17), independent.Get(0))
-	held.Close()
-	independent.Close()
+	require.Equal(t, []byte("still valid"), held.GetValue(0))
+	require.Equal(t, int64(17), independent.GetValue(0))
+	ReleaseVector(held)
+	ReleaseVector(independent)
 	other.Close()
 	require.Zero(t, mp.CurrNB())
 
 	// A caller racing with or arriving after Close gets an ordinary, unpooled
 	// vector whose lifetime remains independent of the closed pool.
 	after := pool.GetVector(&fixedType)
-	after.Append(int64(9), false)
-	require.Equal(t, int64(9), after.Get(0))
-	after.Close()
+	after.MustAppendValue(int64(9), false)
+	require.Equal(t, int64(9), after.GetValue(0))
+	ReleaseVector(after)
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -73,24 +73,24 @@ func TestVectorPoolCloseConcurrentBorrowAndReturn(t *testing.T) {
 		go func(worker int) {
 			defer done.Done()
 			held := pool.GetVector(&typ)
-			held.Append(int64(worker), false)
+			held.MustAppendValue(int64(worker), false)
 			ready.Done()
 			<-release
-			if got := held.Get(0); got != int64(worker) {
+			if got := held.GetValue(0); got != int64(worker) {
 				errCh <- fmt.Errorf("held vector: got %v, want %d", got, worker)
-				held.Close()
+				ReleaseVector(held)
 				return
 			}
-			held.Close()
+			ReleaseVector(held)
 			for i := 0; i < iterations; i++ {
 				v := pool.GetVector(&typ)
-				v.Append(int64(i), false)
-				if got := v.Get(0); got != int64(i) {
+				v.MustAppendValue(int64(i), false)
+				if got := v.GetValue(0); got != int64(i) {
 					errCh <- fmt.Errorf("vector: got %v, want %d", got, i)
-					v.Close()
+					ReleaseVector(v)
 					return
 				}
-				v.Close()
+				ReleaseVector(v)
 			}
 		}(worker)
 	}

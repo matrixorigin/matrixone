@@ -27,7 +27,7 @@ func TestAppendMockFloatsHonorsUnique(t *testing.T) {
 		values := []float32{1, 1, 2, 2, 3}
 		next := 0
 		vec := MakeVector(types.T_float32.ToType(), common.DefaultAllocator)
-		defer vec.Close()
+		defer ReleaseVector(vec)
 
 		appendMockFloats(vec, 3, true, func() float32 {
 			value := values[next]
@@ -36,9 +36,9 @@ func TestAppendMockFloatsHonorsUnique(t *testing.T) {
 		})
 
 		require.Equal(t, 3, vec.Length())
-		require.Equal(t, float32(1), vec.Get(0))
-		require.Equal(t, float32(2), vec.Get(1))
-		require.Equal(t, float32(3), vec.Get(2))
+		require.Equal(t, float32(1), vec.GetValue(0))
+		require.Equal(t, float32(2), vec.GetValue(1))
+		require.Equal(t, float32(3), vec.GetValue(2))
 		require.Equal(t, len(values), next)
 	})
 
@@ -46,7 +46,7 @@ func TestAppendMockFloatsHonorsUnique(t *testing.T) {
 		values := []float64{1, 1, 2}
 		next := 0
 		vec := MakeVector(types.T_float64.ToType(), common.DefaultAllocator)
-		defer vec.Close()
+		defer ReleaseVector(vec)
 
 		appendMockFloats(vec, len(values), false, func() float64 {
 			value := values[next]
@@ -55,9 +55,9 @@ func TestAppendMockFloatsHonorsUnique(t *testing.T) {
 		})
 
 		require.Equal(t, len(values), vec.Length())
-		require.Equal(t, float64(1), vec.Get(0))
-		require.Equal(t, float64(1), vec.Get(1))
-		require.Equal(t, float64(2), vec.Get(2))
+		require.Equal(t, float64(1), vec.GetValue(0))
+		require.Equal(t, float64(1), vec.GetValue(1))
+		require.Equal(t, float64(2), vec.GetValue(2))
 		require.Equal(t, len(values), next)
 	})
 }

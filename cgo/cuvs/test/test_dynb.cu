@@ -86,6 +86,7 @@
 #include <thread>
 #include <vector>
 
+#include <cuda/stream_ref>
 #include <cuda_runtime.h>
 
 #pragma GCC diagnostic push
@@ -198,7 +199,8 @@ auto build_cagra_index(raft::resources&       res,
     // copies, so it works for any dim= passed on the command line.
     padded_out = cuvs::neighbors::make_device_padded_dataset(res, host_view);
     // `host` dies at return; make sure the copy off it has landed.
-    CHECK_CUDA(cudaStreamSynchronize(raft::resource::get_cuda_stream(res)));
+    const cuda::stream_ref stream_ref = raft::resource::get_cuda_stream(res);
+    CHECK_CUDA(cudaStreamSynchronize(stream_ref.get()));
 
     return cuvs::neighbors::cagra::build(res, bp, padded_out->as_dataset_view());
 }
@@ -219,7 +221,8 @@ void client_thread(int                                         tid,
     // Each thread owns its own raft::resources => its own default stream.
     // This mirrors the recommended cuVS pattern for thread-safe batching.
     raft::resources res;
-    auto stream = raft::resource::get_cuda_stream(res);
+    const cuda::stream_ref stream_ref = raft::resource::get_cuda_stream(res);
+    const cudaStream_t stream = stream_ref.get();
 
     // One query per call (n_queries=1) — the canonical case for dynamic
     // batching: many independent clients, each issuing single-vector searches.

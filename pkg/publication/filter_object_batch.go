@@ -238,7 +238,7 @@ func convertObjectToBatch(
 		if !ownershipTransferred {
 			for _, vec := range vecs {
 				if vec != nil {
-					vec.Close()
+					containers.ReleaseVector(vec)
 				}
 			}
 		}
@@ -258,8 +258,8 @@ func convertObjectToBatch(
 				pos, ok := objectio.ResolveSpecialColumnLayout(blkMeta).Resolve(seqnum)
 				if !ok {
 					if seqnum == objectio.SEQNUM_ABORT {
-						for range int(blkMeta.GetRows()) {
-							vecs[i].Append(false, false)
+						if err := vector.AppendMultiFixed(vecs[i], false, false, int(blkMeta.GetRows()), vecs[i].MPool()); err != nil {
+							return nil, err
 						}
 						continue
 					}
@@ -272,7 +272,9 @@ func convertObjectToBatch(
 					// Generate null values for missing columns
 					length := int(blkMeta.GetRows())
 					for j := 0; j < length; j++ {
-						vecs[i].Append(nil, true)
+						if err := vector.AppendAny(vecs[i], nil, true, vecs[i].MPool()); err != nil {
+							return nil, err
+						}
 					}
 					continue
 				}
@@ -300,7 +302,7 @@ func convertObjectToBatch(
 			vec := obj.(*vector.Vector)
 
 			// Extend result vector with this block's data
-			if err := vecs[i].ExtendVec(vec); err != nil {
+			if err := vecs[i].UnionBatch(vec, 0, vec.Length(), nil, vecs[i].MPool()); err != nil {
 				return nil, moerr.NewInternalErrorf(ctx, "failed to extend vector: %v", err)
 			}
 		}
@@ -348,14 +350,14 @@ func filterBatchBySnapshotTS(
 	}
 
 	// Get commit TS values
-	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
+	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
 	var aborts []bool
 	if abortPos, ok := bat.Nameidx[objectio.TombstoneAttr_Abort_Attr]; ok {
 		abortVec := bat.Vecs[abortPos]
 		if abortVec.GetType().Oid != types.T_bool {
 			return nil, nil, moerr.NewInternalErrorf(ctx, "abort column has invalid type")
 		}
-		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec.GetDownstreamVector())
+		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
 		if len(aborts) != len(commitTSs) {
 			return nil, nil, moerr.NewInternalErrorf(
 				ctx,
@@ -384,8 +386,15 @@ func filterBatchBySnapshotTS(
 	}
 
 	// Compact all vectors to remove deleted rows
+	dels := make([]int64, 0, deletes.GetCardinality())
+	itr := deletes.Iterator()
+	for itr.HasNext() {
+		dels = append(dels, int64(itr.Next()))
+	}
 	for _, vec := range bat.Vecs {
-		vec.Compact(deletes)
+		if err := vec.Shrink(dels, true, vec.MPool()); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return bat, originalRowOffsets, nil
