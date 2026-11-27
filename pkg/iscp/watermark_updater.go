@@ -245,7 +245,8 @@ func registerJob(
 	if jobSpec.ConsumerInfo.InitSQL != "" {
 		encoded := base64.StdEncoding.EncodeToString([]byte(jobSpec.ConsumerInfo.InitSQL))
 		jobSpec.ConsumerInfo.InitSQL = encoded
-	} else {
+	}
+	if !jobSpec.needsInitializer() {
 		emptyJobStatus.Stage = JobStage_Running
 	}
 	var dbID uint64

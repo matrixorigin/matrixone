@@ -4190,13 +4190,9 @@ func (s *Scope) TableClone(c *Compile) error {
 //     seed with `DELETE … WHERE TRUE` (a content delete that keeps the table
 //     and its id — NOT truncate, which re-creates the table);
 //  3. s.Run(c): clone the main table + index hidden tables (append onto empty);
-//  4. re-register each index's CDC startFromNow=true with a PLUGIN-PROVIDED
-//     InitSQL. For a vector index that InitSQL is `ALTER … REINDEX … FORCE_SYNC`,
-//     so the CDC's first iteration runs the reindex in its own post-commit txn —
-//     rebuilding the model from the committed cloned rows and re-arming the CDC
-//     at the post-clone watermark. Running it as InitSQL (not inline in this
-//     clone txn) is what avoids the SnapshotTS replay that double-counts the
-//     cloned rows.
+//  4. register each index's CDC. Full-source initializers rebuild the committed
+//     clone and publish its watermark together. Other plugins supply their
+//     own post-commit initialization or catch up from the source watermark.
 func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 	tableDef := clonePlan.GetCreateTable().GetDdl().GetCreateTable().GetTableDef()
 	if tableDef == nil {
@@ -4233,9 +4229,7 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		return err
 	}
 
-	// 4. group plugin indexes, then re-register each index's CDC startFromNow=true
-	//    with a plugin-provided InitSQL (vector: ALTER REINDEX … FORCE_SYNC;
-	//    fulltext: "" — none). tblId comes from CreateTable's tableDef.
+	// 4. Restore each logical index once, after the source clone commits.
 	multiTableIndexes := make(map[string]*MultiTableIndex)
 	for _, idx := range tableDef.GetIndexes() {
 		valid, err := checkValidIndexCdcByIndexdef(idx)
@@ -4263,6 +4257,13 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		if cctx == nil {
 			cctx = newPluginCompileCtx(s, c, tableDef.GetTblId(), nil, nil, dbName, tableDef, nil)
 		}
+		sinkerType := getSinkerTypeFromAlgo(mti.IndexAlgo)
+		if _, ok := p.Compile().(compileplugin.SourceSnapshotInitializer); ok {
+			if err := createIndexCdcTask(c, dbName, tblName, tableDef.GetTblId(), name, sinkerType, false, "", true, tableDef); err != nil {
+				return err
+			}
+			continue
+		}
 		startFromNow, initSQL, err := p.Compile().RestoreInitSQL(cctx, mti.IndexDefs)
 		if err != nil {
 			return err
@@ -4274,7 +4275,7 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		}
 		logutil.Infof("[RestoreTable] re-register CDC index=%s startFromNow=%v initSQL=%q", name, startFromNow, initSQL)
 		if err := CreateIndexCdcTask(c, dbName, tblName, tableDef.GetTblId(), name,
-			getSinkerTypeFromAlgo(mti.IndexAlgo), startFromNow, initSQL, tableDef); err != nil {
+			sinkerType, startFromNow, initSQL, tableDef); err != nil {
 			return err
 		}
 	}

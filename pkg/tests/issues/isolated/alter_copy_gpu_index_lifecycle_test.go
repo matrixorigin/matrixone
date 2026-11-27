@@ -19,7 +19,6 @@ package isolated
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -110,7 +109,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			defer fault.RemoveFaultPoint(ctx, waitKey)
 			require.NoError(t, fault.AddFaultPoint(ctx, waiters, ":::", "getwaiters", 0, waitKey, false))
 			defer fault.RemoveFaultPoint(ctx, waiters)
-			require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_CDCExecutor, ":::", "return", 0, phase, false))
+			require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_CDCExecutor, ":::", "echo", 0, phase, false))
 			defer fault.RemoveFaultPoint(ctx, objectio.FJ_CDCExecutor)
 			exec(tc.create)
 			require.Eventually(t, func() bool {
@@ -199,9 +198,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			require.NotEqual(t, originalTable, replacementTable, "COPY must replace the source relation")
 			snapshotJob := waitJob(replacementTable, types.TS{})
 			require.True(t, snapshotJob.spec.InitSQLCoversSnapshot)
-			initSQL, err := base64.StdEncoding.DecodeString(snapshotJob.spec.InitSQL)
-			require.NoError(t, err, "persisted ISCP InitSQL must be valid base64")
-			require.Contains(t, strings.ToLower(string(initSQL)), tc.algo+"_create")
+			require.Empty(t, snapshotJob.spec.InitSQL)
 			require.NotZero(t, initialJob.id)
 			require.NotZero(t, snapshotJob.id)
 
@@ -276,9 +273,8 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 				require.Greater(t, j.id, laterJob.id)
 				require.Equal(t, needsSnapshot, j.spec.InitSQLCoversSnapshot)
 				if needsSnapshot {
-					require.NotEmpty(t, j.spec.InitSQL)
+					require.Equal(t, int8(iscp.JobStage_Init), j.status.Stage)
 				} else {
-					require.Empty(t, j.spec.InitSQL)
 					require.Equal(t, int8(iscp.JobStage_Running), j.status.Stage)
 					require.NotEmpty(t, j.watermark)
 					require.NotEqual(t, "0-0", j.watermark)
@@ -324,14 +320,19 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			exec("begin")
 			exec("insert into t(id,v) values (999,'[-100,-100,-100,-100,-100,-100,-100,-100]')")
 			jobID := reindex("int8", true)
-			exec("insert into t(id,v) values (1000,'[-50,-50,-50,-50,-50,-50,-50,-50]')")
+			exec("alter table t rename to renamed")
+			exec("insert into renamed(id,v) values (1000,'[-50,-50,-50,-50,-50,-50,-50,-50]')")
+			exec("create table t(id bigint primary key, v vecf32(8))")
+			exec("insert into t values " + strings.Join(rows, ","))
 			exec("commit")
 			require.Equal(t, "int8", quantization())
-			checkNeighbor(observer, privateQuery, 999)
-			require.Equal(t, jobID, waitJob(replacementTable, types.TS{}).id)
-			require.Contains(t, explain("select id from t"+privateDistance+" limit 2"), tc.algo+"_search")
+			checkNeighbor(observer, "select id from renamed"+privateOrder, 999)
+			rebuilt := waitJob(replacementTable, types.TS{})
+			require.Equal(t, jobID, rebuilt.id)
+			require.Equal(t, "renamed", rebuilt.spec.SrcTable.TableName)
+			require.Contains(t, explain("select id from renamed"+privateDistance+" limit 2"), tc.algo+"_search")
 			for _, hint := range []string{"", " ignore index(ix)"} {
-				q := "select id from t" + hint + privateDistance + " limit 2"
+				q := "select id from renamed" + hint + privateDistance + " limit 2"
 				rows, err := observer.QueryContext(ctx, q)
 				require.NoError(t, err)
 				defer rows.Close()
@@ -346,7 +347,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			}
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+storageSQL+" where tag=0").Scan(&count))
 			require.Positive(t, count)
-			query := "select id from t" + orderBy
+			query := "select id from renamed" + orderBy
 			require.Contains(t, explain(query), tc.algo+"_search")
 			checkNeighbor(observer, query, 100)
 		})

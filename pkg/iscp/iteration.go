@@ -33,8 +33,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -141,7 +144,7 @@ func ExecuteIterationWithRuntime(
 
 	var needInit bool
 	for i := range prevStatus {
-		if prevStatus[i].Stage == JobStage_Init && jobSpecs[i].ConsumerInfo.InitSQL != "" {
+		if prevStatus[i].Stage == JobStage_Init && jobSpecs[i].needsInitializer() {
 			if len(iterCtx.jobNames) != 1 {
 				return moerr.NewInternalError(ctx, "init sql is not supported for multiple jobs")
 			}
@@ -209,7 +212,7 @@ func ExecuteIterationWithRuntime(
 			default:
 				return moerr.NewInternalErrorf(initCtx, "unsupported ISCP consumer type %d", jobSpecs[0].ConsumerInfo.ConsumerType)
 			}
-			return processInitSQL(initCtx, cnUUID, cnEngine, cnTxnClient, jobSpecs[0].ConsumerInfo.InitSQL, dbName, tableName, jobSpecs[0].ConsumerInfo.IndexName,
+			return processInitSQL(initCtx, cnUUID, cnEngine, cnTxnClient, &jobSpecs[0].ConsumerInfo,
 				func(proc *sqlexec.SqlProcess) error {
 					if err := retriever.GuardSnapshot(proc.GetContext(), cnUUID, proc.SqlCtx.Txn()); err != nil {
 						return err
@@ -238,7 +241,7 @@ func ExecuteIterationWithRuntime(
 					if err != nil {
 						// A legacy REINDEX initializer can retire its own job. Its successor
 						// owns the new output and cursor inside this same transaction.
-						if initializer != nil {
+						if initializer != nil && !jobSpecs[0].InitSQLCoversSnapshot {
 							advanced, readErr := initializer.jobAdvancedInTxn(proc, iterCtx.jobIDs[0])
 							if advanced {
 								return nil
@@ -891,39 +894,60 @@ func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jo
 	}
 }
 
-// initSQLSessionVars loads the source table's def and returns the target
-// index's captured session_vars blob (algo_params.session_vars, JSON text), or
-// nil if absent. Load failures (Database/Relation) and the IndexParamsSessionVars
-// parse error are returned so the caller can fail the InitSQL rather than
-// silently rebuild with defaults; an absent blob (no index match, or no
-// session_vars key) is (nil, nil) — legitimate, skip the overlay.
-func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, dbName, tableName, indexName string) ([]byte, error) {
-	if dbName == "" || tableName == "" || indexName == "" {
-		return nil, nil
-	}
-	db, err := cnEngine.Database(ctx, dbName, txnOp)
+func initSQLSource(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, source TableInfo) (*plan.TableDef, error) {
+	db, err := cnEngine.Database(ctx, source.DBName, txnOp)
 	if err != nil {
 		return nil, err
 	}
-	rel, err := db.Relation(ctx, tableName, nil)
+	rel, err := db.Relation(ctx, source.TableName, nil)
 	if err != nil {
 		return nil, err
 	}
-	tableDef := rel.CopyTableDef(ctx)
-	if tableDef == nil {
-		return nil, nil
+	if source.TableID != 0 && rel.GetTableID(ctx) != source.TableID {
+		return nil, moerr.NewInternalError(ctx, "iscp source relation changed")
 	}
-	for _, idx := range tableDef.Indexes {
-		if idx.IndexName != indexName {
-			continue
+	return rel.CopyTableDef(ctx), nil
+}
+
+func initSQLSessionVars(tableDef *plan.TableDef, indexName string) ([]byte, error) {
+	for _, idx := range tableDef.GetIndexes() {
+		if idx.IndexName == indexName {
+			return catalog.IndexParamsSessionVars(idx.IndexAlgoParams)
 		}
-		sv, serr := catalog.IndexParamsSessionVars(idx.IndexAlgoParams)
-		if serr != nil {
-			return nil, serr
-		}
-		return sv, nil
 	}
 	return nil, nil
+}
+
+type snapshotBuildContext struct {
+	database string
+	table    *plan.TableDef
+	resolve  func(string, bool, bool) (any, error)
+}
+
+func (c snapshotBuildContext) QryDatabase() string              { return c.database }
+func (c snapshotBuildContext) OriginalTableDef() *plan.TableDef { return c.table }
+func (c snapshotBuildContext) ResolveVariable(name string, system, global bool) (any, error) {
+	if c.resolve == nil {
+		return nil, moerr.NewInternalErrorNoCtx("iscp index build variable resolver is unavailable")
+	}
+	return c.resolve(name, system, global)
+}
+
+func sourceSnapshotStatements(ctx context.Context, build snapshotBuildContext, indexName string) ([]string, error) {
+	defs := make(map[string]*plan.IndexDef)
+	var algo string
+	for _, idx := range build.table.Indexes {
+		if idx.TableExist && idx.IndexName == indexName {
+			defs[catalog.ToLower(idx.IndexAlgoTableType)] = idx
+			algo = idx.IndexAlgo
+		}
+	}
+	if plugin, ok := indexplugin.Get(algo); ok {
+		if init, ok := plugin.Compile().(compileplugin.SourceSnapshotInitializer); ok {
+			return init.SourceSnapshotInitSQL(build, defs)
+		}
+	}
+	return nil, moerr.NewInternalErrorf(ctx, "index %q has no full-source initializer", indexName)
 }
 
 // initSQLResolver builds the system-variable resolver for an InitSQL build.
@@ -1026,15 +1050,19 @@ func ProcessInitSQL(
 	tableName string,
 	indexName string,
 ) (err error) {
-	return processInitSQL(ctx, cnUUID, cnEngine, cnTxnClient, sql, dbName, tableName, indexName, nil, nil, nil)
+	info := &ConsumerInfo{InitSQL: sql, IndexName: indexName, SrcTable: TableInfo{DBName: dbName, TableName: tableName}}
+	return processInitSQL(ctx, cnUUID, cnEngine, cnTxnClient, info, nil, nil, nil)
 }
 
-func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClient, sql, dbName, tableName, indexName string, before func(*sqlexec.SqlProcess) error, complete func(*sqlexec.SqlProcess, types.TS) error, uncertain *bool) (err error) {
-	decoded, err := base64.StdEncoding.DecodeString(sql)
-	if err != nil {
-		return
+func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClient, info *ConsumerInfo, before func(*sqlexec.SqlProcess) error, complete func(*sqlexec.SqlProcess, types.TS) error, uncertain *bool) (err error) {
+	var statements []string
+	if !info.InitSQLCoversSnapshot {
+		decoded, err := base64.StdEncoding.DecodeString(info.InitSQL)
+		if err != nil {
+			return err
+		}
+		statements = splitInitSQL(string(decoded))
 	}
-	sql = string(decoded)
 	completed := false
 	// InitSQL writes model/output data together with the guarded job watermark.
 	// Keep its validation snapshot fixed through completion so an optimistic
@@ -1088,26 +1116,23 @@ func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, 
 		return
 	}
 
-	// Fetch the target index's captured build-time session vars from
-	// algo_params.session_vars (recorded at CREATE INDEX). The InitSQL build
-	// (cagra_create/ivfpq_create/...) resolves vars like kmeans_train_percent
-	// through this process's resolver; overlaying the captured values lets the
-	// background rebuild reproduce the create-time config instead of process
-	// defaults. A load/parse failure is surfaced; an absent blob yields nil.
-	sessionVars, svErr := initSQLSessionVars(ctx, cnEngine, txnOp, dbName, tableName, indexName)
-	if svErr != nil {
-		err = svErr
-		return
+	var source *plan.TableDef
+	var sessionVars []byte
+	dbName, tableName := info.SrcTable.DBName, info.SrcTable.TableName
+	if dbName != "" && tableName != "" && info.IndexName != "" {
+		source, err = initSQLSource(ctx, cnEngine, txnOp, info.SrcTable)
+		if err != nil {
+			return
+		}
+		sessionVars, err = initSQLSessionVars(source, info.IndexName)
+		if err != nil {
+			return
+		}
+	}
+	if info.InitSQLCoversSnapshot && (info.SrcTable.TableID == 0 || source == nil) {
+		return moerr.NewInternalError(ctx, "iscp source relation changed")
 	}
 
-	// Run the InitSQL through sqlexec's background SqlContext rather than the
-	// frontend back-exec. sqlexec.RunSql (SqlContext path) runs IsFrontend=false
-	// and passes the SqlContext's ResolveVariableFunc straight into the executor
-	// opts, so the overlay built from algo_params.session_vars
-	// (kmeans_train_percent etc.) actually reaches the cuvs build. The frontend
-	// back-exec instead resets the proc resolver to the back session's default
-	// (back_exec.go), silently dropping the overlay. initSQLResolver overlays the
-	// captured session_vars on top of executor.DefaultResolveVariable.
 	accountId, aerr := defines.GetAccountId(ctx)
 	if aerr != nil {
 		err = aerr
@@ -1125,10 +1150,13 @@ func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, 
 			return err
 		}
 	}
-	// InitSQL is a JSON array of statements (the multi-statement form), or a JSON
-	// string / raw single statement (backward-compat). ISCP has no multi-statement
-	// executor, so run each in sequence within this txn.
-	for _, stmt := range splitInitSQL(sql) {
+	if info.InitSQLCoversSnapshot {
+		statements, err = sourceSnapshotStatements(ctx, snapshotBuildContext{database: dbName, table: source, resolve: resolver}, info.IndexName)
+		if err != nil {
+			return err
+		}
+	}
+	for _, stmt := range statements {
 		if stmt == "" {
 			continue
 		}

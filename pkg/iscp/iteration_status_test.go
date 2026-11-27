@@ -146,7 +146,7 @@ func TestProcessInitSQLFinalizationOutcome(t *testing.T) {
 			txn := &statusTestTxn{commitErr: tc.commitErr, rollbackErr: tc.rollbackErr}
 			ctx := defines.AttachAccountId(t.Context(), 0)
 			uncertain := false
-			err := processInitSQL(ctx, "", statusTestEngine{}, &statusTestClient{ops: []*statusTestTxn{txn}}, "W10=", "", "", "", func(*sqlexec.SqlProcess) error { return tc.operation }, nil, &uncertain)
+			err := processInitSQL(ctx, "", statusTestEngine{}, &statusTestClient{ops: []*statusTestTxn{txn}}, &ConsumerInfo{InitSQL: "W10="}, func(*sqlexec.SqlProcess) error { return tc.operation }, nil, &uncertain)
 			if tc.operation != nil {
 				require.ErrorIs(t, err, tc.operation)
 				if tc.rollbackErr == nil {
@@ -193,7 +193,7 @@ func TestProcessInitSQLRollsBackOnCallbackPanic(t *testing.T) {
 			}
 			require.PanicsWithValue(t, "initializer panic", func() {
 				sql := base64.StdEncoding.EncodeToString([]byte(`["first", "second"]`))
-				_ = processInitSQL(ctx, service, statusTestEngine{}, &statusTestClient{ops: []*statusTestTxn{txn}}, sql, "", "", "", before, complete, nil)
+				_ = processInitSQL(ctx, service, statusTestEngine{}, &statusTestClient{ops: []*statusTestTxn{txn}}, &ConsumerInfo{InitSQL: sql}, before, complete, nil)
 			})
 			require.Zero(t, txn.commits)
 			require.Equal(t, 1, txn.rollbacks)

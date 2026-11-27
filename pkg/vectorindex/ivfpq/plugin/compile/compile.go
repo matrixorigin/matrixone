@@ -99,8 +99,7 @@ type Hooks struct{}
 // IndexAlgoParam (catalog.IndexParamAsync). Default (key missing or
 // "false"): forceSync=true — ivfpq_create runs inline before the CDC
 // task is registered. Explicit async="true": forceSync=false — the
-// build SQL is stashed as ConsumerInfo.InitSQL and runs at the first
-// CDC iteration.
+// first CDC iteration builds the model.
 //
 // Lifted from Scope.handleVectorIvfpqIndex
 // (pkg/sql/compile/ddl_index_algo.go:802).
@@ -122,18 +121,13 @@ func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[str
 	return h.handleCreate(ctx, indexDefs, forceSync, true)
 }
 
-// RestoreInitSQL — see CAGRA. Rebuilds the IVF-PQ index post-commit during restore.
-func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
-	metaDef, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
-	if !ok {
-		return false, "", moerr.NewInternalErrorNoCtx("ivfpq_meta index definition not found")
-	}
-	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` ivfpq FORCE_SYNC",
-		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+// RestoreInitSQL is bypassed for full-source initializers.
+func (Hooks) RestoreInitSQL(compileplugin.CompileContext, map[string]*plan.IndexDef) (bool, string, error) {
+	return false, "", nil
 }
 
 // handleCreate runs the build in the current transaction if forceSync is set.
-// Otherwise CDC builds it from a source snapshot through InitSQL.
+// Otherwise ISCP builds it from a committed snapshot.
 func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync, reindex bool) error {
 	logutil.Infof("[plugin] ivfpq handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// 0. experimental flag gate (mirrors HNSW's check at ddl_index_algo.go:627).
@@ -185,14 +179,13 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 	// Release the cached GPU model before allocating its replacement.
 	cache.Cache.RemoveCuvs(storageDef.IndexTableName)
 
-	// Use the same replacement statements for an inline reindex and for an
-	// asynchronous build. In the latter case the old model remains readable
-	// until ISCP atomically publishes the replacement and its watermark.
-	statements, err := (Hooks{}).SourceSnapshotInitSQL(ctx, indexDefs)
-	if err != nil {
-		return err
-	}
+	// The async initializer generates the same statements from its guarded
+	// source snapshot, after any committed rename.
 	if forceSync {
+		statements, err := (Hooks{}).SourceSnapshotInitSQL(ctx, indexDefs)
+		if err != nil {
+			return err
+		}
 		if reindex {
 			if err := cuvscdc.ReplaceSnapshot(ctx.QryDatabase(), originalTableDef, storageDef, statements, ctx.RunSqlWithResult); err != nil {
 				return err
@@ -210,14 +203,14 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return err
 	}
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexIvfpqAlgo.ToString())
-	if err := ctx.CreateIndexSnapshotCdcTask(metaDef.IndexName, sinkerType, statements, forceSync); err != nil {
+	if err := ctx.CreateIndexSnapshotCdcTask(metaDef.IndexName, sinkerType, forceSync); err != nil {
 		return err
 	}
 	return registerIdxcronUpdate(ctx, metaDef, db, originalTableDef)
 }
 
 // SourceSnapshotInitSQL replaces the complete model from a single source snapshot.
-func (Hooks) SourceSnapshotInitSQL(ctx compileplugin.CompileContext, defs map[string]*plan.IndexDef) ([]string, error) {
+func (Hooks) SourceSnapshotInitSQL(ctx compileplugin.SourceSnapshotContext, defs map[string]*plan.IndexDef) ([]string, error) {
 	clear, err := genDeleteSQL(defs, ctx.QryDatabase())
 	if err != nil {
 		return nil, err
@@ -352,7 +345,7 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 }
 
 // genBuildSQL is lifted from pkg/sql/compile/util.go:757.
-func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) ([]string, error) {
+func genBuildSQL(ctx compileplugin.SourceSnapshotContext, indexDefs map[string]*plan.IndexDef) ([]string, error) {
 	originalTableDef := ctx.OriginalTableDef()
 	qryDatabase := ctx.QryDatabase()
 	const srcAlias = "src"

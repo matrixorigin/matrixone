@@ -35,7 +35,6 @@ type stubCompileContext struct {
 
 	lastCdcTask struct {
 		called      bool
-		snapshot    []string
 		builtInline bool
 	}
 
@@ -78,9 +77,8 @@ func (s *stubCompileContext) SinkerTypeFromAlgo(_ string) int8             { ret
 func (s *stubCompileContext) CreateIndexCdcTask(_, _ string, _ uint64, _ string, _ int8, _ bool, _ string, _ *plan.TableDef) error {
 	return nil
 }
-func (s *stubCompileContext) CreateIndexSnapshotCdcTask(_ string, _ int8, statements []string, builtInline bool) error {
+func (s *stubCompileContext) CreateIndexSnapshotCdcTask(_ string, _ int8, builtInline bool) error {
 	s.lastCdcTask.called = true
-	s.lastCdcTask.snapshot = statements
 	s.lastCdcTask.builtInline = builtInline
 	return nil
 }
@@ -337,7 +335,7 @@ func TestCagraHandleCreateIndex_OK(t *testing.T) {
 }
 
 func TestCagraHandleCreateIndex_AsyncTrue(t *testing.T) {
-	// An async build delegates the supplied rebuild statements to CDC.
+	// An async build delegates the rebuild to CDC.
 	defs := cagraIndexDefs()
 	defs[catalog.Cagra_TblType_Metadata].IndexAlgoParams = `{"async":"true"}`
 	ctx := newHandleCtx(true)
@@ -345,9 +343,6 @@ func TestCagraHandleCreateIndex_AsyncTrue(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
 	require.False(t, ctx.stubCompileContext.lastCdcTask.builtInline)
-	want, err := (Hooks{}).SourceSnapshotInitSQL(ctx, defs)
-	require.NoError(t, err)
-	require.Equal(t, want, ctx.stubCompileContext.lastCdcTask.snapshot)
 	require.True(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "async branch must also register cron metadata row")
 	require.Equal(t, actionCagraReindex, ctx.stubCompileContext.lastIdxcronUpdate.action)
 }

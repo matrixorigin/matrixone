@@ -32,17 +32,13 @@ import (
 // plugin code never touches *compile.Compile directly, which keeps the
 // plugin package out of an import cycle with pkg/sql/compile.
 type CompileContext interface {
+	SourceSnapshotContext
+
 	// Ctx returns the request context (for cancellation, txn, etc.).
 	Ctx() Context
 
 	// Database is the engine.Database for the indexed table's database.
 	Database() engine.Database
-
-	// QryDatabase is the database name from the parsed query.
-	QryDatabase() string
-
-	// OriginalTableDef is the table-def the index is being created on.
-	OriginalTableDef() *plan.TableDef
 
 	// IndexInfo is the CreateTable carrying the hidden index-table DDL.
 	// May be nil for the ALTER REINDEX path.
@@ -61,9 +57,6 @@ type CompileContext interface {
 	// BuildIndexTable creates one hidden table for the index. Wraps the
 	// existing indexTableBuild helper in pkg/sql/compile/ddl.go.
 	BuildIndexTable(def *plan.TableDef) error
-
-	// ResolveVariable forwards to process.GetResolveVariableFunc().
-	ResolveVariable(name string, isSystemVar, isGlobalVar bool) (any, error)
 
 	// IsFrontend reports whether the Compile is running attached to a
 	// frontend client session (mysql client query or in-frontend
@@ -117,7 +110,7 @@ type CompileContext interface {
 
 	// CreateIndexSnapshotCdcTask initializes CDC from a complete source snapshot.
 	// An inline build can supply that snapshot when it only read committed rows.
-	CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, statements []string, builtInline bool) error
+	CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, builtInline bool) error
 
 	// DropIndexCdcTask removes any ISCP CDC task previously registered
 	// for this (table, index). Safe to call when no task exists.
@@ -257,5 +250,13 @@ func MergeReindexParams(old map[string]string, update ReindexParamUpdate, algo s
 // and cover the complete source snapshot; executing only a training/model stage
 // does not satisfy this contract. ISCP publishes that snapshot with the output.
 type SourceSnapshotInitializer interface {
-	SourceSnapshotInitSQL(ctx CompileContext, indexDefs map[string]*plan.IndexDef) ([]string, error)
+	SourceSnapshotInitSQL(ctx SourceSnapshotContext, indexDefs map[string]*plan.IndexDef) ([]string, error)
+}
+
+// SourceSnapshotContext supplies the source schema and build settings from the
+// transaction that executes the rebuild.
+type SourceSnapshotContext interface {
+	QryDatabase() string
+	OriginalTableDef() *plan.TableDef
+	ResolveVariable(name string, isSystemVar, isGlobalVar bool) (any, error)
 }

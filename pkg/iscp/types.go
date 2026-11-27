@@ -260,9 +260,13 @@ type ConsumerInfo struct {
 	Columns      []string
 	SrcTable     TableInfo
 	InitSQL      string
-	// Set only by a plugin's SourceSnapshotInitializer. Other initializers may
-	// build only a model and must still consume a complete source snapshot.
+	// Build from the source and index definitions in the guarded snapshot.
+	// InitSQL is for initializers that do not cover the source snapshot.
 	InitSQLCoversSnapshot bool `json:",omitempty"`
+}
+
+func (info *ConsumerInfo) needsInitializer() bool {
+	return info.InitSQLCoversSnapshot || info.InitSQL != ""
 }
 
 type TableInfo struct {

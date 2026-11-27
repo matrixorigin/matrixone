@@ -17,7 +17,6 @@ package isolated
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -276,12 +275,9 @@ func TestAlterCopyIndexLifecycle(t *testing.T) {
 				var spec iscp.JobSpec
 				require.NoError(t, json.Unmarshal([]byte(raw), &spec))
 				require.True(t, spec.InitSQLCoversSnapshot, "the model and its source watermark must commit together")
-				payload, err := base64.StdEncoding.DecodeString(spec.InitSQL)
-				require.NoError(t, err)
-				var statements []string
-				require.NoError(t, json.Unmarshal(payload, &statements))
-				require.NotEmpty(t, statements)
-				require.Contains(t, statements[len(statements)-1], tc.algo+"_create(")
+				require.Empty(t, spec.InitSQL)
+				require.Equal(t, "init_gpu", spec.SrcTable.TableName)
+				require.NotZero(t, spec.SrcTable.TableID)
 			})
 		}
 	})

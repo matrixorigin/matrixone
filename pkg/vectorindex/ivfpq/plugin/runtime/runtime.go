@@ -98,6 +98,7 @@ func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 func (CatalogHooks) BuildSessionVars() []string {
 	return []string{
 		"ivfpq_threads_build",
+		"gpu_multi_simulation",
 		"lower_case_table_names",
 	}
 }

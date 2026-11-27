@@ -15,8 +15,6 @@
 package compile
 
 import (
-	"encoding/json"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
@@ -161,28 +159,21 @@ func (p *pluginCompileCtx) CreateIndexCdcTask(dbName, tableName string, tableID 
 		// COPY's workspace rows commit after the DDL snapshot. Bootstrap the
 		// replacement from committed rows before consuming later changes.
 		startFromNow = false
-		defs := make(map[string]*plan.IndexDef)
-		var algo string
 		for _, idx := range p.originalTableDef.Indexes {
 			if idx.IndexName == indexName {
-				defs[idx.IndexAlgoTableType] = idx
-				algo = idx.IndexAlgo
-			}
-		}
-		if plugin, ok := indexplugin.Get(algo); ok {
-			if init, ok := plugin.Compile().(compileplugin.SourceSnapshotInitializer); ok {
-				statements, err := init.SourceSnapshotInitSQL(p, defs)
-				if err != nil {
-					return err
+				if plugin, ok := indexplugin.Get(idx.IndexAlgo); ok {
+					if _, ok := plugin.Compile().(compileplugin.SourceSnapshotInitializer); ok {
+						return p.CreateIndexSnapshotCdcTask(indexName, sinkerType, false)
+					}
 				}
-				return p.CreateIndexSnapshotCdcTask(indexName, sinkerType, statements, false)
+				break
 			}
 		}
 	}
 	return CreateIndexCdcTask(p.c, dbName, tableName, tableID, indexName, sinkerType, startFromNow, sql, tableDef)
 }
 
-func (p *pluginCompileCtx) CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, statements []string, builtInline bool) error {
+func (p *pluginCompileCtx) CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, builtInline bool) error {
 	table := p.originalTableDef
 	if builtInline && !p.isCopyReplacement(p.qryDatabase, table.Name, table.TblId) {
 		// Workspace rows commit after the inline build's snapshot. A committed
@@ -192,11 +183,7 @@ func (p *pluginCompileCtx) CreateIndexSnapshotCdcTask(indexName string, sinkerTy
 			return CreateIndexCdcTask(p.c, p.qryDatabase, table.Name, table.TblId, indexName, sinkerType, true, "", table)
 		}
 	}
-	encoded, err := json.Marshal(statements)
-	if err != nil {
-		return err
-	}
-	return createIndexCdcTask(p.c, p.qryDatabase, table.Name, table.TblId, indexName, sinkerType, false, string(encoded), true, table)
+	return createIndexCdcTask(p.c, p.qryDatabase, table.Name, table.TblId, indexName, sinkerType, false, "", true, table)
 }
 
 func (p *pluginCompileCtx) isCopyReplacement(database, table string, id uint64) bool {
