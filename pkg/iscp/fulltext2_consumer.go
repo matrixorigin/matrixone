@@ -87,8 +87,8 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 					reportIndexConsumerErr(errch, ferr)
 					return
 				}
-				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
-					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+				err = c.RunTxn(ctx, r, time.Hour,
+					func(sqlproc *sqlexec.SqlProcess) (err error) {
 						startChunk, err := fulltext2.NextTailChunkId(sqlproc, w.cfg)
 						if err != nil {
 							return err

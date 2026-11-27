@@ -495,6 +495,9 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	nowTs := exec.txnEngine.LatestLogtailAppliedTime()
+	if latestCommitTS := exec.cnTxnClient.GetLatestCommitTS(); latestCommitTS.Greater(nowTs) {
+		nowTs = latestCommitTS
+	}
 	createByOpt := client.WithTxnCreateBy(
 		0,
 		"",
@@ -537,21 +540,6 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobsInTxn(ctx context.Context, txnO
 	if err := exec.txnEngine.New(ctx, txnOp); err != nil {
 		return err
 	}
-	sql := fmt.Sprintf(
-		`UPDATE mo_catalog.mo_iscp_log
-        SET job_state = %d
-        WHERE job_state IN (%d, %d);
-        `,
-		ISCPJobState_Completed,
-		ISCPJobState_Pending,
-		ISCPJobState_Running,
-	)
-	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txnOp)
-	if err != nil {
-		return err
-	}
-	defer result.Close()
-
 	owners, err := ExecWithResult(ctx, "SELECT count(*) FROM mo_task.sys_daemon_task WHERE task_type = 'ISCP'", exec.cnUUID, txnOp)
 	if err != nil {
 		return err
@@ -570,14 +558,27 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobsInTxn(ctx context.Context, txnO
 		logutil.Error("ISCP-Task unexpected daemon task count", zap.Int64("count", ownerCount))
 		return moerr.NewInvalidTask(ctx, exec.cnUUID, exec.taskID)
 	}
-
-	// Refresh after the potentially long job scan, then validate and write the
-	// owner guard. Heartbeats that committed during the scan are harmless, while
-	// the SI snapshot stays fixed after this point so a takeover cannot be
-	// hidden by a commit-time RC refresh.
+	// Pin the SI snapshot immediately before the first write. DDL passes its
+	// caller-owned transaction to UnregisterJob, so not every writer of
+	// mo_iscp_log follows ISCP's transaction mode. Refreshing after the repair
+	// UPDATE could hide an optimistic DDL commit and restore a retired job.
 	if err = txnOp.GetWorkspace().AdvanceSnapshot(ctx, timestamp.Timestamp{}); err != nil {
 		return err
 	}
+	sql := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_iscp_log
+        SET job_state = %d
+        WHERE drop_at IS NULL AND job_state IN (%d, %d);
+        `,
+		ISCPJobState_Completed,
+		ISCPJobState_Pending,
+		ISCPJobState_Running,
+	)
+	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txnOp)
+	if err != nil {
+		return err
+	}
+	result.Close()
 
 	// The repair and ownership check must commit together. A pre-check alone
 	// permits a new runner to claim the daemon task before this update commits.
@@ -1310,7 +1311,9 @@ func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) (err
 	}
 	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
 	defer cancel()
-	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "flush watermark for all tables")
+	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "flush watermark for all tables",
+		client.WithTxnIsolation(txn.TxnIsolation_SI),
+	)
 	if err != nil {
 		return err
 	}

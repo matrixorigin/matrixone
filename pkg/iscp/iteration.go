@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -680,7 +681,9 @@ var FlushJobStatusOnIterationState = func(
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush job status timeout"))
 	defer cancel()
-	txnWriter, err := getTxn(ctx, cnEngine, cnTxnClient, "iscp iteration")
+	txnWriter, err := getTxn(ctx, cnEngine, cnTxnClient, "iscp iteration",
+		client.WithTxnIsolation(pbtxn.TxnIsolation_SI),
+	)
 	if err != nil {
 		return
 	}
@@ -1032,14 +1035,13 @@ func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, 
 		return
 	}
 	sql = string(decoded)
-	nowTs := cnEngine.LatestLogtailAppliedTime()
-	createByOpt := client.WithTxnCreateBy(
-		0,
-		"",
-		"iscp process init sql",
-		0)
 	completed := false
-	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	// InitSQL writes model/output data together with the guarded job watermark.
+	// Keep its validation snapshot fixed through completion so an optimistic
+	// DDL retirement cannot be hidden by an RC commit refresh.
+	txnOp, err := sqlexec.GetTxn(ctx, cnEngine, cnTxnClient, "iscp process init sql",
+		client.WithTxnIsolation(pbtxn.TxnIsolation_SI),
+	)
 	if txnOp != nil {
 		// Commit only when every InitSQL statement succeeded; roll back on any
 		// error so a multi-statement InitSQL (postings-populate + WAND build) is

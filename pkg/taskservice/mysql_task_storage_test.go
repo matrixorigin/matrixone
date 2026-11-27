@@ -1989,6 +1989,23 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 		require.NoError(t, storage.Close())
 	})
 
+	t.Run("collector panic after catalog write rolls back", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectExec("update mo_catalog.mo_cdc_task set state=1").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectRollback()
+		require.PanicsWithValue(t, "collector panic", func() {
+			_, _ = storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(ctx context.Context, _ task.TaskStatus, _ map[CDCTaskKey]struct{}, tx SqlExecutor) (int, error) {
+				_, err := tx.ExecContext(ctx, "update mo_catalog.mo_cdc_task set state=1")
+				require.NoError(t, err)
+				panic("collector panic")
+			})
+		})
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
 	t.Run("empty task key map", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		mock.ExpectBegin()

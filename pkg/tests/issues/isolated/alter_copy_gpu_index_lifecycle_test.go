@@ -19,6 +19,7 @@ package isolated
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -144,7 +145,9 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			require.NotEqual(t, originalTable, replacementTable, "COPY must replace the source relation")
 			snapshotJob := waitJob(replacementTable, types.TS{})
 			require.True(t, snapshotJob.spec.InitSQLCoversSnapshot)
-			require.Contains(t, strings.ToLower(snapshotJob.spec.InitSQL), tc.algo+"_create")
+			initSQL, err := base64.StdEncoding.DecodeString(snapshotJob.spec.InitSQL)
+			require.NoError(t, err, "persisted ISCP InitSQL must be valid base64")
+			require.Contains(t, strings.ToLower(string(initSQL)), tc.algo+"_create")
 			require.NotZero(t, initialJob.id)
 			require.NotZero(t, snapshotJob.id)
 
@@ -173,10 +176,10 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			require.Contains(t, explain("select id from t"+orderBy), tc.algo+"_search", "the query must exercise the native index")
 			require.NotContains(t, explain("select id from t ignore index(ix)"+orderBy), tc.algo+"_search", "the comparison must scan the source table")
 
-			writeStart := types.BuildTS(time.Now().UnixNano(), 0)
 			exec("insert into t values (100,'[100,100,100,100,100,100,100,100]')")
 			exec("update t set v='[500,500,500,500,500,500,500,500]' where id=5")
 			exec("delete from t where id=21")
+			writeEnd := types.BuildTS(time.Now().UnixNano(), 0)
 			var laterJob job
 			require.EventuallyWithT(t, func(check *assert.CollectT) {
 				var err error
@@ -192,7 +195,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 				assert.NotEmpty(check, laterJob.watermark)
 				if laterJob.watermark != "0-0" && laterJob.watermark != "" {
 					watermark := types.StringToTS(laterJob.watermark)
-					assert.True(check, watermark.GE(&writeStart), "watermark %s has not reached %s", laterJob.watermark, writeStart.ToString())
+					assert.True(check, watermark.GE(&writeEnd), "watermark %s has not reached %s", laterJob.watermark, writeEnd.ToString())
 				}
 				var tailRows int
 				queryErr := conn.QueryRowContext(ctx, "select count(*) from "+storageSQL+" where tag=1").Scan(&tailRows)

@@ -42,6 +42,8 @@ func (c *blockedRecoveryClient) New(ctx context.Context, _ timestamp.Timestamp, 
 	return nil, ctx.Err()
 }
 
+func (*blockedRecoveryClient) GetLatestCommitTS() timestamp.Timestamp { return timestamp.Timestamp{} }
+
 type stoppedRecoveryWorker struct{}
 
 func (*stoppedRecoveryWorker) Submit(*IterationContext) error { return nil }

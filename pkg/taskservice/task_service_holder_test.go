@@ -29,6 +29,52 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
+type panicLeaseTaskStorage struct{ TaskStorage }
+
+func (s *panicLeaseTaskStorage) UpdateOwnedCDCTask(context.Context, CDCTaskOwner, CDCTaskTransition, func(context.Context, SqlExecutor) error) error {
+	panic("owned update panic")
+}
+
+func (s *panicLeaseTaskStorage) ClaimCDCRestart(context.Context, task.DaemonTask, string, time.Time) (bool, error) {
+	panic("restart claim panic")
+}
+
+func TestRefreshTaskStorageUnlocksLeaseMethodsAfterPanic(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		call  func(*refreshableTaskStorage)
+		panic string
+	}{
+		{
+			name:  "owned update",
+			panic: "owned update panic",
+			call: func(s *refreshableTaskStorage) {
+				_ = s.UpdateOwnedCDCTask(context.Background(), CDCTaskOwner{}, CDCTaskTransition{}, func(context.Context, SqlExecutor) error { return nil })
+			},
+		},
+		{
+			name:  "restart claim",
+			panic: "restart claim panic",
+			call: func(s *refreshableTaskStorage) {
+				_, _ = s.ClaimCDCRestart(context.Background(), task.DaemonTask{}, "", time.Time{})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &panicLeaseTaskStorage{TaskStorage: NewMemTaskStorage()}
+			s := newRefreshableTaskStorage(
+				runtime.DefaultRuntime(),
+				func(context.Context, bool) (string, error) { return "s1", nil },
+				NewFixedTaskStorageFactory(store),
+			).(*refreshableTaskStorage)
+			require.PanicsWithValue(t, tc.panic, func() { tc.call(s) })
+			require.True(t, s.mu.TryLock(), "panic must release the storage read lock")
+			s.mu.Unlock()
+			require.NoError(t, s.Close(), "Close must acquire the storage lock after panic")
+		})
+	}
+}
+
 func TestTaskHolderCanCreateTaskService(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	store := NewMemTaskStorage()

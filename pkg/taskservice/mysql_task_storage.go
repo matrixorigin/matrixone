@@ -2080,15 +2080,20 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 	if err != nil {
 		return 0, err
 	}
+	completed := false
 	defer func() {
-		if err != nil {
+		if !completed {
 			if e := tx.Rollback(); e != nil {
-				err = errors.Join(e, err)
+				if err != nil {
+					err = errors.Join(e, err)
+				} else {
+					logutil.Error("cdc task update rollback after abnormal exit failed", zap.Error(e))
+				}
 			}
-		} else {
-			if e := tx.Commit(); e != nil {
-				err = errors.Join(e, err)
-			}
+			return
+		}
+		if e := tx.Commit(); e != nil {
+			err = errors.Join(e, err)
 		}
 	}()
 
@@ -2103,6 +2108,7 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 	}
 
 	if len(taskKeyMap) == 0 {
+		completed = true
 		return 0, nil
 	}
 
@@ -2194,6 +2200,7 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 		return 0, err
 	}
 
+	completed = true
 	return affectedCdcRow, nil
 }
 

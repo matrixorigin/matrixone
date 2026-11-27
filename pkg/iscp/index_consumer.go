@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -68,7 +69,23 @@ type indexOutputTable struct {
 
 var _ Consumer = new(IndexConsumer)
 
-var runTxnWithSqlContext = sqlexec.RunTxnWithSqlContext
+var runTxnWithSqlContext = func(
+	ctx context.Context,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	cnUUID string,
+	accountID uint32,
+	timeout time.Duration,
+	resolveVariableFunc func(string, bool, bool) (interface{}, error),
+	cbdata any,
+	f func(*sqlexec.SqlProcess, any) error,
+) error {
+	// ISCP output and its mo_iscp_log publication share one transaction. Pin an
+	// SI snapshot so an optimistic DDL retirement or successor update cannot be
+	// hidden by RC's commit-time refresh. Leave the transaction mode unchanged.
+	return sqlexec.RunTxnWithSqlContext(ctx, cnEngine, cnTxnClient, cnUUID, accountID, timeout, resolveVariableFunc, cbdata, f,
+		client.WithTxnIsolation(pbtxn.TxnIsolation_SI))
+}
 
 // captureOutputTables binds the job's catalog view to physical index tables.
 // A later transaction must not write a new table that reused an old name.

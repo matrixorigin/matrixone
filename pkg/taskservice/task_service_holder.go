@@ -622,17 +622,20 @@ func (s *refreshableTaskStorage) AddCdcTaskSub(ctx context.Context, dt task.Daem
 }
 
 func (s *refreshableTaskStorage) UpdateOwnedCDCTask(ctx context.Context, owner CDCTaskOwner, target CDCTaskTransition, mutate func(context.Context, SqlExecutor) error) error {
-	s.mu.RLock()
-	lastAddress := s.mu.lastAddress
 	var err error
-	if s.mu.store == nil {
-		err = cdcTaskStorageError(ErrNotReady, false)
-	} else if err = s.mu.store.PingContext(ctx); err != nil {
-		err = cdcTaskStorageError(err, false)
-	} else {
-		err = s.mu.store.UpdateOwnedCDCTask(ctx, owner, target, mutate)
-	}
-	s.mu.RUnlock()
+	var lastAddress string
+	func() {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		lastAddress = s.mu.lastAddress
+		if s.mu.store == nil {
+			err = cdcTaskStorageError(ErrNotReady, false)
+		} else if err = s.mu.store.PingContext(ctx); err != nil {
+			err = cdcTaskStorageError(err, false)
+		} else {
+			err = s.mu.store.UpdateOwnedCDCTask(ctx, owner, target, mutate)
+		}
+	}()
 	var storeErr *CDCTaskStorageError
 	if errors.As(err, &storeErr) && ctx.Err() == nil {
 		s.maybeRefresh(lastAddress)
@@ -641,18 +644,21 @@ func (s *refreshableTaskStorage) UpdateOwnedCDCTask(ctx context.Context, owner C
 }
 
 func (s *refreshableTaskStorage) ClaimCDCRestart(ctx context.Context, task task.DaemonTask, previousRunner string, staleBefore time.Time) (bool, error) {
-	s.mu.RLock()
-	lastAddress := s.mu.lastAddress
 	var claimed bool
 	var err error
-	if s.mu.store == nil {
-		err = cdcTaskStorageError(ErrNotReady, false)
-	} else if err = s.mu.store.PingContext(ctx); err != nil {
-		err = cdcTaskStorageError(err, false)
-	} else {
-		claimed, err = s.mu.store.ClaimCDCRestart(ctx, task, previousRunner, staleBefore)
-	}
-	s.mu.RUnlock()
+	var lastAddress string
+	func() {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		lastAddress = s.mu.lastAddress
+		if s.mu.store == nil {
+			err = cdcTaskStorageError(ErrNotReady, false)
+		} else if err = s.mu.store.PingContext(ctx); err != nil {
+			err = cdcTaskStorageError(err, false)
+		} else {
+			claimed, err = s.mu.store.ClaimCDCRestart(ctx, task, previousRunner, staleBefore)
+		}
+	}()
 	var storeErr *CDCTaskStorageError
 	if errors.As(err, &storeErr) && ctx.Err() == nil {
 		s.maybeRefresh(lastAddress)
