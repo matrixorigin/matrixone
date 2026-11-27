@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -693,6 +694,29 @@ func TestHeartbeatDaemonTask(t *testing.T) {
 	assert.False(t, ts[0].LastHeartbeat.IsZero())
 	assert.Equal(t, task.TaskStatus_CancelRequested, ts[0].TaskStatus)
 	assert.Equal(t, updateAt, ts[0].UpdateAt)
+}
+
+func TestHeartbeatDaemonTaskRejectsSupersededRunner(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	ctx := context.Background()
+
+	old := newTestDaemonTask(1, "heartbeat-owner")
+	old.TaskRunner = "old-cn"
+	old.TaskStatus = task.TaskStatus_Running
+	mustAddTestDaemonTask(t, store, 1, old)
+	newer := old
+	newer.TaskRunner = "new-cn"
+	newer.LastHeartbeat = time.Unix(1, 0)
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{newer})
+
+	err := s.HeartbeatDaemonTask(ctx, old)
+	require.Error(t, err)
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, old.ID))
+	require.Equal(t, "new-cn", got[0].TaskRunner)
+	require.Equal(t, newer.LastHeartbeat, got[0].LastHeartbeat)
+	require.NoError(t, s.HeartbeatDaemonTask(ctx, newer))
 }
 
 func TestAddCdcTask1(t *testing.T) {

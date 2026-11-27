@@ -23,7 +23,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,6 +61,245 @@ type mockConcurrentChangeReader struct {
 	tableInfo *cdc.DbTableInfo
 	stopDelay time.Duration // Simulate work time before stopping
 	started   chan struct{} // Signal when Run() has started
+}
+
+type heldCleanupReader struct {
+	started      chan struct{}
+	closeStarted chan struct{}
+	releaseClose chan struct{}
+	releaseRun   chan struct{}
+	done         chan struct{}
+	closeCalls   atomic.Int32
+}
+
+func newHeldCleanupReader() *heldCleanupReader {
+	return &heldCleanupReader{
+		started:      make(chan struct{}),
+		closeStarted: make(chan struct{}),
+		releaseClose: make(chan struct{}),
+		releaseRun:   make(chan struct{}),
+		done:         make(chan struct{}),
+	}
+}
+
+func (r *heldCleanupReader) Run(_ context.Context, ar *cdc.ActiveRoutine) {
+	close(r.started)
+	<-ar.Cancel
+	<-r.releaseRun
+	close(r.done)
+}
+
+func (r *heldCleanupReader) Close() {
+	if r.closeCalls.Add(1) == 1 {
+		close(r.closeStarted)
+	}
+	<-r.releaseClose
+}
+func (r *heldCleanupReader) Wait()                          { <-r.done }
+func (r *heldCleanupReader) GetTableInfo() *cdc.DbTableInfo { return nil }
+
+func newCancelDrainExecutor(t *testing.T) *CDCTaskExecutor {
+	t.Helper()
+	exec := &CDCTaskExecutor{
+		spec:           &task.CreateCdcDetails{TaskId: "cancel-drain", TaskName: "cancel-drain"},
+		stateMachine:   NewExecutorStateMachine(),
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		runningReaders: &sync.Map{},
+		holdCh:         make(chan int, 1),
+	}
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+	return exec
+}
+
+func TestCancelAndWaitRetainsBlockedReaderCleanup(t *testing.T) {
+	exec := newCancelDrainExecutor(t)
+	reader := newHeldCleanupReader()
+	var closeOnce, runOnce sync.Once
+	t.Cleanup(func() {
+		closeOnce.Do(func() { close(reader.releaseClose) })
+		runOnce.Do(func() { close(reader.releaseRun) })
+	})
+	exec.runningReaders.Store("db.table", reader)
+	exec.startReader(t.Context(), exec.activeRoutine, reader)
+	<-reader.started
+
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() { result <- exec.CancelAndWait(ctx) }()
+	select {
+	case <-reader.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reader close did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("cleanup wait ignored cancellation while reader close was blocked")
+	}
+	canceled, stop := context.WithCancel(t.Context())
+	stop()
+	require.ErrorIs(t, exec.CancelAndWait(canceled), context.Canceled)
+	require.Equal(t, int32(1), reader.closeCalls.Load(), "retry must join the same cleanup")
+	closeOnce.Do(func() { close(reader.releaseClose) })
+	require.ErrorIs(t, exec.CancelAndWait(canceled), context.Canceled, "reader Run is still cleaning up")
+	runOnce.Do(func() { close(reader.releaseRun) })
+	ctx, stop = context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	require.NoError(t, exec.CancelAndWait(ctx))
+	require.Error(t, exec.Cancel(), "direct repeated Cancel keeps its existing contract")
+}
+
+func TestCancelAndWaitDrainsWhenTransitionFails(t *testing.T) {
+	exec := newCancelDrainExecutor(t)
+	// Idle rejects Cancel, but a previously scheduled reader still has to stop.
+	exec.stateMachine = NewExecutorStateMachine()
+	reader := newHeldCleanupReader()
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(reader.releaseRun) }) })
+	exec.startReader(t.Context(), exec.activeRoutine, reader)
+	<-reader.started
+	result := make(chan error, 1)
+	go func() { result <- exec.CancelAndWait(t.Context()) }()
+	select {
+	case <-exec.activeRoutine.Cancel:
+	case err := <-result:
+		t.Fatalf("cleanup returned before signaling the reader: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("cleanup did not signal the reader")
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("cleanup returned before the reader exited: %v", err)
+	default:
+	}
+	release.Do(func() { close(reader.releaseRun) })
+	select {
+	case err := <-result:
+		require.ErrorContains(t, err, "cannot cancel")
+	case <-time.After(time.Second):
+		t.Fatal("cleanup did not join the reader")
+	}
+}
+
+func TestCancelAndWaitJoinsReadersScheduledByInFlightCallback(t *testing.T) {
+	exec := newCancelDrainExecutor(t)
+	reader := newHeldCleanupReader()
+	var runOnce sync.Once
+	t.Cleanup(func() { runOnce.Do(func() { close(reader.releaseRun) }) })
+	// Model a detector callback that passed its generation check before Cancel.
+	exec.callbackMu.RLock()
+	locked := true
+	t.Cleanup(func() {
+		if locked {
+			exec.callbackMu.RUnlock()
+		}
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() { result <- exec.CancelAndWait(ctx) }()
+	require.Eventually(t, func() bool { return exec.stateMachine.State() == StateCancelled }, time.Second, time.Millisecond)
+	// A concurrent restart may install its routine after Cancel closed the old
+	// one, while this callback is still creating a reader.
+	lateRoutine := cdc.NewCdcActiveRoutine()
+	exec.setActiveRoutine(lateRoutine)
+	exec.startReader(t.Context(), lateRoutine, reader)
+	<-reader.started
+	cancel()
+	require.ErrorIs(t, <-result, context.Canceled)
+	exec.callbackMu.RUnlock()
+	locked = false
+	joined := make(chan error, 1)
+	go func() { joined <- exec.CancelAndWait(t.Context()) }()
+	select {
+	case err := <-joined:
+		t.Fatalf("cleanup returned before the callback's reader exited: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	runOnce.Do(func() { close(reader.releaseRun) })
+	select {
+	case err := <-joined:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("cleanup did not finish after the reader exited")
+	}
+}
+
+func TestCancelAndWaitCancelsDetectorCallbackContext(t *testing.T) {
+	exec := newCancelDrainExecutor(t)
+	exec.spec.Accounts = []*task.Account{{Id: 1}}
+	exec.bindLifecycleContext(t.Context())
+	entered := make(chan struct{})
+	stub := gostub.Stub(&cdc.GetTxnOp, func(ctx context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	defer stub.Reset()
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- exec.handleNewTablesForGeneration(exec.callbackGeneration.Load(), nil)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("detector callback did not start")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	require.NoError(t, exec.CancelAndWait(ctx))
+	require.ErrorIs(t, <-callbackDone, context.Canceled)
+}
+
+func TestCancelAndWaitCleanupIsOwnedByRunner(t *testing.T) {
+	exec := newCancelDrainExecutor(t)
+	runner := stopper.NewStopper("cdc-cleanup-test")
+	exec.lifecycleTaskScheduler = runner.RunNamedTask
+	reader := newHeldCleanupReader()
+	var closeOnce, runOnce sync.Once
+	t.Cleanup(func() {
+		closeOnce.Do(func() { close(reader.releaseClose) })
+		runOnce.Do(func() { close(reader.releaseRun) })
+		runner.Stop()
+	})
+	exec.runningReaders.Store("db.table", reader)
+	exec.startReader(t.Context(), exec.activeRoutine, reader)
+	<-reader.started
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() { result <- exec.CancelAndWait(ctx) }()
+	select {
+	case <-reader.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reader close did not start")
+	}
+	cancel()
+	require.ErrorIs(t, <-result, context.Canceled)
+	stopped := make(chan struct{})
+	go func() { runner.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("runner stopped before its cleanup task completed")
+	case <-time.After(25 * time.Millisecond):
+	}
+	closeOnce.Do(func() { close(reader.releaseClose) })
+	runOnce.Do(func() { close(reader.releaseRun) })
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("runner did not join completed cleanup")
+	}
+}
+
+func TestCancelAndWaitAfterRunnerStops(t *testing.T) {
+	exec := newCancelDrainExecutor(t)
+	runner := stopper.NewStopper("cdc-stopped-cleanup-test")
+	exec.lifecycleTaskScheduler = runner.RunNamedTask
+	runner.Stop()
+	require.NoError(t, exec.CancelAndWait(t.Context()))
+	require.Equal(t, StateCancelled, exec.stateMachine.State())
 }
 
 func newMockConcurrentChangeReader(tableInfo *cdc.DbTableInfo, stopDelay time.Duration) *mockConcurrentChangeReader {

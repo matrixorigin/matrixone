@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -48,15 +49,7 @@ func handlePauseDaemonTask(ctx context.Context, ses *Session, st *tree.PauseDaem
 			task.TaskStatus_Running,
 			tasks[0].TaskStatus)
 	}
-	tasks[0].TaskStatus = task.TaskStatus_PauseRequested
-	c, err := ts.UpdateDaemonTask(ctx, tasks)
-	if err != nil {
-		return err
-	}
-	if c != 1 {
-		return moerr.NewErrTaskNotFound(ctx, st.TaskID)
-	}
-	return nil
+	return requestDaemonTaskStatus(ctx, ts, tasks[0], task.TaskStatus_PauseRequested)
 }
 
 func handleCancelDaemonTask(ctx context.Context, ses *Session, taskID uint64) error {
@@ -82,15 +75,7 @@ func handleCancelDaemonTask(ctx context.Context, ses *Session, taskID uint64) er
 		return moerr.NewInternalErrorf(ctx,
 			"task can not be canceled because it is in %s state", task.TaskStatus_Error)
 	}
-	tasks[0].TaskStatus = task.TaskStatus_CancelRequested
-	c, err := ts.UpdateDaemonTask(ctx, tasks)
-	if err != nil {
-		return err
-	}
-	if c != 1 {
-		return moerr.NewErrTaskNotFound(ctx, taskID)
-	}
-	return nil
+	return requestDaemonTaskStatus(ctx, ts, tasks[0], task.TaskStatus_CancelRequested)
 }
 
 func handleResumeDaemonTask(ctx context.Context, ses *Session, st *tree.ResumeDaemonTask) error {
@@ -118,13 +103,22 @@ func handleResumeDaemonTask(ctx context.Context, ses *Session, st *tree.ResumeDa
 			task.TaskStatus_Paused,
 			tasks[0].TaskStatus)
 	}
-	tasks[0].TaskStatus = task.TaskStatus_ResumeRequested
-	c, err := ts.UpdateDaemonTask(ctx, tasks)
+	return requestDaemonTaskStatus(ctx, ts, tasks[0], task.TaskStatus_ResumeRequested)
+}
+
+// A control request owns the status, not the runner or heartbeat. A full-row
+// update from the earlier read can otherwise restore a superseded lease.
+func requestDaemonTaskStatus(ctx context.Context, ts taskservice.TaskService, observed task.DaemonTask, status task.TaskStatus) error {
+	c, err := ts.UpdateDaemonTaskStatus(
+		ctx, observed.ID, status, time.Now(), observed.EndAt,
+		taskservice.WithAccountID(taskservice.EQ, observed.AccountID),
+		taskservice.WithTaskStatusCond(observed.TaskStatus),
+	)
 	if err != nil {
 		return err
 	}
 	if c != 1 {
-		return moerr.NewErrTaskNotFound(ctx, st.TaskID)
+		return moerr.NewInternalErrorf(ctx, "task %d changed concurrently; please retry", observed.ID)
 	}
 	return nil
 }

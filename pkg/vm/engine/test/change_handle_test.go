@@ -1981,7 +1981,7 @@ func TestISCPExecutor1(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -1996,10 +1996,10 @@ func TestISCPExecutor1(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	// register cdc job
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
@@ -2154,7 +2154,7 @@ func TestISCPRegisterUnregisterIdempotence(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -2163,10 +2163,10 @@ func TestISCPRegisterUnregisterIdempotence(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	// unregister a job that not exist
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
@@ -2366,7 +2366,7 @@ func TestISCPExecutor3(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -2381,10 +2381,10 @@ func TestISCPExecutor3(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	require.True(t, fault.Enable(), "fault injection was already enabled before TestISCPExecutor3")
 	t.Cleanup(func() {
@@ -2594,7 +2594,7 @@ func TestISCPExecutor4(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -2609,10 +2609,10 @@ func TestISCPExecutor4(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	require.True(t, fault.Enable(), "fault injection was already enabled before TestISCPExecutor4")
 	t.Cleanup(func() {
@@ -2826,7 +2826,7 @@ func TestISCPExecutor5(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -2841,10 +2841,10 @@ func TestISCPExecutor5(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	registerFn := func(indexName string, tableName string) {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
@@ -2977,7 +2977,7 @@ func TestISCPExecutor6(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -2992,10 +2992,10 @@ func TestISCPExecutor6(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	txn, err = disttaeEngine.NewTxnOperator(ctxAccountID2, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
@@ -3093,7 +3093,7 @@ func TestISCPExecutor7(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -3108,10 +3108,10 @@ func TestISCPExecutor7(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	// register cdc job
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
@@ -3493,7 +3493,7 @@ func TestISCPExecutor8(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -3508,10 +3508,10 @@ func TestISCPExecutor8(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	// register cdc job
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
@@ -3610,7 +3610,7 @@ func TestUpdateJobSpec(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -3626,10 +3626,10 @@ func TestUpdateJobSpec(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 	jobName := "job1"
 	dbName := "srcdb"
 	tableName := "src_table"
@@ -3808,7 +3808,7 @@ func TestFlushWatermark(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -3824,10 +3824,10 @@ func TestFlushWatermark(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 	jobName := "job1"
 	dbName := "srcdb"
 	tableName := "src_table"
@@ -3925,7 +3925,7 @@ func TestGCInMemoryJob(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -3940,10 +3940,10 @@ func TestGCInMemoryJob(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
@@ -4053,7 +4053,7 @@ func TestIteration(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -4068,10 +4068,10 @@ func TestIteration(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	fault.Enable()
 	defer fault.Disable()
@@ -4207,7 +4207,7 @@ func TestDropJobsByDBName(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -4222,10 +4222,10 @@ func TestDropJobsByDBName(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	registerFn := func(tableName string, jobName string) types.TS {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
@@ -4351,7 +4351,7 @@ func TestInvalidTimestamp(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -4366,11 +4366,11 @@ func TestInvalidTimestamp(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	err = cdcExecutor.Start()
 	require.NoError(t, err)
-	defer cdcExecutor.Stop()
 
 	// create database and table
 
@@ -4470,21 +4470,18 @@ func TestCancelIteration1(t *testing.T) {
 		) (jobSpec []*iscp.JobSpec, prevStatus []*iscp.JobStatus, prevStates []int8, err error) {
 			cancelCh <- struct{}{}
 			<-cancelCh
-			return []*iscp.JobSpec{
-					{
-						ConsumerInfo: iscp.ConsumerInfo{
-							ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-							SrcTable: iscp.TableInfo{
-								DBName:    "srcdb",
-								TableName: "src_table",
-							},
-						},
+			jobSpec = []*iscp.JobSpec{{
+				ConsumerInfo: iscp.ConsumerInfo{
+					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+					SrcTable: iscp.TableInfo{
+						DBName:    "srcdb",
+						TableName: "src_table",
 					},
-				}, []*iscp.JobStatus{
-					{
-						Stage: iscp.JobStage_Running,
-					},
-				}, []int8{iscp.ISCPJobState_Completed}, nil
+				},
+			}}
+			prevStatus = []*iscp.JobStatus{{Stage: iscp.JobStage_Running}}
+			prevStates = []int8{iscp.ISCPJobState_Completed}
+			return
 		},
 	)
 	defer stub.Reset()
@@ -4571,21 +4568,18 @@ func TestCancelIteration2(t *testing.T) {
 			[]string,
 			[]uint64,
 		) (jobSpec []*iscp.JobSpec, prevStatus []*iscp.JobStatus, prevStates []int8, err error) {
-			return []*iscp.JobSpec{
-					{
-						ConsumerInfo: iscp.ConsumerInfo{
-							ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-							SrcTable: iscp.TableInfo{
-								DBName:    "srcdb",
-								TableName: "src_table",
-							},
-						},
+			jobSpec = []*iscp.JobSpec{{
+				ConsumerInfo: iscp.ConsumerInfo{
+					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+					SrcTable: iscp.TableInfo{
+						DBName:    "srcdb",
+						TableName: "src_table",
 					},
-				}, []*iscp.JobStatus{
-					{
-						Stage: iscp.JobStage_Running,
-					},
-				}, []int8{iscp.ISCPJobState_Completed}, nil
+				},
+			}}
+			prevStatus = []*iscp.JobStatus{{Stage: iscp.JobStage_Running}}
+			prevStates = []int8{iscp.ISCPJobState_Completed}
+			return
 		},
 	)
 	defer stub.Reset()
@@ -4717,7 +4711,7 @@ func TestStartFromNow(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -4732,10 +4726,10 @@ func TestStartFromNow(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	// register cdc job
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
@@ -4830,7 +4824,7 @@ func TestApplyISCPLog(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -4845,10 +4839,10 @@ func TestApplyISCPLog(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
@@ -4968,7 +4962,7 @@ func TestISCPResumeRecoversAcceptedIteration(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -4983,10 +4977,10 @@ func TestISCPResumeRecoversAcceptedIteration(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
@@ -5123,7 +5117,7 @@ func TestRenameSrcTable(t *testing.T) {
 		RetryTimes:             1,
 	}
 	opts.GCTTL = time.Hour
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -5132,10 +5126,10 @@ func TestRenameSrcTable(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 	registerFn := func(indexName string) types.TS {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 		require.NoError(t, err)
@@ -5260,7 +5254,7 @@ func TestISCPExecutorStartError(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -5275,11 +5269,11 @@ func TestISCPExecutorStartError(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	err = cdcExecutor.Start()
 	require.NoError(t, err)
-	defer cdcExecutor.Stop()
 
 	err = cdcExecutor.Restart()
 	require.NoError(t, err)
@@ -5342,7 +5336,7 @@ func TestStaleRead(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -5357,11 +5351,11 @@ func TestStaleRead(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	err = cdcExecutor.Start()
 	require.NoError(t, err)
-	defer cdcExecutor.Stop()
 
 	// create database and table
 
@@ -5488,7 +5482,7 @@ func TestInitSql(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -5497,10 +5491,10 @@ func TestInitSql(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	require.NoError(t, cdcExecutor.Start())
-	defer cdcExecutor.Stop()
 
 	const jobName = "idx"
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
@@ -5620,7 +5614,7 @@ func TestCheckLeaseFailed(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -5635,11 +5629,11 @@ func TestCheckLeaseFailed(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	err = cdcExecutor.Start()
 	require.NoError(t, err)
-	t.Cleanup(cdcExecutor.Stop)
 
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 	bats := bat.Split(10)
@@ -6081,7 +6075,7 @@ func TestISCPTableIDChange(t *testing.T) {
 		},
 	)
 	defer checkLeaseStub.Reset()
-	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+	cdcExecutor, err := newTestISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -6096,11 +6090,11 @@ func TestISCPTableIDChange(t *testing.T) {
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
+	defer cdcExecutor.Cancel()
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
 	err = cdcExecutor.Start()
 	require.NoError(t, err)
-	defer cdcExecutor.Stop()
 
 	// register index job
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())

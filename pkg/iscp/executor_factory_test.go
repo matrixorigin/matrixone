@@ -163,8 +163,6 @@ func TestFactoryRetainsPausedExecutor(t *testing.T) {
 		{name: "backend error during pause", backendError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			running.Store(false)
-			t.Cleanup(func() { running.Store(false) })
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 			defer cancel()
 			blocked := &blockedRecoveryClient{entered: make(chan struct{})}
@@ -186,7 +184,7 @@ func TestFactoryRetainsPausedExecutor(t *testing.T) {
 				return nil
 			}, "", nil, nil)
 			done := make(chan error, 1)
-			go func() { done <- factory(ctx, &task.DaemonTask{}) }()
+			go func() { done <- factory(ctx, &task.DaemonTask{ID: 1}) }()
 			var exec *ISCPTaskExecutor
 			select {
 			case exec = <-attached:
@@ -219,9 +217,6 @@ func TestFactoryRetainsPausedExecutor(t *testing.T) {
 }
 
 func TestExecutorFactoryReturnsAttachErrorAndReleasesAdmission(t *testing.T) {
-	running.Store(false)
-	t.Cleanup(func() { running.Store(false) })
-
 	attachErr := errors.New("attach failed")
 	factory := ISCPTaskExecutorFactory(
 		nil,
@@ -235,7 +230,7 @@ func TestExecutorFactoryReturnsAttachErrorAndReleasesAdmission(t *testing.T) {
 	)
 
 	for range 2 {
-		require.ErrorIs(t, factory(context.Background(), &task.DaemonTask{}), attachErr)
+		require.ErrorIs(t, factory(context.Background(), &task.DaemonTask{ID: 1}), attachErr)
 	}
 }
 
