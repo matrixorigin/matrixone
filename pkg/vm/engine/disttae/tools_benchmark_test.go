@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
-func TestToPBBatchPreservesRepresentation(t *testing.T) {
+func TestToPBEntryPreservesRepresentation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(4)
 	batAttrs := []string{"fixed", "varlen", "const", "null"}
@@ -40,43 +40,61 @@ func TestToPBBatchPreservesRepresentation(t *testing.T) {
 	bat.Vecs[2], _ = vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, mp)
 	bat.Vecs[3] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[3], int64(0), true, mp))
+	bat.SetRowCount(1)
 	t.Cleanup(func() { bat.Clean(mp) })
 
-	pb, err := toPBBatch(bat, batAttrs)
+	pb, err := toPBEntry(Entry{typ: ALTER, bat: bat, attrs: batAttrs})
 	require.NoError(t, err)
-	require.Len(t, pb.Vecs, 4)
-	require.Equal(t, len(pb.Vecs), cap(pb.Vecs))
+	require.Equal(t, api.Entry_Alter, pb.EntryType)
 	require.Equal(t, batAttrs, pb.Attrs)
-	require.True(t, pb.Vecs[2].IsConst)
-	require.False(t, pb.Vecs[3].IsConst)
+	// The entry borrows the vectors until it is marshaled; after that the
+	// sender may reuse them.
+	wire, err := pb.Bat.Marshal()
+	require.NoError(t, err)
+	rows, err := batch.EncodedRowCount(wire)
+	require.NoError(t, err)
+	require.Equal(t, 1, rows)
 	require.NotEmpty(t, bat.Vecs[1].GetArea())
-	require.Equal(t, bat.Vecs[1].GetArea(), pb.Vecs[1].Area)
+	clear(bat.Vecs[0].GetData())
+	clear(bat.Vecs[1].GetArea())
 
-	pb.Vecs[0].Data[0] = 1
-	require.Equal(t, byte(1), bat.Vecs[0].GetData()[0])
-	pb.Vecs[1].Area[0] = 'x'
-	require.Equal(t, byte('x'), bat.Vecs[1].GetArea()[0])
-	roundTrip, err := batch.ProtoBatchToBatch(pb, mp)
+	view, err := batch.ViewBinary(wire)
 	require.NoError(t, err)
-	require.Equal(t, bat.Vecs[1].GetStringAt(0), roundTrip.Vecs[1].GetStringAt(0))
+	require.Len(t, view.Vecs, 4)
+	require.Equal(t, 1, view.RowCount())
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](view.Vecs[0], 0))
+	require.Equal(t, longValue, view.Vecs[1].GetBytesAt(0))
+	require.True(t, view.Vecs[2].IsConst())
+	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](view.Vecs[2], 0))
+	require.False(t, view.Vecs[3].IsConst())
+	require.True(t, view.Vecs[3].IsNull(0))
 }
 
-func TestToPBBatchKeepsNilVecsForEmptyBatch(t *testing.T) {
-	pb, err := toPBBatch(new(batch.Batch), nil)
+func TestToPBEntryEncodesEmptyBatch(t *testing.T) {
+	pb, err := toPBEntry(Entry{typ: ALTER, bat: new(batch.Batch)})
 	require.NoError(t, err)
-	require.Nil(t, pb.Vecs)
+	require.Nil(t, pb.Attrs)
+	view, err := batch.ViewBinary(pb.Bat.Bytes())
+	require.NoError(t, err)
+	require.Empty(t, view.Vecs)
+	require.Zero(t, view.RowCount())
 }
 
-func BenchmarkToPBBatchPreallocation(b *testing.B) {
+func BenchmarkToPBEntry(b *testing.B) {
 	for _, size := range []int{1, 2, 8, 16, 32} {
 		bat := newDisttaeProtoBenchmarkBatch(size)
-		b.Run(fmt.Sprintf("vectors=%d/append", size), func(b *testing.B) {
-			benchmarkToPBBatch(b, bat, toPBBatchAppend)
-		})
-		b.Run(fmt.Sprintf("vectors=%d/exact", size), func(b *testing.B) {
-			benchmarkToPBBatch(b, bat, func(bat *batch.Batch) (*api.Batch, error) {
-				return toPBBatch(bat, nil)
-			})
+		b.Run(fmt.Sprintf("vectors=%d", size), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				pb, err := toPBEntry(Entry{typ: ALTER, bat: bat})
+				if err != nil {
+					b.Fatal(err)
+				}
+				if pb.Bat.Len() == 0 {
+					b.Fatal("empty encoding")
+				}
+			}
 		})
 	}
 }
@@ -86,31 +104,6 @@ func newDisttaeProtoBenchmarkBatch(size int) *batch.Batch {
 	for i := range bat.Vecs {
 		bat.Vecs[i] = vector.NewVecWithData(types.T_int64.ToType(), 1, make([]byte, types.T_int64.ToType().TypeSize()), nil, mpool.MustNewZero())
 	}
+	bat.SetRowCount(1)
 	return bat
-}
-
-func benchmarkToPBBatch(b *testing.B, bat *batch.Batch, convert func(*batch.Batch) (*api.Batch, error)) {
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		pb, err := convert(bat)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if len(pb.Vecs) != len(bat.Vecs) {
-			b.Fatalf("converted %d vectors, want %d", len(pb.Vecs), len(bat.Vecs))
-		}
-	}
-}
-
-func toPBBatchAppend(bat *batch.Batch) (*api.Batch, error) {
-	rbat := new(api.Batch)
-	for _, vec := range bat.Vecs {
-		pbVector, err := vector.VectorToProtoVector(vec)
-		if err != nil {
-			return nil, err
-		}
-		rbat.Vecs = append(rbat.Vecs, pbVector)
-	}
-	return rbat, nil
 }

@@ -56,6 +56,11 @@ cgo:
 EOF
 printf 'native source\n' > "$primary/cgo/native.c"
 printf 'third-party source\n' > "$primary/thirdparties/source.txt"
+git init --quiet "$work/sdk"
+git -C "$work/sdk" -c user.name=test -c user.email=test@example.com \
+    commit --quiet --allow-empty -m sdk
+git -C "$primary" -c protocol.file.allow=always submodule add --quiet \
+    "$work/sdk" thirdparties/sirius
 git -C "$primary" add .
 git -C "$primary" -c user.name=test -c user.email=test@example.com \
     commit --quiet -m fixture
@@ -271,6 +276,17 @@ check_platform() {
 
 check_platform darwin libmo.dylib
 check_platform linux libmo.so
+
+# The linked worktree keeps the old SDK pin. Native artifacts must still
+# verify after the primary advances its gitlink and dirties its SDK checkout.
+git -C "$primary/thirdparties/sirius" -c user.name=test -c user.email=test@example.com \
+    commit --quiet --allow-empty -m 'advance SDK'
+git -C "$primary" add thirdparties/sirius
+git -C "$primary" -c user.name=test -c user.email=test@example.com \
+    commit --quiet -m 'advance SDK pin'
+touch "$primary/thirdparties/sirius/local-edit"
+env FAKE_GOOS=linux PATH="$work/bin:$PATH" sh "$linked_wrapper" ./pkg/x/ >/dev/null
+echo "ok   Sirius pin and checkout changes preserve primary artifact reuse"
 
 set +e
 variant_output=$(env FAKE_GOOS=linux MO_CL_CUDA=1 \

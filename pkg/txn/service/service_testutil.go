@@ -15,6 +15,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -190,12 +191,34 @@ func (s *TestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.
 
 		resp := txn.TxnResponse{}
 		h := s.router[s.getRouteKey(req.Method, req.GetTargetTN())]
+		req = ownPayloads(req)
 		if err := h(ctx, &req, &resp); err != nil {
 			return nil, moerr.AttachCause(ctx, err)
 		}
 		responses = append(responses, resp)
 	}
 	return &rpc.SendResult{Responses: responses}, nil
+}
+
+// ownPayloads gives the handler its own copy of req's CN payloads, as the
+// wire does: TN may keep views of a payload after the RPC returns, while the
+// CN reuses its payload buffer once its commit ends.
+func ownPayloads(req txn.TxnRequest) txn.TxnRequest {
+	if req.CNRequest != nil {
+		cn := *req.CNRequest
+		cn.Payload = bytes.Clone(cn.Payload)
+		req.CNRequest = &cn
+	}
+	if req.CommitRequest != nil {
+		commit := *req.CommitRequest
+		commit.Payload = make([]*txn.TxnRequest, len(req.CommitRequest.Payload))
+		for i, payload := range req.CommitRequest.Payload {
+			owned := ownPayloads(*payload)
+			commit.Payload[i] = &owned
+		}
+		req.CommitRequest = &commit
+	}
+	return req
 }
 
 // Close close the test TxnSender

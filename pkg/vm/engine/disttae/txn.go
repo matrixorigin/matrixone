@@ -5961,6 +5961,7 @@ func missingCreatedDatabaseWriteError(ctx context.Context, pending map[databaseK
 }
 
 func (txn *Transaction) FinalizeCommit(ctx context.Context) {
+	txn.releaseCommitPayload()
 	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
 		txn.engine.ccprTxnCache.OnTxnCommit(txn.op.Txn().ID)
 	}
@@ -5989,6 +5990,7 @@ func (txn *Transaction) FinalizeCommit(ctx context.Context) {
 }
 
 func (txn *Transaction) FinalizeCommitWithUnknownResult(ctx context.Context) {
+	txn.releaseCommitPayload()
 	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
 		txn.engine.ccprTxnCache.OnTxnUnknownResult(txn.op.Txn().ID)
 	}
@@ -6182,6 +6184,7 @@ func skipTransfer(ctx context.Context, txn *Transaction) bool {
 }
 
 func (txn *Transaction) Rollback(ctx context.Context) error {
+	txn.releaseCommitPayload()
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
 	if !txn.ReadOnly() && len(txn.writes) > 0 {

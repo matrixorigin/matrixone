@@ -216,7 +216,7 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 	// 		tid, tableName, delete, bat.PPString(5), b.txn.GetPrepareTS().ToString(),
 	// 	)
 	// }
-	apiBat, err := containersBatchToProtoBatch(bat)
+	apiBat, err := marshalContainersBatch(bat)
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf(
 			"[logtail] from table %d-%s, delete %v, batch length %d @%s",
@@ -239,6 +239,7 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 		TableName:    tableName,
 		DatabaseId:   dbid,
 		DatabaseName: dbName,
+		Attrs:        bat.Attrs,
 		Bat:          apiBat,
 	}
 	ts := b.txn.GetPrepareTS().ToTimestamp()

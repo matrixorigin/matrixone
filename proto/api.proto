@@ -75,21 +75,6 @@ message TNStringResponse {
     string returnStr = 1;
 }
 
-message Vector {
-    bytes data     = 1;
-    plan.Type type = 2 [(gogoproto.nullable) = false];
-    bool nullable  = 3;
-    bytes nsp      = 4;
-    bool is_const  = 5;
-    uint32 len     = 6;
-    bytes area     = 7;
-};
-
-message Batch {
-    repeated string attrs = 1 [(gogoproto.nullable) = false];
-    repeated Vector vecs  = 2 [(gogoproto.nullable) = false];
-};
-
 message TableID {
     uint64 db_id          = 1;
     uint64 tb_id          = 2;
@@ -157,7 +142,7 @@ message PrecommitWriteCmd {
 //          table_name =  mo_tables
 //          database_name = mo_catalog
 //          file_name = ""
-//          bat.attrs = {"relid", "relname", "reldatabase", ...}
+//          attrs = {"relid", "relname", "reldatabase", ...}
 //      }
 
 // drop table:
@@ -169,7 +154,7 @@ message PrecommitWriteCmd {
 //          table_name =  mo_tables
 //          database_name = mo_catalog
 //          file_name = ""
-//          bat.attrs = {"relid", "relname",...}
+//          attrs = {"relid", "relname",...}
 //      }
 
 //  bulk load:
@@ -185,7 +170,7 @@ message PrecommitWriteCmd {
 //
 //          //  bat holds meta locations for many blocks.
 //          //  "meta_loc" : the location of block data which contains BF and ZM
-//          index and be sorted by primary key. bat.attrs = {"meta_loc"}
+//          index and be sorted by primary key. attrs = {"meta_loc"}
 //      }
 
 // deletes/updates involves many rows need to write S3.
@@ -200,7 +185,7 @@ message PrecommitWriteCmd {
 //          file_name = "s3 file name"
 
 //          // "delta_loc" : the location of deleted row-ids for a block
-//          bat.attrs = {"delta_loc"}
+//          attrs = {"delta_loc"}
 //      }
 
 //  DML:
@@ -212,7 +197,7 @@ message PrecommitWriteCmd {
 //          table_name =  xxx
 //          database_name = xxx
 //          file_name = ""
-//          bat.attrs = {"primary column value",  "column1 value", ...}
+//          attrs = {"primary column value",  "column1 value", ...}
 //      }
 
 //  delete batch of data from table;
@@ -223,7 +208,7 @@ message PrecommitWriteCmd {
 //          table_name =  xxx
 //          database_name = xxx
 //          file_name = ""
-//          bat.attrs = {"rowid"}
+//          attrs = {"rowid"}
 //      }
 
 message Entry {
@@ -242,7 +227,8 @@ message Entry {
     string table_name    = 4;
     string database_name = 5;
     string file_name     = 6;
-    Batch bat            = 7;
+    // Field 7 held the batch as a protobuf message; bat replaces it.
+    reserved 7;
     // whether TN do the PK uniqueness check against txn's workspace or not.
     int32 pk_check_by_tn = 8;
     // AUTO_INCREMENT epoch used by the CN when planning this write.
@@ -250,43 +236,16 @@ message Entry {
     uint32 auto_incr_epoch = 9;
     // whether auto_incr_epoch was supplied by an epoch-aware CN.
     bool auto_incr_epoch_known = 10;
-};
-
-// There are two kinds of checkpoint: delta checkpoint and base checkpoint,
-// base checkpoint is a snapshot at a timestamp for catalog and block meta.
-// delta checkpoint is a mini checkpoint represents changes during a period.
-
-// CatalogCkp contains information about database and tables in the system,and
-// MetadataCkp contains information about blocks.
-message Checkpoint {
-    // min_ts TN is the lower bounds of the checkpoint
-    //  CN maybe don't care about it.
-    timestamp.Timestamp min_ts = 1;
-    // max_ts is the upper bounds of the checkpoint.
-    //  CN maybe don't care about it.
-    timestamp.Timestamp max_ts = 2;
-    Batch bat                  = 3;
-};
-// catalog checkpoint:
-// one Batch represents a table, such as : mo_databases, mo_tables,
-// mo_columns,... etc. knowing more about system tables, pls ref to
-// pkg/vm/engine/tae/catalog/model.go
-message CatalogCkp {
-    timestamp.Timestamp min_ts = 1;
-    timestamp.Timestamp max_ts = 2;
-    Batch bat                  = 3;
-};
-
-// metadata checkpoint:
-//  Batch is a batch of block metadata for a table,
-//  one row of Batch represents a block meta data.
-//  TODO::
-//  knowing more about block meta data , pls ref to ...
-message MetadataCkp {
-    timestamp.Timestamp min_ts = 1;
-    timestamp.Timestamp max_ts = 2;
-    // block meta data for a table;
-    Batch bat = 3;
+    // attrs names the columns of bat.
+    repeated string attrs = 11;
+    // bat is the batch in its batch.MarshalBinary encoding. Entries travel
+    // only between the CN and TN of one cluster and are never persisted.
+    // EncodedBatch lets the encoder borrow the vectors' buffers, so the
+    // payload is copied once, into the message.
+    bytes bat = 12 [
+        (gogoproto.customtype) = "EncodedBatch",
+        (gogoproto.nullable) = false
+    ];
 };
 
 // For AlterTable

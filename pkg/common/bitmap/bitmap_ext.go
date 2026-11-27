@@ -381,7 +381,41 @@ func (n *Bitmap) MarshalTo(w io.Writer) error {
 		}
 		return types.WriteFull(w, types.EncodeSlice(n.data))
 	}
-	if err := types.WriteFull(w, types.EncodeInt64(&n.popCount)); err != nil {
+	return n.marshalHeaderAndWordsTo(w, bitLength, dataLength)
+}
+
+// MarshalToBytes writes MarshalTo's encoding of n into dst, which must hold
+// at least MarshalSize bytes, and returns the bytes written. It allocates
+// nothing: a read-only bitmap's clean words are written in place.
+func (n *Bitmap) MarshalToBytes(dst []byte) int {
+	if n == nil {
+		return 0
+	}
+	nwords := len(n.data)
+	if n.mp == nil {
+		nwords = n.nwords()
+	}
+	size := MarshalHeaderSize + nwords*8
+	dst = dst[:size]
+	binary.NativeEndian.PutUint64(dst[0:8], uint64(n.popCount))
+	binary.NativeEndian.PutUint64(dst[8:16], uint64(n.numBits))
+	binary.NativeEndian.PutUint64(dst[16:24], uint64(nwords*8))
+	words := dst[MarshalHeaderSize:]
+	if n.mp == nil {
+		for i := 0; i < nwords; i++ {
+			binary.NativeEndian.PutUint64(words[i*8:], n.lword(i))
+		}
+	} else {
+		copy(words, types.EncodeSlice(n.data))
+	}
+	return size
+}
+
+// marshalHeaderAndWordsTo is MarshalTo for a plain io.Writer. It is separate
+// so the header values escape to the heap only on this path.
+func (n *Bitmap) marshalHeaderAndWordsTo(w io.Writer, bitLength, dataLength uint64) error {
+	popCount := n.popCount
+	if err := types.WriteFull(w, types.EncodeInt64(&popCount)); err != nil {
 		return err
 	}
 	if err := types.WriteFull(w, types.EncodeUint64(&bitLength)); err != nil {

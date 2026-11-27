@@ -309,7 +309,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		if batch == nil || batch.Length() == 0 {
 			return nil
 		}
-		bat, err := containersBatchToProtoBatch(batch)
+		bat, err := marshalContainersBatch(batch)
 		if err != nil {
 			return err
 		}
@@ -333,6 +333,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			TableName:    tableName,
 			DatabaseId:   b.did,
 			DatabaseName: b.dname,
+			Attrs:        batch.Attrs,
 			Bat:          bat,
 		}
 		entries = append(entries, entry)

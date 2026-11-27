@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -306,4 +307,83 @@ func TestLogtailClientReadBarrierSendFailureBreaksStream(t *testing.T) {
 	require.Empty(t, client.readBarrierSlots)
 	require.Error(t, client.Subscribe(t.Context(), api.TableID{}),
 		"requests after a broken stream must fail instead of entering an orphaned send queue")
+}
+
+// encodeSegmentedTestResponse splits response's encoding into segments of
+// at most limit bytes.
+func encodeSegmentedTestResponse(
+	t *testing.T, response *LogtailResponse, limit int,
+) []*LogtailResponseSegment {
+	payload, err := response.Marshal()
+	require.NoError(t, err)
+	chunks := Split(payload, limit)
+	segments := make([]*LogtailResponseSegment, len(chunks))
+	for i, chunk := range chunks {
+		segments[i] = &LogtailResponseSegment{MessageSegment: logtail.MessageSegment{
+			MessageSize: int32(len(payload)),
+			Sequence:    int32(i + 1),
+			MaxSequence: int32(len(chunks)),
+			Payload:     chunk,
+		}}
+	}
+	return segments
+}
+
+// Responses are reassembled into recycled receive buffers: their batches are
+// views of the buffer until Release, a released buffer serves the next
+// response, and a response still held gets a buffer of its own.
+func TestLogtailClientReceiveReusesReleasedBuffers(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	stream := mock_morpc.NewMockStream(ctrl)
+	recvC := make(chan morpc.Message, 16)
+	stream.EXPECT().Receive().Return(recvC, nil)
+	stream.EXPECT().ID().Return(uint64(1)).AnyTimes()
+	stream.EXPECT().Close(true).AnyTimes().Return(nil)
+	client, err := NewLogtailClient(t.Context(), stream)
+	require.NoError(t, err)
+
+	push := func(batch string) {
+		from := timestamp.Timestamp{PhysicalTime: 1}
+		response := &LogtailResponse{LogtailResponse: logtail.LogtailResponse{
+			Response: newUpdateResponse(from, from.Next(), logtail.TableLogtail{
+				Table:    &api.TableID{TbId: 7},
+				Commands: []api.Entry{{TableName: "t", Bat: api.NewEncodedBatch([]byte(batch))}},
+			}),
+		}}
+		for _, segment := range encodeSegmentedTestResponse(t, response, 16) {
+			recvC <- segment
+		}
+	}
+	receive := func(want string) (*LogtailResponse, []byte) {
+		response, err := client.Receive(t.Context())
+		require.NoError(t, err)
+		bat := response.GetUpdateResponse().LogtailList[0].Commands[0].Bat
+		require.True(t, bat.IsView())
+		require.Equal(t, []byte(want), bat.Bytes())
+		return response, bat.Bytes()
+	}
+	batch := strings.Repeat("b", 100)
+
+	push(batch)
+	first, firstView := receive(batch)
+	detached := first.GetUpdateResponse().LogtailList[0].Commands[0].Bat.Detach()
+	first.Release()
+	first.Release()
+
+	allocated := logtailReceivePool.Stats().NumAlloc.Load()
+	push(batch)
+	second, secondView := receive(batch)
+	require.True(t, &firstView[0] == &secondView[0], "the released buffer is reused")
+	require.Equal(t, allocated, logtailReceivePool.Stats().NumAlloc.Load())
+	require.Equal(t, []byte(batch), detached.Bytes(), "a detached batch survives the reuse")
+
+	push(batch)
+	third, thirdView := receive(batch)
+	require.False(t, &secondView[0] == &thirdView[0], "a held response keeps its buffer")
+	second.Release()
+
+	before := logtailReceivePool.CurrNB()
+	require.NoError(t, client.Close())
+	third.Release()
+	require.Less(t, logtailReceivePool.CurrNB(), before, "closing frees idle and later released buffers")
 }
