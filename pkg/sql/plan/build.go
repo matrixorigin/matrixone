@@ -324,6 +324,7 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	}()
 
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, true)
+	builder.roleRuleRowLocalWrite = stmt.RewriteOption != nil && len(stmt.RewriteOption.RoleRules) != 0
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -379,6 +380,7 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	}
 
 	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, isPrepareStmt, true)
+	builder.roleRuleRowLocalWrite = stmt.RewriteOption != nil && len(stmt.RewriteOption.RoleRules) != 0
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()

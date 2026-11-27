@@ -177,6 +177,7 @@ func TestRoleRuleStatementSupportRejectsUnboundReads(t *testing.T) {
 		&tree.DumpTable{},
 		&tree.MoDump{},
 		&tree.BackupStart{},
+		&tree.CreateCDC{},
 		&tree.Update{Where: &tree.Where{Expr: &tree.Subquery{}}},
 		&tree.Delete{Where: &tree.Where{Expr: &tree.Subquery{}}},
 		&tree.ShowTables{Where: &tree.Where{Expr: &tree.Subquery{}}},

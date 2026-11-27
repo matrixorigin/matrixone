@@ -534,8 +534,8 @@ func roleRuleStatementSupport(stmt tree.Statement) (rewrite, supported bool) {
 			return false, false
 		}
 		return true, true
-	case *tree.DumpTable, *tree.MoDump, *tree.BackupStart:
-		// Physical export does not pass the exported rows through the binder.
+	case *tree.DumpTable, *tree.MoDump, *tree.BackupStart, *tree.CreateCDC:
+		// Physical exports and asynchronous CDC reads do not enforce role rules.
 		return false, false
 	case *tree.CreateTable:
 		return stmt.AsSource != nil, true

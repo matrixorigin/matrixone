@@ -301,7 +301,12 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	var value int
 	require.NoError(t, admin.QueryRowContext(ctx, "select value from policy_fixture.summary where id = 10").Scan(&value))
 	require.Equal(t, 20, value)
-	exec(reader, "delete from policy_fixture.summary where id = 10")
+	exec(reader, "update policy_fixture.summary set value = abs(-value) + 1 where abs(id) = 10")
+	require.NoError(t, admin.QueryRowContext(ctx, "select value from policy_fixture.summary where id = 10").Scan(&value))
+	require.Equal(t, 21, value)
+	assertDenied("update policy_fixture.summary set value = abs((select 1)) where id = 10", "cannot enforce active role rules")
+	assertDenied("update policy_fixture.summary set value = unknown_local_function(value) where id = 10", "cannot enforce active role rules")
+	exec(reader, "delete from policy_fixture.summary where abs(id) = 10")
 	selectIDs(admin, "select id from policy_fixture.summary order by id", 1)
 	assertDenied("update policy_fixture.docs set note = 'blocked' where id = 1", "write target cannot enforce active role rules")
 	assertDenied("delete from policy_fixture.docs where id = 1", "write target cannot enforce active role rules")
@@ -363,6 +368,10 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	exec(reader, "set role policy_other")
 	selectIDs(reader, "select * from policy_fixture.docs", 2)
 	assertDenied(vector, "embedding")
+	const createCDC = "create cdc policy_blocked 'unconfigured-source' 'mysql' 'unconfigured-sink' 'fixture' {}"
+	_, err = admin.ExecContext(ctx, createCDC)
+	require.ErrorContains(t, err, "invalid uri format")
+
 	// A committed catalog change also applies to the next statement in
 	// the same request. The database belongs only to this cluster fixture.
 	batch, err := admin.QueryContext(ctx, "alter role moadmin add rule 'select id from policy_fixture.docs where id = 1' on table policy_fixture.docs; "+relational)
@@ -444,4 +453,10 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	_, err = foldingAdmin.ExecContext(ctx, fmt.Sprintf("dump table policy_fixture.summary to '%s'", destination))
 	require.ErrorContains(t, err, "cannot enforce active role rules")
 	require.NoFileExists(t, filepath.Join(destination, "manifest.json"))
+	_, err = foldingAdmin.ExecContext(ctx, createCDC)
+	require.ErrorContains(t, err, "cannot enforce active role rules")
+	var tasks int
+	require.NoError(t, foldingAdmin.QueryRowContext(ctx,
+		"select count(*) from mo_catalog.mo_cdc_task where task_name = 'policy_blocked'").Scan(&tasks))
+	require.Zero(t, tasks)
 }
