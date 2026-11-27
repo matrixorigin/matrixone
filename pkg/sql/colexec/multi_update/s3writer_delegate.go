@@ -675,9 +675,15 @@ func (writer *s3WriterDelegate) appendWindow(
 	// Reserve every projection before Write/Extend can copy it, including a
 	// single wide batch that already exceeds the normal flush threshold.
 	unit := writer.writerUnit(proc)
-	// Keep the retained aggregate below one shared byte unit. Flush before a
-	// crossing window so W's bound need not include two complete units.
-	windowBytes := uint64(writer.windowFootprint(inBatch, 0, inBatch.RowCount()))
+	// Ordinary UPDATE/DELETE flushes by the bytes of its projected columns.
+	// appendAllocation still reserves the future split/merge work. Imports can
+	// fall back to one W unit, so their flush boundary includes that work.
+	var windowBytes uint64
+	if proc.Base.ImportMemory == nil && writer.action != actionInsert {
+		windowBytes = uint64(writer.projectionBytes(inBatch, 0, inBatch.RowCount()))
+	} else {
+		windowBytes = uint64(writer.windowFootprint(inBatch, 0, inBatch.RowCount()))
+	}
 	if writer.batchSize > 0 && writer.batchSize+windowBytes > uint64(unit) {
 		if err = writer.sortAndSync(proc, analyzer); err != nil {
 			return err

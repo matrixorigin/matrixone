@@ -67,9 +67,13 @@ jobs:
     name: Matrixone UT Coverage
     needs: [check-pr-valid, bvt-group-plan]
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@main
+    permissions:
+      contents: read
+      actions: write
+    uses: matrixorigin/CI/.github/workflows/coverage-ut-standby.yaml@4972bd963f4cc9510266323b14446a8edcda2bfc
     with:
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
+      enable_4_2_dev: true
     secrets: inherit
 
   matrixone-upgrade-ci:

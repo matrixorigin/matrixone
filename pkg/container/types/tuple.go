@@ -676,6 +676,27 @@ func UnpackWithSchema(b []byte) (Tuple, []T, error) {
 	return t, schema, err
 }
 
+// DecodeDatetimeTuplePrefix decodes the first DATETIME of a packed key. A
+// zone-map endpoint may omit the rest of the tuple or contain a rounded prefix.
+func DecodeDatetimeTuplePrefix(b []byte) (Datetime, bool) {
+	if len(b) < 2 || b[0] != datetimeCode {
+		return 0, false
+	}
+	width := int(b[1]) - intZeroCode
+	if width < -8 || width > 8 || len(b) < 2+max(width, -width) {
+		return 0, false
+	}
+	value, _ := decodeInt(datetimeCode, b[1:])
+	dt := value.(Datetime)
+	if dt == 0 {
+		return dt, width == 0
+	}
+	if dt < 0 {
+		return dt, width == -bisectLeft(-uint64(dt))
+	}
+	return dt, width == bisectLeft(uint64(dt))
+}
+
 // UnpackNthElement decodes only up to the nth element (0-based) and returns
 // just that element plus its type. This avoids deserializing the entire tuple
 // when only one element is needed, which is critical for performance in

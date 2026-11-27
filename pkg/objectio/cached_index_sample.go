@@ -92,6 +92,50 @@ func (m cachedObjectBlocks) block(i uint32) (BlockObject, bool) {
 	return block, true
 }
 
+// CachedMatchingBlockRows bounds matching rows using only validated cached
+// metadata. A cache miss leaves the caller responsible for the whole object.
+func CachedMatchingBlockRows(
+	ctx context.Context,
+	location Location,
+	seq uint16,
+	oid types.T,
+	blocks int,
+	rows uint32,
+	match func(int, BlockObject) (bool, bool, error),
+) (uint64, bool) {
+	view, ok := tryCachedObjectBlocks(ctx, location, blocks)
+	if !ok || int(view.count) != blocks {
+		return 0, false
+	}
+	var total, matching uint64
+	for i := range view.count {
+		block, ok := view.block(i)
+		if !ok || context.Cause(ctx) != nil {
+			return 0, false
+		}
+		h := BlockHeader(block[:headerLen])
+		end := uint64(headerLen) + uint64(h.MetaColumnCount())*colMetaLen
+		if h.Rows() == 0 || h.Rows() > BlockMaxRows || end > uint64(len(block)) ||
+			seq > h.MaxSeqnum() || seq >= h.MetaColumnCount() {
+			return 0, false
+		}
+		column := GetColumnMeta(seq, block)
+		total += uint64(h.Rows())
+		// Older or uninitialized metadata supplies no exclusion proof.
+		if types.T(column.DataType()) == oid && column.ZoneMap().GetType() == oid {
+			_, mayMatch, err := match(int(i), block)
+			if err != nil {
+				return 0, false
+			}
+			if !mayMatch {
+				continue
+			}
+		}
+		matching += uint64(h.Rows())
+	}
+	return matching, total == uint64(rows)
+}
+
 const maxCachedSampleColumns = 4
 
 type CachedInt32Block struct {

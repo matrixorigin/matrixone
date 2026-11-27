@@ -96,7 +96,10 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	// new logic
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	queryBindCtx := NewBindContext(builder, nil)
-	lastNodeId, updatePlanCtxs, err := selectUpdateTables(builder, queryBindCtx, stmt, tblInfo)
+	if hasRepeatedUpdateTarget(tblInfo) {
+		return buildRepeatedUpdatePlan(stmt, ctx, builder, queryBindCtx, tblInfo)
+	}
+	lastNodeId, updatePlanCtxs, err := selectUpdateTables(builder, queryBindCtx, stmt, tblInfo, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -192,6 +195,22 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	}, err
 }
 
+// hasRepeatedUpdateTarget is called after generated-column DEFAULT assignments
+// and aliases without writable columns have been removed from the target list.
+func hasRepeatedUpdateTarget(info *dmlTableInfo) bool {
+	if len(info.tableDefs) < 2 {
+		return false
+	}
+	seen := make(map[uint64]struct{}, len(info.tableDefs))
+	for _, table := range info.tableDefs {
+		if _, exists := seen[table.TblId]; exists {
+			return true
+		}
+		seen[table.TblId] = struct{}{}
+	}
+	return false
+}
+
 func isDefaultValExpr(e *Expr) bool {
 	if ce, ok := e.Expr.(*plan.Expr_Lit); ok {
 		_, isDefVal := ce.Lit.Value.(*plan.Literal_Defaultval)
@@ -282,7 +301,7 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 				}
 			}
 		}
-		idx = planCtx.updateColLength + len(tableDef.Cols)
+		idx += planCtx.updateColLength + len(tableDef.Cols)
 	}
 	return nil
 }
@@ -376,7 +395,7 @@ func fallbackUpdateFromDedupPartitionCols(planCtxs []*dmlPlanCtx) []int32 {
 	return partitionCols
 }
 
-func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo) (int32, []*dmlPlanCtx, error) {
+func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo, repeated *repeatedUpdateAssignments) (int32, []*dmlPlanCtx, error) {
 	// Merge target table list with PostgreSQL-style FROM sources so that the
 	// inner SELECT can resolve column references against both. tableInfo only
 	// tracks targets, so FROM-clause tables remain read-only join sources.
@@ -401,9 +420,17 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	}
 
 	updatePlanCtxs := make([]*dmlPlanCtx, len(aliasList))
+	if repeated != nil {
+		repeated.source = newRepeatedUpdateSource(&plan.Node{})
+		repeated.roles = make([]*repeatedUpdateRole, len(aliasList))
+		repeated.positions = make(map[int]*repeatedUpdateAssignment)
+	}
 	for i, alias := range aliasList {
 		tableDef := tableInfo.tableDefs[i]
 		updateKeys := tableInfo.updateKeys[i]
+		if repeated != nil {
+			repeated.roles[i] = repeated.source.newRole(builder.genNewBindTag(), len(tableDef.Cols))
+		}
 
 		// append  table.* to project list
 		rowIdPos := -1
@@ -450,13 +477,17 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 					if isNumericAssignmentTarget(coldef.Typ) {
 						legacyNumericTargets[len(selectList)] = coldef.Typ
 					}
-					if isEnumOrSetPlanType(&coldef.Typ) {
+					_, directColumn := unwrapParenExpr(updateKey).(*tree.UnresolvedName)
+					if isEnumOrSetPlanType(&coldef.Typ) && !(repeated != nil && directColumn) {
 						updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
 						if err != nil {
 							return 0, nil, err
 						}
 					}
 				}
+			}
+			if repeated != nil {
+				repeated.positions[len(selectList)] = &repeatedUpdateAssignment{role: repeated.roles[i]}
 			}
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: updateKey,
@@ -503,10 +534,19 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	for pos, typ := range legacyNumericTargets {
 		bindCtx.numericProjectionTypes[pos] = typ
 	}
+	if repeated != nil {
+		repeated.width = len(selectList)
+		repeated.source.project.ProjectList = make([]*plan.Expr, repeated.width)
+		bindCtx.repeatedUpdateAssignments = repeated
+		defer func() { bindCtx.repeatedUpdateAssignments = nil }()
+	}
 
 	lastNodeId, err := builder.bindSelect(selectAst, bindCtx, false)
 	if err != nil {
 		return -1, nil, err
+	}
+	if repeated != nil {
+		repeated.source.project = builder.qry.Nodes[lastNodeId]
 	}
 
 	return lastNodeId, updatePlanCtxs, nil

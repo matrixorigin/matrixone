@@ -166,6 +166,41 @@ func TestEncoding(t *testing.T) {
 	require.Equal(t, e, e2)
 }
 
+func TestFencedTxnErrorEncoding(t *testing.T) {
+	normal := NewLockTableBindChangedNoCtx()
+	fenced := NewLockTableBindChangedForFencedTxnNoCtx()
+	require.True(t, IsMoErrCode(fenced, ErrLockTableBindChanged))
+	require.Equal(t, normal.Error(), fenced.Error())
+	require.Equal(t, normal.MySQLCode(), fenced.MySQLCode())
+	require.Equal(t, normal.SqlState(), fenced.SqlState())
+	require.False(t, IsLockTableBindChangedForFencedTxn(normal))
+
+	data, err := fenced.MarshalBinary()
+	require.NoError(t, err)
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.True(t, IsLockTableBindChangedForFencedTxn(decoded))
+	require.Equal(t, fenced, decoded)
+
+	require.False(t, IsFencedTxnLockRejected(decoded))
+	rejected := NewFencedTxnLockRejectedNoCtx()
+	require.Equal(t, normal.Error(), rejected.Error())
+	require.Equal(t, normal.MySQLCode(), rejected.MySQLCode())
+	require.Equal(t, normal.SqlState(), rejected.SqlState())
+	data, err = rejected.MarshalBinary()
+	require.NoError(t, err)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.True(t, IsLockTableBindChangedForFencedTxn(decoded))
+	require.True(t, IsFencedTxnLockRejected(decoded))
+
+	// Decoding an older or ordinary error into a reused object clears the flag.
+	data, err = normal.MarshalBinary()
+	require.NoError(t, err)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.False(t, IsLockTableBindChangedForFencedTxn(decoded))
+	require.Equal(t, normal, decoded)
+}
+
 func TestResourceExhaustedWithDetailsEncoding(t *testing.T) {
 	err := NewResourceExhaustedf(context.Background(), "requested=%d used=%d limit=%d", 3, 5, 7)
 	require.Equal(t, ErrOOM, err.ErrorCode())

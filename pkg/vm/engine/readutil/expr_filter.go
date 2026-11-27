@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -156,21 +157,27 @@ func temporalFilterRangeFromZoneMap(
 		if !minOK || !maxOK {
 			return temporalFilterRange{}, false
 		}
-		if minValue == maxValue {
-			value := minValue.ToTimestamp(zone).TruncateToScale(timestampScale)
-			return temporalFilterRange{min: value, max: value}, true
-		}
-		minTimestamp, maxTimestamp, ok := types.DatetimeRangeToTimestampRange(minValue, maxValue, zone)
-		if !ok {
-			return temporalFilterRange{}, false
-		}
-		return temporalFilterRange{
-			min: minTimestamp.TruncateToScale(timestampScale),
-			max: maxTimestamp.TruncateToScale(timestampScale),
-		}, true
+		return temporalFilterRangeFromDatetimes(minValue, maxValue, timestampScale, zone)
 	default:
 		return temporalFilterRange{}, false
 	}
+}
+
+func temporalFilterRangeFromDatetimes(
+	minValue, maxValue types.Datetime, timestampScale int32, zone *time.Location,
+) (temporalFilterRange, bool) {
+	if minValue == maxValue {
+		value := minValue.ToTimestamp(zone).TruncateToScale(timestampScale)
+		return temporalFilterRange{min: value, max: value}, true
+	}
+	minTimestamp, maxTimestamp, ok := types.DatetimeRangeToTimestampRange(minValue, maxValue, zone)
+	if !ok {
+		return temporalFilterRange{}, false
+	}
+	return temporalFilterRange{
+		min: minTimestamp.TruncateToScale(timestampScale),
+		max: maxTimestamp.TruncateToScale(timestampScale),
+	}, true
 }
 
 func temporalFilterRangeFromValue(
@@ -501,6 +508,28 @@ func compileScalarDomainFilterExpr(
 				return true, nil
 			}
 			return match(obj.SortKeyZoneMap()).mayMatch(), nil
+		}
+	} else if mixedTemporal && columnType == types.T_datetime && len(values) == 1 &&
+		util.JudgeIsCompositeClusterByColumn(tableDef.GetClusterBy().GetName()) &&
+		util.GetClusterByColumnOrder(tableDef.ClusterBy.Name, colDef.Name) == 0 {
+		// The object summary stores the packed cluster key. Convert its leading
+		// DATETIME range with the same time zone and precision as the row comparison.
+		cutoff, ok := temporalFilterRangeFromValue(values[0], types.T_timestamp, valueExprs[0].Typ.Scale, zone)
+		if ok {
+			timestampScale := valueExprs[0].Typ.Scale
+			fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
+				zm := obj.SortKeyZoneMap()
+				if !zm.Valid() || zm.GetType() != types.T_varchar || zm.MaxTruncated() {
+					return true, nil
+				}
+				minValue, minOK := types.DecodeDatetimeTuplePrefix(zm.GetMinBuf())
+				maxValue, maxOK := types.DecodeDatetimeTuplePrefix(zm.GetMaxBuf())
+				if !minOK || !maxOK {
+					return true, nil
+				}
+				valueRange, ok := temporalFilterRangeFromDatetimes(minValue, maxValue, timestampScale, zone)
+				return !ok || temporalFilterMatch(op, valueRange, cutoff).mayMatch(), nil
+			}
 		}
 	}
 	loadOp = loadMetadataOnlyOpFactory(fs)

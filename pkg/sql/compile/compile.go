@@ -61,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -75,6 +76,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/updateunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
@@ -1334,7 +1336,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileShuffleGroup(node, ss, nodes)
 		} else {
+			remoteScalarCount := len(ss) == 1 && ss[0].HasPartialResults &&
+				isSingleStarCountNoFilterNoGroupBy(nodes[node.Children[0]]) && !sameExecutionAddr(ss[0].NodeInfo.Addr, c.addr)
 			ss = c.compileGroupWithoutShuffle(node, ss, nodes, distinctRequiresSingleStage)
+			if remoteScalarCount {
+				// Final projection and statement output remain on the coordinator.
+				ss = []*Scope{c.newMergeScope(ss)}
+			}
 		}
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 		return ss, nil
@@ -1519,6 +1527,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compilePreInsertUk(node, ss)
 		return ss, nil
+	case plan.Node_UPDATE_UNIQUE:
+		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		return c.compileUpdateUnique(node, ss)
 	case plan.Node_PRE_INSERT_SK:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -5751,10 +5766,19 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 			dataScope.setRootOperator(dispatchArg)
 		}
 		dataScope.IsEnd = true
+		var localObjects *colexec.LocalInsertObjects
+		eng, _ := unwrapSchedulingEngine(c.e)
+		storage, _ := eng.(*disttae.Engine)
 		for i := range scopes {
 			insertArg, err := constructInsert(c.proc, node, c.e, true)
 			if err != nil {
 				return nil, err
+			}
+			if op, ok := insertArg.(*insert.Insert); ok && storage != nil {
+				if localObjects == nil {
+					localObjects = storage.NewLocalInsertObjectStream()
+				}
+				op.InsertCtx.LocalObjects = localObjects
 			}
 
 			insertArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -5765,6 +5789,8 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		rs.PreScopes = append(rs.PreScopes, dataScope)
 		rs.Magic = MergeInsert
 		mergeInsertArg := constructMergeblock(c.e, node)
+		rs.localInsertObjects = localObjects
+		mergeInsertArg.LocalObjects = localObjects
 		mergeInsertArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(mergeInsertArg)
 		ss = []*Scope{rs}
@@ -5901,6 +5927,58 @@ func (c *Compile) compilePreInsertUk(node *plan.Node, ss []*Scope) []*Scope {
 	}
 	c.anal.isFirst = false
 	return ss
+}
+
+func (c *Compile) compileUpdateUnique(node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	ctx := node.UpdateUniqueCtx
+	if ctx == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing repeated UPDATE admission context")
+	}
+	keys := make([]updateunique.Key, len(ctx.Keys))
+	for i, key := range ctx.Keys {
+		keys[i] = updateunique.Key{
+			Original: int(key.Original), Current: int(key.Current),
+			Proposed: int(key.Proposed), SnapshotHit: int(key.SnapshotHit),
+		}
+	}
+	values := make([]updateunique.Value, len(ctx.Values))
+	for i, value := range ctx.Values {
+		values[i] = updateunique.Value{Current: int(value.Current), Proposed: int(value.Proposed)}
+	}
+	checks := make([]updateunique.Check, len(ctx.Checks))
+	for i, check := range ctx.Checks {
+		checks[i] = updateunique.Check{Column: int(check.Column), Name: check.Name, NotNull: check.NotNull}
+	}
+	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(c.proc)
+	if err != nil {
+		return nil, err
+	}
+	localInput := len(ss) == 1 && ss[0] != nil && ss[0].Magic == Merge && !ss[0].IsRemote &&
+		ss[0].NodeInfo.Mcpu == 1 && sameExecutionNode(ss[0].NodeInfo, toEngineNode(c.currentCNWorker()))
+	if len(keys) > 0 || !localInput {
+		ss = c.mergeShuffleScopesIfNeeded(ss, false)
+		ss = []*Scope{c.newMergeScope(ss)}
+	}
+	for _, scope := range ss {
+		op := &updateunique.UpdateUnique{
+			RowID: int(ctx.RowId), Active: int(ctx.Active), Keys: keys, Values: values, Checks: checks,
+			RejectZeroTemporal: rejectZeroTemporal,
+			SpillConfig: materialized.SpillConfig{
+				FileFactory: func(name string) (*os.File, error) {
+					spillFS, err := c.proc.GetSpillFileService()
+					if err != nil {
+						return nil, err
+					}
+					return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
+				},
+				Budget: newMaterializedSpillBudget(c.proc),
+			},
+		}
+		op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		scope.setRootOperator(op)
+	}
+	c.anal.isFirst = false
+	return c.compileProjection(node, ss), nil
 }
 
 func (c *Compile) compilePreInsertSK(node *plan.Node, ss []*Scope) []*Scope {
@@ -6107,17 +6185,25 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 
 	materializedSource := c.getMaterializedSource(step)
 	var rs *Scope
-	if materializedSource != nil {
-		// The materialized source is process-local state. Always terminate the
-		// producer at a local merge scope so it is never serialized as part of a
-		// remote scope without its consumers. Group same-CN shuffle buckets first
-		// so every remote producer scope is independently executable.
+	if materializedSource != nil || node.UpdateCountCtx != nil {
+		// Materialized sources and the count callback are local state. Terminate
+		// their producer on the coordinator, grouping same-CN shuffle buckets so
+		// every remote producer scope remains independently executable.
 		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		rs = c.newMergeScope(ss)
 	} else if c.IsSingleScope(ss) {
 		rs = ss[0]
 	} else {
 		rs = c.newMergeScope(ss)
+	}
+	if node.UpdateCountCtx != nil {
+		if node.RecursiveSink || node.RecursiveCte {
+			return nil, moerr.NewInternalErrorNoCtx("recursive repeated UPDATE count source")
+		}
+		count := &updateunique.Count{Column: int(node.UpdateCountCtx.Column), Publish: c.addAffectedRows}
+		count.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(count)
+		c.anal.isFirst = false
 	}
 
 	currentFirstFlag := c.anal.isFirst

@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -530,6 +531,17 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 //	3. run itself.
 //	4. listen to all running pipelines, once any error occurs, stop the NormalMergeRun asap.
 func (s *Scope) MergeRun(c *Compile) (err error) {
+	if s.localInsertObjects != nil {
+		if err = s.localInsertObjects.Begin(s.Proc.Ctx); err != nil {
+			return err
+		}
+		// The pre-scope join below runs before retiring the object owner.
+		defer func() {
+			if n := s.localInsertObjects.Finish(); n != 0 && err == nil {
+				err = moerr.NewInternalErrorf(s.Proc.Ctx, "%d local INSERT objects were not adopted by the workspace", n)
+			}
+		}()
+	}
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -554,6 +566,22 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	// Merge Run normally.
 	var wg sync.WaitGroup
 	preScopeResultReceiveChan := make(chan scopeRunResult, len(s.PreScopes))
+	var notifyMessageResultReceiveChan chan notifyMessageResult
+	defer func() {
+		if p := recover(); p != nil {
+			if s.localInsertObjects != nil {
+				s.cancelMergeSiblingsOnError(moerr.ConvertPanicError(s.Proc.Ctx, p))
+				wg.Wait()
+			}
+			panic(p)
+		}
+		wg.Wait()
+		err = collectMergeRunResults(
+			s.Proc,
+			scopeRunResult{err: err, classified: true},
+			preScopeResultReceiveChan,
+			notifyMessageResultReceiveChan)
+	}()
 
 	// step 1.
 	for i := range s.PreScopes {
@@ -591,23 +619,12 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	}
 
 	// step 2.
-	var notifyMessageResultReceiveChan chan notifyMessageResult
 	if len(s.RemoteReceivRegInfos) > 0 {
 		notifyMessageResultReceiveChan = make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
 		s.sendNotifyMessage(&wg, notifyMessageResultReceiveChan)
 	}
 
 	// step 3.
-	defer func() {
-		// should wait all the notify-message-routine and preScopes done.
-		wg.Wait()
-		err = collectMergeRunResults(
-			s.Proc,
-			scopeRunResult{err: err, classified: true},
-			preScopeResultReceiveChan,
-			notifyMessageResultReceiveChan)
-	}()
-
 	preScopeCount := len(s.PreScopes)
 	remoteScopeCount := len(s.RemoteReceivRegInfos)
 	//after parallelRun, prescope count may change. we need to save this before parallelRun
@@ -1628,17 +1645,50 @@ func isSingleStarCountNoFilterNoGroupBy(node *plan.Node) bool {
 func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
 	node := s.DataSource.node
 	if node != nil && len(node.AggList) > 0 {
+		// Partial results can replace input rows only when this scope also
+		// owns the matching Group and MergeGroup over its TableScan.
+		mergeGroup, scan := findScanMergeGroup(s.RootOp)
 		// Fast path: single starcount without filter/groupby — only call rel.StarCount(), no scan.
 		if isSingleStarCountNoFilterNoGroupBy(node) {
+			if mergeGroup == nil {
+				return nil
+			}
 			estimatedTombstoneRows, err := rel.EstimateCommittedTombstoneCount(ctx)
 			if err != nil {
 				return err
+			}
+			// 仅在测试域中按表覆盖分支估计，实际封存块和删除仍由存储层读取。
+			if fault.StatusOfDomain(fault.DomainTest) {
+				name := "starcount_tombstone_estimate:" + s.DataSource.SchemaName + "." + s.DataSource.RelationName
+				if estimate, _, ok := fault.TriggerFaultInDomainWithContext(ctx, fault.DomainTest, name); ok {
+					estimatedTombstoneRows = int(estimate)
+				}
 			}
 			metricv2.StarcountEstimateTombstoneRowsHistogram.Observe(float64(estimatedTombstoneRows))
 
 			if estimatedTombstoneRows > defaultStarCountTombstoneThreshold {
 				metricv2.StarcountPathPerBlockCounter.Inc()
-				// Fall through to per-block aggOptimize (only scan blocks with tombstones)
+				if len(node.RuntimeFilterProbeList) == 0 && node.Limit == nil && node.Offset == nil {
+					var rows int64
+					var remaining engine.RelData
+					err := scan.MeasureReaderStartup(s.countSealedBlocksContext(c, ctx),
+						func(ctx context.Context, analyzer process.Analyzer) error {
+							var readErr error
+							rows, remaining, readErr = disttae.CountSealedBlocks(ctx, rel, s.NodeInfo.Data, s.TxnOffset, analyzer)
+							return readErr
+						})
+					if err != nil {
+						return err
+					}
+					if remaining != nil {
+						s.NodeInfo.Data = remaining
+						mergeGroup.PartialResults = []any{rows}
+						mergeGroup.PartialResultTypes = []types.T{types.T_int64}
+						s.StarCountMergeGroup = mergeGroup
+						return nil
+					}
+				}
+				// Fall through to the generic block aggregate optimization.
 			} else {
 				metricv2.StarcountPathFastCounter.Inc()
 				fastStart := time.Now()
@@ -1653,21 +1703,16 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 				s.NodeInfo.Data = newRelData
 				partialResults := []any{int64(totalRows)}
 				partialResultTypes := []types.T{types.T_int64}
-				mergeGroup := findMergeGroup(s.RootOp)
-				if mergeGroup != nil {
-					mergeGroup.PartialResults = partialResults
-					mergeGroup.PartialResultTypes = partialResultTypes
-					s.StarCountMergeGroup = mergeGroup
-				} else {
-					panic("can't find merge group operator for agg optimize!")
-				}
+				mergeGroup.PartialResults = partialResults
+				mergeGroup.PartialResultTypes = partialResultTypes
+				s.StarCountMergeGroup = mergeGroup
 				s.StarCountOnly = true
 				return nil
 			}
 		}
 
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(node)
-		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
+		if partialResults != nil && mergeGroup != nil && s.NodeInfo.Data.DataCnt() > 1 {
 			//append first empty block
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
 			newRelData.AppendBlockInfo(&objectio.EmptyBlockInfo)
@@ -1707,42 +1752,49 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 
 			if partialResults != nil {
 				s.NodeInfo.Data = newRelData
-				//find the last mergegroup
-				mergeGroup := findMergeGroup(s.RootOp)
-				if mergeGroup != nil {
-					mergeGroup.PartialResults = partialResults
-					mergeGroup.PartialResultTypes = partialResultTypes
-				} else {
-					panic("can't find merge group operator for agg optimize!")
-				}
+				mergeGroup.PartialResults = partialResults
+				mergeGroup.PartialResultTypes = partialResultTypes
 			}
 		}
 	}
 	return nil
 }
 
-// find scan->group->mergegroup
-func findMergeGroup(op vm.Operator) *group.MergeGroup {
-	if op == nil {
-		return nil
-	}
-	base := op.GetOperatorBase()
-	if base == nil || base.NumChildren() == 0 {
-		return nil
-	}
-	if mergeGroup, ok := op.(*group.MergeGroup); ok {
+// findScanMergeGroup finds the matching scan and aggregate owners in this scope.
+func findScanMergeGroup(op vm.Operator) (*group.MergeGroup, *table_scan.TableScan) {
+	for op != nil {
+		base := op.GetOperatorBase()
+		if base == nil || base.NumChildren() == 0 {
+			break
+		}
 		child := base.GetChildren(0)
-		if _, ok = child.(*group.Group); ok {
-			childBase := child.GetOperatorBase()
-			if childBase != nil && childBase.NumChildren() > 0 {
-				child = childBase.GetChildren(0)
-				if _, ok = child.(*table_scan.TableScan); ok {
-					return mergeGroup
+		if mergeGroup, ok := op.(*group.MergeGroup); ok {
+			if groupOp, ok := child.(*group.Group); ok && groupOp.NumChildren() == 1 {
+				if scan, ok := groupOp.GetChildren(0).(*table_scan.TableScan); ok {
+					return mergeGroup, scan
 				}
 			}
 		}
+		op = child
 	}
-	return findMergeGroup(base.GetChildren(0))
+	return nil, nil
+}
+
+// Count using the snapshot already bound to the opened relation, under the
+// scan's cancellation and with the relation's effective tenant and statement
+// statistics (which may differ from the scan's inherited values).
+func (s *Scope) countSealedBlocksContext(c *Compile, relationCtx context.Context) context.Context {
+	ctx := s.readerContext(c)
+	if ctx == nil {
+		return relationCtx
+	}
+	if accountID, ok := relationCtx.Value(defines.TenantIDKey{}).(uint32); ok {
+		ctx = defines.AttachAccountId(ctx, accountID)
+	}
+	if stats := statistic.StatsInfoFromContext(relationCtx); stats != nil {
+		ctx = statistic.ContextWithStatsInfo(ctx, stats)
+	}
+	return ctx
 }
 
 func (s *Scope) readerContext(c *Compile) context.Context {

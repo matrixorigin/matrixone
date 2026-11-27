@@ -23,9 +23,18 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/moerr";
 option (gogoproto.sizer_all)      = false;
 option (gogoproto.protosizer_all) = true;
 
+enum TxnFence {
+    NONE = 0;
+    FENCED = 1;
+    // The owner rejected this request before attempting to acquire a lock.
+    REJECTED_BEFORE_LOCK = 2;
+}
+
 message Error {
     uint32 code       = 1 [(gogoproto.casttype) = "uint16"];
     uint32 mysql_code = 2 [(gogoproto.casttype) = "uint16"];
     string message    = 3;
     string sql_state  = 4;
+    // Set only when the transaction itself has been fenced by a lock bind change.
+    TxnFence txn_fence = 5;
 }

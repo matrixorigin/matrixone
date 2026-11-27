@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -25,6 +26,8 @@ import (
 )
 
 var methodVersions = map[pb.CmdMethod]int64{
+	// Optional cache hint; old peers may reject the command.
+	pb.CmdMethod_CountCachedObjectFiles:   defines.MORPCMinVersion,
 	pb.CmdMethod_ShowProcessList:          defines.MORPCVersion1,
 	pb.CmdMethod_AlterAccount:             defines.MORPCVersion1,
 	pb.CmdMethod_KillConn:                 defines.MORPCVersion1,
@@ -66,14 +69,18 @@ var methodVersions = map[pb.CmdMethod]int64{
 }
 
 type queryClient struct {
-	serviceID string
-	client    morpc.RPCClient
-	pool      morpc.MessagePool[*pb.Request, *pb.Response]
+	serviceID   string
+	client      morpc.RPCClient
+	pool        morpc.MessagePool[*pb.Request, *pb.Response]
+	cacheProbes sync.Map
 }
+
+var errCacheProbeBusy = moerr.NewInvalidStateNoCtx("query cache probe already pending for peer")
 
 type QueryClient interface {
 	ServiceID() string
 	// SendMessage send message to a cache server.
+	// For CountCachedObjectFiles, SendMessage consumes req even on error.
 	SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error)
 	// NewRequest creates a new request by cmd method.
 	NewRequest(pb.CmdMethod) *pb.Request
@@ -112,14 +119,30 @@ func (c *queryClient) ServiceID() string {
 
 // SendMessage implements the QueryService interface.
 func (c *queryClient) SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error) {
-	if address == "" {
-		return nil, moerr.NewInternalErrorf(ctx, "invalid CN query address %s", address)
+	var release func(morpc.Message)
+	if req.CmdMethod == pb.CmdMethod_CountCachedObjectFiles {
+		if err := ctx.Err(); err != nil {
+			c.pool.ReleaseRequest(req)
+			return nil, err
+		}
+		// Cache placement is optional. Hold at most one unsent probe per peer,
+		// even if the SQL that queued it has already stopped waiting.
+		if _, pending := c.cacheProbes.LoadOrStore(address, struct{}{}); pending {
+			c.pool.ReleaseRequest(req)
+			return nil, errCacheProbeBusy
+		}
+		release = func(message morpc.Message) {
+			c.cacheProbes.Delete(address)
+			c.pool.ReleaseRequest(message.(*pb.Request))
+		}
+		ctx = morpc.WithRequestRelease(ctx, release)
 	}
-	if err := checkMethodVersion(ctx, c.serviceID, req); err != nil {
-		return nil, err
-	}
-	f, err := c.client.Send(ctx, address, req)
+
+	f, err := c.send(ctx, address, req)
 	if err != nil {
+		if release != nil {
+			release(req)
+		}
 		return nil, err
 	}
 	defer f.Close()
@@ -129,6 +152,16 @@ func (c *queryClient) SendMessage(ctx context.Context, address string, req *pb.R
 	}
 	resp := v.(*pb.Response)
 	return c.unwrapResponseError(resp)
+}
+
+func (c *queryClient) send(ctx context.Context, address string, req *pb.Request) (*morpc.Future, error) {
+	if address == "" {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid CN query address %s", address)
+	}
+	if err := checkMethodVersion(ctx, c.serviceID, req); err != nil {
+		return nil, err
+	}
+	return c.client.Send(ctx, address, req)
 }
 
 // NewRequest implements the QueryService interface.

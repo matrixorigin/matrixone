@@ -274,6 +274,8 @@ type Engine struct {
 	idGen    IDGenerator
 	tnID     string
 
+	localInsertObjects *colexec.LocalInsertObjectRegistry
+
 	config struct {
 		checkWorkspaceAccounting bool
 		insertEntryMaxCount      int

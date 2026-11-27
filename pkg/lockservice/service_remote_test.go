@@ -436,6 +436,202 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 	)
 }
 
+func TestFencedTxnPrecedesDrainAdmission(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+		s := services[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		txnID := []byte("fenced-before-drain")
+		options := newTestRowExclusiveOptions()
+		_, err := s.Lock(ctx, 301, [][]byte{{1}}, txnID, options)
+		require.NoError(t, err)
+		txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+		newBind := s.tableGroups.get(0, 301).getBind()
+		newBind.Version++
+		require.True(t, txn.fenceByBindChanged(newBind, s.logger))
+		s.setStatus(pb.Status_ServiceLockWaiting)
+		defer s.setStatus(pb.Status_ServiceLockEnable)
+
+		_, err = s.Lock(ctx, 302, [][]byte{{1}}, txnID, options)
+		require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
+		for _, method := range []pb.Method{pb.Method_Lock, pb.Method_ForwardLock} {
+			req := &pb.Request{Method: method, LockTable: pb.LockTable{Table: 302}, Lock: pb.LockRequest{
+				TxnID: txnID, ServiceID: "remote", Rows: [][]byte{{1}}, Options: options,
+			}}
+			resp := acquireResponse()
+			cs := &testClientSession{ctx: context.Background()}
+			if method == pb.Method_Lock {
+				s.handleRemoteLock(ctx, nil, req, resp, cs)
+			} else {
+				s.handleForwardLock(ctx, nil, req, resp, cs)
+			}
+			require.True(t, cs.writeCalled)
+			require.True(t, moerr.IsLockTableBindChangedForFencedTxn(resp.UnwrapError()))
+			releaseResponse(resp)
+		}
+		require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+	})
+}
+
+// staleBindRefreshClient fails only the source lookup of the requested table
+// after its old binding has been cached.
+type staleBindRefreshClient struct {
+	Client
+	table     uint64
+	fail      atomic.Bool
+	refreshes atomic.Int32
+	unlocks   atomic.Int32
+}
+
+func (c *staleBindRefreshClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	if req.LockTable.Table == c.table && req.Method == pb.Method_Unlock {
+		c.unlocks.Add(1)
+	}
+	if req.Method == pb.Method_GetBind && req.GetBind.Table == c.table && c.fail.Load() {
+		c.refreshes.Add(1)
+		return nil, moerr.NewInternalErrorNoCtx("allocator unavailable")
+	}
+	return c.Client.Send(ctx, req)
+}
+
+func TestRemoteLockReturnsFenceBeforeStaleBind(t *testing.T) {
+	for _, scenario := range []string{"stale-request", "updated-during-request", "removed-during-request"} {
+		t.Run(scenario, func(t *testing.T) {
+			runLockServiceTests(t, []string{"s1", "s2"}, func(_ *lockTableAllocator, services []*service) {
+				owner, source := services[0], services[1]
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				const heldTable, requestedTable = 301, 302
+				options := newTestRowExclusiveOptions()
+				fenced := []byte("fenced-txn")
+				rows := [][]byte{{1}}
+
+				// Give the owner a transaction to fence through a different table.
+				_, err := owner.Lock(ctx, heldTable, rows, fenced, options)
+				require.NoError(t, err)
+				defer func() { require.NoError(t, owner.Unlock(ctx, fenced, timestamp.Timestamp{})) }()
+				seed := []byte("seed")
+				_, err = owner.Lock(ctx, requestedTable, rows, seed, options)
+				require.NoError(t, err)
+				require.NoError(t, owner.Unlock(ctx, seed, timestamp.Timestamp{}))
+
+				client := &staleBindRefreshClient{Client: source.remote.client, table: requestedTable}
+				source.remote.client = client
+				table, err := source.getLockTableWithCreate(ctx, 0, requestedTable, rows, pb.Sharding_None)
+				require.NoError(t, err)
+				newBind := table.getBind()
+				require.Equal(t, owner.serviceID, newBind.ServiceID)
+				newBind.Version++
+				client.fail.Store(true)
+
+				// A successful refresh could fence the source locally and hide a
+				// missing wire marker. Keep the old source binding during the test.
+				switch scenario {
+				case "stale-request":
+					owner.handleBindChanged(newBind)
+					healthy := []byte("healthy-txn")
+					_, err = source.Lock(ctx, requestedTable, rows, healthy, options)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged), "%v", err)
+					require.False(t, moerr.IsLockTableBindChangedForFencedTxn(err))
+					require.NoError(t, source.Unlock(ctx, healthy, timestamp.Timestamp{}))
+				case "updated-during-request":
+					owner.option.beforeRemoteLockBindCheck = func() { owner.handleBindChanged(newBind) }
+				case "removed-during-request":
+					owner.option.beforeRemoteLockBindCheck = func() {
+						owner.tableGroups.removeWithFilter(func(table uint64, _ lockTable) bool {
+							return table == requestedTable
+						}, closeReasonBindChanged)
+					}
+				}
+				defer func() { owner.option.beforeRemoteLockBindCheck = nil }()
+
+				fenceBind := owner.tableGroups.get(0, heldTable).getBind()
+				fenceBind.Version++
+				owner.fenceByBindChanged(fenceBind)
+				prev := client.refreshes.Load()
+				_, err = source.Lock(ctx, requestedTable, rows, fenced, options)
+				require.True(t, moerr.IsLockTableBindChangedForFencedTxn(err), "%v", err)
+				require.Equal(t, prev+1, client.refreshes.Load())
+				require.NoError(t, source.Unlock(ctx, fenced, timestamp.Timestamp{}))
+				if scenario != "removed-during-request" {
+					require.Zero(t, client.unlocks.Load(), "NewBind rejection did not acquire a lock")
+				}
+			})
+		})
+	}
+}
+
+type cancelableBindRefreshClient struct {
+	Client
+	started chan struct{}
+}
+
+func (c *cancelableBindRefreshClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	if req.Method != pb.Method_GetBind {
+		return c.Client.Send(ctx, req)
+	}
+	close(c.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestRemoteLockKeepsBindChangeWhenRefreshIsCanceled(t *testing.T) {
+	runLockServiceTests(t, []string{"origin", "owner"}, func(_ *lockTableAllocator, services []*service) {
+		origin, owner := services[0], services[1]
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+
+		const heldTable, requestedTable = 301, 302
+		options := newTestRowExclusiveOptions()
+		rows := [][]byte{{1}}
+		for _, table := range []uint64{heldTable, requestedTable} {
+			seed := []byte("seed")
+			_, err := owner.Lock(ctx, table, rows, seed, options)
+			require.NoError(t, err)
+			require.NoError(t, owner.Unlock(ctx, seed, timestamp.Timestamp{}))
+		}
+		txnID := []byte("remote-txn")
+		_, err := origin.Lock(ctx, heldTable, rows, txnID, options)
+		require.NoError(t, err)
+		defer func() { assert.NoError(t, origin.Unlock(ctx, txnID, timestamp.Timestamp{})) }()
+
+		stale := owner.tableGroups.get(0, requestedTable).getBind()
+		stale.Version--
+		remote := origin.createLockTableByBind(stale).(*remoteLockTable)
+		refresh := &cancelableBindRefreshClient{Client: remote.client, started: make(chan struct{})}
+		remote.client = refresh
+		origin.tableGroups.set(stale.Group, stale.Table, remote)
+
+		lockCtx, cancelLock := context.WithCancel(ctx)
+		defer cancelLock()
+		done := make(chan error, 1)
+		go func() {
+			_, err := origin.Lock(lockCtx, requestedTable, rows, txnID, options)
+			done <- err
+		}()
+		select {
+		case <-refresh.started:
+		case <-ctx.Done():
+			t.Fatal("source did not receive the stale-binding rejection")
+		}
+
+		// The owner fences a previously acquired binding after returning NewBind.
+		changed := owner.tableGroups.get(0, heldTable).getBind()
+		changed.Version++
+		owner.fenceByBindChanged(changed)
+		require.True(t, owner.activeTxnHolder.isTxnFenced(txnID))
+		require.False(t, origin.activeTxnHolder.isTxnFenced(txnID))
+		cancelLock()
+
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, ErrLockTableBindChanged)
+		case <-ctx.Done():
+			t.Fatal("source did not stop the canceled refresh")
+		}
+	})
+}
+
 func TestHandleForwardLockRejectsWhenServiceCannotLock(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -1032,7 +1228,7 @@ func TestMapBasedTxnHolderFenceReleasesShardWhileTxnIsBusy(t *testing.T) {
 			t.Fatal("bind fencing did not resume after the transaction unlocked")
 		}
 		txn.RLock()
-		require.True(t, txn.bindChanged)
+		require.True(t, txn.isFenced())
 		txn.RUnlock()
 	})
 }

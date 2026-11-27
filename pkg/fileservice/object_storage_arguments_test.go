@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"encoding/xml"
@@ -22,8 +23,10 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
@@ -61,6 +64,77 @@ func TestObjectStorageArguments(t *testing.T) {
 			}
 		}
 
+	})
+}
+
+func TestCSStorageArgumentsPreservePrefix(t *testing.T) {
+	const endpoint = "https://myqcloud.example.invalid"
+	t.Setenv("MO_CI_S3_PREFIX", "ci-ut/run-123")
+	t.Setenv("TEST_S3FS_CS", "name=cs,endpoint="+endpoint+",bucket=restricted-test,is-minio=true")
+	t.Setenv("TEST_S3FS_PROVIDER_CONTROL", "name=cs-s3,endpoint="+endpoint+",bucket=ordinary-test,is-minio=true")
+	var sawOrdinary bool
+	for _, args := range objectStorageArgumentsForTest("test", t) {
+		if args.Endpoint != endpoint {
+			continue
+		}
+		if args.Bucket == "restricted-test" {
+			t.Fatal("restricted CS fixture exposed to a consumer that can replace its prefix")
+		}
+		sawOrdinary = sawOrdinary || args.Bucket == "ordinary-test"
+	}
+	if !sawOrdinary {
+		t.Fatal("ordinary QCloud fixture missing from the shared provider list")
+	}
+	var restricted, ordinary int
+	for _, spec := range prefixAwareStorageTestSpecs(t) {
+		args := spec.args
+		if args.Endpoint != endpoint {
+			continue
+		}
+		switch args.Bucket {
+		case "restricted-test":
+			restricted++
+			if !spec.scopedCS || args.Name != "cs-s3" || !strings.HasPrefix(args.KeyPrefix, "ci-ut/run-123/") || !args.IsMinio || !args.NoBucketValidation {
+				t.Fatal("CS test storage is not isolated under the run prefix")
+			}
+		case "ordinary-test":
+			ordinary++
+			if spec.scopedCS || args.NoBucketValidation {
+				t.Fatal("ordinary provider treated as the restricted CS fixture")
+			}
+		}
+	}
+	if restricted != 1 || ordinary != 1 {
+		t.Fatalf("expected one fixture from each source, got CS=%d ordinary=%d", restricted, ordinary)
+	}
+}
+
+// prepareCITestStorage refuses a pre-existing fixture prefix and only cleans
+// objects underneath that exact run-specific prefix. Never operate on a bucket root.
+func prepareCITestStorage(t *testing.T, args ObjectStorageArguments) {
+	t.Helper()
+	root := os.Getenv("MO_CI_S3_PREFIX")
+	if !validCITestS3Prefix(root) || !validCITestS3Prefix(args.KeyPrefix) || !strings.HasPrefix(args.KeyPrefix, root+"/") {
+		t.Fatal("unsafe CS S3 fixture prefix")
+	}
+	prefix := args.KeyPrefix + "/"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	sdk, err := NewMinioSDK(ctx, args, nil)
+	if err != nil {
+		cancel()
+		t.Fatal(ciTestS3Error("initialize fixture", err))
+	}
+	if err := checkEmptyCITestPrefix(ctx, sdk.client, args.Bucket, prefix); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	cancel()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := cleanupCITestPrefix(ctx, sdk.client, args.Bucket, prefix); err != nil {
+			t.Error(err)
+		}
 	})
 }
 
@@ -129,28 +203,65 @@ func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []Obje
 			continue
 		}
 		// env vars begin with TEST_S3FS_
-		if !strings.HasPrefix(name, "TEST_S3FS_") {
+		if !strings.HasPrefix(name, "TEST_S3FS_") || name == "TEST_S3FS_CS" {
 			continue
 		}
 
-		// parse args
-		reader := csv.NewReader(strings.NewReader(value))
-		argStrs, err := reader.Read()
+		args, err := parseStorageTestSpec(value)
 		if err != nil {
-			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
-			continue
-		}
-		var args ObjectStorageArguments
-		if err := args.SetFromString(argStrs); err != nil {
-			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
+			logutil.Warn("bad S3FS test spec", zap.String("env", name))
 			continue
 		}
 		args.KeyPrefix = fmt.Sprintf("%v", rand.Int64())
-
 		ret = append(ret, args)
 	}
 
 	return ret
+}
+
+func parseStorageTestSpec(value string) (args ObjectStorageArguments, err error) {
+	fields, err := csv.NewReader(strings.NewReader(value)).Read()
+	if err != nil {
+		return args, err
+	}
+	err = args.SetFromString(fields)
+	return args, err
+}
+
+type storageTestSpec struct {
+	args     ObjectStorageArguments
+	scopedCS bool
+}
+
+// Only consumers that keep all keys and cleanup under the assigned prefix
+// may opt in here. Legacy SDK tests use objectStorageArgumentsForTest instead.
+func prefixAwareStorageTestSpecs(t *testing.T) []storageTestSpec {
+	t.Helper()
+	ordinary := objectStorageArgumentsForTest("test", t)
+	specs := make([]storageTestSpec, 0, len(ordinary)+1)
+	if value, ok := os.LookupEnv("TEST_S3FS_CS"); ok {
+		args, err := parseStorageTestSpec(value)
+		if err != nil {
+			t.Fatal("invalid TEST_S3FS_CS test specification")
+		}
+		prefix := os.Getenv("MO_CI_S3_PREFIX")
+		if !validCITestS3Prefix(prefix) {
+			t.Fatal("TEST_S3FS_CS requires a non-root, normalized MO_CI_S3_PREFIX")
+		}
+		if !args.IsMinio {
+			t.Fatal("TEST_S3FS_CS requires is-minio=true")
+		}
+		args.Name = "cs-s3"
+		args.KeyPrefix = path.Join(prefix, fmt.Sprintf("%v", rand.Int64()))
+		// HeadBucket is not prefix-scoped. prepareCITestStorage validates the
+		// assigned prefix without requiring bucket-wide access.
+		args.NoBucketValidation = true
+		specs = append(specs, storageTestSpec{args: args, scopedCS: true})
+	}
+	for _, args := range ordinary {
+		specs = append(specs, storageTestSpec{args: args})
+	}
+	return specs
 }
 
 func TestQCloudRegion(t *testing.T) {

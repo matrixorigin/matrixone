@@ -107,6 +107,8 @@ enum CmdMethod {
   IcebergCacheInvalidate = 38;
   // MongoDBClientRetire drains obsolete MongoDB driver clients after catalog DDL.
   MongoDBClientRetire = 39;
+  // Uses the wire number assigned on main.
+  CountCachedObjectFiles = 47;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -250,6 +252,7 @@ message Request {
   ISCPDrainConsumerRequest ISCPDrainConsumerRequest = 39;
   IcebergCacheInvalidateRequest IcebergCacheInvalidateRequest = 40 [ (gogoproto.nullable) = false ];
   MongoDBClientRetireRequest MongoDBClientRetireRequest = 41 [ (gogoproto.nullable) = false ];
+  CountCachedObjectFilesRequest CountCachedObjectFilesRequest = 49;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -318,6 +321,7 @@ message Response {
   ISCPDrainConsumerResponse ISCPDrainConsumerResponse = 40;
   IcebergCacheInvalidateResponse IcebergCacheInvalidateResponse = 41 [ (gogoproto.nullable) = false ];
   MongoDBClientRetireResponse MongoDBClientRetireResponse = 42 [ (gogoproto.nullable) = false ];
+  CountCachedObjectFilesResponse CountCachedObjectFilesResponse = 50;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -740,4 +744,13 @@ message MongoDBClientRetireRequest {
 
 message MongoDBClientRetireResponse {
   bool Success = 1;
+}
+
+// CountCachedObjectFiles reports a best-effort count of whole-file disk cache hits.
+message CountCachedObjectFilesRequest {
+  repeated bytes ObjectIds = 1;
+}
+
+message CountCachedObjectFilesResponse {
+  uint32 Hits = 1;
 }
