@@ -21,7 +21,6 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -64,34 +63,6 @@ func issue32362Conn(t *testing.T, ctx context.Context, addr string) (*sql.Conn, 
 	}
 }
 
-func issue32362QueryVisible(ctx context.Context, db *sql.DB, marker string) (bool, error) {
-	rows, err := db.QueryContext(ctx, "show full processlist")
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	columns, err := rows.Columns()
-	if err != nil {
-		return false, err
-	}
-	values := make([]sql.RawBytes, len(columns))
-	dest := make([]any, len(values))
-	for i := range values {
-		dest[i] = &values[i]
-	}
-	for rows.Next() {
-		if err = rows.Scan(dest...); err != nil {
-			return false, err
-		}
-		for _, value := range values {
-			if strings.Contains(string(value), marker) {
-				return true, nil
-			}
-		}
-	}
-	return false, rows.Err()
-}
-
 func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
@@ -121,7 +92,7 @@ func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 		visible := func(t *testing.T, marker string) {
 			t.Helper()
 			require.Eventually(t, func() bool {
-				found, queryErr := issue32362QueryVisible(ctx, admin, marker)
+				found, queryErr := queryVisibleInProcesslist(ctx, admin, marker)
 				return queryErr == nil && found
 			}, 10*time.Second, 50*time.Millisecond, "statement must be running before the connection changes")
 		}
@@ -250,7 +221,7 @@ func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 				t.Fatal("half-closed client was not canceled before the legacy grace")
 			}
 			require.Eventually(t, func() bool {
-				found, queryErr := issue32362QueryVisible(ctx, admin, "323620995")
+				found, queryErr := queryVisibleInProcesslist(ctx, admin, "323620995")
 				return queryErr == nil && !found
 			}, 10*time.Second, 50*time.Millisecond, "cancellation must remove the server-side query")
 			needKill = false

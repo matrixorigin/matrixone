@@ -37,6 +37,9 @@ type Select struct {
 	With           *With
 	Ep             *ExportParam
 	SelectLockInfo *SelectLockInfo
+	// HasLockingRead is set by the MySQL parser on the enclosing statement
+	// (including a prepared SELECT) when any query block has a locking clause.
+	HasLockingRead bool
 }
 
 func (node *Select) Format(ctx *FmtCtx) {

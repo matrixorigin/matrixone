@@ -70,12 +70,14 @@ func startMaxExecutionTimer(ses *Session, execCtx *ExecCtx) (func(error) error, 
 	timeoutErr := moerr.NewQueryTimeout(parentCtx)
 	timeoutCtx, cancel := context.WithTimeoutCause(parentCtx, time.Duration(milliseconds)*time.Millisecond, timeoutErr)
 	execCtx.reqCtx = timeoutCtx
+	execCtx.txnAdmissionCtx = timeoutCtx
 	proc.ReplaceTopCtx(timeoutCtx)
 	proc.ResetQueryContext()
 
 	return func(stmtErr error) error {
 		cancel()
 		execCtx.reqCtx = parentCtx
+		execCtx.txnAdmissionCtx = nil
 		proc.ReplaceTopCtx(previousTopCtx)
 		proc.ResetQueryContext()
 		// Keep the original error if it requires a full transaction rollback.
@@ -96,7 +98,7 @@ func isReadOnlySelectForTimeout(stmt tree.Statement) bool {
 func selectHasWriteIntent(stmt tree.SelectStatement) bool {
 	switch sel := stmt.(type) {
 	case *tree.Select:
-		return sel.IsPerform || sel.Ep != nil ||
+		return sel.HasLockingRead || sel.IsPerform || sel.Ep != nil ||
 			(sel.SelectLockInfo != nil && sel.SelectLockInfo.LockType != tree.SelectLockNone) ||
 			selectHasWriteIntent(sel.Select)
 	case *tree.ParenSelect:

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -43,10 +44,12 @@ func TestMaxExecutionTimePreservesCancellationAndProcessContext(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, finish)
 	require.Same(t, execCtx.reqCtx, proc.GetTopContext())
+	require.Same(t, execCtx.reqCtx, execCtx.txnAdmissionCtx)
 	require.Same(t, execCtx.reqCtx, proc.Ctx)
 	cancelParent()
 	require.ErrorIs(t, finish(context.Canceled), context.Canceled)
 	require.Same(t, parentCtx, execCtx.reqCtx)
+	require.Nil(t, execCtx.txnAdmissionCtx)
 	require.Same(t, procCtx, proc.GetTopContext())
 	require.Same(t, procCtx, proc.Ctx)
 }
@@ -87,4 +90,32 @@ func TestMaxExecutionTimeRequiresReadOnlySelect(t *testing.T) {
 	require.False(t, isReadOnlySelectForTimeout(&tree.Select{Ep: &tree.ExportParam{}}))
 	require.False(t, isReadOnlySelectForTimeout(&tree.Select{IsPerform: true}))
 	require.False(t, isReadOnlySelectForTimeout(&tree.Insert{}))
+}
+
+func TestMaxExecutionTimeClassifiesParsedNestedLocks(t *testing.T) {
+	for _, tc := range []struct {
+		sql      string
+		readOnly bool
+	}{
+		{"select * from (select id from t for update) as locked", false},
+		{"with locked as (select id from t for share) select * from locked", false},
+		{"select (select id from t lock in share mode)", false},
+		{"select 1 where exists (select id from t for /* row lock */ update)", false},
+		{"prepare s from select * from (select id from t for update) as locked", false},
+		{"with r as (select id from t) select * from r", true},
+		{"select 'for update', 'lock in share mode' /* for share */", true},
+		{"select `for update` from t", true},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmts, err := mysql.Parse(t.Context(), tc.sql+"; select 1", 0)
+			require.NoError(t, err)
+			require.Len(t, stmts, 2)
+			stmt := stmts[0]
+			if prepared, ok := stmt.(*tree.PrepareStmt); ok {
+				stmt = prepared.Stmt
+			}
+			require.Equal(t, tc.readOnly, isReadOnlySelectForTimeout(stmt))
+			require.True(t, isReadOnlySelectForTimeout(stmts[1]))
+		})
+	}
 }
