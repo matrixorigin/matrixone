@@ -288,9 +288,9 @@ func TestCreateAndAlterCopyTablePreserveIndexVisibility(t *testing.T) {
 	require.True(t, visibility["idx_visible"])
 	require.False(t, visibility["uq_invisible"])
 
-	got, _, _, err := constructCreateTableSQL(
+	got, _, err := constructCreateTableSQL(
 		&mock.ctxt, tableDef, nil, true, nil, true, nil,
-		false, "",
+		false, "", nil,
 	)
 	require.NoError(t, err)
 	require.Contains(t, got, "UNIQUE KEY `uq_invisible` (`b`) INVISIBLE")

@@ -4594,9 +4594,9 @@ func TestConstructCreateTableSQLSubscriptionCloneMapsPublisherForeignKeyToTarget
 		StmtType: tree.WithinAccCloneDB,
 	}
 
-	createSQL, _, statement, err := constructCreateTableSQL(
+	createSQL, statement, err := constructCreateTableSQL(
 		ctx, child, nil, true, cloneStmt, true, subscription,
-		false, "",
+		false, "", nil,
 	)
 	require.NoError(t, err)
 	defer statement.Free()

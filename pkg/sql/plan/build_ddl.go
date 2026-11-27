@@ -3015,7 +3015,7 @@ func buildCreateTable(
 		if sub != nil {
 			ctx.SetQueryingSubscription(previousSubscription)
 		}
-		_, _, newStmt, err := constructCreateTableSQL(
+		_, newStmt, err := constructCreateTableSQL(
 			ctx,
 			likeSkeletonDef,
 			snapshot,
@@ -3023,7 +3023,7 @@ func buildCreateTable(
 			cloneStmt,
 			recoveredLegacyChecks,
 			sub,
-			false, *parserSQLModeFromContext(ctx),
+			false, *parserSQLModeFromContext(ctx), nil,
 		)
 		if err != nil {
 			return nil, err

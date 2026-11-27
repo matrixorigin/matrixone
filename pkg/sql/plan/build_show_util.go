@@ -60,10 +60,10 @@ func ConstructCreateTableSQL(
 		sqlMode = *parserSQLModeFromContext(ctx)
 		sourceSubscription = ctx.GetQueryingSubscription()
 	}
-	displaySQL, _, stmt, err := constructCreateTableSQL(
+	displaySQL, stmt, err := constructCreateTableSQL(
 		ctx, tableDef, snapshot, useDbName, cloneStmt, true,
 		sourceSubscription,
-		false, sqlMode,
+		false, sqlMode, nil,
 	)
 	return displaySQL, stmt, err
 }
@@ -87,10 +87,11 @@ func constructCreateTableSQL(
 	sourceSubscription *SubscriptionMeta,
 	legacyDumpDefaults bool,
 	sqlMode string,
-) (string, string, tree.Statement, error) {
+	replayOut *string,
+) (string, tree.Statement, error) {
 	return constructCreateTableSQLWithCommentFormat(
 		ctx, tableDef, snapshot, useDbName, cloneStmt, includeChecks,
-		sourceSubscription, legacyDumpDefaults, false, sqlMode,
+		sourceSubscription, legacyDumpDefaults, false, sqlMode, replayOut,
 	)
 }
 
@@ -99,8 +100,8 @@ func constructCreateTableSQL(
 // fingerprints. Its output is hash input, not replayable SQL. Ordinary SQL
 // consumers must use ConstructCreateTableSQL, which renders both for replay.
 func ConstructCreateTableSQLForSchemaHash(tableDef *plan.TableDef) (string, error) {
-	sql, _, _, err := constructCreateTableSQLWithCommentFormat(
-		nil, tableDef, nil, false, nil, true, nil, true, true, "",
+	sql, _, err := constructCreateTableSQLWithCommentFormat(
+		nil, tableDef, nil, false, nil, true, nil, true, true, "", nil,
 	)
 	return sql, err
 }
@@ -116,11 +117,12 @@ func constructCreateTableSQLWithCommentFormat(
 	legacyDumpDefaults bool,
 	legacyStoredComments bool,
 	sqlMode string,
-) (string, string, tree.Statement, error) {
+	replayOut *string,
+) (string, tree.Statement, error) {
 	// Replaying native metadata through a legacy SQL alias would change its
 	// semantics. Until activation, reject rather than emit a lossy dump.
 	if err := plan.RequireLegacyCollations(tableDef); err != nil {
-		return "", "", nil, err
+		return "", nil, err
 	}
 	var err error
 	var createStr string
@@ -139,12 +141,12 @@ func constructCreateTableSQLWithCommentFormat(
 		var isMongoDB bool
 		isMongoDB, err = IsMongoDBTableDef(ctx.GetContext(), tableDef)
 		if err != nil {
-			return "", "", nil, err
+			return "", nil, err
 		}
 		if isMongoDB {
 			mongoEnvelope, _, err = sqlmongodb.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql)
 			if err != nil {
-				return "", "", nil, err
+				return "", nil, err
 			}
 			for _, column := range mongoEnvelope.Columns {
 				mongoColumns[strings.ToLower(column.Name)] = column
@@ -201,7 +203,7 @@ func constructCreateTableSQLWithCommentFormat(
 		if util.IsClusterTableAttribute(colNameOrigin) && isClusterTable {
 			accountId, err := ctx.GetAccountId()
 			if err != nil {
-				return "", "", nil, err
+				return "", nil, err
 			}
 			if accountId != catalog.System_Account || IsSnapshotValid(snapshot) || useDbName {
 				// useDbName reuse in build alter table sql
@@ -263,7 +265,7 @@ func constructCreateTableSQLWithCommentFormat(
 				} else if noBackslashEscapes && strings.Contains(defaultSQL, "\\") {
 					defaultSQL, err = formatDefaultWithoutBackslashEscapes(defaultSQL)
 					if err != nil {
-						return "", "", nil, err
+						return "", nil, err
 					}
 				}
 				buf.WriteString(" DEFAULT " + defaultSQL)
@@ -372,7 +374,7 @@ func constructCreateTableSQLWithCommentFormat(
 				// order-flexible index_option, so it may precede WITH PARSER).
 				includedColumns, incErr := indexDefIncludedColumns(indexdef)
 				if incErr != nil {
-					return "", "", nil, incErr
+					return "", nil, incErr
 				}
 				indexStr += indexIncludeColumnsToString(includedColumns, colNameToOriginName, legacyStoredComments)
 
@@ -383,7 +385,7 @@ func constructCreateTableSQLWithCommentFormat(
 						parser, err := val.StrictString()
 						if err != nil {
 							// value exists but not string type
-							return "", "", nil, err
+							return "", nil, err
 						}
 
 						if len(parser) > 0 {
@@ -399,7 +401,7 @@ func constructCreateTableSQLWithCommentFormat(
 						// POSITION_FREE and the capacities and build a different index.
 						paramStr, err := catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
 						if err != nil {
-							return "", "", nil, err
+							return "", nil, err
 						}
 						indexStr += paramStr
 					} else {
@@ -409,7 +411,7 @@ func constructCreateTableSQLWithCommentFormat(
 							async, err := val.StrictString()
 							if err != nil {
 								// value exists but not string type
-								return "", "", nil, err
+								return "", nil, err
 							}
 
 							if async == "true" {
@@ -443,7 +445,7 @@ func constructCreateTableSQLWithCommentFormat(
 				}
 				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexdef.IndexAlgoParams)
 				if err != nil {
-					return "", "", nil, err
+					return "", nil, err
 				}
 				indexStr += "("
 				rewriteIndexStr += "("
@@ -459,7 +461,7 @@ func constructCreateTableSQLWithCommentFormat(
 
 					if col := functionalIndexPartColumn(tableDef, indexdef, ordinal); col != nil {
 						if err := validateFunctionalTable(ctx.GetContext(), tableDef); err != nil {
-							return "", "", nil, err
+							return "", nil, err
 						}
 						expressionPart := "(" + col.GeneratedCol.OriginString + ")"
 						indexStr += expressionPart
@@ -484,14 +486,14 @@ func constructCreateTableSQLWithCommentFormat(
 					var paramList string
 					paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
 					if err != nil {
-						return "", "", nil, err
+						return "", nil, err
 					}
 					indexStr += paramList
 					rewriteIndexStr += paramList
 				}
 				includedColumns, err := indexDefIncludedColumns(indexdef)
 				if err != nil {
-					return "", "", nil, err
+					return "", nil, err
 				}
 				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName, legacyStoredComments)
 				indexStr += includeList
@@ -623,24 +625,24 @@ func constructCreateTableSQLWithCommentFormat(
 		} else {
 			if sourceSubscription != nil {
 				if _, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, sourceSubscription); err != nil {
-					return "", "", nil, err
+					return "", nil, err
 				}
 				if fkTableDef, err = updateFKTableDef(fkTableDef); err != nil {
-					return "", "", nil, err
+					return "", nil, err
 				}
 			} else {
 				if _, fkTableDef, err = ctx.ResolveById(fk.ForeignTbl, snapshot); err != nil {
-					return "", "", nil, err
+					return "", nil, err
 				}
 				if fkTableDef, err = updateFKTableDef(fkTableDef); err != nil {
-					return "", "", nil, err
+					return "", nil, err
 				}
 			}
 		}
 
 		// fkTable may not exist in snapshot restoration
 		if fkTableDef == nil {
-			return "", "", nil, moerr.NewInternalErrorNoCtxf(
+			return "", nil, moerr.NewInternalErrorNoCtxf(
 				"can't find fkTable from fk %s.%s.(%s) {%s}",
 				tableDef.DbName, tableDef.Name,
 				strings.Join(colOriginNames, ","),
@@ -708,7 +710,7 @@ func constructCreateTableSQLWithCommentFormat(
 			}
 			defaults, err := GetDatabaseDefaults(ctx, database, snapshot)
 			if err != nil {
-				return "", "", nil, err
+				return "", nil, err
 			}
 			if defaults != nil && defaults.Version != 0 && defaults.Collation != "utf8mb4_general_ci" {
 				charsetContext = nil
@@ -761,7 +763,7 @@ func constructCreateTableSQLWithCommentFormat(
 
 			meta, err := ps.GetPartitionMetadata(newCtx, tableDef.GetTblId(), txn)
 			if err != nil {
-				return "", "", nil, err
+				return "", nil, err
 			}
 
 			partitionBy += meta.Description
@@ -830,14 +832,14 @@ func constructCreateTableSQLWithCommentFormat(
 
 	if tableDef.TableType == catalog.SystemExternalRel {
 		if env, found, parseErr := sqliceberg.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql); parseErr != nil {
-			return "", "", nil, parseErr
+			return "", nil, parseErr
 		} else if found {
 			createStr += formatIcebergTableOptionsForShowCreate(env, sqlMode)
 			var stmt tree.Statement
 			if ctx != nil {
 				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
 			}
-			return createStr, createStr, stmt, err
+			return createStr, stmt, err
 		}
 		if len(mongoColumns) > 0 {
 			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope, sqlMode)
@@ -845,50 +847,50 @@ func constructCreateTableSQLWithCommentFormat(
 			if ctx != nil {
 				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
 			}
-			return createStr, createStr, stmt, err
+			return createStr, stmt, err
 		}
 		if dsCfg, found, parseErr := IsDataStreamTableDef(ctx.GetContext(), tableDef); parseErr != nil {
-			return "", "", nil, parseErr
+			return "", nil, parseErr
 		} else if found {
 			createStr += formatDataStreamTableOptionsForShowCreate(dsCfg, sqlMode)
 			var stmt tree.Statement
 			if ctx != nil {
 				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
 			}
-			return createStr, createStr, stmt, err
+			return createStr, stmt, err
 		}
 		if fCfg, found, parseErr := IsForeignTableDef(ctx.GetContext(), tableDef); parseErr != nil {
-			return "", "", nil, parseErr
+			return "", nil, parseErr
 		} else if found {
 			createStr += formatForeignTableOptionsForShowCreate(fCfg, sqlMode)
 			var stmt tree.Statement
 			if ctx != nil {
 				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
 			}
-			return createStr, createStr, stmt, err
+			return createStr, stmt, err
 		}
 		if kCfg, found, parseErr := IsKafkaTableDef(ctx.GetContext(), tableDef); parseErr != nil {
-			return "", "", nil, parseErr
+			return "", nil, parseErr
 		} else if found {
 			createStr += formatKafkaTableOptionsForShowCreate(kCfg, sqlMode)
 			var stmt tree.Statement
 			if ctx != nil {
 				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
 			}
-			return createStr, createStr, stmt, err
+			return createStr, stmt, err
 		}
 
 		param := &tree.ExternParam{}
 		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
-			return "", "", nil, err
+			return "", nil, err
 		}
 		if param.ScanType == tree.S3 {
 			if err = InitS3Param(param); err != nil {
-				return "", "", nil, err
+				return "", nil, err
 			}
 		} else {
 			if err = InitInfileParam(param); err != nil {
-				return "", "", nil, err
+				return "", nil, err
 			}
 		}
 		createStr += formatExternalTableOptionsForShowCreate(param, sqlMode)
@@ -950,10 +952,15 @@ func constructCreateTableSQLWithCommentFormat(
 	for _, pair := range rewritePairs {
 		replayStr = strings.Replace(replayStr, pair.display, pair.rewrite, 1)
 	}
+	// replayOut, when non-nil, receives the replay form so this builder's
+	// long-standing error exits stay unchanged.
+	if replayOut != nil {
+		*replayOut = replayStr
+	}
 	if ctx != nil {
 		stmt, err = getRewriteSQLStmtWithSQLMode(ctx, replayStr, sqlMode)
 	}
-	return createStr, replayStr, stmt, err
+	return createStr, stmt, err
 }
 
 func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableCharset uint32) {
