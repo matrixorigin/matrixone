@@ -475,7 +475,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 		{30, "db2.t2", "select * from db2.t2 where age > 30"},
 	})
 
-	cache, err := loadRuleCache(context.Background(), ses)
+	cache, err := readRoleRules(context.Background(), bh, ses.GetTenantInfo())
 	require.NoError(t, err)
 	rules, err := cache.forSQLMode(context.Background(), "")
 	require.NoError(t, err)
@@ -512,7 +512,7 @@ func TestRoleRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 		{10, "db1.t1", "select a from"},
 	})
 
-	cache, err := loadRuleCache(context.Background(), ses)
+	cache, err := readRoleRules(context.Background(), bh, ses.GetTenantInfo())
 	require.NoError(t, err)
 	_, err = cache.forSQLMode(context.Background(), "")
 	require.Error(t, err)
@@ -609,6 +609,7 @@ func TestRewriteSQLStatementInputPreservesSource(t *testing.T) {
 }
 
 func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
+	stubSeededRoleRuleCache(t)
 	ctx := context.Background()
 	newSession := func(t *testing.T, roleRule, sessionRule string) *Session {
 		t.Helper()
@@ -800,6 +801,7 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 }
 
 func TestRewritePolicySnapshotUsesCurrentSQLModeAndFrozenEnablement(t *testing.T) {
+	stubSeededRoleRuleCache(t)
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)

@@ -412,6 +412,7 @@ func TestTxnComputationWrapperCompileRefreshesProfileForBinaryExecute(t *testing
 }
 
 func Test_mce(t *testing.T) {
+	stubSeededRoleRuleCache(t)
 	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 	convey.Convey("boot mce succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -607,6 +608,7 @@ func Test_mce(t *testing.T) {
 
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 		ses := NewSession(ctx, "", proto, nil)
+		ses.ruleCache = &roleRuleCache{}
 		ses.SetTenantInfo(&TenantInfo{
 			Tenant:        sysAccountName,
 			User:          rootName,
@@ -2580,6 +2582,7 @@ func TestNestedBackgroundSessionInheritsEffectiveSQLMode(t *testing.T) {
 }
 
 func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
+	stubSeededRoleRuleCache(t)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)

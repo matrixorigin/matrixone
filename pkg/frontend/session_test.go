@@ -688,6 +688,8 @@ func TestSession_Migrate(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(0)] = newMrsForInheritedRoleIdOfRoleId(nil)
+		bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{0})] = newMrsForRewriteRules(nil)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -699,21 +701,10 @@ func TestSession_Migrate(t *testing.T) {
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
 			DB:               "d1",
 			LastAffectedRows: 7,
-			PrepareStmts: []*query.PrepareStmt{
-				{Name: "p1", SQL: `select ?`},
-				{Name: "p2", SQL: `select ?`},
-				{Name: "a-b", SQL: `select ?`},
-				{Name: "select", SQL: `select ?`},
-				{Name: "a`b", SQL: `select ?`},
-				{Name: "from", SQL: `select ?`},
-			},
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, "d1", s.GetDatabaseName())
-		assert.Len(t, s.prepareStmts, 6)
-		for _, name := range []string{"a-b", "select", "a`b", "from"} {
-			assert.Contains(t, s.prepareStmts, name)
-		}
+		assert.Empty(t, s.prepareStmts)
 		assert.Equal(t, int64(7), s.GetLastAffectedRows())
 		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
 
@@ -733,6 +724,22 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Nil(t, resp)
 		assert.Equal(t, int64(0), s.GetLastAffectedRows())
 		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
+	})
+
+	t.Run("reject unverified prepared state", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		s.SetLastAffectedRows(9)
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+			DB: "d1", LastAffectedRows: 7,
+			PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select 1"}},
+		})
+		require.ErrorIs(t, err, moerr.GetOkExpectedNotSafeToStartTransfer())
+		require.Empty(t, s.prepareStmts)
+		require.Equal(t, int64(9), s.GetLastAffectedRows())
 	})
 
 	t.Run("reject user-level locks", func(t *testing.T) {

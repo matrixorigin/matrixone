@@ -31,11 +31,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
@@ -81,26 +84,35 @@ func (policy *rewritePolicySnapshot) hasRoleRules() bool {
 	return policy != nil && policy.roleRules != nil && len(policy.roleRules.first) > 0
 }
 
-func captureRoleRuleCache(ctx context.Context, ses *Session) (*roleRuleCache, error) {
-	ses.ruleCacheMu.RLock()
+var captureRoleRuleCache = func(ctx context.Context, ses *Session) (*roleRuleCache, error) {
+	if ses.GetTenantInfo() == nil {
+		return &roleRuleCache{}, nil
+	}
+	snapshot, err := authorizationReadSnapshot(ctx, ses)
+	if err != nil {
+		return nil, err
+	}
+	storage := getPu(ses.GetService()).StorageEngine
+	reader, _ := storage.(engine.TableContentReader)
+	principal := currentAuthorizationPrincipal(ses)
+
+	ses.ruleCacheMu.Lock()
 	cache := ses.ruleCache
-	ses.ruleCacheMu.RUnlock()
-	if cache != nil {
+	if cache != nil && cache.proof.valid(ctx, principal, reader, snapshot, ses.ruleCacheObserved[:]) {
+		ses.ruleCacheMu.Unlock()
 		return cache, nil
 	}
+	ses.ruleCacheMu.Unlock()
 
-	rules, err := loadRuleCache(ctx, ses)
+	rules, err := loadRoleRuleCacheAtSnapshot(ctx, ses, snapshot, storage, reader)
 	if err != nil {
 		ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
 		return nil, err
 	}
-
 	ses.ruleCacheMu.Lock()
-	defer ses.ruleCacheMu.Unlock()
-	if ses.ruleCache == nil {
-		ses.ruleCache = rules
-	}
-	return ses.ruleCache, nil
+	ses.ruleCache = rules
+	ses.ruleCacheMu.Unlock()
+	return rules, nil
 }
 
 func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
@@ -291,6 +303,20 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 		rewritten += ";"
 	}
 	return rewritten, nil
+}
+
+// Catalog load errors permit only a complete, standalone transaction end.
+func isStandaloneRoleRuleTxnEnd(ctx context.Context, sql, sqlMode string) bool {
+	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, sqlMode)
+	if err != nil {
+		return false
+	}
+	defer stmt.Free()
+	switch stmt.(type) {
+	case *tree.CommitTransaction, *tree.RollbackTransaction:
+		return true
+	}
+	return false
 }
 
 // A broken rule must not prevent ending a transaction, dropping secondary roles,
@@ -514,12 +540,15 @@ func applyRoleRulesToSetExpression(execCtx *ExecCtx, ses *Session, stmt *tree.Se
 }
 
 func (prepared *PrepareStmt) checkRoleRulePolicy(ctx context.Context, ses *Session) error {
-	if prepared.roleRules == nil {
-		return nil
-	}
 	current, err := captureRoleRuleCache(ctx, ses)
 	if err != nil {
 		return err
+	}
+	if prepared.roleRules == nil {
+		if len(current.first) > 0 {
+			return moerr.NewInvalidInput(ctx, "prepared statement is missing its active role rules; prepare it again")
+		}
+		return nil
 	}
 	if len(prepared.roleRules.first) == 0 && len(current.first) == 0 {
 		return nil
@@ -769,6 +798,7 @@ func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMe
 // Catalog text is immutable after publication. Each request keeps the captured
 // generation, but each statement interprets it under its own parser mode.
 type roleRuleCache struct {
+	proof      roleRuleCacheProof
 	first      map[string]string
 	later      map[string][]string // competing rules only, in active-role priority order
 	hasNonUTF8 bool
@@ -849,15 +879,90 @@ func roleRuleHintSQL(ctx context.Context, rule string, mode mysql.SQLModeFlags) 
 	return "", moerr.NewInvalidInput(ctx, "rewrite rule contains invalid UTF-8 outside binary literals")
 }
 
-func loadRuleCache(ctx context.Context, ses *Session) (*roleRuleCache, error) {
-	rules := &roleRuleCache{first: make(map[string]string)}
-	tenant := ses.GetTenantInfo()
-	if tenant == nil {
-		return rules, nil
-	}
+const roleRuleDependencyCount = 4
 
-	bh := ses.GetBackgroundExec(ctx)
+type roleRuleCacheProof struct {
+	principal    authorizationPrincipal
+	snapshot     timestamp.Timestamp
+	dependencies [roleRuleDependencyCount]engine.TableContentDependency
+	versions     [roleRuleDependencyCount]engine.TableContentVersion
+}
+
+func (proof *roleRuleCacheProof) valid(ctx context.Context, principal authorizationPrincipal, reader engine.TableContentReader, snapshot timestamp.Timestamp, observed []engine.TableContentVersion) bool {
+	return reader != nil && !proof.snapshot.IsEmpty() && !snapshot.Less(proof.snapshot) &&
+		proof.principal == principal &&
+		reader.ReadTableContentVersions(ctx, snapshot, proof.dependencies[:], observed) &&
+		slices.Equal(observed, proof.versions[:])
+}
+
+func captureRoleRuleCacheProof(ctx context.Context, ses *Session, bh BackgroundExec, snapshot timestamp.Timestamp, storage engine.Engine, reader engine.TableContentReader) (proof roleRuleCacheProof) {
+	if reader == nil || snapshot.IsEmpty() {
+		return proof
+	}
+	txnSource, ok := bh.(interface{ GetTxnOperator() TxnOperator })
+	if !ok {
+		return proof
+	}
+	op := txnSource.GetTxnOperator()
+	if op == nil || !op.SnapshotTS().Equal(snapshot) || op.Txn().Isolation != pbtxn.TxnIsolation_SI || !op.TxnOptions().ReadOnly() {
+		return proof
+	}
+	proof.principal = currentAuthorizationPrincipal(ses)
+	// The physical rule and role-grant tables provide data versions. The
+	// system table catalog also covers changes to their name bindings.
+	names := [roleRuleDependencyCount]string{catalog.MO_ROLE_RULE, "mo_user_grant", "mo_role_grant", catalog.MO_TABLES}
+	for i, name := range names {
+		account := proof.principal.account
+		if name == catalog.MO_TABLES {
+			account = sysAccountID
+		}
+		tableCtx := defines.AttachAccountId(ctx, account)
+		db, err := storage.Database(tableCtx, catalog.MO_CATALOG, op)
+		if err != nil {
+			return roleRuleCacheProof{}
+		}
+		dbID, err := strconv.ParseUint(db.GetDatabaseId(tableCtx), 10, 64)
+		if err != nil {
+			return roleRuleCacheProof{}
+		}
+		relation, err := db.Relation(tableCtx, name, nil)
+		if err != nil || relation == nil {
+			return roleRuleCacheProof{}
+		}
+		tableID := relation.GetTableID(tableCtx)
+		if err := storage.TryToSubscribeTable(tableCtx, uint64(account), dbID, tableID, catalog.MO_CATALOG, name); err != nil {
+			return roleRuleCacheProof{}
+		}
+		proof.dependencies[i] = engine.TableContentDependency{DatabaseID: dbID, TableID: tableID}
+	}
+	if reader.ReadTableContentVersions(ctx, snapshot, proof.dependencies[:], proof.versions[:]) {
+		proof.snapshot = snapshot
+	}
+	return proof
+}
+
+func loadRoleRuleCacheAtSnapshot(ctx context.Context, ses *Session, snapshot timestamp.Timestamp, storage engine.Engine, reader engine.TableContentReader) (rules *roleRuleCache, err error) {
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, readSnapshot: snapshot})
 	defer bh.Close()
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return nil, err
+	}
+	defer func() { err = finishTxn(ctx, bh, err) }()
+
+	proof := captureRoleRuleCacheProof(ctx, ses, bh, snapshot, storage, reader)
+	rules, err = readRoleRules(ctx, bh, ses.GetTenantInfo())
+	if err != nil {
+		return nil, err
+	}
+	var observed [roleRuleDependencyCount]engine.TableContentVersion
+	if proof.valid(ctx, currentAuthorizationPrincipal(ses), reader, snapshot, observed[:]) {
+		rules.proof = proof
+	}
+	return rules, nil
+}
+
+func readRoleRules(ctx context.Context, bh BackgroundExec, tenant *TenantInfo) (*roleRuleCache, error) {
+	rules := &roleRuleCache{first: make(map[string]string)}
 
 	roleIDs, err := loadActiveRoleIDsForRuleCache(ctx, bh, tenant)
 	if err != nil {
@@ -1411,20 +1516,24 @@ func escapeSQLString(s string) string {
 }
 
 // handleAlterRoleAddRule verifies role existence, then inserts or updates a mo_role_rule record.
-func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleAddRule) error {
+func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleAddRule) (err error) {
 	ctx := execCtx.reqCtx
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	// Begin transaction
-	err := bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
+	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
 	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+		if err == nil {
+			ses.ruleCacheMu.Lock()
+			ses.ruleCache = nil
+			ses.ruleCacheMu.Unlock()
+		}
+	}()
 
 	// Step 1: Verify role exists and get role_id
 	sqlStr, err := getSqlForRoleIdOfRole(ctx, stmt.RoleName)
@@ -1461,32 +1570,28 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 		return err
 	}
 
-	// Invalidate current session's rule cache after successful rule modification
-	// Note: This only affects the current session. Other sessions using the same role
-	// will need to reconnect or execute SET ROLE to refresh their cache.
-	// TODO: Implement cross-session cache invalidation for better consistency.
-	ses.ruleCacheMu.Lock()
-	ses.ruleCache = nil
-	ses.ruleCacheMu.Unlock()
-
-	return err
+	return nil
 }
 
 // handleAlterRoleDropRule verifies role and rule existence, then deletes the mo_role_rule record.
-func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleDropRule) error {
+func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleDropRule) (err error) {
 	ctx := execCtx.reqCtx
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	// Begin transaction
-	err := bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
+	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
 	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+		if err == nil {
+			ses.ruleCacheMu.Lock()
+			ses.ruleCache = nil
+			ses.ruleCacheMu.Unlock()
+		}
+	}()
 
 	// Step 1: Verify role exists and get role_id
 	sqlStr, err := getSqlForRoleIdOfRole(ctx, stmt.RoleName)
@@ -1530,15 +1635,7 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 		return err
 	}
 
-	// Invalidate current session's rule cache after successful rule modification
-	// Note: This only affects the current session. Other sessions using the same role
-	// will need to reconnect or execute SET ROLE to refresh their cache.
-	// TODO: Implement cross-session cache invalidation for better consistency.
-	ses.ruleCacheMu.Lock()
-	ses.ruleCache = nil
-	ses.ruleCacheMu.Unlock()
-
-	return err
+	return nil
 }
 
 // handleShowRules queries and returns all rewrite rules for the specified role.

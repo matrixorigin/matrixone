@@ -56,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -3562,12 +3563,24 @@ func mayNeedSQLModeStaging(sql string) bool {
 		return false
 	}
 	lower := strings.ToLower(sql)
-	return strings.Contains(lower, "sql_mode") || strings.Contains(lower, "role")
+	return strings.Contains(lower, "sql_mode") || strings.Contains(lower, "role") ||
+		strings.Contains(lower, "grant") || strings.Contains(lower, "revoke") || strings.Contains(lower, "drop")
 }
 
 func changesStatementPolicy(stmt tree.Statement) bool {
-	_, changesRole := stmt.(*tree.SetRole)
-	return changesRole || isSessionSQLModeSet(stmt)
+	return changesRoleRuleCatalog(stmt) || isSessionSQLModeSet(stmt)
+}
+
+func changesRoleRuleCatalog(stmt tree.Statement) bool {
+	switch s := stmt.(type) {
+	case *tree.SetRole, *tree.AlterRoleAddRule, *tree.AlterRoleDropRule, *tree.DropRole, *tree.DropUser:
+		return true
+	case *tree.Grant:
+		return s.Typ == tree.GrantTypeRole
+	case *tree.Revoke:
+		return s.Typ == tree.RevokeTypeRole
+	}
+	return false
 }
 
 func prepareSQLModeStagedExecution(
@@ -5057,7 +5070,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 
 		if stagedSQLMode && hasMoreStatements {
-			if _, changedRole := stmt.(*tree.SetRole); changedRole && input.rewritePolicy != nil {
+			// Restore the outer context after a statement's nested operations.
+			ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+			if changesRoleRuleCatalog(stmt) && input.rewritePolicy != nil {
+				execCtx.authorizationMu.Lock()
+				execCtx.authorizationSnapshot = timestamp.Timestamp{}
+				execCtx.authorizationMu.Unlock()
 				policy, policyErr := input.rewritePolicy.withCurrentRoleRules(execCtx.reqCtx, ses)
 				if policyErr != nil {
 					return policyErr
@@ -5066,10 +5084,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				refreshedInput.rewritePolicy = policy
 				input = &refreshedInput
 			}
-			// SET expressions may execute an internal query, which temporarily
-			// replaces the compiler context's ExecCtx. Restore this outer query
-			// before planning the next staged statement.
-			ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 			nextInput, remaining, nextErr := nextSQLModeStatementInput(
 				execCtx.reqCtx,
 				ses,
@@ -5275,17 +5289,19 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// Capture policy before choosing a query execution path.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
 		if rewriteErr != nil {
-			ses.resetDiagnostics()
-			markRowCountFailed(ses, ses.GetProc())
-			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
-			return resp, nil
+			if !isStandaloneRoleRuleTxnEnd(execCtx.reqCtx, query, sessionSQLModeForParser(ses)) {
+				ses.resetDiagnostics()
+				markRowCountFailed(ses, ses.GetProc())
+				return NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr), nil
+			}
+			rewritePolicy = &rewritePolicySnapshot{}
 		}
 		// Sidecar offload: intercept /*+ SIDECAR */ or /*+ SIDECAR GPU */ hint
 		// before normal processing. If sidecar is not configured, silently
 		// fall through to normal MO execution.
 		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
 			ses.addSqlCount(1)
-			if rewritePolicy.hasRoleRules() || sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
+			if rewriteErr != nil || rewritePolicy.hasRoleRules() || sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
 				query = stripSidecarHint(query)
 			} else {
 				err = handleSidecarOffload(ses, execCtx, query, useGPU)

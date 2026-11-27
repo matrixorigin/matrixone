@@ -33,7 +33,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// Insert source SELECTs own the complete rewrite option. Other expression
+// binders inherit the mandatory policies from the enclosing INSERT.
+func (stmtBinder *BindContext) bindInsertRoleRules(stmt *tree.Insert) {
+	if stmt.Rows != nil && stmt.Rows.RewriteOption != nil && len(stmt.Rows.RewriteOption.RoleRules) > 0 {
+		rules := stmt.Rows.RewriteOption.RoleRules
+		stmtBinder.remapOption = &tree.RewriteOption{Rewrites: rules, RoleRules: rules}
+	}
+}
+
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext) (int32, error) {
+	bindCtx.bindInsertRoleRules(stmt)
 	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
 	// CHAR/VARCHAR writes to truncation instead of rejection.
 	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil

@@ -237,6 +237,14 @@ func newMrsForSleep(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+// Protocol fixtures use mock storage without a role catalog. Return a typed
+// empty policy result for the authenticated fixture role.
+func stubEmptyRoleRuleRows(bh *backgroundExecTest, tenant *TenantInfo) {
+	roleID := int64(tenant.GetDefaultRoleID())
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(roleID)] = newMrsForInheritedRoleIdOfRoleId(nil)
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{roleID})] = newMrsForRewriteRules(nil)
+}
+
 func TestKill(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connect
@@ -276,6 +284,7 @@ func TestKill(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		tenant := upstream.GetTenantInfo()
+		stubEmptyRoleRuleRows(bh, tenant)
 		bh.sql2result[getSqlForActiveRolesForAuthorization(tenant, true)] = newMrsForRoleIdOfUserId([][]interface{}{{int64(tenant.GetUserID())}})
 		return bh
 	})
@@ -1733,6 +1742,13 @@ func TestMysqlResultSet(t *testing.T) {
 	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
+	policy := gostub.Stub(&NewBackgroundExec, func(_ context.Context, upstream FeSession, _ ...*BackgroundExecOption) BackgroundExec {
+		bh := &backgroundExecTest{}
+		bh.init()
+		stubEmptyRoleRuleRows(bh, upstream.GetTenantInfo())
+		return bh
+	})
+	defer policy.Reset()
 
 	noResultSet := make(map[string]bool)
 	resultSet := make(map[string]*result)

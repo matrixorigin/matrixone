@@ -121,12 +121,13 @@ func TestRewritePolicySavedResult(t *testing.T) {
 						// Fresh sessions isolate rewrite correctness from policy-cache invalidation.
 						conn := connect(t)
 						if tc.name == "combined" {
+							// Saved and live rows both follow the mandatory policy.
 							_, err := conn.ExecContext(ctx, "set enable_remap_hint=0")
 							require.NoError(t, err)
-							read(t, conn, "/* save_result */ select * from rewrite_saved.t order by id", []string{"id", "secret"}, [][]int{{1, 10}, {2, 20}})
+							read(t, conn, "/* save_result */ select * from rewrite_saved.t order by id", tc.columns, tc.rows)
 							var id string
 							require.NoError(t, conn.QueryRowContext(ctx, "select last_query_id()").Scan(&id))
-							read(t, conn, fmt.Sprintf("select * from result_scan('%s') as saved order by id", id), []string{"id", "secret"}, [][]int{{1, 10}, {2, 20}})
+							read(t, conn, fmt.Sprintf("select * from result_scan('%s') as saved order by id", id), tc.columns, tc.rows)
 							_, err = conn.ExecContext(ctx, "set enable_remap_hint=1")
 							require.NoError(t, err)
 						}
