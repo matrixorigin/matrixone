@@ -22,9 +22,13 @@ jobs:
       github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' &&
       github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-worker.yaml@refs/heads/weilu-runner-test' &&
       github.run_attempt == 1 && (inputs.group == 0 || inputs.group == 1) && inputs.ticket != '' &&
-      (!fromJSON(inputs.ticket).site || contains(fromJSON('["mty","jed","mnl2","ruh"]'), fromJSON(inputs.ticket).site))
+      (!fromJSON(inputs.ticket).site || contains(fromJSON('["mty","jed","mnl2","ruh"]'), fromJSON(inputs.ticket).site)) &&
+      (!fromJSON(inputs.ticket).scale_set || (!fromJSON(inputs.ticket).site &&
+      contains(fromJSON('["cs-mnl2-nc-n0-pr-v1","cs-mnl2-nc-n1-pr-v1","cs-mnl2-nc-n2-pr-v1","cs-ruh-nc-n0-pr-v1","cs-ruh-nc-n1-pr-v1","cs-ruh-nc-n2-pr-v1"]'), fromJSON(inputs.ticket).scale_set)))
     runs-on: >-
-      ${{ fromJSON(fromJSON(inputs.ticket || '{}').site &&
+      ${{ fromJSON(fromJSON(inputs.ticket || '{}').scale_set &&
+      format('["{0}"]', fromJSON(inputs.ticket || '{}').scale_set) ||
+      fromJSON(inputs.ticket || '{}').site &&
       format('["cs-node-cache-7c14g","cs-{0}-node-cache-all"]', fromJSON(inputs.ticket || '{}').site) ||
       '["cs-node-cache-7c14g"]') }}
     environment: ci
@@ -34,7 +38,7 @@ jobs:
       uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
         repository: matrixorigin/CI
-        ref: 27887597968a080f78e942fc54636e5b9354033c
+        ref: 4ef594a63bf7fd8c584e62e108be8faa5e2358d4
         path: .standby
         sparse-checkout: |
           scripts/coverage_standby.py

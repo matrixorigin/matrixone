@@ -6,6 +6,7 @@ on:
       head: {type: string, required: true}
       source: {type: string, required: true}
       enable_cs_site_retry: {type: boolean, default: false}
+      first_pool_snapshot: {type: string, default: ''}
       enable_4_2_dev: {type: boolean, required: false, default: false}
     secrets:
       TOKEN_ACTION: {required: false}
@@ -19,7 +20,7 @@ jobs:
       github.repository == 'matrixorigin/matrixone' && github.event_name == 'push' &&
       github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-pr32922.yaml@refs/heads/weilu-runner-test' &&
       github.actor == 'Ariznawlll' && github.run_attempt == 1 &&
-      github.event.before == '4dd4ab4dee6dc2386c8654f45d91098a980a0913'
+      github.event.before == '39faeecc15aaeb43b788c37cf4c49a327e230056'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     environment: ci
@@ -32,7 +33,7 @@ jobs:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
         repository: matrixorigin/CI
-        ref: 27887597968a080f78e942fc54636e5b9354033c
+        ref: 4ef594a63bf7fd8c584e62e108be8faa5e2358d4
         path: .standby
         sparse-checkout: |
           scripts/coverage_standby.py
@@ -57,6 +58,7 @@ jobs:
         HEAD: ${{ inputs.head }}
         SOURCE: ${{ inputs.source }}
         COVERAGE_CS_SITE_RETRY: ${{ inputs.enable_cs_site_retry }}
+        COVERAGE_CS_FIRST_POOL_SNAPSHOT: ${{ inputs.first_pool_snapshot }}
         ACTIONS_TOKEN: ${{ github.token }}
       run: python3 -I .coverage-trial/.github/standby-trial/ci495_trial.py choose
     - name: Release exactly one worker
@@ -75,6 +77,7 @@ jobs:
         POOL: ${{ steps.select.outputs.pool }}
         GROUP: ${{ inputs.group }}
         COVERAGE_CS_SITE: ${{ steps.select.outputs.site }}
+        COVERAGE_CS_SCALE_SET: ${{ steps.select.outputs.scale_set }}
         ACTIONS_TOKEN: ${{ github.token }}
       run: python3 -I .coverage-trial/.github/standby-trial/ci495_trial.py wait
     - name: Cancel the selected worker if the selector stops

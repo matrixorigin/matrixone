@@ -11,7 +11,7 @@ ENTRY = ".github/workflows/coverage-standby-pr32922.yaml"
 WORKER = ".github/workflows/coverage-standby-worker.yaml"
 SOURCE = "Ariznawlll/matrixone"
 HEAD = "02db9ac905295aedf2ea3ae0edf46e01778177ea"
-PIN = "27887597968a080f78e942fc54636e5b9354033c"
+PIN = "4ef594a63bf7fd8c584e62e108be8faa5e2358d4"
 
 
 def main():
