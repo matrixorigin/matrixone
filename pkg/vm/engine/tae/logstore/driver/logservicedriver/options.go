@@ -31,12 +31,16 @@ const (
 	DefaultMaxTimeout          = time.Minute * 3
 	DefaultOneTryTimeout       = time.Minute
 	DefaultClientMaxEntryCount = 50
+	// The Log Service default is 100 MiB. Keep space for the LogRecord and
+	// RPC envelope even when TN's own RPC limit is configured higher.
+	DefaultMaxWALRecordSize = 99 * mpool.MB
 )
 
 type Config struct {
 	ClientMaxCount      int
 	ClientBufSize       int
 	ClientMaxEntryCount int
+	MaxWALRecordSize    int
 
 	MaxTimeout time.Duration
 
@@ -94,6 +98,12 @@ func WithConfigOptClientBufSize(bufSize int) ConfigOption {
 	}
 }
 
+func WithConfigOptMaxWALRecordSize(size int) ConfigOption {
+	return func(cfg *Config) {
+		cfg.MaxWALRecordSize = size
+	}
+}
+
 func WithConfigOptMaxTimeout(timeout time.Duration) ConfigOption {
 	return func(cfg *Config) {
 		cfg.MaxTimeout = timeout
@@ -148,6 +158,9 @@ func (cfg *Config) fillDefaults() {
 	}
 	if cfg.ClientMaxEntryCount <= 0 {
 		cfg.ClientMaxEntryCount = DefaultClientMaxEntryCount
+	}
+	if cfg.MaxWALRecordSize <= 0 {
+		cfg.MaxWALRecordSize = DefaultMaxWALRecordSize
 	}
 	if cfg.ClientRetryTimes <= 0 {
 		cfg.ClientRetryTimes = DefaultRetryTimes

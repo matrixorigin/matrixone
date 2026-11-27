@@ -17,6 +17,7 @@ package tnservice
 import (
 	"testing"
 
+	btoml "github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/assert"
@@ -57,4 +58,12 @@ func TestDefaulValue(t *testing.T) {
 	c := Config{}
 	c.SetDefaultValue()
 	assert.Equal(t, options.DefaultCheckpointIncrementalInterval, c.Ckp.IncrementalInterval.Duration)
+}
+
+func TestLogServiceMaxWALRecordSizeConfig(t *testing.T) {
+	cfg := Config{}
+	_, err := btoml.Decode("[LogService]\nmax-wal-record-size = '64MiB'\nreceiver-max-message-size = '32MiB'", &cfg)
+	assert.NoError(t, err)
+	assert.Equal(t, toml.ByteSize(64*1024*1024), cfg.LogService.MaxWALRecordSize)
+	assert.Equal(t, toml.ByteSize(32*1024*1024), cfg.LogService.ReceiverMaxMessageSize)
 }

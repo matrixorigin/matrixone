@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -24,19 +25,47 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
+	"golang.org/x/sync/semaphore"
 )
 
 type commandManager struct {
-	cmd    *txnbase.TxnCmd
-	lsn    uint64
-	csn    uint32
-	driver wal.Store
+	cmd           *txnbase.TxnCmd
+	lsn           uint64
+	csn           uint32
+	driver        wal.Store
+	maxWalSize    int
+	preparedEntry entry.Entry
+	preparedSize  int
+	walBudget     *semaphore.Weighted
+}
+
+// Retain at most 4 KiB of serialized data per queued transaction. Large
+// records are encoded again when they enter the WAL stage.
+const maxRetainedPreflightRecordSize = 4 * 1024
+
+// The append queues admit by count. Bound their additional encoded WAL payload
+// while allowing many small records to be in flight.
+const maxOutstandingEncodedWALBytes = 4 * MaxWalSize
+
+var encodedWALBudget = semaphore.NewWeighted(maxOutstandingEncodedWALBytes)
+
+type largeWALRecordEntry struct {
+	entry.Entry
+	budget *semaphore.Weighted
+	size   int64
+}
+
+func (e *largeWALRecordEntry) Free() {
+	e.Entry.Free()
+	e.budget.Release(e.size)
 }
 
 func newCommandManager(driver wal.Store) *commandManager {
 	return &commandManager{
-		cmd:    txnbase.NewTxnCmd(),
-		driver: driver,
+		cmd:        txnbase.NewTxnCmd(),
+		driver:     driver,
+		maxWalSize: MaxWalSize,
+		walBudget:  encodedWALBudget,
 	}
 }
 
@@ -53,70 +82,116 @@ func (mgr *commandManager) AddCmd(cmd txnif.TxnCmd) {
 	mgr.csn++
 }
 
-func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry, err error) {
-	if mgr.driver == nil {
-		return
+func (mgr *commandManager) discardPreparedRecord() {
+	if mgr.preparedEntry != nil {
+		mgr.preparedEntry.Free()
+		mgr.preparedEntry = nil
+		mgr.preparedSize = 0
 	}
+}
 
+func (mgr *commandManager) PreflightTxnRecord(store *txnStore) (err error) {
+	if mgr.driver == nil || mgr.preparedEntry != nil {
+		return nil
+	}
+	logEntry, walSize, err := mgr.marshalTxnRecord(store)
+	if err != nil {
+		return err
+	}
+	if walSize > maxRetainedPreflightRecordSize {
+		logEntry.Free()
+	} else {
+		mgr.preparedEntry = logEntry
+		mgr.preparedSize = walSize
+	}
+	return nil
+}
+
+func (mgr *commandManager) marshalTxnRecord(store *txnStore) (logEntry entry.Entry, walSize int, err error) {
 	mgr.cmd.SetTxn(store.txn)
 
-	store.AddEvent(txnif.WalPreparing)
+	t1 := time.Now()
+	buf, err := mgr.cmd.MarshalBinary()
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(buf) > mgr.maxWalSize {
+		return nil, 0, wal.NewRecordTooLargeError(len(buf), mgr.maxWalSize)
+	}
 
 	logEntry = entry.GetBase()
 	info := &entry.Info{Group: wal.GroupUserTxn}
 	logEntry.SetInfo(info)
-	logEntry.SetApproxPayloadSize(mgr.cmd.ApproxSize())
-
-	logEntry.RegisterGroupWalPreCallbacks(func() error {
-		defer func() {
-			store.DoneEvent(txnif.WalPreparing)
-		}()
-
-		var (
-			err2 error
-			buf  []byte
-			t1   = time.Now()
-		)
-
-		// MarshalBinary already uses sync.Pool internally and handles copy
-		if buf, err2 = mgr.cmd.MarshalBinary(); err2 != nil {
-			return err2
+	logEntry.SetApproxPayloadSize(int64(len(buf)))
+	logEntry.SetType(IOET_WALEntry_TxnRecord)
+	if err = logEntry.SetPayload(buf); err != nil {
+		logEntry.Free()
+		return nil, 0, err
+	}
+	infoBuf, err := info.Marshal()
+	if err != nil {
+		logEntry.Free()
+		return nil, 0, err
+	}
+	logEntry.SetInfoBuf(infoBuf)
+	if validator, ok := mgr.driver.(interface{ ValidateUserTxnRecordSize(int) error }); ok {
+		// driver/entry.Entry adds the 8-byte DSN to the complete base entry,
+		// including the fixed-size Info buffer materialized above.
+		if err = validator.ValidateUserTxnRecordSize(logEntry.TotalSize() + 8); err != nil {
+			logEntry.Free()
+			return nil, 0, err
 		}
+	}
+	logutil.Debugf("Marshal Command Size=%d", len(buf))
+	if len(buf) > 10*mpool.MB {
+		logutil.Info("BIG-TXN", zap.Int("wal-size", len(buf)), zap.String("txn", store.txn.String()))
+	}
+	if dur := time.Since(t1); dur >= time.Millisecond*500 {
+		logutil.Warn("SlOW-LOG", zap.Int("wal-size", len(buf)),
+			zap.String("txn", store.txn.String()), zap.Duration("marshal-log-entry-duration", dur))
+	}
+	return logEntry, len(buf), nil
+}
 
-		logEntry.SetType(IOET_WALEntry_TxnRecord)
-		if err2 = logEntry.SetPayload(buf); err2 != nil {
-			return err2
+func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry, err error) {
+	if mgr.driver == nil {
+		return
+	}
+	var walSize int
+	if mgr.preparedEntry != nil {
+		logEntry = mgr.preparedEntry
+		walSize = mgr.preparedSize
+		mgr.preparedEntry = nil
+		mgr.preparedSize = 0
+	} else {
+		// Reserve the maximum before serialization, then retain only the
+		// actual encoded payload size until the entry is freed after WAL.
+		if err = mgr.walBudget.Acquire(context.Background(), int64(mgr.maxWalSize)); err != nil {
+			return nil, err
 		}
-
-		logutil.Debugf("Marshal Command LSN=%d, Size=%d", info.GroupLSN, len(buf))
-
-		if len(buf) > 10*mpool.MB {
-			logutil.Info(
-				"BIG-TXN",
-				zap.Int("wal-size", len(buf)),
-				zap.Uint64("lsn", info.GroupLSN),
-				zap.String("txn", store.txn.String()),
-			)
+		if logEntry, walSize, err = mgr.marshalTxnRecord(store); err != nil {
+			mgr.walBudget.Release(int64(mgr.maxWalSize))
+			return nil, err
 		}
-
-		if dur := time.Since(t1); dur >= time.Millisecond*500 {
-			logutil.Warn(
-				"SlOW-LOG",
-				zap.Int("wal-size", len(buf)),
-				zap.Uint64("lsn", info.GroupLSN),
-				zap.String("txn", store.txn.String()),
-				zap.Duration("marshal-log-entry-duration", dur),
-			)
+		if walSize > maxRetainedPreflightRecordSize {
+			mgr.walBudget.Release(int64(mgr.maxWalSize - walSize))
+			logEntry = &largeWALRecordEntry{Entry: logEntry, budget: mgr.walBudget, size: int64(walSize)}
+		} else {
+			mgr.walBudget.Release(int64(mgr.maxWalSize))
 		}
-
-		return nil
-	})
+		mgr.preparedSize = 0
+	}
 
 	t2 := time.Now()
 	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupUserTxn, logEntry)
+	if err != nil {
+		logEntry.Free()
+		logEntry = nil
+	}
 	if dur := time.Since(t2); dur >= time.Millisecond*20 {
 		logutil.Warn(
 			"SlOW-LOG",
+			zap.Int("wal-size", walSize),
 			zap.Uint64("lsn", mgr.lsn),
 			zap.String("txn", store.txn.String()),
 			zap.Duration("append-log-entry-duration", dur),

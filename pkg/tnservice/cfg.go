@@ -109,6 +109,18 @@ type Config struct {
 	LogService struct {
 		// ConnectTimeout timeout for connect to logservice. Default is 30s.
 		ConnectTimeout toml.Duration `toml:"connect-timeout"`
+		// MaxWALRecordSize bounds a complete WAL record sent to Log Service.
+		// The effective limit is also capped below the TN client's RPC
+		// max-message-size to leave room for the LogRecord and RPC envelope.
+		// It must also be below every Log Service receiver's RPC
+		// max-message-size. Zero uses the default 99 MiB.
+		MaxWALRecordSize toml.ByteSize `toml:"max-wal-record-size"`
+		// ReceiverMaxMessageSize is the smallest rpc.max-message-size among
+		// Log Service voters serving this TN. Set it whenever a receiver uses
+		// a value other than the Log Service default (100 MiB). The TN caps
+		// WAL admission below this value; deployments must keep it in sync
+		// when changing a receiver's configuration.
+		ReceiverMaxMessageSize toml.ByteSize `toml:"receiver-max-message-size"`
 	}
 
 	// RPC configuration
