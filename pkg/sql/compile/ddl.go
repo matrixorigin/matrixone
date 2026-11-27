@@ -4414,6 +4414,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err := c.runSqlWithAccountIdAndOptions(dropSQL, int32(accountID), dropOpts); err != nil {
 			return err
 		}
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = plan2.WithReplacementTableFeatures(originalCtx, tableDef)
+		defer func() { c.proc.Ctx = originalCtx }()
 		return c.runSqlWithAccountIdAndOptions(createSQL, int32(accountID), createOpts)
 	}
 	if !isTemp {

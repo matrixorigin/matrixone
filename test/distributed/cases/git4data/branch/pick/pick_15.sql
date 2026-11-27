@@ -1604,3 +1604,55 @@ select k,v,tag from dst order by k;
 drop snapshot pick_window_hi;
 drop snapshot pick_window_lo;
 drop database pick_window;
+
+-- @testcase: Snapshot restore must preserve the target when fork evidence is unavailable
+create database pick_window;
+use pick_window;
+begin;
+create table root(k int primary key,v int);
+insert into root values(1,10),(2,20);
+data branch create table src from root;
+data branch create table dst from root;
+delete from dst where k=2;
+commit;
+create snapshot pick_restore_state for database pick_window;
+drop database pick_window;
+restore database pick_window {snapshot=pick_restore_state};
+use pick_window;
+create snapshot pick_window_lo for account sys;
+update src set v=52 where k=2;
+insert into src values(3,80);
+create snapshot pick_window_hi for account sys;
+-- @regex("branch history unavailable after restore", true)
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v from dst order by k;
+-- @regex("branch history unavailable after restore", true)
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst order by k;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop snapshot pick_restore_state;
+drop database pick_window;
+
+-- @testcase: Restore a parent to a snapshot taken before its surviving child forked
+create database pick_window;
+use pick_window;
+create table src(k int primary key,v int);
+insert into src values(1,10),(2,20);
+create snapshot pick_restore_state for table pick_window src;
+data branch create table dst from src;
+delete from dst where k=2;
+restore table pick_window.src {snapshot=pick_restore_state};
+create snapshot pick_window_lo for account sys;
+update src set v=52 where k=2;
+insert into src values(3,80);
+create snapshot pick_window_hi for account sys;
+-- @regex("branch history unavailable after restore", true)
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop snapshot pick_restore_state;
+drop database pick_window;

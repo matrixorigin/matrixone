@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -379,10 +380,36 @@ func WithAlterTableDDLReplay(ctx context.Context, database string, original, tar
 		return nil, err
 	}
 	ctx = WithPersistedDDLReplay(ctx, original, target)
+	ctx = WithReplacementTableFeatures(ctx, target)
 	if count := userColumnCount(target.Cols, util.TableIsClusterTable(target.TableType)); count > TableColumnCountLimit {
 		ctx = defines.WithAlterCopyColumnLimit(ctx, database, target.Name, count)
 	}
 	return ctx, nil
+}
+
+type replacementTableFeatureKey struct{}
+
+type replacementTableFeature struct {
+	name  string
+	flags uint64
+}
+
+// WithReplacementTableFeatures carries the restore protection bit through
+// a physical rewrite of the same logical table.
+func WithReplacementTableFeatures(ctx context.Context, target *planpb.TableDef) context.Context {
+	flags := target.GetFeatureFlag() & features.BranchHistoryLostOnRestore
+	if flags == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, replacementTableFeatureKey{}, replacementTableFeature{target.Name, flags})
+}
+
+func replacementTableFeatures(ctx context.Context, name string) uint64 {
+	replacement, _ := ctx.Value(replacementTableFeatureKey{}).(replacementTableFeature)
+	if strings.EqualFold(replacement.name, name) {
+		return replacement.flags
+	}
+	return 0
 }
 
 func ddlReplayForTable(ctx context.Context, tableName string) *persistedDDLReplay {

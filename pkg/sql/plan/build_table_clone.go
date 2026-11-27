@@ -24,8 +24,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -129,6 +131,18 @@ func buildCloneTable(
 
 	if createTablePlan, err = buildCreateTable(ctx, &stmt.CreateTable, stmt, false); err != nil {
 		return nil, err
+	}
+
+	if target := createTablePlan.GetDdl().GetCreateTable().GetTableDef(); target != nil {
+		target.FeatureFlag |= srcTblDef.FeatureFlag & features.BranchHistoryLostOnRestore
+		if ids, restoring := ctx.GetContext().Value(defines.RestoreBranchHistoryKey{}).(map[uint64]struct{}); restoring &&
+			!slices.Contains(catalog.SystemDatabases, srcTblDef.DbName) {
+			_, physical := ids[srcTblDef.TblId]
+			_, logical := ids[srcTblDef.LogicalId]
+			if ids == nil || physical || logical {
+				target.FeatureFlag |= features.BranchHistoryLostOnRestore
+			}
+		}
 	}
 
 	return &Plan{

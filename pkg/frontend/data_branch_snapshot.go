@@ -308,6 +308,42 @@ func compactHistoricalAlterLineageWithBH(
 	return nil
 }
 
+// withRestoreBranchHistory finds source IDs whose lineage can be disconnected
+// by physical recreation. A surviving branch can have forked after the snapshot.
+func withRestoreBranchHistory(ctx context.Context, bh BackgroundExec, snapshotTS int64) (context.Context, error) {
+	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	defer bh.ClearExecResultSet()
+	sql := fmt.Sprintf("select table_id,p_table_id from mo_catalog.mo_branch_metadata {MO_TS = %d} "+
+		"union all select table_id,p_table_id from mo_catalog.mo_branch_metadata", snapshotTS)
+	if err := bh.Exec(sysCtx, sql); err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return context.WithValue(ctx, defines.RestoreBranchHistoryKey{}, map[uint64]struct{}(nil)), nil
+		}
+		return ctx, err
+	}
+	results, err := getResultSet(sysCtx, bh)
+	if err != nil {
+		return ctx, err
+	}
+	ids := make(map[uint64]struct{})
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			child, err := result.GetUint64(sysCtx, row, 0)
+			if err != nil {
+				return ctx, err
+			}
+			parent, err := result.GetUint64(sysCtx, row, 1)
+			if err != nil {
+				return ctx, err
+			}
+			ids[child] = struct{}{}
+			ids[parent] = struct{}{}
+		}
+	}
+	return context.WithValue(ctx, defines.RestoreBranchHistoryKey{}, ids), nil
+}
+
 // loadBranchDAGWithBH reads mo_branch_metadata under the sys account and
 // returns an in-memory DAG. It is used by the frontend reclaim entry point
 // which has a BackgroundExec available.

@@ -346,6 +346,12 @@ type BgKey struct{}
 // BranchForkKeyAccess allows branch metadata operations to open the fork key catalog.
 type BranchForkKeyAccess struct{}
 
+// RestoreBranchHistoryKey carries the source physical IDs participating in
+// Data Branch at the restore snapshot. A typed nil set means the historical
+// catalog was unavailable and the restore cannot prove any table is detached
+// from the old branch history.
+type RestoreBranchHistoryKey struct{}
+
 // PublicationViewBinding marks a background statement whose only job is
 // binding the persisted metadata of a published view: identifiers keep their
 // source case in parsing, the compile stops after binding (no optimizer rule

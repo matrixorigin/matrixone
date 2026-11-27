@@ -1073,6 +1073,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		if err = preflightIcebergAccountRestore(ctx, bh, ts, uint32(accountRecord.accountId), targetAccount, targetExists); err != nil {
 			return stats, err
 		}
+		if ctx, err = withRestoreBranchHistory(ctx, bh, ts); err != nil {
+			return stats, err
+		}
 
 		restoreOtherAccount := func() (rtnErr error) {
 			var (
@@ -1150,6 +1153,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
 	}
 	if restoreLevel == tree.RESTORELEVELCLUSTER {
+		if ctx, err = withRestoreBranchHistory(ctx, bh, ts); err != nil {
+			return stats, err
+		}
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
 		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, &retiredMongoDBAccountIDs); err != nil {
 			return stats, err
@@ -1170,6 +1176,11 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		if err = preflightIcebergAccountRestore(ctx, bh, ts, tenantInfo.TenantID, tenantInfo.TenantID, true); err != nil {
 			return stats, err
 		}
+	}
+	if ctx, err = withRestoreBranchHistory(ctx, bh, ts); err != nil {
+		return stats, err
+	}
+	if restoreLevel == tree.RESTORELEVELACCOUNT {
 		if err = invalidateAccountViewMetadata(ctx, ses, bh, tenantInfo.TenantID); err != nil {
 			return stats, err
 		}

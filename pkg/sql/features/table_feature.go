@@ -22,6 +22,9 @@ const (
 	DataStreamExternal = 1 << iota
 	ForeignExternal    = 1 << iota
 	KafkaExternal      = 1 << iota
+	// BranchHistoryLostOnRestore marks a restored table whose old physical
+	// lineage and fork evidence were not reattached.
+	BranchHistoryLostOnRestore = 1 << iota
 )
 
 func IsPartitioned(f uint64) bool {
