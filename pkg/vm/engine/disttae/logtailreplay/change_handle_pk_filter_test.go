@@ -261,6 +261,66 @@ func TestHistoricalChangesCancelPendingReadsOnMissingFile(t *testing.T) {
 	}
 }
 
+func TestPersistedChangeWindowsCancelPendingReadsOnMissingFile(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		missingFirst bool
+		appendable   bool
+	}{
+		{name: "CN object missing first", missingFirst: true},
+		{name: "CN object missing second"},
+		{name: "appendable object windows", appendable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			mem, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			defer mem.Close(t.Context())
+
+			ts := types.BuildTS(100, 0)
+			slow := writeReplayTestObject(t, t.Context(), mp, mem, ts, 11)
+			missing := writeReplayTestObject(t, t.Context(), mp, mem, ts, 11)
+			objects := []*objectio.ObjectEntry{slow, missing}
+			if tc.missingFirst {
+				objects[0], objects[1] = objects[1], objects[0]
+			}
+			fs := &replayReadFailureFS{
+				FileService:   mem,
+				slowObject:    slow.ObjectName().String(),
+				missingObject: missing.ObjectName().String(),
+				missingErr:    moerr.NewFileNotFoundNoCtx(missing.ObjectName().String()),
+				started:       make(chan struct{}),
+				stopped:       make(chan struct{}),
+			}
+			scheduler := tasks.NewParallelJobScheduler(LoadParallism)
+			defer scheduler.Stop()
+			base := &baseHandle{changesHandle: &ChangeHandler{scheduler: scheduler}}
+
+			// The deadline bounds the unfixed code path. Cancellation must
+			// leave the caller's context usable for the snapshot fallback.
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			if tc.appendable {
+				handle := NewAObjectHandle(ctx, base, false, ts, ts, objects, fs, mp)
+				defer handle.Close()
+				err = handle.prefetch(ctx)
+			} else {
+				handle := NewCNObjectHandle(false, objects, fs, base, mp)
+				defer handle.Close()
+				err = handle.prefetch(ctx)
+			}
+			require.NoError(t, ctx.Err())
+			require.ErrorIs(t, err, fs.missingErr)
+			select {
+			case <-fs.stopped:
+			default:
+				t.Fatal("prefetch returned before the canceled read finished")
+			}
+		})
+	}
+}
+
 // Tombstones store the deleted user PK at seqnum 1, independently of its
 // position in the data schema. Both paths must prune the unrelated block, while
 // an unfiltered consumer must still read both blocks.

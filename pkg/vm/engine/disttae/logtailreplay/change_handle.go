@@ -1318,12 +1318,16 @@ func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fil
 }
 func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
+	readCtx, cancel := context.WithCancelCause(ctx)
 	jobs := make([]*tasks.Job, 0)
-	defer func() { releasePrefetchedChangeBlocks(jobs, h.mp) }()
+	defer func() {
+		cancel(err)
+		releasePrefetchedChangeBlocks(jobs, h.mp)
+	}()
 	blks := make([]types.Blockid, 0)
 	prefetchWidth := objectPrefetchWidth(h.maxRows, h.maxBytes)
 	bounded := h.maxRows > 0 || h.maxBytes > 0
-	for i := 0; i < prefetchWidth; i++ {
+	for i := 0; i < prefetchWidth && readCtx.Err() == nil; i++ {
 		if h.objectOffsetCursor >= len(h.objects) {
 			break
 		}
@@ -1337,7 +1341,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		h.TSs = append(h.TSs, entry.CreateTime)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 		job := prefetchObjects(
-			ctx, uint32(h.blkOffsetCursor), rowOffset, h.fs, &stats,
+			readCtx, cancel, uint32(h.blkOffsetCursor), rowOffset, h.fs, &stats,
 			h.base.changesHandle.scheduler, h.maxRows, h.maxBytes,
 			h.base.changesHandle.spillConfig, h.mp, h.base.changesHandle, h.isTombstone,
 		)
@@ -1351,7 +1355,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		putJob(job)
 		jobs[i] = nil
 		if res.Err != nil {
-			err = res.Err
+			err = context.Cause(readCtx)
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				logutil.Info("ChangesHandle-FileNotFound",
 					zap.String("err", err.Error()))
@@ -1375,7 +1379,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		}
 	}
 	h.base.changesHandle.readDuration += time.Since(t0)
-	return
+	return context.Cause(readCtx)
 }
 
 func (h *CNObjectHandle) advanceBlock(blockCount uint32) {
@@ -2092,12 +2096,16 @@ func (h *AObjectHandle) prefetch(ctx context.Context) error {
 
 func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 	t0 := time.Now()
+	readCtx, cancel := context.WithCancelCause(ctx)
 	jobs := make([]*tasks.Job, 0)
-	defer func() { releasePrefetchedChangeBlocks(jobs, h.mp) }()
+	defer func() {
+		cancel(err)
+		releasePrefetchedChangeBlocks(jobs, h.mp)
+	}()
 	blks := make([]types.Blockid, 0)
 	prefetchWidth := objectPrefetchWidth(h.maxRows, h.maxBytes)
 	bounded := h.maxRows > 0 || h.maxBytes > 0
-	for i := 0; i < prefetchWidth; i++ {
+	for i := 0; i < prefetchWidth && readCtx.Err() == nil; i++ {
 		var obj *objectio.ObjectEntry
 		var blk uint16
 		if bounded && h.pendingObject != nil {
@@ -2105,9 +2113,10 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 		} else {
 			var ok bool
 			var targetErr error
-			obj, blk, ok, targetErr = h.nextPrefetchTarget(ctx)
+			obj, blk, ok, targetErr = h.nextPrefetchTarget(readCtx)
 			if targetErr != nil {
-				err = targetErr
+				cancel(targetErr)
+				err = context.Cause(readCtx)
 				h.p.changesHandle.readDuration += time.Since(t0)
 				return
 			}
@@ -2120,7 +2129,7 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 		}
 		stats := obj.ObjectStats
 		job := prefetchObjects(
-			ctx, uint32(blk), h.blockRowOffset, h.fs, &stats,
+			readCtx, cancel, uint32(blk), h.blockRowOffset, h.fs, &stats,
 			h.p.changesHandle.scheduler, h.maxRows, h.maxBytes,
 			h.p.changesHandle.spillConfig, h.mp, h.p.changesHandle, h.isTombstone,
 		)
@@ -2132,7 +2141,7 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 		putJob(job)
 		jobs[i] = nil
 		if res.Err != nil {
-			err = res.Err
+			err = context.Cause(readCtx)
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				logutil.Info("ChangesHandle-FileNotFound",
 					zap.String("err", err.Error()))
@@ -2154,7 +2163,7 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 		}
 	}
 	h.p.changesHandle.readDuration += time.Since(t0)
-	return
+	return context.Cause(readCtx)
 }
 
 func (h *AObjectHandle) init(ctx context.Context, quick bool) (err error) {
@@ -4568,6 +4577,7 @@ func releasePrefetchedChangeBlocks(jobs []*tasks.Job, mp *mpool.MPool) {
 
 func prefetchObjects(
 	ctx context.Context,
+	cancel context.CancelCauseFunc,
 	blockID uint32,
 	rowOffset int,
 	fs fileservice.FileService,
@@ -4585,6 +4595,13 @@ func prefetchObjects(
 		stats.ObjectName().String(),
 		JTCDCLoad,
 		func(ctx context.Context) (res *tasks.JobResult) {
+			// A failed read must stop siblings even when its result follows
+			// a stalled read in replay order.
+			defer func() {
+				if res != nil && res.Err != nil {
+					cancel(res.Err)
+				}
+			}()
 			loc := stats.BlockLocation(uint16(blockID), 8192)
 			project := !isTombstone && change.readSpec != nil
 			if project || maxRows > 0 || maxBytes > 0 {
@@ -4653,6 +4670,7 @@ func prefetchObjects(
 		},
 	)
 	if err := scheduler.Schedule(job); err != nil {
+		cancel(err)
 		job.DoneWithErr(err)
 	}
 	return
