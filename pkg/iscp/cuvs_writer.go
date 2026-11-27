@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -403,6 +404,9 @@ func (w *CuvsCdcWriter) PrepareSourceSnapshot(proc *sqlexec.SqlProcess) (func() 
 	if cfg.IndexTable == "" {
 		return nil, moerr.NewInternalError(proc.GetContext(), "cuVS snapshot storage table is missing")
 	}
+	// A warmed clone can already have a model on this worker's GPU. Release
+	// it before allocating the replacement; publication invalidates again.
+	cache.Cache.RemoveCuvs(cfg.IndexTable)
 	return cuvscdc.PrepareSnapshotMarker(cfg, w.colMetaJSON, func(sql string) (executor.Result, error) {
 		return ExecWithResult(proc.GetContext(), sql, proc.SqlCtx.GetService(), proc.SqlCtx.Txn())
 	})

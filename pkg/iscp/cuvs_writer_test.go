@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -24,7 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -114,6 +121,46 @@ func TestNewCuvsCdcWriter_Success(t *testing.T) {
 	require.Equal(t, "test_tbl", w.TblName())
 	require.Equal(t, "cuvs_idx", w.IndexName())
 	require.Empty(t, w.ColMetaJSON(), "no INCLUDE cols → empty colMetaJSON")
+}
+
+type cachedSnapshotModel struct {
+	cache.VectorIndexSearchIf
+	destroyed bool
+}
+
+func (*cachedSnapshotModel) Load(*sqlexec.SqlProcess) error { return nil }
+func (*cachedSnapshotModel) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
+	return nil, nil, nil
+}
+
+func (m *cachedSnapshotModel) Destroy() { m.destroyed = true }
+
+func TestCuvsSourceSnapshotEvictsWarmModelBeforeBuild(t *testing.T) {
+	td := newTestCuvsTableDef("pk", "v", 4)
+	const storage = "snapshot_test_storage"
+	td.Indexes[1].IndexTableName = storage
+	w, err := NewCuvsCdcWriter("cagra", "db", "cloned", "cuvs_idx", td, newTestCuvsIndexDefs(td))
+	require.NoError(t, err)
+	proc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(t.Context(), "", nil, 0, nil))
+	key := cache.CuvsKey(storage, metric.Quantization_F32)
+	model := &cachedSnapshotModel{}
+	t.Cleanup(func() { cache.Cache.Remove(key) })
+	_, _, err = cache.Cache.SearchCuvs(proc, key, model, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	require.False(t, model.destroyed)
+
+	exec := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = exec })
+	markerErr := errors.New("marker read failed")
+	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		require.Contains(t, sql, storage)
+		require.True(t, model.destroyed)
+		return executor.Result{}, markerErr
+	}
+
+	finish, err := w.PrepareSourceSnapshot(proc)
+	require.ErrorIs(t, err, markerErr)
+	require.Nil(t, finish)
 }
 
 // TestCuvsCdcWriter_VectorTypeHandling pins the NULL-vs-wrong-type contract:

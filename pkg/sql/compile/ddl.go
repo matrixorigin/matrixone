@@ -68,9 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -561,23 +559,6 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 		m[catalog.Quantization] = catalog.ToLower(opt.Quantization)
 	}
 	return m
-}
-
-// cuVS readers select a decoder from the published storage type. Changing
-// it requires the new model to commit with the new catalog parameters.
-func reindexChangesCuvsStorageType(table *plan.TableDef, index *plan.IndexDef, oldQuantization, newQuantization string) bool {
-	if oldQuantization == newQuantization || (!catalog.IsCagraIndexAlgo(index.IndexAlgo) && !catalog.IsIvfpqIndexAlgo(index.IndexAlgo)) {
-		return false
-	}
-	if len(index.Parts) != 1 {
-		return true
-	}
-	column := plan2.FindColumn(table.Cols, index.Parts[0])
-	if column == nil {
-		return true
-	}
-	baseType := types.T(column.Typ.Id)
-	return metric.CuvsStorageQuantization(baseType, oldQuantization) != metric.CuvsStorageQuantization(baseType, newQuantization)
 }
 
 func (s *Scope) AlterTableInplace(c *Compile) error {
@@ -1125,8 +1106,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if err != nil {
 						return err
 					}
-					forceSync = forceSync || reindexChangesCuvsStorageType(
-						oTableDef, indexDef, oldParams[catalog.Quantization], newParamsMap[catalog.Quantization])
+					if publication, ok := p.Compile().(compileplugin.SynchronousReindex); ok {
+						forceSync = forceSync || publication.RequiresSyncReindex(oTableDef, indexDef, oldParams, newParamsMap)
+					}
 					// Preserve the captured session_vars (skipped by the flat
 					// parser above) across the param rewrite.
 					sessionVars, err := catalog.IndexParamsSessionVars(alterIndex.IndexAlgoParams)
@@ -1176,13 +1158,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
 					}
 					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, forceSync, tableAlterIndex.Merge)
-					if err == nil && forceSync {
-						for kind, def := range multiTableIndex.IndexDefs {
-							if kind == catalog.Cagra_TblType_Storage || kind == catalog.Ivfpq_TblType_Storage {
-								cache.Cache.RemoveCuvsOnCommit(c.proc.GetTxnOperator(), def.IndexTableName)
-							}
-						}
-					}
 				}
 
 				if err != nil {
@@ -4259,7 +4234,7 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		}
 		sinkerType := getSinkerTypeFromAlgo(mti.IndexAlgo)
 		if _, ok := p.Compile().(compileplugin.SourceSnapshotInitializer); ok {
-			if err := createIndexCdcTask(c, dbName, tblName, tableDef.GetTblId(), name, sinkerType, false, "", true, tableDef); err != nil {
+			if err := createIndexCdcTask(c, dbName, tblName, tableDef.GetTblId(), name, sinkerType, false, "", true, nil, tableDef); err != nil {
 				return err
 			}
 			continue

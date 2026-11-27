@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -88,6 +89,8 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			defer conn.ExecContext(ctx, "rollback")
 			exec("use " + dbName)
 			exec("set experimental_" + tc.algo + "_index=1")
+			buildThreads := tc.algo + "_threads_build"
+			exec("set session " + buildThreads + "=1")
 			exec("create table t(id bigint primary key, v vecf32(8))")
 			var rows []string
 			for i := 1; i <= 20; i++ {
@@ -317,6 +320,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, laterJob.id, unchanged.id)
 
+			exec("set session " + buildThreads + "=2")
 			exec("begin")
 			exec("insert into t(id,v) values (999,'[-100,-100,-100,-100,-100,-100,-100,-100]')")
 			jobID := reindex("int8", true)
@@ -330,6 +334,11 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			rebuilt := waitJob(replacementTable, types.TS{})
 			require.Equal(t, jobID, rebuilt.id)
 			require.Equal(t, "renamed", rebuilt.spec.SrcTable.TableName)
+			settings, err := sqlexec.NewMetadataFromJson(string(rebuilt.spec.SnapshotBuildVars))
+			require.NoError(t, err)
+			threads, err := settings.ResolveVariableFunc(buildThreads, true, false)
+			require.NoError(t, err)
+			require.Equal(t, int64(2), threads)
 			require.Contains(t, explain("select id from renamed"+privateDistance+" limit 2"), tc.algo+"_search")
 			for _, hint := range []string{"", " ignore index(ix)"} {
 				q := "select id from renamed" + hint + privateDistance + " limit 2"

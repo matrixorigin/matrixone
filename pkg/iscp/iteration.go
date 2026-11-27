@@ -950,44 +950,26 @@ func sourceSnapshotStatements(ctx context.Context, build snapshotBuildContext, i
 	return nil, moerr.NewInternalErrorf(ctx, "index %q has no full-source initializer", indexName)
 }
 
-// initSQLResolver builds the system-variable resolver for an InitSQL build.
-// When sessionVars (the index's captured algo_params.session_vars) is present,
-// its typed values overlay the process defaults so the background build
-// (cagra_create/ivfpq_create/...) reproduces the create-time config (e.g.
-// kmeans_train_percent); every other var falls through to
-// executor.DefaultResolveVariable. With no sessionVars it IS
-// DefaultResolveVariable (may be nil — caller guards), preserving prior
-// behaviour. Note md.ResolveVariableFunc errors on a var it doesn't hold, so
-// the wrapper falls back on error rather than propagating it.
-func initSQLResolver(sessionVars []byte) (func(string, bool, bool) (interface{}, error), error) {
-	def := executor.DefaultResolveVariable
+// initSQLResolver overlays typed, persisted vars on the underlying resolver.
+// The DDL's build-only settings can override the catalog for one rebuild.
+func initSQLResolver(sessionVars []byte, fallback func(string, bool, bool) (any, error)) (func(string, bool, bool) (any, error), error) {
 	if len(sessionVars) == 0 {
-		// No captured session_vars (old index / non-vector / no build vars):
-		// skip the overlay and resolve through the process default. Not an error.
-		return def, nil
+		return fallback, nil
 	}
-	// session_vars is JSON *text* (from algo_params), so parse it with the text
-	// parser (NewMetadataFromJson → bytejson.ParseFromString). NewMetadata uses
-	// bj.Unmarshal, which expects the binary bytejson encoding and would silently
-	// mis-parse the text → md.bj garbage → every lookup falls back.
+	// Persisted settings use JSON text; NewMetadata expects binary bytejson.
 	md, err := sqlexec.NewMetadataFromJson(string(sessionVars))
 	if err != nil {
-		// session_vars is present but unparseable — surface the error rather than
-		// silently rebuilding with defaults (which would corrupt the index).
 		return nil, err
 	}
 	if md == nil {
-		return def, nil
+		return fallback, nil
 	}
 	return func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
-		// Captured vars resolve from the overlay; everything else (timezone,
-		// sql_mode, …) falls through to the process default — that per-variable
-		// fallback is expected, unlike the parse-failure case above.
 		if v, verr := md.ResolveVariableFunc(name, isSystemVar, isGlobalVar); verr == nil && v != nil {
 			return v, nil
 		}
-		if def != nil {
-			return def(name, isSystemVar, isGlobalVar)
+		if fallback != nil {
+			return fallback(name, isSystemVar, isGlobalVar)
 		}
 		return nil, nil
 	}, nil
@@ -1138,7 +1120,7 @@ func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, 
 		err = aerr
 		return
 	}
-	resolver, rerr := initSQLResolver(sessionVars)
+	resolver, rerr := initSQLResolver(sessionVars, executor.DefaultResolveVariable)
 	if rerr != nil {
 		err = rerr
 		return
@@ -1151,7 +1133,11 @@ func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, 
 		}
 	}
 	if info.InitSQLCoversSnapshot {
-		statements, err = sourceSnapshotStatements(ctx, snapshotBuildContext{database: dbName, table: source, resolve: resolver}, info.IndexName)
+		buildResolver, rerr := initSQLResolver(info.SnapshotBuildVars, resolver)
+		if rerr != nil {
+			return rerr
+		}
+		statements, err = sourceSnapshotStatements(ctx, snapshotBuildContext{database: dbName, table: source, resolve: buildResolver}, info.IndexName)
 		if err != nil {
 			return err
 		}

@@ -17,15 +17,38 @@ package cuvs
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
+
+const GPUMultiSimulationVar = "gpu_multi_simulation"
+
+// ReindexChangesStorageType reports whether the new decoder needs the model
+// to be published atomically with the index parameters.
+func ReindexChangesStorageType(table *plan.TableDef, index *plan.IndexDef, oldQuantization, newQuantization string) bool {
+	if oldQuantization == newQuantization {
+		return false
+	}
+	if len(index.Parts) == 1 {
+		for _, column := range table.Cols {
+			if strings.EqualFold(column.Name, index.Parts[0]) {
+				baseType := types.T(column.Typ.Id)
+				return metric.CuvsStorageQuantization(baseType, oldQuantization) !=
+					metric.CuvsStorageQuantization(baseType, newQuantization)
+			}
+		}
+	}
+	return true
+}
 
 // ResolveIndexIncludeColumns uses the stored index parameters and source schema
 // to derive the CDC frame header and row layout.

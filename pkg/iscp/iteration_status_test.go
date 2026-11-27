@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -123,6 +124,43 @@ func (e *initPanicExecutor) Exec(context.Context, string, executor.Options) (exe
 
 func (*initPanicExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
 	panic("unexpected transaction")
+}
+
+func TestInitSQLResolverRestoresJobBuildOverrides(t *testing.T) {
+	catalogVars := sqlexec.NewMetadataWriter()
+	catalogVars.AddInt("cagra_threads_build", 0)
+	catalogVars.AddInt("lower_case_table_names", 1)
+	catalogSettings, err := catalogVars.Marshal()
+	require.NoError(t, err)
+	catalogResolver, err := initSQLResolver(catalogSettings, nil)
+	require.NoError(t, err)
+
+	ddlVars := sqlexec.NewMetadataWriter()
+	ddlVars.AddInt("cagra_threads_build", 1)
+	settings, err := ddlVars.Marshal()
+	require.NoError(t, err)
+	stored, err := MarshalJobSpec(&JobSpec{ConsumerInfo: ConsumerInfo{
+		InitSQLCoversSnapshot: true,
+		SnapshotBuildVars:     settings,
+	}})
+	require.NoError(t, err)
+	var job JobSpec
+	require.NoError(t, json.Unmarshal([]byte(stored), &job))
+	buildResolver, err := initSQLResolver(job.SnapshotBuildVars, catalogResolver)
+	require.NoError(t, err)
+
+	threads, err := buildResolver("cagra_threads_build", true, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), threads)
+	names, err := buildResolver("lower_case_table_names", true, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), names)
+	threads, err = catalogResolver("cagra_threads_build", true, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), threads)
+
+	_, err = initSQLResolver([]byte("{"), catalogResolver)
+	require.Error(t, err)
 }
 
 func TestProcessInitSQLFinalizationOutcome(t *testing.T) {

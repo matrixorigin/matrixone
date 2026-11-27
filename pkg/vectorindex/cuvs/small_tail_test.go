@@ -240,6 +240,26 @@ func TestPeekColMetaJSON_NoHeader(t *testing.T) {
 	require.Equal(t, "", got)
 }
 
+func TestReindexChangesStorageType(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		columnType types.T
+		newFormat  string
+		change     bool
+	}{
+		{"vecf32 changes representation", types.T_array_float32, "float16", true},
+		{"vecf16 keeps representation", types.T_array_float16, "float16", false},
+		{"vecf16 changes representation", types.T_array_float16, "int8", true},
+		{"explicit same format", types.T_array_float32, "float32", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.columnType)}}}}
+			index := &plan.IndexDef{Parts: []string{"V"}}
+			require.Equal(t, tc.change, ReindexChangesStorageType(table, index, "float32", tc.newFormat))
+		})
+	}
+}
+
 func TestReplaceSnapshotPreservesTailGeneration(t *testing.T) {
 	cfg := smallTailTblcfg()
 	old := int64(8)

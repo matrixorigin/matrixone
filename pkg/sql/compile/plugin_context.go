@@ -20,6 +20,7 @@ import (
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -153,6 +154,10 @@ func (p *pluginCompileCtx) SinkerTypeFromAlgo(algo string) int8 {
 	return getSinkerTypeFromAlgo(algo)
 }
 
+func (p *pluginCompileCtx) TxnOperator() client.TxnOperator {
+	return p.c.proc.GetTxnOperator()
+}
+
 func (p *pluginCompileCtx) CreateIndexCdcTask(dbName, tableName string, tableID uint64, indexName string,
 	sinkerType int8, startFromNow bool, sql string, tableDef *plan.TableDef) error {
 	if p.isCopyReplacement(dbName, tableName, tableID) {
@@ -162,8 +167,8 @@ func (p *pluginCompileCtx) CreateIndexCdcTask(dbName, tableName string, tableID 
 		for _, idx := range p.originalTableDef.Indexes {
 			if idx.IndexName == indexName {
 				if plugin, ok := indexplugin.Get(idx.IndexAlgo); ok {
-					if _, ok := plugin.Compile().(compileplugin.SourceSnapshotInitializer); ok {
-						return p.CreateIndexSnapshotCdcTask(indexName, sinkerType, false)
+					if init, ok := plugin.Compile().(compileplugin.SourceSnapshotInitializer); ok {
+						return p.CreateIndexSnapshotCdcTask(indexName, sinkerType, false, init.SourceSnapshotBuildVars())
 					}
 				}
 				break
@@ -173,7 +178,7 @@ func (p *pluginCompileCtx) CreateIndexCdcTask(dbName, tableName string, tableID 
 	return CreateIndexCdcTask(p.c, dbName, tableName, tableID, indexName, sinkerType, startFromNow, sql, tableDef)
 }
 
-func (p *pluginCompileCtx) CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, builtInline bool) error {
+func (p *pluginCompileCtx) CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, builtInline bool, buildVars []string) error {
 	table := p.originalTableDef
 	if builtInline && !p.isCopyReplacement(p.qryDatabase, table.Name, table.TblId) {
 		// Workspace rows commit after the inline build's snapshot. A committed
@@ -183,7 +188,11 @@ func (p *pluginCompileCtx) CreateIndexSnapshotCdcTask(indexName string, sinkerTy
 			return CreateIndexCdcTask(p.c, p.qryDatabase, table.Name, table.TblId, indexName, sinkerType, true, "", table)
 		}
 	}
-	return createIndexCdcTask(p.c, p.qryDatabase, table.Name, table.TblId, indexName, sinkerType, false, "", true, table)
+	settings, err := compileplugin.CaptureVars(p.ResolveVariable, buildVars)
+	if err != nil {
+		return err
+	}
+	return createIndexCdcTask(p.c, p.qryDatabase, table.Name, table.TblId, indexName, sinkerType, false, "", true, settings, table)
 }
 
 func (p *pluginCompileCtx) isCopyReplacement(database, table string, id uint64) bool {

@@ -22,6 +22,7 @@ import (
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -31,6 +32,7 @@ import (
 // stubCompileContext implements compileplugin.CompileContext for genBuildSQL
 // + the trivial hook tests. Methods not needed by the tests panic when called.
 type stubCompileContext struct {
+	testTxn          *testTxn
 	originalTableDef *plan.TableDef
 	qryDatabase      string
 	vars             map[string]any
@@ -39,6 +41,7 @@ type stubCompileContext struct {
 	lastCdcTask struct {
 		called      bool
 		builtInline bool
+		vars        []string
 	}
 
 	// lastIdxcronUpdate records the args of the most recent
@@ -54,6 +57,21 @@ type stubCompileContext struct {
 		action      string
 		metadataLen int
 	}
+}
+
+type testTxn struct {
+	client.TxnOperator
+	closed int
+}
+
+func (t *testTxn) AppendEventCallback(event client.EventType, callbacks ...client.TxnEventCallback) {
+	if event == client.ClosedEvent {
+		t.closed += len(callbacks)
+	}
+}
+
+func (s *stubCompileContext) TxnOperator() client.TxnOperator {
+	return s.testTxn
 }
 
 func (s *stubCompileContext) Ctx() compileplugin.Context       { return nil }
@@ -82,9 +100,10 @@ func (s *stubCompileContext) SinkerTypeFromAlgo(_ string) int8             { ret
 func (s *stubCompileContext) CreateIndexCdcTask(_, _ string, _ uint64, _ string, _ int8, _ bool, _ string, _ *plan.TableDef) error {
 	return nil
 }
-func (s *stubCompileContext) CreateIndexSnapshotCdcTask(_ string, _ int8, builtInline bool) error {
+func (s *stubCompileContext) CreateIndexSnapshotCdcTask(_ string, _ int8, builtInline bool, vars []string) error {
 	s.lastCdcTask.called = true
 	s.lastCdcTask.builtInline = builtInline
+	s.lastCdcTask.vars = vars
 	return nil
 }
 func (s *stubCompileContext) DropIndexCdcTask(_ *plan.TableDef, _, _, _ string) error {
@@ -335,6 +354,7 @@ func (e *experimentalFlagCtx) IsExperimentalEnabled(_ string) (bool, error) {
 func newHandleCtx(enabled bool) *experimentalFlagCtx {
 	return &experimentalFlagCtx{
 		stubCompileContext: &stubCompileContext{
+			testTxn: &testTxn{},
 			// Frontend context — the experimental-flag gate is
 			// skipped when !IsFrontend (background re-entry).
 			isFrontend:  true,
@@ -388,6 +408,8 @@ func TestIvfpqHandleCreateIndex_AsyncTrue(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
 	require.False(t, ctx.stubCompileContext.lastCdcTask.builtInline)
+	require.Equal(t, []string{threadsBuildVar, "gpu_multi_simulation"}, ctx.stubCompileContext.lastCdcTask.vars)
+	require.Zero(t, ctx.stubCompileContext.testTxn.closed)
 	require.True(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "async branch must also register cron metadata row")
 	require.Equal(t, actionIvfpqReindex, ctx.stubCompileContext.lastIdxcronUpdate.action)
 }
@@ -414,6 +436,7 @@ func TestIvfpqHandleCreateIndex_BackgroundReentry(t *testing.T) {
 	err := Hooks{}.HandleReindex(ctx, ivfpqIndexDefs(), true, false)
 	require.NoError(t, err)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called, "background re-entry still drives the CDC task")
+	require.Equal(t, 1, ctx.stubCompileContext.testTxn.closed)
 	require.False(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "background re-entry must NOT rewrite mo_index_update")
 }
 

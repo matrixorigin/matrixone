@@ -17,6 +17,7 @@ package iscp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -263,6 +264,8 @@ type ConsumerInfo struct {
 	// Build from the source and index definitions in the guarded snapshot.
 	// InitSQL is for initializers that do not cover the source snapshot.
 	InitSQLCoversSnapshot bool `json:",omitempty"`
+	// Settings frozen by the DDL for the deferred build, in typed session metadata format.
+	SnapshotBuildVars json.RawMessage `json:",omitempty"`
 }
 
 func (info *ConsumerInfo) needsInitializer() bool {

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -36,6 +37,9 @@ type CompileContext interface {
 
 	// Ctx returns the request context (for cancellation, txn, etc.).
 	Ctx() Context
+
+	// TxnOperator provides the transaction lifecycle for publication callbacks.
+	TxnOperator() client.TxnOperator
 
 	// Database is the engine.Database for the indexed table's database.
 	Database() engine.Database
@@ -110,7 +114,7 @@ type CompileContext interface {
 
 	// CreateIndexSnapshotCdcTask initializes CDC from a complete source snapshot.
 	// An inline build can supply that snapshot when it only read committed rows.
-	CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, builtInline bool) error
+	CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, builtInline bool, buildVars []string) error
 
 	// DropIndexCdcTask removes any ISCP CDC task previously registered
 	// for this (table, index). Safe to call when no task exists.
@@ -250,7 +254,14 @@ func MergeReindexParams(old map[string]string, update ReindexParamUpdate, algo s
 // and cover the complete source snapshot; executing only a training/model stage
 // does not satisfy this contract. ISCP publishes that snapshot with the output.
 type SourceSnapshotInitializer interface {
+	SourceSnapshotBuildVars() []string
 	SourceSnapshotInitSQL(ctx SourceSnapshotContext, indexDefs map[string]*plan.IndexDef) ([]string, error)
+}
+
+// SynchronousReindex is implemented by plugins that must publish a model and
+// its changed format in the same transaction.
+type SynchronousReindex interface {
+	RequiresSyncReindex(table *plan.TableDef, index *plan.IndexDef, oldParams, newParams map[string]string) bool
 }
 
 // SourceSnapshotContext supplies the source schema and build settings from the

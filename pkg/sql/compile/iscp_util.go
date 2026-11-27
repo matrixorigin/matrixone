@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -143,10 +144,10 @@ func isTableInCCPRImpl(c *Compile, tableid uint64) bool {
 
 // NOTE: CreateIndexCdcTask will create CDC task without any checking.  Original TableDef may be empty
 func CreateIndexCdcTask(c *Compile, dbname string, tablename string, tableid uint64, indexname string, sinker_type int8, startFromNow bool, sql string, tableDef *plan.TableDef) error {
-	return createIndexCdcTask(c, dbname, tablename, tableid, indexname, sinker_type, startFromNow, sql, false, tableDef)
+	return createIndexCdcTask(c, dbname, tablename, tableid, indexname, sinker_type, startFromNow, sql, false, nil, tableDef)
 }
 
-func createIndexCdcTask(c *Compile, dbname, tablename string, tableid uint64, indexname string, sinker_type int8, startFromNow bool, sql string, coversSnapshot bool, tableDef *plan.TableDef) error {
+func createIndexCdcTask(c *Compile, dbname, tablename string, tableid uint64, indexname string, sinker_type int8, startFromNow bool, sql string, coversSnapshot bool, snapshotBuildVars json.RawMessage, tableDef *plan.TableDef) error {
 	var err error
 
 	// Skip ISCP task creation if table is from CCPR subscription (from_publication = true)
@@ -167,7 +168,8 @@ func createIndexCdcTask(c *Compile, dbname, tablename string, tableid uint64, in
 			TableName:             tablename,
 			IndexName:             indexname,
 			InitSQL:               sql,
-			InitSQLCoversSnapshot: coversSnapshot},
+			InitSQLCoversSnapshot: coversSnapshot,
+			SnapshotBuildVars:     snapshotBuildVars},
 	}
 	job := &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(indexname)}
 

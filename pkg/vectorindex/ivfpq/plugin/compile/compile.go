@@ -81,6 +81,8 @@ const actionIvfpqReindex = "ivfpq_reindex"
 // this file) breaks the build.
 type Hooks struct{}
 
+const threadsBuildVar = "ivfpq_threads_build"
+
 // HandleCreateIndex runs during CREATE INDEX (and as the worker for
 // HandleReindex). Called once per multi-table index; indexDefs is keyed by
 // IndexAlgoTableType (the same strings CatalogHooks.HiddenTableTypes()
@@ -121,6 +123,10 @@ func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[str
 	return h.handleCreate(ctx, indexDefs, forceSync, true)
 }
 
+func (Hooks) RequiresSyncReindex(table *plan.TableDef, index *plan.IndexDef, oldParams, newParams map[string]string) bool {
+	return cuvscdc.ReindexChangesStorageType(table, index, oldParams[catalog.Quantization], newParams[catalog.Quantization])
+}
+
 // RestoreInitSQL is bypassed for full-source initializers.
 func (Hooks) RestoreInitSQL(compileplugin.CompileContext, map[string]*plan.IndexDef) (bool, string, error) {
 	return false, "", nil
@@ -128,7 +134,7 @@ func (Hooks) RestoreInitSQL(compileplugin.CompileContext, map[string]*plan.Index
 
 // handleCreate runs the build in the current transaction if forceSync is set.
 // Otherwise ISCP builds it from a committed snapshot.
-func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync, reindex bool) error {
+func (h Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync, reindex bool) error {
 	logutil.Infof("[plugin] ivfpq handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// 0. experimental flag gate (mirrors HNSW's check at ddl_index_algo.go:627).
 	// Frontend-only: re-entry from background (idxcron ALTER REINDEX,
@@ -176,13 +182,9 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return nil
 	}
 
-	// Release the cached GPU model before allocating its replacement.
-	cache.Cache.RemoveCuvs(storageDef.IndexTableName)
-
-	// The async initializer generates the same statements from its guarded
-	// source snapshot, after any committed rename.
 	if forceSync {
-		statements, err := (Hooks{}).SourceSnapshotInitSQL(ctx, indexDefs)
+		cache.Cache.RemoveCuvs(storageDef.IndexTableName)
+		statements, err := h.SourceSnapshotInitSQL(ctx, indexDefs)
 		if err != nil {
 			return err
 		}
@@ -203,10 +205,20 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return err
 	}
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexIvfpqAlgo.ToString())
-	if err := ctx.CreateIndexSnapshotCdcTask(metaDef.IndexName, sinkerType, forceSync); err != nil {
+	if err := ctx.CreateIndexSnapshotCdcTask(metaDef.IndexName, sinkerType, forceSync, h.SourceSnapshotBuildVars()); err != nil {
 		return err
 	}
-	return registerIdxcronUpdate(ctx, metaDef, db, originalTableDef)
+	if err := registerIdxcronUpdate(ctx, metaDef, db, originalTableDef); err != nil {
+		return err
+	}
+	if forceSync && reindex {
+		cache.Cache.RemoveCuvsOnCommit(ctx.TxnOperator(), storageDef.IndexTableName)
+	}
+	return nil
+}
+
+func (Hooks) SourceSnapshotBuildVars() []string {
+	return []string{threadsBuildVar, cuvscdc.GPUMultiSimulationVar}
 }
 
 // SourceSnapshotInitSQL replaces the complete model from a single source snapshot.
@@ -369,7 +381,7 @@ func genBuildSQL(ctx compileplugin.SourceSnapshotContext, indexDefs map[string]*
 		KeyPart:       idx.Parts[0],
 	}
 
-	threads, err := ctx.ResolveVariable("ivfpq_threads_build", true, false)
+	threads, err := ctx.ResolveVariable(threadsBuildVar, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +389,7 @@ func genBuildSQL(ctx compileplugin.SourceSnapshotContext, indexDefs map[string]*
 
 	// max_index_capacity now rides algo_params as a flat key (written at
 	// CREATE INDEX); ivfpq_create reads it from there.
-	gpusim, err := ctx.ResolveVariable("gpu_multi_simulation", true, false)
+	gpusim, err := ctx.ResolveVariable(cuvscdc.GPUMultiSimulationVar, true, false)
 	if err != nil {
 		return nil, err
 	}
