@@ -48,6 +48,7 @@ func newReplayWriteTestFS(t *testing.T) *S3FS {
 
 func readReplayCache(t *testing.T, fs *S3FS, path string) []byte {
 	t.Helper()
+	fs.diskCache.Flush(t.Context())
 	got, err := os.ReadFile(fs.diskCache.pathForFile(path))
 	require.NoError(t, err)
 	return got
@@ -204,6 +205,7 @@ func TestReplayWriteConcurrentIndependentInputs(t *testing.T) {
 				return
 			}
 			clear(source)
+			fs.diskCache.Flush(t.Context())
 			got, err := os.ReadFile(fs.diskCache.pathForFile(path))
 			if err != nil {
 				errs <- err
@@ -406,4 +408,33 @@ func TestReplayWriteDiskCacheFailureParity(t *testing.T) {
 		require.Equal(t, []byte("data"), got)
 	}
 	require.Equal(t, failures[0], failures[1])
+}
+
+type cancelAfterStoredWrite struct {
+	ObjectStorage
+	cancel context.CancelFunc
+}
+
+func (s cancelAfterStoredWrite) Write(ctx context.Context, key string, r io.Reader, size *int64, expire *time.Time) error {
+	err := s.ObjectStorage.Write(ctx, key, r, size, expire)
+	if err == nil {
+		s.cancel()
+	}
+	return err
+}
+
+func TestCommittedS3WriteSurvivesCanceledCacheReplay(t *testing.T) {
+	fs := newReplayWriteTestFS(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	fs.storage = cancelAfterStoredWrite{ObjectStorage: fs.storage, cancel: cancel}
+	require.NoError(t, fs.Write(ctx, IOVector{
+		FilePath: "committed",
+		Entries:  []IOEntry{{Size: 2, Data: []byte("ok")}},
+	}))
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	result := &IOVector{FilePath: "committed", Policy: SkipAllCache, Entries: []IOEntry{{Size: 2}}}
+	defer result.Release()
+	require.NoError(t, fs.Read(t.Context(), result))
+	require.Equal(t, []byte("ok"), result.Entries[0].Data)
 }
