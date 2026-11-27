@@ -393,7 +393,7 @@ func sendBatchToClientSession(
 	wcs.Lock()
 	defer wcs.Unlock()
 
-	if wcs.ReceiverDone {
+	if wcs.ReceiverDone && !wcs.ReceiverStopSettled.Load() {
 		// Critical fix: distinguish between strict and tolerant modes
 		if failureMode == FailureModeStrict {
 			// Strict mode: receiver done indicates data loss

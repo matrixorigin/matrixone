@@ -77,7 +77,10 @@ func (f *pipelineBatchFlow) reserve(
 	connectionCtx context.Context,
 	size uint64,
 ) (uint64, error) {
-	sequence, _, err := f.reserveOrStop(messageCtx, connectionCtx, size)
+	sequence, stopped, err := f.reserveOrStop(messageCtx, connectionCtx, size)
+	if stopped && connectionCtx != nil && connectionCtx.Err() != nil {
+		return 0, moerr.NewStreamClosed(messageCtx)
+	}
 	return sequence, err
 }
 
@@ -97,9 +100,6 @@ func (f *pipelineBatchFlow) reserveOrStop(
 			if stopped {
 				if cause := moerr.PipelineContextError(messageCtx); cause != nil {
 					return 0, false, cause
-				}
-				if connectionCtx != nil && connectionCtx.Err() != nil {
-					return 0, false, moerr.NewStreamClosed(messageCtx)
 				}
 				return 0, true, err
 			}

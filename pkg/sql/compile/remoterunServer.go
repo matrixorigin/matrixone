@@ -301,8 +301,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			infoToDispatchOperator.ReserveBatch = func(ctx context.Context, size uint64) (uint64, bool, error) {
 				sequence, stopped, err := flow.reserveOrStop(ctx, receiver.connectionCtx, size)
 				if stopped {
-					if err := moerr.PipelineContextError(receiver.messageCtx); err != nil {
-						return 0, false, err
+					if !infoToDispatchOperator.ReceiverStopSettled.Load() {
+						if err := receiver.dispatchReceiverContextError(); err != nil {
+							return 0, false, err
+						}
 					}
 					return 0, true, nil
 				}
@@ -347,23 +349,19 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			// of the terminal response in the session's write order.
 			infoToDispatchOperator.Lock()
 			err = infoToDispatchOperator.BatchSendError
-			infoToDispatchOperator.Unlock()
 			select {
 			case terminalErr := <-infoToDispatchOperator.Err:
 				err = preferPrimaryScopeError(err, terminalErr)
 			default:
 			}
 			if err == nil {
-				if receiver.connectionCtx != nil && receiver.connectionCtx.Err() != nil {
-					err = moerr.NewStreamClosed(receiver.getMessageContext())
+				if err = receiver.dispatchReceiverContextError(); err != nil {
 					dispatchProc.Cancel(err)
-				} else if receiver.messageCtx != nil && receiver.messageCtx.Err() != nil {
-					err = remoteRegistrationContextError(receiver.messageCtx)
-					dispatchProc.Cancel(err)
-				} else {
-					err = moerr.PipelineContextError(dispatchProc.Ctx)
+				} else if err = moerr.PipelineContextError(dispatchProc.Ctx); err == nil {
+					infoToDispatchOperator.ReceiverStopSettled.Store(true)
 				}
 			}
+			infoToDispatchOperator.Unlock()
 		}
 		return err
 
@@ -1402,6 +1400,13 @@ func (receiver *messageReceiverOnServer) getMessageContext() context.Context {
 		return receiver.messageCtx
 	}
 	return context.Background()
+}
+
+func (receiver *messageReceiverOnServer) dispatchReceiverContextError() error {
+	if receiver.connectionCtx != nil && receiver.connectionCtx.Err() != nil {
+		return moerr.NewStreamClosed(receiver.getMessageContext())
+	}
+	return moerr.PipelineContextError(receiver.messageCtx)
 }
 
 func (receiver *messageReceiverOnServer) cancelConsumedDispatchRegistration(

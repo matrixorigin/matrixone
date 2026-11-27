@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1562,4 +1563,82 @@ func TestDataLossPrevention_ComparisonTable(t *testing.T) {
 		require.NoError(t, err, "SendToAny can tolerate failures")
 		t.Log("SendToAny: Can failover to other receivers")
 	})
+}
+
+func TestDispatchRoutesAfterNormalReceiverStop(t *testing.T) {
+	type sendFunc func(*batch.Batch, *Dispatch, *process.Process) (bool, error)
+	for _, tc := range []struct {
+		name        string
+		send        sendFunc
+		shuffleType int32
+		local, live bool
+		wantWrites  int
+		wantEnd     bool
+	}{
+		{name: "broadcast sends to local after last remote stops", send: sendToAllFunc, local: true},
+		{name: "broadcast ends after all receivers stop", send: sendToAllRemoteFunc, wantEnd: true},
+		{name: "shuffle index keeps its assignment", send: shuffleToAllFunc, shuffleType: plan2.ShuffleToRegIndex, live: true},
+		{name: "shuffle index ends after all receivers stop", send: shuffleToAllFunc, shuffleType: plan2.ShuffleToRegIndex, wantEnd: true},
+		{name: "shuffle multi-match continues the current batch", send: shuffleToAllFunc, shuffleType: plan2.ShuffleToMultiMatchedReg, local: true, live: true, wantWrites: 1},
+		{name: "any retries the current batch on another remote", send: sendToAnyRemoteFunc, live: true, wantWrites: 1},
+		{name: "any retries the current batch locally", send: sendToAnyFunc, local: true},
+		{name: "any ends after all receivers stop", send: sendToAnyRemoteFunc, wantEnd: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.BuildPipelineContext(ctx)
+			bat := colexec.MakeMockPartitionBatchs(42, proc.Mp())
+			defer bat.Clean(proc.Mp())
+			stopCalls := 0
+			stopReg := &process.WrapCs{
+				Uid: uuid.New(),
+				ReserveBatch: func(context.Context, uint64) (uint64, bool, error) {
+					stopCalls++
+					return 0, true, nil
+				},
+			}
+			op := &Dispatch{
+				ShuffleType: tc.shuffleType,
+				ctr: &container{
+					prepared: true, remoteReceivers: []*process.WrapCs{stopReg},
+					remoteRegsCnt: 1, aliveRegCnt: 1, remoteToIdx: map[uuid.UUID]int{stopReg.Uid: 0},
+					batchCnt: make([]int, 2), rowCnt: make([]int, 2),
+				},
+			}
+			if tc.live {
+				session := mock_morpc.NewMockClientSession(gomock.NewController(t))
+				session.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).Times(tc.wantWrites)
+				reg := &process.WrapCs{Uid: uuid.New(), Cs: session}
+				op.ctr.remoteReceivers = append(op.ctr.remoteReceivers, reg)
+				op.ctr.remoteRegsCnt++
+				op.ctr.aliveRegCnt++
+				op.ctr.remoteToIdx[reg.Uid] = 1
+			}
+			if tc.local {
+				op.LocalRegs = []*process.WaitRegister{process.NewPipelineEdge(1, 0)}
+				op.ShuffleRegIdxLocal = []int{0}
+				op.ctr.localRegsCnt = 1
+				op.ctr.aliveRegCnt++
+				op.ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), 1)
+				defer op.ctr.sp.FinalizeAfterConsumersQuiesced()
+				op.ctr.sendCnt = 1
+			}
+			end, err := tc.send(bat, op, proc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantEnd, end)
+			require.Equal(t, 1, stopCalls)
+			require.NotContains(t, op.ctr.remoteReceivers, stopReg)
+			require.NoError(t, proc.Ctx.Err())
+			if tc.local {
+				receiver := process.InitPipelineSignalReceiver(ctx, op.LocalRegs)
+				got, err := receiver.GetNextBatch(nil)
+				require.NoError(t, err)
+				require.NotNil(t, got)
+				require.Equal(t, bat.RowCount(), got.RowCount())
+			}
+		})
+	}
 }

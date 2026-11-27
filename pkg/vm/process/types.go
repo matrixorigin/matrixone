@@ -523,6 +523,9 @@ type WrapCs struct {
 	Err          chan error
 	// ReserveBatch distinguishes a normally stopped receiver from a failed reservation.
 	ReserveBatch func(context.Context, uint64) (sequence uint64, receiverStopped bool, err error)
+	// ReceiverStopSettled protects a normal terminal outcome from the request
+	// or session cleanup that follows it, even if Dispatch has yet to retire it.
+	ReceiverStopSettled atomic.Bool
 	// BatchSendError is read under the receiver lock when a stop races an in-flight write.
 	BatchSendError error
 	RollbackBatch  func(uint64)
