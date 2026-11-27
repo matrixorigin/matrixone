@@ -766,21 +766,26 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	}
 	defer from.Close()
 
-	// do eviction before write
-	forceEvict := int64(0)
-	if file, ok := from.(*os.File); ok {
-		// get file size
-		info, err := file.Stat()
-		if err == nil {
-			forceEvict = fileSize(info)
+	var dst io.Writer = f
+	var stage *diskCacheStagingWriter
+	if asyncFinalize {
+		stage = &diskCacheStagingWriter{cache: d, path: diskPath, file: f, ctx: ctx}
+		dst = stage
+	} else {
+		// Async full files make room as their temporary file grows.
+		forceEvict := int64(0)
+		if file, ok := from.(*os.File); ok {
+			if info, err := file.Stat(); err == nil {
+				forceEvict = fileSize(info)
+			}
 		}
+		d.cache.Evict(ctx, nil, forceEvict)
 	}
-	d.cache.Evict(ctx, nil, forceEvict)
 
 	// Replay readers can write directly from the caller's input. Track the
 	// destination separately so cache write failures remain optional.
 	if wt, ok := from.(io.WriterTo); ok {
-		dest := &diskCacheDestinationWriter{Writer: f}
+		dest := &diskCacheDestinationWriter{Writer: dst}
 		_, err = wt.WriteTo(dest)
 		if err != nil && dest.err == nil {
 			return false, d.sourceError(ctx, diskPath, err)
@@ -790,7 +795,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 		var buf []byte
 		put := ioBufferPool.Get(&buf)
 		defer put.Put()
-		_, err = io.CopyBuffer(f, source, buf)
+		_, err = io.CopyBuffer(dst, source, buf)
 		if source.err != nil {
 			return false, d.sourceError(ctx, diskPath, source.err)
 		}
@@ -804,6 +809,9 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 		// handoff, the caller still owns both the temp file and its admission.
 		if err := ctx.Err(); err != nil {
 			return false, err
+		}
+		if stage.skipped {
+			return false, nil
 		}
 		d.scheduleReservedAsyncFileFinalize(diskPath, f, doneUpdate)
 		asyncSlotOwned = false

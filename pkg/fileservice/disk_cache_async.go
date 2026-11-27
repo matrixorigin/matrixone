@@ -24,6 +24,7 @@ import (
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"go.uber.org/zap"
@@ -63,11 +64,12 @@ type diskCacheAsyncFileFinalize struct {
 }
 
 type diskCacheAsyncState struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	jobs   chan *diskCacheAsyncUpdate
-	slots  chan struct{}
-	done   chan struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
+	jobs      chan *diskCacheAsyncUpdate
+	slots     chan struct{}
+	done      chan struct{}
+	blockSize int64 // allocation unit for full-file staging
 
 	startOnce    sync.Once
 	closeOnce    sync.Once
@@ -79,6 +81,7 @@ type diskCacheAsyncState struct {
 		sync.Mutex
 		closed          bool
 		pending         map[string]diskCacheAdmission
+		stagedBytes     int64 // full-file temporary disk space
 		pendingBytes    int64
 		maxPendingBytes int64
 		dropped         int64
@@ -88,12 +91,15 @@ type diskCacheAsyncState struct {
 
 // A non-nil done revokes publication and signals when the admission drains.
 type diskCacheAdmission struct {
-	object string // canonical object path of a range update
-	done   chan struct{}
+	object      string // canonical object path of a range update
+	done        chan struct{}
+	stagedBytes int64
 }
 
 func (a *diskCacheAsyncState) finishAdmissionLocked(path string) {
-	if done := a.mu.pending[path].done; done != nil {
+	admission := a.mu.pending[path]
+	a.mu.stagedBytes -= admission.stagedBytes
+	if done := admission.done; done != nil {
 		close(done)
 	}
 	delete(a.mu.pending, path)
@@ -152,6 +158,75 @@ func (w *diskCacheDestinationWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// Each async full-file writer spends its admission's disk reservation before
+// writing. If the source outgrows the budget, keep consuming it: a streaming
+// Read captures the caller's entries as it goes and must still see source errors.
+type diskCacheStagingWriter struct {
+	cache   *DiskCache
+	path    string
+	file    *os.File
+	ctx     context.Context
+	credit  int64 // reserved space not yet written by this file
+	skipped bool
+}
+
+func (w *diskCacheStagingWriter) Write(p []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if w.skipped {
+		return len(p), nil
+	}
+	if need := int64(len(p)) - w.credit; need > 0 {
+		granted := w.cache.reserveStagingBytes(w.ctx, w.path, need)
+		if granted == 0 {
+			if err := w.file.Truncate(0); err != nil {
+				return 0, err
+			}
+			// The rest of a slow source no longer needs its partial file.
+			a := &w.cache.async
+			a.mu.Lock()
+			admission := a.mu.pending[w.path]
+			a.mu.stagedBytes -= admission.stagedBytes
+			admission.stagedBytes = 0
+			a.mu.pending[w.path] = admission
+			a.mu.Unlock()
+			w.skipped = true
+			return len(p), nil
+		}
+		w.credit += granted
+	}
+	n, err := w.file.Write(p)
+	w.credit -= int64(n)
+	return n, err
+}
+
+func (d *DiskCache) reserveStagingBytes(ctx context.Context, path string, need int64) int64 {
+	a := &d.async
+	blocks := 1 + (need-1)/a.blockSize
+	capacity := max(int64(0), d.cache.Capacity())
+	a.mu.Lock()
+	available := capacity - a.mu.stagedBytes
+	if a.mu.closed || available <= 0 || blocks > available/a.blockSize {
+		a.dropAsyncUpdateLocked()
+		a.mu.Unlock()
+		return 0
+	}
+	granted := blocks * a.blockSize
+	admission := a.mu.pending[path]
+	admission.stagedBytes += granted
+	a.mu.pending[path] = admission
+	a.mu.stagedBytes += granted
+	a.mu.Unlock()
+
+	// Make room among published entries without holding the admission lock
+	// across eviction callbacks. Concurrent stagers share the same limit.
+	if target := available - granted; d.cache.Used() > target {
+		d.cache.EvictToTargetWithWait(ctx, target)
+	}
+	return granted
+}
+
 func (d *DiskCache) sourceError(ctx context.Context, path string, err error) error {
 	if (err != context.Canceled && err != context.DeadlineExceeded) || ctx.Err() != err {
 		metric.FSDiskCacheErrorCounter.Inc()
@@ -176,6 +251,11 @@ func (r *diskCacheSourceReader) Read(buf []byte) (int, error) {
 }
 
 func (d *DiskCache) initAsyncUpdates() {
+	d.async.blockSize = int64(os.Getpagesize())
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(d.path, &stat); err == nil && stat.Bsize > 0 {
+		d.async.blockSize = int64(stat.Bsize)
+	}
 	d.async.ctx, d.async.cancel = context.WithCancel(context.Background())
 	d.async.jobs = make(chan *diskCacheAsyncUpdate, diskCacheAsyncQueueSize)
 	d.async.slots = make(chan struct{}, diskCacheAsyncQueueSize)

@@ -3461,3 +3461,68 @@ func TestS3FSCommittedDeleteSurvivesCancellation(t *testing.T) {
 		check(key, SkipMemoryCache, "new")
 	}
 }
+
+func TestS3FSPrefetchBoundsStagedFullFiles(t *testing.T) {
+	const capacity = 1 << 20
+	ctx, cancel := context.WithTimeout(t.Context(), diskCacheLifecycleTestTimeout)
+	defer cancel()
+	dir := t.TempDir()
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{
+		DiskPath: &dir, DiskCapacity: ptrTo[toml.ByteSize](capacity),
+	}, nil, false, false)
+	require.NoError(t, err)
+	defer fs.Close(context.Background())
+
+	data := bytes.Repeat([]byte("abcd"), capacity/16)
+	keys := strings.Fields("a b c d e f g h i j k l m n o p")
+	for _, key := range keys {
+		require.NoError(t, fs.Write(ctx, IOVector{FilePath: key, Policy: SkipAllCache,
+			Entries: []IOEntry{{Size: int64(len(data)), Data: data}}}))
+	}
+
+	started, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	blockFirst := sync.OnceFunc(func() { close(started); <-resume })
+	fs.diskCache.fileSync = func(*os.File) error { blockFirst(); return nil }
+	require.NoError(t, fs.PrefetchFile(ctx, keys[0]))
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("prefetch did not reach sync")
+	}
+	for _, key := range keys[1:] {
+		require.NoError(t, fs.PrefetchFile(ctx, key))
+	}
+
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	var staged int64
+	for _, f := range files {
+		require.True(t, strings.HasSuffix(f.Name(), cacheFileTempSuffix))
+		info, err := f.Info()
+		require.NoError(t, err)
+		staged += info.Size()
+	}
+	require.Zero(t, fs.diskCache.cache.Used())
+	require.Equal(t, int64(capacity), staged, "temporary files must share the disk budget")
+
+	// An optional fill under pressure must still deliver all requested bytes
+	// from a single source GET, and a successful upload must stay readable.
+	var counters perfcounter.CounterSet
+	v := &IOVector{FilePath: "p", Entries: []IOEntry{{Offset: 17, Size: 3}}}
+	defer v.Release()
+	require.NoError(t, fs.Read(perfcounter.WithCounterSet(ctx, &counters), v))
+	require.Equal(t, data[17:20], v.Entries[0].Data)
+	require.EqualValues(t, 1, counters.FileService.S3.Get.Load())
+	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "upload", Policy: ReplayDataForDiskCache,
+		Entries: []IOEntry{{Size: int64(len(data)), Data: data}}}))
+
+	release()
+	fs.FlushCache(ctx)
+	require.NoError(t, ctx.Err())
+	require.NoFileExists(t, fs.diskCache.pathForFile("p"))
+	require.NoFileExists(t, fs.diskCache.pathForFile("upload"))
+	require.NoError(t, fs.PrefetchFile(ctx, "upload"))
+	require.Equal(t, data, readReplayCache(t, fs, "upload"))
+}

@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -886,6 +887,7 @@ func TestDiskCacheAsyncSetFileFinalizeErrorIsFailOpenAndObservable(t *testing.T)
 	defer cancel()
 	cache.Flush(flushCtx)
 	require.NoError(t, flushCtx.Err())
+	require.Zero(t, cache.async.mu.stagedBytes)
 	require.Equal(t, 1, logs.FilterMessage("write disk cache error").Len())
 	require.True(t, cache.writeFailures.failed.Load())
 	require.False(t, cache.isUpdating(cache.pathForFile("foo")))
@@ -1771,4 +1773,66 @@ func TestDiskCacheDeleteAfterPublicationClaim(t *testing.T) {
 	require.NoError(t, <-finished)
 	require.NoFileExists(t, path)
 	require.False(t, cache.cache.Contains(path))
+}
+
+func TestDiskCacheStagingAccountsForActiveCopies(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	ctx, stop := context.WithTimeout(t.Context(), diskCacheLifecycleTestTimeout)
+	defer stop()
+	data := bytes.Repeat([]byte("x"), int(cache.cache.Capacity()))
+	half := len(data) / 2
+	staged := func() int64 {
+		cache.async.mu.Lock()
+		defer cache.async.mu.Unlock()
+		return cache.async.mu.stagedBytes
+	}
+	require.NoError(t, cache.SetFile(ctx, "old", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(data)), nil
+	}))
+	require.FileExists(t, cache.pathForFile("old"))
+
+	// Hold a foreground copy one byte short of a block boundary. Its last
+	// partially written block still counts against the on-disk budget.
+	partial, cancel := context.WithCancel(ctx)
+	copied := make(chan struct{})
+	finished := make(chan struct{})
+	result := make(chan error, 1)
+	defer func() { cancel(); <-finished }()
+	go func() {
+		defer close(finished)
+		result <- cache.setFile(partial, "first", func(context.Context) (io.ReadCloser, error) {
+			reader := io.MultiReader(bytes.NewReader(data[:half-2]), strings.NewReader("y"), readerFunc(func(p []byte) (int, error) {
+				close(copied)
+				<-partial.Done()
+				p[0] = 'z'
+				return 1, nil
+			}))
+			return io.NopCloser(struct{ io.Reader }{reader}), nil
+		}, true)
+	}()
+	select {
+	case <-copied:
+	case <-ctx.Done():
+		t.Fatal("foreground copy did not reach its last read")
+	}
+	require.EqualValues(t, half, staged())
+	require.NoFileExists(t, cache.pathForFile("old"))
+
+	// A WriterTo fills the remaining space, outgrows it, then encounters a
+	// real source error. Release its partial file before draining the source.
+	err := cache.setFile(ctx, "second", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(io.MultiReader(bytes.NewReader(data[:half]), strings.NewReader("!"), strings.NewReader("tail"),
+			readerFunc(func([]byte) (int, error) {
+				require.EqualValues(t, half, staged())
+				return 0, io.ErrUnexpectedEOF
+			}))), nil
+	}, true)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.NoFileExists(t, cache.pathForFile("second"))
+	cancel()
+	require.ErrorIs(t, <-result, context.Canceled)
+	require.Zero(t, staged())
+	files, err := os.ReadDir(cache.path)
+	require.NoError(t, err)
+	require.Empty(t, files)
 }
