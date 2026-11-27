@@ -62,13 +62,20 @@ func (c *dispatchCreditWaitContext) Done() <-chan struct{} {
 
 type dispatchCreditTestSession struct {
 	morpc.ClientSession
-	frames chan morpc.Message
+	frames     chan morpc.Message
+	beforeData func() error
 }
 
 func (*dispatchCreditTestSession) SessionCtx() context.Context { return context.Background() }
 
 func (s *dispatchCreditTestSession) Write(_ context.Context, msg morpc.Message) error {
-	data, err := msg.(*pipeline.Message).Marshal()
+	frame := msg.(*pipeline.Message)
+	if frame.IsBatchMessage() && s.beforeData != nil {
+		if err := s.beforeData(); err != nil {
+			return err
+		}
+	}
+	data, err := frame.Marshal()
 	if err != nil {
 		return err
 	}
@@ -83,12 +90,19 @@ func (s *dispatchCreditTestSession) Write(_ context.Context, msg morpc.Message) 
 func TestDispatchCreditStopKeepsOtherReceiverAndNotifyOutcome(t *testing.T) {
 	base := context.Background()
 	for _, tc := range []struct {
-		name string
-		err  error
+		name        string
+		err         error
+		idle        bool
+		inFlight    bool
+		killRequest bool
 	}{
-		{"normal receiver stop", nil},
-		{"actual peer interruption", moerr.NewQueryInterrupted(base)},
-		{"actual foreign-key failure", moerr.NewErrFKNoReferencedRow2(base)},
+		{name: "normal receiver stop"},
+		{name: "idle receiver stop survives request and connection cleanup", idle: true},
+		{name: "in-flight write precedes successful end", inFlight: true},
+		{name: "in-flight write failure survives stop", inFlight: true, err: moerr.NewErrFKNoReferencedRow2(base)},
+		{name: "actual peer interruption", err: moerr.NewQueryInterrupted(base)},
+		{name: "actual foreign-key failure", err: moerr.NewErrFKNoReferencedRow2(base)},
+		{name: "request kill before receiver stop", err: moerr.NewQueryInterrupted(base), killRequest: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(base, 3*time.Second)
@@ -113,14 +127,33 @@ func TestDispatchCreditStopKeepsOtherReceiverAndNotifyOutcome(t *testing.T) {
 
 			slow := &dispatchCreditTestSession{frames: make(chan morpc.Message, 4)}
 			fast := &dispatchCreditTestSession{frames: make(chan morpc.Message, 4)}
-			creditWait := &dispatchCreditWaitContext{Context: ctx, entered: make(chan struct{})}
+			slowRequest, cancelSlowRequest := context.WithCancelCause(ctx)
+			defer cancelSlowRequest(nil)
+			connection, disconnectSlow := context.WithCancel(ctx)
+			defer disconnectSlow()
+			creditWait := &dispatchCreditWaitContext{Context: connection, entered: make(chan struct{})}
 			flow := newPipelineBatchFlow(1, 128)
 			const slowStream, fastStream = 81, 82
 			lifecycle, err := registerPipelineStreamLifecycle(slow, slowStream, flow)
 			require.NoError(t, err)
 			defer lifecycle.remove()
-			seq, err := flow.reserve(ctx, ctx, 1)
-			require.NoError(t, err)
+			var seq uint64
+			writeEntered, releaseWrite := make(chan struct{}), make(chan struct{})
+			if tc.inFlight {
+				slow.beforeData = func() error {
+					close(writeEntered)
+					select {
+					case <-releaseWrite:
+						return tc.err
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+			}
+			if !tc.idle && !tc.inFlight {
+				seq, err = flow.reserve(ctx, ctx, 1)
+				require.NoError(t, err)
+			}
 
 			var workers sync.WaitGroup
 			defer func() {
@@ -134,9 +167,9 @@ func TestDispatchCreditStopKeepsOtherReceiverAndNotifyOutcome(t *testing.T) {
 				workers.Go(func() { done <- fn() })
 				return done
 			}
-			startNotify := func(peer *dispatchCreditTestSession, connCtx context.Context, stream uint64, id uuid.UUID, life *pipelineStreamLifecycle) <-chan error {
+			startNotify := func(peer *dispatchCreditTestSession, requestCtx, connCtx context.Context, stream uint64, id uuid.UUID, life *pipelineStreamLifecycle) <-chan error {
 				receiver := &messageReceiverOnServer{
-					messageCtx: ctx, connectionCtx: connCtx, messageId: stream,
+					messageCtx: requestCtx, connectionCtx: connCtx, messageId: stream,
 					messageTyp: pipeline.Method_PrepareDoneNotifyMessage, messageUuid: id,
 					clientSession: peer, colexecServer: srv, streamLifecycle: life,
 					messageAcquirer: func() morpc.Message { return new(pipeline.Message) },
@@ -144,7 +177,7 @@ func TestDispatchCreditStopKeepsOtherReceiverAndNotifyOutcome(t *testing.T) {
 				return run(func() error {
 					err := handlePipelineMessage(receiver)
 					if err == nil && life != nil {
-						err = waitUntilPipelineBatchFlowDrained(ctx, connCtx, life.batchFlow, nil)
+						err = waitUntilPipelineBatchFlowDrained(requestCtx, connCtx, life.batchFlow, nil)
 					}
 					if err != nil {
 						return receiver.sendError(err)
@@ -152,19 +185,71 @@ func TestDispatchCreditStopKeepsOtherReceiverAndNotifyOutcome(t *testing.T) {
 					return receiver.sendEndMessage()
 				})
 			}
-			slowDone := startNotify(slow, creditWait, slowStream, slowID, lifecycle)
-			fastDone := startNotify(fast, ctx, fastStream, fastID, nil)
+			slowDone := startNotify(slow, slowRequest, creditWait, slowStream, slowID, lifecycle)
+			fastDone := startNotify(fast, ctx, ctx, fastStream, fastID, nil)
 			sendDone := run(func() error {
 				_, err := op.Call(proc)
 				return err
 			})
 
-			select {
-			case <-creditWait.entered:
-			case <-ctx.Done():
-				t.Fatal("dispatch did not wait on the occupied credit window")
+			await := func(done <-chan error) error {
+				t.Helper()
+				select {
+				case err := <-done:
+					return err
+				case <-ctx.Done():
+					t.Fatal("dispatch or notify did not finish")
+					return nil
+				}
 			}
-			if tc.err != nil {
+			nextFrame := func(peer *dispatchCreditTestSession) *pipeline.Message {
+				t.Helper()
+				select {
+				case frame := <-peer.frames:
+					return frame.(*pipeline.Message)
+				case <-ctx.Done():
+					t.Fatal("expected a data frame")
+					return nil
+				}
+			}
+
+			var sendErr error
+			if tc.idle {
+				sendErr = await(sendDone)
+				require.NoError(t, sendErr)
+				first := nextFrame(slow)
+				require.True(t, first.IsBatchMessage())
+				seq = first.GetBatchSequence()
+			} else if tc.inFlight {
+				select {
+				case <-writeEntered:
+				case <-ctx.Done():
+					t.Fatal("dispatch did not reach the reserved batch write")
+				}
+				require.NoError(t, handlePipelineMessage(&messageReceiverOnServer{
+					messageCtx: ctx, messageTyp: pipeline.Method_StopSending, messageId: slowStream,
+					clientSession: slow, colexecServer: srv,
+				}))
+				require.Empty(t, slow.frames, "the terminal frame must wait behind the in-flight write")
+				close(releaseWrite)
+				sendErr = await(sendDone)
+				if tc.err == nil {
+					first := nextFrame(slow)
+					require.True(t, first.IsBatchMessage(), "data must arrive before the terminal frame")
+					seq = first.GetBatchSequence()
+				} else {
+					seq = 1
+				}
+			} else {
+				select {
+				case <-creditWait.entered:
+				case <-ctx.Done():
+					t.Fatal("dispatch did not wait on the occupied credit window")
+				}
+			}
+			if tc.killRequest {
+				cancelSlowRequest(tc.err)
+			} else if tc.err != nil && !tc.inFlight {
 				flow.abort(tc.err)
 			}
 
@@ -185,26 +270,19 @@ func TestDispatchCreditStopKeepsOtherReceiverAndNotifyOutcome(t *testing.T) {
 				}}
 				return result.clean(proc)
 			})
-			await := func(done <-chan error) error {
-				t.Helper()
-				select {
-				case err := <-done:
-					return err
-				case <-ctx.Done():
-					t.Fatal("dispatch or notify did not finish")
-					return nil
-				}
+			if !tc.idle && !tc.inFlight {
+				sendErr = await(sendDone)
 			}
-
-			sendErr := await(sendDone)
 			if tc.err == nil {
 				require.NoError(t, sendErr)
 				require.NoError(t, await(slowDone), "stopped notify must finish before the producer resets")
 				require.NoError(t, await(cleanDone), "client cleanup must read a successful terminal frame")
+				cancelSlowRequest(nil)
+				disconnectSlow()
 				_, err := op.Call(proc)
 				require.NoError(t, err)
 				for _, want := range []int32{10, 20} {
-					frame := (<-fast.frames).(*pipeline.Message)
+					frame := nextFrame(fast)
 					require.True(t, frame.IsBatchMessage())
 					bat, err := decodeBatch(proc.Mp(), frame.GetData())
 					require.NoError(t, err)
@@ -223,7 +301,11 @@ func TestDispatchCreditStopKeepsOtherReceiverAndNotifyOutcome(t *testing.T) {
 			}
 			require.NoError(t, await(fastDone))
 			require.NoError(t, handlePipelineBatchAck(&pipeline.Message{Id: slowStream, BatchAckSequence: seq}, slow))
-			require.NoError(t, proc.Ctx.Err(), "only the stopped receiver is retired")
+			if tc.killRequest {
+				require.ErrorIs(t, context.Cause(proc.Ctx), tc.err)
+			} else {
+				require.NoError(t, proc.Ctx.Err(), "only the stopped receiver is retired")
+			}
 		})
 	}
 }
