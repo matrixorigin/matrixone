@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -127,9 +128,9 @@ func TestRecoverCheckpointAppendNames(t *testing.T) {
 			original := append([]string(nil), attrs...)
 			bat := containers.BuildBatch(attrs, typs, containers.Options{Allocator: common.DefaultAllocator})
 			defer bat.Close()
-			bat.Vecs[0].Append(int64(1), false)
+			require.NoError(t, vector.AppendAny(bat.Vecs[0], int64(1), false, bat.Vecs[0].MPool()))
 			if scenario != "wrong_type" {
-				bat.Vecs[1].Append(int64(42), false)
+				require.NoError(t, vector.AppendAny(bat.Vecs[1], int64(42), false, bat.Vecs[1].MPool()))
 			}
 			if scenario == "duplicate_name" {
 				bat.Attrs[1] = "id"
@@ -140,8 +141,8 @@ func TestRecoverCheckpointAppendNames(t *testing.T) {
 			if scenario == "rename" || scenario == "rename_then_comment" || scenario == "swap" {
 				require.NoError(t, err)
 				require.Equal(t, current.AllNames(), bat.Attrs)
-				require.Equal(t, int64(1), bat.GetVectorByName(current.ColDefs[0].Name).Get(0))
-				require.Equal(t, int64(42), bat.GetVectorByName(current.ColDefs[1].Name).Get(0))
+				require.Equal(t, int64(1), bat.GetVectorByName(current.ColDefs[0].Name).GetValue(0))
+				require.Equal(t, int64(42), bat.GetVectorByName(current.ColDefs[1].Name).GetValue(0))
 			} else {
 				require.Error(t, err)
 				require.Equal(t, original, bat.Attrs)
@@ -150,8 +151,8 @@ func TestRecoverCheckpointAppendNames(t *testing.T) {
 					// Their positions expose the ambiguity before any row is installed.
 					require.ElementsMatch(t, current.AllNames(), bat.Attrs)
 					require.False(t, walColumnsInSchemaOrder(bat.Attrs, current))
-					require.Equal(t, int64(1), bat.GetVectorByName("id").Get(0))
-					require.Equal(t, int64(42), bat.GetVectorByName("price").Get(0))
+					require.Equal(t, int64(1), bat.GetVectorByName("id").GetValue(0))
+					require.Equal(t, int64(42), bat.GetVectorByName("price").GetValue(0))
 				}
 			}
 		})

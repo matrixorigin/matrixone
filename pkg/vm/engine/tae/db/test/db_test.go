@@ -14300,8 +14300,8 @@ func testReplayAppendAcrossColumnRename(t *testing.T, checkpointed, swap bool) {
 	writer, oldRel := tae.GetRelation()
 	payload := containers.BuildBatch(schema.Attrs(), schema.Types(), containers.Options{Allocator: common.DefaultAllocator})
 	defer payload.Close()
-	payload.GetVectorByName("id").Append(int64(1), false)
-	payload.GetVectorByName("price").Append(int64(42), false)
+	require.NoError(t, vector.AppendAny(payload.GetVectorByName("id"), int64(1), false, payload.GetVectorByName("id").MPool()))
+	require.NoError(t, vector.AppendAny(payload.GetVectorByName("price"), int64(42), false, payload.GetVectorByName("price").MPool()))
 	require.NoError(t, oldRel.Append(ctx, payload))
 
 	ddl, rel := tae.GetRelation()
@@ -14393,8 +14393,8 @@ func TestReplayAppendWithSameTxnColumnRename(t *testing.T) {
 			insert := func(key, val int32) {
 				bat := containers.BuildBatch([]string{pk, value}, []types.Type{typ, typ}, containers.Options{Allocator: common.DefaultAllocator})
 				defer bat.Close()
-				bat.GetVectorByName(pk).Append(key, false)
-				bat.GetVectorByName(value).Append(val, false)
+				require.NoError(t, vector.AppendAny(bat.GetVectorByName(pk), key, false, bat.GetVectorByName(pk).MPool()))
+				require.NoError(t, vector.AppendAny(bat.GetVectorByName(value), val, false, bat.GetVectorByName(value).MPool()))
 				require.NoError(t, rel.Append(ctx, bat))
 				want[key] = val
 			}
@@ -14458,9 +14458,9 @@ func TestReplayAppendWithSameTxnColumnRename(t *testing.T) {
 				got := make(map[int32]int32, scan.Length())
 				keys, vals := scan.GetVectorByName(pk), scan.GetVectorByName(value)
 				for i := range scan.Length() {
-					require.False(t, keys.IsNull(i))
-					require.False(t, vals.IsNull(i))
-					got[keys.Get(i).(int32)] = vals.Get(i).(int32)
+					require.False(t, keys.IsNull(uint64(i)))
+					require.False(t, vals.IsNull(uint64(i)))
+					got[keys.GetValue(i).(int32)] = vals.GetValue(i).(int32)
 				}
 				require.Equal(t, want, got)
 				for key, val := range want {

@@ -214,7 +214,7 @@ func TestSchemaEvolutionWALRename(t *testing.T) {
 							keys, err := node.pkIndex.GetActiveRow(int64(99))
 							require.NoError(t, err)
 							require.Equal(t, []uint32{0}, keys)
-							require.Equal(t, int64(99), node.data.GetVectorByName("amount").Get(0))
+							require.Equal(t, int64(99), node.data.GetVectorByName("amount").GetValue(0))
 						} else {
 							_, err := node.ApplyAppendLocked(bad.bat, bad.source)
 							require.ErrorContains(t, err, bad.message)
@@ -321,9 +321,9 @@ func TestApplyAppendAtWALFillFailurePreservesRowsAndPrimaryKey(t *testing.T) {
 	for _, vec := range node.data.Vecs {
 		require.Equal(t, 1, vec.Length())
 	}
-	require.Equal(t, int64(7), node.data.GetVectorByName("id").Get(0))
-	require.Equal(t, true, node.data.GetVectorByName("flag").Get(0))
-	require.Equal(t, []byte("unchanged"), node.data.GetVectorByName("memo").Get(0))
+	require.Equal(t, int64(7), node.data.GetVectorByName("id").GetValue(0))
+	require.Equal(t, true, node.data.GetVectorByName("flag").GetValue(0))
+	require.Equal(t, []byte("unchanged"), node.data.GetVectorByName("memo").GetValue(0))
 	positions, err = node.pkIndex.GetActiveRow(int64(7))
 	require.NoError(t, err)
 	require.Equal(t, []uint32{0}, positions)
@@ -338,7 +338,7 @@ func TestApplyAppendAtWALFillFailurePreservesRowsAndPrimaryKey(t *testing.T) {
 	positions, err = node.pkIndex.GetActiveRow(int64(99))
 	require.NoError(t, err)
 	require.Equal(t, []uint32{0}, positions)
-	require.Equal(t, int64(99), node.data.GetVectorByName("id").Get(0))
+	require.Equal(t, int64(99), node.data.GetVectorByName("id").GetValue(0))
 	require.True(t, node.data.GetVectorByName("flag").IsNull(0))
 	require.True(t, node.data.GetVectorByName("memo").IsNull(0))
 }
@@ -464,7 +464,7 @@ func TestReplayAppendLegacyCatalogWALTextType(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, []byte("release_db"), node.data.GetVectorByName(name).Get(0))
+			require.Equal(t, []byte("release_db"), node.data.GetVectorByName(name).GetValue(0))
 			require.Equal(t, types.CharsetUTF8, node.data.GetVectorByName(name).GetType().Charset)
 		})
 	}
