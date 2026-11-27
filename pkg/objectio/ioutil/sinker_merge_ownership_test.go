@@ -44,7 +44,7 @@ type panicFetchBuffer struct {
 	freshAt        int
 }
 
-func (b *panicFetchBuffer) FetchWithSchema(attrs []string, typs []types.Type) *batch.Batch {
+func (b *panicFetchBuffer) FetchWithTypes(typs []types.Type, mp *mpool.MPool) *batch.Batch {
 	b.calls++
 	if b.beforeFetch != nil {
 		b.beforeFetch(b.calls)
@@ -56,9 +56,9 @@ func (b *panicFetchBuffer) FetchWithSchema(attrs []string, typs []types.Type) *b
 		panic(b.panicValue)
 	}
 	if b.calls == b.freshAt {
-		return batch.NewWithSchema(true, attrs, typs)
+		return batch.NewWithTypes(typs, mp)
 	}
-	return b.BatchFreeList.FetchWithSchema(attrs, typs)
+	return b.BatchFreeList.FetchWithTypes(typs, mp)
 }
 
 func TestMergeSpillReplacementFetchError(t *testing.T) {
@@ -72,7 +72,7 @@ func TestMergeSpillReplacementFetchError(t *testing.T) {
 			require.NoError(t, err)
 			attrs := []string{"a", "b", "c"}
 			typs := []types.Type{types.T_int32.ToType(), types.T_int32.ToType(), types.T_int32.ToType()}
-			buf := &panicFetchBuffer{BatchFreeList: containers.NewBatchFreeList(attrs, typs, true)}
+			buf := &panicFetchBuffer{BatchFreeList: containers.NewBatchFreeList(typs, true)}
 			opts := []SinkerOption{WithBuffer(buf, true), WithOffHeap(), WithMemorySizeThreshold(1 << 30)}
 			if mode == "accumulate" {
 				opts = append(opts, WithDedupAll())
@@ -137,7 +137,7 @@ func TestMergeSpillResetKeepsNewData(t *testing.T) {
 			require.NoError(t, err)
 			attrs := []string{"key"}
 			typs := []types.Type{types.T_int64.ToType()}
-			buf := &panicFetchBuffer{BatchFreeList: containers.NewBatchFreeList(attrs, typs, true)}
+			buf := &panicFetchBuffer{BatchFreeList: containers.NewBatchFreeList(typs, true)}
 			file := &keyRecordingSinker{}
 			opts := []SinkerOption{WithBuffer(buf, true), WithMemorySizeThreshold(1 << 30)}
 			if mode == "accumulate" {
@@ -147,7 +147,7 @@ func TestMergeSpillResetKeepsNewData(t *testing.T) {
 			}
 			sinker := NewSinker(0, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, proc.Mp(), fs, opts...)
 			defer sinker.Close()
-			input := batch.NewWithSchema(false, attrs, typs)
+			input := batch.NewWithTypes(typs, proc.Mp())
 			defer input.Clean(proc.Mp())
 			for _, key := range []int64{8, 7} {
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], key, false, proc.Mp()))
@@ -185,7 +185,7 @@ func TestMergeSpillFullBlockFetchPanicByRange(t *testing.T) {
 				require.NoError(t, err)
 				attrs := []string{"key"}
 				typs := []types.Type{types.T_int64.ToType()}
-				buf := &panicFetchBuffer{BatchFreeList: containers.NewBatchFreeList(attrs, typs, true)}
+				buf := &panicFetchBuffer{BatchFreeList: containers.NewBatchFreeList(typs, true)}
 				opts := []SinkerOption{WithBuffer(buf, true), WithMemorySizeThreshold(1 << 30)}
 				if mode == "accumulate" {
 					opts = append(opts, WithDedupAll())
@@ -194,7 +194,7 @@ func TestMergeSpillFullBlockFetchPanicByRange(t *testing.T) {
 				}
 				sinker := NewSinker(0, attrs, typs, mockFactory(nil, nil), proc.Mp(), fs, opts...)
 				defer sinker.Close()
-				input := batch.NewWithSchema(false, attrs, typs)
+				input := batch.NewWithTypes(typs, proc.Mp())
 				defer input.Clean(proc.Mp())
 				for part := range 2 {
 					for i := range int(objectio.BlockMaxRows) {
@@ -264,7 +264,7 @@ func TestStreamingTailSinkFailureByRange(t *testing.T) {
 				file := &tailFailureSinker{want: want, panicOnTail: panicOnTail}
 				sinker := NewSinker(0, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, proc.Mp(), fs, WithMemorySizeThreshold(1<<30))
 				t.Cleanup(func() { _ = sinker.Close() })
-				input := batch.NewWithSchema(false, attrs, typs)
+				input := batch.NewWithTypes(typs, proc.Mp())
 				defer input.Clean(proc.Mp())
 				var expected []int64
 				for part, count := range []int{int(objectio.BlockMaxRows), 100} {
@@ -319,7 +319,7 @@ func TestPipelineProducerPanicAfterWorkerTakesBatch(t *testing.T) {
 	fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
 	attrs, typs, _ := mockSchema(3, 2)
-	buf := &panicFetchBuffer{BatchFreeList: containers.NewBatchFreeList(attrs, typs, true)}
+	buf := &panicFetchBuffer{BatchFreeList: containers.NewBatchFreeList(typs, true)}
 	worker := &blockingOwnershipSinker{started: make(chan struct{}), release: make(chan struct{}), rows: make(chan int, 1)}
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(worker.release) }) }
@@ -420,7 +420,7 @@ func TestMergeSpillReplacementFetchPanic(t *testing.T) {
 			fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
 			require.NoError(t, err)
 			attrs, typs, _ := mockSchema(3, 2)
-			buf := &panicFetchBuffer{BatchFreeList: containers.NewBatchFreeList(attrs, typs, true)}
+			buf := &panicFetchBuffer{BatchFreeList: containers.NewBatchFreeList(typs, true)}
 			opts := []SinkerOption{WithBuffer(buf, true), WithMemorySizeThreshold(1 << 30)}
 			if mode == "accumulate" {
 				opts = append(opts, WithDedupAll())
@@ -444,7 +444,7 @@ func TestMergeSpillReplacementFetchPanic(t *testing.T) {
 			batches := make([]*batch.Batch, 0, count)
 			seen := make(map[*batch.Batch]bool)
 			for i := 0; i < count; i++ {
-				b := buf.FetchWithSchema(attrs, typs)
+				b := buf.FetchWithTypes(typs, proc.Mp())
 				batches = append(batches, b)
 				require.False(t, seen[b], "batch returned more than once")
 				seen[b] = true
@@ -475,7 +475,7 @@ func TestMergeSpillReplacementOwnedOnPanic(t *testing.T) {
 			fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
 			require.NoError(t, err)
 			attrs, typs, _ := mockSchema(3, 2)
-			buf := &panicFetchBuffer{BatchFreeList: containers.NewBatchFreeList(attrs, typs, true)}
+			buf := &panicFetchBuffer{BatchFreeList: containers.NewBatchFreeList(typs, true)}
 			opts := []SinkerOption{WithBuffer(buf, true), WithMemorySizeThreshold(1 << 30)}
 			if mode == "accumulate" {
 				opts = append(opts, WithDedupAll())
