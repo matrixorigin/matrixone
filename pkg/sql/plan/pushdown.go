@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -279,6 +280,44 @@ const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
 func (builder *QueryBuilder) filterPushdownBarrier(expr *plan.Expr) bool {
 	return ContainsVolatileFunction(expr) ||
 		builder.containsStatementInvariantFilterDiagnostic(expr)
+}
+
+// DATABASE() is stable within one execution, but must not be folded into a
+// cached plan. Filter the TABLES arms before the local arm observes live
+// AUTO_INCREMENT state for a table outside the requested schema.
+func canPushTablesDatabaseFilter(set, left, right *plan.Node, filter *plan.Expr) bool {
+	if set.NodeType != plan.Node_UNION_ALL || len(set.ViewPath) == 0 {
+		return false
+	}
+	owner := set.ViewPath[len(set.ViewPath)-1]
+	if !strings.EqualFold(owner.GetDatabaseName(), INFORMATION_SCHEMA) || !strings.EqualFold(owner.GetViewName(), "tables") {
+		return false
+	}
+	eq := filter.GetF()
+	if len(eq.GetArgs()) != 2 || !IsEqualFunc(eq.Func.GetObj()) {
+		return false
+	}
+	column, value := eq.Args[0], eq.Args[1]
+	if column.GetCol() == nil {
+		column, value = value, column
+	}
+	col, db := column.GetCol(), value.GetF()
+	if col == nil || len(set.BindingTags) != 1 || col.RelPos != set.BindingTags[0] ||
+		db == nil || len(db.Args) != 0 || db.Func.GetObj() != function.EncodeOverloadID(function.DATABASE, 0) {
+		return false
+	}
+	pos := int(col.ColPos)
+	for _, arm := range []*plan.Node{left, right} {
+		if pos < 0 || pos >= len(arm.ProjectList) {
+			return false
+		}
+		project := arm.ProjectList[pos]
+		if project.GetCol() == nil || project.Typ.Id != column.Typ.Id || project.Typ.PadSpace != column.Typ.PadSpace ||
+			!project.Typ.SameCollation(column.Typ) {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeScalarReaggFilterRefs(expr *plan.Expr, groupTag int32, aliases map[[2]int32]int32) {
@@ -968,7 +1007,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		var canPushDownRight []*plan.Expr
 
 		for _, filter := range filters {
-			if builder.filterPushdownBarrier(filter) {
+			if builder.filterPushdownBarrier(filter) && !canPushTablesDatabaseFilter(node, leftChild, rightChild, filter) {
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}

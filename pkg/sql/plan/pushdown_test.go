@@ -898,6 +898,32 @@ func TestSetPhysicalEqualityFilterBoundary(t *testing.T) {
 	}
 }
 
+func TestTablesDatabaseFilterBoundary(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		t.Helper()
+		f, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return f
+	}
+	db := bind("database")
+	col := GetColExpr(db.Typ, 3, 0)
+	left := &plan.Node{ProjectList: []*plan.Expr{GetColExpr(db.Typ, 1, 0)}}
+	right := &plan.Node{ProjectList: []*plan.Expr{GetColExpr(db.Typ, 2, 0)}}
+	set := &plan.Node{NodeType: plan.Node_UNION_ALL, BindingTags: []int32{3}, ViewPath: []*plan.ViewStep{{DatabaseName: INFORMATION_SCHEMA, ViewName: "TABLES"}}}
+	filter := bind("=", col, db)
+	require.True(t, canPushTablesDatabaseFilter(set, left, right, filter))
+	require.True(t, canPushTablesDatabaseFilter(set, left, right, bind("=", db, col)))
+	require.False(t, canPushTablesDatabaseFilter(set, left, right, bind("=", GetColExpr(db.Typ, 4, 0), db)))
+	require.False(t, canPushTablesDatabaseFilter(set, left, right, bind("=", col, bind("user"))))
+	require.False(t, canPushTablesDatabaseFilter(set, left, &plan.Node{ProjectList: []*plan.Expr{db}}, filter))
+	set.NodeType = plan.Node_UNION
+	require.False(t, canPushTablesDatabaseFilter(set, left, right, filter))
+	set.NodeType = plan.Node_UNION_ALL
+	set.ViewPath = append(set.ViewPath, &plan.ViewStep{DatabaseName: "app", ViewName: "tables"})
+	require.False(t, canPushTablesDatabaseFilter(set, left, right, filter))
+}
+
 func TestVolatileFilterStopsAtPlanBoundary(t *testing.T) {
 	for _, test := range []struct {
 		name       string
