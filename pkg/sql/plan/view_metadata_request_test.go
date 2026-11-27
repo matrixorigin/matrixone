@@ -507,4 +507,78 @@ func TestViewMetadataRequestDescribesReleasedExtraGroupingFixture(t *testing.T) 
 	registerNamedView("v_nested_marked", marked)
 	_, err = DescribeViewMetadata(r.Context(), "pg200", "v_nested_marked", nil)
 	require.ErrorContainsf(t, err, "multiple time window clauses", "a marked definition keeps the complete binding and must genuinely surface the duplicate-window validation through the metadata route")
+	// The reviewers' exact triple-window body through the SAME real route and
+	// request/binding: the released inference boundary pins the immediate
+	// middle SELECT and its two-minute ownership in the actual binding.
+	tripleStmt := "create view pg200.v_triple as ((select count(*) as a from pg200.tw_src interval(ts, 1, minute)) interval(ts, 2, minute) order by a) interval(ts, 3, minute) limit 5"
+	tripleContext := int64(1)
+	tripleFree, mErr := json.Marshal(ViewData{Stmt: tripleStmt, DefaultDatabase: "pg200",
+		SQLMode: authentic.SQLMode, SecurityType: authentic.SecurityType,
+		LowerCaseTableNames: &tripleContext})
+	require.NoErrorf(t, mErr, "the triple-window creation-context definition must marshal")
+	registerNamedView("v_triple_ctx", string(tripleFree))
+	tripleRes, tErr := DescribeViewMetadata(r.Context(), "pg200", "v_triple_ctx", nil)
+	require.NoErrorf(t, tErr, "the reviewers' triple-window body describes through the same real route")
+	// Acquire-time release: a fatal column/dependency assertion below must
+	// not leave the acquired reader live while the deferred request Close
+	// waits for readers. Release is idempotent, and this later-registered
+	// defer runs before the deferred r.Close, while the explicit release
+	// below still guards the same-request reuse ordering.
+	defer tripleRes.Release()
+	tripleCols, cErr := tripleRes.Columns()
+	require.NoErrorf(t, cErr, "the triple-window describe returns columns")
+	require.Lenf(t, tripleCols, 1, "the triple-window view exposes exactly one visible column")
+	require.Truef(t, strings.EqualFold(tripleCols[0].GetName(), "a"), "the visible column is a")
+	require.Equalf(t, int32(types.T_int64), tripleCols[0].Typ.Id, "the visible column a is BIGINT per the middle-window release binding")
+	sawTripleSrc := false
+	tripleDeps, dErr := tripleRes.Dependencies()
+	require.NoErrorf(t, dErr, "the triple-window dependencies decode")
+	for _, dep := range tripleDeps {
+		if strings.EqualFold(dep.DatabaseName, "pg200") && strings.EqualFold(dep.RelationName, "tw_src") {
+			require.Equalf(t, uint64(4202), dep.RelationID, "the decoded direct physical RelationID")
+			require.Equalf(t, uint64(4202), dep.LogicalID, "the decoded direct physical LogicalID")
+			sawTripleSrc = true
+		}
+	}
+	require.Truef(t, sawTripleSrc, "the triple-window describe binds the seeded pg200.tw_src dependency")
+	// Release explicitly BEFORE the same-request reuse describe below.
+	tripleRes.Release()
+	// The effective two-minute ownership observed from the ACTUAL bound
+	// inference, not a separately parsed AST: regenerate the same persisted
+	// marker-free definition through the production regeneration path. The
+	// rewritten Definition renders the bound body - the immediate middle
+	// child's own two-minute window is the effective interval, while the
+	// outer wrapper's three-minute window never reaches the regenerated
+	// catalog definition.
+	prevCtx := f.compiler.GetContext()
+	f.compiler.SetContext(WithRestoredViewDefinition(context.Background(), "pg200", "v_triple_ctx", string(tripleFree), tripleStmt))
+	regen, regenErr := RegenerateViewDefinition(f.compiler, string(tripleFree))
+	f.compiler.SetContext(prevCtx)
+	require.NoErrorf(t, regenErr, "the production regeneration succeeds on the same persisted triple-window definition")
+	var regenData ViewData
+	require.NoErrorf(t, json.Unmarshal([]byte(regen.TableDef.ViewSql.View), &regenData), "the regenerated catalog definition must decode")
+	t.Logf("regenerated triple-window definition: %s", regenData.Definition)
+	require.Containsf(t, regenData.Definition, "interval(`tw_src`.`ts`, 2, minute)",
+		"the effective window from the actual bound inference is the middle two-minute interval, qualified onto the resolved tw_src.ts column")
+	require.NotContainsf(t, regenData.Definition, "interval(`tw_src`.`ts`, 1, minute)",
+		"the peeled inner one-minute window is not the binding's own window")
+	require.NotContainsf(t, regenData.Definition, "interval(`tw_src`.`ts`, 3, minute)",
+		"the outer wrapper's three-minute window is not the binding's own window")
+	// Release and reuse on the same request context: after the explicit release
+	// above, the request gate must admit a second describe of the same
+	// marker-free view.
+	reuseRes, reuseErr := DescribeViewMetadata(r.Context(), "pg200", "v_triple_ctx", nil)
+	require.NoErrorf(t, reuseErr, "the same request context must admit a second describe after release")
+	reuseRes.Release()
+	// The marked same-body rejection through the same request: the whole-
+	// statement duplicate-window validation stays genuine.
+	tripleMarked, mkErr := json.Marshal(ViewData{Stmt: tripleStmt, DefaultDatabase: "pg200",
+		SQLMode: authentic.SQLMode, SecurityType: authentic.SecurityType,
+		LowerCaseTableNames: &tripleContext, CTEScopeProtocol: &tripleContext})
+	require.NoErrorf(t, mkErr, "the marked triple definition must marshal")
+	registerNamedView("v_triple_marked", string(tripleMarked))
+	_, err = DescribeViewMetadata(r.Context(), "pg200", "v_triple_marked", nil)
+	require.ErrorContainsf(t, err, "multiple time window clauses",
+		"the marked same-body rejection reaches the real whole-statement duplicate-window validation")
+
 }

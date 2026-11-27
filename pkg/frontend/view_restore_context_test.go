@@ -222,3 +222,38 @@ func TestViewRestoreHelpersBindReleasedExtraGroupingFixture(t *testing.T) {
 	require.Truef(t, strings.EqualFold(cols[0].Name, "a"), "the planned output column is a")
 	require.Equalf(t, int32(types.T_int64), cols[0].Typ.Id, "the planned output column a is BIGINT per the release readback")
 }
+
+func TestViewRestoreHelpersBindReleasedTripleWindowFixture(t *testing.T) {
+	inner := plan.NewMockCompilerContext(false, testutil.NewProcess(t))
+	compiler := &pg200SeedCompiler{MockCompilerContext: inner}
+	original := t.Context()
+	compiler.SetContext(original)
+	createSQL := "create view pg200.v_triple as ((select count(*) as a from pg200.tw_src interval(ts, 1, minute)) interval(ts, 2, minute) order by a) interval(ts, 3, minute) limit 5"
+	def := `{"Stmt":"` + createSQL + `","DefaultDatabase":"pg200","sql_mode":"","security_type":"DEFINER"}`
+	info := &tableInfo{dbName: "pg200", tblName: "v_triple", createSql: createSQL, viewDef: def}
+	statements, err := parseViewCreateSQLForRestore(original, info, 1)
+	require.NoErrorf(t, err, "the reviewers' triple-window CREATE VIEW must parse through the frontend restore helper")
+	defer freeStatements(statements)
+	p, err := buildViewCreatePlanForRestore(compiler, info, statements[0])
+	require.NoErrorf(t, err, "the actual frontend restore helper must plan the released triple-window fixture")
+	require.NotNilf(t, p, "the restore helper must produce a real plan")
+	require.Same(t, original, compiler.GetContext(), "the restore helper must restore the original context ownership")
+	var emitted plan.ViewData
+	require.NoErrorf(t, json.Unmarshal([]byte(p.GetDdl().GetCreateView().TableDef.ViewSql.View), &emitted), "the emitted CREATE DDL must carry ViewData")
+	require.Equalf(t, createSQL, emitted.Stmt, "the emitted CREATE DDL must persist the authored statement exactly, unrewritten")
+	require.NotContainsf(t, p.GetDdl().GetCreateView().TableDef.ViewSql.View, "cte_scope_protocol",
+		"the restore must not promote the marker on the marker-free triple-window body")
+	sawSrc := false
+	for _, dep := range emitted.Dependencies {
+		if strings.EqualFold(dep.DatabaseName, "pg200") && strings.EqualFold(dep.RelationName, "tw_src") {
+			require.Equalf(t, uint64(4202), dep.RelationID, "the emitted CREATE DDL must persist the physical RelationID")
+			require.Equalf(t, uint64(4202), dep.LogicalID, "the emitted CREATE DDL must persist the physical LogicalID")
+			sawSrc = true
+		}
+	}
+	require.Truef(t, sawSrc, "the emitted CREATE DDL must bind the seeded pg200.tw_src dependency")
+	cols := p.GetDdl().GetCreateView().TableDef.Cols
+	require.Lenf(t, cols, 1, "the planned triple-window view definition has exactly one visible output column")
+	require.Truef(t, strings.EqualFold(cols[0].Name, "a"), "the planned output column is a")
+	require.Equalf(t, int32(types.T_int64), cols[0].Typ.Id, "the planned output column a is BIGINT per the middle-window binding")
+}

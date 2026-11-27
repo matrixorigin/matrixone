@@ -695,3 +695,215 @@ func TestLazyBroadcastProbeKeepsAdmissionSpaceIntact(t *testing.T) {
 		})
 	})
 }
+
+func TestReview6068PreparedChildOnlyCtasRealRoute(t *testing.T) {
+	runSQLIntegration(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?multiStatements=true", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		const probeDB = "patrol208_ctas_child_review"
+		_, e := conn.ExecContext(ctx, "drop database if exists "+probeDB)
+		require.NoError(t, e)
+		_, e = conn.ExecContext(ctx, "create database "+probeDB)
+		require.NoError(t, e)
+		_, e = conn.ExecContext(ctx, "use "+probeDB)
+		require.NoError(t, e)
+		defer func() { _, _ = conn.ExecContext(ctx, "drop database if exists "+probeDB) }()
+
+		// The reviewers' exact public prepared shape: the merge-base child-only
+		// CTAS (no WITH) stays accepted through the real PREPARE/EXECUTE route.
+		_, e = conn.ExecContext(ctx, "PREPARE p FROM 'CREATE TABLE ctas_page AS (SELECT 7 AS a LIMIT 1) LIMIT 1'")
+		require.NoErrorf(t, e, "the child-only CTAS must stay accepted through the real public PREPARE route")
+		_, e = conn.ExecContext(ctx, "EXECUTE p")
+		require.NoErrorf(t, e, "the prepared child-only CTAS must execute")
+		_, e = conn.ExecContext(ctx, "DEALLOCATE PREPARE p")
+		require.NoError(t, e)
+		rowsPage, e := conn.QueryContext(ctx, "select a from ctas_page")
+		require.NoErrorf(t, e, "the created CTAS table is readable")
+		defer rowsPage.Close()
+		colTypes, e := rowsPage.ColumnTypes()
+		require.NoErrorf(t, e, "the created CTAS column types are readable")
+		require.Lenf(t, colTypes, 1, "the prepared-created CTAS table exposes exactly one visible column")
+		require.Equalf(t, "BIGINT", colTypes[0].DatabaseTypeName(), "the visible column a is BIGINT")
+		var av int64
+		require.Truef(t, rowsPage.Next(), "exactly one row was written")
+		require.NoError(t, rowsPage.Scan(&av))
+		require.Equalf(t, int64(7), av, "the child-only CTAS writes the value 7")
+		require.Falsef(t, rowsPage.Next(), "exactly one row was written")
+		require.NoErrorf(t, rowsPage.Err(), "the row iteration completed without an iteration error")
+		require.NoError(t, rowsPage.Close())
+
+		// The plain (non-prepared) same-shape route agrees.
+		_, e = conn.ExecContext(ctx, "CREATE TABLE ctas_plain AS (SELECT 7 AS a LIMIT 1) LIMIT 1")
+		require.NoErrorf(t, e, "the ordinary child-only CTAS route stays accepted")
+		rowsPlain, e := conn.QueryContext(ctx, "select a from ctas_plain")
+		require.NoError(t, e)
+		defer rowsPlain.Close()
+		require.Truef(t, rowsPlain.Next(), "exactly one row on the ordinary route")
+		require.NoError(t, rowsPlain.Scan(&av))
+		require.Equalf(t, int64(7), av, "the ordinary child-only CTAS writes 7")
+		require.Falsef(t, rowsPlain.Next(), "exactly one row on the ordinary route")
+		require.NoErrorf(t, rowsPlain.Err(), "the ordinary-route row iteration completed without an iteration error")
+		require.NoError(t, rowsPlain.Close())
+
+		// The enclosing-WITH control: the declared CTE wins over a deliberate
+		// physical homonym with a different value and identity.
+		_, e = conn.ExecContext(ctx, "create table w(a int)")
+		require.NoError(t, e)
+		_, e = conn.ExecContext(ctx, "insert into w values (42)")
+		require.NoError(t, e)
+		_, e = conn.ExecContext(ctx, "PREPARE pw FROM 'CREATE TABLE ctas_with AS WITH w AS (SELECT 99 AS a) (SELECT a FROM w) LIMIT 1'")
+		require.NoErrorf(t, e, "the enclosing-WITH CTAS prepares")
+		_, e = conn.ExecContext(ctx, "EXECUTE pw")
+		require.NoErrorf(t, e, "the enclosing-WITH CTAS executes")
+		_, e = conn.ExecContext(ctx, "DEALLOCATE PREPARE pw")
+		require.NoError(t, e)
+		rowsWith, e := conn.QueryContext(ctx, "select a from ctas_with")
+		require.NoError(t, e)
+		defer rowsWith.Close()
+		var wv int64
+		require.Truef(t, rowsWith.Next(), "the WITH-bearing CTAS wrote its row")
+		require.NoError(t, rowsWith.Scan(&wv))
+		require.Equalf(t, int64(99), wv, "the actual CTAS reads the declared CTE (99), not the physical homonym (42)")
+		require.Falsef(t, rowsWith.Next(), "exactly one WITH-bearing row")
+		require.NoErrorf(t, rowsWith.Err(), "the WITH-bearing row iteration completed without an iteration error")
+		require.NoError(t, rowsWith.Close())
+
+		// Nested no-WITH shapes select ONE shared child boundary on every
+		// consumer: the conflicting-limits body reaches the real duplicate
+		// validation at prepare-time planning, and the no-conflict body binds
+		// the immediate middle wrapper through the public PREPARE route.
+		_, e = conn.ExecContext(ctx, "create table nested_src(a int)")
+		require.NoError(t, e)
+		_, e = conn.ExecContext(ctx, "insert into nested_src values (1),(2),(3),(4),(5)")
+		require.NoError(t, e)
+		_, e = conn.ExecContext(ctx, "PREPARE badn FROM 'CREATE TABLE nested_bad AS ((SELECT a FROM nested_src LIMIT 5) LIMIT 3)'")
+		require.Errorf(t, e, "the conflicting nested body reaches duplicate-clause validation at the real prepare-time planning")
+		require.Containsf(t, e.Error(), "multiple LIMIT", "one shared selection surfaces the genuine inner/middle duplicate at the plan stage")
+		_, _ = conn.ExecContext(ctx, "DEALLOCATE PREPARE badn")
+		_, e = conn.ExecContext(ctx, "PREPARE np FROM 'CREATE TABLE nested_page AS ((SELECT a FROM nested_src) LIMIT 3)'")
+		require.NoErrorf(t, e, "the no-conflict nested CTAS prepares through the shared one-child boundary")
+		_, e = conn.ExecContext(ctx, "EXECUTE np")
+		require.NoErrorf(t, e, "the nested CTAS executes")
+		_, e = conn.ExecContext(ctx, "DEALLOCATE PREPARE np")
+		require.NoError(t, e)
+		nestedRows, e := conn.QueryContext(ctx, "select count(*) from nested_page")
+		require.NoError(t, e)
+		defer nestedRows.Close()
+		var nestedCount int
+		require.True(t, nestedRows.Next(), "the nested count returned a row")
+		require.NoError(t, nestedRows.Scan(&nestedCount))
+		require.Equalf(t, 3, nestedCount, "the middle wrapper's LIMIT 3 owns the nested copy, not the unbound deepest child")
+		require.Falsef(t, nestedRows.Next(), "the nested count returned a single row")
+		require.NoErrorf(t, nestedRows.Err(), "the nested count iteration completed cleanly")
+		require.NoError(t, nestedRows.Close())
+
+		// GLM214 control: the authored outer clauses of a no-WITH source stay
+		// effective in the executed copy. Fresh main renders the complete
+		// private source into the follow-up INSERT, so (SELECT a FROM src)
+		// ORDER BY a DESC LIMIT 1 over values 1..5 copies exactly the single
+		// largest value on both the ordinary and the prepared route.
+		_, e = conn.ExecContext(ctx, "create table order_src(a int)")
+		require.NoError(t, e)
+		_, e = conn.ExecContext(ctx, "insert into order_src values (1),(2),(3),(4),(5)")
+		require.NoError(t, e)
+		_, e = conn.ExecContext(ctx, "CREATE TABLE order_dst AS (SELECT a FROM order_src) ORDER BY a DESC LIMIT 1")
+		require.NoErrorf(t, e, "the ordinary route accepts the authored outer order/limit wrapper")
+		orderRows, e := conn.QueryContext(ctx, "select count(*), max(a) from order_dst")
+		require.NoError(t, e)
+		defer orderRows.Close()
+		var orderCount, orderMax int
+		require.True(t, orderRows.Next(), "the ordinary outer-clause copy returns its summary row")
+		require.NoError(t, orderRows.Scan(&orderCount, &orderMax))
+		require.Equalf(t, 1, orderCount, "fresh-main parity: the outer LIMIT 1 bounds the executed copy")
+		require.Equalf(t, 5, orderMax, "fresh-main parity: the outer ORDER BY a DESC picks the largest value")
+		require.False(t, orderRows.Next(), "the outer-clause copy summary is a single row")
+		require.NoErrorf(t, orderRows.Err(), "the outer-clause summary iteration completed cleanly")
+		require.NoError(t, orderRows.Close())
+		_, e = conn.ExecContext(ctx, "PREPARE op FROM 'CREATE TABLE order_prep AS (SELECT a FROM order_src) ORDER BY a DESC LIMIT 1'")
+		require.NoErrorf(t, e, "the prepared route accepts the authored outer order/limit wrapper")
+		_, e = conn.ExecContext(ctx, "EXECUTE op")
+		require.NoErrorf(t, e, "the prepared outer-clause CTAS executes")
+		_, e = conn.ExecContext(ctx, "DEALLOCATE PREPARE op")
+		require.NoError(t, e)
+		prepOrderRows, e := conn.QueryContext(ctx, "select count(*), max(a) from order_prep")
+		require.NoError(t, e)
+		defer prepOrderRows.Close()
+		var prepOrderCount, prepOrderMax int
+		require.True(t, prepOrderRows.Next(), "the prepared outer-clause copy returns its summary row")
+		require.NoError(t, prepOrderRows.Scan(&prepOrderCount, &prepOrderMax))
+		require.Equalf(t, 1, prepOrderCount, "fresh-main parity: the executed prepared copy honors the outer LIMIT 1")
+		require.Equalf(t, 5, prepOrderMax, "fresh-main parity: the executed prepared copy honors the outer ORDER BY a DESC")
+		require.Falsef(t, prepOrderRows.Next(), "the prepared outer-clause summary is a single row")
+		require.NoErrorf(t, prepOrderRows.Err(), "the prepared outer-clause summary iteration completed cleanly")
+		require.NoError(t, prepOrderRows.Close())
+
+		// GLM215 controls: duplicate authored clauses with independent
+		// evaluation are never silently elided. Equal LIMIT 2 OFFSET 1 at
+		// both levels leaves the outer independently authored paging live,
+		// and separately authored positional LIMIT markers are distinct
+		// statement parameters; both keep the ordinary wrapper and the
+		// genuine duplicate-owner rejection on every route, and no rejected
+		// destination is created.
+		_, e = conn.ExecContext(ctx, "CREATE TABLE off_dst AS (SELECT a FROM order_src LIMIT 2 OFFSET 1) LIMIT 2 OFFSET 1")
+		require.Errorf(t, e, "dual authored paged limits keep the genuine duplicate-owner rejection on the ordinary route")
+		require.Containsf(t, e.Error(), "multiple LIMIT", "the duplicate paged wrapper surfaces the real duplicate error")
+		_, e = conn.ExecContext(ctx, "PREPARE off_p FROM 'CREATE TABLE off_prep AS (SELECT a FROM order_src LIMIT 2 OFFSET 1) LIMIT 2 OFFSET 1'")
+		require.Errorf(t, e, "dual authored paged limits keep the genuine duplicate-owner rejection on the prepared route")
+		require.Containsf(t, e.Error(), "multiple LIMIT", "the prepared duplicate paged wrapper surfaces the real duplicate error")
+		_, _ = conn.ExecContext(ctx, "DEALLOCATE PREPARE off_p")
+		_, e = conn.ExecContext(ctx, "PREPARE par_p FROM 'CREATE TABLE par_dst AS (SELECT a FROM order_src LIMIT ?) LIMIT ?'")
+		require.Errorf(t, e, "separately authored positional LIMIT markers are distinct parameters keeping the duplicate-owner rejection")
+		require.Containsf(t, e.Error(), "multiple LIMIT", "the separately authored LIMIT markers surface the real duplicate error")
+		_, _ = conn.ExecContext(ctx, "DEALLOCATE PREPARE par_p")
+		offDstProbe, e := conn.QueryContext(ctx, "select count(*) from mo_catalog.mo_tables where relname = 'off_dst'")
+		require.NoErrorf(t, e, "the rejected-destination catalog probe for off_dst runs")
+		defer offDstProbe.Close()
+		var offDstCreated int
+		require.True(t, offDstProbe.Next(), "the off_dst catalog probe returns its summary row")
+		require.NoError(t, offDstProbe.Scan(&offDstCreated))
+		require.Equalf(t, 0, offDstCreated, "no destination off_dst is created for a rejected duplicate-authored CTAS")
+		require.False(t, offDstProbe.Next(), "the off_dst catalog probe returns a single row")
+		require.NoErrorf(t, offDstProbe.Err(), "the off_dst catalog probe completed cleanly")
+		require.NoError(t, offDstProbe.Close())
+		offPrepProbe, e := conn.QueryContext(ctx, "select count(*) from mo_catalog.mo_tables where relname = 'off_prep'")
+		require.NoErrorf(t, e, "the rejected-destination catalog probe for off_prep runs")
+		defer offPrepProbe.Close()
+		var offPrepCreated int
+		require.True(t, offPrepProbe.Next(), "the off_prep catalog probe returns its summary row")
+		require.NoError(t, offPrepProbe.Scan(&offPrepCreated))
+		require.Equalf(t, 0, offPrepCreated, "no destination off_prep is created from the rejected prepared duplicate-paged CTAS")
+		require.False(t, offPrepProbe.Next(), "the off_prep catalog probe returns a single row")
+		require.NoErrorf(t, offPrepProbe.Err(), "the off_prep catalog probe completed cleanly")
+		require.NoError(t, offPrepProbe.Close())
+		parDstProbe, e := conn.QueryContext(ctx, "select count(*) from mo_catalog.mo_tables where relname = 'par_dst'")
+		require.NoErrorf(t, e, "the rejected-destination catalog probe for par_dst runs")
+		defer parDstProbe.Close()
+		var parDstCreated int
+		require.True(t, parDstProbe.Next(), "the par_dst catalog probe returns its summary row")
+		require.NoError(t, parDstProbe.Scan(&parDstCreated))
+		require.Equalf(t, 0, parDstCreated, "no destination par_dst is created for the rejected separately-authored-parameter CTAS")
+		require.False(t, parDstProbe.Next(), "the par_dst catalog probe returns a single row")
+		require.NoErrorf(t, parDstProbe.Err(), "the par_dst catalog probe completed cleanly")
+		require.NoError(t, parDstProbe.Close())
+
+		// A genuine rejected control at the real planning phase: the public
+		// PREPARE route performs the actual plan build, so an unknown projection
+		// is rejected at PREPARE itself by the planner rather than by a
+		// parse-level or silent-skip path.
+		_, e = conn.ExecContext(ctx, "PREPARE bad FROM 'CREATE TABLE ctas_bad AS WITH w2 AS (SELECT 1 AS a) (SELECT nosuchcol FROM w2) LIMIT 1'")
+		require.Errorf(t, e, "the invalid projection is rejected by the real prepare-time planning")
+		require.Containsf(t, e.Error(), "nosuchcol", "the rejection names the missing projection column at the plan stage")
+		_, e = conn.ExecContext(ctx, "EXECUTE bad")
+		require.Errorf(t, e, "a statement rejected at PREPARE is never registered, so EXECUTE must also fail")
+		_, _ = conn.ExecContext(ctx, "DEALLOCATE PREPARE bad")
+	})
+}

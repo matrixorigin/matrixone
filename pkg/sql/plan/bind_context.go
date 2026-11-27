@@ -64,6 +64,12 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		}
 		if defines.IsLegacyViewCTEScope(builder.GetContext()) {
 			bc.legacyCTEScope = true
+			// The same marker-free definition also keeps the released
+			// TimeWindow placement during schema inference: the regeneration
+			// context installs this ambient only from the described
+			// definition's own marker, so nested or marked definitions stay
+			// whole-statement validated.
+			bc.releasedTimeWindowPlacement = true
 		}
 		bc.integerPrecision = builder.integerPrecision
 		bc.lower = builder.compCtx.GetLowerCaseTableNames()
