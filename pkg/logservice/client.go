@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	stderrors "errors"
 	"math/rand"
 	"sync"
 	"time"
@@ -55,7 +56,11 @@ func IsTempError(err error) bool {
 var NewLogRecord = pb.NewLogRecord
 var NewUserLogRecord = pb.NewUserLogRecord
 
-type ClientFactory func() (Client, error)
+type ClientFactory func(context.Context) (Client, error)
+
+// ErrTNLeaseClaimUncertain ends retries on a factory whose claim might have
+// committed. A new factory can check the authoritative assignment again.
+var ErrTNLeaseClaimUncertain = moerr.NewInternalErrorNoCtx("TN writer lease claim outcome is uncertain")
 
 // Client is the Log Service Client interface exposed to the DN.
 type Client interface {
@@ -143,6 +148,71 @@ func NewClient(
 	return &managedClient{cfg: cfg, client: client, sid: sid}, nil
 }
 
+// NewTNWriterClientFactory claims the shard's write lease before its first
+// client is returned. Further clients and transport reconnects only attach
+// to the shard, so an existing writer cannot take back a successor's lease.
+func NewTNWriterClientFactory(sid string, cfg ClientConfig, timeout time.Duration) ClientFactory {
+	cfg.connectWithoutLease = true
+	if err := cfg.ValidateClient(); err != nil {
+		return func(context.Context) (Client, error) { return nil, err }
+	}
+	claimGate := make(chan struct{}, 1)
+	var claimFinished bool
+	var claimErr error
+	return func(ctx context.Context) (Client, error) {
+		ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseNewLogServiceClient)
+		defer cancel()
+
+		select {
+		case claimGate <- struct{}{}:
+		case <-ctx.Done():
+			return nil, moerr.AttachCause(ctx, ctx.Err())
+		}
+		if err := ctx.Err(); err != nil {
+			<-claimGate
+			return nil, moerr.AttachCause(ctx, err)
+		}
+		if claimFinished {
+			err := claimErr
+			<-claimGate
+			if err != nil {
+				return nil, err
+			}
+			c, err := NewClient(ctx, sid, cfg)
+			return c, moerr.AttachCause(ctx, err)
+		}
+		defer func() { <-claimGate }()
+
+		c, err := newClient(ctx, sid, cfg)
+		if err != nil {
+			return nil, moerr.AttachCause(ctx, err)
+		}
+
+		if ctx.Err() != nil {
+			err = moerr.AttachCause(ctx, ctx.Err())
+		} else {
+			var dispatched bool
+			_, _, dispatched, err = c.requestWithDispatch(ctx, pb.CLAIM_TN_LEASE, nil, 0, 0, time.Time{})
+			err = moerr.AttachCause(ctx, err)
+			// A missing shard or HAKeeper prevents the lease proposal.
+			// Otherwise, an RPC accepted for dispatch might have applied
+			// even when the client could not confirm the grant.
+			if dispatched && !errors.Is(err, dragonboat.ErrShardNotFound) &&
+				!moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) {
+				if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder) {
+					err = stderrors.Join(ErrTNLeaseClaimUncertain, err)
+				}
+				claimFinished, claimErr = true, err
+			}
+		}
+		if err != nil {
+			closeStartupRPCClient(ctx, c.client)
+			return nil, err
+		}
+		return &managedClient{cfg: cfg, client: c, sid: sid}, nil
+	}
+}
+
 // NewStandbyClient creates a Log Service client which is used by standby shard.
 func NewStandbyClient(ctx context.Context, sid string, cfg ClientConfig) (StandbyClient, error) {
 	if err := cfg.ValidateStandbyClient(); err != nil {
@@ -209,7 +279,7 @@ func (c *managedClient) UpdateLeaseholderID(ctx context.Context, leaseholderID u
 		if err := c.prepareClient(ctx); err != nil {
 			return err
 		}
-		err := c.client.updateLeaseholderID(ctx, leaseholderID)
+		_, err := c.client.updateLeaseholderID(ctx, leaseholderID)
 		if err != nil {
 			c.resetClient()
 		}
@@ -468,7 +538,7 @@ func connectToLogServiceByReverseProxy(
 	discoveryAddress string,
 	cfg ClientConfig,
 ) (*client, error) {
-	si, ok, err := GetShardInfo(sid, discoveryAddress, cfg.LogShardID)
+	si, ok, err := getShardInfoWithContext(ctx, sid, discoveryAddress, cfg.LogShardID)
 	if err != nil {
 		return nil, err
 	}
@@ -543,11 +613,9 @@ func connectToLogServiceAddress(
 	}
 	c.addr = addr
 	c.client = cc
-	if cfg.ReadOnly {
+	if cfg.ReadOnly || cfg.connectWithoutLease {
 		if err := c.connectReadOnly(ctx); err != nil {
-			if closeErr := c.close(); closeErr != nil {
-				logutil.Error("failed to close the client", zap.Error(closeErr))
-			}
+			closeStartupRPCClient(ctx, cc)
 			return nil, err
 		}
 		return c, nil
@@ -681,8 +749,24 @@ func (c *client) close() error {
 	return c.client.Close()
 }
 
-func (c *client) updateLeaseholderID(ctx context.Context, leaseholderID uint64) error {
-	return c.doUpdateLeaseholderID(ctx, leaseholderID)
+// A canceled startup request can return before the RPC writer is done. The
+// unused client owns that writer and its request until transport cleanup ends.
+func closeStartupRPCClient(ctx context.Context, cc morpc.RPCClient) {
+	closeClient := func() {
+		if err := cc.Close(); err != nil {
+			logutil.Error("failed to close the client", zap.Error(err))
+		}
+	}
+	if ctx.Err() != nil {
+		go closeClient()
+		return
+	}
+	closeClient()
+}
+
+func (c *client) updateLeaseholderID(ctx context.Context, leaseholderID uint64) (bool, error) {
+	_, _, dispatched, err := c.requestWithDispatch(ctx, pb.UPDATE_LEASEHOLDER_ID, nil, leaseholderID, 0, time.Time{})
+	return dispatched, err
 }
 
 func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
@@ -751,6 +835,15 @@ func (c *client) connectReadOnly(ctx context.Context) error {
 func (c *client) request(ctx context.Context,
 	mt pb.MethodType, payload []byte, lsn Lsn,
 	maxSize uint64, ts time.Time) (pb.Response, []pb.LogRecord, error) {
+	resp, records, _, err := c.requestWithDispatch(ctx, mt, payload, lsn, maxSize, ts)
+	return resp, records, err
+}
+
+// requestWithDispatch reports whether morpc accepted the request into its
+// send queue. After that point a transport failure can hide a committed update.
+func (c *client) requestWithDispatch(ctx context.Context,
+	mt pb.MethodType, payload []byte, lsn Lsn,
+	maxSize uint64, ts time.Time) (pb.Response, []pb.LogRecord, bool, error) {
 	ctx, span := trace.Debug(ctx, "client.request")
 	defer span.End()
 	tnID := c.cfg.TNReplicaID
@@ -769,17 +862,27 @@ func (c *client) request(ctx context.Context,
 		},
 	}
 	r := c.pool.Get().(*RPCRequest)
-	defer r.Release()
 	r.Request = req
 	r.payload = payload
+	// Ordinary WAL requests may borrow the caller's payload. Only startup
+	// messages transfer ownership and may return before the write completes.
+	writerOwnsRequest := isStartupRPCRequest(r)
+	if writerOwnsRequest {
+		ctx = morpc.WithRequestRelease(ctx, releaseRPCRequest)
+	} else {
+		defer r.Release()
+	}
 	future, err := c.client.Send(ctx, c.addr, r)
 	if err != nil {
-		return pb.Response{}, nil, err
+		if writerOwnsRequest {
+			r.Release()
+		}
+		return pb.Response{}, nil, false, err
 	}
 	defer future.Close()
 	msg, err := future.Get()
 	if err != nil {
-		return pb.Response{}, nil, err
+		return pb.Response{}, nil, true, err
 	}
 	response, ok := msg.(*RPCResponse)
 	if !ok {
@@ -793,9 +896,9 @@ func (c *client) request(ctx context.Context,
 	}
 	err = toError(ctx, response.Response)
 	if err != nil {
-		return pb.Response{}, nil, err
+		return pb.Response{}, nil, true, err
 	}
-	return resp, recs.Records, nil
+	return resp, recs.Records, true, nil
 }
 
 func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
@@ -833,11 +936,6 @@ func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
 
 func (c *client) connect(ctx context.Context, mt pb.MethodType) error {
 	_, _, err := c.request(ctx, mt, nil, 0, 0, time.Time{})
-	return err
-}
-
-func (c *client) doUpdateLeaseholderID(ctx context.Context, leaseholderID uint64) error {
-	_, _, err := c.request(ctx, pb.UPDATE_LEASEHOLDER_ID, nil, leaseholderID, 0, time.Time{})
 	return err
 }
 
@@ -959,4 +1057,21 @@ func getRPCClient(
 
 func releaseOrphanRPCResponse(message morpc.Message) {
 	message.(*RPCResponse).Release()
+}
+
+func isStartupRPCRequest(message morpc.Message) bool {
+	req, ok := message.(*RPCRequest)
+	if !ok || len(req.payload) != 0 {
+		return false
+	}
+	switch req.Request.Method {
+	case pb.CONNECT_RO, pb.CLAIM_TN_LEASE, pb.GET_SHARD_INFO:
+		return true
+	default:
+		return false
+	}
+}
+
+func releaseRPCRequest(message morpc.Message) {
+	message.(*RPCRequest).Release()
 }

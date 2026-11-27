@@ -16,6 +16,7 @@ package logservicedriver
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -122,6 +123,7 @@ type wrappedClient struct {
 }
 
 func NewClient(
+	ctx context.Context,
 	factory LogServiceClientFactory,
 	bufSize int,
 	retryTimes int,
@@ -135,7 +137,17 @@ func NewClient(
 	// Standard retry logic: try up to retryTimes, respecting total duration
 	// First attempt doesn't count as a retry
 	for attempt := 0; attempt < retryTimes; attempt++ {
-		if wrapped, err = factory(); err == nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		wrapped, err = factory(ctx)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if err == nil {
+				_ = wrapped.Close()
+			}
+			return nil, ctxErr
+		}
+		if err == nil {
 			// Success
 			client.wrapped = wrapped
 			client.buf = wrapped.GetLogRecord(bufSize)
@@ -144,6 +156,9 @@ func NewClient(
 
 		logutil.Errorf("WAL-Replay failed to create log service client (attempt %d/%d): %v",
 			attempt+1, retryTimes, err)
+		if moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder) || errors.Is(err, logservice.ErrTNLeaseClaimUncertain) {
+			break
+		}
 
 		// Don't sleep after the last attempt
 		if attempt < retryTimes-1 {
@@ -152,7 +167,13 @@ func NewClient(
 				logutil.Errorf("WAL-Replay retry timeout after %v, stopping retries", retryDuration)
 				break
 			}
-			time.Sleep(retryInterval)
+			timer := time.NewTimer(retryInterval)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			}
 		}
 	}
 
@@ -205,7 +226,7 @@ func (c *wrappedClient) Append(
 		)
 		psn, err = c.wrapped.Append(ctx, c.buf)
 		cancel()
-		if err == nil {
+		if err == nil || moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder) {
 			break
 		}
 		retryTimes++
@@ -252,7 +273,7 @@ type clientPool struct {
 	writeTokenController *writeTokenController
 }
 
-func newClientPool(cfg *Config) *clientPool {
+func openClientPool(ctx context.Context, cfg *Config) (*clientPool, error) {
 	maxPenddingWrites := cfg.ClientMaxCount
 	if maxPenddingWrites < DefaultMaxClient {
 		maxPenddingWrites = DefaultMaxClient
@@ -275,7 +296,7 @@ func newClientPool(cfg *Config) *clientPool {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			client, err := NewClient(cfg.ClientFactory, cfg.ClientBufSize, cfg.ClientRetryTimes, cfg.ClientRetryInterval, cfg.ClientRetryDuration)
+			client, err := NewClient(ctx, cfg.ClientFactory, cfg.ClientBufSize, cfg.ClientRetryTimes, cfg.ClientRetryInterval, cfg.ClientRetryDuration)
 			results <- initResult{
 				idx:    idx,
 				client: client,
@@ -285,13 +306,28 @@ func newClientPool(cfg *Config) *clientPool {
 	}
 	wg.Wait()
 	close(results)
+	var openErr error
 	for res := range results {
 		if res.err != nil {
-			panic(res.err)
+			if openErr == nil || moerr.IsMoErrCode(res.err, moerr.ErrNotLeaseHolder) {
+				openErr = res.err
+			}
+			continue
 		}
 		pool.clients[res.idx] = res.client
 	}
-	return pool
+	if err := ctx.Err(); err != nil {
+		openErr = err
+	}
+	if openErr != nil {
+		for _, client := range pool.clients {
+			if client != nil {
+				client.Close()
+			}
+		}
+		return nil, openErr
+	}
+	return pool, nil
 }
 
 func (c *clientPool) Close() {
@@ -316,7 +352,7 @@ func (c *clientPool) Close() {
 	c.cond.Broadcast()
 }
 
-func (c *clientPool) GetOnFly() (*wrappedClient, error) {
+func (c *clientPool) GetOnFly(ctx context.Context) (*wrappedClient, error) {
 	c.cond.L.Lock()
 	if c.closed {
 		c.cond.L.Unlock()
@@ -324,7 +360,7 @@ func (c *clientPool) GetOnFly() (*wrappedClient, error) {
 	}
 	c.cond.L.Unlock()
 
-	client, err := NewClient(c.cfg.ClientFactory, c.cfg.ClientBufSize, c.cfg.ClientRetryTimes, c.cfg.ClientRetryInterval, c.cfg.ClientRetryDuration)
+	client, err := NewClient(ctx, c.cfg.ClientFactory, c.cfg.ClientBufSize, c.cfg.ClientRetryTimes, c.cfg.ClientRetryInterval, c.cfg.ClientRetryDuration)
 	if err != nil {
 		return nil, err
 	}
