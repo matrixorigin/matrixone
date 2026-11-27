@@ -60,3 +60,33 @@ create table gj_t(id int, g geometry);
 insert into gj_t values (1, st_geomfromgeojson('{"type":"Point","coordinates":[10,20]}'));
 select id, st_astext(g) from gj_t;
 drop table gj_t;
+
+-- Null or missing required members are invalid even when a differently-cased
+-- member would case-fold onto them; member order does not matter, the
+-- canonical value always wins, and explicit empty arrays keep their EMPTY
+-- acceptance. Both public overloads behave the same.
+
+-- @regex("invalid GeoJSON Point: coordinates is null",true)
+select st_geomfromgeojson('{"type":"Point","coordinates":null}');
+-- @regex("invalid GeoJSON Point: coordinates is null",true)
+select st_geomfromgeojson('{"type":"Point","coordinates":null}', 0);
+-- @regex("invalid GeoJSON Point: coordinates is null",true)
+select st_geomfromgeojson('{"type":"Point","coordinates":null,"Coordinates":[1,2]}');
+-- @regex("invalid GeoJSON Point: coordinates is null",true)
+select st_geomfromgeojson('{"type":"Point","Coordinates":[1,2],"coordinates":null}');
+-- @regex("invalid GeoJSON Point: missing coordinates",true)
+select st_geomfromgeojson('{"type":"Point","Coordinates":[1,2]}');
+-- @regex("invalid GeoJSON GeometryCollection: geometries is required",true)
+select st_geomfromgeojson('{"type":"GeometryCollection"}');
+-- @regex("invalid GeoJSON GeometryCollection: geometries is required",true)
+select st_geomfromgeojson('{"type":"GeometryCollection","geometries":null,"Geometries":[{"type":"Point","coordinates":[1,2]}]}');
+-- @regex("invalid GeoJSON Point",true)
+select st_geomfromgeojson('{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":null,"Coordinates":[1,2]}]}');
+select st_astext(st_geomfromgeojson('{"type":"Point","coordinates":[]}')) as pt_empty;
+select st_astext(st_geomfromgeojson('{"type":"Point","coordinates":[],"Coordinates":[1,2]}')) as pt_empty_shadowed;
+select st_astext(st_geomfromgeojson('{"type":"GeometryCollection","geometries":[]}')) as gc_empty;
+select st_astext(st_geomfromgeojson('{"type":"GeometryCollection","geometries":[],"Geometries":[{"type":"Point","coordinates":[1,2]}]}')) as gc_empty_shadowed;
+select st_astext(st_geomfromgeojson('{"type":"Point","coordinates":[5,6],"Coordinates":[9,9]}')) as pt_canonical;
+select st_srid(st_geomfromgeojson('{"type":"Point","coordinates":[5,6],"Coordinates":[9,9]}', 0)) as pt_srid0_kept;
+select st_astext(st_geomfromgeojson('{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1,2]}],"Geometries":[]}', 0)) as gc_child_kept;
+select 2 as after_case_fold_checks;

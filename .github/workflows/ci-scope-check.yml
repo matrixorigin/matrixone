@@ -8,6 +8,8 @@ on:
       - 'Makefile'
       - 'go.mod'
       - '.github/workflows/entrypoint.yaml'
+      - '.github/workflows/coverage-standby-worker.yaml'
+      - '.github/workflows/coverage-identity-contract.yml'
       - '.github/workflows/python-sdk.yml'
       - '.github/workflows/iceberg-connector.yml'
       - '.github/workflows/ci-scope-check.yml'
