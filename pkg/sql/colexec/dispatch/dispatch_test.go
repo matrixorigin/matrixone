@@ -1575,8 +1575,9 @@ func TestDispatchRoutesAfterNormalReceiverStop(t *testing.T) {
 		local, live bool
 		wantWrites  int
 		wantEnd     bool
+		secondBatch bool
 	}{
-		{name: "broadcast sends to local after last remote stops", send: sendToAllFunc, local: true},
+		{name: "broadcast sends to local after last remote stops", send: sendToAllFunc, local: true, secondBatch: true},
 		{name: "broadcast ends after all receivers stop", send: sendToAllRemoteFunc, wantEnd: true},
 		{name: "shuffle index keeps its assignment", send: shuffleToAllFunc, shuffleType: plan2.ShuffleToRegIndex, live: true},
 		{name: "shuffle index ends after all receivers stop", send: shuffleToAllFunc, shuffleType: plan2.ShuffleToRegIndex, wantEnd: true},
@@ -1635,10 +1636,25 @@ func TestDispatchRoutesAfterNormalReceiverStop(t *testing.T) {
 			require.NoError(t, proc.Ctx.Err())
 			if tc.local {
 				receiver := process.InitPipelineSignalReceiver(ctx, op.LocalRegs)
-				got, err := receiver.GetNextBatch(nil)
-				require.NoError(t, err)
-				require.NotNil(t, got)
-				require.Equal(t, bat.RowCount(), got.RowCount())
+				requireLocalBatch := func(want int32) {
+					t.Helper()
+					got, err := receiver.GetNextBatch(nil)
+					require.NoError(t, err)
+					require.NotNil(t, got)
+					require.Equal(t, bat.RowCount(), got.RowCount())
+					require.Equal(t, want, vector.MustFixedColNoTypeCheck[int32](got.Vecs[0])[0])
+				}
+				requireLocalBatch(42)
+				if tc.secondBatch {
+					op.ctr.marshalBuf.Reset()
+					next := colexec.MakeMockPartitionBatchs(43, proc.Mp())
+					defer next.Clean(proc.Mp())
+					end, err := tc.send(next, op, proc)
+					require.NoError(t, err)
+					require.False(t, end)
+					require.Zero(t, op.ctr.marshalBuf.Len())
+					requireLocalBatch(43)
+				}
 			}
 		})
 	}
