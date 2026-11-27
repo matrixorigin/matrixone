@@ -2025,6 +2025,7 @@ insert into src values(1,10);
 create snapshot pick_restore_state for table pick_window src;
 restore table pick_window.src {snapshot=pick_restore_state};
 create table root(k int primary key,v int);
+truncate table root;
 insert into root values(1,10);
 data branch create table dst from root;
 alter table root algorithm=copy, add column tag int;

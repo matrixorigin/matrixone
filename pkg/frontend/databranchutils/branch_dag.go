@@ -173,6 +173,36 @@ func (d *DataBranchDAG) RebuildChain(tableID uint64) []uint64 {
 	return ids
 }
 
+// RebuildGenerations returns the known physical generations of each supplied
+// table, including rebuilds newer than the supplied ID. It never crosses a
+// logical fork.
+func (d *DataBranchDAG) RebuildGenerations(tableIDs []uint64) [][]uint64 {
+	children := make(map[uint64][]uint64)
+	for _, node := range d.nodes {
+		if node.LineageOnly && node.Parent != nil {
+			children[node.ParentID] = append(children[node.ParentID], node.TableID)
+		}
+	}
+	byRoot := make(map[uint64][]uint64)
+	groups := make([][]uint64, 0, len(tableIDs))
+	for _, id := range tableIDs {
+		root := id
+		for node := d.nodes[id]; node != nil && node.LineageOnly && node.Parent != nil; node = node.Parent {
+			root = node.ParentID
+		}
+		generations, ok := byRoot[root]
+		if !ok {
+			generations = []uint64{root}
+			for i := 0; i < len(generations); i++ {
+				generations = append(generations, children[generations[i]]...)
+			}
+			byRoot[root] = generations
+		}
+		groups = append(groups, generations)
+	}
+	return groups
+}
+
 func (d *DataBranchDAG) HasParent(tableID uint64) bool {
 	node, ok := d.nodes[tableID]
 	if !ok {

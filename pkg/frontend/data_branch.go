@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -1072,17 +1073,9 @@ func diffMergeAgency(
 
 	tblStuff.boundedPick = pickStmt != nil && pickStmt.BetweenFrom != "" && pickStmt.BetweenTo != ""
 	if dagInfo, err = decideLCABranchTSFromBranchDAG(
-		ctx, ses, bh, tblStuff, pickStmt != nil && pickStmt.BetweenFrom != "",
+		ctx, ses, bh, tblStuff, pickStmt != nil && pickStmt.BetweenFrom != "", copt.protectMissingPickHistory,
 	); err != nil {
 		return
-	}
-	if tblStuff.boundedPick && copt.protectMissingPickHistory && !dagInfo.hasLCA() {
-		source, target := tblStuff.endpointIdentities(ctx, ses)
-		sourceFlags := tblStuff.tarRel.GetTableDef(identityCtx(ctx, source)).FeatureFlag
-		targetFlags := tblStuff.baseRel.GetTableDef(identityCtx(ctx, target)).FeatureFlag
-		if err = checkRestoredPickHistory(ctx, bh, &dagInfo, sourceFlags, targetFlags); err != nil {
-			return
-		}
 	}
 
 	if err = reconcileDataBranchEndpointSchema(ctx, ses, bh, &tblStuff, &dagInfo); err != nil {
@@ -4730,6 +4723,7 @@ func decideLCABranchTSFromBranchDAG(
 	bh BackgroundExec,
 	tblStuff tableStuff,
 	boundedPick bool,
+	protectMissingPickHistory bool,
 ) (
 	branchInfo branchMetaInfo,
 	err error,
@@ -4846,6 +4840,14 @@ func decideLCABranchTSFromBranchDAG(
 		branchInfo.pathFromLCAToBase = []uint64{baseTableID}
 		branchInfo.pathFromLCAToBaseTS = []types.TS{{}}
 		branchInfo.pathFromLCAToBaseLineageOnly = []bool{false}
+	}
+	if tblStuff.boundedPick && protectMissingPickHistory && !branchInfo.hasLCA() {
+		source, target := tblStuff.endpointIdentities(ctx, ses)
+		sourceFlags := tblStuff.tarRel.GetTableDef(identityCtx(ctx, source)).FeatureFlag
+		targetFlags := tblStuff.baseRel.GetTableDef(identityCtx(ctx, target)).FeatureFlag
+		if (sourceFlags|targetFlags)&features.BranchRestoreFlags != 0 {
+			err = checkRestoredPickHistory(ctx, bh, dag, &branchInfo, sourceFlags, targetFlags)
+		}
 	}
 	return
 }

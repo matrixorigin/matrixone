@@ -417,7 +417,7 @@ func withRestoreBranchHistory(ctx context.Context, ses *Session, bh BackgroundEx
 // ancestor. A restored endpoint can be a new generation of a missing fork
 // parent. A parent that still has a live logical identity proves that its fork
 // belongs to a different lineage.
-func checkRestoredPickHistory(ctx context.Context, bh BackgroundExec, info *branchMetaInfo, sourceFlags, targetFlags uint64) error {
+func checkRestoredPickHistory(ctx context.Context, bh BackgroundExec, dag *databranchutils.DataBranchDAG, info *branchMetaInfo, sourceFlags, targetFlags uint64) error {
 	reject := func() error {
 		return moerr.NewNotSupported(ctx, "DATA BRANCH PICK with FAIL or SKIP requires branch history unavailable after restore")
 	}
@@ -425,15 +425,11 @@ func checkRestoredPickHistory(ctx context.Context, bh BackgroundExec, info *bran
 		return reject()
 	}
 
-	var parents [][]uint64
+	var parents []uint64
 	addParents := func(path []uint64, lineageOnly []bool) {
-		start := 0
 		for i := 1; i < len(path); i++ {
 			if !lineageOnly[i] {
-				// Physical generations before this fork are one logical
-				// parent. Any of them can identify its live replacement.
-				parents = append(parents, path[start:i])
-				start = i
+				parents = append(parents, path[i-1])
 			}
 		}
 	}
@@ -447,8 +443,9 @@ func checkRestoredPickHistory(ctx context.Context, bh BackgroundExec, info *bran
 		return nil
 	}
 
+	generations := dag.RebuildGenerations(parents)
 	var ids []uint64
-	for _, group := range parents {
+	for _, group := range generations {
 		ids = append(ids, group...)
 	}
 	slices.Sort(ids)
@@ -478,7 +475,7 @@ func checkRestoredPickHistory(ctx context.Context, bh BackgroundExec, info *bran
 			}
 		}
 	}
-	for _, group := range parents {
+	for _, group := range generations {
 		if !slices.ContainsFunc(group, func(id uint64) bool {
 			_, ok := live[id]
 			return ok
