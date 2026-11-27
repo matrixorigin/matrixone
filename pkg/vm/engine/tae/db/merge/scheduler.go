@@ -87,6 +87,8 @@ type MergeScheduler struct {
 	lifecycleMu sync.Mutex // Start must not rearm the queue before Stop joins the old loop
 	stopRecv    chan struct{}
 	stopped     atomic.Bool
+	// Owned by the main loop. Cleared only after scanning every table's retries.
+	mayHaveDeferredRetries bool
 
 	msgChan      chan *MMsg
 	bootstrapMsg *MMsg
@@ -175,10 +177,12 @@ func (a *MergeScheduler) Start() {
 		default:
 		}
 		// A task from the previous generation may have completed while stopped.
-		// Recheck retained manual work before publishing the new loop.
+		// Recheck retained one-shot work before publishing the new loop.
 		now := a.clock.Now()
+		a.mayHaveDeferredRetries = false
 		for _, supp := range a.supps {
 			if _, ok := a.nextManualRetryDue(supp, now); ok {
+				a.mayHaveDeferredRetries = true
 				a.pq.Update(supp.todo, now)
 			}
 		}
@@ -235,15 +239,11 @@ func (a *MergeScheduler) taskObserverFactory(
 	return &taskObserver{f: func() {
 		supp.DoneTask()
 		rc.Release(int64(size))
-		if supp.mergingTaskCnt.Load() == 0 {
-			a.notifyTaskCompletion(supp)
-		}
+		a.notifyReservationReleased()
 	}}
 }
 
-func (a *MergeScheduler) notifyTaskCompletion(
-	supp *todoSupporter,
-) {
+func (a *MergeScheduler) notifyReservationReleased() {
 	if a.stopped.Load() {
 		return
 	}
@@ -251,7 +251,7 @@ func (a *MergeScheduler) notifyTaskCompletion(
 	if generation == nil {
 		return
 	}
-	msg := &MMsg{Kind: MMsgKindTaskCompleted, Value: supp, generation: generation}
+	msg := &MMsg{Kind: MMsgKindReservationReleased, generation: generation}
 	select {
 	case <-generation.stopCh:
 		return
@@ -313,7 +313,7 @@ const (
 	MMsgKindConfig
 	MMsgKindVacuumCheck
 	MMsgKindConfigBootstrap
-	MMsgKindTaskCompleted
+	MMsgKindReservationReleased
 )
 
 type MMsgSwitch struct {
@@ -1066,20 +1066,23 @@ func (a *MergeScheduler) dispatchMsg(
 		} else if tableChange.DoneTask {
 			a.handleMergeDone(tableChange.Table, tableChange.EstSize)
 		}
-	case MMsgKindTaskCompleted:
-		a.handleTaskCompleted(msg.Value.(*todoSupporter))
+	case MMsgKindReservationReleased:
+		a.handleReservationReleased()
 	}
 }
 
-func (a *MergeScheduler) handleTaskCompleted(supp *todoSupporter) {
-	if a.supps[supp.todo.table.ID()] != supp || supp.mergingTaskCnt.Load() != 0 {
+func (a *MergeScheduler) handleReservationReleased() {
+	if !a.mayHaveDeferredRetries {
 		return
 	}
 	now := a.clock.Now()
-	for _, trigger := range supp.triggers {
-		if !trigger.retryUntil.IsZero() && now.Before(trigger.retryUntil) {
-			a.pq.Update(supp.todo, now)
-			return
+	a.mayHaveDeferredRetries = false
+	for _, supp := range a.supps {
+		if _, ok := a.nextManualRetryDue(supp, now); ok {
+			a.mayHaveDeferredRetries = true
+			if supp.mergingTaskCnt.Load() == 0 {
+				a.pq.Update(supp.todo, now)
+			}
 		}
 	}
 }
@@ -1103,6 +1106,9 @@ func (a *MergeScheduler) nextManualRetryDue(supp *todoSupporter, now time.Time) 
 }
 
 func (a *MergeScheduler) nextPendingManualRetryDue(now time.Time) (time.Time, bool) {
+	if !a.mayHaveDeferredRetries {
+		return time.Time{}, false
+	}
 	var due time.Time
 	for _, supp := range a.supps {
 		candidate, ok := a.nextManualRetryDue(supp, now)
@@ -1378,7 +1384,7 @@ func (a *MergeScheduler) doSched(
 			continue
 		}
 		if !last.retryUntil.IsZero() && !now.Before(last.retryUntil) {
-			logutil.Warn("MergeExecutorEvent-ManualRetryExpired",
+			logutil.Warn("MergeExecutorEvent-DeferredRetryExpired",
 				zap.String("table", todo.table.GetNameDesc()),
 				zap.Int("tasks", len(last.assigns)))
 			continue
@@ -1409,10 +1415,11 @@ func (a *MergeScheduler) doSched(
 	}
 
 	afterGather := a.clock.Now()
+	retryable := trigger.expire.IsZero() && (trigger.byUser || len(trigger.assigns) > 0)
 	// Schedule tasks
 	for _, task := range tasks {
 		if _, granted := rc.Acquire(int64(task.eSize)); !granted {
-			if trigger.byUser && trigger.expire.IsZero() {
+			if retryable {
 				denied = append(denied, task)
 			}
 			continue
@@ -1441,12 +1448,13 @@ func (a *MergeScheduler) doSched(
 	if len(denied) > 0 {
 		retry := trigger
 		if retry.retryUntil.IsZero() {
-			retry = NewMMsgTaskTrigger(todo.table).WithByUser(true)
+			retry = NewMMsgTaskTrigger(todo.table).WithByUser(trigger.byUser)
 			retry.retryUntil = afterGather.Add(manualMergeRetryWindow)
 		}
 		if afterGather.Before(retry.retryUntil) {
 			retry.assigns = denied
 			supp.requeueManualRetry(retry)
+			a.mayHaveDeferredRetries = true
 		}
 	}
 
