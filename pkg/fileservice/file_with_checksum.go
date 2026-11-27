@@ -37,6 +37,7 @@ import (
 // without the entries fighting over the kernel file offset.
 type FileWithChecksum[T FileLike] struct {
 	ctx              context.Context
+	readWait         *ReadWaitTracker
 	underlying       T
 	blockSize        int
 	blockContentSize int
@@ -175,10 +176,14 @@ func (f *FileWithChecksum[T]) ReadAt(buf []byte, offset int64) (n int, err error
 		return 0, nil
 	}
 
+	wait := f.readWait
 	if f.noChecksum {
 		// passthrough: logical offset == physical offset, no CRC, no
 		// de-interleave. io.EOF / short-read semantics come from the underlying.
-		return f.underlying.ReadAt(buf, offset)
+		start := wait.Start()
+		n, err := f.underlying.ReadAt(buf, offset)
+		wait.Stop(start)
+		return n, err
 	}
 
 	blockSize := int64(f.blockSize)
@@ -211,7 +216,9 @@ func (f *FileWithChecksum[T]) ReadAt(buf []byte, offset int64) (n int, err error
 			raw = make([]byte, chunkBytes)
 		}
 
+		start := wait.Start()
 		rn, rerr := f.underlying.ReadAt(raw, blockOffset)
+		wait.Stop(start)
 		if rerr != nil && rerr != io.EOF {
 			return n, rerr
 		}

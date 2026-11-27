@@ -28,7 +28,8 @@ usage() {
     echo "       $0 verify  <artifact-root> <libmo-path> <goos> <goarch> <cpu|gpu> <release|debug> <simsimd:0|1>" >&2
 }
 
-native_paths="Makefile cgo thirdparties"
+# Sirius SDK inputs are validated separately by optools/sirius_sdk.py.
+native_paths="Makefile cgo thirdparties :(exclude)thirdparties/sirius"
 
 validate_build_key() {
     case "$1" in
@@ -169,7 +170,10 @@ emit_provenance() {
     head=$(git -C "$root" rev-parse HEAD) || return 1
     makefile_hash=$(git -C "$root" rev-parse "$head:Makefile") || return 1
     cgo_hash=$(git -C "$root" rev-parse "$head:cgo") || return 1
-    thirdparties_hash=$(git -C "$root" rev-parse "$head:thirdparties") || return 1
+    # Each immediate child tree already covers all of its descendants.
+    thirdparty_entries=$(git -C "$root" ls-tree "$head:thirdparties") || return 1
+    thirdparties_hash=$(printf '%s\n' "$thirdparty_entries" |
+        sed '/	sirius$/d' | git hash-object --stdin) || return 1
 
     if [ "$accelerator" = gpu ]; then
         . "$root/cgo/mo-gpu-env" || return 1
@@ -472,7 +476,7 @@ case "$operation" in
                 # Dirty CGo inputs cannot be shared, but a CGo-only edit does
                 # not need an expensive thirdparty rebuild on every iteration.
                 if ! non_cgo_status=$(git -C "$root" status --porcelain \
-                    --untracked-files=all -- Makefile thirdparties); then
+                    --untracked-files=all -- Makefile thirdparties ':(exclude)thirdparties/sirius'); then
                     action=local
                     reusable=no
                     expected=

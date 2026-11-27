@@ -106,6 +106,15 @@ func newPhyPlanExportCloneFixture() (*PhyPlan, *process.OperatorStats) {
 			}},
 		}},
 	}
+	stats.SetStartupResource(resource.Delta{
+		Usage: resource.Usage{
+			ExclusiveActiveNS: 31,
+			WaitNS:            [resource.WaitKindCount]uint64{resource.WaitFilesystem: 37},
+			S3Requests:        [resource.S3OpCount]uint64{resource.S3Get: 1},
+			S3ReadBytes:       41,
+		},
+		Quality: resource.QualityPartial,
+	})
 	sharedChild := &PhyOperator{
 		OpName:  "child",
 		NodeIdx: 1,
@@ -174,7 +183,7 @@ func TestPhyPlanCloneForExportReferenceSchemaIsExplicit(t *testing.T) {
 		{
 			name:                  "OperatorStats",
 			value:                 stats,
-			referenceBearingField: []string{"OperatorMetrics", "ExtraStats", "BackgroundQueries"},
+			referenceBearingField: []string{"startupResource", "OperatorMetrics", "ExtraStats", "BackgroundQueries"},
 		},
 		{
 			name:                  "StatementResourceSummary",
@@ -192,6 +201,7 @@ func TestPhyPlanCloneForExportReferenceSchemaIsExplicit(t *testing.T) {
 
 func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
 	source, stats := newPhyPlanExportCloneFixture()
+	wantResource := stats.ResourceDelta()
 
 	got := source.CloneForExport()
 	shallow := *source
@@ -229,6 +239,7 @@ func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
 	require.Equal(t, 7, got.LocalScope[0].RootOperator.OpStats.CallNum)
 	require.Equal(t, int64(11), got.LocalScope[0].RootOperator.OpStats.OperatorMetrics[process.OpScanTime])
 	require.Equal(t, int64(13), got.LocalScope[0].RootOperator.OpStats.ExtraStats["SpillBytes"])
+	require.Equal(t, wantResource, got.LocalScope[0].RootOperator.OpStats.ResourceDelta())
 	owner, ok := got.Resource.Allocation.Owner(1)
 	require.True(t, ok)
 	require.Equal(t, uint64(7), owner.SumGenerationPeak)
