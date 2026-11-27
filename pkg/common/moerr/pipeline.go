@@ -27,6 +27,14 @@ type publicPipelineError interface {
 	PublicErrorMessage() string
 }
 
+type pipelinePublicDiagnostic struct {
+	message string
+}
+
+func (e *pipelinePublicDiagnostic) Error() string {
+	return e.message
+}
+
 // PipelineStop marks cancellation by a downstream pipeline that has finished
 // taking input. It signals when the cancellation reaches the context's children.
 type PipelineStop struct {
@@ -206,7 +214,7 @@ func selectPipelineError(err error) (error, bool) {
 		switch wrapped := e.(type) {
 		case publicPipelineError:
 			hasPublicBoundary = true
-			e = errors.New(wrapped.PublicErrorMessage())
+			e = &pipelinePublicDiagnostic{message: wrapped.PublicErrorMessage()}
 		case interface{ Unwrap() []error }:
 			hasChild := false
 			for _, child := range wrapped.Unwrap() {

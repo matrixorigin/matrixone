@@ -93,12 +93,15 @@ func TestPipelineErrorKeepsFailuresWithoutChildren(t *testing.T) {
 	}
 }
 
-type pipelinePublicTestError struct{ cause error }
+type pipelinePublicTestError struct {
+	cause   error
+	message string
+}
 
-func (*pipelinePublicTestError) Error() string              { return "local diagnostic" }
-func (*pipelinePublicTestError) PublicErrorMessage() string { return "public metadata error" }
-func (e *pipelinePublicTestError) Unwrap() error            { return e.cause }
-func (e *pipelinePublicTestError) Is(target error) bool     { return target == e.cause }
+func (*pipelinePublicTestError) Error() string                { return "local diagnostic" }
+func (e *pipelinePublicTestError) PublicErrorMessage() string { return e.message }
+func (e *pipelinePublicTestError) Unwrap() error              { return e.cause }
+func (e *pipelinePublicTestError) Is(target error) bool       { return target == e.cause }
 
 func (e *pipelinePublicTestError) As(target any) bool {
 	if mo, ok := target.(**Error); ok {
@@ -128,7 +131,7 @@ func TestPipelinePublicErrorDoesNotUsePrivateControlSignals(t *testing.T) {
 		{"RPC cancellation", canceled, NewQueryInterrupted(live)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			failure := &pipelinePublicTestError{cause: tc.private}
+			failure := &pipelinePublicTestError{cause: tc.private, message: "public metadata error"}
 			wrapped := fmt.Errorf("execution: %w", failure)
 			require.ErrorIs(t, wrapped, tc.private, "local callers retain the cause")
 			require.Nil(t, PipelineStopCause(wrapped))
@@ -140,11 +143,29 @@ func TestPipelinePublicErrorDoesNotUsePrivateControlSignals(t *testing.T) {
 	}
 }
 
+func TestPipelinePublicErrorSnapshotsKeepIndependentIdentity(t *testing.T) {
+	failure := &pipelinePublicTestError{
+		cause:   context.Canceled,
+		message: "public metadata error",
+	}
+	first := PipelineError(failure)
+	second := PipelineError(failure)
+	require.EqualError(t, first, failure.message)
+	require.EqualError(t, second, failure.message)
+	require.NotErrorIs(t, second, first)
+
+	failure.message = "updated metadata error"
+	require.EqualError(t, first, "public metadata error")
+	require.EqualError(t, second, "public metadata error")
+	require.EqualError(t, PipelineError(failure), failure.message)
+	require.ErrorIs(t, failure, context.Canceled)
+}
+
 func TestPipelinePublicErrorKeepsAggregatePriority(t *testing.T) {
 	ctx := context.Background()
 	fk := NewErrFKNoReferencedRow2(ctx)
 	retry := NewTxnNeedRetry(ctx)
-	failure := &pipelinePublicTestError{cause: retry}
+	failure := &pipelinePublicTestError{cause: retry, message: "public metadata error"}
 	var localCause *Error
 	require.ErrorAs(t, failure, &localCause)
 	require.Same(t, retry, localCause)
