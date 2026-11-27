@@ -65,7 +65,10 @@ export GOWORK
 UNAME_S := $(shell uname -s | tr A-Z a-z)
 UNAME_M := $(shell uname -m)
 GOPATH := $(shell go env GOPATH)
-GO_VERSION=$(shell GOPROXY="$(GOPROXY)" $(GOEXPERIMENT_OPT) $(GO) version)
+# Resolve the installed Go version before choosing SIMD build options. The
+# SIMD default depends on this value, so including GOEXPERIMENT_OPT here would
+# create a recursive make variable dependency.
+GO_VERSION := $(shell GOPROXY="$(GOPROXY)" $(GO) version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
@@ -233,10 +236,10 @@ DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 TAGS :=
 
-# Env-var prefix for the build command. On x86_64 the arch-specific SIMD kernels in
-# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
+# Env-var prefix for the build command. On x86_64 with Go 1.26, the SIMD kernels
+# in pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
 # (Haswell baseline -- AVX2/FMA/BMI, required by the Go simd experiment) and
-# GOEXPERIMENT defaults to simd (enables the goexperiment.simd build tag on Go 1.26+).
+# GOEXPERIMENT defaults to simd with Go 1.26 (enables the goexperiment.simd build tag).
 # Disable the SIMD kernels with:
 #   make ARCHSIMD=0 build                       # plain x86 build, no SIMD kernels
 # Either default can still be overridden individually, e.g. `make GOAMD64=v4 build`.
@@ -249,7 +252,10 @@ ifeq ("$(UNAME_M)", "x86_64")
 	# kernels in pkg/vectorindex/metric require it, and the Go simd experiment
 	# mandates a v3 baseline. Pre-Haswell CPUs must build with `make ARCHSIMD=0`.
 	GOAMD64 ?= v3
-	GOEXPERIMENT_SIMD ?= simd
+	# The vectorindex SIMD kernels use the Go 1.26 experimental API. Go 1.27
+	# renamed its load/store operations, so use the scalar implementation with
+	# other toolchains until those kernels support the new API.
+	GOEXPERIMENT_SIMD ?= $(if $(findstring go1.26.,$(GO_VERSION)),simd,)
   endif
   ifneq ($(GOAMD64),)
 	GOEXPERIMENT_OPT += GOAMD64=$(GOAMD64)

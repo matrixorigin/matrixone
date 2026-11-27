@@ -74,6 +74,58 @@ const (
 
 const HiddenColumnSelection_None HiddenColumnSelection = 0
 
+const InvalidSpecialColumnPosition = math.MaxUint16
+
+// SpecialColumnLayout records the physical positions of storage-only columns.
+// Older appendable objects contain CommitTS without Abort.
+type SpecialColumnLayout struct {
+	PhysicalAddr uint16
+	CommitTS     uint16
+	Abort        uint16
+}
+
+func (layout SpecialColumnLayout) Resolve(seqnum uint16) (uint16, bool) {
+	switch seqnum {
+	case SEQNUM_COMMITTS:
+		return layout.CommitTS, layout.CommitTS != InvalidSpecialColumnPosition
+	case SEQNUM_ABORT:
+		return layout.Abort, layout.Abort != InvalidSpecialColumnPosition
+	default:
+		return InvalidSpecialColumnPosition, false
+	}
+}
+
+func ResolveSpecialColumnLayout(block BlockObject) SpecialColumnLayout {
+	layout := SpecialColumnLayout{
+		PhysicalAddr: InvalidSpecialColumnPosition,
+		CommitTS:     InvalidSpecialColumnPosition,
+		Abort:        InvalidSpecialColumnPosition,
+	}
+	metaColumnCount := block.GetMetaColumnCount()
+	if metaColumnCount == 0 {
+		return layout
+	}
+	pos := block.GetMaxSeqnum() + 1
+	if pos < metaColumnCount && block.ColumnMeta(pos).DataType() == uint8(types.T_Rowid) {
+		layout.PhysicalAddr = pos
+		pos++
+	}
+	commitPos := pos
+	if commitPos >= metaColumnCount || block.ColumnMeta(commitPos).DataType() != uint8(types.T_TS) {
+		return layout
+	}
+	layout.CommitTS = commitPos
+	abortPos := commitPos + 1
+	if abortPos < metaColumnCount && block.ColumnMeta(abortPos).DataType() == uint8(types.T_Rowid) {
+		layout.PhysicalAddr = abortPos
+		abortPos++
+	}
+	if abortPos < metaColumnCount && block.ColumnMeta(abortPos).DataType() == uint8(types.T_bool) {
+		layout.Abort = abortPos
+	}
+	return layout
+}
+
 var (
 	TombstoneSeqnums_CN_Created         = []uint16{0, 1}
 	TombstoneSeqnums_CN_Created_PhyAddr = []uint16{0, 1, SEQNUM_ROWID}

@@ -3862,6 +3862,7 @@ func (v *Vector) UnionWholeWithPayloadSize(w *Vector, cnt, payloadSize int, mp *
 }
 
 func (v *Vector) unionBatch(w *Vector, offset int64, cnt int, flags []uint8, payloadSize int, mp *mpool.MPool) error {
+	areaWasDisjoint := v.areaDisjoint
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
 	}
@@ -3945,6 +3946,7 @@ func (v *Vector) unionBatch(w *Vector, offset int64, cnt int, flags []uint8, pay
 			if err != nil {
 				return err
 			}
+			v.areaDisjoint = areaWasDisjoint && w.VarlenaAreaIsDisjoint()
 			if fast {
 				return nil
 			}

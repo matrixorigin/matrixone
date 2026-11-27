@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"sync/atomic"
 	"testing"
 
@@ -95,8 +96,9 @@ func TestValidatedVectorCacheDataSizesDoNotSnapshot(t *testing.T) {
 
 type partialReadErrorFS struct {
 	fileservice.FileService
-	data fscache.Data
-	err  error
+	data  fscache.Data
+	err   error
+	reads atomic.Int32
 }
 
 func (p *partialReadErrorFS) Name() string {
@@ -104,10 +106,280 @@ func (p *partialReadErrorFS) Name() string {
 }
 
 func (p *partialReadErrorFS) Read(_ context.Context, vector *fileservice.IOVector) error {
+	p.reads.Add(1)
 	if len(vector.Entries) > 0 {
 		vector.Entries[0].CachedData = p.data
 	}
 	return p.err
+}
+
+func TestMaterializeCachedAliasedWindowOmitsUnselectedArea(t *testing.T) {
+	writerMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(writerMP)
+	source := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte{'x'}, 1<<20), false, writerMP))
+	for i := 0; i < 8; i++ {
+		require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte{'s'}, 32), false, writerMP))
+	}
+	values := vector.MustFixedColNoTypeCheck[types.Varlena](source)
+	for i := 2; i < len(values); i++ {
+		values[i] = values[1]
+	}
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(writerMP)
+	encoded := append(EncodeIOEntryHeader(&IOEntryHeader{
+		Type: IOET_ColData, Version: IOET_ColumnData_V2,
+	}), payload...)
+	data := fileservice.NewBytes(encoded)
+	defer data.Release()
+	queryMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(queryMP)
+	window, err := MaterializeCachedVectorWindow(data, 2, 6, queryMP)
+	require.NoError(t, err)
+	defer window.Free(queryMP)
+	require.Less(t, window.Allocated(), 1<<20)
+	for row := 0; row < 6; row++ {
+		require.Equal(t, bytes.Repeat([]byte{'s'}, 32), window.GetBytesAt(row))
+	}
+}
+
+func TestMaterializeCachedAliasedWindowPreservesNullSmallSharedAndGrouping(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte("a"), 64), false, mp))
+	require.NoError(t, vector.AppendBytes(source, []byte("small"), false, mp))
+	require.NoError(t, vector.AppendBytes(source, nil, true, mp))
+	require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte("b"), 64), false, mp))
+	require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte("c"), 64), false, mp))
+	values := vector.MustFixedColNoTypeCheck[types.Varlena](source)
+	values[4] = values[0]
+	source.GetGrouping().Add(1)
+	source.GetGrouping().Add(4)
+	grouped, err := materializeAliasedVarlenaWindow(source, 0, 5, mp)
+	require.NoError(t, err)
+	require.True(t, grouped.GetGrouping().Contains(1))
+	require.True(t, grouped.GetGrouping().Contains(4))
+	grouped.Free(mp)
+	encoded := marshalLegacyTestColumn(t, source)
+	source.Free(mp)
+	data := fileservice.NewBytes(encoded)
+	defer data.Release()
+	window, err := MaterializeCachedVectorWindow(data, 0, 5, mp)
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte("a"), 64), window.GetBytesAt(0))
+	require.Equal(t, []byte("small"), window.GetBytesAt(1))
+	require.True(t, window.IsNull(2))
+	require.Equal(t, bytes.Repeat([]byte("b"), 64), window.GetBytesAt(3))
+	require.Equal(t, window.GetBytesAt(0), window.GetBytesAt(4))
+	require.False(t, window.HasGrouping(), "the persisted vector format omits grouping")
+	window.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestDecompressColumnExtentRejectsCorruptEncoding(t *testing.T) {
+	ctx := context.Background()
+	allocator := fileservice.DefaultCacheDataAllocator()
+	data := []byte("truncated")
+	_, err := DecompressColumnExtent(ctx, data,
+		NewExtent(compress.None, 0, uint32(len(data)+1), uint32(len(data)+1)), allocator)
+	require.ErrorContains(t, err, "does not match")
+	_, err = DecompressColumnExtent(ctx, data,
+		NewExtent(255, 0, uint32(len(data)), uint32(len(data))), allocator)
+	require.ErrorContains(t, err, "unsupported object column compression")
+}
+
+func TestBudgetedWindowReadsOrdinaryExtentOnce(t *testing.T) {
+	writerMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(writerMP)
+	source := vector.NewVec(types.T_int64.ToType())
+	for i := int64(0); i < 8; i++ {
+		require.NoError(t, vector.AppendFixed(source, i, false, writerMP))
+	}
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(writerMP)
+	encoded := append(EncodeIOEntryHeader(&IOEntryHeader{
+		Type: IOET_ColData, Version: IOET_ColumnData_V2,
+	}), payload...)
+	fs := &partialReadErrorFS{data: fileservice.NewBytes(encoded)}
+	meta := BuildMetaData(1, 1)
+	block := meta.GetBlockMeta(0)
+	block.BlockHeader().SetRows(8)
+	col := block.ColumnMeta(0)
+	col.setDataType(uint8(types.T_int64))
+	col.setLocation(NewExtent(compress.None, 0, uint32(len(encoded)), uint32(len(encoded))))
+	queryMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(queryMP)
+	bat, rows, err := ReadOneBlockAllColumnsBudgetedWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		0, 8, 1<<20, fileservice.SkipAllCache, fs, queryMP, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 8, rows)
+	require.Equal(t, int32(1), fs.reads.Load())
+	require.Equal(t, []int64{0, 1, 2, 3, 4, 5, 6, 7},
+		vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]))
+	bat.Clean(queryMP)
+}
+
+type countingColumnFS struct {
+	fileservice.FileService
+	reads   atomic.Int32
+	failAt  int32
+	failErr error
+}
+
+func (f *countingColumnFS) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	if f.reads.Add(1) == f.failAt {
+		return f.failErr
+	}
+	return f.FileService.Read(ctx, vector)
+}
+
+func TestBudgetedAliasedWindowReadsEachSpilledExtentOnce(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte{'x'}, 300<<10), false, mp))
+	for i := 0; i < 8; i++ {
+		require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte{'s'}, 32), false, mp))
+	}
+	values := vector.MustFixedColNoTypeCheck[types.Varlena](source)
+	for i := 2; i < len(values); i++ {
+		values[i] = values[1]
+	}
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+	encoded := append(EncodeIOEntryHeader(&IOEntryHeader{
+		Type: IOET_ColData, Version: IOET_ColumnData_V2,
+	}), payload...)
+	rawFS, err := fileservice.NewMemoryFS("budgeted-window-test", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	const name = "aliased-columns"
+	ext := writeLegacyTestExtent(t, rawFS, name, encoded, compress.None)
+	fs := &countingColumnFS{FileService: rawFS}
+	meta := BuildMetaData(1, 6)
+	block := meta.GetBlockMeta(0)
+	block.BlockHeader().SetRows(9)
+	cols := []uint16{0, 1, 2, 3, 4, 5}
+	for _, seqnum := range cols {
+		col := block.ColumnMeta(seqnum)
+		col.setDataType(uint8(types.T_varchar))
+		col.setLocation(ext)
+	}
+	var spills []*testColumnWindowSpill
+	factory := func(context.Context) (ColumnWindowSpill, error) {
+		file, err := os.CreateTemp(t.TempDir(), "budgeted-column-*")
+		if err != nil {
+			return nil, err
+		}
+		spill := &testColumnWindowSpill{File: file}
+		spills = append(spills, spill)
+		return spill, nil
+	}
+	bat, rows, err := ReadOneBlockAllColumnsBudgetedWindow(
+		ctx, &meta, name, 0, cols, 2, 6, 256<<10,
+		fileservice.SkipAllCache, fs, mp, factory,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 6, rows)
+	require.Equal(t, int32(len(cols)), fs.reads.Load())
+	require.Len(t, spills, len(cols), "each spilled column releases its file before the next")
+	for _, spill := range spills {
+		require.True(t, spill.closed)
+	}
+	require.Less(t, bat.Allocated(), 1<<20)
+	for _, vec := range bat.Vecs {
+		for row := 0; row < rows; row++ {
+			require.Equal(t, bytes.Repeat([]byte{'s'}, 32), vec.GetBytesAt(row))
+		}
+	}
+	bat.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	spills = nil
+	readErr := moerr.NewInternalErrorNoCtx("later column read failed")
+	failingFS := &countingColumnFS{FileService: rawFS, failAt: 3, failErr: readErr}
+	bat, rows, err = ReadOneBlockAllColumnsBudgetedWindow(
+		ctx, &meta, name, 0, cols, 2, 6, 256<<10,
+		fileservice.SkipAllCache, failingFS, mp, factory,
+	)
+	require.Nil(t, bat)
+	require.Zero(t, rows)
+	require.ErrorIs(t, err, readErr)
+	require.Len(t, spills, 3)
+	for _, spill := range spills {
+		require.True(t, spill.closed)
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestBudgetedWindowCompactsEarlierColumnsAfterWideLaterColumn(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fixed := vector.NewVec(types.T_int64.ToType())
+	wide := vector.NewVec(types.T_varchar.ToType())
+	for row := 0; row < 8; row++ {
+		require.NoError(t, vector.AppendFixed(fixed, int64(row), false, mp))
+		width := 16
+		if row < 2 {
+			width = 180 << 10
+		}
+		require.NoError(t, vector.AppendBytes(wide, bytes.Repeat([]byte{'w'}, width), false, mp))
+	}
+	fixedEncoded := marshalLegacyTestColumn(t, fixed)
+	wideEncoded := marshalLegacyTestColumn(t, wide)
+	fixed.Free(mp)
+	wide.Free(mp)
+	stored := append(fixedEncoded, wideEncoded...)
+	rawFS, err := fileservice.NewMemoryFS("budgeted-shrink-test", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	const name = "narrow-then-wide"
+	require.NoError(t, rawFS.Write(ctx, fileservice.IOVector{
+		FilePath: name,
+		Entries: []fileservice.IOEntry{{
+			Offset: 0, Size: int64(len(stored)), Data: stored,
+		}},
+	}))
+	fs := &countingColumnFS{FileService: rawFS}
+	meta := BuildMetaData(1, 2)
+	block := meta.GetBlockMeta(0)
+	block.BlockHeader().SetRows(8)
+	block.ColumnMeta(0).setDataType(uint8(types.T_int64))
+	block.ColumnMeta(0).setLocation(NewExtent(compress.None, 0,
+		uint32(len(fixedEncoded)), uint32(len(fixedEncoded))))
+	block.ColumnMeta(1).setDataType(uint8(types.T_varchar))
+	block.ColumnMeta(1).setLocation(NewExtent(compress.None, uint32(len(fixedEncoded)),
+		uint32(len(wideEncoded)), uint32(len(wideEncoded))))
+	var spills []*testColumnWindowSpill
+	factory := func(context.Context) (ColumnWindowSpill, error) {
+		file, err := os.CreateTemp(t.TempDir(), "budgeted-shrink-*")
+		if err != nil {
+			return nil, err
+		}
+		spill := &testColumnWindowSpill{File: file}
+		spills = append(spills, spill)
+		return spill, nil
+	}
+	bat, rows, err := ReadOneBlockAllColumnsBudgetedWindow(
+		ctx, &meta, name, 0, []uint16{0, 1}, 0, 6, 256<<10,
+		fileservice.SkipAllCache, fs, mp, factory,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, rows)
+	require.Equal(t, 1, bat.Vecs[0].Length())
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0))
+	require.Equal(t, 1, bat.Vecs[1].Length())
+	require.Equal(t, 180<<10, len(bat.Vecs[1].GetBytesAt(0)))
+	require.Equal(t, int32(2), fs.reads.Load())
+	require.Len(t, spills, 1)
+	require.True(t, spills[0].closed)
+	bat.Clean(mp)
+	require.Zero(t, mp.CurrNB())
 }
 
 func (p *partialReadErrorFS) ReadCache(context.Context, *fileservice.IOVector) error {
@@ -436,6 +708,15 @@ func TestCopyCachedVectorRowsMaterializesOnlySelectedRows(t *testing.T) {
 	widerType := vector.NewOffHeapVecWithType(types.New(types.T_varchar, 512, 0))
 	require.NoError(t, CopyCachedVectorRows(widerType, cacheData, sels[:1], queryMP))
 	require.Equal(t, bytes.Repeat([]byte{'a'}, valueLen), widerType.GetBytesAt(0))
+	window, err := MaterializeCachedVectorWindow(cacheData, 7000, 3, queryMP)
+	require.NoError(t, err)
+	require.Equal(t, 3, window.Length())
+	require.Equal(t, bytes.Repeat([]byte{byte('a' + 7000%26)}, valueLen), window.GetBytesAt(0))
+	window.Free(queryMP)
+	_, err = MaterializeCachedVectorWindow(cacheData, rowCount-1, 2, queryMP)
+	require.Error(t, err)
+	_, err = MaterializeCachedVectorWindow(cacheData, 0, 1, nil)
+	require.Error(t, err)
 
 	needle := bytes.Repeat([]byte{'h'}, valueLen)
 	search := NewReadFilterSearch(types.T_varchar, [][]byte{needle})
@@ -1159,4 +1440,55 @@ func TestReadOneBlockAllColumnsReleasesPartialReadOnError(t *testing.T) {
 	)
 	require.ErrorIs(t, err, readErr)
 	require.Equal(t, int32(1), releases.Load())
+}
+
+func TestReadOneBlockAllColumnsWindowMaterializesRequestedRows(t *testing.T) {
+	writerMP := mpool.MustNewZero()
+	source := vector.NewVec(types.T_int64.ToType())
+	for i := int64(0); i < 8; i++ {
+		require.NoError(t, vector.AppendFixed(source, i, false, writerMP))
+	}
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(writerMP)
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type: IOET_ColData, Version: IOET_ColumnData_V2,
+	})...)
+	encoded = append(encoded, payload...)
+	var releases atomic.Int32
+	fs := &partialReadErrorFS{data: &releaseTrackingData{releases: &releases, bytes: encoded}}
+	meta := BuildMetaData(1, 1)
+	col := meta.GetBlockMeta(0).ColumnMeta(0)
+	col.setDataType(uint8(types.T_int64))
+	col.setLocation(NewExtent(1, 0, uint32(len(encoded)), uint32(len(encoded))))
+	queryMP := mpool.MustNewZero()
+	bat, err := ReadOneBlockAllColumnsWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		2, 3, fileservice.Policy(0), fs, queryMP, 0, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{2, 3, 4}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]))
+	bat.Clean(queryMP)
+	require.Equal(t, int32(1), releases.Load())
+	_, err = ReadOneBlockAllColumnsWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		0, 0, fileservice.Policy(0), fs, queryMP, 0, nil,
+	)
+	require.Error(t, err)
+
+	var errorReleases atomic.Int32
+	readErr := moerr.NewInternalErrorNoCtx("window read failed")
+	errorFS := &partialReadErrorFS{
+		data: &releaseTrackingData{releases: &errorReleases},
+		err:  readErr,
+	}
+	_, err = ReadOneBlockAllColumnsWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		0, 1, fileservice.Policy(0), errorFS, queryMP, 0, nil,
+	)
+	require.ErrorIs(t, err, readErr)
+	require.Equal(t, int32(1), errorReleases.Load())
+	require.Zero(t, queryMP.CurrNB())
+	mpool.DeleteMPool(queryMP)
+	mpool.DeleteMPool(writerMP)
 }

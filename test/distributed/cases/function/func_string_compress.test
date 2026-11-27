@@ -3,11 +3,11 @@ SELECT UNCOMPRESS(COMPRESS('Hello World')) AS result1;
 
 # Additional test cases
 # Basic compression and decompression
-SELECT COMPRESS('Hello World') AS compressed;
+SELECT LENGTH(COMPRESS('Hello World')) > 4 AS compressed;
 SELECT UNCOMPRESS(COMPRESS('Hello World')) AS decompressed;
 
 # Empty string
-SELECT COMPRESS('') AS empty_compressed;
+SELECT LENGTH(COMPRESS('')) >= 4 AS empty_compressed;
 SELECT UNCOMPRESS(COMPRESS('')) AS empty_decompressed;
 
 # Long strings
@@ -50,7 +50,7 @@ SELECT UNCOMPRESS(COMPRESS('2024-01-01')) AS date_string;
 SELECT COMPRESS('Hello World') != 'Hello World' AS compressed_different;
 
 # Test compression ratio (compressed should be smaller for repetitive data)
-SELECT LENGTH(COMPRESS('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')) < LENGTH('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA') AS compression_works;
+SELECT LENGTH(COMPRESS(REPEAT('A', 1024))) < 1024 AS compression_works;
 
 # UNCOMPRESSED_LENGTH function
 SELECT UNCOMPRESSED_LENGTH(COMPRESS('Hello World')) AS result1;

@@ -963,6 +963,12 @@ func TestParseSessionRewrites(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "invalid remap_rewrites value")
 	})
+	for _, input := range []string{"[1,2,3]", "123", "null"} {
+		t.Run("non-object "+input, func(t *testing.T) {
+			_, _, err := parseSessionRewrites(ctx, input)
+			require.ErrorContains(t, err, "expected a JSON object")
+		})
+	}
 	t.Run("array (chain) rewrite value is rejected", func(t *testing.T) {
 		// A table must map to a single SQL string, not a list.
 		_, _, err := parseSessionRewrites(ctx,

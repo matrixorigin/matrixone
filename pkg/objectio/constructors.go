@@ -135,6 +135,9 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 				return
 			}
 		}
+		if algo == compress.Lz4Chunked {
+			return decodeChunkedColumn(ctx, data, allocator)
+		}
 
 		// no compress
 		if algo == compress.None {
@@ -152,6 +155,31 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 		decompressedData = decompressedData.Slice(len(bs))
 		return decompressedData, nil
 	}
+}
+
+// DecompressColumnExtent materializes one serialized object column from its
+// physical extent encoding. Raw object consumers must use this entry point so
+// Lz4Chunked columns are not mistaken for legacy single-frame LZ4 data.
+func DecompressColumnExtent(
+	ctx context.Context,
+	data []byte,
+	ext Extent,
+	allocator fileservice.CacheDataAllocator,
+) (fscache.Data, error) {
+	if uint64(len(data)) != uint64(ext.Length()) {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"object column extent length %d does not match data length %d",
+			ext.Length(), len(data),
+		)
+	}
+	switch ext.Alg() {
+	case compress.None, compress.Lz4, compress.Lz4Chunked:
+	default:
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"unsupported object column compression algorithm %d", ext.Alg(),
+		)
+	}
+	return constructorFactory(int64(ext.OriginSize()), ext.Alg())(ctx, nil, data, allocator)
 }
 
 // columnCacheConstructorFactory validates V2 column data once, after
@@ -307,6 +335,120 @@ func CopyCachedVectorRows(toVec *vector.Vector, data fscache.Data, sels []int64,
 // without exposing a writable alias to the cached representation.
 func CopyCachedVectorAll(toVec *vector.Vector, data fscache.Data, mp *mpool.MPool) error {
 	return copyCachedVector(toVec, data, nil, true, mp)
+}
+
+// MaterializeCachedVectorWindow copies one row window from a cache-backed
+// object column without cloning or exposing the complete decoded Vector.
+func MaterializeCachedVectorWindow(
+	data fscache.Data,
+	offset, length int,
+	mp *mpool.MPool,
+) (*vector.Vector, error) {
+	if mp == nil {
+		return nil, moerr.NewInvalidInputNoCtx("nil mpool for object column materialization")
+	}
+	var source vector.Vector
+	if err := bindCachedVectorForScope(&source, data); err != nil {
+		return nil, err
+	}
+	defer source.Free(nil)
+	if offset < 0 || length < 0 || offset > source.Length()-length {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"object column window [%d, %d) out of range [0, %d)",
+			offset, offset+length, source.Length(),
+		)
+	}
+	// A checked persisted vector may legally contain overlapping varlena
+	// descriptors and dead payload outside this window. Copy only selected
+	// values, while retaining exact aliases within the new compact area.
+	if cachedVarlenaAreaOverlaps(&source) {
+		return materializeAliasedVarlenaWindow(&source, offset, length, mp)
+	}
+	dst := vector.NewVec(*source.GetType())
+	sels := make([]int64, length)
+	for i := range sels {
+		sels[i] = int64(offset + i)
+	}
+	if err := dst.Union(&source, sels, mp); err != nil {
+		dst.Free(mp)
+		return nil, err
+	}
+	return dst, nil
+}
+
+func materializeAliasedVarlenaWindow(
+	source *vector.Vector, offset, length int, mp *mpool.MPool,
+) (_ *vector.Vector, err error) {
+	dst := vector.NewVec(*source.GetType())
+	defer func() {
+		if err != nil {
+			dst.Free(mp)
+		}
+	}()
+	type areaRef struct{ offset, length uint32 }
+	shared := make(map[areaRef]types.Varlena)
+	values := vector.MustFixedColNoTypeCheck[types.Varlena](source)
+	if source.HasGrouping() {
+		if err = dst.PreExtendGrouping(length, mp); err != nil {
+			return nil, err
+		}
+	}
+	for row := offset; row < offset+length; row++ {
+		if source.IsNull(uint64(row)) {
+			if err = vector.AppendBytes(dst, nil, true, mp); err != nil {
+				return nil, err
+			}
+		} else if value := values[row]; value.IsSmall() {
+			if err = vector.AppendFixed(dst, value, false, mp); err != nil {
+				return nil, err
+			}
+		} else {
+			areaOffset, areaLength := value.OffsetLen()
+			key := areaRef{areaOffset, areaLength}
+			if existing, ok := shared[key]; ok {
+				if err = vector.AppendFixed(dst, existing, false, mp); err != nil {
+					return nil, err
+				}
+			} else {
+				if err = vector.AppendBytes(dst, source.GetBytesAt(row), false, mp); err != nil {
+					return nil, err
+				}
+				shared[key] = vector.GetFixedAtNoTypeCheck[types.Varlena](dst, dst.Length()-1)
+			}
+		}
+		if source.GetGrouping().Contains(uint64(row)) {
+			dst.GetGrouping().Add(uint64(dst.Length() - 1))
+		}
+	}
+	return dst, nil
+}
+
+func cachedVarlenaAreaOverlaps(source *vector.Vector) bool {
+	if source == nil || !source.GetType().IsVarlen() || source.IsConst() {
+		return false
+	}
+	values := vector.MustFixedColNoTypeCheck[types.Varlena](source)
+	var previousEnd uint64
+	seen := false
+	for row, value := range values {
+		if source.IsNull(uint64(row)) || value.IsSmall() {
+			continue
+		}
+		offset, length := value.OffsetLen()
+		if length == 0 {
+			continue
+		}
+		start := uint64(offset)
+		if seen && start < previousEnd {
+			// This includes exact aliases and conservatively treats reordered
+			// disjoint ranges as potentially shared. The latter only retains the
+			// already-bounded source area; it never changes values.
+			return true
+		}
+		previousEnd = start + uint64(length)
+		seen = true
+	}
+	return false
 }
 
 func copyCachedVector(

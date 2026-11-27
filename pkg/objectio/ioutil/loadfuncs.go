@@ -623,22 +623,38 @@ func LoadOneBlock(
 	key objectio.Location,
 	metaType objectio.DataMetaType,
 ) (*batch.Batch, uint16, error) {
+	bat, sortKey, _, err := LoadOneBlockWithSpecialLayout(ctx, fs, key, metaType)
+	return bat, sortKey, err
+}
+
+func LoadOneBlockWithSpecialLayout(
+	ctx context.Context,
+	fs fileservice.FileService,
+	key objectio.Location,
+	metaType objectio.DataMetaType,
+) (*batch.Batch, uint16, objectio.SpecialColumnLayout, error) {
 	sortKey := uint16(math.MaxUint16)
+	layout := objectio.SpecialColumnLayout{
+		PhysicalAddr: objectio.InvalidSpecialColumnPosition,
+		CommitTS:     objectio.InvalidSpecialColumnPosition,
+		Abort:        objectio.InvalidSpecialColumnPosition,
+	}
 	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
 	if err != nil {
-		return nil, sortKey, err
+		return nil, sortKey, layout, err
 	}
 	data := meta.MustGetMeta(metaType)
 	if data.BlockHeader().Appendable() {
 		sortKey = data.BlockHeader().SortKey()
 	}
+	layout = objectio.ResolveSpecialColumnLayout(data.GetBlockMeta(uint32(key.ID())))
 	idxes := make([]uint16, data.BlockHeader().ColumnCount())
 	for i := range idxes {
 		idxes[i] = uint16(i)
 	}
 	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
 		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
-	return bat, sortKey, err
+	return bat, sortKey, layout, err
 }
 
 func LoadOneBlockWithIndex(
@@ -671,14 +687,35 @@ func LoadBlocks(
 	blockIDs []uint16,
 	mp *mpool.MPool,
 ) ([]*batch.Batch, error) {
+	batches, _, err := LoadBlocksWithSpecialLayouts(ctx, fs, key, blockIDs, mp)
+	return batches, err
+}
+
+// LoadBlocksWithSpecialLayouts returns the persisted special-column positions
+// with each block while retaining LoadBlocks' single data read for the group.
+func LoadBlocksWithSpecialLayouts(
+	ctx context.Context,
+	fs fileservice.FileService,
+	key objectio.Location,
+	blockIDs []uint16,
+	mp *mpool.MPool,
+) ([]*batch.Batch, []objectio.SpecialColumnLayout, error) {
 	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	data := meta.MustGetMeta(objectio.SchemaData)
 	cols := make([]uint16, data.BlockHeader().ColumnCount())
 	for i := range cols {
 		cols[i] = uint16(i)
 	}
-	return objectio.ReadBlocksAllColumns(ctx, &data, key.Name().String(), blockIDs, cols, fileservice.SkipAllCache, fs, mp)
+	batches, err := objectio.ReadBlocksAllColumns(ctx, &data, key.Name().String(), blockIDs, cols, fileservice.SkipAllCache, fs, mp)
+	if err != nil {
+		return nil, nil, err
+	}
+	layouts := make([]objectio.SpecialColumnLayout, len(blockIDs))
+	for i, id := range blockIDs {
+		layouts[i] = objectio.ResolveSpecialColumnLayout(data.GetBlockMeta(uint32(id)))
+	}
+	return batches, layouts, nil
 }
