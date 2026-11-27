@@ -130,7 +130,10 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 		func(ctx context.Context) {
 			ctx, cancel := context.WithTimeoutCause(ctx, time.Second*2, moerr.CauseRemoteCacheRead)
 			defer cancel()
+			wait := ReadWaitTrackerFromContext(ctx)
+			start := wait.Start()
 			resp, err := r.client.SendMessage(ctx, target, req)
+			wait.Stop(start)
 			if err != nil || resp == nil {
 				// Do not return error here to read data from local storage.
 				return

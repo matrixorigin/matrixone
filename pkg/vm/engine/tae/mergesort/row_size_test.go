@@ -48,6 +48,9 @@ func TestMergeFlushesOversizedRows(t *testing.T) {
 				sortKey:               -1,
 				deletes:               []*nulls.Nulls{{}, {}},
 			}
+			for _, d := range host.deletes {
+				d.Init(mp)
+			}
 			if sorted {
 				host.sortKey = 0
 			}
@@ -58,6 +61,10 @@ func TestMergeFlushesOversizedRows(t *testing.T) {
 				for _, run := range host.runs {
 					run.Clean(mp)
 				}
+				// The host owns the delete bitmaps it hands to the merge.
+				for _, d := range host.deletes {
+					d.Free()
+				}
 				fs.Close(ctx)
 				require.Zero(t, mp.CurrNB())
 				mpool.DeleteMPool(mp)
@@ -66,7 +73,6 @@ func TestMergeFlushesOversizedRows(t *testing.T) {
 			payloadSizes := []int{1, 1, 300, 1, 1, 80, 80, 1}
 			for run := range 2 {
 				bat := batch.NewWithSize(2)
-				bat.Attrs = []string{"key", "payload"}
 				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 				bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 				host.runs = append(host.runs, bat)

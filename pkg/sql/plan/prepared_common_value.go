@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -127,7 +126,7 @@ func preparedCommonValueDomain(ctx context.Context, args []*Expr) (peers []*Expr
 				continue
 			}
 			if binding.Type.Oid.IsMySQLString() && param.Pos >= 0 && int(param.Pos) < len(state.values) {
-				value, ok := state.values[param.Pos].(ParamValue)
+				value, ok := AsParamValue(state.values[param.Pos])
 				if ok && value.EnableNumericPrefix {
 					continue
 				}
@@ -180,7 +179,7 @@ func preparedCommonValueMarkers(ctx context.Context, args []*Expr) ([]*Expr, boo
 				(binding.Type.Oid != types.T_any && !binding.Type.Oid.IsMySQLString()) {
 				continue
 			}
-			if param, ok := state.values[pos].(ParamValue); ok && param.EnableNumericPrefix {
+			if param, ok := AsParamValue(state.values[pos]); ok && param.EnableNumericPrefix {
 				markers = append(markers, source)
 			}
 			continue
@@ -292,16 +291,16 @@ func bindPreparedCommonValueContextMarkers(ctx context.Context, markers, peers [
 	prefixKinds := make([]types.StringConversionKind, len(args))
 	state := preparedBindingState(ctx)
 	for i, source := range markers {
-		param := state.values[source.GetP().Pos].(ParamValue)
+		param, _ := AsParamValue(state.values[source.GetP().Pos])
 		value, present := preparedConfigurationValue(ctx, source)
 		if !present {
 			return nil, nil
 		}
-		witnesses[i] = makePlan2StringConstExprWithType(fmt.Sprint(value))
+		witnesses[i] = makePlan2StringConstExprWithType(preparedNumericValueSpelling(value))
 		if value == nil {
 			witnesses[i] = makePlan2NullConstExprWithType()
 		}
-		prefixArgs[i], prefixKinds[i] = true, param.PrepareParamKind
+		prefixArgs[i], prefixKinds[i] = true, ParamValueKind(param)
 	}
 	converted, _, err := preparedNumericPrefixArgs(ctx, "coalesce", args, witnesses,
 		prefixArgs, prefixKinds, nil, nil, true)

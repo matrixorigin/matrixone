@@ -52,7 +52,7 @@ func TestEncodeLowPrecisionFloat(t *testing.T) {
 	mp := mpool.MustNewZero()
 	for _, oid := range lowPrecTypes {
 		vec := lowPrecVector(t, oid, mp)
-		bat := batch.New([]string{"f"})
+		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vec
 		bat.SetRowCount(3)
 

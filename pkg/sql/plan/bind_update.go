@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -320,7 +321,9 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		rhsBindCtx, rhsBinder := builder.newSequentialUpdateProjectionBinder(
 			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList, stageLegacy,
 		)
-		if target := tableDef.Cols[columnIndex].Typ; useNumericAssignmentContext(target, ignore) &&
+		_, columnAssignment := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
+		if target := tableDef.Cols[columnIndex].Typ; (useNumericAssignmentContext(target, ignore) ||
+			columnAssignment && isEnumOrSetPlanType(&target)) &&
 			!isPreparedAssignmentParam(builder, astExpr) && !builder.deferSpecialUpdateConversion(target, astExpr) {
 			rhsBinder.numericTargetType = &target
 		}
@@ -524,9 +527,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 		for _, col := range tableDef.Cols {
 			oldColName2Idx[alias+"."+col.Name] = int32(len(selectList))
 			e := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
-			if sequentialAssignments && isEnumOrSetPlanType(&col.Typ) {
-				// Sequential projections must retain the storage ordinal/bitmap.
-				// A display string cannot recover an empty-label ENUM member.
+			if isEnumOrSetPlanType(&col.Typ) {
+				// DML row images keep the storage ordinal/bitmap, including
+				// ENUM members that share an empty display string.
 				if bindCtx.physicalMySQLSpecialRefs == nil {
 					bindCtx.physicalMySQLSpecialRefs = make(map[*tree.UnresolvedName]struct{})
 				}
@@ -611,10 +614,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			}
 
 			deferSpecial := false
+			_, columnAssignment := unwrapParenExpr(updateExpr).(*tree.UnresolvedName)
 			for _, colDef := range tableDef.Cols {
 				if colDef.Name == colName {
 					deferSpecial = builder.deferSpecialUpdateConversion(colDef.Typ, updateExpr)
-					if isEnumOrSetPlanType(&colDef.Typ) && !deferSpecial {
+					// A column assignment must bind in the source row scope.
+					// Projection supplies the storage type for the later cast.
+					if isEnumOrSetPlanType(&colDef.Typ) && !deferSpecial && !columnAssignment {
 						updateExpr, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), colDef.Typ, updateExpr)
 						if err != nil {
 							return 0, err
@@ -642,14 +648,17 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			}
 
 			oldPos := oldColName2Idx[alias+"."+colName]
-			if typ := tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ; useNumericAssignmentContext(typ, stmt.Ignore) && !deferSpecial && !isPreparedAssignmentParam(builder, updateExpr) {
+			if typ := tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ; (useNumericAssignmentContext(typ, stmt.Ignore) ||
+				columnAssignment && isEnumOrSetPlanType(&typ)) && !deferSpecial && !isPreparedAssignmentParam(builder, updateExpr) {
 				updateNumericTargets[oldPos] = typ
 			}
 			newColName2Idx[alias+"."+colName] = oldPos
 			oldColName2Idx[alias+"."+colName] = int32(len(selectList))
-			selectList = append(selectList, tree.SelectExpr{
-				Expr: tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(colName, 1)),
-			})
+			oldColumn := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(colName, 1))
+			if typ := tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ; isEnumOrSetPlanType(&typ) {
+				bindCtx.physicalMySQLSpecialRefs[oldColumn] = struct{}{}
+			}
+			selectList = append(selectList, tree.SelectExpr{Expr: oldColumn})
 			selectList[oldPos] = tree.SelectExpr{Expr: updateExpr}
 		}
 	}
@@ -5093,11 +5102,25 @@ func (builder *QueryBuilder) guardTargetLocalExpr(
 	newExpr *plan.Expr,
 	oldExpr *plan.Expr,
 ) (*plan.Expr, error) {
-	return BindFuncExprImplByPlanExpr(
-		builder.GetContext(),
-		"if",
-		[]*plan.Expr{DeepCopyExpr(targetSelected), newExpr, DeepCopyExpr(oldExpr)},
-	)
+	args := []*plan.Expr{DeepCopyExpr(targetSelected), newExpr, DeepCopyExpr(oldExpr)}
+	newType, oldType := newExpr.Typ, oldExpr.Typ
+	sameLabels := isEnumOrSetPlanType(&newType) && isEnumOrSetPlanType(&oldType) &&
+		newType.Id == oldType.Id && newType.Enumvalues == oldType.Enumvalues
+	sameGeometry := isGeometryPlanType(&newType) && isGeometryPlanType(&oldType) &&
+		makeTypeByPlan2Type(newType).Eq(makeTypeByPlan2Type(oldType))
+	if sameLabels || sameGeometry {
+		// Both arms are already normalized to the destination storage
+		// type. Select the exact value without ordinary SQL IF coercion.
+		newType.NotNullable = newType.NotNullable && oldType.NotNullable
+		return &plan.Expr{
+			Typ: newType,
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.IFF, 0), ObjName: "if"},
+				Args: args,
+			}},
+		}, nil
+	}
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), "if", args)
 }
 
 func (builder *QueryBuilder) appendSelectedTargetNotNullAssertions(

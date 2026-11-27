@@ -151,7 +151,7 @@ func NewFunctionTestCase(
 		// generate the nulls.
 		var nsp *nulls.Nulls = nil
 		if len(inputs[i].nullList) != 0 {
-			nsp = nulls.NewWithSize(len(inputs[i].nullList))
+			nsp = mustNullsOK(nulls.NewWithSize(len(inputs[i].nullList), bitmapTestMP))
 			for j, b := range inputs[i].nullList {
 				if b {
 					nsp.Set(uint64(j))
@@ -323,7 +323,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 	// generate the expected nsp
 	var expectedNsp *nulls.Nulls = nil
 	if fc.expected.nullList != nil {
-		expectedNsp = nulls.NewWithSize(len(fc.expected.nullList))
+		expectedNsp = mustNullsOK(nulls.NewWithSize(len(fc.expected.nullList), bitmapTestMP))
 		for i, b := range fc.expected.nullList {
 			if b {
 				expectedNsp.Add(uint64(i))
@@ -729,21 +729,23 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 		assertReleased(t)
 	})
 	t.Run("current vector rollback", func(t *testing.T) {
-		// Not valid UTF-8, so a native Unicode text vector rejects it after
-		// the first, longer-than-inline value has been appended.
-		unicode := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
-		invalid := string([]byte{0x30, 0xfb, 0xc1, 0x30, 0xff, 0xff, 0x20})
+		// The capped pool admits the first, longer-than-inline value and
+		// refuses the second, so construction fails with a partly built vector.
+		capped, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
+		require.NoError(t, err)
+		cappedProc := testutil.NewProcessWithOwnedMPool(t, "", capped)
 		var recovered any
 		func() {
 			defer func() { recovered = recover() }()
-			_ = NewFunctionTestCase(proc, []FunctionTestInput{
+			_ = NewFunctionTestCase(cappedProc, []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{7}, nil),
-				NewFunctionTestInput(unicode, []string{"01234567890123456789012345678901", invalid}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"01234567890123456789012345678901", strings.Repeat("x", 2<<20)}, nil),
 			}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7}, nil), AbsInt64)
 		}()
 		err, ok := recovered.(error)
-		require.True(t, ok)
+		require.True(t, ok, "recovered %v", recovered)
 		require.Error(t, err)
+		require.Zero(t, capped.CurrNB())
 		assertReleased(t)
 	})
 	t.Run("borrow and reuse", func(t *testing.T) {

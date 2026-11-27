@@ -20,6 +20,7 @@ package function
 import "C"
 import (
 	"fmt"
+	"runtime"
 	"unsafe"
 
 	_ "github.com/matrixorigin/matrixone/cgo"
@@ -69,10 +70,13 @@ func c_xcall(f *XCallFunction, mp *mpool.MPool, length int, result *vector.Vecto
 		f.args = make([]xcallArgs, len(argvecs)+1)
 	}
 
-	result.FillRawPtrLen(f.args[0].ptrLens[0:6])
+	// Copies of read-only null bitmaps, which C reads through raw pointers.
+	keepAlive := make([][]uint64, 0, len(argvecs)+1)
+	keepAlive = append(keepAlive, result.FillRawPtrLen(f.args[0].ptrLens[0:6]))
 	for i, argvec := range argvecs {
-		argvec.FillRawPtrLen(f.args[i+1].ptrLens[0:6])
+		keepAlive = append(keepAlive, argvec.FillRawPtrLen(f.args[i+1].ptrLens[0:6]))
 	}
+	defer runtime.KeepAlive(keepAlive)
 
 	if f.clHost == "CGO" {
 		f.ErrStr[0] = 0
@@ -143,7 +147,9 @@ func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.Function
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
-			rsNull.InitWithSize(length)
+			if err := rsNull.InitWithSize(length, resultVec.MPool()); err != nil {
+				return err
+			}
 			nullsInited = true
 			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
@@ -162,7 +168,9 @@ func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.Function
 		} else {
 			if v.HasNull() {
 				if !nullsInited {
-					rsNull.InitWithSize(length)
+					if err := rsNull.InitWithSize(length, resultVec.MPool()); err != nil {
+						return err
+					}
 					nullsInited = true
 				}
 				nulls.Or(rsNull, v.GetNulls(), rsNull)

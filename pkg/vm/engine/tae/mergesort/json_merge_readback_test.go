@@ -51,7 +51,6 @@ func TestJSONMergeObjsRetainsRawRunThroughWriteAndRead(t *testing.T) {
 		host := &jsonReadbackMergeHost{mp: mp, writer: writer, loaded: make([]bool, len(runs))}
 		for _, rows := range runs {
 			bat := batch.NewWithSize(1)
-			bat.Attrs = []string{"j"}
 			bat.Vecs[0] = vector.NewVec(types.T_json.ToType(), mp)
 			for _, raw := range rows {
 				require.NoError(t, vector.AppendBytes(bat.Vecs[0], raw, false, mp))

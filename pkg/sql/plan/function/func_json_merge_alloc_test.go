@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !race
-
 package function
 
 import (
@@ -25,9 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
-// Allocation counts are not a stable production invariant under race
-// instrumentation. Keep this regression check in non-race builds while the
-// JSON merge functional tests continue to run in both configurations.
 func TestJsonMergePatchWrapperAllocationsDoNotScaleWithRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	trueJSON := mustJsonBinaryString(t, `true`)

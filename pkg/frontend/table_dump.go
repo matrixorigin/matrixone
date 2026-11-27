@@ -1506,14 +1506,13 @@ func submitTableDumpObjects(
 	}
 	if len(dataStats) != 0 {
 		bat := batch.NewWithSize(2)
-		bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
 		bat.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
 		bat.Vecs[1] = vector.NewVec(types.T_binary.ToType(), mp)
 		if err := colexec.ExpandObjectStatsToBatch(mp, false, bat, true, dataStats...); err != nil {
 			bat.Clean(mp)
 			return submitted, err
 		}
-		if err := rel.Write(ctx, bat); err != nil {
+		if err := rel.Write(ctx, bat, []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}); err != nil {
 			bat.Clean(mp)
 			return submitted, err
 		}
@@ -1522,7 +1521,6 @@ func submitTableDumpObjects(
 	}
 	if len(tombstoneStats) != 0 {
 		bat := batch.NewWithSize(1)
-		bat.SetAttributes([]string{catalog.ObjectMeta_ObjectStats})
 		bat.Vecs[0] = vector.NewVec(types.T_binary.ToType(), mp)
 		for i := range tombstoneStats {
 			if err := vector.AppendBytes(bat.Vecs[0], tombstoneStats[i].Marshal(), false, mp); err != nil {
@@ -1531,7 +1529,7 @@ func submitTableDumpObjects(
 			}
 		}
 		bat.SetRowCount(len(tombstoneStats))
-		if err := rel.Delete(context.WithValue(ctx, defines.SkipTransferKey{}, true), bat, ""); err != nil {
+		if err := rel.Delete(context.WithValue(ctx, defines.SkipTransferKey{}, true), bat, []string{catalog.ObjectMeta_ObjectStats}, ""); err != nil {
 			bat.Clean(mp)
 			return submitted, err
 		}

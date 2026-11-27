@@ -75,7 +75,7 @@ func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
 // v's pool, or references data without copying when v is read-only. v must
 // not hold memory.
 func (v *Vector) UnmarshalBinaryV1(data []byte) error {
-	if len(data) > 0 && data[0] > LegacyRowBufferClass {
+	if len(data) > 0 && data[0] > CONSTANT {
 		return moerr.NewInvalidInputNoCtx("invalid legacy vector representation")
 	}
 	if v.hasBackingStorage() {
@@ -118,7 +118,9 @@ func (v *Vector) copyDecoded(decoded *Vector) (err error) {
 		}
 		copy(w.area, decoded.area)
 	}
-	w.nsp.InitWith(&decoded.nsp)
+	if err = w.nsp.InitWith(&decoded.nsp, v.mp); err != nil {
+		return err
+	}
 	*v = *w
 	return nil
 }
@@ -132,7 +134,7 @@ func (v *Vector) unmarshalBinaryV1(data []byte) error {
 		return err
 	}
 	// read class
-	v.class = int(decodedPhysicalClass(data[0]))
+	v.class = int(data[0])
 	data = data[1:]
 
 	// read typ

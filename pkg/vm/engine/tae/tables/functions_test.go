@@ -18,6 +18,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -506,4 +507,60 @@ func BenchmarkFunctions(b *testing.B) {
 		b.StopTimer()
 		checkNoMatches(b, rowIDs)
 	})
+}
+
+func TestPersistedContainsReturnsTombstoneBitmapCapacityError(t *testing.T) {
+	for _, appendable := range []bool{false, true} {
+		name := "non-appendable"
+		if appendable {
+			name = "appendable"
+		}
+		t.Run(name, func(t *testing.T) {
+			const capacity = 1 << 20
+			pool, err := mpool.NewMPool(t.Name(), capacity, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mpool.DeleteMPool(pool)
+
+			typ := types.T_Rowid.ToType()
+			var blk types.Blockid
+			rowID := types.NewRowid(&blk, 7)
+			persisted := containers.MakeVector(typ, common.DefaultAllocator)
+			defer persisted.Close()
+			persisted.Append(rowID, false)
+			keys := containers.MakeVector(typ, pool)
+			defer keys.Close()
+			keys.Append(rowID, false)
+
+			op := containers.MakeForeachVectorOp(typ.Oid, containsNABlkFunctions, persisted, keys)
+			if appendable {
+				txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+				op = containers.MakeForeachVectorOp(
+					typ.Oid, containsAlkFunctions, persisted, keys,
+					func(uint16) (containers.Vector, containers.Vector, error) {
+						commitTS := containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
+						commitTS.Append(types.BuildTS(5, 0), false)
+						return commitTS, nil, nil
+					},
+					txn,
+					func(any, types.TS) (types.TS, error) {
+						t.Fatal("old committed tombstone must not perform a conflict lookup")
+						return types.TS{}, nil
+					},
+				)
+			}
+			before := pool.CurrNB()
+			t.Run("under pressure", func(t *testing.T) {
+				filler, err := pool.Alloc(capacity-int(before), true)
+				require.NoError(t, err)
+				defer pool.Free(filler)
+				err = containers.ForeachVector(keys, op, nil)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "%v", err)
+				require.False(t, keys.IsNull(0))
+				require.EqualValues(t, capacity, pool.CurrNB())
+			})
+			require.Equal(t, before, pool.CurrNB())
+			require.NoError(t, containers.ForeachVector(keys, op, nil))
+			require.True(t, keys.IsNull(0))
+		})
+	}
 }

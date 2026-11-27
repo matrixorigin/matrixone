@@ -15,10 +15,13 @@
 package isolated
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"runtime"
+	"runtime/pprof"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +35,70 @@ import (
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func issue29492ReplayDiagnostics(dbs []*sql.DB) string {
+	var stacks bytes.Buffer
+	_ = pprof.Lookup("goroutine").WriteTo(&stacks, 2)
+	dbStats := make([]string, len(dbs))
+	for i, db := range dbs {
+		dbStats[i] = fmt.Sprintf("cn%d=%+v", i, db.Stats())
+	}
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	return fmt.Sprintf(
+		"pipeline_senders=%v pipeline_stream_lifecycles=%v db_stats=[%s] "+
+			"goroutines=%d gomaxprocs=%d heap_alloc=%d heap_inuse=%d gc_cycles=%d\nembedded-CN goroutines:\n%s",
+		promtestutil.ToFloat64(metricv2.PipelineMessageSenderGauge),
+		promtestutil.ToFloat64(metricv2.PipelineStreamLifecycleGauge),
+		strings.Join(dbStats, "; "), runtime.NumGoroutine(), runtime.GOMAXPROCS(0),
+		mem.HeapAlloc, mem.HeapInuse, mem.NumGC, stacks.String())
+}
+
+// armIssue29492ReplayDiagnostics captures while the replay is still blocked.
+// The returned stop waits for an already-running capture before the test exits.
+func armIssue29492ReplayDiagnostics(delay time.Duration, capture func()) func() {
+	done := make(chan struct{})
+	timer := time.AfterFunc(delay, func() {
+		defer close(done)
+		capture()
+	})
+	return func() {
+		if !timer.Stop() {
+			<-done
+		}
+	}
+}
+
+func TestIssue29492ReplayDiagnostics(t *testing.T) {
+	captured := make(chan string, 1)
+	stop := armIssue29492ReplayDiagnostics(time.Millisecond, func() {
+		captured <- issue29492ReplayDiagnostics(nil)
+	})
+	var diagnostic string
+	select {
+	case diagnostic = <-captured:
+	case <-time.After(5 * time.Second):
+		stop()
+		t.Fatal("pre-deadline replay diagnostics did not run")
+	}
+	stop()
+	require.Contains(t, diagnostic, "pipeline_senders=")
+	require.Contains(t, diagnostic, "pipeline_stream_lifecycles=")
+	require.Contains(t, diagnostic, "db_stats=")
+	require.Contains(t, diagnostic, "gomaxprocs=")
+	require.Contains(t, diagnostic, "embedded-CN goroutines:\ngoroutine ")
+
+	t.Run("stop prevents late capture", func(t *testing.T) {
+		fired := make(chan struct{})
+		stop := armIssue29492ReplayDiagnostics(time.Minute, func() { close(fired) })
+		stop()
+		select {
+		case <-fired:
+			t.Fatal("diagnostics ran after the replay completed")
+		default:
+		}
+	})
+}
 
 // Full-channel causality is proved in the component tests. This public-path
 // control verifies three-CN cancellation and remote-stream quiescence. Its
@@ -187,16 +254,31 @@ func TestIssue29492MultiCNCancellationCleanup(t *testing.T) {
 				return promtestutil.ToFloat64(metricv2.PipelineMessageSenderGauge) == 0 &&
 					promtestutil.ToFloat64(metricv2.PipelineStreamLifecycleGauge) == 0
 			}, 15*time.Second, 10*time.Millisecond, "all CN remote stream owners must finish")
+			// Cancellation and replay own separate budgets. A slow cleanup must
+			// still fail here rather than silently shortening the replay phase.
+			require.NoError(t, ctx.Err(), "KILL/cancellation cleanup exhausted its phase budget")
+			cancel()
+			replayCtx, replayCancel := context.WithTimeout(t.Context(), 3*time.Minute)
+			defer replayCancel()
+			// Two snapshots distinguish a fixed wait from slow progress. They fire
+			// after the existing drain warning and before the replay deadline.
+			for _, delay := range []time.Duration{45 * time.Second, 50 * time.Second} {
+				stopReplayDiagnostics := armIssue29492ReplayDiagnostics(delay, func() {
+					t.Logf("post-cancellation replay remains in flight: mode=%s connection_id=%d elapsed=%s\n%s",
+						name, connectionID, delay, issue29492ReplayDiagnostics(dbs))
+				})
+				defer stopReplayDiagnostics()
+			}
 			// Removing the barrier makes the same query healthy. Keep the physical
 			// connection and, for binary execution, the same prepared statement.
 			if binary {
-				require.NoError(t, prepared.QueryRowContext(ctx, barrier).Scan(&cont))
+				require.NoError(t, prepared.QueryRowContext(replayCtx, barrier).Scan(&cont))
 			} else {
-				require.NoError(t, runner.QueryRowContext(ctx, query).Scan(&cont))
+				require.NoError(t, runner.QueryRowContext(replayCtx, query).Scan(&cont))
 			}
 			require.Equal(t, 12288.5, cont)
 			var reusedID uint64
-			require.NoError(t, runner.QueryRowContext(ctx, "select connection_id()").Scan(&reusedID))
+			require.NoError(t, runner.QueryRowContext(replayCtx, "select connection_id()").Scan(&reusedID))
 			require.Equal(t, connectionID, reusedID)
 		}) {
 			return // Do not reuse a connection whose cancellation/recovery failed.

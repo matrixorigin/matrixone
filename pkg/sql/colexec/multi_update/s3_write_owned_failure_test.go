@@ -70,7 +70,7 @@ func TestSortAndSyncDropsTransferredBatchOnWriteError(t *testing.T) {
 	t.Cleanup(func() { fs.Close(ctx) })
 	proc := testutil.NewProcess(t, testutil.WithFileService(&ownershipFailFS{fs}))
 	columnType := types.New(types.T_varchar, 256, 0)
-	input := batch.New([]string{"v"})
+	input := batch.NewWithSize(1)
 	input.Vecs[0] = vector.NewVec(columnType, proc.Mp())
 	for range objectio.BlockMaxRows {
 		// One 24-byte descriptor plus 40 payload bytes per row fills the
@@ -80,7 +80,7 @@ func TestSortAndSyncDropsTransferredBatchOnWriteError(t *testing.T) {
 	input.SetRowCount(int(objectio.BlockMaxRows))
 	bats := []*batch.Batch{input}
 	seenClose, retained := false, false
-	buf := &ownershipTrackingBuffer{BatchFreeList: containers.NewBatchFreeList(nil, nil, true)}
+	buf := &ownershipTrackingBuffer{BatchFreeList: containers.NewBatchFreeList(nil, true)}
 	buf.onClose = func() { seenClose = true; retained = bats[0] != nil }
 	table := &planpb.TableDef{
 		DbName: "ownership_db", Name: "ownership_table",
@@ -100,12 +100,12 @@ func TestSortAndSyncRetainsUntransferredBatchOnWriteError(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(ctx) })
 	proc := testutil.NewProcess(t, testutil.WithFileService(fs))
-	input := batch.New([]string{"v"})
+	input := batch.NewWithSize(1)
 	input.Vecs[0] = nil // Validation fails before ownership is transferred.
 	input.SetRowCount(int(objectio.BlockMaxRows))
 	bats := []*batch.Batch{input}
 	seenClose, retained := false, false
-	buf := &ownershipTrackingBuffer{BatchFreeList: containers.NewBatchFreeList(nil, nil, true)}
+	buf := &ownershipTrackingBuffer{BatchFreeList: containers.NewBatchFreeList(nil, true)}
 	buf.onClose = func() { seenClose = true; retained = bats[0] != nil }
 	table := &planpb.TableDef{
 		DbName: "ownership_db", Name: "ownership_table",
@@ -160,14 +160,14 @@ func TestPersistentSinkerResetRetriesOrReconstructs(t *testing.T) {
 			writer := &s3WriterDelegate{
 				insertSinkers: []*colexec.CNS3Writer{first, failed},
 				insertFreeLists: []*containers.BatchFreeList{
-					containers.NewBatchFreeList(nil, nil, true), containers.NewBatchFreeList(nil, nil, true),
+					containers.NewBatchFreeList(nil, true), containers.NewBatchFreeList(nil, true),
 				},
 				updateCtxs: []*MultiUpdateCtx{
 					{TableDef: table, InsertCols: []int{0}}, {TableDef: table, InsertCols: []int{0}},
 				},
 			}
 			t.Cleanup(func() { _ = writer.free(proc) })
-			input := batch.NewWithSchema([]string{"v"}, []types.Type{types.New(types.T_varchar, 256, 0)}, proc.Mp())
+			input := batch.NewWithTypes([]types.Type{types.New(types.T_varchar, 256, 0)}, proc.Mp())
 			defer input.Clean(proc.Mp())
 			require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("value"), false, proc.Mp()))
 			input.SetRowCount(1)
@@ -222,7 +222,7 @@ func TestDeleteOutputRetainsAllObjectStats(t *testing.T) {
 	info := writer.deleteBlockInfo[0]
 	require.Equal(t, 3, info.bat.RowCount())
 	require.Equal(t, uint64(9), info.rawRowCount)
-	require.NoError(t, writer.addBatchToOutput(proc.Mp(), actionDelete, 0, info.rawRowCount, info.name, info.bat))
+	require.NoError(t, writer.addBatchToOutput(proc.Mp(), actionDelete, 0, info.rawRowCount, info.name, info.bat, colexec.CNS3TombstoneResultAttrs))
 	decoded := batch.NewWithSize(0)
 	defer decoded.Clean(proc.Mp())
 	require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(writer.outputBat.Vecs[4].GetBytesAt(0), proc.Mp()))

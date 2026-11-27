@@ -698,12 +698,8 @@ func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (peak int64, un
 // occupy. A frame of n bytes was written as ceil(n / MaxChunkSize) chunks, contiguously, so the
 // chunk count is what makes the rows comparable with the chunks actually stored.
 func tailFrameCoverage(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (stored, chunks int64, err error) {
-	sql := fmt.Sprintf(
-		"SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED), CAST(COALESCE(SUM((%s + %d) DIV %d), 0) AS SIGNED) "+
-			"FROM %s WHERE %s",
-		catalog.FullText2Index_TblCol_Metadata_Filesize,
-		catalog.FullText2Index_TblCol_Metadata_Filesize,
-		vectorindex.MaxChunkSize-1, vectorindex.MaxChunkSize,
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED), %s FROM %s WHERE %s",
+		catalog.FullText2Index_TblCol_Metadata_Filesize, tailFrameChunksSQL(),
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
 		vectorindex.TailFrameSQL(catalog.FullText2Index_TblCol_Metadata_Index_Id))
 	res, err := runSql(sqlproc, sql)
@@ -719,6 +715,11 @@ func tailFrameCoverage(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (stored, ch
 			vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0), nil
 	}
 	return 0, 0, nil
+}
+
+func tailFrameChunksSQL() string {
+	return fmt.Sprintf("CAST(COALESCE(SUM((%s + %d) DIV %d), 0) AS SIGNED)",
+		catalog.FullText2Index_TblCol_Metadata_Filesize, vectorindex.MaxChunkSize-1, vectorindex.MaxChunkSize)
 }
 
 // tailChunkCount counts the tag=1 chunks actually stored.
@@ -1020,9 +1021,8 @@ func readTailFrameFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, f tailFrame
 // NextTailChunkIdSql returns a SELECT for the next free tag=1 CdcTail chunk_id —
 // the monotonic append position (= recency) the sinker frames at. It is
 // GREATEST(MAX tail chunk_id, MAX tag=0 base recency) + 1, so an appended tail is
-// always newer than every base under Index liveness, and the sequence never
-// resets after a compaction folds the tail into a base. Mirrors bm25's
-// NextTailChunkIdSql.
+// always newer than every remaining base. If compaction leaves neither a base
+// nor a tail, numbering restarts at one.
 func NextTailChunkIdSql(cfg TableConfig) string {
 	tailMax := fmt.Sprintf("COALESCE((SELECT MAX(%s) FROM %s WHERE %s = %s AND %s = %d), 0)",
 		catalog.FullText2Index_TblCol_Storage_Chunk_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
@@ -1159,14 +1159,65 @@ func QueryGeneration(ctx context.Context, cnUUID string, accountID uint32, cfg T
 	return ts, tail, nil
 }
 
-// CountTailChunks returns the number of tag=1 CdcTail chunk rows — the idxcron
-// tail-growth gate (fold once the delta is large enough).
+func cdcTailFilter() string {
+	return fmt.Sprintf("%s = %s AND %s = %d", catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId), catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+}
+
+// CountTailChunks is the scheduler's tag=1 CdcTail growth gate.
 func CountTailChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
-	sql := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = %s AND %s = %d",
-		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
-		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
-		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
-	return scanInt64(sqlproc, sql)
+	return scanInt64(sqlproc, "SELECT COUNT(*) FROM "+sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable)+" WHERE "+cdcTailFilter())
+}
+
+type TailUsage struct {
+	Chunks, Bytes int64
+	Frames        *int64 // nil when legacy chunks lack frame metadata
+}
+
+// ReadTailUsage compares physical chunks with the spans of logical frames in
+// the same snapshot. Legacy frames without metadata still contribute bytes.
+func ReadTailUsage(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (TailUsage, error) {
+	query := fmt.Sprintf(`SELECT chunks, bytes, IF(chunks = covered, frames, NULL)
+		FROM (SELECT COUNT(*) AS chunks FROM %s WHERE %s) AS storage
+		CROSS JOIN (SELECT COUNT(*) AS frames, %s AS covered,
+		    CAST(COALESCE(SUM(%s), 0) AS SIGNED) AS bytes FROM %s WHERE %s) AS meta`,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), cdcTailFilter(), tailFrameChunksSQL(),
+		catalog.FullText2Index_TblCol_Metadata_Filesize, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+		vectorindex.TailFrameSQL(catalog.FullText2Index_TblCol_Metadata_Index_Id))
+	var usage TailUsage
+	err := sqlexec.RunTxn(sqlproc, func(tx executor.TxnExecutor) error {
+		stmt := sqlproc.StatementOption()
+		result, err := tx.Exec(query, stmt)
+		if err != nil {
+			return err
+		}
+		defer result.Close()
+		for _, bat := range result.Batches {
+			if bat.RowCount() == 0 {
+				continue
+			}
+			usage.Chunks = scalarInt64(bat.Vecs[0])
+			if !bat.Vecs[2].IsNull(0) {
+				usage.Bytes = scalarInt64(bat.Vecs[1])
+				frames := scalarInt64(bat.Vecs[2])
+				usage.Frames = &frames
+				return nil
+			}
+
+			// Legacy tail chunks have no recorded length. Read their exact total
+			// only on this path, in the same snapshot as the coverage check.
+			fallback := fmt.Sprintf("SELECT CAST(COALESCE(SUM(LENGTH(%s)), 0) AS SIGNED) FROM %s WHERE %s",
+				catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), cdcTailFilter())
+			payload, err := tx.Exec(fallback, stmt)
+			if err != nil {
+				return err
+			}
+			defer payload.Close()
+			usage.Bytes = resultScalarInt64(payload)
+			return nil
+		}
+		return moerr.NewInternalErrorNoCtx("missing Fulltext2 tail usage")
+	})
+	return usage, err
 }
 
 // SumBaseNrow sums metadata.nrow over the tag=0 bases — the base doc count for the

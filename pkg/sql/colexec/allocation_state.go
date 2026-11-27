@@ -19,15 +19,18 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
-// NewRowBitmap creates a Go-owned bitmap sized for rows bits. Bitmaps never
-// hold accounted memory, so there is nothing to free.
-func NewRowBitmap(rows int64) (*bitmap.Bitmap, error) {
+// NewRowBitmap creates a bitmap of rows bits allocated from mp. The caller
+// owns it and releases it with Free.
+func NewRowBitmap(rows int64, mp *mpool.MPool) (*bitmap.Bitmap, error) {
 	if rows < 0 || rows > math.MaxInt64-63 {
 		return nil, moerr.NewInvalidInputNoCtxf("invalid bitmap row count %d", rows)
 	}
 	value := new(bitmap.Bitmap)
-	value.InitWithSize(rows)
+	if err := value.InitWithSize(rows, mp); err != nil {
+		return nil, err
+	}
 	return value, nil
 }

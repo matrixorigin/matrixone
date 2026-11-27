@@ -156,6 +156,7 @@ func (s *service) initQueryCommandHandler() {
 	s.addQueryCommandHandler(query.CmdMethod_RunTask, s.handleRunTask)
 	s.addQueryCommandHandler(query.CmdMethod_RemoveRemoteLockTable, s.handleRemoveRemoteLockTable)
 	s.addQueryCommandHandler(query.CmdMethod_UnsubscribeTable, s.handleUnsubscribeTable)
+	s.addQueryCommandHandler(query.CmdMethod_CountCachedObjectFiles, s.handleCountCachedObjectFiles)
 	s.addQueryCommandHandler(query.CmdMethod_GetCacheData, s.handleGetCacheData)
 	s.addQueryCommandHandler(query.CmdMethod_GetStatsInfo, s.handleGetStatsInfo)
 	s.addQueryCommandHandler(query.CmdMethod_GetPipelineInfo, s.handleGetPipelineInfo)
@@ -647,6 +648,23 @@ func (s *service) handleUnsubscribeTable(ctx context.Context, req *query.Request
 	return nil
 }
 
+func (s *service) handleCountCachedObjectFiles(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	probe := req.CountCachedObjectFilesRequest
+	if probe == nil {
+		return moerr.NewInvalidInput(ctx, "missing object cache probe")
+	}
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
+	hits, err := objectio.CountCachedObjectFiles(ctx, fs, probe.ObjectIds)
+	if err != nil {
+		return err
+	}
+	resp.CountCachedObjectFilesResponse = &query.CountCachedObjectFilesResponse{Hits: uint32(hits)}
+	return nil
+}
+
 // handleGetCacheData reads the cache data from the local data cache in fileservice.
 func (s *service) handleGetCacheData(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	sharedFS, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
@@ -725,13 +743,14 @@ func (s *service) handleMigrateConnTo(
 		logutil.Errorf("failed to migrate conn to: %v", err)
 		return err
 	}
+	resp.MigrateConnToResponse = &query.MigrateConnToResponse{Success: true, PrincipalVerified: true}
+	if req.MigrateConnToRequest.VerifyPrincipalOnly {
+		return nil
+	}
 	logutil.Infof("migrate ok, conn ID: %d, DB: %s, prepared stmt count: %d",
 		req.MigrateConnToRequest.ConnID, req.MigrateConnToRequest.DB, len(req.MigrateConnToRequest.PrepareStmts))
 	for _, stmt := range req.MigrateConnToRequest.PrepareStmts {
 		logutil.Infof("migrated prepare stmt on conn %d, %s, %s", req.MigrateConnToRequest.ConnID, stmt.Name, stmt.SQL)
-	}
-	resp.MigrateConnToResponse = &query.MigrateConnToResponse{
-		Success: true,
 	}
 	return nil
 }

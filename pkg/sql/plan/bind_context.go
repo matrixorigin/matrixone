@@ -1101,7 +1101,7 @@ func sameHavingColumnReference(ctx *BindContext, left, right *tree.UnresolvedNam
 		if leftOK && rightOK {
 			return leftBinding.tag == rightBinding.tag && leftPos == rightPos
 		}
-		if leftOK || rightOK {
+		if leftOK || rightOK || leftPos == AmbiguousName || rightPos == AmbiguousName {
 			return false
 		}
 	}
@@ -1118,21 +1118,42 @@ func sameHavingColumnReference(ctx *BindContext, left, right *tree.UnresolvedNam
 }
 
 // resolveTableBinding resolves only this scope. A different explicit database
-// is a miss, so the binder can continue through its existing parent traversal.
-func (bc *BindContext) resolveTableBinding(db, table string) *Binding {
-	binding := bc.bindingByTable[table]
-	if db == "" {
-		return binding
-	}
-	if binding != nil && binding.db != "" &&
+// is a miss, while multiple implicit system table matches end parent lookup.
+func (bc *BindContext) resolveTableBinding(db, table string) (binding *Binding, ambiguous bool) {
+	binding = bc.bindingByTable[table]
+	if binding != nil && (db == "" || binding.db != "" &&
 		(db == binding.db || db == tree.NewCStr(binding.db, bc.lower).Compare() ||
-			(slices.Contains(mysql.CaseInsensitiveDbs, binding.db) && strings.EqualFold(db, binding.db))) {
-		return binding
+			(slices.Contains(mysql.CaseInsensitiveDbs, binding.db) && strings.EqualFold(db, binding.db)))) {
+		return binding, false
 	}
-	if bc.remapOption != nil {
-		return bc.bindingByTable[db+"."+table]
+	if db != "" && bc.remapOption != nil {
+		if binding = bc.bindingByTable[db+"."+table]; binding != nil {
+			return binding, false
+		}
 	}
-	return nil
+
+	if bc.lower != 0 {
+		return nil, false
+	}
+	db = strings.ToLower(db)
+	if db != "" && !slices.Contains(mysql.CaseInsensitiveDbs, db) {
+		return nil, false
+	}
+	// Catalog case folding applies to implicit table names, while explicit
+	// aliases retain the spelling that was registered in the scope.
+	table = strings.ToLower(table)
+	var match *Binding
+	for _, candidate := range bc.bindings {
+		if !candidate.caseInsensitiveTable || table != strings.ToLower(candidate.table) ||
+			db != "" && db != strings.ToLower(candidate.db) {
+			continue
+		}
+		if match != nil {
+			return nil, true
+		}
+		match = candidate
+	}
+	return match, false
 }
 
 func resolveColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*Binding, int32, bool) {
@@ -1144,7 +1165,11 @@ func resolveColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*Binding
 	if ref.TblName() == "" {
 		binding = ctx.bindingByCol[ref.ColName()]
 	} else {
-		binding = ctx.resolveTableBinding(ref.DbName(), ref.TblName())
+		var ambiguous bool
+		binding, ambiguous = ctx.resolveTableBinding(ref.DbName(), ref.TblName())
+		if ambiguous {
+			return nil, AmbiguousName, false
+		}
 	}
 	if binding == nil {
 		return nil, 0, false

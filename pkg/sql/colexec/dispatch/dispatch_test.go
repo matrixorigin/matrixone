@@ -15,7 +15,6 @@
 package dispatch
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"testing"
@@ -198,17 +197,53 @@ func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {
 	legacy.SetRowCount(1)
 	defer legacy.Clean(proc.Mp())
 
-	buf := bytes.NewBufferString("sentinel")
+	mp := mpool.MustNewZero()
+	buf := mpool.NewMessageBuffer(mp, maxRetainedSendBuffer)
+	_, err := buf.Write([]byte("sentinel"))
+	require.NoError(t, err)
 	var encoded []byte
-	var err error
 	require.NotPanics(t, func() {
-		encoded, err = marshalRemoteBatch(proc, legacy, buf)
+		encoded, err = marshalRemoteBatch(proc, legacy, &buf)
 	})
 	require.NoError(t, err)
 	expected, err := legacy.MarshalBinary()
 	require.NoError(t, err)
 	require.Equal(t, expected, encoded,
 		"unknown service without metadata keeps the legacy wire format")
+
+	// The next batch reuses the buffer: no new allocation from its pool.
+	allocated := mp.Stats().NumAlloc.Load()
+	again, err := marshalRemoteBatch(proc, legacy, &buf)
+	require.NoError(t, err)
+	require.Equal(t, expected, again)
+	require.True(t, &encoded[0] == &again[0])
+	require.Equal(t, allocated, mp.Stats().NumAlloc.Load())
+	buf.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+// A dispatch operator keeps its send buffer across executions and frees it
+// when it is freed or released.
+func TestDispatchSendBufferLifetime(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, proc.Mp()))
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	d := NewArgument()
+	before := dispatchSendPool.CurrNB()
+	_, err := marshalRemoteBatch(proc, bat, &d.sendBuf)
+	require.NoError(t, err)
+	require.Greater(t, dispatchSendPool.CurrNB(), before)
+	d.Free(proc, false, nil)
+	require.Equal(t, before, dispatchSendPool.CurrNB())
+	_, err = marshalRemoteBatch(proc, bat, &d.sendBuf)
+	require.NoError(t, err)
+	d.Release()
+	require.Equal(t, before, dispatchSendPool.CurrNB())
 }
 
 func TestPrepareRemote(t *testing.T) {
@@ -1144,7 +1179,7 @@ func TestShuffleRetiresCertifiedStopWithoutDataLoss(t *testing.T) {
 		remoteToIdx:     map[uuid.UUID]int{uid: 0},
 	}}
 
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 
 	done, err := sendBatToIndexOutcome(d, proc, bat, 0)
@@ -1293,7 +1328,7 @@ func Test_sendBatToMultiMatchedReg_ReceiverRemoved(t *testing.T) {
 		},
 	}
 
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 
 	// shuffleIndex=0, localRegsCnt=2, remoteToIdx[uid]=0
@@ -1505,7 +1540,7 @@ func TestSendToAllRemoteFunc_ReceiverFailure(t *testing.T) {
 		},
 	}
 
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 
 	// SendToAll should fail when any receiver is done
@@ -1538,7 +1573,7 @@ func TestSendToAnyRemoteFunc_ReceiverFailure(t *testing.T) {
 		},
 	}
 
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 
 	end, err := sendToAnyRemoteFunc(bat, d, proc)
@@ -1565,7 +1600,7 @@ func Test_sendToAnyRemoteFunc_RemoteRegsCntZero(t *testing.T) {
 		},
 	}
 
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 
 	// Should hit the error path: if ap.ctr.remoteRegsCnt == 0
@@ -1598,7 +1633,7 @@ func Test_sendToAnyRemoteFunc_NetworkError(t *testing.T) {
 
 func TestSendToAnyFunc_PropagatesLocalError(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 	want := moerr.NewInternalErrorNoCtx("local send failed")
 
@@ -1621,7 +1656,7 @@ func TestSendToAnyFunc_PropagatesLocalError(t *testing.T) {
 
 func TestSendToAnyFunc_PropagatesRemoteError(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 	want := moerr.NewInternalErrorNoCtx("remote send failed")
 
@@ -1644,7 +1679,7 @@ func TestSendToAnyFunc_PropagatesRemoteError(t *testing.T) {
 
 func TestSendToAnyFunc_FallbackFromLocalToRemote(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 
 	localStub := gostub.Stub(&sendToAnyLocal, func(*batch.Batch, *Dispatch, *process.Process) (bool, error) {
@@ -1674,7 +1709,7 @@ func TestSendToAnyFunc_FallbackFromLocalToRemote(t *testing.T) {
 
 func TestSendToAnyFunc_FallbackRemoteErrorIsPropagated(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 	want := moerr.NewInternalErrorNoCtx("fallback remote failed")
 	localCalled := false
@@ -1725,7 +1760,7 @@ func TestShuffleScenario_TargetReceiverFailed(t *testing.T) {
 		},
 	}
 
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 	bat.ShuffleIDX = 0 // This batch should go to receiver 0
 

@@ -78,7 +78,7 @@ func (p *PartitionState) ApproxTombstoneObjectsNum() int {
 
 func (p *PartitionState) newTombstoneObjectsIter(
 	snapshot types.TS,
-	onlyVisible bool) (objectio.ObjectIter, error) {
+	onlyVisible bool) *objectsIter {
 
 	iter := p.tombstoneObjectDTSIndex.Iter()
 	if onlyVisible {
@@ -99,7 +99,31 @@ func (p *PartitionState) newTombstoneObjectsIter(
 		ts:          snapshot,
 		iter:        iter,
 	}
-	return ret, nil
+	return ret
+}
+
+// VisitVisibleTombstoneObjects allows callers to stop a walk even when the
+// timestamp filter skips a long run of entries.
+func (p *PartitionState) VisitVisibleTombstoneObjects(
+	ctx context.Context, snapshot types.TS, visit func(objectio.ObjectEntry),
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := p.checkObjectSnapshot(snapshot); err != nil {
+		return err
+	}
+	iter := p.newTombstoneObjectsIter(snapshot, true)
+	defer iter.Close()
+	for iter.iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry := iter.Entry(); entry.Visible(snapshot) {
+			visit(entry)
+		}
+	}
+	return ctx.Err()
 }
 
 func (p *PartitionState) newDataObjectIter(
@@ -124,18 +148,23 @@ func (p *PartitionState) NewObjectsIter(
 	onlyVisible bool,
 	visitTombstone bool,
 ) (objectio.ObjectIter, error) {
+	if err := p.checkObjectSnapshot(snapshot); err != nil {
+		return nil, err
+	}
+	if visitTombstone {
+		return p.newTombstoneObjectsIter(snapshot, onlyVisible), nil
+	}
+	return p.newDataObjectIter(snapshot, onlyVisible)
+}
+
+func (p *PartitionState) checkObjectSnapshot(snapshot types.TS) error {
 	if !p.IsEmpty() && snapshot.LT(&p.start) {
-		return nil, moerr.NewTxnStaleNoCtxf(
+		return moerr.NewTxnStaleNoCtxf(
 			"(%s<%s)",
 			snapshot.ToString(), p.start.ToString(),
 		)
 	}
-
-	if visitTombstone {
-		return p.newTombstoneObjectsIter(snapshot, onlyVisible)
-	} else {
-		return p.newDataObjectIter(snapshot, onlyVisible)
-	}
+	return nil
 }
 
 func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {

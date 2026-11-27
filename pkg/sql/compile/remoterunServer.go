@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -28,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -120,13 +118,12 @@ func CnServerMessageHandler(
 	if msg.GetCmd() == pipeline.Method_PipelineBatchAck {
 		return handlePipelineBatchAck(msg, cs)
 	}
-	if msg.GetCmd() == pipeline.Method_PipelineProtocolCheck {
-		return handlePipelineProtocolCheck(ctx, msg, cs, lockService.GetConfig().ServiceID, messageAcquirer)
-	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
 	receiver, err := newMessageReceiverOnServer(ctx, serverAddress, msg,
 		cs, messageAcquirer, storageEngine, fileService, lockService, queryClient, HaKeeper, udfService, txnClient, autoIncreaseCM, colexecServer)
+	// Execution, and every batch it sends, ends before the handler returns.
+	defer receiver.batchOut.close()
 	if err != nil {
 		if sendErr := receiver.sendError(err); sendErr != nil {
 			return errors.Join(err, sendErr)
@@ -206,28 +203,6 @@ func CnServerMessageHandler(
 		receiver.colexecServer.RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
-}
-
-func handlePipelineProtocolCheck(
-	ctx context.Context,
-	request *pipeline.Message,
-	cs morpc.ClientSession,
-	serviceID string,
-	messageAcquirer func() morpc.Message,
-) error {
-	response, ok := messageAcquirer().(*pipeline.Message)
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("pipeline protocol response has wrong type")
-	}
-	response.SetID(request.GetID())
-	response.SetMessageType(pipeline.Method_PipelineProtocolCheck)
-	response.SetSid(pipeline.Status_Last)
-	if runtime := moruntime.ServiceRuntime(serviceID); runtime != nil {
-		if value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
-			response.ProtocolVersion, _ = value.(int64)
-		}
-	}
-	return cs.Write(ctx, response)
 }
 
 // waitUntilPipelineBatchFlowDrained preserves the ownership boundary between
@@ -1053,6 +1028,8 @@ type messageReceiverOnServer struct {
 	messageAcquirer func() morpc.Message
 	maxMessageSize  int
 	scopeData       []byte
+	// batchOut is the stream's marshal buffer for result batches.
+	batchOut *remoteBatchBuffer
 
 	needNotReply bool
 
@@ -1098,6 +1075,7 @@ func newMessageReceiverOnServer(
 	colexecServer *colexec.Server) (messageReceiverOnServer, error) {
 	connectionCtx := cs.SessionCtx()
 	receiver := messageReceiverOnServer{
+		batchOut:              newRemoteBatchBuffer(),
 		messageCtx:            ctx,
 		connectionCtx:         connectionCtx,
 		messageId:             m.GetId(),
@@ -1397,11 +1375,22 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return nil
 	}
 
-	var transport bytes.Buffer
-	data, err := b.MarshalBinaryWithBuffer(&transport, false)
-	if err != nil {
+	out := receiver.batchOut
+	out.mu.Lock()
+	defer out.mu.Unlock()
+	if out.closed {
+		return moerr.NewInternalErrorNoCtx("remote batch stream is closed")
+	}
+	// Every Write below returns only once its message is encoded or dropped,
+	// so the messages are done with the buffer when sendBatch returns. Reset
+	// it then: one larger than the retention bound is freed before the
+	// stream waits for its next batch or the receiver's acknowledgement.
+	defer out.buf.Reset()
+	if err := b.MarshalBinaryTo(&out.buf); err != nil {
 		return err
 	}
+	data := out.buf.Bytes()
+	var err error
 
 	var batchSequence uint64
 	batchSent := false
@@ -1463,6 +1452,41 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	}
 	batchSent = true
 	return nil
+}
+
+// remoteBatchSendPool holds the streams' result-batch marshal buffers.
+var remoteBatchSendPool = mpool.MustNew("remote_batch_send")
+
+// maxRetainedRemoteBatchBuffer bounds the buffer a stream keeps between
+// batches; a larger batch's buffer is freed after it is sent.
+const maxRetainedRemoteBatchBuffer = 64 << 20
+
+// remoteBatchBuffer is a stream's marshal buffer for result batches, off
+// heap from remoteBatchSendPool. sendBatch marshals each batch into it and
+// sends messages whose Data points into it. That is safe because a server
+// session's ClientSession.Write returns only after the transport has
+// encoded the message, or dropped it; the next batch then reuses the bytes.
+type remoteBatchBuffer struct {
+	mu     sync.Mutex
+	buf    mpool.MessageBuffer
+	closed bool
+}
+
+func newRemoteBatchBuffer() *remoteBatchBuffer {
+	return &remoteBatchBuffer{
+		buf: mpool.NewMessageBuffer(remoteBatchSendPool, maxRetainedRemoteBatchBuffer),
+	}
+}
+
+// close frees the buffer; later sends fail.
+func (b *remoteBatchBuffer) close() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+	b.buf.Free()
 }
 
 func (receiver *messageReceiverOnServer) sendEndMessage() error {

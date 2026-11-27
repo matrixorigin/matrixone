@@ -34,7 +34,7 @@ import (
 func TestWriteDMLReplacementDataFilesWritesStatementScopedParquet(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "created_at", "name"})
+	bat := batch.NewWithSize(3)
 	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	dateVec := vector.NewVec(types.T_date.ToType(), mp)
 	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
@@ -84,7 +84,7 @@ func TestWriteDMLReplacementDataFilesWritesStatementScopedParquet(t *testing.T) 
 			Name:      "created_month",
 			Transform: "month",
 		}}},
-		Attrs:               bat.Attrs,
+		Attrs:               []string{"id", "created_at", "name"},
 		Batch:               bat,
 		TargetFileSizeBytes: 1,
 		ObjectWriter:        writer,

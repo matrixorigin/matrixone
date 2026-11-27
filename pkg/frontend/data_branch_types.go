@@ -84,7 +84,9 @@ type collectRange struct {
 	from             []types.TS
 	end              []types.TS
 	rel              []engine.Relation
+	relSnapshot      []types.TS // The snapshot at which each relation was opened.
 	startBoundaryRel []engine.Relation
+	clearAt          []types.TS
 	// idents carries the physical identity each segment was opened under
 	// (design §6): the walking side's endpoint identity for the endpoint
 	// segment and the winning candidate identity for reopened lineage
@@ -100,11 +102,86 @@ func (r collectRange) segmentIdentity(i int, fallback branchIdentity) branchIden
 	return fallback
 }
 
+func (r collectRange) segmentSnapshot(i int, fallback types.TS) types.TS {
+	if i >= 0 && i < len(r.relSnapshot) {
+		return r.relSnapshot[i]
+	}
+	return fallback
+}
+
 func (r collectRange) startBoundary(i int) engine.Relation {
 	if i < 0 || i >= len(r.startBoundaryRel) {
 		return nil
 	}
 	return r.startBoundaryRel[i]
+}
+
+// restrict intersects the source segments with the PICK window (lo, hi].
+func (r *collectRange) restrict(lo, hi types.TS) {
+	first := lo.Next()
+	j := 0
+	for i := range r.rel {
+		from, end := r.from[i], r.end[i]
+		boundary := r.startBoundary(i)
+		if first.GT(&from) {
+			from = first
+			boundary = nil
+		}
+		if hi.LT(&end) {
+			end = hi
+		}
+		if from.GT(&end) {
+			continue
+		}
+		r.from[j], r.end[j], r.rel[j] = from, end, r.rel[i]
+		if r.relSnapshot != nil {
+			r.relSnapshot[j] = r.relSnapshot[i]
+		}
+		if r.idents != nil {
+			r.idents[j] = r.idents[i]
+		}
+		if r.startBoundaryRel != nil {
+			r.startBoundaryRel[j] = boundary
+		}
+		if r.clearAt != nil {
+			at := r.clearAt[i]
+			if at.LT(&first) {
+				at = types.TS{}
+			}
+			r.clearAt[j] = at
+		}
+		j++
+	}
+	r.from, r.end, r.rel = r.from[:j], r.end[:j], r.rel[:j]
+	if r.relSnapshot != nil {
+		r.relSnapshot = r.relSnapshot[:j]
+	}
+	if r.idents != nil {
+		r.idents = r.idents[:j]
+	}
+	if r.startBoundaryRel != nil {
+		r.startBoundaryRel = r.startBoundaryRel[:j]
+	}
+	if r.clearAt != nil {
+		r.clearAt = r.clearAt[:j]
+	}
+}
+
+func (r collectRange) crossesClear() bool {
+	for _, at := range r.clearAt {
+		if !at.IsEmpty() {
+			return true
+		}
+	}
+	return false
+}
+
+type dataBranchSnapshotRelation struct {
+	rel          engine.Relation
+	ident        branchIdentity
+	at           types.TS
+	columns      *dataBranchClearColumns
+	upperColumns []*plan.ColDef // nil when the upper boundary uses the endpoint schema
 }
 
 // branchMetaInfo describes the lineage relationship between the two
@@ -155,13 +232,19 @@ type branchMetaInfo struct {
 
 	pathFromLCAToTar   []uint64
 	pathFromLCAToTarTS []types.TS
-	// LineageOnly[i] marks an ALTER copy-and-swap edge into path[i]. Such
+	// LineageOnly[i] marks a physical rebuild edge into path[i]. Such
 	// edges split physical collection ranges but do not represent a branch
 	// fork for LCA probing/conflict semantics.
 	pathFromLCAToTarLineageOnly  []bool
+	pathFromLCAToTarClearsRows   []bool
 	pathFromLCAToBase            []uint64
 	pathFromLCAToBaseTS          []types.TS
 	pathFromLCAToBaseLineageOnly []bool
+	pathFromLCAToBaseClearsRows  []bool
+	// The source's physical lineage continues above the LCA when a bounded
+	// PICK needs to read a lower snapshot from before that ancestor.
+	tarRebuildChain   []uint64
+	tarRebuildChainTS []types.TS
 }
 
 // hasLCA reports whether tar and base share a common ancestor in the
@@ -170,70 +253,77 @@ func (m *branchMetaInfo) hasLCA() bool {
 	return m.lcaTableId != 0
 }
 
-// tarLCASnapshot is the snapshot of the LCA at which tar's view of
-// the LCA's state is anchored. It is one of the two per-side anchors
-// that lcaProbeSnapshot composes into the shared divergence point
-// both sides resolve against.
-//
-// When tar forked off the LCA (len(pathFromLCAToTar) > 1), the
-// anchor is tar's own first-child CloneTS — the moment tar diverged.
-// When tar IS the LCA (length-1 path), tar inherits the meeting
-// point from base: base's first-child CloneTS, or baseSP if base is
-// also the LCA (case-0 same-table diff).
-func (m *branchMetaInfo) tarLCASnapshot(baseSP types.TS) types.TS {
-	if ts, ok := firstDataBranchForkTS(
-		m.pathFromLCAToTarTS, m.pathFromLCAToTarLineageOnly,
-	); ok {
-		return ts
-	}
-	if ts, ok := firstDataBranchForkTS(
-		m.pathFromLCAToBaseTS, m.pathFromLCAToBaseLineageOnly,
-	); ok {
-		return ts
-	}
-	return baseSP
-}
-
-// baseLCASnapshot is the mirror of tarLCASnapshot for the base side.
-func (m *branchMetaInfo) baseLCASnapshot(tarSP types.TS) types.TS {
-	if ts, ok := firstDataBranchForkTS(
-		m.pathFromLCAToBaseTS, m.pathFromLCAToBaseLineageOnly,
-	); ok {
-		return ts
-	}
-	if ts, ok := firstDataBranchForkTS(
-		m.pathFromLCAToTarTS, m.pathFromLCAToTarLineageOnly,
-	); ok {
-		return ts
-	}
-	return tarSP
-}
-
-func firstDataBranchForkTS(pathTS []types.TS, lineageOnly []bool) (types.TS, bool) {
-	for i := 1; i < len(pathTS); i++ {
+func firstDataBranchForkIndex(lineageOnly []bool, pathLen int) (int, bool) {
+	for i := 1; i < pathLen; i++ {
 		if i < len(lineageOnly) && lineageOnly[i] {
 			continue
 		}
+		return i, true
+	}
+	return 0, false
+}
+
+func firstDataBranchForkTS(pathTS []types.TS, lineageOnly []bool) (types.TS, bool) {
+	if i, ok := firstDataBranchForkIndex(lineageOnly, len(pathTS)); ok {
 		return pathTS[i], true
 	}
 	return types.TS{}, false
 }
 
-// lcaProbeSnapshot is the shared divergence point of the two
-// lineages: the earlier of the two per-side fork anchors. diffOnBase
-// uses it to fetch the LCA relation handle when the LCA is a
-// third-party node (neither tar nor base), so the handle is valid on
-// both sides' views, and hashDiffIfHasLCA uses it to anchor both
-// sides' tombstone resolution so the LCA's writes between the two
-// forks surface as the later-forked side's divergence instead of
-// being absorbed into that side's fork baseline.
+// lcaProbeSnapshot is the shared baseline used to open the LCA relation.
 func (m *branchMetaInfo) lcaProbeSnapshot(tarSP, baseSP types.TS) types.TS {
-	t := m.tarLCASnapshot(baseSP)
-	b := m.baseLCASnapshot(tarSP)
-	if t.LT(&b) {
-		return t
+	probe, _ := m.lcaProbeSnapshots(tarSP, baseSP, false)
+	return probe
+}
+
+// lcaProbeAnchors anchors each side at its first branch fork, or its
+// endpoint snapshot if it observes the LCA directly (possibly through ALTER
+// generations).
+func (m *branchMetaInfo) lcaProbeAnchors(tarSP, baseSP types.TS) (tarAnchor, baseAnchor types.TS, bothForked bool) {
+	tarAnchor, tarForked := firstDataBranchForkTS(m.pathFromLCAToTarTS, m.pathFromLCAToTarLineageOnly)
+	baseAnchor, baseForked := firstDataBranchForkTS(m.pathFromLCAToBaseTS, m.pathFromLCAToBaseLineageOnly)
+	if !tarForked {
+		tarAnchor = tarSP
 	}
-	return b
+	if !baseForked {
+		baseAnchor = baseSP
+	}
+	return tarAnchor, baseAnchor, tarForked && baseForked
+}
+
+// lcaProbeSnapshots uses the earlier observation as the shared baseline.
+func (m *branchMetaInfo) lcaProbeSnapshots(
+	tarSP, baseSP types.TS, preservePickConflicts bool,
+) (tarProbe, baseProbe types.TS) {
+	tarAnchor, baseAnchor, bothForked := m.lcaProbeAnchors(tarSP, baseSP)
+	// For sibling PICK, each side's conflict baseline includes the state it
+	// inherited at its own fork. With an ancestor operand both probes must
+	// honor the shared baseline, including an endpoint older than the fork.
+	if preservePickConflicts && bothForked {
+		return tarAnchor, baseAnchor
+	}
+	if tarAnchor.LT(&baseAnchor) {
+		return tarAnchor, tarAnchor
+	}
+	return baseAnchor, baseAnchor
+}
+
+// lcaProbeTableIDs pairs the sibling PICK snapshots with their fork parents.
+func (m *branchMetaInfo) lcaProbeTableIDs(preservePickConflicts bool) (tarTableID, baseTableID uint64) {
+	tarTableID, baseTableID = m.lcaTableId, m.lcaTableId
+	if preservePickConflicts {
+		tarIdx, tarForked := firstDataBranchForkIndex(m.pathFromLCAToTarLineageOnly, len(m.pathFromLCAToTarTS))
+		baseIdx, baseForked := firstDataBranchForkIndex(m.pathFromLCAToBaseLineageOnly, len(m.pathFromLCAToBaseTS))
+		if tarForked && baseForked {
+			if tarIdx > 0 && tarIdx-1 < len(m.pathFromLCAToTar) {
+				tarTableID = m.pathFromLCAToTar[tarIdx-1]
+			}
+			if baseIdx > 0 && baseIdx-1 < len(m.pathFromLCAToBase) {
+				baseTableID = m.pathFromLCAToBase[baseIdx-1]
+			}
+		}
+	}
+	return tarTableID, baseTableID
 }
 
 type tableStuff struct {
@@ -241,6 +331,11 @@ type tableStuff struct {
 	baseRel  engine.Relation
 	tarSnap  *plan.Snapshot
 	baseSnap *plan.Snapshot
+
+	// The endpoint handles can be opened by a background transaction whose
+	// snapshot is later than the foreground observation snapshot.
+	tarRelSnapshot  types.TS
+	baseRelSnapshot types.TS
 
 	// tarOperand/baseOperand are the operand descriptors of design §6.1,
 	// nil in unit tests that construct tableStuff directly. Their
@@ -250,8 +345,20 @@ type tableStuff struct {
 	baseOperand *branchOperand
 
 	lcaRel            engine.Relation
+	lcaRelSnapshot    types.TS // snapshot at which lcaRel was opened
+	lcaProbeTableId   uint64   // nonzero when the probe uses a different generation from lcaRel
 	lcaCTS            types.TS
 	lcaHasZeroHistory bool
+
+	// A side crossing a truncate is collected as visible rows at its upper
+	// boundary. A bounded source also carries its own lower snapshot image.
+	tarVisibleState, baseVisibleState bool
+	boundedPick                       bool
+	tarClearBaseline                  *dataBranchSnapshotRelation
+	tarPathDefs, basePathDefs         []*plan.TableDef
+	// Bounded PICK copies source values without firing destination ON UPDATE
+	// expressions for columns its generated UPDATE leaves unchanged.
+	pickOnUpdateNames []string
 	// lcaIdent is the winning owner identity lcaRel was reopened under
 	// (design §6.4). Nil when the LCA is an endpoint of a legacy
 	// local-local diff; identity accessors fall back to the session.
@@ -275,6 +382,8 @@ type tableStuff struct {
 		baseColToTarIdx     []int    // for base batch Vec[i+1], the target column index, or -1
 		baseColNames        []string // target data column index to lineage-resolved base name
 		lcaColNames         []string // target data column index to lineage-resolved LCA name
+		tarLCAColNames      []string // LCA names at the target fork, in target batch order
+		baseLCAColNames     []string // LCA names at the base fork, in target batch order
 		// indexedSpecialUpdateIdxes are special writable columns that belong to
 		// a unique secondary index. MatrixOne rejects assigning those columns in
 		// ON DUPLICATE KEY UPDATE, so changed values use a native UPDATE instead.
@@ -299,6 +408,26 @@ type tableStuff struct {
 	seqWatermarks *sequenceWatermarkTracker
 }
 
+func (t tableStuff) lcaProbeTableID(ctx context.Context) uint64 {
+	if t.lcaProbeTableId != 0 {
+		return t.lcaProbeTableId
+	}
+	if t.lcaRel != nil {
+		return t.lcaRel.GetTableID(ctx)
+	}
+	return 0
+}
+
+func (t tableStuff) lcaFallbackRangeRel(snapshotTS types.TS) engine.Relation {
+	if t.lcaProbeTableId != 0 {
+		return nil
+	}
+	if !t.lcaRelSnapshot.IsEmpty() && t.lcaRelSnapshot.EQ(&snapshotTS) {
+		return t.lcaRel
+	}
+	return nil
+}
+
 // resolvedSnapshots returns the effective per-side snapshot timestamps:
 // the snapshot bound to {tar,base}Snap when present, otherwise the
 // session's transaction snapshot. Centralized here so every call site
@@ -312,6 +441,21 @@ func (t *tableStuff) resolvedSnapshots(ses *Session) (tarSP, baseSP types.TS) {
 	}
 	if t.baseSnap != nil && t.baseSnap.TS != nil {
 		baseSP = types.TimestampToTS(*t.baseSnap.TS)
+	}
+	return
+}
+
+// resolvedRelSnapshots returns the snapshots used to open the endpoint handles.
+func (t *tableStuff) resolvedRelSnapshots(ses *Session) (tarRelSP, baseRelSP types.TS) {
+	tarRelSP, baseRelSP = t.tarRelSnapshot, t.baseRelSnapshot
+	if tarRelSP.IsEmpty() || baseRelSP.IsEmpty() {
+		tarSP, baseSP := t.resolvedSnapshots(ses)
+		if tarRelSP.IsEmpty() {
+			tarRelSP = tarSP
+		}
+		if baseRelSP.IsEmpty() {
+			baseRelSP = baseSP
+		}
 	}
 	return
 }

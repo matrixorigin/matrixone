@@ -55,7 +55,7 @@ func TestInternalAutoIncrementOwnsRelationNames(t *testing.T) {
 					bat, err := catalog.GenCreateDatabaseTuple("", 7, 1, 1, names.db, 10, "", proc.Mp(), packer)
 					require.NoError(t, err)
 					defer bat.Clean(proc.Mp())
-					_, err = fillRandomRowidAndZeroTs(bat, proc.Mp())
+					_, _, err = fillRandomRowidAndZeroTs(bat, catalog.MoDatabaseSchema, proc.Mp())
 					require.NoError(t, err)
 					eng.GetLatestCatalogCache().InsertDatabase(bat)
 				}()

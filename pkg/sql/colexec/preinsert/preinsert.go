@@ -16,8 +16,6 @@ package preinsert
 
 import (
 	"bytes"
-	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -40,9 +38,6 @@ import (
 )
 
 const opName = "preinsert"
-
-const autoIncrementGeneratedAttr = "__mo_auto_increment_generated"
-const odkuInputOrdinalAttr = "__mo_odku_input_ordinal"
 
 func (preInsert *PreInsert) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -155,7 +150,6 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 			preInsert.ctr.buf = batch.NewWithSize(len(bat.Vecs))
 		} else {
 			preInsert.ctr.buf = batch.NewWithSize(len(preInsert.Attrs))
-			preInsert.ctr.buf.Attrs = slices.Clone(preInsert.Attrs)
 		}
 	} else {
 		preInsert.ctr.buf.SetRowCount(0)
@@ -248,7 +242,6 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 			preInsert.ctr.canFreeVecIdx[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.ownedVecSlots[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, vec)
-			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.CPrimaryKeyColName)
 		}
 		if preInsert.ctr.clusterByExecutor != nil {
 			vec, err := preInsert.ctr.clusterByExecutor.Eval(proc, []*batch.Batch{preInsert.ctr.buf}, nil)
@@ -258,11 +251,9 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 			preInsert.ctr.canFreeVecIdx[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.ownedVecSlots[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, vec)
-			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.TableDef.ClusterBy.Name)
 		}
 		if preInsert.IsOldUpdate {
 			rowIdIdx := len(bat.Vecs) - 1
-			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.Row_ID)
 			rowIdVec := vector.NewVec(*bat.GetVector(int32(rowIdIdx)).GetType(), proc.Mp())
 			err = rowIdVec.UnionBatch(bat.Vecs[rowIdIdx], 0, bat.Vecs[rowIdIdx].Length(), nil, proc.Mp())
 			if err != nil {
@@ -671,7 +662,6 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 		preInsert.ctr.ownedVecSlots[markerPos] = true
 		preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs,
 			vector.NewVec(types.T_bool.ToType(), proc.Mp()))
-		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, autoIncrementGeneratedAttr)
 		if preInsert.TrackODKUResult {
 			ordinalPos := int(preInsert.ODKUOrdinalColumn)
 			if ordinalPos != len(preInsert.ctr.buf.Vecs) {
@@ -683,7 +673,6 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 			preInsert.ctr.ownedVecSlots[ordinalPos] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs,
 				vector.NewVec(types.T_uint64.ToType(), proc.Mp()))
-			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, odkuInputOrdinalAttr)
 		}
 	} else {
 		if markerPos >= len(preInsert.ctr.buf.Vecs) {
@@ -801,44 +790,13 @@ func checkZeroTemporalInStrictMode(preInsert *PreInsert, bat *batch.Batch, proc 
 	if preInsert == nil || bat == nil || proc == nil {
 		return nil
 	}
-
 	for idx := range preInsert.Attrs {
 		vecIdx := int(preInsert.ColOffset) + idx
 		if vecIdx >= len(bat.Vecs) || bat.Vecs[vecIdx] == nil {
 			continue
 		}
-		vec := bat.Vecs[vecIdx]
-		switch vec.GetType().Oid {
-		case types.T_timestamp:
-		case types.T_date, types.T_datetime:
-			if !preInsert.RejectZeroTemporal {
-				continue
-			}
-		default:
-			continue
-		}
-		for row := 0; row < vec.Length(); row++ {
-			if vec.IsNull(uint64(row)) {
-				continue
-			}
-			switch vec.GetType().Oid {
-			case types.T_date:
-				if preInsert.RejectZeroTemporal && vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "date", "0000-00-00", "value", row+1)
-				}
-			case types.T_datetime:
-				if preInsert.RejectZeroTemporal && vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
-				}
-			case types.T_timestamp:
-				timestamp := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
-				if !types.ValidTimestamp(timestamp) {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", fmt.Sprintf("%d", int64(timestamp)), "value", row+1)
-				}
-				if preInsert.RejectZeroTemporal && timestamp == types.ZeroTimestamp {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
-				}
-			}
+		if err := colexec.CheckZeroTemporalVector(proc.Ctx, bat.Vecs[vecIdx], preInsert.RejectZeroTemporal); err != nil {
+			return err
 		}
 	}
 	return nil

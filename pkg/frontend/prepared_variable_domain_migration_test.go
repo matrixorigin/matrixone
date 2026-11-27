@@ -38,6 +38,7 @@ import (
 func TestDependentPreparedMigrationProtocol(t *testing.T) {
 	ses, prepared, _, execCtx := newPreparedExecuteEnvForSQL(t, 112,
 		"select (select (select t.k limit 1)) from (select 1 as k union all select 2) t")
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, User: rootName, TenantID: sysAccountID, UserID: rootID})
 	defer ses.Close()
 	prepared.rewritePolicyCaptured = true
 	prepared.rewritePolicyGeneration = ses.rewritePolicyGeneration
@@ -74,6 +75,7 @@ func TestDependentPreparedMigrationProtocol(t *testing.T) {
 
 func TestDependentPreparedMigrationRejectsTargetBeforeStateChange(t *testing.T) {
 	ses, prepared, _, _ := newPreparedExecuteEnv(t, 111)
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, User: rootName, TenantID: sysAccountID, UserID: rootID})
 	defer ses.Close()
 	rt := moruntime.ServiceRuntime(ses.GetService())
 	previous, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -87,7 +89,7 @@ func TestDependentPreparedMigrationRejectsTargetBeforeStateChange(t *testing.T) 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 	ses.SetLastFoundRows(23)
 	ses.SetLastInsertID(7)
-	err := Migrate(context.Background(), ses, &query.MigrateConnToRequest{
+	err := Migrate(context.Background(), ses, &query.MigrateConnToRequest{Principal: &query.MigrateSessionPrincipal{},
 		LastInsertIDExported: true, LastInsertID: 99, FoundRows: 42,
 		PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select 1", RequiredProtocolVersion: defines.MORPCVersion119}},
 	})
@@ -103,12 +105,17 @@ func TestDependentPreparedMigrationRejectsTargetBeforeStateChange(t *testing.T) 
 
 func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 	ses, scratch, cw, execCtx := newPreparedExecuteEnv(t, 125)
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, User: rootName, TenantID: sysAccountID, UserID: rootID})
+	// This expression-only fixture has no catalog; retain its empty policy with
+	// the existing private proof after supplying the authenticated principal.
+	ses.ruleCache = map[string]string{}
+	seedRewriteRuleCacheProofForTest(ses)
 	t.Cleanup(ses.Close)
 	scratch.rewritePolicyCaptured = true
 	scratch.rewritePolicyGeneration = ses.rewritePolicyGeneration
 	staticType := plan.Type{Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetBinary)}
-	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-		"bound_s", "你", "", false, staticType, types.StringConversionString, false, types.RuntimeStringInherit))
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
+		"bound_s", "你", "", false, staticType, false, types.RuntimeStringInherit))
 	stmt := tree.NewPrepareString("bound_migration", "select charset(@bound_s), char_length(coalesce(@bound_s, ?))")
 	defer stmt.Free()
 	p, err := buildPlan(execCtx.reqCtx, ses, ses.txnCompileCtx, stmt)
@@ -131,10 +138,9 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 
 	for _, value := range []string{"你", "你好"} {
 		// Migration's current snapshot differs from the frozen type and row domain.
-		require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
 			"bound_s", value, "", false,
-			plan.Type{Id: int32(types.T_text), Charset: uint32(types.CharsetUTF8)},
-			types.StringConversionString, false, types.RuntimeStringInherit))
+			plan.Type{Id: int32(types.T_text), Charset: uint32(types.CharsetUTF8)}, false, types.RuntimeStringInherit))
 		resp := &query.MigrateConnFromResponse{}
 		err := rt.migrateConnectionFrom(resp)
 		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))

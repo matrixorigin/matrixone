@@ -181,7 +181,6 @@ func TestSortBatchCarriesPrecomputedAndExtraVectors(t *testing.T) {
 		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		proc.Base.Lim.SpillSize = 64 << 20
 		input := newPairBatch(proc, []int8{10, 20, 30}, []int64{1000, 2000, 3000})
-		input.Attrs = []string{"id", "payload"}
 		key := testutil.NewVector(3, types.T_int8.ToType(), proc.Mp(), false, []int8{3, 1, 2})
 		extra := testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{100, 200, 300})
 		var sorted *batch.Batch
@@ -231,7 +230,7 @@ func TestSortBatchCarriesPrecomputedAndExtraVectors(t *testing.T) {
 		require.Equal(t, []int64{2000, 3000, 1000}, vector.MustFixedColWithTypeCheck[int64](sorted.Vecs[1]))
 		require.Equal(t, []int8{1, 2, 3}, vector.MustFixedColWithTypeCheck[int8](sortedKeys[0]))
 		require.Equal(t, []int64{200, 300, 100}, vector.MustFixedColWithTypeCheck[int64](sortedExtra[0]))
-		require.Equal(t, []string{"id", "payload"}, sorted.Attrs)
+		require.Len(t, sorted.Vecs, 2)
 	})
 
 	t.Run("evaluated extra vector", func(t *testing.T) {

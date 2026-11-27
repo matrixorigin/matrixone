@@ -3549,7 +3549,6 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 		}
 
 		bat := batch.NewWithSize(2)
-		bat.SetAttributes([]string{"id", "name"})
 		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), ses.proc.Mp())
 		defer bat.Clean(ses.proc.Mp())
@@ -3755,7 +3754,6 @@ func buildFakePKComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *ba
 	t.Helper()
 
 	bat := batch.NewWithSize(3)
-	bat.SetAttributes([]string{"id", "name", "__mo_fake_pk_col"})
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType(), mp)
@@ -3774,7 +3772,6 @@ func buildFakePKInsertBatchWithoutFakePKValue(t *testing.T, mp *mpool.MPool, row
 	t.Helper()
 
 	bat := batch.NewWithSize(3)
-	bat.SetAttributes([]string{"id", "name", "__mo_fake_pk_col"})
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType(), mp)
@@ -3849,7 +3846,13 @@ func TestOnlineBranchApplyOrdersPreparationProductionAndCleanup(t *testing.T) {
 				}
 				var err error
 				if pick {
-					err = pickMergeDiffs(ctx, cancel, ses, bh, &tree.DataBranchPick{ConflictOpt: &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}}, tblStuff, produce)
+					err = pickMergeDiffs(ctx, cancel, ses, bh, &tree.DataBranchPick{ConflictOpt: &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}}, tblStuff,
+						func(emit emitFunc, prepare pickApplySetup) error {
+							if err := prepare(nil); err != nil {
+								return err
+							}
+							return produce(emit)
+						})
 				} else {
 					err = mergeDiffs(ctx, cancel, ses, bh, tblStuff, produce)
 				}

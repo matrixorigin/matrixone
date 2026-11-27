@@ -721,11 +721,12 @@ func TestSubmitTableDumpObjects(t *testing.T) {
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
 	}).Times(1)
-	rel.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, bat any) error {
+	rel.EXPECT().Write(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, bat any, attrs []string) error {
 		require.NotNil(t, bat)
+		require.Equal(t, []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}, attrs)
 		return nil
 	}).Times(1)
-	rel.EXPECT().Delete(gomock.Any(), gomock.Any(), "").DoAndReturn(func(ctx context.Context, bat any, _ string) error {
+	rel.EXPECT().Delete(gomock.Any(), gomock.Any(), []string{catalog.ObjectMeta_ObjectStats}, "").DoAndReturn(func(ctx context.Context, bat any, _ []string, _ string) error {
 		require.Equal(t, true, ctx.Value(defines.SkipTransferKey{}))
 		require.NotNil(t, bat)
 		return nil
@@ -806,7 +807,7 @@ func TestHandleLoadTable(t *testing.T) {
 		require.True(t, targetsLocked.Load())
 		return 0, nil
 	})
-	rel.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil)
+	rel.EXPECT().Write(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 

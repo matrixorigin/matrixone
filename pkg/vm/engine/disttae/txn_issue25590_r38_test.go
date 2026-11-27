@@ -45,6 +45,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"testing"
 
 	"github.com/panjf2000/ants/v2"
@@ -88,7 +89,7 @@ func TestIssue25590RollbackHandoffRetiresRecordedNamesAtQueueSettle(t *testing.T
 		}
 		return txn.WriteFile(
 			INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-			name, recBat, txn.tnStores[0])
+			name, recBat, catalog.ObjectInsertAttrs, txn.tnStores[0])
 	}
 
 	// The standing prior recorded write — the LIVE-record class the
@@ -241,7 +242,7 @@ func TestIssue25590PoolHandoffTailRetiresRecordedNamesAtQueueSettle(t *testing.T
 		}
 		return txn.WriteFile(
 			INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-			name, recBat, txn.tnStores[0])
+			name, recBat, catalog.ObjectInsertAttrs, txn.tnStores[0])
 	}
 
 	// The standing prior recorded write, outside the handoff.

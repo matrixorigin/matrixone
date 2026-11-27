@@ -368,6 +368,9 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		if s.AtTsExpr != nil {
 			remapDbInExpr(s.AtTsExpr.Expr, remap)
 		}
+		if len(remap.databases) > 0 {
+			remap.fail(remapRewriteOption(s.RewriteOption, remap))
+		}
 	case *tree.ShowCreateView:
 		remapObjectName(s.Name, remap)
 		if s.AtTsExpr != nil {
@@ -389,6 +392,9 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		remapDatabaseName(&s.DBName, remap)
 		remapDbInOptionalComparisonExpr(s.Like, remap)
 		remapDbInWhere(s.Where, remap)
+		if len(remap.databases) > 0 {
+			remap.fail(remapRewriteOption(s.RewriteOption, remap))
+		}
 	case *tree.ShowIndex:
 		remapObjectName(s.TableName, remap)
 		remapDatabaseName(&s.DbName, remap)

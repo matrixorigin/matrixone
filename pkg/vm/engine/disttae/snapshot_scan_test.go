@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -577,15 +576,7 @@ func TestCollectSnapshotScanTombstonesUsesProvidedState(t *testing.T) {
 
 	packer := types.NewPacker()
 	defer packer.Close()
-	pState.HandleRowsDelete(context.Background(), &api.Batch{
-		Attrs: []string{"rowid", "time"},
-		Vecs: []api.Vector{
-			mustVectorToProtoForMaterializedSnapshotTest(t, rowIDVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, tsVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, pkVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, tombstoneRowIDVec),
-		},
-	}, packer, mp)
+	pState.HandleRowsDelete(context.Background(), mustMarshalVectors(rowIDVec, tsVec, pkVec, tombstoneRowIDVec), packer, mp)
 
 	tombstones, err := collectSnapshotScanTombstones(pState, types.BuildTS(20, 0))
 	require.NoError(t, err)

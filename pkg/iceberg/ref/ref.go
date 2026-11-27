@@ -56,6 +56,33 @@ func ParseNessieRef(raw string, meta *api.TableMetadata) (Spec, error) {
 	return Spec{Name: raw, Type: TypeBranch}, nil
 }
 
+// EquivalentReadRefs compares Iceberg refs without looking up catalog metadata.
+func EquivalentReadRefs(left, right string) bool {
+	left, right = strings.TrimSpace(left), strings.TrimSpace(right)
+	if left == right {
+		return true
+	}
+	leftType, leftValue, leftTyped := splitTypedRef(left)
+	rightType, rightValue, rightTyped := splitTypedRef(right)
+	// For a catalog without Nessie routing, the runtime uses the original
+	// hash ref as a name. Untyped names can also require metadata to resolve.
+	if !leftTyped || !rightTyped || leftType != rightType || Type(leftType) == TypeHash {
+		return false
+	}
+	leftSpec, err := parseTypedRef(leftType, leftValue)
+	if err != nil {
+		return false
+	}
+	rightSpec, err := parseTypedRef(rightType, rightValue)
+	if err != nil {
+		return false
+	}
+	if leftSpec.Type == TypeSnapshot {
+		return leftSpec.SnapshotID == rightSpec.SnapshotID
+	}
+	return leftSpec.Name == rightSpec.Name
+}
+
 func FromSnapshotRef(name string, snapshotRef api.SnapshotRef) Spec {
 	typ := Type(strings.ToLower(strings.TrimSpace(snapshotRef.Type)))
 	if typ == "" {

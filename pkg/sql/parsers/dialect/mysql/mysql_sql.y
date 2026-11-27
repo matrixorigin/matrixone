@@ -199,6 +199,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 }
 
 %union {
+    renameUserPairs []tree.RenameUserPair
+
     statement tree.Statement
     statements []tree.Statement
 
@@ -481,6 +483,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 %token LEX_ERROR
 %token <str> JSON_TABLE JSON_TABLE_PATH JSON_TABLE_NESTED JSON_TABLE_ORDINALITY JSON_TABLE_EMPTY JSON_TABLE_ERROR
+%type <renameUserPairs> rename_user_pairs
+
 %type <jsonTableColumn> json_table_column json_table_policies
 %type <jsonTableColumns> json_table_columns
 %type <jsonTableResponse> json_table_response json_table_on_empty json_table_on_error
@@ -1005,6 +1009,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <roles> role_spec_list using_roles_opt
 %type <role> role_spec
 %type <cstr> role_name
+%type <str> id_only_bare_name
 %type <usernameRecord> user_name
 %type <user> user_spec drop_user_spec user_spec_with_identified
 %type <users> user_spec_list drop_user_spec_list user_spec_list_of_create_user
@@ -4312,6 +4317,15 @@ rename_stmt:
         renameTables := tree.NewRenameTable(alterTables)
         $$ = renameTables
     }
+
+|   RENAME USER rename_user_pairs
+    { $$ = &tree.RenameUser{Pairs: $3} }
+
+rename_user_pairs:
+    drop_user_spec TO drop_user_spec
+    { $$ = []tree.RenameUserPair{{From: $1, To: $3}} }
+|   rename_user_pairs ',' drop_user_spec TO drop_user_spec
+    { $$ = append($1, tree.RenameUserPair{From: $3, To: $5}) }
 
 rename_table_list:
     rename_option
@@ -8204,7 +8218,7 @@ where_expression_opt:
     }
 |   WHERE expression
     {
-        $$ = &tree.Where{Type: tree.AstWhere, Expr: $2}
+        $$ = yylex.(*Lexer).whereClause($2, $<pos>1, yyrcvr.Lookahead() >= 0)
     }
 
 select_expression_list:
@@ -10082,8 +10096,15 @@ role_spec:
         )
     }
 
-role_name:
+// These bitmap names were bare IDs before they needed dedicated tokens for
+// window calls. Keep other keyword tokens out of role and Iceberg ref names.
+id_only_bare_name:
     ID
+|   BITMAP_CONSTRUCT_AGG
+|   BITMAP_OR_AGG
+
+role_name:
+    id_only_bare_name
 	{
 		$$ = tree.NewCStr($1, 1)
     }
@@ -12347,11 +12368,11 @@ row_format_options:
     }
 
 charset_name:
-    name_string
+    name_string { $$ = yylex.(*Lexer).rewriteMergeName($1) }
 |   BINARY
 
 collate_name:
-    name_string
+    name_string { $$ = yylex.(*Lexer).rewriteMergeName($1) }
 |   BINARY
 
 table_name_list:
@@ -12411,7 +12432,7 @@ iceberg_ref_opt:
     }
 
 iceberg_ref_name:
-    ID
+    id_only_bare_name
     {
         $$ = $1
     }
@@ -17616,7 +17637,9 @@ not_keyword:
 |   BIT_CAST
 |   BITMAP_BIT_POSITION
 |   BITMAP_BUCKET_NUMBER
+|   BITMAP_CONSTRUCT_AGG
 |   BITMAP_COUNT
+|   BITMAP_OR_AGG
 |   PERCENTILE_CONT
 |   PERCENTILE_DISC
 |   EWM_MEAN

@@ -137,11 +137,14 @@ type AggFuncExec interface {
 	// PreAllocateGroups pre-allocates more additional groups to reduce garbage collection overhead.
 	PreAllocateGroups(more int) error
 
-	// XXX: WTF.
+	// Fill adds a logical input row to an existing zero-based group. It owns
+	// any required admission; callers do not run batch preflight for Fill.
 	Fill(groupIndex int, row int, vectors []*vector.Vector) error
 	BulkFill(groupIndex int, vectors []*vector.Vector) error
 
-	// BatchFill : add values to the aggregation for multiple groups at once.
+	// BatchFill maps input offset+i to groups[i]-1 (zero skips the row).
+	// Accounted Group callers reserve capacity for the same work unit through
+	// BatchCapacityPreflight before publishing the batch.
 	BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
 
 	// XXX: WTF.
@@ -427,40 +430,6 @@ func MakeSingleGroupAggWithLegacyTextMinMax(
 ) (GroupAggFuncExec, error) {
 	return makeGroupAgg(
 		mg, aggID, isDistinct, true, false, false, false, true, allocation, extraInformation, param...)
-}
-
-// MakeGroupAggWithLegacyRemoteState selects aggregate implementations whose
-// partial-state layout is understood by pre-upgrade CNs. Most callers are
-// remotely decoded pipelines; coordinator-side MergeGroup also uses it when a
-// state change must be compatible in both wire directions.
-func MakeGroupAggWithLegacyRemoteState(
-	mg *mpool.MPool,
-	aggID int64, isDistinct bool,
-	legacyTextMinMax bool, legacyVarianceState bool,
-	legacyDecimalSumState bool, legacyDecimalSumResult bool,
-	allocation *AllocationAccount,
-	extraInformation any,
-	param ...types.Type,
-) (GroupAggFuncExec, error) {
-	return makeGroupAgg(
-		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
-		legacyDecimalSumState, legacyDecimalSumResult, false,
-		allocation, extraInformation, param...)
-}
-
-func MakeSingleGroupAggWithLegacyRemoteState(
-	mg *mpool.MPool,
-	aggID int64, isDistinct bool,
-	legacyTextMinMax bool, legacyVarianceState bool,
-	legacyDecimalSumState bool, legacyDecimalSumResult bool,
-	allocation *AllocationAccount,
-	extraInformation any,
-	param ...types.Type,
-) (GroupAggFuncExec, error) {
-	return makeGroupAgg(
-		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
-		legacyDecimalSumState, legacyDecimalSumResult, true,
-		allocation, extraInformation, param...)
 }
 
 type singleGroupAggregate interface {

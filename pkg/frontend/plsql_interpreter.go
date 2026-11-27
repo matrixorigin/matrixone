@@ -313,6 +313,41 @@ func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
 	return 0, nil
 }
 
+// EvalCaseWhenCond evaluates a simple-CASE WHEN equality condition the same
+// way EvalCond does, and additionally reports whether the result is SQL NULL.
+// SQL NULL is a valid result of the generated equality expression (for
+// example CASE 1 WHEN NULL); the simple CASE statement keeps its original
+// NULL disposition of matching no branch while raising no error.
+func (interpreter *Interpreter) EvalCaseWhenCond(cond string) (int, bool, error) {
+	savedAffectedRows := interpreter.lastAffectedRows
+	defer interpreter.setAffectedRows(savedAffectedRows)
+
+	interpreter.bh.ClearExecResultSet()
+	interpreter.ctx = interpreter.storedProcedureContext()
+	if err := interpreter.bh.Exec(interpreter.ctx, "select "+cond); err != nil {
+		return 0, false, err
+	}
+	erArray, err := getResultSet(interpreter.ctx, interpreter.bh)
+	if err != nil {
+		return 0, false, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		// Decide SQL NULL from the typed result state before the numeric
+		// conversion, so a NULL comparison value is not mistaken for an
+		// evaluation error.
+		if isNull, nullErr := erArray[0].ColumnIsNull(interpreter.ctx, 0, 0); nullErr == nil && isNull {
+			return 0, true, nil
+		}
+		condVal, err := erArray[0].GetInt64(interpreter.ctx, 0, 0)
+		if err != nil {
+			return 0, false, err
+		}
+		return int(condVal), false, nil
+	}
+	return 0, false, nil
+}
+
 func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string, bg bool) (err error) {
 	curScope := make(map[string]interface{})
 	curTypeScope := make(map[string]plan.Type)
@@ -585,9 +620,17 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 				Left:  st.Expr,
 				Right: whenStmt.Cond,
 			}
-			condVal, err := interpreter.EvalCond(interpreter.GetExprString(equalityExpr))
+			condVal, isNull, err := interpreter.EvalCaseWhenCond(interpreter.GetExprString(equalityExpr))
 			if err != nil {
-				return SpNotOk, nil
+				return SpNotOk, err
+			}
+			if isNull {
+				// SQL NULL equality (e.g. CASE 1 WHEN NULL) is not an
+				// evaluation error and never matches under the documented
+				// CASE contract: keep checking the remaining WHEN clauses
+				// in order, so a later matching WHEN, the ELSE clause, and
+				// any later WHEN evaluation error are all reached.
+				continue
 			}
 			if condVal == 1 {
 				// we use this branch

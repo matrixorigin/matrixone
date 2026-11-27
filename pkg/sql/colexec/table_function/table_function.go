@@ -214,6 +214,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = sqlTvfPrepare(proc, tblArg)
 	case "table_stats":
 		tblArg.ctr.state, err = tableStatsPrepare(proc, tblArg)
+	case "mo_index_stats":
+		tblArg.ctr.state, err = indexStatsPrepare(proc, tblArg)
 	case "load_file_chunks":
 		tblArg.ctr.state, err = loadFileChunksPrepare(proc, tblArg)
 	case indexfile.FuncName:
@@ -245,7 +247,6 @@ func (tableFunction *TableFunction) cleanForPrepare(proc *process.Process) {
 
 func (tableFunction *TableFunction) createResultBatch(mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(tableFunction.Attrs))
-	bat.Attrs = tableFunction.Attrs
 	for i := range tableFunction.ctr.retSchema {
 		bat.Vecs[i] = vector.NewVec(tableFunction.ctr.retSchema[i], mp)
 	}

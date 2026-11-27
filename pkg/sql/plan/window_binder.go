@@ -919,12 +919,12 @@ func validationPrivilegeCarrier(node *plan.Node) *plan.Node {
 		carrier.ExternScan = &plan.ExternScan{Type: node.GetExternScan().GetType()}
 		return carrier
 	case plan.Node_FUNCTION_SCAN:
-		if node.TableDef == nil || node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "table_changes" {
+		if !IsSourceResolvingTableFunction(node) {
 			return nil
 		}
 		// Keep the function discriminator for authorization. Catalog validation
-		// uses the underlying table dependency recorded by buildTableChanges.
-		carrier.TableDef.TblFunc = &plan.TableFunction{Name: "table_changes"}
+		// uses the underlying source dependency recorded by the function binder.
+		carrier.TableDef.TblFunc = &plan.TableFunction{Name: node.TableDef.TblFunc.Name}
 		return carrier
 	default:
 		return nil

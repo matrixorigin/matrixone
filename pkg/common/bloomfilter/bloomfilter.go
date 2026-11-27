@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -252,14 +251,14 @@ func (bf *BloomFilter) Unmarshal(data []byte) error {
 		return moerr.NewInternalErrorNoCtx("invalid bloomfilter data (bitmap truncated)")
 	}
 
-	var bm bitmap.Bitmap
-	bm.Unmarshal(data[:bmLen])
-
+	// Release the filter this handle held before, then reference data: the
+	// bitmap has no pool, and the caller keeps data alive while it is used.
+	bf.Free()
 	bf.shared = &sharedData{
-		bitmap:   bm,
 		hashSeed: hashSeed,
 		refCount: 1,
 	}
+	bf.shared.bitmap.UnmarshalNoCopy(data[:bmLen])
 
 	bf.keys = make([][]byte, hashmap.UnitLimit)
 	bf.states = make([][3]uint64, hashmap.UnitLimit)

@@ -70,7 +70,7 @@ func genWriteReqs(
 			e.typ == INSERT &&
 			e.databaseId == catalog.MO_CATALOG_ID &&
 			e.tableId == catalog.MO_DATABASE_ID {
-			consumeCreatedDatabaseWrites(pendingDatabaseCreates, e.bat)
+			consumeCreatedDatabaseWrites(pendingDatabaseCreates, e.bat, e.attrs)
 		}
 		// --sql
 		// create table t (a int);
@@ -108,13 +108,22 @@ func genWriteReqs(
 	}
 
 	reqs := make([]txn.TxnRequest, 0, len(entries))
-	payload, err := types.Encode(&api.PrecommitWriteCmd{
+	// Every shard's request shares one payload, marshaled straight into a
+	// recycled off-heap buffer that the transaction holds until it ends.
+	cmd := api.PrecommitWriteCmd{
 		EntryList:           entries,
 		SyncProtectionJobId: txnCommit.GetSyncProtectionJobID(),
-	})
+	}
+	buf := commitPayloads.get()
+	payload, err := buf.Resize(cmd.ProtoSize())
+	if err == nil {
+		_, err = cmd.MarshalToSizedBuffer(payload)
+	}
 	if err != nil {
+		commitPayloads.put(buf)
 		return nil, err
 	}
+	txnCommit.holdCommitPayload(buf)
 	for _, info := range tn.Shards {
 		reqs = append(reqs, txn.TxnRequest{
 			CNRequest: &txn.CNOpRequest{
@@ -150,25 +159,26 @@ func requiresAutoIncrEpochFenceCommit(entries []*api.Entry) bool {
 }
 
 func toPBEntry(e Entry) (*api.Entry, error) {
-	var ebat *batch.Batch
+	var (
+		ebat   *batch.Batch
+		eattrs []string
+	)
 
 	if e.typ == INSERT {
 		ebat = batch.NewWithSize(0)
-		if e.bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
-			ebat.Vecs = e.bat.Vecs
-			ebat.Attrs = e.bat.Attrs
-
+		if e.attrs[0] == catalog.BlockMeta_BlockInfo {
 			// no need to commit the blk info to tn
-			ebat.Vecs = ebat.Vecs[1:]
-			ebat.Attrs = e.bat.Attrs[1:]
+			ebat.Vecs = e.bat.Vecs[1:]
+			eattrs = e.attrs[1:]
 			ebat.SetRowCount(ebat.Vecs[0].Length())
 		} else {
 			//e.bat.Vecs[0] is rowid vector
 			ebat.Vecs = e.bat.Vecs[1:]
-			ebat.Attrs = e.bat.Attrs[1:]
+			eattrs = e.attrs[1:]
 		}
 	} else {
 		ebat = e.bat
+		eattrs = e.attrs
 	}
 	typ := api.Entry_Insert
 	if e.typ == DELETE {
@@ -184,10 +194,10 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 						"database name = %s, table name = %s", e.databaseName, e.tableName))
 				}
 				ebat.Vecs = e.bat.Vecs[:2]
-				ebat.Attrs = e.bat.Attrs[:2]
+				eattrs = e.attrs[:2]
 			} else {
 				ebat.Vecs = e.bat.Vecs[:1]
-				ebat.Attrs = e.bat.Attrs[:1]
+				eattrs = e.attrs[:1]
 			}
 		}
 
@@ -196,13 +206,25 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	} else if e.typ == SOFT_DELETE_OBJECT {
 		typ = api.Entry_Delete
 		ebat = e.bat
+		eattrs = e.attrs
 	}
-	bat, err := toPBBatch(ebat)
+	// The entry encodes only the vectors, through a header of its own, and
+	// borrows the workspace vectors: genWriteReqs marshals the commit request
+	// before anything changes them.
+	if ebat == e.bat {
+		ebat = batch.NewWithSize(0)
+		ebat.Vecs = e.bat.Vecs
+	}
+	if len(ebat.Vecs) > 0 {
+		ebat.SetRowCount(ebat.Vecs[0].Length())
+	}
+	bat, err := batch.Encode(ebat)
 	if err != nil {
 		return nil, err
 	}
 	return &api.Entry{
 		Bat:                bat,
+		Attrs:              eattrs,
 		EntryType:          typ,
 		TableId:            e.tableId,
 		DatabaseId:         e.databaseId,
@@ -213,22 +235,6 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		AutoIncrEpoch:      e.autoIncrEpoch,
 		AutoIncrEpochKnown: e.autoIncrEpochKnown,
 	}, nil
-}
-
-func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
-	rbat := new(api.Batch)
-	rbat.Attrs = bat.Attrs
-	if len(bat.Vecs) > 0 {
-		rbat.Vecs = make([]api.Vector, len(bat.Vecs))
-	}
-	for i, vec := range bat.Vecs {
-		pbVector, err := vector.VectorToProtoVector(vec)
-		if err != nil {
-			return nil, err
-		}
-		rbat.Vecs[i] = pbVector
-	}
-	return rbat, nil
 }
 
 func getSql(ctx context.Context) string {
@@ -286,8 +292,10 @@ func genTableKey(
 }
 
 // PXU TODO: optimize me
-// fillRandomRowidAndZeroTs modifies the input batch and returns the proto batch as a shallow copy.
-func fillRandomRowidAndZeroTs(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
+// fillRandomRowidAndZeroTs puts a random rowid and a zero commit-ts vector
+// in front of bat's vectors, and returns the result encoded as a batch,
+// together with its column names. batAttrs names bat's columns.
+func fillRandomRowidAndZeroTs(bat *batch.Batch, batAttrs []string, m *mpool.MPool) ([]byte, []string, error) {
 	var attrs []string
 	vecs := make([]*vector.Vector, 0, 2)
 
@@ -297,7 +305,7 @@ func fillRandomRowidAndZeroTs(bat *batch.Batch, m *mpool.MPool) (*api.Batch, err
 			val := types.RandomRowid()
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
 				vec.Free(m)
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		vecs = append(vecs, vec)
@@ -311,15 +319,18 @@ func fillRandomRowidAndZeroTs(bat *batch.Batch, m *mpool.MPool) (*api.Batch, err
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
 				vecs[0].Free(m)
 				vec.Free(m)
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		vecs = append(vecs, vec)
 		attrs = append(attrs, catalog.TableTailAttrCommitTs)
 	}
 	bat.Vecs = append(vecs, bat.Vecs...)
-	bat.Attrs = append(attrs, bat.Attrs...)
-	return batch.BatchToProtoBatch(bat)
+	data, err := batch.MarshalVectors(bat.Vecs)
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, append(attrs, batAttrs...), nil
 }
 
 // PXU TODO: refactor me

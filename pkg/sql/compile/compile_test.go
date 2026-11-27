@@ -39,7 +39,6 @@ import (
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -59,7 +58,6 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -67,7 +65,6 @@ import (
 	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
-	orderop "github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -2038,13 +2035,12 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	// binding to a newer transaction process must not recapture its snapshot.
 	c.SetPlanGenerationReused(true)
 	currentSnapshot = timestamp.Timestamp{PhysicalTime: 20}
-	serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
 	require.NoError(t, c.Reset(proc, time.Now(), nil, "execute prepared_stmt"))
 	got, ok = proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
 	require.True(t, proc.PlanGenerationReused())
-	require.Equal(t, process.StringShuffleHashLegacy, proc.StringShuffleHashAlgorithm())
+	require.Equal(t, process.StringShuffleHashComplete, proc.StringShuffleHashAlgorithm())
 	// The prior execution's already-created child remains immutable until the
 	// prepared scope is explicitly reset for the next execution.
 	require.Equal(t, process.StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
@@ -2054,7 +2050,7 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
 	require.True(t, child.PlanGenerationReused())
-	require.Equal(t, process.StringShuffleHashLegacy, child.StringShuffleHashAlgorithm())
+	require.Equal(t, process.StringShuffleHashComplete, child.StringShuffleHashAlgorithm())
 
 	// A data-only retry recompiles pipelines from the same logical plan. It
 	// retains the original binding even after the transaction snapshot moves.
@@ -2066,7 +2062,7 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, got)
 	require.True(t, proc.PlanGenerationReused())
-	require.Equal(t, process.StringShuffleHashLegacy, proc.StringShuffleHashAlgorithm())
+	require.Equal(t, process.StringShuffleHashComplete, proc.StringShuffleHashAlgorithm())
 
 	// A definition-change retry rebuilds the logical plan and starts a new plan
 	// generation at the transaction's refreshed snapshot. The old prepared
@@ -2107,71 +2103,6 @@ func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
 	got, ok = proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 5}, got)
-}
-
-func TestStringShuffleHashCaptureIgnoresParticipantRuntimeAfterAdmission(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	const (
-		coordinatorID = "string-shuffle-v33-coordinator"
-		participantID = "string-shuffle-v32-participant"
-	)
-	coordinatorRuntime := runtime.NewRuntime(
-		metadata.ServiceType_CN, coordinatorID, zap.NewNop())
-	participantRuntime := runtime.NewRuntime(
-		metadata.ServiceType_CN, participantID, zap.NewNop())
-	runtime.SetupServiceBasedRuntime(coordinatorID, coordinatorRuntime)
-	runtime.SetupServiceBasedRuntime(participantID, participantRuntime)
-	coordinatorRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion33)
-	participantRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
-
-	coordinatorProc := testutil.NewProcess(t)
-	participantProc := testutil.NewProcess(t)
-	defer coordinatorProc.Free()
-	defer participantProc.Free()
-	coordinatorLock := mock_lock.NewMockLockService(ctrl)
-	participantLock := mock_lock.NewMockLockService(ctrl)
-	coordinatorLock.EXPECT().GetConfig().Return(
-		lockservice.Config{ServiceID: coordinatorID}).AnyTimes()
-	participantLock.EXPECT().GetConfig().Return(
-		lockservice.Config{ServiceID: participantID}).AnyTimes()
-	coordinatorProc.Base.LockService = coordinatorLock
-	participantProc.Base.LockService = participantLock
-
-	compile := &Compile{proc: coordinatorProc}
-	compile.captureStringShuffleHashAlgorithm()
-	require.Equal(t, process.StringShuffleHashComplete,
-		coordinatorProc.StringShuffleHashAlgorithm())
-	require.False(t, supportsStableStringShuffleHash(participantProc.GetService()))
-
-	// Model the ProcessInfo decoder's copy of the coordinator's exact selection
-	// (its codec round trip is covered separately). A new participant must
-	// consume that value instead of consulting its v32 local gate during Prepare
-	// or remote-pipeline reconstruction.
-	participantProc.CopyStringShuffleHashAlgorithmFrom(coordinatorProc)
-	require.Equal(t, process.StringShuffleHashComplete,
-		participantProc.StringShuffleHashAlgorithm())
-	arg := shuffle.NewArgument()
-	defer arg.Release()
-	arg.ShuffleType = int32(plan.ShuffleType_Hash)
-	arg.StringHashKey = true
-	_, instruction, err := convertToPipelineInstruction(
-		arg, participantProc, &scopeContext{}, 1)
-	require.NoError(t, err)
-	require.Equal(t, int32(vm.ShuffleStable), instruction.Op)
-
-	// A rollout gate change applies only to the next execution. It cannot alter
-	// either process already admitted into this one.
-	coordinatorRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
-	require.Equal(t, process.StringShuffleHashComplete,
-		coordinatorProc.StringShuffleHashAlgorithm())
-	require.Equal(t, process.StringShuffleHashComplete,
-		participantProc.StringShuffleHashAlgorithm())
-	next := &Compile{proc: coordinatorProc}
-	next.captureStringShuffleHashAlgorithm()
-	require.Equal(t, process.StringShuffleHashLegacy,
-		coordinatorProc.StringShuffleHashAlgorithm())
-	require.Equal(t, process.StringShuffleHashComplete,
-		participantProc.StringShuffleHashAlgorithm())
 }
 
 func TestShuffleConstructionMarksOnlyStringHashKeys(t *testing.T) {
@@ -3479,39 +3410,6 @@ func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 		require.True(t, physicalWindow.PartitionTopN)
 	})
 
-	t.Run("v17 keeps legacy window contract", func(t *testing.T) {
-		c := newCompileForShuffleGroupTest(t)
-		rt := runtime.ServiceRuntime(c.proc.GetService())
-		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
-
-		partitionScopes := c.compilePartition(newNode(), []*Scope{newShuffleGroupInputScope(t, 1)})
-		physicalPartition := partitionScopes[0].RootOp.(*partitionop.Partition)
-		require.Nil(t, physicalPartition.Limit)
-		windowScopes := c.compileWin(&plan.Node{}, partitionScopes)
-		physicalWindow := windowScopes[0].RootOp.(*windowop.Window)
-		require.False(t, physicalWindow.PartitionTopN)
-	})
-
-	t.Run("rank with ties requires v68", func(t *testing.T) {
-		c := newCompileForShuffleGroupTest(t)
-		rt := runtime.ServiceRuntime(c.proc.GetService())
-		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-		node := newNode()
-		node.PartitionTopNWithTies = true
-
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion68)
-		legacyScopes := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
-		legacyPartition := legacyScopes[0].RootOp.(*partitionop.Partition)
-		require.Nil(t, legacyPartition.Limit)
-		require.False(t, legacyPartition.WithTies)
-
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
-		boundedScopes := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
-		boundedPartition := boundedScopes[0].RootOp.(*partitionop.Partition)
-		require.NotNil(t, boundedPartition.Limit)
-		require.True(t, boundedPartition.WithTies)
-	})
 }
 
 func TestCompileHashPartitionPhysicalTopology(t *testing.T) {
@@ -3540,29 +3438,6 @@ func TestCompileHashPartitionPhysicalTopology(t *testing.T) {
 		// leave that previous root untouched instead of adding local Order.
 		require.IsType(t, &colexec.MockOperator{}, input.RootOp.GetOperatorBase().GetChildren(0))
 	}
-}
-
-func TestCompileHashPartitionGatedByProtocolVersion(t *testing.T) {
-	c := newCompileForShuffleGroupTest(t)
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion46)
-	require.False(t, c.supportsRemoteHashPartition())
-	node := &plan.Node{
-		NodeType:           plan.Node_PARTITION,
-		PartitionAlgorithm: plan.Node_PARTITION_ALGORITHM_HASH,
-		OrderBy: []*plan.OrderBySpec{{
-			Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
-		}},
-	}
-	legacy := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
-	require.Len(t, legacy, 1)
-	require.Equal(t, plan.Node_PARTITION_ALGORITHM_SORT, legacy[0].RootOp.(*partitionop.Partition).Algorithm)
-	require.IsType(t, &orderop.Order{}, legacy[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
-
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion47)
-	require.True(t, c.supportsRemoteHashPartition())
 }
 
 func TestCompileOrderedSetPercentileUsesSingleStageForNonShuffleMerge(t *testing.T) {

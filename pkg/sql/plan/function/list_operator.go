@@ -1009,8 +1009,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint8]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint8](false)
 				},
 			},
 			{
@@ -1019,8 +1019,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint16]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint16](false)
 				},
 			},
 			{
@@ -1029,8 +1029,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint32]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint32](false)
 				},
 			},
 			{
@@ -1039,8 +1039,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint64]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint64](false)
 				},
 			},
 			{
@@ -1049,8 +1049,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int8]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int8](false)
 				},
 			},
 			{
@@ -1059,8 +1059,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int16]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int16](false)
 				},
 			},
 			{
@@ -1069,8 +1069,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int32]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int32](false)
 				},
 			},
 			{
@@ -1079,8 +1079,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int64]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int64](false)
 				},
 			},
 			{
@@ -1362,8 +1362,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint8]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint8](true)
 				},
 			},
 			{
@@ -1372,8 +1372,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint16]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint16](true)
 				},
 			},
 			{
@@ -1382,8 +1382,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint32]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint32](true)
 				},
 			},
 			{
@@ -1392,8 +1392,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint64]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint64](true)
 				},
 			},
 			{
@@ -1402,8 +1402,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int8]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int8](true)
 				},
 			},
 			{
@@ -1412,8 +1412,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int16]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int16](true)
 				},
 			},
 			{
@@ -1422,8 +1422,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int32]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int32](true)
 				},
 			},
 			{
@@ -1432,8 +1432,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int64]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int64](true)
 				},
 			},
 			{
