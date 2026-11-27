@@ -1128,7 +1128,7 @@ func TestSendBatchToClientSession_StrictMode(t *testing.T) {
 	}
 
 	// Test strict mode - should return error
-	done, err := sendBatchToClientSession(
+	outcome, err := sendBatchToClientSession(
 		proc.Ctx,
 		[]byte("test data"),
 		wcs,
@@ -1136,7 +1136,7 @@ func TestSendBatchToClientSession_StrictMode(t *testing.T) {
 		"test-receiver-strict",
 	)
 
-	require.True(t, done, "receiver should be marked as done")
+	require.Equal(t, remoteReceiverUnavailable, outcome)
 	require.Error(t, err, "strict mode MUST return error when ReceiverDone=true")
 	require.Contains(t, err.Error(), "test-receiver-strict", "error should contain receiver ID")
 	require.Contains(t, err.Error(), "data loss may occur", "error should mention data loss risk")
@@ -1151,7 +1151,7 @@ func TestSendBatchToClientSession_TolerantMode(t *testing.T) {
 	}
 
 	// Test tolerant mode - should NOT return error
-	done, err := sendBatchToClientSession(
+	outcome, err := sendBatchToClientSession(
 		proc.Ctx,
 		[]byte("test data"),
 		wcs,
@@ -1159,7 +1159,7 @@ func TestSendBatchToClientSession_TolerantMode(t *testing.T) {
 		"test-receiver-tolerant",
 	)
 
-	require.True(t, done, "receiver should be marked as done")
+	require.Equal(t, remoteReceiverUnavailable, outcome)
 	require.NoError(t, err, "tolerant mode should NOT return error when ReceiverDone=true")
 }
 
@@ -1180,19 +1180,19 @@ func TestSendBatchToClientSessionUsesBatchCredits(t *testing.T) {
 		Cs:           session,
 		BatchCredits: 8,
 		ByteCredits:  64 << 20,
-		ReserveBatch: func(_ context.Context, size uint64) (uint64, error) {
+		ReserveBatch: func(_ context.Context, size uint64) (uint64, bool, error) {
 			reserved = size
-			return 7, nil
+			return 7, false, nil
 		},
 		RollbackBatch: func(sequence uint64) {
 			rolledBack = sequence
 		},
 	}
 
-	done, err := sendBatchToClientSession(
+	outcome, err := sendBatchToClientSession(
 		context.Background(), []byte("batch"), wcs, FailureModeStrict, "receiver")
 	require.NoError(t, err)
-	require.False(t, done)
+	require.Equal(t, remoteBatchSent, outcome)
 	require.Equal(t, uint64(5), reserved)
 	require.Zero(t, rolledBack)
 	require.NotNil(t, sent)
@@ -1211,18 +1211,18 @@ func TestSendBatchToClientSessionRollsBackBatchCreditOnWriteFailure(t *testing.T
 	wcs := &process.WrapCs{
 		MsgId: 42,
 		Cs:    session,
-		ReserveBatch: func(_ context.Context, _ uint64) (uint64, error) {
-			return 7, nil
+		ReserveBatch: func(_ context.Context, _ uint64) (uint64, bool, error) {
+			return 7, false, nil
 		},
 		RollbackBatch: func(sequence uint64) {
 			rolledBack = sequence
 		},
 	}
 
-	done, err := sendBatchToClientSession(
+	outcome, err := sendBatchToClientSession(
 		context.Background(), []byte("batch"), wcs, FailureModeStrict, "receiver")
 	require.ErrorIs(t, err, wantErr)
-	require.False(t, done)
+	require.Equal(t, remoteReceiverUnavailable, outcome)
 	require.Equal(t, uint64(7), rolledBack)
 }
 
@@ -1233,15 +1233,15 @@ func TestSendBatchToClientSessionReturnsBatchCreditReservationError(t *testing.T
 	wcs := &process.WrapCs{
 		MsgId: 42,
 		Cs:    session,
-		ReserveBatch: func(_ context.Context, _ uint64) (uint64, error) {
-			return 0, wantErr
+		ReserveBatch: func(_ context.Context, _ uint64) (uint64, bool, error) {
+			return 0, false, wantErr
 		},
 	}
 
-	done, err := sendBatchToClientSession(
+	outcome, err := sendBatchToClientSession(
 		context.Background(), []byte("batch"), wcs, FailureModeStrict, "receiver")
 	require.ErrorIs(t, err, wantErr)
-	require.False(t, done)
+	require.Equal(t, remoteReceiverUnavailable, outcome)
 }
 
 func TestSendBatchToClientSessionKeepsOneCreditAcrossFragments(t *testing.T) {
@@ -1265,17 +1265,17 @@ func TestSendBatchToClientSessionKeepsOneCreditAcrossFragments(t *testing.T) {
 		Cs:           session,
 		BatchCredits: 2,
 		ByteCredits:  uint64(len(payload)),
-		ReserveBatch: func(_ context.Context, size uint64) (uint64, error) {
+		ReserveBatch: func(_ context.Context, size uint64) (uint64, bool, error) {
 			reserveCalls++
 			require.Equal(t, uint64(len(payload)), size)
-			return 11, nil
+			return 11, false, nil
 		},
 	}
 
-	done, err := sendBatchToClientSession(
+	outcome, err := sendBatchToClientSession(
 		context.Background(), payload, wcs, FailureModeStrict, "receiver")
 	require.NoError(t, err)
-	require.False(t, done)
+	require.Equal(t, remoteBatchSent, outcome)
 	require.Equal(t, 1, reserveCalls)
 	require.Equal(t, 2, writes)
 }

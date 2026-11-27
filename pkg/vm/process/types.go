@@ -516,15 +516,18 @@ type sqlHelper interface {
 // WrapCs record information about pipeline's remote receiver.
 type WrapCs struct {
 	sync.RWMutex
-	ReceiverDone  bool
-	MsgId         uint64
-	Uid           uuid.UUID
-	Cs            morpc.ClientSession
-	Err           chan error
-	ReserveBatch  func(context.Context, uint64) (uint64, error)
-	RollbackBatch func(uint64)
-	BatchCredits  uint32
-	ByteCredits   uint64
+	ReceiverDone bool
+	MsgId        uint64
+	Uid          uuid.UUID
+	Cs           morpc.ClientSession
+	Err          chan error
+	// ReserveBatch distinguishes a normally stopped receiver from a failed reservation.
+	ReserveBatch func(context.Context, uint64) (sequence uint64, receiverStopped bool, err error)
+	// BatchSendError is read under the receiver lock when a stop races an in-flight write.
+	BatchSendError error
+	RollbackBatch  func(uint64)
+	BatchCredits   uint32
+	ByteCredits    uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.

@@ -52,7 +52,7 @@ func TestDataLoss_FullScenario_SendToAll(t *testing.T) {
 		}
 
 		// This is the core fix - strict mode with ReceiverDone=true
-		done, err := sendBatchToClientSession(
+		outcome, err := sendBatchToClientSession(
 			proc.Ctx,
 			[]byte("batch data"),
 			wcs,
@@ -60,7 +60,7 @@ func TestDataLoss_FullScenario_SendToAll(t *testing.T) {
 			"CN1",
 		)
 
-		require.True(t, done)
+		require.Equal(t, remoteReceiverUnavailable, outcome)
 		require.Error(t, err, "MUST return error in strict mode")
 		require.Contains(t, err.Error(), "data loss may occur")
 
@@ -129,7 +129,7 @@ func TestDataLoss_FullScenario_Shuffle(t *testing.T) {
 			Err:          make(chan error, 1),
 		}
 
-		done, err := sendBatchToClientSession(
+		outcome, err := sendBatchToClientSession(
 			proc.Ctx,
 			[]byte("shuffle data for key=user_123"),
 			wcs,
@@ -137,7 +137,7 @@ func TestDataLoss_FullScenario_Shuffle(t *testing.T) {
 			"CN1(ShuffleIdx=1)",
 		)
 
-		require.True(t, done)
+		require.Equal(t, remoteReceiverUnavailable, outcome)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "data loss may occur")
 
@@ -364,7 +364,7 @@ func TestShuffleTargetReceiverRemoved(t *testing.T) {
 		}
 
 		// In shuffle mode with strict failure checking
-		remove, err := sendBatchToClientSession(
+		outcome, err := sendBatchToClientSession(
 			proc.Ctx,
 			[]byte("shuffle data"),
 			wcs,
@@ -372,7 +372,7 @@ func TestShuffleTargetReceiverRemoved(t *testing.T) {
 			"CN1(ShuffleIdx=2)",
 		)
 
-		require.True(t, remove, "receiver should be marked as removed")
+		require.Equal(t, remoteReceiverUnavailable, outcome)
 		require.Error(t, err, "must return error to prevent data loss")
 		require.Contains(t, err.Error(), "data loss may occur")
 
@@ -386,7 +386,7 @@ func TestShuffleTargetReceiverRemoved(t *testing.T) {
 			Err:          make(chan error, 1),
 		}
 
-		remove, err := sendBatchToClientSession(
+		outcome, err := sendBatchToClientSession(
 			proc.Ctx,
 			[]byte("data"),
 			wcs,
@@ -394,7 +394,7 @@ func TestShuffleTargetReceiverRemoved(t *testing.T) {
 			"CN2(ShuffleIdx=5)",
 		)
 
-		require.True(t, remove)
+		require.Equal(t, remoteReceiverUnavailable, outcome)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "data loss may occur")
 
@@ -476,7 +476,7 @@ func TestShuffleDataLossPrevention(t *testing.T) {
 			Err:          make(chan error, 1),
 		}
 
-		remove, err := sendBatchToClientSession(
+		outcome, err := sendBatchToClientSession(
 			proc.Ctx,
 			[]byte("data"),
 			wcs,
@@ -484,7 +484,7 @@ func TestShuffleDataLossPrevention(t *testing.T) {
 			"CN1(ShuffleIdx=3)",
 		)
 
-		require.True(t, remove)
+		require.Equal(t, remoteReceiverUnavailable, outcome)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "data loss may occur")
 
@@ -498,7 +498,7 @@ func TestShuffleDataLossPrevention(t *testing.T) {
 			Err:          make(chan error, 1),
 		}
 
-		remove, err := sendBatchToClientSession(
+		outcome, err := sendBatchToClientSession(
 			proc.Ctx,
 			[]byte("data"),
 			wcs,
@@ -506,7 +506,7 @@ func TestShuffleDataLossPrevention(t *testing.T) {
 			"CN2(ShuffleIdx=7)",
 		)
 
-		require.True(t, remove)
+		require.Equal(t, remoteReceiverUnavailable, outcome)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "data loss may occur")
 

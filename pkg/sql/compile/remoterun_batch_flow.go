@@ -44,6 +44,7 @@ type pipelineBatchFlow struct {
 	// stoppedByReceiver distinguishes an internal StopSending from query or
 	// connection cancellation at the terminal-response drain boundary.
 	stoppedByReceiver bool
+	receiverStopped   chan struct{}
 }
 
 func newPipelineBatchFlow(requestedCount uint32, requestedBytes uint64) *pipelineBatchFlow {
@@ -51,10 +52,11 @@ func newPipelineBatchFlow(requestedCount uint32, requestedBytes uint64) *pipelin
 		return nil
 	}
 	return &pipelineBatchFlow{
-		maxCount: min(requestedCount, pipelineBatchCreditCount),
-		maxBytes: min(requestedBytes, pipelineBatchCreditBytes),
-		pending:  make(map[uint64]uint64),
-		changed:  make(chan struct{}),
+		maxCount:        min(requestedCount, pipelineBatchCreditCount),
+		maxBytes:        min(requestedBytes, pipelineBatchCreditBytes),
+		pending:         make(map[uint64]uint64),
+		changed:         make(chan struct{}),
+		receiverStopped: make(chan struct{}),
 	}
 }
 
@@ -75,15 +77,33 @@ func (f *pipelineBatchFlow) reserve(
 	connectionCtx context.Context,
 	size uint64,
 ) (uint64, error) {
+	sequence, _, err := f.reserveOrStop(messageCtx, connectionCtx, size)
+	return sequence, err
+}
+
+func (f *pipelineBatchFlow) reserveOrStop(
+	messageCtx context.Context,
+	connectionCtx context.Context,
+	size uint64,
+) (sequence uint64, receiverStopped bool, err error) {
 	if f == nil {
-		return 0, nil
+		return 0, false, nil
 	}
 	for {
 		f.mu.Lock()
 		if f.abortErr != nil {
-			err := f.abortErr
+			err, stopped := f.abortErr, f.stoppedByReceiver
 			f.mu.Unlock()
-			return 0, err
+			if stopped {
+				if cause := moerr.PipelineContextError(messageCtx); cause != nil {
+					return 0, false, cause
+				}
+				if connectionCtx != nil && connectionCtx.Err() != nil {
+					return 0, false, moerr.NewStreamClosed(messageCtx)
+				}
+				return 0, true, err
+			}
+			return 0, false, moerr.ReportedPipelineError(err)
 		}
 		countAvailable := uint32(len(f.pending)) < f.maxCount
 		bytesAvailable := f.bytes+size <= f.maxBytes || len(f.pending) == 0
@@ -93,7 +113,7 @@ func (f *pipelineBatchFlow) reserve(
 			f.pending[seq] = size
 			f.bytes += size
 			f.mu.Unlock()
-			return seq, nil
+			return seq, false, nil
 		}
 		changed := f.changed
 		f.mu.Unlock()
@@ -101,9 +121,9 @@ func (f *pipelineBatchFlow) reserve(
 		select {
 		case <-changed:
 		case <-messageCtx.Done():
-			return 0, moerr.PipelineContextError(messageCtx)
-		case <-connectionCtx.Done():
-			return 0, moerr.NewStreamClosed(messageCtx)
+			return 0, false, moerr.PipelineContextError(messageCtx)
+		case <-contextDone(connectionCtx):
+			return 0, false, moerr.NewStreamClosed(messageCtx)
 		}
 	}
 }
@@ -135,6 +155,9 @@ func (f *pipelineBatchFlow) terminate(cause error, stoppedByReceiver bool) {
 	if f.abortErr == nil {
 		f.abortErr = cause
 		f.stoppedByReceiver = stoppedByReceiver
+		if stoppedByReceiver {
+			close(f.receiverStopped)
+		}
 		clear(f.pending)
 		f.bytes = 0
 		f.notifyLocked()
@@ -232,7 +255,7 @@ func (f *pipelineBatchFlow) waitUntilDrained(
 	}
 }
 
-func abortPipelineBatchFlow(cs morpc.ClientSession, id uint64, cause error) {
+func stopPipelineBatchFlow(cs morpc.ClientSession, id uint64, cause error) {
 	key := pipelineStreamLifecycleKey{session: cs, id: id}
 	value, ok := pipelineStreamLifecycles.Load(key)
 	if !ok {

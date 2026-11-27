@@ -44,6 +44,14 @@ const (
 	FailureModeTolerant
 )
 
+type remoteSendResult uint8
+
+const (
+	remoteBatchSent remoteSendResult = iota
+	remoteReceiverStopped
+	remoteReceiverUnavailable
+)
+
 var (
 	sendToAnyLocal  = sendToAnyLocalFunc
 	sendToAnyRemote = sendToAnyRemoteFunc
@@ -93,22 +101,19 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 
 			// SendToAll requires strict failure checking
 			// If any receiver fails, we must report error to prevent data loss
-			remove, err := sendBatchToClientSession(proc.Ctx, encodeData, receiver, FailureModeStrict, receiverID)
+			outcome, err := sendBatchToClientSession(proc.Ctx, encodeData, receiver, FailureModeStrict, receiverID)
 			if err != nil {
 				return false, err
 			}
 
-			if remove {
+			if outcome == remoteReceiverStopped {
 				ap.ctr.removeIdxReceiver(i)
-				if ap.ctr.remoteRegsCnt == 0 {
-					return true, nil
-				}
 				i--
 			}
 		}
 	}
 
-	return false, nil
+	return ap.ctr.remoteRegsCnt == 0, nil
 }
 
 func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuffleIndex uint32) (err error) {
@@ -137,17 +142,14 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuff
 
 				// Shuffle requires strict failure checking
 				// If target receiver fails, data for this shuffle key will be lost
-				remove, errSend := sendBatchToClientSession(proc.Ctx, encodeData, r, FailureModeStrict, receiverID)
+				outcome, errSend := sendBatchToClientSession(proc.Ctx, encodeData, r, FailureModeStrict, receiverID)
 				if errSend != nil {
 					err = errSend
 					break
 				}
 
-				if remove {
-					// In shuffle scenario, if target receiver is removed, it's a critical error
-					err = moerr.NewInternalError(proc.Ctx, fmt.Sprintf(
-						"shuffle target receiver %s was removed, data loss may occur", receiverID))
-					break
+				if outcome == remoteReceiverStopped {
+					ap.ctr.removeIdxReceiver(i)
 				}
 			}
 			// Found the target receiver, exit loop
@@ -187,14 +189,14 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 				}
 
 				// Shuffle requires strict failure checking
-				remove, err := sendBatchToClientSession(proc.Ctx, encodeData, r, FailureModeStrict, receiverID)
+				outcome, err := sendBatchToClientSession(proc.Ctx, encodeData, r, FailureModeStrict, receiverID)
 				if err != nil {
 					return err
 				}
 
-				if remove {
-					return moerr.NewInternalError(proc.Ctx, fmt.Sprintf(
-						"shuffle target receiver %s was removed, data loss may occur", receiverID))
+				if outcome == remoteReceiverStopped {
+					ap.ctr.removeIdxReceiver(i)
+					i--
 				}
 			}
 		}
@@ -226,20 +228,23 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bo
 
 	ap.ctr.batchCnt[bat.ShuffleIDX]++
 	ap.ctr.rowCnt[bat.ShuffleIDX] += bat.RowCount()
-	if ap.ShuffleType == plan2.ShuffleToRegIndex {
-		return false, sendBatToIndex(ap, proc, bat, uint32(bat.ShuffleIDX))
-	} else if ap.ShuffleType == plan2.ShuffleToLocalMatchedReg {
-		return false, sendBatToLocalMatchedReg(ap, proc, bat, uint32(bat.ShuffleIDX))
-	} else {
-		return false, sendBatToMultiMatchedReg(ap, proc, bat, uint32(bat.ShuffleIDX))
+	var err error
+	switch ap.ShuffleType {
+	case plan2.ShuffleToRegIndex:
+		err = sendBatToIndex(ap, proc, bat, uint32(bat.ShuffleIDX))
+	case plan2.ShuffleToLocalMatchedReg:
+		err = sendBatToLocalMatchedReg(ap, proc, bat, uint32(bat.ShuffleIDX))
+	default:
+		err = sendBatToMultiMatchedReg(ap, proc, bat, uint32(bat.ShuffleIDX))
 	}
+	return err == nil && ap.ctr.aliveRegCnt == 0, err
 }
 
 // send to all receiver (include LocalReceiver and RemoteReceiver)
 func sendToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
-	end, remoteErr := sendToAllRemoteFunc(bat, ap, proc)
-	if remoteErr != nil || end {
-		return end, remoteErr
+	_, remoteErr := sendToAllRemoteFunc(bat, ap, proc)
+	if remoteErr != nil {
+		return false, remoteErr
 	}
 
 	return sendToAllLocalFunc(bat, ap, proc)
@@ -298,11 +303,11 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 			return true, nil
 		}
 	}
-	select {
-	case <-proc.Ctx.Done():
+	if err := moerr.PipelineContextError(proc.Ctx); err != nil {
+		return false, err
+	}
+	if ap.ctr.remoteRegsCnt == 0 {
 		return true, nil
-
-	default:
 	}
 
 	encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
@@ -310,44 +315,29 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 		return false, errEncode
 	}
 
-	// SendToAny can tolerate individual receiver failures
-	// We can try other receivers if one fails
-	maxRetries := len(ap.ctr.remoteReceivers)
-	retriesLeft := maxRetries
-
-	for retriesLeft > 0 {
-		if ap.ctr.remoteRegsCnt == 0 {
-			return false, moerr.NewInternalError(proc.Ctx,
-				"sendToAny failed: all remote receivers are unavailable")
-		}
-
+	retryCount := ap.ctr.remoteRegsCnt
+	unavailable := false
+	for ap.ctr.remoteRegsCnt > 0 {
 		regIdx := ap.ctr.sendCnt % ap.ctr.remoteRegsCnt
 		reg := ap.ctr.remoteReceivers[regIdx]
 		receiverID := fmt.Sprintf("%s(Idx=%d)", reg.Uid.String(), regIdx)
-
-		// SendToAny uses tolerant mode - can failover to other receivers
-		remove, err := sendBatchToClientSession(proc.Ctx, encodeData, reg, FailureModeTolerant, receiverID)
+		outcome, err := sendBatchToClientSession(proc.Ctx, encodeData, reg, FailureModeTolerant, receiverID)
 		if err != nil {
-			// Network error or other critical error
 			return false, err
 		}
 
-		if remove {
-			// Receiver is done, try next one
-			ap.ctr.removeIdxReceiver(regIdx)
-			ap.ctr.sendCnt++
-			retriesLeft--
-			continue
-		}
-
-		// Send succeeded
 		ap.ctr.sendCnt++
-		return false, nil
+		if outcome == remoteBatchSent {
+			return false, nil
+		}
+		unavailable = unavailable || outcome == remoteReceiverUnavailable
+		ap.ctr.removeIdxReceiver(regIdx)
 	}
-
-	// All receivers failed
-	return false, moerr.NewInternalError(proc.Ctx,
-		fmt.Sprintf("sendToAny failed: tried %d receivers, all unavailable", maxRetries))
+	if unavailable {
+		return false, moerr.NewInternalErrorf(proc.Ctx,
+			"sendToAny failed: tried %d receivers, all unavailable", retryCount)
+	}
+	return true, nil
 }
 
 // Make sure enter this function LocalReceiver and RemoteReceiver are both not equal 0
@@ -386,7 +376,7 @@ func sendToAnyFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool,
 //   - receiverID: receiver identifier for error messages
 //
 // Returns:
-//   - receiverDone: whether the receiver is done (normally or abnormally)
+//   - outcome: a sent batch, a normal stop, or an unavailable receiver
 //   - err: error if any
 //
 // Critical fix for silent data loss:
@@ -399,7 +389,7 @@ func sendBatchToClientSession(
 	wcs *process.WrapCs,
 	failureMode receiverFailureMode,
 	receiverID string,
-) (receiverDone bool, err error) {
+) (outcome remoteSendResult, err error) {
 	wcs.Lock()
 	defer wcs.Unlock()
 
@@ -412,7 +402,7 @@ func sendBatchToClientSession(
 				zap.String("receiverID", receiverID),
 				zap.Uint64("msgId", wcs.MsgId),
 				zap.String("uid", wcs.Uid.String()))
-			return true, moerr.NewInternalError(ctx, fmt.Sprintf(
+			return remoteReceiverUnavailable, moerr.NewInternalError(ctx, fmt.Sprintf(
 				"remote receiver %s is already done, data loss may occur. "+
 					"This usually indicates the remote CN has failed or been canceled",
 				receiverID))
@@ -427,16 +417,25 @@ func sendBatchToClientSession(
 				// Channel full or no receiver, that's acceptable
 				// Receiver will eventually timeout or get canceled via context
 			}
-			return true, nil
+			return remoteReceiverUnavailable, nil
 		}
 	}
 
 	var batchSequence uint64
 	batchSent := false
 	if wcs.ReserveBatch != nil {
-		batchSequence, err = wcs.ReserveBatch(ctx, uint64(len(encodeBatData)))
+		defer func() {
+			if err != nil {
+				wcs.BatchSendError = err
+			}
+		}()
+		var receiverStopped bool
+		batchSequence, receiverStopped, err = wcs.ReserveBatch(ctx, uint64(len(encodeBatData)))
 		if err != nil {
-			return false, moerr.PipelineRPCIOError(ctx, err)
+			return remoteReceiverUnavailable, err
+		}
+		if receiverStopped {
+			return remoteReceiverStopped, nil
 		}
 		defer func() {
 			if !batchSent && wcs.RollbackBatch != nil {
@@ -460,10 +459,10 @@ func sendBatchToClientSession(
 			msg.AcceptedBatchCreditBytes = wcs.ByteCredits
 		}
 		if err = wcs.Cs.Write(ctx, msg); err != nil {
-			return false, moerr.PipelineRPCIOError(ctx, err)
+			return remoteReceiverUnavailable, moerr.PipelineRPCIOError(ctx, err)
 		}
 		batchSent = true
-		return false, nil
+		return remoteBatchSent, nil
 	}
 
 	// Send large message in chunks (original logic unchanged)
@@ -487,10 +486,10 @@ func sendBatchToClientSession(
 		}
 
 		if err = wcs.Cs.Write(ctx, msg); err != nil {
-			return false, moerr.PipelineRPCIOError(ctx, err)
+			return remoteReceiverUnavailable, moerr.PipelineRPCIOError(ctx, err)
 		}
 		start = end
 	}
 	batchSent = true
-	return false, nil
+	return remoteBatchSent, nil
 }

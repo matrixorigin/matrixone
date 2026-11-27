@@ -293,11 +293,20 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			Cs:           receiver.clientSession,
 			Err:          make(chan error, 1),
 		}
+		var receiverStopped <-chan struct{}
 		if receiver.streamLifecycle != nil && receiver.streamLifecycle.batchFlow != nil {
 			flow := receiver.streamLifecycle.batchFlow
+			receiverStopped = flow.receiverStopped
 			infoToDispatchOperator.BatchCredits, infoToDispatchOperator.ByteCredits = flow.accepted()
-			infoToDispatchOperator.ReserveBatch = func(ctx context.Context, size uint64) (uint64, error) {
-				return flow.reserve(ctx, receiver.connectionCtx, size)
+			infoToDispatchOperator.ReserveBatch = func(ctx context.Context, size uint64) (uint64, bool, error) {
+				sequence, stopped, err := flow.reserveOrStop(ctx, receiver.connectionCtx, size)
+				if stopped {
+					if err := moerr.PipelineContextError(receiver.messageCtx); err != nil {
+						return 0, false, err
+					}
+					return 0, true, nil
+				}
+				return sequence, false, err
 			}
 			infoToDispatchOperator.RollbackBatch = flow.rollback
 		}
@@ -332,6 +341,29 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		// there is no need to check the dispatchProc.Ctx.Done() here.
 		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
 		case err = <-infoToDispatchOperator.Err:
+		case <-receiverStopped:
+			// Once the flow has stopped no new batch can reserve credit.
+			// Leave already-reserved batches, including fragmented ones, ahead
+			// of the terminal response in the session's write order.
+			infoToDispatchOperator.Lock()
+			err = infoToDispatchOperator.BatchSendError
+			infoToDispatchOperator.Unlock()
+			select {
+			case terminalErr := <-infoToDispatchOperator.Err:
+				err = preferPrimaryScopeError(err, terminalErr)
+			default:
+			}
+			if err == nil {
+				if receiver.connectionCtx != nil && receiver.connectionCtx.Err() != nil {
+					err = moerr.NewStreamClosed(receiver.getMessageContext())
+					dispatchProc.Cancel(err)
+				} else if receiver.messageCtx != nil && receiver.messageCtx.Err() != nil {
+					err = remoteRegistrationContextError(receiver.messageCtx)
+					dispatchProc.Cancel(err)
+				} else {
+					err = moerr.PipelineContextError(dispatchProc.Ctx)
+				}
+			}
 		}
 		return err
 
@@ -567,7 +599,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	case pipeline.Method_StopSending:
 		receiver.colexecServer.CancelPipelineSending(receiver.clientSession, receiver.messageId)
-		abortPipelineBatchFlow(
+		stopPipelineBatchFlow(
 			receiver.clientSession,
 			receiver.messageId,
 			moerr.NewQueryInterrupted(receiver.messageCtx),
