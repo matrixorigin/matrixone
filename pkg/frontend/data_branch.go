@@ -585,7 +585,8 @@ func dataBranchCreateDatabase(
 		return
 	}
 
-	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase); err != nil {
+	privateWorkspace := deferred != nil && !ses.proc.GetTxnOperator().TxnOptions().ByBegin
+	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase, privateWorkspace); err != nil {
 		return
 	}
 

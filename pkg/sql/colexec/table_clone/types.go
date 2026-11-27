@@ -16,8 +16,11 @@ package table_clone
 
 import (
 	"context"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -40,8 +43,9 @@ type TableCloneCtx struct {
 	RequestedAutoIncrOffset uint64
 	// Source allocator state is keyed by lower-cased destination column name.
 	// COPY can reorder destination columns, so source indexes are not stable here.
-	SrcAutoIncrMaxValues map[string]uint64
-	SrcAutoIncrOffsets   map[string]uint64
+	SrcAutoIncrMaxValues    map[string]uint64
+	SrcAutoIncrOffsets      map[string]uint64
+	MainAutoIncrementSeeded bool
 
 	// IndexAutoIncrStates uses the same lower-cased index key as dstIdxRel
 	// (partition.index.type for partitioned tables). Each hidden table owns an
@@ -52,6 +56,26 @@ type TableCloneCtx struct {
 type AutoIncrementState struct {
 	MaxValues map[string]uint64
 	Offsets   map[string]uint64
+}
+
+func (tc *TableCloneCtx) MainAutoIncrementState() AutoIncrementState {
+	return AutoIncrementState{MaxValues: tc.SrcAutoIncrMaxValues, Offsets: tc.SrcAutoIncrOffsets}
+}
+
+// MainColumns preserves the user and hidden allocator watermarks independently.
+func (s AutoIncrementState) MainColumns(def *plan.TableDef, lowerBound uint64) []incrservice.AutoColumn {
+	columns := incrservice.GetUserAutoColumnFromDef(def)
+	for i := range columns {
+		name := strings.ToLower(columns[i].ColName)
+		columns[i].Offset = max(lowerBound, s.MaxValues[name], s.Offsets[name])
+	}
+	for _, col := range incrservice.GetInternalAutoColumnFromDef(def) {
+		if offset, ok := s.Offsets[strings.ToLower(col.ColName)]; ok {
+			col.Offset = offset
+			columns = append(columns, col)
+		}
+	}
+	return columns
 }
 
 type TableClone struct {

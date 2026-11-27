@@ -88,6 +88,7 @@ func (r *autoIncrementTestRelation) GetTableName() string {
 func TestUpdateDstAutoIncrColumnsReconcilesAllSafeBounds(t *testing.T) {
 	tests := []struct {
 		name      string
+		seeded    bool
 		requested uint64
 		copiedMax uint64
 		srcOffset uint64
@@ -97,6 +98,7 @@ func TestUpdateDstAutoIncrColumnsReconcilesAllSafeBounds(t *testing.T) {
 		{name: "copied maximum wins", requested: 99, copiedMax: 200, srcOffset: 50, want: 200},
 		{name: "source allocator wins", requested: 99, copiedMax: 40, srcOffset: 300, want: 300},
 		{name: "empty source", want: 0},
+		{name: "allocator already initialized by create", seeded: true, requested: 99, copiedMax: 40, srcOffset: 300},
 	}
 
 	for _, tt := range tests {
@@ -119,13 +121,14 @@ func TestUpdateDstAutoIncrColumnsReconcilesAllSafeBounds(t *testing.T) {
 					RequestedAutoIncrOffset: tt.requested,
 					SrcAutoIncrMaxValues:    map[string]uint64{"id": tt.copiedMax},
 					SrcAutoIncrOffsets:      map[string]uint64{"id": tt.srcOffset},
+					MainAutoIncrementSeeded: tt.seeded,
 				},
 				dstMasterRel: &autoIncrementTestRelation{tableID: def.TblId, def: def},
 			}
 
-			incrSvc.EXPECT().SetOffset(
-				gomock.Any(), def.TblId, "id", tt.want, gomock.Any(),
-			)
+			if !tt.seeded {
+				incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, "id", tt.want, gomock.Any())
+			}
 			require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
 		})
 	}

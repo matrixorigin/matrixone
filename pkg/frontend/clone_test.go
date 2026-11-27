@@ -496,12 +496,12 @@ func TestGetBackExecutorClosesWhenBeginFails(t *testing.T) {
 	require.Equal(t, 1, backExec.closeCalls)
 }
 
-func Test_prepareCloneViewSnapshot(t *testing.T) {
+func Test_prepareCloneSourceSnapshot(t *testing.T) {
 	original := &plan.Snapshot{
 		Tenant: &plan.SnapshotTenant{TenantID: 1001},
 	}
 
-	rewritten := prepareCloneViewSnapshot(original, 42)
+	rewritten := prepareCloneSourceSnapshot(original, 42)
 	require.NotNil(t, rewritten)
 	require.NotNil(t, rewritten.TS)
 	require.Equal(t, int64(42), rewritten.TS.PhysicalTime)
@@ -512,15 +512,15 @@ func Test_prepareCloneViewSnapshot(t *testing.T) {
 		TS:     &timestamp.Timestamp{PhysicalTime: 99},
 		Tenant: &plan.SnapshotTenant{TenantID: 2002},
 	}
-	require.Same(t, valid, prepareCloneViewSnapshot(valid, 42))
+	require.Same(t, valid, prepareCloneSourceSnapshot(valid, 42))
 
-	fromNil := prepareCloneViewSnapshot(nil, 24)
+	fromNil := prepareCloneSourceSnapshot(nil, 24)
 	require.NotNil(t, fromNil)
 	require.NotNil(t, fromNil.TS)
 	require.Equal(t, int64(24), fromNil.TS.PhysicalTime)
 	require.Nil(t, fromNil.Tenant)
 
-	require.Nil(t, prepareCloneViewSnapshot(nil, 0))
+	require.Nil(t, prepareCloneSourceSnapshot(nil, 0))
 }
 
 func Test_rewriteCloneViewInfos(t *testing.T) {

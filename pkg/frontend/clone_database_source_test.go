@@ -31,6 +31,28 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 )
 
+func TestCloneViewPlanningRestoresSessionOnError(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ctx := defines.AttachAccountId(context.Background(), 9)
+	compCtx := ses.GetTxnCompileCtx()
+	compCtx.SetExecCtx(&ExecCtx{reqCtx: ctx, ses: ses})
+	compCtx.SetDatabase("caller_database")
+	previous := &plan.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: 9}}
+	compCtx.SetSnapshot(previous)
+	source := cloneDatabaseSource{
+		snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: 10}},
+		viewMap: map[string]*tableInfo{
+			"publisher.v": {dbName: "publisher", tblName: "v", typ: view, createSql: "invalid view SQL"},
+		},
+	}
+	_, err := source.sortViews(ctx, ses, &backgroundExecTest{}, 42)
+	require.Error(t, err)
+	require.Same(t, ctx, compCtx.GetContext())
+	require.Equal(t, "caller_database", compCtx.GetDatabase())
+	require.Same(t, previous, compCtx.GetSnapshot())
+}
+
 func TestCollectCloneDatabaseSourceReusesFKDefinitions(t *testing.T) {
 	const database = "source_db"
 	for _, ts := range []int64{0, 42} {
@@ -64,7 +86,7 @@ func TestCollectCloneDatabaseSourceReusesFKDefinitions(t *testing.T) {
 			collect := func(t *testing.T) *cloneDatabaseSource {
 				t.Helper()
 				source := &cloneDatabaseSource{srcResolveDBName: database, snapshot: snapshot, viewMap: make(map[string]*tableInfo)}
-				require.NoError(t, source.collectTables(ctx, ses.GetService(), bh))
+				require.NoError(t, source.collectTables(ctx, ses.GetService(), bh, snapshot))
 				return source
 			}
 			source := collect(t)
@@ -97,7 +119,7 @@ func TestCollectCloneDatabaseSourceReusesFKDefinitions(t *testing.T) {
 
 			want := moerr.NewInternalErrorNoCtx("schema lookup failed")
 			bh.sql2err[childSQL] = want
-			require.ErrorIs(t, next.collectTables(ctx, ses.GetService(), bh), want)
+			require.ErrorIs(t, next.collectTables(ctx, ses.GetService(), bh, snapshot), want)
 		})
 	}
 }

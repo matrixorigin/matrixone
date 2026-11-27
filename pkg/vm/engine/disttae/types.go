@@ -457,7 +457,7 @@ type Transaction struct {
 	adjustCount int
 
 	haveDDL             atomic.Bool
-	isCloneTxn          bool
+	isCloneTxn          atomic.Bool
 	loadFiles           map[int]map[string]struct{}
 	loadCleanupTimeout  time.Duration
 	isCCPRTxn           bool
@@ -470,8 +470,10 @@ type Transaction struct {
 }
 
 func (txn *Transaction) SetCloneTxn(snapshot int64) {
-	txn.isCloneTxn = true
+	txn.Lock()
+	defer txn.Unlock()
 	txn.engine.cloneTxnCache.AddTxn(txn.op.Txn().ID, snapshot)
+	txn.isCloneTxn.Store(true)
 }
 
 // ProtectCloneFiles records pre-existing objects reused by a clone-like write.
@@ -1096,7 +1098,7 @@ const (
 )
 
 func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
-	if txn.isCloneTxn {
+	if txn.isCloneTxn.Load() {
 		names = readutil.RemoveIf(names, func(name string) bool {
 			txnID := txn.op.Txn().ID
 			if txn.engine.cloneTxnCache.IsSharedFile(txnID, name) {
