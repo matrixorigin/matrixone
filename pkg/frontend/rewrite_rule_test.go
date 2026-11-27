@@ -475,7 +475,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 		{30, "db2.t2", "select * from db2.t2 where age > 30"},
 	})
 
-	cache, err := readRoleRules(context.Background(), bh, ses.GetTenantInfo())
+	cache, err := readRoleRules(context.Background(), bh, ses.GetTenantInfo(), 1)
 	require.NoError(t, err)
 	rules, err := cache.forSQLMode(context.Background(), "")
 	require.NoError(t, err)
@@ -512,11 +512,36 @@ func TestRoleRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 		{10, "db1.t1", "select a from"},
 	})
 
-	cache, err := readRoleRules(context.Background(), bh, ses.GetTenantInfo())
+	cache, err := readRoleRules(context.Background(), bh, ses.GetTenantInfo(), 1)
 	require.NoError(t, err)
 	_, err = cache.forSQLMode(context.Background(), "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to parse rewrite rule")
+}
+
+func TestRoleRuleCacheRetainsCaseSensitiveTargets(t *testing.T) {
+	ctx := t.Context()
+	tenant := &TenantInfo{DefaultRoleID: 10}
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId(nil)
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10})] = newMrsForRewriteRules([][]interface{}{
+		{10, "PolicyDb.Docs", "select id from PolicyDb.Docs where id = 1"},
+		{10, "PolicyDb.docs", "select id from PolicyDb.docs where id = 2"},
+	})
+	for _, mode := range []int64{0, 2} {
+		cache, err := readRoleRules(ctx, bh, tenant, mode)
+		require.NoError(t, err)
+		rules, err := cache.forSQLMode(ctx, "")
+		require.NoError(t, err)
+		require.Len(t, rules, 2)
+		require.Contains(t, rules, "PolicyDb.Docs")
+		require.Contains(t, rules, "PolicyDb.docs")
+	}
+	cache, err := readRoleRules(ctx, bh, tenant, 1)
+	require.NoError(t, err)
+	_, err = cache.forSQLMode(ctx, "")
+	require.ErrorContains(t, err, "ambiguous case spellings")
 }
 
 func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
@@ -860,7 +885,7 @@ func TestValidateRewriteRuleSQL(t *testing.T) {
 	}
 	for _, rule := range validRules {
 		t.Run("valid "+rule, func(t *testing.T) {
-			require.NoError(t, validateRewriteRuleSQL(ctx, rule))
+			require.NoError(t, validateRewriteRuleSQL(ctx, rule, 1, ""))
 		})
 	}
 
@@ -875,7 +900,7 @@ func TestValidateRewriteRuleSQL(t *testing.T) {
 	}
 	for _, tc := range invalidRules {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateRewriteRuleSQL(ctx, tc.rule)
+			err := validateRewriteRuleSQL(ctx, tc.rule, 1, "")
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.err)
 		})
@@ -1207,6 +1232,14 @@ func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) 
 	require.NoError(t, err)
 	bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
 
+	keys := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("rule_name")
+	column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	keys.AddColumn(column)
+	keys.AddRow([]interface{}{"db1.t1"})
+	bh.sql2result["select rule_name from mo_catalog.mo_role_rule where role_id = 10"] = keys
+
 	stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "select a from db1.t1", "db1", "t1")
 	require.NoError(t, handleAlterRoleAddRule(ses, execCtx, stmt))
 
@@ -1267,7 +1300,7 @@ func TestMergeRewriteRules(t *testing.T) {
 
 	left := "select a from db1.t1 where a = 1"
 	right := "select a from db1.t1 where a = 2"
-	merged, err := mergeRewriteRules(ctx, left, right, "")
+	merged, err := mergeRewriteRules(ctx, 1, left, right, "")
 	require.NoError(t, err)
 	require.Equal(t, "select `a` from `db1`.`t1` where (`a` = 1) or (`a` = 2)", merged)
 
@@ -1276,31 +1309,31 @@ func TestMergeRewriteRules(t *testing.T) {
 	// visible rows with the same projected value are not collapsed here.
 	rowUnionMerged, err := mergeRewriteRules(
 		ctx,
-		"select a from db1.t1 where role_marker = 1",
+		1, "select a from db1.t1 where role_marker = 1",
 		"select a from db1.t1 where role_marker = 2", "")
 
 	require.NoError(t, err)
 	require.Equal(t, "select `a` from `db1`.`t1` where (`role_marker` = 1) or (`role_marker` = 2)", rowUnionMerged)
 
-	merged, err = mergeRewriteRules(ctx, merged, "select a from db1.t1 where a = 3", "")
+	merged, err = mergeRewriteRules(ctx, 1, merged, "select a from db1.t1 where a = 3", "")
 	require.NoError(t, err)
 	require.Equal(t, "select `a` from `db1`.`t1` where ((`a` = 1) or (`a` = 2)) or (`a` = 3)", merged)
 
-	merged, err = mergeRewriteRules(ctx, "select a, age from db1.t1 where age > 28", "select a from db1.t1 where a = 2", "")
+	merged, err = mergeRewriteRules(ctx, 1, "select a, age from db1.t1 where age > 28", "select a from db1.t1 where a = 2", "")
 	require.NoError(t, err)
 	require.Equal(t,
 		"select a from db1.t1 where a = 2",
 		merged,
 	)
 
-	merged, err = mergeRewriteRules(ctx, "select * from db1.t1 where age > 28", "select * from db1.t1 where age < 3", "")
+	merged, err = mergeRewriteRules(ctx, 1, "select * from db1.t1 where age > 28", "select * from db1.t1 where age < 3", "")
 	require.NoError(t, err)
 	require.Equal(t,
 		"select * from `db1`.`t1` where (`age` > 28) or (`age` < 3)",
 		merged,
 	)
 
-	merged, err = mergeRewriteRules(ctx, "select t.* from db1.t1 as t where age > 28", "select t.* from db1.t1 as t where age < 3", "")
+	merged, err = mergeRewriteRules(ctx, 1, "select t.* from db1.t1 as t where age > 28", "select t.* from db1.t1 as t where age < 3", "")
 	require.NoError(t, err)
 	require.Equal(t,
 		"select `t`.* from `db1`.`t1` as `t` where (`age` > 28) or (`age` < 3)",
@@ -1360,21 +1393,21 @@ func TestMergeRewriteRules(t *testing.T) {
 	}
 	for _, tc := range fallbackCases {
 		t.Run(tc.name, func(t *testing.T) {
-			merged, err = mergeRewriteRules(ctx, tc.left, tc.right, "")
+			merged, err = mergeRewriteRules(ctx, 1, tc.left, tc.right, "")
 			require.NoError(t, err)
 			require.Equal(t, tc.right, merged)
 		})
 	}
 
-	merged, err = mergeRewriteRules(ctx, "select a as x from db1.t1 where age > 28", "select a as x from db1.t1 where age < 3", "")
+	merged, err = mergeRewriteRules(ctx, 1, "select a as x from db1.t1 where age > 28", "select a as x from db1.t1 where age < 3", "")
 	require.NoError(t, err)
 	require.Equal(t, "select `a` as `x` from `db1`.`t1` where (`age` > 28) or (`age` < 3)", merged)
 
-	merged, err = mergeRewriteRules(ctx, "select a + 1 as b from db1.t1 where age > 28", "select a + 1 as b from db1.t1 where age < 3", "")
+	merged, err = mergeRewriteRules(ctx, 1, "select a + 1 as b from db1.t1 where age > 28", "select a + 1 as b from db1.t1 where age < 3", "")
 	require.NoError(t, err)
 	require.Equal(t, "select `a` + 1 as `b` from `db1`.`t1` where (`age` > 28) or (`age` < 3)", merged)
 
-	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1", "")
+	_, err = mergeRewriteRules(ctx, 1, "select a from", "select a from db1.t1", "")
 	require.Error(t, err)
 }
 
@@ -1384,7 +1417,7 @@ func TestMergeRewriteRulesPreservesStringLiterals(t *testing.T) {
 	const left = `kind = '单据' and code in (select code from db1.codes where region in ('0001', '0010'))`
 	const right = `label = 'O''Brien\\west'`
 
-	merged, err := mergeRewriteRules(ctx, base+left, base+right, "")
+	merged, err := mergeRewriteRules(ctx, 1, base+left, base+right, "")
 	require.NoError(t, err)
 	// Compare reparsed trees, not SQL spelling: another pair of quotes is fine,
 	// but changing a string into a number or changing its decoded value is not.
@@ -1431,7 +1464,7 @@ func TestMergeRewriteRulesPreservesIdentifiersAndBinaryLiterals(t *testing.T) {
 			const base = "select id from db.t where "
 			left := tc.column + " = _binary '0001'"
 			right := tc.column + " = _binary 0x4f"
-			merged, err := mergeRewriteRules(ctx, base+left, base+right, tc.mode)
+			merged, err := mergeRewriteRules(ctx, 1, base+left, base+right, tc.mode)
 			require.NoError(t, err)
 			parse := func(sql string) tree.Statement {
 				stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, tc.mode)
@@ -1443,7 +1476,7 @@ func TestMergeRewriteRulesPreservesIdentifiersAndBinaryLiterals(t *testing.T) {
 			require.Equal(t, parse(base+"("+left+") or ("+right+")"), parse(merged))
 
 			const subtraction = "select part - code from db.t where id = 2"
-			merged, err = mergeRewriteRules(ctx, "select "+tc.column+" from db.t where id = 1", subtraction, tc.mode)
+			merged, err = mergeRewriteRules(ctx, 1, "select "+tc.column+" from db.t where id = 1", subtraction, tc.mode)
 			require.NoError(t, err)
 			require.Equal(t, subtraction, merged)
 		})
@@ -1529,7 +1562,7 @@ func TestRoleRuleHintSQLPreservesValidSQLAndRejectsNonBinaryBytes(t *testing.T) 
 	_, err = policy.rewrite(ctx, "select id from db.t", "")
 	require.ErrorContains(t, err, "invalid UTF-8 outside binary literals")
 
-	merged, err := mergeRewriteRules(ctx, "select id from db.t where a = _binary X''",
+	merged, err := mergeRewriteRules(ctx, 1, "select id from db.t where a = _binary X''",
 		"select id from db.t where b is null", "")
 	require.NoError(t, err)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, merged, 1)
@@ -1550,12 +1583,12 @@ func TestMergeRewriteRulesDistinguishesProjectionLiterals(t *testing.T) {
 		t.Run(tc.left+" vs "+tc.right, func(t *testing.T) {
 			left := "select " + tc.left + " as x from db.t where id = 1"
 			right := "select " + tc.right + " as x from db.t where id = 2"
-			got, err := mergeRewriteRules(ctx, left, right, tc.mode)
+			got, err := mergeRewriteRules(ctx, 1, left, right, tc.mode)
 			require.NoError(t, err)
 			require.Equal(t, right, got)
 		})
 	}
-	got, err := mergeRewriteRules(ctx, "select concat(LABEL, 'East') as x from db.t where id = 1",
+	got, err := mergeRewriteRules(ctx, 1, "select concat(LABEL, 'East') as x from db.t where id = 1",
 		"select concat(label, 'East') as x from db.t where id = 2", "")
 	require.NoError(t, err)
 	require.Contains(t, got, "where (`id` = 1) or (`id` = 2)")
@@ -1564,7 +1597,7 @@ func TestMergeRewriteRulesDistinguishesProjectionLiterals(t *testing.T) {
 func TestMergeRewriteRulesMergesIdenticalEnumProjections(t *testing.T) {
 	ctx := context.Background()
 	const prefix = "select cast(1 as enum('East')) as x from db.t where "
-	got, err := mergeRewriteRules(ctx, prefix+"id = 1", prefix+"id = 2", "")
+	got, err := mergeRewriteRules(ctx, 1, prefix+"id = 1", prefix+"id = 2", "")
 	require.NoError(t, err)
 	want, err := parsers.ParseOne(ctx, dialect.MYSQL, prefix+"(id = 1) or (id = 2)", 1)
 	require.NoError(t, err)
@@ -1632,7 +1665,7 @@ func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			merged, err := mergeRewriteRules(ctx, tc.left, tc.right, "")
+			merged, err := mergeRewriteRules(ctx, 1, tc.left, tc.right, "")
 			require.NoError(t, err)
 			require.Equal(t, tc.right, merged)
 		})
@@ -1752,7 +1785,7 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			shape, ok, err := rewriteRuleMergeShapeForRule(ctx, tc.rule, "")
+			shape, ok, err := rewriteRuleMergeShapeForRule(ctx, 1, tc.rule, "")
 			require.NoError(t, err)
 			require.Equal(t, tc.ok, ok)
 			if !tc.ok {

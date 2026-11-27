@@ -734,14 +734,25 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		s.SetLastAffectedRows(9)
+		s.GetTenantInfo().SetDefaultRole("renamed_role")
 		role := migrationRoleState(s)
-		for _, source := range []*query.MigrateConnRoleState{
-			nil,
-			{AccountID: role.AccountID + 1, UserID: role.UserID, PrimaryRoleID: role.PrimaryRoleID},
-			{AccountID: role.AccountID, UserID: role.UserID + 1, PrimaryRoleID: role.PrimaryRoleID},
-			{AccountID: role.AccountID, UserID: role.UserID, PrimaryRoleID: role.PrimaryRoleID + 1},
-			{AccountID: role.AccountID, UserID: role.UserID, PrimaryRoleID: role.PrimaryRoleID, AllSecondaryRoles: !role.AllSecondaryRoles},
+		sources := []*query.MigrateConnRoleState{nil}
+		for _, change := range []func(*query.MigrateConnRoleState){
+			func(state *query.MigrateConnRoleState) { state.AccountID++ },
+			func(state *query.MigrateConnRoleState) { state.UserID++ },
+			func(state *query.MigrateConnRoleState) { state.PrimaryRoleID++ },
+			func(state *query.MigrateConnRoleState) { state.AllSecondaryRoles = !state.AllSecondaryRoles },
+			func(state *query.MigrateConnRoleState) { state.PrimaryRoleName = "original_role" },
+			func(state *query.MigrateConnRoleState) { state.PrimaryRoleName = "" },
+			func(state *query.MigrateConnRoleState) {
+				state.LowerCaseTableNames = (state.LowerCaseTableNames + 1) % 3
+			},
 		} {
+			source := *role
+			change(&source)
+			sources = append(sources, &source)
+		}
+		for _, source := range sources {
 			err := Migrate(t.Context(), s, &query.MigrateConnToRequest{
 				DB: "d1", LastAffectedRows: 7, RoleState: source,
 			})

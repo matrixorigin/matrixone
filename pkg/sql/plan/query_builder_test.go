@@ -2942,6 +2942,30 @@ func TestQueryBuilderIcebergTimeTravelSnapshot(t *testing.T) {
 	require.Equal(t, "main", scan.Ref)
 }
 
+func TestRoleRuleTargetUsesMandatoryIdentity(t *testing.T) {
+	option := &tree.RewriteOption{
+		Rewrites:  map[string][]*tree.Rewrite{"db.Docs": {{TableName: "Docs"}}},
+		RoleRules: map[string][]*tree.Rewrite{"db.docs": {{TableName: "docs"}}},
+	}
+	option = mandatoryRewrites(option)
+	_, exact, ambiguous := roleRuleTarget(option, "db", "Docs")
+	require.False(t, exact)
+	require.True(t, ambiguous)
+	_, exact, ambiguous = roleRuleTarget(option, "db", "other")
+	require.False(t, exact)
+	require.False(t, ambiguous)
+	option.RoleRules["db.Docs"] = []*tree.Rewrite{{TableName: "Docs"}}
+	key, exact, ambiguous := roleRuleTarget(option, "db", "Docs")
+	require.Equal(t, "db.Docs", key)
+	require.True(t, exact)
+	require.False(t, ambiguous)
+	option.RoleRuleLowerCaseTableNames = 1
+	key, exact, ambiguous = roleRuleTarget(option, "DB", "Docs")
+	require.Equal(t, "db.docs", key)
+	require.True(t, exact)
+	require.False(t, ambiguous)
+}
+
 func TestQueryBuilderIcebergHistoryRejectsRoleRewrite(t *testing.T) {
 	ctx := newIcebergTestCompilerContext(t, time.UTC)
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select id from gold_orders for iceberg snapshot 1", 1)

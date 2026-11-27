@@ -16,10 +16,12 @@ package plan
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -30,7 +32,24 @@ func mandatoryRewrites(option *tree.RewriteOption) *tree.RewriteOption {
 	if option == nil || len(option.RoleRules) == 0 {
 		return nil
 	}
-	return &tree.RewriteOption{Rewrites: option.RoleRules, RoleRules: option.RoleRules}
+	return &tree.RewriteOption{
+		Rewrites: option.RoleRules, RoleRules: option.RoleRules,
+		RoleRuleLowerCaseTableNames: option.RoleRuleLowerCaseTableNames,
+	}
+}
+
+func roleRuleTarget(option *tree.RewriteOption, db, table string) (key string, exact, ambiguous bool) {
+	if option == nil || len(option.RoleRules) == 0 {
+		return "", false, false
+	}
+	key = parsers.RoleRuleKey(db, table, option.RoleRuleLowerCaseTableNames)
+	if len(option.RoleRules[key]) > 0 {
+		return key, true, false
+	}
+	// Older role DDL folded case-sensitive table names before storage.
+	// A folded rule alone cannot establish which physical table it targets.
+	folded := strings.ToLower(key)
+	return key, false, folded != key && len(option.RoleRules[folded]) > 0
 }
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {

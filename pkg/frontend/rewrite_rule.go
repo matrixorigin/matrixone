@@ -332,7 +332,8 @@ func isRoleRuleRecoveryStatement(ctx context.Context, sql, sqlMode string) bool 
 	}
 	defer stmt.Free()
 	switch s := stmt.(type) {
-	case *tree.CommitTransaction, *tree.RollbackTransaction, *tree.Kill, *tree.DropTable:
+	case *tree.CommitTransaction, *tree.RollbackTransaction, *tree.Kill, *tree.DropTable,
+		*tree.AlterRoleAddRule, *tree.AlterRoleDropRule:
 		return true
 	case *tree.SetRole:
 		return s.SecondaryRole && s.SecondaryRoleType == tree.SecondaryRoleTypeNone
@@ -493,14 +494,17 @@ func addStatementRewriteHints(ctx context.Context, stmts []tree.Statement, sql, 
 		targets[i] = target
 	}
 	var roleRules map[string]string
+	lower := int64(1)
 	if appliesRules {
 		var err error
-		roleRules, err = input.rewritePolicy.roleRules.forSQLMode(ctx, sqlMode)
+		cache := input.rewritePolicy.roleRules
+		lower = cache.lowerCaseTableNames
+		roleRules, err = cache.forSQLMode(ctx, sqlMode)
 		if err != nil {
 			return err
 		}
 	}
-	return parsers.AddRewriteHintsWithRoleRules(ctx, targets, sql, sqlMode, roleRules)
+	return parsers.AddRewriteHintsWithRoleRules(ctx, targets, sql, sqlMode, roleRules, lower)
 }
 
 // roleRuleStatementSupport classifies statements by whether planning binds the
@@ -601,29 +605,30 @@ func applyRoleRulesToSetExpression(execCtx *ExecCtx, ses *Session, stmt *tree.Se
 	if err != nil {
 		return err
 	}
-	return parsers.AddRewriteHintsWithRoleRules(ctx, []tree.Statement{stmt}, hint+" select 1", sqlMode, rules)
+	return parsers.AddRewriteHintsWithRoleRules(ctx, []tree.Statement{stmt}, hint+" select 1", sqlMode, rules, cache.lowerCaseTableNames)
 }
 
-func (prepared *PrepareStmt) checkRoleRulePolicy(ctx context.Context, ses *Session) error {
+func (prepareStmt *PrepareStmt) checkRoleRulePolicy(ctx context.Context, ses *Session) error {
 	current, err := captureRoleRuleCache(ctx, ses)
 	if err != nil {
 		return err
 	}
-	if prepared.roleRules == nil {
+	if prepareStmt.roleRules == nil {
 		if len(current.first) > 0 {
 			return moerr.NewInvalidInput(ctx, "prepared statement is missing its active role rules; prepare it again")
 		}
 		return nil
 	}
-	if len(prepared.roleRules.first) == 0 && len(current.first) == 0 {
+	if len(prepareStmt.roleRules.first) == 0 && len(current.first) == 0 {
 		return nil
 	}
 	mode := sessionSQLModeForParser(ses)
-	if mysql.ParseSQLModeFlags(mode) == mysql.ParseSQLModeFlags(prepared.schedulingSQLMode) {
-		if current == prepared.roleRules {
+	if current.lowerCaseTableNames == prepareStmt.roleRules.lowerCaseTableNames &&
+		mysql.ParseSQLModeFlags(mode) == mysql.ParseSQLModeFlags(prepareStmt.schedulingSQLMode) {
+		if current == prepareStmt.roleRules {
 			return nil
 		}
-		oldRules, err := prepared.roleRules.forSQLMode(ctx, mode)
+		oldRules, err := prepareStmt.roleRules.forSQLMode(ctx, mode)
 		if err != nil {
 			return err
 		}
@@ -795,7 +800,7 @@ func validateRemapRewrites(ctx context.Context, val interface{}) error {
 		if err := validateRewriteTableKey(ctx, key); err != nil {
 			return err
 		}
-		if err := validateRewriteRuleSQL(ctx, rule); err != nil {
+		if err := validateRewriteRuleSQL(ctx, rule, 1, ""); err != nil {
 			return err
 		}
 	}
@@ -863,11 +868,13 @@ func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMe
 // Catalog text is immutable after publication. Each request keeps the captured
 // generation, but each statement interprets it under its own parser mode.
 type roleRuleCache struct {
-	proof      roleRuleCacheProof
-	first      map[string]string
-	later      map[string][]string // competing rules only, in active-role priority order
-	hasNonUTF8 bool
-	last       atomic.Pointer[mergedRoleRules]
+	lowerCaseTableNames int64
+	caseCollision       bool
+	proof               roleRuleCacheProof
+	first               map[string]string
+	later               map[string][]string // competing rules only, in active-role priority order
+	hasNonUTF8          bool
+	last                atomic.Pointer[mergedRoleRules]
 }
 
 type mergedRoleRules struct {
@@ -879,6 +886,9 @@ func (c *roleRuleCache) forSQLMode(ctx context.Context, sqlMode string) (map[str
 	if c == nil {
 		return nil, nil
 	}
+	if c.caseCollision {
+		return nil, moerr.NewInvalidInput(ctx, "active role rules contain ambiguous case spellings")
+	}
 	if len(c.later) == 0 && !c.hasNonUTF8 {
 		return c.first, nil
 	}
@@ -889,7 +899,7 @@ func (c *roleRuleCache) forSQLMode(ctx context.Context, sqlMode string) (map[str
 	rules := cloneRewriteMap(c.first)
 	for name, later := range c.later {
 		for _, rule := range later {
-			merged, err := mergeRewriteRules(ctx, rules[name], rule, sqlMode)
+			merged, err := mergeRewriteRules(ctx, c.lowerCaseTableNames, rules[name], rule, sqlMode)
 			if err != nil {
 				return nil, err
 			}
@@ -1015,7 +1025,9 @@ func loadRoleRuleCacheAtSnapshot(ctx context.Context, ses *Session, snapshot tim
 	defer func() { err = finishTxn(ctx, bh, err) }()
 
 	proof := captureRoleRuleCacheProof(ctx, ses, bh, snapshot, storage, reader)
-	rules, err = readRoleRules(ctx, bh, ses.GetTenantInfo())
+	// The authenticated session retains its own table-name mode. Read it
+	// when loading rules so a cache hit does not need the system-variable lock.
+	rules, err = readRoleRules(ctx, bh, ses.GetTenantInfo(), parserLowerCaseTableNames(ses))
 	if err != nil {
 		return nil, err
 	}
@@ -1026,8 +1038,8 @@ func loadRoleRuleCacheAtSnapshot(ctx context.Context, ses *Session, snapshot tim
 	return rules, nil
 }
 
-func readRoleRules(ctx context.Context, bh BackgroundExec, tenant *TenantInfo) (*roleRuleCache, error) {
-	rules := &roleRuleCache{first: make(map[string]string)}
+func readRoleRules(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, lower int64) (*roleRuleCache, error) {
+	rules := &roleRuleCache{first: make(map[string]string), lowerCaseTableNames: lower}
 
 	roleIDs, err := loadActiveRoleIDsForRuleCache(ctx, bh, tenant)
 	if err != nil {
@@ -1100,7 +1112,16 @@ func readRoleRules(ctx context.Context, bh BackgroundExec, tenant *TenantInfo) (
 		return cmp.Compare(a.ruleName, b.ruleName)
 	})
 
+	rawSpellings := make(map[string]string, len(ruleRows))
 	for _, row := range ruleRows {
+		if db, table, ok := parsers.SplitRewriteKey(row.ruleName); ok {
+			key := parsers.RoleRuleKey(db, table, lower)
+			if prior, exists := rawSpellings[key]; exists && prior != row.ruleName {
+				rules.caseCollision = true
+			}
+			rawSpellings[key] = row.ruleName
+			row.ruleName = key
+		}
 		if _, ok := rules.first[row.ruleName]; !ok {
 			rules.first[row.ruleName] = row.rule
 			continue
@@ -1205,7 +1226,7 @@ func getSqlForRoleRulesOfRoleIDs(roleIDs []int64) string {
 		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, builder.String())
 }
 
-func mergeRewriteRules(ctx context.Context, leftRule, rightRule, sqlMode string) (string, error) {
+func mergeRewriteRules(ctx context.Context, lower int64, leftRule, rightRule, sqlMode string) (string, error) {
 	leftRule = trimRewriteRuleForMerge(leftRule)
 	rightRule = trimRewriteRuleForMerge(rightRule)
 
@@ -1213,7 +1234,7 @@ func mergeRewriteRules(ctx context.Context, leftRule, rightRule, sqlMode string)
 		return leftRule, nil
 	}
 
-	mergedRule, ok, err := mergeRewriteRulesSafely(ctx, leftRule, rightRule, sqlMode)
+	mergedRule, ok, err := mergeRewriteRulesSafely(ctx, lower, leftRule, rightRule, sqlMode)
 	if err != nil {
 		return "", err
 	}
@@ -1244,8 +1265,8 @@ type rewriteRuleMergeShape struct {
 // filters expresses that row union directly. This is intentionally not a
 // UNION DISTINCT equivalent for partial projections; two visible base rows that
 // project to the same values should both remain visible.
-func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode string) (string, bool, error) {
-	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, leftRule, sqlMode)
+func mergeRewriteRulesSafely(ctx context.Context, lower int64, leftRule, rightRule, sqlMode string) (string, bool, error) {
+	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, lower, leftRule, sqlMode)
 	if err != nil {
 		return "", false, err
 	}
@@ -1253,7 +1274,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 		return "", false, nil
 	}
 
-	rightShape, ok, err := rewriteRuleMergeShapeForRule(ctx, rightRule, sqlMode)
+	rightShape, ok, err := rewriteRuleMergeShapeForRule(ctx, lower, rightRule, sqlMode)
 	if err != nil {
 		return "", false, err
 	}
@@ -1282,30 +1303,30 @@ func rewriteRuleFormatOptions(sqlMode string) []tree.FmtCtxOption {
 	return opts
 }
 
-func rewriteRuleMergeShapeForRule(ctx context.Context, rule, sqlMode string) (*rewriteRuleMergeShape, bool, error) {
-	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, 1, sqlMode)
+func rewriteRuleMergeShapeForRule(ctx context.Context, lower int64, rule, sqlMode string) (*rewriteRuleMergeShape, bool, error) {
+	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, lower, sqlMode)
 	if err != nil {
 		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse rewrite rule %q while merging rewrite rules: %v", rule, err)
 	}
-	shape, ok := rewriteRuleMergeShapeForStatement(stmt, sqlMode)
+	shape, ok := rewriteRuleMergeShapeForStatement(stmt, lower, sqlMode)
 	return shape, ok, nil
 }
 
-func rewriteRuleMergeShapeForStatement(stmt tree.Statement, sqlMode string) (*rewriteRuleMergeShape, bool) {
+func rewriteRuleMergeShapeForStatement(stmt tree.Statement, lower int64, sqlMode string) (*rewriteRuleMergeShape, bool) {
 	switch s := stmt.(type) {
 	case *tree.Select:
-		return rewriteRuleMergeShapeForSelect(s, sqlMode)
+		return rewriteRuleMergeShapeForSelect(s, lower, sqlMode)
 	case *tree.ParenSelect:
 		if s.Select == nil {
 			return nil, false
 		}
-		return rewriteRuleMergeShapeForStatement(s.Select, sqlMode)
+		return rewriteRuleMergeShapeForStatement(s.Select, lower, sqlMode)
 	default:
 		return nil, false
 	}
 }
 
-func rewriteRuleMergeShapeForSelect(stmt *tree.Select, sqlMode string) (*rewriteRuleMergeShape, bool) {
+func rewriteRuleMergeShapeForSelect(stmt *tree.Select, lower int64, sqlMode string) (*rewriteRuleMergeShape, bool) {
 	if stmt == nil || len(stmt.OrderBy) > 0 || stmt.Limit != nil || stmt.With != nil ||
 		stmt.TimeWindow != nil || stmt.RankOption != nil || stmt.Ep != nil || stmt.SelectLockInfo != nil {
 		return nil, false
@@ -1316,7 +1337,7 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select, sqlMode string) (*rewrite
 		return nil, false
 	}
 
-	table, ok := rewriteRuleSingleTableSource(clause.From)
+	table, ok := rewriteRuleSingleTableSource(clause.From, lower)
 	if !ok {
 		return nil, false
 	}
@@ -1324,7 +1345,7 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select, sqlMode string) (*rewrite
 	return &rewriteRuleMergeShape{
 		stmt:       stmt,
 		clause:     clause,
-		selectList: rewriteRuleProjectionKey(&clause.Exprs, sqlMode),
+		selectList: rewriteRuleProjectionKey(&clause.Exprs, lower, sqlMode),
 		table:      table,
 	}, true
 }
@@ -1361,7 +1382,7 @@ func rewriteRuleSelectExprIsStar(expr tree.Expr) bool {
 	}
 }
 
-func rewriteRuleSingleTableSource(from *tree.From) (string, bool) {
+func rewriteRuleSingleTableSource(from *tree.From, lower int64) (string, bool) {
 	if from == nil || len(from.Tables) != 1 {
 		return "", false
 	}
@@ -1371,7 +1392,11 @@ func rewriteRuleSingleTableSource(from *tree.From) (string, bool) {
 		return "", false
 	}
 
-	return normalizeRewriteSQL(tree.StringWithOpts(tableExpr, dialect.MYSQL, tree.WithQuoteIdentifier())), true
+	sql := tree.StringWithOpts(tableExpr, dialect.MYSQL, tree.WithQuoteIdentifier())
+	if lower != 1 {
+		return sql, true
+	}
+	return normalizeRewriteSQL(sql), true
 }
 
 func rewriteRuleSingleTableExpr(expr tree.TableExpr) (*tree.AliasedTableExpr, bool) {
@@ -1417,7 +1442,10 @@ func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
 
 // Preserve literal spelling and type delimiters while folding the surrounding
 // SQL as before. In particular, the column `x` is not the string '`x`'.
-func rewriteRuleProjectionKey(exprs *tree.SelectExprs, sqlMode string) string {
+func rewriteRuleProjectionKey(exprs *tree.SelectExprs, lower int64, sqlMode string) string {
+	if lower != 1 {
+		return tree.StringWithOpts(exprs, dialect.MYSQL, rewriteRuleFormatOptions(sqlMode)...)
+	}
 	var literals []tree.StringLiteralPosition
 	opts := append(rewriteRuleFormatOptions(sqlMode), tree.WithStringLiteralPositions(&literals))
 	sql := tree.StringWithOpts(exprs, dialect.MYSQL, opts...)
@@ -1555,15 +1583,16 @@ func rewriteFuncExprName(fn *tree.FuncExpr) string {
 	return ""
 }
 
-func validateRewriteRuleSQL(ctx context.Context, rule string) error {
+func validateRewriteRuleSQL(ctx context.Context, rule string, lower int64, sqlMode string) error {
 	if strings.TrimSpace(rule) == "" {
 		return moerr.NewInvalidInput(ctx, "rewrite rule SQL is empty")
 	}
 
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, lower, sqlMode)
 	if err != nil {
 		return moerr.NewInvalidInputf(ctx, "invalid rewrite rule SQL %q: %v", rule, err)
 	}
+	defer stmt.Free()
 
 	switch stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
@@ -1578,6 +1607,48 @@ func escapeSQLString(s string) string {
 	var buf bytes.Buffer
 	writeEscapedSQLString(&buf, []byte(s))
 	return buf.String()
+}
+
+func deleteMatchingRoleRuleKeys(ctx context.Context, bh BackgroundExec, roleID int64, target string, lower int64) (bool, error) {
+	sql := fmt.Sprintf("select rule_name from %s.%s where role_id = %d",
+		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil || !execResultArrayHasData(results) {
+		return false, err
+	}
+	var keys []string
+	for i := uint64(0); i < results[0].GetRowCount(); i++ {
+		name, err := results[0].GetString(ctx, i, 0)
+		if err != nil {
+			return false, err
+		}
+		if name != target {
+			db, table, ok := parsers.SplitRewriteKey(name)
+			if !ok || parsers.RoleRuleKey(db, table, lower) != target {
+				continue
+			}
+		}
+		keys = append(keys, escapeSQLString(name))
+	}
+	if len(keys) == 0 {
+		return false, nil
+	}
+	sql = fmt.Sprintf("delete from %s.%s where role_id = %d and cast(rule_name as binary) in (%s)",
+		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, strings.Join(keys, ", "))
+	return true, bh.Exec(ctx, sql)
+}
+
+func roleRuleDDLKey(ctx context.Context, db, table string, lower int64) (string, error) {
+	key := db + "." + table
+	parsedDB, parsedTable, ok := parsers.SplitRewriteKey(key)
+	if !ok || parsedDB != db || parsedTable != table {
+		return "", moerr.NewInvalidInput(ctx, "role rule requires an unambiguous database and table name")
+	}
+	return parsers.RoleRuleKey(db, table, lower), nil
 }
 
 // handleAlterRoleAddRule verifies role existence, then inserts or updates a mo_role_rule record.
@@ -1614,17 +1685,16 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 	}
 	roleID := vr.id
 
-	if err = validateRewriteRuleSQL(ctx, stmt.RuleSQL); err != nil {
+	lower := parserLowerCaseTableNames(ses)
+	if err = validateRewriteRuleSQL(ctx, stmt.RuleSQL, lower, sessionSQLModeForParser(ses)); err != nil {
 		return err
 	}
 
-	// Derive rule_name from db.tbl
-	ruleName := stmt.DbName + "." + stmt.TblName
-
-	// Delete existing rule (if any), then insert the new one
-	deleteSQL := fmt.Sprintf("delete from %s.%s where role_id = %d and rule_name = %s",
-		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(ruleName))
-	if err = bh.Exec(ctx, deleteSQL); err != nil {
+	ruleName, err := roleRuleDDLKey(ctx, stmt.DbName, stmt.TblName, lower)
+	if err != nil {
+		return err
+	}
+	if _, err = deleteMatchingRoleRuleKeys(ctx, bh, roleID, ruleName, lower); err != nil {
 		return err
 	}
 
@@ -1672,32 +1742,17 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 	}
 	roleID := vr.id
 
-	// Derive rule_name from db.tbl
-	ruleName := stmt.DbName + "." + stmt.TblName
-
-	// Step 2: Check if rule_name exists for this role_id
-	checkSQL := fmt.Sprintf("select `rule` from %s.%s where role_id = %d and rule_name = %s",
-		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(ruleName))
-
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, checkSQL); err != nil {
-		return err
-	}
-
-	erArray, err := getResultSet(ctx, bh)
+	lower := parserLowerCaseTableNames(ses)
+	ruleName, err := roleRuleDDLKey(ctx, stmt.DbName, stmt.TblName, lower)
 	if err != nil {
 		return err
 	}
-
-	if !execResultArrayHasData(erArray) {
-		return moerr.NewInternalErrorf(ctx, "rule '%s' does not exist for role '%s'", ruleName, stmt.RoleName)
-	}
-
-	// Step 3: Delete the matching record
-	deleteSQL := fmt.Sprintf("delete from %s.%s where role_id = %d and rule_name = %s",
-		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(ruleName))
-	if err = bh.Exec(ctx, deleteSQL); err != nil {
+	deleted, err := deleteMatchingRoleRuleKeys(ctx, bh, roleID, ruleName, lower)
+	if err != nil {
 		return err
+	}
+	if !deleted {
+		return moerr.NewInternalErrorf(ctx, "rule '%s' does not exist for role '%s'", ruleName, stmt.RoleName)
 	}
 
 	return nil

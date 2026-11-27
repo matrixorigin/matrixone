@@ -194,6 +194,7 @@ func migrationRoleState(ses *Session) *query.MigrateConnRoleState {
 	return &query.MigrateConnRoleState{
 		AccountID: principal.account, UserID: principal.user,
 		PrimaryRoleID: principal.role, AllSecondaryRoles: principal.secondary,
+		PrimaryRoleName: principal.roleName, LowerCaseTableNames: parserLowerCaseTableNames(ses),
 	}
 }
 

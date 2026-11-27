@@ -35,9 +35,9 @@ import (
 
 // Insert source SELECTs own the complete rewrite option. Other expression
 // binders inherit the mandatory policies from the enclosing INSERT.
-func (stmtBinder *BindContext) bindInsertRoleRules(stmt *tree.Insert) {
+func (bc *BindContext) bindInsertRoleRules(stmt *tree.Insert) {
 	if stmt.Rows != nil {
-		stmtBinder.remapOption = mandatoryRewrites(stmt.Rows.RewriteOption)
+		bc.remapOption = mandatoryRewrites(stmt.Rows.RewriteOption)
 	}
 }
 
@@ -88,7 +88,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	tableDef := dmlCtx.tableDefs[0]
 	if stmt.HasReturning() {
 		target := dmlCtx.objRefs[0]
-		if bindCtx.remapOption != nil && len(bindCtx.remapOption.RoleRules[target.SchemaName+"."+target.ObjName]) > 0 {
+		if _, exact, ambiguous := roleRuleTarget(bindCtx.remapOption, target.SchemaName, target.ObjName); exact || ambiguous {
 			return 0, moerr.NewNotSupported(builder.GetContext(), "INSERT RETURNING cannot enforce active role rules on the target")
 		}
 		if err := validateReturningTarget(builder, tableDef, target); err != nil {

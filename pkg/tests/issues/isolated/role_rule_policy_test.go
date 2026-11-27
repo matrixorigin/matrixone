@@ -84,8 +84,9 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 		_, err := conn.ExecContext(ctx, statement)
 		require.NoError(t, err)
 	}
-	assertIDs := func(rows *sql.Rows, err error, expected ...int) {
+	assertIDs := func(query func() (*sql.Rows, error), expected ...int) {
 		t.Helper()
+		rows, err := query()
 		require.NoError(t, err)
 		defer rows.Close()
 		cols, err := rows.Columns()
@@ -99,6 +100,11 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 		}
 		require.NoError(t, rows.Err())
 		require.Equal(t, expected, ids)
+	}
+
+	selectIDs := func(conn *sql.Conn, stmt string, expected ...int) {
+		t.Helper()
+		assertIDs(func() (*sql.Rows, error) { return conn.QueryContext(ctx, stmt) }, expected...)
 	}
 
 	admin := connect(0, "root")
@@ -184,8 +190,7 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	native, err := reader.PrepareContext(ctx, "select id from policy_fixture.docs where id = ?")
 	require.NoError(t, err)
 	defer native.Close()
-	rows, err := native.QueryContext(ctx, 2)
-	assertIDs(rows, err, 2)
+	assertIDs(func() (*sql.Rows, error) { return native.QueryContext(ctx, 2) }, 2)
 	exported, err := rpc.SendMessage(ctx, sourceAddress, export)
 	require.NoError(t, err)
 	defer rpc.Release(exported)
@@ -210,15 +215,13 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	require.NoError(t, replay(destinationID))
 	exec(migrationTarget, "set @move_doc_id = 2")
 	for _, stmt := range exported.MigrateConnFromResponse.PrepareStmts {
-		rows, err = migrationTarget.QueryContext(ctx, fmt.Sprintf("execute %s using @move_doc_id", stmt.Name))
-		assertIDs(rows, err, 2)
+		selectIDs(migrationTarget, fmt.Sprintf("execute %s using @move_doc_id", stmt.Name), 2)
 	}
 
 	// Warm an empty policy with a connection-only control before publishing
 	// the first rule on the other CN.
 	for range 2 {
-		rows, err := reader.QueryContext(ctx, "select 1 as id")
-		assertIDs(rows, err, 1)
+		selectIDs(reader, "select 1 as id", 1)
 	}
 	publishPolicy("select id, body, embedding from policy_fixture.docs where id <= 2")
 	// The old source handle and a stale export are both ineligible once
@@ -257,22 +260,25 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 		require.NoError(t, rows.Err())
 		require.Equal(t, expected, actual)
 	}
-	assertDenied := func(query, expected string) {
+	assertQueryDenied := func(query func() (*sql.Rows, error), expected string) {
 		t.Helper()
-		rows, err := reader.QueryContext(ctx, query)
+		rows, err := query()
 		if rows != nil {
-			rows.Close()
+			defer rows.Close()
+			require.NoError(t, rows.Err())
 		}
 		require.ErrorContains(t, err, expected)
+	}
+	assertDenied := func(query, expected string) {
+		t.Helper()
+		assertQueryDenied(func() (*sql.Rows, error) { return reader.QueryContext(ctx, query) }, expected)
 	}
 	for _, query := range []string{fulltext, vector, nestedView} {
 		assertDocs(query, first, second)
 	}
 	const historical = "select id from policy_fixture.docs {snapshot = 'policy_history'} order by id"
-	rows, err = admin.QueryContext(ctx, historical)
-	assertIDs(rows, err, 1, 2, 3)
-	rows, err = admin.QueryContext(ctx, relational)
-	assertIDs(rows, err, 1, 2, 3, 4)
+	selectIDs(admin, historical, 1, 2, 3)
+	selectIDs(admin, relational, 1, 2, 3, 4)
 	assertDenied(historical, "table history qualifiers are not supported with active role-rule rewrites")
 	var table string
 	require.NoError(t, reader.QueryRowContext(ctx, "show tables from policy_fixture like 'docs'").Scan(&table))
@@ -316,23 +322,18 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	prepared, err := reader.PrepareContext(ctx, relational)
 	require.NoError(t, err)
 	defer prepared.Close()
-	rows, err = prepared.QueryContext(ctx)
-	assertIDs(rows, err, 1, 2)
+	assertIDs(func() (*sql.Rows, error) { return prepared.QueryContext(ctx) }, 1, 2)
 	exec(reader, "prepare text_policy from 'select id from policy_fixture.docs order by id'")
-	rows, err = reader.QueryContext(ctx, "execute text_policy")
-	assertIDs(rows, err, 1, 2)
+	selectIDs(reader, "execute text_policy", 1, 2)
 
 	// Update from another CN while the original restricted session stays open.
 	publishPolicy("select id, body, embedding from policy_fixture.docs where id = 1")
-	rows, err = reader.QueryContext(ctx, relational)
-	assertIDs(rows, err, 1)
+	selectIDs(reader, relational, 1)
 	for _, query := range []string{fulltext, vector, nestedView} {
 		assertDocs(query, first)
 	}
-	_, err = prepared.QueryContext(ctx)
-	require.ErrorContains(t, err, "role rule policy changed")
-	_, err = reader.QueryContext(ctx, "execute text_policy")
-	require.ErrorContains(t, err, "role rule policy changed")
+	assertQueryDenied(func() (*sql.Rows, error) { return prepared.QueryContext(ctx) }, "role rule policy changed")
+	assertDenied("execute text_policy", "role rule policy changed")
 	exec(reader, "deallocate prepare text_policy")
 	// Object denial is a separate assertion from cross-CN policy publication.
 	// Revoke on the reader's CN so this check observes its committed DDL.
@@ -341,14 +342,54 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 		assertDenied(query, "privilege")
 	}
 	exec(reader, "set role policy_other")
-	rows, err = reader.QueryContext(ctx, "select * from policy_fixture.docs")
-	assertIDs(rows, err, 2)
-	_, err = reader.QueryContext(ctx, vector)
-	require.ErrorContains(t, err, "embedding")
+	selectIDs(reader, "select * from policy_fixture.docs", 2)
+	assertDenied(vector, "embedding")
 	// A committed catalog change also applies to the next statement in
 	// the same request. The database belongs only to this cluster fixture.
 	batch, err := admin.QueryContext(ctx, "alter role moadmin add rule 'select id from policy_fixture.docs where id = 1' on table policy_fixture.docs; "+relational)
 	require.NoError(t, err)
+	defer batch.Close()
 	// go-sql-driver/mysql positions the reader on the first nonempty result.
-	assertIDs(batch, nil, 1)
+	assertIDs(func() (*sql.Rows, error) { return batch, nil }, 1)
+	require.NoError(t, batch.Err())
+
+	exec(admin, "set global lower_case_table_names = 0")
+	caseAdmin := connect(0, "root")
+	for _, statement := range []string{
+		"create database PolicyCase",
+		"create table PolicyCase.Docs(id int primary key)",
+		"create table PolicyCase.docs(id int primary key)",
+		"insert into PolicyCase.Docs values (11),(12)",
+		"insert into PolicyCase.docs values (21),(22)",
+		"create role policy_case_role",
+		"create user policy_case_user identified by '111' default role policy_case_role",
+		"grant connect on account * to policy_case_role",
+		"grant select on table PolicyCase.Docs to policy_case_role",
+		"grant select on table PolicyCase.docs to policy_case_role",
+		"alter role policy_case_role add rule 'select id from PolicyCase.Docs where id = 11' on table PolicyCase.Docs",
+		"alter role policy_case_role add rule 'select id from PolicyCase.docs where id = 21' on table PolicyCase.docs",
+	} {
+		exec(caseAdmin, statement)
+	}
+	caseReader := connect(0, "sys#policy_case_user#policy_case_role")
+	selectIDs(caseReader, "select id from PolicyCase.Docs", 11)
+	selectIDs(caseReader, "select id from PolicyCase.docs", 21)
+	exec(caseAdmin, "alter role policy_case_role drop rule on table PolicyCase.Docs")
+	var ruleName, ruleSQL string
+	require.NoError(t, caseAdmin.QueryRowContext(ctx, "show rules on role policy_case_role").Scan(&ruleName, &ruleSQL))
+	require.Equal(t, "PolicyCase.docs", ruleName)
+	selectIDs(caseReader, "select id from PolicyCase.docs", 21)
+
+	exec(caseAdmin, "alter role policy_case_role add rule 'select id from PolicyCase.Docs where id = 11' on table PolicyCase.Docs")
+	selectIDs(caseReader, "select id from PolicyCase.Docs", 11)
+	exec(caseAdmin, "set global lower_case_table_names = 2")
+	preservingReader := connect(0, "sys#policy_case_user#policy_case_role")
+	selectIDs(preservingReader, "select id from PolicyCase.Docs", 11)
+	selectIDs(preservingReader, "select docs.* from PolicyCase.docs", 21)
+	selectIDs(preservingReader, "select Docs.id from PolicyCase.Docs", 11)
+	exec(caseAdmin, "set global lower_case_table_names = 1")
+	selectIDs(caseReader, "select id from PolicyCase.Docs", 11)
+	foldingAdmin := connect(0, "root")
+	exec(foldingAdmin, "alter role policy_case_role drop rule on table PolicyCase.Docs")
+	require.ErrorIs(t, foldingAdmin.QueryRowContext(ctx, "show rules on role policy_case_role").Scan(&ruleName, &ruleSQL), sql.ErrNoRows)
 }

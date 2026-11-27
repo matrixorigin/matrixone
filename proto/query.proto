@@ -575,13 +575,15 @@ message MigrateConnToRequest {
   MigrateConnRoleState RoleState = 7;
 }
 
-// The role selection already authorized on the source connection. The
-// destination must authenticate with the same identity and role selection.
+// Source authorization identity and table-name comparison mode. The
+// destination must preserve both before replaying session state.
 message MigrateConnRoleState {
   uint32 AccountID = 1;
   uint32 UserID = 2;
   uint32 PrimaryRoleID = 3;
   bool AllSecondaryRoles = 4;
+  string PrimaryRoleName = 5;
+  int64 LowerCaseTableNames = 6;
 }
 
 message UserLevelLock {

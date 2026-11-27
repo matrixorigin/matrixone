@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	gotrace "runtime/trace"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -391,6 +392,14 @@ func SplitRewriteKey(key string) (db, table string, ok bool) {
 	return db, table, true
 }
 
+// RoleRuleKey follows table binding, including case-insensitive system schemas.
+func RoleRuleKey(db, table string, lower int64) string {
+	if lower == 1 || slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(db)) {
+		return strings.ToLower(db + "." + table)
+	}
+	return db + "." + table
+}
+
 // ValidateRemapDb validates a remapdb map: every source/destination must be a
 // valid (unquoted) database identifier, and the source and destination sets must
 // be disjoint (forbidding chaining such as {"x":"y","y":"z"} and self-maps). It
@@ -486,12 +495,12 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 }
 
 func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql string, sqlMode string) error {
-	return AddRewriteHintsWithRoleRules(ctx, stmts, sql, sqlMode, nil)
+	return AddRewriteHintsWithRoleRules(ctx, stmts, sql, sqlMode, nil, 1)
 }
 
 // AddRewriteHintsWithRoleRules also marks and verifies the server-supplied
 // first layer for each protected table.
-func AddRewriteHintsWithRoleRules(ctx context.Context, stmts []tree.Statement, sql, sqlMode string, roleRules map[string]string) error {
+func AddRewriteHintsWithRoleRules(ctx context.Context, stmts []tree.Statement, sql, sqlMode string, roleRules map[string]string, lower int64) error {
 	hints, err := extractLeadingHintsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return err
@@ -546,6 +555,7 @@ func AddRewriteHintsWithRoleRules(ctx context.Context, stmts []tree.Statement, s
 		rewriteOption := &tree.RewriteOption{Rewrites: make(map[string][]*tree.Rewrite)}
 		if len(roleRules) > 0 {
 			rewriteOption.RoleRules = make(map[string][]*tree.Rewrite, len(roleRules))
+			rewriteOption.RoleRuleLowerCaseTableNames = lower
 		}
 		if len(remapDb) > 0 {
 			rewriteOption.RemapDb = remapDb
@@ -556,11 +566,16 @@ func AddRewriteHintsWithRoleRules(ctx context.Context, stmts []tree.Statement, s
 				return moerr.NewParseError(ctx, "statement")
 			}
 			chain := make([]*tree.Rewrite, 0, len(sqls))
-			for _, v := range sqls {
+			_, mandatory := roleRules[key]
+			for i, v := range sqls {
 				if v == "" {
 					return moerr.NewParseError(ctx, "statement")
 				}
-				st, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, 1, sqlMode)
+				ruleCaseMode := int64(1)
+				if i == 0 && mandatory {
+					ruleCaseMode = lower
+				}
+				st, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, ruleCaseMode, sqlMode)
 				if err != nil {
 					return moerr.NewParseError(ctx, err.Error())
 				}
@@ -573,7 +588,7 @@ func AddRewriteHintsWithRoleRules(ctx context.Context, stmts []tree.Statement, s
 				chain = append(chain, &tree.Rewrite{TableName: table, DbName: db, Stmt: st})
 			}
 			rewriteOption.Rewrites[key] = chain
-			if _, mandatory := roleRules[key]; mandatory {
+			if mandatory {
 				rewriteOption.RoleRules[key] = chain[:1]
 			}
 		}

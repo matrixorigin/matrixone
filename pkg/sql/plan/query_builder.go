@@ -9317,6 +9317,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				schema = builder.compCtx.DefaultDatabase()
 			}
 			key := schema + "." + table
+			roleKey, exact, ambiguous := roleRuleTarget(ctx.remapOption, schema, table)
+			if ambiguous {
+				return 0, moerr.NewInvalidInput(builder.GetContext(), "role rule target has an ambiguous case spelling")
+			}
+			if exact {
+				key = roleKey
+			}
 			if chain, ok := ctx.remapOption.Rewrites[key]; ok && len(chain) > 0 {
 				// Replacement SQL has its own table references. An explicit
 				// qualifier on the replaced reference cannot be inherited safely.
@@ -9346,8 +9353,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					}
 					if len(next) > 0 {
 						ctx.remapOption = &tree.RewriteOption{
-							Rewrites:  next,
-							RoleRules: option.RoleRules,
+							Rewrites:                    next,
+							RoleRules:                   option.RoleRules,
+							RoleRuleLowerCaseTableNames: option.RoleRuleLowerCaseTableNames,
 						}
 					}
 				}
@@ -9359,7 +9367,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				// Do not bind here to avoid double-binding. Instead, set the
 				// subquery context name so the outer AliasedTableExpr binds once.
 				if int(nodeID) < len(builder.ctxByNode) && builder.ctxByNode[nodeID] != nil {
-					builder.ctxByNode[nodeID].cteName = key
+					bindingName := key
+					if exact {
+						// The role key identifies the physical relation. Column
+						// qualifiers use the ordinary unqualified binding name.
+						bindingName = tree.NewCStr(table, option.RoleRuleLowerCaseTableNames).Compare()
+					}
+					builder.ctxByNode[nodeID].cteName = bindingName
 				}
 				return
 			}

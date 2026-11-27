@@ -349,11 +349,11 @@ func protectedPolicyValueForStatement(ctx context.Context, ses *Session) (string
 // The protected database barrier can impose a newer write restriction. Role
 // rules and object privileges still use the statement's pinned authorization view.
 // The caller holds authorizationMu.
-func (execution *ExecCtx) recordProtectedPolicy(raw string, snapshot timestamp.Timestamp) {
-	execution.protectedPolicyRaw = raw
-	execution.protectedPolicyLoaded = true
-	if !execution.authorizationSnapshotPinned {
-		execution.authorizationSnapshot = snapshot
+func (execCtx *ExecCtx) recordProtectedPolicy(raw string, snapshot timestamp.Timestamp) {
+	execCtx.protectedPolicyRaw = raw
+	execCtx.protectedPolicyLoaded = true
+	if !execCtx.authorizationSnapshotPinned {
+		execCtx.authorizationSnapshot = snapshot
 	}
 }
 

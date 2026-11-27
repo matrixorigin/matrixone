@@ -36,6 +36,42 @@ var (
 	}
 )
 
+func TestRoleRuleDDLUsesTableNameCaseMode(t *testing.T) {
+	for _, tc := range []struct {
+		mode      int64
+		db, table string
+	}{
+		{0, "PolicyDb", "Docs"},
+		{1, "policydb", "docs"},
+		{2, "PolicyDb", "Docs"},
+	} {
+		add, err := mysql.ParseOne(t.Context(), "alter role reader add rule 'select id from PolicyDb.Docs' on table PolicyDb.Docs", tc.mode)
+		require.NoError(t, err)
+		defer add.Free()
+		require.Equal(t, tc.db, add.(*tree.AlterRoleAddRule).DbName)
+		require.Equal(t, tc.table, add.(*tree.AlterRoleAddRule).TblName)
+
+		drop, err := mysql.ParseOne(t.Context(), "alter role reader drop rule on table PolicyDb.Docs", tc.mode)
+		require.NoError(t, err)
+		defer drop.Free()
+		require.Equal(t, tc.db, drop.(*tree.AlterRoleDropRule).DbName)
+		require.Equal(t, tc.table, drop.(*tree.AlterRoleDropRule).TblName)
+	}
+}
+
+func TestRoleRuleCaseModePreservesOptionalRuleParsing(t *testing.T) {
+	const mandatory = "select id from PolicyDb.Docs"
+	const sql = `/*+ {"rewrites":{"PolicyDb.Docs":["select id from PolicyDb.Docs","select id from OptionalDb.Items"]}} */ select id from PolicyDb.Docs`
+	stmt, err := mysql.ParseOne(t.Context(), sql, 0)
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.NoError(t, AddRewriteHintsWithRoleRules(t.Context(), []tree.Statement{stmt}, sql, "",
+		map[string]string{"PolicyDb.Docs": mandatory}, 0))
+	option := stmt.(*tree.Select).RewriteOption
+	require.Equal(t, mandatory, tree.String(option.RoleRules["PolicyDb.Docs"][0].Stmt, dialect.MYSQL))
+	require.Equal(t, "select id from optionaldb.items", tree.String(option.Rewrites["PolicyDb.Docs"][1].Stmt, dialect.MYSQL))
+}
+
 func TestMysql(t *testing.T) {
 	ctx := context.TODO()
 	if debugSQL.output == "" {
