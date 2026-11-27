@@ -17,6 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -408,6 +411,82 @@ func withRestoreBranchHistory(ctx context.Context, ses *Session, bh BackgroundEx
 			old.GetFeatureFlag()&features.BranchHistoryLostOnRestore != 0, nil
 	})
 	return context.WithValue(ctx, defines.RestoreBranchHistoryKey{}, check), nil
+}
+
+// checkRestoredPickHistory handles protected PICK when there is no shared
+// ancestor. A restored endpoint can be a new generation of a missing fork
+// parent. A parent that still has a live logical identity proves that its fork
+// belongs to a different lineage.
+func checkRestoredPickHistory(ctx context.Context, bh BackgroundExec, info *branchMetaInfo, sourceFlags, targetFlags uint64) error {
+	reject := func() error {
+		return moerr.NewNotSupported(ctx, "DATA BRANCH PICK with FAIL or SKIP requires branch history unavailable after restore")
+	}
+	if (sourceFlags|targetFlags)&features.BranchHistoryLostOnRestore != 0 {
+		return reject()
+	}
+
+	var parents [][]uint64
+	addParents := func(path []uint64, lineageOnly []bool) {
+		start := 0
+		for i := 1; i < len(path); i++ {
+			if !lineageOnly[i] {
+				// Physical generations before this fork are one logical
+				// parent. Any of them can identify its live replacement.
+				parents = append(parents, path[start:i])
+				start = i
+			}
+		}
+	}
+	if sourceFlags&features.RestoredTable != 0 {
+		addParents(info.pathFromLCAToBase, info.pathFromLCAToBaseLineageOnly)
+	}
+	if targetFlags&features.RestoredTable != 0 {
+		addParents(info.pathFromLCAToTar, info.pathFromLCAToTarLineageOnly)
+	}
+	if len(parents) == 0 {
+		return nil
+	}
+
+	var ids []uint64
+	for _, group := range parents {
+		ids = append(ids, group...)
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	literals := make([]string, len(ids))
+	for i, id := range ids {
+		literals[i] = strconv.FormatUint(id, 10)
+	}
+	list := strings.Join(literals, ",")
+	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	defer bh.ClearExecResultSet()
+	sql := fmt.Sprintf("select rel_id,coalesce(rel_logical_id,rel_id) from mo_catalog.mo_tables "+
+		"where rel_id in (%s) or rel_logical_id in (%s)", list, list)
+	results, err := historicalLineageQuery(sysCtx, bh, sql)
+	if err != nil {
+		return err
+	}
+	live := make(map[uint64]struct{}, len(ids))
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			for col := uint64(0); col < 2; col++ {
+				id, err := result.GetUint64(sysCtx, row, col)
+				if err != nil {
+					return err
+				}
+				live[id] = struct{}{}
+			}
+		}
+	}
+	for _, group := range parents {
+		if !slices.ContainsFunc(group, func(id uint64) bool {
+			_, ok := live[id]
+			return ok
+		}) {
+			return reject()
+		}
+	}
+	return nil
 }
 
 // loadBranchDAGWithBH reads mo_branch_metadata under the sys account and
