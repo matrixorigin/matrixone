@@ -300,11 +300,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		zap.Bool("locatorUnchanged", locatorUnchanged),
 		zap.Any("option", opt))
 
-	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx, copyTableDef, copyFakePKCol, preservedGenerated)
-	if err != nil {
-		return nil, err
-	}
-	alterTablePlan.InsertTmpDataSql = insertTmpDml
+	alterTablePlan.InsertTmpDataSql = buildAlterInsertDataSQL(alterTableCtx, copyTableDef, copyFakePKCol, preservedGenerated)
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
@@ -323,75 +319,63 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 var ID atomic.Int64
 
 func buildAlterInsertDataSQL(
-	ctx CompilerContext,
 	alterCtx *AlterTableContext,
-	copyTableDef *TableDef,
-	copyFakePKCol bool,
+	target *TableDef,
+	copyFakePK bool,
 	preservedGenerated map[string]bool,
-) (string, error) {
-
-	schemaName := alterCtx.schemaName
-	originTableName := alterCtx.originTableName
-	copyTableName := alterCtx.copyTableName
-
-	insertBuffer := bytes.NewBufferString("")
-	selectBuffer := bytes.NewBufferString("")
-
-	isFirst := true
-	for key, value := range alterCtx.alterColMap {
-		copyCol := FindColumn(copyTableDef.Cols, key)
-		if copyCol != nil && copyCol.GeneratedCol != nil && !preservedGenerated[copyCol.Name] {
+) string {
+	var columns, expressions bytes.Buffer
+	project := func(name, expr string) {
+		if columns.Len() > 0 {
+			columns.WriteString(", ")
+			expressions.WriteString(", ")
+		}
+		columns.WriteString(sqlquote.Ident(name))
+		expressions.WriteString(expr)
+	}
+	for _, col := range target.Cols {
+		src, ok := alterCtx.alterColMap[col.Name]
+		if !ok || (col.GeneratedCol != nil && !preservedGenerated[col.Name]) {
 			continue
 		}
-		// A newly added auto-increment column needs generated values, while
-		// an existing column's source values (including zero) must be copied.
-		if copyCol != nil && copyCol.Typ.AutoIncr && value.sexprType == exprConstValue {
-			value.sexprStr = "NULL"
+		expr := src.sexprStr
+		if src.sexprType == exprColumnName {
+			expr = sqlquote.Ident(expr)
+		} else if col.Typ.AutoIncr {
+			// Allocate new values while preserving existing values, including zero.
+			expr = "NULL"
 		}
-		if isFirst {
-			insertBuffer.WriteString(sqlquote.Ident(key))
-			if value.sexprType == exprColumnName {
-				selectBuffer.WriteString(sqlquote.Ident(value.sexprStr))
-			} else {
-				selectBuffer.WriteString(value.sexprStr)
-			}
-			isFirst = false
-		} else {
-			insertBuffer.WriteString(", " + sqlquote.Ident(key))
-
-			if value.sexprType == exprColumnName {
-				selectBuffer.WriteString(", " + sqlquote.Ident(value.sexprStr))
-			} else {
-				selectBuffer.WriteString(", " + value.sexprStr)
-			}
-		}
+		project(col.Name, expr)
 	}
 
-	if copyFakePKCol {
-		// why select fake pk col here?
-		// we want to clone unaffected indexes to avoid deep copy table.
-		// but if the primary table has tombstones, the re-generated fake pk column
-		// will be mismatched with these index tables, the shallow copy won't work.
-		// so we need to select these fake pks into the new table.
-		//
-		// example:
-		// create table t1(a int, b int, index(b));
-		// insert into t1 select *, * from generate_series(1,1000*100)g;
-		// delete from t1 where a = 1;
-		// alter table t1 add column c int;
-		// delete from t1 where a = 2;
-		// fails, cannot find this row by join index table and the primary table.
-		//
-		str := fmt.Sprintf(", `%s`", catalog.FakePrimaryKeyColName)
-		insertBuffer.WriteString(str)
-		selectBuffer.WriteString(str)
+	if copyFakePK {
+		// Cloned index entries still address the original hidden keys, including gaps.
+		project(catalog.FakePrimaryKeyColName, sqlquote.Ident(catalog.FakePrimaryKeyColName))
 	}
-
-	insertSQL := fmt.Sprintf("INSERT INTO %s.%s (%s) SELECT %s FROM %s.%s",
-		sqlquote.Ident(schemaName), sqlquote.Ident(copyTableName), insertBuffer.String(),
-		selectBuffer.String(), sqlquote.Ident(schemaName), sqlquote.Ident(originTableName))
-
-	return insertSQL, nil
+	if columns.Len() == 0 {
+		// INSERT SELECT still needs one input per source row when every copied
+		// column is recomputed. Use an independently produced target value.
+		for _, col := range target.Cols {
+			if col.Hidden && !catalog.IsFakePkName(col.Name) {
+				continue
+			}
+			expr := col.Default.GetOriginString()
+			if gen := col.GeneratedCol; gen != nil {
+				if exprHasColRef(gen.Expr) {
+					continue
+				}
+				expr = gen.OriginString
+			}
+			if expr == "" {
+				expr = "NULL"
+			}
+			project(col.Name, expr)
+			break
+		}
+	}
+	return fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM %s",
+		sqlquote.QualifiedIdent(alterCtx.schemaName, alterCtx.copyTableName), columns.Bytes(),
+		expressions.Bytes(), sqlquote.QualifiedIdent(alterCtx.schemaName, alterCtx.originTableName))
 }
 
 const UnKnownColId uint64 = math.MaxUint64

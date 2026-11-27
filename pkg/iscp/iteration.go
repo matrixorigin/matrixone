@@ -1072,8 +1072,13 @@ func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, 
 	}
 	// injection is for ut
 
-	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "processInitSQLNewTxn" {
-		err = moerr.NewInternalErrorNoCtx(msg)
+	if msg, injected := objectio.ISCPExecutorInjected(); injected {
+		switch msg {
+		case "processInitSQLNewTxn":
+			err = moerr.NewInternalErrorNoCtx(msg)
+		case "processInitSQLSnapshot":
+			objectio.WaitForISCPExecutorFault(ctx, msg)
+		}
 	}
 	if err != nil {
 		return

@@ -150,64 +150,38 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 
 	cache.Cache.Remove(storageDef.IndexTableName)
 
-	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
+	// Use the same replacement statements for an inline reindex and for an
+	// asynchronous build. In the latter case the old model remains readable
+	// until ISCP atomically publishes the replacement and its watermark.
+	statements, err := (Hooks{}).SourceSnapshotInitSQL(ctx, indexDefs)
 	if err != nil {
 		return err
 	}
-	for _, sql := range sqls {
-		if err = ctx.RunSql(sql); err != nil {
-			return err
-		}
-	}
-
-	buildSqls, err := genBuildSQL(ctx, indexDefs)
-	if err != nil {
-		return err
-	}
-	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexCagraAlgo.ToString())
-	indexName := metaDef.IndexName
-
 	if forceSync {
-		// Background reindex: build cagra_create synchronously inside
-		// the current txn so the new tag=0 model lands before
-		// subsequent steps observe the index. Then re-register the
-		// CDC task with startFromNow=true (CDC catches only forward
-		// changes; the build we just ran already produced tag=0).
-		for _, sql := range buildSqls {
-			if err = ctx.RunSql(sql); err != nil {
+		for _, sql := range statements {
+			if err := ctx.RunSql(sql); err != nil {
 				return err
 			}
 		}
-		if err = ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(),
-			originalTableDef.Name, indexName); err != nil {
-			return err
-		}
-		if err = ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
-			indexName, sinkerType, true, "", originalTableDef); err != nil {
-			return err
-		}
-		return registerIdxcronUpdate(ctx, metaDef, ctx.QryDatabase(), originalTableDef)
 	}
-
-	// Always-async path (CREATE INDEX, foreground reindex): defer the
-	// cagra_create build to the CDC pipeline's ProcessInitSQL step.
-	// cuvs storage needs both tag=0 (model blob) and tag=1 (CDC
-	// events); CagraSync only writes tag=1, so we stash the build SQL
-	// as InitSQL — unlike HNSW which passes "" because HnswSync
-	// derives both layers from the event stream alone.
-	if err = ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(),
-		originalTableDef.Name, indexName); err != nil {
+	db := ctx.QryDatabase()
+	if err := ctx.DropIndexCdcTask(originalTableDef, db, originalTableDef.Name, metaDef.IndexName); err != nil {
 		return err
 	}
-	if err = ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
-		indexName, sinkerType, false, strings.Join(buildSqls, ";"), originalTableDef); err != nil {
+	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexCagraAlgo.ToString())
+	if forceSync {
+		err = ctx.CreateIndexCdcTask(db, originalTableDef.Name, originalTableDef.TblId,
+			metaDef.IndexName, sinkerType, true, "", originalTableDef)
+	} else {
+		err = ctx.CreateIndexSnapshotCdcTask(metaDef.IndexName, sinkerType, statements)
+	}
+	if err != nil {
 		return err
 	}
-	return registerIdxcronUpdate(ctx, metaDef, ctx.QryDatabase(), originalTableDef)
+	return registerIdxcronUpdate(ctx, metaDef, db, originalTableDef)
 }
 
-// SourceSnapshotInitSQL rebuilds the trained model after COPY commits. The
-// clear and full-source build execute together with ISCP's snapshot progress.
+// SourceSnapshotInitSQL replaces the complete model from a single source snapshot.
 func (Hooks) SourceSnapshotInitSQL(ctx compileplugin.CompileContext, defs map[string]*plan.IndexDef) ([]string, error) {
 	clear, err := genDeleteSQL(defs, ctx.QryDatabase())
 	if err != nil {

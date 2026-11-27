@@ -39,6 +39,7 @@ type stubCompileContext struct {
 	// fired.
 	lastCdcTask struct {
 		called       bool
+		snapshot     []string
 		startFromNow bool
 		sql          string
 	}
@@ -83,6 +84,11 @@ func (s *stubCompileContext) CreateIndexCdcTask(_, _ string, _ uint64, _ string,
 	s.lastCdcTask.called = true
 	s.lastCdcTask.startFromNow = startFromNow
 	s.lastCdcTask.sql = sql
+	return nil
+}
+func (s *stubCompileContext) CreateIndexSnapshotCdcTask(_ string, _ int8, statements []string) error {
+	s.lastCdcTask.called = true
+	s.lastCdcTask.snapshot = statements
 	return nil
 }
 func (s *stubCompileContext) DropIndexCdcTask(_ *plan.TableDef, _, _, _ string) error {
@@ -350,7 +356,9 @@ func TestCagraHandleCreateIndex_AsyncTrue(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
 	require.False(t, ctx.stubCompileContext.lastCdcTask.startFromNow, "async=true → startFromNow=false")
-	require.NotEmpty(t, ctx.stubCompileContext.lastCdcTask.sql, "async=true → InitSQL carries the build")
+	want, err := (Hooks{}).SourceSnapshotInitSQL(ctx, defs)
+	require.NoError(t, err)
+	require.Equal(t, want, ctx.stubCompileContext.lastCdcTask.snapshot)
 	require.True(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "async branch must also register cron metadata row")
 	require.Equal(t, actionCagraReindex, ctx.stubCompileContext.lastIdxcronUpdate.action)
 }

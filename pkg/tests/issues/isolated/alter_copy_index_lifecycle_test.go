@@ -17,9 +17,11 @@ package isolated
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -249,6 +252,67 @@ func TestAlterCopyIndexLifecycle(t *testing.T) {
 		waitThrough(t, time.Now())
 		nearest(t, 6)
 		exec(t, "drop table h")
+	})
+	t.Run("async create registers its source snapshot", func(t *testing.T) {
+		exec(t, "create table init_gpu(id bigint primary key,v vecf32(8))")
+		defer exec(t, "drop table init_gpu")
+		for _, tc := range []struct{ algo, index, ddl string }{
+			{"cagra", "cg", "create index cg using cagra on init_gpu(v) op_type 'vector_l2_ops' ASYNC"},
+			{"ivfpq", "pq", "alter table init_gpu add index pq using ivfpq (v) op_type 'vector_l2_ops' lists=2 m=2 bits_per_code=8 ASYNC"},
+		} {
+			t.Run(tc.algo, func(t *testing.T) {
+				exec(t, "set experimental_"+tc.algo+"_index=1")
+				// Read our uncommitted job, then roll it back before ISCP can run it.
+				exec(t, "begin")
+				defer exec(t, "rollback")
+				if _, enabled := indexplugin.Get(tc.algo); !enabled {
+					_, err := conn.ExecContext(ctx, tc.ddl)
+					require.ErrorContains(t, err, "unsupported index type: "+tc.algo)
+					return
+				}
+				exec(t, tc.ddl)
+				var raw string
+				require.NoError(t, conn.QueryRowContext(ctx, "select job_spec from mo_catalog.mo_iscp_log where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='copy_hnsw_lifecycle' and relname='init_gpu') and job_name=? and drop_at is null", "index_"+tc.index).Scan(&raw))
+				var spec iscp.JobSpec
+				require.NoError(t, json.Unmarshal([]byte(raw), &spec))
+				require.True(t, spec.InitSQLCoversSnapshot, "the model and its source watermark must commit together")
+				payload, err := base64.StdEncoding.DecodeString(spec.InitSQL)
+				require.NoError(t, err)
+				var statements []string
+				require.NoError(t, json.Unmarshal(payload, &statements))
+				require.NotEmpty(t, statements)
+				require.Contains(t, statements[len(statements)-1], tc.algo+"_create(")
+			})
+		}
+	})
+	t.Run("copy recomputes every visible column", func(t *testing.T) {
+		exec(t, "create table only_g(x int)")
+		defer exec(t, "drop table only_g")
+		exec(t, "insert into only_g values(1),(2),(3)")
+		exec(t, "delete from only_g where x=2")
+		var first, last, copiedFirst, copiedLast uint64
+		require.NoError(t, conn.QueryRowContext(ctx, "select min(__mo_fake_pk_col),max(__mo_fake_pk_col) from only_g").Scan(&first, &last))
+		exec(t, "alter table only_g algorithm=copy,modify x int generated always as (7) stored")
+		var n, sum int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*),sum(x),min(__mo_fake_pk_col),max(__mo_fake_pk_col) from only_g").Scan(&n, &sum, &copiedFirst, &copiedLast))
+		require.Equal(t, first, copiedFirst)
+		require.Equal(t, last, copiedLast)
+		require.Equal(t, 2, n)
+		require.Equal(t, 14, sum)
+
+		// A generated primary key must still deduplicate the recomputed values.
+		_, err := conn.ExecContext(ctx, "alter table only_g algorithm=copy,modify x int generated always as (9) stored, add primary key (x)")
+		require.Error(t, err)
+		require.Contains(t, strings.ToLower(err.Error()), "duplicate")
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*),sum(x) from only_g").Scan(&n, &sum))
+		require.Equal(t, 2, n)
+		require.Equal(t, 14, sum)
+
+		exec(t, "delete from only_g limit 1")
+		exec(t, "alter table only_g algorithm=copy,modify x int generated always as (9) stored, add primary key (x)")
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*),sum(x) from only_g").Scan(&n, &sum))
+		require.Equal(t, 1, n)
+		require.Equal(t, 9, sum)
 	})
 	t.Run("cuVS generated clear preserves physical table identities", func(t *testing.T) {
 		// Exercise the actual providers' SQL through the CPU SQL planner. The native

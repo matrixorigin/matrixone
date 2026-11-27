@@ -38,6 +38,7 @@ import (
 // real behavior; the remaining 16 CompileContext methods are zero-value stubs
 // (BuildIdxcronMetadata never calls them).
 type subCompileCtx struct {
+	compileplugin.CompileContext
 	tableDef       *plan.TableDef
 	registeredMeta []byte // captured by RegisterIdxcronUpdate, if ever called
 }

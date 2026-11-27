@@ -32,6 +32,7 @@ import (
 // Most methods are no-ops since these tests exercise each Hook just far
 // enough to cover its entry-log line.
 type stubCtx struct {
+	compileplugin.CompileContext
 	isFrontend       bool
 	qryDatabase      string
 	originalTableDef *plan.TableDef

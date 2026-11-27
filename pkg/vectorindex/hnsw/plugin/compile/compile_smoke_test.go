@@ -30,6 +30,7 @@ import (
 // tests. Each Hook is exercised just far enough to cover its
 // entry-log line.
 type stubCtx struct {
+	compileplugin.CompileContext
 	isFrontend bool
 }
 

@@ -178,7 +178,7 @@ func createIndexCdcTask(c *Compile, dbname, tablename string, tableid uint64, in
 	}
 
 	if !ok && coversSnapshot {
-		return moerr.NewInternalError(c.proc.Ctx, "COPY index initializer was not registered")
+		return moerr.NewInternalErrorf(c.proc.Ctx, "source snapshot initializer for index %q was not registered", indexname)
 	}
 	if !ok {
 		// cdc task already exist. ignore it.  IVFFLAT alter reindex will call CreateIndexCdcTask multiple times.

@@ -156,14 +156,10 @@ func (p *pluginCompileCtx) SinkerTypeFromAlgo(algo string) int8 {
 
 func (p *pluginCompileCtx) CreateIndexCdcTask(dbName, tableName string, tableID uint64, indexName string,
 	sinkerType int8, startFromNow bool, sql string, tableDef *plan.TableDef) error {
-	copyReplacement := p.isCopyReplacement(dbName, tableName, tableID)
-	if copyReplacement {
-		// The synchronous build sees COPY's workspace rows, whose commit is
-		// later than this transaction's snapshot. Replaying that interval as
-		// INSERTs would add the copied keys to the freshly built index twice.
+	if p.isCopyReplacement(dbName, tableName, tableID) {
+		// COPY's workspace rows commit after the DDL snapshot. Bootstrap the
+		// replacement from committed rows before consuming later changes.
 		startFromNow = false
-	}
-	if (copyReplacement || sql != "") && p.originalTableDef != nil && tableID != 0 && tableID == p.mainTableID && tableID == p.originalTableDef.TblId && dbName == p.qryDatabase && tableName == p.originalTableDef.Name {
 		defs := make(map[string]*plan.IndexDef)
 		var algo string
 		for _, idx := range p.originalTableDef.Indexes {
@@ -178,15 +174,20 @@ func (p *pluginCompileCtx) CreateIndexCdcTask(dbName, tableName string, tableID 
 				if err != nil {
 					return err
 				}
-				encoded, err := json.Marshal(statements)
-				if err != nil {
-					return err
-				}
-				return createIndexCdcTask(p.c, dbName, tableName, tableID, indexName, sinkerType, false, string(encoded), true, tableDef)
+				return p.CreateIndexSnapshotCdcTask(indexName, sinkerType, statements)
 			}
 		}
 	}
 	return CreateIndexCdcTask(p.c, dbName, tableName, tableID, indexName, sinkerType, startFromNow, sql, tableDef)
+}
+
+func (p *pluginCompileCtx) CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, statements []string) error {
+	encoded, err := json.Marshal(statements)
+	if err != nil {
+		return err
+	}
+	table := p.originalTableDef
+	return createIndexCdcTask(p.c, p.qryDatabase, table.Name, table.TblId, indexName, sinkerType, false, string(encoded), true, table)
 }
 
 func (p *pluginCompileCtx) isCopyReplacement(database, table string, id uint64) bool {

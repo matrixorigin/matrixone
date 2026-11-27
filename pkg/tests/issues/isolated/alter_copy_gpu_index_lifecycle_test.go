@@ -31,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -68,7 +70,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 		create string
 	}{
 		{"cagra", "create index ix using cagra on t(v) op_type 'vector_l2_ops' intermediate_graph_degree=8 graph_degree=4 ASYNC"},
-		{"ivfpq", "create index ix using ivfpq on t(v) op_type 'vector_l2_ops' lists=2 m=2 bits_per_code=8 ASYNC"},
+		{"ivfpq", "create index ix using ivfpq on t(v) op_type 'vector_l2_ops' lists=2 m=2 bits_per_code=4 ASYNC"},
 	} {
 		t.Run(tc.algo, func(t *testing.T) {
 			dbName := "copy_gpu_" + tc.algo
@@ -92,11 +94,32 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 				vector := strings.TrimSuffix(strings.Repeat(fmt.Sprintf("%d,", i), 8), ",")
 				rows = append(rows, fmt.Sprintf("(%d,'[%s]')", i, vector))
 			}
-			rows = append(rows, "(21,'[105,105,105,105,105,105,105,105]')")
+			rows = append(rows, "(21,'[105,105,105,105,105,105,105,105]')", "(22,'[-1,-1,-1,-1,-1,-1,-1,-1]')")
 			exec("insert into t values " + strings.Join(rows, ","))
 			var originalTable uint64
 			require.NoError(t, conn.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='t'", dbName).Scan(&originalTable))
+			// Delete the exact nearest row after the initializer has acquired S1.
+			// A second full-table snapshot cannot see this tombstone.
+			fault.Enable()
+			defer fault.Disable()
+			const phase = "processInitSQLSnapshot"
+			waitKey := objectio.ISCPExecutorFaultWaitKey(phase)
+			waiters := waitKey + ":waiters"
+			require.NoError(t, fault.AddFaultPoint(ctx, waitKey, ":::", "wait", 0, "", false))
+			defer fault.RemoveFaultPoint(ctx, waitKey)
+			require.NoError(t, fault.AddFaultPoint(ctx, waiters, ":::", "getwaiters", 0, waitKey, false))
+			defer fault.RemoveFaultPoint(ctx, waiters)
+			require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_CDCExecutor, ":::", "return", 0, phase, false))
+			defer fault.RemoveFaultPoint(ctx, objectio.FJ_CDCExecutor)
 			exec(tc.create)
+			require.Eventually(t, func() bool {
+				n, _, ok := fault.TriggerFault(waiters)
+				return ok && n > 0
+			}, time.Minute, 50*time.Millisecond)
+			exec("delete from t where id=22")
+			deleteEnd := types.BuildTS(time.Now().UnixNano(), 0)
+			_, err = fault.RemoveFaultPoint(ctx, waitKey)
+			require.NoError(t, err)
 
 			type job struct {
 				id        uint64
@@ -138,7 +161,34 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 				}, 2*time.Minute, 100*time.Millisecond)
 				return j
 			}
-			initialJob := waitJob(originalTable, types.TS{})
+			explain := func(query string) string {
+				t.Helper()
+				planRows, err := conn.QueryContext(ctx, "explain "+query)
+				require.NoError(t, err)
+				defer planRows.Close()
+				var plan strings.Builder
+				for planRows.Next() {
+					var line string
+					require.NoError(t, planRows.Scan(&line))
+					plan.WriteString(line)
+				}
+				require.NoError(t, planRows.Err())
+				return strings.ToLower(plan.String())
+			}
+			initialJob := waitJob(originalTable, deleteEnd)
+			deletedProbe := " order by l2_distance(v,'[-1,-1,-1,-1,-1,-1,-1,-1]') limit 1"
+			for _, hint := range []string{"", " ignore index(ix)"} {
+				q := "select id from t" + hint + deletedProbe
+				if hint == "" {
+					require.Contains(t, explain(q), tc.algo+"_search")
+				} else {
+					require.NotContains(t, explain(q), tc.algo+"_search")
+				}
+				var id int64
+				require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&id), q)
+				require.EqualValues(t, 1, id, q)
+			}
+			require.True(t, initialJob.spec.InitSQLCoversSnapshot)
 			exec("alter table t algorithm=copy,add column marker int default 0")
 			var replacementTable uint64
 			require.NoError(t, conn.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='t'", dbName).Scan(&replacementTable))
@@ -158,20 +208,6 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+storageSQL+" where tag=0").Scan(&count))
 			require.Positive(t, count, "native model must be published with snapshot progress")
 
-			explain := func(query string) string {
-				t.Helper()
-				planRows, err := conn.QueryContext(ctx, "explain "+query)
-				require.NoError(t, err)
-				defer planRows.Close()
-				var plan strings.Builder
-				for planRows.Next() {
-					var line string
-					require.NoError(t, planRows.Scan(&line))
-					plan.WriteString(line)
-				}
-				require.NoError(t, planRows.Err())
-				return strings.ToLower(plan.String())
-			}
 			orderBy := " order by l2_distance(v,'[100,100,100,100,100,100,100,100]') limit 1"
 			require.Contains(t, explain("select id from t"+orderBy), tc.algo+"_search", "the query must exercise the native index")
 			require.NotContains(t, explain("select id from t ignore index(ix)"+orderBy), tc.algo+"_search", "the comparison must scan the source table")
