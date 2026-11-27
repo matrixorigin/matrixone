@@ -306,9 +306,6 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	if err := moerr.PipelineContextError(proc.Ctx); err != nil {
 		return false, err
 	}
-	if ap.ctr.remoteRegsCnt == 0 {
-		return true, nil
-	}
 
 	encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
 	if errEncode != nil {
@@ -316,7 +313,8 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	}
 
 	retryCount := ap.ctr.remoteRegsCnt
-	unavailable := false
+	// An empty list on entry has no receiver stop to justify ending this batch.
+	unavailable := retryCount == 0
 	for ap.ctr.remoteRegsCnt > 0 {
 		regIdx := ap.ctr.sendCnt % ap.ctr.remoteRegsCnt
 		reg := ap.ctr.remoteReceivers[regIdx]

@@ -1368,6 +1368,7 @@ func Test_sendToAnyRemoteFunc_RemoteRegsCntZero(t *testing.T) {
 
 	require.False(t, end)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	require.Contains(t, err.Error(), "all unavailable")
 }
 
