@@ -228,7 +228,7 @@ func (ca *checkToAdd) check() []*operator.Operator {
 			for replicasToAdd > uint32(len(adding[shardID])) {
 				bestStore := selectStore(
 					ca.lc.logState.Shards[shardID],
-					ca.lc.workingStores,
+					working,
 					locality,
 				)
 				if bestStore == "" {
