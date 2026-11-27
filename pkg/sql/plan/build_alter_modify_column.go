@@ -34,7 +34,7 @@ func updateNewColumnInTableDef(
 ) (bool, error) {
 	ctx := cctx.GetContext()
 
-	nTy, err := getTypeFromAst(ctx, nColSpec.Type)
+	nTy, err := getDDLColumnType(ctx, nColSpec, enumDDLDefault{})
 	if err != nil {
 		return false, err
 	}
@@ -42,11 +42,7 @@ func updateNewColumnInTableDef(
 		return false, err
 	}
 
-	if isEnumPlanType(&nTy) {
-		if err := applyEnumColumnCollation(ctx, &nTy, nColSpec.Attributes, enumDDLDefault{}); err != nil {
-			return false, err
-		}
-	} else if !applyColumnCharset(&nTy, nColSpec.Attributes) {
+	if !isEnumPlanType(&nTy) && !applyColumnCharset(&nTy, nColSpec.Attributes) {
 		return false, moerr.NewNotSupported(ctx, "only utf8mb4 and utf8mb4_bin are supported on CHAR, VARCHAR and TEXT columns")
 	}
 

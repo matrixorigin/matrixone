@@ -236,7 +236,7 @@ numeric_precision    BIGINT(0)    YES        null
 numeric_scale    BIGINT(0)    YES        null        
 datetime_precision    BIGINT(0)    YES        null        
 character_set_name    VARCHAR(7)    YES        null
-collation_name    VARCHAR(11)    YES        null
+collation_name    VARCHAR(18)    YES        null
 column_type    VARCHAR(65535)    YES        null        
 column_key    VARCHAR(3)    YES        null        
 extra    VARCHAR(24)    YES        null        

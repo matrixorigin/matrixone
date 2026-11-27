@@ -1392,14 +1392,7 @@ func buildCreateTable(
 func getCreateColumnType(ctx context.Context, stmt *tree.CreateTable, col *tree.ColumnTableDef) (Type, error) {
 	source, ok := stmt.InheritedEnums[strings.ToLower(col.Name.ColName())]
 	if !ok {
-		typ, err := getTypeFromAst(ctx, col.Type)
-		if err != nil {
-			return Type{}, err
-		}
-		if err := applyEnumColumnCollation(ctx, &typ, col.Attributes, enumCreateTableDefault(stmt.Options)); err != nil {
-			return Type{}, err
-		}
-		return typ, nil
+		return getDDLColumnType(ctx, col, enumCreateTableDefault(stmt.Options))
 	}
 	decl, ok := col.Type.(*tree.T)
 	if !ok || decl.InternalType.Oid != uint32(defines.MYSQL_TYPE_ENUM) {

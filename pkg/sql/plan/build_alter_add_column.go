@@ -57,7 +57,7 @@ func AddColumn(
 			"column name %s is reserved for external table scans", newColName)
 	}
 
-	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
+	colType, err := getDDLColumnType(ctx.GetContext(), specNewColumn, enumDDLDefault{})
 	if err != nil {
 		return false, err
 	}
@@ -66,11 +66,7 @@ func AddColumn(
 	}
 	// Preserve the supported declaration while retaining ADD's acceptance of
 	// other charset declarations, as with CREATE TABLE.
-	if isEnumPlanType(&colType) {
-		if err := applyEnumColumnCollation(ctx.GetContext(), &colType, specNewColumn.Attributes, enumDDLDefault{}); err != nil {
-			return false, err
-		}
-	} else {
+	if !isEnumPlanType(&colType) {
 		applyColumnCharset(&colType, specNewColumn.Attributes)
 	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {

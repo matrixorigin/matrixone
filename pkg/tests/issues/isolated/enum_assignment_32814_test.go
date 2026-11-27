@@ -135,6 +135,21 @@ func TestBinaryEnumAssignment32814(t *testing.T) {
 		require.NoError(t, rows.Err())
 		require.Equal(t, []int{1, 2}, positions)
 	})
+	t.Run("authored padding", func(t *testing.T) {
+		exec(t, "create table padded (id int primary key,e enum('a','A ')) collate=utf8mb4_bin partition by key(id) partitions 2")
+		exec(t, "insert into padded select id,e from seed")
+		require.Equal(t, want, read(t, "padded"), "partition children must use the normalized target domain")
+
+		exec(t, "create table padded_alter (id int primary key)")
+		exec(t, "insert into padded_alter values (1)")
+		exec(t, "alter table padded_alter algorithm=copy, add column e enum('B','A ')"+opt+" default 'A'")
+		require.Equal(t, []witness{{1, "A", "41", 2}}, read(t, "padded_alter"))
+		exec(t, "alter table padded_alter algorithm=copy, modify column e enum('A ','B')"+opt)
+		require.Equal(t, []witness{{1, "A", "41", 1}}, read(t, "padded_alter"))
+		_, err := conn.ExecContext(ctx, "alter table padded_alter algorithm=copy, modify column e enum('A','a ') collate utf8mb4_general_ci")
+		require.ErrorContains(t, err, "duplicate ENUM member")
+		require.Equal(t, []witness{{1, "A", "41", 1}}, read(t, "padded_alter"))
+	})
 	t.Run("column metadata", func(t *testing.T) {
 		exec(t, "create table meta (b enum('A','a')"+opt+
 			", g enum('A','Other') collate utf8mb4_general_ci, e enum('A','Other'), s varchar(5)"+opt+")")

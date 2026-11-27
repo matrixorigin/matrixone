@@ -32,11 +32,14 @@ func TestEnumAssignmentDDLIdentity(t *testing.T) {
 		inherited, reject bool
 	}{
 		{"explicit binary", "create table t(e enum('A','a') collate utf8mb4_bin)", types.EnumCollationUTF8Bin, 2, false, false},
-		{"explicit general ci", "create table t(e enum('A','a') collate utf8mb4_general_ci)", types.EnumCollationGeneralCI, 1, false, false},
+		{"explicit general ci", "create table t(e enum('A','Other') collate utf8mb4_general_ci)", types.EnumCollationGeneralCI, 1, false, false},
 		{"same CREATE default", "create table t(e enum('A','a')) collate=utf8mb4_bin", types.EnumCollationUTF8Bin, 2, false, false},
 		{"explicit overrides CREATE default", "create table t(e enum('A','a') collate utf8mb4_bin) collate=utf8mb4_general_ci", types.EnumCollationUTF8Bin, 2, false, false},
 		{"bare stays legacy", "create table t(e enum('A','a'))", types.EnumCollationLegacy, 1, false, false},
 		{"typed legacy overrides displayed options", "create table t(e enum('A','a')) collate=utf8mb4_bin", types.EnumCollationLegacy, 1, true, false},
+		{"binary padding", "create table t(e enum('B','a ')) collate=utf8mb4_bin", types.EnumCollationUTF8Bin, 2, false, false},
+		{"binary duplicate after normalization", "create table t(e enum('a','a ') collate utf8mb4_bin)", 0, 0, false, true},
+		{"general ci equivalent duplicate", "create table t(e enum('a','A ') collate utf8mb4_general_ci)", 0, 0, false, true},
 		{"unsupported explicit collation", "create table t(e enum('A','a') collate utf8mb4_0900_bin)", 0, 0, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -25,7 +25,9 @@ assignments use an explicit four-argument overload. Exact supported names are
 ## DDL provenance
 
 - Explicit supported column COLLATE authors that identity on CREATE or
-  ADD/MODIFY/CHANGE. Unsupported column charset/collation declarations reject.
+  ADD/MODIFY/CHANGE. Authoring trims trailing ASCII spaces before encoding and
+  rejects duplicate labels under the effective collation. Unsupported column
+  charset/collation declarations reject.
 - A supported table COLLATE supplied in the same CREATE is authoritative for
   new ENUM columns in that statement unless a supported column declaration
   overrides it. This records each column's effective identity, not a new
@@ -35,8 +37,8 @@ assignments use an explicit four-argument overload. Exact supported names are
   for unqualified ENUM authoring in a later ALTER. Such a declaration keeps
   existing legacy behavior; use a column COLLATE to select a new identity.
   Existing metadata, original CREATE SQL and server settings are not used to
-  guess a legacy column's identity. Persisting defaults for subsequent DDL is
-  separate work.
+  guess a legacy column's identity. Persisting defaults for subsequent DDL and updating bare ENUM authoring
+  are separate work.
 - Existing typed reconstruction owns CREATE LIKE, partition rebuild and ALTER
   COPY. Preserve the saved identity, even where the old SQL spelled a COLLATE
   that 4.2 ignored. SHOW CREATE materializes the actual known column identity.
@@ -45,8 +47,8 @@ assignments use an explicit four-argument overload. Exact supported names are
 
 ## Scope and release gate
 
-This change does not switch codecs, change ENUM comparison operators, enforce
-new general-CI duplicate rules, repair old rows, or redesign physical index
+This change does not switch codecs, change ENUM comparison operators, repair
+old rows, or redesign physical index
 keys. Copies of an existing typed index column retain the new metadata; COPY's
 key optimization is conservative across changed identities. SHOW FULL COLUMNS and INFORMATION_SCHEMA.COLUMNS expose the effective identity
 for typed ENUM columns. The tenant upgrade refreshes existing COLUMNS views.

@@ -250,6 +250,10 @@ func (s *storage) Create(
 		return err
 	}
 
+	if err := inheritPartitionEnums(ctx, stmt, def); err != nil {
+		return err
+	}
+
 	opts := executor.Options{}.
 		WithTxn(txnOp).
 		WithAccountID(accountID).
@@ -276,7 +280,6 @@ func (s *storage) Create(
 				return err
 			}
 
-			inheritedEnums := tree.InheritedEnumTypes(def)
 			for _, p := range metadata.Partitions {
 				err := s.createPartitionTable(
 					def,
@@ -284,7 +287,7 @@ func (s *storage) Create(
 					metadata,
 					p,
 					txn,
-					inheritedEnums,
+					stmt.InheritedEnums,
 				)
 				if err != nil {
 					return err
@@ -994,7 +997,18 @@ func parsePartitionCreate(ctx context.Context, def *plan.TableDef) (*tree.Create
 		parsed.Free()
 		return nil, moerr.NewInternalError(ctx, "invalid partition table CREATE metadata")
 	}
+	if err := inheritPartitionEnums(ctx, stmt, def); err != nil {
+		stmt.Free()
+		return nil, err
+	}
+	return stmt, nil
+}
+
+func inheritPartitionEnums(ctx context.Context, stmt *tree.CreateTable, def *plan.TableDef) error {
 	stmt.InheritedEnums = tree.InheritedEnumTypes(def)
+	if len(stmt.InheritedEnums) == 0 {
+		return nil
+	}
 	for _, item := range stmt.Defs {
 		col, ok := item.(*tree.ColumnTableDef)
 		if !ok {
@@ -1006,17 +1020,15 @@ func parsePartitionCreate(ctx context.Context, def *plan.TableDef) (*tree.Create
 		}
 		members, err := types.DecodeEnumMembers(domain.Enumvalues, domain.EnumEncoding)
 		if err != nil {
-			stmt.Free()
-			return nil, err
+			return err
 		}
 		typ, ok := col.Type.(*tree.T)
 		if !ok || typ.InternalType.Oid != uint32(defines.MYSQL_TYPE_ENUM) {
-			stmt.Free()
-			return nil, moerr.NewInternalErrorf(ctx, "unexpected type for partition ENUM column %q", col.Name.ColName())
+			return moerr.NewInternalErrorf(ctx, "unexpected type for partition ENUM column %q", col.Name.ColName())
 		}
 		typ.InternalType.EnumValues = members
 	}
-	return stmt, nil
+	return nil
 }
 
 func getPartitionTableCreateSQL(
