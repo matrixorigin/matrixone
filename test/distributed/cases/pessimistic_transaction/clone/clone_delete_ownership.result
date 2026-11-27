@@ -118,5 +118,32 @@ select id from persisted_b order by id;
 ➤ id[4,32,0]  𝄀
 2  𝄀
 3
+create table inherited_deletes(id int primary key);
+insert into inherited_deletes values (1),(2),(3),(4);
+set @flush_result = (select mo_ctl('dn','flush','clone_delete_ownership.inherited_deletes'));
+delete from inherited_deletes where id=2;
+set @flush_result = (select mo_ctl('dn','flush','clone_delete_ownership.inherited_deletes'));
+begin;
+create table rewritten clone inherited_deletes;
+select id from rewritten order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+4
+delete from rewritten where id=3;
+select id from rewritten order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+4
+select id from inherited_deletes order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+4
+commit;
+select id from rewritten order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+4
 set session transaction_isolation=default;
 drop database clone_delete_ownership;
