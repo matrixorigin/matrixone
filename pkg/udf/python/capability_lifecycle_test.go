@@ -19,7 +19,9 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow/flight/gen/flight"
@@ -88,6 +90,109 @@ func TestCancelledReadinessDoesNotWaitForOtherProbe(t *testing.T) {
 			t.Errorf("released cancelled probe returned %v", err)
 		}
 		t.Fatal("already-cancelled readiness blocked behind another request's capabilityMu/Flight probe; it returned only after the unrelated probe was released")
+	}
+}
+
+type sharedCapabilityClient struct {
+	flight.FlightServiceClient
+	calls      atomic.Int32
+	workerFail chan struct{}
+	response   []byte
+}
+
+func (c *sharedCapabilityClient) DoAction(ctx context.Context, _ *flight.Action, _ ...grpc.CallOption) (flight.FlightService_DoActionClient, error) {
+	if c.calls.Add(1) == 1 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-c.workerFail:
+			return nil, context.Canceled
+		}
+	}
+	return &finishAckActionStream{result: &flight.Result{Body: c.response}}, nil
+}
+
+func TestCapabilityWaitersIsolateOwnerCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		wantErr error
+		retry   bool
+	}{
+		{name: "owner-cancelled", wantErr: context.Canceled, retry: true},
+		{name: "owner-deadline", wantErr: context.DeadlineExceeded, retry: true},
+		{name: "worker-cancelled", wantErr: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				g, err := NewGateway(ClientConfig{Enabled: true, AllowUnisolated: true, ServerAddress: "127.0.0.1:1", RequestTimeout: 30 * time.Second})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer g.Close()
+				capabilities := currentTestCapabilities()
+				body, err := json.Marshal(capabilities)
+				if err != nil {
+					t.Fatal(err)
+				}
+				client := &sharedCapabilityClient{workerFail: make(chan struct{}), response: body}
+				g.flight = client
+				ownerCtx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if tc.wantErr == context.DeadlineExceeded {
+					var cancelTimeout context.CancelFunc
+					ownerCtx, cancelTimeout = context.WithTimeout(ownerCtx, time.Second)
+					defer cancelTimeout()
+				}
+				ownerDone := make(chan error, 1)
+				go func() { ownerDone <- g.CheckLanguageReady(ownerCtx, udf.LanguagePython) }()
+				synctest.Wait()
+
+				type result struct {
+					snapshot capabilitySnapshot
+					err      error
+				}
+				waiters := make(chan result, 2)
+				for _, forceRefresh := range []bool{false, true} {
+					go func() {
+						snapshot, err := g.ensureCapabilitySnapshot(context.Background(), client, forceRefresh)
+						waiters <- result{snapshot: snapshot, err: err}
+					}()
+				}
+				synctest.Wait()
+				if calls := client.calls.Load(); calls != 1 || len(waiters) != 0 {
+					t.Fatalf("waiters did not join the live probe: calls=%d results=%d", calls, len(waiters))
+				}
+
+				switch tc.name {
+				case "owner-cancelled":
+					cancel()
+				case "owner-deadline":
+					<-ownerCtx.Done()
+				case "worker-cancelled":
+					close(client.workerFail)
+				}
+				if err := <-ownerDone; !errors.Is(err, tc.wantErr) {
+					t.Errorf("owner error = %v, want %v", err, tc.wantErr)
+				}
+				wantCalls := int32(1)
+				if tc.retry {
+					wantCalls++
+				}
+				for range 2 {
+					got := <-waiters
+					if tc.retry {
+						if got.err != nil || got.snapshot.response.LeaseEpoch != capabilities.LeaseEpoch {
+							t.Errorf("live waiter received lease %d and error %v", got.snapshot.response.LeaseEpoch, got.err)
+						}
+					} else if !errors.Is(got.err, tc.wantErr) {
+						t.Errorf("waiter error = %v, want worker error %v", got.err, tc.wantErr)
+					}
+				}
+				if calls := client.calls.Load(); calls != wantCalls {
+					t.Errorf("capability RPC calls = %d, want %d", calls, wantCalls)
+				}
+			})
+		})
 	}
 }
 

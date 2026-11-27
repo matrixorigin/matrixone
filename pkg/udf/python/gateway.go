@@ -1349,11 +1349,12 @@ type capabilitySnapshot struct {
 }
 
 type capabilityProbe struct {
-	generation uint64
-	done       chan struct{}
-	cancel     context.CancelFunc
-	snapshot   capabilitySnapshot
-	err        error
+	generation    uint64
+	done          chan struct{}
+	cancel        context.CancelFunc
+	snapshot      capabilitySnapshot
+	err           error
+	ownerCanceled bool
 }
 
 func (g *Gateway) ensureCapabilities(ctx context.Context, client flight.FlightServiceClient, forceRefresh bool) error {
@@ -1361,51 +1362,62 @@ func (g *Gateway) ensureCapabilities(ctx context.Context, client flight.FlightSe
 	return err
 }
 
-// One caller owns the RPC. Joiners wait with their own deadline and cancellation;
-// no network operation or wait holds mu. The owner alone retires the probe.
+// One caller owns the RPC and retires its slot. Joiners wait with their own
+// deadline and may reacquire the slot if that owner's context ends.
 func (g *Gateway) ensureCapabilitySnapshot(ctx context.Context, client flight.FlightServiceClient, forceRefresh bool) (capabilitySnapshot, error) {
 	ctx, release := g.withLifecycleContext(ctx)
 	defer release()
 	ctx, cancel := context.WithTimeout(ctx, g.cfg.RequestTimeout)
 	defer cancel()
-	if err := ctx.Err(); err != nil {
-		return capabilitySnapshot{}, err
-	}
-	g.mu.Lock()
-	if g.closed {
-		g.mu.Unlock()
-		return capabilitySnapshot{}, errGatewayClosed
-	}
-	if !forceRefresh && g.capabilityReady && g.capability != nil && g.workerLeaseEpoch != 0 {
-		snapshot := capabilitySnapshot{g.capabilityGeneration, *g.capability}
-		g.mu.Unlock()
-		return snapshot, ctx.Err()
-	}
-	if p := g.capabilityProbe; p != nil {
-		g.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return capabilitySnapshot{}, ctx.Err()
-		case <-p.done:
-			if err := ctx.Err(); err != nil {
-				return capabilitySnapshot{}, err
-			}
-			return p.snapshot, p.err
+	var p *capabilityProbe
+	for {
+		if err := ctx.Err(); err != nil {
+			return capabilitySnapshot{}, err
 		}
+		g.mu.Lock()
+		if g.closed {
+			g.mu.Unlock()
+			return capabilitySnapshot{}, errGatewayClosed
+		}
+		if !forceRefresh && g.capabilityReady && g.capability != nil && g.workerLeaseEpoch != 0 {
+			snapshot := capabilitySnapshot{g.capabilityGeneration, *g.capability}
+			g.mu.Unlock()
+			return snapshot, ctx.Err()
+		}
+		if active := g.capabilityProbe; active != nil {
+			g.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return capabilitySnapshot{}, ctx.Err()
+			case <-active.done:
+				if err := ctx.Err(); err != nil {
+					return capabilitySnapshot{}, err
+				}
+				if active.ownerCanceled {
+					// Starting that probe cleared the cache. Any success now
+					// cached is from a newer probe and satisfies this refresh.
+					forceRefresh = false
+					continue
+				}
+				return active.snapshot, active.err
+			}
+		}
+		g.capabilityGeneration++
+		g.capabilityReady, g.workerLeaseEpoch, g.capability = false, 0, nil
+		p = &capabilityProbe{generation: g.capabilityGeneration, done: make(chan struct{}), cancel: cancel}
+		g.capabilityProbe = p
+		g.mu.Unlock()
+		break
 	}
-	g.capabilityGeneration++
-	g.capabilityReady, g.workerLeaseEpoch, g.capability = false, 0, nil
-	p := &capabilityProbe{generation: g.capabilityGeneration, done: make(chan struct{}), cancel: cancel}
-	g.capabilityProbe = p
-	g.mu.Unlock()
 	response, err := readCapabilities(ctx, client)
 	g.mu.Lock()
 	if g.closed {
 		err = errGatewayClosed
 	} else if p.generation != g.capabilityGeneration {
 		err = udferr.New("python udf: capability probe invalidated")
-	} else if ctx.Err() != nil {
-		err = ctx.Err()
+	} else if ownerErr := ctx.Err(); ownerErr != nil {
+		err = ownerErr
+		p.ownerCanceled = true
 	}
 	if err == nil {
 		// response is immutable after publication, including its decoded slices.
