@@ -375,6 +375,18 @@ test('trusted control jobs share the configurable runner while PR diff and test 
   assert.doesNotMatch(blocks['matrixone-ci'], /CI_CONTROL_RUNNER_LABEL/);
 });
 
+test('Coverage site retry is enabled for main PRs, not release PRs', () => {
+  const block = entrypointJobs()['matrixone-ut-coverage'];
+  const option = block.match(/^      enable_cs_site_retry: \$\{\{ (.*) \}\}$/m);
+  assert.ok(option, 'Coverage UT must pass the site retry setting');
+  for (const number of [33176, 100001]) {
+    for (const base of ['main', '4.2-dev', 'v4.2.8-hotfix', '3.0-dev']) {
+      const github = { base_ref: base, event: { pull_request: { number } } };
+      assert.equal(runInNewContext(option[1], { github }), base === 'main', `${base} PR #${number}`);
+    }
+  }
+});
+
 test('entrypoint routes each scope through one required check', () => {
   const blocks = entrypointJobs();
   const routed = ['docs-check', 'matrixone-shared-build', 'matrixone-ci',
