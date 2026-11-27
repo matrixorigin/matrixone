@@ -55,6 +55,10 @@ func TestCurrentDatabaseAutoIncrementIgnoresUnrelatedDrop(t *testing.T) {
 		exec("create table ai_meta_b.t(id bigint auto_increment primary key) auto_increment=200")
 		const metadata = "select auto_increment from information_schema.tables where table_schema=database() and table_name='t'"
 		exec("use ai_meta_a")
+		exec("create table manifest (name varchar(64))")
+		exec("insert into manifest values ('t'), ('not_present')")
+		value("select count(*) from manifest x left join information_schema.tables m "+
+			"on m.table_name=x.name and m.table_schema=database() where m.table_name is null", 1)
 		exec("prepare p from \"" + metadata + "\"")
 		value("execute p", 10)
 		exec("use ai_meta_b")
@@ -67,6 +71,11 @@ func TestCurrentDatabaseAutoIncrementIgnoresUnrelatedDrop(t *testing.T) {
 		_, err = db.ExecContext(ctx, "drop table ai_meta_b.t")
 		require.NoError(t, err)
 		value(metadata, 10)
+		value("select m.auto_increment from information_schema.tables m join information_schema.columns c "+
+			"on m.table_schema=c.table_schema and m.table_name=c.table_name "+
+			"where m.table_schema=database() and m.table_name='t' and c.column_name='id'", 10)
+		value("select m.auto_increment from manifest x join information_schema.tables m "+
+			"on x.name=m.table_name where database()=m.table_schema and x.name='t'", 10)
 		exec("commit")
 	})
 }
