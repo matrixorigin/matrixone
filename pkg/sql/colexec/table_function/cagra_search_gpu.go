@@ -192,18 +192,6 @@ func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 			u.idxcfg.CuvsCagra.DistributionMode = uint16(vectorindex.DistributionMode_SINGLE_GPU)
 		}
 
-		// quantization
-		switch u.param.Quantization {
-		case metric.Quantization_F16_Str:
-			u.idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_F16)
-		case metric.Quantization_INT8_Str:
-			u.idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_INT8)
-		case metric.Quantization_UINT8_Str:
-			u.idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_UINT8)
-		default:
-			u.idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_F32)
-		}
-
 		// ---- IndexTableConfig ----
 		cfgVec := tf.ctr.argVecs[0]
 		if cfgVec.GetType().Oid != types.T_varchar {
@@ -235,13 +223,7 @@ func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 			return moerr.NewInvalidInput(proc.Ctx, "query vector type does not match the index base column type")
 		}
 
-		// A vecf16 base with no QUANTIZATION stores natively as half: derive the
-		// storage qtype from the (f16) base type so newCagraAlgo dispatches
-		// NewCagraSearch[cuvs.Float16]. (vecf16 + QUANTIZATION keeps int8/uint8.)
-		if types.T(u.tblcfg.KeyPartType) == types.T_array_float16 &&
-			metric.QuantizationType(u.idxcfg.CuvsCagra.Quantization) == metric.Quantization_F32 {
-			u.idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_F16)
-		}
+		u.idxcfg.CuvsCagra.Quantization = uint16(metric.CuvsStorageQuantization(types.T(u.tblcfg.KeyPartType), u.param.Quantization))
 
 		u.batch = tf.createResultBatch()
 		u.inited = true

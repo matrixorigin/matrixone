@@ -93,6 +93,16 @@ var CuvsQuantizationNameToType = map[string]QuantizationType{
 	Quantization_UINT8_Str: Quantization_UINT8,
 }
 
+// CuvsStorageQuantization returns the storage type shared by model builders
+// and readers. A vecf16 column uses half precision for the default mode.
+func CuvsStorageQuantization(baseType types.T, name string) QuantizationType {
+	quantization := CuvsQuantizationNameToType[name]
+	if baseType == types.T_array_float16 && quantization == Quantization_F32 {
+		return Quantization_F16
+	}
+	return quantization
+}
+
 // ValidQuantization gates the QUANTIZATION='X' option in CREATE INDEX
 // for CAGRA / IVF-PQ — both cuvs-backed, so the cuvs map is the
 // source of truth. See pkg/catalog/secondary_index_utils.go.

@@ -69,6 +69,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -559,6 +560,23 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 		m[catalog.Quantization] = catalog.ToLower(opt.Quantization)
 	}
 	return m
+}
+
+// cuVS readers select a decoder from the published storage type. Changing
+// it requires the new model to commit with the new catalog parameters.
+func reindexChangesCuvsStorageType(table *plan.TableDef, index *plan.IndexDef, oldQuantization, newQuantization string) bool {
+	if oldQuantization == newQuantization || (!catalog.IsCagraIndexAlgo(index.IndexAlgo) && !catalog.IsIvfpqIndexAlgo(index.IndexAlgo)) {
+		return false
+	}
+	if len(index.Parts) != 1 {
+		return true
+	}
+	column := plan2.FindColumn(table.Cols, index.Parts[0])
+	if column == nil {
+		return true
+	}
+	baseType := types.T(column.Typ.Id)
+	return metric.CuvsStorageQuantization(baseType, oldQuantization) != metric.CuvsStorageQuantization(baseType, newQuantization)
 }
 
 func (s *Scope) AlterTableInplace(c *Compile) error {
@@ -1080,7 +1098,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			//in the beginning for pessimistic mode. We need to see how to reduce the critical section.
 			hasUpdateConstraints = true
 			tableAlterIndex := act.AlterReindex
+			forceSync := tableAlterIndex.ForceSync
 			constraintName := tableAlterIndex.IndexName
+			paramUpdate := compileplugin.ReindexParamUpdate{
+				Params: reindexSpecifiedParams(c.stmt, constraintName),
+				Merge:  tableAlterIndex.Merge,
+			}
 			multiTableIndexes := make(map[string]*MultiTableIndex)
 
 			for i, indexDef := range oTableDef.Indexes {
@@ -1091,30 +1114,18 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if !indexplugin.IsVectorIndexAlgo(indexAlgo) && !catalog.IsFullText2IndexAlgo(indexAlgo) {
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
-					// Each algorithm's plugin owns parameter-update
-					// semantics via Compile.ValidateReindexParams: it
-					// merges the build options it honors on a rebuild
-					// (e.g. IVF-FLAT's `lists`, HNSW's `m`/`ef_*`, CAGRA's
-					// graph degrees) into the algo params and rejects any
-					// other option it does not support. (quantization is left
-					// entirely to the vecf16 quantization work — reindexSpecified
-					// Params does not extract it, so reindex ignores it.) The
-					// REINDEX rule shares index_option_list with CREATE INDEX, so
-					// the specified options are read straight off the parse tree
-					// (c.stmt) here — no plan proto field is needed to carry them.
+					// The algorithm validates and merges the requested build options.
 					oldParams, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
 					if err != nil {
 						return err
 					}
 					p, _ := indexplugin.Get(indexAlgo)
-					newParamsMap, err := p.Compile().ValidateReindexParams(oldParams,
-						compileplugin.ReindexParamUpdate{
-							Params: reindexSpecifiedParams(c.stmt, constraintName),
-							Merge:  tableAlterIndex.Merge,
-						})
+					newParamsMap, err := p.Compile().ValidateReindexParams(oldParams, paramUpdate)
 					if err != nil {
 						return err
 					}
+					forceSync = forceSync || reindexChangesCuvsStorageType(
+						oTableDef, indexDef, oldParams[catalog.Quantization], newParamsMap[catalog.Quantization])
 					// Preserve the captured session_vars (skipped by the flat
 					// parser above) across the param rewrite.
 					sessionVars, err := catalog.IndexParamsSessionVars(alterIndex.IndexAlgoParams)
@@ -1163,7 +1174,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if cctx == nil {
 						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
 					}
-					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync, tableAlterIndex.Merge)
+					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, forceSync, tableAlterIndex.Merge)
 				}
 
 				if err != nil {

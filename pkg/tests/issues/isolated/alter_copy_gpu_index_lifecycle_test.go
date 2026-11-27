@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -69,8 +70,8 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 		algo   string
 		create string
 	}{
-		{"cagra", "create index ix using cagra on t(v) op_type 'vector_l2_ops' intermediate_graph_degree=8 graph_degree=4 ASYNC"},
-		{"ivfpq", "create index ix using ivfpq on t(v) op_type 'vector_l2_ops' lists=2 m=2 bits_per_code=4 ASYNC"},
+		{"cagra", "create index ix using cagra on t(v) op_type 'vector_l2_ops' intermediate_graph_degree=8 graph_degree=4 quantization 'float32' ASYNC"},
+		{"ivfpq", "create index ix using ivfpq on t(v) op_type 'vector_l2_ops' lists=2 m=2 bits_per_code=4 kmeans_train_percent=100 quantization 'float32' ASYNC"},
 	} {
 		t.Run(tc.algo, func(t *testing.T) {
 			dbName := "copy_gpu_" + tc.algo
@@ -86,6 +87,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 				_, err := db.ExecContext(cleanupCtx, "drop database if exists "+dbName)
 				require.NoError(t, err)
 			})
+			defer conn.ExecContext(ctx, "rollback")
 			exec("use " + dbName)
 			exec("set experimental_" + tc.algo + "_index=1")
 			exec("create table t(id bigint primary key, v vecf32(8))")
@@ -128,10 +130,13 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 				status    iscp.JobStatus
 				spec      iscp.JobSpec
 			}
-			readJob := func(tableID uint64) (job, error) {
+			type jobReader interface {
+				QueryRowContext(context.Context, string, ...any) *sql.Row
+			}
+			readJob := func(reader jobReader, tableID uint64) (job, error) {
 				var j job
 				var status, spec string
-				err := db.QueryRowContext(ctx, "select job_id,job_state,watermark,job_status,job_spec from mo_catalog.mo_iscp_log where drop_at is null and job_name='index_ix' and table_id=?", tableID).Scan(&j.id, &j.state, &j.watermark, &status, &spec)
+				err := reader.QueryRowContext(ctx, "select job_id,job_state,watermark,job_status,job_spec from mo_catalog.mo_iscp_log where drop_at is null and job_name='index_ix' and table_id=?", tableID).Scan(&j.id, &j.state, &j.watermark, &status, &spec)
 				if err == nil {
 					err = json.Unmarshal([]byte(status), &j.status)
 				}
@@ -145,7 +150,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 				var j job
 				require.EventuallyWithT(t, func(check *assert.CollectT) {
 					var err error
-					j, err = readJob(tableID)
+					j, err = readJob(db, tableID)
 					if !assert.NoError(check, err) {
 						return
 					}
@@ -219,7 +224,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			var laterJob job
 			require.EventuallyWithT(t, func(check *assert.CollectT) {
 				var err error
-				laterJob, err = readJob(replacementTable)
+				laterJob, err = readJob(db, replacementTable)
 				if !assert.NoError(check, err) {
 					return
 				}
@@ -253,6 +258,54 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 					require.Equal(t, probe.want, id, "probe %d with %q", probe.value, hint)
 				}
 			}
+
+			quantization := func() string {
+				t.Helper()
+				var raw string
+				require.NoError(t, db.QueryRowContext(ctx, "select algo_params from mo_catalog.mo_indexes where table_id=? and name='ix' and algo_table_type=?", replacementTable, tc.algo+"_index").Scan(&raw))
+				var params struct {
+					Quantization string `json:"quantization"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(raw), &params))
+				return params.Quantization
+			}
+			reindex := func(format string, async bool) {
+				t.Helper()
+				exec("alter table t alter reindex ix " + tc.algo + " quantization '" + format + "'")
+				j, err := readJob(conn, replacementTable)
+				require.NoError(t, err)
+				require.Greater(t, j.id, laterJob.id)
+				require.Equal(t, async, j.spec.InitSQLCoversSnapshot)
+				if async {
+					require.NotEmpty(t, j.spec.InitSQL)
+				} else {
+					require.Empty(t, j.spec.InitSQL)
+					require.Equal(t, int8(iscp.JobStage_Running), j.status.Stage)
+					require.NotEmpty(t, j.watermark)
+					require.NotEqual(t, "0-0", j.watermark)
+				}
+			}
+			exec("begin")
+			reindex("float32", true)
+			exec("rollback")
+			exec("begin")
+			reindex("int8", false)
+			exec("rollback")
+			require.Equal(t, "float32", quantization())
+			unchanged, err := readJob(db, replacementTable)
+			require.NoError(t, err)
+			require.Equal(t, laterJob.id, unchanged.id)
+
+			reindex("int8", false)
+			require.Equal(t, "int8", quantization())
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+storageSQL+" where tag=0").Scan(&count))
+			require.Positive(t, count)
+			cache.Cache.Remove(storage)
+			query := "select id from t" + orderBy
+			require.Contains(t, explain(query), tc.algo+"_search")
+			var id int64
+			require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&id))
+			require.EqualValues(t, 100, id)
 		})
 	}
 }

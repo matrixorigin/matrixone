@@ -115,11 +115,8 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 	return h.handleCreate(ctx, indexDefs, !async)
 }
 
-// HandleReindex runs during ALTER … REINDEX (foreground forceSync=false)
-// and during idxcron background reindex (forceSync=true). The forceSync
-// branch builds ivfpq_create synchronously inside the txn so the new
-// tag=0 model lands before subsequent steps observe the index — mirrors
-// IVF-FLAT and CAGRA.
+// HandleReindex uses the shared build path. An inline rebuild publishes the
+// replacement model before handing off forward changes to CDC.
 func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool, _ bool) error {
 	return h.handleCreate(ctx, indexDefs, forceSync)
 }
@@ -134,10 +131,8 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
 }
 
-// handleCreate is the shared body for HandleCreateIndex and
-// HandleReindex. forceSync controls whether ivfpq_create runs inside
-// the current txn (true — background reindex) or is deferred to the
-// CDC pipeline via InitSQL (false — the always-async default path).
+// handleCreate runs the build in the current transaction if forceSync is set.
+// Otherwise CDC builds it from a source snapshot through InitSQL.
 func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
 	logutil.Infof("[plugin] ivfpq handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// 0. experimental flag gate (mirrors HNSW's check at ddl_index_algo.go:627).
