@@ -739,6 +739,8 @@ func TestOldMergeCompletionCannotWakeReplacementTable(t *testing.T) {
 	sched.Stop()
 	// A table with the same ID can have a new supporter after the old one is
 	// removed. An old task still owns its reservation and completion callback.
+	oldSupporter.todo.table = &droppedMergeTable{MergeTable: table}
+	sched.doSched(nil, oldSupporter.todo)
 	replacement := reservationProbeBaseTable(table.ID())
 	sched.handleAddTable(replacement)
 	newSupporter := sched.supps[table.ID()]
@@ -749,6 +751,182 @@ func TestOldMergeCompletionCannotWakeReplacementTable(t *testing.T) {
 	_, err := sched.Query(context.Background(), replacement)
 	require.NoError(t, err) // message-queue barrier
 	require.Equal(t, due, newSupporter.todo.readyAt)
+}
+
+func TestManualMergeRetrySurvivesMetadataCommit(t *testing.T) {
+	table := reservationProbeBaseTable(8914)
+	clock := newFakeClock()
+	rc := &reservationProbeRSC{limit: 60}
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	supp := sched.supps[table.ID()]
+	retry := NewMMsgTaskTrigger(table).WithByUser(true)
+	retry.retryUntil = clock.Now().Add(manualMergeRetryWindow)
+	retry.assigns = []mergeTask{{eSize: 80, note: "retained after ALTER"}}
+	supp.triggers = append(supp.triggers, retry)
+	sched.pq.Update(supp.todo, clock.Now())
+
+	replacement := reservationProbeBaseTable(table.ID())
+	sched.handleAddTable(replacement)
+	require.Same(t, supp, sched.supps[table.ID()])
+	require.Equal(t, replacement, supp.todo.table)
+	require.Len(t, sched.pq, 1)
+	require.Same(t, retry, supp.triggers[0])
+
+	rc.limit = 100
+	clock.Advance(manualMergeRetryWindow)
+	sched.doSched(nil, supp.todo)
+	require.Len(t, executor.tasks, 1)
+	task := <-executor.tasks
+	t.Cleanup(func() { task.doneCB.OnExecDone(nil) })
+	require.Equal(t, "retained after ALTER", task.note)
+	task.doneCB.OnExecDone(nil)
+	require.Empty(t, supp.triggers)
+	require.Zero(t, rc.held)
+}
+
+func TestExpiredManualMergeRetryReleasesMetadataUnderMemoryPressure(t *testing.T) {
+	table := reservationProbeBaseTable(8915)
+	clock := &observedRetryClock{fakeClock: newFakeClock(), resets: make(chan retryTimerReset, 8)}
+	rc := newSimRscController(400 * common.Const1MBytes)
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	supp := sched.supps[table.ID()]
+	retry := NewMMsgTaskTrigger(table).WithByUser(true)
+	retry.retryUntil = clock.Now().Add(manualMergeRetryWindow)
+	retry.assigns = []mergeTask{{eSize: 40 * common.Const1MBytes, note: "expire under pressure"}}
+	supp.triggers = append(supp.triggers, retry)
+	sched.pq.Update(supp.todo, clock.Now())
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for {
+		select {
+		case reset := <-clock.resets:
+			if reset.delay <= 15*time.Second {
+				goto timerArmed
+			}
+		case <-ctx.Done():
+			t.Fatal("memory-pressure retry timer was not armed")
+		}
+	}
+timerArmed:
+	clock.Advance(manualMergeRetryWindow + time.Second)
+	for {
+		answer, err := sched.Query(ctx, table)
+		require.NoError(t, err)
+		if answer.Triggers == "" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("expired retry remained queued under memory pressure")
+		default:
+		}
+	}
+	sched.Stop()
+	require.Empty(t, supp.triggers)
+	require.Nil(t, retry.assigns)
+	require.Empty(t, executor.tasks)
+}
+
+func TestExpiredManualMergeRetryReleasesMetadataWhilePaused(t *testing.T) {
+	table := reservationProbeBaseTable(8917)
+	clock := &observedRetryClock{fakeClock: newFakeClock(), resets: make(chan retryTimerReset, 4)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}},
+		&delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}, clock)
+	sched.allPaused = true
+	supp := sched.supps[table.ID()]
+	retry := NewMMsgTaskTrigger(table).WithByUser(true)
+	retry.retryUntil = clock.Now().Add(manualMergeRetryWindow)
+	retry.assigns = []mergeTask{{eSize: 1, note: "expire while paused"}}
+	supp.triggers = append(supp.triggers, retry)
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	select {
+	case reset := <-clock.resets:
+		require.Equal(t, manualMergeRetryWindow, reset.delay)
+	case <-ctx.Done():
+		t.Fatal("paused scheduler did not arm the retry expiry")
+	}
+	clock.Advance(manualMergeRetryWindow)
+	for {
+		answer, err := sched.Query(ctx, table)
+		require.NoError(t, err)
+		if answer.Triggers == "" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("paused scheduler retained the expired retry")
+		default:
+		}
+	}
+	sched.Stop()
+	require.Empty(t, supp.triggers)
+	require.Nil(t, retry.assigns)
+}
+
+func TestManualMergeRetryChecksRecoveredHeadroomBeforeDeadline(t *testing.T) {
+	table := reservationProbeBaseTable(8916)
+	clock := &observedRetryClock{fakeClock: newFakeClock(), resets: make(chan retryTimerReset, 8)}
+	rc := &manualMergeAdmissionProbe{
+		simRscController: newSimRscController(2 * common.Const1GBytes),
+		budget:           700 * common.Const1MBytes,
+		decisions:        make(chan reservationProbeDecision, 2),
+	}
+	rc.reserved.Store(650 * common.Const1MBytes)
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	supp := sched.supps[table.ID()]
+	retry := NewMMsgTaskTrigger(table).WithByUser(true)
+	retry.retryUntil = clock.Now().Add(15 * time.Second)
+	retry.assigns = []mergeTask{{eSize: 80 * common.Const1MBytes, note: "headroom recovered"}}
+	supp.triggers = append(supp.triggers, retry)
+	sched.pq.Update(supp.todo, clock.Now())
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	select {
+	case decision := <-rc.decisions:
+		require.False(t, decision.granted)
+	case <-ctx.Done():
+		t.Fatal("initial retry admission did not run")
+	}
+	for {
+		select {
+		case reset := <-clock.resets:
+			if reset.delay == 14*time.Second {
+				goto finalCheckArmed
+			}
+		case <-ctx.Done():
+			t.Fatal("retry check was not scheduled before expiry")
+		}
+	}
+finalCheckArmed:
+	clock.Advance(time.Second)
+	rc.Release(650 * common.Const1MBytes) // no merge-completion notification
+	clock.Advance(13 * time.Second)
+	select {
+	case task := <-executor.tasks:
+		t.Cleanup(func() { task.doneCB.OnExecDone(nil) })
+		require.Equal(t, "headroom recovered", task.note)
+		task.doneCB.OnExecDone(nil)
+	case <-ctx.Done():
+		t.Fatal("recovered headroom was missed before the retry deadline")
+	}
+	require.Zero(t, rc.reserved.Load())
 }
 
 func TestManualMergeRetryRechecksAfterMemoryPressure(t *testing.T) {
