@@ -31,6 +31,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/json"
 )
@@ -404,7 +405,8 @@ func newMockStorage(t *testing.T) (*mysqlTaskStorage, sqlmock.Sqlmock) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	return &mysqlTaskStorage{
-		db: db,
+		db:       db,
+		fencedDB: db,
 	}, mock
 }
 
@@ -743,6 +745,44 @@ func TestNewMysqlTaskStorage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, store)
 	require.NoError(t, store.Close())
+}
+
+func TestTaskLeaseFencedDSN(t *testing.T) {
+	dsn := "user:password@tcp(localhost:3306)/mo_task?parseTime=true&disable_txn_trace=1&" + defines.TaskLeaseSnapshotSysVar + "=0"
+	fenced, err := taskLeaseFencedDSN(dsn)
+	require.NoError(t, err)
+	config, err := mysqlDriver.ParseDSN(fenced)
+	require.NoError(t, err)
+	require.Equal(t, "1", config.Params[defines.TaskLeaseSnapshotSysVar])
+	require.Equal(t, "1", config.Params["disable_txn_trace"])
+	require.True(t, config.ParseTime)
+	require.Equal(t, "mo_task", config.DBName)
+	original, err := mysqlDriver.ParseDSN(dsn)
+	require.NoError(t, err)
+	require.Equal(t, "0", original.Params[defines.TaskLeaseSnapshotSysVar])
+}
+
+func TestTaskLeaseFencedTxnDoesNotFallBack(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	storage.fencedDB = nil
+	_, err := storage.beginFencedTxn(context.Background())
+	require.ErrorContains(t, err, "task lease snapshot connection is unavailable")
+	require.NoError(t, mock.ExpectationsWereMet(), "the ordinary pool must not be used")
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func TestTaskStorageClosesBothPools(t *testing.T) {
+	ordinary, ordinaryMock, err := sqlmock.New()
+	require.NoError(t, err)
+	fenced, fencedMock, err := sqlmock.New()
+	require.NoError(t, err)
+	storage := &mysqlTaskStorage{db: ordinary, fencedDB: fenced}
+	ordinaryMock.ExpectClose()
+	fencedMock.ExpectClose()
+	require.NoError(t, storage.Close())
+	require.NoError(t, ordinaryMock.ExpectationsWereMet())
+	require.NoError(t, fencedMock.ExpectationsWereMet())
 }
 
 func TestDeleteAsyncTaskInSqlMock(t *testing.T) {

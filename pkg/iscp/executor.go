@@ -502,7 +502,10 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 		0)
 	txnOp, err := exec.cnTxnClient.New(ctxWithTimeout, nowTs, createByOpt,
 		client.WithTxnMode(txn.TxnMode_Pessimistic),
-		client.WithTxnIsolation(txn.TxnIsolation_RC),
+		// Keep the snapshot used to validate job and lease writes fixed through
+		// commit. RC may advance it at commit after an optimistic lease takeover,
+		// allowing a stale owner to overwrite its successor.
+		client.WithTxnIsolation(txn.TxnIsolation_SI),
 	)
 	if txnOp == nil {
 		if err == nil {
@@ -549,13 +552,6 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobsInTxn(ctx context.Context, txnO
 	}
 	defer result.Close()
 
-	// Internal statements do not advance the transaction snapshot themselves.
-	// Refresh after a potentially long job scan so ordinary heartbeats do not
-	// repeatedly invalidate the lease write. The workspace also transfers the
-	// transaction's pending tombstones to the refreshed snapshot.
-	if err = txnOp.GetWorkspace().AdvanceSnapshot(ctx, timestamp.Timestamp{}); err != nil {
-		return err
-	}
 	owners, err := ExecWithResult(ctx, "SELECT count(*) FROM mo_task.sys_daemon_task WHERE task_type = 'ISCP'", exec.cnUUID, txnOp)
 	if err != nil {
 		return err
@@ -573,6 +569,14 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobsInTxn(ctx context.Context, txnO
 	if countRows != 1 || ownerCount != 1 {
 		logutil.Error("ISCP-Task unexpected daemon task count", zap.Int64("count", ownerCount))
 		return moerr.NewInvalidTask(ctx, exec.cnUUID, exec.taskID)
+	}
+
+	// Refresh after the potentially long job scan, then validate and write the
+	// owner guard. Heartbeats that committed during the scan are harmless, while
+	// the SI snapshot stays fixed after this point so a takeover cannot be
+	// hidden by a commit-time RC refresh.
+	if err = txnOp.GetWorkspace().AdvanceSnapshot(ctx, timestamp.Timestamp{}); err != nil {
+		return err
 	}
 
 	// The repair and ownership check must commit together. A pre-check alone

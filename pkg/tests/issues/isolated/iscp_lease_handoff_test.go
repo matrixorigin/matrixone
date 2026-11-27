@@ -216,12 +216,21 @@ func verifyOptimisticLeaseConflict(t *testing.T, ctx context.Context, first, sec
 	svc := first.RawService().(cnservice.Service)
 	eng, tc := svc.GetEngine(), svc.GetTxnClient()
 	sysCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	begin := func() client.TxnOperator {
+	begin := func(isolation pbtxn.TxnIsolation) (client.TxnOperator, func()) {
 		t.Helper()
-		op, beginErr := tc.New(sysCtx, eng.LatestLogtailAppliedTime(), client.WithTxnMode(pbtxn.TxnMode_Pessimistic), client.WithTxnIsolation(pbtxn.TxnIsolation_RC))
+		op, beginErr := tc.New(sysCtx, eng.LatestLogtailAppliedTime(), client.WithTxnMode(pbtxn.TxnMode_Pessimistic), client.WithTxnIsolation(isolation))
+		active := op != nil
+		t.Cleanup(func() {
+			if active {
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(sysCtx), 15*time.Second)
+				defer cancel()
+				require.NoError(t, op.Rollback(cleanupCtx))
+			}
+		})
 		require.NoError(t, beginErr)
+		require.NotNil(t, op)
 		require.NoError(t, eng.New(sysCtx, op))
-		return op
+		return op, func() { active = false }
 	}
 	run := func(op client.TxnOperator, sql string) (uint64, error) {
 		result, runErr := iscp.ExecWithResult(sysCtx, sql, first.ServiceID(), op)
@@ -232,31 +241,63 @@ func verifyOptimisticLeaseConflict(t *testing.T, ctx context.Context, first, sec
 		return result.AffectedRows, nil
 	}
 
-	setup := begin()
+	setup, finishSetup := begin(pbtxn.TxnIsolation_RC)
 	_, err = run(setup, `insert into mo_task.sys_daemon_task (task_metadata_id,task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,task_type,task_runner,task_status,create_at,update_at,details) select 'lease-transaction-test',task_metadata_executor,task_metadata_context,task_metadata_option,account_id,account,'Unknown','old-cn',4,now(),now(),details from mo_task.sys_daemon_task where task_type='ISCP' limit 1`)
 	require.NoError(t, err)
 	require.NoError(t, setup.Commit(sysCtx))
+	finishSetup()
 	var taskID uint64
 	require.NoError(t, conn.QueryRowContext(ctx, "select task_id from mo_task.sys_daemon_task where task_metadata_id='lease-transaction-test'").Scan(&taskID))
 	tasks, err := ts.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, taskID))
 	require.NoError(t, err)
 	require.Len(t, tasks, 1)
 
-	repair := begin()
-	defer func() { _ = repair.Rollback(context.WithoutCancel(sysCtx)) }()
-	_, err = run(repair, "update managed_iscp_handoff.lease_jobs set state=3 where id=1")
+	// First prove that a fixed-snapshot repair can refresh after heartbeats and
+	// still commit its pending job update.
+	repair, finishRepair := begin(pbtxn.TxnIsolation_SI)
+	affected, err := run(repair, "update managed_iscp_handoff.lease_jobs set state=3 where id=1")
 	require.NoError(t, err)
+	require.EqualValues(t, 1, affected)
 	// Heartbeats can advance the task row while the job update is running.
-	// Refreshing the RC workspace must preserve the pending job write.
-	tasks[0].LastHeartbeat = time.Now().UTC().Truncate(time.Second)
-	for range 2 {
+	// Task storage can use either CN, so wait for the final committed heartbeat
+	// to be visible on the repair CN before refreshing its RC snapshot.
+	marker := time.Now().In(time.Local).Truncate(time.Second)
+	for i := 1; i <= 2; i++ {
+		tasks[0].LastHeartbeat = marker.Add(time.Duration(i) * time.Second)
 		count, heartbeatErr := ts.GetStorage().HeartbeatDaemonTask(ctx, tasks)
 		require.NoError(t, heartbeatErr)
 		require.Equal(t, 1, count)
 	}
+	var visibilityErr error
+	require.Eventually(t, func() bool {
+		var count int
+		visibilityErr = conn.QueryRowContext(ctx, "select count(*) from mo_task.sys_daemon_task where task_id=? and last_heartbeat=?", taskID, tasks[0].LastHeartbeat.Format("2006-01-02 15:04:05")).Scan(&count)
+		return visibilityErr != nil || count == 1
+	}, 30*time.Second, 100*time.Millisecond, "final heartbeat must be visible on the repair CN")
+	require.NoError(t, visibilityErr)
 	require.NoError(t, repair.GetWorkspace().AdvanceSnapshot(sysCtx, timestamp.Timestamp{}))
 	guard := fmt.Sprintf("update mo_task.sys_daemon_task set task_runner=task_runner where task_id=%d and task_type='Unknown' and task_runner='old-cn' and task_status=4", taskID)
-	affected, err := run(repair, guard)
+	affected, err = run(repair, guard)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, affected)
+	require.NoError(t, repair.Commit(sysCtx))
+	finishRepair()
+	var state int
+	var owner string
+	require.NoError(t, conn.QueryRowContext(ctx, "select state from lease_jobs where id=1").Scan(&state))
+	require.Equal(t, 3, state, "snapshot refresh must preserve the pending job update")
+	require.NoError(t, conn.QueryRowContext(ctx, "select task_runner from mo_task.sys_daemon_task where task_id=?", taskID).Scan(&owner))
+	require.Equal(t, "old-cn", owner)
+	_, err = conn.ExecContext(ctx, "update lease_jobs set state=2 where id=1")
+	require.NoError(t, err)
+
+	// In a fresh repair, an optimistic takeover must invalidate the commit.
+	repair, finishRepair = begin(pbtxn.TxnIsolation_SI)
+	affected, err = run(repair, "update managed_iscp_handoff.lease_jobs set state=3 where id=1")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, affected)
+	require.NoError(t, repair.GetWorkspace().AdvanceSnapshot(sysCtx, timestamp.Timestamp{}))
+	affected, err = run(repair, guard)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, affected)
 
@@ -280,11 +321,28 @@ func verifyOptimisticLeaseConflict(t *testing.T, ctx context.Context, first, sec
 		}()
 	}
 	tasks[0].TaskRunner = "new-cn"
-	updated, err := ts.UpdateDaemonTask(ctx, tasks)
+	updated, err := ts.UpdateDaemonTask(ctx, tasks,
+		taskservice.WithTaskRunnerCond(taskservice.EQ, "old-cn"),
+		taskservice.WithTaskStatusCond(task.TaskStatus_Error))
 	require.NoError(t, err)
 	require.Equal(t, 1, updated)
-	require.Error(t, repair.Commit(sysCtx), "stale repair must conflict after the optimistic takeover commits")
-	var state int
+	var readErr error
+	require.Eventually(t, func() bool {
+		readErr = conn.QueryRowContext(ctx, "select task_runner from mo_task.sys_daemon_task where task_id=?", taskID).Scan(&owner)
+		return readErr != nil || owner == "new-cn"
+	}, 30*time.Second, 100*time.Millisecond, "optimistic takeover must be visible before stale repair commits")
+	require.NoError(t, readErr)
+	beforeCommit := repair.SnapshotTS()
+	err = repair.Commit(sysCtx)
+	finishRepair()
+	commitErr := err
 	require.NoError(t, conn.QueryRowContext(ctx, "select state from lease_jobs where id=1").Scan(&state))
+	require.NoError(t, conn.QueryRowContext(ctx, "select task_runner from mo_task.sys_daemon_task where task_id=?", taskID).Scan(&owner))
+	var count int
+	require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_task.sys_daemon_task where task_id=?", taskID).Scan(&count))
+	t.Logf("stale repair commit: %v; durable job state: %d; durable owner: %s; row count: %d; snapshot before/after commit: %v/%v", commitErr, state, owner, count, beforeCommit, repair.SnapshotTS())
+	require.True(t, moerr.IsMoErrCode(commitErr, moerr.ErrTxnWWConflict), "stale repair must fail with a write conflict: %v", commitErr)
 	require.Equal(t, 2, state, "a failed repair must not publish its job update")
+	require.Equal(t, 1, count)
+	require.Equal(t, "new-cn", owner, "stale repair must not overwrite the successor")
 }

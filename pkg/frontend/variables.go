@@ -1477,6 +1477,17 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("mo_rollback_txn_on_error"),
 		Default:           int8(0),
 	},
+	// Internal, versioned capability for the task service's dedicated pool.
+	// Unlike transaction_isolation, this explicitly selects the actual txn
+	// operator's isolation and is rejected by older CNs that lack support.
+	defines.TaskLeaseSnapshotSysVar: {
+		Name:              defines.TaskLeaseSnapshotSysVar,
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType(defines.TaskLeaseSnapshotSysVar),
+		Default:           int8(0),
+	},
 	//whether TN does primary key uniqueness check against transaction's workspace or not.
 	"mo_pk_check_by_dn": {
 		Name:              "mo_pk_check_by_dn",
