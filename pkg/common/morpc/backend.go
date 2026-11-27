@@ -166,8 +166,15 @@ func WithBackendFreeOrphansResponse(value func(Message)) BackendOption {
 // accesses the request. Configuring this option also allows Future.Get to
 // return on request context cancellation before the write completes.
 func WithBackendRequestRelease(value func(Message)) BackendOption {
+	return WithBackendRequestReleaseFor(nil, value)
+}
+
+// WithBackendRequestReleaseFor applies WithBackendRequestRelease to requests
+// accepted by match. A nil match accepts every ordinary unary request.
+func WithBackendRequestReleaseFor(match func(Message) bool, release func(Message)) BackendOption {
 	return func(rb *remoteBackend) {
-		rb.options.releaseRequest = value
+		rb.options.matchRequestRelease = match
+		rb.options.releaseRequest = release
 	}
 }
 
@@ -219,6 +226,7 @@ type remoteBackend struct {
 		readTimeout           time.Duration
 		livenessProbe         func(context.Context, string) error
 		freeResponse          func(Message)
+		matchRequestRelease   func(Message) bool
 		releaseRequest        func(Message)
 	}
 
@@ -430,7 +438,10 @@ func (rb *remoteBackend) getFuture(ctx context.Context, request Message, interna
 	f := rb.newFuture()
 	f.init(RPCMessage{Ctx: ctx, Message: request, internal: internal})
 	if !internal {
-		f.setSendRelease(rb.options.releaseRequest)
+		if rb.options.releaseRequest != nil &&
+			(rb.options.matchRequestRelease == nil || rb.options.matchRequestRelease(request)) {
+			f.setSendRelease(rb.options.releaseRequest)
+		}
 		f.setResponseRelease(rb.options.freeResponse)
 		f.enableRequestMetrics(rb.metrics)
 	}

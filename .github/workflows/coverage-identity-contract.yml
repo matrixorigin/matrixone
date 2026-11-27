@@ -94,7 +94,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: matrixorigin/CI
-          ref: 53e9dadff4440a517b190b5819c4da9d1f112adf
+          ref: 3d7dce54bdb6ec099102ca2f3aa3a05e96f1f738
           path: .coverage-companion
           persist-credentials: false
           sparse-checkout: |

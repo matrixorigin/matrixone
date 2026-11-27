@@ -451,9 +451,11 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 			}
 		}
 		rbat := deletion.ctr.partitionId_blockId_rowIdBatch[pIdx][blkid]
-		pk := getNonNullValue(destBatch.GetVector(int32(pkIdx)), uint32(i))
 		vector.AppendFixed(rbat.GetVector(0), rowId, false, proc.GetMPool())
-		vector.AppendAny(rbat.GetVector(1), pk, false, proc.GetMPool())
+		// Typed copy of the key; rbat's key column has the key's type (makeDelBatch).
+		if err := rbat.GetVector(1).UnionOne(destBatch.GetVector(int32(pkIdx)), int64(i), proc.GetMPool()); err != nil {
+			return err
+		}
 
 	}
 	var batchSize int
@@ -500,61 +502,4 @@ func makeDelRemoteBatch(mp *mpool.MPool) *batch.Batch {
 	bat.SetVector(3, vector.NewVec(types.T_int32.ToType(), mp))
 	//bat.Vecs[4] is constant
 	return bat
-}
-
-func getNonNullValue(col *vector.Vector, row uint32) any {
-	switch col.GetType().Oid {
-	case types.T_bool:
-		return vector.GetFixedAtNoTypeCheck[bool](col, int(row))
-	case types.T_bit:
-		return vector.GetFixedAtNoTypeCheck[uint64](col, int(row))
-	case types.T_int8:
-		return vector.GetFixedAtNoTypeCheck[int8](col, int(row))
-	case types.T_int16:
-		return vector.GetFixedAtNoTypeCheck[int16](col, int(row))
-	case types.T_int32:
-		return vector.GetFixedAtNoTypeCheck[int32](col, int(row))
-	case types.T_int64:
-		return vector.GetFixedAtNoTypeCheck[int64](col, int(row))
-	case types.T_uint8:
-		return vector.GetFixedAtNoTypeCheck[uint8](col, int(row))
-	case types.T_uint16:
-		return vector.GetFixedAtNoTypeCheck[uint16](col, int(row))
-	case types.T_uint32:
-		return vector.GetFixedAtNoTypeCheck[uint32](col, int(row))
-	case types.T_uint64:
-		return vector.GetFixedAtNoTypeCheck[uint64](col, int(row))
-	case types.T_decimal64:
-		return vector.GetFixedAtNoTypeCheck[types.Decimal64](col, int(row))
-	case types.T_decimal128:
-		return vector.GetFixedAtNoTypeCheck[types.Decimal128](col, int(row))
-	case types.T_uuid:
-		return vector.GetFixedAtNoTypeCheck[types.Uuid](col, int(row))
-	case types.T_float32:
-		return vector.GetFixedAtNoTypeCheck[float32](col, int(row))
-	case types.T_float64:
-		return vector.GetFixedAtNoTypeCheck[float64](col, int(row))
-	case types.T_date:
-		return vector.GetFixedAtNoTypeCheck[types.Date](col, int(row))
-	case types.T_time:
-		return vector.GetFixedAtNoTypeCheck[types.Time](col, int(row))
-	case types.T_datetime:
-		return vector.GetFixedAtNoTypeCheck[types.Datetime](col, int(row))
-	case types.T_timestamp:
-		return vector.GetFixedAtNoTypeCheck[types.Timestamp](col, int(row))
-	case types.T_enum:
-		return vector.GetFixedAtNoTypeCheck[types.Enum](col, int(row))
-	case types.T_TS:
-		return vector.GetFixedAtNoTypeCheck[types.TS](col, int(row))
-	case types.T_Rowid:
-		return vector.GetFixedAtNoTypeCheck[types.Rowid](col, int(row))
-	case types.T_Blockid:
-		return vector.GetFixedAtNoTypeCheck[types.Blockid](col, int(row))
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
-		return col.GetBytesAt(int(row))
-	default:
-		// return vector.ErrVecTypeNotSupport
-		panic(any("No Support"))
-	}
 }

@@ -12,13 +12,13 @@ Pixi profile:
 
 ```sh
 git submodule update --init --recursive
-git -C third_party/sirius fetch origin perf/embedded-mo-scan
-cd third_party/sirius
+git -C thirdparties/sirius fetch origin perf/embedded-mo-scan
+cd thirdparties/sirius
 pixi run --frozen -e mo mo-build-embedding-sdk
 cd ../..
-pixi run --frozen --manifest-path third_party/sirius/pixi.toml -e mo \
+pixi run --frozen --manifest-path thirdparties/sirius/pixi.toml -e mo \
   make -j8 MO_SIRIUS=1 MO_CL_CUDA=1 \
-  SIRIUS_SDK="$PWD/third_party/sirius/build/mo/extension/sirius/embedding-sdk" \
+  SIRIUS_SDK="$PWD/thirdparties/sirius/build/mo/extension/sirius/embedding-sdk" \
   SIRIUS_MERGED_REF=origin/perf/embedded-mo-scan
 ```
 
@@ -94,9 +94,9 @@ Set `MO_SIRIUS_TEST_CONFIG` to a valid, bounded Sirius YAML configuration and
 run the native tests through the same Pixi environment used for the build:
 
 ```sh
-pixi run --frozen --manifest-path third_party/sirius/pixi.toml -e mo \
+pixi run --frozen --manifest-path thirdparties/sirius/pixi.toml -e mo \
   env MO_SIRIUS=1 MO_CL_CUDA=1 \
-  SIRIUS_SDK="$PWD/third_party/sirius/build/mo/extension/sirius/embedding-sdk" \
+  SIRIUS_SDK="$PWD/thirdparties/sirius/build/mo/extension/sirius/embedding-sdk" \
   MO_SIRIUS_TEST_CONFIG="/absolute/path/to/sirius.yaml" \
   .agents/skills/mo-dev/scripts/mo-cgo-test \
   -tags sirius_integration -count=1 -timeout=180s \

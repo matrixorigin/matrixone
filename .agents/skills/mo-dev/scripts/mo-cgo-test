@@ -82,7 +82,8 @@ esac
 # C/C++ or Makefile change link against a stale library.
 native_inputs_match() {
     candidate_root=$1
-    native_paths="Makefile cgo thirdparties"
+    # Sirius SDK inputs are validated separately by optools/sirius_sdk.py.
+    native_paths="Makefile cgo thirdparties :(exclude)thirdparties/sirius"
     if ! repo_native_status=$(git -C "$repo_root" status \
         --porcelain --untracked-files=all -- $native_paths); then
         return 1
