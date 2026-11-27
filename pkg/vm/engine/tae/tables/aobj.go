@@ -253,7 +253,7 @@ func (obj *aobject) ApplyDebugBatch(bat *containers.Batch, txn txnif.AsyncTxn) (
 	mnode := node.MustMNode()
 
 	commitTSVec := bat.Vecs[len(bat.Vecs)-1]
-	commitTSs := vector.MustFixedColNoTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
+	commitTSs := vector.MustFixedColNoTypeCheck[types.TS](commitTSVec)
 	prevTS := commitTSs[0]
 	anodeStart := 0
 	ans = make([]txnif.TxnEntry, 0)

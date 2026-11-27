@@ -18,22 +18,24 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"go.uber.org/zap"
 )
 
 func BuildFilesEntry(files []string) (entry.Entry, error) {
-	vec := containers.NewVector(types.T_char.ToType())
+	vec := vector.NewVec(types.T_char.ToType(), common.DefaultAllocator)
+	defer vec.Free(common.DefaultAllocator)
 	for _, file := range files {
-		vec.Append([]byte(file), false)
+		if err := vector.AppendBytes(vec, []byte(file), false, common.DefaultAllocator); err != nil {
+			return nil, err
+		}
 	}
-	defer vec.Close()
-	buf, err := vec.GetDownstreamVector().MarshalBinary()
+	buf, err := vec.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}

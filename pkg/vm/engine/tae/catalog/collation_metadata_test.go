@@ -12,9 +12,10 @@ package catalog
 
 import (
 	"bytes"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCollationMetadataSchemaRecovery(t *testing.T) {

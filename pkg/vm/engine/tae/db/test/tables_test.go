@@ -216,8 +216,10 @@ func TestTxn4(t *testing.T) {
 		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
 		pk := containers.MakeVector(schema.GetSingleSortKey().Type, common.DefaultAllocator)
-		defer pk.Close()
-		pk.AppendMany([]any{int32(1), int32(2), int32(1)}, []bool{false, false, false})
+		defer containers.ReleaseVector(pk)
+		for _, v := range []int32{1, 2, 1} {
+			pk.MustAppendValue(v, false)
+		}
 		provider := containers.NewMockDataProvider()
 		provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 		bat := containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), 3, schema.GetSingleSortKeyIdx(), provider)
@@ -433,13 +435,13 @@ func TestFlushAblkMerge(t *testing.T) {
 	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pk := containers.MakeVector(schema.GetSingleSortKey().Type, common.DefaultAllocator)
-	defer pk.Close()
+	defer containers.ReleaseVector(pk)
 	col3 := containers.MakeVector(schema.ColDefs[3].Type, common.DefaultAllocator)
-	defer col3.Close()
+	defer containers.ReleaseVector(col3)
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
-		pk.Append(v, false)
-		col3.Append(col3Data[i], false)
+		pk.MustAppendValue(v, false)
+		col3.MustAppendValue(col3Data[i], false)
 		mapping[v] = col3Data[i]
 	}
 
@@ -513,8 +515,8 @@ func TestFlushAblkMerge(t *testing.T) {
 					t.Log(view.Deletes.String())
 				}
 				for i := 0; i < view.Length(); i++ {
-					pkv := view.Vecs[1].Get(i)
-					colv := view.Vecs[0].Get(i)
+					pkv := view.Vecs[1].GetValue(i)
+					colv := view.Vecs[0].GetValue(i)
 					assert.Equal(t, mapping[pkv.(int32)], colv)
 				}
 
@@ -547,8 +549,8 @@ func TestMergeBlocks2(t *testing.T) {
 	col3 := containers.MakeVector(schema.ColDefs[3].Type, common.DefaultAllocator)
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
-		pk.Append(v, false)
-		col3.Append(col3Data[i], false)
+		pk.MustAppendValue(v, false)
+		col3.MustAppendValue(col3Data[i], false)
 		mapping[v] = col3Data[i]
 	}
 
@@ -564,8 +566,8 @@ func TestMergeBlocks2(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
-	pk.Close()
-	col3.Close()
+	containers.ReleaseVector(pk)
+	containers.ReleaseVector(col3)
 	bat.Close()
 	start := time.Now()
 	testutils.WaitExpect(2000, func() bool {

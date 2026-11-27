@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -283,7 +282,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if w.fakePK != math.MaxUint16 && w.fakePK == uint16(i) {
 			isPK = true
 		}
-		columnData := containers.ToTNVector(vec, common.DefaultAllocator)
+		columnData := vec
 		if !zmOnlyHiddenColumn {
 			// update null count and distinct value
 			w.objMetaBuilder.InspectVector(i, columnData, isPK)
@@ -291,11 +290,11 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 
 		// Build ZM
 		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
-		if err = index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
+		if err = index.BatchUpdateZM(zm, columnData); err != nil {
 			return nil, err
 		}
 
-		index.SetZMSum(zm, columnData.GetDownstreamVector())
+		index.SetZMSum(zm, columnData)
 		// Update column meta zonemap
 		// Note: Write always writes to SchemaData, so UpdateBlockZM should also use SchemaData
 		// The tombstone flag is handled by WriteObjectMeta setting tombstonesColmeta

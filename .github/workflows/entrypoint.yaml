@@ -140,7 +140,7 @@ jobs:
     permissions:
       contents: read
       actions: write
-    uses: matrixorigin/CI/.github/workflows/coverage-ut-standby.yaml@0441134eb2a05aba6fd8c3f7a27cd6696a296467
+    uses: matrixorigin/CI/.github/workflows/coverage-ut-standby.yaml@0d217341538bf3ee1cf97e7bf639296d5c5788ae
     with:
       bvt_generation: ${{ needs.preflight.outputs.generation }}
       enable_4_2_dev: ${{ github.base_ref == '4.2-dev' }}
