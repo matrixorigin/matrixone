@@ -77,7 +77,8 @@ def exercise():
             if path == f"/actions/runs/{run_id}/attempts/1":
                 if run_id == 51:
                     original_worker_reads += 1
-                    if original_worker_reads == 1:
+                    # Fail the result poll and the first pre-rerun read independently.
+                    if original_worker_reads in (1, 3):
                         raise urllib.error.HTTPError(path, 503, "worker result temporarily unavailable", None, None)
                 return granted_attempts[run_id], 0
             if path == f"/actions/runs/{run_id}/attempts/1/jobs?per_page=100":
@@ -105,6 +106,7 @@ def exercise():
         assert original_worker_reads == 2
         runs[51] = dict(runs[51], run_attempt=2, conclusion="success")
         standby.choose()
+        assert original_worker_reads >= 4
         grant = json.loads(Path(tmp, "grant.json").read_text())
         assert grant["child"] == 55 and grant["pool"] == "cs"
         assert grant["ticket"] == dispatches[0] and len(dispatches) == 1
