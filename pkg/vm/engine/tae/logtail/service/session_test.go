@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
@@ -45,10 +46,23 @@ func TestMain(m *testing.M) {
 	os.Exit(ret)
 }
 
+// newTestSendBuffer returns a send buffer whose memory the test checks is
+// all freed.
+func newTestSendBuffer(t *testing.T) *mpool.MessageBuffer {
+	mp := mpool.MustNewZero()
+	buf := mpool.NewMessageBuffer(mp, maxRetainedSendBuffer)
+	t.Cleanup(func() {
+		buf.Free()
+		require.Zero(t, mp.CurrNB())
+	})
+	return &buf
+}
+
 func TestSegmentPayloadCapacityPreservesQueuedResponses(t *testing.T) {
 	cs := newCaptureSession()
 	t.Cleanup(func() { require.NoError(t, cs.Close()) })
 	stream := mockMorpcStream(cs, 17, 1024)
+	buf := newTestSendBuffer(t)
 	type pending struct {
 		response *LogtailResponse
 		segments []*LogtailResponseSegment
@@ -70,7 +84,7 @@ func TestSegmentPayloadCapacityPreservesQueuedResponses(t *testing.T) {
 			messageLength += size - response.ProtoSize()
 		}
 		require.Equal(t, size, response.ProtoSize())
-		require.NoError(t, stream.write(context.Background(), response))
+		require.NoError(t, stream.write(context.Background(), response, buf))
 		item := pending{response: response}
 		for index := 0; index < (size+stream.limit-1)/stream.limit; index++ {
 			select {
@@ -112,7 +126,7 @@ func TestSegmentPayloadCapacityPreservesQueuedResponses(t *testing.T) {
 		}
 	}
 	// Empty protobuf responses have no segments or transport writes.
-	require.NoError(t, stream.write(context.Background(), &LogtailResponse{}))
+	require.NoError(t, stream.write(context.Background(), &LogtailResponse{}, buf))
 	require.Empty(t, cs.writes)
 }
 
@@ -140,6 +154,7 @@ func TestSegmentPayloadGrowthAndReuse(t *testing.T) {
 	stream := mockMorpcStream(cs, 17, 1024)
 	pool := &reusableSegmentPool{segment: &LogtailResponseSegment{}, limit: stream.limit}
 	stream.segments = pool
+	buf := newTestSendBuffer(t)
 	// Cold, geometric growth, growth directly to a larger payload, shrinking,
 	// and a final clamp at the protocol limit.
 	for _, messageLength := range []int{20, 30, 200, 600, 10, stream.limit - 11} {
@@ -150,7 +165,7 @@ func TestSegmentPayloadGrowthAndReuse(t *testing.T) {
 		}}
 		oldCapacity := cap(pool.segment.Payload)
 		require.LessOrEqual(t, response.ProtoSize(), stream.limit)
-		require.NoError(t, stream.write(context.Background(), response))
+		require.NoError(t, stream.write(context.Background(), response, buf))
 		var segment *LogtailResponseSegment
 		select {
 		case message := <-cs.writes:
@@ -659,4 +674,34 @@ func mockMOLogger() *log.MOLogger {
 		metadata.ServiceType_TN,
 		"uuid",
 	)
+}
+
+// A session marshals every response into one reused buffer: once it holds
+// the largest response, sending allocates nothing more from the pool.
+func TestSendBufferIsReused(t *testing.T) {
+	cs := newCaptureSession()
+	t.Cleanup(func() { require.NoError(t, cs.Close()) })
+	stream := mockMorpcStream(cs, 17, 1024)
+	mp := mpool.MustNewZero()
+	buf := mpool.NewMessageBuffer(mp, maxRetainedSendBuffer)
+	send := func(messageLength int) {
+		response := &LogtailResponse{LogtailResponse: logtail.LogtailResponse{
+			Response: &logtail.LogtailResponse_Error{Error: &logtail.ErrorResponse{
+				Status: logtail.Status{Message: strings.Repeat("x", messageLength)},
+			}},
+		}}
+		require.NoError(t, stream.write(context.Background(), response, &buf))
+		for range (response.ProtoSize() + stream.limit - 1) / stream.limit {
+			stream.segments.Release((<-cs.writes).(*LogtailResponseSegment))
+		}
+	}
+	send(3000)
+	allocated := mp.Stats().NumAlloc.Load()
+	for _, n := range []int{10, 3000, 500, 2999} {
+		send(n)
+	}
+	require.Equal(t, allocated, mp.Stats().NumAlloc.Load())
+	require.NotZero(t, mp.CurrNB(), "the buffer is kept between responses")
+	buf.Free()
+	require.Zero(t, mp.CurrNB())
 }

@@ -76,13 +76,14 @@ func checkBranchQuotaForAccount(
 // Deletion only reduces usage; whole-catalog restore is excluded by G.
 func branchQuotaUsageSQL(accountID uint32) string {
 	return fmt.Sprintf(
-		"select count(*) from %s.%s b join %s.%s t on b.table_id = t.rel_id where t.account_id = %d and b.table_deleted = false and b.level != '%s'",
+		"select count(*) from %s.%s b join %s.%s t on b.table_id = t.rel_id where t.account_id = %d and b.table_deleted = false and b.level not in ('%s', '%s')",
 		catalog.MO_CATALOG,
 		catalog.MO_BRANCH_METADATA,
 		catalog.MO_CATALOG,
 		catalog.MO_TABLES,
 		accountID,
 		databranchutils.AlterLineageLevel,
+		databranchutils.TruncateLineageLevel,
 	)
 }
 
