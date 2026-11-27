@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import urllib.error
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -72,6 +73,8 @@ def exercise():
                 return run, 0
             if path == f"/actions/runs/{run_id}/attempts/1/jobs?per_page=100":
                 marker_reads[run_id] = marker_reads.get(run_id, 0) + 1
+                if run_id == 51 and marker_reads[run_id] == 1:
+                    raise urllib.error.HTTPError(path, 404, "attempt jobs temporarily unavailable", None, None)
                 rows = jobs[run_id][1:] if run_id == 55 and marker_reads[run_id] == 1 else jobs[run_id]
                 return {"jobs": rows, "total_count": len(rows)}, 0
         raise AssertionError(f"unexpected fixture request: {path}")
@@ -94,6 +97,7 @@ def exercise():
         assert grant["ticket"] == dispatches[0] and len(dispatches) == 1
         assert standby.digest(grant["nonce"]) == dispatches[0]["key"]
         assert standby.proof_name(grant["ticket"]) == "real-pr-retry-42-attempt-2-group-0"
+        assert marker_reads[51] == 2
         assert marker_reads[52] >= 1 and marker_reads[53] >= 1 and marker_reads[55] >= 3
     # Share the same metadata with the real cleanup controller. Omit the
     # fixture nonce and expose only fields normally visible on the Actions API.
