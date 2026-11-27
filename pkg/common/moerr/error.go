@@ -51,6 +51,8 @@ const (
 	// Prepared state is still being changed or cannot be replayed. Closing
 	// the handle may make the connection eligible without a server response.
 	OkExpectedMigrationPreparedState uint16 = 9
+	// A catalog change can restore the authenticated primary role.
+	OkExpectedMigrationRoleChanged uint16 = 10
 
 	OkMax uint16 = 99
 
@@ -922,6 +924,7 @@ var errOkExpectedPossibleDup = Error{code: OkExpectedPossibleDup, message: "OkEx
 var errOkExpectedNotSafeToStartTransfer = Error{code: OkExpectedNotSafeToStartTransfer, message: "OkExpectedNotSafeToStartTransfer", sqlState: "00000"}
 var errOkExpectedMigrationPolicyChanged = Error{code: OkExpectedMigrationPolicyChanged, message: "OkExpectedMigrationPolicyChanged", sqlState: "00000"}
 var errOkExpectedMigrationPreparedState = Error{code: OkExpectedMigrationPreparedState, message: "OkExpectedMigrationPreparedState", sqlState: "00000"}
+var errOkExpectedMigrationRoleChanged = Error{code: OkExpectedMigrationRoleChanged, message: "OkExpectedMigrationRoleChanged", sqlState: "00000"}
 var errMysqlClientQuit = Error{code: MysqlClientQuit, message: "MysqlClientQuit", sqlState: "00000"}
 
 /*
@@ -963,6 +966,10 @@ func GetOkExpectedMigrationPolicyChanged() *Error {
 
 func GetOkExpectedMigrationPreparedState() *Error {
 	return &errOkExpectedMigrationPreparedState
+}
+
+func GetOkExpectedMigrationRoleChanged() *Error {
+	return &errOkExpectedMigrationRoleChanged
 }
 
 func GetMysqlClientQuit() *Error {

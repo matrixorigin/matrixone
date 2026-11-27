@@ -2287,8 +2287,18 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	// The proxy handshakes with the original login credentials. It must
 	// keep the source if that login no longer reproduces its role selection.
 	currentRole := migrationRoleState(ses)
-	if currentRole == nil || req.RoleState == nil || *currentRole != *req.RoleState {
+	sourceRole := req.RoleState
+	if currentRole == nil || sourceRole == nil ||
+		currentRole.AccountID != sourceRole.AccountID || currentRole.UserID != sourceRole.UserID ||
+		currentRole.AllSecondaryRoles != sourceRole.AllSecondaryRoles ||
+		currentRole.LowerCaseTableNames != sourceRole.LowerCaseTableNames {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if currentRole.PrimaryRoleName != sourceRole.PrimaryRoleName || currentRole.PrimaryRoleID != sourceRole.PrimaryRoleID {
+		if currentRole.PrimaryRoleName == "" || sourceRole.PrimaryRoleName == "" {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
+		return moerr.GetOkExpectedMigrationRoleChanged()
 	}
 	for _, stmt := range req.PrepareStmts {
 		if stmt == nil || len(stmt.ReplayProof) != sha256.Size {

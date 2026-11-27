@@ -394,10 +394,14 @@ func SplitRewriteKey(key string) (db, table string, ok bool) {
 
 // RoleRuleKey follows table binding, including case-insensitive system schemas.
 func RoleRuleKey(db, table string, lower int64) string {
-	if lower == 1 || slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(db)) {
+	if lower == 1 || RoleRuleAlwaysFolds(db) {
 		return strings.ToLower(db + "." + table)
 	}
 	return db + "." + table
+}
+
+func RoleRuleAlwaysFolds(db string) bool {
+	return slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(db))
 }
 
 // ValidateRemapDb validates a remapdb map: every source/destination must be a
@@ -495,12 +499,12 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 }
 
 func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql string, sqlMode string) error {
-	return AddRewriteHintsWithRoleRules(ctx, stmts, sql, sqlMode, nil, 1)
+	return AddRewriteHintsWithRoleRules(ctx, stmts, sql, sqlMode, nil, 1, nil)
 }
 
 // AddRewriteHintsWithRoleRules also marks and verifies the server-supplied
 // first layer for each protected table.
-func AddRewriteHintsWithRoleRules(ctx context.Context, stmts []tree.Statement, sql, sqlMode string, roleRules map[string]string, lower int64) error {
+func AddRewriteHintsWithRoleRules(ctx context.Context, stmts []tree.Statement, sql, sqlMode string, roleRules map[string]string, lower int64, provenFoldedTargets map[string]uint64) error {
 	hints, err := extractLeadingHintsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return err
@@ -556,6 +560,7 @@ func AddRewriteHintsWithRoleRules(ctx context.Context, stmts []tree.Statement, s
 		if len(roleRules) > 0 {
 			rewriteOption.RoleRules = make(map[string][]*tree.Rewrite, len(roleRules))
 			rewriteOption.RoleRuleLowerCaseTableNames = lower
+			rewriteOption.ProvenFoldedRoleTargets = provenFoldedTargets
 		}
 		if len(remapDb) > 0 {
 			rewriteOption.RemapDb = remapDb

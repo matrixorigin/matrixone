@@ -495,16 +495,18 @@ func addStatementRewriteHints(ctx context.Context, stmts []tree.Statement, sql, 
 	}
 	var roleRules map[string]string
 	lower := int64(1)
+	var provenFoldedTargets map[string]uint64
 	if appliesRules {
 		var err error
 		cache := input.rewritePolicy.roleRules
 		lower = cache.lowerCaseTableNames
+		provenFoldedTargets = cache.provenFoldedTargets
 		roleRules, err = cache.forSQLMode(ctx, sqlMode)
 		if err != nil {
 			return err
 		}
 	}
-	return parsers.AddRewriteHintsWithRoleRules(ctx, targets, sql, sqlMode, roleRules, lower)
+	return parsers.AddRewriteHintsWithRoleRules(ctx, targets, sql, sqlMode, roleRules, lower, provenFoldedTargets)
 }
 
 // roleRuleStatementSupport classifies statements by whether planning binds the
@@ -605,7 +607,7 @@ func applyRoleRulesToSetExpression(execCtx *ExecCtx, ses *Session, stmt *tree.Se
 	if err != nil {
 		return err
 	}
-	return parsers.AddRewriteHintsWithRoleRules(ctx, []tree.Statement{stmt}, hint+" select 1", sqlMode, rules, cache.lowerCaseTableNames)
+	return parsers.AddRewriteHintsWithRoleRules(ctx, []tree.Statement{stmt}, hint+" select 1", sqlMode, rules, cache.lowerCaseTableNames, cache.provenFoldedTargets)
 }
 
 func (prepareStmt *PrepareStmt) checkRoleRulePolicy(ctx context.Context, ses *Session) error {
@@ -636,7 +638,7 @@ func (prepareStmt *PrepareStmt) checkRoleRulePolicy(ctx context.Context, ses *Se
 		if err != nil {
 			return err
 		}
-		if maps.Equal(oldRules, activeRules) {
+		if maps.Equal(oldRules, activeRules) && maps.Equal(prepareStmt.roleRules.provenFoldedTargets, current.provenFoldedTargets) {
 			return nil
 		}
 	}
@@ -870,6 +872,7 @@ func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMe
 type roleRuleCache struct {
 	lowerCaseTableNames int64
 	caseCollision       bool
+	provenFoldedTargets map[string]uint64
 	proof               roleRuleCacheProof
 	first               map[string]string
 	later               map[string][]string // competing rules only, in active-role priority order
@@ -954,7 +957,7 @@ func roleRuleHintSQL(ctx context.Context, rule string, mode mysql.SQLModeFlags) 
 	return "", moerr.NewInvalidInput(ctx, "rewrite rule contains invalid UTF-8 outside binary literals")
 }
 
-const roleRuleDependencyCount = 4
+const roleRuleDependencyCount = 5
 
 type roleRuleCacheProof struct {
 	principal    authorizationPrincipal
@@ -985,10 +988,10 @@ func captureRoleRuleCacheProof(ctx context.Context, ses *Session, bh BackgroundE
 	proof.principal = currentAuthorizationPrincipal(ses)
 	// The physical rule and role-grant tables provide data versions. The
 	// system table catalog also covers changes to their name bindings.
-	names := [roleRuleDependencyCount]string{catalog.MO_ROLE_RULE, "mo_user_grant", "mo_role_grant", catalog.MO_TABLES}
+	names := [roleRuleDependencyCount]string{catalog.MO_ROLE_RULE, "mo_user_grant", "mo_role_grant", catalog.MO_TABLES, catalog.MO_DATABASE}
 	for i, name := range names {
 		account := proof.principal.account
-		if name == catalog.MO_TABLES {
+		if name == catalog.MO_TABLES || name == catalog.MO_DATABASE {
 			account = sysAccountID
 		}
 		tableCtx := defines.AttachAccountId(ctx, account)
@@ -1031,11 +1034,73 @@ func loadRoleRuleCacheAtSnapshot(ctx context.Context, ses *Session, snapshot tim
 	if err != nil {
 		return nil, err
 	}
+	if rules.lowerCaseTableNames != 1 {
+		if source, ok := bh.(interface{ GetTxnOperator() TxnOperator }); ok {
+			if op := source.GetTxnOperator(); op != nil {
+				rules.provenFoldedTargets = proveFoldedRoleTargets(ctx, storage, op, rules.first)
+			}
+		}
+	}
 	var observed [roleRuleDependencyCount]engine.TableContentVersion
 	if proof.valid(ctx, currentAuthorizationPrincipal(ses), reader, snapshot, observed[:]) {
 		rules.proof = proof
 	}
 	return rules, nil
+}
+
+// proveFoldedRoleTargets enumerates the directory once per authorization
+// generation, at the same catalog snapshot that supplied the role rows.
+// A unique exact lowercase relation is sufficient for that spelling only.
+func proveFoldedRoleTargets(ctx context.Context, storage engine.Engine, txn TxnOperator, rules map[string]string) map[string]uint64 {
+	targets := make(map[string][]string)
+	for key := range rules {
+		db, table, valid := parsers.SplitRewriteKey(key)
+		if valid && key == db+"."+table && key == strings.ToLower(key) && !parsers.RoleRuleAlwaysFolds(db) {
+			targets[db] = append(targets[db], table)
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	names, err := storage.Databases(ctx, txn)
+	if err != nil {
+		return nil
+	}
+	dbMatches := make(map[string]int, len(targets))
+	for _, name := range names {
+		folded := strings.ToLower(name)
+		if _, wanted := targets[folded]; wanted {
+			dbMatches[folded]++
+		}
+	}
+	proven := make(map[string]uint64)
+	for db, tables := range targets {
+		if dbMatches[db] != 1 || !slices.Contains(names, db) {
+			continue
+		}
+		database, err := storage.Database(ctx, db, txn)
+		if err != nil || database == nil || database.IsSubscription(ctx) {
+			continue
+		}
+		relations, err := database.Relations(ctx)
+		if err != nil {
+			continue
+		}
+		counts := make(map[string]int, len(relations))
+		for _, relation := range relations {
+			counts[strings.ToLower(relation)]++
+		}
+		for _, table := range tables {
+			if counts[table] != 1 || !slices.Contains(relations, table) {
+				continue
+			}
+			relation, err := database.Relation(ctx, table, nil)
+			if err == nil && relation != nil {
+				proven[db+"."+table] = relation.GetTableID(ctx)
+			}
+		}
+	}
+	return proven
 }
 
 func readRoleRules(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, lower int64) (*roleRuleCache, error) {

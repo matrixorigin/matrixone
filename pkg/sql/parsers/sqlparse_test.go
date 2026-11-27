@@ -66,7 +66,7 @@ func TestRoleRuleCaseModePreservesOptionalRuleParsing(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	require.NoError(t, AddRewriteHintsWithRoleRules(t.Context(), []tree.Statement{stmt}, sql, "",
-		map[string]string{"PolicyDb.Docs": mandatory}, 0))
+		map[string]string{"PolicyDb.Docs": mandatory}, 0, nil))
 	option := stmt.(*tree.Select).RewriteOption
 	require.Equal(t, mandatory, tree.String(option.RoleRules["PolicyDb.Docs"][0].Stmt, dialect.MYSQL))
 	require.Equal(t, "select id from optionaldb.items", tree.String(option.Rewrites["PolicyDb.Docs"][1].Stmt, dialect.MYSQL))

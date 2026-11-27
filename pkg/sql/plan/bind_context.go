@@ -35,6 +35,7 @@ func mandatoryRewrites(option *tree.RewriteOption) *tree.RewriteOption {
 	return &tree.RewriteOption{
 		Rewrites: option.RoleRules, RoleRules: option.RoleRules,
 		RoleRuleLowerCaseTableNames: option.RoleRuleLowerCaseTableNames,
+		ProvenFoldedRoleTargets:     option.ProvenFoldedRoleTargets,
 	}
 }
 
@@ -43,13 +44,16 @@ func roleRuleTarget(option *tree.RewriteOption, db, table string) (key string, e
 		return "", false, false
 	}
 	key = parsers.RoleRuleKey(db, table, option.RoleRuleLowerCaseTableNames)
-	if len(option.RoleRules[key]) > 0 {
-		return key, true, false
-	}
-	// Older role DDL folded case-sensitive table names before storage.
-	// A folded rule alone cannot establish which physical table it targets.
 	folded := strings.ToLower(key)
-	return key, false, folded != key && len(option.RoleRules[folded]) > 0
+	if option.RoleRuleLowerCaseTableNames != 1 &&
+		!parsers.RoleRuleAlwaysFolds(db) && len(option.RoleRules[folded]) > 0 {
+		// Released writers folded the entire key, even for distinct
+		// identifiers. Test the group before accepting an apparent exact hit.
+		if key != folded || option.ProvenFoldedRoleTargets[folded] == 0 {
+			return key, false, true
+		}
+	}
+	return key, len(option.RoleRules[key]) > 0, false
 }
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {

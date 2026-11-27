@@ -9330,6 +9330,16 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				if len(ctx.remapOption.RoleRules) != 0 && (tbl.AtTsExpr != nil || tbl.IcebergRef != nil) {
 					return 0, moerr.NewInvalidInput(builder.GetContext(), "table history qualifiers are not supported with active role-rule rewrites")
 				}
+				if targetID := ctx.remapOption.ProvenFoldedRoleTargets[roleKey]; exact && targetID != 0 {
+					ref, def, err := builder.compCtx.Resolve(schema, table, ctx.snapshot)
+					if err != nil {
+						return 0, err
+					}
+					if ref == nil || def == nil || def.IsTemporary || ref.PubInfo != nil ||
+						ref.SchemaName != schema || ref.ObjName != table || uint64(ref.Obj) != targetID {
+						return 0, moerr.NewInvalidInput(builder.GetContext(), "role rule target identity is unverified")
+					}
+				}
 				// Apply the rewrite chain as stacked views: build the outermost
 				// (last) layer now. A reference to this same table inside that
 				// layer's body resolves to the next inner layer (the chain minus
@@ -9356,6 +9366,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 							Rewrites:                    next,
 							RoleRules:                   option.RoleRules,
 							RoleRuleLowerCaseTableNames: option.RoleRuleLowerCaseTableNames,
+							ProvenFoldedRoleTargets:     option.ProvenFoldedRoleTargets,
 						}
 					}
 				}

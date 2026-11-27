@@ -2954,11 +2954,24 @@ func TestRoleRuleTargetUsesMandatoryIdentity(t *testing.T) {
 	_, exact, ambiguous = roleRuleTarget(option, "db", "other")
 	require.False(t, exact)
 	require.False(t, ambiguous)
+	_, exact, ambiguous = roleRuleTarget(option, "db", "docs")
+	require.False(t, exact)
+	require.True(t, ambiguous)
+	option.ProvenFoldedRoleTargets = map[string]uint64{"db.docs": 123}
+	key, exact, ambiguous := roleRuleTarget(option, "db", "docs")
+	require.Equal(t, "db.docs", key)
+	require.True(t, exact)
+	require.False(t, ambiguous)
 	option.RoleRules["db.Docs"] = []*tree.Rewrite{{TableName: "Docs"}}
-	key, exact, ambiguous := roleRuleTarget(option, "db", "Docs")
+	_, exact, ambiguous = roleRuleTarget(option, "db", "Docs")
+	require.False(t, exact)
+	require.True(t, ambiguous)
+	delete(option.RoleRules, "db.docs")
+	key, exact, ambiguous = roleRuleTarget(option, "db", "Docs")
 	require.Equal(t, "db.Docs", key)
 	require.True(t, exact)
 	require.False(t, ambiguous)
+	option.RoleRules["db.docs"] = []*tree.Rewrite{{TableName: "docs"}}
 	option.RoleRuleLowerCaseTableNames = 1
 	key, exact, ambiguous = roleRuleTarget(option, "DB", "Docs")
 	require.Equal(t, "db.docs", key)
@@ -2975,7 +2988,7 @@ func TestQueryBuilderIcebergHistoryRejectsRoleRewrite(t *testing.T) {
 	require.NoError(t, err)
 	defer replacement.Free()
 	rules := map[string][]*tree.Rewrite{"tpch.gold_orders": {{Stmt: replacement}}}
-	stmt.(*tree.Select).RewriteOption = &tree.RewriteOption{Rewrites: rules, RoleRules: rules}
+	stmt.(*tree.Select).RewriteOption = &tree.RewriteOption{Rewrites: rules, RoleRules: rules, RoleRuleLowerCaseTableNames: 1}
 	_, err = BuildPlan(ctx, stmt, false)
 	require.ErrorContains(t, err, "table history qualifiers are not supported with active role-rule rewrites")
 }

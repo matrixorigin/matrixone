@@ -145,6 +145,7 @@ func TestMigrationCatalogRetryIsBounded(t *testing.T) {
 	for name, refusal := range map[string]error{
 		"catalog":  moerr.GetOkExpectedMigrationPolicyChanged(),
 		"prepared": moerr.GetOkExpectedMigrationPreparedState(),
+		"role":     moerr.GetOkExpectedMigrationRoleChanged(),
 	} {
 		t.Run(name, func(t *testing.T) {
 			now := time.Now()

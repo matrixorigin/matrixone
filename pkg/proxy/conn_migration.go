@@ -165,5 +165,6 @@ func isMigrationRefusal(err error) bool {
 
 func isRetryableMigrationRefusal(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPolicyChanged) ||
-		moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPreparedState)
+		moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPreparedState) ||
+		moerr.IsMoErrCode(err, moerr.OkExpectedMigrationRoleChanged)
 }

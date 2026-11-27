@@ -1895,7 +1895,9 @@ func (ui *UserInput) isPreparedExpr() bool {
 }
 
 func (ui *UserInput) canUsePlanCache() bool {
-	return ui != nil && !ui.isSetExpression
+	// The SQL cache key does not include the directory proof for case-sensitive role targets.
+	return ui != nil && !ui.isSetExpression && (!ui.rewritePolicy.hasRoleRules() ||
+		ui.rewritePolicy.roleRules.lowerCaseTableNames == 1)
 }
 
 func (ui *UserInput) genSqlSourceType(ses FeSession) {

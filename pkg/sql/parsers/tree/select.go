@@ -102,6 +102,8 @@ type RewriteOption struct {
 	// RoleRules holds the mandatory first layer for each protected table.
 	RoleRules                   map[string][]*Rewrite
 	RoleRuleLowerCaseTableNames int64
+	// ProvenFoldedRoleTargets records directory proof for indistinguishable old keys.
+	ProvenFoldedRoleTargets map[string]uint64
 	// RemapDb maps a source database name to a target database name. It is
 	// applied before the table Rewrites: a reference to <src>.t (or an
 	// unqualified table when the current database is <src>) is resolved against

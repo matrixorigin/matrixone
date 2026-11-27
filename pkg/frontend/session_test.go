@@ -756,7 +756,13 @@ func TestSession_Migrate(t *testing.T) {
 			err := Migrate(t.Context(), s, &query.MigrateConnToRequest{
 				DB: "d1", LastAffectedRows: 7, RoleState: source,
 			})
-			require.ErrorIs(t, err, moerr.GetOkExpectedNotSafeToStartTransfer())
+			expected := moerr.GetOkExpectedNotSafeToStartTransfer()
+			if source != nil && source.AccountID == role.AccountID && source.UserID == role.UserID &&
+				source.LowerCaseTableNames == role.LowerCaseTableNames && source.AllSecondaryRoles == role.AllSecondaryRoles &&
+				source.PrimaryRoleName != "" {
+				expected = moerr.GetOkExpectedMigrationRoleChanged()
+			}
+			require.ErrorIs(t, err, expected)
 			require.Empty(t, s.GetDatabaseName())
 			require.Equal(t, int64(9), s.GetLastAffectedRows())
 		}

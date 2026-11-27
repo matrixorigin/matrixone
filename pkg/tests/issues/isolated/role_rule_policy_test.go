@@ -382,6 +382,30 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 
 	exec(caseAdmin, "alter role policy_case_role add rule 'select id from PolicyCase.Docs where id = 11' on table PolicyCase.Docs")
 	selectIDs(caseReader, "select id from PolicyCase.Docs", 11)
+	for _, statement := range []string{
+		"create database legacy_case",
+		"create table legacy_case.docs(id int primary key)",
+		"insert into legacy_case.docs values (31),(32)",
+		"grant select on table legacy_case.docs to policy_case_role",
+		"alter role policy_case_role add rule 'select id from legacy_case.docs where id = 31' on table legacy_case.docs",
+	} {
+		exec(caseAdmin, statement)
+	}
+	selectIDs(caseReader, "select id from legacy_case.docs", 31)
+	legacyPrepared, err := caseReader.PrepareContext(ctx, "select id from legacy_case.docs")
+	require.NoError(t, err)
+	defer legacyPrepared.Close()
+	assertIDs(func() (*sql.Rows, error) { return legacyPrepared.QueryContext(ctx) }, 31)
+	exec(caseAdmin, "create table legacy_case.Docs(id int primary key)")
+	exec(caseAdmin, "grant select on table legacy_case.Docs to policy_case_role")
+	for _, name := range []string{"legacy_case.docs", "legacy_case.Docs"} {
+		assertQueryDenied(func() (*sql.Rows, error) {
+			return caseReader.QueryContext(ctx, "select id from "+name)
+		}, "ambiguous case spelling")
+	}
+	assertQueryDenied(func() (*sql.Rows, error) { return legacyPrepared.QueryContext(ctx) }, "role rule policy changed")
+	exec(caseAdmin, "alter role policy_case_role drop rule on table legacy_case.docs")
+
 	exec(caseAdmin, "set global lower_case_table_names = 2")
 	preservingReader := connect(0, "sys#policy_case_user#policy_case_role")
 	selectIDs(preservingReader, "select id from PolicyCase.Docs", 11)
