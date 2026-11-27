@@ -700,7 +700,7 @@ invalid input: 278732.48392480932 beyond the range, can't be converted to Decima
 DROP TABLE decimal01;
 DROP TABLE IF EXISTS decimal02;
 CREATE TABLE decimal02(a DECIMAL(10,11));
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a')) at line 1 column 39 near "));";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For float(M,D), double(M,D) or decimal(M,D), M must be >= D at line 1 column 39 near "));";
 DROP TABLE decimal02;
 Unknown table 'decimal.decimal02'
 DROP TABLE IF EXISTS decimal03;

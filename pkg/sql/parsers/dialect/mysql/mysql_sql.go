@@ -36884,7 +36884,7 @@ yydefault:
 				goto ret1
 			}
 			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
-				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D")
 				goto ret1
 			}
 			yyLOCAL = &tree.T{
@@ -36916,7 +36916,7 @@ yydefault:
 				goto ret1
 			}
 			if yyDollar[3].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[3].lengthScaleOptUnion().Scale > yyDollar[3].lengthScaleOptUnion().DisplayWith {
-				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D")
 				goto ret1
 			}
 			yyLOCAL = &tree.T{
@@ -36947,7 +36947,7 @@ yydefault:
 				goto ret1
 			}
 			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
-				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D")
 				goto ret1
 			}
 			if yyDollar[2].lengthScaleOptUnion().Scale == tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().DisplayWith > 24 {
@@ -36984,7 +36984,7 @@ yydefault:
 		{
 			locale := ""
 			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
-				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D")
 				goto ret1
 			}
 			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 65 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {
@@ -37036,7 +37036,7 @@ yydefault:
 		{
 			locale := ""
 			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
-				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D")
 				goto ret1
 			}
 			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 65 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {

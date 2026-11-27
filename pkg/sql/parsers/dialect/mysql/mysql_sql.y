@@ -15932,7 +15932,7 @@ decimal_type:
             goto ret1
         }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
-            yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+            yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D")
                 goto ret1
         }
         $$ = &tree.T{
@@ -15960,7 +15960,7 @@ decimal_type:
             goto ret1
         }
         if $3.Scale != tree.NotDefineDec && $3.Scale > $3.DisplayWith {
-            yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+            yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D")
                 goto ret1
         }
         $$ = &tree.T{
@@ -15987,7 +15987,7 @@ decimal_type:
             goto ret1
         }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
-        	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+        	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D")
         	goto ret1
         }
         if $2.Scale == tree.NotDefineDec && $2.DisplayWith > 24 {
@@ -16021,7 +16021,7 @@ decimal_type:
     {
         locale := ""
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
-        yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+        yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D")
         goto ret1
         }
         if $2.DisplayWith > 65 || $2.DisplayWith < 0 {
@@ -16069,7 +16069,7 @@ decimal_type:
     {
         locale := ""
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
-        yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+        yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D")
         goto ret1
         }
         if $2.DisplayWith > 65 || $2.DisplayWith < 0 {

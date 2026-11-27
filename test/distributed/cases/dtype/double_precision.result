@@ -62,7 +62,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 create table dperr(a double precision(10,40));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. Display scale for double out of range (max = 30) at line 1 column 44 near "));";
 create table dperr(a double precision(5,10));
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a')) at line 1 column 43 near "));";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For float(M,D), double(M,D) or decimal(M,D), M must be >= D at line 1 column 43 near "));";
 create table dpres(precision int);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 28 near "precision int);";
 select 1 as precision;
