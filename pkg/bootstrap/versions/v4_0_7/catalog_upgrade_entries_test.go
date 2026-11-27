@@ -35,9 +35,9 @@ import (
 
 func TestConsolidatedTenantEntriesKeepWriterProtocolGates(t *testing.T) {
 	require.Equal(t, "4.0.7", Handler.Metadata().Version)
-	require.Equal(t, uint32(45), Handler.Metadata().VersionOffset)
+	require.Equal(t, uint32(46), Handler.Metadata().VersionOffset)
 	require.Len(t, tenantUpgEntries, 27)
-	require.Len(t, clusterUpgEntries, 18)
+	require.Len(t, clusterUpgEntries, 19)
 	require.Contains(t, upgradeInformationSchemaStatistics().UpgSql, "sub_part")
 	for _, tc := range []struct {
 		table   string
@@ -1252,9 +1252,21 @@ func TestCleanupLegacyOrphanSQLTaskChildren(t *testing.T) {
 }
 
 func TestMetricBatchReceiptUpgradeIsIdempotent(t *testing.T) {
+	for _, tc := range []struct{ table, ddl string }{
+		{dbholder.MetricBatchReceiptTable, dbholder.CreateMetricBatchReceipt},
+		{dbholder.MetricFileProgressTable, dbholder.CreateMetricFileProgress},
+	} {
+		t.Run(tc.table, func(t *testing.T) {
+			testMetricTableUpgrade(t, tc.table, tc.ddl)
+		})
+	}
+}
+
+func testMetricTableUpgrade(t *testing.T, table, ddl string) {
+	t.Helper()
 	var receiptEntry *versions.UpgradeEntry
 	for i := range clusterUpgEntries {
-		if clusterUpgEntries[i].TableName == dbholder.MetricBatchReceiptTable {
+		if clusterUpgEntries[i].TableName == table {
 			receiptEntry = &clusterUpgEntries[i]
 			break
 		}
@@ -1264,14 +1276,14 @@ func TestMetricBatchReceiptUpgradeIsIdempotent(t *testing.T) {
 	created := false
 	ddlCount := 0
 	txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
-		if sql == dbholder.CreateMetricBatchReceipt {
+		if sql == ddl {
 			created = true
 			ddlCount++
 			return executor.Result{}, nil
 		}
-		require.Contains(t, sql, dbholder.MetricBatchReceiptTable)
+		require.Contains(t, sql, table)
 		if created {
-			return newProtocolVersionResultValue(t, "metric_batch_receipt"), nil
+			return newProtocolVersionResultValue(t, table), nil
 		}
 		return executor.Result{}, nil
 	})

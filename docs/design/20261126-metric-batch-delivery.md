@@ -13,10 +13,14 @@ The writer factory assigns one random UUID to a batch for either
 system_metrics.metric or system_metrics.sql_statement_cu. The SQL writer and
 the CSV filename carry this UUID. SQL-disabled writers also name their CSV
 with a batch UUID. The table directory and CSV body layout stay the same.
-The filename is `!<uuid>.csv`, with the full 16-byte UUID encoded as 22
+New files use `@<uuid>.csv`, with the full 16-byte UUID encoded as 22
 unpadded URL-safe Base64 characters. The 27-byte name avoids growing the
-object key and leaves room for the disk-cache suffix. The original node
-identifier and timestamp stay in the CSV.
+object key and leaves room for the disk-cache suffix. Each new file starts
+with a 16-byte publisher UUID and an 8-byte big-endian sequence, followed
+by the original CSV. The producer assigns a sequence when it starts a
+file write, including in file-only mode. Retries of a file write reuse the
+same key, header and payload. Each writer factory uses a separate publisher
+identity per account and table. A restart uses a new publisher identity.
 
 Both write paths insert the UUID into the primary key of
 system_metrics.metric_batch_receipt and load the rows in the same transaction.
@@ -42,9 +46,9 @@ A rollback removes both effects. When the insert or commit reports a
 duplicate key, the writer checks the receipt from a new SQL statement after
 releasing the failed transaction. A visible receipt proves that a previous
 attempt committed. Timeouts, conflicts without a visible receipt, and failed
-receipt reads leave the file available for retry. Only a confirmed commit or
-a visible committed receipt permits deletion. If deletion fails, the next
-importer uses the same UUID and can safely retry deletion.
+receipt reads leave the file available for retry. For a sequenced file,
+its delivery must also be recorded in the progress table before deletion.
+If deletion fails, the next importer can safely retry deletion.
 
 This fits the existing 4.2-dev file transaction. On that branch several
 bounded LOADs can share one receipt and commit after a clean end of file.
@@ -56,19 +60,39 @@ A successful first-write acknowledgment means the sole producer of that
 batch will never publish its fallback file. The producer can delete the
 receipt at that point. A failed receipt delete leaves the receipt in place
 and still counts as a successful delivery. The normal SQL path adds a
-transaction and a receipt insert and delete per batch.
+transaction, a receipt insert and delete, and a write to the origin
+fence per batch.
 
-Keep receipts for file-backed batches, and orphaned receipts from failed
-cleanup, until there is a cleanup mechanism that can prove the batch cannot
-be replayed. Both a delayed SQL writer publishing a fallback and an importer
-that already read a deleted file can outlive a listing or delete operation.
-Age-based reclamation can therefore cause duplicates. Receipt storage
-grows with file-backed batches and failed receipt deletions. Operators can
-query created_at to inspect that growth.
+The replay transaction records a delivered sequence in
+`system_metrics.metric_file_progress` along with the LOAD and UUID receipt.
+When the first write already committed, replay records the sequence after
+a fresh read of that receipt under the replay fence. The permanent prefix
+row serializes replays in pessimistic mode and makes concurrent progress
+updates conflict in optimistic mode. A paused importer must check progress
+inside this transaction, even if it read the payload before another
+importer finished.
 
-Fresh bootstrap creates the receipt table in the system account. Shutdown
-upgrade creates it through an idempotent cluster entry in the pending
-4.0.7 catalog version. The two metric tables keep their existing columns
+After progress commits, a second short transaction retires the UUID
+receipt before the source file is deleted. That transaction and the
+original SQL attempt write a separate fence row. An older optimistic
+first write therefore cannot commit after retirement removes the UUID it
+would otherwise have conflicted with. The original write never locks the
+replay prefix row, and holds its own fence only at commit. A failed
+retirement leaves the CSV available for retry. Progress also deduplicates
+the original bytes if an upload retry recreates the deleted object.
+
+One prefix row and one first-write fence row cover consecutive
+deliveries for a publisher. Out-of-order deliveries use one row per
+disjoint delivered interval beyond the prefix, and intervals coalesce
+when gaps are filled. Gaps may correspond to delayed or failed uploads.
+Retirement never infers completion from time or from an absent object.
+An original SQL receipt that is still awaiting fallback keeps its UUID
+until that file is replayed. Unsequenced `!<uuid>.csv` and manually
+reconciled `-batch-<uuid>.csv` use their UUID receipts, since they have no
+publisher sequence to retire by.
+
+Fresh bootstrap and the idempotent 4.0.7 cluster upgrade create both
+tables in the system account. The two metric tables keep their existing columns
 and CSV column order. ETL retains incompatible versioned CSV before opening
 a SQL transaction. Legacy TAE files keep their existing import path. The
 SQL writer has only ever used CSV for fallback.

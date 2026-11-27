@@ -49,7 +49,7 @@ import (
 )
 
 const (
-	insertReceipt = "insert into system_metrics.metric_batch_receipt (batch_id) values (?)"
+	insertReceipt = "insert into system_metrics.metric_batch_receipt (batch_id) select ? where not exists(select 1 from system_metrics.metric_batch_receipt where batch_id = ?)"
 	selectReceipt = "select exists(select 1 from system_metrics.metric_batch_receipt where batch_id = ?)"
 	sampleTime    = "2026-11-25 09:36:01.123456"
 )
@@ -76,7 +76,7 @@ func metricDeliveryDB(t *testing.T) sqlmock.Sqlmock {
 
 func expectMetricLoad(mock sqlmock.Sqlmock, tbl *table.Table, id uuid.UUID, csv string, replay bool) {
 	mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String(), id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
 	if replay {
 		expectMetricPacket(mock, 1<<20)
 	} else if strings.ContainsRune(csv, '\\') {
@@ -111,7 +111,7 @@ func expectMetricLoadSQL(mock sqlmock.Sqlmock, tbl *table.Table, csv string) {
 
 func expectCommittedReceipt(mock sqlmock.Sqlmock, id uuid.UUID) {
 	mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnError(&mysql.MySQLError{Number: moerr.ER_DUP_ENTRY})
+	mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String(), id.String()).WillReturnError(&mysql.MySQLError{Number: moerr.ER_DUP_ENTRY})
 	mock.ExpectExec("^ROLLBACK$").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(regexp.QuoteMeta(selectReceipt)).WithArgs(id.String()).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 }
@@ -137,7 +137,7 @@ func TestMetricFallbackDelivery(t *testing.T) {
 				id := uuid.New()
 				file := table.MetricBatchPath("etl:sys/logs/metric-delivery.csv", id)
 				tbl := fixture.tbl
-				writer := etl.NewMetricContentWriter(ctx, tbl, etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, etl.WithFilePath(file))), id)
+				writer := etl.NewMetricContentWriter(ctx, tbl, etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, etl.WithFilePath(file))), id, uuid.Nil)
 				writer.SetBuffer(bytes.NewBufferString(fixture.csv), nil)
 
 				expectMetricLoad(mock, tbl, id, fixture.csv, false)
@@ -225,7 +225,7 @@ func TestMetricFallbackWithLongNodeID(t *testing.T) {
 				mock := metricDeliveryDB(t)
 				receipt := &metricReceiptArgument{}
 				mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
-				mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(receipt).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(receipt, receipt).WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectExec("^LOAD DATA INLINE").WillReturnError(&mysql.MySQLError{Number: 1213})
 				expectMetricRollback(mock)
 
@@ -258,7 +258,9 @@ func TestMetricFallbackWithLongNodeID(t *testing.T) {
 					cacheFiles, err = filepath.Glob(filepath.Join(cacheDir, "*", relative))
 					require.NoError(t, err)
 				}
-				expectMetricLoad(mock, fixture.tbl, receipt.id, fixture.payload, true)
+				expectSequencedMetricLoad(mock, fixture.tbl, receipt.id, fixture.payload)
+				expectMetricCommit(mock)
+				expectMetricReceiptRetirement(mock, receipt.id)
 				expectMetricCommit(mock)
 				merge, err := NewMerge(ctx, "", WithFileService(fs), WithTable(fixture.tbl))
 				require.NoError(t, err)
@@ -273,6 +275,30 @@ func TestMetricFallbackWithLongNodeID(t *testing.T) {
 			})
 		}
 	}
+}
+
+const metricFileFenceSQL = "insert into system_metrics.metric_file_progress (publisher_id, first_seq, last_seq) values (?, ?, 0) on duplicate key update revision = 1-revision"
+
+func expectMetricFileProgress(mock sqlmock.Sqlmock, last int) {
+	mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(metricFileFenceSQL)).WithArgs(sqlmock.AnyArg(), 0).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("select first_seq, last_seq").WithArgs(sqlmock.AnyArg(), 1).
+		WillReturnRows(sqlmock.NewRows([]string{"first_seq", "last_seq"}).AddRow(0, last))
+}
+
+func expectSequencedMetricLoad(mock sqlmock.Sqlmock, tbl *table.Table, id uuid.UUID, payload string) {
+	expectMetricFileProgress(mock, 0)
+	mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String(), id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMetricPacket(mock, 1<<20)
+	expectMetricLoadSQL(mock, tbl, payload)
+	mock.ExpectQuery("select last_seq").WithArgs(sqlmock.AnyArg(), 2).WillReturnRows(sqlmock.NewRows([]string{"last_seq"}))
+	mock.ExpectExec("update system_metrics.metric_file_progress").WithArgs(1, sqlmock.AnyArg(), 0).WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
+func expectMetricReceiptRetirement(mock sqlmock.Sqlmock, id uuid.UUID) {
+	mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(metricFileFenceSQL)).WithArgs(sqlmock.AnyArg(), -1).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("delete from system_metrics.metric_batch_receipt").WithArgs(id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
 }
 
 func TestMetricFallbackFitsMinIOObjectKey(t *testing.T) {
@@ -306,7 +332,7 @@ func TestMetricFallbackFitsMinIOObjectKey(t *testing.T) {
 	for _, tbl := range []*table.Table{mometric.SingleMetricTable, mometric.SqlStatementCUTable} {
 		receipt := &metricReceiptArgument{}
 		mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(receipt).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(receipt, receipt).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectExec("^LOAD DATA INLINE").WillReturnError(&mysql.MySQLError{Number: 1213})
 		expectMetricRollback(mock)
 
@@ -316,7 +342,7 @@ func TestMetricFallbackFitsMinIOObjectKey(t *testing.T) {
 		require.NoError(t, err)
 		select {
 		case key := <-uploads:
-			require.Equal(t, path.Join(prefix, table.MetricBatchLogPath("sys", tbl, now, receipt.id)), key)
+			require.Equal(t, path.Join(prefix, table.SequencedMetricBatchLogPath("sys", tbl, now, receipt.id)), key)
 			require.LessOrEqual(t, len(key), 1024)
 		default:
 			t.Fatal("successful flush did not upload a fallback object")
@@ -354,24 +380,38 @@ func TestMetricMergeRecoversCommitAndDeleteFailures(t *testing.T) {
 	mock := metricDeliveryDB(t)
 	tbl := mometric.SingleMetricTable
 	id := uuid.New()
-	file := table.MetricBatchPath("etl:sys/logs/retry.csv", id)
+	file := "etl:" + table.SequencedMetricBatchLogPath("sys", tbl, time.Now(), id)
 	payload := "m," + sampleTime + ",1,cn-1,CN,sys,0,\n"
-	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
-		FilePath: file, Entries: []fileservice.IOEntry{{Size: int64(len(payload)), Data: []byte(payload)}},
-	}))
+	fileWriter := &metricFileWriter{ctx: ctx, fs: fs, path: file, publisher: &metricPublisher{id: uuid.New()}}
+	_, err := fileWriter.WriteString(payload)
+	require.NoError(t, err)
 	wrapped := &failMetricFileDelete{FileService: fs}
 	wrapped.fail.Store(true)
 	merge, err := NewMerge(ctx, "", WithTable(tbl), WithFileService(wrapped))
 	require.NoError(t, err)
 	t.Cleanup(merge.Stop)
-	expectMetricLoad(mock, tbl, id, payload, true)
+	expectSequencedMetricLoad(mock, tbl, id, payload)
 	mock.ExpectExec("^COMMIT$").WillReturnError(commitUnknown)
 	expectMetricRollback(mock)
 	require.ErrorIs(t, merge.mergeMetricFile(ctx, file), commitUnknown)
 	_, err = fs.StatFile(ctx, file)
 	require.NoError(t, err)
 
-	expectCommittedReceipt(mock, id)
+	// A fresh transaction sees that replay committed. The retirement
+	// COMMIT can also be ambiguous and must keep the source for retry.
+	expectMetricFileProgress(mock, 1)
+	expectMetricCommit(mock)
+	expectMetricReceiptRetirement(mock, id)
+	mock.ExpectExec("^COMMIT$").WillReturnError(commitUnknown)
+	expectMetricRollback(mock)
+	require.ErrorIs(t, merge.mergeMetricFile(ctx, file), commitUnknown)
+	_, err = fs.StatFile(ctx, file)
+	require.NoError(t, err)
+
+	expectMetricFileProgress(mock, 1)
+	expectMetricCommit(mock)
+	expectMetricReceiptRetirement(mock, id)
+	expectMetricCommit(mock)
 	require.Error(t, merge.mergeMetricFile(ctx, file))
 	_, err = fs.StatFile(ctx, file)
 	require.NoError(t, err)
@@ -380,7 +420,10 @@ func TestMetricMergeRecoversCommitAndDeleteFailures(t *testing.T) {
 	next, err := NewMerge(ctx, "", WithTable(tbl), WithFileService(wrapped))
 	require.NoError(t, err)
 	t.Cleanup(next.Stop)
-	expectCommittedReceipt(mock, id)
+	expectMetricFileProgress(mock, 1)
+	expectMetricCommit(mock)
+	expectMetricReceiptRetirement(mock, id)
+	expectMetricCommit(mock)
 	require.NoError(t, next.mergeMetricFile(ctx, file))
 	_, err = fs.StatFile(ctx, file)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
@@ -408,7 +451,7 @@ func TestMetricReplayChunksRollBackTogether(t *testing.T) {
 
 	expectBegin := func() {
 		mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String(), id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
 		expectMetricPacket(mock, 195)
 		expectMetricLoadSQL(mock, tbl, first)
 	}
@@ -435,7 +478,7 @@ func TestMetricReplayFitsPacketWithoutBackslashEscapes(t *testing.T) {
 	row := "m," + sampleTime + ",1,cn" + strings.Repeat("\\x", 30) + ",CN,sys,0,select\n"
 	query := "LOAD DATA INLINE FORMAT='csv', DATA='" + row + "' INTO TABLE " + tbl.GetIdentify() + " FIELDS TERMINATED BY ','"
 	mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String(), id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT @@session.max_allowed_packet, @@session.sql_mode")).
 		WillReturnRows(sqlmock.NewRows([]string{"limit", "mode"}).AddRow(len(query)+2, "NO_BACKSLASH_ESCAPES"))
 	mock.ExpectExec(regexp.QuoteMeta(query)).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -451,7 +494,7 @@ func TestMetricReplayRenewsDeadlinePerLoad(t *testing.T) {
 		id := uuid.New()
 		row := "sys," + sampleTime + ",1,cn,CN,internal_sql\n"
 		mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String(), id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
 		expectMetricPacket(mock, 185)
 		for range 3 {
 			mock.ExpectExec(regexp.QuoteMeta("LOAD DATA INLINE FORMAT='csv', DATA='" + row + "' INTO TABLE system_metrics.sql_statement_cu FIELDS TERMINATED BY ','")).
@@ -529,7 +572,7 @@ func TestMetricReplayReselectsAfterCNRefusal(t *testing.T) {
 			payload := []byte("m," + sampleTime + ",1,cn-1,CN,sys,0,\n")
 			restart := &mysql.MySQLError{Number: failure.code}
 			mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
-			mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnError(restart)
+			mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String(), id.String()).WillReturnError(restart)
 			expectMetricRollback(mock)
 			require.ErrorIs(t, etl.ReplayMetricBatch(t.Context(), tbl, payload, id), restart)
 

@@ -46,6 +46,10 @@ const metricReplaySQLTarget = 4 * mpool.MB
 var metricReplaySlot = make(chan struct{}, 1)
 
 func ReplayMetricBatch(ctx context.Context, tbl *table.Table, data []byte, id uuid.UUID) error {
+	return ReplayMetricFile(ctx, tbl, data, id, dbholder.MetricFilePublication{})
+}
+
+func ReplayMetricFile(ctx context.Context, tbl *table.Table, data []byte, id uuid.UUID, publication dbholder.MetricFilePublication) error {
 	// Leave at least one connection available to foreground exporters.
 	select {
 	case metricReplaySlot <- struct{}{}:
@@ -53,10 +57,10 @@ func ReplayMetricBatch(ctx context.Context, tbl *table.Table, data []byte, id uu
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	return NewSQLFlusher(tbl).flushMetricBatch(ctx, data, id, false)
+	return NewSQLFlusher(tbl).flushMetricBatch(ctx, data, id, publication, false)
 }
 
-func (f *SQLFlusher) flushMetricBatch(parent context.Context, data []byte, id uuid.UUID, firstWrite bool) error {
+func (f *SQLFlusher) flushMetricBatch(parent context.Context, data []byte, id uuid.UUID, publication dbholder.MetricFilePublication, firstWrite bool) error {
 	ctx := parent
 	if firstWrite {
 		// Keep the original total budget for synchronous collection.
@@ -73,7 +77,7 @@ func (f *SQLFlusher) flushMetricBatch(parent context.Context, data []byte, id uu
 	if err != nil {
 		return err
 	}
-	err = dbholder.CommitMetricBatch(ctx, db, id, func(conn *sql.Conn) error {
+	load := func(conn *sql.Conn) error {
 		if firstWrite {
 			if bytes.IndexByte(data, '\\') == -1 {
 				return f.loadMetricCSV(ctx, conn, data, false)
@@ -88,7 +92,12 @@ func (f *SQLFlusher) flushMetricBatch(parent context.Context, data []byte, id uu
 			return f.loadMetricCSV(ctx, conn, data, metricSQLEscapesBackslashes(mode))
 		}
 		return f.replayMetricLoads(ctx, conn, data)
-	})
+	}
+	if publication.Sequence == 0 {
+		err = dbholder.CommitMetricOrigin(ctx, db, id, f.metricPublisher, load)
+	} else {
+		err = dbholder.CommitMetricFile(ctx, db, id, publication, load)
+	}
 	if err != nil {
 		if parent.Err() == nil && shouldReselectMetricCN(err) {
 			dbholder.MarkMetricDBConnFailed(db)

@@ -58,16 +58,17 @@ type ContentWriter struct {
 }
 
 func NewContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher) *ContentWriter {
-	return newContentWriter(ctx, tbl, fileFlusher, uuid.Nil)
+	return newContentWriter(ctx, tbl, fileFlusher, uuid.Nil, uuid.Nil)
 }
 
-func NewMetricContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher, id uuid.UUID) *ContentWriter {
-	return newContentWriter(ctx, tbl, fileFlusher, id)
+func NewMetricContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher, id, publisher uuid.UUID) *ContentWriter {
+	return newContentWriter(ctx, tbl, fileFlusher, id, publisher)
 }
 
-func newContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher, id uuid.UUID) *ContentWriter {
+func newContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher, id, publisher uuid.UUID) *ContentWriter {
 	sqlFlusher := NewSQLFlusher(tbl)
 	sqlFlusher.metricBatchID = id
+	sqlFlusher.metricPublisher = publisher
 	sqlFlusher.ctx = ctx
 	return &ContentWriter{
 		ctx: ctx,
@@ -181,11 +182,12 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 var _ table.Flusher = (*SQLFlusher)(nil)
 
 type SQLFlusher struct {
-	ctx           context.Context
-	database      string
-	table         string
-	columns       []table.Column
-	metricBatchID uuid.UUID
+	ctx             context.Context
+	database        string
+	table           string
+	columns         []table.Column
+	metricBatchID   uuid.UUID
+	metricPublisher uuid.UUID
 }
 
 func NewSQLFlusher(tbl *table.Table) *SQLFlusher {
@@ -201,7 +203,7 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 		if buf.Len() == 0 {
 			return 0, nil
 		}
-		return 0, f.flushMetricBatch(f.ctx, buf.Bytes(), f.metricBatchID, true)
+		return 0, f.flushMetricBatch(f.ctx, buf.Bytes(), f.metricBatchID, db_holder.MetricFilePublication{}, true)
 	}
 
 	forceNewConn := !db_holder.DBConnErrCount.Check()

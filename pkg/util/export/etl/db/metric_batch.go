@@ -60,22 +60,35 @@ func execMetricBatch(ctx context.Context, conn *sql.Conn, query string, args ...
 }
 
 func CommitMetricBatch(ctx context.Context, db *sql.DB, id uuid.UUID, load func(*sql.Conn) error) error {
-	err := insertMetricBatch(ctx, db, id.String(), load)
+	return CommitMetricOrigin(ctx, db, id, uuid.Nil, load)
+}
+
+func CommitMetricOrigin(ctx context.Context, db *sql.DB, id, publisher uuid.UUID, load func(*sql.Conn) error) error {
+	err := withMetricBatchTxn(ctx, db, func(conn *sql.Conn) error {
+		claimed, err := insertMetricReceipt(ctx, conn, id)
+		if err != nil || !claimed {
+			return err
+		}
+		if err := load(conn); err != nil {
+			return err
+		}
+		if publisher != uuid.Nil {
+			return lockMetricFileProgress(ctx, conn, publisher.String(), metricOriginFence)
+		}
+		return nil
+	})
 	if err == nil {
 		return nil
 	}
-	var mysqlErr *mysql.MySQLError
-	if !errors.As(err, &mysqlErr) ||
-		(mysqlErr.Number != moerr.ER_DUP_ENTRY && mysqlErr.Number != moerr.ErrPrimaryKeyDuplicated) {
+	if !isMetricDuplicate(err) {
 		return err
 	}
 
-	// The attempt has released its transaction and connection. Use a new
-	// statement to observe a committed receipt, including commit-time conflicts.
+	// Use a fresh statement after releasing the failed transaction, including
+	// when the duplicate key was reported at COMMIT.
 	var committed bool
 	checkErr := WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
-		return db.QueryRowContext(opCtx, "select exists(select 1 from "+metricBatchReceiptRelation+
-			" where batch_id = ?)", id.String()).Scan(&committed)
+		return db.QueryRowContext(opCtx, metricReceiptExists, id.String()).Scan(&committed)
 	})
 	if checkErr != nil {
 		return errors.Join(err, checkErr)
@@ -86,7 +99,35 @@ func CommitMetricBatch(ctx context.Context, db *sql.DB, id uuid.UUID, load func(
 	return err
 }
 
-func insertMetricBatch(ctx context.Context, db *sql.DB, id string, load func(*sql.Conn) error) error {
+const metricReceiptExists = "select exists(select 1 from " + metricBatchReceiptRelation + " where batch_id = ?)"
+
+func isMetricDuplicate(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	return errors.As(err, &mysqlErr) &&
+		(mysqlErr.Number == moerr.ER_DUP_ENTRY || mysqlErr.Number == moerr.ErrPrimaryKeyDuplicated)
+}
+
+func insertMetricReceipt(ctx context.Context, conn *sql.Conn, id uuid.UUID) (bool, error) {
+	// Optimistic deployments can omit a CN-side primary-key check against
+	// rows already visible to the transaction. Check that snapshot here
+	// while retaining the unique insert for concurrent attempts.
+	key := id.String()
+	var claimed bool
+	err := WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
+		result, err := conn.ExecContext(opCtx, "insert into "+metricBatchReceiptRelation+
+			" (batch_id) select ? where not exists(select 1 from "+metricBatchReceiptRelation+
+			" where batch_id = ?)", key, key)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		claimed = affected == 1
+		return err
+	})
+	return claimed, err
+}
+
+func withMetricBatchTxn(ctx context.Context, db *sql.DB, run func(*sql.Conn) error) error {
 	var conn *sql.Conn
 	err := WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
 		var err error
@@ -119,10 +160,7 @@ func insertMetricBatch(ctx context.Context, db *sql.DB, id string, load func(*sq
 		discard()
 	}()
 
-	if err = execMetricBatch(ctx, conn, "insert into "+metricBatchReceiptRelation+" (batch_id) values (?)", id); err != nil {
-		return err
-	}
-	if err = load(conn); err != nil {
+	if err = run(conn); err != nil {
 		return err
 	}
 	err = execMetricBatch(ctx, conn, "COMMIT")
@@ -130,9 +168,11 @@ func insertMetricBatch(ctx context.Context, db *sql.DB, id string, load func(*sq
 	return err
 }
 
+const deleteMetricReceipt = "delete from " + metricBatchReceiptRelation + " where batch_id = ?"
+
 func DeleteMetricBatchReceipt(ctx context.Context, db *sql.DB, id uuid.UUID) error {
 	return WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
-		_, err := db.ExecContext(opCtx, "delete from "+metricBatchReceiptRelation+" where batch_id = ?", id.String())
+		_, err := db.ExecContext(opCtx, deleteMetricReceipt, id.String())
 		return err
 	})
 }

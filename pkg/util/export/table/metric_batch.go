@@ -25,18 +25,30 @@ import (
 
 const metricBatchSuffix = "-batch-"
 const compactMetricBatchPrefix = "!"
+const sequencedMetricBatchPrefix = "@"
 
 // MetricBatchLogPath stores the whole UUID in a 27-byte filename. The short
 // component leaves room for the object-store prefix and the disk-cache suffix.
 func MetricBatchLogPath(account string, tbl *Table, ts time.Time, id uuid.UUID) string {
+	return metricBatchLogPath(account, tbl, ts, id, compactMetricBatchPrefix)
+}
+
+func SequencedMetricBatchLogPath(account string, tbl *Table, ts time.Time, id uuid.UUID) string {
+	return metricBatchLogPath(account, tbl, ts, id, sequencedMetricBatchPrefix)
+}
+
+func metricBatchLogPath(account string, tbl *Table, ts time.Time, id uuid.UUID, prefix string) string {
 	dir := tbl.PathBuilder.Build(account, MergeLogTypeLogs, ts, tbl.Database, tbl.Table)
-	name := compactMetricBatchPrefix + base64.RawURLEncoding.EncodeToString(id[:]) + CsvExtension
+	name := prefix + base64.RawURLEncoding.EncodeToString(id[:]) + CsvExtension
 	return path.Join(dir, name)
 }
 
 func compactMetricBatchID(name string) (uuid.UUID, bool) {
-	encoded, ok := strings.CutPrefix(name, compactMetricBatchPrefix)
-	if !ok || len(encoded) != base64.RawURLEncoding.EncodedLen(len(uuid.Nil)) {
+	if len(name) == 0 || (name[:1] != compactMetricBatchPrefix && name[:1] != sequencedMetricBatchPrefix) {
+		return uuid.Nil, false
+	}
+	encoded := name[1:]
+	if len(encoded) != base64.RawURLEncoding.EncodedLen(len(uuid.Nil)) {
 		return uuid.Nil, false
 	}
 	var id uuid.UUID
@@ -58,8 +70,8 @@ func MetricBatchID(filePath string) (uuid.UUID, bool) {
 	if !ok {
 		return uuid.Nil, false
 	}
-	if strings.HasPrefix(name, compactMetricBatchPrefix) {
-		return compactMetricBatchID(name)
+	if id, ok := compactMetricBatchID(name); ok {
+		return id, true
 	}
 	index := strings.LastIndex(name, metricBatchSuffix)
 	if index < 0 {
@@ -68,4 +80,8 @@ func MetricBatchID(filePath string) (uuid.UUID, bool) {
 	suffix := name[index+len(metricBatchSuffix):]
 	id, err := uuid.Parse(suffix)
 	return id, err == nil && id != uuid.Nil && suffix == id.String()
+}
+
+func IsSequencedMetricBatch(filePath string) bool {
+	return strings.HasPrefix(path.Base(filePath), sequencedMetricBatchPrefix)
 }

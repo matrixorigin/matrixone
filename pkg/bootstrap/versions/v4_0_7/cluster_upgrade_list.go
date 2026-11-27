@@ -50,6 +50,15 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 			return versions.CheckTableDefinition(txn, accountID, "system_metrics", dbholder.MetricBatchReceiptTable)
 		},
 	},
+	{
+		Schema:    "system_metrics",
+		TableName: dbholder.MetricFileProgressTable,
+		UpgType:   versions.CREATE_NEW_TABLE,
+		UpgSql:    dbholder.CreateMetricFileProgress,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDefinition(txn, accountID, "system_metrics", dbholder.MetricFileProgressTable)
+		},
+	},
 }
 
 // EnsureViewMetadataCatalogs prepares the metadata required by CN admission.

@@ -17,24 +17,74 @@ package export
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/csv"
 	"errors"
 	"io"
 	"strconv"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
+	dbholder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 var errMetricFileRetained = moerr.NewInvalidStateNoCtx("metric file retained for reconciliation")
+
+// Sequenced files contain a 16-byte publisher UUID and an 8-byte sequence,
+// followed by the unchanged CSV payload. Only actual publications consume
+// sequence numbers, so acknowledged SQL writes leave no holes.
+const metricFileHeaderSize = len(uuid.Nil) + 8
+
+type metricPublisher struct {
+	id   uuid.UUID
+	next atomic.Int64
+}
+
+type metricFileWriter struct {
+	ctx       context.Context
+	fs        fileservice.FileService
+	path      string
+	publisher *metricPublisher
+	sequence  int64
+}
+
+func (w *metricFileWriter) WriteString(payload string) (int, error) {
+	if w.sequence == 0 {
+		w.sequence = w.publisher.next.Add(1)
+	}
+	var header [metricFileHeaderSize]byte
+	copy(header[:], w.publisher.id[:])
+	binary.BigEndian.PutUint64(header[len(w.publisher.id):], uint64(w.sequence))
+	err := w.fs.Write(w.ctx, fileservice.IOVector{
+		FilePath: w.path,
+		Entries: []fileservice.IOEntry{
+			{Size: int64(metricFileHeaderSize), Data: header[:]},
+			{Offset: int64(metricFileHeaderSize), Size: int64(len(payload)), Data: util.UnsafeStringToBytes(payload)},
+		},
+	})
+	return len(payload), err
+}
+
+func metricFilePublication(payload []byte) (dbholder.MetricFilePublication, bool) {
+	var publication dbholder.MetricFilePublication
+	if len(payload) < metricFileHeaderSize {
+		return publication, false
+	}
+	copy(publication.Publisher[:], payload[:len(publication.Publisher)])
+	publication.Sequence = int64(binary.BigEndian.Uint64(payload[len(publication.Publisher):metricFileHeaderSize]))
+	return publication, publication.Publisher != uuid.Nil && publication.Sequence > 0
+}
 
 func (m *Merge) mergeMetricFile(ctx context.Context, filePath string) error {
 	id, ok := table.MetricBatchID(filePath)
@@ -57,6 +107,17 @@ func (m *Merge) mergeMetricFile(ctx context.Context, filePath string) error {
 	}
 
 	payload := vec.Entries[0].Data
+	var publication dbholder.MetricFilePublication
+	if table.IsSequencedMetricBatch(filePath) {
+		var valid bool
+		publication, valid = metricFilePublication(payload)
+		if !valid {
+			v2.TraceETLMergeParseFailedCounter.Inc()
+			m.logger.Warn("retain metric file with invalid publication header", logutil.PathField(filePath))
+			return errMetricFileRetained
+		}
+		payload = payload[metricFileHeaderSize:]
+	}
 	if err := validateMetricCSV(ctx, payload, m.table); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -65,7 +126,7 @@ func (m *Merge) mergeMetricFile(ctx context.Context, filePath string) error {
 		m.logger.Warn("retain incompatible metric file", logutil.PathField(filePath), zap.Error(err))
 		return errMetricFileRetained
 	}
-	if err := etl.ReplayMetricBatch(ctx, m.table, payload, id); err != nil {
+	if err := etl.ReplayMetricFile(ctx, m.table, payload, id, publication); err != nil {
 		v2.TraceETLMergeWriteFailedCounter.Inc()
 		return err
 	}

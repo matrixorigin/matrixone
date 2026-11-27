@@ -258,11 +258,13 @@ func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 	if _, err := txn.Exec(SqlCreateDBConst, executor.StatementOption{}); err != nil {
 		return err
 	}
-	result, err := txn.Exec(dbholder.CreateMetricBatchReceipt, executor.StatementOption{})
-	if err != nil {
-		return err
+	for _, ddl := range []string{dbholder.CreateMetricBatchReceipt, dbholder.CreateMetricFileProgress} {
+		result, err := txn.Exec(ddl, executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		result.Close()
 	}
-	result.Close()
 
 	var createCost time.Duration
 	defer func() {
@@ -318,6 +320,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 	}
 	mustExec(SqlCreateDBConst)
 	mustExec(dbholder.CreateMetricBatchReceipt)
+	mustExec(dbholder.CreateMetricFileProgress)
 	var createCost time.Duration
 	defer func() {
 		logutil.Debugf(
