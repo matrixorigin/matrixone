@@ -124,7 +124,7 @@ uint64_t gpu_pairwise_distance_launch(const void* x,
         job.host_dist = dist;
         job.n_x = (int64_t)n_x;
         job.n_y = (int64_t)n_y;
-        job.stream = raft::resource::get_cuda_stream(res);
+        job.stream = matrixone::cuda_stream_handle(res);
         job.d_ptr = nullptr;
         job.device_id = device_id;
         job.metric = metric;
