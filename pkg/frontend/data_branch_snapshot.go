@@ -315,8 +315,8 @@ func withRestoreBranchHistory(ctx context.Context, ses *Session, bh BackgroundEx
 	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	bh.ClearExecResultSet()
 	defer bh.ClearExecResultSet()
-	sql := fmt.Sprintf("select table_id,p_table_id from mo_catalog.mo_branch_metadata {MO_TS = %d} "+
-		"union all select table_id,p_table_id from mo_catalog.mo_branch_metadata", snapshotTS)
+	sql := fmt.Sprintf("select table_id,p_table_id,level from mo_catalog.mo_branch_metadata {MO_TS = %d} "+
+		"union all select table_id,p_table_id,level from mo_catalog.mo_branch_metadata", snapshotTS)
 	if err := bh.Exec(sysCtx, sql); err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 			markAll := defines.RestoreBranchHistoryCheck(func(context.Context, uint64, uint64, uint32, string, string) (bool, error) {
@@ -331,6 +331,7 @@ func withRestoreBranchHistory(ctx context.Context, ses *Session, bh BackgroundEx
 		return ctx, err
 	}
 	ids := make(map[uint64]struct{})
+	rebuilds := make(map[uint64][]uint64)
 	for _, result := range results {
 		for row := uint64(0); row < result.GetRowCount(); row++ {
 			child, err := result.GetUint64(sysCtx, row, 0)
@@ -341,8 +342,32 @@ func withRestoreBranchHistory(ctx context.Context, ses *Session, bh BackgroundEx
 			if err != nil {
 				return ctx, err
 			}
-			ids[child] = struct{}{}
-			ids[parent] = struct{}{}
+			level, err := result.GetString(sysCtx, row, 2)
+			if err != nil {
+				return ctx, err
+			}
+			if databranchutils.IsRebuildLineageLevel(level) {
+				rebuilds[child] = append(rebuilds[child], parent)
+				rebuilds[parent] = append(rebuilds[parent], child)
+			}
+			if databranchutils.IsLiveBranchLevel(level) {
+				ids[child] = struct{}{}
+				ids[parent] = struct{}{}
+			}
+		}
+	}
+	// Follow physical replacements in either direction from known forks.
+	// A chain containing only ordinary table rebuilds has no fork evidence.
+	pending := make([]uint64, 0, len(ids))
+	for id := range ids {
+		pending = append(pending, id)
+	}
+	for i := 0; i < len(pending); i++ {
+		for _, id := range rebuilds[pending[i]] {
+			if _, seen := ids[id]; !seen {
+				ids[id] = struct{}{}
+				pending = append(pending, id)
+			}
 		}
 	}
 	inLineage := func(physicalID, logicalID uint64) bool {

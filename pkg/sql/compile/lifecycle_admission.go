@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -333,7 +334,7 @@ func scalarReplacementShape(ctx context.Context, rel engine.Relation) (bool, err
 		return false, nil
 	}
 	extra := rel.GetExtraInfo()
-	if extra == nil || extra.FeatureFlag != 0 || extra.ParentTableID != 0 || len(extra.IndexTables) != 0 {
+	if extra == nil || extra.FeatureFlag&^features.BranchRestoreFlags != 0 || extra.ParentTableID != 0 || len(extra.IndexTables) != 0 {
 		return false, nil
 	}
 	ct, err := GetConstraintDef(ctx, rel)

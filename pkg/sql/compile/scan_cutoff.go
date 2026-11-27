@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -76,7 +77,7 @@ func (c *Compile) paginationCutoffScan(node *plan.Node) (*plan.Node, int32) {
 				input.RecvMsgList[0].MsgType != node.SendMsgList[0].MsgType ||
 				len(input.OrderBy) != 1 || input.OrderBy[0] == nil || input.OrderBy[0].Expr == nil ||
 				input.OrderBy[0].Expr.GetCol() == nil || input.TableDef == nil ||
-				input.TableDef.Partition != nil || input.TableDef.FeatureFlag != 0 || input.TableDef.IsTemporary || input.ClusterTable != nil ||
+				input.TableDef.Partition != nil || input.TableDef.FeatureFlag&^features.BranchRestoreFlags != 0 || input.TableDef.IsTemporary || input.ClusterTable != nil ||
 				!sameScanCutoffType(node.OrderBy[0].Expr.Typ, input.OrderBy[0].Expr.Typ) ||
 				(node.OrderBy[0].Flag&plan.OrderBySpec_DESC) != (input.OrderBy[0].Flag&plan.OrderBySpec_DESC) ||
 				cutoffPlacementMismatch(node.OrderBy[0], input.OrderBy[0]) ||
@@ -162,8 +163,8 @@ func initScanCutoff(s *Scope) int32 {
 		s.DataSource.OrderBy[0] == nil || s.DataSource.OrderBy[0].Expr == nil ||
 		s.DataSource.IndexReaderParam != nil || s.DataSource.node.NodeType != plan.Node_TABLE_SCAN ||
 		len(s.DataSource.RuntimeFilterSpecs) != 0 || s.DataSource.node.TableDef == nil ||
-		s.DataSource.node.TableDef.Partition != nil || s.DataSource.node.TableDef.FeatureFlag != 0 || s.DataSource.node.TableDef.IsTemporary ||
-		s.DataSource.TableDef == nil || s.DataSource.TableDef.Partition != nil || s.DataSource.TableDef.FeatureFlag != 0 || s.DataSource.TableDef.IsTemporary ||
+		s.DataSource.node.TableDef.Partition != nil || s.DataSource.node.TableDef.FeatureFlag&^features.BranchRestoreFlags != 0 || s.DataSource.node.TableDef.IsTemporary ||
+		s.DataSource.TableDef == nil || s.DataSource.TableDef.Partition != nil || s.DataSource.TableDef.FeatureFlag&^features.BranchRestoreFlags != 0 || s.DataSource.TableDef.IsTemporary ||
 		!scanCutoffPhysicalColumn(s.DataSource.TableDef, s.DataSource.OrderBy[0].Expr) {
 		return 0
 	}

@@ -139,7 +139,7 @@ func copyIndexBaseSchemaWithBudget(base *plan.TableDef, hiddenName string, sampl
 	if *budget > engine.MaxIndexPlanningWork {
 		*budget = engine.MaxIndexPlanningWork
 	}
-	if base == nil || base.Pkey == nil || base.TblId == 0 || len(hiddenName) == 0 || len(hiddenName) > engine.MaxIndexPlanningNameBytes || len(samples) == 0 || len(samples) > maxIndexPlanningSamples || len(base.Indexes) > engine.MaxIndexPlanningDefinitions || len(base.Cols) > engine.MaxIndexPlanningColumns || len(base.Pkey.Names) > engine.MaxIndexPlanningParts || base.IsTemporary || base.IsDynamic || base.FeatureFlag != 0 || base.KeyFormat != 0 {
+	if base == nil || base.Pkey == nil || base.TblId == 0 || len(hiddenName) == 0 || len(hiddenName) > engine.MaxIndexPlanningNameBytes || len(samples) == 0 || len(samples) > maxIndexPlanningSamples || len(base.Indexes) > engine.MaxIndexPlanningDefinitions || len(base.Cols) > engine.MaxIndexPlanningColumns || len(base.Pkey.Names) > engine.MaxIndexPlanningParts || base.IsTemporary || base.IsDynamic || base.FeatureFlag&^features.BranchRestoreFlags != 0 || base.KeyFormat != 0 {
 		return out, false
 	}
 	var definition *plan.IndexDef

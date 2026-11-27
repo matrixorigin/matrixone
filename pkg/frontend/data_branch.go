@@ -1081,7 +1081,12 @@ func diffMergeAgency(
 		source, target := tblStuff.endpointIdentities(ctx, ses)
 		flags := tblStuff.tarRel.GetTableDef(identityCtx(ctx, source)).FeatureFlag |
 			tblStuff.baseRel.GetTableDef(identityCtx(ctx, target)).FeatureFlag
-		if flags&features.BranchHistoryLostOnRestore != 0 {
+		// An earlier restore may have removed a parent entirely. The
+		// surviving fork then cannot be linked to its reintroduced parent.
+		_, sourceFork := firstDataBranchForkIndex(dagInfo.pathFromLCAToTarLineageOnly, len(dagInfo.pathFromLCAToTar))
+		_, targetFork := firstDataBranchForkIndex(dagInfo.pathFromLCAToBaseLineageOnly, len(dagInfo.pathFromLCAToBase))
+		if flags&features.BranchHistoryLostOnRestore != 0 ||
+			flags&features.RestoredTable != 0 && (sourceFork || targetFork) {
 			return moerr.NewNotSupported(ctx, "DATA BRANCH PICK with FAIL or SKIP requires branch history unavailable after restore")
 		}
 	}

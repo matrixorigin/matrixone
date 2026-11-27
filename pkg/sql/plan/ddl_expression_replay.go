@@ -394,10 +394,10 @@ type replacementTableFeature struct {
 	flags uint64
 }
 
-// WithReplacementTableFeatures carries the restore protection bit through
+// WithReplacementTableFeatures carries the restore provenance through
 // a physical rewrite of the same logical table.
 func WithReplacementTableFeatures(ctx context.Context, target *planpb.TableDef) context.Context {
-	flags := target.GetFeatureFlag() & features.BranchHistoryLostOnRestore
+	flags := target.GetFeatureFlag() & features.BranchRestoreFlags
 	if flags == 0 {
 		return ctx
 	}

@@ -25,7 +25,12 @@ const (
 	// BranchHistoryLostOnRestore marks a restored table whose old physical
 	// lineage and fork evidence were not reattached.
 	BranchHistoryLostOnRestore = 1 << iota
+	// RestoredTable records that restore installed a new physical identity.
+	RestoredTable = 1 << iota
 )
+
+// BranchRestoreFlags carry provenance and do not change a table's storage kind.
+const BranchRestoreFlags = BranchHistoryLostOnRestore | RestoredTable
 
 func IsPartitioned(f uint64) bool {
 	return f&Partitioned != 0
