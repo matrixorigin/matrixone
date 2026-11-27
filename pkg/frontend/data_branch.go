@@ -4798,32 +4798,26 @@ func decideLCABranchTSFromBranchDAG(
 		return
 	}
 
-	wholePath := func(lineageID, endpointID uint64) ([]uint64, []types.TS, []bool, []bool, error) {
-		ids, cloneTSs, ok := dag.PathFromRoot(lineageID)
-		if !ok {
-			return []uint64{endpointID}, []types.TS{{}}, []bool{false}, nil, nil
-		}
-		if len(ids) == 0 || ids[len(ids)-1] != endpointID {
-			return nil, nil, nil, nil, moerr.NewInternalErrorNoCtxf(
-				"data branch: lineage endpoint %d does not match table %d", lineageID, endpointID,
-			)
-		}
-		lineageOnly, clearsRows := dataBranchPathEdges(dag, ids)
-		return ids, buildTSs(cloneTSs), lineageOnly, clearsRows, nil
+	var sourceFlags, targetFlags uint64
+	if tarTableID != baseTableID && tblStuff.boundedPick && protectMissingPickHistory {
+		source, target := tblStuff.endpointIdentities(ctx, ses)
+		sourceFlags = tblStuff.tarRel.GetTableDef(identityCtx(ctx, source)).FeatureFlag
+		targetFlags = tblStuff.baseRel.GetTableDef(identityCtx(ctx, target)).FeatureFlag
 	}
+	restoredPick := (sourceFlags|targetFlags)&features.BranchRestoreFlags != 0
 	if tarTableID != baseTableID {
 		if branchInfo.pathFromLCAToTar,
 			branchInfo.pathFromLCAToTarTS,
 			branchInfo.pathFromLCAToTarLineageOnly,
 			branchInfo.pathFromLCAToTarClearsRows,
-			err = wholePath(tarLineageID, tarTableID); err != nil {
+			err = dataBranchWholePath(dag, tarLineageID, tarTableID, restoredPick); err != nil {
 			return
 		}
 		if branchInfo.pathFromLCAToBase,
 			branchInfo.pathFromLCAToBaseTS,
 			branchInfo.pathFromLCAToBaseLineageOnly,
 			branchInfo.pathFromLCAToBaseClearsRows,
-			err = wholePath(baseLineageID, baseTableID); err != nil {
+			err = dataBranchWholePath(dag, baseLineageID, baseTableID, restoredPick); err != nil {
 			return
 		}
 	}
@@ -4841,15 +4835,31 @@ func decideLCABranchTSFromBranchDAG(
 		branchInfo.pathFromLCAToBaseTS = []types.TS{{}}
 		branchInfo.pathFromLCAToBaseLineageOnly = []bool{false}
 	}
-	if tblStuff.boundedPick && protectMissingPickHistory && !branchInfo.hasLCA() {
-		source, target := tblStuff.endpointIdentities(ctx, ses)
-		sourceFlags := tblStuff.tarRel.GetTableDef(identityCtx(ctx, source)).FeatureFlag
-		targetFlags := tblStuff.baseRel.GetTableDef(identityCtx(ctx, target)).FeatureFlag
-		if (sourceFlags|targetFlags)&features.BranchRestoreFlags != 0 {
-			err = checkRestoredPickHistory(ctx, bh, dag, &branchInfo, sourceFlags, targetFlags)
-		}
+	if restoredPick {
+		err = checkRestoredPickHistory(ctx, bh, dag, &branchInfo, sourceFlags, targetFlags)
 	}
 	return
+}
+
+func dataBranchWholePath(dag *databranchutils.DataBranchDAG, lineageID, endpointID uint64, requireComplete bool) ([]uint64, []types.TS, []bool, []bool, error) {
+	ids, cloneTSs, ok := dag.PathFromRoot(lineageID)
+	if !ok {
+		if requireComplete && dag.Exists(lineageID) {
+			// The walk can fail for a known lineage that exceeds its depth
+			// limit. Such a lineage cannot prove a restored fork independent.
+			return nil, nil, nil, nil, moerr.NewInternalErrorNoCtxf(
+				"data branch: incomplete lineage path for table %d", endpointID,
+			)
+		}
+		return []uint64{endpointID}, []types.TS{{}}, []bool{false}, nil, nil
+	}
+	if len(ids) == 0 || ids[len(ids)-1] != endpointID {
+		return nil, nil, nil, nil, moerr.NewInternalErrorNoCtxf(
+			"data branch: lineage endpoint %d does not match table %d", lineageID, endpointID,
+		)
+	}
+	lineageOnly, clearsRows := dataBranchPathEdges(dag, ids)
+	return ids, buildTSs(cloneTSs), lineageOnly, clearsRows, nil
 }
 
 func dataBranchPathEdges(dag *databranchutils.DataBranchDAG, path []uint64) (lineageOnly, clearsRows []bool) {

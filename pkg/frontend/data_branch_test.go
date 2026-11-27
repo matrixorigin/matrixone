@@ -257,6 +257,27 @@ func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootRebuilds(t *testing.T)
 	)
 }
 
+func TestDataBranchWholePathRequiresCompleteRestoreLineage(t *testing.T) {
+	rows := make([]databranchutils.DataBranchMetadata, 1024)
+	for i := range rows {
+		rows[i].TableID = uint64(i + 2)
+		rows[i].PTableID = uint64(i + 1)
+	}
+	dag := databranchutils.NewDAG(rows)
+	deep := rows[len(rows)-1].TableID
+
+	_, _, _, _, err := dataBranchWholePath(dag, deep, deep, true)
+	require.ErrorContains(t, err, "incomplete lineage path")
+
+	path, _, _, _, err := dataBranchWholePath(dag, deep-1, deep-1, true)
+	require.NoError(t, err)
+	require.Len(t, path, len(rows))
+
+	path, _, _, _, err = dataBranchWholePath(dag, deep+1, deep+1, true)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{deep + 1}, path)
+}
+
 func TestDataBranchFakePKColIdxesUseOnlyVisibleColumns(t *testing.T) {
 	tblDef := &plan.TableDef{
 		Cols: []*plan.ColDef{
