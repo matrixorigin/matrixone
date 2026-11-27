@@ -135,11 +135,14 @@ func buildCloneTable(
 
 	if target := createTablePlan.GetDdl().GetCreateTable().GetTableDef(); target != nil {
 		target.FeatureFlag |= srcTblDef.FeatureFlag & features.BranchHistoryLostOnRestore
-		if ids, restoring := ctx.GetContext().Value(defines.RestoreBranchHistoryKey{}).(map[uint64]struct{}); restoring &&
-			!slices.Contains(catalog.SystemDatabases, srcTblDef.DbName) {
-			_, physical := ids[srcTblDef.TblId]
-			_, logical := ids[srcTblDef.LogicalId]
-			if ids == nil || physical || logical {
+		if check, restoring := ctx.GetContext().Value(defines.RestoreBranchHistoryKey{}).(defines.RestoreBranchHistoryCheck); restoring &&
+			target.FeatureFlag&features.BranchHistoryLostOnRestore == 0 &&
+			!slices.Contains(catalog.SystemDatabases, dstDatabaseName) {
+			mark, err := check(ctx.GetContext(), srcTblDef.TblId, srcTblDef.LogicalId, dstAccount, dstDatabaseName, dstTableName)
+			if err != nil {
+				return nil, err
+			}
+			if mark {
 				target.FeatureFlag |= features.BranchHistoryLostOnRestore
 			}
 		}

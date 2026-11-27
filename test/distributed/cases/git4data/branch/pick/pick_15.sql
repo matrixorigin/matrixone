@@ -1636,14 +1636,16 @@ drop snapshot pick_window_lo;
 drop snapshot pick_restore_state;
 drop database pick_window;
 
--- @testcase: Restore a parent to a snapshot taken before its surviving child forked
+-- @testcase: Repeated restore of a parent retains protection for a surviving child
 create database pick_window;
 use pick_window;
 create table src(k int primary key,v int);
 insert into src values(1,10),(2,20);
 create snapshot pick_restore_state for table pick_window src;
+restore table pick_window.src {snapshot=pick_restore_state};
 data branch create table dst from src;
 delete from dst where k=2;
+restore table pick_window.src {snapshot=pick_restore_state};
 restore table pick_window.src {snapshot=pick_restore_state};
 create snapshot pick_window_lo for account sys;
 update src set v=52 where k=2;

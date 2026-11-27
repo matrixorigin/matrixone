@@ -1073,7 +1073,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		if err = preflightIcebergAccountRestore(ctx, bh, ts, uint32(accountRecord.accountId), targetAccount, targetExists); err != nil {
 			return stats, err
 		}
-		if ctx, err = withRestoreBranchHistory(ctx, bh, ts); err != nil {
+		if ctx, err = withRestoreBranchHistory(ctx, ses, bh, ts); err != nil {
 			return stats, err
 		}
 
@@ -1153,7 +1153,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
 	}
 	if restoreLevel == tree.RESTORELEVELCLUSTER {
-		if ctx, err = withRestoreBranchHistory(ctx, bh, ts); err != nil {
+		if ctx, err = withRestoreBranchHistory(ctx, ses, bh, ts); err != nil {
 			return stats, err
 		}
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
@@ -1177,7 +1177,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			return stats, err
 		}
 	}
-	if ctx, err = withRestoreBranchHistory(ctx, bh, ts); err != nil {
+	if ctx, err = withRestoreBranchHistory(ctx, ses, bh, ts); err != nil {
 		return stats, err
 	}
 	if restoreLevel == tree.RESTORELEVELACCOUNT {

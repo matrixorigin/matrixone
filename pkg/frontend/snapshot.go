@@ -982,7 +982,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return stats, err
 		}
 	}
-	if ctx, err = withRestoreBranchHistory(ctx, bh, snapshot.ts); err != nil {
+	if ctx, err = withRestoreBranchHistory(ctx, ses, bh, snapshot.ts); err != nil {
 		return stats, err
 	}
 	if stmt.Level == tree.RESTORELEVELACCOUNT {

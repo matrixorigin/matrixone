@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 )
 
 // branchSnapshotName is a thin alias over the databranchutils helper so that
@@ -310,7 +311,7 @@ func compactHistoricalAlterLineageWithBH(
 
 // withRestoreBranchHistory finds source IDs whose lineage can be disconnected
 // by physical recreation. A surviving branch can have forked after the snapshot.
-func withRestoreBranchHistory(ctx context.Context, bh BackgroundExec, snapshotTS int64) (context.Context, error) {
+func withRestoreBranchHistory(ctx context.Context, ses *Session, bh BackgroundExec, snapshotTS int64) (context.Context, error) {
 	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	bh.ClearExecResultSet()
 	defer bh.ClearExecResultSet()
@@ -318,7 +319,10 @@ func withRestoreBranchHistory(ctx context.Context, bh BackgroundExec, snapshotTS
 		"union all select table_id,p_table_id from mo_catalog.mo_branch_metadata", snapshotTS)
 	if err := bh.Exec(sysCtx, sql); err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
-			return context.WithValue(ctx, defines.RestoreBranchHistoryKey{}, map[uint64]struct{}(nil)), nil
+			markAll := defines.RestoreBranchHistoryCheck(func(context.Context, uint64, uint64, uint32, string, string) (bool, error) {
+				return true, nil
+			})
+			return context.WithValue(ctx, defines.RestoreBranchHistoryKey{}, markAll), nil
 		}
 		return ctx, err
 	}
@@ -341,7 +345,44 @@ func withRestoreBranchHistory(ctx context.Context, bh BackgroundExec, snapshotTS
 			ids[parent] = struct{}{}
 		}
 	}
-	return context.WithValue(ctx, defines.RestoreBranchHistoryKey{}, ids), nil
+	inLineage := func(physicalID, logicalID uint64) bool {
+		_, physical := ids[physicalID]
+		_, logical := ids[logicalID]
+		return physical || logicalID != 0 && logical
+	}
+	// Restore can drop whole databases before planning their replacement
+	// tables. Resolve the previous destination in the pre-restore view.
+	txn := backgroundExecTxnOperator(bh)
+	if txn != nil {
+		txn = txn.CloneSnapshotOp(txn.SnapshotTS())
+	}
+	check := defines.RestoreBranchHistoryCheck(func(ctx context.Context, sourceID, sourceLogicalID uint64, accountID uint32, database, table string) (bool, error) {
+		if inLineage(sourceID, sourceLogicalID) {
+			return true, nil
+		}
+		if txn == nil {
+			return true, nil
+		}
+		ctx = defines.AttachAccountId(ctx, accountID)
+		db, err := ses.GetTxnHandler().GetStorage().Database(ctx, database, txn)
+		if moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		rel, err := db.Relation(ctx, table, nil)
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		old := rel.GetTableDef(ctx)
+		return inLineage(rel.GetTableID(ctx), old.GetLogicalId()) ||
+			old.GetFeatureFlag()&features.BranchHistoryLostOnRestore != 0, nil
+	})
+	return context.WithValue(ctx, defines.RestoreBranchHistoryKey{}, check), nil
 }
 
 // loadBranchDAGWithBH reads mo_branch_metadata under the sys account and
