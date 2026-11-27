@@ -50,8 +50,10 @@ def exercise():
     artifacts = [{"name": f"coverage-admit-{run_id}"} for run_id in (51, 54)]
     marker_reads = {}
     granted_attempts = {run_id: runs[run_id] for run_id in (51, 54)}
+    original_worker_reads = 0
 
     def api(path, payload=None):
+        nonlocal original_worker_reads
         if payload is not None:
             assert path == f"/actions/workflows/{standby.WORKER}/dispatches", path
             assert payload["ref"] == standby.WORKER_REF and payload["inputs"]["pool"] == "cs"
@@ -73,6 +75,10 @@ def exercise():
             if path == f"/actions/runs/{run_id}":
                 return run, 0
             if path == f"/actions/runs/{run_id}/attempts/1":
+                if run_id == 51:
+                    original_worker_reads += 1
+                    if original_worker_reads == 1:
+                        raise urllib.error.HTTPError(path, 503, "worker result temporarily unavailable", None, None)
                 return granted_attempts[run_id], 0
             if path == f"/actions/runs/{run_id}/attempts/1/jobs?per_page=100":
                 marker_reads[run_id] = marker_reads.get(run_id, 0) + 1
@@ -96,6 +102,7 @@ def exercise():
             assert str(exc) == "selected coverage group did not pass"
         else:
             raise AssertionError("failed group should fail the selector")
+        assert original_worker_reads == 2
         runs[51] = dict(runs[51], run_attempt=2, conclusion="success")
         standby.choose()
         grant = json.loads(Path(tmp, "grant.json").read_text())
