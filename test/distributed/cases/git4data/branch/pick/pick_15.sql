@@ -1748,3 +1748,29 @@ drop snapshot pick_window_hi;
 drop snapshot pick_window_lo;
 drop snapshot pick_restore_state;
 drop database pick_window;
+
+-- @testcase: A restored fork parent can pick into a new independent table
+create database pick_window;
+use pick_window;
+create table src(k int primary key,v int);
+insert into src values(1,10),(2,20);
+data branch create table old_dst from src;
+delete from old_dst where k=2;
+create snapshot pick_restore_state for table pick_window src;
+restore table pick_window.src {snapshot=pick_restore_state};
+create table dst_fail(k int primary key,v int);
+create table dst_skip(k int primary key,v int);
+create snapshot pick_window_lo for account sys;
+insert into src values(3,80);
+create snapshot pick_window_hi for account sys;
+-- @regex("branch history unavailable after restore", true)
+data branch pick src into old_dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from old_dst order by k;
+data branch pick src into dst_fail between snapshot pick_window_lo and pick_window_hi;
+select k,v from dst_fail order by k;
+data branch pick src into dst_skip between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst_skip order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop snapshot pick_restore_state;
+drop database pick_window;

@@ -27,10 +27,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // branchSnapshotName is a thin alias over the databranchutils helper so that
@@ -417,12 +419,25 @@ func withRestoreBranchHistory(ctx context.Context, ses *Session, bh BackgroundEx
 // ancestor. A restored endpoint can be a new generation of a missing fork
 // parent. A parent that still has a live logical identity proves that its fork
 // belongs to a different lineage.
-func checkRestoredPickHistory(ctx context.Context, bh BackgroundExec, dag *databranchutils.DataBranchDAG, info *branchMetaInfo, sourceFlags, targetFlags uint64) error {
+func checkRestoredPickHistory(ctx context.Context, ses *Session, bh BackgroundExec, dag *databranchutils.DataBranchDAG, info *branchMetaInfo, tables *tableStuff, sourceFlags, targetFlags uint64) error {
 	reject := func() error {
 		return moerr.NewNotSupported(ctx, "DATA BRANCH PICK with FAIL or SKIP requires branch history unavailable after restore")
 	}
 	if (sourceFlags|targetFlags)&features.BranchHistoryLostOnRestore != 0 {
-		return reject()
+		source, target := tables.endpointIdentities(ctx, ses)
+		var independent bool
+		switch {
+		case targetFlags&features.BranchRestoreFlags == 0 && len(info.pathFromLCAToBase) == 1:
+			independent = independentPickEndpointCreatedAfterRestore(ctx, ses, source, tables.tarRel, target, tables.baseRel)
+		case sourceFlags&features.BranchRestoreFlags == 0 && len(info.pathFromLCAToTar) == 1:
+			independent = independentPickEndpointCreatedAfterRestore(ctx, ses, target, tables.baseRel, source, tables.tarRel)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !independent {
+			return reject()
+		}
 	}
 
 	var parents []uint64
@@ -484,6 +499,58 @@ func checkRestoredPickHistory(ctx context.Context, bh BackgroundExec, dag *datab
 		}
 	}
 	return nil
+}
+
+// The caller has ruled out restore provenance and incoming DAG edges on the
+// independent side. Its original catalog row must postdate a committed row
+// for the restored physical table. A surviving parent can also have a
+// single-node path, so the lack of a common ancestor alone does not suffice.
+func independentPickEndpointCreatedAfterRestore(
+	ctx context.Context,
+	ses *Session,
+	restoredOwner branchIdentity,
+	restored engine.Relation,
+	independentOwner branchIdentity,
+	independent engine.Relation,
+) bool {
+	handler := ses.GetTxnHandler()
+	txn := handler.GetTxn()
+	snapshot := types.TimestampToTS(txn.SnapshotTS())
+	independentCtx := identityCtx(ctx, independentOwner)
+	independentID := independent.GetTableID(independentCtx)
+	def := independent.GetTableDef(independentCtx)
+	if def.GetLogicalId() != independentID {
+		// A rebuild can create a new physical table for an older identity.
+		return false
+	}
+	key := packMoTablesCPKey(independentOwner.account, def.GetDbName(), independent.GetTableName())
+	created, original, err := readTableCatalogCommitTS(independentCtx, ses, independentID, snapshot, key)
+	if err != nil || !original || created.IsEmpty() {
+		return false
+	}
+
+	restoredCtx := identityCtx(ctx, restoredOwner)
+	key = packMoTablesCPKey(restoredOwner.account, restored.GetTableDef(restoredCtx).GetDbName(), restored.GetTableName())
+	visible, _, err := readTableCatalogCommitTS(restoredCtx, ses, restored.GetTableID(restoredCtx), snapshot, key)
+	if err != nil || visible.IsEmpty() || !visible.LT(&created) {
+		return false
+	}
+
+	// A system-account restore can replace the global branch catalog without
+	// recreating the other accounts' tables. Trust the missing branch edge
+	// only if the current catalog already existed when this table was created.
+	sysCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	db, err := handler.GetStorage().Database(sysCtx, catalog.MO_CATALOG, txn)
+	if err != nil {
+		return false
+	}
+	metadata, err := db.Relation(sysCtx, catalog.MO_BRANCH_METADATA, nil)
+	if err != nil {
+		return false
+	}
+	key = packMoTablesCPKey(catalog.System_Account, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA)
+	catalogVisible, _, err := readTableCatalogCommitTS(sysCtx, ses, metadata.GetTableID(sysCtx), snapshot, key)
+	return err == nil && !catalogVisible.IsEmpty() && catalogVisible.LT(&created)
 }
 
 // loadBranchDAGWithBH reads mo_branch_metadata under the sys account and

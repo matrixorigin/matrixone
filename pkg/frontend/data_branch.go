@@ -4836,7 +4836,7 @@ func decideLCABranchTSFromBranchDAG(
 		branchInfo.pathFromLCAToBaseLineageOnly = []bool{false}
 	}
 	if restoredPick {
-		err = checkRestoredPickHistory(ctx, bh, dag, &branchInfo, sourceFlags, targetFlags)
+		err = checkRestoredPickHistory(ctx, ses, bh, dag, &branchInfo, &tblStuff, sourceFlags, targetFlags)
 	}
 	return
 }

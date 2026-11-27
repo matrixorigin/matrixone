@@ -27,6 +27,102 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBoundedPickWithRestoredForkAndIndependentTable(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db := recoverySQLClient(t, cn)
+		defer db.Close()
+		ctx := t.Context()
+		run := func(statements ...string) {
+			t.Helper()
+			for _, statement := range statements {
+				_, err := db.ExecContext(ctx, statement)
+				require.NoError(t, err, statement)
+			}
+		}
+		checkRows := func(table, want string) {
+			t.Helper()
+			var rows string
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select coalesce(group_concat(concat_ws(':',k,v) order by k),'') from "+table).Scan(&rows))
+			require.Equal(t, want, rows)
+		}
+
+		run("create database pick_restore",
+			"create table pick_restore.parent(k int primary key, v int)",
+			"insert into pick_restore.parent values(1,10),(2,20)",
+			"data branch create table pick_restore.src from pick_restore.parent",
+			"delete from pick_restore.parent where k=2",
+			"create snapshot fork_restore for table pick_restore src",
+			"restore table pick_restore.src {snapshot=fork_restore}",
+			"create table pick_restore.dst_fail(k int primary key, v int)",
+			"create table pick_restore.dst_skip(k int primary key, v int)",
+			"create table pick_restore.src_new(k int primary key, v int)",
+			"create snapshot pick_restore_lo for account sys",
+			"update pick_restore.src set v=52 where k=2",
+			"insert into pick_restore.src values(3,80)",
+			"insert into pick_restore.src_new values(4,90)",
+			"create snapshot pick_restore_hi for account sys")
+
+		window := " between snapshot pick_restore_lo and pick_restore_hi"
+		for _, conflict := range []string{" when conflict fail", " when conflict skip"} {
+			_, err := db.ExecContext(ctx, "data branch pick pick_restore.src into pick_restore.parent"+window+conflict)
+			require.ErrorContains(t, err, "branch history unavailable after restore")
+			checkRows("pick_restore.parent", "1:10")
+		}
+
+		run("data branch pick pick_restore.src into pick_restore.dst_fail"+window,
+			"data branch pick pick_restore.src into pick_restore.dst_skip"+window+" when conflict skip")
+		checkRows("pick_restore.dst_fail", "2:52,3:80")
+		checkRows("pick_restore.dst_skip", "2:52,3:80")
+
+		run("data branch pick pick_restore.src_new into pick_restore.src" + window + " when conflict fail")
+		checkRows("pick_restore.src", "1:10,2:52,3:80,4:90")
+
+		run("drop snapshot pick_restore_hi", "drop snapshot pick_restore_lo",
+			"drop snapshot fork_restore", "drop database pick_restore")
+	})
+}
+
+func TestBoundedPickWithRestoredBranchCatalog(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		sys := recoverySQLClient(t, cn)
+		defer sys.Close()
+		ctx := t.Context()
+		run := func(db *sql.DB, stmts ...string) {
+			t.Helper()
+			for _, stmt := range stmts {
+				_, err := db.ExecContext(ctx, stmt)
+				require.NoError(t, err, stmt)
+			}
+		}
+		run(sys, "create account pick_tenant admin_name 'tester' identified by '111'")
+		tenant := recoverySQLClientWithUser(t, cn, "pick_tenant#tester")
+		defer tenant.Close()
+		run(tenant, "create database branch_probe", "create table branch_probe.parent(k int primary key,v int)",
+			"insert into branch_probe.parent values(1,10),(2,20)",
+			"data branch create table branch_probe.src from branch_probe.parent",
+			"create snapshot src_restore for table branch_probe src",
+			"restore table branch_probe.src {snapshot=src_restore}")
+		run(sys, "create snapshot system_before for account sys")
+		run(tenant, "data branch create table branch_probe.dst from branch_probe.parent", "delete from branch_probe.dst where k=2")
+		run(sys, "restore account sys {snapshot=system_before}")
+		run(tenant, "create snapshot probe_lo for account pick_tenant",
+			"update branch_probe.src set v=52 where k=2", "insert into branch_probe.src values(3,80)",
+			"create snapshot probe_hi for account pick_tenant")
+		_, err = tenant.ExecContext(ctx, "data branch pick branch_probe.src into branch_probe.dst between snapshot probe_lo and probe_hi when conflict skip")
+		var result string
+		require.NoError(t, tenant.QueryRowContext(ctx, "select group_concat(concat_ws(':',k,v) order by k) from branch_probe.dst").Scan(&result))
+		require.Equal(t, "1:10", result)
+		require.ErrorContains(t, err, "branch history unavailable after restore")
+		run(tenant, "drop snapshot probe_hi", "drop snapshot probe_lo", "drop snapshot src_restore", "drop database branch_probe")
+		run(sys, "drop snapshot system_before", "drop account pick_tenant")
+	})
+}
+
 func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 	RunSingleCNBaseClusterTests(t, func(c Cluster) {
 		cn, err := c.GetCNService(0)
