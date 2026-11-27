@@ -793,7 +793,6 @@ func newTestStore(
 		c,
 		rt,
 		fs,
-		nil,
 		func(value Service) { owner = value },
 		options...)
 	require.NoError(t, err)

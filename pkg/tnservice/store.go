@@ -256,7 +256,6 @@ func NewService(
 	cfg *Config,
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
-	_ chan struct{},
 	publish func(Service),
 	opts ...Option) (result Service, err error) {
 	if err := cfg.Validate(); err != nil {

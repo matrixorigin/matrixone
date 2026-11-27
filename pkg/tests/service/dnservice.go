@@ -169,7 +169,7 @@ func newTNService(
 	if publish != nil {
 		publish(ds)
 	}
-	_, err := tnservice.NewService(cfg, rt, fs, nil, func(owner tnservice.Service) { ds.svc = owner }, opts...)
+	_, err := tnservice.NewService(cfg, rt, fs, func(owner tnservice.Service) { ds.svc = owner }, opts...)
 	constructed = err == nil
 	return ds, err
 }
