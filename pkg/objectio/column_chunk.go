@@ -245,6 +245,13 @@ func decodeChunkedColumn(
 		if chunkErr != nil {
 			return nil, chunkErr
 		}
+		if len(chunk) < IOEntryHeaderSize {
+			return nil, moerr.NewInvalidInputNoCtx("invalid chunked object column payload header")
+		}
+		header := DecodeIOEntryHeader(chunk)
+		if header.Type != IOET_ColData || header.Version != IOET_ColumnData_CurrVer {
+			return nil, moerr.NewInvalidInputNoCtx("invalid chunked object column payload header")
+		}
 		decoded, decodeErr := Decode(chunk)
 		if decodeErr != nil {
 			return nil, decodeErr

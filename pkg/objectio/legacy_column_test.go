@@ -477,3 +477,48 @@ func TestLegacyColumnStreamRejectsUnsupportedAndInvalidSpill(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+func TestLegacyWindowRejectsCorruptVarlenaReference(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(source, []byte(strings.Repeat("x", 64)), false, mp))
+	require.NoError(t, vector.AppendBytes(source, []byte(strings.Repeat("y", 64)), false, mp))
+	encoded := marshalLegacyTestColumn(t, source)
+	source.Free(mp)
+	layout, err := readLegacyColumnLayout(bytes.NewReader(encoded), int64(len(encoded)))
+	require.NoError(t, err)
+	// The first descriptor points beyond its declared area. Both sizing and
+	// materialization must reject it without retaining any output allocation.
+	descriptors := types.DecodeSlice[types.Varlena](encoded[layout.dataOffset : layout.dataOffset+layout.dataLength])
+	descriptors[0].SetOffsetLen(uint32(layout.areaLength), 64)
+	before := mp.CurrNB()
+	costs := make([]uint64, 1)
+	require.ErrorContains(t, addLegacyColumnWindowCosts(bytes.NewReader(encoded), int64(len(encoded)), 0, costs), "varlen offset")
+	window, err := materializeLegacyColumnWindow(bytes.NewReader(encoded), int64(len(encoded)), 0, 1, mp)
+	require.ErrorContains(t, err, "varlen offset")
+	require.Nil(t, window)
+	require.Equal(t, before, mp.CurrNB())
+
+	// The adjacent valid row remains readable when the corrupt row is outside
+	// the requested window.
+	window, err = materializeLegacyColumnWindow(bytes.NewReader(encoded), int64(len(encoded)), 1, 1, mp)
+	require.NoError(t, err)
+	require.Equal(t, strings.Repeat("y", 64), window.GetStringAt(0))
+	window.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestLegacyWindowCostRangeDoesNotReadOutsideColumn(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(source, int64(7), false, mp))
+	encoded := marshalLegacyTestColumn(t, source)
+	source.Free(mp)
+	costs := make([]uint64, 2)
+	err := addLegacyColumnWindowCosts(bytes.NewReader(encoded), int64(len(encoded)), 0, costs)
+	require.ErrorContains(t, err, "out of range")
+	require.Equal(t, []uint64{0, 0}, costs)
+	require.Zero(t, mp.CurrNB())
+}

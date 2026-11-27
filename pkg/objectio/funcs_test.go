@@ -144,6 +144,52 @@ func TestMaterializeCachedAliasedWindowOmitsUnselectedArea(t *testing.T) {
 	}
 }
 
+func TestMaterializeCachedAliasedWindowPreservesNullSmallSharedAndGrouping(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte("a"), 64), false, mp))
+	require.NoError(t, vector.AppendBytes(source, []byte("small"), false, mp))
+	require.NoError(t, vector.AppendBytes(source, nil, true, mp))
+	require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte("b"), 64), false, mp))
+	require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte("c"), 64), false, mp))
+	values := vector.MustFixedColNoTypeCheck[types.Varlena](source)
+	values[4] = values[0]
+	source.GetGrouping().Add(1)
+	source.GetGrouping().Add(4)
+	grouped, err := materializeAliasedVarlenaWindow(source, 0, 5, mp)
+	require.NoError(t, err)
+	require.True(t, grouped.GetGrouping().Contains(1))
+	require.True(t, grouped.GetGrouping().Contains(4))
+	grouped.Free(mp)
+	encoded := marshalLegacyTestColumn(t, source)
+	source.Free(mp)
+	data := fileservice.NewBytes(encoded)
+	defer data.Release()
+	window, err := MaterializeCachedVectorWindow(data, 0, 5, mp)
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte("a"), 64), window.GetBytesAt(0))
+	require.Equal(t, []byte("small"), window.GetBytesAt(1))
+	require.True(t, window.IsNull(2))
+	require.Equal(t, bytes.Repeat([]byte("b"), 64), window.GetBytesAt(3))
+	require.Equal(t, window.GetBytesAt(0), window.GetBytesAt(4))
+	require.False(t, window.HasGrouping(), "the persisted vector format omits grouping")
+	window.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestDecompressColumnExtentRejectsCorruptEncoding(t *testing.T) {
+	ctx := context.Background()
+	allocator := fileservice.DefaultCacheDataAllocator()
+	data := []byte("truncated")
+	_, err := DecompressColumnExtent(ctx, data,
+		NewExtent(compress.None, 0, uint32(len(data)+1), uint32(len(data)+1)), allocator)
+	require.ErrorContains(t, err, "does not match")
+	_, err = DecompressColumnExtent(ctx, data,
+		NewExtent(255, 0, uint32(len(data)), uint32(len(data))), allocator)
+	require.ErrorContains(t, err, "unsupported object column compression")
+}
+
 func TestBudgetedWindowReadsOrdinaryExtentOnce(t *testing.T) {
 	writerMP := mpool.MustNewZero()
 	defer mpool.DeleteMPool(writerMP)
