@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r45-2026-11-12`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r46-2026-11-27`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -951,3 +951,16 @@ ABI, capacity limits and opt-in unisolated development scope remain unchanged.
 Independent Architecture and SQL/Planner approval of r45 remains pending; this
 maintenance and its tests do not supply either decision. Historical approval
 facts and revision descriptions above remain unchanged.
+
+## r46: preserve the official cache-locality RPC (2026-11-27)
+
+Official main `9bf005bfcd06ef722351bccd9c9a59833ce2b5bd` assigns
+`CountCachedObjectFiles` query method 47, request field 49 and response field
+50. The unpublished Python status envelope uses method 48, request field 50
+and response field 51. The status payload fields and admission semantics carry
+over from r45. The CN query handler, client dispatch and status wire fixture
+share these updated identifiers.
+
+The catalog target, MORPC 134, and the external Arrow/Flight ABI carry over
+from r45. Independent Architecture and SQL/Planner approval of r46 remains
+pending.

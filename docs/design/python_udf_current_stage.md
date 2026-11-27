@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r45-2026-11-12` |
+| Design revision | `python-udf-current-stage-r46-2026-11-27` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
-| Upstream repair baseline | `12679d7993eca1fb5355711eeb60e30ee522592f` (official ENUM/SET result metadata at Query field 24; routine dependencies use field 25; MORPC 134 and pending catalog 4.0.7/53 unchanged) |
-| Approval | Feature owner approved the r1 test/development scope in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r45 proposal preserves r44 semantics and pending catalog 4.0.7/53 (36 tenant, 17 cluster entries). It retains official ENUM/SET metadata at Query field 24 and moves the unmerged routine dependency envelope to 25. MORPC 134 and external Arrow/Flight ABI are unchanged. Independent Architecture and SQL/Planner approval remains pending; no production or security scope is added. Historical facts remain in the [approval record](python_udf_current_stage_approval.md). |
+| Upstream repair baseline | `9bf005bfcd06ef722351bccd9c9a59833ce2b5bd` (official cache-locality RPC at method 47, request field 49 and response field 50) |
+| Approval | Feature owner approved the r1 test/development scope in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r46 proposal preserves r45 behavior and moves the unpublished Python status envelope to method 48, request field 50 and response field 51. The pending catalog remains 4.0.7/53 (36 tenant, 17 cluster entries). MORPC 134 and the external Arrow/Flight ABI are unchanged. Independent Architecture and SQL/Planner approval remains pending. Historical facts remain in the [approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -180,10 +180,11 @@ shutdown upgrade; old unmerged PR plan/cache blobs are not a persistence or
 mixed-binary compatibility contract. Routine metadata introduces
 no placement, destination capability probe, stream floor or receiver version
 gate. Unrelated existing gates, including dependent programs, remain unchanged.
-The read-only `GetPythonUdfStatus` uses query method 47, request field 49 and
-response field 50 without a feature-version check. Session KILL/disconnect
-methods 45/46 retain their existing capability 120. External worker capability
-negotiation remains a separate exact-contract check.
+The read-only `GetPythonUdfStatus` uses query method 48, request field 50 and
+response field 51 without a feature-version check. Upstream
+`CountCachedObjectFiles` uses method 47, request field 49 and response field 50.
+Session KILL/disconnect methods 45/46 retain their existing capability 120.
+External worker capability negotiation remains a separate exact-contract check.
 
 The migration has no down handler. Do not manually remove the revision table,
 columns, or index, and do not claim that restoring an old binary restores Python
