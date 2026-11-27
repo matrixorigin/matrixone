@@ -266,58 +266,43 @@ func TestShowColumnsSplitsPhysicalAndLogicalAuthority(t *testing.T) {
 }
 
 func TestViewMetadataCandidateFailureProvenance(t *testing.T) {
-	for _, stage := range []string{"authorize", "open", "root", "definition"} {
-		t.Run(stage, func(t *testing.T) {
-			f := newViewSchemaTestFixture(t)
-			f.addView(t, "current_v", "select n_nationkey from nation")
-			missing := moerr.NewNoSuchTable(t.Context(), "tpch", "missing")
-			switch stage {
-			case "authorize":
-				f.authErr = missing
-			case "open":
-				f.provider = func(context.Context) (*ViewSchemaBinding, error) { return nil, missing }
-			default:
-				f.compiler.resolve = func(_ context.Context, _, name string, _ *Snapshot) error {
-					if (stage == "root" && name == "current_v") || (stage == "definition" && name == "nation") {
-						return missing
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"missing table", moerr.NewNoSuchTable(t.Context(), "tpch", "missing")},
+		{"missing fulltext index", moerr.NewFtMatchingKeyNotFound(t.Context())},
+	} {
+		for _, stage := range []string{"authorize", "open", "root", "definition"} {
+			t.Run(tc.name+"/"+stage, func(t *testing.T) {
+				f := newViewSchemaTestFixture(t)
+				f.addView(t, "current_v", "select n_nationkey from nation")
+				missing := tc.err
+				switch stage {
+				case "authorize":
+					f.authErr = missing
+				case "open":
+					f.provider = func(context.Context) (*ViewSchemaBinding, error) { return nil, missing }
+				default:
+					f.compiler.resolve = func(_ context.Context, _, name string, _ *Snapshot) error {
+						if (stage == "root" && name == "current_v") || (stage == "definition" && name == "nation") {
+							return missing
+						}
+						return nil
 					}
-					return nil
 				}
-			}
-			r := NewViewMetadataRequest(t.Context(), f.provider)
-			defer r.Close()
-			result, invalid, err := DescribeViewMetadataCandidate(r.Context(), "tpch", "current_v", nil)
-			require.Nil(t, result)
-			require.ErrorIs(t, err, missing)
-			require.Equal(t, stage == "definition", invalid)
-			_, err = r.schema.Describe("tpch", "current_v", nil)
-			require.Same(t, missing, err, "existing S2 callers retain the original error identity/code")
-			r.Close()
-			require.Zero(t, f.generation.Used())
-		})
-	}
-}
-
-func TestViewMetadataCandidateInvalidFulltextDependency(t *testing.T) {
-	for _, stage := range []string{"root", "definition"} {
-		t.Run(stage, func(t *testing.T) {
-			f := newViewSchemaTestFixture(t)
-			f.addView(t, "current_v", "select n_nationkey from nation")
-			missingIndex := moerr.NewFtMatchingKeyNotFound(t.Context())
-			f.compiler.resolve = func(_ context.Context, _, name string, _ *Snapshot) error {
-				if (stage == "root" && name == "current_v") || (stage == "definition" && name == "nation") {
-					return missingIndex
-				}
-				return nil
-			}
-			r := NewViewMetadataRequest(t.Context(), f.provider)
-			defer r.Close()
-			result, invalid, err := DescribeViewMetadataCandidate(r.Context(), "tpch", "current_v", nil)
-			require.Nil(t, result)
-			require.ErrorIs(t, err, missingIndex)
-			require.Equal(t, stage == "definition", invalid,
-				"only a proven View dependency may be skipped by a metadata scan")
-		})
+				r := NewViewMetadataRequest(t.Context(), f.provider)
+				defer r.Close()
+				result, invalid, err := DescribeViewMetadataCandidate(r.Context(), "tpch", "current_v", nil)
+				require.Nil(t, result)
+				require.ErrorIs(t, err, missing)
+				require.Equal(t, stage == "definition", invalid)
+				_, err = r.schema.Describe("tpch", "current_v", nil)
+				require.Same(t, missing, err, "existing S2 callers retain the original error identity/code")
+				r.Close()
+				require.Zero(t, f.generation.Used())
+			})
+		}
 	}
 }
 

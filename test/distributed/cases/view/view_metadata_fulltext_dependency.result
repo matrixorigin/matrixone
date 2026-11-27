@@ -1,0 +1,124 @@
+SET @saved_fulltext_index = @@session.experimental_fulltext_index;
+SET experimental_fulltext_index = 1;
+DROP DATABASE IF EXISTS tc_meta_target;
+DROP DATABASE IF EXISTS tc_meta_view;
+CREATE DATABASE tc_meta_target;
+CREATE TABLE tc_meta_target.t (
+id INT PRIMARY KEY,
+payload VARCHAR(30)
+);
+INSERT INTO tc_meta_target.t VALUES (1, 'unchanged');
+CREATE DATABASE tc_meta_view;
+USE tc_meta_view;
+CREATE TABLE docs (id INT PRIMARY KEY, body TEXT);
+INSERT INTO docs VALUES (1, 'hello matrixone'), (2, 'other text');
+CREATE FULLTEXT INDEX ft_body ON docs(body);
+CREATE VIEW v_good AS
+SELECT id FROM docs WHERE MATCH(body) AGAINST('hello');
+CREATE VIEW v_plain AS SELECT id FROM docs;
+SELECT c.attname, c.attnotnull, c.att_is_hidden,
+s.DATA_TYPE, s.COLLATION_NAME, s.EXTRA
+FROM mo_catalog.mo_columns c
+JOIN mo_catalog.mo_tables t
+ON c.account_id = t.account_id AND c.att_relname_id = t.rel_id
+LEFT JOIN information_schema.COLUMNS s
+ON s.TABLE_SCHEMA = t.reldatabase
+AND s.TABLE_NAME = t.relname
+AND s.COLUMN_NAME = c.attname
+WHERE t.account_id = current_account_id()
+AND (
+t.reldatabase = CONVERT(X'74635f6d6574615f746172676574' USING utf8mb4)
+OR (@@lower_case_table_names <> 0 AND LOWER(t.reldatabase) =
+LOWER(CONVERT(X'74635f6d6574615f746172676574' USING utf8mb4)))
+)
+AND (
+t.relname = CONVERT(X'74' USING utf8mb4)
+OR (@@lower_case_table_names <> 0 AND LOWER(t.relname) =
+LOWER(CONVERT(X'74' USING utf8mb4)))
+)
+ORDER BY c.attnum;
+➤ attname[12,256,0]  ¦  attnotnull[-6,8,0]  ¦  att_is_hidden[-6,8,0]  ¦  DATA_TYPE[12,65535,0]  ¦  COLLATION_NAME[12,18,0]  ¦  EXTRA[12,24,0]  𝄀
+id  ¦  1  ¦  0  ¦  int  ¦  null  ¦    𝄀
+payload  ¦  0  ¦  0  ¦  varchar  ¦  utf8mb4_general_ci  ¦    𝄀
+__mo_rowid  ¦  1  ¦  1  ¦  null  ¦  null  ¦  null
+DROP INDEX ft_body ON docs;
+SELECT c.attname, c.attnotnull, c.att_is_hidden,
+s.DATA_TYPE, s.COLLATION_NAME, s.EXTRA
+FROM mo_catalog.mo_columns c
+JOIN mo_catalog.mo_tables t
+ON c.account_id = t.account_id AND c.att_relname_id = t.rel_id
+LEFT JOIN information_schema.COLUMNS s
+ON s.TABLE_SCHEMA = t.reldatabase
+AND s.TABLE_NAME = t.relname
+AND s.COLUMN_NAME = c.attname
+WHERE t.account_id = current_account_id()
+AND (
+t.reldatabase = CONVERT(X'74635f6d6574615f746172676574' USING utf8mb4)
+OR (@@lower_case_table_names <> 0 AND LOWER(t.reldatabase) =
+LOWER(CONVERT(X'74635f6d6574615f746172676574' USING utf8mb4)))
+)
+AND (
+t.relname = CONVERT(X'74' USING utf8mb4)
+OR (@@lower_case_table_names <> 0 AND LOWER(t.relname) =
+LOWER(CONVERT(X'74' USING utf8mb4)))
+)
+ORDER BY c.attnum;
+➤ attname[12,256,0]  ¦  attnotnull[-6,8,0]  ¦  att_is_hidden[-6,8,0]  ¦  DATA_TYPE[12,65535,0]  ¦  COLLATION_NAME[12,18,0]  ¦  EXTRA[12,24,0]  𝄀
+id  ¦  1  ¦  0  ¦  int  ¦  null  ¦    𝄀
+payload  ¦  0  ¦  0  ¦  varchar  ¦  utf8mb4_general_ci  ¦    𝄀
+__mo_rowid  ¦  1  ¦  1  ¦  null  ¦  null  ¦  null
+SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA IN ('tc_meta_target', 'tc_meta_view')
+AND TABLE_NAME IN ('t', 'v_good', 'v_plain')
+ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION;
+➤ TABLE_SCHEMA[12,256,0]  ¦  TABLE_NAME[12,256,0]  ¦  COLUMN_NAME[12,256,0]  ¦  DATA_TYPE[12,65535,0]  𝄀
+tc_meta_target  ¦  t  ¦  id  ¦  int  𝄀
+tc_meta_target  ¦  t  ¦  payload  ¦  varchar  𝄀
+tc_meta_view  ¦  v_plain  ¦  id  ¦  int
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1356  ¦  View 'tc_meta_view.v_good' references invalid table(s) or column(s) or function(s) or definer/invoker of view lack rights to use them
+DESC v_good;
+Can't find FULLTEXT index matching the column list
+CREATE FULLTEXT INDEX ft_body ON docs(body);
+SELECT c.attname, c.attnotnull, c.att_is_hidden,
+s.DATA_TYPE, s.COLLATION_NAME, s.EXTRA
+FROM mo_catalog.mo_columns c
+JOIN mo_catalog.mo_tables t
+ON c.account_id = t.account_id AND c.att_relname_id = t.rel_id
+LEFT JOIN information_schema.COLUMNS s
+ON s.TABLE_SCHEMA = t.reldatabase
+AND s.TABLE_NAME = t.relname
+AND s.COLUMN_NAME = c.attname
+WHERE t.account_id = current_account_id()
+AND (
+t.reldatabase = CONVERT(X'74635f6d6574615f746172676574' USING utf8mb4)
+OR (@@lower_case_table_names <> 0 AND LOWER(t.reldatabase) =
+LOWER(CONVERT(X'74635f6d6574615f746172676574' USING utf8mb4)))
+)
+AND (
+t.relname = CONVERT(X'74' USING utf8mb4)
+OR (@@lower_case_table_names <> 0 AND LOWER(t.relname) =
+LOWER(CONVERT(X'74' USING utf8mb4)))
+)
+ORDER BY c.attnum;
+➤ attname[12,256,0]  ¦  attnotnull[-6,8,0]  ¦  att_is_hidden[-6,8,0]  ¦  DATA_TYPE[12,65535,0]  ¦  COLLATION_NAME[12,18,0]  ¦  EXTRA[12,24,0]  𝄀
+id  ¦  1  ¦  0  ¦  int  ¦  null  ¦    𝄀
+payload  ¦  0  ¦  0  ¦  varchar  ¦  utf8mb4_general_ci  ¦    𝄀
+__mo_rowid  ¦  1  ¦  1  ¦  null  ¦  null  ¦  null
+SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA IN ('tc_meta_target', 'tc_meta_view')
+AND TABLE_NAME IN ('t', 'v_good', 'v_plain')
+ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION;
+➤ TABLE_SCHEMA[12,256,0]  ¦  TABLE_NAME[12,256,0]  ¦  COLUMN_NAME[12,256,0]  ¦  DATA_TYPE[12,65535,0]  𝄀
+tc_meta_target  ¦  t  ¦  id  ¦  int  𝄀
+tc_meta_target  ¦  t  ¦  payload  ¦  varchar  𝄀
+tc_meta_view  ¦  v_good  ¦  id  ¦  int  𝄀
+tc_meta_view  ¦  v_plain  ¦  id  ¦  int
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+DROP DATABASE tc_meta_view;
+DROP DATABASE tc_meta_target;
+SET experimental_fulltext_index = @saved_fulltext_index;
