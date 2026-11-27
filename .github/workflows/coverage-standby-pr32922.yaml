@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   authorize:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == '944c23873fae6290cefc9a0c32159a1aa77ebb7b' && github.ref == 'refs/heads/weilu-runner-test'
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == 'a979437d3c09f3757cc5f01a2d8cbb595dbf09e8' && github.ref == 'refs/heads/weilu-runner-test'
     runs-on: ubuntu-latest
     environment: ci
     permissions:
@@ -52,8 +52,8 @@ jobs:
           from coverage_pr_entry import ENTRY, PROJECT, has_s3_fixture, route
           import node_cache_real_pr_gate as approved
 
-          number, run_id, preflight = 33176, 45952769594, 140352208426
-          head, source, author = "1e244603917809ad7e13d2bb4aafdbd0fd52e06e", "Ariznawlll/matrixone", "Ariznawlll"
+          number, run_id, preflight = 33176, 45954916655, 140359333240
+          head, source, author = "d6cfdc837296c8290e782cbaecc4d587ec453f94", "Ariznawlll/matrixone", "Ariznawlll"
           def check(ok, message):
               if not ok:
                   raise SystemExit(message)
@@ -234,7 +234,7 @@ jobs:
           COVERAGE_ARTIFACT: ${{ needs.merge.outputs.artifact }}
         run: |
           set -euo pipefail
-          test "$COVERAGE_HEAD" = '1e244603917809ad7e13d2bb4aafdbd0fd52e06e'
+          test "$COVERAGE_HEAD" = 'd6cfdc837296c8290e782cbaecc4d587ec453f94'
           [[ "$COVERAGE_PERCENT" =~ ^([0-9]{1,2}\.[0-9]{2}|100\.00)$ ]]
           [[ "$COVERAGE_ARTIFACT" =~ ^https://github\.com/matrixorigin/matrixone/actions/runs/${GITHUB_RUN_ID}/artifacts/[0-9]+$ ]]
           root="$GITHUB_API_URL/repos/matrixorigin/matrixone"
