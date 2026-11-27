@@ -1008,7 +1008,7 @@ func TestLateDeadlineCheckGetsOneFinalAdmissionAttempt(t *testing.T) {
 	require.Len(t, supp.triggers, 1)
 
 	clock.Advance(14*time.Second + 500*time.Millisecond)
-	rc.limit = 100 // capacity returned after the last pre-deadline check
+	rc.limit = 100                        // capacity returned after the last pre-deadline check
 	clock.Advance(501 * time.Millisecond) // the final check is handled slightly late
 	sched.doSched(nil, supp.todo)
 	require.Len(t, executor.tasks, 1)
