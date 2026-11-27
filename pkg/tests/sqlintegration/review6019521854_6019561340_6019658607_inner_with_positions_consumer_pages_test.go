@@ -601,6 +601,46 @@ func TestInnerWithPositionsConsumerAndReleasePages(t *testing.T) {
 	})
 }
 
+// Review 6090564133 (page composition): a SELECT ... INTO @var assignment
+// authored on the statement root rides through the paginated WITH-paren
+// composition at exactly that root - the composed pages keep the root's
+// pagination and the assignment's public result - while an INTO authored
+// inside the parenthesized child is not a proper root and stays rejected.
+func TestReview6090RootSelectIntoAssignmentComposesPages(t *testing.T) {
+	runSQLIntegration(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?multiStatements=true", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, err = conn.ExecContext(ctx, "create database if not exists into_page_db")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "use into_page_db")
+		require.NoError(t, err)
+		defer func() { _, _ = conn.ExecContext(ctx, "drop database if exists into_page_db") }()
+		_, err = conn.ExecContext(ctx, "WITH q AS (SELECT 1 AS a UNION ALL SELECT 2 AS a) (SELECT a FROM q LIMIT 2) ORDER BY a LIMIT 1 OFFSET 1 INTO @pgx")
+		require.NoErrorf(t, err, "the proper-root assignment composes through the paginated WITH-paren body")
+		var assigned int
+		rows, qerr := conn.QueryContext(ctx, "SELECT @pgx")
+		require.NoError(t, qerr)
+		defer rows.Close()
+		require.Truef(t, rows.Next(), "the variable readback returns its row")
+		require.NoError(t, rows.Scan(&assigned))
+		require.Equalf(t, 2, assigned, "the composed pages assign the second ordered row: @pgx = 2")
+		require.False(t, rows.Next(), "the variable readback is a single row")
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		_, err = conn.ExecContext(ctx, "WITH q AS (SELECT 1 AS a UNION ALL SELECT 2 AS a) (SELECT a FROM q LIMIT 2 INTO @pny) ORDER BY a LIMIT 1 OFFSET 1")
+		require.ErrorContainsf(t, err, "multiple LIMIT",
+			"a nested INTO inside the parenthesized child keeps the proper-root rejection at the plain binder")
+	})
+}
+
 // The lazy-broadcast composition regression for review6040251798's D1 class:
 // a non-hash LEFT LoopJoin whose single probe scope is a lazily admitted
 // composed page (a UNION ALL body under a LIMIT) must keep the union

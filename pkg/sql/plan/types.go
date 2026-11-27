@@ -416,6 +416,13 @@ type QueryBuilder struct {
 	// paginated view that clause is a clone, while the catalog formatter
 	// walks the authored statement, so the capture records the authored key.
 	clauseCorrespondence map[*tree.SelectClause]*tree.SelectClause
+	// routedRootSelect records the first select this builder binds for the
+	// plan - the authored statement the executor actually routed. The
+	// pagination helpers treat the routed root as the one authored position
+	// an assignment or export clause may ride through the composition,
+	// while every nested body (CTE bodies, view sources, set members)
+	// stays subject to the plain duplicate-owner validation.
+	routedRootSelect *tree.Select
 
 	// syntheticStarOrdinals carries, for the wrap's generated star refs
 	// only, the sole derived binding's visible column by relation tag and

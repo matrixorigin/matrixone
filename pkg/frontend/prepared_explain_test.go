@@ -634,12 +634,14 @@ func TestCompileOutputCallbackCapturesSelectIntoUserVariables(t *testing.T) {
 // executor. A reachable export-bearing paginated child is parsed and driven
 // through the actual frontend EXPLAIN handler chain while the authorization
 // boundary stub captures the threaded identity and delegates every check to
-// the original planner: the child must refuse its duplicate pagination
-// clauses (1149) with the captured owner exactly nil.
+// the original planner: the exported paginated query composes into its
+// explain plan with the captured owner exactly nil, while a nested
+// export keeps the plain duplicate-owner rejection.
 func TestExplainChildPlanningKeepsNeutralExportOwner(t *testing.T) {
 	ses, prepareStmt, _, execCtx := newPreparedExecuteEnvForSQL(t, 107, "select 1")
 	defer prepareStmt.Close()
-	sql := "explain with q as (select 1 as a union all select 2 as a) (select a from q limit 2) order by a limit 1 offset 1 into outfile '/tmp/p137-owner-guard.csv'"
+	explainTarget := t.TempDir() + "/p137-owner-guard.csv"
+	sql := "explain with q as (select 1 as a union all select 2 as a) (select a from q limit 2) order by a limit 1 offset 1 into outfile '" + explainTarget + "'"
 	ses.GetTxnCompileCtx().SetContext(execCtx.reqCtx)
 	stmts, err := mysql.Parse(execCtx.reqCtx, sql, 1)
 	require.NoError(t, err)
@@ -656,8 +658,26 @@ func TestExplainChildPlanningKeepsNeutralExportOwner(t *testing.T) {
 		return originalBuild(reqCtx, innerSes, compiler, innerStmt, input, owner)
 	}
 
+	require.Nil(t, capturedOwner, "the neutral diagnostic threads no planning owner before planning")
 	err = handleExplainStmt(ses, execCtx, explain)
-	require.Error(t, err, "the neutral diagnostic must refuse the paginated export child")
-	require.Nil(t, capturedOwner, "the actual frontend EXPLAIN child planning must pass the neutral nil owner")
-	require.ErrorContains(t, err, "multiple LIMIT")
+	require.NoErrorf(t, err, "EXPLAIN composes the valid two-page WITH export and returns its plan under the neutral owner")
+	require.Nil(t, capturedOwner, "the actual frontend EXPLAIN child planning stays ownership-neutral")
+	require.NoFileExists(t, explainTarget, "explain-only composition shows the plan but leaves the export target absent")
+	// The executable route stays distinct: the very statement EXPLAIN just
+	// composed runs through the executor's export owner on the execution
+	// path (covered by the outfile-audit and lazy-broadcast execution
+	// witnesses), so this probe pins only the explain-only side. A nested
+	// INTO OUTFILE authored inside the parenthesized child is not a proper
+	// root and keeps its rejection.
+	nestedTarget := t.TempDir() + "/p137-nested-guard.csv"
+	nestedSQL := "explain with q as (select 1 as a union all select 2 as a) (select a from q limit 2 into outfile '" + nestedTarget + "') order by a limit 1"
+	nestedStmts, nerr := mysql.Parse(execCtx.reqCtx, nestedSQL, 1)
+	require.NoError(t, nerr, "the nested-export control parses")
+	nestedExplain, nestedOK := nestedStmts[0].(*tree.ExplainStmt)
+	require.Truef(t, nestedOK, "the nested-export control is an EXPLAIN statement")
+	nestedErr := handleExplainStmt(ses, execCtx, nestedExplain)
+	require.ErrorContainsf(t, nestedErr, "multiple LIMIT",
+		"a nested INTO OUTFILE inside the parenthesized child keeps the plain duplicate-owner rejection")
+	require.NoFileExists(t, nestedTarget,
+		"the nested control's isolated target stays absent alongside its planning rejection")
 }

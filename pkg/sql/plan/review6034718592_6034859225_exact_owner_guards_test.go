@@ -117,12 +117,12 @@ func TestOrdinaryPaginationWrapExemptsOnlyExplicitExportOwner(t *testing.T) {
 	}
 
 	sNil := getWrapped()
-	if _, _, _, ok := ordinaryPaginationWrap(sNil, false, nil); ok {
+	if _, _, _, ok := ordinaryPaginationWrap(sNil, false, nil, nil); ok {
 		t.Fatalf("a nil export owner must decline the composition when the Ep sits on the walk root")
 	}
 
 	sOwner := getWrapped()
-	wrapped, _, _, ok := ordinaryPaginationWrap(sOwner, false, sOwner)
+	wrapped, _, _, ok := ordinaryPaginationWrap(sOwner, false, sOwner, nil)
 	if !ok {
 		t.Fatalf("the explicitly threaded executable Ep statement must compose its pages")
 	}
@@ -269,7 +269,7 @@ func TestEnclosingAuthoredPagesComposeAtTheWithTerminal(t *testing.T) {
 		withStmt = paren.Select
 	}
 	innerAuthored := withStmt.Select.(*tree.ParenSelect).Select
-	wrapped, pages, _, rewritten := ordinaryPaginationWrap(withStmt, false, nil, enclosing...)
+	wrapped, pages, _, rewritten := ordinaryPaginationWrap(withStmt, false, nil, nil, enclosing...)
 	if !rewritten || wrapped == nil {
 		t.Fatalf("the enclosing authored pages must compose at the WITH terminal")
 	}
@@ -291,7 +291,7 @@ func TestEnclosingAuthoredPagesComposeAtTheWithTerminal(t *testing.T) {
 	// Without the recorded enclosing stages the composition loses the
 	// genuine outer page: this is the discriminating pre-fix behavior, so
 	// the assertion keeps the test honest about which input owns the stage.
-	_, pagesWithout, _, withoutRewritten := ordinaryPaginationWrap(withStmt, false, nil)
+	_, pagesWithout, _, withoutRewritten := ordinaryPaginationWrap(withStmt, false, nil, nil)
 	if withoutRewritten && len(pagesWithout) > 0 && pagesWithout[len(pagesWithout)-1].Limit == sel.Limit {
 		t.Fatalf("the peeled enclosing stage must not appear without the recorded enclosing input")
 	}
@@ -306,7 +306,7 @@ func TestWrapDeclinesANestedExportWithADifferentAction(t *testing.T) {
 	// The production anchor: the WITH sits on the root itself, so the
 	// caller binds s = the rooted statement and threads the same statement
 	// as the export owner.
-	if _, _, _, rewritten := ordinaryPaginationWrap(sel, false, sel); !rewritten {
+	if _, _, _, rewritten := ordinaryPaginationWrap(sel, false, sel, sel); !rewritten {
 		t.Fatalf("the one shared action must stay exempt as the root's own export")
 	}
 	paren, ok := sel.Select.(*tree.ParenSelect)
@@ -317,16 +317,16 @@ func TestWrapDeclinesANestedExportWithADifferentAction(t *testing.T) {
 	// A genuinely different second action on a level the walk visits must
 	// decline: pointer identity is the only authority here.
 	walked.Ep = &tree.ExportParam{}
-	if _, _, _, rewritten := ordinaryPaginationWrap(sel, false, sel); rewritten {
+	if _, _, _, rewritten := ordinaryPaginationWrap(sel, false, sel, sel); rewritten {
 		t.Fatalf("a distinct nested export action must not gain the root's exemption")
 	}
 	// The same pointer copied onto the walked level stays the one action.
 	walked.Ep = sel.Ep
-	if _, _, _, rewritten := ordinaryPaginationWrap(sel, false, sel); !rewritten {
+	if _, _, _, rewritten := ordinaryPaginationWrap(sel, false, sel, sel); !rewritten {
 		t.Fatalf("the same shared pointer must stay exempt on the walked level")
 	}
 	walked.Ep = nil
-	if _, _, _, rewritten := ordinaryPaginationWrap(sel, false, sel); !rewritten {
+	if _, _, _, rewritten := ordinaryPaginationWrap(sel, false, sel, sel); !rewritten {
 		t.Fatalf("the neutral no-export level must compose as before")
 	}
 }
@@ -348,7 +348,7 @@ func TestEnclosingStagesStayOutsideTheWithRegion(t *testing.T) {
 		enclosing = append(enclosing, withStmt)
 		withStmt = paren.Select
 	}
-	wrapped, pages, _, rewritten := ordinaryPaginationWrap(withStmt, false, nil, enclosing...)
+	wrapped, pages, _, rewritten := ordinaryPaginationWrap(withStmt, false, nil, nil, enclosing...)
 	if !rewritten || wrapped == nil {
 		t.Fatalf("the enclosing authored stages must compose at the WITH terminal")
 	}
@@ -392,7 +392,7 @@ func TestSameActionEnclosingChainComposesOneAction(t *testing.T) {
 		enclosing = append(enclosing, withStmt)
 		withStmt = paren.Select
 	}
-	wrapped, pages, _, rewritten := ordinaryPaginationWrap(withStmt, false, sel, enclosing...)
+	wrapped, pages, _, rewritten := ordinaryPaginationWrap(withStmt, false, sel, nil, enclosing...)
 	if !rewritten || wrapped == nil {
 		t.Fatalf("the one shared action's contiguous enclosing chain must compose")
 	}
@@ -415,7 +415,7 @@ func TestSameActionEnclosingChainComposesOneAction(t *testing.T) {
 		}
 	}
 	enclosing[0].Ep = &tree.ExportParam{}
-	if _, _, _, declined := ordinaryPaginationWrap(withStmt, false, sel, enclosing...); declined {
+	if _, _, _, declined := ordinaryPaginationWrap(withStmt, false, sel, nil, enclosing...); declined {
 		t.Fatalf("a different action on the enclosing chain must still decline")
 	}
 }

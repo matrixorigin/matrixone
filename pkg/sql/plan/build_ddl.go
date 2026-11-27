@@ -1663,10 +1663,11 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 // follow-up INSERT and the frontend privilege re-plan - starts from this
 // same boundary. The wrapper is selected away only under the unavoidable
 // compatibility exception of releasedCtasWrapperOwnedIdempotentLiteralLimit:
-// a provably idempotent repeated literal integer LIMIT count. Every other
+// a semantically redundant outer literal integer LIMIT count (one at least
+// the child's own count, the equal-count form included). Every other
 // wrapper - fresh ordering, pagination with offsets, time windows, locks,
-// export targets, parameterized or non-literal counts, or any unequal
-// authored clause - keeps the complete source, so those authored clauses
+// export targets, parameterized or non-literal counts, or any authored
+// narrower count - keeps the complete source, so those authored clauses
 // stay effective in the executed INSERT copy, stay covered by the privilege
 // re-plan of the same effective source, and keep their ordinary duplicate-
 // owner validation rather than a rendered-text elision.
@@ -1684,12 +1685,15 @@ func ReleasedChildOnlyCtasSource(stmt *tree.Select) *tree.Select {
 // releasedCtasWrapperOwnedIdempotentLiteralLimit guards the one unavoidable
 // compatibility exception: the wrapper and its immediate parenthesized child
 // each own a literal integer LIMIT count, with no offset authored on either
-// side and no other outer-owned clause, and the two counts are the same
-// value. `(X LIMIT n) LIMIT n` is then provably idempotent, so the shared
-// selection may select the child for inference, the follow-up INSERT and
-// the privilege re-plan without accepting a genuinely duplicate owner or
-// choosing between unequal authored limits. Every other form - offsets,
-// parameters, ordering, windows, locks, exports, unequal or non-literal
+// side and no other outer-owned clause, and the outer count is at least the
+// child's own count - the prior equal-count form included. `(X LIMIT n)
+// LIMIT m` with m >= n is then semantically redundant (the child already
+// caps the result at or below the outer count), so the shared selection may
+// select the child for inference, the follow-up INSERT and the privilege
+// re-plan without accepting a genuinely duplicate owner, silently choosing
+// between authored limits, or dropping an authored narrower count. Every
+// other form - offsets,
+// parameters, ordering, windows, locks, exports, narrower or non-literal
 // counts or any further wrapper-owned clause - keeps the complete wrapper
 // and its ordinary duplicate-owner validation.
 func releasedCtasWrapperOwnedIdempotentLiteralLimit(wrapper *tree.Select, child *tree.Select) bool {
@@ -1710,7 +1714,7 @@ func releasedCtasWrapperOwnedIdempotentLiteralLimit(wrapper *tree.Select, child 
 	if !innerOk {
 		return false
 	}
-	return outerCount == innerCount
+	return outerCount >= innerCount
 }
 
 // releasedCtasLiteralLimitCount extracts the authored count of a LIMIT

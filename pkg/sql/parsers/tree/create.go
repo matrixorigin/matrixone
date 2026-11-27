@@ -2915,10 +2915,39 @@ func NewTableOptionSecondaryEngineNull() *TableOptionSecondaryEngineNull {
 	return reuse.Alloc[TableOptionSecondaryEngineNull](nil)
 }
 
+// CharsetNameOriginKind names the grammar alternative that captured an
+// authored charset/collate name.
+type CharsetNameOriginKind int
+
+const (
+	// CharsetNameBare: a plain identifier keyword (ID, not_keyword,
+	// non_reserved_keyword, BINARY) folded exactly as the ident branch
+	// always has.
+	CharsetNameBare CharsetNameOriginKind = iota
+	// CharsetNameBacktick: a backtick-quoted identifier.
+	CharsetNameBacktick
+	// CharsetNameString: a single-quoted string literal.
+	CharsetNameString
+)
+
+// CharsetNameOrigin carries an authored charset/collate name together with
+// its grammar origin so the canonical catalog render re-emits each accepted
+// alternative in a form the very same parser consumes back.
+type CharsetNameOrigin struct {
+	Value string
+	Kind  CharsetNameOriginKind
+}
+
 type TableOptionCharset struct {
 	tableOptionImpl
 	Charset string
 	Collate string
+	// Origin records the grammar alternative that captured the name: the
+	// canonical render re-emits bare identifier keywords verbatim,
+	// backtick-quoted identifiers re-quoted, and string literals as
+	// escaped single-quoted literals, so keywords, digit-only spellings,
+	// mixed case and spaced names all round-trip the catalog reparse.
+	Origin CharsetNameOriginKind
 	// Convert changes existing character columns/data, not only the default.
 	Convert bool
 	// NonCharsetSyntax distinguishes historical ALTER no-op placeholders
@@ -2932,10 +2961,10 @@ func (node *TableOptionCharset) Format(ctx *FmtCtx) {
 	} else {
 		ctx.WriteString("charset = ")
 	}
-	ctx.WriteString(node.Charset)
+	writeCharacterSetName(ctx, node.Charset, node.Origin)
 	if node.Collate != "" {
 		ctx.WriteString(" collate = ")
-		ctx.WriteString(node.Collate)
+		writeCharacterSetName(ctx, node.Collate, CharsetNameBare)
 	}
 }
 
@@ -2949,20 +2978,35 @@ func (node *TableOptionCharset) Free() {
 	reuse.Free[TableOptionCharset](node, nil)
 }
 
-func NewTableOptionCharset(s string) *TableOptionCharset {
+func NewTableOptionCharset(s string, quoted bool) *TableOptionCharset {
 	t := reuse.Alloc[TableOptionCharset](nil)
 	t.Charset = s
+	t.Origin = CharsetNameBare
+	if quoted {
+		t.Origin = CharsetNameString
+	}
+	return t
+}
+
+// NewTableOptionCharsetFrom builds a table charset option from the typed
+// grammar origin recording how the name was authored.
+func NewTableOptionCharsetFrom(o CharsetNameOrigin) *TableOptionCharset {
+	t := reuse.Alloc[TableOptionCharset](nil)
+	t.Charset = o.Value
+	t.Origin = o.Kind
 	return t
 }
 
 type TableOptionCollate struct {
 	tableOptionImpl
 	Collate string
+	// Origin records the name's grammar alternative; see TableOptionCharset.
+	Origin CharsetNameOriginKind
 }
 
 func (node *TableOptionCollate) Format(ctx *FmtCtx) {
 	ctx.WriteString("Collate = ")
-	ctx.WriteString(node.Collate)
+	writeCharacterSetName(ctx, node.Collate, node.Origin)
 }
 
 func (node TableOptionCollate) TypeName() string { return "tree.TableOptionCollate" }
@@ -2975,9 +3019,22 @@ func (node *TableOptionCollate) Free() {
 	reuse.Free[TableOptionCollate](node, nil)
 }
 
-func NewTableOptionCollate(s string) *TableOptionCollate {
+func NewTableOptionCollate(s string, quoted bool) *TableOptionCollate {
 	t := reuse.Alloc[TableOptionCollate](nil)
 	t.Collate = s
+	t.Origin = CharsetNameBare
+	if quoted {
+		t.Origin = CharsetNameString
+	}
+	return t
+}
+
+// NewTableOptionCollateFrom builds a table collate option from the typed
+// grammar origin recording how the name was authored.
+func NewTableOptionCollateFrom(o CharsetNameOrigin) *TableOptionCollate {
+	t := reuse.Alloc[TableOptionCollate](nil)
+	t.Collate = o.Value
+	t.Origin = o.Kind
 	return t
 }
 
@@ -3124,6 +3181,27 @@ func NewTableOptionChecksum(v uint64) *TableOptionChecksum {
 type TableOptionCompression struct {
 	tableOptionImpl
 	Compression string
+}
+
+// writeCharacterSetName re-emits an authored charset/collate name so the
+// canonical catalog rel_createsql reparse restores the exact authored value
+// for every accepted grammar origin: a bare identifier keyword is re-emitted
+// verbatim, exactly as the ident branch always folded it; a backtick-quoted
+// identifier is re-emitted backtick-quoted with embedded backticks doubled;
+// a string literal is re-emitted as a properly escaped single-quoted literal
+// that keywords, digit-only spellings, mixed case, embedded quotes and the
+// empty spelling all round-trip through.
+func writeCharacterSetName(ctx *FmtCtx, value string, origin CharsetNameOriginKind) {
+	switch origin {
+	case CharsetNameBare:
+		ctx.WriteString(value)
+	case CharsetNameBacktick:
+		ctx.WriteByte('`')
+		ctx.WriteString(strings.ReplaceAll(value, "`", "``"))
+		ctx.WriteByte('`')
+	default:
+		writeDecodedSQLString(ctx, value)
+	}
 }
 
 // writeDecodedSQLString re-emits a DECODED string value as a single-quoted

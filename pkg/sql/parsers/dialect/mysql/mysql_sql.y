@@ -223,6 +223,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     tableNames tree.TableNames
     columnTableDef *tree.ColumnTableDef
     tableOption tree.TableOption
+    charsetNameOrigin tree.CharsetNameOrigin
     tableOptions []tree.TableOption
     tableExprs tree.TableExprs
     tableExpr tree.TableExpr
@@ -928,6 +929,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <foreignTableOption> foreign_option
 %type <str> foreign_engine_kind
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
+%type <charsetNameOrigin> table_charset_name
+%type <str> table_charset_bare_ident
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
@@ -4743,38 +4746,38 @@ alter_option:
     }
 |   default_opt charset_keyword equal_opt charset_name COLLATE equal_opt charset_name
     {
-        opt := tree.NewTableOptionCharset($4)
+        opt := tree.NewTableOptionCharset($4, false)
         opt.Collate = $7
         $$ = opt
     }
 |   CONVERT TO charset_keyword charset_name
     {
-        opt := tree.NewTableOptionCharset($4)
+        opt := tree.NewTableOptionCharset($4, false)
         opt.Convert = true
         $$ = opt
     }
 |   CONVERT TO charset_keyword charset_name COLLATE equal_opt charset_name
     {
-        opt := tree.NewTableOptionCharset($4)
+        opt := tree.NewTableOptionCharset($4, false)
         opt.Collate = $7
         opt.Convert = true
         $$ = opt
     }
 |   able_type KEYS
     {
-        opt := tree.NewTableOptionCharset($1)
+        opt := tree.NewTableOptionCharset($1, false)
         opt.NonCharsetSyntax = true
         $$ = opt
     }
 |   space_type TABLESPACE
     {
-        opt := tree.NewTableOptionCharset($1)
+        opt := tree.NewTableOptionCharset($1, false)
         opt.NonCharsetSyntax = true
         $$ = opt
     }
 |   FORCE
     {
-        opt := tree.NewTableOptionCharset($1)
+        opt := tree.NewTableOptionCharset($1, false)
         opt.NonCharsetSyntax = true
         $$ = opt
     }
@@ -4784,7 +4787,7 @@ alter_option:
     }
 |   with_type VALIDATION
     {
-        opt := tree.NewTableOptionCharset($1)
+        opt := tree.NewTableOptionCharset($1, false)
         opt.NonCharsetSyntax = true
         $$ = opt
     }
@@ -12312,13 +12315,13 @@ table_option:
     {
         $$ = tree.NewTableOptionAvgRowLength(integralToUint64($3))
     }
-|   default_opt charset_keyword equal_opt charset_name
+|   default_opt charset_keyword equal_opt table_charset_name
     {
-        $$ = tree.NewTableOptionCharset($4)
+        $$ = tree.NewTableOptionCharsetFrom($4)
     }
-|   default_opt COLLATE equal_opt charset_name
+|   default_opt COLLATE equal_opt table_charset_name
     {
-        $$ = tree.NewTableOptionCollate($4)
+        $$ = tree.NewTableOptionCollateFrom($4)
     }
 |   CHECKSUM equal_opt INTEGRAL
     {
@@ -12521,6 +12524,44 @@ row_format_options:
 charset_name:
     name_string { $$ = yylex.(*Lexer).rewriteMergeName($1) }
 |   BINARY
+
+// table_charset_name captures the authored charset/collate name together
+// with the grammar alternative that produced it: the CREATE-side table
+// options carry that origin into the tree so the canonical catalog render
+// re-emits every accepted spelling - bare identifier keywords folded
+// exactly as before, backtick identifiers re-quoted, string literals
+// escaped - instead of a bare token the parser cannot consume back.
+table_charset_name:
+      table_charset_bare_ident
+    {
+        $$ = tree.CharsetNameOrigin{Kind: tree.CharsetNameBare, Value: $1}
+    }
+|   QUOTE_ID
+    {
+        $$ = tree.CharsetNameOrigin{Kind: tree.CharsetNameBacktick, Value: yylex.(*Lexer).rewriteMergeName(tree.NewCStr($1, 1).Compare())}
+    }
+|   STRING
+    {
+        $$ = tree.CharsetNameOrigin{Kind: tree.CharsetNameString, Value: yylex.(*Lexer).rewriteMergeName($1)}
+    }
+|   BINARY
+    {
+        $$ = tree.CharsetNameOrigin{Kind: tree.CharsetNameBare, Value: $1}
+    }
+
+table_charset_bare_ident:
+      ID
+    {
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = yylex.(*Lexer).rewriteMergeName(tree.NewCStr($1, 1).Compare())
+    }
+|   not_keyword
+    {
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = yylex.(*Lexer).rewriteMergeName(tree.NewCStr($1, 1).Compare())
+    }
+|   non_reserved_keyword
+    {
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = yylex.(*Lexer).rewriteMergeName(tree.NewCStr($1, 1).Compare())
+    }
 
 collate_name:
     name_string { $$ = yylex.(*Lexer).rewriteMergeName($1) }

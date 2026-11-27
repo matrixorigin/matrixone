@@ -6586,7 +6586,7 @@ func (builder *QueryBuilder) registerSyntheticPages(pages []*tree.Select) func()
 	}
 }
 
-func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tree.Select, enclosing ...*tree.Select) (*tree.Select, []*tree.Select, map[*tree.SelectClause]*tree.SelectClause, bool) {
+func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tree.Select, root *tree.Select, enclosing ...*tree.Select) (*tree.Select, []*tree.Select, map[*tree.SelectClause]*tree.SelectClause, bool) {
 	if s == nil {
 		return nil, nil, nil, false
 	}
@@ -6626,7 +6626,21 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tr
 	// any non-page clause set - a window, a rank, a lock, a different export action
 	// or a perform marker - was never recorded and still declines here.
 	for _, node := range enclosing {
-		if node == nil || node.RankOption != nil || node.TimeWindow != nil || node.SelectLockInfo != nil || node.IntoVars != nil || (exportOwner == nil || exportOwner.Ep == nil || node.Ep != exportOwner.Ep) && node.Ep != nil || node.DeprecatedInto || node.IsPerform {
+		if node == nil || node.DeprecatedInto || node.IsPerform ||
+			node.RankOption != nil || node.TimeWindow != nil || node.SelectLockInfo != nil {
+			return nil, nil, nil, false
+		}
+		// The routed root is the one authored position an assignment or an
+		// export may own while still peeling to the WITH-bearing region:
+		// the executor performs them from the original routed statement.
+		// Any other wrapper owning them, or a foreign export owner, keeps
+		// the plain binder's complete rejection.
+		rootAuthored := node == root
+		if node.Ep != nil &&
+			!((exportOwner != nil && exportOwner.Ep == node.Ep) || (rootAuthored && exportOwner == nil)) {
+			return nil, nil, nil, false
+		}
+		if !rootAuthored && node.IntoVars != nil {
 			return nil, nil, nil, false
 		}
 		stages = append(stages, pageStage{limit: node.Limit, orderBy: node.OrderBy})
@@ -6635,16 +6649,35 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tr
 	for {
 		paren, ok := cur.Select.(*tree.ParenSelect)
 		if !ok || paren.Select == nil {
+			// The terminal select binds as the composed body: its ordinary
+			// window/rank/lock clauses stay with it on the plain binder.
+			// Its authored INTO family, though, is exactly the nested-owner
+			// case - a clause authored inside the parenthesized body itself
+			// - and must decline instead of being silently absorbed into
+			// the composition: the routed-root exemption above never
+			// reaches a terminal child, so the nested INTO/OUTFILE keeps
+			// the plain binder's duplicate-owner rejection.
+			if cur != root && (cur.IntoVars != nil || cur.Ep != nil) {
+				return nil, nil, nil, false
+			}
 			break
 		}
+		rootAuthored := cur == root
+		epUnauthorized := cur.Ep != nil && ((!rootAuthored && (exportOwner == nil || exportOwner.Ep == nil || cur.Ep != exportOwner.Ep)) ||
+			(rootAuthored && exportOwner != nil && exportOwner.Ep != nil && cur.Ep != exportOwner.Ep))
 		if cur.RankOption != nil || cur.TimeWindow != nil ||
-			cur.SelectLockInfo != nil || (exportOwner == nil || exportOwner.Ep == nil || cur.Ep != exportOwner.Ep) && cur.Ep != nil || cur.IntoVars != nil {
+			cur.SelectLockInfo != nil || epUnauthorized || (!rootAuthored && cur.IntoVars != nil) {
 			// A wrapper carrying BY RANK or an interval window keeps the whole
 			// expression on the normal binder: its single-clause semantics and
 			// typed error behavior are already correct there. A wrapper whose
 			// authored state the reconstruction would discard - a lock, an
 			// export (INTO) or variable targets - stays whole for the same
 			// reason: nothing may silently strip an authored clause there.
+			// The composed ROOT is the one authored position those clauses
+			// may ride: the frontend executor performs the authored
+			// assignment and export from the original routed statement, so
+			// only the page reconstruction happens here while non-root and
+			// owner-mismatched INTO/OUTFILE clauses stay rejected above.
 			return nil, nil, nil, false
 		}
 		if cur.With != nil && cur != s {
@@ -6907,7 +6940,7 @@ func (builder *QueryBuilder) bindCte(
 		// equivalent derived-table nest.
 		if ctx.legacyCTEScope {
 			bodyForBinding = s
-		} else if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(fullBody, ctx.captureViewStarExpansion, nil); rewritten {
+		} else if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(fullBody, ctx.captureViewStarExpansion, nil, nil); rewritten {
 			unregisterSyntheticPages := builder.registerSyntheticPages(pages)
 			defer unregisterSyntheticPages()
 			if len(clauseMemo) > 0 {
@@ -7172,6 +7205,15 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	if len(execOwner) > 0 {
 		owner = execOwner[0]
 	}
+	// The routed statement root is the first select this builder binds:
+	// CTE bodies, view sources, set-operation members and prepared replans
+	// (fresh builders) enter later and never overwrite it, so the root-based
+	// pagination exemptions below distinguish the authored routed root from
+	// any WITH-bearing entry the composition helper receives.
+	if builder.routedRootSelect == nil {
+		builder.routedRootSelect = stmt
+	}
+	rootSelect := builder.routedRootSelect
 	withStmt := stmt
 	if stmt != nil && !ctx.legacyCTEScope {
 		// The consuming WITH-bearing query expression owns the composed
@@ -7193,8 +7235,25 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			// WITH descent alive. Every enclosing wrapper this peel passes
 			// through is recorded here, outermost first, together with its
 			// authored clause set, so the composition below replays those
-			// pages instead of silently dropping them.
-			if !ok || paren.Select == nil || (owner == nil || owner.Ep == nil || withStmt.Ep != owner.Ep) && withStmt.Ep != nil || withStmt.TimeWindow != nil || withStmt.RankOption != nil || withStmt.RewriteOption != nil || withStmt.SelectLockInfo != nil || withStmt.IntoVars != nil || withStmt.DeprecatedInto || withStmt.IsPerform {
+			// pages instead of silently dropping them. The routed root is
+			// the one authored position an assignment (INTO variables) or an
+			// export (INTO OUTFILE) rides through: the executor performs
+			// them from the original routed statement, so only the pagination
+			// replay happens here, while a non-root wrapper owning them, or
+			// a foreign export owner, still declines the rewrite.
+			rootOwned := withStmt == rootSelect
+			epRejected := false
+			if withStmt.Ep != nil {
+				ownerMatches := owner != nil && owner.Ep == withStmt.Ep
+				if rootOwned {
+					epRejected = owner != nil && !ownerMatches
+				} else {
+					epRejected = !ownerMatches
+				}
+			}
+			if !ok || paren.Select == nil ||
+				epRejected || (!rootOwned && withStmt.IntoVars != nil) ||
+				withStmt.TimeWindow != nil || withStmt.RankOption != nil || withStmt.RewriteOption != nil || withStmt.SelectLockInfo != nil || withStmt.DeprecatedInto || withStmt.IsPerform {
 				withStmt = nil
 				break
 			}
@@ -7202,7 +7261,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			withStmt = paren.Select
 		}
 		if withStmt != nil {
-			if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(withStmt, ctx.captureViewStarExpansion, owner, enclosing...); rewritten {
+			if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(withStmt, ctx.captureViewStarExpansion, owner, rootSelect, enclosing...); rewritten {
 				unregisterSyntheticPages := builder.registerSyntheticPages(pages)
 				defer unregisterSyntheticPages()
 				if len(clauseMemo) > 0 {

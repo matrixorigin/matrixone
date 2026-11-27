@@ -106,6 +106,16 @@ func TestReview6068CTASSourcePrivilegeDiscrimination(t *testing.T) {
 		require.Error(t, err, "the prepared route performs real planning and denies the unread source at PREPARE")
 		require.Contains(t, err.Error(), "privilege", "the prepared-route rejection names the missing source read privilege")
 
+		// The same decision for the redundant-outer wrapper of review
+		// 6090897398's gap: the privilege re-plan shares the same
+		// effective source, so the unread source is denied before the
+		// grant and the granted source prepares the exact redundant-count
+		// statement.
+		_, err = userConn.ExecContext(ctx,
+			"PREPARE redundant_denied_p FROM 'CREATE TABLE `"+destDB+"`.ctas_pdenied_r2 AS (SELECT id FROM `"+sourceDB+"`.src LIMIT 1) LIMIT 2'")
+		require.Error(t, err, "the prepared redundant-outer route performs real planning and denies the unread source at PREPARE")
+		require.Contains(t, err.Error(), "privilege", "the redundant-outer rejection names the missing source read privilege")
+
 		// Authorized recovery through the exact same statements: granting the
 		// source read restores the ordinary route exactly.
 		execAdmin("grant select on table `" + sourceDB + "`.src to " + role)
@@ -114,13 +124,15 @@ func TestReview6068CTASSourcePrivilegeDiscrimination(t *testing.T) {
 		require.NoError(t, err, "the granted role can create the CTAS copy through the ordinary route")
 		rows, err := userConn.QueryContext(ctx, "SELECT id FROM `"+destDB+"`.ctas_allowed")
 		require.NoError(t, err)
-		defer rows.Close()
-		require.True(t, rows.Next(), "the authorized CTAS copied exactly one row")
 		var copied int
-		require.NoError(t, rows.Scan(&copied))
-		require.Equal(t, 42, copied, "the authorized CTAS reads the real source value 42")
-		require.False(t, rows.Next(), "the authorized CTAS copied exactly one row")
-		require.NoError(t, rows.Err(), "the row iteration completed without an iteration error")
+		func() {
+			defer rows.Close()
+			require.True(t, rows.Next(), "the authorized CTAS copied exactly one row")
+			require.NoError(t, rows.Scan(&copied))
+			require.Equal(t, 42, copied, "the authorized CTAS reads the real source value 42")
+			require.False(t, rows.Next(), "the authorized CTAS copied exactly one row")
+			require.NoError(t, rows.Err(), "the row iteration completed without an iteration error")
+		}()
 
 		// The prepared route agrees once the source read privilege exists.
 		_, err = userConn.ExecContext(ctx,
@@ -130,14 +142,36 @@ func TestReview6068CTASSourcePrivilegeDiscrimination(t *testing.T) {
 		require.NoError(t, err, "the prepared CTAS executes for the granted role")
 		_, err = userConn.ExecContext(ctx, "DEALLOCATE PREPARE ok_p")
 		require.NoError(t, err)
+
+		// The granted source agrees for the redundant-outer statement: the
+		// granted privilege re-plan composes the exact prepared statement.
+		_, err = userConn.ExecContext(ctx,
+			"PREPARE redundant_ok_p FROM 'CREATE TABLE `"+destDB+"`.ctas_prep_ok_r2 AS (SELECT id FROM `"+sourceDB+"`.src LIMIT 1) LIMIT 2'")
+		require.NoError(t, err, "the granted role prepares the redundant-outer CTAS through the public prepared route")
+		_, err = userConn.ExecContext(ctx, "EXECUTE redundant_ok_p")
+		require.NoError(t, err, "the redundant-outer prepared CTAS executes for the granted role")
+		_, err = userConn.ExecContext(ctx, "DEALLOCATE PREPARE redundant_ok_p")
+		require.NoError(t, err)
+		r2Rows, err := userConn.QueryContext(ctx, "SELECT count(*) FROM `"+destDB+"`.ctas_prep_ok_r2")
+		require.NoError(t, err)
+		var r2Count int
+		func() {
+			defer r2Rows.Close()
+			require.True(t, r2Rows.Next(), "the redundant-outer count readback returns its row")
+			require.NoError(t, r2Rows.Scan(&r2Count))
+			require.Equalf(t, 1, r2Count, "the child's own LIMIT caps the copied destination at its row")
+			require.NoError(t, r2Rows.Err())
+		}()
 		prepRows, err := userConn.QueryContext(ctx, "SELECT count(*) FROM `"+destDB+"`.ctas_prep_ok")
 		require.NoError(t, err)
-		defer prepRows.Close()
-		require.True(t, prepRows.Next(), "the prepared CTAS wrote its rows")
 		var prepared int
-		require.NoError(t, prepRows.Scan(&prepared))
-		require.Equal(t, 1, prepared, "the prepared CTAS copied exactly one row")
-		require.False(t, prepRows.Next(), "the prepared CTAS count returned a single row")
-		require.NoError(t, prepRows.Err(), "the prepared-count iteration completed cleanly")
+		func() {
+			defer prepRows.Close()
+			require.True(t, prepRows.Next(), "the prepared CTAS wrote its rows")
+			require.NoError(t, prepRows.Scan(&prepared))
+			require.Equal(t, 1, prepared, "the prepared CTAS copied exactly one row")
+			require.False(t, prepRows.Next(), "the prepared CTAS count returned a single row")
+			require.NoError(t, prepRows.Err(), "the prepared-count iteration completed cleanly")
+		}()
 	})
 }

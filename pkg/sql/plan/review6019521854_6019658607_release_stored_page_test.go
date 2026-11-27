@@ -96,12 +96,12 @@ func TestWrapperGuardDeclinesAuthoredLockState(t *testing.T) {
 			SelectLockInfo: lock,
 		}
 	}
-	rewritten, _, _, ok := ordinaryPaginationWrap(buildWrapper(nil), false, nil)
+	rewritten, _, _, ok := ordinaryPaginationWrap(buildWrapper(nil), false, nil, nil)
 	require.True(t, ok, "the unspecialized wrapper with real pages must be rewritten")
 	require.NotNil(t, rewritten, "the rewritten control must synthesize its page tree")
 
 	locked := buildWrapper(&tree.SelectLockInfo{})
-	rewrittenLocked, _, _, okLocked := ordinaryPaginationWrap(locked, false, nil)
+	rewrittenLocked, _, _, okLocked := ordinaryPaginationWrap(locked, false, nil, nil)
 	require.False(t, okLocked, "an authored lock state on a wrapper must decline the page reconstruction")
 	require.Nil(t, rewrittenLocked, "the declined rewrite must not synthesize a replacement tree")
 	require.NotNil(t, locked.SelectLockInfo, "the authored lock state must stay on the original wrapper")

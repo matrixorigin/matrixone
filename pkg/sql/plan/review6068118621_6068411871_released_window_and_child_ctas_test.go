@@ -158,4 +158,25 @@ func TestReleasedChildOnlyCtasNestedSourceSelectsOneImmediateChild(t *testing.T)
 	require.NoErrorf(t, abindErr, "the no-conflict nested source binds through the one immediate child")
 	require.Lenf(t, acceptedCols, 1, "the nested accepted control projects one column")
 	require.Truef(t, colNameEqualFold(acceptedCols[0], "a"), "the nested accepted control projects the single literal column")
+	// Review 6090897398 (inline 4721617684): a semantically redundant outer
+	// literal count - one at least as large as the child's own authored
+	// count, the prior equal-count form included - composes through the same
+	// shared child-only boundary, because the child's LIMIT already caps the
+	// result at or below the outer count. An authored narrower outer count
+	// stays on the genuine duplicate-owner rejection.
+	redundantStmt, rerr := mysql.ParseOne(context.Background(),
+		"create table pg189.nested_redundant as (select 7 as a limit 1) limit 2", 1)
+	require.NoErrorf(t, rerr, "the redundant outer-count shape parses")
+	redundantCt := redundantStmt.(*tree.CreateTable)
+	redundantCols, _, _, redundErr := genAsSelectCols(ctx, ReleasedChildOnlyCtasSource(redundantCt.AsSource), false, nil)
+	require.NoErrorf(t, redundErr, "a redundant outer literal count composes through the shared child-only boundary")
+	require.Lenf(t, redundantCols, 1, "the redundant outer-count projection keeps one column")
+	require.Truef(t, colNameEqualFold(redundantCols[0], "a"), "the redundant outer-count projection is a")
+	narrowStmt, nerr := mysql.ParseOne(context.Background(),
+		"create table pg189.nested_narrow as (select 7 as a limit 5) limit 3", 1)
+	require.NoErrorf(t, nerr, "the narrower outer-count shape parses")
+	narrowCt := narrowStmt.(*tree.CreateTable)
+	_, _, _, narrowErr := genAsSelectCols(ctx, ReleasedChildOnlyCtasSource(narrowCt.AsSource), false, nil)
+	require.ErrorContainsf(t, narrowErr, "multiple LIMIT clauses not allowed",
+		"an authored narrower outer count keeps the genuine duplicate-owner rejection")
 }
