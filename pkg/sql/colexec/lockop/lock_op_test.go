@@ -719,6 +719,23 @@ func TestLockWithRetryDoesNotRetryBackendErrorWhenLockTableAlreadyHeld(t *testin
 	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
 }
 
+func TestLockWithRetryStopsForFencedTxnWithoutConfirmedLock(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	ctx := context.Background()
+	expectedErr := moerr.NewLockTableBindChangedForFencedTxnNoCtx()
+	lockSvc.EXPECT().
+		Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+		Return(lock.Result{}, expectedErr).Times(1)
+
+	_, err := lockWithRetry(ctx, lockSvc, 1, nil, []byte("txn1"), lock.LockOptions{},
+		txnOp, nil, nil, LockOptions{}, types.Type{})
+	require.Same(t, expectedErr, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+}
+
 func TestLockWithRetryRetriesBindChangedInExplicitUserTxnBeforeLockHeld(t *testing.T) {
 	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
 
@@ -852,6 +869,74 @@ func TestLockWithRetryRetriesBindChangedInAutocommitTxn(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, expected, result)
+}
+
+func TestLockWithRetryPreservesUnresolvedBindChange(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
+	previousWait := defaultWaitTimeOnRetryLock
+	defaultWaitTimeOnRetryLock = time.Millisecond
+	defer func() { defaultWaitTimeOnRetryLock = previousWait }()
+
+	var reply lock.Response
+	reply.WrapError(moerr.CauseGetLockTableBind)
+	lookupTimeout := reply.UnwrapError()
+	require.Same(t, lookupTimeout, getLockRetryExitError(t.Context(), lookupTimeout, nil, lock.LockOptions{}))
+	reply.WrapError(context.DeadlineExceeded)
+	unrelatedRPCTimeout := reply.UnwrapError()
+
+	for _, test := range []struct {
+		name            string
+		retryError      error
+		cancelStatement bool
+		wantBindChange  bool
+	}{
+		{"statement canceled", context.Canceled, true, true},
+		{"forwarded binding lookup deadline", lookupTimeout, false, true},
+		{"unrelated deadline", context.DeadlineExceeded, false, false},
+		{"unrelated forwarded deadline", unrelatedRPCTimeout, false, false},
+		{"row lock timeout", lockservice.ErrLockTimeout, false, false},
+		{"coordinator saturated", moerr.NewForwardBindBusy(t.Context()), false, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			lockSvc := mock_lock.NewMockLockService(ctrl)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			txnID := []byte("txn1")
+			busy := moerr.IsMoErrCode(test.retryError, moerr.ErrForwardBindBusy)
+			if busy {
+				txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: txnID})
+			}
+			bindChanged := moerr.NewLockTableBindChangedNoCtx()
+			gomock.InOrder(
+				lockSvc.EXPECT().Lock(ctx, uint64(1), gomock.Nil(), txnID, lock.LockOptions{}).
+					Return(lock.Result{}, bindChanged),
+				txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+				lockSvc.EXPECT().Lock(retryContextMatcher{ctx}, uint64(1), gomock.Nil(), txnID, lock.LockOptions{}).
+					DoAndReturn(func(context.Context, uint64, [][]byte, []byte, lock.LockOptions) (lock.Result, error) {
+						if test.cancelStatement {
+							cancel()
+						}
+						if busy {
+							// Stop retrying under critical pressure while the statement is live.
+							forceLockRetryMemoryPressure(t, lockRetryMemoryPressureCritical)
+						}
+						return lock.Result{}, test.retryError
+					}),
+			)
+
+			_, err := lockWithRetry(ctx, lockSvc, 1, nil, txnID, lock.LockOptions{},
+				txnOp, nil, nil, LockOptions{}, types.Type{})
+			if test.wantBindChange {
+				require.Same(t, bindChanged, err)
+			} else {
+				require.Equal(t, test.retryError, err)
+			}
+		})
+	}
 }
 
 func TestLockWithRetryDoesNotRetryBindChangedWhenLockTableAlreadyHeld(t *testing.T) {
@@ -1115,6 +1200,48 @@ func TestLockWithRetryRetriesInsideLoopAndReturnsSecondResult(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, expected, result)
 	require.GreaterOrEqual(t, time.Since(start), defaultWaitTimeOnRetryLock)
+}
+
+func TestLockWithRetryRetriesBusyForwardBindingWithTableAlreadyHeld(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	// The transaction snapshot on the mirror already includes this table.
+	// A busy resolver has not consulted or invalidated that binding.
+	txnOp.EXPECT().HasLockTable(uint64(1)).Return(true).AnyTimes()
+	ctx := context.Background()
+	expected := lock.Result{HasConflict: true}
+	options := lock.LockOptions{ForwardTo: "coordinator"}
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), options).
+			Return(lock.Result{}, moerr.NewForwardBindBusy(ctx)),
+		lockSvc.EXPECT().
+			Lock(retryContextMatcher{ctx}, uint64(1), gomock.Nil(), []byte("txn1"), options).
+			Return(expected, nil),
+	)
+
+	result, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		options,
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, expected, result)
 }
 
 func TestLockWithRetryKeepsSuccessfulResultAfterContextCanceled(t *testing.T) {
@@ -2021,4 +2148,62 @@ func TestLockOpExclusiveTargetsStayRowLocked(t *testing.T) {
 		require.NoError(t, err)
 		arg.Free(proc, false, nil)
 	})
+}
+
+func TestForwardBindBusyBackoffKeepsRetryBudget(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+	busy := moerr.NewForwardBindBusy(context.Background())
+	state := lockRetryState{}
+	wait, ok := getRetryWaitDuration(busy, &state)
+	require.True(t, ok)
+	require.GreaterOrEqual(t, wait, 20*time.Millisecond)
+	require.Less(t, wait, 30*time.Millisecond)
+	deadline := state.backendRetryDeadline
+
+	wait, ok = getRetryWaitDuration(busy, &state)
+	require.True(t, ok)
+	require.GreaterOrEqual(t, wait, 40*time.Millisecond)
+	require.Less(t, wait, 60*time.Millisecond)
+	require.Equal(t, deadline, state.backendRetryDeadline)
+
+	state.forwardBindBackoff = defaultWaitTimeOnRetryLock
+	wait, ok = getRetryWaitDuration(busy, &state)
+	require.True(t, ok)
+	require.Equal(t, defaultWaitTimeOnRetryLock, wait)
+	state.backendRetryDeadline = time.Now().Add(-time.Second)
+	_, ok = getRetryWaitDuration(busy, &state)
+	require.False(t, ok)
+}
+
+func TestForwardBindBusyWaitStopsAtStatementDeadline(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+	ctrl := gomock.NewController(t)
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	ctx := context.Background()
+	txnID := []byte("mirror-txn")
+	opts := lock.LockOptions{ForwardTo: "coordinator", LockWaitDeadline: time.Now().Add(150 * time.Millisecond).UnixNano()}
+	lockSvc.EXPECT().Lock(gomock.Any(), uint64(1), gomock.Nil(), txnID, gomock.Any()).
+		Return(lock.Result{}, moerr.NewForwardBindBusy(ctx)).MinTimes(1)
+	_, err := lockWithRetry(ctx, lockSvc, 1, nil, txnID, opts, txnOp, nil, nil, LockOptions{}, types.Type{})
+	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
+}
+
+func TestForwardBindBusyPreservesCallerCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	txnID := []byte("mirror-txn")
+	opts := lock.LockOptions{ForwardTo: "coordinator"}
+	lockSvc.EXPECT().Lock(ctx, uint64(1), gomock.Nil(), txnID, opts).
+		DoAndReturn(func(context.Context, uint64, [][]byte, []byte, lock.LockOptions) (lock.Result, error) {
+			cancel()
+			return lock.Result{}, moerr.NewForwardBindBusy(ctx)
+		})
+	_, err := lockWithRetry(ctx, lockSvc, 1, nil, txnID, opts, txnOp, nil, nil, LockOptions{}, types.Type{})
+	require.ErrorIs(t, err, context.Canceled)
 }

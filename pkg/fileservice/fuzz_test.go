@@ -113,11 +113,13 @@ func fuzzFS(
 			t.Fatal(err)
 		}
 
-		if !bytes.Equal(vec.Entries[0].Data, info.Content[offset:]) {
-			t.Fatal()
+		// A read with ToCacheData may release its intermediate raw buffer.
+		// If it keeps both representations, verify both against storage.
+		if data := vec.Entries[0].Data; data != nil && !bytes.Equal(data, info.Content[offset:]) {
+			t.Fatalf("raw data mismatch for %s at offset %d", info.Path, offset)
 		}
-		if !bytes.Equal(vec.Entries[0].CachedData.Bytes(), info.Content[offset:]) {
-			t.Fatal()
+		if vec.Entries[0].CachedData == nil || !bytes.Equal(vec.Entries[0].CachedData.Bytes(), info.Content[offset:]) {
+			t.Fatalf("cached data mismatch for %s at offset %d", info.Path, offset)
 		}
 
 		vec.Release()

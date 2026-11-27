@@ -113,9 +113,12 @@ const (
 	_
 	// 与主线保持编码一致，不重排已有算子。
 	VectorQuery OpType = 67
+	// 68 is reserved for main's coordinator-local Dependent operator.
+	UpdateUnique OpType = 69
+	UpdateCount  OpType = 70
 	// OpTypeEnd is the exclusive upper bound for executable operator types.
 	// New operator types must be added before it.
-	OpTypeEnd OpType = 68
+	OpTypeEnd OpType = 71
 )
 
 var OperatorToStrMap map[OpType]string
@@ -148,6 +151,8 @@ func init() {
 		IndexBuild:              "IndexBuild",
 		Merge:                   "Merge",
 		VectorQuery:             "VectorQuery",
+		UpdateUnique:            "UpdateUnique",
+		UpdateCount:             "UpdateCount",
 		MergeTop:                "MergeTop",
 		MergeLimit:              "MergeLimit",
 		MergeOrder:              "MergeOrder",

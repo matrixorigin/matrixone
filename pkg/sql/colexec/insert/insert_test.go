@@ -18,19 +18,23 @@ import (
 	"context"
 	"errors"
 	goruntime "runtime"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -488,6 +492,93 @@ func TestInsertFlushS3WriterOnMemoryPressureRefreshesBeforeReleaseOnAppendError(
 	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
 	require.Equal(t, int64(1024), throttler.released)
 	require.Equal(t, []string{"force-refresh", "release"}, throttler.ops)
+}
+
+func TestLocalS3InsertObjectOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		writeErr error
+	}{
+		{name: "adopted"},
+		{name: "rejected", writeErr: errors.New("workspace rejected object metadata")},
+		{name: "canceled", writeErr: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			defer proc.GetFileService().Close(context.Background())
+			requestCtx, cancel := context.WithCancel(proc.Ctx)
+			defer cancel()
+			proc.Ctx = requestCtx
+			fs, err := colexec.GetSharedFSFromProc(proc)
+			require.NoError(t, err)
+			registry := colexec.NewLocalInsertObjectRegistry(t.Context(), fs, 2)
+			closeRegistry := sync.OnceFunc(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				require.NoError(t, registry.Close(ctx))
+			})
+			defer closeRegistry()
+			owner := registry.NewStream()
+			require.NoError(t, owner.Begin(requestCtx))
+			finish := sync.OnceFunc(func() { owner.Finish() })
+			defer finish()
+
+			data := batch.NewWithSize(2)
+			data.Vecs[0] = testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp())
+			data.Vecs[1] = testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp())
+			data.SetRowCount(1)
+			defer data.Clean(proc.Mp())
+			writer := &Insert{ToWriteS3: true, InsertCtx: &InsertCtx{
+				TableDef: testInsertS3TableDef(), Attrs: []string{"a", "b"}, LocalObjects: owner,
+			}}
+			writer.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{data}))
+			defer writer.Free(proc, tc.writeErr != nil, tc.writeErr)
+			require.NoError(t, writer.Prepare(proc))
+			writer.ctr.s3MemThrottler = nil
+
+			ctrl := gomock.NewController(t)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil)
+			db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(rel, nil)
+			var objectName string
+			rel.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, b *batch.Batch) error {
+				require.Equal(t, 1, b.Vecs[1].Length())
+				stats := objectio.ObjectStats(b.Vecs[1].GetBytesAt(0))
+				objectName = stats.ObjectName().String()
+				_, err := fs.StatFile(ctx, objectName)
+				require.NoError(t, err, "writer must upload before offering its metadata to the workspace")
+				if tc.writeErr == context.Canceled {
+					cancel()
+					return ctx.Err()
+				}
+				return tc.writeErr
+			})
+			consumer := mergeblock.NewArgument().WithEngine(eng).WithObjectRef(&plan.ObjectRef{SchemaName: "test", ObjName: "t1"})
+			defer consumer.Release()
+			defer consumer.Free(proc, tc.writeErr != nil, tc.writeErr)
+			consumer.LocalObjects = owner
+			consumer.AppendChild(writer)
+			require.NoError(t, consumer.Prepare(proc))
+			_, err = consumer.Call(proc)
+			require.ErrorIs(t, err, tc.writeErr)
+			writer.Reset(proc, err != nil, err)
+			finish()
+			if tc.writeErr != nil {
+				require.Eventually(t, func() bool {
+					_, statErr := fs.StatFile(t.Context(), objectName)
+					return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)
+				}, 5*time.Second, 10*time.Millisecond, "unadopted object %s must be reclaimed", objectName)
+			}
+			closeRegistry()
+			if tc.writeErr == nil {
+				_, err = fs.StatFile(t.Context(), objectName)
+				require.NoError(t, err, "cleanup must preserve the adopted object")
+			}
+		})
+	}
 }
 
 func TestInsertS3FinalFlushRefreshesBeforeReleaseOnSuccess(t *testing.T) {

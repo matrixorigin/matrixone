@@ -57,7 +57,7 @@ func addMemoryBytes(a, b int64) int64 {
 // is rescanned or recharged when a small source window is appended.
 func deletePreparationBytes(bat *batch.Batch, start, end int, cols []int) int64 {
 	rowids := bat.Vecs[cols[0]]
-	if rowids.GetNulls().Count() == bat.RowCount() {
+	if start == end || rowids.IsConstNull() || rowids.GetNulls().Count() == bat.RowCount() {
 		return 0
 	}
 	var size int64
@@ -74,11 +74,24 @@ func deletePreparationBytes(bat *batch.Batch, start, end int, cols []int) int64 
 	const allocationRounding = 2 * 2 * 2 * 8
 	// Two vectors × (null+grouping) × (old+new) × one word per row.
 	const bitmapWords = 2 * 2 * 2 * 8
-	perRow := int64(options.DefaultBlockMaxRows/8) + deleteBlockObjectsBytes + allocationRounding + bitmapWords
-	if rows > math.MaxInt64/perRow {
+	// Only the first row for each committed block creates a map entry and
+	// block bitmap. Counting contiguous runs bounds distinct blocks without
+	// allocating a set. Interleaved blocks and NULL slots can only overcount.
+	blocks := int64(1)
+	if !rowids.IsConst() {
+		ids := vector.MustFixedColWithTypeCheck[types.Rowid](rowids)[start:end]
+		for i := 1; i < len(ids); i++ {
+			if ids[i].CloneBlockID() != ids[i-1].CloneBlockID() {
+				blocks++
+			}
+		}
+	}
+	const perRow = allocationRounding + bitmapWords
+	perBlock := int64(options.DefaultBlockMaxRows/8) + deleteBlockObjectsBytes
+	if rows > math.MaxInt64/perRow || blocks > math.MaxInt64/perBlock {
 		return math.MaxInt64
 	}
-	return addMemoryBytes(size, rows*perRow)
+	return addMemoryBytes(addMemoryBytes(size, rows*perRow), blocks*perBlock)
 }
 
 func (writer *s3WriterDelegate) windowFootprint(bat *batch.Batch, start, end int) int64 {

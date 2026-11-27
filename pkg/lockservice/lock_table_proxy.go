@@ -405,7 +405,13 @@ func (s *sharedOps) done(
 		if idx == 0 && cb != nil {
 			cb(r, err)
 		} else if s.waiters[idx] != nil {
-			s.waiters[idx].notify(notifyValue{err: err}, logger)
+			waiterErr := err
+			// A shared operation's leader may be fenced while other transactions
+			// remain valid. Only the leader can receive its terminal error.
+			if moerr.IsLockTableBindChangedForFencedTxn(waiterErr) {
+				waiterErr = ErrLockTableBindChanged
+			}
+			s.waiters[idx].notify(notifyValue{err: waiterErr}, logger)
 		}
 		s.cbs[idx] = nil
 		s.waiters[idx] = nil

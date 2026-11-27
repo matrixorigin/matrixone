@@ -120,7 +120,7 @@ var (
 	CauseInitRemote2               = NewInternalError(context.Background(), "initRemote 2")
 	CauseResetLockServiceBackend   = NewInternalError(context.Background(), "resetLockServiceBackend")
 	CauseGetTxnWaitingListOnRemote = NewInternalError(context.Background(), "getTxnWaitingListOnRemote")
-	CauseGetLockTableBind          = NewInternalError(context.Background(), "getLockTableBind")
+	CauseGetLockTableBind          = newError(context.Background(), ErrLockTableBindLookupTimeout)
 	CauseAbortRemoteDeadlockTxn    = NewInternalError(context.Background(), "abortRemoteDeadlockTxn")
 	//pkg/logservice
 	CauseNewStandbyClientWithRetry     = NewInternalError(context.Background(), "NewStandbyClientWithRetry")

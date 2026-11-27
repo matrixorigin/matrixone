@@ -518,11 +518,16 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	if groupPos, ok := b.correlatedGroupByColPos(depth, name, table, col); ok {
+		groupRel := b.ctx.groupTag
+		groupType := b.ctx.groups[groupPos].Typ
+		if role := b.ctx.repeatedUpdateRole; role != nil {
+			groupRel, groupPos = role.capture(groupRel, groupPos, groupType)
+		}
 		expr = &plan.Expr{
-			Typ: b.ctx.groups[groupPos].Typ,
+			Typ: groupType,
 			Expr: &plan.Expr_Corr{
 				Corr: &plan.CorrColRef{
-					RelPos: b.ctx.groupTag,
+					RelPos: groupRel,
 					ColPos: groupPos,
 					Depth:  depth,
 				},
@@ -543,6 +548,9 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		// this binder's bare-column accounting.
 		if rawSpecial || !isEnumOrSetPlanType(typ) {
 			b.boundCols = append(b.boundCols, table+"."+col)
+		}
+		if role := b.ctx.repeatedUpdateRole; role != nil && depth > 0 {
+			relPos, colPos = role.capture(relPos, colPos, *typ)
 		}
 
 		expr = &plan.Expr{

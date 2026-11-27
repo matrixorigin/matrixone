@@ -43,6 +43,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	client2 "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -206,10 +207,12 @@ func New(
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 
+	e.localInsertObjects = colexec.NewLocalInsertObjectRegistry(ctx, e.fs, 500_000)
 	return e
 }
 
 func (e *Engine) Close() error {
+	err := e.CloseLocalInsertObjects()
 	if e.gcPool != nil {
 		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}
@@ -218,7 +221,17 @@ func (e *Engine) Close() error {
 	e.cloneTxnCache = nil
 	e.ccprTxnCache = nil
 
-	return nil
+	return err
+}
+
+// CloseLocalInsertObjects is called after the CN has drained its pipelines.
+func (e *Engine) CloseLocalInsertObjects() error {
+	if e.localInsertObjects == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return e.localInsertObjects.Close(ctx)
 }
 
 func (e *Engine) fillDefaults() {
@@ -1341,6 +1354,13 @@ func (e *Engine) RunGCScheduler(ctx context.Context) {
 			e.snapshotMgr.MaybeStartGC()
 		}
 	}
+}
+
+func (e *Engine) NewLocalInsertObjectStream() *colexec.LocalInsertObjects {
+	if e.localInsertObjects == nil {
+		return nil
+	}
+	return e.localInsertObjects.NewStream()
 }
 
 // gcPartitionState runs GC for partition states
