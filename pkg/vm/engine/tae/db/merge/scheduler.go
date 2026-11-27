@@ -87,6 +87,8 @@ type MergeScheduler struct {
 	lifecycleMu sync.Mutex // Start must not rearm the queue before Stop joins the old loop
 	stopRecv    chan struct{}
 	stopped     atomic.Bool
+	// Owned by the main loop. Cleared only after scanning every table's queue.
+	mayHaveQueuedOneShots bool
 
 	msgChan      chan *MMsg
 	bootstrapMsg *MMsg
@@ -170,11 +172,13 @@ func (a *MergeScheduler) Start() {
 		generation := newMergeSchedulerGeneration()
 		a.generation.Store(generation)
 		// The previous generation may have stopped while an admitted task was
-		// still running. Recheck its retained manual work even if that task's
+		// still running. Recheck its retained one-shot work even if that task's
 		// completion notification was delivered while the scheduler was stopped.
 		now := a.clock.Now()
+		a.mayHaveQueuedOneShots = false
 		for _, supp := range a.supps {
-			if _, ok := a.nextManualRetryDue(supp, now); ok {
+			if supp.hasPendingOneShot(now) {
+				a.mayHaveQueuedOneShots = true
 				a.pq.Update(supp.todo, now)
 			}
 		}
@@ -231,15 +235,11 @@ func (a *MergeScheduler) taskObserverFactory(
 	return &taskObserver{f: func() {
 		supp.DoneTask()
 		rc.Release(int64(size))
-		if supp.mergingTaskCnt.Load() == 0 {
-			a.notifyTaskCompletion(supp)
-		}
+		a.notifyReservationReleased()
 	}}
 }
 
-func (a *MergeScheduler) notifyTaskCompletion(
-	supp *todoSupporter,
-) {
+func (a *MergeScheduler) notifyReservationReleased() {
 	if a.stopped.Load() {
 		return
 	}
@@ -247,7 +247,7 @@ func (a *MergeScheduler) notifyTaskCompletion(
 	if generation == nil {
 		return
 	}
-	msg := &MMsg{Kind: MMsgKindTaskCompleted, Value: supp, generation: generation}
+	msg := &MMsg{Kind: MMsgKindReservationReleased, generation: generation}
 	select {
 	case <-generation.stopCh:
 		return
@@ -315,7 +315,7 @@ const (
 	MMsgKindConfig
 	MMsgKindVacuumCheck
 	MMsgKindConfigBootstrap
-	MMsgKindTaskCompleted
+	MMsgKindReservationReleased
 )
 
 type MMsgSwitch struct {
@@ -956,6 +956,7 @@ func (a *MergeScheduler) handleMainLoop(
 
 		now := a.clock.Now()
 		nextReadyAt := never
+		memoryBlocked := false
 
 		if !a.allPaused {
 			// handle tasks in the priority queue
@@ -971,6 +972,7 @@ func (a *MergeScheduler) handleMainLoop(
 				available := a.rc.Available()
 				v2.TaskMergeAvailableMemoryGauge.Set(float64(available))
 				if available < 500*common.Const1MBytes {
+					memoryBlocked = true
 					v2.TaskMergeOOMPauseCounter.Inc()
 					logutil.Info(
 						"MergeExecutorEvent-PauseDueToOOMAlert",
@@ -994,6 +996,16 @@ func (a *MergeScheduler) handleMainLoop(
 					nextReadyAtTimer.Stop()
 				}
 				next := a.pq.Peek().readyAt.Sub(now)
+				if memoryBlocked {
+					// Recheck due one-shot work before its retry window expires,
+					// even when no other scheduler message arrives.
+					if retryDue, ok := a.nextPendingManualRetryDue(now); ok {
+						retryDelay := retryDue.Sub(now)
+						if next <= 0 || retryDelay < next {
+							next = retryDelay
+						}
+					}
+				}
 				if next > 0 {
 					nextReadyAtTimer.Reset(next)
 					nextReadyAt = nextReadyAtTimer.Chan()
@@ -1056,20 +1068,23 @@ func (a *MergeScheduler) dispatchMsg(
 		} else if tableChange.DoneTask {
 			a.handleMergeDone(tableChange.Table, tableChange.EstSize)
 		}
-	case MMsgKindTaskCompleted:
-		a.handleTaskCompleted(msg.Value.(*todoSupporter))
+	case MMsgKindReservationReleased:
+		a.handleReservationReleased()
 	}
 }
 
-func (a *MergeScheduler) handleTaskCompleted(supp *todoSupporter) {
-	if a.supps[supp.todo.table.ID()] != supp || supp.mergingTaskCnt.Load() != 0 {
+func (a *MergeScheduler) handleReservationReleased() {
+	if !a.mayHaveQueuedOneShots {
 		return
 	}
 	now := a.clock.Now()
-	for _, trigger := range supp.triggers {
-		if !trigger.retryUntil.IsZero() && now.Before(trigger.retryUntil) {
-			a.pq.Update(supp.todo, now)
-			return
+	a.mayHaveQueuedOneShots = false
+	for _, supp := range a.supps {
+		if supp.hasPendingOneShot(now) {
+			a.mayHaveQueuedOneShots = true
+			if supp.mergingTaskCnt.Load() == 0 {
+				a.pq.Update(supp.todo, now)
+			}
 		}
 	}
 }
@@ -1086,6 +1101,29 @@ func (a *MergeScheduler) nextManualRetryDue(supp *todoSupporter, now time.Time) 
 			candidate = trigger.retryUntil
 		}
 		if due.IsZero() || candidate.Before(due) {
+			due = candidate
+		}
+	}
+	return due, !due.IsZero()
+}
+
+func (m *todoSupporter) hasPendingOneShot(now time.Time) bool {
+	for _, trigger := range m.triggers {
+		if trigger.expire.IsZero() && (trigger.retryUntil.IsZero() || now.Before(trigger.retryUntil)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *MergeScheduler) nextPendingManualRetryDue(now time.Time) (time.Time, bool) {
+	if !a.mayHaveQueuedOneShots {
+		return time.Time{}, false
+	}
+	var due time.Time
+	for _, supp := range a.supps {
+		candidate, ok := a.nextManualRetryDue(supp, now)
+		if ok && (due.IsZero() || candidate.Before(due)) {
 			due = candidate
 		}
 	}
@@ -1159,6 +1197,7 @@ func (a *MergeScheduler) handleTaskTrigger(
 		)
 	} else {
 		supp.triggers = append(supp.triggers, msg)
+		a.mayHaveQueuedOneShots = true
 	}
 
 	// exec the task immediately
@@ -1329,6 +1368,35 @@ func (a *MergeScheduler) doSched(
 		return
 	}
 
+	// A denied one-shot is requeued ahead of other one-shots. Try every
+	// request that was present at the start of this pass once, so queue depth
+	// cannot use up a later request's retry window.
+	attempts := 0
+	for _, trigger := range supp.triggers {
+		if trigger.expire.IsZero() && (trigger.retryUntil.IsZero() || now.Before(trigger.retryUntil)) {
+			attempts++
+		}
+	}
+	if attempts == 0 {
+		attempts = 1 // default policy or a durable policy patch
+	} else {
+		a.mayHaveQueuedOneShots = true
+	}
+	for range attempts {
+		if a.doSchedTrigger(generation, todo, supp) {
+			return
+		}
+	}
+}
+
+// doSchedTrigger returns true after admitting work or when scheduling stops.
+func (a *MergeScheduler) doSchedTrigger(
+	generation *mergeSchedulerGeneration,
+	todo *todoItem,
+	supp *todoSupporter,
+) bool {
+	now := a.clock.Now()
+
 	trigger := a.defaultTrigger
 	if supp.baseTrigger != nil {
 		trigger = supp.baseTrigger
@@ -1350,7 +1418,7 @@ func (a *MergeScheduler) doSched(
 			continue
 		}
 		if !last.retryUntil.IsZero() && !now.Before(last.retryUntil) {
-			logutil.Warn("MergeExecutorEvent-ManualRetryExpired",
+			logutil.Warn("MergeExecutorEvent-DeferredRetryExpired",
 				zap.String("table", todo.table.GetNameDesc()),
 				zap.Int("tasks", len(last.assigns)))
 			continue
@@ -1367,7 +1435,7 @@ func (a *MergeScheduler) doSched(
 			due = retryDue
 		}
 		a.pq.Update(todo, due)
-		return
+		return false
 	}
 
 	rc := a.rc
@@ -1381,16 +1449,19 @@ func (a *MergeScheduler) doSched(
 	}
 
 	afterGather := a.clock.Now()
+	retryable := trigger.expire.IsZero() && (trigger.byUser || len(trigger.assigns) > 0)
+	admitted := false
 	// Schedule tasks
 	for _, task := range tasks {
 		if _, granted := rc.Acquire(int64(task.eSize)); !granted {
-			if trigger.byUser && trigger.expire.IsZero() {
+			if retryable {
 				denied = append(denied, task)
 			}
 			continue
 		}
 		task.doneCB = a.taskObserverFactory(supp, task.eSize, rc)
 		if a.executor.ExecuteFor(todo.table, task) {
+			admitted = true
 			supp.AddTask()
 			task.doneCB.Admit()
 			if task.isTombstone {
@@ -1413,12 +1484,18 @@ func (a *MergeScheduler) doSched(
 	if len(denied) > 0 {
 		retry := trigger
 		if retry.retryUntil.IsZero() {
-			retry = NewMMsgTaskTrigger(todo.table).WithByUser(true)
+			retry = NewMMsgTaskTrigger(todo.table).WithByUser(trigger.byUser)
 			retry.retryUntil = afterGather.Add(manualMergeRetryWindow)
 		}
 		if afterGather.Before(retry.retryUntil) {
-			retry.assigns = denied
+			if retry == trigger {
+				retry.assigns = denied
+			} else {
+				// The launch pad reuses its result buffer for the next trigger.
+				retry.assigns = slices.Clone(denied)
+			}
 			supp.requeueManualRetry(retry)
+			a.mayHaveQueuedOneShots = true
 		}
 	}
 
@@ -1438,7 +1515,7 @@ func (a *MergeScheduler) doSched(
 					opts:  vacuumOpts,
 				},
 			}) {
-				return
+				return true
 			}
 			supp.lastVacuumCheckTime = afterGather
 			supp.totalVacuumCheckCnt++
@@ -1460,7 +1537,7 @@ func (a *MergeScheduler) doSched(
 		}
 	}
 	a.pq.Update(todo, due)
-
+	return admitted
 }
 
 type launchPad struct {
