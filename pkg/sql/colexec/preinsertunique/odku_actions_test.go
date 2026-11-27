@@ -171,12 +171,24 @@ func TestODKUStaticClaimsPreserveGroupedInsertSemantics(t *testing.T) {
 			require.NotNil(t, out.Batch)
 			require.Nil(t, a.ctr.acceptedKeys[1].fixedKeys, "the later grouped batch selected the generic key encoder")
 			require.Equal(t, []int64{2, 7}, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[2]))
+			// Compare current values and grouping; old NULL vectors may
+			// have different bitmap capacity when represented as a range.
+			sourceColumns := len(a.PreInsertCtx.OdkuActions.SourceColumns)
+			for _, old := range out.Batch.Vecs[sourceColumns:] {
+				require.False(t, old.HasGrouping())
+				for row := range out.Batch.RowCount() {
+					require.True(t, old.IsNull(uint64(row)))
+				}
+			}
+			current := batch.NewWithSize(sourceColumns)
+			current.Vecs = out.Batch.Vecs[:sourceColumns]
+			current.SetRowCount(out.Batch.RowCount())
 			var encoded bytes.Buffer
-			require.NoError(t, out.Batch.MarshalBinaryWithGroupingTo(&encoded))
+			require.NoError(t, current.MarshalBinaryWithGroupingTo(&encoded))
 			if !static {
 				native = append([]byte(nil), encoded.Bytes()...)
 			} else {
-				require.Equal(t, native, encoded.Bytes(), "values, original identities and grouping match native transitions")
+				require.Equal(t, native, encoded.Bytes(), "current values and grouping match native transitions")
 				require.Nil(t, a.ctr.actionRows.keys, "the current image is the only retained static-key value")
 			}
 		})
@@ -849,6 +861,11 @@ func TestODKUActionsFinalOutputBoundaries(t *testing.T) {
 			}
 			for range 2 {
 				child.WithBatchs([]*batch.Batch{b})
+				child.WithEndOfDataCallback(func() {
+					for _, origin := range a.ctr.actionRows.origins.Vecs {
+						require.Zero(t, origin.Length(), "inserts should not materialize old rows")
+					}
+				})
 				require.NoError(t, a.Prepare(proc))
 				total, batches := 0, []int{}
 				for {
@@ -858,6 +875,9 @@ func TestODKUActionsFinalOutputBoundaries(t *testing.T) {
 						break
 					}
 					batches = append(batches, out.Batch.RowCount())
+					for _, origin := range out.Batch.Vecs[len(a.PreInsertCtx.OdkuActions.SourceColumns):] {
+						require.True(t, origin.IsConstNull(), "the writer receives constant NULL old columns")
+					}
 					for row := range out.Batch.RowCount() {
 						require.Equal(t, int64(total+1), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[0], row))
 						require.Equal(t, total == 0, out.Batch.Vecs[2].IsNull(uint64(row)))

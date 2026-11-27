@@ -34,12 +34,11 @@ type updateComparisonCase struct {
 	name     string
 	typ      types.Type
 	safe     bool
-	same     bool
 	appendAt func(*vector.Vector, bool, bool, *process.Process) error
 }
 
-func updateFixedCase[T types.FixedSizeTExceptStrType](name string, typ types.Type, left, right T, safe, same bool) updateComparisonCase {
-	return updateComparisonCase{name, typ, safe, same, func(v *vector.Vector, second, null bool, p *process.Process) error {
+func updateFixedCase[T types.FixedSizeTExceptStrType](name string, typ types.Type, left, right T, safe bool) updateComparisonCase {
+	return updateComparisonCase{name, typ, safe, func(v *vector.Vector, second, null bool, p *process.Process) error {
 		value := left
 		if second {
 			value = right
@@ -48,8 +47,8 @@ func updateFixedCase[T types.FixedSizeTExceptStrType](name string, typ types.Typ
 	}}
 }
 
-func updateBytesCase(name string, typ types.Type, left, right []byte, safe, same bool) updateComparisonCase {
-	return updateComparisonCase{name, typ, safe, same, func(v *vector.Vector, second, null bool, p *process.Process) error {
+func updateBytesCase(name string, typ types.Type, left, right []byte, safe bool) updateComparisonCase {
+	return updateComparisonCase{name, typ, safe, func(v *vector.Vector, second, null bool, p *process.Process) error {
 		value := left
 		if second {
 			value = right
@@ -81,30 +80,30 @@ func TestUpdateChangedMatchesTypedSQLEquality(t *testing.T) {
 		return encoded
 	}
 	cases := []updateComparisonCase{
-		updateFixedCase("bool", types.T_bool.ToType(), true, true, true, true),
-		updateFixedCase("bit", types.T_bit.ToType(), uint64(1), uint64(2), true, false),
-		updateFixedCase("int8", types.T_int8.ToType(), int8(-1), int8(1), true, false),
-		updateFixedCase("int64", types.T_int64.ToType(), int64(-9), int64(-9), true, true),
-		updateFixedCase("malformed-integer-size", types.T_int64.ToType(), int64(1), int64(257), false, false),
-		updateFixedCase("uint64", types.T_uint64.ToType(), uint64(math.MaxUint64), uint64(math.MaxUint64), true, true),
-		updateFixedCase("enum", types.T_enum.ToType(), types.Enum(2), types.Enum(2), true, true),
-		updateFixedCase("float-scale", types.New(types.T_float32, 0, 2), float32(1.231), float32(1.234), false, false),
-		updateFixedCase("float-same", types.T_float32.ToType(), float32(1), float32(1), false, true),
-		updateFixedCase("signed-zero", types.T_float64.ToType(), float64(0), math.Copysign(0, -1), false, false),
-		updateFixedCase("nan", types.T_float64.ToType(), math.Float64frombits(0x7ff8000000000001), math.Float64frombits(0x7ff8000000000001), false, true),
-		updateFixedCase("infinity", types.T_float64.ToType(), math.Inf(1), math.Inf(1), false, true),
-		updateBytesCase("json-numeric", types.T_json.ToType(), jsonBytes("1"), jsonBytes("1.0"), false, false),
-		updateBytesCase("json-same", types.T_json.ToType(), jsonBytes("{}"), jsonBytes("{}"), false, true),
-		updateBytesCase("array", types.T_array_float32.ToType(), types.ArrayToBytes([]float32{1, 2}), types.ArrayToBytes([]float32{1, 2}), false, true),
-		updateBytesCase("varchar-change", types.T_varchar.ToType(), []byte("a"), []byte("b"), true, false),
-		updateBytesCase("varchar-metadata-equal", types.T_varchar.ToType(), []byte("a"), []byte("a"), true, true),
-		updateBytesCase("varchar-metadata-changed", types.T_varchar.ToType(), []byte("a"), []byte("b"), true, false),
-		updateBytesCase("varchar-oid-mismatch", types.T_varchar.ToType(), []byte("a"), []byte("a"), false, true),
+		updateFixedCase("bool", types.T_bool.ToType(), true, true, true),
+		updateFixedCase("bit", types.T_bit.ToType(), uint64(1), uint64(2), true),
+		updateFixedCase("int8", types.T_int8.ToType(), int8(-1), int8(1), true),
+		updateFixedCase("int64", types.T_int64.ToType(), int64(-9), int64(-9), true),
+		updateFixedCase("malformed-integer-size", types.T_int64.ToType(), int64(1), int64(257), false),
+		updateFixedCase("uint64", types.T_uint64.ToType(), uint64(math.MaxUint64), uint64(math.MaxUint64), true),
+		updateFixedCase("enum", types.T_enum.ToType(), types.Enum(2), types.Enum(2), true),
+		updateFixedCase("float-scale", types.New(types.T_float32, 0, 2), float32(1.231), float32(1.234), false),
+		updateFixedCase("float-same", types.T_float32.ToType(), float32(1), float32(1), false),
+		updateFixedCase("signed-zero", types.T_float64.ToType(), float64(0), math.Copysign(0, -1), false),
+		updateFixedCase("nan", types.T_float64.ToType(), math.Float64frombits(0x7ff8000000000001), math.Float64frombits(0x7ff8000000000001), false),
+		updateFixedCase("infinity", types.T_float64.ToType(), math.Inf(1), math.Inf(1), false),
+		updateBytesCase("json-numeric", types.T_json.ToType(), jsonBytes("1"), jsonBytes("1.0"), false),
+		updateBytesCase("json-same", types.T_json.ToType(), jsonBytes("{}"), jsonBytes("{}"), false),
+		updateBytesCase("array", types.T_array_float32.ToType(), types.ArrayToBytes([]float32{1, 2}), types.ArrayToBytes([]float32{1, 2}), false),
+		updateBytesCase("varchar-change", types.T_varchar.ToType(), []byte("a"), []byte("b"), true),
+		updateBytesCase("varchar-metadata-equal", types.T_varchar.ToType(), []byte("a"), []byte("a"), true),
+		updateBytesCase("varchar-metadata-changed", types.T_varchar.ToType(), []byte("a"), []byte("b"), true),
+		updateBytesCase("varchar-oid-mismatch", types.T_varchar.ToType(), []byte("a"), []byte("a"), false),
 	}
 	for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink} {
 		for _, size := range []int{1, 512} {
 			value := []byte(strings.Repeat("x", size))
-			cases = append(cases, updateBytesCase(fmt.Sprintf("%s/%d", oid, size), oid.ToType(), value, value, true, true))
+			cases = append(cases, updateBytesCase(fmt.Sprintf("%s/%d", oid, size), oid.ToType(), value, value, true))
 		}
 	}
 	for _, tc := range cases {
@@ -153,7 +152,7 @@ func TestUpdateChangedMatchesTypedSQLEquality(t *testing.T) {
 						changed, err := UpdateChanged([]colexec.ExpressionExecutor{observed}, []int32{0}, operands[0], operands[1], p)
 						require.NoError(t, err)
 						require.Equal(t, want, changed, "const=%t nulls=%d", constant, nulls)
-						fallback := !tc.safe || (nulls == 0 && !tc.same)
+						fallback := !tc.safe
 						require.Equal(t, fallback, observed.calls == 1, "fallback const=%t nulls=%d", constant, nulls)
 						if fallback {
 							cause := moerr.NewInternalErrorNoCtx("comparison failed")

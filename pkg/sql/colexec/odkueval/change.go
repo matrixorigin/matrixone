@@ -16,6 +16,7 @@ package odkueval
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -63,7 +64,7 @@ func UpdateChanged(execs []colexec.ExpressionExecutor, columns []int32, before, 
 		left, right := before.Vecs[columns[i]], after.Vecs[columns[i]]
 		equal, known := false, false
 		if left.Length() == 1 && right.Length() == 1 {
-			equal, known = IdenticalUpdateValueAt(left, 0, right, 0)
+			equal, known = UpdateValuesEqualAt(left, 0, right, 0)
 		}
 		if known {
 			if !equal {
@@ -82,10 +83,10 @@ func UpdateChanged(execs []colexec.ExpressionExecutor, columns []int32, before, 
 	return false, nil
 }
 
-// IdenticalUpdateValueAt is only a sufficient equality proof for the primitive/string
-// operators in nullSafeEqualFn. Other types and unequal bytes retain the SQL
-// executor, including its floating scale, JSON/array and error semantics.
-func IdenticalUpdateValueAt(left *vector.Vector, leftRow int, right *vector.Vector, rightRow int) (equal, known bool) {
+// UpdateValuesEqualAt uses the same value equality as nullSafeEqualFn for
+// canonical primitive and byte-string vectors. FLOAT, JSON and other types
+// keep the SQL executor's type-specific comparison.
+func UpdateValuesEqualAt(left *vector.Vector, leftRow int, right *vector.Vector, rightRow int) (equal, known bool) {
 	if left == nil || right == nil || leftRow < 0 || rightRow < 0 || leftRow >= left.Length() || rightRow >= right.Length() ||
 		left.GetType().Oid != right.GetType().Oid {
 		return false, false
@@ -109,9 +110,7 @@ func IdenticalUpdateValueAt(left *vector.Vector, leftRow int, right *vector.Vect
 		if ln || rn {
 			return ln == rn, true
 		}
-		if bytes.Equal(left.GetRawBytesAt(leftRow), right.GetRawBytesAt(rightRow)) {
-			return true, true
-		}
+		return bytes.Equal(left.GetRawBytesAt(leftRow), right.GetRawBytesAt(rightRow)), true
 	}
 	return false, false
 }

@@ -181,16 +181,18 @@ func (preInsertUnique *PreInsertUnique) publishODKUAction(proc *process.Process,
 		}
 	}
 	imageColumns := rows.imageColumns
-	if err = preInsertUnique.validateODKUActionKeys(proc, keys, 1); err != nil {
-		return -1, 0, err
+	// Static originals already belong to the snapshot, and updates cannot
+	// change any static key. Only a new insert needs a statement key claim.
+	staticUnchanged := rows.keys == nil && (!inserting || origin != nil)
+	if !staticUnchanged {
+		if err = preInsertUnique.validateODKUActionKeys(proc, keys, 1); err != nil {
+			return -1, 0, err
+		}
 	}
-	// Static snapshot keys already belong to storage; retain only their RowID
-	// identity and current image. Insert claims still use the normal native map.
-	snapshot := rows.keys == nil && (origin != nil || (!inserting && !rows.origins.Vecs[rows.originRowIDColumn].IsNull(uint64(owner))))
-	keysUnchanged := snapshot || !inserting
-	if !inserting && !snapshot {
+	keysUnchanged := staticUnchanged || !inserting
+	if !inserting && !staticUnchanged {
 		for i, proposed := range keys.Vecs {
-			index, current := &preInsertUnique.ctr.acceptedKeys[i], preInsertUnique.retainedODKUActionKey(i)
+			index, current := &preInsertUnique.ctr.acceptedKeys[i], rows.keys.Vecs[i]
 			if index.index == nil || index.iterator == nil || index.rows == nil {
 				return -1, 0, moerr.NewInternalError(proc.Ctx, "invalid ODKU action key")
 			}
@@ -206,7 +208,7 @@ func (preInsertUnique *PreInsertUnique) publishODKUAction(proc *process.Process,
 		for i := range rows.changes {
 			rows.changes[i] = odkuKeyChange{next: keys.Vecs[i]}
 			if !inserting {
-				rows.changes[i].old = preInsertUnique.retainedODKUActionKey(i)
+				rows.changes[i].old = rows.keys.Vecs[i]
 				rows.changes[i].oldRow = int(owner)
 			}
 		}
@@ -227,6 +229,11 @@ func (preInsertUnique *PreInsertUnique) publishODKUAction(proc *process.Process,
 		}
 	}
 	if inserting {
+		if prefix := int(owner) - rows.origins.RowCount(); prefix > 0 {
+			if err = rows.appendNullOrigins(proc, preInsertUnique.ctr.actions.nullImage, prefix); err != nil {
+				return -1, 0, err
+			}
+		}
 		for i, dst := range rows.origins.Vecs {
 			if err = context.Cause(proc.Ctx); err != nil {
 				return -1, 0, err
@@ -263,13 +270,21 @@ func (preInsertUnique *PreInsertUnique) publishODKUAction(proc *process.Process,
 	return -1, 0, nil
 }
 
-func (preInsertUnique *PreInsertUnique) retainedODKUActionKey(slot int) *vector.Vector {
-	rows := preInsertUnique.ctr.actionRows
-	if rows.keys != nil {
-		return rows.keys.Vecs[slot]
+func (rows *odkuActionRows) hasOrigin(row int) bool {
+	return row < rows.origins.RowCount() && !rows.origins.Vecs[rows.originRowIDColumn].IsNull(uint64(row))
+}
+
+func (rows *odkuActionRows) appendNullOrigins(proc *process.Process, nullImage *batch.Batch, count int) error {
+	for i, dst := range rows.origins.Vecs {
+		if err := context.Cause(proc.Ctx); err != nil {
+			return err
+		}
+		if err := dst.UnionMulti(nullImage.Vecs[i], 0, count, proc.Mp()); err != nil {
+			return err
+		}
 	}
-	c := preInsertUnique.PreInsertCtx.OdkuActions
-	return rows.images.Vecs[c.InputColumns[c.Constraints[slot].CurrentKey.GetCol().ColPos]]
+	rows.origins.AddRowCount(count)
+	return nil
 }
 
 func (preInsertUnique *PreInsertUnique) validateODKUActionKeys(proc *process.Process, keys *batch.Batch, sourceRows int) error {

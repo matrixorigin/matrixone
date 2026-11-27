@@ -112,12 +112,10 @@ Compile typed executors once. A stable borrowed two-batch RHS frame observes
 image changes synchronously; executors neither mutate nor retain the frame.
 Free executors before their inputs and clear the frame on Reset/Free.
 
-For bool, bit, integers, enum and byte-string types, equal non-NULL stored bytes
-are a sufficient proof of the existing `<=>` result after checking matching
-actual OIDs, canonical physical sizes and valid row shape. Both NULLs are equal;
-one NULL differs. Unequal bytes and every other type use the typed executor,
-including FLOAT, JSON, arrays and temporal types. This is a sufficient equality
-shortcut, not a second SQL comparator; differential tests use actual `<=>`.
+For bool, bit, integers, enum and byte-string types, the existing `<=>` result
+follows from byte equality and NULL state after checking matching OIDs,
+canonical physical sizes and valid row shape. FLOAT, JSON, arrays and temporal
+types use the typed executor. Differential tests use actual `<=>`.
 
 A static no-op shortcut additionally requires immutable keys, no prior view,
 FK/deferred output or automatic/generated phase, exact
@@ -210,8 +208,11 @@ input. The owner retains its own copy before the child batch can be reused.
 
 ## Resource bounds and deferred cleanup
 
-Retain one original/current image per touched row and one live non-NULL key per
-constraint. Distinct old/new/transient groups remain until Reset to deduplicate
+Retain one current image per touched row, the required original images and one
+live non-NULL key per constraint. The initial run of inserted rows keeps its
+NULL originals implicit until a snapshot row is retained. Insert-only output
+uses constant NULL old columns.
+Distinct old/new/transient groups remain until Reset to deduplicate
 lock history, including cycles. They are not compacted to a current-owner cap.
 The `dead` counter validates reuse of vacated ownership. Row-image/key payload
 areas compact dead varlen bytes independently from these groups.

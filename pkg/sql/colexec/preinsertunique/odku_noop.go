@@ -16,6 +16,7 @@ package preinsertunique
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -100,7 +101,7 @@ func (preInsertUnique *PreInsertUnique) tryDirectNoop(proc *process.Process, own
 			return false, nil
 		}
 		current := image.Vecs[c.InputColumns[c.UpdateColumns[i]]]
-		equal, known := odkueval.IdenticalUpdateValueAt(current, row, incoming, 0)
+		equal, known := odkueval.UpdateValuesEqualAt(current, row, incoming, 0)
 		if !known || !equal {
 			return false, nil
 		}

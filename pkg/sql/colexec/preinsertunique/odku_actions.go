@@ -541,8 +541,12 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 			return err
 		}
 	}
-	if err := preInsertUnique.evalODKUKeys(proc); err != nil {
-		return err
+	// Static keys are plain image columns absent from every assignment.
+	// An existing owner keeps its claims without reevaluating those columns.
+	if insert || !a.staticKeys {
+		if err := preInsertUnique.evalODKUKeys(proc); err != nil {
+			return err
+		}
 	}
 	if c.PriorData != nil {
 		for slot, key := range a.keys.Vecs {
@@ -554,12 +558,9 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 				return preInsertUnique.odkuDuplicate(proc, slot, key, 0)
 			}
 		}
-	} else if !insert {
+	} else if !insert && !a.staticKeys {
 		for slot, key := range a.keys.Vecs {
-			original, row := preInsertUnique.retainedODKUActionKey(slot), int(owner)
-			if freshOriginal {
-				original, row = a.old.Vecs[c.Constraints[slot].CurrentKey.GetCol().ColPos], 0
-			}
+			original, row := preInsertUnique.ctr.actionRows.keys.Vecs[slot], int(owner)
 			if !sameODKUKey(original, row, key, 0) || original.GetGrouping().Contains(uint64(row)) != key.GetGrouping().Contains(0) {
 				return moerr.NewInternalError(proc.Ctx, "ODKU changing key is missing prior-data metadata")
 			}
@@ -680,13 +681,14 @@ func (preInsertUnique *PreInsertUnique) insertODKUSourceRun(proc *process.Proces
 				return err
 			}
 		}
-		for i, dst := range rows.origins.Vecs {
-			if err := dst.UnionMulti(a.nullImage.Vecs[i], 0, n, proc.Mp()); err != nil {
+		// Until an original is retained, NULL old rows are implicit. A later
+		// snapshot hit materializes this prefix before appending its original.
+		if rows.origins.RowCount() != 0 {
+			if err := rows.appendNullOrigins(proc, a.nullImage, n); err != nil {
 				return err
 			}
 		}
 		rows.images.AddRowCount(n)
-		rows.origins.AddRowCount(n)
 		resetInput() // Original registration reuses the one-row scratch.
 		return nil
 	}
@@ -744,7 +746,7 @@ func (preInsertUnique *PreInsertUnique) finishODKUAction(proc *process.Process, 
 // ordinals, RowIDs and FK/source metadata. SQL equality is insufficient here.
 func (preInsertUnique *PreInsertUnique) physicalODKUChange(row int) bool {
 	c, rows := preInsertUnique.PreInsertCtx.OdkuActions, preInsertUnique.ctr.actionRows
-	if rows.origins.Vecs[c.RowIdColumn].IsNull(uint64(row)) {
+	if !rows.hasOrigin(row) {
 		return true
 	}
 	for _, column := range c.UpdateColumns {
@@ -773,9 +775,14 @@ func (preInsertUnique *PreInsertUnique) finalODKUOutputCount() int {
 	count := min(rows.images.RowCount()-a.finalRow, colexec.DefaultBatchSize-out.RowCount())
 	remaining, fixed := max(0, (1<<20)-out.Size()), 0
 	hasVarlen := false
-	for _, v := range out.Vecs {
+	for col, v := range out.Vecs {
+		if col >= len(c.SourceColumns) && rows.origins.RowCount() == 0 {
+			continue // Constant NULL old columns have no data payload.
+		}
 		fixed += v.GetType().TypeSize()
-		hasVarlen = hasVarlen || v.GetType().IsVarlen()
+		if v.GetType().IsVarlen() && col != int(c.ActionFinalColumn) {
+			hasVarlen = hasVarlen || len(preInsertUnique.odkuOutputVector(col).GetArea()) != 0
+		}
 	}
 	if !hasVarlen && fixed > 0 {
 		count = min(count, max(1, (remaining+fixed-1)/fixed))
@@ -795,7 +802,7 @@ func (preInsertUnique *PreInsertUnique) finalODKUOutputCount() int {
 				continue
 			}
 			src := preInsertUnique.odkuOutputVector(col)
-			if !src.IsNull(uint64(a.finalRow + n)) {
+			if len(src.GetArea()) != 0 && !src.IsNull(uint64(a.finalRow+n)) {
 				payload := src.GetBytesAt(a.finalRow + n)
 				if len(payload) > types.VarlenaInlineSize {
 					remaining = max(0, remaining-len(payload))
@@ -845,6 +852,14 @@ func (preInsertUnique *PreInsertUnique) appendODKUOutput(proc *process.Process, 
 			}
 		}
 		src := preInsertUnique.odkuOutputVector(i)
+		if i >= len(c.SourceColumns) && src.Length() == 0 {
+			// With no retained original, output begins after all actions.
+			// Every old column is NULL for the rest of this attempt.
+			if err := vector.SetConstNull(dst, count, proc.Mp()); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := dst.UnionBatch(src, int64(owner), count, nil, proc.Mp()); err != nil {
 			return err
 		}
