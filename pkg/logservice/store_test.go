@@ -2115,9 +2115,9 @@ func TestCheckZombieReplicas_DiscoveryOnlyUsesHAKeeperState(t *testing.T) {
 		},
 	}
 	zombies := l.checkZombieReplicas(context.Background(), shards, nil, nil)
-	assert.Equal(t, map[zombieKey]struct{}{
-		{shardID: hakeeper.DefaultHAKeeperShardID, replicaID: 7}: {},
-		{shardID: 3, replicaID: 17}:                              {},
+	assert.Equal(t, map[zombieKey]startupAbsence{
+		{shardID: hakeeper.DefaultHAKeeperShardID, replicaID: 7}: {epoch: 12},
+		{shardID: 3, replicaID: 17}:                              {epoch: 21},
 	}, zombies)
 	assert.False(t, gossipCalled,
 		"discovery-only mode must use HAKeeper state, not one proxy-selected gossip view")

@@ -905,6 +905,35 @@ func TestTruncationCleansSkippedZombieReplicaMetadata(t *testing.T) {
 	}
 }
 
+func TestPendingReplicaKeepsMetadataAndSnapshotsUntilRetired(t *testing.T) {
+	runServiceTest(t, false, false, func(t *testing.T, s *Service) {
+		const shardID, replicaID = uint64(1), uint64(99)
+		l := s.store
+		testPrepareSnapshot(t, l.snapshotMgr, nodeID{shardID: shardID, replicaID: replicaID}, snapshotIndex(100))
+		// Joining a shard with no other local or remote NodeHost keeps this
+		// replica pending. A stale cleanup candidate can predate its Start.
+		require.NoError(t, l.startReplica(shardID, replicaID, nil, true))
+		require.True(t, l.localReplicaPresent(shardID, replicaID))
+		require.NotContains(t, l.startedReplicaIDs()[shardID], replicaID)
+		l.cleanupStaleReplica(shardID, replicaID, 0)
+		require.Equal(t, int64(replicaID), l.getReplicaID(shardID))
+		require.Equal(t, 1, l.snapshotMgr.Count(shardID, replicaID))
+
+		require.NoError(t, l.stopReplica(shardID, replicaID))
+		require.False(t, l.localReplicaPresent(shardID, replicaID))
+		l.cleanupStaleReplica(shardID, replicaID, 0)
+		require.Equal(t, int64(-1), l.getReplicaID(shardID))
+		require.Zero(t, l.snapshotMgr.Count(shardID, replicaID))
+		replica := pb.Replica{UUID: s.ID(), ShardID: shardID, ReplicaID: replicaID, Epoch: 7}
+		require.False(t, l.canStartScheduledReplica(replica, false, true, nil), "the retained retirement decision must reject Start")
+		s.handleCommands([]pb.ScheduleCommand{{
+			UUID: s.ID(), ServiceType: pb.LogService,
+			ConfigChange: &pb.ConfigChange{ChangeType: pb.StartReplica, Replica: replica},
+		}})
+		require.False(t, l.localReplicaPresent(shardID, replicaID), "retirement must defeat delayed Start")
+	})
+}
+
 func TestTruncationRealignsSnapshotIndexAfterStaleReplicaCleanup(t *testing.T) {
 	const (
 		shardID       = uint64(1)
