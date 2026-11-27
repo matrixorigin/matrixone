@@ -86,7 +86,7 @@ func TestCollectCloneDatabaseSourceReusesFKDefinitions(t *testing.T) {
 			collect := func(t *testing.T) *cloneDatabaseSource {
 				t.Helper()
 				source := &cloneDatabaseSource{srcResolveDBName: database, snapshot: snapshot, viewMap: make(map[string]*tableInfo)}
-				require.NoError(t, source.collectTables(ctx, ses.GetService(), bh))
+				require.NoError(t, source.collectTables(ctx, ses.GetService(), bh, snapshot))
 				return source
 			}
 			source := collect(t)
@@ -119,7 +119,7 @@ func TestCollectCloneDatabaseSourceReusesFKDefinitions(t *testing.T) {
 
 			want := moerr.NewInternalErrorNoCtx("schema lookup failed")
 			bh.sql2err[childSQL] = want
-			require.ErrorIs(t, next.collectTables(ctx, ses.GetService(), bh), want)
+			require.ErrorIs(t, next.collectTables(ctx, ses.GetService(), bh, snapshot), want)
 		})
 	}
 }

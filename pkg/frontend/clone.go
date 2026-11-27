@@ -887,10 +887,11 @@ func handleCloneDatabaseWithSource(
 		}()
 	}
 
+	privateWorkspace := deferred != nil && !ses.proc.GetTxnOperator().TxnOptions().ByBegin
 	if resolvedSource != nil {
 		source = *resolvedSource
 	} else {
-		if source, err = collectCloneDatabaseSource(reqCtx, ses, bh, stmt); err != nil {
+		if source, err = collectCloneDatabaseSource(reqCtx, ses, bh, stmt, privateWorkspace); err != nil {
 			return
 		}
 		if _, systemDB := sysDatabases[strings.ToLower(source.srcResolveDBName)]; systemDB && source.opAccountId != sysAccountID {
@@ -907,6 +908,7 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 	}
+	snapshotTS = source.readTS
 	fromAccountID := source.opAccountId
 	if source.snapshot != nil && source.snapshot.Tenant != nil {
 		fromAccountID = source.snapshot.Tenant.TenantID
@@ -946,7 +948,7 @@ func handleCloneDatabaseWithSource(
 		return
 	}
 
-	if stmt.AtTsExpr == nil {
+	if stmt.AtTsExpr == nil && snapshotTS == 0 {
 		// consider the following example:
 		// (within a session)
 		//   ...
@@ -966,7 +968,6 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
-	privateWorkspace := deferred != nil && !ses.proc.GetTxnOperator().TxnOptions().ByBegin
 	var indexBatch *compile.CloneIndexCatalogBatch
 	var catalogProc *process.Process
 	var independent []*tableInfo
@@ -991,7 +992,8 @@ func handleCloneDatabaseWithSource(
 				if err = compile.LockCloneTargetNames(proc, source.toAccountId, stmt.DstDatabase.String(), names); err != nil {
 					return
 				}
-				if snapshotTS, err = tryToIncreaseTxnPhysicalTS(reqCtx, proc.GetTxnOperator()); err != nil {
+				// Refresh target admission without moving the source read boundary.
+				if _, err = tryToIncreaseTxnPhysicalTS(reqCtx, proc.GetTxnOperator()); err != nil {
 					return
 				}
 				bh.ClearExecResultSet()
@@ -1201,7 +1203,7 @@ func handleCloneDatabaseWithSource(
 	return
 }
 
-func prepareCloneViewSnapshot(snapshot *plan.Snapshot, snapshotTS int64) *plan.Snapshot {
+func prepareCloneSourceSnapshot(snapshot *plan.Snapshot, snapshotTS int64) *plan.Snapshot {
 	if plan.IsSnapshotValid(snapshot) || snapshotTS == 0 {
 		return snapshot
 	}

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"sort"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,12 +36,26 @@ type cloneDatabaseSource struct {
 	fkTableMap         map[string]*tableInfo
 	hasFkCycle         bool
 	snapshot           *plan.Snapshot
+	readTS             int64
 	opAccountId        uint32
 	toAccountId        uint32
 }
 
+var cloneDatabaseSourceReadHook atomic.Pointer[func(string)]
+
+// SetCloneDatabaseSourceReadHookForTest observes a completed source inventory.
+// Production leaves it unset; tests can coordinate DDL before target creation.
+func SetCloneDatabaseSourceReadHookForTest(hook func(string)) func() {
+	var next *func(string)
+	if hook != nil {
+		next = &hook
+	}
+	previous := cloneDatabaseSourceReadHook.Swap(next)
+	return func() { cloneDatabaseSourceReadHook.Store(previous) }
+}
+
 func (source *cloneDatabaseSource) sortViews(ctx context.Context, ses *Session, bh BackgroundExec, snapshotTS int64) ([]string, error) {
-	snapshot := prepareCloneViewSnapshot(source.snapshot, snapshotTS)
+	snapshot := prepareCloneSourceSnapshot(source.snapshot, snapshotTS)
 	account := source.opAccountId
 	if snapshot != nil && snapshot.Tenant != nil {
 		account = snapshot.Tenant.TenantID
@@ -72,6 +87,7 @@ func collectCloneDatabaseSource(
 	ses *Session,
 	bh BackgroundExec,
 	stmt *tree.CloneDatabase,
+	privateWorkspace bool,
 ) (cloneDatabaseSource, error) {
 	source := cloneDatabaseSource{
 		srcPrivilegeDBName: stmt.SrcDatabase.String(),
@@ -107,16 +123,30 @@ func collectCloneDatabaseSource(
 		}
 	}
 
+	// Keep inventory, dependency ordering and table readers at one source
+	// boundary. Target-name admission may later advance the write transaction,
+	// but must not change which source schema this inventory describes.
+	if privateWorkspace && stmt.AtTsExpr == nil {
+		if source.readTS, err = tryToIncreaseTxnPhysicalTS(ctx, cloneSnapshotTxnOperator(ses, bh)); err != nil {
+			return source, err
+		}
+	}
+
 	source.srcResolveDBName = srcDBName
 	source.snapshot = snapshot
 	source.opAccountId = opAccountId
 	source.toAccountId = toAccountId
-	err = source.collectTables(ctx, ses.GetService(), bh)
+	err = source.collectTables(ctx, ses.GetService(), bh, prepareCloneSourceSnapshot(snapshot, source.readTS))
+	if err == nil {
+		if hook := cloneDatabaseSourceReadHook.Load(); hook != nil {
+			(*hook)(source.srcResolveDBName)
+		}
+	}
 	return source, err
 }
 
-func (source *cloneDatabaseSource) collectTables(ctx context.Context, sid string, bh BackgroundExec) error {
-	srcDBName, snapshot := source.srcResolveDBName, source.snapshot
+func (source *cloneDatabaseSource) collectTables(ctx context.Context, sid string, bh BackgroundExec, snapshot *plan.Snapshot) error {
+	srcDBName := source.srcResolveDBName
 	srcTblInfos, err := getTableInfos(ctx, sid, bh, snapshot, srcDBName, "")
 	if err != nil {
 		return err

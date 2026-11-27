@@ -18,9 +18,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,6 +101,104 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, query, database).Scan(&offset))
 			return max(lowerBound, offset+1)
 		}
+
+		t.Run("concurrent source foreign key keeps one snapshot", func(t *testing.T) {
+			for _, branch := range []bool{false, true} {
+				t.Run(fmt.Sprintf("branch=%t", branch), func(t *testing.T) {
+					const source = "clone_schema_source"
+					const before = "clone_schema_before"
+					const raced = "clone_schema_raced"
+					const fresh = "clone_schema_fresh"
+					create := func(target string) string {
+						if branch {
+							return "data branch create database " + target + " from " + source
+						}
+						return "create database " + target + " clone " + source
+					}
+					defer func() {
+						cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+						defer cancel()
+						for _, name := range []string{before, raced, fresh, source} {
+							statement := "drop database if exists " + name
+							if branch && name != source {
+								var exists int
+								if !assert.NoError(t, conn.QueryRowContext(cleanupCtx, "select count(*) from mo_catalog.mo_database where datname=?", name).Scan(&exists)) || exists == 0 {
+									continue
+								}
+								statement = "data branch delete database " + name
+							}
+							_, err := conn.ExecContext(cleanupCtx, statement)
+							assert.NoError(t, err, name)
+						}
+					}()
+					// A single clone worker makes the catalog's name order deterministic:
+					// the child must run before its newly introduced parent dependency.
+					previous := runtime.GOMAXPROCS(1)
+					defer runtime.GOMAXPROCS(previous)
+					exec(t, "create database "+source)
+					for _, table := range []string{"a_child", "z_parent"} {
+						exec(t, "create table "+source+"."+table+" (id int primary key, parent_id int)")
+						exec(t, "insert into "+source+"."+table+" values (1,1)")
+					}
+					exec(t, create(before))
+					count(t, "select count(*) from "+before+".a_child where id=1 and parent_id=1", 1)
+					peer, err := db.Conn(ctx)
+					require.NoError(t, err)
+					defer peer.Close()
+					var cloneErr error
+					func() {
+						ready, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+						var observed atomic.Bool
+						var release sync.Once
+						restore := frontend.SetCloneDatabaseSourceReadHookForTest(func(database string) {
+							if database != source || !observed.CompareAndSwap(false, true) {
+								return
+							}
+							close(ready)
+							select {
+							case <-resume:
+							case <-ctx.Done():
+							}
+						})
+						defer restore()
+						go func() {
+							defer close(done)
+							_, cloneErr = conn.ExecContext(ctx, create(raced))
+						}()
+						defer func() {
+							release.Do(func() { close(resume) })
+							<-done
+						}()
+						select {
+						case <-ready:
+						case <-done:
+							t.Fatalf("clone ended before reading source inventory: %v", cloneErr)
+						case <-ctx.Done():
+							t.Fatal(ctx.Err())
+						}
+						_, err := peer.ExecContext(ctx, "alter table "+source+".a_child add constraint fk_parent foreign key (parent_id) references "+source+".z_parent(id)")
+						require.NoError(t, err)
+						release.Do(func() { close(resume) })
+						<-done
+					}()
+					if branch {
+						// DATA BRANCH's existing source-row admission rejects a schema
+						// changed since inventory rather than publishing stale lineage.
+						var sqlErr *mysql.MySQLError
+						require.ErrorAs(t, cloneErr, &sqlErr)
+						require.Equal(t, moerr.ErrTxnNeedRetry, sqlErr.Number)
+						count(t, "select count(*) from mo_catalog.mo_database where datname='"+raced+"'", 0)
+					} else if assert.NoError(t, cloneErr) {
+						count(t, "select count(*) from "+raced+".a_child where id=1 and parent_id=1", 1)
+						count(t, "select count(*) from "+raced+".z_parent where id=1", 1)
+						count(t, "select count(*) from mo_catalog.mo_foreign_keys where db_name='"+raced+"'", 0)
+					}
+					exec(t, create(fresh))
+					count(t, "select count(*) from "+fresh+".a_child where id=1 and parent_id=1", 1)
+					count(t, "select count(*) from mo_catalog.mo_foreign_keys where db_name='"+fresh+"' and table_name='a_child' and refer_db_name='"+fresh+"' and refer_table_name='z_parent'", 1)
+				})
+			}
+		})
 
 		t.Run("hidden allocator keeps user auto increment independent", func(t *testing.T) {
 			defer func() {
