@@ -91,7 +91,7 @@ func TestOversizeWALAfterApplyAppendRollsBack(t *testing.T) {
 	readRel, err := readDB.GetRelationByName(schema.Name)
 	require.NoError(t, err)
 	pkIdx := schema.GetSingleSortKeyIdx()
-	pk := bat.Vecs[pkIdx].Get(0)
+	pk := bat.Vecs[pkIdx].GetValue(0)
 	value, isNull, err := readRel.GetValueByFilter(ctx, handle.NewEQFilter(pk), pkIdx)
 	require.NoError(t, err)
 	require.False(t, isNull)

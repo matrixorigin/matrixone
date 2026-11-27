@@ -92,7 +92,7 @@ func TestCollectChangesSeedRangeDeliversInheritedDelete(t *testing.T) {
 	}
 	deleteFn := func() {
 		txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
-		require.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(bat.Vecs[0].Get(0))))
+		require.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(bat.Vecs[0].GetValue(0))))
 		require.NoError(t, txn.Commit(ctx))
 	}
 	now := func() types.TS { return taeHandler.GetDB().TxnMgr.Now() }

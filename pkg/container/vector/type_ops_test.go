@@ -56,6 +56,7 @@ func TestTypeOpsRows(t *testing.T) {
 		require.True(t, ops.supported, name)
 		require.NotNil(t, ops.getAny, name)
 		require.NotNil(t, ops.appendAny, name)
+		require.NotNil(t, ops.setAny, name)
 		require.NotNil(t, ops.shrink, name)
 		require.NotNil(t, ops.shrinkByMask, name)
 		require.NotNil(t, ops.shuffle, name)
@@ -361,6 +362,35 @@ func TestTypeOpsConstructorsMatchLegacy(t *testing.T) {
 		base.Free(mp)
 	}
 	require.Zero(t, mp.CurrNB(), "vectors leaked")
+}
+
+// TestSetAny sets a row of a vector of every supported type to another row's
+// value, and checks that unsupported types are refused.
+func TestSetAny(t *testing.T) {
+	mp := mpool.MustNewZero()
+	rng := rand.New(rand.NewSource(5))
+	for i := 0; i < 256; i++ {
+		oid := types.T(i)
+		require.Equal(t, vectorTypeOps[oid].supported, SupportsAny(oid))
+		if !SupportsAny(oid) {
+			typ, ok := oid.TryToType()
+			if !ok {
+				typ = types.Type{Oid: oid}
+			}
+			require.Error(t, SetAny(NewVec(typ, mp), 0, nil, mp), oid.OidString())
+			continue
+		}
+		typ := oid.ToType()
+		v := randomVector(t, rng, typ, 8, mp)
+		want := GetAny(v, 5, true)
+		wasNull := v.IsNull(2)
+		require.NoError(t, SetAny(v, 2, want, mp), oid.OidString())
+		require.Equal(t, want, GetAny(v, 2, true), oid.OidString())
+		require.Equal(t, wasNull, v.IsNull(2), "%s: SetAny leaves the NULL bit", oid.OidString())
+		require.Panics(t, func() { _ = SetAny(v, 2, struct{}{}, mp) }, oid.OidString())
+		v.Free(mp)
+	}
+	require.Zero(t, mp.CurrNB())
 }
 
 // TestConstSetCoversTypeOps ties getConstSetFunction, which stays a switch

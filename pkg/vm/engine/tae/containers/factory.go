@@ -17,10 +17,15 @@ package containers
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 func MakeVector(typ types.Type, mp *mpool.MPool) (vec Vector) {
-	return NewVector(typ, Options{Allocator: mp})
+	if mp == nil {
+		mp = common.DefaultAllocator
+	}
+	return vector.NewVec(typ, mp)
 }
 
 func BuildBatchWithPool(
@@ -35,7 +40,9 @@ func BuildBatchWithPool(
 	for i, attr := range attrs {
 		vec := pool.GetVector(&colTypes[i])
 		if capacity > 0 {
-			vec.PreExtend(capacity)
+			if err := vec.PreExtend(capacity, vec.MPool()); err != nil {
+				panic(err)
+			}
 		}
 		bat.AddVector(attr, vec)
 	}
@@ -49,7 +56,12 @@ func BuildBatch(attrs []string, colTypes []types.Type, opts Options) *Batch {
 		Vecs:    make([]Vector, 0, len(attrs)),
 	}
 	for i, attr := range attrs {
-		vec := NewVector(colTypes[i], opts)
+		vec := MakeVector(colTypes[i], opts.Allocator)
+		if opts.Capacity > 0 {
+			if err := vec.PreExtend(opts.Capacity, vec.MPool()); err != nil {
+				panic(err)
+			}
+		}
 		bat.AddVector(attr, vec)
 	}
 	return bat

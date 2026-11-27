@@ -98,7 +98,7 @@ func TestCopyBackupTableIDHistory(t *testing.T) {
 				for col, attr := range checkpoint.CheckpointSchema.Attrs() {
 					vec := containers.MakeVector(checkpoint.CheckpointSchema.Types()[col], common.CheckpointAllocator)
 					meta.AddVector(attr, vec)
-					vec.Append(values[col], false)
+					vec.MustAppendValue(values[col], false)
 				}
 				metaName := path.Clean(ioutil.EncodeCKPMetadataFullName(types.TS{}, predecessorEnd))
 				writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, metaName, dst)

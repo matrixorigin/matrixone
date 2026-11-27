@@ -209,7 +209,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 				return
 			}
 			defer view.Close()
-			_ = view.Vecs[0].Foreach(func(v any, _ bool, row int) (err error) {
+			_ = containers.ForeachVectorWindow(view.Vecs[0], 0, view.Vecs[0].Length(), nil, func(v any, _ bool, row int) (err error) {
 				pk := v.(uint64)
 				if pk != goodId {
 					return
@@ -228,6 +228,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 				count = cntv.(uint64)
 				return moerr.NewInternalErrorNoCtx("stop iteration")
 			}, nil)
+
 			if found {
 				return
 			}
@@ -379,8 +380,8 @@ func (app1 *APP1) Init(factor int) {
 	defer userData.Close()
 
 	for i := 0; i < conf.Users; i++ {
-		uid := userData.Vecs[0].Get(i)
-		uname := userData.Vecs[1].Get(i)
+		uid := userData.Vecs[0].GetValue(i)
+		uname := userData.Vecs[1].GetValue(i)
 		client := NewAPP1UserClient(uid.(uint64), string(uname.([]byte)))
 		app1.Clients = append(app1.Clients, client)
 		// logutil.Info(client.String())
@@ -390,10 +391,10 @@ func (app1 *APP1) Init(factor int) {
 		panic(err)
 	}
 	price := containers.MakeVector(goods.ColDefs[2].Type, common.DefaultAllocator)
-	defer price.Close()
+	defer containers.ReleaseVector(price)
 	for i := 0; i < conf.GoodKinds; i++ {
 		goodPrice := float64(rand.Intn(1000)+20) / float64(rand.Intn(10)+1) / float64(20)
-		price.Append(goodPrice, false)
+		price.MustAppendValue(goodPrice, false)
 	}
 	goodsRel, err := db.GetRelationByName(goods.Name)
 	if err != nil {
@@ -409,12 +410,12 @@ func (app1 *APP1) Init(factor int) {
 
 	goodIds := goodsData.Vecs[0]
 	count := containers.MakeVector(repertory.ColDefs[2].Type, common.DefaultAllocator)
-	defer count.Close()
+	defer containers.ReleaseVector(count)
 	for i := 0; i < conf.GoodKinds; i++ {
 		goodCount := rand.Intn(1000) + 100
-		count.Append(uint64(goodCount), false)
-		goodsId := goodsData.Vecs[0].Get(i)
-		goodsName := goodsData.Vecs[1].Get(i)
+		count.MustAppendValue(uint64(goodCount), false)
+		goodsId := goodsData.Vecs[0].GetValue(i)
+		goodsName := goodsData.Vecs[1].GetValue(i)
 		goods := new(APP1Goods)
 		goods.ID = goodsId.(uint64)
 		goods.Name = string(goodsName.([]byte))
@@ -566,12 +567,12 @@ func TestTxn8(t *testing.T) {
 	rel, _ = db.GetRelationByName(schema.Name)
 	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	pkv := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
+	pkv := bats[0].Vecs[schema.GetSingleSortKeyIdx()].GetValue(2)
 	filter := handle.NewEQFilter(pkv)
 	err = rel.UpdateByFilter(context.Background(), filter, 3, int64(9999), false)
 	assert.NoError(t, err)
 
-	pkv = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+	pkv = bats[0].Vecs[schema.GetSingleSortKeyIdx()].GetValue(3)
 	filter = handle.NewEQFilter(pkv)
 	id, row, err := rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
@@ -688,7 +689,7 @@ func TestTxn9(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(apply(int(expectRows/5*2)-1, int(expectRows/5)*2, txn))
 	rel, _ = db.GetRelationByName(schema.Name)
-	v := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
+	v := bats[0].Vecs[schema.GetSingleSortKeyIdx()].GetValue(2)
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
@@ -701,7 +702,7 @@ func TestTxn9(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(apply(0, int(expectRows/5*2)-1, nil))
 	rel, _ = db.GetRelationByName(schema.Name)
-	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
+	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].GetValue(3)
 	filter = handle.NewEQFilter(v)
 	err = rel.UpdateByFilter(context.Background(), filter, 2, int32(9999), false)
 	assert.NoError(t, err)

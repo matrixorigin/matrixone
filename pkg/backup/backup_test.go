@@ -819,7 +819,7 @@ func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
 				require.NoError(t, txn.Rollback(context.Background()))
 			}
 		}()
-		require.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(data.Vecs[0].Get(0))))
+		require.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(data.Vecs[0].GetValue(0))))
 		row := data.CloneWindow(sourceRows, 1)
 		defer row.Close()
 		require.NoError(t, rel.Append(ctx, row))
@@ -854,13 +854,13 @@ func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
 		}
 	}()
 	testutil.CheckAllColRowsByScan(t, rel, sourceRows, true)
-	_, _, err = rel.GetByFilter(ctx, handle.NewEQFilter(data.Vecs[0].Get(0)))
+	_, _, err = rel.GetByFilter(ctx, handle.NewEQFilter(data.Vecs[0].GetValue(0)))
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 	for row := 1; row <= sourceRows; row++ {
-		value, isNull, err := rel.GetValueByFilter(ctx, handle.NewEQFilter(data.Vecs[0].Get(row)), 1)
+		value, isNull, err := rel.GetValueByFilter(ctx, handle.NewEQFilter(data.Vecs[0].GetValue(row)), 1)
 		require.NoError(t, err)
 		require.False(t, isNull)
-		require.Equal(t, data.Vecs[1].Get(row), value)
+		require.Equal(t, data.Vecs[1].GetValue(row), value)
 	}
 	require.NoError(t, txn.Commit(ctx))
 	readComplete = true
