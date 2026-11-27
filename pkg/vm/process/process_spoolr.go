@@ -37,7 +37,7 @@ var (
 
 	// ErrPipelineEndSignalDeliveryFailed marks a successful cleanup path that
 	// could not durably record its normal End and had to fall back to abort.
-	ErrPipelineEndSignalDeliveryFailed = moerr.NewInternalErrorNoCtx("pipeline end signal delivery failed")
+	ErrPipelineEndSignalDeliveryFailed = moerr.PipelineEndDeliveryFailed
 
 	// ErrPipelineTerminalWithoutCause marks a failure/abort terminal event whose
 	// caller did not provide the original cause. Error and Abort terminal events
@@ -152,7 +152,7 @@ func NewErrorSignal(err error) PipelineSignal {
 	return PipelineSignal{
 		typ:         GetDirectly,
 		EventType:   EventError,
-		terminalErr: err,
+		terminalErr: moerr.ReportedPipelineError(err),
 	}
 }
 
@@ -165,7 +165,7 @@ func NewAbortSignal(err error) PipelineSignal {
 	return PipelineSignal{
 		typ:         GetDirectly,
 		EventType:   EventAbort,
-		terminalErr: err,
+		terminalErr: moerr.ReportedPipelineError(err),
 	}
 }
 
@@ -443,13 +443,13 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 			chosen, msg = receiver.listenToAll()
 			analyzer.WaitStop(start)
 			if chosen == 0 {
-				return nil, nil
+				return nil, moerr.PipelineContextError(receiver.usrCtx)
 			}
 
 		} else {
 			chosen, msg = receiver.listenToAll()
 			if chosen == 0 {
-				return nil, nil
+				return nil, moerr.PipelineContextError(receiver.usrCtx)
 			}
 		}
 
@@ -473,7 +473,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 			// GetDirectly as a per-sender end signal.
 			receiver.removeIdxReceiver(chosen)
 			if info != nil {
-				return nil, info
+				return nil, moerr.ReportedPipelineError(info)
 			}
 			continue
 		}
@@ -482,7 +482,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 		if analyzer != nil {
 			analyzer.Input(content)
 		}
-		return content, info
+		return content, moerr.ReportedPipelineError(info)
 	}
 }
 

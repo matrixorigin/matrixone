@@ -705,7 +705,7 @@ func TestMessageSenderOnClientReceive(t *testing.T) {
 }
 
 func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
-	t.Run("cancel returns query interrupted", func(t *testing.T) {
+	t.Run("cancel reports the observed context cancellation", func(t *testing.T) {
 		sender := new(messageSenderOnClient)
 		sender.receiveCh = make(chan morpc.Message, 1)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -717,10 +717,10 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 		require.Nil(t, bat)
 		require.False(t, over)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.ErrorIs(t, err, context.Canceled)
 	})
 
-	t.Run("upstream deadline returns query interrupted", func(t *testing.T) {
+	t.Run("upstream deadline remains a query deadline", func(t *testing.T) {
 		sender := new(messageSenderOnClient)
 		sender.receiveCh = make(chan morpc.Message, 1)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
@@ -734,7 +734,7 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 		require.Nil(t, bat)
 		require.False(t, over)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.ErrorIs(t, err, context.DeadlineExceeded)
 	})
 
 	t.Run("internal deadline returns rpc timeout", func(t *testing.T) {
@@ -755,7 +755,7 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout))
 	})
 
-	t.Run("cancel during merge loop returns query interrupted", func(t *testing.T) {
+	t.Run("cancel during merge loop remains cancellation", func(t *testing.T) {
 		sender := new(messageSenderOnClient)
 		sender.receiveCh = make(chan morpc.Message, 1)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -773,7 +773,7 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 		require.Nil(t, bat)
 		require.False(t, over)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.ErrorIs(t, err, context.Canceled)
 	})
 }
 
@@ -2236,121 +2236,43 @@ func TestNotifyMessageClean(t *testing.T) {
 	require.Equal(t, 1, ff.number)
 }
 
-func TestSuppressRemoteRunCancelError(t *testing.T) {
-	t.Run("suppress query interrupted after proc cancel", func(t *testing.T) {
-		queryCtx := context.Background()
-		ctx, cancel := context.WithCancel(queryCtx)
-		cancel()
-		require.NoError(t, suppressRemoteRunCancelError(ctx, queryCtx, moerr.NewQueryInterrupted(ctx)))
+func TestRemoteTransportErrorPreservesContextOrigin(t *testing.T) {
+	query, cancelQuery := context.WithCancelCause(context.Background())
+	defer cancelQuery(nil)
+	pipelineCtx, cancelPipeline := context.WithCancelCause(query)
+	moerr.StopPipeline(cancelPipeline)
+	stop := context.Cause(pipelineCtx)
+	fk := moerr.NewErrFKNoReferencedRow2(query)
+	rpcTimeout := moerr.NewRPCTimeout(query)
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"canceled I/O", fmt.Errorf("open remote stream: %w", context.Canceled), stop},
+		{"interrupted I/O", moerr.NewQueryInterrupted(query), stop},
+		{"joined cancellation from I/O", errors.Join(context.Canceled, moerr.NewQueryInterrupted(query)), stop},
+		{"independent deadline", errors.Join(context.DeadlineExceeded, context.Canceled), context.DeadlineExceeded},
+		{"substantive failure racing cancellation", errors.Join(context.Canceled, fk), fk},
+		{"RPC timeout racing cancellation", rpcTimeout, rpcTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.ErrorIs(t, pipelineTransportError(pipelineCtx, false, tc.err), tc.want)
+		})
+	}
+
+	t.Run("user cancellation cause is carried out of local I/O", func(t *testing.T) {
+		cause := moerr.NewInternalErrorNoCtx("client canceled query")
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cancel(cause)
+		require.ErrorIs(t, pipelineTransportError(ctx, false, context.Canceled), cause)
 	})
-
-	t.Run("suppress raw context cancellation after proc cancel", func(t *testing.T) {
-		queryCtx := context.Background()
-		ctx, cancel := context.WithCancel(queryCtx)
-		cancel()
-		require.NoError(t, suppressRemoteRunCancelError(ctx, queryCtx, fmt.Errorf("open remote stream: %w", context.Canceled)))
-	})
-
-	t.Run("suppress joined cancellation fallout after proc cancel", func(t *testing.T) {
-		queryCtx := context.Background()
-		ctx, cancel := context.WithCancel(queryCtx)
-		cancel()
-		err := errors.Join(context.Canceled, moerr.NewQueryInterrupted(ctx))
-		require.NoError(t, suppressRemoteRunCancelError(ctx, queryCtx, err))
-	})
-
-	t.Run("keep independent deadline joined with cancellation", func(t *testing.T) {
-		queryCtx := context.Background()
-		ctx, cancel := context.WithCancel(queryCtx)
-		cancel()
-		err := suppressRemoteRunCancelError(
-			ctx, queryCtx, errors.Join(context.DeadlineExceeded, context.Canceled))
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-	})
-
-	t.Run("keep substantive error joined with cancellation", func(t *testing.T) {
-		queryCtx := context.Background()
-		ctx, cancel := context.WithCancel(queryCtx)
-		cancel()
-		primaryErr := moerr.NewInternalErrorNoCtx("remote execution failed")
-		err := suppressRemoteRunCancelError(
-			ctx, queryCtx, errors.Join(primaryErr, context.Canceled))
-		require.ErrorIs(t, err, primaryErr)
-	})
-
-	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		err := suppressRemoteRunCancelError(ctx, nil, moerr.NewRPCTimeout(ctx))
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout))
-	})
-
-	t.Run("keep query interrupted while proc still active", func(t *testing.T) {
-		ctx := context.Background()
-		err := suppressRemoteRunCancelError(ctx, nil, moerr.NewQueryInterrupted(ctx))
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
-	})
-
-	t.Run("keep raw context cancellation while proc still active", func(t *testing.T) {
-		ctx := context.Background()
-		err := suppressRemoteRunCancelError(ctx, nil, context.Canceled)
-		require.ErrorIs(t, err, context.Canceled)
-	})
-
-	t.Run("keep query cancellation after pipeline cancel", func(t *testing.T) {
-		queryCtx, cancelQuery := context.WithCancel(context.Background())
-		pipelineCtx, cancelPipeline := context.WithCancel(queryCtx)
-		cancelQuery()
-		cancelPipeline()
-		err := suppressRemoteRunCancelError(pipelineCtx, queryCtx, context.Canceled)
-		require.ErrorIs(t, err, context.Canceled)
-	})
-
-	t.Run("keep substantive pipeline cancellation cause", func(t *testing.T) {
-		queryCtx := context.Background()
-		pipelineCtx, cancelPipeline := context.WithCancelCause(queryCtx)
-		substantiveErr := moerr.NewInternalErrorNoCtx("remote execution failed")
-		cancelPipeline(substantiveErr)
-		err := suppressRemoteRunCancelError(pipelineCtx, queryCtx, context.Canceled)
-		require.ErrorIs(t, err, substantiveErr)
-	})
-
-	t.Run("keep deadline classification instead of timeout cause", func(t *testing.T) {
-		diagnostic := moerr.NewInternalErrorNoCtx("request timeout diagnostic")
-		requestCtx, cancelRequest := context.WithDeadlineCause(
-			context.Background(),
-			time.Now().Add(-time.Second),
-			diagnostic,
-		)
-		defer cancelRequest()
-		queryCtx, cancelQuery := context.WithCancel(requestCtx)
-		defer cancelQuery()
-		pipelineCtx, cancelPipeline := context.WithCancelCause(queryCtx)
-		defer cancelPipeline(nil)
-
-		<-pipelineCtx.Done()
-		require.ErrorIs(t, queryCtx.Err(), context.DeadlineExceeded)
-		require.Equal(t, diagnostic, context.Cause(queryCtx))
-		err := suppressRemoteRunCancelError(
-			pipelineCtx,
-			queryCtx,
-			moerr.NewQueryInterrupted(pipelineCtx),
-		)
-		require.Equal(t, context.DeadlineExceeded, err)
-	})
-
-	t.Run("keep substantive error joined with cancellation", func(t *testing.T) {
-		queryCtx := context.Background()
-		pipelineCtx, cancelPipeline := context.WithCancel(queryCtx)
-		cancelPipeline()
-		substantiveErr := moerr.NewInternalErrorNoCtx("operator failed")
-		joined := errors.Join(context.Canceled, substantiveErr)
-
-		err := suppressRemoteRunCancelError(pipelineCtx, queryCtx, joined)
-		require.ErrorIs(t, err, context.Canceled)
-		require.ErrorIs(t, err, substantiveErr)
+	t.Run("deadline classification survives diagnostic cause", func(t *testing.T) {
+		ctx, cancel := context.WithTimeoutCause(context.Background(), 0, moerr.CauseInternalExecutorExec)
+		defer cancel()
+		require.ErrorIs(t, pipelineTransportError(ctx, false, moerr.NewQueryInterrupted(ctx)), context.DeadlineExceeded)
+		require.True(t, moerr.IsMoErrCode(
+			pipelineTransportError(ctx, true, moerr.NewQueryInterrupted(ctx)), moerr.ErrRPCTimeout))
 	})
 }
 
@@ -2486,59 +2408,43 @@ func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
 	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
 	producerErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
 	notifyErr := moerr.NewInternalErrorNoCtx("remote producer failed")
-	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
-	cancelInternal(producerErr)
-	externalCancelCtx, cancelExternal := context.WithCancel(context.Background())
-	cancelExternal()
 
 	tests := []struct {
 		name     string
-		current  scopeRunResult
-		preScope []scopeRunResult
+		current  error
+		preScope []error
 		notify   []error
 		want     error
 	}{
 		{
 			name:     "producer error replaces cleanup fallback",
-			current:  scopeRunResult{err: cleanupErr},
-			preScope: []scopeRunResult{{err: context.Canceled}, {err: producerErr}},
+			current:  cleanupErr,
+			preScope: []error{context.Canceled, producerErr},
 			want:     producerErr,
 		},
 		{
 			name:    "remote notifier error replaces cleanup fallback",
-			current: scopeRunResult{err: cleanupErr},
+			current: cleanupErr,
 			notify:  []error{notifyErr},
 			want:    notifyErr,
 		},
 		{
 			name:     "cleanup fallback does not replace producer error",
-			current:  scopeRunResult{err: producerErr},
-			preScope: []scopeRunResult{{err: cleanupErr}},
-			want:     producerErr,
-		},
-		{
-			name:     "internally canceled merge resolves to producer error",
-			current:  scopeRunResult{err: context.Canceled, ctx: internalCancelCtx},
-			preScope: []scopeRunResult{{err: producerErr}},
-			want:     producerErr,
-		},
-		{
-			name:     "internally interrupted merge resolves to producer error",
-			current:  scopeRunResult{err: moerr.NewQueryInterrupted(context.Background()), ctx: internalCancelCtx},
-			preScope: []scopeRunResult{{err: producerErr}},
+			current:  producerErr,
+			preScope: []error{cleanupErr},
 			want:     producerErr,
 		},
 		{
 			name:     "externally canceled merge remains canceled",
-			current:  scopeRunResult{err: context.Canceled, ctx: externalCancelCtx},
-			preScope: []scopeRunResult{{err: producerErr}},
-			want:     context.Canceled,
+			current:  moerr.PipelineContextCanceled,
+			preScope: []error{producerErr},
+			want:     moerr.PipelineContextCanceled,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			preScopeResults := make(chan scopeRunResult, len(tt.preScope))
+			preScopeResults := make(chan error, len(tt.preScope))
 			for _, result := range tt.preScope {
 				preScopeResults <- result
 			}
@@ -2553,7 +2459,7 @@ func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
 				preScopeResults,
 				notifyResults)
 
-			require.Same(t, tt.want, got)
+			require.ErrorIs(t, got, tt.want)
 			require.Empty(t, preScopeResults)
 			require.Empty(t, notifyResults)
 		})

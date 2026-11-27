@@ -15,6 +15,7 @@
 package pipeline
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -160,7 +161,11 @@ func (p *Pipeline) CleanRootOperator(proc *process.Process, pipelineFailed bool,
 // we deliver the error because some operator may need to know what the error it is.
 func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
 	// cancel the context to stop its pre-pipelines.
-	proc.Cancel(err)
+	if pipelineFailed || err != nil {
+		proc.Cancel(err)
+	} else if proc.Ctx.Err() == nil {
+		moerr.StopPipeline(proc.Cancel)
+	}
 	resetDone := make(map[vm.Operator]struct{})
 	resetChildOwners(p.rootOp, resetDone, proc, pipelineFailed, err)
 

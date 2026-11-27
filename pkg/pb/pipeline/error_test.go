@@ -16,10 +16,14 @@ package pipeline
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,4 +51,68 @@ func TestMPoolCapacityErrorPreservesWireIdentity(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, moerr.IsMoErrCode(wireErr, moerr.ErrMPoolCapacity))
 	require.Contains(t, wireErr.Error(), "allocation owner=1 site=1")
+}
+
+func TestIcebergFailureWithoutCausePreservesWireError(t *testing.T) {
+	failure := api.NewError(api.ErrMetadataInvalid, "invalid manifest metadata", nil)
+	wireErr := roundTripPipelineError(t, failure)
+	require.True(t, moerr.IsMoErrCode(wireErr, moerr.ErrInternal), "%v", wireErr)
+	require.Contains(t, wireErr.Error(), failure.Error())
+}
+
+func TestIcebergPublicErrorSurvivesTwoPipelineHops(t *testing.T) {
+	ctx := context.Background()
+	localCause := moerr.NewErrFKNoReferencedRow2(ctx)
+	failure := api.WrapError(api.ErrMetadataInvalid, "invalid manifest metadata", nil, localCause)
+	require.ErrorIs(t, failure, localCause)
+
+	want := moerr.ConvertGoError(ctx, errors.New(failure.Error()))
+	var wireErr error = fmt.Errorf("fragment failure: %w", failure)
+	for range 2 {
+		wireErr = roundTripPipelineError(t, wireErr)
+		require.True(t, moerr.IsMoErrCode(wireErr, moerr.ErrInternal), "%v", wireErr)
+		require.EqualError(t, wireErr, want.Error())
+	}
+}
+
+func TestPipelineWireKeepsOrdinaryWrappedDiagnostic(t *testing.T) {
+	failure := fmt.Errorf("read manifest: %w", io.EOF)
+	want := moerr.ConvertGoError(context.Background(), failure)
+	wireErr := roundTripPipelineError(t, failure)
+	require.True(t, moerr.IsMoErrCode(wireErr, moerr.ErrInternal), "%v", wireErr)
+	require.EqualError(t, wireErr, want.Error())
+}
+
+type pipelineWireErrorWithAs struct{ typed *moerr.Error }
+
+func (e pipelineWireErrorWithAs) Error() string { return e.typed.Error() }
+
+func (e pipelineWireErrorWithAs) As(target any) bool {
+	if mo, ok := target.(**moerr.Error); ok {
+		*mo = e.typed
+		return true
+	}
+	return false
+}
+
+func TestPipelineWireKeepsOrdinaryCustomAs(t *testing.T) {
+	failure := moerr.NewTxnNeedRetry(context.Background())
+	wireErr := roundTripPipelineError(t, pipelineWireErrorWithAs{typed: failure})
+	require.True(t, moerr.IsMoErrCode(wireErr, moerr.ErrTxnNeedRetry), "%v", wireErr)
+	require.EqualError(t, wireErr, failure.Error())
+}
+
+func roundTripPipelineError(t *testing.T, failure error) error {
+	t.Helper()
+	frame := &Message{Sid: Status_MessageEnd}
+	frame.SetMoError(context.Background(), failure)
+	data, err := frame.Marshal()
+	require.NoError(t, err)
+
+	var received Message
+	require.NoError(t, received.Unmarshal(data))
+	require.True(t, received.IsEndMessage())
+	wireErr, hasError := received.TryToGetMoErr()
+	require.True(t, hasError)
+	return wireErr
 }

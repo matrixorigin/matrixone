@@ -168,7 +168,7 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 			u.batch.SetRowCount(b.Keys.N)
 			return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 		case <-proc.Ctx.Done():
-			return vm.CancelResult, proc.Ctx.Err()
+			return vm.CancelResult, moerr.PipelineContextError(proc.Ctx)
 		}
 	}
 

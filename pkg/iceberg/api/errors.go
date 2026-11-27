@@ -102,6 +102,11 @@ func (e *IcebergError) Error() string {
 	return b.String()
 }
 
+// PublicErrorMessage reports the Iceberg diagnostic without rendering its cause.
+func (e *IcebergError) PublicErrorMessage() string {
+	return e.Error()
+}
+
 func (e *IcebergError) Unwrap() error {
 	if e == nil {
 		return nil

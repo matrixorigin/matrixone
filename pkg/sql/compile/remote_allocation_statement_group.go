@@ -339,7 +339,7 @@ func (p *remoteAllocationStatementParticipant) finish(cause error) (
 			remoteAllocationStatementGroups.Unlock()
 			if abort {
 				abortErr := allocationLifecycleCall(func() error {
-					group.board.Close()
+					group.board.CloseWithError(cause)
 					return nil
 				})
 				abortErr = joinAllocationLifecycleErrors(
@@ -524,7 +524,7 @@ func expireRemoteAllocationStatementGroup(
 		terminalErr = joinAllocationLifecycleErrors(
 			terminalErr,
 			allocationLifecycleCall(func() error {
-				group.board.Close()
+				group.board.CloseWithError(timeoutErr)
 				return nil
 			}),
 		)

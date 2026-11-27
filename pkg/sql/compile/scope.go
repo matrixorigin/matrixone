@@ -329,6 +329,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
+		err = scopeExecutionError(s.Proc, err)
+		c.stopExecutionScopes(err)
 		if p != nil {
 			err = cleanupScopePipeline(p, s.Proc, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
@@ -384,7 +386,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
-	err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 	return err
 }
 
@@ -467,7 +468,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 
 	// Merge Run normally.
 	var wg sync.WaitGroup
-	preScopeResultReceiveChan := make(chan scopeRunResult, len(s.PreScopes))
+	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
 
 	// step 1.
 	for i := range s.PreScopes {
@@ -492,15 +493,16 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
 				}
 				s.cancelMergeSiblingsOnError(err)
-				preScopeResultReceiveChan <- newScopeRunResult(err, scope)
+				preScopeResultReceiveChan <- err
 			})
 
 		// build routine failed.
 		if submitPreScope != nil {
 			wg.Done() // this is necessary, because the submitPreScope may panic.
-			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
+			c.stopExecutionScopes(submitPreScope)
 			s.cancelMergeSiblingsOnError(submitPreScope)
-			preScopeResultReceiveChan <- newScopeRunResult(submitPreScope, scope)
+			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
+			preScopeResultReceiveChan <- submitPreScope
 		}
 	}
 
@@ -517,7 +519,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		wg.Wait()
 		err = collectMergeRunResults(
 			s.Proc,
-			newScopeRunResultForProcess(err, s.Proc),
+			err,
 			preScopeResultReceiveChan,
 			notifyMessageResultReceiveChan)
 	}()
@@ -534,9 +536,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	// receive and check error from pre-scopes and remote scopes.
 	if remoteScopeCount == 0 {
 		for i := 0; i < preScopeCount; i++ {
-			result := <-preScopeResultReceiveChan
-			result, _ = result.resolveCancelCause()
-			if err = result.err; err != nil {
+			if err = <-preScopeResultReceiveChan; err != nil {
 				return err
 			}
 		}
@@ -545,18 +545,15 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 
 	for {
 		select {
-		case result := <-preScopeResultReceiveChan:
-			result, _ = result.resolveCancelCause()
-			err := result.err
+		case err := <-preScopeResultReceiveChan:
 			if err != nil {
 				return s.cancelMergeSiblingsOnError(err)
 			}
 			preScopeCount--
 
 		case result := <-notifyMessageResultReceiveChan:
-			result.clean(s.Proc)
-			if result.err != nil {
-				return s.cancelMergeSiblingsOnError(result.err)
+			if err := result.clean(s.Proc); err != nil {
+				return s.cancelMergeSiblingsOnError(err)
 			}
 			remoteScopeCount--
 		}
@@ -573,20 +570,18 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 // that caused cleanup to race a full pipeline channel.
 func collectMergeRunResults(
 	proc *process.Process,
-	current scopeRunResult,
-	preScopeResults <-chan scopeRunResult,
+	current error,
+	preScopeResults <-chan error,
 	notifyResults <-chan notifyMessageResult,
 ) error {
 	for len(preScopeResults) > 0 {
-		current = preferPrimaryScopeResult(current, <-preScopeResults)
+		current = preferPrimaryScopeError(current, <-preScopeResults)
 	}
 	for len(notifyResults) > 0 {
 		result := <-notifyResults
-		current = preferPrimaryScopeResult(current, newScopeRunResultForProcess(result.err, proc))
-		result.clean(proc)
+		current = preferPrimaryScopeError(current, result.clean(proc))
 	}
-	current, _ = current.resolveCancelCause()
-	return current.err
+	return current
 }
 
 // cancelMergeSiblingsOnError breaks the wait-for cycle between a failed
@@ -637,12 +632,8 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
 
-	runErr := err
-	runErr = suppressRemoteRunCancelError(
-		s.Proc.Ctx,
-		scopeRunQueryContext(s.Proc),
-		runErr,
-	)
+	runErr := scopeExecutionError(s.Proc, err)
+	c.stopExecutionScopes(runErr)
 	if runErr != nil && s.Proc.Cancel != nil {
 		s.Proc.Cancel(runErr)
 	}
@@ -655,15 +646,14 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		if runErr == nil {
 			sender.prepareForLocalCleanup()
 		}
-		sender.close()
+		runErr = preferPrimaryScopeError(runErr, sender.close())
+		c.stopExecutionScopes(runErr)
 	}
 	return runErr
 }
 
 func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
-	if c != nil && c.proc != nil && c.proc.Cancel != nil {
-		c.proc.Cancel(err)
-	}
+	c.stopExecutionScopes(err)
 	cleanPipelineWitchStartFail(s, err, c.isPrepare)
 	return err
 }
@@ -770,21 +760,15 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		// if codes run here, it means some error happens during build the parallel scope.
 		// we should do clean work for source-scope to avoid receiver hung.
 		if parallelScope == nil {
-			// ParallelRun owns the source operator until construction publishes a
-			// parallel scope. StopSending can cancel the pipeline while reader
-			// construction is still in flight, so classify that cancellation at
-			// this boundary before cleanup chooses EventEnd versus EventError.
 			rawErr := err
-			queryCtx := scopeRunQueryContext(s.Proc)
-			var normalized bool
-			err, normalized = normalizeScopeRunError(
-				err,
-				s.Proc.Ctx,
-				queryCtx,
-			)
-			if isScopeCancellationError(rawErr) {
-				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
+			err = scopeExecutionError(s.Proc, err)
+			if moerr.PipelineStopCause(rawErr) != nil || moerr.IsPipelineInterruption(rawErr) ||
+				errors.Is(rawErr, context.DeadlineExceeded) {
+				reportParallelScopeBuildCancellation(
+					s, rawErr, err, moerr.PipelineStopCause(rawErr) != nil, scopeRunQueryContext(s.Proc),
+				)
 			}
+			c.stopExecutionScopes(err)
 			err = cleanupScopePipeline(pipeline.NewMerge(s.RootOp), s.Proc, c.isPrepare, err)
 		}
 	}()
@@ -1010,7 +994,7 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool
 				return nil, false, err
 			}
 			if ctxDone {
-				return nil, false, nil
+				return nil, false, moerr.PipelineContextError(s.Proc.Ctx)
 			}
 			for i := range msgs {
 				msg, ok := msgs[i].(message.RuntimeFilterMessage)
@@ -1189,16 +1173,17 @@ type notifyMessageSenderFactory func(
 ) (*messageSenderOnClient, error)
 
 // clean do final work for a notifyMessageResult.
-func (r *notifyMessageResult) clean(proc *process.Process) {
+func (r *notifyMessageResult) clean(proc *process.Process) error {
 	if r.sender != nil {
 		if r.err == nil {
 			r.sender.prepareForLocalCleanup()
 		}
-		r.sender.close()
+		r.err = preferPrimaryScopeError(r.err, r.sender.close())
 	}
 	if r.err != nil {
 		proc.Infof(proc.Ctx, "send notify message failed : %s", r.err)
 	}
+	return r.err
 }
 
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
@@ -1269,11 +1254,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		err, _ = normalizeScopeRunError(
-			err,
-			s.Proc.Ctx,
-			scopeRunQueryContext(s.Proc),
-		)
+		err = scopeExecutionError(s.Proc, err)
 		s.cancelMergeSiblingsOnError(err)
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}
@@ -1305,7 +1286,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 						nil,
 					)
 					if err != nil {
-						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						closeWithError(moerr.PipelineRPCIOError(s.Proc.Ctx, err), s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 						return
 					}
 					message := cnclient.AcquireMessage()
@@ -1316,7 +1297,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 					message.Uuid = uuid
 
 					if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
-						closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+						closeWithError(sender.transportError(errSend), s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 						return
 					}
 					sender.markStreamActive(pbpipeline.Method_PrepareDoneNotifyMessage)
@@ -1413,110 +1394,16 @@ func scopeRunQueryContext(proc *process.Process) context.Context {
 	return proc.GetTopContext()
 }
 
-func isScopeCancellationError(err error) bool {
-	if err == nil {
-		return false
+// scopeExecutionError resolves a downstream stop before the scope's own
+// cleanup is allowed to cancel its context. Reported failures, including
+// interruption from another pipeline or a peer, have already been decided.
+func scopeExecutionError(proc *process.Process, err error) error {
+	if proc != nil {
+		err = moerr.PipelineIOError(proc.Ctx, err)
 	}
-	// A joined result is cancellation fallout only when every leaf is
-	// cancellation-shaped. One cancellation sibling must not hide a
-	// substantive execution failure.
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		children := joined.Unwrap()
-		if len(children) == 0 {
-			return false
-		}
-		for _, child := range children {
-			if !isScopeCancellationError(child) {
-				return false
-			}
-		}
-		return true
+	if moerr.PipelineStopCause(err) != nil {
+		return moerr.PipelineContextError(scopeRunQueryContext(proc))
 	}
-	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-		if child := wrapped.Unwrap(); child != nil {
-			return isScopeCancellationError(child)
-		}
-	}
-	return errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) ||
-		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
-}
-
-func isScopeCancellationFrom(err error, contextErr error) bool {
-	if err == nil || contextErr == nil {
-		return false
-	}
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		children := joined.Unwrap()
-		if len(children) == 0 {
-			return false
-		}
-		for _, child := range children {
-			if !isScopeCancellationFrom(child, contextErr) {
-				return false
-			}
-		}
-		return true
-	}
-	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-		if child := wrapped.Unwrap(); child != nil {
-			return isScopeCancellationFrom(child, contextErr)
-		}
-	}
-	return errors.Is(err, contextErr) ||
-		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
-}
-
-// normalizeScopeRunError distinguishes a substantive execution failure from
-// cancellation fallout. An internally canceled pipeline may finish
-// successfully, while query cancellation and substantive cancel causes remain
-// terminal and must poison the remote stream.
-func normalizeScopeRunError(
-	err error,
-	pipelineCtx context.Context,
-	queryCtx context.Context,
-) (error, bool) {
-	if err == nil || !isScopeCancellationError(err) ||
-		pipelineCtx == nil || pipelineCtx.Err() == nil {
-		return err, false
-	}
-	if queryCtx != nil {
-		if queryErr := queryCtx.Err(); queryErr != nil {
-			// WithTimeoutCause keeps DeadlineExceeded in Err and stores only
-			// diagnostics in Cause. Preserve the public timeout classification.
-			if errors.Is(queryErr, context.DeadlineExceeded) {
-				return queryErr, true
-			}
-			if !isScopeCancellationFrom(err, queryErr) {
-				return err, false
-			}
-			if cause := context.Cause(queryCtx); cause != nil {
-				return cause, true
-			}
-			return queryErr, true
-		}
-	}
-
-	// Cancellation is secondary only when every error leaf came from this
-	// pipeline. Preserve an independent error that merely raced cancellation.
-	if !isScopeCancellationFrom(err, pipelineCtx.Err()) {
-		return err, false
-	}
-	if cause := context.Cause(pipelineCtx); cause != nil {
-		err = cause
-	}
-	if isScopeCancellationError(err) && queryCtx != nil && queryCtx.Err() == nil {
-		return nil, true
-	}
-	return err, true
-}
-
-func suppressRemoteRunCancelError(
-	procCtx context.Context,
-	queryCtx context.Context,
-	err error,
-) error {
-	err, _ = normalizeScopeRunError(err, procCtx, queryCtx)
 	return err
 }
 
@@ -1527,14 +1414,15 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.Wai
 			return err
 		}
 
-		var receiverDone bool
-		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil {
-			return err
+		receiverDone, forwardErr := forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp)
+		// A terminal receiver discards the decoded batch, but the peer owns
+		// its credit until this ACK. Keep the receiver's error if ACK fails.
+		ackErr := sender.acknowledgeRemoteBatch()
+		if forwardErr != nil {
+			return forwardErr
 		}
-		// A stopped receiver intentionally discarded the decoded batch, but the
-		// remote sender still owns its credit until this ACK is sent.
-		if err = sender.acknowledgeRemoteBatch(); err != nil {
-			return err
+		if ackErr != nil {
+			return ackErr
 		}
 		if receiverDone {
 			return nil
@@ -1767,6 +1655,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.NodeInfo.Mcpu,
 			hint)
 		if err != nil {
+			err = moerr.PipelineIOError(ctx, err)
 			return
 		}
 	// Reader can be generated from local relation.
@@ -1809,6 +1698,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			engine.Policy_CheckAll,
 			hint,
 		)
+		err = moerr.PipelineIOError(newCtx, err)
 
 		stats.AddScopePrepareS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),
@@ -1894,6 +1784,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			hint,
 		)
 		if err != nil {
+			err = moerr.PipelineIOError(newCtx, err)
 			return
 		}
 		readers = append(readers, mainRds...)

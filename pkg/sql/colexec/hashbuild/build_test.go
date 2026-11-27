@@ -23,6 +23,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
@@ -2797,4 +2798,67 @@ func TestObserveHashBuildBudgetUsesGenerationSnapshot(t *testing.T) {
 	account.Seal()
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)
+}
+
+func TestHashBuildRevokedBeforeCompletionPublishesStoppedDependency(t *testing.T) {
+	for _, phase := range []string{"before-call", "after-child-batch", "empty-build"} {
+		t.Run(phase, func(t *testing.T) {
+			typ := types.T_int32.ToType()
+			tc := newTestCase(t, []bool{false}, []types.Type{typ}, []*plan.Expr{newExpr(0, typ)})
+			t.Cleanup(tc.proc.Free)
+			t.Cleanup(func() { tc.proc.GetMessageBoard().CloseAndDrain() })
+			defer tc.cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			parent, stopParent := context.WithCancelCause(ctx)
+			defer stopParent(nil)
+			tc.proc.BuildPipelineContext(parent)
+			tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 6001}
+			child := colexec.NewMockOperator()
+			tc.arg.AppendChild(child)
+			defer func() {
+				tc.arg.Reset(tc.proc, false, nil)
+				tc.arg.Free(tc.proc, false, nil)
+				child.Free(tc.proc, false, nil)
+				require.Zero(t, tc.proc.Mp().CurrNB())
+			}()
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			if phase == "after-child-batch" {
+				child.WithBatchs([]*batch.Batch{newBatch(tc.types, tc.proc, 1)}).
+					WithBatchCallback(func(int) { moerr.StopPipeline(stopParent) })
+			}
+			if phase == "before-call" {
+				moerr.StopPipeline(stopParent)
+			}
+			_, err := vm.Exec(tc.arg, tc.proc)
+			if phase == "empty-build" {
+				require.NoError(t, err)
+			} else {
+				require.NotNil(t, moerr.PipelineStopCause(err))
+			}
+			// This models Scope's normal teardown of the stopped producer.
+			tc.arg.Reset(tc.proc, false, nil)
+			receiver := message.NewMessageReceiver(
+				[]int32{tc.arg.JoinMapTag, tc.arg.RuntimeFilterSpec.Tag},
+				message.AddrBroadCastOnCurrentCN(), tc.proc.GetMessageBoard(),
+			)
+			msgs, done, receiveErr := receiver.ReceiveMessage(false, ctx)
+			require.NoError(t, receiveErr)
+			require.False(t, done)
+			require.Len(t, msgs, 2, "one JoinMap and one runtime filter per generation")
+			dep, receiveErr := message.ReceiveJoinMapResult(tc.arg.JoinMapTag, false, 0, tc.proc.GetMessageBoard(), ctx)
+			require.NoError(t, receiveErr)
+			if phase == "empty-build" {
+				require.True(t, dep.IsEmpty())
+				return
+			}
+			require.Equal(t, message.JoinMapResultStopped, dep.Kind())
+			require.Error(t, dep.DependencyError(ctx))
+			for _, msg := range msgs {
+				if filter, ok := msg.(message.RuntimeFilterMessage); ok {
+					require.Equal(t, int32(message.RuntimeFilter_PASS), filter.Typ)
+				}
+			}
+		})
+	}
 }

@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1128,7 +1129,7 @@ func TestSendBatchToClientSession_StrictMode(t *testing.T) {
 	}
 
 	// Test strict mode - should return error
-	done, err := sendBatchToClientSession(
+	outcome, err := sendBatchToClientSession(
 		proc.Ctx,
 		[]byte("test data"),
 		wcs,
@@ -1136,7 +1137,7 @@ func TestSendBatchToClientSession_StrictMode(t *testing.T) {
 		"test-receiver-strict",
 	)
 
-	require.True(t, done, "receiver should be marked as done")
+	require.Equal(t, remoteReceiverUnavailable, outcome)
 	require.Error(t, err, "strict mode MUST return error when ReceiverDone=true")
 	require.Contains(t, err.Error(), "test-receiver-strict", "error should contain receiver ID")
 	require.Contains(t, err.Error(), "data loss may occur", "error should mention data loss risk")
@@ -1151,7 +1152,7 @@ func TestSendBatchToClientSession_TolerantMode(t *testing.T) {
 	}
 
 	// Test tolerant mode - should NOT return error
-	done, err := sendBatchToClientSession(
+	outcome, err := sendBatchToClientSession(
 		proc.Ctx,
 		[]byte("test data"),
 		wcs,
@@ -1159,7 +1160,7 @@ func TestSendBatchToClientSession_TolerantMode(t *testing.T) {
 		"test-receiver-tolerant",
 	)
 
-	require.True(t, done, "receiver should be marked as done")
+	require.Equal(t, remoteReceiverUnavailable, outcome)
 	require.NoError(t, err, "tolerant mode should NOT return error when ReceiverDone=true")
 }
 
@@ -1180,19 +1181,19 @@ func TestSendBatchToClientSessionUsesBatchCredits(t *testing.T) {
 		Cs:           session,
 		BatchCredits: 8,
 		ByteCredits:  64 << 20,
-		ReserveBatch: func(_ context.Context, size uint64) (uint64, error) {
+		ReserveBatch: func(_ context.Context, size uint64) (uint64, bool, error) {
 			reserved = size
-			return 7, nil
+			return 7, false, nil
 		},
 		RollbackBatch: func(sequence uint64) {
 			rolledBack = sequence
 		},
 	}
 
-	done, err := sendBatchToClientSession(
+	outcome, err := sendBatchToClientSession(
 		context.Background(), []byte("batch"), wcs, FailureModeStrict, "receiver")
 	require.NoError(t, err)
-	require.False(t, done)
+	require.Equal(t, remoteBatchSent, outcome)
 	require.Equal(t, uint64(5), reserved)
 	require.Zero(t, rolledBack)
 	require.NotNil(t, sent)
@@ -1211,18 +1212,18 @@ func TestSendBatchToClientSessionRollsBackBatchCreditOnWriteFailure(t *testing.T
 	wcs := &process.WrapCs{
 		MsgId: 42,
 		Cs:    session,
-		ReserveBatch: func(_ context.Context, _ uint64) (uint64, error) {
-			return 7, nil
+		ReserveBatch: func(_ context.Context, _ uint64) (uint64, bool, error) {
+			return 7, false, nil
 		},
 		RollbackBatch: func(sequence uint64) {
 			rolledBack = sequence
 		},
 	}
 
-	done, err := sendBatchToClientSession(
+	outcome, err := sendBatchToClientSession(
 		context.Background(), []byte("batch"), wcs, FailureModeStrict, "receiver")
 	require.ErrorIs(t, err, wantErr)
-	require.False(t, done)
+	require.Equal(t, remoteReceiverUnavailable, outcome)
 	require.Equal(t, uint64(7), rolledBack)
 }
 
@@ -1233,15 +1234,15 @@ func TestSendBatchToClientSessionReturnsBatchCreditReservationError(t *testing.T
 	wcs := &process.WrapCs{
 		MsgId: 42,
 		Cs:    session,
-		ReserveBatch: func(_ context.Context, _ uint64) (uint64, error) {
-			return 0, wantErr
+		ReserveBatch: func(_ context.Context, _ uint64) (uint64, bool, error) {
+			return 0, false, wantErr
 		},
 	}
 
-	done, err := sendBatchToClientSession(
+	outcome, err := sendBatchToClientSession(
 		context.Background(), []byte("batch"), wcs, FailureModeStrict, "receiver")
 	require.ErrorIs(t, err, wantErr)
-	require.False(t, done)
+	require.Equal(t, remoteReceiverUnavailable, outcome)
 }
 
 func TestSendBatchToClientSessionKeepsOneCreditAcrossFragments(t *testing.T) {
@@ -1265,17 +1266,17 @@ func TestSendBatchToClientSessionKeepsOneCreditAcrossFragments(t *testing.T) {
 		Cs:           session,
 		BatchCredits: 2,
 		ByteCredits:  uint64(len(payload)),
-		ReserveBatch: func(_ context.Context, size uint64) (uint64, error) {
+		ReserveBatch: func(_ context.Context, size uint64) (uint64, bool, error) {
 			reserveCalls++
 			require.Equal(t, uint64(len(payload)), size)
-			return 11, nil
+			return 11, false, nil
 		},
 	}
 
-	done, err := sendBatchToClientSession(
+	outcome, err := sendBatchToClientSession(
 		context.Background(), payload, wcs, FailureModeStrict, "receiver")
 	require.NoError(t, err)
-	require.False(t, done)
+	require.Equal(t, remoteBatchSent, outcome)
 	require.Equal(t, 1, reserveCalls)
 	require.Equal(t, 2, writes)
 }
@@ -1367,6 +1368,7 @@ func Test_sendToAnyRemoteFunc_RemoteRegsCntZero(t *testing.T) {
 
 	require.False(t, end)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	require.Contains(t, err.Error(), "all unavailable")
 }
 
@@ -1562,4 +1564,98 @@ func TestDataLossPrevention_ComparisonTable(t *testing.T) {
 		require.NoError(t, err, "SendToAny can tolerate failures")
 		t.Log("SendToAny: Can failover to other receivers")
 	})
+}
+
+func TestDispatchRoutesAfterNormalReceiverStop(t *testing.T) {
+	type sendFunc func(*batch.Batch, *Dispatch, *process.Process) (bool, error)
+	for _, tc := range []struct {
+		name        string
+		send        sendFunc
+		shuffleType int32
+		local, live bool
+		wantWrites  int
+		wantEnd     bool
+		secondBatch bool
+	}{
+		{name: "broadcast sends to local after last remote stops", send: sendToAllFunc, local: true, secondBatch: true},
+		{name: "broadcast ends after all receivers stop", send: sendToAllRemoteFunc, wantEnd: true},
+		{name: "shuffle index keeps its assignment", send: shuffleToAllFunc, shuffleType: plan2.ShuffleToRegIndex, live: true},
+		{name: "shuffle index ends after all receivers stop", send: shuffleToAllFunc, shuffleType: plan2.ShuffleToRegIndex, wantEnd: true},
+		{name: "shuffle multi-match continues the current batch", send: shuffleToAllFunc, shuffleType: plan2.ShuffleToMultiMatchedReg, local: true, live: true, wantWrites: 1},
+		{name: "any retries the current batch on another remote", send: sendToAnyRemoteFunc, live: true, wantWrites: 1},
+		{name: "any retries the current batch locally", send: sendToAnyFunc, local: true},
+		{name: "any ends after all receivers stop", send: sendToAnyRemoteFunc, wantEnd: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.BuildPipelineContext(ctx)
+			bat := colexec.MakeMockPartitionBatchs(42, proc.Mp())
+			defer bat.Clean(proc.Mp())
+			stopCalls := 0
+			stopReg := &process.WrapCs{
+				Uid: uuid.New(),
+				ReserveBatch: func(context.Context, uint64) (uint64, bool, error) {
+					stopCalls++
+					return 0, true, nil
+				},
+			}
+			op := &Dispatch{
+				ShuffleType: tc.shuffleType,
+				ctr: &container{
+					prepared: true, remoteReceivers: []*process.WrapCs{stopReg},
+					remoteRegsCnt: 1, aliveRegCnt: 1, remoteToIdx: map[uuid.UUID]int{stopReg.Uid: 0},
+					batchCnt: make([]int, 2), rowCnt: make([]int, 2),
+				},
+			}
+			if tc.live {
+				session := mock_morpc.NewMockClientSession(gomock.NewController(t))
+				session.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).Times(tc.wantWrites)
+				reg := &process.WrapCs{Uid: uuid.New(), Cs: session}
+				op.ctr.remoteReceivers = append(op.ctr.remoteReceivers, reg)
+				op.ctr.remoteRegsCnt++
+				op.ctr.aliveRegCnt++
+				op.ctr.remoteToIdx[reg.Uid] = 1
+			}
+			if tc.local {
+				op.LocalRegs = []*process.WaitRegister{process.NewPipelineEdge(1, 0)}
+				op.ShuffleRegIdxLocal = []int{0}
+				op.ctr.localRegsCnt = 1
+				op.ctr.aliveRegCnt++
+				op.ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), 1)
+				defer op.ctr.sp.FinalizeAfterConsumersQuiesced()
+				op.ctr.sendCnt = 1
+			}
+			end, err := tc.send(bat, op, proc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantEnd, end)
+			require.Equal(t, 1, stopCalls)
+			require.NotContains(t, op.ctr.remoteReceivers, stopReg)
+			require.NoError(t, proc.Ctx.Err())
+			if tc.local {
+				receiver := process.InitPipelineSignalReceiver(ctx, op.LocalRegs)
+				requireLocalBatch := func(want int32) {
+					t.Helper()
+					got, err := receiver.GetNextBatch(nil)
+					require.NoError(t, err)
+					require.NotNil(t, got)
+					require.Equal(t, bat.RowCount(), got.RowCount())
+					require.Equal(t, want, vector.MustFixedColNoTypeCheck[int32](got.Vecs[0])[0])
+				}
+				requireLocalBatch(42)
+				if tc.secondBatch {
+					op.ctr.marshalBuf.Reset()
+					next := colexec.MakeMockPartitionBatchs(43, proc.Mp())
+					defer next.Clean(proc.Mp())
+					end, err := tc.send(next, op, proc)
+					require.NoError(t, err)
+					require.False(t, end)
+					require.Zero(t, op.ctr.marshalBuf.Len())
+					requireLocalBatch(43)
+				}
+			}
+		})
+	}
 }

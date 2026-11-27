@@ -15,6 +15,7 @@
 package message
 
 import (
+	"context"
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,6 +34,7 @@ const (
 	JoinMapResultUnfinalized JoinMapResultKind = iota
 	JoinMapResultSuccess
 	JoinMapResultBuildError
+	JoinMapResultStopped
 )
 
 // JoinMapBuildError is the immutable, typed error published by a failed
@@ -40,7 +42,8 @@ const (
 // fresh moerr clone through AsMoErr so a caller cannot mutate the value seen by
 // another broadcast consumer.
 type JoinMapBuildError struct {
-	err *moerr.Error
+	err      *moerr.Error
+	deadline bool
 }
 
 var _ error = new(JoinMapBuildError)
@@ -52,11 +55,19 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	if err == nil {
 		err = moerr.NewInternalErrorNoCtx("hash build failed without an error")
 	}
+	cause, diagnostic := moerr.PipelineErrorForTransfer(err)
+	deadline := errors.Is(cause, context.DeadlineExceeded)
 	var me *moerr.Error
-	if !errors.As(err, &me) {
-		me = moerr.NewInternalErrorNoCtx(err.Error())
+	switch {
+	case errors.As(cause, &me):
+	case moerr.IsPipelineInterruption(cause):
+		me = moerr.NewQueryInterrupted(context.Background())
+	case deadline:
+		me = moerr.NewRPCTimeout(context.Background())
+	default:
+		me = moerr.NewInternalErrorNoCtx(diagnostic.Error())
 	}
-	return &JoinMapBuildError{err: cloneMoErr(me)}
+	return &JoinMapBuildError{err: cloneMoErr(me), deadline: deadline}
 }
 
 func cloneMoErr(src *moerr.Error) *moerr.Error {
@@ -120,6 +131,7 @@ type JoinMapResult struct {
 	kind     JoinMapResultKind
 	joinMap  *JoinMap
 	buildErr *JoinMapBuildError
+	stop     *moerr.PipelineStop
 }
 
 // NewJoinMapResult creates a successful terminal result.  A nil map means a
@@ -133,12 +145,19 @@ func NewJoinMapBuildErrorResult(err error) JoinMapResult {
 	return JoinMapResult{kind: JoinMapResultBuildError, buildErr: NewJoinMapBuildError(err)}
 }
 
+// NewJoinMapStoppedResult records a revoked build before it produced a complete
+// JoinMap. The cancellation belongs to the producer's downstream owner.
+func NewJoinMapStoppedResult(stop *moerr.PipelineStop) JoinMapResult {
+	return JoinMapResult{kind: JoinMapResultStopped, stop: stop}
+}
+
 func (r JoinMapResult) Kind() JoinMapResultKind {
 	return r.kind
 }
 
 func (r JoinMapResult) Finalized() bool {
-	return r.kind == JoinMapResultSuccess || r.kind == JoinMapResultBuildError
+	return r.kind == JoinMapResultSuccess || r.kind == JoinMapResultBuildError ||
+		r.kind == JoinMapResultStopped && r.stop != nil
 }
 
 func (r JoinMapResult) IsSuccess() bool {
@@ -167,8 +186,11 @@ func (r JoinMapResult) BuildError() *JoinMapBuildError {
 	return r.buildErr
 }
 
-// Err returns the typed terminal error, or nil for successful results.
+// Err returns the terminal error, or nil for successful results.
 func (r JoinMapResult) Err() error {
+	if r.stop != nil {
+		return moerr.NewInternalErrorNoCtx("join map build stopped before publishing its result")
+	}
 	if e := r.BuildError(); e != nil {
 		return e
 	}

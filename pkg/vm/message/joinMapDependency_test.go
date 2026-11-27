@@ -16,6 +16,8 @@ package message
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -23,6 +25,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -46,6 +49,30 @@ func TestJoinMapResultDistinguishesSuccessEmptyAndBuildError(t *testing.T) {
 	var got *moerr.Error
 	require.ErrorAs(t, failure.Err(), &got)
 	require.Equal(t, baseErr.ErrorCode(), got.ErrorCode())
+}
+
+func TestJoinMapDependenciesPreserveDeadlineAndRPCFailure(t *testing.T) {
+	ctx := context.Background()
+	deadline := NewJoinMapBuildErrorResult(errors.Join(context.Canceled, context.DeadlineExceeded))
+	require.ErrorIs(t, deadline.DependencyError(ctx), context.DeadlineExceeded)
+
+	rpcTimeout := NewJoinMapBuildErrorResult(moerr.NewRPCTimeout(ctx))
+	got := rpcTimeout.DependencyError(ctx)
+	require.True(t, moerr.IsMoErrCode(got, moerr.ErrRPCTimeout), "%v", got)
+	require.NotErrorIs(t, got, context.DeadlineExceeded)
+}
+
+func TestJoinMapSnapshotPreservesPublicIcebergError(t *testing.T) {
+	ctx := context.Background()
+	localCause := moerr.NewTxnNeedRetry(ctx)
+	failure := api.WrapError(api.ErrMetadataInvalid, "invalid manifest metadata", nil, localCause)
+	require.ErrorIs(t, failure, localCause)
+
+	result := NewJoinMapBuildErrorResult(fmt.Errorf("build input: %w", failure))
+	require.True(t, result.IsBuildError())
+	want := moerr.NewInternalErrorNoCtx(failure.Error())
+	require.Equal(t, want.ErrorCode(), result.BuildError().ErrorCode())
+	require.EqualError(t, result.DependencyError(ctx), want.Error())
 }
 
 func TestSendJoinMapResultRetainsOwnershipWhenBoardUnavailable(t *testing.T) {
@@ -136,4 +163,49 @@ func TestFinalizeRuntimeFilterOnBuildErrorPasses(t *testing.T) {
 	rt, ok := msgs[0].(RuntimeFilterMessage)
 	require.True(t, ok)
 	require.Equal(t, int32(RuntimeFilter_PASS), rt.Typ)
+}
+
+func TestReceiveJoinMapStoppedDistinguishesConsumerContexts(t *testing.T) {
+	board := NewMessageBoard()
+	defer board.CloseAndDrain()
+	query, cancelQuery := context.WithTimeout(context.Background(), time.Second)
+	defer cancelQuery()
+	parent, stopParent := context.WithCancelCause(query)
+	defer stopParent(nil)
+	producer, cancelProducer := context.WithCancelCause(parent)
+	defer cancelProducer(nil)
+	sibling, cancelSibling := context.WithCancelCause(parent)
+	defer cancelSibling(nil)
+	independent, stopIndependent := context.WithCancelCause(query)
+	defer stopIndependent(nil)
+	live, cancelLive := context.WithCancelCause(independent)
+	defer cancelLive(nil)
+
+	moerr.StopPipeline(stopParent)
+	cause := moerr.PipelineStopCause(context.Cause(producer))
+	require.NotNil(t, cause)
+	const tag = 42
+	require.True(t, SendJoinMapResult(NewJoinMapStoppedResult(cause), tag, false, 0, board))
+
+	dep, err := ReceiveJoinMapResult(tag, false, 0, board, live)
+	require.NoError(t, err)
+	require.Equal(t, JoinMapResultStopped, dep.Kind())
+	require.False(t, dep.IsEmpty())
+	require.Nil(t, dep.JoinMap())
+
+	siblingMap, err := ReceiveJoinMap(tag, false, 0, board, sibling)
+	require.Nil(t, siblingMap)
+	require.Same(t, cause, err, "the sibling acknowledges its own downstream stop")
+	require.NoError(t, live.Err(), "the independent consumer still needs this map")
+	liveMap, err := ReceiveJoinMap(tag, false, 0, board, live)
+	require.Nil(t, liveMap)
+	require.ErrorContains(t, err, "join map build stopped before publishing")
+
+	moerr.StopPipeline(stopIndependent)
+	independentCause := moerr.PipelineStopCause(context.Cause(live))
+	require.NotNil(t, independentCause)
+	require.NotSame(t, cause, independentCause)
+	_, err = ReceiveJoinMap(tag, false, 0, board, live)
+	require.Same(t, independentCause, err, "the consumer preserves the cause from its own tree")
+	require.NoError(t, query.Err())
 }

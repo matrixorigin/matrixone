@@ -1470,7 +1470,8 @@ func TestHandlePrepareDoneNotifyObservesMessageCancellationAfterAttach(t *testin
 		require.Equal(t, uint64(1024), attached.ByteCredits)
 		require.NotNil(t, attached.ReserveBatch)
 		require.NotNil(t, attached.RollbackBatch)
-		seq, err := attached.ReserveBatch(context.Background(), 10)
+		seq, stopped, err := attached.ReserveBatch(context.Background(), 10)
+		require.False(t, stopped)
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), seq)
 		attached.RollbackBatch(seq)
@@ -2338,7 +2339,7 @@ func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
 			wantErr: duplicateErr,
 		},
 		{
-			name: "raw pipeline cancellation without substantive cause is secondary",
+			name: "raw I/O cancellation from a downstream stop is secondary",
 			factoryErr: func(context.Context) error {
 				return context.Canceled
 			},
@@ -2371,7 +2372,11 @@ func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
 				require.NotNil(t, cancelQuery)
 				cancelQuery()
 			} else if !tt.keepPipelineActive {
-				scopeProc.Cancel(tt.cancelCause)
+				if tt.cancelCause == nil {
+					moerr.StopPipeline(scopeProc.Cancel)
+				} else {
+					scopeProc.Cancel(tt.cancelCause)
+				}
 			}
 
 			uid, err := uuid.NewV7()
@@ -3510,7 +3515,7 @@ func TestReceiveMessageFromCnServerIfConnector_ReturnsOnBlockedReceiverCancel(t 
 	select {
 	case err := <-done:
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		<-s.RootOp.(*connector.Connector).Reg.Ch2
 		require.Fail(t, "receiveMessageFromCnServerIfConnector did not unblock after cancellation")
@@ -3541,7 +3546,7 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 	select {
 	case err := <-done:
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		<-forwardReg.Ch2
 		require.Fail(t, "receiveMsgAndForward did not unblock after cancellation")
@@ -3570,7 +3575,7 @@ func TestReceiveMsgAndForward_AcknowledgesBatchOnReceiverTerminal(t *testing.T) 
 
 	select {
 	case err := <-done:
-		require.NoError(t, err)
+		require.ErrorIs(t, err, forwardReg.Err())
 		require.Zero(t, sender.pendingBatchAck)
 		require.Len(t, stream.sent, 1)
 		ack := stream.sent[0].(*pipeline.Message)
@@ -3610,7 +3615,7 @@ func TestReceiveMessageFromCnServerIfConnector_AcknowledgesBatchOnReceiverTermin
 
 	select {
 	case err := <-done:
-		require.NoError(t, err)
+		require.ErrorIs(t, err, reg.Err())
 		require.Zero(t, sender.pendingBatchAck)
 		require.Len(t, stream.sent, 1)
 		ack := stream.sent[0].(*pipeline.Message)

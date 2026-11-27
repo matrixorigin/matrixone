@@ -533,16 +533,24 @@ func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
 
 	substantiveErr := moerr.NewInternalErrorNoCtx("remote execution failed")
 	tests := []struct {
-		name        string
-		cancelQuery bool
-		cancelCause error
-		wantErr     error
-		wantEvent   process.PipelineEventType
-		poison      bool
+		name         string
+		cancelQuery  bool
+		stopPipeline bool
+		cancelCause  error
+		wantErr      error
+		wantEvent    process.PipelineEventType
+		poison       bool
 	}{
 		{
-			name:      "internal early stop is successful and reuses backend",
-			wantEvent: process.EventEnd,
+			name:         "internal early stop is successful and reuses backend",
+			stopPipeline: true,
+			wantEvent:    process.EventEnd,
+		},
+		{
+			name:      "unattributed pipeline cancellation is terminal",
+			wantErr:   context.Canceled,
+			wantEvent: process.EventError,
+			poison:    true,
 		},
 		{
 			name:        "query cancellation is terminal and poisons backend",
@@ -580,9 +588,12 @@ func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
 					message := request.(*pipeline.Message)
 					switch message.GetCmd() {
 					case pipeline.Method_PipelineMessage:
-						if tt.cancelQuery {
+						switch {
+						case tt.cancelQuery:
 							cancelQuery()
-						} else {
+						case tt.stopPipeline:
+							moerr.StopPipeline(proc.Cancel)
+						default:
 							proc.Cancel(tt.cancelCause)
 						}
 					case pipeline.Method_StopSending:
@@ -750,4 +761,46 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 	require.False(t, ok)
 	require.Nil(t, registeredProc)
 	require.Nil(t, notifyCh)
+}
+
+func TestPipelineStopResponsePreservesExplicitPeerFailure(t *testing.T) {
+	ctx := context.Background()
+	for _, method := range []pipeline.Method{pipeline.Method_PipelineMessage, pipeline.Method_PrepareDoneNotifyMessage} {
+		t.Run(method.String(), func(t *testing.T) {
+			for _, outcome := range []struct {
+				name string
+				err  error
+				code uint16
+			}{
+				{"normal", nil, moerr.Ok},
+				{"foreign key", moerr.NewErrFKNoReferencedRow2(ctx), moerr.ErrFKNoReferencedRow2},
+				{"independent interruption", moerr.NewQueryInterrupted(ctx), moerr.ErrQueryInterrupted},
+				{"independent RPC timeout", moerr.NewRPCTimeout(ctx), moerr.ErrRPCTimeout},
+			} {
+				t.Run(outcome.name, func(t *testing.T) {
+					ctrl := gomock.NewController(t)
+					stream := mock_morpc.NewMockStream(ctrl)
+					responses := make(chan morpc.Message, 1)
+					stream.EXPECT().ID().Return(uint64(7))
+					stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(
+						func(_ context.Context, request morpc.Message) error {
+							require.Equal(t, pipeline.Method_StopSending, request.(*pipeline.Message).GetCmd())
+							msg := &pipeline.Message{Cmd: method, Sid: pipeline.Status_MessageEnd}
+							msg.SetMoError(ctx, outcome.err)
+							responses <- msg
+							return nil
+						})
+					stream.EXPECT().Close(true).Return(nil)
+					waitCtx, stopWait := context.WithCancelCause(ctx)
+					sender := &messageSenderOnClient{ctx: waitCtx, streamSender: stream, receiveCh: responses}
+					moerr.StopPipeline(stopWait)
+					_, _, err := sender.receiveBatch()
+					require.NotNil(t, moerr.PipelineStopCause(err))
+					sender.prepareForLocalCleanup()
+					err = sender.close()
+					require.True(t, moerr.IsMoErrCode(err, outcome.code), "%v", err)
+				})
+			}
+		})
+	}
 }

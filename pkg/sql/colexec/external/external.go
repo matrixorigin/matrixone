@@ -317,7 +317,7 @@ func (external *External) checkLoadLockTableBinds(proc *process.Process) error {
 	if txnOp == nil {
 		return nil
 	}
-	return txnOp.CheckLockTableBinds(proc.Ctx)
+	return moerr.PipelineIOError(proc.Ctx, txnOp.CheckLockTableBinds(proc.Ctx))
 }
 
 func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
@@ -354,6 +354,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 
 		fileEmpty, err := external.reader.Open(param, proc)
 		if err != nil {
+			err = moerr.PipelineIOError(proc.Ctx, err)
 			external.reader.Close()
 			external.fileOpened = false
 			param.Fileparam.End = true
@@ -386,6 +387,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 
 	fileFinished, err := external.reader.ReadBatch(ctx, external.ctr.buf, proc, analyzer)
 	if err != nil {
+		err = moerr.PipelineIOError(ctx, err)
 		external.reader.Close()
 		external.fileOpened = false
 		param.Fileparam.End = true

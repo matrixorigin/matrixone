@@ -595,14 +595,16 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	// finalization and is intentionally non-blocking: publication only appends
 	// one immutable value to the current-CN MessageBoard.
 	if !mapSucceed {
-		if pipelineFailed || err != nil {
-			if err == nil {
-				err = moerr.NewQueryInterrupted(proc.Ctx)
-			}
-			hashBuild.publishBuildError(proc, err)
+		dependencyErr := err
+		if dependencyErr == nil {
+			dependencyErr = moerr.PipelineContextError(proc.Ctx)
+		}
+		if dependencyErr == nil && pipelineFailed {
+			dependencyErr = moerr.NewQueryInterrupted(proc.Ctx)
+		}
+		if dependencyErr != nil {
+			hashBuild.publishBuildError(proc, dependencyErr)
 		} else {
-			// Preserve the established nil JoinMap convention for a true empty
-			// build and for cleanup paths that completed without a map.
 			hashBuild.publishJoinMap(proc, nil)
 		}
 	}
@@ -619,8 +621,8 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
 	if !hashBuild.ctr.runtimeFilterDone {
-		if pipelineFailed || err != nil {
-			// A failed build must complete the runtime-filter dependency with
+		if pipelineFailed || err != nil || !mapSucceed {
+			// A failed or stopped build must complete the runtime-filter dependency with
 			// PASS.  DROP would incorrectly filter all probe rows because no
 			// unique keys were published.
 			message.FinalizeRuntimeFilterOnBuildError(hashBuild.RuntimeFilterSpec, proc.GetMessageBoard())
@@ -706,12 +708,18 @@ func (hashBuild *HashBuild) publishBuildError(proc *process.Process, err error) 
 	if !atomic.CompareAndSwapUint32(&hashBuild.ctr.terminalPublished, 0, 1) {
 		return false
 	}
-	if !message.FinalizeJoinMapBuildError(
-		proc.GetMessageBoard(),
+	var result message.JoinMapResult
+	if stop := moerr.PipelineStopCause(err); stop != nil {
+		result = message.NewJoinMapStoppedResult(stop)
+	} else {
+		result = message.NewJoinMapBuildErrorResult(err)
+	}
+	if !message.SendJoinMapResult(
+		result,
 		hashBuild.JoinMapTag,
 		hashBuild.IsShuffle,
 		hashBuild.ShuffleIdx,
-		err,
+		proc.GetMessageBoard(),
 	) {
 		atomic.StoreUint32(&hashBuild.ctr.terminalPublished, 0)
 		return false

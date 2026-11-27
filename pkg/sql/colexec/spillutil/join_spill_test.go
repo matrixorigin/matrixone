@@ -22,6 +22,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -192,6 +193,27 @@ func TestClassifyRowsConservesRows(t *testing.T) {
 		make([]int32, SpillNumBuckets*2),
 		make([]int32, SpillNumBuckets*2+1),
 	), process.ErrHashBuildBudgetInvalid)
+}
+
+func TestSpillBucketReadPreservesObservedCancellation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	reader := &BucketReader{}
+	proc.BuildPipelineContext(context.Background())
+	_, err := reader.ReadBatch(proc, nil)
+	require.ErrorIs(t, err, io.EOF)
+
+	moerr.StopPipeline(proc.Cancel)
+	_, err = reader.ReadBatch(proc, nil)
+	require.Same(t, context.Cause(proc.Ctx), err)
+	require.NotNil(t, moerr.PipelineStopCause(err))
+
+	query, cancel := context.WithTimeoutCause(context.Background(), 0, moerr.CauseInternalExecutorExec)
+	defer cancel()
+	proc.BuildPipelineContext(query)
+	_, err = reader.ReadBatch(proc, nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NotErrorIs(t, err, moerr.CauseInternalExecutorExec)
 }
 
 func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {

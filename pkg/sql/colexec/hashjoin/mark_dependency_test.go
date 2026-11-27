@@ -92,3 +92,32 @@ func TestHashMarkJoinWaitForBuildHonorsCancellation(t *testing.T) {
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
+
+func TestHashMarkJoinRevokedBuildCannotEmitProbeRows(t *testing.T) {
+	tc := newMarkSpillTestCase(t)
+	probe := &countingBroadcastProbeChild{MockOperator: colexec.NewMockOperator()}
+	tc.arg.Children = nil
+	tc.arg.AppendChild(probe)
+	defer func() {
+		tc.arg.Reset(tc.proc, true, nil)
+		tc.arg.Free(tc.proc, true, nil)
+		probe.Free(tc.proc, true, nil)
+		tc.barg.Free(tc.proc, true, nil)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+	require.NoError(t, probe.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	producer, stopProducer := context.WithCancelCause(context.Background())
+	moerr.StopPipeline(stopProducer)
+	require.NoError(t, tc.proc.Ctx.Err())
+	require.True(t, message.SendJoinMapResult(
+		message.NewJoinMapStoppedResult(moerr.PipelineStopCause(context.Cause(producer))),
+		tc.arg.JoinMapTag, tc.arg.IsShuffle, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(),
+	))
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.ErrorContains(t, err, "join map build stopped before publishing")
+	require.Nil(t, result.Batch)
+	require.Zero(t, probe.calls.Load())
+}

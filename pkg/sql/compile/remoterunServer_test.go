@@ -257,7 +257,8 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 		},
 	}
 
-	compile, err := receiver.newCompile()
+	compile, cancelFragment, err := receiver.newCompile()
+	require.Nil(t, cancelFragment)
 	require.NoError(t, err)
 	require.NotNil(t, compile)
 	require.Equal(t, "test-addr", compile.addr)
@@ -276,6 +277,139 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.NotPanics(t, compile.Release)
 	require.Nil(t, remoteParams.GetData())
 	require.Nil(t, remoteParams.GetArea())
+}
+
+type fragmentWaitContext struct {
+	context.Context
+	started chan struct{}
+	once    sync.Once
+}
+
+func (ctx *fragmentWaitContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.started) })
+	return ctx.Context.Done()
+}
+
+func TestGroupedRemoteFragmentStopsIOAndPreservesBoardFailure(t *testing.T) {
+	for _, withForeignKey := range []bool{false, true} {
+		name := "interruption"
+		if withForeignKey {
+			name = "later-foreign-key"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			request, cancelRequest := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancelRequest()
+			engine := mock_frontend.NewMockEngine(ctrl)
+			center := &message.MessageCenter{
+				StmtIDToBoard: make(map[uuid.UUID]*message.MessageBoard),
+				RwMutex:       &sync.Mutex{},
+			}
+			engine.EXPECT().GetMessageCenter().Return(center).AnyTimes()
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().Txn().Return(txn.TxnMeta{ID: make([]byte, 16)}).AnyTimes()
+
+			const addr = "remote-cn:6002"
+			flow := newPipelineBatchFlow(1, 1)
+			_, err := flow.reserve(request, context.Background(), 1)
+			require.NoError(t, err)
+			creditWaitContext := &fragmentWaitContext{Context: context.Background(), started: make(chan struct{})}
+			receiver := &messageReceiverOnServer{
+				messageCtx:      request,
+				connectionCtx:   creditWaitContext,
+				streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
+				cnInformation:   cnInformation{cnAddr: addr, storeEngine: engine},
+				procBuildHelper: processHelper{
+					StmtId:               uuid.New(),
+					txnOperator:          txnOp,
+					remoteExecutionID:    uuid.New(),
+					remoteFragmentCounts: map[string]uint32{addr: 2},
+				},
+			}
+			newFragment := func() (*Compile, context.CancelCauseFunc, *remoteAllocationStatementParticipant) {
+				fragment, cancelFragment, err := receiver.newCompile()
+				require.NoError(t, err)
+				require.NotNil(t, cancelFragment)
+				t.Cleanup(fragment.Release)
+				t.Cleanup(func() { cancelFragment(nil) })
+				p, err := acquireRemoteAllocationStatementParticipant(
+					remoteAllocationStatementGroupKey(fragment.remoteExecutionID, addr),
+					fragment.MessageBoard, 2, cancelFragment,
+				)
+				require.NoError(t, err)
+				t.Cleanup(func() { _, _ = p.finish(nil) })
+				return fragment, cancelFragment, p
+			}
+			_, _, first := newFragment()
+			b, previousCancel, last := newFragment()
+			// The server registers the participant before constructing the
+			// pipeline tree. Its cancel must govern I/O even after initialization.
+			b.InitPipelineContextToExecuteQuery()
+			waitCtx := &fragmentWaitContext{Context: b.proc.Ctx, started: make(chan struct{})}
+			joinMapWait := make(chan error, 1)
+			go func() {
+				_, err := message.ReceiveJoinMap(123, false, 0, b.MessageBoard, waitCtx)
+				joinMapWait <- err
+			}()
+			select {
+			case <-waitCtx.started:
+			case <-request.Done():
+				<-joinMapWait
+				t.Fatal("fragment did not enter its JoinMap wait")
+			}
+
+			creditWait := make(chan error, 1)
+			go func() { creditWait <- b.fill(batch.EmptyBatch, nil) }()
+			select {
+			case <-creditWaitContext.started:
+			case <-request.Done():
+				<-creditWait
+				t.Fatal("data write did not enter the occupied credit window")
+			}
+
+			reported := moerr.NewQueryInterrupted(request)
+			terminal, err := first.finish(reported)
+			require.NoError(t, err)
+			require.False(t, terminal.complete)
+			require.ErrorIs(t, <-joinMapWait, reported)
+			require.ErrorIs(t, <-creditWait, reported, "the data write must use the fragment context")
+			// A reader arriving at the closed board must see the same failure
+			// even without inheriting B's canceled context.
+			_, err = message.ReceiveJoinMap(123, false, 0, b.MessageBoard, context.Background())
+			require.ErrorIs(t, err, reported)
+			select {
+			case <-b.proc.Ctx.Done():
+				require.ErrorIs(t, context.Cause(b.proc.Ctx), reported)
+			default:
+				t.Fatal("group abort did not release a waiter that only observes the pipeline context")
+			}
+			require.NoError(t, request.Err())
+
+			wantCode := moerr.ErrQueryInterrupted
+			if withForeignKey {
+				err = moerr.NewErrFKNoReferencedRow2(request)
+				wantCode = moerr.ErrFKNoReferencedRow2
+			}
+			terminal, err = last.finish(err)
+			require.True(t, terminal.complete)
+			for range 2 {
+				var frame pipeline.Message
+				frame.SetMoError(request, err)
+				var ok bool
+				err, ok = frame.TryToGetMoErr()
+				require.True(t, ok)
+				require.True(t, moerr.IsMoErrCode(err, wantCode), "%v", err)
+			}
+
+			// Reuse the same process with completely new execution contexts.
+			// A retained callback from the previous group can only touch its old
+			// captured parent.
+			b.proc.ReplaceTopCtx(request)
+			b.InitPipelineContextToExecuteQuery()
+			previousCancel(moerr.NewInternalErrorNoCtx("late abort from previous generation"))
+			require.NoError(t, b.proc.Ctx.Err())
+		})
+	}
 }
 
 func TestHandlePipelineMessage_ReleasesCompileOnDecodeError(t *testing.T) {
@@ -663,7 +797,7 @@ func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
 		maxMessageSize:  1 << 20,
 		streamLifecycle: lifecycle,
 	}
-	require.NoError(t, receiver.sendBatch(batch.NewWithSize(0)))
+	require.NoError(t, receiver.sendBatch(receiver.messageCtx, batch.NewWithSize(0)))
 	require.NotNil(t, sent)
 	require.Equal(t, uint64(1), sent.GetBatchSequence())
 	require.Equal(t, uint32(2), sent.GetAcceptedBatchCreditCount())
@@ -705,7 +839,7 @@ func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *test
 		maxMessageSize:  len(data) - 1,
 		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
 	}
-	err = receiver.sendBatch(bat)
+	err = receiver.sendBatch(receiver.messageCtx, bat)
 	require.ErrorIs(t, err, wantErr)
 	require.Equal(t, 2, writes)
 	flow.mu.Lock()
@@ -740,7 +874,7 @@ func TestMessageReceiverSendFragmentedBatchKeepsCreditUntilAck(t *testing.T) {
 		maxMessageSize:  len(data) - 1,
 		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
 	}
-	require.NoError(t, receiver.sendBatch(bat))
+	require.NoError(t, receiver.sendBatch(receiver.messageCtx, bat))
 	require.Equal(t, 2, writes)
 	flow.mu.Lock()
 	require.Len(t, flow.pending, 1)

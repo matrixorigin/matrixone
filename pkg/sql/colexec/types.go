@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -84,7 +85,7 @@ type runningPipelineInfo struct {
 	receiver   *process.WrapCs
 }
 
-func (info *runningPipelineInfo) cancelPipeline() {
+func (info *runningPipelineInfo) cancelPipeline(cause error) {
 	// If this was a pipeline responsible for distributing data, we cannot end this
 	// because we are just one of the receivers.
 	if info.isDispatch {
@@ -94,7 +95,11 @@ func (info *runningPipelineInfo) cancelPipeline() {
 
 	} else {
 		if info.pipelineCancel != nil {
-			info.pipelineCancel(nil)
+			if cause == nil {
+				moerr.StopPipeline(info.pipelineCancel)
+			} else {
+				info.pipelineCancel(cause)
+			}
 		}
 	}
 }

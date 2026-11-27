@@ -161,6 +161,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		isEnd, err := tableScan.readBatch(newCtx, proc)
 		if err != nil {
+			err = moerr.PipelineIOError(newCtx, err)
 			e = err
 			return vm.CancelResult, err
 		}
@@ -175,6 +176,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 				v2.TxnS3ReadSizeHistogram.Observe(float64(opStats.S3ReadSize))
 				v2.TxnDiskReadSizeHistogram.Observe(float64(opStats.DiskReadSize))
 			}
+			err = moerr.PipelineIOError(newCtx, err)
 			e = err
 			return vm.CancelResult, err
 		}

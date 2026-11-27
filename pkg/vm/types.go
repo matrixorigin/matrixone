@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -362,7 +363,7 @@ var CancelResult = CallResult{
 func CancelCheck(proc *process.Process) (error, bool) {
 	select {
 	case <-proc.Ctx.Done():
-		return proc.Ctx.Err(), true
+		return moerr.PipelineContextError(proc.Ctx), true
 	default:
 		return nil, false
 	}
@@ -377,11 +378,11 @@ func Exec(op Operator, proc *process.Process) (CallResult, error) {
 	defer analyzer.Stop()
 	result, err := op.Call(proc)
 	if err != nil {
-		return result, err
+		return result, moerr.PipelineIOError(proc.Ctx, err)
 	}
 	result.Batch, err = op.ExecProjection(proc, result.Batch)
 	analyzer.Output(result.Batch)
-	return result, err
+	return result, moerr.PipelineIOError(proc.Ctx, err)
 }
 
 func ChildrenCall(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {

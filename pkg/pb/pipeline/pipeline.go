@@ -16,6 +16,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -106,20 +107,22 @@ func (m *Message) IsLast() bool {
 }
 
 func EncodedMessageError(ctx context.Context, err error) []byte {
-	var errData []byte
-	if err == nil {
+	cause, diagnostic := moerr.PipelineErrorForTransfer(err)
+	var me *moerr.Error
+	switch {
+	case cause == nil:
 		return nil
+	case errors.As(cause, &me):
+	case moerr.IsPipelineInterruption(cause):
+		me = moerr.NewQueryInterrupted(ctx)
+	case errors.Is(cause, context.DeadlineExceeded):
+		me = moerr.NewRPCTimeout(ctx)
+	default:
+		me = moerr.ConvertGoError(ctx, diagnostic).(*moerr.Error)
 	}
-	if me, ok := err.(*moerr.Error); ok {
-		if ed, err1 := me.MarshalBinary(); err1 == nil {
-			errData = ed
-		} else {
-			errData, _ = err1.(*moerr.Error).MarshalBinary()
-		}
-	} else {
-		// XXXXX It's so bad that if we still received non mo err here. Just convert all them to be mo err now.
-		// once we eliminate all the hidden dangers brought by non mo err, should delete these code.
-		errData, _ = moerr.ConvertGoError(ctx, err).(*moerr.Error).MarshalBinary()
+	data, marshalErr := me.MarshalBinary()
+	if marshalErr != nil {
+		data, _ = moerr.ConvertGoError(ctx, marshalErr).(*moerr.Error).MarshalBinary()
 	}
-	return errData
+	return data
 }

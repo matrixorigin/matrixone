@@ -150,6 +150,9 @@ func CnServerMessageHandler(
 	// requested StopSending may make execution return an error, but its terminal
 	// response and FIN still need the same cleanup barrier.
 	handlerErr := handlePipelineMessage(&receiver)
+	if moerr.PipelineStopCause(handlerErr) != nil {
+		handlerErr = moerr.PipelineContextError(receiver.messageCtx)
+	}
 	if handlerErr == nil && lifecycle != nil && lifecycle.batchFlow != nil {
 		handlerErr = waitUntilPipelineBatchFlowDrained(
 			receiver.messageCtx,
@@ -219,12 +222,12 @@ func waitUntilPipelineBatchFlowDrained(
 		return nil
 	}
 	if messageCtx != nil && messageCtx.Err() != nil {
-		return moerr.AttachCause(messageCtx, messageCtx.Err())
+		return moerr.PipelineContextError(messageCtx)
 	}
 	if connectionCtx != nil && connectionCtx.Err() != nil {
 		return moerr.NewStreamClosed(messageCtx)
 	}
-	if flow.wasStoppedByReceiver() && isScopeCancellationError(err) {
+	if flow.wasStoppedByReceiver() && moerr.IsPipelineInterruption(err) {
 		return nil
 	}
 	return err
@@ -263,6 +266,13 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
+		defer func() {
+			// Notification results enter the RPC codec directly. Preserve
+			// the handler's existing error form at this terminal boundary.
+			if err == moerr.PipelineContextCanceled || err == moerr.PipelineReportedCanceled {
+				err = context.Canceled
+			}
+		}()
 		dispatchProc, dispatchNotifyCh, err := receiver.GetProcByUuid(receiver.messageUuid)
 		if err != nil {
 			return err
@@ -283,11 +293,22 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			Cs:           receiver.clientSession,
 			Err:          make(chan error, 1),
 		}
+		var receiverStopped <-chan struct{}
 		if receiver.streamLifecycle != nil && receiver.streamLifecycle.batchFlow != nil {
 			flow := receiver.streamLifecycle.batchFlow
+			receiverStopped = flow.receiverStopped
 			infoToDispatchOperator.BatchCredits, infoToDispatchOperator.ByteCredits = flow.accepted()
-			infoToDispatchOperator.ReserveBatch = func(ctx context.Context, size uint64) (uint64, error) {
-				return flow.reserve(ctx, receiver.connectionCtx, size)
+			infoToDispatchOperator.ReserveBatch = func(ctx context.Context, size uint64) (uint64, bool, error) {
+				sequence, stopped, err := flow.reserveOrStop(ctx, receiver.connectionCtx, size)
+				if stopped {
+					if !infoToDispatchOperator.ReceiverStopSettled.Load() {
+						if err := receiver.dispatchReceiverContextError(); err != nil {
+							return 0, false, err
+						}
+					}
+					return 0, true, nil
+				}
+				return sequence, false, err
 			}
 			infoToDispatchOperator.RollbackBatch = flow.rollback
 		}
@@ -322,13 +343,35 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		// there is no need to check the dispatchProc.Ctx.Done() here.
 		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
 		case err = <-infoToDispatchOperator.Err:
+		case <-receiverStopped:
+			// Once the flow has stopped no new batch can reserve credit.
+			// Leave already-reserved batches, including fragmented ones, ahead
+			// of the terminal response in the session's write order.
+			infoToDispatchOperator.Lock()
+			err = infoToDispatchOperator.BatchSendError
+			select {
+			case terminalErr := <-infoToDispatchOperator.Err:
+				err = preferPrimaryScopeError(err, terminalErr)
+			default:
+			}
+			if err == nil {
+				if err = receiver.dispatchReceiverContextError(); err != nil {
+					dispatchProc.Cancel(err)
+				} else if err = moerr.PipelineContextError(dispatchProc.Ctx); err == nil {
+					infoToDispatchOperator.ReceiverStopSettled.Store(true)
+				}
+			}
+			infoToDispatchOperator.Unlock()
 		}
 		return err
 
 	case pipeline.Method_PipelineMessage:
-		runCompile, errBuildCompile := receiver.newCompile()
+		runCompile, cancelFragment, errBuildCompile := receiver.newCompile()
 		if errBuildCompile != nil {
 			return errBuildCompile
+		}
+		if cancelFragment != nil {
+			defer cancelFragment(nil)
 		}
 		var allocationAttempt *statementAllocationAttempt
 		var allocationParticipant *remoteAllocationStatementParticipant
@@ -471,10 +514,8 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					),
 				)
 			}
-			// Capture the function value for this execution generation. Both the
-			// Compile and Process fields are reset after an early sibling returns;
-			// looking up proc.Cancel later could cancel an unrelated generation.
-			remoteCancel := runCompile.proc.Cancel
+			// The fragment context already exists, even if the RPC has not
+			// decoded and installed its pipeline tree yet.
 			allocationGroupKey = remoteAllocationStatementGroupKey(
 				runCompile.remoteExecutionID,
 				runCompile.addr,
@@ -483,11 +524,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				allocationGroupKey,
 				runCompile.MessageBoard,
 				expectedFragments,
-				func(cause error) {
-					if remoteCancel != nil {
-						remoteCancel(cause)
-					}
-				},
+				cancelFragment,
 			)
 			if runErr != nil {
 				return runErr
@@ -560,7 +597,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	case pipeline.Method_StopSending:
 		receiver.colexecServer.CancelPipelineSending(receiver.clientSession, receiver.messageId)
-		abortPipelineBatchFlow(
+		stopPipelineBatchFlow(
 			receiver.clientSession,
 			receiver.messageId,
 			moerr.NewQueryInterrupted(receiver.messageCtx),
@@ -898,23 +935,29 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 }
 
 // newCompile make and return a new compile to run a pipeline.
-func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
+func (receiver *messageReceiverOnServer) newCompile() (*Compile, context.CancelCauseFunc, error) {
 	// A remote compile used to have an unlimited local pool. HashBuild could
 	// therefore grow until the CN was killed even though the process limitation
 	// was already present on the wire. Keep a finite physical backstop while the
 	// finer-grained HashBuild admission layer decides whether to spill or fail.
 	poolCap, err := resolveRemoteCompileMPoolCap(receiver.procBuildHelper.lim)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	mp, err := mpool.NewMPool("compile", poolCap, mpool.NoFixed)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pHelper, cnInfo := receiver.procBuildHelper, receiver.cnInformation
 
-	// required deadline.
-	runningCtx := defines.AttachAccountId(receiver.messageCtx, pHelper.accountId)
+	runningCtx := receiver.messageCtx
+	var cancelFragment context.CancelCauseFunc
+	if len(pHelper.remoteFragmentCounts) > 0 {
+		// Capture this generation's cancel function before any participant can
+		// abort the group. The request context still owns the RPC response.
+		runningCtx, cancelFragment = context.WithCancelCause(runningCtx)
+	}
+	runningCtx = defines.AttachAccountId(runningCtx, pHelper.accountId)
 	proc := process.NewTopProcess(
 		runningCtx,
 		mp,
@@ -943,7 +986,10 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		if err != nil {
 			proc.Free()
 			mpool.DeleteMPool(mp)
-			return nil, err
+			if cancelFragment != nil {
+				cancelFragment(nil)
+			}
+			return nil, nil, err
 		}
 		for i := range pHelper.prepareParams.Nulls {
 			if pHelper.prepareParams.Nulls[i] {
@@ -980,10 +1026,10 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	// a method to send back.
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.fill = func(b *batch.Batch, counter *perfcounter.CounterSet) error {
-		return receiver.sendBatch(b)
+		return receiver.sendBatch(proc.Ctx, b)
 	}
 
-	return c, nil
+	return c, cancelFragment, nil
 }
 
 func resolveRemoteCompileMPoolCap(lim process.Limitation) (int64, error) {
@@ -1051,7 +1097,7 @@ func (receiver *messageReceiverOnServer) sendError(
 }
 
 func (receiver *messageReceiverOnServer) sendBatch(
-	b *batch.Batch) error {
+	ctx context.Context, b *batch.Batch) error {
 	// there's no need to send the nil batch.
 	if b == nil {
 		return nil
@@ -1072,11 +1118,11 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		flow.sendMu.Lock()
 		defer flow.sendMu.Unlock()
 		batchSequence, err = flow.reserve(
-			receiver.messageCtx,
+			ctx,
 			receiver.connectionCtx,
 			uint64(len(data)))
 		if err != nil {
-			return err
+			return moerr.PipelineRPCIOError(ctx, err)
 		}
 		defer func() {
 			if !batchSent {
@@ -1095,9 +1141,9 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		m.SetData(data)
 		m.SetSid(pipeline.Status_Last)
 		m.BatchSequence = batchSequence
-		err = receiver.clientSession.Write(receiver.messageCtx, m)
+		err = receiver.clientSession.Write(ctx, m)
 		batchSent = err == nil
-		return err
+		return moerr.PipelineRPCIOError(ctx, err)
 	}
 	// if data is too large, cut and send
 	for start, end := 0, 0; start < dataLen; start = end {
@@ -1116,8 +1162,8 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		m.SetData(data[start:end])
 		m.BatchSequence = batchSequence
 
-		if err = receiver.clientSession.Write(receiver.messageCtx, m); err != nil {
-			return err
+		if err = receiver.clientSession.Write(ctx, m); err != nil {
+			return moerr.PipelineRPCIOError(ctx, err)
 		}
 	}
 	batchSent = true
@@ -1343,10 +1389,7 @@ func remoteRegistrationContextError(ctx context.Context) error {
 	if ctx == nil {
 		return context.Canceled
 	}
-	if err := context.Cause(ctx); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
+	if err := moerr.PipelineContextError(ctx); err != nil {
 		return err
 	}
 	return context.Canceled
@@ -1357,6 +1400,13 @@ func (receiver *messageReceiverOnServer) getMessageContext() context.Context {
 		return receiver.messageCtx
 	}
 	return context.Background()
+}
+
+func (receiver *messageReceiverOnServer) dispatchReceiverContextError() error {
+	if receiver.connectionCtx != nil && receiver.connectionCtx.Err() != nil {
+		return moerr.NewStreamClosed(receiver.getMessageContext())
+	}
+	return moerr.PipelineContextError(receiver.messageCtx)
 }
 
 func (receiver *messageReceiverOnServer) cancelConsumedDispatchRegistration(

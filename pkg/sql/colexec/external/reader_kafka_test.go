@@ -17,6 +17,7 @@ package external
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -434,6 +436,87 @@ func TestKafkaReaderQueryDeadlineAborts(t *testing.T) {
 		"deadline-aborted scan must not record a last id")
 	_, ok := fetchCommitted(t, addr, "g_test", "t_ddl")
 	require.False(t, ok, "deadline-aborted autocommit scan must not commit")
+}
+
+type kafkaPollContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *kafkaPollContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
+func TestExternalKafkaPreservesPipelineStopDuringPoll(t *testing.T) {
+	const topic = "t_pipeline_end"
+	addr := startKafka(t, topic, nil)
+	for _, normal := range []bool{true, false} {
+		name := "downstream-stop"
+		if !normal {
+			name = "query-cancel"
+		}
+		t.Run(name, func(t *testing.T) {
+			ks := kafkaScan(addr, topic, sqlkafka.FormatCSV)
+			ks.TimeoutSeconds = 0
+			param, proc, _ := newKafkaTestParam(t, ks)
+			defer proc.Free()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			query, cancelQuery := context.WithCancelCause(ctx)
+			defer cancelQuery(nil)
+			parent, stopParent := context.WithCancelCause(query)
+			defer stopParent(nil)
+			proc.BuildPipelineContext(parent)
+
+			op := NewArgument()
+			defer op.Release()
+			op.Es = param
+			require.NoError(t, op.Prepare(proc))
+			defer op.Free(proc, true, nil)
+			reader := op.reader.(*KafkaReader)
+			_, err := reader.Open(param, proc)
+			require.NoError(t, err)
+			op.fileOpened = true
+			polling := &kafkaPollContext{Context: proc.Ctx, entered: make(chan struct{})}
+			reader.source.ctx = polling
+
+			type pollResult struct {
+				batch *batch.Batch
+				err   error
+			}
+			done := make(chan pollResult, 1)
+			go func() {
+				r, err := vm.Exec(op, proc)
+				done <- pollResult{batch: r.Batch, err: err}
+			}()
+
+			select {
+			case <-polling.entered:
+			case <-ctx.Done():
+				<-done
+				t.Fatal("Kafka did not enter its poll wait")
+			}
+
+			if normal {
+				moerr.StopPipeline(stopParent)
+			} else {
+				cancelQuery(context.Canceled)
+			}
+			result := <-done
+			require.Nil(t, result.batch)
+			require.False(t, reader.completed)
+			require.Nil(t, param.KafkaPending)
+			require.False(t, proc.GetSession().(*fakeKafkaSession).lastSet)
+			if normal {
+				require.NotNil(t, moerr.PipelineStopCause(result.err))
+				require.NoError(t, query.Err())
+			} else {
+				require.ErrorIs(t, result.err, moerr.PipelineContextCanceled)
+			}
+		})
+	}
 }
 
 // TestKafkaReaderCancelAtBatchBoundary: a KILL landing exactly between
