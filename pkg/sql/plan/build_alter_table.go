@@ -144,13 +144,17 @@ func AlterCopyKeyColumnValueUnchanged(oldCol, newCol *ColDef, sameNullability bo
 	if oldCol.GeneratedCol != nil || newCol.GeneratedCol != nil {
 		return false
 	}
-	oldTyp, newTyp := oldCol.Typ, newCol.Typ
+	return alterCopyTypeValueUnchanged(&oldCol.Typ, &newCol.Typ, sameNullability)
+}
+
+// alterCopyTypeValueUnchanged compares value semantics, not type provenance.
+func alterCopyTypeValueUnchanged(oldTyp, newTyp *Type, sameNullability bool) bool {
 	return oldTyp.Id == newTyp.Id &&
 		(!sameNullability || oldTyp.NotNullable == newTyp.NotNullable) &&
 		oldTyp.AutoIncr == newTyp.AutoIncr &&
 		oldTyp.Width == newTyp.Width &&
 		oldTyp.Scale == newTyp.Scale &&
-		oldTyp.Enumvalues == newTyp.Enumvalues
+		sameTypeMemberDomain(oldTyp, newTyp)
 }
 
 func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
