@@ -56,6 +56,7 @@ CROARING_CFLAGS=-O3 -fPIC -std=c11
 ONNX_VERSION=1.26.0
 ONNX_REPO_COMMIT=655365097e21c4df0f82337063f9a12b66700593
 ONNX_BASE_URL=https://github.com/matrixorigin/thirdparty/raw/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
+ONNX_FALLBACK_BASE_URL=https://media.githubusercontent.com/media/matrixorigin/thirdparty/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
 ONNX_SUPPORTED=
 ifeq ($(UNAME_S)_$(UNAME_M),darwin_arm64)
   ONNX_SUPPORTED=1
@@ -199,7 +200,8 @@ install/lib/libroaring.a:
 #   macOS arm64  -> onnxruntime_arm64.dylib
 ifeq ($(ONNX_SUPPORTED),1)
 onnxruntime: | init
-	$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "install/lib/$(ONNX_LIB)"
+	MO_DOWNLOAD_FALLBACK_URL="$(ONNX_FALLBACK_BASE_URL)/$(ONNX_SRC)" \
+		$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "install/lib/$(ONNX_LIB)"
 else
 onnxruntime:
 	$(error unsupported ONNX Runtime platform: $(UNAME_S)/$(UNAME_M))
