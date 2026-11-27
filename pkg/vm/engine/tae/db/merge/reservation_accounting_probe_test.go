@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -816,7 +817,7 @@ func TestExpiredManualMergeRetryReleasesMetadataUnderMemoryPressure(t *testing.T
 		}
 	}
 timerArmed:
-	clock.Advance(manualMergeRetryWindow + time.Second)
+	clock.Advance(manualMergeRetryWindow + manualMergeRetryGrace)
 	for {
 		answer, err := sched.Query(ctx, table)
 		require.NoError(t, err)
@@ -853,11 +854,11 @@ func TestExpiredManualMergeRetryReleasesMetadataWhilePaused(t *testing.T) {
 	defer cancel()
 	select {
 	case reset := <-clock.resets:
-		require.Equal(t, manualMergeRetryWindow, reset.delay)
+		require.Equal(t, manualMergeRetryWindow+manualMergeRetryGrace, reset.delay)
 	case <-ctx.Done():
 		t.Fatal("paused scheduler did not arm the retry expiry")
 	}
-	clock.Advance(manualMergeRetryWindow)
+	clock.Advance(manualMergeRetryWindow + manualMergeRetryGrace)
 	for {
 		answer, err := sched.Query(ctx, table)
 		require.NoError(t, err)
@@ -927,6 +928,121 @@ finalCheckArmed:
 		t.Fatal("recovered headroom was missed before the retry deadline")
 	}
 	require.Zero(t, rc.reserved.Load())
+}
+
+func TestNamedObjectMergeUsesVisibleStatisticsForAdmission(t *testing.T) {
+	real := []*objectio.ObjectStats{
+		newTestObjectStats(t, 1, 2, 300*common.Const1MBytes, 8192, 1, nil, 0),
+		newTestObjectStats(t, 3, 4, 300*common.Const1MBytes, 8192, 1, nil, 0),
+	}
+	named := make([]*objectio.ObjectStats, len(real))
+	for i, stat := range real {
+		named[i] = objectio.NewObjectStats()
+		require.NoError(t, objectio.SetObjectStatsObjectName(named[i], stat.ObjectName()))
+		require.Zero(t, named[i].Rows(), "inspect sends only object names")
+	}
+	estimate := int64(mergesort.EstimateMergeSize(IterStats(real)))
+	require.Positive(t, estimate)
+	for _, tc := range []struct {
+		name        string
+		visible     []*objectio.ObjectStats
+		budget      int64
+		wantAsk     bool
+		wantGranted bool
+	}{
+		{name: "capacity denied", visible: real, budget: estimate - 1, wantAsk: true},
+		{name: "capacity available", visible: real, budget: estimate + 1, wantAsk: true, wantGranted: true},
+		{name: "one removed", visible: real[:1]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := &reservationProbeTable{MergeTable: reservationProbeBaseTable(8918), stats: tc.visible}
+			rc := &manualMergeAdmissionProbe{
+				simRscController: newSimRscController(6 * common.Const1GBytes),
+				budget:           tc.budget,
+				decisions:        make(chan reservationProbeDecision, 2),
+			}
+			executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+			sched := NewMergeScheduler(time.Hour,
+				&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, newFakeClock())
+			sched.PatchTestRscController(rc)
+			sched.handleTaskTrigger(nil, NewMMsgTaskTrigger(table).WithByUser(true).
+				WithAssignedTasks(NewMergeTaskFromSpecObjects(slices.Clone(named), 1)))
+			sched.doSched(nil, sched.supps[table.ID()].todo)
+			if tc.wantAsk {
+				require.Equal(t, reservationProbeDecision{ask: estimate, granted: tc.wantGranted}, <-rc.decisions)
+				if tc.wantGranted {
+					require.Len(t, executor.tasks, 1)
+					task := <-executor.tasks
+					require.Equal(t, real, task.objs)
+					task.doneCB.OnExecDone(nil)
+					require.Empty(t, sched.supps[table.ID()].triggers)
+				} else {
+					require.Len(t, sched.supps[table.ID()].triggers, 1)
+					require.Equal(t, real, sched.supps[table.ID()].triggers[0].assigns[0].objs)
+				}
+			} else {
+				require.Empty(t, rc.decisions, "a missing object must never be admitted as a zero-byte task")
+			}
+			require.Empty(t, executor.tasks)
+			require.Zero(t, rc.reserved.Load())
+		})
+	}
+}
+
+func TestLateDeadlineCheckGetsOneFinalAdmissionAttempt(t *testing.T) {
+	table := reservationProbeBaseTable(8919)
+	clock := newFakeClock()
+	rc := &reservationProbeRSC{limit: 60}
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	supp := sched.supps[table.ID()]
+	retry := NewMMsgTaskTrigger(table).WithByUser(true)
+	retry.retryUntil = clock.Now().Add(15 * time.Second)
+	retry.assigns = []mergeTask{{eSize: 80, note: "late final check"}}
+	supp.triggers = append(supp.triggers, retry)
+	sched.pq.Update(supp.todo, clock.Now())
+	sched.doSched(nil, supp.todo)
+	require.Equal(t, []reservationProbeDecision{{ask: 80, granted: false}}, rc.decisions)
+	require.Len(t, supp.triggers, 1)
+
+	clock.Advance(14*time.Second + 500*time.Millisecond)
+	rc.limit = 100 // capacity returned after the last pre-deadline check
+	clock.Advance(501 * time.Millisecond) // the final check is handled slightly late
+	sched.doSched(nil, supp.todo)
+	require.Len(t, executor.tasks, 1)
+	task := <-executor.tasks
+	require.Equal(t, "late final check", task.note)
+	task.doneCB.OnExecDone(nil)
+	require.Empty(t, supp.triggers)
+	require.Zero(t, rc.held)
+	clock.Advance(manualMergeRetryGrace)
+	sched.doSched(nil, supp.todo)
+	require.Empty(t, executor.tasks, "the grace period cannot repeat an admitted request")
+}
+
+func TestDelayedVacuumCheckKeepsScheduledTableReference(t *testing.T) {
+	base := reservationProbeBaseTable(8920)
+	item := &blockingMergeTombstoneItem{stats: newTestObjectStats(t, 1, 2,
+		3*common.DefaultMaxOsizeObjBytes, 1, 0, nil, 0)}
+	table := &blockingMergeTable{MergeTable: base, item: item}
+	clock := newFakeClock()
+	sched := NewMergeScheduler(time.Hour,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, &dummyExecutor{}, clock)
+	generation := newMergeSchedulerGeneration()
+	sched.fallbackSchedVacuumCheck(generation)
+	replacement := reservationProbeBaseTable(table.ID())
+	sched.handleAddTable(replacement)
+	clock.Advance(10 * time.Minute)
+	require.Eventually(t, func() bool { return len(generation.ioChan) == 1 }, time.Second, time.Millisecond)
+	select {
+	case msg := <-generation.ioChan:
+		require.Same(t, table, msg.Value.(MMsgVacuumCheck).Table)
+	default:
+		t.Fatal("scheduled vacuum check was not delivered")
+	}
+	require.Equal(t, replacement, sched.supps[table.ID()].todo.table)
 }
 
 func TestManualMergeRetryRechecksAfterMemoryPressure(t *testing.T) {

@@ -41,19 +41,23 @@ const (
 	bigDataTaskCntThreshold   = 4
 	objectOpsTriggerThreshold = 5
 	manualMergeRetryWindow    = time.Minute
+	// The deadline timer can fire a little late. Allow one final attempt, then
+	// expire retained candidates at the end of this bounded grace period.
+	manualMergeRetryGrace = 5 * time.Second
 )
 
 var ErrMergeSchedulerStopped = moerr.NewInternalErrorNoCtx("merge scheduler stopped")
 
 type mergeTask struct {
-	objs        []*objectio.ObjectStats
-	kind        taskHostKind
-	isTombstone bool
-	level       int8
-	note        string
-	oSize       int
-	eSize       int
-	doneCB      *taskObserver
+	objs                []*objectio.ObjectStats
+	resolveNamedObjects bool
+	kind                taskHostKind
+	isTombstone         bool
+	level               int8
+	note                string
+	oSize               int
+	eSize               int
+	doneCB              *taskObserver
 }
 
 type mergeSchedulerGeneration struct {
@@ -380,7 +384,7 @@ var DefaultTrigger = &MMsgTaskTrigger{
 
 type MMsgTaskTrigger struct {
 	expire     time.Time
-	retryUntil time.Time // deadline for already gathered, denied one-shot tasks
+	retryUntil time.Time // final scheduled check for already gathered, denied one-shot tasks
 	byUser     bool
 
 	table catalog.MergeTable
@@ -530,10 +534,11 @@ func (b *MMsgTaskTrigger) WithAssignedTasks(tasks []mergeTask) *MMsgTaskTrigger 
 // This is a helper function for external packages to create merge tasks
 func NewMergeTaskFromSpecObjects(objs []*objectio.ObjectStats, lv int8) []mergeTask {
 	task := mergeTask{
-		objs:        objs,
-		isTombstone: false,
-		level:       lv,
-		note:        "user specified objects",
+		objs:                objs,
+		resolveNamedObjects: true,
+		isTombstone:         false,
+		level:               lv,
+		note:                "user specified objects",
 	}
 	return []mergeTask{task}
 }
@@ -926,11 +931,12 @@ func (a *MergeScheduler) fallbackSchedVacuumCheck(
 			size += int(stat.GetObjectStats().OriginSize())
 		}
 		if size > 2*common.DefaultMaxOsizeObjBytes {
+			table := supp.todo.table
 			a.clock.AfterFunc(time.Duration(rand.Intn(10))*time.Minute, func() {
 				a.sendIOForGeneration(generation, &MMsg{
 					Kind: MMsgKindVacuumCheck,
 					Value: MMsgVacuumCheck{
-						Table: supp.todo.table,
+						Table: table,
 						opts:  DefaultVacuumOpts,
 					},
 				})
@@ -1101,7 +1107,13 @@ func (a *MergeScheduler) nextManualRetryDue(supp *todoSupporter, now time.Time) 
 	delay := min(max(a.baseInterval, time.Second), manualMergeRetryWindow/4)
 	var due time.Time
 	for _, trigger := range supp.triggers {
-		if trigger.retryUntil.IsZero() || !now.Before(trigger.retryUntil) {
+		if trigger.retryUntil.IsZero() || !now.Before(trigger.retryUntil.Add(manualMergeRetryGrace)) {
+			continue
+		}
+		if !now.Before(trigger.retryUntil) {
+			if due.IsZero() || trigger.retryUntil.Add(manualMergeRetryGrace).Before(due) {
+				due = trigger.retryUntil.Add(manualMergeRetryGrace)
+			}
 			continue
 		}
 		candidate := now.Add(delay)
@@ -1142,7 +1154,7 @@ func (a *MergeScheduler) pruneExpiredManualRetries(now time.Time) time.Time {
 	for _, supp := range a.supps {
 		kept := supp.triggers[:0]
 		for _, trigger := range supp.triggers {
-			if trigger.expire.IsZero() && !trigger.retryUntil.IsZero() && !now.Before(trigger.retryUntil) {
+			if trigger.expire.IsZero() && !trigger.retryUntil.IsZero() && !now.Before(trigger.retryUntil.Add(manualMergeRetryGrace)) {
 				logutil.Warn("MergeExecutorEvent-DeferredRetryExpired",
 					zap.String("table", supp.todo.table.GetNameDesc()),
 					zap.Int("tasks", len(trigger.assigns)))
@@ -1153,8 +1165,8 @@ func (a *MergeScheduler) pruneExpiredManualRetries(now time.Time) time.Time {
 			kept = append(kept, trigger)
 			if trigger.expire.IsZero() {
 				a.mayHaveQueuedOneShots = true
-				if !trigger.retryUntil.IsZero() && (nextExpiry.IsZero() || trigger.retryUntil.Before(nextExpiry)) {
-					nextExpiry = trigger.retryUntil
+				if !trigger.retryUntil.IsZero() && (nextExpiry.IsZero() || trigger.retryUntil.Add(manualMergeRetryGrace).Before(nextExpiry)) {
+					nextExpiry = trigger.retryUntil.Add(manualMergeRetryGrace)
 				}
 			}
 		}
@@ -1427,7 +1439,7 @@ func (a *MergeScheduler) doSched(
 	// cannot use up a later request's retry window.
 	attempts := 0
 	for _, trigger := range supp.triggers {
-		if trigger.expire.IsZero() && (trigger.retryUntil.IsZero() || !now.After(trigger.retryUntil)) {
+		if trigger.expire.IsZero() && (trigger.retryUntil.IsZero() || now.Before(trigger.retryUntil.Add(manualMergeRetryGrace))) {
 			attempts++
 		}
 	}
@@ -1471,7 +1483,7 @@ func (a *MergeScheduler) doSchedTrigger(
 		if !last.expire.IsZero() {
 			continue
 		}
-		if !last.retryUntil.IsZero() && now.After(last.retryUntil) {
+		if !last.retryUntil.IsZero() && !now.Before(last.retryUntil.Add(manualMergeRetryGrace)) {
 			logutil.Warn("MergeExecutorEvent-DeferredRetryExpired",
 				zap.String("table", todo.table.GetNameDesc()),
 				zap.Int("tasks", len(last.assigns)))
@@ -1761,7 +1773,7 @@ func (p *launchPad) gatherByTrigger(ctx context.Context,
 	}
 	if len(trigger.assigns) > 0 {
 		p.revisedResults = append(p.revisedResults,
-			controlTaskMemInPlace(trigger.assigns, rc, 1)...)
+			controlTaskMemInPlace(resolveNamedObjectTasks(p.table, trigger.assigns), rc, 1)...)
 	}
 	if trigger.table.ID() == MergeHeroID {
 		logutil.Infof(
@@ -1778,6 +1790,69 @@ func sumOsize(objs []*objectio.ObjectStats) int {
 		sum += int(obj.OriginSize())
 	}
 	return sum
+}
+
+// The inspect command carries object names without row or size metadata. Use
+// the current visible catalog statistics before estimating a named merge.
+// An object that disappeared before scheduling cannot be admitted safely.
+func resolveNamedObjectTasks(table catalog.MergeTable, tasks []mergeTask) []mergeTask {
+	var wanted map[objectio.ObjectId]*objectio.ObjectStats
+	hasNil := false
+	for _, task := range tasks {
+		if !task.resolveNamedObjects {
+			continue
+		}
+		for _, obj := range task.objs {
+			if obj == nil {
+				hasNil = true
+			} else if obj.Rows() == 0 {
+				if wanted == nil {
+					wanted = make(map[objectio.ObjectId]*objectio.ObjectStats)
+				}
+				wanted[*obj.ObjectName().ObjectId()] = nil
+			}
+		}
+	}
+	if len(wanted) == 0 && !hasNil {
+		return tasks
+	}
+	remaining := len(wanted)
+	if remaining > 0 {
+		for item := range table.IterDataItem() {
+			if stat := item.GetObjectStats(); stat != nil {
+				id := *stat.ObjectName().ObjectId()
+				if existing, ok := wanted[id]; ok && existing == nil {
+					wanted[id] = stat
+					remaining--
+					if remaining == 0 {
+						break
+					}
+				}
+			}
+		}
+	}
+	return slices.DeleteFunc(tasks, func(task mergeTask) bool {
+		if !task.resolveNamedObjects {
+			return false
+		}
+		for i, obj := range task.objs {
+			if obj == nil {
+				return true
+			}
+			if obj.Rows() != 0 {
+				continue
+			}
+			stat := wanted[*obj.ObjectName().ObjectId()]
+			if stat == nil || stat.Rows() == 0 {
+				logutil.Warn("MergeExecutorEvent-NamedObjectUnavailable",
+					zap.String("table", table.GetNameDesc()),
+					zap.String("object", obj.ObjectName().String()))
+				return true
+			}
+			task.objs[i] = stat
+		}
+		return false
+	})
 }
 
 func controlTaskMemInPlace(
