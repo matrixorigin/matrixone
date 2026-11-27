@@ -23,13 +23,17 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -54,11 +58,96 @@ type IndexConsumer struct {
 	rowdelete    []any
 	sqlBufSendCh chan []byte
 	algo         string
+	outputTables []indexOutputTable
+}
+
+type indexOutputTable struct {
+	name string
+	id   uint64
 }
 
 var _ Consumer = new(IndexConsumer)
 
 var runTxnWithSqlContext = sqlexec.RunTxnWithSqlContext
+
+// captureOutputTables binds the job's catalog view to physical index tables.
+// A later transaction must not write a new table that reused an old name.
+func (c *IndexConsumer) captureOutputTables(ctx context.Context, db engine.Database) error {
+	seen := make(map[string]struct{})
+	for _, idx := range c.tableDef.Indexes {
+		if !idx.TableExist || idx.IndexName != c.info.IndexName || !HasHooks(idx.IndexAlgo) {
+			continue
+		}
+		if idx.IndexTableName == "" {
+			return moerr.NewInternalError(ctx, "iscp index output table name is empty")
+		}
+		if _, ok := seen[idx.IndexTableName]; ok {
+			continue
+		}
+		rel, err := db.Relation(ctx, idx.IndexTableName, nil)
+		if err != nil {
+			return err
+		}
+		id := rel.GetTableID(ctx)
+		if id == 0 {
+			return moerr.NewInternalError(ctx, "iscp index output table id is empty")
+		}
+		seen[idx.IndexTableName] = struct{}{}
+		c.outputTables = append(c.outputTables, indexOutputTable{name: idx.IndexTableName, id: id})
+	}
+	if len(c.outputTables) == 0 {
+		return moerr.NewInternalError(ctx, "iscp index has no output tables")
+	}
+	return nil
+}
+
+func (c *IndexConsumer) validateOutputTables(ctx context.Context, accountID uint32, txn client.TxnOperator) error {
+	if txn == nil || c.cnEngine == nil || len(c.outputTables) == 0 {
+		return moerr.NewInternalError(ctx, "iscp index output identity is unavailable")
+	}
+	ctx = defines.AttachAccountId(ctx, accountID)
+	db, err := c.cnEngine.Database(ctx, c.jobID.DBName, txn)
+	if err != nil {
+		return err
+	}
+	source, err := db.Relation(ctx, c.jobID.TableName, nil)
+	if err != nil {
+		return err
+	}
+	if source.GetTableID(ctx) != c.tableDef.TblId {
+		return moerr.NewInternalError(ctx, "iscp source relation changed")
+	}
+	for _, output := range c.outputTables {
+		rel, err := db.Relation(ctx, output.name, nil)
+		if err != nil {
+			return err
+		}
+		if rel.GetTableID(ctx) != output.id {
+			return moerr.NewInternalErrorf(ctx, "iscp index output table %s changed", output.name)
+		}
+	}
+	return nil
+}
+
+// Invalidate after the consumer's output transaction finishes. Evicting only
+// inside Save permits a query to reload the old committed model before commit.
+func (c *IndexConsumer) invalidateOutputCaches() {
+	for _, table := range c.outputTables {
+		cache.Cache.Remove(table.name)
+	}
+}
+
+// clearSnapshotOutput runs inside the output owner's transaction, before Save.
+func (c *IndexConsumer) clearSnapshotOutput(proc *sqlexec.SqlProcess) error {
+	for _, table := range c.outputTables {
+		res, err := ExecWithResult(proc.GetContext(), "DELETE FROM "+sqlquote.QualifiedIdent(c.jobID.DBName, table.name)+" WHERE TRUE", c.cnUUID, proc.SqlCtx.Txn())
+		res.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type errorAwareDataRetriever interface {
 	SetError(error)
@@ -168,6 +257,61 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 	indexName := c.indexName()
 
 	if datatype == ISCPDataType_Snapshot {
+		writer, ok := c.sqlWriter.(SnapshotSQLWriter)
+		if !ok {
+			reportIndexConsumerErr(errch, moerr.NewInternalErrorNoCtx("SQL snapshot writer cannot reset its output"))
+			return
+		}
+		database, table := writer.SnapshotTarget()
+		if database == "" || table == "" {
+			reportIndexConsumerErr(errch, moerr.NewInternalErrorNoCtx("SQL snapshot writer has no output table"))
+			return
+		}
+		target := sqlquote.QualifiedIdent(database, table)
+		deleteSQL := fmt.Sprintf("DELETE FROM %s LIMIT %d", target, MAX_CDC_DATA_SIZE)
+		remainingSQL := fmt.Sprintf("SELECT 1 FROM %s LIMIT 1", target)
+		// Snapshot batches commit independently to keep the transaction bounded.
+		// Clear partial output before every attempt, including after a crash or
+		// an ambiguous status commit; a newer source snapshot may omit rows that
+		// an earlier attempt already wrote.
+		for {
+			select {
+			case <-ctx.Done():
+				reportIndexConsumerErr(errch, ctx.Err())
+				return
+			case err := <-errch:
+				reportIndexConsumerErr(errch, err)
+				return
+			default:
+			}
+			var remaining bool
+			err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
+				func(sqlproc *sqlexec.SqlProcess, _ any) error {
+					sqlctx := sqlproc.SqlCtx
+					result, err := ExecWithResult(sqlproc.GetContext(), deleteSQL, sqlctx.GetService(), sqlctx.Txn())
+					if err != nil {
+						return err
+					}
+					result.Close()
+					result, err = ExecWithResult(sqlproc.GetContext(), remainingSQL, sqlctx.GetService(), sqlctx.Txn())
+					if err != nil {
+						return err
+					}
+					result.ReadRows(func(rows int, _ []*vector.Vector) bool {
+						remaining = rows > 0
+						return !remaining
+					})
+					result.Close()
+					return r.GuardSnapshot(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
+				})
+			if err != nil {
+				reportIndexConsumerErr(errch, err)
+				return
+			}
+			if !remaining {
+				break
+			}
+		}
 		// SNAPSHOT
 		for {
 			if err := ctx.Err(); err != nil {
@@ -183,10 +327,18 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				return
 			case sql, ok := <-c.sqlBufSendCh:
 				if !ok {
+					err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
+						func(sqlproc *sqlexec.SqlProcess, _ any) error {
+							sqlctx := sqlproc.SqlCtx
+							return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
+						})
+					if err != nil {
+						reportIndexConsumerErr(errch, err)
+					}
 					return
 				}
 
-				// no transaction required and commit every time.
+				// Each bounded output batch commits with its job-generation guard.
 				err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
 					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 						sqlctx := sqlproc.SqlCtx
@@ -205,7 +357,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 							return err
 						}
 						res.Close()
-						return nil
+						return r.GuardSnapshot(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 					})
 
 				if err != nil {
@@ -295,7 +447,11 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 		func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 
 			w := c.sqlWriter.(*HnswSqlWriter[T])
-			sync, err = w.NewSync(sqlproc)
+			if datatype == ISCPDataType_Snapshot {
+				sync, err = w.NewSnapshotSync(sqlproc)
+			} else {
+				sync, err = w.NewSync(sqlproc)
+			}
 			return err
 		})
 
@@ -361,24 +517,23 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 						}
 
 						// update watermark
-						if datatype == ISCPDataType_Tail {
-							if objectio.ISCPIndexWatermarkErrInjected() {
-								return injectedISCPIndexErr("watermark")
-							}
-							if objectio.WaitInjected(objectio.FJ_ISCPCancelBeforeUpdateWatermark) {
-								logutil.Infof("ISCP-Task cancel fault wait %s index=%s", objectio.FJ_ISCPCancelBeforeUpdateWatermark, indexName)
-							}
-							if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeWatermark, indexName); err != nil {
-								return err
-							}
-							if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:before-update-watermark:"+indexName {
-								logutil.Infof("ISCP-Task injected hook %s", msg)
-							}
-							err = r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
-							if err != nil {
-								return
-							}
+						if objectio.ISCPIndexWatermarkErrInjected() {
+							return injectedISCPIndexErr("watermark")
 						}
+						if objectio.WaitInjected(objectio.FJ_ISCPCancelBeforeUpdateWatermark) {
+							logutil.Infof("ISCP-Task cancel fault wait %s index=%s", objectio.FJ_ISCPCancelBeforeUpdateWatermark, indexName)
+						}
+						if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeWatermark, indexName); err != nil {
+							return err
+						}
+						if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:before-update-watermark:"+indexName {
+							logutil.Infof("ISCP-Task injected hook %s", msg)
+						}
+						err = r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
+						if err != nil {
+							return
+						}
+
 						return
 
 					})

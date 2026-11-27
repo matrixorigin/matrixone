@@ -255,20 +255,30 @@ func (t *TableEntry) UpdateWatermark(iter *IterationContext) {
 	}
 }
 
+type watermarkFlush struct {
+	table     *TableEntry
+	job       *JobEntry
+	lsn       uint64
+	watermark types.TS
+}
+
 func (t *TableEntry) tryFlushWatermark(
 	ctx context.Context,
 	txn client.TxnOperator,
 	threshold time.Duration,
-) (flushCount int) {
+) (updates []watermarkFlush, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, jobEntry := range t.jobs {
 		needFlush, err := jobEntry.tryFlushWatermark(ctx, txn, threshold)
-		if needFlush && err == nil {
-			flushCount++
+		if err != nil {
+			return nil, err
+		}
+		if needFlush {
+			updates = append(updates, watermarkFlush{table: t, job: jobEntry, lsn: jobEntry.currentLSN, watermark: jobEntry.watermark})
 		}
 	}
-	return flushCount
+	return updates, nil
 }
 
 func (t *TableEntry) String() string {

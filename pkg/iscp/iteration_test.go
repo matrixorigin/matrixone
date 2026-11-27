@@ -64,7 +64,7 @@ func TestGetJobSpecsReadsAcrossBatchesAndMatchesJobsByKey(t *testing.T) {
 		return result, nil
 	}
 
-	jobSpecs, prevStatuses, err := GetJobSpecs(
+	jobSpecs, prevStatuses, _, err := GetJobSpecs(
 		context.Background(),
 		"",
 		nil,
@@ -85,7 +85,7 @@ func TestGetJobSpecsReadsAcrossBatchesAndMatchesJobsByKey(t *testing.T) {
 	require.Equal(t, uint64(22), prevStatuses[1].LSN)
 }
 
-func TestGetJobSpecsMissingJobFlushesPermanentErrorWithoutNilStatuses(t *testing.T) {
+func TestGetJobSpecsMissingSiblingRequiresRecovery(t *testing.T) {
 	oldExecWithResult := ExecWithResult
 	oldFlushJobStatusOnIterationState := FlushJobStatusOnIterationState
 	defer func() {
@@ -110,27 +110,12 @@ func TestGetJobSpecsMissingJobFlushesPermanentErrorWithoutNilStatuses(t *testing
 		return result, nil
 	}
 
-	var capturedStatuses []*JobStatus
-	FlushJobStatusOnIterationState = func(
-		_ context.Context,
-		_ string,
-		_ engine.Engine,
-		_ client.TxnClient,
-		_ uint32,
-		_ uint64,
-		_ []string,
-		_ []uint64,
-		_ []uint64,
-		jobStatuses []*JobStatus,
-		_ types.TS,
-		_ int8,
-		_ []uint64,
-	) error {
-		capturedStatuses = jobStatuses
+	flushed := false
+	FlushJobStatusOnIterationState = func(context.Context, string, engine.Engine, client.TxnClient, uint32, uint64, []string, []uint64, []uint64, []*JobStatus, types.TS, int8, []uint64) error {
+		flushed = true
 		return nil
 	}
-
-	_, _, err := GetJobSpecs(
+	_, _, _, err := GetJobSpecs(
 		context.Background(),
 		"",
 		nil,
@@ -144,13 +129,8 @@ func TestGetJobSpecsMissingJobFlushesPermanentErrorWithoutNilStatuses(t *testing
 		make([]*JobStatus, 2),
 		[]uint64{3, 2},
 	)
-	require.Error(t, err)
-	require.True(t, isPermanentError(err))
-	require.Len(t, capturedStatuses, 2)
-	require.NotNil(t, capturedStatuses[0])
-	require.NotNil(t, capturedStatuses[1])
-	require.Equal(t, uint64(101), capturedStatuses[0].LSN)
-	require.Equal(t, uint64(202), capturedStatuses[1].LSN)
+	require.ErrorIs(t, err, errIterationNeedsRecovery)
+	require.False(t, flushed, "a retired sibling must not permanently fail a surviving job")
 }
 
 func TestGetJobSpecsFlushesPermanentErrorForInvalidRows(t *testing.T) {
@@ -249,7 +229,7 @@ func TestGetJobSpecsFlushesPermanentErrorForInvalidRows(t *testing.T) {
 				return nil
 			}
 
-			jobSpecs, prevStatuses, err := GetJobSpecs(
+			jobSpecs, prevStatuses, _, err := GetJobSpecs(
 				context.Background(),
 				"",
 				nil,
@@ -363,6 +343,7 @@ func newISCPLogResult(t *testing.T, batches []iscpLogBatch) (executor.Result, *m
 			types.T_uint64.ToType(),
 			types.T_json.ToType(),
 			types.T_json.ToType(),
+			types.T_int8.ToType(),
 		},
 		mp,
 	)
@@ -372,6 +353,11 @@ func newISCPLogResult(t *testing.T, batches []iscpLogBatch) (executor.Result, *m
 		require.NoError(t, executor.AppendFixedRows(memRes, 1, batch.jobIDs))
 		require.NoError(t, executor.AppendBytesRows(memRes, 2, encodeJSONRows(t, batch.jobSpecs)))
 		require.NoError(t, executor.AppendBytesRows(memRes, 3, encodeJSONRows(t, batch.jobStatuss)))
+		states := make([]int8, len(batch.jobNames))
+		for i := range states {
+			states[i] = ISCPJobState_Completed
+		}
+		require.NoError(t, executor.AppendFixedRows(memRes, 4, states))
 	}
 	return memRes.GetResult(), mp
 }
@@ -510,7 +496,7 @@ func TestGetJobSpecsPermanentErrorFailsWhenFlushReturnsError(t *testing.T) {
 		return moerr.NewInternalErrorNoCtx("update affected 0 rows for job")
 	}
 
-	_, _, err := GetJobSpecs(
+	_, _, _, err := GetJobSpecs(
 		context.Background(),
 		"",
 		nil,

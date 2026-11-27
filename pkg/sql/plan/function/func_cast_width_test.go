@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -296,7 +297,9 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	// ALTER COPY executes an internal INSERT, but keeps its legacy internal
 	// error contract instead of exposing the DML-only 1406 mapping.
 	alterProc := newProc("STRICT_TRANS_TABLES")
-	alterProc.Ctx = context.WithValue(alterProc.Ctx, defines.AlterCopyOpt{}, &plan.AlterCopyOpt{})
+	alterProc.Ctx = context.WithValue(alterProc.Ctx, defines.InternalInsertOptionsKey{}, &executor.InternalInsertOptions{
+		Purpose: executor.InternalInsertCopy, Dedup: &plan.AlterCopyOpt{},
+	})
 	_, err = castTextToVarchar3(t, alterProc, "abcd")
 	require.Error(t, err)
 	require.Equal(t, moerr.ErrInternal, err.(*moerr.Error).ErrorCode())

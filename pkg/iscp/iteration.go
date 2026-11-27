@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -83,7 +84,6 @@ func ExecuteIterationWithRuntime(
 	defer packer.Close()
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctxWithoutTimeout := ctx
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour, moerr.NewInternalErrorNoCtx("iscp iteration timeout"))
 	defer cancel()
 
@@ -95,7 +95,7 @@ func ExecuteIterationWithRuntime(
 		0)
 	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if txnOp != nil {
-		defer txnOp.Commit(ctx)
+		defer func() { err = finishISCPTransaction(ctx, txnOp, err) }()
 	}
 	if err != nil {
 		return
@@ -106,7 +106,7 @@ func ExecuteIterationWithRuntime(
 	}
 
 	statuses := make([]*JobStatus, len(iterCtx.jobNames))
-	jobSpecs, prevStatus, err := GetJobSpecs(
+	jobSpecs, prevStatus, prevStates, err := GetJobSpecs(
 		ctx,
 		cnUUID,
 		cnTxnClient,
@@ -126,9 +126,30 @@ func ExecuteIterationWithRuntime(
 		}
 		return
 	}
+	iterCtx, jobSpecs, prevStatus, err = unfinishedIteration(iterCtx, jobSpecs, prevStatus, prevStates)
+	if err != nil || iterCtx == nil {
+		return err
+	}
+	statuses = statuses[:len(iterCtx.jobNames)]
 	preLSN := make([]uint64, len(iterCtx.jobNames))
 	for i := range iterCtx.jobNames {
 		preLSN[i] = iterCtx.lsn[i] - 1
+	}
+
+	dbName := jobSpecs[0].ConsumerInfo.SrcTable.DBName
+	tableName := jobSpecs[0].ConsumerInfo.SrcTable.TableName
+	ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
+	db, err := cnEngine.Database(ctxWithAccount, dbName, txnOp)
+	if err != nil {
+		return
+	}
+	rel, err := db.Relation(ctxWithAccount, tableName, nil)
+	if err != nil {
+		return
+	}
+	tableDef := rel.CopyTableDef(ctxWithAccount)
+	if rel.GetTableID(ctxWithAccount) != iterCtx.tableID {
+		return moerr.NewInternalErrorNoCtx("table id mismatch")
 	}
 
 	var needInit bool
@@ -136,7 +157,7 @@ func ExecuteIterationWithRuntime(
 		if prevStatus[i].Stage == JobStage_Init && jobSpecs[i].ConsumerInfo.InitSQL != "" {
 			if len(iterCtx.jobNames) != 1 {
 				errMsg := "init sql is not supported for multiple jobs"
-				FlushPermanentErrorMessage(
+				return FlushPermanentErrorMessage(
 					ctx,
 					cnUUID,
 					cnEngine,
@@ -157,71 +178,70 @@ func ExecuteIterationWithRuntime(
 		}
 	}
 	if needInit {
-		err = runInitSQLWithRuntime(
-			ctx,
-			runtime,
-			iterCtx,
-			func(initCtx context.Context) error {
-				ctxWithAccount := context.WithValue(initCtx, defines.TenantIDKey{}, iterCtx.accountID)
-				return ProcessInitSQL(
-					ctxWithAccount, cnUUID, cnEngine, cnTxnClient,
-					jobSpecs[0].ConsumerInfo.InitSQL,
-					jobSpecs[0].ConsumerInfo.SrcTable.DBName,
-					jobSpecs[0].ConsumerInfo.SrcTable.TableName,
-					jobSpecs[0].ConsumerInfo.IndexName,
-				)
-			},
-		)
-		if err != nil {
-			if errors.Is(err, errInitSQLJobFenced) {
-				return nil
-			}
-			return
+		if len(iterCtx.jobNames) != 1 {
+			return moerr.NewInternalError(ctx, "multiple jobs cannot share an initializer")
 		}
-		statuses[0] = prevStatus[0]
-		statuses[0].Stage = JobStage_Running
-		err = retry(
-			ctx,
-			func() error {
-				return FlushJobStatusOnIterationState(
-					ctx,
-					cnUUID,
-					cnEngine,
-					cnTxnClient,
-					iterCtx.accountID,
-					iterCtx.tableID,
-					iterCtx.jobNames,
-					iterCtx.jobIDs,
-					iterCtx.lsn,
-					statuses,
-					iterCtx.fromTS,
-					ISCPJobState_Completed,
-					preLSN,
-				)
-			},
-			SubmitRetryTimes,
-			DefaultRetryInterval,
-			SubmitRetryDuration,
-		)
-		if err != nil {
-			return
+		status := &JobStatus{LSN: iterCtx.lsn[0], Stage: prevStatus[0].Stage, From: iterCtx.fromTS, To: previousWatermark(iterCtx.fromTS)}
+		statuses[0] = status
+		if err = FlushJobStatusOnIterationState(ctx, cnUUID, cnEngine, cnTxnClient, iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames, iterCtx.jobIDs, iterCtx.lsn, statuses, previousWatermark(iterCtx.fromTS), ISCPJobState_Running, preLSN); err != nil {
+			return err
 		}
-		return nil
-	}
-	dbName := jobSpecs[0].ConsumerInfo.SrcTable.DBName
-	tableName := jobSpecs[0].ConsumerInfo.SrcTable.TableName
-	ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
-	db, err := cnEngine.Database(ctxWithAccount, dbName, txnOp)
-	if err != nil {
-		return
-	}
-	rel, err := db.Relation(ctxWithAccount, tableName, nil)
-	if err != nil {
-		return
-	}
-	tableDef := rel.CopyTableDef(ctxWithAccount)
-	if rel.GetTableID(ctxWithAccount) != iterCtx.tableID {
-		return moerr.NewInternalErrorNoCtx("table id mismatch")
+		consumer, initErr := NewIndexConsumer(cnUUID, cnEngine, cnTxnClient, tableDef, JobID{DBName: dbName, TableName: tableName, JobName: iterCtx.jobNames[0]}, &jobSpecs[0].ConsumerInfo)
+		if initErr != nil {
+			return initErr
+		}
+		initializer := consumer.(*IndexConsumer)
+		if err = initializer.captureOutputTables(ctxWithAccount, db); err != nil {
+			return err
+		}
+		retriever := NewDataRetriever(ctx, iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0], status, iterCtx.lsn[0], ISCPDataType_Snapshot)
+		defer retriever.Close()
+		retriever.validateOutput = initializer.validateOutputTables
+		var snapshotMarker *cuvsSnapshotMarker
+		err = runInitSQLWithRuntime(ctx, runtime, iterCtx, func(initCtx context.Context) error {
+			initCtx = defines.AttachAccountId(initCtx, iterCtx.accountID)
+			return processInitSQL(initCtx, cnUUID, cnEngine, cnTxnClient, jobSpecs[0].ConsumerInfo.InitSQL, dbName, tableName, jobSpecs[0].ConsumerInfo.IndexName,
+				func(proc *sqlexec.SqlProcess) error {
+					if err := retriever.GuardSnapshot(proc.GetContext(), cnUUID, proc.SqlCtx.Txn()); err != nil {
+						return err
+					}
+					if jobSpecs[0].InitSQLCoversSnapshot {
+						var err error
+						snapshotMarker, err = initializer.prepareCuvsSnapshotMarker(proc)
+						return err
+					}
+					return nil
+				}, func(proc *sqlexec.SqlProcess, snapshot types.TS) error {
+					status.Stage = JobStage_Running
+					if jobSpecs[0].InitSQLCoversSnapshot {
+						if err := snapshotMarker.persist(proc); err != nil {
+							return err
+						}
+						status.To = snapshot
+					}
+					err := retriever.UpdateWatermark(proc.GetContext(), cnUUID, proc.SqlCtx.Txn())
+					if err != nil {
+						// A legacy REINDEX initializer can retire its own job. Its successor
+						// owns the new output and cursor inside this same transaction.
+						advanced, readErr := initializer.jobAdvancedInTxn(proc, iterCtx.jobIDs[0])
+						if advanced {
+							return nil
+						}
+						return errors.Join(err, readErr)
+					}
+					return nil
+				})
+		})
+		initializer.invalidateOutputCaches()
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, errInitSQLJobFenced) {
+			return nil
+		}
+		status.SetError(err)
+		publicationErr := flushFinalJobStatusOnIterationState(ctx, cnUUID, cnEngine, cnTxnClient, iterCtx, 0, status, previousWatermark(iterCtx.fromTS), ISCPJobState_Completed)
+		return errors.Join(err, publicationErr)
 	}
 
 	if iterCtx.fromTS.IsEmpty() {
@@ -237,7 +257,7 @@ func ExecuteIterationWithRuntime(
 		}
 		statuses[i].StartAt = startAt
 	}
-	changes, err := CollectChanges(ctxWithoutTimeout, rel, iterCtx.fromTS, iterCtx.toTS, mp)
+	changes, err := CollectChanges(ctx, rel, iterCtx.fromTS, iterCtx.toTS, mp)
 	if err != nil {
 		return
 	}
@@ -273,6 +293,11 @@ func ExecuteIterationWithRuntime(
 		if err != nil {
 			return
 		}
+		if consumer, ok := consumers[i].(*IndexConsumer); ok {
+			if err = consumer.captureOutputTables(ctxWithAccount, db); err != nil {
+				return
+			}
+		}
 	}
 
 	insTSColIdx := len(tableDef.Cols) - 1
@@ -299,7 +324,7 @@ func ExecuteIterationWithRuntime(
 		iterCtx.jobIDs,
 		iterCtx.lsn,
 		statuses,
-		iterCtx.fromTS,
+		previousWatermark(iterCtx.fromTS),
 		ISCPJobState_Running,
 		preLSN,
 	)
@@ -308,7 +333,7 @@ func ExecuteIterationWithRuntime(
 	}
 
 	runISCPTaskIterationConsumers(
-		ctxWithoutTimeout,
+		ctx,
 		runtime,
 		iterCtx,
 		changes,
@@ -322,16 +347,21 @@ func ExecuteIterationWithRuntime(
 		delTSColIdx,
 		delCompositedPkColIdx,
 	)
+	var publicationErr error
 	for i, status := range statuses {
+		if consumer, ok := consumers[i].(*IndexConsumer); ok {
+			consumer.invalidateOutputCaches()
+		}
 		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])) {
 			continue
 		}
-		if status.ErrorCode != 0 || typ == ISCPDataType_Snapshot {
+		_, indexConsumer := consumers[i].(*IndexConsumer)
+		if status.ErrorCode != 0 || (typ == ISCPDataType_Snapshot && !indexConsumer) {
 			state := ISCPJobState_Completed
 			if status.PermanentlyFailed() {
 				state = ISCPJobState_Error
 			}
-			watermark := status.From
+			watermark := previousWatermark(status.From)
 			if status.ErrorCode == 0 {
 				watermark = status.To
 			}
@@ -351,11 +381,12 @@ func ExecuteIterationWithRuntime(
 					"ISCP-Task iteration flush job status failed",
 					zap.Error(err),
 				)
+				publicationErr = errors.Join(publicationErr, err)
 			}
 		}
 	}
 
-	return nil
+	return publicationErr
 }
 
 func runISCPTaskIterationConsumers(
@@ -381,7 +412,7 @@ func runISCPTaskIterationConsumers(
 		if consumers[i] == nil {
 			continue
 		}
-		dataRetrievers[i] = NewDataRetriever(
+		retriever := NewDataRetriever(
 			ctxWithCancel,
 			iterCtx.accountID,
 			iterCtx.tableID,
@@ -391,6 +422,10 @@ func runISCPTaskIterationConsumers(
 			iterCtx.lsn[i],
 			typ,
 		)
+		if consumer, ok := consumers[i].(*IndexConsumer); ok {
+			retriever.validateOutput = consumer.validateOutputTables
+		}
+		dataRetrievers[i] = retriever
 		defer dataRetrievers[i].Close()
 	}
 
@@ -626,10 +661,14 @@ var FlushJobStatusOnIterationState = func(
 		return
 	}
 	defer func() {
-		if err != nil {
-			err = errors.Join(err, txnWriter.Rollback(ctx))
-		} else {
-			err = txnWriter.Commit(ctx)
+		err = finishISCPTransaction(ctx, txnWriter, err)
+		if err != nil && state != ISCPJobState_Running {
+			resolved, readErr := reconcileIterationPublication(ctx, cnUUID, cnEngine, cnTxnClient, accountID, tableID, jobNames, jobIDs, lsns)
+			if resolved {
+				err = nil
+			} else {
+				err = errors.Join(err, readErr)
+			}
 		}
 		if err != nil {
 			logutil.Error(
@@ -690,6 +729,11 @@ func FlushStatus(
 		state,
 		prevLSN,
 	)
+	expectedState := ISCPJobState_Completed
+	if jobStatus.LSN == prevLSN {
+		expectedState = ISCPJobState_Running
+	}
+	sql += fmt.Sprintf(" AND job_state = %d", expectedState)
 	result, err := ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
 		return
@@ -730,15 +774,15 @@ var GetJobSpecs = func(
 	watermark types.TS,
 	jobStatuses []*JobStatus,
 	jobIDs []uint64,
-) (jobSpec []*JobSpec, prevStatus []*JobStatus, err error) {
+) (jobSpec []*JobSpec, prevStatus []*JobStatus, prevStates []int8, err error) {
 	var buf bytes.Buffer
-	buf.WriteString("SELECT job_name, job_id, job_spec, job_status FROM mo_catalog.mo_iscp_log WHERE")
+	buf.WriteString("SELECT job_name, job_id, job_spec, job_status, job_state FROM mo_catalog.mo_iscp_log WHERE")
 	for i, jobName := range jobName {
 		if i > 0 {
 			buf.WriteString(" OR")
 		}
-		buf.WriteString(fmt.Sprintf(" (account_id = %d AND table_id = %d AND job_name = '%s' AND job_id = %d)",
-			tenantId, tableID, jobName, jobIDs[i]))
+		buf.WriteString(fmt.Sprintf(" (account_id = %d AND table_id = %d AND job_name = %s AND job_id = %d AND drop_at IS NULL)",
+			tenantId, tableID, sqlquote.String(jobName), jobIDs[i]))
 	}
 	sql := buf.String()
 	execResult, err := ExecWithResult(ctx, sql, cnUUID, txn)
@@ -756,11 +800,13 @@ var GetJobSpecs = func(
 	}
 	jobSpec = make([]*JobSpec, len(jobName))
 	prevStatus = make([]*JobStatus, len(jobName))
+	prevStates = make([]int8, len(jobName))
 	var foundRows int
 	var permanentErrMsg string
 	execResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		currentJobNames := executor.GetStringRows(cols[0])
 		currentJobIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+		currentStates := vector.MustFixedColWithTypeCheck[int8](cols[4])
 		for i := 0; i < rows; i++ {
 			jobIdx, ok := expectedJobs[JobKey{JobName: currentJobNames[i], JobID: currentJobIDs[i]}]
 			if !ok {
@@ -781,12 +827,15 @@ var GetJobSpecs = func(
 				permanentErrMsg = err.Error()
 				return false
 			}
+			prevStates[jobIdx] = currentStates[i]
 			foundRows++
 		}
 		return true
 	})
 	if permanentErrMsg == "" && foundRows != len(jobName) {
-		permanentErrMsg = fmt.Sprintf("invalid rows %d, expected %d", foundRows, len(jobName))
+		// Retirement can remove one member of a shared iteration. Let the
+		// worker reconcile each surviving generation rather than failing siblings.
+		return nil, nil, nil, errIterationNeedsRecovery
 	}
 	if permanentErrMsg != "" {
 		err = FlushPermanentErrorMessage(
@@ -807,7 +856,7 @@ var GetJobSpecs = func(
 		if err == nil {
 			err = errPermanent
 		}
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	return
 }
@@ -1026,6 +1075,10 @@ func ProcessInitSQL(
 	tableName string,
 	indexName string,
 ) (err error) {
+	return processInitSQL(ctx, cnUUID, cnEngine, cnTxnClient, sql, dbName, tableName, indexName, nil, nil)
+}
+
+func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClient, sql, dbName, tableName, indexName string, before func(*sqlexec.SqlProcess) error, complete func(*sqlexec.SqlProcess, types.TS) error) (err error) {
 	decoded, err := base64.StdEncoding.DecodeString(sql)
 	if err != nil {
 		return
@@ -1093,6 +1146,11 @@ func ProcessInitSQL(
 	}
 	sqlctx := sqlexec.NewSqlContext(ctx, cnUUID, txnOp, accountId, resolver)
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
+	if before != nil {
+		if err = before(sqlproc); err != nil {
+			return err
+		}
+	}
 	// InitSQL is a JSON array of statements (the multi-statement form), or a JSON
 	// string / raw single statement (backward-compat). ISCP has no multi-statement
 	// executor, so run each in sequence within this txn.
@@ -1109,6 +1167,9 @@ func ProcessInitSQL(
 	}
 	if err = ctx.Err(); err != nil {
 		return
+	}
+	if complete != nil {
+		err = complete(sqlproc, types.TimestampToTS(txnOp.SnapshotTS()))
 	}
 	return
 }

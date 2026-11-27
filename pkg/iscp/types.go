@@ -54,6 +54,7 @@ const (
 
 type DataRetriever interface {
 	Next() (iscpData *ISCPData)
+	GuardSnapshot(ctx context.Context, cnUUID string, txn client.TxnOperator) error
 	UpdateWatermark(ctx context.Context, cnUUID string, txn client.TxnOperator) error
 	GetDataType() int8
 	GetAccountID() uint32
@@ -254,6 +255,9 @@ type ConsumerInfo struct {
 	Columns      []string
 	SrcTable     TableInfo
 	InitSQL      string
+	// Set only by a plugin's SourceSnapshotInitializer. Other initializers may
+	// build only a model and must still consume a complete source snapshot.
+	InitSQLCoversSnapshot bool `json:",omitempty"`
 }
 
 type TableInfo struct {

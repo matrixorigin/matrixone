@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -164,19 +165,12 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		return
 	}
 	needFlush = true
-	emptyStatus := &JobStatus{LSN: jobEntry.currentLSN + 1}
-	statusJson, err := MarshalJobStatus(emptyStatus)
-	if err != nil {
-		return
-	}
-	sql := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
+	sql := cdc.CDCSQLBuilder.ISCPLogAdvanceWatermarkSQL(
 		jobEntry.tableInfo.accountID,
 		jobEntry.tableInfo.tableID,
 		jobEntry.jobName,
 		jobEntry.jobID,
 		jobEntry.watermark,
-		statusJson,
-		ISCPJobState_Completed,
 		jobEntry.currentLSN,
 	)
 	result, err := ExecWithResult(
@@ -199,9 +193,11 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		)
 		return
 	}
-	jobEntry.state = ISCPJobState_Pending
+	if result.AffectedRows != 1 {
+		result.Close()
+		return true, moerr.NewInternalErrorNoCtxf("iscp flush watermark: update affected %d rows for job %s (id=%d), expected 1", result.AffectedRows, jobEntry.jobName, jobEntry.jobID)
+	}
 	result.Close()
-	jobEntry.persistedWatermark = jobEntry.watermark
 	return
 }
 

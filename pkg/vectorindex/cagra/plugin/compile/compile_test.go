@@ -455,3 +455,15 @@ func TestCagraValidateReindexParams_Quantization(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "int8", got[catalog.Quantization])
 }
+
+func TestSourceSnapshotInitializerIncludesResetAndFullBuild(t *testing.T) {
+	ctx := newHandleCtx(true)
+	sqls, err := Hooks{}.SourceSnapshotInitSQL(ctx, cagraIndexDefs())
+	require.NoError(t, err)
+	require.Len(t, sqls, 3)
+	require.Contains(t, sqls[0], "DELETE FROM `db1`.`__mo_cagra_meta_001`")
+	require.Contains(t, sqls[1], "DELETE FROM `db1`.`__mo_cagra_idx_001`")
+	require.Contains(t, sqls[2], "`db1`.`t`")
+	require.Contains(t, sqls[2], "cagra_create")
+	require.NotContains(t, sqls[2], "REINDEX")
+}

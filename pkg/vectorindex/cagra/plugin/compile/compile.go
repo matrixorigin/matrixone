@@ -206,6 +206,20 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 	return registerIdxcronUpdate(ctx, metaDef, ctx.QryDatabase(), originalTableDef)
 }
 
+// SourceSnapshotInitSQL rebuilds the trained model after COPY commits. The
+// clear and full-source build execute together with ISCP's snapshot progress.
+func (Hooks) SourceSnapshotInitSQL(ctx compileplugin.CompileContext, defs map[string]*plan.IndexDef) ([]string, error) {
+	clear, err := genDeleteSQL(defs, ctx.QryDatabase())
+	if err != nil {
+		return nil, err
+	}
+	build, err := genBuildSQL(ctx, defs)
+	if err != nil {
+		return nil, err
+	}
+	return append(clear, build...), nil
+}
+
 // registerIdxcronUpdate writes the cron task's frozen-metadata row into
 // mo_index_update via the BuildIdxcronMetadata + RegisterIdxcronUpdate
 // pattern shared with IVF-FLAT (see ivfflat/plugin/compile/compile.go:452).

@@ -15,7 +15,10 @@
 package compile
 
 import (
+	"encoding/json"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -153,7 +156,47 @@ func (p *pluginCompileCtx) SinkerTypeFromAlgo(algo string) int8 {
 
 func (p *pluginCompileCtx) CreateIndexCdcTask(dbName, tableName string, tableID uint64, indexName string,
 	sinkerType int8, startFromNow bool, sql string, tableDef *plan.TableDef) error {
+	copyReplacement := p.isCopyReplacement(dbName, tableName, tableID)
+	if copyReplacement {
+		// The synchronous build sees COPY's workspace rows, whose commit is
+		// later than this transaction's snapshot. Replaying that interval as
+		// INSERTs would add the copied keys to the freshly built index twice.
+		startFromNow = false
+	}
+	if (copyReplacement || sql != "") && p.originalTableDef != nil && tableID != 0 && tableID == p.mainTableID && tableID == p.originalTableDef.TblId && dbName == p.qryDatabase && tableName == p.originalTableDef.Name {
+		defs := make(map[string]*plan.IndexDef)
+		var algo string
+		for _, idx := range p.originalTableDef.Indexes {
+			if idx.IndexName == indexName {
+				defs[idx.IndexAlgoTableType] = idx
+				algo = idx.IndexAlgo
+			}
+		}
+		if plugin, ok := indexplugin.Get(algo); ok {
+			if init, ok := plugin.Compile().(compileplugin.SourceSnapshotInitializer); ok {
+				statements, err := init.SourceSnapshotInitSQL(p, defs)
+				if err != nil {
+					return err
+				}
+				encoded, err := json.Marshal(statements)
+				if err != nil {
+					return err
+				}
+				return createIndexCdcTask(p.c, dbName, tableName, tableID, indexName, sinkerType, false, string(encoded), true, tableDef)
+			}
+		}
+	}
 	return CreateIndexCdcTask(p.c, dbName, tableName, tableID, indexName, sinkerType, startFromNow, sql, tableDef)
+}
+
+func (p *pluginCompileCtx) isCopyReplacement(database, table string, id uint64) bool {
+	if p.scope == nil || p.originalTableDef == nil {
+		return false
+	}
+	alter := p.scope.Plan.GetDdl().GetAlterTable()
+	return alter != nil && alter.AlgorithmType == plan.AlterTable_COPY &&
+		database == p.qryDatabase && table == p.originalTableDef.Name &&
+		id != 0 && id == p.mainTableID && id == p.originalTableDef.TblId && id != alter.TableDef.GetTblId()
 }
 
 func (p *pluginCompileCtx) DropIndexCdcTask(tableDef *plan.TableDef, dbName, tableName, indexName string) error {

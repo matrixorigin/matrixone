@@ -433,3 +433,15 @@ func TestIvfpqHandleReindex_DelegatesToCreate(t *testing.T) {
 	err := Hooks{}.HandleReindex(newHandleCtx(true), ivfpqIndexDefs(), false, false)
 	require.NoError(t, err)
 }
+
+func TestSourceSnapshotInitializerIncludesResetAndFullBuild(t *testing.T) {
+	ctx := newHandleCtx(true)
+	sqls, err := Hooks{}.SourceSnapshotInitSQL(ctx, ivfpqIndexDefs())
+	require.NoError(t, err)
+	require.Len(t, sqls, 3)
+	require.Contains(t, sqls[0], "DELETE FROM `db1`.`__mo_ivfpq_meta_001`")
+	require.Contains(t, sqls[1], "DELETE FROM `db1`.`__mo_ivfpq_idx_001`")
+	require.Contains(t, sqls[2], "`db1`.`t`")
+	require.Contains(t, sqls[2], "ivfpq_create")
+	require.NotContains(t, sqls[2], "REINDEX")
+}
