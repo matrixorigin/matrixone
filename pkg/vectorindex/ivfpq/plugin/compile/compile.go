@@ -57,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
 )
 
@@ -106,19 +107,19 @@ type Hooks struct{}
 func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
 	metaDef, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
 	if !ok || metaDef == nil {
-		return h.handleCreate(ctx, indexDefs, true)
+		return h.handleCreate(ctx, indexDefs, true, false)
 	}
 	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
-	return h.handleCreate(ctx, indexDefs, !async)
+	return h.handleCreate(ctx, indexDefs, !async, false)
 }
 
 // HandleReindex uses the shared build path. An inline rebuild publishes the
 // replacement model before handing off forward changes to CDC.
 func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool, _ bool) error {
-	return h.handleCreate(ctx, indexDefs, forceSync)
+	return h.handleCreate(ctx, indexDefs, forceSync, true)
 }
 
 // RestoreInitSQL — see CAGRA. Rebuilds the IVF-PQ index post-commit during restore.
@@ -133,7 +134,7 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 
 // handleCreate runs the build in the current transaction if forceSync is set.
 // Otherwise CDC builds it from a source snapshot through InitSQL.
-func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync, reindex bool) error {
 	logutil.Infof("[plugin] ivfpq handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// 0. experimental flag gate (mirrors HNSW's check at ddl_index_algo.go:627).
 	// Frontend-only: re-entry from background (idxcron ALTER REINDEX,
@@ -181,8 +182,8 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return nil
 	}
 
-	// 3. clear the cache
-	cache.Cache.Remove(storageDef.IndexTableName)
+	// Release the cached GPU model before allocating its replacement.
+	cache.Cache.RemoveCuvs(storageDef.IndexTableName)
 
 	// Use the same replacement statements for an inline reindex and for an
 	// asynchronous build. In the latter case the old model remains readable
@@ -192,9 +193,15 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return err
 	}
 	if forceSync {
-		for _, sql := range statements {
-			if err := ctx.RunSql(sql); err != nil {
+		if reindex {
+			if err := cuvscdc.ReplaceSnapshot(ctx.QryDatabase(), originalTableDef, storageDef, statements, ctx.RunSqlWithResult); err != nil {
 				return err
+			}
+		} else {
+			for _, sql := range statements {
+				if err := ctx.RunSql(sql); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -291,21 +298,13 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 	return merged, nil
 }
 
-// HandleDropIndex runs algorithm-specific cleanup beyond the generic
-// hidden-table deletion the SQL layer already performs.
-//
-// Implementations typically: unregister CDC tasks (DropIndexCdcTask),
-// remove idxcron schedules, clear runtime caches.
-//
-// IVF-PQ does none of those — generic hidden-table deletion is enough —
-// so this is a no-op. Compare HNSW, which does maintain CDC tasks.
+// HandleDropIndex releases the cached GPU models for the dropped storage table.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] ivfpq HandleDropIndex: defs=%d", len(defs))
 	// Evict the cached search index so its GPU resources are freed NOW, rather
 	// than lingering until the 5-min VectorIndexCacheTTL housekeeping reaps it.
-	// Mirrors the create-side cache.Cache.Remove(storageDef.IndexTableName).
 	if storageDef, ok := defs[catalog.Ivfpq_TblType_Storage]; ok {
-		cache.Cache.Remove(storageDef.IndexTableName)
+		cache.Cache.RemoveCuvs(storageDef.IndexTableName)
 	}
 	return nil
 }

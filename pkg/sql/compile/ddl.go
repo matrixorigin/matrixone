@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1175,6 +1176,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
 					}
 					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, forceSync, tableAlterIndex.Merge)
+					if err == nil && forceSync {
+						for kind, def := range multiTableIndex.IndexDefs {
+							if kind == catalog.Cagra_TblType_Storage || kind == catalog.Ivfpq_TblType_Storage {
+								cache.Cache.RemoveCuvsOnCommit(c.proc.GetTxnOperator(), def.IndexTableName)
+							}
+						}
+					}
 				}
 
 				if err != nil {

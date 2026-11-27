@@ -136,6 +136,14 @@ func (s *SqlProcess) GetResolveVariableFunc() func(varName string, isSystemVar, 
 	return nil
 }
 
+// Txn returns the transaction used by internal index reads.
+func (s *SqlProcess) Txn() client.TxnOperator {
+	if s.Proc != nil {
+		return s.Proc.GetTxnOperator()
+	}
+	return s.SqlCtx.Txn()
+}
+
 // GetService returns the CN UUID (service name) of the underlying proc or SqlContext.
 // Captured at load so a later background query (e.g. the cache IsStale check) can reach
 // the internal SQL executor by service name.

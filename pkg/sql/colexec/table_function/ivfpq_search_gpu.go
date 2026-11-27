@@ -38,6 +38,7 @@ import (
 )
 
 type ivfpqSearchState struct {
+	cacheKey  string
 	inited    bool
 	param     vectorindex.IvfpqParam
 	tblcfg    vectorindex.IndexTableConfig
@@ -227,7 +228,9 @@ func (u *ivfpqSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 			return moerr.NewInvalidInput(proc.Ctx, "query vector type does not match the index base column type")
 		}
 
-		u.idxcfg.CuvsIvfpq.Quantization = uint16(metric.CuvsStorageQuantization(types.T(u.tblcfg.KeyPartType), u.param.Quantization))
+		format := metric.CuvsStorageQuantization(types.T(u.tblcfg.KeyPartType), u.param.Quantization)
+		u.idxcfg.CuvsIvfpq.Quantization = uint16(format)
+		u.cacheKey = veccache.CuvsKey(u.tblcfg.IndexTable, format)
 
 		u.batch = tf.createResultBatch()
 		u.inited = true
@@ -296,7 +299,7 @@ func ivfpqRunSearchQuery(proc *process.Process, u *ivfpqSearchState, fa any) (er
 		FilterJSON:   u.predsJSON,
 	}
 	var keys any
-	keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, fa, rt)
+	keys, u.distances, err = veccache.Cache.SearchCuvs(sqlexec.NewSqlProcess(proc), u.cacheKey, algo, fa, rt)
 	if err != nil {
 		return err
 	}

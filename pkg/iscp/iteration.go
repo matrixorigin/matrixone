@@ -162,7 +162,7 @@ func ExecuteIterationWithRuntime(
 		completedStatus.Stage = JobStage_Running
 		retriever := NewDataRetriever(ctx, iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0], &completedStatus, iterCtx.lsn[0], ISCPDataType_Snapshot)
 		defer retriever.Close()
-		var finishSnapshot func(*sqlexec.SqlProcess) error
+		var finishSnapshot func() error
 		var uncertain bool
 		err = runInitSQLWithRuntime(ctx, runtime, iterCtx, func(initCtx context.Context) (initErr error) {
 			initCtx = defines.AttachAccountId(initCtx, iterCtx.accountID)
@@ -226,7 +226,7 @@ func ExecuteIterationWithRuntime(
 					return nil
 				}, func(proc *sqlexec.SqlProcess, snapshot types.TS) error {
 					if jobSpecs[0].InitSQLCoversSnapshot {
-						if err := finishSnapshot(proc); err != nil {
+						if err := finishSnapshot(); err != nil {
 							return err
 						}
 						completedStatus.To = snapshot

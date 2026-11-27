@@ -16,19 +16,16 @@ package iscp
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -149,11 +146,7 @@ func NewCuvsCdcWriter(algoName, dbName, tblName, indexName string,
 
 	// Resolve INCLUDE columns from indexAlgoParams. Returns zero
 	// values when no INCLUDE columns are configured.
-	bindings, colMetaJSON, ibpr, err := cuvscdc.ResolveIncludeColumns(
-		includedColumnsFromAlgoParams(idxdef.IndexAlgoParams),
-		tabledef.Name2ColIndex,
-		func(pos int32) int32 { return tabledef.Cols[pos].Typ.Id },
-	)
+	bindings, colMetaJSON, ibpr, err := cuvscdc.ResolveIndexIncludeColumns(tabledef, idxdef.IndexAlgoParams)
 	if err != nil {
 		return nil, err
 	}
@@ -162,24 +155,6 @@ func NewCuvsCdcWriter(algoName, dbName, tblName, indexName string,
 	w.includeBytesPer = ibpr
 
 	return w, nil
-}
-
-// includedColumnsFromAlgoParams extracts the comma-separated INCLUDE
-// column names from indexAlgoParams (key catalog.IncludedColumns).
-// Returns "" if absent or unparseable.
-func includedColumnsFromAlgoParams(indexAlgoParams string) string {
-	if indexAlgoParams == "" {
-		return ""
-	}
-	val, err := sonic.Get([]byte(indexAlgoParams), catalog.IncludedColumns)
-	if err != nil {
-		return ""
-	}
-	joined, err := val.StrictString()
-	if err != nil {
-		return ""
-	}
-	return joined
 }
 
 // Accessors used by per-algo Hooks.Run impls to build their algo's
@@ -417,16 +392,7 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 
 var _ SourceSnapshotWriter = (*CuvsCdcWriter)(nil)
 
-// An empty event frame retains the index's existing chunk-generation floor
-// across a full rebuild, including a small or empty source with no model tar.
-// It carries INCLUDE metadata but contributes no inserts, deletes or upserts.
-type cuvsSnapshotMarker struct {
-	cfg    vectorindex.IndexTableConfig
-	header []byte
-	floor  int64
-}
-
-func (w *CuvsCdcWriter) PrepareSourceSnapshot(proc *sqlexec.SqlProcess) (func(*sqlexec.SqlProcess) error, error) {
+func (w *CuvsCdcWriter) PrepareSourceSnapshot(proc *sqlexec.SqlProcess) (func() error, error) {
 	cfg := vectorindex.IndexTableConfig{DbName: w.dbName, SrcTable: w.tblName}
 	for _, idx := range w.indexdef {
 		switch idx.IndexAlgoTableType {
@@ -437,40 +403,7 @@ func (w *CuvsCdcWriter) PrepareSourceSnapshot(proc *sqlexec.SqlProcess) (func(*s
 	if cfg.IndexTable == "" {
 		return nil, moerr.NewInternalError(proc.GetContext(), "cuVS snapshot storage table is missing")
 	}
-	marker := &cuvsSnapshotMarker{cfg: cfg, header: []byte(w.colMetaJSON)}
-	floor, err := marker.nextChunk(proc)
-	if err != nil {
-		return nil, err
-	}
-	marker.floor = floor
-	return marker.persist, nil
-}
-
-func (m *cuvsSnapshotMarker) nextChunk(proc *sqlexec.SqlProcess) (int64, error) {
-	res, err := ExecWithResult(proc.GetContext(), cuvscdc.NextChunkIdSql(m.cfg, vectorindex.CdcTailId, vectorindex.Tag_CdcEvents), proc.SqlCtx.GetService(), proc.SqlCtx.Txn())
-	if err != nil {
-		return 0, err
-	}
-	defer res.Close()
-	for _, bat := range res.Batches {
-		if bat != nil && bat.RowCount() > 0 {
-			return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0), nil
-		}
-	}
-	return 0, nil
-}
-
-func (m *cuvsSnapshotMarker) persist(proc *sqlexec.SqlProcess) error {
-	next, err := m.nextChunk(proc)
-	if err != nil {
-		return err
-	}
-	if next < m.floor {
-		next = m.floor
-	}
-	frame := cuvscdc.FrameCdcChunk(nil, m.header, 0, 0, 0)
-	sql := fmt.Sprintf("INSERT INTO %s VALUES (%s,%d,unhex(%s),%d)", sqlquote.QualifiedIdent(m.cfg.DbName, m.cfg.IndexTable), sqlquote.String(vectorindex.CdcTailId), next, sqlquote.String(hex.EncodeToString(frame)), vectorindex.Tag_CdcEvents)
-	res, err := ExecWithResult(proc.GetContext(), sql, proc.SqlCtx.GetService(), proc.SqlCtx.Txn())
-	res.Close()
-	return err
+	return cuvscdc.PrepareSnapshotMarker(cfg, w.colMetaJSON, func(sql string) (executor.Result, error) {
+		return ExecWithResult(proc.GetContext(), sql, proc.SqlCtx.GetService(), proc.SqlCtx.Txn())
+	})
 }

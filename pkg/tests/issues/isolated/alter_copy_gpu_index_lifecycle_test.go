@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -288,24 +287,46 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			exec("begin")
 			reindex("float32", true)
 			exec("rollback")
+			observer, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer observer.Close()
+			_, err = observer.ExecContext(ctx, "use "+dbName)
+			require.NoError(t, err)
+			_, err = observer.ExecContext(ctx, "set experimental_"+tc.algo+"_index=1")
+			require.NoError(t, err)
+			privateOrder := " order by l2_distance(v,'[-100,-100,-100,-100,-100,-100,-100,-100]') limit 1"
+			checkNeighbor := func(reader jobReader, query string, want int64) {
+				t.Helper()
+				var id int64
+				require.NoError(t, reader.QueryRowContext(ctx, query).Scan(&id), query)
+				require.Equal(t, want, id, query)
+			}
+			checkNeighbor(observer, "select id from t"+privateOrder, 1)
 			exec("begin")
+			exec("insert into t(id,v) values (999,'[-100,-100,-100,-100,-100,-100,-100,-100]')")
 			reindex("int8", false)
+			privateQuery := "select id from t" + privateOrder
+			require.Contains(t, explain(privateQuery), tc.algo+"_search")
+			checkNeighbor(conn, privateQuery, 999)
 			exec("rollback")
 			require.Equal(t, "float32", quantization())
+			checkNeighbor(observer, "select id from t ignore index(ix)"+privateOrder, 1)
+			checkNeighbor(observer, privateQuery, 1)
 			unchanged, err := readJob(db, replacementTable)
 			require.NoError(t, err)
 			require.Equal(t, laterJob.id, unchanged.id)
 
+			exec("begin")
+			exec("insert into t(id,v) values (999,'[-100,-100,-100,-100,-100,-100,-100,-100]')")
 			reindex("int8", false)
+			exec("commit")
 			require.Equal(t, "int8", quantization())
+			checkNeighbor(observer, privateQuery, 999)
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+storageSQL+" where tag=0").Scan(&count))
 			require.Positive(t, count)
-			cache.Cache.Remove(storage)
 			query := "select id from t" + orderBy
 			require.Contains(t, explain(query), tc.algo+"_search")
-			var id int64
-			require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&id))
-			require.EqualValues(t, 100, id)
+			checkNeighbor(observer, query, 100)
 		})
 	}
 }

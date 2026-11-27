@@ -149,8 +149,13 @@ func (c *IndexConsumer) validateOutputTables(ctx context.Context, accountID uint
 // Invalidate after the consumer's output transaction finishes. Evicting only
 // inside Save permits a query to reload the old committed model before commit.
 func (c *IndexConsumer) invalidateOutputCaches() {
+	_, cuvs := c.sqlWriter.(*CuvsCdcWriter)
 	for _, table := range c.outputTables {
-		cache.Cache.Remove(table.name)
+		if cuvs {
+			cache.Cache.RemoveCuvs(table.name)
+		} else {
+			cache.Cache.Remove(table.name)
+		}
 	}
 }
 

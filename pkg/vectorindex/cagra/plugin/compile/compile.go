@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	cagraruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 )
 
 // insertIntoCagraIndexTableFormat is the SQL template used to populate the
@@ -67,19 +68,19 @@ type Hooks struct{}
 func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
 	metaDef, ok := indexDefs[catalog.Cagra_TblType_Metadata]
 	if !ok || metaDef == nil {
-		return h.handleCreate(ctx, indexDefs, true)
+		return h.handleCreate(ctx, indexDefs, true, false)
 	}
 	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
-	return h.handleCreate(ctx, indexDefs, !async)
+	return h.handleCreate(ctx, indexDefs, !async, false)
 }
 
 // HandleReindex uses the shared build path. An inline rebuild publishes the
 // replacement model before handing off forward changes to CDC.
 func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool, _ bool) error {
-	return h.handleCreate(ctx, indexDefs, forceSync)
+	return h.handleCreate(ctx, indexDefs, forceSync, true)
 }
 
 // RestoreInitSQL returns the CDC InitSQL that rebuilds the CAGRA index from the
@@ -97,7 +98,7 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 
 // handleCreate runs the build in the current transaction if forceSync is set.
 // Otherwise CDC builds it from a source snapshot through InitSQL.
-func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync, reindex bool) error {
 	logutil.Infof("[plugin] cagra handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// Gate the experimental flag check on frontend context only. The
 	// flag was enforced at the original CREATE INDEX time; re-entry
@@ -144,7 +145,8 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return nil
 	}
 
-	cache.Cache.Remove(storageDef.IndexTableName)
+	// Release the cached GPU model before allocating its replacement.
+	cache.Cache.RemoveCuvs(storageDef.IndexTableName)
 
 	// Use the same replacement statements for an inline reindex and for an
 	// asynchronous build. In the latter case the old model remains readable
@@ -154,9 +156,15 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return err
 	}
 	if forceSync {
-		for _, sql := range statements {
-			if err := ctx.RunSql(sql); err != nil {
+		if reindex {
+			if err := cuvscdc.ReplaceSnapshot(ctx.QryDatabase(), originalTableDef, storageDef, statements, ctx.RunSqlWithResult); err != nil {
 				return err
+			}
+		} else {
+			for _, sql := range statements {
+				if err := ctx.RunSql(sql); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -247,9 +255,8 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 	logutil.Infof("[plugin] cagra HandleDropIndex: defs=%d", len(defs))
 	// Evict the cached search index so its GPU resources are freed NOW, rather
 	// than lingering until the 5-min VectorIndexCacheTTL housekeeping reaps it.
-	// Mirrors the create-side cache.Cache.Remove(storageDef.IndexTableName).
 	if storageDef, ok := defs[catalog.Cagra_TblType_Storage]; ok {
-		cache.Cache.Remove(storageDef.IndexTableName)
+		cache.Cache.RemoveCuvs(storageDef.IndexTableName)
 	}
 	return nil
 }
