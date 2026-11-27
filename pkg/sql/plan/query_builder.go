@@ -99,6 +99,9 @@ func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Con
 	if function.LegacyDecimalIntegerDiv(ctx.GetContext()) {
 		bound = function.WithLegacyDecimalIntegerDiv(bound)
 	}
+	if function.LegacyIntegerFloatDiv(ctx.GetContext()) {
+		bound = function.WithLegacyIntegerFloatDiv(bound)
+	}
 	if function.LegacyTimestampAddSecond(ctx.GetContext()) {
 		bound = function.WithLegacyTimestampAddSecond(bound)
 	}

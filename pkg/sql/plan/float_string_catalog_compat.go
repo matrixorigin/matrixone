@@ -498,6 +498,9 @@ func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	if mode&tableDumpBindingPreIntegerDecimal != 0 {
 		rebindCtx = function.WithLegacyIntegerDecimalCoercions(rebindCtx)
 	}
+	if mode&tableDumpBindingLegacyIntegerFloatDiv != 0 {
+		rebindCtx = function.WithLegacyIntegerFloatDiv(rebindCtx)
+	}
 	if legacySpecial {
 		rebindCtx = function.WithLegacySpecialConsumers(rebindCtx)
 	}
@@ -537,7 +540,7 @@ func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	if budget.visits > tableDumpMaxCandidateVisits {
 		return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
 	}
-	mode &= tableDumpBindingPreJSONFolding | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision
+	mode &= tableDumpBindingPreJSONFolding | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingLegacyIntegerFloatDiv
 	if legacySpecial {
 		mode |= tableDumpBindingLegacySpecial
 	}

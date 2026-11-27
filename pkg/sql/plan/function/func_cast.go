@@ -678,7 +678,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_date: {
 		types.T_bool, types.T_float64,
 		types.T_int32, types.T_int64, types.T_uint64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
@@ -712,7 +712,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_binary, types.T_varbinary,
 		types.T_bit,
 	},
@@ -916,7 +916,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
@@ -1593,6 +1593,71 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 			return nil
 		}
 		return decimal256ToDecimal256(s, rs, length, selectList)
+	case types.T_date:
+		width := toType.Width
+		if width <= 0 {
+			width = types.DecimalMaxPrecision(types.T_decimal256)
+		}
+		s := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
+		return temporalToDecimal256(s, rs, length, selectList, func(v types.Date) (types.Decimal256, error) {
+			return types.ParseDecimal256WithContext(proc.Ctx, strconv.FormatInt(packedDateInt64(v), 10), width, toType.Scale)
+		})
+	case types.T_datetime:
+		width := toType.Width
+		if width <= 0 {
+			width = types.DecimalMaxPrecision(types.T_decimal256)
+		}
+		s := vector.GenerateFunctionFixedTypeParameter[types.Datetime](from)
+		return temporalToDecimal256(s, rs, length, selectList, func(v types.Datetime) (types.Decimal256, error) {
+			return types.ParseDecimal256WithContext(proc.Ctx, packedDatetimeDecimalString(v), width, toType.Scale)
+		})
+	case types.T_timestamp:
+		width := toType.Width
+		if width <= 0 {
+			width = types.DecimalMaxPrecision(types.T_decimal256)
+		}
+		zone := time.Local
+		if proc != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
+		return temporalToDecimal256(s, rs, length, selectList, func(v types.Timestamp) (types.Decimal256, error) {
+			return types.ParseDecimal256WithContext(proc.Ctx, packedDatetimeDecimalString(v.ToDatetime(zone)), width, toType.Scale)
+		})
+	case types.T_time:
+		width := toType.Width
+		if width <= 0 {
+			width = types.DecimalMaxPrecision(types.T_decimal256)
+		}
+		limit := intDecimal256WidthLimit(width)
+		s := vector.GenerateFunctionFixedTypeParameter[types.Time](from)
+		fromScale := from.GetType().Scale
+		return temporalToDecimal256(s, rs, length, selectList, func(v types.Time) (types.Decimal256, error) {
+			d128, err := v.ToDecimal128(proc.Ctx, 38, fromScale)
+			if err != nil {
+				return types.Decimal256{}, err
+			}
+			d256 := types.Decimal256FromDecimal128(d128)
+			if toType.Scale != fromScale {
+				d256, err = d256.Scale(toType.Scale - fromScale)
+				if err != nil {
+					return types.Decimal256{}, err
+				}
+			}
+			if err := checkIntDecimal256Width(int64(0), d256, limit, width, toType.Scale); err != nil {
+				return types.Decimal256{}, err
+			}
+			return d256, nil
+		})
+	case types.T_year:
+		width := toType.Width
+		if width <= 0 {
+			width = types.DecimalMaxPrecision(types.T_decimal256)
+		}
+		s := vector.GenerateFunctionFixedTypeParameter[types.MoYear](from)
+		return temporalToDecimal256(s, rs, length, selectList, func(v types.MoYear) (types.Decimal256, error) {
+			return types.ParseDecimal256WithContext(proc.Ctx, strconv.FormatUint(uint64(v), 10), width, toType.Scale)
+		})
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		s := vector.GenerateFunctionStrParameter(from)
 		return strToDecimal(proc, s, rs, length, selectList, mode,
@@ -1600,6 +1665,33 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 	default:
 		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from %s to %s", from.GetType(), toType))
 	}
+}
+
+func temporalToDecimal256[T types.FixedSizeT](
+	source vector.FunctionParameterWrapper[T],
+	rs *vector.FunctionResult[types.Decimal256],
+	length int,
+	selectList *FunctionSelectList,
+	convert func(T) (types.Decimal256, error),
+) error {
+	var dft types.Decimal256
+	for i := 0; i < length; i++ {
+		v, isNull := source.GetValue(uint64(i))
+		if functionRowSkipped(selectList, uint64(i)) || isNull {
+			if err := rs.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		d256, err := convert(v)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(d256, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func scalarNullToOthers(ctx context.Context,

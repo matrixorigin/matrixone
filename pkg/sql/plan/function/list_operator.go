@@ -1935,7 +1935,7 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
+				has, t1, t2 := divTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if divOperatorSupportsVectorScalar(t1, t2) {
 						return newCheckResultWithCast(1, []types.Type{t1, t2})

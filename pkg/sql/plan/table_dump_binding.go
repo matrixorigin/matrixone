@@ -253,6 +253,7 @@ const (
 	tableDumpBindingPreIntegerDecimal        tableDumpBindingMode = 1 << 15
 	tableDumpBindingPreDecimalPrecision      tableDumpBindingMode = 1 << 16
 	tableDumpBindingPreTimeNullability       tableDumpBindingMode = 1 << 17
+	tableDumpBindingLegacyIntegerFloatDiv    tableDumpBindingMode = 1 << 18
 )
 
 const tableDumpBindingLegacyFloat tableDumpBindingMode = 1 << 11
@@ -438,7 +439,10 @@ func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, ite
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability | tableDumpBindingLegacyIntegerFloatDiv)
+	if mode&tableDumpBindingLegacyIntegerFloatDiv != 0 {
+		bindCtx = function.WithLegacyIntegerFloatDiv(bindCtx)
+	}
 	if mode&tableDumpBindingPreDecimalPrecision != 0 {
 		bindCtx = function.WithLegacyDecimalIntermediatePrecision(bindCtx)
 	}
@@ -1073,6 +1077,11 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			if ddlScope != nil && visit.hasColumn {
 				for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
 					modes = append(modes, mode|tableDumpBindingDDLColumnScope)
+				}
+			}
+			if visit.hasDivision {
+				for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
+					modes = append(modes, mode|tableDumpBindingLegacyIntegerFloatDiv)
 				}
 			}
 			if decimalPrecision || integerDecimal {

@@ -416,7 +416,7 @@ select i, count(*), std(e1/e2) from bug22555 group by i order by i;
 3  ¦  4  ¦  0.0
 select std(s1/s2) from bug22555;
 ➤ std(s1 / s2)[8,54,0]  𝄀
-0.2132576358664934
+0.21328516643738313
 select std(o1/o2) from bug22555;
 ➤ std(o1 / o2)[8,54,0]  𝄀
 0.2132576358664934
@@ -440,7 +440,7 @@ select i, count(*), std(e1/e2) from bug22555 group by i order by i;
 3  ¦  4  ¦  0.0
 select round(std(s1/s2), 17) from bug22555;
 ➤ round(std(s1 / s2), 17)[8,54,0]  𝄀
-0.2132576358664934
+0.21328516643738313
 select std(o1/o2) from bug22555;
 ➤ std(o1 / o2)[8,54,0]  𝄀
 0.2132576358664934

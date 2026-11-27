@@ -83,15 +83,16 @@ func TestIntegerOverDecimal256DivisionBinding(t *testing.T) {
 		name      string
 		left      types.T
 		precision int32
+		leftWidth int32
 	}{
-		{"int8", types.T_int8, 37},
-		{"int16", types.T_int16, 39},
-		{"int32", types.T_int32, 44},
-		{"int64", types.T_int64, 53},
-		{"uint8", types.T_uint8, 37},
-		{"uint16", types.T_uint16, 39},
-		{"uint32", types.T_uint32, 44},
-		{"uint64", types.T_uint64, 54},
+		{"int8", types.T_int8, 37, 3},
+		{"int16", types.T_int16, 39, 5},
+		{"int32", types.T_int32, 44, 10},
+		{"int64", types.T_int64, 53, 19},
+		{"uint8", types.T_uint8, 37, 3},
+		{"uint16", types.T_uint16, 39, 5},
+		{"uint32", types.T_uint32, 44, 10},
+		{"uint64", types.T_uint64, 54, 20},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bound, err := GetFunctionByName(
@@ -101,10 +102,7 @@ func TestIntegerOverDecimal256DivisionBinding(t *testing.T) {
 				types.New(types.T_decimal256, tc.precision, 4), bound.GetReturnType())
 			targets, cast := bound.ShouldDoImplicitTypeCast()
 			require.True(t, cast)
-			// The integer operand casts through the DECIMAL256 default physical
-			// type at scale zero, mirroring the legacy reverse rows; the
-			// DECIMAL256 divisor keeps its declared width and scale.
-			require.Equal(t, types.T_decimal256.ToType(), targets[0])
+			require.Equal(t, types.New(types.T_decimal256, tc.leftWidth, 0), targets[0])
 			require.Equal(t, types.New(types.T_decimal256, 65, 30), targets[1])
 		})
 	}
@@ -139,14 +137,15 @@ func TestIntegerOverDecimal256DivisionBindingControls(t *testing.T) {
 		require.Equal(t, types.T_decimal128, targets[1].Oid)
 	})
 
-	t.Run("integer over integer still binds the double path", func(t *testing.T) {
+	t.Run("integer over integer binds the decimal path", func(t *testing.T) {
 		bound, err := GetFunctionByName(context.Background(), "/", []types.Type{
 			types.T_int64.ToType(), types.T_int64.ToType()})
 		require.NoError(t, err)
-		require.Equal(t, types.T_float64, bound.GetReturnType().Oid)
-		_, err = GetFunctionByName(context.Background(), "/", []types.Type{
+		require.Equal(t, types.New(types.T_decimal128, 23, 4), bound.GetReturnType())
+		bound2, err := GetFunctionByName(context.Background(), "/", []types.Type{
 			types.T_uint32.ToType(), types.T_int64.ToType()})
 		require.NoError(t, err)
+		require.Equal(t, types.New(types.T_decimal128, 14, 4), bound2.GetReturnType())
 	})
 
 	t.Run("float over decimal256 still falls back to double", func(t *testing.T) {
@@ -172,7 +171,7 @@ func TestIntegerOverDecimal256DivisionBindingControls(t *testing.T) {
 			types.New(types.T_decimal256, 35, 4), bound.GetReturnType())
 		targets, cast := bound.ShouldDoImplicitTypeCast()
 		require.True(t, cast)
-		require.Equal(t, types.T_decimal256.ToType(), targets[0])
+		require.Equal(t, types.New(types.T_decimal256, 1, 0), targets[0])
 		require.Equal(t, types.New(types.T_decimal256, 65, 30), targets[1])
 	})
 

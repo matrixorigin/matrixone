@@ -703,3 +703,134 @@ func TestTableDumpPreIncompleteTemporalStringBindings(t *testing.T) {
 		})
 	}
 }
+
+func TestTableDumpLegacyIntegerFloatDivEra(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(a int, b int, g double generated always as (a / b) stored, check (a / 3 > 0))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	build := func(ctx CompilerContext) *planpb.TableDef {
+		p, buildErr := BuildPlan(ctx, stmt, false, nil)
+		require.NoError(t, buildErr)
+		return p.GetDdl().GetCreateTable().GetTableDef()
+	}
+
+	current := build(compiler)
+	legacy := build(tableDumpBindContext{
+		CompilerContext: compiler,
+		ctx:             function.WithLegacyIntegerFloatDiv(compiler.GetContext()),
+		increment:       4,
+	})
+
+	// Current binding binds integer `/` to DECIMAL; legacy era binds to float64.
+	require.Equal(t, int32(types.T_decimal128), current.Cols[2].GeneratedCol.Expr.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(types.T_float64), legacy.Cols[2].GeneratedCol.Expr.GetF().Args[0].Typ.Id)
+
+	for _, source := range []*planpb.TableDef{current, legacy} {
+		sensitive, analyzeErr := AnalyzeTableDumpBindings(compiler, current, source)
+		require.NoError(t, analyzeErr)
+		require.True(t, sensitive)
+	}
+
+	forged := proto.Clone(legacy).(*planpb.TableDef)
+	forged.Cols[2].GeneratedCol.Expr.GetF().Args[0].Typ.Id = int32(types.T_float32)
+	_, err = AnalyzeTableDumpBindings(compiler, current, forged)
+	require.ErrorContains(t, err, "cannot verify bound generated expression")
+}
+
+func TestTableDumpLegacyFloatStringAndIntegerDivComposition(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(a int, b int, d double default (cast('1.5' as double) + (1 / 3)))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	build := func(ctx context.Context) *planpb.TableDef {
+		p, buildErr := BuildPlan(tableDumpBindContext{CompilerContext: compiler, ctx: ctx, increment: 4}, stmt, false, nil)
+		require.NoError(t, buildErr)
+		return p.GetDdl().GetCreateTable().GetTableDef()
+	}
+
+	current := build(compiler.GetContext())
+	legacy := build(function.WithLegacyFloatStringBounds(function.WithLegacyIntegerFloatDiv(compiler.GetContext())))
+	_, err = AnalyzeTableDumpBindings(compiler, current, legacy)
+	require.NoError(t, err)
+}
+
+func TestPreparedExactDivisionUsesDivPrecisionIncrement(t *testing.T) {
+	for _, tc := range []struct {
+		sql       string
+		param     ParamValue
+		increment int32
+		want      types.Type
+	}{
+		{
+			sql:       "prepare p from 'select ? / 3 as q'",
+			param:     ParamValue{Value: int32(1), SourceType: types.T_int32.ToType(), HasSourceType: true},
+			increment: 4,
+			want:      types.New(types.T_decimal128, 14, 4),
+		},
+		{
+			sql:       "prepare p from 'select ? / 3 as q'",
+			param:     ParamValue{Value: int32(1), SourceType: types.T_int32.ToType(), HasSourceType: true},
+			increment: 30,
+			want:      types.New(types.T_decimal256, 40, 30),
+		},
+		{
+			sql:       "prepare p from 'select 1 / ? as q'",
+			param:     ParamValue{Value: int64(3), SourceType: types.T_int64.ToType(), HasSourceType: true},
+			increment: 10,
+			want:      types.New(types.T_decimal128, 29, 10),
+		},
+		{
+			sql:       "prepare p from 'select 1 / ? as q'",
+			param:     ParamValue{Value: true, SourceType: types.T_bool.ToType(), HasSourceType: true},
+			increment: 4,
+			want:      types.New(types.T_decimal128, 23, 4),
+		},
+		{
+			sql:       "prepare p from 'select 1 / ? as q'",
+			param:     ParamValue{Value: types.DateFromCalendar(2024, 1, 2), SourceType: types.T_date.ToType(), HasSourceType: true},
+			increment: 4,
+			want:      types.New(types.T_decimal128, 23, 4),
+		},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+
+			ctx := function.WithDivPrecisionIncrement(context.Background(), tc.increment)
+			bound, _, err := FillValuesOfParamsInPlanWithSpecialization(
+				ctx,
+				prepared.GetDcl().GetPrepare().Plan,
+				[]any{tc.param},
+			)
+			require.NoError(t, err)
+			division := findPlanFunctionExpr(bound, "/")
+			require.NotNil(t, division)
+			require.Equal(t, tc.want, makeTypeByPlan2Expr(division))
+		})
+	}
+
+	// Explicit CAST(? AS INT) / 3 fixes the dividend type at PREPARE time and
+	// honors the session's div_precision_increment.
+	t.Run("prepare cast(? as int) / 3 with increment=30", func(t *testing.T) {
+		proc := newPlanTestProcess(t)
+		compiler := divPrecisionCompilerContext{
+			CompilerContext: NewMockCompilerContext(false, proc),
+			increment:       30,
+		}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "prepare p from 'select cast(? as int) / 3 as q'", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		prepared, err := BuildPlan(compiler, stmt, false, nil)
+		require.NoError(t, err)
+		division := findPlanFunctionExpr(prepared.GetDcl().GetPrepare().Plan, "/")
+		require.NotNil(t, division)
+		require.Equal(t, types.New(types.T_decimal256, 40, 30), makeTypeByPlan2Expr(division))
+	})
+}

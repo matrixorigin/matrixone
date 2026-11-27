@@ -503,7 +503,7 @@ func TestResolveNumericBinaryTypesByName(t *testing.T) {
 		{name: "+", wantResult: types.T_int64, wantOK: true},
 		{name: "-", wantResult: types.T_int64, wantOK: true},
 		{name: "*", wantResult: types.T_int64, wantOK: true},
-		{name: "/", wantResult: types.T_float64, wantOK: true},
+		{name: "/", wantResult: types.T_decimal128, wantOK: true},
 		{name: "DIV", wantResult: types.T_int64, wantOK: true},
 		{name: "%", wantResult: types.T_int64, wantOK: true},
 		{name: "MOD", wantResult: types.T_int64, wantOK: true},
@@ -595,4 +595,61 @@ func TestInferNumericParameterTypeLowPrecisionFloatIsApproximate(t *testing.T) {
 			require.Equal(t, types.T_float64, got.Oid, oid.String())
 		}
 	}
+}
+
+func TestResolveNumericBinaryTypesDivExactAndIncrement(t *testing.T) {
+	for _, inc := range []int32{0, 4, 10, 30} {
+		ctx := WithDivPrecisionIncrement(context.Background(), inc)
+		left, right, result, ok := ResolveNumericBinaryTypesWithContext(
+			ctx, "/", types.T_int32.ToType(), types.T_int32.ToType(), nil,
+		)
+		require.True(t, ok)
+		wantPrec := int32(10) + inc
+		wantOid := types.T_decimal128
+		wantOperandOid := types.T_decimal64
+		if wantPrec > 38 {
+			wantOid = types.T_decimal256
+			wantOperandOid = types.T_decimal256
+		}
+		require.Equal(t, wantOperandOid, left.Oid)
+		require.Equal(t, wantOperandOid, right.Oid)
+		require.Equal(t, types.New(wantOid, wantPrec, inc), result)
+	}
+
+	// Unknown parameter `? / peer` and `peer / ?` resolve through exact DECIMAL division
+	// for all exact types (including BOOL and temporal types).
+	for _, pair := range [][2]types.Type{
+		{types.T_any.ToType(), types.T_int32.ToType()},
+		{types.T_int32.ToType(), types.T_any.ToType()},
+		{types.New(types.T_bit, 64, 0), types.T_int32.ToType()},
+		{types.T_bool.ToType(), types.T_int32.ToType()},
+		{types.T_any.ToType(), types.T_bool.ToType()},
+		{types.T_bool.ToType(), types.T_any.ToType()},
+		{types.T_any.ToType(), types.T_date.ToType()},
+		{types.T_date.ToType(), types.T_any.ToType()},
+		{types.T_any.ToType(), types.T_year.ToType()},
+		{types.T_year.ToType(), types.T_any.ToType()},
+		{types.T_any.ToType(), types.New(types.T_time, 0, 3)},
+		{types.New(types.T_time, 0, 3), types.T_any.ToType()},
+		{types.T_any.ToType(), types.New(types.T_datetime, 0, 2)},
+		{types.New(types.T_datetime, 0, 2), types.T_any.ToType()},
+		{types.T_any.ToType(), types.New(types.T_timestamp, 0, 4)},
+		{types.New(types.T_timestamp, 0, 4), types.T_any.ToType()},
+	} {
+		_, _, result, ok := ResolveNumericBinaryTypesWithContext(
+			WithDivPrecisionIncrement(context.Background(), 6),
+			"/", pair[0], pair[1], nil,
+		)
+		require.True(t, ok, "%v", pair)
+		require.True(t, result.Oid.IsDecimal(), "%v -> %v", pair, result)
+		require.GreaterOrEqual(t, result.Scale, int32(6), "%v", pair)
+	}
+
+	// Legacy float `/` era isolation.
+	legacyCtx := WithLegacyIntegerFloatDiv(context.Background())
+	_, _, legacyResult, ok := ResolveNumericBinaryTypesWithContext(
+		legacyCtx, "/", types.T_int64.ToType(), types.T_int64.ToType(), nil,
+	)
+	require.True(t, ok)
+	require.Equal(t, types.T_float64, legacyResult.Oid)
 }
