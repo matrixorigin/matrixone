@@ -1039,6 +1039,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <privilegeType> priv_type
 %type <privilegeLevel> priv_level
 %type <unresolveNames> column_name_list
+%type <unresolveNames> partition_column_name_list
 %type <unresolveNames> cluster_decl_name_list
 %type <partitionOption> partition_by_opt
 %type <clusterByOption> cluster_by_opt
@@ -11774,6 +11775,20 @@ cluster_by_opt:
         )
     }
 
+// partition_column_name_list is confined to the PARTITION BY name lists of
+// KEY, RANGE COLUMNS and LIST COLUMNS: it accepts the same declaration
+// identifier rule (including the unquoted END column) without widening the
+// shared column_name_list used by privilege/INCLUDE contexts.
+partition_column_name_list:
+    column_decl_name
+    {
+        $$ = []*tree.UnresolvedName{$1}
+    }
+|   partition_column_name_list ',' column_decl_name
+    {
+        $$ = append($1, $3)
+    }
+
 // cluster_decl_name_list is confined to CLUSTER BY: it accepts the same
 // declaration identifier rule (including the unquoted END column) without
 // widening the shared column_name_list used by privilege/INCLUDE contexts.
@@ -11974,7 +11989,7 @@ partition_method:
             rangeTyp,
         )
     }
-|   RANGE fields_or_columns '(' column_name_list ')'
+|   RANGE fields_or_columns '(' partition_column_name_list ')'
     {
         rangeTyp := tree.NewRangeType()
         rangeTyp.ColumnList = $4
@@ -11990,7 +12005,7 @@ partition_method:
             listTyp,
         )
     }
-|   LIST fields_or_columns '(' column_name_list ')'
+|   LIST fields_or_columns '(' partition_column_name_list ')'
     {
         listTyp := tree.NewListType()
         listTyp.ColumnList = $4
@@ -12010,7 +12025,7 @@ sub_partition_method:
             keyTyp,
         )
     }
-|   linear_opt KEY algorithm_opt '(' column_name_list ')'
+|   linear_opt KEY algorithm_opt '(' partition_column_name_list ')'
     {
         keyTyp := tree.NewKeyType()
         keyTyp.Linear = $1
