@@ -747,6 +747,7 @@ func TestSession_Migrate(t *testing.T) {
 			func(state *query.MigrateConnRoleState) {
 				state.LowerCaseTableNames = (state.LowerCaseTableNames + 1) % 3
 			},
+			func(state *query.MigrateConnRoleState) { state.LowerCaseTableNames = 3 },
 		} {
 			source := *role
 			change(&source)
@@ -758,9 +759,13 @@ func TestSession_Migrate(t *testing.T) {
 			})
 			expected := moerr.GetOkExpectedNotSafeToStartTransfer()
 			if source != nil && source.AccountID == role.AccountID && source.UserID == role.UserID &&
-				source.LowerCaseTableNames == role.LowerCaseTableNames && source.AllSecondaryRoles == role.AllSecondaryRoles &&
-				source.PrimaryRoleName != "" {
-				expected = moerr.GetOkExpectedMigrationRoleChanged()
+				source.AllSecondaryRoles == role.AllSecondaryRoles && source.PrimaryRoleName != "" {
+				switch {
+				case source.LowerCaseTableNames == role.LowerCaseTableNames:
+					expected = moerr.GetOkExpectedMigrationRoleChanged()
+				case source.LowerCaseTableNames >= 0 && source.LowerCaseTableNames <= 2:
+					expected = moerr.GetOkExpectedMigrationTableNameModeChanged()
+				}
 			}
 			require.ErrorIs(t, err, expected)
 			require.Empty(t, s.GetDatabaseName())

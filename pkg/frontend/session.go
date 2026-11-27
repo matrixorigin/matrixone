@@ -2291,7 +2291,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	if currentRole == nil || sourceRole == nil ||
 		currentRole.AccountID != sourceRole.AccountID || currentRole.UserID != sourceRole.UserID ||
 		currentRole.AllSecondaryRoles != sourceRole.AllSecondaryRoles ||
-		currentRole.LowerCaseTableNames != sourceRole.LowerCaseTableNames {
+		sourceRole.LowerCaseTableNames < 0 || sourceRole.LowerCaseTableNames > 2 {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	if currentRole.PrimaryRoleName != sourceRole.PrimaryRoleName || currentRole.PrimaryRoleID != sourceRole.PrimaryRoleID {
@@ -2304,6 +2304,9 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		if stmt == nil || len(stmt.ReplayProof) != sha256.Size {
 			return moerr.GetOkExpectedNotSafeToStartTransfer()
 		}
+	}
+	if currentRole.LowerCaseTableNames != sourceRole.LowerCaseTableNames {
+		return moerr.GetOkExpectedMigrationTableNameModeChanged()
 	}
 	// USE is replayed as an internal statement and updates ROW_COUNT().
 	// Restore the source session value after all replay work has finished.

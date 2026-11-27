@@ -143,9 +143,10 @@ func TestMigrationRefusalClearedAfterForwardedStmtClose(t *testing.T) {
 
 func TestMigrationCatalogRetryIsBounded(t *testing.T) {
 	for name, refusal := range map[string]error{
-		"catalog":  moerr.GetOkExpectedMigrationPolicyChanged(),
-		"prepared": moerr.GetOkExpectedMigrationPreparedState(),
-		"role":     moerr.GetOkExpectedMigrationRoleChanged(),
+		"catalog":         moerr.GetOkExpectedMigrationPolicyChanged(),
+		"prepared":        moerr.GetOkExpectedMigrationPreparedState(),
+		"role":            moerr.GetOkExpectedMigrationRoleChanged(),
+		"table-name mode": moerr.GetOkExpectedMigrationTableNameModeChanged(),
 	} {
 		t.Run(name, func(t *testing.T) {
 			now := time.Now()

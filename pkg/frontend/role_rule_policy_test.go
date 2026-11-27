@@ -174,6 +174,11 @@ func TestRoleRuleAndObjectPrivilegesShareStatementSnapshot(t *testing.T) {
 func TestRoleRuleStatementSupportRejectsUnboundReads(t *testing.T) {
 	for _, stmt := range []tree.Statement{
 		&tree.Merge{},
+		&tree.DumpTable{},
+		&tree.MoDump{},
+		&tree.BackupStart{},
+		&tree.Update{Where: &tree.Where{Expr: &tree.Subquery{}}},
+		&tree.Delete{Where: &tree.Where{Expr: &tree.Subquery{}}},
 		&tree.ShowTables{Where: &tree.Where{Expr: &tree.Subquery{}}},
 	} {
 		rewrite, supported := roleRuleStatementSupport(stmt)

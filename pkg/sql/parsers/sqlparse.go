@@ -529,9 +529,8 @@ func AddRewriteHintsWithRoleRules(ctx context.Context, stmts []tree.Statement, s
 		case *tree.Select, *tree.ParenSelect, *tree.Insert, *tree.Update, *tree.Delete:
 			// SELECT and INSERT...SELECT carry the rewrite option for the planner
 			// (INSERT propagates it to its inner SELECT read-source, see below).
-			// UPDATE/DELETE are decoded only to validate the inline hint; their
-			// remapdb is applied at the AST level and table rewrites on their
-			// read-sources are not yet implemented.
+			// UPDATE and DELETE only carry the trusted policy for target
+			// validation. Optional remapdb is applied separately to the AST.
 		default:
 			continue
 		}
@@ -613,6 +612,14 @@ func AddRewriteHintsWithRoleRules(ctx context.Context, stmts []tree.Statement, s
 					break
 				}
 				source = paren.Select
+			}
+		case *tree.Update:
+			if len(roleRules) != 0 {
+				s.RewriteOption = rewriteOption
+			}
+		case *tree.Delete:
+			if len(roleRules) != 0 {
+				s.RewriteOption = rewriteOption
 			}
 		case *tree.Insert:
 			// INSERT...SELECT: propagate the rewrite to the inner read-source so

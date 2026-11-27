@@ -53,6 +53,8 @@ const (
 	OkExpectedMigrationPreparedState uint16 = 9
 	// A catalog change can restore the authenticated primary role.
 	OkExpectedMigrationRoleChanged uint16 = 10
+	// Restoring the destination's table-name mode can make replay safe.
+	OkExpectedMigrationTableNameModeChanged uint16 = 11
 
 	OkMax uint16 = 99
 
@@ -925,6 +927,7 @@ var errOkExpectedNotSafeToStartTransfer = Error{code: OkExpectedNotSafeToStartTr
 var errOkExpectedMigrationPolicyChanged = Error{code: OkExpectedMigrationPolicyChanged, message: "OkExpectedMigrationPolicyChanged", sqlState: "00000"}
 var errOkExpectedMigrationPreparedState = Error{code: OkExpectedMigrationPreparedState, message: "OkExpectedMigrationPreparedState", sqlState: "00000"}
 var errOkExpectedMigrationRoleChanged = Error{code: OkExpectedMigrationRoleChanged, message: "OkExpectedMigrationRoleChanged", sqlState: "00000"}
+var errOkExpectedMigrationTableNameModeChanged = Error{code: OkExpectedMigrationTableNameModeChanged, message: "OkExpectedMigrationTableNameModeChanged", sqlState: "00000"}
 var errMysqlClientQuit = Error{code: MysqlClientQuit, message: "MysqlClientQuit", sqlState: "00000"}
 
 /*
@@ -970,6 +973,10 @@ func GetOkExpectedMigrationPreparedState() *Error {
 
 func GetOkExpectedMigrationRoleChanged() *Error {
 	return &errOkExpectedMigrationRoleChanged
+}
+
+func GetOkExpectedMigrationTableNameModeChanged() *Error {
+	return &errOkExpectedMigrationTableNameModeChanged
 }
 
 func GetMysqlClientQuit() *Error {

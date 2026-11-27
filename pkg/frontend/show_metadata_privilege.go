@@ -258,37 +258,44 @@ func showMetadataPredicateSafe(stmt tree.Statement) bool {
 }
 
 func showMetadataRowLocalExpr(expr tree.Expr) bool {
+	return rowLocalExpr(expr, false)
+}
+
+// rowLocalExpr restricts expressions to forms with no independent data source.
+func rowLocalExpr(expr tree.Expr, allowDMLLeaves bool) bool {
 	if expr == nil {
 		return true
 	}
 	switch e := expr.(type) {
 	case *tree.NumVal, *tree.UnresolvedName:
 		return true
+	case *tree.ParamExpr, *tree.DefaultVal:
+		return allowDMLLeaves
 	case *tree.ComparisonExpr:
-		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right) && showMetadataRowLocalExpr(e.Escape)
+		return rowLocalExpr(e.Left, allowDMLLeaves) && rowLocalExpr(e.Right, allowDMLLeaves) && rowLocalExpr(e.Escape, allowDMLLeaves)
 	case *tree.BinaryExpr:
-		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right)
+		return rowLocalExpr(e.Left, allowDMLLeaves) && rowLocalExpr(e.Right, allowDMLLeaves)
 	case *tree.AndExpr:
-		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right)
+		return rowLocalExpr(e.Left, allowDMLLeaves) && rowLocalExpr(e.Right, allowDMLLeaves)
 	case *tree.OrExpr:
-		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right)
+		return rowLocalExpr(e.Left, allowDMLLeaves) && rowLocalExpr(e.Right, allowDMLLeaves)
 	case *tree.XorExpr:
-		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right)
+		return rowLocalExpr(e.Left, allowDMLLeaves) && rowLocalExpr(e.Right, allowDMLLeaves)
 	case *tree.NotExpr:
-		return showMetadataRowLocalExpr(e.Expr)
+		return rowLocalExpr(e.Expr, allowDMLLeaves)
 	case *tree.ParenExpr:
-		return showMetadataRowLocalExpr(e.Expr)
+		return rowLocalExpr(e.Expr, allowDMLLeaves)
 	case *tree.UnaryExpr:
-		return showMetadataRowLocalExpr(e.Expr)
+		return rowLocalExpr(e.Expr, allowDMLLeaves)
 	case *tree.IsNullExpr:
-		return showMetadataRowLocalExpr(e.Expr)
+		return rowLocalExpr(e.Expr, allowDMLLeaves)
 	case *tree.IsNotNullExpr:
-		return showMetadataRowLocalExpr(e.Expr)
+		return rowLocalExpr(e.Expr, allowDMLLeaves)
 	case *tree.RangeCond:
-		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.From) && showMetadataRowLocalExpr(e.To)
+		return rowLocalExpr(e.Left, allowDMLLeaves) && rowLocalExpr(e.From, allowDMLLeaves) && rowLocalExpr(e.To, allowDMLLeaves)
 	case *tree.Tuple:
 		for _, item := range e.Exprs {
-			if !showMetadataRowLocalExpr(item) {
+			if !rowLocalExpr(item, allowDMLLeaves) {
 				return false
 			}
 		}

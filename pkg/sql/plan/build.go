@@ -591,8 +591,14 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		}
 		return bindAndOptimizeReplaceQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Update:
+		if err := checkRoleRuleWriteTarget(ctx, stmt.Tables, stmt.RewriteOption); err != nil {
+			return nil, err
+		}
 		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Delete:
+		if err := checkRoleRuleWriteTarget(ctx, stmt.Tables, stmt.RewriteOption); err != nil {
+			return nil, err
+		}
 		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Merge:
 		if stmt.HasReturning() {

@@ -126,8 +126,8 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 		"grant select on table policy_fixture.docs to policy_reader, policy_other",
 		"grant select on view policy_fixture.docs_view to policy_reader",
 		"grant select on view policy_fixture.docs_nested to policy_reader",
-		"grant insert on table policy_fixture.docs to policy_reader",
-		"grant select, insert, update on table policy_fixture.summary to policy_reader",
+		"grant insert, update, delete on table policy_fixture.docs to policy_reader",
+		"grant select, insert, update, delete on table policy_fixture.summary to policy_reader",
 		"grant policy_other to policy_test_user",
 	} {
 		exec(admin, statement)
@@ -290,6 +290,25 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	var returned int
 	require.NoError(t, reader.QueryRowContext(ctx, "insert into policy_fixture.summary values (10,10) returning id").Scan(&returned))
 	require.Equal(t, 10, returned)
+	unboundUpdate, err := reader.PrepareContext(ctx, "update policy_fixture.summary set value = ? where id = ?")
+	require.NoError(t, err)
+	defer unboundUpdate.Close()
+	updated, err := unboundUpdate.ExecContext(ctx, 20, 10)
+	require.NoError(t, err)
+	count, err := updated.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, count)
+	var value int
+	require.NoError(t, admin.QueryRowContext(ctx, "select value from policy_fixture.summary where id = 10").Scan(&value))
+	require.Equal(t, 20, value)
+	exec(reader, "delete from policy_fixture.summary where id = 10")
+	selectIDs(admin, "select id from policy_fixture.summary order by id", 1)
+	assertDenied("update policy_fixture.docs set note = 'blocked' where id = 1", "write target cannot enforce active role rules")
+	assertDenied("delete from policy_fixture.docs where id = 1", "write target cannot enforce active role rules")
+	assertDenied("delete from policy_fixture.summary where id in (select 1)", "cannot enforce active role rules")
+	var note string
+	require.NoError(t, admin.QueryRowContext(ctx, "select note from policy_fixture.docs where id = 1").Scan(&note))
+	require.Equal(t, "a", note)
 	exec(reader, "insert into policy_fixture.docs values (10,'other','[8,0,0]','d')")
 	assertDenied("insert into policy_fixture.docs values (11,'other','[8,0,0]','e') returning id", "INSERT RETURNING cannot enforce active role rules")
 	planContains := func(query, expected string) {
@@ -416,4 +435,13 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	foldingAdmin := connect(0, "root")
 	exec(foldingAdmin, "alter role policy_case_role drop rule on table PolicyCase.Docs")
 	require.ErrorIs(t, foldingAdmin.QueryRowContext(ctx, "show rules on role policy_case_role").Scan(&ruleName, &ruleSQL), sql.ErrNoRows)
+
+	// An authorized administrator still cannot physically export rows while
+	// subject to a mandatory policy. Refusal must precede manifest creation.
+	exec(foldingAdmin, "alter role moadmin add rule 'select id from policy_fixture.summary where id = 1' on table policy_fixture.summary")
+	defer exec(foldingAdmin, "alter role moadmin drop rule on table policy_fixture.summary")
+	destination := filepath.Join(t.TempDir(), "export")
+	_, err = foldingAdmin.ExecContext(ctx, fmt.Sprintf("dump table policy_fixture.summary to '%s'", destination))
+	require.ErrorContains(t, err, "cannot enforce active role rules")
+	require.NoFileExists(t, filepath.Join(destination, "manifest.json"))
 }

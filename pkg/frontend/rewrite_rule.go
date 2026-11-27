@@ -517,6 +517,26 @@ func roleRuleStatementSupport(stmt tree.Statement) (rewrite, supported bool) {
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect, *tree.Insert:
 		return true, true
+	case *tree.Update:
+		if stmt.With != nil || stmt.MultiTable || stmt.From != nil || stmt.HasReturning() ||
+			!roleRuleWriteRowLocal(stmt.Where, stmt.OrderBy, stmt.Limit) {
+			return false, false
+		}
+		for _, assignment := range stmt.Exprs {
+			if !rowLocalExpr(assignment.Expr, true) {
+				return false, false
+			}
+		}
+		return true, true
+	case *tree.Delete:
+		if stmt.With != nil || stmt.TableRefs != nil || stmt.HasReturning() ||
+			!roleRuleWriteRowLocal(stmt.Where, stmt.OrderBy, stmt.Limit) {
+			return false, false
+		}
+		return true, true
+	case *tree.DumpTable, *tree.MoDump, *tree.BackupStart:
+		// Physical export does not pass the exported rows through the binder.
+		return false, false
 	case *tree.CreateTable:
 		return stmt.AsSource != nil, true
 	case *tree.CreateView, *tree.AlterView, *tree.CloneTable, *tree.CloneDatabase, *tree.CallStmt,
@@ -568,6 +588,18 @@ func roleRuleStatementSupport(stmt tree.Statement) (rewrite, supported bool) {
 		kind := stmt.GetQueryType()
 		return false, kind != tree.QueryTypeDML && kind != tree.QueryTypeDQL
 	}
+}
+
+func roleRuleWriteRowLocal(where *tree.Where, order tree.OrderBy, limit *tree.Limit) bool {
+	if where != nil && !rowLocalExpr(where.Expr, true) {
+		return false
+	}
+	for _, term := range order {
+		if !rowLocalExpr(term.Expr, true) {
+			return false
+		}
+	}
+	return limit == nil || (rowLocalExpr(limit.Offset, true) && rowLocalExpr(limit.Count, true))
 }
 
 func roleRuleMetadataFilterSupported(where *tree.Where, like *tree.ComparisonExpr) bool {
