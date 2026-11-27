@@ -430,20 +430,24 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 
 // ### Update Function
 
-// UpdateValue sets row row of col to val, or to NULL.
+// UpdateValue sets row to val, or to NULL. It panics on a const or read-only
+// vector.
 func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool.MPool) {
+	if col.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("update to const vector"))
+	}
 	if !vector.SupportsAny(col.GetType().Oid) {
 		panic(moerr.NewInternalErrorNoCtxf("%v not supported", col.GetType()))
 	}
 	if isNull {
-		col.GetNulls().Add(uint64(row))
+		col.SetNull(uint64(row))
 		return
 	}
 	if err := vector.SetAny(col, int(row), val, mp); err != nil {
 		panic(err)
 	}
 	if col.GetNulls().Contains(uint64(row)) {
-		col.GetNulls().Unset(uint64(row))
+		col.UnsetNull(uint64(row))
 	}
 }
 

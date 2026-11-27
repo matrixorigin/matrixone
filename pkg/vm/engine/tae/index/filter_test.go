@@ -174,12 +174,12 @@ func TestHybridBloomFilter(t *testing.T) {
 	rowids := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(rowids)
 	for i := 0; i < 10; i++ {
-		containers.AppendValue(rowids, types.NewRowid(&blk1_0, uint32(i)), false)
-		containers.AppendValue(rowids, types.NewRowid(&blk1_1, uint32(i)), false)
-		containers.AppendValue(rowids, types.NewRowid(&blk2_0, uint32(i)), false)
-		containers.AppendValue(rowids, types.NewRowid(&blk3_0, uint32(i)), false)
-		containers.AppendValue(rowids, types.NewRowid(&blk3_1, uint32(i)), false)
-		containers.AppendValue(rowids, types.NewRowid(&blk3_2, uint32(i)), false)
+		rowids.MustAppendValue(types.NewRowid(&blk1_0, uint32(i)), false)
+		rowids.MustAppendValue(types.NewRowid(&blk1_1, uint32(i)), false)
+		rowids.MustAppendValue(types.NewRowid(&blk2_0, uint32(i)), false)
+		rowids.MustAppendValue(types.NewRowid(&blk3_0, uint32(i)), false)
+		rowids.MustAppendValue(types.NewRowid(&blk3_1, uint32(i)), false)
+		rowids.MustAppendValue(types.NewRowid(&blk3_2, uint32(i)), false)
 	}
 	objectFn := func(in []byte) []byte {
 		return in[:types.ObjectBytesSize]

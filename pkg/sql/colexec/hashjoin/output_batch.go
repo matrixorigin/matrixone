@@ -15,6 +15,7 @@
 package hashjoin
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -54,11 +55,17 @@ func (ctr *container) retainedOutputBatch(index int64) *batch.Batch {
 	return ctr.rightBats[index]
 }
 
+// outputAreaTarget bounds the external payload per result column so that
+// growing a vector leaves room for both the old and new buffers.
+func outputAreaTarget() int64 {
+	return min(mpool.MaxAllocationSize(), 64*mpool.MB)
+}
+
 // needsOutputAreaCheck only chooses whether projection needs to count bytes.
 // Even a build value that never matches can enable the check, but only payloads
 // selected for output use up the result batch's physical area.
 func needsOutputAreaCheck(columns []colexec.ResultPos, source *batch.Batch, relation int32, copyFlatPayloadOnce bool) bool {
-	limit := mpool.MaxAllocationSize()
+	limit := outputAreaTarget()
 	threshold := limit / colexec.DefaultBatchSize
 	for _, column := range columns {
 		if column.Rel != relation || column.Pos < 0 || int(column.Pos) >= len(source.Vecs) {
@@ -76,6 +83,12 @@ func needsOutputAreaCheck(columns []colexec.ResultPos, source *batch.Batch, rela
 	return false
 }
 
+func (hashJoin *HashJoin) gathersInnerPayload() bool {
+	ctr := &hashJoin.ctr
+	return hashJoin.IsInner() && hashJoin.NonEqCond == nil && !ctr.probeHashOnPK &&
+		!ctr.probeTrackBuildMatches && ctr.spillEngine == nil
+}
+
 func (hashJoin *HashJoin) prepareBuildOutputAreaCheck() {
 	ctr := &hashJoin.ctr
 	if ctr.buildAreaChecked || hashJoin.IsShuffle || ctr.mp == nil || ctr.spillEngine != nil {
@@ -86,14 +99,55 @@ func (hashJoin *HashJoin) prepareBuildOutputAreaCheck() {
 	if hashJoin.AsofBuildLeft {
 		relation, buildTypes = 0, hashJoin.LeftTypes
 	}
-	threshold := mpool.MaxAllocationSize() / colexec.DefaultBatchSize
+	threshold := outputAreaTarget() / colexec.DefaultBatchSize
 	for _, column := range hashJoin.ResultCols {
-		if column.Rel == relation && column.Pos >= 0 && int(column.Pos) < len(buildTypes) &&
-			buildTypes[column.Pos].IsVarlen() && ctr.mp.BuildPayloadExceeds(int(column.Pos), threshold) {
-			ctr.checkBuildArea = true
-			return
+		if column.Rel != relation || column.Pos < 0 || int(column.Pos) >= len(buildTypes) ||
+			!buildTypes[column.Pos].IsVarlen() || !ctr.mp.BuildPayloadExceeds(int(column.Pos), threshold) {
+			continue
+		}
+		if hashJoin.gathersInnerPayload() {
+			// Values that fit a complete gather can still use bulk projection.
+			// Narrower columns already fit a full batch by the shared check above.
+			limit := outputAreaTarget() / hashmap.UnitLimit
+			bound := gatherPayloadBound(ctr.mp.GetBatches(), int(column.Pos), threshold, limit)
+			if bound <= limit {
+				ctr.gatherBuildRowBytes = max(ctr.gatherBuildRowBytes, bound)
+				continue
+			}
+		}
+		ctr.checkBuildArea = true
+		return
+	}
+}
+
+// Return an upper bound for live external values, or stop on a value that
+// already exceeds the gather limit. A narrow source area needs no row scan.
+func gatherPayloadBound(batches []*batch.Batch, col int, narrow, limit int64) int64 {
+	bound := narrow
+	for _, bat := range batches {
+		if col >= len(bat.Vecs) || bat.Vecs[col] == nil {
+			continue
+		}
+		vec := bat.Vecs[col]
+		area := int64(len(vec.GetArea()))
+		if area <= bound || vec.IsConstNull() {
+			continue
+		}
+		rows := vec.Length()
+		if vec.IsConst() {
+			rows = min(rows, 1)
+		}
+		for i := range rows {
+			bound = max(bound, vector.VarlenaPayloadSize(vec, i))
+			if bound > limit {
+				return bound
+			}
+			if bound == area {
+				break
+			}
 		}
 	}
+	return bound
 }
 
 type outputArea struct {
@@ -105,7 +159,7 @@ type outputAreas []outputArea
 
 func (ctr *container) outputAreas(areas outputAreas, check bool) outputAreas {
 	if check {
-		limit := mpool.MaxAllocationSize()
+		limit := outputAreaTarget()
 		for i, dst := range ctr.resBat.Vecs {
 			if dst.GetType().IsVarlen() {
 				areas = append(areas, outputArea{column: i, remaining: limit})
@@ -137,10 +191,26 @@ func (areas outputAreas) reserve(columns []colexec.ResultPos, row, previous outp
 		if area.remaining < 0 && haveRows {
 			return false
 		}
-		// An oversized first value has no smaller batch to move to. Let the
-		// vector append report the allocator error through the usual path.
+		// Admit a first value larger than the batch target. The vector
+		// append still enforces the allocator limit.
 	}
 	return true
+}
+
+// UnionBatch copies a constant once per range, but can materialize shared
+// descriptors of a flat probe separately. Reserve the same logical range.
+func (ctr *container) fitEmptyProbe(join *HashJoin, start, count int) int {
+	var scratch [8]outputArea
+	areas := ctr.outputAreas(scratch[:0], true)
+	var previous outputRow
+	for i := range count {
+		row := outputRow{left: ctr.leftBat, leftRow: int64(start + i)}
+		if !areas.reserve(join.ResultCols, row, previous, i > 0) {
+			return i
+		}
+		previous = row
+	}
+	return count
 }
 
 // fitFindOutput preserves the Find window and its gather when the selected

@@ -159,7 +159,7 @@ namespace matrixone {
 void convert_f32_to_f16_on_device(const raft::resources& res, const float* src, half* dst, uint64_t total_elements) {
     if (!src || !dst || total_elements == 0) return;
     
-    auto stream = raft::resource::get_cuda_stream(res);
+    auto stream = cuda_stream_handle(res);
     uint64_t n_pairs = total_elements / 2;
     if (n_pairs > 0) {
         uint32_t threads_per_block = 256;
@@ -175,7 +175,7 @@ void convert_f32_to_f16_on_device(const raft::resources& res, const float* src, 
 void convert_f16_to_f32_on_device(const raft::resources& res, const half* src, float* dst, uint64_t total_elements) {
     if (!src || !dst || total_elements == 0) return;
 
-    auto stream = raft::resource::get_cuda_stream(res);
+    auto stream = cuda_stream_handle(res);
     uint64_t n_pairs = total_elements / 2;
     if (n_pairs > 0) {
         uint32_t threads_per_block = 256;

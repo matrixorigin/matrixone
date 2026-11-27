@@ -17,7 +17,6 @@ package types
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"math"
 	"math/big"
 	"math/bits"
@@ -2784,67 +2783,93 @@ func ParseDecimal256FromByte(x string, width, scale int32) (y Decimal256, err er
 }
 
 func (x Decimal64) Format(scale int32) string {
-	a := ""
 	signx := (x >> 63) != 0
 	if signx {
 		x = x.Minus()
 	}
+	// at most 20 digits, the padding to scale, '.', a leading '0' and '-'
+	var stack [64]byte
+	buf := stack[:]
+	if need := 24 + int(max(scale, 0)); need > len(buf) {
+		buf = make([]byte, need)
+	}
+	i := len(buf)
 	for x != 0 {
-		a = fmt.Sprintf("%c", x%10+'0') + a
+		i--
+		buf[i] = byte(x%10) + '0'
 		x /= 10
 		scale--
 		if scale == 0 {
-			a = "." + a
+			i--
+			buf[i] = '.'
 		}
 	}
 	for scale > 0 {
-		a = "0" + a
+		i--
+		buf[i] = '0'
 		scale--
 		if scale == 0 {
-			a = "." + a
+			i--
+			buf[i] = '.'
 		}
 	}
 	if scale == 0 {
-		a = "0" + a
+		i--
+		buf[i] = '0'
 	}
 	if signx {
-		a = "-" + a
+		i--
+		buf[i] = '-'
 	}
-	return a
+	return string(buf[i:])
 }
 
 func (x Decimal128) Format(scale int32) string {
-	a := ""
 	signx := x.Sign()
 	if signx {
 		x = x.Minus()
 	}
-	for x.B64_127 != 0 || x.B0_63 != 0 {
-		y, _ := x.Mod128(Decimal128{Pow10[1], 0})
-		a = fmt.Sprintf("%c", y.B0_63+'0') + a
-		x, _ = x.Div128(Decimal128{Pow10[1], 0})
-		if y.B0_63 >= 5 {
-			x, _ = x.Sub128(Decimal128{1, 0})
-		}
+	// at most 39 digits, the padding to scale, '.', a leading '0' and '-'
+	var stack [80]byte
+	buf := stack[:]
+	if need := 43 + int(max(scale, 0)); need > len(buf) {
+		buf = make([]byte, need)
+	}
+	i := len(buf)
+	// x is the 128-bit magnitude hi:lo; take its decimal digits by exact
+	// division by 10 (what Div128, which rounds, followed by the correction
+	// for a remainder of 5 or more, computed).
+	hi, lo := x.B64_127, x.B0_63
+	for hi != 0 || lo != 0 {
+		var rem uint64
+		hi, rem = hi/10, hi%10
+		lo, rem = bits.Div64(rem, lo, 10)
+		i--
+		buf[i] = byte(rem) + '0'
 		scale--
 		if scale == 0 {
-			a = "." + a
+			i--
+			buf[i] = '.'
 		}
 	}
 	for scale > 0 {
-		a = "0" + a
+		i--
+		buf[i] = '0'
 		scale--
 		if scale == 0 {
-			a = "." + a
+			i--
+			buf[i] = '.'
 		}
 	}
 	if scale == 0 {
-		a = "0" + a
+		i--
+		buf[i] = '0'
 	}
 	if signx {
-		a = "-" + a
+		i--
+		buf[i] = '-'
 	}
-	return a
+	return string(buf[i:])
 }
 
 func (x Decimal256) Format(scale int32) string {

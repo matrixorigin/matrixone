@@ -186,3 +186,20 @@ func MakeImmuIndex(
 	)
 	return
 }
+
+// appendTombstoneRow appends one tombstone row (rowID, row pkRow of pk,
+// commitTS) to a batch made by catalog.NewTombstoneBatchByPKType.
+func appendTombstoneRow(
+	bat *containers.Batch, rowID types.Rowid, pk containers.Vector, pkRow int, commitTS types.TS,
+) error {
+	rowIDs := bat.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr)
+	if err := vector.AppendFixed(rowIDs, rowID, false, rowIDs.MPool()); err != nil {
+		return err
+	}
+	pks := bat.GetVectorByName(objectio.TombstoneAttr_PK_Attr)
+	if err := pks.UnionOne(pk, int64(pkRow), pks.MPool()); err != nil {
+		return err
+	}
+	commitTSs := bat.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr)
+	return vector.AppendFixed(commitTSs, commitTS, false, commitTSs.MPool())
+}

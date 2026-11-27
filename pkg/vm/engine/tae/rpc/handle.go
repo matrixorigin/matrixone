@@ -1170,7 +1170,7 @@ func parse_merge_settings_unset(
 ) (func(types.TS), error) {
 	tids := make([]uint64, 0, 1)
 	for i := 0; i < pkVec.Length(); i++ {
-		bs, ok := containers.GetValue(pkVec, i).([]byte)
+		bs, ok := pkVec.GetValue(i).([]byte)
 		if !ok {
 			return nil, moerr.NewInternalErrorNoCtxf("invalid merge setting key at row %d", i)
 		}

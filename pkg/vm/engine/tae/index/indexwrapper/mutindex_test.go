@@ -33,8 +33,8 @@ func TestMutIndexDeleteAtPreservesOtherPositions(t *testing.T) {
 	idx := NewMutIndex(types.T_int32.ToType())
 	keys := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(keys)
-	containers.AppendValue(keys, int32(7), false)
-	containers.AppendValue(keys, int32(7), false)
+	keys.MustAppendValue(int32(7), false)
+	keys.MustAppendValue(int32(7), false)
 	require.NoError(t, idx.BatchUpsert(keys, 0))
 
 	require.NoError(t, idx.DeleteAt(int32(7), 0))
@@ -47,16 +47,16 @@ func TestForeachRowsByKeysSkipsNullAndMissingKeys(t *testing.T) {
 	idx := NewMutIndex(types.T_int32.ToType())
 	indexed := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(indexed)
-	containers.AppendValue(indexed, int32(7), false)
-	containers.AppendValue(indexed, int32(8), false)
-	containers.AppendValue(indexed, int32(7), false)
+	indexed.MustAppendValue(int32(7), false)
+	indexed.MustAppendValue(int32(8), false)
+	indexed.MustAppendValue(int32(7), false)
 	require.NoError(t, idx.BatchUpsert(indexed, 0))
 
 	query := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(query)
-	containers.AppendValue(query, int32(7), false)
-	containers.AppendValue(query, nil, true)
-	containers.AppendValue(query, int32(9), false)
+	query.MustAppendValue(int32(7), false)
+	query.MustAppendValue(nil, true)
+	query.MustAppendValue(int32(9), false)
 	queryZM := index.NewZM(types.T_int32, 0)
 	require.NoError(t, index.BatchUpdateZM(queryZM, query))
 
@@ -73,16 +73,16 @@ func TestGetDuplicatedRowsSkipsIneligibleCandidates(t *testing.T) {
 	indexedKeys := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(indexedKeys)
 	for i := 0; i < 3; i++ {
-		containers.AppendValue(indexedKeys, int32(7), false)
+		indexedKeys.MustAppendValue(int32(7), false)
 	}
 	require.NoError(t, idx.BatchUpsert(indexedKeys, 0))
 
 	query := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(query)
-	containers.AppendValue(query, int32(7), false)
+	query.MustAppendValue(int32(7), false)
 	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(rowIDs)
-	containers.AppendValue(rowIDs, nil, true)
+	rowIDs.MustAppendValue(nil, true)
 
 	objID := types.NewObjectid()
 	blkID := types.NewBlockidWithObjectID(&objID, 0)
@@ -103,12 +103,12 @@ func TestGetDuplicatedRowsSkipsIneligibleCandidates(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.False(t, rowIDs.IsNull(0))
-	rid := containers.GetValue(rowIDs, 0).(types.Rowid)
+	rid := rowIDs.GetValue(0).(types.Rowid)
 	require.Equal(t, uint32(0), rid.GetRowOffset())
 
 	skippedRowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(skippedRowIDs)
-	containers.AppendValue(skippedRowIDs, nil, true)
+	skippedRowIDs.MustAppendValue(nil, true)
 	err = idx.GetDuplicatedRows(
 		context.Background(),
 		query,
@@ -128,18 +128,18 @@ func TestGetDuplicatedRowsChecksOnlyMatchingRows(t *testing.T) {
 	defer idx.Close()
 	indexed := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(indexed)
-	containers.AppendValue(indexed, int32(7), false)
-	containers.AppendValue(indexed, int32(9), false)
+	indexed.MustAppendValue(int32(7), false)
+	indexed.MustAppendValue(int32(9), false)
 	require.NoError(t, idx.BatchUpsert(indexed, 0))
 
 	query := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(query)
-	containers.AppendValue(query, int32(8), false) // Inside the zonemap, absent from ART.
-	containers.AppendValue(query, int32(9), false)
+	query.MustAppendValue(int32(8), false) // Inside the zonemap, absent from ART.
+	query.MustAppendValue(int32(9), false)
 	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(rowIDs)
-	containers.AppendValue(rowIDs, nil, true)
-	containers.AppendValue(rowIDs, nil, true)
+	rowIDs.MustAppendValue(nil, true)
+	rowIDs.MustAppendValue(nil, true)
 
 	var checked []uint32
 	blockID := types.Blockid{}
@@ -223,13 +223,13 @@ func TestContainsSkipsIneligibleTombstoneCandidates(t *testing.T) {
 	indexedKeys := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(indexedKeys)
 	for i := 0; i < 3; i++ {
-		containers.AppendValue(indexedKeys, rowID, false)
+		indexedKeys.MustAppendValue(rowID, false)
 	}
 	require.NoError(t, idx.BatchUpsert(indexedKeys, 0))
 
 	query := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(query)
-	containers.AppendValue(query, rowID, false)
+	query.MustAppendValue(rowID, false)
 	err := idx.Contains(
 		context.Background(),
 		query,
@@ -248,7 +248,7 @@ func TestContainsSkipsIneligibleTombstoneCandidates(t *testing.T) {
 
 	allSkipped := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(allSkipped)
-	containers.AppendValue(allSkipped, rowID, false)
+	allSkipped.MustAppendValue(rowID, false)
 	err = idx.Contains(
 		context.Background(),
 		allSkipped,
@@ -262,7 +262,7 @@ func TestContainsSkipsIneligibleTombstoneCandidates(t *testing.T) {
 
 	conflicting := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	defer containers.ReleaseVector(conflicting)
-	containers.AppendValue(conflicting, rowID, false)
+	conflicting.MustAppendValue(rowID, false)
 	conflictErr := errors.New("prepared tombstone conflict")
 	err = idx.Contains(
 		context.Background(),
@@ -292,7 +292,7 @@ func TestContainsReturnsTombstoneBitmapCapacityError(t *testing.T) {
 	rowID := types.NewRowid(&blkID, 42)
 	keys := containers.MakeVector(types.T_Rowid.ToType(), pool)
 	defer containers.ReleaseVector(keys)
-	containers.AppendValue(keys, rowID, false)
+	keys.MustAppendValue(rowID, false)
 
 	idx := NewMutIndex(types.T_Rowid.ToType())
 	defer idx.Close()

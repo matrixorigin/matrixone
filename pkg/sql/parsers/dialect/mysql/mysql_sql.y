@@ -794,7 +794,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt load_table_stmt dump_table_stmt
 %type <statement> analyze_stmt check_table_stmt show_profile_stmt
-%type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
+%type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt flush_privileges_stmt
 %type <statement> replace_stmt
 %type <statement> do_stmt perform_stmt
 %type <statement> declare_stmt
@@ -1169,10 +1169,10 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> AUTO_ID_CACHE
 // Shift the contextual SOUNDS LIKE phrase before reducing a bare select alias.
 %left <str> SOUNDS
-// MySQL SERIAL column-alias type. Declared last so every existing token
-// keeps its generated lexer constant number, per the append-to-end contract
-// above.
+// MySQL SERIAL column-alias type. Keep new tokens after this append-only
+// boundary so existing generated lexer constants remain stable.
 %token <str> SERIAL
+%token <str> FLUSH
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -1208,12 +1208,21 @@ stmt_list:
             yylex.(*Lexer).AppendStmt($1)
         }
     }
+|   flush_privileges_stmt
+    {
+        yylex.(*Lexer).AppendStmt($1)
+    }
 |   stmt_list ';' stmt
     {
         yylex.(*Lexer).AppendTopLevelSemicolon($<pos>2)
         if $3 != nil {
             yylex.(*Lexer).AppendStmt($3)
         }
+    }
+|   stmt_list ';' flush_privileges_stmt
+    {
+        yylex.(*Lexer).AppendTopLevelSemicolon($<pos>2)
+        yylex.(*Lexer).AppendStmt($3)
     }
 
 block_stmt:
@@ -1319,6 +1328,12 @@ normal_stmt:
 |   resume_ccpr_subscription_stmt
 |   pause_ccpr_subscription_stmt
 |   branch_stmt
+
+flush_privileges_stmt:
+    FLUSH PRIVILEGES
+    {
+        $$ = &tree.FlushPrivileges{}
+    }
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt backup_timestamp_opt
@@ -10059,6 +10074,10 @@ role_name:
 	{
 		$$ = tree.NewCStr($1, 1)
     }
+|   FLUSH
+    {
+        $$ = tree.NewCStr($1, 1)
+    }
 |   QUOTE_ID
 	{
 		$$ = tree.NewCStr($1, 1)
@@ -12384,6 +12403,10 @@ iceberg_ref_opt:
 
 iceberg_ref_name:
     id_only_bare_name
+    {
+        $$ = $1
+    }
+|   FLUSH
     {
         $$ = $1
     }
@@ -14770,6 +14793,16 @@ function_call_generic:
             Exprs: $3,
         }
     }
+|   FLUSH '(' expression_list_opt ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            IsGeneric: isSQLModeSensitiveFunctionName($1),
+            Exprs: $3,
+        }
+    }
 |   SERIAL '(' expression_list_opt ')'
     {
         // `serial` is a keyword (SERIAL column-alias type, see column_def) but
@@ -17038,7 +17071,8 @@ equal_opt:
 //|   MYSQL_COMPATIBILITY_MODE
 
 non_reserved_keyword:
-    ACCOUNT
+    FLUSH
+|   ACCOUNT
 |   JSON_TABLE_PATH
 |   JSON_TABLE_NESTED
 |   JSON_TABLE_ORDINALITY

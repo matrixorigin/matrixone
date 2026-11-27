@@ -36,9 +36,9 @@ func TestAppendMockFloatsHonorsUnique(t *testing.T) {
 		})
 
 		require.Equal(t, 3, vec.Length())
-		require.Equal(t, float32(1), GetValue(vec, 0))
-		require.Equal(t, float32(2), GetValue(vec, 1))
-		require.Equal(t, float32(3), GetValue(vec, 2))
+		require.Equal(t, float32(1), vec.GetValue(0))
+		require.Equal(t, float32(2), vec.GetValue(1))
+		require.Equal(t, float32(3), vec.GetValue(2))
 		require.Equal(t, len(values), next)
 	})
 
@@ -55,9 +55,9 @@ func TestAppendMockFloatsHonorsUnique(t *testing.T) {
 		})
 
 		require.Equal(t, len(values), vec.Length())
-		require.Equal(t, float64(1), GetValue(vec, 0))
-		require.Equal(t, float64(1), GetValue(vec, 1))
-		require.Equal(t, float64(2), GetValue(vec, 2))
+		require.Equal(t, float64(1), vec.GetValue(0))
+		require.Equal(t, float64(1), vec.GetValue(1))
+		require.Equal(t, float64(2), vec.GetValue(2))
 		require.Equal(t, len(values), next)
 	})
 }

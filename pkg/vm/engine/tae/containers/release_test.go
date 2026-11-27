@@ -15,6 +15,7 @@
 package containers
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,7 +36,7 @@ func TestReleaseVectorPooled(t *testing.T) {
 	first := pool.GetVector(&typ)
 	require.True(t, isLent(first))
 	for i := 0; i < 100; i++ {
-		AppendValue(first, int64(i), false)
+		first.MustAppendValue(int64(i), false)
 	}
 	held := pool.Allocated()
 	require.Greater(t, held, 0, "the pool measures a lent vector")
@@ -53,13 +54,13 @@ func TestReleaseVectorPooled(t *testing.T) {
 	second := pool.GetVector(&typ)
 	require.True(t, isLent(second))
 	require.NotSame(t, first, second)
-	AppendValue(second, int64(7), false)
+	second.MustAppendValue(int64(7), false)
 
 	// a stale release of first does nothing to second
 	ReleaseVector(first)
 	require.True(t, isLent(second))
 	require.Equal(t, 1, second.Length())
-	require.Equal(t, int64(7), GetValue(second, 0))
+	require.Equal(t, int64(7), second.GetValue(0))
 
 	ReleaseVector(second)
 	ReleaseVector(second)
@@ -70,8 +71,8 @@ func TestReleaseVectorPooled(t *testing.T) {
 // A vector the pool did not lend is freed, and releasing it again is a no-op.
 func TestReleaseVectorUnpooled(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := NewVector(types.T_varchar.ToType(), Options{Allocator: mp})
-	AppendValue(vec, []byte("a value longer than an inline varlena"), false)
+	vec := MakeVector(types.T_varchar.ToType(), mp)
+	vec.MustAppendValue([]byte("a value longer than an inline varlena"), false)
 	require.Greater(t, mp.CurrNB(), int64(0))
 	ReleaseVector(vec)
 	require.Zero(t, mp.CurrNB())
@@ -81,7 +82,8 @@ func TestReleaseVectorUnpooled(t *testing.T) {
 	// a read-only vector only drops its references
 	owner := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(owner, int32(1), false, mp))
-	view := Window(owner, 0, 1)
+	view, err := owner.Window(0, 1)
+	require.NoError(t, err)
 	require.True(t, view.IsReadOnly())
 	ReleaseVector(view)
 	require.Equal(t, 1, owner.Length())
@@ -102,22 +104,68 @@ func TestReleaseVectorAfterPoolClose(t *testing.T) {
 	typ := types.T_int64.ToType()
 	vec := pool.GetVector(&typ)
 	require.True(t, isLent(vec))
-	AppendValue(vec, int64(1), false)
+	vec.MustAppendValue(int64(1), false)
 	pool.Close()
-	require.Equal(t, int64(1), GetValue(vec, 0))
+	require.Equal(t, int64(1), vec.GetValue(0))
 	ReleaseVector(vec)
 	require.Zero(t, mp.CurrNB(), "the lent buffers are freed once returned to a closed pool")
 }
 
-// The mutating functions refuse a read-only vector instead of copying it.
+// Mutating a read-only vector fails instead of copying it.
 func TestMutatingReadOnlyPanics(t *testing.T) {
 	mp := mpool.MustNewZero()
 	owner := vector.NewVec(types.T_int32.ToType(), mp)
 	defer owner.Free(mp)
 	require.NoError(t, vector.AppendFixed(owner, int32(1), false, mp))
-	view := Window(owner, 0, 1)
-	require.Panics(t, func() { AppendValue(view, int32(2), false) })
-	require.Panics(t, func() { UpdateRow(view, 0, int32(2), false) })
-	require.Panics(t, func() { DeleteRow(view, 0) })
-	require.Equal(t, int32(1), GetValue(owner, 0), "the owner is untouched")
+	view, err := owner.Window(0, 1)
+	require.NoError(t, err)
+	require.Panics(t, func() { view.MustAppendValue(int32(2), false) })
+	require.Panics(t, func() { UpdateValue(view, uint32(0), int32(2), false, view.MPool()) })
+	require.Error(t, view.Shrink([]int64{0}, true, view.MPool()))
+	require.Equal(t, int32(1), owner.GetValue(0), "the owner is untouched")
+}
+
+// Overlapping releases of one lent vector return its buffers to the pool
+// exactly once: none of them frees the buffers the pool now holds.
+func TestReleaseVectorPooledConcurrent(t *testing.T) {
+	mp := mpool.MustNewZero()
+	pool := NewVectorPool(t.Name(), 2, WithMPool(mp)) // one fixed-size and one varlena slot
+	defer pool.Destory()
+	typ := types.T_int64.ToType()
+
+	const releasers = 8
+	for round := 0; round < 5000; round++ {
+		vec := pool.GetVector(&typ)
+		require.True(t, isLent(vec))
+		for i := 0; i < 100; i++ {
+			vec.MustAppendValue(int64(i), false)
+		}
+		held := pool.Allocated()
+
+		var start, done sync.WaitGroup
+		start.Add(1)
+		for i := 0; i < releasers; i++ {
+			done.Add(1)
+			go func() {
+				defer done.Done()
+				start.Wait()
+				ReleaseVector(vec)
+			}()
+		}
+		start.Done()
+		done.Wait()
+
+		require.False(t, isLent(vec))
+		require.Equal(t, 0, vec.Length())
+		require.Equal(t, held, pool.Allocated(), "round %d: the buffers went back to the pool", round)
+		require.Equal(t, int64(held), mp.CurrNB(), "round %d: the pooled buffers are still allocated", round)
+		usedCnt, _ := pool.Used(false)
+		require.Equal(t, 0, usedCnt)
+	}
+
+	// the pooled buffers are still good to use
+	vec := pool.GetVector(&typ)
+	vec.MustAppendValue(int64(42), false)
+	require.Equal(t, int64(42), vec.GetValue(0))
+	ReleaseVector(vec)
 }

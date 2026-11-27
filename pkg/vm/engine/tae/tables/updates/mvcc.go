@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -284,7 +285,7 @@ func (n *AppendMVCCHandle) GetRowSelectionAfterLocked(start, end types.TS) (sele
 // holds the MVCC read lock, which is temporarily released for transaction waits.
 func (n *AppendMVCCHandle) CollectAppendLocked(
 	start, end types.TS, mp *mpool.MPool,
-) (selection index.RowSelection, commitTSVec, abortVec containers.Vector) {
+) (selection index.RowSelection, commitTSVec, abortVec containers.Vector, err error) {
 	return n.collectAppendLocked(start, end, false, mp)
 }
 
@@ -292,13 +293,13 @@ func (n *AppendMVCCHandle) CollectAppendLocked(
 // without a selected append node must stay invisible in the persisted prefix.
 func (n *AppendMVCCHandle) CollectAppendSnapshotLocked(
 	end types.TS, mp *mpool.MPool,
-) (selection index.RowSelection, commitTSVec, abortVec containers.Vector) {
+) (selection index.RowSelection, commitTSVec, abortVec containers.Vector, err error) {
 	return n.collectAppendLocked(types.TS{}, end, true, mp)
 }
 
 func (n *AppendMVCCHandle) collectAppendLocked(
 	start, end types.TS, preserveOffsets bool, mp *mpool.MPool,
-) (selection index.RowSelection, commitTSVec, abortVec containers.Vector) {
+) (selection index.RowSelection, commitTSVec, abortVec containers.Vector, err error) {
 	if end.LT(&start) {
 		return
 	}
@@ -349,25 +350,31 @@ func (n *AppendMVCCHandle) collectAppendLocked(
 	if !dense {
 		first, rest, dense = n.rangeIndex.selectNodes(start, end, max(16, len(n.rows)/8))
 	}
+	// appendRows appends n rows of (ts, aborted).
+	appendRows := func(ts types.TS, aborted bool, n int) error {
+		if n <= 0 {
+			return nil
+		}
+		if err := vector.AppendMultiFixed(commitTSVec, ts, false, n, commitTSVec.MPool()); err != nil {
+			return err
+		}
+		return vector.AppendMultiFixed(abortVec, aborted, false, n, abortVec.MPool())
+	}
 	emit := func(node *AppendNode) {
-		if node.startRow >= node.maxRow {
+		if err != nil || node.startRow >= node.maxRow {
 			return
 		}
 		if commitTSVec == nil {
 			commitTSVec = containers.MakeVector(types.T_TS.ToType(), mp)
 			abortVec = containers.MakeVector(types.T_bool.ToType(), mp)
 		}
-		if preserveOffsets {
-			for row := selection.MaxRow; row < node.startRow; row++ {
-				containers.AppendValue(commitTSVec, txnif.UncommitTS, false)
-				containers.AppendValue(abortVec, true, false)
+		if preserveOffsets && selection.MaxRow < node.startRow {
+			if err = appendRows(txnif.UncommitTS, true, int(node.startRow-selection.MaxRow)); err != nil {
+				return
 			}
 		}
 		selection.AddRange(node.startRow, node.maxRow)
-		for row := node.startRow; row < node.maxRow; row++ {
-			containers.AppendValue(commitTSVec, node.GetCommitTS(), false)
-			containers.AppendValue(abortVec, node.IsAborted(), false)
-		}
+		err = appendRows(node.GetCommitTS(), node.IsAborted(), int(node.maxRow-node.startRow))
 	}
 	if dense {
 		// Sorting most of the history is more expensive than one row-order pass.
@@ -395,10 +402,23 @@ func (n *AppendMVCCHandle) collectAppendLocked(
 			emit(node)
 		}
 	}
+	if err != nil {
+		selection.Release()
+		selection = index.RowSelection{}
+		containers.ReleaseVector(commitTSVec)
+		containers.ReleaseVector(abortVec)
+		commitTSVec, abortVec = nil, nil
+	}
 	return
 }
 
-func (n *AppendMVCCHandle) FillInCommitTSVecLocked(commitTSVec containers.Vector, maxrow uint32, mp *mpool.MPool) {
+func (n *AppendMVCCHandle) FillInCommitTSVecLocked(commitTSVec containers.Vector, maxrow uint32, mp *mpool.MPool) error {
+	appendTS := func(ts types.TS, from, to uint32) error {
+		if from >= to {
+			return nil
+		}
+		return vector.AppendMultiFixed(commitTSVec, ts, false, int(to-from), commitTSVec.MPool())
+	}
 	var cursor uint32
 	for _, node := range n.rows {
 		if node.startRow >= maxrow {
@@ -408,34 +428,17 @@ func (n *AppendMVCCHandle) FillInCommitTSVecLocked(commitTSVec containers.Vector
 		// fails queue dedup before an AppendNode owns that physical range. Keep
 		// the commit-TS vector aligned with physical row offsets; scan selection
 		// holes delete these placeholder rows before they become visible.
-		for cursor < node.startRow {
-			containers.AppendValue(commitTSVec, txnif.UncommitTS, false)
-			cursor++
+		if err := appendTS(txnif.UncommitTS, cursor, node.startRow); err != nil {
+			return err
 		}
+		cursor = max(cursor, node.startRow)
 		end := min(node.maxRow, maxrow)
-		for cursor < end {
-			containers.AppendValue(commitTSVec, node.GetCommitTS(), false)
-			cursor++
+		if err := appendTS(node.GetCommitTS(), cursor, end); err != nil {
+			return err
 		}
+		cursor = max(cursor, end)
 	}
-	for cursor < maxrow {
-		containers.AppendValue(commitTSVec, txnif.UncommitTS, false)
-		cursor++
-	}
-}
-
-func (n *AppendMVCCHandle) GetCommitTSVecInRange(start, end types.TS, mp *mpool.MPool) containers.Vector {
-	n.RLock()
-	defer n.RUnlock()
-	commitTSVec := containers.MakeVector(types.T_TS.ToType(), mp)
-	for _, node := range n.rows {
-		if in, _ := node.PreparedIn(start, end); in {
-			for i := 0; i < int(node.maxRow-node.startRow); i++ {
-				containers.AppendValue(commitTSVec, node.GetCommitTS(), false)
-			}
-		}
-	}
-	return commitTSVec
+	return appendTS(txnif.UncommitTS, cursor, maxrow)
 }
 
 // it is used to get the visible max row for a txn

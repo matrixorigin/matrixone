@@ -1831,7 +1831,7 @@ func (sm *SnapshotMeta) Rebuild(
 	insTides := vector.MustFixedColWithTypeCheck[uint64](ins.GetVectorByName(SnapshotAttr_TID))
 	for i := 0; i < ins.Length(); i++ {
 		var objectStats objectio.ObjectStats
-		buf := containers.GetValue(ins.GetVectorByName(catalog.ObjectAttr_ObjectStats), i).([]byte)
+		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetValue(i).([]byte)
 		objectStats.UnMarshal(buf)
 		createTS := insCreateTSs[i]
 		tid := insTides[i]

@@ -124,7 +124,7 @@ func TestTombstoneRangeScanClosesPartialBatchOnError(t *testing.T) {
 	partial := containers.NewBatch()
 	defer partial.Close()
 	values := containers.MakeVector(types.T_int64.ToType(), mp)
-	containers.AppendValue(values, int64(1), false)
+	values.MustAppendValue(int64(1), false)
 	partial.AddVector("value", values)
 
 	dataObject := &tombstoneScanCounter{

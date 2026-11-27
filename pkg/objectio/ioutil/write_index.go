@@ -49,7 +49,7 @@ func (b *ObjectColumnMetasBuilder) AddRowCnt(rows int) {
 func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector, isPK bool) {
 	nulls := 0
 	if vec.HasNull() {
-		nulls = containers.NullCount(vec)
+		nulls = vec.NullCount()
 		cnt := b.metas[idx].NullCnt()
 		cnt += uint32(nulls)
 		b.metas[idx].SetNullCnt(cnt)
