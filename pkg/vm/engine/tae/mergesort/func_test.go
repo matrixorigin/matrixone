@@ -33,7 +33,7 @@ type testPool struct {
 
 func (p *testPool) GetVector(typ *types.Type) (ret *vector.Vector, release func()) {
 	v := p.pool.GetVector(typ)
-	return v.GetDownstreamVector(), v.Close
+	return v, func() { containers.ReleaseVector(v) }
 }
 
 func (p *testPool) GetMPool() *mpool.MPool {
@@ -52,7 +52,7 @@ func TestReshapeBatches(t *testing.T) {
 		for j := 0; j < batchSize; j++ {
 			vec := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 			for k := uint32(0); k < fromLayout[i]; k++ {
-				vec.Append(int32(k), false)
+				vec.MustAppendValue(int32(k), false)
 			}
 			batches[i].Vecs = append(batches[i].Vecs, vec)
 			batches[i].Attrs = append(batches[i].Attrs, "")

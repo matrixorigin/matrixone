@@ -181,8 +181,7 @@ func (obj *txnObject) Scan(
 	mp *mpool.MPool,
 ) (err error) {
 	if obj.entry.IsLocal {
-		obj.table.dataTable.tableSpace.Scan(ctx, bat, colIdxes, mp)
-		return
+		return obj.table.dataTable.tableSpace.Scan(ctx, bat, colIdxes, mp)
 	}
 	return obj.entry.GetObjectData().Scan(ctx, bat, obj.Txn, obj.table.getSchema(obj.entry.IsTombstone), blkID, colIdxes, mp)
 }
@@ -195,8 +194,7 @@ func (obj *txnObject) HybridScan(
 	mp *mpool.MPool,
 ) error {
 	if obj.entry.IsLocal {
-		obj.table.dataTable.tableSpace.HybridScan(ctx, bat, colIdxs, mp)
-		return nil
+		return obj.table.dataTable.tableSpace.HybridScan(ctx, bat, colIdxs, mp)
 	}
 	blkID := objectio.NewBlockidWithObjectID(obj.GetID(), blkOffset)
 	return tables.HybridScanByBlock(

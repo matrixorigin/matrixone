@@ -358,7 +358,7 @@ func readMetaForV12(
 	dataLocationsVec := metaBatch.Vecs[MetaSchema_DataObject_Idx+2]
 	tombstoneLocationsVec := metaBatch.Vecs[MetaSchema_TombstoneObject_Idx+2]
 	for i := 0; i < dataLocationsVec.Length(); i++ {
-		dataLocations := BlockLocations(dataLocationsVec.GetDownstreamVector().GetBytesAt(i))
+		dataLocations := BlockLocations(dataLocationsVec.GetBytesAt(i))
 		it := dataLocations.MakeIterator()
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
@@ -367,7 +367,7 @@ func readMetaForV12(
 				data[str] = loc.Clone()
 			}
 		}
-		tombstoneLocations := BlockLocations(tombstoneLocationsVec.GetDownstreamVector().GetBytesAt(i))
+		tombstoneLocations := BlockLocations(tombstoneLocationsVec.GetBytesAt(i))
 		it = tombstoneLocations.MakeIterator()
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
@@ -404,7 +404,7 @@ func readMetaForV12WithTableID(
 
 	data = make(map[string]objectio.Location)
 	tombstone = make(map[string]objectio.Location)
-	tids := vector.MustFixedColNoTypeCheck[uint64](metaBatch.Vecs[MetaSchema_Tid_Idx+2].GetDownstreamVector())
+	tids := vector.MustFixedColNoTypeCheck[uint64](metaBatch.Vecs[MetaSchema_Tid_Idx+2])
 	dataLocationsVec := metaBatch.Vecs[MetaSchema_DataObject_Idx+2]
 	tombstoneLocationsVec := metaBatch.Vecs[MetaSchema_TombstoneObject_Idx+2]
 	start := vector.OrderedFindFirstIndexInSortedSlice(tableID, tids)
@@ -415,7 +415,7 @@ func readMetaForV12WithTableID(
 		if tids[i] != tableID {
 			break
 		}
-		dataLocations := BlockLocations(dataLocationsVec.GetDownstreamVector().GetBytesAt(i))
+		dataLocations := BlockLocations(dataLocationsVec.GetBytesAt(i))
 		it := dataLocations.MakeIterator()
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
@@ -424,7 +424,7 @@ func readMetaForV12WithTableID(
 				data[str] = loc.Clone()
 			}
 		}
-		tombstoneLocations := BlockLocations(tombstoneLocationsVec.GetDownstreamVector().GetBytesAt(i))
+		tombstoneLocations := BlockLocations(tombstoneLocationsVec.GetBytesAt(i))
 		it = tombstoneLocations.MakeIterator()
 		for it.HasNext() {
 			loc := it.Next().GetLocation()
@@ -676,10 +676,10 @@ func compatibilityForV12(
 		); err != nil {
 			return err
 		}
-		if err = ckpData.Vecs[ckputil.TableObjectsAttr_DB_Idx].Union(src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector(), sels, mp); err != nil {
+		if err = ckpData.Vecs[ckputil.TableObjectsAttr_DB_Idx].Union(src.Vecs[ObjectInfo_DBID_Idx+2], sels, mp); err != nil {
 			return err
 		}
-		if err = ckpData.Vecs[ckputil.TableObjectsAttr_Table_Idx].Union(src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector(), sels, mp); err != nil {
+		if err = ckpData.Vecs[ckputil.TableObjectsAttr_Table_Idx].Union(src.Vecs[ObjectInfo_TID_Idx+2], sels, mp); err != nil {
 			return err
 		}
 		if err = vector.AppendMultiFixed(
@@ -691,13 +691,13 @@ func compatibilityForV12(
 		); err != nil {
 			return err
 		}
-		if err = ckpData.Vecs[ckputil.TableObjectsAttr_ID_Idx].Union(src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector(), sels, mp); err != nil {
+		if err = ckpData.Vecs[ckputil.TableObjectsAttr_ID_Idx].Union(src.Vecs[ObjectInfo_ObjectStats_Idx+2], sels, mp); err != nil {
 			return err
 		}
-		if err = ckpData.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx].Union(src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector(), sels, mp); err != nil {
+		if err = ckpData.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx].Union(src.Vecs[ObjectInfo_CreateAt_Idx+2], sels, mp); err != nil {
 			return err
 		}
-		if err = ckpData.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx].Union(src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector(), sels, mp); err != nil {
+		if err = ckpData.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx].Union(src.Vecs[ObjectInfo_DeleteAt_Idx+2], sels, mp); err != nil {
 			return err
 		}
 		for i := 0; i < src.Length(); i++ {
@@ -706,10 +706,10 @@ func compatibilityForV12(
 				return err
 			}
 		}
-		tids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector())
-		deletes := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector())
+		tids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_TID_Idx+2])
+		deletes := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_DeleteAt_Idx+2])
 		for i := 0; i < src.Length(); i++ {
-			objectStats := objectio.ObjectStats(src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector().GetBytesAt(i))
+			objectStats := objectio.ObjectStats(src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetBytesAt(i))
 			ckputil.EncodeCluser(encoder, tids[i], dataType, objectStats.ObjectName().ObjectId(), deletes[i].IsEmpty())
 			if err = vector.AppendBytes(ckpData.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp); err != nil {
 				return err

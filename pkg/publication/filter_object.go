@@ -343,7 +343,7 @@ func rewriteTombstoneRowids(
 	}
 
 	// Get rowid values from the vector
-	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](rowidVec.GetDownstreamVector())
+	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](rowidVec)
 
 	// Iterate through each rowid and rewrite if mapping exists
 	for i := range rowids {
@@ -384,11 +384,11 @@ func rewriteTombstoneRowids(
 	for i := 0; i < n; i++ {
 		sortedIdx[i] = int64(i)
 	}
-	sort.Sort(false, false, false, sortedIdx, rowidVec.GetDownstreamVector())
+	sort.Sort(false, false, false, sortedIdx, rowidVec)
 
 	// Shuffle all vectors in the batch using the sorted index
 	for i := 0; i < len(bat.Vecs); i++ {
-		if err := bat.Vecs[i].GetDownstreamVector().Shuffle(sortedIdx, mp); err != nil {
+		if err := bat.Vecs[i].Shuffle(sortedIdx, mp); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to shuffle tombstone column %d: %v", i, err)
 		}
 	}

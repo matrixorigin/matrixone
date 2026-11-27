@@ -158,17 +158,27 @@ func MergeCheckpoint(
 	newFiles = append(newFiles, files...)
 	bat := makeBatchFromSchema(checkpoint.CheckpointSchema)
 	var cptLocation objectio.LocationSlice
-	bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(ckpEntries[0].GetStart(), false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_EndTS).Append(*end, false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_MetaLocation).Append([]byte(location), false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_EntryType).Append(false, false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_Version).Append(logtail.CheckpointCurrentVersion, false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_AllLocations).Append([]byte(location), false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_CheckpointLSN).Append(uint64(0), false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_TruncateLSN).Append(uint64(0), false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_Type).Append(int8(checkpoint.ET_Compacted), false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_TableIDLocation).Append([]byte(cptLocation), false)
 	defer bat.Close()
+	for _, col := range []struct {
+		attr string
+		val  any
+	}{
+		{checkpoint.CheckpointAttr_StartTS, ckpEntries[0].GetStart()},
+		{checkpoint.CheckpointAttr_EndTS, *end},
+		{checkpoint.CheckpointAttr_MetaLocation, []byte(location)},
+		{checkpoint.CheckpointAttr_EntryType, false},
+		{checkpoint.CheckpointAttr_Version, logtail.CheckpointCurrentVersion},
+		{checkpoint.CheckpointAttr_AllLocations, []byte(location)},
+		{checkpoint.CheckpointAttr_CheckpointLSN, uint64(0)},
+		{checkpoint.CheckpointAttr_TruncateLSN, uint64(0)},
+		{checkpoint.CheckpointAttr_Type, int8(checkpoint.ET_Compacted)},
+		{checkpoint.CheckpointAttr_TableIDLocation, []byte(cptLocation)},
+	} {
+		vec := bat.GetVectorByName(col.attr)
+		if err = vector.AppendAny(vec, col.val, false, vec.MPool()); err != nil {
+			return
+		}
+	}
 	name := ioutil.EncodeCompactCKPMetadataFullName(ckpEntries[0].GetStart(), *end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {

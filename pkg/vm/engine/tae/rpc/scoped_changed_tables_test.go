@@ -98,7 +98,7 @@ func TestScopedChangedTablesReadDirtyAndReplay(t *testing.T) {
 	require.NoError(t, err)
 	unscoped, err = database.GetRelationByName(other.Name)
 	require.NoError(t, err)
-	filter := handle.NewEQFilter(bat.Vecs[schema.GetPrimaryKey().Idx].Get(0))
+	filter := handle.NewEQFilter(bat.Vecs[schema.GetPrimaryKey().Idx].GetValue(0))
 	require.NoError(t, relation.DeleteByFilter(ctx, filter))
 	require.NoError(t, unscoped.DeleteByFilter(ctx, filter))
 	require.NoError(t, del.Commit(ctx))
@@ -459,13 +459,13 @@ func TestScopedChangedTablesExcludesStandaloneFlushAndKeepsDML(t *testing.T) {
 	}
 	check(before, afterFlush, nil)
 
-	filter := handle.NewEQFilter(data.Vecs[schema.GetPrimaryKey().Idx].Get(0))
+	filter := handle.NewEQFilter(data.Vecs[schema.GetPrimaryKey().Idx].GetValue(0))
 	update := startScopedChangedTablesTxn(t, h.Handle)
 	database, err = update.GetDatabase("watch_maintenance")
 	require.NoError(t, err)
 	relation, err = database.GetRelationByName(schema.Name)
 	require.NoError(t, err)
-	require.NoError(t, relation.UpdateByFilter(ctx, filter, 1, data.Vecs[1].Get(1), false))
+	require.NoError(t, relation.UpdateByFilter(ctx, filter, 1, data.Vecs[1].GetValue(1), false))
 	require.NoError(t, update.Commit(ctx))
 	check(afterFlush, update.GetCommitTS(), []cmd_util.ScopedChangedTable{scope})
 

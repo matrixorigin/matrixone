@@ -328,15 +328,15 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 		objID := id.ObjectID()
 		_, blkOffset := id.BlockID.Offsets()
 		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(*objID, blkOffset, offset)
-		rowIDs.Append(rowID, false)
-		pks.Append(val, false)
+		rowIDs.MustAppendValue(rowID, false)
+		pks.MustAppendValue(val, false)
 	}
 
 	s3stats, err := MockCNDeleteInS3(e.Runtime.Fs, rowIDs, pks, e.schema, txn)
 	stats := objectio.NewObjectStatsWithObjectID(s3stats.ObjectName().ObjectId(), false, true, true)
 	objectio.SetObjectStats(stats, &s3stats)
-	pks.Close()
-	rowIDs.Close()
+	containers.ReleaseVector(pks)
+	containers.ReleaseVector(rowIDs)
 	assert.NoError(e.T, err)
 	require.False(e.T, stats.IsZero())
 	ok, err = rel.AddPersistedTombstoneFile(firstID, *stats)
@@ -410,14 +410,14 @@ func (e *TestEngine) CheckCollectTombstoneInRange() {
 			deleteRowIDs := deleteBatch.Vecs[0]
 			deletePKs := deleteBatch.Vecs[1]
 			for i := 0; i < deleteRowIDs.Length(); i++ {
-				rowID := deleteRowIDs.Get(i).(types.Rowid)
+				rowID := deleteRowIDs.GetValue(i).(types.Rowid)
 				offset := rowID.GetRowOffset()
 				id := obj.Fingerprint()
 				id.BlockID = *rowID.BorrowBlockID()
 				val, _, err := rel.GetValue(id, offset, uint16(pkDef.Idx), true)
 				assert.NoError(e.T, err)
-				e.T.Logf("delete rowID %v pk %v, append rowID %v pk %v", rowID.String(), deletePKs.Get(i), rowID.String(), val)
-				assert.Equal(e.T, val, deletePKs.Get(i))
+				e.T.Logf("delete rowID %v pk %v, append rowID %v pk %v", rowID.String(), deletePKs.GetValue(i), rowID.String(), val)
+				assert.Equal(e.T, val, deletePKs.GetValue(i))
 			}
 		}
 		return nil

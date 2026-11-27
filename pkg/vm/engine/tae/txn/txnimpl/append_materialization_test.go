@@ -194,7 +194,7 @@ func TestFreezeMaterializationDoesNotHoldAllocatorLocks(t *testing.T) {
 	rel, err := db.GetRelationByName(schema.Name)
 	require.NoError(t, err)
 	for row := 0; row < input.Length(); row++ {
-		pk := input.Vecs[0].Get(row)
+		pk := input.Vecs[0].GetValue(row)
 		value, isNull, err := rel.GetValueByFilter(ctx, handle.NewEQFilter(pk), 0)
 		require.NoError(t, err)
 		require.False(t, isNull)
@@ -264,7 +264,7 @@ func TestFreezeReservationDoesNotBlockOtherObjectKind(t *testing.T) {
 			require.NoError(t, err)
 			defer remove.Rollback(context.Background())
 			rel = allocatorRelation(t, remove, schema)
-			id, row, err := rel.GetByFilter(ctx, handle.NewEQFilter(input.Vecs[0].Get(0)))
+			id, row, err := rel.GetByFilter(ctx, handle.NewEQFilter(input.Vecs[0].GetValue(0)))
 			require.NoError(t, err)
 			require.NoError(t, rel.RangeDelete(id, row, row, handle.DT_Normal))
 			first, second := insert, remove
@@ -298,10 +298,10 @@ func TestFreezeReservationDoesNotBlockOtherObjectKind(t *testing.T) {
 			require.NoError(t, err)
 			defer read.Rollback(context.Background())
 			rel = allocatorRelation(t, read, schema)
-			_, _, err = rel.GetValueByFilter(ctx, handle.NewEQFilter(input.Vecs[0].Get(0)), 0)
+			_, _, err = rel.GetValueByFilter(ctx, handle.NewEQFilter(input.Vecs[0].GetValue(0)), 0)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound), "%v", err)
 			for _, row := range []int{1, 2} {
-				pk := input.Vecs[0].Get(row)
+				pk := input.Vecs[0].GetValue(row)
 				value, isNull, err := rel.GetValueByFilter(ctx, handle.NewEQFilter(pk), 0)
 				require.NoError(t, err)
 				require.False(t, isNull)
@@ -425,7 +425,7 @@ func TestFreezeSelectedOwnersRollOverWithoutExtraCarriers(t *testing.T) {
 	defer read.Rollback(context.Background())
 	rel = allocatorRelation(t, read, schema)
 	for row := 0; row < input.Length(); row++ {
-		pk := input.Vecs[0].Get(row)
+		pk := input.Vecs[0].GetValue(row)
 		value, isNull, err := rel.GetValueByFilter(ctx, handle.NewEQFilter(pk), 0)
 		require.NoError(t, err)
 		require.False(t, isNull)
@@ -523,10 +523,10 @@ func TestFreezeCancelledCreatorLeavesSharedCarrierUsable(t *testing.T) {
 	require.NoError(t, err)
 	defer read.Rollback(context.Background())
 	rel = allocatorRelation(t, read, schema)
-	_, _, err = rel.GetValueByFilter(ctx, handle.NewEQFilter(input.Vecs[0].Get(0)), 0)
+	_, _, err = rel.GetValueByFilter(ctx, handle.NewEQFilter(input.Vecs[0].GetValue(0)), 0)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound), "%v", err)
 	for _, row := range []int{1, 2} {
-		pk := input.Vecs[0].Get(row)
+		pk := input.Vecs[0].GetValue(row)
 		value, isNull, err := rel.GetValueByFilter(ctx, handle.NewEQFilter(pk), 0)
 		require.NoError(t, err)
 		require.False(t, isNull)

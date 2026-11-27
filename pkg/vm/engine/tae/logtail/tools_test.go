@@ -45,13 +45,13 @@ func TestV9RollbackSentinelDoesNotReachTombstoneLogtail(t *testing.T) {
 	commitTSs := containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
 	var blockID types.Blockid
 	for row, key := range []int64{42, 7} {
-		deletedRowIDs.Append(types.NewRowid(&blockID, uint32(row+10)), false)
-		primaryKeys.Append(key, false)
-		physicalRowIDs.Append(types.NewRowid(&blockID, uint32(row)), false)
+		deletedRowIDs.MustAppendValue(types.NewRowid(&blockID, uint32(row+10)), false)
+		primaryKeys.MustAppendValue(key, false)
+		physicalRowIDs.MustAppendValue(types.NewRowid(&blockID, uint32(row)), false)
 		if row == 0 {
-			commitTSs.Append(txnif.UncommitTS, false)
+			commitTSs.MustAppendValue(txnif.UncommitTS, false)
 		} else {
-			commitTSs.Append(types.BuildTS(5, 0), false)
+			commitTSs.MustAppendValue(types.BuildTS(5, 0), false)
 		}
 	}
 	src.AddVector(objectio.TombstoneAttr_Rowid_Attr, deletedRowIDs)
@@ -61,5 +61,5 @@ func TestV9RollbackSentinelDoesNotReachTombstoneLogtail(t *testing.T) {
 
 	output := TombstoneChangeToLogtailBatch(src)
 	require.Equal(t, 1, output.Length())
-	require.Equal(t, int64(7), output.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Get(0))
+	require.Equal(t, int64(7), output.GetVectorByName(objectio.TombstoneAttr_PK_Attr).GetValue(0))
 }
