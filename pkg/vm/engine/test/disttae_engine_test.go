@@ -527,15 +527,15 @@ func TestAlterTableBasic(t *testing.T) {
 	require.NoError(t, err)
 	c2, err := cstr2.MarshalBinary()
 	require.NoError(t, err)
-	require.Equal(t, []byte{}, containers.GetValue(cstrCol, 0).([]byte))
-	require.Equal(t, c1, containers.GetValue(cstrCol, 1).([]byte))
-	require.Equal(t, c2, containers.GetValue(cstrCol, 2).([]byte))
+	require.Equal(t, []byte{}, cstrCol.GetValue(0).([]byte))
+	require.Equal(t, c1, cstrCol.GetValue(1).([]byte))
+	require.Equal(t, c2, cstrCol.GetValue(2).([]byte))
 
 	commetCol := containers.NewNonNullBatchWithSharedMemory(bat, resp.Commands[2].Attrs, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Comment)
 	require.Equal(t, 3, cstrCol.Length())
-	require.Equal(t, []byte(initComment), containers.GetValue(commetCol, 0).([]byte))
-	require.Equal(t, []byte("comment version 1"), containers.GetValue(commetCol, 1).([]byte))
-	require.Equal(t, []byte("comment version 1"), containers.GetValue(commetCol, 2).([]byte))
+	require.Equal(t, []byte(initComment), commetCol.GetValue(0).([]byte))
+	require.Equal(t, []byte("comment version 1"), commetCol.GetValue(1).([]byte))
+	require.Equal(t, []byte("comment version 1"), commetCol.GetValue(2).([]byte))
 
 	require.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)
 
@@ -1648,7 +1648,7 @@ func Test_SubUnsubTable(t *testing.T) {
 		defer result.Clean(mp)
 		var got, want []int8
 		for i := 0; i < 10; i++ {
-			want = append(want, containers.GetValue(bat.Vecs[0], i).(int8))
+			want = append(want, bat.Vecs[0].GetValue(i).(int8))
 		}
 		for {
 			done, err := reader.Read(ctx, resultAttrs, nil, mp, result)

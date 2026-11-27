@@ -43,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	taeCatalog "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	taeCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	taeContainers "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	taeDBTestutil "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -468,14 +467,14 @@ func clusterBySpecTaeBatch(
 		packer.EncodeInt32(r.metric)
 		packer.EncodeDatetime(eventTs)
 
-		containers.AppendValue(tenantVec, int32(0), false)
-		containers.AppendValue(deviceVec, r.device, false)
-		containers.AppendValue(metricVec, r.metric, false)
-		containers.AppendValue(eventVec, eventTs, false)
-		containers.AppendValue(valueVec, r.value, false)
-		containers.AppendValue(qualityVec, r.quality, false)
-		containers.AppendValue(fakePkVec, fakePkBase+uint64(i), false)
-		containers.AppendValue(clusterVec, packer.Bytes(), false)
+		tenantVec.MustAppendValue(int32(0), false)
+		deviceVec.MustAppendValue(r.device, false)
+		metricVec.MustAppendValue(r.metric, false)
+		eventVec.MustAppendValue(eventTs, false)
+		valueVec.MustAppendValue(r.value, false)
+		qualityVec.MustAppendValue(r.quality, false)
+		fakePkVec.MustAppendValue(fakePkBase+uint64(i), false)
+		clusterVec.MustAppendValue(packer.Bytes(), false)
 	}
 
 	// Schema-position order: visible 0..5, fake primary key 6, compound 7.
@@ -517,7 +516,7 @@ func churnTaeBatch(t *testing.T, rows int) *taeContainers.Batch {
 	bat := taeContainers.NewBatch()
 	vec := taeContainers.MakeVector(types.T_int32.ToType(), taeCommon.DefaultAllocator)
 	for i := 0; i < rows; i++ {
-		containers.AppendValue(vec, int32(i), false)
+		vec.MustAppendValue(int32(i), false)
 	}
 	bat.AddVector("v", vec)
 	t.Cleanup(bat.Close)

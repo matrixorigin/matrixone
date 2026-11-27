@@ -357,19 +357,20 @@ func MockCheckpointV12(
 	dataBatch := makeRespBatchFromSchema(ObjectInfoSchema, mp)
 	tombstoneBatch := makeRespBatchFromSchema(ObjectInfoSchema, mp)
 
-	visitObjFn := func(objectEntry *catalog.ObjectEntry, dstBatch *containers.Batch, metaIdx int) {
+	visitObjFn := func(objectEntry *catalog.ObjectEntry, dstBatch *containers.Batch, metaIdx int) error {
 		dataStart := dstBatch.GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
-		objectEntry.ForeachMVCCNodeInRange(start, end, func(node *txnbase.TxnMVCCNode) error {
+		if err := objectEntry.ForeachMVCCNodeInRange(start, end, func(node *txnbase.TxnMVCCNode) error {
 			if node.IsAborted() {
 				return nil
 			}
 			create := node.End.Equal(&objectEntry.CreatedAt)
-			visitObject(dstBatch, objectEntry, node, create, false, types.TS{})
-			return nil
-		})
+			return visitObject(dstBatch, objectEntry, node, create, false, types.TS{})
+		}); err != nil {
+			return err
+		}
 		dataEnd := dstBatch.GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
 		if dataEnd <= dataStart {
-			return
+			return nil
 		}
 		tid := objectEntry.GetTable().ID
 		tableMeta, ok := meta[tid]
@@ -389,16 +390,15 @@ func MockCheckpointV12(
 				}
 			}
 		}
+		return nil
 	}
 
 	p := &catalog.LoopProcessor{}
 	p.ObjectFn = func(oe *catalog.ObjectEntry) error {
-		visitObjFn(oe, dataBatch, DataObject)
-		return nil
+		return visitObjFn(oe, dataBatch, DataObject)
 	}
 	p.TombstoneFn = func(oe *catalog.ObjectEntry) error {
-		visitObjFn(oe, tombstoneBatch, TombstoneObject)
-		return nil
+		return visitObjFn(oe, tombstoneBatch, TombstoneObject)
 	}
 
 	if err = c.RecurLoop(p); err != nil {
@@ -519,7 +519,10 @@ func mockCheckpointV12_writeTo(
 	schemas = append(schemas, schemaTypes)
 	objectBlocks = append(objectBlocks, blks)
 
-	tnMetaBatch := prepareTNMeta(checkpointNames, objectBlocks, schemas, mp)
+	tnMetaBatch, err := prepareTNMeta(checkpointNames, objectBlocks, schemas, mp)
+	if err != nil {
+		return
+	}
 
 	for _, tableMeta := range meta {
 		for i, table := range tableMeta.tables {
@@ -675,13 +678,20 @@ func prepareTNMeta(
 	objectBlocks [][]objectio.BlockObject,
 	schemaTypes [][]uint16,
 	mp *mpool.MPool,
-) (dstBatch *containers.Batch) {
+) (dstBatch *containers.Batch, err error) {
 	dstBatch = makeRespBatchFromSchema(TNMetaSchema, mp)
+	locations := dstBatch.GetVectorByName(CheckpointMetaAttr_BlockLocation)
+	schemas := dstBatch.GetVectorByName(CheckpointMetaAttr_SchemaType)
 	for i, blks := range objectBlocks {
 		for y, blk := range blks {
 			location := objectio.BuildLocation(checkpointNames[i], blk.GetExtent(), 0, blk.GetID())
-			containers.AppendValue(dstBatch.GetVectorByName(CheckpointMetaAttr_BlockLocation), []byte(location), false)
-			containers.AppendValue(dstBatch.GetVectorByName(CheckpointMetaAttr_SchemaType), schemaTypes[i][y], false)
+			if err = vector.AppendBytes(locations, []byte(location), false, locations.MPool()); err == nil {
+				err = vector.AppendFixed(schemas, schemaTypes[i][y], false, schemas.MPool())
+			}
+			if err != nil {
+				dstBatch.Close()
+				return nil, err
+			}
 		}
 	}
 	return

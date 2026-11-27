@@ -351,9 +351,9 @@ func genRecordWithLocation(num uint16, upstreamLsn uint64) (logservice.LogRecord
 }
 
 func genRecordWithCkpFiles(files []string, upstreamLsn uint64) (logservice.LogRecord, error) {
-	vec := containers.NewVector(types.T_char.ToType())
+	vec := containers.MakeVector(types.T_char.ToType(), nil)
 	for _, file := range files {
-		containers.AppendValue(vec, []byte(file), false)
+		vec.MustAppendValue([]byte(file), false)
 	}
 	defer containers.ReleaseVector(vec)
 	buf, err := vec.MarshalBinary()

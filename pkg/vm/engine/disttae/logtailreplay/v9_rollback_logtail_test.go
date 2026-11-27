@@ -47,19 +47,20 @@ func TestV9RollbackSentinelDoesNotReachPartitionState(t *testing.T) {
 	commitTSs := containers.MakeVector(types.T_TS.ToType(), mp)
 	var blockID types.Blockid
 	for row, key := range []int64{42, 7} {
-		containers.AppendValue(primaryKeys, key, false)
-		containers.AppendValue(rowIDs, types.NewRowid(&blockID, uint32(row)), false)
+		primaryKeys.MustAppendValue(key, false)
+		rowIDs.MustAppendValue(types.NewRowid(&blockID, uint32(row)), false)
 		if row == 0 {
-			containers.AppendValue(commitTSs, txnif.UncommitTS, false)
+			commitTSs.MustAppendValue(txnif.UncommitTS, false)
 		} else {
-			containers.AppendValue(commitTSs, types.BuildTS(5, 0), false)
+			commitTSs.MustAppendValue(types.BuildTS(5, 0), false)
 		}
 	}
 	src.AddVector("pk", primaryKeys)
 	src.AddVector(catalog.PhyAddrColumnName, rowIDs)
 	src.AddVector(objectio.DefaultCommitTS_Attr, commitTSs)
 
-	logtailBatch := logtail.DataChangeToLogtailBatch(src)
+	logtailBatch, err := logtail.DataChangeToLogtailBatch(src)
+	require.NoError(t, err)
 	require.Equal(t, 1, logtailBatch.Length())
 	encoded, err := batch.MarshalVectors(containers.ToCNBatch(logtailBatch).Vecs)
 	require.NoError(t, err)

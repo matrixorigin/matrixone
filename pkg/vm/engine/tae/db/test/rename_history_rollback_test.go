@@ -71,8 +71,8 @@ func TestHistoricalRenameRollback(t *testing.T) {
 				require.NoError(t, err)
 				ids[name] = rel.ID()
 				bat := containers.NewBatch()
-				bat.AddVector("id", containers.NewVector(types.T_int64.ToType()))
-				containers.AppendValue(bat.Vecs[0], int64((i+1)*100), false)
+				bat.AddVector("id", containers.MakeVector(types.T_int64.ToType(), nil))
+				bat.Vecs[0].MustAppendValue(int64((i+1)*100), false)
 				err = rel.Append(ctx, bat)
 				bat.Close()
 				require.NoError(t, err)
@@ -100,7 +100,7 @@ func TestHistoricalRenameRollback(t *testing.T) {
 				testutil.ForEachColumnView(t, rel, 0, func(view *containers.Batch) error {
 					view.Compact()
 					for i := 0; i < view.Length(); i++ {
-						values = append(values, containers.GetValue(view.Vecs[0], i).(int64))
+						values = append(values, view.Vecs[0].GetValue(i).(int64))
 					}
 					return nil
 				})

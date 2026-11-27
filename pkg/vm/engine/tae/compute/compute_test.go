@@ -34,9 +34,9 @@ func TestGetOffsetByValNarrowArray(t *testing.T) {
 	vec := containers.MakeVector(typ, mp)
 	defer containers.ReleaseVector(vec)
 	// byte-sorted rows so binary search is well-defined
-	containers.AppendValue(vec, types.ArrayToBytes([]int8{1, 1}), false)
-	containers.AppendValue(vec, types.ArrayToBytes([]int8{2, 2}), false)
-	containers.AppendValue(vec, types.ArrayToBytes([]int8{3, 3}), false)
+	vec.MustAppendValue(types.ArrayToBytes([]int8{1, 1}), false)
+	vec.MustAppendValue(types.ArrayToBytes([]int8{2, 2}), false)
+	vec.MustAppendValue(types.ArrayToBytes([]int8{3, 3}), false)
 
 	off, exist := GetOffsetByVal(vec, types.ArrayToBytes([]int8{2, 2}), nil)
 	require.True(t, exist)
@@ -86,7 +86,7 @@ func TestAppendNull(t *testing.T) {
 	check := func(typ types.Type) {
 		vec := containers.MockVector2(typ, 10, 0)
 		defer containers.ReleaseVector(vec)
-		containers.AppendValue(vec, nil, true)
+		vec.MustAppendValue(nil, true)
 		assert.Equal(t, 11, vec.Length())
 		assert.True(t, vec.IsNull(10))
 		t.Log(vec.String())

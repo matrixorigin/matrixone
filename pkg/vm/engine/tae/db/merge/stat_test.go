@@ -517,16 +517,16 @@ func TestVacuumOpts(t *testing.T) {
 		bat := containers.NewBatch()
 		bat.AddVector(
 			objectio.TombstoneAttrs_CN_Created[0],
-			containers.NewVector(types.T_Rowid.ToType()),
+			containers.MakeVector(types.T_Rowid.ToType(), nil),
 		)
 		bat.AddVector(
 			objectio.TombstoneAttrs_CN_Created[1],
-			containers.NewVector(types.T_int32.ToType()),
+			containers.MakeVector(types.T_int32.ToType(), nil),
 		)
 
 		for j := 2000 * i; j < 2000*(i+1); j++ {
-			containers.AppendValue(bat.Vecs[0], types.NewRowIDWithObjectIDBlkNumAndRowID(*name.ObjectId(), 0, uint32(j)), false)
-			containers.AppendValue(bat.Vecs[1], int32(j), false)
+			bat.Vecs[0].MustAppendValue(types.NewRowIDWithObjectIDBlkNumAndRowID(*name.ObjectId(), 0, uint32(j)), false)
+			bat.Vecs[1].MustAppendValue(int32(j), false)
 		}
 
 		tombwriter, err := ioutil.NewBlockWriterNew(

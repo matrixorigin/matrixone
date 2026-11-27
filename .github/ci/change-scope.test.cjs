@@ -135,11 +135,29 @@ function results() {
   return needs;
 }
 
-function entrypointJobs() {
-  const workflow = readFileSync(`${__dirname}/../workflows/entrypoint.yaml`, 'utf8');
+function workflowJobs(filename) {
+  const workflow = readFileSync(join(__dirname, '../workflows', filename), 'utf8');
   return Object.fromEntries([...workflow.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:\n|$(?![\s\S]))/gm)]
     .map(match => [match[1], match[2]]));
 }
+
+const entrypointJobs = () => workflowJobs('entrypoint.yaml');
+
+test('coverage dispatcher and both standby pools use the same pinned ticket protocol', () => {
+  const worker = workflowJobs('coverage-standby-worker.yaml');
+  const calls = [
+    [entrypointJobs()['matrixone-ut-coverage'], 'coverage-ut-standby'],
+    [worker.cs, 'coverage-worker-cs'],
+    [worker.idc, 'coverage-worker-idc'],
+  ];
+  const pins = calls.map(([job, expected]) => {
+    const call = job.match(/^    uses: matrixorigin\/CI\/\.github\/workflows\/([\w-]+)\.yaml@([0-9a-f]{40})$/m);
+    assert.ok(call, `expected an immutable ${expected} workflow reference`);
+    assert.equal(call[1], expected);
+    return call[2];
+  });
+  assert.equal(new Set(pins).size, 1, 'update the dispatcher and both worker pins together');
+});
 
 test('actual preflight applies main-only SDK policy to routing and the required check', async () => {
   const block = entrypointJobs().preflight;

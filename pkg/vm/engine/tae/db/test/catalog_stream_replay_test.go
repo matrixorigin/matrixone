@@ -261,11 +261,11 @@ func TestCatalogReplayReadFailureReleasesPools(t *testing.T) {
 	typ := types.T_int64.ToType()
 	held := reopened.Runtime.VectorPool.Small.GetVector(&typ)
 	defer containers.ReleaseVector(held)
-	containers.AppendValue(held, int64(42), false)
+	held.MustAppendValue(int64(42), false)
 	err = reopened.Close()
 	reopenedClosed = true
 	require.NoError(t, err)
-	require.Equal(t, int64(42), containers.GetValue(held, 0))
+	require.Equal(t, int64(42), held.GetValue(0))
 	containers.ReleaseVector(held)
 	require.Zero(t, reopened.Runtime.VectorPool.Small.Allocated())
 	require.Zero(t, reopened.Runtime.VectorPool.Transient.Allocated())
