@@ -1088,6 +1088,19 @@ func (ses *Session) cleanCache() {
 	}
 }
 
+func (ses *Session) invalidateForeignKeyDeletePlans() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache != nil {
+		ses.planCache.invalidateForeignKeyDeletePlans()
+	}
+	for _, stmt := range ses.prepareStmts {
+		if stmt != nil && deletePlanDependsOnForeignKeyChecks(stmt.PreparePlan.GetDcl().GetPrepare().GetPlan()) {
+			stmt.needsRebuild = true
+		}
+	}
+}
+
 // releasePlanCache is an internal method. The caller MUST hold ses.mu
 // (currently only called from Session.Close which holds the lock).
 func (ses *Session) releasePlanCache() {
