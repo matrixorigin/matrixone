@@ -1,4 +1,4 @@
-name: PR 33176 / CS site retry (isolated)
+name: PR 32922 / CS site retry (isolated)
 on:
   push:
     branches: [weilu-runner-test]
@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   authorize:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == '2ab1e9e339f9c5770dfd0a8e17c00aa2406ec172' && github.ref == 'refs/heads/weilu-runner-test'
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == '4dd4ab4dee6dc2386c8654f45d91098a980a0913' && github.ref == 'refs/heads/weilu-runner-test'
     runs-on: ubuntu-latest
     environment: ci
     permissions:
@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: matrixorigin/CI
-          ref: 4972bd963f4cc9510266323b14446a8edcda2bfc
+          ref: 27887597968a080f78e942fc54636e5b9354033c
           path: fixed-ci
           sparse-checkout: |
             scripts/coverage_cache_preflight.py
@@ -52,8 +52,8 @@ jobs:
           from coverage_pr_entry import ENTRY, PROJECT, has_s3_fixture, route
           import node_cache_real_pr_gate as approved
 
-          number, run_id, preflight = 33176, 45965072949, 140392721855
-          head, source, author = "324d849115e6d5d5052c6dfa7f181a9fc4397c98", "Ariznawlll/matrixone", "Ariznawlll"
+          number, run_id, preflight = 32922, 46008768129, 140538571212
+          head, source, author = "02db9ac905295aedf2ea3ae0edf46e01778177ea", "Ariznawlll/matrixone", "Ariznawlll"
           def check(ok, message):
               if not ok:
                   raise SystemExit(message)
@@ -90,7 +90,7 @@ jobs:
                          {"number": number, "action": "opened", "pull_request": p}, p, member,
                          lambda src, rev: has_s3_fixture(src, rev, os.environ["CS_PR_METADATA_TOKEN"]))
           check(result == {"route": "cache", "allowed": "true", "head_sha": head, "head_repository": source},
-                "Merged CI 495 did not authorize the exact PR and fixtures")
+                "Pinned production CI did not authorize the exact PR and fixtures")
           receipt = dict(schema=2, allowed="true", pr_number=str(number), author=author, base_ref="main",
                          head_sha=head, head_repository=source, verified_membership_http_status=member,
                          membership_checks=checks, project_cache_namespace=PROJECT)
@@ -98,7 +98,7 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               for key, value in result.items():
                   print(f"{key}={value}", file=out)
-          print(f"Official preflight verified; authorized MatrixOne PR #33176 at {head}")
+          print(f"Official preflight verified; authorized MatrixOne PR #32922 at {head}")
           PY
       - name: Check Coverage S3 configuration names
         env:
@@ -217,35 +217,3 @@ jobs:
           name: ut-coverage-combined-skips-${{ github.run_id }}-${{ github.run_attempt }}
           path: combined-skip-manifest.json
           if-no-files-found: error
-  feedback:
-    name: Report Coverage UT to the exact PR head
-    needs: [authorize, coverage, merge]
-    if: needs.coverage.result == 'success' && needs.merge.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    permissions:
-      pull-requests: read
-      statuses: write
-    steps:
-      - name: Publish the isolated two-group result, not the full CI status
-        env:
-          API_TOKEN: ${{ github.token }}
-          COVERAGE_HEAD: ${{ needs.authorize.outputs.sha }}
-          COVERAGE_PERCENT: ${{ needs.merge.outputs.percent }}
-          COVERAGE_ARTIFACT: ${{ needs.merge.outputs.artifact }}
-        run: |
-          set -euo pipefail
-          test "$COVERAGE_HEAD" = '324d849115e6d5d5052c6dfa7f181a9fc4397c98'
-          [[ "$COVERAGE_PERCENT" =~ ^([0-9]{1,2}\.[0-9]{2}|100\.00)$ ]]
-          [[ "$COVERAGE_ARTIFACT" =~ ^https://github\.com/matrixorigin/matrixone/actions/runs/${GITHUB_RUN_ID}/artifacts/[0-9]+$ ]]
-          root="$GITHUB_API_URL/repos/matrixorigin/matrixone"
-          curl --fail --silent --show-error --max-time 30 -H "Authorization: Bearer $API_TOKEN" \
-            "$root/pulls/33176" | jq -e --arg head "$COVERAGE_HEAD" \
-            '.state == "open" and .head.sha == $head and .head.repo.full_name == "Ariznawlll/matrixone"' >/dev/null
-          payload=$(jq -n --arg url "$COVERAGE_ARTIFACT" --arg description "Both groups passed; UT coverage ${COVERAGE_PERCENT}%" \
-            '{state:"success", context:"Coverage UT (CS site retry trial)", target_url:$url, description:$description}')
-          curl --fail --silent --show-error --max-time 30 -H "Authorization: Bearer $API_TOKEN" \
-            -H "Content-Type: application/json" --data "$payload" "$root/statuses/$COVERAGE_HEAD" |
-            jq -e --arg url "$COVERAGE_ARTIFACT" 'select(.state == "success" and .target_url == $url) | .context'
-          printf 'Coverage UT: %s%% on `%s`; [combined profile](%s).\n' \
-            "$COVERAGE_PERCENT" "$COVERAGE_HEAD" "$COVERAGE_ARTIFACT" >> "$GITHUB_STEP_SUMMARY"

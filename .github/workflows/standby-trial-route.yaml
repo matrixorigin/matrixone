@@ -19,7 +19,7 @@ jobs:
       github.repository == 'matrixorigin/matrixone' && github.event_name == 'push' &&
       github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-pr32922.yaml@refs/heads/weilu-runner-test' &&
       github.actor == 'Ariznawlll' && github.run_attempt == 1 &&
-      github.event.before == '2ab1e9e339f9c5770dfd0a8e17c00aa2406ec172'
+      github.event.before == '4dd4ab4dee6dc2386c8654f45d91098a980a0913'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     environment: ci
@@ -32,7 +32,7 @@ jobs:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
         repository: matrixorigin/CI
-        ref: 4972bd963f4cc9510266323b14446a8edcda2bfc
+        ref: 27887597968a080f78e942fc54636e5b9354033c
         path: .standby
         sparse-checkout: |
           scripts/coverage_standby.py
@@ -52,7 +52,7 @@ jobs:
       name: Find a CS runner or use Shanghai standby
       timeout-minutes: 85
       env:
-        PR: "33176"
+        PR: "32922"
         GROUP: ${{ inputs.group }}
         HEAD: ${{ inputs.head }}
         SOURCE: ${{ inputs.source }}
@@ -85,7 +85,7 @@ jobs:
         GROUP: ${{ inputs.group }}
         HEAD: ${{ inputs.head }}
         SOURCE: ${{ inputs.source }}
-        PR: "33176"
+        PR: "32922"
         ACTIONS_TOKEN: ${{ github.token }}
       run: python3 -I .coverage-trial/.github/standby-trial/ci495_trial.py revoke
   collect:

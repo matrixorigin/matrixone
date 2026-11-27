@@ -10,8 +10,8 @@ REF = "weilu-runner-test"
 ENTRY = ".github/workflows/coverage-standby-pr32922.yaml"
 WORKER = ".github/workflows/coverage-standby-worker.yaml"
 SOURCE = "Ariznawlll/matrixone"
-HEAD = "324d849115e6d5d5052c6dfa7f181a9fc4397c98"
-PIN = "4972bd963f4cc9510266323b14446a8edcda2bfc"
+HEAD = "02db9ac905295aedf2ea3ae0edf46e01778177ea"
+PIN = "27887597968a080f78e942fc54636e5b9354033c"
 
 
 def main():
@@ -21,11 +21,11 @@ def main():
         os.environ["GITHUB_WORKFLOW_REF"], os.environ["GITHUB_RUN_ATTEMPT"]) != (
         REPO, event, f"{REPO}/{workflow}@refs/heads/{REF}", "1"
     ) or (event == "push" and os.environ["GITHUB_ACTOR"] != "Ariznawlll"):
-        raise SystemExit("Not the protected PR 33176 trial")
+        raise SystemExit("Not the protected PR 32922 trial")
 
     if subprocess.check_output(["git", "-C", ".standby", "rev-parse", "HEAD"], text=True).strip() != PIN:
-        raise SystemExit("Standby checkout is not the merged CI #495 revision")
-    print(f"Using merged CI #495 standby {PIN}", flush=True)
+        raise SystemExit("Standby checkout is not the pinned production CI revision")
+    print(f"Using pinned production CI standby {PIN}", flush=True)
     path = Path(".standby/scripts/coverage_standby.py").resolve(strict=True)
     spec = importlib.util.spec_from_file_location("pinned_coverage_standby", path)
     code = importlib.util.module_from_spec(spec)
@@ -33,7 +33,7 @@ def main():
     code.WORKER_REF, code.ENTRY = REF, ENTRY
 
     def trial_parent_identity(ticket, run):
-        code.check((ticket["pr"], ticket["source"], ticket["head"]) == (33176, SOURCE, HEAD),
+        code.check((ticket["pr"], ticket["source"], ticket["head"]) == (32922, SOURCE, HEAD),
                    "not the frozen MatrixOne PR head")
         fields = {"id": ticket["parent"], "run_attempt": ticket["attempt"],
                   "repository.full_name": REPO, "head_repository.full_name": REPO,
