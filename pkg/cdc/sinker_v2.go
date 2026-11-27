@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -118,9 +119,16 @@ var CreateMysqlSinker2 = func(
 	maxSqlLength uint64,
 	sendSqlTimeout string,
 ) (Sinker, error) {
-	// 1. Determine if we need to record transactions for debugging
 	var doRecord bool
 	if tableDef != nil {
+		// The SQL sink encodes ENUM ordinals as quoted text, which the
+		// target can resolve as member labels. Reject before any sink DDL.
+		for _, col := range tableDef.Cols {
+			if col.Typ.Id == int32(types.T_enum) && col.Typ.EnumCollation != types.EnumCollationLegacy {
+				return nil, moerr.NewNotSupportedNoCtx("CDC SQL sinks with explicitly collated ENUM columns")
+			}
+		}
+		// Determine if we need to record transactions for debugging.
 		doRecord, _ = objectio.CDCRecordTxnInjected(tableDef.DbName, tableDef.Name)
 	}
 
