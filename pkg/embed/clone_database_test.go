@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -115,6 +116,43 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 			count(t, "select count(*) from mo_catalog.mo_database where datname='"+target+"'", 0)
 			exec(t, "create database "+target+" clone "+source)
 			count(t, "select count(*) from "+target+".native_index where id=1 and score=7", 1)
+		})
+
+		t.Run("hidden allocator keeps user auto increment independent", func(t *testing.T) {
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				for _, statement := range []string{"drop database if exists " + target, "drop table if exists " + source + ".allocator_tail"} {
+					_, err := conn.ExecContext(cleanupCtx, statement)
+					assert.NoError(t, err, statement)
+				}
+			}()
+			exec(t, "create table "+source+".allocator_tail (user_id smallint auto_increment, marker int)")
+			// Explicit user values stay small while the hidden row-ID allocator
+			// advances past SMALLINT's range. A later copy must not mix them.
+			for start := 1; start <= 40000; start += 10000 {
+				exec(t, fmt.Sprintf("insert into %s.allocator_tail select 1, result from generate_series(%d,%d) g", source, start, start+9999))
+			}
+			var sourceUserOffset uint64
+			require.NoError(t, conn.QueryRowContext(ctx, "select offset from mo_catalog.mo_increment_columns where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='"+source+"' and relname='allocator_tail') and col_name='user_id'").Scan(&sourceUserOffset))
+			require.LessOrEqual(t, sourceUserOffset, uint64(32767), "the source user allocator must still have SMALLINT capacity")
+			exec(t, "create database "+target+" clone "+source)
+			var extraBytes []byte
+			require.NoError(t, conn.QueryRowContext(ctx, "select extra_info from mo_catalog.mo_tables where reldatabase='"+target+"' and relname='allocator_tail'").Scan(&extraBytes))
+			var extra api.SchemaExtra
+			require.NoError(t, extra.Unmarshal(extraBytes))
+			// The durable source offset includes unused reserved IDs. A clone may
+			// retain a smaller consumed watermark, but never the hidden allocator.
+			require.GreaterOrEqual(t, extra.AutoIncrOffset, uint64(1))
+			require.LessOrEqual(t, extra.AutoIncrOffset, sourceUserOffset, "table-level AUTO_INCREMENT must stay within the user allocator")
+			exec(t, "alter table "+target+".allocator_tail modify column marker bigint")
+			result, err := conn.ExecContext(ctx, "insert into "+target+".allocator_tail (marker) values (40001)")
+			require.NoError(t, err)
+			id, err := result.LastInsertId()
+			require.NoError(t, err)
+			require.Greater(t, id, int64(1))
+			require.LessOrEqual(t, id, int64(32767))
+			count(t, "select count(*) from "+target+".allocator_tail where marker=40001 and user_id="+fmt.Sprint(id), 1)
 		})
 
 		for _, historical := range []bool{false, true} {

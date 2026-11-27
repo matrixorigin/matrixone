@@ -2153,7 +2153,9 @@ func (s *Scope) createTable(c *Compile, tableCreated func(), clone *table_clone.
 			if err := incrservice.ValidateAutoColumnOffset(c.proc.Ctx, typ, col.Offset); err != nil {
 				return err
 			}
-			extra.AutoIncrOffset = col.Offset
+			if !qry.TableDef.Cols[col.ColIndex].Hidden {
+				extra.AutoIncrOffset = col.Offset
+			}
 		}
 	}
 
