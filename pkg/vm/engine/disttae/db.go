@@ -113,13 +113,13 @@ func initSysTable(
 		if sysTablesCreatedTime != nil {
 			sysTablesCreatedTime[sysTableCreatedTimeIdxCatalog] = bat.Vecs[catalog.MO_DATABASE_CREATED_TIME_IDX]
 		}
-		ibat, err := fillRandomRowidAndZeroTs(bat, catalog.MoDatabaseSchema, m)
+		ibat, ibatAttrs, err := fillRandomRowidAndZeroTs(bat, catalog.MoDatabaseSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, catalog.MO_DATABASE_CPKEY_IDX, packer, mp)
+		state.HandleRowsInsert(ctx, ibat, ibatAttrs, catalog.MO_DATABASE_CPKEY_IDX, packer, mp)
 		done()
 		if initCatalog {
 			cc.InsertDatabase(bat)
@@ -144,14 +144,14 @@ func initSysTable(
 		if sysTablesCreatedTime != nil {
 			sysTablesCreatedTime[sysTableCreatedTimeIdxDatabase] = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
-		ibat, err := fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, m)
+		ibat, ibatAttrs, err := fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
 		}
 
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
+		state.HandleRowsInsert(ctx, ibat, ibatAttrs, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
 		if initCatalog {
 			cc.InsertTable(bat) // cache
 		}
@@ -174,12 +174,12 @@ func initSysTable(
 		if sysTablesCreatedTime != nil {
 			sysTablesCreatedTime[sysTableCreatedTimeIdxTables] = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
-		ibat, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, m)
+		ibat, ibatAttrs, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
 		}
-		state.HandleRowsInsert(ctx, ibat, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
+		state.HandleRowsInsert(ctx, ibat, ibatAttrs, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
 		if initCatalog {
 			cc.InsertTable(bat)
 		}
@@ -203,12 +203,12 @@ func initSysTable(
 		if sysTablesCreatedTime != nil {
 			sysTablesCreatedTime[sysTableCreatedTimeIdxColumns] = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
-		ibat, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, m)
+		ibat, ibatAttrs, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
 		}
-		state.HandleRowsInsert(ctx, ibat, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
+		state.HandleRowsInsert(ctx, ibat, ibatAttrs, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
 		if initCatalog {
 			cc.InsertTable(bat)
 		}
@@ -231,12 +231,12 @@ func initSysTable(
 		if sysTablesCreatedTime != nil {
 			sysTablesCreatedTime[sysTableCreatedTimeIdxIndexTbl] = indexBat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
-		indexIbat, err := fillRandomRowidAndZeroTs(indexBat, catalog.MoTablesSchema, m)
+		indexIbat, indexIbatAttrs, err := fillRandomRowidAndZeroTs(indexBat, catalog.MoTablesSchema, m)
 		if err != nil {
 			indexBat.Clean(m)
 			return err
 		}
-		state.HandleRowsInsert(ctx, indexIbat, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
+		state.HandleRowsInsert(ctx, indexIbat, indexIbatAttrs, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
 		if initCatalog {
 			cc.InsertTable(indexBat)
 		}
@@ -258,13 +258,13 @@ func initSysTable(
 		if err != nil {
 			return err
 		}
-		ibat, err := fillRandomRowidAndZeroTs(bat, catalog.MoColumnsSchema, m)
+		ibat, ibatAttrs, err := fillRandomRowidAndZeroTs(bat, catalog.MoColumnsSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
 		}
 		state, done := part.MutateState()
-		state.HandleRowsInsert(ctx, ibat, catalog.MO_COLUMNS_ATT_CPKEY_IDX, packer, mp)
+		state.HandleRowsInsert(ctx, ibat, ibatAttrs, catalog.MO_COLUMNS_ATT_CPKEY_IDX, packer, mp)
 		if initCatalog {
 			cc.InsertColumns(bat)
 		}
@@ -284,12 +284,12 @@ func initSysTable(
 		if err != nil {
 			return err
 		}
-		ibat, err = fillRandomRowidAndZeroTs(bat, catalog.MoColumnsSchema, m)
+		ibat, ibatAttrs, err = fillRandomRowidAndZeroTs(bat, catalog.MoColumnsSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
 		}
-		state.HandleRowsInsert(ctx, ibat, catalog.MO_COLUMNS_ATT_CPKEY_IDX, packer, mp)
+		state.HandleRowsInsert(ctx, ibat, ibatAttrs, catalog.MO_COLUMNS_ATT_CPKEY_IDX, packer, mp)
 		if initCatalog {
 			cc.InsertColumns(bat)
 		}
@@ -309,12 +309,12 @@ func initSysTable(
 		if err != nil {
 			return err
 		}
-		ibat, err = fillRandomRowidAndZeroTs(bat, catalog.MoColumnsSchema, m)
+		ibat, ibatAttrs, err = fillRandomRowidAndZeroTs(bat, catalog.MoColumnsSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
 		}
-		state.HandleRowsInsert(ctx, ibat, catalog.MO_COLUMNS_ATT_CPKEY_IDX, packer, mp)
+		state.HandleRowsInsert(ctx, ibat, ibatAttrs, catalog.MO_COLUMNS_ATT_CPKEY_IDX, packer, mp)
 		if initCatalog {
 			cc.InsertColumns(bat)
 		}
@@ -335,12 +335,12 @@ func initSysTable(
 		if err != nil {
 			return err
 		}
-		ibat, err = fillRandomRowidAndZeroTs(bat, catalog.MoColumnsSchema, m)
+		ibat, ibatAttrs, err = fillRandomRowidAndZeroTs(bat, catalog.MoColumnsSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
 		}
-		state.HandleRowsInsert(ctx, ibat, catalog.MO_COLUMNS_ATT_CPKEY_IDX, packer, mp)
+		state.HandleRowsInsert(ctx, ibat, ibatAttrs, catalog.MO_COLUMNS_ATT_CPKEY_IDX, packer, mp)
 		if initCatalog {
 			cc.InsertColumns(bat)
 		}

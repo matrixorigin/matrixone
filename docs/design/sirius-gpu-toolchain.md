@@ -23,11 +23,11 @@ required CUDA/cuVS inputs are missing; it never falls back to `/usr/local/cuda`.
 
 ## Ownership and layout
 
-MatrixOne pins Sirius at `third_party/sirius` as a Git submodule. Initialize it
+MatrixOne pins Sirius at `thirdparties/sirius` as a Git submodule. Initialize it
 and its DuckDB/cuCascade dependencies with `git submodule update --init
 --recursive`, then run `pixi run --frozen -e mo mo-build-embedding-sdk` from
-`third_party/sirius`. The SDK is generated at
-`third_party/sirius/build/mo/extension/sirius/embedding-sdk`; build MatrixOne
+`thirdparties/sirius`. The SDK is generated at
+`thirdparties/sirius/build/mo/extension/sirius/embedding-sdk`; build MatrixOne
 under that same Sirius Pixi environment with `SIRIUS_SDK` pointing there.
 The pinned Sirius commit must be available from the submodule's public remote
 before the MatrixOne commit is published.

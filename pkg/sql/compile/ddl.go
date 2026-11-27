@@ -4274,7 +4274,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
-	// TRUNCATE is a copy-and-swap rebuild: it creates a replacement relation
+	// TRUNCATE creates an empty replacement relation
 	// before the ordinary DROP path retires the old physical generation. Reuse
 	// ALTER's lineage publication protocol so the replacement remains the live
 	// branch child and the old generation stays protected for DIFF/MERGE.
@@ -4428,6 +4428,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 	newID := rel.GetTableID(c.proc.Ctx)
 	if lineagePlan.enabled {
+		lineagePlan.clearsRows = true
 		if err = c.preserveAlterDataBranchLineage(
 			lineagePlan, oldID, newID, db, table,
 		); err != nil {

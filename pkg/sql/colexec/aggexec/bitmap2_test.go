@@ -50,6 +50,196 @@ func newBitmapTestAllocation(
 	return registry, account, allocation
 }
 
+func TestAccountedDirectFillBitmap(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	controller := &rejectNthAggregateAllocation{}
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1<<20, controller)
+	require.NoError(t, err)
+	t.Cleanup(func() { finishTestAggregateAllocation(t, registry, account) })
+	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+		VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
+	})
+	require.NoError(t, err)
+	typ := types.T_varbinary.ToType()
+	input := vector.NewVec(typ, mp)
+	t.Cleanup(func() { input.Free(mp) })
+	wire := func(values ...uint32) []byte {
+		data, err := roaring.BitmapOf(values...).ToBytes()
+		require.NoError(t, err)
+		return data
+	}
+	require.NoError(t, input.PreExtend(259, mp))
+	for range 255 {
+		require.NoError(t, vector.AppendBytes(input, nil, true, mp))
+	}
+	for _, data := range [][]byte{wire(1, 2), wire(2, 3, 65537), wire(), {1}} {
+		require.NoError(t, vector.AppendBytes(input, data, false, mp))
+	}
+	vecs := []*vector.Vector{input}
+	constant, err := vector.NewConstBytes(typ, wire(2), 259, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { constant.Free(mp) })
+	for _, batchFill := range []bool{false, true} {
+		name := "direct"
+		if batchFill {
+			name = "batch"
+		}
+		t.Run(name, func(t *testing.T) {
+			exec := makeBmpOrExec(mp, AggIdOfBitmapOr, typ)
+			defer exec.Free()
+			require.NoError(t, exec.SetAllocationAccount(allocation))
+			require.NoError(t, exec.GroupGrow(3))
+			fill := func(group, row int, vectors []*vector.Vector) error {
+				if !batchFill {
+					return exec.Fill(group, row, vectors)
+				}
+				groups := []uint64{uint64(group + 1)}
+				if err := exec.PreflightBatchFill(row, groups, vectors); err != nil {
+					return err
+				}
+				return exec.BatchFill(row, groups, vectors)
+			}
+			observe := func(want []uint32) {
+				out, err := exec.Flush()
+				require.NoError(t, err)
+				defer out[0].Free(out[0].MPool())
+				if want == nil {
+					require.True(t, out[0].IsNull(1))
+				} else {
+					checkBitmap(t, out[0], 1, want)
+				}
+			}
+			for i, old := range [][]uint32{nil, {1, 2}} {
+				before := account.Snapshot()
+				controller.failAt = controller.calls + 1
+				require.ErrorIs(t, fill(1, 255+i, vecs), mpool.ErrAllocationAccountCapacity)
+				after := account.Snapshot()
+				require.Equal(t, before.Used, after.Used)
+				observe(old)
+				require.NoError(t, fill(1, 255+i, vecs))
+			}
+			require.NoError(t, fill(0, 254, vecs))
+			require.Error(t, fill(0, 258, vecs))
+			require.NoError(t, fill(1, 256, []*vector.Vector{constant}))
+			require.NoError(t, fill(2, 257, vecs))
+			if !batchFill {
+				require.NoError(t, exec.BulkFill(1, []*vector.Vector{constant}))
+			}
+			out, err := exec.Flush()
+			require.NoError(t, err)
+			defer out[0].Free(out[0].MPool())
+			require.True(t, out[0].IsNull(0))
+			checkBitmap(t, out[0], 1, []uint32{1, 2, 3, 65537})
+			require.False(t, out[0].IsNull(2))
+			checkBitmap(t, out[0], 2, []uint32{})
+		})
+	}
+}
+
+func TestAccountedDirectFillBitmapReservationIsNotAValue(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	registry, account, allocation := newBitmapTestAllocation(t, 1<<20)
+	t.Cleanup(func() { finishTestAggregateAllocation(t, registry, account) })
+	typ := types.T_varbinary.ToType()
+	exec := makeBmpOrExec(mp, AggIdOfBitmapOr, typ)
+	defer exec.Free()
+	require.NoError(t, exec.SetAllocationAccount(allocation))
+	require.NoError(t, exec.GroupGrow(2))
+	input := vector.NewVec(typ, mp)
+	defer input.Free(mp)
+	data, err := roaring.BitmapOf(7).ToBytes()
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendBytes(input, data, false, mp))
+	require.NoError(t, exec.PreflightBatchFill(0, []uint64{2}, []*vector.Vector{input}))
+	// A later aggregate can reject the unit, leaving only this reservation.
+	var spill bytes.Buffer
+	require.NoError(t, exec.SaveSpillIntermediateRows(0, []int32{0, 1}, &spill))
+	restored := makeBmpOrExec(mp, AggIdOfBitmapOr, typ)
+	defer restored.Free()
+	require.NoError(t, restored.SetAllocationAccount(allocation))
+	require.NoError(t, restored.UnmarshalSpillFromReader(&spill, mp))
+	require.NoError(t, restored.PreflightBatchMerge(exec, 1, []uint64{2}))
+	require.NoError(t, restored.BatchMerge(exec, 1, []uint64{2}))
+	for _, agg := range []*bmpOrExec{exec, restored} {
+		out, err := agg.Flush()
+		require.NoError(t, err)
+		defer out[0].Free(out[0].MPool())
+		require.True(t, out[0].IsNull(0))
+		require.True(t, out[0].IsNull(1))
+	}
+}
+
+func TestAccountedBitmapMergeTightReservation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sources [][]uint32
+		want    []uint32
+	}{
+		{"full-overlap", [][]uint32{{1, 2}}, []uint32{1, 2}},
+		{"multiple-sources", [][]uint32{{0, 1, 2}, {1, 2, 4}}, []uint32{0, 1, 2, 4}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			controller := &rejectNthAggregateAllocation{}
+			registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(1<<20, controller)
+			require.NoError(t, err)
+			t.Cleanup(func() { finishTestAggregateAllocation(t, registry, account) })
+			allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+				VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
+			})
+			require.NoError(t, err)
+			typ := types.T_varbinary.ToType()
+			makeExec := func(sets ...[]uint32) *bmpOrExec {
+				exec := makeBmpOrExec(mp, AggIdOfBitmapOr, typ)
+				t.Cleanup(exec.Free)
+				require.NoError(t, exec.SetAllocationAccount(allocation))
+				require.NoError(t, exec.GroupGrow(len(sets)))
+				vec := vector.NewVec(typ, mp)
+				defer vec.Free(mp)
+				for row, set := range sets {
+					data, err := roaring.BitmapOf(set...).ToBytes()
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendBytes(vec, data, false, mp))
+					require.NoError(t, exec.Fill(row, row, []*vector.Vector{vec}))
+				}
+				return exec
+			}
+			dst, src := makeExec([]uint32{1, 2}), makeExec(tc.sources...)
+			target := dst.state[0].mobs[0].(*bmp)
+			require.Equal(t, 2, cap(target.values))
+			groups := slices.Repeat([]uint64{1}, len(tc.sources))
+			if len(tc.sources) > 1 {
+				old := target.values
+				before := account.Snapshot()
+				controller.failAt = controller.calls + 1
+				require.ErrorIs(t, dst.PreflightBatchMerge(src, 0, groups), mpool.ErrAllocationAccountCapacity)
+				require.Equal(t, before.Used, account.Snapshot().Used)
+				require.Same(t, &old[0], &target.values[0])
+				require.Equal(t, []uint32{1, 2}, target.values)
+			}
+			require.NoError(t, dst.PreflightBatchMerge(src, 0, groups))
+			require.Equal(t, []uint32{1, 2}, target.values, "preflight must not publish")
+			require.Equal(t, len(tc.want), cap(target.values))
+			calls := controller.calls
+			controller.failAt = calls + 1
+			require.NoError(t, dst.BatchMerge(src, 0, groups))
+			require.Equal(t, calls, controller.calls, "committed merge must not acquire capacity")
+			controller.failAt = 0
+			out, err := dst.Flush()
+			require.NoError(t, err)
+			defer out[0].Free(out[0].MPool())
+			checkBitmap(t, out[0], 0, tc.want)
+		})
+	}
+}
+
 type errMarshalerUnmarshaler struct {
 	err error
 }

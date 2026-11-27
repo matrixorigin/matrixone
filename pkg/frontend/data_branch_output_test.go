@@ -3846,7 +3846,13 @@ func TestOnlineBranchApplyOrdersPreparationProductionAndCleanup(t *testing.T) {
 				}
 				var err error
 				if pick {
-					err = pickMergeDiffs(ctx, cancel, ses, bh, &tree.DataBranchPick{ConflictOpt: &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}}, tblStuff, produce)
+					err = pickMergeDiffs(ctx, cancel, ses, bh, &tree.DataBranchPick{ConflictOpt: &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}}, tblStuff,
+						func(emit emitFunc, prepare pickApplySetup) error {
+							if err := prepare(nil); err != nil {
+								return err
+							}
+							return produce(emit)
+						})
 				} else {
 					err = mergeDiffs(ctx, cancel, ses, bh, tblStuff, produce)
 				}

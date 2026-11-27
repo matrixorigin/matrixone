@@ -432,6 +432,21 @@ func ValidCalendarDate(year int32, month, day uint8) bool {
 
 func (d Date) String() string {
 	y, m, day, _ := d.Calendar(true)
+	if y < 0 || y > 9999 {
+		return dateStringSlow(d)
+	}
+	var buf [10]byte
+	b := append4Digits(buf[:0], int(y))
+	b = append(b, '-')
+	b = append2Digits(b, int(m))
+	b = append(b, '-')
+	b = append2Digits(b, int(day))
+	return string(b)
+}
+
+// dateStringSlow is String through fmt, for years outside 0..9999.
+func dateStringSlow(d Date) string {
+	y, m, day, _ := d.Calendar(true)
 	return fmt.Sprintf("%04d-%02d-%02d", y, m, day)
 }
 

@@ -15,41 +15,131 @@
 package batch
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
-// BatchToProtoBatch converts bat to its protobuf form. attrs names bat's
-// columns on the wire: a batch carries no names of its own.
-func BatchToProtoBatch(bat *Batch, attrs []string) (*api.Batch, error) {
-	rbat := new(api.Batch)
-	rbat.Attrs = attrs
-	if len(bat.Vecs) > 0 {
-		rbat.Vecs = make([]api.Vector, len(bat.Vecs))
+// MarshalVectors encodes vecs into a new slice, like EncodeVectors but
+// copying the vectors' buffers.
+func MarshalVectors(vecs []*vector.Vector) ([]byte, error) {
+	bat := Batch{Vecs: vecs}
+	if len(vecs) > 0 {
+		bat.rowCount = vecs[0].Length()
 	}
-	for i, vec := range bat.Vecs {
-		pbVector, err := vector.VectorToProtoVector(vec)
-		if err != nil {
-			return nil, err
-		}
-		rbat.Vecs[i] = pbVector
-	}
-	return rbat, nil
-
+	return bat.MarshalBinary()
 }
 
-// ProtoBatchToBatch copies bat into vectors of mp. With a nil mp the vectors
-// are read-only references to bat's buffers.
-func ProtoBatchToBatch(bat *api.Batch, mp *mpool.MPool) (*Batch, error) {
-	rbat := NewWithSize(len(bat.Vecs))
-	for i, v := range bat.Vecs {
-		vec, err := vector.ProtoVectorToVector(v, mp)
-		if err != nil {
-			return nil, err
-		}
-		rbat.SetVector(int32(i), vec)
+// EncodeVectors encodes vecs as one batch whose row count is the length of
+// the first vector. Only the vectors are encoded: no extra buffer, and a
+// zero Recursive and ShuffleIDX. It allocates the batch header the result
+// borrows; see Encode.
+func EncodeVectors(vecs []*vector.Vector) (api.EncodedBatch, error) {
+	bat := &Batch{Vecs: vecs}
+	if len(vecs) > 0 {
+		bat.rowCount = vecs[0].Length()
 	}
-	rbat.SetRowCount(rbat.GetVector(0).Length())
-	return rbat, nil
+	return Encode(bat)
+}
+
+// Encode returns bat's MarshalBinary encoding as an api.EncodedBatch that
+// borrows bat and writes it straight into the message buffer when the Entry
+// is marshaled. It allocates nothing and copies nothing. bat, its vectors
+// and their buffers must stay unchanged until the result is marshaled or
+// dropped; marshaling fails if bat no longer has the size it had here.
+//
+// bat must be valid, as an engine's batches are: Encode sends each varlen
+// area as is, without the codec's linear check of its descriptors.
+func Encode(bat *Batch) (api.EncodedBatch, error) {
+	size, err := bat.marshalTrustedSize()
+	if err != nil {
+		return api.EncodedBatch{}, err
+	}
+	return api.NewBorrowedEncodedBatch((*trustedEncoder)(bat), size), nil
+}
+
+// trustedEncoder is the api.BatchEncoder of a valid batch. Being a pointer
+// type, it is stored in the interface without an allocation.
+type trustedEncoder Batch
+
+func (e *trustedEncoder) EncodeTo(dst []byte) error {
+	return (*Batch)(e).marshalTrustedTo(dst)
+}
+
+// ViewBinary decodes data, a MarshalBinary encoding, into a new batch whose
+// vectors and extra buffer are read-only views of data. Every vector must
+// hold the batch's row count.
+func ViewBinary(data []byte) (*Batch, error) {
+	return viewBinary(data, true)
+}
+
+// ViewTrustedBinary is ViewBinary for data that Encode produced from a valid
+// batch, such as an api.Entry from a peer of the same cluster. It checks the
+// framing, sizes and row counts, but not the null bitmaps or varlen payloads.
+func ViewTrustedBinary(data []byte) (*Batch, error) {
+	return viewBinary(data, false)
+}
+
+// ViewTrustedBinaryInto is ViewTrustedBinary decoding into bat, which must
+// be a view from an earlier decode or a new batch. It reuses bat's vectors,
+// so decoding an encoding with as many vectors as the last allocates
+// nothing. The previous views are replaced.
+func ViewTrustedBinaryInto(bat *Batch, data []byte) error {
+	if bat.mp != nil || bat.selection != nil {
+		return moerr.NewInvalidInputNoCtx("batch is not a view")
+	}
+	if err := bat.unmarshalBinary(data, nil, false); err != nil {
+		return err
+	}
+	if err := bat.CheckLength(); err != nil {
+		return moerr.NewInvalidInputNoCtx("batch vector length does not match row count")
+	}
+	return nil
+}
+
+// DropViews drops the references of bat, a batch from ViewTrustedBinaryInto,
+// to its encoding, and keeps its vectors for the next decode.
+func DropViews(bat *Batch) {
+	for _, vec := range bat.Vecs {
+		vec.Free(nil)
+	}
+	bat.extraBuf = nil
+	bat.rowCount = 0
+}
+
+func viewBinary(data []byte, validateValues bool) (*Batch, error) {
+	bat := NewWithSize(0)
+	// The vectors are views, so they can share one allocation.
+	if len(data) >= 12 {
+		if n := int(types.DecodeInt32(data[8:12])); n > 0 && n <= (len(data)-12)/4 {
+			views := make([]vector.Vector, n)
+			bat.Vecs = make([]*vector.Vector, n)
+			for i := range views {
+				bat.Vecs[i] = &views[i]
+			}
+		}
+	}
+	if err := bat.unmarshalBinary(data, nil, validateValues); err != nil {
+		return nil, err
+	}
+	if err := bat.CheckLength(); err != nil {
+		return nil, moerr.NewInvalidInputNoCtx("batch vector length does not match row count")
+	}
+	return bat, nil
+}
+
+// EncodedRowCount returns the row count of a MarshalBinary encoding without
+// decoding its vectors.
+func EncodedRowCount(data []byte) (int, error) {
+	if len(data) < 8 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	rows := types.DecodeInt64(data[:8])
+	if rows < 0 || int64(int(rows)) != rows {
+		return 0, moerr.NewInvalidInputNoCtx("invalid batch row count")
+	}
+	return int(rows), nil
 }

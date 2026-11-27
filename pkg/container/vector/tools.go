@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -239,63 +238,6 @@ func extendWithBitmaps(
 	return nil
 }
 
-func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
-	nsp, err := vec.nsp.Show()
-	if err != nil {
-		return
-	}
-	sz := vec.typ.TypeSize()
-	physicalRows := vec.length
-	if vec.IsConst() {
-		physicalRows = min(physicalRows, 1)
-		if vec.IsConstNull() {
-			physicalRows = 0
-		}
-	}
-	return api.Vector{
-		Nsp:      nsp,
-		Nullable: true,
-		Area:     vec.area,
-		IsConst:  vec.IsConst(),
-		Len:      uint32(vec.length),
-		Type:     TypeToProtoType(vec.typ),
-		// Data:     vec.data,
-		Data: vec.data[:physicalRows*sz],
-	}, nil
-}
-
-// ProtoVectorToVector copies vec into a new vector allocated from mp. With a
-// nil mp the result is a read-only reference to vec's buffers.
-func ProtoVectorToVector(vec api.Vector, mp *mpool.MPool) (*Vector, error) {
-	typ, err := types.TypeFromPlan(vec.Type)
-	if err != nil {
-		return nil, err
-	}
-	var decoded Vector
-	decoded.area = vec.Area
-	decoded.length = int(vec.Len)
-	decoded.typ = typ
-	if vec.IsConst {
-		decoded.class = CONSTANT
-	} else {
-		decoded.class = FLAT
-	}
-	if err := decoded.nsp.Read(vec.Nsp); err != nil {
-		return nil, err
-	}
-	if !decoded.IsConst() || !decoded.nsp.Contains(0) {
-		decoded.data = vec.Data
-	}
-	if mp == nil {
-		return &decoded, nil
-	}
-	rvec := NewVec(typ, mp)
-	if err := rvec.copyDecoded(&decoded); err != nil {
-		return nil, err
-	}
-	return rvec, nil
-}
-
 func TypeToProtoType(typ types.Type) plan.Type {
 	return typ.PlanType()
 }
@@ -318,65 +260,9 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 			return AppendBytes(vec, v, isNull, mp)
 		}
 	}
-	switch t.Oid {
-	case types.T_bool:
-		return appendBytesToFixSized[bool](vec)
-	case types.T_bit:
-		return appendBytesToFixSized[uint64](vec)
-	case types.T_int8:
-		return appendBytesToFixSized[int8](vec)
-	case types.T_int16:
-		return appendBytesToFixSized[int16](vec)
-	case types.T_int32:
-		return appendBytesToFixSized[int32](vec)
-	case types.T_int64:
-		return appendBytesToFixSized[int64](vec)
-	case types.T_uint8:
-		return appendBytesToFixSized[uint8](vec)
-	case types.T_uint16:
-		return appendBytesToFixSized[uint16](vec)
-	case types.T_uint32:
-		return appendBytesToFixSized[uint32](vec)
-	case types.T_uint64:
-		return appendBytesToFixSized[uint64](vec)
-	case types.T_float32:
-		return appendBytesToFixSized[float32](vec)
-	case types.T_float64:
-		return appendBytesToFixSized[float64](vec)
-	case types.T_bf16:
-		return appendBytesToFixSized[types.BF16](vec)
-	case types.T_float16:
-		return appendBytesToFixSized[types.Float16](vec)
-	case types.T_float8:
-		return appendBytesToFixSized[types.Float8](vec)
-	case types.T_float4:
-		return appendBytesToFixSized[types.Float4](vec)
-	case types.T_date:
-		return appendBytesToFixSized[types.Date](vec)
-	case types.T_datetime:
-		return appendBytesToFixSized[types.Datetime](vec)
-	case types.T_time:
-		return appendBytesToFixSized[types.Time](vec)
-	case types.T_timestamp:
-		return appendBytesToFixSized[types.Timestamp](vec)
-	case types.T_enum:
-		return appendBytesToFixSized[types.Enum](vec)
-	case types.T_decimal64:
-		return appendBytesToFixSized[types.Decimal64](vec)
-	case types.T_decimal128:
-		return appendBytesToFixSized[types.Decimal128](vec)
-	case types.T_decimal256:
-		return appendBytesToFixSized[types.Decimal256](vec)
-	case types.T_uuid:
-		return appendBytesToFixSized[types.Uuid](vec)
-	case types.T_TS:
-		return appendBytesToFixSized[types.TS](vec)
-	case types.T_Rowid:
-		return appendBytesToFixSized[types.Rowid](vec)
-	case types.T_Blockid:
-		return appendBytesToFixSized[types.Blockid](vec)
-	case types.T_year:
-		return appendBytesToFixSized[types.MoYear](vec)
+	ops := &vectorTypeOps[t.Oid]
+	if !ops.supported {
+		panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
 	}
-	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
+	return ops.appendBytes(vec)
 }

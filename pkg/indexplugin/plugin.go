@@ -30,13 +30,12 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
@@ -113,6 +112,16 @@ func Get(algo string) (AlgoPlugin, bool) {
 	defer registryMu.RUnlock()
 	p, ok := registry[normalize(algo)]
 	return p, ok
+}
+
+// IndexStats returns the owner for both planning and execution of mo_index_stats.
+func IndexStats(ctx context.Context, algo string) (planplugin.IndexStatsHooks, error) {
+	if plugin, ok := Get(algo); ok {
+		if hooks, ok := plugin.Plan().(planplugin.IndexStatsHooks); ok {
+			return hooks, nil
+		}
+	}
+	return nil, moerr.NewNotSupportedf(ctx, "mo_index_stats: index type '%s' is not supported", algo)
 }
 
 // CoversSnapshot asks algo whether its index is current enough to be used as a
