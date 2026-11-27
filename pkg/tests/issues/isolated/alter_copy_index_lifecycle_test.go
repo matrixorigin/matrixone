@@ -45,8 +45,10 @@ func TestAlterCopyIndexLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(path)) })
 	cluster, err := embed.NewCluster(embed.WithTesting(), embed.WithDataPath(path), embed.WithCNCount(1))
+	if cluster != nil {
+		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+	}
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, cluster.Close()) })
 	require.NoError(t, cluster.Start())
 	cn, err := cluster.GetCNService(0)
 	require.NoError(t, err)
