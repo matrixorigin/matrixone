@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -2314,14 +2315,18 @@ func TestRestoredMaterializedViewUsesCreationDatabaseForSources(t *testing.T) {
 	} {
 		compiler.dbs[source.database] = true
 		key := mockQualifiedTableName(source.database, "t")
+		columnType := types.T_int64.ToType().PlanType()
+		if source.database == "dstdb" {
+			columnType = types.T_timestamp.ToType().PlanType()
+		}
 		compiler.tablesByQualifiedName[key] = &plan.TableDef{
 			DbName: source.database, Name: "t", DbId: source.id + 1, TblId: source.id, TableType: "r",
-			Cols: []*plan.ColDef{{Name: "id", Typ: types.T_int64.ToType().PlanType()}},
+			Cols: []*plan.ColDef{{Name: "id", Typ: columnType}},
 		}
 		compiler.objectsByQualifiedName[key] = &plan.ObjectRef{SchemaName: source.database, ObjName: "t", Obj: int64(source.id)}
 	}
 	compiler.SetContext(WithRestoredViewDefinition(t.Context(), "dstdb", "mv", `{"DefaultDatabase":"srcdb"}`, ""))
-	ctx := &viewRegenerationContext{CompilerContext: compiler, defaultDatabase: "dstdb"}
+	ctx := &viewRegenerationContext{CompilerContext: compiler, defaultDatabase: "dstdb", lowerCaseTableNames: 1}
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"create materialized view dstdb.mv refresh complete on demand as select id from t", 1)
 	require.NoError(t, err)
@@ -2334,6 +2339,45 @@ func TestRestoredMaterializedViewUsesCreationDatabaseForSources(t *testing.T) {
 	require.Equal(t, "srcdb", def.Sources[0].Database)
 	require.Equal(t, uint64(101), def.Sources[0].ID)
 	require.Contains(t, def.RefreshSQL, "`srcdb`.`t`")
+}
+
+func TestMaterializedViewRejectsCaseSensitiveSourceMode(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create materialized view mv refresh complete on demand as select n_nationkey from nation", 0)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(caseSensitiveNamesContext{compiler}, stmt, false, nil)
+	require.ErrorContains(t, err, "lower_case_table_names=0")
+}
+
+func TestMaterializedViewRefreshUsesStableBindingRules(t *testing.T) {
+	compiler := NewMockOptimizer(true, newPlanTestProcess(t))
+	for _, def := range compiler.ctxt.tables {
+		def.DbName = "tpch"
+		def.DbId = 1
+	}
+	defaults := compiler.ctxt
+	precision := int64(8)
+	compiler.ctxt.ResolveVariableFunc = func(name string, system, global bool) (any, error) {
+		switch name {
+		case "sql_mode":
+			return "ENABLE_BOOL_SUMAVG", nil
+		case "div_precision_increment":
+			return precision, nil
+		default:
+			return defaults.ResolveVariable(name, system, global)
+		}
+	}
+	_, err := runOneStmt(compiler, t, "create materialized view mv_bool refresh complete on demand as select n_regionkey, sum(n_nationkey > 0) from nation group by n_regionkey")
+	require.ErrorContains(t, err, "refresh query cannot bind")
+	_, err = runOneStmt(compiler, t, "create materialized view mv_div refresh complete on demand as select n_nationkey / 3 from nation")
+	require.ErrorContains(t, err, "default div_precision_increment")
+	_, err = runOneStmt(compiler, t, "create materialized view mv_control refresh complete on demand as select n_nationkey from nation")
+	require.NoError(t, err)
+	precision = int64(function.DefaultDivPrecisionIncrement)
+	_, err = runOneStmt(compiler, t, "create materialized view mv_default_div refresh complete on demand as select n_nationkey / 3 from nation")
+	require.NoError(t, err)
 }
 
 func TestMaterializedViewAdmissionTracksAllInputs(t *testing.T) {

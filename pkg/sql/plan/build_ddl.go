@@ -2187,9 +2187,6 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		if err := validateMaterializedViewQuery(ctx.GetContext(), stmt.AsSource); err != nil {
 			return nil, err
 		}
-		if err := validateMaterializedViewTimezoneColumns(ctx, stmt.AsSource); err != nil {
-			return nil, err
-		}
 	}
 	viewName := stmt.Name.ObjectName
 	if err := validateIdentifier(ctx.GetContext(), string(viewName)); err != nil {
@@ -2237,6 +2234,14 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	creationContext, err := restoredViewCreationContext(ctx, createView.Database, string(viewName))
 	if err != nil {
 		return nil, err
+	}
+	if stmt.Materialized {
+		if creationContext.GetLowerCaseTableNames() == 0 {
+			return nil, moerr.NewNotSupported(creationContext.GetContext(), "materialized views do not support lower_case_table_names=0")
+		}
+		if err := validateMaterializedViewTimezoneColumns(creationContext, stmt.AsSource); err != nil {
+			return nil, err
+		}
 	}
 	// Column inference binds and rewrites the SELECT tree in place. Materialized
 	// view admission and refresh SQL must inspect the original AST, so keep the

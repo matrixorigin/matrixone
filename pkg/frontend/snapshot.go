@@ -2334,6 +2334,11 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 			for _, item := range e.OrderBy {
 				walkExpr(item.Expr)
 			}
+		case *tree.SampleExpr:
+			columns, _ := e.GetColumns()
+			for _, column := range columns {
+				walkExpr(column)
+			}
 		case *tree.ExprList:
 			for _, item := range e.Exprs {
 				walkExpr(item)

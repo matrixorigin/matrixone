@@ -465,9 +465,9 @@ func TestMaterializedViewRowsFromBatchRejectsMalformedDeletes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bat := testutil.NewBatchWithVectors(tc.vectors, nil)
-			bat.Attrs = tc.attrs
 			t.Cleanup(func() { bat.Clean(mp) })
 			atomic := NewAtomicBatch(mp)
+			atomic.Attrs = tc.attrs
 			atomic.Batches = []*batch.Batch{bat}
 			atomic.Rows.Set(AtomicBatchRow{Pk: []byte(tc.name), Src: bat})
 			_, err := materializedViewRowsFromBatch(atomic, false)
@@ -513,21 +513,21 @@ func TestMaterializedViewConsumerAppliesInsertAndDeleteTail(t *testing.T) {
 		testutil.NewVector(1, types.T_varchar.ToType(), mp, false, []string{"api"}),
 		testutil.NewVector(1, types.T_int64.ToType(), mp, false, []int64{10}),
 	}, nil)
-	insertBat.Attrs = []string{catalog.Row_ID, "service", "value"}
 	deleteTS := types.BuildTS(20, 1)
 	deleteBat := testutil.NewBatchWithVectors([]*vector.Vector{
 		testutil.NewVector(1, types.T_Rowid.ToType(), mp, false, []types.Rowid{rowID}),
 		testutil.NewVector(1, types.T_TS.ToType(), mp, false, []types.TS{deleteTS}),
 	}, nil)
-	deleteBat.Attrs = []string{catalog.Row_ID, "commit_ts"}
 	t.Cleanup(func() {
 		insertBat.Clean(mp)
 		deleteBat.Clean(mp)
 	})
 	atomicInsert := NewAtomicBatch(mp)
+	atomicInsert.Attrs = []string{catalog.Row_ID, "service", "value"}
 	atomicInsert.Batches = []*batch.Batch{insertBat}
 	atomicInsert.Rows.Set(AtomicBatchRow{Pk: []byte("insert"), Src: insertBat})
 	atomicDelete := NewAtomicBatch(mp)
+	atomicDelete.Attrs = []string{catalog.Row_ID, "commit_ts"}
 	atomicDelete.Batches = []*batch.Batch{deleteBat}
 	atomicDelete.Rows.Set(AtomicBatchRow{Pk: []byte("delete"), Src: deleteBat})
 
@@ -587,9 +587,9 @@ func TestMaterializedViewConsumerRoutesUnionAllTailBySource(t *testing.T) {
 	insertBat := testutil.NewBatchWithVectors([]*vector.Vector{
 		testutil.NewVector(1, types.T_varchar.ToType(), mp, false, []string{"api"}),
 	}, nil)
-	insertBat.Attrs = []string{"service"}
 	t.Cleanup(func() { insertBat.Clean(mp) })
 	atomicInsert := NewAtomicBatch(mp)
+	atomicInsert.Attrs = []string{"service"}
 	atomicInsert.Batches = []*batch.Batch{insertBat}
 	atomicInsert.Rows.Set(AtomicBatchRow{Pk: []byte("insert"), Src: insertBat})
 
@@ -662,9 +662,9 @@ func TestMaterializedViewRowVisitorBoundsCancellationAndErrors(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 	vec := testutil.NewVector(3, types.T_varchar.ToType(), mp, false, []string{"a", "b", "c"})
 	bat := testutil.NewBatchWithVectors([]*vector.Vector{vec}, nil)
-	bat.Attrs = []string{"k"}
 	defer func() { bat.Clean(mp); require.Zero(t, mp.CurrNB()) }()
 	atomic := NewAtomicBatch(mp)
+	atomic.Attrs = []string{"k"}
 	for i := range 3 {
 		atomic.Rows.Set(AtomicBatchRow{Pk: []byte{byte(i)}, Src: bat, Offset: i})
 	}
@@ -746,9 +746,9 @@ func TestMaterializedViewForceResourceFailureDoesNotFullRefresh(t *testing.T) {
 				testutil.NewVector(1, types.T_Rowid.ToType(), mp, false, []types.Rowid{rowID}),
 				testutil.NewVector(1, types.T_varchar.ToType(), mp, false, []string{"api"}),
 			}, nil)
-			insertBat.Attrs = []string{catalog.Row_ID, "service"}
 			t.Cleanup(func() { insertBat.Clean(mp) })
 			atomicInsert := NewAtomicBatch(mp)
+			atomicInsert.Attrs = []string{catalog.Row_ID, "service"}
 			atomicInsert.Batches = []*batch.Batch{insertBat}
 			atomicInsert.Rows.Set(AtomicBatchRow{Pk: []byte("api"), Src: insertBat})
 			info := &ConsumerInfo{

@@ -465,19 +465,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	warningsSucceeded := false
 	defer func() { warnings.finish(warningsSucceeded, warningDestination) }()
 
-	// Cached plans can outlive the negotiated cluster capability.
-	if err = validateJSONStringConsumerProtocol(c.proc, c.pn); err != nil {
-		return nil, err
-	}
-	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
-		return nil, err
-	}
-	if err = validateHexMySQLNumericProtocol(c.proc, c.pn); err != nil {
-		return nil, err
-	}
-	if err = validateIncompleteTemporalStringProtocol(c.proc, c.pn); err != nil {
-		return nil, err
-	}
 	if err = c.validateMaterializedViewReads(); err != nil {
 		return nil, err
 	}

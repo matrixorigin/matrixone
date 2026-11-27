@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -70,13 +69,11 @@ type iterationSourceChanges struct {
 	changes engine.ChangesHandle
 }
 
-// ensureISCPInsertBatchAttrs restores the logical column names for persisted
-// object batches returned by CollectChanges. Object reads carry vectors and
-// special-column layout, but may not carry Attrs; consumers such as incremental
-// materialized views need names to bind expressions to values.
-func ensureISCPInsertBatchAttrs(bat *batch.Batch, def *plan.TableDef, retainRowID bool) error {
+// iscpInsertBatchAttrs derives the logical names from the source definition.
+// Object batches carry vectors without names; the ISCP stream owns this schema.
+func iscpInsertBatchAttrs(bat *batch.Batch, def *plan.TableDef, retainRowID bool) ([]string, error) {
 	if bat == nil || def == nil {
-		return nil
+		return nil, nil
 	}
 
 	attrs := make([]string, 0, len(def.Cols)+1)
@@ -96,23 +93,18 @@ func ensureISCPInsertBatchAttrs(bat *batch.Batch, def *plan.TableDef, retainRowI
 	}
 	expectedCount := len(attrs)
 	if len(bat.Vecs) != expectedCount {
-		return moerr.NewInternalErrorNoCtxf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"ISCP insert batch schema mismatch: got %d vectors, expected %d",
 			len(bat.Vecs), expectedCount,
 		)
 	}
 	if retainRowID && (bat.Vecs[0] == nil || bat.Vecs[0].GetType().Oid != types.T_Rowid) {
-		return moerr.NewInternalErrorNoCtx("ISCP insert batch is missing the retained rowid")
+		return nil, moerr.NewInternalErrorNoCtx("ISCP insert batch is missing the retained rowid")
 	}
 	if len(bat.Vecs) == 0 || bat.Vecs[len(bat.Vecs)-1] == nil || bat.Vecs[len(bat.Vecs)-1].GetType().Oid != types.T_TS {
-		return moerr.NewInternalErrorNoCtx("ISCP insert batch is missing the commit timestamp")
+		return nil, moerr.NewInternalErrorNoCtx("ISCP insert batch is missing the commit timestamp")
 	}
-
-	if slices.Equal(bat.Attrs, attrs) {
-		return nil
-	}
-	bat.Attrs = attrs
-	return nil
+	return attrs, nil
 }
 
 func resolveMVBatchIndexes(bat *batch.Batch, def *plan.TableDef, insert bool, retainRowID bool) (tsIdx, pkIdx int) {
@@ -135,9 +127,12 @@ func resolveMVBatchIndexes(bat *batch.Batch, def *plan.TableDef, insert bool, re
 			}
 		}
 		if len(def.Pkey.Names) == 1 {
-			for i, attr := range bat.Attrs {
-				if attr == def.Pkey.Names[0] {
+			for i, col := range def.Cols {
+				if col.Name == def.Pkey.Names[0] {
 					pkIdx = i
+					if retainRowID {
+						pkIdx++
+					}
 					break
 				}
 			}
@@ -360,22 +355,60 @@ func ExecuteIterationWithRuntime(
 		}
 		return nil
 	}
-	dbName := jobSpecs[0].ConsumerInfo.SrcTable.DBName
-	tableName := jobSpecs[0].ConsumerInfo.SrcTable.TableName
 	ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
-	for _, spec := range jobSpecs {
+	keep := make([]int, 0, len(jobSpecs))
+	for i, spec := range jobSpecs {
 		if spec.ConsumerType == int8(ConsumerType_MaterializedView) {
 			d, loadErr := LoadMaterializedViewDefinition(ctxWithAccount, cnEngine, cnUUID, txnOp, &spec.ConsumerInfo, false)
-			if loadErr != nil {
-				return loadErr
+			if loadErr == nil {
+				var projected *ConsumerInfo
+				projected, loadErr = MaterializedViewInfo(d)
+				if loadErr == nil {
+					spec.ConsumerInfo = *projected
+				}
 			}
-			projected, loadErr := MaterializedViewInfo(d)
 			if loadErr != nil {
-				return loadErr
+				if !isPermanentError(loadErr) {
+					return loadErr
+				}
+				// A changed definition belongs to this job alone. Persist its
+				// terminal status before narrowing the shared iteration, so a
+				// healthy peer can still consume the selected range.
+				flushErr := FlushPermanentErrorMessage(ctx, cnUUID, cnEngine, cnTxnClient,
+					iterCtx.accountID, iterCtx.tableID,
+					[]string{iterCtx.jobNames[i]}, []uint64{iterCtx.jobIDs[i]},
+					[]uint64{iterCtx.lsn[i]}, []*JobStatus{prevStatus[i]},
+					loadErr.Error(), []uint64{preLSN[i]})
+				if flushErr != nil && !isSupersededIteration(flushErr) {
+					return flushErr
+				}
+				continue
 			}
-			spec.ConsumerInfo = *projected
+		}
+		keep = append(keep, i)
+	}
+	if len(keep) != len(jobSpecs) {
+		originalJobCount := len(jobSpecs)
+		jobSpecs = selectIterationJobs(jobSpecs, keep)
+		prevStatus = selectIterationJobs(prevStatus, keep)
+		committedWatermark = selectIterationJobs(committedWatermark, keep)
+		statuses = selectIterationJobs(statuses, keep)
+		preLSN = selectIterationJobs(preLSN, keep)
+		iterCtx.jobNames = selectIterationJobs(iterCtx.jobNames, keep)
+		iterCtx.jobIDs = selectIterationJobs(iterCtx.jobIDs, keep)
+		iterCtx.lsn = selectIterationJobs(iterCtx.lsn, keep)
+		if len(iterCtx.stages) == originalJobCount {
+			iterCtx.stages = selectIterationJobs(iterCtx.stages, keep)
+		} else {
+			iterCtx.stages = nil
+		}
+		iterCtx.sourceTables = iterationSourcesForJobs(jobSpecs)
+		if len(jobSpecs) == 0 {
+			return nil
 		}
 	}
+	dbName := jobSpecs[0].ConsumerInfo.SrcTable.DBName
+	tableName := jobSpecs[0].ConsumerInfo.SrcTable.TableName
 	db, err := cnEngine.Database(ctxWithAccount, dbName, txnOp)
 	if err != nil {
 		return
@@ -609,6 +642,32 @@ func ExecuteIterationWithRuntime(
 	}
 
 	return finalErr
+}
+
+func selectIterationJobs[T any](values []T, indices []int) []T {
+	selected := make([]T, 0, len(indices))
+	for _, index := range indices {
+		selected = append(selected, values[index])
+	}
+	return selected
+}
+
+// A scheduled union may include a source used only by a job whose definition
+// has since become invalid. Build the stream from the surviving catalog jobs.
+func iterationSourcesForJobs(specs []*JobSpec) []TableInfo {
+	seen := make(map[[2]uint64]struct{})
+	var sources []TableInfo
+	for _, spec := range specs {
+		for _, source := range spec.ConsumerInfo.SourceTableInfos() {
+			key := [2]uint64{source.DBID, source.TableID}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			sources = append(sources, source)
+		}
+	}
+	return sources
 }
 
 func reconcileIterationStages(iterCtx *IterationContext, statuses []*JobStatus) {
@@ -858,9 +917,10 @@ func runISCPTaskIterationConsumers(
 				if streamDef == nil {
 					streamDef = defaultTableDef
 				}
+				var insertAttrs []string
 				if retainRowID && streamDef != nil {
 					if insertData != nil {
-						readErr = ensureISCPInsertBatchAttrs(insertData, streamDef, true)
+						insertAttrs, readErr = iscpInsertBatchAttrs(insertData, streamDef, true)
 						if readErr == nil {
 							streamInsTSColIdx, streamInsPKColIdx = resolveMVBatchIndexes(insertData, streamDef, true, true)
 						}
@@ -880,6 +940,7 @@ func runISCPTaskIterationConsumers(
 						break
 					}
 					insertBatch := NewAtomicBatch(mp)
+					insertBatch.Attrs = insertAttrs
 					insertBatch.Append(packer, insertData, streamInsTSColIdx, streamInsPKColIdx)
 					insertData = nil
 					data = NewISCPData(false, insertBatch, nil, nil)
@@ -891,6 +952,12 @@ func runISCPTaskIterationConsumers(
 					}
 					pendingInsert = allocateAtomicBatchIfNeed(pendingInsert)
 					pendingDelete = allocateAtomicBatchIfNeed(pendingDelete)
+					if insertData != nil {
+						pendingInsert.Attrs = insertAttrs
+					}
+					if retainRowID {
+						pendingDelete.Attrs = []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
+					}
 					pendingInsert.Append(packer, insertData, streamInsTSColIdx, streamInsPKColIdx)
 					insertData = nil
 					pendingDelete.Append(packer, deleteData, streamDelTSColIdx, streamDelPKColIdx)

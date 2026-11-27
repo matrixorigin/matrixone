@@ -247,10 +247,20 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 	// Re-render after source resolution so complete-refresh workers consume the
 	// same database binding accepted by CREATE, including cross-database joins.
 	d.RefreshSQL = materializedViewRefreshSQL(stmt.AsSource)
-	if stmt.RefreshTiming == tree.MaterializedViewRefreshOnChange {
-		if _, err := BuildPlan(materializedViewRefreshCompilerContext{ctx}, DeepCopySelect(stmt.AsSource), false, nil); err != nil {
-			return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view background refresh query cannot bind: %v", err)
+	if resolveDivPrecisionIncrement(ctx) != function.DefaultDivPrecisionIncrement {
+		division := false
+		walkASTExpressions(stmt.AsSource, func(expr tree.Expr) bool {
+			if binary, ok := expr.(*tree.BinaryExpr); ok && binary.Op == tree.DIV {
+				division = true
+			}
+			return !division
+		})
+		if division {
+			return moerr.NewNotSupported(ctx.GetContext(), "materialized view division requires the default div_precision_increment")
 		}
+	}
+	if _, err := BuildPlan(materializedViewRefreshCompilerContext{ctx}, DeepCopySelect(stmt.AsSource), false, nil); err != nil {
+		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view background refresh query cannot bind: %v", err)
 	}
 	incrementalSpec := ""
 	unsupportedSourceReason := ""

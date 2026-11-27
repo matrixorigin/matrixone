@@ -360,6 +360,8 @@ type AtomicBatch struct {
 	Mp      *mpool.MPool
 	Batches []*batch.Batch
 	Rows    *btree.BTreeG[AtomicBatchRow]
+	// Column names belong to the source relation, not to batch.Batch.
+	Attrs []string
 }
 
 func NewAtomicBatch(mp *mpool.MPool) *AtomicBatch {
@@ -442,6 +444,7 @@ func (bat *AtomicBatch) Close() {
 		bat.Rows = nil
 	}
 	bat.Batches = nil
+	bat.Attrs = nil
 	bat.Mp = nil
 }
 

@@ -304,6 +304,7 @@ func TestPartialRestoreMaterializedViewOrder(t *testing.T) {
 		{name: "is_not_false", sql: "create view truth as select id from src where exists(select 1 from mv) is not false"},
 		{name: "is_unknown", sql: "create view truth as select id from src where exists(select 1 from mv) is unknown"},
 		{name: "is_not_unknown", sql: "create view truth as select id from src where exists(select 1 from mv) is not unknown"},
+		{name: "sample", sql: "create view sampled as select sample((select max(id) from mv), 1 rows) from src"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			info := &tableInfo{dbName: "db", tblName: tc.name, typ: view, createSql: tc.sql}

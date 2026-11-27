@@ -294,9 +294,12 @@ func visitMaterializedViewRows(ctx context.Context, bat *AtomicBatch, insert boo
 		if item.Src == nil || len(item.Src.Vecs) == 0 {
 			return moerr.NewInternalErrorNoCtx("empty materialized view change row")
 		}
-		included := make([]int, 0, len(item.Src.Attrs))
+		if len(bat.Attrs) != len(item.Src.Vecs) {
+			return moerr.NewInternalErrorNoCtx("materialized view change batch schema mismatch")
+		}
+		included := make([]int, 0, len(bat.Attrs))
 		bytes := 128
-		for i, attr := range item.Src.Attrs {
+		for i, attr := range bat.Attrs {
 			name := strings.ToLower(attr)
 			commit := isMaterializedViewCommitColumn(name)
 			if insert && (name == catalog.Row_ID || commit || columns != nil && !columns[name]) {
@@ -340,7 +343,7 @@ func visitMaterializedViewRows(ctx context.Context, bat *AtomicBatch, insert boo
 			if err := extractRowFromVector(ctx, item.Src.Vecs[i], 0, value[:], item.Offset, ReprSQLString); err != nil {
 				return err
 			}
-			name := strings.ToLower(item.Src.Attrs[i])
+			name := strings.ToLower(bat.Attrs[i])
 			if insert {
 				row.Values[name] = value[0]
 				continue
