@@ -16,8 +16,6 @@ package frontend
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -40,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
@@ -302,19 +299,7 @@ func saveMeta(ctx context.Context, ses *Session) error {
 		}
 	}
 
-	var rules *roleRuleCache
-	if execution := statementAuthorizationContext(ses); execution != nil {
-		if execution.prepareStmt != nil {
-			rules = execution.prepareStmt.roleRules
-		} else if execution.input != nil && execution.input.rewritePolicy != nil {
-			rules = execution.input.rewritePolicy.roleRules
-		}
-	}
-	policy, err := savedResultRolePolicy(ctx, ses, rules)
-	if err != nil {
-		return err
-	}
-	st, err := simpleAstMarshal(ses.ast, policy)
+	st, err := simpleAstMarshal(ses.ast)
 	if err != nil {
 		return err
 	}
@@ -520,9 +505,10 @@ func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Ses
 	if err != nil {
 		return stats, err
 	}
-	policy, err := savedResultRolePolicy(reqCtx, ses, rules)
-	if err != nil {
-		return stats, err
+	// The saved payload cannot prove that today's policy authorizes its
+	// rows and columns. Even identical rule text may read different inputs.
+	if rules != nil && len(rules.first) != 0 {
+		return stats, moerr.NewInvalidInput(reqCtx, "saved result cannot enforce the active role rule policy")
 	}
 	f := getPu(ses.GetService()).FileService
 	for _, id := range uuids {
@@ -549,12 +535,9 @@ func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Ses
 			return stats, err
 		}
 		a := bat.Vecs[1].UnsafeGetStringAt(0)
-		ast, savedPolicy, err := simpleAstUnmarshal([]byte(a))
-		if err != nil {
+		var ast tree.Statement
+		if ast, err = simpleAstUnmarshal([]byte(a)); err != nil {
 			return stats, err
-		}
-		if policy != "" && policy != savedPolicy {
-			return stats, moerr.NewInvalidInput(reqCtx, "saved result cannot enforce the active role rule policy")
 		}
 
 		delta, err := authenticateCanExecuteStatementAndPlan(reqCtx, ses, ast, pn)
@@ -566,34 +549,9 @@ func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Ses
 	return stats, nil
 }
 
-// Saved rows cannot be re-filtered. An active policy can read a saved result
-// only when it was materialized under the same rules and principal.
-func savedResultRolePolicy(ctx context.Context, ses *Session, rules *roleRuleCache) (string, error) {
-	if rules == nil || len(rules.first) == 0 {
-		return "", nil
-	}
-	mode := sessionSQLModeForParser(ses)
-	effective, err := rules.forSQLMode(ctx, mode)
-	if err != nil {
-		return "", err
-	}
-	principal := currentAuthorizationPrincipal(ses)
-	payload, err := json.Marshal(struct {
-		Account, User, Role uint32
-		Secondary           bool
-		Mode                mysql.SQLModeFlags
-		Rules               map[string]string
-	}{principal.account, principal.user, principal.role, principal.secondary, mysql.ParseSQLModeFlags(mode), effective})
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256(payload)
-	return hex.EncodeToString(digest[:]), nil
-}
-
 type simpleAst struct {
-	Typ        int    `json:"age"`
-	RolePolicy string `json:"role_policy,omitempty"`
+	Typ int `json:"age"`
+	// opt which fun of determinePrivilegeSetOfStatement need
 }
 
 type astType int
@@ -607,8 +565,8 @@ const (
 	astExecute
 )
 
-func simpleAstMarshal(stmt tree.Statement, rolePolicy string) ([]byte, error) {
-	s := simpleAst{RolePolicy: rolePolicy}
+func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
+	s := simpleAst{}
 	switch stmt.(type) {
 	case *tree.Select:
 		s.Typ = int(astSelect)
@@ -634,10 +592,10 @@ func simpleAstMarshal(stmt tree.Statement, rolePolicy string) ([]byte, error) {
 	return json.Marshal(s)
 }
 
-func simpleAstUnmarshal(b []byte) (tree.Statement, string, error) {
+func simpleAstUnmarshal(b []byte) (tree.Statement, error) {
 	s := &simpleAst{}
 	if err := json.Unmarshal(b, s); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	var stmt tree.Statement
 	switch astType(s.Typ) {
@@ -654,7 +612,7 @@ func simpleAstUnmarshal(b []byte) (tree.Statement, string, error) {
 	case astValues:
 		stmt = &tree.ValuesStatement{}
 	}
-	return stmt, s.RolePolicy, nil
+	return stmt, nil
 }
 
 func getTablesFromPlan(p *plan.Plan) string {

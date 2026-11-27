@@ -141,7 +141,7 @@ type tunnel struct {
 	// It only works if RebalancePolicy is "active".
 	transferIntent atomic.Bool
 	// A zero deadline waits for client activity. A nonzero deadline rate
-	// limits new attempts when another session can change the role catalog.
+	// limits new attempts after changes that may have no client response.
 	migrationRetryAt atomic.Pointer[time.Time]
 	// expectedCacheQuit indicates this tunnel already intercepted a client QUIT
 	// for connection caching, so the follow-up client EOF should not tear down
@@ -677,7 +677,7 @@ func (t *tunnel) observeMigrationClientActivity(command frontend.CommandType) {
 	}
 }
 
-const migrationPolicyRetryInterval = 10 * time.Second
+const migrationRetryInterval = 10 * time.Second
 
 func (t *tunnel) migrationDeferred(now time.Time) bool {
 	retry := t.migrationRetryAt.Load()
@@ -686,8 +686,8 @@ func (t *tunnel) migrationDeferred(now time.Time) bool {
 
 func (t *tunnel) deferMigration(err error, now time.Time) {
 	var retryAt time.Time
-	if moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPolicyChanged) {
-		retryAt = now.Add(migrationPolicyRetryInterval)
+	if isRetryableMigrationRefusal(err) {
+		retryAt = now.Add(migrationRetryInterval)
 	}
 	t.migrationRetryAt.Store(&retryAt)
 }
@@ -993,8 +993,11 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	var lastSeq int16 = -1
 	var rotated bool
 	var stopAfterSend bool
+	var command frontend.CommandType
+	var hasCommand bool
 	prepareNextMessage := func() (terminate bool, err error) {
 		stopAfterSend = false
+		hasCommand = false
 		if terminate := func() bool {
 			p.mu.Lock()
 			defer p.mu.Unlock()
@@ -1094,7 +1097,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			p.mu.lastCmdTime = time.Now()
 		} else {
 			if len(tempBuf) >= preRecvLen && tempBuf[3] == 0 {
-				p.tun.observeMigrationClientActivity(frontend.CommandType(tempBuf[4]))
+				command, hasCommand = frontend.CommandType(tempBuf[4]), true
 			}
 			if isEmptyPacket(tempBuf) {
 				p.logger.Warn("there comes an empty packet from client")
@@ -1140,6 +1143,11 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 
 		if err = p.src.sendTo(p.dst); err != nil {
 			return wrapPipeSendError(p.name, err)
+		}
+		if hasCommand {
+			// A synchronous transfer can publish a refusal while the
+			// command waits above. Reconsider it only once the send succeeds.
+			p.tun.observeMigrationClientActivity(command)
 		}
 		if stopAfterSend {
 			// COM_QUIT is terminal even when another complete packet is already

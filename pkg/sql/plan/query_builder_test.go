@@ -2942,6 +2942,20 @@ func TestQueryBuilderIcebergTimeTravelSnapshot(t *testing.T) {
 	require.Equal(t, "main", scan.Ref)
 }
 
+func TestQueryBuilderIcebergHistoryRejectsRoleRewrite(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select id from gold_orders for iceberg snapshot 1", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	replacement, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select id from gold_orders", 1)
+	require.NoError(t, err)
+	defer replacement.Free()
+	rules := map[string][]*tree.Rewrite{"tpch.gold_orders": {{Stmt: replacement}}}
+	stmt.(*tree.Select).RewriteOption = &tree.RewriteOption{Rewrites: rules, RoleRules: rules}
+	_, err = BuildPlan(ctx, stmt, false)
+	require.ErrorContains(t, err, "table history qualifiers are not supported with active role-rule rewrites")
+}
+
 func TestQueryBuilderIcebergTimeTravelTimestampUsesSessionTimezone(t *testing.T) {
 	loc := time.FixedZone("KSA", 3*60*60)
 	ctx := newIcebergTestCompilerContext(t, loc)

@@ -651,12 +651,20 @@ func (rt *Routine) migrateConnectionFromWithContext(
 	if roleState == nil {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
-	// A query-service request does not carry the client's account context.
-	// Catalog reads use the principal authenticated on the source session.
-	roleCtx := defines.AttachAccount(operationCtx, roleState.AccountID, roleState.UserID, roleState.PrimaryRoleID)
-	prepared, err := exportMigrationPrepares(roleCtx, ses)
+	prepared, err := rt.exportMigrationPrepares(ses)
 	if err != nil {
 		return err
+	}
+	if len(prepared) != 0 {
+		// Check for policy publication since prepare using the source identity.
+		roleCtx := defines.AttachAccount(operationCtx, roleState.AccountID, roleState.UserID, roleState.PrimaryRoleID)
+		rules, err := captureRoleRuleCache(roleCtx, ses)
+		if err != nil {
+			return err
+		}
+		if len(rules.first) != 0 {
+			return moerr.GetOkExpectedMigrationPolicyChanged()
+		}
 	}
 	resp.PrepareStmts = prepared
 	resp.RoleState = roleState

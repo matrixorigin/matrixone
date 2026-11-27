@@ -15,6 +15,10 @@
 package proxy
 
 import (
+	"context"
+	"io"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTunnelDeliver_Deliver(t *testing.T) {
@@ -74,20 +79,88 @@ func TestTunnelDeliver_Deliver(t *testing.T) {
 	}
 }
 
-func TestMigrationCatalogRetryIsBounded(t *testing.T) {
-	now := time.Now()
-	tun := &tunnel{}
-	tun.deferMigration(moerr.GetOkExpectedMigrationPolicyChanged(), now)
-	tun.observeMigrationClientActivity(frontend.COM_PING)
-	tun.observeMigrationClientActivity(frontend.COM_QUERY)
-	assert.True(t, tun.migrationDeferred(now))
-	assert.True(t, tun.migrationDeferred(now.Add(migrationPolicyRetryInterval-time.Nanosecond)))
-	assert.False(t, tun.migrationDeferred(now.Add(migrationPolicyRetryInterval)))
+func TestMigrationRefusalClearedAfterForwardedStmtClose(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	clientProxy, client := net.Pipe()
+	defer clientProxy.Close()
+	defer client.Close()
+	backendProxy, backend := net.Pipe()
+	defer backendProxy.Close()
+	defer backend.Close()
+	deadline, _ := ctx.Deadline()
+	require.NoError(t, client.SetDeadline(deadline))
+	require.NoError(t, backend.SetDeadline(deadline))
 
-	// A subsequent refusal establishes a fresh interval without an idle
-	// connection sending anything other than its keepalive.
-	next := now.Add(migrationPolicyRetryInterval)
-	tun.deferMigration(moerr.GetOkExpectedMigrationPolicyChanged(), next)
-	assert.True(t, tun.migrationDeferred(next))
-	assert.False(t, tun.migrationDeferred(next.Add(migrationPolicyRetryInterval)))
+	logger := runtime.DefaultRuntime().Logger()
+	tun := newTunnel(ctx, logger, nil)
+	defer tun.Close()
+	tun.mu.started = true
+	csp := tun.newPipe(pipeClientToServer,
+		newMySQLConn(connClientName, clientProxy, 0, nil, nil, false, 1),
+		newMySQLConn(connServerName, backendProxy, 0, nil, nil, false, 2))
+	csp.wg.Add(1) // A synchronous transfer owns the backend until it refuses.
+	var release sync.Once
+	resume := func() { release.Do(csp.wg.Done) }
+	defer resume()
+	ready := make(chan struct{})
+	csp.testHelper.beforeSend = func() { close(ready) }
+	done := make(chan error, 1)
+	go func() { done <- csp.kickoff(ctx, nil) }()
+	defer func() {
+		resume()
+		_ = client.Close()
+		_ = backend.Close()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			t.Error("client pipe did not terminate")
+		}
+	}()
+
+	packet := []byte{5, 0, 0, 0, byte(frontend.COM_STMT_CLOSE), 1, 0, 0, 0}
+	_, err := client.Write(packet)
+	require.NoError(t, err)
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("close packet did not reach the transfer barrier")
+	}
+	tun.deferMigration(moerr.GetOkExpectedNotSafeToStartTransfer(), time.Now())
+	require.True(t, tun.migrationDeferred(time.Now()))
+	resume()
+
+	got := make([]byte, len(packet))
+	_, err = io.ReadFull(backend, got)
+	require.NoError(t, err)
+	require.Equal(t, packet, got)
+	// No command or server response follows the close.
+	require.Eventually(t, func() bool { return !tun.migrationDeferred(time.Now()) }, time.Second, time.Millisecond)
+	queue := make(chan *tunnel, 1)
+	newTunnelDeliver(queue, logger).Deliver(tun, transferByScaling)
+	require.Len(t, queue, 1)
+}
+
+func TestMigrationCatalogRetryIsBounded(t *testing.T) {
+	for name, refusal := range map[string]error{
+		"catalog":  moerr.GetOkExpectedMigrationPolicyChanged(),
+		"prepared": moerr.GetOkExpectedMigrationPreparedState(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := time.Now()
+			tun := &tunnel{}
+			tun.deferMigration(refusal, now)
+			tun.observeMigrationClientActivity(frontend.COM_PING)
+			tun.observeMigrationClientActivity(frontend.COM_STMT_CLOSE)
+			require.True(t, tun.migrationDeferred(now))
+			require.True(t, tun.migrationDeferred(now.Add(migrationRetryInterval-time.Nanosecond)))
+			require.False(t, tun.migrationDeferred(now.Add(migrationRetryInterval)))
+
+			// A later refusal establishes another bounded interval.
+			next := now.Add(migrationRetryInterval)
+			tun.deferMigration(refusal, next)
+			require.True(t, tun.migrationDeferred(next))
+			require.False(t, tun.migrationDeferred(next.Add(migrationRetryInterval)))
+		})
+	}
 }

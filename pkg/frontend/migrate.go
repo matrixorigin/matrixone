@@ -282,7 +282,14 @@ func canReplayMigrationStatement(stmt tree.Statement) bool {
 	}
 }
 
-func exportMigrationPrepares(ctx context.Context, ses *Session) ([]*query.PrepareStmt, error) {
+func (rt *Routine) exportMigrationPrepares(ses *Session) ([]*query.PrepareStmt, error) {
+	// A no-response command can still be running after the proxy has sent
+	// it. Keep the prepared metadata stable until its wire copy is complete.
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.inProcessRequest {
+		return nil, moerr.GetOkExpectedMigrationPreparedState()
+	}
 	statements := ses.GetPrepareStmts()
 	if len(statements) == 0 {
 		return nil, nil
@@ -291,19 +298,11 @@ func exportMigrationPrepares(ctx context.Context, ses *Session) ([]*query.Prepar
 	for _, stmt := range statements {
 		proof := migrationPrepareProof(ses, stmt)
 		if len(proof) == 0 {
-			return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
+			return nil, moerr.GetOkExpectedMigrationPreparedState()
 		}
 		exported = append(exported, &query.PrepareStmt{
 			Name: stmt.Name, SQL: stmt.Sql, ParamTypes: slices.Clone(stmt.ParamTypes), ReplayProof: proof,
 		})
-	}
-	// A role or rule publication can invalidate a plan after it was prepared.
-	rules, err := captureRoleRuleCache(ctx, ses)
-	if err != nil {
-		return nil, err
-	}
-	if len(rules.first) != 0 {
-		return nil, moerr.GetOkExpectedMigrationPolicyChanged()
 	}
 	return exported, nil
 }
@@ -352,12 +351,12 @@ func replayMigrationPrepare(ctx context.Context, ses *Session, wire *query.Prepa
 	// statement. Preparing it never executes the inner query.
 	parsed, err := mysql.ParseWithSQLMode(ctx, wire.SQL, parserLowerCaseTableNames(ses), mode)
 	if err != nil {
-		return moerr.GetOkExpectedNotSafeToStartTransfer()
+		return moerr.GetOkExpectedMigrationPreparedState()
 	}
 	supported := len(parsed) == 1 && canReplayMigrationStatement(parsed[0])
 	freeStatements(parsed)
 	if !supported {
-		return moerr.GetOkExpectedNotSafeToStartTransfer()
+		return moerr.GetOkExpectedMigrationPreparedState()
 	}
 	input := &UserInput{rewritePolicy: &rewritePolicySnapshot{roleRules: rules}, rewritePolicyMaterialized: true}
 	stmt := tree.NewPrepareString(tree.Identifier(wire.Name), wire.SQL)
@@ -373,7 +372,7 @@ func replayMigrationPrepare(ctx context.Context, ses *Session, wire *query.Prepa
 	}
 	replayed.ParamTypes = slices.Clone(wire.ParamTypes)
 	if mode != replayed.schedulingSQLMode || !bytes.Equal(wire.ReplayProof, migrationPrepareProof(ses, replayed)) {
-		return moerr.GetOkExpectedNotSafeToStartTransfer()
+		return moerr.GetOkExpectedMigrationPreparedState()
 	}
 	return nil
 }

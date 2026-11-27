@@ -188,10 +188,21 @@ func TestRoleRuleMigrationRejectsPreparedStateAtSource(t *testing.T) {
 	defer ses.Close()
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
+	ses.SetTenantInfo(&TenantInfo{TenantID: 1, UserID: 2, DefaultRoleID: 3})
 	require.NoError(t, ses.SetPrepareStmt(t.Context(), "p", &PrepareStmt{Name: "p", Sql: "select 1"}))
 	resp := &query.MigrateConnFromResponse{}
-	require.ErrorIs(t, rt.migrateConnectionFromWithContext(t.Context(), resp), moerr.GetOkExpectedNotSafeToStartTransfer())
+	require.ErrorIs(t, rt.migrateConnectionFromWithContext(t.Context(), resp), moerr.GetOkExpectedMigrationPreparedState())
 	require.Empty(t, resp.PrepareStmts)
 	_, err := ses.GetPrepareStmt(t.Context(), "p")
 	require.NoError(t, err)
+
+	// Native deallocation has no response. Export while the request is
+	// still running must be retryable even after the handle was removed.
+	require.True(t, rt.setInProcessRequest(true))
+	require.True(t, ses.RemovePrepareStmt("p"))
+	require.ErrorIs(t, rt.migrateConnectionFromWithContext(t.Context(), resp), moerr.GetOkExpectedMigrationPreparedState())
+	require.True(t, rt.setInProcessRequest(false))
+	require.NoError(t, rt.migrateConnectionFromWithContext(t.Context(), resp))
+	require.NotNil(t, resp.RoleState)
+	require.Empty(t, resp.PrepareStmts)
 }

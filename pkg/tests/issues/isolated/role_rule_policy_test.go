@@ -126,6 +126,14 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	} {
 		exec(admin, statement)
 	}
+	exec(admin, "create snapshot policy_history for table policy_fixture docs")
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := admin.ExecContext(ctx, "drop snapshot if exists policy_history")
+		require.NoError(t, err)
+	})
+	exec(admin, "insert into policy_fixture.docs values (4,'late row','[8,0,0]','d')")
 	const readerLogin = "sys#policy_test_user#policy_reader"
 	reader := connect(1, readerLogin)
 	observer := connect(1, "root")
@@ -260,6 +268,12 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	for _, query := range []string{fulltext, vector, nestedView} {
 		assertDocs(query, first, second)
 	}
+	const historical = "select id from policy_fixture.docs {snapshot = 'policy_history'} order by id"
+	rows, err = admin.QueryContext(ctx, historical)
+	assertIDs(rows, err, 1, 2, 3)
+	rows, err = admin.QueryContext(ctx, relational)
+	assertIDs(rows, err, 1, 2, 3, 4)
+	assertDenied(historical, "table history qualifiers are not supported with active role-rule rewrites")
 	var table string
 	require.NoError(t, reader.QueryRowContext(ctx, "show tables from policy_fixture like 'docs'").Scan(&table))
 	require.Equal(t, "docs", table)

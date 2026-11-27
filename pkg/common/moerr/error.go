@@ -48,6 +48,9 @@ const (
 	// A prepared session was valid at prepare time, but the active role
 	// catalog now prevents replay. The proxy can retry after a cooldown.
 	OkExpectedMigrationPolicyChanged uint16 = 8
+	// Prepared state is still being changed or cannot be replayed. Closing
+	// the handle may make the connection eligible without a server response.
+	OkExpectedMigrationPreparedState uint16 = 9
 
 	OkMax uint16 = 99
 
@@ -918,6 +921,7 @@ var errOkExpectedDup = Error{code: OkExpectedDup, message: "ExpectedDup", sqlSta
 var errOkExpectedPossibleDup = Error{code: OkExpectedPossibleDup, message: "OkExpectedPossibleDup", sqlState: "00000"}
 var errOkExpectedNotSafeToStartTransfer = Error{code: OkExpectedNotSafeToStartTransfer, message: "OkExpectedNotSafeToStartTransfer", sqlState: "00000"}
 var errOkExpectedMigrationPolicyChanged = Error{code: OkExpectedMigrationPolicyChanged, message: "OkExpectedMigrationPolicyChanged", sqlState: "00000"}
+var errOkExpectedMigrationPreparedState = Error{code: OkExpectedMigrationPreparedState, message: "OkExpectedMigrationPreparedState", sqlState: "00000"}
 var errMysqlClientQuit = Error{code: MysqlClientQuit, message: "MysqlClientQuit", sqlState: "00000"}
 
 /*
@@ -955,6 +959,10 @@ func GetOkExpectedNotSafeToStartTransfer() *Error {
 
 func GetOkExpectedMigrationPolicyChanged() *Error {
 	return &errOkExpectedMigrationPolicyChanged
+}
+
+func GetOkExpectedMigrationPreparedState() *Error {
+	return &errOkExpectedMigrationPreparedState
 }
 
 func GetMysqlClientQuit() *Error {

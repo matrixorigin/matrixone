@@ -9318,6 +9318,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			}
 			key := schema + "." + table
 			if chain, ok := ctx.remapOption.Rewrites[key]; ok && len(chain) > 0 {
+				// Replacement SQL has its own table references. An explicit
+				// qualifier on the replaced reference cannot be inherited safely.
+				if len(ctx.remapOption.RoleRules) != 0 && (tbl.AtTsExpr != nil || tbl.IcebergRef != nil) {
+					return 0, moerr.NewInvalidInput(builder.GetContext(), "table history qualifiers are not supported with active role-rule rewrites")
+				}
 				// Apply the rewrite chain as stacked views: build the outermost
 				// (last) layer now. A reference to this same table inside that
 				// layer's body resolves to the next inner layer (the chain minus

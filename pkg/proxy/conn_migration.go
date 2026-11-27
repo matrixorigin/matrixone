@@ -160,6 +160,10 @@ func (c *clientConn) migrationSourceContext(ctx context.Context, prevAddr string
 }
 
 func isMigrationRefusal(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) ||
-		moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPolicyChanged)
+	return moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) || isRetryableMigrationRefusal(err)
+}
+
+func isRetryableMigrationRefusal(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPolicyChanged) ||
+		moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPreparedState)
 }
