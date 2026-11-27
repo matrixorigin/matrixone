@@ -181,7 +181,7 @@ func (a *MergeScheduler) Start() {
 		now := a.clock.Now()
 		a.mayHaveQueuedOneShots = false
 		for _, supp := range a.supps {
-			if supp.hasPendingOneShot(now) {
+			if supp.hasPendingOneShot() {
 				a.mayHaveQueuedOneShots = true
 				a.pq.Update(supp.todo, now)
 			}
@@ -987,12 +987,15 @@ func (a *MergeScheduler) handleMainLoop(
 				// because the task may be updated
 				a.doSched(generation, todo)
 			}
-
+		}
+		// A retry owns object metadata until it is admitted or expires. Release it
+		// even when the global memory guard (or PauseAll) prevents scheduling.
+		now = a.clock.Now()
+		nextRetryExpiry := a.pruneExpiredManualRetries(now)
+		if !a.allPaused {
 			// set the timer for the next task
 			if a.pq.Len() > 0 {
-				if nextReadyAtTimer != nil {
-					nextReadyAtTimer.Stop()
-				}
+				nextReadyAtTimer.Stop()
 				next := a.pq.Peek().readyAt.Sub(now)
 				if memoryBlocked {
 					// A due manual retry must be checked again before its one-minute
@@ -1009,6 +1012,11 @@ func (a *MergeScheduler) handleMainLoop(
 					nextReadyAt = nextReadyAtTimer.Chan()
 				}
 			}
+		} else if !nextRetryExpiry.IsZero() {
+			// PauseAll suppresses admission, but it must not suppress expiration.
+			nextReadyAtTimer.Stop()
+			nextReadyAtTimer.Reset(nextRetryExpiry.Sub(now))
+			nextReadyAt = nextReadyAtTimer.Chan()
 		}
 
 		select {
@@ -1078,7 +1086,7 @@ func (a *MergeScheduler) handleReservationReleased() {
 	now := a.clock.Now()
 	a.mayHaveQueuedOneShots = false
 	for _, supp := range a.supps {
-		if supp.hasPendingOneShot(now) {
+		if supp.hasPendingOneShot() {
 			a.mayHaveQueuedOneShots = true
 			if supp.mergingTaskCnt.Load() == 0 {
 				a.pq.Update(supp.todo, now)
@@ -1095,8 +1103,14 @@ func (a *MergeScheduler) nextManualRetryDue(supp *todoSupporter, now time.Time) 
 			continue
 		}
 		candidate := now.Add(delay)
-		if trigger.retryUntil.Before(candidate) {
-			candidate = trigger.retryUntil
+		// Leave a check before expiry, since ordinary headroom recovery does
+		// not send a merge-completion notification to wake the scheduler.
+		lastCheck := trigger.retryUntil.Add(-time.Second)
+		if !lastCheck.After(now) {
+			lastCheck = trigger.retryUntil
+		}
+		if lastCheck.Before(candidate) {
+			candidate = lastCheck
 		}
 		if due.IsZero() || candidate.Before(due) {
 			due = candidate
@@ -1105,13 +1119,47 @@ func (a *MergeScheduler) nextManualRetryDue(supp *todoSupporter, now time.Time) 
 	return due, !due.IsZero()
 }
 
-func (m *todoSupporter) hasPendingOneShot(now time.Time) bool {
+func (m *todoSupporter) hasPendingOneShot() bool {
 	for _, trigger := range m.triggers {
-		if trigger.expire.IsZero() && (trigger.retryUntil.IsZero() || now.Before(trigger.retryUntil)) {
+		if trigger.expire.IsZero() {
+			// An expired retry still needs the scheduler loop to release it.
 			return true
 		}
 	}
 	return false
+}
+
+// pruneExpiredManualRetries runs on the scheduler loop, independently of
+// resource admission. It also returns the next expiry for PauseAll's timer.
+func (a *MergeScheduler) pruneExpiredManualRetries(now time.Time) time.Time {
+	if !a.mayHaveQueuedOneShots {
+		return time.Time{}
+	}
+	a.mayHaveQueuedOneShots = false
+	var nextExpiry time.Time
+	for _, supp := range a.supps {
+		kept := supp.triggers[:0]
+		for _, trigger := range supp.triggers {
+			if trigger.expire.IsZero() && !trigger.retryUntil.IsZero() && !now.Before(trigger.retryUntil) {
+				logutil.Warn("MergeExecutorEvent-DeferredRetryExpired",
+					zap.String("table", supp.todo.table.GetNameDesc()),
+					zap.Int("tasks", len(trigger.assigns)))
+				clear(trigger.assigns)
+				trigger.assigns = nil
+				continue
+			}
+			kept = append(kept, trigger)
+			if trigger.expire.IsZero() {
+				a.mayHaveQueuedOneShots = true
+				if !trigger.retryUntil.IsZero() && (nextExpiry.IsZero() || trigger.retryUntil.Before(nextExpiry)) {
+					nextExpiry = trigger.retryUntil
+				}
+			}
+		}
+		clear(supp.triggers[len(kept):])
+		supp.triggers = kept
+	}
+	return nextExpiry
 }
 
 func (a *MergeScheduler) nextPendingManualRetryDue(now time.Time) (time.Time, bool) {
@@ -1272,7 +1320,10 @@ func (a *MergeScheduler) handleQuery(msg MMsgQuery) {
 }
 
 func (a *MergeScheduler) handleAddTable(table catalog.MergeTable) {
-	if a.supps[table.ID()] != nil {
+	if supp := a.supps[table.ID()]; supp != nil {
+		// ALTER commits publish a new table projection under the same ID.
+		// Preserve the queue, in-flight accounting and one-shot retries.
+		supp.todo.table = table
 		return
 	}
 	todo := &todoItem{
@@ -1378,7 +1429,7 @@ func (a *MergeScheduler) doSched(
 	// cannot use up a later request's retry window.
 	attempts := 0
 	for _, trigger := range supp.triggers {
-		if trigger.expire.IsZero() && (trigger.retryUntil.IsZero() || now.Before(trigger.retryUntil)) {
+		if trigger.expire.IsZero() && (trigger.retryUntil.IsZero() || !now.After(trigger.retryUntil)) {
 			attempts++
 		}
 	}
@@ -1422,7 +1473,7 @@ func (a *MergeScheduler) doSchedTrigger(
 		if !last.expire.IsZero() {
 			continue
 		}
-		if !last.retryUntil.IsZero() && !now.Before(last.retryUntil) {
+		if !last.retryUntil.IsZero() && now.After(last.retryUntil) {
 			logutil.Warn("MergeExecutorEvent-DeferredRetryExpired",
 				zap.String("table", todo.table.GetNameDesc()),
 				zap.Int("tasks", len(last.assigns)))
