@@ -5097,6 +5097,7 @@ func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
 	// as an ordinary bitmap and does not convert it back through SET semantics.
 	bitmap.Typ.Enumvalues = ""
 	bitmap.Typ.EnumEncoding = 0
+	bitmap.Typ.EnumCollation = 0
 	return bitmap, true
 }
 

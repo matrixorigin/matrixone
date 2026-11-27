@@ -1988,11 +1988,12 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+			return processStringToFixedWithTrim(proc.Ctx, mp, page, proc, vec,
 				func(data []byte) (types.Enum, error) {
-					return members.Parse(util.UnsafeBytesToString(data))
+					return members.ParseCollated(util.UnsafeBytesToString(data), dt.EnumCollation)
 				},
 				types.Enum(0),
+				dt.EnumCollation == types.EnumCollationLegacy,
 			)
 		}
 	case types.T_array_float32:
@@ -2218,6 +2219,19 @@ func processStringToFixed[T any](
 	parseFunc func(data []byte) (T, error),
 	zeroVal T,
 ) error {
+	return processStringToFixedWithTrim(ctx, mp, page, proc, vec, parseFunc, zeroVal, true)
+}
+
+func processStringToFixedWithTrim[T any](
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	parseFunc func(data []byte) (T, error),
+	zeroVal T,
+	trimSpace bool,
+) error {
 	numRows := int(page.NumRows())
 	if numRows == 0 {
 		return nil
@@ -2284,8 +2298,9 @@ func processStringToFixed[T any](
 			data = loader.loadAt(idx)
 		}
 
-		// Use bytes.TrimSpace to avoid string allocation
-		data = bytes.TrimSpace(data)
+		if trimSpace {
+			data = bytes.TrimSpace(data)
+		}
 
 		// Parse and write
 		val, parseErr := parseFunc(data)

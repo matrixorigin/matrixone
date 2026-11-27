@@ -1392,7 +1392,14 @@ func buildCreateTable(
 func getCreateColumnType(ctx context.Context, stmt *tree.CreateTable, col *tree.ColumnTableDef) (Type, error) {
 	source, ok := stmt.InheritedEnums[strings.ToLower(col.Name.ColName())]
 	if !ok {
-		return getTypeFromAst(ctx, col.Type)
+		typ, err := getTypeFromAst(ctx, col.Type)
+		if err != nil {
+			return Type{}, err
+		}
+		if err := applyEnumColumnCollation(ctx, &typ, col.Attributes, enumCreateTableDefault(stmt.Options)); err != nil {
+			return Type{}, err
+		}
+		return typ, nil
 	}
 	decl, ok := col.Type.(*tree.T)
 	if !ok || decl.InternalType.Oid != uint32(defines.MYSQL_TYPE_ENUM) {
@@ -1405,7 +1412,10 @@ func getCreateColumnType(ctx context.Context, stmt *tree.CreateTable, col *tree.
 	if !slices.Equal(members, decl.InternalType.EnumValues) {
 		return Type{}, moerr.NewInternalErrorf(ctx, "member mismatch for inherited ENUM column %q", col.Name.ColName())
 	}
-	return Type{Id: source.Id, Enumvalues: source.Enumvalues, EnumEncoding: source.EnumEncoding}, nil
+	if err := types.ValidateEnumCollation(source.EnumCollation); err != nil {
+		return Type{}, err
+	}
+	return Type{Id: source.Id, Enumvalues: source.Enumvalues, EnumEncoding: source.EnumEncoding, EnumCollation: source.EnumCollation}, nil
 }
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
@@ -5806,12 +5816,13 @@ func validateAndSetHivePartitionOptions(ctx context.Context, proc *process.Proce
 			nullable = col.Default.NullAbility
 		}
 		colTypes = append(colTypes, tree.HivePartColType{
-			Id:           col.Typ.Id,
-			Width:        col.Typ.Width,
-			Scale:        col.Typ.Scale,
-			Enumvalues:   col.Typ.Enumvalues,
-			EnumEncoding: col.Typ.EnumEncoding,
-			NullAbility:  nullable,
+			Id:            col.Typ.Id,
+			Width:         col.Typ.Width,
+			Scale:         col.Typ.Scale,
+			Enumvalues:    col.Typ.Enumvalues,
+			EnumEncoding:  col.Typ.EnumEncoding,
+			EnumCollation: col.Typ.EnumCollation,
+			NullAbility:   nullable,
 		})
 	}
 

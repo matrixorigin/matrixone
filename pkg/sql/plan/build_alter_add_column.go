@@ -66,7 +66,13 @@ func AddColumn(
 	}
 	// Preserve the supported declaration while retaining ADD's acceptance of
 	// other charset declarations, as with CREATE TABLE.
-	applyColumnCharset(&colType, specNewColumn.Attributes)
+	if isEnumPlanType(&colType) {
+		if err := applyEnumColumnCollation(ctx.GetContext(), &colType, specNewColumn.Attributes, enumDDLDefault{}); err != nil {
+			return false, err
+		}
+	} else {
+		applyColumnCharset(&colType, specNewColumn.Attributes)
+	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
 		return false, err
 	}

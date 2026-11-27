@@ -1565,6 +1565,7 @@ func (boundary *distinctSpecialStorage) canonicalValue(builder *QueryBuilder, ex
 		}
 		value.Typ.Enumvalues = ""
 		value.Typ.EnumEncoding = 0
+		value.Typ.EnumCollation = 0
 		return value, nil
 	}
 	value, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "_enum_display_to_index", []*Expr{

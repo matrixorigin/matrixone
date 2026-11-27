@@ -265,6 +265,7 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 		colTyp := col.GetTyp()
 		attrType := types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale())
 		attrType.SetEnumEncoding(colTyp.GetEnumEncoding())
+		attrType.SetEnumCollation(colTyp.GetEnumCollation())
 		exeCols[i] = &AttributeDef{
 			Attr: Attribute{
 				Name:          col.GetOriginCaseName(),
