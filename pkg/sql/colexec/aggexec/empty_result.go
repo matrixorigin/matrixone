@@ -37,7 +37,7 @@ func GetEmptyResultKind(aggID int64) EmptyResultKind {
 		return EmptyResultAllBitsSet
 	case AggIdOfBitOr, AggIdOfBitXor:
 		return EmptyResultZero
-	case AggIdOfAny, AggIdOfAvg, AggIdOfGroupConcat, AggIdOfJsonArrayAgg,
+	case AggIdOfAny, AggIdOfFirstRow, AggIdOfAvg, AggIdOfGroupConcat, AggIdOfJsonArrayAgg,
 		AggIdOfJsonObjectAgg, AggIdOfMax, AggIdOfMaxBy, AggIdOfMaxByNonNull,
 		AggIdOfMedian, AggIdOfMin, AggIdOfApproxPercentile, AggIdOfStdDevPop,
 		AggIdOfStdDevSample, AggIdOfSum, AggIdOfVarPop, AggIdOfVarSample:

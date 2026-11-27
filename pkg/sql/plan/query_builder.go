@@ -8653,6 +8653,12 @@ func bindProjectionList(
 	projectionBinder *ProjectionBinder,
 	selectList tree.SelectExprs) error {
 	ctx.binder = projectionBinder
+	bindExpr := func(ast tree.Expr, pos int) (*plan.Expr, error) {
+		if ctx.repeatedUpdateAssignments != nil {
+			return ctx.repeatedUpdateAssignments.bindProjection(ctx, projectionBinder, ast, pos)
+		}
+		return bindProjectionExprWithNumericTarget(ctx, projectionBinder, ast, pos)
+	}
 
 	sampleRangeLeft, sampleRangeRight := ctx.sampleFunc.start, ctx.sampleFunc.start+ctx.sampleFunc.offset
 	if ctx.sampleFunc.hasSampleFunc {
@@ -8663,7 +8669,7 @@ func bindProjectionList(
 		}
 
 		for i := range selectList[:sampleRangeLeft] {
-			expr, err := bindProjectionExprWithNumericTarget(ctx, projectionBinder, selectList[i].Expr, i)
+			expr, err := bindExpr(selectList[i].Expr, i)
 			if err != nil {
 				return err
 			}
@@ -8674,17 +8680,18 @@ func bindProjectionList(
 
 	for i := range selectList[sampleRangeRight:] {
 		projectIdx := sampleRangeRight + i
-		expr, err := bindProjectionExprWithNumericTarget(
-			ctx,
-			projectionBinder,
-			selectList[projectIdx].Expr,
-			projectIdx,
-		)
+		expr, err := bindExpr(selectList[projectIdx].Expr, projectIdx)
 		if err != nil {
 			return err
 		}
 
 		ctx.projects = append(ctx.projects, expr)
+	}
+	if assignments := ctx.repeatedUpdateAssignments; assignments != nil {
+		if len(ctx.projects) != assignments.width {
+			return moerr.NewInternalErrorNoCtx("invalid repeated UPDATE projection width")
+		}
+		ctx.projects = append(ctx.projects, assignments.source.project.ProjectList[assignments.width:]...)
 	}
 	return nil
 }

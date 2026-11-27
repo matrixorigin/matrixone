@@ -1410,6 +1410,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 	}
 
+	if builder.repeatedUpdateStats != nil {
+		builder.applyRepeatedUpdateStats(nodeID)
+	}
+
 	// LIMIT caps the output cardinality. It never increases an estimate, and a
 	// fold failure must not turn into an optimizer panic.
 	if node.Limit != nil {
@@ -1757,6 +1761,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		currentBlockSel := 1.0
 		if s != nil {
 			filter.Selectivity = estimateExprSelectivity(filter, builder, s)
+			filter.Selectivity = builder.tightenIndexedEquality(node, filter, s.TableCnt)
 			currentBlockSel = estimateFilterBlockSelectivity(builder.GetContext(), filter, node.TableDef, s)
 		}
 		// overlap/选择率是成本估算，不是普通列缺少可用块统计的证明。

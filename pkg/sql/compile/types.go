@@ -209,7 +209,8 @@ type Scope struct {
 	TxnOffset int
 	// Instructions contains command list of this scope.
 	// Instructions vm.Instructions
-	RootOp vm.Operator
+	RootOp             vm.Operator
+	localInsertObjects *colexec.LocalInsertObjects
 	// Proc contains the execution context.
 	Proc *process.Process
 
