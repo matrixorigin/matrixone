@@ -18,13 +18,17 @@ import (
 	"context"
 	"math/rand"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
+	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -36,6 +40,172 @@ import (
 const (
 	ModuleName = "logstore"
 )
+
+type failedGroupDriver struct {
+	driver.Driver
+	writer     *logservicedriver.LogEntryWriter
+	entryCount int
+}
+
+func (d *failedGroupDriver) Append(e *driverEntry.Entry) error {
+	if err := d.writer.AppendEntry(e); err != nil {
+		return err
+	}
+	d.entryCount++
+	if d.entryCount == 2 {
+		d.writer.NotifyDone(assert.AnError)
+	}
+	return nil
+}
+
+func (d *failedGroupDriver) Close() error {
+	d.writer.Close()
+	return nil
+}
+
+func TestStoreCompletesFailedGroupWithoutRecordingDSNs(t *testing.T) {
+	w := NewStore(&failedGroupDriver{writer: logservicedriver.NewLogEntryWriter()})
+	first, second := mockEntry(), mockEntry()
+	for _, e := range []entry.Entry{first, second} {
+		_, err := w.AppendEntry(GroupUserTxn, e)
+		require.NoError(t, err)
+	}
+	done := make(chan error, 2)
+	go func() {
+		done <- first.WaitDone()
+		done <- second.WaitDone()
+	}()
+	for range 2 {
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, assert.AnError)
+		case <-time.After(time.Second):
+			t.Fatal("transaction-owned WAL entry did not complete")
+		}
+	}
+	require.NoError(t, w.Close())
+	require.Empty(t, w.lsn2dsn.mapping[GroupUserTxn])
+	first.Free()
+	second.Free()
+}
+
+func TestClosedStoreRejectsAppendWhileAdmissionLockIsHeld(t *testing.T) {
+	w := NewStore(&failedGroupDriver{writer: logservicedriver.NewLogEntryWriter()})
+	w.appendMu.Lock()
+	require.True(t, w.TryClose())
+	e := mockEntry()
+	defer e.Free()
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.AppendEntry(GroupUserTxn, e)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		w.appendMu.Unlock()
+		require.ErrorIs(t, err, sm.ErrClose)
+	case <-time.After(time.Second):
+		w.appendMu.Unlock()
+		<-done
+		t.Fatal("closed store waited on the append admission lock")
+	}
+	w.drain()
+	require.NoError(t, w.driver.Close())
+}
+
+type blockedAppendClient struct {
+	logservice.Client
+	started chan<- struct{}
+	release <-chan struct{}
+	closed  chan<- struct{}
+	used    bool
+}
+
+func (c *blockedAppendClient) Append(ctx context.Context, record logservice.LogRecord) (uint64, error) {
+	if !c.used {
+		c.used = true
+		close(c.started)
+	}
+	<-c.release
+	return c.Client.Append(ctx, record)
+}
+
+func (c *blockedAppendClient) Close() error {
+	err := c.Client.Close()
+	if c.used {
+		close(c.closed)
+	}
+	return err
+}
+
+func TestStoreCloseDeadlineIncludesAppendDrain(t *testing.T) {
+	_, newClient := logservicedriver.NewMockServiceAndClientFactory()
+	started, release, closed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	allowAppend := sync.OnceFunc(func() { close(release) })
+	defer allowAppend()
+	cfg := logservicedriver.NewConfig("",
+		logservicedriver.WithConfigOptMaxClient(1),
+		logservicedriver.WithConfigOptClientFactory(func(ctx context.Context) (logservice.Client, error) {
+			client, err := newClient(ctx)
+			return &blockedAppendClient{Client: client, started: started, release: release, closed: closed}, err
+		}),
+	)
+	cfg.CloseTimeout = 50 * time.Millisecond
+	wal := NewStore(logservicedriver.NewLogServiceDriver(&cfg))
+	require.NoError(t, wal.Replay(context.Background(), nil, func() driver.ReplayMode {
+		return driver.ReplayMode_ReplayForWrite
+	}, nil))
+
+	e := mockEntry()
+	_, err := wal.AppendEntry(GroupUserTxn, e)
+	require.NoError(t, err)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("append did not reach LogService")
+	}
+	queued := mockEntry()
+	_, err = wal.AppendEntry(GroupUserTxn, queued)
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() { done <- wal.Close() }()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(time.Second):
+		t.Fatal("Store.Close did not return while append was blocked")
+	}
+	require.ErrorIs(t, wal.Close(), context.DeadlineExceeded)
+	rejected := mockEntry()
+	defer rejected.Free()
+	_, err = wal.AppendEntry(GroupUserTxn, rejected)
+	require.ErrorIs(t, err, sm.ErrClose)
+	select {
+	case <-closed:
+		t.Fatal("LogService client closed during append")
+	default:
+	}
+	allowAppend()
+	completed := make(chan error, 2)
+	go func() {
+		completed <- e.WaitDone()
+		completed <- queued.WaitDone()
+	}()
+	for range 2 {
+		select {
+		case err := <-completed:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("accepted append did not complete after release")
+		}
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("LogService client remained open after append completed")
+	}
+}
 
 // var buf []byte
 // func init() {

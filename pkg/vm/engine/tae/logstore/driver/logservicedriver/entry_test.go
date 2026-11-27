@@ -16,11 +16,15 @@ package logservicedriver
 
 import (
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	walentry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_SkipCmd(t *testing.T) {
@@ -122,6 +126,71 @@ func Test_LogEntry2(t *testing.T) {
 	assert.Equal(t, []uint64{1, 2, 3}, skipCmd.GetDSNSlice())
 	assert.Equal(t, []uint64{3, 2, 1}, skipCmd.GetPSNSlice())
 	assert.Equal(t, 3, skipCmd.ElementCount())
+}
+
+type blockedErrorCompletionEntry struct {
+	walentry.Entry
+	started chan<- struct{}
+	release <-chan struct{}
+}
+
+func (e *blockedErrorCompletionEntry) DoneWithErr(err error) {
+	close(e.started)
+	<-e.release
+	e.Entry.DoneWithErr(err)
+}
+
+func TestLogEntryWriterErrorCompletesOwnedEntriesExactlyOnce(t *testing.T) {
+	w := NewLogEntryWriter()
+	first := entry.NewEmptyEntry()
+	started, release := make(chan struct{}), make(chan struct{})
+	allowCompletion := sync.OnceFunc(func() { close(release) })
+	defer allowCompletion()
+	second := entry.NewEntry(&blockedErrorCompletionEntry{Entry: walentry.GetBase(), started: started, release: release})
+	require.NoError(t, w.AppendEntry(first))
+	require.NoError(t, w.AppendEntry(second))
+
+	errExpected := fmt.Errorf("append failed")
+	finished := make(chan struct{})
+	go func() {
+		w.NotifyDone(errExpected)
+		close(finished)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("second transaction entry was not notified")
+	}
+
+	results := make(chan error, 2)
+	go func() { results <- first.WaitDone() }()
+	go func() { results <- first.Entry.WaitDone() }()
+	select {
+	case err := <-results:
+		t.Fatalf("first entry observed %v before the group completed", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	allowCompletion()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("group did not finish notifying its entries")
+	}
+	for range 2 {
+		select {
+		case err := <-results:
+			require.ErrorIs(t, err, errExpected)
+		case <-time.After(time.Second):
+			t.Fatal("first entry did not observe the group failure")
+		}
+	}
+	// A wait-loop cleanup may run after the fail-stop notification. The writer
+	// must treat that second terminal notification as a no-op.
+	w.NotifyDone(nil)
+	require.ErrorIs(t, second.WaitDone(), errExpected)
+	require.ErrorIs(t, second.Entry.WaitDone(), errExpected)
+	first.Entry.Free()
+	second.Entry.Free()
 }
 
 func TestCompatibility1(t *testing.T) {

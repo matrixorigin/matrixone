@@ -16,13 +16,18 @@ package logservicedriver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/lni/vfs"
+	"github.com/panjf2000/ants/v2"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -40,6 +45,492 @@ func initTest(t *testing.T) (*logservice.Service, *logservice.ClientConfig) {
 	require.NoError(t, err)
 	require.NotNil(t, service)
 	return service, &ccfg
+}
+
+func TestClientAcquisitionFailureCompletesWaiterBeforePanic(t *testing.T) {
+	service, ccfg := initTest(t)
+	defer service.Close()
+	cfg := NewConfig(
+		"",
+		WithConfigOptClientConfig("", ccfg),
+		WithConfigOptMaxClient(1),
+	)
+	d := NewLogServiceDriver(&cfg)
+	d.clientPool.Close()
+
+	committer := getCommitter()
+	e := entry.MockEntryWithPayload([]byte("client acquisition failure"))
+	e.DSN = 1
+	committer.AddIntent(e)
+	require.Panics(t, func() { d.asyncCommit(committer) })
+	require.ErrorIs(t, e.WaitDone(), ErrClientPoolClosed)
+	require.NoError(t, d.Close())
+}
+
+type blockingBackendClient struct {
+	*mockBackendClient
+	appendStarted chan struct{}
+	release       chan struct{}
+	startOnce     *sync.Once
+}
+
+type deadlineBlockingBackendClient struct {
+	*mockBackendClient
+	appendStarted chan struct{}
+	release       chan struct{}
+	startOnce     sync.Once
+}
+
+func (c *deadlineBlockingBackendClient) Append(
+	_ context.Context,
+	record logservice.LogRecord,
+) (uint64, error) {
+	c.startOnce.Do(func() { close(c.appendStarted) })
+	<-c.release
+	return c.mockBackendClient.Append(context.Background(), record)
+}
+
+func (c *blockingBackendClient) Append(ctx context.Context, record logservice.LogRecord) (uint64, error) {
+	c.startOnce.Do(func() { close(c.appendStarted) })
+	select {
+	case <-c.release:
+		return c.mockBackendClient.Append(ctx, record)
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
+func TestCommitSubmissionWaitsForWorkerHandoff(t *testing.T) {
+	backend := NewMockBackend()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+	factory := func(ctx context.Context) (logservice.Client, error) {
+		return &blockingBackendClient{
+			mockBackendClient: newMockBackendClient(backend),
+			appendStarted:     started,
+			release:           release,
+			startOnce:         &startOnce,
+		}, nil
+	}
+	cfg := NewConfig("", WithConfigOptClientFactory(factory), WithConfigOptMaxClient(2))
+	d := NewLogServiceDriver(&cfg)
+	// Keep two clients available while constraining the append worker capacity
+	// to one, so the second accepted committer reaches the worker handoff while
+	// the first task is still running.
+	d.workers.Release()
+	panics := make(chan any, 2)
+	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true), ants.WithPanicHandler(func(v any) {
+		panics <- v
+	}))
+
+	first := entry.MockEntryWithPayload([]byte("first"))
+	second := entry.MockEntryWithPayload([]byte("second"))
+	d.onCommitIntents(first)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first append did not enter the production worker")
+	}
+	secondSubmitted := make(chan struct{})
+	go func() {
+		d.onCommitIntents(second)
+		close(secondSubmitted)
+	}()
+
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 2 }, time.Second, time.Millisecond)
+	select {
+	case <-secondSubmitted:
+		t.Fatal("second committer was submitted before the first worker returned")
+	default:
+	}
+
+	close(release)
+	require.NoError(t, first.WaitDone())
+	require.NoError(t, second.WaitDone())
+	select {
+	case <-secondSubmitted:
+	case <-time.After(time.Second):
+		t.Fatal("second committer did not finish worker handoff")
+	}
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
+	require.NoError(t, d.Close())
+	require.Empty(t, panics, "append worker panicked")
+	records, _, err := backend.Read(context.Background(), 1, DefaultRecordSize)
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+	for i, record := range records {
+		require.Equal(t, uint64(i+1), LogEntry(record.Payload()).GetStartDSN())
+	}
+}
+
+type retryTruncateReadClient struct {
+	*mockBackendClient
+	calls int
+}
+
+func (c *retryTruncateReadClient) GetTruncatedLsn(context.Context) (uint64, error) {
+	c.calls++
+	if c.calls == 1 {
+		return 0, errors.New("transient truncation read error")
+	}
+	return 7, nil
+}
+
+func TestGetTruncatedPSNRetriesTransientRead(t *testing.T) {
+	client := &retryTruncateReadClient{mockBackendClient: newMockBackendClient(NewMockBackend())}
+	cfg := NewConfig("", WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second),
+		WithConfigOptClientFactory(func(ctx context.Context) (logservice.Client, error) { return client, nil }))
+	d := NewLogServiceDriver(&cfg)
+	defer func() { require.NoError(t, d.Close()) }()
+
+	psn, err := d.getTruncatedPSNFromBackend(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), psn)
+	require.Equal(t, 2, client.calls)
+}
+
+func TestSubmitCommitWaitsAfterCommitterCompletion(t *testing.T) {
+	service, ccfg := initTest(t)
+	defer service.Close()
+	cfg := NewConfig("", WithConfigOptClientConfig("", ccfg), WithConfigOptMaxClient(1))
+	d := NewLogServiceDriver(&cfg)
+	d.workers.Release()
+	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true))
+
+	committer := getCommitter()
+	committer.startCommit()
+	donePublished := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	require.NoError(t, d.workers.Submit(func() {
+		committer.finishCommit()
+		close(donePublished)
+		<-releaseWorker
+	}))
+	<-donePublished
+
+	taskRan := make(chan struct{})
+	submitDone := make(chan error, 1)
+	go func() {
+		submitDone <- d.submitCommit(func() { close(taskRan) })
+	}()
+	select {
+	case err := <-submitDone:
+		t.Fatalf("submit returned before the worker was reusable: %v", err)
+	default:
+	}
+
+	close(releaseWorker)
+	require.NoError(t, <-submitDone)
+	select {
+	case <-taskRan:
+	case <-time.After(time.Second):
+		t.Fatal("submitted task did not run after worker handoff")
+	}
+	putCommitter(committer)
+	require.NoError(t, d.Close())
+}
+
+func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
+	backend := NewMockBackend()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	factory := func(ctx context.Context) (logservice.Client, error) {
+		return &deadlineBlockingBackendClient{
+			mockBackendClient: newMockBackendClient(backend),
+			appendStarted:     started,
+			release:           release,
+		}, nil
+	}
+	cfg := NewConfig("", WithConfigOptClientFactory(factory), WithConfigOptMaxClient(2))
+	d := NewLogServiceDriver(&cfg)
+	d.config.CloseTimeout = 50 * time.Millisecond
+	d.workers.Release()
+	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true))
+
+	first := entry.MockEntryWithPayload([]byte("first"))
+	second := entry.MockEntryWithPayload([]byte("second"))
+	d.onCommitIntents(first)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first append did not enter the production worker")
+	}
+	secondSubmitted := make(chan struct{})
+	go func() {
+		d.onCommitIntents(second)
+		close(secondSubmitted)
+	}()
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 2 }, time.Second, time.Millisecond)
+
+	start := time.Now()
+	err := d.Close()
+	require.Error(t, err)
+	require.Less(t, time.Since(start), time.Second)
+	select {
+	case <-secondSubmitted:
+	case <-time.After(time.Second):
+		t.Fatal("close did not unblock worker submission")
+	}
+	require.Error(t, second.WaitDone())
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- first.WaitDone() }()
+	select {
+	case <-firstDone:
+		t.Fatal("in-flight append acquired a synthetic terminal result")
+	default:
+	}
+
+	close(release)
+	require.NoError(t, <-firstDone)
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
+
+	select {
+	case _, open := <-d.postCommitQueue:
+		require.False(t, open)
+	case <-time.After(time.Second):
+		t.Fatal("driver did not complete cleanup after append returned")
+	}
+}
+
+type failingBackendClient struct {
+	*mockBackendClient
+	err error
+}
+
+type blockedTruncateClient struct {
+	*mockBackendClient
+	started  chan<- struct{}
+	canceled chan<- struct{}
+	release  <-chan struct{}
+}
+
+func (c *blockedTruncateClient) Truncate(ctx context.Context, _ uint64) error {
+	close(c.started)
+	select {
+	case <-c.release:
+		return nil
+	case <-ctx.Done():
+		close(c.canceled)
+		<-c.release
+		return ctx.Err()
+	}
+}
+
+func TestCloseDeadlineIncludesInFlightTruncate(t *testing.T) {
+	backend := NewMockBackend()
+	started, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	allowTruncate := sync.OnceFunc(func() { close(release) })
+	defer allowTruncate()
+	cfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(func(ctx context.Context) (logservice.Client, error) {
+			return &blockedTruncateClient{
+				mockBackendClient: newMockBackendClient(backend),
+				started:           started,
+				canceled:          canceled,
+				release:           release,
+			}, nil
+		}),
+	)
+	d := NewLogServiceDriver(&cfg)
+	d.config.CloseTimeout = 50 * time.Millisecond
+	require.NoError(t, d.Replay(context.Background(), nil, func() driver.ReplayMode {
+		return driver.ReplayMode_ReplayForWrite
+	}, nil))
+	e := entry.MockEntryWithPayload([]byte("truncate target"))
+	require.NoError(t, d.Append(e))
+	require.NoError(t, e.WaitDone())
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
+	require.NoError(t, d.Truncate(e.DSN))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("truncate did not reach LogService")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- d.Close() }()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.ErrorIs(t, err, errWALCloseTimeout)
+	case <-time.After(time.Second):
+		t.Fatal("driver Close did not return while truncate was blocked")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not cancel the truncate request")
+	}
+	select {
+	case <-d.postCommitQueue:
+		t.Fatal("driver finished cleanup while truncate still owned a client")
+	default:
+	}
+	allowTruncate()
+	select {
+	case _, open := <-d.postCommitQueue:
+		require.False(t, open)
+	case <-time.After(time.Second):
+		t.Fatal("driver did not complete cleanup after truncate returned")
+	}
+	require.Zero(t, d.truncatedPSN)
+}
+
+func (c *failingBackendClient) Append(context.Context, logservice.LogRecord) (uint64, error) {
+	return 0, c.err
+}
+
+func TestAppendFailureCompletesWaiterBeforeFailStop(t *testing.T) {
+	backend := NewMockBackend()
+	errExpected := errors.New("append failed")
+	factory := func(ctx context.Context) (logservice.Client, error) {
+		return &failingBackendClient{
+			mockBackendClient: newMockBackendClient(backend),
+			err:               errExpected,
+		}, nil
+	}
+	cfg := NewConfig(
+		"",
+		WithConfigOptClientFactory(factory),
+		WithConfigOptMaxClient(1),
+		WithConfigOptMaxTimeout(time.Millisecond),
+	)
+	d := NewLogServiceDriver(&cfg)
+	first := entry.MockEntryWithPayload([]byte("first"))
+	second := entry.MockEntryWithPayload([]byte("second"))
+	failStop := make(chan [3]error, 1)
+	d.onAppendFailure = func(err error) {
+		failStop <- [3]error{err, first.Entry.GetError(), second.Entry.GetError()}
+	}
+
+	d.onCommitIntents(first, second)
+	select {
+	case results := <-failStop:
+		for _, err := range results {
+			require.ErrorIs(t, err, errExpected)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("append failure did not reach fail-stop")
+	}
+	for _, e := range []*entry.Entry{first, second} {
+		require.ErrorIs(t, e.WaitDone(), errExpected)
+		require.ErrorIs(t, e.Entry.WaitDone(), errExpected)
+		e.Entry.Free()
+	}
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
+	require.Zero(t, d.getCommittedDSNWatermark())
+	require.NoError(t, d.Close())
+}
+
+type takeoverAppendClient struct {
+	logservice.Client
+	reconnect logservice.ClientFactory
+	started   chan<- struct{}
+	release   <-chan struct{}
+	startOnce sync.Once
+}
+
+func (c *takeoverAppendClient) Append(ctx context.Context, record logservice.LogRecord) (uint64, error) {
+	if LogEntry(record.Payload()).GetStartDSN() != 2 {
+		return c.Client.Append(ctx, record)
+	}
+	c.startOnce.Do(func() { close(c.started) })
+	<-c.release
+	client, err := c.reconnect(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer client.Close()
+	return client.Append(ctx, record)
+}
+
+func TestTimedOutWriterCannotOverwriteReplacementWAL(t *testing.T) {
+	service, clientCfg := initTest(t)
+	defer service.Close()
+	oldFactory := logservice.NewTNWriterClientFactory("", *clientCfg, 5*time.Second)
+	started, release := make(chan struct{}), make(chan struct{})
+	allowAppend := sync.OnceFunc(func() { close(release) })
+	defer allowAppend()
+	cfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(func(ctx context.Context) (logservice.Client, error) {
+			client, err := oldFactory(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return &takeoverAppendClient{Client: client, reconnect: oldFactory, started: started, release: release}, nil
+		}))
+	cfg.CloseTimeout = 50 * time.Millisecond
+	old := NewLogServiceDriver(&cfg)
+	failed := make(chan error, 1)
+	old.onAppendFailure = func(err error) { failed <- err }
+	replay := func(d *LogServiceDriver) []string {
+		t.Helper()
+		var payloads []string
+		require.NoError(t, d.Replay(t.Context(), func(e *entry.Entry) driver.ReplayEntryState {
+			payloads = append(payloads, string(e.Entry.GetPayload()))
+			return driver.RE_Nomal
+		}, func() driver.ReplayMode { return driver.ReplayMode_ReplayForWrite }, nil))
+		return payloads
+	}
+	require.Empty(t, replay(old))
+	defer func() { allowAppend(); _ = old.Close() }()
+	first := entry.MockEntryWithPayload([]byte("old-first"))
+	require.NoError(t, old.Append(first))
+	require.NoError(t, first.WaitDone())
+	stale := entry.MockEntryWithPayload([]byte("old-second"))
+	require.NoError(t, old.Append(stale))
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old append did not reach the LogService client")
+	}
+	require.ErrorIs(t, old.Close(), context.DeadlineExceeded)
+
+	clientCfg.TNReplicaID++
+	newFactory := logservice.NewTNWriterClientFactory("", *clientCfg, 5*time.Second)
+	replacementCfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(LogServiceClientFactory(newFactory)))
+	replacement := NewLogServiceDriver(&replacementCfg)
+	defer replacement.Close()
+	require.Equal(t, []string{"old-first"}, replay(replacement))
+
+	// An older standby reader uses CONNECT with no TN replica ID.
+	upstreamCtx, cancelUpstream := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelUpstream()
+	upstream, err := logservice.NewStandbyClient(upstreamCtx, "", logservice.ClientConfig{
+		LogShardID:       clientCfg.LogShardID,
+		ServiceAddresses: clientCfg.ServiceAddresses,
+	})
+	require.NoError(t, err)
+	defer upstream.Close()
+	_, err = upstream.GetLatestLsn(upstreamCtx)
+	require.NoError(t, err)
+
+	allowAppend()
+	select {
+	case <-old.ShutdownDone():
+	case <-time.After(5 * time.Second):
+		t.Fatal("old WAL did not finish draining")
+	}
+	assert.True(t, moerr.IsMoErrCode(stale.WaitDone(), moerr.ErrNotLeaseHolder), "the old writer was not fenced")
+	select {
+	case err := <-failed:
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
+	default:
+		t.Error("the old writer did not report the lease failure")
+	}
+
+	newEntry := entry.MockEntryWithPayload([]byte("replacement"))
+	require.NoError(t, replacement.Append(newEntry))
+	require.NoError(t, newEntry.WaitDone())
+	require.Equal(t, uint64(2), newEntry.DSN)
+	require.NoError(t, replacement.Close())
+
+	reopened := NewLogServiceDriver(&replacementCfg)
+	defer reopened.Close()
+	require.Equal(t, []string{"old-first", "replacement"}, replay(reopened))
 }
 
 func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *LogServiceDriver {

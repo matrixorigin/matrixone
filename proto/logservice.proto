@@ -230,6 +230,7 @@ message RSMState {
   uint64 WALRecoveryLastLsn = 11;
   uint64 WALRecoveryOriginalLeaseHolderID = 12;
   bool WALRecoveryComplete = 13;
+  uint64 TNLeaseEpoch = 14;
 }
 
 enum MethodType {
@@ -262,6 +263,7 @@ enum MethodType {
   CHECK_HEALTH = 26;
   READ_LSN = 27;
   UPDATE_LEASEHOLDER_ID = 28;
+  CLAIM_TN_LEASE = 29;
 };
 
 enum RecordType {
@@ -557,6 +559,7 @@ message BootstrapShard {
 message CommandBatch {
   uint64 Term                       = 1;
   repeated ScheduleCommand Commands = 2 [(gogoproto.nullable) = false];
+  bool AssignTNWALOwner = 3;
 }
 
 // CNStoreInfo contains information on a CN store.
@@ -709,6 +712,14 @@ message CheckerState {
   uint64 IDWatermarkRestoreGeneration = 16;
   bool LogServiceRecoveryPrepared = 17;
   bool LogServiceRecoveryCompleted = 18;
+  map<uint64, TNWALAssignment> TNWALAssignments = 19 [(gogoproto.nullable) = false];
+}
+
+// TNWALAssignment records a scheduled writer and the HAKeeper Raft index
+// that assigned it. Assignments are keyed by LogService shard ID.
+message TNWALAssignment {
+  uint64 ReplicaID = 1;
+  uint64 Epoch = 2;
 }
 
 message DeletedStore {
@@ -755,6 +766,7 @@ message HAKeeperRSMState {
   uint64 IDWatermarkRestoreGeneration = 20;
   bool LogServiceRecoveryPrepared = 21;
   bool LogServiceRecoveryCompleted = 22;
+  map<uint64, TNWALAssignment> TNWALAssignments = 23 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica

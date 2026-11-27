@@ -21,11 +21,9 @@ import (
 	"time"
 
 	"github.com/lni/dragonboat/v4"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -176,11 +174,7 @@ func queryShardInfoRaw(
 	if err != nil {
 		return pb.ShardInfoQueryResult{}, false, err
 	}
-	defer func() {
-		if err := cc.Close(); err != nil {
-			logutil.Error("failed to close client", zap.Error(err))
-		}
-	}()
+	defer closeStartupRPCClient(ctx, cc)
 	ctx, span := trace.Debug(ctx, "GetShardInfo")
 	defer span.End()
 	req := pb.Request{
@@ -194,7 +188,9 @@ func queryShardInfoRaw(
 	rpcReq := &RPCRequest{
 		Request: req,
 	}
-	future, err := cc.Send(ctx, address, rpcReq)
+	// The discovery request owns its data, so cancellation can return while
+	// the backend finishes writing it.
+	future, err := cc.Send(morpc.WithRequestRelease(ctx, releaseRPCRequest), address, rpcReq)
 	if err != nil {
 		return pb.ShardInfoQueryResult{}, false, moerr.AttachCause(ctx, err)
 	}

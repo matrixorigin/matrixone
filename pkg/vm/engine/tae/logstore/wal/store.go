@@ -15,6 +15,7 @@
 package wal
 
 import (
+	"context"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -35,7 +36,6 @@ type StoreImpl struct {
 	maxRecordSize int
 
 	appendMu sync.Mutex
-	appendWg sync.WaitGroup
 
 	driverAppendQueue sm.Queue
 	doneWithErrQueue  sm.Queue
@@ -47,13 +47,28 @@ func NewLogserviceHandle(
 	factory logservicedriver.LogServiceClientFactory,
 	maxRecordSize int,
 ) *StoreImpl {
+	w, err := OpenLogserviceHandle(context.Background(), factory, maxRecordSize)
+	if err != nil {
+		panic(err)
+	}
+	return w
+}
+
+func OpenLogserviceHandle(
+	ctx context.Context,
+	factory logservicedriver.LogServiceClientFactory,
+	maxRecordSize int,
+) (*StoreImpl, error) {
 	cfg := logservicedriver.NewConfig(
 		"",
 		logservicedriver.WithConfigOptClientFactory(factory),
 		logservicedriver.WithConfigOptMaxWALRecordSize(maxRecordSize),
 	)
-	driver := logservicedriver.NewLogServiceDriver(&cfg)
-	return NewStore(driver)
+	driver, err := logservicedriver.OpenLogServiceDriver(ctx, &cfg)
+	if err != nil {
+		return nil, err
+	}
+	return NewStore(driver), nil
 }
 
 func NewLocalHandle(
@@ -96,19 +111,37 @@ func (w *StoreImpl) ValidateUserTxnRecordSize(entrySize int) error {
 }
 
 func (w *StoreImpl) Close() error {
+	if d, ok := w.driver.(*logservicedriver.LogServiceDriver); ok {
+		w.TryClose()
+		return d.CloseAfterDrain(w.drain)
+	}
 	if !w.TryClose() {
 		return nil
 	}
-	w.appendWg.Wait()
-	w.driverAppendQueue.Stop()
+	w.drain()
+	return w.driver.Close()
+}
+
+// ShutdownDone reports asynchronous driver shutdown. Local WAL closes synchronously.
+func (w *StoreImpl) ShutdownDone() <-chan struct{} {
+	if d, ok := w.driver.(*logservicedriver.LogServiceDriver); ok {
+		return d.ShutdownDone()
+	}
+	return nil
+}
+
+func (w *StoreImpl) drain() {
+	// Take ownership after any append that passed the closed check has enqueued.
+	w.appendMu.Lock()
+	appendQueue := w.driverAppendQueue
+	w.driverAppendQueue = nil
+	w.appendMu.Unlock()
+
+	// Drain each producer before stopping its consumer.
+	appendQueue.Stop()
 	w.doneWithErrQueue.Stop()
 	w.logInfoQueue.Stop()
 	w.checkpointQueue.Stop()
-	err := w.driver.Close()
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (w *StoreImpl) AppendEntry(gid uint32, e entry.Entry) (lsn uint64, err error) {
@@ -124,18 +157,14 @@ func (w *StoreImpl) start() {
 }
 
 func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.Entry, lsn uint64, err error) {
-	w.appendWg.Add(1)
-	accepted := false
-	defer func() {
-		if !accepted {
-			w.appendWg.Done()
-		}
-	}()
 	if w.IsClosed() {
 		return nil, 0, sm.ErrClose
 	}
 	w.appendMu.Lock()
 	defer w.appendMu.Unlock()
+	if w.IsClosed() {
+		return nil, 0, sm.ErrClose
+	}
 	lsn = w.peekNextLSN(gid)
 	v1 := e.GetInfo()
 	var info *entry.Info
@@ -170,36 +199,38 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 	if err != nil {
 		panic(err)
 	}
-	accepted = true
 	return
 }
 
-// TODO: error handling
 func (w *StoreImpl) onDriverAppendQueue(items ...any) {
-	for _, item := range items {
-		driverEntry := item.(*driverEntry.Entry)
-		if w.maxRecordSize == 0 || driverEntry.Entry.GetInfo().(*entry.Info).Group != GroupUserTxn {
-			driverEntry.Entry.PrepareWrite()
+	for i, item := range items {
+		e := item.(*driverEntry.Entry)
+		if w.maxRecordSize == 0 || e.Entry.GetInfo().(*entry.Info).Group != GroupUserTxn {
+			e.Entry.PrepareWrite()
 		}
-		err := w.driver.Append(driverEntry)
+		err := w.driver.Append(e)
 		if err != nil {
+			groupErr := entry.NewGroupError(err)
+			for _, rejected := range items[i:] {
+				rejected.(*driverEntry.Entry).DoneWithErr(groupErr)
+			}
+			groupErr.Release()
 			panic(err)
 		}
-		// driverEntry.Entry.DoneWithErr(nil)
-		_, err = w.doneWithErrQueue.Enqueue(driverEntry)
+		_, err = w.doneWithErrQueue.Enqueue(e)
 		if err != nil {
 			panic(err)
 		}
 	}
 }
 
-// TODO: error handling
 func (w *StoreImpl) onDoneWithErrQueue(items ...any) {
 	for _, item := range items {
 		e := item.(*driverEntry.Entry)
 		err := e.WaitDone()
 		if err != nil {
-			panic(err)
+			// The producer already completed the transaction entry on failure.
+			continue
 		}
 		e.Entry.DoneWithErr(nil)
 		_, err = w.logInfoQueue.Enqueue(e)
@@ -207,7 +238,6 @@ func (w *StoreImpl) onDoneWithErrQueue(items ...any) {
 			panic(err)
 		}
 	}
-	w.appendWg.Add(-len(items))
 }
 
 func (w *StoreImpl) onLogInfoQueue(items ...any) {

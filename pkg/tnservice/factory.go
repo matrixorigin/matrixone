@@ -44,15 +44,15 @@ func (s *store) createTxnStorage(
 ) (storage.TxnStorage, error) {
 	switch s.cfg.Txn.Storage.Backend {
 	case StorageMEMKV:
-		factory := s.createLogServiceClientFactroy(shard)
-		logClient, err := factory()
+		factory := s.createLogServiceClientFactory(shard)
+		logClient, err := factory(ctx)
 		if err != nil {
 			return nil, err
 		}
 		return s.newMemKVStorage(shard, logClient)
 
 	case StorageTAE:
-		factory := s.createLogServiceClientFactroy(shard)
+		factory := s.createLogServiceClientFactory(shard)
 		ts, err := s.newTAEStorage(ctx, shard, factory, txnServer)
 		if err != nil {
 			return nil, err
@@ -63,34 +63,22 @@ func (s *store) createTxnStorage(
 	}
 }
 
-func (s *store) createLogServiceClient(shard metadata.TNShard) (logservice.Client, error) {
-	if s.options.logServiceClientFactory != nil {
-		return s.options.logServiceClientFactory(shard)
+func (s *store) createLogServiceClientFactory(shard metadata.TNShard) logservice.ClientFactory {
+	if factory := s.options.logServiceClientFactory; factory != nil {
+		return func(ctx context.Context) (logservice.Client, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return factory(shard)
+		}
 	}
-	return s.newLogServiceClient(shard)
-}
-
-func (s *store) createLogServiceClientFactroy(shard metadata.TNShard) logservice.ClientFactory {
-	return func() (logservice.Client, error) {
-		return s.createLogServiceClient(shard)
-	}
-}
-
-func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), s.cfg.LogService.ConnectTimeout.Duration, moerr.CauseNewLogServiceClient)
-	defer cancel()
-	client, err := logservice.NewClient(ctx, s.cfg.UUID, logservice.ClientConfig{
-		ReadOnly:         false,
+	return logservice.NewTNWriterClientFactory(s.cfg.UUID, logservice.ClientConfig{
 		LogShardID:       shard.LogShardID,
 		TNReplicaID:      shard.ReplicaID,
 		ServiceAddresses: s.cfg.HAKeeper.ClientConfig.ServiceAddresses,
 		DiscoveryAddress: s.cfg.HAKeeper.ClientConfig.DiscoveryAddress,
 		MaxMessageSize:   int(s.cfg.RPC.MaxMessageSize),
-	})
-	if err != nil {
-		return nil, moerr.AttachCause(ctx, err)
-	}
-	return client, nil
+	}, s.cfg.LogService.ConnectTimeout.Duration)
 }
 
 // The Log Service client applies its RPC limit to the complete request. Reserve

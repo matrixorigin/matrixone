@@ -133,10 +133,14 @@ func (s *store) handleAddReplica(cmd logservicepb.ScheduleCommand) {
 }
 
 func (s *store) handleRemoveReplica(cmd logservicepb.ScheduleCommand) {
-	shardID := cmd.ConfigChange.Replica.ShardID
+	replica := cmd.ConfigChange.Replica
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.removeReplicaLocked(shardID); err != nil {
+	if current := s.getReplica(replica.ShardID); current != nil &&
+		replica.ReplicaID != 0 && current.shard.ReplicaID != replica.ReplicaID {
+		return
+	}
+	if err := s.removeReplicaLocked(replica.ShardID); err != nil {
 		s.rt.Logger().Error("failed to remove replica", zap.Error(err))
 	}
 }

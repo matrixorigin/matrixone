@@ -87,6 +87,25 @@ func TestGetSetLeaseHolderCmd(t *testing.T) {
 	assert.False(t, isSetLeaseHolderUpdate(cmd2))
 }
 
+func TestTNLeaseClaimOnReleasedHistory(t *testing.T) {
+	const oldHolder, newHolder = uint64(42), uint64(43)
+	tsm := newStateMachine(1, 1).(*stateMachine)
+	tsm.state.Index = 7
+	tsm.state.LeaseHistory = map[uint64]uint64{2: oldHolder, 5: newHolder, 6: 0}
+	assert.NotEmpty(t, tsm.handleSetLeaseHolderID(getTNLeaseClaimCmd(oldHolder, 0)).Data)
+	assert.Empty(t, tsm.handleSetLeaseHolderID(getTNLeaseClaimCmd(newHolder, 0)).Data)
+	assert.Equal(t, newHolder, tsm.state.LeaseHolderID)
+
+	// If truncation removed the previous owner's history, only an
+	// assignment from HAKeeper can establish a writer.
+	tsm.state.LeaseHolderID = 0
+	tsm.state.Index = 8
+	tsm.state.LeaseHistory = map[uint64]uint64{7: 0}
+	assert.NotEmpty(t, tsm.handleSetLeaseHolderID(getTNLeaseClaimCmd(newHolder, 0)).Data)
+	assert.Empty(t, tsm.handleSetLeaseHolderID(getTNLeaseClaimCmd(newHolder, 7)).Data)
+	assert.Equal(t, uint64(7), tsm.state.TNLeaseEpoch)
+}
+
 func TestIsUserUpdate(t *testing.T) {
 	cmd := make([]byte, headerSize+8+1)
 	binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
