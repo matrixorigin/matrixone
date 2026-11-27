@@ -260,65 +260,9 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 			return AppendBytes(vec, v, isNull, mp)
 		}
 	}
-	switch t.Oid {
-	case types.T_bool:
-		return appendBytesToFixSized[bool](vec)
-	case types.T_bit:
-		return appendBytesToFixSized[uint64](vec)
-	case types.T_int8:
-		return appendBytesToFixSized[int8](vec)
-	case types.T_int16:
-		return appendBytesToFixSized[int16](vec)
-	case types.T_int32:
-		return appendBytesToFixSized[int32](vec)
-	case types.T_int64:
-		return appendBytesToFixSized[int64](vec)
-	case types.T_uint8:
-		return appendBytesToFixSized[uint8](vec)
-	case types.T_uint16:
-		return appendBytesToFixSized[uint16](vec)
-	case types.T_uint32:
-		return appendBytesToFixSized[uint32](vec)
-	case types.T_uint64:
-		return appendBytesToFixSized[uint64](vec)
-	case types.T_float32:
-		return appendBytesToFixSized[float32](vec)
-	case types.T_float64:
-		return appendBytesToFixSized[float64](vec)
-	case types.T_bf16:
-		return appendBytesToFixSized[types.BF16](vec)
-	case types.T_float16:
-		return appendBytesToFixSized[types.Float16](vec)
-	case types.T_float8:
-		return appendBytesToFixSized[types.Float8](vec)
-	case types.T_float4:
-		return appendBytesToFixSized[types.Float4](vec)
-	case types.T_date:
-		return appendBytesToFixSized[types.Date](vec)
-	case types.T_datetime:
-		return appendBytesToFixSized[types.Datetime](vec)
-	case types.T_time:
-		return appendBytesToFixSized[types.Time](vec)
-	case types.T_timestamp:
-		return appendBytesToFixSized[types.Timestamp](vec)
-	case types.T_enum:
-		return appendBytesToFixSized[types.Enum](vec)
-	case types.T_decimal64:
-		return appendBytesToFixSized[types.Decimal64](vec)
-	case types.T_decimal128:
-		return appendBytesToFixSized[types.Decimal128](vec)
-	case types.T_decimal256:
-		return appendBytesToFixSized[types.Decimal256](vec)
-	case types.T_uuid:
-		return appendBytesToFixSized[types.Uuid](vec)
-	case types.T_TS:
-		return appendBytesToFixSized[types.TS](vec)
-	case types.T_Rowid:
-		return appendBytesToFixSized[types.Rowid](vec)
-	case types.T_Blockid:
-		return appendBytesToFixSized[types.Blockid](vec)
-	case types.T_year:
-		return appendBytesToFixSized[types.MoYear](vec)
+	ops := &vectorTypeOps[t.Oid]
+	if !ops.supported {
+		panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
 	}
-	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
+	return ops.appendBytes(vec)
 }

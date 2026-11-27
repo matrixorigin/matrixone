@@ -196,3 +196,23 @@ func TestReports(t *testing.T) {
 		t.Errorf("unexpected -loops -invariant output:\n%s", b.String())
 	}
 }
+
+func TestListAndDir(t *testing.T) {
+	switches, err := Scan(writeFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := underDir(switches, "pkg/other"); len(got) != 0 {
+		t.Errorf("underDir(pkg/other) kept %d switches", len(got))
+	}
+	kept := underDir(switches, "pkg/p/")
+	if len(kept) != len(switches) {
+		t.Errorf("underDir(pkg/p/) kept %d of %d switches", len(kept), len(switches))
+	}
+	var b bytes.Buffer
+	writeList(&b, kept)
+	if !strings.Contains(b.String(), "\tnotInLoop\t2\tdefault\t-\n") ||
+		!strings.Contains(b.String(), "\tperRowInvariant\t2\t-\tloop\n") {
+		t.Errorf("unexpected -list output:\n%s", b.String())
+	}
+}
