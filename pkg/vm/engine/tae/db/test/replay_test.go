@@ -508,7 +508,7 @@ func TestReplay3(t *testing.T) {
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
-	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	v := bat.Vecs[schema.GetSingleSortKeyIdx()].GetValue(0)
 	filter := handle.NewEQFilter(v)
 
 	txn, err := tae.StartTxn(nil)
