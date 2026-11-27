@@ -1800,7 +1800,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 		if name == "+" || name == "-" || name == "*" {
 			originalBoundExpr = expr
 		}
-		bound, err := bindFuncExprImplByPlanExpr(rule.ctx, nil, name, copy.GetF().Args, true, nil, originalBoundExpr, false)
+		bound, err := rebindFuncExprImplByPlanExpr(rule.ctx, fn, name, copy.GetF().Args, nil, originalBoundExpr, false)
 		if err != nil {
 			return nil, false, err
 		}
@@ -2352,7 +2352,7 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 		if !changed {
 			return expr, false, nil
 		}
-		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.GetObjName(), copy.GetF().Args)
+		bound, err := rebindFuncExprImplByPlanExpr(rule.ctx, fn, fn.Func.GetObjName(), copy.GetF().Args, nil, nil, false)
 		if err != nil {
 			return nil, false, err
 		}
@@ -3934,7 +3934,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				rewritten, err = rebindExplicitPreparedCast(rule.ctx, e, boundArgs)
 				rule.specialized = true
 			} else {
-				var originalBoundExpr *Expr
+				originalBoundExpr := e
 				switch functionName {
 				case "+", "-", "*", "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd", "from_unixtime":
 					// The saved operands already own immutable provenance. Share

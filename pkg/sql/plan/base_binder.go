@@ -8562,8 +8562,22 @@ func bindPreparedFuncExprImplByPlanExpr(
 		// again and preserves direct-marker/domainless provenance separately.
 		stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 	}
+	return rebindFuncExprImplByPlanExpr(
+		ctx, originalBoundExpr.GetF(), name, args, stringDomainModes, originalBoundExpr, true)
+}
+
+func rebindFuncExprImplByPlanExpr(
+	ctx context.Context,
+	original *plan.Function,
+	name string,
+	args []*Expr,
+	stringDomainModes []function.StringDomainCheckMode,
+	originalBoundExpr *Expr,
+	allowInternalFunctionArgs bool,
+) (*Expr, error) {
+	ctx = function.WithBoundPowerBinding(ctx, original.GetFunc().GetObj())
 	return bindFuncExprImplByPlanExpr(
-		ctx, nil, name, args, true, stringDomainModes, originalBoundExpr, true)
+		ctx, nil, name, args, true, stringDomainModes, originalBoundExpr, allowInternalFunctionArgs)
 }
 
 func bindFuncExprImplByPlanExpr(

@@ -53,6 +53,21 @@ func WithPersistedPowerBinding(ctx context.Context, legacy bool) context.Context
 	return context.WithValue(ctx, persistedPowerContextKey{}, legacy)
 }
 
+// WithBoundPowerBinding preserves the definition's POW semantics when a
+// prepared call is resolved again against its execution-time argument types.
+// Both variants share a signature and still require normal argument coercion.
+func WithBoundPowerBinding(ctx context.Context, boundOverload int64) context.Context {
+	fid, overload := DecodeOverloadID(boundOverload)
+	if fid != POW || (overload != 0 && overload != powerNullOnNonFiniteOverload) {
+		return ctx
+	}
+	legacy := overload == 0
+	if legacyPersistedPowerBinding(ctx) == legacy {
+		return ctx
+	}
+	return WithPersistedPowerBinding(ctx, legacy)
+}
+
 func legacyPersistedPowerBinding(ctx context.Context) bool {
 	if ctx == nil {
 		return false

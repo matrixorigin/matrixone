@@ -817,6 +817,97 @@ func TestSQLUDFBindsPowerInDefinitionScope(t *testing.T) {
 	}
 }
 
+func TestPreparedSQLUDFRetainsBoundPowerSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name, call    string
+		executeLegacy bool
+		overloads     []int32
+		negativeError bool
+		positive      float64
+	}{
+		{"released", "released_pow(?)", false, []int32{0}, true, 4},
+		{"current", "current_pow(?)", true, []int32{1}, false, 4},
+		{"ordinary alias", "POW(?, 0.5)", true, []int32{1}, false, 4},
+		{"legacy wraps current", "released_outer(?)", false, []int32{0, 1}, false, 2},
+		{"current wraps legacy", "current_outer(?)", true, []int32{1, 0}, true, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			compiler := &powerUdfCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, proc),
+				bodies: map[string]function.Udf{
+					"released_pow":   {Body: "power($1,0.5)", LegacyPower: true},
+					"current_pow":    {Body: "pow($1,0.5)"},
+					"released_outer": {Body: "power(current_pow($1),0.5)", LegacyPower: true},
+					"current_outer":  {Body: "pow(released_pow($1),0.5)"},
+				},
+			}
+			// Prepared SET takes the parameter-fill path at execution even
+			// when a pure SELECT could use its cached compile or rebind its AST.
+			sql := "prepare p from 'set @answer = " + tc.call + "'"
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			prepared, err := BuildPlan(compiler, stmt, false, nil)
+			require.NoError(t, err)
+			preparePlan := prepared.GetDcl().GetPrepare().GetPlan()
+			original := preparePlan.GetDcl().GetSetVariables().Items[0].Value
+
+			checkPower := func(t *testing.T, expr *plan.Expr) {
+				t.Helper()
+				var overloads []int32
+				require.NoError(t, plan.VisitExprTree(expr, func(current *plan.Expr) error {
+					fn := current.GetF()
+					if id, overload := function.DecodeOverloadID(fn.GetFunc().GetObj()); id == function.POW {
+						overloads = append(overloads, overload)
+						require.Equal(t, "power", fn.Func.GetObjName())
+						require.Equal(t, types.T_float64, types.T(current.Typ.Id))
+					}
+					return nil
+				}))
+				require.Equal(t, tc.overloads, overloads)
+			}
+			checkPower(t, original)
+			require.Equal(t, int32(0), findFirstParamPos(original))
+
+			execCtx := function.WithPersistedPowerBinding(t.Context(), tc.executeLegacy)
+			for _, values := range []struct {
+				name  string
+				arg   ParamValue
+				valid bool
+			}{
+				{"negative", sqlIntParam(-4), false},
+				{"positive text", ParamValue{Value: "16", SourceType: types.T_varchar.ToType(), HasSourceType: true}, true},
+				{"negative reused", sqlIntParam(-4), false},
+			} {
+				t.Run(values.name, func(t *testing.T) {
+					filled, err := FillValuesOfParamsInPlan(execCtx, preparePlan, []any{values.arg})
+					require.NoError(t, err)
+					bound := filled.GetDcl().GetSetVariables().Items[0].Value
+					checkPower(t, bound)
+					exec, err := colexec.NewExpressionExecutor(proc, bound)
+					require.NoError(t, err)
+					defer exec.Free()
+					result, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+					if !values.valid && tc.negativeError {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+						return
+					}
+					require.NoError(t, err)
+					got, isNull := vector.GenerateFunctionFixedTypeParameter[float64](result).GetValue(0)
+					require.Equal(t, !values.valid, isNull)
+					if values.valid {
+						require.Equal(t, tc.positive, got)
+					}
+				})
+			}
+			cached := preparePlan.GetDcl().GetSetVariables().Items[0].Value
+			checkPower(t, cached)
+			require.Equal(t, int32(0), findFirstParamPos(cached))
+		})
+	}
+}
+
 func TestSQLUDFBindsTableAndValuesQueryTerms(t *testing.T) {
 	mode := "ANSI_QUOTES"
 	for _, tc := range []struct {
