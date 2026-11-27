@@ -127,7 +127,7 @@ func GetOffsetOfOrdered[T types.OrderedT](column []T, val T, skipmask *nulls.Nul
 }
 
 func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Nulls) (offset int, exist bool) {
-	vec := data.GetDownstreamVector()
+	vec := data
 	switch data.GetType().Oid {
 	case types.T_bool:
 		vs := vector.MustFixedColNoTypeCheck[bool](vec)
@@ -228,7 +228,7 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Nulls) (offse
 		var mid int
 		for start <= end {
 			mid = (start + end) / 2
-			res := bytes.Compare(data.ShallowGet(mid).([]byte), val)
+			res := bytes.Compare(data.GetBytesAt(mid), val)
 			if res > 0 {
 				end = mid - 1
 			} else if res < 0 {

@@ -49,9 +49,9 @@ func TestLowPrecisionFloatGetUpdateByFilter(t *testing.T) {
 	bat := containers.BuildBatch(attrs, typs, containers.Options{})
 	defer bat.Close()
 	for id, f := range []float32{1.5, -2} {
-		bat.Vecs[0].Append(int32(id+1), false)
+		bat.Vecs[0].MustAppendValue(int32(id+1), false)
 		for i, v := range row(f) {
-			bat.Vecs[i+1].Append(v, false)
+			bat.Vecs[i+1].MustAppendValue(v, false)
 		}
 	}
 	read := func(rel handle.Relation, id int32, want []any) {

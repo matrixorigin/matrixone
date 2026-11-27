@@ -471,8 +471,8 @@ func TestGenerateManifest_DuringUncommittedMerge(t *testing.T) {
 	// unique rows at math.MinInt8 and the offset batch appends its shifted
 	// keys; values are captured from the batches themselves.
 	expectedPKs := []any{
-		bat1.Vecs[0].Get(0), bat1.Vecs[0].Get(1),
-		bat2.Vecs[0].Get(0), bat2.Vecs[0].Get(1),
+		bat1.Vecs[0].GetValue(0), bat1.Vecs[0].GetValue(1),
+		bat2.Vecs[0].GetValue(0), bat2.Vecs[0].GetValue(1),
 	}
 
 	rtxn, rrel := tae.GetRelation()
@@ -597,8 +597,8 @@ func TestGenerateManifest_DuringCommittingMerge(t *testing.T) {
 	tae.CompactBlocks(true)
 
 	expectedPKs := []any{
-		bat1.Vecs[0].Get(0), bat1.Vecs[0].Get(1),
-		bat2.Vecs[0].Get(0), bat2.Vecs[0].Get(1),
+		bat1.Vecs[0].GetValue(0), bat1.Vecs[0].GetValue(1),
+		bat2.Vecs[0].GetValue(0), bat2.Vecs[0].GetValue(1),
 	}
 
 	rtxn, rrel := tae.GetRelation()

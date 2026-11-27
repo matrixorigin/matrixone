@@ -66,7 +66,7 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector,
 	if b.sks[idx] == nil {
 		b.sks[idx] = hll.NewNoSparse()
 	}
-	containers.ForeachWindowBytes(vec.GetDownstreamVector(), 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
+	containers.ForeachWindowBytes(vec, 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
 		if isNull {
 			return
 		}

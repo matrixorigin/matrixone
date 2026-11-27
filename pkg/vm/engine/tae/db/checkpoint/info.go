@@ -21,6 +21,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -59,41 +60,45 @@ type RunnerReader interface {
 	GetDirtyCollector() logtail.Collector
 }
 
-func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batch {
+func (r *runner) collectCheckpointMetadata(start, end types.TS) (*containers.Batch, error) {
 	bat := makeRespBatchFromSchema(CheckpointSchema)
-	entries := r.GetAllIncrementalCheckpoints()
-	for _, entry := range entries {
-		if !entry.IsFinished() && !entry.end.Equal(&end) {
-			continue
+	appendEntries := func(entries []*CheckpointEntry, isIncremental bool, typ EntryType) error {
+		for _, entry := range entries {
+			if !entry.IsFinished() && !entry.end.Equal(&end) {
+				continue
+			}
+			for _, col := range []struct {
+				attr string
+				val  any
+			}{
+				{CheckpointAttr_StartTS, entry.start},
+				{CheckpointAttr_EndTS, entry.end},
+				{CheckpointAttr_MetaLocation, []byte(entry.GetLocation())},
+				{CheckpointAttr_EntryType, isIncremental},
+				{CheckpointAttr_Version, entry.version},
+				{CheckpointAttr_AllLocations, []byte(entry.tnLocation)},
+				{CheckpointAttr_CheckpointLSN, entry.ckpLSN},
+				{CheckpointAttr_TruncateLSN, entry.truncateLSN},
+				{CheckpointAttr_Type, int8(typ)},
+				{CheckpointAttr_TableIDLocation, []byte(entry.tableIDLocation)},
+			} {
+				vec := bat.GetVectorByName(col.attr)
+				if err := vector.AppendAny(vec, col.val, false, vec.MPool()); err != nil {
+					return err
+				}
+			}
 		}
-		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start, false)
-		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end, false)
-		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()), false)
-		bat.GetVectorByName(CheckpointAttr_EntryType).Append(true, false)
-		bat.GetVectorByName(CheckpointAttr_Version).Append(entry.version, false)
-		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.tnLocation), false)
-		bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(entry.ckpLSN, false)
-		bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(entry.truncateLSN, false)
-		bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Incremental), false)
-		bat.GetVectorByName(CheckpointAttr_TableIDLocation).Append([]byte(entry.tableIDLocation), false)
+		return nil
 	}
-	entries = r.GetAllGlobalCheckpoints()
-	for _, entry := range entries {
-		if !entry.IsFinished() && !entry.end.Equal(&end) {
-			continue
-		}
-		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start, false)
-		bat.GetVectorByName(CheckpointAttr_EndTS).Append(entry.end, false)
-		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()), false)
-		bat.GetVectorByName(CheckpointAttr_EntryType).Append(false, false)
-		bat.GetVectorByName(CheckpointAttr_Version).Append(entry.version, false)
-		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.tnLocation), false)
-		bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(entry.ckpLSN, false)
-		bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(entry.truncateLSN, false)
-		bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Global), false)
-		bat.GetVectorByName(CheckpointAttr_TableIDLocation).Append([]byte(entry.tableIDLocation), false)
+	if err := appendEntries(r.GetAllIncrementalCheckpoints(), true, ET_Incremental); err != nil {
+		bat.Close()
+		return nil, err
 	}
-	return bat
+	if err := appendEntries(r.GetAllGlobalCheckpoints(), false, ET_Global); err != nil {
+		bat.Close()
+		return nil, err
+	}
+	return bat, nil
 }
 func (r *runner) GetAllIncrementalCheckpoints() []*CheckpointEntry {
 	return r.store.GetAllIncrementalCheckpoints()
