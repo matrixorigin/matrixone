@@ -36,20 +36,15 @@ type stubCompileContext struct {
 	vars             map[string]any
 	isFrontend       bool
 
-	// lastCdcTask records the args of the most recent
-	// CreateIndexCdcTask call. Used by HandleCreateIndex_Async{True,
-	// False} to assert the right branch (startFromNow / sql InitSQL)
-	// fired.
 	lastCdcTask struct {
-		called       bool
-		snapshot     []string
-		startFromNow bool
-		sql          string
+		called      bool
+		snapshot    []string
+		builtInline bool
 	}
 
 	// lastIdxcronUpdate records the args of the most recent
 	// RegisterIdxcronUpdate call — pins that handleCreate writes the
-	// cron metadata row after CreateIndexCdcTask succeeds, and that
+	// cron metadata row after CDC registration succeeds, and that
 	// background re-entry skips the call.
 	lastIdxcronUpdate struct {
 		called      bool
@@ -85,15 +80,13 @@ func (s *stubCompileContext) IsTableClone() bool                           { ret
 func (s *stubCompileContext) IsCCPRTaskTransaction() bool                  { return false }
 func (s *stubCompileContext) IsTableFromPublication(_ *plan.TableDef) bool { return false }
 func (s *stubCompileContext) SinkerTypeFromAlgo(_ string) int8             { return 0 }
-func (s *stubCompileContext) CreateIndexCdcTask(_, _ string, _ uint64, _ string, _ int8, startFromNow bool, sql string, _ *plan.TableDef) error {
-	s.lastCdcTask.called = true
-	s.lastCdcTask.startFromNow = startFromNow
-	s.lastCdcTask.sql = sql
+func (s *stubCompileContext) CreateIndexCdcTask(_, _ string, _ uint64, _ string, _ int8, _ bool, _ string, _ *plan.TableDef) error {
 	return nil
 }
-func (s *stubCompileContext) CreateIndexSnapshotCdcTask(_ string, _ int8, statements []string) error {
+func (s *stubCompileContext) CreateIndexSnapshotCdcTask(_ string, _ int8, statements []string, builtInline bool) error {
 	s.lastCdcTask.called = true
 	s.lastCdcTask.snapshot = statements
+	s.lastCdcTask.builtInline = builtInline
 	return nil
 }
 func (s *stubCompileContext) DropIndexCdcTask(_ *plan.TableDef, _, _, _ string) error {
@@ -376,15 +369,12 @@ func TestIvfpqHandleCreateIndex_InvalidDefCount(t *testing.T) {
 }
 
 func TestIvfpqHandleCreateIndex_OK(t *testing.T) {
-	// Default (no async key in metadata IndexAlgoParams) takes the
-	// sync branch: ctx.CreateIndexCdcTask called with
-	// startFromNow=true and empty InitSQL.
+	// CREATE INDEX builds inline by default.
 	ctx := newHandleCtx(true)
 	err := Hooks{}.HandleCreateIndex(ctx, ivfpqIndexDefs())
 	require.NoError(t, err)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
-	require.True(t, ctx.stubCompileContext.lastCdcTask.startFromNow, "sync default → startFromNow=true")
-	require.Empty(t, ctx.stubCompileContext.lastCdcTask.sql, "sync default → no InitSQL")
+	require.True(t, ctx.stubCompileContext.lastCdcTask.builtInline)
 	require.True(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "frontend create must register cron metadata row")
 	require.Equal(t, actionIvfpqReindex, ctx.stubCompileContext.lastIdxcronUpdate.action)
 	require.Equal(t, "ix", ctx.stubCompileContext.lastIdxcronUpdate.indexName)
@@ -392,15 +382,14 @@ func TestIvfpqHandleCreateIndex_OK(t *testing.T) {
 }
 
 func TestIvfpqHandleCreateIndex_AsyncTrue(t *testing.T) {
-	// Explicit async="true" on metadata params takes the async-via-
-	// InitSQL branch: startFromNow=false, sql carries the build SQL.
+	// An async build delegates the supplied rebuild statements to CDC.
 	defs := ivfpqIndexDefs()
 	defs[catalog.Ivfpq_TblType_Metadata].IndexAlgoParams = `{"async":"true"}`
 	ctx := newHandleCtx(true)
 	err := Hooks{}.HandleCreateIndex(ctx, defs)
 	require.NoError(t, err)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
-	require.False(t, ctx.stubCompileContext.lastCdcTask.startFromNow, "async=true → startFromNow=false")
+	require.False(t, ctx.stubCompileContext.lastCdcTask.builtInline)
 	want, err := (Hooks{}).SourceSnapshotInitSQL(ctx, defs)
 	require.NoError(t, err)
 	require.Equal(t, want, ctx.stubCompileContext.lastCdcTask.snapshot)
@@ -416,8 +405,7 @@ func TestIvfpqHandleCreateIndex_AsyncFalseExplicit(t *testing.T) {
 	err := Hooks{}.HandleCreateIndex(ctx, defs)
 	require.NoError(t, err)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called)
-	require.True(t, ctx.stubCompileContext.lastCdcTask.startFromNow)
-	require.Empty(t, ctx.stubCompileContext.lastCdcTask.sql)
+	require.True(t, ctx.stubCompileContext.lastCdcTask.builtInline)
 	require.True(t, ctx.stubCompileContext.lastIdxcronUpdate.called)
 }
 

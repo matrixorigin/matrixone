@@ -173,13 +173,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return err
 	}
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexCagraAlgo.ToString())
-	if forceSync {
-		err = ctx.CreateIndexCdcTask(db, originalTableDef.Name, originalTableDef.TblId,
-			metaDef.IndexName, sinkerType, true, "", originalTableDef)
-	} else {
-		err = ctx.CreateIndexSnapshotCdcTask(metaDef.IndexName, sinkerType, statements)
-	}
-	if err != nil {
+	if err := ctx.CreateIndexSnapshotCdcTask(metaDef.IndexName, sinkerType, statements, forceSync); err != nil {
 		return err
 	}
 	return registerIdxcronUpdate(ctx, metaDef, db, originalTableDef)

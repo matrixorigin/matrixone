@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 
 	// Blank-import the central plugin registration list so every
 	// vector-index plugin's init() fires whenever compile is loaded
@@ -174,19 +175,27 @@ func (p *pluginCompileCtx) CreateIndexCdcTask(dbName, tableName string, tableID 
 				if err != nil {
 					return err
 				}
-				return p.CreateIndexSnapshotCdcTask(indexName, sinkerType, statements)
+				return p.CreateIndexSnapshotCdcTask(indexName, sinkerType, statements, false)
 			}
 		}
 	}
 	return CreateIndexCdcTask(p.c, dbName, tableName, tableID, indexName, sinkerType, startFromNow, sql, tableDef)
 }
 
-func (p *pluginCompileCtx) CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, statements []string) error {
+func (p *pluginCompileCtx) CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, statements []string, builtInline bool) error {
+	table := p.originalTableDef
+	if builtInline && !p.isCopyReplacement(p.qryDatabase, table.Name, table.TblId) {
+		// Workspace rows commit after the inline build's snapshot. A committed
+		// rebuild covers those rows and any later writes in the same transaction.
+		workspace, ok := p.c.proc.GetTxnOperator().GetWorkspace().(*disttae.Transaction)
+		if ok && !workspace.HasTableWrites(table.TblId) {
+			return CreateIndexCdcTask(p.c, p.qryDatabase, table.Name, table.TblId, indexName, sinkerType, true, "", table)
+		}
+	}
 	encoded, err := json.Marshal(statements)
 	if err != nil {
 		return err
 	}
-	table := p.originalTableDef
 	return createIndexCdcTask(p.c, p.qryDatabase, table.Name, table.TblId, indexName, sinkerType, false, string(encoded), true, table)
 }
 

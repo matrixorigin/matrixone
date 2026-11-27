@@ -268,14 +268,14 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 				require.NoError(t, json.Unmarshal([]byte(raw), &params))
 				return params.Quantization
 			}
-			reindex := func(format string, async bool) {
+			reindex := func(format string, needsSnapshot bool) uint64 {
 				t.Helper()
 				exec("alter table t alter reindex ix " + tc.algo + " quantization '" + format + "'")
 				j, err := readJob(conn, replacementTable)
 				require.NoError(t, err)
 				require.Greater(t, j.id, laterJob.id)
-				require.Equal(t, async, j.spec.InitSQLCoversSnapshot)
-				if async {
+				require.Equal(t, needsSnapshot, j.spec.InitSQLCoversSnapshot)
+				if needsSnapshot {
 					require.NotEmpty(t, j.spec.InitSQL)
 				} else {
 					require.Empty(t, j.spec.InitSQL)
@@ -283,9 +283,13 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 					require.NotEmpty(t, j.watermark)
 					require.NotEqual(t, "0-0", j.watermark)
 				}
+				return j.id
 			}
 			exec("begin")
 			reindex("float32", true)
+			exec("rollback")
+			exec("begin")
+			reindex("int8", false)
 			exec("rollback")
 			observer, err := db.Conn(ctx)
 			require.NoError(t, err)
@@ -294,7 +298,8 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			require.NoError(t, err)
 			_, err = observer.ExecContext(ctx, "set experimental_"+tc.algo+"_index=1")
 			require.NoError(t, err)
-			privateOrder := " order by l2_distance(v,'[-100,-100,-100,-100,-100,-100,-100,-100]') limit 1"
+			privateDistance := " order by l2_distance(v,'[-100,-100,-100,-100,-100,-100,-100,-100]')"
+			privateOrder := privateDistance + " limit 1"
 			checkNeighbor := func(reader jobReader, query string, want int64) {
 				t.Helper()
 				var id int64
@@ -304,7 +309,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			checkNeighbor(observer, "select id from t"+privateOrder, 1)
 			exec("begin")
 			exec("insert into t(id,v) values (999,'[-100,-100,-100,-100,-100,-100,-100,-100]')")
-			reindex("int8", false)
+			reindex("int8", true)
 			privateQuery := "select id from t" + privateOrder
 			require.Contains(t, explain(privateQuery), tc.algo+"_search")
 			checkNeighbor(conn, privateQuery, 999)
@@ -318,10 +323,27 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 
 			exec("begin")
 			exec("insert into t(id,v) values (999,'[-100,-100,-100,-100,-100,-100,-100,-100]')")
-			reindex("int8", false)
+			jobID := reindex("int8", true)
+			exec("insert into t(id,v) values (1000,'[-50,-50,-50,-50,-50,-50,-50,-50]')")
 			exec("commit")
 			require.Equal(t, "int8", quantization())
 			checkNeighbor(observer, privateQuery, 999)
+			require.Equal(t, jobID, waitJob(replacementTable, types.TS{}).id)
+			require.Contains(t, explain("select id from t"+privateDistance+" limit 2"), tc.algo+"_search")
+			for _, hint := range []string{"", " ignore index(ix)"} {
+				q := "select id from t" + hint + privateDistance + " limit 2"
+				rows, err := observer.QueryContext(ctx, q)
+				require.NoError(t, err)
+				defer rows.Close()
+				var ids []int64
+				for rows.Next() {
+					var id int64
+					require.NoError(t, rows.Scan(&id), q)
+					ids = append(ids, id)
+				}
+				require.NoError(t, rows.Err(), q)
+				require.Equal(t, []int64{999, 1000}, ids, q)
+			}
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+storageSQL+" where tag=0").Scan(&count))
 			require.Positive(t, count)
 			query := "select id from t" + orderBy

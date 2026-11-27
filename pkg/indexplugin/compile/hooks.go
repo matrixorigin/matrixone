@@ -115,9 +115,9 @@ type CompileContext interface {
 	CreateIndexCdcTask(dbName, tableName string, tableID uint64, indexName string,
 		sinkerType int8, startFromNow bool, sql string, tableDef *plan.TableDef) error
 
-	// CreateIndexSnapshotCdcTask publishes a complete rebuild and its source
-	// snapshot together. CDC starts immediately after that snapshot.
-	CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, statements []string) error
+	// CreateIndexSnapshotCdcTask initializes CDC from a complete source snapshot.
+	// An inline build can supply that snapshot when it only read committed rows.
+	CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, statements []string, builtInline bool) error
 
 	// DropIndexCdcTask removes any ISCP CDC task previously registered
 	// for this (table, index). Safe to call when no task exists.
