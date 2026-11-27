@@ -64,6 +64,7 @@ delete from rewritten where id=3;
 select id from rewritten order by id;
 select id from inherited_deletes order by id;
 commit;
+select id from inherited_deletes order by id;
 select id from rewritten order by id;
 set session transaction_isolation=default;
 drop database clone_delete_ownership;
