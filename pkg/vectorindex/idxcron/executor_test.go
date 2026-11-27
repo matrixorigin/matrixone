@@ -53,8 +53,11 @@ type TestTask struct {
 	expected  bool
 }
 
-func stubIdxcronTxnRunner() *gostub.Stubs {
-	return gostub.Stub(&runTxnWithSqlContext, func(
+func stubIdxcronTxnRunner(t *testing.T) {
+	t.Helper()
+	original := runTxnWithSqlContext
+	t.Cleanup(func() { runTxnWithSqlContext = original })
+	runTxnWithSqlContext = func(
 		ctx context.Context,
 		_ engine.Engine,
 		_ client.TxnClient,
@@ -64,6 +67,7 @@ func stubIdxcronTxnRunner() *gostub.Stubs {
 		resolveVariableFunc func(string, bool, bool) (interface{}, error),
 		data any,
 		fn func(*sqlexec.SqlProcess, any) error,
+		_ ...client.TxnOption,
 	) error {
 		txnCtx := context.WithValue(ctx, defines.TenantIDKey{}, accountID)
 		txnCtx, cancel := context.WithTimeout(txnCtx, duration)
@@ -71,7 +75,7 @@ func stubIdxcronTxnRunner() *gostub.Stubs {
 		return fn(sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(
 			txnCtx, cnUUID, nil, accountID, resolveVariableFunc,
 		)), data)
-	})
+	}
 }
 
 func getTestCases(t *testing.T) []TestTask {
@@ -361,8 +365,7 @@ func TestIvfflatReindex(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 
-	txnStub := stubIdxcronTxnRunner()
-	defer txnStub.Reset()
+	stubIdxcronTxnRunner(t)
 	cnUUID := "a-b-c-d"
 	tableid := uint64(1)
 	dbname := "test"
@@ -434,8 +437,7 @@ func TestIvfflatReindexAutoUpdateOff(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 
-	txnStub := stubIdxcronTxnRunner()
-	defer txnStub.Reset()
+	stubIdxcronTxnRunner(t)
 	cnUUID := "a-b-c-d"
 	tableid := uint64(1)
 	dbname := "test"
