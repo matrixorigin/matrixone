@@ -274,7 +274,7 @@ func findMySQLDMLTargetInExprWithOuterTargets(
 		return "", false
 	}
 	var found string
-	walkGroupingSetOrderByExpr(expr, func(node tree.Expr) bool {
+	walkASTExpressions(expr, func(node tree.Expr) bool {
 		if found != "" {
 			return false
 		}
@@ -691,7 +691,7 @@ func mysqlExprReferencesOuterQualifier(
 		return false
 	}
 	found := false
-	walkGroupingSetOrderByExpr(expr, func(node tree.Expr) bool {
+	walkASTExpressions(expr, func(node tree.Expr) bool {
 		if found {
 			return false
 		}

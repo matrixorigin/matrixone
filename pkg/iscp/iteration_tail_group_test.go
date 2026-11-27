@@ -36,7 +36,8 @@ type tailGroupResult struct {
 }
 
 type recordingTailConsumer struct {
-	groups []tailGroupResult
+	groups    []tailGroupResult
+	sourceIDs []uint64
 }
 
 func (c *recordingTailConsumer) Consume(ctx context.Context, retriever DataRetriever) error {
@@ -61,8 +62,43 @@ func (c *recordingTailConsumer) Consume(ctx context.Context, retriever DataRetri
 			deleteBatches: len(data.deleteBatch.Batches),
 		}
 		c.groups = append(c.groups, group)
+		c.sourceIDs = append(c.sourceIDs, data.SourceTableID)
 		data.Done()
 	}
+}
+
+func TestISCPMultiSourceTailGroupsStaySeparate(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	makeSource := func(first int64) engine.ChangesHandle {
+		step := 0
+		return &iterationChangesHandle{next: func(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+			step++
+			switch step {
+			case 1:
+				return tailGroupBatch(mp, first, first), nil, engine.ChangesHandle_Tail_wip, nil
+			case 2:
+				return tailGroupBatch(mp, first+1, first+1), nil, engine.ChangesHandle_Tail_done, nil
+			default:
+				return nil, nil, engine.ChangesHandle_Tail_done, nil
+			}
+		}}
+	}
+	streams := []iterationSourceChanges{
+		{tableID: 11, changes: makeSource(1)},
+		{tableID: 22, changes: makeSource(3)},
+	}
+	consumer := new(recordingTailConsumer)
+	statuses := []*JobStatus{{}}
+	packer := types.NewPacker()
+	defer packer.Close()
+	runISCPTaskIterationConsumers(t.Context(), nil, testIterationContext(), streams,
+		[]Consumer{consumer}, statuses, nil, ISCPDataType_Tail, packer, mp,
+		1, 0, 1, 0, false, nil)
+	require.Zero(t, statuses[0].ErrorCode)
+	require.Equal(t, []uint64{11, 22}, consumer.sourceIDs)
+	require.Equal(t, []tailGroupResult{{inserts: 2, insertBatches: 2}, {inserts: 2, insertBatches: 2}}, consumer.groups)
+	require.Zero(t, mp.CurrNB())
 }
 
 func tailGroupBatch(mp *mpool.MPool, pk int64, ts int64) *batch.Batch {

@@ -260,6 +260,16 @@ func TestGetTableDefRestoresChecksFromSchemaExtra(t *testing.T) {
 	require.Equal(t, uint32(types.CharsetBinary), tableDef.DefaultCharset)
 }
 
+func TestGetTableDefPreservesColumnCollationRevision(t *testing.T) {
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	tableDef, _ := getTableDef(&TableItem{Name: "t"}, []engine.TableDef{
+		&engine.AttributeDef{Attr: engine.Attribute{Name: "s", Type: typ}},
+	})
+
+	require.Len(t, tableDef.Cols, 1)
+	require.Equal(t, uint32(types.CollationVersionV1), tableDef.Cols[0].Typ.CollationVersion)
+}
+
 func TestGetTableDefRestoresAutoIDCache(t *testing.T) {
 	for _, size := range []uint64{0, 1, 2, 1000000} {
 		tableDef, _ := getTableDef(&TableItem{

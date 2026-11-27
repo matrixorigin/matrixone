@@ -2968,6 +2968,17 @@ func TestCompileShuffleGroupSupportsOrderedGroupConcat(t *testing.T) {
 	require.IsType(t, &shuffle.Shuffle{}, result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
 }
 
+func TestMaterializedViewReadValidationGuards(t *testing.T) {
+	c := NewMockCompile(t)
+
+	// A compile without a query plan is a valid path for utility/internal
+	// statements and must not attempt MV catalog validation.
+	require.NoError(t, c.validateMaterializedViewReads())
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
+	require.NoError(t, c.validateMaterializedViewReads())
+
+}
+
 func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 	newNode := func() *plan.Node {
 		return &plan.Node{

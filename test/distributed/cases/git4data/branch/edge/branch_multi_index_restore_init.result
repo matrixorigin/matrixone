@@ -1,8 +1,5 @@
 set experimental_fulltext2_index = 1;
 set experimental_hnsw_index = 1;
-select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s') not like '%failed=[%' as all_cn_updated;
-➤ all_cn_updated[-7,1,0]  𝄀
-1
 drop database if exists issue27950_branch_indexes;
 create database issue27950_branch_indexes;
 use issue27950_branch_indexes;
@@ -25,6 +22,54 @@ set @leaf_id = (
 select rel_id from mo_catalog.mo_tables
 where reldatabase = database() and relname = 'leaf_t'
 );
+set @leaf_ft2_index = (
+select index_table_name from mo_catalog.mo_indexes
+where table_id = @leaf_id and name = 'ft'
+and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+limit 1
+);
+set @leaf_ft2_ready_sql = concat(
+'select coalesce(max(chunk_id), -1) >= 0 as ready from `', database(), '`.`',
+@leaf_ft2_index, '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_leaf_ft2 from @leaf_ft2_ready_sql;
+set @leaf_hnsw_meta = (
+select index_table_name from mo_catalog.mo_indexes
+where table_id = @leaf_id and name = 'hv'
+and algo = 'hnsw' and algo_table_type = 'hnsw_meta'
+limit 1
+);
+set @leaf_hnsw_ready_sql = concat(
+'select count(*) > 0 as ready from `', database(), '`.`',
+@leaf_hnsw_meta, '`'
+);
+prepare wait_leaf_hnsw from @leaf_hnsw_ready_sql;
+execute wait_leaf_ft2;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_leaf_ft2;
+execute wait_leaf_hnsw;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_leaf_hnsw;
+set @leaf_dml_done_ns = cast(unix_timestamp(now(6)) * 1000000000 as unsigned);
+set @leaf_cdc_ready_sql = concat(
+'select count(*) = 2 and coalesce(min(cast(substring_index(watermark, ''-'', 1) as unsigned)), 0) >= ',
+@leaf_dml_done_ns, ' as ready from mo_catalog.mo_iscp_log',
+' where table_id = ', @leaf_id, ' and drop_at is null',
+' and job_name in (''index_ft'', ''index_hv'')'
+);
+prepare wait_leaf_cdc from @leaf_cdc_ready_sql;
+execute wait_leaf_cdc;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_leaf_cdc;
+select count(*) from mo_catalog.mo_iscp_log
+where table_id = @leaf_id and drop_at is null
+and job_name in ('index_ft', 'index_hv')
+and job_state = 4;
+➤ count(*)[-5,64,0]  𝄀
+0
 explain select id from leaf_t
 where match(body) against('+branch' in boolean mode) order by id;
 -- @regex("Fulltext Index Scan on", true)
@@ -76,15 +121,6 @@ order by (l2_distance(v, '[0,0,0]') + 0) limit 2;
 data branch diff leaf_t against base_t output count;
 ➤ COUNT(*)[-5,0,0]  𝄀
 2
-select count(*) from mo_catalog.mo_iscp_log
-where table_id = @leaf_id and drop_at is null
-and job_name in ('index_ft', 'index_hv')
-and job_state = 4;
-➤ count(*)[-5,64,0]  𝄀
-0
-select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0') not like '%failed=[%' as all_cn_restored;
-➤ all_cn_restored[-7,1,0]  𝄀
-1
 drop database issue27950_branch_indexes;
 set experimental_fulltext2_index = 0;
 set experimental_hnsw_index = 0;

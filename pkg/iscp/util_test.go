@@ -257,8 +257,6 @@ func TestConvertColIntoSQLSpecialValues(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func ptrType(t types.Type) *types.Type { return &t }
-
 func TestRowFromVector(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
@@ -280,6 +278,56 @@ func TestRowFromVector(t *testing.T) {
 		sql = sql[:0]
 	}
 
+}
+
+func TestHistoricalRowValuesConvertIntoSQL(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
+	bat, expected := mockUtilVector(t, proc)
+	// RowIDReader uses vector.GetAny, whereas live batches use
+	// extractRowFromVector. Both representations must produce the same SQL.
+	for _, index := range []int{0, 2, 3, 4, 5, 6, 7} {
+		value := vector.GetAny(bat.Vecs[index], 0, true)
+		got, err := convertColIntoSql(t.Context(), value, bat.Vecs[index].GetType(), nil)
+		require.NoError(t, err)
+		require.Equal(t, expected[index], string(got))
+	}
+	for _, tc := range []struct {
+		typ   types.T
+		value any
+	}{
+		{types.T_bf16, types.BF16FromFloat32(1.5)},
+		{types.T_float16, types.Float16(0x3e00)},
+		{types.T_float8, types.Float8(0)},
+		{types.T_float4, types.Float4(0)},
+	} {
+		got, err := convertColIntoSql(t.Context(), tc.value, ptrType(tc.typ.ToType()), nil)
+		require.NoError(t, err)
+		_, err = mysql.ParseOne(t.Context(), "SELECT "+string(got), 1)
+		require.NoError(t, err)
+	}
+}
+
+func TestConvertNativeDecimalAndUUIDIntoSQL(t *testing.T) {
+	uuid := types.Uuid([16]byte{0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8})
+	tests := []struct {
+		name string
+		data any
+		typ  types.Type
+		want string
+	}{
+		{name: "decimal64", data: types.Decimal64(12345), typ: types.New(types.T_decimal64, 12, 2), want: "'123.45'"},
+		{name: "decimal128", data: types.Decimal128{B0_63: 12345}, typ: types.New(types.T_decimal128, 24, 2), want: "'123.45'"},
+		{name: "decimal256", data: types.Decimal256{B0_63: 12345}, typ: types.New(types.T_decimal256, 65, 2), want: "'123.45'"},
+		{name: "uuid", data: uuid, typ: types.New(types.T_uuid, 16, 0), want: "'00010002-0003-0004-0005-000600070008'"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := convertColIntoSql(t.Context(), test.data, &test.typ, nil)
+			require.NoError(t, err)
+			require.Equal(t, test.want, string(got))
+		})
+	}
 }
 
 // TestExtractRowNativeRepr covers the ReprNative path added for binary CDC consumers
@@ -318,6 +366,9 @@ func TestExtractRowNativeRepr(t *testing.T) {
 		{"decimal128", mk(types.New(types.T_decimal128, 16, 0), func(v *vector.Vector) {
 			vector.AppendFixed(v, types.Decimal128{B0_63: 1000, B64_127: 7}, false, proc.Mp())
 		}), types.Decimal128{B0_63: 1000, B64_127: 7}, true},
+		{"decimal256", mk(types.New(types.T_decimal256, 32, 0), func(v *vector.Vector) {
+			vector.AppendFixed(v, types.Decimal256{B0_63: 1000, B64_127: 7, B128_191: 11, B192_255: 13}, false, proc.Mp())
+		}), types.Decimal256{B0_63: 1000, B64_127: 7, B128_191: 11, B192_255: 13}, true},
 		{"uuid", mk(types.New(types.T_uuid, 16, 0), func(v *vector.Vector) {
 			vector.AppendFixed(v, types.Uuid([16]byte{0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8}), false, proc.Mp())
 		}), types.Uuid([16]byte{0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8}), true},

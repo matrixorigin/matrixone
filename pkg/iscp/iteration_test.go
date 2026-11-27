@@ -17,16 +17,276 @@ package iscp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
+
+type closeCountingChanges struct {
+	engine.ChangesHandle
+	closed int
+}
+
+func (c *closeCountingChanges) Close() error { c.closed++; return nil }
+
+type iterationMVEngine struct{ *mvTestCatalog }
+
+func (e iterationMVEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
+	return timestamp.Timestamp{PhysicalTime: 20}
+}
+
+func (e iterationMVEngine) New(context.Context, client.TxnOperator) error { return nil }
+
+func (r *materializedViewTestRelation) CopyTableDef(ctx context.Context) *planpb.TableDef {
+	return r.GetTableDef(ctx)
+}
+
+func TestSharedIterationSettlesInvalidMVWithoutOpeningItsSource(t *testing.T) {
+	info := &ConsumerInfo{ConsumerType: int8(ConsumerType_MaterializedView), DBName: "db", TableName: "healthy_mv",
+		RefreshSQL: "select service, count(*) requests from db.events group by service"}
+	anchor := &planpb.TableDef{DbName: "db", Name: "events", DbId: 1, TblId: 11, TableType: "r"}
+	healthySource := &planpb.TableDef{DbName: "db", Name: "extra", DbId: 1, TblId: 12, TableType: "r"}
+	catalog := newMVTestCatalog(t, info, anchor, healthySource)
+	stale := *info
+	stale.TableName = "removed_mv"
+	stale.SrcTables = append(append([]TableInfo(nil), info.SrcTables...), TableInfo{DBName: "db", DBID: 1, TableName: "gone", TableID: 13})
+	specs := []*JobSpec{{ConsumerInfo: stale}, {ConsumerInfo: *info}}
+	prev := []*JobStatus{{LSN: 1, Stage: JobStage_Running}, {LSN: 1, Stage: JobStage_Running}}
+	stub := gostub.StubFunc(&GetJobSpecs, specs, prev, []types.TS{{}, {}}, nil)
+	t.Cleanup(stub.Reset)
+	var settled []string
+	stub.Stub(&FlushJobStatusOnIterationState, func(_ context.Context, _ string, _ engine.Engine, _ client.TxnClient,
+		_ uint32, _ uint64, names []string, _ []uint64, _ []uint64, _ []*JobStatus,
+		_ *types.TS, state int8, _ []uint64) error {
+		require.Equal(t, ISCPJobState_Error, state)
+		settled = append(settled, names...)
+		return nil
+	})
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(catalog.txn, nil)
+	catalog.txn.(*mock_frontend.MockTxnOperator).EXPECT().Rollback(gomock.Any()).Return(nil)
+	opened := &closeCountingChanges{}
+	stop := errors.New("healthy source opened")
+	stub.Stub(&CollectChanges, func(ctx context.Context, rel engine.Relation, _, _ types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
+		switch rel.GetTableID(ctx) {
+		case 11:
+			return opened, nil
+		case 12:
+			return nil, stop
+		default:
+			t.Fatalf("stale source was opened: %d", rel.GetTableID(ctx))
+			return nil, nil
+		}
+	})
+	iter := &IterationContext{tableID: 11, accountID: 0,
+		sourceTables: []TableInfo{info.SrcTables[0], info.SrcTables[1], stale.SrcTables[2]},
+		jobNames:     []string{"stale", "healthy"}, jobIDs: []uint64{1, 2}, lsn: []uint64{2, 2},
+		stages: []int8{JobStage_Running, JobStage_Running}, fromTS: types.BuildTS(10, 0), toTS: types.BuildTS(20, 0)}
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+	require.ErrorIs(t, ExecuteIteration(t.Context(), "cn", iterationMVEngine{catalog}, txnClient, iter, mp), stop)
+	require.Equal(t, []string{"stale"}, settled)
+	require.Equal(t, []string{"healthy"}, iter.jobNames)
+	require.Equal(t, info.SrcTables, iter.sourceTables)
+	require.Equal(t, 1, opened.closed)
+}
+
+func TestExecuteIterationClosesEarlierSourcesOnOpenFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	first, second := mock_frontend.NewMockRelation(ctrl), mock_frontend.NewMockRelation(ctrl)
+	txn := mock_frontend.NewMockTxnOperator(ctrl)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	eng.EXPECT().LatestLogtailAppliedTime().Return(timestamp.Timestamp{PhysicalTime: 20})
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txn, nil)
+	eng.EXPECT().New(gomock.Any(), txn).Return(nil)
+	txn.EXPECT().Rollback(gomock.Any()).Return(nil)
+	eng.EXPECT().Database(gomock.Any(), "db", txn).Return(db, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), "first", nil).Return(first, nil).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), "second", nil).Return(second, nil)
+	first.EXPECT().GetTableID(gomock.Any()).Return(uint64(11)).AnyTimes()
+	second.EXPECT().GetTableID(gomock.Any()).Return(uint64(12))
+	first.EXPECT().CopyTableDef(gomock.Any()).Return(&planpb.TableDef{TblId: 11}).AnyTimes()
+	sources := []TableInfo{{DBName: "db", TableName: "first", TableID: 11}, {DBName: "db", TableName: "second", TableID: 12}}
+	stub := gostub.StubFunc(&GetJobSpecs, []*JobSpec{{ConsumerInfo: ConsumerInfo{SrcTable: sources[0], SrcTables: sources}}}, []*JobStatus{{LSN: 1, Stage: JobStage_Running}}, []types.TS{{}}, nil)
+	t.Cleanup(stub.Reset)
+	opened := &closeCountingChanges{}
+	failure := errors.New("second source open failed")
+	stub.Stub(&CollectChanges, func(_ context.Context, rel engine.Relation, _, _ types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
+		if rel == first {
+			return opened, nil
+		}
+		require.Same(t, second, rel)
+		return nil, failure
+	})
+	iter := &IterationContext{tableID: 11, sourceTables: sources, jobNames: []string{"job"}, jobIDs: []uint64{1}, lsn: []uint64{1}, stages: []int8{JobStage_Running}, fromTS: types.BuildTS(10, 0), toTS: types.BuildTS(20, 0)}
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+	require.ErrorIs(t, ExecuteIteration(t.Context(), "cn", eng, txnClient, iter, mp), failure)
+	require.Equal(t, 1, opened.closed, "partial acquisition must close each owned handle once")
+}
+
+func TestResolveSingleSourceInsertIndexesWithRetainedRowID(t *testing.T) {
+	def := &planpb.TableDef{
+		Cols:          []*planpb.ColDef{{Name: "id"}, {Name: "value"}, {Name: "__mo_cpkey"}, {Name: "__mo_commit_ts"}},
+		Name2ColIndex: map[string]int32{"id": 0, "value": 1},
+		Pkey:          &planpb.PrimaryKeyDef{Names: []string{"id"}},
+	}
+
+	tsIdx, pkIdx := resolveSingleSourceInsertIndexes(def, false)
+	require.Equal(t, 3, tsIdx)
+	require.Equal(t, 0, pkIdx)
+
+	tsIdx, pkIdx = resolveSingleSourceInsertIndexes(def, true)
+	require.Equal(t, 4, tsIdx)
+	require.Equal(t, 1, pkIdx)
+}
+
+func TestResolveMVBatchIndexesUsesRetainedBatchLayout(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+	def := &planpb.TableDef{
+		Pkey: &planpb.PrimaryKeyDef{Names: []string{"id"}},
+	}
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType(), mp)
+	defer bat.Clean(mp)
+
+	tsIdx, pkIdx := resolveMVBatchIndexes(bat, def, true, true)
+	require.Equal(t, 3, tsIdx)
+	require.Equal(t, 0, pkIdx)
+}
+
+func TestEnsureISCPInsertBatchAttrsRestoresPersistedObjectSchema(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+
+	def := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "event_id"},
+		{Name: "bytes_sent"},
+		{Name: objectio.DefaultCommitTS_Attr},
+	}}
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType(), mp)
+	var block types.Blockid
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(&block, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(7), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(99), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3], types.BuildTS(10, 0), false, mp))
+	bat.SetRowCount(1)
+
+	attrs, err := iscpInsertBatchAttrs(bat, def, true)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		catalog.Row_ID, "event_id", "bytes_sent", objectio.DefaultCommitTS_Attr,
+	}, attrs)
+
+	atomicBat := NewAtomicBatch(mp)
+	atomicBat.Attrs = attrs
+	packer := types.NewPacker()
+	defer packer.Close()
+	atomicBat.Append(packer, bat, 3, 0)
+	rows, err := materializedViewRowsFromBatch(atomicBat, true)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, int64(7), rows[0].Values["event_id"])
+	require.Equal(t, int64(99), rows[0].Values["bytes_sent"])
+	atomicBat.Close()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestEnsureISCPInsertBatchAttrsRejectsUnknownLayout(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+	def := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "event_id"},
+		{Name: objectio.DefaultCommitTS_Attr},
+	}}
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
+	defer bat.Clean(mp)
+
+	_, err := iscpInsertBatchAttrs(bat, def, true)
+	require.ErrorContains(t, err, "schema mismatch")
+}
+
+func TestAtomicBatchRetainsRowsWithDistinctRowIDs(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
+	var block types.Blockid
+	ts := types.BuildTS(1, 0)
+	for i := 0; i < 3; i++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(&block, uint32(i)), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(i+1), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], ts, false, mp))
+	}
+	bat.SetRowCount(3)
+	atomicBat := NewAtomicBatch(mp)
+	packer := types.NewPacker()
+	defer packer.Close()
+	atomicBat.Append(packer, bat, 2, 0)
+	require.Equal(t, 3, atomicBat.Rows.Len())
+	atomicBat.Close()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMaterializedViewDeleteRowsRetainCommitTS(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
+	var block types.Blockid
+	rowid := types.NewRowid(&block, 7)
+	commitTS := types.BuildTS(20, 3)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowid, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(42), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], commitTS, false, mp))
+	bat.SetRowCount(1)
+	atomicBat := NewAtomicBatch(mp)
+	atomicBat.Attrs = []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
+	defer atomicBat.Close()
+	packer := types.NewPacker()
+	defer packer.Close()
+	atomicBat.Append(packer, bat, 2, 1)
+	rows, err := materializedViewRowsFromBatch(atomicBat, false)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, rowid, rows[0].RowID)
+	require.Equal(t, commitTS, rows[0].CommitTS)
+	atomicBat.Close()
+	require.Zero(t, mp.CurrNB())
+}
 
 type iscpLogBatch struct {
 	jobNames   []string

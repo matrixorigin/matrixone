@@ -26,15 +26,18 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -49,6 +52,131 @@ type DataRetrieverConsumer interface {
 	Cancel(error)
 	IsCanceled() bool
 	Close()
+}
+
+// changePayloadConsumer lets a consumer opt out of decoding an iteration's
+// row payload when the iteration boundary alone is sufficient. Consumers that
+// do not implement this interface conservatively keep the historical payload
+// delivery behavior.
+type changePayloadConsumer interface {
+	NeedsChangePayload(dataType int8) bool
+}
+
+type iterationSourceChanges struct {
+	tableID uint64
+	rel     engine.Relation
+	def     *plan.TableDef
+	changes engine.ChangesHandle
+}
+
+// iscpInsertBatchAttrs derives the logical names from the source definition.
+// Object batches carry vectors without names; the ISCP stream owns this schema.
+func iscpInsertBatchAttrs(bat *batch.Batch, def *plan.TableDef, retainRowID bool) ([]string, error) {
+	if bat == nil || def == nil {
+		return nil, nil
+	}
+
+	attrs := make([]string, 0, len(def.Cols)+1)
+	if retainRowID {
+		attrs = append(attrs, catalog.Row_ID)
+	}
+	hasCommitTS := false
+	for _, col := range def.Cols {
+		if strings.EqualFold(col.Name, catalog.Row_ID) {
+			continue
+		}
+		attrs = append(attrs, col.Name)
+		hasCommitTS = hasCommitTS || strings.EqualFold(col.Name, objectio.DefaultCommitTS_Attr)
+	}
+	if !hasCommitTS {
+		attrs = append(attrs, objectio.DefaultCommitTS_Attr)
+	}
+	expectedCount := len(attrs)
+	if len(bat.Vecs) != expectedCount {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"ISCP insert batch schema mismatch: got %d vectors, expected %d",
+			len(bat.Vecs), expectedCount,
+		)
+	}
+	if retainRowID && (bat.Vecs[0] == nil || bat.Vecs[0].GetType().Oid != types.T_Rowid) {
+		return nil, moerr.NewInternalErrorNoCtx("ISCP insert batch is missing the retained rowid")
+	}
+	if len(bat.Vecs) == 0 || bat.Vecs[len(bat.Vecs)-1] == nil || bat.Vecs[len(bat.Vecs)-1].GetType().Oid != types.T_TS {
+		return nil, moerr.NewInternalErrorNoCtx("ISCP insert batch is missing the commit timestamp")
+	}
+	return attrs, nil
+}
+
+func resolveMVBatchIndexes(bat *batch.Batch, def *plan.TableDef, insert bool, retainRowID bool) (tsIdx, pkIdx int) {
+	tsIdx, pkIdx = -1, -1
+	if bat == nil || def == nil {
+		return -1, -1
+	}
+	if insert {
+		for i := len(bat.Vecs) - 1; i >= 0; i-- {
+			if bat.Vecs[i] != nil && bat.Vecs[i].GetType().Oid == types.T_TS {
+				tsIdx = i
+				break
+			}
+		}
+		if retainRowID {
+			for i, vec := range bat.Vecs {
+				if vec != nil && vec.GetType().Oid == types.T_Rowid {
+					return tsIdx, i
+				}
+			}
+		}
+		if len(def.Pkey.Names) == 1 {
+			for i, col := range def.Cols {
+				if col.Name == def.Pkey.Names[0] {
+					pkIdx = i
+					if retainRowID {
+						pkIdx++
+					}
+					break
+				}
+			}
+		}
+		if pkIdx < 0 {
+			pkIdx = len(bat.Vecs) - 2
+		}
+		return tsIdx, pkIdx
+	}
+	for i, vec := range bat.Vecs {
+		if vec != nil && vec.GetType().Oid == types.T_TS {
+			tsIdx = i
+			break
+		}
+	}
+	if retainRowID {
+		for i, vec := range bat.Vecs {
+			if vec != nil && vec.GetType().Oid == types.T_Rowid {
+				return tsIdx, i
+			}
+		}
+		pkIdx = 0
+	} else {
+		pkIdx = 0
+	}
+	return tsIdx, pkIdx
+}
+
+func resolveSingleSourceInsertIndexes(def *plan.TableDef, retainRowID bool) (tsIdx, pkIdx int) {
+	tsIdx = len(def.Cols) - 1
+	pkIdx = len(def.Cols) - 2
+	if retainRowID {
+		tsIdx++
+		pkIdx++
+	}
+	if len(def.Pkey.Names) == 1 {
+		pkIdx = int(def.Name2ColIndex[def.Pkey.Names[0]])
+		// CollectChanges prepends the retained rowid to the insert batch. The
+		// table definition indexes do not include that synthetic column.
+		if retainRowID {
+			pkIdx++
+		}
+	}
+	return
 }
 
 func (iterCtx *IterationContext) String() string {
@@ -227,9 +355,60 @@ func ExecuteIterationWithRuntime(
 		}
 		return nil
 	}
+	ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
+	keep := make([]int, 0, len(jobSpecs))
+	for i, spec := range jobSpecs {
+		if spec.ConsumerType == int8(ConsumerType_MaterializedView) {
+			d, loadErr := LoadMaterializedViewDefinition(ctxWithAccount, cnEngine, cnUUID, txnOp, &spec.ConsumerInfo, false)
+			if loadErr == nil {
+				var projected *ConsumerInfo
+				projected, loadErr = MaterializedViewInfo(d)
+				if loadErr == nil {
+					spec.ConsumerInfo = *projected
+				}
+			}
+			if loadErr != nil {
+				if !isPermanentError(loadErr) {
+					return loadErr
+				}
+				// A changed definition belongs to this job alone. Persist its
+				// terminal status before narrowing the shared iteration, so a
+				// healthy peer can still consume the selected range.
+				flushErr := FlushPermanentErrorMessage(ctx, cnUUID, cnEngine, cnTxnClient,
+					iterCtx.accountID, iterCtx.tableID,
+					[]string{iterCtx.jobNames[i]}, []uint64{iterCtx.jobIDs[i]},
+					[]uint64{iterCtx.lsn[i]}, []*JobStatus{prevStatus[i]},
+					loadErr.Error(), []uint64{preLSN[i]})
+				if flushErr != nil && !isSupersededIteration(flushErr) {
+					return flushErr
+				}
+				continue
+			}
+		}
+		keep = append(keep, i)
+	}
+	if len(keep) != len(jobSpecs) {
+		originalJobCount := len(jobSpecs)
+		jobSpecs = selectIterationJobs(jobSpecs, keep)
+		prevStatus = selectIterationJobs(prevStatus, keep)
+		committedWatermark = selectIterationJobs(committedWatermark, keep)
+		statuses = selectIterationJobs(statuses, keep)
+		preLSN = selectIterationJobs(preLSN, keep)
+		iterCtx.jobNames = selectIterationJobs(iterCtx.jobNames, keep)
+		iterCtx.jobIDs = selectIterationJobs(iterCtx.jobIDs, keep)
+		iterCtx.lsn = selectIterationJobs(iterCtx.lsn, keep)
+		if len(iterCtx.stages) == originalJobCount {
+			iterCtx.stages = selectIterationJobs(iterCtx.stages, keep)
+		} else {
+			iterCtx.stages = nil
+		}
+		iterCtx.sourceTables = iterationSourcesForJobs(jobSpecs)
+		if len(jobSpecs) == 0 {
+			return nil
+		}
+	}
 	dbName := jobSpecs[0].ConsumerInfo.SrcTable.DBName
 	tableName := jobSpecs[0].ConsumerInfo.SrcTable.TableName
-	ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
 	db, err := cnEngine.Database(ctxWithAccount, dbName, txnOp)
 	if err != nil {
 		return
@@ -292,15 +471,60 @@ func ExecuteIterationWithRuntime(
 		}
 		statuses[i].StartAt = startAt
 	}
-	changes, err := CollectChanges(
-		collectCtx,
-		rel, iterCtx.fromTS, iterCtx.toTS, mp,
-	)
-	if err != nil {
-		return
+	// MV consumers need the tombstone rowid to recover deleted rows.
+	for _, spec := range jobSpecs {
+		if spec.ConsumerType == int8(ConsumerType_MaterializedView) {
+			collectCtx = engine.WithRetainRowID(collectCtx, true)
+			break
+		}
 	}
-	if changes != nil {
-		defer changes.Close()
+
+	// A shared iteration is admitted from the union of all jobs' source
+	// tables. Collect every relation in that union; each consumer is filtered
+	// to its own source set when the batches are fanned out below.
+	sources := iterCtx.sourceTables
+	if len(sources) == 0 {
+		sources = []TableInfo{jobSpecs[0].ConsumerInfo.SrcTable}
+	}
+	if len(sources) > MaxSourceTables {
+		return moerr.NewInternalErrorNoCtxf("too many ISCP source tables: %d", len(sources))
+	}
+	changeStreams := make([]iterationSourceChanges, 0, len(sources))
+	for _, source := range sources {
+		sourceDB, sourceErr := cnEngine.Database(ctxWithAccount, source.DBName, txnOp)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		sourceRel, sourceErr := sourceDB.Relation(ctxWithAccount, source.TableName, nil)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		if source.TableID != 0 && sourceRel.GetTableID(ctxWithAccount) != source.TableID {
+			return moerr.NewInternalErrorNoCtx("source table id mismatch")
+		}
+		sourceChanges, sourceErr := CollectChanges(collectCtx, sourceRel, iterCtx.fromTS, iterCtx.toTS, mp)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		if sourceChanges == nil {
+			return moerr.NewInternalErrorNoCtx("source returned no change handle")
+		}
+		// Own each handle immediately: any later source lookup/open can fail.
+		defer sourceChanges.Close()
+		changeStreams = append(changeStreams, iterationSourceChanges{
+			tableID: sourceRel.GetTableID(ctxWithAccount),
+			rel:     sourceRel,
+			// Keep the legacy index path byte-for-byte for single-source jobs.
+			// Multi-source jobs need a per-relation definition because their
+			// source schemas can differ.
+			def: func() *plan.TableDef {
+				if len(sources) == 1 {
+					return nil
+				}
+				return sourceRel.CopyTableDef(ctxWithAccount)
+			}(),
+			changes: sourceChanges,
+		})
 	}
 	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
@@ -333,14 +557,14 @@ func ExecuteIterationWithRuntime(
 		}
 	}
 
-	insTSColIdx := len(tableDef.Cols) - 1
-	insCompositedPkColIdx := len(tableDef.Cols) - 2
+	retainRowID := engine.RetainRowIDFromContext(collectCtx)
+	insTSColIdx, insCompositedPkColIdx := resolveSingleSourceInsertIndexes(tableDef, retainRowID)
 	delTSColIdx := 1
 	delCompositedPkColIdx := 0
-	if len(tableDef.Pkey.Names) == 1 {
-		insCompositedPkColIdx = int(tableDef.Name2ColIndex[tableDef.Pkey.Names[0]])
+	if retainRowID {
+		delTSColIdx = 2
+		delCompositedPkColIdx = 1
 	}
-
 	typ := ISCPDataType_Tail
 	if iterCtx.fromTS.IsEmpty() {
 		typ = ISCPDataType_Snapshot
@@ -369,9 +593,10 @@ func ExecuteIterationWithRuntime(
 		ctxWithoutTimeout,
 		runtime,
 		iterCtx,
-		changes,
+		changeStreams,
 		consumers,
 		statuses,
+		tableDef,
 		typ,
 		packer,
 		mp,
@@ -379,6 +604,8 @@ func ExecuteIterationWithRuntime(
 		insCompositedPkColIdx,
 		delTSColIdx,
 		delCompositedPkColIdx,
+		retainRowID,
+		jobSpecs,
 	)
 	var finalErr error
 	for i, status := range statuses {
@@ -415,6 +642,32 @@ func ExecuteIterationWithRuntime(
 	}
 
 	return finalErr
+}
+
+func selectIterationJobs[T any](values []T, indices []int) []T {
+	selected := make([]T, 0, len(indices))
+	for _, index := range indices {
+		selected = append(selected, values[index])
+	}
+	return selected
+}
+
+// A scheduled union may include a source used only by a job whose definition
+// has since become invalid. Build the stream from the surviving catalog jobs.
+func iterationSourcesForJobs(specs []*JobSpec) []TableInfo {
+	seen := make(map[[2]uint64]struct{})
+	var sources []TableInfo
+	for _, spec := range specs {
+		for _, source := range spec.ConsumerInfo.SourceTableInfos() {
+			key := [2]uint64{source.DBID, source.TableID}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			sources = append(sources, source)
+		}
+	}
+	return sources
 }
 
 func reconcileIterationStages(iterCtx *IterationContext, statuses []*JobStatus) {
@@ -503,9 +756,10 @@ func runISCPTaskIterationConsumers(
 	ctx context.Context,
 	runtime *ISCPTaskExecutor,
 	iterCtx *IterationContext,
-	changes engine.ChangesHandle,
+	changeStreams []iterationSourceChanges,
 	consumers []Consumer,
 	statuses []*JobStatus,
+	defaultTableDef *plan.TableDef,
 	typ int8,
 	packer *types.Packer,
 	mp *mpool.MPool,
@@ -513,9 +767,23 @@ func runISCPTaskIterationConsumers(
 	insCompositedPkColIdx int,
 	delTSColIdx int,
 	delCompositedPkColIdx int,
+	retainRowID bool,
+	jobSpecs []*JobSpec,
 ) {
 	ctxWithCancel, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	needsChangePayload := false
+	for _, consumer := range consumers {
+		if consumer == nil {
+			continue
+		}
+		payloadConsumer, ok := consumer.(changePayloadConsumer)
+		if !ok || payloadConsumer.NeedsChangePayload(typ) {
+			needsChangePayload = true
+			break
+		}
+	}
 
 	dataRetrievers := make([]DataRetrieverConsumer, len(consumers))
 	for i := range consumers {
@@ -545,9 +813,10 @@ func runISCPTaskIterationConsumers(
 	changeHandelWg := sync.WaitGroup{}
 	changeHandelWg.Add(1)
 	go func() {
-		var dataLength int
-		var pendingInsert, pendingDelete *AtomicBatch
 		defer changeHandelWg.Done()
+		var dataLength int
+		streamIdx := 0
+		var pendingInsert, pendingDelete *AtomicBatch
 		defer func() {
 			if pendingInsert != nil {
 				closePendingTailBatch(pendingInsert)
@@ -557,18 +826,38 @@ func runISCPTaskIterationConsumers(
 			}
 			logutil.Infof("ISCP-Task iteration %s, data length %d", iterCtx.String(), dataLength)
 		}()
+		if !needsChangePayload {
+			// Complete-refresh consumers evaluate their source at toTS.
+			data := NewISCPData(true, nil, nil, nil)
+			active := make([]DataRetrieverConsumer, 0, len(dataRetrievers))
+			for _, retriever := range dataRetrievers {
+				if retriever != nil && !retriever.IsCanceled() {
+					active = append(active, retriever)
+				}
+			}
+			data.Set(len(active))
+			if len(active) == 0 {
+				data.Close()
+			}
+			for _, retriever := range active {
+				if !retriever.SetNextBatch(data) {
+					data.Done()
+				}
+			}
+			return
+		}
 		for {
 			select {
 			case <-ctxWithCancel.Done():
 				return
 			default:
 			}
+			stream := changeStreams[streamIdx]
 			var data *ISCPData
-			// Keep current source batches in this iteration's scope. Appending a
-			// batch transfers ownership to an AtomicBatch; every other path
-			// releases it before the next source read.
+			// Append transfers each source batch to an AtomicBatch. Clean
+			// batches that were not transferred on every error and skip path.
 			func() {
-				insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
+				insertData, deleteData, currentHint, readErr := stream.changes.Next(ctxWithCancel, mp)
 				defer func() {
 					if insertData != nil {
 						insertData.Clean(mp)
@@ -580,74 +869,119 @@ func runISCPTaskIterationConsumers(
 				if insertData != nil {
 					dataLength += insertData.RowCount()
 				}
-				// injection is for ut
 				if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
-					err = moerr.NewInternalErrorNoCtx(msg)
+					readErr = moerr.NewInternalErrorNoCtx(msg)
 					objectio.WaitForISCPExecutorFault(ctxWithCancel, msg)
 				}
-				if err != nil {
+				if readErr != nil {
 					jobNames := ""
 					for _, jobName := range iterCtx.jobNames {
 						jobNames = fmt.Sprintf("%s%s, ", jobNames, jobName)
 					}
-					logutil.Error(
-						"ISCP-Task sink iteration failed",
+					logutil.Error("ISCP-Task sink iteration failed",
 						zap.Uint32("tenantID", iterCtx.accountID),
 						zap.Uint64("tableID", iterCtx.tableID),
 						zap.String("jobName", jobNames),
-						zap.Error(err),
+						zap.Error(readErr),
 						zap.String("from", iterCtx.fromTS.ToString()),
-						zap.String("to", iterCtx.toTS.ToString()),
-					)
-					data = NewISCPData(true, nil, nil, err)
-				} else if insertData == nil && deleteData == nil {
-					if pendingInsert != nil || currentHint == engine.ChangesHandle_Tail_wip {
-						err = moerr.NewInternalErrorNoCtx("incomplete ISCP tail change group")
+						zap.String("to", iterCtx.toTS.ToString()))
+					data = NewISCPData(true, nil, nil, readErr)
+					return
+				}
+				if insertData == nil && deleteData == nil {
+					if pendingInsert != nil || pendingDelete != nil || currentHint == engine.ChangesHandle_Tail_wip {
+						data = NewISCPData(true, nil, nil, moerr.NewInternalErrorNoCtx("incomplete ISCP tail change group"))
+					} else if streamIdx+1 < len(changeStreams) {
+						streamIdx++
+					} else {
+						data = NewISCPData(true, nil, nil, nil)
 					}
-					data = NewISCPData(true, nil, nil, err)
-				} else {
-					switch currentHint {
-					case engine.ChangesHandle_Snapshot:
-						if typ != ISCPDataType_Snapshot || pendingInsert != nil || deleteData != nil {
-							err = moerr.NewInternalErrorNoCtx("invalid ISCP snapshot change group")
-							break
-						}
-						insertAtmBatch := NewAtomicBatch(mp)
-						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-						insertData = nil
-						data = NewISCPData(false, insertAtmBatch, nil, nil)
-					case engine.ChangesHandle_Tail_wip, engine.ChangesHandle_Tail_done:
-						if typ != ISCPDataType_Tail {
-							err = moerr.NewInternalErrorNoCtx("invalid ISCP tail change group")
-							break
-						}
-						pendingInsert = allocateAtomicBatchIfNeed(pendingInsert)
-						pendingDelete = allocateAtomicBatchIfNeed(pendingDelete)
-						pendingInsert.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-						insertData = nil
-						pendingDelete.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
-						deleteData = nil
-						if currentHint == engine.ChangesHandle_Tail_wip {
-							return
-						}
-						data = NewISCPData(false, pendingInsert, pendingDelete, nil)
-						pendingInsert, pendingDelete = nil, nil
-					default:
-						err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid hint %d", currentHint))
+					return
+				}
+				streamInsTSColIdx, streamInsPKColIdx := insTSColIdx, insCompositedPkColIdx
+				streamDelTSColIdx, streamDelPKColIdx := delTSColIdx, delCompositedPkColIdx
+				if stream.def != nil {
+					streamInsTSColIdx = len(stream.def.Cols) - 1
+					streamInsPKColIdx = len(stream.def.Cols) - 2
+					streamDelTSColIdx, streamDelPKColIdx = 1, 0
+					if retainRowID {
+						streamInsTSColIdx++
+						streamInsPKColIdx++
+						streamDelTSColIdx, streamDelPKColIdx = 2, 1
 					}
-					if err != nil {
-						data = NewISCPData(true, nil, nil, err)
+					if stream.def.Pkey != nil && len(stream.def.Pkey.Names) == 1 {
+						streamInsPKColIdx = int(stream.def.Name2ColIndex[stream.def.Pkey.Names[0]])
 					}
+				}
+				streamDef := stream.def
+				if streamDef == nil {
+					streamDef = defaultTableDef
+				}
+				var insertAttrs []string
+				if retainRowID && streamDef != nil {
+					if insertData != nil {
+						insertAttrs, readErr = iscpInsertBatchAttrs(insertData, streamDef, true)
+						if readErr == nil {
+							streamInsTSColIdx, streamInsPKColIdx = resolveMVBatchIndexes(insertData, streamDef, true, true)
+						}
+					}
+					if readErr == nil && deleteData != nil {
+						streamDelTSColIdx, streamDelPKColIdx = resolveMVBatchIndexes(deleteData, streamDef, false, true)
+					}
+				}
+				if readErr != nil {
+					data = NewISCPData(true, nil, nil, readErr)
+					return
+				}
+				switch currentHint {
+				case engine.ChangesHandle_Snapshot:
+					if typ != ISCPDataType_Snapshot || pendingInsert != nil || pendingDelete != nil || deleteData != nil {
+						readErr = moerr.NewInternalErrorNoCtx("invalid ISCP snapshot change group")
+						break
+					}
+					insertBatch := NewAtomicBatch(mp)
+					insertBatch.Attrs = insertAttrs
+					insertBatch.Append(packer, insertData, streamInsTSColIdx, streamInsPKColIdx)
+					insertData = nil
+					data = NewISCPData(false, insertBatch, nil, nil)
+					data.SetSourceTableID(stream.tableID)
+				case engine.ChangesHandle_Tail_wip, engine.ChangesHandle_Tail_done:
+					if typ != ISCPDataType_Tail {
+						readErr = moerr.NewInternalErrorNoCtx("invalid ISCP tail change group")
+						break
+					}
+					pendingInsert = allocateAtomicBatchIfNeed(pendingInsert)
+					pendingDelete = allocateAtomicBatchIfNeed(pendingDelete)
+					if insertData != nil {
+						pendingInsert.Attrs = insertAttrs
+					}
+					if retainRowID {
+						pendingDelete.Attrs = []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
+					}
+					pendingInsert.Append(packer, insertData, streamInsTSColIdx, streamInsPKColIdx)
+					insertData = nil
+					pendingDelete.Append(packer, deleteData, streamDelTSColIdx, streamDelPKColIdx)
+					deleteData = nil
+					if currentHint == engine.ChangesHandle_Tail_wip {
+						return
+					}
+					data = NewISCPData(false, pendingInsert, pendingDelete, nil)
+					data.SetSourceTableID(stream.tableID)
+					pendingInsert, pendingDelete = nil, nil
+				default:
+					readErr = moerr.NewInternalErrorNoCtxf("invalid hint %d", currentHint)
+				}
+				if readErr != nil {
+					data = NewISCPData(true, nil, nil, readErr)
 				}
 			}()
 			if data == nil {
 				continue
 			}
-
 			noMoreData := data.noMoreData
 			active := make([]DataRetrieverConsumer, 0, len(dataRetrievers))
 			for i := range dataRetrievers {
-				if dataRetrievers[i] != nil && !dataRetrievers[i].IsCanceled() {
+				if dataRetrievers[i] != nil && !dataRetrievers[i].IsCanceled() && consumerAcceptsSource(jobSpecs, i, data.SourceTableID) {
 					active = append(active, dataRetrievers[i])
 				}
 			}
@@ -666,7 +1000,6 @@ func runISCPTaskIterationConsumers(
 					data.Done()
 				}
 			}
-
 			if noMoreData {
 				return
 			}
@@ -734,6 +1067,30 @@ func runISCPTaskIterationConsumers(
 
 	cancel()
 	changeHandelWg.Wait()
+}
+
+// consumerAcceptsSource keeps a shared iteration's union stream from leaking
+// rows from one job's source set into another job. A zero source ID is the
+// legacy single-source/error shape and is intentionally broadcast.
+func consumerAcceptsSource(jobSpecs []*JobSpec, consumerIdx int, sourceID uint64) bool {
+	if sourceID == 0 || consumerIdx < 0 || consumerIdx >= len(jobSpecs) || jobSpecs[consumerIdx] == nil {
+		return true
+	}
+	sources := jobSpecs[consumerIdx].ConsumerInfo.SourceTableInfos()
+	if len(sources) == 0 {
+		return true
+	}
+	for _, source := range sources {
+		if source.TableID == 0 {
+			// Persisted legacy jobs may not have resolved source IDs yet. Keep
+			// their compatibility behavior until registration resolves them.
+			return true
+		}
+		if source.TableID == sourceID {
+			return true
+		}
+	}
+	return false
 }
 
 func flushFinalJobStatusOnIterationState(
@@ -1100,7 +1457,8 @@ func FlushPermanentErrorMessage(
 // store more of the source rows than it may, which fails the same way until it is rebuilt.
 func isPermanentError(err error) bool {
 	var target permanentError
-	if errors.As(err, &target) {
+	var invalid *mvdefinition.InvalidDefinition
+	if errors.As(err, &target) || errors.As(err, &invalid) || errors.Is(err, engine.ErrRowIDReadLimit) || errors.Is(err, errMaterializedViewDeltaSQLTooLarge) {
 		return true
 	}
 	var me *moerr.Error

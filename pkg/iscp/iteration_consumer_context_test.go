@@ -150,9 +150,10 @@ func runIterationConsumersWithStatusesForTest(
 			ctx,
 			nil,
 			iterCtx,
-			changes,
+			[]iterationSourceChanges{{tableID: iterCtx.tableID, changes: changes}},
 			consumers,
 			statuses,
+			nil,
 			typ,
 			packer,
 			mp,
@@ -160,6 +161,8 @@ func runIterationConsumersWithStatusesForTest(
 			0,
 			1,
 			0,
+			false,
+			nil,
 		)
 	}()
 	return done, statuses
@@ -540,9 +543,10 @@ func TestFencedConsumerFailureReleasesSharedReader(t *testing.T) {
 		defer close(done)
 		packer := types.NewPacker()
 		defer packer.Close()
-		runISCPTaskIterationConsumers(ctx, exec, iter, changes,
+		runISCPTaskIterationConsumers(ctx, exec, iter,
+			[]iterationSourceChanges{{tableID: iter.tableID, changes: changes}},
 			[]Consumer{fencedFailingIterationConsumer{runtime: exec, key: key}, healthy},
-			statuses, ISCPDataType_Tail, packer, mp, 1, 0, 1, 0)
+			statuses, nil, ISCPDataType_Tail, packer, mp, 1, 0, 1, 0, false, nil)
 	}()
 
 	select {
