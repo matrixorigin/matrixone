@@ -18,9 +18,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -88,6 +91,31 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, want, id)
 		}
+
+		t.Run("owner panic rolls back and permits retry", func(t *testing.T) {
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				_, err := conn.ExecContext(cleanupCtx, "drop database if exists "+target)
+				assert.NoError(t, err)
+			}()
+			var fired atomic.Bool
+			var cloneErr error
+			func() {
+				restore := frontend.SetLifecycleAdmissionLockEventHookForTest(func(label string, acquired bool) {
+					if !acquired && strings.HasPrefix(label, "mo_tables#") && strings.HasSuffix(label, "#Exclusive") && fired.CompareAndSwap(false, true) {
+						panic("injected clone owner panic")
+					}
+				})
+				defer restore()
+				_, cloneErr = conn.ExecContext(ctx, "create database "+target+" clone "+source)
+			}()
+			require.True(t, fired.Load(), "the private clone must reach target-table admission")
+			require.ErrorContains(t, cloneErr, "injected clone owner panic")
+			count(t, "select count(*) from mo_catalog.mo_database where datname='"+target+"'", 0)
+			exec(t, "create database "+target+" clone "+source)
+			count(t, "select count(*) from "+target+".native_index where id=1 and score=7", 1)
+		})
 
 		for _, historical := range []bool{false, true} {
 			t.Run(fmt.Sprintf("historical=%t", historical), func(t *testing.T) {

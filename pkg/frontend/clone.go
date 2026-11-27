@@ -1234,17 +1234,10 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 
-		if admission != nil {
-			defer func() {
-				defer trace.StartRegion(reqCtx, "clone finish transaction").End()
-				finishDataBranchComponent(reqCtx, deferred, &err)
-			}()
-		} else {
-			defer func() {
-				defer trace.StartRegion(reqCtx, "clone finish transaction").End()
-				err = deferred(err)
-			}()
-		}
+		defer finishDataBranchComponent(reqCtx, func(err error) error {
+			defer trace.StartRegion(reqCtx, "clone finish transaction").End()
+			return deferred(err)
+		}, &err)
 	}
 	if resolvedSource != nil {
 		accounts = cloneDatabaseAccountResolution{
