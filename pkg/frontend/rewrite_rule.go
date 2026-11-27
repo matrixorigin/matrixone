@@ -534,8 +534,11 @@ func roleRuleStatementSupport(stmt tree.Statement) (rewrite, supported bool) {
 			return false, false
 		}
 		return true, true
-	case *tree.DumpTable, *tree.MoDump, *tree.BackupStart, *tree.CreateCDC:
-		// Physical exports and asynchronous CDC reads do not enforce role rules.
+	case *tree.DumpTable, *tree.MoDump, *tree.BackupStart:
+		// Physical exports do not enforce role rules.
+		return false, false
+	case *tree.CreateCDC, *tree.ResumeCDC, *tree.RestartCDC:
+		// Each can activate a reader that does not enforce the caller's role rules.
 		return false, false
 	case *tree.CreateTable:
 		return stmt.AsSource != nil, true

@@ -369,8 +369,16 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	selectIDs(reader, "select * from policy_fixture.docs", 2)
 	assertDenied(vector, "embedding")
 	const createCDC = "create cdc policy_blocked 'unconfigured-source' 'mysql' 'unconfigured-sink' 'fixture' {}"
+	startCDC := []string{
+		"resume cdc task policy_blocked",
+		"resume cdc task policy_blocked ''",
+	}
 	_, err = admin.ExecContext(ctx, createCDC)
 	require.ErrorContains(t, err, "invalid uri format")
+	for _, statement := range startCDC {
+		_, err = admin.ExecContext(ctx, statement)
+		require.ErrorContains(t, err, "no cdc task found")
+	}
 
 	// A committed catalog change also applies to the next statement in
 	// the same request. The database belongs only to this cluster fixture.
@@ -453,8 +461,12 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	_, err = foldingAdmin.ExecContext(ctx, fmt.Sprintf("dump table policy_fixture.summary to '%s'", destination))
 	require.ErrorContains(t, err, "cannot enforce active role rules")
 	require.NoFileExists(t, filepath.Join(destination, "manifest.json"))
-	_, err = foldingAdmin.ExecContext(ctx, createCDC)
-	require.ErrorContains(t, err, "cannot enforce active role rules")
+	for _, statement := range append(startCDC, createCDC) {
+		_, err = foldingAdmin.ExecContext(ctx, statement)
+		require.ErrorContains(t, err, "cannot enforce active role rules")
+	}
+	exec(foldingAdmin, "pause cdc all")
+	exec(foldingAdmin, "drop cdc if exists policy_blocked")
 	var tasks int
 	require.NoError(t, foldingAdmin.QueryRowContext(ctx,
 		"select count(*) from mo_catalog.mo_cdc_task where task_name = 'policy_blocked'").Scan(&tasks))

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -178,6 +179,8 @@ func TestRoleRuleStatementSupportRejectsUnboundReads(t *testing.T) {
 		&tree.MoDump{},
 		&tree.BackupStart{},
 		&tree.CreateCDC{},
+		&tree.ResumeCDC{},
+		&tree.RestartCDC{},
 		&tree.Update{Where: &tree.Where{Expr: &tree.Subquery{}}},
 		&tree.Delete{Where: &tree.Where{Expr: &tree.Subquery{}}},
 		&tree.ShowTables{Where: &tree.Where{Expr: &tree.Subquery{}}},
@@ -185,6 +188,42 @@ func TestRoleRuleStatementSupportRejectsUnboundReads(t *testing.T) {
 		rewrite, supported := roleRuleStatementSupport(stmt)
 		require.False(t, rewrite)
 		require.False(t, supported)
+	}
+}
+
+func TestRoleRuleStatementSupportAllowsCDCInspectionAndCleanup(t *testing.T) {
+	for _, stmt := range []tree.Statement{&tree.ShowCDC{}, &tree.PauseCDC{}, &tree.DropCDC{}} {
+		rewrite, supported := roleRuleStatementSupport(stmt)
+		require.False(t, rewrite)
+		require.True(t, supported)
+	}
+}
+
+func TestRoleRuleCDCRefusesBeforeTaskService(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+	service := &testTaskService{dTask: []task.DaemonTask{{TaskStatus: task.TaskStatus_Paused}}}
+	getPu(ses.GetService()).TaskService = service
+	ses.ruleCache = &roleRuleCache{first: map[string]string{
+		"fixture.t": "select id from fixture.t where id = 1",
+	}}
+
+	for _, statement := range []string{
+		"resume cdc task fixture", "resume cdc task fixture ''",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			ec := newTestExecCtx(ctx, ctrl)
+			defer ec.Close()
+			resp, err := ExecRequest(ses, ec, &Request{cmd: COM_QUERY, data: []byte(statement)})
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			require.Equal(t, ErrorResponse, resp.category)
+			require.ErrorContains(t, resp.GetData().(error), "cannot enforce active role rules")
+			require.Empty(t, service.data)
+			require.Equal(t, task.TaskStatus_Paused, service.dTask[0].TaskStatus)
+		})
 	}
 }
 
