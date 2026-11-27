@@ -15,6 +15,7 @@
 package geo
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 	"strconv"
@@ -186,7 +187,10 @@ func geoJSONFractionDigits(s string) int {
 }
 
 // ParseGeoJSON decodes an RFC 7946 GeoJSON geometry object. Feature and
-// FeatureCollection objects are not geometries and are rejected.
+// FeatureCollection objects are not geometries and are rejected. Every
+// Geometry object must carry its type's required array member — coordinates
+// for the coordinate-bearing types, geometries for a GeometryCollection — at
+// the top level and in every child Geometry object.
 func ParseGeoJSON(data []byte) (Geometry, error) {
 	var raw struct {
 		Type        string            `json:"type"`
@@ -199,7 +203,47 @@ func ParseGeoJSON(data []byte) (Geometry, error) {
 	return parseGeoJSONObj(raw.Type, raw.Coordinates, raw.Geometries)
 }
 
+// geoJSONNull is the raw text of a JSON null member value.
+var geoJSONNull = []byte("null")
+
+// requireGeoJSONMemberArray enforces the RFC 7946 section-3.1 required-member
+// rule for the raw coordinates member of a coordinate-bearing Geometry object:
+// an absent member and a JSON null member are both invalid geometry, while any
+// other value — an explicit empty array included — decodes normally so EMPTY
+// geometry behavior is unchanged. A GeometryCollection's geometries member is
+// validated from its typed decode instead: a malformed value fails the
+// surrounding unmarshal, and an absent or JSON null member yields a nil slice.
+func requireGeoJSONMemberArray(member json.RawMessage, typ, name string) error {
+	if len(member) == 0 {
+		return moerr.NewInvalidInputNoCtxf("invalid GeoJSON %s: missing %s", typ, name)
+	}
+	if bytes.Equal(member, geoJSONNull) {
+		return moerr.NewInvalidInputNoCtxf("invalid GeoJSON %s: %s is null", typ, name)
+	}
+	return nil
+}
+
 func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage) (Geometry, error) {
+	// Validate the required member at the common parser boundary before any
+	// member decoding; this covers the top level and every child dispatch. The
+	// geometries member arrives already typed from the surrounding struct
+	// decode, where a malformed value fails that unmarshal, and an absent or
+	// JSON null member yields a nil slice while an explicit [] stays non-nil;
+	// the raw coordinates member keeps its explicit absence/null guard here.
+	switch typ {
+	case "Point", "LineString", "Polygon", "MultiPoint", "MultiLineString", "MultiPolygon":
+		if err := requireGeoJSONMemberArray(coords, typ, "coordinates"); err != nil {
+			return nil, err
+		}
+	case "GeometryCollection":
+		if geoms == nil {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON %s: geometries is required", typ)
+		}
+	case "":
+		return nil, moerr.NewInvalidInputNoCtxf("invalid GeoJSON: missing type")
+	default:
+		return nil, moerr.NewInvalidInputNoCtxf("unsupported GeoJSON type %q", typ)
+	}
 	switch typ {
 	case "Point":
 		var c []float64
@@ -277,6 +321,8 @@ func parseGeoJSONObj(typ string, coords json.RawMessage, geoms []json.RawMessage
 		}
 		return MultiPolygon{Polygons: polys}, nil
 	case "GeometryCollection":
+		// geoms was required as a present array above; apply the same
+		// required-member rule to every child object.
 		subs := make([]Geometry, 0, len(geoms))
 		for _, rg := range geoms {
 			var sub struct {
