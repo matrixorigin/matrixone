@@ -41,12 +41,13 @@ type Checker interface {
 }
 
 type CheckerCommonFields struct {
-	ServiceID   string
-	Cfg         Config
-	Alloc       util.IDAllocator
-	Cluster     pb.ClusterInfo
-	User        pb.TaskTableUser
-	CurrentTick uint64
+	ServiceID        string
+	Cfg              Config
+	Alloc            util.IDAllocator
+	Cluster          pb.ClusterInfo
+	User             pb.TaskTableUser
+	CurrentTick      uint64
+	TNWALAssignments map[uint64]pb.TNWALAssignment
 }
 
 func NewCheckerCommonFields(

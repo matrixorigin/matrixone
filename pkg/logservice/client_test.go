@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -500,6 +501,249 @@ func TestClientUpdateLeaseholderID(t *testing.T) {
 		assert.Equal(t, uint64(8), lsn)
 	}
 	RunClientTest(t, false, nil, fn)
+}
+
+func TestTNWriterReconnectDoesNotReclaimLease(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, _ *Service, cfg ClientConfig, _ Client) {
+		ctx, cancel := context.WithTimeout(t.Context(), testIOTimeout)
+		defer cancel()
+		oldFactory := NewTNWriterClientFactory("", cfg, testIOTimeout)
+		old, err := oldFactory(t.Context())
+		require.NoError(t, err)
+		defer old.Close()
+		oldRecord := old.GetLogRecord(8)
+		first, err := old.Append(ctx, oldRecord)
+		require.NoError(t, err)
+
+		cfg.TNReplicaID++
+		newFactory := NewTNWriterClientFactory("", cfg, testIOTimeout)
+		replacement, err := newFactory(t.Context())
+		require.NoError(t, err)
+		defer replacement.Close()
+		newRecord := replacement.GetLogRecord(8)
+		newPSN, err := replacement.Append(ctx, newRecord)
+		require.NoError(t, err)
+
+		old.(*managedClient).resetClient()
+		_, err = old.Append(ctx, oldRecord)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
+		stale, err := oldFactory(t.Context())
+		require.NoError(t, err)
+		defer stale.Close()
+		_, err = stale.Append(ctx, oldRecord)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
+
+		// A read starting before the handoff retains both accepted writes.
+		records, _, err := replacement.Read(ctx, first, math.MaxUint64)
+		require.NoError(t, err)
+		var accepted []Lsn
+		for _, record := range records {
+			if record.Type == pb.UserRecord {
+				accepted = append(accepted, record.Lsn)
+			}
+		}
+		require.Equal(t, []Lsn{first, newPSN}, accepted)
+
+		// Reads starting after the handoff also know the active lease, even
+		// though the lease update is outside this page.
+		records, _, err = replacement.Read(ctx, newPSN+1, math.MaxUint64)
+		require.NoError(t, err)
+		require.Len(t, records, 2)
+		for i, record := range records {
+			require.Equal(t, newPSN+1+uint64(i), record.Lsn)
+			require.Equal(t, pb.LeaseRejected, record.Type)
+			require.Empty(t, record.Data)
+		}
+	})
+}
+
+type failLeaseClaimBeforeSend struct {
+	morpc.RPCClient
+	err error
+}
+
+func (c *failLeaseClaimBeforeSend) Send(ctx context.Context, addr string, req morpc.Message) (*morpc.Future, error) {
+	if req.(*RPCRequest).Request.Method == pb.CLAIM_TN_LEASE {
+		return nil, c.err
+	}
+	return c.RPCClient.Send(ctx, addr, req)
+}
+
+func TestTNWriterLeaseClaimFailure(t *testing.T) {
+	t.Run("before dispatch", func(t *testing.T) {
+		RunClientTest(t, false, nil, func(t *testing.T, _ *Service, cfg ClientConfig, _ Client) {
+			sendErr := errors.New("lease request rejected before dispatch")
+			originalConnect := connectToLogServiceAddressFn
+			defer func() { connectToLogServiceAddressFn = originalConnect }()
+			connectToLogServiceAddressFn = func(ctx context.Context, sid string, addr string, cfg ClientConfig) (*client, error) {
+				c, err := originalConnect(ctx, sid, addr, cfg)
+				if err == nil {
+					c.client = &failLeaseClaimBeforeSend{RPCClient: c.client, err: sendErr}
+				}
+				return c, err
+			}
+			cfg.TNReplicaID++
+			factory := NewTNWriterClientFactory("", cfg, testIOTimeout)
+			c, err := factory(t.Context())
+			require.ErrorIs(t, err, sendErr)
+			require.Nil(t, c)
+
+			connectToLogServiceAddressFn = originalConnect
+			c, err = factory(t.Context())
+			require.NoError(t, err)
+			defer c.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), testIOTimeout)
+			defer cancel()
+			_, err = c.Append(ctx, c.GetLogRecord(8))
+			require.NoError(t, err)
+		})
+	})
+
+	t.Run("after dispatch", func(t *testing.T) {
+		RunClientTest(t, false, nil, func(t *testing.T, service *Service, cfg ClientConfig, incumbent Client) {
+			ctx, cancel := context.WithTimeout(t.Context(), testIOTimeout)
+			defer cancel()
+			originalConnect := connectToLogServiceAddressFn
+			defer func() { connectToLogServiceAddressFn = originalConnect }()
+			applied := make(chan error, 1)
+			connectToLogServiceAddressFn = func(connectCtx context.Context, sid string, addr string, cfg ClientConfig) (*client, error) {
+				opts := morpc.WithBackendFilter(func(msg morpc.Message, _ string) bool {
+					req, ok := msg.(*RPCRequest)
+					if !ok || req.Request.Method != pb.CLAIM_TN_LEASE {
+						return true
+					}
+					// Apply the grant in Raft but withhold the response
+					// from the caller waiting on the RPC future.
+					applied <- service.store.getOrExtendTNLease(ctx, req.Request.LogRequest.ShardID, req.Request.LogRequest.TNID)
+					return false
+				})
+				return originalConnect(SetBackendOptions(connectCtx, opts), sid, addr, cfg)
+			}
+			cfg.TNReplicaID++
+			factory := NewTNWriterClientFactory("", cfg, testIOTimeout)
+			c, claimErr := factory(t.Context())
+			require.ErrorIs(t, claimErr, ErrTNLeaseClaimUncertain)
+			require.Nil(t, c)
+			select {
+			case err := <-applied:
+				require.NoError(t, err)
+			default:
+				t.Fatal("the request did not reach the dispatch fault")
+			}
+			_, err := incumbent.Append(ctx, incumbent.GetLogRecord(8))
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
+
+			connectToLogServiceAddressFn = originalConnect
+			retry, err := NewTNWriterClientFactory("", cfg, testIOTimeout)(t.Context())
+			require.NoError(t, err)
+			defer retry.Close()
+			_, err = retry.Append(ctx, retry.GetLogRecord(8))
+			require.NoError(t, err)
+
+			cfg.TNReplicaID++
+			successor, err := NewTNWriterClientFactory("", cfg, testIOTimeout)(t.Context())
+			require.NoError(t, err)
+			defer successor.Close()
+			connectToLogServiceAddressFn = func(context.Context, string, string, ClientConfig) (*client, error) {
+				return nil, errors.New("cached claim reopened a transport")
+			}
+			c, err = factory(t.Context())
+			require.ErrorIs(t, err, claimErr)
+			require.Nil(t, c)
+			_, err = successor.Append(ctx, successor.GetLogRecord(8))
+			require.NoError(t, err)
+		})
+	})
+}
+
+func TestStandbyWriterWithNoLease(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, service *Service, cfg ClientConfig, _ Client) {
+		const standbyShardID, standbyReplicaID = 3, 3
+		require.NoError(t, service.store.startReplica(standbyShardID, standbyReplicaID,
+			map[uint64]string{standbyReplicaID: service.ID()}, false))
+		ctx, cancel := context.WithTimeout(t.Context(), testIOTimeout)
+		defer cancel()
+		cfg.LogShardID, cfg.TNReplicaID = standbyShardID, 0
+		standby, err := NewStandbyClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer standby.Close()
+		rec := standby.GetLogRecord(8)
+		lsn, err := standby.Append(ctx, rec)
+		require.NoError(t, err)
+		records, _, err := standby.Read(ctx, lsn, math.MaxUint64)
+		require.NoError(t, err)
+		require.Len(t, records, 1)
+		require.Equal(t, pb.UserRecord, records[0].Type)
+		require.Equal(t, rec.Data, records[0].Data)
+	})
+}
+
+func TestTNLeaseRejectsStaleStartupAndDelayedClaim(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, service *Service, cfg ClientConfig, _ Client) {
+		const haKeeperReplica uint64 = 2
+		require.NoError(t, service.store.startHAKeeperReplica(haKeeperReplica,
+			map[uint64]string{haKeeperReplica: service.ID()}, false))
+		require.NoError(t, service.store.setInitialClusterInfo(1, 1, 1, 0, nil, nil))
+		ctx, cancel := context.WithTimeout(t.Context(), 2*testIOTimeout)
+		defer cancel()
+
+		assign := func(term, replicaID uint64) pb.TNWALAssignment {
+			t.Helper()
+			require.NoError(t, service.store.addScheduleCommands(ctx, term, []pb.ScheduleCommand{{
+				UUID:        "assigned-tn",
+				ServiceType: pb.TNService,
+				ConfigChange: &pb.ConfigChange{
+					ChangeType: pb.StartReplica,
+					Replica: pb.Replica{
+						ShardID: 2, LogShardID: cfg.LogShardID, ReplicaID: replicaID,
+					},
+				},
+			}}))
+			state, err := service.getTNLeaseCheckerState(ctx)
+			require.NoError(t, err)
+			assignment := state.TNWALAssignments[cfg.LogShardID]
+			require.Equal(t, replicaID, assignment.ReplicaID)
+			require.NotZero(t, assignment.Epoch)
+			return assignment
+		}
+		oldCfg := cfg
+		oldOwner := assign(1, oldCfg.TNReplicaID)
+		old, err := NewTNWriterClientFactory("", oldCfg, testIOTimeout)(t.Context())
+		require.NoError(t, err)
+		defer old.Close()
+		_, err = old.Append(ctx, old.GetLogRecord(8))
+		require.NoError(t, err)
+
+		// A replacement's assignment can be newer even with a lower replica ID.
+		cfg.TNReplicaID--
+		replacementOwner := assign(2, cfg.TNReplicaID)
+		require.Greater(t, replacementOwner.Epoch, oldOwner.Epoch)
+		replacement, err := NewTNWriterClientFactory("", cfg, testIOTimeout)(t.Context())
+		require.NoError(t, err)
+		defer replacement.Close()
+		_, err = replacement.Append(ctx, replacement.GetLogRecord(8))
+		require.NoError(t, err)
+
+		// A restarted TN constructs a fresh factory from the old disk identity.
+		c, err := NewTNWriterClientFactory("", oldCfg, testIOTimeout)(t.Context())
+		require.Nil(t, c)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
+		// An old request might already have read its assignment before takeover.
+		err = service.store.proposeTNLease(ctx, cfg.LogShardID,
+			getTNLeaseClaimCmd(oldOwner.ReplicaID, oldOwner.Epoch))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
+		c, err = NewClient(ctx, "", oldCfg)
+		require.Nil(t, c)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
+
+		_, err = replacement.Append(ctx, replacement.GetLogRecord(8))
+		require.NoError(t, err)
+		c, err = NewTNWriterClientFactory("", cfg, testIOTimeout)(t.Context())
+		require.NoError(t, err)
+		defer c.Close()
+		_, err = c.Append(ctx, c.GetLogRecord(8))
+		require.NoError(t, err)
+	})
 }
 
 func TestClientAppend(t *testing.T) {

@@ -51,6 +51,7 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	tsm1.state.NextID = 12345
 	tsm1.state.LogServiceRecoveryPending = true
 	tsm1.state.IDWatermarkRestoreGeneration = 7
+	tsm1.state.TNWALAssignments = map[uint64]pb.TNWALAssignment{1: {ReplicaID: 10, Epoch: 9}}
 	tsm1.state.LogShards["test1"] = 23456
 	tsm1.state.LogShards["test2"] = 34567
 
@@ -61,6 +62,7 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	assert.Equal(t, tsm1.state.LogShards, tsm2.state.LogShards)
 	assert.True(t, tsm2.state.LogServiceRecoveryPending)
 	assert.Equal(t, uint64(7), tsm2.state.IDWatermarkRestoreGeneration)
+	assert.Equal(t, tsm1.state.TNWALAssignments, tsm2.state.TNWALAssignments)
 	assert.True(t, tsm1.replicaID != tsm2.replicaID)
 }
 

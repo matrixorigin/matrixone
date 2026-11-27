@@ -38,6 +38,24 @@ func TestMain(m *testing.M) {
 	m.Run()
 }
 
+func TestAssignedTNReplicaSurvivesHigherRetiredReport(t *testing.T) {
+	InitCheckState("sid")
+	const tick, shardID, logShardID = 20, 2, 1
+	commonFields := hakeeper.NewCheckerCommonFields("sid", hakeeper.Config{}, &mockIDAllocator{},
+		pb.ClusterInfo{TNShards: []metadata.TNShardRecord{{ShardID: shardID, LogShardID: logShardID}}},
+		pb.TaskTableUser{}, tick)
+	commonFields.TNWALAssignments = map[uint64]pb.TNWALAssignment{logShardID: {ReplicaID: 9, Epoch: 2}}
+	state := pb.TNState{Stores: map[string]pb.TNStoreInfo{
+		"retired": {Tick: tick, Shards: []pb.TNShardInfo{{ShardID: shardID, ReplicaID: 10}}},
+		"owner":   {Tick: tick, Shards: []pb.TNShardInfo{{ShardID: shardID, ReplicaID: 9}}},
+	}}
+	ops := NewTNServiceChecker(commonFields, state, operator.NewController()).Check()
+	require.Len(t, ops, 1)
+	require.Equal(t, []operator.OpStep{operator.RemoveTnReplica{
+		StoreID: "retired", ShardID: shardID, ReplicaID: 10, LogShardID: logShardID,
+	}}, ops[0].OpSteps())
+}
+
 func TestExpiredReplicas(t *testing.T) {
 	replicaIDs := []uint64{11, 13, 12, 14, 15}
 	retFirst := expiredReplicas(mockTnShard(10, nil, replicaIDs))

@@ -90,23 +90,24 @@ func (c *tnServiceChecker) Check() []*operator.Operator {
 	for _, node := range stores.ExpiredStores() {
 		runtime.ServiceRuntime(c.ServiceID).Logger().Info("node is expired", zap.String("uuid", node.ID))
 	}
+	mapper := parseClusterInfo(c.Cluster)
+	operators := c.removeRetiredReplicas(reportedShards, mapper)
 	pending := c.pendingStarts(stores, reportedShards)
 	if len(stores.WorkingStores()) < 1 {
 		runtime.ServiceRuntime(c.ServiceID).Logger().Warn("no working tn stores")
 		return nil
 	}
 
-	mapper := parseClusterInfo(c.Cluster)
-
-	var operators []*operator.Operator
+	var starts []*operator.Operator
 	for _, record := range c.Cluster.TNShards {
 		if op := pending[record.ShardID]; op != nil {
-			operators = append(operators, op)
+			starts = append(starts, op)
 		}
 	}
-	slices.SortFunc(operators, func(a, b *operator.Operator) int {
+	slices.SortFunc(starts, func(a, b *operator.Operator) int {
 		return cmp.Compare(a.ShardID(), b.ShardID())
 	})
+	operators = append(operators, starts...)
 
 	// 1. check reported tn state
 	operators = append(operators,
@@ -138,6 +139,38 @@ func (c *tnServiceChecker) Check() []*operator.Operator {
 	return operators
 }
 
+// Reports from a retired replica cannot cancel its replacement or influence
+// the selection of the writer. Stop it before sending any start to its store.
+func (c *tnServiceChecker) removeRetiredReplicas(reports *reportedShards, mapper tnShardToLogShard) []*operator.Operator {
+	var operators []*operator.Operator
+	ids := slices.Clone(reports.shardIDs)
+	slices.Sort(ids)
+	for _, id := range ids {
+		shard := reports.shards[id]
+		logShardID := mapper[id]
+		assignment := c.TNWALAssignments[logShardID]
+		if assignment.Epoch == 0 {
+			continue
+		}
+		slices.SortFunc(shard.working, func(a, b *tnReplica) int {
+			return cmp.Or(cmp.Compare(a.replicaID, b.replicaID), cmp.Compare(a.storeID, b.storeID))
+		})
+		working := shard.working[:0]
+		for _, replica := range shard.working {
+			if replica.replicaID == assignment.ReplicaID {
+				working = append(working, replica)
+				continue
+			}
+			operators = append(operators, operator.NewOperator(
+				"tnservice", id, operator.NoopEpoch,
+				newRemoveStep(replica.storeID, id, replica.replicaID, logShardID),
+			))
+		}
+		shard.working = working
+	}
+	return operators
+}
+
 // pendingStarts reconciles the controller's existing start attempts with real
 // reports. The per-check map is an index, not another owner of retry state.
 func (c *tnServiceChecker) pendingStarts(stores *util.ClusterStores, reports *reportedShards) map[uint64]*operator.Operator {
@@ -159,7 +192,9 @@ func (c *tnServiceChecker) pendingStarts(stores *util.ClusterStores, reports *re
 			}
 			shard, err := reports.getShard(record.ShardID)
 			reported := err == nil && len(shard.workingReplicas()) != 0
-			if op.IsEnd() || working[start.StoreID] == nil || reported || pending[record.ShardID] != nil {
+			assignment := c.TNWALAssignments[record.LogShardID]
+			retired := assignment.Epoch != 0 && start.ReplicaID != assignment.ReplicaID
+			if op.IsEnd() || working[start.StoreID] == nil || reported || retired || pending[record.ShardID] != nil {
 				// Another replica ID can already own this shard: the receiver is
 				// shard-keyed and cannot replace it by replaying an obsolete start.
 				c.controller.RemoveOperator(op)

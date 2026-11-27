@@ -16,6 +16,7 @@ package logservicedriver
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,8 +32,11 @@ import (
 )
 
 const (
-	MaxReadBatchSize = mpool.MB * 64
+	MaxReadBatchSize          = mpool.MB * 64
+	defaultDriverCloseTimeout = 4 * time.Minute
 )
+
+var errWALCloseTimeout = moerr.NewInternalErrorNoCtx("log service WAL close")
 
 type replayState struct {
 	mode   driver.ReplayMode
@@ -82,37 +86,74 @@ type LogServiceDriver struct {
 
 	commitLoop      sm.Queue
 	commitWaitQueue chan any
+	pendingWait     atomic.Int64
+	pendingMu       sync.Mutex
+	pendingZero     chan struct{}
 	waitCommitLoop  *sm.Loop
 	postCommitQueue chan any
 	truncateQueue   sm.Queue
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	truncateCtx    context.Context
+	cancelTruncate context.CancelFunc
+	closeC         chan struct{}
+	shutdownDone   chan struct{}
 
-	workers *ants.Pool
+	workers   *ants.Pool
+	closeOnce sync.Once
+	closeErr  error
+
+	onAppendFailure func(error)
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
+	d, err := OpenLogServiceDriver(context.Background(), cfg)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+func OpenLogServiceDriver(ctx context.Context, cfg *Config) (*LogServiceDriver, error) {
 	start := time.Now()
+	clientPool, err := openClientPool(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
 	// the tasks submitted to LogServiceDriver.workers append entries to logservice,
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
 	// the goroutine the append task belongs to.
-	pool, _ := ants.NewPool(cfg.ClientMaxCount, ants.WithPanicHandler(func(v interface{}) {
-		panic(v)
-	}))
+	pool, err := ants.NewPool(cfg.ClientMaxCount,
+		ants.WithNonblocking(true),
+		ants.WithPanicHandler(func(v interface{}) {
+			panic(v)
+		}))
+	if err != nil {
+		clientPool.Close()
+		return nil, err
+	}
 
 	d := &LogServiceDriver{
-		clientPool:          newClientPool(cfg),
+		clientPool:          clientPool,
 		committer:           getCommitter(),
 		sequenceNumberState: newSequenceNumberState(),
 		commitWaitQueue:     make(chan any, 10000),
 		postCommitQueue:     make(chan any, 10000),
 		workers:             pool,
+		closeC:              make(chan struct{}),
+		shutdownDone:        make(chan struct{}),
+		onAppendFailure: func(err error) {
+			logutil.Fatal(
+				"Wal-Cannot-Append",
+				zap.Error(err),
+			)
+		},
 	}
+	d.pendingZero = make(chan struct{})
+	close(d.pendingZero)
 
 	d.config = *cfg
-	d.ctx, d.cancel = context.WithCancel(context.Background())
+	d.truncateCtx, d.cancelTruncate = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
 	d.commitLoop.Start()
 	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, nil, d.onWaitCommitted, 10000)
@@ -124,7 +165,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		zap.String("config", cfg.String()),
 		zap.Duration("duration", time.Since(start)),
 	)
-	return d
+	return d, nil
 }
 
 func (d *LogServiceDriver) GetMaxClient() int {
@@ -136,15 +177,86 @@ func (d *LogServiceDriver) MaxWALRecordSize() int {
 }
 
 func (d *LogServiceDriver) Close() error {
-	d.clientPool.Close()
-	d.cancel()
+	return d.CloseAfterDrain(nil)
+}
+
+// ShutdownDone closes after the queues, workers, and LogService clients stop.
+func (d *LogServiceDriver) ShutdownDone() <-chan struct{} {
+	return d.shutdownDone
+}
+
+// CloseAfterDrain includes the WAL store's accepted appends and queue shutdown
+// in the driver's close deadline. The drain may still submit to the driver.
+func (d *LogServiceDriver) CloseAfterDrain(drain func()) error {
+	d.closeOnce.Do(func() {
+		timeout := d.config.CloseTimeout
+		if timeout <= 0 {
+			timeout = defaultDriverCloseTimeout
+		}
+		ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, errWALCloseTimeout)
+		defer cancel()
+
+		// Cleanup retains ownership after a timeout: an in-flight append may
+		// still have an unknown durability outcome and need its client.
+		done := make(chan error, 1)
+		go func() {
+			if drain != nil {
+				drain()
+			}
+			err := d.closeGracefully()
+			if err == nil {
+				close(d.shutdownDone)
+			}
+			done <- err
+		}()
+		select {
+		case d.closeErr = <-done:
+		case <-ctx.Done():
+			d.cancelTruncate()
+			d.closeErr = moerr.AttachCause(ctx, ctx.Err())
+		}
+	})
+	return d.closeErr
+}
+
+func (d *LogServiceDriver) closeGracefully() error {
+	defer d.cancelTruncate()
+	close(d.closeC)
 	d.commitLoop.Stop()
+	if err := d.workers.ReleaseContext(context.Background()); err != nil {
+		return err
+	}
+
+	// Intake has stopped, so pendingZero now covers every accepted committer.
+	// Keep the wait loop and client pool alive through terminal notification.
+	d.pendingMu.Lock()
+	pendingZero := d.pendingZero
+	d.pendingMu.Unlock()
+	<-pendingZero
 	d.waitCommitLoop.Stop()
 	d.truncateQueue.Stop()
+	d.clientPool.Close()
 	close(d.commitWaitQueue)
 	close(d.postCommitQueue)
-	d.workers.Release()
 	return nil
+}
+
+func (d *LogServiceDriver) addPendingWait() {
+	d.pendingMu.Lock()
+	if d.pendingWait.Load() == 0 {
+		d.pendingZero = make(chan struct{})
+	}
+	d.pendingWait.Add(1)
+	d.pendingMu.Unlock()
+}
+
+func (d *LogServiceDriver) donePendingWait() {
+	d.pendingMu.Lock()
+	remaining := d.pendingWait.Add(-1)
+	if remaining == 0 {
+		close(d.pendingZero)
+	}
+	d.pendingMu.Unlock()
 }
 
 func (d *LogServiceDriver) Replay(

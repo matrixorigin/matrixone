@@ -635,6 +635,8 @@ type ClientConfig struct {
 	Tag string
 	// ReadOnly indicates whether this is a read-only client.
 	ReadOnly bool
+	// connectWithoutLease checks shard availability without claiming the writer lease.
+	connectWithoutLease bool
 	// LogShardID is the shard ID of the log service shard to be used.
 	LogShardID uint64
 	// TNReplicaID is the replica ID of the TN that owns the created client.

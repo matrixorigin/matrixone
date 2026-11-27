@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -154,6 +155,14 @@ func TestRemoveReplica(t *testing.T) {
 		assert.NoError(t, s.StartTNReplica(newTestTNShard(1, 2, 3)))
 		r := s.getReplica(1)
 		assert.NoError(t, r.waitStarted(context.Background()))
+		s.handleRemoveReplica(logservicepb.ScheduleCommand{
+			ServiceType: logservicepb.TNService,
+			ConfigChange: &logservicepb.ConfigChange{
+				ChangeType: logservicepb.RemoveReplica,
+				Replica:    logservicepb.Replica{ShardID: 1, ReplicaID: 1, LogShardID: 3},
+			},
+		})
+		assert.Same(t, r, s.getReplica(1))
 
 		thc := s.hakeeperClient.(*testHAKeeperClient)
 		thc.setCommandBatch(logservicepb.CommandBatch{
@@ -400,6 +409,34 @@ func TestReplicaCreateRetryStopsOnStoreStop(t *testing.T) {
 			t.Fatal("store stop did not cancel replica creation retry")
 		}
 		require.Equal(t, int32(1), createAttempts.Load())
+	})
+}
+
+func TestRetiredTNStartupRemovesOnlyItsStaleAssignment(t *testing.T) {
+	runTNStoreTest(t, func(s *store) {
+		s.options.logServiceClientFactory = func(d metadata.TNShard) (logservice.Client, error) {
+			if d.ReplicaID == 2 {
+				return nil, moerr.NewNotLeaseHolder(t.Context(), 4)
+			}
+			return mem.NewMemLog(), nil
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), storeTestTimeout)
+		defer cancel()
+		require.NoError(t, s.StartTNReplica(newTestTNShard(5, 6, 7)))
+		require.NoError(t, s.getReplica(5).waitStarted(ctx))
+
+		s.mu.Lock()
+		s.addTNShardLocked(newTestTNShard(1, 2, 3))
+		s.mu.Unlock()
+		require.NoError(t, s.startTNShards())
+		require.Eventually(t, func() bool {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.getReplica(1) == nil && len(s.mu.metadata.Shards) == 1
+		}, time.Second, time.Millisecond)
+		require.NotNil(t, s.getReplica(5))
+		require.NoError(t, s.StartTNReplica(newTestTNShard(1, 4, 3)))
+		require.NoError(t, s.getReplica(1).waitStarted(ctx))
 	})
 }
 
