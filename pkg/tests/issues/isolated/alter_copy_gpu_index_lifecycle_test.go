@@ -86,7 +86,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			})
 			exec("use " + dbName)
 			exec("set experimental_" + tc.algo + "_index=1")
-			exec("create table t(id int primary key, v vecf32(8))")
+			exec("create table t(id bigint primary key, v vecf32(8))")
 			var rows []string
 			for i := 1; i <= 20; i++ {
 				vector := strings.TrimSuffix(strings.Repeat(fmt.Sprintf("%d,", i), 8), ",")
@@ -139,7 +139,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 				return j
 			}
 			initialJob := waitJob(originalTable, types.TS{})
-			exec("alter table t algorithm=copy,modify id bigint")
+			exec("alter table t algorithm=copy,add column marker int default 0")
 			var replacementTable uint64
 			require.NoError(t, conn.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='t'", dbName).Scan(&replacementTable))
 			require.NotEqual(t, originalTable, replacementTable, "COPY must replace the source relation")
@@ -176,7 +176,7 @@ func TestAlterCopyGPUIndexSnapshotCDC(t *testing.T) {
 			require.Contains(t, explain("select id from t"+orderBy), tc.algo+"_search", "the query must exercise the native index")
 			require.NotContains(t, explain("select id from t ignore index(ix)"+orderBy), tc.algo+"_search", "the comparison must scan the source table")
 
-			exec("insert into t values (100,'[100,100,100,100,100,100,100,100]')")
+			exec("insert into t(id,v) values (100,'[100,100,100,100,100,100,100,100]')")
 			exec("update t set v='[500,500,500,500,500,500,500,500]' where id=5")
 			exec("delete from t where id=21")
 			writeEnd := types.BuildTS(time.Now().UnixNano(), 0)

@@ -35,22 +35,24 @@ import (
 type repairTestWorkspace struct {
 	client.Workspace
 	events *[]string
+	err    error
 }
 
 func (w repairTestWorkspace) AdvanceSnapshot(context.Context, timestamp.Timestamp) error {
 	if w.events != nil {
 		*w.events = append(*w.events, "advance_snapshot")
 	}
-	return nil
+	return w.err
 }
 
 type repairTestTxn struct {
 	*statusTestTxn
-	events *[]string
+	events     *[]string
+	advanceErr error
 }
 
 func (t *repairTestTxn) GetWorkspace() client.Workspace {
-	return repairTestWorkspace{events: t.events}
+	return repairTestWorkspace{events: t.events, err: t.advanceErr}
 }
 
 type repairTestClient struct {
@@ -71,10 +73,14 @@ type handoffTestClient struct {
 func (*handoffTestClient) GetLatestCommitTS() timestamp.Timestamp { return timestamp.Timestamp{} }
 
 func (c *handoffTestClient) New(context.Context, timestamp.Timestamp, ...client.TxnOption) (client.TxnOperator, error) {
-	if c.calls.Add(1) == 1 {
+	switch c.calls.Add(1) {
+	case 1:
 		return &statusTestTxn{}, nil
+	case 2:
+		return &repairTestTxn{statusTestTxn: &statusTestTxn{}}, nil
+	default:
+		return &handoffTestTxn{client: c}, nil
 	}
-	return &handoffTestTxn{client: c}, nil
 }
 
 type handoffTestTxn struct {
@@ -112,7 +118,7 @@ func TestRepairAbandonedJobsTransactionCreationFailure(t *testing.T) {
 				client.txn = &repairTestTxn{statusTestTxn: txn}
 			}
 			exec := &ISCPTaskExecutor{txnEngine: statusTestEngine{}, cnTxnClient: client}
-			err := exec.repairAbandonedJobs(t.Context())
+			err := exec.repairAbandonedJobBatch(t.Context(), []JobRuntimeKey{{AccountID: 0, TableID: 10, JobName: "index_idx", JobID: 3}})
 			require.Error(t, err)
 			if tc.err != nil {
 				require.ErrorIs(t, err, tc.err)
@@ -180,9 +186,11 @@ func TestRepairAbandonedJobsRequiresCurrentOwner(t *testing.T) {
 			}
 			var err error
 			if tc.panicGuard {
-				require.PanicsWithValue(t, "guard panic", func() { _ = exec.repairAbandonedJobs(t.Context()) })
+				require.PanicsWithValue(t, "guard panic", func() {
+					_ = exec.repairAbandonedJobBatch(t.Context(), []JobRuntimeKey{{AccountID: 0, TableID: 10, JobName: "index_idx", JobID: 3}})
+				})
 			} else {
-				err = exec.repairAbandonedJobs(t.Context())
+				err = exec.repairAbandonedJobBatch(t.Context(), []JobRuntimeKey{{AccountID: 0, TableID: 10, JobName: "index_idx", JobID: 3}})
 			}
 			if tc.wantInvalid {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask), "%v", err)
@@ -208,6 +216,97 @@ func TestRepairAbandonedJobsRequiresCurrentOwner(t *testing.T) {
 			}
 			require.Equal(t, tc.commits, txn.commits)
 			require.Equal(t, tc.rollbacks, txn.rollbacks)
+		})
+	}
+}
+
+// Each committed batch owns only its selected jobs. If ownership is lost,
+// earlier commits remain valid and the next batch must not commit.
+func TestRepairAbandonedJobsBatchBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		rows           int
+		selectionError bool
+		snapshotError  bool
+		loseOwnerOn    int
+		wantCommits    int
+		wantRollbacks  int
+		wantUpdates    int
+	}{
+		{name: "empty still checks ownership", rows: 0, wantCommits: 2},
+		{name: "empty rejects lost owner", rows: 0, loseOwnerOn: 1, wantCommits: 1, wantRollbacks: 1},
+		{name: "selection error releases results", rows: 1, selectionError: true, wantRollbacks: 1},
+		{name: "snapshot error rolls back", snapshotError: true, wantRollbacks: 1},
+		{name: "ownership lost in second batch", rows: 129, loseOwnerOn: 2, wantCommits: 2, wantRollbacks: 1, wantUpdates: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
+			txn := &statusTestTxn{}
+			snapshotErr := errors.New("snapshot unavailable")
+			scanTxn := &repairTestTxn{statusTestTxn: txn}
+			if tc.snapshotError {
+				scanTxn.advanceErr = snapshotErr
+			}
+			testClient := &repairTestClient{txn: scanTxn}
+			exec := &ISCPTaskExecutor{cnUUID: "current-cn", taskID: 7, txnEngine: statusTestEngine{}, cnTxnClient: testClient}
+			old := ExecWithResult
+			t.Cleanup(func() { ExecWithResult = old })
+			updates, guards := 0, 0
+			selectionErr := errors.New("candidate scan failed")
+			ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+				switch {
+				case strings.HasPrefix(sql, "SELECT account_id, table_id, job_name, job_id FROM mo_catalog.mo_iscp_log"):
+					if tc.rows == 0 {
+						return executor.Result{}, nil
+					}
+					result := executor.NewMemResult([]types.Type{types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType()}, mp)
+					result.NewBatchWithRowCount(tc.rows)
+					accounts, tables, ids := make([]uint32, tc.rows), make([]uint64, tc.rows), make([]uint64, tc.rows)
+					names := make([]string, tc.rows)
+					for i := range names {
+						tables[i], ids[i], names[i] = 10, uint64(i+1), "index_idx"
+					}
+					require.NoError(t, executor.AppendFixedRows(result, 0, accounts))
+					require.NoError(t, executor.AppendFixedRows(result, 1, tables))
+					require.NoError(t, executor.AppendStringRows(result, 2, names))
+					require.NoError(t, executor.AppendFixedRows(result, 3, ids))
+					if tc.selectionError {
+						return result.GetResult(), selectionErr
+					}
+					return result.GetResult(), nil
+				case strings.HasPrefix(sql, "SELECT count(*)"):
+					result := executor.NewMemResult([]types.Type{types.T_int64.ToType()}, mp)
+					result.NewBatchWithRowCount(1)
+					require.NoError(t, executor.AppendFixedRows(result, 0, []int64{1}))
+					return result.GetResult(), nil
+				case strings.HasPrefix(sql, "UPDATE mo_catalog.mo_iscp_log"):
+					updates++
+					require.Contains(t, sql, "drop_at IS NULL")
+					return executor.Result{AffectedRows: 1}, nil
+				case strings.HasPrefix(sql, "UPDATE mo_task.sys_daemon_task"):
+					guards++
+					if guards == tc.loseOwnerOn {
+						return executor.Result{}, nil
+					}
+					return executor.Result{AffectedRows: 1}, nil
+				default:
+					return executor.Result{}, moerr.NewInternalErrorNoCtx("unexpected SQL in repair test")
+				}
+			}
+			err := exec.repairAbandonedJobs(t.Context())
+			if tc.snapshotError {
+				require.ErrorIs(t, err, snapshotErr)
+			} else if tc.selectionError {
+				require.ErrorIs(t, err, selectionErr)
+			} else if tc.loseOwnerOn != 0 {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask), "%v", err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.wantCommits, txn.commits)
+			require.Equal(t, tc.wantRollbacks, txn.rollbacks)
+			require.Equal(t, tc.wantUpdates, updates)
 		})
 	}
 }
@@ -241,6 +340,22 @@ func TestWorkerRecoveryRollsBackAfterLeaseHandoff(t *testing.T) {
 	t.Cleanup(func() { ExecWithResult = old })
 	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
 		switch {
+		case strings.HasPrefix(sql, "SELECT account_id, table_id, job_name, job_id FROM mo_catalog.mo_iscp_log"):
+			result := executor.NewMemResult([]types.Type{types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType()}, mp)
+			result.NewBatchWithRowCount(1)
+			if err := executor.AppendFixedRows(result, 0, []uint32{0}); err != nil {
+				return executor.Result{}, err
+			}
+			if err := executor.AppendFixedRows(result, 1, []uint64{10}); err != nil {
+				return executor.Result{}, err
+			}
+			if err := executor.AppendStringRows(result, 2, []string{"index_idx"}); err != nil {
+				return executor.Result{}, err
+			}
+			if err := executor.AppendFixedRows(result, 3, []uint64{3}); err != nil {
+				return executor.Result{}, err
+			}
+			return result.GetResult(), nil
 		case strings.Contains(sql, "SELECT job_name, job_id, job_spec"):
 			return data, nil
 		case strings.Contains(sql, "UPDATE mo_catalog.mo_iscp_log"):

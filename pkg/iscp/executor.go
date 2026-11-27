@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -491,9 +493,97 @@ func (exec *ISCPTaskExecutor) stopGenerationLocked(unregister bool) {
 	exec.worker = nil
 }
 
-func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err error) {
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+// Select outside the lease-fenced write transaction: scanning a large catalog
+// must not make that transaction conflict with every healthy heartbeat.
+func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	for {
+		selected, err := exec.repairAbandonedJobsPass(ctx)
+		if err != nil || !selected {
+			return err
+		}
+	}
+}
+
+// A stopped predecessor can still publish a job after a scan. Recheck after
+// each pass before publishing the replacement executor's in-memory state.
+func (exec *ISCPTaskExecutor) repairAbandonedJobsPass(ctx context.Context) (bool, error) {
+	result, err := exec.selectAbandonedJobs(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer result.Close()
+
+	const batchSize = 128
+	jobs := make([]JobRuntimeKey, 0, batchSize)
+	selected := false
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		accounts := vector.MustFixedColWithTypeCheck[uint32](cols[0])
+		tables := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+		ids := vector.MustFixedColWithTypeCheck[uint64](cols[3])
+		for i := 0; i < rows; i++ {
+			selected = true
+			jobs = append(jobs, NewJobRuntimeKey(accounts[i], tables[i], cols[2].GetStringAt(i), ids[i]))
+			if len(jobs) == batchSize {
+				err = exec.repairAbandonedJobBatch(ctx, jobs)
+				if err != nil {
+					return false
+				}
+				jobs = jobs[:0]
+			}
+		}
+		return true
+	})
+	if err != nil {
+		return selected, err
+	}
+	// Even an empty scan must verify that this executor still owns the lease.
+	if len(jobs) != 0 || !selected {
+		if err := exec.repairAbandonedJobBatch(ctx, jobs); err != nil {
+			return selected, err
+		}
+	}
+	return selected, nil
+}
+
+// Finish the read before writing any batch. getTxn supplies the CN's last
+// committed timestamp, including when freshness-sacrificing reads are enabled.
+func (exec *ISCPTaskExecutor) selectAbandonedJobs(ctx context.Context) (result executor.Result, err error) {
+	txnOp, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "iscp select abandoned jobs")
+	if err != nil {
+		return result, err
+	}
+	completed := false
+	defer func() {
+		if !completed {
+			result.Close()
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+			defer cancel()
+			if rollbackErr := txnOp.Rollback(cleanupCtx); rollbackErr != nil {
+				logutil.Error("ISCP-Task selection rollback after abnormal exit failed", zap.Error(rollbackErr))
+			}
+			return
+		}
+		err = finishISCPTransaction(ctx, txnOp, err)
+		if err != nil {
+			result.Close()
+			result = executor.Result{}
+		}
+	}()
+	if err = txnOp.GetWorkspace().AdvanceSnapshot(ctx, timestamp.Timestamp{}); err != nil {
+		completed = true
+		return result, err
+	}
+	query := fmt.Sprintf("SELECT account_id, table_id, job_name, job_id FROM mo_catalog.mo_iscp_log WHERE drop_at IS NULL AND job_state IN (%d, %d)", ISCPJobState_Pending, ISCPJobState_Running)
+	result, err = ExecWithResult(ctx, query, exec.cnUUID, txnOp)
+	completed = true
+	return result, err
+}
+
+// Every batch validates the owner and the selected job rows in the same SI
+// transaction. Previously committed batches remain safe across a handoff.
+func (exec *ISCPTaskExecutor) repairAbandonedJobBatch(ctx context.Context, jobs []JobRuntimeKey) (err error) {
 	nowTs := exec.txnEngine.LatestLogtailAppliedTime()
 	if latestCommitTS := exec.cnTxnClient.GetLatestCommitTS(); latestCommitTS.Greater(nowTs) {
 		nowTs = latestCommitTS
@@ -503,7 +593,7 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 		"",
 		"iscp init state",
 		0)
-	txnOp, err := exec.cnTxnClient.New(ctxWithTimeout, nowTs, createByOpt,
+	txnOp, err := exec.cnTxnClient.New(ctx, nowTs, createByOpt,
 		client.WithTxnMode(txn.TxnMode_Pessimistic),
 		// Keep the snapshot used to validate job and lease writes fixed through
 		// commit. RC may advance it at commit after an optimistic lease takeover,
@@ -520,23 +610,23 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 	defer func() {
 		if !completed {
 			// An abnormal exit must roll back without swallowing the panic.
-			cleanupCtx, cleanupCancel := context.WithTimeoutCause(context.WithoutCancel(ctxWithTimeout), time.Minute, moerr.NewInternalErrorNoCtx("iscp repair rollback timed out"))
+			cleanupCtx, cleanupCancel := context.WithTimeoutCause(context.WithoutCancel(ctx), time.Minute, moerr.NewInternalErrorNoCtx("iscp repair rollback timed out"))
 			defer cleanupCancel()
 			if rollbackErr := txnOp.Rollback(cleanupCtx); rollbackErr != nil {
 				logutil.Error("ISCP-Task repair rollback after abnormal exit failed", zap.Error(rollbackErr))
 			}
 			return
 		}
-		err = finishISCPTransaction(ctxWithTimeout, txnOp, err)
+		err = finishISCPTransaction(ctx, txnOp, err)
 	}()
 	if err == nil {
-		err = exec.repairAbandonedJobsInTxn(ctxWithTimeout, txnOp)
+		err = exec.repairAbandonedJobsInTxn(ctx, txnOp, jobs)
 	}
 	completed = true
 	return err
 }
 
-func (exec *ISCPTaskExecutor) repairAbandonedJobsInTxn(ctx context.Context, txnOp client.TxnOperator) error {
+func (exec *ISCPTaskExecutor) repairAbandonedJobsInTxn(ctx context.Context, txnOp client.TxnOperator, jobs []JobRuntimeKey) error {
 	if err := exec.txnEngine.New(ctx, txnOp); err != nil {
 		return err
 	}
@@ -565,20 +655,22 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobsInTxn(ctx context.Context, txnO
 	if err = txnOp.GetWorkspace().AdvanceSnapshot(ctx, timestamp.Timestamp{}); err != nil {
 		return err
 	}
-	sql := fmt.Sprintf(
-		`UPDATE mo_catalog.mo_iscp_log
-        SET job_state = %d
-        WHERE drop_at IS NULL AND job_state IN (%d, %d);
-        `,
-		ISCPJobState_Completed,
-		ISCPJobState_Pending,
-		ISCPJobState_Running,
-	)
-	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txnOp)
-	if err != nil {
-		return err
+	if len(jobs) != 0 {
+		var sql strings.Builder
+		fmt.Fprintf(&sql, "UPDATE mo_catalog.mo_iscp_log SET job_state = %d WHERE drop_at IS NULL AND job_state IN (%d, %d) AND (", ISCPJobState_Completed, ISCPJobState_Pending, ISCPJobState_Running)
+		for i, job := range jobs {
+			if i != 0 {
+				sql.WriteString(" OR ")
+			}
+			fmt.Fprintf(&sql, "(account_id = %d AND table_id = %d AND job_name = %s AND job_id = %d)", job.AccountID, job.TableID, sqlquote.String(job.JobName), job.JobID)
+		}
+		sql.WriteString(")")
+		result, err := ExecWithResult(ctx, sql.String(), exec.cnUUID, txnOp)
+		if err != nil {
+			return err
+		}
+		result.Close()
 	}
-	result.Close()
 
 	// The repair and ownership check must commit together. A pre-check alone
 	// permits a new runner to claim the daemon task before this update commits.
