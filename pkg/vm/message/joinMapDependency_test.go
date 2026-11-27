@@ -17,6 +17,7 @@ package message
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -58,6 +60,19 @@ func TestJoinMapDependenciesPreserveDeadlineAndRPCFailure(t *testing.T) {
 	got := rpcTimeout.DependencyError(ctx)
 	require.True(t, moerr.IsMoErrCode(got, moerr.ErrRPCTimeout), "%v", got)
 	require.NotErrorIs(t, got, context.DeadlineExceeded)
+}
+
+func TestJoinMapSnapshotPreservesPublicIcebergError(t *testing.T) {
+	ctx := context.Background()
+	localCause := moerr.NewTxnNeedRetry(ctx)
+	failure := api.WrapError(api.ErrMetadataInvalid, "invalid manifest metadata", nil, localCause)
+	require.ErrorIs(t, failure, localCause)
+
+	result := NewJoinMapBuildErrorResult(fmt.Errorf("build input: %w", failure))
+	require.True(t, result.IsBuildError())
+	want := moerr.NewInternalErrorNoCtx(failure.Error())
+	require.Equal(t, want.ErrorCode(), result.BuildError().ErrorCode())
+	require.EqualError(t, result.DependencyError(ctx), want.Error())
 }
 
 func TestSendJoinMapResultRetainsOwnershipWhenBoardUnavailable(t *testing.T) {

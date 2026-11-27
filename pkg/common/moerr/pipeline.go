@@ -21,6 +21,12 @@ import (
 	"sync"
 )
 
+// A public error owns the diagnostic that execution boundaries may publish.
+// Its wrapped cause remains available to callers of the original error.
+type publicPipelineError interface {
+	PublicErrorMessage() string
+}
+
 // PipelineStop marks cancellation by a downstream pipeline that has finished
 // taking input. It signals when the cancellation reaches the context's children.
 type PipelineStop struct {
@@ -40,8 +46,11 @@ func StopPipeline(cancel context.CancelCauseFunc) {
 // wrapper. An aggregate with another failure must retain that failure.
 func PipelineStopCause(err error) *PipelineStop {
 	for err != nil {
-		if stop, ok := err.(*PipelineStop); ok {
-			return stop
+		switch e := err.(type) {
+		case *PipelineStop:
+			return e
+		case publicPipelineError:
+			return nil
 		}
 		err = errors.Unwrap(err)
 	}
@@ -136,7 +145,7 @@ func pipelineIOError(ctx context.Context, err error, legacyRPC bool) error {
 
 func isPipelineIOCancellation(err, ctxErr, diagnostic error, legacyRPC bool) bool {
 	switch e := err.(type) {
-	case nil, pipelineCancellationOrigin, reportedPipelineError:
+	case nil, pipelineCancellationOrigin, reportedPipelineError, publicPipelineError:
 		return false
 	case interface{ Unwrap() []error }:
 		children := e.Unwrap()
@@ -170,14 +179,34 @@ func IsPipelineEndDeliveryFailure(err error) bool {
 // crosses a protocol that carries a single MatrixOne error. Typed execution
 // failures survive incidental Go errors and cancellation, in tree order.
 func PipelineError(err error) error {
+	best, _ := selectPipelineError(err)
+	return best
+}
+
+// PipelineErrorForTransfer returns the selected cause and a safe fallback
+// diagnostic for protocols and snapshots that carry only one error. Preserve
+// the existing diagnostic for ordinary error trees.
+func PipelineErrorForTransfer(err error) (cause, diagnostic error) {
+	cause, hasPublicBoundary := selectPipelineError(err)
+	if hasPublicBoundary {
+		return cause, cause
+	}
+	return cause, err
+}
+
+func selectPipelineError(err error) (error, bool) {
 	if err == nil {
-		return nil
+		return nil, false
 	}
 	var best error
 	rank := -1
+	hasPublicBoundary := false
 	var visit func(error)
 	visit = func(e error) {
 		switch wrapped := e.(type) {
+		case publicPipelineError:
+			hasPublicBoundary = true
+			e = errors.New(wrapped.PublicErrorMessage())
 		case interface{ Unwrap() []error }:
 			hasChild := false
 			for _, child := range wrapped.Unwrap() {
@@ -215,11 +244,39 @@ func PipelineError(err error) error {
 		}
 	}
 	visit(err)
-	return best
+	return best, hasPublicBoundary
 }
 
 // IsPipelineInterruption identifies the local and wire forms of an
 // interruption. Callers comparing aggregate results first select a leaf.
 func IsPipelineInterruption(err error) bool {
-	return errors.Is(err, context.Canceled) || IsMoErrCode(err, ErrQueryInterrupted)
+	return isPipelineCanceled(err) || IsMoErrCode(err, ErrQueryInterrupted)
+}
+
+// isPipelineCanceled checks a control signal without looking inside a public
+// error's private cause.
+func isPipelineCanceled(err error) bool {
+	if _, ok := err.(publicPipelineError); ok {
+		return false
+	}
+	if err == context.Canceled {
+		return true
+	}
+	if matcher, ok := err.(interface{ Is(error) bool }); ok && matcher.Is(context.Canceled) {
+		return true
+	}
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, child := range wrapped.Unwrap() {
+			if isPipelineCanceled(child) {
+				return true
+			}
+		}
+		return false
+	case interface{ Unwrap() error }:
+		if child := wrapped.Unwrap(); child != nil {
+			return isPipelineCanceled(child)
+		}
+	}
+	return false
 }

@@ -55,7 +55,7 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	if err == nil {
 		err = moerr.NewInternalErrorNoCtx("hash build failed without an error")
 	}
-	cause := moerr.PipelineError(err)
+	cause, diagnostic := moerr.PipelineErrorForTransfer(err)
 	deadline := errors.Is(cause, context.DeadlineExceeded)
 	var me *moerr.Error
 	switch {
@@ -65,7 +65,7 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	case deadline:
 		me = moerr.NewRPCTimeout(context.Background())
 	default:
-		me = moerr.NewInternalErrorNoCtx(err.Error())
+		me = moerr.NewInternalErrorNoCtx(diagnostic.Error())
 	}
 	return &JoinMapBuildError{err: cloneMoErr(me), deadline: deadline}
 }

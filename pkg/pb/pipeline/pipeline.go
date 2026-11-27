@@ -107,7 +107,7 @@ func (m *Message) IsLast() bool {
 }
 
 func EncodedMessageError(ctx context.Context, err error) []byte {
-	cause := moerr.PipelineError(err)
+	cause, diagnostic := moerr.PipelineErrorForTransfer(err)
 	var me *moerr.Error
 	switch {
 	case cause == nil:
@@ -118,7 +118,7 @@ func EncodedMessageError(ctx context.Context, err error) []byte {
 	case errors.Is(cause, context.DeadlineExceeded):
 		me = moerr.NewRPCTimeout(ctx)
 	default:
-		me = moerr.ConvertGoError(ctx, err).(*moerr.Error)
+		me = moerr.ConvertGoError(ctx, diagnostic).(*moerr.Error)
 	}
 	data, marshalErr := me.MarshalBinary()
 	if marshalErr != nil {
