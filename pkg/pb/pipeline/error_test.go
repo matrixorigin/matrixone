@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,4 +48,21 @@ func TestMPoolCapacityErrorPreservesWireIdentity(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, moerr.IsMoErrCode(wireErr, moerr.ErrMPoolCapacity))
 	require.Contains(t, wireErr.Error(), "allocation owner=1 site=1")
+}
+
+func TestIcebergFailureWithoutCausePreservesWireError(t *testing.T) {
+	ctx := context.Background()
+	failure := api.NewError(api.ErrMetadataInvalid, "invalid manifest metadata", nil)
+	frame := &Message{Sid: Status_MessageEnd}
+	frame.SetMoError(ctx, failure)
+	data, err := frame.Marshal()
+	require.NoError(t, err)
+
+	var received Message
+	require.NoError(t, received.Unmarshal(data))
+	require.True(t, received.IsEndMessage())
+	wireErr, hasError := received.TryToGetMoErr()
+	require.True(t, hasError)
+	require.True(t, moerr.IsMoErrCode(wireErr, moerr.ErrInternal), "%v", wireErr)
+	require.Contains(t, wireErr.Error(), failure.Error())
 }

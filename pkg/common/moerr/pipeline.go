@@ -179,16 +179,21 @@ func PipelineError(err error) error {
 	visit = func(e error) {
 		switch wrapped := e.(type) {
 		case interface{ Unwrap() []error }:
+			hasChild := false
 			for _, child := range wrapped.Unwrap() {
-				visit(child)
+				if child != nil {
+					hasChild = true
+					visit(child)
+				}
 			}
-			return
+			if hasChild {
+				return
+			}
 		case interface{ Unwrap() error }:
 			if child := wrapped.Unwrap(); child != nil {
 				visit(child)
 				return
 			}
-			return
 		}
 		if e == nil || PipelineStopCause(e) != nil {
 			return

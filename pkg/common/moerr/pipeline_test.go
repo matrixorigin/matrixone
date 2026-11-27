@@ -50,3 +50,45 @@ func TestPipelineErrorKeepsObservedAndReportedOrigins(t *testing.T) {
 	require.Same(t, sameShape, PipelineIOError(query, sameShape))
 	require.Same(t, fk, PipelineError(errors.Join(PipelineReportedCanceled, fk)))
 }
+
+type pipelineErrorChildren struct {
+	children []error
+}
+
+func (*pipelineErrorChildren) Error() string { return "pipeline failure" }
+
+func (e *pipelineErrorChildren) Unwrap() []error { return e.children }
+
+func TestPipelineErrorKeepsFailuresWithoutChildren(t *testing.T) {
+	ctx, stop := context.WithCancelCause(context.Background())
+	StopPipeline(stop)
+	stopped := context.Cause(ctx)
+	emptyChildren := &pipelineErrorChildren{}
+	nilChildren := &pipelineErrorChildren{children: []error{nil, nil}}
+	typedFailure := NewErrFKNoReferencedRow2(ctx)
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"empty children", emptyChildren, emptyChildren},
+		{"nil children", nilChildren, nilChildren},
+		{"failure beside stop", errors.Join(emptyChildren, stopped), emptyChildren},
+		{"stop beside failure", errors.Join(stopped, emptyChildren), emptyChildren},
+		{"specific error after generic failure", errors.Join(emptyChildren, typedFailure), typedFailure},
+		{"generic failure after specific error", errors.Join(typedFailure, emptyChildren), typedFailure},
+		{"interruption beside failure", errors.Join(context.Canceled, nilChildren), nilChildren},
+		{"wrapped stop only", fmt.Errorf("downstream: %w", stopped), nil},
+		{"multi-error containing only stop and nil", &pipelineErrorChildren{children: []error{nil, stopped}}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := PipelineError(tc.err)
+			if tc.want == nil {
+				require.NoError(t, got)
+			} else {
+				require.Same(t, tc.want, got)
+			}
+		})
+	}
+}
