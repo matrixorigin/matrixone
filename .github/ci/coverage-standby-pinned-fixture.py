@@ -49,6 +49,7 @@ def exercise():
 
     artifacts = [{"name": f"coverage-admit-{run_id}"} for run_id in (51, 54)]
     marker_reads = {}
+    granted_attempts = {run_id: runs[run_id] for run_id in (51, 54)}
 
     def api(path, payload=None):
         if payload is not None:
@@ -71,10 +72,14 @@ def exercise():
         for run_id, run in runs.items():
             if path == f"/actions/runs/{run_id}":
                 return run, 0
+            if path == f"/actions/runs/{run_id}/attempts/1":
+                return granted_attempts[run_id], 0
             if path == f"/actions/runs/{run_id}/attempts/1/jobs?per_page=100":
                 marker_reads[run_id] = marker_reads.get(run_id, 0) + 1
                 if run_id == 51 and marker_reads[run_id] == 1:
                     raise urllib.error.HTTPError(path, 404, "attempt jobs temporarily unavailable", None, None)
+                if run_id == 53 and marker_reads[run_id] == 1:
+                    raise urllib.error.HTTPError(path, 503, "unrelated worker jobs temporarily unavailable", None, None)
                 rows = jobs[run_id][1:] if run_id == 55 and marker_reads[run_id] == 1 else jobs[run_id]
                 return {"jobs": rows, "total_count": len(rows)}, 0
         raise AssertionError(f"unexpected fixture request: {path}")
@@ -91,6 +96,7 @@ def exercise():
             assert str(exc) == "selected coverage group did not pass"
         else:
             raise AssertionError("failed group should fail the selector")
+        runs[51] = dict(runs[51], run_attempt=2, conclusion="success")
         standby.choose()
         grant = json.loads(Path(tmp, "grant.json").read_text())
         assert grant["child"] == 55 and grant["pool"] == "cs"
