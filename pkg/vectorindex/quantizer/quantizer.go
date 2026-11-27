@@ -302,3 +302,30 @@ func Uint8EntrySQLFromBounds(colExpr, minExpr, maxExpr string, dim int32) string
 	f32col := CastSQL(colExpr, types.T_array_float32, dim)
 	return fmt.Sprintf("cast(%s * %s + %s as vecuint8(%d))", f32col, mul, add, dim)
 }
+
+// NeedsBounds reports whether reconstruction requires trained scalar bounds.
+// Callers ask the quantizer rather than maintaining their own vector-type lists.
+func NeedsBounds(q string) bool {
+	q = strings.ToLower(strings.TrimSpace(q))
+	return q == metric.Quantization_INT8_Str || q == metric.Quantization_UINT8_Str
+}
+
+// ReconstructionParams inverts the trained scalar quantizer. Floating formats
+// already decode in the original units. The returned step bounds rounding
+// resolution, but cannot recover original values clipped during quantization.
+func ReconstructionParams(q string, min, max float64) (scale, offset float64, err error) {
+	var mul, add float64
+	switch strings.ToLower(strings.TrimSpace(q)) {
+	case metric.Quantization_INT8_Str:
+		mul, add = Int8Params(min, max)
+	case metric.Quantization_UINT8_Str:
+		mul, add = Uint8Params(min, max)
+	default:
+		return 1, 0, nil
+	}
+	if math.IsNaN(min) || math.IsNaN(max) || math.IsInf(min, 0) || math.IsInf(max, 0) || max <= min || math.IsInf(max-min, 0) || mul == 0 || math.IsInf(mul, 0) || math.IsNaN(add) || math.IsInf(add, 0) {
+		return 0, 0, moerr.NewInvalidInputNoCtx("invalid scalar quantization bounds")
+	}
+	scale, offset = 1/mul, -add/mul
+	return
+}

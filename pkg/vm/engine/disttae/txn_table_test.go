@@ -54,6 +54,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestVisibleObjectCountAtSnapshot(t *testing.T) {
+	tbl, _ := newViewPathTxnTable(t) // snapshot at physical time 100
+	ctx := t.Context()
+	state, publish := tbl.getTxn().engine.GetOrCreateLatestPart(ctx, uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId).MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	for _, obj := range []struct {
+		tombstone        bool
+		created, deleted int64
+	}{
+		{false, 80, 0}, {false, 95, 0}, {false, 101, 0}, {false, 70, 99},
+		{true, 90, 0}, {true, 101, 0}, {true, 80, 99},
+	} {
+		id := types.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsSize(stats, 128))
+		entry := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: types.BuildTS(obj.created, 0)}
+		if obj.deleted > 0 {
+			entry.DeleteTime = types.BuildTS(obj.deleted, 0)
+		}
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, entry, obj.tombstone))
+	}
+	publish()
+	count, err := (&txnTableDelegate{origin: tbl}).VisibleObjectCount(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 3, count, "two visible data objects and one visible tombstone")
+}
+
 func TestTxnTableWriteTableName(t *testing.T) {
 	tbl := &txnTable{tableId: catalog.MO_COLUMNS_ID, tableName: catalog.MO_COLUMNS}
 	require.Equal(t, catalog.MO_COLUMNS, tbl.writeTableName(context.Background()))
@@ -119,11 +146,11 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			require.Equal(t, tc.tableID, summary.tableId)
 			require.Equal(t, tc.want, summary.tbName)
 			if tc.want == catalog.MO_COLUMNS_UPDATE {
-				protoBat, err := batch.BatchToProtoBatch(txn.writes[0].bat, batAttrs)
+				encoded, err := batch.MarshalVectors(txn.writes[0].bat.Vecs)
 				require.NoError(t, err)
 				req, remaining, err := catalog.ParseEntryList([]*api.Entry{{
 					EntryType: api.Entry_Insert, DatabaseId: catalog.MO_CATALOG_ID,
-					TableId: catalog.MO_COLUMNS_ID, TableName: tc.want, Bat: protoBat,
+					TableId: catalog.MO_COLUMNS_ID, TableName: tc.want, Attrs: batAttrs, Bat: api.NewEncodedBatch(encoded),
 				}})
 				require.NoError(t, err)
 				require.Equal(t, tc.want, req.(*api.Entry).TableName)
@@ -165,14 +192,15 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			require.Equal(t, catalog.MO_COLUMNS_UPDATE, txn.writes[0].tableName)
 			require.Equal(t, skipTransfer, txn.writes[0].skipTransfer)
 
-			protoBat, err := batch.BatchToProtoBatch(txn.writes[0].bat, batAttrs)
+			encoded, err := batch.MarshalVectors(txn.writes[0].bat.Vecs)
 			require.NoError(t, err)
 			req, remaining, err := catalog.ParseEntryList([]*api.Entry{{
 				EntryType:  api.Entry_Delete,
 				DatabaseId: catalog.MO_CATALOG_ID,
 				TableId:    catalog.MO_COLUMNS_ID,
 				TableName:  txn.writes[0].tableName,
-				Bat:        protoBat,
+				Attrs:      batAttrs,
+				Bat:        api.NewEncodedBatch(encoded),
 			}})
 			require.NoError(t, err)
 			require.Equal(t, txn.writes[0].tableName, req.(*api.Entry).TableName)
@@ -182,7 +210,8 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 				DatabaseId: catalog.MO_CATALOG_ID,
 				TableId:    catalog.MO_COLUMNS_ID,
 				TableName:  catalog.MO_COLUMNS,
-				Bat:        protoBat,
+				Attrs:      batAttrs,
+				Bat:        api.NewEncodedBatch(encoded),
 			}})
 			require.ErrorContains(t, err, "bad write format")
 			txn.writes[0].bat.Clean(txn.workspaceMP())
@@ -308,7 +337,7 @@ func insertCatalogTableForResetTest(
 	}, txn.proc.Mp(), packer)
 	require.NoError(t, err)
 	defer bat.Clean(txn.proc.Mp())
-	_, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, txn.proc.Mp())
+	_, _, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, txn.proc.Mp())
 	require.NoError(t, err)
 	eng.GetLatestCatalogCache().InsertTable(bat)
 }
@@ -580,14 +609,8 @@ func TestPrimaryKeysMayBeModifiedWaitsForSubscriptionData(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(rowIDVec, types.RandomRowid(), false, mp))
 	require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(15, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, mp))
-	insert := &api.Batch{
-		Attrs: []string{"rowid", "time", "pk"},
-		Vecs: []api.Vector{
-			mustVectorToProtoForMaterializedSnapshotTest(t, rowIDVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, tsVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, pkVec),
-		},
-	}
+	insert := mustMarshalVectors(rowIDVec, tsVec, pkVec)
+	insertAttrs := []string{"rowid", "time", "pk"}
 
 	eng.pClient.SetSubscribeState(10, 42, Subscribing)
 	part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
@@ -599,7 +622,7 @@ func TestPrimaryKeysMayBeModifiedWaitsForSubscriptionData(t *testing.T) {
 		packer := types.NewPacker()
 		defer packer.Close()
 		state, done := part.MutateState()
-		state.HandleRowsInsert(context.Background(), insert, 0, packer, mp)
+		state.HandleRowsInsert(context.Background(), insert, insertAttrs, 0, packer, mp)
 		done()
 		eng.pClient.SetSubscribeState(10, 42, Subscribed)
 	}()
@@ -1055,11 +1078,11 @@ func TestPartitionRowEstimate(t *testing.T) {
 	bat.Vecs[0] = testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil, mp)
 	bat.SetRowCount(3)
 	defer bat.Clean(mp)
-	insert, err := fillRandomRowidAndZeroTs(bat, batAttrs, mp)
+	insert, insertAttrs, err := fillRandomRowidAndZeroTs(bat, batAttrs, mp)
 	require.NoError(t, err)
 	packer := types.NewPacker()
 	defer packer.Close()
-	state.HandleRowsInsert(context.Background(), insert, 0, packer, mp)
+	state.HandleRowsInsert(context.Background(), insert, insertAttrs, 0, packer, mp)
 	rows, err = partitionRowEstimate(state, types.MaxTs())
 	require.NoError(t, err)
 	require.Equal(t, float64(3), rows)
@@ -1095,14 +1118,7 @@ func TestReplayRowColumnSizeIncludesPhysicalRowID(t *testing.T) {
 	state := logtailreplay.NewPartitionState("test", false, 42, false)
 	packer := types.NewPacker()
 	defer packer.Close()
-	state.HandleRowsInsert(context.Background(), &api.Batch{
-		Attrs: []string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "id"},
-		Vecs: []api.Vector{
-			mustVectorToProtoForMaterializedSnapshotTest(t, rowIDVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, tsVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, idVec),
-		},
-	}, 0, packer, mp)
+	state.HandleRowsInsert(context.Background(), mustMarshalVectors(rowIDVec, tsVec, idVec), []string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "id"}, 0, packer, mp)
 	iter := state.NewRowsIter(types.MaxTs(), nil, false)
 	defer iter.Close()
 	require.True(t, iter.Next())

@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -339,14 +338,6 @@ func moBatchToString(moBat *batch.Batch, attrs []string, printN int) string {
 		}
 	}
 	return buf.String()
-}
-
-func ApiBatchToString(apiBat *api.Batch, printN int) string {
-	if apiBat == nil {
-		return ""
-	}
-	bat, _ := batch.ProtoBatchToBatch(apiBat, nil)
-	return moBatchToString(bat, apiBat.Attrs, printN)
 }
 
 func DebugMoBatch(moBat *batch.Batch) string {

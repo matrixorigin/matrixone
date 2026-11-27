@@ -79,7 +79,7 @@ func TestReplayAutomaticallyConfirmsNamedDelta(t *testing.T) {
 			cli := &replayTxnClient{TxnClient: client.NewTxnClient(sid, sender, client.WithLockService(blocker))}
 			cli.Resume()
 			t.Cleanup(func() { require.NoError(t, cli.Close()) })
-			e := &Engine{service: sid, cli: cli, mp: mp, ls: blocker, partitions: make(map[[2]uint64]*logtailreplay.Partition), globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 16)}, packerPool: fileservice.NewPool(1, func() *types.Packer { return packer }, func(p *types.Packer) { p.Reset() }, nil)}
+			e := &Engine{service: sid, cli: cli, mp: mp, ls: blocker, partitions: make(map[[2]uint64]*logtailreplay.Partition), globalStats: &GlobalStats{tailC: make(chan statsLogtail, 16)}, packerPool: fileservice.NewPool(1, func() *types.Packer { return packer }, func(p *types.Packer) { p.Reset() }, nil)}
 			e.catalog.Store(cache.NewCatalog())
 			tw := client.NewTimestampWaiter(runtime.GetLogger(sid))
 			t.Cleanup(tw.Close)
@@ -89,15 +89,16 @@ func TestReplayAutomaticallyConfirmsNamedDelta(t *testing.T) {
 			}
 			routines := newTestRoutineControllers(16)
 			makeTail := func(b *batch.Batch, id uint64, name string, seq uint32) logtail.TableLogtail {
-				filled, err := fillRandomRowidAndZeroTs(b, catalogTupleAttrsForTest(id), mp)
+				_, attrs, err := fillRandomRowidAndZeroTs(b, catalogTupleAttrsForTest(id), mp)
 				require.NoError(t, err)
 				ts := vector.MustFixedColWithTypeCheck[types.TS](b.Vecs[cache.MO_TIMESTAMP_IDX])
 				for i := range ts {
 					ts[i] = types.BuildTS(100, 0)
 				}
-				encoded, err := batch.BatchToProtoBatch(b, filled.Attrs)
+				// Re-encode: the commit timestamps changed after the fill.
+				encoded, err := batch.MarshalVectors(b.Vecs)
 				require.NoError(t, err)
-				return logtail.TableLogtail{Table: &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: id, DbName: catalog.MO_CATALOG, TbName: name, PrimarySeqnum: seq}, Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: id, TableName: name, DatabaseId: catalog.MO_CATALOG_ID, DatabaseName: catalog.MO_CATALOG, Bat: encoded}}}
+				return logtail.TableLogtail{Table: &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: id, DbName: catalog.MO_CATALOG, TbName: name, PrimarySeqnum: seq}, Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: id, TableName: name, DatabaseId: catalog.MO_CATALOG_ID, DatabaseName: catalog.MO_CATALOG, Attrs: attrs, Bat: api.NewEncodedBatch(encoded)}}}
 			}
 			cols, err := catalog.GenColumnsFromDefs(7, "delayed_table", "db", 90, 80, []engine.TableDef{&engine.AttributeDef{Attr: engine.Attribute{Name: "delta_column", Type: types.T_uint64.ToType()}}})
 			require.NoError(t, err)

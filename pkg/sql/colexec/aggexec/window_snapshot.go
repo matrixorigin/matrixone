@@ -104,6 +104,10 @@ func FullPartitionWindowAggregate(id int64) bool {
 	switch id {
 	case AggIdOfCountStar, AggIdOfCountColumn, AggIdOfSum, AggIdOfAvg, AggIdOfMin, AggIdOfMax:
 		return true
+	case AggIdOfBitmapOr:
+		return true
+	case AggIdOfBitmapConstruct:
+		return true
 	}
 	return false
 }

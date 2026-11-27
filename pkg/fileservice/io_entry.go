@@ -67,7 +67,7 @@ func (i *IOEntry) readFrom(ctx context.Context, from io.Reader, allocator CacheD
 	}
 	defer finally(&err)
 
-	r := io.LimitReader(from, i.Size)
+	r := io.LimitReader(ReadWaitTrackerFromContext(ctx).wrapReader(from), i.Size)
 	LogEvent(ctx, str_io_readfull_begin)
 	n, err := io.ReadFull(r, i.Data)
 	LogEvent(ctx, str_io_readfull_end)

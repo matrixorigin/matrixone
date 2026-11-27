@@ -5841,9 +5841,7 @@ func isUDFArgumentAuthorizationSource(node *plan.Node) bool {
 	case plan.Node_EXTERNAL_SCAN:
 		return IsExternalScanRequiringSelectPrivilege(node)
 	case plan.Node_FUNCTION_SCAN:
-		tableDef := node.GetTableDef()
-		return tableDef != nil && tableDef.GetTblFunc() != nil &&
-			tableDef.GetTblFunc().GetName() == "table_changes"
+		return IsSourceResolvingTableFunction(node)
 	default:
 		return false
 	}

@@ -1845,17 +1845,54 @@ func isSingleStarCountNoFilterNoGroupBy(node *plan.Node) bool {
 func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
 	node := s.DataSource.node
 	if node != nil && len(node.AggList) > 0 {
+		// Partial results can replace input rows only when this scope also
+		// owns the matching Group and MergeGroup over its TableScan.
+		mergeGroup, scan := findScanMergeGroup(s.RootOp)
 		// Fast path: single starcount without filter/groupby — only call rel.StarCount(), no scan.
 		if isSingleStarCountNoFilterNoGroupBy(node) {
+			if mergeGroup == nil {
+				return nil
+			}
 			estimatedTombstoneRows, err := rel.EstimateCommittedTombstoneCount(ctx)
 			if err != nil {
 				return err
 			}
 			metricv2.StarcountEstimateTombstoneRowsHistogram.Observe(float64(estimatedTombstoneRows))
 
-			if estimatedTombstoneRows > defaultStarCountTombstoneThreshold {
+			threshold := defaultStarCountTombstoneThreshold
+			var onSealedRows func(int64)
+			if s.Proc != nil {
+				if cfg, ok := runtime.GetStarCountTestConfig(s.Proc.GetService(), uint64(node.GetObjRef().GetObj())); ok {
+					threshold = cfg.TombstoneThreshold
+					onSealedRows = cfg.OnSealedRows
+				}
+			}
+			if estimatedTombstoneRows > threshold {
 				metricv2.StarcountPathPerBlockCounter.Inc()
-				// Fall through to per-block aggOptimize (only scan blocks with tombstones)
+				if len(node.RuntimeFilterProbeList) == 0 && node.Limit == nil && node.Offset == nil {
+					var rows int64
+					var remaining engine.RelData
+					err := scan.MeasureReaderStartup(s.countSealedBlocksContext(c, ctx),
+						func(ctx context.Context, analyzer process.Analyzer) error {
+							var readErr error
+							rows, remaining, readErr = disttae.CountSealedBlocks(ctx, rel, s.NodeInfo.Data, s.TxnOffset, analyzer)
+							return readErr
+						})
+					if err != nil {
+						return err
+					}
+					if remaining != nil {
+						s.NodeInfo.Data = remaining
+						mergeGroup.PartialResults = []any{rows}
+						mergeGroup.PartialResultTypes = []types.T{types.T_int64}
+						s.StarCountMergeGroup = mergeGroup
+						if onSealedRows != nil {
+							onSealedRows(rows)
+						}
+						return nil
+					}
+				}
+				// Fall through to the generic block aggregate optimization.
 			} else {
 				metricv2.StarcountPathFastCounter.Inc()
 				fastStart := time.Now()
@@ -1870,21 +1907,16 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 				s.NodeInfo.Data = newRelData
 				partialResults := []any{int64(totalRows)}
 				partialResultTypes := []types.T{types.T_int64}
-				mergeGroup := findMergeGroup(s.RootOp)
-				if mergeGroup != nil {
-					mergeGroup.PartialResults = partialResults
-					mergeGroup.PartialResultTypes = partialResultTypes
-					s.StarCountMergeGroup = mergeGroup
-				} else {
-					panic("can't find merge group operator for agg optimize!")
-				}
+				mergeGroup.PartialResults = partialResults
+				mergeGroup.PartialResultTypes = partialResultTypes
+				s.StarCountMergeGroup = mergeGroup
 				s.StarCountOnly = true
 				return nil
 			}
 		}
 
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(node)
-		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
+		if partialResults != nil && mergeGroup != nil && s.NodeInfo.Data.DataCnt() > 1 {
 			//append first empty block
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
 			newRelData.AppendBlockInfo(&objectio.EmptyBlockInfo)
@@ -1924,42 +1956,49 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 
 			if partialResults != nil {
 				s.NodeInfo.Data = newRelData
-				//find the last mergegroup
-				mergeGroup := findMergeGroup(s.RootOp)
-				if mergeGroup != nil {
-					mergeGroup.PartialResults = partialResults
-					mergeGroup.PartialResultTypes = partialResultTypes
-				} else {
-					panic("can't find merge group operator for agg optimize!")
-				}
+				mergeGroup.PartialResults = partialResults
+				mergeGroup.PartialResultTypes = partialResultTypes
 			}
 		}
 	}
 	return nil
 }
 
-// find scan->group->mergegroup
-func findMergeGroup(op vm.Operator) *group.MergeGroup {
-	if op == nil {
-		return nil
-	}
-	base := op.GetOperatorBase()
-	if base == nil || base.NumChildren() == 0 {
-		return nil
-	}
-	if mergeGroup, ok := op.(*group.MergeGroup); ok {
+// findScanMergeGroup finds the matching scan and aggregate owners in this scope.
+func findScanMergeGroup(op vm.Operator) (*group.MergeGroup, *table_scan.TableScan) {
+	for op != nil {
+		base := op.GetOperatorBase()
+		if base == nil || base.NumChildren() == 0 {
+			break
+		}
 		child := base.GetChildren(0)
-		if _, ok = child.(*group.Group); ok {
-			childBase := child.GetOperatorBase()
-			if childBase != nil && childBase.NumChildren() > 0 {
-				child = childBase.GetChildren(0)
-				if _, ok = child.(*table_scan.TableScan); ok {
-					return mergeGroup
+		if mergeGroup, ok := op.(*group.MergeGroup); ok {
+			if groupOp, ok := child.(*group.Group); ok && groupOp.NumChildren() == 1 {
+				if scan, ok := groupOp.GetChildren(0).(*table_scan.TableScan); ok {
+					return mergeGroup, scan
 				}
 			}
 		}
+		op = child
 	}
-	return findMergeGroup(base.GetChildren(0))
+	return nil, nil
+}
+
+// Count using the snapshot already bound to the opened relation, under the
+// scan's cancellation and with the relation's effective tenant and statement
+// statistics (which may differ from the scan's inherited values).
+func (s *Scope) countSealedBlocksContext(c *Compile, relationCtx context.Context) context.Context {
+	ctx := s.readerContext(c)
+	if ctx == nil {
+		return relationCtx
+	}
+	if accountID, ok := relationCtx.Value(defines.TenantIDKey{}).(uint32); ok {
+		ctx = defines.AttachAccountId(ctx, accountID)
+	}
+	if stats := statistic.StatsInfoFromContext(relationCtx); stats != nil {
+		ctx = statistic.ContextWithStatsInfo(ctx, stats)
+	}
+	return ctx
 }
 
 func (s *Scope) readerContext(c *Compile) context.Context {

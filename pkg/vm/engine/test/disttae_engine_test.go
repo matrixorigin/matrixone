@@ -355,10 +355,17 @@ func TestLogtailBasic(t *testing.T) {
 
 	fixedColCnt := 2 // __rowid + commit_time, the columns for a delBatch
 	// check Bat rows count consistency
-	check_same_rows := func(bat *api.Batch, expect int) {
-		for i, vec := range bat.Vecs {
-			col, err := vector.ProtoVectorToVector(vec, p.Mp)
-			require.NoError(t, err)
+	// viewEntry decodes e's batch as read-only views of e.Bat, one vector
+	// per attr.
+	viewEntry := func(e *api.Entry) *batch.Batch {
+		bat, err := batch.ViewBinary(e.Bat.Bytes())
+		require.NoError(t, err)
+		require.Equal(t, len(e.Attrs), len(bat.Vecs))
+		return bat
+	}
+	check_same_rows := func(bat *batch.Batch, expect int) {
+		require.Equal(t, expect, bat.RowCount())
+		for i, col := range bat.Vecs {
 			require.Equal(t, expect, col.Length(), "columns %d", i)
 		}
 	}
@@ -373,16 +380,17 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, 4, len(resp.Commands)) // data_mata, tombstone_meta, insert, delete
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
-	require.Equal(t, len(catalog2.SystemDBSchema.ColDefs)+1 /*commit ts*/, len(resp.Commands[2].Bat.Vecs))
-	check_same_rows(resp.Commands[2].Bat, 2)                                       // 2 db
-	datname, err := vector.ProtoVectorToVector(resp.Commands[2].Bat.Vecs[3], p.Mp) // datname column
-	require.NoError(t, err)
+	insBat := viewEntry(resp.Commands[2])
+	require.Equal(t, len(catalog2.SystemDBSchema.ColDefs)+1 /*commit ts*/, len(insBat.Vecs))
+	check_same_rows(insBat, 2) // 2 db
+	datname := insBat.Vecs[3]  // datname column
 	require.Equal(t, "todrop", datname.UnsafeGetStringAt(0))
 	require.Equal(t, "db", datname.UnsafeGetStringAt(1))
 
 	require.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)
-	require.Equal(t, fixedColCnt+2, len(resp.Commands[3].Bat.Vecs))
-	check_same_rows(resp.Commands[3].Bat, 1) // 1 drop db
+	delBat := viewEntry(resp.Commands[3])
+	require.Equal(t, fixedColCnt+2, len(delBat.Vecs))
+	check_same_rows(delBat, 1) // 1 drop db
 
 	close()
 
@@ -395,16 +403,17 @@ func TestLogtailBasic(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 4, len(resp.Commands)) // data_mata, tombstone_meta, insert, delete
 	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
-	require.Equal(t, len(catalog2.SystemTableSchema.ColDefs)+1, len(resp.Commands[2].Bat.Vecs))
-	check_same_rows(resp.Commands[2].Bat, 2)                                       // 2 tables
-	relname, err := vector.ProtoVectorToVector(resp.Commands[2].Bat.Vecs[3], p.Mp) // relname column
-	require.NoError(t, err)
+	insBat = viewEntry(resp.Commands[2])
+	require.Equal(t, len(catalog2.SystemTableSchema.ColDefs)+1, len(insBat.Vecs))
+	check_same_rows(insBat, 2) // 2 tables
+	relname := insBat.Vecs[3]  // relname column
 	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(0))
 	require.Equal(t, schema.Name, relname.UnsafeGetStringAt(1))
 
 	require.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)
-	require.Equal(t, fixedColCnt+2, len(resp.Commands[3].Bat.Vecs)) // 4 columns, rowid + commit_ts + delete_rowid + pk
-	check_same_rows(resp.Commands[3].Bat, 1)                        // 1 drop table
+	delBat = viewEntry(resp.Commands[3])
+	require.Equal(t, fixedColCnt+2, len(delBat.Vecs)) // 4 columns, rowid + commit_ts + delete_rowid + pk
+	check_same_rows(delBat, 1)                        // 1 drop table
 	close()
 
 	// get columns catalog change
@@ -416,8 +425,9 @@ func TestLogtailBasic(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 4, len(resp.Commands)) // data_mata, tombstone_meta, insert, delete
 	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
-	require.Equal(t, len(catalog2.SystemColumnSchema.ColDefs)+1, len(resp.Commands[2].Bat.Vecs))
-	check_same_rows(resp.Commands[2].Bat, len(schema.ColDefs)*2) // column count of 2 tables
+	insBat = viewEntry(resp.Commands[2])
+	require.Equal(t, len(catalog2.SystemColumnSchema.ColDefs)+1, len(insBat.Vecs))
+	check_same_rows(insBat, len(schema.ColDefs)*2) // column count of 2 tables
 	close()
 
 	// get user table change
@@ -432,22 +442,22 @@ func TestLogtailBasic(t *testing.T) {
 	// check data change
 	insDataEntry := resp.Commands[2]
 	require.Equal(t, api.Entry_Insert, insDataEntry.EntryType)
-	require.Equal(t, len(schema.ColDefs)+1, len(insDataEntry.Bat.Vecs)) // 5 columns, rowid + commit ts + 2 visibile
-	check_same_rows(insDataEntry.Bat, 99)                               // 99 rows, because the first write is excluded.
+	insBat = viewEntry(insDataEntry)
+	require.Equal(t, len(schema.ColDefs)+1, len(insBat.Vecs)) // 5 columns, rowid + commit ts + 2 visibile
+	check_same_rows(insBat, 99)                               // 99 rows, because the first write is excluded.
 	// test first user col, this is probably fragile, it depends on the details of MockSchema
 	// if something changes, delete this is okay.
-	firstCol, err := vector.ProtoVectorToVector(insDataEntry.Bat.Vecs[2], p.Mp) // mock_0 column, int8 type
+	firstCol := insBat.Vecs[2] // mock_0 column, int8 type
 	require.Equal(t, types.T_int8, firstCol.GetType().Oid)
-	require.NoError(t, err)
 
 	delDataEntry := resp.Commands[3]
 	require.Equal(t, api.Entry_Delete, delDataEntry.EntryType)
-	require.Equal(t, fixedColCnt+2, len(delDataEntry.Bat.Vecs)) // 4 columns, rowid + commit_ts + delete_rowid + pk
-	check_same_rows(delDataEntry.Bat, 10)
+	delBat = viewEntry(delDataEntry)
+	require.Equal(t, fixedColCnt+2, len(delBat.Vecs)) // 4 columns, rowid + commit_ts + delete_rowid + pk
+	check_same_rows(delBat, 10)
 
 	// check delete rowids are exactly what we want
-	rowids, err := vector.ProtoVectorToVector(delDataEntry.Bat.Vecs[0], p.Mp)
-	require.NoError(t, err)
+	rowids := delBat.Vecs[0]
 	require.Equal(t, types.T_Rowid, rowids.GetType().Oid)
 	rowidMap := make(map[types.Rowid]int)
 	for _, id := range deleteRowIDs {
@@ -509,8 +519,9 @@ func TestAlterTableBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
 	}, true)
 
-	bat, _ := batch.ProtoBatchToBatch(resp.Commands[2].Bat, p.Mp)
-	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat, resp.Commands[2].Bat.Attrs, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Constraint)
+	bat, err := batch.ViewBinary(resp.Commands[2].Bat.Bytes())
+	require.NoError(t, err)
+	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat, resp.Commands[2].Attrs, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Constraint)
 	require.Equal(t, 3, cstrCol.Length())
 	c1, err := cstr1.MarshalBinary()
 	require.NoError(t, err)
@@ -520,7 +531,7 @@ func TestAlterTableBasic(t *testing.T) {
 	require.Equal(t, c1, cstrCol.Get(1).([]byte))
 	require.Equal(t, c2, cstrCol.Get(2).([]byte))
 
-	commetCol := containers.NewNonNullBatchWithSharedMemory(bat, resp.Commands[2].Bat.Attrs, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Comment)
+	commetCol := containers.NewNonNullBatchWithSharedMemory(bat, resp.Commands[2].Attrs, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Comment)
 	require.Equal(t, 3, cstrCol.Length())
 	require.Equal(t, []byte(initComment), commetCol.Get(0).([]byte))
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
