@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -120,4 +121,65 @@ func TestBudgetedColumnWindowSpillFailureAndMissingCacheData(t *testing.T) {
 	missing := &partialReadErrorFS{}
 	_, err = readCachedColumnRange(ctx, "missing-cache-data", ext, fileservice.SkipAllCache, missing)
 	require.ErrorContains(t, err, "cache data is unavailable")
+}
+
+func TestBudgetedColumnWindowRejectsMismatchedChunkRowsAndReleasesFailedSpill(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	chunked := twoChunkTestColumn(t, types.T_int64.ToType())
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: "wrong-rows", Entries: []fileservice.IOEntry{{Data: chunked, Size: int64(len(chunked))}},
+	}))
+	ext := NewExtent(compress.Lz4Chunked, 0, uint32(len(chunked)), uint32(len(chunked)))
+	err = forEachBlockWindowPart(ctx, "wrong-rows", ext, 3, 0, 2, 1024,
+		fileservice.SkipAllCache, fs, nil, func(*blockWindowPart) (bool, error) {
+			t.Fatal("a mismatched chunk must not reach the visitor")
+			return false, nil
+		})
+	require.ErrorContains(t, err, "row count mismatch")
+
+	legacy := []byte("legacy")
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: "short-legacy", Entries: []fileservice.IOEntry{{Data: legacy, Size: int64(len(legacy))}},
+	}))
+	var spill *testColumnWindowSpill
+	factory := func(context.Context) (ColumnWindowSpill, error) {
+		file, err := os.CreateTemp(t.TempDir(), "column-window-*")
+		if err != nil {
+			return nil, err
+		}
+		spill = &testColumnWindowSpill{File: file}
+		return spill, nil
+	}
+	ext = NewExtent(compress.None, 0, uint32(len(legacy)), uint32(len(legacy)+1))
+	err = forEachBlockWindowPart(ctx, "short-legacy", ext, 1, 0, 1, 1,
+		fileservice.SkipAllCache, fs, factory, func(*blockWindowPart) (bool, error) {
+			t.Fatal("a short stream must not reach the visitor")
+			return false, nil
+		})
+	require.ErrorContains(t, err, "decoded size mismatch")
+	require.NotNil(t, spill)
+	require.True(t, spill.closed)
+}
+
+func TestBudgetedColumnWindowRejectsMixedPayloadTypesAndCostOverrun(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	dst := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(dst, int64(7), false, mp))
+	part := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(part, int32(8), false, mp))
+	require.ErrorContains(t, appendBlockWindowVector(&dst, part, mp), "type mismatch")
+	dst.Free(mp)
+
+	source := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(source, int64(1), false, mp))
+	encoded := marshalLegacyTestColumn(t, source)
+	source.Free(mp)
+	data := fileservice.NewBytes(encoded)
+	require.ErrorContains(t, addCachedColumnWindowCosts(data, 1, make([]uint64, 1)), "out of range")
+	data.Release()
+	require.Zero(t, mp.CurrNB())
 }

@@ -503,6 +503,74 @@ func TestTableChangesDeleteKeyValuesCompositeAndMalformed(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(bad, []byte{1, 2, 3}, false, proc.Mp()))
 	_, err = state.deleteKeyValues(bad, 0)
 	require.Error(t, err)
+
+	tooFewParts := vector.NewVec(types.T_varbinary.ToType())
+	defer tooFewParts.Free(proc.Mp())
+	packer.Reset()
+	packer.EncodeInt64(11)
+	require.NoError(t, vector.AppendBytes(tooFewParts, packer.GetBuf(), false, proc.Mp()))
+	_, err = state.deleteKeyValues(tooFewParts, 0)
+	require.ErrorContains(t, err, "unexpected composite primary key part count")
+}
+
+func TestTableChangesAccountFilteredDeleteRequiresAccountKey(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	state := &tableChangesState{
+		isAccountFiltered: true,
+		accountID:         7,
+		tableDef: &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}},
+		},
+	}
+	deletes := batch.NewWithSize(2)
+	deletes.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	deletes.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(deletes.Vecs[0], int64(1), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(deletes.Vecs[1], types.BuildTS(10, 0), false, proc.Mp()))
+	deletes.SetRowCount(1)
+	defer deletes.Clean(proc.Mp())
+	require.ErrorContains(t, state.appendDeleteRows(nil, deletes, proc), "no account_id key")
+
+	state.tableDef.Pkey.Names = []string{"account_id"}
+	require.NoError(t, state.appendDeleteRows(nil, deletes, proc), "an account ID with the wrong type cannot pass the filter")
+}
+
+func TestTableChangesSchemaLookupDistinguishesMissingFromReadFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		databaseError error
+		relationError error
+		wantError     bool
+	}{
+		{name: "database absent at endpoint", databaseError: moerr.NewBadDBNoCtx("db")},
+		{name: "table absent at endpoint", relationError: moerr.NewNoSuchTableNoCtx("db", "t")},
+		{name: "database read failure", databaseError: moerr.NewInternalErrorNoCtx("database read failed"), wantError: true},
+		{name: "table read failure", relationError: moerr.NewInternalErrorNoCtx("table read failed"), wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			txn := mock_frontend.NewMockTxnOperator(ctrl)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			at := types.BuildTS(100, 0)
+			proc.Base.TxnOperator = txn
+			txn.EXPECT().CloneSnapshotOp(at.ToTimestamp()).Return(txn)
+			eng.EXPECT().Database(gomock.Any(), "db", txn).Return(db, tc.databaseError)
+			if tc.databaseError == nil {
+				db.EXPECT().Relation(gomock.Any(), "t", nil).Return(nil, tc.relationError)
+			}
+			got, err := tableChangesTableDefAt(proc.Ctx, eng, proc, "db", "t", at)
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Nil(t, got)
+			}
+		})
+	}
 }
 
 func TestValidateRuntimeTableChangesSourceRejectsMetadataColumnNames(t *testing.T) {

@@ -524,6 +524,10 @@ func readChunkedColumnWindow(
 			return nil, err
 		}
 		data := ioVec.Entries[0].CachedData
+		if data == nil {
+			ioVec.Release()
+			return nil, moerr.NewInternalErrorNoCtx("chunked object column cache data is unavailable")
+		}
 		data.Retain()
 		ioVec.Release()
 		return data, nil

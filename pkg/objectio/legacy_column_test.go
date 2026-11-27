@@ -522,3 +522,80 @@ func TestLegacyWindowCostRangeDoesNotReadOutsideColumn(t *testing.T) {
 	require.Equal(t, []uint64{0, 0}, costs)
 	require.Zero(t, mp.CurrNB())
 }
+
+type failNthColumnRead struct {
+	*bytes.Reader
+	failAt int
+	reads  int
+}
+
+func (r *failNthColumnRead) ReadAt(dst []byte, offset int64) (int, error) {
+	r.reads++
+	if r.reads == r.failAt {
+		return 0, io.ErrUnexpectedEOF
+	}
+	return r.Reader.ReadAt(dst, offset)
+}
+
+func TestLegacyWindowReadFailuresReleasePartialOutput(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_varchar.ToType())
+	for _, value := range []string{strings.Repeat("a", 64), strings.Repeat("b", 64)} {
+		require.NoError(t, vector.AppendBytes(source, []byte(value), false, mp))
+	}
+	encoded := marshalLegacyTestColumn(t, source)
+	source.Free(mp)
+	size := int64(len(encoded))
+	baseline := mp.CurrNB()
+	for _, read := range []struct {
+		name string
+		run  func(io.ReaderAt) error
+	}{
+		{name: "materialize", run: func(reader io.ReaderAt) error {
+			window, err := materializeLegacyColumnWindow(reader, size, 0, 2, mp)
+			if window != nil {
+				window.Free(mp)
+			}
+			return err
+		}},
+		{name: "estimate cost", run: func(reader io.ReaderAt) error {
+			return addLegacyColumnWindowCosts(reader, size, 0, make([]uint64, 2))
+		}},
+	} {
+		t.Run(read.name, func(t *testing.T) {
+			control := &failNthColumnRead{Reader: bytes.NewReader(encoded)}
+			require.NoError(t, read.run(control))
+			for failAt := 1; failAt <= control.reads; failAt++ {
+				reader := &failNthColumnRead{Reader: bytes.NewReader(encoded), failAt: failAt}
+				require.ErrorIs(t, read.run(reader), io.ErrUnexpectedEOF)
+				require.Equal(t, baseline, mp.CurrNB())
+			}
+		})
+	}
+}
+
+func TestLegacyColumnStreamRejectsReadAndShortWriteFailures(t *testing.T) {
+	ctx := context.Background()
+	data := []byte("legacy stream")
+	ext := NewExtent(compress.None, 0, uint32(len(data)), uint32(len(data)))
+	sentinel := io.ErrClosedPipe
+	err := streamLegacyColumnToSpill(ctx, "missing", ext,
+		&partialReadErrorFS{err: sentinel}, &failingColumnWindowSpill{})
+	require.ErrorIs(t, err, sentinel)
+	err = streamLegacyColumnToSpill(ctx, "missing", ext,
+		&partialReadErrorFS{}, &failingColumnWindowSpill{})
+	require.ErrorContains(t, err, "stream is unavailable")
+
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: "short-write", Entries: []fileservice.IOEntry{{Data: data, Size: int64(len(data))}},
+	}))
+	err = streamLegacyColumnToSpill(ctx, "short-write", ext, fs, &failingColumnWindowSpill{})
+	require.ErrorIs(t, err, io.ErrShortWrite)
+	err = streamLegacyColumnToSpill(ctx, "short-write", ext, fs,
+		&failingColumnWindowSpill{writeErr: sentinel})
+	require.ErrorIs(t, err, sentinel)
+}

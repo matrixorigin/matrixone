@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -127,4 +129,48 @@ func TestChunkedColumnHeaderRejectsIncompleteAndMismatchedRows(t *testing.T) {
 	require.ErrorContains(t, err, "row count mismatch")
 	_, _, err = parseColumnChunkHeader(valid, uint32(len(valid)+1))
 	require.ErrorContains(t, err, "row count mismatch")
+}
+
+func TestChunkedColumnWindowReleasesEarlierRowsOnLateFailure(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	valid := twoChunkTestColumn(t, types.T_int64.ToType())
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: "two-chunks", Entries: []fileservice.IOEntry{{Data: valid, Size: int64(len(valid))}},
+	}))
+	ext := NewExtent(compress.Lz4Chunked, 0, uint32(len(valid)), uint32(len(valid)))
+	window, err := readChunkedColumnWindow(ctx, "two-chunks", ext, 0, 2,
+		fileservice.SkipAllCache, fs, mp)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](window))
+	window.Free(mp)
+
+	readErr := errors.New("second chunk unavailable")
+	failing := &countingColumnFS{FileService: fs, failAt: 4, failErr: readErr}
+	window, err = readChunkedColumnWindow(ctx, "two-chunks", ext, 0, 2,
+		fileservice.SkipAllCache, failing, mp)
+	require.Nil(t, window)
+	require.ErrorIs(t, err, readErr)
+	require.Zero(t, mp.CurrNB())
+
+	mixed := twoChunkTestColumn(t, types.T_int32.ToType())
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: "mixed-chunks", Entries: []fileservice.IOEntry{{Data: mixed, Size: int64(len(mixed))}},
+	}))
+	window, err = readChunkedColumnWindow(ctx, "mixed-chunks",
+		NewExtent(compress.Lz4Chunked, 0, uint32(len(mixed)), uint32(len(mixed))), 0, 2,
+		fileservice.SkipAllCache, fs, mp)
+	require.Nil(t, window)
+	require.ErrorContains(t, err, "payload type mismatch")
+	require.Zero(t, mp.CurrNB())
+
+	window, err = readChunkedColumnWindow(ctx, "no-cache-data", ext, 0, 2,
+		fileservice.SkipAllCache, &partialReadErrorFS{}, mp)
+	require.Nil(t, window)
+	require.ErrorContains(t, err, "cache data is unavailable")
+	require.Zero(t, mp.CurrNB())
 }
