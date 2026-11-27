@@ -58,6 +58,9 @@ func (d *tunnelDeliver) Deliver(t *tunnel, typ transferType) {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.migrationBlocked.Load() {
+		return
+	}
 	if !t.mu.started {
 		d.logger.DebugEvent(eventTunnelTransferSkippedNotStarted)
 		return

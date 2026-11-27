@@ -78,6 +78,8 @@ func TestPickTunnels(t *testing.T) {
 	ts.add(t3)
 	res = pickTunnels(ts, 2)
 	require.Equal(t, len(res), 2)
+	t1.migrationBlocked.Store(true)
+	require.ElementsMatch(t, []*tunnel{t2, t3}, pickTunnels(ts, 3))
 }
 
 func TestSortSlice(t *testing.T) {

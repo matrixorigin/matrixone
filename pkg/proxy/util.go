@@ -182,6 +182,9 @@ func pickTunnels(tuns tunnelSet, n int) []*tunnel {
 	ret := make([]*tunnel, 0, size)
 	i := 1
 	for t := range tuns {
+		if t.migrationBlocked.Load() {
+			continue
+		}
 		// if the tunnel is in transfer intent state, we need to put it
 		// into the queue to speed up its transfer, and it does not count
 		// in the 'size'.

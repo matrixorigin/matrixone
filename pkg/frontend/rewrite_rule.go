@@ -308,15 +308,16 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 	return rewritten, nil
 }
 
-// Catalog load errors permit only a complete, standalone transaction end.
-func isStandaloneRoleRuleTxnEnd(ctx context.Context, sql, sqlMode string) bool {
+// A catalog load error permits only standalone controls that do not read
+// protected rows. Their ordinary authorization and handlers still apply.
+func isStandaloneRoleRuleControl(ctx context.Context, sql, sqlMode string) bool {
 	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, sqlMode)
 	if err != nil {
 		return false
 	}
 	defer stmt.Free()
 	switch stmt.(type) {
-	case *tree.CommitTransaction, *tree.RollbackTransaction:
+	case *tree.CommitTransaction, *tree.RollbackTransaction, *tree.Kill:
 		return true
 	}
 	return false
@@ -331,7 +332,7 @@ func isRoleRuleRecoveryStatement(ctx context.Context, sql, sqlMode string) bool 
 	}
 	defer stmt.Free()
 	switch s := stmt.(type) {
-	case *tree.CommitTransaction, *tree.RollbackTransaction, *tree.DropTable:
+	case *tree.CommitTransaction, *tree.RollbackTransaction, *tree.Kill, *tree.DropTable:
 		return true
 	case *tree.SetRole:
 		return s.SecondaryRole && s.SecondaryRoleType == tree.SecondaryRoleTypeNone

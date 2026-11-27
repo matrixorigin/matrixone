@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -1034,6 +1035,17 @@ func (c *clientConn) connectToBackendContext(
 	}
 skipConnCache:
 
+	// Export once before connecting to any destination. State that cannot
+	// move belongs to this session, not to the candidate CNs.
+	var source *query.MigrateConnFromResponse
+	if prevAdd != "" {
+		var err error
+		source, err = c.migrationSourceContext(ctx, prevAdd)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	badCNServers := make(map[string]struct{})
 	// timeoutCNServers tracks CN servers that failed due to timeout.
 	// This helps distinguish between "CN is busy" vs "CN is down".
@@ -1173,15 +1185,16 @@ skipConnCache:
 				return nil, err
 			}
 		} else {
-			// The connection has been transferred to a new server, but migration fails,
-			// but we don't return error, which will cause unknown issue.
-			if err := c.migrateConnContext(ctx, prevAdd, sc); err != nil {
+			if err := c.migrateConnToContext(ctx, sc, source); err != nil {
 				closeErr := sc.Close()
 				if closeErr != nil {
 					c.log.Error("failed to close server connection", zap.Error(closeErr))
 				}
 				if cause := operationContextCause(ctx); cause != nil {
 					return nil, cause
+				}
+				if moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
+					return nil, err
 				}
 				c.log.Error("failed to migrate connection to cn, will retry",
 					zap.Uint32("conn ID", c.connID),

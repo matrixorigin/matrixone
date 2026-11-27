@@ -330,6 +330,8 @@ func TestMigrateConnToContextCancelsReplay(t *testing.T) {
 }
 
 type migrationUserLockQueryClient struct {
+	sourceError                   error
+	sourceCalls                   int
 	userLevelLocks                []*pb.UserLevelLock
 	userLevelLockReleaseSupported bool
 }
@@ -341,6 +343,10 @@ func (c *migrationUserLockQueryClient) ServiceID() string {
 func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error) {
 	switch req.CmdMethod {
 	case pb.CmdMethod_MigrateConnFrom:
+		c.sourceCalls++
+		if c.sourceError != nil {
+			return nil, c.sourceError
+		}
 		return &pb.Response{MigrateConnFromResponse: &pb.MigrateConnFromResponse{
 			DB:                            "d1",
 			UserLevelLocks:                c.userLevelLocks,
@@ -380,7 +386,7 @@ func TestMigrateConnContextRejectsUserLevelLocks(t *testing.T) {
 	}
 	ccc.moCluster = cluster
 
-	err := ccc.migrateConnContext(context.Background(), "pipe", nil)
+	_, err := ccc.migrationSourceContext(context.Background(), "pipe")
 	assert.ErrorContains(t, err, "cannot migrate connection while user-level locks are held")
 }
 
@@ -400,6 +406,25 @@ func TestMigrateConnContextRejectsOldUserLevelLockProtocol(t *testing.T) {
 	ccc.queryClient = &migrationUserLockQueryClient{}
 	ccc.moCluster = cluster
 
-	err := ccc.migrateConnContext(context.Background(), "pipe", nil)
+	_, err := ccc.migrationSourceContext(context.Background(), "pipe")
 	assert.ErrorContains(t, err, "cannot migrate connection from CN without user-level lock release support")
+}
+
+func TestMigrateConnSourceRefusalStopsBeforeRouting(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster("", nil, 0, clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	t.Cleanup(cluster.Close)
+
+	raw, closeFn := createNewClientConn(t)
+	t.Cleanup(closeFn)
+	cc := raw.(*clientConn)
+	source := &migrationUserLockQueryClient{sourceError: moerr.GetOkExpectedNotSafeToStartTransfer()}
+	router := &testRouter{mod: 1}
+	cc.queryClient, cc.moCluster, cc.router = source, cluster, router
+	conn, err := cc.connectToBackendContext(t.Context(), "pipe")
+	require.ErrorIs(t, err, moerr.GetOkExpectedNotSafeToStartTransfer())
+	require.Nil(t, conn)
+	require.Equal(t, 1, source.sourceCalls)
+	require.Zero(t, router.cnt)
 }

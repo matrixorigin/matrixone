@@ -537,6 +537,8 @@ message PrepareStmt {
   string Name = 1;
   string SQL = 2;
   bytes ParamTypes = 3;
+  // Verifies the source's replay context and prepared protocol metadata.
+  bytes ReplayProof = 4;
 }
 
 enum MigrateConnFromAction {

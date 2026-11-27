@@ -647,11 +647,11 @@ func (rt *Routine) migrateConnectionFromWithContext(
 	if ses.hasForeignConns() {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
-	// The prepared-state wire format cannot prove which mandatory role
-	// policy was applied. Keep the connection on the current CN.
-	if len(ses.GetPrepareStmts()) != 0 {
-		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	prepared, err := exportMigrationPrepares(operationCtx, ses)
+	if err != nil {
+		return err
 	}
+	resp.PrepareStmts = prepared
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()

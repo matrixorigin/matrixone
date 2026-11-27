@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"runtime"
@@ -2269,7 +2270,7 @@ func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
 		ses:         ses,
 	}
 	defer tempExecCtx.Close()
-	return doComQuery(ses, tempExecCtx, &UserInput{sql: "use `" + d.db + "`"})
+	return doComQuery(ses, tempExecCtx, &UserInput{sql: "use " + quoteIdentifierForSQL(d.db)})
 }
 
 func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest) error {
@@ -2283,10 +2284,10 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
-	// Serialized PREPARE state carries neither a verified mandatory policy
-	// nor enough original SQL and role state to rebuild one.
-	if len(req.PrepareStmts) != 0 {
-		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	for _, stmt := range req.PrepareStmts {
+		if stmt == nil || len(stmt.ReplayProof) != sha256.Size {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
 	}
 	// USE is replayed as an internal statement and updates ROW_COUNT().
 	// Restore the source session value after all replay work has finished.
@@ -2336,7 +2337,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	if cause := context.Cause(migrationCtx); cause != nil {
 		return cause
 	}
-	return nil
+	return replayMigrationPrepares(migrationCtx, ses, req.PrepareStmts)
 }
 
 func (ses *Session) GetLogger() SessionLogger {

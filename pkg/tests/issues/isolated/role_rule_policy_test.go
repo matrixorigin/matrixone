@@ -25,8 +25,13 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/stretchr/testify/require"
 )
 
@@ -121,14 +126,102 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	} {
 		exec(admin, statement)
 	}
-	reader := connect(1, "sys#policy_test_user#policy_reader")
+	const readerLogin = "sys#policy_test_user#policy_reader"
+	reader := connect(1, readerLogin)
+	observer := connect(1, "root")
+	publishPolicy := func(rule string) {
+		t.Helper()
+		exec(admin, fmt.Sprintf("alter role policy_reader add rule '%s' on table policy_fixture.docs", rule))
+		// Wait for the receiving CN to observe the committed catalog row
+		// before testing its existing restricted connection against that view.
+		require.Eventually(t, func() bool {
+			var name, received string
+			err := observer.QueryRowContext(ctx, "show rules on role policy_reader").Scan(&name, &received)
+			return err == nil && name == "policy_fixture.docs" && received == rule
+		}, 10*time.Second, 50*time.Millisecond)
+	}
+	migrationTarget := connect(0, readerLogin)
+	connectionID := func(conn *sql.Conn) uint32 {
+		t.Helper()
+		var id uint32
+		require.NoError(t, conn.QueryRowContext(ctx, "select connection_id()").Scan(&id))
+		return id
+	}
+	sourceCN, err := cluster.GetCNService(1)
+	require.NoError(t, err)
+	targetCN, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	clusterView := clusterservice.GetMOCluster(sourceCN.ServiceID())
+	queryAddress := func(cn embed.ServiceOperator) string {
+		t.Helper()
+		var address string
+		require.Eventually(t, func() bool {
+			clusterView.GetCNService(clusterservice.NewSelector().SelectByServiceID(cn.ServiceID()), func(service metadata.CNService) bool {
+				address = service.QueryAddress
+				return false
+			})
+			return address != ""
+		}, 15*time.Second, 100*time.Millisecond)
+		return address
+	}
+	sourceAddress, targetAddress := queryAddress(sourceCN), queryAddress(targetCN)
+	rpc, err := qclient.NewQueryClient(sourceCN.ServiceID(), morpc.Config{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rpc.Close()) })
+	export := rpc.NewRequest(query.CmdMethod_MigrateConnFrom)
+	export.MigrateConnFromRequest = &query.MigrateConnFromRequest{ConnID: connectionID(reader)}
+	destinationID := connectionID(migrationTarget)
+
+	exec(reader, "prepare move_doc from 'select id from policy_fixture.docs where id = ?'")
+	native, err := reader.PrepareContext(ctx, "select id from policy_fixture.docs where id = ?")
+	require.NoError(t, err)
+	defer native.Close()
+	rows, err := native.QueryContext(ctx, 2)
+	assertIDs(rows, err, 2)
+	exported, err := rpc.SendMessage(ctx, sourceAddress, export)
+	require.NoError(t, err)
+	defer rpc.Release(exported)
+	require.Len(t, exported.MigrateConnFromResponse.PrepareStmts, 2)
+
+	replay := func(id uint32) error {
+		call := rpc.NewRequest(query.CmdMethod_MigrateConnTo)
+		call.MigrateConnToRequest = &query.MigrateConnToRequest{
+			ConnID: id, PrepareStmts: exported.MigrateConnFromResponse.PrepareStmts,
+		}
+		resp, err := rpc.SendMessage(ctx, targetAddress, call)
+		if err == nil {
+			ack := resp.GetMigrateConnToResponse()
+			require.NotNil(t, ack)
+			require.True(t, ack.Success)
+		}
+		if resp != nil {
+			rpc.Release(resp)
+		}
+		return err
+	}
+	require.NoError(t, replay(destinationID))
+	exec(migrationTarget, "set @move_doc_id = 2")
+	for _, stmt := range exported.MigrateConnFromResponse.PrepareStmts {
+		rows, err = migrationTarget.QueryContext(ctx, fmt.Sprintf("execute %s using @move_doc_id", stmt.Name))
+		assertIDs(rows, err, 2)
+	}
+
 	// Warm an empty policy with a connection-only control before publishing
 	// the first rule on the other CN.
 	for range 2 {
 		rows, err := reader.QueryContext(ctx, "select 1 as id")
 		assertIDs(rows, err, 1)
 	}
-	exec(admin, "alter role policy_reader add rule 'select id, body, embedding from policy_fixture.docs where id <= 2' on table policy_fixture.docs")
+	publishPolicy("select id, body, embedding from policy_fixture.docs where id <= 2")
+	// The old source handle and a stale export are both ineligible once
+	// the receiving statement would be subject to a new mandatory policy.
+	export = rpc.NewRequest(query.CmdMethod_MigrateConnFrom)
+	export.MigrateConnFromRequest = &query.MigrateConnFromRequest{ConnID: connectionID(reader)}
+	_, err = rpc.SendMessage(ctx, sourceAddress, export)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "%v", err)
+	err = replay(connectionID(connect(0, readerLogin)))
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "%v", err)
+
 	const relational = "select id from policy_fixture.docs order by id"
 	const fulltext = "select * from policy_fixture.docs where match(body) against('orchard') order by id"
 	const vector = "select * from policy_fixture.docs order by l2_distance(embedding,'[0,0,0]') limit 2 by rank with option 'mode=pre'"
@@ -209,14 +302,14 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	prepared, err := reader.PrepareContext(ctx, relational)
 	require.NoError(t, err)
 	defer prepared.Close()
-	rows, err := prepared.QueryContext(ctx)
+	rows, err = prepared.QueryContext(ctx)
 	assertIDs(rows, err, 1, 2)
 	exec(reader, "prepare text_policy from 'select id from policy_fixture.docs order by id'")
 	rows, err = reader.QueryContext(ctx, "execute text_policy")
 	assertIDs(rows, err, 1, 2)
 
 	// Update from another CN while the original restricted session stays open.
-	exec(admin, "alter role policy_reader add rule 'select id, body, embedding from policy_fixture.docs where id = 1' on table policy_fixture.docs")
+	publishPolicy("select id, body, embedding from policy_fixture.docs where id = 1")
 	rows, err = reader.QueryContext(ctx, relational)
 	assertIDs(rows, err, 1)
 	for _, query := range []string{fulltext, vector, nestedView} {
@@ -227,7 +320,9 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	_, err = reader.QueryContext(ctx, "execute text_policy")
 	require.ErrorContains(t, err, "role rule policy changed")
 	exec(reader, "deallocate prepare text_policy")
-	exec(admin, "revoke select on table policy_fixture.docs from policy_reader")
+	// Object denial is a separate assertion from cross-CN policy publication.
+	// Revoke on the reader's CN so this check observes its committed DDL.
+	exec(observer, "revoke select on table policy_fixture.docs from policy_reader")
 	for _, query := range []string{relational, fulltext, vector, nestedView} {
 		assertDenied(query, "privilege")
 	}

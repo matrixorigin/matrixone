@@ -73,6 +73,9 @@ func statementAuthorizationContext(ses *Session) *ExecCtx {
 }
 
 func readStatementAuthorizationSnapshot(ctx context.Context, ses *Session, pin bool) (timestamp.Timestamp, error) {
+	if err := ctx.Err(); err != nil {
+		return timestamp.Timestamp{}, err
+	}
 	execution := statementAuthorizationContext(ses)
 	if execution != nil {
 		execution.authorizationMu.Lock()

@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -291,6 +292,15 @@ func TestKill(t *testing.T) {
 	})
 	defer authorization.Reset()
 
+	var roleCatalogUnavailable atomic.Bool
+	readPolicy := captureRoleRuleCache
+	authorization.Stub(&captureRoleRuleCache, func(ctx context.Context, ses *Session) (*roleRuleCache, error) {
+		if roleCatalogUnavailable.Load() {
+			return nil, moerr.NewInternalError(ctx, "test role catalog unavailable")
+		}
+		return readPolicy(ctx, ses)
+	})
+
 	setSessionAlloc("", NewLeakCheckAllocator())
 	sql1 := "select connection_id();"
 	var sql2, sql3, sql4 string
@@ -458,6 +468,12 @@ func TestKill(t *testing.T) {
 	}
 
 	waitForQueryStart(resultSet[sql5].startedCh)
+	roleCatalogUnavailable.Store(true)
+	for _, query := range []string{"select 1", fmt.Sprintf("kill query %d; select 1", conn1Id)} {
+		_, err := conn2.ExecContext(ctx, query)
+		require.ErrorContains(t, err, "test role catalog unavailable")
+	}
+	require.Zero(t, resultSet[sql5].resultX.Load())
 
 	logutil.Infof("conn2 kill query on conn1")
 	//conn2 kills the query
@@ -472,6 +488,7 @@ func TestKill(t *testing.T) {
 	res := resultSet[sql5]
 	require.Equal(t, res.resultX.Load(), contextCancel)
 	logutil.Infof("conn2 kill query on conn1 done")
+	roleCatalogUnavailable.Store(false)
 
 	//================================
 
@@ -493,6 +510,7 @@ func TestKill(t *testing.T) {
 	}()
 
 	waitForQueryStart(res.startedCh)
+	roleCatalogUnavailable.Store(true)
 
 	logutil.Infof("conn2 kill conn1")
 	//conn2 kills the connection 1

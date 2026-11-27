@@ -332,8 +332,9 @@ type PrepareStmt struct {
 	schedulingSQLMode string
 	// optimizerHints is the session value used to build this prepared plan.
 	// EXECUTE rebuilds when it changes without dropping the statement handle.
-	optimizerHints string
-	roleRules      *roleRuleCache // policy encoded in the retained statement and plan
+	optimizerHints   string
+	roleRules        *roleRuleCache // policy encoded in the retained statement and plan
+	optionalRewrites bool
 }
 
 /*

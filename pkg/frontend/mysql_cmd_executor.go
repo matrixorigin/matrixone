@@ -2041,8 +2041,10 @@ func createPrepareStmtInSession(
 	prepareControl := preparePlan.GetDcl().GetPrepare()
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	var roleRules *roleRuleCache
+	var optionalRewrites bool
 	if execCtx.input != nil && execCtx.input.rewritePolicy != nil {
 		roleRules = execCtx.input.rewritePolicy.roleRules
+		optionalRewrites = execCtx.input.rewritePolicy.sessionEnabled
 	}
 	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan && canCachePreparedMetadataCompile(saveStmt) &&
@@ -2080,6 +2082,7 @@ func createPrepareStmtInSession(
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 		roleRules:           roleRules,
+		optionalRewrites:    optionalRewrites,
 	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
@@ -5304,7 +5307,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		beginStatementAuthorization(ses, execCtx)
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
 		if rewriteErr != nil {
-			if !isStandaloneRoleRuleTxnEnd(execCtx.reqCtx, query, sessionSQLModeForParser(ses)) {
+			if !isStandaloneRoleRuleControl(execCtx.reqCtx, query, sessionSQLModeForParser(ses)) {
 				ses.resetDiagnostics()
 				markRowCountFailed(ses, ses.GetProc())
 				rollbackWholeTxnOnPreExecutionError(ses, execCtx, rewriteErr)

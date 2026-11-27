@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -44,7 +45,14 @@ func TestTunnelDeliver_Deliver(t *testing.T) {
 
 	// start the tunnel
 	startTunnel(tun1)
-
+	tun1.migrationBlocked.Store(true)
+	for range 2 {
+		deliver.Deliver(tun1, transferByScaling)
+		assert.Equal(t, 0, deliver.Count())
+		assert.False(t, tun1.tryStartTransferAttempt())
+		tun1.observeMigrationClientActivity(frontend.COM_PING)
+	}
+	tun1.observeMigrationClientActivity(frontend.COM_STMT_CLOSE)
 	deliver.Deliver(tun1, transferByRebalance)
 	assert.Equal(t, 1, deliver.Count())
 

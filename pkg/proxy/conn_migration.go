@@ -37,6 +37,9 @@ func (c *clientConn) migrateConnFromContext(
 	if parent == nil {
 		parent = context.Background()
 	}
+	if c.queryClient == nil || c.moCluster == nil {
+		return nil, moerr.NewInternalError(parent, "migration source query service is unavailable")
+	}
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
 	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
 		ConnID: c.connID,
@@ -51,7 +54,14 @@ func (c *clientConn) migrateConnFromContext(
 	if err != nil {
 		return nil, moerr.AttachCause(ctx, err)
 	}
+	if resp == nil {
+		return nil, moerr.NewInternalError(parent, "missing migration source response")
+	}
+	defer c.queryClient.Release(resp)
 	r := resp.MigrateConnFromResponse
+	if r == nil {
+		return nil, moerr.NewInternalError(parent, "missing migration source response")
+	}
 
 	c.log.Info("connection migrate from server", zap.String("server address", addr),
 		zap.String("tenant", string(c.clientInfo.Tenant)),
@@ -62,7 +72,6 @@ func (c *clientConn) migrateConnFromContext(
 		zap.Int64("goId", goid.Get()),
 	)
 
-	defer c.queryClient.Release(resp)
 	return r, nil
 }
 
@@ -131,30 +140,27 @@ func (c *clientConn) migrateConnToContext(
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
-	c.queryClient.Release(resp)
+	if resp == nil {
+		return moerr.NewInternalError(parent, "missing migration destination response")
+	}
+	defer c.queryClient.Release(resp)
+	ack := resp.GetMigrateConnToResponse()
+	if len(info.PrepareStmts) != 0 && (ack == nil || !ack.Success) {
+		return moerr.NewInternalError(parent, "destination did not acknowledge prepared replay")
+	}
 	return nil
 }
 
-func (c *clientConn) migrateConnContext(
-	ctx context.Context,
-	prevAddr string,
-	sc ServerConn,
-) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (c *clientConn) migrationSourceContext(ctx context.Context, prevAddr string) (*query.MigrateConnFromResponse, error) {
 	resp, err := c.migrateConnFromContext(ctx, prevAddr)
 	if err != nil {
-		return err
-	}
-	if resp == nil {
-		return moerr.NewInternalError(ctx, "bad response")
+		return nil, err
 	}
 	if !resp.UserLevelLockReleaseSupported {
-		return moerr.NewInternalError(ctx, "cannot migrate connection from CN without user-level lock release support")
+		return nil, moerr.NewInternalError(ctx, "cannot migrate connection from CN without user-level lock release support")
 	}
 	if len(resp.UserLevelLocks) > 0 {
-		return moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
+		return nil, moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
 	}
-	return c.migrateConnToContext(ctx, sc, resp)
+	return resp, nil
 }

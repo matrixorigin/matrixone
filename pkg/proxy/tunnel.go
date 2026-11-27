@@ -140,6 +140,9 @@ type tunnel struct {
 	// more proactive.
 	// It only works if RebalancePolicy is "active".
 	transferIntent atomic.Bool
+	// A negative admission will remain true until the client can change
+	// session state. Idle sessions do not repeatedly pause for the same refusal.
+	migrationBlocked atomic.Bool
 	// expectedCacheQuit indicates this tunnel already intercepted a client QUIT
 	// for connection caching, so the follow-up client EOF should not tear down
 	// the backend session that is being cached.
@@ -666,10 +669,16 @@ func (t *tunnel) setTransferIntentForType(i bool, typ transferType) {
 	}
 }
 
+func (t *tunnel) observeMigrationClientActivity(command frontend.CommandType) {
+	if command != frontend.COM_PING && command != frontend.COM_QUIT {
+		t.migrationBlocked.Store(false)
+	}
+}
+
 func (t *tunnel) tryStartTransferAttempt() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.mu.inTransfer {
+	if t.mu.inTransfer || t.migrationBlocked.Load() {
 		return false
 	}
 	t.mu.inTransfer = true
@@ -710,6 +719,11 @@ func (t *tunnel) finishTransfer(start time.Time) {
 func (t *tunnel) doReplaceConnection(ctx context.Context, sync bool) error {
 	newSC, newConn, err := t.getNewServerConn(ctx)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
+			t.migrationBlocked.Store(true)
+			t.counterSet.connMigrationCannotStart.Add(1)
+			return err
+		}
 		t.logger.Error("failed to get a new connection", zap.Error(err))
 		return err
 	}
@@ -752,16 +766,16 @@ func (t *tunnel) transfer(ctx context.Context) error {
 		v2.ProxyTransferFailCounter.Inc()
 		return moerr.AttachCause(ctx, err)
 	}
-	if err := t.doReplaceConnection(ctx, false); err != nil {
+	replaceErr := t.doReplaceConnection(ctx, false)
+	if replaceErr != nil && !moerr.IsMoErrCode(replaceErr, moerr.OkExpectedNotSafeToStartTransfer) {
 		v2.ProxyTransferFailCounter.Inc()
-		err = moerr.AttachCause(ctx, err)
-		t.logger.Error("failed to replace connection", zap.Error(err))
+		t.logger.Error("failed to replace connection", zap.Error(moerr.AttachCause(ctx, replaceErr)))
 	}
 	// Restart pipes even if the error happened in last step.
 	if err := t.kickoff(); err != nil {
 		t.logger.Error("failed to kickoff tunnel", zap.Error(err))
 		_ = t.Close()
-	} else {
+	} else if replaceErr == nil {
 		v2.ProxyTransferSuccessCounter.Inc()
 	}
 	return nil
@@ -783,6 +797,9 @@ func (t *tunnel) transferSync(ctx context.Context) error {
 	ctx, cancel := context.WithTimeoutCause(ctx, defaultTransferTimeout, moerr.CauseTransferSync)
 	defer cancel()
 	if err := t.doReplaceConnection(ctx, true); err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
+			return nil
+		}
 		v2.ProxyTransferFailCounter.Inc()
 		return moerr.AttachCause(ctx, err)
 	}
@@ -800,10 +817,6 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (ServerConn, *MySQLConn, 
 	t.logger.Info("build connection with new server", zap.String("prev addr", prevAddr))
 	newConn, err := t.cc.BuildConnWithServer(ctx, prevAddr)
 	if err != nil {
-		t.logger.Error("failed to build connection with new server",
-			zap.String("prev addr", prevAddr),
-			zap.Error(err),
-		)
 		return nil, nil, err
 	}
 	return newConn, newMySQLConn(
@@ -1063,6 +1076,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			}
 			p.mu.lastCmdTime = time.Now()
 		} else {
+			if len(tempBuf) >= preRecvLen && tempBuf[3] == 0 {
+				p.tun.observeMigrationClientActivity(frontend.CommandType(tempBuf[4]))
+			}
 			if isEmptyPacket(tempBuf) {
 				p.logger.Warn("there comes an empty packet from client")
 			}

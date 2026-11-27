@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -499,10 +500,16 @@ func TestAuthorizationWaitHonorsCancellation(t *testing.T) {
 			execution.authorizationMu.Lock()
 			done := make(chan error, 1)
 			go func() { done <- tc.read(ctx, ses) }()
-			<-ctx.checked
+			checkedBeforeLock := false
+			select {
+			case <-ctx.checked:
+				checkedBeforeLock = true
+			case <-time.After(5 * time.Second):
+			}
 			cancel()
 			execution.authorizationMu.Unlock()
 			require.ErrorIs(t, <-done, context.Canceled)
+			require.True(t, checkedBeforeLock, "authorization must check cancellation before waiting for the lock")
 		})
 	}
 }
