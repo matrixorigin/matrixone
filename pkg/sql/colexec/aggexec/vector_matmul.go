@@ -436,8 +436,20 @@ func vectorMatmulParseBound(raw []byte, vecType types.Type) (uint64, error) {
 	opSize := uint64(reflect.TypeFor[metric.VecBlockOperand]().Size())
 	bound += uint64(nq) * (64 + 4*uint64(cellSize) + 8*uint64(dim) + opSize + 8)
 	// a margin for the decoder's own allocation; the commit returns what is not retained
-	return 2 * bound, nil
+	bound *= 2
+	if !binaryQueries {
+		// vecblock JSON queries decode through a sonic parser that the first decode after a
+		// garbage collection allocates anew; the format is only known after admission
+		bound += vectorMatmulJSONDecoderScratch
+	}
+	return bound, nil
 }
+
+// vectorMatmulJSONDecoderScratch is one sonic optdec parser: a 1 MiB padded input buffer
+// and a 1 MiB node buffer, with headroom for its small buffers. A parse decodes its JSON
+// texts one at a time, so at most one parser is live, though a garbage collection empties
+// sonic's pool and the next decode allocates a new one (about 2.1 MB measured).
+const vectorMatmulJSONDecoderScratch = 2<<20 + 64<<10
 
 // vectorMatmulJSONRows scans text as a JSON array of arrays without decoding it: it returns
 // the number of rows and calls row, when not nil, with each row's element count, the index

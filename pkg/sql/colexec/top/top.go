@@ -293,8 +293,7 @@ func (top *Top) Call(
 			}
 			top.ctr.buildBat.Recursive = bat.Recursive
 			top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
-			top.ctr.buildBat.Attrs = bat.Attrs
-			if len(bat.ExtraBuf) > 0 {
+			if len(bat.ExtraBuf()) > 0 {
 				return result, moerr.NewInternalError(proc.Ctx, "top build should not have extra buffers")
 			}
 			copy(top.ctr.buildBat.Vecs, bat.Vecs)
@@ -839,7 +838,7 @@ func (ctr *container) spillBatch(
 	if bat == nil || ctr.n < 0 || ctr.n > len(bat.Vecs) {
 		return spillRecordRef{}, moerr.NewInvalidInputNoCtx("invalid top spill batch")
 	}
-	if len(bat.ExtraBuf) != 0 {
+	if len(bat.ExtraBuf()) != 0 {
 		return spillRecordRef{}, moerr.NewInvalidInputNoCtx("top spill batch has extra buffers")
 	}
 
@@ -1201,7 +1200,7 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 		}
 		reuseBat.CleanOnlyData()
 		reader := io.NewSectionReader(ctr.spillFile, record.offset, record.size)
-		if err := reuseBat.UnmarshalFromReaderWithMetadataForSpill(
+		if err := reuseBat.UnmarshalSizedFrom(
 			reader,
 			record.size,
 			decodedMP,
@@ -1223,7 +1222,7 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 				if err := outputBat.Vecs[i].PreExtend(chunkSize, outputMP); err != nil {
 					return false, err
 				}
-				if err := outputBat.Vecs[i].PreExtendBitmap(chunkSize, outputMP); err != nil {
+				if err := outputBat.Vecs[i].PreExtendNulls(chunkSize, outputMP); err != nil {
 					return false, err
 				}
 				outputBat.Vecs[i].SetLength(chunkSize)

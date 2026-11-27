@@ -151,6 +151,7 @@ func ValidDistributionMode(val string) bool {
 // HNSW have two secondary index tables, metadata and index storage.  For new vector index algorithm that share the same secondary tables,
 // can use the same IndexTableConfig struct
 type IndexTableConfig struct {
+	SourceTableID uint64 `json:"source_table_id,omitempty"`
 	DbName        string `json:"db"`
 	SrcTable      string `json:"src"`
 	MetadataTable string `json:"metadata"`
@@ -168,6 +169,7 @@ type IndexTableConfig struct {
 
 	// IVF related
 	EntriesTable       string   `json:"entries"`
+	CountFromBuildTxn  bool     `json:"count_from_build_txn,omitempty"`
 	DataSize           int64    `json:"datasize"`
 	Nprobe             uint     `json:"nprobe"`
 	PKeyType           int32    `json:"pktype"`

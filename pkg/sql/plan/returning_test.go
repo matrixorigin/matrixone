@@ -293,17 +293,4 @@ func TestReturningFallbackFeature(t *testing.T) {
 		moerr.NewUnsupportedDML(ctx, foreignKeyUnsupportedDMLCause), "legacy INSERT path",
 	))
 	require.Empty(t, returningFallbackFeature(moerr.NewInvalidInput(ctx, "other"), "legacy INSERT path"))
-	require.Equal(t, "primary-key UPDATE on synchronous full-text/vector index", returningUpdatePlannerFeature(
-		newUpdatePlannerRouteError(
-			updatePlannerRejected,
-			updateRouteReasonIrregularIndex,
-			moerr.NewUnsupportedDML(ctx, "update primary key on a table with a synchronous full-text/vector index"),
-		),
-	))
-	require.Empty(t, returningUpdatePlannerFeature(
-		newRejectedUpdatePlannerRouteError(
-			updateRouteReasonIrregularIndex,
-			moerr.NewUnsupportedDML(ctx, "update vector/full-text index"),
-		),
-	))
 }

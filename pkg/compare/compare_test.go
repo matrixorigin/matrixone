@@ -298,7 +298,6 @@ func TestJSONOrderMetadataAndCopy(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendBytes(source, encoded, false, mp))
 	require.NoError(t, vector.AppendBytes(destination, encodedZero, false, mp))
-	source.GetGrouping().Add(0)
 
 	cmp := NewOrder(types.T_json.ToType(), false, false)
 	cmp.Set(0, source)
@@ -306,13 +305,13 @@ func TestJSONOrderMetadataAndCopy(t *testing.T) {
 	require.Same(t, source, cmp.Vector())
 	require.NoError(t, cmp.Copy(0, 1, 0, 0, proc))
 	require.Equal(t, source.GetBytesAt(0), destination.GetBytesAt(0))
-	require.True(t, destination.GetGrouping().Contains(0))
+	require.False(t, destination.GetNulls().Contains(0))
 
 	require.NoError(t, vector.AppendBytes(value, encodedZero, false, mp))
-	grouped := NewOrder(types.T_json.ToType(), false, false)
-	grouped.Set(0, destination)
-	grouped.Set(1, value)
-	require.Negative(t, grouped.Compare(0, 1, 0, 0), "grouping sentinels compare as SQL NULL")
+	copied := NewOrder(types.T_json.ToType(), false, false)
+	copied.Set(0, destination)
+	copied.Set(1, value)
+	require.Positive(t, copied.Compare(0, 1, 0, 0), "copied value orders after {\"a\": 0}")
 
 	nullsFirst := NewOrder(types.T_json.ToType(), false, false)
 	nullsFirst.Set(0, constNull)
@@ -355,7 +354,7 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		for _, metadata := range []string{"null", "const-null", "grouping"} {
+		for _, metadata := range []string{"null", "const-null"} {
 			t.Run(tc.name+"/"+metadata, func(t *testing.T) {
 				mp := mpool.MustNewZero()
 				proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
@@ -369,7 +368,6 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 				destination := vector.NewVec(tc.typ, view)
 				require.NoError(t, tc.append(destination, false, view))
 				require.Zero(t, destination.GetNulls().GetBitmap().CapWords())
-				require.Zero(t, destination.GetGrouping().GetBitmap().CapWords())
 
 				var source *vector.Vector
 				if metadata == "const-null" {
@@ -377,9 +375,6 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 				} else {
 					source = vector.NewVec(tc.typ, mp)
 					require.NoError(t, tc.append(source, metadata == "null", mp))
-					if metadata == "grouping" {
-						source.GetGrouping().Add(0)
-					}
 				}
 
 				cmp := New(tc.typ, false, false)
@@ -388,7 +383,6 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 				require.NoError(t, cmp.Copy(0, 1, 0, 0, proc))
 
 				require.Equal(t, metadata == "null" || metadata == "const-null", destination.GetNulls().Contains(0))
-				require.Equal(t, metadata == "grouping", destination.GetGrouping().Contains(0))
 				require.Positive(t, account.Snapshot().Used)
 
 				source.Free(mp)
@@ -404,12 +398,12 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 	}
 }
 
-// Null bitmaps are Go-owned, so copying a NULL into an accounted vector
-// succeeds without charging the allocation account.
-func TestCopyAccountedNullUsesGoBitmap(t *testing.T) {
+// A vector's null bitmap comes from the vector's pool, so copying a NULL into
+// an accounted vector charges its allocation account, and Free returns it.
+func TestCopyAccountedNullChargesAccount(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 2)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
@@ -429,7 +423,7 @@ func TestCopyAccountedNullUsesGoBitmap(t *testing.T) {
 	require.NoError(t, cmp.Copy(0, 1, 0, 0, proc))
 	require.True(t, destination.GetNulls().Contains(0))
 	require.Equal(t, 1, destination.Length())
-	require.Equal(t, used, account.Snapshot().Used)
+	require.Greater(t, account.Snapshot().Used, used, "the null bitmap is charged")
 
 	source.Free(mp)
 	destination.Free(view)

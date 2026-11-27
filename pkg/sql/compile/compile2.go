@@ -178,7 +178,7 @@ func (c *Compile) Compile(
 	// rolling back the caller's workspace statement. This also covers
 	// frontend background execution and reused Compile instances.
 	if c.proc != nil && c.proc.IncrStatementDisabled() {
-		if err = validateTemporalResultProtocol(c.proc, queryPlan); err != nil {
+		if err = validateTemporalResultContracts(queryPlan); err != nil {
 			return err
 		}
 		queryPlan, err = c.prepareCreateNamePlan(queryPlan)
@@ -186,22 +186,10 @@ func (c *Compile) Compile(
 			return err
 		}
 	}
-	if err = validateJSONStringConsumerProtocol(c.proc, queryPlan); err != nil {
-		return err
-	}
 	if err = plan.RequireLegacyCollations(queryPlan); err != nil {
 		return err
 	}
-	if err = validateTemporalResultProtocol(c.proc, queryPlan); err != nil {
-		return err
-	}
-	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
-		return err
-	}
-	if err = validateHexMySQLNumericProtocol(c.proc, queryPlan); err != nil {
-		return err
-	}
-	if err = validateIncompleteTemporalStringProtocol(c.proc, queryPlan); err != nil {
+	if err = validateTemporalResultContracts(queryPlan); err != nil {
 		return err
 	}
 	if c.indexMaintenanceSpec != nil {
@@ -457,7 +445,7 @@ func expressionsContainUnresolvedFullText(expressions []*plan.Expr) bool {
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	defer func() { err = process.UnwrapPipelineFailure(err) }()
-	if err = validateTemporalResultProtocol(c.proc, c.pn); err != nil {
+	if err = validateTemporalResultContracts(c.pn); err != nil {
 		return nil, err
 	}
 	if c.pn.GetDdl().GetDropTable() != nil {
@@ -477,19 +465,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	warningsSucceeded := false
 	defer func() { warnings.finish(warningsSucceeded, warningDestination) }()
 
-	// Cached plans can outlive the negotiated cluster capability.
-	if err = validateJSONStringConsumerProtocol(c.proc, c.pn); err != nil {
-		return nil, err
-	}
-	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
-		return nil, err
-	}
-	if err = validateHexMySQLNumericProtocol(c.proc, c.pn); err != nil {
-		return nil, err
-	}
-	if err = validateIncompleteTemporalStringProtocol(c.proc, c.pn); err != nil {
-		return nil, err
-	}
 	var txnOperator = c.proc.GetTxnOperator()
 
 	// init context for pipeline.
@@ -600,6 +575,13 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	var coordinatorPhaseStart time.Time
 	var coordinatorPhaseBase time.Duration
 	var allocationAttempt *statementAllocationAttempt
+	localJoined, analyzed := false, false
+	defer func() {
+		if err != nil && localJoined && !analyzed {
+			resourceRecorder.publish()
+			c.capturePartialExecution(runC, uint64(retryTimes))
+		}
+	}()
 	finishAllocationAttempt := func() error {
 		if allocationAttempt == nil {
 			return nil
@@ -645,6 +627,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			localJoined = false
 			var panicErr error = moerr.NewInternalError(execTopContext, "panic while executing DML RETURNING")
 			if c.resultSink != nil {
 				panicErr = errors.Join(panicErr, c.cancelAndWaitRunningSQL(&attemptRemoteWait))
@@ -700,7 +683,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				coordinatorPhaseStart = time.Time{}
 				coordinatorPhaseBase = 0
 
-				if runErr := runC.runOnce(); runErr != nil {
+				joined, runErr := runC.runOnce()
+				localJoined = joined
+				if runErr != nil {
 					return runErr
 				}
 				return runC.proc.GetQueryContextError()
@@ -832,6 +817,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		)
 		attemptOpen = false
 		warnings.finish(false, nil)
+		localJoined = false
 		if runC != c {
 			releaseRetryCompile(runC)
 		}
@@ -919,6 +905,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	// outcome. The panic defer above remains the single terminal owner until
 	// this call returns.
 	c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
+	analyzed = true
 	if terminalErr := finishAllocationAttempt(); terminalErr != nil {
 		err = joinAllocationLifecycleErrors(err, terminalErr)
 		err = abortSinkAttempt(err)

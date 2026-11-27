@@ -143,15 +143,17 @@ func TestStatementDiagnosticsSQL(t *testing.T) {
 			_, err = db.ExecContext(ctx, sql)
 			require.NoError(t, err)
 		}
-		for _, tc := range []struct{ name, sql string }{
-			{"compile_failure", "select * from missing_issue23386_probe"},
-			{"run_failure", "insert into issue23386_duplicate.t values(1)"},
+		for _, tc := range []struct {
+			name, sql string
+			partial   bool
+		}{
+			{"compile_failure", "select * from missing_issue23386_probe", false},
+			{"run_failure", "insert into issue23386_duplicate.t values(1)", true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				sql := tc.sql
-				_, err := db.ExecContext(ctx, sql)
+				_, err := db.ExecContext(ctx, tc.sql)
 				require.Error(t, err)
-				if strings.HasPrefix(sql, "insert") {
+				if tc.partial {
 					var wireErr *mysql.MySQLError
 					require.ErrorAs(t, err, &wireErr)
 					require.Equal(t, uint16(1062), wireErr.Number)
@@ -160,9 +162,14 @@ func TestStatementDiagnosticsSQL(t *testing.T) {
 				require.Equal(t, "failed", d.Outcome)
 				require.GreaterOrEqual(t, d.Level, 2)
 				capture := ""
-				if strings.HasPrefix(sql, "insert") {
-					capture = "execution_failed_before_analysis"
-					require.Equal(t, "execution_failed_before_analysis", d.Detail.Capture)
+				if tc.partial {
+					capture = "partial_execution"
+					require.Equal(t, capture, d.Detail.Capture)
+					require.True(t, d.Detail.Partial.Interrupted)
+					require.Zero(t, d.Detail.Partial.Attempt)
+					require.NotEmpty(t, d.Physical)
+				} else {
+					require.False(t, d.Detail.Partial.Interrupted)
 					require.Empty(t, d.Logical)
 					require.Empty(t, d.Physical)
 				}

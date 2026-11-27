@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"math"
 	"reflect"
 	"slices"
@@ -918,12 +919,12 @@ func validationPrivilegeCarrier(node *plan.Node) *plan.Node {
 		carrier.ExternScan = &plan.ExternScan{Type: node.GetExternScan().GetType()}
 		return carrier
 	case plan.Node_FUNCTION_SCAN:
-		if node.TableDef == nil || node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "table_changes" {
+		if !IsSourceResolvingTableFunction(node) {
 			return nil
 		}
 		// Keep the function discriminator for authorization. Catalog validation
-		// uses the underlying table dependency recorded by buildTableChanges.
-		carrier.TableDef.TblFunc = &plan.TableFunction{Name: "table_changes"}
+		// uses the underlying source dependency recorded by the function binder.
+		carrier.TableDef.TblFunc = &plan.TableFunction{Name: node.TableDef.TblFunc.Name}
 		return carrier
 	default:
 		return nil
@@ -1388,8 +1389,11 @@ func validateIndicatorWindowSpec(
 	if defines.IsNoEvaluationViewBinding(ctx) {
 		return nil
 	}
-	period, ok := constantFoldedPeriod(fn.Args[1], proc)
-	if !ok || period < 1 || period > 1024 {
+	period, err := constantFoldedPeriod(ctx, fn.Args[1], proc)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if err != nil || period < 1 || period > 1024 {
 		return moerr.NewInvalidInputf(ctx,
 			"period argument of %s must be a constant integer in [1, 1024]", funcName)
 	}
@@ -1405,57 +1409,37 @@ func validateIndicatorWindowSpec(
 // itself refuses to fold volatile, real-time, aggregate or window
 // functions, expressions that evaluate only with warnings, and errors, so
 // every such form plus non-constant inputs, NULL and non-integer results
-// reports !ok and rejects with the pinned section-4 diagnostic. Without a
+// is rejected by the caller's period check. Without a
 // process (builder-less unit-test stubs) only a directly-bound integer
 // literal qualifies. The folded value decides admission only; the executed
 // period still flows through the argument expression's own evaluation and
 // the executor-side per-row validation.
-func constantFoldedPeriod(expr *plan.Expr, proc *process.Process) (int64, bool) {
+func constantFoldedPeriod(ctx context.Context, expr *plan.Expr, proc *process.Process) (int64, error) {
 	if expr == nil {
-		return 0, false
+		return 0, nil
 	}
 	folded := expr
 	if proc != nil {
 		var err error
-		folded, err = ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)
+		folded, err = foldBoundConstant(ctx, DeepCopyExpr(expr), proc)
 		if err != nil {
-			return 0, false
+			return 0, err
 		}
-	} else if folded.GetLit() == nil {
-		return 0, false
-	}
-	if folded.Typ.Id == int32(types.T_any) {
-		return 0, false
 	}
 	if !types.T(folded.Typ.Id).IsInteger() {
-		return 0, false
+		return 0, nil
 	}
 	lit := folded.GetLit()
 	if lit == nil || lit.Isnull {
-		return 0, false
+		return 0, nil
 	}
-	switch val := lit.Value.(type) {
-	case *plan.Literal_I8Val:
-		return int64(val.I8Val), true
-	case *plan.Literal_I16Val:
-		return int64(val.I16Val), true
-	case *plan.Literal_I32Val:
-		return int64(val.I32Val), true
-	case *plan.Literal_I64Val:
-		return val.I64Val, true
-	case *plan.Literal_U8Val:
-		return int64(val.U8Val), true
-	case *plan.Literal_U16Val:
-		return int64(val.U16Val), true
-	case *plan.Literal_U32Val:
-		return int64(val.U32Val), true
-	case *plan.Literal_U64Val:
-		if val.U64Val > math.MaxInt64 {
-			return 0, false
-		}
-		return int64(val.U64Val), true
+	if value, ok := literalSignedValue(lit); ok {
+		return value, nil
 	}
-	return 0, false
+	if value, ok := literalUnsignedValue(lit); ok && value <= math.MaxInt64 {
+		return int64(value), nil
+	}
+	return 0, nil
 }
 
 func isWindowFrameParam(expr tree.Expr) bool {
@@ -1892,6 +1876,7 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 		return e, nil
 	}
 
+	proc = processForBoundExpr(bindCtx, numberExpr, proc)
 	executor, err := colexec.NewExpressionExecutor(proc, numberExpr)
 	if err != nil {
 		return nil, err

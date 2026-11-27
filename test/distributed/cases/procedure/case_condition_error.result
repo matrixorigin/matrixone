@@ -1,0 +1,145 @@
+drop database if exists case_cond_error;
+create database case_cond_error;
+use case_cond_error;
+create table choices(id int primary key);
+create table effects(id int primary key, stage varchar(20));
+insert into choices values(1),(2);
+select 1 = (select id from choices);
+Subquery returns more than 1 row
+create procedure p_case_error() '
+BEGIN
+INSERT INTO effects VALUES(1,''before'');
+CASE 1 WHEN (SELECT id FROM choices) THEN
+INSERT INTO effects VALUES(2,''then'');
+ELSE
+INSERT INTO effects VALUES(3,''else'');
+END CASE;
+INSERT INTO effects VALUES(4,''after'');
+END';
+call p_case_error();
+Subquery returns more than 1 row
+select * from effects order by id;
+➤ id[4,32,0]  ¦  stage[12,20,0]
+select count(*) from effects;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop procedure p_case_error;
+delete from choices where id = 2;
+create procedure p_case_match() '
+BEGIN
+INSERT INTO effects VALUES(1,''before'');
+CASE 1 WHEN (SELECT id FROM choices) THEN
+INSERT INTO effects VALUES(2,''then'');
+ELSE
+INSERT INTO effects VALUES(3,''else'');
+END CASE;
+INSERT INTO effects VALUES(4,''after'');
+END';
+call p_case_match();
+select * from effects order by id;
+➤ id[4,32,0]  ¦  stage[12,20,0]  𝄀
+1  ¦  before  𝄀
+2  ¦  then  𝄀
+4  ¦  after
+drop procedure p_case_match;
+delete from effects;
+create procedure p_case_else() '
+BEGIN
+INSERT INTO effects VALUES(1,''before'');
+CASE 1 WHEN (SELECT id + 1 FROM choices) THEN
+INSERT INTO effects VALUES(2,''then'');
+ELSE
+INSERT INTO effects VALUES(3,''else'');
+END CASE;
+INSERT INTO effects VALUES(4,''after'');
+END';
+call p_case_else();
+select * from effects order by id;
+➤ id[4,32,0]  ¦  stage[12,20,0]  𝄀
+1  ¦  before  𝄀
+3  ¦  else  𝄀
+4  ¦  after
+drop procedure p_case_else;
+delete from effects;
+create procedure p_case_null_then_else() '
+BEGIN
+INSERT INTO effects VALUES(1,''before'');
+CASE 1 WHEN NULL THEN
+INSERT INTO effects VALUES(2,''then'');
+ELSE
+INSERT INTO effects VALUES(3,''else'');
+END CASE;
+INSERT INTO effects VALUES(4,''after'');
+END';
+select 1 = NULL as null_cond;
+➤ null_cond[-6,8,0]  𝄀
+null
+call p_case_null_then_else();
+select * from effects order by id;
+➤ id[4,32,0]  ¦  stage[12,20,0]  𝄀
+1  ¦  before  𝄀
+3  ¦  else  𝄀
+4  ¦  after
+select count(*) from effects;
+➤ count(*)[-5,64,0]  𝄀
+3
+drop procedure p_case_null_then_else;
+delete from effects;
+create procedure p_case_null_then_match() '
+BEGIN
+INSERT INTO effects VALUES(1,''before'');
+CASE 1 WHEN NULL THEN
+INSERT INTO effects VALUES(2,''then'');
+WHEN 1 THEN
+INSERT INTO effects VALUES(5,''second'');
+ELSE
+INSERT INTO effects VALUES(3,''else'');
+END CASE;
+INSERT INTO effects VALUES(4,''after'');
+END';
+call p_case_null_then_match();
+select * from effects order by id;
+➤ id[4,32,0]  ¦  stage[12,20,0]  𝄀
+1  ¦  before  𝄀
+4  ¦  after  𝄀
+5  ¦  second
+drop procedure p_case_null_then_match;
+delete from effects;
+insert into choices values(2);
+create procedure p_case_null_then_error() '
+BEGIN
+INSERT INTO effects VALUES(1,''before'');
+CASE 1 WHEN NULL THEN
+INSERT INTO effects VALUES(2,''then'');
+WHEN (SELECT id FROM choices) THEN
+INSERT INTO effects VALUES(5,''second'');
+ELSE
+INSERT INTO effects VALUES(3,''else'');
+END CASE;
+INSERT INTO effects VALUES(4,''after'');
+END';
+call p_case_null_then_error();
+Subquery returns more than 1 row
+select * from effects order by id;
+➤ id[4,32,0]  ¦  stage[12,20,0]
+select count(*) from effects;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop procedure p_case_null_then_error;
+delete from choices where id = 2;
+delete from effects;
+create procedure p_case_noelse() '
+BEGIN
+INSERT INTO effects VALUES(1,''before'');
+CASE 1 WHEN 9 THEN
+INSERT INTO effects VALUES(2,''then'');
+END CASE;
+INSERT INTO effects VALUES(4,''after'');
+END';
+call p_case_noelse();
+select * from effects order by id;
+➤ id[4,32,0]  ¦  stage[12,20,0]  𝄀
+1  ¦  before  𝄀
+4  ¦  after
+drop procedure p_case_noelse;
+drop database if exists case_cond_error;

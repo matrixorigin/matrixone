@@ -126,7 +126,7 @@ func TestAtomicBatch_Append(t *testing.T) {
 		Batches: []*batch.Batch{},
 		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
 	}
-	bat := batch.New([]string{"pk", "ts"})
+	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mp)
 	bat.Vecs[1] = testutil.MakeTSVector([]types.TS{types.BuildTS(1, 1)}, nil, mp)
 
@@ -139,7 +139,7 @@ func TestAtomicBatch_Close(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	defer mpool.DeleteMPool(mp)
 
-	bat := batch.New([]string{"attr1"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mp)
 
 	type fields struct {
@@ -267,7 +267,7 @@ func Test_atomicBatchRowIter(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	defer mpool.DeleteMPool(mp)
 
-	bat := batch.New([]string{"attr1"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mp)
 
 	// at init position (before the first row)
@@ -304,7 +304,7 @@ func TestAtomicBatch_RowCountDeduplicates(t *testing.T) {
 	ts := types.BuildTS(10, 2)
 
 	createBatch := func(pk int32) *batch.Batch {
-		b := batch.New([]string{"pk", "ts"})
+		b := batch.NewWithSize(2)
 		b.Vecs[0] = testutil.MakeInt32Vector([]int32{pk}, nil, mp)
 		b.Vecs[1] = testutil.MakeTSVector([]types.TS{ts}, nil, mp)
 		return b

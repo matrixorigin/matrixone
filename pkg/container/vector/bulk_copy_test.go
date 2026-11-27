@@ -29,11 +29,9 @@ func TestBatchCopySelection(t *testing.T) {
 	t.Cleanup(func() { flat.Free(mp) })
 	require.NoError(t, AppendFixedList(flat, []int64{11, 22, 33}, nil, mp))
 	flat.SetNull(1)
-	flat.GetGrouping().Add(2)
 	constant, err := NewConstBytes(types.T_varchar.ToType(), []byte("a non-inline constant payload"), 3, mp)
 	require.NoError(t, err)
 	t.Cleanup(func() { constant.Free(mp) })
-	constant.GetGrouping().Add(2)
 
 	// Reuse the batch's vector slots across representation generations. Each
 	// fresh selection must honor the current source, including reordered rows.
@@ -101,7 +99,7 @@ func TestBatchCopySelectionAliasAndAdmission(t *testing.T) {
 			state := newTestVectorAllocationAccount(t, 1, 128)
 			t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
 			dmp := state.view(t, mp)
-			out := newAccountedTestVector(t, types.T_int64.ToType(), dmp)
+			out := NewVec(types.T_int64.ToType(), dmp)
 			t.Cleanup(func() { out.Free(dmp) })
 			var err error
 			if rangeCopy {

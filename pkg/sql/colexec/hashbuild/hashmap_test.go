@@ -35,155 +35,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestObserveNullKeysUsesColumnLevelGroupingSentinel(t *testing.T) {
+func TestObserveNullKeysCountsEveryNull(t *testing.T) {
 	mp := mpool.MustNewZero()
-	newVec := func(nullRows, groupingRows []uint64) *vector.Vector {
-		vec := vector.NewVec(types.T_int32.ToType(), mp)
-		require.NoError(t, vector.AppendFixedList(
-			vec,
-			[]int32{1, 2},
-			nil,
-			mp,
-		))
-		for _, row := range nullRows {
-			vec.GetNulls().Add(row)
-		}
-		for _, row := range groupingRows {
-			vec.GetGrouping().Add(row)
-		}
-		return vec
-	}
-
 	tests := []struct {
-		name         string
-		nullRows     []uint64
-		groupingRows []uint64
-		want         bool
+		name     string
+		nullRows []uint64
+		constant bool
+		want     bool
 	}{
-		{
-			name:         "grouping sentinel masks null in same row",
-			nullRows:     []uint64{0},
-			groupingRows: []uint64{0},
-			want:         false,
-		},
-		{
-			name:         "full grouping is sentinel",
-			nullRows:     []uint64{0, 1},
-			groupingRows: []uint64{0, 1},
-			want:         false,
-		},
-		{
-			name:         "partial grouping without null",
-			groupingRows: []uint64{0},
-			want:         false,
-		},
-		{
-			name:         "null outside partial grouping is retained",
-			nullRows:     []uint64{1},
-			groupingRows: []uint64{0},
-			want:         true,
-		},
+		{name: "no null", want: false},
+		{name: "partial null", nullRows: []uint64{1}, want: true},
+		{name: "all null", nullRows: []uint64{0, 1}, want: true},
+		{name: "const null", constant: true, want: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			vec := newVec(test.nullRows, test.groupingRows)
+			var vec *vector.Vector
+			if test.constant {
+				vec = vector.NewConstNull(types.T_int32.ToType(), 2, mp)
+			} else {
+				vec = vector.NewVec(types.T_int32.ToType(), mp)
+				require.NoError(t, vector.AppendFixedList(vec, []int32{1, 2}, nil, mp))
+				for _, row := range test.nullRows {
+					vec.GetNulls().Add(row)
+				}
+			}
 			defer vec.Free(mp)
 			builder := HashmapBuilder{TrackNullKeys: true}
 			builder.observeNullKeys([]*vector.Vector{vec})
 			require.Equal(t, test.want, builder.HasNullKey)
 		})
 	}
-}
-
-func TestBuildHashmapPreservesRowwiseGroupingAcrossCopiedBatchMerge(t *testing.T) {
-	for _, test := range []struct {
-		name       string
-		groupFirst bool
-		columns    int
-	}{
-		{name: "grouping then ordinary", groupFirst: true, columns: 1},
-		{name: "ordinary then grouping", groupFirst: false, columns: 1},
-		{name: "multi-column grouping pattern", groupFirst: true, columns: 2},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-			defer proc.Free()
-			builder := newTestHashmapBuilder(t)
-			defer builder.Free(proc)
-
-			exprs := make([]*plan.Expr, test.columns)
-			for column := range exprs {
-				exprs[column] = newExpr(int32(column), types.T_int32.ToType())
-			}
-			require.NoError(t, builder.Prepare(exprs, -1, -1, nil, proc))
-
-			appendInput := func(grouping bool, groupingColumn int) {
-				input := batch.NewWithSize(test.columns)
-				for column := 0; column < test.columns; column++ {
-					if grouping && column == groupingColumn {
-						input.Vecs[column] = vector.NewRollupConst(
-							types.T_int32.ToType(), 1, proc.Mp(),
-						)
-					} else {
-						input.Vecs[column] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
-						require.NoError(t, vector.AppendFixed(
-							input.Vecs[column], int32(column), false, proc.Mp(),
-						))
-					}
-				}
-				input.SetRowCount(1)
-				require.NoError(t, builder.CopyBuildBatch(input, proc))
-				builder.InputBatchRowCount++
-				input.Clean(proc.Mp())
-			}
-
-			appendInput(test.groupFirst, 0)
-			if test.columns == 2 {
-				// A different grouping column in the later row proves that the
-				// per-column bit pattern survives tail coalescing.
-				appendInput(true, 1)
-			} else {
-				appendInput(!test.groupFirst, 0)
-			}
-
-			require.Len(t, builder.Batches.Buf, 1)
-			require.Equal(t, 2, builder.Batches.Buf[0].RowCount())
-			require.False(t, builder.Batches.Buf[0].Vecs[0].IsGrouping())
-			require.True(t, builder.Batches.Buf[0].Vecs[0].HasGrouping())
-
-			require.NoError(t, builder.BuildHashmap(false, false, false, proc))
-			require.Nil(t, builder.IntHashMap)
-			require.NotNil(t, builder.StrHashMap)
-			require.Equal(t, uint64(2), builder.StrHashMap.GroupCount())
-		})
-	}
-}
-
-func TestBuildHashmapDetectsGroupingForOriginalBuildRelation(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-	builder := newTestHashmapBuilder(t)
-	defer builder.Free(proc)
-
-	expr := newExpr(0, types.T_int32.ToType())
-	expr.GetCol().RelPos = 1
-	require.NoError(t, builder.Prepare([]*plan.Expr{expr}, -1, -1, nil, proc))
-
-	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
-	require.NoError(t, vector.AppendFixedList(
-		input.Vecs[0], []int32{0, 0}, nil, proc.Mp(),
-	))
-	input.Vecs[0].GetGrouping().Add(1)
-	input.SetRowCount(2)
-	require.NoError(t, builder.CopyBuildBatch(input, proc))
-	builder.InputBatchRowCount = input.RowCount()
-	input.Clean(proc.Mp())
-
-	require.NoError(t, builder.BuildHashmap(false, false, false, proc))
-	require.Nil(t, builder.IntHashMap)
-	require.NotNil(t, builder.StrHashMap)
-	require.Equal(t, uint64(2), builder.StrHashMap.GroupCount())
 }
 
 func TestBuildHashMap(t *testing.T) {
@@ -780,7 +662,7 @@ func TestDedupUpdateBuildGroupsNullKeysSeparately(t *testing.T) {
 		nulls[i] = uint64(hashmap.UnitLimit + i)
 	}
 	keyVec := testutil.MakeInt32Vector(keys, nulls, proc.Mp())
-	bat := batch.New([]string{"id"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, keyVec)
 	bat.SetRowCount(rows)
 	require.NoError(t, hb.CopyBuildBatch(bat, proc))
@@ -863,7 +745,7 @@ func TestStrIteratorCapacityPrune(t *testing.T) {
 	vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	large := strings.Repeat("x", hashmap.MaxStrIteratorCapacity+4096)
 	require.NoError(t, vector.AppendBytes(vec, []byte(large), false, proc.Mp()))
-	bat := batch.New([]string{"col"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, vec)
 	bat.SetRowCount(1)
 	hb.InputBatchRowCount = bat.RowCount()
@@ -886,7 +768,7 @@ func TestStrIteratorBelowThresholdIsKept(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		require.NoError(t, vector.AppendBytes(vec, []byte("small"), false, proc.Mp()))
 	}
-	bat := batch.New([]string{"col"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, vec)
 	bat.SetRowCount(vec.Length())
 	hb.InputBatchRowCount = bat.RowCount()
@@ -939,7 +821,7 @@ func TestAlternateIntStrBuildsReuseIndependently(t *testing.T) {
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_varchar.ToType())}, -1, -1, nil, proc))
 	vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
-	bat := batch.New([]string{"col"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, vec)
 	bat.SetRowCount(1)
 	hb.InputBatchRowCount = bat.RowCount()
@@ -1341,7 +1223,6 @@ func TestDedupBuildIgnorePrefersOriginalKeyOwner(t *testing.T) {
 				defer bat.Clean(proc.Mp())
 				logical := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				bat.Vecs = append(bat.Vecs, logical)
-				bat.Attrs = append(bat.Attrs, "logical")
 				require.NoError(t, vector.AppendBytesList(logical, [][]byte{[]byte("BETA"), []byte("beta")}, nil, proc.Mp()))
 				require.NoError(t, hb.CopyBuildBatch(bat, proc))
 				hb.InputBatchRowCount = bat.RowCount()
@@ -1502,7 +1383,7 @@ func TestBuildHashmapErrorDoesNotLeakIterators(t *testing.T) {
 	hb.Batches.Reset()
 	hb.Batches.Buf = nil
 	intVec := testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
-	intBat := batch.New([]string{"col"})
+	intBat := batch.NewWithSize(1)
 	intBat.SetVector(0, intVec)
 	intBat.SetRowCount(1)
 	require.NoError(t, hb.CopyBuildBatch(intBat, proc))
@@ -1659,7 +1540,7 @@ func TestFreeThenBuildRepopulatesCache(t *testing.T) {
 	// First build to populate cache.
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
 	intVec := testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
-	intBat := batch.New([]string{"col"})
+	intBat := batch.NewWithSize(1)
 	intBat.SetVector(0, intVec)
 	intBat.SetRowCount(2)
 	hb.InputBatchRowCount = intBat.RowCount()
@@ -1733,7 +1614,7 @@ func makeIntBatch(tb testing.TB, n int, proc *process.Process) *batch.Batch {
 		ints[i] = int32(i)
 	}
 	vec := testutil.MakeInt32Vector(ints, nil, proc.Mp())
-	bat := batch.New([]string{"col"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, vec)
 	bat.SetRowCount(n)
 	return bat
@@ -1744,7 +1625,7 @@ func makeStrBatch(tb testing.TB, n int, proc *process.Process) *batch.Batch {
 	for i := 0; i < n; i++ {
 		require.NoError(tb, vector.AppendBytes(vec, []byte("v"+strconv.Itoa(i)), false, proc.Mp()))
 	}
-	bat := batch.New([]string{"col"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, vec)
 	bat.SetRowCount(n)
 	return bat
@@ -1753,7 +1634,7 @@ func makeStrBatch(tb testing.TB, n int, proc *process.Process) *batch.Batch {
 func makeIntKeyValueBatch(proc *process.Process, keys []int32, values []int32) *batch.Batch {
 	keyVec := testutil.MakeInt32Vector(keys, nil, proc.Mp())
 	valueVec := testutil.MakeInt32Vector(values, nil, proc.Mp())
-	bat := batch.New([]string{"id", "v"})
+	bat := batch.NewWithSize(2)
 	bat.SetVector(0, keyVec)
 	bat.SetVector(1, valueVec)
 	bat.SetRowCount(len(keys))
@@ -1769,7 +1650,7 @@ func makeIntKeyValueBatchWithReleaseMarker(
 	keyVec := testutil.MakeInt32Vector(keys, nil, proc.Mp())
 	valueVec := testutil.MakeInt32Vector(values, nil, proc.Mp())
 	releasedVec := testutil.MakeBoolVector(released, nil, proc.Mp())
-	bat := batch.New([]string{"id", "v", "released"})
+	bat := batch.NewWithSize(3)
 	bat.SetVector(0, keyVec)
 	bat.SetVector(1, valueVec)
 	bat.SetVector(2, releasedVec)
@@ -1787,7 +1668,7 @@ func makeIntKeyValueBatchWithMarker(
 	keyVec := testutil.MakeInt32Vector(keys, nil, proc.Mp())
 	valueVec := testutil.MakeInt32Vector(values, nil, proc.Mp())
 	markerVec := testutil.MakeInt32Vector(markers, markerNulls, proc.Mp())
-	bat := batch.New([]string{"id", "v", "old_row_id"})
+	bat := batch.NewWithSize(3)
 	bat.SetVector(0, keyVec)
 	bat.SetVector(1, valueVec)
 	bat.SetVector(2, markerVec)
@@ -2017,7 +1898,7 @@ func TestStrIteratorLargeStringTriggersPrune(t *testing.T) {
 	vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	large := strings.Repeat("x", hashmap.MaxStrIteratorCapacity+2048)
 	require.NoError(t, vector.AppendBytes(vec, []byte(large), false, proc.Mp()))
-	bat := batch.New([]string{"col"})
+	bat := batch.NewWithSize(1)
 	bat.SetVector(0, vec)
 	bat.SetRowCount(1)
 

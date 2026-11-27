@@ -166,40 +166,55 @@ func TestIntegerArithmeticWidth(t *testing.T) {
 			check(t, rows, []string{"BIGINT", "BIGINT"}, [][]string{{"-384", "1"}, {"200", "1"}})
 			require.NoError(t, rows.Err())
 		})
+		checkColumnTypes := func(t *testing.T, table string, want ...string) {
+			t.Helper()
+			expected := make([][]string, len(want))
+			for i, typ := range want {
+				expected[i] = []string{typ}
+			}
+			query(t, "select column_type from information_schema.columns where table_schema='"+schema+
+				"' and table_name='"+table+"' order by ordinal_position", nil, expected)
+		}
 		t.Run("grouping rewrite preserves CTAS roots", func(t *testing.T) {
 			for groupIndex, group := range []string{"%s", "%s with rollup", "cube(%s)", "grouping sets ((%s),())"} {
 				for windowIndex, window := range []struct{ projection, order string }{
 					{"", ""}, {",row_number() over () as rn", ""}, {"", " order by row_number() over ()"},
 				} {
-					for expressionIndex, tc := range []struct{ expr, from, typ, negative, positive string }{
-						{"b*b*b", "t", "int", "-2097152", "1000000"},
-						{"b*b*b+1", "t", "int", "-2097151", "1000001"},
-						{"case when b>0 then b*b*b else b*b*b+1 end", "t", "int", "-2097151", "1000000"},
-						{"x", "(select b*b*b as x from t) s", "bigint", "-2097152", "1000000"},
+					for _, tc := range []struct {
+						name, projection, from, key, typ, wire string
+						negative, positive                     []string
+					}{
+						{"direct", "b*b*b as x,b*b*b+1 as y,case when b>0 then b*b*b else b*b*b+1 end as z", "t", "b", "int", "INT",
+							[]string{"-2097152", "-2097151", "-2097151"}, []string{"1000000", "1000001", "1000000"}},
+						{"reference", "x", "(select b*b*b as x from t) s", "x", "bigint", "BIGINT",
+							[]string{"-2097152"}, []string{"1000000"}},
 					} {
-						table := fmt.Sprintf("grouped_%d_%d_%d", groupIndex, windowIndex, expressionIndex)
-						key := "b"
-						if tc.expr == "x" {
-							key = "x"
+						table := fmt.Sprintf("grouped_%d_%d_%s", groupIndex, windowIndex, tc.name)
+						by := fmt.Sprintf(group, tc.key)
+						exec("create table " + table + " as select " + tc.projection + window.projection + " from " + tc.from + " group by " + by + window.order)
+						names := []string{"x", "y", "z"}[:len(tc.negative)]
+						stored := make([]string, 0, len(names)+1)
+						wire := make([]string, 0, len(names))
+						nulls := make([]string, 0, len(names))
+						for range names {
+							stored = append(stored, tc.typ)
+							wire = append(wire, tc.wire)
+							nulls = append(nulls, "NULL")
 						}
-						by := fmt.Sprintf(group, key)
-						exec("create table " + table + " as select " + tc.expr + " as x" + window.projection + " from " + tc.from + " group by " + by + window.order)
-						var typ string
-						require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema=? and table_name=? and column_name='x'", schema, table).Scan(&typ))
-						require.Equal(t, tc.typ, typ, table)
-						want := [][]string{{tc.negative}, {tc.positive}}
+						want := [][]string{tc.negative, tc.positive}
 						if groupIndex > 0 {
-							want = append([][]string{{"NULL"}}, want...)
+							want = append([][]string{nulls}, want...)
 						}
-						wireType := "INT"
-						if tc.typ == "bigint" {
-							wireType = "BIGINT"
+						if window.projection != "" {
+							stored = append(stored, "bigint unsigned")
 						}
-						query(t, "select x from "+table+" order by x", []string{wireType}, want)
+						checkColumnTypes(t, table, stored...)
+						query(t, "select "+strings.Join(names, ",")+" from "+table+" order by x", wire, want)
 						if window.projection != "" {
 							count := len(want)
 							query(t, "select count(distinct rn),min(rn),max(rn),sum(rn) from "+table, nil, [][]string{{fmt.Sprint(count), "1", fmt.Sprint(count), fmt.Sprint(count * (count + 1) / 2)}})
 						}
+						exec("drop table " + table)
 					}
 				}
 			}
@@ -216,33 +231,26 @@ func TestIntegerArithmeticWidth(t *testing.T) {
 				require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema=? and table_name=? and column_name='x'", schema, table).Scan(&typ))
 				require.Equal(t, "bigint", typ, selectSQL)
 				query(t, "select x from "+table+" order by x", []string{"BIGINT"}, [][]string{{"NULL"}, {"-2097152"}, {"1000000"}})
+				exec("drop table " + table)
 			}
+			var transientTables int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select count(*) from information_schema.tables where table_schema=? and left(table_name,8)='grouped_'", schema).
+				Scan(&transientTables))
+			require.Zero(t, transientTables, "transient grouping tables must be released before database teardown")
 		})
 
 		exec("create table c(b tinyint,m mediumint,u mediumint unsigned)")
 		exec("insert into c values(1,100,100),(0,200,200)")
 		t.Run("CASE alias and reference schemas", func(t *testing.T) {
-			for n, tc := range []struct{ expr, direct, ref string }{
-				{"case when b>0 then m+1 else m+m end", "int", "bigint"},
-				{"case when b>0 then u+1 else u+u end", "int unsigned", "int unsigned"},
-				{"case when b>0 then m+1 else null end", "int", "bigint"},
-				{"case when b>0 then m+1 else cast(null as signed) end", "bigint", "bigint"},
-				{"m+1", "int", "bigint"},
-			} {
-				for _, reference := range []bool{false, true} {
-					table := fmt.Sprintf("d%d_%v", n, reference)
-					selectSQL := "select " + tc.expr + " as x from c"
-					want := tc.direct
-					if reference {
-						selectSQL = "select x from (" + selectSQL + ") r"
-						want = tc.ref
-					}
-					exec("create table " + table + " as " + selectSQL)
-					var typ string
-					require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema=? and table_name=?", schema, table).Scan(&typ))
-					require.Equal(t, want, typ, selectSQL)
-				}
-			}
+			const projection = "select case when b>0 then m+1 else m+m end as signed_case," +
+				"case when b>0 then u+1 else u+u end as unsigned_case," +
+				"case when b>0 then m+1 else null end as null_case," +
+				"case when b>0 then m+1 else cast(null as signed) end as typed_null_case,m+1 as addition from c"
+			exec("create table case_direct as " + projection)
+			checkColumnTypes(t, "case_direct", "int", "int unsigned", "int", "bigint", "int")
+			exec("create table case_reference as select signed_case,unsigned_case,null_case,typed_null_case,addition from (" + projection + ") r")
+			checkColumnTypes(t, "case_reference", "bigint", "int unsigned", "bigint", "bigint", "bigint")
 			exec("create table square as select b*b bb,i*i ii from t")
 			query(t, "select bb,ii from square order by bb", []string{"INT", "BIGINT"}, [][]string{{"10000", "4611686014132420609"}, {"16384", "NULL"}})
 		})

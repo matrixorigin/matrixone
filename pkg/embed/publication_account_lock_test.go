@@ -44,6 +44,13 @@ func startPublicationAccountLockCluster(t *testing.T, lockBudget toml.ByteSize) 
 		if s.ServiceType() == metadata.ServiceType_CN {
 			s.Adjust(func(cfg *ServiceConfig) {
 				cfg.CN.LockService.MaxLockRowCount = lockBudget
+				// The tests commit on one CN and check the catalog on the
+				// other. With freshness sacrificed (the default), a new
+				// transaction starts at its CN's latest applied logtail and
+				// may miss the other CN's commit, so a positive check fails
+				// and a zero check passes vacuously. Start every
+				// transaction at the current time instead.
+				cfg.CN.Txn.EnableSacrificingFreshness = -1
 			})
 		}
 	}))
@@ -89,7 +96,10 @@ func TestCreatePublicationExplicitTargetLockScope(t *testing.T) {
 		require.NoError(t, err)
 		defer gate.Rollback()
 		var locked int
-		require.NoError(t, gate.QueryRowContext(f.ctx, "select account_id from mo_catalog.mo_account where account_id=? for update", id).Scan(&locked))
+		ctx, cancel := f.statementContext(publicationStatementTimeout)
+		err = gate.QueryRowContext(ctx, "select account_id from mo_catalog.mo_account where account_id=? for update", id).Scan(&locked)
+		cancel()
+		require.NoError(t, err)
 		require.Equal(t, id, locked)
 		drop := f.start(f.left, "drop account pub_lock_unused")
 		waited, err := f.waitForLockOrResult(drop, 0, "mo_account")
@@ -216,13 +226,22 @@ type publicationAccountSQL struct {
 	running     sync.WaitGroup
 }
 
+const (
+	publicationStatementTimeout = 90 * time.Second
+	publicationFixtureTimeout   = 5 * time.Minute
+)
+
 func newPublicationAccountSQL(t *testing.T, cluster Cluster) *publicationAccountSQL {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), publicationFixtureTimeout)
 	t.Cleanup(cancel)
 	f := &publicationAccountSQL{t: t, ctx: ctx, cancel: cancel, cluster: cluster}
 	f.left, f.right = f.open(0, "dump"), f.open(1, "dump")
 	return f
+}
+
+func (f *publicationAccountSQL) statementContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(f.ctx, timeout)
 }
 
 func (f *publicationAccountSQL) open(index int, user string) *sql.DB {
@@ -246,8 +265,14 @@ func (f *publicationAccountSQL) stopStatements() {
 }
 
 func (f *publicationAccountSQL) exec(db *sql.DB, stmt string) {
+	f.execWithTimeout(db, stmt, publicationStatementTimeout)
+}
+
+func (f *publicationAccountSQL) execWithTimeout(db *sql.DB, stmt string, timeout time.Duration) {
 	f.t.Helper()
-	_, err := db.ExecContext(f.ctx, stmt)
+	ctx, cancel := f.statementContext(timeout)
+	defer cancel()
+	_, err := db.ExecContext(ctx, stmt)
 	require.NoError(f.t, err, stmt)
 }
 
@@ -259,7 +284,9 @@ func (f *publicationAccountSQL) createAccount(name string) {
 func (f *publicationAccountSQL) number(db *sql.DB, query string, args ...any) int {
 	f.t.Helper()
 	var number int
-	require.NoError(f.t, db.QueryRowContext(f.ctx, query, args...).Scan(&number), query)
+	ctx, cancel := f.statementContext(publicationStatementTimeout)
+	defer cancel()
+	require.NoError(f.t, db.QueryRowContext(ctx, query, args...).Scan(&number), query)
 	return number
 }
 
@@ -269,7 +296,9 @@ func (f *publicationAccountSQL) holdSourceDatabase(name string) *sql.Tx {
 	require.NoError(f.t, err)
 	f.t.Cleanup(func() { _ = tx.Rollback() })
 	var id uint64
-	require.NoError(f.t, tx.QueryRowContext(f.ctx, `select dat_id from mo_catalog.mo_database
+	ctx, cancel := f.statementContext(publicationStatementTimeout)
+	defer cancel()
+	require.NoError(f.t, tx.QueryRowContext(ctx, `select dat_id from mo_catalog.mo_database
 		where account_id=0 and datname=? for update`, name).Scan(&id))
 	return tx
 }
@@ -277,7 +306,9 @@ func (f *publicationAccountSQL) holdSourceDatabase(name string) *sql.Tx {
 func (f *publicationAccountSQL) start(db *sql.DB, stmt string) <-chan error {
 	result := make(chan error, 1)
 	f.running.Go(func() {
-		_, err := db.ExecContext(f.ctx, stmt)
+		ctx, cancel := f.statementContext(publicationStatementTimeout)
+		defer cancel()
+		_, err := db.ExecContext(ctx, stmt)
 		result <- err
 	})
 	return result
@@ -341,7 +372,9 @@ func TestPublicationAccountCoveringRange(t *testing.T) {
 		tx, err := f.left.BeginTx(f.ctx, nil)
 		require.NoError(t, err)
 		defer tx.Rollback()
-		rows, err := tx.QueryContext(f.ctx, "select account_id from mo_catalog.mo_account for share")
+		ctx, cancel := f.statementContext(publicationStatementTimeout)
+		defer cancel()
+		rows, err := tx.QueryContext(ctx, "select account_id from mo_catalog.mo_account for share")
 		require.NoError(t, err)
 		defer rows.Close()
 		n := 0
@@ -370,7 +403,7 @@ func TestPublicationAccountCoveringRange(t *testing.T) {
 		f.exec(f.left, "create snapshot pub_range_snap for cluster")
 		f.exec(f.left, "drop publication a_range_all")
 		f.exec(f.left, "drop publication z_range_named")
-		f.exec(f.right, "restore cluster {snapshot='pub_range_snap'}")
+		f.execWithTimeout(f.right, "restore cluster {snapshot='pub_range_snap'}", 4*time.Minute)
 		require.Equal(t, 5, f.number(f.left, active, "a_range_all"))
 		require.Equal(t, 2, f.number(f.left, active, "z_range_named"))
 		require.Equal(t, 2, f.number(f.left, active+" and sub_account_name in ('range_a','range_e')", "z_range_named"))

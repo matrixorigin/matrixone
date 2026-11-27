@@ -29,6 +29,16 @@ set session rollup_algorithm = 'SORT';
 -- @regex("Union All",false)
 explain select a, b,
                 count(*) as cnt,
+                sum(amount) as total
+from t_rollup_sort
+group by a, b with rollup
+order by a, b;
+
+-- GROUPING is a constant of each grouping-set branch, which sort rollup does
+-- not have, so a query using it keeps the Union All expansion.
+-- @regex("Union All",true)
+explain select a, b,
+                count(*) as cnt,
                 sum(amount) as total,
                 grouping(a) as grouping_a,
                 grouping(b) as grouping_b

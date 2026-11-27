@@ -354,12 +354,7 @@ func (proc *Process) SetTypedPrepareParams(params *batch.Batch) {
 }
 
 func (proc *Process) setTypedPrepareParams(params *batch.Batch, owned bool) {
-	old := proc.Base.typedPrepareParams
-	if old != nil && old != params && proc.Base.typedPrepareParamsOwned {
-		old.Clean(proc.Mp())
-	}
-	proc.Base.typedPrepareParams = params
-	proc.Base.typedPrepareParamsOwned = owned && params != nil
+	proc.setTypedPrepareParamsWithConversions(params, owned, nil)
 }
 
 // GetTypedPrepareParam returns parameter i as a one-row vector of its source
@@ -385,6 +380,7 @@ type PrepareParamsState struct {
 	owned         bool
 	typed         *batch.Batch
 	typedOwned    bool
+	conversions   *TypedParamConversions
 	source        types.StringSource
 }
 
@@ -398,6 +394,7 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 		owned:         proc.Base.prepareParamsOwned,
 		typed:         proc.Base.typedPrepareParams,
 		typedOwned:    proc.Base.typedPrepareParamsOwned,
+		conversions:   proc.Base.typedPrepareParamConversions,
 		source:        proc.Base.prepareParamsStringSource,
 	}
 	proc.Base.prepareParams = nil
@@ -405,6 +402,7 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 	proc.Base.prepareParamsOwned = false
 	proc.Base.typedPrepareParams = nil
 	proc.Base.typedPrepareParamsOwned = false
+	proc.Base.typedPrepareParamConversions = nil
 	return state
 }
 
@@ -413,7 +411,7 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 // Process.Free releases only resources owned by that nested work.
 func (proc *Process) BorrowPrepareParams(state PrepareParamsState) {
 	proc.setPrepareParams(state.prepareParams, state.isBin, false)
-	proc.setTypedPrepareParams(state.typed, false)
+	proc.setTypedPrepareParamsWithConversions(state.typed, false, state.conversions)
 	proc.Base.prepareParamsStringSource = state.source
 }
 
@@ -421,7 +419,7 @@ func (proc *Process) BorrowPrepareParams(state PrepareParamsState) {
 // DetachPrepareParams.
 func (proc *Process) RestorePrepareParams(state PrepareParamsState) {
 	proc.setPrepareParams(state.prepareParams, state.isBin, state.owned)
-	proc.setTypedPrepareParams(state.typed, state.typedOwned)
+	proc.setTypedPrepareParamsWithConversions(state.typed, state.typedOwned, state.conversions)
 	proc.Base.prepareParamsStringSource = state.source
 }
 
@@ -467,7 +465,6 @@ func (proc *Process) NewBatchFromSrcWithAllocation(
 			bat.Clean(mp)
 		}
 	}()
-	bat.SetAttributes(src.Attrs)
 	bat.Recursive = src.Recursive
 	for i := range bat.Vecs {
 		if src.Vecs[i] == nil {

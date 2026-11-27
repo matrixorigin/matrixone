@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -66,25 +65,6 @@ func newColumnIOEntry(ext Extent, factory CacheConstructorFactory) fileservice.I
 // Vector cannot mutate the sealed representation retained by the cache.
 type validatedVectorCacheData struct {
 	data fscache.Data
-}
-
-// privateJSONVectorCacheData is created only by the private JSON column
-// constructor, which owns the allocation from creation through validation.
-// The older validation marker alone does not prove absence of writable aliases.
-type privateJSONVectorCacheData struct{ *validatedVectorCacheData }
-
-func (d *privateJSONVectorCacheData) Slice(length int) fscache.Data {
-	buf := d.data.Bytes()
-	if length == len(buf) {
-		return d
-	}
-	return fileservice.NewBytes(bytes.Clone(buf[:length]))
-}
-
-// A public callback may retain both its input and its returned Data. Pass it a
-// snapshot and do not transfer private-reader qualification to its result.
-func (d *privateJSONVectorCacheData) RehomeCacheData(copyData func([]byte) fscache.Data) fscache.Data {
-	return copyData(d.validatedVectorSnapshot())
 }
 
 var _ fscache.Data = (*validatedVectorCacheData)(nil)
@@ -269,29 +249,6 @@ func columnCacheConstructorFactory(size int64, algo uint8) CacheConstructor {
 				cacheData.Release()
 			}
 			return nil, err
-		}
-		return validated, nil
-	}
-}
-
-// privateJSONColumnCacheConstructorFactory is selected only for an actual
-// JSON_VALUE input request. Its allocator cannot retain the constructor's
-// writable buffer; the validated wrapper is published only after construction.
-func privateJSONColumnCacheConstructorFactory(size int64, algo uint8) CacheConstructor {
-	construct := constructorFactory(size, algo)
-	return func(ctx context.Context, reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (fscache.Data, error) {
-		privateAllocator := fileservice.NewPrivateCacheDataAllocator(allocator)
-		owned, err := construct(ctx, reader, data, privateAllocator)
-		if err != nil {
-			return nil, err
-		}
-		validated, err := validateVectorCacheData(owned)
-		if err != nil {
-			owned.Release()
-			return nil, err
-		}
-		if marked, ok := validated.(*validatedVectorCacheData); ok {
-			return &privateJSONVectorCacheData{validatedVectorCacheData: marked}, nil
 		}
 		return validated, nil
 	}
@@ -539,10 +496,7 @@ func copyCachedVector(
 			// admitting a fresh, exactly-sized private copy; unused capacity must
 			// not consume the next block's budget. Inline-only and fixed columns
 			// keep reuse.
-			data := vector.DetachVectorData(toVec)
-			area := vector.DetachVectorArea(toVec)
-			data.Free(mp)
-			area.Free(mp)
+			toVec.Free(mp)
 		}
 		return toVec.UnionBatch(&source, 0, source.Length(), nil, mp)
 	}
@@ -1078,14 +1032,13 @@ func MustObjectMeta(buffer []byte) ObjectMeta {
 }
 
 // TryBorrowCachedVector turns the empty dst into a read-only reference vector
-// (nil pool) over a privately validated cache column. keeper (the lender that
-// published dst, normally the output batch) holds the cache pin and, through
-// an accounted view mp, a reservation of the full pinned capacity, until it
-// drops or reuses its columns. dst must never be mutated; a consumer that
+// (nil pool) over a privately validated cache column. pins, the lender's
+// (for a scan, its reader request's), takes the cache pin and, through an
+// accounted view mp, a reservation of the full pinned capacity, until the
+// lender drops or reuses dst. dst must never be mutated; a consumer that
 // needs to write copies it first.
-func TryBorrowCachedVector(dst *vector.Vector, data fscache.Data, mp *mpool.MPool, keeper bufferlease.Keeper) (bool, error) {
-	marked, ok := data.(validatedVectorCacheDataMarker)
-	if !ok || keeper == nil || mp == nil || dst == nil || dst.Length() != 0 || dst.Allocated() != 0 || dst.GetType().Oid == types.T_json {
+func TryBorrowCachedVector(dst *vector.Vector, data fscache.Data, mp *mpool.MPool, pins *CachePins) (bool, error) {
+	if !isValidatedVectorCacheData(data) || pins == nil || mp == nil || dst == nil || dst.Length() != 0 || dst.Allocated() != 0 || dst.GetType().Oid == types.T_json {
 		return false, nil
 	}
 	var source vector.Vector
@@ -1121,100 +1074,12 @@ func TryBorrowCachedVector(dst *vector.Vector, data fscache.Data, mp *mpool.MPoo
 		}
 	}
 	data.Retain()
-	lease, err := bufferlease.NewRefCounted(marked.validatedVectorBackingForScope(), data.Capacity(), func() {
-		data.Release()
-		pin.Release()
-	})
-	if err != nil {
-		data.Release()
-		pin.Release()
-		return false, err
-	}
-	// The keeper takes its own reference; ours is dropped on return, so the
-	// keeper's release is the last one.
-	defer lease.Release()
-	if err = keeper.HoldLease(lease); err != nil {
-		return false, err
-	}
+	pins.add(data, pin)
 	view, err := source.Window(0, source.Length())
 	if err != nil {
-		// The keeper keeps the pin until its next release; dst holds nothing.
+		// pins keeps the pin until the lender's next release; dst holds nothing.
 		return false, err
 	}
 	*dst = *view
 	return true, nil
-}
-
-// JSONCachePinAdmission reserves physical non-MPool backing for the lifetime
-// of a reader owner and returns its unique release function.
-type JSONCachePinAdmission = vector.JSONReaderMemoryAdmission
-
-// OpenJSONReader retains a private cache column only after its complete backing
-// is admitted to the caller's account (an accounted view mp) or pin admission.
-// Otherwise it returns an independently allocated snapshot charged through mp.
-// No mutable cache-backed Vector escapes.
-func OpenJSONReader(data fscache.Data, mp *mpool.MPool, admissions ...JSONCachePinAdmission) (vector.JSONReader, error) {
-	if data == nil || mp == nil {
-		return nil, moerr.NewInvalidInputNoCtx("JSON cache reader requires data and a pool")
-	}
-	var admission vector.JSONReaderMemoryAdmission
-	if len(admissions) != 0 {
-		admission = admissions[0]
-	}
-	var view *mpool.MPool
-	if mp.IsView() && !mp.IsAdmissionView() {
-		view = mp
-	}
-	private, isPrivate := data.(*privateJSONVectorCacheData)
-	if isPrivate {
-		capacity := data.Capacity()
-		if capacity < 0 {
-			return nil, moerr.NewInvalidInputNoCtx("invalid JSON cache backing capacity")
-		}
-		var releasePin func()
-		var err error
-		switch {
-		case view != nil:
-			var pin *mpool.CapacityLease
-			pin, err = view.ReservePinnedCapacity(uint64(capacity))
-			if err == nil {
-				releasePin = pin.Release
-			}
-		case len(admissions) > 0 && admissions[0] != nil:
-			releasePin, err = admissions[0](uint64(capacity))
-		}
-		if err != nil {
-			if releasePin != nil {
-				releasePin()
-			}
-			return nil, err
-		}
-		if releasePin != nil {
-			return newCacheJSONReader(data, private, view, capacity, releasePin, admission)
-		}
-		if len(admissions) > 0 && admissions[0] != nil {
-			return nil, moerr.NewInternalErrorNoCtx("JSON cache pin admission returned no release")
-		}
-	}
-	data.Retain()
-	defer data.Release()
-	var buf []byte
-	if marked, ok := data.(validatedVectorCacheDataMarker); ok {
-		buf = marked.validatedVectorBackingForScope()
-	} else {
-		buf = data.Bytes()
-	}
-	if len(buf) < IOEntryHeaderSize {
-		return nil, io.ErrUnexpectedEOF
-	}
-	header := DecodeIOEntryHeader(buf)
-	if header.Type != IOET_ColData || header.Version != IOET_ColumnData_V1 && header.Version != IOET_ColumnData_V2 {
-		return nil, moerr.NewInvalidInputNoCtx("invalid JSON object column header")
-	}
-	var source vector.Vector
-	defer source.Free(nil)
-	if err := mustVectorTo(&source, buf, isPrivate); err != nil {
-		return nil, err
-	}
-	return vector.NewJSONReaderSnapshot(&source, mp, admission)
 }

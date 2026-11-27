@@ -58,9 +58,6 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 		for row, value := range values {
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), source == 0 && row == 1, proc.Mp()))
 		}
-		if source == 0 {
-			bat.Vecs[0].GetGrouping().Add(1)
-		}
 		bat.SetRowCount(2)
 	}
 	// The helper's input is resolved global build ordinals, with the existing
@@ -70,7 +67,7 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 	ctr.zvs = []int64{0, 1, 1, 1, 1, 1, 1, 0}
 	ctr.probeTrackBuildMatches = true
 	ctr.rightRowsMatched = new(bitmap.Bitmap)
-	ctr.rightRowsMatched.InitWithSize(colexec.DefaultBatchSize + 2)
+	mustBitmapOK(ctr.rightRowsMatched.InitWithSize(colexec.DefaultBatchSize+2, bitmapTestMP))
 	matched, err := ctr.appendUniqueMatches(arg, proc, 7)
 	require.NoError(t, err)
 	require.Equal(t, 5, matched)
@@ -82,7 +79,6 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 	payload := ctr.resBat.Vecs[1]
 	for row, value := range []string{"a", "", "c", "d", "a"} {
 		require.Equal(t, row == 1, payload.IsNull(uint64(row)))
-		require.Equal(t, row == 1, payload.GetGrouping().Contains(uint64(row)))
 		if row != 1 {
 			require.Equal(t, value, string(payload.GetBytesAt(row)))
 		}
@@ -90,8 +86,8 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 }
 
 func TestHashJoinUniqueProjectionFixedScattered(t *testing.T) {
-	for _, grouping := range []bool{false, true} {
-		t.Run(fmt.Sprintf("grouping=%t", grouping), func(t *testing.T) {
+	{
+		t.Run("scattered", func(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			arg := &HashJoin{ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}, {Rel: 1, Pos: 1}, {Rel: 1, Pos: 2}}}
 			ctr := &arg.ctr
@@ -125,14 +121,11 @@ func TestHashJoinUniqueProjectionFixedScattered(t *testing.T) {
 					require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.Decimal128{B0_63: uint64(source*10 + row)}, row == 1, proc.Mp()))
 					require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte(fmt.Sprintf("%d-%d", source, row)), row == 2, proc.Mp()))
 				}
-				if grouping {
-					bat.Vecs[0].GetGrouping().Add(2)
-				}
 				bat.SetRowCount(4)
 			}
 			ctr.probeTrackBuildMatches = true
 			ctr.rightRowsMatched = new(bitmap.Bitmap)
-			ctr.rightRowsMatched.InitWithSize(colexec.DefaultBatchSize + 4)
+			mustBitmapOK(ctr.rightRowsMatched.InitWithSize(colexec.DefaultBatchSize+4, bitmapTestMP))
 			ctr.vs, ctr.zvs = make([]uint64, 16), make([]int64, 16)
 			for row := range 16 {
 				ctr.vs[row], ctr.zvs[row] = uint64(1+row%4+(row%2)*colexec.DefaultBatchSize), 1
@@ -157,7 +150,6 @@ func TestHashJoinUniqueProjectionFixedScattered(t *testing.T) {
 				require.Equal(t, expected.Length(), actual.Length())
 				for row := range matched {
 					require.Equal(t, expected.IsNull(uint64(row)), actual.IsNull(uint64(row)))
-					require.Equal(t, expected.GetGrouping().Contains(uint64(row)), actual.GetGrouping().Contains(uint64(row)))
 					if !expected.IsNull(uint64(row)) {
 						if col < 2 {
 							require.Equal(t, vector.GetFixedAtNoTypeCheck[int32](expected, row), vector.GetFixedAtNoTypeCheck[int32](actual, row))
@@ -206,7 +198,6 @@ func TestHashJoinUniqueProjectionProbeRange(t *testing.T) {
 				physical, _ := vector.MustVarlenaRawData(source)
 				physical[2].SetOffsetLen(1<<30, 65536) // NULL payload must not be read.
 			}
-			source.GetGrouping().Add(3)
 			ctr.leftBat.SetRowCount(6)
 			for _, target := range []*vector.Vector{want, ctr.resBat.Vecs[0]} {
 				require.NoError(t, vector.AppendBytes(target, []byte("existing-prefix"), false, proc.Mp()))
@@ -226,7 +217,6 @@ func TestHashJoinUniqueProjectionProbeRange(t *testing.T) {
 			require.Equal(t, want.Length(), got.Length())
 			for row := range want.Length() {
 				require.Equal(t, want.IsNull(uint64(row)), got.IsNull(uint64(row)))
-				require.Equal(t, want.GetGrouping().Contains(uint64(row)), got.GetGrouping().Contains(uint64(row)))
 				if !want.IsNull(uint64(row)) {
 					require.Equal(t, want.GetBytesAt(row), got.GetBytesAt(row))
 				}
@@ -403,7 +393,7 @@ func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
 	arg.ctr.leftBat, arg.ctr.vs, arg.ctr.zvs = left, []uint64{1}, []int64{1}
 	arg.ctr.probeTrackBuildMatches = true
 	arg.ctr.rightRowsMatched = new(bitmap.Bitmap)
-	arg.ctr.rightRowsMatched.InitWithSize(1)
+	mustBitmapOK(arg.ctr.rightRowsMatched.InitWithSize(1, bitmapTestMP))
 	matched, err := arg.ctr.appendUniqueMatches(arg, proc, 1)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, matched)

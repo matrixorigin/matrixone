@@ -70,7 +70,6 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 					values, _ := vector.MustVarlenaRawData(v)
 					values[2].SetOffsetLen(1<<30, 65536) // Never read NULL payload.
 				}
-				v.GetGrouping().Add(2)
 				bat.SetRowCount(4)
 			}
 			// Resolved build ordinals use DefaultBatchSize stride; only the
@@ -82,7 +81,8 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 			} {
 				want.CleanOnlyData()
 				var bm bitmap.Bitmap
-				bm.InitWithSize(colexec.DefaultBatchSize + 4)
+				bm.Init(bitmapTestMP)
+				mustBitmapOK(bm.InitWithSize(colexec.DefaultBatchSize+4, bitmapTestMP))
 				for _, row := range selected {
 					bm.Add(row)
 					require.NoError(t, want.UnionOne(sources[row/colexec.DefaultBatchSize].Vecs[0], int64(row%colexec.DefaultBatchSize), proc.Mp()))
@@ -100,7 +100,6 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 					for row := range want.Length() {
 						require.True(t, result.Batch.Vecs[0].IsNull(uint64(row)))
 						require.Equal(t, want.IsNull(uint64(row)), got.IsNull(uint64(row)))
-						require.Equal(t, want.GetGrouping().Contains(uint64(row)), got.GetGrouping().Contains(uint64(row)))
 						if !want.IsNull(uint64(row)) {
 							require.Equal(t, want.GetBytesAt(row), got.GetBytesAt(row))
 						}
@@ -156,7 +155,8 @@ func TestHashJoinFinalizeProjectionAllocation(t *testing.T) {
 			})
 			require.NoError(t, arg.SetAllocationAccount(account))
 			var bm bitmap.Bitmap
-			bm.InitWithSize(int64(count))
+			bm.Init(bitmapTestMP)
+			mustBitmapOK(bm.InitWithSize(int64(count), bitmapTestMP))
 			for row := range count {
 				require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(row), false, proc.Mp()))
 				value := "live"

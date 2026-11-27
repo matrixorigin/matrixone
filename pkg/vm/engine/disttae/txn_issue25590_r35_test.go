@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/stretchr/testify/require"
@@ -106,7 +105,6 @@ func TestIssue25590ReusedWriterReservationsSettleUnderReboundWorkspace(t *testin
 				rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowidVec)
 				bat := batch.NewWithSize(2)
 				defer bat.Clean(txn.proc.Mp())
-				bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
 				rowidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 				bat.Vecs[0] = rowidCol
 				require.NoError(t, vector.AppendFixedList(rowidCol, rowids, nil, txn.proc.Mp()))

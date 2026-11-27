@@ -141,11 +141,7 @@ func (r *TableRange) IsEmpty() bool {
 }
 
 func MakeTableRangeBatch(mp *mpool.MPool) *batch.Batch {
-	return batch.NewWithSchema(
-		MetaSchema_TableRange_Attrs,
-		MetaSchema_TableRange_Types,
-		mp,
-	)
+	return batch.NewWithTypes(MetaSchema_TableRange_Types, mp)
 }
 
 // data should be sorted by table id and object type
@@ -161,18 +157,19 @@ func ExportToTableRangesByFilter(
 	if start == -1 {
 		return
 	}
-	for i := start; i < len(tableIds); i++ {
-		if objectTypes[i] == objectType {
-			break
+	end, count := start, 0
+	for rows := data.RowCount(); end < rows && end < len(tableIds) && tableIds[end] == tableId; end++ {
+		if objectTypes[end] == objectType {
+			count++
 		}
-		start++
 	}
+	if count == 0 {
+		return nil
+	}
+	ranges = make([]TableRange, 0, count)
 	startRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[2])
 	endRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[3])
-	for i, rows := start, data.RowCount(); i < rows; i++ {
-		if tableIds[i] != tableId {
-			break
-		}
+	for i := start; i < end; i++ {
 		if objectTypes[i] != objectType {
 			continue
 		}
@@ -281,14 +278,12 @@ func ForEachFile(
 	var (
 		end bool
 	)
-	tmpBat := batch.NewWithSchema(
-		DataScan_TableIDAtrrs, DataScan_TableIDTypes, mp,
-	)
+	tmpBat := batch.NewWithTypes(DataScan_TableIDTypes, mp)
 	defer tmpBat.Clean(mp)
 	for {
 		tmpBat.CleanOnlyData()
 		if end, err = reader.Read(
-			ctx, tmpBat.Attrs, nil, mp, tmpBat,
+			ctx, DataScan_TableIDAtrrs, nil, mp, tmpBat,
 		); err != nil {
 			return
 		}

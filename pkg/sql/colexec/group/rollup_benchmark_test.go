@@ -281,10 +281,7 @@ func rollupBenchmarkCountOracle(base *batch.Batch) (func(*batch.Batch) error, fu
 		for row := 0; row < out.RowCount(); row++ {
 			key := rollupBenchmarkCountKey{prefix: 3}
 			for i := range keys {
-				rolled := out.Vecs[i].GetGrouping().Contains(uint64(row))
-				if rolled != out.Vecs[i].GetNulls().Contains(uint64(row)) {
-					return fmt.Errorf("wrong grouping/NULL provenance at key %d", i)
-				}
+				rolled := out.Vecs[i].IsNull(uint64(row))
 				if rolled {
 					if key.prefix == 3 {
 						key.prefix = i

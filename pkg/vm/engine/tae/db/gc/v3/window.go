@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
@@ -248,6 +249,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	if err != nil {
 		return nil, "", err
 	}
+	defer bf.Free()
 	// Use a map to deduplicate file names, as the same object may appear
 	// multiple times in vecToGC (e.g., when referenced by multiple tables).
 	// This avoids sending duplicate delete requests to S3.
@@ -498,9 +500,7 @@ func (w *GCWindow) writeMetaForRemainings(
 			w.abandonPrepared()
 		}
 	}()
-	ret := batch.NewWithSchema(
-		ObjectTableMetaAttrs, ObjectTableMetaTypes, w.mp,
-	)
+	ret := batch.NewWithTypes(ObjectTableMetaTypes, w.mp)
 	defer ret.Clean(w.mp)
 	for _, s := range stats {
 		if err := vector.AppendBytes(
@@ -867,7 +867,7 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 			return nil, context.Cause(ctx)
 		default:
 		}
-		done, err := sourcer.Read(ctx, bat.Attrs, nil, mp, bat)
+		done, err := sourcer.Read(ctx, buffer.Attrs(), nil, mp, bat)
 		if err != nil {
 			return nil, err
 		}

@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -41,12 +40,32 @@ func LoadColumnsData(
 	policy fileservice.Policy,
 ) (dataMeta objectio.ObjectDataMeta, release func(), fromCache bool, err error) {
 	var meta objectio.ObjectMeta
-	var vectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
-	name := location.Name().UnsafeString()
 	dataMeta = meta.MustGetMeta(objectio.SchemaData)
+	release, fromCache, err = LoadColumnsDataFromMeta(
+		ctx, dataMeta, columns, typs, fs, location, cacheVectors, m, policy,
+	)
+	return
+}
+
+// LoadColumnsDataFromMeta reads columns using the already loaded data metadata
+// for location. Its release and cache-vector ownership are the same as
+// LoadColumnsData.
+func LoadColumnsDataFromMeta(
+	ctx context.Context,
+	dataMeta objectio.ObjectDataMeta,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	cacheVectors containers.Vectors,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (release func(), fromCache bool, err error) {
+	var vectors fileservice.IOVector
+	name := location.Name().UnsafeString()
 	if vectors, err = objectio.ReadOneBlock(
 		ctx,
 		&dataMeta,
@@ -184,11 +203,12 @@ func LoadColumnsDataIntoReadonly(
 // LoadColumnsDataIntoBorrowed borrows only entries with ObjectIO's immutable
 // validation capability and an admitted per-column borrow policy. A nil policy
 // preserves full borrowing; an incompatible policy conservatively copies owned.
-// keeper is the lender of every borrowed destination (normally the batch the
-// destinations belong to): it holds the cache pins until it drops or reuses
-// those vectors. A nil keeper copies every column.
-func LoadColumnsDataIntoBorrowed(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, m *mpool.MPool, policy fileservice.Policy, allowBorrow []bool, keeper bufferlease.Keeper) (bool, error) {
-	_, hit, err := loadColumnsDataInto(ctx, columns, typs, fs, location, destinations, nil, nil, m, policy, false, keeper, allowBorrow)
+// pins takes the cache pins of every borrowed destination for the lender, the
+// producer that published the destinations (for a scan, its reader request):
+// the producer releases them when it reuses or drops those vectors. Nil pins
+// copy every column.
+func LoadColumnsDataIntoBorrowed(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, m *mpool.MPool, policy fileservice.Policy, allowBorrow []bool, pins *objectio.CachePins) (bool, error) {
+	_, hit, err := loadColumnsDataInto(ctx, columns, typs, fs, location, destinations, nil, nil, m, policy, false, pins, allowBorrow)
 	return hit, err
 }
 
@@ -218,7 +238,7 @@ func loadColumnsDataInto(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 	readonlyArea bool,
-	keeper bufferlease.Keeper,
+	pins *objectio.CachePins,
 	allowBorrow []bool,
 ) (deleteMask objectio.Bitmap, fromCache bool, err error) {
 	if len(columns) != len(destinations) {
@@ -324,39 +344,15 @@ func loadColumnsDataInto(
 		}
 	}
 
-	publication := objectio.JSONReadSetFromContext(ctx)
 	for i := range columns {
-		if destinations[i].Length() != 0 && publication.Requested(columns[i]) && typs[i].Oid == types.T_json {
-			publication.Disable()
-		}
-		if publication.Requested(columns[i]) && typs[i].Oid == types.T_json {
-			reader, openErr := objectio.OpenJSONReader(ioVectors.Entries[i].CachedData, m, publication.CachePinAdmission())
-			if openErr != nil {
-				publication.Disable()
-				err = openErr
-				return
-			}
-			if sels != nil {
-				selected, selectErr := reader.Select(sels, m)
-				reader.Close()
-				if selectErr != nil {
-					publication.Disable()
-					err = selectErr
-					return
-				}
-				reader = selected
-			}
-			publication.Publish(columns[i], reader)
-		}
 		// A destination is filled through its own pool. An empty read-only
 		// destination (a column borrowed by an earlier block) becomes an owned
 		// vector of m again.
 		dm := destinationMP(destinations[i], m)
-		if keeper != nil && (allowBorrow == nil || len(allowBorrow) == len(columns) && allowBorrow[i]) {
+		if pins != nil && (allowBorrow == nil || len(allowBorrow) == len(columns) && allowBorrow[i]) {
 			var borrowed bool
-			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, dm, keeper)
+			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, dm, pins)
 			if err != nil {
-				publication.Disable()
 				return
 			}
 			if borrowed {
@@ -384,7 +380,6 @@ func loadColumnsDataInto(
 			)
 		}
 		if err != nil {
-			publication.Disable()
 			logutil.Errorf("LoadColumnsDataInto %s error: %v", location.String(), err)
 			return
 		}

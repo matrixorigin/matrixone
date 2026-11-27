@@ -42,25 +42,25 @@ func TestPreparedGetLockTimeoutPreservesRuntimeType(t *testing.T) {
 	}{
 		{
 			name:         "decimal half-up domain",
-			timeout:      ParamValue{Value: "0.5", PrepareParamKind: types.StringConversionDecimal},
+			timeout:      ParamValue{Value: "0.5", SourceType: decimalParamType("0.5"), HasSourceType: true},
 			wantArgType:  types.T_decimal64,
 			wantOverload: 1,
 		},
 		{
 			name:         "double ties-to-even domain",
-			timeout:      ParamValue{Value: "0.5", PrepareParamKind: types.StringConversionFloat},
+			timeout:      sqlFloatParam(0.5),
 			wantArgType:  types.T_float64,
 			wantOverload: 0,
 		},
 		{
 			name:         "integer keeps the historical double coercion",
-			timeout:      ParamValue{Value: "2", PrepareParamKind: types.StringConversionInteger},
+			timeout:      sqlIntParam(2),
 			wantArgType:  types.T_float64,
 			wantOverload: 0,
 		},
 		{
 			name:         "decimal after double does not reuse stale metadata",
-			timeout:      ParamValue{Value: "1.25", PrepareParamKind: types.StringConversionDecimal},
+			timeout:      ParamValue{Value: "1.25", SourceType: decimalParamType("1.25"), HasSourceType: true},
 			wantArgType:  types.T_decimal64,
 			wantOverload: 1,
 		},

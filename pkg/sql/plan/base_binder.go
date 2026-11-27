@@ -572,11 +572,11 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			state := preparedBindingState(b.GetContext())
 			if state != nil && astExpr.Offset > 0 && astExpr.Offset <= len(state.values) {
 				value := state.values[astExpr.Offset-1]
-				if source, ok := value.(ParamValue); ok {
+				if source, ok := AsParamValue(value); ok {
 					value = source.Value
 				}
 				if value == nil {
-					source, _ := state.values[astExpr.Offset-1].(ParamValue)
+					source, _ := AsParamValue(state.values[astExpr.Offset-1])
 					if !source.IsBinaryProtocol {
 						// SQL user-variable NULL has a TEXT source for FIELD and
 						// for a bare visible projection.
@@ -857,7 +857,10 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			err = moerr.NewBadFieldErrorf(localErrCtx, "invalid input: column %s does not exist", name)
 		}
 	} else {
-		binding := b.resolveTableBinding(b.ctx, db, table)
+		binding, ambiguous := b.resolveTableBinding(b.ctx, db, table)
+		if ambiguous {
+			return nil, moerr.NewInvalidInputf(localErrCtx, "ambiguous table reference '%s'", table)
+		}
 		if binding != nil {
 			resolvedBinding = binding
 			colPos = binding.FindColumn(col)
@@ -1086,7 +1089,7 @@ func (b *baseBinder) joinOnNamespaceResolved(db, table string) bool {
 		if c.binder == nil {
 			continue
 		}
-		if b.resolveTableBinding(c, db, table) != nil {
+		if binding, ambiguous := b.resolveTableBinding(c, db, table); binding != nil || ambiguous {
 			return true
 		}
 	}
@@ -2810,9 +2813,9 @@ func (b *baseBinder) numericColumnTypeInContext(
 		return Type{}, false, false
 	}
 
-	binding := b.resolveTableBinding(ctx, astExpr.DbName(), table)
+	binding, ambiguous := b.resolveTableBinding(ctx, astExpr.DbName(), table)
 	if binding == nil {
-		return Type{}, false, false
+		return Type{}, false, ambiguous
 	}
 	typ, found = bindingColumnType(binding, col)
 	return typ, found, false
@@ -2820,12 +2823,12 @@ func (b *baseBinder) numericColumnTypeInContext(
 
 // resolveTableBinding preserves the lazy default-database lookup for rewritten
 // tables. Qualified namespace matching belongs to BindContext.
-func (b *baseBinder) resolveTableBinding(ctx *BindContext, db, table string) *Binding {
-	binding := ctx.resolveTableBinding(db, table)
-	if binding == nil && db == "" && ctx.remapOption != nil && b.builder != nil {
-		binding = ctx.resolveTableBinding(b.builder.compCtx.DefaultDatabase(), table)
+func (b *baseBinder) resolveTableBinding(ctx *BindContext, db, table string) (*Binding, bool) {
+	binding, ambiguous := ctx.resolveTableBinding(db, table)
+	if binding == nil && !ambiguous && db == "" && ctx.remapOption != nil && b.builder != nil {
+		return ctx.resolveTableBinding(b.builder.compCtx.DefaultDatabase(), table)
 	}
-	return binding
+	return binding, ambiguous
 }
 
 func bindingColumnType(binding *Binding, col string) (Type, bool) {
@@ -5184,11 +5187,8 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 			if peer.IsInteger() && pos >= 0 && int(pos) < len(state.values) {
 				state.valueDependent = true
 				value := state.values[pos]
-				if param, ok := value.(ParamValue); ok {
+				if param, ok := AsParamValue(value); ok {
 					value = param.Value
-					if param.MaterializedValue != "" {
-						value = param.MaterializedValue
-					}
 				}
 				if str, ok := value.(string); ok {
 					str = strings.TrimSpace(str)
@@ -5841,9 +5841,7 @@ func isUDFArgumentAuthorizationSource(node *plan.Node) bool {
 	case plan.Node_EXTERNAL_SCAN:
 		return IsExternalScanRequiringSelectPrivilege(node)
 	case plan.Node_FUNCTION_SCAN:
-		tableDef := node.GetTableDef()
-		return tableDef != nil && tableDef.GetTblFunc() != nil &&
-			tableDef.GetTblFunc().GetName() == "table_changes"
+		return IsSourceResolvingTableFunction(node)
 	default:
 		return false
 	}
@@ -6721,7 +6719,7 @@ func bindFuncExprAndConstFoldInternal(
 
 	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
-			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false, true)
+			tmpexpr, _ := foldBoundConstant(ctx, DeepCopyExpr(retExpr), proc)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
@@ -6746,7 +6744,7 @@ func bindFuncExprAndConstFoldInternal(
 
 		fnArgs := retExpr.GetF().Args
 
-		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false, true)
+		arg1, err := foldBoundConstant(ctx, fnArgs[1], proc)
 		if err != nil {
 			goto between_fallback
 		}
@@ -6759,7 +6757,7 @@ func bindFuncExprAndConstFoldInternal(
 			}
 		}
 
-		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false, true)
+		arg2, err := foldBoundConstant(ctx, fnArgs[2], proc)
 		if err != nil {
 			goto between_fallback
 		}
@@ -6777,7 +6775,7 @@ func bindFuncExprAndConstFoldInternal(
 		// value dependency to an otherwise reusable closed range.
 		if !containsDynamicParam(arg1) && !containsDynamicParam(arg2) {
 			rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
-			rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
+			rangeCheckRes, _ := foldBoundConstant(ctx, rangeCheckFn, proc)
 			rangeCheckVal := rangeCheckRes.GetLit()
 			if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
 				goto between_fallback
@@ -6787,7 +6785,7 @@ func bindFuncExprAndConstFoldInternal(
 		// The final fold can fail (e.g. '1.5' BETWEEN 1 AND 20 casts the
 		// string operand to INT). Surface the error like the >=/<= form does;
 		// discarding it would bind a nil expression.
-		retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+		retExpr, err = foldBoundConstant(ctx, retExpr, proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6799,7 +6797,7 @@ func bindFuncExprAndConstFoldInternal(
 
 		fnArgs := retExpr.GetF().Args
 
-		arg3, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[3], proc, false, true)
+		arg3, err := foldBoundConstant(ctx, fnArgs[3], proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6811,7 +6809,7 @@ func bindFuncExprAndConstFoldInternal(
 		}
 		flag := flagLit.GetU8Val()
 
-		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false, true)
+		arg1, err := foldBoundConstant(ctx, fnArgs[1], proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6824,7 +6822,7 @@ func bindFuncExprAndConstFoldInternal(
 			return nil, moerr.NewInvalidInput(ctx, "2nd argument of in_range must be constant")
 		}
 
-		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false, true)
+		arg2, err := foldBoundConstant(ctx, fnArgs[2], proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6839,7 +6837,7 @@ func bindFuncExprAndConstFoldInternal(
 			fnName = "<"
 		}
 		rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, fnName, []*plan.Expr{arg1, arg2})
-		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
+		rangeCheckRes, _ := foldBoundConstant(ctx, rangeCheckFn, proc)
 		rangeCheckVal := rangeCheckRes.GetLit()
 		if rangeCheckVal == nil {
 			return nil, moerr.NewInvalidInput(ctx, "2nd and 3rd arguments not comparable")
@@ -6847,7 +6845,7 @@ func bindFuncExprAndConstFoldInternal(
 		if !rangeCheckVal.GetBval() {
 			retExpr = DeepCopyExpr(kAlwaysFalseExpr)
 		} else {
-			retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+			retExpr, _ = foldBoundConstant(ctx, retExpr, proc)
 		}
 	}
 
@@ -6868,7 +6866,7 @@ between_fallback:
 	if err != nil {
 		return nil, err
 	}
-	retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+	retExpr, err = foldBoundConstant(ctx, retExpr, proc)
 	if err != nil {
 		return nil, err
 	}
@@ -6894,7 +6892,7 @@ func validateNthValueArgs(ctx context.Context, proc *process.Process, args []*pl
 		return moerr.NewWrongArguments(ctx, "nth_value")
 	}
 
-	offset, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	offset, err := foldBoundConstant(ctx, args[1], proc)
 	if err != nil {
 		return err
 	}

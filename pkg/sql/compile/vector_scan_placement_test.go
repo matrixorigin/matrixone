@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -25,33 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
-
-func vectorPlacementCompile(t *testing.T, workers engine.Nodes) (*Compile, *expressionVersionClient) {
-	t.Helper()
-	c, client := expressionProtocolTestCompile(t)
-	t.Cleanup(c.proc.Free)
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.anal = &AnalyzeModule{isFirst: true}
-	c.cnList = slices.Clone(workers)
-	c.addr = workers[0].Addr
-	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	value, _ := rt.GetGlobalVariables(moruntime.ClusterService)
-	cluster := value.(*schedulerTestCluster)
-	cluster.cns = nil
-	for _, worker := range workers {
-		cluster.cns = append(cluster.cns, metadata.CNService{
-			ServiceID: worker.Id, PipelineServiceAddress: worker.Addr, QueryAddress: worker.Addr,
-		})
-	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
-	client.version = vectorscan.IndexSearchScanProtocolVersion
-	return c, client
-}
 
 func vectorPlacementNode() *plan.Node {
 	return &plan.Node{
@@ -79,7 +57,7 @@ func TestVectorScanPlacementKeepsObjectOwnersAcrossIngress(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { ReleaseScopes(scopes) })
 			require.Equal(t, selected, c.cnList, "scan numbering must not mutate query placement")
-			owners := make(map[types.Objectid]string)
+			immutableOwners := make(map[types.Objectid]string)
 			buckets := make(map[int32]bool)
 			for _, scope := range scopes {
 				require.False(t, buckets[scope.NodeInfo.CNIDX])
@@ -91,20 +69,27 @@ func TestVectorScanPlacementKeepsObjectOwnersAcrossIngress(t *testing.T) {
 			for object := byte(0); object < 32; object++ {
 				id := types.Objectid{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, object, 0}
 				stats := objectio.NewObjectStatsWithObjectID(&id, object%2 == 0, false, true)
+				var owner string
 				for _, scope := range scopes {
-					rsp := &engine.RangesShuffleParam{Node: vectorPlacementNode(),
-						CNCNT: int32(count), CNIDX: scope.NodeInfo.CNIDX, ShuffleByObjectID: true}
+					rsp := &engine.RangesShuffleParam{Node: scope.DataSource.node,
+						CNCNT: scope.NodeInfo.CNCNT, CNIDX: scope.NodeInfo.CNIDX,
+						IsLocalCN: scope.ipAddrMatch(c.addr), ShuffleByObjectID: true}
 					if !plan2.ShouldSkipObjByShuffle(rsp, stats) {
-						require.Empty(t, owners[id], "object must have exactly one owner")
-						owners[id] = scope.NodeInfo.Id
+						require.Empty(t, owner, "object must have exactly one owner")
+						owner = scope.NodeInfo.Id
 					}
 				}
-				require.NotEmpty(t, owners[id])
+				require.NotEmpty(t, owner)
+				if stats.GetAppendable() {
+					require.Equal(t, selected[0].Id, owner, "appendable rows follow ingress")
+				} else {
+					immutableOwners[id] = owner
+				}
 			}
 			if reference == nil {
-				reference = owners
+				reference = immutableOwners
 			} else {
-				require.Equal(t, reference, owners, "changing ingress must preserve physical object owners")
+				require.Equal(t, reference, immutableOwners, "changing ingress must preserve immutable object owners")
 			}
 		}
 	}
@@ -123,4 +108,54 @@ func TestVectorScanPlacementUsesAddressOnlyForMissingIdentity(t *testing.T) {
 	require.Equal(t, []string{"a:6001", "z:6001", "b:6001"}, addresses)
 	require.Equal(t, workers, c.cnList)
 	require.Equal(t, client.calls, client.releases)
+}
+
+func TestPrunedVectorScanDoesNotProbePeer(t *testing.T) {
+	workers := engine.Nodes{{Addr: "local:6001", Mcpu: 2}, {Id: "peer", Addr: "peer:6001", Mcpu: 2}}
+	for _, tc := range []struct {
+		name  string
+		limit uint64
+	}{{"pruned", 0}, {"executed", 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, client := vectorPlacementCompile(t, workers)
+			c.e = &schedulerTestEngine{nodes: workers}
+			c.anal = nil // compileQuery owns the analyze module it allocates.
+			t.Cleanup(func() {
+				if c.anal != nil {
+					c.anal.release()
+				}
+			})
+			client.customResponse, client.sendErr = true, errors.New("peer query service unavailable")
+			project := &plan.Node{NodeType: plan.Node_PROJECT, NodeId: 1, Children: []int32{0},
+				Limit: plan2.MakePlan2Uint64ConstExprWithType(tc.limit), Stats: &plan.Stats{}}
+			q := &plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{1}, Nodes: []*plan.Node{vectorPlacementNode(), project}}
+			c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: q}}
+			scopes, err := c.compileQuery(q)
+			defer ReleaseScopes(scopes)
+			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+			require.Len(t, c.cnList, 2)
+			require.NoError(t, err)
+			require.Zero(t, client.calls, "placement probes no peer")
+		})
+	}
+}
+
+func vectorPlacementCompile(t *testing.T, workers engine.Nodes) (*Compile, *expressionVersionClient) {
+	t.Helper()
+	c, client := expressionProtocolTestCompile(t)
+	t.Cleanup(c.proc.Free)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{isFirst: true}
+	c.cnList = slices.Clone(workers)
+	c.addr = workers[0].Addr
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	value, _ := rt.GetGlobalVariables(moruntime.ClusterService)
+	cluster := value.(*schedulerTestCluster)
+	cluster.cns = nil
+	for _, worker := range workers {
+		cluster.cns = append(cluster.cns, metadata.CNService{
+			ServiceID: worker.Id, PipelineServiceAddress: worker.Addr, QueryAddress: worker.Addr,
+		})
+	}
+	return c, client
 }

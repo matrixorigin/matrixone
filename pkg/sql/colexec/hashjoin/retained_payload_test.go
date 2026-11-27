@@ -53,11 +53,16 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 		usePK            bool
 		useResidual      bool
 		unmatchedOutlier bool
+		earlyStop        bool
 		wantBatchRows    []int
 	}{
 		{
 			name: "inner-duplicate-continuation", joinType: plan.Node_INNER, probeKeys: []int64{1},
 			wantBatchRows: []int{11, 2},
+		},
+		{
+			name: "reset-partial-duplicate-group", joinType: plan.Node_LEFT, probeKeys: []int64{1},
+			earlyStop: true,
 		},
 		{
 			name: "left-duplicate-continuation", joinType: plan.Node_LEFT, probeKeys: []int64{1, 2},
@@ -208,6 +213,17 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 			probe.SetRowCount(len(tc.probeKeys))
 			require.NoError(t, probeChild.Prepare(proc))
 			require.NoError(t, arg.Prepare(proc))
+
+			if tc.earlyStop {
+				result, err := vm.Exec(arg, proc)
+				require.NoError(t, err)
+				require.NotNil(t, result.Batch)
+				require.Equal(t, 11, result.Batch.RowCount())
+				require.Len(t, arg.ctr.sels, 2)
+				arg.Reset(proc, false, nil)
+				require.True(t, arg.ctr.sels == nil, "reset retained the previous match group")
+				return
+			}
 
 			// -1 represents the NULL side of an outer join row.
 			type joinedRow struct{ key, id int64 }

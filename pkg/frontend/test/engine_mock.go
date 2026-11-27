@@ -243,17 +243,17 @@ func (mr *MockRelationMockRecorder) DelTableDef(arg0, arg1 interface{}) *gomock.
 }
 
 // Delete mocks base method.
-func (m *MockRelation) Delete(arg0 context.Context, arg1 *batch.Batch, arg2 string) error {
+func (m *MockRelation) Delete(arg0 context.Context, arg1 *batch.Batch, arg2 []string, arg3 string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Delete", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "Delete", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Delete indicates an expected call of Delete.
-func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockRelation)(nil).Delete), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockRelation)(nil).Delete), arg0, arg1, arg2, arg3)
 }
 
 // EstimateCommittedTombstoneCount mocks base method.
@@ -607,18 +607,33 @@ func (mr *MockRelationMockRecorder) UpdateConstraint(arg0, arg1 interface{}) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateConstraint", reflect.TypeOf((*MockRelation)(nil).UpdateConstraint), arg0, arg1)
 }
 
-// Write mocks base method.
-func (m *MockRelation) Write(arg0 context.Context, arg1 *batch.Batch) error {
+// VisibleObjectCount mocks base method.
+func (m *MockRelation) VisibleObjectCount(arg0 context.Context) (int, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Write", arg0, arg1)
+	ret := m.ctrl.Call(m, "VisibleObjectCount", arg0)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// VisibleObjectCount indicates an expected call of VisibleObjectCount.
+func (mr *MockRelationMockRecorder) VisibleObjectCount(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "VisibleObjectCount", reflect.TypeOf((*MockRelation)(nil).VisibleObjectCount), arg0)
+}
+
+// Write mocks base method.
+func (m *MockRelation) Write(arg0 context.Context, arg1 *batch.Batch, arg2 []string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Write", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Write indicates an expected call of Write.
-func (mr *MockRelationMockRecorder) Write(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) Write(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockRelation)(nil).Write), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockRelation)(nil).Write), arg0, arg1, arg2)
 }
 
 // MockReader is a mock of Reader interface.

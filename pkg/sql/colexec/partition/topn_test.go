@@ -504,36 +504,6 @@ func TestPartitionTopNWithTiesChunksUnboundedBoundary(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
-func TestPartitionTopNWithTiesTreatsGroupingSentinelAsPartitionNull(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
-	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"", ""}, []bool{false, true}, proc.Mp()))
-	input.Vecs[0].GetGrouping().Add(0)
-	input.Vecs[1] = testutil.MakeInt64Vector([]int64{10, 20}, nil, proc.Mp())
-	input.Vecs[2] = testutil.MakeInt64Vector([]int64{1, 2}, nil, proc.Mp())
-	input.SetRowCount(2)
-
-	arg := newRankTopNArgument(1)
-	arg.OrderBySpecs[0].Expr = topNCol(0, types.T_varchar)
-	arg.PreReduce = true
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	arg.AppendChild(child)
-	require.NoError(t, arg.Prepare(proc))
-	result, err := arg.Call(proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	require.Equal(t, []int64{20}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
-	require.Equal(t, 1, len(arg.top.groups))
-
-	arg.Free(proc, false, nil)
-	colexec.FreeMockChildren(arg)
-	child.Free(proc, false, nil)
-	colexec.FreeMockChildren(child)
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
-}
-
 func TestPartitionTopNPreReducePacksCandidateGroups(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := makeTopNBatch(t, proc,

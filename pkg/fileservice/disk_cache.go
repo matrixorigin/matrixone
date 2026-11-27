@@ -462,6 +462,7 @@ func (d *DiskCache) Read(
 		return err
 	}
 
+	wait := ReadWaitTrackerFromContext(ctx)
 	openedFiles := make(map[string]openedDiskCacheFile)
 	// All path waits in one Read share a single budget. Start it lazily on the
 	// first contended path so uncontended reads do not pay for a timer.
@@ -488,7 +489,9 @@ func (d *DiskCache) Read(
 			return openedDiskCacheFile{}, false, false
 		}
 		LogEvent(ctx, str_disk_cache_file_open_begin)
+		start := wait.Start()
 		diskFile, err := os.Open(diskPath)
+		wait.Stop(start)
 		LogEvent(ctx, str_disk_cache_file_open_end)
 		if err != nil {
 			d.finishPathRead(diskPath, generation)
@@ -531,7 +534,9 @@ func (d *DiskCache) Read(
 				// An IOEntry cache file contains only this range, so its content
 				// always starts at file offset zero. entry.Offset is only valid for
 				// a full-object cache file.
+				start := wait.Start()
 				_, err = f.file.Seek(0, io.SeekStart)
+				wait.Stop(start)
 				LogEvent(ctx, str_disk_cache_file_seek_end)
 				if err == nil {
 					opened = f
@@ -563,7 +568,9 @@ func (d *DiskCache) Read(
 					numOpenFull++
 				}
 				LogEvent(ctx, str_disk_cache_file_seek_begin)
+				start := wait.Start()
 				_, err = f.file.Seek(entry.Offset, io.SeekStart)
+				wait.Stop(start)
 				LogEvent(ctx, str_disk_cache_file_seek_end)
 				if err == nil {
 					opened = f
@@ -582,7 +589,9 @@ func (d *DiskCache) Read(
 		if _, ok := d.cache.Get(ctx, diskPath); !ok {
 			// set cache
 			LogEvent(ctx, str_disk_cache_file_stat_begin)
+			start := wait.Start()
 			stat, err := file.Stat()
+			wait.Stop(start)
 			LogEvent(ctx, str_disk_cache_file_stat_end)
 			if err != nil {
 				return err
@@ -619,7 +628,6 @@ func (d *DiskCache) Read(
 
 	for i := range vector.Entries {
 		if err := fillEntry(&vector.Entries[i]); err != nil {
-			// ignore error
 			numError++
 			logutil.Warn(
 				"read disk cache error",
@@ -627,6 +635,11 @@ func (d *DiskCache) Read(
 				zap.Any("path", vector.FilePath),
 				zap.Any("entry", vector.Entries[i]),
 			)
+			// A process allocation failure is not a cache miss; falling back
+			// can immediately fail another allocation in the storage path.
+			if errors.Is(err, syscall.ENOMEM) {
+				return err
+			}
 		}
 	}
 
@@ -1096,6 +1109,13 @@ func (d *DiskCache) pathForIOEntry(path string, entry IOEntry) string {
 	)
 }
 
+// IsWholeObjectCached reports a hint from the local disk index without
+// reading the file or changing its eviction order.
+func IsWholeObjectCached(fs FileService, path string) bool {
+	s, ok := fs.(*S3FS)
+	return ok && s.diskCache != nil && s.diskCache.cache.Contains(s.diskCache.pathForFile(path))
+}
+
 func (d *DiskCache) pathForFile(path string) string {
 	path = pathpkg.Clean(path)
 	return filepath.Join(
@@ -1178,8 +1198,11 @@ func (d *DiskCache) startPathReadWithin(
 		d.updatingPaths.Broadcast()
 		d.updatingPaths.L.Unlock()
 	})
+	wait := ReadWaitTrackerFromContext(ctx)
 	for d.updatingPaths.m[path] != nil && ctx.Err() == nil {
+		start := wait.Start()
 		d.updatingPaths.Wait()
+		wait.Stop(start)
 	}
 	completed := d.updatingPaths.m[path] == nil && ctx.Err() == nil
 	if completed {

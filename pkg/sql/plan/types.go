@@ -404,6 +404,7 @@ type QueryBuilder struct {
 	// DELETE owns these generated scan identities. Optimizer consumers must
 	// revalidate the binding and table after join rewrites.
 	deleteIndexScanTables    map[int32]deleteIndexScan
+	equalityRowBounds        map[*plan.Expr]float64
 	planningInput            *PlanningInput
 	scanBorrows              []scanBorrow
 	borrowResolutionDisabled bool
@@ -626,6 +627,9 @@ type QueryBuilder struct {
 	// common input can be shared after CTE reuse has established any nested
 	// producer boundaries.
 	groupingSetCandidates []groupingSetCandidate
+	// groupingFlags records each aggregate group tag's active GROUP BY keys,
+	// for foldGroupingFunctions.
+	groupingFlags map[int32][]bool
 	// splitGroupingSetCoarseAggs marks the large coarser half of a direct
 	// ROLLUP split. Keep its partial aggregation local: shuffling a key that
 	// the coarser sets roll up creates a hot owner for those sets.
@@ -673,6 +677,9 @@ type QueryBuilder struct {
 	irregularMaintObjRef                  *plan.ObjectRef
 	irregularMaintSkipInsert              bool
 	irregularUpdateMaints                 []irregularUpdateMaintenance
+	// queryCreated is set once createQuery has run. Irregular-index
+	// maintenance planned before it is queued for finishIrregularIndexMaintenance.
+	queryCreated bool
 
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN
@@ -744,6 +751,7 @@ type irregularUpdateMaintenance struct {
 	valueChangedSourceSteps map[string]int32
 	tableDef                *plan.TableDef
 	objRef                  *plan.ObjectRef
+	skipInsert              bool
 }
 
 type OptimizerHints struct {
@@ -1434,6 +1442,7 @@ type Binding struct {
 	db                     string
 	table                  string
 	tableID                uint64
+	caseInsensitiveTable   bool // unaliased relation in a case-insensitive system schema
 	// lower case: used for binding/lookup
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)

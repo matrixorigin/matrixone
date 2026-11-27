@@ -157,7 +157,7 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 }
 
 func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
-	for _, shape := range []string{"constant", "grouping"} {
+	for _, shape := range []string{"constant"} {
 		t.Run(shape, func(t *testing.T) {
 			proc, allocation, _ := dependentTestAllocation(t)
 			input := batch.NewWithSize(2)
@@ -168,9 +168,6 @@ func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
 				require.NoError(t, err)
 			}
 			input.SetRowCount(4)
-			if shape == "grouping" {
-				input.Vecs[0].GetGrouping().Add(1)
-			}
 			cols := make([]*plan.Expr, 0, 2)
 			for side := range 2 {
 				cols = append(cols, &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(side)}}})
@@ -214,9 +211,9 @@ func TestBooleanValidityAdmissionFailure(t *testing.T) {
 	require.EqualValues(t, 8, account.Snapshot().Used)
 	require.Zero(t, result.GetNulls().GetBitmap().CapWords())
 	input.Vecs[0].SetNull(0)
-	result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err, "the NULL bitmap is Go-owned and is not admitted")
-	require.True(t, result.IsNull(0))
+	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity,
+		"a nullable result reserves its NULL bitmap against the account")
 	require.EqualValues(t, 8, account.Snapshot().Used)
 	input.Vecs[0].GetNulls().Reset()
 	result, err = executor.Eval(proc, []*batch.Batch{input}, nil)

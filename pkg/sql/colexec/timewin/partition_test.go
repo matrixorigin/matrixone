@@ -193,7 +193,7 @@ func makePartInput(t *testing.T, mp *mpool.MPool, rows []row) *batch.Batch {
 		parts = append(parts, r.part)
 	}
 
-	bat := batch.New([]string{"ts", "val", "part"})
+	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = testutil.NewVector(len(rows), types.T_datetime.ToType(), mp, false, ts)
 	bat.Vecs[1] = testutil.NewVector(len(rows), types.T_int32.ToType(), mp, false, vals)
 	bat.Vecs[2] = testutil.NewVector(len(rows), types.T_int64.ToType(), mp, false, parts)
@@ -360,7 +360,7 @@ func TestTimeWinSlidingMicrosecondWindows(t *testing.T) {
 	sliding, err := calcDatetime(500, types.MicroSecond)
 	require.NoError(t, err)
 
-	in := batch.New([]string{"ts", "val"})
+	in := batch.NewWithSize(2)
 	in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 	in.Vecs[1] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
 	require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
@@ -420,7 +420,7 @@ func TestTimeWinMicrosecondBoundariesPreservePrecisionAcrossInputScales(t *testi
 			oneMicrosecond, err := calcDatetime(1, types.MicroSecond)
 			require.NoError(t, err)
 
-			in := batch.New([]string{"ts", "val"})
+			in := batch.NewWithSize(2)
 			in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(scale), proc.Mp())
 			in.Vecs[1] = testutil.MakeInt32Vector([]int32{10}, nil, proc.Mp())
 			require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
@@ -743,7 +743,7 @@ func TestBoundedGapFillConvertsTimestampBoundsInSessionTimezone(t *testing.T) {
 	// that same coordinate instead of merely producing correctly labelled gaps.
 	observed, err := types.ParseTimestamp(zone, "2023-08-01 00:00:05", 6)
 	require.NoError(t, err)
-	in := batch.New([]string{"ts", "val"})
+	in := batch.NewWithSize(2)
 	in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 	require.NoError(t, vector.AppendFixed(in.Vecs[0], types.Datetime(observed), false, proc.Mp()))
 	in.Vecs[1] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
@@ -800,7 +800,7 @@ func TestTimestampDayWindowsPreserveDSTCivilBoundaries(t *testing.T) {
 				secondDay, parseErr := types.ParseDatetime(tc.secondDay, 6)
 				require.NoError(t, parseErr)
 
-				in := batch.New([]string{"ts", "val"})
+				in := batch.NewWithSize(2)
 				in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 				require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
 					types.Datetime(startTS),
@@ -843,7 +843,7 @@ func TestTimestampFoldGapFillKeepsBothCivilOccurrences(t *testing.T) {
 			arg.GapFill = gapFill
 			proc.GetSessionInfo().TimeZone = zone
 
-			in := batch.New([]string{"ts", "val"})
+			in := batch.NewWithSize(2)
 			in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
 				types.Datetime(first),
@@ -884,7 +884,7 @@ func TestBoundedTimestampNonDivisorFoldGapFill(t *testing.T) {
 	first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
 	second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
 
-	in := batch.New([]string{"ts", "val"})
+	in := batch.NewWithSize(2)
 	in.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Timestamp{first, second}, nil, proc.Mp()))
 	in.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
@@ -1492,7 +1492,7 @@ func TestTimeWinSinglePartitionMatchesNoPartition(t *testing.T) {
 func TestTimeWinPartitionNullKeysGroupTogether(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
-	bat := batch.New([]string{"ts", "val", "part"})
+	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = testutil.NewVector(2, types.T_datetime.ToType(), proc.Mp(), false,
 		[]string{"2023-08-01 00:00:00", "2023-08-01 00:00:01"})
 	bat.Vecs[1] = testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int32{10, 20})

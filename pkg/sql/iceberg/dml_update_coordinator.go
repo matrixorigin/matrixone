@@ -128,7 +128,7 @@ func (c *DMLUpdateCoordinator) AppendWithProcess(proc *process.Process, bat *bat
 	if err := c.budget.reserve(ctx, retainedBytes); err != nil {
 		return err
 	}
-	cloned, err := bat.CloneSelectedColumns(replacementCols, append([]string(nil), c.replacementAttrs...), proc.Mp())
+	cloned, err := bat.CloneSelectedColumns(replacementCols, proc.Mp())
 	if err != nil {
 		c.budget.release(retainedBytes)
 		return api.ToMOErr(ctx, api.WrapError(api.ErrInternal, "Iceberg DML update coordinator failed to clone replacement rows", nil, err))

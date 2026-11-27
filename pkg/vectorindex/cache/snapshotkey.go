@@ -31,6 +31,12 @@ func SnapshotKey(indexTable string, ts timestamp.Timestamp) string {
 	return fmt.Sprintf("%s%s%d-%d", indexTable, snapshotKeySep, ts.PhysicalTime, ts.LogicalTime)
 }
 
+// GenerationKey identifies immutable fulltext data across transaction snapshots.
+// Sharing SnapshotKey's namespace keeps table-wide eviction and TTL ownership intact.
+func GenerationKey(indexTable string, base, tail int64) string {
+	return fmt.Sprintf("%s%sgen-%d-%d", indexTable, snapshotKeySep, base, tail)
+}
+
 // IsSnapshotKey reports whether key is a snapshot key. Current-generation entries are keyed by
 // the bare index table name.
 func IsSnapshotKey(key string) bool {

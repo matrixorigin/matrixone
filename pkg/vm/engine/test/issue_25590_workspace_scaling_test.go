@@ -83,7 +83,6 @@ const (
 func issue25590InsertRow(t *testing.T, mp *mpool.MPool, pk, v int32) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{"mock_0", "mock_1"}
 	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], pk, false, mp))
@@ -99,7 +98,6 @@ func issue25590InsertRow(t *testing.T, mp *mpool.MPool, pk, v int32) *batch.Batc
 func issue25590DeleteRow(t *testing.T, mp *mpool.MPool, rowid types.Rowid, pk int32) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowid, false, mp))
@@ -140,7 +138,7 @@ func issue25590DeleteRowByRowid(
 	t.Helper()
 	del := issue25590DeleteRow(t, mp, rowid, pk)
 	defer del.Clean(mp)
-	require.NoError(t, relation.Delete(ctx, del, catalog.Row_ID))
+	require.NoError(t, relation.Delete(ctx, del, issue25590DeleteAttrs, catalog.Row_ID))
 }
 
 // issue25590InsertRowViaRelation inserts the next row version through the
@@ -156,7 +154,7 @@ func issue25590InsertRowViaRelation(
 	t.Helper()
 	ins := issue25590InsertRow(t, mp, pk, v)
 	defer ins.Clean(mp)
-	require.NoError(t, relation.Write(ctx, ins))
+	require.NoError(t, relation.Write(ctx, ins, issue25590InsertAttrs))
 }
 
 // issue25590NextStatementBoundary closes the workspace the way production
@@ -317,7 +315,8 @@ func issue25590ReadTableRows(
 	}()
 	for {
 		ret := testutil.EmptyBatchFromSchema(schema, mp, 0, 1)
-		isEnd, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+		retAttrs := testutil.SchemaAttrs(schema, 0, 1)
+		isEnd, err := reader.Read(ctx, retAttrs, nil, mp, ret)
 		if err != nil {
 			ret.Clean(mp)
 			require.NoError(t, err)
@@ -837,7 +836,7 @@ func issue25590FlushedBlocks(
 		relation.GetDBID(ctx), relation.GetTableID(ctx),
 		int(dtxn.WriteOffset()), func(entry disttae.Entry) {
 			if entry.Type() != disttae.INSERT || entry.Bat() == nil ||
-				entry.Bat().Attrs[0] != catalog.BlockMeta_BlockInfo ||
+				entry.Attrs()[0] != catalog.BlockMeta_BlockInfo ||
 				entry.Bat().RowCount() == 0 {
 				return
 			}
@@ -1050,7 +1049,7 @@ func issue25590FlushedObjects(
 		relation.GetDBID(ctx), relation.GetTableID(ctx),
 		int(dtxn.WriteOffset()), func(entry disttae.Entry) {
 			if entry.Type() != disttae.INSERT || entry.Bat() == nil ||
-				entry.Bat().Attrs[0] != catalog.BlockMeta_BlockInfo ||
+				entry.Attrs()[0] != catalog.BlockMeta_BlockInfo ||
 				entry.Bat().RowCount() == 0 {
 				return
 			}
@@ -1123,7 +1122,7 @@ func TestIssue25590CompactPublishFailurePreservesDeletesAndCommits(t *testing.T)
 	const totalRows = 100000
 	issue25590AdmitStatement(t, ctx, txn)
 	bulk := batch.NewWithSize(2)
-	bulk.Attrs = []string{"mock_0", "mock_1"}
+	bulkAttrs := []string{"mock_0", "mock_1"}
 	pkCol := vector.NewVec(types.T_int32.ToType(), mp)
 	vCol := vector.NewVec(types.T_int32.ToType(), mp)
 	bulkPks := make([]int32, totalRows)
@@ -1137,7 +1136,7 @@ func TestIssue25590CompactPublishFailurePreservesDeletesAndCommits(t *testing.T)
 	bulk.Vecs[0] = pkCol
 	bulk.Vecs[1] = vCol
 	bulk.SetRowCount(totalRows)
-	require.NoError(t, rel.Write(ctx, bulk))
+	require.NoError(t, rel.Write(ctx, bulk, bulkAttrs))
 	bulk.Clean(mp)
 	issue25590EndStatement(t, txn)
 
@@ -1306,7 +1305,7 @@ func TestIssue25590CompactSecondPublishFailureRetriesAndCommits(t *testing.T) {
 	// spills the tail at Sync, publishing ONE mixed metadata batch.
 	insertBulkEntry := func(entry int32) {
 		bulk := batch.NewWithSize(2)
-		bulk.Attrs = []string{"mock_0", "mock_1"}
+		bulkAttrs := []string{"mock_0", "mock_1"}
 		pkCol := vector.NewVec(types.T_int32.ToType(), mp)
 		vCol := vector.NewVec(types.T_int32.ToType(), mp)
 		bulkPks := make([]int32, rowsPerEntry)
@@ -1320,7 +1319,7 @@ func TestIssue25590CompactSecondPublishFailureRetriesAndCommits(t *testing.T) {
 		bulk.Vecs[0] = pkCol
 		bulk.Vecs[1] = vCol
 		bulk.SetRowCount(rowsPerEntry)
-		require.NoError(t, rel.Write(ctx, bulk))
+		require.NoError(t, rel.Write(ctx, bulk, bulkAttrs))
 		bulk.Clean(mp)
 	}
 
@@ -1346,7 +1345,7 @@ func TestIssue25590CompactSecondPublishFailureRetriesAndCommits(t *testing.T) {
 		dtxn.ForEachTableWrites(
 			rel.GetDBID(ctx), rel.GetTableID(ctx), 1<<30, func(entry disttae.Entry) {
 				if entry.Type() != disttae.INSERT || entry.Bat() == nil ||
-					entry.Bat().Attrs[0] != catalog.BlockMeta_BlockInfo ||
+					entry.Attrs()[0] != catalog.BlockMeta_BlockInfo ||
 					entry.Bat().RowCount() == 0 {
 					return
 				}
@@ -1530,7 +1529,7 @@ func TestIssue25590CompactionAdmissionRefusalPreservesRowsAndCommits(t *testing.
 	const totalRows = 100000
 	issue25590AdmitStatement(t, ctx, txn)
 	bulk := batch.NewWithSize(2)
-	bulk.Attrs = []string{"mock_0", "mock_1"}
+	bulkAttrs := []string{"mock_0", "mock_1"}
 	pkCol := vector.NewVec(types.T_int32.ToType(), mp)
 	vCol := vector.NewVec(types.T_int32.ToType(), mp)
 	bulkPks := make([]int32, totalRows)
@@ -1544,7 +1543,7 @@ func TestIssue25590CompactionAdmissionRefusalPreservesRowsAndCommits(t *testing.
 	bulk.Vecs[0] = pkCol
 	bulk.Vecs[1] = vCol
 	bulk.SetRowCount(totalRows)
-	require.NoError(t, rel.Write(ctx, bulk))
+	require.NoError(t, rel.Write(ctx, bulk, bulkAttrs))
 	bulk.Clean(mp)
 	issue25590EndStatement(t, txn)
 
@@ -1676,7 +1675,7 @@ func TestIssue25590TwoDirtyObjectRefusalRollsBackRetriesAndCommits(t *testing.T)
 	const totalRows = 100000
 	issue25590AdmitStatement(t, ctx, txn)
 	bulk := batch.NewWithSize(2)
-	bulk.Attrs = []string{"mock_0", "mock_1"}
+	bulkAttrs := []string{"mock_0", "mock_1"}
 	pkCol := vector.NewVec(types.T_int32.ToType(), mp)
 	vCol := vector.NewVec(types.T_int32.ToType(), mp)
 	bulkPks := make([]int32, totalRows)
@@ -1690,7 +1689,7 @@ func TestIssue25590TwoDirtyObjectRefusalRollsBackRetriesAndCommits(t *testing.T)
 	bulk.Vecs[0] = pkCol
 	bulk.Vecs[1] = vCol
 	bulk.SetRowCount(totalRows)
-	require.NoError(t, rel.Write(ctx, bulk))
+	require.NoError(t, rel.Write(ctx, bulk, bulkAttrs))
 	bulk.Clean(mp)
 	issue25590EndStatement(t, txn)
 
@@ -1792,3 +1791,9 @@ func TestIssue25590TwoDirtyObjectRefusalRollsBackRetriesAndCommits(t *testing.T)
 		"the committed surviving-row contents are exact")
 	require.NoError(t, txn2.Commit(ctx))
 }
+
+// Column names of issue25590InsertRow and issue25590DeleteRow batches.
+var (
+	issue25590InsertAttrs = []string{"mock_0", "mock_1"}
+	issue25590DeleteAttrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+)

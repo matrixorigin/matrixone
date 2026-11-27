@@ -182,14 +182,17 @@ func (ticket *decodedFillTicket) wait(ctx context.Context, timeout time.Duration
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	wait := ReadWaitTrackerFromContext(ctx)
+	start := wait.Start()
 	select {
 	case <-ctx.Done():
+		wait.Stop(start)
 		return ctx.Err()
 	case <-ticket.generation.done:
-		return ticket.waitResult(ctx)
 	case <-timer.C:
-		return ticket.waitResult(ctx)
 	}
+	wait.Stop(start)
+	return ticket.waitResult(ctx)
 }
 
 func (ticket *decodedFillTicket) waitResult(ctx context.Context) error {

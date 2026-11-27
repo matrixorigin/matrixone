@@ -30,12 +30,10 @@ func TestCopyBatchCompactsAndFlattens(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()
 	src := batch.NewWithSize(4)
-	src.Attrs = []string{"fixed", "varlen", "const", "const_null"}
 
 	fixed := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(fixed, []int64{11}, []bool{false}, mp))
 	fixed.GetNulls().Add(9)
-	fixed.GetGrouping().Add(0, 9)
 	fixed.SetSorted(true)
 
 	dead := []byte("dead-")
@@ -65,7 +63,6 @@ func TestCopyBatchCompactsAndFlattens(t *testing.T) {
 
 	got, err := CopyBatch(src, proc)
 	require.NoError(t, err)
-	require.Equal(t, src.Attrs, got.Attrs)
 	require.Equal(t, src.RowCount(), got.RowCount())
 	for _, vec := range got.Vecs {
 		require.False(t, vec.IsConst())
@@ -73,9 +70,7 @@ func TestCopyBatchCompactsAndFlattens(t *testing.T) {
 	}
 	require.False(t, got.Vecs[0].GetSorted())
 	require.Equal(t, int64(11), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
-	require.True(t, got.Vecs[0].GetGrouping().Contains(0))
 	require.False(t, got.Vecs[0].GetNulls().Contains(9))
-	require.False(t, got.Vecs[0].GetGrouping().Contains(9))
 	require.Equal(t, live, got.Vecs[1].GetBytesAt(0))
 	require.Len(t, got.Vecs[1].GetArea(), len(live))
 	require.Equal(t, "a repeated value long enough to use the area", string(got.Vecs[2].GetBytesAt(0)))
@@ -214,7 +209,6 @@ func BenchmarkCopyBatchAlreadyCompact(b *testing.B) {
 
 func copyBatchWithUnionAll(src *batch.Batch, mp *mpool.MPool) (*batch.Batch, error) {
 	dst := batch.NewWithSize(len(src.Vecs))
-	dst.Attrs = append(dst.Attrs, src.Attrs...)
 	for i, srcVec := range src.Vecs {
 		vec := vector.NewVec(*srcVec.GetType(), mp)
 		if err := vector.GetUnionAllFunction(*srcVec.GetType(), mp)(vec, srcVec); err != nil {
@@ -231,7 +225,6 @@ func copyBatchWithUnionAll(src *batch.Batch, mp *mpool.MPool) (*batch.Batch, err
 func TestCopyBatchDestinationAdmission(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	src := batch.NewWithSize(2)
-	src.Attrs = []string{"id", "payload"}
 	src.SetVector(0, vector.NewVec(types.T_int64.ToType(), proc.Mp()))
 	src.SetVector(1, vector.NewVec(types.T_varchar.ToType(), proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(src.Vecs[0], []int64{1, 2}, []bool{false, true}, proc.Mp()))
@@ -269,7 +262,6 @@ func TestCopyBatchDestinationAdmission(t *testing.T) {
 func BenchmarkCopyBatchDestinationAdmission(b *testing.B) {
 	proc := testutil.NewProcess(b)
 	src := batch.NewWithSize(1)
-	src.Attrs = []string{"payload"}
 	src.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	for range 32 {
 		require.NoError(b, vector.AppendBytes(src.Vecs[0], []byte("a moderately wide variable payload for a workspace batch"), false, proc.Mp()))

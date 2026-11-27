@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -190,8 +189,8 @@ func TestRetainedCachedVectorLifetimeAndCow(t *testing.T) {
 	require.NoError(t, err)
 	destination := vector.NewVec(types.T_varchar.ToType(), mp)
 	t.Cleanup(func() { destination.Free(mp) })
-	// The lender (normally the output batch) holds the pin, not the Vector.
-	var keeper bufferlease.Holder
+	// The lender (for a scan, its reader request) holds the pin, not the Vector.
+	var keeper CachePins
 	t.Cleanup(keeper.Release)
 	admitted, err := TryBorrowCachedVector(destination, probe, allocation, &keeper)
 	require.NoError(t, err)
@@ -246,7 +245,7 @@ func TestRetainedCachedVectorPinRefusal(t *testing.T) {
 			var transientBytes uint64
 			if transient {
 				var err error
-				allocMP, err = vector.JSONReaderAllocationMP(mp, func(size uint64) (func(), error) {
+				allocMP, err = mp.WithAdmission(func(size uint64) (func(), error) {
 					transientBytes += size
 					return func() { transientBytes -= size }, nil
 				})
@@ -255,7 +254,7 @@ func TestRetainedCachedVectorPinRefusal(t *testing.T) {
 			}
 			destination := vector.NewVec(types.T_varchar.ToType(), allocMP)
 			defer destination.Free(allocMP)
-			var keeper bufferlease.Holder
+			var keeper CachePins
 			admitted, err := TryBorrowCachedVector(destination, data, allocMP, &keeper)
 			require.NoError(t, err)
 			require.False(t, admitted)

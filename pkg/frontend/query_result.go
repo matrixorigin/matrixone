@@ -184,7 +184,6 @@ func normalizeQueryResultBatchForWrite(
 	rowCount int,
 ) (*batch.Batch, func(), error) {
 	writeBat := batch.NewWithSize(len(bat.Vecs))
-	writeBat.Attrs = bat.Attrs
 	copy(writeBat.Vecs, bat.Vecs)
 	writeBat.SetRowCount(rowCount)
 	cloned := make([]*vector.Vector, 0, len(bat.Vecs))
@@ -755,7 +754,6 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 			bat.Clean(mp)
 		}
 	}()
-	bat.SetAttributes(catalog.MetaColNames)
 	for i, t := range catalog.MetaColTypes {
 		bat.Vecs[i] = vector.NewVec(t, mp)
 	}

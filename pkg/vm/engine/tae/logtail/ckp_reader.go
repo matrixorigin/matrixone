@@ -90,7 +90,8 @@ func (r *ckpObjectReader) Read(
 		return true, nil
 	}
 	for {
-		if end, err = r.reader.Read(ctx, bat.Attrs, nil, mp, bat); err != nil {
+		// bat is a ckputil.MakeDataScanTableIDBatch batch.
+		if end, err = r.reader.Read(ctx, ckputil.DataScan_TableIDAtrrs, nil, mp, bat); err != nil {
 			return
 		}
 		if !end {
@@ -179,7 +180,7 @@ func (r *ckpObjectReaderForV12) Read(
 	}
 	var bats []*containers.Batch
 	if bats, err = LoadBlkColumnsByMeta(
-		CheckpointVersion12, ctx, typs, destBatch.Attrs, batchIndex, reader, mp,
+		CheckpointVersion12, ctx, typs, ckputil.DataScan_TableIDAtrrs, batchIndex, reader, mp,
 	); err != nil {
 		return
 	}
@@ -455,7 +456,7 @@ func readMetaBatch(
 	); err != nil {
 		return
 	}
-	metaBatch = batch.New(ckputil.MetaAttrs)
+	metaBatch = batch.NewWithSize(len(ckputil.MetaAttrs))
 	for i, vec := range metaVecs {
 		metaBatch.Vecs[i] = &vec
 	}
@@ -485,9 +486,31 @@ func readMetaWithTableID(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (dataRanges, tombstoneRanges []ckputil.TableRange, err error) {
+	meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+	if err != nil {
+		return nil, nil, err
+	}
+	// A block's table-ID zone map can prove absence without loading any
+	// columns. IDs inside its bounds still require the exact lookup below.
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
+	block := dataMeta.GetBlockMeta(uint32(location.ID()))
+	if block.GetMetaColumnCount() > ckputil.MetaSeqnums[0] {
+		column := block.ColumnMeta(ckputil.MetaSeqnums[0])
+		zm := column.ZoneMap()
+		if column.DataType() == uint8(types.T_uint64) && zm.Valid() && zm.GetType() == types.T_uint64 {
+			minBytes, maxBytes := zm.GetMinBuf(), zm.GetMaxBuf()
+			if len(minBytes) == 8 && len(maxBytes) == 8 {
+				minID, maxID := types.DecodeUint64(minBytes), types.DecodeUint64(maxBytes)
+				if minID <= maxID && (tableID < minID || tableID > maxID) {
+					return nil, nil, ctx.Err()
+				}
+			}
+		}
+	}
+
 	tableIDs := containers.NewVectors(1)
-	_, release, _, err := ioutil.LoadColumnsData(
-		ctx, ckputil.MetaSeqnums[:1], ckputil.MetaTypes[:1],
+	release, _, err := ioutil.LoadColumnsDataFromMeta(
+		ctx, dataMeta, ckputil.MetaSeqnums[:1], ckputil.MetaTypes[:1],
 		fs, location, tableIDs, mp, 0,
 	)
 	if err != nil {
@@ -1204,7 +1227,7 @@ func (reader *SyncTableIDReader) Read(ctx context.Context) (release func(), bat 
 	); err != nil {
 		return
 	}
-	bat = batch.New(TableIDAttrs)
+	bat = batch.NewWithSize(len(TableIDAttrs))
 	for i, vec := range preTableIDVecs {
 		bat.Vecs[i] = &vec
 	}

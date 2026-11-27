@@ -53,7 +53,7 @@ func (projection *Projection) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(projection.ctr.projExecutors) == 0 {
-		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
+		projection.ctr.projExecutors, projection.ctr.jsonFrame, err = colexec.NewProjectionExecutors(proc, projection.ProjectList, nil)
 
 		projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 		if projection.GroupingSetCount > 0 {
@@ -118,6 +118,11 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		defer func() { proc.WarningRowOffset = previous }()
 	}
 
+	if projection.ctr.jsonFrame != nil {
+		projection.ctr.jsonFrame.Begin(batches[0])
+		defer projection.ctr.jsonFrame.End()
+	}
+
 	for i := range projection.ctr.projExecutors {
 		vec, err := projection.ctr.projExecutors[i].Eval(proc, batches, mask)
 		if err != nil {
@@ -180,7 +185,7 @@ func (projection *Projection) emitRuntimeEmptyGroupingSet(proc *process.Process)
 	projection.freeExpandOwned(proc)
 	output := projection.ctr.expandBuf
 	for i := 0; i < groupCount; i++ {
-		vec := vector.NewRollupConst(planTypeToType(projection.ProjectList[i].Typ), 1, proc.Mp())
+		vec := vector.NewConstNull(planTypeToType(projection.ProjectList[i].Typ), 1, proc.Mp())
 		projection.ctr.expandOwned = append(projection.ctr.expandOwned, vec)
 		output.Vecs[i] = vec
 	}
@@ -220,7 +225,7 @@ func (projection *Projection) emitGroupingSet(proc *process.Process) (vm.CallRes
 			continue
 		}
 		typ := planTypeToType(projection.ProjectList[i].Typ)
-		vec := vector.NewRollupConst(typ, rowCount, proc.Mp())
+		vec := vector.NewConstNull(typ, rowCount, proc.Mp())
 		projection.ctr.expandOwned = append(projection.ctr.expandOwned, vec)
 		output.Vecs[i] = vec
 	}

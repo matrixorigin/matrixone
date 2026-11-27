@@ -31,31 +31,47 @@ import (
 // branch".
 const BranchSnapshotKind = "branch"
 
-// AlterLineageLevel marks an internal mo_branch_metadata edge created by
-// ALTER's copy-and-swap. It preserves physical history but is not a logical
-// branch fork.
-const AlterLineageLevel = "alter"
+// Physical rebuilds preserve logical branch identity. Only truncate edges
+// reset the row image.
+const (
+	AlterLineageLevel    = "alter"
+	TruncateLineageLevel = "truncate"
+)
 
 func IsAlterLineageLevel(level string) bool {
 	return level == AlterLineageLevel || strings.HasPrefix(level, AlterLineageLevel+":")
 }
 
-func NextAlterLineageLevel(parentLevel string) string {
-	if IsAlterLineageLevel(parentLevel) {
-		return parentLevel
-	}
-	if parentLevel == "" {
-		return AlterLineageLevel
-	}
-	return AlterLineageLevel + ":" + parentLevel
+func IsTruncateLineageLevel(level string) bool {
+	return level == TruncateLineageLevel || strings.HasPrefix(level, TruncateLineageLevel+":")
 }
 
-// isLogicalBranchOwnerLevel reports whether a live metadata row represents a
-// logical branch. A plain "alter" row exists only for a historical source,
-// while "alter:<level>" carries the logical ownership inherited across
-// ALTER's copy-and-swap.
-func isLogicalBranchOwnerLevel(level string) bool {
-	return !IsAlterLineageLevel(level) || strings.HasPrefix(level, AlterLineageLevel+":")
+func IsRebuildLineageLevel(level string) bool {
+	return IsAlterLineageLevel(level) || IsTruncateLineageLevel(level)
+}
+
+func NextAlterLineageLevel(parentLevel string) string {
+	return nextRebuildLineageLevel(AlterLineageLevel, parentLevel)
+}
+
+func NextTruncateLineageLevel(parentLevel string) string {
+	return nextRebuildLineageLevel(TruncateLineageLevel, parentLevel)
+}
+
+func nextRebuildLineageLevel(level, parentLevel string) string {
+	for IsRebuildLineageLevel(parentLevel) {
+		_, parentLevel, _ = strings.Cut(parentLevel, ":")
+	}
+	if parentLevel == "" {
+		return level
+	}
+	return level + ":" + parentLevel
+}
+
+// IsLiveBranchLevel reports whether an undeleted metadata row owns a
+// logical branch. A suffixed rebuild inherits its previous branch's level.
+func IsLiveBranchLevel(level string) bool {
+	return level != AlterLineageLevel && level != TruncateLineageLevel
 }
 
 // BranchSnapshotSnamePrefix is the sname prefix used by branch-owned snapshot
@@ -399,7 +415,7 @@ func ComputeAlterLineageCompactionPlan(
 		}
 		for _, tableID := range component {
 			meta, ok := dag.Info[tableID]
-			if !ok || !IsAlterLineageLevel(meta.Level) {
+			if !ok || !IsRebuildLineageLevel(meta.Level) {
 				continue
 			}
 			edge, ok := edges[tableID]
@@ -412,7 +428,7 @@ func ComputeAlterLineageCompactionPlan(
 			// plain DROP reclaims branch snapshots before the last historical
 			// owner disappears. Once that owner is gone, deleting the orphaned
 			// metadata row (and the deterministic snapshot name, idempotently)
-			// closes the lifecycle instead of leaking one row per ALTER.
+			// closes the lifecycle instead of leaking one row per rebuild.
 			if !ok && !meta.Deleted {
 				continue
 			}
@@ -455,7 +471,7 @@ func (d BranchReclaimDag) connectedComponent(
 		component = append(component, tableID)
 
 		if meta, ok := d.Info[tableID]; ok {
-			if !meta.Deleted && isLogicalBranchOwnerLevel(meta.Level) {
+			if !meta.Deleted && IsLiveBranchLevel(meta.Level) {
 				hasLiveLogicalBranch = true
 			}
 			if meta.ParentTableID != 0 {
@@ -494,7 +510,7 @@ func (d BranchReclaimDag) ComponentsHaveAlterLineage(starts []uint64) bool {
 		}
 		component, _ := d.connectedComponent(start, visited)
 		for _, id := range component {
-			if meta, ok := d.Info[id]; ok && IsAlterLineageLevel(meta.Level) {
+			if meta, ok := d.Info[id]; ok && IsRebuildLineageLevel(meta.Level) {
 				return true
 			}
 		}
@@ -542,7 +558,7 @@ func BuildAlterLineageMetadataDeleteSQL(tableIDs []uint64) string {
 		}
 		b.WriteString(strconv.FormatUint(tableID, 10))
 	}
-	b.WriteString(") and (level = 'alter' or level like 'alter:%')")
+	b.WriteString(") and (level = 'alter' or level like 'alter:%' or level = 'truncate' or level like 'truncate:%')")
 	return b.String()
 }
 
@@ -683,11 +699,11 @@ func branchReclaimableTableIDs(dag BranchReclaimDag, roots []uint64) []uint64 {
 		if !ok {
 			continue
 		}
-		// ALTER generations are reclaimed by ComputeAlterLineageCompactionPlan,
+		// Rebuilt generations are reclaimed by ComputeAlterLineageCompactionPlan,
 		// which also accounts for user snapshots and PITRs. Deleting their
 		// identity snapshots here would discard the account/database scope
 		// evidence before that historical-owner check runs.
-		if IsAlterLineageLevel(meta.Level) {
+		if IsRebuildLineageLevel(meta.Level) {
 			continue
 		}
 		if dag.subtreeAllDeletedMemo(tid, memo, visited) {
@@ -786,7 +802,7 @@ func BuildBranchMetadataDeleteSQL(tableIDs []uint64) string {
 		}
 		b.WriteString(strconv.FormatUint(tableID, 10))
 	}
-	b.WriteString(") and table_deleted = true and (level != 'alter' and level not like 'alter:%')")
+	b.WriteString(") and table_deleted = true and (level != 'alter' and level not like 'alter:%' and level != 'truncate' and level not like 'truncate:%')")
 	return b.String()
 }
 

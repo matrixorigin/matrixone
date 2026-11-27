@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -1058,8 +1057,8 @@ type RangesShuffleParam struct {
 	CNCNT     int32 // number of all cns
 	CNIDX     int32 // cn index , starts from 0
 	IsLocalCN bool
-	// ShuffleByObjectID assigns IVF persisted and appendable objects to the
-	// same physical CN owner.
+	// ShuffleByObjectID hashes immutable IVF objects by their full ObjectID.
+	// Appendable objects follow IsLocalCN, the owner of replay rows.
 	ShuffleByObjectID  bool
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
@@ -1116,11 +1115,16 @@ type Relation interface {
 
 	GetPrimaryKeys(context.Context) ([]*Attribute, error)
 
+	// Write inserts bat, whose columns attrs names, one name per vector. A
+	// batch of persisted objects is named [BlockMeta_BlockInfo,
+	// ObjectMeta_ObjectStats].
 	// Note: Write Will access Fileservice
-	Write(context.Context, *batch.Batch) error
+	Write(ctx context.Context, bat *batch.Batch, attrs []string) error
 
-	// Delete(context.Context, *vector.Vector, string) error
-	Delete(context.Context, *batch.Batch, string) error
+	// Delete deletes the rows bat identifies. attrs names bat's columns: a
+	// row delete starts with Row_ID, a delete of persisted tombstone objects
+	// is named [ObjectMeta_ObjectStats].
+	Delete(ctx context.Context, bat *batch.Batch, attrs []string, name string) error
 
 	AddTableDef(context.Context, TableDef) error
 	DelTableDef(context.Context, TableDef) error
@@ -1183,6 +1187,10 @@ type Relation interface {
 
 	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
+	// VisibleObjectCount counts persisted data and tombstone objects at the relation snapshot.
+	// Index diagnostics currently call it only on local, non-partitioned relations.
+	VisibleObjectCount(ctx context.Context) (int, error)
+
 	ApproxObjectsNum(ctx context.Context) int
 
 	// GetFlushTS returns the flush timestamp of the relation.
@@ -1205,6 +1213,12 @@ type RelationHandleFactory interface {
 // relation cache do not implement it.
 type RelationCreatedInCurrentTxn interface {
 	CreatedInCurrentTxn(context.Context) (bool, error)
+}
+
+// HistoricalSourceProvider checks whether the build snapshot can reproduce the
+// source seen by this transaction, including local DDL and DML.
+type HistoricalSourceProvider interface {
+	SourceVisibleAtSnapshot(context.Context) (bool, error)
 }
 
 // SourceCommitTSProvider is an optional relation capability used by async
@@ -1345,18 +1359,24 @@ type ReaderFilterRequest struct {
 	selectionScratch *ReaderSelectionScratch
 	borrowColumns    []bool
 	scopedColumns    *objectio.CachedColumnScope
+	// pins keeps the shared cache entries that borrowed (read-only) output
+	// columns alias. The cache is shared, so its entries are pinned; the
+	// request's owner is the lender, not the output batch. A reader releases
+	// the pins before it reuses the output batch for the next block, and the
+	// owner releases them when it is done with the batch (ReleasePins).
+	pins objectio.CachePins
 	// Select evaluates the same ordered predicate chain without shrinking its
 	// input. Sels uses the original live-row domain and is borrowed until the
 	// next callback. A supporting reader gathers that mapping once; unsupported
 	// readers continue calling Apply.
 	Select           ReaderSelection
 	OutputAllocation *mpool.MPool
-	// PublishSelection, when set, lets a Select read keep its columns'
-	// physical rows (read-only cache references) and publish the selected rows
-	// as the batch's selection, held in this caller-owned bitmap, instead of
-	// compacting them. Readers fall back to compaction when the block's rows
-	// are not its physical rows (deletes, storage row selections).
-	PublishSelection *bitmap.Bitmap
+	// PublishSelection lets a Select read keep its columns' physical rows
+	// (read-only cache references) and publish the selected rows as the output
+	// batch's own selection instead of compacting them. Readers fall back to
+	// compaction when the block's rows are not its physical rows (deletes,
+	// storage row selections).
+	PublishSelection bool
 	Apply            ReaderFilter
 	Exact            *objectio.ExactScanState
 	Observe          func(objectio.ExactScanStats)
@@ -1451,18 +1471,34 @@ func (r *ReaderFilterRequest) ColumnScope() *objectio.CachedColumnScope {
 }
 
 // BorrowColumns lets the single pinned read honor the eventual representation.
-// Owned/unused columns use the original owned decoder path without transient
-// cache leases. The mask is request-local and consumed before publication.
+// Only a column the request explicitly retains is borrowed: the request's
+// owner then lends it and holds its cache pin (Pins) until it reuses or drops
+// the output batch. Every other column, including all columns of a request
+// without matching ColumnUses, uses the owned decoder path without cache pins.
+// The mask is request-local and consumed before publication.
 func (r *ReaderFilterRequest) BorrowColumns(positions []int, width int) []bool {
 	if cap(r.borrowColumns) < len(positions) {
 		r.borrowColumns = make([]bool, len(positions))
 	} else {
 		r.borrowColumns = r.borrowColumns[:len(positions)]
 	}
+	explicit := len(r.ColumnUses) == width
 	for i, pos := range positions {
-		r.borrowColumns[i] = r.ColumnUse(pos, width) == ReaderColumnRetain
+		r.borrowColumns[i] = explicit && r.ColumnUse(pos, width) == ReaderColumnRetain
 	}
 	return r.borrowColumns
+}
+
+// Pins holds the cache entries that borrowed output columns alias.
+func (r *ReaderFilterRequest) Pins() *objectio.CachePins { return &r.pins }
+
+// ReleasePins drops every pin. The caller guarantees that no output column
+// still aliases a pinned entry: the batch is being reused, freed, or is no
+// longer read. It is safe on a nil request.
+func (r *ReaderFilterRequest) ReleasePins() {
+	if r != nil {
+		r.pins.Release()
+	}
 }
 
 // SelectionScratch is execution-lane local and bounded by the scan schema.

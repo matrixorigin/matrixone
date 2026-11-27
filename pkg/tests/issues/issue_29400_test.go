@@ -235,7 +235,7 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 						require.Zero(t, n)
 						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+database+"."+table+"{snapshot='issue29400_history'} where id=1 and v=7").Scan(&n))
 						require.Equal(t, 1, n)
-						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_branch_metadata where table_id=? and p_table_id=? and level='alter' and not table_deleted", idOf(table), oldID).Scan(&n))
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_branch_metadata where table_id=? and p_table_id=? and level='truncate' and not table_deleted", idOf(table), oldID).Scan(&n))
 						require.Equal(t, 1, n, "late protection must publish a successor edge from the original root")
 						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_snapshots where sname=? and kind='branch'", fmt.Sprintf("__mo_branch_%d", idOf(table))).Scan(&n))
 						require.Equal(t, 1, n, "successor edge must have its protection snapshot")
@@ -727,10 +727,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				unrelated := database + "_other"
 				for _, query := range []string{
 					"create database " + database,
-					"create database " + unrelated,
 					"create table " + database + ".t (id int primary key, v int)",
 					"create table " + database + ".u (i int)",
-					"create table " + unrelated + ".u (i int)",
 					"insert into " + database + ".t values (1, 1)",
 				} {
 					execSQLRequire(t, ctx, db0, query)
@@ -739,10 +737,14 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
 					defer done()
 					_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+database)
-					_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+unrelated)
+					if scenario.name == "shared_gate" {
+						_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+unrelated)
+					}
 				}()
 				var progressConn *sql.Conn
 				if scenario.name == "shared_gate" {
+					execSQLRequire(t, ctx, db0, "create database "+unrelated)
+					execSQLRequire(t, ctx, db0, "create table "+unrelated+".u (i int)")
 					conn, err := db0.Conn(ctx)
 					require.NoError(t, err)
 					defer conn.Close()

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -115,7 +114,8 @@ type Entry struct {
 	//object name for s3 file
 	fileName string
 	// update or delete tuples
-	bat *batch.Batch
+	bat   *batch.Batch
+	attrs []string
 }
 
 func makePBEntry(
@@ -125,7 +125,8 @@ func makePBEntry(
 	dbName,
 	tbName,
 	file string,
-	bat *batch.Batch) (pe *api.Entry, err error) {
+	bat *batch.Batch,
+	attrs []string) (pe *api.Entry, err error) {
 	e := Entry{
 		typ:          typ,
 		databaseName: dbName,
@@ -134,6 +135,7 @@ func makePBEntry(
 		tableId:      tableId,
 		fileName:     file,
 		bat:          bat,
+		attrs:        attrs,
 	}
 	return toPBEntry(e)
 }
@@ -169,7 +171,7 @@ func makeCreateDatabaseEntries(
 		catalog.MO_CATALOG,
 		catalog.MO_DATABASE,
 		"",
-		createDbBat,
+		createDbBat, catalog.MoDatabaseSchema,
 	)
 	if err != nil {
 		return nil, err
@@ -225,7 +227,7 @@ func makeCreateTableEntries(
 		}
 		createTbEntry, err := makePBEntry(INSERT,
 			catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, "", bat)
+			catalog.MO_CATALOG, catalog.MO_TABLES, "", bat, catalog.MoTablesSchema)
 		if err != nil {
 			return nil, err
 		}
@@ -239,7 +241,7 @@ func makeCreateTableEntries(
 		createColumnEntry, err := makePBEntry(
 			INSERT, catalog.MO_CATALOG_ID,
 			catalog.MO_COLUMNS_ID, catalog.MO_CATALOG,
-			catalog.MO_COLUMNS, "", bat)
+			catalog.MO_COLUMNS, "", bat, catalog.MoColumnsSchema)
 		if err != nil {
 			return nil, err
 		}
@@ -258,7 +260,8 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		typ = api.Entry_Delete
 	}
 	return &api.Entry{
-		Bat:          bat,
+		Attrs:        e.attrs,
+		Bat:          api.NewEncodedBatch(bat),
 		EntryType:    typ,
 		TableId:      e.tableId,
 		DatabaseId:   e.databaseId,
@@ -268,15 +271,8 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	}, nil
 }
 
-func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
-	rbat := new(api.Batch)
-	rbat.Attrs = bat.Attrs
-	for _, vec := range bat.Vecs {
-		pbVector, err := vector.VectorToProtoVector(vec)
-		if err != nil {
-			return nil, err
-		}
-		rbat.Vecs = append(rbat.Vecs, pbVector)
-	}
-	return rbat, nil
+// toPBBatch encodes bat's vectors for an api.Entry. The bytes are a copy:
+// the entry does not alias bat.
+func toPBBatch(bat *batch.Batch) ([]byte, error) {
+	return batch.MarshalVectors(bat.Vecs)
 }

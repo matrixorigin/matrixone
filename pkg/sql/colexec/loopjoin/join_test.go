@@ -984,7 +984,7 @@ func TestLoopJoinNonEqCondSplitsLargeBuildBatch(t *testing.T) {
 func TestLoopJoinConditionEvaluationWindowsOnlyOversizedBuildBatches(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	buildValues := make([]int32, loopJoinConditionMaxWindowRows+1)
-	buildBat := batch.New([]string{"id"})
+	buildBat := batch.NewWithSize(1)
 	buildBat.Vecs[0] = testutil.MakeInt32Vector(
 		buildValues, []uint64{0, loopJoinConditionMaxWindowRows}, proc.Mp())
 	buildBat.SetRowCount(len(buildValues))
@@ -1532,14 +1532,14 @@ func TestLoopJoinResultBatchAdmissionMatrix(t *testing.T) {
 }
 
 func makeInt32LoopJoinBatch(mp *mpool.MPool, vals []int32) *batch.Batch {
-	bat := batch.New([]string{"id"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector(vals, nil, mp)
 	bat.SetRowCount(len(vals))
 	return bat
 }
 
 func makeVarcharLoopJoinBatch(mp *mpool.MPool, vals []string) *batch.Batch {
-	bat := batch.New([]string{"value"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeVarcharVector(vals, nil, mp)
 	bat.SetRowCount(len(vals))
 	return bat

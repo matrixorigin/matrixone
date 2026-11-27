@@ -109,6 +109,8 @@ func issue25590MakeRelayBatch(
 		if r.origin != nil {
 			var buf bytes.Buffer
 			var err error
+			// Written without names: the recognizer locates the stats
+			// column from the writer's fixed layout, never from the wire.
 			val, err = r.origin.MarshalBinaryWithBuffer(&buf, true)
 			require.NoError(t, err)
 		}
@@ -157,13 +159,13 @@ func TestIssue25590RelayS3InfoNameExtraction(t *testing.T) {
 		"adoption derives the tombstone object's own name from the append tail, every insert tail object, and excludes row-only deletes")
 
 	// The wire shape: the production server encodes batches with
-	// MarshalBinaryForPipeline and the client decodes them with
-	// UnmarshalBinaryForPipeline before this recognizer runs.
+	// MarshalBinaryWithBuffer and the client decodes them with
+	// UnmarshalBinaryWithAnyMp before this recognizer runs.
 	var transport bytes.Buffer
-	data, err := bat.MarshalBinaryForPipeline(&transport, false)
+	data, err := bat.MarshalBinaryWithBuffer(&transport, false)
 	require.NoError(t, err)
 	wire := batch.NewWithSize(0)
-	require.NoError(t, wire.UnmarshalBinaryForPipeline(data, mp))
+	require.NoError(t, wire.UnmarshalBinaryWithAnyMp(data, mp))
 	defer wire.CleanOnlyData()
 	wireNames, ok, err := TryExtractRelayS3InfoObjectNames(wire, mp)
 	require.NoError(t, err)
@@ -175,7 +177,6 @@ func TestIssue25590RelayS3InfoNameExtraction(t *testing.T) {
 	// tail lost the object-stats column cannot prove its objects, so
 	// the whole ack rejects fail-closed instead of adopting a subset.
 	typeless := batch.NewWithSize(1)
-	typeless.SetAttributes([]string{"not-a-stats-column"})
 	typeless.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	defer typeless.Clean(mp)
 	require.NoError(t, vector.AppendFixed(typeless.Vecs[0], int64(1), false, mp))
@@ -235,7 +236,6 @@ func TestIssue25590RelayS3InfoNameExtraction(t *testing.T) {
 
 	// An ordinary two-column data batch never matches the layout.
 	dataBatch := batch.NewWithSize(2)
-	dataBatch.SetAttributes([]string{"pk", "v"})
 	dataBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	dataBatch.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	defer dataBatch.Clean(mp)

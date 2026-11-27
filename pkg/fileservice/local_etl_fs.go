@@ -212,11 +212,30 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 	}
 	nativePath := l.toNativeFilePath(path.File)
 
+	wait := ReadWaitTrackerFromContext(ctx)
+	start := wait.Start()
 	_, err = os.Stat(nativePath)
+	wait.Stop(start)
 	if os.IsNotExist(err) {
 		return moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	if err != nil {
+		return err
+	}
+
+	open := func() (*os.File, error) {
+		start := wait.Start()
+		f, err := os.Open(nativePath)
+		wait.Stop(start)
+		if os.IsNotExist(err) {
+			return nil, moerr.NewFileNotFoundNoCtx(path.File)
+		}
+		return f, err
+	}
+	seek := func(f *os.File, offset int64) error {
+		start := wait.Start()
+		_, err := f.Seek(offset, io.SeekStart)
+		wait.Stop(start)
 		return err
 	}
 
@@ -230,20 +249,17 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 		}
 
 		if entry.WriterForRead != nil {
-			f, err := os.Open(nativePath)
-			if os.IsNotExist(err) {
-				return moerr.NewFileNotFoundNoCtx(path.File)
-			}
+			f, err := open()
 			if err != nil {
 				return err
 			}
 			defer f.Close()
 			if entry.Offset > 0 {
-				if _, err := f.Seek(int64(entry.Offset), io.SeekStart); err != nil {
+				if err := seek(f, entry.Offset); err != nil {
 					return err
 				}
 			}
-			r := (io.Reader)(f)
+			r := wait.wrapReader(f)
 			if entry.Size > 0 {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
@@ -281,19 +297,16 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 			}
 
 		} else if entry.ReadCloserForRead != nil {
-			f, err := os.Open(nativePath)
-			if os.IsNotExist(err) {
-				return moerr.NewFileNotFoundNoCtx(path.File)
-			}
+			f, err := open()
 			if err != nil {
 				return err
 			}
 			if entry.Offset > 0 {
-				if _, err := f.Seek(int64(entry.Offset), io.SeekStart); err != nil {
+				if err := seek(f, entry.Offset); err != nil {
 					return err
 				}
 			}
-			r := (io.Reader)(f)
+			r := wait.wrapReader(f)
 			if entry.Size > 0 {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
@@ -322,22 +335,19 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 			}
 
 		} else {
-			f, err := os.Open(nativePath)
-			if os.IsNotExist(err) {
-				return moerr.NewFileNotFoundNoCtx(path.File)
-			}
+			f, err := open()
 			if err != nil {
 				return err
 			}
 			defer f.Close()
 
 			if entry.Offset > 0 {
-				_, err = f.Seek(int64(entry.Offset), io.SeekStart)
+				err = seek(f, entry.Offset)
 				if err != nil {
 					return err
 				}
 			}
-			r := (io.Reader)(f)
+			r := wait.wrapReader(f)
 			if entry.Size > 0 {
 				r = io.LimitReader(r, int64(entry.Size))
 			}

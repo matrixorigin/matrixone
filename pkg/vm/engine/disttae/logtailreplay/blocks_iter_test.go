@@ -485,7 +485,7 @@ func TestFilterBatchCase2InsertThenDelete(t *testing.T) {
 	pkValue := int32(999)
 	primarySeqnum := 0
 	// Create data batch with 1 insert operation
-	dataBatch := batch.New([]string{"pk", "col1", "ts"})
+	dataBatch := batch.NewWithSize(3)
 	dataBatch.Vecs = make([]*vector.Vector, 3)
 
 	// Primary key column
@@ -505,7 +505,7 @@ func TestFilterBatchCase2InsertThenDelete(t *testing.T) {
 	dataBatch.SetRowCount(1)
 
 	// Create tombstone batch with 1 delete operation
-	tombstoneBatch := batch.New([]string{"pk", "ts"})
+	tombstoneBatch := batch.NewWithSize(2)
 	tombstoneBatch.Vecs = make([]*vector.Vector, 2)
 
 	// Primary key column
@@ -567,7 +567,7 @@ func TestFilterBatchCase2InsertThenDeleteMultiple(t *testing.T) {
 	primarySeqnum := 0
 
 	// Create data batch with 2 insert operations
-	dataBatch := batch.New([]string{"pk", "col1", "ts"})
+	dataBatch := batch.NewWithSize(3)
 	dataBatch.Vecs = make([]*vector.Vector, 3)
 
 	pkVec := vector.NewVec(types.T_int32.ToType(), mp)
@@ -587,7 +587,7 @@ func TestFilterBatchCase2InsertThenDeleteMultiple(t *testing.T) {
 	dataBatch.SetRowCount(2)
 
 	// Create tombstone batch with 2 delete operations
-	tombstoneBatch := batch.New([]string{"pk", "ts"})
+	tombstoneBatch := batch.NewWithSize(2)
 	tombstoneBatch.Vecs = make([]*vector.Vector, 2)
 
 	tombstonePkVec := vector.NewVec(types.T_int32.ToType(), mp)
@@ -623,7 +623,7 @@ func TestChangeHandlerCoalesceBatchPreservesAllVersions(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	data := batch.New([]string{"pk", "ts"})
+	data := batch.NewWithSize(2)
 	data.Vecs = []*vector.Vector{
 		vector.NewVec(types.T_int32.ToType(), mp),
 		vector.NewVec(types.T_TS.ToType(), mp),
@@ -635,7 +635,7 @@ func TestChangeHandlerCoalesceBatchPreservesAllVersions(t *testing.T) {
 	data.SetRowCount(2)
 	defer data.Clean(mp)
 
-	tombstone := batch.New([]string{"pk", "ts"})
+	tombstone := batch.NewWithSize(2)
 	tombstone.Vecs = []*vector.Vector{
 		vector.NewVec(types.T_int32.ToType(), mp),
 		vector.NewVec(types.T_TS.ToType(), mp),

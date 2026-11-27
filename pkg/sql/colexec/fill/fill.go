@@ -187,8 +187,7 @@ func cloneFillBatch(
 	if view != nil {
 		mp = view
 	}
-	attrs, attrTypes := source.GetSchema()
-	cloned := batch.NewWithSchema(attrs, attrTypes, mp)
+	cloned := batch.NewWithTypes(source.Types(), mp)
 	cloned.Recursive = source.Recursive
 	if err := source.CloneTo(cloned, mp); err != nil {
 		cloned.Clean(mp)

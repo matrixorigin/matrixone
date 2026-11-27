@@ -134,7 +134,7 @@ func TestMergeRecursiveFreeWithoutReset(t *testing.T) {
 func TestMergeRecursiveMemoryQuotaAndMarkerReplacement(t *testing.T) {
 	t.Run("initial quota", func(t *testing.T) {
 		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-		src := batch.New([]string{"value"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 256)}, nil, proc.Mp())
 		src.SetRowCount(1)
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(src.Size() - 1), nil })
@@ -163,14 +163,14 @@ func TestMergeRecursiveMemoryQuotaAndMarkerReplacement(t *testing.T) {
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(1 << 20), nil })
 		arg := &MergeRecursive{}
 		require.NoError(t, arg.Prepare(proc))
-		src := batch.New([]string{"value"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 4096)}, nil, proc.Mp())
 		src.SetRowCount(1)
 		cached, err := arg.ctr.cacheBatch(proc, arg.OpAnalyzer, src)
 		require.NoError(t, err)
 		require.Positive(t, arg.ctr.memory.Retained())
 
-		marker := batch.New([]string{"value"})
+		marker := batch.NewWithSize(1)
 		marker.Vecs[0] = testutil.MakeVarcharVector([]string{"marker"}, nil, proc.Mp())
 		marker.SetRowCount(1)
 		marker.SetLast()
@@ -201,14 +201,14 @@ func TestMergeRecursiveFailedReuseDropsStaleCacheAndCharge(t *testing.T) {
 	require.NoError(t, arg.Prepare(proc))
 
 	sourcePool := mpool.MustNewZero()
-	initial := batch.New([]string{"value"})
+	initial := batch.NewWithSize(1)
 	initial.Vecs[0] = testutil.MakeVarcharVector([]string{"seed"}, nil, sourcePool)
 	initial.SetRowCount(1)
 	cached, err := arg.ctr.cacheBatch(proc, arg.OpAnalyzer, initial)
 	require.NoError(t, err)
 	require.Positive(t, arg.ctr.memory.Retained())
 
-	large := batch.New([]string{"value"})
+	large := batch.NewWithSize(1)
 	large.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 2<<20)}, nil, sourcePool)
 	large.SetRowCount(1)
 	arg.ctr.i = 0

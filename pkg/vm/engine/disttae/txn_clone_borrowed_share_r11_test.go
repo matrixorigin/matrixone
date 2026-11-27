@@ -26,6 +26,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"sync"
 	"testing"
 	"time"
@@ -328,6 +329,7 @@ func TestIssue25590CloneBorrowedSurvivesRollbackDrainAndStaysReadableR24ControlD
 		typ:      INSERT,
 		fileName: "clone-meta",
 		bat:      bat,
+		attrs:    catalog.ObjectInsertAttrs,
 	})
 	require.NoError(t, txn.gcObjsByIdxRange(0, 0, cloneGCTxnRollback))
 

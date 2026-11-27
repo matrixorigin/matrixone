@@ -372,17 +372,16 @@ func TestRebuildHashmapBasic(t *testing.T) {
 
 func TestReSpillDecisionKeepsStaticBoundAndAddsAdaptiveBound(t *testing.T) {
 	builder := &hashbuild.HashmapBuilder{}
-	var groupingSeen bool
 	builder.Batches.MemSize = 120_000
 
 	spill, adaptive, err := shouldReSpillBeforeRetain(
-		builder, nil, math.MaxInt64, nil, &groupingSeen,
+		builder, nil, math.MaxInt64, nil,
 	)
 	require.NoError(t, err)
 	require.False(t, spill)
 	require.False(t, adaptive)
 
-	spill, adaptive, err = shouldReSpillBeforeRetain(builder, nil, 100_001, nil, &groupingSeen)
+	spill, adaptive, err = shouldReSpillBeforeRetain(builder, nil, 100_001, nil)
 	require.NoError(t, err)
 	require.True(t, spill)
 	require.False(t, adaptive)
@@ -399,7 +398,7 @@ func TestReSpillDecisionKeepsStaticBoundAndAddsAdaptiveBound(t *testing.T) {
 	require.NoError(t, err)
 
 	spill, adaptive, err = shouldReSpillBeforeRetain(
-		builder, nil, math.MaxInt64, first, &groupingSeen,
+		builder, nil, math.MaxInt64, first,
 	)
 	require.NoError(t, err)
 	require.True(t, spill)
@@ -644,7 +643,6 @@ func TestReSpillOmitsUnusedBatchMetadata(t *testing.T) {
 		values[i] = int32(i)
 	}
 	build := makeInt32Batch(proc, values)
-	build.Attrs = []string{"key"}
 	defer build.Clean(proc.Mp())
 	engine := newExactTestSpillEngine(t, SpillEngineConfig{
 		BuildKeyExprs:           makeTestKeyExpr(),
@@ -669,9 +667,6 @@ func TestReSpillOmitsUnusedBatchMetadata(t *testing.T) {
 			continue
 		}
 		found = true
-		for _, bat := range jm.GetBatches() {
-			require.Empty(t, bat.Attrs)
-		}
 		jm.Free()
 	}
 	require.True(t, found)

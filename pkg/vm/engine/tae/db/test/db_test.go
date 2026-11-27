@@ -2523,10 +2523,10 @@ func TestChaos1(t *testing.T) {
 	assert.NoError(t, err)
 	defer view.Close()
 	assert.Equal(t, int(appendCnt), view.Length())
-	mask := view.Deletes
+	// Compact releases the deletes bitmap, so count it first.
+	assert.Equal(t, int(deleteCnt), view.Deletes.Count())
 	view.Compact()
 	t.Log(view.String())
-	assert.Equal(t, int(deleteCnt), mask.Count())
 }
 
 // Testing Steps
@@ -2832,22 +2832,22 @@ func TestSegDelLogtail(t *testing.T) {
 	assert.Equal(t, 2, len(resp.Commands)) // data object + tombstone object
 
 	assert.Equal(t, api.Entry_DataObject, resp.Commands[0].EntryType)
-	assert.Equal(t, uint32(9), resp.Commands[0].Bat.Vecs[0].Len) /* 5 create + 4 delete */
+	dataObjectBat, err := batch.ViewBinary(resp.Commands[0].Bat.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, 9, dataObjectBat.Vecs[0].Length()) /* 5 create + 4 delete */
 	// start ts should not be empty
-	startTSVec := resp.Commands[0].Bat.Vecs[9]
-	cnStartVec, err := vector.ProtoVectorToVector(startTSVec, mpool.MustNewZero())
-	assert.NoError(t, err)
+	cnStartVec := dataObjectBat.Vecs[9]
 	startTSs := vector.MustFixedColWithTypeCheck[types.TS](cnStartVec)
 	for _, ts := range startTSs {
 		assert.False(t, ts.IsEmpty())
 	}
 
 	assert.Equal(t, api.Entry_TombstoneObject, resp.Commands[1].EntryType)
-	assert.Equal(t, uint32(4), resp.Commands[1].Bat.Vecs[0].Len) /* 2 create + 2 delete */
+	tombstoneObjectBat, err := batch.ViewBinary(resp.Commands[1].Bat.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, 4, tombstoneObjectBat.Vecs[0].Length()) /* 2 create + 2 delete */
 	// start ts should not be empty
-	startTSVec = resp.Commands[1].Bat.Vecs[9]
-	cnStartVec, err = vector.ProtoVectorToVector(startTSVec, mpool.MustNewZero())
-	assert.NoError(t, err)
+	cnStartVec = tombstoneObjectBat.Vecs[9]
 	startTSs = vector.MustFixedColWithTypeCheck[types.TS](cnStartVec)
 	for _, ts := range startTSs {
 		assert.False(t, ts.IsEmpty())
@@ -6933,6 +6933,8 @@ func TestAlterFakePk(t *testing.T) {
 		// check non-exist column foreach
 		newSchema := obj.GetRelation().Schema(false)
 		sels := &nulls.Nulls{}
+		sels.Init(common.DefaultAllocator)
+		defer sels.Free()
 		sels.Add(1)
 		sels.Add(3)
 		rows := make([]int, 0, 4)
@@ -6971,27 +6973,27 @@ func TestAlterFakePk(t *testing.T) {
 	assert.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)          // data insert
 	assert.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)          // data delete
 
-	dataObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat, mpool.MustNewZero())
+	dataObjectBat, err := batch.ViewBinary(resp.Commands[0].Bat.Bytes())
 	assert.NoError(t, err)
-	tnDataObjectBat := containers.NewNonNullBatchWithSharedMemory(dataObjectBat, common.DefaultAllocator)
+	tnDataObjectBat := containers.NewNonNullBatchWithSharedMemory(dataObjectBat, resp.Commands[0].Attrs, common.DefaultAllocator)
 	t.Log(tnDataObjectBat.Attrs)
 	assert.Equal(t, 10, len(tnDataObjectBat.Vecs))
 	for _, v := range tnDataObjectBat.Vecs {
 		assert.Equal(t, 1, v.Length())
 	}
 
-	tombstoneObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[1].Bat, mpool.MustNewZero())
+	tombstoneObjectBat, err := batch.ViewBinary(resp.Commands[1].Bat.Bytes())
 	assert.NoError(t, err)
-	tnTombstoneObjectBat := containers.NewNonNullBatchWithSharedMemory(tombstoneObjectBat, common.DefaultAllocator)
+	tnTombstoneObjectBat := containers.NewNonNullBatchWithSharedMemory(tombstoneObjectBat, resp.Commands[1].Attrs, common.DefaultAllocator)
 	t.Log(tnTombstoneObjectBat.Attrs)
 	assert.Equal(t, 10, len(tnTombstoneObjectBat.Vecs)) // 1 fake pk + 1 rowid + 1 committs
 	for _, v := range tnTombstoneObjectBat.Vecs {
 		assert.Equal(t, 1, v.Length())
 	}
 
-	insBat, err := batch.ProtoBatchToBatch(resp.Commands[2].Bat, mpool.MustNewZero())
+	insBat, err := batch.ViewBinary(resp.Commands[2].Bat.Bytes())
 	assert.NoError(t, err)
-	tnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat, common.DefaultAllocator)
+	tnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat, resp.Commands[2].Attrs, common.DefaultAllocator)
 	t.Log(tnInsBat.Attrs)
 	assert.Equal(t, 6, len(tnInsBat.Vecs)) // 3 col + 1 fake pk + 1 rowid + 1 committs
 	for _, v := range tnInsBat.Vecs {
@@ -6999,9 +7001,9 @@ func TestAlterFakePk(t *testing.T) {
 	}
 	t.Log(tnInsBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
 
-	delBat, err := batch.ProtoBatchToBatch(resp.Commands[3].Bat, mpool.MustNewZero())
+	delBat, err := batch.ViewBinary(resp.Commands[3].Bat.Bytes())
 	assert.NoError(t, err)
-	tnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat, common.DefaultAllocator)
+	tnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat, resp.Commands[3].Attrs, common.DefaultAllocator)
 	t.Log(tnDelBat.Attrs)
 	assert.Equal(t, 4, len(tnDelBat.Vecs)) // 1 fake pk + 1 rowid + 1 committs + tombstone rowID
 	for _, v := range tnDelBat.Vecs {
@@ -7387,19 +7389,36 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	}, true)
 
 	assert.Equal(t, 4, len(resp.Commands)) // data object + 3 version insert
-	bat0 := resp.Commands[1].Bat
-	assert.Equal(t, 12, len(bat0.Attrs))
-	assert.Equal(t, "mock_9", bat0.Attrs[2+schema.GetSeqnum("mock_9")])
-	bat1 := resp.Commands[2].Bat
-	assert.Equal(t, 13, len(bat1.Attrs))
-	assert.Equal(t, "mock_9", bat1.Attrs[2+schema1.GetSeqnum("mock_9")])
-	assert.Equal(t, "xyz", bat1.Attrs[2+schema1.GetSeqnum("xyz")])
-	bat2 := resp.Commands[3].Bat
-	assert.Equal(t, 13, len(bat2.Attrs))
-	assert.Equal(t, "mock_9", bat2.Attrs[2+schema1.GetSeqnum("mock_9")])
-	assert.Equal(t, "mock_9", bat2.Attrs[2+schema2.GetSeqnum("mock_9")])
-	assert.Equal(t, "xyz", bat2.Attrs[2+schema1.GetSeqnum("xyz")])
-	assert.Equal(t, "xyz", bat2.Attrs[2+schema2.GetSeqnum("xyz")])
+	bat0Attrs := resp.Commands[1].Attrs
+	assert.Equal(t, 12, len(bat0Attrs))
+	assert.Equal(t, "mock_9", bat0Attrs[2+schema.GetSeqnum("mock_9")])
+	bat1Attrs := resp.Commands[2].Attrs
+	assert.Equal(t, 13, len(bat1Attrs))
+	assert.Equal(t, "mock_9", bat1Attrs[2+schema1.GetSeqnum("mock_9")])
+	assert.Equal(t, "xyz", bat1Attrs[2+schema1.GetSeqnum("xyz")])
+	bat2Attrs := resp.Commands[3].Attrs
+	assert.Equal(t, 13, len(bat2Attrs))
+	assert.Equal(t, "mock_9", bat2Attrs[2+schema1.GetSeqnum("mock_9")])
+	assert.Equal(t, "mock_9", bat2Attrs[2+schema2.GetSeqnum("mock_9")])
+	assert.Equal(t, "xyz", bat2Attrs[2+schema1.GetSeqnum("xyz")])
+	assert.Equal(t, "xyz", bat2Attrs[2+schema2.GetSeqnum("xyz")])
+	// Each entry decodes the way CN replays it, with one vector per attr that
+	// holds the row count. A dropped column (mock_8 in the last batch) keeps
+	// its position as an unnamed constant-null placeholder.
+	placeholders := 0
+	for _, cmd := range resp.Commands[1:] {
+		decoded, err := batch.ViewBinary(cmd.Bat.Bytes())
+		require.NoError(t, err)
+		require.Equal(t, len(cmd.Attrs), len(decoded.Vecs))
+		for i, attr := range cmd.Attrs {
+			if attr == "" {
+				placeholders++
+				require.True(t, decoded.Vecs[i].IsConstNull())
+				require.Equal(t, decoded.RowCount(), decoded.Vecs[i].Length())
+			}
+		}
+	}
+	require.Equal(t, 1, placeholders)
 	close()
 	logutil.Info(tae.Catalog.SimplePPString(common.PPL1))
 }
@@ -13573,6 +13592,7 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 
 	txn, _ = tae.GetRelation()
 	deletes := &nulls.Nulls{}
+	deletes.Init(common.DebugAllocator)
 	nbid := types.NewBlockidWithObjectID(dataObj.ID(), 0)
 	atombstone.GetObjectData().FillBlockTombstones(
 		ctx,
@@ -13583,6 +13603,7 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 		common.DebugAllocator)
 	assert.NoError(t, txn.Commit(ctx))
 	assert.Equal(t, 1, deletes.Count())
+	deletes.Free()
 	assert.Equal(t, debugBaseline, common.DebugAllocator.CurrNB())
 }
 
@@ -14670,15 +14691,8 @@ func TestCheckpointV2(t *testing.T) {
 	assert.NoError(t, err)
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
-			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
-			return
-		}, &objlistReplayer{},
-	)
-	for _, fn := range closeFn {
-		fn()
-	}
+	err = catalog2.ReplayFromSysTableObjects(ctx, readTxn, tables.ScanSysTable, &objlistReplayer{})
+	require.NoError(t, err)
 	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
 	assert.NoError(t, err)
 
@@ -14731,8 +14745,9 @@ func TestCheckpointV2(t *testing.T) {
 
 type objlistReplayer struct{}
 
-func (r *objlistReplayer) Submit(_ uint64, fn func()) {
+func (r *objlistReplayer) Submit(_ context.Context, _ uint64, fn func()) error {
 	fn()
+	return nil
 }
 
 func TestDedupx(t *testing.T) {
@@ -14821,24 +14836,11 @@ func TestCheckpointCompatibility(t *testing.T) {
 	assert.NoError(t, err)
 	err = logtail.ReplayCheckpoint(ctx, catalog2, true, reader)
 	assert.NoError(t, err)
-	sortFunc := func(cols []containers.Vector, pkidx int) (err2 error) {
-		_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
-		return
-	}
-
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx,
-		readTxn,
-		tables.ReadSysTableBatch,
-		sortFunc,
-		&objlistReplayer{},
-	)
+	err = catalog2.ReplayFromSysTableObjects(ctx, readTxn, tables.ScanSysTable, &objlistReplayer{})
+	require.NoError(t, err)
 	assert.NoError(t, readTxn.Commit(ctx))
-	for _, fn := range closeFn {
-		fn()
-	}
 
 	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
 	assert.NoError(t, err)

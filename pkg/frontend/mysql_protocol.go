@@ -1080,6 +1080,16 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 			newParamTypes = true
 		}
 
+		// Every position is rewritten below (long data, NULL or a value), so
+		// this execution starts from an empty area that keeps its capacity: the
+		// statement's parameter storage grows only when this execution's strings
+		// need more room than any earlier one, and is otherwise reused.
+		stmt.params.CleanOnlyData()
+		stmt.params.SetLength(numParams)
+		// A NULL only sets its bit: clear every row so none keeps an earlier
+		// execution's value, which may point past the emptied area.
+		clear(vector.MustFixedColNoTypeCheck[types.Varlena](stmt.params))
+
 		// get paramters and set value to session variables
 		for i := 0; i < numParams; i++ {
 			// Materialize each streamed parameter only once. Long data takes

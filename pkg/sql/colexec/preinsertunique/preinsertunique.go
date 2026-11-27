@@ -17,7 +17,6 @@ package preinsertunique
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -149,11 +148,9 @@ func (preInsertUnique *PreInsertUnique) initBuf(bat *batch.Batch, uniqueColumnPo
 
 	if isUpdate {
 		preInsertUnique.ctr.buf = batch.NewWithSize(3)
-		preInsertUnique.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
 		preInsertUnique.ctr.buf.Vecs[2] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	} else {
 		preInsertUnique.ctr.buf = batch.NewWithSize(2)
-		preInsertUnique.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 	}
 
 	if len(uniqueColumnPos) == 1 {
@@ -210,6 +207,9 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 		if err != nil {
 			return result, err
 		}
+		// SerialWithCompacted's bitmap is ours; CompactSingleIndexCol's is
+		// the input vector's.
+		defer bitMap.Free()
 	}
 	preInsertUnique.ctr.buf.SetRowCount(preInsertUnique.ctr.buf.Vecs[0].Length())
 
@@ -278,10 +278,6 @@ func (preInsertUnique *PreInsertUnique) callODKUTargetArbitration(
 
 	if preInsertUnique.ctr.buf == nil {
 		preInsertUnique.ctr.buf = batch.NewWithSize(outputColumns + 1)
-		if len(inputBat.Attrs) >= outputColumns {
-			attrs := append([]string(nil), inputBat.Attrs[:outputColumns]...)
-			preInsertUnique.ctr.buf.SetAttributes(append(attrs, "__mo_odku_target_pk"))
-		}
 		for i, vec := range inputBat.Vecs[:outputColumns] {
 			preInsertUnique.ctr.buf.Vecs[i] = vector.NewVec(*vec.GetType(), proc.Mp())
 		}
@@ -710,9 +706,6 @@ func (preInsertUnique *PreInsertUnique) initInsertIgnoreOutput(input *batch.Batc
 		return
 	}
 	preInsertUnique.ctr.buf = batch.NewWithSize(columns)
-	if len(input.Attrs) >= columns {
-		preInsertUnique.ctr.buf.SetAttributes(input.Attrs[:columns])
-	}
 	for i, vec := range input.Vecs[:columns] {
 		preInsertUnique.ctr.buf.Vecs[i] = vector.NewVec(*vec.GetType(), mp)
 	}

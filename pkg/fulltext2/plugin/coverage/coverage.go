@@ -30,8 +30,6 @@ package coverage
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,18 +39,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
+	iscpmeta "github.com/matrixorigin/matrixone/pkg/iscp/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 )
 
-// ISCP job states, mirrored from pkg/iscp/types.go. They are duplicated rather
-// than imported because pkg/iscp reaches pkg/sql/plan transitively, and the
-// planner — which calls this hook — sits below both. Only these two mean "the
-// index is being kept current"; every other state must decline.
 const (
-	iscpJobStateRunning   int8 = 2 // ISCPJobState_Running
-	iscpJobStateCompleted int8 = 3 // ISCPJobState_Completed
+	iscpJobStateRunning   = iscpmeta.StateRunning
+	iscpJobStateCompleted = iscpmeta.StateCompleted
 )
 
 // execWithResult runs one internal SQL statement in the caller's transaction.
@@ -77,31 +72,9 @@ type Hooks struct{}
 
 var _ coverage.Hooks = Hooks{}
 
-// jobNameForIndex mirrors the ISCP job identity that CreateIndexCdcTask
-// registers for an index ("index_" + index name). Kept as a tiny local copy
-// rather than an import: pkg/sql/compile owns the writer side and importing it
-// here would be a cycle.
-func jobNameForIndex(indexName string) string { return "index_" + indexName }
+func jobNameForIndex(index string) string { return iscpmeta.IndexJobName(index) }
 
-// parseWatermark decodes the "physical-logical" watermark the ISCP executor
-// writes. A value it cannot read is not an error to propagate — it is simply no
-// evidence of freshness.
-func parseWatermark(s string) (types.TS, bool) {
-	physical, logical, found := strings.Cut(s, "-")
-	if !found {
-		return types.TS{}, false
-	}
-	p, err := strconv.ParseInt(physical, 10, 64)
-	if err != nil {
-		return types.TS{}, false
-	}
-	l, err := strconv.ParseUint(logical, 10, 32)
-	if err != nil {
-		return types.TS{}, false
-	}
-	ts := types.BuildTS(p, uint32(l))
-	return ts, !ts.IsEmpty()
-}
+func parseWatermark(value string) (types.TS, bool) { return iscpmeta.ParseWatermark(value) }
 
 // CoversSnapshot reports whether the index generation a probe would search reaches the
 // read's coverage bar.

@@ -285,12 +285,6 @@ type container struct {
 	mtyp        int32
 	keyWidth    int32
 	keyNullable bool
-	// legacyH8CharSemantics keeps pre-v78 CHAR bytes intact when this
-	// container must merge a short variable-length H8 partial.
-	legacyH8CharSemantics bool
-	// groupingAware selects the collision-free HStr key grammar whenever a
-	// grouping-set rollup sentinel can appear, including NOT NULL input keys.
-	groupingAware bool
 
 	// x, y of `group by x, y`.
 	groupByEvaluate colexec.ExprEvalVector
@@ -320,34 +314,22 @@ type container struct {
 	groupConcatSourceRowsUntrusted bool
 
 	// aggs, which holds the intermediate state of agg functions.
-	aggList                     []aggexec.GroupAggFuncExec
-	aggExprs                    []aggexec.AggFuncExecExpression
-	warningRetentionLimit       int
-	warningRetentionSet         bool
-	groupConcatWarnings         aggexec.GroupConcatWarningAccumulator
-	sortRollup                  *sortRollupState
-	rowMetadataTrailerWire      bool
-	legacyTextMinMax            bool
-	legacyVarianceState         bool
-	legacyDecimalSumState       bool
-	legacyDecimalSumResult      bool
-	legacyApproxPercentileState bool
-	legacyHLLState              bool
-	floatZeroHLLState           bool
+	aggList               []aggexec.GroupAggFuncExec
+	aggExprs              []aggexec.AggFuncExecExpression
+	warningRetentionLimit int
+	warningRetentionSet   bool
+	groupConcatWarnings   aggexec.GroupConcatWarningAccumulator
+	sortRollup            *sortRollupState
 	// legacyVectorHLLState keeps vector HLL_ADD_AGG on the raw v2 hash domain
 	// while a pre-v88 peer may consume that state.
-	legacyVectorHLLState bool
 	// legacyTextHLLAddState keeps CHAR and JSON HLL_ADD_AGG on the raw v2 hash
 	// domain while a pre-v91 peer may consume that state.
-	legacyTextHLLAddState bool
 	// legacyFloatHLLAddState keeps scalar FLOAT/DOUBLE HLL_ADD_AGG on the raw
 	// v2 hash domain while a pre-v92 peer may consume that state.
-	legacyFloatHLLAddState bool
 	// legacyDistinctFloatKeys is frozen before aggregate groups are admitted.
 	// Pre-v79 remote producers keep the compatibility FLOAT key policy, which
 	// preserves every non-zero bit pattern in the fixed index and wire output.
-	legacyDistinctFloatKeys bool
-	timeZone                *time.Location
+	timeZone *time.Location
 
 	// spill, agglist to load spilled data.
 	spillMem                int64
@@ -882,7 +864,6 @@ func (ctr *container) free(expressionMP *mpool.MPool) {
 	ctr.freeAggList()
 	ctr.groupConcatWarnings.Reset()
 	ctr.aggExprs = nil
-	ctr.rowMetadataTrailerWire = false
 	ctr.freeSpillReloadStaging()
 	ctr.freeSpillBkts()
 	if ctr.distinctSpill != nil {
@@ -908,7 +889,6 @@ func (ctr *container) free(expressionMP *mpool.MPool) {
 	ctr.hashKeyVecs = nil
 	ctr.mergePartialMetadataSet = false
 	ctr.groupConcatSourceRowsUntrusted = false
-	ctr.legacyDistinctFloatKeys = false
 	ctr.budget = nil
 
 	ctr.unbindAllocationViews()
@@ -1030,7 +1010,7 @@ func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.
 	// grouping flag
 	for i, flag := range group.GroupingFlag {
 		if !flag {
-			rollup := vector.NewRollupConst(
+			rollup := vector.NewConstNull(
 				group.ctr.groupByEvaluate.Typ[i],
 				group.ctr.groupByEvaluate.Vec[i].Length(),
 				group.ctr.rollupMP(),
@@ -1185,9 +1165,9 @@ type MergeGroup struct {
 	Aggs []aggexec.AggFuncExecExpression
 
 	GroupByHashKey []int32
-	// GroupingAware is fixed by the producer plan, not inferred from one
-	// partial's data. Dynamic grouping streams can legally alternate partials
-	// with and without an actual rollup sentinel.
+	// GroupingAware declares, from the producer plan, that partials carry
+	// grouping-set rows. Dynamic grouping streams can legally alternate partials
+	// with and without an actual rolled-up key.
 	GroupingAware bool
 	// EmptyGroupingSet declares that a legacy/static all-rolled branch must
 	// produce one row even when no partial reaches this final merge boundary.

@@ -144,7 +144,7 @@ func TestGetWithError(t *testing.T) {
 
 func TestGetOwnedRequestReturnsBeforeWriteCompletes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
-	requestReleased := make(chan Message, 1)
+	requestReleased := make(chan Message, 2)
 	futureReleased := make(chan struct{}, 1)
 
 	f := newFuture(func(*Future) { futureReleased <- struct{}{} })
@@ -178,6 +178,7 @@ func TestGetOwnedRequestReturnsBeforeWriteCompletes(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("future was not released after the writer completed")
 	}
+	require.Empty(t, requestReleased, "writer returned the request exactly once")
 }
 
 func TestGetInternalReturnsBeforeWriteCompletes(t *testing.T) {

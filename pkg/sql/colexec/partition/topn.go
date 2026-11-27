@@ -154,7 +154,7 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 	ctr.isStrHash = keyWidth > 8 || group.HasVariableLengthKey(partitionExprs)
 	if err = ctr.hash.BuildHashTable(
 		proc.Ctx, proc.Mp(), false, ctr.isStrHash, ctr.keyNullable,
-		false, 1024, nil, nil,
+		1024, nil, nil,
 	); err != nil {
 		return err
 	}
@@ -277,12 +277,7 @@ func (ctr *topNContainer) consume(proc *process.Process, input *batch.Batch) err
 	for i, cmp := range ctr.compares {
 		cmp.Set(1, ctr.orderEval.Vec[i])
 	}
-	partitionKeys, ownedPartitionKeys, err := normalizeHashPartitionKeys(
-		ctr.partitionEval.Vec, input.RowCount(), proc.Mp())
-	if err != nil {
-		return err
-	}
-	defer freeNormalizedHashPartitionKeys(ownedPartitionKeys, proc.Mp())
+	partitionKeys := ctr.partitionEval.Vec
 
 	reduceSingleRuns := ctr.limit == 1 && !ctr.withTies
 	for start := 0; start < input.RowCount(); start += hashmap.UnitLimit {

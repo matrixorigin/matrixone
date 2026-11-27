@@ -190,10 +190,10 @@ func TestCompactAbortRowsRemapsDeletes(t *testing.T) {
 	defer bat.Close()
 	// Rows 0, 1, 3, and 4 are aborted append holes. Row 2 is a committed row
 	// deleted by a tombstone; row 5 remains visible.
-	bat.Deletes = nulls.Build(6, 0, 1, 2, 3, 4)
-	abortRows := nulls.Build(6, 0, 1, 3, 4)
+	bat.Deletes = mustNullsOK(nulls.Build(6, bitmapTestMP, 0, 1, 2, 3, 4))
+	abortRows := mustNullsOK(nulls.Build(6, bitmapTestMP, 0, 1, 3, 4))
 
-	compactInvisibleAppendRows(bat, abortRows)
+	require.NoError(t, compactInvisibleAppendRows(bat, abortRows, bitmapTestMP))
 
 	require.Equal(t, 2, bat.Length())
 	require.Equal(t, []uint64{0}, bat.Deletes.ToArray())

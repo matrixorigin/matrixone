@@ -357,10 +357,10 @@ func TestComponentHasAlterLineageKeepsUnrelatedComponentsIndependent(t *testing.
 	require.ElementsMatch(t, []uint64{1, 2, 3, 10, 11}, dag.ComponentsIDs([]uint64{2, 3, 11}))
 }
 
-func TestComputeAlterLineageCompactionPlanReclaimsDeletedAlterGenerations(t *testing.T) {
+func TestComputeAlterLineageCompactionPlanReclaimsDeletedRebuildGenerations(t *testing.T) {
 	rows := []DataBranchMetadata{
 		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter", TableDeleted: true},
-		{TableID: 3, PTableID: 2, CloneTS: 200, Level: "alter"},
+		{TableID: 3, PTableID: 2, CloneTS: 200, Level: TruncateLineageLevel},
 	}
 	edges := map[uint64]HistoricalLineageEdge{
 		2: {ChildTableID: 2, ParentTableID: 1, CloneTS: 100},
@@ -753,13 +753,13 @@ func TestBuildAlterLineageDeleteSQL(t *testing.T) {
 		BuildAlterLineageSnapshotDeleteSQL([]string{"__mo_branch_2", "__mo_branch_3"}),
 	)
 	require.Equal(t,
-		"delete from mo_catalog.mo_branch_metadata where table_id in (2,3) and (level = 'alter' or level like 'alter:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2,3) and (level = 'alter' or level like 'alter:%' or level = 'truncate' or level like 'truncate:%')",
 		BuildAlterLineageMetadataDeleteSQL([]uint64{2, 3}),
 	)
 	require.Empty(t, BuildAlterLineageSnapshotDeleteSQL(nil))
 	require.Empty(t, BuildAlterLineageMetadataDeleteSQL(nil))
 	require.Equal(t,
-		"delete from mo_catalog.mo_branch_metadata where table_id in (2,3) and table_deleted = true and (level != 'alter' and level not like 'alter:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2,3) and table_deleted = true and (level != 'alter' and level not like 'alter:%' and level != 'truncate' and level not like 'truncate:%')",
 		BuildBranchMetadataDeleteSQL([]uint64{2, 3}),
 	)
 	require.Empty(t, BuildBranchMetadataDeleteSQL(nil))
@@ -843,5 +843,31 @@ func TestNewDAGCycle(t *testing.T) {
 	deepDAG := NewDAG(chain)
 	if lca, child, _, ok := deepDAG.FindLCA(1, chainLength); !ok || lca != 1 || child != 1 {
 		t.Fatalf("deep-chain LCA: got lca=%d child=%d ok=%v", lca, child, ok)
+	}
+}
+
+func TestTruncateLineageLevels(t *testing.T) {
+	for _, tc := range []struct {
+		level                   string
+		alter, truncate, live   bool
+		nextAlter, nextTruncate string
+	}{
+		{"", false, false, true, "alter", "truncate"},
+		{"table", false, false, true, "alter:table", "truncate:table"},
+		{"database", false, false, true, "alter:database", "truncate:database"},
+		{"alter", true, false, false, "alter", "truncate"},
+		{"truncate", false, true, false, "alter", "truncate"},
+		{"alter:table", true, false, true, "alter:table", "truncate:table"},
+		{"truncate:table", false, true, true, "alter:table", "truncate:table"},
+		{"truncate:alter:table", false, true, true, "alter:table", "truncate:table"},
+	} {
+		t.Run(tc.level, func(t *testing.T) {
+			require.Equal(t, tc.alter, IsAlterLineageLevel(tc.level))
+			require.Equal(t, tc.truncate, IsTruncateLineageLevel(tc.level))
+			require.Equal(t, tc.alter || tc.truncate, IsRebuildLineageLevel(tc.level))
+			require.Equal(t, tc.live, IsLiveBranchLevel(tc.level))
+			require.Equal(t, tc.nextAlter, NextAlterLineageLevel(tc.level))
+			require.Equal(t, tc.nextTruncate, NextTruncateLineageLevel(tc.level))
+		})
 	}
 }

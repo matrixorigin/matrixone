@@ -39,7 +39,7 @@ func (hb *HashmapBuilder) EstimatedHashMapBytes(rowCount int64) (uint64, error) 
 	if rowCount == 0 {
 		return 0, nil
 	}
-	return estimatedHashMapBytes(rowCount, hb.keyWidth <= 8 && !hb.hasGroupingKey())
+	return estimatedHashMapBytes(rowCount, hb.keyWidth <= 8)
 }
 
 // estimatedHashMapBytes separates the capacity calculation from inspecting
@@ -75,20 +75,15 @@ func (hb *HashmapBuilder) EstimatedResidentBuildBytes(
 	return retained + mapBytes, nil
 }
 
-// EstimatedResidentBuildBytesForInput observes only the new input of a growing
-// recovery bucket. groupingSeen belongs to that bucket, starts false, and stays
-// true once a direct key contains a GROUPING sentinel. Observe before copying:
-// the threshold-crossing input must already use the string-map projection.
+// EstimatedResidentBuildBytesForInput projects the resident size of a growing
+// recovery bucket after retaining rowCount build rows.
 func (hb *HashmapBuilder) EstimatedResidentBuildBytesForInput(
-	retained uint64, rowCount int64, input *batch.Batch, groupingSeen *bool,
+	retained uint64, rowCount int64,
 ) (uint64, error) {
-	if hb == nil || groupingSeen == nil || rowCount < 0 {
+	if hb == nil || rowCount < 0 {
 		return 0, process.ErrExecutionResourceInvalid
 	}
-	if hb.keyWidth <= 8 && !*groupingSeen && input != nil {
-		*groupingSeen = hb.hasGroupingKeyInBatches([]*batch.Batch{input})
-	}
-	mapBytes, err := estimatedHashMapBytes(rowCount, hb.keyWidth <= 8 && !*groupingSeen)
+	mapBytes, err := estimatedHashMapBytes(rowCount, hb.keyWidth <= 8)
 	if err != nil {
 		return 0, err
 	}
