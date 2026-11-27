@@ -715,9 +715,23 @@ func TestAddScheduleCommands(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = store.id()
-		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+		require.NoError(t, store.startHAKeeperReplica(1, peers, false))
+		var term uint64
+		require.Eventually(t, func() bool {
+			leader, currentTerm, err := store.isLeaderHAKeeper()
+			if err != nil || !leader || currentTerm == 0 {
+				return false
+			}
+			term = currentTerm
+			return true
+		}, 5*time.Second, 10*time.Millisecond)
+		// Exercise queue admission after the leader has published its policy.
+		store.hakeeperTick()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
+		state, err := store.readCheckerState(ctx, &hakeeper.StateQuery{Scheduling: true})
+		require.NoError(t, err)
+		require.Equal(t, term, state.LogStoreTimeoutPolicyTerm)
 		sc1 := pb.ScheduleCommand{
 			UUID: "uuid1",
 			ConfigChange: &pb.ConfigChange{
@@ -743,7 +757,7 @@ func TestAddScheduleCommands(t *testing.T) {
 			},
 		}
 		require.NoError(t,
-			store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
+			store.addScheduleCommands(ctx, term, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		cb, err := store.getCommandBatch(ctx, "uuid1")
 		require.NoError(t, err)
 		assert.Equal(t, []pb.ScheduleCommand{sc1, sc3}, cb.Commands)
