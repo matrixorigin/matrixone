@@ -737,10 +737,11 @@ var predefinedFunids = map[int]int{
 	SQL_TVF_DISCONNECT:            566,
 	LAST_KAFKA_MESSAGE_ID:         567,
 	ENUM_DISPLAY_TO_INDEX:         568,
+	FIRST_ROW:                     637,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	CHECK_ASYNC_DATALINK_SOURCE: 599,
-	FUNCTION_END_NUMBER:         600,
+	FUNCTION_END_NUMBER:         638,
 }
 
 func Test_funids(t *testing.T) {

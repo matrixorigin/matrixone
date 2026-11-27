@@ -665,6 +665,20 @@ var supportedAggInNewFramework = []FuncNew{
 		},
 	},
 	{
+		functionId: FIRST_ROW,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, AnyValueSupportedTypes)
+		},
+		Overloads: []overload{{
+			overloadId: 0,
+			isAgg:      true,
+			retType:    ReturnFirstArgType,
+			aggName:    "_first_row",
+		}},
+	},
+	{
 		functionId: MAX_BY,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,

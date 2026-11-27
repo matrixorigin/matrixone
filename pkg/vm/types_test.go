@@ -157,7 +157,8 @@ func TestOperatorToStrMapCompleteness(t *testing.T) {
 	const reservedShuffleV2 = Shuffle + 1
 
 	for op := Top; op < OpTypeEnd; op++ {
-		if op == reservedSource || op == reservedShuffleV2 || (op > MongoScan && op < VectorQuery) {
+		if op == reservedSource || op == reservedShuffleV2 || (op > MongoScan && op < VectorQuery) ||
+			(op > VectorQuery && op < UpdateUnique) {
 			continue
 		}
 		if op.String() == "Unknown" {

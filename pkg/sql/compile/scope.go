@@ -530,6 +530,17 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 //	3. run itself.
 //	4. listen to all running pipelines, once any error occurs, stop the NormalMergeRun asap.
 func (s *Scope) MergeRun(c *Compile) (err error) {
+	if s.localInsertObjects != nil {
+		if err = s.localInsertObjects.Begin(s.Proc.Ctx); err != nil {
+			return err
+		}
+		// The pre-scope join below runs before retiring the object owner.
+		defer func() {
+			if n := s.localInsertObjects.Finish(); n != 0 && err == nil {
+				err = moerr.NewInternalErrorf(s.Proc.Ctx, "%d local INSERT objects were not adopted by the workspace", n)
+			}
+		}()
+	}
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -554,6 +565,22 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	// Merge Run normally.
 	var wg sync.WaitGroup
 	preScopeResultReceiveChan := make(chan scopeRunResult, len(s.PreScopes))
+	var notifyMessageResultReceiveChan chan notifyMessageResult
+	defer func() {
+		if p := recover(); p != nil {
+			if s.localInsertObjects != nil {
+				s.cancelMergeSiblingsOnError(moerr.ConvertPanicError(s.Proc.Ctx, p))
+				wg.Wait()
+			}
+			panic(p)
+		}
+		wg.Wait()
+		err = collectMergeRunResults(
+			s.Proc,
+			scopeRunResult{err: err, classified: true},
+			preScopeResultReceiveChan,
+			notifyMessageResultReceiveChan)
+	}()
 
 	// step 1.
 	for i := range s.PreScopes {
@@ -591,23 +618,12 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	}
 
 	// step 2.
-	var notifyMessageResultReceiveChan chan notifyMessageResult
 	if len(s.RemoteReceivRegInfos) > 0 {
 		notifyMessageResultReceiveChan = make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
 		s.sendNotifyMessage(&wg, notifyMessageResultReceiveChan)
 	}
 
 	// step 3.
-	defer func() {
-		// should wait all the notify-message-routine and preScopes done.
-		wg.Wait()
-		err = collectMergeRunResults(
-			s.Proc,
-			scopeRunResult{err: err, classified: true},
-			preScopeResultReceiveChan,
-			notifyMessageResultReceiveChan)
-	}()
-
 	preScopeCount := len(s.PreScopes)
 	remoteScopeCount := len(s.RemoteReceivRegInfos)
 	//after parallelRun, prescope count may change. we need to save this before parallelRun
