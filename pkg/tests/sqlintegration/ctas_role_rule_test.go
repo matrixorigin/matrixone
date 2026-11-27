@@ -96,6 +96,73 @@ func TestRoleRuleDottedLegacyKeyRecovery(t *testing.T) {
 	})
 }
 
+func TestRoleRuleWhitespaceLegacyCollisionRecovery(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		admin, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer admin.Close()
+		defer cleanupSQLIntegration(t, cn,
+			"drop user if exists spaced_rule_reader",
+			"drop role if exists spaced_rule_owner",
+			"drop database if exists spaced_rule_db",
+		)
+
+		execSQLRequire(t, ctx, admin, "create database spaced_rule_db")
+		execSQLRequire(t, ctx, admin, "create table spaced_rule_db.t (id int)")
+		execSQLRequire(t, ctx, admin, "insert into spaced_rule_db.t values (1), (2)")
+		execSQLRequire(t, ctx, admin, "create role spaced_rule_owner")
+		execSQLRequire(t, ctx, admin, "create user spaced_rule_reader identified by 'SpacedRulePass01' default role spaced_rule_owner")
+		execSQLRequire(t, ctx, admin, "grant connect on account * to spaced_rule_owner")
+		execSQLRequire(t, ctx, admin, "grant select on table spaced_rule_db.t to spaced_rule_owner")
+
+		reader, err := sql.Open("mysql", fmt.Sprintf(
+			"sys#spaced_rule_reader#spaced_rule_owner:SpacedRulePass01@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer reader.Close()
+		conn, err := reader.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		const query = "select count(*), min(id) from spaced_rule_db.t"
+		var count, first int
+		_, err = conn.ExecContext(ctx, "set session sql_mode = ''")
+		require.NoError(t, err)
+		prepared, err := conn.PrepareContext(ctx, query)
+		require.NoError(t, err)
+		defer prepared.Close()
+		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&count, &first))
+		require.Equal(t, 2, count)
+		_, err = conn.ExecContext(ctx, "begin")
+		require.NoError(t, err)
+
+		// The v4.2.9 writer preserved the space in the key and stored
+		// COUNT with a space before the opening parenthesis.
+		testutils.ExecSQL(t, "", cn,
+			"insert into mo_catalog.mo_role_rule (role_id, rule_name, `rule`) "+
+				"select role_id, 'spaced_rule_db. t', 'select count (*) as id from spaced_rule_db.t' "+
+				"from mo_catalog.mo_role where role_name = 'spaced_rule_owner' union all "+
+				"select role_id, 'spaced_rule_db.t', 'select id from spaced_rule_db.t where id = 2' "+
+				"from mo_catalog.mo_role where role_name = 'spaced_rule_owner'")
+		_, err = conn.ExecContext(ctx, "rollback")
+		require.NoError(t, err)
+		var mysqlErr *mysql.MySQLError
+		require.ErrorAs(t, conn.QueryRowContext(ctx, query).Scan(&count, &first), &mysqlErr)
+		require.Equal(t, moerr.ER_PARSE_ERROR, mysqlErr.Number)
+		require.ErrorAs(t, prepared.QueryRowContext(ctx).Scan(&count, &first), &mysqlErr)
+		require.Equal(t, moerr.ER_NEED_REPREPARE, mysqlErr.Number)
+
+		_, err = conn.ExecContext(ctx, "set session sql_mode = 'IGNORE_SPACE'")
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&count, &first))
+		require.Equal(t, 1, count)
+		require.Equal(t, 2, first)
+	})
+}
+
 func TestCTASCarriesRoleRuleAcrossSQLModesAndRemap(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

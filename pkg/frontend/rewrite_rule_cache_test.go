@@ -324,7 +324,9 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 					}
 					initial := capture()
 					if scenario == "table name mode" {
-						require.Contains(t, ses.ruleCache["db.t"], "or (x.id = 2)")
+						rules, err := ses.ruleVariants.forMode(ctx, ses.ruleCache, initial.lowerCaseTableNames, "", "")
+						require.NoError(t, err)
+						require.Contains(t, rules["db.t"], "or (x.id = 2)")
 						require.True(t, preparedPolicyAlreadyRefreshed(ctx, ses))
 					}
 					if scenario == "single legacy key mode" {
@@ -402,7 +404,9 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 						require.Equal(t, map[string]string{"DB.T": "select id from db.t"}, ses.ruleCache)
 					}
 					if scenario == "table name mode" {
-						require.Equal(t, "select id from db.t as x where x.id = 2", ses.ruleCache["db.t"])
+						rules, err := ses.ruleVariants.forMode(ctx, ses.ruleCache, refreshed.lowerCaseTableNames, "", "")
+						require.NoError(t, err)
+						require.Equal(t, "select id from db.t as x where x.id = 2", rules["db.t"])
 					}
 					if scenario == "default database" && materialize {
 						query := "select id from information_schema.character_sets"

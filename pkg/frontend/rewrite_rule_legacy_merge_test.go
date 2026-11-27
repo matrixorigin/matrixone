@@ -129,7 +129,9 @@ func TestLoadRuleCacheLegacyTargetComparison(t *testing.T) {
 				{20, "db.t", right},
 			})
 
-			rules, _, err := loadRuleCache(t.Context(), ses, tc.mode)
+			rules, variants, err := loadRuleCache(t.Context(), ses, tc.mode)
+			require.NoError(t, err)
+			rules, err = variants.forMode(t.Context(), rules, tc.mode, "", "")
 			require.NoError(t, err)
 			for target, rule := range rules {
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rule, tc.mode)
@@ -142,7 +144,7 @@ func TestLoadRuleCacheLegacyTargetComparison(t *testing.T) {
 	}
 }
 
-func TestLoadRuleCacheRejectsInvalidLegacyRules(t *testing.T) {
+func TestRewritePolicyRejectsInvalidLegacyRulesForOrdinaryStatements(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		roleID int64
@@ -166,11 +168,17 @@ func TestLoadRuleCacheRejectsInvalidLegacyRules(t *testing.T) {
 			})
 
 			policy, err := captureRewritePolicy(t.Context(), ses)
+			require.NoError(t, err)
+			require.Equal(t, "commit;", bh.executedSQLs[len(bh.executedSQLs)-1])
+
+			recovery, err := policy.rewrite(t.Context(), "rollback", "")
+			require.NoError(t, err)
+			require.Equal(t, "rollback", recovery)
+			const query = "select id from db.t"
+			rewritten, err := policy.rewrite(t.Context(), query, "")
 			require.ErrorContains(t, err, "only accept SELECT-like statements")
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrParseError))
-			require.Nil(t, policy)
-			require.Nil(t, ses.ruleCache)
-			require.Equal(t, "rollback;", bh.executedSQLs[len(bh.executedSQLs)-1])
+			require.Equal(t, query, rewritten)
 		})
 	}
 }

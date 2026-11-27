@@ -1088,9 +1088,9 @@ func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMe
 	return out, nil
 }
 
-// Competing roles retain their ordered source rules to resolve
-// projection compatibility in a different statement SQL mode. Retain one
-// result per immutable catalog snapshot, including final binary literal encoding.
+// Competing roles retain their ordered source rules. Validate discarded
+// spellings and resolve projection compatibility in the statement's SQL mode.
+// Retain one resolved result per immutable catalog snapshot.
 type roleRuleVariants struct {
 	byName     map[string][]string
 	validate   []string
@@ -1154,27 +1154,23 @@ func sameParsedRoleRule(ctx context.Context, oldSQL, newSQL string, lower int64,
 	return reflect.DeepEqual(oldRule, newRule)
 }
 
-func (c *roleRuleVariants) forMode(ctx context.Context, defaults map[string]string, lower int64, sqlMode, defaultDatabase string) (map[string]string, error) {
+func (c *roleRuleVariants) forMode(ctx context.Context, baseRules map[string]string, lower int64, sqlMode, defaultDatabase string) (map[string]string, error) {
 	if c == nil {
-		return defaults, nil
+		return baseRules, nil
 	}
 	mode := mysql.ParseSQLModeFlags(sqlMode)
 	systemDefault := lower != 1 && slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(defaultDatabase))
-	if mode == 0 && !systemDefault && !c.hasNonUTF8 {
-		return defaults, nil
-	}
 	if last := c.last.Load(); last != nil && last.mode == mode && last.lower == lower && last.systemDefault == systemDefault {
 		return last.rules, nil
 	}
-	if mode != 0 {
-		for _, rule := range c.validate {
-			if err := validateRewriteHintSQL(ctx, rule, lower, sqlMode); err != nil {
-				return nil, err
-			}
+	for _, rule := range c.validate {
+		if err := validateRewriteHintSQL(ctx, rule, lower, sqlMode); err != nil {
+			return nil, err
 		}
 	}
-	rules := maps.Clone(defaults)
-	if mode != 0 || systemDefault {
+	rules := baseRules
+	if len(c.byName) > 0 {
+		rules = maps.Clone(baseRules)
 		for name, sources := range c.byName {
 			result := sources[0]
 			for _, rule := range sources[1:] {
@@ -1276,8 +1272,9 @@ func loadRuleCache(ctx context.Context, ses *Session, lower int64) (_ map[string
 		rulesByRole[roleID][ruleName] = rule
 	}
 
-	// Collapse legacy spellings within a role first. Competing roles keep
-	// discovery order and their original SQL for reader-mode re-merging.
+	// Choose the canonical spelling within each role. Keep discarded SQL and
+	// ordered sources from competing roles so recovery statements can run
+	// without first parsing or merging the policy in default SQL mode.
 	var variants roleRuleVariants
 	storedKeys := make(map[string]string)
 	for _, roleID := range roleIDs {
@@ -1293,11 +1290,7 @@ func loadRuleCache(ctx context.Context, ses *Session, lower int64) (_ map[string
 					return nil, nil, err
 				}
 				if selected[target] != key {
-					rule := roleRules[key]
-					if err := validateRewriteHintSQL(ctx, rule, lower, ""); err != nil {
-						return nil, nil, err
-					}
-					variants.validate = append(variants.validate, rule)
+					variants.validate = append(variants.validate, roleRules[key])
 				}
 			}
 		}
@@ -1315,20 +1308,9 @@ func loadRuleCache(ctx context.Context, ses *Session, lower int64) (_ map[string
 				if storedKeys[target] != selected[target] {
 					// Normalizing the keys now can hide an invalid earlier
 					// spelling behind later-role precedence.
-					previous := group[len(group)-1]
-					if err := validateRewriteHintSQL(ctx, previous, lower, ""); err != nil {
-						return nil, nil, err
-					}
-					if err := validateRewriteHintSQL(ctx, rule, lower, ""); err != nil {
-						return nil, nil, err
-					}
-					variants.validate = append(variants.validate, previous, rule)
+					variants.validate = append(variants.validate, existing, rule)
 				}
 				variants.byName[target] = append(group, rule)
-				rule, err = mergeRewriteRulesInMode(ctx, existing, rule, lower, 0, false)
-				if err != nil {
-					return nil, nil, err
-				}
 			}
 			rules[target] = rule
 			storedKeys[target] = selected[target]

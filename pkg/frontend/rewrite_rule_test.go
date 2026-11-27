@@ -683,7 +683,9 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 		{10, "db3.t3", "select * from db3.t3 /* persisted */ where id = 1"},
 	})
 
-	rules, _, err := loadRuleCache(context.Background(), ses, 1)
+	rules, variants, err := loadRuleCache(context.Background(), ses, 1)
+	require.NoError(t, err)
+	rules, err = variants.forMode(context.Background(), rules, 1, "", "")
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
 		"db1.t1": "select a, age from db1.t1 where (age < 3) or (age > 28)",
@@ -699,7 +701,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	require.NoError(t, parsers.AddRewriteHints(context.Background(), stmts, sql))
 }
 
-func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
+func TestRewritePolicyReturnsParseErrorForConflictingRules(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -726,7 +728,11 @@ func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 		{20, "db1.t1", "select a from"},
 	})
 
-	_, _, err := loadRuleCache(context.Background(), ses, 1)
+	policy, err := captureRewritePolicy(context.Background(), ses)
+	require.NoError(t, err)
+	_, err = policy.rewrite(context.Background(), "rollback", "")
+	require.NoError(t, err)
+	_, err = policy.rewrite(context.Background(), "select a from db1.t1", "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to parse rewrite rule")
 }
