@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -55,12 +56,11 @@ type rewriteHintPayload struct {
 	RemapDb map[string]string `json:"remapdb"`
 }
 
-// rewritePolicySnapshot freezes the effective request policy before any
-// statement in a multi-statement COM_QUERY can mutate session variables. SQL
-// text is still rewritten one staged statement at a time, using the SQL mode
-// that is current when that statement is parsed.
+// rewritePolicySnapshot captures optional rewrites at the request boundary.
+// Each staged statement uses its current SQL mode and active role catalog.
 type rewritePolicySnapshot struct {
 	enabled        bool
+	sessionEnabled bool
 	roleRules      *roleRuleCache
 	sessionRules   map[string]string
 	sessionRemapDb map[string]string
@@ -77,35 +77,51 @@ func cloneRewriteMap(src map[string]string) map[string]string {
 	return dst
 }
 
-func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
-	policy := &rewritePolicySnapshot{enabled: ses.rewriteEnabled.Load()}
-	if !policy.enabled {
-		return policy, nil
-	}
+func (policy *rewritePolicySnapshot) hasRoleRules() bool {
+	return policy != nil && policy.roleRules != nil && len(policy.roleRules.first) > 0
+}
 
+func captureRoleRuleCache(ctx context.Context, ses *Session) (*roleRuleCache, error) {
 	ses.ruleCacheMu.RLock()
-	policy.roleRules = ses.ruleCache
+	cache := ses.ruleCache
 	ses.ruleCacheMu.RUnlock()
-
-	if policy.roleRules == nil {
-		rules, err := loadRuleCache(ctx, ses)
-		if err != nil {
-			ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
-			return nil, err
-		}
-
-		ses.ruleCacheMu.Lock()
-		if ses.ruleCache == nil {
-			ses.ruleCache = rules
-		}
-		policy.roleRules = ses.ruleCache
-		ses.ruleCacheMu.Unlock()
+	if cache != nil {
+		return cache, nil
 	}
 
-	policy.sessionRules, policy.sessionRemapDb = getSessionRewriteRules(ctx, ses)
-	policy.sessionRules = cloneRewriteMap(policy.sessionRules)
-	policy.sessionRemapDb = cloneRewriteMap(policy.sessionRemapDb)
-	return policy, nil
+	rules, err := loadRuleCache(ctx, ses)
+	if err != nil {
+		ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
+		return nil, err
+	}
+
+	ses.ruleCacheMu.Lock()
+	defer ses.ruleCacheMu.Unlock()
+	if ses.ruleCache == nil {
+		ses.ruleCache = rules
+	}
+	return ses.ruleCache, nil
+}
+
+func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
+	policy := &rewritePolicySnapshot{sessionEnabled: ses.rewriteEnabled.Load()}
+	if policy.sessionEnabled {
+		policy.sessionRules, policy.sessionRemapDb = getSessionRewriteRules(ctx, ses)
+		policy.sessionRules = cloneRewriteMap(policy.sessionRules)
+		policy.sessionRemapDb = cloneRewriteMap(policy.sessionRemapDb)
+	}
+	return policy.withCurrentRoleRules(ctx, ses)
+}
+
+func (policy *rewritePolicySnapshot) withCurrentRoleRules(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
+	cache, err := captureRoleRuleCache(ctx, ses)
+	if err != nil {
+		return nil, err
+	}
+	next := *policy
+	next.roleRules = cache
+	next.enabled = next.sessionEnabled || next.hasRoleRules()
+	return &next, nil
 }
 
 // validateRemapDb checks a remapdb map: every source/target is a valid database
@@ -194,7 +210,9 @@ func formatRewriteHintChains(ctx context.Context, chains map[string][]string, re
 		return "", moerr.NewInternalErrorf(ctx, "failed to serialize rewrite rules: %v", err)
 	}
 	// Encode appends a trailing newline, trim it
-	return hintPrefix + strings.TrimSpace(buf.String()) + hintSuffix, nil
+	// A rule can contain a SQL comment terminator inside a literal. Escape
+	// the slash in JSON so it survives the outer SQL hint comment.
+	return hintPrefix + strings.ReplaceAll(strings.TrimSpace(buf.String()), "*/", `*\/`) + hintSuffix, nil
 }
 
 // parseRewriteHint parses a hint string back into a rules map.
@@ -221,7 +239,7 @@ func parseRewriteHint(ctx context.Context, hint string) (map[string]string, erro
 // rule narrows the role-rewritten relation rather than replacing it. See the
 // chain-building comment below for details.
 // If the combined rule set is empty, the original SQL is returned unchanged.
-// This function only injects hints when enable_remap_hint is true.
+// The session switch controls optional rewrites. Active role rules are mandatory.
 // Rule cache load failures are returned to the caller so access-control rewrites
 // do not silently fall back to the unmodified SQL.
 func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
@@ -249,7 +267,7 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 		if ruleErr != nil && !isRoleRuleRecoveryStatement(ctx, fragment, sqlMode) {
 			return fragment, ruleErr
 		}
-		return rewriteSingleSQL(ctx, fragment, roleRules, policy.sessionRules, policy.sessionRemapDb)
+		return rewriteSingleSQL(ctx, fragment, roleRules, policy.sessionRules, policy.sessionRemapDb, policy.sessionEnabled)
 	}
 	if len(fragments) == 1 {
 		if !parsers.FragmentHasStatement(sql) {
@@ -317,16 +335,20 @@ func rewriteSingleSQL(
 	cache map[string]string,
 	sessionRules map[string]string,
 	sessionRemapDb map[string]string,
+	sessionEnabled bool,
 ) (string, error) {
-
 	// Inline /*+ {...} */ rewrites and database remaps. A user-provided rewrite
 	// value must be a single SQL string; arrays/objects are rejected here. The
 	// array form exists only internally, to carry the role->session->inline
 	// stacked-view chain to the planner. Validate the inline hint up front so an
 	// invalid value is caught even when there is no role/session config to merge.
-	inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, sql)
-	if err != nil {
-		return sql, err
+	var inlineRules, inlineRemapDb map[string]string
+	if sessionEnabled {
+		var err error
+		inlineRules, inlineRemapDb, err = extractInlineRewrites(ctx, sql)
+		if err != nil {
+			return sql, err
+		}
 	}
 
 	if len(cache) == 0 && len(sessionRules) == 0 && len(sessionRemapDb) == 0 &&
@@ -381,7 +403,7 @@ func rewriteSingleSQL(
 // nested SQL's own inline hint on top. It intentionally does not read session
 // or role state again: earlier statements in the same COM_QUERY may already
 // have changed that state after the request was parsed.
-func rewriteSQLFromMaterializedPolicy(ctx context.Context, outerSQL, innerSQL string) (string, error) {
+func rewriteSQLFromMaterializedPolicy(ctx context.Context, outerSQL, innerSQL string, sessionEnabled bool) (string, error) {
 	chains := make(map[string][]string)
 	remapDb := make(map[string]string)
 	if content, ok := leadingHintContent(outerSQL); ok {
@@ -400,15 +422,17 @@ func rewriteSQLFromMaterializedPolicy(ctx context.Context, outerSQL, innerSQL st
 		}
 	}
 
-	inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, innerSQL)
-	if err != nil {
-		return innerSQL, err
-	}
-	for key, rule := range inlineRules {
-		chains[key] = append(chains[key], rule)
-	}
-	for src, dst := range inlineRemapDb {
-		remapDb[src] = dst
+	if sessionEnabled {
+		inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, innerSQL)
+		if err != nil {
+			return innerSQL, err
+		}
+		for key, rule := range inlineRules {
+			chains[key] = append(chains[key], rule)
+		}
+		for src, dst := range inlineRemapDb {
+			remapDb[src] = dst
+		}
 	}
 	if len(chains) == 0 && len(remapDb) == 0 {
 		return innerSQL, nil
@@ -419,6 +443,105 @@ func rewriteSQLFromMaterializedPolicy(ctx context.Context, outerSQL, innerSQL st
 		return innerSQL, err
 	}
 	return hint + " " + innerSQL, nil
+}
+
+// addStatementRewriteHints preserves the normal privilege path while requiring
+// a rewrite-capable execution path for statements that can read table data.
+func addStatementRewriteHints(ctx context.Context, stmts []tree.Statement, sql, sqlMode string, input *UserInput) error {
+	if input == nil || !input.rewritePolicy.hasRoleRules() {
+		return parsers.AddRewriteHintsWithSQLMode(ctx, stmts, sql, sqlMode)
+	}
+	targets := make([]tree.Statement, len(stmts))
+	var appliesRules bool
+	for i, stmt := range stmts {
+		target := authorizationStatement(stmt)
+		switch target := target.(type) {
+		case *tree.Select, *tree.ParenSelect, *tree.Insert:
+			appliesRules = true
+		case *tree.CreateTable:
+			appliesRules = appliesRules || target.AsSource != nil
+		case *tree.Update, *tree.Delete, *tree.Replace, *tree.CreateView, *tree.AlterView,
+			*tree.CloneTable, *tree.CallStmt, *tree.ExecuteSQLTask, *tree.ShowTableValues,
+			*tree.ValuesStatement:
+			return moerr.NewNotSupported(ctx, "statement cannot enforce active role rules")
+		}
+		targets[i] = target
+	}
+	var roleRules map[string]string
+	if appliesRules {
+		var err error
+		roleRules, err = input.rewritePolicy.roleRules.forSQLMode(ctx, sqlMode)
+		if err != nil {
+			return err
+		}
+	}
+	return parsers.AddRewriteHintsWithRoleRules(ctx, targets, sql, sqlMode, roleRules)
+}
+
+// applyRoleRulesToSetExpression covers the SELECT synthesized by SET, which
+// enters planning with an AST in place of materialized SQL.
+func applyRoleRulesToSetExpression(execCtx *ExecCtx, ses *Session, stmt *tree.Select, expr tree.Expr, preparedExpression bool) error {
+	switch expr.(type) {
+	case *tree.NumVal, *tree.DefaultVal:
+		// Literals also allow SQL mode recovery when a rule cannot be parsed.
+		return nil
+	}
+	var cache *roleRuleCache
+	if preparedExpression && execCtx.prepareStmt != nil {
+		cache = execCtx.prepareStmt.roleRules
+	} else if execCtx.input != nil && execCtx.input.rewritePolicy != nil {
+		cache = execCtx.input.rewritePolicy.roleRules
+	}
+	if cache == nil || len(cache.first) == 0 {
+		return nil
+	}
+
+	ctx := execCtx.reqCtx
+	sqlMode := sessionSQLModeForParser(ses)
+	rules, err := cache.forSQLMode(ctx, sqlMode)
+	if err != nil {
+		return err
+	}
+	chains := make(map[string][]string, len(rules))
+	for key, rule := range rules {
+		chains[key] = []string{rule}
+	}
+	hint, err := formatRewriteHintChains(ctx, chains, nil)
+	if err != nil {
+		return err
+	}
+	return parsers.AddRewriteHintsWithRoleRules(ctx, []tree.Statement{stmt}, hint+" select 1", sqlMode, rules)
+}
+
+func (prepared *PrepareStmt) checkRoleRulePolicy(ctx context.Context, ses *Session) error {
+	if prepared.roleRules == nil {
+		return nil
+	}
+	current, err := captureRoleRuleCache(ctx, ses)
+	if err != nil {
+		return err
+	}
+	if len(prepared.roleRules.first) == 0 && len(current.first) == 0 {
+		return nil
+	}
+	mode := sessionSQLModeForParser(ses)
+	if mysql.ParseSQLModeFlags(mode) == mysql.ParseSQLModeFlags(prepared.schedulingSQLMode) {
+		if current == prepared.roleRules {
+			return nil
+		}
+		oldRules, err := prepared.roleRules.forSQLMode(ctx, mode)
+		if err != nil {
+			return err
+		}
+		activeRules, err := current.forSQLMode(ctx, mode)
+		if err != nil {
+			return err
+		}
+		if maps.Equal(oldRules, activeRules) {
+			return nil
+		}
+	}
+	return moerr.NewInvalidInput(ctx, "active role rule policy changed; prepare the statement again")
 }
 
 // extractInlineRewrites returns the per-table rewrite rules and database-remap

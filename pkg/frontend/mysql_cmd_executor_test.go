@@ -1477,7 +1477,7 @@ func TestGetComputationWrapperUsesRequestRewriteSnapshot(t *testing.T) {
 	execCtx.input = &UserInput{
 		sql: `/*+ {"rewrites":{"src.t":["select * from src.t where keep = 1"]},` +
 			`"remapdb":{"src":"dst"}} */ select * from src.t`,
-		rewritePolicy:             &rewritePolicySnapshot{enabled: true},
+		rewritePolicy:             &rewritePolicySnapshot{enabled: true, sessionEnabled: true},
 		rewritePolicyMaterialized: true,
 	}
 	cws, err := GetComputationWrapper(execCtx, "src", "root", nil, proc, ses)
@@ -2754,11 +2754,8 @@ func TestExecRequestStmtPrepareBindsSource(t *testing.T) {
 				require.True(t, ok)
 				_, ok = prepare.Stmt.(*tree.Select)
 				require.True(t, ok)
-				if enabled {
-					require.Contains(t, ec.input.getSql(), "select id from db.t where id=1")
-				} else {
-					require.NotContains(t, ec.input.getSql(), "select id from db.t where id=1")
-				}
+				require.Contains(t, ec.input.getSql(), "select id from db.t where id=1")
+				require.Equal(t, enabled, ec.input.rewritePolicy.sessionEnabled)
 				observed = true
 				return nil, moerr.NewInternalError(ctx, "stop after native prepare source check")
 			})
@@ -3295,7 +3292,7 @@ func TestPrepareStringCreateViewUsesRewrittenInnerRootSQL(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	const outerSQL = `/*+ {"remapdb":{"src":"dst"}} */ prepare inline_view from 'create view v as select 1'`
 	const innerSQL = "create view v as select 1"
-	want, err := rewriteSQLFromMaterializedPolicy(ctx, outerSQL, innerSQL)
+	want, err := rewriteSQLFromMaterializedPolicy(ctx, outerSQL, innerSQL, true)
 	require.NoError(t, err)
 
 	runTestHandle("prepare string create view root SQL", t, func(ses *Session) error {
@@ -3409,7 +3406,7 @@ func TestHandleAnalyzeStmtInheritsCurrentStatementRewriteOnly(t *testing.T) {
 			execCtx.rewriteEnabled = true
 			execCtx.input = &UserInput{
 				sql:           tt.commandSQL,
-				rewritePolicy: &rewritePolicySnapshot{enabled: true},
+				rewritePolicy: &rewritePolicySnapshot{enabled: true, sessionEnabled: true},
 			}
 			execCtx.sqlOfStmt = tt.statementSQL
 			var gotDerived string

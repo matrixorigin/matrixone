@@ -255,7 +255,11 @@ func getExprValueWithPrepareMeta(
 		},
 	}
 
-	//2.run the select
+	// SET expressions can read tables through scalar subqueries. Apply the
+	// active role rules to the generated SELECT before executing it.
+	if err := applyRoleRulesToSetExpression(execCtx, ses, compositedSelect, e, preparedExpression); err != nil {
+		return nil, err
+	}
 
 	//run the statement in the same session
 	ses.ClearResultBatches()

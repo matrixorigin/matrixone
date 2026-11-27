@@ -539,7 +539,6 @@ func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
 		DefaultRoleID: 10,
 	}
 	ses.SetTenantInfo(tenant)
-	ses.rewriteEnabled.Store(true)
 
 	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
 	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10})] = newMrsForRewriteRules([][]interface{}{
@@ -557,7 +556,7 @@ func TestRewriteSQLStatementInputPreservesSource(t *testing.T) {
 	ses := newTestSession(t, gomock.NewController(t))
 	defer ses.Close()
 	ctx := context.Background()
-	role := &rewritePolicySnapshot{enabled: true,
+	role := &rewritePolicySnapshot{enabled: true, sessionEnabled: true,
 		roleRules: &roleRuleCache{first: map[string]string{"db.t": "select id from db.t where id = 1"}}}
 	tests := []struct {
 		name, sql                                  string
@@ -570,14 +569,14 @@ func TestRewriteSQLStatementInputPreservesSource(t *testing.T) {
 		{name: "external", sql: "select * from db.t", policy: role, changed: true},
 		{name: "internal", sql: "/* save_result */ select * from db.t", policy: role, internal: true, changed: true},
 		{name: "session rule", sql: "/* save_result */ select * from db.t", changed: true,
-			policy: &rewritePolicySnapshot{enabled: true,
+			policy: &rewritePolicySnapshot{enabled: true, sessionEnabled: true,
 				sessionRules: map[string]string{"db.t": "select * from db.t where id = 1"}}},
 		{name: "remap", sql: "/* save_result */ select * from db.t", changed: true,
-			policy: &rewritePolicySnapshot{enabled: true,
+			policy: &rewritePolicySnapshot{enabled: true, sessionEnabled: true,
 				sessionRemapDb: map[string]string{"db": "target"}}},
 		{name: "no policy", sql: "/* save_result */ select 1"},
 		{name: "disabled", sql: "/* save_result */ select 1", policy: &rewritePolicySnapshot{}},
-		{name: "empty", sql: "/* save_result */ select 1", policy: &rewritePolicySnapshot{enabled: true}},
+		{name: "empty", sql: "/* save_result */ select 1", policy: &rewritePolicySnapshot{enabled: true, sessionEnabled: true}},
 		{name: "materialized", sql: "/* save_result */ select 1", policy: role, materialized: true},
 		{name: "parse error", sql: "/* save_result */ select '", policy: role, wantError: true},
 	}
@@ -836,7 +835,7 @@ func TestRewriteSQLFromMaterializedPolicy(t *testing.T) {
 	outer := `/*+ {"rewrites":{"src.t":["select * from src.t where role_keep = 1","select * from src.t where session_keep = 1"]},"remapdb":{"src":"session_db"}} */ prepare s from 'select 1'`
 	inner := `/*+ {"rewrites":{"src.t":"select * from src.t where inline_keep = 1"},"remapdb":{"src":"inline_db"}} */ select * from src.t`
 
-	rewritten, err := rewriteSQLFromMaterializedPolicy(ctx, outer, inner)
+	rewritten, err := rewriteSQLFromMaterializedPolicy(ctx, outer, inner, true)
 	require.NoError(t, err)
 	content, ok := leadingHintContent(rewritten)
 	require.True(t, ok)
@@ -1480,7 +1479,7 @@ func TestRoleRuleBinaryLiteralHintRoundTrip(t *testing.T) {
 					if len(tc.later) != 0 {
 						cache.later = map[string][]string{key: tc.later}
 					}
-					policy := &rewritePolicySnapshot{enabled: true, roleRules: cache}
+					policy := &rewritePolicySnapshot{enabled: true, sessionEnabled: true, roleRules: cache}
 					sql, err := policy.rewrite(ctx, "select payload from db.t", mode)
 					require.NoError(t, err)
 					stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, mode)
@@ -1524,7 +1523,7 @@ func TestRoleRuleHintSQLPreservesValidSQLAndRejectsNonBinaryBytes(t *testing.T) 
 		later:      map[string][]string{"db.t": {"select id from db.t where code = " + textLiteral}},
 		hasNonUTF8: true,
 	}
-	policy := &rewritePolicySnapshot{enabled: true, roleRules: cache}
+	policy := &rewritePolicySnapshot{enabled: true, sessionEnabled: true, roleRules: cache}
 	_, err = policy.rewrite(ctx, "select id from db.t", "")
 	require.ErrorContains(t, err, "invalid UTF-8 outside binary literals")
 
@@ -1576,7 +1575,7 @@ func TestRewritePolicyAllowsRoleRuleRecovery(t *testing.T) {
 	const brokenMode = "NO_BACKSLASH_ESCAPES"
 	const query = "select * from db.t"
 	ctx := context.Background()
-	policy := &rewritePolicySnapshot{enabled: true, roleRules: &roleRuleCache{
+	policy := &rewritePolicySnapshot{enabled: true, sessionEnabled: true, roleRules: &roleRuleCache{
 		first: map[string]string{"db.t": `select * from db.t where c = 'O\'Brien'`},
 		later: map[string][]string{"db.t": {`select * from db.t where c = 'other'`}},
 	}}

@@ -486,6 +486,12 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 }
 
 func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql string, sqlMode string) error {
+	return AddRewriteHintsWithRoleRules(ctx, stmts, sql, sqlMode, nil)
+}
+
+// AddRewriteHintsWithRoleRules also marks and verifies the server-supplied
+// first layer for each protected table.
+func AddRewriteHintsWithRoleRules(ctx context.Context, stmts []tree.Statement, sql, sqlMode string, roleRules map[string]string) error {
 	hints, err := extractLeadingHintsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return err
@@ -518,6 +524,9 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 		}
 		hint := strings.TrimSpace(hints[i])
 		if hint == "" || hint[0] != '{' {
+			if len(roleRules) != 0 {
+				return moerr.NewInvalidInput(ctx, "statement is missing its active role rules")
+			}
 			continue
 		}
 
@@ -525,10 +534,19 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 		if err != nil {
 			return err
 		}
+		for key, rule := range roleRules {
+			chain := rawChains[key]
+			if len(chain) == 0 || chain[0] != rule {
+				return moerr.NewInvalidInput(ctx, "statement is missing its active role rules")
+			}
+		}
 		if len(rawChains) == 0 && len(remapDb) == 0 {
 			continue
 		}
 		rewriteOption := &tree.RewriteOption{Rewrites: make(map[string][]*tree.Rewrite)}
+		if len(roleRules) > 0 {
+			rewriteOption.RoleRules = make(map[string][]*tree.Rewrite, len(roleRules))
+		}
 		if len(remapDb) > 0 {
 			rewriteOption.RemapDb = remapDb
 		}
@@ -555,6 +573,9 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 				chain = append(chain, &tree.Rewrite{TableName: table, DbName: db, Stmt: st})
 			}
 			rewriteOption.Rewrites[key] = chain
+			if _, mandatory := roleRules[key]; mandatory {
+				rewriteOption.RoleRules[key] = chain[:1]
+			}
 		}
 		switch s := stmt.(type) {
 		case *tree.Select:
@@ -579,11 +600,13 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 			// #25310). RemapDb (if any) is applied separately at the AST level;
 			// the planner only consumes rewriteOption.Rewrites, so carrying the
 			// full option here is safe.
-			if s.Rows != nil {
-				s.Rows.RewriteOption = rewriteOption
-				if ps, ok := s.Rows.Select.(*tree.ParenSelect); ok && ps.Select != nil {
-					ps.Select.RewriteOption = rewriteOption
+			for source := s.Rows; source != nil; {
+				source.RewriteOption = rewriteOption
+				paren, ok := source.Select.(*tree.ParenSelect)
+				if !ok {
+					break
 				}
+				source = paren.Select
 			}
 		}
 	}

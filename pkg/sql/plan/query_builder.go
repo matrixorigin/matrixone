@@ -9321,22 +9321,29 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				// the base table. Peeling one layer per nested reference also
 				// guarantees termination.
 				//
-				// Inside a layer's body, only this table's remaining chain stays
-				// active; every other table's rewrite is disabled (matching the
-				// long-standing behavior where rewrites do not apply within a
-				// rewrite body). Sibling tables in the original query still get
-				// rewritten because ctx.remapOption is restored below before the
-				// caller builds them.
+				// Optional layers keep mandatory rules for their other table
+				// references. A trusted role rule resolves its own body against
+				// base relations, which also terminates nested policy binding.
 				top := chain[len(chain)-1]
-				m := ctx.remapOption
-				if len(chain) == 1 {
-					ctx.remapOption = nil
-				} else {
-					ctx.remapOption = &tree.RewriteOption{
-						Rewrites: map[string][]*tree.Rewrite{key: chain[:len(chain)-1]},
+				option := ctx.remapOption
+				ctx.remapOption = nil
+				if len(chain) > 1 || len(option.RoleRules[key]) == 0 {
+					next := maps.Clone(option.RoleRules)
+					if len(chain) > 1 {
+						if next == nil {
+							next = make(map[string][]*tree.Rewrite, 1)
+						}
+						next[key] = chain[:len(chain)-1]
+					}
+					if len(next) > 0 {
+						ctx.remapOption = &tree.RewriteOption{
+							Rewrites:  next,
+							RoleRules: option.RoleRules,
+						}
 					}
 				}
 				nodeID, err = builder.buildTable(top.Stmt, ctx, tableInput)
+				ctx.remapOption = option
 				if err != nil {
 					return
 				}
@@ -9345,7 +9352,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				if int(nodeID) < len(builder.ctxByNode) && builder.ctxByNode[nodeID] != nil {
 					builder.ctxByNode[nodeID].cteName = key
 				}
-				ctx.remapOption = m
 				return
 			}
 		}

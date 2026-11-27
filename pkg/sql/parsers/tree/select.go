@@ -99,6 +99,8 @@ type RewriteOption struct {
 	// next inner layer; once the chain is exhausted it resolves to the base
 	// table.
 	Rewrites map[string][]*Rewrite
+	// RoleRules holds the mandatory first layer for each protected table.
+	RoleRules map[string][]*Rewrite
 	// RemapDb maps a source database name to a target database name. It is
 	// applied before the table Rewrites: a reference to <src>.t (or an
 	// unqualified table when the current database is <src>) is resolved against

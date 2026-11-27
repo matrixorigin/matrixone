@@ -705,6 +705,9 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
+	if err := prepareStmt.checkRoleRulePolicy(reqCtx, owner); err != nil {
+		return nil, nil, nil, "", false, err
+	}
 	execCtx.prepareStmt = prepareStmt
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
