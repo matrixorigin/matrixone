@@ -379,13 +379,13 @@ func BuildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 				}
 			}
 		case *engine.PrimaryKeyDef:
-			ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseBuildInsertIndexMetaBatch2)
-			defer cancelFunc()
-			indexId, err = eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
-			if err != nil {
-				return nil, moerr.AttachCause(ctx, err)
-			}
 			if def.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+				ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseBuildInsertIndexMetaBatch2)
+				defer cancelFunc()
+				indexId, err = eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
+				if err != nil {
+					return nil, moerr.AttachCause(ctx, err)
+				}
 				for i, colName := range def.Pkey.Names {
 					err = vector.AppendFixed(vec_id, indexId, false, proc.Mp())
 					if err != nil {
