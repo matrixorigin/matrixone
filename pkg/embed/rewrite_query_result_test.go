@@ -127,7 +127,13 @@ func TestRewritePolicySavedResult(t *testing.T) {
 							read(t, conn, "/* save_result */ select * from rewrite_saved.t order by id", tc.columns, tc.rows)
 							var id string
 							require.NoError(t, conn.QueryRowContext(ctx, "select last_query_id()").Scan(&id))
-							read(t, conn, fmt.Sprintf("select * from result_scan('%s') as saved order by id", id), tc.columns, tc.rows)
+							savedQuery := fmt.Sprintf("select * from result_scan('%s') as saved order by id", id)
+							read(t, conn, savedQuery, tc.columns, tc.rows)
+							exec("alter role rewrite_saved_reader add rule 'select id from rewrite_saved.t where id=2' on table rewrite_saved.t")
+							var value int
+							err = conn.QueryRowContext(ctx, savedQuery).Scan(&value)
+							require.ErrorContains(t, err, "saved result cannot enforce the active role rule policy")
+							exec(fmt.Sprintf("alter role rewrite_saved_reader add rule %q on table rewrite_saved.t", tc.rule))
 							_, err = conn.ExecContext(ctx, "set enable_remap_hint=1")
 							require.NoError(t, err)
 						}

@@ -36,9 +36,8 @@ import (
 // Insert source SELECTs own the complete rewrite option. Other expression
 // binders inherit the mandatory policies from the enclosing INSERT.
 func (stmtBinder *BindContext) bindInsertRoleRules(stmt *tree.Insert) {
-	if stmt.Rows != nil && stmt.Rows.RewriteOption != nil && len(stmt.Rows.RewriteOption.RoleRules) > 0 {
-		rules := stmt.Rows.RewriteOption.RoleRules
-		stmtBinder.remapOption = &tree.RewriteOption{Rewrites: rules, RoleRules: rules}
+	if stmt.Rows != nil {
+		stmtBinder.remapOption = mandatoryRewrites(stmt.Rows.RewriteOption)
 	}
 }
 
@@ -88,7 +87,11 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// maintained and ride the modern path with no inline sub-plan.
 	tableDef := dmlCtx.tableDefs[0]
 	if stmt.HasReturning() {
-		if err := validateReturningTarget(builder, tableDef, dmlCtx.objRefs[0]); err != nil {
+		target := dmlCtx.objRefs[0]
+		if bindCtx.remapOption != nil && len(bindCtx.remapOption.RoleRules[target.SchemaName+"."+target.ObjName]) > 0 {
+			return 0, moerr.NewNotSupported(builder.GetContext(), "INSERT RETURNING cannot enforce active role rules on the target")
+		}
+		if err := validateReturningTarget(builder, tableDef, target); err != nil {
 			return 0, err
 		}
 	}

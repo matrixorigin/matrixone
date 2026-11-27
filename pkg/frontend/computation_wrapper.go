@@ -333,7 +333,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 	}
 
-	if !cwft.ses.IsBackgroundSession() {
+	_, isTextProtExecute := cwft.stmt.(*tree.Execute)
+	isPreparedExecution := isTextProtExecute || execCtx.input.isBinaryProtExecute
+	if !cwft.ses.IsBackgroundSession() && !isPreparedExecution {
 		cwft.ses.SetPlan(cwft.plan)
 		authStats, err := checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session))
 		if err != nil {
@@ -342,7 +344,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		stats.PermissionAuth.Add(&authStats)
 	}
 
-	if _, isTextProtExecute := cwft.stmt.(*tree.Execute); isTextProtExecute || execCtx.input.isBinaryProtExecute {
+	if isPreparedExecution {
 		owner, ownerErr := preparedStatementOwner(execCtx.reqCtx, cwft.ses)
 		if ownerErr != nil {
 			return nil, ownerErr
@@ -366,11 +368,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			}
 			if !cwft.ses.IsBackgroundSession() {
 				authStats, err := authenticatePreparedStatement(execCtx.reqCtx, owner, stmt, plan, execCtx.prepareStmt)
-				if err != nil {
-					return nil, err
-				}
-				stats.PermissionAuth.Add(&authStats)
-				authStats, err = checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), owner)
 				if err != nil {
 					return nil, err
 				}
@@ -409,6 +406,14 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.stmt = stmt
 				cwft.stmtBorrowed = true
 			}
+		}
+		if !cwft.ses.IsBackgroundSession() {
+			cwft.ses.SetPlan(cwft.plan)
+			authStats, err := checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), owner)
+			if err != nil {
+				return nil, err
+			}
+			stats.PermissionAuth.Add(&authStats)
 		}
 		refreshProcessStmtProfileForPreparedStmt(cwft.proc, stmt)
 		originSQL = sql

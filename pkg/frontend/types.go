@@ -905,13 +905,14 @@ type ExecCtx struct {
 	prepareStmt *PrepareStmt
 	runResult   *util.RunResult
 	// Authorization uses a statement view independently of an old user SI transaction.
-	authorizationMu       sync.Mutex
-	authorizationSnapshot timestamp.Timestamp
-	showMetadataRead      *backExec
-	protectedPolicyLoaded bool
-	protectedPolicyRaw    string
-	sequenceAuthorization sync.Once
-	sequenceAuthErr       error
+	authorizationMu             sync.Mutex
+	authorizationSnapshot       timestamp.Timestamp
+	authorizationSnapshotPinned bool
+	showMetadataRead            *backExec
+	protectedPolicyLoaded       bool
+	protectedPolicyRaw          string
+	sequenceAuthorization       sync.Once
+	sequenceAuthErr             error
 	// rootSQLOverride is the authoritative SQL for a statement planned
 	// recursively inside this request, such as the statement owned by PREPARE.
 	// A nil value falls back to the session SQL.
@@ -998,10 +999,20 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.rewriteEnabled = false
 }
 
+// A derived query evaluates part of its parent's statement under the same
+// authorization view, even when it needs a separate execution context.
+func (execCtx *ExecCtx) inheritAuthorizationSnapshot(parent *ExecCtx) {
+	parent.authorizationMu.Lock()
+	defer parent.authorizationMu.Unlock()
+	execCtx.authorizationSnapshot = parent.authorizationSnapshot
+	execCtx.authorizationSnapshotPinned = parent.authorizationSnapshotPinned
+}
+
 func (execCtx *ExecCtx) resetAuthorization() {
 	execCtx.authorizationMu.Lock()
 	defer execCtx.authorizationMu.Unlock()
 	execCtx.authorizationSnapshot = timestamp.Timestamp{}
+	execCtx.authorizationSnapshotPinned = false
 	execCtx.protectedPolicyLoaded = false
 	execCtx.protectedPolicyRaw = ""
 	execCtx.sequenceAuthorization = sync.Once{}

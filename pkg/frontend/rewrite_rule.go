@@ -88,9 +88,12 @@ var captureRoleRuleCache = func(ctx context.Context, ses *Session) (*roleRuleCac
 	if ses.GetTenantInfo() == nil {
 		return &roleRuleCache{}, nil
 	}
-	snapshot, err := authorizationReadSnapshot(ctx, ses)
+	snapshot, err := readStatementAuthorizationSnapshot(ctx, ses, true)
 	if err != nil {
 		return nil, err
+	}
+	if snapshot.IsEmpty() && ses.GetFromRealUser() {
+		return nil, moerr.NewInternalError(ctx, "authorization snapshot is unavailable for role rules")
 	}
 	storage := getPu(ses.GetService()).StorageEngine
 	reader, _ := storage.(engine.TableContentReader)
@@ -319,8 +322,8 @@ func isStandaloneRoleRuleTxnEnd(ctx context.Context, sql, sqlMode string) bool {
 	return false
 }
 
-// A broken rule must not prevent ending a transaction, dropping secondary roles,
-// or restoring a usable mode. None of these statements reads protected rows.
+// Recovery can end a transaction, reset policy-dependent session settings or
+// drop a table. These operations still undergo normal object authorization.
 func isRoleRuleRecoveryStatement(ctx context.Context, sql, sqlMode string) bool {
 	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, sqlMode)
 	if err != nil {
@@ -328,7 +331,7 @@ func isRoleRuleRecoveryStatement(ctx context.Context, sql, sqlMode string) bool 
 	}
 	defer stmt.Free()
 	switch s := stmt.(type) {
-	case *tree.CommitTransaction, *tree.RollbackTransaction:
+	case *tree.CommitTransaction, *tree.RollbackTransaction, *tree.DropTable:
 		return true
 	case *tree.SetRole:
 		return s.SecondaryRole && s.SecondaryRoleType == tree.SecondaryRoleTypeNone
@@ -481,16 +484,11 @@ func addStatementRewriteHints(ctx context.Context, stmts []tree.Statement, sql, 
 	var appliesRules bool
 	for i, stmt := range stmts {
 		target := authorizationStatement(stmt)
-		switch target := target.(type) {
-		case *tree.Select, *tree.ParenSelect, *tree.Insert:
-			appliesRules = true
-		case *tree.CreateTable:
-			appliesRules = appliesRules || target.AsSource != nil
-		case *tree.Update, *tree.Delete, *tree.Replace, *tree.CreateView, *tree.AlterView,
-			*tree.CloneTable, *tree.CallStmt, *tree.ExecuteSQLTask, *tree.ShowTableValues,
-			*tree.ValuesStatement:
+		rewrite, supported := roleRuleStatementSupport(target)
+		if !supported {
 			return moerr.NewNotSupported(ctx, "statement cannot enforce active role rules")
 		}
+		appliesRules = appliesRules || rewrite
 		targets[i] = target
 	}
 	var roleRules map[string]string
@@ -502,6 +500,72 @@ func addStatementRewriteHints(ctx context.Context, stmts []tree.Statement, sql, 
 		}
 	}
 	return parsers.AddRewriteHintsWithRoleRules(ctx, targets, sql, sqlMode, roleRules)
+}
+
+// roleRuleStatementSupport classifies statements by whether planning binds the
+// active rules. PREPARE, EXECUTE and SET validate their nested statements at
+// their respective planning boundaries. Metadata SHOW is limited to row-local
+// expressions because its synthesized queries do not carry role rules.
+func roleRuleStatementSupport(stmt tree.Statement) (rewrite, supported bool) {
+	switch stmt := stmt.(type) {
+	case *tree.Select, *tree.ParenSelect, *tree.Insert:
+		return true, true
+	case *tree.CreateTable:
+		return stmt.AsSource != nil, true
+	case *tree.CreateView, *tree.AlterView, *tree.CloneTable, *tree.CloneDatabase, *tree.CallStmt,
+		*tree.ExecuteSQLTask, *tree.ShowTableValues, *tree.DataBranchCreateTable,
+		*tree.DataBranchCreateDatabase, *tree.DataBranchDiff, *tree.DataBranchMerge,
+		*tree.DataBranchPick, *tree.RestoreSnapShot, *tree.RestorePitr:
+		return false, false
+	case *tree.ShowColumns:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowDatabases:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowTarget:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowTableStatus:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowTables:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowCollation:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowVariables:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowStatus:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowFunctionOrProcedureStatus:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowIcebergCatalogs:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowIcebergNamespaces:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowIcebergTables:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowMongoDBConnections:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowIndex:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, nil)
+	case *tree.ShowSequences:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, nil)
+	case *tree.ShowAccounts:
+		return false, roleRuleMetadataFilterSupported(nil, stmt.Like)
+	case *tree.ShowPublications:
+		return false, roleRuleMetadataFilterSupported(nil, stmt.Like)
+	case *tree.ShowSubscriptions:
+		return false, roleRuleMetadataFilterSupported(nil, stmt.Like)
+	case *tree.ShowRolesStmt:
+		return false, roleRuleMetadataFilterSupported(nil, stmt.Like)
+	case *tree.ShowStages:
+		return false, roleRuleMetadataFilterSupported(nil, stmt.Like)
+	default:
+		kind := stmt.GetQueryType()
+		return false, kind != tree.QueryTypeDML && kind != tree.QueryTypeDQL
+	}
+}
+
+func roleRuleMetadataFilterSupported(where *tree.Where, like *tree.ComparisonExpr) bool {
+	return (where == nil || showMetadataRowLocalExpr(where.Expr)) &&
+		(like == nil || showMetadataRowLocalExpr(like))
 }
 
 // applyRoleRulesToSetExpression covers the SELECT synthesized by SET, which

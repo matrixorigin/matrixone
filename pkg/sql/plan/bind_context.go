@@ -24,6 +24,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
+// mandatoryRewrites carries the invoker's policy into a bind scope that must
+// keep independent name resolution and must not inherit optional rewrites.
+func mandatoryRewrites(option *tree.RewriteOption) *tree.RewriteOption {
+	if option == nil || len(option.RoleRules) == 0 {
+		return nil
+	}
+	return &tree.RewriteOption{Rewrites: option.RoleRules, RoleRules: option.RoleRules}
+}
+
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
 		groupByAst:      make(map[string]int32),

@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -273,7 +274,7 @@ func TestKill(t *testing.T) {
 			txnOp := newTestTxnOp()
 			return txnOp, nil
 		}).AnyTimes()
-	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+	pu, err := getParameterUnit("test/system_vars_config.toml", eng, &authorizationSnapshotReader{TxnClient: txnClient, snapshot: timestamp.Timestamp{PhysicalTime: 1}})
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 0
@@ -1736,7 +1737,7 @@ func TestMysqlResultSet(t *testing.T) {
 		txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		return txnOp, nil
 	}).AnyTimes()
-	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+	pu, err := getParameterUnit("test/system_vars_config.toml", eng, &authorizationSnapshotReader{TxnClient: txnClient, snapshot: timestamp.Timestamp{PhysicalTime: 1}})
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 0

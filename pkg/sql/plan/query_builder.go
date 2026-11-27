@@ -8926,6 +8926,10 @@ func (builder *QueryBuilder) bindView(
 		return 0, nil
 	}
 	viewCtx := NewBindContext(builder, nil)
+	viewCtx.remapOption = mandatoryRewrites(ctx.remapOption)
+	if viewCtx.remapOption != nil && (IsSnapshotValid(snapshot) || obj.PubInfo != nil) {
+		return 0, moerr.NewNotSupported(builder.GetContext(), "historical or published view cannot enforce active role rules")
+	}
 	viewCtx.snapshot = snapshot
 	viewCtx.lower = ctx.lower
 

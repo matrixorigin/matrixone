@@ -56,7 +56,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -1387,6 +1386,7 @@ func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string)
 	defer ses.ReplaceResponser(liveResponder)
 
 	tempExecCtx := ExecCtx{ses: ses, reqCtx: outerExecCtx.reqCtx}
+	tempExecCtx.inheritAuthorizationSnapshot(outerExecCtx)
 	defer func() {
 		tempExecCtx.Close()
 		if tcc := ses.GetTxnCompileCtx(); tcc != nil {
@@ -3383,6 +3383,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		if execCtx.rewriteEnabled {
 			err = addStatementRewriteHints(execCtx.reqCtx, stmts, execCtx.input.getSql(), parserSQLMode, execCtx.input)
 			if err != nil {
+				freeStatements(stmts)
 				return nil, err
 			}
 			// Apply remapdb (database-name substitution) on the parsed AST
@@ -3588,6 +3589,7 @@ func prepareSQLModeStagedExecution(
 	ses FeSession,
 	p *mysql.MySQLParser,
 	sql string,
+	snapshotEachStatement bool,
 ) (first string, remaining string, staged bool, err error) {
 	lctn := parserLowerCaseTableNames(ses)
 	parserSQLMode := sessionSQLModeForParser(ses)
@@ -3600,7 +3602,7 @@ func prepareSQLModeStagedExecution(
 				break
 			}
 		}
-		shouldStage := stageAt >= 0 && stageAt < len(stmts)-1
+		shouldStage := len(stmts) > 1 && (snapshotEachStatement || stageAt >= 0 && stageAt < len(stmts)-1)
 		freeStatements(stmts)
 		if !shouldStage {
 			return "", "", false, nil
@@ -4692,6 +4694,7 @@ func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr
 	if txnHandler == nil || !txnHandler.InMultiStmtTransactionMode() || !txnHandler.InActiveTxn() {
 		return
 	}
+	execCtx.txnOpt.byRollback = true
 	if rbErr := txnHandler.Rollback(execCtx); rbErr != nil {
 		// The statement's own error is what the client asked about; a failure
 		// to roll back is logged, not substituted for it.
@@ -4700,10 +4703,20 @@ func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr
 	}
 }
 
+func beginStatementAuthorization(ses *Session, execCtx *ExecCtx) {
+	execCtx.ses = ses
+	execCtx.resetAuthorization()
+	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+}
+
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
 	defer ses.ClearDDLOwnerRoleID()
+	if input.rewritePolicy == nil && !input.isSetExpression {
+		execCtx.resetAuthorization()
+	}
+	execCtx.ses = ses
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	beginInstant := time.Now()
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
@@ -4832,12 +4845,14 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	stagedSQLMode := false
 	stagedRemaining := ""
 	var err error
-	if ses.GetCmd() == COM_QUERY && input.getStmt() == nil && !input.isInternal() && mayNeedSQLModeStaging(input.getSql()) {
+	if ses.GetCmd() == COM_QUERY && input.getStmt() == nil && !input.isInternal() &&
+		(input.rewritePolicy != nil && strings.Contains(input.getSql(), ";") || mayNeedSQLModeStaging(input.getSql())) {
 		first, remaining, staged, stageErr := prepareSQLModeStagedExecution(
 			execCtx.reqCtx,
 			ses,
 			ses.GetMySQLParser(),
 			input.getSql(),
+			input.rewritePolicy != nil,
 		)
 		if stageErr != nil {
 			err = stageErr
@@ -4978,7 +4993,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
 		proc.SetStatementLastInsertID(0)
-		execCtx.resetAuthorization()
+		if i > 0 && !stagedSQLMode {
+			beginStatementAuthorization(ses, execCtx)
+		}
 		execCtx.prepareStmt = nil
 		resetDiagnosticsForStatement(ses, execCtx, currentInput, stmt)
 		removePrepareStmtForReplacement(ses, stmt)
@@ -5070,12 +5087,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 
 		if stagedSQLMode && hasMoreStatements {
-			// Restore the outer context after a statement's nested operations.
-			ses.GetTxnCompileCtx().SetExecCtx(execCtx)
-			if changesRoleRuleCatalog(stmt) && input.rewritePolicy != nil {
-				execCtx.authorizationMu.Lock()
-				execCtx.authorizationSnapshot = timestamp.Timestamp{}
-				execCtx.authorizationMu.Unlock()
+			beginStatementAuthorization(ses, execCtx)
+			if input.rewritePolicy != nil {
 				policy, policyErr := input.rewritePolicy.withCurrentRoleRules(execCtx.reqCtx, ses)
 				if policyErr != nil {
 					return policyErr
@@ -5286,12 +5299,15 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
-		// Capture policy before choosing a query execution path.
+		// Capture policy before choosing a query execution path. Privilege
+		// checks in doComQuery use this same statement authorization view.
+		beginStatementAuthorization(ses, execCtx)
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
 		if rewriteErr != nil {
 			if !isStandaloneRoleRuleTxnEnd(execCtx.reqCtx, query, sessionSQLModeForParser(ses)) {
 				ses.resetDiagnostics()
 				markRowCountFailed(ses, ses.GetProc())
+				rollbackWholeTxnOnPreExecutionError(ses, execCtx, rewriteErr)
 				return NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr), nil
 			}
 			rewritePolicy = &rewritePolicySnapshot{}
@@ -5339,7 +5355,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_INIT_DB:
 		var dbname = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
-		query := "use `" + dbname + "`"
+		query := "use " + quoteIdentifierForSQL(dbname)
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, ses.GetTxnHandler().GetServerStatus(), err)
@@ -5365,6 +5381,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		beginStatementAuthorization(ses, execCtx)
 		policy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
 		if rewriteErr == nil {
 			sql, rewriteErr = policy.rewrite(execCtx.reqCtx, sql, sessionSQLModeForParser(ses))
@@ -5372,6 +5389,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if rewriteErr != nil {
 			ses.resetDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
+			rollbackWholeTxnOnPreExecutionError(ses, execCtx, rewriteErr)
 			return NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr), nil
 		}
 

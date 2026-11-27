@@ -250,15 +250,7 @@ func protectedPolicyValueForStatement(ctx context.Context, ses *Session) (string
 	if err := ctx.Err(); err != nil {
 		return "", context.Cause(ctx)
 	}
-	var execution *ExecCtx
-	if compiler := ses.GetTxnCompileCtx(); compiler != nil {
-		compiler.mu.Lock()
-		execution = compiler.execCtx
-		compiler.mu.Unlock()
-	}
-	if execution != nil && (execution.ses != ses || execution.reqCtx == nil) {
-		execution = nil
-	}
+	execution := statementAuthorizationContext(ses)
 	if execution != nil {
 		execution.authorizationMu.Lock()
 		defer execution.authorizationMu.Unlock()
@@ -299,9 +291,7 @@ func protectedPolicyValueForStatement(ctx context.Context, ses *Session) (string
 				return "", err
 			}
 			if execution != nil {
-				execution.protectedPolicyRaw = cached.value
-				execution.protectedPolicyLoaded = true
-				execution.authorizationSnapshot = snapshot
+				execution.recordProtectedPolicy(cached.value, snapshot)
 			}
 			return cached.value, nil
 		}
@@ -315,9 +305,7 @@ func protectedPolicyValueForStatement(ctx context.Context, ses *Session) (string
 			return "", err
 		}
 		if execution != nil {
-			execution.protectedPolicyRaw = cached.value
-			execution.protectedPolicyLoaded = true
-			execution.authorizationSnapshot = snapshot
+			execution.recordProtectedPolicy(cached.value, snapshot)
 		}
 		return cached.value, nil
 	}
@@ -353,11 +341,20 @@ func protectedPolicyValueForStatement(ctx context.Context, ses *Session) (string
 		cache.protectedPolicyMu.Unlock()
 	}
 	if execution != nil {
-		execution.protectedPolicyRaw = raw
-		execution.protectedPolicyLoaded = true
-		execution.authorizationSnapshot = snapshot
+		execution.recordProtectedPolicy(raw, snapshot)
 	}
 	return raw, nil
+}
+
+// The protected database barrier can impose a newer write restriction. Role
+// rules and object privileges still use the statement's pinned authorization view.
+// The caller holds authorizationMu.
+func (execution *ExecCtx) recordProtectedPolicy(raw string, snapshot timestamp.Timestamp) {
+	execution.protectedPolicyRaw = raw
+	execution.protectedPolicyLoaded = true
+	if !execution.authorizationSnapshotPinned {
+		execution.authorizationSnapshot = snapshot
+	}
 }
 
 func readProtectedPolicy(ctx context.Context, ses *Session, bh BackgroundExec) (string, error) {

@@ -99,17 +99,23 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	admin := connect(0, "root")
 	for _, statement := range []string{
 		"create database policy_fixture",
-		"create table policy_fixture.docs(id int primary key, body varchar(48), embedding vecf32(3))",
+		"create table policy_fixture.docs(id int primary key, body varchar(48), embedding vecf32(3), note varchar(16))",
 		"create table policy_fixture.summary(id int primary key, value int)",
 		"insert into policy_fixture.summary values (1,1)",
-		"insert into policy_fixture.docs values (1,'orchard apple','[1,0,0]'),(2,'orchard pear','[2,0,0]'),(3,'orchard plum','[3,0,0]')",
+		"insert into policy_fixture.docs values (1,'orchard apple','[1,0,0]','a'),(2,'orchard pear','[2,0,0]','b'),(3,'orchard plum','[0,0,0]','c')",
 		"create fulltext index docs_text on policy_fixture.docs(body)",
 		"create index docs_ann using ivfflat on policy_fixture.docs(embedding) lists=1 op_type 'vector_l2_ops'",
+		"set view_security_type = 'INVOKER'",
+		"create view policy_fixture.docs_view as select * from policy_fixture.docs",
+		"create view policy_fixture.docs_nested as select * from policy_fixture.docs_view",
 		"create role policy_reader, policy_other",
 		"alter role policy_other add rule 'select id from policy_fixture.docs where id = 2' on table policy_fixture.docs",
 		"create user policy_test_user identified by '111' default role policy_reader",
 		"grant connect on account * to policy_reader, policy_other",
 		"grant select on table policy_fixture.docs to policy_reader, policy_other",
+		"grant select on view policy_fixture.docs_view to policy_reader",
+		"grant select on view policy_fixture.docs_nested to policy_reader",
+		"grant insert on table policy_fixture.docs to policy_reader",
 		"grant select, insert, update on table policy_fixture.summary to policy_reader",
 		"grant policy_other to policy_test_user",
 	} {
@@ -124,12 +130,55 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	}
 	exec(admin, "alter role policy_reader add rule 'select id, body, embedding from policy_fixture.docs where id <= 2' on table policy_fixture.docs")
 	const relational = "select id from policy_fixture.docs order by id"
-	const fulltext = "select id from policy_fixture.docs where match(body) against('orchard') order by id"
-	const vector = "select id from policy_fixture.docs order by l2_distance(embedding,'[0,0,0]') limit 2 by rank with option 'mode=pre'"
-	for _, query := range []string{relational, fulltext, vector} {
-		rows, err := reader.QueryContext(ctx, query)
-		assertIDs(rows, err, 1, 2)
+	const fulltext = "select * from policy_fixture.docs where match(body) against('orchard') order by id"
+	const vector = "select * from policy_fixture.docs order by l2_distance(embedding,'[0,0,0]') limit 2 by rank with option 'mode=pre'"
+	const nestedView = "select * from policy_fixture.docs_nested order by id"
+	type doc struct {
+		id              int
+		body, embedding string
 	}
+	first := doc{1, "orchard apple", "[1, 0, 0]"}
+	second := doc{2, "orchard pear", "[2, 0, 0]"}
+	assertDocs := func(query string, expected ...doc) {
+		t.Helper()
+		rows, err := reader.QueryContext(ctx, query)
+		require.NoError(t, err)
+		defer rows.Close()
+		cols, err := rows.Columns()
+		require.NoError(t, err)
+		require.Equal(t, []string{"id", "body", "embedding"}, cols)
+		var actual []doc
+		for rows.Next() {
+			var d doc
+			require.NoError(t, rows.Scan(&d.id, &d.body, &d.embedding))
+			actual = append(actual, d)
+		}
+		require.NoError(t, rows.Err())
+		require.Equal(t, expected, actual)
+	}
+	assertDenied := func(query, expected string) {
+		t.Helper()
+		rows, err := reader.QueryContext(ctx, query)
+		if rows != nil {
+			rows.Close()
+		}
+		require.ErrorContains(t, err, expected)
+	}
+	for _, query := range []string{fulltext, vector, nestedView} {
+		assertDocs(query, first, second)
+	}
+	var table string
+	require.NoError(t, reader.QueryRowContext(ctx, "show tables from policy_fixture like 'docs'").Scan(&table))
+	require.Equal(t, "docs", table)
+	require.ErrorIs(t, reader.QueryRowContext(ctx, "show tables from policy_fixture where 1 = 0").Scan(&table), sql.ErrNoRows)
+	assertDenied("show tables from policy_fixture where length('x') = 1", "cannot enforce active role rules")
+
+	// The write is authorized and the result shape depends on the target policy.
+	var returned int
+	require.NoError(t, reader.QueryRowContext(ctx, "insert into policy_fixture.summary values (10,10) returning id").Scan(&returned))
+	require.Equal(t, 10, returned)
+	exec(reader, "insert into policy_fixture.docs values (10,'other','[8,0,0]','d')")
+	assertDenied("insert into policy_fixture.docs values (11,'other','[8,0,0]','e') returning id", "INSERT RETURNING cannot enforce active role rules")
 	planContains := func(query, expected string) {
 		t.Helper()
 		rows, err := reader.QueryContext(ctx, "explain "+query)
@@ -145,14 +194,18 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 		require.True(t, found, "expected plan detail %q", expected)
 	}
 	planContains(vector, "Table Function on ivf_search")
-	const refreshSummary = "insert into policy_fixture.summary values (1,1) on duplicate key update value = (select min(id) from policy_fixture.docs)"
+	const refreshSummary = "insert into policy_fixture.summary values (1,1) on duplicate key update value = (select count(*) from policy_fixture.docs)"
 	planContains(refreshSummary, "Filter Cond: (docs.id <= 2)")
 	exec(reader, refreshSummary)
-	var visibleMinimum int
-	require.NoError(t, reader.QueryRowContext(ctx, "select value from policy_fixture.summary").Scan(&visibleMinimum))
-	require.Equal(t, 1, visibleMinimum)
+	var visibleCount int
+	require.NoError(t, reader.QueryRowContext(ctx, "select value from policy_fixture.summary where id = 1").Scan(&visibleCount))
+	require.Equal(t, 2, visibleCount)
 
 	exec(reader, "set @session_message = 'ready'")
+	exec(reader, "set @visible_docs = (select count(*) from policy_fixture.docs)")
+	var setCount int
+	require.NoError(t, reader.QueryRowContext(ctx, "select @visible_docs").Scan(&setCount))
+	require.Equal(t, 2, setCount)
 	prepared, err := reader.PrepareContext(ctx, relational)
 	require.NoError(t, err)
 	defer prepared.Close()
@@ -164,15 +217,20 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 
 	// Update from another CN while the original restricted session stays open.
 	exec(admin, "alter role policy_reader add rule 'select id, body, embedding from policy_fixture.docs where id = 1' on table policy_fixture.docs")
-	for _, query := range []string{relational, fulltext, vector} {
-		rows, err = reader.QueryContext(ctx, query)
-		assertIDs(rows, err, 1)
+	rows, err = reader.QueryContext(ctx, relational)
+	assertIDs(rows, err, 1)
+	for _, query := range []string{fulltext, vector, nestedView} {
+		assertDocs(query, first)
 	}
 	_, err = prepared.QueryContext(ctx)
 	require.ErrorContains(t, err, "role rule policy changed")
 	_, err = reader.QueryContext(ctx, "execute text_policy")
 	require.ErrorContains(t, err, "role rule policy changed")
 	exec(reader, "deallocate prepare text_policy")
+	exec(admin, "revoke select on table policy_fixture.docs from policy_reader")
+	for _, query := range []string{relational, fulltext, vector, nestedView} {
+		assertDenied(query, "privilege")
+	}
 	exec(reader, "set role policy_other")
 	rows, err = reader.QueryContext(ctx, "select * from policy_fixture.docs")
 	assertIDs(rows, err, 2)

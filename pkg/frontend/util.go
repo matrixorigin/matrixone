@@ -268,7 +268,11 @@ func getExprValueWithPrepareMeta(
 		reqCtx: execCtx.reqCtx,
 		ses:    ses,
 	}
-	defer tempExecCtx.Close()
+	tempExecCtx.inheritAuthorizationSnapshot(execCtx)
+	defer func() {
+		tempExecCtx.Close()
+		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+	}()
 	err = executeStmtInSameSession(
 		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
 	if err != nil {

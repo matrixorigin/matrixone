@@ -586,6 +586,7 @@ func Test_mce(t *testing.T) {
 			cws = append(cws, select_2)
 		}
 
+		statement := 0
 		stubs := gostub.Stub(&GetComputationWrapper, func(
 			execCtx *ExecCtx,
 			db string,
@@ -597,7 +598,12 @@ func Test_mce(t *testing.T) {
 			if strings.HasPrefix(strings.ToLower(execCtx.input.getSql()), "use ") {
 				return []ComputationWrapper{use_t}, nil
 			}
-			return cws, nil
+			if statement >= len(cws) {
+				return nil, moerr.NewInternalError(ctx, "unexpected statement in protocol fixture")
+			}
+			wrapper := cws[statement]
+			statement++
+			return []ComputationWrapper{wrapper}, nil
 		})
 		defer stubs.Reset()
 
@@ -2402,7 +2408,7 @@ func TestPrepareSQLModeStagedExecution(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			first, _, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), test.sql)
+			first, _, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), test.sql, false)
 			if test.wantError {
 				require.Error(t, err)
 				return
@@ -2421,7 +2427,7 @@ func TestNextSQLModeStatementUsesCurrentSessionMode(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
 
 	input := &UserInput{sql: `set sql_mode=concat('ANSI_','QUOTES'); select "c"`}
-	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql)
+	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql, false)
 	require.NoError(t, err)
 	require.True(t, staged)
 	require.NotEmpty(t, first)
@@ -2608,7 +2614,7 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 			cw.Free()
 		}
 	}
-	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql)
+	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql, false)
 	require.NoError(t, err)
 	require.True(t, staged)
 	firstInput, err := rewriteSQLStatementInput(ctx, ses, newSQLStatementInput(input, first))
