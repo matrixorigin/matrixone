@@ -307,6 +307,10 @@ func verifyOptimisticLeaseConflict(t *testing.T, ctx context.Context, first, sec
 	require.EqualValues(t, 1, affected)
 	require.NoError(t, repair.Commit(sysCtx))
 	finishRepair()
+	// The SQL observer can start at the local applied logtail, before this
+	// internal transaction's successful commit reaches its snapshot.
+	_, err = tc.WaitLogTailAppliedAt(ctx, repair.Txn().CommitTS)
+	require.NoError(t, err)
 	require.NoError(t, conn.QueryRowContext(ctx, "select state from lease_jobs where id=1").Scan(&state))
 	require.Equal(t, 3, state, "retry on the fresh snapshot must apply the repair")
 	_, err = conn.ExecContext(ctx, "update lease_jobs set state=2,lsn=7,watermark='old' where id=1")
