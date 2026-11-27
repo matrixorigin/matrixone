@@ -33,6 +33,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestHashJoinSharedVarlenOutputBudget(t *testing.T) {
+	const valueBytes = 16 << 10
+	const rowsAtTarget = (64 << 20) / valueBytes
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	textType := types.T_text.ToType()
+	value := vector.NewVec(textType, mp)
+	defer value.Free(mp)
+	require.NoError(t, vector.AppendBytes(value, bytes.Repeat([]byte{'x'}, valueBytes), false, mp))
+
+	// The inner join can share one payload across all its matches. An outer
+	// join that projects those rows with UnionOne will copy it once per row.
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(textType, mp)
+	joinMap := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, []*batch.Batch{input}, mp)
+	defer joinMap.FreeMemory()
+	require.NoError(t, input.Vecs[0].UnionMulti(value, 0, rowsAtTarget+1, mp))
+	input.SetRowCount(rowsAtTarget + 1)
+	require.Len(t, input.Vecs[0].GetArea(), valueBytes)
+
+	probeCols := []colexec.ResultPos{{Rel: 0, Pos: 0}}
+	require.True(t, needsOutputAreaCheck(probeCols, input, 0, true))
+	join := HashJoin{JoinType: plan.Node_LEFT, RightTypes: []types.Type{textType}, ResultCols: []colexec.ResultPos{{Rel: 1, Pos: 0}}}
+	join.ctr.mp = joinMap
+	join.prepareBuildOutputAreaCheck()
+	require.True(t, join.ctr.checkBuildArea)
+
+	join.ctr.resBat = input // Only the projected vector type is needed to plan a batch.
+	areas := join.ctr.outputAreas(nil, true)
+	for i := range rowsAtTarget {
+		require.True(t, areas.reserve(probeCols, outputRow{left: input, leftRow: int64(i)}, outputRow{}, i > 0))
+	}
+	last := outputRow{left: input, leftRow: rowsAtTarget}
+	require.False(t, areas.reserve(probeCols, last, outputRow{}, true))
+	areas = join.ctr.outputAreas(areas[:0], true)
+	require.True(t, areas.reserve(probeCols, last, outputRow{}, false))
+}
+
 func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 	previousLimit := mpool.CapLimit
 	mpool.CapLimit = 1 << 20
