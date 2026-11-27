@@ -21,6 +21,8 @@ select algo, algo_table_type from mo_catalog.mo_indexes
 show create table d;
 -- @sortkey:0
 select id from d where match(body) against('hello');
+-- Multi-term SHOULD query exercises the NQFT/WAND global-DF scoring path.
+select id from d where match(body) against('hello world' in boolean mode) order by id;
 set experimental_fulltext_index = 0;
 
 drop database fulltext_plugin_smoke;
