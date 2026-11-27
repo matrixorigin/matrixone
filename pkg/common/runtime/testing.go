@@ -16,6 +16,7 @@ package runtime
 
 import (
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -51,6 +52,7 @@ type TestingContext struct {
 	beforeLockFunc       func(txnID []byte, tableID uint64)
 	loadDataConfig       LoadDataTestConfig
 	txnModeConfig        TxnModeTestConfig
+	starCountConfig      StarCountTestConfig
 }
 
 // LoadDataTestConfig lets an embedded SQL test cross the parallel reader
@@ -159,4 +161,42 @@ func GetTxnModeTestConfig(service string, accountID uint32) (txn.TxnMode, bool) 
 	cfg := tc.txnModeConfig
 	tc.RUnlock()
 	return cfg.Mode, cfg.Enabled && cfg.AccountID == accountID
+}
+
+// StarCountTestConfig lets an embedded SQL test exercise the sealed count
+// and real cache probe with a small fixture. It applies only to the specified
+// service and table. A zero table ID leaves the production settings in use.
+type StarCountTestConfig struct {
+	TableID            uint64
+	TombstoneThreshold int
+	ProbeTimeout       time.Duration
+	// OnSealedRows observes the partial result accepted on the executing CN.
+	OnSealedRows func(rows int64)
+}
+
+func (tc *TestingContext) SetStarCountTestConfig(cfg StarCountTestConfig) StarCountTestConfig {
+	tc.Lock()
+	defer tc.Unlock()
+	previous := tc.starCountConfig
+	tc.starCountConfig = cfg
+	return previous
+}
+
+func GetStarCountTestConfig(service string, tableID uint64) (StarCountTestConfig, bool) {
+	if service == "" || tableID == 0 {
+		return StarCountTestConfig{}, false
+	}
+	rt := ServiceRuntime(service)
+	if rt == nil {
+		return StarCountTestConfig{}, false
+	}
+	v, ok := rt.GetGlobalVariables(TestingContextKey)
+	if !ok {
+		return StarCountTestConfig{}, false
+	}
+	tc := v.(*TestingContext)
+	tc.RLock()
+	cfg := tc.starCountConfig
+	tc.RUnlock()
+	return cfg, cfg.TableID == tableID && cfg.TombstoneThreshold >= 0
 }

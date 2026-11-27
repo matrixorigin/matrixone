@@ -78,6 +78,25 @@ func (dt Datetime) String() string {
 }
 
 func (dt Datetime) String2(scale int32) string {
+	if dt == ZeroDatetime || dt < 0 {
+		return datetimeString2Slow(dt, scale)
+	}
+	y, m, d, _ := dt.ToDate().Calendar(true)
+	if y < 0 || y > 9999 {
+		return datetimeString2Slow(dt, scale)
+	}
+	hour, minute, sec := dt.Clock()
+	var buf [32]byte
+	b := appendDateClock(buf[:0], int(y), int(m), int(d), int(hour), int(minute), int(sec))
+	if scale > 0 {
+		b = appendFraction(b, int64(dt)%MicroSecsPerSec, min(scale, 9))
+	}
+	return string(b)
+}
+
+// datetimeString2Slow is String2 through fmt, for values the fast path does
+// not cover: negative values and years outside 0..9999.
+func datetimeString2Slow(dt Datetime, scale int32) string {
 	if dt == ZeroDatetime {
 		if scale > 0 {
 			return "0000-00-00 00:00:00." + strings.Repeat("0", int(scale))

@@ -66,7 +66,7 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 		entry := cmd.EntryList[0]
 		require.Equal(t, uint64(catalog.MO_CATALOG_ID), entry.DatabaseId)
 		require.Equal(t, uint64(catalog.MO_DATABASE_ID), entry.TableId)
-		bat, err := batch.ProtoBatchToBatch(entry.Bat, txn.proc.Mp())
+		bat, err := batch.ViewBinary(entry.Bat.Bytes())
 		require.NoError(t, err)
 		require.Equal(t, uint64(42), vector.GetFixedAtNoTypeCheck[uint64](bat.Vecs[catalog.MO_DATABASE_DAT_ID_IDX], 0))
 		require.Equal(t, "db", string(bat.Vecs[catalog.MO_DATABASE_DAT_NAME_IDX].GetBytesAt(0)))
@@ -230,6 +230,8 @@ func decodePrecommitWriteCmdForTest(t *testing.T, req txnpb.TxnRequest) *api.Pre
 }
 
 func cleanTxnWritesForTest(txn *Transaction) {
+	// The commit's terminal hook would give the payload buffer back.
+	txn.releaseCommitPayload()
 	for i := range txn.writes {
 		if txn.writes[i].bat != nil {
 			txn.writes[i].bat.Clean(txn.workspaceMP())

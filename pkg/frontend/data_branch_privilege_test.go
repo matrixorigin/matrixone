@@ -228,7 +228,7 @@ func TestValidateDataBranchDeleteDatabaseTargetUsesDatabaseIdentity(t *testing.T
 			)
 			bh.sql2result[branchDeleteDatabaseTableIDsSQL(accountID, dbName)] = branchTableResult(test.tables)
 			activeSQL := fmt.Sprintf(
-				"select table_id from %s.%s where table_deleted = false and level != 'alter' and table_id in (%d)",
+				"select table_id from %s.%s where table_deleted = false and level not in ('alter', 'truncate') and table_id in (%d)",
 				catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, tableID,
 			)
 			bh.sql2result[activeSQL] = branchUint64Result("table_id", test.activeIDs)

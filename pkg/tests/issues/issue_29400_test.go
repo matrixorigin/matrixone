@@ -235,7 +235,7 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 						require.Zero(t, n)
 						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+database+"."+table+"{snapshot='issue29400_history'} where id=1 and v=7").Scan(&n))
 						require.Equal(t, 1, n)
-						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_branch_metadata where table_id=? and p_table_id=? and level='alter' and not table_deleted", idOf(table), oldID).Scan(&n))
+						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_branch_metadata where table_id=? and p_table_id=? and level='truncate' and not table_deleted", idOf(table), oldID).Scan(&n))
 						require.Equal(t, 1, n, "late protection must publish a successor edge from the original root")
 						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_snapshots where sname=? and kind='branch'", fmt.Sprintf("__mo_branch_%d", idOf(table))).Scan(&n))
 						require.Equal(t, 1, n, "successor edge must have its protection snapshot")

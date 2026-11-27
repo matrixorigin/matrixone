@@ -37,8 +37,17 @@ func TestDaemonClaimSQLRoundTrip(t *testing.T) {
 		service, ok := cn.RawService().(testutil.TaskServiceGetter).GetTaskService()
 		require.True(t, ok)
 		storage := service.GetStorage()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		const sqlBudget = 30 * time.Second
+		// Each scenario gets its own SQL budget, including when selected with -run.
+		run := func(name string, check func(*testing.T, context.Context)) {
+			t.Run(name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), sqlBudget)
+				defer cancel()
+				check(t, ctx)
+			})
+		}
+		ctx, cancelSetup := context.WithTimeout(t.Context(), sqlBudget)
+		defer cancelSetup()
 		// This shared fixture has no TestOnly daemon; use its supported executor
 		// predicate for discovery, then the concrete generated ID for all writes.
 		cond := taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_TestOnly)
@@ -52,7 +61,7 @@ func TestDaemonClaimSQLRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 1, n)
 		defer func() {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), sqlBudget)
 			defer cleanupCancel()
 			n, err := storage.DeleteDaemonTask(cleanupCtx, cond)
 			require.NoError(t, err)
@@ -64,7 +73,8 @@ func TestDaemonClaimSQLRoundTrip(t *testing.T) {
 		claim = rows[0]
 		require.Equal(t, t.Name(), claim.Metadata.ID)
 		cond = taskservice.WithTaskIDCond(taskservice.EQ, claim.ID)
-		t.Run("account condition", func(t *testing.T) {
+		cancelSetup()
+		run("account condition", func(t *testing.T, ctx context.Context) {
 			matching, err := storage.QueryDaemonTask(ctx, cond, taskservice.WithAccount(taskservice.EQ, "sys"))
 			require.NoError(t, err)
 			require.Len(t, matching, 1)
@@ -72,7 +82,7 @@ func TestDaemonClaimSQLRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.Empty(t, other)
 		})
-		t.Run("account value is matched literally", func(t *testing.T) {
+		run("account value is matched literally", func(t *testing.T, ctx context.Context) {
 			unique := time.Now().UnixNano()
 			account := fmt.Sprintf("tenant'quoted-%d", unique)
 			other := task.DaemonTask{
@@ -83,7 +93,7 @@ func TestDaemonClaimSQLRoundTrip(t *testing.T) {
 			byAccount := taskservice.WithAccount(taskservice.EQ, other.Details.Account)
 			var ownedID uint64
 			t.Cleanup(func() {
-				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), sqlBudget)
 				defer cleanupCancel()
 				conditions := []taskservice.Condition{byAccount, taskservice.WithAccountID(taskservice.EQ, 17), taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_TestOnly)}
 				if ownedID != 0 {
@@ -104,7 +114,7 @@ func TestDaemonClaimSQLRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.Empty(t, otherRows)
 		})
-		t.Run("unassigned null claim", func(t *testing.T) {
+		run("unassigned null claim", func(t *testing.T, ctx context.Context) {
 			require.Empty(t, claim.TaskRunner)
 			require.True(t, claim.LastRun.IsZero())
 			n, err := storage.RequestDaemonTaskStatus(ctx, claim, task.TaskStatus_PauseRequested)
@@ -120,6 +130,8 @@ func TestDaemonClaimSQLRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, n)
 		})
+		ctx, cancelClaim := context.WithTimeout(t.Context(), sqlBudget)
+		defer cancelClaim()
 		claim.TaskRunner = "claim-test-cn"
 		claim.LastRun = time.Date(2026, 8, 1, 12, 0, 0, 123456000, time.UTC)
 		claim.LastHeartbeat = claim.LastRun.Truncate(time.Second)
@@ -130,15 +142,16 @@ func TestDaemonClaimSQLRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, rows, 1)
 		require.True(t, claim.LastRun.Equal(rows[0].LastRun), "claim must survive SQL serialization")
+		cancelClaim()
 
-		t.Run("duplicate heartbeat is still owned", func(t *testing.T) {
+		run("duplicate heartbeat is still owned", func(t *testing.T, ctx context.Context) {
 			for range 2 {
 				n, err := storage.HeartbeatDaemonTask(ctx, []task.DaemonTask{rows[0]})
 				require.NoError(t, err)
 				require.Equal(t, 1, n)
 			}
 		})
-		t.Run("status request preserves renewed heartbeat", func(t *testing.T) {
+		run("status request preserves renewed heartbeat", func(t *testing.T, ctx context.Context) {
 			observed := rows[0]
 			renewed := observed
 			renewed.LastHeartbeat = time.Now().UTC().Truncate(time.Second)
@@ -171,7 +184,7 @@ func TestDaemonClaimSQLRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, n)
 		})
-		t.Run("same-second replacement fences stale owner", func(t *testing.T) {
+		run("same-second replacement fences stale owner", func(t *testing.T, ctx context.Context) {
 			replacement := claim
 			replacement.LastRun = claim.LastRun.Add(time.Microsecond)
 			n, err := storage.UpdateDaemonTask(ctx, []task.DaemonTask{replacement}, cond)
@@ -190,86 +203,104 @@ func TestDaemonClaimSQLRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.Zero(t, n)
 		})
+		runningClaim := claim
+		runningClaim.TaskStatus = task.TaskStatus_Running
+		runningClaim.LastRun = claim.LastRun.Add(2 * time.Microsecond)
+		run("claim admission predicates", func(t *testing.T, ctx context.Context) {
+			current := runningClaim
+			current.LastHeartbeat = time.Now().UTC().Truncate(time.Second)
+			n, err := storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, cond)
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+			// All storage consumers must carry the bound claim argument,
+			// including readers/deleters and whole-row claim admission.
+			matching, err := storage.QueryDaemonTask(ctx, cond, taskservice.WithLastRun(current.LastRun))
+			require.NoError(t, err)
+			require.Len(t, matching, 1)
+			obsolete, err := storage.QueryDaemonTask(ctx, cond, taskservice.WithLastRun(claim.LastRun))
+			require.NoError(t, err)
+			require.Empty(t, obsolete)
+			n, err = storage.DeleteDaemonTask(ctx, cond, taskservice.WithLastRun(claim.LastRun))
+			require.NoError(t, err)
+			require.Zero(t, n)
+			n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, cond,
+				taskservice.WithTaskRunnerCond(taskservice.EQ, current.TaskRunner), taskservice.WithLastRun(current.LastRun))
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+			n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, cond,
+				taskservice.WithTaskRunnerCond(taskservice.EQ, current.TaskRunner), taskservice.WithLastRun(claim.LastRun))
+			require.NoError(t, err)
+			require.Zero(t, n, "an older microsecond claim must not admit a start")
+			n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, cond,
+				taskservice.WithTaskRunnerCond(taskservice.EQ, "other-cn"), taskservice.WithLastRun(current.LastRun))
+			require.NoError(t, err)
+			require.Zero(t, n, "a different owner must not admit a start")
+			cutoff := current.LastHeartbeat.Add(-30 * time.Second).UnixNano()
+			admission := []taskservice.Condition{cond, taskservice.WithTaskStatusCond(task.TaskStatus_Running),
+				taskservice.WithTaskRunnerCond(taskservice.EQ, current.TaskRunner), taskservice.WithLastRun(current.LastRun),
+				taskservice.WithLastHeartbeat(taskservice.LE, cutoff)}
+			n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, admission...)
+			require.NoError(t, err)
+			require.Zero(t, n, "a fresh heartbeat must prevent admission")
+			expired := current
+			expired.LastHeartbeat = current.LastHeartbeat.Add(-time.Minute)
+			n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{expired}, cond)
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+			n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, admission...)
+			require.NoError(t, err)
+			require.Equal(t, 1, n, "an expired current claim must remain recoverable")
+		})
 		t.Run("completion predicates and field ownership", func(t *testing.T) {
-			for _, release := range []bool{false, true} {
-				current := claim
-				current.TaskStatus = task.TaskStatus_Running
-				current.LastHeartbeat = time.Now().UTC().Truncate(time.Second)
-				current.LastRun = claim.LastRun.Add(2 * time.Microsecond)
-				n, err := storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, cond)
-				require.NoError(t, err)
-				require.Equal(t, 1, n)
-				// All storage consumers must carry the bound claim argument,
-				// including readers/deleters and whole-row claim admission.
-				matching, err := storage.QueryDaemonTask(ctx, cond, taskservice.WithLastRun(current.LastRun))
-				require.NoError(t, err)
-				require.Len(t, matching, 1)
-				obsolete, err := storage.QueryDaemonTask(ctx, cond, taskservice.WithLastRun(claim.LastRun))
-				require.NoError(t, err)
-				require.Empty(t, obsolete)
-				n, err = storage.DeleteDaemonTask(ctx, cond, taskservice.WithLastRun(claim.LastRun))
-				require.NoError(t, err)
-				require.Zero(t, n)
-				n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, cond,
-					taskservice.WithTaskRunnerCond(taskservice.EQ, current.TaskRunner), taskservice.WithLastRun(current.LastRun))
-				require.NoError(t, err)
-				require.Equal(t, 1, n)
-				n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, cond,
-					taskservice.WithTaskRunnerCond(taskservice.EQ, current.TaskRunner), taskservice.WithLastRun(claim.LastRun))
-				require.NoError(t, err)
-				require.Zero(t, n, "an older microsecond claim must not admit a start")
-				n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, cond,
-					taskservice.WithTaskRunnerCond(taskservice.EQ, "other-cn"), taskservice.WithLastRun(current.LastRun))
-				require.NoError(t, err)
-				require.Zero(t, n, "a different owner must not admit a start")
-				cutoff := time.Now().Add(-30 * time.Second).UnixNano()
-				admission := []taskservice.Condition{cond, taskservice.WithTaskStatusCond(task.TaskStatus_Running),
-					taskservice.WithTaskRunnerCond(taskservice.EQ, current.TaskRunner), taskservice.WithLastRun(current.LastRun),
-					taskservice.WithLastHeartbeat(taskservice.LE, cutoff)}
-				n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, admission...)
-				require.NoError(t, err)
-				require.Zero(t, n, "a fresh heartbeat must prevent admission")
-				expired := current
-				expired.LastHeartbeat = time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
-				n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{expired}, cond)
-				require.NoError(t, err)
-				require.Equal(t, 1, n)
-				n, err = storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, admission...)
-				require.NoError(t, err)
-				require.Equal(t, 1, n, "an expired current claim must remain recoverable")
-				stale := claim
-				stale.TaskStatus = task.TaskStatus_Running
-				stale.Details = &task.Details{Account: "sys", Error: "obsolete failure"}
-				n, err = service.UpdateDaemonTaskError(ctx, stale, release)
-				require.NoError(t, err)
-				require.Zero(t, n)
-				n, err = service.UpdateDaemonTaskStatus(ctx, current.ID, task.TaskStatus_Paused,
-					time.Now(), time.Time{}, taskservice.WithLastRun(stale.LastRun))
-				require.NoError(t, err)
-				require.Zero(t, n)
-				completed := current
-				completed.LastHeartbeat = claim.LastHeartbeat // deliberately stale input
-				completed.Details = &task.Details{Account: "sys", Error: "current failure"}
-				n, err = service.UpdateDaemonTaskError(ctx, completed, release)
-				require.NoError(t, err)
-				require.Equal(t, 1, n)
-				got, err := storage.QueryDaemonTask(ctx, cond)
-				require.NoError(t, err)
-				require.Len(t, got, 1)
-				require.True(t, current.LastRun.Equal(got[0].LastRun))
-				require.Equal(t, "current failure", got[0].Details.Error)
-				if release {
-					require.Empty(t, got[0].TaskRunner)
-					require.True(t, got[0].LastHeartbeat.IsZero())
-					require.Equal(t, task.TaskStatus_RestartRequested, got[0].TaskStatus)
-				} else {
-					require.Equal(t, current.TaskRunner, got[0].TaskRunner)
-					require.True(t, current.LastHeartbeat.Equal(got[0].LastHeartbeat))
-					n, err = service.UpdateDaemonTaskStatus(ctx, current.ID, task.TaskStatus_Paused,
-						time.Now(), time.Time{}, taskservice.WithLastRun(current.LastRun))
+			for _, scenario := range []struct {
+				name    string
+				release bool
+			}{
+				{name: "retain claim"},
+				{name: "release claim", release: true},
+			} {
+				t.Run(scenario.name, func(t *testing.T) {
+					ctx, cancel := context.WithTimeout(t.Context(), sqlBudget)
+					defer cancel()
+					current := runningClaim
+					current.LastHeartbeat = time.Now().UTC().Truncate(time.Second)
+					n, err := storage.UpdateDaemonTask(ctx, []task.DaemonTask{current}, cond)
 					require.NoError(t, err)
 					require.Equal(t, 1, n)
-				}
+					stale := claim
+					stale.TaskStatus = task.TaskStatus_Running
+					stale.Details = &task.Details{Account: "sys", Error: "obsolete failure"}
+					n, err = service.UpdateDaemonTaskError(ctx, stale, scenario.release)
+					require.NoError(t, err)
+					require.Zero(t, n)
+					n, err = service.UpdateDaemonTaskStatus(ctx, current.ID, task.TaskStatus_Paused,
+						time.Now(), time.Time{}, taskservice.WithLastRun(stale.LastRun))
+					require.NoError(t, err)
+					require.Zero(t, n)
+					completed := current
+					completed.LastHeartbeat = claim.LastHeartbeat // deliberately stale input
+					completed.Details = &task.Details{Account: "sys", Error: "current failure"}
+					n, err = service.UpdateDaemonTaskError(ctx, completed, scenario.release)
+					require.NoError(t, err)
+					require.Equal(t, 1, n)
+					got, err := storage.QueryDaemonTask(ctx, cond)
+					require.NoError(t, err)
+					require.Len(t, got, 1)
+					require.True(t, current.LastRun.Equal(got[0].LastRun))
+					require.Equal(t, "current failure", got[0].Details.Error)
+					if scenario.release {
+						require.Empty(t, got[0].TaskRunner)
+						require.True(t, got[0].LastHeartbeat.IsZero())
+						require.Equal(t, task.TaskStatus_RestartRequested, got[0].TaskStatus)
+					} else {
+						require.Equal(t, current.TaskRunner, got[0].TaskRunner)
+						require.True(t, current.LastHeartbeat.Equal(got[0].LastHeartbeat))
+						n, err = service.UpdateDaemonTaskStatus(ctx, current.ID, task.TaskStatus_Paused,
+							time.Now(), time.Time{}, taskservice.WithLastRun(current.LastRun))
+						require.NoError(t, err)
+						require.Equal(t, 1, n)
+					}
+				})
 			}
 		})
 	})

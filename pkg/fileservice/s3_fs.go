@@ -1200,7 +1200,10 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
 		defer spanR.End()
 		key := s.pathToKey(path.File)
+		wait := ReadWaitTrackerFromContext(ctx)
+		start := wait.Start()
 		r, err := s.storage.Read(ctx, key, min, max)
+		wait.Stop(start)
 		if err != nil {
 			// The earliest range has already succeeded, so a later 416 is a
 			// short object, just as it is for the original envelope read.
@@ -1211,7 +1214,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		}
 		return &readCloser{
 			r: &countingReader{
-				R: r,
+				R: wait.wrapReader(r),
 				C: bytesCounter,
 			},
 			closeFunc: func() error {
@@ -1226,6 +1229,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 						rangeReadCosts.observe(n, time.Since(t0))
 					}
 				}
+				start := wait.Start()
+				defer wait.Stop(start)
 				return r.Close()
 			},
 		}, nil
@@ -1563,7 +1568,11 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 
 	// The download outlives ctx once the reader returned in async mode; until then ctx
 	// cancels it. It keeps ctx's deadline and ends when the disk cache closes.
-	fillCtx, cancelFill := context.WithCancel(context.WithoutCancel(ctx))
+	// The request accounts for time waiting for download progress below.
+	// The download worker's own reads can overlap that wait or continue
+	// after this request has returned.
+	wait := ReadWaitTrackerFromContext(ctx)
+	fillCtx, cancelFill := context.WithCancel(withoutReadWaitTracking(context.WithoutCancel(ctx)))
 	if deadline, ok := ctx.Deadline(); ok {
 		fillCtx, cancelFill = context.WithDeadline(fillCtx, deadline)
 	}
@@ -1597,9 +1606,11 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	}()
 	var setErr error
 	setFinished := false
-	waitSet := func() error {
+	waitSet := func(wait *ReadWaitTracker) error {
 		if !setFinished {
+			start := wait.Start()
 			setErr, setFinished = <-setDone, true
+			wait.Stop(start)
 		}
 		stopOnClose()
 		cancelFill()
@@ -1607,6 +1618,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	}
 
 	var admitted admittedDownload
+	start := wait.Start()
 	select {
 	case admitted = <-started:
 	case setErr = <-setDone:
@@ -1617,8 +1629,9 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		default:
 		}
 	}
+	wait.Stop(start)
 	if admitted.download == nil {
-		if err := waitSet(); err != nil {
+		if err := waitSet(wait); err != nil {
 			return true, err
 		}
 		// SetFile may skip an existing file or a busy publication reservation.
@@ -1634,12 +1647,12 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	captured, captureErr := read.capture(ctx, download, admitted.file, file)
 	if err := ctx.Err(); err != nil {
 		cancelFill()
-		_ = waitSet()
+		_ = waitSet(wait)
 		return true, err
 	}
 	if captureErr != nil {
 		cancelFill()
-		_ = waitSet()
+		_ = waitSet(wait)
 		return true, captureErr
 	}
 	if captured && s.asyncUpdate {
@@ -1647,14 +1660,14 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		case backgroundFills <- struct{}{}:
 			stopCancelFill()
 			go func() {
-				_ = waitSet()
+				_ = waitSet(nil)
 				<-backgroundFills
 			}()
 			return true, read.fillVector(ctx, s, file)
 		default:
 		}
 	}
-	if err := waitSet(); err != nil && !(captured && s.asyncUpdate) {
+	if err := waitSet(wait); err != nil && !(captured && s.asyncUpdate) {
 		return true, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -1736,7 +1749,8 @@ func (r *fullObjectDiskCacheReader) capture(
 			}
 			if want > 0 {
 				c.data.Reset()
-				n, err := io.Copy(&c.data, io.NewSectionReader(source, c.offset, want))
+				section := io.NewSectionReader(source, c.offset, want)
+				n, err := io.Copy(&c.data, ReadWaitTrackerFromContext(ctx).wrapReader(section))
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return false, ctxErr
 				}

@@ -301,7 +301,7 @@ update t1 set b=25 where a=1;
 
 data branch pick t1 into t2 between snapshot sp_nolca_from and sp_nolca_to when conflict accept;
 select * from t2 order by a asc;
--- expect a=1 at bounded value 15 with c=NULL (column not yet present);
+-- expect a=1 at bounded value 15 with the destination c=7 preserved;
 -- a=2 remains independent value 200
 select * from t1 order by a asc;
 
@@ -338,7 +338,7 @@ update t1 set b=25,c=18,d=19 where a=1;
 
 data branch pick t1 into t2 between snapshot sp_double_from and sp_double_to when conflict accept;
 select * from t2 order by a asc;
--- expect bounded middle-generation row; d did not exist at the upper bound
+-- expect the bounded middle-generation row with the destination d=90 preserved
 select * from t1 order by a asc;
 
 drop snapshot sp_double_from;

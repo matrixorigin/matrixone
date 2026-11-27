@@ -354,7 +354,7 @@ func TestReplayPartialInsertRetryCache(t *testing.T) {
 				b, err := catalog.GenCreateTableTuple(tbl, mp, packer)
 				require.NoError(t, err)
 				defer b.Clean(mp)
-				_, err = fillRandomRowidAndZeroTs(b, catalog.MoTablesSchema, mp)
+				_, _, err = fillRandomRowidAndZeroTs(b, catalog.MoTablesSchema, mp)
 				require.NoError(t, err)
 				vector.MustFixedColWithTypeCheck[types.TS](b.Vecs[cache.MO_TIMESTAMP_IDX])[0] = ts
 				cc.InsertTable(b)

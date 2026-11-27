@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
@@ -77,6 +78,64 @@ type LogtailClient struct {
 	}
 
 	limiter ratelimit.Limiter
+
+	// recvBufs recycles the buffers responses are reassembled into.
+	recvBufs receiveBuffers
+}
+
+// logtailReceivePool accounts the clients' receive buffers.
+var logtailReceivePool = mpool.MustNew("logtail_receive")
+
+const (
+	// maxRetainedReceiveBuffer bounds a recycled receive buffer; a larger
+	// one is freed when its response is released.
+	maxRetainedReceiveBuffer = 64 << 20
+	// maxFreeReceiveBuffers bounds the idle receive buffers a client keeps.
+	maxFreeReceiveBuffers = 2
+)
+
+// receiveBuffers recycles a client's off-heap receive buffers. A response
+// holds its buffer until Release; buffers released after Close are freed.
+type receiveBuffers struct {
+	mu     sync.Mutex
+	free   []*mpool.MessageBuffer
+	closed bool
+}
+
+func (b *receiveBuffers) get() *mpool.MessageBuffer {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if n := len(b.free); n > 0 {
+		buf := b.free[n-1]
+		b.free[n-1] = nil
+		b.free = b.free[:n-1]
+		return buf
+	}
+	buf := mpool.NewMessageBuffer(logtailReceivePool, maxRetainedReceiveBuffer)
+	return &buf
+}
+
+func (b *receiveBuffers) put(buf *mpool.MessageBuffer) {
+	buf.Reset()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.closed && len(b.free) < maxFreeReceiveBuffers {
+		b.free = append(b.free, buf)
+		return
+	}
+	buf.Free()
+}
+
+// close frees the idle buffers; those still held are freed on release.
+func (b *receiveBuffers) close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+	for i, buf := range b.free {
+		buf.Free()
+		b.free[i] = nil
+	}
+	b.free = nil
 }
 
 type readBarrierResult struct {
@@ -124,6 +183,7 @@ func NewLogtailClient(ctx context.Context, stream morpc.Stream, opts ...ClientOp
 
 // Close closes stream.
 func (c *LogtailClient) Close() error {
+	defer c.recvBufs.close()
 	err := c.stream.Close(true)
 	if err != nil {
 		logutil.Error("logtail client: fail to close morpc stream", zap.Error(err))
@@ -264,6 +324,9 @@ func (c *LogtailClient) BreakoutReceive() {
 // 2. response for subscription: *LogtailResponse.GetSubscribeResponse() != nil
 // 3. response for unsubscription: *LogtailResponse.GetUnsubscribeResponse() != nil
 // 3. response for incremental logtail: *LogtailResponse.GetUpdateResponse() != nil
+//
+// The response's batches are views of a reused receive buffer: the caller
+// calls Release once it has handled the response.
 func (c *LogtailClient) Receive(ctx context.Context) (*LogtailResponse, error) {
 	recvFunc := func() (*LogtailResponseSegment, error) {
 		select {
@@ -297,29 +360,54 @@ func (c *LogtailClient) Receive(ctx context.Context) (*LogtailResponse, error) {
 		if err != nil {
 			return nil, err
 		}
-		buf := make([]byte, 0, prev.MessageSize)
-		buf = AppendChunk(buf, prev.GetPayload())
-
-		for prev.Sequence < prev.MaxSequence {
-			segment, err := recvFunc()
-			if err != nil {
-				return nil, err
-			}
-			buf = AppendChunk(buf, segment.GetPayload())
-			prev = segment
-		}
-
-		resp := &LogtailResponse{}
-		if err := resp.Unmarshal(buf); err != nil {
-			logutil.Error("logtail client: fail to unmarshal logtail response", zap.Error(err))
+		buf := c.recvBufs.get()
+		resp, err := c.assembleResponse(prev, buf, recvFunc)
+		if err != nil {
+			c.recvBufs.put(buf)
 			return nil, err
 		}
 		if barrier := resp.GetReadBarrierResponse(); barrier != nil {
 			c.completeReadBarrier(barrier)
+			c.recvBufs.put(buf)
 			continue
 		}
+		resp.recvBuf = buf
+		resp.client = c
 		return resp, nil
 	}
+}
+
+// assembleResponse reassembles the response that starts with first into
+// buf, and decodes it.
+func (c *LogtailClient) assembleResponse(
+	first *LogtailResponseSegment,
+	buf *mpool.MessageBuffer,
+	next func() (*LogtailResponseSegment, error),
+) (*LogtailResponse, error) {
+	if size := int(first.MessageSize); size > 0 && size <= maxSegmentedLogtailResponseSize {
+		if err := buf.EnsureCapacity(size); err != nil {
+			return nil, err
+		}
+	}
+	segment := first
+	for {
+		if _, err := buf.Write(segment.GetPayload()); err != nil {
+			return nil, err
+		}
+		if segment.Sequence >= segment.MaxSequence {
+			break
+		}
+		var err error
+		if segment, err = next(); err != nil {
+			return nil, err
+		}
+	}
+	resp := &LogtailResponse{}
+	if err := resp.Unmarshal(buf.Bytes()); err != nil {
+		logutil.Error("logtail client: fail to unmarshal logtail response", zap.Error(err))
+		return nil, err
+	}
+	return resp, nil
 }
 
 // streamBroken returns true if stream is borken.

@@ -62,39 +62,62 @@ func TestDecimalIntegerDivPublicContracts(t *testing.T) {
 					require.Zero(t, existing, "recreated source must not expose rows from the previous database")
 				}
 				exec("insert into src values(1,5.678,5.678,2,2),(2,-5.678,-5.678,-2,2)")
-				for _, object := range []string{"table", "view"} {
-					for _, tc := range []struct {
-						name, query, want string
-						recheck           bool
-					}{
-						{"narrow", "select d div i as q from src", "int", true},
-						{"wide", "select w div i as q from src", "bigint", true},
-						{"unsigned", "select d div u as q from src where id=1", "int unsigned", true},
-						{"folded", "select cast(5.678 as decimal(10,3)) div cast(2 as signed) as q", "int", false},
-						{"derived", "select q from (select d div i as q from src) s", "int", false},
-						{"ordered", "select d div i as q from src order by id desc limit 1", "int", false},
-						{"signed_threshold", "select cast(d as decimal(11,3)) div i as q from src", "bigint", false},
-						{"unsigned_threshold", "select cast(d as decimal(11,3)) div u as q from src where id=1", "int unsigned", true},
-					} {
-						if round == 1 && !tc.recheck {
-							continue
+				checkObject := func(name, columns string, want []string) {
+					t.Helper()
+					func() {
+						rows, err := conn.QueryContext(ctx, "select column_type from information_schema.columns where table_schema=? and table_name=? order by ordinal_position", schema, name)
+						require.NoError(t, err, name)
+						defer rows.Close()
+						var got []string
+						for rows.Next() {
+							var typ string
+							require.NoError(t, rows.Scan(&typ), name)
+							got = append(got, typ)
 						}
+						require.NoError(t, rows.Err())
+						require.Equal(t, want, got, name)
+					}()
+					values := make([]int64, len(want))
+					dest := make([]any, len(want))
+					for i := range values {
+						dest[i] = &values[i]
+					}
+					require.NoError(t, conn.QueryRowContext(ctx, "select "+columns+" from "+name+" limit 1").Scan(dest...), name)
+					for _, got := range values {
+						require.Equal(t, int64(2), got, name)
+					}
+				}
+				signed := "d div i as narrow,w div i as wide"
+				signedColumns := "narrow,wide"
+				signedTypes := []string{"int", "bigint"}
+				if round == 0 {
+					signed += ",cast(d as decimal(11,3)) div i as threshold_result"
+					signedColumns += ",threshold_result"
+					signedTypes = append(signedTypes, "bigint")
+				}
+				for _, tc := range []struct {
+					name, query, columns string
+					want                 []string
+					recheck              bool
+				}{
+					{"signed_results", "select " + signed + " from src", signedColumns, signedTypes, true},
+					{"unsigned_results", "select d div u as q,cast(d as decimal(11,3)) div u as threshold_result from src where id=1", "q,threshold_result", []string{"int unsigned", "int unsigned"}, true},
+					{"folded", "select cast(5.678 as decimal(10,3)) div cast(2 as signed) as q", "q", []string{"int"}, false},
+					{"derived", "select q from (select d div i as q from src) s", "q", []string{"int"}, false},
+					{"ordered", "select d div i as q from src order by id desc limit 1", "q", []string{"int"}, false},
+				} {
+					if round == 1 && !tc.recheck {
+						continue
+					}
+					for _, object := range []string{"table", "view"} {
 						name := object + "_" + tc.name
 						exec("create " + object + " " + name + " as " + tc.query)
-						var got string
-						require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema=? and table_name=? and column_name='q'", schema, name).Scan(&got))
-						require.Equal(t, tc.want, got, name)
-						var q int64
-						require.NoError(t, conn.QueryRowContext(ctx, "select q from "+name+" limit 1").Scan(&q))
-						require.Equal(t, int64(2), q, name)
+						checkObject(name, tc.columns, tc.want)
 						if object == "view" {
 							for _, consumer := range []string{"table", "view"} {
 								outer := consumer + "_via_" + name
-								exec("create " + consumer + " " + outer + " as select q from " + name)
-								require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema=? and table_name=? and column_name='q'", schema, outer).Scan(&got))
-								require.Equal(t, tc.want, got, outer)
-								require.NoError(t, conn.QueryRowContext(ctx, "select q from "+outer+" limit 1").Scan(&q))
-								require.Equal(t, int64(2), q, outer)
+								exec("create " + consumer + " " + outer + " as select " + tc.columns + " from " + name)
+								checkObject(outer, tc.columns, tc.want)
 							}
 						}
 					}
