@@ -140,9 +140,9 @@ type tunnel struct {
 	// more proactive.
 	// It only works if RebalancePolicy is "active".
 	transferIntent atomic.Bool
-	// A negative admission will remain true until the client can change
-	// session state. Idle sessions do not repeatedly pause for the same refusal.
-	migrationBlocked atomic.Bool
+	// A zero deadline waits for client activity. A nonzero deadline rate
+	// limits new attempts when another session can change the role catalog.
+	migrationRetryAt atomic.Pointer[time.Time]
 	// expectedCacheQuit indicates this tunnel already intercepted a client QUIT
 	// for connection caching, so the follow-up client EOF should not tear down
 	// the backend session that is being cached.
@@ -671,14 +671,31 @@ func (t *tunnel) setTransferIntentForType(i bool, typ transferType) {
 
 func (t *tunnel) observeMigrationClientActivity(command frontend.CommandType) {
 	if command != frontend.COM_PING && command != frontend.COM_QUIT {
-		t.migrationBlocked.Store(false)
+		if retry := t.migrationRetryAt.Load(); retry != nil && retry.IsZero() {
+			t.migrationRetryAt.CompareAndSwap(retry, nil)
+		}
 	}
+}
+
+const migrationPolicyRetryInterval = 10 * time.Second
+
+func (t *tunnel) migrationDeferred(now time.Time) bool {
+	retry := t.migrationRetryAt.Load()
+	return retry != nil && (retry.IsZero() || now.Before(*retry))
+}
+
+func (t *tunnel) deferMigration(err error, now time.Time) {
+	var retryAt time.Time
+	if moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPolicyChanged) {
+		retryAt = now.Add(migrationPolicyRetryInterval)
+	}
+	t.migrationRetryAt.Store(&retryAt)
 }
 
 func (t *tunnel) tryStartTransferAttempt() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.mu.inTransfer || t.migrationBlocked.Load() {
+	if t.mu.inTransfer || t.migrationDeferred(time.Now()) {
 		return false
 	}
 	t.mu.inTransfer = true
@@ -719,8 +736,8 @@ func (t *tunnel) finishTransfer(start time.Time) {
 func (t *tunnel) doReplaceConnection(ctx context.Context, sync bool) error {
 	newSC, newConn, err := t.getNewServerConn(ctx)
 	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
-			t.migrationBlocked.Store(true)
+		if isMigrationRefusal(err) {
+			t.deferMigration(err, time.Now())
 			t.counterSet.connMigrationCannotStart.Add(1)
 			return err
 		}
@@ -767,7 +784,7 @@ func (t *tunnel) transfer(ctx context.Context) error {
 		return moerr.AttachCause(ctx, err)
 	}
 	replaceErr := t.doReplaceConnection(ctx, false)
-	if replaceErr != nil && !moerr.IsMoErrCode(replaceErr, moerr.OkExpectedNotSafeToStartTransfer) {
+	if replaceErr != nil && !isMigrationRefusal(replaceErr) {
 		v2.ProxyTransferFailCounter.Inc()
 		t.logger.Error("failed to replace connection", zap.Error(moerr.AttachCause(ctx, replaceErr)))
 	}
@@ -797,7 +814,7 @@ func (t *tunnel) transferSync(ctx context.Context) error {
 	ctx, cancel := context.WithTimeoutCause(ctx, defaultTransferTimeout, moerr.CauseTransferSync)
 	defer cancel()
 	if err := t.doReplaceConnection(ctx, true); err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
+		if isMigrationRefusal(err) {
 			return nil
 		}
 		v2.ProxyTransferFailCounter.Inc()

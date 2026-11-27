@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResponse, error) {
@@ -98,17 +97,7 @@ func (c *clientConn) migrateConnToContext(
 		return err
 	}
 
-	// First, we re-run the set variables statements.
-	for _, stmt := range c.migration.setVarStmts {
-		if _, err := execStmtWithContext(parent, sc, internalStmt{
-			cmdType: cmdQuery,
-			s:       stmt,
-		}, nil); err != nil {
-			v2.ProxyConnectCommonFailCounter.Inc()
-			return err
-		}
-	}
-	// The final control read above re-arms the frontend IOSession's
+	// The control read above re-arms the frontend IOSession's
 	// SessionTimeout. Clear that phase-owned deadline before the backend is
 	// handed to the tunnel; otherwise an actively used migrated connection can
 	// still expire at the end of the session timeout period.
@@ -131,8 +120,10 @@ func (c *clientConn) migrateConnToContext(
 	req.MigrateConnToRequest = &query.MigrateConnToRequest{
 		ConnID:           c.connID,
 		DB:               info.DB,
+		SetVarStmts:      c.migration.setVarStmts,
 		PrepareStmts:     info.PrepareStmts,
 		LastAffectedRows: info.LastAffectedRows,
+		RoleState:        info.RoleState,
 	}
 	ctx, cancel := context.WithTimeoutCause(parent, defaultTransferTimeout, moerr.CauseMigrateConnTo)
 	defer cancel()
@@ -145,8 +136,8 @@ func (c *clientConn) migrateConnToContext(
 	}
 	defer c.queryClient.Release(resp)
 	ack := resp.GetMigrateConnToResponse()
-	if len(info.PrepareStmts) != 0 && (ack == nil || !ack.Success) {
-		return moerr.NewInternalError(parent, "destination did not acknowledge prepared replay")
+	if ack == nil || !ack.Success {
+		return moerr.NewInternalError(parent, "destination did not acknowledge session migration")
 	}
 	return nil
 }
@@ -162,5 +153,13 @@ func (c *clientConn) migrationSourceContext(ctx context.Context, prevAddr string
 	if len(resp.UserLevelLocks) > 0 {
 		return nil, moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
 	}
+	if resp.RoleState == nil {
+		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	return resp, nil
+}
+
+func isMigrationRefusal(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) ||
+		moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPolicyChanged)
 }

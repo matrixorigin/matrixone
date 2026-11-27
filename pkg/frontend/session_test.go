@@ -700,6 +700,7 @@ func TestSession_Migrate(t *testing.T) {
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
 			DB:               "d1",
+			RoleState:        migrationRoleState(s),
 			LastAffectedRows: 7,
 		})
 		assert.NoError(t, err)
@@ -726,6 +727,30 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
 	})
 
+	t.Run("reject role mismatch without prepared statements", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		s.SetLastAffectedRows(9)
+		role := migrationRoleState(s)
+		for _, source := range []*query.MigrateConnRoleState{
+			nil,
+			{AccountID: role.AccountID + 1, UserID: role.UserID, PrimaryRoleID: role.PrimaryRoleID},
+			{AccountID: role.AccountID, UserID: role.UserID + 1, PrimaryRoleID: role.PrimaryRoleID},
+			{AccountID: role.AccountID, UserID: role.UserID, PrimaryRoleID: role.PrimaryRoleID + 1},
+			{AccountID: role.AccountID, UserID: role.UserID, PrimaryRoleID: role.PrimaryRoleID, AllSecondaryRoles: !role.AllSecondaryRoles},
+		} {
+			err := Migrate(t.Context(), s, &query.MigrateConnToRequest{
+				DB: "d1", LastAffectedRows: 7, RoleState: source,
+			})
+			require.ErrorIs(t, err, moerr.GetOkExpectedNotSafeToStartTransfer())
+			require.Empty(t, s.GetDatabaseName())
+			require.Equal(t, int64(9), s.GetLastAffectedRows())
+		}
+	})
+
 	t.Run("reject unverified prepared state", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
@@ -734,7 +759,7 @@ func TestSession_Migrate(t *testing.T) {
 		s := genSession(ctrl, "d1", nil)
 		s.SetLastAffectedRows(9)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			DB: "d1", LastAffectedRows: 7,
+			DB: "d1", LastAffectedRows: 7, RoleState: migrationRoleState(s),
 			PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select 1"}},
 		})
 		require.ErrorIs(t, err, moerr.GetOkExpectedNotSafeToStartTransfer())
@@ -757,8 +782,9 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			ConnID: 88,
-			DB:     "d1",
+			ConnID:    88,
+			DB:        "d1",
+			RoleState: migrationRoleState(s),
 			UserLevelLocks: []*query.UserLevelLock{
 				{Name: "restored_lock", Count: 2},
 			},
@@ -781,7 +807,7 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d2", context.Canceled)
-		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d2"})
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d2", RoleState: migrationRoleState(s)})
 		assert.Equal(t, "", s.GetDatabaseName())
 		assert.NoError(t, err)
 	})

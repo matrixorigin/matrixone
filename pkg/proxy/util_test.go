@@ -17,6 +17,7 @@ package proxy
 import (
 	"net"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -78,7 +79,7 @@ func TestPickTunnels(t *testing.T) {
 	ts.add(t3)
 	res = pickTunnels(ts, 2)
 	require.Equal(t, len(res), 2)
-	t1.migrationBlocked.Store(true)
+	t1.deferMigration(moerr.GetOkExpectedNotSafeToStartTransfer(), time.Now())
 	require.ElementsMatch(t, []*tunnel{t2, t3}, pickTunnels(ts, 3))
 }
 

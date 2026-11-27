@@ -647,11 +647,19 @@ func (rt *Routine) migrateConnectionFromWithContext(
 	if ses.hasForeignConns() {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
-	prepared, err := exportMigrationPrepares(operationCtx, ses)
+	roleState := migrationRoleState(ses)
+	if roleState == nil {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	// A query-service request does not carry the client's account context.
+	// Catalog reads use the principal authenticated on the source session.
+	roleCtx := defines.AttachAccount(operationCtx, roleState.AccountID, roleState.UserID, roleState.PrimaryRoleID)
+	prepared, err := exportMigrationPrepares(roleCtx, ses)
 	if err != nil {
 		return err
 	}
 	resp.PrepareStmts = prepared
+	resp.RoleState = roleState
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()

@@ -186,6 +186,43 @@ func (mc *migrateController) getGoroutineId() uint64 {
 	return mc.goroutineID
 }
 
+func migrationRoleState(ses *Session) *query.MigrateConnRoleState {
+	if ses.GetTenantInfo() == nil {
+		return nil
+	}
+	principal := currentAuthorizationPrincipal(ses)
+	return &query.MigrateConnRoleState{
+		AccountID: principal.account, UserID: principal.user,
+		PrimaryRoleID: principal.role, AllSecondaryRoles: principal.secondary,
+	}
+}
+
+// Replay client SQL after role equivalence is established on the destination.
+func replayMigrationVariables(ctx context.Context, ses *Session, statements []string) error {
+	for _, sql := range statements {
+		stmt, err := mysql.ParseOneWithSQLMode(ctx, sql, parserLowerCaseTableNames(ses), sessionSQLModeForParser(ses))
+		if err != nil {
+			return err
+		}
+		_, isSet := stmt.(*tree.SetVar)
+		stmt.Free()
+		if !isSet {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
+
+		ec := &ExecCtx{reqCtx: ctx, ses: ses, inMigration: true}
+		resp, err := ExecRequest(ses, ec, &Request{cmd: COM_QUERY, data: []byte(sql)})
+		ec.Close()
+		if err != nil {
+			return err
+		}
+		if resp != nil && resp.category == ErrorResponse {
+			return resp.GetData().(error)
+		}
+	}
+	return nil
+}
+
 // Only verified, unrewritten SQL can currently be replayed without moving
 // additional session state. Comparisons include the authenticated role, the
 // preparation database and SQL mode, and client-visible protocol metadata.
@@ -266,7 +303,7 @@ func exportMigrationPrepares(ctx context.Context, ses *Session) ([]*query.Prepar
 		return nil, err
 	}
 	if len(rules.first) != 0 {
-		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
+		return nil, moerr.GetOkExpectedMigrationPolicyChanged()
 	}
 	return exported, nil
 }
@@ -308,7 +345,7 @@ func replayMigrationPrepare(ctx context.Context, ses *Session, wire *query.Prepa
 		return err
 	}
 	if len(rules.first) != 0 {
-		return moerr.GetOkExpectedNotSafeToStartTransfer()
+		return moerr.GetOkExpectedMigrationPolicyChanged()
 	}
 	mode := sessionSQLModeForParser(ses)
 	// The exported text must describe a single replayable parameterized

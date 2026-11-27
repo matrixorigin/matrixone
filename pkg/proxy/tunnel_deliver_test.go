@@ -16,7 +16,9 @@ package proxy
 
 import (
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/stretchr/testify/assert"
@@ -45,7 +47,7 @@ func TestTunnelDeliver_Deliver(t *testing.T) {
 
 	// start the tunnel
 	startTunnel(tun1)
-	tun1.migrationBlocked.Store(true)
+	tun1.deferMigration(moerr.GetOkExpectedNotSafeToStartTransfer(), time.Now())
 	for range 2 {
 		deliver.Deliver(tun1, transferByScaling)
 		assert.Equal(t, 0, deliver.Count())
@@ -70,4 +72,22 @@ func TestTunnelDeliver_Deliver(t *testing.T) {
 			assert.Equal(t, 10, deliver.Count())
 		}
 	}
+}
+
+func TestMigrationCatalogRetryIsBounded(t *testing.T) {
+	now := time.Now()
+	tun := &tunnel{}
+	tun.deferMigration(moerr.GetOkExpectedMigrationPolicyChanged(), now)
+	tun.observeMigrationClientActivity(frontend.COM_PING)
+	tun.observeMigrationClientActivity(frontend.COM_QUERY)
+	assert.True(t, tun.migrationDeferred(now))
+	assert.True(t, tun.migrationDeferred(now.Add(migrationPolicyRetryInterval-time.Nanosecond)))
+	assert.False(t, tun.migrationDeferred(now.Add(migrationPolicyRetryInterval)))
+
+	// A subsequent refusal establishes a fresh interval without an idle
+	// connection sending anything other than its keepalive.
+	next := now.Add(migrationPolicyRetryInterval)
+	tun.deferMigration(moerr.GetOkExpectedMigrationPolicyChanged(), next)
+	assert.True(t, tun.migrationDeferred(next))
+	assert.False(t, tun.migrationDeferred(next.Add(migrationPolicyRetryInterval)))
 }

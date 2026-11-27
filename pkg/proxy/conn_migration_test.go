@@ -90,6 +90,7 @@ func runTestWithQueryServiceHandler(
 					DB:                            "d1",
 					LastAffectedRows:              7,
 					UserLevelLockReleaseSupported: true,
+					RoleState:                     &pb.MigrateConnRoleState{PrimaryRoleID: 5},
 				}
 				return nil
 			}, false)
@@ -167,11 +168,16 @@ func TestQueryServiceMigrateTo(t *testing.T) {
 
 func TestQueryServiceMigrateToClearsReadDeadlineAfterControlReads(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
-	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+	handler := func(_ context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		assert.Equal(t, []string{"set @mode = 'PIPES_AS_CONCAT'"}, req.MigrateConnToRequest.SetVarStmts)
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
 		local, remote := net.Pipe()
 		defer remote.Close()
 		raw := &phaseDeadlineConn{Conn: local}
-		statements := make([]string, 0, 2)
+		statements := make([]string, 0, 1)
 		sc := &deadlineRearmingServerConn{
 			ServerConn: newMockServerConn(raw),
 			raw:        raw,
@@ -183,7 +189,6 @@ func TestQueryServiceMigrateToClearsReadDeadlineAfterControlReads(t *testing.T) 
 		require.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{LastAffectedRows: 7}))
 		assert.Equal(t, []string{
 			"/* cloud_nonuser */ set transferred=1;",
-			"set @mode = 'PIPES_AS_CONCAT'",
 		}, statements)
 		assert.True(t, raw.readDeadline().IsZero(),
 			"migration must clear the deadline armed by its final control read")
@@ -351,6 +356,7 @@ func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address 
 			DB:                            "d1",
 			UserLevelLocks:                c.userLevelLocks,
 			UserLevelLockReleaseSupported: c.userLevelLockReleaseSupported,
+			RoleState:                     &pb.MigrateConnRoleState{},
 		}}, nil
 	default:
 		return nil, moerr.NewInternalError(ctx, "unexpected request")

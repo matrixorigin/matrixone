@@ -2284,6 +2284,12 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
+	// The proxy handshakes with the original login credentials. It must
+	// keep the source if that login no longer reproduces its role selection.
+	currentRole := migrationRoleState(ses)
+	if currentRole == nil || req.RoleState == nil || *currentRole != *req.RoleState {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	for _, stmt := range req.PrepareStmts {
 		if stmt == nil || len(stmt.ReplayProof) != sha256.Size {
 			return moerr.GetOkExpectedNotSafeToStartTransfer()
@@ -2322,6 +2328,9 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		req.ConnID, req.DB, accountID, userID)
 	if len(req.UserLevelLocks) > 0 {
 		return moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
+	}
+	if err := replayMigrationVariables(migrationCtx, ses, req.SetVarStmts); err != nil {
+		return err
 	}
 
 	dbm := newDBMigration(req.DB)

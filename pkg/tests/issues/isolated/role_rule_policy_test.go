@@ -186,7 +186,7 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	replay := func(id uint32) error {
 		call := rpc.NewRequest(query.CmdMethod_MigrateConnTo)
 		call.MigrateConnToRequest = &query.MigrateConnToRequest{
-			ConnID: id, PrepareStmts: exported.MigrateConnFromResponse.PrepareStmts,
+			ConnID: id, PrepareStmts: exported.MigrateConnFromResponse.PrepareStmts, RoleState: exported.MigrateConnFromResponse.RoleState,
 		}
 		resp, err := rpc.SendMessage(ctx, targetAddress, call)
 		if err == nil {
@@ -218,9 +218,9 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	export = rpc.NewRequest(query.CmdMethod_MigrateConnFrom)
 	export.MigrateConnFromRequest = &query.MigrateConnFromRequest{ConnID: connectionID(reader)}
 	_, err = rpc.SendMessage(ctx, sourceAddress, export)
-	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "%v", err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPolicyChanged), "%v", err)
 	err = replay(connectionID(connect(0, readerLogin)))
-	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "%v", err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedMigrationPolicyChanged), "%v", err)
 
 	const relational = "select id from policy_fixture.docs order by id"
 	const fulltext = "select * from policy_fixture.docs where match(body) against('orchard') order by id"

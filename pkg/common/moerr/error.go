@@ -45,6 +45,9 @@ const (
 	OkExpectedNotSafeToStartTransfer uint16 = 6
 	//mysql client sends the COM_QUIT to the server before closing the connection.
 	MysqlClientQuit uint16 = 7
+	// A prepared session was valid at prepare time, but the active role
+	// catalog now prevents replay. The proxy can retry after a cooldown.
+	OkExpectedMigrationPolicyChanged uint16 = 8
 
 	OkMax uint16 = 99
 
@@ -914,6 +917,7 @@ var errOkExpectedEOB = Error{code: OkExpectedEOB, message: "ExpectedEOB", sqlSta
 var errOkExpectedDup = Error{code: OkExpectedDup, message: "ExpectedDup", sqlState: "00000"}
 var errOkExpectedPossibleDup = Error{code: OkExpectedPossibleDup, message: "OkExpectedPossibleDup", sqlState: "00000"}
 var errOkExpectedNotSafeToStartTransfer = Error{code: OkExpectedNotSafeToStartTransfer, message: "OkExpectedNotSafeToStartTransfer", sqlState: "00000"}
+var errOkExpectedMigrationPolicyChanged = Error{code: OkExpectedMigrationPolicyChanged, message: "OkExpectedMigrationPolicyChanged", sqlState: "00000"}
 var errMysqlClientQuit = Error{code: MysqlClientQuit, message: "MysqlClientQuit", sqlState: "00000"}
 
 /*
@@ -947,6 +951,10 @@ func GetOkExpectedPossibleDup() *Error {
 
 func GetOkExpectedNotSafeToStartTransfer() *Error {
 	return &errOkExpectedNotSafeToStartTransfer
+}
+
+func GetOkExpectedMigrationPolicyChanged() *Error {
+	return &errOkExpectedMigrationPolicyChanged
 }
 
 func GetMysqlClientQuit() *Error {

@@ -1193,7 +1193,7 @@ skipConnCache:
 				if cause := operationContextCause(ctx); cause != nil {
 					return nil, cause
 				}
-				if moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
+				if isMigrationRefusal(err) {
 					return nil, err
 				}
 				c.log.Error("failed to migrate connection to cn, will retry",
