@@ -123,6 +123,7 @@ set mo_rollback_txn_on_error = 1;
 delete from t;
 insert into t values (1, 'one');
 begin;
+insert into t values (69, 'first');
 insert into t values (70, 'seventy');
 selec 1;
 commit;
