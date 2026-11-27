@@ -50,7 +50,8 @@ func TestBinaryEnumAssignment32814(t *testing.T) {
 	c, err := cluster.GetCNService(0)
 	require.NoError(t, err)
 	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=25s&writeTimeout=25s", c.GetServiceConfig().CN.Frontend.Port)
-	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+	const sqlTimeout = 4 * time.Minute
+	ctx, cancel := context.WithTimeout(t.Context(), sqlTimeout)
 	defer cancel()
 	var conn *sql.Conn
 	var db *sql.DB
@@ -59,14 +60,30 @@ func TestBinaryEnumAssignment32814(t *testing.T) {
 		var err error
 		db, err = sql.Open("mysql", dsn)
 		require.NoError(t, err)
-		require.EventuallyWithT(t, func(ch *assert.CollectT) { conn, err = db.Conn(ctx); assert.NoError(ch, err) }, 30*time.Second, 250*time.Millisecond)
+		loginCtx, cancelLogin := context.WithTimeout(ctx, 30*time.Second)
+		defer cancelLogin()
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			conn, err = db.Conn(loginCtx)
+			if err == nil {
+				break
+			}
+			select {
+			case <-loginCtx.Done():
+				require.NoError(t, err, "connect to CN (%v)", loginCtx.Err())
+			case <-ticker.C:
+			}
+		}
 		// Login can succeed before the CN's cluster snapshot reports the TN shard.
-		clusterState, err := clusterservice.GetMOClusterWithContext(ctx, c.ServiceID())
+		readyCtx, cancelReady := context.WithTimeout(ctx, 30*time.Second)
+		defer cancelReady()
+		clusterState, err := clusterservice.GetMOClusterWithContext(readyCtx, c.ServiceID())
 		require.NoError(t, err)
 		require.EventuallyWithT(t, func(ch *assert.CollectT) {
 			clusterState.ForceRefresh(false)
-			stores := clusterState.GetAllTNServices()
-			if assert.Len(ch, stores, 1) {
+			stores, err := clusterservice.GetAllTNServicesWithContext(readyCtx, clusterState)
+			if assert.NoError(ch, err) && assert.Len(ch, stores, 1) {
 				assert.NotEmpty(ch, stores[0].Shards)
 			}
 		}, 30*time.Second, 250*time.Millisecond)
@@ -266,9 +283,19 @@ func TestBinaryEnumAssignment32814(t *testing.T) {
 		assert.Equal(t, want, read(t, "alter_dst"), "changed domain maps by binary label, not source ordinal")
 	})
 	t.Run("restart and catalog reopen", func(t *testing.T) {
+		cancel()
 		closeConnect()
-		require.NoError(t, cluster.Close())
-		require.NoError(t, cluster.Start())
+		start := time.Now()
+		require.NoError(t, cluster.Close(), "close embedded cluster")
+		t.Logf("closed embedded cluster in %s", time.Since(start))
+		start = time.Now()
+		require.NoError(t, cluster.Start(), "restart embedded cluster")
+		t.Logf("restarted embedded cluster in %s", time.Since(start))
+		// Restart may wait for shared test-cluster admission. Give SQL its
+		// own budget once the new cluster is running.
+		reopenCtx, cancelReopen := context.WithTimeout(t.Context(), sqlTimeout)
+		defer cancelReopen()
+		ctx = reopenCtx
 		connect(t)
 		exec(t, "use enum_validation_32824")
 		assert.Equal(t, seeds, read(t, "seed"), "source label/type catalog reopens")
