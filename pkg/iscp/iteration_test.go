@@ -68,14 +68,9 @@ func TestGetJobSpecsReadsAcrossBatchesAndMatchesJobsByKey(t *testing.T) {
 		context.Background(),
 		"",
 		nil,
-		nil,
-		nil,
 		0,
 		42,
 		[]string{"index_idx01", "index_idx02"},
-		[]uint64{101, 202},
-		types.TS{},
-		[]*JobStatus{{}, {}},
 		[]uint64{3, 2},
 	)
 	require.NoError(t, err)
@@ -85,7 +80,7 @@ func TestGetJobSpecsReadsAcrossBatchesAndMatchesJobsByKey(t *testing.T) {
 	require.Equal(t, uint64(22), prevStatuses[1].LSN)
 }
 
-func TestGetJobSpecsMissingSiblingRequiresRecovery(t *testing.T) {
+func TestGetJobSpecsPrunesMissingSibling(t *testing.T) {
 	oldExecWithResult := ExecWithResult
 	oldFlushJobStatusOnIterationState := FlushJobStatusOnIterationState
 	defer func() {
@@ -115,25 +110,28 @@ func TestGetJobSpecsMissingSiblingRequiresRecovery(t *testing.T) {
 		flushed = true
 		return nil
 	}
-	_, _, _, err := GetJobSpecs(
+	specs, statuses, states, err := GetJobSpecs(
 		context.Background(),
 		"",
-		nil,
-		nil,
 		nil,
 		0,
 		42,
 		[]string{"index_idx01", "index_idx02"},
-		[]uint64{101, 202},
-		types.TS{},
-		make([]*JobStatus, 2),
 		[]uint64{3, 2},
 	)
-	require.ErrorIs(t, err, errIterationNeedsRecovery)
+	require.NoError(t, err)
+	require.Nil(t, statuses[0])
+	require.NotNil(t, statuses[1])
+	iter := NewIterationContext(0, 42, []string{"index_idx01", "index_idx02"}, []uint64{3, 2}, []uint64{101, 23}, types.TS{}, types.TS{})
+	states[1] = ISCPJobState_Completed
+	out, kept, _, err := unfinishedIteration(iter, specs, statuses, states)
+	require.NoError(t, err)
+	require.Equal(t, []string{"index_idx02"}, out.jobNames)
+	require.Equal(t, "idx02", kept[0].IndexName)
 	require.False(t, flushed, "a retired sibling must not permanently fail a surviving job")
 }
 
-func TestGetJobSpecsFlushesPermanentErrorForInvalidRows(t *testing.T) {
+func TestGetJobSpecsRejectsInvalidRowsWithoutPublication(t *testing.T) {
 	oldExecWithResult := ExecWithResult
 	oldFlushJobStatusOnIterationState := FlushJobStatusOnIterationState
 	defer func() {
@@ -233,23 +231,16 @@ func TestGetJobSpecsFlushesPermanentErrorForInvalidRows(t *testing.T) {
 				context.Background(),
 				"",
 				nil,
-				nil,
-				nil,
 				0,
 				42,
 				[]string{"index_idx01"},
-				[]uint64{101},
-				types.TS{},
-				[]*JobStatus{nil},
 				[]uint64{1},
 			)
 			require.Error(t, err)
-			require.True(t, isPermanentError(err))
+			require.False(t, isPermanentError(err))
 			require.Nil(t, jobSpecs)
 			require.Nil(t, prevStatuses)
-			require.Len(t, capturedStatuses, 1)
-			require.NotNil(t, capturedStatuses[0])
-			require.Equal(t, uint64(101), capturedStatuses[0].LSN)
+			require.Nil(t, capturedStatuses, "invalid metadata grants no admission or publication rights")
 		})
 	}
 }
@@ -447,69 +438,4 @@ func TestFlushStatusErrorsOnZeroAffectedRows(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, isPermanentError(err))
 	require.Contains(t, err.Error(), "affected 0 rows")
-}
-
-// TestGetJobSpecsPermanentErrorFailsWhenFlushReturnsError verifies that when
-// FlushPermanentErrorMessage fails (e.g. because the conditional UPDATE affects
-// 0 rows), GetJobSpecs returns a non-permanent error so that ExecuteIteration
-// does NOT swallow it as handled.
-func TestGetJobSpecsPermanentErrorFailsWhenFlushReturnsError(t *testing.T) {
-	oldExecWithResult := ExecWithResult
-	oldFlushJobStatusOnIterationState := FlushJobStatusOnIterationState
-	defer func() {
-		ExecWithResult = oldExecWithResult
-		FlushJobStatusOnIterationState = oldFlushJobStatusOnIterationState
-	}()
-
-	result, mp := newISCPLogResult(t, []iscpLogBatch{
-		{
-			jobNames:   []string{"index_idx02"},
-			jobIDs:     []uint64{2},
-			jobSpecs:   []string{mustMarshalJobSpec(t, "idx02")},
-			jobStatuss: []string{mustMarshalJobStatus(t, 22, JobStage_Running)},
-		},
-	})
-	defer func() {
-		require.Equal(t, int64(0), mp.CurrNB())
-		mpool.DeleteMPool(mp)
-	}()
-
-	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
-		return result, nil
-	}
-
-	FlushJobStatusOnIterationState = func(
-		_ context.Context,
-		_ string,
-		_ engine.Engine,
-		_ client.TxnClient,
-		_ uint32,
-		_ uint64,
-		_ []string,
-		_ []uint64,
-		_ []uint64,
-		_ []*JobStatus,
-		_ types.TS,
-		_ int8,
-		_ []uint64,
-	) error {
-		return moerr.NewInternalErrorNoCtx("update affected 0 rows for job")
-	}
-
-	_, _, _, err := GetJobSpecs(
-		context.Background(),
-		"",
-		nil,
-		nil,
-		nil,
-		0,
-		42,
-		[]string{"index_idx01", "index_idx02"},
-		[]uint64{101, 202},
-		types.TS{},
-		make([]*JobStatus, 2),
-		[]uint64{3, 2},
-	)
-	require.Error(t, err)
-	require.False(t, isPermanentError(err))
 }

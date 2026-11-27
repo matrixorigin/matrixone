@@ -272,7 +272,7 @@ func TestReasonlessDropInvalidatesGenerationBeforeClearingReusablePools(t *testi
 	loadedBasePool.mu.Unlock()
 	oldBaseLease.mu.Lock()
 
-	oldTail := newTailState(1, 1, []*Segment{NewSegment("old-tail", 0)}, nil)
+	oldTail := newTailState(1, 1, 1, []*Segment{NewSegment("old-tail", 0)}, nil)
 	oldTailLease := oldTail.segments[0]
 	loadedTailPool.mu.Lock()
 	loadedTailPool.states[index] = oldTail
@@ -324,7 +324,7 @@ func TestReasonlessDropInvalidatesGenerationBeforeClearingReusablePools(t *testi
 		return !ok
 	}, time.Second, time.Millisecond)
 
-	newTail := newTailState(1, 2, []*Segment{NewSegment("new-tail", 0)}, nil)
+	newTail := newTailState(1, 2, 2, []*Segment{NewSegment("new-tail", 0)}, nil)
 	views, _, tailPublished := loadedTailPool.installAndAcquireIfCurrent(
 		index,
 		newTail,
@@ -358,11 +358,11 @@ func TestLoadTailWithReuseReusesUnchangedState(t *testing.T) {
 	index := "db.store"
 	loadedTailPool.clear(index)
 	t.Cleanup(func() { loadedTailPool.clear(index) })
-	state := newTailState(7, 11, []*Segment{NewSegment("tail", 11)}, nil)
+	state := newTailState(7, 11, 11, []*Segment{NewSegment("tail", 11)}, nil)
 	views, _ := loadedTailPool.installAndAcquire(index, state)
 	freeSegs(views)
 
-	segs, deletes, maxChunk, err := loadTailWithReuse(nil, TableConfig{DbName: "db", IndexTable: "store"}, 7, 11, nil)
+	segs, deletes, maxChunk, err := loadTailWithReuse(nil, TableConfig{DbName: "db", IndexTable: "store"}, 7, 11, 11, nil)
 	require.NoError(t, err)
 	require.Len(t, segs, 1)
 	require.Nil(t, deletes)
@@ -400,11 +400,11 @@ func TestTailPoolBoundaryAccountingAndReplacement(t *testing.T) {
 	require.Nil(t, deletes)
 
 	p := &tailPool{states: make(map[string]*tailState)}
-	expected := newTailState(1, 10, []*Segment{NewSegment("old", 0)}, nil)
+	expected := newTailState(1, 10, 10, []*Segment{NewSegment("old", 0)}, nil)
 	_, _, ok := p.acquireViews("missing", expected)
 	require.False(t, ok)
 	require.False(t, p.current("missing", expected))
-	state := newTailState(1, 11, []*Segment{NewSegment("delta", 0)}, nil)
+	state := newTailState(1, 11, 11, []*Segment{NewSegment("delta", 0)}, nil)
 	_, _, ok = p.installDeltaAndAcquire("missing", expected, state)
 	require.False(t, ok)
 	retireTailStates([]*tailState{state})
@@ -427,7 +427,7 @@ func TestTailPoolBoundaryAccountingAndReplacement(t *testing.T) {
 		view.Free()
 	}
 
-	replacement := newTailState(1, 12, []*Segment{NewSegment("replacement", 0)}, nil)
+	replacement := newTailState(1, 12, 12, []*Segment{NewSegment("replacement", 0)}, nil)
 	views, _ = p.installAndAcquire("db.store", replacement)
 	for _, view := range views {
 		view.Free()

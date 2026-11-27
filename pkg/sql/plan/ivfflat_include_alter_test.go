@@ -221,37 +221,6 @@ func TestResolveAlterTableAlgorithmCopiesIvfIncludeRename(t *testing.T) {
 	require.Equal(t, planpb.AlterTable_INPLACE, algorithm)
 }
 
-func TestCollectAffectedIndexNamesForAlterIncludesIvfIncludeColumns(t *testing.T) {
-	indexes := []*planpb.IndexDef{
-		makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
-		makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
-		{
-			IndexName: "idx_note",
-			IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
-			Parts:     []string{"note"},
-		},
-	}
-
-	names, err := collectAffectedIndexNamesForAlter(indexes, []string{"title", "note"})
-	require.NoError(t, err)
-	require.Equal(t, []string{"idx_ivf", "idx_note"}, names)
-}
-
-func TestCollectAffectedIndexNamesForAlterUsesLegacyIncludeParams(t *testing.T) {
-	indexes := []*planpb.IndexDef{
-		{
-			IndexName:       "idx_gpu",
-			IndexAlgo:       catalog.MoIndexCagraAlgo.ToString(),
-			Parts:           []string{"embedding"},
-			IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"title,category"}`,
-		},
-	}
-
-	names, err := collectAffectedIndexNamesForAlter(indexes, []string{"category"})
-	require.NoError(t, err)
-	require.Equal(t, []string{"idx_gpu"}, names)
-}
-
 func TestAlterCompositePrimaryKeyRebuildsRenamedVectorIndex(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	base := mock.ctxt.tables["partsupp"]

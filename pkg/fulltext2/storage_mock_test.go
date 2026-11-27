@@ -86,6 +86,16 @@ func int64Batch(mp *mpool.MPool, v int64) *batch.Batch {
 	return b
 }
 
+func tailBoundsBatch(mp *mpool.MPool, first, last int64) *batch.Batch {
+	b := batch.NewWithSize(2)
+	for i, v := range []int64{first, last} {
+		b.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		_ = vector.AppendFixed(b.Vecs[i], v, false, mp)
+	}
+	b.SetRowCount(1)
+	return b
+}
+
 func metaBatch(mp *mpool.MPool, checksum string, filesize, recency int64) *batch.Batch {
 	b := batch.NewWithSize(3)
 	b.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
@@ -587,7 +597,7 @@ func TestLoadReadersReleaseMalformedResults(t *testing.T) {
 				}
 				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 1)}}, nil
 			})
-			_, _, err := LoadGeneration(sp, testStorageCfg())
+			_, _, _, err := LoadGeneration(sp, testStorageCfg())
 			require.ErrorContains(t, err, "LoadGeneration recovered")
 			require.Equal(t, failingCall, calls)
 			require.Equal(t, before, mp.CurrNB())
@@ -645,4 +655,35 @@ func TestLoadFromStorageDrainsStreamAfterConsumerPanic(t *testing.T) {
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	require.Empty(t, entries)
+}
+
+func TestCompactZeroTermShadowRetainsTailFloor(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+	b := NewBuilder("shadow", int32(types.T_int64))
+	b.SetDoc(int64(1), nil, nil)
+	seg, err := b.Finish()
+	require.NoError(t, err)
+	framed, err := FrameSegment(seg)
+	require.NoError(t, err)
+	chunks := splitFrameChunks(1, framed)
+	marker := false
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		switch {
+		case strings.Contains(sql, "GREATEST"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 100)}}, nil
+		case strings.Contains(sql, "LENGTH("):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 1)}}, nil
+		case strings.HasPrefix(sql, "SELECT") && strings.Contains(sql, vectorindex.CdcTailId):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, chunks)}}, nil
+		case strings.HasPrefix(sql, "INSERT"):
+			require.Equal(t, EmptyTailSQL(cfg, 100), sql, "zero-term shadow emits no base, so preserve its floor in a no-op tail")
+			marker = true
+		}
+		return executor.Result{Mp: mp}, nil
+	})
+	count, err := CompactSegments(sp, cfg, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.True(t, marker)
 }
