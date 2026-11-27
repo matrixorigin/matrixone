@@ -517,6 +517,9 @@ func (r *txnRecordedUnpublished) takeAll() (names []string, took bool) {
 
 // Transaction represents a transaction
 type Transaction struct {
+	// commitPayload holds the commit requests' payload; see holdCommitPayload.
+	commitPayload atomic.Pointer[mpool.MessageBuffer]
+
 	workspaceAllocationMu     sync.Mutex
 	workspaceGeneration       *process.ExecutionResourceGeneration
 	workspaceAccount          *mpool.AllocationAccount

@@ -406,6 +406,7 @@ type QueryBuilder struct {
 	// DELETE owns these generated scan identities. Optimizer consumers must
 	// revalidate the binding and table after join rewrites.
 	deleteIndexScanTables    map[int32]deleteIndexScan
+	equalityRowBounds        map[*plan.Expr]float64
 	planningInput            *PlanningInput
 	scanBorrows              []scanBorrow
 	borrowResolutionDisabled bool

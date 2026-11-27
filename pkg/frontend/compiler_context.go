@@ -2058,3 +2058,19 @@ func (tcc *TxnCompilerContext) SamplePointIndexMatches(db, table uint64, rows in
 	}
 	return observer.SamplePointIndexMatches(tcc.GetContext(), th.GetTxn(), db, table, rows, candidates, proc.Mp())
 }
+
+// BoundEqualityRows only uses metadata already present on the planning CN.
+func (tcc *TxnCompilerContext) BoundEqualityRows(table *plan.TableDef, column *plan.ColDef, value []byte, valueType types.Type) (candidates, total uint64) {
+	th := tcc.GetTxnHandler()
+	storage := th.GetStorage()
+	if wrapped, ok := storage.(*engine.EntireEngine); ok {
+		storage = wrapped.Engine
+	}
+	observer, ok := storage.(interface {
+		BoundEqualityRows(context.Context, TxnOperator, *plan.TableDef, *plan.ColDef, []byte, types.Type) (candidates, total uint64)
+	})
+	if !ok {
+		return 0, 0
+	}
+	return observer.BoundEqualityRows(tcc.GetContext(), th.GetTxn(), table, column, value, valueType)
+}

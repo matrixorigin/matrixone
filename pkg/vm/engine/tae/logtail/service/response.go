@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 )
 
@@ -82,6 +83,22 @@ func releaseLogtailPhase(phase *LogtailPhase) {
 type LogtailResponse struct {
 	logtail.LogtailResponse
 	closeCB func()
+	// recvBuf, of a response from LogtailClient.Receive, is the buffer the
+	// response was decoded from: its batches are views of it.
+	recvBuf *mpool.MessageBuffer
+	client  *LogtailClient
+}
+
+// Release ends the use of a received response: the client reuses its
+// receive buffer for a later response. Only batches detached from it
+// (api.EncodedBatch.Detach) may be used afterwards.
+func (r *LogtailResponse) Release() {
+	if r == nil || r.recvBuf == nil {
+		return
+	}
+	r.client.recvBufs.put(r.recvBuf)
+	r.recvBuf = nil
+	r.client = nil
 }
 
 var _ morpc.Message = (*LogtailResponse)(nil)
