@@ -77,6 +77,7 @@ mock_curl() {
 	fi
 	count=$((count + 1))
 	printf '%s\n' "$count" > "$MO_DOWNLOAD_MOCK_STATE/count"
+	printf '%s\n' "$url" > "$MO_DOWNLOAD_MOCK_STATE/last-url"
 
 	if [ -n "${MO_DOWNLOAD_MOCK_PRIMARY_STATUS:-}" ] && [ "$url" = https://example.invalid/dependency ]; then
 		exit "$MO_DOWNLOAD_MOCK_PRIMARY_STATUS"
@@ -149,6 +150,11 @@ assert_count() {
 		IFS= read -r actual < "$MO_DOWNLOAD_MOCK_STATE/count"
 	fi
 	[ "$actual" -eq "$expected" ] || fail "expected $expected curl calls, got $actual"
+}
+
+assert_last_url() {
+	IFS= read -r actual_url < "$MO_DOWNLOAD_MOCK_STATE/last-url"
+	[ "$actual_url" = "$1" ] || fail "expected last requested URL $1, got $actual_url"
 }
 
 assert_retry_contract() {
@@ -310,6 +316,7 @@ for primary_status in 22 28 56; do
 	MO_DOWNLOAD_MOCK_MODE=success MO_DOWNLOAD_MOCK_PRIMARY_STATUS=$primary_status MO_DOWNLOAD_FALLBACK_URL=$fallback_url \
 		"$download_script" "$primary_url" "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
 	assert_count 2
+	assert_last_url "$fallback_url"
 	cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "fallback installed wrong content"
 	assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
 done
@@ -318,6 +325,7 @@ new_case legacy-http-fallback
 MO_DOWNLOAD_MOCK_MODE=success MO_DOWNLOAD_MOCK_PRIMARY_STATUS=22 MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS=0 MO_DOWNLOAD_FALLBACK_URL=$fallback_url \
 	"$download_script" "$primary_url" "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
 assert_count "$((MO_DOWNLOAD_ATTEMPTS + 1))"
+assert_last_url "$fallback_url"
 assert_legacy_retry_contract
 cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "legacy fallback installed wrong content"
 assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
@@ -330,6 +338,7 @@ if MO_DOWNLOAD_MOCK_MODE=always-corrupt MO_DOWNLOAD_MOCK_PRIMARY_STATUS=22 MO_DO
 	fail "fallback checksum mismatch unexpectedly succeeded"
 fi
 assert_count 2
+assert_last_url "$fallback_url"
 cmp "$MO_DOWNLOAD_MOCK_STATE/original" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "corrupt fallback replaced destination"
 assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
 
