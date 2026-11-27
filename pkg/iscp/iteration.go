@@ -822,49 +822,6 @@ func (permanentError) Error() string {
 
 var errPermanent error = permanentError{}
 
-func FlushPermanentErrorMessage(
-	ctx context.Context,
-	cnUUID string,
-	cnEngine engine.Engine,
-	cnTxnClient client.TxnClient,
-	accountID uint32,
-	tableID uint64,
-	jobNames []string,
-	jobIDs []uint64,
-	lsns []uint64,
-	jobStatuses []*JobStatus,
-	watermark types.TS,
-	errMsg string,
-	prevLSN []uint64,
-) (err error) {
-	logutil.Error(
-		"ISCP-Task Flush Permanent Error Message",
-		zap.Uint32("accountID", accountID),
-		zap.Uint64("tableID", tableID),
-		zap.Strings("jobNames", jobNames),
-		zap.Any("jobIDs", jobIDs),
-		zap.String("errMsg", errMsg),
-	)
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush permanent error message timeout"))
-	defer cancel()
-	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
-	return FlushJobStatusOnIterationState(
-		ctx,
-		cnUUID,
-		cnEngine,
-		cnTxnClient,
-		accountID,
-		tableID,
-		jobNames,
-		jobIDs,
-		lsns,
-		jobStatuses,
-		watermark,
-		ISCPJobState_Error,
-		prevLSN,
-	)
-}
-
 func isPermanentError(err error) bool {
 	var target permanentError
 	return errors.As(err, &target)

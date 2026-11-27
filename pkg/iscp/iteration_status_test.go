@@ -207,3 +207,86 @@ func TestWorkerDoesNotCompleteUnownedRunningGeneration(t *testing.T) {
 		})
 	}
 }
+
+func TestCleanIterationWatermarkIsAtomic(t *testing.T) {
+	table := NewTableEntry(nil, 0, 1, 2, "db", "t")
+	watermark := types.BuildTS(10, 0)
+	from := watermark.Next()
+	to := types.BuildTS(20, 0)
+	for _, name := range []string{"a", "b"} {
+		table.AddOrUpdateSinker(t.Context(), name, &JobSpec{}, &JobStatus{LSN: 1}, 1, types.BuildTS(10, 0), ISCPJobState_Completed, 0)
+	}
+	iter := NewIterationContext(0, 2, []string{"a", "b"}, []uint64{1, 1}, []uint64{2, 2}, from, to)
+	job := table.jobs[JobKey{JobName: "b", JobID: 1}]
+	job.watermark = types.BuildTS(11, 0)
+	require.Error(t, table.UpdateWatermark(iter))
+	require.Equal(t, types.BuildTS(10, 0), table.jobs[JobKey{JobName: "a", JobID: 1}].watermark)
+	require.Equal(t, types.BuildTS(11, 0), job.watermark)
+	job.watermark = types.BuildTS(10, 0)
+	require.NoError(t, table.UpdateWatermark(iter))
+	require.Equal(t, to, table.jobs[JobKey{JobName: "a", JobID: 1}].watermark)
+	require.Equal(t, to, job.watermark)
+}
+
+func TestIdleFlushCommitRejectsOlderReplay(t *testing.T) {
+	old := ExecWithResult
+	t.Cleanup(func() { ExecWithResult = old })
+	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		return executor.Result{AffectedRows: 1}, nil
+	}
+	txn := &statusTestTxn{}
+	exec := &ISCPTaskExecutor{ctx: t.Context(), txnEngine: statusTestEngine{}, cnTxnClient: &statusTestClient{ops: []*statusTestTxn{txn}}, tables: newISCPTableTree()}
+	table := NewTableEntry(exec, 0, 1, 2, "db", "t")
+	oldWatermark := types.BuildTS(10, 0)
+	newWatermark := types.BuildTS(20, 0)
+	spec := &JobSpec{}
+	table.AddOrUpdateSinker(t.Context(), "idx", spec, &JobStatus{LSN: 1}, 1, oldWatermark, ISCPJobState_Completed, 0)
+	job := table.jobs[JobKey{JobName: "idx", JobID: 1}]
+	job.watermark = newWatermark
+	exec.tables.Set(table)
+	require.NoError(t, exec.FlushWatermarkForAllTables(0))
+	require.Equal(t, 1, txn.commits)
+	require.Equal(t, uint64(2), job.currentLSN)
+	require.Equal(t, ISCPJobState_Pending, job.state)
+	table.AddOrUpdateSinker(t.Context(), "idx", spec, &JobStatus{LSN: 1}, 1, oldWatermark, ISCPJobState_Completed, 0)
+	require.Equal(t, newWatermark, job.watermark)
+	require.Equal(t, ISCPJobState_Pending, job.state)
+	table.AddOrUpdateSinker(t.Context(), "idx", spec, &JobStatus{LSN: 2}, 1, newWatermark, ISCPJobState_Completed, 0)
+	require.Equal(t, ISCPJobState_Completed, job.state)
+}
+
+func TestIdleFlushDoesNotAdvanceMemoryOnFailure(t *testing.T) {
+	for _, mode := range []string{"write failure", "commit acknowledgement failure"} {
+		t.Run(mode, func(t *testing.T) {
+			old := ExecWithResult
+			t.Cleanup(func() { ExecWithResult = old })
+			failure := moerr.NewInternalErrorNoCtx(mode)
+			txn := &statusTestTxn{}
+			if mode == "commit acknowledgement failure" {
+				txn.commitErr = failure
+			}
+			ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+				if mode == "write failure" {
+					return executor.Result{}, failure
+				}
+				return executor.Result{AffectedRows: 1}, nil
+			}
+			exec := &ISCPTaskExecutor{ctx: t.Context(), txnEngine: statusTestEngine{}, cnTxnClient: &statusTestClient{ops: []*statusTestTxn{txn}}, tables: newISCPTableTree()}
+			table := NewTableEntry(exec, 0, 1, 2, "db", "t")
+			persisted := types.BuildTS(10, 0)
+			table.AddOrUpdateSinker(t.Context(), "idx", &JobSpec{}, &JobStatus{LSN: 1}, 1, persisted, ISCPJobState_Completed, 0)
+			job := table.jobs[JobKey{JobName: "idx", JobID: 1}]
+			job.watermark = types.BuildTS(20, 0)
+			exec.tables.Set(table)
+			require.ErrorIs(t, exec.FlushWatermarkForAllTables(0), failure)
+			require.Equal(t, uint64(1), job.currentLSN)
+			require.Equal(t, ISCPJobState_Completed, job.state)
+			require.Equal(t, persisted, job.persistedWatermark)
+			if mode == "write failure" {
+				require.Equal(t, 1, txn.rollbacks)
+			} else {
+				require.Equal(t, 1, txn.commits)
+			}
+		})
+	}
+}

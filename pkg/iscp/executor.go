@@ -563,7 +563,11 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 						logutil.Infof("ISCP-Task injected hook %s", msg)
 					}
 				} else {
-					table.UpdateWatermark(iter)
+					if err := table.UpdateWatermark(iter); err != nil {
+						logutil.Error("ISCP-Task clean iteration requires recovery", zap.Error(err))
+						go exec.Cancel()
+						return
+					}
 				}
 			}
 		case <-flushWatermarkTrigger.C:
@@ -1165,6 +1169,7 @@ func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) (err
 			current := update.table.jobs[JobKey{JobName: update.job.jobName, JobID: update.job.jobID}]
 			if current == update.job && current.currentLSN == update.lsn && current.state == ISCPJobState_Completed {
 				current.state = ISCPJobState_Pending
+				current.currentLSN = update.lsn + 1
 				current.persistedWatermark = update.watermark
 			}
 			update.table.mu.Unlock()
