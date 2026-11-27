@@ -2123,6 +2123,10 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	return builder.applyIndicesForFiltersRegularIndexCandidates(nodeID, node, colRefCnt, idxColMap, nil, true)
 }
 
+func hasOrderedPrimaryKey(table *plan.TableDef) bool {
+	return table.ClusterBy == nil && table.Pkey != nil && !catalog.IsFakePkName(table.Pkey.PkeyColName)
+}
+
 // candidates restricts an existing scan selection to the indexes allowed by
 // its JOIN owner. JOIN fallback cannot publish covering-column replacements
 // after the parent has already consumed idxColMap.
@@ -2133,7 +2137,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexCandidates(nodeID
 
 	forceIndex := builder.scanHintsForceIndexes(node)
 	pointBlocked := !forceIndex && hasPrimaryKeyEquality(node)
-	if pointBlocked && node.TableDef.ClusterBy == nil && !catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
+	if pointBlocked && hasOrderedPrimaryKey(node.TableDef) {
 		// A real, physically ordered full PK is already a point lookup.
 		// Do not build or score partial secondary candidates for a singleton.
 		return nodeID

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,8 +50,11 @@ func TestCachedInt32BlocksRequiresCompleteMetadata(t *testing.T) {
 	writer, err := NewObjectWriter(name, fs, 0, []uint16{0, 1}, nil)
 	require.NoError(t, err)
 	for range 2 {
-		_, err = writer.Write(bat)
+		block, err := writer.Write(bat)
 		require.NoError(t, err)
+		zm := index.NewZM(types.T_int32, 0)
+		require.NoError(t, index.BatchUpdateZM(zm, bat.Vecs[0]))
+		block.ColumnMeta(0).SetZoneMap(zm)
 	}
 	blocks, err := writer.WriteEnd(ctx)
 	require.NoError(t, err)
@@ -59,9 +63,22 @@ func TestCachedInt32BlocksRequiresCompleteMetadata(t *testing.T) {
 
 	var dst [2]CachedInt32Block
 	require.False(t, CachedInt32Blocks(ctx, loc, []uint16{0}, dst[:]), "cold metadata must stay a miss")
+	matchSecond := func(pos int, _ BlockObject) (bool, bool, error) {
+		return false, pos == 1, nil
+	}
+	_, observed := CachedMatchingBlockRows(ctx, loc, 0, types.T_int32, 2, 2, matchSecond)
+	require.False(t, observed)
 	_, err = FastLoadObjectMeta(ctx, &loc, false, fs)
 	require.NoError(t, err)
 	require.True(t, CachedInt32Blocks(ctx, loc, []uint16{0}, dst[:]))
+	rows, observed := CachedMatchingBlockRows(ctx, loc, 0, types.T_int32, 2, 2, matchSecond)
+	require.True(t, observed)
+	require.Equal(t, uint64(1), rows)
+	rows, observed = CachedMatchingBlockRows(ctx, loc, 1, types.T_int32, 2, 2, matchSecond)
+	require.True(t, observed)
+	require.Equal(t, uint64(2), rows, "a changed stored type is unknown")
+	_, observed = CachedMatchingBlockRows(ctx, loc, 0, types.T_int32, 2, 3, matchSecond)
+	require.False(t, observed, "partial row coverage is not evidence")
 	for i, block := range dst {
 		require.Equal(t, uint32(1), block.Rows)
 		require.Equal(t, blocks[i].MustGetColumn(0).Location(), Extent(block.Extents[0][:]))
