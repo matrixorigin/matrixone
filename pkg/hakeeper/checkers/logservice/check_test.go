@@ -27,6 +27,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -37,6 +38,159 @@ func TestMain(m *testing.M) {
 
 	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_LOG, "test", logutil.GetGlobalLogger()))
 	m.Run()
+}
+
+func TestCheckerUsesReportingVoterToRemoveExpiredPeers(t *testing.T) {
+	cfg := hakeeper.Config{}
+	cfg.Fill()
+	const tick = uint64(10000)
+	shard := pb.LogShardInfo{ShardID: 1, Epoch: 1, Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d", 5: "e"}}
+	state := pb.LogState{Shards: map[uint64]pb.LogShardInfo{1: shard}, Stores: make(map[string]pb.LogStoreInfo)}
+	for id, uuid := range shard.Replicas {
+		store := pb.LogStoreInfo{Tick: tick, Replicas: []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: id}}}
+		if uuid == "a" || uuid == "b" {
+			store.Tick = 0
+		}
+		state.Stores[uuid] = store
+	}
+	cluster := pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 5}}}
+	fields := hakeeper.NewCheckerCommonFields("", cfg, util.NewTestIDAllocator(10), cluster, pb.TaskTableUser{}, tick)
+	checker := NewLogServiceChecker(fields, state, pb.TNState{}, operator.ExecutingReplicas{}, operator.ExecutingReplicas{}, 0, pb.Locality{}, false)
+	ops := checker.Check()
+	require.Len(t, ops, 1)
+	first, ok := ops[0].OpSteps()[0].(operator.RemoveLogService)
+	require.True(t, ok)
+	require.Equal(t, "a", first.UUID)
+	require.Equal(t, "c", first.Target)
+	delete(shard.Replicas, first.ReplicaID)
+	shard.Epoch++
+	state.Shards[1] = shard
+	ops = NewLogServiceChecker(fields, state, pb.TNState{}, operator.ExecutingReplicas{}, operator.ExecutingReplicas{}, 0, pb.Locality{}, false).Check()
+	require.Len(t, ops, 1)
+	second, ok := ops[0].OpSteps()[0].(operator.RemoveLogService)
+	require.True(t, ok)
+	require.Equal(t, "b", second.UUID)
+	require.Equal(t, shard.Epoch, second.Epoch)
+}
+
+func TestCheckerPrefersSafeSurplusAndStartsWhenQuorumIsMissing(t *testing.T) {
+	cfg := hakeeper.Config{}
+	cfg.Fill()
+	const tick = uint64(10000)
+	shard := pb.LogShardInfo{ShardID: 1, Epoch: 1, LeaderID: 3, Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d", 5: "e"}}
+	state := pb.LogState{Shards: map[uint64]pb.LogShardInfo{1: shard}, Stores: make(map[string]pb.LogStoreInfo)}
+	for id, uuid := range shard.Replicas {
+		store := pb.LogStoreInfo{Tick: tick}
+		if id <= 3 {
+			store.Replicas = []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: id}}
+		}
+		state.Stores[uuid] = store
+	}
+	cluster := pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}}}
+	fields := hakeeper.NewCheckerCommonFields("", cfg, util.NewTestIDAllocator(10), cluster, pb.TaskTableUser{}, tick)
+	check := func(executing operator.ExecutingReplicas) []*operator.Operator {
+		return NewLogServiceChecker(fields, state, pb.TNState{}, executing, operator.ExecutingReplicas{}, 0, pb.Locality{}, false).Check()
+	}
+	ops := check(operator.ExecutingReplicas{})
+	require.Len(t, ops, 2)
+	removed := make(map[string]bool)
+	started := make(map[string]bool)
+	for _, op := range ops {
+		switch step := op.OpSteps()[0].(type) {
+		case operator.RemoveLogService:
+			require.Equal(t, "a", step.Target)
+			removed[step.UUID] = true
+		case operator.StartLogService:
+			started[step.UUID] = true
+		default:
+			t.Fatalf("unexpected step %T", step)
+		}
+	}
+	require.Equal(t, map[string]bool{"d": true}, removed)
+	require.Equal(t, map[string]bool{"e": true}, started, "an independent start is not blocked by a possible later removal")
+	ops = check(operator.ExecutingReplicas{Starting: map[uint64][]uint64{1: {5}}})
+	removed = make(map[string]bool)
+	for _, op := range ops {
+		if step, ok := op.OpSteps()[0].(operator.RemoveLogService); ok {
+			removed[step.UUID] = true
+		}
+	}
+	require.Equal(t, map[string]bool{"d": true}, removed, "an independent safe removal still proceeds")
+
+	// A previously issued removal may still commit using a different live
+	// majority. Do not race it with a start of the same identity.
+	c := state.Stores["c"]
+	c.Replicas = nil
+	state.Stores["c"] = c
+	ops = check(operator.ExecutingReplicas{Removing: map[uint64][]uint64{1: {4}}})
+	var startedD bool
+	for _, op := range ops {
+		switch step := op.OpSteps()[0].(type) {
+		case operator.StartLogService:
+			startedD = startedD || step.UUID == "d"
+		case operator.RemoveLogService:
+			t.Fatalf("removed %s without current quorum", step.UUID)
+		}
+	}
+	require.False(t, startedD, "wait for the in-flight removal before restarting the same identity")
+	pending := operator.NewOperator("", 1, 1, operator.StartLogService{Replica: operator.Replica{UUID: "d", ShardID: 1, ReplicaID: 4}})
+	require.NotContains(t, PendingOperators(fields, state, operator.ExecutingReplicas{Removing: map[uint64][]uint64{1: {4}}}, operator.ExecutingReplicas{}, 0, pb.Locality{}, []*operator.Operator{pending}), pending)
+	c.Replicas = []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: 3}}
+	state.Stores["c"] = c
+	delete(shard.Replicas, 4)
+	shard.Epoch++
+	state.Shards[1] = shard
+	ops = check(operator.ExecutingReplicas{})
+	require.Len(t, ops, 1)
+	second, ok := ops[0].OpSteps()[0].(operator.RemoveLogService)
+	require.True(t, ok)
+	require.Equal(t, "e", second.UUID)
+	require.Equal(t, shard.Epoch, second.Epoch)
+}
+
+func TestCheckerSerializesMembershipPerShard(t *testing.T) {
+	cfg := hakeeper.Config{}
+	cfg.Fill()
+	state := pb.LogState{Shards: make(map[uint64]pb.LogShardInfo), Stores: make(map[string]pb.LogStoreInfo)}
+	cluster := pb.ClusterInfo{}
+	for _, shardID := range []uint64{1, 2} {
+		shard := pb.LogShardInfo{ShardID: shardID, Epoch: 1, Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"}}
+		state.Shards[shardID] = shard
+		cluster.LogShards = append(cluster.LogShards, metadata.LogShardRecord{ShardID: shardID, NumberOfReplicas: 5})
+		for id, uuid := range shard.Replicas {
+			store := state.Stores[uuid]
+			store.Tick = 1
+			store.Replicas = append(store.Replicas, pb.LogReplicaInfo{LogShardInfo: shard, ReplicaID: id})
+			state.Stores[uuid] = store
+		}
+	}
+	state.Stores["d"] = pb.LogStoreInfo{Tick: 1}
+	state.Stores["e"] = pb.LogStoreInfo{Tick: 1}
+	state.Stores["f"] = pb.LogStoreInfo{Tick: 1}
+	alloc := util.NewTestIDAllocator(10)
+	fields := hakeeper.NewCheckerCommonFields("", cfg, alloc, cluster, pb.TaskTableUser{}, 1)
+	check := func(voting, nonVoting operator.ExecutingReplicas) []*operator.Operator {
+		return NewLogServiceChecker(fields, state, pb.TNState{}, voting, nonVoting, 1, pb.Locality{}, false).Check()
+	}
+	ops := check(operator.ExecutingReplicas{}, operator.ExecutingReplicas{})
+	require.Len(t, ops, 2, "separate shards make progress independently")
+	seen := make(map[uint64]bool)
+	for _, op := range ops {
+		step, ok := op.OpSteps()[0].(operator.AddLogService)
+		require.True(t, ok, "voting and non-voting changes share a slot")
+		require.False(t, seen[step.ShardID])
+		seen[step.ShardID] = true
+	}
+	require.Equal(t, map[uint64]bool{1: true, 2: true}, seen)
+	next, ok := alloc.Next()
+	require.True(t, ok)
+	require.Equal(t, uint64(13), next, "allocate only for selected changes")
+	// A current non-voter change occupies shard 1 but does not block shard 2.
+	ops = check(operator.ExecutingReplicas{}, operator.ExecutingReplicas{Removing: map[uint64][]uint64{1: {99}}})
+	require.Len(t, ops, 1)
+	step, ok := ops[0].OpSteps()[0].(operator.AddLogService)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), step.ShardID)
 }
 
 var expiredTick = uint64(hakeeper.DefaultLogStoreTimeout / time.Second * hakeeper.DefaultTickPerSecond)
@@ -531,6 +685,7 @@ func TestCheck(t *testing.T) {
 								LeaderID: 1,
 								Term:     1,
 							},
+							ReplicaID: 2,
 						}},
 						TaskServiceCreated: true,
 					},
@@ -544,6 +699,7 @@ func TestCheck(t *testing.T) {
 								LeaderID: 1,
 								Term:     1,
 							},
+							ReplicaID: 3,
 						}},
 						TaskServiceCreated: false,
 					},
@@ -941,7 +1097,7 @@ func TestCheck(t *testing.T) {
 									LeaderID:          1,
 									Term:              1,
 								},
-								ReplicaID: 4,
+								ReplicaID: 4, IsNonVoting: true,
 							},
 						},
 					},
@@ -957,7 +1113,7 @@ func TestCheck(t *testing.T) {
 									LeaderID:          1,
 									Term:              1,
 								},
-								ReplicaID: 5,
+								ReplicaID: 5, IsNonVoting: true,
 							},
 						},
 					},
@@ -1062,7 +1218,7 @@ func TestCheck(t *testing.T) {
 									LeaderID:          1,
 									Term:              1,
 								},
-								ReplicaID: 4,
+								ReplicaID: 4, IsNonVoting: true,
 							},
 						},
 					},
@@ -1078,7 +1234,7 @@ func TestCheck(t *testing.T) {
 									LeaderID:          1,
 									Term:              1,
 								},
-								ReplicaID: 5,
+								ReplicaID: 5, IsNonVoting: true,
 							},
 						},
 					},
@@ -1094,7 +1250,7 @@ func TestCheck(t *testing.T) {
 									LeaderID:          1,
 									Term:              1,
 								},
-								ReplicaID: 6,
+								ReplicaID: 6, IsNonVoting: true,
 							},
 						},
 					},
@@ -1195,7 +1351,7 @@ func TestCheck(t *testing.T) {
 									LeaderID:          1,
 									Term:              1,
 								},
-								ReplicaID: 3,
+								ReplicaID: 4, IsNonVoting: true,
 							},
 						},
 					},
@@ -1211,7 +1367,7 @@ func TestCheck(t *testing.T) {
 									LeaderID:          1,
 									Term:              1,
 								},
-								ReplicaID: 3,
+								ReplicaID: 5, IsNonVoting: true,
 							},
 						},
 					},
@@ -1312,7 +1468,7 @@ func TestCheck(t *testing.T) {
 									LeaderID:          1,
 									Term:              1,
 								},
-								ReplicaID: 4,
+								ReplicaID: 4, IsNonVoting: true,
 							},
 						},
 					},
@@ -1328,7 +1484,7 @@ func TestCheck(t *testing.T) {
 									LeaderID:          1,
 									Term:              1,
 								},
-								ReplicaID: 5,
+								ReplicaID: 5, IsNonVoting: true,
 							},
 						},
 					},
@@ -1344,7 +1500,7 @@ func TestCheck(t *testing.T) {
 									LeaderID:          1,
 									Term:              1,
 								},
-								ReplicaID: 6,
+								ReplicaID: 6, IsNonVoting: true,
 							},
 						},
 					},
@@ -1393,4 +1549,63 @@ func TestCheck(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestStartDoesNotRacePreviouslyDispatchedRemoval(t *testing.T) {
+	cfg := hakeeper.Config{}
+	cfg.Fill()
+	shard := pb.LogShardInfo{ShardID: 1, Epoch: 7, LeaderID: 1,
+		Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d", 5: "e"}}
+	state := pb.LogState{Shards: map[uint64]pb.LogShardInfo{1: shard}, Stores: map[string]pb.LogStoreInfo{}}
+	for id, name := range shard.Replicas {
+		store := pb.LogStoreInfo{Tick: 1}
+		if id == 1 || id == 3 || id == 5 {
+			store.Replicas = []pb.LogReplicaInfo{{LogShardInfo: shard, ReplicaID: id}}
+		}
+		state.Stores[name] = store
+	}
+	fields := hakeeper.NewCheckerCommonFields("", cfg, util.NewTestIDAllocator(100),
+		pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 4}}}, pb.TaskTableUser{}, 1)
+	executing := operator.ExecutingReplicas{Removing: map[uint64][]uint64{1: {4}}}
+	checker := NewLogServiceChecker(fields, state, pb.TNState{}, executing, operator.ExecutingReplicas{}, 0, pb.Locality{}, false)
+	var starts, removals []uint64
+	for _, op := range checker.Check() {
+		for _, step := range op.OpSteps() {
+			switch step := step.(type) {
+			case operator.StartLogService:
+				starts = append(starts, step.ReplicaID)
+			case operator.RemoveLogService:
+				removals = append(removals, step.ReplicaID)
+			}
+		}
+	}
+	require.NotContains(t, starts, uint64(4), "the already-dispatched removal can still commit")
+	require.Contains(t, starts, uint64(2), "another replica can start while the membership slot is occupied")
+	require.Empty(t, removals, "another removal must wait for the current configuration change")
+	require.NotEmpty(t, membershipTargets(cfg, state, 1, pb.RemoveReplica,
+		pb.Replica{ShardID: 1, ReplicaID: 4, UUID: "d", Epoch: 7}))
+}
+
+func TestStandbyShardUsesRegisteredConfiguration(t *testing.T) {
+	cfg := hakeeper.Config{}
+	cfg.Fill()
+	cluster := pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 0, NumberOfReplicas: 1}, {ShardID: 1, NumberOfReplicas: 1}}}
+	state := pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{0: {ShardID: 0}, 1: {ShardID: 1}, 77: {ShardID: 77}},
+		Stores: map[string]pb.LogStoreInfo{"a": {Tick: 1}},
+	}
+	check := func(cluster pb.ClusterInfo) []uint64 {
+		fields := hakeeper.NewCheckerCommonFields("", cfg, util.NewTestIDAllocator(100), cluster, pb.TaskTableUser{}, 1)
+		checker := NewLogServiceChecker(fields, state, pb.TNState{}, operator.ExecutingReplicas{}, operator.ExecutingReplicas{}, 0, pb.Locality{}, true)
+		var shards []uint64
+		for _, op := range checker.Check() {
+			if step, ok := op.OpSteps()[0].(operator.AddLogShard); ok {
+				shards = append(shards, step.ShardID)
+			}
+		}
+		return shards
+	}
+	require.Equal(t, []uint64{78}, check(cluster), "an observed orphan is not a registered standby shard")
+	cluster.LogShards = append(cluster.LogShards, metadata.LogShardRecord{ShardID: 4, NumberOfReplicas: 1})
+	require.Empty(t, check(cluster), "a configured standby need not have reported yet")
 }

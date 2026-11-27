@@ -15,133 +15,9 @@
 package logservice
 
 import (
-	"slices"
-
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
-
-// fixingShard is the replicas of the shardID that required.
-type fixingShard struct {
-	// shardID is the shard ID.
-	shardID uint64
-	// They are the replicas after calculated. Other replicas need to be removed.
-	// The key of the map is replica ID and the value is store UUID.
-	replicas map[uint64]string
-	// toAdd is the normal replica number needs to be added.
-	toAdd uint32
-}
-
-func newFixingShardNormal(origin pb.LogShardInfo) *fixingShard {
-	shard := &fixingShard{
-		shardID:  origin.ShardID,
-		replicas: make(map[uint64]string),
-		toAdd:    0,
-	}
-	for replicaID, uuid := range origin.Replicas {
-		shard.replicas[replicaID] = uuid
-	}
-	return shard
-}
-
-func newFixingShardNonVoting(origin pb.LogShardInfo) *fixingShard {
-	shard := &fixingShard{
-		shardID:  origin.ShardID,
-		replicas: make(map[uint64]string),
-		toAdd:    0,
-	}
-	for replicaID, uuid := range origin.NonVotingReplicas {
-		shard.replicas[replicaID] = uuid
-	}
-	return shard
-}
-
-func fixedLogShardInfoNormal(
-	record metadata.LogShardRecord,
-	info pb.LogShardInfo,
-	expiredStores []string,
-) *fixingShard {
-	// info.Replicas only contains the normal replicas.
-	// info.NonVotingReplicas only contains the non-voting replicas.
-	fixing := newFixingShardNormal(info)
-	diff := len(fixing.replicas) - int(record.NumberOfReplicas)
-	// The number of replicas is less than expected.
-	// Record how many replicas should be added.
-	if diff < 0 {
-		fixing.toAdd = uint32(-diff)
-	}
-
-	// remove the expired replicas.
-	for replicaID, uuid := range info.Replicas {
-		if contains(expiredStores, uuid) {
-			delete(fixing.replicas, replicaID)
-			// do not remove replicas more than expected.
-			if diff > 0 {
-				diff--
-			}
-		}
-	}
-
-	// The number of replicas is more than expected. Remove some of them.
-	if diff > 0 {
-		idSlice := sortedReplicaID(fixing.replicas, info.LeaderID)
-		for i := 0; i < diff; i++ {
-			delete(fixing.replicas, idSlice[i])
-		}
-	}
-
-	return fixing
-}
-
-func fixedLogShardInfoNonVoting(
-	nonVotingReplicaNum uint64,
-	info pb.LogShardInfo,
-	expiredStores []string,
-) *fixingShard {
-	// info.Replicas only contains the normal replicas.
-	// info.NonVotingReplicas only contains the non-voting replicas.
-	fixing := newFixingShardNonVoting(info)
-	// nonVotingReplicaNum is the number of expected non-voting replicas.
-	// calculate the expected non-voting replicas number.
-	diff := len(fixing.replicas) - int(nonVotingReplicaNum)
-	if diff < 0 {
-		fixing.toAdd = uint32(-diff)
-	}
-
-	// remove the expired replicas.
-	for replicaID, uuid := range info.NonVotingReplicas {
-		if contains(expiredStores, uuid) {
-			delete(fixing.replicas, replicaID)
-			if diff > 0 {
-				diff--
-			}
-		}
-	}
-
-	// The number of replicas is more than expected. Remove some of them.
-	if diff > 0 {
-		idSlice := sortedReplicaID(fixing.replicas, info.LeaderID)
-		for i := 0; i < diff; i++ {
-			delete(fixing.replicas, idSlice[i])
-		}
-	}
-
-	return fixing
-}
-
-// fixedLogShardInfo returns the replicas information after fixing for the shard.
-// the first return value is the normal replicas, and the second return value
-// is the non-voting replicas.
-func fixedLogShardInfo(
-	record metadata.LogShardRecord,
-	nonVotingReplicaNum uint64,
-	info pb.LogShardInfo,
-	expiredStores []string,
-) (*fixingShard, *fixingShard) {
-	return fixedLogShardInfoNormal(record, info, expiredStores),
-		fixedLogShardInfoNonVoting(nonVotingReplicaNum, info, expiredStores)
-}
 
 func getReplicasToRemove(shardID uint64, current, left map[uint64]string) []replica {
 	toRemove := make([]replica, 0, len(current)-len(left))
@@ -167,14 +43,16 @@ func getReplicasToStart(
 ) []replica {
 	toStart := make([]replica, 0)
 	for id, uuid := range replicas {
-		if replicaStoreIncarnationChanged(id, uuid, replicaStoreIncarnations, stores) {
+		if storeIncarnationChanged(id, uuid, replicaStoreIncarnations, stores) {
 			// This replica belongs to an older persistent storage generation.
 			// Starting it with the same replica ID would make Raft peers reuse
 			// progress acknowledged by the lost generation.
 			continue
 		}
 		store := stores[uuid]
-		if !replicaStarted(shardID, store.Replicas) {
+		// A NodeHost can host only one local instance per shard. A different
+		// reported ID must be stopped before scheduling this one.
+		if !shardReported(shardID, store.Replicas) {
 			rep := replica{
 				uuid:      uuid,
 				shardID:   shardID,
@@ -186,36 +64,6 @@ func getReplicasToStart(
 	return toStart
 }
 
-func replicaStoreIncarnationChanged(
-	replicaID uint64,
-	storeID string,
-	replicaStoreIncarnations map[uint64]string,
-	stores map[string]pb.LogStoreInfo,
-) bool {
-	replicaIncarnation := replicaStoreIncarnations[replicaID]
-	storeIncarnation := stores[storeID].StoreIncarnation
-	return replicaIncarnation != "" &&
-		storeIncarnation != "" &&
-		replicaIncarnation != storeIncarnation
-}
-
-func removeReplicasOnChangedStoreIncarnation(
-	fixed *fixingShard,
-	shardInfo pb.LogShardInfo,
-	stores map[string]pb.LogStoreInfo,
-) {
-	for replicaID, storeID := range fixed.replicas {
-		if replicaStoreIncarnationChanged(
-			replicaID,
-			storeID,
-			shardInfo.ReplicaStoreIncarnations,
-			stores,
-		) {
-			delete(fixed.replicas, replicaID)
-		}
-	}
-}
-
 // parseLogShards collects stats for further use.
 // It returns two stats, the first is the stats for normal replicas
 // and the second one is for the non-voting replicas.
@@ -225,16 +73,8 @@ func parseLogShards(
 	normalStats, nonVotingStats := newStats(false), newStats(true)
 	for _, shardInfo := range infos.Shards {
 		shardID := shardInfo.ShardID
-		record := getRecord(shardID, cluster.LogShards)
-		fixingNormal, fixingNonVoting := fixedLogShardInfo(record, nonVotingReplicaNum, shardInfo, expired)
-		removeReplicasOnChangedStoreIncarnation(fixingNormal, shardInfo, infos.Stores)
-		removeReplicasOnChangedStoreIncarnation(fixingNonVoting, shardInfo, infos.Stores)
-
-		// cal the toRemove field.
-		toRemoveNormal := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.replicas)
-		toRemoveNonVoting := getReplicasToRemove(shardID, shardInfo.NonVotingReplicas, fixingNonVoting.replicas)
-
-		// cal the toStart field.
+		// Existing replica starts are independent of membership reconfiguration.
+		// A report alone is not authority to add or remove shard members.
 		toStartNormal := getReplicasToStart(
 			shardID,
 			shardInfo.Replicas,
@@ -248,11 +88,21 @@ func parseLogShards(
 			infos.Stores,
 		)
 
-		if fixingNormal.toAdd > 0 {
-			normalStats.toAdd[shardID] = fixingNormal.toAdd
+		normalStats.toStart = append(normalStats.toStart, toStartNormal...)
+		nonVotingStats.toStart = append(nonVotingStats.toStart, toStartNonVoting...)
+		record, known := recordForShard(shardID, cluster.LogShards)
+		if !known || record.NumberOfReplicas == 0 {
+			continue
 		}
-		if fixingNonVoting.toAdd > 0 {
-			nonVotingStats.toAdd[shardID] = fixingNonVoting.toAdd
+		fixingNormal, fixingNonVoting := planRepair(record, nonVotingReplicaNum, shardInfo, expired, infos.Stores)
+		toRemoveNormal := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.Replicas)
+		toRemoveNonVoting := getReplicasToRemove(shardID, shardInfo.NonVotingReplicas, fixingNonVoting.Replicas)
+
+		if fixingNormal.ToAdd > 0 {
+			normalStats.toAdd[shardID] = fixingNormal.ToAdd
+		}
+		if fixingNonVoting.ToAdd > 0 {
+			nonVotingStats.toAdd[shardID] = fixingNonVoting.ToAdd
 		}
 		if len(toRemoveNormal) > 0 {
 			normalStats.toRemove[shardID] = toRemoveNormal
@@ -260,8 +110,6 @@ func parseLogShards(
 		if len(toRemoveNonVoting) > 0 {
 			nonVotingStats.toRemove[shardID] = toRemoveNonVoting
 		}
-		normalStats.toStart = append(normalStats.toStart, toStartNormal...)
-		nonVotingStats.toStart = append(nonVotingStats.toStart, toStartNonVoting...)
 	}
 	// Check zombies
 	for uuid, storeInfo := range infos.Stores {
@@ -302,39 +150,7 @@ func parseLogStores(cfg hakeeper.Config, infos pb.LogState, currentTick uint64) 
 	return working, expired
 }
 
-// getRecord returns the LogShardRecord with the given shardID.
-func getRecord(shardID uint64, LogShards []metadata.LogShardRecord) metadata.LogShardRecord {
-	for _, record := range LogShards {
-		if record.ShardID == shardID {
-			return record
-		}
-	}
-	return metadata.LogShardRecord{}
-}
-
-// sortedReplicaID returns a sorted replica id slice with leader at last.
-// The first <expected-current> replicas will be removed as current replica
-// num is larger than expected. So we put the leader replica at last to make
-// sure that no leader election happened if replicas are removed.
-func sortedReplicaID(replicas map[uint64]string, leaderID uint64) []uint64 {
-	var exist bool
-	idSlice := make([]uint64, 0, len(replicas))
-	for id := range replicas {
-		if id != leaderID {
-			idSlice = append(idSlice, id)
-		} else {
-			exist = true
-		}
-	}
-	slices.Sort(idSlice)
-	if exist {
-		idSlice = append(idSlice, leaderID)
-	}
-	return idSlice
-}
-
-// replicaStarted checks if a replica is started in LogReplicaInfo.
-func replicaStarted(shardID uint64, replicas []pb.LogReplicaInfo) bool {
+func shardReported(shardID uint64, replicas []pb.LogReplicaInfo) bool {
 	for _, r := range replicas {
 		if r.ShardID == shardID {
 			return true

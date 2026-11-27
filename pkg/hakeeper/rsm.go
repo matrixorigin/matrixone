@@ -788,12 +788,12 @@ func coalescibleReplicaChange(serviceType pb.ServiceType, change *pb.ConfigChang
 }
 
 func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
-	return s.getCommandBatchFiltered(uuid, false)
+	return s.getCommandBatchFiltered(uuid, nil)
 }
 
 func (s *stateMachine) getCommandBatchFiltered(
 	uuid string,
-	filterHAKeeperAdmissions bool,
+	hb *pb.LogStoreHeartbeat,
 ) sm.Result {
 	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
 		deliver := make([]pb.ScheduleCommand, 0, len(batch.Commands))
@@ -811,16 +811,22 @@ func (s *stateMachine) getCommandBatchFiltered(
 			if applied {
 				continue
 			}
-			if (filterHAKeeperAdmissions && !s.logScheduleCommandDeliverable(cmd)) || !s.prepareCatalogSchedule(&cmd) {
+			if (hb != nil && !s.logScheduleCommandDeliverable(cmd)) || !s.prepareCatalogSchedule(&cmd) {
 				pending = append(pending, cmd)
 				if pendingIDs != nil {
 					pendingIDs = append(pendingIDs, batch.CommandIDs[i])
 				}
 				continue
 			}
-			deliver = append(deliver, cmd)
-			if deliverIDs != nil {
-				deliverIDs = append(deliverIDs, batch.CommandIDs[i])
+			delivery, allowed := cmd, true
+			if hb != nil {
+				delivery, allowed = s.logStartForDelivery(cmd, hb)
+			}
+			if allowed {
+				deliver = append(deliver, delivery)
+				if deliverIDs != nil {
+					deliverIDs = append(deliverIDs, batch.CommandIDs[i])
+				}
 			}
 			if retryable {
 				pending = append(pending, cmd)
@@ -849,6 +855,48 @@ func (s *stateMachine) getCommandBatchFiltered(
 	}
 	return sm.Result{}
 
+}
+
+// logStartForDelivery binds an outgoing Start to observed membership without rewriting queued work.
+func (s *stateMachine) logStartForDelivery(cmd pb.ScheduleCommand, hb *pb.LogStoreHeartbeat) (pb.ScheduleCommand, bool) {
+	change := cmd.ConfigChange
+	if cmd.ServiceType != pb.LogService || change == nil {
+		return cmd, true
+	}
+	if change.Replica.ShardID == DefaultHAKeeperShardID &&
+		(cmd.CatalogMetadataStart != nil || s.state.CatalogMetadataBarrierRequiredProtocolVersion != 0) {
+		return cmd, true
+	}
+	if change.ChangeType != pb.StartReplica && change.ChangeType != pb.StartNonVotingReplica {
+		return cmd, true
+	}
+	if cmd.UUID != hb.UUID || change.Replica.UUID != hb.UUID {
+		return cmd, false
+	}
+	shard, known := s.state.LogState.Shards[change.Replica.ShardID]
+	if !known || shard.Epoch == 0 {
+		return cmd, !cmd.Bootstrapping || s.state.State == pb.HAKeeperBootstrapCommandsReceived
+	}
+	if cmd.Bootstrapping && change.ChangeType == pb.StartReplica &&
+		shard.Epoch < uint64(len(change.InitialMembers)) {
+		// A majority can be reported before the last initial AddNode.
+		active := s.state.State == pb.HAKeeperBootstrapCommandsReceived || s.state.State == pb.HAKeeperRunning
+		return cmd, active && pb.IsInitialMembershipPrefix(change.InitialMembers, shard.Replicas, shard.NonVotingReplicas, shard.Epoch)
+	}
+	members := shard.Replicas
+	if change.ChangeType == pb.StartNonVotingReplica {
+		members = shard.NonVotingReplicas
+	}
+	if target, ok := members[change.Replica.ReplicaID]; !ok || target != cmd.UUID {
+		return cmd, false
+	}
+	if incarnation := shard.ReplicaStoreIncarnations[change.Replica.ReplicaID]; incarnation != "" && incarnation != hb.StoreIncarnation {
+		return cmd, false
+	}
+	confirmed := *change
+	confirmed.Replica.Epoch = shard.Epoch
+	cmd.ConfigChange = &confirmed
+	return cmd, true
 }
 
 // hakeeperAdmissionTarget returns the LogStore that a schedule command would
@@ -1135,7 +1183,7 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) (result sm.Result) {
 			delete(s.state.CommandDeliveryReady, hb.UUID)
 		}
 	}
-	return s.attachPendingCatalogStart(s.getCommandBatchFiltered(hb.UUID, true), hb)
+	return s.attachPendingCatalogStart(s.getCommandBatchFiltered(hb.UUID, &hb), hb)
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {

@@ -76,9 +76,7 @@ type Service struct {
 	haClient    LogHAKeeperClient
 	fileService fileservice.FileService
 	heartbeatC  chan struct{}
-	shutdownC   chan struct{}
-
-	options struct {
+	options     struct {
 		// morpc client would filter remote backend via this
 		backendFilter func(msg morpc.Message, backendAddr string) bool
 	}
@@ -122,7 +120,6 @@ func NewService(
 		stopper:     stopper.NewStopper("log-service"),
 		fileService: fileService,
 		heartbeatC:  make(chan struct{}, 1),
-		shutdownC:   shutdownC,
 	}
 	constructed := false
 	defer func() {

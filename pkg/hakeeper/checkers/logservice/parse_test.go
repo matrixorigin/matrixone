@@ -26,6 +26,19 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestStartWaitsForReportedLocalShard(t *testing.T) {
+	replicas := map[uint64]string{4: "store"}
+	stores := map[string]pb.LogStoreInfo{
+		"store": {Replicas: []pb.LogReplicaInfo{{
+			LogShardInfo: pb.LogShardInfo{ShardID: 1}, ReplicaID: 3, IsNonVoting: true,
+		}}},
+	}
+	assert.Empty(t, getReplicasToStart(1, replicas, nil, stores), "a different local ID still occupies the shard")
+	assert.Len(t, getReplicasToStart(2, replicas, nil, stores), 1, "other shards must be independent")
+	stores["store"] = pb.LogStoreInfo{}
+	assert.Equal(t, []replica{{uuid: "store", shardID: 1, replicaID: 4}}, getReplicasToStart(1, replicas, nil, stores))
+}
+
 func TestParseLogShardsFencesChangedStoreIncarnation(t *testing.T) {
 	cluster := pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{
 		ShardID:          1,
@@ -88,8 +101,8 @@ func TestFixedLogShardInfo(t *testing.T) {
 		info          pb.LogShardInfo
 		expiredStores []string
 
-		expectedNormal    *fixingShard
-		expectedNonVoting *fixingShard
+		expectedNormal    *repairPlan
+		expectedNonVoting *repairPlan
 	}{
 		{
 			desc: "normal case",
@@ -101,14 +114,12 @@ func TestFixedLogShardInfo(t *testing.T) {
 				ShardID:  1,
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 			},
-			expectedNormal: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-				toAdd:    0,
+			expectedNormal: &repairPlan{
+				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+				ToAdd:    0,
 			},
-			expectedNonVoting: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{},
+			expectedNonVoting: &repairPlan{
+				Replicas: map[uint64]string{},
 			},
 		},
 		{
@@ -121,14 +132,12 @@ func TestFixedLogShardInfo(t *testing.T) {
 				ShardID:  1,
 				Replicas: map[uint64]string{1: "a", 2: "b"},
 			},
-			expectedNormal: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{1: "a", 2: "b"},
-				toAdd:    1,
+			expectedNormal: &repairPlan{
+				Replicas: map[uint64]string{1: "a", 2: "b"},
+				ToAdd:    1,
 			},
-			expectedNonVoting: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{},
+			expectedNonVoting: &repairPlan{
+				Replicas: map[uint64]string{},
 			},
 		},
 		{
@@ -142,14 +151,12 @@ func TestFixedLogShardInfo(t *testing.T) {
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 				LeaderID: 2,
 			},
-			expectedNormal: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{2: "b"},
-				toAdd:    0,
+			expectedNormal: &repairPlan{
+				Replicas: map[uint64]string{2: "b"},
+				ToAdd:    0,
 			},
-			expectedNonVoting: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{},
+			expectedNonVoting: &repairPlan{
+				Replicas: map[uint64]string{},
 			},
 		},
 		{
@@ -163,15 +170,13 @@ func TestFixedLogShardInfo(t *testing.T) {
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 			},
 			nonVotingReplicaNum: 3,
-			expectedNormal: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-				toAdd:    0,
+			expectedNormal: &repairPlan{
+				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+				ToAdd:    0,
 			},
-			expectedNonVoting: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{},
-				toAdd:    3,
+			expectedNonVoting: &repairPlan{
+				Replicas: map[uint64]string{},
+				ToAdd:    3,
 			},
 		},
 		{
@@ -186,15 +191,13 @@ func TestFixedLogShardInfo(t *testing.T) {
 				NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
 			},
 			nonVotingReplicaNum: 3,
-			expectedNormal: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-				toAdd:    0,
+			expectedNormal: &repairPlan{
+				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+				ToAdd:    0,
 			},
-			expectedNonVoting: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
-				toAdd:    0,
+			expectedNonVoting: &repairPlan{
+				Replicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
+				ToAdd:    0,
 			},
 		},
 		{
@@ -209,15 +212,13 @@ func TestFixedLogShardInfo(t *testing.T) {
 				NonVotingReplicas: map[uint64]string{4: "d", 5: "e"},
 			},
 			nonVotingReplicaNum: 3,
-			expectedNormal: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-				toAdd:    0,
+			expectedNormal: &repairPlan{
+				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+				ToAdd:    0,
 			},
-			expectedNonVoting: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{4: "d", 5: "e"},
-				toAdd:    1,
+			expectedNonVoting: &repairPlan{
+				Replicas: map[uint64]string{4: "d", 5: "e"},
+				ToAdd:    1,
 			},
 		},
 		{
@@ -232,22 +233,20 @@ func TestFixedLogShardInfo(t *testing.T) {
 				NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f", 7: "g"},
 			},
 			nonVotingReplicaNum: 3,
-			expectedNormal: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-				toAdd:    0,
+			expectedNormal: &repairPlan{
+				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+				ToAdd:    0,
 			},
-			expectedNonVoting: &fixingShard{
-				shardID:  1,
-				replicas: map[uint64]string{5: "e", 6: "f", 7: "g"},
-				toAdd:    0,
+			expectedNonVoting: &repairPlan{
+				Replicas: map[uint64]string{5: "e", 6: "f", 7: "g"},
+				ToAdd:    0,
 			},
 		},
 	}
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		normal, nonVoting := fixedLogShardInfo(c.record, c.nonVotingReplicaNum, c.info, c.expiredStores)
+		normal, nonVoting := planRepair(c.record, c.nonVotingReplicaNum, c.info, c.expiredStores, nil)
 		assert.Equal(t, c.expectedNormal, normal)
 		assert.Equal(t, c.expectedNonVoting, nonVoting)
 	}
@@ -1088,6 +1087,29 @@ func TestCollectStats(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
+		// Older fixtures omitted replica IDs and roles from healthy reports.
+		// Populate them from this case's configured members; unmatched reports
+		// retain their zombie identity and remain part of the original oracle.
+		for uuid, store := range c.infos.Stores {
+			for i := range store.Replicas {
+				r := &store.Replicas[i]
+				shard := c.infos.Shards[r.ShardID]
+				if r.ReplicaID == 0 {
+					for id, member := range shard.Replicas {
+						if member == uuid {
+							r.ReplicaID = id
+						}
+					}
+					for id, member := range shard.NonVotingReplicas {
+						if member == uuid {
+							r.ReplicaID = id
+						}
+					}
+				}
+				r.IsNonVoting = shard.NonVotingReplicas[r.ReplicaID] == uuid
+			}
+			c.infos.Stores[uuid] = store
+		}
 		normal, nonVoting := parseLogShards(c.cluster, c.infos, c.expired, c.nonVotingReplicaNum)
 		assert.Equal(t, c.expectedNormal, normal)
 		assert.Equal(t, c.expectedNonVoting, nonVoting)

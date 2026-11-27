@@ -229,7 +229,13 @@ func (l *store) cleanupStaleReplica(
 ) {
 	// Fence new exports before checking whether an admitted request can still
 	// publish into this replica's export directory.
-	l.markReplicaRetiring(shardID, replicaID)
+	l.mu.Lock()
+	if l.localReplicaPresent(shardID, replicaID) {
+		l.mu.Unlock()
+		return
+	}
+	l.markReplicaRetiringLocked(shardID, replicaID)
+	l.mu.Unlock()
 	if err := l.snapshotMgr.RemoveReplica(shardID, replicaID); err != nil {
 		if errors.Is(err, errSnapshotExportPending) {
 			return

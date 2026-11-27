@@ -329,7 +329,7 @@ func TestGetShardMembership_IncludesExpiredReplicaAddresses(t *testing.T) {
 		assert.True(t, includeExpiredReplicaAddresses)
 		assert.False(t, excludeHardDownReplicaAddresses)
 		return pb.ShardInfoQueryResult{
-			ShardID: shardID,
+			ShardID: shardID, Epoch: 7,
 			Replicas: map[uint64]pb.ReplicaInfo{
 				1: {UUID: "uuid-1", ServiceAddress: "10.0.0.1:1"},
 				2: {UUID: "uuid-2", ServiceAddress: "10.0.0.2:1"},
@@ -337,11 +337,12 @@ func TestGetShardMembership_IncludesExpiredReplicaAddresses(t *testing.T) {
 		}, true, nil
 	}
 
-	members, ok, err := getShardMembership(context.Background(), "", "doesnt-matter", 3)
+	members, epoch, ok, err := getShardMembership(context.Background(), "", "doesnt-matter", 3)
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "10.0.0.1:1", members[1])
-	assert.Equal(t, "10.0.0.2:1", members[2])
+	require.Equal(t, uint64(7), epoch)
+	assert.Equal(t, "uuid-1", members[1])
+	assert.Equal(t, "uuid-2", members[2])
 }
 
 func TestServiceGetShardInfoOmitsExpiredReplicasByDefault(t *testing.T) {

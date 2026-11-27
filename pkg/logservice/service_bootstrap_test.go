@@ -529,8 +529,8 @@ func TestServiceBootstrap(t *testing.T) {
 			// Seed the skippedZombies set as if startReplicas had already
 			// classified this HAKeeper replica as removed.
 			s.store.mu.Lock()
-			s.store.mu.skippedZombies = map[zombieKey]struct{}{
-				{shardID: hakeeper.DefaultHAKeeperShardID, replicaID: replicaID}: {},
+			s.store.mu.skippedZombies = map[zombieKey]startupAbsence{
+				{shardID: hakeeper.DefaultHAKeeperShardID, replicaID: replicaID}: {retired: true},
 			}
 			s.store.mu.Unlock()
 
@@ -580,12 +580,12 @@ func TestBootstrapChecksInitialReplicaMissingFromMetadata(t *testing.T) {
 	original := getShardMembershipFn
 	t.Cleanup(func() { getShardMembershipFn = original })
 	var checked []uint64
-	getShardMembershipFn = func(_ context.Context, _, _ string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(_ context.Context, _, _ string, shardID uint64) (map[uint64]string, uint64, bool, error) {
 		checked = append(checked, shardID)
 		if shardID == hakeeper.DefaultHAKeeperShardID {
-			return map[uint64]string{newID: "10.0.0.2:32001"}, true, nil
+			return map[uint64]string{newID: "10.0.0.2:32001"}, 1, true, nil
 		}
-		return map[uint64]string{2: "10.0.0.2:32001"}, true, nil
+		return map[uint64]string{2: "10.0.0.2:32001"}, 1, true, nil
 	}
 
 	restarted, err := NewService(cfg, files, nil)
@@ -662,8 +662,8 @@ func TestColdBootstrapWithUnknownMembership(t *testing.T) {
 	cfg.HAKeeperClientConfig.ServiceAddresses = []string{"10.0.0.1:32001"}
 	original := getShardMembershipFn
 	t.Cleanup(func() { getShardMembershipFn = original })
-	getShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, bool, error) {
-		return nil, false, nil
+	getShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, uint64, bool, error) {
+		return nil, 1, false, nil
 	}
 	s, err := NewService(cfg, newFS(), nil)
 	require.NoError(t, err)

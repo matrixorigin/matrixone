@@ -478,3 +478,25 @@ func (l *Locality) Format() string {
 	}
 	return s[:len(s)-1]
 }
+
+// IsInitialMembershipPrefix checks the partial ordered voter configuration during bootstrap.
+func IsInitialMembershipPrefix(initial, voters, nonVoters map[uint64]string, epoch uint64) bool {
+	if epoch == 0 || epoch >= uint64(len(initial)) || epoch != uint64(len(voters)) || len(nonVoters) != 0 {
+		return false
+	}
+	var last uint64
+	for id, store := range voters {
+		if owner, ok := initial[id]; !ok || owner != store {
+			return false
+		}
+		last = max(last, id)
+	}
+	for id := range initial {
+		if id < last {
+			if _, ok := voters[id]; !ok {
+				return false
+			}
+		}
+	}
+	return true
+}

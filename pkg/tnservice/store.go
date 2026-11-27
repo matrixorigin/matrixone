@@ -127,7 +127,6 @@ type store struct {
 	moCluster           clusterservice.MOCluster
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
-	shutdownC           chan struct{}
 	closeOnce           sync.Once
 	closeErr            error
 	quiesced            atomic.Bool
@@ -137,11 +136,9 @@ type store struct {
 	commandPollWakeup   chan struct{}
 	heartbeatWakeup     chan struct{}
 	commandMu           sync.Mutex
-	shutdownAckMu       sync.Mutex
 	lastCommandBatchID  uint64
 	ackedCommandBatchID atomic.Uint64
 	appliedCommandIDs   map[logservice.ScheduleCommandIdentity]struct{}
-	shutdownBatchID     atomic.Uint64
 	lastCommandHash     [32]byte
 	legacyDedupeArmed   bool
 
@@ -259,7 +256,7 @@ func NewService(
 	cfg *Config,
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
-	shutdownC chan struct{},
+	_ chan struct{},
 	publish func(Service),
 	opts ...Option) (result Service, err error) {
 	if err := cfg.Validate(); err != nil {
@@ -287,7 +284,6 @@ func NewService(
 		rt:                  rt,
 		fileService:         fileService,
 		metadataFileService: metadataFS,
-		shutdownC:           shutdownC,
 		heartbeatWakeup:     make(chan struct{}, 1),
 		addressMgr:          address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 	}
