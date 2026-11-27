@@ -40,15 +40,15 @@ func TestLogMembershipTargetsRequireReportedCurrentAndProjectedMajority(t *testi
 	expired.Tick = 0
 	stores["b"] = expired
 	remove := pb.Replica{ShardID: 1, ReplicaID: 1, UUID: "a", Epoch: 5}
-	require.Equal(t, []string{"c", "d", "e"}, membershipTargets(cfg, state, tick, pb.RemoveReplica, remove),
+	require.Equal(t, []string{"c", "d", "e"}, hakeeper.LogMembershipTargets(cfg, state, tick, pb.RemoveReplica, remove),
 		"the executor must be a reporting retained voter, not the first configured UUID")
 	remove.ReplicaID, remove.UUID = 3, "c"
-	require.Empty(t, membershipTargets(cfg, state, tick, pb.RemoveReplica, remove),
+	require.Empty(t, hakeeper.LogMembershipTargets(cfg, state, tick, pb.RemoveReplica, remove),
 		"removing a live voter would leave less than the projected majority")
 	add := pb.Replica{ShardID: 1, ReplicaID: 6, UUID: "f", Epoch: 5}
-	require.Empty(t, membershipTargets(cfg, state, tick, pb.AddReplica, add),
+	require.Empty(t, hakeeper.LogMembershipTargets(cfg, state, tick, pb.AddReplica, add),
 		"an unstarted sixth voter raises the majority")
-	require.Equal(t, []string{"c", "d", "e"}, membershipTargets(cfg, state, tick, pb.AddNonVotingReplica, add))
+	require.Equal(t, []string{"c", "d", "e"}, hakeeper.LogMembershipTargets(cfg, state, tick, pb.AddNonVotingReplica, add))
 
 	// A live store reporting another replica, role, or disk generation cannot
 	// be counted as an available voting member.
@@ -56,23 +56,23 @@ func TestLogMembershipTargetsRequireReportedCurrentAndProjectedMajority(t *testi
 	c.Replicas[0].ReplicaID = 99
 	stores["c"] = c
 	remove.ReplicaID, remove.UUID = 1, "a"
-	require.Empty(t, membershipTargets(cfg, state, tick, pb.RemoveReplica, remove))
-	require.Empty(t, membershipTargets(cfg, state, tick, pb.AddNonVotingReplica, add))
+	require.Empty(t, hakeeper.LogMembershipTargets(cfg, state, tick, pb.RemoveReplica, remove))
+	require.Empty(t, hakeeper.LogMembershipTargets(cfg, state, tick, pb.AddNonVotingReplica, add))
 	c.Replicas[0].ReplicaID = 3
 	c.Replicas[0].IsNonVoting = true
 	stores["c"] = c
-	require.Empty(t, membershipTargets(cfg, state, tick, pb.RemoveReplica, remove))
+	require.Empty(t, hakeeper.LogMembershipTargets(cfg, state, tick, pb.RemoveReplica, remove))
 	c.Replicas[0].IsNonVoting = false
 	c.StoreIncarnation = "new"
 	stores["c"] = c
 	shard.ReplicaStoreIncarnations = map[uint64]string{3: "old"}
 	state.Shards[1] = shard
-	require.Empty(t, membershipTargets(cfg, state, tick, pb.RemoveReplica, remove))
+	require.Empty(t, hakeeper.LogMembershipTargets(cfg, state, tick, pb.RemoveReplica, remove))
 	c.StoreIncarnation = "old"
 	stores["c"] = c
-	require.Equal(t, []string{"c", "d", "e"}, membershipTargets(cfg, state, tick, pb.RemoveReplica, remove))
+	require.Equal(t, []string{"c", "d", "e"}, hakeeper.LogMembershipTargets(cfg, state, tick, pb.RemoveReplica, remove))
 	remove.Epoch--
-	require.Empty(t, membershipTargets(cfg, state, tick, pb.RemoveReplica, remove))
+	require.Empty(t, hakeeper.LogMembershipTargets(cfg, state, tick, pb.RemoveReplica, remove))
 }
 
 func TestHAKeeperMembershipTargetsAllowStableReplacement(t *testing.T) {
@@ -88,16 +88,16 @@ func TestHAKeeperMembershipTargetsAllowStableReplacement(t *testing.T) {
 	}
 	state := pb.LogState{Shards: map[uint64]pb.LogShardInfo{0: shard}, Stores: stores}
 	remove := pb.Replica{ShardID: 0, ReplicaID: 3, UUID: "c", Epoch: 5}
-	require.Equal(t, []string{"a", "b"}, membershipTargets(cfg, state, tick, pb.RemoveReplica, remove))
+	require.Equal(t, []string{"a", "b"}, hakeeper.LogMembershipTargets(cfg, state, tick, pb.RemoveReplica, remove))
 
 	shard.Epoch++
 	delete(shard.Replicas, 3)
 	state.Shards[0] = shard
 	add := pb.Replica{ShardID: 0, ReplicaID: 4, UUID: "d", Epoch: 6}
-	require.Equal(t, []string{"a", "b"}, membershipTargets(cfg, state, tick, pb.AddReplica, add))
+	require.Equal(t, []string{"a", "b"}, hakeeper.LogMembershipTargets(cfg, state, tick, pb.AddReplica, add))
 	b := stores["b"]
 	b.Tick = 0
 	stores["b"] = b
-	require.Empty(t, membershipTargets(cfg, state, tick, pb.AddReplica, add),
+	require.Empty(t, hakeeper.LogMembershipTargets(cfg, state, tick, pb.AddReplica, add),
 		"an old or projected majority cannot be inferred from a single reporter")
 }

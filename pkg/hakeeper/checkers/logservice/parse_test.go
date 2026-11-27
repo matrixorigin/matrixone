@@ -101,8 +101,8 @@ func TestFixedLogShardInfo(t *testing.T) {
 		info          pb.LogShardInfo
 		expiredStores []string
 
-		expectedNormal    *repairPlan
-		expectedNonVoting *repairPlan
+		expectedNormal    *hakeeper.LogRepairPlan
+		expectedNonVoting *hakeeper.LogRepairPlan
 	}{
 		{
 			desc: "normal case",
@@ -114,11 +114,11 @@ func TestFixedLogShardInfo(t *testing.T) {
 				ShardID:  1,
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 			},
-			expectedNormal: &repairPlan{
+			expectedNormal: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 				ToAdd:    0,
 			},
-			expectedNonVoting: &repairPlan{
+			expectedNonVoting: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{},
 			},
 		},
@@ -132,11 +132,11 @@ func TestFixedLogShardInfo(t *testing.T) {
 				ShardID:  1,
 				Replicas: map[uint64]string{1: "a", 2: "b"},
 			},
-			expectedNormal: &repairPlan{
+			expectedNormal: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{1: "a", 2: "b"},
 				ToAdd:    1,
 			},
-			expectedNonVoting: &repairPlan{
+			expectedNonVoting: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{},
 			},
 		},
@@ -151,11 +151,11 @@ func TestFixedLogShardInfo(t *testing.T) {
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 				LeaderID: 2,
 			},
-			expectedNormal: &repairPlan{
+			expectedNormal: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{2: "b"},
 				ToAdd:    0,
 			},
-			expectedNonVoting: &repairPlan{
+			expectedNonVoting: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{},
 			},
 		},
@@ -170,11 +170,11 @@ func TestFixedLogShardInfo(t *testing.T) {
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 			},
 			nonVotingReplicaNum: 3,
-			expectedNormal: &repairPlan{
+			expectedNormal: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 				ToAdd:    0,
 			},
-			expectedNonVoting: &repairPlan{
+			expectedNonVoting: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{},
 				ToAdd:    3,
 			},
@@ -191,11 +191,11 @@ func TestFixedLogShardInfo(t *testing.T) {
 				NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
 			},
 			nonVotingReplicaNum: 3,
-			expectedNormal: &repairPlan{
+			expectedNormal: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 				ToAdd:    0,
 			},
-			expectedNonVoting: &repairPlan{
+			expectedNonVoting: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
 				ToAdd:    0,
 			},
@@ -212,11 +212,11 @@ func TestFixedLogShardInfo(t *testing.T) {
 				NonVotingReplicas: map[uint64]string{4: "d", 5: "e"},
 			},
 			nonVotingReplicaNum: 3,
-			expectedNormal: &repairPlan{
+			expectedNormal: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 				ToAdd:    0,
 			},
-			expectedNonVoting: &repairPlan{
+			expectedNonVoting: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{4: "d", 5: "e"},
 				ToAdd:    1,
 			},
@@ -233,11 +233,11 @@ func TestFixedLogShardInfo(t *testing.T) {
 				NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f", 7: "g"},
 			},
 			nonVotingReplicaNum: 3,
-			expectedNormal: &repairPlan{
+			expectedNormal: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 				ToAdd:    0,
 			},
-			expectedNonVoting: &repairPlan{
+			expectedNonVoting: &hakeeper.LogRepairPlan{
 				Replicas: map[uint64]string{5: "e", 6: "f", 7: "g"},
 				ToAdd:    0,
 			},
@@ -246,7 +246,7 @@ func TestFixedLogShardInfo(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		normal, nonVoting := planRepair(c.record, c.nonVotingReplicaNum, c.info, c.expiredStores, nil)
+		normal, nonVoting := hakeeper.PlanLogRepair(c.record, c.nonVotingReplicaNum, c.info, c.expiredStores, nil)
 		assert.Equal(t, c.expectedNormal, normal)
 		assert.Equal(t, c.expectedNonVoting, nonVoting)
 	}

@@ -75,7 +75,7 @@ func TestLogHeartbeatAuthorizesStartsWithoutChangingDeliveryState(t *testing.T) 
 	reference.state.Index = 1
 	reference.state.LogState.Update(hb, reference.state.Tick)
 	reference.observeCatalogStartResult(hb)
-	reference.attachPendingCatalogStart(reference.getCommandBatchFiltered(store, nil), hb)
+	reference.attachPendingCatalogStart(reference.getCommandBatchFiltered(store, nil, false), hb)
 	require.True(t, proto.Equal(&reference.state, &machine.state), "response filtering must not alter replicated state")
 	pending := machine.state.ScheduleCommands[store]
 	require.Equal(t, []pb.ScheduleCommand{bootstrap}, pending.Commands)

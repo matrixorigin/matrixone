@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -178,7 +179,7 @@ func TestFilterLocality(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		r := eligibleLocality(c.store, c.required)
+		r := hakeeper.LogStoreEligibleLocality(c.store, c.required)
 		assert.Equal(t, c.expect, r)
 	}
 }

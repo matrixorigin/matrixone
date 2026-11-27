@@ -841,14 +841,25 @@ func (s *Service) handleAddLogShard(cmd pb.ScheduleCommand) {
 }
 
 func (s *Service) handleBootstrapShard(cmd pb.ScheduleCommand) {
+	start := cmd.BootstrapShard
+	if cmd.UUID != s.ID() || start.Join || start.InitialMembers[start.ReplicaID] != s.ID() {
+		return
+	}
+	replica := pb.Replica{UUID: cmd.UUID, ShardID: start.ShardID, ReplicaID: start.ReplicaID}
+	persisted := s.store.nh.HasNodeInfo(start.ShardID, start.ReplicaID)
+	if !s.store.canStartScheduledReplica(replica, false, persisted, start.InitialMembers) {
+		s.runtime.Logger().Warn("ignoring bootstrap without current replica membership",
+			zap.Uint64("shard ID", start.ShardID), zap.Uint64("replicaID", start.ReplicaID))
+		return
+	}
 	if err := s.store.startReplica(
-		cmd.BootstrapShard.ShardID,
-		cmd.BootstrapShard.ReplicaID,
-		cmd.BootstrapShard.InitialMembers,
-		cmd.BootstrapShard.Join,
+		start.ShardID,
+		start.ReplicaID,
+		start.InitialMembers,
+		false,
 	); err != nil {
 		s.runtime.Logger().Error("failed to bootstrap shard",
-			zap.Uint64("shard ID", cmd.BootstrapShard.ShardID),
+			zap.Uint64("shard ID", start.ShardID),
 			zap.Error(err),
 		)
 	}

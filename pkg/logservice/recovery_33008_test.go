@@ -27,12 +27,22 @@ import (
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
 
 // A real disk-backed three-store Raft group. The retired store never returns:
 // a surviving store must reopen its existing replica from an actual command.
 func TestRecoverExistingReplicaWithoutRetiredStore(t *testing.T) {
+	testRecoverExistingReplicaWithoutRetiredStore(t, false)
+}
+
+func TestRecoverConfiguredReplicaAfterTentativeSkipAndTruncation(t *testing.T) {
+	testRecoverExistingReplicaWithoutRetiredStore(t, true)
+}
+
+func testRecoverExistingReplicaWithoutRetiredStore(t *testing.T, staleStartupView bool) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
 	defer cancel()
 	var configs [3]Config
@@ -118,11 +128,27 @@ func TestRecoverExistingReplicaWithoutRetiredStore(t *testing.T) {
 	require.Equal(t, dataMembers, state.LogState.Shards[1].Replicas)
 	require.NoError(t, client.Close())
 
-	// Preserve C's Dragonboat files while modeling missing MO replica metadata.
+	// In the orphan case, preserve C's native files without MO metadata. In
+	// the configured case, the only answering data-shard peer has stale
+	// membership. Let only the startup read see that old view.
 	require.NoError(t, b.Close())
 	services[1] = nil
 	require.NoError(t, c.store.stopReplica(1, 13))
-	c.store.removeMetadata(1, 13)
+	if staleStartupView {
+		oldMembership := getShardMembershipFn
+		t.Cleanup(func() { getShardMembershipFn = oldMembership })
+		getShardMembershipFn = func(ctx context.Context, sid, address string, shard uint64) (map[uint64]string, uint64, bool, error) {
+			if sid == configs[2].UUID && shard == 1 {
+				if address == configs[0].LogServiceServiceAddr() {
+					return map[uint64]string{11: a.ID(), 12: b.ID()}, 2, true, nil
+				}
+				return nil, 0, false, nil
+			}
+			return oldMembership(ctx, sid, address, shard)
+		}
+	} else {
+		c.store.removeMetadata(1, 13)
+	}
 	require.NoError(t, c.Close())
 	services[2] = nil
 	open(2)
@@ -130,6 +156,11 @@ func TestRecoverExistingReplicaWithoutRetiredStore(t *testing.T) {
 	require.True(t, c.store.nh.HasNodeInfo(1, 13))
 	_, _, _, err = c.store.nh.GetLeaderID(1)
 	require.ErrorIs(t, err, dragonboat.ErrShardNotFound)
+	if staleStartupView {
+		require.True(t, c.store.isSkippedZombie(1, 13), "the persisted replica must actually be skipped")
+		require.NoError(t, c.store.processTruncateLog(ctx))
+		require.False(t, c.store.localReplicaPresent(1, 13))
+	}
 	attempt, stop := context.WithTimeout(ctx, 500*time.Millisecond)
 	_, err = a.store.nh.SyncPropose(attempt, a.store.nh.GetNoOPSession(1), getTestUserEntry())
 	stop()
@@ -173,7 +204,17 @@ func TestRecoverExistingReplicaWithoutRetiredStore(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, delivered.Commands, 2)
 	require.NotZero(t, delivered.Commands[1].ConfigChange.Replica.Epoch)
+	var beforeStart []metadata.LogShard
+	if staleStartupView {
+		require.Greater(t, delivered.Commands[1].ConfigChange.Replica.Epoch, uint64(2))
+		beforeStart = c.store.getShards()
+	}
 	c.handleCommands(delivered.Commands)
+	if staleStartupView {
+		require.True(t, c.store.localReplicaPresent(1, 13), "truncation must not fence a confirmed newer Start")
+		require.Contains(t, beforeStart, metadata.LogShard{LogShardRecord: metadata.LogShardRecord{ShardID: 1}, ReplicaID: 13},
+			"truncation must not retire a configured replica based on an older gossip view")
+	}
 	readMembership(c, 1, dataMembers)
 	var next uint64
 	waitForRecovery(t, ctx, "post-recovery write", 10*time.Second, 500*time.Millisecond, func(attempt context.Context) bool {
@@ -185,6 +226,21 @@ func TestRecoverExistingReplicaWithoutRetiredStore(t *testing.T) {
 		lsn, err := c.store.getLatestLsn(attempt, 1)
 		return err == nil && lsn >= next
 	})
+	if staleStartupView {
+		require.False(t, c.store.isSkippedZombie(1, 13), "the confirmed Start resolves the tentative skip")
+		// An actual retirement still fences the exact ID, and a retry of the
+		// previously authorized Start cannot undo it.
+		kill := pb.ScheduleCommand{UUID: c.ID(), ServiceType: pb.LogService,
+			ConfigChange: &pb.ConfigChange{ChangeType: pb.KillZombie, Replica: pb.Replica{
+				ShardID: 1, ReplicaID: 13, UUID: c.ID(),
+			}}}
+		c.handleCommands([]pb.ScheduleCommand{kill})
+		require.False(t, c.store.localReplicaPresent(1, 13))
+		require.True(t, c.store.nh.HasNodeInfo(1, 13), "the fence must be tested with native data still present")
+		require.Equal(t, int64(-1), c.store.getReplicaID(1))
+		c.handleCommands(delivered.Commands)
+		require.False(t, c.store.localReplicaPresent(1, 13), "a Start cannot override a real retirement")
+	}
 }
 
 func useRecoveryRPCSocket(t *testing.T, cfg *Config) {

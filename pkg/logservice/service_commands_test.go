@@ -428,6 +428,8 @@ func TestServiceBootstrapShard(t *testing.T) {
 	}()
 
 	cmd := pb.ScheduleCommand{
+		UUID:        service.ID(),
+		ServiceType: pb.LogService,
 		BootstrapShard: &pb.BootstrapShard{
 			ShardID:   1,
 			ReplicaID: 100,

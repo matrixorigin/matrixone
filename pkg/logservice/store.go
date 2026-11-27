@@ -507,19 +507,6 @@ func (l *store) zombieCheckAddresses() []string {
 	return addresses
 }
 
-// isSkippedZombie reports whether startReplicas skipped a removed replica or
-// an older HAKeeper ID superseded by a newer local record. Bootstrap paths
-// must not start either one again.
-func (l *store) isSkippedZombie(shardID, replicaID uint64) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.mu.skippedZombies == nil {
-		return false
-	}
-	_, ok := l.mu.skippedZombies[zombieKey{shardID: shardID, replicaID: replicaID}]
-	return ok
-}
-
 func (l *store) canBootstrapHAKeeper(replicaID uint64, members map[uint64]string) bool {
 	key := zombieKey{shardID: hakeeper.DefaultHAKeeperShardID, replicaID: replicaID}
 	l.mu.Lock()
@@ -610,6 +597,12 @@ func (l *store) canStartScheduledReplica(replica pb.Replica, nonVoting, persiste
 	if shard.ConfigChangeIndex < initialSize {
 		return pb.IsInitialMembershipPrefix(initialMembers, shard.Nodes, shard.NonVotingNodes, shard.ConfigChangeIndex) &&
 			(confirmed || shard.Nodes[replicaID] == l.id())
+	}
+	if initialSize != 0 && !persisted &&
+		!pb.IsInitialMembership(initialMembers, shard.Nodes, shard.NonVotingNodes, shard.ConfigChangeIndex) {
+		// Opening native data and creating a fresh Raft genesis are different.
+		// A later configuration can authorize a join, not the old genesis.
+		return false
 	}
 	members := shard.Nodes
 	if nonVoting {
@@ -893,6 +886,7 @@ func (l *store) openDataReplicaLocked(shardID, replicaID uint64,
 	}
 	l.snapshotMgr.MarkPreviousReplicaStopped(shardID, replicaID)
 	l.addMetadataLocked(shardID, replicaID, nonVoting)
+	delete(l.mu.skippedZombies, zombieKey{shardID, replicaID})
 	return nil
 }
 
@@ -1253,7 +1247,7 @@ func handleNotHAKeeperError(ctx context.Context, err error) error {
 func (l *store) addLogStoreHeartbeat(ctx context.Context,
 	hb pb.LogStoreHeartbeat) (pb.CommandBatch, error) {
 	data := MustMarshal(&hb)
-	cmd := hakeeper.GetLogStoreHeartbeatCmd(data)
+	cmd := hakeeper.GetGuardedLogStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if result, err := l.propose(ctx, session, cmd); err != nil {
 		l.runtime.Logger().Error("propose failed", zap.Error(err))
@@ -2184,14 +2178,16 @@ func (l *store) waitHAKeeperLeaderReady(ctx context.Context, maxWait time.Durati
 
 // TODO: add test for this
 func (l *store) hakeeperTick() {
-	isLeader, _, err := l.isLeaderHAKeeper()
+	isLeader, term, err := l.isLeaderHAKeeper()
 	if err != nil {
 		l.runtime.Logger().Error("failed to get HAKeeper Leader ID", zap.Error(err))
 		return
 	}
 
 	if isLeader {
-		cmd := hakeeper.GetTickCmd()
+		cfg := l.cfg.GetHAKeeperConfig()
+		cfg.Fill()
+		cmd := hakeeper.GetTickCmdWithLogStorePolicy(term, cfg.LogStoreTimeoutTicks())
 		ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseHakeeperTick)
 		defer cancel()
 		session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)

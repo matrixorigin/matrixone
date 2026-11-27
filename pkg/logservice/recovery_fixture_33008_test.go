@@ -24,6 +24,13 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
+func (l *store) isSkippedZombie(shardID, replicaID uint64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, ok := l.mu.skippedZombies[zombieKey{shardID, replicaID}]
+	return ok
+}
+
 // waitForRecovery runs each probe synchronously so a timeout cannot leave a
 // callback using a service after test cleanup has started.
 func waitForRecovery(t *testing.T, ctx context.Context, what string, timeout, attemptTimeout time.Duration, probe func(context.Context) bool) {

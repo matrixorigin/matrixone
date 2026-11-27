@@ -481,7 +481,13 @@ func (l *Locality) Format() string {
 
 // IsInitialMembershipPrefix checks the partial ordered voter configuration during bootstrap.
 func IsInitialMembershipPrefix(initial, voters, nonVoters map[uint64]string, epoch uint64) bool {
-	if epoch == 0 || epoch >= uint64(len(initial)) || epoch != uint64(len(voters)) || len(nonVoters) != 0 {
+	return epoch < uint64(len(initial)) && IsInitialMembership(initial, voters, nonVoters, epoch)
+}
+
+// IsInitialMembership recognizes only the Raft configuration built by the
+// original AddNode entries, including the complete initial configuration.
+func IsInitialMembership(initial, voters, nonVoters map[uint64]string, epoch uint64) bool {
+	if epoch == 0 || epoch > uint64(len(initial)) || epoch != uint64(len(voters)) || len(nonVoters) != 0 {
 		return false
 	}
 	var last uint64

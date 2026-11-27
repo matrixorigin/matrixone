@@ -325,11 +325,13 @@ func (l *store) markReplicaRetiringLocked(shardID, replicaID uint64) {
 		rec := &l.mu.metadata.Shards[i]
 		if rec.ShardID == shardID && rec.ReplicaID == replicaID && !rec.Retiring {
 			rec.Retiring = true
-			if shardID == hakeeper.DefaultHAKeeperShardID || l.nh.HasNodeInfo(shardID, replicaID) {
+			key := zombieKey{shardID: shardID, replicaID: replicaID}
+			_, skipped := l.mu.skippedZombies[key]
+			if skipped || shardID == hakeeper.DefaultHAKeeperShardID || l.nh.HasNodeInfo(shardID, replicaID) {
 				if l.mu.skippedZombies == nil {
 					l.mu.skippedZombies = make(map[zombieKey]startupAbsence)
 				}
-				l.mu.skippedZombies[zombieKey{shardID: shardID, replicaID: replicaID}] = startupAbsence{retired: true}
+				l.mu.skippedZombies[key] = startupAbsence{retired: true}
 			}
 			l.mustSaveMetadata()
 			return

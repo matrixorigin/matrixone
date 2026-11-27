@@ -1582,7 +1582,7 @@ func TestStartDoesNotRacePreviouslyDispatchedRemoval(t *testing.T) {
 	require.NotContains(t, starts, uint64(4), "the already-dispatched removal can still commit")
 	require.Contains(t, starts, uint64(2), "another replica can start while the membership slot is occupied")
 	require.Empty(t, removals, "another removal must wait for the current configuration change")
-	require.NotEmpty(t, membershipTargets(cfg, state, 1, pb.RemoveReplica,
+	require.NotEmpty(t, hakeeper.LogMembershipTargets(cfg, state, 1, pb.RemoveReplica,
 		pb.Replica{ShardID: 1, ReplicaID: 4, UUID: "d", Epoch: 7}))
 }
 

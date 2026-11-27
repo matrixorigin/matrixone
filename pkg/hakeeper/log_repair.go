@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logservice
+package hakeeper
 
 import (
 	"slices"
@@ -21,14 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
-// repairPlan contains the retained replicas and remaining additions for one role.
-type repairPlan struct {
+// LogRepairPlan contains the retained replicas and remaining additions for one role.
+type LogRepairPlan struct {
 	Replicas map[uint64]string
 	ToAdd    uint32
 }
 
-func newPlan(replicas map[uint64]string) *repairPlan {
-	plan := &repairPlan{Replicas: make(map[uint64]string, len(replicas))}
+func newPlan(replicas map[uint64]string) *LogRepairPlan {
+	plan := &LogRepairPlan{Replicas: make(map[uint64]string, len(replicas))}
 	for id, store := range replicas {
 		plan.Replicas[id] = store
 	}
@@ -40,7 +40,7 @@ func fixedLogShardInfoNormal(
 	info pb.LogShardInfo,
 	expiredStores []string,
 	stores map[string]pb.LogStoreInfo,
-) *repairPlan {
+) *LogRepairPlan {
 	// info.Replicas only contains the normal replicas.
 	// info.NonVotingReplicas only contains the non-voting replicas.
 	fixing := newPlan(info.Replicas)
@@ -72,8 +72,8 @@ func fixedLogShardInfoNormal(
 		reported := make(map[uint64]bool, len(idSlice))
 		for _, id := range idSlice {
 			uuid := fixing.Replicas[id]
-			reported[id] = !storeIncarnationChanged(id, uuid, info.ReplicaStoreIncarnations, stores) &&
-				replicaReported(info.ShardID, id, false, stores[uuid].Replicas)
+			reported[id] = !LogReplicaIncarnationChanged(id, uuid, info.ReplicaStoreIncarnations, stores) &&
+				LogReplicaReported(info.ShardID, id, false, stores[uuid].Replicas)
 		}
 		slices.SortStableFunc(idSlice, func(a, b uint64) int {
 			if reported[a] == reported[b] {
@@ -96,7 +96,7 @@ func fixedLogShardInfoNonVoting(
 	nonVotingReplicaNum uint64,
 	info pb.LogShardInfo,
 	expiredStores []string,
-) *repairPlan {
+) *LogRepairPlan {
 	// info.Replicas only contains the normal replicas.
 	// info.NonVotingReplicas only contains the non-voting replicas.
 	fixing := newPlan(info.NonVotingReplicas)
@@ -128,14 +128,14 @@ func fixedLogShardInfoNonVoting(
 	return fixing
 }
 
-// planRepair selects the voting and non-voting replicas required by the checker.
-func planRepair(
+// PlanLogRepair selects the voting and non-voting replicas required by the checker.
+func PlanLogRepair(
 	record metadata.LogShardRecord,
 	nonVotingReplicaNum uint64,
 	info pb.LogShardInfo,
 	expiredStores []string,
 	stores map[string]pb.LogStoreInfo,
-) (*repairPlan, *repairPlan) {
+) (*LogRepairPlan, *LogRepairPlan) {
 	normal := fixedLogShardInfoNormal(record, info, expiredStores, stores)
 	nonVoting := fixedLogShardInfoNonVoting(nonVotingReplicaNum, info, expiredStores)
 	removeReplicasOnChangedStoreIncarnation(normal, info, stores)
@@ -143,8 +143,8 @@ func planRepair(
 	return normal, nonVoting
 }
 
-// recordForShard returns the checker's desired configuration for the shard.
-func recordForShard(shardID uint64, shards []metadata.LogShardRecord) (metadata.LogShardRecord, bool) {
+// LogShardRecord returns the checker's desired configuration for the shard.
+func LogShardRecord(shardID uint64, shards []metadata.LogShardRecord) (metadata.LogShardRecord, bool) {
 	for _, record := range shards {
 		if record.ShardID == shardID {
 			return record, true
@@ -153,8 +153,8 @@ func recordForShard(shardID uint64, shards []metadata.LogShardRecord) (metadata.
 	return metadata.LogShardRecord{}, false
 }
 
-// storeIncarnationChanged reports whether a replica belongs to an old store generation.
-func storeIncarnationChanged(
+// LogReplicaIncarnationChanged reports whether a replica belongs to an old store generation.
+func LogReplicaIncarnationChanged(
 	replicaID uint64,
 	storeID string,
 	replicaStoreIncarnations map[uint64]string,
@@ -168,12 +168,12 @@ func storeIncarnationChanged(
 }
 
 func removeReplicasOnChangedStoreIncarnation(
-	fixed *repairPlan,
+	fixed *LogRepairPlan,
 	shardInfo pb.LogShardInfo,
 	stores map[string]pb.LogStoreInfo,
 ) {
 	for replicaID, storeID := range fixed.Replicas {
-		if storeIncarnationChanged(
+		if LogReplicaIncarnationChanged(
 			replicaID,
 			storeID,
 			shardInfo.ReplicaStoreIncarnations,
@@ -205,8 +205,8 @@ func sortedReplicaID(replicas map[uint64]string, leaderID uint64) []uint64 {
 	return idSlice
 }
 
-// replicaReported reports whether the exact replica and role are present.
-func replicaReported(shardID, replicaID uint64, nonVoting bool, replicas []pb.LogReplicaInfo) bool {
+// LogReplicaReported reports whether the exact replica and role are present.
+func LogReplicaReported(shardID, replicaID uint64, nonVoting bool, replicas []pb.LogReplicaInfo) bool {
 	for _, r := range replicas {
 		if r.ShardID == shardID && r.ReplicaID == replicaID && r.IsNonVoting == nonVoting {
 			return true
@@ -215,9 +215,9 @@ func replicaReported(shardID, replicaID uint64, nonVoting bool, replicas []pb.Lo
 	return false
 }
 
-// eligibleLocality applies the same hard placement constraint to new replicas
+// LogStoreEligibleLocality applies the same hard placement constraint to new replicas
 // at scheduling and delivery. Empty requirements select only unlabelled stores.
-func eligibleLocality(store, required pb.Locality) bool {
+func LogStoreEligibleLocality(store, required pb.Locality) bool {
 	if len(required.Value) == 0 {
 		return len(store.Value) == 0
 	}

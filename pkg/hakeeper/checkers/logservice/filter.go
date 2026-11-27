@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -30,7 +31,7 @@ func selectStore(
 ) string {
 	workingStores := make([]*util.Store, 0, len(workingStoreMap))
 	for id, loc := range workingStoreMap {
-		if eligibleLocality(loc, locality) {
+		if hakeeper.LogStoreEligibleLocality(loc, locality) {
 			workingStores = append(workingStores, &util.Store{ID: id})
 		}
 	}

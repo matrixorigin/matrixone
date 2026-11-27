@@ -43,7 +43,7 @@ func getReplicasToStart(
 ) []replica {
 	toStart := make([]replica, 0)
 	for id, uuid := range replicas {
-		if storeIncarnationChanged(id, uuid, replicaStoreIncarnations, stores) {
+		if hakeeper.LogReplicaIncarnationChanged(id, uuid, replicaStoreIncarnations, stores) {
 			// This replica belongs to an older persistent storage generation.
 			// Starting it with the same replica ID would make Raft peers reuse
 			// progress acknowledged by the lost generation.
@@ -90,11 +90,11 @@ func parseLogShards(
 
 		normalStats.toStart = append(normalStats.toStart, toStartNormal...)
 		nonVotingStats.toStart = append(nonVotingStats.toStart, toStartNonVoting...)
-		record, known := recordForShard(shardID, cluster.LogShards)
+		record, known := hakeeper.LogShardRecord(shardID, cluster.LogShards)
 		if !known || record.NumberOfReplicas == 0 {
 			continue
 		}
-		fixingNormal, fixingNonVoting := planRepair(record, nonVotingReplicaNum, shardInfo, expired, infos.Stores)
+		fixingNormal, fixingNonVoting := hakeeper.PlanLogRepair(record, nonVotingReplicaNum, shardInfo, expired, infos.Stores)
 		toRemoveNormal := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.Replicas)
 		toRemoveNonVoting := getReplicasToRemove(shardID, shardInfo.NonVotingReplicas, fixingNonVoting.Replicas)
 

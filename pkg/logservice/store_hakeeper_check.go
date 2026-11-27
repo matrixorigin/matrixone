@@ -358,7 +358,6 @@ func (l *store) hakeeperCheck() *pb.CheckerState {
 		}
 	}
 	cancel()
-
 	switch state.State {
 	case pb.HAKeeperBootstrapping:
 		if err := l.bootstrap(term, state); err != nil {
@@ -376,6 +375,15 @@ func (l *store) hakeeperCheck() *pb.CheckerState {
 	case pb.HAKeeperBootstrapFailed:
 		l.handleBootstrapFailure()
 	case pb.HAKeeperRunning:
+		// Ordinary repair and dynamic bootstrap must agree with committed
+		// expiry. Initial cluster bootstrap and permit processing do not
+		// depend on this policy.
+		cfg := l.cfg.GetHAKeeperConfig()
+		cfg.Fill()
+		if state.LogStoreTimeoutPolicyTerm == 0 || state.LogStoreTimeoutPolicyTerm > term ||
+			state.LogStoreTimeoutPolicyTicks != cfg.LogStoreTimeoutTicks() {
+			return state
+		}
 		if debugPrintHAKeeperState.CompareAndSwap(false, true) {
 			l.runtime.Logger().Info("HAKeeper is running",
 				zap.Uint64("next id", state.NextId))

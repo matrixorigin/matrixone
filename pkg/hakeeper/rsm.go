@@ -400,8 +400,20 @@ func GetTickCmd() []byte {
 	return cmd
 }
 
+func GetTickCmdWithLogStorePolicy(term, timeoutTicks uint64) []byte {
+	cmd := make([]byte, headerSize+16)
+	binaryEnc.PutUint32(cmd, uint32(pb.TickUpdate))
+	binaryEnc.PutUint64(cmd[headerSize:], term)
+	binaryEnc.PutUint64(cmd[headerSize+8:], timeoutTicks)
+	return cmd
+}
+
 func GetLogStoreHeartbeatCmd(data []byte) []byte {
 	return getHeartbeatCmd(data, pb.LogHeartbeatUpdate)
+}
+
+func GetGuardedLogStoreHeartbeatCmd(data []byte) []byte {
+	return getHeartbeatCmd(data, pb.GuardedLogHeartbeatUpdate)
 }
 
 func GetCNStoreHeartbeatCmd(data []byte) []byte {
@@ -519,7 +531,7 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	if err := b.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	if s.state.Term > b.Term {
+	if s.state.Term > b.Term || s.state.LogStoreTimeoutPolicyTerm > b.Term {
 		return sm.Result{}
 	}
 	if s.state.LogServiceRecoveryPending && !s.state.LogServiceRecoveryPrepared {
@@ -542,6 +554,8 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		if s.state.ScheduleCommands == nil {
 			s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
 		}
+	} else if s.state.LogStoreTimeoutPolicyTerm != 0 {
+		s.state.ScheduleCommands = s.pendingDynamicBootstraps()
 	} else {
 		// Preserve the legacy replacement contract until the cluster-wide
 		// capability transition has entered its preparation barrier.
@@ -553,6 +567,14 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		// by an older binary or made stale while already queued.
 		if s.catalogScheduleObsolete(c) {
 			continue
+		}
+		if s.state.LogStoreTimeoutPolicyTerm != 0 {
+			if c.BootstrapShard != nil && !s.admitDynamicBootstrap(c) {
+				continue
+			}
+			if s.startHasPendingBootstrap(c, s.state.ScheduleCommands[c.UUID]) {
+				continue
+			}
 		}
 		if c.Bootstrapping {
 			s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
@@ -788,12 +810,13 @@ func coalescibleReplicaChange(serviceType pb.ServiceType, change *pb.ConfigChang
 }
 
 func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
-	return s.getCommandBatchFiltered(uuid, nil)
+	return s.getCommandBatchFiltered(uuid, nil, false)
 }
 
 func (s *stateMachine) getCommandBatchFiltered(
 	uuid string,
 	hb *pb.LogStoreHeartbeat,
+	guarded bool,
 ) sm.Result {
 	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
 		deliver := make([]pb.ScheduleCommand, 0, len(batch.Commands))
@@ -804,14 +827,34 @@ func (s *stateMachine) getCommandBatchFiltered(
 			pendingIDs = make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
 		}
 		for i, cmd := range batch.Commands {
-			if s.catalogScheduleObsolete(cmd) {
+			if s.catalogScheduleObsolete(cmd) ||
+				guarded && (s.startHasPendingBootstrap(cmd, batch) || s.logKillObsolete(cmd)) {
 				continue
 			}
 			retryable, applied := s.bootstrapReplicaCommandStatus(cmd)
 			if applied {
 				continue
 			}
-			if (hb != nil && !s.logScheduleCommandDeliverable(cmd)) || !s.prepareCatalogSchedule(&cmd) {
+			wait := hb != nil && !s.logScheduleCommandDeliverable(cmd)
+			if guarded && cmd.BootstrapShard != nil {
+				keep, ready := s.bootstrapCommandStatus(cmd)
+				held, retired := s.bootstrapFencedByBatch(cmd, batch)
+				if !keep || retired {
+					continue
+				}
+				retryable = true
+				wait = wait || !ready || held || s.hasConflictingBootstrap(cmd.BootstrapShard)
+			}
+			if !wait && guarded && isLogMembershipChange(cmd) {
+				if s.state.LogStoreTimeoutPolicyTerm == 0 {
+					wait = true
+				} else if !s.logMembershipDeliverable(uuid, cmd) {
+					// The checker can propose a new operation using current
+					// reports. Sending the stale choice later cannot make it safe.
+					continue
+				}
+			}
+			if wait || !s.prepareCatalogSchedule(&cmd) {
 				pending = append(pending, cmd)
 				if pendingIDs != nil {
 					pendingIDs = append(pendingIDs, batch.CommandIDs[i])
@@ -1141,7 +1184,7 @@ func (s *stateMachine) handleTNHeartbeat(cmd []byte) (result sm.Result) {
 	return s.getCommandBatch(hb.UUID)
 }
 
-func (s *stateMachine) handleLogHeartbeat(cmd []byte) (result sm.Result) {
+func (s *stateMachine) handleLogHeartbeat(cmd []byte, guarded bool) (result sm.Result) {
 	data := parseHeartbeatCmd(cmd)
 	var hb pb.LogStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
@@ -1150,6 +1193,10 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) (result sm.Result) {
 	previous, registered := s.state.LogState.Stores[hb.UUID]
 	deliveryReady := s.state.CommandDeliveryReady[hb.UUID]
 	admissionReady := s.state.ViewMetadataAdmissionLogReady[hb.UUID]
+	if guarded && hb.StoreIncarnation != "" && previous.StoreIncarnation != "" &&
+		hb.StoreIncarnation != previous.StoreIncarnation {
+		s.discardReplacedStoreBootstraps(hb.UUID)
+	}
 	s.state.LogState.Update(hb, s.state.Tick)
 	defer func() {
 		if !registered ||
@@ -1183,10 +1230,17 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) (result sm.Result) {
 			delete(s.state.CommandDeliveryReady, hb.UUID)
 		}
 	}
-	return s.attachPendingCatalogStart(s.getCommandBatchFiltered(hb.UUID, &hb), hb)
+	return s.attachPendingCatalogStart(s.getCommandBatchFiltered(hb.UUID, &hb, guarded), hb)
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
+	if len(cmd) == headerSize+16 {
+		term := binaryEnc.Uint64(cmd[headerSize:])
+		if term > s.state.LogStoreTimeoutPolicyTerm && term >= s.state.Term {
+			s.state.LogStoreTimeoutPolicyTerm = term
+			s.state.LogStoreTimeoutPolicyTicks = binaryEnc.Uint64(cmd[headerSize+8:])
+		}
+	}
 	// A replica entering the preparation barrier or upgraded from an older
 	// snapshot can contain pending batches without delivery IDs. Reuse one
 	// ordinary replicated tick to make them poll-safe. The decision depends only
@@ -1720,8 +1774,13 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.CNHeartbeatUpdate:
 		return s.handleCNHeartbeat(cmd), nil
 	case pb.LogHeartbeatUpdate:
-		return s.handleLogHeartbeat(cmd), nil
+		return s.handleLogHeartbeat(cmd, false), nil
+	case pb.GuardedLogHeartbeatUpdate:
+		return s.handleLogHeartbeat(cmd, true), nil
 	case pb.TickUpdate:
+		if len(cmd) != headerSize && (len(cmd) != headerSize+16 || binaryEnc.Uint64(cmd[headerSize:]) == 0) {
+			return sm.Result{}, moerr.NewInvalidInputNoCtx("invalid HAKeeper policy tick")
+		}
 		return s.handleTick(cmd), nil
 	case pb.GetIDUpdate:
 		if (s.state.LogServiceRecoveryPending && !s.state.LogServiceRecoveryPrepared) ||
@@ -1797,6 +1856,8 @@ func (s *stateMachine) handleStateQuery(scheduling bool) interface{} {
 		IDWatermarkRestoreGeneration: s.state.IDWatermarkRestoreGeneration,
 		LogServiceRecoveryPrepared:   s.state.LogServiceRecoveryPrepared,
 		LogServiceRecoveryCompleted:  s.state.LogServiceRecoveryCompleted,
+		LogStoreTimeoutPolicyTerm:    s.state.LogStoreTimeoutPolicyTerm,
+		LogStoreTimeoutPolicyTicks:   s.state.LogStoreTimeoutPolicyTicks,
 	}
 	if scheduling {
 		// Copy records before projecting: the replicated authority and full

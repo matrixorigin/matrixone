@@ -249,7 +249,7 @@ func (ca *checkToAdd) check() []*operator.Operator {
 					"cannot get store for adding replica", zap.Uint64("shardID", shardID))
 				continue
 			}
-			targets := membershipTargets(ca.lc.Cfg, ca.lc.logState, ca.lc.CurrentTick,
+			targets := hakeeper.LogMembershipTargets(ca.lc.Cfg, ca.lc.logState, ca.lc.CurrentTick,
 				change, pb.Replica{ShardID: shardID, UUID: bestStore, Epoch: shard.Epoch})
 			if len(targets) == 0 {
 				continue
@@ -318,8 +318,8 @@ func (cr *checkToRemove) check() []*operator.Operator {
 			shard := cr.lc.logState.Shards[shardID]
 			reported := func(r replica) bool {
 				_, live := cr.lc.workingStores[r.uuid]
-				return live && !storeIncarnationChanged(r.replicaID, r.uuid, shard.ReplicaStoreIncarnations, cr.lc.logState.Stores) &&
-					replicaReported(shardID, r.replicaID, change == pb.RemoveNonVotingReplica, cr.lc.logState.Stores[r.uuid].Replicas)
+				return live && !hakeeper.LogReplicaIncarnationChanged(r.replicaID, r.uuid, shard.ReplicaStoreIncarnations, cr.lc.logState.Stores) &&
+					hakeeper.LogReplicaReported(shardID, r.replicaID, change == pb.RemoveNonVotingReplica, cr.lc.logState.Stores[r.uuid].Replicas)
 			}
 			slices.SortFunc(replicasToRemove, func(a, b replica) int {
 				aReported, bReported := reported(a), reported(b)
@@ -335,7 +335,7 @@ func (cr *checkToRemove) check() []*operator.Operator {
 				if replicaIsStarting(cr.lc.executing, cr.lc.executingNonVoting, shardID, toRemoveReplica.replicaID) {
 					continue
 				}
-				targets := membershipTargets(cr.lc.Cfg, cr.lc.logState, cr.lc.CurrentTick,
+				targets := hakeeper.LogMembershipTargets(cr.lc.Cfg, cr.lc.logState, cr.lc.CurrentTick,
 					change, pb.Replica{ShardID: shardID, ReplicaID: toRemoveReplica.replicaID, UUID: toRemoveReplica.uuid, Epoch: shard.Epoch})
 				if len(targets) == 0 {
 					continue

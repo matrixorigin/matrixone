@@ -53,7 +53,7 @@ func PendingOperators(fields hakeeper.CheckerCommonFields, state pb.LogState,
 	live := func(uuid string) bool { _, ok := working[uuid]; return ok }
 	eligible := func(r operator.Replica, target string, change pb.ConfigChangeType) bool {
 		replica := pb.Replica{UUID: r.UUID, ShardID: r.ShardID, ReplicaID: r.ReplicaID, Epoch: r.Epoch}
-		return slices.Contains(membershipTargets(fields.Cfg, state, fields.CurrentTick, change, replica), target)
+		return slices.Contains(hakeeper.LogMembershipTargets(fields.Cfg, state, fields.CurrentTick, change, replica), target)
 	}
 	add := func(role int, r operator.Replica, target string, change pb.ConfigChangeType) bool {
 		if additions[role][r.ShardID] == 0 || !live(r.UUID) || !live(target) {
@@ -63,7 +63,7 @@ func PendingOperators(fields hakeeper.CheckerCommonFields, state pb.LogState,
 		if role == 1 {
 			locality = nonVotingLocality
 		}
-		return eligibleLocality(working[r.UUID], locality) && eligible(r, target, change)
+		return hakeeper.LogStoreEligibleLocality(working[r.UUID], locality) && eligible(r, target, change)
 	}
 	remove := func(role int, r operator.Replica, target string, change pb.ConfigChangeType) bool {
 		key := r
