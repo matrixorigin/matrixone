@@ -226,28 +226,56 @@ func TestRestoredLegacyInnerWindowInferenceShapeIsExact(t *testing.T) {
 	}
 }
 
-// The real caller-level boundary discriminator: the same authored paginated
-// WITH+OUTFILE statement composed through the ownership-neutral public
-// BuildPlan (the recursive diagnostic / internal routes) must NOT claim the
-// executable export exemption, while BuildPlanWithExecutionOwner - the
-// frontend execution and prepared routes' entry - composes the statement's
-// pages exactly once.
+// The caller-level boundary discriminator for the root-accepted routed-root
+// contract: the ownership-neutral public BuildPlan composes an authored
+// paginated statement exactly once when - and only when - the composed export
+// or assignment sits on the statement root the plan itself routes (the
+// accepted neutral-diagnostic behavior the frontend EXPLAIN witness pins
+// with a nil threaded owner and an untouched target), and the execution-owner
+// entry composes the same shape identically. A clause authored at any
+// non-root position keeps the genuine neutral boundary.
 func TestBuildPlanExecutionOwnerBoundaryDiscriminator(t *testing.T) {
-	stmt := p132ParseOne(t,
+	rootOwned := p132ParseOne(t,
 		"with q as (select 1 as a union all select 2 as a) (select a from q limit 2) order by a limit 1 offset 1 into outfile '/tmp/p135-owner-guard.csv'")
-	sel, ok := stmt.(*tree.Select)
+	rootSel, ok := rootOwned.(*tree.Select)
 	if !ok {
 		t.Fatalf("the probe statement must bind as *tree.Select")
 	}
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
-	if _, err := BuildPlan(ctx, sel, false, nil); err == nil {
-		// A neutral diagnostic route (EXPLAIN's recursive child, an internal
-		// helper) that plans this statement must not silently compose with
-		// an unscoped Ep exemption: the duplicate-clause contract holds.
-		t.Fatalf("the neutral public BuildPlan must reject the duplicate pagination clauses without an execution owner")
+	if _, err := BuildPlan(ctx, rootSel, false, nil); err != nil {
+		// The routed statement root's own export composes under the neutral
+		// diagnostic route: the duplicate-pagination rejection is a
+		// non-root clause's contract, not the statement root's.
+		t.Fatalf("the neutral public BuildPlan must compose the routed statement root's own paginated export: %v", err)
 	}
-	if _, err := BuildPlanWithExecutionOwner(ctx, sel, false, nil, sel); err != nil {
+	if _, err := BuildPlanWithExecutionOwner(ctx, rootSel, false, nil, rootSel); err != nil {
 		t.Fatalf("the execution-owner route must compose the statement's pages: %v", err)
+	}
+
+	// The same retained contract for the root-owned SELECT INTO variable
+	// assignment: the routed root's assignment composes on the neutral route.
+	intoVars := p132ParseOne(t,
+		"with q as (select 1 as a union all select 2 as a) (select a from q limit 2) order by a limit 1 offset 1 into @p137v")
+	intoSel, ok2 := intoVars.(*tree.Select)
+	if !ok2 {
+		t.Fatalf("the INTO-variables probe must bind as *tree.Select")
+	}
+	if _, err := BuildPlan(ctx, intoSel, false, nil); err != nil {
+		t.Fatalf("the neutral public BuildPlan must compose the routed root's variable assignment: %v", err)
+	}
+
+	// The genuinely-neutral negative discriminator: the same pagination with
+	// the export authored inside the parenthesized body is a non-root clause,
+	// so the routed-root exemption never reaches it and the neutral route
+	// keeps the plain duplicate-owner rejection.
+	nested := p132ParseOne(t,
+		"with q as (select 1 as a union all select 2 as a) (select a from q limit 2 into outfile '/tmp/p135-nested-guard.csv') order by a limit 1 offset 1")
+	nestedSel, ok3 := nested.(*tree.Select)
+	if !ok3 {
+		t.Fatalf("the nested-export probe must bind as *tree.Select")
+	}
+	if _, err := BuildPlan(ctx, nestedSel, false, nil); err == nil {
+		t.Fatalf("the neutral public BuildPlan must reject a nested (non-root) export: the routed-root exemption never reaches it")
 	}
 }
 
