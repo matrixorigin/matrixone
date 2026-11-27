@@ -295,6 +295,7 @@ type QueryBuilder struct {
 	preserveScanProjection           map[int32]struct{}
 	positionalSinkScans              map[int32]struct{}
 	repeatedUpdateStats              map[int32]repeatedUpdateStatsHint
+	equalityRowBounds                map[*plan.Expr]float64
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
