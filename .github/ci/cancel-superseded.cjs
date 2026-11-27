@@ -210,6 +210,10 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
     if (!hasWorkerIdentity(run) || !isShortTitle(run)) return run;
     const { data } = await github.rest.actions.listJobsForWorkflowRunAttempt({
       ...repo, run_id: id, attempt_number: 1, per_page: 100,
+    }).catch(err => {
+      // The run is visible, but GitHub may not have indexed its attempt jobs yet.
+      if (err.status === 404) throw new CoverageIdentityPending('Coverage worker attempt jobs returned HTTP 404');
+      throw err;
     });
     if (data.jobs.length !== data.total_count) throw new Error('Incomplete coverage worker identity');
     const suffix = ' / Run identity';

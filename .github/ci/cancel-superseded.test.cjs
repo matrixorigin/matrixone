@@ -258,7 +258,7 @@ test('closed PR cancellation handles normal completion, API errors and malformed
   assert.deepEqual(invalid.calls, []);
 });
 
-function coverageHarness({ children, parentOverride = {}, tick, receipts = [], listed = () => true } = {}) {
+function coverageHarness({ children, parentOverride = {}, tick, receipts = [], listed = () => true, jobsError } = {}) {
   const sha = 'a'.repeat(40);
   const parent = { id: 600, run_attempt: 2, workflow_id: 42, event: 'pull_request_target',
     path: '.github/workflows/entrypoint.yaml', repository: { full_name: 'matrixorigin/matrixone' },
@@ -301,6 +301,8 @@ function coverageHarness({ children, parentOverride = {}, tick, receipts = [], l
     },
     listJobsForWorkflowRunAttempt: async ({ run_id, attempt_number }) => {
       assert.equal(attempt_number, 1);
+      const status = jobsError?.(run_id, elapsed);
+      if (status) throw Object.assign(new Error(`jobs HTTP ${status}`), { status });
       const jobs = rows.get(run_id)?.fixtureJobs || [];
       return { data: { total_count: jobs.length, jobs } };
     },
@@ -373,15 +375,19 @@ test('short worker names never authorize cleanup without the original exact iden
     [['cancel', 700], ['cancel', 707], ['force', 700], ['force', 707]]);
 });
 
-test('queued and running short workers wait for identity together, without delaying proven siblings', async () => {
-  const h = coverageHarness({ children: [], tick(rows, _parent, elapsed) {
-    if (elapsed !== 15000) return;
-    for (const [id, group, pool] of [[710, 0, 'cs'], [711, 1, 'idc'], [712, 0, 'cs']]) {
-      const title = h.child(id, group, pool).display_title;
-      rows.get(id).fixtureJobs = [{ name: (id === 712 ? title.replace('600/2/', '601/2/') : title) +
-        ' / Run identity', run_id: id, run_attempt: 1, status: 'completed', conclusion: 'skipped' }];
-    }
-  } });
+test('queued and running short workers retry jobs 404 and empty markers without delaying proven siblings', async () => {
+  const h = coverageHarness({
+    children: [],
+    jobsError: (_id, elapsed) => elapsed === 10000 ? 404 : null,
+    tick(rows, _parent, elapsed) {
+      if (elapsed !== 20000) return;
+      for (const [id, group, pool] of [[710, 0, 'cs'], [711, 1, 'idc'], [712, 0, 'cs']]) {
+        const title = h.child(id, group, pool).display_title;
+        rows.get(id).fixtureJobs = [{ name: (id === 712 ? title.replace('600/2/', '601/2/') : title) +
+          ' / Run identity', run_id: id, run_attempt: 1, status: 'completed', conclusion: 'skipped' }];
+      }
+    },
+  });
   for (const [id, group, pool] of [[710, 0, 'cs'], [711, 1, 'idc'], [712, 0, 'cs']]) {
     h.rows.set(id, h.child(id, group, pool, { display_title: 'GROUP' + group,
       status: group ? 'in_progress' : 'queued' }));
@@ -389,7 +395,7 @@ test('queued and running short workers wait for identity together, without delay
   h.rows.set(713, h.child(713, 1, 'cs'));
   await h.run();
   assert.deepEqual(h.calls.filter(([op]) => op === 'cancel'),
-    [['cancel', 713, 10000], ['cancel', 710, 15000], ['cancel', 711, 15000]]);
+    [['cancel', 713, 10000], ['cancel', 710, 20000], ['cancel', 711, 20000]]);
   assert.deepEqual(h.calls.filter(([op]) => op === 'force').map(([, id]) => id), [713, 710, 711]);
 });
 
@@ -409,6 +415,22 @@ test('permanently missing and ambiguous identities fail visibly without cancella
     return true;
   });
   assert.deepEqual(reads, [720, 721, 720, 720]);
+  assert.deepEqual(h.calls, []);
+});
+
+test('persistent jobs 404 exhausts the lookup budget; jobs 403 is not retried', async () => {
+  const reads = [];
+  const h = coverageHarness({ children: [], jobsError(id) {
+    reads.push(id);
+    return id === 730 ? 404 : 403;
+  } });
+  for (const id of [730, 731]) h.rows.set(id, h.child(id, 0, 'cs', { display_title: 'GROUP0' }));
+  await assert.rejects(h.run(), err => {
+    assert.match(err.message, /730: [^;]*404/);
+    assert.match(err.message, /731: jobs HTTP 403/);
+    return true;
+  });
+  assert.deepEqual(reads, [730, 731, 730, 730]);
   assert.deepEqual(h.calls, []);
 });
 
