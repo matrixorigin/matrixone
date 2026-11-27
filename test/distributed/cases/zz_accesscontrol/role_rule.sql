@@ -11,7 +11,6 @@ drop user if exists test_rule_user_where;
 drop user if exists test_rule_user_dup_projection;
 drop user if exists test_rule_user_expr_projection;
 drop user if exists test_rule_user_columns;
-drop user if exists test_rule_user_legacy;
 drop user if exists test_rule_user_dependency;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
@@ -32,7 +31,6 @@ drop role if exists test_rule_role_dup_projection_b;
 drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
 drop role if exists test_rule_role_columns;
-drop role if exists test_rule_role_legacy;
 drop role if exists test_rule_role_dependency;
 drop database if exists db1;
 drop database if exists db2;
@@ -212,25 +210,96 @@ insert into db1.t_rename_chain_guard values (7);
 rename table db1.t_rename_chain_guard to db1.t_rename_chain_guard_after, db1.t1 to db1.t1_renamed;
 select * from db1.t_rename_chain_guard;
 
--- 11a. Legacy noncanonical rule keys still guard both rename entry points
-create table db1.t_rename_legacy(a int, age int);
-insert into db1.t_rename_legacy values (1,1),(100,30);
-create role test_rule_role_legacy;
-alter role test_rule_role_legacy add rule "select * from db1.t_rename_legacy where age > 28" on table db1.` t_rename_legacy`;
-create user test_rule_user_legacy identified by '123456' default role test_rule_role_legacy;
-grant connect on account * to test_rule_role_legacy;
-grant select on table db1.t_rename_legacy to test_rule_role_legacy;
--- @session:id=11&user=sys:test_rule_user_legacy:test_rule_role_legacy&password=123456
-set enable_remap_hint = 1;
-select * from db1.t_rename_legacy order by a;
+-- 11a. Legacy noncanonical rule keys still guard both rename entry points.
+-- #32858: Use a separate account so case-mode changes affect only this fixture.
+drop account if exists role_rule_case_modes;
+create account role_rule_case_modes admin_name 'admin' identified by '123456';
+-- @session:id=137&user=role_rule_case_modes:admin&password=123456
+set global lower_case_table_names = 0;
 -- @session
 
-alter table db1.t_rename_legacy rename to db1.t_rename_legacy_after;
-rename table db1.t_rename_legacy to db1.t_rename_legacy_after;
--- @session:id=11&user=sys:test_rule_user_legacy:test_rule_role_legacy&password=123456
-set enable_remap_hint = 1;
-select * from db1.t_rename_legacy order by a;
+-- @session:id=138&user=role_rule_case_modes:admin&password=123456
+select @@lower_case_table_names;
+create database rule_db;
+create table rule_db.t_target(id int);
+create table rule_db.t_source(id int);
+create table rule_db.T_SOURCE(id int);
+insert into rule_db.t_target values (4);
+insert into rule_db.t_source values (2),(3);
+insert into rule_db.T_SOURCE values (2),(3),(4);
+create role case_primary, case_later;
+alter role case_primary add rule "select id from rule_db.t_source where id = 3" on table rule_db.t_target;
+alter role case_later add rule "select id from rule_db.T_SOURCE where id = 2" on table rule_db.t_target;
+create user case_reader identified by '123456' default role case_primary;
+grant connect on account * to case_primary, case_later;
+grant select on table rule_db.t_target to case_primary, case_later;
+grant select on table rule_db.t_source to case_primary, case_later;
+grant select on table rule_db.T_SOURCE to case_primary, case_later;
+grant case_later to case_reader;
+
+-- Both spellings are valid table identities in mode 0. Public ADD writes
+-- the legacy keys, and the lowercase source remains usable in mode 1.
+create table rule_db.t_catalog(id int);
+create table rule_db.T_CATALOG(id int);
+create role case_replace, case_drop;
+alter role case_replace add rule "select id from rule_db.t_source where id = 2" on table rule_db.T_CATALOG;
+alter role case_replace add rule "select id from rule_db.t_source where id = 3" on table rule_db.t_catalog;
+alter role case_drop add rule "select id from rule_db.t_source where id = 2" on table rule_db.T_CATALOG;
+-- @sortkey:0
+show rules on role case_replace;
+show rules on role case_drop;
+
+create table rule_db.t_rename_legacy(a int, age int);
+create table rule_db.T_RENAME_LEGACY(a int, age int);
+insert into rule_db.t_rename_legacy values (1,1),(100,30);
+create role case_rename;
+alter role case_rename add rule "select id as a, id as age from rule_db.t_source where id = 3" on table rule_db.T_RENAME_LEGACY;
+create user case_rename_reader identified by '123456' default role case_rename;
+grant connect on account * to case_rename;
+grant select on table rule_db.t_rename_legacy to case_rename;
+grant select on table rule_db.t_source to case_rename;
 -- @session
+
+-- @session:id=129&user=role_rule_case_modes:case_reader:case_primary&password=123456
+select id from rule_db.t_target order by id;
+-- @session
+-- @session:id=130&user=role_rule_case_modes:case_reader:case_later&password=123456
+select id from rule_db.t_target order by id;
+-- @session
+
+-- @session:id=138&user=role_rule_case_modes:admin&password=123456
+grant case_later to case_primary;
+-- @session
+-- @session:id=131&user=role_rule_case_modes:case_reader:case_primary&password=123456
+select id from rule_db.t_target order by id;
+-- @session
+
+-- @session:id=138&user=role_rule_case_modes:admin&password=123456
+set global lower_case_table_names = 1;
+-- @session
+-- @session:id=132&user=role_rule_case_modes:admin&password=123456
+select @@lower_case_table_names;
+alter role case_replace add rule "select id from rule_db.t_source where id = 4" on table rule_db.T_CATALOG;
+show rules on role case_replace;
+show rules on role case_drop;
+alter role case_drop drop rule on table rule_db.t_catalog;
+show rules on role case_drop;
+show rules on role case_replace;
+show rules on role case_rename;
+-- @session
+
+-- @session:id=133&user=role_rule_case_modes:case_rename_reader:case_rename&password=123456
+select * from rule_db.t_rename_legacy order by a;
+-- @session
+-- @session:id=132&user=role_rule_case_modes:admin&password=123456
+alter table rule_db.t_rename_legacy rename to rule_db.t_rename_legacy_after;
+rename table rule_db.t_rename_legacy to rule_db.t_rename_legacy_after;
+-- @session
+-- @session:id=134&user=role_rule_case_modes:case_rename_reader:case_rename&password=123456
+select * from rule_db.t_rename_legacy order by a;
+-- @session
+drop account role_rule_case_modes;
+select count(*) from mo_catalog.mo_account where account_name = 'role_rule_case_modes';
 
 -- 11b. A rule's joined allowlist relation cannot be renamed out from under it
 create table db1.t_rename_rule_dependency(id int primary key, tenant_id int);
@@ -299,10 +368,28 @@ alter role test_rule_role_inherit_b add rule "select a, age from db2.t2 where ag
 create user test_rule_user_inherit identified by '123456' default role test_rule_role_inherit_a;
 grant connect on account * to test_rule_role_inherit_a;
 grant select on table db2.t2 to test_rule_role_inherit_b;
+
+-- #32858: Both predicates must retain their string literals after inheritance.
+create table db2.t_string(name varchar(10));
+insert into db2.t_string values ('Alice'),('Bob'),('Cara');
+alter role test_rule_role_inherit_a add rule "select name from db2.t_string where name = 'Alice'" on table db2.t_string;
+alter role test_rule_role_inherit_b add rule "select name from db2.t_string where name = 'Bob'" on table db2.t_string;
+grant select on table db2.t_string to test_rule_role_inherit_a;
+grant select on table db2.t_string to test_rule_role_inherit_b;
+grant connect on account * to test_rule_role_inherit_b;
+grant test_rule_role_inherit_b to test_rule_user_inherit;
+-- @session:id=35&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select name from db2.t_string order by name;
+-- @session
+-- @session:id=36&user=sys:test_rule_user_inherit:test_rule_role_inherit_b&password=123456
+select name from db2.t_string order by name;
+-- @session
+
 grant test_rule_role_inherit_b to test_rule_role_inherit_a;
 -- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
 set enable_remap_hint = 1;
 select * from db2.t2 order by a;
+select name from db2.t_string order by name;
 -- @session
 
 -- 相同 COLLATE 投影必须合并主角色和继承角色允许的行。
@@ -545,19 +632,18 @@ select a, count(*) from db1.t_dup group by a order by a;
 select count(*) from db1.t_dup;
 -- @session
 
--- 19. Row-wise expression projections also merge without dropping role visibility
+-- 19. Row-wise expression projections merge across case-equivalent aliases.
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
 alter role test_rule_role_expr_projection_a add rule "select a + 1 as b from db1.t_dup where marker = 1" on table db1.t_dup;
-alter role test_rule_role_expr_projection_b add rule "select a + 1 as b from db1.t_dup where marker = 2" on table db1.t_dup;
+alter role test_rule_role_expr_projection_b add rule "select a + 1 as B from db1.t_dup where marker = 2" on table db1.t_dup;
 create user test_rule_user_expr_projection identified by '123456' default role test_rule_role_expr_projection_a;
 grant connect on account * to test_rule_role_expr_projection_a;
 grant select on table db1.t_dup to test_rule_role_expr_projection_a;
 grant select on table db1.t_dup to test_rule_role_expr_projection_b;
-grant test_rule_role_expr_projection_b to test_rule_user_expr_projection;
+grant test_rule_role_expr_projection_b to test_rule_role_expr_projection_a;
 -- @session:id=9&user=sys:test_rule_user_expr_projection:test_rule_role_expr_projection_a&password=123456
 set enable_remap_hint = 1;
-set secondary role all;
 select b, count(*) from db1.t_dup group by b order by b;
 -- @session
 
@@ -579,7 +665,6 @@ drop user if exists test_rule_user_where;
 drop user if exists test_rule_user_dup_projection;
 drop user if exists test_rule_user_expr_projection;
 drop user if exists test_rule_user_columns;
-drop user if exists test_rule_user_legacy;
 drop user if exists test_rule_user_dependency;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
@@ -600,7 +685,6 @@ drop role if exists test_rule_role_dup_projection_b;
 drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
 drop role if exists test_rule_role_columns;
-drop role if exists test_rule_role_legacy;
 drop role if exists test_rule_role_dependency;
 drop database if exists db1;
 drop database if exists db2;
