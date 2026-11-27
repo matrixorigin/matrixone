@@ -5,6 +5,8 @@ on:
       group: {type: number, required: true}
       head: {type: string, required: true}
       source: {type: string, required: true}
+      enable_cs_site_retry: {type: boolean, default: false}
+      enable_4_2_dev: {type: boolean, required: false, default: false}
     secrets:
       TOKEN_ACTION: {required: false}
       CS_COVERAGE_CACHE_READ_TOKEN: {required: false}
@@ -13,55 +15,50 @@ permissions:
 jobs:
   select:
     name: GROUP${{ inputs.group }}
-    if: github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-pr32922.yaml@refs/heads/weilu-runner-test' && github.event_name == 'push' && github.actor == 'Ariznawlll' && github.run_attempt == 1
+    if: >-
+      github.repository == 'matrixorigin/matrixone' && github.event_name == 'push' &&
+      github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-pr32922.yaml@refs/heads/weilu-runner-test' &&
+      github.actor == 'Ariznawlll' && github.run_attempt == 1 &&
+      github.event.before == '944c23873fae6290cefc9a0c32159a1aa77ebb7b'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     environment: ci
     permissions:
       contents: read
       actions: write
-      pull-requests: read
     outputs:
       child: ${{ steps.select.outputs.child }}
     steps:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
+        repository: matrixorigin/CI
+        ref: 4972bd963f4cc9510266323b14446a8edcda2bfc
+        path: .standby
+        sparse-checkout: |
+          scripts/coverage_standby.py
+          scripts/coverage_pr_entry.py
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
+    - name: Load isolated provenance adapter from the exact trial commit
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
         repository: matrixorigin/matrixone
         ref: ${{ github.sha }}
-        sparse-checkout: .github/standby-trial
-        sparse-checkout-cone-mode: true
+        path: .coverage-trial
+        sparse-checkout: .github/standby-trial/ci495_trial.py
+        sparse-checkout-cone-mode: false
         persist-credentials: false
-    - id: retry_auth
-      if: github.run_attempt > 1
-      name: Reauthorize the exact live PR before dispatching a retry
-      env:
-        ORG_MEMBERSHIP_TOKEN: ${{ secrets.TOKEN_ACTION }}
-        API_TOKEN: ${{ github.token }}
-      run: python3 -I .github/standby-trial/retry_authorize.py
-    - if: github.run_attempt > 1
-      name: Verify retry eligibility and pinned source
-      env:
-        ALLOWED: ${{ steps.retry_auth.outputs.allowed }}
-        LIVE_HEAD: ${{ steps.retry_auth.outputs.head_sha }}
-        LIVE_SOURCE: ${{ steps.retry_auth.outputs.head_repository }}
-        HEAD: ${{ inputs.head }}
-        SOURCE: ${{ inputs.source }}
-      run: test "$ALLOWED" = true && test "$LIVE_HEAD" = "$HEAD" && test "$LIVE_SOURCE" = "$SOURCE"
-    - if: github.run_attempt > 1
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      with:
-        name: real-pr-retry-${{ github.run_id }}-attempt-${{ github.run_attempt }}-group-${{ inputs.group }}
-        path: ${{ runner.temp }}/real-pr-authorization.json
-        if-no-files-found: error
     - id: select
+      name: Find a CS runner or use Shanghai standby
       timeout-minutes: 85
       env:
         PR: "33176"
         GROUP: ${{ inputs.group }}
         HEAD: ${{ inputs.head }}
         SOURCE: ${{ inputs.source }}
+        COVERAGE_CS_SITE_RETRY: ${{ inputs.enable_cs_site_retry }}
         ACTIONS_TOKEN: ${{ github.token }}
-      run: python3 -I .github/standby-trial/coverage_standby.py choose
+      run: python3 -I .coverage-trial/.github/standby-trial/ci495_trial.py choose
     - name: Release exactly one worker
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -71,14 +68,28 @@ jobs:
         retention-days: 1
     # A failed child must fail the job that dispatched it. Failed-only reruns
     # now create a new child for this group, not a new poll of the dead child.
-    - name: Show live Coverage UT progress
+    - id: wait
+      name: Wait for selected group, including its UT result
       env:
         CHILD: ${{ steps.select.outputs.child }}
         POOL: ${{ steps.select.outputs.pool }}
         GROUP: ${{ inputs.group }}
+        COVERAGE_CS_SITE: ${{ steps.select.outputs.site }}
         ACTIONS_TOKEN: ${{ github.token }}
-      run: python3 -I .github/standby-trial/coverage_standby.py wait
+      run: python3 -I .coverage-trial/.github/standby-trial/ci495_trial.py wait
+    - name: Cancel the selected worker if the selector stops
+      if: ${{ always() && steps.select.outputs.child != '' && steps.wait.outcome != 'success' }}
+      timeout-minutes: 2
+      env:
+        CHILD: ${{ steps.select.outputs.child }}
+        GROUP: ${{ inputs.group }}
+        HEAD: ${{ inputs.head }}
+        SOURCE: ${{ inputs.source }}
+        PR: "33176"
+        ACTIONS_TOKEN: ${{ github.token }}
+      run: python3 -I .coverage-trial/.github/standby-trial/ci495_trial.py revoke
   collect:
+    name: Collect Group ${{ inputs.group }} coverage
     needs: select
     runs-on: ubuntu-latest
     timeout-minutes: 360

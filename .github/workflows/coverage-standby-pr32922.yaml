@@ -1,4 +1,4 @@
-name: PR 33176 / CI 491 Coverage UT (isolated)
+name: PR 33176 / merged CI 495 Coverage UT (isolated)
 on:
   push:
     branches: [weilu-runner-test]
@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   authorize:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == '77e3187e32d1988a71a7233cfda44d9523d494aa' && github.ref == 'refs/heads/weilu-runner-test'
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == '944c23873fae6290cefc9a0c32159a1aa77ebb7b' && github.ref == 'refs/heads/weilu-runner-test'
     runs-on: ubuntu-latest
     environment: ci
     permissions:
@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: matrixorigin/CI
-          ref: 746b0257a141f5ac935376bc947bf4cf73e49b74
+          ref: 4972bd963f4cc9510266323b14446a8edcda2bfc
           path: fixed-ci
           sparse-checkout: |
             scripts/coverage_cache_preflight.py
@@ -32,13 +32,13 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: matrixorigin/CI
-          ref: 48edf24e44a888c1c4d57318c4eca7cbb310c6e7
+          ref: 7a8cf1854da5ca4cc5ffb5a1f2cbc454162ad589
           path: reviewed
           sparse-checkout: |
             scripts
             config
           persist-credentials: false
-      - name: Verify the JED canary, frozen PR, and production eligibility
+      - name: Verify the frozen PR head, official preflight, and production eligibility
         id: auth
         env:
           CS_PR_METADATA_TOKEN: ${{ secrets.TOKEN_ACTION }}
@@ -52,9 +52,8 @@ jobs:
           from coverage_pr_entry import ENTRY, PROJECT, has_s3_fixture, route
           import node_cache_real_pr_gate as approved
 
-          number, run_id, preflight = 33176, 45801565374, 139845911163
-          canary, canary_sha = 45818613257, "77e3187e32d1988a71a7233cfda44d9523d494aa"
-          head, source, author = "78aa93fc7e1b5620f6218cdd5c9a436a7e7fa343", "Ariznawlll/matrixone", "Ariznawlll"
+          number, run_id, preflight = 33176, 45952769594, 140352208426
+          head, source, author = "1e244603917809ad7e13d2bb4aafdbd0fd52e06e", "Ariznawlll/matrixone", "Ariznawlll"
           def check(ok, message):
               if not ok:
                   raise SystemExit(message)
@@ -62,7 +61,7 @@ jobs:
               def redirect_request(self, *args, **kwargs):
                   return None
           def actions_record(path):
-              check(path in (f"actions/runs/{run_id}", f"actions/jobs/{preflight}", f"actions/runs/{canary}"),
+              check(path in (f"actions/runs/{run_id}", f"actions/jobs/{preflight}"),
                     "Unapproved Actions provenance path")
               request = urllib.request.Request(f"https://api.github.com/repos/{PROJECT}/{path}",
                   headers={"Authorization": "Bearer " + os.environ["API_TOKEN"],
@@ -74,12 +73,6 @@ jobs:
                   return json.loads(raw)
           code, p = approved.read(f"repos/{PROJECT}/pulls/{number}", token=os.environ["CS_PR_METADATA_TOKEN"])
           check(code == 200, "Required PR record unavailable")
-          c = actions_record(f"actions/runs/{canary}")
-          check(c["repository"]["full_name"] == PROJECT and c["head_repository"]["full_name"] == PROJECT
-                and c["event"] == "push" and c["path"] == ".github/workflows/cs-jed-build-tools-canary.yml"
-                and c["head_sha"] == canary_sha and c["head_branch"] == "weilu-runner-test"
-                and c["run_attempt"] == 1 and c["status"] == "completed" and c["conclusion"] == "success",
-                "The exact JED installation canary did not pass")
           r = actions_record(f"actions/runs/{run_id}")
           j = actions_record(f"actions/jobs/{preflight}")
           check(p["user"]["login"] == author and p["base"]["ref"] == "main"
@@ -97,7 +90,7 @@ jobs:
                          {"number": number, "action": "opened", "pull_request": p}, p, member,
                          lambda src, rev: has_s3_fixture(src, rev, os.environ["CS_PR_METADATA_TOKEN"]))
           check(result == {"route": "cache", "allowed": "true", "head_sha": head, "head_repository": source},
-                "CI 491 did not authorize the exact PR and fixtures")
+                "Merged CI 495 did not authorize the exact PR and fixtures")
           receipt = dict(schema=2, allowed="true", pr_number=str(number), author=author, base_ref="main",
                          head_sha=head, head_repository=source, verified_membership_http_status=member,
                          membership_checks=checks, project_cache_namespace=PROJECT)
@@ -105,7 +98,7 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               for key, value in result.items():
                   print(f"{key}={value}", file=out)
-          print("Verified the JED canary and authorized fixed MatrixOne PR #33176")
+          print(f"Official preflight verified; authorized MatrixOne PR #33176 at {head}")
           PY
       - name: Check Coverage S3 configuration names
         env:
@@ -160,8 +153,12 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: matrixorigin/CI
-          ref: 48edf24e44a888c1c4d57318c4eca7cbb310c6e7
-          sparse-checkout: scripts
+          ref: c48984d3f9a6aff6179b28aa3e3d5466141a56b7
+          sparse-checkout: |
+            scripts/coverage_group_collect.py
+            scripts/coverage_two_groups_merge.py
+            scripts/compact_coverage_profile.go
+          sparse-checkout-cone-mode: false
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -213,3 +210,41 @@ jobs:
           name: ut-coverage-generation-${{ github.run_id }}-${{ github.run_attempt }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ut-coverage.out
           if-no-files-found: error
+      - name: Upload combined group evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ut-coverage-combined-skips-${{ github.run_id }}-${{ github.run_attempt }}
+          path: combined-skip-manifest.json
+          if-no-files-found: error
+  feedback:
+    name: Report Coverage UT to the exact PR head
+    needs: [authorize, coverage, merge]
+    if: needs.coverage.result == 'success' && needs.merge.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Publish the isolated two-group result, not the full CI status
+        env:
+          API_TOKEN: ${{ github.token }}
+          COVERAGE_HEAD: ${{ needs.authorize.outputs.sha }}
+          COVERAGE_PERCENT: ${{ needs.merge.outputs.percent }}
+          COVERAGE_ARTIFACT: ${{ needs.merge.outputs.artifact }}
+        run: |
+          set -euo pipefail
+          test "$COVERAGE_HEAD" = '1e244603917809ad7e13d2bb4aafdbd0fd52e06e'
+          [[ "$COVERAGE_PERCENT" =~ ^([0-9]{1,2}\.[0-9]{2}|100\.00)$ ]]
+          [[ "$COVERAGE_ARTIFACT" =~ ^https://github\.com/matrixorigin/matrixone/actions/runs/${GITHUB_RUN_ID}/artifacts/[0-9]+$ ]]
+          root="$GITHUB_API_URL/repos/matrixorigin/matrixone"
+          curl --fail --silent --show-error --max-time 30 -H "Authorization: Bearer $API_TOKEN" \
+            "$root/pulls/33176" | jq -e --arg head "$COVERAGE_HEAD" \
+            '.state == "open" and .head.sha == $head and .head.repo.full_name == "Ariznawlll/matrixone"' >/dev/null
+          payload=$(jq -n --arg url "$COVERAGE_ARTIFACT" --arg description "Both groups passed; UT coverage ${COVERAGE_PERCENT}%" \
+            '{state:"success", context:"Coverage UT (CI #495 trial)", target_url:$url, description:$description}')
+          curl --fail --silent --show-error --max-time 30 -H "Authorization: Bearer $API_TOKEN" \
+            -H "Content-Type: application/json" --data "$payload" "$root/statuses/$COVERAGE_HEAD" |
+            jq -e --arg url "$COVERAGE_ARTIFACT" 'select(.state == "success" and .target_url == $url) | .context'
+          printf 'Coverage UT: %s%% on `%s`; [combined profile](%s).\n' \
+            "$COVERAGE_PERCENT" "$COVERAGE_HEAD" "$COVERAGE_ARTIFACT" >> "$GITHUB_STEP_SUMMARY"

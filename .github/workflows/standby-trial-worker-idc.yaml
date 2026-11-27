@@ -19,7 +19,10 @@ permissions:
 jobs:
   worker:
     name: Coverage reservation IDC group ${{ inputs.group }}
-    if: github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-worker.yaml@refs/heads/weilu-runner-test' && github.event_name == 'workflow_dispatch' && inputs.ticket != ''
+    if: >-
+      github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' &&
+      github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-worker.yaml@refs/heads/weilu-runner-test' &&
+      github.run_attempt == 1 && (inputs.group == 0 || inputs.group == 1) && inputs.ticket != ''
     runs-on: amd64-mo-shanghai-ut-safe
     timeout-minutes: 320
     steps:
@@ -27,10 +30,19 @@ jobs:
       if: inputs.ticket != ''
       uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
+        repository: matrixorigin/CI
+        ref: 4972bd963f4cc9510266323b14446a8edcda2bfc
+        path: .standby
+        sparse-checkout: scripts/coverage_standby.py
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
+    - name: Load isolated provenance adapter from the exact trial commit
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
         repository: matrixorigin/matrixone
         ref: ${{ github.sha }}
-        path: .standby
-        sparse-checkout: .github/standby-trial/coverage_standby.py
+        path: .coverage-trial
+        sparse-checkout: .github/standby-trial/ci495_trial.py
         sparse-checkout-cone-mode: false
         persist-credentials: false
     - name: Wait for an exclusive grant for this exact run before PR checkout
@@ -43,12 +55,7 @@ jobs:
         HEAD: ${{ inputs.head }}
         GROUP: ${{ inputs.group }}
         POOL: idc
-      run: python3 -I .standby/.github/standby-trial/coverage_standby.py admit
-    - name: Drill only - fail group 1 after admission on parent attempt 1
-      if: inputs.group == 1 && fromJSON(inputs.ticket).attempt == 1
-      run: |
-        echo "::error::Intentional first-attempt reservation failure; no UT result produced"
-        exit 1
+      run: python3 -I .coverage-trial/.github/standby-trial/ci495_trial.py admit
     - name: Check direct worker before loading PR source
       env:
         ASSIGNED: ${{ runner.name }}
@@ -71,7 +78,7 @@ jobs:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
         repository: matrixorigin/CI
-        ref: 48edf24e44a888c1c4d57318c4eca7cbb310c6e7
+        ref: 7a8cf1854da5ca4cc5ffb5a1f2cbc454162ad589
         sparse-checkout: |
           scripts
           config
@@ -84,6 +91,7 @@ jobs:
     - uses: matrixorigin/CI/actions/setup-python-udf@4670989748419fb169f88282cf05fb690ea91074
       if: hashFiles('pkg/udf/python/worker/requirements.txt') != ''
     - name: Run the reviewed Coverage UT group, cold build allowed
+      id: coverage_ut
       timeout-minutes: 190
       env:
         GOPROXY: http://goproxy.goproxy.svc.cluster.local|https://goproxy.cn|direct
@@ -466,6 +474,45 @@ jobs:
         set -e
         phase_end "${phase_status}"
         (( phase_status == 0 )) || exit "${phase_status}"
+    - name: Collect bounded Shanghai failure evidence
+      id: idc_diagnostics
+      if: ${{ failure() && !cancelled() && steps.coverage_ut.outcome == 'failure' }}
+      timeout-minutes: 5
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -euo pipefail
+        out=$(mktemp -d "${RUNNER_TEMP}/idc-diagnostics.XXXXXXXX")
+        echo "path=$out" >> "$GITHUB_OUTPUT"
+        cd "$RUNNER_TEMP"
+        # Keep the failing test's output, not just its final FAIL event.
+        # Never glob the PR workspace or upload the entire runner directory.
+        report=ut-coverage-report.json
+        if [[ -f "$report" && ! -L "$report" ]]; then
+          jq -rc 'select(.Action=="fail") | [.Package,.Test] | @json' "$report" |
+            head -n 50 > "$out/failed-tests.txt" || true
+          jq -cn --rawfile failed "$out/failed-tests.txt" '
+            ($failed | split("\n") | map(select(length>0)) | INDEX(.)) as $fail |
+            reduce inputs as $e ({}; ([$e.Package,$e.Test]|@json) as $k |
+              if $fail[$k] and ($e.Action=="output" or $e.Action=="fail") then
+                .[$k] = ((.[$k] + [($e.Output // "FAIL")[:800]])[-20:])
+              else . end) | to_entries[]' "$report" > "$out/failed-test-output.txt" || true
+          # JSON quoting keeps embedded newlines and workflow commands inert.
+          head -c 8192 "$out/failed-test-output.txt"
+        fi
+        for f in ut-coverage-timeout.txt ut-coverage-status.json ut-coverage-phase-failure.txt ut-coverage-phase-timing.txt ut-coverage.stderr.log; do
+          if [[ -f "$f" && ! -L "$f" ]]; then tail -c 65536 "$f" > "$out/$f"; fi
+        done
+    - name: Upload Shanghai failure evidence
+      if: ${{ failure() && !cancelled() && steps.coverage_ut.outcome == 'failure' && steps.idc_diagnostics.outputs.path != '' }}
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ut-coverage-diagnostics-group-${{ inputs.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ steps.idc_diagnostics.outputs.path }}
+        if-no-files-found: warn
+        retention-days: 7
     - name: Record actual packages, skips and source
       env:
         ASSIGNED: ${{ runner.name }}

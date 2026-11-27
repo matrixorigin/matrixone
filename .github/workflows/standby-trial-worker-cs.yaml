@@ -18,22 +18,41 @@ on:
 jobs:
   worker:
     name: Coverage reservation CS group ${{ inputs.group }}
-    if: github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-worker.yaml@refs/heads/weilu-runner-test' && github.event_name == 'workflow_dispatch' && inputs.ticket != ''
-    runs-on: cs-node-cache-7c14g
+    if: >-
+      github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' &&
+      github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-worker.yaml@refs/heads/weilu-runner-test' &&
+      github.run_attempt == 1 && (inputs.group == 0 || inputs.group == 1) && inputs.ticket != '' &&
+      (!fromJSON(inputs.ticket).site || contains(fromJSON('["mty","jed","mnl2","ruh"]'), fromJSON(inputs.ticket).site))
+    runs-on: >-
+      ${{ fromJSON(fromJSON(inputs.ticket || '{}').site &&
+      format('["cs-node-cache-7c14g","cs-{0}-node-cache-all"]', fromJSON(inputs.ticket || '{}').site) ||
+      '["cs-node-cache-7c14g"]') }}
     environment: ci
     timeout-minutes: 320
     steps:
-    - name: Load trusted admission check, never PR source
-      if: inputs.ticket != ''
+    - name: Load trusted admission and failure reporting helpers
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
+        repository: matrixorigin/CI
+        ref: 4972bd963f4cc9510266323b14446a8edcda2bfc
+        path: .standby
+        sparse-checkout: |
+          scripts/coverage_standby.py
+          scripts/summarize_ut_report.py
+          scripts/coverage_cs_build_tools.sh
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
+    - name: Load isolated provenance adapter from the exact trial commit
       uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
         repository: matrixorigin/matrixone
         ref: ${{ github.sha }}
-        path: .trial-admission
-        sparse-checkout: .github/standby-trial/coverage_standby.py
+        path: .coverage-trial
+        sparse-checkout: .github/standby-trial/ci495_trial.py
         sparse-checkout-cone-mode: false
         persist-credentials: false
     - name: Wait for an exclusive grant for this exact run before PR checkout
+      id: admission
       if: inputs.ticket != ''
       timeout-minutes: 20
       env:
@@ -43,16 +62,9 @@ jobs:
         HEAD: ${{ inputs.head }}
         GROUP: ${{ inputs.group }}
         POOL: cs
-      run: python3 -I .trial-admission/.github/standby-trial/coverage_standby.py admit
-    - name: Load the pinned CI 487 failure reporting helper
-      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      with:
-        repository: matrixorigin/CI
-        ref: fcd1f2ffe4119e412c78902728c17eda2febc394
-        path: .standby
-        sparse-checkout: scripts/summarize_ut_report.py
-        sparse-checkout-cone-mode: false
-        persist-credentials: false
+      run: python3 -I .coverage-trial/.github/standby-trial/ci495_trial.py admit
+    - name: Preserve the trusted failure summary helper
+      run: install -m 0444 .standby/scripts/summarize_ut_report.py "$RUNNER_TEMP/coverage-summarize-ut-report.py"
     - id: reader
       name: Verify assigned reader before checkout
       shell: bash
@@ -65,18 +77,10 @@ jobs:
         [[ "$site:$node" != mty:2 && "$site" == "${CS_CACHE_ENV:-}" ]]
         [[ "mo-standard-$node" == "${CS_CACHE_NODE:-}" && "$CS_CACHE_NODE" == "${CS_CACHE_EXPECTED_NODE:-}" ]]
         echo "site=$site" >> "$GITHUB_OUTPUT"
-    - name: Load the exact JED-verified CI 491 dependency installer
-      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      with:
-        repository: matrixorigin/CI
-        ref: 746b0257a141f5ac935376bc947bf4cf73e49b74
-        path: .build-tools
-        sparse-checkout: scripts/coverage_cs_build_tools.sh
-        sparse-checkout-cone-mode: false
-        persist-credentials: false
     - name: Install CS runner build dependencies
+      id: build_tools
       timeout-minutes: 10
-      run: bash .build-tools/scripts/coverage_cs_build_tools.sh
+      run: bash .standby/scripts/coverage_cs_build_tools.sh
     - name: Checkout MatrixOne source
       timeout-minutes: 10
       uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -92,7 +96,7 @@ jobs:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
         repository: matrixorigin/CI
-        ref: 48edf24e44a888c1c4d57318c4eca7cbb310c6e7
+        ref: 7a8cf1854da5ca4cc5ffb5a1f2cbc454162ad589
         persist-credentials: false
         path: .ci-toolchain
         sparse-checkout: |-
@@ -110,6 +114,7 @@ jobs:
       timeout-minutes: 5
       uses: matrixorigin/CI/actions/setup-python-udf@4670989748419fb169f88282cf05fb690ea91074
     - name: Checkout CI coverage helper
+      id: coverage_helpers
       timeout-minutes: 10
       uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       env:
@@ -118,7 +123,7 @@ jobs:
       with:
         token: ${{ secrets.TOKEN_ACTION }}
         repository: matrixorigin/CI
-        ref: 48edf24e44a888c1c4d57318c4eca7cbb310c6e7
+        ref: 7a8cf1854da5ca4cc5ffb5a1f2cbc454162ad589
         persist-credentials: false
         sparse-checkout: |
           scripts
@@ -182,6 +187,18 @@ jobs:
         COVERAGE_GROUP_COUNT: '2'
       run: |
         set -euo pipefail
+        phase_failure="${RUNNER_TEMP}/ut-coverage-phase-failure.txt"
+        phase_name=configure_coverage
+        rm -f "${phase_failure}"
+        record_phase_failure() {
+          printf 'phase=%s status=%s\n' "${phase_name}" "$1" > "${phase_failure}"
+        }
+        record_unreported_phase_failure() {
+          if (( $1 != 0 )) && [[ ! -s "${phase_failure}" && ! -s "${coverage_report:-}" ]]; then
+            record_phase_failure "$1"
+          fi
+        }
+        trap 'record_unreported_phase_failure "$?"' EXIT
         cd "$GITHUB_WORKSPACE"
         test "${CS_CACHE_ENV:-}" = "$CS_S3_ENV"
         echo "Coverage comparison: GOMAXPROCS=${GOMAXPROCS}; package parallelism=${COVERAGE_UT_PACKAGE_PARALLELISM}"
@@ -233,6 +250,9 @@ jobs:
             phase_status_suffix=" raw_status=${raw_phase_status}"
           fi
           echo "phase=${phase_name} status=${phase_status} elapsed_seconds=${phase_elapsed_seconds}${phase_status_suffix}" >> "${phase_timing}"
+          if [ "${phase_status}" != '0' ]; then
+            record_phase_failure "${phase_status}"
+          fi
           if [ "${phase_status}" = '124' ]; then
             {
               echo "Coverage UT phase exceeded its internal deadline: ${phase_name}"
@@ -264,7 +284,7 @@ jobs:
                 echo 'CGo preparation log (last 100 lines):'
                 tail -n 100 "${cgo_log}"
               fi
-            } > "${phase_failure}"
+            } >> "${phase_failure}"
           fi
         }
 
@@ -299,6 +319,7 @@ jobs:
         set -e
         phase_end "${phase_status}" "${COVERAGE_UT_DISCOVERY_TIMEOUT_SECONDS}"
         (( phase_status == 0 )) || exit "${phase_status}"
+        phase_name=select_coverage_group
         package_count=$(printf '%s\n' "${test_scope}" | awk 'NF { count++ } END { print count + 0 }')
         instrumented_package_count=$(printf '%s\n' "${cover_pkgs}" | awk -F, '{ print NF }')
         printf '%s\n' "${test_scope}" > "$RUNNER_TEMP/coverage-full-scope.txt"
@@ -333,6 +354,7 @@ jobs:
         set -e
         phase_end "${phase_status}" "${COVERAGE_UT_CGO_TIMEOUT_SECONDS}"
         (( phase_status == 0 )) || exit "${phase_status}"
+        phase_name=configure_native_flags
         thirdparties_install_dir="$GITHUB_WORKSPACE/thirdparties/install"
         cgo_cflags="-I${GITHUB_WORKSPACE}/cgo -I${thirdparties_install_dir}/include"
         if [ -n "${CS_NODE_CACHE_STATE:-}" ]; then
@@ -360,6 +382,7 @@ jobs:
         done
         echo '- Restricted-account S3 initialization, basic and streaming smoke passed.' >> "$GITHUB_STEP_SUMMARY"
 
+        phase_name=launch_coverage_suite
         # Keep the same all-package scope, using environment-local CS S3.
         # Save the verbose JSON report as an artifact
         # rather than flooding the Actions console; the next step prints a
@@ -569,6 +592,8 @@ jobs:
         if [ ! -s "${report}" ]; then
           echo 'UT JSON report was not produced; inspect the failed test step.' | tee -a "${summary}"
         else
+          python3 -I "$RUNNER_TEMP/coverage-summarize-ut-report.py" "${report}" \
+            --compact-output "$RUNNER_TEMP/ut-failure-compact.txt" | tee -a "${summary}" || true
           status_result=$(jq -r '.result // "unknown"' "${status_file}" 2>/dev/null || true)
           if [ "${status_result}" = 'timeout' ]; then
             echo 'Coverage UT hit the controlled deadline; skipped go-ut-analysis installation to preserve diagnostic upload time.' | tee -a "${summary}"
@@ -580,8 +605,6 @@ jobs:
               echo 'go-ut-analysis is unavailable; the raw JSON report is attached.' | tee -a "${summary}"
             fi
           fi
-          python3 -I "$GITHUB_WORKSPACE/.standby/scripts/summarize_ut_report.py" "${report}" \
-            --compact-output "$RUNNER_TEMP/ut-failure-compact.txt" | tee -a "${summary}" || true
         fi
         if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
           {
@@ -665,13 +688,34 @@ jobs:
       if: ${{ always() && !cancelled() }}
       timeout-minutes: 5
       continue-on-error: true
+      env:
+        ADMISSION_OUTCOME: ${{ steps.admission.outcome }}
+        BUILD_TOOLS_OUTCOME: ${{ steps.build_tools.outcome }}
+        NODE_CACHE_OUTCOME: ${{ steps.node_cache.outcome }}
+        COVERAGE_OUTCOME: ${{ steps.coverage_ut.outcome }}
+        PROFILE_UPLOAD_OUTCOME: ${{ steps.upload_coverage_profile.outcome }}
+        CACHE_ACCEPTANCE_OUTCOME: ${{ steps.node_cache_acceptance.outcome }}
       run: |
         set -euo pipefail
         status_file="${RUNNER_TEMP}/ut-coverage-status.json"
-        if [ -s "${status_file}" ]; then
+        preserve_status=false
+        if [[ "$COVERAGE_OUTCOME" != success && "$COVERAGE_OUTCOME" != failure ]]; then
+          result=failed
+          if [[ "$ADMISSION_OUTCOME" == failure ]]; then
+            reason=worker_admission_failure
+          elif [[ "$BUILD_TOOLS_OUTCOME" == failure ]]; then
+            reason=runner_build_dependencies_failure
+          elif [[ "$NODE_CACHE_OUTCOME" == failure ]]; then
+            reason=node_cache_configuration_failure
+          else
+            reason=coverage_setup_failed
+          fi
+          # No test producer ran. Do not read a leftover report or status.
+        elif [ -s "${status_file}" ]; then
+          preserve_status=true
           result=$(jq -r '.result // "unknown"' "${status_file}")
           reason=$(jq -r '.reason // "unknown"' "${status_file}")
-          if [ "${{ steps.coverage_ut.outcome }}" = 'failure' ] && [ "${result}" = 'passed' ]; then
+          if [ "$COVERAGE_OUTCOME" = 'failure' ] && [ "${result}" = 'passed' ]; then
             result=failed
             reason=post_test_phase_failure
           fi
@@ -685,26 +729,23 @@ jobs:
           awk '$2 ~ /^status=[1-9]/ { found=1; exit } END { exit !found }' "${RUNNER_TEMP}/ut-coverage-phase-timing.txt"; then
           result=failed
           reason=coverage_preparation_or_compaction_failure
-        elif [ "${{ steps.coverage_ut.outcome }}" = 'success' ]; then
+        elif [ "$COVERAGE_OUTCOME" = 'success' ]; then
           result=passed
           reason=command_exit
-        elif [ "${{ steps.coverage_ut.outcome }}" = 'failure' ]; then
+        else
           result=failed
           reason=coverage_step_terminated_without_status
-        else
-          result=external_timeout_or_cancellation
-          reason=producer_status_file_missing
         fi
-        if [ "${result}" = 'passed' ] && [ "${{ steps.upload_coverage_profile.outcome }}" != 'success' ]; then
+        if [ "${result}" = 'passed' ] && [ "$PROFILE_UPLOAD_OUTCOME" != 'success' ]; then
           result=failed
           reason=coverage_profile_artifact_upload_failure
         fi
-        if [ '${{ true }}' = true ] && [ '${{ steps.node_cache_acceptance.outcome }}' != success ]; then
+        if [ "${result}" = 'passed' ] && [ "$CACHE_ACCEPTANCE_OUTCOME" != 'success' ]; then
           result=failed
           reason=incremental_cache_validation_failure
         fi
         status_tmp="${status_file}.final"
-        if [ -s "${status_file}" ]; then
+        if [ "${preserve_status}" = true ]; then
           jq --arg result "${result}" --arg reason "${reason}" \
             '. + {result: $result, reason: $reason}' "${status_file}" > "${status_tmp}"
         else
@@ -716,14 +757,14 @@ jobs:
         echo "- UT coverage producer status: \`${result}\` (reason: \`${reason}\`)." >> "$GITHUB_STEP_SUMMARY"
     - id: render_coverage_report
       name: Render readable coverage UT report
-      if: ${{ always() && !cancelled() }}
+      if: ${{ always() && !cancelled() && steps.coverage_helpers.outcome == 'success' }}
       timeout-minutes: 5
       continue-on-error: true
       run: |
         set -uo pipefail
         report="${RUNNER_TEMP}/ut-coverage-report.json"
         incident="${RUNNER_TEMP}/ut-coverage-incident.md"
-        python "$GITHUB_WORKSPACE/.ci-workflow/scripts/summarize_coverage_ut.py" \
+        python3 "$GITHUB_WORKSPACE/.ci-workflow/scripts/summarize_coverage_ut.py" \
           --report "${report}" \
           --status "${RUNNER_TEMP}/ut-coverage-status.json" \
           --phase-timing "${RUNNER_TEMP}/ut-coverage-phase-timing.txt" \
@@ -737,29 +778,44 @@ jobs:
           echo '::warning::failed to render the readable coverage UT report'
         fi
     - name: Summarize package and admission timings
-      if: ${{ always() && !cancelled() }}
+      if: ${{ always() && !cancelled() && steps.coverage_helpers.outcome == 'success' && (steps.coverage_ut.outcome == 'success' || steps.coverage_ut.outcome == 'failure') }}
       timeout-minutes: 5
       continue-on-error: true
       run: |
-        python "$GITHUB_WORKSPACE/.ci-workflow/scripts/coverage_timing.py" \
-          "$RUNNER_TEMP/ut-coverage-report.json" "$RUNNER_TEMP/ut-coverage-timing.json"
+        report="$RUNNER_TEMP/ut-coverage-report.json"
+        if [[ -f "$report" && -s "$report" && ! -L "$report" ]]; then
+          python3 "$GITHUB_WORKSPACE/.ci-workflow/scripts/coverage_timing.py" \
+            "$report" "$RUNNER_TEMP/ut-coverage-timing.json"
+        fi
     - id: skip_manifest
       name: Preserve per-test skip evidence on success and failure
-      if: ${{ always() && !cancelled() }}
+      if: ${{ always() && !cancelled() && (steps.coverage_ut.outcome == 'success' || steps.coverage_ut.outcome == 'failure') }}
       timeout-minutes: 5
+      continue-on-error: ${{ steps.coverage_ut.outcome == 'failure' }}
       env:
         ACTUAL_RUNNER: ${{ runner.name }}
         STORAGE_MODE: cs-s3
+        COVERAGE_OUTCOME: ${{ steps.coverage_ut.outcome }}
       run: |
         set -euo pipefail
-        python "$GITHUB_WORKSPACE/.ci-workflow/scripts/coverage_skip_manifest.py" \
-          --report "$RUNNER_TEMP/ut-coverage-report.json" \
+        report="$RUNNER_TEMP/ut-coverage-report.json"
+        if [[ ! -f "$report" || ! -s "$report" || -L "$report" ]]; then
+          if [[ "$COVERAGE_OUTCOME" == failure ]]; then
+            echo 'No per-test skip evidence: coverage failed before a JSON report was available.'
+            exit 0
+          fi
+          echo '::error::Coverage succeeded without the expected JSON report for skip evidence.'
+          exit 1
+        fi
+        python3 "$GITHUB_WORKSPACE/.ci-workflow/scripts/coverage_skip_manifest.py" \
+          --report "$report" \
           --status "$RUNNER_TEMP/ut-coverage-status.json" \
           --source-sha "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" \
           --runner "$ACTUAL_RUNNER" --mode "$STORAGE_MODE" \
           --output "$RUNNER_TEMP/ut-coverage-skip-manifest.json"
+        echo 'available=true' >> "$GITHUB_OUTPUT"
     - name: Upload skip comparison evidence
-      if: ${{ always() && !cancelled() && steps.skip_manifest.outcome == 'success' }}
+      if: ${{ always() && !cancelled() && steps.skip_manifest.outcome == 'success' && steps.skip_manifest.outputs.available == 'true' }}
       timeout-minutes: 5
       uses: actions/upload-artifact@v7
       with:
@@ -834,7 +890,7 @@ jobs:
           jq -r '.reason | strings | gsub("[^a-zA-Z0-9_]"; "") | .[0:80] | "Coverage UT status: " + .' "$status" || true
         fi
         if [[ -s "$phase" && ! -L "$phase" ]]; then
-          head -c 512 "$phase" | awk '/^phase=[a-z_]+([[:space:]]|$)/ {print "Coverage UT phase: " substr($1, 7); exit}' || true
+          head -c 512 "$phase" | awk '/^phase=[a-z][a-z0-9_]*([[:space:]]|$)/ {print "Coverage UT phase: " substr($1, 7, 80); exit}' || true
         fi
         if [[ -s "$failure" && ! -L "$failure" ]]; then
           # Keep text produced by the tests inert as GitHub workflow commands.
