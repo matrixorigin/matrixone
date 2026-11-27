@@ -615,10 +615,10 @@ func (m *TNUsageMemo) EstablishFromCKPs() {
 // the returned order:
 // [account_id_vec, db_id_vec, tbl_id_vec, size_vec]
 func getStorageUsageBatVectors(bat *containers.Batch) []*vector.Vector {
-	accIDVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
-	dbIDVec := bat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
-	tblIDVec := bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
-	sizeVec := bat.GetVectorByName(CheckpointMetaAttr_ObjectSize).GetDownstreamVector()
+	accIDVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_AccID)
+	dbIDVec := bat.GetVectorByName(SnapshotAttr_DBID)
+	tblIDVec := bat.GetVectorByName(SnapshotAttr_TID)
+	sizeVec := bat.GetVectorByName(CheckpointMetaAttr_ObjectSize)
 
 	return []*vector.Vector{
 		accIDVec, dbIDVec, tblIDVec, nil, sizeVec,

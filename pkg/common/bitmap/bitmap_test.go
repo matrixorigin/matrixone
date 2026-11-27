@@ -483,3 +483,25 @@ func TestInitWithInvertedBits(t *testing.T) {
 		}
 	}
 }
+
+// MarshalToBytes writes MarshalTo's bytes without allocating, for an owned
+// bitmap and for a shifted read-only view.
+func TestMarshalToBytesMatchesMarshalTo(t *testing.T) {
+	var owned Bitmap
+	mustOK(owned.InitWithSize(300, testMP))
+	defer owned.Free()
+	for _, row := range []uint64{0, 3, 64, 65, 130, 299} {
+		owned.Add(row)
+	}
+	var view Bitmap
+	view.InitView(&owned, 3, 200)
+	for name, bm := range map[string]*Bitmap{"owned": &owned, "view": &view} {
+		var want bytes.Buffer
+		require.NoError(t, bm.MarshalTo(&want), name)
+		require.Equal(t, want.Len(), bm.MarshalSize(), name)
+		got := make([]byte, bm.MarshalSize()+3)
+		var n int
+		require.Zero(t, testing.AllocsPerRun(10, func() { n = bm.MarshalToBytes(got) }), name)
+		require.Equal(t, want.Bytes(), got[:n], name)
+	}
+}

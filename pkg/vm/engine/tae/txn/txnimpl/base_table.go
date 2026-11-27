@@ -80,16 +80,16 @@ func (r *duplicatedRowIDs) Close() {
 		return
 	}
 	if r.appendable != nil {
-		r.appendable.Close()
+		containers.ReleaseVector(r.appendable)
 		r.appendable = nil
 	}
 	if r.nonAppendable != nil {
-		r.nonAppendable.Close()
+		containers.ReleaseVector(r.nonAppendable)
 		r.nonAppendable = nil
 	}
 }
 
-func (r *duplicatedRowIDs) add(appendable bool, key int, rowID types.Rowid) {
+func (r *duplicatedRowIDs) add(appendable bool, key int, rowID types.Rowid) error {
 	var (
 		rows containers.Vector
 		keys *[][]int
@@ -102,19 +102,22 @@ func (r *duplicatedRowIDs) add(appendable bool, key int, rowID types.Rowid) {
 		keys = &r.nonAppendableByKey
 	}
 	idx := rows.Length()
-	rows.Append(rowID, false)
+	if err := vector.AppendFixed(rows, rowID, false, rows.MPool()); err != nil {
+		return err
+	}
 	(*keys)[key] = append((*keys)[key], idx)
+	return nil
 }
 
 func (r *duplicatedRowIDs) HasCandidate() bool {
 	for i := range r.appendableByKey {
 		for _, idx := range r.appendableByKey[i] {
-			if !r.appendable.IsNull(idx) {
+			if !r.appendable.IsNull(uint64(idx)) {
 				return true
 			}
 		}
 		for _, idx := range r.nonAppendableByKey[i] {
-			if !r.nonAppendable.IsNull(idx) {
+			if !r.nonAppendable.IsNull(uint64(idx)) {
 				return true
 			}
 		}
@@ -127,8 +130,8 @@ func (r *duplicatedRowIDs) firstLive(
 	indexes []int,
 ) (types.Rowid, bool) {
 	for _, idx := range indexes {
-		if !rows.IsNull(idx) {
-			return vector.GetFixedAtNoTypeCheck[types.Rowid](rows.GetDownstreamVector(), idx), true
+		if !rows.IsNull(uint64(idx)) {
+			return vector.GetFixedAtNoTypeCheck[types.Rowid](rows, idx), true
 		}
 	}
 	return types.EmptyRowid, false
@@ -140,20 +143,19 @@ func (r *duplicatedRowIDs) firstLive(
 // candidates from the same object class are retained until that filtering is
 // complete; the first surviving candidate preserves the existing object-list
 // traversal order.
-func (r *duplicatedRowIDs) Merge(pool *containers.VectorPool) containers.Vector {
+func (r *duplicatedRowIDs) Merge(pool *containers.VectorPool) (containers.Vector, error) {
 	rowIDs := pool.GetVector(&objectio.RowidType)
 	for i := range r.appendableByKey {
-		if rowID, ok := r.firstLive(r.appendable, r.appendableByKey[i]); ok {
-			rowIDs.Append(rowID, false)
-			continue
+		rowID, ok := r.firstLive(r.appendable, r.appendableByKey[i])
+		if !ok {
+			rowID, ok = r.firstLive(r.nonAppendable, r.nonAppendableByKey[i])
 		}
-		if rowID, ok := r.firstLive(r.nonAppendable, r.nonAppendableByKey[i]); ok {
-			rowIDs.Append(rowID, false)
-			continue
+		if err := vector.AppendFixed(rowIDs, rowID, !ok, rowIDs.MPool()); err != nil {
+			containers.ReleaseVector(rowIDs)
+			return nil, err
 		}
-		rowIDs.Append(nil, true)
 	}
-	return rowIDs
+	return rowIDs, nil
 }
 
 func newBaseTable(schema *catalog.Schema, isTombstone bool, txnTable *txnTable) *baseTable {
@@ -205,7 +207,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	var closeFuncs []func()
 	defer func() {
 		for _, v := range pkVecs {
-			v.Close()
+			containers.ReleaseVector(v)
 		}
 		for _, f := range closeFuncs {
 			f()
@@ -289,7 +291,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 	}()
 	pkType := pks.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
-	if err = index.BatchUpdateZM(keysZM, pks.GetDownstreamVector()); err != nil {
+	if err = index.BatchUpdateZM(keysZM, pks); err != nil {
 		return
 	}
 	for it.Next() {
@@ -311,11 +313,11 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 		}
 		objectRowIDs := tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		err = vector.AppendMultiFixed[types.Rowid](
-			objectRowIDs.GetDownstreamVector(),
+			objectRowIDs,
 			types.EmptyRowid,
 			true,
 			pks.Length(),
-			objectRowIDs.GetAllocator(),
+			objectRowIDs.MPool(),
 		)
 		if err == nil {
 			err = obj.GetObjectData().GetDuplicatedRows(
@@ -325,21 +327,25 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 				nil,
 				types.TS{}, types.MaxTs(),
 				objectRowIDs,
-				objectRowIDs.GetAllocator(),
+				objectRowIDs.MPool(),
 			)
 		}
 		if err == nil || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 			for i := 0; i < pks.Length(); i++ {
-				if !objectRowIDs.IsNull(i) {
-					rowIDs.add(
+				if !objectRowIDs.IsNull(uint64(i)) {
+					if addErr := rowIDs.add(
 						obj.IsAppendable(),
 						i,
-						vector.GetFixedAtNoTypeCheck[types.Rowid](objectRowIDs.GetDownstreamVector(), i),
-					)
+						vector.GetFixedAtNoTypeCheck[types.Rowid](objectRowIDs, i),
+					); addErr != nil {
+						containers.ReleaseVector(objectRowIDs)
+						err = addErr
+						return
+					}
 				}
 			}
 		}
-		objectRowIDs.Close()
+		containers.ReleaseVector(objectRowIDs)
 		if err != nil {
 			logutil.Infof("getRowsByPK failed GetDuplicate: %v, obj %v", err, obj.ID().String())
 			return
@@ -613,16 +619,16 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 		// Ownership transfers to the caller only on success. In particular,
 		// lazy commit-TS reads add cancellable I/O errors after allocation.
 		if err != nil {
-			rowIDs.Close()
+			containers.ReleaseVector(rowIDs)
 			rowIDs = nil
 		}
 	}()
 	vector.AppendMultiFixed[types.Rowid](
-		rowIDs.GetDownstreamVector(),
+		rowIDs,
 		types.EmptyRowid,
 		true,
 		pks.Length(),
-		rowIDs.GetAllocator(),
+		rowIDs.MPool(),
 	)
 	err = foreachIncrementalObjectInPhase(snapshot, tbl.isTombstone, from, to, metricPhase, func(obj *catalog.ObjectEntry) error {
 		if isEmptyDroppedAppendableObject(obj) {
@@ -639,7 +645,7 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			nil,
 			from, to,
 			rowIDs,
-			rowIDs.GetAllocator(),
+			rowIDs.MPool(),
 		)
 		return err
 	})

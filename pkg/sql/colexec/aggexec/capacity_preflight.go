@@ -2727,7 +2727,7 @@ func (e *bmpExecCommon) applyBitmapPreflight(
 			if err != nil {
 				return err
 			}
-			state.mobs[target.row] = value
+			value.reserved = true
 		} else {
 			var ok bool
 			value, ok = state.mobs[target.row].(*bmp)
@@ -2740,6 +2740,9 @@ func (e *bmpExecCommon) applyBitmapPreflight(
 		}
 		if err := value.ensureCapacity(len(value.values) + target.required); err != nil {
 			return err
+		}
+		if state.mobs[target.row] == nil {
+			state.mobs[target.row] = value
 		}
 	}
 	return nil
@@ -2907,18 +2910,18 @@ func (e *bmpExecCommon) preflightBitmapMerge(
 		if !ok {
 			return mpool.ErrAllocationAccountInvariant
 		}
+		if source.reserved {
+			continue
+		}
 		x, y, _, current, err := e.bitmapTarget(group)
 		if err != nil {
 			return err
 		}
 		additional := 0
 		if source.allocation != nil {
-			for _, value := range source.values {
-				if current == nil {
-					additional++
-				} else if _, found := slices.BinarySearch(current.values, value); !found {
-					additional++
-				}
+			additional = len(source.values)
+			if current != nil {
+				additional = bitmapMergeGrowth(current.values, source.values)
 			}
 		} else {
 			for iterator := source.legacy.Iterator(); iterator.HasNext(); {
@@ -2930,9 +2933,8 @@ func (e *bmpExecCommon) preflightBitmapMerge(
 				}
 			}
 		}
-		// Merge batches can map several immutable source groups to one target.
-		// Counting source overlap conservatively reserves extra reusable capacity;
-		// it never mutates values and cannot under-admit the committed merge.
+		// Earlier sources only add to the target, so adding each source's
+		// growth against the original target bounds the whole batch.
 		if err := addBitmapPreflightTarget(
 			&targets, &targetCount, x, y, additional); err != nil {
 			return err

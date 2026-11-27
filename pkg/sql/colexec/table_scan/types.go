@@ -41,6 +41,7 @@ type container struct {
 	// pools) can modify them: the strict mpool check rejects any other pool.
 	// It lives as long as buf.
 	scanMP                    *mpool.MPool
+	readerStartupMeasured     bool
 	maxAllocSize              int
 	buf                       *batch.Batch
 	msgReceiver               *message.MessageReceiver
@@ -223,6 +224,7 @@ func (tableScan *TableScan) Release() {
 }
 
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.ctr.readerStartupMeasured = false
 	tableScan.releaseLocalDomains()
 	allocSize := int64(0)
 	allocSize += int64(tableScan.ctr.maxAllocSize)
@@ -280,6 +282,7 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.ctr.readerStartupMeasured = false
 	tableScan.ctr.columnUses = nil
 	tableScan.ctr.columnUsesReady = false
 

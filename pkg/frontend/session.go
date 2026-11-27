@@ -265,6 +265,7 @@ type Session struct {
 	ruleVariants                 *roleRuleVariants
 	ruleCacheIdentity            rewriteRuleIdentity
 	ruleCacheLowerCaseTableNames int64
+	ruleCacheSQLMode             string
 	ruleCacheDatabase            string
 	ruleCacheVersion             any
 	ruleCacheVersionProvider     func(context.Context, *Session) (any, error)

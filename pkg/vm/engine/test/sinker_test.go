@@ -64,9 +64,9 @@ func Test_Sinker(t *testing.T) {
 	bat1 := readutil.NewCNTombstoneBatch(&pkType, objectio.HiddenColumnSelection_None, mp)
 	bat1.SetVector(0, rowIDVec)
 	// Copy the mock pk column into mp, the pool the test sorts bat1 with.
-	pkCopy, err := pkVec.GetDownstreamVector().Dup(mp)
+	pkCopy, err := pkVec.Dup(mp)
 	require.NoError(t, err)
-	pkVec.Close()
+	containers.ReleaseVector(pkVec)
 	bat1.SetVector(1, pkCopy)
 	bat1.SetRowCount(rowIDVec.Length())
 

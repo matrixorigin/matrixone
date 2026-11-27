@@ -699,7 +699,7 @@ func LoadColumnsData2(
 		if err != nil {
 			for _, col := range vectors {
 				if col != nil {
-					col.Close()
+					containers.ReleaseVector(col)
 				}
 			}
 			vectors = nil
@@ -715,14 +715,14 @@ func LoadColumnsData2(
 			); err != nil {
 				for _, col := range vectors {
 					if col != nil {
-						col.Close()
+						containers.ReleaseVector(col)
 					}
 				}
 				vectors = nil
 				return
 			}
 		} else {
-			vec = containers.ToTNVector(obj.(*vector.Vector), nil)
+			vec = obj.(*vector.Vector)
 		}
 		vectors[i] = vec
 	}

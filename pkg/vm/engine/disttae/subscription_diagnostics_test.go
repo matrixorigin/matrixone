@@ -36,7 +36,7 @@ const diagnosticDB, diagnosticCold, diagnosticWarm = uint64(1000), uint64(100), 
 
 func subscriptionDiagnosticsFixture(t *testing.T) *PushClient {
 	t.Helper()
-	e := &Engine{service: "subscription-diagnostics", partitions: make(map[[2]uint64]*logtailreplay.Partition), globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 1)}}
+	e := &Engine{service: "subscription-diagnostics", partitions: make(map[[2]uint64]*logtailreplay.Partition), globalStats: &GlobalStats{tailC: make(chan statsLogtail, 1)}}
 	c := &e.pClient
 	c.eng, c.subscriber = e, newLogTailSubscriber()
 	c.subscriber.setReady()

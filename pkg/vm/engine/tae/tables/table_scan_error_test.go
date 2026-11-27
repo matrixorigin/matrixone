@@ -94,7 +94,7 @@ func addHybridScanObject(
 func partialScanBatch(mp *mpool.MPool) *containers.Batch {
 	bat := containers.NewBatch()
 	values := containers.MakeVector(types.T_int64.ToType(), mp)
-	values.Append(int64(1), false)
+	values.MustAppendValue(int64(1), false)
 	bat.AddVector("value", values)
 	return bat
 }

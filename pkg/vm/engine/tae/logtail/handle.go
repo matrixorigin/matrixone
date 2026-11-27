@@ -74,6 +74,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -255,10 +256,11 @@ func (b *TableLogtailRespBuilder) visitObjMeta(e *catalog.ObjectEntry) (bool, er
 	} else {
 		destBatch = b.dataMetaBatch
 	}
-	e.ForeachMVCCNodeInRange(b.start, b.end, func(node *txnbase.TxnMVCCNode) error {
-		visitObject(destBatch, e, node, node.End.Equal(&e.CreatedAt), false, types.TS{})
-		return nil
-	})
+	if err := e.ForeachMVCCNodeInRange(b.start, b.end, func(node *txnbase.TxnMVCCNode) error {
+		return visitObject(destBatch, e, node, node.End.Equal(&e.CreatedAt), false, types.TS{})
+	}); err != nil {
+		return false, err
+	}
 
 	if e.IsAppendable() && !e.HasDropCommitted() {
 		return false, nil
@@ -276,23 +278,43 @@ func (b *TableLogtailRespBuilder) visitObjData(e *catalog.ObjectEntry) error {
 	return tables.RangeScanInMemoryByObject(b.ctx, e, destBatches, b.start, b.end, common.LogtailAllocator)
 }
 
-func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNode *txnbase.TxnMVCCNode, create bool, push bool, committs types.TS) {
-	var rowid types.Rowid
+func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNode *txnbase.TxnMVCCNode, create bool, push bool, committs types.TS) error {
 	// refer to ObjectInfoAttr for batch schema
 	if !push {
 		committs = txnMVCCNode.End
-		entry.EntryMVCCNode.AppendObjectTuple(batch, create) // createAt and deleteAt for pull
+		// createAt and deleteAt for pull
+		if err := entry.EntryMVCCNode.AppendObjectTuple(batch, create); err != nil {
+			return err
+		}
 	} else {
-		entry.EntryMVCCNode.AppendTupleWithCommitTS(batch, committs) // createAt and deleteAt for push
+		// createAt and deleteAt for push
+		if err := entry.EntryMVCCNode.AppendTupleWithCommitTS(batch, committs); err != nil {
+			return err
+		}
 	}
 	// two padding columns
-	batch.GetVectorByName(catalog.PhyAddrColumnName).Append(rowid, false)
-	batch.GetVectorByName(objectio.DefaultCommitTS_Attr).Append(committs, false)
-
-	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
-	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
-	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(entry.ObjectMVCCNode.ObjectStats[:], false)
-	txnMVCCNode.AppendTupleWithCommitTS(batch, committs) // start prepare and commit ts
+	rowIDs := batch.GetVectorByName(catalog.PhyAddrColumnName)
+	if err := vector.AppendFixed(rowIDs, types.Rowid{}, false, rowIDs.MPool()); err != nil {
+		return err
+	}
+	commitTSs := batch.GetVectorByName(objectio.DefaultCommitTS_Attr)
+	if err := vector.AppendFixed(commitTSs, committs, false, commitTSs.MPool()); err != nil {
+		return err
+	}
+	dbIDs := batch.GetVectorByName(SnapshotAttr_DBID)
+	if err := vector.AppendFixed(dbIDs, entry.GetTable().GetDB().ID, false, dbIDs.MPool()); err != nil {
+		return err
+	}
+	tableIDs := batch.GetVectorByName(SnapshotAttr_TID)
+	if err := vector.AppendFixed(tableIDs, entry.GetTable().ID, false, tableIDs.MPool()); err != nil {
+		return err
+	}
+	stats := batch.GetVectorByName(ObjectAttr_ObjectStats)
+	if err := vector.AppendBytes(stats, entry.ObjectMVCCNode.ObjectStats[:], false, stats.MPool()); err != nil {
+		return err
+	}
+	// start prepare and commit ts
+	return txnMVCCNode.AppendTupleWithCommitTS(batch, committs)
 }
 
 type TableRespKind int
@@ -309,7 +331,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		if batch == nil || batch.Length() == 0 {
 			return nil
 		}
-		bat, err := containersBatchToProtoBatch(batch)
+		bat, err := marshalContainersBatch(batch)
 		if err != nil {
 			return err
 		}
@@ -333,6 +355,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			TableName:    tableName,
 			DatabaseId:   b.did,
 			DatabaseName: b.dname,
+			Attrs:        batch.Attrs,
 			Bat:          bat,
 		}
 		entries = append(entries, entry)
@@ -352,7 +375,11 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}
 	slices.Sort(keys)
 	for _, k := range keys {
-		if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Data, DataChangeToLogtailBatch(b.dataInsBatches[k]), k); err != nil {
+		bat, err := DataChangeToLogtailBatch(b.dataInsBatches[k])
+		if err != nil {
+			return empty, err
+		}
+		if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Data, bat, k); err != nil {
 			return empty, err
 		}
 	}

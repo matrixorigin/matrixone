@@ -276,7 +276,7 @@ func insertTable(
 	bat, err := catalog.GenCreateTableTuple(tbl, e.mp, packer)
 	require.NoError(t, err)
 	defer bat.Clean(e.mp)
-	_, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, e.mp)
+	_, _, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, e.mp)
 	assert.NoError(t, err)
 	ccache := e.catalog.Load()
 	ccache.InsertTable(bat)

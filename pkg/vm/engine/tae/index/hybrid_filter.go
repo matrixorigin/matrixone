@@ -76,7 +76,7 @@ func NewHybridBloomFilter(
 		return nil
 	}
 	if err := containers.ForeachWindowBytes(
-		data.GetDownstreamVector(), 0, n, op, nil,
+		data, 0, n, op, nil,
 	); err != nil {
 		return nil, err
 	}

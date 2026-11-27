@@ -39,11 +39,14 @@ type rangeBenchmarkObject struct {
 func (d *rangeBenchmarkObject) GetAppendMaxCommitTS() (types.TS, bool) { return types.TS{}, false }
 func (d *rangeBenchmarkObject) ScanInMemory(_ context.Context, _ map[uint32]*containers.BatchWithVersion, start, end types.TS, mp *mpool.MPool) error {
 	d.history.RLock()
-	_, commits, aborts := d.history.CollectAppendLocked(start, end, mp)
+	_, commits, aborts, err := d.history.CollectAppendLocked(start, end, mp)
 	d.history.RUnlock()
+	if err != nil {
+		return err
+	}
 	if commits != nil {
-		commits.Close()
-		aborts.Close()
+		containers.ReleaseVector(commits)
+		containers.ReleaseVector(aborts)
 	}
 	return nil
 }

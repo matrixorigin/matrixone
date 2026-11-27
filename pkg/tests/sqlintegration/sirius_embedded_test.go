@@ -42,6 +42,7 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 	require.NotEmpty(t, config, "sirius_integration requires MO_SIRIUS_TEST_CONFIG")
 	config, err := filepath.Abs(config)
 	require.NoError(t, err)
+	t.Chdir(t.TempDir())
 	c, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(op embed.ServiceOperator) {
 		if op.ServiceType() == metadata.ServiceType_CN {
 			op.Adjust(func(cfg *embed.ServiceConfig) {

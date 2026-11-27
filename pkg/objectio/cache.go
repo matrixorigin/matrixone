@@ -410,8 +410,11 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 		}
 		if pending := group.current; pending != abandoned {
 			metaLoadMu.Unlock()
+			wait := fileservice.ReadWaitTrackerFromContext(ctx)
+			start := wait.Start()
 			select {
 			case <-pending.done:
+				wait.Stop(start)
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
@@ -433,6 +436,7 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 				}
 				return pending.val, nil
 			case <-ctx.Done():
+				wait.Stop(start)
 				return nil, ctx.Err()
 			}
 		}

@@ -40,83 +40,23 @@ This contract bounds additional outgoing staging. The future MO-reader adapter
 must split oversized batches at row boundaries and preserve the reader's existing
 bounded prefetch; this bridge milestone does not implement that SQL path.
 
-## Prerequisites
-
-- Linux amd64 or arm64, CGo, MatrixOne's normal build prerequisites, a compatible
-  NVIDIA driver and GPU, and [Pixi](https://pixi.sh). CUDA, cuDF, cuVS, RMM,
-  compilers, and `patchelf` come from Sirius's frozen `mo` Pixi environment;
-  `/usr/local/cuda` is not required.
-- The Sirius commit pinned by MatrixOne at `third_party/sirius`. For a release,
-  that commit must be merged into `matrixorigin/sirius:perf/embedded-mo-scan`; the
-  `SIRIUS_MERGED_REF` used below must contain the exact SDK source revision.
-  An unmerged pin requires an explicit development build and is not a release
-  artifact.
-- An absolute path to the MatrixOne checkout. Run the commands from the host;
-  no sidecar checkout or container rebuild is needed.
-
 ## Build the combined MO/Sirius binary
 
-First generate the SDK and its C smoke consumer from Sirius. This is a build
-tree artifact, so regenerate it after changing Sirius source or its Pixi lock:
+Follow the [MatrixOne and Sirius build guide](../../../../Sirius.md) to initialize
+the pinned sources, build the SDK and `mo-service`, and verify the package.
+Keep the guide's exported `MO_SRC`, `SIRIUS_SRC`, `SIRIUS_SDK`, and `MO_GO_ROOT`
+variables in the shell used for the commands below.
+
+Use `make build` for a source checkout. The `build-with-prebuilt-native`
+target expects a matching `cgo/libmo.so` and `thirdparties/install` from an
+earlier build stage. To recheck a packaged binary against the same SDK:
 
 ```sh
-export MO_SRC=/absolute/path/to/matrixone
-export SIRIUS_SRC="$MO_SRC/third_party/sirius"
-# Capture the repository-supported Go installation before Pixi activation.
-export MO_GO_ROOT="$(go env GOROOT)"
-git -C "$MO_SRC" submodule update --init third_party/sirius
-cd "$SIRIUS_SRC"
-git fetch origin perf/embedded-mo-scan
-git submodule update --init duckdb substrait cucascade tae-scanner vcpkg
-pixi install --frozen -e mo
-pixi run --frozen -e mo mo-build-embedding-sdk
-```
-
-Build MO's GPU native library and `mo-service` with the same activated Pixi
-prefix. `MO_CL_CUDA=1` also includes MO cuVS, so this is the combined-process
-profile; omit it only if MO's GPU vector operations are not needed.
-
-```sh
-cd "$SIRIUS_SRC"
-pixi run --frozen -e mo sh -c '
-  cd "$MO_SRC"
-  export GOROOT="$MO_GO_ROOT" PATH="$MO_GO_ROOT/bin:$PATH"
-  MO_CL_CUDA=1 MO_SIRIUS=1 \
-    SIRIUS_SDK="$SIRIUS_SRC/build/mo/extension/sirius/embedding-sdk" \
-    SIRIUS_MERGED_REF=origin/perf/embedded-mo-scan \
-    make -j8 build
-'
-```
-
-`make build` builds MO's native dependencies before linking. The
-`build-with-prebuilt-native` target is only for a stage that already has a
-matching `cgo/libmo.so` and `thirdparties/install`; it is not the first-build
-command. SDK preparation and packaging reject a source path or revision that
-does not match MO's committed Sirius submodule pin. CPU-only builds remain
-unchanged. Enabling Sirius in
-a binary without `MO_SIRIUS=1` returns an explicit configuration error.
-
-The output is `mo-service` with an adjacent `lib/` directory (and MO's normal
-`dict/`; combined GPU builds also stage `mocl_kernel64.fatbin`). Keep these
-together when moving the binary. The NVIDIA driver stays on the host. Check
-the package against the prepared SDK under the same Pixi provider:
-
-```sh
-cd "$SIRIUS_SRC"
-pixi run --frozen -e mo sh -c '
-  cd "$MO_SRC"
+cd "$MO_SRC"
+pixi run --frozen --manifest-path "$SIRIUS_SRC/pixi.toml" -e mo \
   python3 optools/sirius_sdk.py verify-package \
-    --prepared .sirius-sdk --output lib \
-    --sdk "$SIRIUS_SRC/build/mo/extension/sirius/embedding-sdk"
-'
+    --prepared .sirius-sdk --output lib --sdk "$SIRIUS_SDK"
 ```
-
-`lib/sirius-provenance.json` records the binary, Sirius source and SDK,
-baseline native libraries, GPU-runtime closure, and packaged hashes. A release
-build rejects a dirty Sirius tree or a revision outside `SIRIUS_MERGED_REF`.
-For local work on an unmerged Sirius change, set
-`SIRIUS_BUILD_MODE=development` on the MO build command, and do not distribute
-its resulting package as a release.
 
 ## Configure a local runtime
 
@@ -180,8 +120,8 @@ cuVS-after check. It requires a working GPU and uses the test YAML above.
 cd "$SIRIUS_SRC"
 pixi run --frozen -e mo sh -c '
   cd "$MO_SRC"
+  export GOROOT="$MO_GO_ROOT" PATH="$MO_GO_ROOT/bin:$PATH"
   MO_CL_CUDA=1 MO_SIRIUS=1 \
-    SIRIUS_SDK="$SIRIUS_SRC/build/mo/extension/sirius/embedding-sdk" \
     MO_SIRIUS_TEST_CONFIG="$SIRIUS_SRC/test/cpp/operator/result.yaml" \
     .agents/skills/mo-dev/scripts/mo-cgo-test \
     -count=1 -timeout=180s -tags sirius_integration \

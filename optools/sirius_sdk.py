@@ -56,11 +56,11 @@ def native_architecture():
 
 def verify_source_pin(source, revision, mo_root):
     mo_root = Path(mo_root).resolve()
-    pinned_source = mo_root / "third_party" / "sirius"
+    pinned_source = mo_root / "thirdparties" / "sirius"
     if source.resolve() != pinned_source.resolve():
         raise ValueError("Sirius SDK was not built from the MatrixOne submodule")
     pinned_revision = run(
-        "git", "-C", str(mo_root), "rev-parse", "HEAD:third_party/sirius"
+        "git", "-C", str(mo_root), "rev-parse", "HEAD:thirdparties/sirius"
     ).strip()
     if revision != pinned_revision:
         raise ValueError("Sirius SDK does not match the MatrixOne submodule pin")

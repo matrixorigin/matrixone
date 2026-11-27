@@ -203,7 +203,7 @@ linters:
         path: _test\.go
     paths:
       - pkg/sql/parsers/goyacc/goyacc.go
-      - third_party$
+      - ^thirdparties/
       - builtin$
       - examples$
 formatters:
@@ -213,6 +213,6 @@ formatters:
     generated: lax
     paths:
       - pkg/sql/parsers/goyacc/goyacc.go
-      - third_party$
+      - ^thirdparties/
       - builtin$
       - examples$
