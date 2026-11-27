@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -75,6 +76,59 @@ func (c *recordingPayloadClient) Append(_ context.Context, record logservice.Log
 	return uint64(len(c.records)), c.err
 }
 
+func TestAppendCancellationDuringBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		recorder := &recordingPayloadClient{err: moerr.NewInternalErrorNoCtx("temporary append failure")}
+		client := &wrappedClient{wrapped: recorder, pool: &clientPool{cfg: &Config{MaxTimeout: time.Second}}}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			_, err := client.Append(ctx, LogEntry("skip"), nil)
+			done <- err
+		}()
+		synctest.Wait()
+		require.Len(t, recorder.records, 1)
+		start := time.Now()
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled)
+		require.Equal(t, start, time.Now(), "cancellation must interrupt the retry delay")
+		require.Len(t, recorder.records, 1)
+	})
+}
+
+func TestAppendCanceledBeforeFirstAttempt(t *testing.T) {
+	recorder := &recordingPayloadClient{}
+	client := &wrappedClient{wrapped: recorder, pool: &clientPool{cfg: &Config{MaxTimeout: time.Second}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	psn, err := client.Append(ctx, LogEntry("skip"), nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, psn)
+	require.Empty(t, recorder.records)
+}
+
+type failFirstAppendClient struct{ recordingPayloadClient }
+
+func (c *failFirstAppendClient) Append(ctx context.Context, record logservice.LogRecord) (uint64, error) {
+	psn, err := c.recordingPayloadClient.Append(ctx, record)
+	if len(c.records) == 1 {
+		return 0, moerr.NewInternalErrorNoCtx("temporary append failure")
+	}
+	return psn, err
+}
+
+func TestAppendRetriesWithLiveParent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		recorder := &failFirstAppendClient{}
+		client := &wrappedClient{wrapped: recorder, pool: &clientPool{cfg: &Config{MaxTimeout: time.Second}}}
+		psn, err := client.Append(context.Background(), LogEntry("skip"), nil)
+		require.NoError(t, err)
+		require.Equal(t, uint64(2), psn)
+		require.Len(t, recorder.records, 2)
+	})
+}
+
 func TestClientPayloadAllocatedOnlyForAppend(t *testing.T) {
 	backend := NewMockBackend()
 	pool := newClientPool(&Config{
@@ -110,9 +164,7 @@ func TestClientPayloadAllocatedOnlyForAppend(t *testing.T) {
 	c, err = pool.Get()
 	require.NoError(t, err)
 	recorder.err = context.Canceled
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err = c.Append(ctx, LogEntry("cancel"), nil)
+	_, err = c.Append(context.Background(), LogEntry("cancel"), nil)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, []byte("cancel"), recorder.records[len(recorder.records)-1].Payload())
 	recorder.err = nil

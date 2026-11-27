@@ -354,7 +354,7 @@ func TestZombieRepro_WithFix(t *testing.T) {
 	_ = logs // reserved for log-based assertion if runtimes are ever unified
 
 	defer leaktest.AfterTest(t)()
-	svc1, svc2, svc3, cfg1, _, cfg3 := buildZombieCluster(t, obsLogger)
+	svc1, svc2, svc3, cfg1, cfg2, cfg3 := buildZombieCluster(t, obsLogger)
 
 	waitLeader(t, []*store{svc1.store, svc2.store, svc3.store}, 10*time.Second)
 	// Pin leader to replica 1 so we can deterministically drive REMOVE after
@@ -375,9 +375,11 @@ func TestZombieRepro_WithFix(t *testing.T) {
 	// Wait for the exact gossip-backed membership view used by the self-check.
 	members := waitMembershipExcludesReplica(t, cfg1.LogServiceServiceAddr(), 3)
 	t.Logf("post-REMOVE membership: %v", members)
+	waitMembershipExcludesReplica(t, cfg2.LogServiceServiceAddr(), 3)
 
-	// Sanity 2: verify svc3's configured ServiceAddresses include at least
-	// one live peer the self-check can query.
+	// A single configured seed must discover the other surviving voter before
+	// classifying the persisted replica as removed.
+	cfg3.HAKeeperClientConfig.ServiceAddresses = []string{cfg1.LogServiceServiceAddr()}
 	t.Logf("cfg3.HAKeeperClientConfig.ServiceAddresses = %v", cfg3.HAKeeperClientConfig.ServiceAddresses)
 
 	// Now restart service3 (same DataDir, same FS). This walks through
@@ -500,6 +502,11 @@ func TestZombieRepro_WithoutFix(t *testing.T) {
 	defer func() { getShardMembershipFn = origFn }()
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		return nil, false, nil // shard unknown -> fallback = not a zombie
+	}
+	originalCommitted := getCommittedShardMembershipFn
+	defer func() { getCommittedShardMembershipFn = originalCommitted }()
+	getCommittedShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, error) {
+		return nil, dragonboat.ErrShardNotFound
 	}
 
 	svc3b := restartService3(t, cfg3, obsLogger)

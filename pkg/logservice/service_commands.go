@@ -110,6 +110,9 @@ func (s *Service) handleRemoveReplica(cmd pb.ScheduleCommand) {
 func (s *Service) handleStartReplica(cmd pb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	if s.store.localReplicaPresentWithRole(shardID, replicaID, false) {
+		return
+	}
 	join := len(cmd.ConfigChange.InitialMembers) == 0
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		if err := s.store.startHAKeeperReplica(replicaID,
@@ -127,6 +130,9 @@ func (s *Service) handleStartReplica(cmd pb.ScheduleCommand) {
 func (s *Service) handleStartNonVotingReplica(cmd pb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	if s.store.localReplicaPresentWithRole(shardID, replicaID, true) {
+		return
+	}
 	join := len(cmd.ConfigChange.InitialMembers) == 0
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		if err := s.store.startHAKeeperNonVotingReplica(replicaID,

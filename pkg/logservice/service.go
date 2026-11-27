@@ -370,6 +370,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleGetCheckerState(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_SHARD_INFO:
 		return s.handleGetShardInfo(ctx, req), pb.LogRecordResponse{}
+	case pb.GET_COMMITTED_SHARD_MEMBERSHIP:
+		return s.handleGetCommittedShardMembership(ctx, req), pb.LogRecordResponse{}
 	case pb.UPDATE_CN_LABEL:
 		return s.handleUpdateCNLabel(ctx, req), pb.LogRecordResponse{}
 	case pb.UPDATE_CN_WORK_STATE:
@@ -467,6 +469,30 @@ func (s *Service) handleGetShardInfo(ctx context.Context, req pb.Request) pb.Res
 	} else {
 		resp.ShardInfo = &result
 	}
+	return resp
+}
+
+// handleGetCommittedShardMembership reads Raft membership through a quorum.
+// Gossip and heartbeat membership can both lag a committed ADD; a restart
+// decision must never treat their agreement as proof that a voter was removed.
+func (s *Service) handleGetCommittedShardMembership(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	membership, err := s.store.nh.SyncGetShardMembership(ctx, req.LogRequest.ShardID)
+	if err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	result := pb.ShardInfoQueryResult{
+		ShardID:  req.LogRequest.ShardID,
+		Epoch:    membership.ConfigChangeID,
+		Replicas: make(map[uint64]pb.ReplicaInfo, len(membership.Nodes)),
+	}
+	for replicaID, uuid := range membership.Nodes {
+		result.Replicas[replicaID] = pb.ReplicaInfo{UUID: uuid}
+	}
+	resp.ShardInfo = &result
 	return resp
 }
 

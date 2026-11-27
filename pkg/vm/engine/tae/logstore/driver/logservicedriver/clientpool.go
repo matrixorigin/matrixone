@@ -241,25 +241,35 @@ func (c *wrappedClient) Append(
 	}()
 
 	for {
-		ctx, cancel := context.WithTimeoutCause(
+		if err = ctx.Err(); err != nil {
+			return 0, err
+		}
+		tryCtx, cancel := context.WithTimeoutCause(
 			ctx, DefaultOneTryTimeout, timeoutCause,
 		)
 		if walClient, ok := c.wrapped.(interface {
 			AppendWAL(context.Context, logservice.LogRecord) (uint64, error)
 		}); ok {
-			psn, err = walClient.AppendWAL(ctx, c.buf)
+			psn, err = walClient.AppendWAL(tryCtx, c.buf)
 		} else {
-			psn, err = c.wrapped.Append(ctx, c.buf)
+			psn, err = c.wrapped.Append(tryCtx, c.buf)
 		}
 		cancel()
 		if err == nil {
 			break
 		}
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
 		retryTimes++
 		if time.Since(now) > c.pool.cfg.MaxTimeout {
 			break
 		}
-		time.Sleep(c.pool.cfg.RetryInterval(retryTimes))
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-time.After(c.pool.cfg.RetryInterval(retryTimes)):
+		}
 	}
 	return
 }

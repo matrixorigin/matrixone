@@ -64,7 +64,15 @@ func GetShardInfo(
 	if len(excludeHardDownReplicaAddresses) > 0 {
 		excludeHardDown = excludeHardDownReplicaAddresses[0]
 	}
-	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID, false, excludeHardDown)
+	return getShardInfoWithContext(context.Background(), sid, address, shardID, excludeHardDown)
+}
+
+// getShardInfoWithContext lets client discovery observe its caller's deadline.
+// The exported helper retains its historical independent one-second budget.
+func getShardInfoWithContext(
+	ctx context.Context, sid, address string, shardID uint64, excludeHardDown bool,
+) (ShardInfo, bool, error) {
+	si, ok, err := queryShardInfoRawFn(ctx, sid, address, shardID, false, excludeHardDown)
 	if err != nil || !ok {
 		return ShardInfo{}, false, err
 	}
@@ -143,6 +151,30 @@ func getShardMembership(
 	return members, true, nil
 }
 
+// getCommittedShardMembership asks a running peer for a linearizable Raft
+// membership read. An unavailable quorum is an unknown result, never proof
+// that a locally persisted voter was removed.
+func getCommittedShardMembership(
+	ctx context.Context,
+	sid string,
+	address string,
+	shardID uint64,
+) (map[uint64]string, error) {
+	si, ok, err := queryShardInfoRPC(ctx, sid, address, shardID,
+		pb.GET_COMMITTED_SHARD_MEMBERSHIP, false, false)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || si.Epoch == 0 {
+		return nil, dragonboat.ErrShardNotFound
+	}
+	members := make(map[uint64]string, len(si.Replicas))
+	for replicaID, info := range si.Replicas {
+		members[replicaID] = info.UUID
+	}
+	return members, nil
+}
+
 // queryShardInfoRaw issues the GET_SHARD_INFO RPC and returns the raw response
 // without applying the leader-known filter. ok=false means the queried peer
 // has no record of the shard in its gossip registry.
@@ -154,12 +186,29 @@ func queryShardInfoRaw(
 	includeExpiredReplicaAddresses bool,
 	excludeHardDownReplicaAddresses bool,
 ) (pb.ShardInfoQueryResult, bool, error) {
+	return queryShardInfoRPC(ctx, sid, address, shardID, pb.GET_SHARD_INFO,
+		includeExpiredReplicaAddresses, excludeHardDownReplicaAddresses)
+}
+
+func queryShardInfoRPC(
+	ctx context.Context,
+	sid string,
+	address string,
+	shardID uint64,
+	method pb.MethodType,
+	includeExpiredReplicaAddresses bool,
+	excludeHardDownReplicaAddresses bool,
+) (pb.ShardInfoQueryResult, bool, error) {
 	respPool := &sync.Pool{}
 	respPool.New = func() interface{} {
 		return &RPCResponse{pool: respPool}
 	}
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Second, moerr.CauseGetShardInfo)
 	defer cancel()
+	operation := "GetShardInfo"
+	if method == pb.GET_COMMITTED_SHARD_MEMBERSHIP {
+		operation = "GetCommittedShardMembership"
+	}
 	cc, err := getRPCClient(
 		ctx,
 		sid,
@@ -168,7 +217,7 @@ func queryShardInfoRaw(
 		defaultMaxMessageSize,
 		false,
 		time.Second*10,
-		"GetShardInfo",
+		operation,
 	)
 	if err != nil {
 		return pb.ShardInfoQueryResult{}, false, err
@@ -178,10 +227,10 @@ func queryShardInfoRaw(
 			logutil.Error("failed to close client", zap.Error(err))
 		}
 	}()
-	ctx, span := trace.Debug(ctx, "GetShardInfo")
+	ctx, span := trace.Debug(ctx, operation)
 	defer span.End()
 	req := pb.Request{
-		Method: pb.GET_SHARD_INFO,
+		Method: method,
 		LogRequest: pb.LogRequest{
 			ShardID:                         shardID,
 			IncludeExpiredReplicaAddresses:  includeExpiredReplicaAddresses,
@@ -209,6 +258,9 @@ func queryShardInfoRaw(
 	err = toError(ctx, resp)
 	if err != nil {
 		return pb.ShardInfoQueryResult{}, false, err
+	}
+	if resp.ShardInfo == nil {
+		return pb.ShardInfoQueryResult{}, false, nil
 	}
 	si := *resp.ShardInfo
 	if reflect.DeepEqual(si, pb.ShardInfoQueryResult{}) {

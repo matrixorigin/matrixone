@@ -32,8 +32,11 @@ import (
 // while A still exists. A stale ALTER must not re-grant A after DROP commits.
 func TestDropAccountConcurrentPublicationGrant(t *testing.T) {
 	RunBaseClusterTests(t, func(c Cluster) {
-		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), publicationFixtureTimeout)
 		defer cancel()
+		statementContext := func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(ctx, publicationStatementTimeout)
+		}
 		open := func(n int, user string) *sql.DB {
 			t.Helper()
 			cn, err := c.GetCNService(n)
@@ -46,13 +49,17 @@ func TestDropAccountConcurrentPublicationGrant(t *testing.T) {
 		left, right := open(0, "dump"), open(1, "dump")
 		exec := func(db *sql.DB, q string) {
 			t.Helper()
-			_, err := db.ExecContext(ctx, q)
+			statement, stop := statementContext()
+			defer stop()
+			_, err := db.ExecContext(statement, q)
 			require.NoError(t, err, q)
 		}
 		number := func(db *sql.DB, q string) int {
 			t.Helper()
+			statement, stop := statementContext()
+			defer stop()
 			var n int
-			require.NoError(t, db.QueryRowContext(ctx, q).Scan(&n), q)
+			require.NoError(t, db.QueryRowContext(statement, q).Scan(&n), q)
 			return n
 		}
 		defer func() {
@@ -83,12 +90,17 @@ func TestDropAccountConcurrentPublicationGrant(t *testing.T) {
 		defer ddl.Wait()
 		defer gate.Rollback()
 		var locked int
-		require.NoError(t, gate.QueryRowContext(ctx, fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id=%d for update", id)).Scan(&locked))
+		statement, stop := statementContext()
+		err = gate.QueryRowContext(statement, fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id=%d for update", id)).Scan(&locked)
+		stop()
+		require.NoError(t, err)
 		require.Equal(t, id, locked)
 		async := func(db *sql.DB, q string) <-chan error {
 			done := make(chan error, 1)
 			ddl.Go(func() {
-				_, err := db.ExecContext(ctx, q)
+				statement, stop := statementContext()
+				defer stop()
+				_, err := db.ExecContext(statement, q)
 				done <- err
 			})
 			return done
@@ -98,8 +110,10 @@ func TestDropAccountConcurrentPublicationGrant(t *testing.T) {
 			cn, err := c.GetCNService(n)
 			require.NoError(t, err)
 			require.EventuallyWithT(t, func(tick *assert.CollectT) {
+				statement, stop := context.WithTimeout(ctx, 10*time.Second)
+				defer stop()
 				var waiting int
-				err := left.QueryRowContext(ctx, `select count(*) from mo_transactions() t
+				err := left.QueryRowContext(statement, `select count(*) from mo_transactions() t
 					where cn_id=? and table_id in (select cast(rel_id as char) from mo_catalog.mo_tables
 					where account_id=0 and reldatabase='mo_catalog' and relname in ('mo_account','mo_feature_registry','mo_pubs'))`, cn.ServiceID()).Scan(&waiting)
 				if assert.NoError(tick, err) {
@@ -124,14 +138,19 @@ func TestDropAccountConcurrentPublicationGrant(t *testing.T) {
 		where := fmt.Sprintf(" from mo_catalog.mo_subs where pub_name='race32900p' and sub_account_id=%d", id)
 		require.Zero(t, number(left, "select count(*)"+where))
 		require.Zero(t, number(left, "select count(*) from mo_catalog.mo_account where account_name='race32900a'"))
-		require.Equal(t, 1, number(left, "select count(*) from mo_catalog.mo_subs where pub_name='race32900p' and sub_account_name='race32900b' and status=0"))
+		// Read B on the CN that committed ALTER; the other CN may still be
+		// waiting for its logtail while the DROP checks above already hold.
+		require.Equal(t, 1, number(right, "select count(*) from mo_catalog.mo_subs where pub_name='race32900p' and sub_account_name='race32900b' and status=0"))
 		require.Equal(t, 7, number(keep, "select id from race32900sub.t"))
 		exec(left, "create account race32900a admin_name 'admin' identified by '111'")
 		newID := number(left, findA)
 		require.NotEqual(t, id, newID)
 		require.Zero(t, number(left, fmt.Sprintf("select count(*) from mo_catalog.mo_subs where pub_name='race32900p' and sub_account_id in (%d,%d)", id, newID)))
 		var auth string
-		require.NoError(t, left.QueryRowContext(ctx, "select account_list from mo_catalog.mo_pubs where account_id=0 and pub_name='race32900p'").Scan(&auth))
+		statement, stop = statementContext()
+		err = right.QueryRowContext(statement, "select account_list from mo_catalog.mo_pubs where account_id=0 and pub_name='race32900p'").Scan(&auth)
+		stop()
+		require.NoError(t, err)
 		require.Equal(t, "race32900b,race32900keep", auth)
 	})
 }

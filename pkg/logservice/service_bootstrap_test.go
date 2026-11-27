@@ -583,9 +583,17 @@ func TestBootstrapChecksInitialReplicaMissingFromMetadata(t *testing.T) {
 	getShardMembershipFn = func(_ context.Context, _, _ string, shardID uint64) (map[uint64]string, bool, error) {
 		checked = append(checked, shardID)
 		if shardID == hakeeper.DefaultHAKeeperShardID {
-			return map[uint64]string{newID: "10.0.0.2:32001"}, true, nil
+			return map[uint64]string{newID: "10.0.0.1:32001", newID + 1: "10.0.0.2:32001"}, true, nil
 		}
-		return map[uint64]string{2: "10.0.0.2:32001"}, true, nil
+		return map[uint64]string{2: "10.0.0.1:32001", 3: "10.0.0.2:32001"}, true, nil
+	}
+	originalCommitted := getCommittedShardMembershipFn
+	t.Cleanup(func() { getCommittedShardMembershipFn = originalCommitted })
+	getCommittedShardMembershipFn = func(_ context.Context, _, _ string, shardID uint64) (map[uint64]string, error) {
+		if shardID == hakeeper.DefaultHAKeeperShardID {
+			return map[uint64]string{newID: "store-1", newID + 1: "store-2"}, nil
+		}
+		return map[uint64]string{2: "store-1", 3: "store-2"}, nil
 	}
 
 	restarted, err := NewService(cfg, files, nil)
@@ -664,6 +672,11 @@ func TestColdBootstrapWithUnknownMembership(t *testing.T) {
 	t.Cleanup(func() { getShardMembershipFn = original })
 	getShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, bool, error) {
 		return nil, false, nil
+	}
+	originalCommitted := getCommittedShardMembershipFn
+	t.Cleanup(func() { getCommittedShardMembershipFn = originalCommitted })
+	getCommittedShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, error) {
+		return nil, dragonboat.ErrShardNotFound
 	}
 	s, err := NewService(cfg, newFS(), nil)
 	require.NoError(t, err)

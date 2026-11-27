@@ -343,14 +343,26 @@ func (c *managedClient) TruncateWAL(ctx context.Context, psn, checkpointedDSN Ls
 }
 
 func (c *managedClient) GetWALTruncate(ctx context.Context) (Lsn, Lsn, error) {
-	if err := c.prepareClient(ctx); err != nil {
-		return 0, 0, err
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return 0, 0, err
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, defaultLogServiceReadAttemptTimeout)
+		psn, dsn, err := c.client.getWALTruncate(attemptCtx)
+		attemptExpired := attemptCtx.Err() == context.DeadlineExceeded
+		cancel()
+		if err != nil {
+			c.resetClient()
+		}
+		if ctx.Err() == nil && err != nil &&
+			(attemptExpired || morpc.IsConnectionError(err)) {
+			continue
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+		return psn, dsn, err
 	}
-	psn, dsn, err := c.client.getWALTruncate(ctx)
-	if err != nil {
-		c.resetClient()
-	}
-	return psn, dsn, err
 }
 
 func (c *managedClient) GetTruncatedLsn(ctx context.Context) (Lsn, error) {
@@ -571,7 +583,7 @@ func connectToLogServiceByReverseProxy(
 	discoveryAddress string,
 	cfg ClientConfig,
 ) (*client, error) {
-	si, ok, err := GetShardInfo(sid, discoveryAddress, cfg.LogShardID)
+	si, ok, err := getShardInfoWithContext(ctx, sid, discoveryAddress, cfg.LogShardID, true)
 	if err != nil {
 		return nil, err
 	}
