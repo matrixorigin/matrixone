@@ -764,6 +764,8 @@ func TestSQLUDFBindsPowerInDefinitionScope(t *testing.T) {
 		{"old query under current caller", "old_query(n_nationkey)", false, []int32{0}},
 		{"new scalar under old caller", "new_scalar(n_nationkey)", true, []int32{1}},
 		{"new query under old caller", "new_query(n_nationkey)", true, []int32{1}},
+		{"old parenthesized set query", "old_set(10 + n_nationkey)", false, []int32{0}},
+		{"new parenthesized set query", "new_set(10 + n_nationkey)", true, []int32{1}},
 		{"current callee inside old query", "mixed_old(n_nationkey)", false, []int32{0, 1}},
 		{"old callee inside current scalar", "mixed_new(n_nationkey)", true, []int32{0, 1}},
 		{"old argument inside new body", "new_scalar(pow(n_nationkey,0.5))", true, []int32{0, 1}},
@@ -779,6 +781,8 @@ func TestSQLUDFBindsPowerInDefinitionScope(t *testing.T) {
 					"old_query":        {Body: "select power($1,0.5)", LegacyPower: true},
 					"new_scalar":       {Body: "pow($1,0.5)"},
 					"new_query":        {Body: "SELECT POWER($1,0.5)"},
+					"old_set":          {Body: "(select cast(null as double) where 1=0) union all select pow($1,0.5)", LegacyPower: true},
+					"new_set":          {Body: "(select cast(null as double) where 1=0) union all select pow($1,0.5)"},
 					"unmarked_forward": {Body: "new_scalar($1)", LegacyPower: true},
 					"new_wrapped":      {Body: "SELECT cast(case when $1 > 0 then (select power($1,0.5)) else 0 end as double)"},
 					"mixed_old":        {Body: "select new_scalar($1)+pow($1,0.5)", LegacyPower: true},
@@ -811,6 +815,70 @@ func TestSQLUDFBindsPowerInDefinitionScope(t *testing.T) {
 			require.Same(t, caller, ctx.GetContext())
 		})
 	}
+}
+
+func TestSQLUDFBindsTableAndValuesQueryTerms(t *testing.T) {
+	mode := "ANSI_QUOTES"
+	for _, tc := range []struct {
+		name, body string
+		wantScan   bool
+	}{
+		{"table left term", `TABLE "bvt_test2"."t3" UNION ALL SELECT $1 LIMIT 1`, true},
+		{"parenthesized values left term", "(VALUES ROW($1) UNION ALL SELECT 2 WHERE 1=0)", false},
+		{"leading empty query", "; SELECT $1; SELECT 3;", false},
+		{"leading empty set query", "; (SELECT 1 WHERE 1=0) UNION ALL SELECT $1;", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &powerUdfCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+				bodies: map[string]function.Udf{
+					"query_term": {Body: tc.body, SQLMode: &mode},
+				},
+			}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"select query_term(cast(? as signed))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, true, nil)
+			require.NoError(t, err)
+
+			query := built.GetQuery()
+			require.NotNil(t, query)
+			var foundScan, foundParam bool
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN {
+					require.Equal(t, "bvt_test2", node.TableDef.GetDbName())
+					require.Equal(t, "t3", node.TableDef.GetName())
+					foundScan = true
+				}
+			}
+			require.NoError(t, plan.VisitExpressionsInOwner(query, func(root *plan.Expr) error {
+				return plan.VisitExprTree(root, func(e *plan.Expr) error {
+					if param := e.GetP(); param != nil {
+						require.Equal(t, int32(1), param.Pos)
+						foundParam = true
+					}
+					return nil
+				})
+			}))
+			require.Equal(t, tc.wantScan, foundScan)
+			require.True(t, foundParam, "the query term must retain the caller's prepared argument")
+		})
+	}
+}
+
+func TestSQLUDFReportsInvalidBody(t *testing.T) {
+	ctx := &powerUdfCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
+		bodies: map[string]function.Udf{
+			"incomplete_query": {Body: "(select 1) union all"},
+		},
+	}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select incomplete_query()", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, false, nil)
+	require.Error(t, err)
 }
 
 func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {

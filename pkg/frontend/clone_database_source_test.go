@@ -1275,7 +1275,10 @@ func TestCloneScalarSQLUdfRemapsPowerSubquery(t *testing.T) {
 			require.NoError(t, err)
 			text, legacy := function.DecodeUdfCatalogBody("sql", clone)
 			require.Equal(t, tc.ordinal == 0, legacy)
-			require.False(t, function.SQLUdfBodyIsQuery(text, sqlMode))
+			statements, _, queryBody, err := function.ParseSQLUdfBody(t.Context(), text, 1, sqlMode)
+			require.NoError(t, err)
+			defer freeStatements(statements)
+			require.False(t, queryBody)
 			require.Contains(t, text, "from `tpch`.`nation`")
 			require.Contains(t, text, "= $1")
 
@@ -1321,6 +1324,66 @@ func TestCloneScalarSQLUdfRemapsPowerSubquery(t *testing.T) {
 	}
 }
 
+func TestCloneSQLUdfRemapsParenthesizedQuery(t *testing.T) {
+	const sqlMode = "ANSI_QUOTES"
+	const body = `(select "n_nationkey" from "source_db"."nation" where "n_nationkey" = $1)
+		union all select "r_regionkey" from "source_db"."region" where "r_regionkey" = $1`
+	for _, tc := range []struct {
+		name, stored string
+		legacy       bool
+	}{
+		{"released", body, true},
+		{"current", function.EncodeSQLUdfBody(body), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			refs, status, err := collectCloneRoutineReferences(t.Context(), tc.stored, "sql", sqlMode, "source_db", 1, true)
+			require.NoError(t, err)
+			require.Equal(t, cloneRoutineDependenciesInspected, status)
+			require.Len(t, refs.tables, 2)
+			for _, name := range []string{"nation", "region"} {
+				require.Contains(t, refs.tables, cloneDatabaseObjectKey("source_db", name, 1))
+			}
+
+			clone, err := rewriteCloneSQLFunctionBody(t.Context(), tc.stored, sqlMode, "source_db", "tpch", 1)
+			require.NoError(t, err)
+			text, legacy := function.DecodeUdfCatalogBody("sql", clone)
+			require.Equal(t, tc.legacy, legacy)
+			require.Contains(t, text, "from `tpch`.`nation`")
+			require.Contains(t, text, "from `tpch`.`region`")
+			require.Equal(t, 2, strings.Count(text, "= $1"))
+			statements, _, queryBody, err := function.ParseSQLUdfBody(t.Context(), text, 1, sqlMode)
+			require.NoError(t, err)
+			defer freeStatements(statements)
+			require.True(t, queryBody)
+			require.IsType(t, &tree.UnionClause{}, statements[0].(*tree.Select).Select)
+		})
+	}
+}
+
+func TestCloneSQLUdfRemapsTableQueryTerm(t *testing.T) {
+	const sqlMode = "ANSI_QUOTES"
+	const body = `TABLE "source_db"."control_t" UNION ALL VALUES ROW($1) LIMIT 1`
+
+	refs, status, err := collectCloneRoutineReferences(t.Context(), body, "sql", sqlMode, "source_db", 1, true)
+	require.NoError(t, err)
+	require.Equal(t, cloneRoutineDependenciesInspected, status)
+	require.Len(t, refs.tables, 1)
+	require.Contains(t, refs.tables, cloneDatabaseObjectKey("source_db", "control_t", 1))
+
+	rewritten, err := rewriteCloneSQLFunctionBody(t.Context(), body, sqlMode, "source_db", "target_db", 1)
+	require.NoError(t, err)
+	require.Contains(t, rewritten, "from `target_db`.`control_t`")
+	require.Contains(t, rewritten, "values row($1)")
+	stmts, _, queryBody, err := function.ParseSQLUdfBody(t.Context(), rewritten, 1, sqlMode)
+	require.NoError(t, err)
+	defer freeStatements(stmts)
+	require.True(t, queryBody)
+	set := stmts[0].(*tree.Select).Select.(*tree.UnionClause)
+	require.IsType(t, &tree.SelectClause{}, set.Left)
+	require.IsType(t, &tree.ValuesClause{}, set.Right)
+	require.NotNil(t, stmts[0].(*tree.Select).Limit)
+}
+
 func TestCloneSQLUdfPreservesLiteralSemantics(t *testing.T) {
 	const expr = `concat(inet_ntoa(_binary 0x31), inet_ntoa(0x31), inet_ntoa(_binary '1'),
 		'a''b\\c', _binary '` + "\xff" + `\\', (select n_nationkey from "source_db"."nation" where n_nationkey = $1))`
@@ -1333,7 +1396,10 @@ func TestCloneSQLUdfPreservesLiteralSemantics(t *testing.T) {
 				require.NoError(t, err)
 				require.Contains(t, rewritten, "from `tpch`.`nation`")
 				require.Contains(t, rewritten, "= $1")
-				require.Equal(t, prefix != "", function.SQLUdfBodyIsQuery(rewritten, sqlMode))
+				statements, _, queryBody, err := function.ParseSQLUdfBody(t.Context(), rewritten, 1, sqlMode)
+				require.NoError(t, err)
+				t.Cleanup(func() { freeStatements(statements) })
+				require.Equal(t, prefix != "", queryBody)
 
 				for _, sql := range []string{text, rewritten} {
 					stmt, err := parsers.ParseOneWithSQLMode(t.Context(), dialect.MYSQL, "select "+strings.TrimPrefix(sql, prefix), 1, sqlMode)

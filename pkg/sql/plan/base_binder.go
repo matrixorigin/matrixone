@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -6172,12 +6171,20 @@ func bindFuncExprImplUdf(
 		}
 		restoreUdfArgs := b.pushSQLUdfArguments(udfArgs)
 		defer restoreUdfArgs()
-		expressionBody := !function.SQLUdfBodyIsQuery(sql, parserSQLMode)
+		substmts, bodyExpr, queryBody, err := function.ParseSQLUdfBody(b.GetContext(), sql, 1, parserSQLMode)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			for _, stmt := range substmts {
+				stmt.Free()
+			}
+		}()
 		if requiresUDFSourceValidation {
 			used := make(map[*plan.Expr]struct{}, len(udfArgs))
 			for _, arg := range udfArgs {
 				used[arg] = struct{}{}
-				if expressionBody {
+				if !queryBody {
 					continue
 				}
 				needsRemap, err := udfArgumentNeedsZeroScalarRemap(b.builder, arg)
@@ -6210,29 +6217,13 @@ func bindFuncExprImplUdf(
 				}
 			}
 		}
-		if expressionBody {
-			sql = "select " + sql
-		}
-		substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			for _, stmt := range substmts {
-				stmt.Free()
-			}
-		}()
-		var bodyExpr tree.Expr
-		if expressionBody {
-			bodyExpr = substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
-		}
 		if valueBinder, ok := b.impl.(*DefaultBinder); ok && valueBinder.allowSubquery &&
 			b.builder != nil && b.builder.valuesSubqueryBinding.rows != nil {
 			// The caller's VALUES AST does not contain subqueries introduced by
 			// a SQL UDF. Inspect the parsed expression as well as query bodies,
 			// before either binder can create a relational branch. SQL spelling
 			// and wrappers must not bypass the statement's admission boundary.
-			if !expressionBody || valueExprContainsSubquery(bodyExpr) {
+			if queryBody || valueExprContainsSubquery(bodyExpr) {
 				return nil, moerr.NewNotSupported(b.GetContext(),
 					"SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery")
 			}
@@ -6248,7 +6239,7 @@ func bindFuncExprImplUdf(
 			cc.SetContext(function.WithPersistedPowerBinding(previous, udf.LegacyPower))
 			defer cc.SetContext(previous)
 		}
-		if expressionBody {
+		if !queryBody {
 			expr, err := b.impl.BindExpr(bodyExpr, depth, false)
 			if err != nil {
 				return nil, err
@@ -6418,18 +6409,25 @@ func SQLUdfBodyReferencesPower(body, sqlMode string) bool {
 	defer mysqlparser.PutScanner(scanner)
 	previousToken := 0
 	powerName := false
+	started := false
 	for {
 		lastToken := previousToken
 		token, name := scanSQLToken(scanner, &previousToken)
 		switch token {
-		case 0, mysqlparser.LEX_ERROR, ';':
-			// The UDF binder consumes only the first statement.
+		case 0, mysqlparser.LEX_ERROR:
+			return false
+		case ';':
+			// The binder consumes only the first nonempty statement.
+			if !started {
+				continue
+			}
 			return false
 		case '(':
 			if powerName {
 				return true
 			}
 		}
+		started = true
 		// WITH [RECURSIVE] introduces a CTE declaration, whose leading
 		// identifier can be followed by a parenthesized column list.
 		powerName = token == mysqlparser.ID && lastToken != '.' && lastToken != mysqlparser.WITH && lastToken != mysqlparser.RECURSIVE &&

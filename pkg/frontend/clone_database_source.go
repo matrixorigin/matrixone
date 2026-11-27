@@ -454,8 +454,7 @@ func collectCloneRoutineReferences(
 	if isFunction {
 		body, _ = function.DecodeSQLUdfBody(body)
 	}
-	parseAsExpression := isFunction && !function.SQLUdfBodyIsQuery(body, sqlMode)
-	statements, err := parseCloneRoutineBody(ctx, body, sqlMode, lowerCaseTableNames, parseAsExpression)
+	statements, parseAsExpression, err := parseCloneRoutineBody(ctx, body, sqlMode, lowerCaseTableNames, isFunction)
 	if err != nil {
 		if parseAsExpression {
 			// Preserve historical scalar metadata that cannot be parsed and
@@ -930,9 +929,8 @@ func rewriteCloneSQLFunctionBody(
 	lowerCaseTableNames int64,
 ) (string, error) {
 	sql, nullOnNonFinite := function.DecodeSQLUdfBody(body)
-	parseAsExpression := !function.SQLUdfBodyIsQuery(sql, sqlMode)
 	rewritten, err := plan2.RewriteSQLUdfBodyPreservingArguments(sql, sqlMode, dstDBName, func(protected string) (string, error) {
-		return rewriteCloneSQLRoutineBody(ctx, protected, sqlMode, srcDBName, dstDBName, lowerCaseTableNames, parseAsExpression)
+		return rewriteCloneSQLRoutineBody(ctx, protected, sqlMode, srcDBName, dstDBName, lowerCaseTableNames, true)
 	})
 	if err != nil {
 		return "", err
@@ -950,13 +948,13 @@ func rewriteCloneSQLRoutineBody(
 	srcDBName string,
 	dstDBName string,
 	lowerCaseTableNames int64,
-	parseAsExpression bool,
+	isFunction bool,
 ) (string, error) {
 	if srcDBName == "" || srcDBName == dstDBName {
 		return body, nil
 	}
 
-	stmts, err := parseCloneRoutineBody(ctx, body, sqlMode, lowerCaseTableNames, parseAsExpression)
+	stmts, parseAsExpression, err := parseCloneRoutineBody(ctx, body, sqlMode, lowerCaseTableNames, isFunction)
 	if err != nil {
 		if parseAsExpression {
 			return body, nil
@@ -984,22 +982,20 @@ func rewriteCloneSQLRoutineBody(
 		return body, nil
 	}
 	if parseAsExpression {
-		rewritten = strings.TrimPrefix(rewritten, cloneRoutineProjectionPrefix)
+		rewritten = strings.TrimPrefix(rewritten, "select ")
 	}
 	return rewritten, nil
 }
 
-const cloneRoutineProjectionPrefix = "select "
-
 func parseCloneRoutineBody(
-	ctx context.Context, body, sqlMode string, lowerCaseTableNames int64, parseAsExpression bool,
-) ([]tree.Statement, error) {
-	if parseAsExpression {
-		// Use the same projection wrapper as SQL UDF binding. The remapper
-		// can then see nested subqueries and qualified function calls.
-		body = cloneRoutineProjectionPrefix + body
+	ctx context.Context, body, sqlMode string, lowerCaseTableNames int64, isFunction bool,
+) (statements []tree.Statement, parseAsExpression bool, err error) {
+	if isFunction {
+		statements, _, queryBody, err := function.ParseSQLUdfBody(ctx, body, lowerCaseTableNames, sqlMode)
+		return statements, !queryBody, err
 	}
-	return parsers.ParseWithSQLMode(ctx, dialect.MYSQL, body, lowerCaseTableNames, sqlMode)
+	statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, body, lowerCaseTableNames, sqlMode)
+	return statements, false, err
 }
 
 func formatCloneRoutineStatements(stmts []tree.Statement, options ...tree.FmtCtxOption) string {
