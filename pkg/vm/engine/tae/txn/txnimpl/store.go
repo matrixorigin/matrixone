@@ -136,17 +136,18 @@ func (tracer *txnTracer) Stop() {
 type txnStore struct {
 	ctx context.Context
 	txnbase.NoopTxnStore
-	mu         sync.RWMutex
-	rt         *dbutils.Runtime
-	dbs        map[uint64]*txnDB
-	driver     wal.Store
-	txn        txnif.AsyncTxn
-	catalog    *catalog.Catalog
-	cmdMgr     *commandManager
-	logs       []entry.Entry
-	warChecker *warChecker
-	writeOps   atomic.Uint32
-	tracer     *txnTracer
+	mu            sync.RWMutex
+	rt            *dbutils.Runtime
+	dbs           map[uint64]*txnDB
+	driver        wal.Store
+	txn           txnif.AsyncTxn
+	catalog       *catalog.Catalog
+	cmdMgr        *commandManager
+	cmdsCollected bool
+	logs          []entry.Entry
+	warChecker    *warChecker
+	writeOps      atomic.Uint32
+	tracer        *txnTracer
 
 	isOffline bool
 
@@ -254,6 +255,7 @@ func (store *txnStore) Close() error {
 		}
 	}
 	store.dbs = nil
+	store.cmdMgr.discardPreparedRecord()
 	store.cmdMgr = nil
 	store.logs = nil
 	store.warChecker = nil
@@ -744,9 +746,7 @@ func (store *txnStore) SoftDeleteObject(isTombstone bool, id *common.ID) (err er
 func (store *txnStore) ApplyRollback() (err error) {
 	if store.cmdMgr.GetCSN() != 0 {
 		for _, db := range store.dbs {
-			if err = db.ApplyRollback(); err != nil {
-				break
-			}
+			err = combineTxnLifecycleErrors(err, db.ApplyRollback())
 		}
 	}
 	store.CleanUp()
@@ -870,8 +870,31 @@ func (store *txnStore) PreApplyCommit() (err error) {
 	return
 }
 
-func (store *txnStore) PrepareWAL() (err error) {
+func (store *txnStore) collectCmdOnce() (err error) {
+	if store.cmdsCollected {
+		return nil
+	}
 	if err = store.CollectCmd(); err != nil {
+		return
+	}
+	store.cmdsCollected = true
+	return nil
+}
+
+// PreflightWAL serializes and bounds the final transaction command before
+// PreApplyCommit mutates appendable object data and indexes.
+func (store *txnStore) PreflightWAL() (err error) {
+	if err = store.collectCmdOnce(); err != nil {
+		return
+	}
+	if store.cmdMgr.GetCSN() == 0 {
+		return nil
+	}
+	return store.cmdMgr.PreflightTxnRecord(store)
+}
+
+func (store *txnStore) PrepareWAL() (err error) {
+	if err = store.collectCmdOnce(); err != nil {
 		return
 	}
 
@@ -920,9 +943,7 @@ func (store *txnStore) AddTxnEntry(entry txnif.TxnEntry) {
 func (store *txnStore) PrepareRollback() error {
 	var err error
 	for _, db := range store.dbs {
-		if err = db.PrepareRollback(); err != nil {
-			break
-		}
+		err = combineTxnLifecycleErrors(err, db.PrepareRollback())
 	}
 
 	return err

@@ -715,6 +715,7 @@ type OperatorStats struct {
 	DiskIO          int64                         `json:"DiskIO,omitempty"`
 	ResourceQuality resource.QualityFlags         `json:"-"`
 	ResourceWaitNS  [resource.WaitKindCount]int64 `json:"-"`
+	startupResource *resource.Delta               // immutable canonical-only timing interval
 
 	InputBlocks  int64 `json:"InputBlocks,omitempty"`
 	ScanBytes    int64 `json:"-"`
@@ -791,6 +792,10 @@ func (ps *OperatorStats) CloneForExport() *OperatorStats {
 	}
 
 	clone := *ps
+	if ps.startupResource != nil {
+		startup := *ps.startupResource
+		clone.startupResource = &startup
+	}
 	if ps.OperatorMetrics != nil {
 		clone.OperatorMetrics = make(map[MetricType]int64, len(ps.OperatorMetrics))
 		for key, value := range ps.OperatorMetrics {
@@ -850,7 +855,40 @@ func (ps *OperatorStats) ResourceDelta() resource.Delta {
 	add(ps.S3List, &delta.Usage.S3Requests[resource.S3List])
 	add(ps.S3Delete, &delta.Usage.S3Requests[resource.S3Delete])
 	add(ps.S3DeleteMul, &delta.Usage.S3Requests[resource.S3DeleteMulti])
+	if startup := ps.startupResource; startup != nil {
+		delta.Quality |= startup.Quality | resource.MergeUsage(&delta.Usage, startup.Usage)
+	}
 	return delta
+}
+
+// RecordReaderStartup transfers the startup I/O to the scan's normal counters.
+// Scope preparation already accounts for the elapsed time in legacy reports.
+func (ps *OperatorStats) RecordReaderStartup(startup *OperatorStats) {
+	ps.S3List += startup.S3List
+	ps.S3Head += startup.S3Head
+	ps.S3Put += startup.S3Put
+	ps.S3Get += startup.S3Get
+	ps.S3Delete += startup.S3Delete
+	ps.S3DeleteMul += startup.S3DeleteMul
+	ps.S3ReadSize += startup.S3ReadSize
+	ps.S3WriteSize += startup.S3WriteSize
+	ps.ReadSize += startup.ReadSize
+	ps.DiskReadSize += startup.DiskReadSize
+	ps.CacheRead += startup.CacheRead
+	ps.CacheHit += startup.CacheHit
+	ps.CacheMemoryRead += startup.CacheMemoryRead
+	ps.CacheMemoryHit += startup.CacheMemoryHit
+	ps.CacheDiskRead += startup.CacheDiskRead
+	ps.CacheDiskHit += startup.CacheDiskHit
+	ps.CacheRemoteRead += startup.CacheRemoteRead
+	ps.CacheRemoteHit += startup.CacheRemoteHit
+
+	// ResourceDelta also aggregates the scan's normal I/O fields.
+	delta := startup.ResourceDelta()
+	delta.Usage.S3Requests = [resource.S3OpCount]uint64{}
+	delta.Usage.S3ReadBytes = 0
+	delta.Usage.S3WriteBytes = 0
+	ps.startupResource = &delta
 }
 
 func NewOperatorStats(operatorName string) *OperatorStats {

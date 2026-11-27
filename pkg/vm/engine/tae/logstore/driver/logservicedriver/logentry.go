@@ -71,11 +71,11 @@ func init() {
 }
 
 type LogEntryWriter struct {
-	Entry      LogEntry
-	Footer     LogEntryFooter
-	buf        bytes.Buffer
-	entries    []*entry.Entry
-	approxSize int64
+	Entry       LogEntry
+	Footer      LogEntryFooter
+	buf         bytes.Buffer
+	entries     []*entry.Entry
+	encodedSize int64
 }
 
 func NewLogEntryWriter() *LogEntryWriter {
@@ -104,7 +104,7 @@ func (w *LogEntryWriter) Reset() {
 	} else {
 		w.buf.Reset()
 	}
-	w.approxSize = 0
+	w.encodedSize = 0
 	w.NotifyDone(nil)
 }
 
@@ -128,8 +128,8 @@ func (w *LogEntryWriter) Size() int {
 	return w.Entry.Size() + w.Footer.Size()
 }
 
-func (w *LogEntryWriter) ApproxSize() int64 {
-	return w.approxSize
+func (w *LogEntryWriter) PendingEncodedSize() int64 {
+	return w.encodedSize
 }
 
 func (w *LogEntryWriter) Capacity() int {
@@ -146,11 +146,14 @@ func (w *LogEntryWriter) SetSafeDSN(dsn uint64) {
 }
 
 func (w *LogEntryWriter) AppendEntry(entry *entry.Entry) (err error) {
+	if err = entry.Prepare(); err != nil {
+		return err
+	}
 	if len(w.entries) == 0 {
 		w.Entry.SetStartDSN(entry.DSN)
 	}
 	w.entries = append(w.entries, entry)
-	w.approxSize += entry.Entry.GetApproxPayloadSize()
+	w.encodedSize += int64(entry.GetSize() + OneEntryFooterSize)
 
 	return
 }
@@ -161,10 +164,6 @@ func (w *LogEntryWriter) SetStartDSN(dsn uint64) {
 
 func (w *LogEntryWriter) Finish() (LogEntry, error) {
 	for _, e := range w.entries {
-		if err := e.Entry.ExecuteGroupWalPreCallbacks(); err != nil {
-			return nil, err
-		}
-
 		w.buf.Reset()
 		if _, err := e.WriteTo(&w.buf); err != nil {
 			panic(err)

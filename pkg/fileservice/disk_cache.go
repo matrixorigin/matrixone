@@ -907,6 +907,13 @@ func (d *DiskCache) pathForIOEntry(path string, entry IOEntry) string {
 	)
 }
 
+// IsWholeObjectCached reports a hint from the local disk index without
+// reading the file or changing its eviction order.
+func IsWholeObjectCached(fs FileService, path string) bool {
+	s, ok := fs.(*S3FS)
+	return ok && s.diskCache != nil && s.diskCache.cache.Contains(s.diskCache.pathForFile(path))
+}
+
 func (d *DiskCache) pathForFile(path string) string {
 	return filepath.Join(
 		d.path,

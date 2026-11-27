@@ -236,7 +236,7 @@ func TestTruncate(t *testing.T) {
 // 9. Restart => Check DSN and LSN and Checkpointed
 func TestReplayWithCheckpoint(t *testing.T) {
 	backend, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
-	wal := NewLogserviceHandle(clientFactory)
+	wal := NewLogserviceHandle(clientFactory, 0)
 	t.Cleanup(func() { assert.NoError(t, wal.Close()) })
 	// GetTruncated reports intent; replay requires remote truncation to finish.
 	waitTruncate := func(previous uint64) uint64 {
@@ -370,7 +370,7 @@ func TestReplayWithCheckpoint(t *testing.T) {
 
 	require.NoError(t, wal.Close())
 
-	wal = NewLogserviceHandle(clientFactory)
+	wal = NewLogserviceHandle(clientFactory, 0)
 
 	err = wal.Replay(context.Background(), replayHandle, modeGetter, nil)
 	assert.NoError(t, err)
