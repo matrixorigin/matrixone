@@ -1906,7 +1906,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	builder.DedupColName = e.cfg.DedupColName
 	builder.DedupColTypes = e.cfg.DedupColTypes
 	if err := builder.Prepare(e.cfg.BuildKeyExprs, e.cfg.DelColIdx, e.cfg.DedupDeleteMarkerColIdx, e.cfg.DedupDeleteKeepColIdxList, proc); err != nil {
-		builder.Free(proc)
 		return nil, BucketSkip, err
 	}
 
@@ -1918,7 +1917,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	if e.buildReadBatch == nil {
 		readBatch, err := newSpillBatch(0, e.allocation.decoded)
 		if err != nil {
-			builder.Free(proc)
 			return nil, BucketSkip, err
 		}
 		e.buildReadBatch = readBatch
@@ -1931,8 +1929,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		subBuckets, err := e.reSpillBucket(
 			proc, analyzer, bucket, builder, &e.buildReader, pending,
 		)
-		builder.FreeHashMapAndBatches(proc)
-		builder.Free(proc)
 		if err != nil {
 			return BucketSkip, err
 		}
@@ -1942,8 +1938,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 
 	for {
 		if err := checkSpillCanceled(proc); err != nil {
-			builder.FreeHashMapAndBatches(proc)
-			builder.Free(proc)
 			return nil, BucketSkip, err
 		}
 		bat, err := e.buildReader.ReadBatch(proc, e.buildReadBatch)
@@ -1951,13 +1945,9 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			break
 		}
 		if err != nil {
-			builder.FreeHashMapAndBatches(proc)
-			builder.Free(proc)
 			return nil, BucketSkip, err
 		}
 		if err := checkSpillCanceled(proc); err != nil {
-			builder.FreeHashMapAndBatches(proc)
-			builder.Free(proc)
 			return nil, BucketSkip, err
 		}
 		if bucket.Depth < SpillMaxPass {
@@ -1977,8 +1967,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 				result, spillErr := reSpill(bat)
 				return nil, result, spillErr
 			}
-			builder.FreeHashMapAndBatches(proc)
-			builder.Free(proc)
 			if isBudgetAdmission(err) {
 				return nil, BucketSkip, noProgressError(proc, bucket.Depth)
 			}
@@ -1993,8 +1981,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		if bucket.Depth < SpillMaxPass &&
 			colexec.ShouldSpill(builderMemSize(builder), int64(builder.InputBatchRowCount), e.cfg.SpillThreshold) {
 			subBuckets, err := e.reSpillBucket(proc, analyzer, bucket, builder, &e.buildReader, nil)
-			builder.FreeHashMapAndBatches(proc)
-			builder.Free(proc)
 			if err != nil {
 				return nil, BucketSkip, err
 			}
@@ -2003,8 +1989,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		}
 	}
 	if int64(builder.InputBatchRowCount) != bucket.BuildRows {
-		builder.FreeHashMapAndBatches(proc)
-		builder.Free(proc)
 		return nil, BucketSkip, spillRowCountMismatch(
 			proc,
 			"build",
@@ -2014,8 +1998,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	}
 
 	if err := checkSpillCanceled(proc); err != nil {
-		builder.FreeHashMapAndBatches(proc)
-		builder.Free(proc)
 		return nil, BucketSkip, err
 	}
 	// Keep an admitted recovery floor until the hashmap is committed. Releasing
@@ -2039,8 +2021,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			result, spillErr := reSpill(nil)
 			return nil, result, spillErr
 		}
-		builder.FreeHashMapAndBatches(proc)
-		builder.Free(proc)
 		if isBudgetAdmission(err) {
 			return nil, BucketSkip, noProgressError(proc, bucket.Depth)
 		}
@@ -2049,8 +2029,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	e.releaseScatterScratch()
 	if !e.cfg.NeedBatches {
 		if err := builder.DrainCopiedBatches(proc, nil); err != nil {
-			builder.FreeHashMapAndBatches(proc)
-			builder.Free(proc)
 			return nil, BucketSkip, err
 		}
 	}
@@ -2085,7 +2063,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	}
 	jm.SetRowCount(int64(builder.InputBatchRowCount))
 	jm.IncRef(1)
-	builder.FreeTemporaryVectors(proc)
+	builder.ClearEvaluatedKeys()
 	builder.FreeExecutors()
 
 	// Pop the head bucket and open probe reader.

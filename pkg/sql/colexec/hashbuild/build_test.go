@@ -3160,7 +3160,6 @@ func TestShuffleHashBuildDirectSpillUsesActualAllocation(t *testing.T) {
 		tc.proc,
 		tc.arg.Conditions,
 		rows,
-		false,
 	)
 	require.NoError(t, err)
 	require.Greater(t, estimated, limit,

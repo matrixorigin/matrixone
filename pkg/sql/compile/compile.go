@@ -333,6 +333,8 @@ func (c *Compile) clear() {
 		c.lockMeta = nil
 	}
 
+	_ = c.closeODKUPriorData()
+
 	c.proc.Free()
 	c.proc = nil
 
@@ -380,6 +382,8 @@ func (c *Compile) clear() {
 	for k := range c.materializedSinkScanNodes {
 		delete(c.materializedSinkScanNodes, k)
 	}
+	c.odkuWriterSources = nil
+	c.odkuResult = nil
 	for k, source := range c.materializedSources {
 		source.Close()
 		delete(c.materializedSources, k)
@@ -632,11 +636,21 @@ func (c *Compile) prePipelineInitializer() (err error) {
 	if err = c.beginImportMemory(); err != nil {
 		return err
 	}
+	// Validate local and remote-bound plans before locks, data-source setup or
+	// any MergeRun prescope can begin evaluating source expressions.
+	owner, err := c.preflightODKU()
+	if err != nil {
+		return err
+	}
 	// do table lock.
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
 		return err
 	}
 	if err = c.lockTable(); err != nil {
+		return err
+	}
+
+	if err = c.bindODKUPriorData(owner); err != nil {
 		return err
 	}
 
@@ -647,19 +661,46 @@ func (c *Compile) prePipelineInitializer() (err error) {
 		}
 	}
 	var spillBudget materialized.SpillBudget
+	var writerAllocation *vector.AllocationAccountSelection
 	if len(c.materializedSources) > 0 {
 		spillBudget = newMaterializedSpillBudget(c.proc)
 	}
+	if len(c.odkuWriterSources) > 0 {
+		if c.allocationAttempt == nil {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		writerAllocation, err = vector.NewAllocationAccountSelection(c.allocationAttempt.account,
+			mpool.AllocationOwnerMin, materializedWriterSiteData, materializedWriterSiteArea,
+			materializedWriterSiteNulls, materializedWriterSiteGrouping)
+		if err != nil {
+			return err
+		}
+	}
 	for _, source := range c.materializedSources {
-		if err = source.Begin(c.proc.Mp(), materialized.SpillConfig{FileFactory: func(name string) (*os.File, error) {
+		budget := spillBudget
+		var allocation *vector.AllocationAccountSelection
+		if slices.Contains(c.odkuWriterSources, source) {
+			allocation = writerAllocation
+			budget.ReserveMemory = func(size uint64) (materialized.Reservation, error) {
+				generation, err := c.proc.GetHashBuildBudget()
+				if err != nil {
+					return nil, err
+				}
+				return generation.ReserveMemory(c.proc.Ctx, size)
+			}
+		}
+		if err = source.Begin(c.proc.Mp(), materialized.SpillConfig{FileFactory: func(ctx context.Context, name string) (*os.File, error) {
 			spillFS, spillErr := c.proc.GetSpillFileService()
 			if spillErr != nil {
 				return nil, spillErr
 			}
-			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
-		}, Budget: spillBudget}); err != nil {
+			return spillFS.CreateAndRemoveFile(ctx, name)
+		}, Budget: budget, Allocation: allocation}); err != nil {
 			return err
 		}
+	}
+	for _, source := range c.odkuWriterSources {
+		source.RequireCompletionOf(c.odkuWriterSources)
 	}
 	return nil
 }
@@ -4232,8 +4273,7 @@ func nodeHasUserLevelLockFunction(node *plan.Node) bool {
 		exprHasUserLevelLockFunction(node.Sliding) ||
 		exprHasUserLevelLockFunction(node.Timestamp) ||
 		exprHasUserLevelLockFunction(node.WEnd) ||
-		hasUserLevelLockFunction(node.FillVal) ||
-		hasUserLevelLockFunction(node.OnUpdateExprs) {
+		hasUserLevelLockFunction(node.FillVal) {
 		return true
 	}
 	if node.IndexReaderParam != nil {
@@ -5607,6 +5647,7 @@ func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Sc
 }
 
 func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	ss = c.fenceODKUWriterInput(ss)
 	if ok, err := isIcebergAppendInsert(c.proc.Ctx, node); err != nil {
 		return nil, err
 	} else if ok {
@@ -5829,6 +5870,7 @@ func icebergInsertNeedsSingleWriterMerge(ss []*Scope, currentCN engine.Node) boo
 }
 
 func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	ss = c.fenceODKUWriterInput(ss)
 	// Determine whether to Write S3
 	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
@@ -5913,6 +5955,15 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 }
 
 func (c *Compile) compilePreInsertUk(node *plan.Node, ss []*Scope) []*Scope {
+	if node.PreInsertUkCtx.GetOdkuActions() != nil {
+		if len(ss) == 1 && c.canInlineODKUArbiter(ss[0]) {
+			// Keep concurrent dependency scheduling even though this single
+			// local stream needs no additional merge/connector boundary.
+			c.hasMergeOp = true
+		} else {
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
+	}
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		preInsertUkArg := constructPreInsertUk(node)
@@ -5958,12 +6009,12 @@ func (c *Compile) compileUpdateUnique(node *plan.Node, ss []*Scope) ([]*Scope, e
 			RowID: int(ctx.RowId), Active: int(ctx.Active), Keys: keys, Values: values, Checks: checks,
 			RejectZeroTemporal: rejectZeroTemporal,
 			SpillConfig: materialized.SpillConfig{
-				FileFactory: func(name string) (*os.File, error) {
+				FileFactory: func(ctx context.Context, name string) (*os.File, error) {
 					spillFS, err := c.proc.GetSpillFileService()
 					if err != nil {
 						return nil, err
 					}
-					return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
+					return spillFS.CreateAndRemoveFile(ctx, name)
 				},
 				Budget: newMaterializedSpillBudget(c.proc),
 			},
@@ -5973,6 +6024,14 @@ func (c *Compile) compileUpdateUnique(node *plan.Node, ss []*Scope) ([]*Scope, e
 	}
 	c.anal.isFirst = false
 	return c.compileProjection(node, ss), nil
+}
+
+func (c *Compile) canInlineODKUArbiter(s *Scope) bool {
+	return s != nil && s.RootOp != nil && s.Proc != nil && s.Proc.Base != nil &&
+		c.proc != nil && c.proc.Base != nil && s.Proc.Base == c.proc.Base &&
+		s.NodeInfo.Addr != "" && c.addr != "" && sameExecutionAddr(s.NodeInfo.Addr, c.addr) &&
+		s.NodeInfo.Mcpu == 1 && (s.Magic == Merge || s.Magic == Remote) &&
+		!s.IsRemote && !s.IsEnd && !s.IsLoad && !s.IsTbFunc && !s.VectorQueryScope
 }
 
 func (c *Compile) compilePreInsertSK(node *plan.Node, ss []*Scope) []*Scope {
@@ -5987,6 +6046,7 @@ func (c *Compile) compilePreInsertSK(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	ss = c.fenceODKUWriterInput(ss)
 	currentFirstFlag := c.anal.isFirst
 	op, err := constructDeletion(c.proc, node, c.e)
 	if err != nil {
@@ -6265,8 +6325,9 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	ss = c.groupRemoteRunDependenciesByCNIfNeeded(ss, rs.NodeInfo)
 	rs.PreScopes = ss
 
-	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
+	rs.Proc = c.proc.NewNoContextChildProc(0)
 	if len(ss) > 0 {
+		rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
 
@@ -6283,7 +6344,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		if sameExecutionNode(rs.NodeInfo, ss[i].NodeInfo) {
 			nilBatchCnt = ss[i].NodeInfo.Mcpu
 		}
-		rs.Proc.Reg.MergeReceivers[j].ResetForReuse(mergeReceiverChannelBufferSize(ss[i]), nilBatchCnt)
+		rs.Proc.Reg.MergeReceivers[j] = process.NewPipelineEdge(mergeReceiverChannelBufferSize(ss[i]), nilBatchCnt)
 		// waring: `connector` operator is not used as an input/output analyze,
 		// and `connector` operator cannot play the role of IsFirst/IsLast
 		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])

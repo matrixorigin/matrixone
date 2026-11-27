@@ -36,7 +36,11 @@ const (
 )
 
 type container struct {
-	status int
+	status        int
+	ordinal       *vector.Vector
+	ordinalExtras []*vector.Vector
+	ordinalOutput *batch.Batch
+	ordinalCount  int64
 
 	bat     *batch.Batch
 	batAggs []aggexec.AggFuncExec
@@ -57,8 +61,10 @@ type container struct {
 }
 
 type Window struct {
-	ctr         container
-	WinSpecList []*plan.Expr
+	ctr               container
+	ordinalAccount    *mpool.AllocationAccount
+	ordinalAllocation *vector.AllocationAccountSelection
+	WinSpecList       []*plan.Expr
 	// sort and partition
 	Fs []*plan.OrderBySpec
 	// agg func
@@ -100,6 +106,7 @@ func (window *Window) Release() {
 
 func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &window.ctr
+	ctr.clearRowNumber(proc)
 
 	ctr.resetParam()
 	if ctr.rBat != nil {
@@ -133,6 +140,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr := &window.ctr
 
 	ctr.runtimeFrames = nil
+	ctr.clearRowNumber(proc)
 	// Free aggregators before the batch so an error exit from Call (which skips
 	// the normal freeAggFun()) does not leak their mpool-held state.
 	ctr.freeAggFun()

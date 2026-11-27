@@ -1117,7 +1117,7 @@ func TestLegacyInsertForeignKeyKeepsGenericAssert(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := buildInsert(stmt.(*tree.Insert), mock.CurrentContext(), false, false)
+	logicPlan, err := buildInsert(stmt.(*tree.Insert), mock.CurrentContext(), false)
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.True(t, updateFkPlanContainsAssertWithArity(query, 2))

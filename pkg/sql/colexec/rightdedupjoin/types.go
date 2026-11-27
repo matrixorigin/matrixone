@@ -58,8 +58,6 @@ type container struct {
 	state int
 	itr   hashmap.Iterator
 
-	exprExecs []colexec.ExpressionExecutor
-
 	evecs []evalVector
 	vecs  []*vector.Vector
 
@@ -94,8 +92,6 @@ type RightDedupJoin struct {
 	SpillThreshold    int64
 	DedupColTypes     []plan.Type
 	DelColIdx         int32
-	UpdateColIdxList  []int32
-	UpdateColExprList []*plan.Expr
 	allocationAccount *mpool.AllocationAccount
 	resultAllocation  *vector.AllocationAccountSelection
 
@@ -143,7 +139,6 @@ func (rightDedupJoin *RightDedupJoin) ClearAllocationAccount(
 	if rightDedupJoin.ctr.mp != nil ||
 		rightDedupJoin.ctr.spillEngine != nil ||
 		len(rightDedupJoin.ctr.evecs) != 0 ||
-		len(rightDedupJoin.ctr.exprExecs) != 0 ||
 		rightDedupJoin.ctr.matched != nil ||
 		rightDedupJoin.ctr.resultBatch != nil {
 		return mpool.ErrAllocationAccountInvariant
@@ -198,7 +193,6 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 	ctr.cleanBitmap(proc)
 	ctr.cleanHashMap()
 	ctr.cleanResultBatch(proc)
-	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
@@ -212,7 +206,6 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 	ctr.cleanBitmap(proc)
 	ctr.cleanHashMap()
 	ctr.cleanResultBatch(proc)
-	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
@@ -222,15 +215,6 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 
 func (rightDedupJoin *RightDedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return input, nil
-}
-
-func (ctr *container) cleanExprExecutor() {
-	for i := range ctr.exprExecs {
-		if ctr.exprExecs[i] != nil {
-			ctr.exprExecs[i].Free()
-		}
-	}
-	ctr.exprExecs = nil
 }
 
 func (ctr *container) cleanHashMap() {

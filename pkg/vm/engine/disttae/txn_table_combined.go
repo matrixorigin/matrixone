@@ -1061,7 +1061,15 @@ func (t *combinedTxnTable) PrimaryKeysMayBeModified(
 	pkIndex int32,
 	partitionIndex int32,
 ) (bool, error) {
-	relations, err := t.prunePKFunc(bat, partitionIndex)
+	var relations []engine.Relation
+	var err error
+	if partitionIndex >= 0 {
+		relations, err = t.prunePKFunc(bat, partitionIndex)
+	} else {
+		// A primary-key-only lock can carry an encoded composite key. The
+		// batch has no partition column to evaluate the partition expressions.
+		relations, err = t.tablesFunc()
+	}
 	if err != nil {
 		return false, err
 	}

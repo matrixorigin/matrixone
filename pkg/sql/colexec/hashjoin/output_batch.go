@@ -15,10 +15,14 @@
 package hashjoin
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -155,6 +159,116 @@ func (ctr *container) fitGroupOutput(
 		previous.left, previous.leftRow = row.left, row.leftRow
 	}
 	return count, false
+}
+
+// A unique left join with no residual emits one row per probe row. Start the
+// bulk projection only when the entire input fits one output batch.
+func (ctr *container) copyUniqueLeftProbeColumns(hashJoin *HashJoin, proc *process.Process, outputLimit int) (bool, error) {
+	count := ctr.leftBat.RowCount()
+	if hashJoin.JoinType != plan.Node_LEFT || hashJoin.IsRightJoin || !ctr.probeHashOnPK ||
+		hashJoin.NonEqCond != nil || ctr.spillEngine != nil || ctr.outputTarget > 0 ||
+		ctr.checkBuildArea || ctr.checkProbeArea || ctr.probeState != psNextBatch ||
+		ctr.lastIdx != 0 || ctr.pendingOutput.left != nil || count == 0 || count > outputLimit {
+		return false, nil
+	}
+	for i, column := range hashJoin.ResultCols {
+		if column.Rel != 0 {
+			continue
+		}
+		if column.Pos < 0 || int(column.Pos) >= len(ctr.leftBat.Vecs) {
+			return false, nil
+		}
+		src, dst := ctr.leftBat.Vecs[column.Pos], ctr.resBat.Vecs[i]
+		if src == nil || dst == nil || dst.Length() != 0 || *src.GetType() != *dst.GetType() ||
+			(!src.IsConst() && src.Length() != count) {
+			return false, nil
+		}
+	}
+	for i, column := range hashJoin.ResultCols {
+		if column.Rel != 0 {
+			continue
+		}
+		if err := context.Cause(proc.Ctx); err != nil {
+			return false, err
+		}
+		src, dst := ctr.leftBat.Vecs[column.Pos], ctr.resBat.Vecs[i]
+		if src.CanCopyWholeVarlenaArea() && len(src.GetArea()) > 0 {
+			// A whole-vector copy includes dead payload left by overwrites.
+			// Copy only live values when the physical area exceeds that payload.
+			live := src.WindowSize(0, count) - int64(count)*int64(src.GetType().TypeSize())
+			if int64(len(src.GetArea())) > live {
+				for row := range count {
+					if err := dst.UnionOne(src, int64(row), proc.Mp()); err != nil {
+						return false, err
+					}
+				}
+				continue
+			}
+		}
+		if err := dst.UnionBatch(src, 0, count, nil, proc.Mp()); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// The hash iterator returns matches in probe order. Gather adjacent matches
+// from the same build batch together, keeping misses in their original slots.
+func (ctr *container) copyUniqueLeftBuildColumns(hashJoin *HashJoin, proc *process.Process) error {
+	if err := context.Cause(proc.Ctx); err != nil {
+		return err
+	}
+	var positions [hashmap.UnitLimit]int32
+	var build *batch.Batch
+	start := 0
+	for i, match := range ctr.vs {
+		var next *batch.Batch
+		if match != 0 && ctr.zvs[i] != 0 && len(ctr.rightBats) != 0 {
+			batchIndex, row := ctr.locateBuildRow(int64(match) - 1)
+			next = ctr.rightBats[batchIndex]
+			positions[i] = int32(row)
+		}
+		if next != build {
+			if i > start {
+				if err := ctr.appendUniqueLeftBuildRun(hashJoin, proc, build, positions[start:i]); err != nil {
+					return err
+				}
+			}
+			build, start = next, i
+		}
+	}
+	return ctr.appendUniqueLeftBuildRun(hashJoin, proc, build, positions[start:len(ctr.vs)])
+}
+
+func (ctr *container) appendUniqueLeftBuildRun(hashJoin *HashJoin, proc *process.Process, build *batch.Batch, positions []int32) error {
+	mp := proc.Mp()
+	for i, column := range hashJoin.ResultCols {
+		if column.Rel == 0 {
+			continue
+		}
+		dst := ctr.resBat.Vecs[i]
+		if build == nil {
+			if err := vector.AppendMultiFixed(dst, 0, true, len(positions), mp); err != nil {
+				return err
+			}
+			continue
+		}
+		if column.Pos < 0 || int(column.Pos) >= len(build.Vecs) {
+			return moerr.NewInternalErrorNoCtx("hash join output column is out of range")
+		}
+		src := build.Vecs[column.Pos]
+		if len(positions) == 1 || (src.IsConst() && src.HasGrouping()) {
+			// A constant can still carry row-specific GROUPING bits.
+			for _, row := range positions {
+				if err := dst.UnionOne(src, int64(row), mp); err != nil {
+					return err
+				}
+			}
+		} else if err := dst.UnionInt32(src, positions, mp); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (ctr *container) appendOutputRow(hashJoin *HashJoin, proc *process.Process, row outputRow) error {

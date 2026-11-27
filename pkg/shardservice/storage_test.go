@@ -199,8 +199,9 @@ func (s *MemShardStorage) Read(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	s.RLock()
-	defer s.RUnlock()
+	// KV mutates its search pivot even for read-only range scans.
+	s.Lock()
+	defer s.Unlock()
 
 	var value []byte
 	key := newKey(param.KeyParam.Key, ts)

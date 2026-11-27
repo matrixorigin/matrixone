@@ -468,6 +468,7 @@ func (s *service) closeService() error {
 				}
 				return nil
 			},
+			s.closeStatementObjects,
 			s.closeIncrService,
 			s.closeTxnTraceService,
 			func() error {
@@ -544,6 +545,15 @@ func (s *service) admitPipelineHandler(ctx context.Context) (context.Context, fu
 
 func (s *service) waitPipelineHandlers() error {
 	s.pipelines.wg.Wait()
+	return nil
+}
+
+// Statement views can outlive canceled SQL handlers. The engine owns their
+// final object handoff and must join cleanup before the shared IO is stopped.
+func (s *service) closeStatementObjects() error {
+	if closer, ok := s.storeEngine.(interface{ CloseStatementObjects() error }); ok {
+		return closer.CloseStatementObjects()
+	}
 	return nil
 }
 

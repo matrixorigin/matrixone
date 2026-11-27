@@ -69,9 +69,9 @@ func TestValidateRemoteReadCompatibility(t *testing.T) {
 	textParam.Process.PrepareParams.IsBin = []bool{false, false}
 	require.NoError(t, s.validateRemoteReadCompatibility(t.Context(), target, textParam))
 
-	unknown := target
-	unknown.Replicas[0].CN = "unknown"
+	unknown := shard.TableShard{Replicas: []shard.ShardReplica{{CN: "unknown"}}}
 	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), unknown, binaryParam))
+
 }
 
 func TestNewReadRequestUsesVersionedMethodForPrepareParamMetadata(t *testing.T) {
@@ -216,21 +216,56 @@ func TestBinaryReadUsesVersionedRemoteHandler(t *testing.T) {
 							PrepareParams: pipeline.PrepareParamInfo{IsBin: []bool{true}},
 						},
 					},
-					Apply: func(actual []byte) {
+					Apply: func(actual []byte) error {
 						applied = true
 						require.Equal(t, value, actual)
+
+						return nil
 					},
 				},
 				DefaultOptions.ReadAt(newTestTimestamp(2)).Shard(remoteShard),
 			)
 			require.NoError(t, err)
 			require.True(t, applied)
+
+			// The first callback is local while a remote future is already in
+			// flight. Callback failure must suppress later application but still
+			// drain/release that future; a new read must be independently usable.
+			localStore := s1.storage.(*MemShardStorage)
+			localStore.set(key, value, newTestTimestamp(1))
+			localStore.waiter.NotifyLatestCommitTS(newTestTimestamp(2))
+			for _, cancelDuringApply := range []bool{false, true} {
+				readCtx, cancel := context.WithCancelCause(ctx)
+				cause := moerr.NewInvalidInputNoCtx("failed consumer decode")
+				calls := 0
+				request := ReadRequest{TableID: table, Param: shard.ReadParam{KeyParam: shard.KeyParam{Key: key}},
+					Apply: func(actual []byte) error {
+						calls++
+						require.Equal(t, value, actual)
+						if cancelDuringApply {
+							cancel(cause)
+						}
+						return cause
+					}}
+				err := s1.Read(readCtx, request, DefaultOptions.ReadAt(newTestTimestamp(2)))
+				require.ErrorIs(t, err, cause)
+				require.Equal(t, 1, calls)
+				cancel(nil)
+				calls = 0
+				request.Apply = func(actual []byte) error { calls++; require.Equal(t, value, actual); return nil }
+				require.NoError(t, s1.Read(ctx, request, DefaultOptions.ReadAt(newTestTimestamp(2))))
+				require.Equal(t, 2, calls)
+				require.NoError(t, ctx.Err())
+			}
 		},
 		nil,
 	)
 }
 
 func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
+	savedCommit := version.CommitID
+	version.CommitID = "statement-key-read-test"
+	t.Cleanup(func() { version.CommitID = savedCommit })
 	runServicesTest(
 		t,
 		"cn1,cn2,cn3",
@@ -303,25 +338,18 @@ func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
 			)
 			s.cache.read.Store(cache)
 
-			adjustCalls := make(map[uint64]int)
-			readCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			defer cancel()
-			err := s.Read(
-				readCtx,
-				ReadRequest{
-					TableID: table,
-					Param: shard.ReadParam{Process: pipeline.ProcessInfo{
-						PrepareParams: pipeline.PrepareParamInfo{IsBin: []bool{true}},
-					}},
-				},
-				DefaultOptions.Adjust(func(target *shard.TableShard) {
-					adjustCalls[target.ShardID]++
-				}),
-			)
-			require.Error(t, err)
-			require.ErrorContains(t, err, "incompatible or unknown commit")
-			require.Zero(t, client.asyncCalls.Load())
-			require.Equal(t, map[uint64]int{1: 1, 2: 1}, adjustCalls)
+			for _, request := range []ReadRequest{
+				{TableID: table, Param: shard.ReadParam{Process: pipeline.ProcessInfo{PrepareParams: pipeline.PrepareParamInfo{IsBin: []bool{true}}}}},
+			} {
+				adjustCalls := make(map[uint64]int)
+				readCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				err := s.Read(readCtx, request, DefaultOptions.Adjust(func(target *shard.TableShard) { adjustCalls[target.ShardID]++ }))
+				cancel()
+				require.Error(t, err)
+				require.ErrorContains(t, err, "incompatible or unknown commit")
+				require.Zero(t, client.asyncCalls.Load(), "all replicas are validated before either remote send")
+				require.Equal(t, map[uint64]int{1: 1, 2: 1}, adjustCalls)
+			}
 		},
 		nil,
 	)
@@ -372,8 +400,10 @@ func TestRead(t *testing.T) {
 					ReadRequest{
 						TableID: table,
 						Param:   shard.ReadParam{KeyParam: shard.KeyParam{Key: k}},
-						Apply: func(b []byte) {
+						Apply: func(b []byte) error {
 							values = append(values, b)
+
+							return nil
 						},
 					},
 					DefaultOptions.ReadAt(ts),
@@ -450,8 +480,10 @@ func TestReadWithSpecialShard(t *testing.T) {
 					ReadRequest{
 						TableID: table,
 						Param:   shard.ReadParam{KeyParam: shard.KeyParam{Key: k}},
-						Apply: func(b []byte) {
+						Apply: func(b []byte) error {
 							require.Equal(t, expect, b)
+
+							return nil
 						},
 					},
 					DefaultOptions.ReadAt(ts).Shard(shardID),
@@ -519,9 +551,11 @@ func TestReadWithSpecialShardAndPartitionPolicy(t *testing.T) {
 					ReadRequest{
 						TableID: table,
 						Param:   shard.ReadParam{KeyParam: shard.KeyParam{Key: k}},
-						Apply: func(b []byte) {
+						Apply: func(b []byte) error {
 							n++
 							require.Equal(t, expect, b)
+
+							return nil
 						},
 					},
 					DefaultOptions.ReadAt(ts).Shard(shardID),
@@ -640,7 +674,9 @@ func TestReadWithRemovedReplica(t *testing.T) {
 						ReadRequest{
 							TableID: table,
 							Param:   shard.ReadParam{KeyParam: shard.KeyParam{Key: k}},
-							Apply: func(b []byte) {
+							Apply: func(b []byte) error {
+
+								return nil
 							},
 						},
 						DefaultOptions.ReadAt(newTestTimestamp(2)).Shard(s2Shard),
@@ -694,8 +730,10 @@ func TestReadWithLazyCreateShards(t *testing.T) {
 					ReadRequest{
 						TableID: table,
 						Param:   shard.ReadParam{KeyParam: shard.KeyParam{Key: k}},
-						Apply: func(b []byte) {
+						Apply: func(b []byte) error {
 							values = append(values, b)
+
+							return nil
 						},
 					},
 					DefaultOptions.ReadAt(ts),
@@ -763,8 +801,10 @@ func TestReadWithNewShard(t *testing.T) {
 				ReadRequest{
 					TableID: table,
 					Param:   shard.ReadParam{KeyParam: shard.KeyParam{Key: k}},
-					Apply: func(b []byte) {
+					Apply: func(b []byte) error {
 						require.Equal(t, value, b)
+
+						return nil
 					},
 				},
 				DefaultOptions.ReadAt(newTestTimestamp(2)).Shard(2),

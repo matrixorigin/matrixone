@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -97,12 +99,25 @@ func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
 	for _, step := range qry.Steps {
 		newSteps = append(newSteps, opt.compactPlanTree(qry, step, &newNodes))
 	}
+	// Detached authorization carriers and catalog scans supply metadata for
+	// privilege checks and plan invalidation without becoming execution steps.
 	for _, node := range oldNodes {
-		if !IsZeroScalarPrivilegeCarrier(node) {
+		if node == nil {
 			continue
 		}
 		if id := node.NodeId; id >= 0 && int(id) < len(newNodes) && newNodes[id] == node {
 			continue
+		}
+		if !IsZeroScalarPrivilegeCarrier(node) {
+			if len(qry.CatalogDependencies) == 0 || node.NodeType != plan.Node_TABLE_SCAN || node.ObjRef == nil || node.TableDef == nil {
+				continue
+			}
+			ref := prepareSchemaRefWithSnapshot(node.ObjRef, node.TableDef, node.ScanSnapshot)
+			if !slices.ContainsFunc(qry.CatalogDependencies, func(dep *plan.ObjectRef) bool {
+				return samePrepareSchema(dep, ref)
+			}) {
+				continue
+			}
 		}
 		node.NodeId = int32(len(newNodes))
 		newNodes = append(newNodes, node)

@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -57,6 +58,7 @@ func TestInsertIrregularMaintenanceAction(t *testing.T) {
 				// removing plain INSERT's unnecessary old-index deletion. Fulltext
 				// alone proves filtering does not depend on regular-index projections.
 				def.Indexes = append(def.Indexes, &planpb.IndexDef{IndexName: "ft_name", IndexAlgo: catalog.MOIndexFullTextAlgo.ToString(), IndexTableName: "__mo_index_ft_name", TableExist: true, Parts: []string{"dname"}})
+				declaredIndexes := slices.Clone(def.Indexes)
 				irregular := getIrregularIndexes(def)
 				require.Len(t, irregular, 1)
 				def.Name2ColIndex = make(map[string]int32, len(def.Cols))
@@ -68,11 +70,12 @@ func TestInsertIrregularMaintenanceAction(t *testing.T) {
 				dml.tableDefs = []*planpb.TableDef{def}
 				node, cols, skip, err := b.initInsertReplaceStmt(ctx, stmt.Rows, stmt.Columns, ref, def, false, false)
 				require.NoError(t, err)
-				_, err = b.appendDedupAndMultiUpdateNodesForBindInsert(ctx, dml, node, cols, skip, stmt.OnDuplicateUpdate, irregular)
+				_, err = b.appendDedupAndMultiUpdateNodesForBindInsert(ctx, dml, node, cols, skip, stmt.OnDuplicateUpdate, irregular, declaredIndexes)
 				require.NoError(t, err)
 				require.GreaterOrEqual(t, b.irregularMaintSourceStep, int32(0), "all actions still insert the new fulltext entries")
 				require.Equal(t, tc.wantDelete, b.irregularMaintDeleteStep >= 0, "only ODKU needs to delete conflicting rows' old entries")
 				var dedupActions []planpb.Node_OnDuplicateAction
+				var orderedOwners int
 				seen := make(map[int32]bool)
 				var visit func(int32)
 				visit = func(id int32) {
@@ -81,6 +84,9 @@ func TestInsertIrregularMaintenanceAction(t *testing.T) {
 					}
 					seen[id] = true
 					n := b.qry.Nodes[id]
+					if n.PreInsertUkCtx.GetOdkuActions() != nil {
+						orderedOwners++
+					}
 					if n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP {
 						dedupActions = append(dedupActions, n.OnDuplicateAction)
 					}
@@ -94,14 +100,17 @@ func TestInsertIrregularMaintenanceAction(t *testing.T) {
 				visit(b.qry.Steps[b.irregularMaintSourceStep])
 				switch tc.name {
 				case "insert":
+					require.Zero(t, orderedOwners)
 					require.Empty(t, dedupActions, "plain input source must not retain the old-table dedup subtree")
 				case "ignore":
+					require.Zero(t, orderedOwners)
 					require.NotEmpty(t, dedupActions, "maintenance must consume the post-dedup surviving rows")
 					for _, action := range dedupActions {
 						require.Equal(t, planpb.Node_IGNORE, action)
 					}
 				case "update":
-					require.Contains(t, dedupActions, planpb.Node_UPDATE, "maintenance must consume the post-merge final image")
+					require.Equal(t, 1, orderedOwners, "maintenance must consume the ordered final image")
+					require.NotContains(t, dedupActions, planpb.Node_UPDATE)
 					require.Equal(t, b.irregularMaintSourceStep, b.irregularMaintDeleteStep)
 				}
 			})

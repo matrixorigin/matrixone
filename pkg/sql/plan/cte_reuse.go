@@ -185,7 +185,6 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 		node.TblFuncExprList,
 		node.BlockFilterList,
 		node.FillVal,
-		node.OnUpdateExprs,
 	}
 	for _, exprList := range exprLists {
 		for _, expr := range exprList {

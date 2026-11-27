@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
@@ -40,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 type ReaderPhase uint8
@@ -181,19 +183,22 @@ func (tbl *txnTableDelegate) Stats(
 	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadStats,
-		func(param *shard.ReadParam) {
+		func(request *shardservice.ReadRequest) {
+			param := &request.Param
 			param.StatsParam.Sync = sync
 		},
-		func(resp []byte) {
+		func(resp []byte) error {
 			if len(resp) > 0 {
 				has = true
 				err := stats.Unmarshal(resp)
 				if err != nil {
-					panic(err)
+					return err
 				}
 			}
 
 			// TODO: hash shard need to merge all shard in future
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -227,9 +232,11 @@ func (tbl *txnTableDelegate) Rows(
 	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadRows,
-		func(param *shard.ReadParam) {},
-		func(resp []byte) {
+		func(*shardservice.ReadRequest) {},
+		func(resp []byte) error {
 			rows += buf.Byte2Uint64(resp)
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -261,11 +268,14 @@ func (tbl *txnTableDelegate) Size(
 	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadSize,
-		func(param *shard.ReadParam) {
+		func(request *shardservice.ReadRequest) {
+			param := &request.Param
 			param.SizeParam.ColumnName = columnName
 		},
-		func(resp []byte) {
+		func(resp []byte) error {
 			size += buf.Byte2Uint64(resp)
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -295,6 +305,7 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 	err = tbl.origin.rangesOnePart(
 		ctx,
 		nil,
+		tbl.origin.db.op.SnapshotTS(),
 		tbl.origin.tableDef,
 		rangesParam,
 		&blocks,
@@ -309,19 +320,22 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadRanges,
-		func(param *shard.ReadParam) {
+		func(request *shardservice.ReadRequest) {
+			param := &request.Param
 			param.RangesParam.Exprs = rangesParam.BlockFilters
 			param.RangesParam.PreAllocSize = 2
 			param.RangesParam.DataCollectPolicy = engine.Policy_CollectCommittedData
 			param.RangesParam.TxnOffset = 0
 
 		},
-		func(resp []byte) {
+		func(resp []byte) error {
 			data, err := readutil.UnmarshalRelationData(resp)
 			if err != nil {
-				panic(err)
+				return err
 			}
 			rs = data
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -414,15 +428,18 @@ func (tbl *txnTableDelegate) CollectTombstones(
 	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadCollectTombstones,
-		func(param *shard.ReadParam) {
+		func(request *shardservice.ReadRequest) {
+			param := &request.Param
 			param.CollectTombstonesParam.CollectPolicy = engine.Policy_CollectCommittedTombstones
 		},
-		func(resp []byte) {
+		func(resp []byte) error {
 			tombstones, err := readutil.UnmarshalTombstoneData(resp)
 			if err != nil {
-				panic(err)
+				return err
 			}
 			remoteTombstones = tombstones
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -457,15 +474,18 @@ func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadGetColumMetadataScanInfo,
-		func(param *shard.ReadParam) {
+		func(request *shardservice.ReadRequest) {
+			param := &request.Param
 			param.GetColumMetadataScanInfoParam.ColumnName = name
 		},
-		func(resp []byte) {
+		func(resp []byte) error {
 			err := m.Unmarshal(resp)
 			if err != nil {
-				panic(err)
+				return err
 			}
 			// TODO: hash shard need to merge all shard in future
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -496,9 +516,11 @@ func (tbl *txnTableDelegate) ApproxObjectsNum(
 	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadApproxObjectsNum,
-		func(param *shard.ReadParam) {},
-		func(resp []byte) {
+		func(*shardservice.ReadRequest) {},
+		func(resp []byte) error {
 			num += buf.Byte2Int(resp)
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -750,7 +772,8 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadPrimaryKeysMayBeModified,
-		func(param *shard.ReadParam) {
+		func(request *shardservice.ReadRequest) {
+			param := &request.Param
 			f, err := from.Marshal()
 			if err != nil {
 				panic(err)
@@ -767,10 +790,12 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 			param.PrimaryKeysMayBeModifiedParam.To = t
 			param.PrimaryKeysMayBeModifiedParam.KeyVector = v
 		},
-		func(resp []byte) {
+		func(resp []byte) error {
 			if buf.Byte2Uint16(resp) > 0 {
 				modify = true
 			}
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -843,7 +868,8 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeUpserted(
 	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadPrimaryKeysMayBeUpserted,
-		func(param *shard.ReadParam) {
+		func(request *shardservice.ReadRequest) {
+			param := &request.Param
 			f, err := from.Marshal()
 			if err != nil {
 				panic(err)
@@ -860,10 +886,12 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeUpserted(
 			param.PrimaryKeysMayBeModifiedParam.To = t
 			param.PrimaryKeysMayBeModifiedParam.KeyVector = v
 		},
-		func(resp []byte) {
+		func(resp []byte) error {
 			if buf.Byte2Uint16(resp) > 0 {
 				modify = true
 			}
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -897,7 +925,8 @@ func (tbl *txnTableDelegate) MergeObjects(
 	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadMergeObjects,
-		func(param *shard.ReadParam) {
+		func(request *shardservice.ReadRequest) {
+			param := &request.Param
 			os := make([][]byte, len(objstats))
 			for i, o := range objstats {
 				os[i] = o.Marshal()
@@ -905,12 +934,14 @@ func (tbl *txnTableDelegate) MergeObjects(
 			param.MergeObjectsParam.Objstats = os
 			param.MergeObjectsParam.TargetObjSize = targetObjSize
 		},
-		func(resp []byte) {
+		func(resp []byte) error {
 			err := entry.Unmarshal(resp)
 			if err != nil {
-				panic(err)
+				return err
 			}
 			// TODO: hash shard need to merge all shard in future
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -938,8 +969,8 @@ func (tbl *txnTableDelegate) GetNonAppendableObjectStats(ctx context.Context) ([
 	err = tbl.forwardRead(
 		ctx,
 		shardservice.ReadVisibleObjectStats,
-		func(param *shard.ReadParam) {},
-		func(resp []byte) {
+		func(*shardservice.ReadRequest) {},
+		func(resp []byte) error {
 			if len(resp)%objectio.ObjectStatsLen != 0 {
 				panic("invalid resp")
 			}
@@ -948,6 +979,8 @@ func (tbl *txnTableDelegate) GetNonAppendableObjectStats(ctx context.Context) ([
 			for i := range size {
 				stats[i].UnMarshal(resp[i*objectio.ObjectStatsLen:])
 			}
+
+			return nil
 		},
 	)
 	if err != nil {
@@ -1277,10 +1310,49 @@ func (tbl *txnTableDelegate) hasAllLocalReplicas() (bool, error) {
 	)
 }
 
+// Service fanout joins failures in encounter order. Preserve that primary
+// cause's identity for the engine's direct typed-error classifiers; later
+// failures remain diagnostics, never a reason to promote a later retry.
+func primaryShardReadError(ctx context.Context, err error) error {
+	for current := err; current != nil; {
+		switch wrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			var primary error
+			for _, cause := range wrapped.Unwrap() {
+				selected := primaryShardReadError(ctx, cause)
+				if selected == nil {
+					continue
+				}
+				if primary == nil {
+					primary = selected
+				} else {
+					logutil.Warn("secondary shard read failure", zap.Error(selected))
+				}
+			}
+			if primary != nil {
+				return primary
+			}
+			return err
+		case interface{ Unwrap() error }:
+			current = wrapped.Unwrap()
+		default:
+			current = nil
+		}
+	}
+	var typed *moerr.Error
+	if errors.As(err, &typed) {
+		return typed
+	}
+	if cause := context.Cause(ctx); cause != nil && errors.Is(err, cause) {
+		return cause
+	}
+	return err
+}
+
 func (tbl *txnTableDelegate) getReadRequest(
 	ctx context.Context,
 	method int,
-	apply func([]byte),
+	apply func([]byte) error,
 ) (shardservice.ReadRequest, error) {
 	processInfo, err := tbl.origin.proc.Load().BuildProcessInfo(
 		tbl.origin.createSql,
@@ -1406,8 +1478,8 @@ func (tbl *txnTableDelegate) mockForwardRead(
 func (tbl *txnTableDelegate) forwardRead(
 	ctx context.Context,
 	method int,
-	applyParam func(*shard.ReadParam),
-	apply func([]byte),
+	setup func(*shardservice.ReadRequest),
+	apply func([]byte) error,
 ) error {
 	request, err := tbl.getReadRequest(
 		ctx,
@@ -1418,15 +1490,14 @@ func (tbl *txnTableDelegate) forwardRead(
 		return err
 	}
 
-	applyParam(&request.Param)
+	setup(&request)
 
 	if tbl.isMock {
 		res, err := tbl.mockForwardRead(ctx, method, request)
 		if err != nil {
 			return err
 		}
-		apply(res)
-		return nil
+		return apply(res)
 	}
 
 	shardID := uint64(0)
@@ -1477,6 +1548,10 @@ func (r *shardingLocalReader) Read(
 	bat *batch.Batch,
 ) (isEnd bool, err error) {
 	defer func() {
+		err = primaryShardReadError(ctx, err)
+		if err != nil {
+			bat.CleanOnlyData()
+		}
 		if err != nil || isEnd {
 			r.close()
 		}
@@ -1506,13 +1581,19 @@ func (r *shardingLocalReader) Read(
 			err = r.tblDelegate.forwardRead(
 				ctx,
 				shardservice.ReadBuildReader,
-				func(param *shard.ReadParam) {
+				func(request *shardservice.ReadRequest) {
+					param := &request.Param
 					param.ReaderBuildParam.RelData = relData
 					param.ReaderBuildParam.Expr = expr
 					param.ReaderBuildParam.TombstoneApplyPolicy = int32(r.remoteTombApplyPolicy)
 				},
-				func(resp []byte) {
+				func(resp []byte) error {
+					if len(resp) != len(r.streamID) {
+						return moerr.NewInvalidInput(ctx, "invalid sharded reader UUID")
+					}
 					r.streamID = types.DecodeUuid(resp)
+
+					return nil
 				},
 			)
 			if err != nil {
@@ -1523,21 +1604,43 @@ func (r *shardingLocalReader) Read(
 			err = r.tblDelegate.forwardRead(
 				ctx,
 				shardservice.ReadNext,
-				func(param *shard.ReadParam) {
+				func(request *shardservice.ReadRequest) {
+					param := &request.Param
 					param.ReadNextParam.Uuid = types.EncodeUuid(&r.streamID)
 					param.ReadNextParam.Columns = cols
 				},
-				func(resp []byte) {
+				func(resp []byte) error {
+					if cause := context.Cause(ctx); cause != nil {
+						return cause
+					}
+					if len(resp) == 0 || resp[0] > 1 {
+						return moerr.NewInvalidInput(ctx, "invalid sharded reader end flag")
+					}
 					isEnd = types.DecodeBool(resp)
 					if isEnd {
-						return
+						return nil
 					}
-					resp = resp[1:]
-					l := types.DecodeUint32(resp)
-					resp = resp[4:]
-					if err := bat.UnmarshalBinaryWithAnyMp(resp[:l], mp); err != nil {
-						panic(err)
+					if len(resp) < 5 {
+						return moerr.NewInvalidInput(ctx, "truncated sharded reader batch size")
 					}
+					length := types.DecodeUint32(resp[1:5])
+					if uint64(length) > uint64(len(resp)-5) {
+						return moerr.NewInvalidInput(ctx, "truncated sharded reader batch")
+					}
+					var decoded batch.Batch
+					defer decoded.Clean(nil)
+					if decodeErr := decoded.UnmarshalBinaryWithAnyMp(resp[5:5+int(length)], nil); decodeErr != nil {
+						return moerr.NewInvalidInputf(ctx, "invalid sharded reader batch: %v", decodeErr)
+					}
+					if len(decoded.Vecs) != len(cols) {
+						return moerr.NewInvalidInput(ctx, "invalid sharded reader column count")
+					}
+					if lengthErr := decoded.CheckLength(); lengthErr != nil {
+						return moerr.NewInvalidInputf(ctx, "invalid sharded reader columns: %v", lengthErr)
+					}
+					// The callback owns the response only until it returns. Clone
+					// into the destination's existing account before release.
+					return bat.CopyFrom(ctx, &decoded, mp)
 				},
 			)
 			if err != nil {
@@ -1571,16 +1674,20 @@ func (r *shardingLocalReader) close() error {
 			err := r.tblDelegate.forwardRead(
 				ctx,
 				shardservice.ReadClose,
-				func(param *shard.ReadParam) {
+				func(request *shardservice.ReadRequest) {
+					param := &request.Param
 					param.ReadCloseParam.Uuid = types.EncodeUuid(&r.streamID)
 				},
-				func(resp []byte) {
+				func(resp []byte) error {
+
+					return nil
 				},
 			)
 			if err != nil {
 				return moerr.AttachCause(ctx, err)
 			}
 		}
+		r.closed = true
 	}
 	return nil
 }

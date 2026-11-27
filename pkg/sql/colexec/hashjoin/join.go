@@ -557,6 +557,10 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 	leftRowCnt := ctr.leftBat.RowCount()
 	resRowCnt := 0
 	outputLimit := ctr.maxOutputRows()
+	probeColumnsCopied, err := ctr.copyUniqueLeftProbeColumns(hashJoin, proc, outputLimit)
+	if err != nil {
+		return err
+	}
 	var localAreas [8]outputArea
 	areas := ctr.outputAreas(localAreas[:0], ctr.checkBuildArea || ctr.checkProbeArea)
 	full := false
@@ -591,6 +595,14 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				)
 				if err != nil {
 					return err
+				}
+				if probeColumnsCopied {
+					if err := ctr.copyUniqueLeftBuildColumns(hashJoin, proc); err != nil {
+						return err
+					}
+					ctr.lastIdx += hashBatch
+					resRowCnt += hashBatch
+					continue
 				}
 				ctr.vsIdx = 0
 				ctr.probeState = psBatchRow

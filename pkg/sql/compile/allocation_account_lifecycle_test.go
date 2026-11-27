@@ -697,3 +697,45 @@ func TestCompileRunFinalizesAllocationAttemptOnPanic(t *testing.T) {
 	require.Zero(t, registry.LiveAllocationMetadata())
 	c.Release()
 }
+
+// Only Close is used at the attempt boundary; unexpected lookup calls fail.
+type lifecycleStatementView struct {
+	engine.StatementKeyView
+	closed int
+	err    error
+}
+
+func (v *lifecycleStatementView) Close() error { v.closed++; return v.err }
+
+func TestCompileAttemptViewClosePreservesTypedOutcome(t *testing.T) {
+	for _, executionErr := range []error{moerr.NewDuplicateEntryNoCtx("1", "id"), moerr.NewTxnNeedRetryNoCtx()} {
+		t.Run(executionErr.Error(), func(t *testing.T) {
+			c, registry := newRunLifecycleCompile(t)
+			c.disableRetry = true // Observe one real attempt before testing retry classification.
+			if moerr.IsMoErrCode(executionErr, moerr.ErrDuplicateEntry) {
+				client, operator := newTestTxnClientAndOpWithIsolation(gomock.NewController(t), txn.TxnIsolation_SI)
+				c.proc.Base.TxnClient, c.proc.Base.TxnOperator = client, operator
+			}
+			scope := newScope(Normal)
+			scope.Proc = c.proc.NewNoContextChildProc(0)
+			owner := &allocationLifecycleErrorOperator{MockOperator: colexec.NewMockOperator(), err: executionErr}
+			scope.RootOp = owner
+			c.scopes = []*Scope{scope}
+			view := &lifecycleStatementView{}
+			c.odkuViews = []engine.StatementKeyView{view}
+			_, err := c.Run(0)
+			require.Same(t, executionErr, err, "successful view handoff cannot wrap the primary typed result")
+			require.Equal(t, 1, view.closed)
+			require.Empty(t, c.odkuViews)
+			require.Equal(t, moerr.IsMoErrCode(executionErr, moerr.ErrTxnNeedRetry), c.isRetryErr(err))
+			require.Nil(t, owner.account)
+			require.Zero(t, registry.LiveAllocationMetadata())
+			c.Release()
+		})
+	}
+	c, _ := newRunLifecycleCompile(t)
+	fatal := moerr.NewInternalErrorNoCtx("view allocation teardown failed")
+	c.odkuViews = []engine.StatementKeyView{&lifecycleStatementView{err: fatal}, &lifecycleStatementView{}}
+	require.Same(t, fatal, c.closeODKUPriorData(), "one fatal cleanup error remains typed")
+	c.Release()
+}

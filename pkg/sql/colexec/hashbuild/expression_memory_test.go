@@ -69,9 +69,9 @@ func TestExpressionRecoveryIncludesReplacementOverlap(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	expr := makeIssue26454ConcatKey(t, proc)
-	peak, err := expressionVectorPeak(proc, expr, 1024, false)
+	peak, _, err := expressionTreePeakWithSelection(proc, expr, 1024, false)
 	require.NoError(t, err)
-	recovery, err := expressionRecoveryBytes(proc, []*plan.Expr{expr}, 1024, false)
+	recovery, err := expressionRecoveryBytes(proc, []*plan.Expr{expr}, 1024)
 	require.NoError(t, err)
 	require.Equal(t, 2*peak, recovery)
 }

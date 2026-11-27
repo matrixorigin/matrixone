@@ -173,6 +173,9 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		PkType:   ctx.PkType,
 		UkType:   ctx.UkType,
 	}
+	if ctx.OdkuActions != nil {
+		newCtx.OdkuActions = proto.Clone(ctx.OdkuActions).(*plan.OdkuActionCtx)
+	}
 
 	return newCtx
 }
@@ -221,8 +224,6 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 	}
 	newCtx := &plan.DedupJoinCtx{
 		OldColList:         slices.Clone(ctx.OldColList),
-		UpdateColIdxList:   slices.Clone(ctx.UpdateColIdxList),
-		UpdateColExprList:  DeepCopyExprList(ctx.UpdateColExprList),
 		OldColCaptureList:  slices.Clone(ctx.OldColCaptureList),
 		DedupBuildKeepLast: ctx.DedupBuildKeepLast,
 	}
@@ -248,6 +249,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		Children:        slices.Clone(node.Children),
 		JoinType:        node.JoinType,
 		IsRightJoin:     node.IsRightJoin,
+		FilterIsBarrier: node.FilterIsBarrier,
 		BindingTags:     slices.Clone(node.BindingTags),
 		Limit:           DeepCopyExpr(node.Limit),
 		Offset:          DeepCopyExpr(node.Offset),
@@ -286,7 +288,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		IsEnd:                  node.IsEnd,
 		ExternScan:             deepCopyExternScan(node.ExternScan),
 		SampleFunc:             DeepCopySampleFuncSpec(node.SampleFunc),
-		OnUpdateExprs:          DeepCopyExprList(node.OnUpdateExprs),
 		DedupColName:           node.DedupColName,
 		DedupColTypes:          slices.Clone(node.DedupColTypes),
 		UpdateCtxList:          DeepCopyUpdateCtxList(node.UpdateCtxList),

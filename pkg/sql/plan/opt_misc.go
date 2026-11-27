@@ -34,6 +34,7 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
 	increaseRefCntForExprList(node.AggList, 1, colRefCnt)
 	increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
+	increaseRefCntForExprList(odkuSourceExpressions(node.PreInsertUkCtx.GetOdkuActions()), 2, colRefCnt)
 
 	for i := range node.OrderBy {
 		increaseRefCnt(node.OrderBy[i].Expr, 1, colRefCnt)
@@ -41,7 +42,6 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 
 	if node.DedupJoinCtx != nil {
 		increaseRefCntForColRefList(node.DedupJoinCtx.OldColList, 2, colRefCnt)
-		increaseRefCntForExprList(node.DedupJoinCtx.UpdateColExprList, 2, colRefCnt)
 		for _, cap := range node.DedupJoinCtx.OldColCaptureList {
 			colRefCnt[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}] += 2
 			colRefCnt[[2]int32{cap.ProbeSource.RelPos, cap.ProbeSource.ColPos}] += 2
@@ -164,6 +164,13 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	}
 
 	replaceColumnsForNode(node, projMap)
+
+	if builder.irregularMaintDeleteStep >= 0 && len(node.BindingTags) > 0 &&
+		node.BindingTags[0] == builder.irregularMaintDeletePkRef[0] {
+		// Late index deletes resolve this tagged output when the source SINK is
+		// remapped. Keep its projection as the ordinary column-remapping boundary.
+		return nodeID, projMap
+	}
 
 	if builder.canRemoveProject(parentType, node) {
 		allColRef := true
@@ -315,6 +322,7 @@ func exprCanRemoveProject(expr *Expr) bool {
 }
 
 func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
+	replaceODKUSourceColumns(node.PreInsertUkCtx.GetOdkuActions(), projMap)
 	replaceColumnsForExprList(node.ProjectList, projMap)
 	replaceColumnsForExprList(node.OnList, projMap)
 	replaceColumnsForExprList(node.FilterList, projMap)
@@ -329,7 +337,6 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 
 	if node.DedupJoinCtx != nil {
 		replaceColumnsForColRefList(node.DedupJoinCtx.OldColList, projMap)
-		replaceColumnsForExprList(node.DedupJoinCtx.UpdateColExprList, projMap)
 		for i := range node.DedupJoinCtx.OldColCaptureList {
 			cap := &node.DedupJoinCtx.OldColCaptureList[i]
 			if projExpr, ok := projMap[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}]; ok {
@@ -613,6 +620,7 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	increaseTagCntForExprList(node.GroupBy, 1, tagCnt)
 	increaseTagCntForExprList(node.AggList, 1, tagCnt)
 	increaseTagCntForExprList(node.WinSpecList, 1, tagCnt)
+	increaseTagCntForExprList(odkuSourceExpressions(node.PreInsertUkCtx.GetOdkuActions()), 2, tagCnt)
 
 	for i := range node.OrderBy {
 		increaseTagCnt(node.OrderBy[i].Expr, 1, tagCnt)
@@ -620,7 +628,6 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 
 	if node.DedupJoinCtx != nil {
 		increaseTagCntForColRefList(node.DedupJoinCtx.OldColList, 2, tagCnt)
-		increaseTagCntForExprList(node.DedupJoinCtx.UpdateColExprList, 2, tagCnt)
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -658,6 +665,7 @@ END:
 	increaseTagCntForExprList(node.GroupBy, -1, tagCnt)
 	increaseTagCntForExprList(node.AggList, -1, tagCnt)
 	increaseTagCntForExprList(node.WinSpecList, -1, tagCnt)
+	increaseTagCntForExprList(odkuSourceExpressions(node.PreInsertUkCtx.GetOdkuActions()), -2, tagCnt)
 
 	for i := range node.OrderBy {
 		increaseTagCnt(node.OrderBy[i].Expr, -1, tagCnt)
@@ -665,7 +673,6 @@ END:
 
 	if node.DedupJoinCtx != nil {
 		increaseTagCntForColRefList(node.DedupJoinCtx.OldColList, -2, tagCnt)
-		increaseTagCntForExprList(node.DedupJoinCtx.UpdateColExprList, -2, tagCnt)
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {

@@ -963,6 +963,9 @@ func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 			Typ: plan.Type{
 				Id:          d.Typ.Id,
 				NotNullable: false,
+				Width:       d.Typ.Width,
+				Scale:       d.Typ.Scale,
+				Enumvalues:  d.Typ.Enumvalues,
 			},
 		}, nil
 	}
@@ -1029,18 +1032,6 @@ func checkTableColumnNameValid(name string) bool {
 		return false
 	}
 	return true
-}
-
-// Check the expr has paramExpr
-func checkExprHasParamExpr(exprs []tree.Expr) bool {
-	for _, expr := range exprs {
-		if _, ok := expr.(*tree.ParamExpr); ok {
-			return true
-		} else if e, ok := expr.(*tree.FuncExpr); ok {
-			return checkExprHasParamExpr(e.Exprs)
-		}
-	}
-	return false
 }
 
 // makeSelectList forms SELECT Clause "Select t.a,t.b,... "

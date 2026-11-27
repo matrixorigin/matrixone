@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -213,6 +214,7 @@ func New(
 
 func (e *Engine) Close() error {
 	err := e.CloseLocalInsertObjects()
+	gcErr := e.CloseStatementObjects()
 	if e.gcPool != nil {
 		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}
@@ -221,7 +223,7 @@ func (e *Engine) Close() error {
 	e.cloneTxnCache = nil
 	e.ccprTxnCache = nil
 
-	return err
+	return errors.Join(err, gcErr)
 }
 
 // CloseLocalInsertObjects is called after the CN has drained its pipelines.

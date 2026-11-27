@@ -52,6 +52,11 @@ func (hashBuild *HashBuild) OpType() vm.OpType {
 }
 
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
+	if hashBuild.IsDedup {
+		if err := colexec.ValidateDedupAction(hashBuild.OnDuplicateAction); err != nil {
+			return err
+		}
+	}
 	// A HashBuild can be reused after Reset.  The terminal gate belongs to the
 	// new execution generation; the old MessageBoard is reset by the pipeline
 	// before this generation's consumers are started.
@@ -282,7 +287,7 @@ func (hashBuild *HashBuild) build(
 		// Build-key executors are producer scratch. No consumer reads them after
 		// build() returns, so release their retained vectors here instead of
 		// holding them until pipeline Reset.
-		ctr.hashmapBuilder.FreeTemporaryVectors(proc)
+		ctr.hashmapBuilder.ClearEvaluatedKeys()
 		ctr.hashmapBuilder.FreeExecutors()
 		ctr.dropSpillScratchBuffers()
 		if err := hashBuild.releaseRecoveryCapacity(

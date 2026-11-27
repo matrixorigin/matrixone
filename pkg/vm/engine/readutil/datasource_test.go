@@ -17,10 +17,12 @@ package readutil
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"slices"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -36,6 +38,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+func TestRelationDataRejectsTruncatedFrames(t *testing.T) {
+	source := NewBlockListRelationData(1)
+	valid, err := source.MarshalBinary()
+	require.NoError(t, err)
+	shortBlocks := append([]byte(nil), valid...)
+	size := uint32(len(valid))
+	copy(shortBlocks[1:5], types.EncodeUint32(&size))
+	misaligned := append([]byte(nil), valid...)
+	size = uint32(objectio.BlockInfoSize - 1)
+	copy(misaligned[1:5], types.EncodeUint32(&size))
+	shortTombs := append([]byte(nil), valid...)
+	size = 1
+	copy(shortTombs[len(shortTombs)-4:], types.EncodeUint32(&size))
+	for _, frame := range [][]byte{nil, {}, valid[:1], valid[:4], valid[:len(valid)-1], shortBlocks, misaligned, shortTombs, {byte(engine.RelDataEmpty)}} {
+		data, err := UnmarshalRelationData(frame)
+		require.Error(t, err)
+		require.Nil(t, data)
+	}
+	decoded, err := UnmarshalRelationData(valid)
+	require.NoError(t, err)
+	require.Equal(t, source.DataCnt(), decoded.DataCnt())
+}
+
+func TestBlockListMarshalIncludesTrailingHeaderInAllocation(t *testing.T) {
+	// At this size the old incremental writes filled a 139264-byte buffer
+	// before the final header, causing another 278528-byte allocation.
+	const blocks = 1339
+	source := NewBlockListRelationData(blocks)
+	source.SetBlockInfo(0, &objectio.EmptyBlockInfo)
+	source.SetBlockInfo(blocks-1, &objectio.BlockInfo{BlockID: types.Blockid{0: 93}})
+	wire, err := source.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, 1+4+blocks*objectio.BlockInfoSize+4, len(wire))
+	require.Less(t, cap(wire), len(wire)+8192, "one allocation plus allocator rounding")
+	decoded, err := UnmarshalRelationData(wire)
+	require.NoError(t, err)
+	require.Equal(t, source.GetBlockInfoSlice(), decoded.GetBlockInfoSlice())
+	tooManyBlocks := uint64(math.MaxUint32)/uint64(objectio.BlockInfoSize) + 1
+	for _, size := range []int{-1, 1, math.MaxInt, int(tooManyBlocks) * objectio.BlockInfoSize} {
+		_, err := BlockListEncodedSize(size)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "size=%d: %v", size, err)
+	}
+}
 
 func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
 	var rowIds []types.Rowid

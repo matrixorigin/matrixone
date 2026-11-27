@@ -640,6 +640,7 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 			_, err = oldAdmin.ExecContext(ctx, "set @auth_native_probe=0")
 			require.NoError(t, err)
 			execSQLRequire(t, ctx, sys, restore)
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			for _, q := range native {
 				_, err = oldAdmin.ExecContext(ctx, q)
 				assert.ErrorContains(t, err, "do not have privilege", "replaced administrator ran native command: %s", q)

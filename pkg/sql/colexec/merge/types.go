@@ -31,7 +31,8 @@ type container struct {
 	materializedReleased bool
 	// Source.Next returns independent copies. Retain the current copy so
 	// pass-through consumers cannot leave its vector storage unclaimed.
-	materializedBatch *batch.Batch
+	materializedBatch       *batch.Batch
+	materializedReservation materialized.Reservation
 }
 
 type Merge struct {
@@ -132,6 +133,10 @@ func (merge *Merge) cleanMaterializedBatch(proc *process.Process) {
 	if merge.ctr.materializedBatch != nil {
 		merge.ctr.materializedBatch.Clean(proc.Mp())
 		merge.ctr.materializedBatch = nil
+	}
+	if merge.ctr.materializedReservation != nil {
+		merge.ctr.materializedReservation.Release()
+		merge.ctr.materializedReservation = nil
 	}
 }
 
