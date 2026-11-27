@@ -668,7 +668,7 @@ private:
         row_stats(d_b_, d_sb_, d_g_query_, nq_, d_norm_query_, d_sum_query_);
         check(cudaStreamSynchronize(stream_), "cudaStreamSynchronize");
         if (topk_ != 0) {
-            raft::resource::set_cuda_stream(res_, rmm::cuda_stream_view(stream_));
+            raft::resource::set_cuda_stream(res_, stream_);
         }
 
         check_lt(cublasLtCreate(&lt_), "cublasLtCreate");

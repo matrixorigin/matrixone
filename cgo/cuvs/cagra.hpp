@@ -395,7 +395,7 @@ public:
         uint64_t job_id = transient_worker.submit_main(
             [&](raft_handle_wrapper_t& handle) -> std::any {
                 auto res    = handle.get_raft_resources();
-                auto stream = raft::resource::get_cuda_stream(*res);
+                auto stream = cuda_stream_handle(*res);
 
                 std::vector<cagra_index*> cagra_indices;
                 cagra_indices.reserve(base_indices.size());
@@ -903,7 +903,7 @@ public:
         //     drops and we're back to 1×.
         // This same peak cost existed in the pre-26.06 API too — cuVS just did the alloc internally.
         auto res    = handle.get_raft_resources();
-        auto stream = raft::resource::get_cuda_stream(*res);
+        auto stream = cuda_stream_handle(*res);
 
         cagra_index* idx = nullptr;
         std::shared_ptr<padded_dataset_t> old_owner;  // keeps old dataset alive through extend()
