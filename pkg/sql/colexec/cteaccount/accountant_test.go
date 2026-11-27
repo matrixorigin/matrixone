@@ -34,7 +34,7 @@ func newAccountantTestProcess(t *testing.T, limit int64) *process.Process {
 }
 
 func makeAccountantBatch(proc *process.Process, value string) *batch.Batch {
-	bat := batch.New([]string{"value"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeVarcharVector([]string{value}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	return bat
@@ -43,7 +43,6 @@ func makeAccountantBatch(proc *process.Process, value string) *batch.Batch {
 func TestAccountantAdmissionRollbackCommitAndRelease(t *testing.T) {
 	proc := newAccountantTestProcess(t, 1<<20)
 	src := makeAccountantBatch(proc, "recursive payload")
-	defer src.Clean(proc.Mp())
 
 	var accountant Accountant
 	require.NoError(t, accountant.Bind(proc, nil))
@@ -69,6 +68,7 @@ func TestAccountantAdmissionRollbackCommitAndRelease(t *testing.T) {
 	_, used, _ = proc.GetCTEMemoryBudget().Snapshot()
 	require.Zero(t, used)
 	cached.Clean(proc.Mp())
+	src.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }

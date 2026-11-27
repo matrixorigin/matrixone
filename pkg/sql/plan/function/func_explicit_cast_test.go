@@ -155,7 +155,7 @@ func TestExplicitCastLexicalIntegerDiagnostics(t *testing.T) {
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"x"}, nil),
 				NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil),
 			}, NewFunctionTestResult(tc.target, false, want, nil), NewExplicitCast)
-			fc.parameters[0].SetIsBin(true)
+			fc.result.SetArgumentIsBin([]bool{true})
 			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 			require.Empty(t, sink.warnings)
@@ -612,107 +612,53 @@ func TestExplicitCastFloatRoundingToEven(t *testing.T) {
 	}
 }
 
-func TestExplicitCastPreparedNumericTextUsesSourceKind(t *testing.T) {
+func TestExplicitCastPreparedNumericUsesSourceType(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
-	runSigned := func(name string, kind vector.PrepareParamKind, values []string, want []int64) {
+	// Prepared parameters reach execution as typed values: DECIMAL keeps
+	// exact half-away-from-zero rounding, while an ordinary string keeps
+	// integer-prefix semantics. Typed FLOAT round-to-even is covered by
+	// TestExplicitCastFloatRoundingToEven.
+	run := func(name string, input, target FunctionTestInput, want any, noWarnings bool) {
 		t.Helper()
 		t.Run(name, func(t *testing.T) {
 			sink := &numericWarningSession{}
 			proc.WarningSink = sink
 			testCase := NewFunctionTestCase(proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
-					NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
-				},
-				NewFunctionTestResult(types.T_int64.ToType(), false, want, nil), NewExplicitCast)
-			testCase.parameters[0].SetPrepareParamKind(kind)
+				[]FunctionTestInput{input, target},
+				NewFunctionTestResult(target.typ, false, want, nil), NewExplicitCast)
 			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
-			if kind != vector.PrepareParamNone {
+			if noWarnings {
 				require.Empty(t, sink.warnings)
 			}
 		})
 	}
-
-	runUnsigned := func(name string, kind vector.PrepareParamKind, values []string, want []uint64) {
-		t.Helper()
-		t.Run(name, func(t *testing.T) {
-			sink := &numericWarningSession{}
-			proc.WarningSink = sink
-			testCase := NewFunctionTestCase(proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
-					NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil),
-				},
-				NewFunctionTestResult(types.T_uint64.ToType(), false, want, nil), NewExplicitCast)
-			testCase.parameters[0].SetPrepareParamKind(kind)
-			succeed, info := testCase.RunAndFree()
-			require.True(t, succeed, info)
-			if kind != vector.PrepareParamNone {
-				require.Empty(t, sink.warnings)
-			}
-		})
+	decimals := func(v ...string) FunctionTestInput {
+		typ := types.New(types.T_decimal128, 38, 1)
+		vals := make([]types.Decimal128, len(v))
+		for i, s := range v {
+			d, err := types.ParseDecimal128(s, typ.Width, typ.Scale)
+			require.NoError(t, err)
+			vals[i] = d
+		}
+		return NewFunctionTestInput(typ, vals, nil)
 	}
+	signed := NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)
+	unsigned := NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil)
 
-	runSigned("float uses round-to-even", vector.PrepareParamFloat,
-		[]string{"0.5", "1.5", "2.5", "-0.5", "-1.5", "-2.5"},
-		[]int64{0, 2, 2, 0, -2, -2})
-	runSigned("decimal uses exact half-away-from-zero rounding", vector.PrepareParamDecimal,
-		[]string{"0.5", "1.5", "2.5", "-0.5", "-1.5", "-2.5", "9007199254740993.5"},
-		[]int64{1, 2, 3, -1, -2, -3, 9007199254740994})
-	runUnsigned("float uses round-to-even", vector.PrepareParamFloat,
-		[]string{"1.5", "2.5", "-1.5", "-2.5"},
-		[]uint64{2, 2, math.MaxUint64 - 1, math.MaxUint64 - 1})
-	runUnsigned("decimal uses exact half-away-from-zero rounding", vector.PrepareParamDecimal,
-		[]string{"1.5", "2.5", "-1.5", "-2.5"},
-		[]uint64{2, 3, math.MaxUint64 - 1, math.MaxUint64 - 2})
-	runSigned("ordinary string keeps integer-prefix semantics", vector.PrepareParamNone,
-		[]string{"1.5", "-1.5"}, []int64{1, -1})
-	runUnsigned("ordinary string keeps integer-prefix semantics", vector.PrepareParamNone,
-		[]string{"1.5", "-1.5"}, []uint64{1, math.MaxUint64})
-
-	t.Run("row-local kinds", func(t *testing.T) {
-		testCase := NewFunctionTestCase(proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.5", "1.5", "1.5"}, nil),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
-			},
-			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2, 2, 1}, nil), NewExplicitCast)
-		testCase.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
-			vector.PrepareParamFloat, vector.PrepareParamDecimal, vector.PrepareParamNone,
-		})
-		succeed, info := testCase.RunAndFree()
-		require.True(t, succeed, info)
-	})
-}
-
-func TestExplicitCastPreparedFloatOverflowKeepsRangeError(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	for _, test := range []struct {
-		name   string
-		target types.Type
-		zero   any
-	}{
-		{name: "signed", target: types.T_int64.ToType(), zero: []int64{}},
-		{name: "unsigned", target: types.T_uint64.ToType(), zero: []uint64{}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			testCase := NewFunctionTestCase(proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e100"}, nil),
-					NewFunctionTestInput(test.target, test.zero, nil),
-				},
-				NewFunctionTestResult(test.target, true, test.zero, nil), NewExplicitCast)
-			defer testCase.Free()
-			testCase.parameters[0].SetPrepareParamKind(vector.PrepareParamFloat)
-			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
-			err := testCase.fn(testCase.parameters, testCase.result, testCase.proc,
-				testCase.fnLength, testCase.selectList)
-			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
-		})
-	}
+	run("signed decimal uses exact half-away-from-zero rounding",
+		decimals("0.5", "1.5", "2.5", "-0.5", "-1.5", "-2.5", "9007199254740993.5"), signed,
+		[]int64{1, 2, 3, -1, -2, -3, 9007199254740994}, true)
+	run("unsigned decimal uses exact half-away-from-zero rounding",
+		decimals("1.5", "2.5", "-1.5", "-2.5"), unsigned,
+		[]uint64{2, 3, math.MaxUint64 - 1, math.MaxUint64 - 2}, true)
+	run("signed ordinary string keeps integer-prefix semantics",
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.5", "-1.5"}, nil), signed,
+		[]int64{1, -1}, false)
+	run("unsigned ordinary string keeps integer-prefix semantics",
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.5", "-1.5"}, nil), unsigned,
+		[]uint64{1, math.MaxUint64}, false)
 }
 
 func TestExplicitCastFloatOverflowErrors(t *testing.T) {

@@ -37,7 +37,7 @@ func issue25590TombstoneStatsBatch(
 	n int,
 ) (*batch.Batch, []string) {
 	t.Helper()
-	inner := colexec.AllocCNS3ResultBat(true)
+	inner := colexec.AllocCNS3ResultBat(true, proc.Mp())
 	names := make([]string, 0, n)
 	for i := 0; i < n; i++ {
 		rowid := types.RandomRowid()
@@ -65,16 +65,16 @@ func TestIssue25590DeletionRelayObjectNames(t *testing.T) {
 
 	statsBat, want := issue25590TombstoneStatsBatch(t, proc, 2)
 	defer statsBat.Clean(mp)
-	rowOnly := batch.New([]string{"__mo_rowid", "pk"})
-	rowOnly.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	rowOnly.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	rowOnly := batch.NewWithSize(2)
+	rowOnly.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	rowOnly.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	defer rowOnly.Clean(mp)
 	require.NoError(t, vector.AppendFixed(rowOnly.Vecs[0], types.RandomRowid(), false, mp))
 	require.NoError(t, vector.AppendFixed(rowOnly.Vecs[1], int64(7), false, mp))
 	rowOnly.SetRowCount(1)
 
-	res := makeDelRemoteBatch()
-	res.Vecs[4] = vector.NewVec(types.T_uint64.ToType())
+	res := makeDelRemoteBatch(mp)
+	res.Vecs[4] = vector.NewVec(types.T_uint64.ToType(), mp)
 	defer func() {
 		res.Vecs[4].Free(mp)
 		res.Vecs[4] = nil
@@ -103,8 +103,8 @@ func TestIssue25590DeletionRelayObjectNames(t *testing.T) {
 		"adoption enumerates every flushed tombstone object and excludes the retained-block class")
 
 	// A FlushDeltaLoc row whose DeltaLoc cannot decode rejects the ack.
-	corrupt := makeDelRemoteBatch()
-	corrupt.Vecs[4] = vector.NewVec(types.T_uint64.ToType())
+	corrupt := makeDelRemoteBatch(mp)
+	corrupt.Vecs[4] = vector.NewVec(types.T_uint64.ToType(), mp)
 	defer func() {
 		corrupt.Vecs[4].Free(mp)
 		corrupt.Vecs[4] = nil
@@ -119,21 +119,21 @@ func TestIssue25590DeletionRelayObjectNames(t *testing.T) {
 	require.Error(t, err,
 		"a flushed tombstone row whose stats batch cannot decode rejects the ack fail-closed")
 
-	// Foreign attributes are ordinary data rows.
+	// A foreign layout is ordinary data rows: a batch carries no names, so
+	// the producer's vector types are what identify its rows.
 	foreign := batch.NewWithSize(4)
-	foreign.SetAttributes([]string{"a", "b", "c", "d"})
-	foreign.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	foreign.Vecs[1] = vector.NewVec(types.T_text.ToType())
-	foreign.Vecs[2] = vector.NewVec(types.T_int8.ToType())
-	foreign.Vecs[3] = vector.NewVec(types.T_int32.ToType())
+	foreign.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
+	foreign.Vecs[1] = vector.NewVec(types.T_text.ToType(), mp)
+	foreign.Vecs[2] = vector.NewVec(types.T_int16.ToType(), mp)
+	foreign.Vecs[3] = vector.NewVec(types.T_int32.ToType(), mp)
 	defer foreign.Clean(mp)
 	require.NoError(t, vector.AppendBytes(foreign.Vecs[0], []byte("x"), false, mp))
 	require.NoError(t, vector.AppendBytes(foreign.Vecs[1], []byte("y"), false, mp))
-	require.NoError(t, vector.AppendFixed(foreign.Vecs[2], int8(FlushDeltaLoc), false, mp))
+	require.NoError(t, vector.AppendFixed(foreign.Vecs[2], int16(FlushDeltaLoc), false, mp))
 	require.NoError(t, vector.AppendFixed(foreign.Vecs[3], int32(0), false, mp))
 	foreign.SetRowCount(1)
 	_, ok, err = TryExtractRemoteDeleteObjectNames(foreign, mp)
 	require.NoError(t, err)
 	require.False(t, ok,
-		"attributes the producer never emits never look like ownership metadata")
+		"a layout the producer never emits never looks like ownership metadata")
 }

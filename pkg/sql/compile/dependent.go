@@ -17,14 +17,14 @@ package compile
 import (
 	"context"
 	"errors"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"unsafe"
 )
 
 func (c *Compile) compileDependentQuery(q *plan.Query) ([]*Scope, error) {
@@ -92,7 +91,7 @@ func (c *Compile) compileDependentSource(node *plan.Node) (dependent.SourceFacto
 		return c.compileDependentExternal(node)
 	}
 	if node.NodeType == plan.Node_VALUE_SCAN {
-		return dependentSourceFactory(uint64(unsafe.Sizeof(value_scan.ValueScan{})), func(proc *process.Process, sourceAllocation *vector.AllocationAccountSelection) (vm.Operator, error) {
+		return dependentSourceFactory(uint64(unsafe.Sizeof(value_scan.ValueScan{})), func(proc *process.Process, sourceAllocation *mpool.MPool) (vm.Operator, error) {
 			op, err := constructValueScan(proc, node, sourceAllocation)
 			if err != nil {
 				return nil, err
@@ -109,12 +108,7 @@ func (c *Compile) compileDependentSource(node *plan.Node) (dependent.SourceFacto
 	for i, col := range node.TableDef.Cols {
 		attrs[i], typs[i] = col.GetOriginCaseName(), col.Typ
 	}
-	// NewArgument coallocates the operator and its private frame. Charge both,
-	// even though the frame is outside the operator's reset range.
-	return dependentSourceFactory(uint64(unsafe.Sizeof(struct {
-		operator table_scan.TableScan
-		frame    colexec.DictionaryInputFrame
-	}{})), func(proc *process.Process, sourceAllocation *vector.AllocationAccountSelection) (vm.Operator, error) {
+	return dependentSourceFactory(uint64(unsafe.Sizeof(table_scan.TableScan{})), func(proc *process.Process, sourceAllocation *mpool.MPool) (vm.Operator, error) {
 		ctx, txn := proc.Ctx, proc.GetTxnOperator()
 		if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil && !node.ScanSnapshot.TS.IsEmpty() && node.ScanSnapshot.TS.Less(txn.Txn().SnapshotTS) {
 			txn = txn.CloneSnapshotOp(*node.ScanSnapshot.TS)
@@ -162,8 +156,8 @@ func (c *Compile) compileDependentSource(node *plan.Node) (dependent.SourceFacto
 
 // Admission precedes operator construction and source I/O. The factory hands
 // even a partially initialized operator to this single terminal owner.
-func dependentSourceFactory(metadata uint64, open func(*process.Process, *vector.AllocationAccountSelection) (vm.Operator, error)) dependent.SourceFactory {
-	return func(proc *process.Process, allocation *vector.AllocationAccountSelection, account *mpool.AllocationAccount) (dependent.Source, error) {
+func dependentSourceFactory(metadata uint64, open func(*process.Process, *mpool.MPool) (vm.Operator, error)) dependent.SourceFactory {
+	return func(proc *process.Process, allocation *mpool.MPool, account *mpool.AllocationAccount) (dependent.Source, error) {
 		budget, err := proc.GetExecutionResourceBudget()
 		if err != nil {
 			return nil, err

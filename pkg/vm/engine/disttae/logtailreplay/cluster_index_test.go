@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
@@ -161,10 +160,10 @@ func applyClusterDeletes(
 	rows []clusterRow,
 ) {
 	t.Helper()
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	tbRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+	tbRowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
 	newClusterVecOwner(t, pool, rowIDVec, tsVec, pkVec, tbRowIDVec)
 	for _, row := range rows {
 		vector.AppendFixed(rowIDVec, row.rowID, false, pool)
@@ -172,15 +171,7 @@ func applyClusterDeletes(
 		vector.AppendFixed(pkVec, row.pk, false, pool)
 		vector.AppendFixed(tbRowIDVec, types.RandomRowid(), false, pool)
 	}
-	state.HandleRowsDelete(context.Background(), &api.Batch{
-		Attrs: []string{"rowid", "time", "pk", "tbrowid"},
-		Vecs: []api.Vector{
-			mustVectorToProto(rowIDVec),
-			mustVectorToProto(tsVec),
-			mustVectorToProto(pkVec),
-			mustVectorToProto(tbRowIDVec),
-		},
-	}, packer, pool)
+	state.HandleRowsDelete(context.Background(), mustMarshalVectors(rowIDVec, tsVec, pkVec, tbRowIDVec), packer, pool)
 }
 
 // countIntervalCandidates walks the cluster index exactly like a seek-based
@@ -850,11 +841,11 @@ func TestClusterKeyIndexIgnoresAmbiguousCompoundAttrs(t *testing.T) {
 
 	state := NewPartitionState("", false, 42, false)
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	clusterVec := vector.NewVec(types.T_varchar.ToType())
-	otherVec := vector.NewVec(types.T_varchar.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+	clusterVec := vector.NewVec(types.T_varchar.ToType(), pool)
+	otherVec := vector.NewVec(types.T_varchar.ToType(), pool)
 	newClusterVecOwner(t, pool, rowIDVec, tsVec, pkVec, clusterVec, otherVec)
 	rowID := types.RandomRowid()
 	vector.AppendFixed(rowIDVec, rowID, false, pool)
@@ -863,22 +854,15 @@ func TestClusterKeyIndexIgnoresAmbiguousCompoundAttrs(t *testing.T) {
 	vector.AppendBytes(clusterVec, []byte("v"), false, pool)
 	vector.AppendBytes(otherVec, []byte("w"), false, pool)
 
-	state.HandleRowsInsert(context.Background(), &api.Batch{
-		Attrs: []string{
+	state.HandleRowsInsert(context.Background(),
+		mustMarshalVectors(rowIDVec, tsVec, pkVec, clusterVec, otherVec),
+		[]string{
 			"rowid",
 			"time",
 			"pk",
 			"__mo_cbkey_012tenant_id012device_id",
 			"__mo_cbkey_usercopy",
-		},
-		Vecs: []api.Vector{
-			mustVectorToProto(rowIDVec),
-			mustVectorToProto(tsVec),
-			mustVectorToProto(pkVec),
-			mustVectorToProto(clusterVec),
-			mustVectorToProto(otherVec),
-		},
-	}, 0, packer, pool)
+		}, 0, packer, pool)
 
 	require.Equal(t, 1, state.rows.Len())
 	require.Equal(t, 0, clusterIndexLen(state))
@@ -914,12 +898,12 @@ func TestClusterKeyIndexIgnoresAmbiguousCompoundAttrs(t *testing.T) {
 // for batches that shift the compound column position, omit it, or add
 // same-prefix or filler user columns. Non-cluster user attrs get an int32
 // filler vector.
-func makeClusterReplayBatch(t testing.TB, pool *mpool.MPool, rows []clusterRow, attrs []string) *api.Batch {
+func makeClusterReplayBatch(t testing.TB, pool *mpool.MPool, rows []clusterRow, attrs []string) []byte {
 	t.Helper()
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	clusterVec := vector.NewVec(types.T_varchar.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+	clusterVec := vector.NewVec(types.T_varchar.ToType(), pool)
 	fixtures := newClusterVecOwner(t, pool, rowIDVec, tsVec, pkVec, clusterVec)
 	for _, row := range rows {
 		vector.AppendFixed(rowIDVec, row.rowID, false, pool)
@@ -927,28 +911,21 @@ func makeClusterReplayBatch(t testing.TB, pool *mpool.MPool, rows []clusterRow, 
 		vector.AppendFixed(pkVec, row.pk, false, pool)
 		vector.AppendBytes(clusterVec, row.serial, false, pool)
 	}
-	vecs := []api.Vector{
-		mustVectorToProto(rowIDVec),
-		mustVectorToProto(tsVec),
-		mustVectorToProto(pkVec),
-	}
+	vecs := []*vector.Vector{rowIDVec, tsVec, pkVec}
 	for _, attr := range attrs[3:] {
 		if strings.HasPrefix(attr, catalog.PrefixCBColName) {
-			vecs = append(vecs, mustVectorToProto(clusterVec))
+			vecs = append(vecs, clusterVec)
 		} else {
-			filler := vector.NewVec(types.T_int32.ToType())
+			filler := vector.NewVec(types.T_int32.ToType(), pool)
 			for range rows {
 				vector.AppendFixed(filler, int32(1), false, pool)
 			}
 			fixtures.track(filler)
-			vecs = append(vecs, mustVectorToProto(filler))
+			vecs = append(vecs, filler)
 		}
 	}
 	require.Equal(t, len(attrs), len(vecs))
-	return &api.Batch{
-		Attrs: attrs,
-		Vecs:  vecs,
-	}
+	return mustMarshalVectors(vecs...)
 }
 
 func applyClusterRowsWithAttrs(t *testing.T, state *PartitionState, packer *types.Packer, pool *mpool.MPool, rows []clusterRow, attrs []string) {
@@ -958,7 +935,7 @@ func applyClusterRowsWithAttrs(t *testing.T, state *PartitionState, packer *type
 	if len(attrs) > 3 {
 		key = clusterTestKey(attrs[len(attrs)-1], uint32(len(attrs)-3))
 	}
-	state.HandleRowsInsert(context.Background(), makeClusterReplayBatch(t, pool, rows, attrs), 0, packer, pool, key)
+	state.HandleRowsInsert(context.Background(), makeClusterReplayBatch(t, pool, rows, attrs), attrs, 0, packer, pool, key)
 }
 
 // TestClusterKeyIterFallbackWhenIndexUnusable drives every schema-era shape
@@ -1009,11 +986,11 @@ func TestClusterKeyIterFallbackWhenIndexUnusable(t *testing.T) {
 			name: "user column shadows the compound prefix",
 			setup: func(state *PartitionState) int {
 				rows := mkRows(0, 3, 0, "k")
-				rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-				tsVec := vector.NewVec(types.T_TS.ToType())
-				pkVec := vector.NewVec(types.T_int64.ToType())
-				clusterVec := vector.NewVec(types.T_varchar.ToType())
-				otherVec := vector.NewVec(types.T_int32.ToType())
+				rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+				tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+				pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+				clusterVec := vector.NewVec(types.T_varchar.ToType(), pool)
+				otherVec := vector.NewVec(types.T_int32.ToType(), pool)
 				newClusterVecOwner(t, pool, rowIDVec, tsVec, pkVec, clusterVec, otherVec)
 				for _, row := range rows {
 					vector.AppendFixed(rowIDVec, row.rowID, false, pool)
@@ -1022,15 +999,11 @@ func TestClusterKeyIterFallbackWhenIndexUnusable(t *testing.T) {
 					vector.AppendBytes(clusterVec, row.serial, false, pool)
 					vector.AppendFixed(otherVec, int32(1), false, pool)
 				}
-				state.HandleRowsInsert(context.Background(), &api.Batch{
-					Attrs: []string{"rowid", "time", "pk",
+				state.HandleRowsInsert(context.Background(),
+					mustMarshalVectors(rowIDVec, tsVec, pkVec, clusterVec, otherVec),
+					[]string{"rowid", "time", "pk",
 						"__mo_cbkey_006tenant006device", "__mo_cbkey_usercopy"},
-					Vecs: []api.Vector{
-						mustVectorToProto(rowIDVec), mustVectorToProto(tsVec),
-						mustVectorToProto(pkVec), mustVectorToProto(clusterVec),
-						mustVectorToProto(otherVec),
-					},
-				}, 0, packer, pool)
+					0, packer, pool)
 				return len(rows)
 			},
 			queryCol: "__mo_cbkey_006tenant006device",
@@ -1507,10 +1480,10 @@ func BenchmarkClusterIndexInsertMaintenance(b *testing.B) {
 				// per iteration.
 				fixtures := &clusterVecOwner{pool: pool}
 				for batch := 0; batch < 10; batch++ {
-					rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-					tsVec := vector.NewVec(types.T_TS.ToType())
-					pkVec := vector.NewVec(types.T_int64.ToType())
-					clusterVec := vector.NewVec(types.T_varchar.ToType())
+					rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+					tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+					pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+					clusterVec := vector.NewVec(types.T_varchar.ToType(), pool)
 					fixtures.track(rowIDVec, tsVec, pkVec, clusterVec)
 					for i := 0; i < batchRows; i++ {
 						vector.AppendFixed(rowIDVec, rowIDs[i], false, pool)
@@ -1520,19 +1493,13 @@ func BenchmarkClusterIndexInsertMaintenance(b *testing.B) {
 						vector.AppendBytes(clusterVec, serials[i], false, pool)
 					}
 					attrs := []string{"rowid", "time", "pk"}
-					vecs := []api.Vector{
-						mustVectorToProto(rowIDVec),
-						mustVectorToProto(tsVec),
-						mustVectorToProto(pkVec),
-					}
+					vecs := []*vector.Vector{rowIDVec, tsVec, pkVec}
 					if mode.compound {
 						attrs = append(attrs, clusterTestCompoundAttr)
-						vecs = append(vecs, mustVectorToProto(clusterVec))
+						vecs = append(vecs, clusterVec)
 					}
-					state.HandleRowsInsert(context.Background(), &api.Batch{
-						Attrs: attrs,
-						Vecs:  vecs,
-					}, 0, packer, pool, clusterTestKey(clusterTestCompoundAttr, 1))
+					state.HandleRowsInsert(context.Background(), mustMarshalVectors(vecs...), attrs,
+						0, packer, pool, clusterTestKey(clusterTestCompoundAttr, 1))
 				}
 				fixtures.Free()
 			}
@@ -1554,10 +1521,10 @@ func TestClusterKeyIndexIgnoresNonVarCharPrefixedUserColumn(t *testing.T) {
 	state := NewPartitionState("", false, 42, false)
 	sid := objectio.NewSegmentid()
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	geomVec := vector.NewVec(types.T_geometry.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+	geomVec := vector.NewVec(types.T_geometry.ToType(), pool)
 	newClusterVecOwner(t, pool, rowIDVec, tsVec, pkVec, geomVec)
 	var rowIDs []types.Rowid
 	for i := 0; i < 4; i++ {
@@ -1569,15 +1536,7 @@ func TestClusterKeyIndexIgnoresNonVarCharPrefixedUserColumn(t *testing.T) {
 		// Non-NULL geometry payloads: WKB-shaped bytes.
 		vector.AppendBytes(geomVec, []byte{0x01, 0x02, byte(i), 0x00, 0x00, 0x00}, false, pool)
 	}
-	state.HandleRowsInsert(context.Background(), &api.Batch{
-		Attrs: []string{"rowid", "time", "pk", "__mo_cbkey_usercopy"},
-		Vecs: []api.Vector{
-			mustVectorToProto(rowIDVec),
-			mustVectorToProto(tsVec),
-			mustVectorToProto(pkVec),
-			mustVectorToProto(geomVec),
-		},
-	}, 0, packer, pool)
+	state.HandleRowsInsert(context.Background(), mustMarshalVectors(rowIDVec, tsVec, pkVec, geomVec), []string{"rowid", "time", "pk", "__mo_cbkey_usercopy"}, 0, packer, pool)
 
 	require.Equal(t, 4, state.rows.Len(),
 		"replaying a table with a prefixed GEOMETRY user column must not panic or lose rows")
@@ -1616,9 +1575,10 @@ func TestClusterKeyDeclarationAndDisabledPayloadCost(t *testing.T) {
 	for _, name := range []string{"__mo_cbkey_usercopy", clusterTestCompoundAttr} {
 		t.Run("undeclared/"+name, func(t *testing.T) {
 			state := NewPartitionState("", false, 42, false)
-			input := makeClusterReplayBatch(t, pool, []clusterRow{row}, []string{"rowid", "time", "pk", name})
+			attrs := []string{"rowid", "time", "pk", name}
+			input := makeClusterReplayBatch(t, pool, []clusterRow{row}, attrs)
 			before := packer.Allocated()
-			state.HandleRowsInsert(t.Context(), input, 0, packer, pool)
+			state.HandleRowsInsert(t.Context(), input, attrs, 0, packer, pool)
 			require.Nil(t, state.rowClusterIndex)
 			require.False(t, state.WantsClusterKeyMetadata())
 			require.Equal(t, before, packer.Allocated(), "no declaration means no payload encoding")
@@ -1715,7 +1675,8 @@ func TestClusterKeyRejectsUnprovenCoverage(t *testing.T) {
 	packer := types.NewPacker()
 	defer packer.Close()
 	row := clusterRow{rowID: types.RandomRowid(), ts: types.BuildTS(10, 0), pk: 1, serial: []byte("key")}
-	input := makeClusterReplayBatch(t, pool, []clusterRow{row}, []string{"rowid", "time", "pk", clusterTestCompoundAttr})
+	attrs := []string{"rowid", "time", "pk", clusterTestCompoundAttr}
+	input := makeClusterReplayBatch(t, pool, []clusterRow{row}, attrs)
 	for _, tc := range []struct {
 		name   string
 		change func(*readutil.ClusterKeyDescriptor)
@@ -1731,7 +1692,7 @@ func TestClusterKeyRejectsUnprovenCoverage(t *testing.T) {
 			state := NewPartitionState("", false, 42, false)
 			key := clusterTestKey(clusterTestCompoundAttr, 1)
 			tc.change(key)
-			state.HandleRowsInsert(t.Context(), input, 0, packer, pool, key)
+			state.HandleRowsInsert(t.Context(), input, attrs, 0, packer, pool, key)
 			require.Nil(t, state.rowClusterIndex)
 			require.False(t, state.WantsClusterKeyMetadata())
 			require.Equal(t, []types.Rowid{row.rowID}, clusterIterRowIDs(t, state.NewClusterKeyIterWithFilters(types.MaxTs(), *key, nil)))

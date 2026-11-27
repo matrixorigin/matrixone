@@ -220,7 +220,7 @@ func TestDirectIndexComparisonPreservesScalarOverload(t *testing.T) {
 	require.Equal(t, expected.GetF().Func.Obj, rewritten.GetF().Func.Obj, "the executable overload, not only its name, must be inverted")
 	input := batch.NewWithSize(1)
 	defer input.Clean(proc.Mp())
-	input.Vecs[0] = vector.NewVec(makeTypeByPlan2Type(typ))
+	input.Vecs[0] = vector.NewVec(makeTypeByPlan2Type(typ), proc.Mp())
 	for _, value := range []string{"2024-01-01 00:00:00", "2024-01-02 00:00:00", "2024-01-03 00:00:00"} {
 		dt, err := types.ParseDatetime(value, 6)
 		require.NoError(t, err)
@@ -319,7 +319,7 @@ func TestSerializedIndexComparisonChecksFoldedStringDomain(t *testing.T) {
 	for _, oid := range []types.T{types.T_char, types.T_varchar} {
 		t.Run(oid.String(), func(t *testing.T) {
 			typ := types.New(oid, 8, 0)
-			v := vector.NewVec(typ)
+			v := vector.NewVec(typ, proc.Mp())
 			defer v.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(v, []byte("a"), false, proc.Mp()))
 			data, err := v.MarshalBinary()

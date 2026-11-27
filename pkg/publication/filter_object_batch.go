@@ -68,7 +68,7 @@ func readSingleBlockToBatch(
 	// Create vectors for this block
 	vecs := make([]*vector.Vector, len(cols))
 	for i, typ := range typs {
-		vecs[i] = vector.NewVec(typ)
+		vecs[i] = vector.NewVec(typ, mp)
 	}
 
 	for i, seqnum := range cols {
@@ -131,11 +131,6 @@ func readSingleBlockToBatch(
 	// Create batch
 	bat := batch.NewWithSize(len(cols))
 	bat.Vecs = vecs
-	attrs := make([]string, len(cols))
-	for i := range cols {
-		attrs[i] = fmt.Sprintf("col_%d", i)
-	}
-	bat.SetAttributes(attrs)
 	bat.SetRowCount(vecs[0].Length())
 
 	return bat, nil
@@ -462,7 +457,8 @@ func createObjectFromBatch(
 
 	// Step 3: Remove appendable-only MVCC columns.
 	commitTSIdx, abortIdx := -1, -1
-	for i, attr := range cnBat.Attrs {
+	// cnBat's columns are named by the TN batch it shares vectors with.
+	for i, attr := range bat.Attrs {
 		if attr == objectio.TombstoneAttr_CommitTs_Attr {
 			commitTSIdx = i
 		} else if attr == objectio.TombstoneAttr_Abort_Attr {
@@ -475,12 +471,10 @@ func createObjectFromBatch(
 
 	// Create new batch without commit TS and abort.
 	newBat := &batch.Batch{
-		Vecs:  make([]*vector.Vector, 0, len(cnBat.Vecs)-2),
-		Attrs: make([]string, 0, len(cnBat.Attrs)-2),
+		Vecs: make([]*vector.Vector, 0, len(cnBat.Vecs)-2),
 	}
 	for i, vec := range cnBat.Vecs {
 		if i != commitTSIdx && i != abortIdx {
-			newBat.Attrs = append(newBat.Attrs, cnBat.Attrs[i])
 			newBat.Vecs = append(newBat.Vecs, vec)
 		}
 	}

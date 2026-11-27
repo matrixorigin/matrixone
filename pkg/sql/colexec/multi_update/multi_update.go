@@ -70,11 +70,6 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			}
 
 			info := new(updateCtxInfo)
-			for _, col := range updateCtx.TableDef.Cols {
-				if col.Name != catalog.Row_ID {
-					info.insertAttrs = append(info.insertAttrs, col.Name)
-				}
-			}
 
 			tableType := UpdateMainTable
 			if catalog.IsUniqueIndexTable(updateCtx.TableDef.Name) {
@@ -83,6 +78,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 				tableType = UpdateSecondaryIndexTable
 			}
 			info.tableType = tableType
+			info.writeAttrs = insertWriteAttrs(updateCtx, tableType)
 			info.isContiguous = isContiguousMapping(updateCtx.InsertCols)
 			update.ctr.updateCtxInfos[updateCtxKey(updateCtx)] = info
 		}
@@ -341,13 +337,16 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 		switch actionType(action) {
 		case actionDelete:
 			if batBufs[actionDelete] == nil {
-				batBufs[actionDelete] = batch.NewOffHeapEmpty()
+				batBufs[actionDelete] = batch.NewWithSize(0)
 			} else {
 				batBufs[actionDelete].CleanOnlyData()
 			}
-			if err := batBufs[actionDelete].UnmarshalBinaryWithAnyMp(batData[i].GetByteSlice(batArea), proc.Mp()); err != nil {
+			blob := batData[i].GetByteSlice(batArea)
+			if err := batBufs[actionDelete].UnmarshalBinaryWithAnyMp(blob, proc.Mp()); err != nil {
 				return input, err
 			}
+			// The blob's layout names it.
+			attrs := colexec.RelayedDeleteAttrs(batBufs[actionDelete])
 			// For REPLACE INTO, we don't count DELETE rows in affected rows
 			// REPLACE INTO should only return the number of INSERT rows
 			name := nameData[i].UnsafeGetString(nameArea)
@@ -356,7 +355,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 			newCtx = update.writeContext(newCtx, tables[i])
 			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-				return source.Delete(newCtx, batBufs[actionDelete], name)
+				return source.Delete(newCtx, batBufs[actionDelete], attrs, name)
 			})
 			if err != nil {
 				return input, err
@@ -368,13 +367,16 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 		case actionInsert:
 			if batBufs[actionInsert] == nil {
-				batBufs[actionInsert] = batch.NewOffHeapEmpty()
+				batBufs[actionInsert] = batch.NewWithSize(0)
 			} else {
 				batBufs[actionInsert].CleanOnlyData()
 			}
-			if err := batBufs[actionInsert].UnmarshalBinaryWithAnyMp(batData[i].GetByteSlice(batArea), proc.Mp()); err != nil {
+			blob := batData[i].GetByteSlice(batArea)
+			if err := batBufs[actionInsert].UnmarshalBinaryWithAnyMp(blob, proc.Mp()); err != nil {
 				return input, err
 			}
+			// The writer relays only S3 block-info batches for inserts.
+			attrs := colexec.CNS3ResultAttrs
 
 			// For REPLACE INTO, we need to count INSERT rows based on the actual action
 			// Always count INSERT rows for main table, regardless of update.ctr.action
@@ -386,7 +388,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 			newCtx = update.writeContext(newCtx, tables[i])
 			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-				return source.Write(newCtx, batBufs[actionInsert])
+				return source.Write(newCtx, batBufs[actionInsert], attrs)
 			})
 			if err != nil {
 				return input, err
@@ -395,7 +397,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 		case actionUpdate:
 			if batBufs[actionUpdate] == nil {
-				batBufs[actionUpdate] = batch.NewOffHeapEmpty()
+				batBufs[actionUpdate] = batch.NewWithSize(0)
 			} else {
 				batBufs[actionUpdate].CleanOnlyData()
 			}
@@ -418,9 +420,12 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer process.Analyzer, bat *batch.Batch) (err error) {
 	targetBatches := make(map[int]*batch.Batch)
+	// views are targets replaced by an IGNORE fill's view of bat: they own
+	// nothing, so they are dropped, not cleaned.
+	views := make(map[int]bool)
 	defer func() {
-		for _, targetBatch := range targetBatches {
-			if targetBatch != bat {
+		for targetIdx, targetBatch := range targetBatches {
+			if targetBatch != bat && !views[targetIdx] {
 				targetBatch.Clean(proc.Mp())
 			}
 		}
@@ -464,7 +469,13 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer proces
 		tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
 		switch tableType {
 		case UpdateMainTable:
-			err = update.insert_main_table(proc, analyzer, i, contextBatch)
+			var out *batch.Batch
+			out, err = update.insert_main_table(proc, analyzer, i, contextBatch, contextBatch != bat)
+			if err == nil && out != contextBatch {
+				// The remaining legs of this target read the adjusted rows.
+				targetBatches[targetIdx] = out
+				views[targetIdx] = true
+			}
 		case UpdateUniqueIndexTable:
 			err = update.insert_unique_index_table(proc, analyzer, i, contextBatch)
 		case UpdateSecondaryIndexTable:
@@ -577,10 +588,11 @@ func filterTargetRows(
 		matchedSemanticAffectedRows += uint64(activeCount)
 	}
 
-	// The input can carry a build-side allocation account whose lifetime ends
-	// at the operator boundary. The filtered batch is independently owned by
-	// MULTI_UPDATE, so do not inherit that execution-local account.
-	filtered, err := input.CloneWithoutAllocationAccount(proc.Mp(), true)
+	// The input can be charged to a build-side allocation account whose
+	// lifetime ends at the operator boundary. The filtered batch is
+	// independently owned by MULTI_UPDATE and is copied through proc's pool, so
+	// it does not charge that execution-local account.
+	filtered, err := input.Clone(proc.Mp())
 	if err != nil {
 		return nil, false, 0, err
 	}
@@ -680,7 +692,7 @@ func filterODKUPhysicalRows(
 			selections = append(selections, int64(row))
 		}
 	}
-	filtered, err := input.CloneWithoutAllocationAccount(proc.Mp(), true)
+	filtered, err := input.Clone(proc.Mp())
 	if err != nil {
 		return nil, false, 0, err
 	}
@@ -855,16 +867,32 @@ func (update *MultiUpdate) writeContext(ctx context.Context, tableID uint64) con
 	return ctx
 }
 
+// insertWriteAttrs names the columns of the batches multi_update writes into
+// updateCtx's table: the table's non-rowid columns (by original case for the
+// main table), or the two unique-index columns.
+func insertWriteAttrs(updateCtx *MultiUpdateCtx, tableType UpdateTableType) []string {
+	if tableType == UpdateUniqueIndexTable {
+		return []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
+	}
+	attrs := make([]string, 0, len(updateCtx.TableDef.Cols))
+	for _, col := range updateCtx.TableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		if tableType == UpdateMainTable {
+			attrs = append(attrs, col.GetOriginCaseName())
+		} else {
+			attrs = append(attrs, col.Name)
+		}
+	}
+	return attrs
+}
+
 func (update *MultiUpdate) resetMultiUpdateCtxs() {
 	update.ctr.updateCtxInfos = make(map[string]*updateCtxInfo, len(update.MultiUpdateCtx))
 
 	for _, updateCtx := range update.MultiUpdateCtx {
 		info := new(updateCtxInfo)
-		for _, col := range updateCtx.TableDef.Cols {
-			if col.Name != catalog.Row_ID {
-				info.insertAttrs = append(info.insertAttrs, col.Name)
-			}
-		}
 
 		tableType := UpdateMainTable
 		if catalog.IsUniqueIndexTable(updateCtx.TableDef.Name) {
@@ -873,6 +901,7 @@ func (update *MultiUpdate) resetMultiUpdateCtxs() {
 			tableType = UpdateSecondaryIndexTable
 		}
 		info.tableType = tableType
+		info.writeAttrs = insertWriteAttrs(updateCtx, tableType)
 		update.ctr.updateCtxInfos[updateCtxKey(updateCtx)] = info
 	}
 }

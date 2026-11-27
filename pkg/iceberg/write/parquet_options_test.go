@@ -111,8 +111,8 @@ func TestLimitedZstdDecodeFailureAndReuse(t *testing.T) {
 func TestFanoutZstdOwnerAcrossRotation(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"part"})
-	v := vector.NewVec(types.T_int32.ToType())
+	bat := batch.NewWithSize(1)
+	v := vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 0; i < 10; i++ {
 		require.NoError(t, vector.AppendFixed[int32](v, int32(i), false, mp))
 	}
@@ -127,7 +127,7 @@ func TestFanoutZstdOwnerAcrossRotation(t *testing.T) {
 	require.NoError(t, err)
 	codec := w.codec.(*limitedZstd)
 	require.NotSame(t, codec, other.codec)
-	require.NoError(t, w.WriteBatch(ctx, bat.Attrs, bat))
+	require.NoError(t, w.WriteBatch(ctx, []string{"part"}, bat))
 	require.LessOrEqual(t, len(w.active), 8)
 	require.Same(t, codec, w.codec)
 	require.NotNil(t, codec.enc) // Eviction closes files and initializes the shared encoder.

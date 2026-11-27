@@ -15,7 +15,6 @@
 package readutil
 
 import (
-	"bytes"
 	"fmt"
 	"math"
 	"math/bits"
@@ -628,7 +627,7 @@ func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
 	if err := validatePKInVectorEncoding(data); err != nil {
 		return nil, err
 	}
-	vec := vector.NewVec(types.T_any.ToType())
+	vec := vector.NewVec(types.T_any.ToType(), nil)
 	if err := vec.UnmarshalBinary(data); err != nil {
 		return nil, err
 	}
@@ -644,9 +643,10 @@ func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
 }
 
 func normalizePKInVectorPayload(data []byte, mp *mpool.MPool) (ret *vector.Vector, err error) {
-	owned := vector.NewOffHeapVecWithType(types.T_any.ToType())
+	// Decoding with a pool copies, so data is never mutated.
+	owned := vector.NewVec(types.T_any.ToType(), mp)
 	defer owned.Free(mp)
-	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
+	if err := owned.UnmarshalBinary(data); err != nil {
 		return nil, err
 	}
 	if err := normalizePKInVector(owned, mp); err != nil {
@@ -656,7 +656,8 @@ func normalizePKInVectorPayload(data []byte, mp *mpool.MPool) (ret *vector.Vecto
 	if err != nil {
 		return nil, err
 	}
-	ret = vector.NewVec(types.T_any.ToType())
+	// A read-only reference to encoded: the result outlives mp.
+	ret = vector.NewVec(types.T_any.ToType(), nil)
 	if err := ret.UnmarshalBinary(encoded); err != nil {
 		return nil, err
 	}

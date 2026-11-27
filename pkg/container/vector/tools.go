@@ -21,12 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
-	v.requirePhysical()
 	if v.class == CONSTANT {
 		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
@@ -35,7 +33,6 @@ func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
 }
 
 func ToFixedCol[T any](v *Vector, ret *[]T) {
-	v.requirePhysical()
 	// XXX hack.   Sometimes we generate an t_any, for untyped const null.
 	// This should be handled more carefully and gracefully.
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
@@ -61,7 +58,6 @@ func MustFixedColNoTypeCheck[T any](v *Vector) (ret []T) {
 // n does not exceed the allocated capacity. Used by aggregation executors for
 // bounds-check-eliminated array access via (*[N]T)(slice) conversion.
 func MustFixedColAsSlice[T any](v *Vector, n int) []T {
-	v.requirePhysical()
 	return unsafe.Slice((*T)(unsafe.Pointer(unsafe.SliceData(v.data))), n)
 }
 
@@ -80,7 +76,6 @@ func MustFixedColWithTypeCheck[T any](v *Vector) (ret []T) {
 //		vs[i].GetByteSlice(area)
 //	}
 func InefficientMustBytesCol(v *Vector) [][]byte {
-	v.requirePhysical()
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -112,7 +107,6 @@ func InefficientMustBytesCol(v *Vector) [][]byte {
 // it will cause the UnsafeGetString method to panic. This is because what is stored here is the offset of the last value.
 // and InefficientMustBytesCol has a same bug.
 func InefficientMustStrCol(v *Vector) []string {
-	v.requirePhysical()
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -130,7 +124,6 @@ func InefficientMustStrCol(v *Vector) []string {
 
 // MustArrayCol  Converts Vector<[]T> to [][]T
 func MustArrayCol[T types.ArrayElement](v *Vector) [][]T {
-	v.requirePhysical()
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -209,7 +202,7 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
-	return extendWithBitmaps(v, rows, m, false, false)
+	return extendWithBitmaps(v, rows, m, false)
 }
 
 func extendWithBitmaps(
@@ -217,17 +210,9 @@ func extendWithBitmaps(
 	rows int,
 	m *mpool.MPool,
 	needNulls bool,
-	needGrouping bool,
 ) error {
-	// COW may replace data and shrink spare capacity. Complete it before
-	// admitting rows or handing descriptor slices to append callers.
-	if v.HasBorrowedBacking() {
-		if err := v.MaterializeOwned(m); err != nil {
-			return err
-		}
-	}
-	if m != nil && v.prepareParamKinds == nil {
-		v.prepareParamKindsMP = m
+	if err := v.checkMP(m); err != nil {
+		return err
 	}
 	if rows <= 0 {
 		// we will at least extent by 1.
@@ -236,17 +221,8 @@ func extendWithBitmaps(
 	}
 
 	tgtLen := v.length + rows
-	switch {
-	case needNulls && needGrouping:
-		if err := v.ensureBitmapCapacity(tgtLen, m); err != nil {
-			return err
-		}
-	case needNulls:
-		if err := v.ensureNullCapacity(tgtLen, m); err != nil {
-			return err
-		}
-	case needGrouping:
-		if err := v.ensureGroupingCapacity(tgtLen, m); err != nil {
+	if needNulls {
+		if err := v.ensureNullCapacity(tgtLen); err != nil {
 			return err
 		}
 	}
@@ -258,78 +234,8 @@ func extendWithBitmaps(
 		}
 		v.data = ndata
 	}
-	if v.prepareParamKinds != nil {
-		if err := v.preExtendPrepareParamKinds(tgtLen, m); err != nil {
-			return err
-		}
-	}
-	if v.stringSources != nil {
-		if err := v.preExtendStringSources(tgtLen, m); err != nil {
-			return err
-		}
-	}
-	if v.binaryStringRowsActive {
-		if err := v.ensureBinaryStringCapacity(tgtLen, m); err != nil {
-			return err
-		}
-	}
 	v.data = v.data[:cap(v.data)]
 	return nil
-}
-
-func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
-	if vec.IsDictionary() {
-		return ret, errDictionaryPhysicalAccess
-	}
-	nsp, err := vec.nsp.Show()
-	if err != nil {
-		return
-	}
-	sz := vec.typ.TypeSize()
-	physicalRows := vec.length
-	if vec.IsConst() {
-		physicalRows = min(physicalRows, 1)
-		if vec.IsConstNull() {
-			physicalRows = 0
-		}
-	}
-	return api.Vector{
-		Nsp:      nsp,
-		Nullable: true,
-		Area:     vec.area,
-		IsConst:  vec.IsConst(),
-		Len:      uint32(vec.length),
-		Type:     TypeToProtoType(vec.typ),
-		// Data:     vec.data,
-		Data: vec.data[:physicalRows*sz],
-	}, nil
-}
-
-func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
-	typ, err := types.TypeFromPlan(vec.Type)
-	if err != nil {
-		return nil, err
-	}
-	rvec := NewVecFromReuse()
-	rvec.area = vec.Area
-	rvec.length = int(vec.Len)
-	rvec.typ = typ
-	rvec.cantFreeData = true
-	rvec.cantFreeArea = true
-
-	if vec.IsConst {
-		rvec.class = CONSTANT
-	} else {
-		rvec.class = FLAT
-	}
-	if err := rvec.nsp.Read(vec.Nsp); err != nil {
-		return nil, err
-	}
-	if rvec.IsConst() && rvec.nsp.Contains(0) {
-		return rvec, nil
-	}
-	rvec.data = vec.Data
-	return rvec, nil
 }
 
 func TypeToProtoType(typ types.Type) plan.Type {
@@ -354,65 +260,9 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 			return AppendBytes(vec, v, isNull, mp)
 		}
 	}
-	switch t.Oid {
-	case types.T_bool:
-		return appendBytesToFixSized[bool](vec)
-	case types.T_bit:
-		return appendBytesToFixSized[uint64](vec)
-	case types.T_int8:
-		return appendBytesToFixSized[int8](vec)
-	case types.T_int16:
-		return appendBytesToFixSized[int16](vec)
-	case types.T_int32:
-		return appendBytesToFixSized[int32](vec)
-	case types.T_int64:
-		return appendBytesToFixSized[int64](vec)
-	case types.T_uint8:
-		return appendBytesToFixSized[uint8](vec)
-	case types.T_uint16:
-		return appendBytesToFixSized[uint16](vec)
-	case types.T_uint32:
-		return appendBytesToFixSized[uint32](vec)
-	case types.T_uint64:
-		return appendBytesToFixSized[uint64](vec)
-	case types.T_float32:
-		return appendBytesToFixSized[float32](vec)
-	case types.T_float64:
-		return appendBytesToFixSized[float64](vec)
-	case types.T_bf16:
-		return appendBytesToFixSized[types.BF16](vec)
-	case types.T_float16:
-		return appendBytesToFixSized[types.Float16](vec)
-	case types.T_float8:
-		return appendBytesToFixSized[types.Float8](vec)
-	case types.T_float4:
-		return appendBytesToFixSized[types.Float4](vec)
-	case types.T_date:
-		return appendBytesToFixSized[types.Date](vec)
-	case types.T_datetime:
-		return appendBytesToFixSized[types.Datetime](vec)
-	case types.T_time:
-		return appendBytesToFixSized[types.Time](vec)
-	case types.T_timestamp:
-		return appendBytesToFixSized[types.Timestamp](vec)
-	case types.T_enum:
-		return appendBytesToFixSized[types.Enum](vec)
-	case types.T_decimal64:
-		return appendBytesToFixSized[types.Decimal64](vec)
-	case types.T_decimal128:
-		return appendBytesToFixSized[types.Decimal128](vec)
-	case types.T_decimal256:
-		return appendBytesToFixSized[types.Decimal256](vec)
-	case types.T_uuid:
-		return appendBytesToFixSized[types.Uuid](vec)
-	case types.T_TS:
-		return appendBytesToFixSized[types.TS](vec)
-	case types.T_Rowid:
-		return appendBytesToFixSized[types.Rowid](vec)
-	case types.T_Blockid:
-		return appendBytesToFixSized[types.Blockid](vec)
-	case types.T_year:
-		return appendBytesToFixSized[types.MoYear](vec)
+	ops := &vectorTypeOps[t.Oid]
+	if !ops.supported {
+		panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
 	}
-	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
+	return ops.appendBytes(vec)
 }

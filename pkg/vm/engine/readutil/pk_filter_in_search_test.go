@@ -34,9 +34,9 @@ func checkFixedUnsortedIN[T any](t *testing.T, oid types.T, values, rows []T, eq
 	t.Helper()
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	needles := vector.NewVec(oid.ToType())
+	needles := vector.NewVec(oid.ToType(), mp)
 	t.Cleanup(func() { needles.Free(mp) })
-	input := vector.NewVec(oid.ToType())
+	input := vector.NewVec(oid.ToType(), mp)
 	t.Cleanup(func() { input.Free(mp) })
 	for _, value := range values {
 		require.NoError(t, vector.AppendFixed(needles, value, false, mp))
@@ -120,7 +120,7 @@ func TestUnsortedPKInSearch(t *testing.T) {
 func TestUnsortedPKInOrder(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	needles := vector.NewVec(types.T_uint64.ToType())
+	needles := vector.NewVec(types.T_uint64.ToType(), mp)
 	t.Cleanup(func() { needles.Free(mp) })
 	for i := 0; i < 1000; i++ {
 		require.NoError(t, vector.AppendFixed(needles, uint64(4*(i/2)), false, mp))
@@ -157,7 +157,7 @@ func TestUnsortedPKInOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			data := slices.Clone(base)
 			tc.mutate(data)
-			rows := vector.NewVec(types.T_uint64.ToType())
+			rows := vector.NewVec(types.T_uint64.ToType(), mp)
 			t.Cleanup(func() { rows.Free(mp) })
 			var want []int64
 			for i, value := range data {
@@ -320,7 +320,7 @@ func TestUnsortedPKInSearchRowBoundaries(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { mpool.DeleteMPool(mp) })
-			rows := vector.NewVec(types.T_uint64.ToType())
+			rows := vector.NewVec(types.T_uint64.ToType(), mp)
 			t.Cleanup(func() { rows.Free(mp) })
 			values := make([]uint64, test.keys)
 			for i := range values {
@@ -381,12 +381,12 @@ func TestUnsortedPKInFloatFullBlock(t *testing.T) {
 func TestUnsortedPKInSearchConcurrentReuse(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	small := vector.NewVec(types.T_uint64.ToType())
+	small := vector.NewVec(types.T_uint64.ToType(), mp)
 	t.Cleanup(func() { small.Free(mp) })
 	for _, v := range []uint64{9, 8, 0, 5, 3, 5, math.MaxUint64} {
 		require.NoError(t, vector.AppendFixed(small, v, false, mp))
 	}
-	large := vector.NewVec(types.T_uint64.ToType())
+	large := vector.NewVec(types.T_uint64.ToType(), mp)
 	t.Cleanup(func() { large.Free(mp) })
 	var largeWant []int64
 	for i := 0; i < objectio.BlockMaxRows; i++ {
@@ -395,7 +395,7 @@ func TestUnsortedPKInSearchConcurrentReuse(t *testing.T) {
 			largeWant = append(largeWant, int64(i))
 		}
 	}
-	ordered := vector.NewVec(types.T_uint64.ToType())
+	ordered := vector.NewVec(types.T_uint64.ToType(), mp)
 	t.Cleanup(func() { ordered.Free(mp) })
 	orderedWant := make([]int64, objectio.BlockMaxRows)
 	for i := range orderedWant {
@@ -450,9 +450,9 @@ func TestUnsortedPKInSearchConcurrentReuse(t *testing.T) {
 func TestUnsortedPKInBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	needles := vector.NewVec(types.T_varbinary.ToType())
+	needles := vector.NewVec(types.T_varbinary.ToType(), mp)
 	t.Cleanup(func() { needles.Free(mp) })
-	rows := vector.NewVec(types.T_varbinary.ToType())
+	rows := vector.NewVec(types.T_varbinary.ToType(), mp)
 	t.Cleanup(func() { rows.Free(mp) })
 	for _, value := range [][]byte{{0}, {0, 1}, {1}, {1}, {2}, {255}} {
 		require.NoError(t, vector.AppendBytes(needles, value, false, mp))
@@ -472,9 +472,9 @@ func TestUnsortedPKInArrayUsesByteEquality(t *testing.T) {
 		t.Run(oid.String(), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { mpool.DeleteMPool(mp) })
-			needles := vector.NewVec(oid.ToType())
+			needles := vector.NewVec(oid.ToType(), mp)
 			t.Cleanup(func() { needles.Free(mp) })
-			rows := vector.NewVec(oid.ToType())
+			rows := vector.NewVec(oid.ToType(), mp)
 			t.Cleanup(func() { rows.Free(mp) })
 			for i := 1; i <= 6; i++ {
 				if oid == types.T_array_float32 {
@@ -503,7 +503,7 @@ func TestUnsortedPKInArrayUsesByteEquality(t *testing.T) {
 func TestUnsortedPKInSearchComparisonBound(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	rows := vector.NewVec(types.T_int64.ToType())
+	rows := vector.NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { rows.Free(mp) })
 	for _, value := range []int64{1023, 2048, -1, 511} {
 		require.NoError(t, vector.AppendFixed(rows, value, false, mp))
@@ -538,7 +538,7 @@ func BenchmarkUnsortedPKInOrderedRows(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			mp := mpool.MustNewZero()
 			b.Cleanup(func() { mpool.DeleteMPool(mp) })
-			rows := vector.NewVec(types.T_uint64.ToType())
+			rows := vector.NewVec(types.T_uint64.ToType(), mp)
 			b.Cleanup(func() { rows.Free(mp) })
 			values := make([]uint64, 1000)
 			for i := range values {
@@ -574,9 +574,9 @@ func BenchmarkUnsortedPKInSearch(b *testing.B) {
 		b.Run(fmt.Sprintf("keys_%d", count), func(b *testing.B) {
 			mp := mpool.MustNewZero()
 			b.Cleanup(func() { mpool.DeleteMPool(mp) })
-			needles := vector.NewVec(types.T_uint64.ToType())
+			needles := vector.NewVec(types.T_uint64.ToType(), mp)
 			b.Cleanup(func() { needles.Free(mp) })
-			rows := vector.NewVec(types.T_uint64.ToType())
+			rows := vector.NewVec(types.T_uint64.ToType(), mp)
 			b.Cleanup(func() { rows.Free(mp) })
 			for i := 0; i < count; i++ {
 				require.NoError(b, vector.AppendFixed(needles, uint64(i), false, mp))
@@ -606,7 +606,7 @@ func BenchmarkUnsortedPKInReader(b *testing.B) {
 			b.Run(fmt.Sprintf("keys_%d/blocks_%d", count, blocks), func(b *testing.B) {
 				mp := mpool.MustNewZero()
 				b.Cleanup(func() { mpool.DeleteMPool(mp) })
-				rows := vector.NewVec(types.T_uint64.ToType())
+				rows := vector.NewVec(types.T_uint64.ToType(), mp)
 				b.Cleanup(func() { rows.Free(mp) })
 				mix := func(x uint64) uint64 {
 					x ^= x >> 30
@@ -668,7 +668,7 @@ func BenchmarkUnsortedPKInRowSize(b *testing.B) {
 				}
 				require.NoError(b, err)
 			} else {
-				rows = vector.NewVec(types.T_uint64.ToType())
+				rows = vector.NewVec(types.T_uint64.ToType(), mp)
 				b.Cleanup(func() { rows.Free(mp) })
 				for i := 0; i < test.rows; i++ {
 					require.NoError(b, vector.AppendFixed(rows, uint64(2*(i%1000)+1), false, mp))
@@ -699,9 +699,9 @@ func BenchmarkUnsortedPKInRowSize(b *testing.B) {
 func BenchmarkUnsortedPKInFloat(b *testing.B) {
 	mp := mpool.MustNewZero()
 	b.Cleanup(func() { mpool.DeleteMPool(mp) })
-	needles := vector.NewVec(types.T_float64.ToType())
+	needles := vector.NewVec(types.T_float64.ToType(), mp)
 	b.Cleanup(func() { needles.Free(mp) })
-	rows := vector.NewVec(types.T_float64.ToType())
+	rows := vector.NewVec(types.T_float64.ToType(), mp)
 	b.Cleanup(func() { rows.Free(mp) })
 	for i := 0; i < 1000; i++ {
 		require.NoError(b, vector.AppendFixed(needles, float64(2*i), false, mp))

@@ -125,7 +125,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 			deletion.ctr.resBat.Vecs[4] = nil
 			deletion.ctr.resBat.CleanOnlyData()
 		} else {
-			deletion.ctr.resBat = makeDelRemoteBatch()
+			deletion.ctr.resBat = makeDelRemoteBatch(proc.Mp())
 		}
 
 		for pidx, blockidRowidbatch := range deletion.ctr.partitionId_blockId_rowIdBatch {
@@ -221,7 +221,7 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 		}
 
 		if deletion.ctr.resBat == nil {
-			deletion.ctr.resBat = makeDelBatch(*result.Batch.GetVector(int32(deletion.DeleteCtx.PrimaryKeyIdx)).GetType())
+			deletion.ctr.resBat = makeDelBatch(*result.Batch.GetVector(int32(deletion.DeleteCtx.PrimaryKeyIdx)).GetType(), proc.Mp())
 		} else {
 			deletion.ctr.resBat.CleanOnlyData()
 		}
@@ -245,7 +245,7 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-			return deletion.ctr.source.Delete(newCtx, deletion.ctr.resBat, catalog.Row_ID)
+			return deletion.ctr.source.Delete(newCtx, deletion.ctr.resBat, DelBatchAttrs, catalog.Row_ID)
 		})
 		if err != nil {
 			return result, err

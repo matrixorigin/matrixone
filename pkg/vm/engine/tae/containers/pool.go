@@ -79,13 +79,24 @@ func (e *vectorPoolElement) tryReuse(t *types.Type) bool {
 
 func (e *vectorPoolElement) put() {
 	if e.vec.Allocated() > e.pool.maxAlloc {
-		newVec := vector.NewOffHeapVecWithType(*e.vec.GetType())
+		newVec := vector.NewVec(*e.vec.GetType(), e.mp)
 		e.vec.Free(e.mp)
 		e.vec = newVec
 		e.pool.resetStats.Add(1)
 	}
 	if !e.inUse.CompareAndSwap(true, false) {
 		panic("vectorPoolElement.put: vector is not in use")
+	}
+	// Close may have skipped this slot while it was checked out.
+	if e.pool.closed.Load() {
+		e.freeIfIdle()
+	}
+}
+
+func (e *vectorPoolElement) freeIfIdle() {
+	if e.inUse.CompareAndSwap(false, true) {
+		e.vec.Free(e.mp)
+		e.inUse.Store(false)
 	}
 }
 
@@ -95,6 +106,7 @@ func (e *vectorPoolElement) isIdle() bool {
 
 type VectorPool struct {
 	name           string
+	closed         atomic.Bool
 	maxAlloc       int
 	ratio          float64
 	fixSizedPool   []*vectorPoolElement
@@ -167,6 +179,9 @@ func (p *VectorPool) String() string {
 
 func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 	p.totalStats.Add(1)
+	if p.closed.Load() {
+		return NewVector(*t, Options{Allocator: p.mp})
+	}
 	if t.IsFixedLen() {
 		if len(p.fixSizedPool) > 0 {
 			for i := 0; i < 4; i++ {
@@ -204,6 +219,20 @@ func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 
 func (p *VectorPool) GetMPool() *mpool.MPool {
 	return p.mp
+}
+
+// Close releases idle buffers. Checked-out vectors remain valid and release
+// their backing memory when returned; allocations after Close are unpooled.
+func (p *VectorPool) Close() {
+	if !p.closed.CompareAndSwap(false, true) {
+		return
+	}
+	for _, e := range p.fixSizedPool {
+		e.freeIfIdle()
+	}
+	for _, e := range p.varlenPool {
+		e.freeIfIdle()
+	}
 }
 
 func (p *VectorPool) Allocated() int {
@@ -286,7 +315,7 @@ func (p *VectorPool) Destory() {
 }
 
 func newVectorElement(pool *VectorPool, t *types.Type, mp *mpool.MPool) *vectorPoolElement {
-	vec := vector.NewOffHeapVecWithType(*t)
+	vec := vector.NewVec(*t, mp)
 	element := &vectorPoolElement{
 		pool: pool,
 		mp:   mp,

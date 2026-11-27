@@ -20,6 +20,7 @@ import (
 	"errors"
 	"math"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 var _ Message = new(JoinMapMsg)
@@ -204,19 +206,31 @@ func (sels *GroupSels) Get(k int32) []int32 {
 
 // JoinMap is used for join
 type JoinMap struct {
-	runtimeFilter_In  bool
-	valid             bool
-	hasNullKey        bool
-	rowCnt            int64 // for debug purpose
-	refCnt            int64
-	mpool             *mpool.MPool
+	runtimeFilter_In bool
+	valid            bool
+	hasNullKey       bool
+	rowCnt           int64 // for debug purpose
+	refCnt           int64
+	mpool            *mpool.MPool
+	// batchesMP is the pool the retained batches were created with; nil means
+	// mpool.
+	batchesMP *mpool.MPool
+	// ownedPool is the build operator's own pool, handed over with the
+	// batches; FreeMemory deletes it once the batches are freed.
+	ownedPool         *mpool.MPool
 	shm               *hashmap.StrHashMap
 	ihm               *hashmap.IntHashMap
 	sels              GroupSels
 	delRows           *bitmap.Bitmap
 	batches           []*batch.Batch
+	batchRowEnds      []int64
 	memoryRelease     func()
 	memoryReleaseOnce sync.Once
+
+	// Size checks are shared by consumers of these immutable retained batches.
+	payloadCheckMu      sync.Mutex
+	payloadCheckLimit   int64
+	payloadColumnChecks []uint8
 
 	// A resident JoinMap may be broadcast to multiple consumers, but a spill
 	// payload is move-only. Keep the complete payload behind one lock so files
@@ -445,11 +459,81 @@ func NewJoinMap(sels GroupSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap
 	}
 }
 
+// SetBatchesPool records the pool the retained batches were created with, so
+// FreeMemory frees them with it.
+func (jm *JoinMap) SetBatchesPool(mp *mpool.MPool) {
+	jm.batchesMP = mp
+}
+
+// TakeOwnedPool hands the build operator's own pool to the JoinMap, which
+// deletes it in FreeMemory after freeing the batches allocated from it.
+func (jm *JoinMap) TakeOwnedPool(mp *mpool.MPool) {
+	jm.ownedPool = mp
+}
+
 func (jm *JoinMap) GetBatches() []*batch.Batch {
 	if jm == nil {
 		return nil
 	}
 	return jm.batches
+}
+
+// BuildPayloadExceeds checks one retained column and shares the result with
+// other consumers. A caller must hold its JoinMap reference throughout.
+func (jm *JoinMap) BuildPayloadExceeds(column int, limit int64) bool {
+	if column < 0 || len(jm.batches) == 0 {
+		return false
+	}
+	scan := func() bool {
+		for _, bat := range jm.batches {
+			if column < len(bat.Vecs) && vector.VarlenaPayloadExceeds(bat.Vecs[column], limit) {
+				return true
+			}
+		}
+		return false
+	}
+
+	jm.payloadCheckMu.Lock()
+	defer jm.payloadCheckMu.Unlock()
+	columns := len(jm.batches[0].Vecs)
+	if column >= columns || (jm.payloadColumnChecks != nil && jm.payloadCheckLimit != limit) {
+		return scan()
+	}
+	if jm.payloadColumnChecks == nil {
+		jm.payloadColumnChecks = make([]uint8, columns)
+		jm.payloadCheckLimit = limit
+	}
+	const (
+		fits    = 1
+		exceeds = 2
+	)
+	if jm.payloadColumnChecks[column] == 0 {
+		result := uint8(fits)
+		if scan() {
+			result = exceeds
+		}
+		jm.payloadColumnChecks[column] = result
+	}
+	return jm.payloadColumnChecks[column] == exceeds
+}
+
+// SetBatchRowEnds transfers the allocation-accounted directory to the map
+// before broadcast. It is immutable after publication.
+func (jm *JoinMap) SetBatchRowEnds(ends []int64) {
+	jm.batchRowEnds = ends
+}
+
+func (jm *JoinMap) HasBatchRowEnds() bool {
+	return jm != nil && len(jm.batchRowEnds) != 0
+}
+
+// LocateBatchRow resolves a retained ordinal when the map has a directory.
+func (jm *JoinMap) LocateBatchRow(ordinal int64) (int64, int64) {
+	index := sort.Search(len(jm.batchRowEnds), func(i int) bool { return jm.batchRowEnds[i] > ordinal })
+	if index > 0 {
+		ordinal -= jm.batchRowEnds[index-1]
+	}
+	return int64(index), ordinal
 }
 
 func (jm *JoinMap) SetRowCount(cnt int64) {
@@ -612,6 +696,9 @@ func (jm *JoinMap) FreeMemory() {
 	jm.spillMu.Unlock()
 	_ = payload.Close()
 	jm.sels.Free(jm.mpool)
+	// The join map owns delRows, which the hash builder handed over.
+	jm.delRows.Free()
+	jm.delRows = nil
 	if jm.ihm != nil {
 		jm.ihm.Free()
 		jm.ihm = nil
@@ -619,10 +706,21 @@ func (jm *JoinMap) FreeMemory() {
 		jm.shm.Free()
 		jm.shm = nil
 	}
+	batchesMP := jm.batchesMP
+	if batchesMP == nil {
+		batchesMP = jm.mpool
+	}
 	for i := range jm.batches {
-		jm.batches[i].Clean(jm.mpool)
+		jm.batches[i].Clean(batchesMP)
 	}
 	jm.batches = nil
+	if jm.ownedPool != nil {
+		mpool.DeleteMPool(jm.ownedPool)
+		jm.ownedPool = nil
+	}
+	jm.payloadColumnChecks = nil
+	mpool.FreeSlice(jm.mpool, jm.batchRowEnds)
+	jm.batchRowEnds = nil
 	jm.valid = false
 }
 

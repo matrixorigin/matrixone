@@ -243,7 +243,7 @@ func runRegisteredJSONStringConsumer(
 			integerTarget, integerContext := IntegerArgumentTarget(name, i)
 			require.True(t, integerContext)
 			require.Equal(t, integerTarget, targetType.Oid)
-			target := vector.NewVec(targetType)
+			target := vector.NewVec(targetType, proc.Mp())
 			defer target.Free(proc.Mp())
 			converted, err := RunFunctionDirectly(proc, EncodeOverloadID(CAST, IntegerArgumentCastOverload), []*vector.Vector{inputs[i], target}, 1)
 			require.NoError(t, err)

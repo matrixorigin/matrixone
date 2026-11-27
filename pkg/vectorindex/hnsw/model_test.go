@@ -830,7 +830,7 @@ func TestSearchWithCMembership(t *testing.T) {
 	}
 	mp := mpool.MustNewZero()
 	build := func(keys []int64) docfilter.MembershipFilter {
-		v := vector.NewVec(types.T_int64.ToType())
+		v := vector.NewVec(types.T_int64.ToType(), mp)
 		defer v.Free(mp)
 		for _, k := range keys {
 			require.NoError(t, vector.AppendFixed(v, k, false, mp))

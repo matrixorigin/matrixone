@@ -24,12 +24,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -243,4 +246,51 @@ func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.Clust
 	// deep copy the cluster details to avoid data race.
 	copied := deepcopy.Copy(c.value)
 	return copied.(logpb.ClusterDetails), c.err
+}
+
+// The local CN keeps the fault point named in the arguments after the
+// argument vectors are freed, so FaultInject must not keep views of them.
+func Test_FaultInjectCopiesArguments(t *testing.T) {
+	id := uuid.New().String()
+	initRuntime([]string{id}, []string{"127.0.0.1:7776"})
+	runtime.SetupServiceBasedRuntime(id, runtime.ServiceRuntime(""))
+	cli, err := qclient.NewQueryClient(id, morpc.Config{})
+	require.NoError(t, err)
+
+	proc := testutil.NewProcess(t)
+	proc.Base.QueryClient = cli
+	mp := proc.Mp()
+
+	call := func(service, command, parameter string) []byte {
+		args := make([]*vector.Vector, 0, 3)
+		for _, s := range []string{service, command, parameter} {
+			v, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(s), 1, mp)
+			require.NoError(t, err)
+			args = append(args, v)
+		}
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, FaultInject(args, result, proc, 1))
+		out := result.GetResultVector()
+		ret := out.CloneBytesAt(0)
+		// Overwrite the argument memory as a later allocation would.
+		for _, v := range args {
+			b := v.GetBytesAt(0)
+			for i := range b {
+				b[i] = 'x'
+			}
+			v.Free(mp)
+		}
+		result.Free()
+		return ret
+	}
+
+	call("cn.", "enable_fault_injection", "")
+	defer call("cn.", "disable_fault_injection", "")
+	call("cn.", "add_fault_point", "copied_name#:::#echo#7#copied_sarg#false")
+	iv, sv, ok := fault.TriggerFault("copied_name")
+	require.True(t, ok, "the fault point keeps its name")
+	require.Equal(t, int64(7), iv)
+	require.Equal(t, "copied_sarg", sv)
+	call("cn.", "remove_fault_point", "copied_name")
 }

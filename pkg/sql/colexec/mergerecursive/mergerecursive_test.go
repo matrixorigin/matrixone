@@ -76,6 +76,7 @@ func TestMergeRecursive(t *testing.T) {
 		require.NoError(t, err)
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		colexec.FreeMockChildren(tc.arg)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -110,6 +111,7 @@ func TestMergeRecursiveFreeWithoutReset(t *testing.T) {
 	// Free is a terminal lifecycle operation and must release operator-owned
 	// batches even when an interrupted execution did not reach Reset first.
 	arg.Free(proc, true, context.Canceled)
+	colexec.FreeMockChildren(arg)
 	for _, bat := range cached {
 		require.Nil(t, bat.Vecs)
 	}
@@ -121,8 +123,10 @@ func TestMergeRecursiveFreeWithoutReset(t *testing.T) {
 
 	// Cleanup must remain safe if callers defensively repeat it.
 	arg.Free(proc, true, context.Canceled)
+	colexec.FreeMockChildren(arg)
 
 	child.Free(proc, true, context.Canceled)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -130,7 +134,7 @@ func TestMergeRecursiveFreeWithoutReset(t *testing.T) {
 func TestMergeRecursiveMemoryQuotaAndMarkerReplacement(t *testing.T) {
 	t.Run("initial quota", func(t *testing.T) {
 		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-		src := batch.New([]string{"value"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 256)}, nil, proc.Mp())
 		src.SetRowCount(1)
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(src.Size() - 1), nil })
@@ -147,7 +151,9 @@ func TestMergeRecursiveMemoryQuotaAndMarkerReplacement(t *testing.T) {
 		require.Zero(t, arg.ctr.memory.Retained())
 
 		child.Free(proc, true, err)
+		colexec.FreeMockChildren(child)
 		arg.Free(proc, true, err)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -157,14 +163,14 @@ func TestMergeRecursiveMemoryQuotaAndMarkerReplacement(t *testing.T) {
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(1 << 20), nil })
 		arg := &MergeRecursive{}
 		require.NoError(t, arg.Prepare(proc))
-		src := batch.New([]string{"value"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 4096)}, nil, proc.Mp())
 		src.SetRowCount(1)
 		cached, err := arg.ctr.cacheBatch(proc, arg.OpAnalyzer, src)
 		require.NoError(t, err)
 		require.Positive(t, arg.ctr.memory.Retained())
 
-		marker := batch.New([]string{"value"})
+		marker := batch.NewWithSize(1)
 		marker.Vecs[0] = testutil.MakeVarcharVector([]string{"marker"}, nil, proc.Mp())
 		marker.SetRowCount(1)
 		marker.SetLast()
@@ -176,7 +182,9 @@ func TestMergeRecursiveMemoryQuotaAndMarkerReplacement(t *testing.T) {
 		require.Nil(t, cached.Vecs)
 
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 		src.Clean(proc.Mp())
 		marker.Clean(proc.Mp())
 		proc.Free()
@@ -193,15 +201,14 @@ func TestMergeRecursiveFailedReuseDropsStaleCacheAndCharge(t *testing.T) {
 	require.NoError(t, arg.Prepare(proc))
 
 	sourcePool := mpool.MustNewZero()
-	initial := batch.New([]string{"value"})
+	initial := batch.NewWithSize(1)
 	initial.Vecs[0] = testutil.MakeVarcharVector([]string{"seed"}, nil, sourcePool)
 	initial.SetRowCount(1)
 	cached, err := arg.ctr.cacheBatch(proc, arg.OpAnalyzer, initial)
 	require.NoError(t, err)
 	require.Positive(t, arg.ctr.memory.Retained())
-	cached.Vecs[0].SetOffHeap(true)
 
-	large := batch.New([]string{"value"})
+	large := batch.NewWithSize(1)
 	large.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 2<<20)}, nil, sourcePool)
 	large.SetRowCount(1)
 	arg.ctr.i = 0
@@ -212,6 +219,7 @@ func TestMergeRecursiveFailedReuseDropsStaleCacheAndCharge(t *testing.T) {
 	require.Zero(t, arg.ctr.memory.Retained())
 
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	initial.Clean(sourcePool)
 	large.Clean(sourcePool)
@@ -220,6 +228,7 @@ func TestMergeRecursiveFailedReuseDropsStaleCacheAndCharge(t *testing.T) {
 }
 
 func resetChildren(arg *MergeRecursive, m *mpool.MPool) {
+	colexec.FreeMockChildren(arg)
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil

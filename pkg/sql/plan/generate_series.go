@@ -144,7 +144,7 @@ func generateSeriesDatetimeScale(exprs []*plan.Expr, runtimeValues ...[]any) int
 		}
 		if marker := expr.GetP(); marker != nil && len(runtimeValues) > 0 &&
 			marker.Pos >= 0 && int(marker.Pos) < len(runtimeValues[0]) {
-			if value, ok := runtimeValues[0][marker.Pos].(ParamValue); ok {
+			if value, ok := AsParamValue(runtimeValues[0][marker.Pos]); ok {
 				if value.HasRuntimeType && value.RuntimeType.Oid.IsDateRelate() {
 					scale = max(scale, value.RuntimeType.Scale)
 					continue
@@ -177,7 +177,7 @@ func generateSeriesDatetimeScale(exprs []*plan.Expr, runtimeValues ...[]any) int
 		step := stepExpr.GetLit()
 		if marker := stepExpr.GetP(); marker != nil && len(runtimeValues) > 0 &&
 			marker.Pos >= 0 && int(marker.Pos) < len(runtimeValues[0]) {
-			if value, ok := runtimeValues[0][marker.Pos].(ParamValue); ok {
+			if value, ok := AsParamValue(runtimeValues[0][marker.Pos]); ok {
 				if text, ok := value.Value.(string); ok {
 					if strings.Contains(strings.ToLower(text), "microsecond") {
 						scale = MaxFsp

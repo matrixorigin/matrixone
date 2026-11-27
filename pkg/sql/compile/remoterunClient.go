@@ -43,7 +43,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -88,14 +87,12 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	var scopeEncodeData, processEncodeData []byte
 	var withoutOutput, folded bool
 	remoteFragmentCounts, remoteExecutionID := remoteExecutionTopology(c, s)
-	var requiredProtocol int64
-	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingDataWithProtocol(
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(
 		c.sql,
 		s,
 		c.proc,
 		remoteFragmentCounts,
 		remoteExecutionID,
-		&requiredProtocol,
 	)
 	if err != nil {
 		return nil, err
@@ -128,11 +125,6 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// before an old RPC callback is delivered; a closed captured sink then drops
 	// that stale callback instead of publishing it into the new attempt.
 	sender.warningSink = s.Proc.GetWarningSink()
-	if requiredProtocol > 0 {
-		if err = sender.confirmProtocolOnStream(requiredProtocol); err != nil {
-			return sender, err
-		}
-	}
 
 	debugMsg := ""
 	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
@@ -256,36 +248,6 @@ func prepareRemoteRunSendingData(
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
-	return prepareRemoteRunSendingDataWithProtocol(sqlStr, s, proc, remoteFragmentCounts, remoteExecutionID, nil)
-}
-
-func prepareRemoteRunSendingDataWithProtocol(
-	sqlStr string,
-	s *Scope,
-	proc *process.Process,
-	remoteFragmentCounts map[string]uint32,
-	remoteExecutionID uuid.UUID,
-	requiredProtocol *int64,
-) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
-	// The output dispatch executes on the initiating CN and is stripped from
-	// the encoded scope below. Validate its consumers before losing that edge.
-	if queryNeedsGroupingTransport(s.Plan.GetQuery()) {
-		if output, ok := s.RootOp.(*dispatch.Dispatch); ok && len(output.RemoteRegs) > 0 {
-			workers := make(engine.Nodes, 0, len(output.RemoteRegs))
-			for _, dest := range output.RemoteRegs {
-				workers = append(workers, engine.Node{Addr: dest.NodeAddr})
-			}
-			if err = requireGroupingTransportWorkers(proc, workers); err != nil {
-				return nil, false, nil, false, err
-			}
-		}
-	}
-	if output, ok := s.RootOp.(*connector.Connector); ok &&
-		output.Reg != nil && output.Reg.OrderedStream &&
-		!supportsDistributedOrderedTop(proc.GetService()) {
-		return nil, false, nil, false, moerr.NewNotSupportedNoCtx(
-			"distributed ordered Top-N requires MORPC protocol version 53")
-	}
 	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
 	encodedScope = copyBlockFiltersForRemoteRun(encodedScope)
 	encodedScope, folded, err = foldVarExprsInRemoteRunScope(encodedScope, proc)
@@ -294,7 +256,7 @@ func prepareRemoteRunSendingDataWithProtocol(
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeRemoteScopeWithProtocol(encodedScope, proc, requiredProtocol); err != nil {
+	if scopeData, err = encodeRemoteScope(encodedScope, proc); err != nil {
 		return nil, false, nil, false, err
 	}
 
@@ -782,43 +744,6 @@ func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Me
 	message.RequestedBatchCreditBytes = pipelineBatchCreditBytes
 }
 
-// The capability query uses a different RPC connection. Confirm on the stream
-// that will carry the pipeline so a replacement old CN cannot execute a newer
-// contract.
-func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) error {
-	ctx, cancel := context.WithTimeout(sender.ctx, 5*time.Second)
-	defer cancel()
-	message := cnclient.AcquireMessage()
-	message.SetID(sender.streamSender.ID())
-	message.SetMessageType(pipeline.Method_PipelineProtocolCheck)
-	message.ProtocolVersion = minimum
-	if err := sender.streamSender.Send(ctx, message); err != nil {
-		return err
-	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case val, ok := <-sender.receiveCh:
-		if !ok || val == nil {
-			sender.markReceiveClosed()
-			return moerr.NewStreamClosedNoCtx()
-		}
-		response, ok := val.(*pipeline.Message)
-		if ok {
-			if err, hasError := response.TryToGetMoErr(); hasError {
-				return err
-			}
-		}
-		if !ok || response.GetID() != sender.streamSender.ID() ||
-			response.GetCmd() != pipeline.Method_PipelineProtocolCheck ||
-			response.GetSid() != pipeline.Status_Last ||
-			response.GetProtocolVersion() < minimum {
-			return moerr.NewNotSupportedNoCtxf("remote pipeline stream requires MORPC protocol version %d", minimum)
-		}
-		return nil
-	}
-}
-
 func (sender *messageSenderOnClient) sendPipeline(
 	scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int, debugMsg string) error {
 	sender.markReportingRequestStarted()
@@ -973,7 +898,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		}
 
 		bat, err = decodeBatch(sender.mp, dataBuffer)
-		/* 		bat := batch.NewOffHeapEmpty()
+		/* 		bat := batch.NewWithSize(0)
 		   		if err := bat.UnmarshalBinary(dataBuffer); err != nil {
 		   			bat.Clean(sender.mp)
 		   			return bat, false, err

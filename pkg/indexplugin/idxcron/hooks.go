@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -101,4 +102,10 @@ type Hooks interface {
 // keep their descriptor's fixed option. Called only when Updatable returned ok.
 type ReindexOptioner interface {
 	ReindexOption(in UpdatableInput) (option string, err error)
+}
+
+// HealthInspector is an optional read-only view of an owner's maintenance
+// measurements and decision. It never executes the suggested operation.
+type HealthInspector interface {
+	IndexHealth(*sqlexec.SqlProcess, indexstats.Config) (map[string]any, []indexstats.Suggestion, error)
 }

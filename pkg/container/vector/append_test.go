@@ -1,0 +1,495 @@
+// Copyright 2021 - 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package vector
+
+import (
+	"bytes"
+	"strconv"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/require"
+)
+
+// newAppendTestVec returns a vector and pool that are freed, and checked for
+// leaks, when the test ends.
+func newAppendTestVec(t *testing.T, typ types.Type) (*Vector, *mpool.MPool) {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	vec := NewVec(typ, mp)
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+		require.Zero(t, mp.OnHeapCurrNB())
+	})
+	return vec, mp
+}
+
+// TestAppendFixedListBulkCopy covers the null-free bulk copy, with no mask
+// and with an all-false mask.
+func TestAppendFixedListBulkCopy(t *testing.T) {
+	values := make([]int64, 32)
+	for i := range values {
+		values[i] = int64(i * 11)
+	}
+	for _, mask := range [][]bool{nil, make([]bool, len(values))} {
+		vec, mp := newAppendTestVec(t, types.T_int64.ToType())
+		require.NoError(t, vec.PreExtend(len(values), mp))
+		require.NoError(t, AppendFixedList(vec, values, mask, mp))
+		require.Equal(t, values, MustFixedColWithTypeCheck[int64](vec))
+		for i := range values {
+			require.False(t, vec.IsNull(uint64(i)))
+		}
+	}
+}
+
+// TestAppendFixedListBulkCopyAfterNullablePrefix appends a null-free list
+// after rows that already carry a null bitmap.
+func TestAppendFixedListBulkCopyAfterNullablePrefix(t *testing.T) {
+	vec, mp := newAppendTestVec(t, types.T_int64.ToType())
+	require.NoError(t, AppendFixedList(vec, []int64{1, 2}, []bool{false, true}, mp))
+	values := make([]int64, 32)
+	for i := range values {
+		values[i] = int64(i + 10)
+	}
+	require.NoError(t, AppendFixedList(vec, values, nil, mp))
+	require.Equal(t, 34, vec.Length())
+	require.Equal(t, int64(1), GetFixedAtNoTypeCheck[int64](vec, 0))
+	require.True(t, vec.IsNull(1))
+	for i, value := range values {
+		require.False(t, vec.IsNull(uint64(i+2)))
+		require.Equal(t, value, GetFixedAtNoTypeCheck[int64](vec, i+2))
+	}
+}
+
+// TestAppendFixedListAliasedInput appends a slice of the vector's own unused
+// capacity, which overlaps the destination: the rows must equal the input as
+// it was before the call.
+func TestAppendFixedListAliasedInput(t *testing.T) {
+	vec, mp := newAppendTestVec(t, types.T_int64.ToType())
+	require.NoError(t, vec.PreExtend(17, mp))
+	require.NoError(t, AppendFixedList(vec, []int64{7}, nil, mp))
+	require.GreaterOrEqual(t, vec.Capacity(), 17)
+	backing := MustFixedColWithTypeCheck[int64](vec)[:17]
+	for i := 1; i < len(backing); i++ {
+		backing[i] = int64(i)
+	}
+	input := append([]int64(nil), backing[:16]...)
+	require.NoError(t, AppendFixedList(vec, backing[:16], nil, mp))
+	require.Equal(t, append([]int64{7}, input...), MustFixedColWithTypeCheck[int64](vec))
+}
+
+// TestAppendFixedListAliasedInputAfterGrowth appends a vector's own rows when
+// the append must grow, so the source would be released by the growth.
+func TestAppendFixedListAliasedInputAfterGrowth(t *testing.T) {
+	vec, mp := newAppendTestVec(t, types.T_int64.ToType())
+	values := make([]int64, 16)
+	for i := range values {
+		values[i] = int64(i + 4)
+	}
+	require.NoError(t, AppendFixedList(vec, values, nil, mp))
+	if remaining := vec.Capacity() - vec.Length(); remaining > 0 {
+		filler := make([]int64, remaining)
+		for i := range filler {
+			filler[i] = int64(i + len(values) + 4)
+		}
+		require.NoError(t, AppendFixedList(vec, filler, nil, mp))
+	}
+	vals := MustFixedColWithTypeCheck[int64](vec)
+	require.Equal(t, vec.Capacity(), len(vals))
+	before := append([]int64(nil), vals...)
+	require.NoError(t, AppendFixedList(vec, vals, nil, mp))
+	require.Equal(t, append(before, before...), MustFixedColWithTypeCheck[int64](vec))
+}
+
+// TestAppendVarlenListPregrow checks that a pre-grown bulk append encodes
+// byte-for-byte like row-by-row appends, across inline and area payloads.
+func TestAppendVarlenListPregrow(t *testing.T) {
+	values := make([][]byte, 32)
+	for i := range values {
+		switch i % 5 {
+		case 0:
+			values[i] = bytes.Repeat([]byte("中x"), 24)
+		case 1:
+			values[i] = []byte("short")
+		case 2:
+			values[i] = []byte{}
+		case 3:
+			values[i] = bytes.Repeat([]byte("a"), types.VarlenaInlineSize)
+		case 4:
+			values[i] = bytes.Repeat([]byte("b"), types.VarlenaInlineSize+1)
+		}
+	}
+	strs := make([]string, len(values))
+	expectedArea := 0
+	for i, value := range values {
+		strs[i] = string(value)
+		if len(value) > types.VarlenaInlineSize {
+			expectedArea += len(value)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		oid  types.T
+		add  func(*Vector, *mpool.MPool) error
+	}{
+		{"bytes", types.T_varbinary, func(v *Vector, mp *mpool.MPool) error {
+			return AppendBytesList(v, values, nil, mp)
+		}},
+		{"string", types.T_varchar, func(v *Vector, mp *mpool.MPool) error {
+			return AppendStringList(v, strs, nil, mp)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec, mp := newAppendTestVec(t, tc.oid.ToType())
+			reference := NewVec(tc.oid.ToType(), mp)
+			decoded := NewVec(tc.oid.ToType(), mp)
+			t.Cleanup(func() {
+				reference.Free(mp)
+				decoded.Free(mp)
+			})
+			require.True(t, canPregrowRawByteList(vec, nil))
+			require.NoError(t, tc.add(vec, mp))
+			require.Equal(t, len(values), vec.Length())
+			require.Equal(t, expectedArea, len(vec.area))
+			for i, value := range values {
+				require.NoError(t, AppendBytes(reference, value, false, mp))
+				require.Equal(t, value, vec.GetBytesAt(i))
+				require.False(t, vec.IsNull(uint64(i)))
+			}
+			wire, err := vec.MarshalBinary()
+			require.NoError(t, err)
+			referenceWire, err := reference.MarshalBinary()
+			require.NoError(t, err)
+			require.Equal(t, referenceWire, wire)
+			require.NoError(t, decoded.UnmarshalBinary(wire))
+			for i, value := range values {
+				require.Equal(t, value, decoded.GetBytesAt(i))
+			}
+		})
+	}
+}
+
+// TestAppendVarlenListSlowPath covers the inputs that skip pre-growing: a null
+// mask, an input aliasing the vector's own area, and a unicode collation.
+func TestAppendVarlenListSlowPath(t *testing.T) {
+	t.Run("null payloads are not stored", func(t *testing.T) {
+		vec, mp := newAppendTestVec(t, types.T_varbinary.ToType())
+		deadPayload := bytes.Repeat([]byte("x"), 256)
+		values := make([][]byte, 32)
+		mask := make([]bool, len(values))
+		for i := range values {
+			values[i], mask[i] = deadPayload, true
+		}
+		values[1], mask[1] = []byte("ok"), false
+		require.False(t, canPregrowRawByteList(vec, mask))
+		require.NoError(t, AppendBytesList(vec, values, mask, mp))
+		require.Equal(t, len(values), vec.Length())
+		require.Zero(t, len(vec.area))
+		require.Less(t, cap(vec.area), len(deadPayload), "null payloads must not be reserved")
+		for i := range values {
+			require.Equal(t, mask[i], vec.IsNull(uint64(i)))
+		}
+		require.Equal(t, []byte("ok"), vec.GetBytesAt(1))
+	})
+
+	t.Run("input aliasing the area", func(t *testing.T) {
+		vec, mp := newAppendTestVec(t, types.T_varbinary.ToType())
+		long := bytes.Repeat([]byte("x"), 64)
+		require.NoError(t, AppendBytesList(vec, [][]byte{long, long}, []bool{true, false}, mp))
+		require.Equal(t, len(long), len(vec.area))
+		require.NoError(t, AppendBytesList(vec, [][]byte{vec.GetBytesAt(1)}, nil, mp))
+		require.Equal(t, long, vec.GetBytesAt(2))
+	})
+
+}
+
+// TestAppendVarlenListPregrowFailureRollsBack fails the pre-grow on a full
+// pool and checks the vector is left empty and still usable.
+func TestAppendVarlenListPregrowFailureRollsBack(t *testing.T) {
+	const rows, payload = 128, 64
+	for _, tc := range []struct {
+		name string
+		oid  types.T
+		add  func(*Vector, *mpool.MPool) error
+	}{
+		{"bytes", types.T_varbinary, func(v *Vector, mp *mpool.MPool) error {
+			values := make([][]byte, rows)
+			for i := range values {
+				values[i] = bytes.Repeat([]byte("x"), payload)
+			}
+			return AppendBytesList(v, values, nil, mp)
+		}},
+		{"string", types.T_varchar, func(v *Vector, mp *mpool.MPool) error {
+			values := make([]string, rows)
+			for i := range values {
+				values[i] = string(bytes.Repeat([]byte("x"), payload))
+			}
+			return AppendStringList(v, values, nil, mp)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const poolCap = 1 << 20
+			mp, err := mpool.NewMPool("append-pregrow-rollback", poolCap, 0)
+			require.NoError(t, err)
+			vec := NewVec(tc.oid.ToType(), mp)
+			// Leave room for the row headers, not for the rows*payload area.
+			filler, err := mp.Alloc(poolCap-rows*payload/2, true)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				defer mpool.DeleteMPool(mp)
+				vec.Free(mp)
+				mp.Free(filler)
+				require.Zero(t, mp.CurrNB())
+			})
+			err = tc.add(vec, mp)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "got %v", err)
+			require.Zero(t, vec.Length())
+			require.Zero(t, len(vec.area))
+			require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("ok")}, nil, mp))
+			require.Equal(t, []byte("ok"), vec.GetBytesAt(0))
+		})
+	}
+}
+
+// BenchmarkAppendValueRows measures the public append boundary used by CSV
+// materialization and casts. Each operation reuses physical capacity for one
+// object block; metadata controls retain the same value and row-count oracles.
+// Performance acceptance compares matched binaries, without a timing threshold
+// in ordinary unit tests.
+func TestAppendMultiFixedBroadcast(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v := NewVec(types.T_int64.ToType(), mp)
+	require.NoError(t, AppendMultiFixed(v, int64(0x1122334455667788), false, 1000, mp))
+	require.Equal(t, 1000, v.Length())
+	col := MustFixedColNoTypeCheck[int64](v)
+	for i := 0; i < 1000; i++ {
+		require.Equalf(t, int64(0x1122334455667788), col[i], "AppendMultiFixed row %d", i)
+	}
+	v.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func BenchmarkAppendValueRows(b *testing.B) {
+	const rows = 8192
+	for _, test := range []struct {
+		name   string
+		oid    types.T
+		value  []byte
+		isNull bool
+		seed   bool
+	}{
+		{name: "ordinary_int64", oid: types.T_int64},
+		{name: "null_int64", oid: types.T_int64, isNull: true},
+		{name: "ordinary_inline_varchar", oid: types.T_varchar, value: []byte("ordinary column")},
+		{name: "ordinary_area_varchar", oid: types.T_varchar, value: bytes.Repeat([]byte{'x'}, types.VarlenaInlineSize+1)},
+		{name: "null_varchar", oid: types.T_varchar, isNull: true},
+		{name: "seeded_varchar", oid: types.T_varchar, value: []byte("ordinary column"), seed: true},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			vec := NewVec(test.oid.ToType(), mp)
+			b.Cleanup(func() {
+				defer mpool.DeleteMPool(mp)
+				vec.Free(mp)
+				require.Zero(b, mp.CurrNB())
+			})
+			require.NoError(b, vec.PreExtend(rows, mp))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				vec.ResetWithSameType()
+				start := 0
+				if test.seed {
+					if test.oid == types.T_int64 {
+						if err := AppendFixed(vec, int64(42), false, mp); err != nil {
+							b.Fatal(err)
+						}
+					} else if err := AppendBytes(vec, test.value, false, mp); err != nil {
+						b.Fatal(err)
+					}
+					start = 1
+				}
+				if test.oid == types.T_int64 {
+					for row := start; row < rows; row++ {
+						if err := AppendFixed(vec, int64(42), test.isNull, mp); err != nil {
+							b.Fatal(err)
+						}
+					}
+				} else {
+					for row := start; row < rows; row++ {
+						if err := AppendBytes(vec, test.value, test.isNull, mp); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			}
+			b.StopTimer()
+			require.Equal(b, rows, vec.Length())
+			require.Equal(b, test.isNull, vec.IsNull(rows-1))
+			if !test.isNull {
+				if test.oid == types.T_int64 {
+					require.Equal(b, int64(42), GetFixedAtNoTypeCheck[int64](vec, rows-1))
+				} else {
+					require.Equal(b, test.value, vec.GetBytesAt(rows-1))
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkAppendFixedListReuse measures one public bulk append into a vector
+// whose physical capacity is retained between iterations.
+func BenchmarkAppendFixedListReuse(b *testing.B) {
+	for _, size := range []int{1, 8, 15, 16, 128, 2048} {
+		for _, mode := range []string{"flat", "flat_mask", "mixed"} {
+			if mode == "mixed" && size < 128 {
+				continue
+			}
+			b.Run(mode+"_"+strconv.Itoa(size), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				vec := NewVec(types.T_int64.ToType(), mp)
+				b.Cleanup(func() {
+					defer mpool.DeleteMPool(mp)
+					vec.Free(mp)
+					require.Zero(b, mp.CurrNB())
+					require.Zero(b, mp.OnHeapCurrNB())
+				})
+				values := make([]int64, size)
+				for i := range values {
+					values[i] = int64(i)
+				}
+				var nulls []bool
+				if mode != "flat" {
+					nulls = make([]bool, size)
+					if mode == "mixed" {
+						for i := 0; i < size; i += 8 {
+							nulls[i] = true
+						}
+					}
+				}
+				if err := vec.PreExtend(size, mp); err != nil {
+					b.Fatal(err)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					vec.ResetWithSameType()
+					if err := AppendFixedList(vec, values, nulls, mp); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+				require.Equal(b, size, vec.Length())
+				for i := range values {
+					if mode == "mixed" && nulls[i] {
+						require.True(b, vec.IsNull(uint64(i)))
+					} else {
+						require.False(b, vec.IsNull(uint64(i)))
+						require.Equal(b, values[i], GetFixedAtNoTypeCheck[int64](vec, i))
+					}
+				}
+			})
+		}
+	}
+}
+
+var appendVarlenBenchSink int
+
+// BenchmarkAppendVarlenList measures public bulk appends for non-inline values.
+// Cold makes a new vector per operation; reuse retains descriptor and area
+// capacity. The source values are prepared outside the timer.
+func BenchmarkAppendVarlenList(b *testing.B) {
+	const payloadLength = 64
+	for _, size := range []int{1, 8, 15, 16, 128, 2048} {
+		payload := bytes.Repeat([]byte{'x'}, payloadLength)
+		byteValues := make([][]byte, size)
+		stringValues := make([]string, size)
+		for i := range byteValues {
+			byteValues[i] = payload
+			stringValues[i] = string(payload)
+		}
+		for _, tc := range []struct {
+			name string
+			oid  types.T
+			add  func(*Vector, *mpool.MPool) error
+		}{
+			{"bytes_varbinary", types.T_varbinary, func(v *Vector, mp *mpool.MPool) error {
+				return AppendBytesList(v, byteValues, nil, mp)
+			}},
+			{"string_varchar", types.T_varchar, func(v *Vector, mp *mpool.MPool) error {
+				return AppendStringList(v, stringValues, nil, mp)
+			}},
+		} {
+			for _, reuse := range []bool{false, true} {
+				mode := "cold"
+				if reuse {
+					mode = "reuse"
+				}
+				b.Run(tc.name+"_"+mode+"_"+strconv.Itoa(size), func(b *testing.B) {
+					mp := mpool.MustNewZero()
+					b.Cleanup(func() {
+						defer mpool.DeleteMPool(mp)
+						require.Zero(b, mp.CurrNB())
+						require.Zero(b, mp.OnHeapCurrNB())
+					})
+					check := func(v *Vector) {
+						require.Equal(b, size, v.Length())
+						require.Equal(b, payload, v.GetBytesAt(0))
+						require.Equal(b, payload, v.GetBytesAt(size-1))
+					}
+					if reuse {
+						vec := NewVec(tc.oid.ToType(), mp)
+						b.Cleanup(func() { vec.Free(mp) })
+						require.NoError(b, tc.add(vec, mp))
+						check(vec)
+						b.ReportAllocs()
+						b.ResetTimer()
+						for range b.N {
+							vec.ResetWithSameType()
+							if err := tc.add(vec, mp); err != nil {
+								b.Fatal(err)
+							}
+							appendVarlenBenchSink += len(vec.GetBytesAt(size - 1))
+						}
+						b.StopTimer()
+						check(vec)
+					} else {
+						func() {
+							vec := NewVec(tc.oid.ToType(), mp)
+							defer vec.Free(mp)
+							require.NoError(b, tc.add(vec, mp))
+							check(vec)
+						}()
+						b.ReportAllocs()
+						b.ResetTimer()
+						for range b.N {
+							vec := NewVec(tc.oid.ToType(), mp)
+							if err := tc.add(vec, mp); err != nil {
+								vec.Free(mp)
+								b.Fatal(err)
+							}
+							appendVarlenBenchSink += len(vec.GetBytesAt(size - 1))
+							vec.Free(mp)
+						}
+					}
+				})
+			}
+		}
+	}
+}

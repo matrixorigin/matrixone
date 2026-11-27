@@ -61,9 +61,13 @@ func Test_Sinker(t *testing.T) {
 		blkCnt, blkRows, true, mp,
 	)
 	require.NoError(t, err)
-	bat1 := readutil.NewCNTombstoneBatch(&pkType, objectio.HiddenColumnSelection_None)
+	bat1 := readutil.NewCNTombstoneBatch(&pkType, objectio.HiddenColumnSelection_None, mp)
 	bat1.SetVector(0, rowIDVec)
-	bat1.SetVector(1, pkVec.GetDownstreamVector())
+	// Copy the mock pk column into mp, the pool the test sorts bat1 with.
+	pkCopy, err := pkVec.GetDownstreamVector().Dup(mp)
+	require.NoError(t, err)
+	pkVec.Close()
+	bat1.SetVector(1, pkCopy)
 	bat1.SetRowCount(rowIDVec.Length())
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*100)
@@ -79,6 +83,7 @@ func Test_Sinker(t *testing.T) {
 		data, err := bat1.Window(i, end)
 		require.NoError(t, err)
 		err = sinker1.Write(ctx, data)
+		data.FreeWindow()
 		require.NoError(t, err)
 	}
 
@@ -106,10 +111,10 @@ func Test_Sinker(t *testing.T) {
 	)
 	ioutil.Start("")
 	defer ioutil.Stop("")
-	bat2 := readutil.NewCNTombstoneBatch(&pkType, hiddenSels)
-	buffer := readutil.NewCNTombstoneBatch(&pkType, hiddenSels)
+	bat2 := readutil.NewCNTombstoneBatch(&pkType, hiddenSels, mp)
+	buffer := readutil.NewCNTombstoneBatch(&pkType, hiddenSels, mp)
 	for {
-		done, err := r.Read(ctx, buffer.Attrs, nil, mp, buffer)
+		done, err := r.Read(ctx, objectio.GetTombstoneAttrs(hiddenSels), nil, mp, buffer)
 		require.NoError(t, err)
 		if done {
 			break
@@ -158,8 +163,7 @@ func Test_Sinker(t *testing.T) {
 		require.Equalf(t, pks1[pos], pks2[pos], "pos:%d, pks1:%d, pks2:%d", pos, pks1[pos], pks2[pos])
 	}
 
-	pkVec.Close()
-	rowIDVec.Free(mp)
+	bat1.Clean(mp)
 	bat2.Clean(mp)
 
 	sinker1.Close()

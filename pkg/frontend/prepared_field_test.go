@@ -35,6 +35,7 @@ import (
 func TestPreparedFieldHistoryCacheAndMigration(t *testing.T) {
 	ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 25301,
 		"select field(case when ? then ? else null end, 'Z', 'A', 'a')")
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, User: rootName, TenantID: sysAccountID, UserID: rootID})
 	prepared.proc = cw.proc
 	t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
 	original := prepared.PreparePlan.String()
@@ -44,7 +45,8 @@ func TestPreparedFieldHistoryCacheAndMigration(t *testing.T) {
 		if prepared.params != nil {
 			prepared.params.Free(cw.proc.Mp())
 		}
-		prepared.params = vector.NewVec(types.T_text.ToType())
+		prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+		prepared.paramsMP = cw.proc.Mp()
 		require.NoError(t, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
 		require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), null, cw.proc.Mp()))
 		prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(typ), 0}
@@ -289,7 +291,8 @@ func TestPreparedFieldCandidateHistory(t *testing.T) {
 			prepared.proc = cw.proc
 			t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
 			for _, r := range tc.runs {
-				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+				prepared.paramsMP = cw.proc.Mp()
 				require.NoError(t, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
 				require.NoError(t, vector.AppendBytes(prepared.params, []byte(r.value), r.typ == defines.MYSQL_TYPE_NULL, cw.proc.Mp()))
 				prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(r.typ), 0}
@@ -350,7 +353,8 @@ func TestPreparedFieldPlanInvalidationKeepsHistory(t *testing.T) {
 			execute := func(null bool, want uint64, fail bool) {
 				cw.discardRuntimeCacheCandidate()
 				prepared.clearBinaryParamState(cw.proc)
-				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+				prepared.paramsMP = cw.proc.Mp()
 				require.NoError(t, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
 				require.NoError(t, vector.AppendBytes(prepared.params, []byte("a"), null, cw.proc.Mp()))
 				typ := defines.MYSQL_TYPE_VAR_STRING

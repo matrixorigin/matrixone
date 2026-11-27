@@ -16,13 +16,14 @@ package gc
 
 import (
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"go.uber.org/zap"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -148,7 +149,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 	)
 	defer buffer.Close(e.mp)
 	transObjects := make(map[string]map[uint64]*ObjectEntry, 100)
-	coarseFilter, err := MakeBloomfilterCoarseFilter(
+	coarseFilter, releaseCoarse, err := MakeBloomfilterCoarseFilter(
 		ctx,
 		e.config.coarseEstimateRows,
 		e.config.coarseProbility,
@@ -164,6 +165,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer releaseCoarse()
 
 	fineFilter, err := MakeSnapshotAndPitrFineFilter(
 		e.ts,
@@ -178,7 +180,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		return err
 	}
 
-	e.result.vecToGC = vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+	e.result.vecToGC = vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0), e.mp)
 	finalSinker, err := MakeFinalCanGCSinker(e.result.vecToGC, e.mp)
 	if err != nil {
 		return err
@@ -206,7 +208,7 @@ func (e *CheckpointBasedGCJob) Result() (*vector.Vector, []objectio.ObjectStats)
 }
 
 func dataProcess(b *bloomfilter.BloomFilter, vec *vector.Vector, pool *mpool.MPool) error {
-	gcVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+	gcVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0), pool)
 	for i := 0; i < vec.Length(); i++ {
 		stats := objectio.ObjectStats(vec.GetBytesAt(i))
 		if err := vector.AppendBytes(
@@ -224,7 +226,7 @@ func MakeBloomfilterCoarseFilter(
 	ctx context.Context,
 	rowCount int,
 	probability float64,
-	buffer containers.IBatchBuffer,
+	buffer *containers.OneSchemaBatchBuffer,
 	location objectio.Location,
 	ckpVersion uint32,
 	ts *types.TS,
@@ -234,12 +236,13 @@ func MakeBloomfilterCoarseFilter(
 	fs fileservice.FileService,
 ) (
 	FilterFn,
+	func(),
 	error,
 ) {
 	reader := logtail.NewCKPReader(ckpVersion, location, mp, fs)
 	var err error
 	if err = reader.ReadMeta(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	bf, err := BuildBloomfilter(
 		ctx,
@@ -252,8 +255,10 @@ func MakeBloomfilterCoarseFilter(
 		dataProcess,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	// The returned filter reads bf; release frees it once the filter is done.
+	release := func() { bf.Free() }
 	return func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,
@@ -264,7 +269,7 @@ func MakeBloomfilterCoarseFilter(
 		dropTSs := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
 		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
-		nameVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+		nameVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0), mp)
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
 			stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
 			if err = vector.AppendBytes(
@@ -323,7 +328,7 @@ func MakeBloomfilterCoarseFilter(
 		)
 		return nil
 
-	}, nil
+	}, release, nil
 }
 
 // buildTableExistenceMap creates a combined map of table IDs from both snapshotMeta and catalog
@@ -348,11 +353,18 @@ func buildTableExistenceMap(snapshotMeta *logtail.SnapshotMeta, checkpointCli ch
 		itTable := db.MakeTableIt(true)
 		for itTable.Valid() {
 			table := itTable.Get().GetPayload()
+			// The MVCC chain behind GetDeleteAtLocked is mutated by concurrent
+			// catalog drops (DBEntry.DropTableEntryByID holds the entry write
+			// lock around DropEntryLocked -> DeleteLocked -> InsertLocked), so
+			// the GC reader must hold the same entry's read lock while taking
+			// the delete-at snapshot for this table.
+			table.RLock()
 			drop := table.GetDeleteAtLocked()
 			if drop.IsEmpty() {
 				tableID := table.GetID()
 				tableExistenceMap[tableID] = true
 			}
+			table.RUnlock()
 			itTable.Next()
 		}
 	}

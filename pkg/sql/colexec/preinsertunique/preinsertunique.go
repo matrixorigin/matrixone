@@ -17,7 +17,6 @@ package preinsertunique
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -124,22 +123,24 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 			preInsertUnique.ctr.acceptedIters[i] = accepted.NewIterator()
 		}
 		if odkuArbitration {
+			// Accepted rows are retained state grown through the retained view.
+			retainedMP, err := preInsertUnique.retainedAllocation.MP(proc.Mp())
+			if err != nil {
+				preInsertUnique.freeAcceptedState(proc)
+				return err
+			}
+			preInsertUnique.ctr.acceptedMP = retainedMP
 			preInsertUnique.ctr.acceptedRows = make([]*vector.Vector, keyCount)
 			for i := range keyCount {
-				acceptedRows, err := vector.NewOffHeapVecWithTypeAndAllocation(
-					types.T_int64.ToType(), preInsertUnique.retainedAllocation)
-				if err != nil {
-					preInsertUnique.freeAcceptedState(proc)
-					return err
-				}
-				preInsertUnique.ctr.acceptedRows[i] = acceptedRows
+				preInsertUnique.ctr.acceptedRows[i] = vector.NewVec(
+					types.T_int64.ToType(), retainedMP)
 			}
 		}
 	}
 	return nil
 }
 
-func (preInsertUnique *PreInsertUnique) initBuf(bat *batch.Batch, uniqueColumnPos []int32, pkPos int, isUpdate bool) {
+func (preInsertUnique *PreInsertUnique) initBuf(bat *batch.Batch, uniqueColumnPos []int32, pkPos int, isUpdate bool, mp *mpool.MPool) {
 	if preInsertUnique.ctr.buf != nil {
 		preInsertUnique.ctr.buf.CleanOnlyData()
 		return
@@ -147,11 +148,9 @@ func (preInsertUnique *PreInsertUnique) initBuf(bat *batch.Batch, uniqueColumnPo
 
 	if isUpdate {
 		preInsertUnique.ctr.buf = batch.NewWithSize(3)
-		preInsertUnique.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
-		preInsertUnique.ctr.buf.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
+		preInsertUnique.ctr.buf.Vecs[2] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	} else {
 		preInsertUnique.ctr.buf = batch.NewWithSize(2)
-		preInsertUnique.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 	}
 
 	if len(uniqueColumnPos) == 1 {
@@ -159,11 +158,11 @@ func (preInsertUnique *PreInsertUnique) initBuf(bat *batch.Batch, uniqueColumnPo
 		keyType := types.T(ukType.Id).ToType()
 		keyType.Width = ukType.Width
 		keyType.Scale = ukType.Scale
-		preInsertUnique.ctr.buf.Vecs[0] = vector.NewVec(keyType)
+		preInsertUnique.ctr.buf.Vecs[0] = vector.NewVec(keyType, mp)
 	} else {
-		preInsertUnique.ctr.buf.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		preInsertUnique.ctr.buf.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	}
-	preInsertUnique.ctr.buf.Vecs[1] = vector.NewVec(*bat.Vecs[pkPos].GetType())
+	preInsertUnique.ctr.buf.Vecs[1] = vector.NewVec(*bat.Vecs[pkPos].GetType(), mp)
 }
 
 func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResult, error) {
@@ -189,7 +188,7 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 	uniqueColumnPos := preInsertUnique.PreInsertCtx.Columns
 	pkPos := int(preInsertUnique.PreInsertCtx.PkColumn)
 	isUpdate := inputBat.Vecs[len(inputBat.Vecs)-1].GetType().Oid == types.T_Rowid
-	preInsertUnique.initBuf(inputBat, uniqueColumnPos, pkPos, isUpdate)
+	preInsertUnique.initBuf(inputBat, uniqueColumnPos, pkPos, isUpdate, proc.Mp())
 
 	colCount := len(uniqueColumnPos)
 
@@ -208,6 +207,9 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 		if err != nil {
 			return result, err
 		}
+		// SerialWithCompacted's bitmap is ours; CompactSingleIndexCol's is
+		// the input vector's.
+		defer bitMap.Free()
 	}
 	preInsertUnique.ctr.buf.SetRowCount(preInsertUnique.ctr.buf.Vecs[0].Length())
 
@@ -261,13 +263,14 @@ func (preInsertUnique *PreInsertUnique) callODKUTargetArbitration(
 		}
 		preInsertUnique.ctr.acceptedKeyVecs[i][0] = inputBat.Vecs[keyPos]
 	}
+	retainedMP, err := preInsertUnique.retainedAllocation.MP(proc.Mp())
+	if err != nil {
+		return vm.CancelResult, err
+	}
 	if preInsertUnique.ctr.acceptedTarget == nil {
-		var err error
-		preInsertUnique.ctr.acceptedTarget, err = vector.NewOffHeapVecWithTypeAndAllocation(
-			*inputBat.Vecs[pkColumn].GetType(), preInsertUnique.retainedAllocation)
-		if err != nil {
-			return vm.CancelResult, err
-		}
+		preInsertUnique.ctr.acceptedMP = retainedMP
+		preInsertUnique.ctr.acceptedTarget = vector.NewVec(
+			*inputBat.Vecs[pkColumn].GetType(), retainedMP)
 	} else if !preInsertUnique.ctr.acceptedTarget.GetType().Eq(*inputBat.Vecs[pkColumn].GetType()) {
 		return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx,
 			"ODKU target primary-key type changed between input batches")
@@ -275,14 +278,10 @@ func (preInsertUnique *PreInsertUnique) callODKUTargetArbitration(
 
 	if preInsertUnique.ctr.buf == nil {
 		preInsertUnique.ctr.buf = batch.NewWithSize(outputColumns + 1)
-		if len(inputBat.Attrs) >= outputColumns {
-			attrs := append([]string(nil), inputBat.Attrs[:outputColumns]...)
-			preInsertUnique.ctr.buf.SetAttributes(append(attrs, "__mo_odku_target_pk"))
-		}
 		for i, vec := range inputBat.Vecs[:outputColumns] {
-			preInsertUnique.ctr.buf.Vecs[i] = vector.NewVec(*vec.GetType())
+			preInsertUnique.ctr.buf.Vecs[i] = vector.NewVec(*vec.GetType(), proc.Mp())
 		}
-		preInsertUnique.ctr.buf.Vecs[outputColumns] = vector.NewVec(*inputBat.Vecs[pkColumn].GetType())
+		preInsertUnique.ctr.buf.Vecs[outputColumns] = vector.NewVec(*inputBat.Vecs[pkColumn].GetType(), proc.Mp())
 	} else {
 		preInsertUnique.ctr.buf.CleanOnlyData()
 	}
@@ -346,7 +345,7 @@ func (preInsertUnique *PreInsertUnique) callODKUTargetArbitration(
 			}
 			targetRow := int64(preInsertUnique.ctr.acceptedTarget.Length())
 			if err := preInsertUnique.ctr.acceptedTarget.UnionOne(
-				inputBat.Vecs[pkColumn], int64(row), proc.Mp()); err != nil {
+				inputBat.Vecs[pkColumn], int64(row), retainedMP); err != nil {
 				return vm.CancelResult, err
 			}
 			for keyIdx := range ctx.KeyColumns {
@@ -364,7 +363,7 @@ func (preInsertUnique *PreInsertUnique) callODKUTargetArbitration(
 						"ODKU accepted-key state changed during row commit")
 				}
 				if err := vector.AppendFixed(
-					preInsertUnique.ctr.acceptedRows[keyIdx], targetRow, false, proc.Mp()); err != nil {
+					preInsertUnique.ctr.acceptedRows[keyIdx], targetRow, false, retainedMP); err != nil {
 					return vm.CancelResult, err
 				}
 			}
@@ -493,8 +492,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		preInsertUnique.ctr.buf.CleanOnlyData()
 	}
 
-	sels := vector.GetSels()
-	defer vector.PutSels(sels)
+	var sels []int64
 	sels = sels[:0]
 	var firstGenerated uint64
 	for row := 0; row < inputBat.RowCount(); row++ {
@@ -589,7 +587,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			}
 		}
 		if autoIncrementReorder {
-			preInsertUnique.initInsertIgnoreOutput(inputBat, outputColumns)
+			preInsertUnique.initInsertIgnoreOutput(inputBat, outputColumns, proc.Mp())
 			output := preInsertUnique.ctr.buf.Vecs[autoOutputColumn]
 			if generated {
 				if err := preInsertUnique.appendAutoIncrementCandidate(proc, autoIncrementVec, row); err != nil {
@@ -634,7 +632,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		duplicateWarnings.Flush(proc)
 		return result, nil
 	}
-	preInsertUnique.initInsertIgnoreOutput(inputBat, outputColumns)
+	preInsertUnique.initInsertIgnoreOutput(inputBat, outputColumns, proc.Mp())
 	if autoIncrementReorder {
 		// The final PK was constructed once, in accepted-row order. Never copy
 		// provisional PKs or retain per-row candidate objects for a second pass.
@@ -703,16 +701,13 @@ func buildInsertIgnoreKeyMetadata(ctx *plan.PreInsertUkCtx) []insertIgnoreWarnin
 	return metadata
 }
 
-func (preInsertUnique *PreInsertUnique) initInsertIgnoreOutput(input *batch.Batch, columns int) {
+func (preInsertUnique *PreInsertUnique) initInsertIgnoreOutput(input *batch.Batch, columns int, mp *mpool.MPool) {
 	if preInsertUnique.ctr.buf != nil {
 		return
 	}
 	preInsertUnique.ctr.buf = batch.NewWithSize(columns)
-	if len(input.Attrs) >= columns {
-		preInsertUnique.ctr.buf.SetAttributes(input.Attrs[:columns])
-	}
 	for i, vec := range input.Vecs[:columns] {
-		preInsertUnique.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
+		preInsertUnique.ctr.buf.Vecs[i] = vector.NewVec(*vec.GetType(), mp)
 	}
 }
 

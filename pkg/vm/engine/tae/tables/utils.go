@@ -143,7 +143,22 @@ func LoadPersistedColumnData(
 		for i := range commits {
 			if commits[i].GT(tsForAppendable) || (aborts != nil && aborts[i]) {
 				if deletes == nil {
-					deletes = nulls.NewWithSize(int(location.Rows()))
+					var err error
+					if deletes, err = nulls.NewWithSize(int(location.Rows()), mp); err != nil {
+						if release != nil {
+							release()
+						}
+						for _, vec := range vecs {
+							vec.Close()
+						}
+						// Vectors made before the load, e.g. row IDs.
+						for _, vec := range vectors {
+							if vec != nil {
+								vec.Close()
+							}
+						}
+						return nil, nil, nil, err
+					}
 				}
 				deletes.Add(uint64(i))
 			}

@@ -386,7 +386,7 @@ func makePlan2Int32ConstExpr(v int32) *plan.Expr_Lit {
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e datetime)
 func MakeFilterMockBatchs(mp *mpool.MPool) *batch.Batch {
-	bat := batch.New([]string{"a", "b", "c"})
+	bat := batch.NewWithSize(3)
 
 	vecs := make([]*vector.Vector, 3)
 	vecs[0] = testutil.MakeInt32Vector([]int32{
@@ -611,7 +611,6 @@ func newBatch(proc *process.Process, rows int64) []*batch.Batch {
 	pkAttr := make([]string, 2)
 	pkAttr[0] = "compound_key_col"
 	pkAttr[1] = "val"
-	bat.SetAttributes(pkAttr)
 	return []*batch.Batch{bat, nil}
 }
 
@@ -1108,7 +1107,7 @@ func TestConstantTranspose(t *testing.T) {
 		require.Equal(t, before, input)
 		require.Equal(t, ">=", result.GetF().Args[1].GetF().Func.ObjName)
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(floatType)
+		bat.Vecs[0] = vector.NewVec(floatType, mp)
 		defer bat.Clean(mp)
 		for i, value := range []float64{1e-17, 2, 0, 0} {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, i == 3, mp))
@@ -1183,65 +1182,4 @@ func TestConstantTranspose(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestShrinkWithSelsFailureFreedByOperator(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
-	require.NoError(t, err)
-	account, err := registry.Open(1)
-	require.NoError(t, err)
-	accountFinalized := false
-	defer func() {
-		if !accountFinalized {
-			account.Seal()
-			_, cleanupErr := registry.Finalize(account)
-			if cleanupErr != nil {
-				t.Errorf("finalize account: %v", cleanupErr)
-			}
-		}
-	}()
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
-	require.NoError(t, err)
-	data := types.EncodeSlice([]int64{1, 2, 3})
-	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
-	require.NoError(t, err)
-	defer func() {
-		if lease != nil {
-			lease.Release()
-		}
-	}()
-	vec, err := vector.NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), 3, data, lease, selection)
-	require.NoError(t, err)
-	defer func() {
-		if vec != nil {
-			vec.Free(proc.Mp())
-		}
-	}()
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vec
-	bat.SetRowCount(3)
-	filter := NewArgument()
-	filter.ctr.buf = bat
-	vec = nil // the operator owns the batch and vector
-	defer func() {
-		if filter != nil {
-			filter.Free(proc, true, nil)
-			filter.Release()
-		}
-	}()
-	out, err := filter.ctr.shrinkWithSels(proc, bat, []int64{1, 2})
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	require.Nil(t, out)
-	require.Equal(t, 3, bat.RowCount())
-	filter.Free(proc, true, err)
-	filter.Release()
-	filter = nil
-	lease.Release()
-	lease = nil
-	require.Zero(t, proc.Mp().CurrNB())
-	account.Seal()
-	accountFinalized = true
-	_, err = registry.Finalize(account)
-	require.NoError(t, err)
 }

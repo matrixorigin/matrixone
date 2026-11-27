@@ -121,8 +121,8 @@ func (s *Server) applyViewMetadataAdmission(
 
 func (s *Server) revokeViewMetadataGeneration(authoritative uint64) {
 	s.viewMetadataRevocationOnce.Do(func() {
-		if s.viewMetadataAdmissionCancel != nil {
-			s.viewMetadataAdmissionCancel()
+		if s.lifecycleCancel != nil {
+			s.lifecycleCancel()
 		}
 		// Mark the lifecycle closed before scheduling full shutdown. This shares
 		// the Start/Close lock and explicitly releases a pre-start listener.

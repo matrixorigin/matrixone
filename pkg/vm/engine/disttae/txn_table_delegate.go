@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -56,21 +57,33 @@ func newTxnTableWithItem(
 	process *process.Process,
 	eng engine.Engine,
 ) *txnTable {
+	source := item.SchemaSource()
+	var defs []engine.TableDef
+	var wire []byte
+	if !source.Valid() {
+		var err error
+		defs, err = item.BuildEngineDefs()
+		if err != nil {
+			panic(err)
+		}
+		wire = item.ConstraintBytes()
+	}
 	tbl := &txnTable{
 		db:            db,
 		accountId:     item.AccountId,
 		tableId:       item.Id,
 		version:       item.Version,
 		tableName:     item.Name,
-		defs:          item.Defs,
-		tableDef:      item.TableDef,
+		source:        source,
+		defs:          defs,
+		tableDef:      item.ReadPlanTableDef(),
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
 		relKind:       item.Kind,
 		viewdef:       item.ViewDef,
 		comment:       item.Comment,
 		createSql:     item.CreateSql,
-		constraint:    item.Constraint,
+		constraint:    wire,
 		partitioned:   item.Partitioned,
 		partition:     item.Partition,
 		extraInfo:     item.ExtraInfo,
@@ -152,6 +165,13 @@ func (tbl *txnTableDelegate) CreatedInCurrentTxn(ctx context.Context) (bool, err
 		return tbl.combined.tbl.CreatedInCurrentTxn(ctx)
 	}
 	return tbl.origin.CreatedInCurrentTxn(ctx)
+}
+
+func (tbl *txnTableDelegate) VisibleObjectCount(ctx context.Context) (int, error) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.VisibleObjectCount(ctx)
+	}
+	return tbl.origin.VisibleObjectCount(ctx)
 }
 
 func (tbl *txnTableDelegate) CollectObjectList(ctx context.Context, from, to types.TS, bat *batch.Batch, mp *mpool.MPool) error {
@@ -766,6 +786,7 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 		)
 	}
 
+	resource.LockReadPKFromContext(ctx).MarkRemotePKSubstagesUnavailable()
 	modify := false
 	keyVector := bat.GetVector(pkIndex)
 	err = tbl.forwardRead(
@@ -893,6 +914,13 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeUpserted(
 	return modify, nil
 }
 
+func (tbl *txnTableDelegate) ValidatedCatalogKind() (string, bool) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.primary.ValidatedCatalogKind()
+	}
+	return tbl.origin.ValidatedCatalogKind()
+}
+
 func (tbl *txnTableDelegate) TableDefs(
 	ctx context.Context,
 ) ([]engine.TableDef, error) {
@@ -932,22 +960,24 @@ func (tbl *txnTableDelegate) GetPrimaryKeys(
 func (tbl *txnTableDelegate) Write(
 	ctx context.Context,
 	bat *batch.Batch,
+	attrs []string,
 ) error {
 	if tbl.combined.is {
-		return tbl.combined.tbl.Write(ctx, bat)
+		return tbl.combined.tbl.Write(ctx, bat, attrs)
 	}
-	return tbl.origin.Write(ctx, bat)
+	return tbl.origin.Write(ctx, bat, attrs)
 }
 
 func (tbl *txnTableDelegate) Delete(
 	ctx context.Context,
 	bat *batch.Batch,
+	attrs []string,
 	name string,
 ) error {
 	if tbl.combined.is {
-		return tbl.combined.tbl.Delete(ctx, bat, name)
+		return tbl.combined.tbl.Delete(ctx, bat, attrs, name)
 	}
-	return tbl.origin.Delete(ctx, bat, name)
+	return tbl.origin.Delete(ctx, bat, attrs, name)
 }
 
 func (tbl *txnTableDelegate) SoftDeleteObject(ctx context.Context, objID *objectio.ObjectId, isTombstone bool) error {
@@ -1042,6 +1072,10 @@ func (tbl *txnTableDelegate) TableColumns(
 		return tbl.combined.tbl.TableColumns(ctx)
 	}
 	return tbl.origin.TableColumns(ctx)
+}
+
+func (tbl *txnTableDelegate) MaxAndMinValuesUsePlannerColumns() bool {
+	return !tbl.combined.is && tbl.origin.MaxAndMinValuesUsePlannerColumns()
 }
 
 func (tbl *txnTableDelegate) MaxAndMinValues(
@@ -1551,9 +1585,6 @@ func decodeShardingReadBatch(ctx context.Context, response []byte, output *batch
 		return false, moerr.NewInvalidInputNoCtx("truncated sharding read batch")
 	}
 	if err := output.UnmarshalBinaryWithAnyMp(response[5:5+int(length)], mp); err != nil {
-		return false, err
-	}
-	if err := objectio.JSONReadSetFromContext(ctx).PublishMutableColumnsForEvaluation(output.Vecs, mp, output.RowCount()); err != nil {
 		return false, err
 	}
 	return false, nil

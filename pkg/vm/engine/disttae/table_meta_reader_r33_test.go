@@ -40,6 +40,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -82,18 +83,17 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 	// One real readable source object, written by an UNHOOKED writer -
 	// the committed source state owns it.
 	srcRows := batch.NewWithSize(3)
-	srcRows.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a", "v"})
 	srcRowids := make([]types.Rowid, 16)
 	srcPKs := make([]int64, 16)
 	for i := range srcRowids {
 		srcRowids[i] = types.RandomRowid()
 		srcPKs[i] = int64(i + 1)
 	}
-	rv := vector.NewVec(types.T_Rowid.ToType())
+	rv := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(rv, srcRowids, nil, mp))
-	av := vector.NewVec(types.T_int64.ToType())
+	av := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(av, srcPKs, nil, mp))
-	vv := vector.NewVec(types.T_int64.ToType())
+	vv := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(vv, srcPKs, nil, mp))
 	srcRows.Vecs[0] = rv
 	srcRows.Vecs[1] = av
@@ -115,21 +115,21 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 	// tombstone phase materializes it exactly the production clone
 	// path does.
 	delBat := batch.NewWithSize(2)
-	delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
+	delBatAttrs := []string{objectio.PhysicalAddr_Attr, "a"}
 	delRowids := make([]types.Rowid, 16)
 	delPKs := make([]int64, 16)
 	for i := range delRowids {
 		delRowids[i] = types.RandomRowid()
 		delPKs[i] = int64(i + 1)
 	}
-	drv := vector.NewVec(types.T_Rowid.ToType())
+	drv := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(drv, delRowids, nil, mp))
-	dpv := vector.NewVec(types.T_int64.ToType())
+	dpv := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(dpv, delPKs, nil, mp))
 	delBat.Vecs[0] = drv
 	delBat.Vecs[1] = dpv
 	delBat.SetRowCount(16)
-	txn.appendWorkspaceEntryLocked(Entry{
+	appendWorkspaceEntryForTest(t, txn, Entry{
 		typ:          DELETE,
 		accountId:    1,
 		databaseId:   tbl.db.databaseId,
@@ -137,6 +137,7 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 		databaseName: "db",
 		tableName:    tbl.tableName,
 		bat:          delBat,
+		attrs:        delBatAttrs,
 	})
 
 	// The ACTUAL exported constructor - entering here, not a struct
@@ -183,7 +184,7 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 		reader := variant.build()
 
 		// The data phase drives the data-materializing family.
-		dataOut := colexec.AllocCNS3ResultBat(false)
+		dataOut := colexec.AllocCNS3ResultBat(false, mp)
 		driveErr := r33RecoverGuarded(func() error {
 			_, derr := reader.collectDataOfAObjsAndInMem(
 				ctx, mp, dataOut, seqnums, attrs, colTypes, objRelData)
@@ -203,7 +204,7 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 		dataOut.Clean(mp)
 
 		// The tombstone phase drives the tombstone-materializing family.
-		tombOut := colexec.AllocCNS3ResultBat(true)
+		tombOut := colexec.AllocCNS3ResultBat(true, mp)
 		tombErr := r33RecoverGuarded(func() error {
 			_, terr := reader.collectTombstoneOfAObjsAndInMem(
 				ctx, mp, tombOut,
@@ -242,7 +243,7 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 	// assertions: the drive reserves the fresh name BEFORE durability
 	// and the record choke converts it.
 	boundReader := actualReader(txn.SinkerCapacityOption())
-	boundOut := colexec.AllocCNS3ResultBat(false)
+	boundOut := colexec.AllocCNS3ResultBat(false, mp)
 	_, err = boundReader.collectDataOfAObjsAndInMem(
 		ctx, mp, boundOut, seqnums, attrs, colTypes, objRelData)
 	require.NoError(t, err,
@@ -264,13 +265,13 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 
 	// The record choke converts the bound reservation, settling the
 	// ledger exactly the production destination Write does.
-	recBat := colexec.AllocCNS3ResultBat(false)
+	recBat := colexec.AllocCNS3ResultBat(false, mp)
 	defer recBat.Clean(mp)
 	require.NoError(t, colexec.ExpandObjectStatsToBatch(
 		mp, false, recBat, false, matStats))
 	require.NoError(t, txn.WriteFile(
 		INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-		boundName, recBat, txn.tnStores[0]))
+		boundName, recBat, catalog.ObjectInsertAttrs, txn.tnStores[0]))
 	_, reserved = txn.UnsettledCleanupOwnershipForTest()
 	require.Empty(t, reserved, "the record converted the bound reservation")
 	_, live, inFlight = e.InspectUnpublishedPendingForTest()

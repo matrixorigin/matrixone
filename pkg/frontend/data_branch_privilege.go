@@ -876,10 +876,11 @@ func validateActiveBranchChildTableIDs(
 		}
 
 		sql := fmt.Sprintf(
-			"select table_id from %s.%s where table_deleted = false and level != '%s' and table_id in (%s)",
+			"select table_id from %s.%s where table_deleted = false and level not in ('%s', '%s') and table_id in (%s)",
 			catalog.MO_CATALOG,
 			catalog.MO_BRANCH_METADATA,
 			databranchutils.AlterLineageLevel,
+			databranchutils.TruncateLineageLevel,
 			formatUintList(idList[start:end]),
 		)
 		sqlRet, err := runSql(sysCtx, ses, bh, sql, nil, nil)

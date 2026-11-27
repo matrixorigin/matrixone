@@ -150,7 +150,7 @@ func (s *checkConstraintsState) start(
 ) error {
 	s.stopStreaming(proc)
 	if s.batch == nil {
-		s.batch = tf.createResultBatch()
+		s.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		s.batch.CleanOnlyData()
 	}
@@ -297,7 +297,7 @@ func (s *checkConstraintsState) stopStreaming(_ *process.Process) {
 }
 
 func (s *checkConstraintsState) fillBatch(tf *TableFunction, proc *process.Process) error {
-	positions := checkConstraintOutputPositions(s.batch.Attrs)
+	positions := checkConstraintOutputPositions(tf.Attrs)
 	rowCount := 0
 	for rowCount < checkConstraintBatchSize {
 		if s.limited && s.emitted >= s.limit {

@@ -41,7 +41,7 @@ func TestAggregateCollationAdmission(t *testing.T) {
 						require.Zero(t, mp.CurrNB())
 						mpool.DeleteMPool(mp)
 					}()
-					input := vector.NewVec(typ)
+					input := vector.NewVec(typ, mp)
 					defer input.Free(mp)
 					require.NoError(t, vector.AppendBytes(input, []byte("A"), false, mp))
 					source, err := MakeAgg(mp, id, false, typ)
@@ -50,7 +50,7 @@ func TestAggregateCollationAdmission(t *testing.T) {
 					require.NoError(t, source.GroupGrow(1))
 					require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
 					// The declared argument stays legacy; only the inner wire vector changes.
-					source.(PrepareParamKindStateAccessor).PrepareParamKindVectorForChunk(0).GetType().CollationVersion = revision
+					source.(aggregateBaseCarrier).aggregateBase().state[0].vecs[0].GetType().CollationVersion = revision
 					var wire bytes.Buffer
 					if spill {
 						require.NoError(t, source.(SpillStateCodec).SaveSpillIntermediateRows(0, []int32{0}, &wire))

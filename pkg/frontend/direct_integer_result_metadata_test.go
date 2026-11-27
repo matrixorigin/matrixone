@@ -48,7 +48,7 @@ func TestDirectIntegerBinaryRows(t *testing.T) {
 					bat := batch.NewWithSize(2)
 					defer bat.Clean(proc.Mp())
 					for i, v := range []int32{-1, 73} {
-						bat.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+						bat.Vecs[i] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 						require.NoError(t, vector.AppendFixed(bat.Vecs[i], v, null && i == 0, proc.Mp()))
 					}
 					bat.SetRowCount(1)

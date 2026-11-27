@@ -497,8 +497,8 @@ func TestCountTombstoneRows(t *testing.T) {
 	// Create real tombstone object 1 with 20 deletions pointing to the data object
 	writer1 := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	bat1 := batch.NewWithSize(2)
-	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 
 	for i := 0; i < 20; i++ {
 		row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjID, 0, uint32(i))
@@ -528,8 +528,8 @@ func TestCountTombstoneRows(t *testing.T) {
 	// Create real tombstone object 2 with 15 deletions
 	writer2 := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	bat2 := batch.NewWithSize(2)
-	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 
 	for i := 0; i < 15; i++ {
 		row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjID, 0, uint32(20+i))
@@ -603,8 +603,8 @@ func TestCountTombstoneRows(t *testing.T) {
 	// Test deleted tombstone object visibility
 	writer3 := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	bat3 := batch.NewWithSize(2)
-	bat3.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat3.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat3.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat3.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 
 	for i := 0; i < 10; i++ {
 		row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjID, 0, uint32(40+i))
@@ -1003,8 +1003,8 @@ func TestCountTombstoneRowsWithDuplicates(t *testing.T) {
 	// Write sorted data in two batches (simulating block boundaries)
 	// Batch 1: first 8 rows
 	bat1 := batch.NewWithSize(2)
-	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 0; i < 8; i++ {
 		idx := indices[i]
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], allRowIds[idx], false, mp))
@@ -1015,8 +1015,8 @@ func TestCountTombstoneRowsWithDuplicates(t *testing.T) {
 
 	// Batch 2: remaining 7 rows
 	bat2 := batch.NewWithSize(2)
-	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 8; i < len(indices); i++ {
 		idx := indices[i]
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], allRowIds[idx], false, mp))
@@ -1084,8 +1084,8 @@ func TestCountTombstoneRowsObjectVisibility(t *testing.T) {
 	// Create tombstone with deletions for both objects
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 
 	// 10 deletions for object 1
 	for i := 0; i < 10; i++ {
@@ -1224,8 +1224,8 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 	// Write sorted data in batches (simulating block boundaries)
 	// Batch 1: first 8 rows
 	bat1 := batch.NewWithSize(2)
-	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 0; i < 8 && i < len(indices); i++ {
 		idx := indices[i]
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], allRowIds[idx], false, mp))
@@ -1236,8 +1236,8 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 
 	// Batch 2: remaining rows
 	bat2 := batch.NewWithSize(2)
-	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 8; i < len(indices); i++ {
 		idx := indices[i]
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], allRowIds[idx], false, mp))
@@ -1310,8 +1310,8 @@ func TestCollectTombstoneStats_CrossObjectDuplicates(t *testing.T) {
 	// Object 1: Delete rows 0-9
 	writer1 := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	bat1 := batch.NewWithSize(2)
-	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 0; i < 10; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
 		rowid := types.NewRowid(&blkID, uint32(i))
@@ -1332,8 +1332,8 @@ func TestCollectTombstoneStats_CrossObjectDuplicates(t *testing.T) {
 	// Object 2: Delete rows 5-14 (rows 5-9 are duplicates with Object 1)
 	writer2 := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	bat2 := batch.NewWithSize(2)
-	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 5; i < 15; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
 		rowid := types.NewRowid(&blkID, uint32(i))
@@ -1354,8 +1354,8 @@ func TestCollectTombstoneStats_CrossObjectDuplicates(t *testing.T) {
 	// Object 3: Delete rows 10-19 (rows 10-14 are duplicates with Object 2)
 	writer3 := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	bat3 := batch.NewWithSize(2)
-	bat3.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat3.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat3.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat3.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 10; i < 20; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
 		rowid := types.NewRowid(&blkID, uint32(i))
@@ -1409,8 +1409,8 @@ func TestCollectTombstoneStats_CrossObjectAndInMemoryDuplicates(t *testing.T) {
 	// Persisted tombstone: Delete rows 0-9
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 0; i < 10; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
 		rowid := types.NewRowid(&blkID, uint32(i))
@@ -1493,8 +1493,8 @@ func TestCountTombstoneRowsCNCreatedWithAppendable(t *testing.T) {
 	// Create CN-created tombstone (non-appendable) that references the appendable object
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 
 	// 5 deletions for the appendable object
 	for i := 0; i < 5; i++ {
@@ -1556,8 +1556,8 @@ func TestCollectTombstoneStats_MergeVsMapConsistency(t *testing.T) {
 	for objIdx := 0; objIdx < 5; objIdx++ {
 		writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 
 		// Each object has 10 rows: 6 unique + 4 duplicates from previous objects
 		for i := 0; i < 10; i++ {
@@ -1596,8 +1596,8 @@ func TestCollectTombstoneStats_MergeVsMapConsistency(t *testing.T) {
 			sortedPKs[i] = pks[idx]
 		}
 
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 		for i := range sortedRowIds {
 			require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], sortedRowIds[i], false, mp))
 			require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], sortedPKs[i], false, mp))
@@ -1666,8 +1666,8 @@ func TestCollectTombstoneStats_MultiObjectMultiBlock(t *testing.T) {
 
 		for blockIdx := 0; blockIdx < 3; blockIdx++ {
 			bat := batch.NewWithSize(2)
-			bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+			bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 
 			// Each block has 10 rows
 			baseOffset := objIdx*30 + blockIdx*10
@@ -1790,8 +1790,8 @@ func TestCollectTombstoneStats_ComprehensiveAllScenarios(t *testing.T) {
 	// Has 3 duplicates with in-memory tombstones (rowid 2-4)
 	writer1 := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	bat1 := batch.NewWithSize(2)
-	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 
 	for i := 2; i <= 14; i++ { // rowid 2-14 (includes 2-4 duplicates)
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID1, 0)
@@ -1837,8 +1837,8 @@ func TestCollectTombstoneStats_ComprehensiveAllScenarios(t *testing.T) {
 
 	// Block 1: first 15 rows
 	bat2a := batch.NewWithSize(2)
-	bat2a.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat2a.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat2a.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat2a.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 0; i < 15; i++ {
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat2a.Vecs[0], writer2RowIds[i], false, mp))
 		require.NoError(t, vector.AppendFixed[int32](bat2a.Vecs[1], int32(i), false, mp))
@@ -1848,8 +1848,8 @@ func TestCollectTombstoneStats_ComprehensiveAllScenarios(t *testing.T) {
 
 	// Block 2: remaining 15 rows
 	bat2b := batch.NewWithSize(2)
-	bat2b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat2b.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat2b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat2b.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 15; i < 30; i++ {
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat2b.Vecs[0], writer2RowIds[i], false, mp))
 		require.NoError(t, vector.AppendFixed[int32](bat2b.Vecs[1], int32(i), false, mp))
@@ -1876,9 +1876,9 @@ func TestCollectTombstoneStats_ComprehensiveAllScenarios(t *testing.T) {
 
 	// Block 1: rowid 35-41 (7 rows)
 	bat3a := batch.NewWithSize(3)
-	bat3a.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat3a.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat3a.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat3a.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat3a.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat3a.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 	for i := 35; i <= 41; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID2, 0)
 		rowid := types.NewRowid(&blkID, uint32(i))
@@ -1891,9 +1891,9 @@ func TestCollectTombstoneStats_ComprehensiveAllScenarios(t *testing.T) {
 
 	// Block 2: rowid 42-48 (7 rows)
 	bat3b := batch.NewWithSize(3)
-	bat3b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat3b.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat3b.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat3b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat3b.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat3b.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 	for i := 42; i <= 48; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID2, 0)
 		rowid := types.NewRowid(&blkID, uint32(i))
@@ -1906,9 +1906,9 @@ func TestCollectTombstoneStats_ComprehensiveAllScenarios(t *testing.T) {
 
 	// Block 3: rowid 49-54 (6 rows)
 	bat3c := batch.NewWithSize(3)
-	bat3c.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat3c.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat3c.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat3c.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat3c.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat3c.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 	for i := 49; i <= 54; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID2, 0)
 		rowid := types.NewRowid(&blkID, uint32(i))
@@ -2022,9 +2022,9 @@ func TestCountTombstoneStatsWithMergePropagatesInitialReadError(t *testing.T) {
 
 	blockID := types.Blockid{}
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_bool.ToType(), mp)
 	for offset := uint32(1); offset <= 3; offset++ {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(&blockID, offset), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.BuildTS(1, 0), false, mp))
@@ -2077,8 +2077,8 @@ func TestCountTombstoneRowsEdgeCases(t *testing.T) {
 	// Create tombstone
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 
 	for i := 0; i < 10; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
@@ -2231,7 +2231,7 @@ func TestCalculateTableStatsWithAppendableRows(t *testing.T) {
 	// Add appendable rows
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 0; i < 50; i++ {
 		vector.AppendFixed(bat.Vecs[0], int32(i), false, mp)
 	}
@@ -2244,7 +2244,7 @@ func TestCalculateTableStatsWithAppendableRows(t *testing.T) {
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
 			Time:    types.BuildTS(5, uint32(i)),
-			Batch:   bat,
+			Batch:   &ReplayBatch{Batch: bat},
 			Offset:  int64(i),
 			ID:      int64(i),
 			Deleted: false,
@@ -2265,25 +2265,92 @@ func TestCalculateTableStatsWithAppendableRows(t *testing.T) {
 	assert.Equal(t, 0, stats.TombstoneObjectCnt)
 }
 
+func TestReplayInsertPayloadLifetime(t *testing.T) {
+	const payload = "long enough to use the varchar area"
+	for _, mode := range []string{"received", "local", "keys-only"} {
+		t.Run(mode, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			packer := types.NewPacker()
+			defer packer.Close()
+			row := clusterRow{rowID: types.RandomRowid(), ts: types.BuildTS(1, 0), pk: 42, serial: []byte(payload)}
+			src := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(src) })
+			attrs := []string{"rowid", "time", "pk", clusterTestCompoundAttr}
+			rowIDVec := vector.NewVec(types.T_Rowid.ToType(), src)
+			tsVec := vector.NewVec(types.T_TS.ToType(), src)
+			pkVec := vector.NewVec(types.T_int64.ToType(), src)
+			clusterVec := vector.NewVec(types.T_varchar.ToType(), src)
+			newClusterVecOwner(t, src, rowIDVec, tsVec, pkVec, clusterVec)
+			require.NoError(t, vector.AppendFixed(rowIDVec, row.rowID, false, src))
+			require.NoError(t, vector.AppendFixed(tsVec, row.ts, false, src))
+			require.NoError(t, vector.AppendFixed(pkVec, row.pk, false, src))
+			require.NoError(t, vector.AppendBytes(clusterVec, row.serial, false, src))
+			input := mustMarshalVectors(rowIDVec, tsVec, pkVec, clusterVec)
+			state := NewPartitionState("", mode == "keys-only", 42, false)
+			if mode == "local" {
+				state.HandleRowsInsert(t.Context(), input, attrs, 0, packer, mp)
+			} else {
+				msg := api.Entry{EntryType: api.Entry_Insert, TableName: "t", Attrs: attrs, Bat: api.NewEncodedBatch(input)}
+				wire, err := msg.Marshal()
+				require.NoError(t, err)
+				var received api.Entry
+				require.NoError(t, received.Unmarshal(wire))
+				state.HandleLogtailEntry(t.Context(), nil, &received, 0, packer, mp)
+				received.Reset()
+				// The client reuses its receive buffer once the response is
+				// consumed: the rows keep their own copy.
+				clear(wire)
+				// The sender can reuse its encoding buffer once it is on the wire.
+				clear(input)
+			}
+			// The source vectors' owner can reuse their buffers: the encoded
+			// input is a copy, not an alias of them.
+			clear(pkVec.GetData())
+			clear(clusterVec.GetData())
+			clear(clusterVec.GetArea())
+			old := state.Copy()
+			stats := objectio.NewObjectStatsWithObjectID(row.rowID.BorrowObjectID(), true, false, false)
+			require.NoError(t, objectio.SetObjectStatsSize(stats, 1000))
+			require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+			obj := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: row.ts, DeleteTime: types.BuildTS(2, 0)}
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, obj, false))
+			require.Zero(t, state.rows.Len())
+			require.Zero(t, state.rowPrimaryKeyIndex.Len())
+
+			it := old.NewRowsIter(row.ts, nil, false)
+			defer it.Close()
+			require.True(t, it.Next())
+			entry := it.Entry()
+			if mode == "keys-only" {
+				require.Nil(t, entry.Batch)
+			} else {
+				require.Equal(t, row.pk, vector.GetFixedAtWithTypeCheck[int64](entry.Batch.Vecs[2], int(entry.Offset)))
+				require.Equal(t, payload, entry.Batch.Vecs[3].GetStringAt(int(entry.Offset)))
+			}
+			require.Zero(t, mp.CurrNB(), "replay payload cannot require per-row mpool cleanup")
+		})
+	}
+}
+
 func TestCollectDataStatsCountsCompactReplayPhysicalColumns(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	input := batch.NewWithSize(3)
-	input.SetAttributes([]string{"rowid", "time", "id"})
-	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	input.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
+	input.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
 	defer input.Clean(mp)
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], types.RandomRowid(), false, mp))
 	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(1, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(input.Vecs[2], int64(42), false, mp))
 	input.SetRowCount(1)
-	proto, err := batch.BatchToProtoBatch(input)
+	encoded, err := batch.MarshalVectors(input.Vecs)
 	require.NoError(t, err)
 	state := NewPartitionState("test", false, 42, false)
 	packer := types.NewPacker()
 	defer packer.Close()
-	state.HandleRowsInsert(context.Background(), proto, 0, packer, mp)
+	state.HandleRowsInsert(context.Background(), encoded, []string{"rowid", "time", "id"}, 0, packer, mp)
 	stats, err := state.CollectDataStats(context.Background(), types.BuildTS(2, 0), nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.Rows)
@@ -2363,7 +2430,7 @@ func TestCalculateTableStatsPairedInsertDelete(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	vector.AppendFixed(bat.Vecs[0], int32(0), false, mp)
 	bat.SetRowCount(1)
 
@@ -2374,7 +2441,7 @@ func TestCalculateTableStatsPairedInsertDelete(t *testing.T) {
 		BlockID: rid.CloneBlockID(),
 		RowID:   rid,
 		Time:    types.BuildTS(5, 0),
-		Batch:   bat,
+		Batch:   &ReplayBatch{Batch: bat},
 		Offset:  0,
 		ID:      0,
 		Deleted: false,
@@ -2429,7 +2496,7 @@ func TestCalculateTableStatsFilterByObjectVisibility(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 0; i < 20; i++ {
 		vector.AppendFixed(bat.Vecs[0], int32(i), false, mp)
 	}
@@ -2441,7 +2508,7 @@ func TestCalculateTableStatsFilterByObjectVisibility(t *testing.T) {
 			BlockID: rid1.CloneBlockID(),
 			RowID:   rid1,
 			Time:    types.BuildTS(5, uint32(i)),
-			Batch:   bat,
+			Batch:   &ReplayBatch{Batch: bat},
 			Offset:  int64(i),
 			ID:      int64(i),
 			Deleted: false,
@@ -2500,7 +2567,7 @@ func TestCalculateTableStatsIntegration(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 0; i < 50; i++ {
 		vector.AppendFixed(bat.Vecs[0], int32(i), false, mp)
 	}
@@ -2512,7 +2579,7 @@ func TestCalculateTableStatsIntegration(t *testing.T) {
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
 			Time:    types.BuildTS(5, uint32(i)),
-			Batch:   bat,
+			Batch:   &ReplayBatch{Batch: bat},
 			Offset:  int64(i),
 			ID:      int64(i),
 			Deleted: false,
@@ -2576,9 +2643,9 @@ func TestCollectTombstoneStats_DNCreatedWithCommitTs(t *testing.T) {
 	// Contains deletions from different commit times
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_CommitTS, fs)
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 
 	// 5 deletions committed at TS=3
 	for i := 0; i < 5; i++ {
@@ -2647,9 +2714,9 @@ func TestCollectTombstoneStats_AppendableTombstone(t *testing.T) {
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_CommitTS, fs)
 	writer.SetAppendable()
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 
 	// 5 deletions committed at TS=3
 	for i := 0; i < 5; i++ {
@@ -2721,9 +2788,9 @@ func TestCollectTombstoneStats_AppendableDataWithAppendableTombstone(t *testing.
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_CommitTS, fs)
 	writer.SetAppendable()
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 
 	// 5 deletions committed at TS=5 (rows 0-4)
 	for i := 0; i < 5; i++ {
@@ -2895,8 +2962,8 @@ func TestCountRows_VisibleAppendableDataObjects(t *testing.T) {
 		writer := ioutil.ConstructWriter(0, []uint16{0, objectio.SEQNUM_COMMITTS}, -1, false, false, fs)
 		writer.SetAppendable()
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 		commitTSs := []types.TS{
 			types.BuildTS(2, 0), types.BuildTS(4, 0), types.BuildTS(6, 0), types.BuildTS(8, 0), types.BuildTS(10, 0),
 		}
@@ -2935,8 +3002,8 @@ func TestCountRows_VisibleAppendableDataObjects(t *testing.T) {
 		writer := ioutil.ConstructWriter(0, []uint16{0, objectio.SEQNUM_COMMITTS}, -1, false, false, fsWithData)
 		writer.SetAppendable()
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 		require.NoError(t, vector.AppendFixed[int32](bat.Vecs[0], 1, false, mp))
 		require.NoError(t, vector.AppendFixed[types.TS](bat.Vecs[1], types.BuildTS(1, 0), false, mp))
 		_, err := writer.WriteBatch(bat)
@@ -2979,9 +3046,9 @@ func TestCheckpointDurableAppendableObjectReplay(t *testing.T) {
 			mp := mpool.MustNewZero()
 			liveProto := newReplayObjectListBatch(t, mp, entry, entry.CreateTime)
 			if tombstone {
-				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: liveProto}, nil, mp)
+				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: api.NewEncodedBatch(liveProto)}, nil, mp)
 			} else {
-				state.HandleDataObjectList(t.Context(), &api.Entry{Bat: liveProto}, nil, mp)
+				state.HandleDataObjectList(t.Context(), &api.Entry{Bat: api.NewEncodedBatch(liveProto)}, nil, mp)
 			}
 			require.Zero(t, index.Len(), "live creation is filtered even when stats are nonzero")
 			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
@@ -3015,10 +3082,10 @@ func TestTombstoneReplayReclamationBoundaries(t *testing.T) {
 			dataBlock := types.NewBlockidWithObjectID(&dataObject, 0)
 			input := batch.NewWithSize(4)
 			defer input.Clean(pool)
-			input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-			input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-			input.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-			input.Vecs[3] = vector.NewVec(types.T_Rowid.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), pool)
+			input.Vecs[1] = vector.NewVec(types.T_TS.ToType(), pool)
+			input.Vecs[2] = vector.NewVec(types.T_int64.ToType(), pool)
+			input.Vecs[3] = vector.NewVec(types.T_Rowid.ToType(), pool)
 			rowIDs := make([]types.Rowid, 7)
 			for i, v := range []struct {
 				object byte
@@ -3034,9 +3101,9 @@ func TestTombstoneReplayReclamationBoundaries(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(input.Vecs[3], types.NewRowid(&block, uint32(i)), false, pool))
 			}
 			input.SetRowCount(len(rowIDs))
-			proto, err := batch.BatchToProtoBatch(input)
+			encoded, err := batch.MarshalVectors(input.Vecs)
 			require.NoError(t, err)
-			state.HandleRowsDelete(t.Context(), proto, packer, pool)
+			state.HandleRowsDelete(t.Context(), encoded, packer, pool)
 			retained, ok := state.rows.Get(&RowEntry{
 				BlockID: dataBlock,
 				RowID:   rowIDs[0],
@@ -3063,7 +3130,7 @@ func TestTombstoneReplayReclamationBoundaries(t *testing.T) {
 					return
 				}
 				proto := newReplayObjectListBatch(t, pool, entry, types.BuildTS(2, 0))
-				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: proto}, nil, pool)
+				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: api.NewEncodedBatch(proto)}, nil, pool)
 			}
 			checkRows := func(expected []types.Rowid) {
 				iter := state.NewRowsIter(types.BuildTS(10, 0), nil, true)
@@ -3121,7 +3188,7 @@ func TestTombstoneReplayReclamationBoundaries(t *testing.T) {
 }
 
 // Match the real object-list wire layout for both replay entry points.
-func newReplayObjectListBatch(tb testing.TB, pool *mpool.MPool, entry objectio.ObjectEntry, start types.TS) *api.Batch {
+func newReplayObjectListBatch(tb testing.TB, pool *mpool.MPool, entry objectio.ObjectEntry, start types.TS) []byte {
 	tb.Helper()
 	live := batch.NewWithSize(10)
 	tb.Cleanup(func() { live.Clean(pool) })
@@ -3139,7 +3206,7 @@ func newReplayObjectListBatch(tb testing.TB, pool *mpool.MPool, entry objectio.O
 		require.NoError(tb, err)
 	}
 	live.SetRowCount(1)
-	proto, err := batch.BatchToProtoBatch(live)
+	encoded, err := live.MarshalBinary()
 	require.NoError(tb, err)
-	return proto
+	return encoded
 }

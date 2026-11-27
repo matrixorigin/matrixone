@@ -33,6 +33,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"go.uber.org/zap"
 )
@@ -270,6 +271,35 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 	}
 
 	return
+}
+
+// hasSyncIrregularIndex reports whether tableDef has an irregular index that is
+// not maintained asynchronously by CDC, and whether any such index lacks modern
+// in-statement maintenance.
+func hasSyncIrregularIndex(tableDef *plan.TableDef) (sync, unmaintained bool, err error) {
+	for _, idxDef := range tableDef.Indexes {
+		if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			continue
+		}
+		idxSync, maintained, idxErr := syncIrregularIndex(idxDef)
+		if idxErr != nil {
+			return false, false, idxErr
+		}
+		sync = sync || idxSync
+		unmaintained = unmaintained || (idxSync && !maintained)
+	}
+	return sync, unmaintained, nil
+}
+
+// syncIrregularIndex reports whether DML maintains the irregular index idxDef
+// in the statement instead of CDC, and whether the modern planner supports
+// that maintenance.
+func syncIrregularIndex(idxDef *plan.IndexDef) (sync, maintained bool, err error) {
+	async, err := indexplugin.IsAsync(idxDef.IndexAlgo, idxDef.IndexAlgoParams)
+	if err != nil || async {
+		return false, false, err
+	}
+	return true, isModernMaintainedIrregularAlgo(idxDef.IndexAlgo), nil
 }
 
 // isModernMaintainedIrregularAlgo reports whether an irregular index algorithm has
@@ -1106,6 +1136,31 @@ func (builder *QueryBuilder) deletePkColExpr(relPos, sourceStep int32) *plan.Exp
 	}
 }
 
+// appendIrregularDeleteRuntimeFilter limits the hidden-table scan of a
+// delete-by-key join to the keys of the build side. scanKey is the scan's
+// origin-key column and deleteKey the build-side key column.
+func (builder *QueryBuilder) appendIrregularDeleteRuntimeFilter(scanID, joinID int32, scanKey, deleteKey *plan.Expr) {
+	buildKey := deleteKey.GetCol()
+	if buildKey == nil {
+		return
+	}
+	probeSpec, buildSpec, ok := builder.makeExactRuntimeFilterPair(
+		builder.genNewMsgTag(),
+		false,
+		GetInFilterCardLimit(builder.compCtx.GetProcess().GetService()),
+		DeepCopyExpr(scanKey),
+		&plan.Expr{Typ: deleteKey.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: buildKey.ColPos}}},
+		true,
+	)
+	if !ok {
+		return
+	}
+	scan := builder.qry.Nodes[scanID]
+	scan.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
+	scan.Stats.ForceOneCN = true
+	builder.qry.Nodes[joinID].RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
+}
+
 // buildIrregularIvfDeleteByPk drops the stale IVF entries keyed by the recorded PK
 // position, and the ignored rows of those keys. It projects only the hidden table's
 // row_id + primary key into the join output (the join key is the base PK, never the
@@ -1182,9 +1237,10 @@ func (builder *QueryBuilder) buildIrregularHiddenDeleteByPk(bindCtx *BindContext
 	srcScan := appendSinkScanNode(builder, bindCtx, sourceStep)
 
 	// join the hidden table (left) with the image (right) on origin_pk == old/final PK.
+	deleteKey := builder.deletePkColExpr(1, sourceStep)
 	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 		{Typ: orgPkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
-		builder.deletePkColExpr(1, sourceStep),
+		deleteKey,
 	})
 	if err != nil {
 		return err
@@ -1199,6 +1255,7 @@ func (builder *QueryBuilder) buildIrregularHiddenDeleteByPk(bindCtx *BindContext
 			{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1, Name: pkCol}}},
 		},
 	}, bindCtx)
+	builder.appendIrregularDeleteRuntimeFilter(scanID, joinID, scanProj[2], deleteKey)
 
 	delNodeInfo := makeDeleteNodeInfo(builder.compCtx, hiddenObjRef, hiddenTableDef, 0, false, 1, pkTyp, false)
 	lastID, err := makeOneDeletePlan(builder, bindCtx, joinID, delNodeInfo, false, true, false)
@@ -1267,9 +1324,10 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 	srcScan := appendSinkScanNode(builder, bindCtx, sourceStep)
 
 	// join index (left) with the image (right) on doc_id == old/final PK.
+	deleteKey := builder.deletePkColExpr(1, sourceStep)
 	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 		{Typ: docIdTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
-		builder.deletePkColExpr(1, sourceStep),
+		deleteKey,
 	})
 	if err != nil {
 		return err
@@ -1284,6 +1342,7 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 			{Typ: fakePkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2, Name: catalog.FakePrimaryKeyColName}}},
 		},
 	}, bindCtx)
+	builder.appendIrregularDeleteRuntimeFilter(idxScanID, joinID, scanProj[1], deleteKey)
 
 	delNodeInfo := makeDeleteNodeInfo(builder.compCtx, indexObjRef, indexTableDef, 0, false, 1, fakePkTyp, false)
 	lastID, err := makeOneDeletePlan(builder, bindCtx, joinID, delNodeInfo, false, true, false)
@@ -1346,9 +1405,10 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 	srcScan := appendSinkScanNode(builder, bindCtx, sourceStep)
 
 	// join index (left) with the image (right) on __mo_index_pri_col == old/final PK.
+	deleteKey := builder.deletePkColExpr(1, sourceStep)
 	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 		{Typ: priColTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
-		builder.deletePkColExpr(1, sourceStep),
+		deleteKey,
 	})
 	if err != nil {
 		return err
@@ -1363,6 +1423,7 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 			{Typ: idxColTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2, Name: catalog.MasterIndexTableIndexColName}}},
 		},
 	}, bindCtx)
+	builder.appendIrregularDeleteRuntimeFilter(idxScanID, joinID, scanProj[1], deleteKey)
 
 	// Master index table has __mo_index_idx_col as PRIMARY KEY, so the delete keys
 	// on it directly (pkPos points to the index column in the join output).
@@ -1384,23 +1445,15 @@ func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, 
 	if len(builder.irregularMaintIndexes) == 0 && len(builder.irregularMaintInsertOnlyIndexes) == 0 && len(builder.irregularUpdateMaints) == 0 {
 		return nil
 	}
-	if len(builder.irregularUpdateMaints) > 0 {
-		for _, maint := range builder.irregularUpdateMaints {
-			builder.irregularMaintSourceStep = maint.sourceStep
-			builder.irregularMaintDeleteStep = maint.deleteStep
-			builder.irregularMaintDeletePkPos = maint.deletePkPos
-			builder.irregularMaintDeletePkTyp = maint.deletePkTyp
-			builder.irregularMaintIndexes = maint.indexes
-			builder.irregularMaintInsertOnlySourceStep = maint.insertOnlySourceStep
-			builder.irregularMaintInsertOnlyIndexes = maint.insertOnlyIndexes
-			builder.irregularMaintValueChangedSourceSteps = maint.valueChangedSourceSteps
-			builder.irregularMaintTableDef = maint.tableDef
-			builder.irregularMaintObjRef = maint.objRef
-			if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
-				return err
-			}
+	single := builder.saveIrregularMaint()
+	for _, maint := range builder.irregularUpdateMaints {
+		builder.restoreIrregularMaint(maint)
+		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
+			return err
 		}
-	} else if len(builder.irregularMaintIndexes) > 0 || len(builder.irregularMaintInsertOnlyIndexes) > 0 {
+	}
+	builder.restoreIrregularMaint(single)
+	if len(single.indexes) > 0 || len(single.insertOnlyIndexes) > 0 {
 		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
 			return err
 		}
@@ -2889,7 +2942,7 @@ func formatDedupColumnName(parts []string) string {
 }
 
 // collectGeneratedColumnDependents returns the set of columns that may change
-// when any column in seed is assigned during ODKU. Generated columns are
+// when any column in seed is assigned during DML. Generated columns are
 // expanded to a fixed point so a generated column can depend on another
 // generated column. The returned names are canonical table column names.
 func collectGeneratedColumnDependents(ctx context.Context, tableDef *plan.TableDef, seed map[string]struct{}) (map[string]struct{}, error) {
@@ -3164,6 +3217,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				if err != nil {
 					return 0, err
 				}
+				if radix := boundDecimalRadixAssignmentSource(updateExpr, colDef.Typ); radix != nil {
+					updateExpr = radix
+				}
 			}
 
 			isPrimaryKey := slices.Contains(tableDef.Pkey.Names, colDef.Name)
@@ -3356,10 +3412,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			// columns positionally and the restored row image exports them as
 			// columns; keep the materialization physical instead of inlining
 			// the key expressions past the FILTER.
-			if builder.materializedLockKeyProjects == nil {
-				builder.materializedLockKeyProjects = make(map[int32]struct{})
-			}
-			builder.materializedLockKeyProjects[lastNodeID] = struct{}{}
+			builder.preserveDMLProject(lastNodeID)
 			if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
 				return 0, err
 			}
@@ -3515,6 +3568,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 	odkuActionValidationApplied := false
 	if onDupAction == plan.Node_UPDATE {
+		// DEDUP overwrites these columns with its affected-row metadata.
+		// Keep their slots even when their initial values are constants.
+		builder.preserveDMLProject(selectNode.NodeId)
 		affectedRowsInputPos = int32(len(selectNode.ProjectList))
 		selectNode.ProjectList = append(selectNode.ProjectList, makePlan2Uint64ConstExprWithType(1))
 		physicalChangedRowsInputPos = int32(len(selectNode.ProjectList))
@@ -5471,7 +5527,41 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		return 0, nil, nil, -1, err
 	}
 
-	return builder.appendInsertReplaceSourceCasts(bindCtx, lastNodeID, insertColumns, objRef, tableDef, isReplace)
+	_, typedValues := rowsForInsert.Select.(*tree.ValuesClause)
+	return builder.appendInsertReplaceSourceCasts(bindCtx, lastNodeID, insertColumns, objRef, tableDef, isReplace, typedValues)
+}
+
+// insertDecimalRadixAssignment uses the visible SELECT field rather than
+// its physical projection. Grouping and window rewrites retain those fields
+// by ordinal, but the resulting slot can contain a synthetic NULL.
+func (builder *QueryBuilder) insertDecimalRadixAssignment(nodeID int32, pos int, source *Expr, target Type) (*Expr, error) {
+	if !types.T(target.Id).IsDecimal() ||
+		(source.Typ.Id != int32(types.T_char) && source.Typ.Id != int32(types.T_varchar)) {
+		return source, nil
+	}
+	ctx := builder.ctxByNode[nodeID]
+	node := builder.qry.Nodes[nodeID]
+	// SAMPLE can move duplicate sampled fields ahead of the visible list.
+	if ctx == nil || ctx.sampleFunc.hasSampleFunc || ctx.sampledProjectFields || len(node.BindingTags) != 1 ||
+		(node.BindingTags[0] != ctx.projectTag && node.BindingTags[0] != ctx.resultTag) ||
+		pos >= len(ctx.projectByAst) || ctx.projectByAst[pos].pos != int32(pos) {
+		return source, nil
+	}
+	radix := decimalRadixAssignmentSource(ctx.projectByAst[pos].ast)
+	if radix == nil {
+		return source, nil
+	}
+	if source.Typ.NotNullable {
+		return radix, nil
+	}
+	isNull, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*Expr{source})
+	if err != nil {
+		return nil, err
+	}
+	nullValue := makePlan2NullConstExprWithType()
+	nullValue.Typ = radix.Typ
+	nullValue.Typ.NotNullable = false
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*Expr{isNull, nullValue, radix})
 }
 
 // castInsertSourceColumn casts one bound source column to its target column
@@ -5507,7 +5597,7 @@ func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.E
 // pre-insert nodes (defaults, auto-increment, composite keys, ...) plus the
 // per-table dedup/write nodes. It is shared by single-table INSERT/REPLACE and
 // by every target of a multi-table INSERT.
-func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext, lastNodeID int32, insertColumns []string, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool) (int32, map[string]int32, []bool, int32, error) {
+func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext, lastNodeID int32, insertColumns []string, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace, typedValues bool) (int32, map[string]int32, []bool, int32, error) {
 	var err error
 	lastNode := builder.qry.Nodes[lastNodeID]
 	if len(insertColumns) != len(lastNode.ProjectList) {
@@ -5528,7 +5618,18 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 				},
 			},
 		}
-		projExpr, err = builder.castInsertSourceColumn(projExpr, lastNode.ProjectList[i], tableDef.Cols[colIdx])
+		col := tableDef.Cols[colIdx]
+		if typedValues && types.T(col.Typ.Id).IsDecimal() && !isAttributedDecimalPlanType(col.Typ) &&
+			makeTypeByPlan2Expr(projExpr).Eq(makeTypeByPlan2Type(col.Typ)) {
+			// buildValueScan already assigns each cell to this destination.
+			insertColToExpr[column] = projExpr
+			continue
+		}
+		projExpr, err = builder.insertDecimalRadixAssignment(lastNodeID, i, projExpr, col.Typ)
+		if err != nil {
+			return 0, nil, nil, -1, err
+		}
+		projExpr, err = builder.castInsertSourceColumn(projExpr, lastNode.ProjectList[i], col)
 		if err != nil {
 			return 0, nil, nil, -1, err
 		}
@@ -5541,6 +5642,13 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 	} else {
 		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr, builder.isInsertIgnore)
 	}
+}
+
+func (builder *QueryBuilder) preserveDMLProject(nodeID int32) {
+	if builder.materializedDMLProjects == nil {
+		builder.materializedDMLProjects = make(map[int32]struct{})
+	}
+	builder.materializedDMLProjects[nodeID] = struct{}{}
 }
 
 // localProtocolEnablesRightDedupInputKeysUnique reads the deployment-managed
@@ -6451,6 +6559,7 @@ func (builder *QueryBuilder) buildValueScan(
 	}
 
 	proc := builder.compCtx.GetProcess()
+	strictMode := function.StrictSqlModeForAssignment(proc)
 	lastTag := builder.genNewBindTag()
 	colCount := len(colNames)
 	rowsetData := &plan.RowsetData{
@@ -6553,12 +6662,26 @@ func (builder *QueryBuilder) buildValueScan(
 						continue
 					}
 				}
+				if isAttributedDecimalPlanType(col.Typ) {
+					if source := decimalRadixAssignmentSource(r[i]); source != nil {
+						expr, err := builder.forceCastExpr2(source, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
+						if err != nil {
+							return 0, nil, err
+						}
+						appendValueExpr(i, expr)
+						continue
+					}
+				}
 				// An attributed decimal literal must bind in its natural type and
 				// pass through unsigned-domain admission; the const fast path
 				// materializes the target type directly and would bypass the
 				// admission composition.
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {
-					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
+				literal := r[i]
+				if colTyp.Oid.IsDecimal() || colTyp.Oid.IsInteger() {
+					literal = unwrapParenExpr(literal)
+				}
+				if nv, ok := literal.(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {
+					expr, err := makeInsertValueConstExprWithMode(proc, nv, &colTyp, builder.isInsertIgnore, strictMode)
 					if err != nil {
 						return 0, nil, err
 					}
@@ -6922,7 +7045,9 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 				return 0, err
 			}
 		}
+		var warningRowOption string
 		if carryOrdinal {
+			warningRowOption = plan.ValuesWarningRowOption(uint64(rowIdx) + 1)
 			projectList[ordinalPos] = MakePlan2Int64ConstExprWithType(int64(rowIdx))
 		}
 		rowCtx.headings = make([]string, projectWidth)
@@ -6932,10 +7057,11 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 			rowCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
 		}
 		if carryOrdinal {
-			rowCtx.headings[ordinalPos] = "_values_ordinal"
+			rowCtx.headings[ordinalPos] = plan.ValuesWarningOrdinalColumn
 		}
 		branches = append(branches, builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_PROJECT,
+			ExtraOptions: warningRowOption,
 			ProjectList:  projectList,
 			Children:     []int32{dummyID},
 			BindingTags:  []int32{projectTag},
@@ -6966,7 +7092,9 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 				Typ:   targetCols[colIdx].Typ,
 			}
 		}
+		var scanOption string
 		if carryOrdinal {
+			scanOption = plan.ValuesWarningOrdinalScan
 			rowsetData.Cols[ordinalPos] = &plan.ColData{}
 			for _, rowIdx := range literalRows {
 				rowsetData.Cols[ordinalPos].Data = append(rowsetData.Cols[ordinalPos].Data, &plan.RowsetExpr{
@@ -6975,17 +7103,18 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 			}
 			valueScanTableDef.Cols[ordinalPos] = &plan.ColDef{
 				ColId: 0,
-				Name:  "_values_ordinal",
+				Name:  plan.ValuesWarningOrdinalColumn,
 				Typ:   MakePlan2Int64ConstExprWithType(0).Typ,
 			}
 		}
 		nodeID, _ := uuid.NewV7()
 		scanID := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_VALUE_SCAN,
-			RowsetData:  rowsetData,
-			TableDef:    valueScanTableDef,
-			BindingTags: []int32{lastTag},
-			Uuid:        nodeID[:],
+			NodeType:     plan.Node_VALUE_SCAN,
+			ExtraOptions: scanOption,
+			RowsetData:   rowsetData,
+			TableDef:     valueScanTableDef,
+			BindingTags:  []int32{lastTag},
+			Uuid:         nodeID[:],
 		}, rowCtx)
 		projectTag := builder.genNewBindTag()
 		projectList := make([]*plan.Expr, projectWidth)
@@ -7003,7 +7132,7 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 			rowCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
 		}
 		if carryOrdinal {
-			rowCtx.headings[ordinalPos] = "_values_ordinal"
+			rowCtx.headings[ordinalPos] = plan.ValuesWarningOrdinalColumn
 		}
 		branches = append(branches, builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_PROJECT,
@@ -7050,7 +7179,7 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		if colIdx < len(colNames) {
 			unionCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
 		} else {
-			unionCtx.headings[colIdx] = "_values_ordinal"
+			unionCtx.headings[colIdx] = plan.ValuesWarningOrdinalColumn
 		}
 		unionCtx.projects[colIdx] = &plan.Expr{
 			Typ:  builder.qry.Nodes[lastNodeID].ProjectList[colIdx].Typ,

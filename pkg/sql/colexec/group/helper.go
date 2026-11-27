@@ -27,18 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
-	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -252,26 +248,6 @@ type groupInsertPreview struct {
 	existingOnly bool
 }
 
-type groupKeySourcePublication struct {
-	overrides    [][]types.StringSource
-	destinations []*vector.Vector
-}
-
-func (publication *groupKeySourcePublication) addDestination(destination *vector.Vector) {
-	for _, existing := range publication.destinations {
-		if existing == destination {
-			return
-		}
-	}
-	publication.destinations = append(publication.destinations, destination)
-}
-
-func (publication *groupKeySourcePublication) finalize() {
-	for _, destination := range publication.destinations {
-		destination.FinalizeStringSourcePreflight()
-	}
-}
-
 type groupPrePublicationError struct {
 	cause error
 }
@@ -292,176 +268,16 @@ func (ctr *container) commitGroupByChunk(
 	if preview.existingOnly {
 		return preview.values, 0, nil
 	}
-	hasStringSourceMetadata := ctr.groupKeyStringSourceMetadata
-	if !hasStringSourceMetadata {
-		for _, vec := range vectors {
-			if vec.HasStringSourceMetadata() {
-				hasStringSourceMetadata = true
-				break
-			}
-		}
-	}
-	var sourcePublication groupKeySourcePublication
-	if hasStringSourceMetadata {
-		defer sourcePublication.finalize()
-		if err := ctr.preflightPreviewGroupKeyStringSources(
-			vectors, offset, preview.values, preview.inserted,
-			&sourcePublication); err != nil {
-			return nil, 0, &groupPrePublicationError{cause: err}
-		}
-	}
 	values, _, err := ctr.hr.TxnItr.CommitPreview(&ctr.hr.insertPlan)
 	if err != nil {
 		return nil, 0, &groupPrePublicationError{cause: err}
 	}
 
-	err = ctr.appendGroupByBatchWithStringSources(
-		vectors, offset, preview.inserted, preview.newGroups, sourcePublication.overrides, 0)
-	if err != nil {
+	if err := ctr.appendGroupByBatch(
+		vectors, offset, preview.inserted, preview.newGroups); err != nil {
 		return nil, 0, err
 	}
-	if hasStringSourceMetadata {
-		if err := ctr.applyPreviewGroupKeyStringSources(vectors, offset, values); err != nil {
-			return nil, 0, err
-		}
-		ctr.groupKeyStringSourceMetadata = true
-	}
 	return values, preview.newGroups, nil
-}
-
-func (ctr *container) previewGroupDestination(groupIndex int) (*batch.Batch, int, error) {
-	batchIndex := groupIndex / aggBatchSize
-	batchRow := groupIndex % aggBatchSize
-	if batchIndex < len(ctr.groupByBatches) {
-		return ctr.groupByBatches[batchIndex], batchRow, nil
-	}
-	if batchIndex == len(ctr.groupByBatches) && ctr.groupByStandby != nil {
-		return ctr.groupByStandby, batchRow, nil
-	}
-	return nil, 0, mpool.ErrAllocationAccountInvariant
-}
-
-func (ctr *container) forEachPreviewGroupKeyStringSource(
-	vectors []*vector.Vector,
-	offset int,
-	groups []uint64,
-	fn func(destination *vector.Vector, row int, source types.StringSource) error,
-) error {
-	for row, group := range groups {
-		if group == 0 {
-			continue
-		}
-		seen := false
-		for previous := 0; previous < row; previous++ {
-			if groups[previous] == group {
-				seen = true
-				break
-			}
-		}
-		if seen {
-			continue
-		}
-		groupIndex := int(group - 1)
-		destinationBatch, destinationRow, err := ctr.previewGroupDestination(groupIndex)
-		if err != nil {
-			return err
-		}
-		for column, sourceVector := range vectors {
-			destination := destinationBatch.Vecs[column]
-			merged := sourceVector.GetStringSourceAt(offset + row)
-			if destinationRow < destination.Length() {
-				merged, err = types.MergeStringSources(
-					destination.GetStringSourceAt(destinationRow), merged)
-				if err != nil {
-					return err
-				}
-			}
-			for candidate := row + 1; candidate < len(groups); candidate++ {
-				if groups[candidate] != group {
-					continue
-				}
-				merged, err = types.MergeStringSources(
-					merged, sourceVector.GetStringSourceAt(offset+candidate))
-				if err != nil {
-					return err
-				}
-			}
-			if err := fn(destination, destinationRow, merged); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (ctr *container) preflightPreviewGroupKeyStringSources(
-	vectors []*vector.Vector,
-	offset int,
-	groups []uint64,
-	inserted []uint8,
-	publication *groupKeySourcePublication,
-) error {
-	if len(groups) > hashmap.UnitLimit || len(inserted) != len(groups) || publication == nil {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	if err := ctr.forEachPreviewGroupKeyStringSource(
-		vectors, offset, groups,
-		func(destination *vector.Vector, row int, source types.StringSource) error {
-			publication.addDestination(destination)
-			if err := destination.PreflightSetStringSourceAtLength(
-				row, max(destination.Length(), row+1), source, ctr.mp); err != nil {
-				return err
-			}
-			// Existing-row preflight has finalLength == Length and therefore does
-			// not infer a deferred publication. Keep both current and standby
-			// reservations alive until groupKeySourcePublication.finalize.
-			destination.RetainStringSourcePreflight()
-			return nil
-		},
-	); err != nil {
-		return err
-	}
-	// Keep preview results in operator-owned, UnitLimit-bounded scratch. The
-	// selected append consumes these overrides without modifying borrowed input.
-	publication.overrides = make([][]types.StringSource, len(vectors))
-	for column := range publication.overrides {
-		publication.overrides[column] = make([]types.StringSource, len(groups))
-	}
-	for row, flag := range inserted {
-		if flag == 0 {
-			continue
-		}
-		group := groups[row]
-		for column, sourceVector := range vectors {
-			merged := sourceVector.GetStringSourceAt(offset + row)
-			for candidate := row + 1; candidate < len(groups); candidate++ {
-				if groups[candidate] != group {
-					continue
-				}
-				var err error
-				merged, err = types.MergeStringSources(
-					merged, sourceVector.GetStringSourceAt(offset+candidate))
-				if err != nil {
-					return err
-				}
-			}
-			publication.overrides[column][row] = merged
-		}
-	}
-	return nil
-}
-
-func (ctr *container) applyPreviewGroupKeyStringSources(
-	vectors []*vector.Vector,
-	offset int,
-	groups []uint64,
-) error {
-	return ctr.forEachPreviewGroupKeyStringSource(
-		vectors, offset, groups,
-		func(destination *vector.Vector, row int, source types.StringSource) error {
-			return destination.SetStringSourceAtWithMP(row, source, ctr.mp)
-		},
-	)
 }
 
 func (group *Group) configureH0OrderedAggSpill(proc *process.Process) {
@@ -533,7 +349,7 @@ func (hr *ResHashRelated) IsEmpty() bool {
 func (hr *ResHashRelated) BuildHashTable(
 	ctx context.Context, mp *mpool.MPool,
 	rebuild bool,
-	isStrHash bool, keyNullable bool, groupingAware bool, preAllocated uint64,
+	isStrHash bool, keyNullable bool, preAllocated uint64,
 	hashAllocation *hashtable.AllocationAccountSelection,
 	iteratorAllocation *hashmap.IteratorAllocation,
 ) error {
@@ -573,12 +389,6 @@ func (hr *ResHashRelated) BuildHashTable(
 		}
 		if err != nil {
 			return err
-		}
-		if groupingAware {
-			if err = h.SetGroupingAware(); err != nil {
-				h.Free()
-				return err
-			}
 		}
 		hr.Hash = h
 		if !reuseIterator {
@@ -791,7 +601,6 @@ func (ctr *container) writeSpillRecord(
 	bucket int,
 	rows []int32,
 	bktFlags []uint8,
-	prepareParamKindSources []prepareParamKindRowsSource,
 ) (int64, int64, error) {
 	if len(rows) == 0 {
 		return 0, 0, nil
@@ -854,9 +663,7 @@ func (ctr *container) writeSpillRecord(
 		fullFlags = make([][]uint8, len(ctr.groupByBatches))
 		fullFlags[nthBatch] = bktFlags
 	}
-	clear(prepareParamKindSources)
-	hasPrepareParamKinds := false
-	for i, ag := range ctr.aggList {
+	for _, ag := range ctr.aggList {
 		// Generic spill is local state, so retain GROUP_CONCAT source rows even
 		// when this operator is currently connected to a legacy partial peer.
 		aggexec.SetGroupConcatSourceRowWire(ag, true)
@@ -873,27 +680,7 @@ func (ctr *container) writeSpillRecord(
 				return 0, 0, err
 			}
 		}
-		if i < len(ctr.aggExprs) && ctr.aggExprs[i].PreservesFirstArgPrepareParamKind() {
-			var err error
-			prepareParamKindSources[i], err = newPrepareParamKindSelectedRowsSource(
-				ag.PrepareParamKindVectorForChunk(nthBatch), rows)
-			if err != nil {
-				return 0, 0, err
-			}
-			hasPrepareParamKinds = hasPrepareParamKinds ||
-				prepareParamKindSources[i].summary.seen
-		}
 	}
-	if err := writeSpillBool(&record, hasPrepareParamKinds); err != nil {
-		return 0, 0, err
-	}
-	if hasPrepareParamKinds {
-		if err := writePrepareParamKindTrailer(proc.Ctx, &record, ctr.aggExprs,
-			&ctr.prepareParamKind, prepareParamKindSources); err != nil {
-			return 0, 0, err
-		}
-	}
-
 	const lastMagic = uint64(0xDEADBEEF12345678)
 	if err := types.WriteInt64(&record, cnt); err != nil {
 		return 0, 0, err
@@ -1021,7 +808,6 @@ func (ctr *container) spillDataToDiskWithInput(proc *process.Process, opAnalyzer
 	//
 	nBatches := len(ctr.groupByBatches)
 	var compactedAggChunks int64
-	prepareParamKindSources := make([]prepareParamKindRowsSource, len(ctr.aggList))
 	maxBatchRows := 0
 	totalBatchRows := 0
 	for _, gb := range ctr.groupByBatches {
@@ -1103,7 +889,6 @@ func (ctr *container) spillDataToDiskWithInput(proc *process.Process, opAnalyzer
 			written, spilled, err := ctr.writeSpillRecord(
 				proc, spillfs, opStats, gb, nthBatch, bucket,
 				rows, bktFlags,
-				prepareParamKindSources,
 			)
 			if err != nil {
 				return err
@@ -1216,7 +1001,7 @@ func (ctr *container) prepareSpillReloadRecord(
 		ctr.spillGbBatch, err = ctr.createNewGroupByBatchWithAllocation(
 			nil,
 			record.rows,
-			ctr.spillGroupByAllocation,
+			ctr.spillGroupByMP(),
 		)
 		if err != nil {
 			return record, false, err
@@ -1224,7 +1009,7 @@ func (ctr *container) prepareSpillReloadRecord(
 	}
 	gbBatch := ctr.spillGbBatch
 	gbBatch.CleanOnlyData()
-	if err = unmarshalSpillGroupByRows(reader, gbBatch, record.rows, ctr.mp); err != nil {
+	if err = unmarshalSpillGroupByRows(reader, gbBatch, record.rows, ctr.spillGroupByMP()); err != nil {
 		return record, false, err
 	}
 
@@ -1273,42 +1058,6 @@ func (ctr *container) prepareSpillReloadRecord(
 	record.aggUnmarshalNanos = time.Since(aggStart).Nanoseconds()
 	if aggErr != nil {
 		return record, false, aggErr
-	}
-
-	hasPrepareParamKinds, err := types.ReadBool(reader)
-	if err != nil {
-		return record, false, err
-	}
-	if hasPrepareParamKinds {
-		var spillPrepareParamKind aggexec.PrepareParamKindStates
-		spillPrepareParamKind.Reset(aggExprs)
-		targets := make([]prepareParamKindRowsTarget, len(ctr.spillAggList))
-		for i, ag := range ctr.spillAggList {
-			targets[i] = prepareParamKindFlatTarget(ag)
-		}
-		prepareParamKindSummaries, err := readPrepareParamKindTrailer(
-			proc.Ctx,
-			reader,
-			int32(len(ctr.spillAggList)),
-			&spillPrepareParamKind,
-			targets,
-			ctr.mp,
-			true,
-			true,
-		)
-		if err != nil {
-			return record, false, err
-		}
-		for i, ag := range ctr.spillAggList {
-			if i >= len(aggExprs) || !aggExprs[i].PreservesFirstArgPrepareParamKind() {
-				continue
-			}
-			if !prepareParamKindSummaries[i].rows {
-				if prepareParamKindSummaries[i].seen {
-					ag.SetPrepareParamKind(prepareParamKindSummaries[i].kind)
-				}
-			}
-		}
 	}
 
 	checkMagic, err = types.ReadUint64(reader)
@@ -1408,9 +1157,6 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 	// first, if there is current spill bucket, transfer it to the spill bucket queue.
 	if ctr.currentSpillBkt != nil {
-		if ctr.spillBkts == nil {
-			ctr.spillBkts = list.New[*spillBucket]()
-		}
 		for i, bkt := range ctr.currentSpillBkt {
 			if bkt.cnt > 0 {
 				if err, canceled := vm.CancelCheck(proc); canceled {
@@ -1421,7 +1167,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 					ctr.currentSpillBkt[i] = nil
 					return false, err
 				}
-				ctr.spillBkts.PushBack(bkt)
+				ctr.spillBkts = append(ctr.spillBkts, bkt)
 			} else {
 				bkt.free()
 			}
@@ -1436,13 +1182,16 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	}
 
 	// then, if there is no spill bucket in the queue, done.
-	if ctr.spillBkts == nil || ctr.spillBkts.Len() == 0 {
+	if len(ctr.spillBkts) == 0 {
 		// done
 		return false, nil
 	}
 
 	// popped bkt must be defer freed.
-	bkt := ctr.spillBkts.PopBack().Value
+	last := len(ctr.spillBkts) - 1
+	bkt := ctr.spillBkts[last]
+	ctr.spillBkts[last] = nil
+	ctr.spillBkts = ctr.spillBkts[:last]
 	defer func() {
 		spillio.DropReadCache(bkt.file)
 		if err := bkt.free(); err != nil && retErr == nil {
@@ -1665,21 +1414,10 @@ func (ctr *container) getNextFinalResult(
 
 	if curr == 0 {
 		// flush aggs final result to vectors, all aggs follow groupby columns.
-		for i, ag := range ctr.aggList {
+		for _, ag := range ctr.aggList {
 			vecs, err := aggexec.FlushWithContext(proc.Ctx, ag)
 			if err != nil {
 				return vm.CancelResult, err
-			}
-			kind := ctr.prepareParamKind.Get(i)
-			for _, vec := range vecs {
-				// Preserving aggregates (MIN/MAX/ANY/MAX_BY and value
-				// windows) attach the winner's row provenance directly to
-				// their state vector. Keep that exact metadata; the scalar
-				// execution summary is only a compatibility fallback for
-				// aggregate implementations that materialize ordinary state.
-				if !vec.HasPrepareParamKind() {
-					vec.SetPrepareParamKind(kind)
-				}
 			}
 			for j := range vecs {
 				ctr.groupByBatches[j].Vecs = append(
@@ -1748,30 +1486,18 @@ func (ctr *container) newRuntimeEmptyGroupingSetBatch(
 		rows = len(setIDs)
 		rollupColumns--
 	}
-	output := batch.NewOffHeapWithSize(len(groupTypes))
-	if err := output.SetAllocationAccount(ctr.groupByAllocation); err != nil {
-		output.Clean(ctr.mp)
-		return nil, err
-	}
+	output := batch.NewWithSize(len(groupTypes))
+	groupByMP := ctr.groupByMP()
 	for i := 0; i < rollupColumns; i++ {
-		vec, err := vector.NewRollupConstWithAllocation(
-			groupTypes[i], rows, ctr.mp, ctr.groupByAllocation)
-		if err != nil {
-			output.Clean(ctr.mp)
-			return nil, err
-		}
-		output.Vecs[i] = vec
+		output.Vecs[i] = vector.NewConstNull(
+			groupTypes[i], rows, groupByMP)
 	}
 	if setIDs != nil {
-		setIDVector, err := vector.NewOffHeapVecWithTypeAndAllocation(
-			groupTypes[len(groupTypes)-1], ctr.groupByAllocation)
-		if err != nil {
-			output.Clean(ctr.mp)
-			return nil, err
-		}
+		setIDVector := vector.NewVec(
+			groupTypes[len(groupTypes)-1], groupByMP)
 		output.Vecs[len(output.Vecs)-1] = setIDVector
-		if err = vector.AppendFixedList(setIDVector, setIDs, nil, ctr.mp); err != nil {
-			output.Clean(ctr.mp)
+		if err := vector.AppendFixedList(setIDVector, setIDs, nil, groupByMP); err != nil {
+			ctr.cleanGroupBatch(output)
 			return nil, err
 		}
 	}
@@ -1954,20 +1680,7 @@ func (ctr *container) makeAggListWithAllocationMode(
 		for j, arg := range agExpr.GetArgExpressions() {
 			typs[j] = types.MustTypeFromPlan(arg.Typ)
 		}
-		if ctr.legacyTextMinMax || ctr.legacyVarianceState ||
-			ctr.legacyDecimalSumState || ctr.legacyDecimalSumResult {
-			if singleGroup {
-				aggList[i], err = aggexec.MakeSingleGroupAggWithLegacyRemoteState(
-					ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), ctr.legacyTextMinMax,
-					ctr.legacyVarianceState, ctr.legacyDecimalSumState, ctr.legacyDecimalSumResult,
-					allocation, agExpr.GetExtraInformation(), typs...)
-			} else {
-				aggList[i], err = aggexec.MakeGroupAggWithLegacyRemoteState(
-					ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), ctr.legacyTextMinMax,
-					ctr.legacyVarianceState, ctr.legacyDecimalSumState, ctr.legacyDecimalSumResult,
-					allocation, agExpr.GetExtraInformation(), typs...)
-			}
-		} else if singleGroup {
+		if singleGroup {
 			aggList[i], err = aggexec.MakeSingleGroupAgg(
 				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), allocation,
 				agExpr.GetExtraInformation(), typs...)
@@ -1981,29 +1694,6 @@ func (ctr *container) makeAggListWithAllocationMode(
 			return nil, err
 		}
 		aggexec.ConfigureGroupConcatWarningRetention(aggList[i], limit)
-		if ctr.legacyApproxPercentileState {
-			aggexec.ConfigureApproxPercentileLegacyState(aggList[i])
-		}
-		if ctr.legacyHLLState {
-			if ctr.floatZeroHLLState && hllFloatZeroStateSupported(agExpr.GetAggID()) {
-				aggexec.ConfigureHLLFloatZeroState(aggList[i])
-			} else {
-				aggexec.ConfigureHLLLegacyState(aggList[i])
-			}
-		} else if (ctr.legacyVectorHLLState && hllVectorStateSupported(agExpr)) ||
-			(ctr.legacyTextHLLAddState && hllTextAddStateSupported(agExpr)) ||
-			(ctr.legacyFloatHLLAddState && hllFloatAddStateSupported(agExpr)) {
-			// Keep each producer on v2 until its type family's protocol contract
-			// is understood by every peer (vectors at v88, CHAR/JSON at v91,
-			// FLOAT/DOUBLE at v92).
-			aggexec.ConfigureHLLLegacyState(aggList[i])
-		}
-		if ctr.legacyDistinctFloatKeys {
-			if err := aggexec.ConfigureLegacyDistinctFloatKeys(aggList[i], true); err != nil {
-				freeAggListPartial(aggList, i+1)
-				return nil, err
-			}
-		}
 		aggexec.ConfigureGroupConcatWarningBudget(
 			aggList[i], ctr.groupConcatWarnings.WarningBudget())
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
@@ -2029,228 +1719,6 @@ func (ctr *container) makeAggListWithAllocationMode(
 	return aggList, nil
 }
 
-// hllFloatZeroStateSupported is deliberately limited to APPROX_COUNT
-// families. Protocol v76 introduced signed-zero canonicalization for those
-// newly versioned states; persisted HLL_ADD_AGG/HLL_MERGE_AGG states retain
-// their v2 raw-value wire contract until a future explicit migration.
-func hllFloatZeroStateSupported(aggID int64) bool {
-	return aggID == aggexec.AggIdOfApproxCount ||
-		aggID == aggexec.AggIdOfApproxCountDistinct
-}
-
-func hllVectorStateSupported(
-	agg aggexec.AggFuncExecExpression,
-) bool {
-	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
-		return false
-	}
-	args := agg.GetArgExpressions()
-	if len(args) == 0 || args[0] == nil {
-		return false
-	}
-	switch types.T(args[0].Typ.Id) {
-	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
-		return true
-	default:
-		return false
-	}
-}
-
-func hllTextAddStateSupported(agg aggexec.AggFuncExecExpression) bool {
-	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
-		return false
-	}
-	args := agg.GetArgExpressions()
-	if len(args) == 0 || args[0] == nil {
-		return false
-	}
-	return types.T(args[0].Typ.Id) == types.T_char ||
-		types.T(args[0].Typ.Id) == types.T_json
-}
-
-func hllFloatAddStateSupported(agg aggexec.AggFuncExecExpression) bool {
-	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
-		return false
-	}
-	args := agg.GetArgExpressions()
-	if len(args) == 0 || args[0] == nil {
-		return false
-	}
-	return types.T(args[0].Typ.Id) == types.T_float32 ||
-		types.T(args[0].Typ.Id) == types.T_float64
-}
-
-func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
-	if proc == nil || proc.Ctx == nil {
-		return false
-	}
-	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
-	if !remote {
-		return false
-	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion14
-}
-
-func useLegacyVarianceStateForRemote(proc *process.Process) bool {
-	if proc == nil || proc.Ctx == nil {
-		return false
-	}
-	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
-	if !remote {
-		return false
-	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion35
-}
-
-// Decimal SUM must use the pre-v73 state on every side of a distributed
-// aggregation while the cluster protocol is still mixed. Unlike the older
-// remote-only gates, this includes the coordinator's local MergeGroup: it may
-// consume a partial produced by an older CN.
-func useLegacyDecimalSumState(proc *process.Process) bool {
-	if proc == nil {
-		return true
-	}
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	if rt == nil {
-		return true
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion73
-}
-
-func useLegacyApproxPercentileStateForRemote(proc *process.Process) bool {
-	if proc == nil || proc.Ctx == nil {
-		return false
-	}
-	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
-	if !remote {
-		return false
-	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion76
-}
-
-// An old coordinator can send a final Group to an upgraded worker without
-// running the upgraded shuffle-plan gate. Below v73 that Group must preserve
-// the old Decimal128 result contract. Partial Groups still use the legacy wire
-// state, while local final Groups and coordinator MergeGroups publish the
-// widened result selected by the upgraded plan.
-func useLegacyDecimalSumResultForRemote(proc *process.Process, needEval bool) bool {
-	if !needEval || !useLegacyDecimalSumState(proc) || proc == nil || proc.Ctx == nil {
-		return false
-	}
-	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
-	return remote
-}
-
-func useLegacyHLLStateForRemote(proc *process.Process) bool {
-	if proc == nil || proc.Ctx == nil {
-		return false
-	}
-	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
-	if !remote {
-		return false
-	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion77
-}
-
-func useLegacyVectorHLLStateForRemote(proc *process.Process) bool {
-	if proc == nil || proc.Ctx == nil {
-		return false
-	}
-	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
-	if !remote {
-		return false
-	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion88
-}
-
-func useLegacyTextHLLAddStateForRemote(proc *process.Process) bool {
-	if proc == nil || proc.Ctx == nil {
-		return false
-	}
-	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
-	if !remote {
-		return false
-	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion91
-}
-
-func useLegacyFloatHLLAddStateForRemote(proc *process.Process) bool {
-	if proc == nil || proc.Ctx == nil {
-		return false
-	}
-	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
-	if !remote {
-		return false
-	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion92
-}
-
-func useFloatZeroHLLStateForRemote(proc *process.Process) bool {
-	if proc == nil || proc.Ctx == nil {
-		return false
-	}
-	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
-	if !remote {
-		return false
-	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return ok && valid && version == defines.MORPCVersion76
-}
-
-func groupHashStringWireEnabled(proc *process.Process) bool {
-	if proc == nil || proc.Ctx == nil {
-		return true
-	}
-	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
-	if !remote {
-		return true
-	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion78
-}
-
-func canonicalDistinctKeyWireEnabled(proc *process.Process) bool {
-	if proc == nil || proc.Ctx == nil {
-		return true
-	}
-	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
-	if !remote {
-		return true
-	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion79
-}
-
 // freeAggListPartial frees the first n aggregators in the list.
 func freeAggListPartial(aggList []aggexec.GroupAggFuncExec, n int) {
 	for i := 0; i < n && i < len(aggList); i++ {
@@ -2265,15 +1733,8 @@ func freeAggList(aggList []aggexec.GroupAggFuncExec) {
 	freeAggListPartial(aggList, len(aggList))
 }
 
-func (ctr *container) sanityCheck() {
-	if util.Debug {
-		originGroupCount := ctr.hr.Hash.GroupCount()
-		batchRowCount := 0
-		for _, batch := range ctr.groupByBatches {
-			batchRowCount += batch.RowCount()
-		}
-		if batchRowCount != int(originGroupCount) {
-			panic(moerr.NewInternalErrorNoCtx("group count mismatch"))
-		}
-	}
+// groupConcatSourceRowWireEnabled reports whether GROUP_CONCAT partials carry
+// their source rows: only when the statement trusts row provenance.
+func groupConcatSourceRowWireEnabled(proc *process.Process) bool {
+	return proc != nil && proc.GroupConcatSourceRowProvenanceTrusted()
 }

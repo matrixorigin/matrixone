@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -159,8 +160,8 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	data := batch.NewWithSize(2)
-	data.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 64, -1))
-	data.Vecs[1] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+	data.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 64, -1), mp)
+	data.Vecs[1] = vector.NewVec(types.New(types.T_datetime, 0, 6), mp)
 	defer data.Clean(mp)
 	writer := ioutil.ConstructWriter(0, []uint16{0, 1}, 0, true, false, fs)
 	date := types.DatetimeFromClock(2026, 1, 1, 0, 0, 0, 0)
@@ -211,6 +212,33 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 	f.full.Cols[1].Typ.Scale = 6
 	f.full.Cols[0].Typ.Scale = -1
 	f.stats.TableCnt, f.stats.BlockNumber = 4, 2
+	t.Run("equality includes uncached rows", func(t *testing.T) {
+		value := uint64(1)
+		column := f.full.Cols[0]
+		table := &plan.TableDef{DbId: 10, TblId: 98}
+		observe := func() (uint64, uint64) {
+			return e.BoundEqualityRows(f.ctx, f.read.Op, table, column, types.EncodeUint64(&value), types.T_uint64.ToType())
+		}
+		rows, total := observe()
+		require.Equal(t, uint64(2), rows)
+		require.Equal(t, uint64(4), total)
+
+		cold := stats
+		segment := objectio.NewSegmentid()
+		require.NoError(t, objectio.SetObjectStatsObjectName(&cold, objectio.BuildObjectName(segment, 0)))
+		putObject(t, objectio.ObjectEntry{ObjectStats: cold, CreateTime: types.BuildTS(1, 0)})
+		defer putObject(t, objectio.ObjectEntry{ObjectStats: cold, CreateTime: types.BuildTS(1, 0), DeleteTime: types.BuildTS(2, 0)})
+		rows, total = observe()
+		require.Equal(t, uint64(6), rows)
+		require.Equal(t, uint64(8), total)
+
+		txn := f.read.Workspace.(*Transaction)
+		txn.readOnly.Store(false)
+		defer txn.readOnly.Store(true)
+		rows, total = observe()
+		require.Zero(t, rows)
+		require.Zero(t, total)
+	})
 	observation, ok, err := f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -243,7 +271,7 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 	}
 	var visibleWork int
 	stopCause := errors.New("optional observation cancelled")
-	for _, scenario := range []string{"complete", "two matching blocks", "missing overlap", "NaN overlap", "empty", "budget", "cancelled", "stale stats", "row population", "block population", "pending", "transport unavailable", "entry replaced", "unrelated subscription", "engine contended", "subscriber contended"} {
+	for _, scenario := range []string{"complete", "coordination held", "cache writer", "two matching blocks", "missing overlap", "NaN overlap", "empty", "budget", "cancelled", "stale stats", "row population", "block population", "pending", "transport unavailable", "entry replaced", "unrelated subscription", "engine contended", "subscriber contended"} {
 		t.Run(scenario, func(t *testing.T) {
 			request := req
 			request.Bound = append([]byte(nil), req.Bound...)
@@ -252,6 +280,12 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 			e.pClient.subscriber.swapClient(&service.LogtailClient{})
 			e.pClient.subscribed.m[98].pendingTo.Store(nil)
 			switch scenario {
+			case "coordination held":
+				f.gs.mu.Lock()
+				t.Cleanup(f.gs.mu.Unlock)
+			case "cache writer":
+				f.gs.observationMu.Lock()
+				t.Cleanup(f.gs.observationMu.Unlock)
 			case "two matching blocks":
 				bound := date.ToTimestamp(time.UTC)
 				copy(request.Bound[:], types.EncodeTimestamp(&bound))
@@ -326,7 +360,7 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			wantRows := scenario == "complete" || scenario == "two matching blocks" || scenario == "missing overlap" || scenario == "NaN overlap"
+			wantRows := scenario == "complete" || scenario == "coordination held" || scenario == "two matching blocks" || scenario == "missing overlap" || scenario == "NaN overlap"
 			require.Equal(t, wantRows || scenario == "empty", complete)
 			if wantRows {
 				want := engine.IndexBlockInput{Rows: 2, Blocks: 1}
@@ -501,23 +535,23 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 				require.NoError(t, ps.HandleObjectEntry(f.ctx, nil, objectio.ObjectEntry{ObjectStats: stats, CreateTime: types.BuildTS(1, 0)}, false))
 				rows := batch.NewWithSize(4)
 				defer rows.Clean(mp)
-				rows.Vecs[0], rows.Vecs[1] = vector.NewVec(types.T_Rowid.ToType()), vector.NewVec(types.T_TS.ToType())
-				rows.Vecs[2], rows.Vecs[3] = vector.NewVec(types.T_uint64.ToType()), vector.NewVec(types.T_Rowid.ToType())
+				rows.Vecs[0], rows.Vecs[1] = vector.NewVec(types.T_Rowid.ToType(), mp), vector.NewVec(types.T_TS.ToType(), mp)
+				rows.Vecs[2], rows.Vecs[3] = vector.NewVec(types.T_uint64.ToType(), mp), vector.NewVec(types.T_Rowid.ToType(), mp)
 				id := types.RandomRowid()
 				require.NoError(t, vector.AppendFixed(rows.Vecs[0], id, false, mp))
 				require.NoError(t, vector.AppendFixed(rows.Vecs[1], types.BuildTS(1, 0), false, mp))
 				require.NoError(t, vector.AppendFixed(rows.Vecs[2], uint64(1), false, mp))
 				require.NoError(t, vector.AppendFixed(rows.Vecs[3], id, false, mp))
 				rows.SetRowCount(1)
-				proto, err := batch.BatchToProtoBatch(rows)
+				encoded, err := rows.MarshalBinary()
 				require.NoError(t, err)
 				packer := types.NewPacker()
 				defer packer.Close()
 				if tombstone {
-					ps.HandleRowsDelete(f.ctx, proto, packer, mp)
+					ps.HandleRowsDelete(f.ctx, encoded, packer, mp)
 					require.Positive(t, ps.ApproxInMemTombstones())
 				} else {
-					ps.HandleRowsInsert(f.ctx, proto, 0, packer, mp)
+					ps.HandleRowsInsert(f.ctx, encoded, nil, 0, packer, mp)
 					require.Positive(t, ps.ApproxInMemRows())
 				}
 			}()

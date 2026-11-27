@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"sync"
 	"testing"
 
@@ -73,13 +74,13 @@ func TestIssue25590FragmentSettlementRetiresOnlyOwnSegmentRegistrations(t *testi
 	probeStats := mockStatsList(t, 1)[0]
 	probeName := probeStats.ObjectName().String()
 	require.NoError(t, writeObjectToFS(ctx, failFS, probeName))
-	recBat := colexec.AllocCNS3ResultBat(false)
+	recBat := colexec.AllocCNS3ResultBat(false, mp)
 	defer recBat.Clean(mp)
 	require.NoError(t, colexec.ExpandObjectStatsToBatch(
 		mp, false, recBat, false, probeStats))
 	require.NoError(t, writer.WriteFile(
 		INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-		probeName, recBat, writer.tnStores[0]))
+		probeName, recBat, catalog.ObjectInsertAttrs, writer.tnStores[0]))
 
 	// Sanity: the publish registered the object's segment exactly the way
 	// an in-transaction delete lookup (deleteBatch's GetCnSegmentType
@@ -185,7 +186,7 @@ func TestIssue25590TransferredFragmentSettlementTearsDownLocalWorkspace(t *testi
 	for i := range stats {
 		probeStats := stats[i]
 		names = append(names, probeStats.ObjectName().String())
-		recBat := colexec.AllocCNS3ResultBat(false)
+		recBat := colexec.AllocCNS3ResultBat(false, mp)
 		bats = append(bats, recBat)
 		require.NoError(t, colexec.ExpandObjectStatsToBatch(
 			mp, false, recBat, false, probeStats))
@@ -199,7 +200,7 @@ func TestIssue25590TransferredFragmentSettlementTearsDownLocalWorkspace(t *testi
 	// segment: the fragment-CN shape where no re-record happens.
 	require.NoError(t, writer.WriteFile(
 		INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-		names[0], bats[0], writer.tnStores[0]))
+		names[0], bats[0], catalog.ObjectInsertAttrs, writer.tnStores[0]))
 
 	// Write 2 — the same publish plus the coordinator's re-record claim:
 	// after the adoption barrier hands the name to the recording side,
@@ -208,7 +209,7 @@ func TestIssue25590TransferredFragmentSettlementTearsDownLocalWorkspace(t *testi
 	// ledger on this CN.
 	require.NoError(t, writer.WriteFile(
 		INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-		names[1], bats[1], writer.tnStores[0]))
+		names[1], bats[1], catalog.ObjectInsertAttrs, writer.tnStores[0]))
 	sidSole := stats[0].ObjectName().ObjectId().Segment()
 	sidClaimed := stats[1].ObjectName().ObjectId().Segment()
 	server.PutCnSegment(&recorder.workspaceSegments, txnID, tbl.tableId,

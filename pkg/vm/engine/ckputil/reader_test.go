@@ -46,7 +46,7 @@ func Test_Reader1(t *testing.T) {
 		ioutil.WithMemorySizeThreshold(mpool.KB*200),
 	)
 
-	dataBatch := NewObjectListBatch()
+	dataBatch := NewObjectListBatch(mp)
 	defer dataBatch.Clean(mp)
 
 	packer := types.NewPacker()
@@ -84,11 +84,7 @@ func Test_Reader1(t *testing.T) {
 	require.Equal(t, 5, len(files))
 	require.Equal(t, allRows, totalRows)
 
-	tableidScanBat := batch.NewWithSchema(
-		true,
-		DataScan_TableIDAtrrs,
-		DataScan_TableIDTypes,
-	)
+	tableidScanBat := batch.NewWithTypes(DataScan_TableIDTypes, mp)
 	defer tableidScanBat.Clean(mp)
 
 	for _, file := range files {
@@ -105,7 +101,7 @@ func Test_Reader1(t *testing.T) {
 		for {
 			tableidScanBat.CleanOnlyData()
 			isEnd, err := reader.Read(
-				ctx, tableidScanBat.Attrs, nil, mp, tableidScanBat,
+				ctx, DataScan_TableIDAtrrs, nil, mp, tableidScanBat,
 			)
 			require.NoError(t, err)
 			if isEnd {
@@ -116,7 +112,7 @@ func Test_Reader1(t *testing.T) {
 		require.Equal(t, int(file.Rows()), row)
 	}
 
-	ranges := MakeTableRangeBatch()
+	ranges := MakeTableRangeBatch(mp)
 	defer ranges.Clean(mp)
 	err = CollectTableRanges(ctx, files, ranges, mp, fs)
 	require.NoError(t, err)

@@ -342,10 +342,11 @@ func bindPreparedGeometrySRID(ctx context.Context, name string, args []*Expr) ([
 		return args, nil
 	}
 	last := len(args) - 1
-	value, known := preparedConfigurationValue(ctx, unwrapPreparedImplicitCast(args[last], true))
+	stored, known := preparedConfigurationStoredValue(ctx, unwrapPreparedImplicitCast(args[last], true))
 	if !known {
 		return args, nil
 	}
+	value := preparedProtocolTextValue(stored)
 	var srid uint32
 	isNull := geometrySRIDSourceIsNull(ctx, args[0])
 	if !isNull {
@@ -1456,20 +1457,28 @@ func wrapAstExprForMySQLSpecialType(ctx context.Context, targetType plan.Type, a
 		return astExpr, nil
 	}
 
-	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
-	boundExpr, err := binder.BindExpr(astExpr, 0, false)
-	if err != nil {
-		return nil, err
-	}
-
 	_, valueToIndex, indexValueToIndex, err := mysqlSpecialTypeFuncNames(&targetType)
 	if err != nil {
 		return nil, err
 	}
 
 	funcName := valueToIndex
-	if types.T(boundExpr.Typ.Id).IsInteger() {
-		funcName = indexValueToIndex
+	// The UPDATE assignment is first projected through a SELECT. A parameter
+	// marker must stay in that SELECT until its prepare context or execution
+	// binding is available; the standalone binder below has neither.
+	marker, isMarker := unwrapParenExpr(astExpr).(*tree.ParamExpr)
+	if isMarker {
+		astExpr = marker
+	}
+	if !isMarker || preparedSourceBindings(ctx) != nil {
+		binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+		boundExpr, bindErr := binder.BindExpr(astExpr, 0, false)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		if types.T(boundExpr.Typ.Id).IsInteger() {
+			funcName = indexValueToIndex
+		}
 	}
 
 	return &tree.FuncExpr{

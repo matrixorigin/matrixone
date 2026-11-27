@@ -118,7 +118,7 @@ func parseCommonFiles(payload []byte, tag string) []string {
 
 // parseMetaFiles parses the meta files which are in ckp/ or gc/ directory.
 func parseMetaFiles(payload []byte, tag string) []string {
-	vec := vector.NewVec(types.Type{})
+	vec := vector.NewVec(types.Type{}, nil)
 	if err := vec.UnmarshalBinary(payload); err != nil {
 		logutil.Errorf("failed to unmarshal checkpoint file: %v", err)
 		return nil

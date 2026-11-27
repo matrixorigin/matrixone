@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -47,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
@@ -299,7 +302,7 @@ func typeMatched(vec *vector.Vector, typ types.Type) bool {
 	return t.Oid == typ.Oid && t.Width == typ.Width && t.Scale == typ.Scale
 }
 
-func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombstone bool) *batch.Batch {
+func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombstone bool, mp *mpool.MPool) *batch.Batch {
 	retBatchPool.mu.Lock()
 	defer retBatchPool.mu.Unlock()
 
@@ -323,9 +326,9 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 	if forTombstone {
 		if len(retBatchPool.tList) == 0 {
 			bat = batch.NewWithSize(retBatchPool.tombVecCnt)
-			bat.Vecs[0] = vector.NewVec(retBatchPool.tombstoneType)
-			bat.Vecs[1] = vector.NewVec(retBatchPool.tombRowIDType)
-			bat.Vecs[2] = vector.NewVec(retBatchPool.tombKeyType)
+			bat.Vecs[0] = vector.NewVec(retBatchPool.tombstoneType, mp)
+			bat.Vecs[1] = vector.NewVec(retBatchPool.tombRowIDType, mp)
+			bat.Vecs[2] = vector.NewVec(retBatchPool.tombKeyType, mp)
 			goto done
 		}
 
@@ -352,7 +355,7 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 		if len(retBatchPool.dList) == 0 {
 			bat = batch.NewWithSize(retBatchPool.dataVecCnt)
 			for i := range tblStuff.def.colNames {
-				bat.Vecs[i] = vector.NewVec(retBatchPool.dataTypes[i])
+				bat.Vecs[i] = vector.NewVec(retBatchPool.dataTypes[i], mp)
 			}
 			goto done
 		}
@@ -996,6 +999,11 @@ func diffMergeAgency(
 
 	ctx, cancel := context.WithCancel(execCtx.reqCtx)
 	defer cancel()
+	ctx = logtailreplay.WithCheckpointObjectReuse(ctx)
+	ctx = context.WithValue(ctx, branchCatalogHistoryKey{}, &branchCatalogHistory{
+		dbLowerBounds: make(map[dbCreatedTimeLowerBoundKey]types.TS),
+		tableCTS:      make(map[tableCreationCommitTSKey]types.TS),
+	})
 
 	// DATA BRANCH write destinations are never subscription tables (design
 	// §4.3, I3): classify the destination before any write. DIFF ... OUTPUT
@@ -1056,7 +1064,7 @@ func diffMergeAgency(
 	defer tblStuff.worker.Release()
 
 	if dagInfo, err = decideLCABranchTSFromBranchDAG(
-		ctx, ses, bh, tblStuff,
+		ctx, ses, bh, tblStuff, pickStmt != nil && pickStmt.BetweenFrom != "",
 	); err != nil {
 		return
 	}
@@ -1147,18 +1155,20 @@ func diffMergeAgency(
 	}
 
 	if diffStmt == nil {
-		// The apply owner prepares stages before production and consumes each
-		// batch inline. A retry must never cancel a concurrent LCA probe.
+		// The apply owner prepares stages before opening change handles and
+		// consumes each batch inline. A retry must never cancel a concurrent probe.
 		copt.onlineApply = true
-		produce := func(emit emitFunc) error {
+		produce := func(emit emitFunc, preparePick pickApplySetup) error {
 			wg.Add(1)
 			return diffOnBase(ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit,
-				pkFilter, pickKeyHashmap, betweenFrom, betweenTo)
+				pkFilter, pickKeyHashmap, betweenFrom, betweenTo, preparePick)
 		}
 		if pickStmt != nil {
 			return pickMergeDiffs(ctx, cancel, ses, bh, pickStmt, tblStuff, produce)
 		}
-		return mergeDiffs(ctx, cancel, ses, bh, tblStuff, produce)
+		return mergeDiffs(ctx, cancel, ses, bh, tblStuff, func(emit emitFunc) error {
+			return produce(emit, nil)
+		})
 	}
 
 	retBatCh = make(chan batchWithKind, 10)
@@ -1195,7 +1205,7 @@ func diffMergeAgency(
 
 	if err = diffOnBase(
 		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter, pickKeyHashmap,
-		betweenFrom, betweenTo,
+		betweenFrom, betweenTo, nil,
 	); err != nil {
 		// If the DIFF consumer cancelled the context (e.g., an output failure),
 		// wait for it to finish and prefer its real error over context.Canceled.
@@ -1266,6 +1276,9 @@ func handleBranchMerge(
 	ses *Session,
 	stmt *tree.DataBranchMerge,
 ) (err error) {
+	if stmt.DstTable.AtTsExpr != nil {
+		return moerr.NewInvalidInputNoCtx("destination snapshot option is not supported for DATA BRANCH MERGE")
+	}
 	if dataBranchMergeTxnNotAllowed(ses) {
 		return moerr.NewInternalError(execCtx.reqCtx, dataBranchMergePickTxnErrorInfo())
 	}
@@ -1324,6 +1337,7 @@ func getTableStuff(
 	var tarTblDef *plan.TableDef
 
 	if tblStuff.tarRel, tblStuff.baseRel, tblStuff.tarSnap, tblStuff.baseSnap,
+		tblStuff.tarRelSnapshot, tblStuff.baseRelSnapshot,
 		tblStuff.tarOperand, tblStuff.baseOperand, err = getRelations(
 		ctx, ses, bh, srcTable, dstTable,
 	); err != nil {
@@ -1382,6 +1396,7 @@ func getTableStuff(
 		return
 	}
 	tblStuff.def.pkSeqnum = int(tarTblDef.Cols[tarTblDef.Name2ColIndex[tarTblDef.Pkey.PkeyColName]].Seqnum)
+	tblStuff.def.pkIsSortKey = tblStuff.def.pkKind != fakeKind && tarTblDef.ClusterBy == nil
 	if tblStuff.def.pkKind == fakeKind {
 		tblStuff.def.pkColIdxes = dataBranchFakePKColIdxes(tarTblDef)
 	}
@@ -1416,6 +1431,24 @@ func reconcileDataBranchEndpointSchema(
 		resolveBaseColumn = func(tarCol *plan.ColDef) *plan.ColDef {
 			return dataBranchEndpointColumnDef(baseDef, tarCol)
 		}
+		tarSP, baseSP := tables.resolvedSnapshots(ses)
+		baseAnchorsProbe := baseSP.LT(&tarSP)
+		tables.def.lcaColNames = make([]string, len(tables.def.colNames))
+		idx := -1
+		for _, tarCol := range tarDef.Cols {
+			if tarCol.Name == catalog.Row_ID {
+				continue
+			}
+			idx++
+			baseCol := resolveBaseColumn(tarCol)
+			if baseCol == nil {
+				continue
+			}
+			tables.def.lcaColNames[idx] = tarCol.Name
+			if baseAnchorsProbe {
+				tables.def.lcaColNames[idx] = baseCol.Name
+			}
+		}
 	} else if dagInfo.hasLCA() {
 		tarSP, baseSP := tables.resolvedSnapshots(ses)
 		tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
@@ -1435,28 +1468,13 @@ func reconcileDataBranchEndpointSchema(
 		if err != nil {
 			return err
 		}
+		tables.tarPathDefs, tables.basePathDefs = tarDefs, baseDefs
 		endpointColumns, err := dataBranchLineageEndpointColumns(
 			tarDefs, dagInfo.pathFromLCAToTarLineageOnly,
 			baseDefs, dagInfo.pathFromLCAToBaseLineageOnly,
 		)
 		if err != nil {
 			return err
-		}
-		tables.def.lcaColNames = make([]string, len(tables.def.colNames))
-		for _, tarCol := range tarDef.Cols {
-			if tarCol.Name == catalog.Row_ID {
-				continue
-			}
-			reachesLCA, lcaCol, redefined := dataBranchColumnReachesLCA(
-				tarDefs, dagInfo.pathFromLCAToTarLineageOnly, tarCol,
-			)
-			if !reachesLCA || redefined || lcaCol == nil {
-				continue
-			}
-			idx := dataBranchColumnIndexByName(tables.def.colNames, tarCol.Name)
-			if idx >= 0 {
-				tables.def.lcaColNames[idx] = lcaCol.Name
-			}
 		}
 		resolveBaseColumn = func(tarCol *plan.ColDef) *plan.ColDef {
 			if baseCol := endpointColumns[strings.ToLower(tarCol.Name)]; baseCol != nil {
@@ -1466,6 +1484,40 @@ func reconcileDataBranchEndpointSchema(
 				return dataBranchColumnDefByLogicalName(baseDef, tarCol)
 			}
 			return nil
+		}
+		tables.def.tarLCAColNames = make([]string, len(tables.def.colNames))
+		tables.def.baseLCAColNames = make([]string, len(tables.def.colNames))
+		idx := -1
+		for _, tarCol := range tarDef.Cols {
+			if tarCol.Name == catalog.Row_ID {
+				continue
+			}
+			idx++
+			reaches, tarLCACol, tarForkCol, redefined := dataBranchColumnAtFork(
+				tarDefs, dagInfo.pathFromLCAToTarLineageOnly, tarCol,
+			)
+			if !reaches || redefined || tarLCACol == nil {
+				continue
+			}
+			tables.def.tarLCAColNames[idx] = tarLCACol.Name
+			if tarForkCol != nil {
+				tables.def.tarLCAColNames[idx] = tarForkCol.Name
+			}
+			// Keep the target's lineage name as a default when the base has no
+			// lineage match, as in the shared probe layout.
+			tables.def.baseLCAColNames[idx] = tables.def.tarLCAColNames[idx]
+			if reaches, _, baseForkCol, redefined := dataBranchColumnAtFork(
+				baseDefs, dagInfo.pathFromLCAToBaseLineageOnly, resolveBaseColumn(tarCol),
+			); reaches && !redefined && baseForkCol != nil {
+				tables.def.baseLCAColNames[idx] = baseForkCol.Name
+			}
+		}
+		// The earlier anchor observes the shared LCA generation. Sibling PICK
+		// selects each side's fork names separately.
+		tarAnchor, baseAnchor, _ := dagInfo.lcaProbeAnchors(tarSP, baseSP)
+		tables.def.lcaColNames = tables.def.tarLCAColNames
+		if baseAnchor.LT(&tarAnchor) {
+			tables.def.lcaColNames = tables.def.baseLCAColNames
 		}
 	}
 
@@ -1498,21 +1550,20 @@ func reconcileDataBranchEndpointSchema(
 		tables.def.baseColToTarIdx[i] = -1
 	}
 	tables.def.baseColNames = make([]string, len(tables.def.colNames))
+	tarDataIdx := -1
 	for _, tarCol := range tarDef.Cols {
 		if tarCol.Name == catalog.Row_ID {
 			continue
 		}
+		tarDataIdx++
 		baseCol := resolveBaseColumn(tarCol)
 		if baseCol == nil {
 			continue
 		}
-		tarIdx := dataBranchColumnIndexByName(tables.def.colNames, tarCol.Name)
-		if tarIdx >= 0 {
-			tables.def.baseColNames[tarIdx] = baseCol.Name
-		}
+		tables.def.baseColNames[tarDataIdx] = baseCol.Name
 		for i, candidate := range baseDataCols {
-			if strings.EqualFold(candidate.Name, baseCol.Name) {
-				tables.def.baseColToTarIdx[i] = tarIdx
+			if candidate == baseCol || strings.EqualFold(candidate.Name, baseCol.Name) {
+				tables.def.baseColToTarIdx[i] = tarDataIdx
 				break
 			}
 		}
@@ -1548,6 +1599,7 @@ func diffOnBase(
 	pkFilter *engine.PKFilter,
 	pickKeyHashmap databranchutils.BranchHashmap,
 	betweenFrom, betweenTo *types.TS,
+	preparePick pickApplySetup,
 ) (err error) {
 
 	defer func() {
@@ -1580,16 +1632,23 @@ func diffOnBase(
 
 	if dagInfo.hasLCA() {
 		tarSp, baseSp := tblStuff.resolvedSnapshots(ses)
+		tarRelSp, baseRelSp := tblStuff.resolvedRelSnapshots(ses)
 		lcaProbe := dagInfo.lcaProbeSnapshot(tarSp, baseSp)
 		tarIdent, baseIdent := tblStuff.endpointIdentities(ctx, ses)
 		lcaCandidates := dedupeBranchIdentities(tarIdent, baseIdent)
+		tarID := tblStuff.tarRel.GetTableID(ctx)
+		baseID := tblStuff.baseRel.GetTableID(ctx)
 		var lcaWinner branchIdentity
-		switch dagInfo.lcaTableId {
-		case tblStuff.tarRel.GetTableID(ctx):
+		// When both operands are the LCA table, use the handle at the
+		// earlier observation so the fallback sees that snapshot's schema.
+		switch {
+		case dagInfo.lcaTableId == tarID && (tarID != baseID || !baseSp.LT(&tarSp)):
 			tblStuff.lcaRel = tblStuff.tarRel
+			tblStuff.lcaRelSnapshot = tarRelSp
 			lcaWinner = tarIdent
-		case tblStuff.baseRel.GetTableID(ctx):
+		case dagInfo.lcaTableId == baseID:
 			tblStuff.lcaRel = tblStuff.baseRel
+			tblStuff.lcaRelSnapshot = baseRelSp
 			lcaWinner = baseIdent
 		default:
 			if tblStuff.lcaRel, lcaWinner, err = reopenDataBranchNodeByID(
@@ -1619,11 +1678,14 @@ func diffOnBase(
 						return
 					}
 					if !zeroHistory {
+						tblStuff.lcaRelSnapshot = endpointCreationTS
 						tblStuff.lcaHasZeroHistory = false
 						break
 					}
 					tblStuff.lcaHasZeroHistory = true
 				}
+			} else {
+				tblStuff.lcaRelSnapshot = lcaProbe
 			}
 		}
 		if !tblStuff.lcaHasZeroHistory && tblStuff.lcaIdent == nil {
@@ -1662,7 +1724,7 @@ func diffOnBase(
 	}
 
 	if tarHandle, baseHandle, err = constructChangeHandle(
-		ctx, ses, bh, tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo,
+		ctx, ses, bh, &tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo, preparePick,
 	); err != nil {
 		return
 	}
@@ -1724,6 +1786,7 @@ func checkDataBranchPrimaryKeyCompatibilityWithResolver(
 func dataBranchColumnTypeAttributesEqual(left, right plan.Type) bool {
 	return left.Width == right.Width &&
 		left.Scale == right.Scale &&
+		left.NumericAttributes == right.NumericAttributes &&
 		left.Enumvalues == right.Enumvalues &&
 		left.AutoIncr == right.AutoIncr &&
 		left.NotNullable == right.NotNullable
@@ -1743,16 +1806,22 @@ func checkSchemaCompatibilityWithResolver(
 
 	baseVisibleColMap := make(map[string]*plan.ColDef, len(baseDef.Cols))
 	for _, col := range baseDef.Cols {
-		if col.Name == catalog.Row_ID {
-			continue
-		}
-		name := strings.ToLower(col.Name)
 		if isDataBranchUserVisibleColumn(col) {
-			baseVisibleColMap[name] = col
+			nameKey := commonutil.EqualFoldKey(col.Name)
+			if prev := baseVisibleColMap[nameKey]; prev != nil {
+				err = moerr.NewInternalErrorNoCtxf(
+					"schema compatibility check: base columns '%s' and '%s' have equivalent names",
+					prev.Name, col.Name,
+				)
+				return
+			}
+			baseVisibleColMap[nameKey] = col
 		}
 	}
 
 	commonColNameSet := make(map[string]bool)
+	matchedBaseCols := make(map[*plan.ColDef]string)
+	tarVisibleColMap := make(map[string]*plan.ColDef, len(tarDef.Cols))
 	dataIdx := 0
 	for _, tarCol := range tarDef.Cols {
 		if tarCol.Name == catalog.Row_ID {
@@ -1764,8 +1833,28 @@ func checkSchemaCompatibilityWithResolver(
 			continue
 		}
 
-		name := strings.ToLower(tarCol.Name)
 		baseCol := resolveBaseColumn(tarCol)
+		if baseCol != nil {
+			if prevTarName, matched := matchedBaseCols[baseCol]; matched {
+				err = moerr.NewInternalErrorNoCtxf(
+					"schema compatibility check: base column '%s' matches multiple target columns ('%s' and '%s')",
+					baseCol.Name, prevTarName, tarCol.Name,
+				)
+				return
+			}
+			matchedBaseCols[baseCol] = tarCol.Name
+		}
+		if isDataBranchUserVisibleColumn(tarCol) {
+			tarNameKey := commonutil.EqualFoldKey(tarCol.Name)
+			if prev := tarVisibleColMap[tarNameKey]; prev != nil {
+				err = moerr.NewInternalErrorNoCtxf(
+					"schema compatibility check: target columns '%s' and '%s' have equivalent names",
+					prev.Name, tarCol.Name,
+				)
+				return
+			}
+			tarVisibleColMap[tarNameKey] = tarCol
+		}
 		if baseCol != nil {
 			if !dataBranchGeneratedColumnsLogicallyEqual(
 				tarCol, baseCol, tarDef, baseDef, resolveBaseColumn,
@@ -1792,12 +1881,13 @@ func checkSchemaCompatibilityWithResolver(
 					return
 				}
 				commonIdxes = append(commonIdxes, dataIdx)
-				commonColNameSet[name] = true
-				commonColNameSet[strings.ToLower(baseCol.Name)] = true
+				baseNameKey := commonutil.EqualFoldKey(baseCol.Name)
+				commonColNameSet[commonutil.EqualFoldKey(tarCol.Name)] = true
+				commonColNameSet[baseNameKey] = true
 				if isDataBranchUserVisibleColumn(tarCol) {
 					commonVisibleIdxes = append(commonVisibleIdxes, dataIdx)
 				}
-				delete(baseVisibleColMap, strings.ToLower(baseCol.Name))
+				delete(baseVisibleColMap, baseNameKey)
 			} else {
 				err = moerr.NewInternalErrorNoCtxf(
 					"schema compatibility check: column '%s' exists in both schemas but has different types (target: %d, base: %d)",
@@ -1823,7 +1913,7 @@ func checkSchemaCompatibilityWithResolver(
 		// No specific PK name to verify.
 	} else if baseDef.Pkey.CompPkeyCol != nil {
 		for _, pkName := range baseDef.Pkey.Names {
-			if !commonColNameSet[strings.ToLower(pkName)] {
+			if !commonColNameSet[commonutil.EqualFoldKey(pkName)] {
 				err = moerr.NewInternalErrorNoCtxf(
 					"schema compatibility check: composite primary key column '%s' is not present in common columns",
 					pkName,
@@ -1833,7 +1923,7 @@ func checkSchemaCompatibilityWithResolver(
 		}
 	} else {
 		pkName := baseDef.Pkey.PkeyColName
-		if !commonColNameSet[strings.ToLower(pkName)] {
+		if !commonColNameSet[commonutil.EqualFoldKey(pkName)] {
 			err = moerr.NewInternalErrorNoCtxf(
 				"schema compatibility check: primary key column '%s' is not present in common columns",
 				pkName,
@@ -1859,12 +1949,8 @@ func checkSchemaCompatibilityWithResolver(
 // guarantee that values valid on one side can be materialized into the other.
 func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
 	return left.Id == right.Id &&
-		left.Width == right.Width &&
-		left.Scale == right.Scale &&
-		left.Enumvalues == right.Enumvalues &&
 		left.SameCollation(right) &&
-		left.NotNullable == right.NotNullable &&
-		left.AutoIncr == right.AutoIncr
+		dataBranchColumnTypeAttributesEqual(left, right)
 }
 
 func getRelationById(
@@ -1928,6 +2014,8 @@ func getRelations(
 	baseRel engine.Relation,
 	tarSnap *plan.Snapshot,
 	baseSnap *plan.Snapshot,
+	tarRelSnapshot types.TS,
+	baseRelSnapshot types.TS,
 	tarOperand *branchOperand,
 	baseOperand *branchOperand,
 	err error,
@@ -2031,6 +2119,9 @@ func getRelations(
 	)
 
 	eng := ses.proc.GetSessionInfo().StorageEngine
+	if txnOpA != nil {
+		tarRelSnapshot = types.TimestampToTS(txnOpA.SnapshotTS())
+	}
 	if tarDB, err = eng.Database(tarRelCtx, tarRouteDBName, txnOpA); err != nil {
 		logutil.Error(
 			"DataBranch-GetRelations-TargetDB-Error",
@@ -2061,6 +2152,9 @@ func getRelations(
 		return
 	}
 
+	if txnOpB != nil {
+		baseRelSnapshot = types.TimestampToTS(txnOpB.SnapshotTS())
+	}
 	if baseDB, err = eng.Database(baseRelCtx, baseRouteDBName, txnOpB); err != nil {
 		logutil.Error(
 			"DataBranch-GetRelations-BaseDB-Error",
@@ -2163,10 +2257,11 @@ func constructChangeHandle(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
-	tables tableStuff,
+	tables *tableStuff,
 	branchInfo *branchMetaInfo,
 	pkFilter *engine.PKFilter,
 	betweenFrom, betweenTo *types.TS,
+	preparePick pickApplySetup,
 ) (
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
@@ -2194,64 +2289,111 @@ func constructChangeHandle(
 	}()
 
 	if tarRange, baseRange, err = decideCollectRange(
-		ctx, ses, bh, tables, branchInfo,
+		ctx, ses, bh, *tables, branchInfo,
 	); err != nil {
 		return
 	}
 	tarSnapshot, baseSnapshot := tables.resolvedSnapshots(ses)
+	tarRelSp, baseRelSp := tables.resolvedRelSnapshots(ses)
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
 
-	// BETWEEN SNAPSHOT: intersect the target collect range with [betweenFrom.Next(), betweenTo].
-	// This narrows the time window on the source side so only changes within the
-	// snapshot range are collected.  The base (destination) side is not narrowed.
+	var candidates []branchIdentity
 	if betweenFrom != nil && betweenTo != nil {
-		bFrom := betweenFrom.Next()
-		bTo := *betweenTo
-		j := 0
-		boundaries := make([]engine.Relation, 0, len(tarRange.rel))
-		for i := range tarRange.rel {
-			startBoundary := tarRange.startBoundary(i)
-			// Intersect: from = max(original, bFrom), end = min(original, bTo)
-			f := tarRange.from[i]
-			e := tarRange.end[i]
-			if bFrom.GT(&f) {
-				f = bFrom
-				// The lineage boundary represents the state immediately before
-				// the original range, not an arbitrary BETWEEN lower bound.
-				startBoundary = nil
-			}
-			if bTo.LT(&e) {
-				e = bTo
-			}
-			if f.LE(&e) {
-				tarRange.from[j] = f
-				tarRange.end[j] = e
-				tarRange.rel[j] = tarRange.rel[i]
-				if tarRange.idents != nil {
-					tarRange.idents[j] = tarRange.idents[i]
-				}
-				boundaries = append(boundaries, startBoundary)
-				j++
-			}
-		}
-		tarRange.from = tarRange.from[:j]
-		tarRange.end = tarRange.end[:j]
-		tarRange.rel = tarRange.rel[:j]
-		if tarRange.idents != nil {
-			tarRange.idents = tarRange.idents[:j]
-		}
-		tarRange.startBoundaryRel = boundaries
+		tables.boundedPick = true
+		tarRange.restrict(*betweenFrom, *betweenTo)
+		candidates = dedupeBranchIdentities(tarIdent, baseIdent)
 	}
 	tarHydrationRel := tables.tarRel
 	tarHydrationSnapshot := tarSnapshot
+	tarHydrationRelSnapshot := tarRelSp
 	tarHydrationIdent := tarIdent
-	if betweenTo != nil && betweenTo.LT(&tarHydrationSnapshot) && len(tarRange.rel) > 0 {
-		// PICK BETWEEN observes the target as of betweenTo, not as of the
-		// statement's later endpoint snapshot. The last surviving range is the
-		// physical generation that was active at that boundary.
-		tarHydrationRel = tarRange.rel[len(tarRange.rel)-1]
-		tarHydrationSnapshot = *betweenTo
-		tarHydrationIdent = tarRange.segmentIdentity(len(tarRange.rel)-1, tarIdent)
+	var boundedUpperColumns *dataBranchClearColumns
+	tables.tarVisibleState, tables.baseVisibleState = tarRange.crossesClear(), baseRange.crossesClear()
+	if tables.tarVisibleState {
+		if betweenFrom != nil && betweenTo != nil {
+			// The surviving segments may start after lo because the destination
+			// already inherited the source prefix at its fork.
+			last := tarRange.rel[len(tarRange.rel)-1]
+			baselineAt := *betweenFrom
+			if first := tarRange.from[0].Prev(); first.GT(&baselineAt) {
+				baselineAt = first
+			}
+			if tables.tarClearBaseline, err = dataBranchSourceAt(
+				ctx, ses, bh, candidates, branchInfo, last, baselineAt,
+			); err != nil {
+				return
+			}
+			if tables.tarClearBaseline.rel != nil {
+				if tables.tarClearBaseline.columns, err = boundedDataBranchClearColumns(
+					ctx, ses, bh, candidates, *tables, branchInfo, *tables.tarClearBaseline, tarSnapshot,
+				); err != nil {
+					return
+				}
+			}
+			if betweenTo.LT(&tarSnapshot) {
+				var endpoint *dataBranchSnapshotRelation
+				if endpoint, err = dataBranchSourceAt(ctx, ses, bh, candidates, branchInfo, last, *betweenTo); err != nil {
+					return
+				}
+				if endpoint.rel == nil {
+					err = moerr.NewInternalErrorNoCtx("data branch source is missing at the upper snapshot")
+					return
+				}
+				tarHydrationRel, tarHydrationSnapshot, tarHydrationIdent = endpoint.rel, endpoint.at, endpoint.ident
+				tarHydrationRelSnapshot = endpoint.at
+				if boundedUpperColumns, err = boundedDataBranchClearColumns(
+					ctx, ses, bh, candidates, *tables, branchInfo, *endpoint, tarSnapshot,
+				); err != nil {
+					return
+				}
+				tables.tarClearBaseline.upperColumns = boundedUpperColumns.present
+			}
+		}
+		// The endpoint image contains only surviving rows from the last clear
+		// and its successors, including rows materialized by later COPY ALTERs.
+		tarRange = dataBranchVisibleRange(tarHydrationRel, tarHydrationSnapshot, tarHydrationIdent)
+	} else if betweenTo != nil && betweenTo.LT(&tarHydrationSnapshot) && len(tarRange.rel) > 0 {
+		// The collection relation can have been opened after the upper
+		// snapshot, even for ordinary DML on the same table ID.
+		var endpoint *dataBranchSnapshotRelation
+		last := tarRange.rel[len(tarRange.rel)-1]
+		if endpoint, err = dataBranchSourceAt(ctx, ses, bh, candidates, branchInfo, last, *betweenTo); err != nil {
+			return
+		}
+		if endpoint.rel == nil {
+			err = moerr.NewInternalErrorNoCtx("data branch source is missing at the upper snapshot")
+			return
+		}
+		tarHydrationRel, tarHydrationSnapshot, tarHydrationIdent = endpoint.rel, endpoint.at, endpoint.ident
+		tarHydrationRelSnapshot = endpoint.at
+		if boundedUpperColumns, err = boundedDataBranchClearColumns(
+			ctx, ses, bh, candidates, *tables, branchInfo, *endpoint, tarSnapshot,
+		); err != nil {
+			return
+		}
+	}
+	if tables.tarClearBaseline != nil && (!branchInfo.hasLCA() || tables.lcaHasZeroHistory) {
+		// An unrelated destination has no fork baseline. Compare its visible
+		// rows to the source's lower snapshot when matching picked changes.
+		tables.baseVisibleState = true
+	}
+	if tables.tarVisibleState && branchInfo.hasLCA() && tables.def.pkKind == fakeKind {
+		// Once a clear invalidates the source's hidden row identities, both
+		// sides must match duplicates by value and retain live destination
+		// identities for any excess source deletions.
+		tables.baseVisibleState = true
+	}
+	if tables.baseVisibleState {
+		baseRange = dataBranchVisibleRange(tables.baseRel, baseSnapshot, baseIdent)
+	}
+	if preparePick != nil {
+		var upperColumns []*plan.ColDef
+		if boundedUpperColumns != nil {
+			upperColumns = boundedUpperColumns.present
+		}
+		if err = preparePick(upperColumns); err != nil {
+			return
+		}
 	}
 	targetDef := tables.tarRel.GetTableDef(ctx)
 	ctx = engine.WithVisibleStateRecoveryResources(
@@ -2276,14 +2418,32 @@ func constructChangeHandle(
 
 	for i := range tarRange.rel {
 		collectStart := time.Now()
+		segRel := tarRange.rel[i]
+		tarSegIdent := tarRange.segmentIdentity(i, tarIdent)
+		var historicalColumns []*plan.ColDef
+		if boundedUpperColumns != nil {
+			if segRel.GetTableID(ctx) == tarHydrationRel.GetTableID(ctx) {
+				segRel, tarSegIdent = tarHydrationRel, tarHydrationIdent
+				historicalColumns = boundedUpperColumns.present
+			} else {
+				segment := dataBranchSnapshotRelation{rel: segRel, ident: tarSegIdent, at: tarRange.segmentSnapshot(i, tarRelSp)}
+				var columns *dataBranchClearColumns
+				if columns, err = boundedDataBranchClearColumns(
+					ctx, ses, bh, candidates, *tables, branchInfo, segment, tarSnapshot,
+				); err != nil {
+					return
+				}
+				historicalColumns = columns.present
+			}
+		}
 		var (
 			sourceMapping   []int
 			needsProjection bool
 		)
-		if tarRange.rel[i].GetTableID(ctx) != tables.tarRel.GetTableID(ctx) {
-			if sourceMapping, err = dataBranchSourceColToTargetIdx(
-				tarRange.rel[i].GetTableDef(ctx), targetDef, tables.def.colNames,
-				tables.def.tarOnlyIdxes,
+		if historicalColumns != nil || segRel.GetTableID(ctx) != tables.tarRel.GetTableID(ctx) {
+			if sourceMapping, err = dataBranchHistoricalColToTargetIdx(
+				segRel.GetTableDef(identityCtx(ctx, tarSegIdent)), targetDef, tables.def.colNames,
+				tables.def.tarOnlyIdxes, historicalColumns, false,
 			); err != nil {
 				return
 			}
@@ -2291,7 +2451,6 @@ func constructChangeHandle(
 				sourceMapping, len(tables.def.colNames),
 			)
 		}
-		tarSegIdent := tarRange.segmentIdentity(i, tarIdent)
 		collectCtx := identityCtx(ctx, tarSegIdent)
 		if startBoundary := tarRange.startBoundary(i); startBoundary != nil {
 			collectCtx = engine.WithVisibleStateStartRelation(
@@ -2300,7 +2459,7 @@ func constructChangeHandle(
 		}
 		if handle, err = collectFn(
 			collectCtx,
-			tarRange.rel[i],
+			segRel,
 			tarRange.from[i],
 			tarRange.end[i],
 			ses.proc.Mp(),
@@ -2309,7 +2468,7 @@ func constructChangeHandle(
 		}
 		logutil.Info("DataBranch-CollectChanges-Open",
 			zap.String("side", "target"),
-			zap.Uint64("table-id", tarRange.rel[i].GetTableID(ctx)),
+			zap.Uint64("table-id", segRel.GetTableID(ctx)),
 			zap.String("from", tarRange.from[i].ToString()),
 			zap.String("to", tarRange.end[i].ToString()),
 			zap.Bool("has-handle", handle != nil),
@@ -2319,17 +2478,22 @@ func constructChangeHandle(
 		if handle != nil {
 			handle = scopeChangesHandleToSegmentOwner(handle, tarSegIdent)
 			if needsProjection {
-				handle = &historicalDataBranchChangesHandle{
-					inner:            handle,
-					sourceMapping:    sourceMapping,
-					tblStuff:         tables,
-					ses:              ses,
-					endpointRel:      tarHydrationRel,
-					endpointSnapshot: tarHydrationSnapshot,
-					endpointIdent:    tarHydrationIdent,
-					hydrate: tarRange.rel[i].GetTableID(ctx) !=
+				historical := &historicalDataBranchChangesHandle{
+					inner:               handle,
+					sourceMapping:       sourceMapping,
+					tblStuff:            *tables,
+					ses:                 ses,
+					endpointRel:         tarHydrationRel,
+					endpointSnapshot:    tarHydrationSnapshot,
+					endpointRelSnapshot: tarHydrationRelSnapshot,
+					endpointIdent:       tarHydrationIdent,
+					hydrate: segRel.GetTableID(ctx) !=
 						tarHydrationRel.GetTableID(ctx),
 				}
+				if boundedUpperColumns != nil {
+					historical.endpointColumns = boundedUpperColumns.present
+				}
+				handle = historical
 			}
 			tarHandle = append(tarHandle, handle)
 		}
@@ -2344,7 +2508,7 @@ func constructChangeHandle(
 		if baseRange.rel[i].GetTableID(ctx) != tables.baseRel.GetTableID(ctx) {
 			if sourceMapping, err = dataBranchSourceColToTargetIdx(
 				baseRange.rel[i].GetTableDef(ctx), targetDef, tables.def.colNames,
-				tables.def.tarOnlyIdxes,
+				tables.def.tarOnlyIdxes, true,
 			); err != nil {
 				return
 			}
@@ -2381,22 +2545,166 @@ func constructChangeHandle(
 			handle = scopeChangesHandleToSegmentOwner(handle, baseSegIdent)
 			if needsProjection {
 				handle = &historicalDataBranchChangesHandle{
-					inner:            handle,
-					sourceMapping:    sourceMapping,
-					tblStuff:         tables,
-					ses:              ses,
-					endpointRel:      tables.baseRel,
-					endpointSnapshot: baseSnapshot,
-					endpointIdent:    baseIdent,
+					inner:               handle,
+					sourceMapping:       sourceMapping,
+					tblStuff:            *tables,
+					ses:                 ses,
+					endpointRel:         tables.baseRel,
+					endpointSnapshot:    baseSnapshot,
+					endpointRelSnapshot: baseRelSp,
+					endpointIdent:       baseIdent,
 					hydrate: baseRange.rel[i].GetTableID(ctx) !=
 						tables.baseRel.GetTableID(ctx),
 				}
+			} else if baseRange.rel[i].GetTableID(ctx) == tables.baseRel.GetTableID(ctx) {
+				handle = &currentBaseChangesHandle{inner: handle, tblStuff: *tables}
 			}
 			baseHandle = append(baseHandle, handle)
 		}
 	}
 
 	return
+}
+
+func dataBranchVisibleRange(rel engine.Relation, at types.TS, ident branchIdentity) collectRange {
+	return collectRange{
+		from: []types.TS{types.MinTs()}, end: []types.TS{at},
+		rel: []engine.Relation{rel}, idents: []branchIdentity{ident},
+	}
+}
+
+// dataBranchSourceAt resolves the source's physical generations first.
+// Before the source fork, only the retained segment and the path it inherited
+// can contribute a window image. Clamp each ancestor to its captured horizon.
+func dataBranchSourceAt(
+	ctx context.Context, ses *Session, bh BackgroundExec, candidates []branchIdentity,
+	info *branchMetaInfo, lastRetained engine.Relation, at types.TS,
+) (*dataBranchSnapshotRelation, error) {
+	for _, id := range info.tarRebuildChain {
+		rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, candidates, id, at)
+		if err == nil {
+			return &dataBranchSnapshotRelation{rel: rel, ident: ident, at: at}, nil
+		}
+		if !isMissingDataBranchRelationByID(err) {
+			return nil, err
+		}
+	}
+	path, snapshots := info.pathFromLCAToTar, info.pathFromLCAToTarTS
+	for i := slices.Index(path, lastRetained.GetTableID(ctx)); i >= 0; i-- {
+		segmentAt := at
+		if i+1 < len(path) && snapshots[i+1].LT(&segmentAt) {
+			segmentAt = snapshots[i+1]
+		}
+		rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, candidates, path[i], segmentAt)
+		if err == nil {
+			return &dataBranchSnapshotRelation{rel: rel, ident: ident, at: segmentAt}, nil
+		}
+		if !isMissingDataBranchRelationByID(err) {
+			return nil, err
+		}
+	}
+	return &dataBranchSnapshotRelation{at: at}, nil
+}
+
+// Resolve the schema along the source path from a bounded snapshot to the
+// endpoint. Within a generation the snapshot can predate an in-place
+// rename or DROP/ADD, so include both definitions and compare their stable IDs.
+func boundedDataBranchClearColumns(
+	ctx context.Context, ses *Session, bh BackgroundExec, candidates []branchIdentity, tables tableStuff,
+	info *branchMetaInfo, historical dataBranchSnapshotRelation, endpointSP types.TS,
+) (*dataBranchClearColumns, error) {
+	id := historical.rel.GetTableID(ctx)
+	endpointID := tables.tarRel.GetTableID(ctx)
+	var defs []*plan.TableDef
+	var pathTS []types.TS
+	var lineageOnly []bool
+	if id == endpointID {
+		defs = []*plan.TableDef{tables.tarRel.GetTableDef(ctx)}
+	} else {
+		var path []uint64
+		if i := slices.Index(info.pathFromLCAToTar, id); i >= 0 {
+			path, pathTS = info.pathFromLCAToTar[i:], info.pathFromLCAToTarTS[i:]
+			lineageOnly = info.pathFromLCAToTarLineageOnly[i:]
+			if len(tables.tarPathDefs) == len(info.pathFromLCAToTar) {
+				defs = tables.tarPathDefs[i:]
+			}
+		} else if i := slices.Index(info.tarRebuildChain, id); i >= 0 && i < len(info.tarRebuildChainTS) {
+			path, pathTS = slices.Clone(info.tarRebuildChain[:i+1]), slices.Clone(info.tarRebuildChainTS[:i+1])
+			slices.Reverse(path)
+			slices.Reverse(pathTS)
+		}
+		if defs == nil {
+			var err error
+			defs, err = dataBranchPathTableDefs(ctx, ses, bh, candidates, tables.tarRel, endpointSP, path, pathTS)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if lineageOnly == nil {
+		lineageOnly = make([]bool, len(defs))
+		for i := 1; i < len(lineageOnly); i++ {
+			lineageOnly[i] = true
+		}
+	}
+	if len(defs) > 1 {
+		var err error
+		defs, lineageOnly, err = dataBranchClearCreationSchemas(ctx, ses, bh, candidates,
+			tables.tarRel, endpointSP, defs, pathTS, lineageOnly, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+	older := historical.rel.GetTableDef(identityCtx(ctx, historical.ident))
+	return resolveDataBranchClearColumns(tables.def.colNames, append([]*plan.TableDef{older}, defs...),
+		append([]bool{false}, lineageOnly...)), nil
+}
+
+// Use a versioned generation's creation schema before its final schema. An
+// in-place ALTER may have changed the name or default without rewriting rows.
+// Bounded PICK can also consume a logical parent's historical segment.
+func dataBranchClearCreationSchemas(
+	ctx context.Context, ses *Session, bh BackgroundExec, owners []branchIdentity,
+	endpoint engine.Relation, endpointSP types.TS, defs []*plan.TableDef, pathTS []types.TS, edges []bool,
+	includeForks bool,
+) ([]*plan.TableDef, []bool, error) {
+	out := make([]*plan.TableDef, 0, len(defs))
+	outEdges := make([]bool, 0, len(defs))
+	for i, def := range defs {
+		if i != 0 && (edges[i] || includeForks) && def.Version != 0 && defs[i-1].TblId != def.TblId {
+			rel, owner, at := endpoint, owners[0], endpointSP
+			if i+1 < len(defs) {
+				var err error
+				at = pathTS[i+1]
+				rel, owner, err = reopenDataBranchNodeByID(ctx, ses, bh, owners, def.TblId, at)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			createdAt, err := getTablesCreationCommitTS(ctx, ses, owner, rel, owner, rel, []types.TS{at, at})
+			if err != nil {
+				return nil, nil, err
+			}
+			created, owner, err := reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{owner}, def.TblId, createdAt[0])
+			if err != nil {
+				return nil, nil, err
+			}
+			creationDef := created.GetTableDef(identityCtx(ctx, owner))
+			if creationDef.Version != 0 {
+				// The catalog lookup can fall back to a rewritten row when
+				// history is unavailable. Its default is not the introduction value.
+				return nil, nil, moerr.NewNotSupportedNoCtxf(
+					"DATA BRANCH cannot establish the creation schema for table %d across a clear", def.TblId,
+				)
+			}
+			out = append(out, creationDef)
+			outEdges = append(outEdges, edges[i])
+			out, outEdges = append(out, def), append(outEdges, true)
+			continue
+		}
+		out, outEdges = append(out, def), append(outEdges, edges[i])
+	}
+	return out, outEdges, nil
 }
 
 func dataBranchPathTableDefs(
@@ -2501,37 +2809,59 @@ func dataBranchColumnReachesLCA(
 	lineageOnly []bool,
 	endpointCol *plan.ColDef,
 ) (reachesLCA bool, lcaCol *plan.ColDef, redefined bool) {
+	reachesLCA, lcaCol, _, redefined = dataBranchColumnAtFork(pathDefs, lineageOnly, endpointCol)
+	return
+}
+
+func dataBranchColumnAtFork(
+	pathDefs []*plan.TableDef,
+	lineageOnly []bool,
+	endpointCol *plan.ColDef,
+) (reachesLCA bool, lcaCol, forkCol *plan.ColDef, redefined bool) {
 	if len(pathDefs) == 0 || len(pathDefs) != len(lineageOnly) || endpointCol == nil {
-		return false, nil, false
+		return false, nil, nil, false
+	}
+	forkParentIdx := 0
+	if forkIdx, ok := firstDataBranchForkIndex(lineageOnly, len(pathDefs)); ok {
+		forkParentIdx = forkIdx - 1
+	}
+	if forkParentIdx == len(pathDefs)-1 {
+		forkCol = endpointCol
 	}
 	current := endpointCol
 	for i := len(pathDefs) - 2; i >= 0; i-- {
-		previous := dataBranchColumnDefByName(pathDefs[i], current.Name)
-		if previous == nil && !lineageOnly[i+1] {
-			// An in-place rename on an ordinary clone edge can keep OriginName,
-			// which links the descendant name back to its ancestor column.
-			previous = dataBranchColumnDefByLogicalName(pathDefs[i], current)
-		}
-		if previous == nil {
-			// COPY ALTER may not retain OriginName, but a pure rename preserves
-			// the stable physical identity for the whole visible schema. COPY
-			// ALTER coordinates are table-local, so a partial identity match is
-			// not sufficient: ADD/reorder can reuse another column's old pair.
-			previous = dataBranchColumnDefByRenameIdentity(
-				pathDefs[i], pathDefs[i+1], current,
-			)
-		}
+		previous := dataBranchPreviousLineageColumn(pathDefs[i], pathDefs[i+1], current, lineageOnly[i+1])
 		if previous == nil {
 			for j := i - 1; j >= 0; j-- {
 				if dataBranchColumnDefByLogicalName(pathDefs[j], endpointCol) != nil {
-					return false, nil, true
+					return false, nil, forkCol, true
 				}
 			}
-			return false, nil, false
+			return false, nil, forkCol, false
 		}
 		current = previous
+		if i == forkParentIdx {
+			forkCol = current
+		}
 	}
-	return true, current, false
+	return true, current, forkCol, false
+}
+
+func dataBranchPreviousLineageColumn(previousDef, currentDef *plan.TableDef, current *plan.ColDef, lineageOnly bool) *plan.ColDef {
+	if previousDef.TblId != 0 && previousDef.TblId == currentDef.TblId {
+		return dataBranchColumnDefByIdentity(previousDef, current)
+	}
+	if previous := dataBranchColumnDefByName(previousDef, current.Name); previous != nil {
+		return previous
+	}
+	if !lineageOnly {
+		if previous := dataBranchColumnDefByLogicalName(previousDef, current); previous != nil {
+			return previous
+		}
+	}
+	// COPY ALTER identifiers are table-local. A rename can use them only
+	// when the schema on this edge proves the correspondence.
+	return dataBranchColumnDefByRenameIdentity(previousDef, currentDef, current)
 }
 
 func dataBranchColumnDefByRenameIdentity(
@@ -2616,10 +2946,19 @@ func dataBranchLineageEndpointColumns(
 	tarEndpoint := tarDefs[len(tarDefs)-1]
 	baseEndpoint := baseDefs[len(baseDefs)-1]
 	endpointColumns := make(map[string]*plan.ColDef, len(tarEndpoint.Cols))
+	seenTargetKeys := make(map[string]string, len(tarEndpoint.Cols))
 	for _, tarCol := range tarEndpoint.Cols {
 		if !isDataBranchUserVisibleColumn(tarCol) {
 			continue
 		}
+		key := commonutil.EqualFoldKey(tarCol.Name)
+		if prevName, exists := seenTargetKeys[key]; exists {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"schema compatibility check: target columns '%s' and '%s' have equivalent names",
+				prevName, tarCol.Name,
+			)
+		}
+		seenTargetKeys[key] = tarCol.Name
 		tarReachesLCA, tarLCACol, tarRedefined := dataBranchColumnReachesLCA(
 			tarDefs, tarLineageOnly, tarCol,
 		)
@@ -2690,28 +3029,36 @@ func decideCollectRange(
 	err error,
 ) {
 
-	var (
-		tarCTS  types.TS
-		baseCTS types.TS
-
-		tblCommitTS []types.TS
-
-		tarTableID  = tables.tarRel.GetTableID(ctx)
-		baseTableID = tables.baseRel.GetTableID(ctx)
-	)
-
+	tarTableID := tables.tarRel.GetTableID(ctx)
+	baseTableID := tables.baseRel.GetTableID(ctx)
 	tarSp, baseSp := tables.resolvedSnapshots(ses)
+	tarRelSp, baseRelSp := tables.resolvedRelSnapshots(ses)
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
 
-	if tblCommitTS, err = getTablesCreationCommitTS(
-		ctx, ses, tarIdent, tables.tarRel, baseIdent, tables.baseRel,
-		[]types.TS{tarSp, baseSp},
-	); err != nil {
-		return
+	lcaIdent := tables.resolvedLCAIdentity(ctx, ses)
+	resolveEndpoint := func(ident branchIdentity, rel engine.Relation, tableID uint64, snap types.TS) (types.TS, error) {
+		// At an endpoint snapshot a checkpoint may only retain an ALTER's
+		// rewritten catalog row. Reuse the bound already proven at the LCA
+		// for the same physical generation so earlier writes remain visible.
+		if tableID == dagInfo.lcaTableId && ident.account == lcaIdent.account &&
+			!tables.lcaCTS.IsEmpty() && tables.lcaCTS.LE(&snap) {
+			return tables.lcaCTS, nil
+		}
+		timestamps, err := getTablesCreationCommitTS(ctx, ses, ident, rel, ident, rel, []types.TS{snap, snap})
+		if err != nil {
+			return types.TS{}, err
+		}
+		return timestamps[0], nil
 	}
 
-	tarCTS = tblCommitTS[0]
-	baseCTS = tblCommitTS[1]
+	tarCTS, err := resolveEndpoint(tarIdent, tables.tarRel, tarTableID, tarSp)
+	if err != nil {
+		return
+	}
+	baseCTS, err := resolveEndpoint(baseIdent, tables.baseRel, baseTableID, baseSp)
+	if err != nil {
+		return
+	}
 
 	// ============================================================
 	// Running example used throughout the comments below.
@@ -2763,17 +3110,19 @@ func decideCollectRange(
 		if tarSp.LE(&baseSp) {
 			// tar collect nothing
 			baseCollectRange = collectRange{
-				from:   []types.TS{tarSp.Next()},
-				end:    []types.TS{baseSp},
-				rel:    []engine.Relation{tables.baseRel},
-				idents: []branchIdentity{baseIdent},
+				from:        []types.TS{tarSp.Next()},
+				end:         []types.TS{baseSp},
+				rel:         []engine.Relation{tables.baseRel},
+				relSnapshot: []types.TS{baseRelSp},
+				idents:      []branchIdentity{baseIdent},
 			}
 		} else {
 			tarCollectRange = collectRange{
-				from:   []types.TS{baseSp.Next()},
-				end:    []types.TS{tarSp},
-				rel:    []engine.Relation{tables.tarRel},
-				idents: []branchIdentity{tarIdent},
+				from:        []types.TS{baseSp.Next()},
+				end:         []types.TS{tarSp},
+				rel:         []engine.Relation{tables.tarRel},
+				relSnapshot: []types.TS{tarRelSp},
+				idents:      []branchIdentity{tarIdent},
 			}
 			// base collect nothing
 		}
@@ -2788,14 +3137,14 @@ func decideCollectRange(
 	if dagInfo.lcaTableId == 0 {
 		if tarCollectRange, _, err = buildSideCollectRange(
 			ctx, ses, bh, tables, dedupeBranchIdentities(tarIdent, baseIdent), tarSp, tarCTS,
-			dagInfo.pathFromLCAToTar, dagInfo.pathFromLCAToTarTS,
+			dagInfo.pathFromLCAToTar, dagInfo.pathFromLCAToTarTS, dagInfo.pathFromLCAToTarClearsRows,
 			nil, nil, types.TS{}, true,
 		); err != nil {
 			return
 		}
 		if baseCollectRange, _, err = buildSideCollectRange(
 			ctx, ses, bh, tables, dedupeBranchIdentities(baseIdent, tarIdent), baseSp, baseCTS,
-			dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS,
+			dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS, dagInfo.pathFromLCAToBaseClearsRows,
 			nil, nil, types.TS{}, true,
 		); err != nil {
 			return
@@ -2913,13 +3262,13 @@ func decideCollectRange(
 	var tarHasZeroHistory, baseHasZeroHistory bool
 	if tarCollectRange, tarHasZeroHistory, err = buildSideCollectRange(
 		ctx, ses, bh, tables, dedupeBranchIdentities(tarIdent, baseIdent), tarSp, tarCTS,
-		tarPath, tarPathTS, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, baseSp, false,
+		tarPath, tarPathTS, dagInfo.pathFromLCAToTarClearsRows, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, baseSp, false,
 	); err != nil {
 		return
 	}
 	if baseCollectRange, baseHasZeroHistory, err = buildSideCollectRange(
 		ctx, ses, bh, tables, dedupeBranchIdentities(baseIdent, tarIdent), baseSp, baseCTS,
-		basePath, basePathTS, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, tarSp, false,
+		basePath, basePathTS, dagInfo.pathFromLCAToBaseClearsRows, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, tarSp, false,
 	); err != nil {
 		return
 	}
@@ -2929,17 +3278,15 @@ func decideCollectRange(
 		// materializes that intermediate's complete state, including writes made
 		// before the clone. Compare both endpoint histories directly so inherited
 		// rows cancel while those writes remain visible in the diff.
-		tarCollectRange = collectRange{
-			from:   []types.TS{types.MinTs()},
-			end:    []types.TS{tarSp},
-			rel:    []engine.Relation{tables.tarRel},
-			idents: []branchIdentity{tarIdent},
+		// If a committed clear separates two generations, keep its
+		// segment and timestamp for window clipping and state recovery.
+		if !tarCollectRange.crossesClear() {
+			tarCollectRange = dataBranchVisibleRange(tables.tarRel, tarSp, tarIdent)
+			tarCollectRange.relSnapshot = []types.TS{tarRelSp}
 		}
-		baseCollectRange = collectRange{
-			from:   []types.TS{types.MinTs()},
-			end:    []types.TS{baseSp},
-			rel:    []engine.Relation{tables.baseRel},
-			idents: []branchIdentity{baseIdent},
+		if !baseCollectRange.crossesClear() {
+			baseCollectRange = dataBranchVisibleRange(tables.baseRel, baseSp, baseIdent)
+			baseCollectRange.relSnapshot = []types.TS{baseRelSp}
 		}
 		logutil.Info("DataBranch-CollectRange-Fallback-WholeHistory",
 			zap.Bool("target-zero-history", tarHasZeroHistory),
@@ -3006,6 +3353,7 @@ func buildSideCollectRange(
 	endpointCTS types.TS,
 	selfPath []uint64,
 	selfPathTS []types.TS,
+	selfPathClearsRows []bool,
 	otherPathTS []types.TS,
 	otherPathLineageOnly []bool,
 	otherSP types.TS,
@@ -3014,7 +3362,9 @@ func buildSideCollectRange(
 
 	endpointID := selfPath[len(selfPath)-1]
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
+	tarRelSp, baseRelSp := tables.resolvedRelSnapshots(ses)
 	var previousRel engine.Relation
+	restartWholeHistory := false
 	for i, nodeID := range selfPath {
 		var (
 			rel             engine.Relation
@@ -3043,9 +3393,11 @@ func buildSideCollectRange(
 		// ALTER transition and therefore requires a relation opened there.
 		if i == len(selfPath)-1 && nodeID == tables.tarRel.GetTableID(ctx) {
 			rel = tables.tarRel
+			relationSnapshot = tarRelSp
 			segIdent = tarIdent
 		} else if i == len(selfPath)-1 && nodeID == tables.baseRel.GetTableID(ctx) {
 			rel = tables.baseRel
+			relationSnapshot = baseRelSp
 			segIdent = baseIdent
 		} else {
 			var winner branchIdentity
@@ -3053,21 +3405,38 @@ func buildSideCollectRange(
 				ctx, ses, bh, candidates, nodeID, relationSnapshot,
 			); err != nil {
 				historicalErr := err
-				rel, winner, nodeCTS, hasZeroHistory, err = resolveSameTransactionDataBranchRelation(
+				var zeroHistory bool
+				rel, winner, nodeCTS, zeroHistory, err = resolveSameTransactionDataBranchRelation(
 					ctx, ses, bh, candidates, nodeID, relationSnapshot, endpointCTS, historicalErr,
 				)
-				if err != nil || hasZeroHistory {
+				if err != nil {
 					return
 				}
+				if zeroHistory {
+					hasZeroHistory = true
+					if !slices.Contains(selfPathClearsRows, true) {
+						return
+					}
+					// The next committed table materializes all inherited
+					// rows. Skip the ephemeral relation, but continue resolving
+					// later transitions, including the actual clear commit.
+					previousRel = nil
+					restartWholeHistory = true
+					continue
+				}
+				relationSnapshot = endpointCTS
 				nodeCTSResolved = true
 			}
 			segIdent = winner
 		}
 
 		// Resolve creation commit TS so the window starts after the
-		// clone-materialization commit. Reuse endpointCTS for the
-		// endpoint to avoid a redundant lookup.
-		if nodeID == endpointID {
+		// clone-materialization commit. Reuse the boundary already
+		// resolved for the LCA or the endpoint.
+		if i == 0 && !wholeHistory && segIdent.account == tables.resolvedLCAIdentity(ctx, ses).account &&
+			!tables.lcaCTS.IsEmpty() && tables.lcaCTS.LE(&windowEnd) {
+			nodeCTS = tables.lcaCTS
+		} else if nodeID == endpointID {
 			nodeCTS = endpointCTS
 		} else if !nodeCTSResolved {
 			ctsList, err2 := getTablesCreationCommitTS(
@@ -3087,7 +3456,7 @@ func buildSideCollectRange(
 		}
 
 		// Window lower bound.
-		if wholeHistory && i == 0 {
+		if (wholeHistory && i == 0) || restartWholeHistory {
 			windowFrom = types.MinTs()
 		} else {
 			windowFrom = nodeCTS.Next()
@@ -3108,15 +3477,27 @@ func buildSideCollectRange(
 			}
 		}
 
+		var clearAt types.TS
+		if i > 0 && i < len(selfPathClearsRows) && selfPathClearsRows[i] {
+			// clone_ts is the protected parent snapshot. The clear becomes
+			// visible at the replacement commit, even with no subsequent DML.
+			clearAt = nodeCTS
+			windowFrom = nodeCTS
+		}
 		if windowFrom.GT(&windowEnd) {
 			previousRel = rel
 			continue
 		}
+		restartWholeHistory = false
 		cr.rel = append(cr.rel, rel)
+		cr.relSnapshot = append(cr.relSnapshot, relationSnapshot)
 		cr.from = append(cr.from, windowFrom)
 		cr.end = append(cr.end, windowEnd)
 		cr.idents = append(cr.idents, segIdent)
 		cr.startBoundaryRel = append(cr.startBoundaryRel, previousRel)
+		if len(selfPathClearsRows) > 0 {
+			cr.clearAt = append(cr.clearAt, clearAt)
+		}
 		previousRel = rel
 	}
 	return
@@ -3130,9 +3511,8 @@ func dataBranchCollectRelationSnapshot(endpointSP, windowEnd types.TS, endpoint 
 }
 
 // getTablesCreationCommitTS resolves the creation commit timestamp for
-// both tar and base tables.  It tries CollectChanges first (fast,
-// preserves real commit_ts from partition state), falling back to the
-// Reader-based snapshot scan when partition state is unavailable.
+// both tar and base tables, preferring the original catalog row at the
+// requested snapshot and replaying catalog changes when that row is unavailable.
 func getTablesCreationCommitTS(
 	ctx context.Context,
 	ses *Session,
@@ -3143,8 +3523,13 @@ func getTablesCreationCommitTS(
 	snapshot []types.TS,
 ) ([]types.TS, error) {
 	txnSnap := types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
+	history, _ := ctx.Value(branchCatalogHistoryKey{}).(*branchCatalogHistory)
 	dbLowerBounds := make(map[dbCreatedTimeLowerBoundKey]types.TS)
 	tableCTS := make(map[tableCreationCommitTSKey]types.TS)
+	if history != nil {
+		dbLowerBounds = history.dbLowerBounds
+		tableCTS = history.tableCTS
+	}
 
 	snapFor := func(idx int) types.TS {
 		if idx < len(snapshot) && !snapshot[idx].IsEmpty() {
@@ -3169,7 +3554,10 @@ func getTablesCreationCommitTS(
 		}
 
 		key := tableCreationCommitTSKey{
+			accountID:  ident.account,
 			tableID:    tableID,
+			database:   targetRel.GetTableDef(rctx).DbName,
+			table:      targetRel.GetTableName(),
 			snapshot:   snap,
 			lowerBound: lowerBound,
 		}
@@ -3177,83 +3565,81 @@ func getTablesCreationCommitTS(
 			return ts, nil
 		}
 
-		collectStart := time.Now()
-		ts, err := getTableCreationCommitTSByCollectChanges(
-			rctx, ses, ident.account, targetRel, tableID, snap, lowerBound,
-		)
-		if err == nil {
+		readerStart := time.Now()
+		catalogKey := packMoTablesCPKey(key.accountID, key.database, key.table)
+		ts, original, readerErr := readTableCatalogCommitTS(rctx, ses, tableID, snap, catalogKey)
+		readerCost := time.Since(readerStart)
+		var collectCost time.Duration
+		finish := func(ts types.TS, path string) (types.TS, error) {
 			tableCTS[key] = ts
 			logutil.Info("DataBranch-TableCTS-Resolve-Done",
 				zap.Uint64("table-id", tableID),
 				zap.String("snapshot", snap.ToString()),
 				zap.String("lower-bound", lowerBound.ToString()),
-				zap.String("path", "CollectChanges"),
+				zap.String("path", path),
 				zap.String("commit-ts", ts.ToString()),
-				zap.Duration("collectchanges-cost", time.Since(collectStart)),
+				zap.Duration("reader-cost", readerCost),
+				zap.Duration("collectchanges-cost", collectCost),
 				zap.Duration("total-cost", time.Since(totalStart)),
 			)
 			return ts, nil
 		}
-		collectCost := time.Since(collectStart)
+		if readerErr == nil && original && !ts.IsEmpty() && ts.GE(&lowerBound) && ts.LE(&snap) {
+			return finish(ts, "Reader")
+		}
+		if err := ctx.Err(); err != nil {
+			return types.TS{}, err
+		}
+
+		collectStart := time.Now()
+		replayed, collectErr := getTableCreationCommitTSByCollectChanges(
+			rctx, ses, ident.account, targetRel, tableID, snap, lowerBound, history != nil,
+		)
+		collectCost = time.Since(collectStart)
+		if collectErr == nil {
+			return finish(replayed, "CollectChanges")
+		}
+		if err := ctx.Err(); err != nil {
+			return types.TS{}, err
+		}
+
 		logutil.Warn("getTablesCreationCommitTS: CollectChanges failed, trying Reader fallback",
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snap.ToString()),
 			zap.String("lower-bound", lowerBound.ToString()),
 			zap.Duration("collectchanges-cost", collectCost),
-			zap.Error(err),
+			zap.Error(collectErr),
 		)
-		readerStart := time.Now()
-		ts, readerErr := getTableCreationCommitTSByID(rctx, ses, tableID, snap)
-		if readerErr != nil {
-			// A branch whose parent was created earlier in the same explicit
-			// transaction records a pre-commit clone timestamp.  The parent has
-			// no catalog row at that timestamp, but it is visible at the endpoint
-			// snapshot after commit.  Resolve its real creation timestamp there;
-			// the resulting CTS > clone TS makes the inherited parent window
-			// empty, which is the correct history for a same-commit fork.
-			if snap.LT(&txnSnap) {
-				currentTS, currentErr := getTableCreationCommitTSByID(
-					rctx, ses, tableID, txnSnap,
-				)
-				if currentErr == nil && currentTS.GT(&snap) {
-					logutil.Info("DataBranch-TableCTS-Resolve-Done",
-						zap.Uint64("table-id", tableID),
-						zap.String("snapshot", snap.ToString()),
-						zap.String("fallback-snapshot", txnSnap.ToString()),
-						zap.String("path", "PostCreationSnapshotFallback"),
-						zap.String("commit-ts", currentTS.ToString()),
-						zap.Duration("collectchanges-cost", collectCost),
-						zap.Duration("reader-cost", time.Since(readerStart)),
-						zap.Duration("total-cost", time.Since(totalStart)),
-					)
-					tableCTS[key] = currentTS
-					return currentTS, nil
-				}
-			}
-			logutil.Warn("DataBranch-TableCTS-Resolve-Error",
-				zap.Uint64("table-id", tableID),
-				zap.String("snapshot", snap.ToString()),
-				zap.String("path", "ReaderFallback"),
-				zap.String("lower-bound", lowerBound.ToString()),
-				zap.Duration("collectchanges-cost", collectCost),
-				zap.Duration("reader-cost", time.Since(readerStart)),
-				zap.Duration("total-cost", time.Since(totalStart)),
-				zap.Error(readerErr),
-			)
-			return types.TS{}, readerErr
+		readerStart = time.Now()
+		// Keep the ID-based recovery for historical names and catalog formats
+		// where the compound key lookup cannot resolve the row.
+		ts, _, readerErr = readTableCatalogCommitTS(rctx, ses, tableID, snap, nil)
+		readerCost += time.Since(readerStart)
+		if readerErr == nil {
+			return finish(ts, "ReaderFallback")
 		}
-		logutil.Info("DataBranch-TableCTS-Resolve-Done",
+
+		// A parent created in the same transaction as its branch has no row
+		// at the pre-commit fork timestamp. Its later creation timestamp
+		// makes the inherited parent window empty.
+		if snap.LT(&txnSnap) {
+			readerStart = time.Now()
+			currentTS, _, currentErr := readTableCatalogCommitTS(rctx, ses, tableID, txnSnap, nil)
+			readerCost += time.Since(readerStart)
+			if currentErr == nil && currentTS.GT(&snap) {
+				return finish(currentTS, "PostCreationSnapshotFallback")
+			}
+		}
+		logutil.Warn("DataBranch-TableCTS-Resolve-Error",
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snap.ToString()),
-			zap.String("path", "ReaderFallback"),
-			zap.String("commit-ts", ts.ToString()),
 			zap.String("lower-bound", lowerBound.ToString()),
 			zap.Duration("collectchanges-cost", collectCost),
-			zap.Duration("reader-cost", time.Since(readerStart)),
+			zap.Duration("reader-cost", readerCost),
 			zap.Duration("total-cost", time.Since(totalStart)),
+			zap.Error(readerErr),
 		)
-		tableCTS[key] = ts
-		return ts, nil
+		return types.TS{}, readerErr
 	}
 
 	tarCTS, err := resolve(tarIdent, tar, snapFor(0))
@@ -3275,9 +3661,21 @@ type dbCreatedTimeLowerBoundKey struct {
 }
 
 type tableCreationCommitTSKey struct {
+	accountID  uint32
 	tableID    uint64
+	database   string
+	table      string
 	snapshot   types.TS
 	lowerBound types.TS
+}
+
+type branchCatalogHistoryKey struct{}
+
+// Branch reconciliation and the diff producer resolve catalog history sequentially.
+// Their results are scoped to this statement's transaction.
+type branchCatalogHistory struct {
+	dbLowerBounds map[dbCreatedTimeLowerBoundKey]types.TS
+	tableCTS      map[tableCreationCommitTSKey]types.TS
 }
 
 func getDatabaseCreatedTimeLowerBound(
@@ -3337,7 +3735,7 @@ func getDatabaseCreatedTimeLowerBoundByPK(
 	mp := ses.proc.Mp()
 
 	cpKey := packMoDatabaseCPKey(accountID, databaseName)
-	filterVec := vector.NewVec(types.T_varchar.ToType())
+	filterVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer filterVec.Free(mp)
 	if err := vector.AppendBytes(filterVec, cpKey, false, mp); err != nil {
 		return types.TS{}, err
@@ -3405,45 +3803,67 @@ func databaseCreatedTimeToCollectLowerBound(createdTime types.Timestamp) (types.
 	return types.BuildTS(unixMicros*int64(time.Microsecond), 0).Prev(), nil
 }
 
-// getTableCreationCommitTSByID scans the mo_tables snapshot at the given
-// timestamp and returns the earliest commit_ts for the specified table ID.
-func getTableCreationCommitTSByID(
+// readTableCatalogCommitTS returns the earliest visible commit of the matching
+// catalog row. A compound key is used for the fast lookup. The original row
+// has version zero: a committed ALTER that reuses the physical ID increments
+// rel_version before replacing its catalog row.
+func readTableCatalogCommitTS(
 	ctx context.Context,
 	ses *Session,
 	tableID uint64,
 	snapshotTS types.TS,
-) (types.TS, error) {
+	catalogKey []byte,
+) (ts types.TS, original bool, err error) {
 	mp := ses.proc.Mp()
 
-	filterVec := vector.NewVec(types.T_uint64.ToType())
-	defer filterVec.Free(mp)
-	if err := vector.AppendFixed(filterVec, tableID, false, mp); err != nil {
-		return types.TS{}, err
+	var filterExpr *plan.Expr
+	if len(catalogKey) != 0 {
+		filterVec := vector.NewVec(types.T_varchar.ToType(), mp)
+		defer filterVec.Free(mp)
+		if err := vector.AppendBytes(filterVec, catalogKey, false, mp); err != nil {
+			return types.TS{}, false, err
+		}
+		filterExpr, err = readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_CPKey, filterVec)
+	} else {
+		filterVec := vector.NewVec(types.T_uint64.ToType(), mp)
+		defer filterVec.Free(mp)
+		if err := vector.AppendFixed(filterVec, tableID, false, mp); err != nil {
+			return types.TS{}, false, err
+		}
+		filterExpr, err = readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
+	}
+
+	if err != nil {
+		return types.TS{}, false, err
 	}
 
 	attrs := []string{catalog.SystemRelAttr_ID, objectio.DefaultCommitTS_Attr}
 	colTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
-	filterExpr, cerr := readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
-	if cerr != nil {
-		return types.TS{}, cerr
+	checkVersion := len(catalogKey) != 0
+	if checkVersion {
+		attrs = append(attrs, catalog.SystemRelAttr_Version)
+		colTypes = append(colTypes, types.T_uint32.ToType())
 	}
 
 	found := false
-	result := types.TS{}
-
-	err := scanSnapshotRelationByID(
+	err = scanSnapshotRelationByID(
 		ctx, "table-creation-commit-ts", ses,
 		catalog.MO_TABLES_ID, snapshotTS,
 		attrs, colTypes, filterExpr, 1,
 		func(bat *batch.Batch) error {
 			ids := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
 			cts := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[1])
+			var versions []uint32
+			if checkVersion {
+				versions = vector.MustFixedColWithTypeCheck[uint32](bat.Vecs[2])
+			}
 			for i, id := range ids {
 				if id != tableID || bat.Vecs[1].IsNull(uint64(i)) {
 					continue
 				}
-				if !found || cts[i].LT(&result) {
-					result = cts[i]
+				if !found || cts[i].LT(&ts) {
+					ts = cts[i]
+					original = checkVersion && !bat.Vecs[2].IsNull(uint64(i)) && versions[i] == 0
 				}
 				found = true
 			}
@@ -3451,12 +3871,12 @@ func getTableCreationCommitTSByID(
 		},
 	)
 	if err != nil {
-		return types.TS{}, err
+		return types.TS{}, false, err
 	}
 	if found {
-		return result, nil
+		return ts, original, nil
 	}
-	return types.TS{}, moerr.NewInternalErrorNoCtxf(
+	return types.TS{}, false, moerr.NewInternalErrorNoCtxf(
 		"cannot find table %d commit ts at snapshot %s",
 		tableID, snapshotTS.ToString(),
 	)
@@ -3474,6 +3894,7 @@ func getTableCreationCommitTSByCollectChanges(
 	tableID uint64,
 	snapshotTS types.TS,
 	lowerBound types.TS,
+	prefetchObjectMeta bool,
 ) (types.TS, error) {
 	storage := ses.GetTxnHandler().GetStorage()
 	txnOp := ses.GetTxnHandler().GetTxn()
@@ -3524,6 +3945,7 @@ func getTableCreationCommitTSByCollectChanges(
 		return types.TS{}, err
 	}
 	if pkFilter != nil {
+		pkFilter.PrefetchObjectMeta = prefetchObjectMeta
 		ctx = engine.WithPKFilter(ctx, pkFilter)
 	}
 	ctx = engine.WithCollectChangesDebugLabel(ctx, "data-branch-table-cts")
@@ -3627,7 +4049,7 @@ func tryBuildCurrentMoTablesCPKeyFilter(
 	defer replayPacker.Close()
 	replayKey := append([]byte(nil), readutil.EncodePrimaryKey(packedKey, replayPacker)...)
 
-	filterVec := vector.NewVec(types.T_varchar.ToType())
+	filterVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer filterVec.Free(mp)
 	if err := vector.AppendBytes(filterVec, packedKey, false, mp); err != nil {
 		return nil, "", err
@@ -3637,6 +4059,9 @@ func tryBuildCurrentMoTablesCPKeyFilter(
 	if pkFilter == nil {
 		return nil, "empty-mo-tables-cpkey-filter", nil
 	}
+	// mo_tables is sorted by this composite PK, unlike cluster-by data tables
+	// and rowid-sorted tombstone objects.
+	pkFilter.ObjectZMIsPK = true
 	pkFilter.ReplaySpec = &engine.PKReplaySpec{
 		Op:   function.EQUAL,
 		Keys: [][]byte{replayKey},
@@ -3663,25 +4088,10 @@ func packCatalogCPKey(accountID uint32, values ...string) []byte {
 }
 
 // locateColumnsInChangeBatch finds rel_id and commit_ts column indices
-// in a CollectChanges data batch.  Named attrs are tried first; when
-// absent (aobj path), positional access is used.
+// in a CollectChanges data batch of mo_tables: rel_id at
+// MO_TABLES_REL_ID_IDX, commit_ts at the last vector.
 func locateColumnsInChangeBatch(data *batch.Batch) (relIDIdx, commitTSIdx int) {
-	relIDIdx, commitTSIdx = -1, -1
-	for i, attr := range data.Attrs {
-		switch attr {
-		case catalog.SystemRelAttr_ID:
-			relIDIdx = i
-		case objectio.DefaultCommitTS_Attr:
-			commitTSIdx = i
-		}
-	}
-	if relIDIdx < 0 || commitTSIdx < 0 {
-		// aobj batches lack Attrs; use positional access:
-		// rel_id at MO_TABLES_REL_ID_IDX, commit_ts at last vector.
-		relIDIdx = catalog.MO_TABLES_REL_ID_IDX
-		commitTSIdx = len(data.Vecs) - 1
-	}
-	return
+	return catalog.MO_TABLES_REL_ID_IDX, len(data.Vecs) - 1
 }
 
 // decideLCABranchTSFromBranchDAG resolves the lineage relationship
@@ -3708,6 +4118,7 @@ func decideLCABranchTSFromBranchDAG(
 	ses *Session,
 	bh BackgroundExec,
 	tblStuff tableStuff,
+	boundedPick bool,
 ) (
 	branchInfo branchMetaInfo,
 	err error,
@@ -3730,6 +4141,18 @@ func decideLCABranchTSFromBranchDAG(
 		return
 	}
 
+	if boundedPick {
+		branchInfo.tarRebuildChain = dag.RebuildChain(tarLineageID)
+		if _, cloneTSs, ok := dag.PathFromRoot(tarLineageID); ok {
+			pathTS := buildTSs(cloneTSs)
+			branchInfo.tarRebuildChainTS = pathTS[len(pathTS)-len(branchInfo.tarRebuildChain):]
+			slices.Reverse(branchInfo.tarRebuildChainTS)
+		}
+		if len(branchInfo.tarRebuildChain) == 0 {
+			branchInfo.tarRebuildChain = []uint64{tarTableID}
+		}
+	}
+
 	if lcaTableID, _, _, hasLca := dag.FindLCA(tarLineageID, baseLineageID); hasLca {
 		tarIDs, tarTSs, ok := dag.PathFromAncestor(tarLineageID, lcaTableID)
 		if !ok {
@@ -3748,35 +4171,38 @@ func decideLCABranchTSFromBranchDAG(
 		branchInfo.lcaTableId = lcaTableID
 		branchInfo.pathFromLCAToTar = tarIDs
 		branchInfo.pathFromLCAToTarTS = buildTSs(tarTSs)
-		branchInfo.pathFromLCAToTarLineageOnly = dataBranchPathLineageOnly(dag, tarIDs)
+		branchInfo.pathFromLCAToTarLineageOnly, branchInfo.pathFromLCAToTarClearsRows = dataBranchPathEdges(dag, tarIDs)
 		branchInfo.pathFromLCAToBase = baseIDs
 		branchInfo.pathFromLCAToBaseTS = buildTSs(baseTSs)
-		branchInfo.pathFromLCAToBaseLineageOnly = dataBranchPathLineageOnly(dag, baseIDs)
+		branchInfo.pathFromLCAToBaseLineageOnly, branchInfo.pathFromLCAToBaseClearsRows = dataBranchPathEdges(dag, baseIDs)
 		return
 	}
 
-	wholePath := func(lineageID, endpointID uint64) ([]uint64, []types.TS, []bool, error) {
+	wholePath := func(lineageID, endpointID uint64) ([]uint64, []types.TS, []bool, []bool, error) {
 		ids, cloneTSs, ok := dag.PathFromRoot(lineageID)
 		if !ok {
-			return []uint64{endpointID}, []types.TS{{}}, []bool{false}, nil
+			return []uint64{endpointID}, []types.TS{{}}, []bool{false}, nil, nil
 		}
 		if len(ids) == 0 || ids[len(ids)-1] != endpointID {
-			return nil, nil, nil, moerr.NewInternalErrorNoCtxf(
+			return nil, nil, nil, nil, moerr.NewInternalErrorNoCtxf(
 				"data branch: lineage endpoint %d does not match table %d", lineageID, endpointID,
 			)
 		}
-		return ids, buildTSs(cloneTSs), dataBranchPathLineageOnly(dag, ids), nil
+		lineageOnly, clearsRows := dataBranchPathEdges(dag, ids)
+		return ids, buildTSs(cloneTSs), lineageOnly, clearsRows, nil
 	}
 	if tarTableID != baseTableID {
 		if branchInfo.pathFromLCAToTar,
 			branchInfo.pathFromLCAToTarTS,
 			branchInfo.pathFromLCAToTarLineageOnly,
+			branchInfo.pathFromLCAToTarClearsRows,
 			err = wholePath(tarLineageID, tarTableID); err != nil {
 			return
 		}
 		if branchInfo.pathFromLCAToBase,
 			branchInfo.pathFromLCAToBaseTS,
 			branchInfo.pathFromLCAToBaseLineageOnly,
+			branchInfo.pathFromLCAToBaseClearsRows,
 			err = wholePath(baseLineageID, baseTableID); err != nil {
 			return
 		}
@@ -3798,12 +4224,18 @@ func decideLCABranchTSFromBranchDAG(
 	return
 }
 
-func dataBranchPathLineageOnly(dag *databranchutils.DataBranchDAG, path []uint64) []bool {
-	ret := make([]bool, len(path))
+func dataBranchPathEdges(dag *databranchutils.DataBranchDAG, path []uint64) (lineageOnly, clearsRows []bool) {
+	lineageOnly = make([]bool, len(path))
 	for i := 1; i < len(path); i++ {
-		ret[i] = dag.IsLineageOnly(path[i])
+		lineageOnly[i] = dag.IsLineageOnly(path[i])
+		if dag.ClearsRows(path[i]) {
+			if clearsRows == nil {
+				clearsRows = make([]bool, len(path))
+			}
+			clearsRows[i] = true
+		}
 	}
-	return ret
+	return
 }
 
 func dataBranchLineageTableID(
@@ -3905,7 +4337,8 @@ func constructBranchDAGWithLock(
 				CloneTS:      cloneTS[i],
 				PTableID:     pTblIds[i],
 				TableDeleted: tableDeleted[i],
-				LineageOnly:  databranchutils.IsAlterLineageLevel(levels[i]),
+				LineageOnly:  databranchutils.IsRebuildLineageLevel(levels[i]),
+				ClearsRows:   databranchutils.IsTruncateLineageLevel(levels[i]),
 			})
 		}
 		return true

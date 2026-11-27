@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -82,7 +81,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -102,32 +100,10 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateRemoteBoundStringVariables(p); err != nil {
 		return nil, err
 	}
-	if err = validateRemotePadSpacePipelineProtocol(s.Proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteBinaryStringPipelineProtocol(s.Proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteViewDefinitionPipelineProtocol(s.Proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateOctStringProtocol(s.Proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateHexMySQLNumericProtocol(s.Proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteIgnoreCheckPipelineProtocol(s.Proc, p); err != nil {
-		return nil, err
-	}
 	return p.Marshal()
 }
 
 func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
-	return encodeRemoteScopeWithProtocol(s, proc, nil)
-}
-
-func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProtocol *int64) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
 		return nil, err
@@ -136,15 +112,6 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 		return nil, err
 	}
 	if err = validateRemoteBoundStringVariables(p); err != nil {
-		return nil, err
-	}
-	if err = validateVectorPartitionDestinationWithResult(proc, p, requiredProtocol); err != nil {
-		return nil, err
-	}
-	if err = validateGroupingTransportDestinations(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	features, err := pipelineExpressionFeatures(p)
@@ -159,91 +126,13 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 			return nil, moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline owner is missing")
 		}
 	}
-	if features.FloatConversionSemantics && requiredProtocol != nil {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion132)
-	}
-	// The Query RPC probe and the execution stream can reach different worker
-	// generations. Fence affected payloads on the bound stream as well.
-	if features.IncompleteTemporalStrings && requiredProtocol != nil {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion130)
-	}
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
-		return nil, err
-	}
-	if requiredProtocol != nil && (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion122)
-	}
-	if requiredProtocol != nil && features.LoadFKIgnoreCheck {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion125)
-	}
-	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
-		return nil, err
-	}
-	// Reconfirm these contracts on the very stream that carries the scope,
-	// not only at an earlier inventory/capability observation.
-	if requiredProtocol != nil && (features.ODKUStatementResult || features.SessionLastInsertIDBaseline) {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion134)
-	}
-	if requiredProtocol != nil && features.JSONMinMaxTypedComparison {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion133)
-	}
-	if requiredProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion129)
-	}
-	// Decision D10 of the exact weighted percentile design: the encoded
-	// aggregate travels by encoded ID, so every destination receiving this
-	// pipeline must advertise the aggregate's dispatch capability version;
-	// the destination confirms the raised floor on the live stream before the
-	// pipeline is delivered. The aggregate's capability slot is MORPCVersion131:
-	// upstream main claimed MORPCVersion130 for the incomplete temporal string
-	// overloads (#30311, 5a813a324d) before this gate was merged, so the
-	// aggregate's floor is raised to the version minted for it in const.go.
-	if requiredProtocol != nil && pipelineContainsQuantileExactWeighted(p) {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion131)
-	}
-	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateGroupConcatTimeZoneDestination(proc, p); err != nil {
 		return nil, err
 	}
-	if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateOctStringProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateHexMySQLNumericProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteIgnoreCheckPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemotePartitionTopNWithTiesPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
-	if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
+	if err = validateRemoteAutoIDCachePipeline(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -313,64 +202,13 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteBoundStringVariables(p); err != nil {
 			return nil, err
 		}
-		if err = validateRemoteVectorPartitionProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
+		if err = validateRemoteExpressionPipeline(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteODKUBaselinePresence(proc, p); err != nil {
 			return nil, err
 		}
-		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteUpdateChangedRowsPipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateOctStringProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateHexMySQLNumericProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemotePartitionTopNWithTiesPipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
-			return nil, err
-		}
-		if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
+		if err = validateRemoteAutoIDCachePipeline(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -658,14 +496,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 
 	s = newScope(magicType(p.GetPipelineType()))
-	for parent := ctx; parent != nil; parent = parent.parent {
-		if parent.plan != nil {
-			if queryNeedsGroupingTransport(parent.plan.GetQuery()) {
-				s.Plan = parent.plan
-			}
-			break
-		}
-	}
 	s.IsEnd = p.IsEnd
 	s.IsLoad = p.IsLoad
 	s.IsRemote = isRemote
@@ -868,17 +698,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 			in.Op = int32(vm.PreInsertAutoIDCache)
 		}
-		if err := validateRemoteStatementLastInsertIDProtocol(
-			proc, t.HasAutoCol, t.TrackAutoIncrementGenerated); err != nil {
-			return ctxId, nil, err
-		}
-		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
-			return ctxId, nil, err
-		}
-		if t.TrackODKUResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
-			return ctxId, nil, moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 134")
-		}
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName:                   t.SchemaName,
 			TableDef:                     t.TableDef,
@@ -910,14 +729,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Targets: t.CopyToPipelineTarget(),
 		}
 	case *preinsertunique.PreInsertUnique:
-		if err := validateRemoteAutoIncrementSessionOptionsProtocol(
-			proc, t.PreInsertCtx.GetAutoIncrementReorder()); err != nil {
-			return ctxId, nil, err
-		}
-		if err := validateRemoteODKUActionRowsProtocol(
-			proc, t.PreInsertCtx.GetOdkuTargetArbitration()); err != nil {
-			return ctxId, nil, err
-		}
 		in.PreInsertUnique = &pipeline.PreInsertUnique{
 			PreInsertUkCtx: t.PreInsertCtx,
 		}
@@ -982,9 +793,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			return ctxId, nil, moerr.NewNotSupportedNoCtx(
 				"sort rollup cannot be serialized for remote execution")
 		}
-		if err := validateRemoteAggregateProtocol(proc, t.Aggs); err != nil {
-			return ctxId, nil, err
-		}
 		in.Agg = &pipeline.Group{
 			NeedEval:        t.NeedEval,
 			SpillMem:        t.SpillMem,
@@ -1001,9 +809,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *limit.Limit:
 		in.Limit = t.LimitExpr
 	case *hashjoin.HashJoin:
-		if err := validateRemoteJoinProtocol(proc, t.JoinType); err != nil {
-			return ctxId, nil, err
-		}
 		relList, colList := getRelColList(t.ResultCols)
 		in.HashJoin = &pipeline.HashJoin{
 			ExistenceOnly:          t.ExistenceOnly,
@@ -1079,6 +884,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Ignored:      ignored,
 		}
 	case *projection.Projection:
+		if t.ValuesWarningRow != 0 {
+			return -1, nil, moerr.NewInternalError(proc.Ctx, "VALUES warning projection must run on the coordinator")
+		}
 		in.ProjectList = t.ProjectList
 		in.ProjectionGroupingFlags = t.GroupingFlags
 		in.ProjectionGroupingSetCount = int32(t.GroupingSetCount)
@@ -1114,9 +922,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *mergerecursive.MergeRecursive:
 	case *group.MergeGroup:
-		if err := validateRemoteAggregateProtocol(proc, t.Aggs); err != nil {
-			return ctxId, nil, err
-		}
 		in.Agg = &pipeline.Group{
 			SpillMem:            t.SpillMem,
 			Aggs:                convertToPipelineAggregates(t.Aggs),
@@ -1237,6 +1042,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupColName:              t.DedupColName,
 			DedupColTypes:             t.DedupColTypes,
 			DedupKeyExprs:             t.DedupKeyExprs,
+			AuxiliaryRowIdColIdx:      t.AuxiliaryRowIdColIdx,
 			DelColIdx:                 t.DelColIdx,
 			DedupDeleteMarkerColIdx:   t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList: t.DedupDeleteKeepColIdxList,
@@ -1247,16 +1053,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
 		}
 	case *dedupjoin.DedupJoin:
-		if err := validateRemoteODKUAffectedRowsProtocol(proc, t.HasODKUAffectedRows); err != nil {
-			return ctxId, nil, err
-		}
-		if err := validateRemoteODKUActionRowsProtocol(proc, t.EmitActionRows || len(t.ForeignKeyChecks) > 0); err != nil {
-			return ctxId, nil, err
-		}
-		if t.ODKUResultTracking && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
-			return ctxId, nil, moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 134")
-		}
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
 			RelList:                         relList,
@@ -1272,6 +1068,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupColName:                    t.DedupColName,
 			DedupColTypes:                   t.DedupColTypes,
 			DedupKeyExprs:                   t.DedupKeyExprs,
+			AuxiliaryRowIdColIdx:            t.AuxiliaryRowIdColIdx,
 			DelColIdx:                       t.DelColIdx,
 			DedupDeleteMarkerColIdx:         t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList:       t.DedupDeleteKeepColIdxList,
@@ -1303,9 +1100,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		in.SpillMem = t.SpillThreshold
 	case *rightdedupjoin.RightDedupJoin:
-		if err := validateRemoteRightDedupInputKeysUniqueProtocol(proc, t.InputKeysUnique); err != nil {
-			return ctxId, nil, err
-		}
 		relList, colList := getRelColList(t.Result)
 		in.RightDedupJoin = &pipeline.RightDedupJoin{
 			RelList:                relList,
@@ -1359,33 +1153,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 		}
 	case *multi_update.MultiUpdate:
-		targetAware := false
-		changedRows := false
-		affectedRowsSelectors := false
-		for _, muCtx := range t.MultiUpdateCtx {
-			if muCtx.DedupByTargetRowID || muCtx.TargetUpdateCtxIdx != 0 {
-				targetAware = true
-			}
-			if muCtx.ChangedRowsCol != nil {
-				changedRows = true
-			}
-			affectedRowsSelectors = affectedRowsSelectors || len(muCtx.AffectedRowsCols) > 0
-		}
-		if err := validateRemoteTargetAwareUpdateProtocol(proc, targetAware); err != nil {
-			return ctxId, nil, err
-		}
-		if err := validateRemoteUpdateChangedRowsProtocol(proc, changedRows); err != nil {
-			return ctxId, nil, err
-		}
-		if err := validateRemoteAffectedRowsSelectorsProtocol(proc, affectedRowsSelectors); err != nil {
-			return ctxId, nil, err
-		}
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
 		for i, muCtx := range t.MultiUpdateCtx {
-			if err := validateRemoteODKUAffectedRowsProtocol(proc,
-				muCtx.AffectedRowsWeightCol != nil || muCtx.PhysicalChangedRowsCol != nil); err != nil {
-				return ctxId, nil, err
-			}
 			updateCtxList[i] = &plan.UpdateCtx{
 				ObjRef:                muCtx.ObjRef,
 				TableDef:              muCtx.TableDef,
@@ -1915,7 +1684,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = value_scan.NewArgument()
 		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
 		if len(opr.ValueScan.BatchBlock) > 0 {
-			bat := batch.NewOffHeapEmpty()
+			bat := batch.NewWithSize(0)
 			if err := types.Decode([]byte(opr.ValueScan.BatchBlock), bat); err != nil {
 				return nil, err
 			}
@@ -1943,6 +1712,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DedupKeyExprs = t.DedupKeyExprs
+		arg.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -1968,6 +1738,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DedupKeyExprs = t.DedupKeyExprs
+		arg.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -2163,129 +1934,10 @@ func convertToTypes(ts []plan.Type) []types.Type {
 	return result
 }
 
-func validateRemoteAggregateProtocol(
-	proc *process.Process,
-	aggs []aggexec.AggFuncExecExpression,
-) error {
-	for _, agg := range aggs {
-		if isJSONOpaqueGroupConcatAggregate(agg) {
-			if err := validateRemoteExpressionFeatures(proc, plan.RemoteExpressionFeatures{JSONOpaqueTextContracts: true}); err != nil {
-				return err
-			}
-		}
-		if isDecimalStatisticalAggregate(agg) {
-			if err := requireRemoteDecimalStatisticalResults(proc); err != nil {
-				return err
-			}
-		}
-		if isVarianceAggregate(agg) &&
-			(proc == nil || !procSupportsRemoteVarianceAggregates(proc)) {
-			return moerr.NewNotSupportedNoCtx(
-				"variance remote execution requires MORPC protocol version 35",
-			)
-		}
-		if agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
-			agg.GetAggID() == aggexec.AggIdOfPercentileDisc {
-			if proc == nil || !supportsRemoteOrderedSetAggregates(proc.GetService()) {
-				return moerr.NewNotSupportedNoCtx(
-					"ordered-set percentile remote execution requires MORPC protocol version 17",
-				)
-			}
-			if agg.GetAggID() == aggexec.AggIdOfPercentileDisc &&
-				orderedSetPercentileDiscUsesExtendedType(agg) &&
-				!supportsRemoteOrderedSetExtendedTypes(proc.GetService()) {
-				return moerr.NewNotSupportedNoCtx(
-					"extended discrete percentile input types require MORPC protocol version 84",
-				)
-			}
-		}
-		if agg.GetAggID() == aggexec.AggIdOfApproxPercentile &&
-			(proc == nil || !supportsRemoteApproxPercentile(proc.GetService())) {
-			return moerr.NewNotSupportedNoCtx(
-				"approx_percentile remote execution requires MORPC protocol version 76",
-			)
-		}
-		// The service-local self-gate gives the coherent coordinator-side
-		// message; destination verification for this aggregate is layered at
-		// compile time (AllCNsSupportProtocol), on the requiredProtocol floor
-		// above, and on the pre-dispatch stream confirmation.
-		if agg.GetAggID() == aggexec.AggIdOfQuantileExactWeighted &&
-			(proc == nil || !supportsRemoteQuantileExactWeighted(proc.GetService())) {
-			return moerr.NewNotSupportedNoCtx(
-				"quantileExactWeighted remote execution requires MORPC protocol version 131",
-			)
-		}
-		if (agg.GetAggID() == aggexec.AggIdOfApproxCount ||
-			agg.GetAggID() == aggexec.AggIdOfApproxCountDistinct ||
-			agg.GetAggID() == aggexec.AggIdOfHllAdd ||
-			agg.GetAggID() == aggexec.AggIdOfHllMerge) &&
-			(proc == nil || !supportsRemoteHLL(proc.GetService())) {
-			return moerr.NewNotSupportedNoCtx(
-				"HLL remote execution requires MORPC protocol version 77",
-			)
-		}
-		if agg.GetAggID() == aggexec.AggIdOfHllAdd && len(agg.GetArgExpressions()) > 0 {
-			typ := types.T(agg.GetArgExpressions()[0].Typ.Id)
-			if isCanonicalVectorHLLAddType(typ) &&
-				(proc == nil || !supportsRemoteCanonicalHLLAdd(proc.GetService())) {
-				return moerr.NewNotSupportedNoCtx(
-					"canonical vector HLL_ADD_AGG remote execution requires MORPC protocol version 88")
-			}
-			if isCanonicalTextHLLAddType(typ) &&
-				(proc == nil || !supportsRemoteCanonicalTextHLLAdd(proc.GetService())) {
-				return moerr.NewNotSupportedNoCtx(
-					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
-			}
-			if isCanonicalFloatHLLAddType(typ) &&
-				(proc == nil || !supportsRemoteCanonicalFloatHLLAdd(proc.GetService())) {
-				return moerr.NewNotSupportedNoCtx(
-					"canonical FLOAT HLL_ADD_AGG remote execution requires MORPC protocol version 92")
-			}
-		}
-		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
-			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
-				return moerr.NewNotSupportedNoCtx(
-					"ordered aggregate remote execution requires MORPC protocol version 6",
-				)
-			}
-		}
-		if aggregateUsesCollationAwareTextMinMax(agg) &&
-			(proc == nil || !supportsRemoteTextCollationAggregates(proc.GetService())) {
-			return moerr.NewNotSupportedNoCtx(
-				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
-			)
-		}
-		if aggregateUsesJSONMinMax(agg) {
-			if err := validateRemoteExpressionFeatures(proc, plan.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// orderedSetPercentileDiscUsesExtendedType identifies the input family added
-// by the generic discrete-percentile executor. MORPC v17 only guarantees the
-// historical numeric implementation; an older worker would accept the
-// aggregate ID but fail when it tries to instantiate VARCHAR, DATE, UUID,
-// DECIMAL256, or another newly sortable type.
-func orderedSetPercentileDiscUsesExtendedType(
-	agg aggexec.AggFuncExecExpression,
-) bool {
-	args := agg.GetArgExpressions()
-	if len(args) == 0 || args[0] == nil {
-		return false
-	}
-	switch types.T(args[0].Typ.Id) {
-	case types.T_bit,
-		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128:
-		return false
-	default:
-		return true
-	}
+// pipelineExpressionFeatures returns the expression contracts a pipeline
+// carries, including those of lowered aggregate descriptors.
+func pipelineExpressionFeatures(p *pipeline.Pipeline) (plan.RemoteExpressionFeatures, error) {
+	return requiredRemotePipelineExpressionFeatures(p)
 }
 
 // Native aggregate lowering removes the function expression and its result type.
@@ -2344,17 +1996,6 @@ func isDecimalStatisticalAggregate(agg aggexec.AggFuncExecExpression) bool {
 		(types.T(args[0].Typ.Id) == types.T_decimal64 || types.T(args[0].Typ.Id) == types.T_decimal128)
 }
 
-func requireRemoteDecimalStatisticalResults(proc *process.Process) error {
-	version, known := int64(0), false
-	if proc != nil {
-		version, known = remoteMORPCProtocolVersion(proc.GetService())
-	}
-	if !known || version < defines.MORPCVersion113 {
-		return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
-	}
-	return nil
-}
-
 func isVarianceAggregate(agg aggexec.AggFuncExecExpression) bool {
 	switch agg.GetAggID() {
 	case aggexec.AggIdOfVarPop, aggexec.AggIdOfVarSample,
@@ -2364,150 +2005,7 @@ func isVarianceAggregate(agg aggexec.AggFuncExecExpression) bool {
 	return false
 }
 
-// pipelineContainsQuantileExactWeighted reports whether an encoded remote
-// pipeline carries the exact weighted percentile aggregate in any group or
-// merge-group stage, so encodeRemoteScopeWithProtocol can raise the
-// destination capability floor before the pipeline is delivered.
-func pipelineContainsQuantileExactWeighted(p *pipeline.Pipeline) bool {
-	if p == nil {
-		return false
-	}
-	for _, in := range p.InstructionList {
-		if in == nil || (in.Op != int32(vm.Group) && in.Op != int32(vm.MergeGroup)) ||
-			in.Agg == nil {
-			continue
-		}
-		for _, wire := range in.Agg.Aggs {
-			if wire != nil && wire.Op == aggexec.AggIdOfQuantileExactWeighted {
-				return true
-			}
-		}
-	}
-	for _, child := range p.Children {
-		if pipelineContainsQuantileExactWeighted(child) {
-			return true
-		}
-	}
-	return false
-}
-
-func procSupportsRemoteVarianceAggregates(proc *process.Process) bool {
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion35
-}
-
-func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinType) error {
-	if joinType != plan.Node_ASOF && joinType != plan.Node_ASOF_LEFT {
-		return nil
-	}
-	if proc == nil || !supportsRemoteAsofJoin(proc.GetService()) {
-		return moerr.NewNotSupportedNoCtx(
-			"native ASOF join remote execution requires MORPC protocol version 27",
-		)
-	}
-	return nil
-}
-
-func validateRemoteTargetAwareUpdateProtocol(proc *process.Process, targetAware bool) error {
-	if !targetAware {
-		return nil
-	}
-	if proc == nil || !supportsRemoteTargetAwareUpdate(proc.GetService()) {
-		return moerr.NewNotSupportedNoCtx(
-			"target-aware multi-table UPDATE remote execution requires MORPC protocol version 20",
-		)
-	}
-	return nil
-}
-
-func validateRemoteUpdateChangedRowsProtocol(proc *process.Process, changedRows bool) error {
-	if !changedRows {
-		return nil
-	}
-	if proc == nil || !supportsRemoteUpdateChangedRows(proc.GetService()) {
-		return moerr.NewNotSupportedNoCtx(
-			"UPDATE changed-row counting requires MORPC protocol version 25",
-		)
-	}
-	return nil
-}
-
-func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inputKeysUnique bool) error {
-	if !inputKeysUnique {
-		return nil
-	}
-	if proc == nil || !supportsRemoteRightDedupInputKeysUnique(proc.GetService()) {
-		return moerr.NewNotSupportedNoCtx(
-			"lookup-only RIGHT DEDUP remote execution requires MORPC protocol version 21",
-		)
-	}
-	return nil
-}
-
-func validateRemoteStatementLastInsertIDProtocol(
-	proc *process.Process,
-	hasAutoCol bool,
-	trackAutoIncrementGenerated bool,
-) error {
-	if hasAutoCol && (proc == nil || !supportsRemoteStatementLastInsertID(proc.GetService())) {
-		return moerr.NewNotSupportedNoCtx(
-			"remote auto-increment PRE_INSERT requires MORPC protocol version 26",
-		)
-	}
-	if !hasAutoCol && !trackAutoIncrementGenerated {
-		return nil
-	}
-	return validateRemoteAutoIncrementSessionOptionsProtocol(proc, trackAutoIncrementGenerated || hasNonDefaultAutoIncrementSessionOptions(proc))
-}
-
-func hasNonDefaultAutoIncrementSessionOptions(proc *process.Process) bool {
-	if proc == nil || proc.Base == nil {
-		return false
-	}
-	options := incrservice.NormalizeAutoIncrementOptions(
-		proc.GetSessionInfo().AutoIncrementIncrement,
-		proc.GetSessionInfo().AutoIncrementOffset,
-	)
-	return !options.IsDefault()
-}
-
-func validateRemoteAutoIncrementSessionOptionsProtocol(proc *process.Process, required bool) error {
-	if !required {
-		return nil
-	}
-	if proc == nil || !supportsRemoteAutoIncrementSessionOptions(proc.GetService()) {
-		return moerr.NewNotSupportedNoCtx(
-			"remote auto-increment session/provenance metadata requires MORPC protocol version 56",
-		)
-	}
-	return nil
-}
-
-func validateRemoteStringProvenancePipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	requiresVersion23, err := plan.RequiresMORPCVersion23StringProvenance(p)
-	if err != nil {
-		return err
-	}
-	if !requiresVersion23 {
-		return nil
-	}
-	if proc == nil || !supportsRemoteCrossDomainStringLiterals(proc.GetService()) {
-		return moerr.NewNotSupportedNoCtx(
-			"cross-domain string provenance requires MORPC protocol version 23",
-		)
-	}
-	return nil
-}
-
-func validateRemoteExpressionPipelineProtocol(
+func validateRemoteExpressionPipeline(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
@@ -2530,8 +2028,10 @@ func validateRemoteExpressionPipelineProtocol(
 	return nil
 }
 
-// The sender reuses analysis of its current pipeline; the receiver computes
-// features independently after decoding before calling this same source fence.
+// validateRemoteExpressionFeatures rejects expression contracts that need
+// rebinding or a session snapshot the pipeline does not carry. The sender
+// reuses analysis of its current pipeline; the receiver computes features
+// independently after decoding.
 func validateRemoteExpressionFeatures(proc *process.Process, features plan.RemoteExpressionFeatures) error {
 	if !features.Any() {
 		return nil
@@ -2548,292 +2048,6 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if features.WeekSessionDefault && (proc == nil ||
 		(proc.GetResolveVariableFunc() == nil && !proc.GetSessionInfo().DefaultWeekFormatSet)) {
 		return moerr.NewNotSupportedNoCtx("remote WEEK requires a default_week_format session snapshot")
-	}
-	protocolVersion, hasProtocolVersion := int64(0), false
-	if proc != nil {
-		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
-	}
-	if features.ODKUStatementResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
-		return moerr.NewNotSupportedNoCtx("remote ODKU statement result requires MORPC protocol version 134")
-	}
-	if features.SessionLastInsertIDBaseline {
-		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion134 {
-			return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline requires MORPC protocol version 134")
-		}
-	}
-	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion133) {
-		return moerr.NewNotSupportedNoCtx("typed JSON MIN/MAX requires MORPC protocol version 133")
-	}
-	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion129) {
-		return moerr.NewNotSupportedNoCtx("JSON string consumer execution requires MORPC protocol version 129")
-	}
-	if features.LoadFKIgnoreCheck && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion125) {
-		return moerr.NewNotSupportedNoCtx("LOAD IGNORE foreign-key filtering requires MORPC protocol version 125")
-	}
-	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
-		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
-	}
-	if features.JSONNumericComparisons && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion128) {
-		return moerr.NewNotSupportedNoCtx("mixed JSON/numeric comparisons require MORPC protocol version 128")
-	}
-	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
-		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
-	}
-	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
-		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
-	}
-	if features.TableCollationFunction && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
-		return moerr.NewNotSupportedNoCtx("internal table collation requires MORPC protocol version 118")
-	}
-	if features.LeastGreatestCollationSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
-		return moerr.NewNotSupportedNoCtx("collation-aware LEAST/GREATEST requires MORPC protocol version 117")
-	}
-	if features.CalendarIntervalNormalization && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
-		return moerr.NewNotSupportedNoCtx("calendar interval normalization requires MORPC protocol version 115")
-	}
-	if features.DecimalStatisticalResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
-		return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
-	}
-	if features.DecimalIntegerDivisionSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion121) {
-		return moerr.NewNotSupportedNoCtx("decimal integer division requires MORPC protocol version 121")
-	}
-	if (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion122) {
-		return moerr.NewNotSupportedNoCtx("temporal result contracts require MORPC protocol version 122")
-	}
-	if features.IncompleteTemporalStrings && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion130) {
-		return moerr.NewNotSupportedNoCtx("incomplete temporal strings require MORPC protocol version 130")
-	}
-	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
-		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")
-	}
-	if features.MediumIntAssignmentBounds && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion110) {
-		return moerr.NewNotSupportedNoCtx("MEDIUMINT assignment bounds require MORPC protocol version 110")
-	}
-	if features.SpecialIntegerConsumers && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
-		return moerr.NewNotSupportedNoCtx("special integer consumers require MORPC protocol version 98")
-	}
-	if features.TimestampAddSecondIntervals && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion124) {
-		return moerr.NewNotSupportedNoCtx("fractional TIMESTAMPADD SECOND requires MORPC protocol version 124")
-	}
-	if features.PreparedPrecisionScalar && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion95) {
-		return moerr.NewNotSupportedNoCtx("prepared scalar precision requires MORPC protocol version 95")
-	}
-	if (features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault) &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
-		return moerr.NewNotSupportedNoCtx("temporal expression contracts require MORPC protocol version 98")
-	}
-	if features.NumericPrefix &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {
-		return moerr.NewNotSupportedNoCtx(
-			"prepared numeric-prefix casts require MORPC protocol version 30",
-		)
-	}
-	if features.JSONComparisonParam &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
-		return moerr.NewNotSupportedNoCtx(
-			"prepared JSON comparison parameters require MORPC protocol version 36",
-		)
-	}
-	if features.MixedJSONBooleanEquality &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
-		return moerr.NewNotSupportedNoCtx(
-			"mixed JSON/BOOL equality requires MORPC protocol version 36",
-		)
-	}
-	if features.FormatNumericArguments &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion59) {
-		return moerr.NewNotSupportedNoCtx(
-			"typed numeric FORMAT arguments require MORPC protocol version 59",
-		)
-	}
-	if features.TypedConversionFunctions &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion64) {
-		return moerr.NewNotSupportedNoCtx(
-			"typed BIN/CONV execution requires MORPC protocol version 64",
-		)
-	}
-	if features.IntegerArithmeticDomains && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion71) {
-		return moerr.NewNotSupportedNoCtx("checked integer arithmetic requires MORPC protocol version 71")
-	}
-	if features.RowDependentConvBases && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion70) {
-		return moerr.NewNotSupportedNoCtx("row-dependent CONV bases require MORPC protocol version 70")
-	}
-	if features.ASCIIInt32Result &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion65) {
-		return moerr.NewNotSupportedNoCtx(
-			"signed INT ASCII results require MORPC protocol version 65",
-		)
-	}
-	if features.FloatConversionSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion132) {
-		return moerr.NewNotSupportedNoCtx("corrected float conversions require MORPC protocol version 132")
-	}
-	if features.StringNumericResultContracts &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {
-		return moerr.NewNotSupportedNoCtx(
-			"corrected string numeric result contracts require MORPC protocol version 80",
-		)
-	}
-	if features.BoundedConditionalStringDomains &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion83) {
-		return moerr.NewNotSupportedNoCtx(
-			"bounded conditional string domains require MORPC protocol version 83",
-		)
-	}
-	if features.DecimalLiteralSemantics &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion89) {
-		return moerr.NewNotSupportedNoCtx(
-			"exact DECIMAL256 literal semantics require MORPC protocol version 89",
-		)
-	}
-	if features.IPFunctionSemantics &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
-		return moerr.NewNotSupportedNoCtx(
-			"corrected IP function semantics require MORPC protocol version 72",
-		)
-	}
-	if (features.JSONInputContracts || features.YearBitCast) &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion101) {
-		return moerr.NewNotSupportedNoCtx(
-			"versioned expression contracts require MORPC protocol version 101",
-		)
-	}
-	if features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts {
-		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion86 {
-			return moerr.NewNotSupportedNoCtx(
-				"expression result contracts require MORPC protocol version 86",
-			)
-		}
-	}
-	if features.SpatialDistanceSemantics &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion90) {
-		return moerr.NewNotSupportedNoCtx(
-			"geodetic spatial-distance semantics require MORPC protocol version 90",
-		)
-	}
-	if features.ViewMetadataFunctions && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion126) {
-		return moerr.NewNotSupportedNoCtx("view metadata remote execution requires MORPC protocol version 126")
-	}
-	return nil
-}
-
-// validateRemoteMongoUserQueryPipelineProtocol is the final sender/receiver
-// compatibility fence for explicit MongoDB operations. Compilation can happen
-// while a rolling cluster is at a newer protocol and transmission can happen
-// after a rollback has lowered the oldest-live version. Older receivers ignore
-// the new protobuf fields and would otherwise run the broader legacy Find.
-func validateRemoteMongoUserQueryPipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	if p == nil {
-		return nil
-	}
-	for _, instruction := range p.InstructionList {
-		scan := instruction.GetMongodbScan()
-		if !mongoScanUsesV44Payload(scan) {
-			continue
-		}
-		if proc == nil || !supportsRemoteMongoUserQuery(proc.GetService()) {
-			return moerr.NewNotSupportedNoCtx(
-				"MongoDB explicit-query remote execution requires MORPC protocol version 44",
-			)
-		}
-	}
-	for _, child := range p.Children {
-		if err := validateRemoteMongoUserQueryPipelineProtocol(proc, child); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateRemoteDistributedOrderedTopPipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	if p == nil {
-		return nil
-	}
-	usesOrderedTop := false
-	for _, ordered := range p.OrderedStream {
-		if ordered {
-			usesOrderedTop = true
-			break
-		}
-	}
-	if !usesOrderedTop {
-		for _, instruction := range p.InstructionList {
-			if instruction.TopOrderedOutput || instruction.MergeTopOrderedStreams {
-				usesOrderedTop = true
-				break
-			}
-		}
-	}
-	if usesOrderedTop && (proc == nil || !supportsDistributedOrderedTop(proc.GetService())) {
-		return moerr.NewNotSupportedNoCtx(
-			"distributed ordered Top-N requires MORPC protocol version 53")
-	}
-	for _, child := range p.Children {
-		if err := validateRemoteDistributedOrderedTopPipelineProtocol(proc, child); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateRemotePartitionTopNWithTiesPipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	if p == nil {
-		return nil
-	}
-	for _, instruction := range p.InstructionList {
-		if instruction != nil && instruction.PartitionTopNWithTies &&
-			(proc == nil || !procSupportsRemotePartitionTopNWithTies(proc)) {
-			return moerr.NewNotSupportedNoCtx(
-				"RANK Partition Top-N requires MORPC protocol version 69",
-			)
-		}
-	}
-	for _, child := range p.Children {
-		if err := validateRemotePartitionTopNWithTiesPipelineProtocol(proc, child); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func procSupportsRemotePartitionTopNWithTies(proc *process.Process) bool {
-	version, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion69
-}
-
-func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	if p == nil {
-		return nil
-	}
-	for _, instruction := range p.InstructionList {
-		if rightDedup := instruction.GetRightDedupJoin(); rightDedup != nil {
-			if err := validateRemoteRightDedupInputKeysUniqueProtocol(
-				proc, rightDedup.InputKeysUnique,
-			); err != nil {
-				return err
-			}
-		}
-	}
-	for _, child := range p.Children {
-		if err := validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, child); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -2859,328 +2073,10 @@ func validateRemoteODKUBaselinePresence(proc *process.Process, p *pipeline.Pipel
 	return nil
 }
 
-func validateRemoteStatementLastInsertIDPipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	if p == nil {
-		return nil
-	}
-	for _, instruction := range p.InstructionList {
-		if preInsert := instruction.GetPreInsert(); preInsert != nil {
-			if err := validateRemoteStatementLastInsertIDProtocol(
-				proc, preInsert.HasAutoCol, preInsert.TrackAutoIncrementGenerated); err != nil {
-				return err
-			}
-			if preInsert.TrackOdkuResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
-				return moerr.NewNotSupportedNoCtx(
-					"remote ODKU result tracking requires MORPC protocol version 134")
-			}
-		}
-		if dedup := instruction.GetDedupJoin(); dedup != nil && dedup.OdkuResultTracking &&
-			(proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
-			return moerr.NewNotSupportedNoCtx(
-				"remote ODKU result tracking requires MORPC protocol version 134")
-		}
-		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
-			if err := validateRemoteAutoIncrementSessionOptionsProtocol(
-				proc, preInsertUnique.PreInsertUkCtx.GetAutoIncrementReorder()); err != nil {
-				return err
-			}
-		}
-	}
-	for _, child := range p.Children {
-		if err := validateRemoteStatementLastInsertIDPipelineProtocol(proc, child); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateRemoteAffectedRowsSelectorsProtocol(proc *process.Process, required bool) error {
-	if !required {
-		return nil
-	}
-	if proc == nil || !supportsRemoteAffectedRowsSelectors(proc.GetService()) {
-		return moerr.NewNotSupportedNoCtx(
-			"per-target affected-row selector metadata requires MORPC protocol version 24",
-		)
-	}
-	return nil
-}
-
-func validateRemoteODKUAffectedRowsProtocol(proc *process.Process, required bool) error {
-	if !required {
-		return nil
-	}
-	if proc == nil || !supportsRemoteODKUAffectedRows(proc.GetService()) {
-		return moerr.NewNotSupportedNoCtx(
-			"ODKU logical affected-row metadata requires MORPC protocol version 50",
-		)
-	}
-	return nil
-}
-
-func validateRemoteODKUActionRowsProtocol(proc *process.Process, required bool) error {
-	if !required {
-		return nil
-	}
-	if proc == nil || !supportsRemoteODKUActionRows(proc.GetService()) {
-		return moerr.NewNotSupportedNoCtx(
-			"ODKU per-action constraint metadata requires MORPC protocol version 51",
-		)
-	}
-	return nil
-}
-
-func validateRemoteODKUAffectedRowsPipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	if p == nil {
-		return nil
-	}
-	for _, instruction := range p.InstructionList {
-		if preInsert := instruction.GetPreInsertUnique(); preInsert != nil &&
-			preInsert.GetPreInsertUkCtx().GetOdkuTargetArbitration() {
-			if err := validateRemoteODKUActionRowsProtocol(proc, true); err != nil {
-				return err
-			}
-		}
-		if dedup := instruction.GetDedupJoin(); dedup != nil &&
-			(dedup.HasOdkuAffectedRows || dedup.EmitActionRows || len(dedup.ForeignKeyChecks) > 0) {
-			if err := validateRemoteODKUAffectedRowsProtocol(proc, dedup.HasOdkuAffectedRows); err != nil {
-				return err
-			}
-			if err := validateRemoteODKUActionRowsProtocol(
-				proc, dedup.EmitActionRows || len(dedup.ForeignKeyChecks) > 0); err != nil {
-				return err
-			}
-		}
-		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
-			for _, updateCtx := range multiUpdate.UpdateCtxList {
-				if updateCtx.AffectedRowsWeightCol != nil || updateCtx.PhysicalChangedRowsCol != nil {
-					if err := validateRemoteODKUAffectedRowsProtocol(proc, true); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-	for _, child := range p.Children {
-		if err := validateRemoteODKUAffectedRowsPipelineProtocol(proc, child); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateRemoteTargetAwareUpdatePipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	if p == nil {
-		return nil
-	}
-	for _, instruction := range p.InstructionList {
-		if preInsert := instruction.GetPreInsert(); preInsert != nil && preInsert.HasTargetSelector {
-			if err := validateRemoteTargetAwareUpdateProtocol(proc, true); err != nil {
-				return err
-			}
-		}
-		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
-			for _, updateCtx := range multiUpdate.UpdateCtxList {
-				if updateCtx.DedupByTargetRowId || updateCtx.TargetUpdateCtxIdx != 0 {
-					if err := validateRemoteTargetAwareUpdateProtocol(proc, true); err != nil {
-						return err
-					}
-				}
-				if len(updateCtx.AffectedRowsCols) > 0 {
-					if err := validateRemoteAffectedRowsSelectorsProtocol(proc, true); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-	for _, child := range p.Children {
-		if err := validateRemoteTargetAwareUpdatePipelineProtocol(proc, child); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateRemoteUpdateChangedRowsPipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	if p == nil {
-		return nil
-	}
-	for _, instruction := range p.InstructionList {
-		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
-			for _, updateCtx := range multiUpdate.UpdateCtxList {
-				if updateCtx.ChangedRowsCol != nil {
-					return validateRemoteUpdateChangedRowsProtocol(proc, true)
-				}
-			}
-		}
-	}
-	for _, child := range p.Children {
-		if err := validateRemoteUpdateChangedRowsPipelineProtocol(proc, child); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func binaryStringSemanticFunction(functionID int32) bool {
-	switch functionID {
-	case function.ORD, function.LENGTH_UTF8, function.LEFT, function.RIGHT,
-		function.SUBSTRING, function.REVERSE, function.LOWER, function.UPPER,
-		function.LTRIM, function.RTRIM, function.TRIM, function.LOCATE,
-		function.POSITION, function.INSTR, function.INSERT, function.REPLACE, function.LPAD,
-		function.RPAD, function.SUBSTRING_INDEX, function.SPLIT_PART,
-		function.REPEAT, function.LIKE, function.CONCAT, function.CONCAT_WS,
-		function.CHARSET, function.COLLATION, function.INTERNAL_CHAR_SIZE,
-		function.INTERNAL_COLUMN_CHARACTER_SET:
-		return true
-	default:
-		return false
-	}
-}
-
-// Recheck at serialization: a scope compiled before a capability change must
-// never reach an older CN with the new meaning of CHECK_CONSTRAINT_ASSERT.
-func validateRemoteIgnoreCheckPipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
-	if !statementIgnoreEnabled(proc) ||
-		supportsRemoteIgnoreCheck(proc.GetService()) ||
-		!pipelineContainsFunction(p, isCheckConstraintFunction) {
-		return nil
-	}
-	return moerr.NewNotSupportedNoCtxf(
-		"INSERT IGNORE CHECK semantics require MORPC protocol version %d", defines.MORPCVersion63)
-}
-
-func validateRemoteBinaryStringPipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	if proc != nil {
-		value, ok := moruntime.ServiceRuntime(proc.GetService()).
-			GetGlobalVariables(moruntime.MOProtocolVersion)
-		version, versionOK := value.(int64)
-		if ok && versionOK && version >= defines.MORPCVersion58 {
-			return nil
-		}
-	}
-	if p == nil || !pipelineContainsFunction(p, func(functionID, _ int32) bool {
-		return binaryStringSemanticFunction(functionID)
-	}) {
-		return nil
-	}
-	return moerr.NewNotSupportedNoCtxf(
-		"binary string function semantics require MORPC protocol version %d",
-		defines.MORPCVersion58)
-}
-
-func validateRemotePadSpacePipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	// A current peer cannot reject this feature. Check its negotiated capability
-	// before inspecting the protobuf tree: this validator runs on both remote
-	// sender and receiver paths, and reflective feature discovery is needed only
-	// for a mixed-version peer.
-	if proc != nil && supportsRemotePadSpaceSemantics(proc.GetService()) {
-		return nil
-	}
-	if p == nil {
-		return nil
-	}
-	modeEnabled, err := process.ResolvePadCharToFullLength(proc)
-	if err != nil {
-		return err
-	}
-	if !modeEnabled && !pipelineContainsPadSpaceCast(p) {
-		return nil
-	}
-	return moerr.NewNotSupportedNoCtx(
-		"PAD SPACE remote execution requires MORPC protocol version 40",
-	)
-}
-
-// validateRemoteParquetWholeFileFanoutPipelineProtocol keeps the scope-shape
-// marker from being silently ignored by a receiver from before v45. That
-// receiver would otherwise re-enable object-sized S3 prefetch for a fanout
-// scope, violating the bounded-memory contract.
-func validateRemoteParquetWholeFileFanoutPipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	if p == nil {
-		return nil
-	}
-	for _, instruction := range p.InstructionList {
-		scan := instruction.GetExternalScan()
-		if scan == nil || !scan.ParquetWholeFileFanout {
-			continue
-		}
-		if proc == nil || !supportsRemoteParquetWholeFileFanout(proc.GetService()) {
-			return moerr.NewNotSupportedNoCtx(
-				"Parquet whole-file fanout remote execution requires MORPC protocol version 45",
-			)
-		}
-	}
-	for _, child := range p.Children {
-		if err := validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, child); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateRemoteGroupingSetPipelineProtocol is the final sender/receiver
-// compatibility fence for v49 grouping-set execution metadata. Planning can
-// happen at v49 before a cached/prepared plan is transmitted after a rollback;
-// an older receiver would silently ignore these append-only fields and execute
-// ordinary Projection/Group semantics.
-func validateRemoteGroupingSetPipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	if p == nil {
-		return nil
-	}
-	for _, instruction := range p.InstructionList {
-		if instruction == nil {
-			continue
-		}
-		agg := instruction.GetAgg()
-		requiresV49 := len(instruction.ProjectionGroupingFlags) > 0 ||
-			instruction.ProjectionGroupingSetCount != 0 ||
-			agg != nil && (agg.DynamicGrouping || agg.EmptyGroupingSet ||
-				len(agg.EmptyGroupingSetIds) > 0)
-		if requiresV49 &&
-			(proc == nil || !supportsRemoteGroupingSetExpansion(proc.GetService())) {
-			return moerr.NewNotSupportedNoCtx(
-				"grouping-set remote execution requires MORPC protocol version 49",
-			)
-		}
-	}
-	for _, child := range p.Children {
-		if err := validateRemoteGroupingSetPipelineProtocol(proc, child); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateRemoteAutoIDCachePipelineProtocol runs before receiver scope/operator
+// validateRemoteAutoIDCachePipeline runs before receiver scope/operator
 // construction. The appended opcode makes old decoders reject the payload; this
 // check also rejects disabled new receivers and malformed/stripped markers.
-func validateRemoteAutoIDCachePipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+func validateRemoteAutoIDCachePipeline(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil {
 		return nil
 	}
@@ -3201,85 +2097,11 @@ func validateRemoteAutoIDCachePipelineProtocol(proc *process.Process, p *pipelin
 		}
 	}
 	for _, child := range p.Children {
-		if err := validateRemoteAutoIDCachePipelineProtocol(proc, child); err != nil {
+		if err := validateRemoteAutoIDCachePipeline(proc, child); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// validateRemoteArrowLoadPipelineProtocol prevents receivers from silently
-// ignoring Arrow-specific ExternalScan fields during a mixed-version rollout.
-func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
-	if p == nil {
-		return nil
-	}
-	for _, instruction := range p.InstructionList {
-		scan := instruction.GetExternalScan()
-		if scan == nil || scan.ArrowExecutionScope != pipeline.ArrowExecutionScope_ArrowLoadData {
-			continue
-		}
-		if proc == nil || !supportsRemoteArrowLoadPipeline(proc.GetService()) {
-			return moerr.NewNotSupportedNoCtx(
-				"Arrow LOAD remote execution requires MORPC protocol version 57",
-			)
-		}
-	}
-	for _, child := range p.Children {
-		if err := validateRemoteArrowLoadPipelineProtocol(proc, child); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateRemoteViewDefinitionPipelineProtocol protects the function IDs that
-// occur in the persisted VIEWS definition for standalone scope encoding.
-// Remote send and receive reuse the shared expression feature analysis.
-func validateRemoteViewDefinitionPipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
-	// A current peer cannot reject this function. Avoid a reflective traversal
-	// of every ordinary remote pipeline once the negotiated capability is known.
-	if proc != nil && supportsRemoteViewDefinitionFunction(proc.GetService()) {
-		return nil
-	}
-	features, err := plan.RequiredRemoteExpressionFeatures(p)
-	if err != nil {
-		return err
-	}
-	if !features.ViewMetadataFunctions {
-		return nil
-	}
-	if proc == nil || !supportsRemoteViewDefinitionFunction(proc.GetService()) {
-		return moerr.NewNotSupportedNoCtx(
-			"view metadata remote execution requires MORPC protocol version 126",
-		)
-	}
-	return nil
-}
-
-func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bool {
-	if agg.GetAggID() != aggexec.AggIdOfMin && agg.GetAggID() != aggexec.AggIdOfMax {
-		return false
-	}
-	args := agg.GetArgExpressions()
-	if len(args) == 0 || args[0] == nil ||
-		(args[0].Typ.Charset != uint32(types.CharsetUTF8) &&
-			args[0].Typ.Charset != uint32(types.CharsetUTF8MB4Bin)) {
-		return false
-	}
-	switch types.T(args[0].Typ.Id) {
-	case types.T_char, types.T_varchar, types.T_text:
-		return true
-	default:
-		return false
-	}
-}
-
-func aggregateUsesJSONMinMax(agg aggexec.AggFuncExecExpression) bool {
-	return plan.IsJSONMinMaxAggregate(agg.GetAggID(), agg.GetArgExpressions())
 }
 
 // convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate
@@ -3331,8 +2153,8 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
-	bat := batch.NewOffHeapEmpty()
-	if err := bat.UnmarshalBinaryForPipeline(data, mp); err != nil {
+	bat := batch.NewWithSize(0)
+	if err := bat.UnmarshalBinaryWithAnyMp(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err
 	}

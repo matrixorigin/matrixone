@@ -113,8 +113,8 @@ func TestPadCharColumnsToFullLength(t *testing.T) {
 	varcharType := types.New(types.T_varchar, 8, 0)
 	bat := batch.NewWithSize(5)
 	var err error
-	bat.Vecs[0] = vector.NewVec(charType)
-	bat.Vecs[1] = vector.NewVec(varcharType)
+	bat.Vecs[0] = vector.NewVec(charType, proc.Mp())
+	bat.Vecs[1] = vector.NewVec(varcharType, proc.Mp())
 	bat.Vecs[2], err = vector.NewConstBytes(types.New(types.T_char, 0, 0), []byte("MO"), 3, proc.Mp())
 	require.NoError(t, err)
 	bat.Vecs[3], err = vector.NewConstBytes(charType, []byte("12345678"), 3, proc.Mp())
@@ -129,7 +129,7 @@ func TestPadCharColumnsToFullLength(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], nil, true, proc.Mp()))
 	bat.SetRowCount(3)
 
-	require.NoError(t, padCharColumnsToFullLength(bat, proc))
+	require.NoError(t, padCharColumnsToFullLength(bat, proc.Mp()))
 	require.Equal(t, "MO      ", string(bat.Vecs[0].GetBytesAt(0)))
 	require.Equal(t, "你好      ", string(bat.Vecs[0].GetBytesAt(1)))
 	require.True(t, bat.Vecs[0].GetNulls().Contains(2))
@@ -179,6 +179,8 @@ func TestPrepareResolvesPadCharToFullLength(t *testing.T) {
 func getReader(t *testing.T, ctrl *gomock.Controller, m *mpool.MPool) engine.Reader {
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b interface{}, bat *batch.Batch) (bool, error) {
+		// The scan's output vectors live in the pool the scan reads with.
+		m := b.(*mpool.MPool)
 		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, m)
 		if err != nil {
 			require.Nil(t, err)
@@ -286,6 +288,8 @@ func TestInlineFilter(t *testing.T) {
 				if callCount > 1 {
 					return true, nil // end of data
 				}
+				// The scan's output vectors live in the pool the scan reads with.
+				m := b.(*mpool.MPool)
 				for i := 0; i < 10; i++ {
 					require.NoError(t, vector.AppendFixed(bat.GetVector(0), int32(i+1), false, m))       // a: 1..10
 					require.NoError(t, vector.AppendFixed(bat.GetVector(1), int32((i+1)*5), false, m))   // b: 5,10,..,50
@@ -570,12 +574,12 @@ func TestShrinkPopulatedVecs_SkipsUnmaterializedColumn(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(3)
 
-	pk := vector.NewVec(types.T_int64.ToType())
+	pk := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(pk, []int64{10, 11, 12, 13, 14}, nil, mp))
 	// The ORDER BY vector column: values already consumed to compute distances, then
 	// cleared by the reader — deliberately 0 rows while its siblings hold 5.
-	emptied := vector.NewVec(types.T_int64.ToType())
-	dist := vector.NewVec(types.T_float64.ToType())
+	emptied := vector.NewVec(types.T_int64.ToType(), mp)
+	dist := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(dist, []float64{0.5, 0.4, 0.3, 0.2, 0.1}, nil, mp))
 
 	bat.Vecs[0], bat.Vecs[1], bat.Vecs[2] = pk, emptied, dist
@@ -598,7 +602,7 @@ func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	bat := batch.NewWithSize(1)
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(v, []int64{1, 2, 3}, nil, mp))
 	bat.Vecs[0] = v
 	bat.SetRowCount(3)
@@ -610,7 +614,7 @@ func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
 
 	// RowCount 0 with all-empty vectors: nothing to shrink, must not panic.
 	empty := batch.NewWithSize(1)
-	empty.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	empty.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	empty.SetRowCount(0)
 	defer empty.Clean(mp)
 	require.NotPanics(t, func() { require.NoError(t, shrinkPopulatedVecs(empty, []int64{}, mp)) })

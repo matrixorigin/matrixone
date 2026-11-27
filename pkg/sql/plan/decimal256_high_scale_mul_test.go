@@ -101,7 +101,7 @@ func TestDecimal256ScaleAlignmentPublicPath(t *testing.T) {
 			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int32{1, 2, 0}, []bool{false, false, true}, proc.Mp()))
 			input.SetRowCount(3)
 			executor, err := colexec.NewExpressionExecutor(proc, expr)

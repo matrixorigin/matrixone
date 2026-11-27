@@ -35,12 +35,8 @@ var DataScan_TableIDAtrrs = append(TableObjectsAttrs, objectio.PhysicalAddr_Attr
 var DataScan_TableIDTypes = append(TableObjectsTypes, objectio.RowidType)
 var DataScan_TableIDSeqnums = append(TableObjectsSeqnums, objectio.SEQNUM_ROWID)
 
-func MakeDataScanTableIDBatch() *batch.Batch {
-	return batch.NewWithSchema(
-		true,
-		DataScan_TableIDAtrrs,
-		DataScan_TableIDTypes,
-	)
+func MakeDataScanTableIDBatch(mp *mpool.MPool) *batch.Batch {
+	return batch.NewWithTypes(DataScan_TableIDTypes, mp)
 }
 
 var DataScan_ObjectEntryAttrs = []string{

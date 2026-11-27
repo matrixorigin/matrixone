@@ -797,15 +797,15 @@ func readClusterTaeRange(
 
 	attrs := []string{"tenant_id", "device_id", "metric_id", "event_ts", "value"}
 	out := batch.NewWithSize(len(attrs))
-	out.Attrs = attrs
+	outAttrs := attrs
 	for i := range attrs {
 		switch attrs[i] {
 		case "tenant_id", "device_id", "metric_id":
-			out.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+			out.Vecs[i] = vector.NewVec(types.T_int32.ToType(), mp)
 		case "event_ts":
-			out.Vecs[i] = vector.NewVec(types.T_datetime.ToType())
+			out.Vecs[i] = vector.NewVec(types.T_datetime.ToType(), mp)
 		default:
-			out.Vecs[i] = vector.NewVec(types.T_float64.ToType())
+			out.Vecs[i] = vector.NewVec(types.T_float64.ToType(), mp)
 		}
 	}
 	defer out.Clean(mp)
@@ -813,7 +813,7 @@ func readClusterTaeRange(
 	res := realClusterReadResult{}
 	for {
 		out.CleanOnlyData()
-		isEnd, err := reader.Read(qryCtx, out.Attrs, nil, mp, out)
+		isEnd, err := reader.Read(qryCtx, outAttrs, nil, mp, out)
 		require.NoError(t, err)
 		if isEnd {
 			break

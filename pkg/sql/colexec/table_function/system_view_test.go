@@ -366,10 +366,7 @@ func Test_gettingInfo(t *testing.T) {
 			}
 
 			bat := res.Batch
-			assert.Equal(t, len(bat.Attrs), 3)
-			assert.Equal(t, bat.Attrs[0], "type")
-			assert.Equal(t, bat.Attrs[1], "used")
-			assert.Equal(t, bat.Attrs[2], "hit_ratio")
+			assert.Equal(t, len(bat.Vecs), 3)
 
 			// what?
 			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[0], "mock_cache")
@@ -424,8 +421,7 @@ func Test_gettingInfo(t *testing.T) {
 			}
 
 			bat := res.Batch
-			assert.Equal(t, len(bat.Attrs), 1)
-			assert.Equal(t, bat.Attrs[0], "user_txn")
+			assert.Equal(t, len(bat.Vecs), 1)
 
 			// WTH is this check?
 			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[0], "true")
@@ -481,10 +477,7 @@ func Test_gettingInfo(t *testing.T) {
 			}
 
 			bat := res.Batch
-			assert.Equal(t, len(bat.Attrs), 3)
-			assert.Equal(t, bat.Attrs[0], "table_id")
-			assert.Equal(t, bat.Attrs[1], "lock_key")
-			assert.Equal(t, bat.Attrs[2], "lock_mode")
+			assert.Equal(t, len(bat.Vecs), 3)
 
 			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[0], "1000")
 			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(1))[0], "range")
@@ -777,10 +770,7 @@ func Test_moConfigurationsCall(t *testing.T) {
 			}
 
 			bat := res.Batch
-			assert.Equal(t, len(bat.Attrs), 3)
-			assert.Equal(t, bat.Attrs[0], "name")
-			assert.Equal(t, bat.Attrs[1], "current_value")
-			assert.Equal(t, bat.Attrs[2], "default_value")
+			assert.Equal(t, len(bat.Vecs), 3)
 
 			for i := 0; i < 4; i++ {
 				assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(0))[i], "xxxx")

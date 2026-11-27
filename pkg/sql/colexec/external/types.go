@@ -171,6 +171,18 @@ type ExParam struct {
 	icebergDeleteLoaded         bool
 	IcebergBatchDataFile        string
 	IcebergBatchStartRowOrdinal int64
+	// outputMP is the External operator's OutputAllocation view (nil when
+	// unaccounted). Readers allocate output-batch vectors through it.
+	outputMP *mpool.MPool
+}
+
+// outputPool returns the pool output-batch vectors allocate from: the
+// operator's OutputAllocation view when one is bound, otherwise proc's pool.
+func (param *ExternalParam) outputPool(proc *process.Process) *mpool.MPool {
+	if param != nil && param.outputMP != nil {
+		return param.outputMP
+	}
+	return proc.Mp()
 }
 
 type ExFileparam struct {
@@ -212,6 +224,26 @@ type ExternalFileReader interface {
 	Close() error
 }
 
+// BatchPublisher is an ExternalFileReader that owns the batches it reads (the
+// zero-copy Arrow conversions). PublishBatch replaces ReadBatch: it returns a
+// batch owned by the reader, valid until the next PublishBatch or
+// ReleaseBatch. The External operator outputs it as is and never frees or
+// modifies its vectors; the reader never touches the operator's buffer.
+type BatchPublisher interface {
+	PublishBatch(ctx context.Context, proc *process.Process, analyzer process.Analyzer) (*batch.Batch, bool, error)
+	// ReleaseBatch frees the last published batch once nothing reads it.
+	ReleaseBatch()
+}
+
+// releaseReader releases a publishing reader's last batch and closes the
+// reader. It runs only once the operator's last output was consumed.
+func (external *External) releaseReader() error {
+	if publisher, ok := external.reader.(BatchPublisher); ok {
+		publisher.ReleaseBatch()
+	}
+	return external.reader.Close()
+}
+
 type container struct {
 	maxAllocSize int
 	buf          *batch.Batch
@@ -220,7 +252,8 @@ type container struct {
 type External struct {
 	// OutputAllocation belongs to the coordinator source owner. Reader-specific
 	// scratch retains its native allocation provenance.
-	OutputAllocation  *vector.AllocationAccountSelection
+	// It is an accounted view of the process pool (nil = unaccounted).
+	OutputAllocation  *mpool.MPool
 	ctr               container
 	Es                *ExternalParam
 	reader            ExternalFileReader // unified file reader
@@ -393,7 +426,7 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 		}
 	}
 	if external.reader != nil {
-		if closeErr := external.reader.Close(); closeErr != nil {
+		if closeErr := external.releaseReader(); closeErr != nil {
 			logutil.Debugf("external reader close on reset: %v", closeErr)
 		}
 		external.reader = nil
@@ -434,7 +467,7 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 		external.Es.KafkaPending = nil
 	}
 	if external.reader != nil {
-		external.reader.Close()
+		external.releaseReader()
 		external.reader = nil
 		external.fileOpened = false
 	}
@@ -442,7 +475,9 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 		external.Es.releaseIcebergObjectIORef()
 	}
 	if external.ctr.buf != nil {
-		external.ctr.buf.Clean(proc.Mp())
+		// buf holds only the operator's own vectors (a publishing reader's
+		// batches are never installed in it).
+		external.ctr.buf.Clean(external.Es.outputPool(proc))
 		external.ctr.buf = nil
 	}
 	external.FreeProjection(proc)
@@ -530,6 +565,8 @@ type ParquetHandler struct {
 	rowCountOnly                   bool
 	currentRowGroup                int
 	rowCountRemaining              int64
+	// outputMP is the External OutputAllocation view, nil when unaccounted.
+	outputMP *mpool.MPool
 }
 
 type columnMapper struct {
@@ -546,4 +583,6 @@ type columnMapper struct {
 	mapper           func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
 	listValuesMapper func(mp *columnMapper, values []parquet.Value, numRows int, proc *process.Process, vec *vector.Vector) error
 	rowBuffer        *parquet.Buffer
+	// pool is the External OutputAllocation view, nil when unaccounted.
+	pool *mpool.MPool
 }

@@ -90,7 +90,8 @@ func (r *ckpObjectReader) Read(
 		return true, nil
 	}
 	for {
-		if end, err = r.reader.Read(ctx, bat.Attrs, nil, mp, bat); err != nil {
+		// bat is a ckputil.MakeDataScanTableIDBatch batch.
+		if end, err = r.reader.Read(ctx, ckputil.DataScan_TableIDAtrrs, nil, mp, bat); err != nil {
 			return
 		}
 		if !end {
@@ -179,7 +180,7 @@ func (r *ckpObjectReaderForV12) Read(
 	}
 	var bats []*containers.Batch
 	if bats, err = LoadBlkColumnsByMeta(
-		CheckpointVersion12, ctx, typs, destBatch.Attrs, batchIndex, reader, mp,
+		CheckpointVersion12, ctx, typs, ckputil.DataScan_TableIDAtrrs, batchIndex, reader, mp,
 	); err != nil {
 		return
 	}
@@ -267,7 +268,7 @@ func (reader *CKPReader) GetTableRanges(
 		ranges = append(ranges, reader.tombstoneRanges...)
 		return
 	}
-	rangeBat := ckputil.MakeTableRangeBatch()
+	rangeBat := ckputil.MakeTableRangeBatch(reader.mp)
 	defer rangeBat.Clean(reader.mp)
 	if err = ckputil.CollectTableRanges(
 		ctx,
@@ -455,7 +456,7 @@ func readMetaBatch(
 	); err != nil {
 		return
 	}
-	metaBatch = batch.New(ckputil.MetaAttrs)
+	metaBatch = batch.NewWithSize(len(ckputil.MetaAttrs))
 	for i, vec := range metaVecs {
 		metaBatch.Vecs[i] = &vec
 	}
@@ -485,9 +486,31 @@ func readMetaWithTableID(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (dataRanges, tombstoneRanges []ckputil.TableRange, err error) {
+	meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+	if err != nil {
+		return nil, nil, err
+	}
+	// A block's table-ID zone map can prove absence without loading any
+	// columns. IDs inside its bounds still require the exact lookup below.
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
+	block := dataMeta.GetBlockMeta(uint32(location.ID()))
+	if block.GetMetaColumnCount() > ckputil.MetaSeqnums[0] {
+		column := block.ColumnMeta(ckputil.MetaSeqnums[0])
+		zm := column.ZoneMap()
+		if column.DataType() == uint8(types.T_uint64) && zm.Valid() && zm.GetType() == types.T_uint64 {
+			minBytes, maxBytes := zm.GetMinBuf(), zm.GetMaxBuf()
+			if len(minBytes) == 8 && len(maxBytes) == 8 {
+				minID, maxID := types.DecodeUint64(minBytes), types.DecodeUint64(maxBytes)
+				if minID <= maxID && (tableID < minID || tableID > maxID) {
+					return nil, nil, ctx.Err()
+				}
+			}
+		}
+	}
+
 	tableIDs := containers.NewVectors(1)
-	_, release, _, err := ioutil.LoadColumnsData(
-		ctx, ckputil.MetaSeqnums[:1], ckputil.MetaTypes[:1],
+	release, _, err := ioutil.LoadColumnsDataFromMeta(
+		ctx, dataMeta, ckputil.MetaSeqnums[:1], ckputil.MetaTypes[:1],
 		fs, location, tableIDs, mp, 0,
 	)
 	if err != nil {
@@ -511,7 +534,7 @@ func readMetaWithTableID(
 		sels[i] = int64(start + i)
 	}
 
-	metaBatch := ckputil.NewMetaBatch()
+	metaBatch := ckputil.NewMetaBatch(mp)
 	defer metaBatch.Clean(mp)
 	if _, _, err = ioutil.LoadColumnsDataInto(
 		ctx, ckputil.MetaSeqnums, ckputil.MetaTypes, fs, location,
@@ -526,62 +549,79 @@ func readMetaWithTableID(
 }
 
 func (reader *CKPReader) GetLocations() []objectio.Location {
+	locationCount := len(reader.ckpDataObjectStats) + len(reader.dataRanges) + len(reader.tombstoneRanges) +
+		len(reader.dataLocations) + len(reader.tombstoneLocations)
+	locations := make([]objectio.Location, 0, locationCount)
+	reader.visitLocations(true, func(loc objectio.Location) {
+		locations = append(locations, loc)
+	})
+	return locations
+}
+
+func (reader *CKPReader) visitLocations(byBlock bool, visit func(objectio.Location)) {
 	if reader.version <= CheckpointVersion12 {
-		locations := make([]objectio.Location, 0, len(reader.dataLocations)+len(reader.dataLocations))
 		for _, loc := range reader.dataLocations {
-			locations = append(locations, loc)
+			visit(loc)
 		}
 		for _, loc := range reader.tombstoneLocations {
-			locations = append(locations, loc)
+			visit(loc)
 		}
-		return locations
-	} else {
-		if reader.withTableID {
-			locations := make([]objectio.Location, 0, len(reader.dataRanges)+len(reader.tombstoneRanges))
-			for _, tableRange := range reader.dataRanges {
-				obj := tableRange.ObjectStats
-				for i := 0; i < int(obj.BlkCnt()); i++ {
-					loc := obj.ObjectLocation()
-					loc.SetID(uint16(i))
-					locations = append(locations, loc)
-				}
+		return
+	}
+	visitObject := func(obj objectio.ObjectStats) {
+		blocks := int(obj.BlkCnt())
+		if !byBlock {
+			if blocks > 0 {
+				visit(obj.ObjectLocation())
 			}
-			for _, tableRange := range reader.tombstoneRanges {
-				obj := tableRange.ObjectStats
-				for i := 0; i < int(obj.BlkCnt()); i++ {
-					loc := obj.ObjectLocation()
-					loc.SetID(uint16(i))
-					locations = append(locations, loc)
-				}
-			}
-			return locations
-		} else {
-			locations := make([]objectio.Location, 0, len(reader.ckpDataObjectStats))
-			for _, obj := range reader.ckpDataObjectStats {
-				for i := 0; i < int(obj.BlkCnt()); i++ {
-					loc := obj.ObjectLocation()
-					loc.SetID(uint16(i))
-					locations = append(locations, loc)
-				}
-			}
-			return locations
+			return
 		}
+		for i := range blocks {
+			loc := obj.ObjectLocation()
+			loc.SetID(uint16(i))
+			visit(loc)
+		}
+	}
+	if reader.withTableID {
+		for _, tableRange := range reader.dataRanges {
+			visitObject(tableRange.ObjectStats)
+		}
+		for _, tableRange := range reader.tombstoneRanges {
+			visitObject(tableRange.ObjectStats)
+		}
+		return
+	}
+	for _, obj := range reader.ckpDataObjectStats {
+		visitObject(obj)
 	}
 }
 
 func (reader *CKPReader) PrefetchData(sid string) {
-	locations := reader.GetLocations()
-	for _, loc := range locations {
+	// The pipeline prefetches a whole file. Enqueue each file once, even
+	// when it holds many blocks or appears in multiple checkpoint ranges.
+	reader.visitFiles(func(loc objectio.Location) {
 		ioutil.Prefetch(sid, reader.fs, loc)
-	}
+	})
+}
+
+func (reader *CKPReader) visitFiles(visit func(objectio.Location)) {
+	seen := make(map[string]struct{})
+	reader.visitLocations(false, func(loc objectio.Location) {
+		name := loc.Name().String()
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		visit(loc)
+	})
 }
 
 func (reader *CKPReader) GetCheckpointData(ctx context.Context) (ckpData *batch.Batch, err error) {
 	if reader.withTableID {
 		panic("not support")
 	}
-	ckpData = ckputil.MakeDataScanTableIDBatch()
-	tmpBatch := ckputil.MakeDataScanTableIDBatch()
+	ckpData = ckputil.MakeDataScanTableIDBatch(reader.mp)
+	tmpBatch := ckputil.MakeDataScanTableIDBatch(reader.mp)
 	defer tmpBatch.Clean(reader.mp)
 	for {
 		tmpBatch.CleanOnlyData()
@@ -707,7 +747,7 @@ func (reader *CKPReader) ForEachRow(
 	if reader.withTableID {
 		panic("not support")
 	}
-	tmpBatch := ckputil.MakeDataScanTableIDBatch()
+	tmpBatch := ckputil.MakeDataScanTableIDBatch(reader.mp)
 	defer tmpBatch.Clean(reader.mp)
 	defer reader.ckpDataReader.Reset(ctx)
 	for {
@@ -752,7 +792,7 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 		panic("not support")
 	}
 	if reader.version <= CheckpointVersion12 {
-		tmpBatch := ckputil.MakeDataScanTableIDBatch()
+		tmpBatch := ckputil.MakeDataScanTableIDBatch(reader.mp)
 		defer tmpBatch.Clean(reader.mp)
 		defer reader.ckpDataReader.Reset(ctx)
 		for {
@@ -1187,7 +1227,7 @@ func (reader *SyncTableIDReader) Read(ctx context.Context) (release func(), bat 
 	); err != nil {
 		return
 	}
-	bat = batch.New(TableIDAttrs)
+	bat = batch.NewWithSize(len(TableIDAttrs))
 	for i, vec := range preTableIDVecs {
 		bat.Vecs[i] = &vec
 	}

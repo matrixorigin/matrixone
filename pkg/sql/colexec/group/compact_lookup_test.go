@@ -34,7 +34,7 @@ import (
 func TestCompactTupleLookupScratchAndOffsets(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	vecs := []*vector.Vector{vector.NewVec(types.New(types.T_char, 1, 0)), vector.NewVec(types.New(types.T_char, 1, 0))}
+	vecs := []*vector.Vector{vector.NewVec(types.New(types.T_char, 1, 0), mp), vector.NewVec(types.New(types.T_char, 1, 0), mp)}
 	for col, values := range [][]string{
 		{"ignored", "A ", " ", "\x00", "\xff", "A"},
 		{"ignored", "B", "", "\x00", "\xfe", "B "},
@@ -116,7 +116,7 @@ func BenchmarkCompactGroupLookup(b *testing.B) {
 					b.Cleanup(func() { require.Zero(b, mp.CurrNB()) })
 					vecs := make([]*vector.Vector, columns)
 					for col := range vecs {
-						vec := vector.NewVec(types.New(types.T_char, 1, 0))
+						vec := vector.NewVec(types.New(types.T_char, 1, 0), mp)
 						vecs[col] = vec
 						b.Cleanup(func() { vec.Free(mp) })
 						for row := 0; row < rows; row++ {
@@ -153,12 +153,11 @@ func BenchmarkCompactGroupLookup(b *testing.B) {
 
 func TestCompactGroupCanonicalKeysAndSpill(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		columns    int
-		dictionary bool
-		spill      int64
+		name    string
+		columns int
+		spill   int64
 	}{
-		{"single", 1, false, 0}, {"tuple", 2, false, 0}, {"spill", 2, false, 2}, {"dictionary", 2, true, 0},
+		{"single", 1, 0}, {"tuple", 2, 0}, {"spill", 2, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -168,7 +167,7 @@ func TestCompactGroupCanonicalKeysAndSpill(t *testing.T) {
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			exprs := make([]*plan.Expr, tc.columns)
 			for col := range tc.columns {
-				input.Vecs[col] = vector.NewVec(typ)
+				input.Vecs[col] = vector.NewVec(typ, proc.Mp())
 				exprs[col] = colExprWithType(int32(col), typ)
 			}
 			const rows = 4 * hashmap.UnitLimit
@@ -192,21 +191,6 @@ func TestCompactGroupCanonicalKeysAndSpill(t *testing.T) {
 				expected[canonical]++
 			}
 			input.SetRowCount(rows)
-			if tc.dictionary {
-				mapping := make([]int64, rows)
-				for i := range mapping {
-					mapping[i] = int64(rows - 1 - i)
-				}
-				selected := make([]*vector.Vector, tc.columns)
-				admitted, err := vector.TrySelectDictionaryVectors(input.Vecs, selected, mapping, rows, proc.Mp(), nil)
-				require.NoError(t, err)
-				require.True(t, admitted)
-				for _, source := range input.Vecs {
-					source.Free(proc.Mp())
-				}
-				input.Vecs = selected
-			}
-
 			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 			g := newGroupOp(proc, exprs, []aggexec.AggFuncExecExpression{countStarAgg()})
 			g.SpillMem = tc.spill
@@ -248,7 +232,7 @@ func TestCompactGroupCanonicalKeysAndSpill(t *testing.T) {
 func TestCompactGroupFallbackAndGeneration(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	vec := vector.NewVec(types.New(types.T_char, 1, 0))
+	vec := vector.NewVec(types.New(types.T_char, 1, 0), mp)
 	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, vector.AppendBytes(vec, []byte("A"), false, mp))
 	ctr := container{mp: mp}
@@ -269,11 +253,6 @@ func TestCompactGroupFallbackAndGeneration(t *testing.T) {
 	require.True(t, hit)
 	require.True(t, preview.existingOnly)
 	require.Equal(t, []uint64{7}, preview.values)
-	ctr.groupKeyStringSourceMetadata = true
-	_, hit, err = ctr.previewCompactGroups([]*vector.Vector{vec}, 0, 1)
-	require.NoError(t, err)
-	require.False(t, hit, "resident source metadata keeps the generic publication path")
-	ctr.groupKeyStringSourceMetadata = false
 	vec.GetNulls().Add(0)
 	_, hit, err = ctr.previewCompactGroups([]*vector.Vector{vec}, 0, 1)
 	require.NoError(t, err)
@@ -291,7 +270,7 @@ func TestCompactGroupFallbackAndGeneration(t *testing.T) {
 func TestCompactGroupAdmissionFailure(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	vec := vector.NewVec(types.New(types.T_char, 1, 0))
+	vec := vector.NewVec(types.New(types.T_char, 1, 0), mp)
 	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, vector.AppendBytes(vec, []byte("A"), false, mp))
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)

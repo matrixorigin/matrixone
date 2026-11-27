@@ -35,7 +35,7 @@ func TestJSONIntegerToDecimalIsExact(t *testing.T) {
 		return enc
 	}
 	run := func(t *testing.T, doc string, typ types.Type) (string, error) {
-		vec := vector.NewVec(types.T_json.ToType())
+		vec := vector.NewVec(types.T_json.ToType(), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, vector.AppendBytes(vec, encode(doc), false, proc.Mp()))
 		res := vector.NewFunctionResultWrapper(typ, proc.Mp())

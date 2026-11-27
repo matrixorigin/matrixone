@@ -94,8 +94,8 @@ func TestExternalArrowLoadFileAndStream(t *testing.T) {
 			require.Equal(t, 2, result.Batch.RowCount())
 			require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0]))
 			require.Equal(t, "a payload longer than twenty three bytes", result.Batch.Vecs[1].GetStringAt(0))
-			require.True(t, result.Batch.Vecs[0].HasBorrowedBacking())
-			require.True(t, result.Batch.Vecs[1].HasBorrowedBacking())
+			require.True(t, result.Batch.Vecs[0].IsReadOnly())
+			require.True(t, result.Batch.Vecs[1].IsReadOnly())
 			require.Greater(t, account.Snapshot().Used, uint64(0))
 
 			result, err = arg.Call(proc)
@@ -155,8 +155,8 @@ func TestExternalArrowForceMaterialize(t *testing.T) {
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, vm.ExecNext, result.Status)
-	require.False(t, result.Batch.Vecs[0].HasBorrowedBacking())
-	require.False(t, result.Batch.Vecs[1].HasBorrowedBacking())
+	require.False(t, result.Batch.Vecs[0].IsReadOnly())
+	require.False(t, result.Batch.Vecs[1].IsReadOnly())
 	require.Equal(t, borrowedBefore, promtestutil.ToFloat64(
 		metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed"),
 	))
@@ -415,7 +415,7 @@ func TestExternalArrowLoadFromLocalMinIOAndRejectsObjectChange(t *testing.T) {
 	replacement := append([]byte(nil), payload...)
 	replacement[len(replacement)/2] ^= 0xff
 	upload("identity.arrow", replacement)
-	_, err = reader.ReadBatch(ctx, batch.NewWithSize(2), proc, nil)
+	_, _, err = reader.PublishBatch(ctx, proc, nil)
 	require.ErrorIs(t, err, fileservice.ErrObjectChanged)
 	require.NoError(t, reader.Close())
 	require.Zero(t, account.Snapshot().Used)
@@ -539,6 +539,178 @@ func TestExternalArrowSkipsZeroRowRecordBatches(t *testing.T) {
 			account.Seal()
 			_, err = registry.Finalize(account)
 			require.NoError(t, err)
+		})
+	}
+}
+
+// The reader keeps a record only while its published batch borrows from it.
+// A fully materialized batch borrows nothing, so publishing it does not keep
+// its record's range admitted while the next record is read: the IPC reader
+// releases it at the next Next. A borrowed batch retains its record, so its
+// range stays admitted alongside the next one.
+func TestExternalArrowRetainsRecordOnlyForBorrowedOutput(t *testing.T) {
+	// Two records of the same shape and size, read through range admission.
+	payload := makeExternalArrowIPCWithRows(t, tree.ARROW_CONTAINER_FILE, [][]int64{{1, 2}, {3, 4}})
+	pinnedNow := func() int64 {
+		arrowPinnedMetricState.Lock()
+		defer arrowPinnedMetricState.Unlock()
+		return arrowPinnedMetricState.current
+	}
+	run := func(t *testing.T, materialize bool) (retained bool, pinned int64) {
+		fs, err := fileservice.NewMemoryFS("etl", fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		path := "etl:retain-record.arrow"
+		require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
+			FilePath: path,
+			Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(payload)), Data: payload}},
+		}))
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+		require.NoError(t, err)
+		account, err := registry.Open(64 << 20)
+		require.NoError(t, err)
+		proc := newArrowLoadTestProc(t)
+		param := externalArrowParam(fs, path, int64(len(payload)), tree.ARROW_CONTAINER_FILE)
+		param.ArrowForceMaterialize = materialize
+		arg := NewArgument().WithEs(param)
+		require.NoError(t, arg.SetAllocationAccount(account))
+		require.NoError(t, arg.Prepare(proc))
+		before := pinnedNow()
+
+		result, err := arg.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecNext, result.Status)
+		require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0]))
+		reader, ok := arg.reader.(*ArrowReader)
+		require.True(t, ok)
+		retained = reader.publishedRecord != nil
+		// The next record has already been read: the first record's range
+		// is still admitted only if the reader retained it.
+		pinned = pinnedNow() - before
+
+		result, err = arg.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecNext, result.Status)
+		require.Equal(t, []int64{3, 4}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0]))
+		result, err = arg.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecStop, result.Status)
+
+		arg.Free(proc, false, nil)
+		require.Equal(t, before, pinnedNow(), "every range lease is released")
+		require.Zero(t, account.Snapshot().Used)
+		require.NoError(t, arg.ClearAllocationAccount(account))
+		arg.Release()
+		account.Seal()
+		_, err = registry.Finalize(account)
+		require.NoError(t, err)
+		return retained, pinned
+	}
+
+	materializedRetained, materializedPinned := run(t, true)
+	borrowedRetained, borrowedPinned := run(t, false)
+	require.False(t, materializedRetained, "a materialized batch borrows nothing from its record")
+	require.True(t, borrowedRetained, "a borrowed batch keeps its record alive")
+	require.Positive(t, materializedPinned, "the prefetched next record is admitted")
+	require.Equal(t, 2*materializedPinned, borrowedPinned,
+		"only a borrowed batch keeps its own record's range admitted beside the next one")
+}
+
+// An import whose output is fully materialized needs one record's budget, not
+// one per record: the reader does not keep a record its published batch does
+// not borrow from, so reading ahead never holds two records' ranges at once.
+// The account limit is the peak usage of a one-record import of the same
+// shape; a multi-record import must complete within it. Date32 -> DATE always
+// materializes; the forced case materializes columns that could borrow.
+func TestExternalArrowMaterializedImportFitsOneRecordBudget(t *testing.T) {
+	type load struct {
+		peak uint64
+		rows int
+	}
+	run := func(t *testing.T, payload []byte, newParam func(fileservice.FileService, string, int64) *ExternalParam, limit uint64) (load, error) {
+		fs, err := fileservice.NewMemoryFS("etl", fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		path := "etl:materialized-budget.arrow"
+		require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
+			FilePath: path,
+			Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(payload)), Data: payload}},
+		}))
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+		require.NoError(t, err)
+		account, err := registry.Open(limit)
+		require.NoError(t, err)
+		proc := newArrowLoadTestProc(t)
+		arg := NewArgument().WithEs(newParam(fs, path, int64(len(payload))))
+		require.NoError(t, arg.SetAllocationAccount(account))
+		require.NoError(t, arg.Prepare(proc))
+
+		var got load
+		var runErr error
+		for {
+			result, err := arg.Call(proc)
+			if err != nil {
+				runErr = err
+				break
+			}
+			if result.Status == vm.ExecStop {
+				break
+			}
+			got.rows += result.Batch.RowCount()
+		}
+		arg.Free(proc, false, nil)
+		got.peak = account.Snapshot().Peak
+		require.Zero(t, account.Snapshot().Used, "every path releases the account")
+		require.NoError(t, arg.ClearAllocationAccount(account))
+		arg.Release()
+		account.Seal()
+		_, err = registry.Finalize(account)
+		require.NoError(t, err)
+		return got, runErr
+	}
+
+	cases := []struct {
+		name     string
+		payload  func(records int) []byte
+		newParam func(fileservice.FileService, string, int64) *ExternalParam
+	}{
+		{
+			name: "date32",
+			payload: func(records int) []byte {
+				return makeExternalArrowDate32IPC(t, records, 64)
+			},
+			newParam: func(fs fileservice.FileService, path string, size int64) *ExternalParam {
+				param := externalArrowParam(fs, path, size, tree.ARROW_CONTAINER_FILE)
+				param.Attrs = []plan.ExternAttr{{ColName: "d", ColIndex: 0, ColFieldIndex: 0}}
+				param.Cols = []*plan.ColDef{{Name: "d", Typ: plan.Type{Id: int32(types.T_date)}}}
+				return param
+			},
+		},
+		{
+			name: "forced",
+			payload: func(records int) []byte {
+				batches := make([][]int64, records)
+				for i := range batches {
+					batches[i] = []int64{int64(2*i + 1), int64(2*i + 2)}
+				}
+				return makeExternalArrowIPCWithRows(t, tree.ARROW_CONTAINER_FILE, batches)
+			},
+			newParam: func(fs fileservice.FileService, path string, size int64) *ExternalParam {
+				param := externalArrowParam(fs, path, size, tree.ARROW_CONTAINER_FILE)
+				param.ArrowForceMaterialize = true
+				return param
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			one, err := run(t, tc.payload(1), tc.newParam, 64<<20)
+			require.NoError(t, err)
+			require.Positive(t, one.peak)
+
+			const records = 3
+			many, err := run(t, tc.payload(records), tc.newParam, one.peak)
+			require.NoError(t, err, "a materialized import must fit one record's budget")
+			require.Equal(t, records*one.rows, many.rows)
+			require.LessOrEqual(t, many.peak, one.peak)
 		})
 	}
 }
@@ -911,8 +1083,8 @@ func TestExternalArrowFailurePathsReleaseAllocationAccount(t *testing.T) {
 
 func TestFitArrowBatchUsesActualCanonicalWireSize(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bat := batch.NewOffHeap([]string{"v"})
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, value := range []string{
 		"first payload longer than twenty three bytes",
 		"second payload longer than twenty three bytes",
@@ -948,13 +1120,11 @@ func TestFitArrowBatchUsesActualCanonicalWireSize(t *testing.T) {
 
 func TestFitArrowBatchRetainsEligibleBorrowedPrefix(t *testing.T) {
 	mp := mpool.MustNewZero()
+	// The reader owns the Arrow buffer the converted batch borrows.
 	data := types.EncodeSlice([]int64{11, 22, 33})
-	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 3, data, nil, nil), error(nil)
 	require.NoError(t, err)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
-	require.NoError(t, err)
-	lease.Release()
-	bat := batch.NewOffHeap([]string{"v"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vec
 	bat.SetRowCount(3)
 
@@ -976,14 +1146,16 @@ func TestFitArrowBatchRetainsEligibleBorrowedPrefix(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, rows)
-	require.True(t, fitted.Vecs[0].HasBorrowedBacking())
+	require.True(t, fitted.Vecs[0].IsReadOnly())
 	require.Equal(t, sourcePointer,
 		uintptr(unsafe.Pointer(unsafe.SliceData(fitted.Vecs[0].GetData()))))
 	require.Equal(t, []int64{11}, vector.MustFixedColNoTypeCheck[int64](fitted.Vecs[0]))
-	require.NotNil(t, lease.Bytes())
+	// The borrowed prefix still aliases the reader's buffer after the
+	// source batch was cleaned.
+	require.Equal(t, sourcePointer,
+		uintptr(unsafe.Pointer(unsafe.SliceData(fitted.Vecs[0].GetData()))))
 
 	fitted.Clean(mp)
-	require.Nil(t, lease.Bytes())
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -991,8 +1163,8 @@ func TestFitArrowBatchRejectsOversizedFirstRow(t *testing.T) {
 	for _, rows := range []int{1, 2} {
 		t.Run(fmt.Sprintf("rows-%d", rows), func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			bat := batch.NewOffHeap([]string{"v"})
-			bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 			for row := 0; row < rows; row++ {
 				value := bytes.Repeat([]byte{'x'}, 256)
 				require.NoError(t, vector.AppendBytes(bat.Vecs[0], value, false, mp))
@@ -1179,5 +1351,28 @@ func makeExternalArrowIPCWithRows(t *testing.T, container string, batches [][]in
 		writeRecords(writer.Write)
 		require.NoError(t, writer.Close())
 	}
+	return append([]byte(nil), output.Bytes()...)
+}
+
+// makeExternalArrowDate32IPC writes an Arrow IPC file of records record
+// batches, each with rowsPerRecord Date32 values in column "d".
+func makeExternalArrowDate32IPC(t *testing.T, records, rowsPerRecord int) []byte {
+	t.Helper()
+	allocator := memory.NewGoAllocator()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "d", Type: arrow.FixedWidthTypes.Date32, Nullable: true}}, nil)
+	var output bytes.Buffer
+	writer, err := ipc.NewFileWriter(&output, ipc.WithSchema(schema), ipc.WithAllocator(allocator))
+	require.NoError(t, err)
+	for record := 0; record < records; record++ {
+		builder := array.NewRecordBuilder(allocator, schema)
+		for row := 0; row < rowsPerRecord; row++ {
+			builder.Field(0).(*array.Date32Builder).Append(arrow.Date32(19000 + record*rowsPerRecord + row))
+		}
+		batch := builder.NewRecordBatch()
+		require.NoError(t, writer.Write(batch))
+		batch.Release()
+		builder.Release()
+	}
+	require.NoError(t, writer.Close())
 	return append([]byte(nil), output.Bytes()...)
 }

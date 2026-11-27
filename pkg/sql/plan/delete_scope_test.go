@@ -393,23 +393,38 @@ func TestIrregularIndexDeleteJoinIsRowScoped(t *testing.T) {
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
 
-	var originDelete *planpb.Node
+	fulltextTable := catalog.FullTextIndexTableNamePrefix + "docs_ft_body"
+	originDelete := false
+	joinScanned := false
 	fulltextDeleteCount := 0
+	fulltextScanFiltered := false
 	for _, node := range query.Nodes {
-		if node.NodeType != planpb.Node_DELETE || node.DeleteCtx == nil || node.DeleteCtx.TableDef == nil {
-			continue
-		}
-		switch node.DeleteCtx.TableDef.Name {
-		case "docs_ft":
-			originDelete = node
-		case catalog.FullTextIndexTableNamePrefix + "docs_ft_body":
-			fulltextDeleteCount++
+		switch node.NodeType {
+		case planpb.Node_MULTI_UPDATE:
+			for _, ctx := range node.UpdateCtxList {
+				if ctx.TableDef != nil && ctx.TableDef.Name == "docs_ft" && len(ctx.DeleteCols) > 0 {
+					originDelete = true
+				}
+			}
+		case planpb.Node_TABLE_SCAN:
+			if node.TableDef != nil && node.TableDef.Name == "dept" {
+				joinScanned = true
+			}
+			if node.TableDef != nil && node.TableDef.Name == fulltextTable && len(node.RuntimeFilterProbeList) == 1 {
+				fulltextScanFiltered = true
+			}
+		case planpb.Node_DELETE:
+			if node.DeleteCtx != nil && node.DeleteCtx.TableDef != nil &&
+				node.DeleteCtx.TableDef.Name == fulltextTable {
+				fulltextDeleteCount++
+			}
 		}
 	}
 
-	require.NotNil(t, originDelete, "missing origin-table delete")
-	require.False(t, originDelete.DeleteCtx.CanTruncate, "a join must be evaluated before deleting target rows")
+	require.True(t, originDelete, "missing origin-table delete")
+	require.True(t, joinScanned, "a join must be evaluated before deleting target rows")
 	require.Equal(t, 1, fulltextDeleteCount, "row-scoped fulltext maintenance must not be skipped")
+	require.True(t, fulltextScanFiltered, "the fulltext index scan must be limited to the deleted keys")
 }
 
 func TestLegacyMultiTableDeleteNormalizesSpecialOldValues(t *testing.T) {
@@ -483,4 +498,21 @@ func TestLegacyMultiTableDeleteNormalizesSpecialOldValues(t *testing.T) {
 		require.True(t, hasColRef(setExpr.GetF().Args[1], "d.payload"))
 		require.Empty(t, setExpr.GetF().Args[1].Typ.Enumvalues)
 	}
+}
+
+func TestLegacyDeleteRejectsUnmaintainedSyncIrregularIndex(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	for _, idx := range mock.ctxt.tables["docs_ft"].Indexes {
+		if !catalog.IsRegularIndexAlgo(idx.IndexAlgo) {
+			idx.IndexAlgo = "unknown_algo"
+		}
+	}
+
+	_, err := runOneStmt(
+		mock,
+		t,
+		"delete s,d from constraint_test.docs_ft d join constraint_test.dept s on d.id = s.deptno",
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err.Error())
 }

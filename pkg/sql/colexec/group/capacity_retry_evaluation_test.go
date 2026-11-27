@@ -37,7 +37,7 @@ type retryStringExpression struct {
 	colexec.ExpressionExecutor
 	vec         *vector.Vector
 	mp          *mpool.MPool
-	selection   *vector.AllocationAccountSelection
+	selection   *mpool.MPool
 	borrowed    bool
 	calls, rows int
 }
@@ -52,19 +52,18 @@ func (e *retryStringExpression) Eval(proc *process.Process, inputs []*batch.Batc
 		return result, err
 	}
 	if e.vec != nil {
-		e.vec.Free(proc.Mp())
+		e.vec.Free(e.mp)
 	}
 	e.mp = proc.Mp()
-	e.calls++
-	var err error
-	e.vec, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_varchar.ToType(), e.selection)
-	if err != nil {
-		return nil, err
+	if e.selection != nil {
+		e.mp = e.selection
 	}
+	e.calls++
+	e.vec = vector.NewVec(types.T_varchar.ToType(), e.mp)
 	for range inputs[0].RowCount() {
 		e.rows++
 		value := fmt.Sprintf("%05d-%s", e.rows, strings.Repeat("x", 96))
-		if err := vector.AppendBytes(e.vec, []byte(value), false, proc.Mp()); err != nil {
+		if err := vector.AppendBytes(e.vec, []byte(value), false, e.mp); err != nil {
 			return nil, err
 		}
 	}
@@ -89,24 +88,24 @@ type retryIntExpression struct {
 	colexec.ExpressionExecutor
 	vec         *vector.Vector
 	mp          *mpool.MPool
-	selection   *vector.AllocationAccountSelection
+	selection   *mpool.MPool
 	calls, rows int
 }
 
 func (e *retryIntExpression) Eval(proc *process.Process, inputs []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	if e.vec != nil {
-		e.vec.Free(proc.Mp())
+		e.vec.Free(e.mp)
 	}
 	e.mp = proc.Mp()
+	if e.selection != nil {
+		e.mp = e.selection
+	}
 	e.calls++
 	var err error
-	e.vec, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), e.selection)
-	if err != nil {
-		return nil, err
-	}
+	e.vec = vector.NewVec(types.T_int32.ToType(), e.mp)
 	for range inputs[0].RowCount() {
 		e.rows++
-		if err = vector.AppendFixed(e.vec, int32(e.rows), false, proc.Mp()); err != nil {
+		if err = vector.AppendFixed(e.vec, int32(e.rows), false, e.mp); err != nil {
 			return nil, err
 		}
 	}
@@ -288,17 +287,28 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 				if result.Status == vm.ExecStop || result.Batch == nil {
 					break
 				}
-				sums := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[len(groupExprs)])
+				var sums []types.Decimal128
+				var counts []int64
+				if tc.distinct {
+					counts = vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[len(groupExprs)])
+				} else {
+					sums = vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[len(groupExprs)])
+				}
 				for row := range result.Batch.RowCount() {
 					raw := string(result.Batch.Vecs[0].GetBytesAt(row))
 					require.GreaterOrEqual(t, len(raw), 5)
 					n, err := strconv.Atoi(raw[:5])
 					require.NoError(t, err)
 					if tc.rollup {
-						require.True(t, result.Batch.Vecs[1].GetGrouping().Contains(uint64(row)))
+						require.True(t, result.Batch.Vecs[1].IsNull(uint64(row)))
 					}
 					require.NotContains(t, got, n, "group was published twice")
-					got[n] = sums[row]
+					if tc.distinct {
+						got[n] = counts[row]
+					} else {
+						got[n], err = strconv.ParseInt(sums[row].Format(0), 10, 64)
+						require.NoError(t, err)
+					}
 				}
 			}
 			_, rejected := controller.snapshot()
@@ -337,7 +347,7 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 				require.NotNil(t, result.Batch)
 				require.Equal(t, 1, result.Batch.RowCount())
 				require.Empty(t, result.Batch.Vecs[0].GetBytesAt(0))
-				require.Equal(t, int64(0), vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[2])[0])
+				require.Equal(t, types.Decimal128FromInt64(0), vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[2])[0])
 				result, err = vm.Exec(g, proc)
 				require.NoError(t, err)
 				require.True(t, result.Status == vm.ExecStop || result.Batch == nil)
@@ -522,62 +532,4 @@ func TestGroupCapacityErrorIsNotReplayedAcrossBoundaries(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestGroupRollupSentinelCapacityErrorIsNotReplayed(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	t.Cleanup(func() {
-		proc.Free()
-		require.Zero(t, proc.Mp().CurrNB())
-	})
-	makeInput := func(n int) *batch.Batch {
-		values := make([]int32, n)
-		for i := range values {
-			values[i] = int32(i)
-		}
-		input := batch.NewWithSize(2)
-		t.Cleanup(func() { input.Clean(proc.Mp()) })
-		input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
-		input.Vecs[1] = testutil.MakeInt32Vector(values, nil, proc.Mp())
-		input.SetRowCount(n)
-		return input
-	}
-	first, second := makeInput(256), makeInput(2)
-	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
-		[]aggexec.AggFuncExecExpression{sumAgg(1)})
-	g.GroupingFlag = []bool{true, false}
-	g.SpillMem = 1 << 30
-	generation := installGroupTestResourceBudget(t, proc)
-	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
-	require.NoError(t, err)
-	controller := &rejectNextGroupAllocationController{}
-	account, err := registry.OpenWithController(64<<20, controller)
-	require.NoError(t, err)
-	require.NoError(t, g.ctr.setAllocationAccount(account))
-	allocation := groupTestAllocation{generation: generation, registry: registry, account: account}
-	t.Cleanup(func() {
-		g.Free(proc, true, mpool.ErrAllocationAccountCapacity)
-		defer finalizeGroupTestAllocation(t, g, allocation)
-		require.Zero(t, generation.Snapshot().SpillDiskUsed)
-		require.Zero(t, generation.Snapshot().SpillFDUsed)
-	})
-	g.AppendChild(colexec.NewMockOperator().
-		WithBatchs([]*batch.Batch{first, second, batch.EmptyBatch}).
-		WithBatchCallback(func(index int) {
-			if index == 1 {
-				controller.arm()
-			}
-		}))
-	require.NoError(t, g.Prepare(proc))
-	key := &failOnceRetryExpression{ExpressionExecutor: g.ctr.groupByEvaluate.Executor[0]}
-	arg := &failOnceRetryExpression{ExpressionExecutor: g.ctr.aggArgEvaluate[0].Executor[0]}
-	g.ctr.groupByEvaluate.Executor[0] = key
-	g.ctr.aggArgEvaluate[0].Executor[0] = arg
-
-	_, err = vm.Exec(g, proc)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	_, rejected := controller.snapshot()
-	require.True(t, rejected)
-	require.Equal(t, 2, key.calls)
-	require.Equal(t, 2, arg.calls)
 }

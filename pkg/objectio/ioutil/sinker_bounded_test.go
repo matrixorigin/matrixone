@@ -41,7 +41,7 @@ func TestSpillBoundedRunsReadBack(t *testing.T) {
 					mp := mpool.MustNewZero()
 					attrs := []string{"id", "payload"}
 					typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
-					input := batch.NewWithSchema(false, attrs, typs)
+					input := batch.NewWithTypes(typs, mp)
 					defer input.Clean(mp)
 					const rows = 35
 					payload := strings.Repeat("x", 200)
@@ -138,9 +138,8 @@ func TestSpillBoundedRunsReadBack(t *testing.T) {
 
 func TestSortedRunSizeAccountsForAliasesAndDeadArea(t *testing.T) {
 	mp := mpool.MustNewZero()
-	attrs := []string{"id", "dead", "alias"}
 	typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType(), types.T_text.ToType()}
-	input := batch.NewWithSchema(false, attrs, typs)
+	input := batch.NewWithTypes(typs, mp)
 	defer input.Clean(mp)
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(0), false, mp))
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(1), false, mp))
@@ -167,7 +166,7 @@ func TestSortedRunAvoidsCopyingDeadArea(t *testing.T) {
 			mp := mpool.MustNewZero()
 			attrs := []string{"id", "payload"}
 			typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
-			input := batch.NewWithSchema(false, attrs, typs)
+			input := batch.NewWithTypes(typs, mp)
 			defer input.Clean(mp)
 			for i := 0; i < rows; i++ {
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, mp))
@@ -201,7 +200,7 @@ func TestRunKeepsFullBlocksBeforeLastPartial(t *testing.T) {
 					mp := mpool.MustNewZero()
 					attrs := []string{"id", "payload"}
 					typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
-					input := batch.NewWithSchema(false, attrs, typs)
+					input := batch.NewWithTypes(typs, mp)
 					defer input.Clean(mp)
 					for i := 0; i < objectio.BlockMaxRows; i++ {
 						require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, mp))
@@ -274,7 +273,7 @@ func TestBoundedRunMergesDisjointAndOverlappingBlocks(t *testing.T) {
 				t.Cleanup(func() { require.NoError(t, sink.Close()) })
 				for part := 0; part < 2; part++ {
 					func() {
-						input := batch.NewWithSchema(false, attrs, typs)
+						input := batch.NewWithTypes(typs, mp)
 						defer input.Clean(mp)
 						for row := 0; row < objectio.BlockMaxRows; row++ {
 							id := int32((objectio.BlockMaxRows-1-row)*2 + part)
@@ -329,7 +328,7 @@ func TestBoundedRunCopiesBorrowedWindowWithoutParentArea(t *testing.T) {
 	mp := mpool.MustNewZero()
 	attrs := []string{"id", "value"}
 	typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
-	parent := batch.NewWithSchema(false, attrs, typs)
+	parent := batch.NewWithTypes(typs, mp)
 	defer func() {
 		if parent != nil {
 			parent.Clean(mp)
@@ -344,7 +343,7 @@ func TestBoundedRunCopiesBorrowedWindowWithoutParentArea(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		if window != nil {
-			window.Clean(nil)
+			window.FreeWindow()
 		}
 	}()
 	sink := NewSinker(-1, attrs, typs, NewFSinkerImplFactory([]uint16{0, 1}, -1, false, false, 0), mp, fs,
@@ -353,7 +352,7 @@ func TestBoundedRunCopiesBorrowedWindowWithoutParentArea(t *testing.T) {
 	require.NoError(t, sink.Write(ctx, window))
 	require.Len(t, sink.GetInMemoryData(), 1)
 	require.Empty(t, sink.GetInMemoryData()[0].Vecs[1].GetArea())
-	window.Clean(nil)
+	window.FreeWindow()
 	window = nil
 	parent.Clean(mp)
 	parent = nil

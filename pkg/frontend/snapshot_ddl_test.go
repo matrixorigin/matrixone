@@ -302,9 +302,9 @@ func TestSnapshotDdlCoverage_visitTableDdl_ErrorPaths(t *testing.T) {
 		})
 
 		convey.Convey("batch with fewer than 4 vecs", func() {
-			bat := batch.New([]string{"a", "b"})
-			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 			defer bat.Clean(mp)
 
 			err := visitTableDdl(ctx, "db", "tbl", bat, txnOp, eng, mp)
@@ -313,11 +313,11 @@ func TestSnapshotDdlCoverage_visitTableDdl_ErrorPaths(t *testing.T) {
 		})
 
 		makeBatch := func() *batch.Batch {
-			bat := batch.New([]string{"a", "b", "c", "d"})
-			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+			bat := batch.NewWithSize(4)
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+			bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
 			return bat
 		}
 
@@ -466,8 +466,8 @@ func TestSnapshotDdlCoverage_visitDatabaseDdl_ErrorPaths(t *testing.T) {
 		})
 
 		convey.Convey("too few vecs", func() {
-			bat := batch.New([]string{"a"})
-			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 			defer bat.Clean(mp)
 			err := visitDatabaseDdl(ctx, "db", "", bat, txnOp, eng, mp)
 			convey.So(err, convey.ShouldNotBeNil)
@@ -475,11 +475,11 @@ func TestSnapshotDdlCoverage_visitDatabaseDdl_ErrorPaths(t *testing.T) {
 		})
 
 		makeBatch := func() *batch.Batch {
-			bat := batch.New([]string{"a", "b", "c", "d"})
-			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+			bat := batch.NewWithSize(4)
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+			bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
 			return bat
 		}
 
@@ -542,11 +542,11 @@ func TestSnapshotDdlCoverage_FillDdlMysqlResultSet_NilBatch(t *testing.T) {
 
 	convey.Convey("FillDdlMysqlResultSet with empty batch (0 rows)", t, func() {
 		mp := mpool.MustNewZero()
-		bat := batch.New([]string{"a", "b", "c", "d"})
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		bat := batch.NewWithSize(4)
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
 		bat.SetRowCount(0)
 		defer bat.Clean(mp)
 
@@ -1216,22 +1216,20 @@ func TestSnapshotDdlCoverage_handleInternalGetDdl(t *testing.T) {
 			})
 			defer pubStub.Reset()
 
-			// Stub ComputeDdlBatchWithSnapshotFunc to return an empty batch
-			mp := mpool.MustNewZero()
-			emptyBatch := batch.New([]string{"a", "b", "c", "d"})
-			emptyBatch.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-			emptyBatch.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-			emptyBatch.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-			emptyBatch.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
-			emptyBatch.SetRowCount(0)
-
+			// Stub ComputeDdlBatchWithSnapshotFunc to return an empty batch built in
+			// the pool the caller passes, which the caller cleans it with.
 			ddlStub := gostub.Stub(&ComputeDdlBatchWithSnapshotFunc, func(
-				_ context.Context, _ string, _ string, _ engine.Engine, _ *mpool.MPool, _ TxnOperator, _ int64,
+				_ context.Context, _ string, _ string, _ engine.Engine, mp *mpool.MPool, _ TxnOperator, _ int64,
 			) (*batch.Batch, error) {
+				emptyBatch := batch.NewWithSize(4)
+				emptyBatch.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+				emptyBatch.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+				emptyBatch.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+				emptyBatch.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
+				emptyBatch.SetRowCount(0)
 				return emptyBatch, nil
 			})
 			defer ddlStub.Reset()
-			defer emptyBatch.Clean(mp)
 
 			ses.mrs = &MysqlResultSet{}
 			cmd := &InternalCmdGetDdl{
@@ -1289,11 +1287,11 @@ func TestSnapshotDdlCoverage_visitTableDdl_PropertiesNil(t *testing.T) {
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		mockRel := mock_frontend.NewMockRelation(ctrl)
 
-		bat := batch.New([]string{"a", "b", "c", "d"})
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		bat := batch.NewWithSize(4)
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
 		defer bat.Clean(mp)
 
 		eng.EXPECT().Database(ctx, "db", txnOp).Return(mockDb, nil)

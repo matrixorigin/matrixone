@@ -75,13 +75,13 @@ func TestDoMergeFiltersOnCompositeKeyTemporalDomains(t *testing.T) {
 					if peerType == types.T_timestamp {
 						rhs := folded.GetF().Args[1]
 						require.NotNil(t, rhs.GetVec())
-						decoded := vector.NewVec(types.T_any.ToType())
+						decoded := vector.NewVec(types.T_any.ToType(), proc.Mp())
 						defer decoded.Free(proc.Mp())
 						require.NoError(t, decoded.UnmarshalBinary(rhs.GetVec().Data))
 						require.Equal(t, typ, *decoded.GetType())
 					}
 					input := batch.NewWithSize(1)
-					input.Vecs[0] = vector.NewVec(typ)
+					input.Vecs[0] = vector.NewVec(typ, proc.Mp())
 					defer input.Clean(proc.Mp())
 					for _, value := range append(values, "2024-01-01 00:40:00.123456") {
 						stamp, err := types.ParseTimestamp(zone, value, 6)
@@ -436,20 +436,29 @@ func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
 	table := makeExprOptCompositeClusterKeyTableDef()
 	table.Name = "range_probe"
 	table.TblId = 29507
-	for i, col := range table.Cols {
-		col.Seqnum = uint32(i + 1)
+	temporalTable := makeExprOptCompositeClusterKeyTableDef()
+	temporalTable.Name = "datetime_range_probe"
+	temporalTable.TblId = 29510
+	temporalTable.Cols[0].Typ = planpb.Type{Id: int32(types.T_datetime), Scale: 6}
+	for _, def := range []*planpb.TableDef{table, temporalTable} {
+		for i, col := range def.Cols {
+			col.Seqnum = uint32(i + 1)
+		}
+		ctx.tables[def.Name] = def
+		ctx.objects[def.Name] = &planpb.ObjectRef{Obj: int64(def.TblId), ObjName: def.Name, SchemaName: "tpch"}
 	}
-	ctx.tables[table.Name] = table
-	ctx.objects[table.Name] = &planpb.ObjectRef{Obj: int64(table.TblId), ObjName: table.Name, SchemaName: "tpch"}
 	for _, tc := range []struct {
 		sql      string
+		table    *planpb.TableDef
 		readCols []string
 	}{
-		{"select a from range_probe where a >= 10 and a < 20", []string{"a"}},
-		{"select a from range_probe where a > 10", []string{"a"}},
-		{"select b from range_probe where a > 10", []string{"a", "b"}},
+		{"select a from range_probe where a >= 10 and a < 20", table, []string{"a"}},
+		{"select a from range_probe where a > 10", table, []string{"a"}},
+		{"select b from range_probe where a > 10", table, []string{"a", "b"}},
+		{"select a from datetime_range_probe where a >= now() - interval 1 minute order by a desc limit 1", temporalTable, []string{"a"}},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
+			table := tc.table
 			stmt, err := mysql.ParseOne(ctx.GetContext(), tc.sql, 1)
 			require.NoError(t, err)
 			built, err := BuildPlan(ctx, stmt, false, nil)
@@ -809,7 +818,7 @@ func TestDoMergeFiltersOnCompositeKeySupportsScaleSensitiveFoldedInVector(t *tes
 	tableDef.Cols[1].Typ = makePlan2Type(&decimalType)
 
 	values := []types.Decimal64{250, 375}
-	vec := vector.NewVec(decimalType)
+	vec := vector.NewVec(decimalType, ctx.proc.Mp())
 	for _, value := range values {
 		require.NoError(t, vector.AppendFixed(vec, value, false, ctx.GetProcess().Mp()))
 	}
@@ -917,7 +926,7 @@ func TestInRHSValuesMaterializesFoldedVectorValues(t *testing.T) {
 func TestInRHSValuesRestoresLiteralVecStringSource(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	makeVectorExpr := func(source types.StringSource, null bool) *planpb.Expr {
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(vec, []byte("value"), null, mp))
 		data, err := vec.MarshalBinary()
 		require.NoError(t, err)
@@ -1304,7 +1313,7 @@ func BenchmarkDeduplicateBlockFiltersLargeIN(b *testing.B) {
 	filters := make([]*planpb.Expr, filterCount)
 	mp := mpool.MustNew(b.Name())
 	for filterIndex := range filters {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		for valueIndex := range valueCount {
 			value := int64(valueIndex)
 			if valueIndex == valueCount-1 {
@@ -1477,7 +1486,7 @@ func makeExprOptInExpr(t *testing.T, ctx *MockCompilerContext, tag, pos int32, v
 
 func makeExprOptNullableInt64Vec(t *testing.T, mp *mpool.MPool, value int64) *planpb.Expr {
 	t.Helper()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 	require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
 	data, err := vec.MarshalBinary()
@@ -1495,7 +1504,7 @@ func makeExprOptNullableInt64Vec(t *testing.T, mp *mpool.MPool, value int64) *pl
 func makeExprOptStringVec(t *testing.T, mp *mpool.MPool, values ...string) *planpb.Expr {
 	t.Helper()
 	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	for _, value := range values {
 		require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 	}

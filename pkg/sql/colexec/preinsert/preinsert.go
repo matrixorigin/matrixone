@@ -16,8 +16,6 @@ package preinsert
 
 import (
 	"bytes"
-	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -40,9 +38,6 @@ import (
 )
 
 const opName = "preinsert"
-
-const autoIncrementGeneratedAttr = "__mo_auto_increment_generated"
-const odkuInputOrdinalAttr = "__mo_odku_input_ordinal"
 
 func (preInsert *PreInsert) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -152,10 +147,9 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 			}
 		}
 		if preInsert.IsNewUpdate {
-			preInsert.ctr.buf = batch.NewOffHeapWithSize(len(bat.Vecs))
+			preInsert.ctr.buf = batch.NewWithSize(len(bat.Vecs))
 		} else {
-			preInsert.ctr.buf = batch.NewOffHeapWithSize(len(preInsert.Attrs))
-			preInsert.ctr.buf.Attrs = slices.Clone(preInsert.Attrs)
+			preInsert.ctr.buf = batch.NewWithSize(len(preInsert.Attrs))
 		}
 	} else {
 		preInsert.ctr.buf.SetRowCount(0)
@@ -207,7 +201,7 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 				// leave every destination it feeds with zero-length data,
 				// and Free would later release storage the child still owns,
 				// so install fresh independent storage instead.
-				preInsert.ctr.buf.Vecs[idx] = vector.NewOffHeapVecWithType(*typ)
+				preInsert.ctr.buf.Vecs[idx] = vector.NewVec(*typ, proc.Mp())
 				preInsert.ctr.ownedVecSlots[idx] = true
 			}
 			cnt := bat.Vecs[idx].Length()
@@ -222,7 +216,7 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 				preInsert.ctr.canFreeVecIdx[idx] = true
 				//expland const vector
 				typ := bat.Vecs[idx].GetType()
-				tmpVec := vector.NewOffHeapVecWithType(*typ)
+				tmpVec := vector.NewVec(*typ, proc.Mp())
 				if err = tmpVec.UnionBatch(bat.Vecs[idx], 0, bat.RowCount(), nil, proc.Mp()); err != nil {
 					tmpVec.Free(proc.Mp())
 					return err
@@ -248,7 +242,6 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 			preInsert.ctr.canFreeVecIdx[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.ownedVecSlots[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, vec)
-			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.CPrimaryKeyColName)
 		}
 		if preInsert.ctr.clusterByExecutor != nil {
 			vec, err := preInsert.ctr.clusterByExecutor.Eval(proc, []*batch.Batch{preInsert.ctr.buf}, nil)
@@ -258,12 +251,10 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 			preInsert.ctr.canFreeVecIdx[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.ownedVecSlots[len(preInsert.ctr.buf.Vecs)] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs, vec)
-			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, preInsert.TableDef.ClusterBy.Name)
 		}
 		if preInsert.IsOldUpdate {
 			rowIdIdx := len(bat.Vecs) - 1
-			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.Row_ID)
-			rowIdVec := vector.NewOffHeapVecWithType(*bat.GetVector(int32(rowIdIdx)).GetType())
+			rowIdVec := vector.NewVec(*bat.GetVector(int32(rowIdIdx)).GetType(), proc.Mp())
 			err = rowIdVec.UnionBatch(bat.Vecs[rowIdIdx], 0, bat.Vecs[rowIdIdx].Length(), nil, proc.Mp())
 			if err != nil {
 				rowIdVec.Free(proc.Mp())
@@ -378,8 +369,11 @@ func (preInsert *PreInsert) dropNullPkRowsForIgnoreFill(
 	if keyPos < 0 || keyPos >= len(preInsert.ctr.buf.Vecs) {
 		return nil
 	}
-	_, err := colexec.DropNullPkRowsForIgnore(
-		proc, preInsert.ctr.buf.Vecs[keyPos], fillCols[fillSkipAttr].Name, preInsert.ctr.buf)
+	// Slots holding a child's vector get the fill's shrunk copy; the child's
+	// vectors are never shrunk.
+	_, err := preInsert.ctr.ignoreFill.DropNullPkRows(
+		proc, preInsert.ctr.buf.Vecs[keyPos], fillCols[fillSkipAttr].Name, preInsert.ctr.buf,
+		func(slot int) bool { return preInsert.ctr.ownedVecSlots[slot] })
 	return err
 }
 
@@ -408,7 +402,7 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		if err != nil {
 			return result, err
 		}
-		workBat, err = preInsert.ctr.buf.Clone(proc.Mp(), true)
+		workBat, err = preInsert.ctr.buf.Clone(proc.Mp())
 		if err != nil {
 			return result, err
 		}
@@ -501,24 +495,49 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 				}
 				fillVecs, fillAttrs, fillOpCols = vecs2, attrs2, cols2
 			}
-			filledVecIdx, ferr := colexec.BatchDataNotNullFillForIgnore(
-				fillVecs, fillAttrs, fillOpCols, proc)
+			origin := func(j int) int {
+				if originIdx != nil {
+					return originIdx[j]
+				}
+				return j
+			}
+			// The fill never modifies a vector this operator does not own:
+			// a child vector passed through into the output is copied into
+			// one of the fill's own vectors, which then takes the slot. The
+			// selector branch's clone is owned entirely.
+			owned := func(j int) bool {
+				return preInsert.HasTargetSelector ||
+					preInsert.ctr.ownedVecSlots[int(preInsert.ColOffset)+origin(j)]
+			}
+			filledVecIdx, ferr := preInsert.ctr.ignoreFill.Fill(
+				fillVecs, fillAttrs, fillOpCols, owned, proc)
 			if ferr != nil {
 				return result, ferr
 			}
-			if originIdx != nil {
-				for i, j := range filledVecIdx {
-					filledVecIdx[i] = originIdx[j]
-				}
+			for i, j := range filledVecIdx {
+				// Install a replacement into the work batch (fillVecs may be
+				// a filtered copy of its slots).
+				workBat.Vecs[int(preInsert.ColOffset)+origin(j)] = fillVecs[j]
+				filledVecIdx[i] = origin(j)
 			}
 			if preInsert.HasTargetSelector && len(filledVecIdx) > 0 {
 				// The selector branch validates and fills the shrunk clone.
 				// Mirror the adjusted cells back so the full-width output
 				// batch carries them, exactly like the auto-increment column.
+				// A slot still holding the child's vector gets an owned copy
+				// first: the child's vector is never written.
 				for _, j := range filledVecIdx {
 					vecIdx := int(preInsert.ColOffset) + j
+					dst := preInsert.ctr.buf.Vecs[vecIdx]
+					if !preInsert.ctr.ownedVecSlots[vecIdx] {
+						var cerr error
+						if dst, cerr = preInsert.ctr.ignoreFill.Copy(vecIdx, dst, proc); cerr != nil {
+							return result, cerr
+						}
+						preInsert.ctr.buf.Vecs[vecIdx] = dst
+					}
 					for selectedIdx, inputIdx := range selectedRows {
-						if cerr := preInsert.ctr.buf.Vecs[vecIdx].Copy(
+						if cerr := dst.Copy(
 							workBat.Vecs[vecIdx], inputIdx, int64(selectedIdx), proc.Mp()); cerr != nil {
 							return result, cerr
 						}
@@ -642,8 +661,7 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 		preInsert.ctr.canFreeVecIdx[markerPos] = true
 		preInsert.ctr.ownedVecSlots[markerPos] = true
 		preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs,
-			vector.NewOffHeapVecWithType(types.T_bool.ToType()))
-		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, autoIncrementGeneratedAttr)
+			vector.NewVec(types.T_bool.ToType(), proc.Mp()))
 		if preInsert.TrackODKUResult {
 			ordinalPos := int(preInsert.ODKUOrdinalColumn)
 			if ordinalPos != len(preInsert.ctr.buf.Vecs) {
@@ -654,8 +672,7 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 			preInsert.ctr.canFreeVecIdx[ordinalPos] = true
 			preInsert.ctr.ownedVecSlots[ordinalPos] = true
 			preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs,
-				vector.NewOffHeapVecWithType(types.T_uint64.ToType()))
-			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, odkuInputOrdinalAttr)
+				vector.NewVec(types.T_uint64.ToType(), proc.Mp()))
 		}
 	} else {
 		if markerPos >= len(preInsert.ctr.buf.Vecs) {
@@ -773,44 +790,13 @@ func checkZeroTemporalInStrictMode(preInsert *PreInsert, bat *batch.Batch, proc 
 	if preInsert == nil || bat == nil || proc == nil {
 		return nil
 	}
-
 	for idx := range preInsert.Attrs {
 		vecIdx := int(preInsert.ColOffset) + idx
 		if vecIdx >= len(bat.Vecs) || bat.Vecs[vecIdx] == nil {
 			continue
 		}
-		vec := bat.Vecs[vecIdx]
-		switch vec.GetType().Oid {
-		case types.T_timestamp:
-		case types.T_date, types.T_datetime:
-			if !preInsert.RejectZeroTemporal {
-				continue
-			}
-		default:
-			continue
-		}
-		for row := 0; row < vec.Length(); row++ {
-			if vec.IsNull(uint64(row)) {
-				continue
-			}
-			switch vec.GetType().Oid {
-			case types.T_date:
-				if preInsert.RejectZeroTemporal && vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "date", "0000-00-00", "value", row+1)
-				}
-			case types.T_datetime:
-				if preInsert.RejectZeroTemporal && vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
-				}
-			case types.T_timestamp:
-				timestamp := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
-				if !types.ValidTimestamp(timestamp) {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", fmt.Sprintf("%d", int64(timestamp)), "value", row+1)
-				}
-				if preInsert.RejectZeroTemporal && timestamp == types.ZeroTimestamp {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
-				}
-			}
+		if err := colexec.CheckZeroTemporalVector(proc.Ctx, bat.Vecs[vecIdx], preInsert.RejectZeroTemporal); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -850,7 +836,7 @@ func convertZeroToNull(bat *batch.Batch, preInsert *PreInsert) {
 func convertZeroToNullFixed[T constraints.Integer](vals []T, nsp *nulls.Nulls) {
 	for i, v := range vals {
 		if v == 0 {
-			nulls.Add(nsp, uint64(i))
+			nsp.Add(uint64(i))
 		}
 	}
 }

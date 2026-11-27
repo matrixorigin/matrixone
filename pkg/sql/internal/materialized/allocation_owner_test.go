@@ -52,7 +52,7 @@ func TestMaterializedSourceAllocationOwner(t *testing.T) {
 				require.NoError(t, err)
 				require.False(t, end)
 				require.Equal(t, []int64{42}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
-				out.Clean(mp)
+				out.Clean(source.BatchMP())
 				source.ReleaseReader(0)
 				memory, disk, fd := budget.usage()
 				require.Zero(t, memory)

@@ -100,7 +100,7 @@ For example, "docker-compose.yml"
 
 <actions>
 <action name="start" timeout="240s"/>
-<action name="stop" timeout="20s"/>
+<action name="stop" timeout="120s"/>
 <action name="monitor" depth="0" timeout="10s" interval="60s" />
 <action name="validate-all" timeout="5s" />
 <action name="meta-data"  timeout="5s"/>
@@ -117,139 +117,452 @@ else
 fi
 
 DIR="$OCF_RESKEY_dirpath"
-PRE="$(echo ${DIR##*/} | tr A-Z a-z | sed 's/[^a-z0-9]//g')"
+# Internal status for a successful inspection that found a partial project.
+# Only start may reconcile it. A monitor always reports it as an OCF error.
+COMPOSE_PARTIAL=42
+# docker inspect failed. Distinct from a classified OCF result so status can
+# refresh when a listed container has disappeared.
+INSPECT_FAILED=99
 YML="$OCF_RESKEY_ymlfile"
+case "$YML" in
+	/*) CONFIG_FILE=$YML ;;
+	*)  CONFIG_FILE=$DIR/$YML ;;
+esac
 
-# 枚举本 compose 项目的容器 ID：
-# - YML 可读时交给 compose（ps -aq 列出项目全部容器，含已停止的），
-#   能覆盖 container_name 固定命名、compose v2 连字符命名等情况；
-# - YML 缺失时按命名约定匹配：compose v1 为 <pre>_<service>_<n>，
-#   compose v2 为 <pre>-<service>-<n>。
-# 枚举本身失败（dockerd/compose 报错）必须返回非 0，调用方不得把
-# “枚举失败”当成“没有容器在跑”——否则 stop/monitor 会在容器仍存活时
-# 上报成功/已停止，违反 Pacemaker 的资源所有权约定，在 DRBD 双活防护上
-# 等同于放行脑裂。
-container_ids()
+run_compose()
+(
+	CDPATH= cd "$DIR" || exit 1
+	"$COMMAND" -f "$YML" "$@"
+)
+
+labeled_container_ids()
 {
-	if [ -r "$DIR/$YML" ]; then
-		(cd $DIR || exit 1; $COMMAND -f $YML ps -aq)
-	else
-		ps_out=$(docker ps --all --format '{{.ID}} {{.Names}}') || return $OCF_ERR_GENERIC
-		printf '%s\n' "$ps_out" | awk '$NF ~ /^'"${PRE}"'[_-].*[_-][0-9]+$/ {print $1}'
+	# Compose labels retain the config path after the file disappears or
+	# its project name changes. An empty Compose result alone is inconclusive.
+	project_dir=$(CDPATH= cd "$(dirname "$CONFIG_FILE")" && pwd) || return "$OCF_ERR_GENERIC"
+	config_path=${project_dir%/}/${CONFIG_FILE##*/}
+	format='{{.ID}}{{"\t"}}{{.Names}}{{"\t"}}{{.Label "com.docker.compose.project"}}{{"\t"}}{{.Label "com.docker.compose.project.config_files"}}{{"\t"}}{{.Label "com.docker.compose.oneoff"}}{{"\t"}}{{.Label "com.docker.compose.service"}}{{"\t"}}{{.State}}'
+	containers=$(docker ps --all --no-trunc --format "$format") || {
+		ocf_log err "failed to enumerate Docker containers for $config_path"
+		return "$OCF_ERR_GENERIC"
+	}
+
+	# Names only flag possible ownership conflicts. They cannot authorize
+	# stopping a container, even when it has the template name "matrixone".
+	# An exited project left behind by a rename is not a second owner.
+	# Only a project that still has an active container can conflict.
+	if ! ids=$(printf '%s\n' "$containers" |
+		OCF_COMPOSE_CONFIG="$config_path" OCF_COMPOSE_DIR="${project_dir##*/}" OCF_COMPOSE_PROJECT="$compose_project" OCF_MODELED_SERVICES="$modeled_services" OCF_CURRENT_IDS="${2:-}" awk -F '\t' -v selection="$1" '
+		BEGIN {
+			prefix = tolower(ENVIRON["OCF_COMPOSE_DIR"])
+			gsub(/[^a-z0-9_-]/, "", prefix)
+			legacy = prefix
+			gsub(/[_-]/, "", legacy)
+			n = split(ENVIRON["OCF_CURRENT_IDS"], current, "\n")
+			for (i = 1; i <= n; i++)
+				if (current[i] != "") unverified[current[i]] = 1
+			m = split(ENVIRON["OCF_MODELED_SERVICES"], modeled_names, "\n")
+			for (j = 1; j <= m; j++)
+				if (modeled_names[j] != "") {
+					modeled[modeled_names[j]] = 1
+					modeled_known = 1
+				}
+		}
+		{
+			oneoff = (tolower($5) == "true")
+			service = $6
+			active = ($7 != "exited" && $7 != "created")
+		}
+		oneoff && !active && selection != "reconcile" { next }
+		$3 != "" && $4 == ENVIRON["OCF_COMPOSE_CONFIG"] {
+			if (active) active_project[$3] = 1
+			count++
+			cid[count] = $1
+			cproj[count] = $3
+			coneoff[count] = oneoff
+			cactive[count] = active
+			cservice[count] = service
+			if (selection == "reconcile") {
+				if (active && (oneoff || !($1 in unverified))) ambiguous = 1
+				delete unverified[$1]
+			}
+			next
+		}
+		$2 == "matrixone" ||
+		($2 ~ /[_-][0-9]+$/ && (index($2, prefix "-") == 1 ||
+			index($2, prefix "_") == 1 || index($2, legacy "-") == 1 ||
+			index($2, legacy "_") == 1)) { ambiguous = 1 }
+		END {
+			active_count = 0
+			for (project in active_project) {
+				active_count++
+				current_project = project
+			}
+			# Two active projects are an ownership conflict for monitor and
+			# start. Stop can still name the containers compose down will
+			# skip, because those targets belong to different projects.
+			if (active_count > 1 && selection != "shutdown") ambiguous = 1
+			if (!ambiguous && selection != "reconcile") {
+				for (i = 1; i <= count; i++) {
+					# Health follows the one active project. Removal lists
+					# every verified service. Shutdown lists containers
+					# compose down will skip: one-offs, other projects, and
+					# same-project services absent from the current model.
+					if (selection != "services" && selection != "shutdown" &&
+						(active_count == 0 || cproj[i] != current_project)) continue
+					if (selection == "monitor") selected = 1
+					else if (selection == "oneoff") selected = (coneoff[i] && cactive[i])
+					else if (selection == "active") selected = cactive[i]
+					else if (selection == "shutdown")
+						selected = cactive[i] && (coneoff[i] || cproj[i] != ENVIRON["OCF_COMPOSE_PROJECT"] || (modeled_known && cservice[i] != "" && !(cservice[i] in modeled)))
+					else selected = !coneoff[i]
+					if (selected) print cid[i]
+				}
+			}
+			for (id in unverified) ambiguous = 1
+			exit ambiguous
+		}
+	'); then
+		ocf_log err "cannot verify container ownership for $config_path"
+		return "$OCF_ERR_GENERIC"
 	fi
+	printf '%s\n' "$ids"
 }
 
-docker_kill()
+remove_containers()
 {
-	RTV=true
-	if ! ids=$(container_ids); then
-		ocf_log err "failed to enumerate docker containers"
-		RTV=false
-		return $OCF_ERR_GENERIC
-	fi
-	for i in $ids; do
-		docker kill $i >/dev/null 2>&1
-		docker rm $i >/dev/null 2>&1 || RTV=false
+	ids=$(labeled_container_ids services) || return "$OCF_ERR_GENERIC"
+	failed=0
+	for id in $ids; do
+		# kill can fail for an already stopped container. rm without --force
+		# succeeds only when Docker can remove the container safely.
+		docker kill "$id" >/dev/null 2>&1
+		if ! docker rm "$id" >/dev/null; then
+			ocf_log err "failed to remove Docker container $id"
+			failed=$OCF_ERR_GENERIC
+		fi
 	done
-	if [ "$RTV" = false ]; then
-		ocf_log err "failed to kill docker"
-		return $OCF_ERR_GENERIC
-	else
-		RUN=false
-	fi
+	return "$failed"
+}
+
+desired_services()
+(
+	# Ask Compose to resolve profiles, interpolation and deploy/scale settings.
+	model=$(run_compose config --format json) || exit 1
+	printf '%s\n' "$model" | python3 -I -c '
+import json
+import sys
+
+document = json.load(sys.stdin)
+services = document["services"]
+completed = set()
+for service in services.values():
+    dependencies = service.get("depends_on") or {}
+    if not isinstance(dependencies, dict):
+        continue
+    for name, spec in dependencies.items():
+        if isinstance(spec, dict) and spec.get("condition") == "service_completed_successfully":
+            completed.add(name)
+for name, service in services.items():
+    deploy = service.get("deploy") or {}
+    if not isinstance(deploy, dict):
+        deploy = {}
+    replicas = service.get("scale", deploy.get("replicas", 1))
+    mode = "completed" if name in completed else "running"
+    print(name, replicas, mode)
+'
+)
+
+docker_container_status()
+{
+	expected_services=$1
+	shift
+	[ "$#" -gt 0 ] || return "$OCF_NOT_RUNNING"
+	format='{{.State.Running}}|{{.State.Status}}|{{.State.ExitCode}}|{{index .Config.Labels "com.docker.compose.oneoff"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{index .Config.Labels "com.docker.compose.depends_on"}}'
+	states=$(docker inspect --format="$format" "$@") || return "$INSPECT_FAILED"
+
+	# The resolved Compose model decides which services may be ready after a
+	# successful exit. Dependent container labels survive a later change from
+	# initializer to long-running service, so they are not authoritative.
+	# Successful initializer exits count toward the desired completed count.
+	# Further successful exits left by a scale-down do not. Only an unexpected
+	# number of active replicas is a surplus. Exited replicas of a long-running
+	# service likewise stay out of that comparison.
+	printf '%s\n' "$states" | OCF_EXPECTED_SERVICES="$expected_services" awk -F '[|]' \
+		-v containers="$#" -v not_running="$OCF_NOT_RUNNING" -v partial="$COMPOSE_PARTIAL" '
+		BEGIN {
+			n = split(ENVIRON["OCF_EXPECTED_SERVICES"], lines, "\n")
+			for (i = 1; i <= n; i++) {
+				split(lines[i], fields, " ")
+				if (fields[1] == "") continue
+				desired[fields[1]] = fields[2] + 0
+				if (fields[3] == "completed") init[fields[1]] = 1
+			}
+		}
+		NF != 6 || ($1 != "true" && $1 != "false") { invalid = 1; next }
+		{
+			active = ($2 != "created" && $2 != "exited")
+			if (tolower($4) == "true") {
+				if (active) task = 1
+				next
+			}
+			if (!($5 in desired) || desired[$5] == 0) {
+				if (active) orphan = 1
+				next
+			}
+			if ($1 == "true" && $2 == "running") {
+				running = 1
+				ready[$5]++
+			} else if ($2 == "exited" && $3 == "0") exited[$5]++
+			else if (active) invalid = 1
+		}
+		END {
+			if (invalid || NR != containers) exit 2
+			if (orphan) exit 3
+			if (!running) exit (task ? 4 : not_running)
+			for (service in desired) {
+				active = ready[service] + 0
+				if (service in init) {
+					if (active + exited[service] < desired[service]) stopped = 1
+					if (active > desired[service]) exit 2
+				} else if (active < desired[service]) stopped = 1
+				else if (active > desired[service]) exit 2
+			}
+			if (stopped && task) exit 4
+			exit stopped ? partial : 0
+		}
+	'
+	result=$?
+	case "$result" in
+		"$OCF_SUCCESS"|"$OCF_NOT_RUNNING") return "$result" ;;
+		"$COMPOSE_PARTIAL") ocf_log warn "only some Compose services are running"; return "$result" ;;
+		3) ocf_log err "unexpected service container still active for $CONFIG_FILE" ;;
+		4) ocf_log err "one-off container still active while services are stopped or incomplete for $CONFIG_FILE" ;;
+		*) ocf_log err "cannot confirm safe service state for $CONFIG_FILE" ;;
+	esac
+	return "$OCF_ERR_GENERIC"
+}
+
+# Sets compose_ids for the caller. A command substitution would discard it,
+# and start uses that exact Compose snapshot to prove ownership before repair.
+observe_containers()
+{
+	compose_ids=$(run_compose ps -aq) || {
+		ocf_log err "failed to enumerate Compose containers for $CONFIG_FILE"
+		return "$OCF_ERR_GENERIC"
+	}
+	# Compose may omit old services or one-off jobs. Inspect the union only
+	# once per ID so the replica count reflects actual containers.
+	owned_ids=$(labeled_container_ids monitor) || return "$OCF_ERR_GENERIC"
+	observed_ids=$(printf '%s\n' "$compose_ids" "$owned_ids" | awk 'NF && !seen[$1]++') || return "$OCF_ERR_GENERIC"
+}
+
+# Success means the later snapshot no longer contains every container the
+# earlier snapshot listed. A finished `compose run --rm` task is that case.
+container_disappeared()
+{
+	printf '%s\n' "$1" | REFRESHED_IDS="$2" awk '
+		BEGIN {
+			n = split(ENVIRON["REFRESHED_IDS"], found, "\n")
+			for (i = 1; i <= n; i++) if (found[i] != "") present[found[i]] = 1
+		}
+		$0 != "" && !($0 in present) { missing = 1 }
+		END { exit missing ? 0 : 1 }
+	'
 }
 
 docker_compose_status()
 {
-	# use docker-compose ps if YML found, otherwise try docker ps and kill containers
-	if [ -r "$DIR/$YML" ]; then
-		DKPS=$(cd $DIR; $COMMAND -f $YML ps -q)
-
-		# get number of all containers
-		[ -n "$DKPS" ] && PSNU=$(echo "$DKPS" | wc -l)
-		# get number of running containers
-		for UUID in $DKPS; do
-			UP=$(docker inspect --format='{{.State.Running}}' "$UUID")
-			[ "$UP" = "true" ] && UPNU=$((UPNU+1))
-		done
-		
-		if [ "${PSNU:-0}" -ne 0 ]; then
-			if [ ${UPNU:-0} -eq 0 ]; then
-				ocf_log info "docker service is running but not in up state."
-				return $OCF_NOT_RUNNING
-			elif [ "$PSNU" -eq $UPNU ]; then
-				ocf_log info "docker service is up and running"
-				return $OCF_SUCCESS
-			else
-				ocf_log err "docker service is running with partial up state"
-				return $OCF_ERR_GENERIC
+	if [ ! -r "$CONFIG_FILE" ]; then
+		ids=$(labeled_container_ids active) || return "$OCF_ERR_GENERIC"
+		[ -n "$ids" ] || return "$OCF_NOT_RUNNING"
+		ocf_log err "containers are active but cannot verify expected services without $CONFIG_FILE"
+		return "$OCF_ERR_GENERIC"
+	fi
+	services=$(desired_services) && [ -n "$services" ] || {
+		ocf_log err "cannot determine the configured services for $CONFIG_FILE"
+		return "$OCF_ERR_GENERIC"
+	}
+	observe_containers || return "$OCF_ERR_GENERIC"
+	docker_container_status "$services" $observed_ids
+	result=$?
+	if [ "$result" -eq "$INSPECT_FAILED" ]; then
+		# The listed object can disappear after enumeration. Re-read the
+		# current set and evaluate that. An inspect or enumeration failure
+		# that still applies to a container we can list stays an error.
+		previous_ids=$observed_ids
+		observe_containers || return "$OCF_ERR_GENERIC"
+		if container_disappeared "$previous_ids" "$observed_ids"; then
+			ocf_log info "listed container disappeared before inspection; rechecking $CONFIG_FILE"
+			docker_container_status "$services" $observed_ids
+			result=$?
+			if [ "$result" -eq "$INSPECT_FAILED" ]; then
+				ocf_log err "failed to inspect Docker containers for $CONFIG_FILE"
+				return "$OCF_ERR_GENERIC"
 			fi
 		else
-			RUN=false
-		fi
-	else
-		if ! ids=$(container_ids); then
-			ocf_log err "failed to enumerate docker containers"
-			return $OCF_ERR_GENERIC
-		fi
-		if [ -z "$ids" ]; then
-			RUN=false
-		else
-			ocf_log log "docker service is running without docker-compose, try to kill..."
-			docker_kill
+			ocf_log err "failed to inspect Docker containers for $CONFIG_FILE"
+			return "$OCF_ERR_GENERIC"
 		fi
 	fi
-	[ "$RUN" = false ] && {
-		ocf_log info "docker service is not running"
-		return $OCF_NOT_RUNNING
-	}
+	return "$result"
 }
 
 docker_compose_start()
 {
 	docker_compose_validate_all
-	docker_compose_status >/dev/null 2>&1
-	retVal=$?
-	# return success if docker service is running
-	[ $retVal -eq $OCF_SUCCESS ] && exit $OCF_SUCCESS
+	docker_compose_status
+	case "$?" in
+		"$OCF_SUCCESS") return "$OCF_SUCCESS" ;;
+		"$COMPOSE_PARTIAL"|"$OCF_NOT_RUNNING")
+			# up targets the current project. Prove that its IDs belong to
+			# this config and no other project still runs its services.
+			labeled_container_ids reconcile "$compose_ids" >/dev/null || return "$OCF_ERR_GENERIC"
+			;;
+		*) return "$OCF_ERR_GENERIC" ;;
+	esac
 
-	cd $DIR
-	$COMMAND -f $YML up -d || {
-		ocf_log err "Error. docker-compose returned error $?."
-		exit $OCF_ERR_GENERIC
-	}
+	if ! run_compose up -d; then
+		ocf_log err "docker compose up failed"
+		return "$OCF_ERR_GENERIC"
+	fi
+	if ! docker_compose_status; then
+		ocf_log err "Compose containers could not be confirmed running after up"
+		return "$OCF_ERR_GENERIC"
+	fi
+	return "$OCF_SUCCESS"
+}
 
-	ocf_log info "docker service started."
-	exit $OCF_SUCCESS
+# Sets compose_project and modeled_services from one successful Compose
+# model. A failed lookup does not guess the directory name: that guess can
+# authorize stopping the current project. An empty configured name after a
+# successful model is the directory name Compose itself uses.
+load_stop_model()
+{
+	compose_project=
+	modeled_services=
+	model=$(run_compose config --format json) || return 1
+	parsed=$(printf '%s\n' "$model" | python3 -I -c '
+import json, re, sys
+document = json.load(sys.stdin)
+services = document.get("services")
+if not isinstance(services, dict):
+    raise SystemExit(1)
+raw = document.get("name") or ""
+if not isinstance(raw, str):
+    raw = ""
+print(re.sub(r"[^a-z0-9_-]", "", raw.lower()))
+for name in services:
+    print(name)
+') || return 1
+	compose_project=$(printf '%s\n' "$parsed" | awk 'NR==1 { printf "%s", $0; exit }')
+	modeled_services=$(printf '%s\n' "$parsed" | awk 'NR>1 && NF { print }')
+	if [ -z "$compose_project" ]; then
+		compose_project=$(printf '%s\n' "${DIR##*/}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
+	fi
+	[ -n "$compose_project" ] && [ -n "$modeled_services" ]
+}
+
+confirm_containers_stopped()
+{
+	[ "$#" -gt 0 ] || return "$OCF_SUCCESS"
+	states=$(docker inspect --format='{{.State.Status}}' "$@") || return "$OCF_ERR_GENERIC"
+	if printf '%s\n' "$states" | awk -v count="$#" '
+		$0 != "exited" && $0 != "created" { active = 1 }
+		END { exit (NR != count || active) }
+	'; then
+		return "$OCF_SUCCESS"
+	fi
+	ocf_log err "Compose containers could not be confirmed stopped"
+	return "$OCF_ERR_GENERIC"
 }
 
 docker_compose_stop()
 {
-	# use docker-compose down if YML found, otherwise try docker kill and rm
-	if [ -r "$DIR/$YML" ]; then
-		docker_compose_validate_all
-		cd $DIR
-		$COMMAND -f $YML down || {
-			ocf_log err "Error on shutting down docker service, try docker kill..."
-			RUN_KILL=true
-		}
-	else
-		RUN_KILL=true
+	# compose down stops the services still in the model, in dependency
+	# order, and keeps each container's configured grace period. It skips
+	# one-offs, other projects, and containers whose service was removed
+	# from that model. One docker stop signals only those skipped
+	# containers, overlapped with down, so two 60s grace periods fit in
+	# the 120s Pacemaker budget. No shorter timeout is passed.
+	# --remove-orphans=false overrides an inherited COMPOSE_REMOVE_ORPHANS
+	# so down does not send a second stop to a container already draining.
+	stop_pid=
+	compose_project=
+	modeled_services=
+	discovery_complete=0
+	stop_started=$(date +%s) || return "$OCF_ERR_GENERIC"
+	if [ -r "$CONFIG_FILE" ] && [ -x "$OCF_RESKEY_binpath" ]; then
+		# Project name and service set come from the same successful model.
+		# Retry that lookup once; do not overlap stops from a directory guess.
+		if ! load_stop_model; then
+			ocf_log warn "Compose model failed before shutdown; retrying for $CONFIG_FILE"
+			load_stop_model || true
+		fi
+		skipped=
+		if [ -n "$compose_project" ] && [ -n "$modeled_services" ]; then
+			if ! skipped=$(labeled_container_ids shutdown); then
+				ocf_log warn "Docker listing failed before shutdown; retrying for $CONFIG_FILE"
+				if ! skipped=$(labeled_container_ids shutdown); then
+					skipped=
+				else
+					discovery_complete=1
+				fi
+			else
+				discovery_complete=1
+			fi
+			# Discovery succeeded, so this stop keeps each container's
+			# configured grace period. No -t/--time is passed.
+			if [ "$discovery_complete" = 1 ] && [ -n "$skipped" ]; then
+				docker stop $skipped >/dev/null 2>&1 &
+				stop_pid=$!
+			fi
+		fi
 	fi
-	if [ "$RUN_KILL" = true ]; then
-		docker_kill
-		[ "$RTV" = false ] && {
-			ocf_log err "Error. Could not stop docker services."
-			return $OCF_ERR_GENERIC
-		}
-	fi
-	ocf_log info "docker service stopped."
-	exit $OCF_SUCCESS
-}
 
-docker_compose_monitor()
-{
-	docker_compose_status
+	compose_ids=
+	if ! { [ -r "$CONFIG_FILE" ] && [ -x "$OCF_RESKEY_binpath" ] &&
+		run_compose down --remove-orphans=false && compose_ids=$(run_compose ps -aq); }; then
+		compose_ids=
+		if [ -n "$stop_pid" ]; then
+			wait "$stop_pid" || true
+			stop_pid=
+		fi
+		ocf_log warn "Compose shutdown unavailable or failed, trying Docker label-based removal"
+		remove_containers || return "$OCF_ERR_GENERIC"
+	fi
+	if [ -n "$stop_pid" ]; then
+		wait "$stop_pid" || true
+	fi
+
+	# down can miss one-offs, removed services, and earlier project names.
+	# Every recovery stop, including one after a failed overlapped stop,
+	# keeps a full 60s grace only when that grace and verification still
+	# fit in the 120s budget. Otherwise it stops in the time still left.
+	remaining=$(labeled_container_ids active) || return "$OCF_ERR_GENERIC"
+	if [ -n "$remaining" ]; then
+		now=$(date +%s) || return "$OCF_ERR_GENERIC"
+		remain=$((120 - (now - stop_started) - 10))
+		if [ "$remain" -ge 60 ]; then
+			docker stop $remaining >/dev/null
+		elif [ "$remain" -lt 1 ]; then
+			ocf_log err "no time left in the 120s stop budget for $remaining"
+			return "$OCF_ERR_GENERIC"
+		else
+			docker stop -t "$remain" $remaining >/dev/null
+		fi
+		# A --rm container may disappear during stop. Verify the final state.
+		remaining=$(labeled_container_ids active) || return "$OCF_ERR_GENERIC"
+		if [ -n "$remaining" ]; then
+			ocf_log err "containers still active for $CONFIG_FILE: $remaining"
+			return "$OCF_ERR_GENERIC"
+		fi
+	fi
+	if [ -n "$compose_ids" ]; then
+		compose_ids=$(run_compose ps -aq) || return "$OCF_ERR_GENERIC"
+		confirm_containers_stopped $compose_ids || return "$OCF_ERR_GENERIC"
+	fi
+	return "$OCF_SUCCESS"
 }
 
 docker_compose_validate_all()
@@ -265,8 +578,8 @@ docker_compose_validate_all()
 		ocf_log err "diretory $OCF_RESKEY_dirpath is not a directory."
 		exit $OCF_ERR_ARGS
 	fi
-	if [ ! -e "$OCF_RESKEY_dirpath/$OCF_RESKEY_ymlfile" ]; then
-		ocf_log err "yaml file $OCF_RESKEY_dirpath/$OCF_RESKEY_ymlfile is not found."
+	if [ ! -r "$CONFIG_FILE" ]; then
+		ocf_log err "cannot read Compose file $CONFIG_FILE"
 		exit $OCF_ERR_ARGS
 	fi
 
@@ -292,12 +605,11 @@ case $1 in
 		docker_compose_stop
 		;;
 
-	status)	
+	status|monitor)
 		docker_compose_status
-		;;
-
-	monitor)
-		docker_compose_monitor
+		result=$?
+		[ "$result" != "$COMPOSE_PARTIAL" ] || result=$OCF_ERR_GENERIC
+		exit "$result"
 		;;
 
 	validate-all)

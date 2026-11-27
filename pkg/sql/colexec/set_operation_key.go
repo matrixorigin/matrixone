@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -28,7 +29,7 @@ type SetOperationKeyEvaluator struct {
 	eval ExprEvalVector
 }
 
-func (e *SetOperationKeyEvaluator) Prepare(proc *process.Process, exprs []*plan.Expr, allocations ...*vector.AllocationAccountSelection) error {
+func (e *SetOperationKeyEvaluator) Prepare(proc *process.Process, exprs []*plan.Expr, allocations ...*mpool.MPool) error {
 	if len(exprs) == 0 {
 		e.eval.Free()
 		return nil
@@ -39,7 +40,7 @@ func (e *SetOperationKeyEvaluator) Prepare(proc *process.Process, exprs []*plan.
 	}
 	e.eval.Free()
 	var err error
-	var allocation *vector.AllocationAccountSelection
+	var allocation *mpool.MPool
 	if len(allocations) > 0 {
 		allocation = allocations[0]
 	}

@@ -166,22 +166,22 @@ func TestFilterTargetRowsCrossesAllocationAccountBoundary(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
-	bat := batch.NewOffHeapWithSize(4)
+	bat := batch.NewWithSize(4)
 	for idx, typ := range []types.Type{
 		types.T_Rowid.ToType(), types.T_int64.ToType(),
 		types.T_int32.ToType(), types.T_bool.ToType(),
 	} {
-		bat.Vecs[idx], err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
-		require.NoError(t, err)
+		bat.Vecs[idx] = vector.NewVec(typ, view)
 	}
 	require.NoError(t, vector.AppendFixedList(
-		bat.Vecs[0], []types.Rowid{types.BuildTestRowid(1, 1)}, nil, mp))
-	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int64{1}, nil, mp))
-	require.NoError(t, vector.AppendFixedList(bat.Vecs[2], []int32{10}, nil, mp))
-	require.NoError(t, vector.AppendFixedList(bat.Vecs[3], []bool{true}, nil, mp))
+		bat.Vecs[0], []types.Rowid{types.BuildTestRowid(1, 1)}, nil, view))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int64{1}, nil, view))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[2], []int32{10}, nil, view))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[3], []bool{true}, nil, view))
+	require.Positive(t, account.Snapshot().Used)
 	bat.SetRowCount(1)
 
 	filtered, clean, _, err := filterTargetRows(proc, &MultiUpdateCtx{
@@ -191,13 +191,10 @@ func TestFilterTargetRowsCrossesAllocationAccountBoundary(t *testing.T) {
 	}, bat, nil)
 	require.NoError(t, err)
 	require.True(t, clean)
-	require.Nil(t, filtered.AllocationAccountSelection())
-	for _, vec := range filtered.Vecs {
-		require.Nil(t, vec.AllocationAccountSelection())
-	}
-	filtered.Clean(mp)
-	bat.Clean(mp)
+	// The filtered copy outlives the source account's charge.
+	bat.Clean(view)
 	require.Zero(t, account.Snapshot().Used)
+	filtered.Clean(mp)
 	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
 }
@@ -730,10 +727,8 @@ func prepareUpdateTestBatchs(
 		columnD := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil, nil)
 		columnRowID := makeTestRowIDVector(mp, &mainObjectID, uint16(i), rowCount)
 
-		attrs := []string{"a", "b", "c", "d", catalog.Row_ID}
 		bat := &batch.Batch{
-			Vecs:  []*vector.Vector{columnA, columnB, columnC, columnD, columnRowID},
-			Attrs: attrs,
+			Vecs: []*vector.Vector{columnA, columnB, columnC, columnD, columnRowID},
 		}
 
 		if hasUniqueKey {
@@ -743,7 +738,6 @@ func prepareUpdateTestBatchs(
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnOldPk)
 			bat.Vecs = append(bat.Vecs, columnNewPk)
-			bat.Attrs = append(bat.Attrs, "uk_rowid", "uk_old_pk", "uk_new_pk")
 		}
 
 		if hasSecondaryKey {
@@ -753,7 +747,6 @@ func prepareUpdateTestBatchs(
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnOldPk)
 			bat.Vecs = append(bat.Vecs, columnNewPk)
-			bat.Attrs = append(bat.Attrs, "sk_rowid", "sk_old_pk", "sk_new_pk")
 		}
 
 		bat.SetRowCount(bat.Vecs[0].Length())

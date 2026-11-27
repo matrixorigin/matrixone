@@ -67,7 +67,7 @@ func consumeEntry(
 		return nil
 	}
 
-	if engine.PushClient().dcaTryDelay(isSub, func() { applyToCatalogCache(cache, e) }) {
+	if engine.PushClient().dcaTryDelayEntry(isSub, cache, e) {
 		return nil
 	}
 
@@ -79,7 +79,7 @@ func applyToCatalogCache(cache *cache.CatalogCache, e *api.Entry) {
 	t0 := time.Now()
 	if isPreparedMetadataTable(e.DatabaseName, e.TableName) {
 		if cache != nil {
-			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			bat, _ := batch.ViewBinary(e.Bat.Bytes())
 			cache.UpdatePreparedMetadata(bat)
 		}
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
@@ -88,17 +88,17 @@ func applyToCatalogCache(cache *cache.CatalogCache, e *api.Entry) {
 	if e.EntryType == api.Entry_Insert {
 		switch e.TableId {
 		case catalog.MO_TABLES_ID:
-			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			bat, _ := batch.ViewBinary(e.Bat.Bytes())
 			if cache != nil {
 				cache.InsertTable(bat)
 			}
 		case catalog.MO_DATABASE_ID:
-			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			bat, _ := batch.ViewBinary(e.Bat.Bytes())
 			if cache != nil {
 				cache.InsertDatabase(bat)
 			}
 		case catalog.MO_COLUMNS_ID:
-			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			bat, _ := batch.ViewBinary(e.Bat.Bytes())
 			if cache != nil {
 				cache.InsertColumns(bat)
 			}
@@ -110,12 +110,12 @@ func applyToCatalogCache(cache *cache.CatalogCache, e *api.Entry) {
 	switch e.TableId {
 	case catalog.MO_TABLES_ID:
 		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
-			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			bat, _ := batch.ViewBinary(e.Bat.Bytes())
 			cache.DeleteTable(bat)
 		}
 	case catalog.MO_DATABASE_ID:
 		if cache != nil && !logtailreplay.IsTransferredDels(e.TableName) {
-			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			bat, _ := batch.ViewBinary(e.Bat.Bytes())
 			cache.DeleteDatabase(bat)
 		}
 	}

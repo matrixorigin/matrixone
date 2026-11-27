@@ -99,7 +99,7 @@ func TestCountDistinctLegacyFloatKeepsFixedIndexAndAllPayloads(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, int64(5),
 				vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 
 			var encoded bytes.Buffer
 			SetCanonicalDistinctKeyWire(exec, false)
@@ -143,7 +143,7 @@ func TestCountDistinctModernFloatKeepsFixedIndexFastPath(t *testing.T) {
 	result, err := exec.Flush()
 	require.NoError(t, err)
 	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	vec.Free(mp)
 	exec.Free()
 }
@@ -261,7 +261,7 @@ func TestCountDistinctFloatPolicyCrossRepresentationMerge(t *testing.T) {
 		result, err := exec.Flush()
 		require.NoError(t, err)
 		got := vector.GetFixedAtNoTypeCheck[int64](result[0], 0)
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		return got
 	}
 
@@ -477,7 +477,7 @@ func TestCountDistinctLegacyTupleAppendNormalizesFloatKeys(t *testing.T) {
 			math.Float64frombits(0x7ff8000000000001),
 			math.Float64frombits(0xfff8000000000001),
 		})
-	chars := vector.NewVec(tupleTypes[1])
+	chars := vector.NewVec(tupleTypes[1], mp)
 	require.NoError(t, vector.AppendBytes(chars, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(chars, []byte("a"), false, mp))
 	require.NoError(t, source.BatchFill(
@@ -494,7 +494,7 @@ func TestCountDistinctLegacyTupleAppendNormalizesFloatKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1),
 		vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	floats.Free(mp)
 	chars.Free(mp)
 	source.Free()
@@ -695,7 +695,7 @@ func TestCountDistinctBatchFillChunksAndBoundaryDuplicates(t *testing.T) {
 			require.Len(t, result, 1)
 			require.Equal(t, int64(tc.rows-1),
 				vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			exec.Free()
 			vec.Free(mp)
 			require.Zero(t, mp.CurrNB())
@@ -744,7 +744,7 @@ func TestCountDistinctFixedAdmissionRetainsNonPublishingRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(2),
 		vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	vec.Free(mp)
 	exec.Free()
 	require.NoError(t, exec.ClearAllocationAccount(allocation))
@@ -807,7 +807,7 @@ func TestCountDistinctFixedMergeFromLegacySource(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(250),
 		vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	source.Free()
 	target.Free()
 	require.NoError(t, source.ClearAllocationAccount(allocation))
@@ -829,12 +829,10 @@ func newReviewAggregateAllocation(
 		account,
 		mpool.AllocationOwnerGroup,
 		AllocationAccountSites{
-			VectorData:     1,
-			VectorArea:     2,
-			VectorNulls:    3,
-			VectorGrouping: 4,
-			ArgumentCount:  5,
-			ArgumentArena:  6,
+			VectorData:    1,
+			VectorArea:    2,
+			ArgumentCount: 5,
+			ArgumentArena: 6,
 		},
 	)
 	require.NoError(t, err)
@@ -940,7 +938,7 @@ func TestCountDistinctLegacyMergeFromFixedSource(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(len(targetValues)+len(missing)),
 		vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	source.Free()
 	target.Free()
 	require.NoError(t, source.ClearAllocationAccount(allocation))

@@ -34,6 +34,7 @@ type bmp struct {
 	values     []uint32
 	mp         *mpool.MPool
 	allocation *AllocationAccount
+	reserved   bool // backing exists, but no non-NULL input has been published
 }
 
 func (b *bmp) MarshalBinary() ([]byte, error) {
@@ -216,6 +217,17 @@ func (b *bmp) appendSorted(values []uint32) error {
 	return nil
 }
 
+// bitmapMergeGrowth counts the additions to a sorted, unique target.
+func bitmapMergeGrowth(target, source []uint32) int {
+	additional := 0
+	for _, value := range source {
+		if _, found := slices.BinarySearch(target, value); !found {
+			additional++
+		}
+	}
+	return additional
+}
+
 func (b *bmp) mergeSorted(values []uint32) error {
 	if b == nil || b.allocation == nil {
 		return mpool.ErrAllocationAccountInvariant
@@ -227,10 +239,23 @@ func (b *bmp) mergeSorted(values []uint32) error {
 		return b.appendSorted(values)
 	}
 	oldLength := len(b.values)
-	if err := b.ensureCapacity(oldLength + len(values)); err != nil {
-		return err
+	additional := len(values)
+	if additional > cap(b.values)-oldLength {
+		// The spare tail may be smaller than the source because merge
+		// preflight reserves only additions. Size the backward merge to
+		// the exact union here; overlaps consume no slots.
+		additional = bitmapMergeGrowth(b.values, values)
+		if additional == 0 {
+			return nil
+		}
+		if additional > math.MaxInt-oldLength {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		if err := b.ensureCapacity(oldLength + additional); err != nil {
+			return err
+		}
 	}
-	b.values = b.values[:oldLength+len(values)]
+	b.values = b.values[:oldLength+additional]
 	write, right := len(b.values)-1, len(values)-1
 	for left := oldLength - 1; left >= 0; left-- {
 		for right >= 0 && values[right] > b.values[left] {
@@ -249,9 +274,10 @@ func (b *bmp) mergeSorted(values []uint32) error {
 		write--
 		right--
 	}
-	start := write + 1
-	copy(b.values, b.values[start:])
-	b.values = b.values[:len(b.values)-start]
+	if start := write + 1; start > 0 {
+		copy(b.values, b.values[start:])
+		b.values = b.values[:len(b.values)-start]
+	}
 	return nil
 }
 
@@ -623,6 +649,10 @@ func mergeAccountedBitmapWire(data []byte, target *bmp) error {
 	if err != nil {
 		return err
 	}
+	return appendAccountedBitmapWire(data, target, total)
+}
+
+func appendAccountedBitmapWire(data []byte, target *bmp, total int) error {
 	if total > math.MaxInt-len(target.values) {
 		return mpool.ErrAllocationAllocatorLimit
 	}
@@ -634,15 +664,21 @@ func mergeAccountedBitmapWire(data []byte, target *bmp) error {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	target.values = target.values[:start+total]
-	if _, err = scanAccountedBitmapWire(data, target.values[start:]); err != nil {
+	if _, err := scanAccountedBitmapWire(data, target.values[start:]); err != nil {
 		target.values = target.values[:start]
 		return err
 	}
 	target.normalize()
+	if target.reserved {
+		target.reserved = false
+	}
 	return nil
 }
 
 func (b *bmp) MarshaledSize() int {
+	if b.reserved {
+		return 0 // same wire representation as a nil opaque state
+	}
 	if b.allocation == nil {
 		return int(b.legacy.GetSerializedSizeInBytes())
 	}
@@ -684,6 +720,9 @@ func writeBitmapFull(writer io.Writer, value []byte) error {
 func (b *bmp) MarshalTo(writer io.Writer) error {
 	if b == nil || writer == nil {
 		return mpool.ErrAllocationAccountInvalid
+	}
+	if b.reserved {
+		return nil
 	}
 	if b.allocation == nil {
 		_, err := b.legacy.WriteTo(writer)
@@ -792,22 +831,26 @@ func (e *bmpExecCommon) batchMerge(other *bmpExecCommon, offset int, groups []ui
 		if other.state[x2].mobs[y2] == nil {
 			continue
 		}
-		if e.state[x1].mobs[y1] == nil && e.allocation == nil {
-			e.state[x1].mobs[y1] = other.state[x2].mobs[y2]
+		mob2 := other.state[x2].mobs[y2].(*bmp)
+		if mob2.reserved {
+			continue
+		}
+		state := &e.state[x1]
+		if state.mobs[y1] == nil && e.allocation == nil {
+			state.mobs[y1] = mob2
 			other.state[x2].mobs[y2] = nil
 		} else {
-			if e.state[x1].mobs[y1] == nil {
-				var err error
-				e.state[x1].mobs[y1], err = makeBmp(e.mp, e.allocation)
-				if err != nil {
-					return err
-				}
-			}
-			mob1 := e.state[x1].mobs[y1].(*bmp)
-			mob2 := other.state[x2].mobs[y2].(*bmp)
-			if err := mob1.union(mob2); err != nil {
+			mob1, err := e.bitmapForFill(state, y1)
+			if err != nil {
 				return err
 			}
+			if err := mob1.union(mob2); err != nil {
+				if state.mobs[y1] == nil {
+					mob1.Free()
+				}
+				return err
+			}
+			publishBitmap(state, y1, mob1)
 		}
 	}
 	return nil
@@ -835,7 +878,7 @@ func (e *bmpExecCommon) flush(typ types.Type) (_ []*vector.Vector, retErr error)
 	}()
 	for i, st := range e.state {
 		var err error
-		vecs[i], err = e.allocation.newVector(typ)
+		vecs[i], err = e.allocation.newVector(typ, e.mp)
 		if err != nil {
 			return nil, err
 		}
@@ -843,7 +886,7 @@ func (e *bmpExecCommon) flush(typ types.Type) (_ []*vector.Vector, retErr error)
 			return nil, err
 		}
 		for j := 0; j < int(st.length); j++ {
-			if st.mobs[j] == nil {
+			if st.mobs[j] == nil || st.mobs[j].(*bmp).reserved {
 				if err := vector.AppendNull(vecs[i], e.mp); err != nil {
 					return nil, err
 				}
@@ -870,6 +913,24 @@ func (e *bmpExecCommon) flush(typ types.Type) (_ []*vector.Vector, retErr error)
 		}
 	}
 	return vecs, nil
+}
+
+// bitmapForFill gives the caller a target without installing a new object
+// before a potentially rejected allocation.
+func (e *bmpExecCommon) bitmapForFill(state *aggState, row uint16) (*bmp, error) {
+	if state.mobs[row] != nil {
+		return state.mobs[row].(*bmp), nil
+	}
+	return makeBmp(e.mp, e.allocation)
+}
+
+func publishBitmap(state *aggState, row uint16, target *bmp) {
+	if state.mobs[row] == nil {
+		state.mobs[row] = target
+	}
+	if target.reserved {
+		target.reserved = false
+	}
 }
 
 type bmpConstructExec struct {
@@ -905,17 +966,14 @@ func (e *bmpConstructExec) BatchFill(offset int, groups []uint64, vectors []*vec
 					value, bitmapMaxPosition)
 			}
 			x, y := e.getXY(group - 1)
-			if e.state[x].mobs[y] == nil {
-				mob, err := makeBmp(e.mp, e.allocation)
-				if err != nil {
-					return err
-				}
-				e.state[x].mobs[y] = mob
+			mob, err := e.bitmapForFill(&e.state[x], y)
+			if err != nil {
+				return err
 			}
-			mob := e.state[x].mobs[y].(*bmp)
 			if err := mob.add(uint32(value)); err != nil {
 				return err
 			}
+			publishBitmap(&e.state[x], y, mob)
 		}
 	}
 	return nil
@@ -943,11 +1001,54 @@ type bmpOrExec struct {
 }
 
 func (e *bmpOrExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	return e.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	if e.allocation == nil || groupIndex == -1 {
+		return e.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	}
+	vec := vectors[0]
+	if vec.IsConst() {
+		row = 0
+	}
+	if vec.IsNull(uint64(row)) {
+		return nil
+	}
+	data := vec.GetBytesAt(row)
+	cardinality, err := scanAccountedBitmapWire(data, nil)
+	if err != nil {
+		return err
+	}
+	x, y := e.getXY(uint64(groupIndex))
+	mob, err := e.bitmapForFill(&e.state[x], y)
+	if err != nil {
+		return err
+	}
+	if cardinality > math.MaxInt-len(mob.values) {
+		return mpool.ErrAllocationAllocatorLimit
+	}
+	if err := mob.ensureCapacity(len(mob.values) + cardinality); err != nil {
+		return err
+	}
+	if err := appendAccountedBitmapWire(data, mob, cardinality); err != nil {
+		if e.state[x].mobs[y] == nil {
+			mob.Free()
+		}
+		return err
+	}
+	if e.state[x].mobs[y] == nil {
+		e.state[x].mobs[y] = mob
+	}
+	return nil
 }
 
 func (e *bmpOrExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	return e.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	if e.allocation == nil {
+		return e.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	}
+	for row := range vectors[0].Length() {
+		if err := e.Fill(groupIndex, row, vectors); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *bmpOrExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
@@ -966,16 +1067,16 @@ func (e *bmpOrExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vec
 		} else {
 			x, y := e.getXY(group - 1)
 			bs := vectors[0].GetBytesAt(row)
-			if e.state[x].mobs[y] == nil {
-				e.state[x].mobs[y], _ = makeBmp(e.mp, e.allocation)
-			}
-			mob := e.state[x].mobs[y].(*bmp)
-
 			if e.allocation != nil {
+				mob, _ := e.state[x].mobs[y].(*bmp)
 				if err := mergeAccountedBitmapWire(bs, mob); err != nil {
 					return err
 				}
 			} else {
+				mob, err := e.bitmapForFill(&e.state[x], y)
+				if err != nil {
+					return err
+				}
 				var mob2 bmp
 				if err := mob2.UnmarshalBinary(bs); err != nil {
 					return err
@@ -983,6 +1084,7 @@ func (e *bmpOrExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vec
 				if err := mob.unionLegacy(mob2.legacy); err != nil {
 					return err
 				}
+				publishBitmap(&e.state[x], y, mob)
 			}
 		}
 	}

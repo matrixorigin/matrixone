@@ -16,6 +16,7 @@ package multi_update
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -35,7 +36,7 @@ func (update *MultiUpdate) delete_table(
 	ctr := &update.ctr
 	if ctr.deleteBuf[idx] == nil {
 		mainPkIdx := updateCtx.DeleteCols[1]
-		ctr.deleteBuf[idx] = newDeleteBatch(inputBatch, mainPkIdx)
+		ctr.deleteBuf[idx] = newDeleteBatch(inputBatch, mainPkIdx, proc.Mp())
 	}
 	deleteBatch := ctr.deleteBuf[idx]
 	rowIdIdx := updateCtx.DeleteCols[0]
@@ -84,7 +85,7 @@ func (update *MultiUpdate) delete_table(
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
 		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-			return source.Delete(newCtx, deleteBatch, catalog.Row_ID)
+			return source.Delete(newCtx, deleteBatch, DeleteBatchAttrs, catalog.Row_ID)
 		})
 		if err != nil {
 			return err
@@ -94,9 +95,9 @@ func (update *MultiUpdate) delete_table(
 	return
 }
 
-func newDeleteBatch(inputBatch *batch.Batch, mainPkIdx int) *batch.Batch {
-	buf := batch.NewOffHeap([]string{catalog.Row_ID, "pk"})
-	buf.SetVector(0, vector.NewOffHeapVecWithType(types.T_Rowid.ToType()))
-	buf.SetVector(1, vector.NewOffHeapVecWithType(*inputBatch.Vecs[mainPkIdx].GetType()))
+func newDeleteBatch(inputBatch *batch.Batch, mainPkIdx int, mp *mpool.MPool) *batch.Batch {
+	buf := batch.NewWithSize(2)
+	buf.SetVector(0, vector.NewVec(types.T_Rowid.ToType(), mp))
+	buf.SetVector(1, vector.NewVec(*inputBatch.Vecs[mainPkIdx].GetType(), mp))
 	return buf
 }

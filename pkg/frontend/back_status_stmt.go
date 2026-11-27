@@ -50,7 +50,11 @@ func executeStatusStmtInBack(backSes *backSession,
 		if execCtx.selectInto == nil {
 			return moerr.NewInternalError(execCtx.reqCtx, "SELECT INTO user-variable collector is not initialized")
 		}
-		if err = execCtx.selectInto.apply(execCtx.reqCtx, backSes, execCtx.sqlOfStmt); err != nil {
+		var resultIsBin []bool
+		if resultIsBin, err = selectIntoResultIsBin(execCtx.proc, execCtx.cw.Plan()); err != nil {
+			return
+		}
+		if err = execCtx.selectInto.apply(execCtx.reqCtx, backSes, execCtx.sqlOfStmt, resultIsBin); err != nil {
 			return
 		}
 		if st, ok := execCtx.stmt.(*tree.Select); ok {

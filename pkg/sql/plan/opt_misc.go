@@ -247,15 +247,10 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 		// residual and enumerate every duplicate-key match.
 		return false
 	}
-	if _, protected := builder.materializedLockKeyProjects[node.NodeId]; protected {
-		// The barrier CHECK/FK FILTER consumes this project's computed
-		// unique lock-key columns positionally, and the restored row image
-		// exports them as columns to every downstream writer. Inlining the
-		// project would re-evaluate the key expression once per consumer
-		// after arbitration rows were already filtered.
+	if _, protected := builder.materializedDMLProjects[node.NodeId]; protected {
 		return false
 	}
-	if node.NodeType != plan.Node_PROJECT || node.Limit != nil || node.Offset != nil {
+	if node.NodeType != plan.Node_PROJECT || node.Limit != nil || node.Offset != nil || node.ValuesWarningRow() != 0 {
 		return false
 	}
 	if _, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
@@ -891,9 +886,10 @@ END:
 }
 
 func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
-	cols := make([]*plan.ColRef, 0, 7+len(ctx.ForeignKeyChecks))
+	cols := make([]*plan.ColRef, 0, 8+len(ctx.ForeignKeyChecks))
 	cols = append(cols, ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol)
 	cols = append(cols, ctx.OdkuTargetAutoIncrementCol, ctx.OdkuGeneratedCol, ctx.OdkuOrdinalCol, ctx.OdkuGeneratedAutoIncrementCol)
+	cols = append(cols, ctx.AuxiliaryRowIdCol)
 	for i := range ctx.ForeignKeyChecks {
 		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
 	}
@@ -1888,7 +1884,7 @@ func comparisonEvaluationIsTotal(functionID int32, left, right plan.Type) bool {
 	}
 
 	switch leftID {
-	case types.T_bool,
+	case types.T_bool, types.T_bit,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
@@ -1902,11 +1898,6 @@ func comparisonEvaluationIsTotal(functionID int32, left, right plan.Type) bool {
 		types.T_array_int8, types.T_array_uint8,
 		types.T_year:
 		return true
-	case types.T_bit:
-		// notEqualFn currently routes BIT through the varlena executor even
-		// though BIT is fixed-width.  Keep that resolved overload behind the
-		// blocking Aggregate; equality and ordering use fixed-width executors.
-		return functionID != function.NOT_EQUAL
 	case types.T_geometry, types.T_geometry32:
 		return isTruncationSafeEquality(functionID)
 	case types.T_enum:
@@ -2528,19 +2519,19 @@ func (builder *QueryBuilder) subqueryPredicatePlanningDisabled() bool {
 	return builder.optimizerHints != nil && builder.optimizerHints.subqueryPredicatePlanning == 1
 }
 
-func (builder *QueryBuilder) parseOptimizeHints() {
+func visitResolvedOptimizerHints(ctx CompilerContext, apply func(string)) {
 	applyHints := func(str string) {
 		if len(str) == 0 {
 			return
 		}
 		kvs := strings.Split(str, ",")
 		for i := range kvs {
-			handleOptimizerHints(kvs[i], builder)
+			apply(kvs[i])
 		}
 	}
 	// The session value includes the global default captured when the connection was
 	// created. CN runtime variables are shared by unrelated sessions and tenants.
-	if v, err := builder.compCtx.ResolveVariable("optimizer_hints", true, false); err == nil {
+	if v, err := ctx.ResolveVariable("optimizer_hints", true, false); err == nil {
 		if str, ok := v.(string); ok {
 			applyHints(str)
 		}
@@ -2549,11 +2540,15 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 	// execution context by the internal SQL executor (StatementOption.WithOptimizerHints). Applied
 	// AFTER the session so a statement can override it -- e.g. the fulltext2 json probe's fallback/
 	// tail SQL passes applyIndices=1 so its base-table scan does not re-trigger the probe rewrite.
-	if v := builder.compCtx.GetContext().Value(defines.OptimizerHints{}); v != nil {
+	if v := ctx.GetContext().Value(defines.OptimizerHints{}); v != nil {
 		if str, ok := v.(string); ok {
 			applyHints(str)
 		}
 	}
+}
+
+func (builder *QueryBuilder) parseOptimizeHints() {
+	visitResolvedOptimizerHints(builder.compCtx, func(hint string) { handleOptimizerHints(hint, builder) })
 }
 
 // sortRollupMode is retained as an internal compatibility adapter. New code

@@ -1057,8 +1057,8 @@ type RangesShuffleParam struct {
 	CNCNT     int32 // number of all cns
 	CNIDX     int32 // cn index , starts from 0
 	IsLocalCN bool
-	// ShuffleByObjectID assigns IVF persisted and appendable objects to the
-	// same physical CN owner.
+	// ShuffleByObjectID hashes immutable IVF objects by their full ObjectID.
+	// Appendable objects follow IsLocalCN, the owner of replay rows.
 	ShuffleByObjectID  bool
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
@@ -1115,11 +1115,16 @@ type Relation interface {
 
 	GetPrimaryKeys(context.Context) ([]*Attribute, error)
 
+	// Write inserts bat, whose columns attrs names, one name per vector. A
+	// batch of persisted objects is named [BlockMeta_BlockInfo,
+	// ObjectMeta_ObjectStats].
 	// Note: Write Will access Fileservice
-	Write(context.Context, *batch.Batch) error
+	Write(ctx context.Context, bat *batch.Batch, attrs []string) error
 
-	// Delete(context.Context, *vector.Vector, string) error
-	Delete(context.Context, *batch.Batch, string) error
+	// Delete deletes the rows bat identifies. attrs names bat's columns: a
+	// row delete starts with Row_ID, a delete of persisted tombstone objects
+	// is named [ObjectMeta_ObjectStats].
+	Delete(ctx context.Context, bat *batch.Batch, attrs []string, name string) error
 
 	AddTableDef(context.Context, TableDef) error
 	DelTableDef(context.Context, TableDef) error
@@ -1182,6 +1187,10 @@ type Relation interface {
 
 	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
+	// VisibleObjectCount counts persisted data and tombstone objects at the relation snapshot.
+	// Index diagnostics currently call it only on local, non-partitioned relations.
+	VisibleObjectCount(ctx context.Context) (int, error)
+
 	ApproxObjectsNum(ctx context.Context) int
 
 	// GetFlushTS returns the flush timestamp of the relation.
@@ -1204,6 +1213,12 @@ type RelationHandleFactory interface {
 // relation cache do not implement it.
 type RelationCreatedInCurrentTxn interface {
 	CreatedInCurrentTxn(context.Context) (bool, error)
+}
+
+// HistoricalSourceProvider checks whether the build snapshot can reproduce the
+// source seen by this transaction, including local DDL and DML.
+type HistoricalSourceProvider interface {
+	SourceVisibleAtSnapshot(context.Context) (bool, error)
 }
 
 // SourceCommitTSProvider is an optional relation capability used by async
@@ -1311,54 +1326,127 @@ const (
 // ReaderSelectionScratch contains non-owning call operands, never payload owners.
 // Its vectors are cleared by the reader on every terminal path.
 type ReaderSelectionScratch struct {
-	Seqnums   []uint16
-	Types     []types.Type
-	Columns   []int
-	Sources   []*vector.Vector
-	Vectors   []*vector.Vector
-	Headers   []*vector.Vector
-	Snapshots []*vector.DictionaryVectorSlot
+	Seqnums []uint16
+	Types   []types.Type
+	Columns []int
+	Sources []*vector.Vector
+	Vectors []*vector.Vector
+	Headers []*vector.Vector
 }
 
 func (s *ReaderSelectionScratch) Clear() {
 	clear(s.Sources)
 	clear(s.Vectors)
 	clear(s.Headers)
-	clear(s.Snapshots)
 	s.Seqnums = s.Seqnums[:0]
 	s.Types = s.Types[:0]
 	s.Columns = s.Columns[:0]
 	s.Sources = s.Sources[:0]
 	s.Vectors = s.Vectors[:0]
 	s.Headers = s.Headers[:0]
-	s.Snapshots = s.Snapshots[:0]
 }
 
 type ReaderFilterRequest struct {
+	// Membership is an optional necessary predicate over its key Columns.
+	// It is read-only and runs after storage visibility. Supporting readers
+	// may stage it before proven-total predicates on a pinned identity domain.
+	// Its sorted unique mapping is consumed before another callback. Readers
+	// without staged support ignore it and preserve the ordinary Apply path.
+	Membership *ReaderMembershipFilter
 	// ColumnUses is opt-in, proven by a caller with distinct read headers.
 	// Missing/unknown policies retain all columns. It never changes filter inputs.
 	ColumnUses       []ReaderColumnUse
 	selectionScratch *ReaderSelectionScratch
 	borrowColumns    []bool
 	scopedColumns    *objectio.CachedColumnScope
+	// pins keeps the shared cache entries that borrowed (read-only) output
+	// columns alias. The cache is shared, so its entries are pinned; the
+	// request's owner is the lender, not the output batch. A reader releases
+	// the pins before it reuses the output batch for the next block, and the
+	// owner releases them when it is done with the batch (ReleasePins).
+	pins objectio.CachePins
 	// Select evaluates the same ordered predicate chain without shrinking its
 	// input. Sels uses the original live-row domain and is borrowed until the
-	// next callback. A supporting reader retains views or gathers that mapping
-	// once; unsupported readers continue calling Apply.
-	// Workspace contains caller-owned original read vectors displaced by selected
-	// publication. The caller retires published views, restores these slots, then
-	// reclaims unique backing before its next read; terminal cleanup frees both.
-	Workspace []*vector.Vector
-	// ReusableHeaders are cleared publication headers owned by the same caller.
-	SnapshotSlots    []*vector.DictionaryVectorSlot
-	SelectionSlot    *vector.DictionaryVectorSlot
-	ReusableHeaders  []*vector.Vector
+	// next callback. A supporting reader gathers that mapping once; unsupported
+	// readers continue calling Apply.
 	Select           ReaderSelection
-	OutputAllocation *vector.AllocationAccountSelection
-	ObserveSelection func(rows, columns int, logicalBytes int64)
+	OutputAllocation *mpool.MPool
+	// PublishSelection lets a Select read keep its columns' physical rows
+	// (read-only cache references) and publish the selected rows as the output
+	// batch's own selection instead of compacting them. Readers fall back to
+	// compaction when the block's rows are not its physical rows (deletes,
+	// storage row selections).
+	PublishSelection bool
 	Apply            ReaderFilter
 	Exact            *objectio.ExactScanState
 	Observe          func(objectio.ExactScanStats)
+}
+
+// ReaderMembershipFilter is allocated only by a scan with an admitted ready
+// domain. Ordinary reader requests carry only a nil optional pointer.
+type ReaderMembershipFilter struct {
+	Columns []int
+	// ColumnUses is the original projection policy, used only once a reader
+	// admits the membership path. The outer request keeps aligned fallback data.
+	ColumnUses []ReaderColumnUse
+	// Bypass retires the optional stage after a resource refusal. The current
+	// read completes through the ordinary borrowed-predicate route instead.
+	Bypass bool
+	// PredicateColumns is the original ordered chain's required input set.
+	// Nil retains early-column behavior for callers without staged metadata.
+	PredicateColumns []int
+	// PredicatesTotal permits early rejection only for a proven total chain.
+	// Custom callbacks and unknown/fallible predicates preserve their order.
+	PredicatesTotal       bool
+	Select                ReaderSelection
+	InputRows, OutputRows int64
+	scratch               *ReaderMembershipScratch
+}
+
+// ReaderMembershipScratch belongs to the sequential prepared scan, never to a
+// cached block. The row map is accounted; Sources/Views are non-owning operands
+// cleared before every read returns. Scope cannot escape the synchronous read.
+type ReaderMembershipScratch struct {
+	Physical *vector.Vector
+	// physicalMP is the pool Physical was created with.
+	physicalMP     *mpool.MPool
+	Sources, Views []*vector.Vector
+	// Separate non-owning operands stay stable while nested key/publication
+	// reads reuse the ordinary request scratch inside the predicate I/O scope.
+	PredicateRead ReaderSelectionScratch
+}
+
+func (r *ReaderFilterRequest) MembershipScratch(width int, mp *mpool.MPool) (*ReaderMembershipScratch, error) {
+	if r.Membership.scratch == nil {
+		r.Membership.scratch = &ReaderMembershipScratch{
+			Sources: make([]*vector.Vector, width), Views: make([]*vector.Vector, width),
+		}
+	}
+	s := r.Membership.scratch
+	if s.Physical == nil {
+		// The scratch belongs to the request: it lives in the output pool.
+		owner := mp
+		if r.OutputAllocation != nil {
+			owner = r.OutputAllocation
+		}
+		s.Physical = vector.NewVec(types.T_int64.ToType(), owner)
+		s.physicalMP = owner
+	}
+	return s, nil
+}
+
+// FreeMembership is terminal for this prepared request; the owner calls it on
+// Reset/Free and before replacing a request during preparation.
+func (r *ReaderFilterRequest) FreeMembership(mp *mpool.MPool) {
+	if r == nil || r.Membership == nil || r.Membership.scratch == nil {
+		return
+	}
+	s := r.Membership.scratch
+	if s.Physical != nil {
+		// Freed with the pool MembershipScratch created it with.
+		s.Physical.Free(s.physicalMP)
+	}
+	r.Membership.scratch = nil
 }
 
 // ColumnUse preserves the original behavior for absent or incompatible policy.
@@ -1383,18 +1471,34 @@ func (r *ReaderFilterRequest) ColumnScope() *objectio.CachedColumnScope {
 }
 
 // BorrowColumns lets the single pinned read honor the eventual representation.
-// Owned/unused columns use the original owned decoder path without transient
-// cache leases. The mask is request-local and consumed before publication.
+// Only a column the request explicitly retains is borrowed: the request's
+// owner then lends it and holds its cache pin (Pins) until it reuses or drops
+// the output batch. Every other column, including all columns of a request
+// without matching ColumnUses, uses the owned decoder path without cache pins.
+// The mask is request-local and consumed before publication.
 func (r *ReaderFilterRequest) BorrowColumns(positions []int, width int) []bool {
 	if cap(r.borrowColumns) < len(positions) {
 		r.borrowColumns = make([]bool, len(positions))
 	} else {
 		r.borrowColumns = r.borrowColumns[:len(positions)]
 	}
+	explicit := len(r.ColumnUses) == width
 	for i, pos := range positions {
-		r.borrowColumns[i] = r.ColumnUse(pos, width) == ReaderColumnRetain
+		r.borrowColumns[i] = explicit && r.ColumnUse(pos, width) == ReaderColumnRetain
 	}
 	return r.borrowColumns
+}
+
+// Pins holds the cache entries that borrowed output columns alias.
+func (r *ReaderFilterRequest) Pins() *objectio.CachePins { return &r.pins }
+
+// ReleasePins drops every pin. The caller guarantees that no output column
+// still aliases a pinned entry: the batch is being reused, freed, or is no
+// longer read. It is safe on a nil request.
+func (r *ReaderFilterRequest) ReleasePins() {
+	if r != nil {
+		r.pins.Release()
+	}
 }
 
 // SelectionScratch is execution-lane local and bounded by the scan schema.
@@ -1415,9 +1519,6 @@ func (r *ReaderFilterRequest) SelectionScratch(width int) *ReaderSelectionScratc
 	}
 	if cap(s.Headers) < width {
 		s.Headers = make([]*vector.Vector, 0, width)
-	}
-	if cap(s.Snapshots) < width {
-		s.Snapshots = make([]*vector.DictionaryVectorSlot, 0, width)
 	}
 	return s
 }
@@ -1602,6 +1703,7 @@ type StatsRefresherWithOptions interface {
 // collection. The relation owns snapshot visibility and physical range
 // selection; callers provide only bounded policy inputs and resolved columns.
 type AnalyzeTableRequest struct {
+	ResourceProcess   any
 	Process           any
 	Columns           []string
 	FullScan          bool

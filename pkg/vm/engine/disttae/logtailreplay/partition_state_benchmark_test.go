@@ -29,25 +29,24 @@ import (
 
 func BenchmarkPartitionStateHandleRowsInsert(b *testing.B) {
 	pool := mpool.MustNewZero()
-	input, clean := newReplayInsertBatch(b, pool)
-	b.Cleanup(clean)
+	input, attrs := newReplayInsertBatch(b, pool)
 
 	state := NewPartitionState("", false, 42, false)
 	packer := types.NewPacker()
 	b.Cleanup(packer.Close)
 	ctx := context.Background()
+	entry := &api.Entry{EntryType: api.Entry_Insert, TableName: "t", Attrs: attrs, Bat: api.NewEncodedBatch(input)}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		state.HandleRowsInsert(ctx, input, 0, packer, pool)
+		state.HandleLogtailEntry(ctx, nil, entry, 0, packer, pool)
 	}
 }
 
 func BenchmarkPartitionStateHandleRowsDelete(b *testing.B) {
 	pool := mpool.MustNewZero()
-	input, clean := newReplayDeleteBatch(b, pool)
-	b.Cleanup(clean)
+	input := newReplayDeleteBatch(b, pool)
 
 	state := NewPartitionState("", false, 42, false)
 	packer := types.NewPacker()
@@ -61,12 +60,12 @@ func BenchmarkPartitionStateHandleRowsDelete(b *testing.B) {
 	}
 }
 
-func newReplayInsertBatch(b *testing.B, pool *mpool.MPool) (*api.Batch, func()) {
+func newReplayInsertBatch(b *testing.B, pool *mpool.MPool) ([]byte, []string) {
 	b.Helper()
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
 
 	segmentID := objectio.NewSegmentid()
 	blockID := objectio.NewBlockid(segmentID, 0, 0)
@@ -74,28 +73,20 @@ func newReplayInsertBatch(b *testing.B, pool *mpool.MPool) (*api.Batch, func()) 
 	vector.AppendFixed(tsVec, types.BuildTS(1, 0), false, pool)
 	vector.AppendFixed(pkVec, int64(1), false, pool)
 
-	input := &api.Batch{
-		Attrs: []string{"rowid", "time", "pk"},
-		Vecs: []api.Vector{
-			mustVectorToProto(rowIDVec),
-			mustVectorToProto(tsVec),
-			mustVectorToProto(pkVec),
-		},
-	}
-	return input, func() {
-		rowIDVec.Free(pool)
-		tsVec.Free(pool)
-		pkVec.Free(pool)
-	}
+	input := mustMarshalVectors(rowIDVec, tsVec, pkVec)
+	rowIDVec.Free(pool)
+	tsVec.Free(pool)
+	pkVec.Free(pool)
+	return input, []string{"rowid", "time", "pk"}
 }
 
-func newReplayDeleteBatch(b *testing.B, pool *mpool.MPool) (*api.Batch, func()) {
+func newReplayDeleteBatch(b *testing.B, pool *mpool.MPool) []byte {
 	b.Helper()
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	tombstoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+	tombstoneRowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
 
 	segmentID := objectio.NewSegmentid()
 	blockID := objectio.NewBlockid(segmentID, 0, 0)
@@ -104,21 +95,12 @@ func newReplayDeleteBatch(b *testing.B, pool *mpool.MPool) (*api.Batch, func()) 
 	vector.AppendFixed(pkVec, int64(1), false, pool)
 	vector.AppendFixed(tombstoneRowIDVec, types.RandomRowid(), false, pool)
 
-	input := &api.Batch{
-		Attrs: []string{"rowid", "time", "pk", "tombstone_rowid"},
-		Vecs: []api.Vector{
-			mustVectorToProto(rowIDVec),
-			mustVectorToProto(tsVec),
-			mustVectorToProto(pkVec),
-			mustVectorToProto(tombstoneRowIDVec),
-		},
-	}
-	return input, func() {
-		rowIDVec.Free(pool)
-		tsVec.Free(pool)
-		pkVec.Free(pool)
-		tombstoneRowIDVec.Free(pool)
-	}
+	input := mustMarshalVectors(rowIDVec, tsVec, pkVec, tombstoneRowIDVec)
+	rowIDVec.Free(pool)
+	tsVec.Free(pool)
+	pkVec.Free(pool)
+	tombstoneRowIDVec.Free(pool)
+	return input
 }
 
 // Populate through the actual live delete handler, then replay an earlier
@@ -141,8 +123,8 @@ func BenchmarkTombstoneObjectReplayWithUnrelatedDeletes(b *testing.B) {
 				packer := types.NewPacker()
 				defer packer.Close()
 				vecs := []*vector.Vector{
-					vector.NewVec(types.T_Rowid.ToType()), vector.NewVec(types.T_TS.ToType()),
-					vector.NewVec(types.T_int64.ToType()), vector.NewVec(types.T_Rowid.ToType()),
+					vector.NewVec(types.T_Rowid.ToType(), pool), vector.NewVec(types.T_TS.ToType(), pool),
+					vector.NewVec(types.T_int64.ToType(), pool), vector.NewVec(types.T_Rowid.ToType(), pool),
 				}
 				defer func() {
 					for _, v := range vecs {
@@ -161,11 +143,7 @@ func BenchmarkTombstoneObjectReplayWithUnrelatedDeletes(b *testing.B) {
 					require.NoError(b, vector.AppendFixed(vecs[3], types.NewRowid(&tombBlock, uint32(i%8192)), false, pool))
 				}
 				if count > 0 {
-					input := &api.Batch{Attrs: []string{"rowid", "time", "pk", "tombstone_rowid"}}
-					for _, v := range vecs {
-						input.Vecs = append(input.Vecs, mustVectorToProto(v))
-					}
-					state.HandleRowsDelete(ctx, input, packer, pool)
+					state.HandleRowsDelete(ctx, mustMarshalVectors(vecs...), packer, pool)
 				}
 				require.Equal(b, count, state.inMemTombstoneRowIdIndex.Len())
 				stats := objectio.NewObjectStatsWithObjectID(&checkpointObject, mode.appendable, false, false)
@@ -176,7 +154,7 @@ func BenchmarkTombstoneObjectReplayWithUnrelatedDeletes(b *testing.B) {
 				if mode.deleted {
 					entry.DeleteTime = types.BuildTS(2, 0)
 				}
-				var live *api.Batch
+				var live []byte
 				if mode.live {
 					live = newReplayObjectListBatch(b, pool, entry, entry.DeleteTime)
 				}
@@ -191,7 +169,7 @@ func BenchmarkTombstoneObjectReplayWithUnrelatedDeletes(b *testing.B) {
 						b.StartTimer()
 					}
 					if mode.live {
-						state.HandleTombstoneObjectList(ctx, &api.Entry{Bat: live}, nil, pool)
+						state.HandleTombstoneObjectList(ctx, &api.Entry{Bat: api.NewEncodedBatch(live)}, nil, pool)
 					} else {
 						if err := state.HandleObjectEntry(ctx, nil, entry, true); err != nil {
 							b.Fatal(err)

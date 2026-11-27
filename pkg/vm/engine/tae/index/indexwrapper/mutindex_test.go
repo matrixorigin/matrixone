@@ -181,13 +181,13 @@ func TestGetDuplicatedRowsWindow(t *testing.T) {
 			defer mpool.DeleteMPool(mp)
 			idx := NewMutIndex(types.T_int32.ToType())
 			defer idx.Close()
-			keys := vector.NewVec(types.T_int32.ToType())
+			keys := vector.NewVec(types.T_int32.ToType(), mp)
 			defer keys.Free(mp)
 			require.NoError(t, vector.AppendFixed(keys, int32(7), false, mp))
 			for _, offset := range tc.offsets {
 				require.NoError(t, idx.BatchUpsert(keys, offset))
 			}
-			rows := vector.NewVec(types.T_Rowid.ToType())
+			rows := vector.NewVec(types.T_Rowid.ToType(), mp)
 			defer rows.Free(mp)
 			require.NoError(t, vector.AppendFixed(rows, types.Rowid{}, true, mp))
 			err := idx.GetDuplicatedRows(context.Background(), keys, index.NewZM(types.T_int32, 0), &types.Blockid{}, rows,
@@ -279,4 +279,41 @@ func TestContainsSkipsIneligibleTombstoneCandidates(t *testing.T) {
 	)
 	require.ErrorIs(t, err, conflictErr)
 	require.False(t, conflicting.IsNull(0))
+}
+
+func TestContainsReturnsTombstoneBitmapCapacityError(t *testing.T) {
+	const capacity = 1 << 20
+	pool, err := mpool.NewMPool(t.Name(), capacity, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(pool)
+
+	objID := types.NewObjectid()
+	blkID := types.NewBlockidWithObjectID(&objID, 0)
+	rowID := types.NewRowid(&blkID, 42)
+	keys := containers.MakeVector(types.T_Rowid.ToType(), pool)
+	defer keys.Close()
+	keys.Append(rowID, false)
+
+	idx := NewMutIndex(types.T_Rowid.ToType())
+	defer idx.Close()
+	require.NoError(t, idx.BatchUpsert(keys.GetDownstreamVector(), 0))
+
+	contains := func(skip func(uint32) error) error {
+		return idx.Contains(t.Context(), keys.GetDownstreamVector(), nil, &blkID, skip, pool)
+	}
+	before := pool.CurrNB()
+	t.Run("under pressure", func(t *testing.T) {
+		filler, err := pool.Alloc(capacity-int(before), true)
+		require.NoError(t, err)
+		defer pool.Free(filler)
+		require.NoError(t, contains(func(uint32) error { return index.ErrNotFound }))
+		require.False(t, keys.IsNull(0))
+		err = contains(func(uint32) error { return nil })
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "%v", err)
+		require.False(t, keys.IsNull(0))
+		require.EqualValues(t, capacity, pool.CurrNB())
+	})
+	require.Equal(t, before, pool.CurrNB())
+	require.NoError(t, contains(func(uint32) error { return nil }))
+	require.True(t, keys.IsNull(0))
 }

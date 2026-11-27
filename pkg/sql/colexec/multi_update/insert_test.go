@@ -107,7 +107,7 @@ func TestInsertRejectsZeroTemporalInStrictMode(t *testing.T) {
 			c.op.RejectZeroTemporal = true
 			c.op.MultiUpdateCtx[0].TableDef.Cols[3].Typ = plan.Type{Id: int32(types.T_date)}
 			for _, bat := range c.inputBatchs {
-				zeroDates := vector.NewVec(types.T_date.ToType())
+				zeroDates := vector.NewVec(types.T_date.ToType(), proc.Mp())
 				for i := 0; i < bat.RowCount(); i++ {
 					require.NoError(t, vector.AppendFixed(zeroDates, types.ZeroDate, false, proc.Mp()))
 				}
@@ -134,7 +134,7 @@ func TestCheckTemporalWriteRejectsTimestampBelowMinimum(t *testing.T) {
 		{name: "zero follows zero temporal policy", value: types.ZeroTimestamp},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(types.T_timestamp.ToType())
+			vec := vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixed(vec, tc.value, false, proc.Mp()))
 			bat := &batch.Batch{Vecs: []*vector.Vector{vec}}
 			bat.SetRowCount(1)
@@ -162,7 +162,7 @@ func TestInsertRejectsTimestampBelowMinimum(t *testing.T) {
 			proc, c := tc.build(t, false, false)
 			c.op.MultiUpdateCtx[0].TableDef.Cols[3].Typ = plan.Type{Id: int32(types.T_timestamp)}
 			for _, bat := range c.inputBatchs {
-				timestamps := vector.NewVec(types.T_timestamp.ToType())
+				timestamps := vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
 				for i := 0; i < bat.RowCount(); i++ {
 					require.NoError(t, vector.AppendFixed(timestamps, types.TimestampMinValue-1, false, proc.Mp()))
 				}
@@ -248,20 +248,16 @@ func prepareTestInsertBatchs(
 		columnC := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil, nil)
 		columnD := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil, nil)
 
-		attrs := []string{"a", "b", "c", "d"}
 		bat := &batch.Batch{
-			Vecs:  []*vector.Vector{columnA, columnB, columnC, columnD},
-			Attrs: attrs,
+			Vecs: []*vector.Vector{columnA, columnB, columnC, columnD},
 		}
 
 		if hasUniqueKey {
 			bat.Vecs = append(bat.Vecs, testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil, nil))
-			bat.Attrs = append(bat.Attrs, "uk_pk")
 		}
 
 		if hasSecondaryKey {
 			bat.Vecs = append(bat.Vecs, testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil, nil))
-			bat.Attrs = append(bat.Attrs, "sk_pk")
 		}
 
 		bat.SetRowCount(bat.Vecs[0].Length())

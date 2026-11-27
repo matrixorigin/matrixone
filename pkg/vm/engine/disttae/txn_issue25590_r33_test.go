@@ -46,6 +46,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -68,7 +69,7 @@ func TestIssue25590RollbackRecyclesUnrecordedReservations(t *testing.T) {
 	admit := func() { issue25590AdmitBoundary(t, txn, ctx) }
 
 	record := func(name string, stats objectio.ObjectStats) error {
-		recBat := colexec.AllocCNS3ResultBat(false)
+		recBat := colexec.AllocCNS3ResultBat(false, mp)
 		defer recBat.Clean(mp)
 		if err := colexec.ExpandObjectStatsToBatch(
 			mp, false, recBat, false, stats); err != nil {
@@ -76,7 +77,7 @@ func TestIssue25590RollbackRecyclesUnrecordedReservations(t *testing.T) {
 		}
 		return txn.WriteFile(
 			INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-			name, recBat, txn.tnStores[0])
+			name, recBat, catalog.ObjectInsertAttrs, txn.tnStores[0])
 	}
 
 	// The PRIOR RECORDED write: a statement before every failed round

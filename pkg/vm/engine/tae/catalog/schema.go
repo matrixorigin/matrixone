@@ -659,66 +659,33 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (s *Schema) ReadFromBatch(
-	bat *containers.Batch,
-	tids []uint64,
-	nullables, isHiddens, clusterbys, autoIncrements []int8,
-	idxes []int32,
-	seqNums []uint16,
-	offset int,
-	checkFn func(currentName string, currentTid uint64) (goNext bool),
-) (next int) {
-	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
-	defer func() {
-		slices.SortStableFunc(s.ColDefs, func(i, j *ColDef) int {
-			return i.Idx - j.Idx
-		})
-	}()
-	for {
-		if offset >= nameVec.Length() {
-			break
-		}
-		name := nameVec.GetDownstreamVector().GetStringAt(offset)
-		id := tids[offset]
-		// every schema has 1 rowid column as last column, if have one, break
-		if !checkFn(name, id) {
-			break
-		}
-		def := new(ColDef)
-		def.Name = bat.GetVectorByName((pkgcatalog.SystemColAttr_Name)).GetDownstreamVector().GetStringAt(offset)
-		// unmarshal before releasing, no need to copy
-		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).GetDownstreamVector().GetBytesAt(offset)
-		types.Decode(data, &def.Type)
-		nullable := nullables[offset]
-		def.NullAbility = !i82bool(nullable)
-		isHidden := isHiddens[offset]
-		def.Hidden = i82bool(isHidden)
-		isClusterBy := clusterbys[offset]
-		def.ClusterBy = i82bool(isClusterBy)
-		if def.ClusterBy {
-			def.SortKey = true
-		}
-		isAutoIncrement := autoIncrements[offset]
-		def.AutoIncrement = i82bool(isAutoIncrement)
-		def.Comment = bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).GetDownstreamVector().GetStringAt(offset)
-		def.OnUpdate = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).GetDownstreamVector().CloneBytesAt(offset)
-		def.Default = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).GetDownstreamVector().CloneBytesAt(offset)
-		def.Idx = int(idxes[offset]) - 1
-		def.SeqNum = seqNums[offset]
-		def.EnumValues = bat.GetVectorByName((pkgcatalog.SystemColAttr_EnumValues)).GetDownstreamVector().GetStringAt(offset)
-		s.NameMap[def.Name] = def.Idx
-		s.ColDefs = append(s.ColDefs, def)
-		if def.Name == PhyAddrColumnName {
-			def.PhyAddr = true
-		}
-		constraint := bat.GetVectorByName(pkgcatalog.SystemColAttr_ConstraintType).GetDownstreamVector().GetStringAt(offset)
-		if constraint == "p" {
-			def.SortKey = true
-			def.Primary = true
-		}
-		offset++
+// readReplayColumn copies a catalog row before the scanner releases its block.
+func (s *Schema) readReplayColumn(bat *containers.Batch, row int) error {
+	def := new(ColDef)
+	def.Name = replayString(bat, pkgcatalog.SystemColAttr_Name, row)
+	if err := types.Decode(replayBytes(bat, pkgcatalog.SystemColAttr_Type, row), &def.Type); err != nil {
+		return err
 	}
-	return offset
+	def.NullAbility = !i82bool(replayFixed[int8](bat, pkgcatalog.SystemColAttr_NullAbility, row))
+	def.Hidden = i82bool(replayFixed[int8](bat, pkgcatalog.SystemColAttr_IsHidden, row))
+	def.ClusterBy = i82bool(replayFixed[int8](bat, pkgcatalog.SystemColAttr_IsClusterBy, row))
+	def.SortKey = def.ClusterBy
+	def.AutoIncrement = i82bool(replayFixed[int8](bat, pkgcatalog.SystemColAttr_IsAutoIncrement, row))
+	def.Comment = replayString(bat, pkgcatalog.SystemColAttr_Comment, row)
+	def.OnUpdate = bytes.Clone(replayBytes(bat, pkgcatalog.SystemColAttr_Update, row))
+	def.Default = bytes.Clone(replayBytes(bat, pkgcatalog.SystemColAttr_DefaultExpr, row))
+	def.GeneratedCol = bytes.Clone(replayBytes(bat, pkgcatalog.SystemColAttr_Generated, row))
+	def.Idx = int(replayFixed[int32](bat, pkgcatalog.SystemColAttr_Num, row)) - 1
+	def.SeqNum = replayFixed[uint16](bat, pkgcatalog.SystemColAttr_Seqnum, row)
+	def.EnumValues = replayString(bat, pkgcatalog.SystemColAttr_EnumValues, row)
+	def.PhyAddr = def.Name == PhyAddrColumnName
+	if replayString(bat, pkgcatalog.SystemColAttr_ConstraintType, row) == "p" {
+		def.SortKey = true
+		def.Primary = true
+	}
+	s.NameMap[def.Name] = def.Idx
+	s.ColDefs = append(s.ColDefs, def)
+	return nil
 }
 
 func (s *Schema) AppendColDef(def *ColDef) (err error) {

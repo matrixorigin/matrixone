@@ -32,12 +32,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -240,6 +241,23 @@ func Test_appendUint64(t *testing.T) {
 	}
 }
 
+func TestCDCBitLiteralPreservesBytes(t *testing.T) {
+	for _, tc := range []struct {
+		width int32
+		value uint64
+		want  string
+	}{
+		{8, 39, "x'27'"},
+		{8, 92, "x'5c'"},
+		{16, 39, "x'0027'"},
+		{64, 0xff005c27000000ff, "x'ff005c27000000ff'"},
+	} {
+		got, err := convertColIntoSql(context.Background(), tc.value, &types.Type{Oid: types.T_bit, Width: tc.width}, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, tc.want, string(got))
+	}
+}
+
 func Test_convertColIntoSql(t *testing.T) {
 	bj, err := bytejson.ParseFromString("{\"a\": 1}")
 	require.Nil(t, err)
@@ -286,7 +304,37 @@ func Test_convertColIntoSql(t *testing.T) {
 		},
 		{
 			args:    args{ctx: context.Background(), data: uint64(1), typ: &types.Type{Oid: types.T_bit, Width: 5}, sqlBuff: []byte{}},
-			want:    []byte{0x27, 0x1, 0x27},
+			want:    []byte("x'01'"),
+			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: uint64(1), typ: &types.Type{Oid: types.T_bit, Width: 0}, sqlBuff: []byte{}},
+			want:    []byte("x'01'"),
+			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: uint64(0x5c), typ: &types.Type{Oid: types.T_bit, Width: 8}, sqlBuff: []byte{}},
+			want:    []byte("x'5c'"),
+			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: uint64(0x27), typ: &types.Type{Oid: types.T_bit, Width: 8}, sqlBuff: []byte{}},
+			want:    []byte("x'27'"),
+			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: uint64(0x5c6e), typ: &types.Type{Oid: types.T_bit, Width: 16}, sqlBuff: []byte{}},
+			want:    []byte("x'5c6e'"),
+			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: uint64(0), typ: &types.Type{Oid: types.T_bit, Width: 16}, sqlBuff: []byte{}},
+			want:    []byte("x'0000'"),
+			wantErr: assert.NoError,
+		},
+		{
+			args:    args{ctx: context.Background(), data: uint64(0x5c27000affffffff), typ: &types.Type{Oid: types.T_bit, Width: 64}, sqlBuff: []byte{}},
+			want:    []byte("x'5c27000affffffff'"),
 			wantErr: assert.NoError,
 		},
 		{
@@ -451,37 +499,12 @@ func Test_convertColIntoSql(t *testing.T) {
 	}
 }
 
-func Test_copyBytes(t *testing.T) {
-	type args struct {
-		src []byte
-	}
-	tests := []struct {
-		name string
-		args args
-		want []byte
-	}{
-		{
-			args: args{src: []byte{}},
-			want: []byte{},
-		},
-		{
-			args: args{src: []byte{'a', 'b', 'c'}},
-			want: []byte{'a', 'b', 'c'},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, commonutil.CloneBytes(tt.args.src), "copyBytes(%v)", tt.args.src)
-		})
-	}
-}
-
 func Test_extractRowFromEveryVector(t *testing.T) {
 	var err error
 	mp := mpool.MustNewZeroNoFixed()
 	defer mpool.DeleteMPool(mp)
 
-	bat := batch.New([]string{"const_null", "const", "normal"})
+	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 3, mp)
 	bat.Vecs[1] = testutil.MakeScalarInt64(1, 3, mp)
 	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
@@ -778,7 +801,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      vector.NewVec(types.T_decimal256.ToType()),
+				vec:      vector.NewVec(types.T_decimal256.ToType(), mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -895,6 +918,101 @@ func Test_makeMysqlConfig(t *testing.T) {
 	assert.Equal(t, 10*time.Minute, cfg.WriteTimeout)
 	assert.True(t, cfg.MultiStatements)
 	assert.True(t, cfg.AllowNativePasswords)
+	// Every physical sink session must establish the literal dialect assumed
+	// by convertColIntoSql.
+	assert.Equal(t, map[string]string{"sql_mode": sinkSessionSQLModeExpr}, cfg.Params)
+}
+
+// convertColIntoSql emits backslash-escaped text literals. They round-trip
+// only in the session dialect makeMysqlConfig establishes; under
+// NO_BACKSLASH_ESCAPES the same SQL is rejected or decodes to other bytes.
+func TestConvertColIntoSqlLiteralRequiresBackslashEscapes(t *testing.T) {
+	ctx := context.Background()
+	text := types.T_varchar.ToType()
+	jsonType := types.T_json.ToType()
+
+	parseLiteral := func(sqlMode, sql string) (string, error) {
+		stmt, err := mysqlparser.ParseOneWithSQLMode(ctx, sql, 1, sqlMode)
+		if err != nil {
+			return "", err
+		}
+		sel, ok := stmt.(*tree.Select)
+		require.True(t, ok)
+		clause, ok := sel.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, clause.Exprs, 1)
+		val, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+		require.True(t, ok)
+		return val.String(), nil
+	}
+
+	type literalCase struct {
+		name  string
+		data  any
+		typ   *types.Type
+		value string
+	}
+	texts := []string{`back\slash`, `a'b`, `path\to\dir 'q' 中文`, `\'`, `trailing\`}
+	cases := make([]literalCase, 0, len(texts)+1)
+	for _, v := range texts {
+		cases = append(cases, literalCase{name: "text " + v, data: []byte(v), typ: &text, value: v})
+	}
+	bj, err := types.ParseStringToByteJson(`{"k": "x\"y\\z'w"}`)
+	require.NoError(t, err)
+	cases = append(cases, literalCase{name: "json", data: bj, typ: &jsonType, value: bj.String()})
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf, err := convertColIntoSql(ctx, tc.data, tc.typ, []byte("SELECT "))
+			require.NoError(t, err)
+
+			got, err := parseLiteral("", string(buf))
+			require.NoError(t, err)
+			require.Equal(t, tc.value, got)
+
+			got, err = parseLiteral("NO_BACKSLASH_ESCAPES", string(buf))
+			require.True(t, err != nil || got != tc.value,
+				"literal unexpectedly round-trips under NO_BACKSLASH_ESCAPES: %s", buf)
+		})
+	}
+}
+
+func TestConvertColIntoSqlBitLiteralIndependentOfSQLMode(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name  string
+		value uint64
+		width int32
+		want  string
+	}{
+		{name: "bit8_backslash", value: 0x5c, width: 8, want: "0x5c"},
+		{name: "bit8_quote", value: 0x27, width: 8, want: "0x27"},
+		{name: "bit16_backslash_n", value: 0x5c6e, width: 16, want: "0x5c6e"},
+		{name: "bit16_zero", value: 0x0000, width: 16, want: "0x0000"},
+		{name: "bit64_mixed", value: 0x5c27000affffffff, width: 64, want: "0x5c27000affffffff"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := types.Type{Oid: types.T_bit, Width: tc.width}
+			buf, err := convertColIntoSql(ctx, tc.value, &typ, []byte("SELECT "))
+			require.NoError(t, err)
+
+			for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES"} {
+				stmt, parseErr := mysqlparser.ParseOneWithSQLMode(ctx, string(buf), 1, mode)
+				require.NoError(t, parseErr, "sql_mode=%q sql=%s", mode, buf)
+				sel, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				clause, ok := sel.Select.(*tree.SelectClause)
+				require.True(t, ok)
+				require.Len(t, clause.Exprs, 1)
+				val, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+				require.True(t, ok)
+				require.Equal(t, tree.P_hexnum, val.ValType)
+				require.Equal(t, tc.want, val.String())
+			}
+		})
+	}
 }
 
 func Test_tryConn(t *testing.T) {
@@ -1127,7 +1245,7 @@ func Test_narrowVectorCdcRoundTrip(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			vec := vector.NewVec(c.typ)
+			vec := vector.NewVec(c.typ, mp)
 			require.NoError(t, vector.AppendBytes(vec, c.payload, false, mp))
 			defer vec.Free(mp)
 

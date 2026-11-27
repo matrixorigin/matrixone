@@ -15,20 +15,18 @@
 package dispatch
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -62,68 +60,30 @@ var (
 	sendToAnyRemote = sendToAnyRemoteFunc
 )
 
-func prepareParamKindRemoteWireEnabled(proc *process.Process) bool {
-	return remoteBatchWireVersion(proc) >= defines.MORPCVersion12
-}
+// dispatchSendPool holds the dispatch operators' send buffers.
+var dispatchSendPool = mpool.MustNew("dispatch_send")
 
-func binaryStringRemoteWireEnabled(proc *process.Process) bool {
-	return remoteBatchWireVersion(proc) >= defines.MORPCVersion18
-}
+// maxRetainedSendBuffer bounds the send buffer an operator keeps between
+// batches; a larger batch's buffer is freed when the next batch is sent.
+const maxRetainedSendBuffer = 64 << 20
 
-func explicitTextRemoteWireEnabled(proc *process.Process) bool {
-	return remoteBatchWireVersion(proc) >= defines.MORPCVersion23
-}
-
-func stringSourceRemoteWireEnabled(proc *process.Process) bool {
-	return remoteBatchWireVersion(proc) >= defines.MORPCVersion37
-}
-
-func remoteBatchWireVersion(proc *process.Process) int64 {
-	if proc == nil {
-		return 0
-	}
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	if rt == nil {
-		return 0
-	}
-	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, ok := value.(int64)
-	if !ok {
-		return 0
-	}
-	return version
-}
-
-// marshalRemoteBatch keeps the stable Batch prefix unchanged and appends the
-// optional transient provenance trailer only after the shared protocol gate is
-// enabled. During a rolling upgrade, source metadata is omitted for an older
-// peer while the already-supported provenance axes remain lossless.
-func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buffer) ([]byte, error) {
+// marshalRemoteBatch encodes a batch in the Batch wire format into buf, off
+// heap, and returns the encoding. The messages sent from it point into buf;
+// that is safe because a server session's ClientSession.Write returns only
+// after the transport has encoded the message or dropped it, so the next
+// batch can reuse the bytes.
+func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *mpool.MessageBuffer) ([]byte, error) {
 	if bat == nil {
 		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
 	}
-	if bat.HasGrouping() && remoteBatchWireVersion(proc) < defines.MORPCVersion87 {
-		return nil, moerr.NewInvalidStateNoCtx(
-			"grouping provenance requires MORPCVersion87 for remote dispatch")
+	if buf.Pool() == nil {
+		*buf = mpool.NewMessageBuffer(dispatchSendPool, maxRetainedSendBuffer)
 	}
-	wireEnabled := prepareParamKindRemoteWireEnabled(proc)
-	if bat.HasBinaryStringMetadata() && !binaryStringRemoteWireEnabled(proc) {
-		return nil, moerr.NewInvalidStateNoCtx(
-			"binary-string provenance requires MORPCVersion18 for remote dispatch")
+	buf.Reset()
+	if err := bat.MarshalBinaryTo(buf); err != nil {
+		return nil, err
 	}
-	if bat.HasExplicitTextStringMetadata() && !explicitTextRemoteWireEnabled(proc) {
-		return nil, moerr.NewInvalidStateNoCtx(
-			"explicit-text provenance requires MORPCVersion23 for remote dispatch")
-	}
-	if bat.HasPrepareParamKindMetadataWithoutStringSources() && !wireEnabled {
-		return nil, moerr.NewInvalidStateNoCtx(
-			"prepared parameter provenance requires MORPCVersion12 for remote dispatch")
-	}
-	if wireEnabled {
-		return bat.MarshalBinaryForPipeline(
-			buf, true, stringSourceRemoteWireEnabled(proc))
-	}
-	return bat.MarshalBinaryWithBuffer(buf, true)
+	return buf.Bytes(), nil
 }
 
 func (ctr *container) removeIdxReceiver(idx int) {
@@ -159,7 +119,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	}
 
 	{ // send to remote regs
-		encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
+		encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.sendBuf)
 		if errEncode != nil {
 			return false, errEncode
 		}
@@ -218,7 +178,7 @@ func sendBatToIndexOutcome(ap *Dispatch, proc *process.Process, bat *batch.Batch
 		if shuffleIndex == batIndex {
 			if bat != nil && !bat.IsEmpty() {
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
+				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.sendBuf)
 				if errEncode != nil {
 					return false, errEncode
 				}
@@ -286,7 +246,7 @@ func sendBatToMultiMatchedRegOutcome(ap *Dispatch, proc *process.Process, bat *b
 		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
+				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.sendBuf)
 				if errEncode != nil {
 					return false, errEncode
 				}
@@ -413,7 +373,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	default:
 	}
 
-	encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
+	encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.sendBuf)
 	if errEncode != nil {
 		return false, errEncode
 	}

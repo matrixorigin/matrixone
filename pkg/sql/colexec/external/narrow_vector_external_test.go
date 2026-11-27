@@ -133,8 +133,8 @@ func narrowArrayGetColData(t *testing.T, oid types.T, width int32, val string) (
 	proc := testutil.NewProcess(t)
 	colType := plan.Type{Id: int32(oid), Width: width}
 
-	bat := batch.New([]string{"v"})
-	bat.Vecs[0] = vector.NewVec(types.New(oid, width, 0))
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.New(oid, width, 0), proc.Mp())
 
 	param := &ExternalParam{
 		ExParamConst: ExParamConst{
@@ -258,10 +258,10 @@ func Test_getColData_NarrowVector(t *testing.T) {
 			require.NoError(t, err)
 
 			colType := plan.Type{Id: int32(nt.oid), Width: types.MaxArrayDimension}
-			bat := batch.New([]string{"v"})
+			bat := batch.NewWithSize(1)
 			// Off-heap: the mpool only enforces its cap on off-heap
 			// allocations, so this is what makes the pool actually refuse.
-			bat.Vecs[0] = vector.NewOffHeapVecWithType(types.New(nt.oid, types.MaxArrayDimension, 0))
+			bat.Vecs[0] = vector.NewVec(types.New(nt.oid, types.MaxArrayDimension, 0), mp)
 			param := &ExternalParam{
 				ExParamConst: ExParamConst{
 					Ctx: context.Background(),

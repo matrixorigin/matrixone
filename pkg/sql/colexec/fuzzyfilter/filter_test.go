@@ -159,7 +159,7 @@ func TestFuzzyAccountedFilterLifetime(t *testing.T) {
 			defer arg.Free(proc, false, nil)
 			arg.N, arg.BuildIdx = 1, 0
 			require.NoError(t, arg.SetAllocationAccount(account))
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, proc.Mp())
 			defer input.Free(proc.Mp())
 			if typ.Oid == types.T_uint32 {
 				require.NoError(t, vector.AppendFixedList(input, []uint32{1, 65537}, nil, proc.Mp()))
@@ -217,7 +217,7 @@ func TestRuntimeFilterContract(t *testing.T) {
 		require.False(t, arg.ctr.runtimeFilterUsable)
 		require.Nil(t, arg.ctr.pass2RuntimeFilter)
 
-		payload := vector.NewVec(payloadType)
+		payload := vector.NewVec(payloadType, proc.Mp())
 		require.NoError(t, vector.AppendFixed(
 			payload, types.Decimal64(1000), false, proc.Mp()))
 		beforeAppend := proc.Mp().CurrNB()
@@ -287,7 +287,7 @@ func TestRuntimeFilterContract(t *testing.T) {
 		require.Equal(t, int32(message.RuntimeFilter_IN), runtimeFilter.Typ)
 		require.NotEmpty(t, runtimeFilter.Data)
 
-		decoded := vector.NewVec(types.T_any.ToType())
+		decoded := vector.NewVec(types.T_any.ToType(), proc.Mp())
 		require.NoError(t, decoded.UnmarshalBinary(runtimeFilter.Data))
 		require.Equal(t, runtimeFilter.Card, int32(decoded.Length()))
 		require.True(t, decoded.GetSorted())
@@ -332,7 +332,7 @@ func TestFuzzyRuntimeFilterCopyFailureFailsOpen(t *testing.T) {
 	prepareFuzzyFilter(t, arg, proc)
 
 	sourceMP := mpool.MustNewZero()
-	payload := vector.NewVec(typ)
+	payload := vector.NewVec(typ, sourceMP)
 	require.NoError(t, vector.AppendBytes(
 		payload, []byte("one-key"), false, sourceMP))
 	filler, err := limited.Alloc(
@@ -394,11 +394,11 @@ func TestFuzzyRuntimeFilterClosureFailureFailsOpen(t *testing.T) {
 	arg.RuntimeFilterSpec = spec
 	prepareFuzzyFilter(t, arg, proc)
 	require.NoError(t, vector.AppendFixed(
-		arg.ctr.pass2RuntimeFilter, float64(0), false, limited))
+		arg.ctr.pass2RuntimeFilter, float64(0), false, arg.ctr.pass2MP))
 	for arg.ctr.pass2RuntimeFilter.Length() <
 		arg.ctr.pass2RuntimeFilter.Capacity() {
 		require.NoError(t, vector.AppendFixed(
-			arg.ctr.pass2RuntimeFilter, float64(1), false, limited))
+			arg.ctr.pass2RuntimeFilter, float64(1), false, arg.ctr.pass2MP))
 	}
 	filler, err := limited.Alloc(
 		int(limited.Cap()-limited.CurrNB()), true)
@@ -446,7 +446,7 @@ func TestFuzzyRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			require.NoError(t, arg.SetAllocationAccount(account))
 			prepareFuzzyFilter(t, arg, proc)
 			require.NoError(t, vector.AppendFixed(
-				arg.ctr.pass2RuntimeFilter, int32(1), false, proc.Mp()))
+				arg.ctr.pass2RuntimeFilter, int32(1), false, arg.ctr.pass2MP))
 
 			var filler []byte
 			if test.closed {
@@ -696,6 +696,5 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) []*batch.Batch
 	bat := testutil.NewBatch(ts, false, int(rows), proc.Mp())
 	pkAttr := make([]string, 1)
 	pkAttr[0] = "pkCol"
-	bat.SetAttributes(pkAttr)
 	return []*batch.Batch{bat, nil}
 }

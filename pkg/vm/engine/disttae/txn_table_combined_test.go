@@ -140,12 +140,12 @@ func TestCombinedTxnTable_CollectChanges(t *testing.T) {
 		types.TS{},
 		types.TS{},
 		false,
-		&mpool.MPool{},
+		mpool.MustNewZero(),
 	)
 	assert.NoError(t, err)
 	assert.NotNil(t, handle)
 
-	data, tombstone, hint, err := handle.Next(context.Background(), &mpool.MPool{})
+	data, tombstone, hint, err := handle.Next(context.Background(), mpool.MustNewZero())
 	assert.NoError(t, err)
 	assert.Nil(t, data)
 	assert.Nil(t, tombstone)
@@ -355,7 +355,7 @@ func TestCombinedChangesHandle_NextCloseErrorClosesRemainingHandles(t *testing.T
 	second := &mockChangesHandle{}
 	handle := &combinedChangesHandle{handles: []engine.ChangesHandle{first, second}}
 
-	data, tombstone, _, err := handle.Next(context.Background(), &mpool.MPool{})
+	data, tombstone, _, err := handle.Next(context.Background(), mpool.MustNewZero())
 	assert.ErrorIs(t, err, errFirst)
 	assert.Nil(t, data)
 	assert.Nil(t, tombstone)
@@ -858,7 +858,7 @@ func TestCombinedTxnTable_Write(t *testing.T) {
 	table := newMockCombinedTxnTable()
 
 	assert.PanicsWithValue(t, "BUG: cannot write data to partition primary table", func() {
-		table.Write(context.Background(), &batch.Batch{})
+		table.Write(context.Background(), &batch.Batch{}, nil)
 	})
 }
 
@@ -866,7 +866,7 @@ func TestCombinedTxnTable_Delete(t *testing.T) {
 	table := newMockCombinedTxnTable()
 
 	assert.PanicsWithValue(t, "BUG: cannot delete data to partition primary table", func() {
-		table.Delete(context.Background(), &batch.Batch{}, "")
+		table.Delete(context.Background(), &batch.Batch{}, nil, "")
 	})
 }
 
@@ -2086,9 +2086,8 @@ func newChangesTestBatch(t testing.TB, mp *mpool.MPool, values []int64, timestam
 	t.Helper()
 	require.Len(t, values, len(timestamps))
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{"value", "commit_ts"}
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	for i, value := range values {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], timestamps[i], false, mp))
@@ -2271,6 +2270,10 @@ func (m *mockRelation) CollectObjectList(ctx context.Context, from, to types.TS,
 	return nil
 }
 
+func (m *mockRelation) VisibleObjectCount(ctx context.Context) (int, error) {
+	return 0, nil
+}
+
 func (m *mockRelation) ApproxObjectsNum(ctx context.Context) int {
 	if m.approxObjectsNumFunc != nil {
 		return m.approxObjectsNumFunc(ctx)
@@ -2353,11 +2356,11 @@ func (m *mockRelation) PrimaryKeysMayBeModified(ctx context.Context, from types.
 	return false, nil
 }
 
-func (m *mockRelation) Write(ctx context.Context, bat *batch.Batch) error {
+func (m *mockRelation) Write(ctx context.Context, bat *batch.Batch, attrs []string) error {
 	return nil
 }
 
-func (m *mockRelation) Delete(ctx context.Context, bat *batch.Batch, s string) error {
+func (m *mockRelation) Delete(ctx context.Context, bat *batch.Batch, attrs []string, s string) error {
 	return nil
 }
 

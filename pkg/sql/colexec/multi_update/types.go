@@ -16,6 +16,7 @@ package multi_update
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -131,14 +132,18 @@ type MultiUpdate struct {
 }
 
 type updateCtxInfo struct {
-	Source       engine.Relation
-	tableType    UpdateTableType
-	insertAttrs  []string
+	Source    engine.Relation
+	tableType UpdateTableType
+	// writeAttrs names the columns of the batches written to Source.
+	writeAttrs   []string
 	isContiguous bool
 	refBatch     *batch.Batch
 }
 
 type container struct {
+	// ignoreFills hold, per update context, the vectors and the view of the
+	// INSERT IGNORE NOT NULL fill of the main-table leg.
+	ignoreFills  []colexec.IgnoreFill
 	state        vm.CtrState
 	affectedRows uint64
 	// s3AffectedRows is pending semantic metadata. UpdateWriteS3 owns it only
@@ -244,8 +249,20 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 	update.ctr.state = vm.Build
 }
 
+// ignoreFill returns the IGNORE NOT NULL fill of update context i.
+func (ctr *container) ignoreFill(i int) *colexec.IgnoreFill {
+	for len(ctr.ignoreFills) <= i {
+		ctr.ignoreFills = append(ctr.ignoreFills, colexec.IgnoreFill{})
+	}
+	return &ctr.ignoreFills[i]
+}
+
 func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err error) {
 	mp := proc.GetMPool()
+	for i := range update.ctr.ignoreFills {
+		update.ctr.ignoreFills[i].Free()
+	}
+	update.ctr.ignoreFills = nil
 	for _, buf := range update.ctr.insertBuf {
 		if buf != nil {
 			buf.Clean(mp)

@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -204,18 +205,22 @@ func (b *msgBuf) preRecv() (int, error) {
 // mechanism.
 // The first return value is true if the command is handled, means it does not need
 // to be sent through tunnel anymore; false otherwise.
-// The second return value is true means that the transfer happened.
-func (b *msgBuf) consumeClient(msg []byte) bool {
+func (b *msgBuf) consumeClient(ctx context.Context, msg []byte) (bool, error) {
 	if b.reqC == nil {
-		return false
+		return false, nil
 	}
 	e, r := makeEvent(msg, b)
 	if e == nil {
-		return false
+		return false, nil
 	}
 
-	// send this event to the request channel.
-	sendReq(e, b.reqC)
+	// Once delivered, the event handler owns the acknowledgement. Before
+	// delivery, cancellation must release a sender whose handler has stopped.
+	select {
+	case b.reqC <- e:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 
 	// after send, wait the event finished.
 	e.wait()
@@ -223,7 +228,7 @@ func (b *msgBuf) consumeClient(msg []byte) bool {
 	// We cannot write to b.src directly here. The response has
 	// to go to the server conn buf, and lock writeMu then
 	// write to client.
-	return r
+	return r, nil
 }
 
 func (b *msgBuf) debugLogs(data []byte, dataLeft int) {
@@ -252,7 +257,7 @@ func (b *msgBuf) flushBufDst() error {
 
 // sendTo sends the data in buffer to destination. handled is true when the
 // complete client command was consumed by the proxy event path instead.
-func (b *msgBuf) sendTo(dst io.Writer) (handled bool, err error) {
+func (b *msgBuf) sendTo(ctx context.Context, dst io.Writer) (handled bool, err error) {
 	l, err := b.preRecv()
 	if err != nil {
 		return false, err
@@ -289,7 +294,10 @@ func (b *msgBuf) sendTo(dst io.Writer) (handled bool, err error) {
 	b.debugLogs(b.buf[readPos:writePos], dataLeft)
 
 	if dataLeft == 0 && b.name == connClientName {
-		handled = b.consumeClient(b.buf[readPos:writePos])
+		handled, err = b.consumeClient(ctx, b.buf[readPos:writePos])
+		if err != nil {
+			return false, err
+		}
 		// means the query has been handled
 		if handled {
 			return true, nil

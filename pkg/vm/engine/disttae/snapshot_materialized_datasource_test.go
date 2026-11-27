@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -147,10 +146,10 @@ func newTestMaterializedSnapshotPartitionState(
 	t.Helper()
 
 	pState := logtailreplay.NewPartitionState("", false, 42, false)
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	idVec := vector.NewVec(types.T_int64.ToType())
-	payloadVec := vector.NewVec(types.T_int64.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
+	payloadVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer rowIDVec.Free(mp)
 	defer tsVec.Free(mp)
 	defer idVec.Free(mp)
@@ -165,15 +164,7 @@ func newTestMaterializedSnapshotPartitionState(
 
 	packer := types.NewPacker()
 	defer packer.Close()
-	pState.HandleRowsInsert(context.Background(), &api.Batch{
-		Attrs: []string{"rowid", "time", "id", "payload"},
-		Vecs: []api.Vector{
-			mustVectorToProtoForMaterializedSnapshotTest(t, rowIDVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, tsVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, idVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, payloadVec),
-		},
-	}, 0, packer, mp)
+	pState.HandleRowsInsert(context.Background(), mustMarshalVectors(rowIDVec, tsVec, idVec, payloadVec), []string{"rowid", "time", "id", "payload"}, 0, packer, mp)
 
 	return pState
 }
@@ -191,9 +182,8 @@ func collectMaterializedSnapshotInt64Column(
 	defer source.Close()
 
 	out := batch.NewWithSize(len(attrs))
-	out.SetAttributes(attrs)
 	for i := range attrs {
-		out.Vecs[i] = vector.NewVec(colTypes[i])
+		out.Vecs[i] = vector.NewVec(colTypes[i], mp)
 	}
 	defer out.Clean(mp)
 
@@ -223,13 +213,6 @@ func buildTestMaterializedSnapshotRowID(t *testing.T, rowIdx uint32) types.Rowid
 	require.NoError(t, err)
 	blkID := objectio.NewBlockid(&uid, 0, 1)
 	return types.NewRowid(blkID, rowIdx)
-}
-
-func mustVectorToProtoForMaterializedSnapshotTest(t *testing.T, vec *vector.Vector) api.Vector {
-	t.Helper()
-	ret, err := vector.VectorToProtoVector(vec)
-	require.NoError(t, err)
-	return ret
 }
 
 type recordingTombstoner struct {

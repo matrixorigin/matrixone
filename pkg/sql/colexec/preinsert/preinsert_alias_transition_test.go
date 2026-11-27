@@ -45,7 +45,7 @@ func TestPreInsertAliasSlotOwnershipTransition(t *testing.T) {
 	defer proc.Free()
 
 	buildVec := func(vals []int64) *vector.Vector {
-		v := vector.NewVec(types.T_int64.ToType())
+		v := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(v, vals, nil, proc.Mp()))
 		return v
 	}
@@ -53,20 +53,20 @@ func TestPreInsertAliasSlotOwnershipTransition(t *testing.T) {
 	// batch 1: distinct vectors; every output slot borrows its child vector.
 	aVec := buildVec([]int64{10, 7})
 	bVec := buildVec([]int64{4, 5})
-	bat1 := batch.New([]string{"a", "b"})
+	bat1 := batch.NewWithSize(2)
 	bat1.Vecs = []*vector.Vector{aVec, bVec}
 	bat1.SetRowCount(2)
 
 	// batch 2: the prior child vector comes back shared by both
 	// destinations, so slot 1 - borrowed by batch 1 - becomes owned now.
-	bat2 := batch.New([]string{"a", "b"})
+	bat2 := batch.NewWithSize(2)
 	bat2.Vecs = []*vector.Vector{bVec, bVec}
 	bat2.SetRowCount(2)
 
 	// batch 3: a fresh shared vector keeps the transitioned slot working
 	// through the regular owned-reuse path.
 	cVec := buildVec([]int64{8, 9})
-	bat3 := batch.New([]string{"a", "b"})
+	bat3 := batch.NewWithSize(2)
 	bat3.Vecs = []*vector.Vector{cVec, cVec}
 	bat3.SetRowCount(2)
 
@@ -182,7 +182,7 @@ func TestPreInsertAliasConversionFailurePreservesBorrowedSlots(t *testing.T) {
 	}()
 
 	buildVec := func(vals []int64) *vector.Vector {
-		v := vector.NewVec(types.T_int64.ToType())
+		v := vector.NewVec(types.T_int64.ToType(), childMp)
 		require.NoError(t, vector.AppendFixedList(v, vals, nil, childMp))
 		childVecs = append(childVecs, v)
 		return v
@@ -191,7 +191,7 @@ func TestPreInsertAliasConversionFailurePreservesBorrowedSlots(t *testing.T) {
 	// batch 1: five distinct borrowed vectors; every slot borrows its child
 	// vector, nothing is marked, nothing is allocated.
 	borrowed := make([]*vector.Vector, 0, 5)
-	bat1 := batch.New([]string{"a", "b", "c", "d", "e"})
+	bat1 := batch.NewWithSize(5)
 	for i := range 5 {
 		v := buildVec([]int64{int64(10*(i+1) + 1), int64(10*(i+1) + 2)})
 		borrowed = append(borrowed, v)
@@ -213,7 +213,7 @@ func TestPreInsertAliasConversionFailurePreservesBorrowedSlots(t *testing.T) {
 	}
 	pVec := buildVec(pVals)
 	sVec := buildVec(sVals)
-	bat2 := batch.New([]string{"a", "b", "c", "d", "e"})
+	bat2 := batch.NewWithSize(5)
 	bat2.Vecs = []*vector.Vector{pVec, pVec, sVec, sVec, sVec}
 	bat2.SetRowCount(bigRows)
 

@@ -66,32 +66,6 @@ var _ engine.StatsRefresher = new(Engine)
 var _ engine.StatsRefresherWithOptions = new(Engine)
 var _ engine.LogtailReadBarrier = new(Engine)
 
-const (
-	workspaceRSSCacheFamilyEvictTimeout   = 10 * time.Second
-	workspaceRSSCacheAdmissionPressureTTL = 2 * time.Minute
-	workspaceRSSCachePressureTargetOwner  = "workspace-rss"
-)
-
-func makeWorkspaceRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
-	return func(ctx context.Context, targetPercent int64) {
-		memoryCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseWorkspaceRSSCacheEvict)
-		defer cancel()
-		fileservice.EvictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
-	}
-}
-
-func setWorkspaceRSSCachePressureTarget(targetPercent int64) {
-	fileservice.SetMemoryCachePressureTargetPercentByOwner(
-		workspaceRSSCachePressureTargetOwner,
-		targetPercent,
-		time.Now().Add(workspaceRSSCacheAdmissionPressureTTL),
-	)
-}
-
-func clearWorkspaceRSSCachePressureTarget() {
-	fileservice.ClearMemoryCachePressureTargetByOwner(workspaceRSSCachePressureTargetOwner)
-}
-
 func New(
 	ctx context.Context,
 	service string,
@@ -189,15 +163,9 @@ func New(
 	}
 
 	if e.config.memThrottler == nil {
+		e.rssPressure = rscthrottler.NewRSSPressureSource()
 		throttlerOptions := []rscthrottler.MemThrottlerOption{
-			rscthrottler.WithRSSScavenging(),
-			rscthrottler.WithRSSCachePressureTarget(
-				setWorkspaceRSSCachePressureTarget,
-				clearWorkspaceRSSCachePressureTarget,
-			),
-			rscthrottler.WithRSSCacheEvictor(
-				makeWorkspaceRSSCacheEvictor(workspaceRSSCacheFamilyEvictTimeout),
-			),
+			rscthrottler.WithRSSPressureSource(e.rssPressure),
 		}
 		if e.config.quota.Load() != 0 {
 			throttlerOptions = append(
@@ -265,6 +233,7 @@ func (e *Engine) snapshotShutdownObligations() (
 
 func (e *Engine) Close() error {
 	e.closeOnce.Do(func() {
+		e.rssPressure.Close()
 		// Linearize statistics admission before waiting on any engine-owned
 		// resource. A callback must not start work after engine teardown begins.
 		e.dynamicCtx.closed.Store(true)
@@ -536,11 +505,12 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	// WriteBatch copies the rows into the workspace; the batch stays ours.
+	defer bat.Clean(txn.proc.Mp())
 	// non-io operations do not need to pass context
 	note := noteForCreate(uint64(accountId), name)
 	if _, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0]); err != nil {
-		bat.Clean(txn.proc.Mp())
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, catalog.MoDatabaseSchema, txn.tnStores[0]); err != nil {
 		return err
 	}
 
@@ -979,17 +949,17 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	// WriteBatch copies the rows into the workspace; the batch stays ours.
+	defer bat.Clean(txn.proc.Mp())
 
-	bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID)
+	bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.proc.Mp())
 	if err != nil {
-		bat.Clean(txn.proc.Mp())
 		return err
 	}
 	if bat.RowCount() > 0 {
 		note := noteForDrop(uint64(accountId), name)
 		if _, err := txn.WriteBatch(DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-			catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0]); err != nil {
-			bat.Clean(txn.proc.Mp())
+			catalog.MO_CATALOG, catalog.MO_DATABASE, bat, catalog.DropDatabaseTupleAttrs, txn.tnStores[0]); err != nil {
 			return err
 		}
 	}

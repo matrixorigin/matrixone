@@ -169,7 +169,7 @@ func (c *DMLMergeCoordinator) AppendWithProcess(proc *process.Process, bat *batc
 		if err := c.budget.reserve(ctx, retainedBytes); err != nil {
 			return err
 		}
-		cloned, err := updateBatch.CloneSelectedColumns(replacementCols, append([]string(nil), c.replacementAttrs...), proc.Mp())
+		cloned, err := updateBatch.CloneSelectedColumns(replacementCols, proc.Mp())
 		if err != nil {
 			c.budget.release(retainedBytes)
 			return api.ToMOErr(ctx, api.WrapError(api.ErrInternal, "Iceberg DML merge coordinator failed to clone matched update rows", nil, err))
@@ -187,7 +187,7 @@ func (c *DMLMergeCoordinator) AppendWithProcess(proc *process.Process, bat *batc
 		if err := c.budget.reserve(ctx, retainedBytes); err != nil {
 			return err
 		}
-		cloned, err := insertBatch.CloneSelectedColumns(replacementCols, append([]string(nil), c.replacementAttrs...), proc.Mp())
+		cloned, err := insertBatch.CloneSelectedColumns(replacementCols, proc.Mp())
 		if err != nil {
 			c.budget.release(retainedBytes)
 			return api.ToMOErr(ctx, api.WrapError(api.ErrInternal, "Iceberg DML merge coordinator failed to clone unmatched insert rows", nil, err))
@@ -324,21 +324,21 @@ func (c *DMLMergeCoordinator) splitMergeActionBatch(ctx context.Context, bat *ba
 		switch normalizeMergeAction(action) {
 		case api.DMLMergeActionDelete:
 			if deleteBatch == nil {
-				deleteBatch = emptyBatchLike(bat)
+				deleteBatch = emptyBatchLike(bat, mp)
 			}
 			if err := deleteBatch.UnionOne(bat, int64(row), mp); err != nil {
 				return nil, nil, nil, api.ToMOErr(ctx, api.WrapError(api.ErrInternal, "Iceberg DML merge coordinator failed to copy delete row", nil, err))
 			}
 		case api.DMLMergeActionUpdate:
 			if updateBatch == nil {
-				updateBatch = emptyBatchLike(bat)
+				updateBatch = emptyBatchLike(bat, mp)
 			}
 			if err := updateBatch.UnionOne(bat, int64(row), mp); err != nil {
 				return nil, nil, nil, api.ToMOErr(ctx, api.WrapError(api.ErrInternal, "Iceberg DML merge coordinator failed to copy update row", nil, err))
 			}
 		case api.DMLMergeActionInsert:
 			if insertBatch == nil {
-				insertBatch = emptyBatchLike(bat)
+				insertBatch = emptyBatchLike(bat, mp)
 			}
 			if err := insertBatch.UnionOne(bat, int64(row), mp); err != nil {
 				return nil, nil, nil, api.ToMOErr(ctx, api.WrapError(api.ErrInternal, "Iceberg DML merge coordinator failed to copy insert row", nil, err))
@@ -369,17 +369,16 @@ func normalizeMergeAction(action string) string {
 	}
 }
 
-func emptyBatchLike(src *batch.Batch) *batch.Batch {
+func emptyBatchLike(src *batch.Batch, mp *mpool.MPool) *batch.Batch {
 	if src == nil {
 		return nil
 	}
 	out := batch.NewWithSize(len(src.Vecs))
-	out.Attrs = append([]string(nil), src.Attrs...)
 	for idx, vec := range src.Vecs {
 		if vec == nil {
 			continue
 		}
-		out.Vecs[idx] = vector.NewVec(*vec.GetType())
+		out.Vecs[idx] = vector.NewVec(*vec.GetType(), mp)
 	}
 	return out
 }

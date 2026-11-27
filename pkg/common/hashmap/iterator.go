@@ -52,27 +52,6 @@ func validateIteratorVectors(
 	return nil
 }
 
-func hasGroupingInRange(vecs []*vector.Vector, start, count int) bool {
-	end := uint64(start + count)
-	for _, vec := range vecs {
-		if vec != nil && vec.GetGrouping().GetBitmap().CountRange(
-			uint64(start), end,
-		) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func rowHasGrouping(vecs []*vector.Vector, row int) bool {
-	for _, vec := range vecs {
-		if vec.GetGrouping().Contains(uint64(row)) {
-			return true
-		}
-	}
-	return false
-}
-
 func rowHasNull(vecs []*vector.Vector, row int) bool {
 	for _, vec := range vecs {
 		if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
@@ -106,26 +85,15 @@ func markNonMatchingNaNs(
 			oid != types.T_array_bf16 && oid != types.T_array_float16 {
 			continue
 		}
-		if vec.IsDictionary() {
-			if oid == types.T_float32 {
-				marked = markDictionaryFloatNaNs[float32](vec, start, count, zValues, nonMatching) || marked
-				continue
-			}
-			if oid == types.T_float64 {
-				marked = markDictionaryFloatNaNs[float64](vec, start, count, zValues, nonMatching) || marked
-				continue
-			}
-		}
 
 		nulls := vec.GetNulls()
-		grouping := vec.GetGrouping()
 		isConst := vec.IsConst()
 		switch oid {
 		case types.T_float32:
 			values := vector.MustFixedColNoTypeCheck[float32](vec)
 			for i := 0; i < count; i++ {
 				row := start + i
-				if nulls.Contains(uint64(row)) || grouping.Contains(uint64(row)) {
+				if nulls.Contains(uint64(row)) {
 					continue
 				}
 				valueRow := row
@@ -142,7 +110,7 @@ func markNonMatchingNaNs(
 			values := vector.MustFixedColNoTypeCheck[float64](vec)
 			for i := 0; i < count; i++ {
 				row := start + i
-				if nulls.Contains(uint64(row)) || grouping.Contains(uint64(row)) {
+				if nulls.Contains(uint64(row)) {
 					continue
 				}
 				valueRow := row
@@ -159,7 +127,7 @@ func markNonMatchingNaNs(
 			types.T_array_bf16, types.T_array_float16:
 			for i := 0; i < count; i++ {
 				row := start + i
-				if nulls.Contains(uint64(row)) || grouping.Contains(uint64(row)) {
+				if nulls.Contains(uint64(row)) {
 					continue
 				}
 				valueRow := row
@@ -414,15 +382,6 @@ func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 		finishNonMatchingKeys(
 			vecs, start, itr.values[:count], itr.zValues[:count], itr.nonMatching,
 		)
-	}
-	if !itr.mp.hasNull && !itr.mp.groupingAware &&
-		hasGroupingInRange(vecs, start, count) {
-		for i := 0; i < count; i++ {
-			if rowHasGrouping(vecs, start+i) {
-				itr.values[i] = 0
-				itr.zValues[i] = 0
-			}
-		}
 	}
 	return itr.values[:count], itr.zValues[:count], nil
 }
@@ -766,14 +725,6 @@ func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 			vecs, start, itr.values[:count], itr.zValues[:count], itr.nonMatching,
 		)
 	}
-	if hasGroupingInRange(vecs, start, count) {
-		for i := 0; i < count; i++ {
-			if rowHasGrouping(vecs, start+i) {
-				itr.values[i] = 0
-				itr.zValues[i] = 0
-			}
-		}
-	}
 	return itr.values[:count], itr.zValues[:count], nil
 }
 
@@ -1109,38 +1060,4 @@ func updateHashTableRows(rows *uint64, hasNull bool, vs []uint64, zvs []int64) {
 		}
 	}
 	*rows = groupCount
-}
-
-func markDictionaryFloatNaNs[T ~float32 | ~float64](vec *vector.Vector, start, count int, zValues []int64, nonMatching []bool) bool {
-	view := vector.ResolveFixedReadView[T](vec)
-	marked := false
-	for i := 0; i < count; i++ {
-		row := start + i
-		if view.AllNull || view.Nulls.Contains(uint64(row)) || vec.GetGrouping().Contains(uint64(row)) {
-			continue
-		}
-		physical := int(view.Selection[row])
-		if view.Constant {
-			physical = 0
-		}
-		if math.IsNaN(float64(view.Values[physical])) {
-			nonMatching[i] = true
-			zValues[i] = 0
-			marked = true
-		}
-	}
-	return marked
-}
-
-// The caller has already excluded logical NULL/grouping rows.
-func dictionaryFixedBytes(view vector.FixedBytesReadView, row int) []byte {
-	physical := row
-	if view.Selection != nil {
-		physical = int(view.Selection[row])
-	}
-	if view.Constant {
-		physical = 0
-	}
-	offset := physical * view.Width
-	return view.Values[offset : offset+view.Width]
 }

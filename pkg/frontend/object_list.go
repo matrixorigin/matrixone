@@ -194,9 +194,10 @@ func handleObjectList(
 	defer resultBatch.Clean(mp)
 
 	// Build columns from result batch (which already includes dbname and tablename)
-	if resultBatch != nil && resultBatch.Attrs != nil {
-		for i := 0; i < len(resultBatch.Attrs); i++ {
-			attr := resultBatch.Attrs[i]
+	// The result batch's columns are logtailreplay.ObjectListAttrs.
+	if resultBatch != nil {
+		for i := 0; i < len(resultBatch.Vecs); i++ {
+			attr := logtailreplay.ObjectListAttrs[i]
 			col := new(MysqlColumn)
 			// Map dbname/tablename to "db name"/"table name" for display
 			if attr == "dbname" {
@@ -435,7 +436,7 @@ func GetObjectListWithoutSession(
 	}
 
 	// Create object list batch
-	bat := logtailreplay.CreateObjectListBatch()
+	bat := logtailreplay.CreateObjectListBatch(mp)
 
 	// If dbname is specified, collect for that specific database
 	if len(dbname) > 0 {
@@ -595,9 +596,10 @@ func handleInternalObjectList(ses FeSession, execCtx *ExecCtx, ic *InternalCmdOb
 	defer resultBatch.Clean(mp)
 
 	// Step 4: Build columns from result batch
-	if resultBatch != nil && resultBatch.Attrs != nil {
-		for i := 0; i < len(resultBatch.Attrs); i++ {
-			attr := resultBatch.Attrs[i]
+	// The result batch's columns are logtailreplay.ObjectListAttrs.
+	if resultBatch != nil {
+		for i := 0; i < len(resultBatch.Vecs); i++ {
+			attr := logtailreplay.ObjectListAttrs[i]
 			col := new(MysqlColumn)
 			if attr == "dbname" {
 				col.SetName("db name")

@@ -52,7 +52,7 @@ type Source struct {
 	memoryBatchLimit   int
 	spillFile          *os.File
 	spillConfig        SpillConfig
-	allocation         *vector.AllocationAccountSelection
+	allocation         *mpool.MPool
 	spillDisk          GrowingReservation
 	spillFD            Reservation
 	spillStartPosition int
@@ -81,7 +81,7 @@ const sharedMaterializedSourceMaxInMemoryBatches = 4096
 const spillBatchHeaderSize = int64(8)
 
 const (
-	spillPayloadGrouping byte = iota
+	spillPayloadBatch byte = iota
 	spillPayloadSelectedRange
 )
 
@@ -131,8 +131,8 @@ type SpillConfig struct {
 const (
 	cteAllocationSiteData mpool.AllocationSite = iota + 1
 	cteAllocationSiteArea
-	cteAllocationSiteNulls
-	cteAllocationSiteGrouping
+	_ // reserved: was cteAllocationSiteNulls
+	_ // reserved: was cteAllocationSiteGrouping
 )
 
 // CTESinkOption marks a planner-approved bounded multi-consumer CTE source.
@@ -188,18 +188,20 @@ func (s *Source) Begin(mp *mpool.MPool, spillConfig ...SpillConfig) error {
 			)
 		}
 		owner := s.spillConfig.AllocationOwner
-		sites := [4]mpool.AllocationSite{cteAllocationSiteData, cteAllocationSiteArea, cteAllocationSiteNulls, cteAllocationSiteGrouping}
+		sites := [2]mpool.AllocationSite{cteAllocationSiteData, cteAllocationSiteArea}
 		switch owner {
 		case 0, mpool.AllocationOwnerCTE:
 			owner = mpool.AllocationOwnerCTE
 		case mpool.AllocationOwnerTop:
-			sites = [4]mpool.AllocationSite{topsites.AdaptiveTopRetainedData, topsites.AdaptiveTopRetainedArea, topsites.AdaptiveTopRetainedNulls, topsites.AdaptiveTopRetainedGrouping}
+			sites = [2]mpool.AllocationSite{topsites.AdaptiveTopRetainedData, topsites.AdaptiveTopRetainedArea}
 		default:
 			return mpool.ErrAllocationAccountInvalid
 		}
-		allocation, err := vector.NewAllocationAccountSelection(
+		// A view charges one site: the retained data site. The area site of
+		// the former selection has no separate charge.
+		allocation, err := mp.WithAccount(
 			s.spillConfig.AllocationAccount, owner,
-			sites[0], sites[1], sites[2], sites[3],
+			sites[0], mpool.AllocationCapacityClassDefault,
 		)
 		if err != nil {
 			return err
@@ -238,7 +240,7 @@ func (s *Source) AppendWithStats(bat *batch.Batch) (stats AppendStats, err error
 	if s == nil || bat == nil {
 		return stats, nil
 	}
-	if len(bat.ExtraBuf) != 0 {
+	if len(bat.ExtraBuf()) != 0 {
 		return stats, moerr.NewInternalErrorNoCtx(
 			"materialized sink source requires finalized positional batches",
 		)
@@ -269,6 +271,10 @@ func (s *Source) AppendWithStats(bat *batch.Batch) (stats AppendStats, err error
 	s.mu.Unlock()
 
 	cloned, err := cloneMaterializedBatch(bat, mp, allocation)
+	clonedMP := allocation
+	if clonedMP == nil {
+		clonedMP = mp
+	}
 	if err != nil {
 		s.mu.Lock()
 		if s.generation == generation && s.active {
@@ -285,11 +291,6 @@ func (s *Source) AppendWithStats(bat *batch.Batch) (stats AppendStats, err error
 		return stats, err
 	}
 	actual := int64(max(cloned.Size(), cloned.Allocated()))
-	// SINK_SCAN binds vectors by position. Attribute names are neither observed
-	// nor part of the planner's storage estimate, so do not retain a second,
-	// batch-cardinality-dependent copy of them.
-	cloned.Attrs = nil
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.generation != generation || !s.active || s.done {
@@ -297,7 +298,7 @@ func (s *Source) AppendWithStats(bat *batch.Batch) (stats AppendStats, err error
 			s.bytes -= reserved
 		}
 		stats.RetainedBytes = s.bytes
-		cloned.Clean(mp)
+		cloned.Clean(clonedMP)
 		if s.generation == generation && s.err != nil {
 			return stats, s.err
 		}
@@ -305,7 +306,7 @@ func (s *Source) AppendWithStats(bat *batch.Batch) (stats AppendStats, err error
 	}
 	if actual > reserved && (actual-reserved > s.memoryLimit || s.bytes > s.memoryLimit-(actual-reserved)) {
 		s.bytes -= reserved
-		cloned.Clean(mp)
+		cloned.Clean(clonedMP)
 		stats.SpilledBytes, err = s.appendSpilledLocked(bat)
 		if err != nil {
 			s.failLocked(err)
@@ -324,6 +325,17 @@ func (s *Source) AppendWithStats(bat *batch.Batch) (stats AppendStats, err error
 
 // Next returns a batch owned by the caller, or end=true after the producer
 // finishes. Every successful caller must clean the returned batch exactly once.
+// ReaderMP is the pool of the batches Next returns; the reader cleans them
+// with it.
+func (s *Source) ReaderMP() *mpool.MPool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.allocation != nil {
+		return s.allocation
+	}
+	return s.mp
+}
+
 func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.Batch, end bool, err error) {
 	if s == nil {
 		return nil, true, moerr.NewInternalErrorNoCtx("nil materialized sink source")
@@ -368,7 +380,7 @@ func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.B
 			}
 			if s.generation != generation || !s.active || s.readerReleased[readerID] {
 				s.mu.Unlock()
-				decoded.Clean(mp)
+				decoded.Clean(allocation)
 				return nil, true, moerr.NewInternalErrorNoCtx("materialized sink source stopped while reading spill data")
 			}
 			s.spillReadOffsets[readerID] = nextOffset
@@ -393,16 +405,14 @@ func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.B
 }
 
 func (s *Source) appendSpilledLocked(bat *batch.Batch) (int64, error) {
-	positional := *bat
-	positional.Attrs = nil
-	serializedBytes, scratchBytes, err := spillBatchSizeWithLimit(&positional, s.spillBatchLimit)
-	if errors.Is(err, errSpillBatchTooLarge) && positional.RowCount() > 1 {
-		return s.appendSpillRangeLocked(&positional, 0, positional.RowCount())
+	serializedBytes, scratchBytes, err := spillBatchSizeWithLimit(bat, s.spillBatchLimit)
+	if errors.Is(err, errSpillBatchTooLarge) && bat.RowCount() > 1 {
+		return s.appendSpillRangeLocked(bat, 0, bat.RowCount())
 	}
 	if err != nil {
 		return 0, err
 	}
-	return s.appendSpillRecordLocked(&positional, serializedBytes, scratchBytes)
+	return s.appendSpillRecordLocked(bat, serializedBytes, scratchBytes)
 }
 
 func (s *Source) appendSpillRangeLocked(
@@ -469,12 +479,12 @@ func (s *Source) appendSpillRecordLocked(
 		serializedBytes,
 		scratchBytes,
 		func(w io.Writer) error {
-			if n, err := w.Write([]byte{spillPayloadGrouping}); err != nil {
+			if n, err := w.Write([]byte{spillPayloadBatch}); err != nil {
 				return err
 			} else if n != 1 {
 				return io.ErrShortWrite
 			}
-			return bat.MarshalBinaryWithGroupingTo(w)
+			return bat.MarshalFramedTo(w)
 		},
 	)
 }
@@ -572,7 +582,7 @@ func readSpilledBatch(
 	offset, availableBytes int64,
 	mp *mpool.MPool,
 	budget SpillBudget,
-	allocation *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*batch.Batch, int64, error) {
 	if file == nil || offset < 0 || offset > availableBytes-spillBatchHeaderSize {
 		return nil, offset, moerr.NewInternalErrorNoCtx("invalid materialized sink spill offset")
@@ -603,7 +613,7 @@ func readSpilledBatch(
 	decoded, err := unmarshalSpillBatch(data, mp, allocation)
 	if err != nil {
 		if decoded != nil {
-			decoded.Clean(mp)
+			decoded.Clean(allocation)
 		}
 		return nil, offset, err
 	}
@@ -613,7 +623,7 @@ func readSpilledBatch(
 func unmarshalSpillBatch(
 	data []byte,
 	mp *mpool.MPool,
-	allocation *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*batch.Batch, error) {
 	if len(data) == 0 || mp == nil || allocation == nil {
 		return nil, moerr.NewInternalErrorNoCtx("invalid materialized sink spill payload")
@@ -622,11 +632,9 @@ func unmarshalSpillBatch(
 	var decoded *batch.Batch
 	var err error
 	switch data[0] {
-	case spillPayloadGrouping:
-		decoded = batch.NewOffHeapWithSize(0)
-		if err = decoded.SetAllocationAccount(allocation); err == nil {
-			err = decoded.UnmarshalFromReaderWithGrouping(r, mp)
-		}
+	case spillPayloadBatch:
+		decoded = batch.NewWithSize(0)
+		err = decoded.UnmarshalFramedFrom(r, allocation)
 	case spillPayloadSelectedRange:
 		decoded, err = unmarshalSelectedSpillBatchFrom(r, mp, allocation)
 	default:
@@ -634,12 +642,12 @@ func unmarshalSpillBatch(
 	}
 	if err != nil {
 		if decoded != nil {
-			decoded.Clean(mp)
+			decoded.Clean(allocation)
 		}
 		return nil, err
 	}
 	if r.Len() != 0 {
-		decoded.Clean(mp)
+		decoded.Clean(allocation)
 		return nil, moerr.NewInvalidInputNoCtx("trailing materialized sink spill payload")
 	}
 	return decoded, nil
@@ -648,7 +656,7 @@ func unmarshalSpillBatch(
 func cloneMaterializedBatch(
 	source *batch.Batch,
 	mp *mpool.MPool,
-	allocation *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*batch.Batch, error) {
 	if source == nil || mp == nil {
 		return nil, moerr.NewInternalErrorNoCtx(
@@ -660,14 +668,9 @@ func cloneMaterializedBatch(
 	if allocation == nil {
 		return source.Dup(mp)
 	}
-	attrs, attrTypes := source.GetSchema()
-	cloned := batch.NewWithSchema(true, attrs, attrTypes)
-	if err := cloned.SetAllocationAccount(allocation); err != nil {
-		cloned.Clean(mp)
-		return nil, err
-	}
+	cloned := batch.NewWithTypes(source.Types(), allocation)
 	cloned.Recursive = source.Recursive
-	if err := source.CloneTo(cloned, mp); err != nil {
+	if err := source.CloneTo(cloned, allocation); err != nil {
 		return nil, err
 	}
 	return cloned, nil
@@ -754,7 +757,7 @@ func marshalSelectedSpillBatchTo(
 func unmarshalSelectedSpillBatchFrom(
 	r *bytes.Reader,
 	mp *mpool.MPool,
-	allocation *vector.AllocationAccountSelection,
+	allocation *mpool.MPool,
 ) (*batch.Batch, error) {
 	if r == nil || mp == nil || allocation == nil {
 		return nil, moerr.NewInvalidInputNoCtx("invalid materialized sink spill decoder")
@@ -774,20 +777,16 @@ func unmarshalSelectedSpillBatchFrom(
 		}
 		return nil, moerr.NewInvalidInputNoCtx("invalid materialized sink spill column count")
 	}
-	decoded := batch.NewOffHeapWithSize(columns)
-	if err = decoded.SetAllocationAccount(allocation); err != nil {
-		decoded.Clean(mp)
-		return nil, err
-	}
+	decoded := batch.NewWithSize(columns)
 	for i := range columns {
 		typ, readErr := types.ReadType(r)
 		if readErr != nil {
-			decoded.Clean(mp)
+			decoded.Clean(allocation)
 			return nil, readErr
 		}
 		sorted, readErr := types.ReadByte(r)
 		if readErr != nil || sorted > 1 {
-			decoded.Clean(mp)
+			decoded.Clean(allocation)
 			if readErr != nil {
 				return nil, readErr
 			}
@@ -795,23 +794,19 @@ func unmarshalSelectedSpillBatchFrom(
 				"invalid materialized sink spill sorted flag",
 			)
 		}
-		decoded.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(typ, allocation)
-		if err != nil {
-			decoded.Clean(mp)
-			return nil, err
-		}
-		if err = decoded.Vecs[i].UnmarshalSelectedRowsFrom(r, int(rows64), mp); err != nil {
-			decoded.Clean(mp)
+		decoded.Vecs[i] = vector.NewVec(typ, allocation)
+		if err = decoded.Vecs[i].UnmarshalSelectedRowsFrom(r, int(rows64), allocation); err != nil {
+			decoded.Clean(allocation)
 			return nil, err
 		}
 		decoded.Vecs[i].SetSorted(sorted != 0)
 	}
 	if decoded.Recursive, err = types.ReadInt32(r); err != nil {
-		decoded.Clean(mp)
+		decoded.Clean(allocation)
 		return nil, err
 	}
 	if decoded.ShuffleIDX, err = types.ReadInt32(r); err != nil {
-		decoded.Clean(mp)
+		decoded.Clean(allocation)
 		return nil, err
 	}
 	decoded.SetRowCount(int(rows64))
@@ -925,10 +920,28 @@ func (s *Source) tryCleanLocked() {
 	}
 }
 
+// BatchMP returns the pool the batches Next returns belong to: a consumer
+// frees each returned batch with it. Capture it when the batch is returned;
+// it is valid until the consumer releases its reader.
+func (s *Source) BatchMP() *mpool.MPool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bufferMPLocked()
+}
+
+// bufferMPLocked is the one pool the retained batches belong to: the
+// accounted spill view when one is configured, otherwise the sink pool.
+func (s *Source) bufferMPLocked() *mpool.MPool {
+	if s.allocation != nil {
+		return s.allocation
+	}
+	return s.mp
+}
+
 func (s *Source) cleanLocked() {
-	if s.mp != nil {
+	if mp := s.bufferMPLocked(); mp != nil {
 		for _, bat := range s.batches {
-			bat.Clean(s.mp)
+			bat.Clean(mp)
 		}
 	}
 	if s.spillFile != nil {
@@ -967,8 +980,8 @@ func spillBatchSizeWithLimit(
 	if bat == nil {
 		return 0, 0, moerr.NewInternalErrorNoCtx("nil materialized sink spill batch")
 	}
-	serialized = 1 + 8 + 4 + 4 + 4 + 4 + 4
-	if len(bat.Vecs) > math.MaxInt32 || len(bat.Attrs) > math.MaxInt32 || len(bat.ExtraBuf) > math.MaxInt32 {
+	serialized = 1 + 8 + 4 + 4 + 4 + 4
+	if len(bat.Vecs) > math.MaxInt32 || len(bat.ExtraBuf()) > math.MaxInt32 {
 		return 0, 0, moerr.NewInternalErrorNoCtx("materialized sink spill batch exceeds encoding limit")
 	}
 	for _, vec := range bat.Vecs {
@@ -992,7 +1005,7 @@ func spillBatchSizeWithLimit(
 			return 0, 0, moerr.NewInternalErrorNoCtx("invalid materialized sink spill vector data")
 		}
 		nullBytes := uint64(0)
-		if !vec.GetNulls().EmptyByFlag() {
+		if !vec.GetNulls().IsEmpty() {
 			nullBytes = uint64(nulls.Size(vec.GetNulls())) + 24
 		}
 		if nullBytes > math.MaxUint32 {
@@ -1019,60 +1032,20 @@ func spillBatchSizeWithLimit(
 			}
 		}
 	}
-	for _, attr := range bat.Attrs {
-		if len(attr) > math.MaxInt32 {
-			return 0, 0, moerr.NewInternalErrorNoCtx("materialized sink spill attribute exceeds encoding limit")
-		}
-		serialized, err = checkedAdd(serialized, 4, uint64(len(attr)))
-		if err != nil {
-			return 0, 0, err
-		}
-	}
-	metadataBytes, metadataErr := bat.PrepareParamKindMetadataSize()
-	if metadataErr != nil {
-		return 0, 0, metadataErr
-	}
-	serialized, err = addSpillBatchTail(
-		serialized,
-		uint64(len(bat.ExtraBuf)),
-		uint64(metadataBytes),
-	)
+	serialized, err = checkedAdd(serialized, uint64(len(bat.ExtraBuf())))
 	if err != nil {
 		return 0, 0, err
 	}
-	// The spill-only wrapper frames the stable batch/parameter payload and then
-	// appends one grouping bitmap per vector. Grouping provenance distinguishes
-	// rollup sentinels from SQL NULL and therefore must survive a source crossing
-	// the in-memory threshold.
-	serialized, err = checkedAdd(serialized, 8, 4)
+	// MarshalFramedTo frames the batch with its size.
+	serialized, err = checkedAdd(serialized, 8)
 	if err != nil {
 		return 0, 0, err
-	}
-	for _, vec := range bat.Vecs {
-		groupingBytes := vec.GroupingMarshalBinarySize()
-		if groupingBytes < 0 || groupingBytes > math.MaxInt32 {
-			return 0, 0, moerr.NewInternalErrorNoCtx(
-				"materialized sink spill grouping bitmap exceeds encoding limit",
-			)
-		}
-		serialized, err = checkedAdd(serialized, 4, uint64(groupingBytes))
-		if err != nil {
-			return 0, 0, err
-		}
 	}
 	if serialized > limit || serialized > uint64(math.MaxInt) {
 		return 0, 0, errSpillBatchTooLarge
 	}
 	scratch, err = checkedAdd(scratch, serialized)
 	return serialized, scratch, err
-}
-
-func addSpillBatchTail(serialized, extraBytes, metadataBytes uint64) (uint64, error) {
-	withExtra, err := checkedAdd(serialized, extraBytes)
-	if err != nil {
-		return 0, err
-	}
-	return checkedAdd(withExtra, metadataBytes)
 }
 
 func checkedAdd(values ...uint64) (uint64, error) {

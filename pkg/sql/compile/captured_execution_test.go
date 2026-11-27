@@ -142,7 +142,7 @@ func TestTemporalPreflightDiscardPreservesProcess(t *testing.T) {
 	defer proc.Free()
 	board := message.NewMessageBoard()
 	proc.SetMessageBoard(board)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer params.Free(proc.Mp())
 	proc.SetPrepareParams(params)
 	defer proc.SetPrepareParams(nil)
@@ -233,7 +233,7 @@ func TestTemporalRetryDriftUsesSafeBuilderAndPreservesParamsOnFailure(t *testing
 	proc := testutil.NewProcess(t)
 	proc.Base.TxnOperator = txn
 	proc.ReplaceTopCtx(context.Background())
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer params.Free(proc.Mp())
 	proc.SetPrepareParams(params)
 	labels := map[string]string{"pool": "original"}
@@ -293,7 +293,7 @@ func TestTemporalRetryBuildPanicPreservesCallerResources(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Base.TxnOperator = txn
 	proc.ReplaceTopCtx(context.Background())
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer params.Free(proc.Mp())
 	proc.SetPrepareParams(params)
 	labels := map[string]string{"pool": "original"}

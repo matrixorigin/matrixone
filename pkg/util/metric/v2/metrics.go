@@ -206,6 +206,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnCreateDurationHistogram)
 	registry.MustRegister(txnStatementDurationHistogram)
 	registry.MustRegister(txnLoadLogtailReadBarrierDurationHistogram)
+	registry.MustRegister(changeWatchDurationHistogram)
 	registry.MustRegister(txnLockDurationHistogram)
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)

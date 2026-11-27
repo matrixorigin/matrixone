@@ -28,7 +28,7 @@ import (
 func checkExactDataSorter[T types.FixedSizeT](t *testing.T, typ types.Type, values []T) {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	v := vector.NewVec(typ)
+	v := vector.NewVec(typ, mp)
 	defer v.Free(mp)
 	require.NoError(t, vector.AppendFixedList(v, values, nil, mp))
 	data := append([]byte(nil), v.GetData()[:v.Length()*typ.TypeSize()]...)
@@ -77,7 +77,7 @@ func TestMarshalExactFilterRuns(t *testing.T) {
 			if variable {
 				typ = types.T_varchar.ToType()
 			}
-			x, y, expected := vector.NewVec(typ), vector.NewVec(typ), vector.NewVec(typ)
+			x, y, expected := vector.NewVec(typ, mp), vector.NewVec(typ, mp), vector.NewVec(typ, mp)
 			defer func() {
 				x.Free(mp)
 				y.Free(mp)
@@ -148,7 +148,7 @@ func TestMarshalExactFilterRunsSharedArea(t *testing.T) {
 			source, err := vector.NewConstBytes(types.T_varchar.ToType(), value, 3, mp)
 			require.NoError(t, err)
 			defer source.Free(mp)
-			runs[i] = vector.NewVec(types.T_varchar.ToType())
+			runs[i] = vector.NewVec(types.T_varchar.ToType(), mp)
 			require.NoError(t, runs[i].UnionBatch(source, 0, 3, nil, mp))
 			require.Len(t, runs[i].GetArea(), 64, "three descriptors share one value")
 		}()

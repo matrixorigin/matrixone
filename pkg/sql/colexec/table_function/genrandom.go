@@ -175,7 +175,7 @@ func (st *genRandomState) start(tf *TableFunction, proc *process.Process, nthRow
 
 	// whew, we're done with parameters.
 	if st.batch == nil {
-		st.batch = tf.createResultBatch()
+		st.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		st.batch.CleanOnlyData()
 	}
@@ -214,12 +214,12 @@ func (st *genRandomState) call(tf *TableFunction, proc *process.Process) (vm.Cal
 		cnt = st.total - st.next
 	}
 
-	nthPos := slices.Index(st.batch.Attrs, "nth")
+	nthPos := slices.Index(tf.Attrs, "nth")
 	valueName := "f64"
 	if st.genInt64 {
 		valueName = "i64"
 	}
-	valuePos := slices.Index(st.batch.Attrs, valueName)
+	valuePos := slices.Index(tf.Attrs, valueName)
 	for i := int64(0); i < cnt; i++ {
 		if nthPos >= 0 {
 			if err := vector.AppendFixed(st.batch.Vecs[nthPos], st.next+i+1, false, proc.Mp()); err != nil {

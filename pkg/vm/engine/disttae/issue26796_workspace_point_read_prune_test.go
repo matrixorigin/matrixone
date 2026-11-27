@@ -18,7 +18,6 @@ import (
 	"context"
 	"math/rand"
 	"strconv"
-	"sync"
 	"testing"
 
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -98,7 +97,6 @@ func newIssue26796TxnWithTable(
 		databaseOps:     newDbOps(),
 		deletedBlocks:   &deletedBlocks{},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 	}
 	op := newTxnOperatorForTestWithWorkspace(t, txn)
 	txn.op = op
@@ -129,15 +127,15 @@ func newIssue26796TxnWithTable(
 func issue26796InsertOne(t *testing.T, txn *Transaction, pk, value int64) {
 	t.Helper()
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{issue26796PKName, "value"}
-	bat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
-	bat.SetVector(1, vector.NewVec(types.T_int64.ToType()))
+	batAttrs := []string{issue26796PKName, "value"}
+	bat.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
+	bat.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.GetVector(0), pk, false, txn.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.GetVector(1), value, false, txn.proc.Mp()))
 	bat.SetRowCount(1)
 	_, err := txn.WriteBatch(
 		INSERT, "", 1, issue26796DBID, issue26796TblID,
-		issue26796DB, issue26796Table, bat, DNStore{},
+		issue26796DB, issue26796Table, bat, batAttrs, DNStore{},
 	)
 	require.NoError(t, err)
 }
@@ -147,9 +145,9 @@ func issue26796InsertOne(t *testing.T, txn *Transaction, pk, value int64) {
 func issue26796InsertBatch(t *testing.T, txn *Transaction, pks ...int64) {
 	t.Helper()
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{issue26796PKName, "value"}
-	bat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
-	bat.SetVector(1, vector.NewVec(types.T_int64.ToType()))
+	batAttrs := []string{issue26796PKName, "value"}
+	bat.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
+	bat.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	for _, pk := range pks {
 		require.NoError(t, vector.AppendFixed(bat.GetVector(0), pk, false, txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.GetVector(1), pk, false, txn.proc.Mp()))
@@ -157,7 +155,7 @@ func issue26796InsertBatch(t *testing.T, txn *Transaction, pks ...int64) {
 	bat.SetRowCount(len(pks))
 	_, err := txn.WriteBatch(
 		INSERT, "", 1, issue26796DBID, issue26796TblID,
-		issue26796DB, issue26796Table, bat, DNStore{},
+		issue26796DB, issue26796Table, bat, batAttrs, DNStore{},
 	)
 	require.NoError(t, err)
 }
@@ -243,8 +241,7 @@ func issue26796PointReadTable(
 		memPKFilter: filter,
 	}
 	outBatch := batch.NewWithSize(1)
-	outBatch.Attrs = []string{"value"}
-	outBatch.SetVector(0, vector.NewVec(types.T_int64.ToType()))
+	outBatch.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	err := ls.filterInMemUnCommittedInserts(context.Background(), []uint16{1}, 0, txn.proc.Mp(), outBatch)
 	require.NoError(t, err)
 

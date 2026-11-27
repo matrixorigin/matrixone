@@ -499,7 +499,6 @@ func (sinker *Sinker) fillDefaults() {
 	if sinker.buf.buffers == nil {
 		sinker.buf.isOwner = true
 		sinker.buf.buffers = containers.NewBatchFreeList(
-			sinker.schema.attrs,
 			sinker.schema.attrTypes,
 			sinker.config.offHeap,
 		)
@@ -816,7 +815,7 @@ func (sinker *Sinker) cleanupRunOnFailure(ctx context.Context, operationErr *err
 
 func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 	x := sinker.buf.buffers.Len()
-	bat := sinker.buf.buffers.FetchWithSchema(sinker.schema.attrs, sinker.schema.attrTypes)
+	bat := sinker.buf.buffers.FetchWithTypes(sinker.schema.attrTypes, sinker.mp)
 	y := sinker.buf.buffers.Len()
 
 	if x < y {
@@ -1606,7 +1605,7 @@ func (sinker *Sinker) WriteOwned(ctx context.Context, data *batch.Batch) (owned 
 		if vec == nil {
 			return false, moerr.NewInvalidInputf(ctx, "Sinker.WriteOwned batch has a nil vector at column %d", i)
 		}
-		if vec.HasBorrowedBacking() || vec.NeedDup() {
+		if vec.IsReadOnly() {
 			return false, moerr.NewInvalidInputf(ctx, "Sinker.WriteOwned requires unique-owned vector backing at column %d", i)
 		}
 		if limit > 0 {

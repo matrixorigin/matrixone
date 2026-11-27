@@ -47,6 +47,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -105,7 +106,7 @@ func TestIssue25590RollbackTerminalDetachesQueuedRecordedOwners(t *testing.T) {
 	defer restoreScheduling()
 
 	record := func(name string, stats objectio.ObjectStats) error {
-		recBat := colexec.AllocCNS3ResultBat(false)
+		recBat := colexec.AllocCNS3ResultBat(false, mp)
 		defer recBat.Clean(mp)
 		if err := colexec.ExpandObjectStatsToBatch(
 			mp, false, recBat, false, stats); err != nil {
@@ -113,7 +114,7 @@ func TestIssue25590RollbackTerminalDetachesQueuedRecordedOwners(t *testing.T) {
 		}
 		return txn.WriteFile(
 			INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-			name, recBat, txn.tnStores[0])
+			name, recBat, catalog.ObjectInsertAttrs, txn.tnStores[0])
 	}
 
 	// The transaction's one statement records its S3 object exactly as
@@ -194,7 +195,7 @@ func TestIssue25590CommitTerminalDetachesQueuedRecordedOwners(t *testing.T) {
 	defer restoreScheduling()
 
 	record := func(name string, stats objectio.ObjectStats) error {
-		recBat := colexec.AllocCNS3ResultBat(false)
+		recBat := colexec.AllocCNS3ResultBat(false, mp)
 		defer recBat.Clean(mp)
 		if err := colexec.ExpandObjectStatsToBatch(
 			mp, false, recBat, false, stats); err != nil {
@@ -202,7 +203,7 @@ func TestIssue25590CommitTerminalDetachesQueuedRecordedOwners(t *testing.T) {
 		}
 		return txn.WriteFile(
 			INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
-			name, recBat, txn.tnStores[0])
+			name, recBat, catalog.ObjectInsertAttrs, txn.tnStores[0])
 	}
 
 	// The standing first statement carves the statement boundary the

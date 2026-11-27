@@ -554,8 +554,12 @@ func (space *tableSpace) HybridScan(
 	ctx context.Context, bat **containers.Batch, colIdxes []int, mp *mpool.MPool,
 ) {
 	space.node.Scan(ctx, bat, colIdxes, mp)
+	if space.node.data.Deletes.IsEmpty() {
+		return
+	}
 	if (*bat).Deletes == nil {
 		(*bat).Deletes = &nulls.Nulls{}
+		(*bat).Deletes.Init(mp)
 	}
 	(*bat).Deletes.Or(space.node.data.Deletes)
 }

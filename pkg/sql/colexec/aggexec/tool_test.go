@@ -45,7 +45,7 @@ func makeOffHeapFixedVector[T any](
 	nulls []bool,
 ) *vector.Vector {
 	t.Helper()
-	vec := vector.NewOffHeapVecWithType(typ)
+	vec := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendFixedList(vec, values, nulls, mp))
 	return vec
 }
@@ -57,20 +57,20 @@ func makeOffHeapVarcharVector(
 	nulls []bool,
 ) *vector.Vector {
 	t.Helper()
-	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendStringList(vec, values, nulls, mp))
 	return vec
 }
 
 func TestMergeSplitResult(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
-		result, err := MergeSplitResult(nil, mpool.MustNewZero())
+		result, err := MergeSplitResult(nil)
 		require.Error(t, err)
 		require.Nil(t, result)
 	})
 
 	t.Run("single nil chunk", func(t *testing.T) {
-		result, err := MergeSplitResult([]*vector.Vector{nil}, mpool.MustNewZero())
+		result, err := MergeSplitResult([]*vector.Vector{nil})
 		require.Error(t, err)
 		require.Nil(t, result)
 	})
@@ -78,10 +78,10 @@ func TestMergeSplitResult(t *testing.T) {
 	t.Run("single chunk is zero copy", func(t *testing.T) {
 		mp := mpool.MustNewZero()
 		input := makeOffHeapFixedVector(t, mp, types.T_int32.ToType(), []int32{1, 2, 3}, nil)
-		result, err := MergeSplitResult([]*vector.Vector{input}, mp)
+		result, err := MergeSplitResult([]*vector.Vector{input})
 		require.NoError(t, err)
 		require.Same(t, input, result)
-		result.Free(mp)
+		result.Free(result.MPool())
 		require.Equal(t, int64(0), mp.CurrNB())
 	})
 
@@ -90,7 +90,7 @@ func TestMergeSplitResult(t *testing.T) {
 		first := makeOffHeapFixedVector(t, mp, types.T_int32.ToType(), []int32{1, 2}, []bool{false, true})
 		second := makeOffHeapFixedVector(t, mp, types.T_int32.ToType(), []int32{3, 4}, []bool{true, false})
 		third := makeOffHeapFixedVector(t, mp, types.T_int32.ToType(), []int32{5, 6}, nil)
-		result, err := MergeSplitResult([]*vector.Vector{first, second, third}, mp)
+		result, err := MergeSplitResult([]*vector.Vector{first, second, third})
 		require.NoError(t, err)
 		require.Same(t, first, result)
 		require.Equal(t, 6, result.Length())
@@ -105,7 +105,7 @@ func TestMergeSplitResult(t *testing.T) {
 		require.False(t, result.GetNulls().Contains(3))
 		require.Equal(t, int32(5), values[4])
 		require.Equal(t, int32(6), values[5])
-		result.Free(mp)
+		result.Free(result.MPool())
 		require.Equal(t, int64(0), mp.CurrNB())
 	})
 
@@ -115,7 +115,7 @@ func TestMergeSplitResult(t *testing.T) {
 		longB := "this value is longer than the inline varlena limit B"
 		first := makeOffHeapVarcharVector(t, mp, []string{"a", longA}, nil)
 		second := makeOffHeapVarcharVector(t, mp, []string{"", longB, "z"}, []bool{true, false, false})
-		result, err := MergeSplitResult([]*vector.Vector{first, second}, mp)
+		result, err := MergeSplitResult([]*vector.Vector{first, second})
 		require.NoError(t, err)
 		require.Equal(t, 5, result.Length())
 		require.Equal(t, "a", string(result.GetBytesAt(0)))
@@ -123,7 +123,7 @@ func TestMergeSplitResult(t *testing.T) {
 		require.True(t, result.GetNulls().Contains(2))
 		require.Equal(t, longB, string(result.GetBytesAt(3)))
 		require.Equal(t, "z", string(result.GetBytesAt(4)))
-		result.Free(mp)
+		result.Free(result.MPool())
 		require.Equal(t, int64(0), mp.CurrNB())
 	})
 
@@ -131,7 +131,7 @@ func TestMergeSplitResult(t *testing.T) {
 		mp := mpool.MustNewZero()
 		first := makeOffHeapFixedVector(t, mp, types.T_int32.ToType(), []int32{1}, nil)
 		last := makeOffHeapFixedVector(t, mp, types.T_int32.ToType(), []int32{2}, nil)
-		result, err := MergeSplitResult([]*vector.Vector{first, nil, last}, mp)
+		result, err := MergeSplitResult([]*vector.Vector{first, nil, last})
 		require.Error(t, err)
 		require.Nil(t, result)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -140,7 +140,7 @@ func TestMergeSplitResult(t *testing.T) {
 	t.Run("nil first chunk frees remaining inputs", func(t *testing.T) {
 		mp := mpool.MustNewZero()
 		last := makeOffHeapFixedVector(t, mp, types.T_int32.ToType(), []int32{2}, nil)
-		result, err := MergeSplitResult([]*vector.Vector{nil, last}, mp)
+		result, err := MergeSplitResult([]*vector.Vector{nil, last})
 		require.Error(t, err)
 		require.Nil(t, result)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -149,9 +149,9 @@ func TestMergeSplitResult(t *testing.T) {
 	t.Run("mismatched types free all inputs", func(t *testing.T) {
 		mp := mpool.MustNewZero()
 		first := makeOffHeapFixedVector(t, mp, types.T_int32.ToType(), []int32{1}, nil)
-		second := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		second := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(second, int64(2), false, mp))
-		result, err := MergeSplitResult([]*vector.Vector{first, second}, mp)
+		result, err := MergeSplitResult([]*vector.Vector{first, second})
 		require.Error(t, err)
 		require.Nil(t, result)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -176,9 +176,9 @@ func TestMergeSplitResult(t *testing.T) {
 		require.NoError(t, err)
 		usedByFiller := mp.CurrNB() - int64(first.Allocated()) - int64(second.Allocated())
 
-		result, err := MergeSplitResult([]*vector.Vector{first, second}, mp)
+		result, err := MergeSplitResult([]*vector.Vector{first, second})
 		if result != nil {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		require.Error(t, err)
 		require.Nil(t, result)
@@ -203,13 +203,13 @@ func BenchmarkMergeSplitResult(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			var err error
-			result, err = MergeSplitResult([]*vector.Vector{result}, mp)
+			result, err = MergeSplitResult([]*vector.Vector{result})
 			if err != nil {
 				b.Fatal(err)
 			}
 		}
 		b.StopTimer()
-		result.Free(mp)
+		result.Free(result.MPool())
 		require.Equal(b, int64(0), mp.CurrNB())
 	})
 
@@ -224,12 +224,12 @@ func BenchmarkMergeSplitResult(b *testing.B) {
 					vecs[j] = makeOffHeapFixedVector(b, mp, types.T_int64.ToType(), values, nil)
 				}
 				b.StartTimer()
-				result, err := MergeSplitResult(vecs, mp)
+				result, err := MergeSplitResult(vecs)
 				if err != nil {
 					b.Fatal(err)
 				}
 				b.StopTimer()
-				result.Free(mp)
+				result.Free(result.MPool())
 			}
 			require.Equal(b, int64(0), mp.CurrNB())
 		})
@@ -251,12 +251,12 @@ func BenchmarkMergeSplitResult(b *testing.B) {
 				makeOffHeapVarcharVector(b, mp, values, nil),
 			}
 			b.StartTimer()
-			result, err := MergeSplitResult(vecs, mp)
+			result, err := MergeSplitResult(vecs)
 			if err != nil {
 				b.Fatal(err)
 			}
 			b.StopTimer()
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		require.Equal(b, int64(0), mp.CurrNB())
 	})

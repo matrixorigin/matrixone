@@ -32,7 +32,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -478,18 +477,42 @@ func TestAlterTableHasLatestHistoricalBranchSourceUsesFreshUnlockedProbe(t *test
 	require.Equal(t, []string{snapshotSQL}, spyExec.executedSQLs)
 }
 
-func TestAlterDataBranchLineageMetadata(t *testing.T) {
+func TestAlterAndTruncateDataBranchLineageMetadata(t *testing.T) {
 	dag := databranchutils.NewBranchReclaimDag([]databranchutils.DataBranchMetadata{
-		{TableID: 2, PTableID: 1, Creator: 9, Level: "table", TableDeleted: false},
+		{TableID: 2, PTableID: 1, Creator: 9, Level: "table"},
+		{TableID: 3, PTableID: 2, Creator: 9, Level: "alter:table"},
+		{TableID: 4, PTableID: 3, Creator: 9, Level: "truncate:table"},
+		{TableID: 5, PTableID: 1, Creator: 0, Level: "truncate"},
 	})
+	for _, tc := range []struct {
+		oldID   uint64
+		clear   bool
+		creator uint32
+		level   string
+	}{
+		{1, false, catalog.System_Account, "alter"},
+		{1, true, catalog.System_Account, "truncate"},
+		{2, false, 9, "alter:table"},
+		{2, true, 9, "truncate:table"},
+		{3, true, 9, "truncate:table"},
+		{4, false, 9, "alter:table"},
+		{4, true, 9, "truncate:table"},
+		{5, false, catalog.System_Account, "alter"},
+		{5, true, catalog.System_Account, "truncate"},
+	} {
+		t.Run(fmt.Sprintf("id=%d/clear=%t", tc.oldID, tc.clear), func(t *testing.T) {
+			creator, level := alterDataBranchLineageMetadata(dag, tc.oldID, tc.clear)
+			require.Equal(t, tc.creator, creator)
+			require.Equal(t, tc.level, level)
+		})
+	}
 
-	creator, level := alterDataBranchLineageMetadata(dag, 2)
-	require.Equal(t, uint32(9), creator)
-	require.Equal(t, "alter:table", level)
-
-	creator, level = alterDataBranchLineageMetadata(dag, 1)
-	require.Equal(t, uint32(catalog.System_Account), creator)
-	require.Equal(t, "alter", level)
+	require.NoError(t, validateActiveBranchDeleteRows(t.Context(), &databranchutils.BranchDeleteTarget{
+		TableIDs: []uint64{4}, Database: "db", Table: "branch",
+	}, dag))
+	require.ErrorContains(t, validateActiveBranchDeleteRows(t.Context(), &databranchutils.BranchDeleteTarget{
+		TableIDs: []uint64{5}, Database: "db", Table: "root",
+	}, dag), "not an active branch table")
 }
 
 func TestValidateAlterDataBranchLineageTxn(t *testing.T) {
@@ -4487,7 +4510,6 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			defer ctrl.Finish()
 
 			proc := testutil.NewProcess(t)
-			proc.Base.SessionInfo.Buf = buffer.New()
 			proc.Base.SessionInfo.TimeZone = time.Local
 
 			serviceID := "alter-copy-pipeline-flush-" + tc.name
@@ -4807,7 +4829,6 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Base.SessionInfo.TimeZone = time.Local
 
 	serviceID := "alter-copy-pk-precheck"
@@ -5039,7 +5060,6 @@ func newAlterCopyPrecheckCompile(
 	serviceSuffix ...string,
 ) *Compile {
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Base.SessionInfo.TimeZone = time.Local
 
 	serviceID := "alter-copy-precheck-" + t.Name()
@@ -5167,7 +5187,7 @@ func TestCompactExpiredAlterDataBranchLineage(t *testing.T) {
 			wantDeletes: true,
 			wantSQLSuffix: []string{
 				"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')",
-				"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
+				"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%' or level = 'truncate' or level like 'truncate:%')",
 			},
 		},
 		{
@@ -5514,9 +5534,9 @@ func TestDataBranchLineageGCExecutorMakesDurableProgressAcrossRuns(t *testing.T)
 		metadataDeletes = append(metadataDeletes, sqls[13])
 	}
 	require.Equal(t, []string{
-		"delete from mo_catalog.mo_branch_metadata where table_id in (1,2) and (level = 'alter' or level like 'alter:%')",
-		"delete from mo_catalog.mo_branch_metadata where table_id in (3,4) and (level = 'alter' or level like 'alter:%')",
-		"delete from mo_catalog.mo_branch_metadata where table_id in (5) and (level = 'alter' or level like 'alter:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (1,2) and (level = 'alter' or level like 'alter:%' or level = 'truncate' or level like 'truncate:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (3,4) and (level = 'alter' or level like 'alter:%' or level = 'truncate' or level like 'truncate:%')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (5) and (level = 'alter' or level like 'alter:%' or level = 'truncate' or level like 'truncate:%')",
 	}, metadataDeletes)
 }
 
@@ -6051,7 +6071,6 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -6092,7 +6111,6 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -6148,7 +6166,6 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -6204,7 +6221,6 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -6475,7 +6491,6 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -6514,7 +6529,6 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()
@@ -6568,7 +6582,6 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
 		proc.Ctx = context.Background()

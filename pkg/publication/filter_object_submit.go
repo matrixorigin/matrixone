@@ -109,10 +109,9 @@ func submitObjectsAsInsert(ctx context.Context, taskID string, txn client.TxnOpe
 
 		// Create batch with ObjectStats for deletion
 		deleteBat := batch.NewWithSize(1)
-		deleteBat.SetAttributes([]string{catalog.ObjectMeta_ObjectStats})
 
 		// ObjectStats column (T_binary)
-		statsVec := vector.NewVec(types.T_binary.ToType())
+		statsVec := vector.NewVec(types.T_binary.ToType(), mp)
 		deleteBat.Vecs[0] = statsVec
 
 		// Append ObjectStats to the batch using Marshal()
@@ -129,7 +128,7 @@ func submitObjectsAsInsert(ctx context.Context, taskID string, txn client.TxnOpe
 		// Delete through relation with skipTransfer flag to avoid transfer errors
 		// CCPR tombstones should not be transferred since they are already properly positioned
 		skipTransferCtx := context.WithValue(ctx, defines.SkipTransferKey{}, true)
-		if err := rel.Delete(skipTransferCtx, deleteBat, ""); err != nil {
+		if err := rel.Delete(skipTransferCtx, deleteBat, []string{catalog.ObjectMeta_ObjectStats}, ""); err != nil {
 			deleteBat.Clean(mp)
 			return moerr.NewInternalErrorf(ctx, "failed to delete tombstone objects: %v", err)
 		}
@@ -183,14 +182,13 @@ func submitObjectsAsInsert(ctx context.Context, taskID string, txn client.TxnOpe
 
 		// Create batch with ObjectStats using the same structure as s3util
 		bat := batch.NewWithSize(2)
-		bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
 
 		// First column: BlockInfo (T_text)
-		blockInfoVec := vector.NewVec(types.T_text.ToType())
+		blockInfoVec := vector.NewVec(types.T_text.ToType(), mp)
 		bat.Vecs[0] = blockInfoVec
 
 		// Second column: ObjectStats (T_binary)
-		statsVec := vector.NewVec(types.T_binary.ToType())
+		statsVec := vector.NewVec(types.T_binary.ToType(), mp)
 		bat.Vecs[1] = statsVec
 
 		// Use ExpandObjectStatsToBatch to properly expand ObjectStats to batch
@@ -206,7 +204,7 @@ func submitObjectsAsInsert(ctx context.Context, taskID string, txn client.TxnOpe
 		}
 
 		// Write through relation
-		if err := rel.Write(ctx, bat); err != nil {
+		if err := rel.Write(ctx, bat, []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}); err != nil {
 			bat.Clean(mp)
 			return moerr.NewInternalErrorf(ctx, "failed to write objects: %v", err)
 		}

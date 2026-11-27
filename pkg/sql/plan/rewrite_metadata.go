@@ -18,11 +18,46 @@ import (
 	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 const informationSchemaColumnsTable = "columns"
+
+func rewriteTableKey(database, table string, lower int64) string {
+	return tree.NewCStr(database, lower).Compare() + "." + tree.NewCStr(table, lower).Compare()
+}
+
+// SHOW COLUMNS and SHOW CREATE TABLE expose physical metadata, including
+// expressions and constraints. Only a proven all-column chain can expose it.
+func checkShowRewriteMetadata(
+	ctx CompilerContext, option *tree.RewriteOption, database, table string,
+	def *TableDef, currentLocal bool,
+) error {
+	if option == nil || len(option.Rewrites) == 0 {
+		return nil
+	}
+	lower := ctx.GetLowerCaseTableNames()
+	chain := option.Rewrites[rewriteTableKey(database, table, lower)]
+	if len(chain) == 0 {
+		return nil
+	}
+	if currentLocal && !def.IsTemporary && def.TableType == catalog.SystemOrdinaryRel {
+		for _, rewrite := range chain {
+			if rewrite != nil {
+				_, all, supported := rewriteVisibleColumns(rewrite.Stmt, database, table, lower)
+				if supported && all {
+					continue
+				}
+			}
+			return moerr.NewInternalError(ctx.GetContext(), "do not have privilege to execute the statement")
+		}
+		return nil
+	}
+	return moerr.NewInternalError(ctx.GetContext(), "do not have privilege to execute the statement")
+}
 
 // applyRewriteMetadataVisibility keeps information_schema.COLUMNS consistent
 // with the projection exposed by an active row-column rewrite.  The catalog

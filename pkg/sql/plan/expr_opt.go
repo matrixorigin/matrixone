@@ -984,8 +984,9 @@ func (builder *QueryBuilder) leadingCompositeRangeBlockFilter(filter *plan.Expr,
 		if lit := stripConstLiteralCasts(bound).GetLit(); lit != nil && lit.Isnull {
 			return false
 		}
+		// DATETIME comparison and SERIAL both use the raw microsecond value.
 		return isRuntimeConstExpr(bound) && bound.Typ.Id == col.Typ.Id &&
-			bound.Typ.Scale == col.Typ.Scale
+			(bound.Typ.Scale == col.Typ.Scale || types.T(col.Typ.Id) == types.T_datetime)
 	}
 	key := &plan.Expr{Typ: tableDef.Cols[compoundPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 		RelPos: tag, ColPos: compoundPos, Name: tableDef.Cols[compoundPos].Name,
@@ -1204,7 +1205,7 @@ func blockFilterConstantVectorSet(literalVec *plan.LiteralVec) (ret map[string]s
 	}
 	ret = make(map[string]struct{}, physicalLength)
 	for i := 0; i < physicalLength; i++ {
-		lit := rule.GetConstantValue(&vec, true, uint64(i))
+		lit := rule.GetConstantValue(&vec, true, uint64(i), types.StringSource(literalVec.StringSource))
 		key, ok := blockFilterLiteralKey(lit, typ)
 		if !ok {
 			return nil, false
@@ -1251,7 +1252,7 @@ func materializeInRHSValues(expr *plan.Expr, expectedType *plan.Type) (values []
 	typ := makePlan2Type(vec.GetType())
 	values = make([]*plan.Expr, physicalLength)
 	for i := range physicalLength {
-		lit := rule.GetConstantValue(&vec, true, uint64(i))
+		lit := rule.GetConstantValue(&vec, true, uint64(i), types.StringSource(expr.GetVec().StringSource))
 		if lit == nil {
 			return nil, false
 		}
@@ -1289,14 +1290,9 @@ func decodeLiteralVec(literalVec *plan.LiteralVec) (vec vector.Vector, physicalL
 	if err := vec.UnmarshalBinary(literalVec.Data); err != nil || int64(vec.Length()) != int64(literalVec.Len) {
 		return vector.Vector{}, 0, false
 	}
-	// LiteralVec.Data is the stable Vector payload and deliberately omits
-	// runtime ownership. Restore the validated container-level source before
-	// any caller materializes scalar literals from the decoded rows.
+	// LiteralVec.Data is the stable Vector payload; the container-level source
+	// lives on the LiteralVec. Validate it before callers materialize literals.
 	if literalVec.StringSource > uint32(types.StringSourceCOMStmt) {
-		return vector.Vector{}, 0, false
-	}
-	source := types.StringSource(literalVec.StringSource)
-	if vec.SetStringSource(source) != nil {
 		return vector.Vector{}, 0, false
 	}
 

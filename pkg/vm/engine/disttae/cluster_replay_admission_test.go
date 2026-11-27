@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/require"
@@ -39,7 +40,7 @@ func TestClusterReplayDispatcherBindsCatalogGeneration(t *testing.T) {
 	meta, err := catalog.GenCreateTableTuple(catalog.Table{AccountId: 7, DatabaseId: 10, DatabaseName: "db", TableId: 22, TableName: "metrics"}, mp, packer)
 	require.NoError(t, err)
 	defer meta.Clean(mp)
-	_, err = fillRandomRowidAndZeroTs(meta, mp)
+	_, _, err = fillRandomRowidAndZeroTs(meta, catalog.MoTablesSchema, mp)
 	require.NoError(t, err)
 	vector.MustFixedColWithTypeCheck[types.TS](meta.GetVector(cache.MO_TIMESTAMP_IDX))[0] = types.BuildTS(1, 0)
 	cc.InsertTable(meta)
@@ -47,9 +48,9 @@ func TestClusterReplayDispatcherBindsCatalogGeneration(t *testing.T) {
 	require.NotNil(t, item)
 	// A complete declared schema is installed before dispatch, as after the
 	// catalog bootstrap/column publication boundary. No batch name declares it.
-	item.TableDef = clusterReplayTableDef()
-	input, _ := clusterReplaySpecBatch(t, mp, packer, []clusterRowSpec{{device: 0, metric: 0, tsOrdinal: 18, value: 19}}, 5, 0, clusterReplayBatchOptions{})
-	frame := &logtail.TableLogtail{Table: &api.TableID{AccId: 7, DbId: 10, TbId: 22, TbName: "metrics", DbName: "db"}, Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 22, TableName: "metrics", Bat: input}}}
+	installClusterReplaySchema(t, item, "")
+	input, inputAttrs, _ := clusterReplaySpecBatch(t, mp, packer, []clusterRowSpec{{device: 0, metric: 0, tsOrdinal: 18, value: 19}}, 5, 0, clusterReplayBatchOptions{})
+	frame := &logtail.TableLogtail{Table: &api.TableID{AccId: 7, DbId: 10, TbId: 22, TbName: "metrics", DbName: "db"}, Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 22, TableName: "metrics", Attrs: inputAttrs, Bat: api.NewEncodedBatch(input)}}}
 	through := types.BuildTS(20, 0).ToTimestamp()
 	require.Nil(t, eng.captureReplayClusterKey(frame, through), "bootstrap is not complete")
 	eng.pClient.dcaConfirmAndApply()
@@ -60,14 +61,13 @@ func TestClusterReplayDispatcherBindsCatalogGeneration(t *testing.T) {
 		name   string
 		change func()
 	}{
-		{"ordinary", func() { item.TableDef.ClusterBy = nil }},
-		{"not_hidden", func() { item.TableDef.Cols[7].Hidden = false }},
-		{"not_clustered", func() { item.TableDef.Cols[7].ClusterBy = false }},
+		{"ordinary", func() { installClusterReplaySchema(t, item, "ordinary") }},
+		{"not_hidden", func() { installClusterReplaySchema(t, item, "not_hidden") }},
 		{"wrong_table", func() { frame.Table.TbId = 23 }},
 		{"wrong_tenant", func() { frame.Table.AccId = 8 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			item.TableDef = clusterReplayTableDef()
+			installClusterReplaySchema(t, item, "")
 			frame.Table.TbId = 22
 			frame.Table.AccId = 7
 			tc.change()
@@ -78,9 +78,8 @@ func TestClusterReplayDispatcherBindsCatalogGeneration(t *testing.T) {
 	frame.Table.AccId = 7
 	// The queued descriptor is immutable when a later catalog generation is
 	// published before the table worker applies this frame.
-	item.TableDef = clusterReplayTableDef()
-	item.TableDef.Version = 1
 	item.Version = 1
+	installClusterReplaySchema(t, item, "")
 	next := eng.captureReplayClusterKey(frame, through)
 	require.NotNil(t, next)
 	require.Equal(t, uint32(0), captured.Version)
@@ -92,11 +91,41 @@ func TestClusterReplayDispatcherBindsCatalogGeneration(t *testing.T) {
 	require.True(t, partition.Snapshot().ClusterIndexReadyFor(*captured))
 	previous := partition.Snapshot()
 	state, publish = partition.MutateState()
-	newer, _ := clusterReplaySpecBatch(t, mp, packer, []clusterRowSpec{{device: 0, metric: 0, tsOrdinal: 19, value: 20}}, 6, 1, clusterReplayBatchOptions{})
-	state.HandleRowsInsert(t.Context(), newer, 6, packer, mp, next)
+	newer, newerAttrs, _ := clusterReplaySpecBatch(t, mp, packer, []clusterRowSpec{{device: 0, metric: 0, tsOrdinal: 19, value: 20}}, 6, 1, clusterReplayBatchOptions{})
+	state.HandleRowsInsert(t.Context(), newer, newerAttrs, 6, packer, mp, next)
 	publish()
 	require.False(t, partition.Snapshot().WantsClusterKeyMetadata())
 	require.Nil(t, eng.captureReplayClusterKey(frame, through), "disabled published state skips metadata")
 	require.True(t, previous.ClusterIndexReadyFor(*captured), "old snapshot keeps its schema/index")
 	require.Equal(t, 2, partition.Snapshot().ApproxInMemRows())
+}
+
+func installClusterReplaySchema(t *testing.T, item *cache.TableItem, variant string) {
+	t.Helper()
+	p := clusterReplayTableDef()
+	cols := make(cache.Columns, 0, len(p.Cols))
+	for i, col := range p.Cols {
+		typ := types.T(col.Typ.Id).ToType()
+		encoded, err := typ.Marshal()
+		require.NoError(t, err)
+		c := catalog.Column{Name: col.Name, Num: int32(i + 1), Seqnum: uint16(col.Seqnum), Typ: encoded}
+		if col.Hidden {
+			c.IsHidden = 1
+		}
+		if col.ClusterBy {
+			c.IsClusterBy = 1
+		}
+		if i == 7 && variant == "ordinary" {
+			c.IsClusterBy = 0
+		}
+		if i == 7 && variant == "not_hidden" {
+			c.IsHidden = 0
+		}
+		cols = append(cols, c)
+	}
+	constraint := &engine.ConstraintDef{Cts: []engine.Constraint{&engine.PrimaryKeyDef{Pkey: p.Pkey}}}
+	var err error
+	item.Constraint, err = constraint.MarshalBinary()
+	require.NoError(t, err)
+	cache.InitTableItemWithColumns(item, cols)
 }

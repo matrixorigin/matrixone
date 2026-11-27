@@ -351,6 +351,23 @@ type BgKey struct{}
 // refused with a distinguishable error.
 type PublicationViewBinding struct{}
 
+type persistentViewBindingKey struct{}
+
+// WithPersistentViewBinding excludes session temporary aliases while rebinding
+// a stored View body. It changes only name resolution, not authorization,
+// transaction visibility, or whether the resulting plan can execute.
+func WithPersistentViewBinding(ctx context.Context) context.Context {
+	if IsPersistentViewBinding(ctx) {
+		return ctx
+	}
+	return context.WithValue(ctx, persistentViewBindingKey{}, true)
+}
+
+func IsPersistentViewBinding(ctx context.Context) bool {
+	value, _ := ctx.Value(persistentViewBindingKey{}).(bool)
+	return value
+}
+
 // WithPublicationViewBinding marks ctx as a publication-view metadata binding
 // statement.
 func WithPublicationViewBinding(ctx context.Context) context.Context {

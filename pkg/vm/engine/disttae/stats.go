@@ -26,6 +26,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -245,7 +246,7 @@ type GlobalStats struct {
 	// tailC is the chan to receive entries from logtail
 	// and then update the stats info map.
 	// TODO(volgariver6): add metrics of the chan length.
-	tailC chan *logtail.TableLogtail
+	tailC chan statsLogtail
 
 	updateC chan statsUpdateJob
 
@@ -263,8 +264,7 @@ type GlobalStats struct {
 	// order; unrelated tables normally remain parallel.
 	refreshAdmission [optimizerStatsRefreshStripes]chan struct{}
 
-	// statsInfoMap is the global stats info in engine which
-	// contains all subscribed tables stats info.
+	// mu coordinates ordinary cache operations, producers, cleanup, and waiters.
 	mu struct {
 		sync.Mutex
 
@@ -272,7 +272,7 @@ type GlobalStats struct {
 		// If sync parameter is false, it is unuseful.
 		cond *sync.Cond
 
-		// statsInfoMap is the real stats info data.
+		// statsInfoMap contains the published statistics.
 		statsInfoMap map[pb.StatsInfoKey]*pb.StatsInfo
 
 		// tableDefVersions is present only for statistics that contain a
@@ -290,6 +290,11 @@ type GlobalStats struct {
 	KeyRouter client.KeyRouter[pb.StatsInfoKey]
 
 	concurrentExecutor ConcurrentExecutor
+
+	// observationMu protects the planner's optional scalar copy. Ordinary
+	// readers take mu. The planner uses only TryRLock here. Statistics and
+	// version mutations take mu and then observationMu, which is a leaf lock.
+	observationMu sync.RWMutex
 
 	// approxObjectNumUpdater is for test only currently.
 	approxObjectNumUpdater func() int64
@@ -335,7 +340,7 @@ func NewGlobalStats(
 		ctx:          ownerCtx,
 		cancel:       cancel,
 		engine:       e,
-		tailC:        make(chan *logtail.TableLogtail, 10000),
+		tailC:        make(chan statsLogtail, 10000),
 		updateC:      make(chan statsUpdateJob, 3000),
 		KeyRouter:    keyRouter,
 		queueWatcher: newQueueWatcher(),
@@ -536,12 +541,14 @@ func (gs *GlobalStats) RemoveTid(tableID uint64) {
 	defer gs.mu.Unlock()
 	gs.updatingMu.Lock()
 	defer gs.updatingMu.Unlock()
+	gs.observationMu.Lock()
 	for key := range gs.mu.statsInfoMap {
 		if key.TableID == tableID {
 			delete(gs.mu.statsInfoMap, key)
 			delete(gs.mu.tableDefVersions, key)
 		}
 	}
+	gs.observationMu.Unlock()
 	for key := range gs.updatingMu.updating {
 		if key.TableID == tableID {
 			delete(gs.updatingMu.updating, key)
@@ -667,8 +674,10 @@ func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
 		return nil
 	}
 
+	gs.observationMu.Lock()
 	gs.mu.statsInfoMap[key] = remoteInfo
 	delete(gs.mu.tableDefVersions, key)
+	gs.observationMu.Unlock()
 	if gs.mu.cond != nil {
 		gs.mu.cond.Broadcast()
 	}
@@ -700,7 +709,8 @@ func (gs *GlobalStats) GetAtTableVersion(
 
 // statsInfoForTableVersionLocked distinguishes a true cache miss from a
 // schema-bound entry that this reader must not consume. A mismatched entry is
-// retained because an older snapshot reader may still match it.
+// retained because an older snapshot reader may still match it. The caller
+// holds mu or the observation read lock.
 func (gs *GlobalStats) statsInfoForTableVersionLocked(
 	key pb.StatsInfoKey,
 	tableDefVersion *uint32,
@@ -903,16 +913,52 @@ func (gs *GlobalStats) waitForStatsUpdate(
 	}
 }
 
+// statsLogtail is what the stats consumer needs of a table's logtail. It is
+// taken when the logtail is enqueued: the consumer runs later, after the
+// logtail's batches, views of a reused receive buffer, are gone.
+type statsLogtail struct {
+	key           pb.StatsInfoKey
+	hasCheckpoint bool
+	metaChanges   int
+}
+
+func newStatsLogtail(tail *logtail.TableLogtail) statsLogtail {
+	// Count meta changes from logtail by checking batch length
+	metaChanges := 0
+	for i := range tail.Commands {
+		if cmd := tail.Commands[i]; cmd.EntryType == api.Entry_DataObject || logtailreplay.IsMetaEntry(tail.Commands[i].TableName) {
+			if rows, err := batch.EncodedRowCount(tail.Commands[i].Bat.Bytes()); err == nil {
+				metaChanges += rows
+			}
+		}
+	}
+	return statsLogtail{
+		key: pb.StatsInfoKey{
+			AccId:      tail.Table.AccId,
+			DatabaseID: tail.Table.DbId,
+			TableID:    tail.Table.TbId,
+			TableName:  tail.Table.GetTbName(),
+			DbName:     tail.Table.GetDbName(),
+		},
+		hasCheckpoint: len(tail.CkpLocation) > 0,
+		metaChanges:   metaChanges,
+	}
+}
+
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
 	if gs.ctx != nil {
 		if cause := context.Cause(gs.ctx); cause != nil {
 			return
 		}
 	}
+	change := newStatsLogtail(tail)
+	if !change.hasCheckpoint && change.metaChanges == 0 {
+		return
+	}
 	select {
 	case <-gs.lifecycleDone():
 		return
-	case gs.tailC <- tail:
+	case gs.tailC <- change:
 	default:
 		logutil.Errorf("the channel of logtails is full")
 	}
@@ -1046,33 +1092,15 @@ func (gs *GlobalStats) lifecycleDone() <-chan struct{} {
 	return gs.ctx.Done()
 }
 
-func (gs *GlobalStats) processLogtail(ctx context.Context, tail *logtail.TableLogtail) {
-	key := pb.StatsInfoKey{
-		AccId:      tail.Table.AccId,
-		DatabaseID: tail.Table.DbId,
-		TableID:    tail.Table.TbId,
-		TableName:  tail.Table.GetTbName(),
-		DbName:     tail.Table.GetDbName(),
-	}
-
-	// Count meta changes from logtail by checking batch length
-	metaChanges := 0
-	for i := range tail.Commands {
-		if cmd := tail.Commands[i]; cmd.EntryType == api.Entry_DataObject || logtailreplay.IsMetaEntry(tail.Commands[i].TableName) {
-			if tail.Commands[i].Bat != nil && len(tail.Commands[i].Bat.Vecs) > 0 {
-				metaChanges += int(tail.Commands[i].Bat.Vecs[0].Len)
-			}
-		}
-	}
-
-	if len(tail.CkpLocation) > 0 || metaChanges > 0 {
+func (gs *GlobalStats) processLogtail(ctx context.Context, change statsLogtail) {
+	if change.hasCheckpoint || change.metaChanges > 0 {
 		record, ok := gs.shouldEnqueueExistingStatsUpdateGeneration(
-			key, metaChanges, len(tail.CkpLocation) > 0,
+			change.key, change.metaChanges, change.hasCheckpoint,
 		)
 		if ok {
 			gs.enqueueStatsUpdateForRecord(pb.StatsInfoKeyWithContext{
 				Ctx: ctx,
-				Key: key,
+				Key: change.key,
 			}, false, record)
 		}
 	}
@@ -1335,6 +1363,16 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
+	gs.patchStatsCache(key, patch)
+	gs.broadcastStats(key)
+	gs.mu.cond.Broadcast()
+	return nil
+}
+
+// patchStatsCache updates one published value while the caller owns gs.mu.
+func (gs *GlobalStats) patchStatsCache(key pb.StatsInfoKey, patch *PatchArgs) {
+	gs.observationMu.Lock()
+	defer gs.observationMu.Unlock()
 
 	stats := gs.mu.statsInfoMap[key]
 	if stats == nil {
@@ -1421,13 +1459,6 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 			sr.Result = result
 		}
 	}
-
-	gs.broadcastStats(key)
-
-	// Broadcast update
-	gs.mu.cond.Broadcast()
-
-	return nil
 }
 
 // broadcastStats send the table stats key to gossip manager.
@@ -1495,17 +1526,33 @@ func (gs *GlobalStats) completeAutomaticStatsCacheUpdate(
 		}
 		return false
 	}
-	if updated {
-		gs.mu.statsInfoMap[key] = stats
-		delete(gs.mu.tableDefVersions, key)
+	committed := func() bool {
+		if !updated {
+			if _, exists := gs.mu.statsInfoMap[key]; exists {
+				return false
+			}
+		}
+		gs.observationMu.Lock()
+		defer gs.observationMu.Unlock()
+		// The owner may stop while this writer waits for an observation.
+		if gs.ctx != nil && context.Cause(gs.ctx) != nil {
+			return false
+		}
+		if updated {
+			gs.mu.statsInfoMap[key] = stats
+			delete(gs.mu.tableDefVersions, key)
+		} else {
+			gs.mu.statsInfoMap[key] = nil
+		}
+		return true
+	}()
+	if committed && updated {
 		gs.broadcastStats(key)
-	} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
-		gs.mu.statsInfoMap[key] = nil
 	}
 	if gs.mu.cond != nil {
 		gs.mu.cond.Broadcast()
 	}
-	return updated
+	return committed && updated
 }
 
 func (gs *GlobalStats) coordinateStatsUpdateJob(job statsUpdateJob) {
@@ -1655,8 +1702,8 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	}
 
 	// Get table definition
-	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
-	if table == nil || table.TableDef == nil {
+	tableDef := gs.engine.GetLatestCatalogCache().ReadPlanTableDefByID(key.AccId, key.DatabaseID, key.TableID)
+	if tableDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("table not found")
 	}
 
@@ -1682,7 +1729,7 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := &updateStatsRequest{
 		statsInfo:       stats,
-		tableDef:        table.TableDef,
+		tableDef:        tableDef,
 		partitionState:  ps,
 		fs:              gs.engine.fs,
 		ts:              types.TimestampToTS(now),
@@ -1707,7 +1754,7 @@ func (gs *GlobalStats) refreshStatsWithMode(
 	// Validate the observation against the schema snapshot that owned the
 	// collection. Publication below validates that same version again while
 	// holding the catalog change lock through the cache swap.
-	if err := applyStatsRefreshOptions(stats, table.TableDef, options); err != nil {
+	if err := applyStatsRefreshOptions(stats, tableDef, options); err != nil {
 		return nil, err
 	}
 
@@ -1781,9 +1828,8 @@ func (gs *GlobalStats) publishAnalyzedStats(
 			"manual statistics publication crossed subscription boundary for table %d", key.TableID)
 	}
 
-	table := gs.engine.GetLatestCatalogCache().GetTableById(
-		key.AccId, key.DatabaseID, key.TableID)
-	if table == nil || table.TableDef == nil {
+	tableDef := gs.engine.GetLatestCatalogCache().ReadPlanTableDefByID(key.AccId, key.DatabaseID, key.TableID)
+	if tableDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("table not found")
 	}
 	metadata := plan2.NewStatsInfo()
@@ -1794,7 +1840,7 @@ func (gs *GlobalStats) publishAnalyzedStats(
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := &updateStatsRequest{
 		statsInfo:       metadata,
-		tableDef:        table.TableDef,
+		tableDef:        tableDef,
 		partitionState:  ps,
 		fs:              gs.engine.fs,
 		ts:              types.TimestampToTS(now),
@@ -2002,7 +2048,7 @@ func (gs *GlobalStats) publishStatsForGeneration(
 ) (bool, error) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-	published, err := gs.publishStatsForGenerationLocked(ctx, key, generation, stats)
+	published, err := gs.publishStatsForGenerationLocked(ctx, key, generation, stats, nil)
 	if published {
 		gs.broadcastStats(key)
 	}
@@ -2023,22 +2069,31 @@ func (gs *GlobalStats) publishStatsForGenerationLocked(
 	key pb.StatsInfoKey,
 	generation *updateRecord,
 	stats *pb.StatsInfo,
+	tableDefVersion *uint32,
 ) (bool, error) {
 	if generation == nil || stats == nil {
 		return false, nil
 	}
 	generationActive := gs.statsUpdateGenerationActive(key, generation)
-	// Generation validation is the last operation that can wait on another
-	// application lock. Check cancellation after it so a request canceled while
-	// waiting for updatingMu cannot cross the cache-swap commit point.
+	if !generationActive {
+		return false, gs.statsRefreshCancellationCause(ctx)
+	}
+	gs.observationMu.Lock()
+	defer gs.observationMu.Unlock()
+	// Both generation validation and cache acquisition can wait. Cancellation
+	// observed before the swap wins; a completed swap remains published.
 	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 		return false, cause
 	}
-	if !generationActive {
-		return false, nil
-	}
 	gs.mu.statsInfoMap[key] = stats
-	delete(gs.mu.tableDefVersions, key)
+	if tableDefVersion == nil {
+		delete(gs.mu.tableDefVersions, key)
+	} else {
+		if gs.mu.tableDefVersions == nil {
+			gs.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
+		}
+		gs.mu.tableDefVersions[key] = *tableDefVersion
+	}
 	return true, nil
 }
 
@@ -2074,13 +2129,7 @@ func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
 			gs.mu.Lock()
 			statsLocked = true
 			published, publicationErr = gs.publishStatsForGenerationLocked(
-				ctx, key, generation, stats)
-			if published {
-				if gs.mu.tableDefVersions == nil {
-					gs.mu.tableDefVersions = make(map[pb.StatsInfoKey]uint32)
-				}
-				gs.mu.tableDefVersions[key] = expectedVersion
-			}
+				ctx, key, generation, stats, &expectedVersion)
 		},
 	)
 	if statsLocked {
@@ -2121,9 +2170,8 @@ func (gs *GlobalStats) publishStatsForGenerationAtTableVersion(
 }
 
 func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay.PartitionState, key pb.StatsInfoKey, stats *pb.StatsInfo) (bool, float64) {
-	table := gs.engine.GetLatestCatalogCache().GetTableById(key.AccId, key.DatabaseID, key.TableID)
-	// table or its definition is nil, means that the table is created but not committed yet.
-	if table == nil || table.TableDef == nil {
+	tableDef := gs.engine.GetLatestCatalogCache().ReadPlanTableDefByID(key.AccId, key.DatabaseID, key.TableID)
+	if tableDef == nil {
 		logutil.Errorf("cannot get table by ID %v", key)
 		return false, 0
 	}
@@ -2143,7 +2191,7 @@ func (gs *GlobalStats) executeStatsUpdate(ctx context.Context, ps *logtailreplay
 	// the time used to init stats info is not need to be too precise.
 	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
 	req := newUpdateStatsRequest(
-		table.TableDef,
+		tableDef,
 		ps,
 		gs.engine.fs,
 		types.TimestampToTS(now),
@@ -2539,11 +2587,11 @@ func CollectAndCalculateStats(ctx context.Context, req *updateStatsRequest, exec
 			}
 		}
 	}
-	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
-	info := plan2.NewTableStatsInfo(lenCols)
 	if req.approxObjectNum == 0 {
 		return 1.0, nil
 	}
+	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
+	info := plan2.NewTableStatsInfo(lenCols)
 	info.ApproxObjectNumber = req.approxObjectNum
 	baseTableDef := req.tableDef
 

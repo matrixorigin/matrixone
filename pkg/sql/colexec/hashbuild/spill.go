@@ -127,7 +127,7 @@ func marshalSpillRecordAccounted(
 	}
 	cnt := int64(bat.RowCount())
 	buf.Reset()
-	batchSize, err := bat.MarshalBinaryWithGroupingSize()
+	batchSize, err := bat.MarshalFramedSize()
 	if err != nil || batchSize > math.MaxInt-24 {
 		if err != nil {
 			return 0, err
@@ -145,7 +145,7 @@ func marshalSpillRecordAccounted(
 		return 0, err
 	}
 	batchStart := buf.Len()
-	if err := bat.MarshalBinaryWithGroupingTo(buf); err != nil {
+	if err := bat.MarshalFramedTo(buf); err != nil {
 		return 0, err
 	}
 	serializedSize := int64(buf.Len() - batchStart)
@@ -319,6 +319,10 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 		return mpool.ErrAllocationAccountInvalid
 	}
 	ctr.spillAllocationMP = proc.Mp()
+	selectedMP, err := ctr.spillBatchAllocation.MP(proc.Mp())
+	if err != nil {
+		return err
+	}
 	if !sourceAlreadyCharged {
 		externalBytes := bat.Allocated()
 		if size := bat.Size(); size > externalBytes {
@@ -334,7 +338,6 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	if !keycodec.ValidVectors(bat.Vecs, rows) {
 		return process.ErrExecutionResourceInvalid
 	}
-	var err error
 
 	if cap(ctr.spillKeyVecs) < len(executors) {
 		ctr.spillKeyVecs = make([]*vector.Vector, len(executors))
@@ -365,7 +368,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	var selected *batch.Batch
 	defer func() {
 		if selected != nil {
-			selected.Clean(proc.Mp())
+			selected.Clean(selectedMP)
 		}
 		for i := range ctr.spillKeyVecs {
 			ctr.spillKeyVecs[i] = nil
@@ -435,24 +438,12 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 			continue
 		}
 		if selected == nil {
-			selected = batch.NewOffHeapWithSize(len(bat.Vecs))
-			if err := selected.SetAllocationAccount(
-				ctr.spillBatchAllocation,
-			); err != nil {
-				return err
-			}
+			selected = batch.NewWithSize(len(bat.Vecs))
 			for i, vec := range bat.Vecs {
 				if vec == nil {
 					return process.ErrExecutionResourceInvalid
 				}
-				selected.Vecs[i], err =
-					vector.NewOffHeapVecWithTypeAndAllocation(
-						*vec.GetType(),
-						ctr.spillBatchAllocation,
-					)
-				if err != nil {
-					return err
-				}
+				selected.Vecs[i] = vector.NewVec(*vec.GetType(), selectedMP)
 			}
 		}
 		cursor := start
@@ -469,10 +460,10 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 						spillErr = process.ErrExecutionResourceInvalid
 						break
 					}
-					if spillErr = selected.Vecs[i].PreExtend(n, proc.Mp()); spillErr != nil {
+					if spillErr = selected.Vecs[i].PreExtend(n, selectedMP); spillErr != nil {
 						break
 					}
-					if spillErr = selected.Vecs[i].UnionInt32(vec, sels, proc.Mp()); spillErr != nil {
+					if spillErr = selected.Vecs[i].UnionInt32(vec, sels, selectedMP); spillErr != nil {
 						break
 					}
 				}
@@ -656,9 +647,7 @@ func (ctr *container) spillBatchWithPressure(
 		current := bat
 		if start != 0 || end != rows {
 			var err error
-			current, err = bat.WindowWithAllocation(
-				start, end, proc.Mp(), ctr.spillBatchAllocation,
-			)
+			current, err = bat.Window(start, end)
 			if err != nil {
 				return err
 			}
@@ -672,7 +661,7 @@ func (ctr *container) spillBatchWithPressure(
 			sourceAlreadyCharged,
 		)
 		if current != bat {
-			current.Clean(proc.Mp())
+			current.FreeWindow()
 		}
 		if err == nil {
 			start = end
@@ -999,15 +988,9 @@ func (hashBuild *HashBuild) shouldSpillBeforeRetain(
 		} else {
 			predicted += uint64(inputBatchSize)
 		}
-		// Each retained batch passed through this ingress once. Inspect only the
-		// new input, including the threshold-crossing batch, instead of rescanning
-		// the entire growing build relation on every admission decision.
-		if ctr.hashmapBuilder.keyWidth <= 8 && !ctr.autoSpillHasGrouping {
-			ctr.autoSpillHasGrouping = ctr.hashmapBuilder.hasGroupingKeyInBatches([]*batch.Batch{input})
-		}
 		mapBytes, err := estimatedHashMapBytes(
 			int64(ctr.hashmapBuilder.InputBatchRowCount),
-			ctr.hashmapBuilder.keyWidth <= 8 && !ctr.autoSpillHasGrouping,
+			ctr.hashmapBuilder.keyWidth <= 8,
 		)
 		if err != nil {
 			return false, err

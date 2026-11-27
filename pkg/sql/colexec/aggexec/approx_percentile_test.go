@@ -23,7 +23,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -255,9 +254,6 @@ func TestInterpolateFloat64(t *testing.T) {
 }
 
 func TestPercentileArithmeticScratchDoesNotAllocatePerGroup(t *testing.T) {
-	if util.RaceDetectorEnabled {
-		t.Skip("allocation counts include race-detector instrumentation")
-	}
 	p := new(big.Rat)
 	_, ok := p.SetString("0.12345678901234567890123456789012345678")
 	require.True(t, ok)
@@ -546,7 +542,7 @@ func TestPercentileDecimal128Vals_EdgeCases(t *testing.T) {
 
 func TestPercentileDecimal128MaxPrecisionEndpoints(t *testing.T) {
 	mp := mpool.MustNewZero()
-	values := NewVectors[types.Decimal128](types.New(types.T_decimal128, 38, 0))
+	values := NewVectors[types.Decimal128](types.New(types.T_decimal128, 38, 0), mp)
 	t.Cleanup(func() {
 		values.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -604,7 +600,7 @@ func TestPercentileDecimal128ScaleBoundaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			values := NewVectors[types.Decimal128](tt.typ)
+			values := NewVectors[types.Decimal128](tt.typ, mp)
 			t.Cleanup(func() {
 				values.Free(mp)
 				require.Equal(t, int64(0), mp.CurrNB())
@@ -1288,7 +1284,7 @@ func TestApproxPercentileExec_MultipleGroups(t *testing.T) {
 	// Group 1: values 1,2  -> median 1.5
 	// Group 2: values 10,20 -> median 15
 	// Group 3: value 100 -> median 100
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(vec, []int64{1, 2, 10, 20, 0, 0, 100}, []bool{false, false, false, false, true, true, false}, mp))
 	defer vec.Free(mp)
 
@@ -1315,7 +1311,7 @@ func TestApproxPercentileExec_NullHandling(t *testing.T) {
 	require.NoError(t, exec.GroupGrow(1))
 	require.NoError(t, exec.SetExtraInformation([]byte("0.5"), 0))
 
-	vec := vector.NewVec(types.T_float64.ToType())
+	vec := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(vec, []float64{0, 1, 2, 3, 4, 5}, []bool{true, false, true, false, true, false}, mp))
 	defer vec.Free(mp)
 
@@ -1800,7 +1796,7 @@ func TestApproxPercentileExec_BoundedSketchPartialMerge10K(t *testing.T) {
 				exact = append(exact, values[row])
 			}
 		}
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(vec, values, nulls, mp))
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
 		vec.Free(mp)
@@ -1924,4 +1920,54 @@ func TestQuantileSketchMergeEmptyParityLevelIntoEmptyDestination(t *testing.T) {
 	require.NoError(t, dst.Merge(src))
 	require.Equal(t, src.count, dst.count)
 	require.True(t, dst.hasValue)
+}
+
+func TestApproxPercentileExec_Decimal256MergeRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	typ := types.New(types.T_decimal256, 48, 1)
+	makeExec := func() AggFuncExec {
+		t.Helper()
+		exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, typ)
+		require.NoError(t, err)
+		t.Cleanup(exec.Free)
+		return exec
+	}
+	fill := func(exec AggFuncExec, values ...string) {
+		t.Helper()
+		require.NoError(t, exec.GroupGrow(3))
+		require.NoError(t, exec.SetExtraInformation([]byte("0.5"), 0))
+		vec := vector.NewVec(typ, mp)
+		defer vec.Free(mp)
+		for _, value := range values {
+			decimal, err := types.ParseDecimal256(value, typ.Width, typ.Scale)
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendFixed(vec, decimal, false, mp))
+		}
+		require.NoError(t, vector.AppendFixed(vec, types.Decimal256{}, true, mp))
+		require.NoError(t, exec.BatchFill(0, []uint64{1, 2, 3}, []*vector.Vector{vec}))
+	}
+
+	left, right := makeExec(), makeExec()
+	fill(left, "1234567890123456789012345678901234567890.1", "-1234567890123456789012345678901234567890.1")
+	fill(right, "1234567890123456789012345678901234567890.2", "-1234567890123456789012345678901234567890.2")
+	var buf bytes.Buffer
+	require.NoError(t, right.SaveIntermediateResult(3, [][]uint8{{1, 1, 1}}, &buf))
+	restored := makeExec()
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+	require.NoError(t, restored.SetExtraInformation([]byte("0.5"), 0))
+	require.NoError(t, left.BatchMerge(restored, 0, []uint64{1, 2, 3}))
+
+	result, err := left.Flush()
+	require.NoError(t, err)
+	for _, vec := range result {
+		t.Cleanup(func() { vec.Free(mp) })
+	}
+	require.Len(t, result, 1)
+	require.Equal(t, typ, *result[0].GetType())
+	values := vector.MustFixedColNoTypeCheck[types.Decimal256](result[0])
+	require.Equal(t, "1234567890123456789012345678901234567890.2", values[0].Format(typ.Scale))
+	require.Equal(t, "-1234567890123456789012345678901234567890.2", values[1].Format(typ.Scale))
+	require.True(t, result[0].IsNull(uint64(2)))
 }

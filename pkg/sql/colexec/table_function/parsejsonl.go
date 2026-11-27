@@ -138,7 +138,7 @@ func (st *parseJsonlState) start(tf *TableFunction, proc *process.Process, nthRo
 	}
 
 	if st.batch == nil {
-		st.batch = tf.createResultBatch()
+		st.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		st.batch.CleanOnlyData()
 	}
@@ -211,7 +211,7 @@ func (st *parseJsonlState) call(tf *TableFunction, proc *process.Process) (vm.Ca
 			}
 		}
 
-		for col, att := range st.batch.Attrs {
+		for col, att := range tf.Attrs {
 			origCol := 0
 			for ; origCol < len(st.opts.Cols); origCol++ {
 				if st.opts.Cols[origCol].Name == att {
@@ -251,7 +251,7 @@ func (st *parseJsonlState) call(tf *TableFunction, proc *process.Process) (vm.Ca
 			}
 		}
 
-		for col, att := range st.batch.Attrs {
+		for col, att := range tf.Attrs {
 			origCol := 0
 			for ; origCol < len(st.opts.Cols); origCol++ {
 				if st.opts.Cols[origCol].Name == att {

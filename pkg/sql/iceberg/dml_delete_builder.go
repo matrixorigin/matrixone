@@ -543,9 +543,6 @@ func materializeDMLReplacementBatch(ctx context.Context, operation dml.Operation
 		return nil, nil
 	}
 	attrs := replacement.Attrs
-	if len(attrs) == 0 {
-		attrs = replacement.Batch.Attrs
-	}
 	if replacement.ObjectWriter == nil {
 		replacement.ObjectWriter = fallbackWriter
 	}

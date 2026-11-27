@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"go.uber.org/zap"
 
@@ -63,7 +62,7 @@ type CkpReplayer struct {
 	readDuration, applyDuration       time.Duration
 	readCount, applyCount, totalCount int
 
-	objectReplayWorker []sm.Queue
+	objectReplayWorker []sm.ContextQueue
 	wg                 sync.WaitGroup
 	objectCountMap     map[uint64]int
 }
@@ -288,7 +287,7 @@ func (c *CkpReplayer) replayObjectList(
 	ctx context.Context,
 	forSys bool,
 ) (maxTS types.TS, maxLsn uint64, err error) {
-	tmpBatch := ckputil.MakeDataScanTableIDBatch()
+	tmpBatch := ckputil.MakeDataScanTableIDBatch(common.CheckpointAllocator)
 	defer tmpBatch.Clean(common.CheckpointAllocator)
 	defer c.ckpReader.Reset(ctx)
 	for {
@@ -360,6 +359,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 }
 
 func (c *CkpReplayer) ReplayCatalog(
+	ctx context.Context,
 	readTxn txnif.AsyncTxn,
 	phase string,
 ) (err error) {
@@ -382,21 +382,21 @@ func (c *CkpReplayer) ReplayCatalog(
 		return
 	}
 
-	// logutil.Info(c.r.catalog.SimplePPString(common.PPL3))
-	sortFunc := func(cols []containers.Vector, pkidx int) (err2 error) {
-		_, err2 = mergesort.SortBlockColumns(cols, pkidx, c.r.rt.VectorPool.Transient)
-		return
-	}
-	closeFn := c.r.catalog.RelayFromSysTableObjects(
-		c.r.ctx,
+	err = c.r.catalog.ReplayFromSysTableObjects(
+		ctx,
 		readTxn,
-		tables.ReadSysTableBatch,
-		sortFunc,
+		tables.ScanSysTable,
 		c,
 	)
+	// A cancellation or error may arrive after some tasks were submitted.
+	// They own their schemas and must finish before replay returns.
 	c.wg.Wait()
-	for _, fn := range closeFn {
-		fn()
+	if err != nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		err = context.Cause(ctx)
+		return err
 	}
 	c.resetObjectCountMap()
 	// logutil.Info(c.r.catalog.SimplePPString(common.PPL0))
@@ -446,11 +446,15 @@ func (c *CkpReplayer) ReplayObjectlist(ctx context.Context, phase string) (err e
 	return
 }
 
-func (c *CkpReplayer) Submit(tid uint64, replayFn func()) {
+func (c *CkpReplayer) Submit(ctx context.Context, tid uint64, replayFn func()) error {
 	c.wg.Add(1)
 	workerOffset := tid % uint64(len(c.objectReplayWorker))
+	if _, err := c.objectReplayWorker[workerOffset].EnqueueWithContext(ctx, replayFn); err != nil {
+		c.wg.Done()
+		return err
+	}
 	c.objectCountMap[tid] = c.objectCountMap[tid] + 1
-	c.objectReplayWorker[workerOffset].Enqueue(replayFn)
+	return nil
 }
 
 func (c *CkpReplayer) resetObjectCountMap() {
@@ -465,7 +469,7 @@ func (r *runner) BuildReplayer(
 		dir:            dir,
 		objectCountMap: make(map[uint64]int),
 	}
-	objectWorker := make([]sm.Queue, DefaultObjectReplayWorkerCount)
+	objectWorker := make([]sm.ContextQueue, DefaultObjectReplayWorkerCount)
 	for i := 0; i < DefaultObjectReplayWorkerCount; i++ {
 		objectWorker[i] = sm.NewSafeQueue(10000, 100, func(items ...any) {
 			for _, item := range items {

@@ -402,7 +402,7 @@ func (h *VisibleStateChangesHandle) loadVisibleRows(ctx context.Context) error {
 	}()
 	for _, reader := range h.beforeScan.readers {
 		for {
-			readBatch := newVisibleStateScanBatch(&h.beforeScan)
+			readBatch := newVisibleStateScanBatch(&h.beforeScan, h.mp)
 			isEnd, err := reader.Read(ctx, h.beforeScan.attrs, nil, h.mp, readBatch)
 			if err != nil {
 				readBatch.Clean(h.mp)
@@ -482,7 +482,7 @@ func (h *VisibleStateChangesHandle) ensureAfterBatch(ctx context.Context) error 
 			h.afterDone = true
 			return nil
 		}
-		readBatch := newVisibleStateScanBatch(&h.afterScan)
+		readBatch := newVisibleStateScanBatch(&h.afterScan, h.mp)
 		isEnd, err := h.afterScan.readers[h.afterScan.readerIdx].Read(
 			ctx, h.afterScan.attrs, nil, h.mp, readBatch)
 		if err != nil {
@@ -599,11 +599,10 @@ func (h *VisibleStateChangesHandle) normalizeOutput(data, tombstone *batch.Batch
 	return data, tombstone
 }
 
-func newVisibleStateScanBatch(scan *visibleStateSnapshotScan) *batch.Batch {
+func newVisibleStateScanBatch(scan *visibleStateSnapshotScan, mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(scan.attrs))
-	bat.SetAttributes(scan.attrs)
 	for i := range scan.attrs {
-		bat.Vecs[i] = vector.NewVec(scan.types[i])
+		bat.Vecs[i] = vector.NewVec(scan.types[i], mp)
 	}
 	return bat
 }
@@ -618,14 +617,13 @@ func (h *VisibleStateChangesHandle) newDataBatch() *batch.Batch {
 	attrs = append(attrs, h.dataAttrs...)
 	attrs = append(attrs, objectio.DefaultCommitTS_Attr)
 	bat := batch.NewWithSize(len(attrs))
-	bat.SetAttributes(attrs)
 	if h.retainRowID {
-		bat.Vecs[0] = vector.NewVec(h.rowIDType)
+		bat.Vecs[0] = vector.NewVec(h.rowIDType, h.mp)
 	}
 	for i := range h.dataTypes {
-		bat.Vecs[i+leading] = vector.NewVec(h.dataTypes[i])
+		bat.Vecs[i+leading] = vector.NewVec(h.dataTypes[i], h.mp)
 	}
-	bat.Vecs[len(bat.Vecs)-1] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[len(bat.Vecs)-1] = vector.NewVec(types.T_TS.ToType(), h.mp)
 	return bat
 }
 
@@ -635,13 +633,12 @@ func (h *VisibleStateChangesHandle) newTombstoneBatch() *batch.Batch {
 		attrs = append([]string{catalog.Row_ID}, attrs...)
 	}
 	bat := batch.NewWithSize(len(attrs))
-	bat.SetAttributes(attrs)
 	idx := 0
 	if h.retainRowID {
-		bat.Vecs[0] = vector.NewVec(h.rowIDType)
+		bat.Vecs[0] = vector.NewVec(h.rowIDType, h.mp)
 		idx = 1
 	}
-	bat.Vecs[idx] = vector.NewVec(h.pkType)
-	bat.Vecs[idx+1] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[idx] = vector.NewVec(h.pkType, h.mp)
+	bat.Vecs[idx+1] = vector.NewVec(types.T_TS.ToType(), h.mp)
 	return bat
 }

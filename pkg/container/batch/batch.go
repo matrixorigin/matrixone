@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,68 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-const (
-	prepareParamKindBatchMagic0      = byte('P')
-	prepareParamKindBatchMagic1      = byte('P')
-	prepareParamKindBatchMagic2      = byte('B')
-	prepareParamKindBatchVersionV1   = byte(1)
-	prepareParamKindBatchVersion     = byte(2)
-	prepareParamKindBatchModeNone    = byte(0)
-	prepareParamKindBatchModeUniform = byte(1)
-	prepareParamKindBatchModeRows    = byte(2)
-	prepareParamKindBatchBinaryFlag  = byte(0x80)
-	prepareParamKindBatchTextFlag    = byte(0x40)
-	prepareParamKindBatchMaxRows     = int32(1 << 24)
-)
-
-type prepareParamKindBatchRecord struct {
-	mode                 byte
-	kind                 vector.PrepareParamKind
-	encodedRows          []byte
-	binaryString         bool
-	textString           bool
-	stringSource         types.StringSource
-	encodedStringSources []byte
-}
-
-func setBatchVectorRuntimeStringDomain(
-	vec *vector.Vector,
-	binaryString bool,
-	textString bool,
-	mp *mpool.MPool,
-) error {
-	if binaryString && textString {
-		return moerr.NewInvalidInputNoCtx("binary and text vector flags are mutually exclusive")
-	}
-	if textString {
-		return vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp)
-	}
-	if binaryString {
-		return vec.SetRuntimeStringDomainWithMP(types.RuntimeStringBinary, mp)
-	}
-	return vec.SetRuntimeStringDomainWithMP(types.RuntimeStringInherit, mp)
-}
-
-func New(attrs []string) *Batch {
-	return &Batch{
-		Attrs:    attrs,
-		Vecs:     make([]*vector.Vector, len(attrs)),
-		rowCount: 0,
-	}
-}
-
-func NewOffHeap(attrs []string) *Batch {
-	ret := New(attrs)
-	ret.offHeap = true
-	return ret
-}
-
-func NewOffHeapEmpty() *Batch {
-	return &Batch{
-		offHeap: true,
-	}
-}
-
 func NewWithSize(n int) *Batch {
 	return &Batch{
 		Vecs:     make([]*vector.Vector, n),
@@ -98,26 +37,11 @@ func NewWithSize(n int) *Batch {
 	}
 }
 
-func NewOffHeapWithSize(n int) *Batch {
-	ret := NewWithSize(n)
-	ret.offHeap = true
-	return ret
-}
-
-func NewWithSchema(offHeap bool, attrs []string, attTypes []types.Type) *Batch {
-	var bat *Batch
-	if offHeap {
-		bat = NewOffHeapWithSize(len(attTypes))
-	} else {
-		bat = NewWithSize(len(attTypes))
-	}
-	bat.Attrs = attrs
+// NewWithTypes returns a batch of empty vectors of attTypes, all from mp.
+func NewWithTypes(attTypes []types.Type, mp *mpool.MPool) *Batch {
+	bat := NewWithSize(len(attTypes))
 	for i, t := range attTypes {
-		if offHeap {
-			bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
-		} else {
-			bat.Vecs[i] = vector.NewVec(t)
-		}
+		bat.Vecs[i] = vector.NewVec(t, mp)
 	}
 	return bat
 }
@@ -138,9 +62,60 @@ func (bat *Batch) CheckLength() error {
 	return nil
 }
 
+// MarshalBinary encodes bat in the Batch wire format: the row count, each
+// vector with its length, the extra buffer, Recursive and ShuffleIDX. Peers
+// run the same binary (shutdown upgrade only) and the bytes are never
+// persisted, so the format carries no version or legacy sections.
 func (bat *Batch) MarshalBinary() ([]byte, error) {
-	var w bytes.Buffer
-	return bat.MarshalBinaryWithBuffer(&w, false)
+	var w binaryAppender
+	if err := bat.MarshalBinaryTo(&w); err != nil {
+		return nil, err
+	}
+	return w.buf, nil
+}
+
+// binaryAppender is the writer MarshalBinary encodes into. MarshalBinaryTo
+// sizes it exactly through EnsureCapacity, and the typed writes keep the
+// small headers from escaping to the heap through io.Writer.
+type binaryAppender struct {
+	buf []byte
+}
+
+func (a *binaryAppender) Len() int { return len(a.buf) }
+
+func (a *binaryAppender) EnsureCapacity(n int) error {
+	a.buf = slices.Grow(a.buf, n-len(a.buf))
+	return nil
+}
+
+func (a *binaryAppender) Write(p []byte) (int, error) {
+	a.buf = append(a.buf, p...)
+	return len(p), nil
+}
+
+func (a *binaryAppender) WriteByte(v byte) error {
+	a.buf = append(a.buf, v)
+	return nil
+}
+
+func (a *binaryAppender) WriteUint32(v uint32) error {
+	a.buf = binary.NativeEndian.AppendUint32(a.buf, v)
+	return nil
+}
+
+func (a *binaryAppender) WriteInt32(v int32) error {
+	a.buf = binary.NativeEndian.AppendUint32(a.buf, uint32(v))
+	return nil
+}
+
+func (a *binaryAppender) WriteUint64(v uint64) error {
+	a.buf = binary.NativeEndian.AppendUint64(a.buf, v)
+	return nil
+}
+
+func (a *binaryAppender) WriteInt64(v int64) error {
+	a.buf = binary.NativeEndian.AppendUint64(a.buf, uint64(v))
+	return nil
 }
 
 func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, error) {
@@ -153,347 +128,18 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, 
 	return w.Bytes(), nil
 }
 
-// HasPrepareParamKindMetadata reports whether this batch contains transport-
-// significant prepared-parameter provenance.  An observed scalar None is the
-// ordinary string path and is intentionally omitted; a heterogeneous sidecar
-// is always significant even when some rows are None.
-func (bat *Batch) HasPrepareParamKindMetadata() bool {
-	return bat.hasPrepareParamKindMetadata(true)
-}
-
-// HasPrepareParamKindMetadataWithoutStringSources reports whether the batch
-// contains provenance understood before string-source transport was added.
-// Protocol gates use this to let older peers drop only string sources.
-func (bat *Batch) HasPrepareParamKindMetadataWithoutStringSources() bool {
-	return bat.hasPrepareParamKindMetadata(false)
-}
-
-func (bat *Batch) hasPrepareParamKindMetadata(includeStringSources bool) bool {
-	if bat == nil {
-		return false
-	}
-	for _, vec := range bat.Vecs {
-		if vec == nil {
-			continue
-		}
-		if includeStringSources && vec.HasStringSourceMetadata() {
-			return true
-		}
-		if vec.GetIsBinaryString() || vec.HasBinaryStringRows() {
-			return true
-		}
-		if len(vec.GetPrepareParamKinds()) != 0 {
-			return true
-		}
-		if vec.HasPrepareParamKind() && vec.GetPrepareParamKind() != vector.PrepareParamNone {
-			return true
-		}
-	}
-	return false
-}
-
-func (bat *Batch) HasStringSourceMetadata() bool {
-	if bat == nil {
-		return false
-	}
-	for _, vec := range bat.Vecs {
-		if vec != nil && vec.HasStringSourceMetadata() {
-			return true
-		}
-	}
-	return false
-}
-
-func (bat *Batch) HasBinaryStringMetadata() bool {
-	if bat == nil {
-		return false
-	}
-	for _, vec := range bat.Vecs {
-		if vec != nil && (vec.GetIsBinaryString() || vec.HasBinaryStringRows()) {
-			return true
-		}
-	}
-	return false
-}
-
-func (bat *Batch) HasExplicitTextStringMetadata() bool {
-	if bat == nil {
-		return false
-	}
-	for _, vec := range bat.Vecs {
-		if vec != nil && vec.HasExplicitTextStringMetadata() {
-			return true
-		}
-	}
-	return false
-}
-
-func hasUniformExplicitTextStringMetadata(vec *vector.Vector) bool {
-	if vec == nil || !vec.HasExplicitTextStringMetadata() {
-		return false
-	}
-	seen := false
-	for row := 0; row < vec.Length(); row++ {
-		if vec.IsNull(uint64(row)) {
-			continue
-		}
-		seen = true
-		if vec.GetRuntimeStringDomainAt(row) != types.RuntimeStringText {
-			return false
-		}
-	}
-	return seen
-}
-
-// PrepareParamKindMetadataSize validates the transient trailer and returns its
-// exact wire size. Zero means that no trailer is required.
-func (bat *Batch) PrepareParamKindMetadataSize() (int, error) {
-	return bat.prepareParamKindMetadataSize(true)
-}
-
-func (bat *Batch) prepareParamKindMetadataSize(includeStringSources bool) (int, error) {
-	if bat == nil || !bat.hasPrepareParamKindMetadata(includeStringSources) {
-		return 0, nil
-	}
-	// magic/version + vector count + batch row count + trailing size.
-	total := uint64(4 + 4 + 8 + 4)
-	hasStringSources := includeStringSources && bat.HasStringSourceMetadata()
-	for _, vec := range bat.Vecs {
-		if vec == nil {
-			return 0, moerr.NewInvalidInputNoCtx("cannot encode prepared parameter metadata for nil vector")
-		}
-		kinds := vec.GetPrepareParamKinds()
-		mixedBinaryString := vec.HasBinaryStringRows() && !hasUniformExplicitTextStringMetadata(vec)
-		switch {
-		case len(kinds) != 0 || mixedBinaryString:
-			if (len(kinds) != 0 && len(kinds) != vec.Length()) ||
-				int64(vec.Length()) > int64(prepareParamKindBatchMaxRows) {
-				return 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
-			}
-			for row := 0; row < vec.Length(); row++ {
-				if vec.GetPrepareParamKindAt(row) > vector.PrepareParamBoolean {
-					return 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
-				}
-			}
-			total += 1 + 4 + uint64(vec.Length())
-		case vec.HasPrepareParamKind() && vec.GetPrepareParamKind() != vector.PrepareParamNone:
-			if vec.GetPrepareParamKind() > vector.PrepareParamBoolean {
-				return 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
-			}
-			total += 2
-		default:
-			total++
-		}
-		if hasStringSources {
-			sources := vec.GetStringSources()
-			if len(sources) != 0 {
-				if len(sources) != vec.Length() || int64(vec.Length()) > int64(prepareParamKindBatchMaxRows) {
-					return 0, moerr.NewInvalidInputNoCtx("invalid string source metadata row count")
-				}
-				total += 1 + 4 + uint64(len(sources))
-			} else if vec.GetStringSource() != types.StringSourceExpression {
-				total += 2
-			} else {
-				total++
-			}
-		}
-	}
-	if total > uint64(^uint32(0)) || total > uint64(^uint(0)>>1) {
-		return 0, moerr.NewInvalidInputNoCtx("prepared parameter metadata exceeds wire limit")
-	}
-	return int(total), nil
-}
-
-// AppendPrepareParamKindMetadataTo streams the self-identifying transient
-// trailer after the stable Batch bytes. It is intentionally not part of
-// MarshalBinaryTo: persisted/stable Vector and Batch bytes remain unchanged.
-func (bat *Batch) AppendPrepareParamKindMetadataTo(w io.Writer) error {
-	return bat.appendPrepareParamKindMetadataTo(w, true)
-}
-
-func (bat *Batch) appendPrepareParamKindMetadataTo(w io.Writer, includeStringSources bool) error {
-	size, err := bat.prepareParamKindMetadataSize(includeStringSources)
-	if err != nil || size == 0 {
-		return err
-	}
-	if w == nil {
-		return io.ErrClosedPipe
-	}
-	version := prepareParamKindBatchVersionV1
-	if includeStringSources && bat.HasStringSourceMetadata() {
-		version = prepareParamKindBatchVersion
-	}
-	if err := types.WriteFull(w, []byte{
-		prepareParamKindBatchMagic0, prepareParamKindBatchMagic1,
-		prepareParamKindBatchMagic2, version,
-	}); err != nil {
-		return err
-	}
-	if err := writeBatchMarshalInt32(w, int32(len(bat.Vecs))); err != nil {
-		return err
-	}
-	if err := writeBatchMarshalInt64(w, int64(bat.rowCount)); err != nil {
-		return err
-	}
-	for _, vec := range bat.Vecs {
-		kinds := vec.GetPrepareParamKinds()
-		uniformText := hasUniformExplicitTextStringMetadata(vec)
-		mixedBinaryString := vec.HasBinaryStringRows() && !uniformText
-		binaryFlag := byte(0)
-		if vec.GetIsBinaryString() && !mixedBinaryString {
-			binaryFlag = prepareParamKindBatchBinaryFlag
-		}
-		if uniformText {
-			binaryFlag = prepareParamKindBatchTextFlag
-		}
-		switch {
-		case len(kinds) != 0 || mixedBinaryString:
-			if err := writeBatchMarshalByte(w, prepareParamKindBatchModeRows); err != nil {
-				return err
-			}
-			if err := writeBatchMarshalInt32(w, int32(vec.Length())); err != nil {
-				return err
-			}
-			for row := 0; row < vec.Length(); row++ {
-				encoded := byte(vec.GetPrepareParamKindAt(row))
-				if vec.GetBinaryStringMetadataAt(row) {
-					encoded |= prepareParamKindBatchBinaryFlag
-				}
-				if vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringText {
-					encoded |= prepareParamKindBatchTextFlag
-				}
-				if err := writeBatchMarshalByte(w, encoded); err != nil {
-					return err
-				}
-			}
-		case vec.HasPrepareParamKind() && vec.GetPrepareParamKind() != vector.PrepareParamNone:
-			if err := writeBatchMarshalByte(w, prepareParamKindBatchModeUniform|binaryFlag); err != nil {
-				return err
-			}
-			if err := writeBatchMarshalByte(w, byte(vec.GetPrepareParamKind())); err != nil {
-				return err
-			}
-		default:
-			if err := writeBatchMarshalByte(w, prepareParamKindBatchModeNone|binaryFlag); err != nil {
-				return err
-			}
-		}
-		if version >= prepareParamKindBatchVersion {
-			sources := vec.GetStringSources()
-			switch {
-			case len(sources) != 0:
-				if err := writeBatchMarshalByte(w, prepareParamKindBatchModeRows); err != nil {
-					return err
-				}
-				if err := writeBatchMarshalInt32(w, int32(len(sources))); err != nil {
-					return err
-				}
-				for _, source := range sources {
-					if !source.Valid() {
-						return moerr.NewInvalidInputNoCtxf("invalid string source %d", source)
-					}
-					if err := writeBatchMarshalByte(w, byte(source)); err != nil {
-						return err
-					}
-				}
-			case vec.GetStringSource() != types.StringSourceExpression:
-				if err := writeBatchMarshalByte(w, prepareParamKindBatchModeUniform); err != nil {
-					return err
-				}
-				if err := writeBatchMarshalByte(w, byte(vec.GetStringSource())); err != nil {
-					return err
-				}
-			default:
-				if err := writeBatchMarshalByte(w, prepareParamKindBatchModeNone); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return writeBatchMarshalUint32(w, uint32(size))
-}
-
-// AppendPrepareParamKindMetadata shares the streaming implementation while
-// preserving compatibility with callers that pass a bytes.Buffer.
-func (bat *Batch) AppendPrepareParamKindMetadata(w io.Writer) error {
-	if bat == nil || w == nil || !bat.HasPrepareParamKindMetadata() {
-		return nil
-	}
-	return bat.AppendPrepareParamKindMetadataTo(w)
-}
-
-// MarshalBinaryWithPrepareParamKinds is the pipeline-only transport encoder.
-// With no significant provenance it is byte-for-byte identical to the stable
-// Batch encoder.
-func (bat *Batch) MarshalBinaryWithPrepareParamKinds(w *bytes.Buffer, reset bool) ([]byte, error) {
-	return bat.MarshalBinaryWithPrepareParamKindsForProtocol(w, reset, true)
-}
-
-// MarshalBinaryWithPrepareParamKindsForProtocol omits string-source metadata
-// for an older peer while preserving every provenance axis that peer already
-// understands. Source is observational metadata until both peers advertise
-// its capability; dropping it at that rolling-upgrade boundary restores the
-// pre-capability behavior instead of rejecting an otherwise executable query.
-func (bat *Batch) MarshalBinaryWithPrepareParamKindsForProtocol(
-	w *bytes.Buffer,
-	reset bool,
-	includeStringSources bool,
-) ([]byte, error) {
-	if w == nil {
-		return nil, io.ErrClosedPipe
-	}
-	if reset {
-		w.Reset()
-	}
-	if err := bat.MarshalBinaryTo(w); err != nil {
-		return nil, err
-	}
-	if err := bat.appendPrepareParamKindMetadataTo(w, includeStringSources); err != nil {
-		return nil, err
-	}
-	return w.Bytes(), nil
-}
-
-// MarshalBinaryWithPrepareParamKindsSize returns the exact pipeline transport
-// size without materializing its bytes.
-func (bat *Batch) MarshalBinaryWithPrepareParamKindsSize() (int, error) {
-	stable, err := bat.MarshalBinarySize()
-	if err != nil {
-		return 0, err
-	}
-	trailer, err := bat.PrepareParamKindMetadataSize()
-	if err != nil {
-		return 0, err
-	}
-	if stable > math.MaxInt-trailer {
-		return 0, moerr.NewInvalidInputNoCtx("batch marshal size exceeds platform limit")
-	}
-	return stable + trailer, nil
-}
-
-// MarshalBinaryWithPrepareParamKindsTo streams the stable Batch and optional
-// prepared-parameter trailer to w.
-func (bat *Batch) MarshalBinaryWithPrepareParamKindsTo(w io.Writer) error {
-	if bat == nil || w == nil {
-		return io.ErrClosedPipe
-	}
-	if err := bat.MarshalBinaryTo(w); err != nil {
-		return err
-	}
-	return bat.AppendPrepareParamKindMetadataTo(w)
-}
-
 func (bat *Batch) MarshalBinarySize() (int, error) {
-	return bat.prepareMarshalBinary(nil)
+	return bat.prepareMarshalBinary(nil, false)
 }
 
-func (bat *Batch) prepareMarshalBinary(
-	plans []vector.MarshalBinaryPlan,
-) (int, error) {
+func (bat *Batch) prepareMarshalBinary(plans []vector.MarshalBinaryPlan, trusted bool) (int, error) {
 	if bat == nil {
 		return 0, moerr.NewInvalidInputNoCtx("invalid batch for marshal")
 	}
-	const fixedSize = uint64(8 + 4 + 4 + 4 + 4 + 4)
+	if bat.selection != nil {
+		return 0, errSelectedBatch()
+	}
+	const fixedSize = uint64(8 + 4 + 4 + 4 + 4)
 	total := fixedSize
 	add := func(value uint64) bool {
 		if value > uint64(^uint(0)>>1)-total {
@@ -503,8 +149,7 @@ func (bat *Batch) prepareMarshalBinary(
 		return true
 	}
 	if uint64(len(bat.Vecs)) > uint64(^uint32(0)>>1) ||
-		uint64(len(bat.Attrs)) > uint64(^uint32(0)>>1) ||
-		uint64(len(bat.ExtraBuf)) > uint64(^uint32(0)>>1) {
+		uint64(len(bat.extraBuf)) > uint64(^uint32(0)>>1) {
 		return 0, moerr.NewInvalidInputNoCtx(
 			"batch field exceeds marshal format",
 		)
@@ -518,7 +163,13 @@ func (bat *Batch) prepareMarshalBinary(
 				"cannot marshal a nil batch vector",
 			)
 		}
-		plan, err := vec.PrepareMarshalBinary()
+		var plan vector.MarshalBinaryPlan
+		var err error
+		if trusted {
+			plan, err = vec.PrepareMarshalBinaryTrusted()
+		} else {
+			plan, err = vec.PrepareMarshalBinary()
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -533,15 +184,7 @@ func (bat *Batch) prepareMarshalBinary(
 			plans[i] = plan
 		}
 	}
-	for _, attr := range bat.Attrs {
-		if uint64(len(attr)) > uint64(^uint32(0)>>1) ||
-			!add(4+uint64(len(attr))) {
-			return 0, moerr.NewInvalidInputNoCtx(
-				"batch attribute exceeds marshal format",
-			)
-		}
-	}
-	if !add(uint64(len(bat.ExtraBuf))) {
+	if !add(uint64(len(bat.extraBuf))) {
 		return 0, moerr.NewInvalidInputNoCtx(
 			"batch marshal size exceeds platform limit",
 		)
@@ -553,6 +196,9 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	if bat == nil || w == nil {
 		return io.ErrClosedPipe
 	}
+	if bat.selection != nil {
+		return errSelectedBatch()
+	}
 	var inlinePlans [64]vector.MarshalBinaryPlan
 	var plans []vector.MarshalBinaryPlan
 	if len(bat.Vecs) <= len(inlinePlans) {
@@ -560,7 +206,7 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	} else {
 		plans = make([]vector.MarshalBinaryPlan, len(bat.Vecs))
 	}
-	size, err := bat.prepareMarshalBinary(plans)
+	size, err := bat.prepareMarshalBinary(plans, false)
 	if err != nil {
 		return err
 	}
@@ -592,29 +238,11 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 		}
 	}
 
-	l = int32(len(bat.Attrs))
-	if err := writeBatchMarshalInt32(w, l); err != nil {
-		return err
-	}
-	for i := 0; i < int(l); i++ {
-		size := int32(len(bat.Attrs[i]))
-		if err := writeBatchMarshalInt32(w, size); err != nil {
-			return err
-		}
-		n, err := io.WriteString(w, bat.Attrs[i])
-		if err != nil {
-			return err
-		}
-		if int32(n) != size {
-			return io.ErrShortWrite
-		}
-	}
-
-	extraSize := int32(len(bat.ExtraBuf))
+	extraSize := int32(len(bat.extraBuf))
 	if err := writeBatchMarshalInt32(w, extraSize); err != nil {
 		return err
 	}
-	if err := types.WriteFull(w, bat.ExtraBuf); err != nil {
+	if err := types.WriteFull(w, bat.extraBuf); err != nil {
 		return err
 	}
 
@@ -622,6 +250,64 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 		return err
 	}
 	return writeBatchMarshalInt32(w, bat.ShuffleIDX)
+}
+
+// marshalTrustedSize is MarshalBinarySize for a valid batch; see
+// vector.PrepareMarshalBinaryTrusted. It allocates nothing.
+func (bat *Batch) marshalTrustedSize() (int, error) {
+	return bat.prepareMarshalBinary(nil, true)
+}
+
+// errBatchChanged reports a batch that no longer matches the size its
+// encoding was given: it changed while borrowed.
+func errBatchChanged() error {
+	return moerr.NewInvalidInputNoCtx("batch changed while marshaling")
+}
+
+// marshalTrustedTo writes MarshalBinary's encoding of a valid batch into dst,
+// which must hold exactly marshalTrustedSize bytes. It allocates nothing.
+func (bat *Batch) marshalTrustedTo(dst []byte) error {
+	if bat == nil {
+		return io.ErrClosedPipe
+	}
+	dst = dst[:len(dst):len(dst)]
+	if bat.selection != nil {
+		return errSelectedBatch()
+	}
+	if len(dst) < 12 {
+		return errBatchChanged()
+	}
+	binary.NativeEndian.PutUint64(dst, uint64(bat.rowCount))
+	binary.NativeEndian.PutUint32(dst[8:], uint32(len(bat.Vecs)))
+	n := 12
+	for _, vec := range bat.Vecs {
+		if vec == nil {
+			return moerr.NewInvalidInputNoCtx("cannot marshal a nil batch vector")
+		}
+		plan, err := vec.PrepareMarshalBinaryTrusted()
+		if err != nil {
+			return err
+		}
+		if len(dst)-n < 4+plan.Size() {
+			return errBatchChanged()
+		}
+		binary.NativeEndian.PutUint32(dst[n:], uint32(plan.Size()))
+		end := n + 4 + plan.Size()
+		written, err := plan.MarshalToBytes(dst[n+4 : end : end])
+		if err != nil {
+			return err
+		}
+		n += 4 + written
+	}
+	if len(dst)-n != 4+len(bat.extraBuf)+8 {
+		return errBatchChanged()
+	}
+	binary.NativeEndian.PutUint32(dst[n:], uint32(len(bat.extraBuf)))
+	n += 4
+	n += copy(dst[n:], bat.extraBuf)
+	binary.NativeEndian.PutUint32(dst[n:], uint32(bat.Recursive))
+	binary.NativeEndian.PutUint32(dst[n+4:], uint32(bat.ShuffleIDX))
+	return nil
 }
 
 type batchPrimitiveWriter interface {
@@ -657,512 +343,8 @@ func writeBatchMarshalInt64(w io.Writer, value int64) error {
 	return types.WriteFull(w, data[:])
 }
 
-func writeBatchMarshalByte(w io.Writer, value byte) error {
-	if typed, ok := w.(interface{ WriteByte(byte) error }); ok {
-		return typed.WriteByte(value)
-	}
-	var data [1]byte
-	data[0] = value
-	return types.WriteFull(w, data[:])
-}
-
 func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
 	return bat.UnmarshalBinaryWithAnyMp(data, nil)
-}
-
-func (bat *Batch) clearPrepareParamMetadata(mp *mpool.MPool) {
-	for _, vec := range bat.Vecs {
-		if vec != nil {
-			_ = vec.SetPrepareParamKindsWithMP(nil, mp)
-			_ = vec.SetStringSource(types.StringSourceExpression)
-			vec.SetIsBinaryString(false)
-		}
-	}
-}
-
-// UnmarshalBinaryWithPrepareParamKinds decodes the stable Batch prefix and an
-// optional pipeline-only provenance trailer.  The stable public decoder keeps
-// its historical trailing-byte behavior for persisted/legacy callers.
-func (bat *Batch) UnmarshalBinaryWithPrepareParamKinds(data []byte, mp *mpool.MPool) error {
-	prefixLen, err := stableBatchPayloadLength(data)
-	if err != nil {
-		return err
-	}
-	if err := bat.UnmarshalBinaryWithAnyMp(data[:prefixLen], mp); err != nil {
-		return err
-	}
-	if prefixLen == len(data) {
-		return nil
-	}
-	records, rowCount, err := parsePrepareParamKindBatchTrailer(
-		data[prefixLen:], bat.Vecs, int64(bat.RowCount()))
-	if err != nil {
-		return err
-	}
-	if rowCount != int64(bat.RowCount()) {
-		return moerr.NewInvalidInputNoCtx("prepared parameter metadata batch row count mismatch")
-	}
-	for i, record := range records {
-		if i >= len(bat.Vecs) {
-			return moerr.NewInvalidInputNoCtx("prepared parameter metadata vector count mismatch")
-		}
-		vec := bat.Vecs[i]
-		var applyErr error
-		switch record.mode {
-		case prepareParamKindBatchModeNone:
-			applyErr = setBatchVectorRuntimeStringDomain(vec, record.binaryString, record.textString, mp)
-		case prepareParamKindBatchModeUniform:
-			if record.kind == vector.PrepareParamNone {
-				applyErr = moerr.NewInvalidInputNoCtx("uniform prepared parameter metadata cannot be None")
-			} else {
-				vec.SetPrepareParamKind(record.kind)
-			}
-			if applyErr == nil {
-				applyErr = setBatchVectorRuntimeStringDomain(vec, record.binaryString, record.textString, mp)
-			}
-		case prepareParamKindBatchModeRows:
-			if len(record.encodedRows) != vec.Length() {
-				applyErr = moerr.NewInvalidInputNoCtx("prepared parameter metadata row count mismatch")
-			} else {
-				applyErr = vec.SetPrepareParamKindsAndBinaryStringFromReader(
-					bytes.NewReader(record.encodedRows), len(record.encodedRows), mp,
-					prepareParamKindBatchBinaryFlag,
-					prepareParamKindBatchTextFlag,
-				)
-			}
-		default:
-			applyErr = moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode")
-		}
-		if applyErr != nil {
-			bat.clearPrepareParamMetadata(mp)
-			return applyErr
-		}
-		if len(record.encodedStringSources) != 0 {
-			applyErr = vec.SetStringSourcesFromReader(
-				bytes.NewReader(record.encodedStringSources), len(record.encodedStringSources), mp)
-		} else {
-			applyErr = vec.SetStringSource(record.stringSource)
-		}
-		if applyErr != nil {
-			bat.clearPrepareParamMetadata(mp)
-			return applyErr
-		}
-	}
-	return nil
-}
-
-// UnmarshalFromReaderWithPrepareParamKinds decodes a framed local-spill
-// payload without copying the stable batch or its trailer to a Go-heap
-// buffer. payloadSize is the exact size of this batch section; any remaining
-// bytes after the stable Batch fields are parsed as the transient provenance
-// trailer. The stable reader remains the ownership-aware MPool path.
-func (bat *Batch) UnmarshalFromReaderWithPrepareParamKinds(
-	r io.Reader,
-	payloadSize int64,
-	mp *mpool.MPool,
-) error {
-	return bat.unmarshalFromReaderWithPrepareParamKinds(
-		r,
-		payloadSize,
-		mp,
-		true,
-	)
-}
-
-// UnmarshalFromReaderWithPrepareParamKindsForSpill is the metadata-free local
-// spill variant. It rejects Attrs and ExtraBuf before allocating their
-// payloads, while retaining the prepared-parameter trailer used by expression
-// results.
-func (bat *Batch) UnmarshalFromReaderWithPrepareParamKindsForSpill(
-	r io.Reader,
-	payloadSize int64,
-	mp *mpool.MPool,
-) error {
-	return bat.unmarshalFromReaderWithPrepareParamKinds(
-		r,
-		payloadSize,
-		mp,
-		false,
-	)
-}
-
-func (bat *Batch) unmarshalFromReaderWithPrepareParamKinds(
-	r io.Reader,
-	payloadSize int64,
-	mp *mpool.MPool,
-	allowMetadata bool,
-) error {
-	if bat == nil || r == nil {
-		return io.ErrClosedPipe
-	}
-	if payloadSize < 0 {
-		return moerr.NewInvalidInputNoCtx("negative batch payload size")
-	}
-	limited := &io.LimitedReader{R: r, N: payloadSize}
-	if err := bat.unmarshalFromReader(limited, mp, allowMetadata); err != nil {
-		return err
-	}
-	if limited.N == 0 {
-		return nil
-	}
-	trailerSize := limited.N
-	if trailerSize < 0 || trailerSize > int64(^uint32(0)) {
-		return moerr.NewInvalidInputNoCtx("prepared parameter metadata trailer exceeds wire limit")
-	}
-	startRemaining := trailerSize
-	fail := func(err error) error {
-		bat.clearPrepareParamMetadata(mp)
-		return err
-	}
-	readByte := func() (byte, error) {
-		return types.ReadByte(limited)
-	}
-	magic0, err := readByte()
-	if err != nil {
-		return fail(err)
-	}
-	magic1, err := readByte()
-	if err != nil {
-		return fail(err)
-	}
-	magic2, err := readByte()
-	if err != nil {
-		return fail(err)
-	}
-	version, err := readByte()
-	if err != nil {
-		return fail(err)
-	}
-	if magic0 != prepareParamKindBatchMagic0 ||
-		magic1 != prepareParamKindBatchMagic1 ||
-		magic2 != prepareParamKindBatchMagic2 ||
-		version != prepareParamKindBatchVersionV1 && version != prepareParamKindBatchVersion {
-		return fail(moerr.NewInvalidInputNoCtx("invalid prepared parameter batch trailer"))
-	}
-	nVecs, err := types.ReadInt32(limited)
-	if err != nil || nVecs < 0 || nVecs > 1<<20 {
-		if err == nil {
-			err = moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata vector count")
-		}
-		return fail(err)
-	}
-	if int(nVecs) != len(bat.Vecs) {
-		return fail(moerr.NewInvalidInputNoCtx("prepared parameter metadata vector count mismatch"))
-	}
-	rowCount, err := types.ReadInt64(limited)
-	if err != nil || rowCount < 0 || int64(int(rowCount)) != rowCount {
-		if err == nil {
-			err = moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
-		}
-		return fail(err)
-	}
-	if rowCount != int64(bat.RowCount()) {
-		return fail(moerr.NewInvalidInputNoCtx("prepared parameter metadata batch row count mismatch"))
-	}
-	for i := range bat.Vecs {
-		mode, err := readByte()
-		if err != nil {
-			return fail(err)
-		}
-		binaryString := mode&prepareParamKindBatchBinaryFlag != 0
-		textString := mode&prepareParamKindBatchTextFlag != 0
-		if binaryString && textString {
-			return fail(moerr.NewInvalidInputNoCtx("binary and text vector flags are mutually exclusive"))
-		}
-		mode &^= prepareParamKindBatchBinaryFlag | prepareParamKindBatchTextFlag
-		switch mode {
-		case prepareParamKindBatchModeNone:
-			if err := setBatchVectorRuntimeStringDomain(bat.Vecs[i], binaryString, textString, mp); err != nil {
-				return fail(err)
-			}
-		case prepareParamKindBatchModeUniform:
-			kind, err := readByte()
-			if err != nil {
-				return fail(err)
-			}
-			if vector.PrepareParamKind(kind) == vector.PrepareParamNone ||
-				vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
-				return fail(moerr.NewInvalidInputNoCtx("invalid uniform prepared parameter metadata kind"))
-			}
-			bat.Vecs[i].SetPrepareParamKind(vector.PrepareParamKind(kind))
-			if err := setBatchVectorRuntimeStringDomain(bat.Vecs[i], binaryString, textString, mp); err != nil {
-				return fail(err)
-			}
-		case prepareParamKindBatchModeRows:
-			count, err := types.ReadInt32(limited)
-			if err != nil {
-				return fail(err)
-			}
-			if count < 0 || count > prepareParamKindBatchMaxRows || count != int32(bat.Vecs[i].Length()) {
-				return fail(moerr.NewInvalidInputNoCtx("prepared parameter metadata row count mismatch"))
-			}
-			// Before the vector allocates count bytes, prove that the frame can
-			// contain this row payload, at least one mode byte for every
-			// remaining vector record, and the four-byte trailer footer.
-			// nVecs is capped above, so this int64 sum cannot overflow.
-			minimumPerVector := int64(1)
-			if version >= prepareParamKindBatchVersion {
-				minimumPerVector = 2
-			}
-			minimumRemaining := int64(len(bat.Vecs)-i-1)*minimumPerVector + 4
-			if limited.N < minimumRemaining || int64(count) > limited.N-minimumRemaining {
-				return fail(io.ErrUnexpectedEOF)
-			}
-			if err := bat.Vecs[i].SetPrepareParamKindsAndBinaryStringFromReader(
-				limited, int(count), mp, prepareParamKindBatchBinaryFlag,
-				prepareParamKindBatchTextFlag,
-			); err != nil {
-				return fail(err)
-			}
-		default:
-			return fail(moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode"))
-		}
-		if version >= prepareParamKindBatchVersion {
-			sourceMode, err := readByte()
-			if err != nil {
-				return fail(err)
-			}
-			switch sourceMode {
-			case prepareParamKindBatchModeNone:
-				if err := bat.Vecs[i].SetStringSource(types.StringSourceExpression); err != nil {
-					return fail(err)
-				}
-			case prepareParamKindBatchModeUniform:
-				encoded, err := readByte()
-				source := types.StringSource(encoded)
-				if err != nil || !source.Valid() || source == types.StringSourceExpression {
-					return fail(moerr.NewInvalidInputNoCtx("invalid uniform string source metadata"))
-				}
-				if err := bat.Vecs[i].SetStringSource(source); err != nil {
-					return fail(err)
-				}
-			case prepareParamKindBatchModeRows:
-				count, err := types.ReadInt32(limited)
-				if err != nil || count < 0 || count != int32(bat.Vecs[i].Length()) ||
-					count > prepareParamKindBatchMaxRows || int64(count) > limited.N-4 {
-					return fail(moerr.NewInvalidInputNoCtx("invalid string source metadata row count"))
-				}
-				if err := bat.Vecs[i].SetStringSourcesFromReader(limited, int(count), mp); err != nil {
-					return fail(err)
-				}
-			default:
-				return fail(moerr.NewInvalidInputNoCtx("invalid string source metadata mode"))
-			}
-		}
-	}
-	trailerLen, err := types.ReadUint32(limited)
-	if err != nil {
-		return fail(err)
-	}
-	if trailerLen != uint32(startRemaining) || limited.N != 0 {
-		return fail(moerr.NewInvalidInputNoCtx("prepared parameter metadata length mismatch"))
-	}
-	return nil
-}
-
-// stableBatchPayloadLength parses only the stable Batch framing and returns
-// the exact byte offset at which any pipeline-only extension begins.  Keeping
-// this parser separate from UnmarshalBinaryWithAnyMp preserves the historical
-// public decoder while making the extension boundary unambiguous: a random
-// "PPB" sequence inside a vector or attribute can never be mistaken for a
-// trailer.
-func stableBatchPayloadLength(data []byte) (int, error) {
-	cursor := batchUnmarshalCursor{data: data}
-	rowCount, err := cursor.readInt64()
-	if err != nil {
-		return 0, err
-	}
-	if rowCount < 0 || int64(int(rowCount)) != rowCount {
-		return 0, moerr.NewInvalidInputNoCtx("invalid batch row count")
-	}
-	vecs, err := cursor.readInt32()
-	if err != nil {
-		return 0, err
-	}
-	if vecs < 0 || int64(vecs) > int64(len(cursor.data)/4) {
-		return 0, moerr.NewInvalidInputNoCtx("invalid batch vector count")
-	}
-	for range vecs {
-		size, err := cursor.readUint32()
-		if err != nil {
-			return 0, err
-		}
-		if uint64(size) > uint64(len(cursor.data)) {
-			return 0, io.ErrUnexpectedEOF
-		}
-		if _, err := cursor.read(int(size)); err != nil {
-			return 0, err
-		}
-	}
-	attrs, err := cursor.readInt32()
-	if err != nil {
-		return 0, err
-	}
-	if attrs < 0 || int64(attrs) > int64(len(cursor.data)/4) {
-		return 0, moerr.NewInvalidInputNoCtx("invalid batch attribute count")
-	}
-	for range attrs {
-		size, err := cursor.readInt32()
-		if err != nil {
-			return 0, err
-		}
-		if size < 0 {
-			return 0, moerr.NewInvalidInputNoCtx("invalid batch attribute size")
-		}
-		if _, err := cursor.read(int(size)); err != nil {
-			return 0, err
-		}
-	}
-	extra, err := cursor.readInt32()
-	if err != nil {
-		return 0, err
-	}
-	if extra < 0 {
-		return 0, moerr.NewInvalidInputNoCtx("invalid batch extra buffer size")
-	}
-	if _, err := cursor.read(int(extra)); err != nil {
-		return 0, err
-	}
-	if _, err := cursor.readInt32(); err != nil {
-		return 0, err
-	}
-	if _, err := cursor.readInt32(); err != nil {
-		return 0, err
-	}
-	return len(data) - len(cursor.data), nil
-}
-
-func parsePrepareParamKindBatchTrailer(
-	ext []byte,
-	vecs []*vector.Vector,
-	expectedRowCount int64,
-) ([]prepareParamKindBatchRecord, int64, error) {
-	if len(ext) < 4+4 {
-		return nil, 0, moerr.NewInvalidInputNoCtx("truncated prepared parameter batch trailer")
-	}
-	reader := bytes.NewReader(ext)
-	magic0, _ := types.ReadByte(reader)
-	magic1, _ := types.ReadByte(reader)
-	magic2, _ := types.ReadByte(reader)
-	version, err := types.ReadByte(reader)
-	if err != nil || magic0 != prepareParamKindBatchMagic0 ||
-		magic1 != prepareParamKindBatchMagic1 || magic2 != prepareParamKindBatchMagic2 ||
-		version != prepareParamKindBatchVersionV1 && version != prepareParamKindBatchVersion {
-		return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter batch trailer")
-	}
-	nVecs, err := types.ReadInt32(reader)
-	if err != nil || nVecs < 0 || nVecs > 1<<20 {
-		return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata vector count")
-	}
-	if int(nVecs) != len(vecs) {
-		return nil, 0, moerr.NewInvalidInputNoCtx("prepared parameter metadata vector count mismatch")
-	}
-	rowCount, err := types.ReadInt64(reader)
-	if err != nil || rowCount < 0 || int64(int(rowCount)) != rowCount {
-		return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
-	}
-	if rowCount != expectedRowCount {
-		return nil, 0, moerr.NewInvalidInputNoCtx("prepared parameter metadata batch row count mismatch")
-	}
-	records := make([]prepareParamKindBatchRecord, len(vecs))
-	for i := range records {
-		mode, err := types.ReadByte(reader)
-		if err != nil {
-			return nil, 0, err
-		}
-		records[i].binaryString = mode&prepareParamKindBatchBinaryFlag != 0
-		records[i].textString = mode&prepareParamKindBatchTextFlag != 0
-		if records[i].binaryString && records[i].textString {
-			return nil, 0, moerr.NewInvalidInputNoCtx("binary and text vector flags are mutually exclusive")
-		}
-		mode &^= prepareParamKindBatchBinaryFlag | prepareParamKindBatchTextFlag
-		records[i].mode = mode
-		switch mode {
-		case prepareParamKindBatchModeNone:
-		case prepareParamKindBatchModeUniform:
-			kind, err := types.ReadByte(reader)
-			if err != nil || vector.PrepareParamKind(kind) == vector.PrepareParamNone ||
-				vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
-				return nil, 0, moerr.NewInvalidInputNoCtx("invalid uniform prepared parameter metadata kind")
-			}
-			records[i].kind = vector.PrepareParamKind(kind)
-		case prepareParamKindBatchModeRows:
-			count, err := types.ReadInt32(reader)
-			if err != nil || count < 0 || count > prepareParamKindBatchMaxRows {
-				return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
-			}
-			if vecs[i] == nil || count != int32(vecs[i].Length()) {
-				return nil, 0, moerr.NewInvalidInputNoCtx("prepared parameter metadata row count mismatch")
-			}
-			// Reserve at least the footer before allocating a row payload.  The
-			// vector-length check above bounds this allocation by the decoded
-			// batch, while this check rejects truncated amplification payloads.
-			if reader.Len() < 4 || int64(count) > int64(reader.Len()-4) {
-				return nil, 0, io.ErrUnexpectedEOF
-			}
-			rowStart := len(ext) - reader.Len()
-			rowEnd := rowStart + int(count)
-			records[i].encodedRows = ext[rowStart:rowEnd]
-			for _, encoded := range records[i].encodedRows {
-				if encoded&prepareParamKindBatchBinaryFlag != 0 && encoded&prepareParamKindBatchTextFlag != 0 {
-					return nil, 0, moerr.NewInvalidInputNoCtx("binary and text row flags are mutually exclusive")
-				}
-				kind := encoded &^ (prepareParamKindBatchBinaryFlag | prepareParamKindBatchTextFlag)
-				if vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
-					return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
-				}
-			}
-			if _, err := reader.Seek(int64(count), io.SeekCurrent); err != nil {
-				return nil, 0, err
-			}
-		default:
-			return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode")
-		}
-		if version >= prepareParamKindBatchVersion {
-			sourceMode, err := types.ReadByte(reader)
-			if err != nil {
-				return nil, 0, err
-			}
-			switch sourceMode {
-			case prepareParamKindBatchModeNone:
-				records[i].stringSource = types.StringSourceExpression
-			case prepareParamKindBatchModeUniform:
-				encoded, err := types.ReadByte(reader)
-				source := types.StringSource(encoded)
-				if err != nil || !source.Valid() || source == types.StringSourceExpression {
-					return nil, 0, moerr.NewInvalidInputNoCtx("invalid uniform string source metadata")
-				}
-				records[i].stringSource = source
-			case prepareParamKindBatchModeRows:
-				count, err := types.ReadInt32(reader)
-				if err != nil || count < 0 || vecs[i] == nil || count != int32(vecs[i].Length()) ||
-					count > prepareParamKindBatchMaxRows || int64(count) > int64(reader.Len()-4) {
-					return nil, 0, moerr.NewInvalidInputNoCtx("invalid string source metadata row count")
-				}
-				rowStart := len(ext) - reader.Len()
-				rowEnd := rowStart + int(count)
-				records[i].encodedStringSources = ext[rowStart:rowEnd]
-				for _, encoded := range records[i].encodedStringSources {
-					if !types.StringSource(encoded).Valid() {
-						return nil, 0, moerr.NewInvalidInputNoCtx("invalid string source metadata")
-					}
-				}
-				if _, err := reader.Seek(int64(count), io.SeekCurrent); err != nil {
-					return nil, 0, err
-				}
-			default:
-				return nil, 0, moerr.NewInvalidInputNoCtx("invalid string source metadata mode")
-			}
-		}
-	}
-	if reader.Len() != 4 {
-		return nil, 0, moerr.NewInvalidInputNoCtx("unexpected prepared parameter metadata bytes")
-	}
-	trailerLen, err := types.ReadUint32(reader)
-	if err != nil || trailerLen != uint32(len(ext)) {
-		return nil, 0, moerr.NewInvalidInputNoCtx("prepared parameter metadata length mismatch")
-	}
-	return records, rowCount, nil
 }
 
 type batchUnmarshalCursor struct {
@@ -1203,7 +385,13 @@ func (c *batchUnmarshalCursor) readUint32() (uint32, error) {
 }
 
 func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
-	allocationAccount := bat.allocationAccount
+	return bat.unmarshalBinary(data, mp, true)
+}
+
+// unmarshalBinary decodes data. Without validateValues it trusts data to
+// come from MarshalBinary of a valid batch: the framing and sizes are still
+// checked, but not the null bitmaps or varlen payloads.
+func (bat *Batch) unmarshalBinary(data []byte, mp *mpool.MPool, validateValues bool) (err error) {
 	cursor := batchUnmarshalCursor{data: data}
 	rowCount, err := cursor.readInt64()
 	if err != nil {
@@ -1230,15 +418,9 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	// This ensures Vecs are properly reset and prevents stale data from previous unmarshal operations
 	if firstTime || vecsLenChanged {
 		if vecsLenChanged && len(bat.Vecs) > 0 {
-			if mp == nil {
-				for _, vec := range bat.Vecs {
-					if vec != nil && !vec.NeedDup() {
-						return moerr.NewInvalidInputNoCtx("cannot unmarshal into an owned batch vector without a memory pool")
-					}
-				}
+			if err := bat.freeReceivers(mp); err != nil {
+				return err
 			}
-			bat.Clean(mp)
-			bat.allocationAccount = allocationAccount
 		}
 		bat.Vecs = make([]*vector.Vector, vecsLen)
 	}
@@ -1283,104 +465,26 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 				usedReceivers[vecs[i]] = struct{}{}
 			}
 		}
-		if vecs[i] == nil {
-			if bat.offHeap {
-				vecs[i] = vector.NewOffHeapVec()
-			} else {
-				vecs[i] = vector.NewVecFromReuse()
-			}
-		} else if vecs[i].Allocated() > 0 || vecs[i].NeedDup() {
-			if mp == nil && !vecs[i].NeedDup() {
-				return moerr.NewInvalidInputNoCtx("cannot unmarshal into an owned batch vector without a memory pool")
-			}
-			vecs[i].Free(mp)
-		}
-		// UnmarshalBinary installs aliases into vecData. An empty accounted
-		// receiver must explicitly drop its future-allocation selection first;
-		// the Batch retains the destination context for a later owned copy.
-		if vecs[i].AllocationAccountSelection() != nil {
-			if err := vecs[i].SetAllocationAccount(nil); err != nil {
+		// A receiver is reused only when it belongs to mp; with a nil mp the
+		// decoded vectors are read-only references to data. A read-only
+		// receiver is dropped; one owned by another pool is not ours to free.
+		if vecs[i] != nil && vecs[i].MPool() != mp {
+			if err := dropReadOnlyReceiver(vecs[i]); err != nil {
 				return err
 			}
+			vecs[i] = nil
 		}
-		if err := vecs[i].UnmarshalBinary(vecData); err != nil {
-			return err
-		}
-	}
-
-	l, err = cursor.readInt32()
-	if err != nil {
-		return err
-	}
-	if l < 0 || int64(l) > int64(len(cursor.data)/4) {
-		return moerr.NewInvalidInputNoCtx("invalid batch attribute count")
-	}
-	// Fix for bug #23156: Attrs length MUST always match Vecs length
-	// Vecs length (vecsLen) is authoritative - it's already allocated and deserialized
-	// If serialized Attrs length differs from Vecs length, we use Vecs length as the source of truth
-	// This handles cases where serialized data has inconsistent lengths (which can occur in practice)
-	serializedAttrsLen := int(l)
-	// CRITICAL FIX: Always reallocate Attrs to ensure clean state for batch reuse
-	// This prevents stale Attrs values from previous unmarshal operations
-	// Special case: if vecsLen == 0 but serializedAttrsLen > 0, use serializedAttrsLen
-	// This handles cases where Vecs are empty but Attrs are preserved (e.g., in tests)
-	attrsLen := vecsLen
-	if vecsLen == 0 && serializedAttrsLen > 0 {
-		attrsLen = serializedAttrsLen
-	}
-	if attrsLen != len(bat.Attrs) {
-		if attrsLen == 0 {
-			// If attrsLen is 0, keep Attrs as nil (not empty array) for consistency
-			bat.Attrs = nil
+		if vecs[i] == nil {
+			vecs[i] = vector.NewVec(types.T_any.ToType(), mp)
 		} else {
-			bat.Attrs = make([]string, attrsLen)
+			vecs[i].Free(mp)
 		}
-	} else if !firstTime {
-		// When batch is reused and lengths match, still clear Attrs to prevent stale values
-		// This is critical for UPDATE operations where batch is reused multiple times
-		// Performance note: This is O(n) where n is typically small (dozens of columns)
-		// The cost is acceptable compared to data corruption issues
-		for i := range bat.Attrs {
-			bat.Attrs[i] = ""
+		if validateValues {
+			err = vecs[i].UnmarshalBinary(vecData)
+		} else {
+			err = vecs[i].UnmarshalBinaryTrusted(vecData)
 		}
-	}
-
-	// Read serialized Attrs, but only up to min(serializedAttrsLen, attrsLen)
-	// If serialized length > attrsLen: ignore excess (data inconsistency, attrsLen is authoritative)
-	// If serialized length < attrsLen: read what's available (remaining will be empty strings, should not happen normally)
-	attrsToRead := serializedAttrsLen
-	if attrsToRead > attrsLen {
-		attrsToRead = attrsLen
-	}
-	for i := 0; i < attrsToRead; i++ {
-		size, err := cursor.readInt32()
 		if err != nil {
-			return err
-		}
-		if size < 0 {
-			return moerr.NewInvalidInputNoCtx("invalid batch attribute size")
-		}
-		attrData, err := cursor.read(int(size))
-		if err != nil {
-			return err
-		}
-		bat.Attrs[i] = string(attrData)
-	}
-	// CRITICAL FIX: Clear remaining Attrs to prevent stale values when serializedAttrsLen < attrsLen
-	// This is essential for batch reuse scenarios (e.g., UPDATE operations with IVF index)
-	for i := attrsToRead; i < attrsLen; i++ {
-		bat.Attrs[i] = ""
-	}
-	// If serialized Attrs length > vecsLen, skip the excess data
-	for i := attrsToRead; i < serializedAttrsLen; i++ {
-		size, err := cursor.readInt32()
-		if err != nil {
-			return err
-		}
-		if size < 0 {
-			return moerr.NewInvalidInputNoCtx("invalid batch attribute size")
-		}
-		if _, err := cursor.read(int(size)); err != nil {
 			return err
 		}
 	}
@@ -1397,8 +501,17 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	if err != nil {
 		return err
 	}
-	bat.releaseExtraBuf()
-	bat.ExtraBuf = append(bat.ExtraBuf, extraBuf...)
+	// With a nil mp the decoded vectors are read-only references to data;
+	// extraBuf borrows data the same way.
+	if mp == nil {
+		bat.releaseExtraBuf()
+		bat.mp = nil
+		if len(extraBuf) != 0 {
+			bat.extraBuf = extraBuf
+		}
+	} else if err := bat.SetExtraBuf(mp, extraBuf); err != nil {
+		return err
+	}
 
 	bat.Recursive, err = cursor.readInt32()
 	if err != nil {
@@ -1408,19 +521,15 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	if err != nil {
 		return err
 	}
+	if len(cursor.data) != 0 {
+		return moerr.NewInvalidInputNoCtxf("batch has %d trailing bytes", len(cursor.data))
+	}
 	bat.rowCount = decodedRowCount
 	return nil
 }
 
+// UnmarshalFromReader decodes one batch from r, reading exactly its bytes.
 func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) {
-	return bat.unmarshalFromReader(r, mp, true)
-}
-
-func (bat *Batch) unmarshalFromReader(
-	r io.Reader,
-	mp *mpool.MPool,
-	allowMetadata bool,
-) (err error) {
 	if bat == nil || r == nil {
 		return io.ErrClosedPipe
 	}
@@ -1462,44 +571,8 @@ func (bat *Batch) unmarshalFromReader(
 		}
 	}
 
-	l, err = types.ReadInt32AsInt(r)
-	if err != nil {
+	if err = bat.readExtraBuf(r, mp); err != nil {
 		return err
-	}
-	if err = validateReaderElementCount(r, l, 4, "attribute"); err != nil {
-		return err
-	}
-	if !allowMetadata && l != 0 {
-		return moerr.NewInvalidInputNoCtx("spill batch attributes are not allowed")
-	}
-	if l != len(bat.Attrs) {
-		bat.Attrs = make([]string, l)
-	}
-
-	for i := 0; i < int(l); i++ {
-		bs, err := readBatchSizedBytes(r)
-		if err != nil {
-			return err
-		}
-		bat.Attrs[i] = string(bs)
-	}
-
-	// ExtraBuf is a data-scaled Go-heap field in the stable Batch codec. Spill
-	// records do not use it and reject it before allocating its payload.
-	if allowMetadata {
-		bat.releaseExtraBuf()
-		if bat.ExtraBuf, err = readBatchSizedBytes(r); err != nil {
-			return err
-		}
-	} else {
-		extraSize, readErr := types.ReadInt32AsInt(r)
-		if readErr != nil {
-			return readErr
-		}
-		if extraSize != 0 {
-			return moerr.NewInvalidInputNoCtx("spill batch extra buffer is not allowed")
-		}
-		bat.releaseExtraBuf()
 	}
 
 	if bat.Recursive, err = types.ReadInt32(r); err != nil {
@@ -1509,6 +582,69 @@ func (bat *Batch) unmarshalFromReader(
 		return err
 	}
 	bat.rowCount = decodedRowCount
+	return nil
+}
+
+// MarshalFramedSize returns the size of the record MarshalFramedTo writes.
+func (bat *Batch) MarshalFramedSize() (int, error) {
+	size, err := bat.MarshalBinarySize()
+	if err != nil {
+		return 0, err
+	}
+	if size > math.MaxInt-8 {
+		return 0, moerr.NewInvalidInputNoCtx("batch record exceeds marshal format")
+	}
+	return size + 8, nil
+}
+
+// MarshalFramedTo writes bat as one record of a batch file: an int64 length
+// followed by the batch. UnmarshalFramedFrom reads it back.
+func (bat *Batch) MarshalFramedTo(w io.Writer) error {
+	if bat == nil || w == nil {
+		return io.ErrClosedPipe
+	}
+	size, err := bat.MarshalBinarySize()
+	if err != nil {
+		return err
+	}
+	if err := writeBatchMarshalInt64(w, int64(size)); err != nil {
+		return err
+	}
+	return bat.MarshalBinaryTo(w)
+}
+
+// UnmarshalFramedFrom reads one record written by MarshalFramedTo, and checks
+// that every vector holds the batch's row count.
+func (bat *Batch) UnmarshalFramedFrom(r io.Reader, mp *mpool.MPool) error {
+	size, err := types.ReadInt64(r)
+	if err != nil {
+		return err
+	}
+	if err := bat.UnmarshalSizedFrom(r, size, mp); err != nil {
+		return err
+	}
+	if err := bat.CheckLength(); err != nil {
+		return moerr.NewInvalidInputNoCtx("batch record vector length does not match row count")
+	}
+	return nil
+}
+
+// UnmarshalSizedFrom decodes a batch that takes exactly size bytes of r, for
+// a caller that frames its own records.
+func (bat *Batch) UnmarshalSizedFrom(r io.Reader, size int64, mp *mpool.MPool) error {
+	if bat == nil || r == nil {
+		return io.ErrClosedPipe
+	}
+	if size < 0 {
+		return moerr.NewInvalidInputNoCtx("negative batch record size")
+	}
+	limited := &io.LimitedReader{R: r, N: size}
+	if err := bat.UnmarshalFromReader(limited, mp); err != nil {
+		return err
+	}
+	if limited.N != 0 {
+		return moerr.NewInvalidInputNoCtxf("batch record has %d trailing bytes", limited.N)
+	}
 	return nil
 }
 
@@ -1536,6 +672,43 @@ func readBatchSizedBytes(r io.Reader) ([]byte, error) {
 	return value, nil
 }
 
+// readExtraBuf reads a size-prefixed extraBuf from r into memory allocated
+// from mp, or into Go-heap memory the batch does not own when mp is nil.
+func (bat *Batch) readExtraBuf(r io.Reader, mp *mpool.MPool) error {
+	bat.releaseExtraBuf()
+	bat.mp = mp
+	if mp == nil {
+		data, err := readBatchSizedBytes(r)
+		bat.extraBuf = data
+		return err
+	}
+	size, err := types.ReadInt32AsInt(r)
+	if err != nil {
+		return err
+	}
+	if size < 0 {
+		return moerr.NewInvalidInputNoCtx("negative batch buffer size")
+	}
+	if limited, ok := r.(*io.LimitedReader); ok && int64(size) > limited.N {
+		return io.ErrUnexpectedEOF
+	}
+	if lengthAware, ok := r.(interface{ Len() int }); ok && size > lengthAware.Len() {
+		return io.ErrUnexpectedEOF
+	}
+	if size == 0 {
+		return nil
+	}
+	data, err := mp.Alloc(size, true)
+	if err != nil {
+		return err
+	}
+	bat.extraBuf = data
+	if _, err = io.ReadFull(r, data); err != nil {
+		return err
+	}
+	return nil
+}
+
 func validateReaderElementCount(
 	r io.Reader,
 	count int,
@@ -1559,18 +732,17 @@ func validateReaderElementCount(
 	return nil
 }
 
-// prepareOwnedDecodeVectors makes every destination an independent owner.
-// Alias decoding deliberately installs borrowed vector buffers; those buffers
-// must never be grown or relabeled by the owned streaming decoder.
+// prepareOwnedDecodeVectors makes every destination an independent vector of
+// mp for the streaming decoder.
 func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 	if count < 0 {
 		return moerr.NewInvalidInputNoCtx("invalid batch vector count")
 	}
-	allocationAccount := bat.allocationAccount
 	if count != len(bat.Vecs) {
 		if len(bat.Vecs) > 0 {
-			bat.Clean(mp)
-			bat.allocationAccount = allocationAccount
+			if err := bat.freeReceivers(mp); err != nil {
+				return err
+			}
 		}
 		bat.Vecs = make([]*vector.Vector, count)
 	}
@@ -1579,10 +751,6 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 	var inline [inlineReceivers]*vector.Vector
 	var used map[*vector.Vector]struct{}
 	for i, vec := range bat.Vecs {
-		selection := allocationAccount
-		if selection == nil && vec != nil {
-			selection = vec.AllocationAccountSelection()
-		}
 		if vec != nil {
 			exists := false
 			if i < inlineReceivers {
@@ -1609,27 +777,14 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 				vec = nil
 			}
 		}
-		if vec == nil {
-			if bat.offHeap {
-				vec = vector.NewOffHeapVec()
-			} else {
-				vec = vector.NewVecFromReuse()
-			}
-		} else if vec.NeedDup() {
-			vec.Free(mp)
-		}
-		vec.SetOffHeap(bat.offHeap)
-		if !vector.AllocationAccountSelectionsEqual(
-			vec.AllocationAccountSelection(),
-			selection,
-		) {
-			if err := vec.CanSetAllocationAccount(selection); err != nil {
-				vec.Free(mp)
-				vec.SetOffHeap(bat.offHeap)
-			}
-			if err := vec.SetAllocationAccount(selection); err != nil {
+		if vec != nil && vec.MPool() != mp {
+			if err := dropReadOnlyReceiver(vec); err != nil {
 				return err
 			}
+			vec = nil
+		}
+		if vec == nil {
+			vec = vector.NewVec(types.T_any.ToType(), mp)
 		}
 		bat.Vecs[i] = vec
 	}
@@ -1637,6 +792,9 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 }
 
 func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, mp *mpool.MPool) error {
+	if err := requireCompacted("ShrinkByMask", bat); err != nil {
+		return err
+	}
 	if !negate {
 		if sels.Count() == bat.rowCount {
 			return nil
@@ -1658,6 +816,9 @@ func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, 
 }
 
 func (bat *Batch) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
+	if err := requireCompacted("Shrink", bat); err != nil {
+		return err
+	}
 	if !negate {
 		if len(sels) == bat.rowCount {
 			return nil
@@ -1677,6 +838,9 @@ func (bat *Batch) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 }
 
 func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
+	if err := requireCompacted("Shuffle", bat); err != nil {
+		return err
+	}
 	if len(sels) > 0 {
 		mp := make(map[*vector.Vector]uint8)
 		for _, vec := range bat.Vecs {
@@ -1685,29 +849,6 @@ func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 			}
 			mp[vec]++
 			if err := vec.Shuffle(sels, m); err != nil {
-				return err
-			}
-		}
-		bat.rowCount = len(sels)
-	}
-	return nil
-}
-
-// ShuffleWithAllocationAccount is Shuffle with replacement vector storage
-// admitted through selection's capacity class.
-func (bat *Batch) ShuffleWithAllocationAccount(
-	sels []int64,
-	m *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
-) error {
-	if len(sels) > 0 {
-		seen := make(map[*vector.Vector]uint8)
-		for _, vec := range bat.Vecs {
-			if _, ok := seen[vec]; ok {
-				continue
-			}
-			seen[vec]++
-			if err := vec.ShuffleWithAllocationAccount(sels, m, selection); err != nil {
 				return err
 			}
 		}
@@ -1733,17 +874,45 @@ func (bat *Batch) VectorCount() int {
 	return len(bat.Vecs)
 }
 
-func (bat *Batch) SetAttributes(attrs []string) {
-	bat.Attrs = attrs
-}
-
-// AllocationAccountSelection returns the immutable destination selection used
-// by this batch's owned off-heap vectors.
-func (bat *Batch) AllocationAccountSelection() *vector.AllocationAccountSelection {
+// ExtraBuf returns the batch's opaque payload, or nil. The bytes stay owned
+// by the batch and are valid until it releases or replaces them.
+func (bat *Batch) ExtraBuf() []byte {
 	if bat == nil {
 		return nil
 	}
-	return bat.allocationAccount
+	return bat.extraBuf
+}
+
+// SetExtraBuf replaces the payload with a copy of data allocated from mp.
+// data may alias the current payload.
+func (bat *Batch) SetExtraBuf(mp *mpool.MPool, data []byte) error {
+	if bat == nil || mp == nil {
+		return moerr.NewInternalErrorNoCtx("batch extra buffer needs a batch and a pool")
+	}
+	var copied []byte
+	if len(data) != 0 {
+		var err error
+		if copied, err = mp.Alloc(len(data), true); err != nil {
+			return err
+		}
+		copy(copied, data)
+	}
+	bat.AdoptExtraBuf(mp, copied)
+	return nil
+}
+
+// AdoptExtraBuf replaces the payload with data, an allocation from mp that the
+// batch now owns and releases.
+func (bat *Batch) AdoptExtraBuf(mp *mpool.MPool, data []byte) {
+	bat.releaseExtraBuf()
+	bat.mp = mp
+	if len(data) == 0 {
+		if mp != nil && cap(data) != 0 {
+			mp.Free(data)
+		}
+		return
+	}
+	bat.extraBuf = data
 }
 
 // SetAccountedExtraBuffer transfers one accounted byte buffer into the Batch.
@@ -1757,97 +926,161 @@ func (bat *Batch) SetAccountedExtraBuffer(buffer *mpool.AccountedBuffer) error {
 	if err != nil {
 		return err
 	}
-	bat.releaseExtraBuf()
-	bat.ExtraBuf = data
-	bat.extraBufMP = pool
+	bat.AdoptExtraBuf(pool, data)
 	return nil
 }
 
-func (bat *Batch) HasAccountedExtraBuffer() bool {
-	return bat != nil && bat.extraBufMP != nil
-}
-
-func (bat *Batch) MoveExtraBufferFrom(source *Batch) {
+// MoveExtraBufferFrom moves source's payload, and the pool that owns it, to
+// bat; bat's previous payload is released first. When source only borrows its
+// payload (a view, or a batch decoded without a pool), bat gets a copy
+// allocated from mp instead, so it never outlives the real owner's memory.
+func (bat *Batch) MoveExtraBufferFrom(source *Batch, mp *mpool.MPool) error {
 	if bat == nil || source == nil || bat == source {
-		return
+		return nil
+	}
+	if len(source.extraBuf) != 0 && source.mp == nil {
+		return bat.SetExtraBuf(mp, source.extraBuf)
 	}
 	bat.releaseExtraBuf()
-	bat.ExtraBuf = source.ExtraBuf
-	bat.extraBufMP = source.extraBufMP
-	source.ExtraBuf = nil
-	source.extraBufMP = nil
+	bat.extraBuf = source.extraBuf
+	bat.mp = source.mp
+	source.extraBuf = nil
+	return nil
 }
 
-// DropExtraBuffer releases an accounted payload or drops an ordinary Go-heap
-// payload. It is used by reusable pipeline batches before entering a cache.
+// DropExtraBuffer releases the payload. It is used by reusable pipeline
+// batches before entering a cache.
 func (bat *Batch) DropExtraBuffer() {
 	if bat != nil {
 		bat.releaseExtraBuf()
 	}
 }
 
+// releaseExtraBuf frees extraBuf through mp when the batch owns it. It keeps
+// mp: the pool belongs to the batch, not to one payload.
 func (bat *Batch) releaseExtraBuf() {
-	if bat.extraBufMP != nil && cap(bat.ExtraBuf) != 0 {
-		bat.extraBufMP.Free(bat.ExtraBuf)
+	if bat.mp != nil && cap(bat.extraBuf) != 0 {
+		bat.mp.Free(bat.extraBuf)
 	}
-	bat.ExtraBuf = nil
-	bat.extraBufMP = nil
+	bat.extraBuf = nil
 }
 
-// SetAllocationAccount configures every existing empty destination vector as
-// one transaction. Existing physical allocations are never relabeled.
-func (bat *Batch) SetAllocationAccount(
-	selection *vector.AllocationAccountSelection,
-) error {
-	if bat == nil || (selection != nil && !bat.offHeap) {
-		return mpool.ErrAllocationAccountInvalid
-	}
+// OwnReadOnlyVectors replaces every read-only (reference) vector of bat with
+// a copy in mp, so the batch can be mutated in place. A vector shared by
+// several columns is copied once.
+//
+// It copies every vector before replacing any: a vector can sit in several
+// columns, and on a failed copy bat is left unchanged, its originals intact,
+// while the copies already made are freed.
+func (bat *Batch) OwnReadOnlyVectors(mp *mpool.MPool) error {
+	var copied map[*vector.Vector]*vector.Vector
 	for _, vec := range bat.Vecs {
-		if vec != nil {
-			if err := vec.CanSetAllocationAccount(selection); err != nil {
-				return err
+		if vec == nil || !vec.IsReadOnly() {
+			continue
+		}
+		if _, ok := copied[vec]; ok {
+			continue
+		}
+		owned, err := vec.Dup(mp)
+		if err != nil {
+			for _, c := range copied {
+				c.Free(mp)
 			}
+			return err
+		}
+		if copied == nil {
+			copied = make(map[*vector.Vector]*vector.Vector)
+		}
+		copied[vec] = owned
+	}
+	for i, vec := range bat.Vecs {
+		if owned, ok := copied[vec]; ok {
+			bat.Vecs[i] = owned
 		}
 	}
-	for _, vec := range bat.Vecs {
-		if vec != nil {
-			if err := vec.SetAllocationAccount(selection); err != nil {
-				panic(err)
-			}
-		}
+	// No column references the originals now. A read-only vector can still
+	// own its nulls bitmap.
+	for vec := range copied {
+		vec.Free(nil)
 	}
-	bat.allocationAccount = selection
 	return nil
 }
 
-func (bat *Batch) configureOwnedVector(vec *vector.Vector) {
-	if vec == nil {
-		return
-	}
-	vec.SetOffHeap(bat.offHeap)
-	if bat.allocationAccount != nil {
-		if err := vec.SetAllocationAccount(bat.allocationAccount); err != nil {
-			panic(err)
-		}
-	}
+// errForeignReceiver reports a decode receiver vector owned by a pool other
+// than the decode pool: the batch's owner does not own it, so it must not be
+// freed or reused here.
+func errForeignReceiver() error {
+	return moerr.NewInternalErrorNoCtx("batch decode receiver vector belongs to another pool")
 }
 
-func (bat *Batch) InsertVector(
-	pos int32,
-	attr string,
-	vec *vector.Vector,
-) {
-	bat.configureOwnedVector(vec)
+// dropReadOnlyReceiver drops a read-only receiver's references; a receiver
+// owned by any pool is an error.
+func dropReadOnlyReceiver(vec *vector.Vector) error {
+	if !vec.IsReadOnly() {
+		return errForeignReceiver()
+	}
+	vec.Free(nil)
+	return nil
+}
+
+// freeReceivers releases the decode receivers before the vector count
+// changes: receivers of mp are freed, read-only ones dropped, and a receiver
+// of another pool is an error.
+func (bat *Batch) freeReceivers(mp *mpool.MPool) error {
+	for _, vec := range bat.Vecs {
+		if vec != nil && !vec.IsReadOnly() && vec.MPool() != mp {
+			return errForeignReceiver()
+		}
+	}
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(mp)
+		}
+	}
+	bat.Vecs = nil
+	return nil
+}
+
+// FreeWindow releases a batch returned by Window. Its vectors are read-only
+// references, so this only drops them; it panics on an owned vector.
+func (bat *Batch) FreeWindow() {
+	if bat == nil {
+		return
+	}
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(nil)
+		}
+	}
+	bat.Vecs = nil
+	bat.FreeSelection()
+	bat.rowCount = 0
+}
+
+// CleanOwned frees each vector with the pool it belongs to. It is for test
+// fixtures that assemble batches from several pools. Production code must not
+// use it: an owner frees only the vectors it created, with its own pool.
+func (bat *Batch) CleanOwned() {
+	if bat == nil {
+		return
+	}
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(vec.MPool())
+		}
+	}
+	bat.Vecs = nil
+	bat.FreeSelection()
+	bat.rowCount = 0
+}
+
+func (bat *Batch) InsertVector(pos int32, vec *vector.Vector) {
 	bat.Vecs = append(bat.Vecs, nil)
 	copy(bat.Vecs[pos+1:], bat.Vecs[pos:])
 	bat.Vecs[pos] = vec
-	bat.Attrs = append(bat.Attrs, "")
-	copy(bat.Attrs[pos+1:], bat.Attrs[pos:])
-	bat.Attrs[pos] = attr
 }
 
 func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
-	bat.configureOwnedVector(vec)
 	bat.Vecs[pos] = vec
 }
 
@@ -1857,23 +1090,12 @@ func (bat *Batch) GetVector(pos int32) *vector.Vector {
 
 func (bat *Batch) CloneSelectedColumns(
 	selectCols []int,
-	selectAttrs []string,
 	mp *mpool.MPool,
 ) (cloned *Batch, err error) {
 	cloned = NewWithSize(len(selectCols))
-	cloned.Attrs = selectAttrs
-	cloned.offHeap = bat.offHeap || bat.selectedColumnsHaveAllocationAccount(selectCols)
 	var typ types.Type
 	for idx := range selectCols {
-		if cloned.offHeap {
-			cloned.Vecs[idx] = vector.NewOffHeapVecWithType(typ)
-		} else {
-			cloned.Vecs[idx] = vector.NewVec(typ)
-		}
-	}
-	if err = configureCloneAllocation(bat, cloned, selectCols); err != nil {
-		cloned.Clean(mp)
-		return nil, err
+		cloned.Vecs[idx] = vector.NewVec(typ, mp)
 	}
 	if err = bat.CloneSelectedColumnsTo(selectCols, cloned, mp); err != nil {
 		cloned.Clean(mp)
@@ -1888,6 +1110,9 @@ func (bat *Batch) CloneSelectedColumnsTo(
 	toBat *Batch,
 	mp *mpool.MPool,
 ) (err error) {
+	if err = requireCompacted("CloneSelectedColumnsTo", bat, toBat); err != nil {
+		return err
+	}
 	for idx, sourceIdx := range selectCols {
 		toVec := toBat.Vecs[idx]
 		toVec.ResetWithNewType(bat.Vecs[sourceIdx].GetType())
@@ -1910,11 +1135,21 @@ func (bat *Batch) CloneSelectedColumnsTo(
 	return nil
 }
 
-func (bat *Batch) SelectColumns(cols []int, attrs []string) *Batch {
+// ViewInto makes dst a view of bat: the same vectors, row count
+// and selection. dst owns nothing it references (no vectors, selection or
+// ExtraBuf); it is valid while bat is, and is released by dropping it.
+func (bat *Batch) ViewInto(dst *Batch) {
+	dst.Recursive = bat.Recursive
+	dst.ShuffleIDX = bat.ShuffleIDX
+	dst.Vecs = append(dst.Vecs[:0], bat.Vecs...)
+	dst.extraBuf = bat.extraBuf
+	dst.mp = nil // a view owns nothing
+	dst.rowCount = bat.rowCount
+	dst.selection = bat.selection
+}
+
+func (bat *Batch) SelectColumns(cols []int) *Batch {
 	rbat := NewWithSize(len(cols))
-	rbat.Attrs = attrs
-	rbat.offHeap = bat.offHeap
-	rbat.allocationAccount = bat.allocationAccount
 	for i, col := range cols {
 		rbat.Vecs[i] = bat.Vecs[col]
 	}
@@ -1936,10 +1171,9 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	}
 
 	bat.Vecs = nil
-	bat.Attrs = nil
 	bat.releaseExtraBuf()
 	bat.SetRowCount(0)
-	bat.allocationAccount = nil
+	bat.FreeSelection()
 }
 
 func (bat *Batch) Last() bool {
@@ -1965,19 +1199,13 @@ func (bat *Batch) CleanOnlyData() {
 		}
 	}
 	bat.rowCount = 0
+	bat.selection = nil
 }
 
 func (bat *Batch) FreeColumns(m *mpool.MPool) {
 	for _, vec := range bat.Vecs {
 		if vec != nil {
-			selection := vec.AllocationAccountSelection()
 			vec.Free(m)
-			if bat.allocationAccount != nil {
-				selection = bat.allocationAccount
-			}
-			if err := vec.SetAllocationAccount(selection); err != nil {
-				panic(err)
-			}
 		}
 	}
 }
@@ -1991,82 +1219,18 @@ func (bat *Batch) String() string {
 	return buf.String()
 }
 
-func (bat *Batch) GetSchema() (attrs []string, attrTypes []types.Type) {
-	attrs = make([]string, len(bat.Attrs))
-	attrTypes = make([]types.Type, len(bat.Vecs))
-	copy(attrs, bat.Attrs)
+// Types returns a copy of the types of bat's vectors.
+func (bat *Batch) Types() []types.Type {
+	attrTypes := make([]types.Type, len(bat.Vecs))
 	for i, vec := range bat.Vecs {
 		attrTypes[i] = *vec.GetType()
 	}
-	return
+	return attrTypes
 }
 
-func vectorAllocationSelectionsMatch(left, right *Batch) bool {
-	if left == nil || right == nil || len(left.Vecs) != len(right.Vecs) {
-		return false
-	}
-	if !vector.AllocationAccountSelectionsEqual(
-		left.allocationAccount,
-		right.allocationAccount,
-	) {
-		return false
-	}
-	for i := range left.Vecs {
-		if left.Vecs[i] == nil || right.Vecs[i] == nil {
-			if left.Vecs[i] != right.Vecs[i] {
-				return false
-			}
-			continue
-		}
-		if !vector.AllocationAccountSelectionsEqual(
-			left.Vecs[i].AllocationAccountSelection(),
-			right.Vecs[i].AllocationAccountSelection(),
-		) {
-			return false
-		}
-	}
-	return true
-}
-
-func configureCloneAllocation(
-	source, destination *Batch,
-	selectedColumns []int,
-) error {
-	if source == nil || destination == nil {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	if source.allocationAccount != nil {
-		return destination.SetAllocationAccount(source.allocationAccount)
-	}
-	for destinationIdx := range destination.Vecs {
-		sourceIdx := destinationIdx
-		if len(selectedColumns) > 0 {
-			sourceIdx = selectedColumns[destinationIdx]
-		}
-		selection := source.Vecs[sourceIdx].AllocationAccountSelection()
-		if selection == nil {
-			continue
-		}
-		if !destination.offHeap {
-			return mpool.ErrAllocationAccountInvalid
-		}
-		if err := destination.Vecs[destinationIdx].SetAllocationAccount(selection); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (bat *Batch) Clone(mp *mpool.MPool, offHeap bool) (*Batch, error) {
-	var (
-		cloned           *Batch
-		attrs, attrTypes = bat.GetSchema()
-	)
-	cloned = NewWithSchema(offHeap, attrs, attrTypes)
-	if err := configureCloneAllocation(bat, cloned, nil); err != nil {
-		cloned.Clean(mp)
-		return nil, err
-	}
+// Clone copies bat into a new batch whose vectors all come from mp.
+func (bat *Batch) Clone(mp *mpool.MPool) (*Batch, error) {
+	cloned := NewWithTypes(bat.Types(), mp)
 	cloned.Recursive = bat.Recursive
 	err := bat.CloneTo(cloned, mp)
 	if err != nil {
@@ -2076,6 +1240,9 @@ func (bat *Batch) Clone(mp *mpool.MPool, offHeap bool) (*Batch, error) {
 }
 
 func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
+	if err = requireCompacted("CloneTo", bat, toBat); err != nil {
+		return err
+	}
 	for i, srcVec := range bat.Vecs {
 		toVec := toBat.Vecs[i]
 		toVec.ResetWithNewType(srcVec.GetType())
@@ -2084,16 +1251,6 @@ func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
 			return
 		}
 		toVec.SetSorted(srcVec.GetSorted())
-		if srcVec.IsConst() {
-			// UnionBatch copies the provenance for ordinary vectors while it
-			// appends their rows.  Keep the explicit copy for constants: their
-			// value is represented by one logical cell and the const fast path
-			// does not materialize the row sidecar.
-			if err = srcVec.CopyPrepareParamMetadataToWithMP(toVec, mp); err != nil {
-				toBat.Clean(mp)
-				return
-			}
-		}
 	}
 	toBat.rowCount = bat.rowCount
 	toBat.ShuffleIDX = bat.ShuffleIDX
@@ -2104,77 +1261,12 @@ func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
 // Dup used to copy a Batch object, this method will create a new batch
 // and copy all vectors (Vecs) of the current batch to the new batch.
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
-	return bat.Clone(mp, bat.offHeap || bat.hasAllocationAccountVector())
-}
-
-// CloneWithoutAllocationAccount deep-copies bat without carrying an
-// allocation account into the destination. Use it only at an ownership
-// boundary whose destination can outlive the source account.
-func (bat *Batch) CloneWithoutAllocationAccount(
-	mp *mpool.MPool,
-	offHeap bool,
-) (*Batch, error) {
-	attrs, attrTypes := bat.GetSchema()
-	cloned := NewWithSchema(offHeap, attrs, attrTypes)
-	cloned.Recursive = bat.Recursive
-	if err := bat.CloneTo(cloned, mp); err != nil {
-		return nil, err
-	}
-	return cloned, nil
-}
-
-// DupWithoutAllocationAccount is the ownership-boundary counterpart of Dup.
-func (bat *Batch) DupWithoutAllocationAccount(mp *mpool.MPool) (*Batch, error) {
-	return bat.CloneWithoutAllocationAccount(
-		mp,
-		bat.offHeap || bat.hasAllocationAccountVector(),
-	)
-}
-
-func (bat *Batch) hasAllocationAccountVector() bool {
-	for _, vec := range bat.Vecs {
-		if vec != nil && vec.AllocationAccountSelection() != nil {
-			return true
-		}
-	}
-	return false
-}
-
-// HasAllocationAccount reports whether the batch or one of its vectors owns
-// memory charged to an execution-scoped allocation account.
-func (bat *Batch) HasAllocationAccount() bool {
-	return bat != nil && (bat.extraBufMP != nil || bat.allocationAccount != nil ||
-		bat.hasAllocationAccountVector())
-}
-
-func (bat *Batch) selectedColumnsHaveAllocationAccount(selectCols []int) bool {
-	for _, sourceIdx := range selectCols {
-		vec := bat.Vecs[sourceIdx]
-		if vec != nil && vec.AllocationAccountSelection() != nil {
-			return true
-		}
-	}
-	return false
-}
-
-func finalizeStringSourcePreflights(vecs []*vector.Vector) {
-	for _, vec := range vecs {
-		vec.FinalizeStringSourcePreflight()
-	}
+	return bat.Clone(mp)
 }
 
 func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
-	defer finalizeStringSourcePreflights(bat.Vecs)
-	// Provenance can require an allocation even when every payload vector is
-	// already pre-sized. Admit that state for every column before the first
-	// column publishes rows, so a provenance OOM cannot split batch lengths.
-	for i, vec := range bat.Vecs {
-		if err := vec.PreflightUnionPrepareParamKinds(bat2.Vecs[i], sels, m); err != nil {
-			return err
-		}
-		if err := vec.PreflightUnionBinaryString(bat2.Vecs[i], sels, m); err != nil {
-			return err
-		}
+	if err := requireCompacted("Union", bat, bat2); err != nil {
+		return err
 	}
 	for i, vec := range bat.Vecs {
 		if err := vec.Union(bat2.Vecs[i], sels, m); err != nil {
@@ -2188,16 +1280,8 @@ func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
 }
 
 func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) error {
-	defer finalizeStringSourcePreflights(bat.Vecs)
-	for i, vec := range bat.Vecs {
-		if err := vec.PreflightUnionBatchPrepareParamKinds(
-			bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
-			return err
-		}
-		if err := vec.PreflightUnionBatchBinaryString(
-			bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
-			return err
-		}
+	if err := requireCompacted("UnionWindow", bat, bat2); err != nil {
+		return err
 	}
 	for i, vec := range bat.Vecs {
 		if err := vec.UnionBatch(bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
@@ -2209,14 +1293,8 @@ func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) erro
 }
 
 func (bat *Batch) UnionOne(bat2 *Batch, pos int64, m *mpool.MPool) error {
-	defer finalizeStringSourcePreflights(bat.Vecs)
-	for i, vec := range bat.Vecs {
-		if err := vec.PreflightUnionOnePrepareParamKinds(bat2.Vecs[i], pos, m); err != nil {
-			return err
-		}
-		if err := vec.PreflightUnionOneBinaryString(bat2.Vecs[i], pos, m); err != nil {
-			return err
-		}
+	if err := requireCompacted("UnionOne", bat, bat2); err != nil {
+		return err
 	}
 	for i, vec := range bat.Vecs {
 		if err := vec.UnionOne(bat2.Vecs[i], pos, m); err != nil {
@@ -2240,6 +1318,9 @@ func (bat *Batch) PreExtend(mp *mpool.MPool, rows int) error {
 // ensures that the batch structure is consistent and copies all vector data to the target batch.
 // WARING: this function will cause a memory allocation.
 func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch, error) {
+	if err := requireCompacted("AppendWithCopy", bat, b); err != nil {
+		return nil, err
+	}
 	if bat == nil {
 		return b.Dup(mp)
 	}
@@ -2249,18 +1330,7 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch)
 	if len(bat.Vecs) == 0 {
 		return bat, nil
 	}
-	defer finalizeStringSourcePreflights(bat.Vecs)
 
-	for i := range bat.Vecs {
-		if err := bat.Vecs[i].PreflightUnionBatchPrepareParamKinds(
-			b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
-			return bat, err
-		}
-		if err := bat.Vecs[i].PreflightUnionBatchBinaryString(
-			b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
-			return bat, err
-		}
-	}
 	for i := range bat.Vecs {
 		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
 			return bat, err
@@ -2272,6 +1342,9 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch)
 }
 
 func (bat *Batch) Append(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch, error) {
+	if err := requireCompacted("Append", bat, b); err != nil {
+		return nil, err
+	}
 	if bat == nil {
 		return b, nil
 	}
@@ -2281,18 +1354,7 @@ func (bat *Batch) Append(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch
 	if len(bat.Vecs) == 0 {
 		return bat, nil
 	}
-	defer finalizeStringSourcePreflights(bat.Vecs)
 
-	for i := range bat.Vecs {
-		if err := bat.Vecs[i].PreflightUnionBatchPrepareParamKinds(
-			b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
-			return bat, err
-		}
-		if err := bat.Vecs[i].PreflightUnionBatchBinaryString(
-			b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
-			return bat, err
-		}
-	}
 	for i := range bat.Vecs {
 		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
 			return bat, err
@@ -2309,6 +1371,7 @@ func (bat *Batch) AddRowCount(rowCount int) {
 
 func (bat *Batch) SetRowCount(rowCount int) {
 	bat.rowCount = rowCount
+	bat.selection = nil
 }
 
 func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector, startIndex int) {
@@ -2349,58 +1412,15 @@ func (bat *Batch) Window(start, end int) (*Batch, error) {
 	}
 	b := NewWithSize(len(bat.Vecs))
 	var err error
-	b.Attrs = bat.Attrs
-	b.offHeap = bat.offHeap
-	b.allocationAccount = bat.allocationAccount
 	for i, vec := range bat.Vecs {
 		if vec == nil {
-			b.Clean(nil)
+			b.FreeWindow()
 			return nil, moerr.NewInvalidInputNoCtx("invalid batch vector")
 		}
+		// Each window is a read-only reference to its source vector.
 		b.Vecs[i], err = vec.WindowByLogicalRows(start, end)
 		if err != nil {
-			// Plain vector windows borrow data/area and keep any provenance
-			// sidecar's physical MPool owner internally, so nil is the correct
-			// cleanup pool for the successfully-created prefix.
-			b.Clean(nil)
-			return nil, err
-		}
-		b.Vecs[i].SetOffHeap(bat.offHeap)
-	}
-	b.rowCount = end - start
-	return b, nil
-}
-
-// WindowWithAllocation is the allocation-accounted counterpart of Window.
-// Vector data and area remain borrowed; null/grouping range bitmaps are owned
-// by selection and are released when the returned batch is cleaned.
-func (bat *Batch) WindowWithAllocation(
-	start int,
-	end int,
-	mp *mpool.MPool,
-	selection *vector.AllocationAccountSelection,
-) (*Batch, error) {
-	if bat == nil || mp == nil || selection == nil ||
-		start < 0 || end < start || end > bat.RowCount() {
-		return nil, mpool.ErrAllocationAccountInvalid
-	}
-	b := NewOffHeapWithSize(len(bat.Vecs))
-	b.Attrs = bat.Attrs
-	if err := b.SetAllocationAccount(selection); err != nil {
-		b.Clean(mp)
-		return nil, err
-	}
-	for i, vec := range bat.Vecs {
-		if vec == nil {
-			b.Clean(mp)
-			return nil, mpool.ErrAllocationAccountInvalid
-		}
-		var err error
-		b.Vecs[i], err = vec.WindowByLogicalRowsWithAllocation(
-			start, end, mp, selection,
-		)
-		if err != nil {
-			b.Clean(mp)
+			b.FreeWindow()
 			return nil, err
 		}
 	}

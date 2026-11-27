@@ -26,7 +26,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp"
 
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -67,12 +66,12 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	// MySQL compares byte-wise when either LIKE operand is a binary
 	// string, so the pattern domain participates in the routing exactly
 	// as the subject domain does (issue #31175).
-	uniformBinary, perRow := stringDomainMode(parameters[0])
-	patternBinary, patternPerRow := stringDomainMode(parameters[1])
-	if uniformBinary || perRow || patternBinary || patternPerRow {
+	uniformBinary := isBinaryStringVector(parameters[0], result.ArgumentIsBin(0))
+	patternBinary := isBinaryStringVector(parameters[1], result.ArgumentIsBin(1))
+	if uniformBinary || patternBinary {
 		return op.likeByStringDomain(
-			parameters, result, proc, length, selectList, uniformBinary, perRow,
-			patternBinary, patternPerRow,
+			parameters, result, proc, length, selectList, uniformBinary,
+			patternBinary,
 			[]byte{byte(DefaultEscapeChar)}, true, fold)
 	}
 
@@ -81,7 +80,7 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	// represent, so unicode_ci patterns use the per-character matcher.
 	if fold == likeFoldUnicodeCI {
 		return op.likeByStringDomain(
-			parameters, result, proc, length, selectList, false, false, false, false,
+			parameters, result, proc, length, selectList, false, false,
 			[]byte{byte(DefaultEscapeChar)}, true, fold)
 	}
 
@@ -163,12 +162,12 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
 	}
 
-	uniformBinary, perRow := stringDomainMode(parameters[0])
-	patternBinary, patternPerRow := stringDomainMode(parameters[1])
-	if !foldBinaryDomain && (uniformBinary || perRow || patternBinary || patternPerRow) {
+	uniformBinary := isBinaryStringVector(parameters[0], result.ArgumentIsBin(0))
+	patternBinary := isBinaryStringVector(parameters[1], result.ArgumentIsBin(1))
+	if !foldBinaryDomain && (uniformBinary || patternBinary) {
 		return op.likeByStringDomain(
-			parameters[:2], result, proc, length, selectList, uniformBinary, perRow,
-			patternBinary, patternPerRow,
+			parameters[:2], result, proc, length, selectList, uniformBinary,
+			patternBinary,
 			escapeBytes, escapeEnabled, fold)
 	}
 	if !escapeIsNull && (!utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1) {
@@ -177,7 +176,7 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	if fold == likeFoldUnicodeCI {
 		// The weight-stream matcher owns unicode_ci escapes as well.
 		return op.likeByStringDomain(
-			parameters[:2], result, proc, length, selectList, false, false, false, false,
+			parameters[:2], result, proc, length, selectList, false, false,
 			escapeBytes, escapeEnabled, fold)
 	}
 	var escape rune
@@ -194,8 +193,8 @@ func (op *opBuiltInRegexp) likeByStringDomain(
 	proc *process.Process,
 	length int,
 	selectList *FunctionSelectList,
-	uniformBinary, perRow bool,
-	patternBinary, patternPerRow bool,
+	uniformBinary bool,
+	patternBinary bool,
 	escapeBytes []byte,
 	escapeEnabled bool,
 	fold likeFoldMode,
@@ -234,8 +233,8 @@ func (op *opBuiltInRegexp) likeByStringDomain(
 		}
 		var matched bool
 		var err error
-		if binaryStringAt(parameters[0], int(row), uniformBinary, perRow) ||
-			binaryStringAt(parameters[1], int(row), patternBinary, patternPerRow) {
+		if uniformBinary ||
+			patternBinary {
 			if escapeEnabled && len(escapeBytes) != 1 {
 				return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
 			}
@@ -939,7 +938,7 @@ func optimizeRuleForLike(ctx context.Context, p1, p2 vector.FunctionParameterWra
 	specialFnForV func([]byte) []byte) (bool, error) {
 	pat, null := p2.GetStrValue(0)
 	if null {
-		nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
+		rs.GetResultVector().GetNulls().AddRange(0, uint64(length))
 		return true, nil
 	}
 	pat = specialFnForV(pat)
@@ -1256,7 +1255,8 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 	// match domain still override this default (issue #31175).
 	collationCaseInsensitive := types.IsCaseInsensitiveCollation(parameters[0].GetType().Charset)
 	if len(parameters) == 2 && !parameters[0].HasNull() {
-		if binary, uniform := regexpMatchDomainUniform(parameters); uniform {
+		{
+			binary := regexpMatchDomainBinary(parameters, result)
 			defaultMatchType := "c"
 			pureDefaultMatchType := ""
 			if collationCaseInsensitive && !binary {
@@ -1326,7 +1326,7 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 		}
 
 		patternString := functionUtil.QuickBytesToStr(pattern)
-		binary := regexpMatchUsesBinary(parameters, int(i))
+		binary := regexpMatchUsesBinary(parameters, result, int(i))
 		// Without an explicit match_type case flag, a case-insensitive text
 		// collation supplies the default; a binary match domain stays
 		// case-sensitive unless the caller asked for i (issue #31175).
@@ -1415,7 +1415,7 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
-			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			matchingIsBinary := regexpMatchUsesBinary(parameters, result, int(i))
 			if null2 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
@@ -1439,11 +1439,6 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 				if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), !match); err != nil {
 					return err
 				}
-				if match {
-					if err = setRegexpResultDomain(rs.GetResultVector(), int(i), matchingIsBinary, proc); err != nil {
-						return err
-					}
-				}
 			}
 		}
 
@@ -1459,7 +1454,7 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
-			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			matchingIsBinary := regexpMatchUsesBinary(parameters, result, int(i))
 			if null2 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
@@ -1483,11 +1478,6 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 				if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), !match); err != nil {
 					return err
 				}
-				if match {
-					if err = setRegexpResultDomain(rs.GetResultVector(), int(i), matchingIsBinary, proc); err != nil {
-						return err
-					}
-				}
 			}
 		}
 
@@ -1509,7 +1499,7 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
 			ocur, null4 := occurrences.GetValue(i)
-			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			matchingIsBinary := regexpMatchUsesBinary(parameters, result, int(i))
 			pureMatchType := ""
 			if len(parameters) == 5 {
 				matchType, matchTypeNull := matchTypes.GetStrValue(i)
@@ -1550,11 +1540,6 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 				if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), !match); err != nil {
 					return err
 				}
-				if match {
-					if err = setRegexpResultDomain(rs.GetResultVector(), int(i), matchingIsBinary, proc); err != nil {
-						return err
-					}
-				}
 			}
 		}
 		return nil
@@ -1579,7 +1564,7 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			}
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
-			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			matchingIsBinary := regexpMatchUsesBinary(parameters, result, int(i))
 			if null2 {
 				if err := rs.Append(0, true); err != nil {
 					return err
@@ -1620,7 +1605,7 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
-			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			matchingIsBinary := regexpMatchUsesBinary(parameters, result, int(i))
 			if null2 {
 				if err := rs.Append(0, true); err != nil {
 					return err
@@ -1661,7 +1646,7 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
 			ocur, null4 := occurrences.GetValue(i)
-			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			matchingIsBinary := regexpMatchUsesBinary(parameters, result, int(i))
 			if null2 {
 				if err := rs.Append(0, true); err != nil {
 					return err
@@ -1709,7 +1694,7 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			pos, null3 := positions.GetValue(i)
 			ocur, null4 := occurrences.GetValue(i)
 			resOp, null5 := resultOption.GetValue(i)
-			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			matchingIsBinary := regexpMatchUsesBinary(parameters, result, int(i))
 			pureMatchType := ""
 			if len(parameters) == 6 {
 				matchType, matchTypeNull := matchTypes.GetStrValue(i)
@@ -1765,7 +1750,7 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 	p2 := vector.GenerateFunctionStrParameter(parameters[1]) // pat
 	p3 := vector.GenerateFunctionStrParameter(parameters[2]) // repl
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	replacementConverter := newRegexpReplacementDomainConverter(parameters[2])
+	replacementConverter := newRegexpReplacementDomainConverter(parameters[2], result.ArgumentIsBin(2))
 
 	switch len(parameters) {
 	case 3:
@@ -1779,7 +1764,7 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			v3, null3 := p3.GetStrValue(i)
-			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			matchingIsBinary := regexpMatchUsesBinary(parameters, result, int(i))
 			if null2 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
@@ -1806,9 +1791,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 				if err = rs.AppendBytes([]byte(val), false); err != nil {
 					return err
 				}
-				if err = setRegexpResultDomain(rs.GetResultVector(), int(i), matchingIsBinary, proc); err != nil {
-					return err
-				}
 			}
 		}
 
@@ -1825,7 +1807,7 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v2, null2 := p2.GetStrValue(i)
 			v3, null3 := p3.GetStrValue(i)
 			v4, null4 := p4.GetValue(i)
-			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			matchingIsBinary := regexpMatchUsesBinary(parameters, result, int(i))
 			if null2 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
@@ -1852,9 +1834,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 				if err = rs.AppendBytes([]byte(val), false); err != nil {
 					return err
 				}
-				if err = setRegexpResultDomain(rs.GetResultVector(), int(i), matchingIsBinary, proc); err != nil {
-					return err
-				}
 			}
 		}
 
@@ -1877,7 +1856,7 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v3, null3 := p3.GetStrValue(i)
 			v4, null4 := p4.GetValue(i)
 			v5, null5 := p5.GetValue(i)
-			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
+			matchingIsBinary := regexpMatchUsesBinary(parameters, result, int(i))
 			pureMatchType := ""
 			if len(parameters) == 6 {
 				matchType, matchTypeNull := matchTypes.GetStrValue(i)
@@ -1928,9 +1907,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 				if err = rs.AppendBytes([]byte(val), false); err != nil {
 					return err
 				}
-				if err = setRegexpResultDomain(rs.GetResultVector(), int(i), matchingIsBinary, proc); err != nil {
-					return err
-				}
 			}
 		}
 	}
@@ -1941,10 +1917,10 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 // function: only the subject and pattern select text or byte matching. Other
 // string arguments, such as REGEXP_REPLACE's replacement, may have separate
 // compatibility rules but never change the matcher domain.
-func regexpMatchUsesBinary(parameters []*vector.Vector, row int) bool {
+func regexpMatchUsesBinary(parameters []*vector.Vector, result vector.FunctionResultWrapper, row int) bool {
 	operandCount := min(RegexpMatchStringOperandCount, len(parameters))
 	for i := 0; i < operandCount; i++ {
-		if parameters[i].GetIsBinaryStringAt(row) {
+		if isBinaryStringVector(parameters[i], result.ArgumentIsBin(i)) {
 			return true
 		}
 	}
@@ -1953,18 +1929,19 @@ func regexpMatchUsesBinary(parameters []*vector.Vector, row int) bool {
 
 type regexpReplacementDomainConverter struct {
 	parameter             *vector.Vector
+	isBin                 bool
 	mayBeBinary           bool
 	constant              bool
 	constantText          string
 	constantTextConverted bool
 }
 
-func newRegexpReplacementDomainConverter(parameter *vector.Vector) regexpReplacementDomainConverter {
+func newRegexpReplacementDomainConverter(parameter *vector.Vector, isBin bool) regexpReplacementDomainConverter {
 	return regexpReplacementDomainConverter{
-		parameter: parameter,
-		mayBeBinary: types.StaticStringDomain(*parameter.GetType()) == types.StringDomainBinary ||
-			parameter.HasBinaryStringMetadata(),
-		constant: parameter.IsConst(),
+		parameter:   parameter,
+		isBin:       isBin,
+		mayBeBinary: isBinaryStringVector(parameter, isBin),
+		constant:    parameter.IsConst(),
 	}
 }
 
@@ -1973,7 +1950,7 @@ func (c *regexpReplacementDomainConverter) forMatchDomain(
 	row int,
 	matchingIsBinary bool,
 ) string {
-	if !c.mayBeBinary || matchingIsBinary || !c.parameter.GetIsBinaryStringAt(row) {
+	if !c.mayBeBinary || matchingIsBinary || !isBinaryStringVector(c.parameter, c.isBin) {
 		return replacement
 	}
 	if !c.constant {
@@ -2195,34 +2172,17 @@ func regexpWindows1252Rune(value byte) rune {
 	}
 }
 
-// regexpMatchDomainUniform identifies the common no-row-metadata case so
-// boolean predicates retain the allocation-free vectorized executor. Mixed
-// prepared/user-variable batches fall back to the row-aware loop above.
-func regexpMatchDomainUniform(parameters []*vector.Vector) (binary, uniform bool) {
+// regexpMatchDomainBinary reports whether any match operand is a byte string;
+// MySQL then matches byte-wise and case-sensitively.
+func regexpMatchDomainBinary(parameters []*vector.Vector, result vector.FunctionResultWrapper) (binary bool) {
 	operandCount := min(RegexpMatchStringOperandCount, len(parameters))
 	for i := 0; i < operandCount; i++ {
 		parameter := parameters[i]
-		if parameter.HasBinaryStringRows() {
-			return false, false
-		}
-		if types.StaticStringDomain(*parameter.GetType()) == types.StringDomainBinary ||
-			parameter.GetIsBinaryString() {
+		if isBinaryStringVector(parameter, result.ArgumentIsBin(i)) {
 			binary = true
 		}
 	}
-	return binary, true
-}
-
-func setRegexpResultDomain(result *vector.Vector, row int, matchingIsBinary bool, proc *process.Process) error {
-	domain := types.RuntimeStringText
-	if matchingIsBinary {
-		domain = types.RuntimeStringBinary
-	}
-	if (domain == types.RuntimeStringBinary) ==
-		(types.StaticStringDomain(*result.GetType()) == types.StringDomainBinary) {
-		domain = types.RuntimeStringInherit
-	}
-	return result.SetRuntimeStringDomainAtWithMP(row, domain, proc.Mp())
+	return binary
 }
 
 func regexpRowMasked(selectList *FunctionSelectList, row uint64) bool {

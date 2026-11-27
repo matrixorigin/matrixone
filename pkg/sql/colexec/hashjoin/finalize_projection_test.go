@@ -39,10 +39,11 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 				LeftTypes: []types.Type{types.T_int64.ToType()}, RightTypes: []types.Type{typ},
 				ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}},
 			}
-			want := vector.NewVec(typ)
+			want := vector.NewVec(typ, proc.Mp())
 			sources := make([]*batch.Batch, 0, 2)
 			t.Cleanup(func() {
 				arg.Free(proc, false, nil)
+				freeTestChildren(arg)
 				for _, source := range sources {
 					source.Clean(proc.Mp())
 				}
@@ -51,9 +52,9 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 				require.Zero(t, proc.Mp().CurrNB())
 			})
 			account := installTestAllocation(t, arg)
-			for source := range 2 {
+			for range 2 {
 				bat := batch.NewWithSize(1)
-				v := vector.NewVec(typ)
+				v := vector.NewVec(typ, proc.Mp())
 				bat.Vecs[0] = v
 				sources = append(sources, bat)
 				for _, value := range []string{"a non-inline build payload", "unselected", "null", "tail"} {
@@ -69,14 +70,6 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 					values, _ := vector.MustVarlenaRawData(v)
 					values[2].SetOffsetLen(1<<30, 65536) // Never read NULL payload.
 				}
-				v.GetGrouping().Add(2)
-				origin := types.StringSourceLiteral
-				if source == 1 {
-					origin = types.StringSourceExpression
-					v.SetPrepareParamKind(vector.PrepareParamInteger)
-					v.SetIsBinaryString(true)
-				}
-				require.NoError(t, v.SetStringSource(origin))
 				bat.SetRowCount(4)
 			}
 			// Resolved build ordinals use DefaultBatchSize stride; only the
@@ -88,7 +81,8 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 			} {
 				want.CleanOnlyData()
 				var bm bitmap.Bitmap
-				bm.InitWithSize(colexec.DefaultBatchSize + 4)
+				bm.Init(bitmapTestMP)
+				mustBitmapOK(bm.InitWithSize(colexec.DefaultBatchSize+4, bitmapTestMP))
 				for _, row := range selected {
 					bm.Add(row)
 					require.NoError(t, want.UnionOne(sources[row/colexec.DefaultBatchSize].Vecs[0], int64(row%colexec.DefaultBatchSize), proc.Mp()))
@@ -106,10 +100,6 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 					for row := range want.Length() {
 						require.True(t, result.Batch.Vecs[0].IsNull(uint64(row)))
 						require.Equal(t, want.IsNull(uint64(row)), got.IsNull(uint64(row)))
-						require.Equal(t, want.GetGrouping().Contains(uint64(row)), got.GetGrouping().Contains(uint64(row)))
-						require.Equal(t, want.GetPrepareParamKindAt(row), got.GetPrepareParamKindAt(row))
-						require.Equal(t, want.GetStringSourceAt(row), got.GetStringSourceAt(row))
-						require.Equal(t, want.GetRuntimeStringDomainAt(row), got.GetRuntimeStringDomainAt(row))
 						if !want.IsNull(uint64(row)) {
 							require.Equal(t, want.GetBytesAt(row), got.GetBytesAt(row))
 						}
@@ -140,7 +130,7 @@ func TestHashJoinFinalizeProjectionAllocation(t *testing.T) {
 			}
 			source := batch.NewWithSize(2)
 			for i, typ := range arg.RightTypes {
-				source.Vecs[i] = vector.NewVec(typ)
+				source.Vecs[i] = vector.NewVec(typ, proc.Mp())
 			}
 			t.Cleanup(func() {
 				source.Clean(proc.Mp())
@@ -157,6 +147,7 @@ func TestHashJoinFinalizeProjectionAllocation(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() {
 				arg.Free(proc, true, nil)
+				freeTestChildren(arg)
 				require.NoError(t, arg.ClearAllocationAccount(account))
 				require.Zero(t, account.Seal().Used)
 				_, err := registry.Finalize(account)
@@ -164,7 +155,8 @@ func TestHashJoinFinalizeProjectionAllocation(t *testing.T) {
 			})
 			require.NoError(t, arg.SetAllocationAccount(account))
 			var bm bitmap.Bitmap
-			bm.InitWithSize(int64(count))
+			bm.Init(bitmapTestMP)
+			mustBitmapOK(bm.InitWithSize(int64(count), bitmapTestMP))
 			for row := range count {
 				require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(row), false, proc.Mp()))
 				value := "live"

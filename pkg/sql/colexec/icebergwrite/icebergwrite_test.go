@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -503,7 +504,7 @@ func (c *testProcessAwareCoordinator) AppendWithProcess(proc *process.Process, b
 }
 
 func testBatchWithRows(proc *process.Process, rows int) *batch.Batch {
-	bat := batch.NewWithSchema(false, []string{"id"}, []types.Type{types.T_int64.ToType()})
+	bat := batch.NewWithTypes([]types.Type{types.T_int64.ToType()}, proc.Mp())
 	for i := 0; i < rows; i++ {
 		if err := vector.AppendFixed[int64](bat.Vecs[0], int64(i+1), false, proc.Mp()); err != nil {
 			panic(err)
@@ -514,7 +515,7 @@ func testBatchWithRows(proc *process.Process, rows int) *batch.Batch {
 }
 
 func lastBatch() *batch.Batch {
-	bat := batch.NewWithSchema(false, []string{"id"}, []types.Type{types.T_int64.ToType()})
+	bat := batch.NewWithTypes([]types.Type{types.T_int64.ToType()}, mpool.MustNewZero())
 	bat.SetLast()
 	return bat
 }

@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,10 +35,12 @@ import (
 type mockRelation struct {
 	engine.Relation
 	result *batch.Batch
+	attrs  [][]string
 }
 
-func (e *mockRelation) Delete(ctx context.Context, b *batch.Batch, attrName string) error {
+func (e *mockRelation) Delete(ctx context.Context, b *batch.Batch, attrs []string, attrName string) error {
 	e.result = b
+	e.attrs = append(e.attrs, attrs)
 	return nil
 }
 
@@ -57,12 +58,13 @@ func TestOpType(t *testing.T) {
 func TestMergeDelete(t *testing.T) {
 	proc := testutil.NewProc(t)
 	proc.Ctx = context.TODO()
+	blkId0 := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
 	metaLocBat0 := &batch.Batch{
-		Attrs: []string{
-			catalog.BlockMetaOffset,
-		},
 		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, nil, proc.Mp()),
+			testutil.MakeRowIdVector([]types.Rowid{
+				objectio.NewRowid(blkId0, 0),
+				objectio.NewRowid(blkId0, 1),
+			}, nil, proc.Mp()),
 		},
 	}
 	bytes, err := metaLocBat0.MarshalBinary()
@@ -70,13 +72,6 @@ func TestMergeDelete(t *testing.T) {
 
 	vcu32, _ := vector.NewConstFixed(types.T_uint32.ToType(), uint32(15), 1, proc.GetMPool())
 	batch1 := &batch.Batch{
-		Attrs: []string{
-			catalog.BlockMeta_Delete_ID,
-			catalog.BlockMeta_DeltaLoc,
-			catalog.BlockMeta_Type,
-			catalog.BlockMeta_Partition,
-			catalog.BlockMeta_Deletes_Length,
-		},
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"mock_block_id0"}, nil, proc.Mp()),
 			testutil.MakeTextVector([]string{string(bytes)}, nil, proc.Mp()),
@@ -89,9 +84,6 @@ func TestMergeDelete(t *testing.T) {
 	uuid1 := objectio.NewSegmentid()
 	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
 	metaLocBat1 := &batch.Batch{
-		Attrs: []string{
-			catalog.Row_ID,
-		},
 		Vecs: []*vector.Vector{
 			testutil.MakeRowIdVector([]types.Rowid{
 				objectio.NewRowid(blkId1, 0),
@@ -116,9 +108,6 @@ func TestMergeDelete(t *testing.T) {
 	require.Nil(t, err)
 
 	metaLocBat2 := &batch.Batch{
-		Attrs: []string{
-			catalog.BlockMetaOffset,
-		},
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, nil, proc.Mp()),
 		},
@@ -127,9 +116,6 @@ func TestMergeDelete(t *testing.T) {
 	require.Nil(t, err)
 
 	metaLocBat3 := &batch.Batch{
-		Attrs: []string{
-			catalog.BlockMeta_DeltaLoc,
-		},
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"d:magic:15"}, nil, proc.Mp()),
 		},
@@ -139,13 +125,6 @@ func TestMergeDelete(t *testing.T) {
 
 	vcu32_2, _ := vector.NewConstFixed(types.T_uint32.ToType(), uint32(45), 3, proc.GetMPool())
 	batch2 := &batch.Batch{
-		Attrs: []string{
-			catalog.BlockMeta_Delete_ID,
-			catalog.BlockMeta_DeltaLoc,
-			catalog.BlockMeta_Type,
-			catalog.BlockMeta_Partition,
-			catalog.BlockMeta_Deletes_Length,
-		},
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"mock_block_id1", "mock_block_id2", "mock_block_id3"}, nil, proc.Mp()),
 			testutil.MakeTextVector([]string{string(bytes1), string(bytes2), string(bytes3)}, nil, proc.Mp()),
@@ -177,6 +156,9 @@ func TestMergeDelete(t *testing.T) {
 	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), argument1.GetAffectedRows())
+	// Delete is named from the blob's layout: a row delete.
+	require.Equal(t, [][]string{colexec.DeleteRowsAttrs},
+		argument1.ctr.delSource.(*mockRelation).attrs)
 
 	argument1.Reset(proc, false, err)
 	resetChildren(&argument1, batch2)
@@ -216,6 +198,7 @@ func TestMergeDelete(t *testing.T) {
 
 	// free resource
 	argument1.Free(proc, false, nil)
+	argument2.Free(proc, false, nil)
 	metaLocBat0.Clean(proc.GetMPool())
 	metaLocBat1.Clean(proc.GetMPool())
 	metaLocBat2.Clean(proc.GetMPool())

@@ -111,7 +111,12 @@ func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode, 
 	_, h.rel, insertTxn, err = pack.D.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
 	h.trackTxn(insertTxn)
-	insertBat := containers.ToCNBatch(catalog2.MockBatch(h.schema, rowCount))
+	// Copy the mock batch into pack.Mp, the pool the test grows and frees with.
+	mockBat := catalog2.MockBatch(h.schema, rowCount)
+	insertBat, err := containers.ToCNBatch(mockBat).Dup(pack.Mp)
+	require.NoError(t, err)
+	insertAttrs := mockBat.Attrs
+	mockBat.Close()
 	defer insertBat.Clean(pack.Mp)
 	if len(stringKeys) > 0 {
 		insertBat.Vecs[0].Reset(h.schema.ColDefs[0].Type)
@@ -119,7 +124,7 @@ func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode, 
 			require.NoError(t, vector.AppendBytes(insertBat.Vecs[0], []byte(key), false, pack.Mp))
 		}
 	}
-	require.NoError(t, testutil.WriteToRelation(ctx, insertTxn, h.rel, insertBat, false, true))
+	require.NoError(t, testutil.WriteToRelation(ctx, insertTxn, h.rel, insertBat, insertAttrs, false, true))
 	require.NoError(t, insertTxn.Commit(ctx))
 
 	// Give FlushTable both an appendable object and committed tombstones so it
@@ -130,9 +135,7 @@ func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode, 
 	h.trackTxn(committedDeleteTxn)
 	committedDeletes := h.collectDeletes(committedDeleteTxn, h.rel, rowCount/2)
 	defer committedDeletes.Clean(pack.Mp)
-	require.NoError(t, testutil.WriteToRelation(
-		ctx, committedDeleteTxn, h.rel, committedDeletes, true, true,
-	))
+	require.NoError(t, testutil.WriteToRelation(ctx, committedDeleteTxn, h.rel, committedDeletes, h.deleteAttrs(), true, true))
 	require.NoError(t, committedDeleteTxn.Commit(ctx))
 
 	h.txn, err = pack.D.NewTxnOperator(
@@ -155,21 +158,18 @@ func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode, 
 	}
 	switch mode {
 	case snapshotAdvanceInMemoryTombstone:
-		require.NoError(t, testutil.WriteToRelation(
-			ctx, h.txn, h.rel, uncommittedDeletes, true, true,
-		))
+		require.NoError(t, testutil.WriteToRelation(ctx, h.txn, h.rel, uncommittedDeletes, h.deleteAttrs(), true, true))
 	case snapshotAdvancePersistedTombstone:
 		h.writePersistedDeletes(uncommittedDeletes)
 	case snapshotAdvanceMixedTombstones:
-		// Delete can materialize a window's borrowed data using the transaction pool.
-		mp := h.rel.GetProcess().(*process.Process).Mp()
+		// Windows are read-only references to uncommittedDeletes.
 		inMemory, err := uncommittedDeletes.Window(0, rowCount/4)
 		require.NoError(t, err)
-		defer inMemory.Clean(mp)
+		defer inMemory.FreeWindow()
 		persisted, err := uncommittedDeletes.Window(rowCount/4, rowCount/2)
 		require.NoError(t, err)
-		defer persisted.Clean(mp)
-		require.NoError(t, testutil.WriteToRelation(ctx, h.txn, h.rel, inMemory, true, true))
+		defer persisted.FreeWindow()
+		require.NoError(t, testutil.WriteToRelation(ctx, h.txn, h.rel, inMemory, h.deleteAttrs(), true, true))
 		h.writePersistedDeletes(persisted)
 	default:
 		t.Fatalf("unknown tombstone mode %d", mode)
@@ -234,11 +234,10 @@ func (h *snapshotAdvanceHarness) collectDeletes(
 	defer reader.Close()
 
 	deletes := batch.NewWithSize(2)
-	deletes.Attrs = []string{catalog.Row_ID, h.schema.GetPrimaryKey().Name}
-	deletes.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	deletes.Vecs[1] = vector.NewVec(h.schema.GetPrimaryKey().Type)
+	deletes.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), h.pack.Mp)
+	deletes.Vecs[1] = vector.NewVec(h.schema.GetPrimaryKey().Type, h.pack.Mp)
 
-	ret := testutil.EmptyBatchFromSchema(h.schema)
+	ret := testutil.EmptyBatchFromSchema(h.schema, h.pack.Mp)
 	defer ret.Clean(h.pack.Mp)
 	for deletes.RowCount() < limit {
 		done, err := reader.Read(
@@ -286,8 +285,8 @@ func (h *snapshotAdvanceHarness) writePersistedDeletes(deletes *batch.Batch) {
 	require.Len(h.t, stats, 1)
 
 	statsBat := batch.NewWithSize(1)
-	statsBat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
-	statsBat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	statsBatAttrs := []string{catalog.ObjectMeta_ObjectStats}
+	statsBat.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(h.t, vector.AppendBytes(
 		statsBat.Vecs[0], stats[0].Marshal(), false, h.pack.Mp,
 	))
@@ -302,7 +301,7 @@ func (h *snapshotAdvanceHarness) writePersistedDeletes(deletes *batch.Batch) {
 		"db1",
 		"test1",
 		stats[0].ObjectLocation().String(),
-		statsBat,
+		statsBat, statsBatAttrs,
 		h.pack.D.Engine.GetTNServices()[0],
 	))
 	require.NoError(h.t, ws.IncrStatementID(h.ctx, false))
@@ -320,11 +319,12 @@ func (h *snapshotAdvanceHarness) countRows(
 	require.NoError(h.t, err)
 	defer reader.Close()
 
-	ret := testutil.EmptyBatchFromSchema(h.schema)
+	ret := testutil.EmptyBatchFromSchema(h.schema, h.pack.Mp)
+	retAttrs := testutil.SchemaAttrs(h.schema)
 	defer ret.Clean(h.pack.Mp)
 	rows := 0
 	for {
-		done, err := reader.Read(h.ctx, ret.Attrs, nil, h.pack.Mp, ret)
+		done, err := reader.Read(h.ctx, retAttrs, nil, h.pack.Mp, ret)
 		require.NoError(h.t, err)
 		if done {
 			return rows
@@ -525,13 +525,13 @@ func TestRCLineageSnapshotPreservesUniqueReplacements(t *testing.T) {
 
 			replacements := batch.NewWithSize(1)
 			defer replacements.Clean(h.pack.Mp)
-			replacements.Attrs = []string{h.schema.GetPrimaryKey().Name}
-			replacements.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			replacementsAttrs := []string{h.schema.GetPrimaryKey().Name}
+			replacements.Vecs[0] = vector.NewVec(types.T_int32.ToType(), h.pack.Mp)
 			for _, pk := range h.deletedPKs {
 				require.NoError(t, vector.AppendFixed(replacements.Vecs[0], pk, false, h.pack.Mp))
 			}
 			replacements.SetRowCount(len(h.deletedPKs))
-			require.NoError(t, testutil.WriteToRelation(h.ctx, h.txn, h.rel, replacements, false, true))
+			require.NoError(t, testutil.WriteToRelation(h.ctx, h.txn, h.rel, replacements, replacementsAttrs, false, true))
 			require.Equal(t, len(h.deletedPKs), h.countRows(h.txn, h.rel))
 
 			// Fail a second relation lookup during the same mixed transfer. This
@@ -764,4 +764,9 @@ func TestRCSnapshotRollbackAcrossMerge(t *testing.T) {
 			})
 		}
 	}
+}
+
+// deleteAttrs names the columns of collectDeletes batches.
+func (h *snapshotAdvanceHarness) deleteAttrs() []string {
+	return []string{catalog.Row_ID, h.schema.GetPrimaryKey().Name}
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
@@ -243,20 +244,33 @@ func (s *morpcStream) Close() error {
 	return s.cs.Close()
 }
 
-// write sends response by segment.
+// logtailSendPool accounts the sessions' marshal buffers.
+var logtailSendPool = mpool.MustNew("logtail_send")
+
+// maxRetainedSendBuffer bounds the marshal buffer a session keeps between
+// responses; a larger response's buffer is freed after it is sent.
+const maxRetainedSendBuffer = 64 << 20
+
+// write sends response by segment. It marshals the response into buf, and
+// each segment copies its chunk, so the transport never refers to buf: it is
+// reused once write returns, whether or not the send failed.
 func (s *morpcStream) write(
-	ctx context.Context, response *LogtailResponse,
+	ctx context.Context, response *LogtailResponse, buf *mpool.MessageBuffer,
 ) error {
 	size := response.ProtoSize()
 	if err := validateSegmentedResponseSize(size); err != nil {
 		return err
 	}
-	buf := make([]byte, size)
-	n, err := response.MarshalToSizedBuffer(buf[:size])
+	defer buf.Reset()
+	data, err := buf.Resize(size)
 	if err != nil {
 		return err
 	}
-	chunks := Split(buf[:n], s.limit)
+	n, err := response.MarshalToSizedBuffer(data)
+	if err != nil {
+		return err
+	}
+	chunks := Split(data[:n], s.limit)
 
 	s.logger.Debug("send response by segment",
 		zap.Int("chunk-number", len(chunks)),
@@ -341,6 +355,9 @@ type Session struct {
 	// have been written successfully and is therefore safe to advertise in a
 	// transport heartbeat.
 	sentThrough timestamp.Timestamp
+	// sendBuf is owned by the sender goroutine: every response is marshaled
+	// into it, then copied into the stream's segments.
+	sendBuf mpool.MessageBuffer
 
 	deletedAt time.Time
 	sendMu    struct {
@@ -381,6 +398,7 @@ func NewSession(
 		progressInterval:       progressInterval,
 		progressTimer:          time.NewTimer(progressInterval),
 		transportProbeInterval: transportProbeInterval,
+		sendBuf:                mpool.NewMessageBuffer(logtailSendPool, maxRetainedSendBuffer),
 	}
 
 	ss.logger.Info("initialize new session for morpc stream")
@@ -394,6 +412,7 @@ func NewSession(
 	sender := func() {
 		var notifyErr error
 		defer func() {
+			ss.sendBuf.Free()
 			// A notifier is allowed to synchronously clean the session. Publish
 			// sender termination first so PostClean cannot wait on this goroutine.
 			ss.wg.Done()
@@ -472,7 +491,7 @@ func (ss *Session) sendMessage(msg message, cnt int64) error {
 	}()
 
 	ss.OnBeforeSend(now)
-	err := ss.stream.write(ctx, msg.response)
+	err := ss.stream.write(ctx, msg.response, &ss.sendBuf)
 	ss.OnAfterSend(now, cnt, msg.response.ProtoSize())
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
@@ -531,7 +550,7 @@ func (ss *Session) sendHeartbeat() error {
 	defer ss.responses.Release(resp)
 	ctx, cancel := context.WithTimeout(ss.sessionCtx, ss.sendTimeout)
 	defer cancel()
-	return ss.stream.write(ctx, resp)
+	return ss.stream.write(ctx, resp, &ss.sendBuf)
 }
 
 // Drop closes sender goroutine.

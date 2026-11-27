@@ -23,6 +23,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -71,7 +72,7 @@ func TestInsertOperator(t *testing.T) {
 	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).Times(1)
 
 	relation := mock_frontend.NewMockRelation(ctrl)
-	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	relation.EXPECT().Write(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	relation.EXPECT().Reset(gomock.Any()).Return(nil).Times(1)
 	factory := &relationHandleFactory{Relation: relation, handle: relation}
 	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(factory, nil).Times(1)
@@ -87,7 +88,6 @@ func TestInsertOperator(t *testing.T) {
 			testutil.MakeScalarVarchar("d", 3, proc.Mp()),
 			vector.NewConstNull(types.T_int64.ToType(), 3, proc.Mp()),
 		},
-		Attrs: []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 	}
 	batch1.SetRowCount(3)
 	argument1 := Insert{
@@ -199,11 +199,9 @@ func TestInsert_initBufForS3(t *testing.T) {
 					Engine: nil,
 				},
 			}
-			insert.initBufForS3()
+			insert.initBufForS3(mpool.MustNewZero())
 			require.NotNil(t, insert.ctr.buf)
-			require.Equal(t, 2, len(insert.ctr.buf.Attrs))
-			require.Equal(t, catalog.BlockMeta_BlockInfo, insert.ctr.buf.Attrs[0])
-			require.Equal(t, catalog.ObjectMeta_ObjectStats, insert.ctr.buf.Attrs[1])
+			require.Equal(t, 2, len(insert.ctr.buf.Vecs))
 			require.Equal(t, types.T_text, insert.ctr.buf.Vecs[0].GetType().Oid)
 			require.Equal(t, types.T_binary, insert.ctr.buf.Vecs[1].GetType().Oid)
 		})
@@ -423,11 +421,10 @@ func TestInsertFlushS3WriterOnMemoryPressureAppendsBlockInfo(t *testing.T) {
 			s3MemThrottler: throttler,
 		},
 	}
-	insert.initBufForS3()
+	insert.initBufForS3(proc.Mp())
 	defer insert.ctr.s3Writer.Close()
 
 	bat := &batch.Batch{
-		Attrs: []string{"a", "b"},
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
 			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
@@ -471,7 +468,6 @@ func TestInsertFlushS3WriterOnMemoryPressureRefreshesBeforeReleaseOnAppendError(
 	defer insert.ctr.s3Writer.Close()
 
 	bat := &batch.Batch{
-		Attrs: []string{"a", "b"},
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
 			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
@@ -509,11 +505,10 @@ func TestInsertS3FinalFlushRefreshesBeforeReleaseOnSuccess(t *testing.T) {
 			s3MemThrottler: throttler,
 		},
 	}
-	insert.initBufForS3()
+	insert.initBufForS3(proc.Mp())
 	defer insert.ctr.s3Writer.Close()
 
 	bat := &batch.Batch{
-		Attrs: []string{"a", "b"},
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
 			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
@@ -555,7 +550,6 @@ func TestInsertS3FinalFlushRefreshesBeforeReleaseOnError(t *testing.T) {
 	defer insert.ctr.s3Writer.Close()
 
 	bat := &batch.Batch{
-		Attrs: []string{"a", "b"},
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
 			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),

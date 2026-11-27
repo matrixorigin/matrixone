@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1717,9 +1718,6 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		case *plan.AlterTable_Action_AlterRenameColumn:
 			hasDefReplace = true
 			checks := qry.GetCopyTableDef().GetChecks()
-			if err := c.requireCheckRenameProtocol(checks); err != nil {
-				return err
-			}
 			// When the same ALTER also renames the table, this request must
 			// already carry the final CHECK names; it overwrites the catalog
 			// checks below, so the separate rename-table rewrite must not be
@@ -2702,7 +2700,7 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 			if len(c.preparedParamValues) > 0 {
 				semantic := make([]executor.ParamValue, len(values))
 				for i, value := range c.preparedParamValues {
-					param, ok := value.(plan2.ParamValue)
+					param, ok := plan2.AsParamValue(value)
 					if !ok {
 						return moerr.NewInternalErrorf(c.proc.Ctx,
 							"CTAS prepared parameter %d has no semantic value", i)
@@ -3432,16 +3430,12 @@ func (c *Compile) advanceIndexDDLSnapshot() error {
 		frontier timestamp.Timestamp
 		err      error
 	)
-	if supportsLogtailReadBarrier(c.proc.GetService()) {
-		barrier, ok := getLogtailReadBarrier(c.e)
-		if !ok {
-			return moerr.NewInternalError(c.proc.Ctx,
-				"CREATE INDEX logtail read barrier is unavailable")
-		}
-		frontier, err = barrier.AcquireLogtailReadBarrier(c.proc.Ctx)
-	} else {
-		frontier, err = c.createIndexLegacyLogtailFrontier()
+	barrier, ok := getLogtailReadBarrier(c.e)
+	if !ok {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"CREATE INDEX logtail read barrier is unavailable")
 	}
+	frontier, err = barrier.AcquireLogtailReadBarrier(c.proc.Ctx)
 	if err != nil {
 		return err
 	}
@@ -3459,40 +3453,6 @@ func (c *Compile) advanceIndexDDLSnapshot() error {
 			"CREATE INDEX transaction snapshot did not advance past the logtail frontier")
 	}
 	return nil
-}
-
-// createIndexLegacyLogtailFrontier is the rolling-upgrade fallback for TNs
-// that predate the ordered logtail read barrier. Waiting beyond the local HLC
-// uncertainty bound makes every earlier remote commit visible on this CN.
-func (c *Compile) createIndexLegacyLogtailFrontier() (timestamp.Timestamp, error) {
-	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	if rt == nil || rt.Clock() == nil {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"missing transaction clock for CREATE INDEX snapshot refresh")
-	}
-	if rt.Clock().MaxOffset() < 0 {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"negative transaction clock offset for CREATE INDEX snapshot refresh")
-	}
-	_, upperBound := rt.Clock().Now()
-	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"CREATE INDEX snapshot refresh timestamp overflow")
-	}
-	minimum := timestamp.Timestamp{PhysicalTime: upperBound.PhysicalTime + 1}
-	if c.proc.Base.TxnClient == nil {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"missing transaction client for CREATE INDEX snapshot refresh")
-	}
-	applied, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, minimum)
-	if err != nil {
-		return timestamp.Timestamp{}, err
-	}
-	if applied.Less(minimum) {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"CREATE INDEX snapshot refresh did not reach the required timestamp")
-	}
-	return applied, nil
 }
 
 func (s *Scope) doCreateIndex(
@@ -3912,7 +3872,7 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 			pred := func(fkDef *plan.ForeignKeyDef) bool {
 				return fkDef.Name == dropName
 			}
-			def.Fkeys = plan2.RemoveIf[*plan.ForeignKeyDef](def.Fkeys, pred)
+			def.Fkeys = slices.DeleteFunc(def.Fkeys, pred)
 			oldCt.Cts[i] = def
 		case *engine.IndexDef:
 			pred := func(index *plan.IndexDef) bool {
@@ -3924,7 +3884,7 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 				}
 				return index.IndexName == dropName
 			}
-			def.Indexes = plan2.RemoveIf[*plan.IndexDef](def.Indexes, pred)
+			def.Indexes = slices.DeleteFunc(def.Indexes, pred)
 			oldCt.Cts[i] = def
 		}
 	}
@@ -3969,14 +3929,14 @@ func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 			_, ok = ct.(*engine.ForeignKeyDef)
 			return ok
 		}
-		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = slices.DeleteFunc(oldCt.Cts, pred)
 		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.RefChildTableDef:
 		pred = func(ct engine.Constraint) bool {
 			_, ok = ct.(*engine.RefChildTableDef)
 			return ok
 		}
-		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = slices.DeleteFunc(oldCt.Cts, pred)
 		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.IndexDef:
 		ok := false
@@ -4054,7 +4014,7 @@ func setRefChildTableIDs(constraintDef *engine.ConstraintDef, tableIDs []uint64)
 		seen[tableID] = struct{}{}
 		canonical = append(canonical, tableID)
 	}
-	constraintDef.Cts = plan2.RemoveIf(
+	constraintDef.Cts = slices.DeleteFunc(
 		constraintDef.Cts,
 		func(constraint engine.Constraint) bool {
 			_, ok := constraint.(*engine.RefChildTableDef)
@@ -4085,7 +4045,7 @@ func addRefChildTableIDs(constraintDef *engine.ConstraintDef, added []uint64) {
 
 func removeRefChildTableID(constraintDef *engine.ConstraintDef, removed uint64) {
 	tableIDs := canonicalRefChildTableIDs(constraintDef)
-	tableIDs = plan2.RemoveIf(tableIDs, func(tableID uint64) bool {
+	tableIDs = slices.DeleteFunc(tableIDs, func(tableID uint64) bool {
 		return tableID == removed
 	})
 	setRefChildTableIDs(constraintDef, tableIDs)
@@ -4314,7 +4274,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
-	// TRUNCATE is a copy-and-swap rebuild: it creates a replacement relation
+	// TRUNCATE creates an empty replacement relation
 	// before the ordinary DROP path retires the old physical generation. Reuse
 	// ALTER's lineage publication protocol so the replacement remains the live
 	// branch child and the old generation stays protected for DIFF/MERGE.
@@ -4468,6 +4428,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 	newID := rel.GetTableID(c.proc.Ctx)
 	if lineagePlan.enabled {
+		lineagePlan.clearsRows = true
 		if err = c.preserveAlterDataBranchLineage(
 			lineagePlan, oldID, newID, db, table,
 		); err != nil {
@@ -5361,7 +5322,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		err = rel.Write(c.proc.Ctx, bat)
+		err = rel.Write(c.proc.Ctx, bat, plan2.Sequence_cols_name)
 		if err != nil {
 			return err
 		}
@@ -5483,7 +5444,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		if rel == nil {
 			return moerr.NewLockTableNotFound(c.proc.Ctx)
 		}
-		err = rel.Write(c.proc.Ctx, bat)
+		err = rel.Write(c.proc.Ctx, bat, plan2.Sequence_cols_name)
 		if err != nil {
 			return err
 		}
@@ -5698,11 +5659,6 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 	var def plan2.AlterSequenceEffectiveDefinition
 	var bat batch.Batch
 	bat.SetRowCount(1)
-	attrs := make([]string, len(plan2.Sequence_cols_name))
-	for i := range attrs {
-		attrs[i] = plan2.Sequence_cols_name[i]
-	}
-	bat.Attrs = attrs
 
 	// typ is sequenece's type now
 	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
@@ -5735,11 +5691,6 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
 	var bat batch.Batch
 	bat.SetRowCount(1)
-	attrs := make([]string, len(plan2.Sequence_cols_name))
-	for i := range attrs {
-		attrs[i] = plan2.Sequence_cols_name[i]
-	}
-	bat.Attrs = attrs
 
 	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
 	sequence_cols_num := 7
@@ -6646,26 +6597,6 @@ func maybeResetAutoIncrement(
 	return nil
 }
 
-// requireCheckRenameProtocol is the sender-side safety boundary for the v15
-// AlterTableRenameCol.checks field. Planner checks provide an earlier error,
-// while this check prevents a synthesized or cached plan from sending required
-// CHECK metadata to a receiver whose alter handler cannot apply it.
-func (c *Compile) requireCheckRenameProtocol(checks []*plan.CheckDef) error {
-	if len(checks) == 0 {
-		return nil
-	}
-	value, ok := moruntime.ServiceRuntime(c.proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion15 {
-		return moerr.NewNotSupported(
-			c.proc.Ctx,
-			"renaming a column in a table with CHECK constraints requires all services to support protocol version 15",
-		)
-	}
-	return nil
-}
-
 func (c *Compile) getAlterAutoIncrementOffset(
 	dbName string,
 	tblName string,
@@ -6799,7 +6730,7 @@ func getLockBatch(proc *process.Process, accountId uint32, names []string) (*bat
 	}()
 
 	// append account_id
-	accountIdVec := vector.NewVec(types.T_uint32.ToType())
+	accountIdVec := vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 	vecs[0] = accountIdVec
 	err := vector.AppendFixed(accountIdVec, accountId, false, proc.GetMPool())
 	if err != nil {
@@ -6807,7 +6738,7 @@ func getLockBatch(proc *process.Process, accountId uint32, names []string) (*bat
 	}
 	// append names
 	for i, name := range names {
-		nameVec := vector.NewVec(types.T_varchar.ToType())
+		nameVec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		vecs[i+1] = nameVec
 		err := vector.AppendBytes(nameVec, []byte(name), false, proc.GetMPool())
 		if err != nil {

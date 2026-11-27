@@ -38,7 +38,6 @@ package disttae
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	commonruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -83,7 +82,6 @@ func newIssue26796TxnWithTables(t testing.TB, specs ...issue26796TableSpec) (*Tr
 		databaseOps:     newDbOps(),
 		deletedBlocks:   &deletedBlocks{},
 		batchSelectList: make(map[*batch.Batch][]int64),
-		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 	}
 	op := newTxnOperatorForTestWithWorkspace(t, txn)
 	txn.op = op
@@ -121,9 +119,9 @@ func issue26796InsertBatchInto(
 ) {
 	t.Helper()
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{issue26796PKName, "value"}
-	bat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
-	bat.SetVector(1, vector.NewVec(types.T_int64.ToType()))
+	batAttrs := []string{issue26796PKName, "value"}
+	bat.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
+	bat.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	for _, pk := range pks {
 		require.NoError(t, vector.AppendFixed(bat.GetVector(0), pk, false, txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.GetVector(1), pk, false, txn.proc.Mp()))
@@ -131,7 +129,7 @@ func issue26796InsertBatchInto(
 	bat.SetRowCount(len(pks))
 	_, err := txn.WriteBatch(
 		INSERT, "", 1, issue26796DBID, tableID,
-		issue26796DB, tableName, bat, DNStore{},
+		issue26796DB, tableName, bat, batAttrs, DNStore{},
 	)
 	require.NoError(t, err)
 }

@@ -32,9 +32,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -255,6 +260,7 @@ func insertTable(
 	e *Engine,
 	did, tid uint64,
 	dname, tname string,
+	cols ...catalog.Column,
 ) (uint64, uint64) {
 	tbl := catalog.Table{
 		AccountId:    0,
@@ -266,24 +272,28 @@ func insertTable(
 		TableName:    tname,
 	}
 	packer := types.NewPacker()
+	defer packer.Close()
 	bat, err := catalog.GenCreateTableTuple(tbl, e.mp, packer)
-	assert.NoError(t, err)
-	_, err = fillRandomRowidAndZeroTs(bat, e.mp)
+	require.NoError(t, err)
+	defer bat.Clean(e.mp)
+	_, _, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, e.mp)
 	assert.NoError(t, err)
 	ccache := e.catalog.Load()
 	ccache.InsertTable(bat)
 	tableItem := ccache.GetTableByName(0, did, tname)
 	assert.NotNil(t, tableItem)
-	defs, err := catalog.GenColumnsFromDefs(
-		0,
-		tname,
-		dname,
-		tid,
-		did,
-		catalog.GetDefines(e.service).MoDatabaseTableDefs,
-	)
-	assert.NoError(t, err)
-	cache.InitTableItemWithColumns(tableItem, defs)
+	if len(cols) == 0 {
+		cols, err = catalog.GenColumnsFromDefs(
+			0,
+			tname,
+			dname,
+			tid,
+			did,
+			catalog.GetDefines(e.service).MoDatabaseTableDefs,
+		)
+		require.NoError(t, err)
+	}
+	cache.InitTableItemWithColumns(tableItem, cols)
 	return tableItem.DatabaseId, tableItem.Id
 }
 
@@ -321,26 +331,63 @@ func TestUpdateStats(t *testing.T) {
 		})
 	})
 
-	t.Run("objs", func(t *testing.T) {
+	t.Run("persisted object", func(t *testing.T) {
 		runTest(t, func(ctx context.Context, e *Engine) {
-			did := uint64(1000)
-			dname := "test-db"
-			tid := uint64(1001)
-			tname := "test-table"
-			did1, tid1 := insertTable(t, e, did, tid, dname, tname)
-			assert.Equal(t, did, did1)
-			assert.Equal(t, tid, tid1)
-			k := statsinfo.StatsInfoKey{
-				DatabaseID: did,
-				TableID:    tid,
-			}
-			stats := plan2.NewStatsInfo()
+			columnType := types.T_int64.ToType()
+			typ, err := columnType.Marshal()
+			require.NoError(t, err)
+			rowIDType := types.T_Rowid.ToType()
+			rowID, err := rowIDType.Marshal()
+			require.NoError(t, err)
+			const seqnum = 3
+			did, tid := insertTable(t, e, 1000, 1001, "test-db", "events",
+				catalog.Column{Name: "event_id", Num: 1, Seqnum: seqnum, Typ: typ},
+				catalog.Column{Name: catalog.Row_ID, Num: 2, Seqnum: objectio.SEQNUM_ROWID, Typ: rowID, IsHidden: 1},
+			)
+			item := e.catalog.Load().GetTableByName(0, did, "events")
+			require.True(t, item.SchemaSource().Valid())
+
+			fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			e.fs = fs
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(columnType, e.mp)
+			defer bat.Clean(e.mp)
+			values := []int64{10, 20, 30}
+			require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, e.mp))
+			bat.SetRowCount(len(values))
+			id := objectio.NewObjectid()
+			writer, err := ioutil.NewBlockWriterNew(fs, objectio.BuildObjectNameWithObjectID(&id), 0, []uint16{seqnum}, false)
+			require.NoError(t, err)
+			_, err = writer.WriteBatch(bat)
+			require.NoError(t, err)
+			_, _, err = writer.Sync(ctx)
+			require.NoError(t, err)
+
+			ts := types.BuildTS(1, 0)
 			ps := logtailreplay.NewPartitionState("", true, tid, false)
-			updated, _ := e.globalStats.executeStatsUpdate(ctx, ps, k, stats)
-			assert.True(t, updated)
-		}, WithApproxObjectNumUpdater(func() int64 {
-			return 10
-		}))
+			ps.UpdateDuration(types.TS{}, types.MaxTs())
+			require.NoError(t, ps.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+				ObjectStats: writer.GetObjectStats(),
+				CreateTime:  ts,
+			}, false))
+
+			key := statsinfo.StatsInfoKey{DatabaseID: did, TableID: tid}
+			borrowed := plan2.NewStatsInfo()
+			updated, ratio := e.globalStats.executeStatsUpdate(ctx, ps, key, borrowed)
+			require.True(t, updated)
+			require.Equal(t, 1.0, ratio)
+			require.Equal(t, float64(len(values)), borrowed.TableCnt)
+			require.EqualValues(t, 1, borrowed.AccurateObjectNumber)
+			require.EqualValues(t, 1, borrowed.BlockNumber)
+			require.Equal(t, 3.0, borrowed.NdvMap["event_id"])
+
+			owned := plan2.NewStatsInfo()
+			req := newUpdateStatsRequest(item.ReadPlanTableDef(), ps, fs, ts, 1, owned)
+			_, err = CollectAndCalculateStats(ctx, req, e.globalStats.concurrentExecutor)
+			require.NoError(t, err)
+			require.Equal(t, owned, borrowed)
+		})
 	})
 }
 
@@ -2052,6 +2099,92 @@ func TestStatsPublicationRejectsStoppedOwnerLifecycle(t *testing.T) {
 		"failed publication must not advance the object-count baseline")
 	require.Equal(t, 0.25, generation.samplingRatio)
 	gs.updatingMu.Unlock()
+}
+
+func TestStatsPublicationCanceledWhileWaitingForCache(t *testing.T) {
+	for _, scenario := range []string{"request", "owner", "automatic owner"} {
+		t.Run(scenario, func(t *testing.T) {
+			key := statsinfo.StatsInfoKey{TableID: 42}
+			old, fresh := plan2.NewStatsInfo(), plan2.NewStatsInfo()
+			generation := &updateRecord{inProgress: true}
+			owner, stopOwner := context.WithCancelCause(context.Background())
+			defer stopOwner(nil)
+			ctx, stopRequest := context.WithCancelCause(context.Background())
+			defer stopRequest(nil)
+			gs := &GlobalStats{ctx: owner}
+			gs.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{key: old}
+			gs.mu.tableDefVersions = map[statsinfo.StatsInfoKey]uint32{key: 7}
+			gs.updatingMu.updating = map[statsinfo.StatsInfoKey]*updateRecord{key: generation}
+
+			type result struct {
+				published bool
+				err       error
+			}
+			done := make(chan result, 1)
+			gs.observationMu.RLock()
+			locked := true
+			finished := false
+			defer func() {
+				if locked {
+					gs.observationMu.RUnlock()
+				}
+				if !finished {
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Error("publication goroutine did not exit")
+					}
+				}
+			}()
+			go func() {
+				if scenario == "automatic owner" {
+					done <- result{published: gs.completeAutomaticStatsCacheUpdate(key, generation, fresh, true)}
+					return
+				}
+				published, err := gs.publishStatsForGeneration(ctx, key, generation, fresh)
+				done <- result{published: published, err: err}
+			}()
+
+			// A queued RWMutex writer prevents new readers. This is the observable
+			// handoff after generation validation and before cache publication.
+			guard := time.NewTimer(5 * time.Second)
+			defer guard.Stop()
+			for gs.observationMu.TryRLock() {
+				gs.observationMu.RUnlock()
+				select {
+				case <-guard.C:
+					t.Fatal("publication did not reserve the observation write lock")
+				default:
+					goruntime.Gosched()
+				}
+			}
+			want := fmt.Errorf("stop %s publication", scenario)
+			if scenario == "request" {
+				stopRequest(want)
+			} else {
+				stopOwner(want)
+			}
+			gs.observationMu.RUnlock()
+			locked = false
+			select {
+			case got := <-done:
+				finished = true
+				require.False(t, got.published)
+				if scenario == "automatic owner" {
+					require.NoError(t, got.err)
+				} else {
+					require.ErrorIs(t, got.err, want)
+				}
+			case <-guard.C:
+				t.Fatal("publication did not return after the observation finished")
+			}
+			gs.mu.Lock()
+			current, version := gs.mu.statsInfoMap[key], gs.mu.tableDefVersions[key]
+			gs.mu.Unlock()
+			require.Same(t, old, current)
+			require.Equal(t, uint32(7), version)
+		})
+	}
 }
 
 func TestMetadataRefreshClearsSchemaBoundObservationVersion(t *testing.T) {

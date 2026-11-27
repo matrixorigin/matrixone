@@ -21,59 +21,69 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 //@todo add test case: only insert hidden table
 
+// insert_main_table writes the main-table leg of inputBatch. inputOwned
+// reports that inputBatch is the operator's own (a filtered copy), not the
+// child's batch. It returns the batch the remaining legs of the same target
+// use: under IGNORE the NOT NULL fill may replace inputBatch by the fill's
+// view of it, carrying the adjusted columns.
 func (update *MultiUpdate) insert_main_table(
 	proc *process.Process,
 	analyzer process.Analyzer,
 	tableIndex int,
-	inputBatch *batch.Batch) (err error) {
+	inputBatch *batch.Batch,
+	inputOwned bool,
+) (out *batch.Batch, err error) {
+	out = inputBatch
 	ctr := &update.ctr
 	updateCtx := update.MultiUpdateCtx[tableIndex]
 
 	// init buffer
 	if ctr.insertBuf[tableIndex] == nil {
-		bat := batch.NewOffHeapWithSize(len(updateCtx.InsertCols))
+		bat := batch.NewWithSize(len(updateCtx.InsertCols))
 		attrs := make([]string, 0, len(updateCtx.TableDef.Cols)-1)
 		for _, col := range updateCtx.TableDef.Cols {
 			if col.Name == catalog.Row_ID {
 				continue
 			}
-			bat.Vecs[len(attrs)] = vector.NewOffHeapVecWithType(plan.MakeTypeByPlan2Type(col.Typ))
+			bat.Vecs[len(attrs)] = vector.NewVec(plan.MakeTypeByPlan2Type(col.Typ), proc.Mp())
 			attrs = append(attrs, col.GetOriginCaseName())
 		}
-		bat.SetAttributes(attrs)
 		ctr.insertBuf[tableIndex] = bat
 	}
 
 	if updateCtx.SkipInsertOnNullPk {
 		pkColIdx, ok := mainTableInsertPkInputIdx(updateCtx)
 		if !ok || pkColIdx >= len(inputBatch.Vecs) {
-			return moerr.NewInternalError(proc.Ctx, "invalid main table insert pk column index")
+			return out, moerr.NewInternalError(proc.Ctx, "invalid main table insert pk column index")
 		}
 		if inputBatch.Vecs[pkColIdx].HasNull() {
-			return update.check_null_and_insert_main_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+			return out, update.check_null_and_insert_main_table(proc, analyzer, tableIndex, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
 		}
 	}
 
 	// preinsert: check not null column
-	filled, _, fillErr := fillMainInsertNotNullForIgnore(proc, updateCtx, inputBatch, false, update.insertNotNullFillOwned())
+	filledBatch, filled, _, fillErr := fillMainInsertNotNullForIgnore(
+		proc, update.ctr.ignoreFill(tableIndex), updateCtx, inputBatch, false,
+		update.insertNotNullFillOwned(), inputOwned)
 	if fillErr != nil {
-		return fillErr
+		return out, fillErr
 	}
+	inputBatch, out = filledBatch, filledBatch
 	if !filled {
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
 			col := updateCtx.TableDef.Cols[insertIdx]
 			if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
 				if inputBatch.Vecs[inputIdx].HasNull() {
-					return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+					return out, moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
 				}
 			}
 		}
@@ -94,10 +104,9 @@ func (update *MultiUpdate) insert_unique_index_table(
 
 	// init buffer
 	if ctr.insertBuf[tableIndex] == nil {
-		ctr.insertBuf[tableIndex] = batch.NewOffHeapWithSize(2)
-		ctr.insertBuf[tableIndex].Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
+		ctr.insertBuf[tableIndex] = batch.NewWithSize(2)
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
-			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewOffHeapVecWithType(*inputBatch.Vecs[inputIdx].GetType())
+			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewVec(*inputBatch.Vecs[inputIdx].GetType(), proc.Mp())
 		}
 	}
 
@@ -113,6 +122,7 @@ func (update *MultiUpdate) insert_unique_index_table(
 func (update *MultiUpdate) check_null_and_insert_main_table(
 	proc *process.Process,
 	analyzer process.Analyzer,
+	tableIndex int,
 	updateCtx *MultiUpdateCtx,
 	inputBatch *batch.Batch,
 	insertBatch *batch.Batch,
@@ -141,7 +151,10 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 		return nil
 	}
 	insertBatch.SetRowCount(newRowCount)
-	filled, _, fillErr := fillMainInsertNotNullForIgnore(proc, updateCtx, insertBatch, true, update.insertNotNullFillOwned())
+	// insertBatch is the operator's own buffer: the fill adjusts it in place.
+	_, filled, _, fillErr := fillMainInsertNotNullForIgnore(
+		proc, update.ctr.ignoreFill(tableIndex), updateCtx, insertBatch, true,
+		update.insertNotNullFillOwned(), true)
 	if fillErr != nil {
 		return fillErr
 	}
@@ -162,7 +175,7 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 	newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
 	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-		return source.Write(newCtx, insertBatch)
+		return source.Write(newCtx, insertBatch, lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).writeAttrs)
 	}); err != nil {
 		return err
 	}
@@ -187,9 +200,9 @@ func (update *MultiUpdate) insert_secondary_index_table(
 			}
 		}
 
-		ctr.insertBuf[tableIndex] = batch.NewOffHeap(attrs)
+		ctr.insertBuf[tableIndex] = batch.NewWithSize(len(attrs))
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
-			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewOffHeapVecWithType(*inputBatch.Vecs[inputIdx].GetType())
+			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewVec(*inputBatch.Vecs[inputIdx].GetType(), proc.Mp())
 		}
 	}
 
@@ -218,8 +231,7 @@ func (update *MultiUpdate) insert_table(
 	writeBatch := insertBatch
 	if info.isContiguous {
 		if info.refBatch == nil {
-			info.refBatch = batch.NewOffHeapWithSize(len(updateCtx.InsertCols))
-			info.refBatch.SetAttributes(insertBatch.Attrs)
+			info.refBatch = batch.NewWithSize(len(updateCtx.InsertCols))
 		}
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
 			info.refBatch.Vecs[insertIdx] = inputBatch.Vecs[inputIdx]
@@ -253,7 +265,7 @@ func (update *MultiUpdate) insert_table(
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 	newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
 	err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-		return info.Source.Write(newCtx, writeBatch)
+		return info.Source.Write(newCtx, writeBatch, info.writeAttrs)
 	})
 	if err != nil {
 		return err
@@ -268,42 +280,12 @@ func checkZeroTemporalInStrictMode(reject bool, proc *process.Process, bat *batc
 	if proc == nil || bat == nil {
 		return nil
 	}
-
 	for _, vec := range bat.Vecs {
 		if vec == nil {
 			continue
 		}
-		switch vec.GetType().Oid {
-		case types.T_timestamp:
-		case types.T_date, types.T_datetime:
-			if !reject {
-				continue
-			}
-		default:
-			continue
-		}
-		for row := 0; row < vec.Length(); row++ {
-			if vec.IsNull(uint64(row)) {
-				continue
-			}
-			switch vec.GetType().Oid {
-			case types.T_date:
-				if reject && vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "date", "0000-00-00", "value", row+1)
-				}
-			case types.T_datetime:
-				if reject && vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
-				}
-			case types.T_timestamp:
-				timestamp := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
-				if !types.ValidTimestamp(timestamp) {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", fmt.Sprintf("%d", int64(timestamp)), "value", row+1)
-				}
-				if reject && timestamp == types.ZeroTimestamp {
-					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
-				}
-			}
+		if err := colexec.CheckZeroTemporalVector(proc.Ctx, vec, reject); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -370,7 +352,7 @@ func (update *MultiUpdate) check_null_and_insert_table(
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
 		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-			return source.Write(newCtx, insertBatch)
+			return source.Write(newCtx, insertBatch, lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).writeAttrs)
 		})
 		if err != nil {
 			return err

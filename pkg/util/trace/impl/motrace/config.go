@@ -16,11 +16,11 @@ package motrace
 
 import (
 	"encoding/binary"
+	"math/rand/v2"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -311,15 +311,15 @@ type moIDGenerator struct{}
 
 func (moIDGenerator) NewIDs() (trace.TraceID, trace.SpanID) {
 	var traceID trace.TraceID
-	binary.BigEndian.PutUint64(traceID[:], util.Fastrand64())
-	binary.BigEndian.PutUint64(traceID[8:], util.Fastrand64())
+	binary.BigEndian.PutUint64(traceID[:], rand.Uint64())
+	binary.BigEndian.PutUint64(traceID[8:], rand.Uint64())
 	var spanID trace.SpanID
-	binary.BigEndian.PutUint64(spanID[:], util.Fastrand64())
+	binary.BigEndian.PutUint64(spanID[:], rand.Uint64())
 	return traceID, spanID
 }
 
 func (moIDGenerator) NewSpanID() trace.SpanID {
 	var spanID trace.SpanID
-	binary.BigEndian.PutUint64(spanID[:], util.Fastrand64())
+	binary.BigEndian.PutUint64(spanID[:], rand.Uint64())
 	return spanID
 }

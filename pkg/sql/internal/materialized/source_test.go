@@ -19,10 +19,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"math"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 
@@ -150,7 +148,7 @@ func testSpillFactory(dir string) SpillFileFactory {
 func testInt64Batch(t *testing.T, mp *mpool.MPool, value int64) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
 	bat.SetRowCount(1)
 	return bat
@@ -164,7 +162,7 @@ func TestSharedMaterializedSourceAllowsDependentReaders(t *testing.T) {
 
 	for i := int64(0); i < 4; i++ {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], i, false, mp))
 		bat.SetRowCount(1)
 		stats, err := source.AppendWithStats(bat)
@@ -301,7 +299,7 @@ func TestSharedMaterializedSourcePublishesProducerErrorAfterBufferedData(t *test
 	require.NoError(t, source.Begin(mp))
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, mp))
 	bat.SetRowCount(1)
 	require.NoError(t, source.Append(bat))
@@ -326,7 +324,7 @@ func TestSharedMaterializedSourceUnderestimatedFixedWidthProducerSpills(t *testi
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 	bat.SetRowCount(1)
 	inputMemory := mp.CurrNB()
@@ -359,7 +357,7 @@ func TestSharedMaterializedSourceUnderestimatedFixedWidthProducerSpills(t *testi
 			require.NoError(t, readerErr)
 			require.False(t, end)
 			require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
-			got.Clean(mp)
+			got.Clean(source.BatchMP())
 		}
 		_, end, readerErr := source.Next(context.Background(), readerID, 2)
 		require.NoError(t, readerErr)
@@ -380,7 +378,7 @@ func TestSharedMaterializedSourceBoundsTinyBatchMetadataWithSpill(t *testing.T) 
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 	bat.SetRowCount(1)
 	inputMemory := mp.CurrNB()
@@ -402,7 +400,7 @@ func TestSharedMaterializedSourceBoundsTinyBatchMetadataWithSpill(t *testing.T) 
 		require.NoError(t, err)
 		require.False(t, end)
 		require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
-		got.Clean(mp)
+		got.Clean(source.BatchMP())
 	}
 	_, end, err := source.Next(context.Background(), 0, 2)
 	require.NoError(t, err)
@@ -416,50 +414,15 @@ func TestSharedMaterializedSourceBoundsTinyBatchMetadataWithSpill(t *testing.T) 
 	bat.Clean(mp)
 }
 
-func TestSharedMaterializedSourceSpillPreservesBinaryStringRows(t *testing.T) {
-	mp := mpool.MustNewZeroNoFixed()
-	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("raw"), false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("text"), false, mp))
-	require.NoError(t, bat.Vecs[0].SetIsBinaryStringAt(0, true))
-	bat.SetRowCount(2)
-
-	source := newSource(1, 0)
-	budget := newTestSpillBudget(math.MaxUint64, math.MaxUint64, 1)
-	require.NoError(t, source.Begin(mp, budget.config(testSpillFactory(t.TempDir()))))
-	require.NoError(t, source.Append(bat))
-	require.Equal(t, 1, source.spillBatchCount)
-	bat.Clean(mp)
-	source.Finish(nil)
-
-	got, end, err := source.Next(context.Background(), 0, 0)
-	require.NoError(t, err)
-	require.False(t, end)
-	require.True(t, got.Vecs[0].GetIsBinaryStringAt(0))
-	require.False(t, got.Vecs[0].GetIsBinaryStringAt(1))
-	got.Clean(mp)
-	_, end, err = source.Next(context.Background(), 0, 1)
-	require.NoError(t, err)
-	require.True(t, end)
-	source.ReleaseReader(0)
-	require.Zero(t, mp.CurrNB())
-}
-
 func TestSharedMaterializedSourceSplitsOversizedSpillBatch(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	payload := bytes.Repeat([]byte("x"), 256)
 	for range 100 {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], payload, false, mp))
-	}
-	for row := 0; row < 100; row += 7 {
-		bat.Vecs[0].GetGrouping().Add(uint64(row))
 	}
 	bat.Vecs[0].SetSorted(true)
 	bat.SetRowCount(100)
@@ -484,13 +447,11 @@ func TestSharedMaterializedSourceSplitsOversizedSpillBatch(t *testing.T) {
 		}
 		for row := 0; row < got.RowCount(); row++ {
 			require.Equal(t, payload, got.Vecs[0].GetBytesAt(row))
-			require.Equal(t, (rows+row)%7 == 0,
-				got.Vecs[0].GetGrouping().Contains(uint64(row)))
 		}
 		require.True(t, got.Vecs[0].GetSorted())
 		require.Positive(t, budget.account.Snapshot().Used)
 		rows += got.RowCount()
-		got.Clean(mp)
+		got.Clean(source.BatchMP())
 		require.Zero(t, budget.account.Snapshot().Used)
 	}
 	require.Equal(t, 100, rows)
@@ -509,7 +470,7 @@ func TestOversizedSpillSplitDoesNotCompactWholeInput(t *testing.T) {
 	t.Cleanup(func() { mpool.DeleteMPool(spillMP) })
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), inputMP)
 	payload := bytes.Repeat([]byte("x"), 1024)
 	for range 4096 {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], payload, false, inputMP))
@@ -556,7 +517,7 @@ func TestSharedMaterializedSourceSpillBudgetExactBoundaryAndCleanup(t *testing.T
 	require.NoError(t, err)
 	require.False(t, end)
 	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
-	got.Clean(mp)
+	got.Clean(source.BatchMP())
 	source.ReleaseReader(0)
 	memory, disk, fd = budget.usage()
 	require.Zero(t, memory)
@@ -708,7 +669,7 @@ func TestSharedMaterializedSourceSpillReadUsesMemoryBudget(t *testing.T) {
 	got, end, err := source.Next(context.Background(), 0, 0)
 	require.NoError(t, err)
 	require.False(t, end)
-	got.Clean(mp)
+	got.Clean(source.BatchMP())
 	source.ReleaseReader(0)
 	memory, disk, fd := budget.usage()
 	require.Zero(t, memory)
@@ -743,107 +704,34 @@ func TestSpillBatchSizeMatchesEncoding(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{1, 2}, []bool{false, true}, mp))
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("materialized"), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("spill"), false, mp))
-	require.NoError(t, bat.Vecs[1].SetIsBinaryStringAt(0, true))
-	require.NoError(t, bat.Vecs[1].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
-		vector.PrepareParamInteger, vector.PrepareParamNone,
-	}, mp))
-	bat.Vecs[0].GetGrouping().Add(1)
 	bat.SetRowCount(2)
 	t.Cleanup(func() { bat.Clean(mp) })
 
 	serialized, scratch, err := spillBatchSize(bat)
 	require.NoError(t, err)
 	var encoded bytes.Buffer
-	require.NoError(t, encoded.WriteByte(spillPayloadGrouping))
-	require.NoError(t, bat.MarshalBinaryWithGroupingTo(&encoded))
+	require.NoError(t, encoded.WriteByte(spillPayloadBatch))
+	require.NoError(t, bat.MarshalFramedTo(&encoded))
 	require.Equal(t, uint64(encoded.Len()), serialized)
 	require.GreaterOrEqual(t, scratch, serialized)
-}
-
-func TestSharedMaterializedSourceSpillPreservesGroupingProvenance(t *testing.T) {
-	mp := mpool.MustNewZeroNoFixed()
-	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{0, 7}, []bool{true, false}, mp))
-	bat.Vecs[0].GetGrouping().Add(0)
-	bat.SetRowCount(2)
-	t.Cleanup(func() { bat.Clean(mp) })
-
-	serialized, scratch, err := spillBatchSize(bat)
-	require.NoError(t, err)
-	budget := newTestSpillBudget(
-		scratch,
-		uint64(spillBatchHeaderSize)+serialized,
-		1,
-	)
-	source := newSource(2, 0)
-	require.NoError(t, source.Begin(mp, budget.config(testSpillFactory(t.TempDir()))))
-	require.NoError(t, source.Append(bat))
-	source.Finish(nil)
-
-	for readerID := range 2 {
-		got, end, err := source.Next(context.Background(), readerID, 0)
-		require.NoError(t, err)
-		require.False(t, end)
-		require.Positive(t, budget.account.Snapshot().Used)
-		require.True(t, got.Vecs[0].GetNulls().Contains(0))
-		require.True(t, got.Vecs[0].GetGrouping().Contains(0))
-		require.False(t, got.Vecs[0].GetGrouping().Contains(1))
-		got.Clean(mp)
-		require.Zero(t, budget.account.Snapshot().Used)
-		source.ReleaseReader(readerID)
-	}
-}
-
-func TestSharedMaterializedSourceStoresOnlyPositionalBatches(t *testing.T) {
-	for _, memoryLimit := range []int64{0, sharedMaterializedSourceMaxBytes} {
-		t.Run(fmt.Sprintf("memory-limit-%d", memoryLimit), func(t *testing.T) {
-			mp := mpool.MustNewZeroNoFixed()
-			t.Cleanup(func() { mpool.DeleteMPool(mp) })
-			bat := testInt64Batch(t, mp, 7)
-			bat.Attrs = []string{strings.Repeat("attribute", 64)}
-			t.Cleanup(func() { bat.Clean(mp) })
-
-			source := newSource(1, memoryLimit)
-			budget := newTestSpillBudget(math.MaxUint64, math.MaxUint64, 1)
-			require.NoError(t, source.Begin(mp, budget.config(testSpillFactory(t.TempDir()))))
-			require.NoError(t, source.Append(bat))
-			source.Finish(nil)
-			got, end, err := source.Next(context.Background(), 0, 0)
-			require.NoError(t, err)
-			require.False(t, end)
-			for _, attr := range got.Attrs {
-				require.Empty(t, attr)
-			}
-			require.Equal(t, []int64{7}, vector.MustFixedColWithTypeCheck[int64](got.Vecs[0]))
-			got.Clean(mp)
-			source.ReleaseReader(0)
-		})
-	}
 }
 
 func TestSharedMaterializedSourceRejectsUnfinalizedBatchMetadata(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	bat := testInt64Batch(t, mp, 1)
-	bat.ExtraBuf = []byte("partial aggregate state")
+	require.NoError(t, bat.SetExtraBuf(mp, []byte("partial aggregate state")))
 	t.Cleanup(func() { bat.Clean(mp) })
 
 	source := newSource(1, sharedMaterializedSourceMaxBytes)
 	require.NoError(t, source.Begin(mp))
 	require.ErrorContains(t, source.Append(bat), "requires finalized positional batches")
 	source.Close()
-}
-
-func TestAddSpillBatchTailPreservesFirstOverflow(t *testing.T) {
-	_, err := addSpillBatchTail(math.MaxUint64, 1, 0)
-	require.ErrorContains(t, err, "spill batch size overflow")
 }
 
 func TestReadSpilledBatchRejectsRuntimeOversizeBeforeAllocation(t *testing.T) {
@@ -877,8 +765,8 @@ func TestSharedMaterializedSourceCopyFailureRollsBackReservation(t *testing.T) {
 
 	inputMP := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(inputMP) })
-	bat := batch.NewOffHeapWithSize(1)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), inputMP)
 	values := make([]int64, mpool.MB/4+1)
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, inputMP))
 	bat.SetRowCount(len(values))

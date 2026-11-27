@@ -221,7 +221,7 @@ func newConnectionCatalogResult(t *testing.T, accountID uint32, connectionID, ve
 func TestNullableCatalogString(t *testing.T) {
 	require.Empty(t, nullableString(nil, 0))
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
 	require.Empty(t, nullableString(vec, 0))
 	vec.Free(mp)

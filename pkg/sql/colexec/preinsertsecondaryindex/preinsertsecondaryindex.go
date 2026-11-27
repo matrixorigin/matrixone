@@ -16,8 +16,8 @@ package preinsertsecondaryindex
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -54,7 +54,7 @@ func (preInsertSecIdx *PreInsertSecIdx) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColumnPos []int32, pkPos int, isUpdate bool) {
+func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColumnPos []int32, pkPos int, isUpdate bool, mp *mpool.MPool) {
 	if preInsertSecIdx.ctr.buf != nil {
 		preInsertSecIdx.ctr.buf.CleanOnlyData()
 		return
@@ -62,11 +62,9 @@ func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColum
 
 	if isUpdate {
 		preInsertSecIdx.ctr.buf = batch.NewWithSize(3)
-		preInsertSecIdx.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
-		preInsertSecIdx.ctr.buf.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
+		preInsertSecIdx.ctr.buf.Vecs[2] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	} else {
 		preInsertSecIdx.ctr.buf = batch.NewWithSize(2)
-		preInsertSecIdx.ctr.buf.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 	}
 
 	if len(secondaryColumnPos) == 1 {
@@ -74,11 +72,11 @@ func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColum
 		keyType := types.T(ukType.Id).ToType()
 		keyType.Width = ukType.Width
 		keyType.Scale = ukType.Scale
-		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(keyType)
+		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(keyType, mp)
 	} else {
-		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	}
-	preInsertSecIdx.ctr.buf.Vecs[1] = vector.NewVec(*bat.Vecs[pkPos].GetType())
+	preInsertSecIdx.ctr.buf.Vecs[1] = vector.NewVec(*bat.Vecs[pkPos].GetType(), mp)
 }
 
 func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResult, error) {
@@ -98,7 +96,7 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 	secondaryColumnPos := preInsertSecIdx.PreInsertCtx.Columns
 	pkPos := int(preInsertSecIdx.PreInsertCtx.PkColumn)
 	isUpdate := inputBat.Vecs[len(inputBat.Vecs)-1].GetType().Oid == types.T_Rowid
-	preInsertSecIdx.initBuf(inputBat, secondaryColumnPos, pkPos, isUpdate)
+	preInsertSecIdx.initBuf(inputBat, secondaryColumnPos, pkPos, isUpdate, proc.Mp())
 
 	colCount := len(secondaryColumnPos)
 

@@ -524,6 +524,16 @@ func MemoryAvailableIncludingCache() (avail uint64, measured bool) {
 	return mem.ActualFree, true
 }
 
+// ProcessResidentMemory returns the resident set size of this process. The
+// second return is false when it cannot be read.
+func ProcessResidentMemory() (uint64, bool) {
+	var mem gosigar.ProcMem
+	if err := mem.Get(pid); err != nil {
+		return 0, false
+	}
+	return mem.Resident, true
+}
+
 func MemoryUsed() uint64 {
 	if InContainer() {
 		used, err := cgroup.GetMemUsage(pid)

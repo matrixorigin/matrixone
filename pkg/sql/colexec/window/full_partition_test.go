@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,8 +29,197 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
 )
+
+// Isolate this test with -covermode=count to measure actual Fill calls in
+// processAggregateFuncRange and evaluateFullPartitions on the same OVER() plan.
+func TestBitmapOrWindowFillWork(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	defer func() { proc.Free(); require.Zero(t, mp.CurrNB()) }()
+	child := colexec.NewMockOperator()
+	defer child.Free(proc, false, nil)
+	const rows = 1600
+	typ := types.T_varbinary.ToType()
+	input := batch.NewWithSize(1)
+	child.WithBatchs([]*batch.Batch{input})
+	input.Vecs[0] = vector.NewVec(typ, mp)
+	for row := range rows {
+		data, err := roaring.BitmapOf(uint32(row % 8)).ToBytes()
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], data, false, mp))
+	}
+	input.SetRowCount(rows)
+	spec := makeAggWindowSpec("bitmap_or_agg")
+	spec.GetW().Frame.Type = plan.FrameClause_RANGE
+	arg := &Window{WinSpecList: []*plan.Expr{spec}, Aggs: []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfBitmapOr, false, []*plan.Expr{newColExprWithType(0, typ)}, nil),
+	}}
+	arg.AppendChild(child)
+	defer arg.Free(proc, false, nil)
+	require.NoError(t, arg.Prepare(proc))
+	want := []uint32{0, 1, 2, 3, 4, 5, 6, 7}
+	seen := 0
+	for {
+		result, err := arg.Call(proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop {
+			require.Nil(t, result.Batch)
+			break
+		}
+		require.NotNil(t, result.Batch)
+		require.Positive(t, result.Batch.RowCount())
+		out := result.Batch.Vecs[1]
+		for row := range result.Batch.RowCount() {
+			checkBitmapWindowRow(t, out, row, want)
+		}
+		seen += result.Batch.RowCount()
+		require.LessOrEqual(t, seen, rows)
+	}
+	require.Equal(t, rows, seen)
+}
+
+func TestBitmapConstructWindowBudget(t *testing.T) {
+	const rows, budget = 1600, 1 << 20
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	t.Cleanup(func() {
+		proc.Free()
+		t.Logf("after child/process release: pool bytes=%d", mp.CurrNB())
+		require.Zero(t, mp.CurrNB())
+	})
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	require.NoError(t, err)
+	account, err := registry.Open(budget)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		terminal, _, err := registry.CompleteTerminal(account)
+		require.NoError(t, err)
+		t.Logf("after terminal completion: used=%d live allocations=%d", terminal.Used, terminal.LiveAllocations)
+		require.Zero(t, terminal.Used)
+		require.Zero(t, terminal.LiveAllocations)
+	})
+
+	input := batch.NewWithSize(1)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	t.Cleanup(func() { child.Free(proc, false, nil) })
+	typ := types.T_uint64.ToType()
+	input.Vecs[0] = vector.NewVec(typ, mp)
+	want := make([]uint32, rows)
+	for row := range rows {
+		want[row] = uint32(row)
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], uint64(row), false, mp))
+	}
+	input.SetRowCount(rows)
+	spec := makeAggWindowSpec("bitmap_construct_agg")
+	// RANGE UNBOUNDED PRECEDING TO CURRENT ROW without ordering is OVER().
+	spec.GetW().Frame.Type = plan.FrameClause_RANGE
+	spec.GetW().Frame.End = &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW}
+	arg := newBitmapConstructWindow(spec, typ)
+	arg.AppendChild(child)
+	var callErr error
+	t.Cleanup(func() {
+		arg.Reset(proc, callErr != nil, callErr)
+		t.Logf("after Window.Reset: used=%d", account.Snapshot().Used)
+		require.Zero(t, account.Snapshot().Used)
+	})
+	require.NoError(t, arg.SetAllocationAccount(account))
+	require.NoError(t, arg.Prepare(proc))
+
+	seen := 0
+	for {
+		result, err := arg.Call(proc)
+		callErr = err
+		if err != nil {
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Nil(t, result.Batch)
+			require.Zero(t, seen)
+			t.Fatalf("Window.Call rejected the %d-byte budget with nil batch and %d output rows: %v", budget, seen, err)
+		}
+		if result.Status == vm.ExecStop {
+			require.Nil(t, result.Batch)
+			break
+		}
+		require.NotNil(t, result.Batch)
+		count := result.Batch.RowCount()
+		require.Positive(t, count)
+		require.LessOrEqual(t, seen+count, rows)
+		for row := range count {
+			checkBitmapWindowRow(t, result.Batch.Vecs[1], row, want)
+		}
+		seen += count
+	}
+	require.Equal(t, rows, seen)
+}
+
+func TestBitmapConstructWindowFrames(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		full bool
+		want [][]uint32
+	}{
+		{name: "whole partitions", full: true, want: [][]uint32{{7, 9}, {7, 9}, {7, 9}, {7, 9}, {7, 9}, nil, nil}},
+		{name: "finite sliding", want: [][]uint32{{7}, {7}, {9}, {9}, nil, nil, nil}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, mp.CurrNB()) })
+			typ := types.T_uint64.ToType()
+			input := batch.NewWithSize(1)
+			t.Cleanup(func() { input.Clean(mp) })
+			input.Vecs[0] = vector.NewVec(typ, mp)
+			// In physical ROWS order: [7, NULL, 9, NULL, NULL] | [NULL, NULL].
+			for _, value := range []uint64{7, 0, 9, 0, 0, 0, 0} {
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], value, value == 0, mp))
+			}
+			input.SetRowCount(7)
+			spec := makeAggWindowSpec("bitmap_construct_agg")
+			if !tc.full {
+				spec.GetW().Frame = &plan.FrameClause{
+					Type:  plan.FrameClause_ROWS,
+					Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 1}}}}},
+					End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+				}
+			}
+			arg := newBitmapConstructWindow(spec, typ)
+			ctr := &container{
+				bat: input, ps: []int64{0, 5},
+				aggVecs: []colexec.ExprEvalVector{{Vec: input.Vecs}},
+			}
+			t.Cleanup(func() {
+				ctr.freeFullPartitionResults(proc)
+				ctr.allocation.FreePool()
+			})
+			check := func(start, end int) {
+				t.Helper()
+				out, err := ctr.processAggregateFuncRange(0, arg, proc, start, end)
+				require.NoError(t, err)
+				defer out.Free(out.MPool())
+				require.Equal(t, end-start, out.Length())
+				for row, want := range tc.want[start:end] {
+					checkBitmapWindowRow(t, out, row, want)
+				}
+			}
+			check(0, 2) // The first partition is still partially emitted.
+			if tc.full {
+				require.NotNil(t, ctr.fullPartitionResults)
+			} else {
+				require.Nil(t, ctr.fullPartitionResults)
+			}
+			check(2, len(tc.want))
+			require.Nil(t, ctr.fullPartitionResults)
+		})
+	}
+}
+
+func newBitmapConstructWindow(spec *plan.Expr, typ types.Type) *Window {
+	return &Window{WinSpecList: []*plan.Expr{spec}, Aggs: []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfBitmapConstruct, false, []*plan.Expr{newColExprWithType(0, typ)}, nil),
+	}}
+}
 
 func TestFullPartitionSumAcrossChunksAndNullPartitions(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
@@ -49,29 +239,29 @@ func TestFullPartitionSumAcrossChunksAndNullPartitions(t *testing.T) {
 		bat: bat, ps: []int64{0, firstRows, firstRows + 3},
 		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
 	}
-	defer ctr.freeFullPartitionResults(proc.Mp())
+	defer ctr.freeFullPartitionResults(proc)
 
 	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, colexec.DefaultBatchSize)
 	require.NoError(t, err)
-	defer first.Free(proc.Mp())
+	defer first.Free(first.MPool())
 	require.NotNil(t, ctr.fullPartitionResults)
-	for i, value := range vector.MustFixedColWithTypeCheck[int64](first) {
-		require.Equal(t, int64(firstRows), value, "row %d", i)
+	for i, value := range vector.MustFixedColWithTypeCheck[types.Decimal128](first) {
+		require.Equal(t, types.Decimal128FromInt64(firstRows), value, "row %d", i)
 	}
 
 	second, err := ctr.processAggregateFuncRange(0, arg, proc, colexec.DefaultBatchSize, len(values))
 	require.NoError(t, err)
-	defer second.Free(proc.Mp())
-	got := vector.MustFixedColWithTypeCheck[int64](second)
+	defer second.Free(second.MPool())
+	got := vector.MustFixedColWithTypeCheck[types.Decimal128](second)
 	for i := 0; i < 8; i++ {
-		require.Equal(t, int64(firstRows), got[i])
+		require.Equal(t, types.Decimal128FromInt64(firstRows), got[i])
 		require.False(t, second.IsNull(uint64(i)))
 	}
 	for i := 8; i < 11; i++ {
 		require.True(t, second.IsNull(uint64(i)))
 	}
 	for i := 11; i < 13; i++ {
-		require.Equal(t, int64(2), got[i])
+		require.Equal(t, types.Decimal128FromInt64(2), got[i])
 		require.False(t, second.IsNull(uint64(i)))
 	}
 	require.Nil(t, ctr.fullPartitionResults)
@@ -91,15 +281,18 @@ func TestFullPartitionResultsAdvanceAcrossOutputChunks(t *testing.T) {
 		bat: bat, ps: []int64{0, 2, 4, 10, 12},
 		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
 	}
-	defer ctr.freeFullPartitionResults(proc.Mp())
+	defer ctr.freeFullPartitionResults(proc)
 	want := []int64{2, 2, 2, 2, 6, 6, 6, 6, 6, 6, 2, 2, 1}
 	start := 0
 	for _, end := range []int{5, 11, 13} {
 		func() {
 			result, err := ctr.processAggregateFuncRange(0, arg, proc, start, end)
 			require.NoError(t, err)
-			defer result.Free(proc.Mp())
-			require.Equal(t, want[start:end], vector.MustFixedColWithTypeCheck[int64](result))
+			defer result.Free(result.MPool())
+			values := vector.MustFixedColWithTypeCheck[types.Decimal128](result)
+			for i, value := range values {
+				require.Equal(t, types.Decimal128FromInt64(want[start+i]), value)
+			}
 		}()
 		start = end
 	}
@@ -137,10 +330,10 @@ func TestFullPartitionCommonAggregates(t *testing.T) {
 					e.GetEncodedOverloadID(), tc.distinct, []*plan.Expr{newColExprWithType(0, typ)}, nil)},
 			}
 			ctr := &container{bat: bat, aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}}
-			defer ctr.freeFullPartitionResults(proc.Mp())
+			defer ctr.freeFullPartitionResults(proc)
 			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 4)
 			require.NoError(t, err)
-			defer result.Free(proc.Mp())
+			defer result.Free(result.MPool())
 			for i := 0; i < 4; i++ {
 				require.False(t, result.IsNull(uint64(i)))
 				switch {
@@ -149,6 +342,8 @@ func TestFullPartitionCommonAggregates(t *testing.T) {
 					require.Equal(t, types.Decimal128FromInt64(16667), vector.GetFixedAtNoTypeCheck[types.Decimal128](result, i))
 				case tc.name == "min" || tc.name == "max":
 					require.Equal(t, int32(tc.wantInt), vector.GetFixedAtNoTypeCheck[int32](result, i))
+				case tc.name == "sum":
+					require.Equal(t, types.Decimal128FromInt64(tc.wantInt), vector.GetFixedAtNoTypeCheck[types.Decimal128](result, i))
 				default:
 					require.Equal(t, tc.wantInt, vector.GetFixedAtNoTypeCheck[int64](result, i))
 				}
@@ -164,7 +359,7 @@ func TestFullPartitionDoesNotEvaluateLaterPartitionEarly(t *testing.T) {
 	maxValue, err := types.ParseDecimal256(strings.Repeat("9", 65), 65, 0)
 	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(typ)
+	bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 	for _, v := range []types.Decimal256{types.Decimal256FromInt64(1), types.Decimal256FromInt64(1), maxValue, types.Decimal256FromInt64(1)} {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], v, false, proc.Mp()))
 	}
@@ -172,14 +367,14 @@ func TestFullPartitionDoesNotEvaluateLaterPartitionEarly(t *testing.T) {
 	defer bat.Clean(proc.Mp())
 	arg := &Window{WinSpecList: []*plan.Expr{makeAggWindowSpec("sum")}, Aggs: []aggexec.AggFuncExecExpression{newTypedSumAggExpr(t, 0, typ)}}
 	ctr := &container{bat: bat, ps: []int64{0, 2}, aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}}
-	defer ctr.freeFullPartitionResults(proc.Mp())
+	defer ctr.freeFullPartitionResults(proc)
 	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 1)
 	require.NoError(t, err, "the unrequested overflowing partition must not be evaluated")
-	defer first.Free(proc.Mp())
+	defer first.Free(first.MPool())
 	require.Equal(t, types.Decimal256FromInt64(2), vector.GetFixedAtNoTypeCheck[types.Decimal256](first, 0))
 	second, err := ctr.processAggregateFuncRange(0, arg, proc, 1, 2)
 	require.NoError(t, err)
-	defer second.Free(proc.Mp())
+	defer second.Free(second.MPool())
 	_, err = ctr.processAggregateFuncRange(0, arg, proc, 2, 4)
 	require.ErrorContains(t, err, "beyond the range")
 	require.Nil(t, ctr.fullPartitionResults)
@@ -187,7 +382,7 @@ func TestFullPartitionDoesNotEvaluateLaterPartitionEarly(t *testing.T) {
 	// A failed generation must not contaminate reuse.
 	reused, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 1)
 	require.NoError(t, err)
-	defer reused.Free(proc.Mp())
+	defer reused.Free(reused.MPool())
 }
 
 func TestFullPartitionCancellationReleasesAggregate(t *testing.T) {
@@ -197,7 +392,7 @@ func TestFullPartitionCancellationReleasesAggregate(t *testing.T) {
 	defer bat.Clean(proc.Mp())
 	arg := &Window{WinSpecList: []*plan.Expr{makeAggWindowSpec("sum")}, Aggs: []aggexec.AggFuncExecExpression{newAggExpr()}}
 	ctr := &container{bat: bat, aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}}
-	defer ctr.freeFullPartitionResults(proc.Mp())
+	defer ctr.freeFullPartitionResults(proc)
 	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
 	_, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 1)
 	require.ErrorIs(t, err, context.Canceled)
@@ -218,15 +413,15 @@ func TestUnorderedRangeFullPartitionAcrossMultiplePartitions(t *testing.T) {
 	}
 	arg := &Window{WinSpecList: []*plan.Expr{spec}, Aggs: []aggexec.AggFuncExecExpression{newAggExpr()}}
 	ctr := &container{bat: bat, ps: []int64{0, 2}, aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}}
-	defer ctr.freeFullPartitionResults(proc.Mp())
+	defer ctr.freeFullPartitionResults(proc)
 	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 3)
 	require.NoError(t, err)
-	defer first.Free(proc.Mp())
-	require.Equal(t, []int64{3, 3, 28}, vector.MustFixedColWithTypeCheck[int64](first))
+	defer first.Free(first.MPool())
+	require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(3), types.Decimal128FromInt64(3), types.Decimal128FromInt64(28)}, vector.MustFixedColWithTypeCheck[types.Decimal128](first))
 	require.NotNil(t, ctr.fullPartitionResults)
 	second, err := ctr.processAggregateFuncRange(0, arg, proc, 3, 5)
 	require.NoError(t, err)
-	defer second.Free(proc.Mp())
-	require.Equal(t, []int64{28, 28}, vector.MustFixedColWithTypeCheck[int64](second))
+	defer second.Free(second.MPool())
+	require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(28), types.Decimal128FromInt64(28)}, vector.MustFixedColWithTypeCheck[types.Decimal128](second))
 	require.Nil(t, ctr.fullPartitionResults)
 }

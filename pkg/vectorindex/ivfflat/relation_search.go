@@ -259,7 +259,7 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 			// embeddings in the bounded Top-K accumulator.
 			entryType := *bat.Vecs[3].GetType()
 			bat.Vecs[3].Free(sqlproc.Proc.Mp())
-			bat.Vecs[3] = vector.NewVec(entryType)
+			bat.Vecs[3] = vector.NewVec(entryType, batchResult.Mp)
 			return nil
 		},
 	})
@@ -307,7 +307,6 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 			}
 		}
 		bat.Vecs = out
-		bat.Attrs = append([]string{catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, "vec_dist"}, includeCols...)
 	}
 	return res, nil
 }
@@ -445,7 +444,7 @@ func ivfCentroidPrefixFilter(
 		return nil, err
 	}
 	defer versionVec.Free(mp)
-	centroidVec := vector.NewVec(types.T_int64.ToType())
+	centroidVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer centroidVec.Free(mp)
 	if err = vector.AppendFixedList(centroidVec, centroidIDs, nil, mp); err != nil {
 		return nil, err
@@ -462,7 +461,7 @@ func ivfCentroidPrefixFilter(
 	cpkeyType := types.T_varchar.ToType()
 	cpkeyType.Width = types.MaxVarcharLen
 	cpkeyType.Charset = types.CharsetBinary
-	prefixVec := vector.NewVec(cpkeyType)
+	prefixVec := vector.NewVec(cpkeyType, mp)
 	defer prefixVec.Free(mp)
 	packer := types.NewPacker()
 	defer packer.Close()

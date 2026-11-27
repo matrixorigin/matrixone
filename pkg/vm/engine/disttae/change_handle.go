@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -111,6 +110,7 @@ type PartitionChangesHandle struct {
 	primarySeqnum       int
 	snapshotReadPolicy  engine.SnapshotReadPolicy
 	preserveAllVersions bool
+	disableQuick        bool
 	keepTrailingDeletes bool
 	mp                  *mpool.MPool
 	fs                  fileservice.FileService
@@ -147,6 +147,7 @@ func NewPartitionChangesHandle(
 		primarySeqnum:       tbl.primarySeqnum,
 		snapshotReadPolicy:  snapshotReadPolicy,
 		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
+		disableQuick:        engine.CollectChangesDisableQuickFromContext(ctx),
 		keepTrailingDeletes: engine.CollectChangesKeepTrailingDeletesFromContext(ctx),
 		mp:                  mp,
 		fs:                  tbl.getTxn().engine.fs,
@@ -182,6 +183,9 @@ func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (dat
 func (h *PartitionChangesHandle) collectChangesContext(ctx context.Context) context.Context {
 	if h.preserveAllVersions {
 		ctx = engine.WithCollectChangesPreserveAllVersions(ctx)
+	}
+	if h.disableQuick {
+		ctx = engine.WithCollectChangesDisableQuick(ctx)
 	}
 	if h.keepTrailingDeletes {
 		ctx = engine.WithCollectChangesKeepTrailingDeletes(ctx)
@@ -565,6 +569,7 @@ func (h *PartitionChangesHandle) installSnapshotStateRangeHandle(
 	debugLabel := engine.CollectChangesDebugLabelFromContext(ctx)
 	retainRowID := engine.RetainRowIDFromContext(ctx)
 	preserveAllVersions := h.preserveAllVersions
+	disableQuick := h.disableQuick
 	keepTrailingDeletes := h.keepTrailingDeletes
 	rangeFrom, rangeTo := h.currentPSFrom, h.currentPSTo
 	skipDeletes, primarySeqnum, primaryIdx := h.skipDeletes, snapshotTbl.primarySeqnum, snapshotTbl.primaryIdx
@@ -579,6 +584,9 @@ func (h *PartitionChangesHandle) installSnapshotStateRangeHandle(
 			nextCtx = engine.WithRetainRowID(nextCtx, retainRowID)
 			if preserveAllVersions {
 				nextCtx = engine.WithCollectChangesPreserveAllVersions(nextCtx)
+			}
+			if disableQuick {
+				nextCtx = engine.WithCollectChangesDisableQuick(nextCtx)
 			}
 			if keepTrailingDeletes {
 				nextCtx = engine.WithCollectChangesKeepTrailingDeletes(nextCtx)
@@ -792,9 +800,8 @@ func (h *CheckpointChangesHandle) Next(
 	buildBatch := func() *batch.Batch {
 		bat := batch.NewWithSize(len(tblDef.Cols))
 		for i, col := range tblDef.Cols {
-			bat.Attrs = append(bat.Attrs, col.Name)
 			typ := plan2.ExprType2Type(&col.Typ)
-			bat.Vecs[i] = vector.NewVec(typ)
+			bat.Vecs[i] = vector.NewVec(typ, mp)
 		}
 		return bat
 	}
@@ -844,25 +851,12 @@ func (h *CheckpointChangesHandle) Next(
 		}
 		rewrittenVecs = append(rewrittenVecs, committs)
 		data.Vecs = rewrittenVecs
-
-		rewrittenAttrs := make([]string, 0, len(data.Attrs)+1)
-		rewrittenAttrs = append(rewrittenAttrs, catalog.Row_ID)
-		for i, attr := range data.Attrs {
-			if i == rowIDIdx {
-				continue
-			}
-			rewrittenAttrs = append(rewrittenAttrs, attr)
-		}
-		rewrittenAttrs = append(rewrittenAttrs, objectio.DefaultCommitTS_Attr)
-		data.Attrs = rewrittenAttrs
 	} else {
 		if rowIDIdx >= 0 {
 			data.Vecs[rowIDIdx].Free(mp)
 			data.Vecs = append(data.Vecs[:rowIDIdx], data.Vecs[rowIDIdx+1:]...)
-			data.Attrs = append(data.Attrs[:rowIDIdx], data.Attrs[rowIDIdx+1:]...)
 		}
 		data.Vecs = append(data.Vecs, committs)
-		data.Attrs = append(data.Attrs, objectio.DefaultCommitTS_Attr)
 	}
 	h.duration += time.Since(t0)
 	h.dataLength += data.Vecs[0].Length()

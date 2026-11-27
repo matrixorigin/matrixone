@@ -207,7 +207,7 @@ func TestGroupSpillWriterReconcilesPartialPhysicalWrites(t *testing.T) {
 
 func TestGroupSpillWriterCoalescesSelectedFixedRowsWithoutChangingWire(t *testing.T) {
 	pool := mpool.MustNewZero()
-	source := vector.NewVec(types.T_int64.ToType())
+	source := vector.NewVec(types.T_int64.ToType(), pool)
 	values := make([]int64, 8192)
 	rows := make([]int32, 0, len(values))
 	for i := range values {
@@ -241,7 +241,7 @@ func TestGroupSpillWriterCoalescesSelectedFixedRowsWithoutChangingWire(t *testin
 
 func BenchmarkGroupSpillSelectedFixedRows(b *testing.B) {
 	pool := mpool.MustNewZero()
-	source := vector.NewVec(types.T_int64.ToType())
+	source := vector.NewVec(types.T_int64.ToType(), pool)
 	values := make([]int64, 8192)
 	rows := make([]int32, 0, 256)
 	for i := range values {
@@ -337,7 +337,7 @@ func BenchmarkGroupSpillWriterDiskAccounting(b *testing.B) {
 
 func TestGroupSpillVarlenaWriterMatchesReference(t *testing.T) {
 	pool := mpool.MustNewZero()
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), pool)
 	t.Cleanup(func() { source.Free(pool); require.Zero(t, pool.CurrNB()) })
 	require.NoError(t, vector.AppendStringList(source, []string{"", "short",
 		string(bytes.Repeat([]byte("x"), 23)), string(bytes.Repeat([]byte("y"), 24)),
@@ -388,7 +388,7 @@ func TestGroupSpillVarlenaWriterMatchesReference(t *testing.T) {
 
 func BenchmarkGroupSpillSelectedVarlenaRows(b *testing.B) {
 	pool := mpool.MustNewZero()
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), pool)
 	b.Cleanup(func() { source.Free(pool); require.Zero(b, pool.CurrNB()) })
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(b, err)

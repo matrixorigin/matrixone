@@ -324,22 +324,36 @@ func (p *EnginePack) DeleteTableInDB(txnop client.TxnOperator, dbname, tblname s
 	require.NoError(p.t, db.Delete(p.Ctx, tblname))
 }
 
-func EmptyBatchFromSchema(schema *catalog.Schema, sels ...int) *batch.Batch {
+// SchemaAttrs names the columns of EmptyBatchFromSchema(schema, mp, sels...).
+func SchemaAttrs(schema *catalog.Schema, sels ...int) []string {
+	if len(sels) == 0 {
+		attrs := make([]string, len(schema.ColDefs))
+		for i, col := range schema.ColDefs {
+			attrs[i] = col.Name
+		}
+		return attrs
+	}
+	attrs := make([]string, len(sels))
+	for i, sel := range sels {
+		attrs[i] = schema.ColDefs[sel].Name
+	}
+	return attrs
+}
+
+func EmptyBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool, sels ...int) *batch.Batch {
 	if len(sels) == 0 {
 		ret := batch.NewWithSize(len(schema.ColDefs))
 		for i, col := range schema.ColDefs {
-			vec := vector.NewVec(col.Type.Oid.ToType())
+			vec := vector.NewVec(col.Type.Oid.ToType(), mp)
 			ret.Vecs[i] = vec
-			ret.Attrs = append(ret.Attrs, col.Name)
 		}
 		return ret
 	}
 	ret := batch.NewWithSize(len(sels))
 	for i, sel := range sels {
 		col := schema.ColDefs[sel]
-		vec := vector.NewVec(col.Type.Oid.ToType())
+		vec := vector.NewVec(col.Type.Oid.ToType(), mp)
 		ret.Vecs[i] = vec
-		ret.Attrs = append(ret.Attrs, col.Name)
 	}
 	return ret
 }
@@ -426,13 +440,14 @@ func WriteToRelation(
 	txn client.TxnOperator,
 	relation engine.Relation,
 	bat *batch.Batch,
+	attrs []string,
 	isDelete, toEndStatement bool,
 ) (err error) {
 	txn.GetWorkspace().StartStatement()
 	if isDelete {
-		err = relation.Delete(ctx, bat, catalog2.Row_ID)
+		err = relation.Delete(ctx, bat, attrs, catalog2.Row_ID)
 	} else {
-		err = relation.Write(ctx, bat)
+		err = relation.Write(ctx, bat, attrs)
 	}
 	if err == nil && toEndStatement {
 		EndThisStatement(ctx, txn)

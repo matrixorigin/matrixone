@@ -86,7 +86,6 @@ func (exec *maxByExec) BulkFill(groupIndex int, vectors []*vector.Vector) error 
 }
 
 func (exec *maxByExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	defer exec.finalizeStringSourcePreflights(groups)
 	if len(vectors) != 3 {
 		return moerr.NewInternalErrorNoCtx("max_by requires three input vectors")
 	}
@@ -123,9 +122,6 @@ func (exec *maxByExec) fillRow(
 		candidateWins(vectors, rows, state.vecs, int(y), exec.argTypes) {
 		return exec.copyWinner(x, state.vecs, int(y), vectors, rows)
 	}
-	if candidateEquals(vectors, rows, state.vecs, int(y), exec.argTypes) {
-		return mergeEqualRuntimeStringDomain(state.vecs[0], int(y), vectors[0], rows[0], exec.mp)
-	}
 	return nil
 }
 
@@ -137,7 +133,6 @@ func (exec *maxByExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 }
 
 func (exec *maxByExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
-	defer exec.finalizeStringSourcePreflights(groups)
 	other, ok := next.(*maxByExec)
 	if !ok || other.nonNullValue != exec.nonNullValue || !slices.Equal(other.argTypes, exec.argTypes) {
 		return moerr.NewInternalErrorNoCtx("cannot merge incompatible max_by states")
@@ -158,10 +153,6 @@ func (exec *maxByExec) BatchMerge(next AggFuncExec, offset int, groups []uint64)
 			if err := exec.copyWinner(x1, current, int(y1), candidate, rows); err != nil {
 				return err
 			}
-		} else if candidateEquals(candidate, rows, current, int(y1), exec.argTypes) {
-			if err := mergeEqualRuntimeStringDomain(current[0], int(y1), candidate[0], rows[0], exec.mp); err != nil {
-				return err
-			}
 		}
 	}
 	exec.compactBatchGroups(groups)
@@ -179,12 +170,6 @@ func candidateWins(candidate []*vector.Vector, candidateRows [3]int, current []*
 	// final deterministic fallback so partial aggregation merge order cannot
 	// change the result when it is not.
 	return compareNullableRaw(candidate[0], candidateRows[0], current[0], currentRow) > 0
-}
-
-func candidateEquals(candidate []*vector.Vector, candidateRows [3]int, current []*vector.Vector, currentRow int, typs []types.Type) bool {
-	return compareVectorValue(candidate[1], candidateRows[1], current[1], currentRow, typs[1]) == 0 &&
-		compareNullableVectorValue(candidate[2], candidateRows[2], current[2], currentRow, typs[2]) == 0 &&
-		compareNullableRaw(candidate[0], candidateRows[0], current[0], currentRow) == 0
 }
 
 func compareNullableVectorValue(a *vector.Vector, ai int, b *vector.Vector, bi int, typ types.Type) int {
@@ -313,29 +298,9 @@ func (exec *maxByExec) copyWinner(
 			return err
 		}
 	}
-	valueSource := src[0].GetStringSourceAt(srcRows[0])
-	if err := dst[0].PreflightSetStringSourceAt(dstRow, valueSource, exec.mp); err != nil {
-		return err
-	}
-	if !src[0].IsNull(uint64(srcRows[0])) {
-		if err := dst[0].PreflightSetPrepareParamKindAt(
-			dstRow,
-			src[0].GetPrepareParamKindAt(srcRows[0]),
-			exec.mp,
-		); err != nil {
-			return err
-		}
-	}
 	for i := range dst {
 		if src[i].IsNull(uint64(srcRows[i])) {
-			if i == 0 {
-				dst[i].SetNullPreservingPrepareParamCapacity(uint64(dstRow))
-				if err := dst[i].SetStringSourceAtWithMP(dstRow, valueSource, exec.mp); err != nil {
-					return err
-				}
-			} else {
-				dst[i].SetNull(uint64(dstRow))
-			}
+			dst[i].SetNull(uint64(dstRow))
 			continue
 		}
 		if i == 0 {
@@ -366,9 +331,6 @@ func (exec *maxByExec) getChunk(groupIndex int) int {
 func (exec *maxByExec) compactChunk(chunk int) {
 	if chunk < 0 || chunk >= len(exec.state) {
 		return
-	}
-	if len(exec.state[chunk].vecs) != 0 {
-		exec.state[chunk].vecs[0].NormalizePrepareParamKinds()
 	}
 	usage := exec.ensureVarlenaUsage(chunk)
 	for i, vec := range exec.state[chunk].vecs {
@@ -451,15 +413,8 @@ func compactMaxByStateVector(vec *vector.Vector, usage *maxByVarlenaUsage, mp *m
 		usage.staleBytes <= usage.liveBytes+maxByVarlenaCompactionSlack {
 		return nil
 	}
-	var (
-		compact *vector.Vector
-		err     error
-	)
-	if selection := vec.AllocationAccountSelection(); selection != nil {
-		compact, err = vec.CloneToFlatCompactWithAllocation(mp, selection)
-	} else {
-		compact, err = vec.CloneToFlatCompact(mp)
-	}
+	// mp is the executor's pool: its accounted view while an account is bound.
+	compact, err := vec.CloneToFlatCompact(mp)
 	if err != nil {
 		return err
 	}

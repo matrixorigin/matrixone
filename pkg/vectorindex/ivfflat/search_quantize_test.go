@@ -40,10 +40,10 @@ import (
 // `WHERE key IN ('quantize_min','quantize_max')` query loadQuantizeBounds issues.
 func mockQuantizeBoundsResult(m *mpool.MPool, qmin, qmax float64) executor.Result {
 	bat := batch.NewWithSize(2)
-	keyVec := vector.NewVec(types.T_varchar.ToType())
+	keyVec := vector.NewVec(types.T_varchar.ToType(), m)
 	_ = vector.AppendBytes(keyVec, []byte(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin), false, m)
 	_ = vector.AppendBytes(keyVec, []byte(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax), false, m)
-	valVec := vector.NewVec(types.T_float64.ToType())
+	valVec := vector.NewVec(types.T_float64.ToType(), m)
 	_ = vector.AppendFixed(valVec, qmin, false, m)
 	_ = vector.AppendFixed(valVec, qmax, false, m)
 	bat.Vecs[0] = keyVec
@@ -54,8 +54,8 @@ func mockQuantizeBoundsResult(m *mpool.MPool, qmin, qmax float64) executor.Resul
 
 func mockRawQuantizeMetadataResult(m *mpool.MPool) executor.Result {
 	bat := batch.NewWithSize(2)
-	keyVec := vector.NewVec(types.T_varchar.ToType())
-	valVec := vector.NewVec(types.T_varchar.ToType())
+	keyVec := vector.NewVec(types.T_varchar.ToType(), m)
+	valVec := vector.NewVec(types.T_varchar.ToType(), m)
 	for _, row := range [][2]string{
 		{"clustering_start", "2026-08-18 12:34:56"},
 		{catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin, "-2"},
@@ -144,9 +144,9 @@ func TestDirectCentroidLoadFeedsRankAndProbeSearch(t *testing.T) {
 		require.Equal(t, int32(1), req.PartitionCount)
 		require.NotNil(t, req.Filter)
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 2, 0), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(7), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(0), false, mp))
 		require.NoError(t, vector.AppendArray(bat.Vecs[2], []float32{0, 0}, false, mp))
@@ -443,9 +443,9 @@ func TestIncludeExactPkSearchAppliesQueryQuantizerAndRestoresDistance(t *testing
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		capturedSQL = sql
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), m)
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), m)
+		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), m)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, m))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(400), false, m))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("covered"), false, m))

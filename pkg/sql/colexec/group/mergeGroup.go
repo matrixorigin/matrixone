@@ -34,14 +34,11 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	}
 	mergeGroup.ctr.groupConcatSourceRowsUntrusted = proc != nil &&
 		!proc.GroupConcatSourceRowProvenanceTrusted()
-	mergeGroup.ctr.prepareParamKind.Reset(mergeGroup.Aggs)
 	mergeGroup.ctr.aggExprs = mergeGroup.Aggs
 	mergeGroup.ctr.warningRetentionLimit = process.WarningDiagnosticRetentionLimitForProcess(proc)
 	mergeGroup.ctr.warningRetentionSet = true
 	mergeGroup.ctr.groupConcatWarnings.SetWarningBudget(
 		process.WarningDiagnosticBudgetForProcess(proc))
-	mergeGroup.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
-		hasPrepareParamKindPreservingAgg(mergeGroup.Aggs)
 	mergeGroup.ctr.mp = mpool.MustNewNoLock("merge_group_mpool")
 	if mergeGroup.ctr.allocationAccount != nil {
 		var err error
@@ -54,31 +51,16 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 		if err != nil {
 			return err
 		}
+		if err = mergeGroup.ctr.bindAllocationViews(proc); err != nil {
+			return err
+		}
 		if err = mergeGroup.ctr.installRecoveryCapacity(); err != nil {
 			return err
 		}
 	}
-	mergeGroup.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
-	mergeGroup.ctr.legacyVarianceState = useLegacyVarianceStateForRemote(proc)
-	mergeGroup.ctr.legacyDecimalSumState = useLegacyDecimalSumState(proc)
-	// MergeGroup belongs to the upgraded coordinator and must publish the
-	// widened type selected by its plan, even when it consumes legacy state.
-	mergeGroup.ctr.legacyDecimalSumResult = false
-	mergeGroup.ctr.legacyApproxPercentileState = useLegacyApproxPercentileStateForRemote(proc)
-	mergeGroup.ctr.legacyHLLState = useLegacyHLLStateForRemote(proc)
-	mergeGroup.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
-	mergeGroup.ctr.legacyVectorHLLState = useLegacyVectorHLLStateForRemote(proc)
-	mergeGroup.ctr.legacyTextHLLAddState = useLegacyTextHLLAddStateForRemote(proc)
-	mergeGroup.ctr.legacyFloatHLLAddState = useLegacyFloatHLLAddStateForRemote(proc)
-	// MergeGroup is a receiver. It canonicalizes legacy producer payloads into
-	// the current in-memory DISTINCT domain, so its destination uses the modern
-	// key policy even when the incoming peer is below v79.
-	mergeGroup.ctr.legacyDistinctFloatKeys = false
 	mergeGroup.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
-	mergeGroup.ctr.legacyH8CharSemantics = false
-	mergeGroup.ctr.groupingAware = mergeGroup.GroupingAware
 	mergeGroup.ctr.keyWidth = 0
 	mergeGroup.ctr.mtyp = 0
 	mergeGroup.ctr.setGroupByHashKey(mergeGroup.GroupByHashKey)
@@ -252,16 +234,16 @@ func (mergeGroup *MergeGroup) ensureRuntimeEmptyGroupingSets() error {
 	}
 
 	ctr.mtyp = HStr
-	ctr.groupingAware = true
+	ctr.keyNullable = true
 	aggs, err := ctr.makeAggList(mergeGroup.Aggs)
 	if err != nil {
-		output.Clean(ctr.mp)
+		ctr.cleanGroupBatch(output)
 		return err
 	}
 	for _, agg := range aggs {
 		if err = agg.GroupGrow(rows); err != nil {
 			freeAggList(aggs)
-			output.Clean(ctr.mp)
+			ctr.cleanGroupBatch(output)
 			return err
 		}
 	}
@@ -398,7 +380,6 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 					mergeGroup.ctr.cancelGroupByPreflights()
 				}
 				if err == nil {
-					mergeGroup.ctr.sanityCheck()
 					vals, more, insertErr := mergeGroup.ctr.commitGroupByChunk(
 						bat.Vecs, i, n, preview)
 					if insertErr != nil {
@@ -438,8 +419,6 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 					return false, err
 				}
 			}
-
-			mergeGroup.ctr.sanityCheck()
 		}
 	}
 
@@ -484,11 +463,11 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 	bat *batch.Batch,
 ) error {
 	ctr := &mergeGroup.ctr
-	if len(bat.ExtraBuf) == 0 {
+	if len(bat.ExtraBuf()) == 0 {
 		return moerr.NewInvalidInputNoCtx("merge-group partial metadata is missing")
 	}
 	ctr.freeSpillAggList()
-	reader := bytes.NewReader(bat.ExtraBuf)
+	reader := bytes.NewReader(bat.ExtraBuf())
 	incomingType, err := types.ReadInt32(reader)
 	if err != nil {
 		return err
@@ -511,28 +490,12 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 			"merge-group H0 partial must contain exactly one row")
 	}
 	incomingHashVectors := ctr.hashKeyVectors(bat.Vecs)
-	if incomingType == H8 && mergeGroupHashKeyNeedsV78(incomingHashVectors, incomingNullable) &&
-		groupHashStringWireEnabled(proc) {
-		// Older producers could advertise H8 for a short CHAR/VARCHAR
-		// composite key. The old eight-byte concatenation is ambiguous, so
-		// normalize that partial into the length-delimited HStr domain before
-		// the first hash table is built. This also keeps rolling upgrades
-		// compatible with already-produced partials.
-		incomingType = HStr
+	if incomingType == H8 && mergeGroupShortVariableHashKey(incomingHashVectors, incomingNullable) {
+		return moerr.NewInvalidInputNoCtx(
+			"merge-group H8 partial has a variable-length hash key")
 	}
-	if incomingType == HStr && mergeGroupHashKeyNeedsV78(incomingHashVectors, incomingNullable) &&
-		!groupHashStringWireEnabled(proc) {
-		return moerr.NewInvalidStateNoCtx(
-			"variable-length merge-group hash keys require MORPCVersion78")
-	}
-	ctr.legacyH8CharSemantics = incomingType == H8 &&
-		mergeGroupHashKeyNeedsV78(incomingHashVectors, incomingNullable) &&
-		!groupHashStringWireEnabled(proc)
-	incomingGroupingAware := incomingType == HStr &&
-		mergeGroupHashKeyHasGrouping(incomingHashVectors)
 	if ctr.mergePartialMetadataSet &&
-		(ctr.mtyp != incomingType || ctr.keyNullable != incomingNullable ||
-			(!ctr.groupingAware && incomingGroupingAware)) {
+		(ctr.mtyp != incomingType || ctr.keyNullable != incomingNullable) {
 		return moerr.NewInvalidInputNoCtx(
 			"inconsistent merge-group partial metadata")
 	}
@@ -580,46 +543,20 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 		if err := ctr.spillAggList[i].UnmarshalFromReader(reader, ctr.mp); err != nil {
 			return err
 		}
-		if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
-			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
-			return moerr.NewInvalidStateNoCtx(
-				"aggregate binary-string metadata requires MORPCVersion18")
-		}
-		if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
-			vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
-			return moerr.NewInvalidStateNoCtx(
-				"aggregate explicit-text metadata requires MORPCVersion23")
-		}
-		if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
-			vec.HasStringSourceMetadata() && !stringSourceWireEnabled(proc) {
-			return moerr.NewInvalidStateNoCtx(
-				"aggregate string source metadata requires MORPCVersion37")
-		}
 		if err := validateDecodedAggregateGroupCount(
 			ctr.spillAggList[i], bat.RowCount()); err != nil {
 			return err
 		}
 	}
-	if !ctr.prepareParamKindWireV1 && reader.Len() > 0 {
-		return moerr.NewInvalidStateNoCtx(
-			"prepared parameter aggregate trailer requires MORPCVersion12")
-	}
-	if ctr.prepareParamKindWireV1 && reader.Len() > 0 {
-		if err := mergeGroup.restorePartialPrepareParamKinds(
-			proc, reader, nAggs); err != nil {
-			return err
-		}
+	if reader.Len() > 0 {
+		return moerr.NewInternalErrorNoCtx(
+			"unexpected bytes after the aggregate partial")
 	}
 
 	// Publish the validated header only after its aggregate payload has been
 	// decoded. A rejected partial must not poison the mode used by a retry.
 	ctr.mtyp = incomingType
 	ctr.keyNullable = incomingNullable
-	// The plan-level declaration stays true even when this particular partial
-	// contains only the fully active grouping set and no sentinel bits. For
-	// compatibility with an undeclared single grouping partial, the first
-	// partial may still promote the hash grammar before the table is built.
-	ctr.groupingAware = ctr.groupingAware || incomingGroupingAware
 	ctr.mergePartialMetadataSet = true
 
 	if ctr.mtyp == H0 && len(ctr.groupByBatches) == 0 {
@@ -660,10 +597,6 @@ func validateMergeGroupHashMetadata(
 			return moerr.NewInvalidInputNoCtxf(
 				"nil merge-group hash key column %d", i)
 		}
-		if mtyp == H8 && vec.HasGrouping() {
-			return moerr.NewInvalidInputNoCtxf(
-				"merge-group H8 hash metadata cannot encode grouping key column %d", i)
-		}
 		if !nullable && mergeGroupHashKeyHasNull(vec) {
 			return moerr.NewInvalidInputNoCtxf(
 				"merge-group hash metadata marks keys non-nullable but hash key column %d contains null", i)
@@ -683,24 +616,10 @@ func validateMergeGroupHashMetadata(
 }
 
 func mergeGroupHashKeyHasNull(vec *vector.Vector) bool {
-	rows := uint64(vec.Length())
 	if vec.IsConstNull() {
-		return vec.GetGrouping().GetBitmap().CountRange(0, rows) < vec.Length()
+		return vec.Length() > 0
 	}
-	return vec.GetNulls().GetBitmap().AnySetNotIn(
-		vec.GetGrouping().GetBitmap(), 0, rows,
-	)
-}
-
-func mergeGroupHashKeyHasGrouping(vectors []*vector.Vector) bool {
-	for _, vec := range vectors {
-		if vec != nil && vec.GetGrouping().GetBitmap().CountRange(
-			0, uint64(vec.Length()),
-		) > 0 {
-			return true
-		}
-	}
-	return false
+	return vec.GetNulls().GetBitmap().CountRange(0, uint64(vec.Length())) > 0
 }
 
 func mergeGroupHashKeyHasVariableLength(vectors []*vector.Vector) bool {
@@ -712,7 +631,7 @@ func mergeGroupHashKeyHasVariableLength(vectors []*vector.Vector) bool {
 	return false
 }
 
-func mergeGroupHashKeyNeedsV78(vectors []*vector.Vector, nullable bool) bool {
+func mergeGroupShortVariableHashKey(vectors []*vector.Vector, nullable bool) bool {
 	if !mergeGroupHashKeyHasVariableLength(vectors) {
 		return false
 	}
@@ -751,47 +670,6 @@ func validateMergeGroupColumnTypes(
 		if incoming != want {
 			return moerr.NewInvalidInputNoCtxf(
 				"inconsistent merge-group column type at %d", i)
-		}
-	}
-	return nil
-}
-
-func (mergeGroup *MergeGroup) restorePartialPrepareParamKinds(
-	proc *process.Process,
-	reader *bytes.Reader,
-	nAggs int32,
-) error {
-	ctr := &mergeGroup.ctr
-	targets := make([]prepareParamKindRowsTarget, len(ctr.spillAggList))
-	for i, ag := range ctr.spillAggList {
-		targets[i] = prepareParamKindChunkTarget(ag, 0)
-	}
-	summaries, err := readPrepareParamKindTrailer(
-		proc.Ctx,
-		reader,
-		nAggs,
-		&ctr.prepareParamKind,
-		targets,
-		ctr.mp,
-		binaryStringWireEnabled(proc),
-		explicitTextWireEnabled(proc),
-	)
-	if err != nil {
-		return err
-	}
-	if reader.Len() != 0 {
-		return moerr.NewInternalErrorNoCtx(
-			"unexpected aggregate prepared parameter trailer bytes")
-	}
-	for i, agg := range ctr.spillAggList {
-		if i >= len(mergeGroup.Aggs) ||
-			!mergeGroup.Aggs[i].PreservesFirstArgPrepareParamKind() {
-			continue
-		}
-		if !summaries[i].rows {
-			if summaries[i].seen {
-				agg.SetPrepareParamKind(summaries[i].kind)
-			}
 		}
 	}
 	return nil

@@ -165,22 +165,33 @@ func (node *memoryNode) getDataWindowOnWriteSchema(
 	if node.data == nil {
 		return nil
 	}
-	selection, commitTSVec, abort :=
-		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+	var selection index.RowSelection
+	var commitTSVec, abort containers.Vector
+	preserveOffsets := preservePhysicalRows(ctx)
+	if preserveOffsets {
+		selection, commitTSVec, abort = node.object.appendMVCC.CollectAppendSnapshotLocked(end, mp)
+	} else {
+		selection, commitTSVec, abort = node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+	}
+	defer selection.Release()
 	if commitTSVec == nil {
 		return nil
 	}
 	var inner *containers.Batch
-	selection.ForEachRange(func(from, to uint32) bool {
-		window := node.data.CloneWindowWithPool(int(from), int(to-from), node.object.rt.VectorPool.Transient)
-		if inner == nil {
-			inner = window
-		} else {
-			inner.Extend(window)
-			window.Close()
-		}
-		return true
-	})
+	if preserveOffsets {
+		inner = node.data.CloneWindowWithPool(0, int(selection.MaxRow), node.object.rt.VectorPool.Transient)
+	} else {
+		selection.ForEachRange(func(from, to uint32) bool {
+			window := node.data.CloneWindowWithPool(int(from), int(to-from), node.object.rt.VectorPool.Transient)
+			if inner == nil {
+				inner = window
+			} else {
+				inner.Extend(window)
+				window.Close()
+			}
+			return true
+		})
+	}
 	if inner == nil {
 		commitTSVec.Close()
 		abort.Close()
@@ -443,6 +454,7 @@ func (node *memoryNode) Scan(
 	node.object.RLock()
 	defer node.object.RUnlock()
 	selection, visible, err := node.object.appendMVCC.GetVisibleRowLocked(ctx, txn)
+	defer selection.Release()
 	if !visible || err != nil {
 		// blk.RUnlock()
 		return
@@ -486,6 +498,7 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 	defer node.object.RUnlock()
 	selection, commitTSVec, abort :=
 		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+	defer selection.Release()
 	if commitTSVec == nil {
 		return nil
 	}
@@ -528,6 +541,7 @@ func (node *memoryNode) FillBlockTombstones(
 	node.object.RLock()
 	defer node.object.RUnlock()
 	selection, visible, err := node.object.appendMVCC.GetVisibleRowLocked(ctx, txn)
+	defer selection.Release()
 	if !visible || err != nil {
 		// blk.RUnlock()
 		return err
@@ -542,6 +556,7 @@ func (node *memoryNode) FillBlockTombstones(
 		if types.PrefixCompare(rowID[:], blkID[:]) == 0 {
 			if *deletes == nil {
 				*deletes = &nulls.Nulls{}
+				(*deletes).Init(mp)
 			}
 			offset := rowID.GetRowOffset()
 			(*deletes).Add(uint64(offset) + deleteStartOffset)

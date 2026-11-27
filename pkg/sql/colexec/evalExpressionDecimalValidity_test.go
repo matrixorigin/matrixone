@@ -63,7 +63,7 @@ func TestDecimal128ValidityRuntimeTransitions(t *testing.T) {
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			typ := types.New(tc.oid, 15, 2)
 			for side, values := range [][]int64{{120, -250, 0, 1234}, {200, 300, -500, 10}} {
-				input.Vecs[side] = vector.NewVec(typ)
+				input.Vecs[side] = vector.NewVec(typ, proc.Mp())
 				for _, n := range values {
 					appendValidityDecimal(t, proc, input.Vecs[side], n)
 				}
@@ -94,18 +94,16 @@ func TestDecimal128ValidityRuntimeTransitions(t *testing.T) {
 			out, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			check(out, -1)
-			require.Zero(t, out.GetNulls().GetBitmap().ExternalStorageCapacity())
+			require.Zero(t, out.GetNulls().GetBitmap().CapWords())
 			input.Vecs[0].SetNull(1)
 			out, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			check(out, 1)
-			capacity := out.GetNulls().GetBitmap().ExternalStorageCapacity()
-			require.Positive(t, capacity)
+			require.Positive(t, out.GetNulls().GetBitmap().CapWords())
 			input.Vecs[0].GetNulls().Reset()
 			out, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			check(out, -1)
-			require.Equal(t, capacity, out.GetNulls().GetBitmap().ExternalStorageCapacity())
 			out, err = executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, true})
 			require.NoError(t, err)
 			check(out, 1)
@@ -145,7 +143,7 @@ func TestDecimal128ValidityCastBounds(t *testing.T) {
 			typ := types.New(types.T_decimal64, tc.width, tc.scale)
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(typ)
+			input.Vecs[0] = vector.NewVec(typ, proc.Mp())
 			for _, n := range []int64{120, -250} {
 				appendValidityDecimal(t, proc, input.Vecs[0], n)
 			}
@@ -163,7 +161,7 @@ func TestDecimal128ValidityCastBounds(t *testing.T) {
 			t.Cleanup(executor.Free)
 			out, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
-			require.Equal(t, tc.skip, out.GetNulls().GetBitmap().ExternalStorageCapacity() == 0)
+			require.False(t, out.HasNull())
 			if tc.name == "legacy-carrier" {
 				require.Equal(t, "92233720368547758.07", vector.GetFixedAtNoTypeCheck[types.Decimal128](out, 0).Format(2))
 				require.Equal(t, "-92233720368547758.08", vector.GetFixedAtNoTypeCheck[types.Decimal128](out, 1).Format(2))
@@ -186,13 +184,13 @@ func TestDecimal128ValidityAdmissionFailure(t *testing.T) {
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
 			})
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			typ := types.New(types.T_decimal64, 15, 2)
 			input := batch.NewWithSize(2)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			for side := range 2 {
-				input.Vecs[side] = vector.NewVec(typ)
+				input.Vecs[side] = vector.NewVec(typ, proc.Mp())
 				for range 4 {
 					appendValidityDecimal(t, proc, input.Vecs[side], 100)
 				}
@@ -211,10 +209,12 @@ func TestDecimal128ValidityAdmissionFailure(t *testing.T) {
 			out, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.EqualValues(t, 64, account.Snapshot().Used)
-			require.Zero(t, out.GetNulls().GetBitmap().ExternalStorageCapacity())
+			require.Zero(t, out.GetNulls().GetBitmap().CapWords())
 			input.Vecs[0].SetNull(0)
 			_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
-			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity,
+				"a nullable result reserves its NULL bitmap against the account")
+			require.EqualValues(t, 64, account.Snapshot().Used)
 			input.Vecs[0].GetNulls().Reset()
 			_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
@@ -236,7 +236,7 @@ func TestDecimal128ValidityPreservesMultiplyOverflow(t *testing.T) {
 	for side, text := range []string{"99999999999999999999999999999999999999", "2"} {
 		value, err := types.ParseDecimal128(text, 38, 0)
 		require.NoError(t, err)
-		input.Vecs[side] = vector.NewVec(typ)
+		input.Vecs[side] = vector.NewVec(typ, proc.Mp())
 		require.NoError(t, vector.AppendFixed(input.Vecs[side], value, false, proc.Mp()))
 	}
 	input.SetRowCount(1)
@@ -254,39 +254,7 @@ func TestDecimal128ValidityPreservesMultiplyOverflow(t *testing.T) {
 	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 	require.Error(t, err, "overflow must retain its error, not become a NULL result")
 	root := executor.(*FunctionExpressionExecutor)
-	require.Zero(t, root.resultVector.GetResultVector().GetNulls().GetBitmap().ExternalStorageCapacity())
-}
-
-func TestDecimal128ValidityMetadataFallback(t *testing.T) {
-	for _, shape := range []string{"cast-grouping", "multiply-prepared-json"} {
-		t.Run(shape, func(t *testing.T) {
-			proc, allocation, _ := dependentTestAllocation(t)
-			typ := types.New(types.T_decimal64, 15, 2)
-			input := batch.NewWithSize(2)
-			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			for side := range 2 {
-				input.Vecs[side] = vector.NewVec(typ)
-				appendValidityDecimal(t, proc, input.Vecs[side], 100)
-			}
-			input.SetRowCount(1)
-			col := func(i int32) *plan.Expr {
-				return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: i}}}
-			}
-			expression := bindTestFunction(t, proc, "*", col(0), col(1))
-			if shape == "cast-grouping" {
-				expression = bindTestCast(t, proc, 0, col(0), types.New(types.T_decimal128, 38, 2))
-				input.Vecs[0].GetGrouping().Add(0)
-			} else {
-				input.Vecs[1].SetPreparedJSONComparisonParam()
-			}
-			executor, err := NewExpressionExecutorWithAllocation(proc, expression, allocation)
-			require.NoError(t, err)
-			t.Cleanup(executor.Free)
-			out, err := executor.Eval(proc, []*batch.Batch{input}, nil)
-			require.NoError(t, err)
-			require.Positive(t, out.GetNulls().GetBitmap().ExternalStorageCapacity())
-		})
-	}
+	require.Zero(t, root.resultVector.GetResultVector().GetNulls().GetBitmap().CapWords())
 }
 
 func TestDecimal128ValidityQ17Predicate(t *testing.T) {
@@ -295,7 +263,7 @@ func TestDecimal128ValidityQ17Predicate(t *testing.T) {
 	average := aggexec.AvgReturnType([]types.Type{quantity})
 	input := batch.NewWithSize(2)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
-	input.Vecs[0], input.Vecs[1] = vector.NewVec(quantity), vector.NewVec(average)
+	input.Vecs[0], input.Vecs[1] = vector.NewVec(quantity, proc.Mp()), vector.NewVec(average, proc.Mp())
 	averageValue, err := types.ParseDecimal128("10", average.Width, average.Scale)
 	require.NoError(t, err)
 	for _, n := range []int64{120, -250, 0, 1234} {
@@ -320,7 +288,7 @@ func TestDecimal128ValidityQ17Predicate(t *testing.T) {
 	for _, child := range root.parameterExecutor {
 		value := child.(*FunctionExpressionExecutor).resultVector.GetResultVector()
 		require.Equal(t, types.T_decimal128, value.GetType().Oid)
-		require.Zero(t, value.GetNulls().GetBitmap().ExternalStorageCapacity())
+		require.Zero(t, value.GetNulls().GetBitmap().CapWords())
 	}
 	input.Vecs[1].SetNull(1)
 	out, err = executor.Eval(proc, []*batch.Batch{input}, nil)

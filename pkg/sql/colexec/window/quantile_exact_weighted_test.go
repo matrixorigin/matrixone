@@ -123,6 +123,7 @@ func TestWindowQuantileExactWeightedFullPartitionBroadcasts(t *testing.T) {
 	require.Equal(t, []int32{3, 3, 20, 20, 20}, got)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 }
 
@@ -196,6 +197,7 @@ func TestWindowQuantileExactWeightedRetainedResultSurvivesExecutorDestruction(t 
 	require.Nil(t, arg.ctr.fullPartitionResults)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 }
 
@@ -249,6 +251,7 @@ func TestWindowQuantileExactWeightedDistinctWindowAggregates(t *testing.T) {
 				result.Batch.Vecs[len(result.Batch.Vecs)-1])...)
 		}
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 		op.Free(proc, false, nil)
 		return got
 	}
@@ -323,5 +326,6 @@ func TestWindowQuantileExactWeightedLargePartitionHonorsCancellation(t *testing.
 	require.ErrorIs(t, err, context.Canceled)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	op.Free(proc, false, nil)
 }

@@ -15,6 +15,7 @@
 package batch
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -38,31 +39,39 @@ var (
 // it's the basic unit for data transmission in the computing layer of MatrixOne.
 //
 // this includes information such as
-// column names (Attrs), column data (Vecs), the number of rows (rowCount),
-// aggregation intermediate data (Aggs),
+// column data (Vecs), the number of rows (rowCount),
 // and some specific flags like Recursive, ShuffleIDX.
 //
-// offHeap is true means this batch was allocated outside mpool.
+// A batch carries no column names: names belong to whoever defines the
+// columns (the plan, a table definition, a workspace entry), and travel beside
+// the batch when an API needs them.
 type Batch struct {
 	// For recursive CTE, 1 is last batch, 2 is end of batch
 	Recursive  int32
 	ShuffleIDX int32 //used only in shuffle
-	// Attrs column name list, letter case: origin
-	Attrs []string
 	// Vecs col data
 	Vecs []*vector.Vector
 
-	ExtraBuf []byte
+	// extraBuf is an opaque payload carried with the batch (today: group's
+	// partial aggregate state). It is allocated from mp when mp is non-nil;
+	// with a nil mp it borrows memory the batch does not own.
+	extraBuf []byte
 
-	// row count of batch, to instead of old len(Zs).
+	// row count of batch, to instead of old len(Zs). For a selected batch it
+	// is the logical (selected) row count.
 	rowCount int
-	offHeap  bool
 
-	// allocationAccount is the destination selection for owned off-heap
-	// vectors created or reused by this batch. Alias vectors do not copy it.
-	allocationAccount *vector.AllocationAccountSelection
+	// selection, when non-nil, marks the physical rows that are the batch's
+	// logical rows (see selection.go). Its length is the vectors' physical
+	// row count. It points either at ownSel (the batch owns it) or at a
+	// bitmap borrowed from the producer of the batch's input.
+	selection *bitmap.Bitmap
+	// ownSel is the batch's own selection storage, reused for every batch it
+	// carries (OwnSelection) and released by Clean or FreeSelection.
+	ownSel bitmap.Bitmap
 
-	// extraBufMP owns ExtraBuf only when it was detached from an accounted
-	// off-heap buffer. Ordinary Go-heap ExtraBuf values leave this nil.
-	extraBufMP *mpool.MPool
+	// mp is the pool for the batch's own memory allocations; today that is
+	// only extraBuf. nil means the batch owns nothing from a pool, as for
+	// a view or a batch decoded without a pool.
+	mp *mpool.MPool
 }

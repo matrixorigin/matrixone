@@ -116,12 +116,10 @@ func TestAggArgumentArenaGrowthFailureIsTransactional(t *testing.T) {
 	account, err := registry.Open(128 << 10)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, 1, AllocationAccountSites{
-		VectorData:     1,
-		VectorArea:     2,
-		VectorNulls:    3,
-		VectorGrouping: 4,
-		ArgumentCount:  5,
-		ArgumentArena:  6,
+		VectorData:    1,
+		VectorArea:    2,
+		ArgumentCount: 5,
+		ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 
@@ -170,7 +168,7 @@ func TestVectorsUnmarshalFromReader(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, exec.GroupGrow(2))
 
-	v := vector.NewVec(param)
+	v := vector.NewVec(param, mp)
 	require.NoError(t, vector.AppendFixed(v, float64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(v, float64(3), false, mp))
 	require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v}))
@@ -238,7 +236,7 @@ func TestAggExecUnmarshalReplacesExistingState(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, results, 2)
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 	})
 }
@@ -279,13 +277,13 @@ func TestAggExecSpillDecodeUsesExactSourceCapacity(t *testing.T) {
 	results, err := destination.Flush()
 	require.NoError(t, err)
 	require.Equal(t, []int64{0, 0}, vector.MustFixedColNoTypeCheck[int64](results[0]))
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	destination.Free()
 	target.Free()
 
 	t.Run("fixed-max-plain", func(t *testing.T) {
 		f := newFixedMetadataPreflightFixture(t, AggIdOfMax, types.T_float64.ToType())
-		input := vector.NewVec(types.T_float64.ToType())
+		input := vector.NewVec(types.T_float64.ToType(), f.mp)
 		t.Cleanup(func() { input.Free(f.mp) })
 		require.NoError(t, vector.AppendFixedList(input, []float64{7, 4, 0, 9}, []bool{false, false, true, false}, f.mp))
 		require.NoError(t, f.exec.GroupGrow(3))
@@ -319,13 +317,11 @@ func TestAggExecSpillDecodeUsesExactSourceCapacity(t *testing.T) {
 		results, err := merged.Flush()
 		require.NoError(t, err)
 		require.Len(t, results, 1)
-		t.Cleanup(func() { results[0].Free(f.mp) })
+		t.Cleanup(func() { results[0].Free(results[0].MPool()) })
 		require.Equal(t, float64(7), vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
 		require.Equal(t, float64(9), vector.GetFixedAtNoTypeCheck[float64](results[0], 2))
 		for row := range 3 {
 			require.Equal(t, row == 1, results[0].IsNull(uint64(row)))
-			require.Equal(t, vector.PrepareParamNone, results[0].GetPrepareParamKindAt(row))
-			require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(row))
 		}
 	})
 }
@@ -530,7 +526,7 @@ func TestAggStateReadRejectsInconsistentAndTruncatedState(t *testing.T) {
 
 	t.Run("vector row count", func(t *testing.T) {
 		info := aggInfo{stateTypes: []types.Type{types.T_int64.ToType()}}
-		source := vector.NewVec(types.T_int64.ToType())
+		source := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(source, []int64{1, 2}, nil, mp))
 		var encoded bytes.Buffer
 		require.NoError(t, types.WriteInt32(&encoded, 1))
@@ -678,50 +674,4 @@ func TestAggStateInitSaveArgCleanup(t *testing.T) {
 		require.NotNil(t, ag.vecs)
 		ag.free(mp)
 	})
-}
-
-func TestGroupGrowReturnsPrepareParamSidecarOOM(t *testing.T) {
-	const poolCapacity = int64(1024 * 1024)
-	mp, err := mpool.NewMPool("group-grow-prepare-param", poolCapacity, mpool.NoFixed)
-	require.NoError(t, err)
-
-	input := vector.NewVec(types.T_int64.ToType())
-	exec := makeMinMaxExec(mp, AggIdOfMin, true, types.T_int64.ToType())
-	var filler []byte
-	defer func() {
-		if filler != nil {
-			mp.Free(filler)
-		}
-		input.Free(mp)
-		exec.Free()
-		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
-	}()
-
-	require.NoError(t, exec.GroupGrow(2))
-	require.NoError(t, vector.AppendFixedList(input, []int64{1, 2}, nil, mp))
-	require.NoError(t, input.SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
-		vector.PrepareParamInteger,
-		vector.PrepareParamFloat,
-	}, mp))
-	require.NoError(t, exec.BatchFill(0, []uint64{1, 2}, []*vector.Vector{input}))
-
-	remaining := poolCapacity - mp.CurrNB()
-	require.Greater(t, remaining, int64(1))
-	filler, err = mp.Alloc(int(remaining-1), true)
-	require.NoError(t, err)
-
-	var growErr error
-	require.NotPanics(t, func() {
-		growErr = exec.GroupGrow(1)
-	})
-	require.Error(t, growErr)
-	require.Equal(t, 2, exec.(*minMaxExecFixed[int64]).GetNumGroups())
-
-	// Capacity-only work retained by the failed attempt is reusable; removing
-	// the pressure lets the same logical grow complete exactly once.
-	mp.Free(filler)
-	filler = nil
-	require.NoError(t, exec.GroupGrow(1))
-	require.Equal(t, 3, exec.(*minMaxExecFixed[int64]).GetNumGroups())
 }

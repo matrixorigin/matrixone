@@ -32,8 +32,8 @@ import (
 func TestApplyPreparedMetadataToCatalogCache(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(
 		bat.Vecs[0], types.Rowid{}, false, mp))
 	require.NoError(t, vector.AppendFixed(
@@ -41,14 +41,14 @@ func TestApplyPreparedMetadataToCatalogCache(t *testing.T) {
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
 
-	protoBatch, err := batch.BatchToProtoBatch(bat)
+	encoded, err := batch.MarshalVectors(bat.Vecs)
 	require.NoError(t, err)
 	catalogCache := cache.NewCatalog()
 	applyToCatalogCache(catalogCache, &api.Entry{
 		EntryType:    api.Entry_Update,
 		DatabaseName: catalog.MO_CATALOG,
 		TableName:    catalog.MO_PUBS,
-		Bat:          protoBatch,
+		Bat:          api.NewEncodedBatch(encoded),
 	})
 
 	require.Equal(t,

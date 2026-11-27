@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -106,10 +105,9 @@ type clusterRowSpec struct {
 
 // issueRowSpec maps the deterministic issue dataset index to its row.
 // clusterVecOwner centralizes ownership of the original engine vectors backing
-// a synthetic replay batch. VectorToProtoVector only wraps their Data/Area and
-// PartitionState retains those aliasing views (cantFree), so the bytes can
-// only be returned by freeing the originals, after the state's readers have
-// finished. Registering with t.Cleanup covers failure paths as well.
+// a synthetic replay batch. The encoded replay input is a copy, so the
+// originals stay owned by the test and must be returned to the pool.
+// Registering with t.Cleanup covers failure paths as well.
 type clusterVecOwner struct {
 	pool *mpool.MPool
 	vecs []*vector.Vector
@@ -173,20 +171,20 @@ func clusterReplaySpecBatch(
 	tsBase int64,
 	rowIDBase uint32,
 	opts clusterReplayBatchOptions,
-) (*api.Batch, *objectio.Segmentid) {
+) ([]byte, []string, *objectio.Segmentid) {
 	t.Helper()
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	tenantVec := vector.NewVec(types.T_int32.ToType())
-	deviceVec := vector.NewVec(types.T_int32.ToType())
-	metricVec := vector.NewVec(types.T_int32.ToType())
-	eventTsVec := vector.NewVec(types.T_datetime.ToType())
-	valueVec := vector.NewVec(types.T_float64.ToType())
-	qualityVec := vector.NewVec(types.T_int16.ToType())
-	fakePkVec := vector.NewVec(types.T_uint64.ToType())
-	clusterVec := vector.NewVec(types.T_varchar.ToType())
-	shadowVec := vector.NewVec(types.T_int32.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	tenantVec := vector.NewVec(types.T_int32.ToType(), mp)
+	deviceVec := vector.NewVec(types.T_int32.ToType(), mp)
+	metricVec := vector.NewVec(types.T_int32.ToType(), mp)
+	eventTsVec := vector.NewVec(types.T_datetime.ToType(), mp)
+	valueVec := vector.NewVec(types.T_float64.ToType(), mp)
+	qualityVec := vector.NewVec(types.T_int16.ToType(), mp)
+	fakePkVec := vector.NewVec(types.T_uint64.ToType(), mp)
+	clusterVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	shadowVec := vector.NewVec(types.T_int32.ToType(), mp)
 	newClusterVecOwner(t, mp, rowIDVec, tsVec, tenantVec, deviceVec, metricVec,
 		eventTsVec, valueVec, qualityVec, fakePkVec, clusterVec, shadowVec)
 
@@ -229,26 +227,19 @@ func clusterReplaySpecBatch(
 		"value", "quality",
 		catalog.FakePrimaryKeyColName,
 	}
-	vecs := []api.Vector{
-		mustProtoVector(rowIDVec),
-		mustProtoVector(tsVec),
-		mustProtoVector(tenantVec),
-		mustProtoVector(deviceVec),
-		mustProtoVector(metricVec),
-		mustProtoVector(eventTsVec),
-		mustProtoVector(valueVec),
-		mustProtoVector(qualityVec),
-		mustProtoVector(fakePkVec),
+	vecs := []*vector.Vector{
+		rowIDVec, tsVec, tenantVec, deviceVec, metricVec,
+		eventTsVec, valueVec, qualityVec, fakePkVec,
 	}
 	if !opts.omitCompound {
 		attrs = append(attrs, clusterReplayCompoundName)
-		vecs = append(vecs, mustProtoVector(clusterVec))
+		vecs = append(vecs, clusterVec)
 	}
 	if opts.shadowPrefixUser {
 		attrs = append(attrs, "__mo_cbkey_usercopy")
-		vecs = append(vecs, mustProtoVector(shadowVec))
+		vecs = append(vecs, shadowVec)
 	}
-	return &api.Batch{Attrs: attrs, Vecs: vecs}, sid
+	return mustMarshalVectors(vecs...), attrs, sid
 }
 
 // clusterReplayInsertBatch builds the reported table's batch for the
@@ -260,7 +251,7 @@ func clusterReplayInsertBatch(
 	packer *types.Packer,
 	rowIdx []int,
 	tsBase int64,
-) (*api.Batch, *objectio.Segmentid) {
+) ([]byte, []string, *objectio.Segmentid) {
 	t.Helper()
 	specs := make([]clusterRowSpec, 0, len(rowIdx))
 	for _, i := range rowIdx {
@@ -269,12 +260,14 @@ func clusterReplayInsertBatch(
 	return clusterReplaySpecBatch(t, mp, packer, specs, tsBase, 0, clusterReplayBatchOptions{})
 }
 
-func mustProtoVector(v *vector.Vector) api.Vector {
-	ret, err := vector.VectorToProtoVector(v)
+// mustMarshalVectors encodes vecs as a logtail entry batch. The encoding is
+// a copy: the caller still owns, and must free, vecs.
+func mustMarshalVectors(vecs ...*vector.Vector) []byte {
+	data, err := batch.MarshalVectors(vecs)
 	if err != nil {
 		panic(err)
 	}
-	return ret
+	return data
 }
 
 var clusterScanRe = regexp.MustCompile(`scan:(\d+)`)
@@ -333,14 +326,14 @@ func readClusterReplay(
 	require.NoError(t, err)
 
 	out := batch.NewWithSize(1)
-	out.Attrs = []string{"value"}
-	out.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	outAttrs := []string{"value"}
+	out.Vecs[0] = vector.NewVec(types.T_float64.ToType(), mp)
 	defer out.Clean(mp)
 
 	readBatches := 0
 	for {
 		out.CleanOnlyData()
-		isEnd, err := reader.Read(qryCtx, out.Attrs, nil, mp, out)
+		isEnd, err := reader.Read(qryCtx, outAttrs, nil, mp, out)
 		require.NoError(t, err)
 		if isEnd {
 			break
@@ -393,8 +386,8 @@ func TestClusterReplayDataSourcePrunesToMatchingCandidates(t *testing.T) {
 	const perBatch = 2
 	for start := 0; start < totalRows; start += perBatch {
 		end := min(start+perBatch, totalRows)
-		bat, _ := clusterReplayInsertBatch(t, proc, mp, packer, idx[start:end], 1)
-		pState.HandleRowsInsert(ctx, bat, 6 /*fake pk seqnum*/, packer, mp, clusterReplayKey(22))
+		bat, batAttrs, _ := clusterReplayInsertBatch(t, proc, mp, packer, idx[start:end], 1)
+		pState.HandleRowsInsert(ctx, bat, batAttrs, 6 /*fake pk seqnum*/, packer, mp, clusterReplayKey(22))
 	}
 
 	// The reported predicate: prefix_in_range(cbkey, serial(0,0,0,'...00:03:00'),
@@ -502,10 +495,10 @@ func TestClusterReplayDataSourceReturnsAllDuplicateClusterKeys(t *testing.T) {
 
 	// Two rows share the cluster key (0,0,0,00:00:00); two differ.
 	dupIdx := make([]int, 2)
-	bat, _ := clusterReplayInsertBatch(t, proc, mp, packer, dupIdx, 1)
-	pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
-	other, _ := clusterReplayInsertBatch(t, proc, mp, packer, []int{5000, 6000}, 2)
-	pState.HandleRowsInsert(ctx, other, 6, packer, mp, clusterReplayKey(22))
+	bat, batAttrs, _ := clusterReplayInsertBatch(t, proc, mp, packer, dupIdx, 1)
+	pState.HandleRowsInsert(ctx, bat, batAttrs, 6, packer, mp, clusterReplayKey(22))
+	other, otherAttrs, _ := clusterReplayInsertBatch(t, proc, mp, packer, []int{5000, 6000}, 2)
+	pState.HandleRowsInsert(ctx, other, otherAttrs, 6, packer, mp, clusterReplayKey(22))
 
 	// Equality on the full compound key.
 	equalExpr := bindClusterPredicate(t, proc, "=",
@@ -541,29 +534,21 @@ func TestClusterReplayDataSourceDeletesAndSnapshots(t *testing.T) {
 	tableDef := clusterReplayTableDef()
 	pState := logtailreplay.NewPartitionState("", false, 22, false)
 
-	bat, sid := clusterReplayInsertBatch(t, proc, mp, packer, []int{0, 5000}, 1)
-	pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
+	bat, batAttrs, sid := clusterReplayInsertBatch(t, proc, mp, packer, []int{0, 5000}, 1)
+	pState.HandleRowsInsert(ctx, bat, batAttrs, 6, packer, mp, clusterReplayKey(22))
 
 	// Delete the device-0 row (ts ordinal 0) at a later commit time.
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	delTSVec := vector.NewVec(types.T_TS.ToType())
-	delPkVec := vector.NewVec(types.T_uint64.ToType())
-	tbRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	delTSVec := vector.NewVec(types.T_TS.ToType(), mp)
+	delPkVec := vector.NewVec(types.T_uint64.ToType(), mp)
+	tbRowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	newClusterVecOwner(t, mp, rowIDVec, delTSVec, delPkVec, tbRowIDVec)
 	rowID := objectio.NewRowid(objectio.NewBlockid(sid, 0, 0), 0)
 	vector.AppendFixed(rowIDVec, rowID, false, mp)
 	vector.AppendFixed(delTSVec, types.BuildTS(500, 0), false, mp)
 	vector.AppendFixed(delPkVec, uint64(0), false, mp)
 	vector.AppendFixed(tbRowIDVec, types.RandomRowid(), false, mp)
-	pState.HandleRowsDelete(ctx, &api.Batch{
-		Attrs: []string{"rowid", "time", "pk", "tbrowid"},
-		Vecs: []api.Vector{
-			mustProtoVector(rowIDVec),
-			mustProtoVector(delTSVec),
-			mustProtoVector(delPkVec),
-			mustProtoVector(tbRowIDVec),
-		},
-	}, packer, mp)
+	pState.HandleRowsDelete(ctx, mustMarshalVectors(rowIDVec, delTSVec, delPkVec, tbRowIDVec), packer, mp)
 
 	prefixExpr := bindClusterPredicate(t, proc, "prefix_eq",
 		clusterColExpr(), serialBound(t, proc, -1))
@@ -644,9 +629,9 @@ func TestClusterReplayDataSourceIgnoresUnrelatedPrefixedUserColumn(t *testing.T)
 			value:     value,
 		})
 	}
-	bat, _ := clusterReplaySpecBatch(t, mp, packer, specs, 1, 0,
+	bat, batAttrs, _ := clusterReplaySpecBatch(t, mp, packer, specs, 1, 0,
 		clusterReplayBatchOptions{shadowPrefixUser: true})
-	pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
+	pState.HandleRowsInsert(ctx, bat, batAttrs, 6, packer, mp, clusterReplayKey(22))
 
 	require.True(t, pState.ClusterIndexReadyFor(*clusterReplayKey(22)))
 
@@ -700,12 +685,12 @@ func TestClusterReplayDataSourceFallsBackAcrossSchemaEras(t *testing.T) {
 	for i := 50; i < 100; i++ {
 		clustered = append(clustered, specOf(i))
 	}
-	bat1, _ := clusterReplaySpecBatch(t, mp, packer, plain, 1, 0,
+	bat1, bat1Attrs, _ := clusterReplaySpecBatch(t, mp, packer, plain, 1, 0,
 		clusterReplayBatchOptions{omitCompound: true})
-	pState.HandleRowsInsert(ctx, bat1, 6, packer, mp, clusterReplayKey(22))
-	bat2, _ := clusterReplaySpecBatch(t, mp, packer, clustered, 1000, 50,
+	pState.HandleRowsInsert(ctx, bat1, bat1Attrs, 6, packer, mp, clusterReplayKey(22))
+	bat2, bat2Attrs, _ := clusterReplaySpecBatch(t, mp, packer, clustered, 1000, 50,
 		clusterReplayBatchOptions{})
-	pState.HandleRowsInsert(ctx, bat2, 6, packer, mp, clusterReplayKey(22))
+	pState.HandleRowsInsert(ctx, bat2, bat2Attrs, 6, packer, mp, clusterReplayKey(22))
 
 	require.False(t, pState.ClusterIndexReadyFor(*clusterReplayKey(22)))
 
@@ -750,9 +735,9 @@ func TestClusterReplayDataSourceMultiBatchDuplicates(t *testing.T) {
 		specs[i] = clusterRowSpec{device: 0, metric: 0, tsOrdinal: 0, value: 1}
 	}
 	for b := 0; b < batches; b++ {
-		bat, _ := clusterReplaySpecBatch(t, mp, packer, specs,
+		bat, batAttrs, _ := clusterReplaySpecBatch(t, mp, packer, specs,
 			int64(1+b*perBatch), uint32(b*perBatch), clusterReplayBatchOptions{})
-		pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
+		pState.HandleRowsInsert(ctx, bat, batAttrs, 6, packer, mp, clusterReplayKey(22))
 	}
 
 	equalExpr := bindClusterPredicate(t, proc, "=",
@@ -794,8 +779,8 @@ func TestClusterReplayDataSourceNULLClusterParts(t *testing.T) {
 		{device: 0, tsOrdinal: 1, value: 2, nullMetric: true},
 		{device: 0, tsOrdinal: 2, value: 3, nullMetric: true},
 	}
-	bat, _ := clusterReplaySpecBatch(t, mp, packer, specs, 1, 0, clusterReplayBatchOptions{})
-	pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
+	bat, batAttrs, _ := clusterReplaySpecBatch(t, mp, packer, specs, 1, 0, clusterReplayBatchOptions{})
+	pState.HandleRowsInsert(ctx, bat, batAttrs, 6, packer, mp, clusterReplayKey(22))
 
 	// Predicate on the first two parts only (tenant=0 AND device=0): the
 	// NULL-metric rows must be returned like any other row.
@@ -854,9 +839,9 @@ func TestMaterializedSnapshotClusterEntryCoversPruningAndFallback(t *testing.T) 
 				value:     float64(i/10 + 1),
 			})
 		}
-		bat, _ := clusterReplaySpecBatch(t, mp, packer, specs, 1, 0,
+		bat, batAttrs, _ := clusterReplaySpecBatch(t, mp, packer, specs, 1, 0,
 			clusterReplayBatchOptions{shadowPrefixUser: shadow})
-		pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
+		pState.HandleRowsInsert(ctx, bat, batAttrs, 6, packer, mp, clusterReplayKey(22))
 
 		filter := &readutil.MemPKFilter{}
 		clusterFilter, err := readutil.NewMemClusterKeyFilter(
@@ -939,9 +924,9 @@ func TestClusterOneReplayMatchNeverArmsExactHit(t *testing.T) {
 			value:     float64(i/10 + 1),
 		})
 	}
-	bat, _ := clusterReplaySpecBatch(t, mp, packer, specs, 1, 0, clusterReplayBatchOptions{})
+	bat, batAttrs, _ := clusterReplaySpecBatch(t, mp, packer, specs, 1, 0, clusterReplayBatchOptions{})
 	pState := logtailreplay.NewPartitionState("", false, 22, false)
-	pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
+	pState.HandleRowsInsert(ctx, bat, batAttrs, 6, packer, mp, clusterReplayKey(22))
 
 	expr := bindClusterPredicate(t, proc, "prefix_in_range",
 		clusterColExpr(),
@@ -976,8 +961,7 @@ func TestClusterOneReplayMatchNeverArmsExactHit(t *testing.T) {
 		memPKFilter:     filter,
 	}
 	out := batch.NewWithSize(1)
-	out.Attrs = []string{"value"}
-	out.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, ls.filterInMemCommittedInserts(
 		ctx, []types.Type{types.T_float64.ToType()}, []uint16{4}, mp, out))
 	require.Equal(t, 1, out.RowCount(), "exactly one replay row matches")
@@ -1090,16 +1074,16 @@ func TestMaterializedSnapshotTombstoneErrorCleansUp(t *testing.T) {
 	// cluster key; rows 3..9 carry other keys. Distinct blocks make each
 	// candidate's tombstone check observable.
 	const rows = 10
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	tenantVec := vector.NewVec(types.T_int32.ToType())
-	deviceVec := vector.NewVec(types.T_int32.ToType())
-	metricVec := vector.NewVec(types.T_int32.ToType())
-	eventTsVec := vector.NewVec(types.T_datetime.ToType())
-	valueVec := vector.NewVec(types.T_float64.ToType())
-	qualityVec := vector.NewVec(types.T_int16.ToType())
-	fakePkVec := vector.NewVec(types.T_uint64.ToType())
-	clusterVec := vector.NewVec(types.T_varchar.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	tenantVec := vector.NewVec(types.T_int32.ToType(), mp)
+	deviceVec := vector.NewVec(types.T_int32.ToType(), mp)
+	metricVec := vector.NewVec(types.T_int32.ToType(), mp)
+	eventTsVec := vector.NewVec(types.T_datetime.ToType(), mp)
+	valueVec := vector.NewVec(types.T_float64.ToType(), mp)
+	qualityVec := vector.NewVec(types.T_int16.ToType(), mp)
+	fakePkVec := vector.NewVec(types.T_uint64.ToType(), mp)
+	clusterVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	newClusterVecOwner(t, mp, rowIDVec, tsVec, tenantVec, deviceVec, metricVec,
 		eventTsVec, valueVec, qualityVec, fakePkVec, clusterVec)
 	sid := objectio.NewSegmentid()
@@ -1133,26 +1117,15 @@ func TestMaterializedSnapshotTombstoneErrorCleansUp(t *testing.T) {
 		vector.AppendFixed(fakePkVec, uint64(i), false, mp)
 		vector.AppendBytes(clusterVec, packer.Bytes(), false, mp)
 	}
-	pState.HandleRowsInsert(ctx, &api.Batch{
-		Attrs: []string{
+	pState.HandleRowsInsert(ctx,
+		mustMarshalVectors(rowIDVec, tsVec, tenantVec, deviceVec, metricVec,
+			eventTsVec, valueVec, qualityVec, fakePkVec, clusterVec),
+		[]string{
 			"rowid", "time",
 			"tenant_id", "device_id", "metric_id", "event_ts",
 			"value", "quality",
 			catalog.FakePrimaryKeyColName, clusterReplayCompoundName,
-		},
-		Vecs: []api.Vector{
-			mustProtoVector(rowIDVec),
-			mustProtoVector(tsVec),
-			mustProtoVector(tenantVec),
-			mustProtoVector(deviceVec),
-			mustProtoVector(metricVec),
-			mustProtoVector(eventTsVec),
-			mustProtoVector(valueVec),
-			mustProtoVector(qualityVec),
-			mustProtoVector(fakePkVec),
-			mustProtoVector(clusterVec),
-		},
-	}, 6, packer, mp, clusterReplayKey(22))
+		}, 6, packer, mp, clusterReplayKey(22))
 	require.True(t, pState.ClusterIndexReadyFor(*clusterReplayKey(22)))
 
 	// Equal keys surface newest version first: rows 2, 1, 0 in that order.

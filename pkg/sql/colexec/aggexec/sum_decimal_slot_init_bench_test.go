@@ -67,7 +67,7 @@ func BenchmarkDecimal64GroupedUpdates(b *testing.B) {
 			} else if tc.order == "const_null" {
 				input = vector.NewConstNull(param, tc.rows+2, mp)
 			} else {
-				input = vector.NewVec(param)
+				input = vector.NewVec(param, mp)
 			}
 			defer input.Free(mp)
 			if !input.IsConst() {

@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,9 +31,72 @@ import (
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLatestPartitionLookupSharesReaders(t *testing.T) {
+	key := [2]uint64{10, 42}
+	part := &logtailreplay.Partition{}
+	e := &Engine{partitions: map[[2]uint64]*logtailreplay.Partition{key: part}}
+	e.RLock()
+	locked, received := true, false
+	done := make(chan *logtailreplay.Partition, 1)
+	go func() { done <- e.GetOrCreateLatestPart(t.Context(), 7, key[0], key[1]) }()
+	defer func() {
+		if locked {
+			e.RUnlock()
+		}
+		if !received {
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("partition lookup did not exit")
+			}
+		}
+	}()
+	select {
+	case got := <-done:
+		received = true
+		require.Same(t, part, got)
+	case <-time.After(5 * time.Second):
+		t.Fatal("a cached partition lookup waited for another reader")
+	}
+	e.RUnlock()
+	locked = false
+	// A present nil is distinct from a missing entry and remains unchanged.
+	e.partitions[key] = nil
+	require.Nil(t, e.GetOrCreateLatestPart(t.Context(), 7, key[0], key[1]))
+}
+
+func TestLatestPartitionConcurrentCreationAndReuse(t *testing.T) {
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	const workers = 16
+	parts := make([]*logtailreplay.Partition, workers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range parts {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			parts[i] = e.GetOrCreateLatestPart(t.Context(), 7, 10, 42)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	require.NotNil(t, parts[0])
+	for _, part := range parts[1:] {
+		require.Same(t, parts[0], part)
+	}
+	e.Lock()
+	delete(e.partitions, [2]uint64{10, 42})
+	e.Unlock()
+	replacement := e.GetOrCreateLatestPart(t.Context(), 7, 10, 42)
+	require.NotSame(t, parts[0], replacement)
+	require.NotNil(t, parts[0].Snapshot(), "an existing borrower keeps its old partition alive")
+}
 
 // minimal mock cluster for tn handler wiring
 type mockCluster struct{}

@@ -123,7 +123,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 6, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, []types.Timestamp{types.UnixMicroToTimestamp(microsMaxSqlCalendar)},
@@ -137,7 +137,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 6, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 		defer vec.Free(proc.Mp())
 		err := mp.mapping(page, proc, vec)
 		require.Error(t, err)
@@ -152,7 +152,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 6, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 		defer vec.Free(proc.Mp())
 		err := mp.mapping(page, proc, vec)
 		require.Error(t, err)
@@ -167,7 +167,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 6, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, []types.Timestamp{types.UnixMicroToTimestamp(microsUtcHeadMinus12)},
@@ -181,7 +181,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("local_ts"), plan.Type{Id: int32(types.T_timestamp), Scale: 6, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 		defer vec.Free(proc.Mp())
 		err := mp.mapping(page, proc, vec)
 		require.Error(t, err)
@@ -196,7 +196,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("local_ts"), plan.Type{Id: int32(types.T_timestamp), Scale: 6, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t,
@@ -227,7 +227,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 					h.timeAssignment = true
 					mp := h.getMapper(f.Root().Column("c"), target)
 					require.NotNil(t, mp, "target %s", types.T(target.Id))
-					vec := vector.NewVec(types.New(types.T(target.Id), 0, target.Scale))
+					vec := vector.NewVec(types.New(types.T(target.Id), 0, target.Scale), proc.Mp())
 					err := mp.mapping(page, proc, vec)
 					if tc.reject {
 						require.Error(t, err, "target %s", types.T(target.Id))
@@ -261,7 +261,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_date), NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.T_date.ToType())
+		vec := vector.NewVec(types.T_date.ToType(), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, []types.Date{
@@ -277,7 +277,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_date), NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.T_date.ToType())
+		vec := vector.NewVec(types.T_date.ToType(), proc.Mp())
 		defer vec.Free(proc.Mp())
 		err := mp.mapping(page, proc, vec)
 		require.Error(t, err)
@@ -293,7 +293,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_date), NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.T_date.ToType())
+		vec := vector.NewVec(types.T_date.ToType(), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, []types.Date{types.DaysFromUnixEpochToDate(days2024)},
@@ -308,7 +308,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_datetime), Scale: 6, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_datetime, 0, 6))
+		vec := vector.NewVec(types.New(types.T_datetime, 0, 6), proc.Mp())
 		defer vec.Free(proc.Mp())
 		err := mp.mapping(page, proc, vec)
 		require.Error(t, err)
@@ -323,7 +323,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 6, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 		defer vec.Free(proc.Mp())
 		err := mp.mapping(page, proc, vec)
 		require.Error(t, err)
@@ -338,7 +338,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 6, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 		defer vec.Free(proc.Mp())
 		err := mp.mapping(page, proc, vec)
 		require.Error(t, err)
@@ -354,7 +354,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 6, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, []types.Timestamp{types.UnixMicroToTimestamp(math.MaxInt64 / 1000)},
@@ -375,13 +375,13 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 
 		// The dictionary holds an out-of-range entry, but the sliced page
 		// never references it: only consumed logical rows may fail.
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 		require.NoError(t, mp.mapping(page.Slice(0, 1), proc, vec))
 		require.Equal(t, []types.Timestamp{types.UnixMicroToTimestamp(good)},
 			vector.MustFixedColWithTypeCheck[types.Timestamp](vec))
 		vec.Free(proc.Mp())
 
-		vec2 := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		vec2 := vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 		err := mp.mapping(page, proc, vec2)
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -401,7 +401,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 6})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, 2, vec.Length())
@@ -416,7 +416,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 0, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0), proc.Mp())
 		defer vec.Free(proc.Mp())
 		err := mp.mapping(page, proc, vec)
 		require.Error(t, err)
@@ -431,7 +431,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 0, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		want := types.UnixMicroToTimestamp(microsMaxSqlCalendar).TruncateToScaleWithoutRounding(0)
@@ -447,7 +447,7 @@ func TestParquetLoadTemporalBounds(t *testing.T) {
 		h.timeAssignment = false
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 0, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		// External-table scans keep the existing raw mapping: no bounds and
@@ -493,7 +493,7 @@ func TestParquetLoadTemporalScaleAssignment(t *testing.T) {
 				mp := h.getMapper(f.Root().Column("c"),
 					plan.Type{Id: int32(target.oid), Scale: target.scale, NotNullable: true})
 				require.NotNil(t, mp)
-				vec := vector.NewVec(types.New(target.oid, 0, target.scale))
+				vec := vector.NewVec(types.New(target.oid, 0, target.scale), proc.Mp())
 				defer vec.Free(proc.Mp())
 				require.NoError(t, mp.mapping(page, proc, vec))
 				require.Equal(t, len(offsets), vec.Length())
@@ -538,7 +538,7 @@ func TestParquetLoadTemporalScaleAssignment(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 0, NotNullable: true})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		want := make([]types.Timestamp, 0, len(offsets))
@@ -561,7 +561,7 @@ func TestParquetLoadTemporalScaleAssignment(t *testing.T) {
 		h.timeAssignment = true
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 0})
 		require.NotNil(t, mp)
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0), proc.Mp())
 		defer vec.Free(proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, 3, vec.Length())

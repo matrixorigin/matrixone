@@ -650,3 +650,9 @@ func TestReclaimableCgroupCache(t *testing.T) {
 	_, ok := reclaimableCgroupCache(filepath.Join(t.TempDir(), "absent.stat"))
 	require.False(t, ok)
 }
+
+func TestProcessResidentMemory(t *testing.T) {
+	resident, ok := ProcessResidentMemory()
+	require.True(t, ok)
+	require.NotZero(t, resident)
+}

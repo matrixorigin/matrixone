@@ -24,6 +24,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -51,6 +53,33 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVisibleObjectCountAtSnapshot(t *testing.T) {
+	tbl, _ := newViewPathTxnTable(t) // snapshot at physical time 100
+	ctx := t.Context()
+	state, publish := tbl.getTxn().engine.GetOrCreateLatestPart(ctx, uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId).MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	for _, obj := range []struct {
+		tombstone        bool
+		created, deleted int64
+	}{
+		{false, 80, 0}, {false, 95, 0}, {false, 101, 0}, {false, 70, 99},
+		{true, 90, 0}, {true, 101, 0}, {true, 80, 99},
+	} {
+		id := types.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsSize(stats, 128))
+		entry := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: types.BuildTS(obj.created, 0)}
+		if obj.deleted > 0 {
+			entry.DeleteTime = types.BuildTS(obj.deleted, 0)
+		}
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, entry, obj.tombstone))
+	}
+	publish()
+	count, err := (&txnTableDelegate{origin: tbl}).VisibleObjectCount(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 3, count, "two visible data objects and one visible tombstone")
+}
 
 func TestTxnTableWriteTableName(t *testing.T) {
 	tbl := &txnTable{tableId: catalog.MO_COLUMNS_ID, tableName: catalog.MO_COLUMNS}
@@ -95,9 +124,10 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			info.SetMetaLocation(location)
 			stats := objectio.NewObjectStats()
 			require.NoError(t, objectio.SetObjectStatsLocation(stats, location))
-			bat := batch.New([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
-			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
-			bat.SetVector(1, vector.NewVec(types.T_varchar.ToType()))
+			bat := batch.NewWithSize(2)
+			batAttrs := []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp()))
+			bat.SetVector(1, vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], objectio.EncodeBlockInfo(&info), false, txn.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[1], stats.Marshal(), false, txn.proc.Mp()))
 			bat.SetRowCount(1)
@@ -107,7 +137,7 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			if tc.authorized {
 				ctx = context.WithValue(ctx, defines.MoColumnsUpdateKey{}, true)
 			}
-			require.NoError(t, tbl.Write(ctx, bat))
+			require.NoError(t, tbl.Write(ctx, bat, batAttrs))
 			require.Len(t, txn.writes, 1)
 			require.Equal(t, tc.want, txn.writes[0].tableName)
 			summary, ok := txn.cnObjsSummary[tc.tableID][*stats.ObjectName().ObjectId()]
@@ -116,17 +146,17 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			require.Equal(t, tc.tableID, summary.tableId)
 			require.Equal(t, tc.want, summary.tbName)
 			if tc.want == catalog.MO_COLUMNS_UPDATE {
-				protoBat, err := batch.BatchToProtoBatch(txn.writes[0].bat)
+				encoded, err := batch.MarshalVectors(txn.writes[0].bat.Vecs)
 				require.NoError(t, err)
 				req, remaining, err := catalog.ParseEntryList([]*api.Entry{{
 					EntryType: api.Entry_Insert, DatabaseId: catalog.MO_CATALOG_ID,
-					TableId: catalog.MO_COLUMNS_ID, TableName: tc.want, Bat: protoBat,
+					TableId: catalog.MO_COLUMNS_ID, TableName: tc.want, Attrs: batAttrs, Bat: api.NewEncodedBatch(encoded),
 				}})
 				require.NoError(t, err)
 				require.Equal(t, tc.want, req.(*api.Entry).TableName)
 				require.Empty(t, remaining)
 			}
-			txn.writes[0].bat.Clean(txn.proc.Mp())
+			txn.writes[0].bat.Clean(txn.workspaceMP())
 		})
 	}
 }
@@ -136,7 +166,6 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 		t.Run(fmt.Sprintf("skip-transfer=%v", skipTransfer), func(t *testing.T) {
 			txn := newTransactionWithActivePKTableForTest(t, "pk")
 			txn.tnStores = []DNStore{{}}
-			txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 			txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false).AnyTimes()
 
 			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
@@ -147,8 +176,9 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 
 			stats := objectio.NewObjectStats()
 			require.NoError(t, objectio.SetObjectStatsLocation(stats, objectio.NewRandomLocation(1, 1)))
-			bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
-			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+			bat := batch.NewWithSize(1)
+			batAttrs := []string{catalog.ObjectMeta_ObjectStats}
+			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats.Marshal(), false, txn.proc.Mp()))
 			bat.SetRowCount(1)
 			defer bat.Clean(txn.proc.Mp())
@@ -157,19 +187,20 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			if skipTransfer {
 				ctx = context.WithValue(ctx, defines.SkipTransferKey{}, true)
 			}
-			require.NoError(t, tbl.Delete(ctx, bat, ""))
+			require.NoError(t, tbl.Delete(ctx, bat, batAttrs, ""))
 			require.Len(t, txn.writes, 1)
 			require.Equal(t, catalog.MO_COLUMNS_UPDATE, txn.writes[0].tableName)
 			require.Equal(t, skipTransfer, txn.writes[0].skipTransfer)
 
-			protoBat, err := batch.BatchToProtoBatch(txn.writes[0].bat)
+			encoded, err := batch.MarshalVectors(txn.writes[0].bat.Vecs)
 			require.NoError(t, err)
 			req, remaining, err := catalog.ParseEntryList([]*api.Entry{{
 				EntryType:  api.Entry_Delete,
 				DatabaseId: catalog.MO_CATALOG_ID,
 				TableId:    catalog.MO_COLUMNS_ID,
 				TableName:  txn.writes[0].tableName,
-				Bat:        protoBat,
+				Attrs:      batAttrs,
+				Bat:        api.NewEncodedBatch(encoded),
 			}})
 			require.NoError(t, err)
 			require.Equal(t, txn.writes[0].tableName, req.(*api.Entry).TableName)
@@ -179,10 +210,11 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 				DatabaseId: catalog.MO_CATALOG_ID,
 				TableId:    catalog.MO_COLUMNS_ID,
 				TableName:  catalog.MO_COLUMNS,
-				Bat:        protoBat,
+				Attrs:      batAttrs,
+				Bat:        api.NewEncodedBatch(encoded),
 			}})
 			require.ErrorContains(t, err, "bad write format")
-			txn.writes[0].bat.Clean(txn.proc.Mp())
+			txn.writes[0].bat.Clean(txn.workspaceMP())
 		})
 	}
 }
@@ -256,8 +288,8 @@ func makeBatchForTest(
 	mp *mpool.MPool,
 	ints ...int64,
 ) *batch.Batch {
-	bat := batch.New([]string{"a"})
-	vec := vector.NewVec(types.T_int64.ToType())
+	bat := batch.NewWithSize(1)
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, n := range ints {
 		vector.AppendFixed(vec, n, false, mp)
 	}
@@ -305,7 +337,7 @@ func insertCatalogTableForResetTest(
 	}, txn.proc.Mp(), packer)
 	require.NoError(t, err)
 	defer bat.Clean(txn.proc.Mp())
-	_, err = fillRandomRowidAndZeroTs(bat, txn.proc.Mp())
+	_, _, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, txn.proc.Mp())
 	require.NoError(t, err)
 	eng.GetLatestCatalogCache().InsertTable(bat)
 }
@@ -568,23 +600,17 @@ func TestPrimaryKeysMayBeModifiedWaitsForSubscriptionData(t *testing.T) {
 	bat := makeBatchForTest(mp, 7)
 	defer bat.Clean(mp)
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer rowIDVec.Free(mp)
 	defer tsVec.Free(mp)
 	defer pkVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(rowIDVec, types.RandomRowid(), false, mp))
 	require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(15, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, mp))
-	insert := &api.Batch{
-		Attrs: []string{"rowid", "time", "pk"},
-		Vecs: []api.Vector{
-			mustVectorToProtoForMaterializedSnapshotTest(t, rowIDVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, tsVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, pkVec),
-		},
-	}
+	insert := mustMarshalVectors(rowIDVec, tsVec, pkVec)
+	insertAttrs := []string{"rowid", "time", "pk"}
 
 	eng.pClient.SetSubscribeState(10, 42, Subscribing)
 	part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
@@ -596,7 +622,7 @@ func TestPrimaryKeysMayBeModifiedWaitsForSubscriptionData(t *testing.T) {
 		packer := types.NewPacker()
 		defer packer.Close()
 		state, done := part.MutateState()
-		state.HandleRowsInsert(context.Background(), insert, 0, packer, mp)
+		state.HandleRowsInsert(context.Background(), insert, insertAttrs, 0, packer, mp)
 		done()
 		eng.pClient.SetSubscribeState(10, 42, Subscribed)
 	}()
@@ -676,28 +702,93 @@ func TestPrimaryKeysMayBeModifiedSkipsReadinessForEmptyKeys(t *testing.T) {
 	require.False(t, changed, "an empty key set cannot conflict even while the table is rebuilding")
 }
 
+type pkReadinessWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *pkReadinessWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
 func TestPrimaryKeysMayBeModifiedHonorsPendingTableApply(t *testing.T) {
-	tbl, eng := newPrimaryKeyCheckTableForTest(t)
-	mp := tbl.proc.Load().Mp()
-	bat := makeBatchForTest(mp, 7)
-	defer bat.Clean(mp)
+	for _, name := range []string{"apply", "cancel"} {
+		t.Run(name, func(t *testing.T) {
+			tbl, eng := newPrimaryKeyCheckTableForTest(t)
+			mp := tbl.proc.Load().Mp()
+			bat := makeBatchForTest(mp, 7)
+			defer bat.Clean(mp)
 
-	from := types.BuildTS(10, 0)
-	to := types.BuildTS(20, 0)
-	eng.pClient.SetSubscribeState(10, 42, Subscribed)
-	eng.pClient.subscribed.setTablePendingUpdate(10, 42, to.ToTimestamp())
+			from := types.BuildTS(10, 0)
+			to := types.BuildTS(20, 0)
+			eng.pClient.SetSubscribeState(10, 42, Subscribed)
+			eng.pClient.subscribed.setTablePendingUpdate(10, 42, to.ToTimestamp())
+			part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
 
-	part := eng.GetOrCreateLatestPart(context.Background(), 1, 10, 42)
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		state, done := part.MutateState()
-		state.UpdateAppliedTo(to.Prev())
-		done()
-	}()
-
-	changed, err := tbl.PrimaryKeysMayBeModified(context.Background(), from, to, bat, 0, -1)
-	require.NoError(t, err)
-	require.False(t, changed, "the PK check must wait for the pending table update before proving no change")
+			base, cancel := context.WithCancel(context.Background())
+			waiting := &pkReadinessWaitContext{Context: base, waiting: make(chan struct{})}
+			observation := &resource.LockReadObservation{}
+			ctx := resource.ContextWithLockReadPK(waiting, observation)
+			type result struct {
+				changed bool
+				err     error
+			}
+			done := make(chan result, 1)
+			received := false
+			go func() {
+				start := observation.Start()
+				changed, err := tbl.PrimaryKeysMayBeModified(ctx, from, to, bat, 0, -1)
+				observation.Finish(ctx, resource.LockReadPKCheck, start, err)
+				done <- result{changed, err}
+			}()
+			defer func() {
+				cancel()
+				if !received {
+					<-done
+				}
+			}()
+			select {
+			case <-waiting.waiting:
+			case <-time.After(time.Second):
+				t.Fatal("PK readiness did not enter the pending wait")
+			}
+			waitedAt := time.Now()
+			releasedAt := time.Now()
+			if name == "cancel" {
+				cancel()
+			} else {
+				state, applied := part.MutateState()
+				state.UpdateAppliedTo(to.Prev())
+				applied()
+			}
+			var got result
+			select {
+			case got = <-done:
+				received = true
+			case <-time.After(time.Second):
+				t.Fatal("PK readiness did not finish")
+			}
+			root := resource.NewRoot(resource.ConnExternal)
+			root.MergeLockRead(observation)
+			_, snapshot := root.SealWithLockRead(0)
+			d := snapshot.Diagnostic(uuid.Nil, 1, got.err != nil)
+			require.False(t, got.changed)
+			require.False(t, d.RemotePKSubstagesUnavailable)
+			require.GreaterOrEqual(t, d.PKCheckNS, d.PKReadinessNS)
+			require.GreaterOrEqual(t, d.PKReadinessNS, uint64(releasedAt.Sub(waitedAt)))
+			if name == "cancel" {
+				require.ErrorIs(t, got.err, context.Canceled)
+				require.Equal(t, "pk_readiness", d.LastIncomplete)
+				require.True(t, snapshot.Qualifies(0, time.Second))
+			} else {
+				require.NoError(t, got.err)
+				require.Empty(t, d.LastIncomplete)
+				require.False(t, snapshot.Qualifies(0, time.Second))
+			}
+		})
+	}
 }
 
 func TestPrimaryKeysMayBeModifiedForTableCreatedInTxn(t *testing.T) {
@@ -869,6 +960,7 @@ func BenchmarkTxnTableInsert(b *testing.B) {
 		err := table.Write(
 			ctx,
 			makeBatchForTest(mp, i),
+			[]string{"a"},
 		)
 		assert.Nil(b, err)
 	}
@@ -882,8 +974,8 @@ func TestWorkspaceInsertRowEstimate(t *testing.T) {
 	other := batch.NewWithSize(0)
 	other.SetRowCount(500)
 	meta := batch.NewWithSize(1)
-	meta.Attrs = []string{catalog.ObjectMeta_ObjectStats}
-	meta.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	metaAttrs := []string{catalog.ObjectMeta_ObjectStats}
+	meta.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp())
 	t.Cleanup(func() { meta.Clean(txn.proc.Mp()) })
 	for _, rows := range []uint32{8192, 1844} {
 		stats := objectio.NewObjectStats()
@@ -895,7 +987,7 @@ func TestWorkspaceInsertRowEstimate(t *testing.T) {
 		{typ: INSERT, databaseId: 7, tableId: 42, bat: mem},
 		{typ: INSERT, databaseId: 7, tableId: 43, bat: other},
 		{typ: DELETE, databaseId: 7, tableId: 42, bat: mem},
-		{typ: INSERT, databaseId: 7, tableId: 42, bat: meta, fileName: "object"},
+		{typ: INSERT, databaseId: 7, tableId: 42, bat: meta, attrs: metaAttrs, fileName: "object"},
 	}
 	txn.snapshotWriteOffset.Store(0)
 	require.Equal(t, float64(10041), tbl.workspaceInsertRowEstimate(),
@@ -913,9 +1005,9 @@ func TestWorkspaceInsertRowEstimate(t *testing.T) {
 	txn.Unlock()
 	require.Zero(t, got, "read-only fast path neither locks nor scans")
 	txn.readOnly.Store(false)
-	meta.Attrs[0] = "wrong_attribute"
+	txn.writes[3].attrs = []string{"wrong_attribute"}
 	require.Equal(t, float64(^uint64(0)), tbl.workspaceInsertRowEstimate(), "missing object metadata cannot leave a partial low bound")
-	meta.Attrs[0] = catalog.ObjectMeta_ObjectStats
+	txn.writes[3].attrs = metaAttrs
 	meta.SetRowCount(3)
 	require.Equal(t, float64(^uint64(0)), tbl.workspaceInsertRowEstimate(), "incomplete metadata cannot leave a partial low bound")
 }
@@ -982,15 +1074,15 @@ func TestPartitionRowEstimate(t *testing.T) {
 	require.Zero(t, rows)
 	mp := mpool.MustNew("transient-stat-test")
 	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{"v"}
+	batAttrs := []string{"v"}
 	bat.Vecs[0] = testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil, mp)
 	bat.SetRowCount(3)
 	defer bat.Clean(mp)
-	insert, err := fillRandomRowidAndZeroTs(bat, mp)
+	insert, insertAttrs, err := fillRandomRowidAndZeroTs(bat, batAttrs, mp)
 	require.NoError(t, err)
 	packer := types.NewPacker()
 	defer packer.Close()
-	state.HandleRowsInsert(context.Background(), insert, 0, packer, mp)
+	state.HandleRowsInsert(context.Background(), insert, insertAttrs, 0, packer, mp)
 	rows, err = partitionRowEstimate(state, types.MaxTs())
 	require.NoError(t, err)
 	require.Equal(t, float64(3), rows)
@@ -1014,9 +1106,9 @@ func TestPartitionRowEstimate(t *testing.T) {
 func TestReplayRowColumnSizeIncludesPhysicalRowID(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	idVec := vector.NewVec(types.T_int64.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer rowIDVec.Free(mp)
 	defer tsVec.Free(mp)
 	defer idVec.Free(mp)
@@ -1026,14 +1118,7 @@ func TestReplayRowColumnSizeIncludesPhysicalRowID(t *testing.T) {
 	state := logtailreplay.NewPartitionState("test", false, 42, false)
 	packer := types.NewPacker()
 	defer packer.Close()
-	state.HandleRowsInsert(context.Background(), &api.Batch{
-		Attrs: []string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "id"},
-		Vecs: []api.Vector{
-			mustVectorToProtoForMaterializedSnapshotTest(t, rowIDVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, tsVec),
-			mustVectorToProtoForMaterializedSnapshotTest(t, idVec),
-		},
-	}, 0, packer, mp)
+	state.HandleRowsInsert(context.Background(), mustMarshalVectors(rowIDVec, tsVec, idVec), []string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "id"}, 0, packer, mp)
 	iter := state.NewRowsIter(types.MaxTs(), nil, false)
 	defer iter.Close()
 	require.True(t, iter.Next())
@@ -1163,12 +1248,16 @@ func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
 			workspace := newTransactionWithActivePKTableForTest(t, "pk")
 			op := workspace.op.(*mock_frontend.MockTxnOperator)
 			op.EXPECT().IsSnapOp().Return(false).AnyTimes()
+			op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 			workspace.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
 			table := workspace.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
 			workspace.tableOps.addCreatedInTxn(table.tableId, 0)
 			original := &planpb.CheckDef{Name: "tbl_chk_1", OriginSql: "false", Check: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Bval{Bval: false}}}}}
 			table.extraInfo = &api.SchemaExtra{Checks: []*planpb.CheckDef{original}, AutoIncrEpoch: 9, DefaultCharset: uint32(types.CharsetUTF8MB4Bin)}
-			table.defs = engine.PlanColsToExeCols([]*planpb.ColDef{{Name: "pk", Typ: planpb.Type{Id: int32(types.T_int64)}}})
+			sourceDefs := engine.PlanColsToExeCols([]*planpb.ColDef{{Name: "pk", Typ: planpb.Type{Id: int32(types.T_int64)}}})
+			reconstructed := newTxnTableWithItem(table.db, cache.TableItem{Name: "tbl", Defs: sourceDefs}, workspace.proc, table.eng)
+			table.defs = reconstructed.defs
+			originalVersion := table.version
 			replacement := &planpb.TableDef{Name: "tbl", Cols: []*planpb.ColDef{{Name: "pk", Typ: planpb.Type{Id: int32(types.T_int64)}}}, DefaultCharset: uint32(types.CharsetUTF8)}
 			if kind != "clear" {
 				replacement.Checks = []*planpb.CheckDef{proto.Clone(original).(*planpb.CheckDef)}
@@ -1232,13 +1321,97 @@ func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
 			}
 			op.EXPECT().EnterRollbackStmt()
 			op.EXPECT().ExitRollbackStmt()
+			// A catalog-backed ALTER can advance the version before a later
+			// operation fails; rollback must restore the same generation.
+			table.version++
+			table.constraint = []byte{1}
 			require.NoError(t, workspace.RollbackLastStatement(context.Background()))
 			require.Empty(t, workspace.restoreTxnTableFunc)
 			require.Equal(t, uint32(types.CharsetUTF8MB4Bin), table.extraInfo.DefaultCharset)
 			require.Equal(t, uint32(9), table.extraInfo.AutoIncrEpoch)
 			require.Equal(t, "tbl", table.tableName)
+			require.Equal(t, originalVersion, table.version)
+			require.Nil(t, table.constraint)
+			columns, err := table.TableColumns(context.Background())
+			require.NoError(t, err)
+			require.Len(t, columns, 1)
+			require.Equal(t, "pk", columns[0].Name)
 			require.Len(t, table.GetTableDef(context.Background()).Checks, 1)
 			require.True(t, proto.Equal(original, table.GetTableDef(context.Background()).Checks[0]))
 		})
 	}
+}
+
+func TestRefreshTableDefExpressionIsolation(t *testing.T) {
+	ctx := context.Background()
+	attr := &engine.AttributeDef{Attr: engine.Attribute{Name: "a", Default: &planpb.Default{Expr: &planpb.Expr{}, OriginString: "default"}, OnUpdate: &planpb.OnUpdate{Expr: &planpb.Expr{}, OriginString: "update"}, GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{}, OriginString: "generated"}}}
+	defs := []engine.TableDef{attr}
+	first := &txnTable{db: &txnDatabase{}, defs: defs}
+	second := &txnTable{db: &txnDatabase{}, defs: defs}
+	first.refreshTableDef(ctx)
+	old := first.GetTableDef(ctx).Cols[0]
+	other := second.GetTableDef(ctx).Cols[0]
+	first.refreshTableDef(ctx)
+	current := first.GetTableDef(ctx).Cols[0]
+	old.Default.Expr.Typ.Width = 1
+	old.OnUpdate.Expr.Typ.Width = 2
+	old.GeneratedCol.Expr.Typ.Width = 3
+	for _, col := range []*planpb.ColDef{current, other} {
+		require.Zero(t, col.Default.Expr.Typ.Width)
+		require.Zero(t, col.OnUpdate.Expr.Typ.Width)
+		require.Zero(t, col.GeneratedCol.Expr.Typ.Width)
+	}
+	require.Zero(t, attr.Attr.Default.Expr.Typ.Width)
+	require.Zero(t, attr.Attr.OnUpdate.Expr.Typ.Width)
+	require.Zero(t, attr.Attr.GeneratedCol.Expr.Typ.Width)
+	exposed, err := first.TableDefs(ctx)
+	require.NoError(t, err)
+	for _, def := range exposed {
+		if a, ok := def.(*engine.AttributeDef); ok {
+			a.Attr.Default.Expr.Typ.Width = 4
+			a.Attr.OnUpdate.Expr.Typ.Width = 5
+			a.Attr.GeneratedCol.Expr.Typ.Width = 6
+		}
+	}
+	require.Zero(t, attr.Attr.Default.Expr.Typ.Width)
+	require.Zero(t, attr.Attr.OnUpdate.Expr.Typ.Width)
+	require.Zero(t, attr.Attr.GeneratedCol.Expr.Typ.Width)
+}
+
+// A borrowed catalog generation must survive a transaction-local DDL and its
+// rollback while another transaction still holds the old planner.
+func TestBorrowedSchemaReaderAcrossAlterRollback(t *testing.T) {
+	workspace := newTransactionWithActivePKTableForTest(t, "pk")
+	op := workspace.op.(*mock_frontend.MockTxnOperator)
+	op.EXPECT().IsSnapOp().Return(false).AnyTimes()
+	op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	workspace.deletedBlocks = &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)}
+	base := workspace.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	workspace.tableOps.addCreatedInTxn(base.tableId, 0)
+	typ := types.T_int64.ToType()
+	wire, err := typ.Marshal()
+	require.NoError(t, err)
+	item := cache.TableItem{Name: "tbl", Id: 42, Version: 1, ExtraInfo: &api.SchemaExtra{}}
+	cache.InitTableItemWithColumns(&item, cache.Columns{{Name: "pk", Num: 1, Typ: wire}, {Name: "other", Num: 2, Typ: wire}})
+	reader := newTxnTableWithItem(base.db, item, workspace.proc, base.eng)
+	writer := newTxnTableWithItem(base.db, item, workspace.proc, base.eng)
+	ctx := context.Background()
+	old := reader.GetTableDef(ctx)
+	require.Same(t, old, writer.GetTableDef(ctx))
+	private := reader.CopyTableDef(ctx)
+	private.Cols[0].Name = "private"
+	require.Equal(t, "pk", old.Cols[0].Name)
+	replacement := &planpb.TableDef{Name: "tbl", Cols: []*planpb.ColDef{{Name: "renamed", Typ: planpb.Type{Id: int32(types.T_int64)}}, {Name: "other", Typ: planpb.Type{Id: int32(types.T_int64)}}}}
+	req := api.NewGuardedReplaceDefReq(7, 42, writer.version, 1, 1, 1, replacement)
+	// The missing account produces a deterministic failure after local publication.
+	_, wantErr := defines.GetAccountId(ctx)
+	require.EqualError(t, writer.AlterTable(ctx, nil, []*api.AlterTableReq{req}), wantErr.Error())
+	require.Equal(t, "pk", old.Cols[0].Name)
+	require.Equal(t, "other", old.Cols[1].Name)
+	require.Same(t, old, reader.GetTableDef(ctx))
+	op.EXPECT().EnterRollbackStmt()
+	op.EXPECT().ExitRollbackStmt()
+	require.NoError(t, workspace.RollbackLastStatement(ctx))
+	require.Same(t, old, writer.GetTableDef(ctx))
+	require.Equal(t, "pk", writer.GetTableDef(ctx).Cols[0].Name)
 }

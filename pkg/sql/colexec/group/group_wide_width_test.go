@@ -45,7 +45,7 @@ func wideWidthInput(t *testing.T, proc *process.Process, keys []declaredGroupKey
 	t.Helper()
 	input := batch.NewWithSize(len(keys))
 	for column, key := range keys {
-		input.Vecs[column] = vector.NewVec(types.New(key.typ, key.width, 0))
+		input.Vecs[column] = vector.NewVec(types.New(key.typ, key.width, 0), proc.Mp())
 	}
 	owned := true
 	defer func() {
@@ -128,12 +128,10 @@ func TestGroupHashWideDeclaredWidths(t *testing.T) {
 	hugeNullable := declaredGroupKey{typ: types.T_text, width: math.MaxInt32}
 	hugeNotNull := declaredGroupKey{typ: types.T_text, width: math.MaxInt32, notNullable: true}
 	for _, test := range []struct {
-		name       string
-		keys       []declaredGroupKey
-		remoteV77  bool
-		wantType   int32
-		wantWidth  int32
-		wantLegacy bool
+		name      string
+		keys      []declaredGroupKey
+		wantType  int32
+		wantWidth int32
 	}{
 		{name: "two-nullable-longtext", keys: []declaredGroupKey{hugeNullable, hugeNullable}, wantType: HStr, wantWidth: math.MaxInt32},
 		{name: "two-not-null-longtext", keys: []declaredGroupKey{hugeNotNull, hugeNotNull}, wantType: HStr, wantWidth: math.MaxInt32},
@@ -141,19 +139,9 @@ func TestGroupHashWideDeclaredWidths(t *testing.T) {
 		{name: "real-no-group-by", wantType: H0, wantWidth: 0},
 		{name: "fixed-eight-byte-boundary", keys: []declaredGroupKey{{typ: types.T_int32, notNullable: true}, {typ: types.T_int32, notNullable: true}}, wantType: H8, wantWidth: 8},
 		{name: "global-nullability-eleven", keys: []declaredGroupKey{{typ: types.T_int16, notNullable: true}, {typ: types.T_int16, notNullable: true}, {typ: types.T_int16, notNullable: true}, {typ: types.T_int8}}, wantType: HStr, wantWidth: 11},
-		{name: "legacy-huge-nullable-varchar", keys: []declaredGroupKey{{typ: types.T_varchar, width: math.MaxInt32}}, remoteV77: true, wantType: HStr, wantWidth: math.MaxInt32},
-		{name: "legacy-huge-not-null-composite", keys: []declaredGroupKey{hugeNotNull, hugeNotNull}, remoteV77: true, wantType: HStr, wantWidth: math.MaxInt32},
-		{name: "legacy-one-huge-plus-narrow", keys: []declaredGroupKey{hugeNotNull, {typ: types.T_int8, notNullable: true}}, remoteV77: true, wantType: HStr, wantWidth: math.MaxInt32},
-		{name: "legacy-small-varchar", keys: []declaredGroupKey{{typ: types.T_varchar, width: 2}}, remoteV77: true, wantType: H8, wantWidth: 3, wantLegacy: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			version := int64(defines.MORPCVersion78)
-			if test.remoteV77 {
-				proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-				version = defines.MORPCVersion77
-			}
-			setPrepareParamKindProtocolVersion(t, proc, version)
 			groupBy := make([]*plan.Expr, len(test.keys))
 			for column, key := range test.keys {
 				groupBy[column] = colExpr(int32(column), key.typ)
@@ -178,7 +166,6 @@ func TestGroupHashWideDeclaredWidths(t *testing.T) {
 				require.NoError(t, g.Prepare(proc))
 				require.Equal(t, test.wantType, g.ctr.mtyp)
 				require.Equal(t, test.wantWidth, g.ctr.keyWidth)
-				require.Equal(t, test.wantLegacy, g.ctr.legacyH8CharSemantics)
 				require.Equal(t, want, wideWidthCounts(t, collectBatches(t, g, proc), test.keys))
 				g.Reset(proc, false, nil)
 				child.Free(proc, false, nil)
@@ -194,7 +181,7 @@ func TestGroupWideDeclaredWidthsPartialMerge(t *testing.T) {
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-			setPrepareParamKindProtocolVersion(t, proc, version)
+			setGroupProtocolVersionForTest(t, proc, version)
 			keys := []declaredGroupKey{{typ: types.T_text, width: math.MaxInt32}, {typ: types.T_text, width: math.MaxInt32}}
 			groupBy := []*plan.Expr{colExpr(0, types.T_text), colExpr(1, types.T_text)}
 			for _, key := range groupBy {
@@ -239,8 +226,8 @@ func TestGroupWideDeclaredWidthsPartialMerge(t *testing.T) {
 				for _, output := range outputs {
 					copied := cloneBatch(t, proc, output)
 					copies = append(copies, copied)
-					require.GreaterOrEqual(t, len(copied.ExtraBuf), 4)
-					require.Equal(t, int32(HStr), types.DecodeInt32(copied.ExtraBuf[:4]))
+					require.GreaterOrEqual(t, len(copied.ExtraBuf()), 4)
+					require.Equal(t, int32(HStr), types.DecodeInt32(copied.ExtraBuf()[:4]))
 				}
 				partial.Reset(proc, false, nil)
 				child.Free(proc, false, nil)

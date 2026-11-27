@@ -47,7 +47,7 @@ func TestDecimal64DenseBatchMatchesRowFill(t *testing.T) {
 				mp := mpool.MustNewZero()
 				t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
 				typ := types.New(types.T_decimal64, 12, 2)
-				input := vector.NewVec(typ)
+				input := vector.NewVec(typ, mp)
 				defer input.Free(mp)
 				id := AggIdOfSum
 				if !sum {
@@ -67,7 +67,7 @@ func TestDecimal64DenseBatchMatchesRowFill(t *testing.T) {
 							results, err := exec.Flush()
 							defer func() {
 								for _, result := range results {
-									result.Free(mp)
+									result.Free(result.MPool())
 								}
 							}()
 							require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestDecimal64DenseBatchMatchesRowFill(t *testing.T) {
 					case "all-null":
 						input = vector.NewConstNull(typ, rows, mp)
 					default:
-						input = vector.NewVec(typ)
+						input = vector.NewVec(typ, mp)
 						for i := 0; i < rows; i++ {
 							value := types.Decimal64((int64(i%19) - 9) * 123)
 							if i%17 == 0 {
@@ -189,7 +189,7 @@ func TestDecimal64BatchConstNullPreservesState(t *testing.T) {
 					mp := mpool.MustNewZero()
 					t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
 					typ := types.New(types.T_decimal64, 18, 2)
-					input := vector.NewVec(typ)
+					input := vector.NewVec(typ, mp)
 					defer input.Free(mp)
 					for _, value := range []int64{7, 11, 13, 17} {
 						require.NoError(t, vector.AppendFixed(input, types.Decimal64(value), false, mp))
@@ -217,13 +217,13 @@ func TestDecimal64BatchConstNullPreservesState(t *testing.T) {
 					actualResults, actualErr := actual.Flush()
 					defer func() {
 						for _, result := range actualResults {
-							result.Free(mp)
+							result.Free(result.MPool())
 						}
 					}()
 					expectedResults, expectedErr := expected.Flush()
 					defer func() {
 						for _, result := range expectedResults {
-							result.Free(mp)
+							result.Free(result.MPool())
 						}
 					}()
 					require.NoError(t, actualErr)
@@ -257,7 +257,7 @@ func TestDecimal64DenseBatchGrowthBoundary(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
 	typ := types.New(types.T_decimal64, 18, 0)
-	input := vector.NewVec(typ)
+	input := vector.NewVec(typ, mp)
 	defer input.Free(mp)
 	for i := 0; i < 513; i++ {
 		require.NoError(t, vector.AppendFixed(input, types.Decimal64(i-256), false, mp))
@@ -295,7 +295,7 @@ func BenchmarkDecimal64DenseBatch(b *testing.B) {
 				mp := mpool.MustNewZero()
 				defer mpool.DeleteMPool(mp)
 				typ := types.New(types.T_decimal64, 18, 2)
-				input := vector.NewVec(typ)
+				input := vector.NewVec(typ, mp)
 				defer input.Free(mp)
 				for i := 0; i < size; i++ {
 					if err := vector.AppendFixed(input, types.Decimal64(i%23-11), false, mp); err != nil {
@@ -351,7 +351,7 @@ func TestDecimal64DenseBatchPreservesUncheckedPrefixSemantics(t *testing.T) {
 				chunkArr[types.Decimal128](exec.state[0].vecs[0])[0] = nearMax
 				vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0] = 1
 			}
-			input := vector.NewVec(param)
+			input := vector.NewVec(param, mp)
 			defer input.Free(mp)
 			for _, value := range []int64{1, 1, -2} {
 				require.NoError(t, vector.AppendFixed(input, types.Decimal64(value), false, mp))

@@ -200,7 +200,6 @@ func NewIteratorAllocation(
 //	each time a new key is inserted, the hashtable returns a last-value+1 or, if the old key is inserted, the value corresponding to that key
 type StrHashMap struct {
 	hasNull            bool
-	groupingAware      bool
 	rejectNaN          bool
 	rows               uint64
 	hashMap            *hashtable.StringHashMap
@@ -212,11 +211,10 @@ type StrHashMap struct {
 // before you use the IntHashMap, the user should make sure that
 // sum of vectors' length equal to 8
 type IntHashMap struct {
-	hasNull           bool
-	rejectNaN         bool
-	legacyCharPadding bool
-	rows              uint64
-	hashMap           *hashtable.Int64HashMap
+	hasNull   bool
+	rejectNaN bool
+	rows      uint64
+	hashMap   *hashtable.Int64HashMap
 }
 
 type strHashmapIterator struct {

@@ -39,14 +39,14 @@ func BenchmarkGeneralCIPrefixLike(b *testing.B) {
 			b.Run(fmt.Sprintf("%s/rows=%d", tc.name, rows), func(b *testing.B) {
 				proc := newLikeTestProcess(b)
 				typ := types.NewWithCharset(types.T_varchar, 128, 0, types.CharsetUTF8)
-				values := vector.NewVec(typ)
+				values := vector.NewVec(typ, proc.Mp())
 				b.Cleanup(func() { values.Free(proc.Mp()) })
 				for row := 0; row < rows; row++ {
 					require.NoError(b, vector.AppendBytes(values, []byte(tc.value), tc.nullable && row%4 == 0, proc.Mp()))
 				}
 				var pattern *vector.Vector
 				if tc.dynamic {
-					pattern = vector.NewVec(typ)
+					pattern = vector.NewVec(typ, proc.Mp())
 					for row := 0; row < rows; row++ {
 						require.NoError(b, vector.AppendBytes(pattern, []byte(tc.pattern), false, proc.Mp()))
 					}

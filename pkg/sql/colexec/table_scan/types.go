@@ -35,8 +35,13 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
-	dictionaryInputs          *colexec.DictionaryInputFrame
-	dictionaryBoundary        vm.DictionaryOutputState
+	// scanMP is the scan's own pool for its output vectors when no accounted
+	// OutputAllocation is bound. Output rows copied out of the buffer pool
+	// live in it, so no other operator (they use proc.Mp() or their own
+	// pools) can modify them: the strict mpool check rejects any other pool.
+	// It lives as long as buf.
+	scanMP                    *mpool.MPool
+	readerStartupMeasured     bool
 	maxAllocSize              int
 	buf                       *batch.Batch
 	msgReceiver               *message.MessageReceiver
@@ -47,17 +52,15 @@ type container struct {
 	earlyColumns              []int
 	lateColumns               []int
 	filterRows                []int64
+	flatSels                  []int64
 	filterReadMetrics         bool
 	filterLateMaterialized    bool
+	membershipPrepared        bool
+	membershipApplied         bool
 	filterActiveDuration      time.Duration
 	readerFilter              *engine.ReaderFilterRequest
-	readerWorkspace           []*vector.Vector
-	readerHeaders             []*vector.Vector
-	readerSnapshots           []*vector.DictionaryVectorSlot
-	readerSelection           *vector.DictionaryVectorSlot
 	columnUses                []engine.ReaderColumnUse
 	columnUsesReady           bool
-	columnUsesOwned           bool
 	metricView                *batch.Batch
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
@@ -66,11 +69,14 @@ type container struct {
 	domainRows                []int64
 	domainsReady              bool
 	domainEmpty               bool
+	// selection is the scan's selected-output machinery (selection.go).
+	selection selectionState
 }
 
 type TableScan struct {
 	// OutputAllocation belongs to the caller execution and is installed before reading.
-	OutputAllocation  *vector.AllocationAccountSelection
+	// It is an accounted view of the process pool (nil = unaccounted).
+	OutputAllocation  *mpool.MPool
 	allocationAccount *mpool.AllocationAccount
 	ctr               container
 	TopValueMsgTag    int32
@@ -109,18 +115,60 @@ func (tableScan *TableScan) SetAllocationAccount(account *mpool.AllocationAccoun
 	if tableScan.ctr.buf != nil || len(tableScan.ctr.filterExecutors) != 0 || tableScan.HasPreparedProjection() {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	if tableScan.OutputAllocation != nil {
-		if !tableScan.OutputAllocation.UsesAccount(account) {
-			return mpool.ErrAllocationAccountMismatch
-		}
-	} else {
-		selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
-		if err != nil {
-			return err
-		}
-		tableScan.OutputAllocation = selection
+	if tableScan.OutputAllocation != nil && tableScan.OutputAllocation.ViewAccount() != account {
+		return mpool.ErrAllocationAccountMismatch
 	}
+	// Without a caller-installed view, Prepare builds one on the process pool.
 	tableScan.allocationAccount = account
+	return nil
+}
+
+// bindOutputAllocation builds the accounted view of proc's pool for a bound
+// account when the caller did not install one. Binding happens before the
+// operator knows its process pool, so the view is built on first use.
+func (tableScan *TableScan) bindOutputAllocation(proc *process.Process) error {
+	if tableScan.allocationAccount == nil || tableScan.OutputAllocation != nil {
+		return nil
+	}
+	view, err := proc.Mp().WithAccount(
+		tableScan.allocationAccount, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
+	if err != nil {
+		return err
+	}
+	tableScan.OutputAllocation = view
+	return nil
+}
+
+// BoundAllocationAccount returns the statement account bound by
+// SetAllocationAccount, or nil.
+func (tableScan *TableScan) BoundAllocationAccount() *mpool.AllocationAccount {
+	return tableScan.allocationAccount
+}
+
+// mp returns the pool scan output allocates from: the OutputAllocation view
+// when one is bound, otherwise the scan's own pool (proc's pool before
+// Prepare creates it).
+func (tableScan *TableScan) mp(proc *process.Process) *mpool.MPool {
+	if tableScan.OutputAllocation != nil {
+		return tableScan.OutputAllocation
+	}
+	if tableScan.ctr.scanMP != nil {
+		return tableScan.ctr.scanMP
+	}
+	return proc.Mp()
+}
+
+// prepareScanMP creates the scan's own output pool. It is called only while
+// the output batch does not exist yet.
+func (tableScan *TableScan) prepareScanMP(proc *process.Process) error {
+	if tableScan.OutputAllocation != nil || tableScan.ctr.scanMP != nil {
+		return nil
+	}
+	mp, err := colexec.NewOperatorMPool(proc, "table_scan")
+	if err != nil {
+		return err
+	}
+	tableScan.ctr.scanMP = mp
 	return nil
 }
 
@@ -139,44 +187,21 @@ func (tableScan *TableScan) ClearAllocationAccount(account *mpool.AllocationAcco
 	return nil
 }
 
-func (tableScan *TableScan) DictionaryOutput() (bool, *vector.AllocationAccountSelection) {
-	return tableScan.OutputAllocation != nil && tableScan.ActivatesAllocationAccountLifecycle() &&
-		!tableScan.ctr.padCharToFullLength && colexec.ExpressionsAcceptDictionary(tableScan.ctr.allFilterExecutors) &&
-		colexec.ExpressionsAcceptDictionary(tableScan.ProjectExecutors), tableScan.OutputAllocation
-}
-func (tableScan *TableScan) DictionaryOutputState() *vm.DictionaryOutputState {
-	return &tableScan.ctr.dictionaryBoundary
-}
-
 func (tableScan *TableScan) GetOperatorBase() *vm.OperatorBase {
 	return &tableScan.OperatorBase
 }
 
 func init() {
 	reuse.CreatePool[TableScan](
-		newTableScanArgument,
-		resetTableScanArgument,
+		func() *TableScan {
+			return &TableScan{}
+		},
+		func(a *TableScan) {
+			*a = TableScan{}
+		},
 		reuse.DefaultOptions[TableScan]().
 			WithEnableChecker(),
 	)
-}
-
-// Keep the frame in the same allocation, outside the operator's reset range.
-type tableScanArgument struct {
-	operator TableScan
-	frame    colexec.DictionaryInputFrame
-}
-
-func newTableScanArgument() *TableScan {
-	a := new(tableScanArgument)
-	a.operator.ctr.dictionaryInputs = &a.frame
-	return &a.operator
-}
-
-func resetTableScanArgument(a *TableScan) {
-	frame := a.ctr.dictionaryInputs
-	*a = TableScan{}
-	a.ctr.dictionaryInputs = frame
 }
 
 func (tableScan TableScan) TypeName() string {
@@ -199,6 +224,7 @@ func (tableScan *TableScan) Release() {
 }
 
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.ctr.readerStartupMeasured = false
 	tableScan.releaseLocalDomains()
 	allocSize := int64(0)
 	allocSize += int64(tableScan.ctr.maxAllocSize)
@@ -228,47 +254,49 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
 		tableScan.ctr.readerFilter.Exact.Close()
 	}
+	// The scan lends its output batch's borrowed columns: once the request is
+	// dropped nothing reads that batch, so release the cache pins.
+	tableScan.ctr.readerFilter.ReleasePins()
+	tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
 	tableScan.ctr.readerFilter = nil
+	tableScan.ctr.membershipPrepared = false
+	tableScan.ctr.membershipApplied = false
 	tableScan.RuntimeFilterExprs = nil
 	tableScan.ctr.maxAllocSize = 0
 	if tableScan.OpAnalyzer != nil {
 		tableScan.OpAnalyzer.Alloc(allocSize)
 	}
 	tableScan.closeReader()
+	// Nothing reads the output batch after Reset; drop its data while the
+	// operator waits to be reused.
+	if tableScan.ctr.buf != nil {
+		tableScan.ctr.buf.CleanOnlyData()
+		// The reader's published selection words go back to this
+		// execution's pool.
+		tableScan.ctr.buf.FreeSelection()
+	}
+	tableScan.ctr.selection.reset()
 	if tableScan.allocationAccount != nil {
 		tableScan.Free(proc, pipelineFailed, err)
 	}
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
-	for i, vec := range tableScan.ctr.readerWorkspace {
-		if vec != nil {
-			vec.Free(proc.Mp())
-			tableScan.ctr.readerWorkspace[i] = nil
-		}
-	}
-	tableScan.ctr.readerWorkspace = nil
-	for _, v := range tableScan.ctr.readerHeaders {
-		if v != nil {
-			v.Free(proc.Mp())
-		}
-	}
-	tableScan.ctr.readerHeaders = nil
-	for _, slot := range tableScan.ctr.readerSnapshots {
-		slot.Free(proc.Mp())
-	}
-	tableScan.ctr.readerSnapshots = nil
-	tableScan.ctr.readerSelection.Free(proc.Mp())
-	tableScan.ctr.readerSelection = nil
+	tableScan.ctr.readerStartupMeasured = false
 	tableScan.ctr.columnUses = nil
 	tableScan.ctr.columnUsesReady = false
-	tableScan.ctr.columnUsesOwned = false
 
-	tableScan.ctr.dictionaryInputs.Free(proc.Mp())
 	tableScan.releaseLocalDomains()
+	tableScan.ctr.selection.free(tableScan.mp(proc))
 	if tableScan.ctr.buf != nil {
-		tableScan.ctr.buf.Clean(proc.Mp())
+		// The output vectors were created with the scan's output pool.
+		tableScan.ctr.buf.Clean(tableScan.mp(proc))
 		tableScan.ctr.buf = nil
+	}
+	if tableScan.ctr.scanMP != nil {
+		// The reader fills buf through scanMP; close it before the pool goes.
+		tableScan.closeReader()
+		colexec.FreeOperatorMPool(&tableScan.ctr.scanMP)
 	}
 
 	if tableScan.ProjectList != nil {
@@ -299,7 +327,13 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
 		tableScan.ctr.readerFilter.Exact.Close()
 	}
+	// The scan lends its output batch's borrowed columns: once the request is
+	// dropped nothing reads that batch, so release the cache pins.
+	tableScan.ctr.readerFilter.ReleasePins()
+	tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
 	tableScan.ctr.readerFilter = nil
+	tableScan.ctr.membershipPrepared = false
+	tableScan.ctr.membershipApplied = false
 	if tableScan.ctr.metricView != nil {
 		tableScan.ctr.metricView.Vecs = nil
 		tableScan.ctr.metricView = nil
@@ -317,15 +351,17 @@ func (tableScan *TableScan) closeReader() {
 }
 
 func (tableScan *TableScan) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	if input.HasSelection() {
+		return tableScan.execSelectedProjection(proc, input)
+	}
 	var err error
 	batch := input
 	if tableScan.ProjectList != nil {
 		batch, err = tableScan.EvalProjection(input, proc)
-		tableScan.ObserveDictionaryInputs(tableScan.OpAnalyzer)
 	}
 
 	if err != nil {
 		return nil, err
 	}
-	return tableScan.ctr.dictionaryBoundary.Normalize(batch, proc.Mp())
+	return batch, nil
 }

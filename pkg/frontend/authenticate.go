@@ -1163,7 +1163,7 @@ var (
 			character_set_client,
 			collation_connection,
 			database_collation,
-			sql_mode) values ("%s",%d,'%s','%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			sql_mode) values ("%s",%d,'%s','%s',"%s","%s","%s","%s",%s,"%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	updateMoUserDefinedFunctionFormat = `update mo_catalog.mo_user_defined_function
 			set owner = %d, 
@@ -1172,7 +1172,7 @@ var (
 			    retType = '%s',
 			    body = "%s",
 			    language = '%s',
-			    definer = '%s',
+			    definer = %s,
 			    modified_time = '%s',
 			    type = '%s',
 			    security_type = '%s',
@@ -1198,7 +1198,7 @@ var (
 		comment,
 		character_set_client,
 		collation_connection,
-		database_collation) values ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s', '%s');`
+		database_collation) values ('%s','%s','%s','%s','%s','%s',%s,'%s','%s','%s','%s','%s','%s','%s', '%s');`
 
 	updateMoStoredProcedureFormat = `update mo_catalog.mo_stored_procedure
 			set 
@@ -1207,7 +1207,7 @@ var (
 			    body = '%s',
 				sql_mode = '%s',
 				db = '%s',
-			    definer = '%s',
+			    definer = %s,
 			    modified_time = '%s',
 			    type = '%s',
 			    security_type = '%s',
@@ -1325,12 +1325,6 @@ const (
 	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" , password_last_changed = utc_timestamp() where user_name = "%s" order by user_id;`
 
 	updateStatusUnlockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = 0 where user_name = "%s" order by user_id;`
-
-	updateLoginAttemptsOfUserFormat = `update mo_catalog.mo_user set login_attempts = login_attempts + 1  where user_name = "%s";`
-
-	updateLockTimeOfUserFormat = `update mo_catalog.mo_user set lock_time = utc_timestamp() where user_name = "%s";`
-
-	updateStatusLockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = login_attempts + 1, lock_time = utc_timestamp() where user_name = "%s";`
 
 	updateStatusLockOfUserForeverFormat = `update mo_catalog.mo_user set status = "%s" where user_name = "%s";`
 
@@ -1856,18 +1850,6 @@ func getSqlForUpdateUnlcokStatusOfUser(status, user string) string {
 	return fmt.Sprintf(updateStatusUnlockOfUserFormat, status, user)
 }
 
-func getSqlForUpdateLoginAttemptsOfUser(user string) string {
-	return fmt.Sprintf(updateLoginAttemptsOfUserFormat, user)
-}
-
-func getSqlForUpdateLockTimeOfUser(user string) string {
-	return fmt.Sprintf(updateLockTimeOfUserFormat, user)
-}
-
-func getSqlForUpdateStatusLockOfUser(status, user string) string {
-	return fmt.Sprintf(updateStatusLockOfUserFormat, status, user)
-}
-
 func getSqlForUpdateStatusLockOfUserForever(status string, user string) string {
 	return fmt.Sprintf(updateStatusLockOfUserForeverFormat, status, user)
 }
@@ -2283,6 +2265,8 @@ func getSqlForDropAccount() []string {
 // row is locked first so CREATE TASK cannot commit after this cleanup has
 // passed, and task definitions are disabled before deleting dependent rows so
 // concurrent schedulers and run acquisition serialize with the cleanup.
+// Publication target validation also relies on this exclusive account-ID
+// lock being held before DROP inspects subscriptions, even for taskless tenants.
 func getSqlForDropAccountSQLTasks(accountID int64) []string {
 	return []string{
 		fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update;", accountID),
@@ -3212,7 +3196,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	)
 	doLockOrUnlock := noneLockOrUnlockUser
 	account := ses.GetTenantInfo()
-	currentUser := account.GetUser()
+	currentUserID := int64(account.GetUserID())
 
 	// 1.authenticate the actions
 	if au.Role != nil {
@@ -3243,7 +3227,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	}
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3282,11 +3266,27 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	}
 
-	//
+	targetRows, e := queryAccountUsers(ctx, bh, "user_name = "+quoteSQLStringLiteral(userName), false)
+	if e != nil {
+		return e
+	}
+	if len(targetRows) != 1 || targetRows[0].id != vr.id {
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	principal, e := queryAccountUsers(ctx, bh, fmt.Sprintf("user_id = %d", currentUserID), false)
+	if e != nil {
+		return e
+	}
+	if len(principal) != 1 {
+		return moerr.NewInternalError(ctx, "authenticated user no longer exists")
+	}
+	if err = lockAccountUserBindings(ctx, bh, append(targetRows, principal...)); err != nil {
+		return err
+	}
 	if account.IsSysTenant() {
-		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, moAdminRoleID)
+		sql = fmt.Sprintf("select role_id from mo_catalog.mo_user_grant where user_id = %d and role_id = %d;", currentUserID, moAdminRoleID)
 	} else {
-		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, accountAdminRoleID)
+		sql = fmt.Sprintf("select role_id from mo_catalog.mo_user_grant where user_id = %d and role_id = %d;", currentUserID, accountAdminRoleID)
 	}
 	if err != nil {
 		return err
@@ -3357,7 +3357,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 				return err
 			}
 		} else {
-			if (targetUserIsAdmin && !currentUserIsAdmin) && currentUser != userName {
+			if (targetUserIsAdmin && !currentUserIsAdmin) && currentUserID != vr.id {
 				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 			}
 			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
@@ -3382,7 +3382,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 				return err
 			}
 		} else {
-			if (targetUserIsAdmin && !currentUserIsAdmin) && currentUser != userName {
+			if (targetUserIsAdmin && !currentUserIsAdmin) && currentUserID != vr.id {
 				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 			}
 			err = bh.Exec(ctx, sql)
@@ -4757,6 +4757,21 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 		return err
 	}
 
+	var lockedUsers []accountUserBinding
+	for _, user := range du.Users {
+		rows, e := queryAccountUsers(ctx, bh, "user_name = "+quoteSQLStringLiteral(user.Username), false)
+		if e != nil {
+			return e
+		}
+		lockedUsers = append(lockedUsers, rows...)
+	}
+	if err = lockAccountUserBindings(ctx, bh, lockedUsers); err != nil {
+		return err
+	}
+	lockedIDs := make(map[int64]bool)
+	for _, user := range lockedUsers {
+		lockedIDs[user.id] = true
+	}
 	// step1: check users exists or not.
 	// handle "IF EXISTS"
 	for _, user := range du.Users {
@@ -4779,6 +4794,9 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 			continue
 		}
 
+		if !lockedIDs[vr.id] {
+			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
 		// if the user is admin user with the role moadmin or accountadmin,
 		// the user can not be deleted.
 		if account.IsSysTenant() {
@@ -4922,15 +4940,19 @@ func doAlterRole(ctx context.Context, ses *Session, ar *tree.AlterRole) (err err
 		return moerr.NewInternalErrorf(ctx, "the new role name is the same as the old role name")
 	}
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, cancelTxnCreateWithRequest: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
-	err = bh.Exec(ctx, "begin;")
+	err = beginPrincipalNamespaceTxn(ctx, ses, bh)
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+
+	if _, err = lockAccountPrincipalNamespace(ctx, bh, account.GetTenantID()); err != nil {
 		return err
 	}
 
@@ -5859,14 +5881,6 @@ func SetGrantPrivilegeObjectLockedHookForTest(hook func()) func() {
 
 func checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(ctx context.Context, ses FeSession, bh BackgroundExec,
 	ot tree.ObjectType, pl tree.PrivilegeLevel) (privilegeLevelType, int64, error) {
-	if ot == tree.OBJECT_TYPE_TABLE &&
-		(pl.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE || pl.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE) &&
-		isIndexTable(pl.TabName) {
-		// Hidden index relations are implementation details whose lifecycle is
-		// owned by their base table/index definition. They cannot be independent
-		// authorization objects.
-		return 0, 0, moerr.NewInvalidInputf(ctx, "cannot grant privileges on internal relation %s", pl.TabName)
-	}
 	privLevel, objID, err := checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, ot, pl, true)
 	if err == nil && ot == tree.OBJECT_TYPE_TABLE &&
 		(pl.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE || pl.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE) {
@@ -6335,6 +6349,10 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 		verifiedFromRoles[i] = vr
 	}
 
+	if err = lockVerifiedUserBindings(ctx, bh, verifiedToRoles); err != nil {
+		return err
+	}
+
 	// step3 : process Revoke role from role
 	// step4 : process Revoke role from user
 	for _, from := range verifiedFromRoles {
@@ -6497,13 +6515,21 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 			}
 			verifiedToRoles[i] = vr
 
-			// the user is the administrator or not
-			useIsAdmin, err = userIsAdministrator(ctx, bh, vr.id, account)
-			if err != nil {
-				return err
-			}
-			verifiedToRoles[i].userIsAdmin = useIsAdmin
 		}
+	}
+
+	if err = lockVerifiedUserBindings(ctx, bh, verifiedToRoles); err != nil {
+		return err
+	}
+	for _, target := range verifiedToRoles {
+		if target.typ != userType {
+			continue
+		}
+		useIsAdmin, err = userIsAdministrator(ctx, bh, target.id, account)
+		if err != nil {
+			return err
+		}
+		target.userIsAdmin = useIsAdmin
 	}
 
 	// If there is at least one role in the verifiedToRoles,
@@ -6736,6 +6762,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			}
 			extraEntries = append(extraEntries, entry1, entry2)
 		}
+	case *tree.RenameUser:
+		typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll)
 	case *tree.DropUser:
 		typs = append(typs, PrivilegeTypeDropUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
 	case *tree.AlterUser:
@@ -7325,13 +7353,6 @@ func getDbNameForPrivilege(objRef *plan2.ObjectRef) string {
 	return objRef.GetSchemaName()
 }
 
-func isMongoDBExternalTableScan(node *plan.Node) bool {
-	return node != nil &&
-		node.GetNodeType() == plan.Node_EXTERNAL_SCAN &&
-		node.GetExternScan() != nil &&
-		node.GetExternScan().GetType() == int32(plan.ExternType_MONGODB_TB)
-}
-
 func (pot privilegeTips) String() string {
 	return fmt.Sprintf("%s %s %s", pot.typ, pot.databaseName, pot.tableName)
 }
@@ -7419,10 +7440,74 @@ func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
 	return scans
 }
 
+func icebergDMLTargetScans(q *plan.Query) map[int32]struct{} {
+	if q == nil {
+		return nil
+	}
+	var sinkOption string
+	switch q.StmtType {
+	case plan.Query_UPDATE:
+		sinkOption = icebergapi.DMLUpdatePlanExtraOptions
+	case plan.Query_DELETE:
+		sinkOption = icebergapi.DMLDeletePlanExtraOptions
+	case plan.Query_MERGE:
+		sinkOption = icebergapi.DMLMergePlanExtraOptions
+	default:
+		return nil
+	}
+
+	var targetRef *plan.ObjectRef
+	for _, node := range q.Nodes {
+		if node == nil || node.NodeType != plan.Node_INSERT || node.GetExtraOptions() != sinkOption {
+			continue
+		}
+		if node.GetInsertCtx() != nil && node.GetInsertCtx().GetRef() != nil {
+			targetRef = node.GetInsertCtx().GetRef()
+		} else {
+			targetRef = node.GetObjRef()
+		}
+		if targetRef != nil {
+			break
+		}
+	}
+	if targetRef == nil {
+		return nil
+	}
+
+	scans := make(map[int32]struct{}, 1)
+	for nodeID, node := range q.Nodes {
+		if node == nil || node.GetNodeType() != plan.Node_EXTERNAL_SCAN ||
+			node.GetExternScan().GetType() != int32(plan.ExternType_ICEBERG_TB) ||
+			node.GetExtraOptions() != icebergapi.DMLTargetScanPlanExtraOptions {
+			continue
+		}
+		ref := node.GetObjRef()
+		if ref == nil {
+			continue
+		}
+		if targetRef.GetObj() != 0 && ref.GetObj() != 0 {
+			if targetRef.GetObj() != ref.GetObj() {
+				continue
+			}
+		} else if !strings.EqualFold(targetRef.GetSchemaName(), ref.GetSchemaName()) ||
+			!strings.EqualFold(targetRef.GetObjName(), ref.GetObjName()) {
+			continue
+		}
+		scans[int32(nodeID)] = struct{}{}
+	}
+	return scans
+}
+
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
 func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
+	tips, _, err := extractPrivilegeTipsAndInsertTarget(p)
+	return tips, err
+}
+
+func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *plan.ObjectRef, error) {
 	// NOTE: the pts may be nil when the plan does operate any table.
 	var pts privilegeTipsArray
+	var insertTarget *plan.ObjectRef
 	appendPt := func(pt privilegeTips) {
 		pts = append(pts, pt)
 	}
@@ -7430,6 +7515,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 	if p.GetQuery() != nil { // select,insert select, update, delete
 		q := p.GetQuery()
 		insertDedupScans := insertDedupTargetScans(q)
+		icebergDMLScans := icebergDMLTargetScans(q)
 
 		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
@@ -7466,7 +7552,12 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 		}
 
 		for nodeID, node := range q.Nodes {
-			if isPrivilegeBearingTableScan(node) || isMongoDBExternalTableScan(node) {
+			if _, ok := icebergDMLScans[int32(nodeID)]; ok {
+				continue
+			}
+			externalSelectScan := plan2.IsExternalScanRequiringSelectPrivilege(node)
+			diagnosticScan := node.GetNodeType() == plan.Node_FUNCTION_SCAN && node.GetTableDef().GetTblFunc().GetName() == "mo_index_stats"
+			if isPrivilegeBearingTableScan(node) || externalSelectScan {
 				if _, ok := insertDedupScans[int32(nodeID)]; ok {
 					continue
 				}
@@ -7477,31 +7568,17 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
 					}
 
-					var scanTyp PrivilegeType
-					var scanOperation clusterTableOperationType
-					switch q.StmtType {
-					case plan.Query_UPDATE:
-						scanTyp = PrivilegeTypeSelect
-						scanOperation = clusterTableSelect
-						if _, ok := scanTargetTables[[2]string{node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName()}]; ok {
-							scanTyp = PrivilegeTypeUpdate
-							scanOperation = clusterTableModify
-						}
-					case plan.Query_DELETE:
-						scanTyp = PrivilegeTypeSelect
-						scanOperation = clusterTableSelect
-						if _, ok := scanTargetTables[[2]string{node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName()}]; ok {
-							scanTyp = PrivilegeTypeDelete
-							scanOperation = clusterTableModify
-						}
-					default:
-						scanTyp = PrivilegeTypeSelect
-						scanOperation = clusterTableSelect
+					scanTyp, scanOperation := PrivilegeTypeSelect, clusterTableSelect
+					_, target := scanTargetTables[[2]string{node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName()}]
+					// External and diagnostic scans read their source even when it is also the DML target.
+					if target && !externalSelectScan && !diagnosticScan {
+						scanTyp, scanOperation = t, clusterTableModify
 					}
 
-					// do not check the privilege of the index table
+					// External tables are independent catalog objects even when their
+					// names use the internal index prefix.
 					viewPath := node.GetViewPath()
-					if !isIndexTable(node.ObjRef.GetObjName()) {
+					if externalSelectScan || !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
 							typ:                   scanTyp,
 							objType:               objectTypeTable,
@@ -7541,6 +7618,10 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 				}
 				if objRef == nil && node.ObjRef != nil {
 					objRef = node.ObjRef
+				}
+				if insertTarget == nil && q.StmtType == plan.Query_INSERT &&
+					objRef.GetSchemaName() != "" && objRef.GetObjName() != "" {
+					insertTarget = objRef
 				}
 				if objRef != nil {
 					dbName := objRef.GetSchemaName()
@@ -7590,15 +7671,19 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 					}
 				}
 			} else if node.NodeType == plan.Node_INSERT {
-				if q.StmtType == plan.Query_MERGE &&
-					node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
-					continue
-				}
 				var objRef *plan.ObjectRef
 				if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
 					objRef = node.InsertCtx.Ref
 				} else if node.ObjRef != nil {
 					objRef = node.ObjRef
+				}
+				if insertTarget == nil && node.GetInsertCtx().GetAddAffectedRows() &&
+					objRef.GetSchemaName() != "" && objRef.GetObjName() != "" {
+					insertTarget = objRef
+				}
+				if q.StmtType == plan.Query_MERGE &&
+					node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+					continue
 				}
 				if objRef != nil {
 					dbName := objRef.GetSchemaName()
@@ -7609,12 +7694,21 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 					if tableName == "" && node.TableDef != nil && node.TableDef.Name != "" {
 						tableName = node.TableDef.Name
 					}
-					// do not check the privilege of the index table
+					// External DML targets are catalog objects, not hidden index tables.
+					// Iceberg expresses UPDATE/DELETE with Node_INSERT. Execution
+					// markers must never decide whether authorization is required:
+					// missing or mismatched markers still fail closed on the statement privilege.
+					externalTarget := node.GetTableDef().GetTableType() == catalog.SystemExternalRel
+					targetPrivilege := PrivilegeTypeInsert
+					if externalTarget && (q.StmtType == plan.Query_INSERT ||
+						q.StmtType == plan.Query_UPDATE || q.StmtType == plan.Query_DELETE) {
+						targetPrivilege = t
+					}
 					viewPath := node.GetViewPath()
-					if !isIndexTable(tableName) {
+					if externalTarget || !isIndexTable(tableName) {
 						insertClusterTable := isClusterTable(dbName, tableName)
 						appendPt(privilegeTips{
-							typ:                   PrivilegeTypeInsert,
+							typ:                   targetPrivilege,
 							objType:               objectTypeTable,
 							databaseName:          dbName,
 							tableName:             tableName,
@@ -7642,6 +7736,12 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 					}
 				}
 			} else if node.NodeType == plan.Node_MULTI_UPDATE {
+				if insertTarget == nil && q.StmtType == plan.Query_INSERT && len(node.UpdateCtxList) > 0 {
+					objRef := node.UpdateCtxList[0].GetObjRef()
+					if objRef.GetSchemaName() != "" && objRef.GetObjName() != "" {
+						insertTarget = objRef
+					}
+				}
 				for _, updateCtx := range node.UpdateCtxList {
 					if updateCtx == nil || updateCtx.ObjRef == nil || updateCtx.TableDef == nil {
 						continue
@@ -7722,10 +7822,11 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 	}
 	lockTips, err := selectLockPrivilegeTips(p.GetQuery())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pts = append(pts, lockTips...)
-	return appendLogicalViewPrivilegeTips(pts, p.GetQuery())
+	tips, err := appendLogicalViewPrivilegeTips(pts, p.GetQuery())
+	return tips, insertTarget, err
 }
 
 // A path key identifies each catalog definition, not an authorization result.
@@ -7820,8 +7921,7 @@ func isPrivilegeBearingTableScan(node *plan.Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		return true
 	}
-	return node.NodeType == plan.Node_FUNCTION_SCAN &&
-		node.GetTableDef().GetTblFunc().GetName() == "table_changes"
+	return plan2.IsSourceResolvingTableFunction(node)
 }
 
 func addReplaceDeletePrivilegeTips(arr privilegeTipsArray, p *plan2.Plan) privilegeTipsArray {
@@ -9877,7 +9977,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		if isTargetSysWhiteList(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
 			return true, stats, nil
 		}
-		arr, err := extractPrivilegeTipsFromPlan(p)
+		arr, insertTarget, err := extractPrivilegeTipsAndInsertTarget(p)
 		if err != nil {
 			return false, stats, err
 		}
@@ -9887,24 +9987,46 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		if mergeStmt, ok := stmt.(*tree.Merge); ok {
 			arr = appendMergeActionPrivilegeTips(ses, mergeStmt, p, arr)
 		}
-		if len(arr) == 0 {
+		if ins, ok := stmt.(*tree.Insert); ok {
 			var dbName, tableName string
-			var ok bool
-			switch st := stmt.(type) {
-			case *tree.Insert:
-				dbName, tableName, ok = getInsertTargetTableName(st, ses)
-			case *tree.Load:
-				dbName, tableName, ok = getLoadTargetTableName(st, ses)
+			hasTarget := insertTarget != nil
+			if hasTarget {
+				dbName, tableName = insertTarget.GetSchemaName(), insertTarget.GetObjName()
+			} else {
+				dbName, tableName, hasTarget = getInsertTargetTableName(ins, ses)
 			}
-			if ok {
-				arr = append(arr, privilegeTips{
-					typ:                   PrivilegeTypeInsert,
-					objType:               objectTypeTable,
-					databaseName:          dbName,
-					tableName:             tableName,
-					isClusterTable:        isClusterTable(dbName, tableName),
-					clusterTableOperation: clusterTableModify,
-				})
+			if hasTarget {
+				hasTargetInsert := false
+				for _, tip := range arr {
+					if tip.typ == PrivilegeTypeInsert && tip.objType == objectTypeTable &&
+						tip.databaseName == dbName && tip.tableName == tableName {
+						hasTargetInsert = true
+						break
+					}
+				}
+				if !hasTargetInsert {
+					arr = append(arr, privilegeTips{
+						typ:                   PrivilegeTypeInsert,
+						objType:               objectTypeTable,
+						databaseName:          dbName,
+						tableName:             tableName,
+						isClusterTable:        isClusterTable(dbName, tableName),
+						clusterTableOperation: clusterTableModify,
+					})
+				}
+			}
+		} else if len(arr) == 0 {
+			if loadStmt, ok := stmt.(*tree.Load); ok {
+				if dbName, tableName, hasTarget := getLoadTargetTableName(loadStmt, ses); hasTarget {
+					arr = append(arr, privilegeTips{
+						typ:                   PrivilegeTypeInsert,
+						objType:               objectTypeTable,
+						databaseName:          dbName,
+						tableName:             tableName,
+						isClusterTable:        isClusterTable(dbName, tableName),
+						clusterTableOperation: clusterTableModify,
+					})
+				}
 			}
 		}
 		// SHOW INDEX IGNORED and STATUS need SELECT on the named table, which their plans may not
@@ -11968,14 +12090,18 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 	}
 	defer mpool.DeleteMPool(mp)
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, cancelTxnCreateWithRequest: true, internalExecution: true})
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin;")
+	err = beginPrincipalNamespaceTxn(ctx, ses, bh)
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+
+	if _, err = lockAccountPrincipalNamespace(ctx, bh, tenant.GetTenantID()); err != nil {
 		return err
 	}
 
@@ -12200,14 +12326,18 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, cancelTxnCreateWithRequest: true, internalExecution: true})
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin;")
+	err = beginPrincipalNamespaceTxn(ctx, ses, bh)
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+
+	if _, err = lockAccountPrincipalNamespace(ctx, bh, tenant.GetTenantID()); err != nil {
 		return err
 	}
 
@@ -12300,7 +12430,7 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 				Filepath: localPath,
 			},
 		}
-		return processLoadLocal(funcCtx, ses, execCtx, param, loadLocalWriter, loadLocalReader)
+		return processLoadLocal(funcCtx, ses, execCtx, param, loadLocalWriter)
 	})
 
 	// read from pipe and upload
@@ -12585,6 +12715,11 @@ func persistUserDefinedFunction(
 	definition userDefinedFunctionDefinition,
 	functionID *int64,
 ) error {
+	definer, err := canonicalRoutineDefiner(ctx, bh, tenant)
+	if err != nil {
+		return err
+	}
+
 	body := escapeSQLStringForDoubleQuotes(definition.body)
 	sqlMode := plan2.EscapeFormat(definition.sqlMode)
 	if functionID != nil {
@@ -12592,7 +12727,7 @@ func persistUserDefinedFunction(
 			ownerRoleID,
 			definition.args,
 			definition.argTypes, definition.retType, body, definition.lang,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode,
+			quoteSQLStringLiteral(definer), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode,
 			int32(*functionID)))
 	}
 	return bh.Exec(ctx, fmt.Sprintf(initMoUserDefinedFunctionFormat,
@@ -12600,7 +12735,7 @@ func persistUserDefinedFunction(
 		ownerRoleID,
 		definition.args,
 		definition.argTypes, definition.retType, body, definition.lang, definition.dbName,
-		tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode))
+		quoteSQLStringLiteral(definer), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode))
 }
 
 // storedProcedureDefinition is the procedure metadata kept outside mo_tables.
@@ -12704,6 +12839,11 @@ func persistStoredProcedure(
 	definition storedProcedureDefinition,
 	erArray []ExecResult,
 ) error {
+	definer, err := canonicalRoutineDefiner(ctx, bh, tenant)
+	if err != nil {
+		return err
+	}
+
 	var persistSQL string
 	if execResultArrayHasData(erArray) {
 		id, err := erArray[0].GetInt64(ctx, 0, 0)
@@ -12713,14 +12853,14 @@ func persistStoredProcedure(
 		persistSQL = fmt.Sprintf(updateMoStoredProcedureFormat,
 			definition.args,
 			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
+			quoteSQLStringLiteral(definer), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
 			int32(id))
 	} else {
 		persistSQL = fmt.Sprintf(initMoStoredProcedureFormat,
 			definition.name,
 			definition.args,
 			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+			quoteSQLStringLiteral(definer), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
 	return bh.Exec(ctx, persistSQL)
 }
@@ -12731,18 +12871,19 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
-	erArray, err := prepareStoredProcedurePersistence(ctx, bh, definition, cp.Replace)
-	if err != nil {
-		return err
-	}
 	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
 	}
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
+
+	erArray, err := prepareStoredProcedurePersistence(ctx, bh, definition, cp.Replace)
+	if err != nil {
+		return err
+	}
 
 	return persistStoredProcedure(ctx, bh, tenant, definition, erArray)
 }

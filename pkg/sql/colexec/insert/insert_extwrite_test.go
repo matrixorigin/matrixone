@@ -100,6 +100,9 @@ func nullableCol(name string) *plan.ColDef {
 	}
 }
 
+// notNullErr keeps the error of checkExternalNotNull.
+func notNullErr(_ *batch.Batch, err error) error { return err }
+
 // TestCheckExternalNotNull covers the NOT NULL matrix: nulls bitmap, const-null
 // vectors, the explicit NotNull flag without a Default, and skipped entries.
 func TestCheckExternalNotNull(t *testing.T) {
@@ -115,7 +118,7 @@ func TestCheckExternalNotNull(t *testing.T) {
 	}
 
 	intVec := func(v int64, isNull bool) *vector.Vector {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed[int64](vec, v, isNull, mp))
 		return vec
 	}
@@ -123,48 +126,48 @@ func TestCheckExternalNotNull(t *testing.T) {
 	// non-null value through a NOT NULL column: ok
 	ins := newInsert([]*plan.ColDef{notNullCol("a")}, []string{"a"})
 	defer ins.Release()
-	bat := batch.New([]string{"a"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = intVec(7, false)
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
-	require.NoError(t, ins.checkExternalNotNull(proc, bat))
+	require.NoError(t, notNullErr(ins.checkExternalNotNull(proc, bat)))
 
 	// NULL in the nulls bitmap: rejected
-	bat2 := batch.New([]string{"a"})
+	bat2 := batch.NewWithSize(1)
 	bat2.Vecs[0] = intVec(0, true)
 	bat2.SetRowCount(1)
 	defer bat2.Clean(mp)
-	err := ins.checkExternalNotNull(proc, bat2)
+	_, err := ins.checkExternalNotNull(proc, bat2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cannot be null")
 
 	// const-null vector: rejected (no bitmap entry to find)
 	cn := vector.NewConstNull(types.T_int64.ToType(), 3, mp)
-	bat3 := batch.New([]string{"a"})
+	bat3 := batch.NewWithSize(1)
 	bat3.Vecs[0] = cn
 	bat3.SetRowCount(3)
 	defer bat3.Clean(mp)
-	require.Error(t, ins.checkExternalNotNull(proc, bat3))
+	require.Error(t, notNullErr(ins.checkExternalNotNull(proc, bat3)))
 
 	// the explicit NotNull flag alone (no Default descriptor) is honored
 	flagOnly := &plan.ColDef{Name: "a", NotNull: true}
 	ins2 := newInsert([]*plan.ColDef{flagOnly}, []string{"a"})
 	defer ins2.Release()
-	bat4 := batch.New([]string{"a"})
+	bat4 := batch.NewWithSize(1)
 	bat4.Vecs[0] = intVec(0, true)
 	bat4.SetRowCount(1)
 	defer bat4.Clean(mp)
-	require.Error(t, ins2.checkExternalNotNull(proc, bat4))
+	require.Error(t, notNullErr(ins2.checkExternalNotNull(proc, bat4)))
 
 	// nullable column and nil extCols entries pass NULLs through
 	ins3 := newInsert([]*plan.ColDef{nullableCol("a"), nil}, []string{"a", "b"})
 	defer ins3.Release()
-	bat5 := batch.New([]string{"a", "b"})
+	bat5 := batch.NewWithSize(2)
 	bat5.Vecs[0] = intVec(0, true)
 	bat5.Vecs[1] = intVec(0, true)
 	bat5.SetRowCount(1)
 	defer bat5.Clean(mp)
-	require.NoError(t, ins3.checkExternalNotNull(proc, bat5))
+	require.NoError(t, notNullErr(ins3.checkExternalNotNull(proc, bat5)))
 }
 
 // extIgnoreWarningSession collects flushed warning batches for the IGNORE leg.
@@ -209,18 +212,24 @@ func TestCheckExternalNotNullIgnoreAdjustsInsteadOfRejecting(t *testing.T) {
 	ins.ctr.extCols = []*plan.ColDef{notNullCol("a")}
 	defer ins.Release()
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](vec, 7, false, mp))
 	require.NoError(t, vector.AppendFixed[int64](vec, 0, true, mp))
-	bat := batch.New([]string{"a"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vec
 	bat.SetRowCount(2)
 	defer bat.Clean(mp)
 
-	require.NoError(t, ins.checkExternalNotNull(proc, bat))
-	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](vec, 0))
-	require.False(t, vec.GetNulls().Contains(1))
-	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](vec, 1),
+	out, err := ins.checkExternalNotNull(proc, bat)
+	require.NoError(t, err)
+	defer ins.ctr.extFill.Free()
+	require.NotSame(t, bat, out, "the operator writes its own view, not the child's batch")
+	require.Same(t, vec, bat.Vecs[0], "the child's batch slot is unchanged")
+	require.True(t, vec.GetNulls().Contains(1), "the child's vector is unchanged")
+	adjusted := out.Vecs[0]
+	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](adjusted, 0))
+	require.False(t, adjusted.GetNulls().Contains(1))
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](adjusted, 1),
 		"the NULL cell was adjusted to the implicit default")
 	require.Equal(t, uint64(1), session.total)
 	require.Equal(t, []uint16{moerr.ER_BAD_NULL_ERROR}, session.codes)
@@ -250,13 +259,17 @@ func TestCheckExternalNotNullIgnoreFillsConstNullVector(t *testing.T) {
 	defer ins.Release()
 
 	cn := vector.NewConstNull(types.T_int64.ToType(), 3, mp)
-	bat := batch.New([]string{"a"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = cn
 	bat.SetRowCount(3)
 	defer bat.Clean(mp)
 
-	require.NoError(t, ins.checkExternalNotNull(proc, bat))
-	filled := bat.Vecs[0]
+	out, err := ins.checkExternalNotNull(proc, bat)
+	require.NoError(t, err)
+	defer ins.ctr.extFill.Free()
+	require.Same(t, cn, bat.Vecs[0], "the child's batch slot is unchanged")
+	require.True(t, cn.IsConstNull(), "the child's constant NULL is unchanged")
+	filled := out.Vecs[0]
 	require.NotSame(t, cn, filled,
 		"a constant NULL has no backing storage and is replaced by the fill")
 	require.True(t, filled.IsConst(), "the replacement keeps the broadcast")
@@ -430,7 +443,7 @@ func newExternalIgnoreLoadProc(t *testing.T, q *mpool.MPool) *process.Process {
 
 func int64SupplyVec(t *testing.T, q *mpool.MPool, rows int) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), q)
 	for i := 0; i < rows; i++ {
 		require.NoError(t, vector.AppendFixed[int64](vec, int64(100+i), false, q))
 	}
@@ -460,7 +473,7 @@ func TestExternalInsertOwnsConstFillReplacements(t *testing.T) {
 	const rowsPerBatch = 3
 	inputs := make([]*batch.Batch, 0, batches)
 	for range batches {
-		src := batch.New([]string{"b"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = int64SupplyVec(t, q, rowsPerBatch)
 		src.SetRowCount(rowsPerBatch)
 		inputs = append(inputs, src)
@@ -522,6 +535,9 @@ func TestExternalInsertOwnsConstFillReplacements(t *testing.T) {
 			b.Clean(q)
 		}
 	}
+	// The fill's vectors are created once per column and released by Free.
+	proj.Free(proc, false, nil)
+	require.Zero(t, q.CurrNB(), "no fill vector outlives the operator")
 }
 
 // TestExternalInsertReleasesFillOnWriteFailure walks the same ownership
@@ -535,7 +551,7 @@ func TestExternalInsertReleasesFillOnWriteFailure(t *testing.T) {
 	proc := newExternalIgnoreLoadProc(t, q)
 
 	newPipeline := func() (*projection.Projection, *Insert, *mockExtWriter, *batch.Batch) {
-		src := batch.New([]string{"b"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = int64SupplyVec(t, q, 3)
 		src.SetRowCount(3)
 		proj := projection.NewArgument()
@@ -622,7 +638,7 @@ func TestExternalInsertReleasesPartialFillOnViolation(t *testing.T) {
 	proc := newExternalIgnoreLoadProc(t, q)
 
 	const rowsPerBatch = 3
-	src := batch.New([]string{"b"})
+	src := batch.NewWithSize(1)
 	src.Vecs[0] = int64SupplyVec(t, q, rowsPerBatch)
 	src.SetRowCount(rowsPerBatch)
 
@@ -679,15 +695,14 @@ type aliasedNullSiblingRow struct {
 	bV    int64
 }
 
-// TestCheckExternalNotNullIgnoreDetachesAliasedFlatDestination pins the
+// TestCheckExternalNotNullIgnoreCopiesAliasedFlatDestination pins the
 // component-level fact behind the aliased-fill review: a dependent NOT NULL
 // default on a nullable reference (b BIGINT NOT NULL DEFAULT (a)) lowers to
 // a raw column reference, so the external projection shares one flat vector
-// between a's slot and b's. The IGNORE fill of b runs in place, so it must
-// not clear a's live NULL row while it fills b's: the aliased destination is
-// detached into operator-owned storage first, the sibling keeps its null
-// bitmap, and the borrowed slot is handed back with the copy released.
-func TestCheckExternalNotNullIgnoreDetachesAliasedFlatDestination(t *testing.T) {
+// between a's slot and b's. The IGNORE fill of b copies the vector instead of
+// adjusting it, so a keeps its live NULL row, and the child's batch is never
+// modified.
+func TestCheckExternalNotNullIgnoreCopiesAliasedFlatDestination(t *testing.T) {
 	q := mpool.MustNewZero()
 	proc := newExternalIgnoreLoadProc(t, q)
 
@@ -698,51 +713,41 @@ func TestCheckExternalNotNullIgnoreDetachesAliasedFlatDestination(t *testing.T) 
 	ins.ctr.extCols = []*plan.ColDef{nullableCol("a"), notNullCol("b")}
 
 	// both slots share one flat vector holding (1, NULL, 2)
-	shared := vector.NewVec(types.T_int64.ToType())
+	shared := vector.NewVec(types.T_int64.ToType(), q)
 	require.NoError(t, vector.AppendFixed[int64](shared, 1, false, q))
 	require.NoError(t, vector.AppendFixed[int64](shared, 0, true, q))
 	require.NoError(t, vector.AppendFixed[int64](shared, 2, false, q))
-	bat := batch.New([]string{"a", "b"})
+	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = shared
 	bat.Vecs[1] = shared
 	bat.SetRowCount(3)
-	beforeBytes, beforeObjects := q.OnHeapOutstanding()
 
-	require.NoError(t, ins.checkExternalNotNull(proc, bat))
+	out, err := ins.checkExternalNotNull(proc, bat)
+	require.NoError(t, err)
 	require.True(t, shared.IsNull(1),
 		"the nullable sibling must keep its live NULL while b is filled")
-	require.False(t, bat.Vecs[1] == shared,
-		"the aliased fill destination runs in its own detached storage")
-	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0))
-	require.False(t, bat.Vecs[1].IsNull(1))
-	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 1),
+	require.True(t, bat.Vecs[0] == shared && bat.Vecs[1] == shared,
+		"the child's batch slots are unchanged")
+	require.True(t, out.Vecs[0] == shared, "a passes through")
+	require.False(t, out.Vecs[1] == shared, "b is the fill's own copy")
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[1], 0))
+	require.False(t, out.Vecs[1].IsNull(1))
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[1], 1),
 		"DEFAULT (a) projected a's NULL, and IGNORE filled b with the implicit default")
-	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 2))
+	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[1], 2))
 	require.Equal(t, uint64(1), proc.Session.(*extIgnoreWarningSession).total,
 		"one warning for b's adjusted row")
-	require.Len(t, ins.ctr.extFillOwned, 1)
-	require.Equal(t, shared, ins.ctr.extFillOwned[0].orig)
-	require.Equal(t, bat.Vecs[1], ins.ctr.extFillOwned[0].fill)
 
-	ins.releaseExtFillOwned(bat, proc)
-	require.True(t, bat.Vecs[1] == shared,
-		"the child's borrowed slot is handed back once the batch was written")
-	require.Empty(t, ins.ctr.extFillOwned)
-	afterBytes, afterObjects := q.OnHeapOutstanding()
-	require.Equal(t, beforeBytes, afterBytes,
-		"the detached copy does not survive its batch")
-	require.Equal(t, beforeObjects, afterObjects)
+	ins.ctr.extFill.Free()
 	shared.Free(q)
+	require.Zero(t, q.CurrNB(), "the fill's copy is released with the operator")
 }
 
-// TestCheckExternalNotNullIgnoreDetachesEachAliasedDestination pins the
-// counterexample to a single-detach shortcut: when two NOT NULL dependent
+// TestCheckExternalNotNullIgnoreCopiesEachAliasedDestination pins the
+// counterexample to a single-copy shortcut: when two NOT NULL dependent
 // columns (b1, b2 both DEFAULT (a)) share a's flat vector, each destination
-// needs its own detached storage - one shared detachment would keep the
-// b1/b2 alias, so filling it for b1 would clear the shared NULL before b2's
-// own fill, and b2's adjusted-row warning would never be recorded. Each
-// column reports its own adjusted row.
-func TestCheckExternalNotNullIgnoreDetachesEachAliasedDestination(t *testing.T) {
+// gets its own copy, and each column reports its own adjusted row.
+func TestCheckExternalNotNullIgnoreCopiesEachAliasedDestination(t *testing.T) {
 	q := mpool.MustNewZero()
 	proc := newExternalIgnoreLoadProc(t, q)
 	session := proc.Session.(*extIgnoreWarningSession)
@@ -753,27 +758,27 @@ func TestCheckExternalNotNullIgnoreDetachesEachAliasedDestination(t *testing.T) 
 	ins.InsertCtx = &InsertCtx{Attrs: []string{"a", "b1", "b2"}}
 	ins.ctr.extCols = []*plan.ColDef{nullableCol("a"), notNullCol("b1"), notNullCol("b2")}
 
-	shared := vector.NewVec(types.T_int64.ToType())
+	shared := vector.NewVec(types.T_int64.ToType(), q)
 	require.NoError(t, vector.AppendFixed[int64](shared, 1, false, q))
 	require.NoError(t, vector.AppendFixed[int64](shared, 0, true, q))
 	require.NoError(t, vector.AppendFixed[int64](shared, 2, false, q))
-	bat := batch.New([]string{"a", "b1", "b2"})
+	bat := batch.NewWithSize(3)
 	for j := range bat.Vecs {
 		bat.Vecs[j] = shared
 	}
 	bat.SetRowCount(3)
-	beforeBytes, beforeObjects := q.OnHeapOutstanding()
 
-	require.NoError(t, ins.checkExternalNotNull(proc, bat))
+	out, err := ins.checkExternalNotNull(proc, bat)
+	require.NoError(t, err)
 	require.True(t, shared.IsNull(1), "a keeps its live NULL row")
-	require.False(t, bat.Vecs[1] == shared, "b1 runs in its own detached storage")
-	require.False(t, bat.Vecs[2] == shared, "b2 runs in its own detached storage")
-	require.False(t, bat.Vecs[1] == bat.Vecs[2],
-		"the two destinations were not detached from each other into one copy")
-	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 1))
-	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[2], 1),
-		"the second destination was still a NULL when its own fill ran")
-	require.Len(t, ins.ctr.extFillOwned, 2)
+	for j := range bat.Vecs {
+		require.True(t, bat.Vecs[j] == shared, "the child's batch slots are unchanged")
+	}
+	require.False(t, out.Vecs[1] == shared, "b1 is the fill's own copy")
+	require.False(t, out.Vecs[2] == shared, "b2 is the fill's own copy")
+	require.False(t, out.Vecs[1] == out.Vecs[2], "each destination has its own copy")
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[1], 1))
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[2], 1))
 	require.Equal(t, uint64(2), session.total,
 		"each dependent column reports its own adjusted row")
 	require.Equal(t, []string{
@@ -781,13 +786,9 @@ func TestCheckExternalNotNullIgnoreDetachesEachAliasedDestination(t *testing.T) 
 		"Column 'b2' cannot be null",
 	}, session.messages)
 
-	ins.releaseExtFillOwned(bat, proc)
-	require.True(t, bat.Vecs[1] == shared && bat.Vecs[2] == shared)
-	require.Empty(t, ins.ctr.extFillOwned)
-	afterBytes, afterObjects := q.OnHeapOutstanding()
-	require.Equal(t, beforeBytes, afterBytes)
-	require.Equal(t, beforeObjects, afterObjects)
+	ins.ctr.extFill.Free()
 	shared.Free(q)
+	require.Zero(t, q.CurrNB())
 }
 
 // TestExternalInsertIgnoreFillKeepsAliasedNullableSibling walks the review's
@@ -807,11 +808,11 @@ func TestExternalInsertIgnoreFillKeepsAliasedNullableSibling(t *testing.T) {
 	const rowsPerBatch = 3
 	const batches = 2
 	newSrc := func() *batch.Batch {
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), q)
 		require.NoError(t, vector.AppendFixed[int64](vec, 1, false, q))
 		require.NoError(t, vector.AppendFixed[int64](vec, 0, true, q))
 		require.NoError(t, vector.AppendFixed[int64](vec, 2, false, q))
-		src := batch.New([]string{"s"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = vec
 		src.SetRowCount(rowsPerBatch)
 		return src

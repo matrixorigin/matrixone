@@ -61,7 +61,7 @@ func TestWriteBatchNilEmpty(t *testing.T) {
 	w := NewExternalWriter(nil, WriterConfig{Format: FormatCSV}).(*externalWriter)
 	require.NoError(t, w.WriteBatch(context.Background(), nil, nil))
 
-	empty := batch.New([]string{"v"})
+	empty := batch.NewWithSize(1)
 	empty.SetRowCount(0)
 	require.NoError(t, w.WriteBatch(context.Background(), empty, nil))
 
@@ -102,13 +102,12 @@ func TestExternalWriterChecksResolvedStageAuthority(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "not-created")
 	proc.GetStageCache().Set("owned", stage.StageDef{Name: "owned", Url: &url.URL{Scheme: stage.FILE_PROTOCOL, Path: dir}})
 	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{"id"}
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(7), false, proc.Mp()))
 	bat.SetRowCount(1)
 	analyzer := process.NewAnalyzer(0, false, false, "externalwrite")
-	w := NewExternalWriter(proc, WriterConfig{Pattern: "stage://owned/output.csv", Attrs: bat.Attrs})
+	w := NewExternalWriter(proc, WriterConfig{Pattern: "stage://owned/output.csv", Attrs: []string{"id"}})
 	t.Cleanup(func() { w.Abort(t.Context()) })
 	require.ErrorContains(t, w.WriteBatch(t.Context(), bat, analyzer), "only the sys account moadmin role")
 	_, err := os.Stat(dir)

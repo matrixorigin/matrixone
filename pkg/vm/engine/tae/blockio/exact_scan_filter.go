@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -47,14 +46,9 @@ func blockDataReadExactFilter(ctx context.Context, info *objectio.BlockInfo, ds 
 		}
 		defer tombstones.Release()
 		if !tombstones.IsEmpty() {
-			visible := vector.GetSels()
-			defer func() { vector.PutSels(visible) }()
-			for row := 0; row < int(info.MetaLocation().Rows()); row++ {
-				if !tombstones.Contains(uint64(row)) {
-					visible = append(visible, int64(row))
-				}
-			}
-			rows = visible
+			// Preserve nonnil empty when every row is tombstoned: nil means
+			// that no storage selection was supplied to exact materialization.
+			rows = buildTopInputRows(int(info.MetaLocation().Rows()), tombstones)
 		}
 	}
 	stats, err := ioutil.LoadColumnsDataByExactFilter(ctx, columns, typs, fs, info.MetaLocation(), output.Vecs[:len(columns)], rows, filter.Exact, mp, policy)

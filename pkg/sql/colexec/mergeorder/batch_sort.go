@@ -16,6 +16,7 @@ package mergeorder
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -37,14 +38,16 @@ func SortBatch(
 	threshold int64,
 	analyzer process.Analyzer,
 ) (*batch.Batch, error) {
-	return sortBatch(proc, input, fs, threshold, analyzer, nil)
+	return sortBatch(proc, input, fs, threshold, analyzer, nil, nil)
 }
 
 // sortBatch sorts input and invokes inputConsumed after every input row has
 // been copied into sorter-owned resident batches or spill runs and before the
 // final result is collected. The callback transfers ownership of the source
 // input to the sorter; it is not invoked when validation, input copying, or
-// empty-input duplication fails.
+// empty-input duplication fails. Resident sorted chunks and the collected
+// result allocate through mp (proc's pool when nil), so a caller can charge
+// them to its own accounted view.
 func sortBatch(
 	proc *process.Process,
 	input *batch.Batch,
@@ -52,12 +55,16 @@ func sortBatch(
 	threshold int64,
 	analyzer process.Analyzer,
 	inputConsumed func(),
+	mp *mpool.MPool,
 ) (*batch.Batch, error) {
 	if proc == nil || input == nil || len(fs) == 0 {
 		return nil, moerr.NewInvalidInputNoCtx("invalid merge-order sort input")
 	}
+	if mp == nil {
+		mp = proc.Mp()
+	}
 	if input.RowCount() == 0 {
-		result, err := input.Dup(proc.Mp())
+		result, err := input.Dup(mp)
 		if err == nil && inputConsumed != nil {
 			inputConsumed()
 		}
@@ -72,6 +79,7 @@ func sortBatch(
 		batchList: make([]*batch.Batch, 0, defaultCacheBatchSize),
 		orderCols: make([][]*vector.Vector, 0, defaultCacheBatchSize),
 		budget:    budget,
+		sortMP:    mp,
 	}
 	ctr.setSpillThreshold(threshold)
 	defer func() {
@@ -82,14 +90,11 @@ func sortBatch(
 					orderCols = ctr.orderCols[i]
 				}
 				freeOrderColumns(proc.Mp(), ctr.batchList[i], orderCols)
-				ctr.batchList[i].Clean(proc.Mp())
+				ctr.batchList[i].Clean(ctr.residentMP(proc))
 			}
 		}
 		ctr.cleanupSpill(proc)
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
-		}
+		ctr.cleanBuf()
 		for i := range ctr.executors {
 			if ctr.executors[i] != nil {
 				ctr.executors[i].Free()
@@ -139,7 +144,7 @@ func SortBatchWithExtraVectors(
 	extra []*vector.Vector,
 ) (*batch.Batch, []*vector.Vector, error) {
 	sorted, _, sortedExtra, err := sortBatchWithColumns(
-		proc, input, fs, threshold, analyzer, nil, extra, nil)
+		proc, input, fs, threshold, analyzer, nil, extra, nil, nil)
 	return sorted, sortedExtra, err
 }
 
@@ -158,7 +163,7 @@ func SortBatchWithPrecomputedOrder(
 	extra []*vector.Vector,
 ) (*batch.Batch, []*vector.Vector, []*vector.Vector, error) {
 	return sortBatchWithPrecomputedOrder(
-		proc, input, fs, threshold, analyzer, orderCols, extra, nil)
+		proc, input, fs, threshold, analyzer, orderCols, extra, nil, nil)
 }
 
 // SortBatchWithPrecomputedOrderAndRelease is the ownership-transfer variant
@@ -166,7 +171,8 @@ func SortBatchWithPrecomputedOrder(
 // independent copies of input, orderCols, and extra, and the callback must
 // release those caller-owned vectors. The callback runs exactly once before
 // final merge collection; if sorting fails before that point, the caller keeps
-// ownership and the callback is not called.
+// ownership and the callback is not called. Resident sorted copies and the
+// result allocate through mp (proc's pool when nil).
 func SortBatchWithPrecomputedOrderAndRelease(
 	proc *process.Process,
 	input *batch.Batch,
@@ -176,9 +182,10 @@ func SortBatchWithPrecomputedOrderAndRelease(
 	orderCols []*vector.Vector,
 	extra []*vector.Vector,
 	inputConsumed func(),
+	mp *mpool.MPool,
 ) (*batch.Batch, []*vector.Vector, []*vector.Vector, error) {
 	return sortBatchWithPrecomputedOrder(
-		proc, input, fs, threshold, analyzer, orderCols, extra, inputConsumed)
+		proc, input, fs, threshold, analyzer, orderCols, extra, inputConsumed, mp)
 }
 
 func sortBatchWithPrecomputedOrder(
@@ -190,6 +197,7 @@ func sortBatchWithPrecomputedOrder(
 	orderCols []*vector.Vector,
 	extra []*vector.Vector,
 	inputConsumed func(),
+	mp *mpool.MPool,
 ) (*batch.Batch, []*vector.Vector, []*vector.Vector, error) {
 	if len(orderCols) != len(fs) {
 		return nil, nil, nil, moerr.NewInvalidInputNoCtx("merge-order key count mismatch")
@@ -215,7 +223,7 @@ func sortBatchWithPrecomputedOrder(
 		}
 	}
 	return sortBatchWithColumns(
-		proc, input, precomputed, threshold, analyzer, orderCols, extra, inputConsumed)
+		proc, input, precomputed, threshold, analyzer, orderCols, extra, inputConsumed, mp)
 }
 
 func sortBatchWithColumns(
@@ -227,6 +235,7 @@ func sortBatchWithColumns(
 	orderCols []*vector.Vector,
 	extra []*vector.Vector,
 	inputConsumed func(),
+	mp *mpool.MPool,
 ) (*batch.Batch, []*vector.Vector, []*vector.Vector, error) {
 	if proc == nil || input == nil {
 		return nil, nil, nil, moerr.NewInvalidInputNoCtx("invalid merge-order sort input")
@@ -242,7 +251,7 @@ func sortBatchWithColumns(
 		}
 	}
 	if len(orderCols) == 0 && len(extra) == 0 {
-		sorted, err := sortBatch(proc, input, fs, threshold, analyzer, inputConsumed)
+		sorted, err := sortBatch(proc, input, fs, threshold, analyzer, inputConsumed, mp)
 		return sorted, nil, nil, err
 	}
 
@@ -253,21 +262,18 @@ func sortBatchWithColumns(
 	combined.Vecs = append(combined.Vecs[:0], input.Vecs...)
 	combined.Vecs = append(combined.Vecs, orderCols...)
 	combined.Vecs = append(combined.Vecs, extra...)
-	combined.Attrs = make([]string, len(combined.Vecs))
-	copy(combined.Attrs, input.Attrs)
 	combined.Recursive = input.Recursive
 	combined.SetRowCount(input.RowCount())
 	dataCols := len(input.Vecs)
-	inputAttrs := append([]string(nil), input.Attrs...)
 
-	sorted, err := sortBatch(proc, combined, fs, threshold, analyzer, inputConsumed)
+	sorted, err := sortBatch(proc, combined, fs, threshold, analyzer, inputConsumed, mp)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	orderCount := len(orderCols)
 	if sorted == nil || len(sorted.Vecs) != dataCols+orderCount+len(extra) {
 		if sorted != nil {
-			sorted.Clean(proc.Mp())
+			sorted.Clean(mp)
 		}
 		return nil, nil, nil, moerr.NewInternalErrorNoCtx("merge-order carry vector count mismatch")
 	}
@@ -275,7 +281,6 @@ func sortBatchWithColumns(
 	sortedOrder := append([]*vector.Vector(nil), sorted.Vecs[dataCols:dataCols+orderCount]...)
 	sortedExtra := append([]*vector.Vector(nil), sorted.Vecs[dataCols+orderCount:]...)
 	sorted.Vecs = sorted.Vecs[:dataCols]
-	sorted.Attrs = inputAttrs
 	return sorted, sortedOrder, sortedExtra, nil
 }
 
@@ -327,8 +332,8 @@ func (ctr *container) appendSortedChunk(
 	if err != nil {
 		return err
 	}
-	chunk, err := window.Dup(proc.Mp())
-	window.Clean(proc.Mp())
+	chunk, err := window.Dup(ctr.sortAllocator(proc))
+	window.FreeWindow()
 	if err != nil {
 		return err
 	}
@@ -336,7 +341,7 @@ func (ctr *container) appendSortedChunk(
 	orderCols, err := ctr.evaluateOrderColumns(proc, chunk)
 	if err != nil {
 		freeOrderColumns(proc.Mp(), chunk, orderCols)
-		chunk.Clean(proc.Mp())
+		chunk.Clean(ctr.sortAllocator(proc))
 		return err
 	}
 
@@ -345,16 +350,16 @@ func (ctr *container) appendSortedChunk(
 		sels[i] = int64(i)
 	}
 	mosort.SortByVectorsWithTypes(sels, orderCols, desc, nullsLast, ctr.orderTypes)
-	if err = chunk.Shuffle(sels, proc.Mp()); err != nil {
+	if err = chunk.Shuffle(sels, ctr.sortAllocator(proc)); err != nil {
 		freeOrderColumns(proc.Mp(), chunk, orderCols)
-		chunk.Clean(proc.Mp())
+		chunk.Clean(ctr.sortAllocator(proc))
 		return err
 	}
 	for _, vec := range orderCols {
 		if vec != nil && !batchContainsVector(chunk, vec) {
-			if err = vec.Shuffle(sels, proc.Mp()); err != nil {
+			if err = vec.Shuffle(sels, vec.MPool()); err != nil {
 				freeOrderColumns(proc.Mp(), chunk, orderCols)
-				chunk.Clean(proc.Mp())
+				chunk.Clean(ctr.sortAllocator(proc))
 				return err
 			}
 		}
@@ -364,13 +369,13 @@ func (ctr *container) appendSortedChunk(
 		if !ctr.spilling {
 			if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
 				freeOrderColumns(proc.Mp(), chunk, orderCols)
-				chunk.Clean(proc.Mp())
+				chunk.Clean(ctr.sortAllocator(proc))
 				return err
 			}
 		}
 		err = ctr.spillEvaluatedBatch(proc, chunk, orderCols, analyzer)
 		freeOrderColumns(proc.Mp(), chunk, orderCols)
-		chunk.Clean(proc.Mp())
+		chunk.Clean(ctr.sortAllocator(proc))
 		return err
 	}
 
@@ -391,7 +396,7 @@ func (ctr *container) collectSortedBatch(
 	var output *batch.Batch
 	defer func() {
 		if err != nil && output != nil {
-			output.Clean(proc.Mp())
+			output.Clean(ctr.sortAllocator(proc))
 		}
 	}()
 	if ctr.spilling {
@@ -424,7 +429,7 @@ func (ctr *container) collectSortedBatch(
 		}
 		if result.Batch != nil && result.Batch.RowCount() > 0 {
 			var next *batch.Batch
-			next, err = appendSortedResult(proc, output, result.Batch)
+			next, err = appendSortedResult(proc, ctr.sortAllocator(proc), output, result.Batch)
 			if err != nil {
 				return nil, err
 			}
@@ -443,7 +448,7 @@ func (ctr *container) collectSpillResult(proc *process.Process) (*batch.Batch, e
 	)
 	defer func() {
 		if err != nil && output != nil {
-			output.Clean(proc.Mp())
+			output.Clean(ctr.sortAllocator(proc))
 		}
 	}()
 	for {
@@ -455,7 +460,7 @@ func (ctr *container) collectSpillResult(proc *process.Process) (*batch.Batch, e
 		}
 		if result.Batch != nil && result.Batch.RowCount() > 0 {
 			var next *batch.Batch
-			next, err = appendSortedResult(proc, output, result.Batch)
+			next, err = appendSortedResult(proc, ctr.sortAllocator(proc), output, result.Batch)
 			if err != nil {
 				return nil, err
 			}
@@ -469,10 +474,20 @@ func (ctr *container) collectSpillResult(proc *process.Process) (*batch.Batch, e
 
 func appendSortedResult(
 	proc *process.Process,
+	mp *mpool.MPool,
 	destination, source *batch.Batch,
 ) (*batch.Batch, error) {
 	if destination == nil {
-		return source.Dup(proc.Mp())
+		return source.Dup(mp)
 	}
-	return destination.AppendWithCopy(proc.Ctx, proc.Mp(), source)
+	return destination.AppendWithCopy(proc.Ctx, mp, source)
+}
+
+// sortAllocator is the pool a standalone sort's resident copies and result
+// allocate from.
+func (ctr *container) sortAllocator(proc *process.Process) *mpool.MPool {
+	if ctr.sortMP != nil {
+		return ctr.sortMP
+	}
+	return proc.Mp()
 }

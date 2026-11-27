@@ -30,9 +30,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -844,6 +844,15 @@ func (tcc *TxnCompilerContext) resolveForCatalogValidation(dbName, tableName str
 	return tcc.resolve(dbName, tableName, snapshot, true, nil)
 }
 
+// normalizeSystemRelationNames matches the catalog lookup for MySQL system schemas.
+func normalizeSystemRelationNames(dbName, tableName string) (string, string) {
+	lowerDB := strings.ToLower(dbName)
+	if slices.Contains(mysql.CaseInsensitiveDbs, lowerDB) {
+		return lowerDB, strings.ToLower(tableName)
+	}
+	return dbName, tableName
+}
+
 func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot *plan2.Snapshot, resolveTemporaryAlias bool, result *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	start := time.Now()
 	defer func() {
@@ -852,11 +861,7 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 		v2.TotalResolveDurationHistogram.Observe(end)
 	}()
 
-	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
-	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
-		dbName = strings.ToLower(dbName)
-		tableName = strings.ToLower(tableName)
-	}
+	dbName, tableName = normalizeSystemRelationNames(dbName, tableName)
 
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, snapshot)
 	if err != nil {
@@ -894,7 +899,7 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 		useSessionTemporary = false
 	}
 	isTmpTable := false
-	if useSessionTemporary && resolveTemporaryAlias {
+	if useSessionTemporary && resolveTemporaryAlias && !defines.IsPersistentViewBinding(tcc.GetContext()) {
 		realName, temporary := tcc.GetSession().GetTempTable(dbName, tableName)
 		if temporary {
 			tableName, isTmpTable = realName, true
@@ -1451,7 +1456,7 @@ func (tcc *TxnCompilerContext) ResolveVariableBinaryString(
 func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	varName string,
 	isSystemVar, isGlobalVar bool,
-) (vector.PrepareParamKind, error) {
+) (types.StringConversionKind, error) {
 	if value, declaredType, hasDeclaredType, ok := resolveStoredProcedureVariableWithType(
 		tcc.execCtx.reqCtx, varName,
 	); ok {
@@ -1463,7 +1468,7 @@ func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	if isSystemVar {
 		value, err := tcc.ResolveVariable(varName, true, isGlobalVar)
 		if err != nil {
-			return vector.PrepareParamNone, err
+			return types.StringConversionString, err
 		}
 		return prepareParamKindFromValue(value), nil
 	}
@@ -1471,9 +1476,9 @@ func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	if err != nil {
 		// See ResolveVariable: an unassigned user variable is NULL and has no
 		// prepared-parameter conversion category.
-		return vector.PrepareParamNone, nil
+		return types.StringConversionString, nil
 	}
-	return udVar.PrepareParamKind, nil
+	return udVar.prepareParamKind(), nil
 }
 
 func resolveStoredProcedureVariable(ctx context.Context, varName string) (interface{}, bool) {
@@ -1640,11 +1645,13 @@ func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
 
-	// Resolve temporary table alias: the ObjectRef may carry the original
-	// user-visible name while the real engine name is the session-scoped
-	// temp name.  Without this lookup Stats() would fail with "no such table".
-	if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
-		tableName = realName
+	// Only session-owned temporary references may need alias translation.
+	// Statistics can run after leaving the View binding scope; translating a
+	// bound permanent source here would read/cache the shadow's statistics.
+	if obj.NotLockMeta {
+		if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
+			tableName = realName
+		}
 	}
 
 	// 1. Check database and subscription
@@ -2006,4 +2013,63 @@ func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName stri
 
 func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 	return checkTimeStampValid(tcc.GetContext(), tcc.GetSession(), ts)
+}
+
+func (tcc *TxnCompilerContext) GetCurrentUserID() (uint32, error) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tenant := tcc.execCtx.ses.GetTenantInfo()
+	if tenant == nil {
+		return 0, moerr.NewInternalError(tcc.GetContext(), "current user identity is unavailable")
+	}
+	return tenant.GetUserID(), nil
+}
+
+// GetCurrentUserName returns the authenticated catalog user, not the raw protocol login.
+func (tcc *TxnCompilerContext) GetCurrentUserName() (string, error) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tenant := tcc.execCtx.ses.GetTenantInfo()
+	if tenant == nil {
+		return "", moerr.NewInternalError(tcc.GetContext(), "current user identity is unavailable")
+	}
+	return tenant.GetUser(), nil
+}
+
+// SamplePointIndexMatches is optional for compiler contexts that own a local
+// transaction and its file service. The plan may discard the observation.
+func (tcc *TxnCompilerContext) SamplePointIndexMatches(db, table uint64, rows int, candidates [][]engine.IndexPointKey) ([engine.MaxPointSampleCandidates]int, bool) {
+	var empty [engine.MaxPointSampleCandidates]int
+	proc := tcc.GetProcess()
+	if proc == nil || proc.Base == nil || proc.Mp() == nil {
+		return empty, false
+	}
+	th := tcc.GetTxnHandler()
+	storage := th.GetStorage()
+	if wrapped, ok := storage.(*engine.EntireEngine); ok {
+		storage = wrapped.Engine
+	}
+	observer, ok := storage.(interface {
+		SamplePointIndexMatches(context.Context, TxnOperator, uint64, uint64, int, [][]engine.IndexPointKey, *mpool.MPool) ([engine.MaxPointSampleCandidates]int, bool)
+	})
+	if !ok {
+		return empty, false
+	}
+	return observer.SamplePointIndexMatches(tcc.GetContext(), th.GetTxn(), db, table, rows, candidates, proc.Mp())
+}
+
+// BoundEqualityRows only uses metadata already present on the planning CN.
+func (tcc *TxnCompilerContext) BoundEqualityRows(table *plan.TableDef, column *plan.ColDef, value []byte, valueType types.Type) (candidates, total uint64) {
+	th := tcc.GetTxnHandler()
+	storage := th.GetStorage()
+	if wrapped, ok := storage.(*engine.EntireEngine); ok {
+		storage = wrapped.Engine
+	}
+	observer, ok := storage.(interface {
+		BoundEqualityRows(context.Context, TxnOperator, *plan.TableDef, *plan.ColDef, []byte, types.Type) (candidates, total uint64)
+	})
+	if !ok {
+		return 0, 0
+	}
+	return observer.BoundEqualityRows(tcc.GetContext(), th.GetTxn(), table, column, value, valueType)
 }

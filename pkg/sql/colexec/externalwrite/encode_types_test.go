@@ -28,14 +28,14 @@ import (
 
 // fixedCol builds a one-row vector of fixed type t holding v.
 func fixedCol[T any](t *testing.T, mp *mpool.MPool, typ types.Type, v T) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendFixed[T](vec, v, false, mp))
 	return vec
 }
 
 // bytesCol builds a one-row vector of bytes type typ holding v.
 func bytesCol(t *testing.T, mp *mpool.MPool, typ types.Type, v []byte) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendBytes(vec, v, false, mp))
 	return vec
 }
@@ -105,13 +105,13 @@ func allTypesBatch(t *testing.T, mp *mpool.MPool) (*batch.Batch, []string) {
 	}
 
 	names := make([]string, len(cols))
-	bat := batch.New(func() []string {
+	bat := batch.NewWithSize(len(func() []string {
 		n := make([]string, len(cols))
 		for i, c := range cols {
 			n[i] = c.name
 		}
 		return n
-	}())
+	}()))
 	for i, c := range cols {
 		bat.Vecs[i] = c.vec
 		names[i] = c.name
@@ -189,7 +189,7 @@ func TestEncodeJSONLineAllTypes(t *testing.T) {
 		jvecs = append(jvecs, bat.Vecs[k])
 	}
 	require.Len(t, jnames, len(names)-len(excluded))
-	jbat := batch.New(jnames)
+	jbat := batch.NewWithSize(len(jnames))
 	jbat.Vecs = jvecs
 	jbat.SetRowCount(bat.RowCount())
 
@@ -212,11 +212,11 @@ func TestEncodeJSONLineAllTypes(t *testing.T) {
 // TestCSVValueUnsupportedType ensures an unsupported column type errors.
 func TestCSVValueUnsupportedType(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_Rowid.ToType())
+	vec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[types.Rowid](vec, types.Rowid{}, false, mp))
 	defer vec.Free(mp)
 
-	bat := batch.New([]string{"r"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)
 
@@ -291,7 +291,7 @@ func TestEncodeCSVConstVector(t *testing.T) {
 	cf, err := vector.NewConstFixed[int64](types.T_int64.ToType(), 42, 3, mp)
 	require.NoError(t, err)
 
-	bat := batch.New([]string{"v"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = cf
 	bat.SetRowCount(3)
 	defer bat.Clean(mp)
@@ -307,7 +307,7 @@ func TestEncodeCSVConstVector(t *testing.T) {
 // tokenizer cannot split them.
 func TestEncodeCSVMinimalQuoting(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"c_dt", "c_f"})
+	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = fixedCol(t, mp, types.T_date.ToType(), must(types.ParseDateCast("2026-06-08")))
 	bat.Vecs[1] = fixedCol(t, mp, types.T_float64.ToType(), 1.5)
 	bat.SetRowCount(1)
@@ -338,7 +338,7 @@ func TestEncodeCSVMinimalQuoting(t *testing.T) {
 
 	// An enclosure byte occurring inside an unenclosed value forces enclosing
 	// (with doubling); the reader's doubled-quote collapsing restores it.
-	ibat := batch.New([]string{"v"})
+	ibat := batch.NewWithSize(1)
 	ibat.Vecs[0] = fixedCol(t, mp, types.T_int64.ToType(), int64(55))
 	ibat.SetRowCount(1)
 	defer ibat.Clean(mp)

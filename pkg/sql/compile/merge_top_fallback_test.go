@@ -17,7 +17,6 @@ package compile
 import (
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -62,7 +61,7 @@ func runLargeOffsetMemory(t testing.TB, n int) {
 	var bats []*batch.Batch
 	for start := 0; start < n; start += 8192 {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), c.proc.Mp())
 		values := make([]int64, min(8192, n-start))
 		for j := range values {
 			values[j] = int64(start + j)
@@ -286,14 +285,13 @@ func TestCompileTopKeepsSingleScopeLargeLimitLocal(t *testing.T) {
 
 func TestCompileTopStaleStatisticsCannotAdmitVarlenPayload(t *testing.T) {
 	for _, k := range []uint64{16383, 16384, 16385} {
-		for _, version := range []int64{defines.MORPCVersion52, defines.MORPCLatestVersion} {
+		{
 			c := newMergeTopFallbackTestCompile(t)
-			runtime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(runtime.MOProtocolVersion, version)
 			node := newMergeTopFallbackTestNode(plan2.MakePlan2Uint64ConstExprWithType(k))
 			node.Stats = &plan.Stats{Cost: 1, Rowsize: 1}
 			node.ProjectList = append(node.ProjectList, &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}})
 			result := c.compileTop(node, node.Limit, newMergeTopFallbackTestScopes(c, 2))
-			if version >= defines.MORPCVersion53 && k <= mergeTopResidentPlanThreshold {
+			if k <= mergeTopResidentPlanThreshold {
 				gather, ok := result[0].RootOp.(*mergetop.MergeTop)
 				require.True(t, ok)
 				require.True(t, gather.OrderedStreams)
@@ -335,45 +333,6 @@ func TestResidentTopPayloadProofUsesPhysicalInputSchema(t *testing.T) {
 		node.ProjectList = append(node.ProjectList, node.ProjectList[0])
 	}
 	require.False(t, residentTopPayloadFits(node, limitExpr))
-}
-
-func TestCompileTopFallsBackDuringRollingUpgrade(t *testing.T) {
-	c := newMergeTopFallbackTestCompile(t)
-	rt := runtime.ServiceRuntime(c.proc.GetService())
-	previous, hadPrevious := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion52)
-	t.Cleanup(func() {
-		if hadPrevious {
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
-		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion52)
-		}
-	})
-
-	limitExpr := plan2.MakePlan2Uint64ConstExprWithType(mergeTopResidentPlanThreshold + 1)
-	node := newMergeTopFallbackTestNode(limitExpr)
-	result := c.compileTop(node, limitExpr, newMergeTopFallbackTestScopes(c, 2))
-	require.Len(t, result, 1)
-	globalLimit, ok := result[0].RootOp.(*limit.Limit)
-	require.True(t, ok)
-	_, ok = globalLimit.GetOperatorBase().GetChildren(0).(*mergeorder.MergeOrder)
-	require.True(t, ok)
-	orderedReg := process.NewPipelineEdge(1, 1)
-	orderedReg.OrderedStream = true
-	orderedOutput := connector.NewArgument().WithReg(orderedReg)
-	_, _, _, _, err := prepareRemoteRunSendingData(
-		"select 1 order by 1 limit 1",
-		&Scope{RootOp: orderedOutput, Proc: c.proc},
-		c.proc,
-		nil,
-		uuid.Nil,
-	)
-	require.Error(t, err)
-	orderedOutput.Release()
-
-	result[0].FreeOperator(c)
-	result[0].release()
-	c.proc.Free()
 }
 
 func TestCompileTopFallsBackWhenOrderKeyIsNotMaterialized(t *testing.T) {

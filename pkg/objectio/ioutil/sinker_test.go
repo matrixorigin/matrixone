@@ -48,21 +48,18 @@ func mockSchema(colCnt int, pkIdx int) ([]string, []types.Type, []uint16) {
 
 func TestSinkerWriteOwnedRejectsBorrowedBackingBeforeStaging(t *testing.T) {
 	data := types.EncodeSlice([]int64{7})
-	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 1, data, nil, nil), error(nil)
 	require.NoError(t, err)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, data, lease)
-	require.NoError(t, err)
-	lease.Release()
-	bat := batch.NewOffHeap([]string{"v"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)
 
 	owned, err := new(Sinker).WriteOwned(context.Background(), bat)
 	require.False(t, owned)
 	require.ErrorContains(t, err, "unique-owned vector backing")
-	require.True(t, vec.HasBorrowedBacking())
+	require.True(t, vec.IsReadOnly())
 	bat.Clean(nil)
-	require.Nil(t, lease.Bytes())
+	require.Equal(t, []int64{7}, types.DecodeSlice[int64](data), "the lender's backing is untouched")
 }
 
 func TestNewSinker(t *testing.T) {

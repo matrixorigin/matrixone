@@ -78,6 +78,25 @@ func (dt Datetime) String() string {
 }
 
 func (dt Datetime) String2(scale int32) string {
+	if dt == ZeroDatetime || dt < 0 {
+		return datetimeString2Slow(dt, scale)
+	}
+	y, m, d, _ := dt.ToDate().Calendar(true)
+	if y < 0 || y > 9999 {
+		return datetimeString2Slow(dt, scale)
+	}
+	hour, minute, sec := dt.Clock()
+	var buf [32]byte
+	b := appendDateClock(buf[:0], int(y), int(m), int(d), int(hour), int(minute), int(sec))
+	if scale > 0 {
+		b = appendFraction(b, int64(dt)%MicroSecsPerSec, min(scale, 9))
+	}
+	return string(b)
+}
+
+// datetimeString2Slow is String2 through fmt, for values the fast path does
+// not cover: negative values and years outside 0..9999.
+func datetimeString2Slow(dt Datetime, scale int32) string {
 	if dt == ZeroDatetime {
 		if scale > 0 {
 			return "0000-00-00 00:00:00." + strings.Repeat("0", int(scale))
@@ -280,14 +299,14 @@ func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStr
 		dtSepIdx = strings.IndexAny(s, " T")
 	}
 	if len(s) < 14 && dtSepIdx < 0 {
-		if d, err := parseDateCast(ctx, s, observe); err == nil {
+		if d, err := parseDateCast(ctx, s, observe, nil); err == nil {
 			if kind != nil {
 				*kind = TemporalStringDate
 			}
 			return d.ToDatetime(), nil
 		}
 		if kind != nil {
-			if y, m, d, _, err := parseDateCastComponentsObserved(ctx, strings.TrimSpace(s), observe); err == nil && observedCalendarFields(y, m, d) {
+			if y, m, d, _, err := parseDateCastComponentsObserved(ctx, strings.TrimSpace(s), observe, nil); err == nil && observedCalendarFields(y, m, d) {
 				*kind = TemporalStringDate
 			}
 		}
@@ -354,13 +373,13 @@ func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStr
 			if dtSepIdx == len(s)-1 {
 				return -1, temporalInvalidInput(ctx, s, observe)
 			}
-			date, dateErr := parseDateCast(ctx, s[:dtSepIdx], observe)
+			date, dateErr := parseDateCast(ctx, s[:dtSepIdx], observe, nil)
 			if dateErr != nil || date == ZeroDate {
 				if kind != nil {
 					// The value parser exits before clock parsing for incomplete
 					// dates. Observe components and a valid surrogate clock only
 					// for classification; ordinary conversion keeps its error.
-					y, m, d, _, componentErr := parseDateCastComponentsObserved(ctx, strings.TrimSpace(s[:dtSepIdx]), observe)
+					y, m, d, _, componentErr := parseDateCastComponentsObserved(ctx, strings.TrimSpace(s[:dtSepIdx]), observe, nil)
 					if componentErr == nil && observedCalendarFields(y, m, d) {
 						if _, clockErr := parseDatetime(ctx, "2000-01-01 "+s[dtSepIdx+1:], scale, nil, observe); clockErr == nil {
 							*kind = TemporalStringDatetime

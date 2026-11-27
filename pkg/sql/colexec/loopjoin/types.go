@@ -45,15 +45,15 @@ const (
 const (
 	loopJoinAllocationSiteResultData mpool.AllocationSite = iota + 106
 	loopJoinAllocationSiteResultArea
-	loopJoinAllocationSiteResultNulls
-	loopJoinAllocationSiteResultGrouping
+	_ // reserved: was loopJoinAllocationSiteResultNulls
+	_ // reserved: was loopJoinAllocationSiteResultGrouping
 )
 
 const (
 	loopJoinAllocationSiteConditionData mpool.AllocationSite = iota + 118
 	loopJoinAllocationSiteConditionArea
-	loopJoinAllocationSiteConditionNulls
-	loopJoinAllocationSiteConditionGrouping
+	_ // reserved: was loopJoinAllocationSiteConditionNulls
+	_ // reserved: was loopJoinAllocationSiteConditionGrouping
 )
 
 const defaultLoopJoinResultBatchBytes = 64 * mpool.MB
@@ -96,9 +96,9 @@ type container struct {
 	condBatIdx   int
 	condStart    int
 	condEnd      int
-	// condWindow owns only its range bitmaps; vector data/area borrow the build
-	// batch. It must live as long as condVec because a column expression may
-	// return one of the window vectors directly.
+	// condWindow is a copy of a build-batch range, each vector in its source
+	// vector's pool. It must live as long as condVec because a column
+	// expression may return one of the window vectors directly.
 	condWindow   *batch.Batch
 	condWindowMP *mpool.MPool
 	// Bounded-cardinality joins scan the build before emitting their one result
@@ -122,10 +122,12 @@ type container struct {
 	buildCopyBatch *batch.Batch
 	inBat          *batch.Batch
 	resBat         *batch.Batch
-	joinBat        *batch.Batch
-	expr           colexec.ExpressionExecutor
-	cfs            []func(*vector.Vector, *vector.Vector, int64, int) error
-	mp             *message.JoinMap
+	// resBatMP is the pool resBat was created with (the result view).
+	resBatMP *mpool.MPool
+	joinBat  *batch.Batch
+	expr     colexec.ExpressionExecutor
+	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
+	mp       *message.JoinMap
 
 	// FULL OUTER JOIN bookkeeping. rightRowsMatched is a flat bitmap over
 	// all build rows; bit i is set when build row i matched at least one
@@ -152,8 +154,7 @@ type LoopJoin struct {
 	JoinType                      plan.Node_JoinType
 	MarkPos                       int
 	allocationAccount             *mpool.AllocationAccount
-	resultAllocation              *vector.AllocationAccountSelection
-	conditionAllocation           *vector.AllocationAccountSelection
+	resultAllocation              *mpool.AccountBinding
 	// recursiveProbe is derived from the operator tree during Prepare. An empty
 	// INNER/SEMI build must still drain a recursive probe until its round marker.
 	recursiveProbe bool
@@ -174,31 +175,16 @@ func (loopJoin *LoopJoin) SetAllocationAccount(
 	if loopJoin.allocationAccount == account {
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		loopJoinAllocationSiteResultData,
-		loopJoinAllocationSiteResultArea,
-		loopJoinAllocationSiteResultNulls,
-		loopJoinAllocationSiteResultGrouping,
-	)
-	if err != nil {
-		return err
-	}
-	conditionSelection, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerHashBuild,
-		loopJoinAllocationSiteConditionData,
-		loopJoinAllocationSiteConditionArea,
-		loopJoinAllocationSiteConditionNulls,
-		loopJoinAllocationSiteConditionGrouping,
 	)
 	if err != nil {
 		return err
 	}
 	loopJoin.allocationAccount = account
 	loopJoin.resultAllocation = selection
-	loopJoin.conditionAllocation = conditionSelection
 	return nil
 }
 
@@ -219,8 +205,13 @@ func (loopJoin *LoopJoin) ClearAllocationAccount(
 	}
 	loopJoin.allocationAccount = nil
 	loopJoin.resultAllocation = nil
-	loopJoin.conditionAllocation = nil
 	return nil
+}
+
+// resultMP returns the pool result vectors grow through: the result account
+// view when an account is bound, otherwise proc's pool.
+func (loopJoin *LoopJoin) resultMP(proc *process.Process) (*mpool.MPool, error) {
+	return loopJoin.resultAllocation.MP(proc.Mp())
 }
 
 func (loopJoin *LoopJoin) GetOperatorBase() *vm.OperatorBase {
@@ -286,7 +277,7 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 }
 
 func (ctr *container) cleanRightMatchState(proc *process.Process) {
-	colexec.FreeAccountedBitmap(ctr.rightRowsMatched, proc.Mp())
+	ctr.rightRowsMatched.Free()
 	ctr.rightRowsMatched = nil
 	if cap(ctr.rightBatchOffset) > 0 {
 		mpool.FreeSlice(proc.Mp(), ctr.rightBatchOffset)
@@ -315,7 +306,7 @@ func (ctr *container) clearBulkCopy() {
 
 func (ctr *container) clearConditionResult() {
 	if ctr.condWindow != nil {
-		ctr.condWindow.Clean(ctr.condWindowMP)
+		ctr.condWindow.FreeWindow()
 	}
 	ctr.condVec = nil
 	ctr.condProbeIdx = 0
@@ -345,8 +336,9 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	ctr.clearProbeResume()
 	ctr.clearBulkCopy()
 	if ctr.resBat != nil {
-		ctr.resBat.Clean(mp)
+		ctr.resBat.Clean(ctr.resBatMP)
 		ctr.resBat = nil
+		ctr.resBatMP = nil
 	}
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)

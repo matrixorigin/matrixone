@@ -68,6 +68,8 @@ PULL_IMAGE="${PULL_IMAGE:-1}"
 MO_START_TIMEOUT="${MO_START_TIMEOUT:-600}"
 # check 阶段：等待资源稳态、以及等待 MO 可用的上限（秒）
 CHECK_SETTLE_SEC="${CHECK_SETTLE_SEC:-180}"; CHECK_MO_WAIT="${CHECK_MO_WAIT:-300}"
+# DRBD 仍在同步时，按这个间隔重复读取进度，直到同步结束才继续判定检查结果。
+DRBD_SYNC_INTERVAL="${DRBD_SYNC_INTERVAL:-5}"
 DRBD9_QUORUM="${DRBD9_QUORUM:-0}"; FORMAT_DRBD="${FORMAT_DRBD:-0}"
 BOOTSTRAP="${BOOTSTRAP:-0}"; DRY_RUN="${DRY_RUN:-0}"; ASSUME_YES="${ASSUME_YES:-0}"
 HACLUSTER_PW="${HACLUSTER_PW:-}"; OPEN_PORTS="${OPEN_PORTS:-1}"
@@ -93,6 +95,8 @@ DRBD_KERNEL_FALLBACK="${DRBD_KERNEL_FALLBACK:-auto}"   # auto | never
 # 脚本目录（用于定位随包下发的 OCF agent）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_DIR="${AGENT_DIR:-$SCRIPT_DIR/agents}"
+MO_OCF_PROVIDER=matrixone
+MO_OCF_AGENT="/usr/lib/ocf/resource.d/$MO_OCF_PROVIDER/docker-compose"
 
 # ----------------------------- 工具函数 -------------------------------------
 PASS=0; FAIL=0; WARN=0; CHECK_RC=0
@@ -308,21 +312,16 @@ enable_ha_repo(){
         sed -i '/^\[highavailability\]/,/^\[/ s/^enabled=0/enabled=1/' /etc/yum.repos.d/*.repo"
 }
 
-# 把随包下发的 OCF agent 安装到系统(如 EL9 缺失的 heartbeat/docker-compose)
-ensure_ocf_agents(){
-  local src="$AGENT_DIR/heartbeat"
-  [ -d "$src" ] || return 0
-  run "install -d -m 0755 /usr/lib/ocf/resource.d/heartbeat"
-  local f n
-  for f in "$src"/*; do
-    [ -f "$f" ] || continue
-    n="$(basename "$f")"
-    if [ -f "/usr/lib/ocf/resource.d/heartbeat/$n" ]; then
-      info "OCF agent 已存在: heartbeat/$n"
-    else
-      run "install -m 0755 '$f' /usr/lib/ocf/resource.d/heartbeat/$n"
-    fi
-  done
+# 使用单独的 OCF provider，避免复用或覆盖发行版的 heartbeat 代理。
+install_mo_agent(){
+  [ "$NO_MO" != 1 ] || return 0
+  local src="$AGENT_DIR/heartbeat/docker-compose" dir="${MO_OCF_AGENT%/*}"
+  [ -r "$src" ] || die "缺少随包下发的 MatrixOne OCF agent: $src"
+  runq "install -d -m 0755 '$dir'
+tmp=\$(mktemp '$dir/.docker-compose.XXXXXX')
+trap 'rm -f -- \"\$tmp\"' EXIT
+install -m 0755 '$src' \"\$tmp\"
+mv -f -- \"\$tmp\" '$MO_OCF_AGENT'"
 }
 
 # 从源码构建 DRBD 内核模块(用于 ELRepo 无 aarch64 kmod-drbd 的场景)
@@ -398,11 +397,11 @@ stage_pkg(){
     rpm)
       enable_ha_repo
       runq "$PKG install -y epel-release"
-      pkg_install "drbd-utils drbd-pacemaker pacemaker corosync pcs resource-agents fence-agents-all sbd"
+      pkg_install "drbd-utils drbd-pacemaker pacemaker corosync pcs resource-agents fence-agents-all sbd python3"
       ensure_drbd_module_rpm
       ;;
     deb)
-      pkg_install "drbd-utils pacemaker corosync pcs fence-agents resource-agents-base resource-agents-common resource-agents-extra sbd"
+      pkg_install "drbd-utils pacemaker corosync pcs fence-agents resource-agents-base resource-agents-common resource-agents-extra sbd python3"
       # drbd 内核模块在 linux-modules-extra，必须与当前运行内核版本匹配
       if [ "$DRY_RUN" = 1 ] || ! runq "modprobe drbd"; then
         runq "DEBIAN_FRONTEND=noninteractive apt-get install -y linux-modules-extra-\$(uname -r)"
@@ -411,7 +410,7 @@ stage_pkg(){
       fi
       ;;
   esac
-  ensure_ocf_agents
+  install_mo_agent
   # 两台分别执行 pkg 阶段时都准备代理，故障后任一存活节点均可执行隔离。
   prepare_proxmox_fence
   run "printf 'drbd\n' > /etc/modules-load.d/drbd.conf"
@@ -425,7 +424,7 @@ stage_pkg(){
 # ----------------------------- 阶段 docker ----------------------------------
 compose_wrapper_path(){
   # 放 /usr/local/bin，避免覆盖发行版/第三方提供的 /usr/bin/docker-compose。
-  # ocf:heartbeat:docker-compose 的 binpath 由本脚本显式指定，路径可自选。
+  # MatrixOne OCF 代理的 binpath 由本脚本显式指定，路径可自选。
   echo "/usr/local/bin/docker-compose"
 }
 stage_docker(){
@@ -1115,6 +1114,9 @@ SBD"
 stage_resources() (
   hdr "阶段 resources: DRBD/FS/MatrixOne 资源"
   [ "$BOOTSTRAP" = 1 ] || { info "非引导节点：跳过资源创建"; return 0; }
+  if [ "$NO_MO" != 1 ] && [ "$DRY_RUN" != 1 ] && [ ! -x "$MO_OCF_AGENT" ]; then
+    die "请先在两台节点完成 pkg 阶段，安装 MatrixOne OCF agent"
+  fi
   ha_timeouts
   # Shell 顺序不等于调度事务：所有删除、创建、克隆、约束均只修改离线副本。
   # 子 shell 的 EXIT trap 覆盖成功、错误和中断；CIB 含 fencing 凭据，目录/文件限 root 访问。
@@ -1148,7 +1150,7 @@ stage_resources() (
   cib_cmd "constraint order promote p_drbd-clone then start p_fs"
   if [ "$NO_MO" != 1 ]; then
     runq "mkdir -p $MO_DIR"
-    cib_cmd "resource create p_mo ocf:heartbeat:docker-compose binpath=$(compose_wrapper_path) dirpath=$MO_DIR ymlfile=docker-compose.yaml op monitor interval=30s timeout=60s op start timeout=$MO_START_TIMEOUT interval=0 op stop timeout=120s"
+    cib_cmd "resource create p_mo ocf:$MO_OCF_PROVIDER:docker-compose binpath=$(compose_wrapper_path) dirpath=$MO_DIR ymlfile=docker-compose.yaml op monitor interval=30s timeout=60s op start timeout=$MO_START_TIMEOUT interval=0 op stop timeout=120s"
     cib_cmd "constraint colocation add p_mo with p_fs INFINITY"
     cib_cmd "constraint order start p_fs then start p_mo"
   fi
@@ -1209,6 +1211,82 @@ stage_teardown(){
 
 # ----------------------------- 阶段 check ----------------------------------
 get_crm_prop(){ crm_attribute --type crm_config --query --name "$1" 2>/dev/null | sed -n 's/.*value=\(.*\)/\1/p' | tail -1; }
+
+# 历史失败记录和“资源当前已停止”是两件事。pcs 2.1 的标题可能是
+# “Failed Resource Actions”或“Failed Fencing Actions”，旧版是 “Failed Actions”。
+# 只匹配最后一种时，前两种都会被写成没有失败。读不到状态同样不能记成通过。
+check_failed_resource_actions(){
+  local xml="" xrc=0 text="" trc=0 n=0
+  xml="$(pcs status xml 2>/dev/null)" || xrc=$?
+  if [ "$xrc" = 0 ] && printf '%s\n' "$xml" | grep -q '<'; then
+    n="$(printf '%s\n' "$xml" | grep -cE '<failure[[:space:]/>]' || true)"
+    if [ "${n:-0}" -gt 0 ]; then
+      bad "存在 ${n} 条 Failed Resource Actions（历史失败记录；不表示资源当前已停止，需 pcs resource cleanup 后复查）"
+      return
+    fi
+  fi
+  text="$(pcs status 2>&1)" || trc=$?
+  if [ "$trc" != 0 ]; then
+    bad "不能确认 Failed Actions：pcs status 退出码 ${trc}，读不到状态不能当成没有失败"
+    return
+  fi
+  if printf '%s\n' "$text" | grep -qiE '^[[:space:]]*Failed Fencing Actions:[[:space:]]*$'; then
+    bad "存在 Failed Fencing Actions（历史隔离失败记录；不表示 fencing 设备当前已停止）"
+    return
+  fi
+  if printf '%s\n' "$text" | grep -qiE '^[[:space:]]*Failed (Resource )?Actions:[[:space:]]*$'; then
+    bad "存在 Failed Resource Actions（历史失败记录；不表示资源当前已停止，需 pcs resource cleanup 后复查）"
+    return
+  fi
+  # 结构化结果和文本标题都没有失败记录，才报告没有失败。
+  ok "无 Failed Actions"
+}
+
+# 只有连接已建立且双方都能核对为 UpToDate，才是双副本一致。
+# “没看到正在同步”包含对端 Connecting、状态缺失和查询失败，那些都不是一致。
+drbd_is_syncing(){
+  printf '%s\n' "$1" | grep -qE 'replication:Sync(Source|Target)|replication:(StartingSync|PausedSync|WFBitMap)|peer-disk:Inconsistent|out-of-sync:[[:space:]]*[1-9]|oos:[[:space:]]*[1-9]'
+}
+drbd_sync_progress(){
+  local stat="$1" pct="" oos="" msg=""
+  pct="$(printf '%s\n' "$stat" | sed -n 's/.*done:\([0-9][0-9.]*\).*/\1/p' | head -1)"
+  oos="$(printf '%s\n' "$stat" | sed -n -E 's/.*(out-of-sync:[[:space:]]*[0-9]+|oos:[[:space:]]*[0-9]+).*/\1/p' | head -1)"
+  if [ -n "$pct" ]; then msg="DRBD 同步进度 ${pct}%"; else msg="DRBD 同步进度未知"; fi
+  if [ -n "$oos" ]; then msg="${msg}（待同步 ${oos}）"; fi
+  printf '%s' "$msg"
+}
+check_drbd_consistency(){
+  local step="$DRBD_SYNC_INTERVAL" shown=0
+  case "$step" in ''|*[!0-9]*|0) step=5 ;; esac
+  while true; do
+    local _dstat="" _drc=0
+    _dstat="$(drbdadm status "$DRBD_RESOURCE" 2>/dev/null)" || _drc=$?
+    if [ "$_drc" != 0 ] || [ -z "$_dstat" ]; then
+      bad "DRBD 状态未知（drbdadm status 退出码 ${_drc}），不能确认双端一致；此时不具备双副本保护"
+      return
+    fi
+    if drbd_is_syncing "$_dstat"; then
+      if [ "$shown" = 0 ]; then printf '%s\n' "$_dstat" | sed 's/^/    /'; shown=1; fi
+      printf "  ${Y}[SYNC]${N} %s\n" "$(drbd_sync_progress "$_dstat")"
+      sleep "$step"
+      continue
+    fi
+    if [ "$shown" = 0 ]; then printf '%s\n' "$_dstat" | sed 's/^/    /'; fi
+    local local_ok=0 peer_ok=0 established=0 down=0
+    if printf '%s\n' "$_dstat" | grep -qE '(^|[[:space:]])disk:UpToDate'; then local_ok=1; fi
+    if printf '%s\n' "$_dstat" | grep -q 'peer-disk:UpToDate'; then peer_ok=1; fi
+    if printf '%s\n' "$_dstat" | grep -q 'replication:Established'; then established=1; fi
+    if printf '%s\n' "$_dstat" | grep -qE 'connection:(Connecting|StandAlone|Disconnecting|Unconnected|Timeout|BrokenPipe|NetworkFailure|ProtocolError|TearDown|WFConnection|WFReportParams)'; then
+      down=1
+    fi
+    if [ "$local_ok" = 1 ] && [ "$peer_ok" = 1 ] && [ "$established" = 1 ] && [ "$down" = 0 ]; then
+      ok "DRBD 两侧数据已一致（连接 Established，双方 disk UpToDate）"
+      return
+    fi
+    bad "DRBD 未确认双端一致（需要 replication:Established，且本端 disk:UpToDate、对端 peer-disk:UpToDate）。当前为降级或状态不足，不具备双副本保护"
+    return
+  done
+}
 # wait_for <secs> <shell-cmd>：轮询命令直到成功或超时
 wait_for(){
   local t="$1"; shift; local i=0
@@ -1224,7 +1302,7 @@ stage_check(){
   # dry-run 只做预览：不执行 pcs/corosync 查询，也不等待资源稳态
   if [ "$DRY_RUN" = 1 ]; then
     info "(dry-run) 检查阶段：不执行集群查询、不等待资源稳态"
-    info "  正式执行时检查：quorum / stonith-enabled / no-quorum-policy / fencing 节点覆盖 / DRBD Promoted / p_fs / p_mo"
+    info "  正式执行时检查：quorum / stonith-enabled / no-quorum-policy / fencing 节点覆盖 / Failed Resource Actions / DRBD Promoted / 双端 UpToDate / p_fs / p_mo"
     return 0
   fi
   type -P pcs >/dev/null 2>&1 || die "无 pcs，无法执行 check 阶段"
@@ -1264,7 +1342,7 @@ stage_check(){
   for n in "$SELF" "$PEER"; do
     if printf '%s\n' "$cov" | grep -qxF "$n"; then ok "节点 $n 已被 fencing 覆盖"; else bad "节点 $n 未被 fencing 覆盖"; fi
   done
-  pcs status 2>&1 | grep -qi "Failed Actions" && bad "存在 Failed Actions" || ok "无 Failed Actions"
+  check_failed_resource_actions
 
   wait_for 180 "pcs status 2>&1 | grep -qE 'Promoted: \[ *[^] ]'" \
     && ok "DRBD 已提升为 Primary(Promoted)" || wrn "DRBD 未 Promoted（初始化/同步中属正常，稍后复查）"
@@ -1334,15 +1412,7 @@ stage_check(){
   fi
 
   if [ -b "$DRBD_VOLUME" ]; then
-    local _dstat; _dstat="$(drbdadm status "$DRBD_RESOURCE" 2>/dev/null)"
-    printf '%s\n' "$_dstat" | sed 's/^/    /'
-    # Promoted 只说明本机盘 UpToDate；initial sync 未完成时对端仍落后，
-    # 此刻切过去会丢数据，不具备本方案承诺的 RPO=0，必须显式提示。
-    if printf '%s\n' "$_dstat" | grep -qE 'replication:Sync(Source|Target)|peer-disk:Inconsistent|out-of-sync:[[:space:]]*[1-9]|oos:[[:space:]]*[1-9]'; then
-      wrn "DRBD 仍在同步（对端数据不完整），此刻不具备 RPO=0：请同步完成后复查 drbdadm status"
-    else
-      ok "DRBD 两侧数据已一致（无待同步数据）"
-    fi
+    check_drbd_consistency
   fi
 
   printf "\n${C}== 检查汇总 ==${N}\n  PASS=%d WARN=%d FAIL=%d\n" "$PASS" "$WARN" "$FAIL"
@@ -1378,7 +1448,12 @@ run_stage(){
 }
 main(){
   validate_stages
-  detect_os
+  # check 只读取集群状态，不安装软件包。单独复检时不要求本机有 dnf/yum/apt-get。
+  local _need_os=0 _os_stage
+  for _os_stage in pre pkg docker moconf drbd cluster fence resources teardown; do
+    if stage_enabled "$_os_stage"; then _need_os=1; break; fi
+  done
+  if [ "$_need_os" = 1 ]; then detect_os; fi
   run_stage pre
   run_stage pkg
   # 防火墙必须先于 drbd/cluster：pcsd(2224/tcp)、corosync(5405/udp,5404/udp)、

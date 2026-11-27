@@ -765,7 +765,7 @@ const (
 	JSON_CONTAINS                = 543
 	JSON_REMOVE                  = 544
 	JSON_CONTAINS_PATH           = 545
-	INTERNAL_JSON_ORDERING_PARAM = 546
+	INTERNAL_JSON_ORDERING_PARAM = 546 // retired: prepared parameters are typed
 	JSON_MERGE_PATCH             = 547
 	JSON_MERGE_PRESERVE          = 548
 	JSON_OVERLAPS                = 549
@@ -854,7 +854,7 @@ const (
 	// Kafka external table (issue #27518).
 	LAST_KAFKA_MESSAGE_ID = 576
 
-	INTERNAL_JSON_COMPARISON_PARAM = 577
+	INTERNAL_JSON_COMPARISON_PARAM = 577 // retired: prepared parameters are typed
 	INTERNAL_JSON_MEMBER_OF        = 578
 	// JSON_STORAGE_SIZE and JSON_STORAGE_FREE expose MatrixOne's ByteJson
 	// logical payload size and currently-supported free-space contract.
@@ -974,12 +974,15 @@ const (
 	TEMPORAL_DATETIME_BOUND  = 634
 	TEMPORAL_TIMESTAMP_BOUND = 635
 
+	MO_ASSERT_SNAPSHOT_AFTER = 636
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 636
+	FUNCTION_END_NUMBER = 637
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"mo_assert_snapshot_after":      MO_ASSERT_SNAPSHOT_AFTER,
 	"__mo_temporal_datetime_bound":  TEMPORAL_DATETIME_BOUND,
 	"__mo_temporal_timestamp_bound": TEMPORAL_TIMESTAMP_BOUND,
 	"timestampadd_second_interval":  TIMESTAMPADD_SECOND_INTERVAL,
@@ -1295,8 +1298,6 @@ var functionIdRegister = map[string]int32{
 	"json_objectagg":                 JSON_OBJECTAGG,
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
-	JsonOrderingParamFunctionName:    INTERNAL_JSON_ORDERING_PARAM,
-	JsonComparisonParamFunctionName:  INTERNAL_JSON_COMPARISON_PARAM,
 	"json_row":                       JSON_ROW,
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,

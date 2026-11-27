@@ -120,7 +120,9 @@ func finishMarkSpillTest(t *testing.T, tc *joinTestCase) {
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.barg.Reset(tc.proc, false, nil)
 	tc.arg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.arg)
 	tc.barg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.barg)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
@@ -470,7 +472,7 @@ func TestHashMarkJoinEmptySpillBucketTruthTable(t *testing.T) {
 			tc.arg.ctr.leftBat = probe
 			tc.arg.ctr.globalBuildRowCnt = tt.globalBuildRowCnt
 			tc.arg.ctr.buildHasNullKey = tt.buildHasNullKey
-			require.NoError(t, tc.arg.resetResultBat())
+			require.NoError(t, tc.arg.resetResultBat(tc.proc))
 
 			var result vm.CallResult
 			require.NoError(t, tc.arg.ctr.emptyProbe(tc.arg, tc.proc, &result))
@@ -487,7 +489,9 @@ func TestHashMarkJoinEmptySpillBucketTruthTable(t *testing.T) {
 			probe.Clean(tc.proc.Mp())
 			tc.arg.Reset(tc.proc, false, nil)
 			tc.arg.Free(tc.proc, false, nil)
+			freeTestChildren(tc.arg)
 			tc.barg.Free(tc.proc, false, nil)
+			freeTestChildren(tc.barg)
 			tc.proc.Free()
 			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 		})
@@ -605,8 +609,10 @@ func TestBooleanExistenceMarkNullMasksAndReuse(t *testing.T) {
 			for generation, buildRows := range builds {
 				probeOp := colexec.NewMockOperator().WithBatchs(makeBatches(probes))
 				buildOp := colexec.NewMockOperator().WithBatchs(makeBatches(buildRows))
+				freeTestChildren(tc.arg)
 				tc.arg.Children = nil
 				tc.arg.AppendChild(probeOp)
+				freeTestChildren(tc.barg)
 				tc.barg.Children = nil
 				tc.barg.AppendChild(buildOp)
 				func() {

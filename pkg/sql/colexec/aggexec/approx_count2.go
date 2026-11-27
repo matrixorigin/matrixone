@@ -916,7 +916,7 @@ func (exec *approxCountExec) Flush() (_ []*vector.Vector, retErr error) {
 	vecs := make([]*vector.Vector, len(exec.state))
 	defer freeAggregateResultsOnError(exec.mp, vecs, &retErr)
 	for chunk, state := range exec.state {
-		vecs[chunk], retErr = exec.allocation.newVector(types.T_uint64.ToType())
+		vecs[chunk], retErr = exec.allocation.newVector(types.T_uint64.ToType(), exec.mp)
 		if retErr != nil {
 			return nil, retErr
 		}
@@ -1078,7 +1078,7 @@ func flushHLLSketches(exec *hllStateExec) (_ []*vector.Vector, retErr error) {
 	vecs := make([]*vector.Vector, len(exec.state))
 	defer freeAggregateResultsOnError(exec.mp, vecs, &retErr)
 	for chunk, state := range exec.state {
-		vecs[chunk], retErr = exec.allocation.newVector(types.T_varbinary.ToType())
+		vecs[chunk], retErr = exec.allocation.newVector(types.T_varbinary.ToType(), exec.mp)
 		if retErr != nil {
 			return nil, retErr
 		}

@@ -238,8 +238,8 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 	txnMeta := proc.GetTxnOperator().Txn()
 	proc.GetTxnOperator().GetWorkspace().SetCloneTxn(txnMeta.SnapshotTS.PhysicalTime)
 
-	tc.dataObjBat = colexec.AllocCNS3ResultBat(false)
-	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true)
+	tc.dataObjBat = colexec.AllocCNS3ResultBat(false, proc.Mp())
+	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true, proc.Mp())
 
 	tc.srcRel = make(map[string]engine.Relation)
 	tc.srcReader = make(map[string]engine.Reader)
@@ -428,7 +428,7 @@ func clone(
 		}
 
 		if dataObjBat.RowCount() != 0 {
-			if err = dstRel.Write(dstCtx, dataObjBat); err != nil {
+			if err = dstRel.Write(dstCtx, dataObjBat, colexec.CNS3ResultAttrs); err != nil {
 				return err
 			}
 		}
@@ -445,7 +445,7 @@ func clone(
 		}
 
 		if tombstoneObjBat.RowCount() != 0 {
-			if err = dstRel.Delete(dstCtx, tombstoneObjBat, ""); err != nil {
+			if err = dstRel.Delete(dstCtx, tombstoneObjBat, colexec.CNS3TombstoneResultAttrs, ""); err != nil {
 				return err
 			}
 		}

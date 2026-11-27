@@ -376,7 +376,7 @@ func TestLoadGenerationHappy(t *testing.T) {
 	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		n++
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		v := int64(11)
 		if n == 2 {
 			v = 22
@@ -439,11 +439,11 @@ func TestFulltext2SearchInto(t *testing.T) {
 
 	// Decode the box-free buffers into vectors and zip by row (Keys[i] <-> Include[*][i]) into
 	// a pk -> (status, prio) map (result order is score-desc; equal scores are unspecified).
-	keyVec := vector.NewVec(types.T_int64.ToType())
+	keyVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vectorindex.AppendColumnBuffer(out.Keys, keyVec, mp))
-	statusVec := vector.NewVec(types.T_varchar.ToType())
+	statusVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vectorindex.AppendColumnBuffer(out.Include[0], statusVec, mp))
-	prioVec := vector.NewVec(types.T_int64.ToType())
+	prioVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vectorindex.AppendColumnBuffer(out.Include[1], prioVec, mp))
 
 	pks := vector.MustFixedColWithTypeCheck[int64](keyVec)

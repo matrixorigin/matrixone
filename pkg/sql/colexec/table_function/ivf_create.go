@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	"github.com/matrixorigin/matrixone/pkg/indexstats/sqlreader"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -148,7 +149,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 		logutil.Infof("IVFFLAT: int8 quantizer min=%g max=%g stored", qmin, qmax)
 	}
 
-	return nil
+	return writeIVFBuildInfo(proc, sqlproc, u.tblcfg, version, len(data), int(u.idxcfg.Ivfflat.Lists))
 }
 
 // kmeansCentroids returns the rows of the centroids k-means trains on data.
@@ -344,19 +345,18 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 			return err
 		}
 
-		u.nsample = u.idxcfg.Ivfflat.Lists * 50
-		train_percent := u.idxcfg.Ivfflat.KmeansTrainPercent / float64(100)
-		if u.tblcfg.DataSize > 0 {
-			ns := uint(train_percent * float64(u.tblcfg.DataSize))
-			if u.nsample > ns {
-				u.nsample = ns
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.IndexRelationPolicy = u.policy
+		if u.param.Async == "true" && !u.tblcfg.CountFromBuildTxn {
+			// InitSQL may have been registered in an earlier transaction. Use the
+			// training snapshot for both the sampling ratio and its published baseline.
+			u.tblcfg.DataSize, err = sqlreader.NonNullSourceCount(sqlproc, u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.KeyPart)
+			if err != nil {
+				return err
 			}
 		}
-		min_nsample := uint(10000)
-		if u.nsample < min_nsample {
-			u.nsample = min_nsample
-		}
-
+		u.nsample = ivfflatrt.TrainingSampleLimit(u.tblcfg.DataSize, u.idxcfg.Ivfflat.Lists, u.idxcfg.Ivfflat.KmeansTrainPercent)
+		train_percent := u.idxcfg.Ivfflat.KmeansTrainPercent / 100
 		u.sample_ratio = train_percent
 		if u.tblcfg.DataSize > 0 {
 			u.sample_ratio = float64(u.nsample) / float64(u.tblcfg.DataSize)
@@ -374,8 +374,6 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 		logutil.Infof("IVFFLAT START: pick sample. %s", sql)
 
-		sqlproc := sqlexec.NewSqlProcess(proc)
-		sqlproc.IndexRelationPolicy = u.policy
 		res, err := ivf_runSql(sqlproc, sql)
 		if err != nil {
 			return err
@@ -384,7 +382,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		logutil.Infof("IVFFLAT END: pick sample")
 
 		if len(res.Batches) == 0 {
-			u.batch = tf.createResultBatch()
+			u.batch = tf.createResultBatch(proc.Mp())
 			u.inited = true
 			return nil
 		}
@@ -448,7 +446,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		// reset slice
 		u.offset = 0
 
-		u.batch = tf.createResultBatch()
+		u.batch = tf.createResultBatch(proc.Mp())
 		u.inited = true
 		//os.Stderr.WriteString(fmt.Sprintf("nsample %d, train_percent %f, iter %d\n", u.nsample, train_percent, u.idxcfg.Ivfflat.KmeansMaxIteration))
 		// cleanup the batch

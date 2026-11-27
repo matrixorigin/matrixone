@@ -36,11 +36,12 @@ func TestOptimisticRCWriteDependencies(t *testing.T) {
 		t.Run(map[bool]string{false: "data", true: "tombstone"}[tombstone], func(t *testing.T) {
 			tbl, eng, fs, keys := newPersistedPKCheckTable(t, types.T_int64, tombstone)
 			mp := tbl.proc.Load().Mp()
-			keys.Attrs = []string{"pk"}
+			keysAttrs := []string{"pk"}
 			for _, typ := range []int{INSERT, DELETE} {
-				e := Entry{typ: typ, tableId: tbl.tableId, bat: keys}
+				e := Entry{typ: typ, tableId: tbl.tableId, bat: keys, attrs: keysAttrs}
 				if typ == DELETE {
-					e.bat = &batch.Batch{Attrs: []string{"rowid", "pk"}, Vecs: []*vector.Vector{nil, keys.Vecs[0]}}
+					e.bat = &batch.Batch{Vecs: []*vector.Vector{nil, keys.Vecs[0]}}
+					e.attrs = []string{"rowid", "pk"}
 				}
 				require.Error(t, validateOptimisticWriteEntry(t.Context(), tbl, e, types.BuildTS(10, 0), types.BuildTS(50, 0)))
 				require.NoError(t, validateOptimisticWriteEntry(t.Context(), tbl, e, types.BuildTS(50, 0), types.BuildTS(60, 0)))
@@ -57,8 +58,8 @@ func TestOptimisticRCWriteDependencies(t *testing.T) {
 			require.NoError(t, err)
 			metadata := batch.NewWithSize(2)
 			defer metadata.Clean(mp)
-			metadata.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-			metadata.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+			metadata.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+			metadata.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 			stats := writer.GetObjectStats()
 			require.NoError(t, vector.AppendBytes(metadata.Vecs[1], stats.Marshal(), false, mp))
 			metadata.SetRowCount(1)
@@ -82,7 +83,7 @@ func TestOptimisticRCSpilledDelete(t *testing.T) {
 	mp := tbl.proc.Load().Mp()
 	data := batch.NewWithSize(2)
 	defer data.Clean(mp)
-	data.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	var err error
 	data.Vecs[1], err = keys.Vecs[0].Dup(mp)
 	require.NoError(t, err)
@@ -99,7 +100,7 @@ func TestOptimisticRCSpilledDelete(t *testing.T) {
 	require.EqualValues(t, 2, stats.BlkCnt())
 	metadata := batch.NewWithSize(1)
 	defer metadata.Clean(mp)
-	metadata.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	metadata.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(metadata.Vecs[0], stats.Marshal(), false, mp))
 	metadata.SetRowCount(1)
 	e := Entry{typ: DELETE, tableId: tbl.tableId, bat: metadata, fileName: "cn-tombstone"}

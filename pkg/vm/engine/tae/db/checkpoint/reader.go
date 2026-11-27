@@ -28,12 +28,8 @@ import (
 	"go.uber.org/zap"
 )
 
-func MakeMetadataBatch() *batch.Batch {
-	return batch.NewWithSchema(
-		false,
-		CheckpointSchema.Attrs(),
-		CheckpointSchema.Types(),
-	)
+func MakeMetadataBatch(mp *mpool.MPool) *batch.Batch {
+	return batch.NewWithTypes(CheckpointSchema.Types(), mp)
 }
 
 func MakeCKPMetaDirReader(

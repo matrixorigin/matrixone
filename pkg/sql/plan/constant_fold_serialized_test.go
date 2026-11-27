@@ -160,7 +160,7 @@ func TestDecimal256ConstantFoldBoundaries(t *testing.T) {
 						require.NoError(t, decoded.Unmarshal(encoded))
 						got = decoded
 					}
-					input := batch.New(nil)
+					input := batch.NewWithSize(0)
 					defer input.Clean(proc.Mp())
 					input.SetRowCount(3)
 					result, free, err := colexec.GetReadonlyResultFromExpression(proc, got, []*batch.Batch{input})
@@ -395,8 +395,8 @@ func TestConstantFoldPreservesSerialCastSemantics(t *testing.T) {
 	defer foldedFree()
 	require.Equal(
 		t,
-		rule.GetConstantValue(runtimeResult, false, 0),
-		rule.GetConstantValue(foldedResult, false, 0),
+		rule.GetConstantValue(runtimeResult, false, 0, types.StringSourceExpression),
+		rule.GetConstantValue(foldedResult, false, 0, types.StringSourceExpression),
 		"constant folding changed the expression value",
 	)
 }
@@ -633,8 +633,7 @@ func TestConstantListFoldPreservesPerItemStringProvenance(t *testing.T) {
 			)
 			require.NoError(t, evalErr)
 			defer free()
-			require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(0))
-			require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(1))
+			require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(*result.GetType()))
 		})
 	}
 
@@ -667,12 +666,6 @@ func TestConstantListFoldPreservesPerItemStringProvenance(t *testing.T) {
 	require.NoError(t, proto.Unmarshal(payload, decodedControl))
 	require.Equal(t, foldedControl.GetVec().GetStringSource(),
 		decodedControl.GetVec().GetStringSource())
-	result, free, evalErr := colexec.GetReadonlyResultFromExpression(
-		proc, foldedControl, []*batch.Batch{batch.EmptyForConstFoldBatch},
-	)
-	require.NoError(t, evalErr)
-	defer free()
-	require.Equal(t, types.StringSourceLiteral, result.GetStringSourceAt(0))
 }
 
 func TestConstantFoldPreservesExplicitCastSource(t *testing.T) {
@@ -704,31 +697,12 @@ func TestConstantFoldPreservesExplicitCastSource(t *testing.T) {
 	require.Equal(t, folded.GetLit().GetStringSource(), decoded.GetLit().GetStringSource())
 	require.Equal(t, exprStructuralHash(folded), exprStructuralHash(decoded))
 	require.True(t, exprStructuralEqual(folded, decoded))
-
-	result, free, err := colexec.GetReadonlyResultFromExpression(
-		ctx.GetProcess(), decoded, []*batch.Batch{batch.EmptyForConstFoldBatch})
-	require.NoError(t, err)
-	defer free()
-	require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
-
-	plain := &planpb.Expr{
-		Typ: planpb.Type{Id: int32(types.T_varchar)},
-		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
-			Value: &planpb.Literal_Sval{Sval: "x"},
-		}},
-	}
-	plainResult, plainFree, err := colexec.GetReadonlyResultFromExpression(
-		ctx.GetProcess(), plain, []*batch.Batch{batch.EmptyForConstFoldBatch})
-	require.NoError(t, err)
-	defer plainFree()
-	require.Equal(t, types.StringSourceLiteral, plainResult.GetStringSourceAt(0))
 }
 
 func TestMakeInExprRuntimePayloadKeepsExpressionSource(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	scanKeys := vector.NewVec(types.T_varchar.ToType())
+	scanKeys := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(scanKeys, []byte("runtime-key"), false, proc.Mp()))
-	require.Equal(t, types.StringSourceExpression, scanKeys.GetStringSourceAt(0))
 	data, err := scanKeys.MarshalBinary()
 	require.NoError(t, err)
 	scanKeys.Free(proc.Mp())
@@ -743,25 +717,19 @@ func TestMakeInExprRuntimePayloadKeepsExpressionSource(t *testing.T) {
 	}, 1, data, false)
 	runtimePayload := inExpr.GetF().Args[1]
 	require.Zero(t, runtimePayload.GetVec().GetStringSource())
-
-	result, free, evalErr := colexec.GetReadonlyResultFromExpression(
-		proc, runtimePayload, []*batch.Batch{batch.EmptyForConstFoldBatch},
-	)
-	require.NoError(t, evalErr)
-	defer free()
-	require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
 }
 
 func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {
 	tests := []struct {
 		name       string
 		sql        string
-		wantDomain types.RuntimeStringDomain
+		wantDomain types.StringDomain
 		wantFold   bool
 	}{
-		{name: "if text to binary", sql: "select if(true, 'selected', cast('fallback' as varbinary))", wantDomain: types.RuntimeStringText, wantFold: true},
-		{name: "case runtime control", sql: "select case when true then 'selected' else cast('fallback' as varbinary) end", wantDomain: types.RuntimeStringText},
-		{name: "coalesce binary to text", sql: "select coalesce(_binary'selected', cast('fallback' as char))", wantDomain: types.RuntimeStringBinary, wantFold: true},
+		{name: "if text to binary", sql: "select if(true, 'selected', cast('fallback' as varbinary))", wantDomain: types.StringDomainBinary, wantFold: true},
+		{name: "case runtime control", sql: "select case when true then 'selected' else cast('fallback' as varbinary) end", wantDomain: types.StringDomainBinary},
+		// A CAST is IMPLICIT and outranks the COERCIBLE binary literal (MySQL).
+		{name: "coalesce binary to text", sql: "select coalesce(_binary'selected', cast('fallback' as char))", wantDomain: types.StringDomainText, wantFold: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -803,7 +771,7 @@ func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {
 					require.NoError(t, evalErr)
 					defer free()
 					require.Equal(t, "selected", result.GetStringAt(0))
-					require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(0))
+					require.Equal(t, test.wantDomain, types.StaticStringDomain(*result.GetType()))
 				})
 			}
 		})

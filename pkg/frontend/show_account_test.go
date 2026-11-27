@@ -260,7 +260,7 @@ func Test_updateStorageSize(t *testing.T) {
 
 	size := uint64(9999 * 1024 * 1024)
 	bat := batch.Batch{}
-	bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_float64.ToType()))
+	bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_float64.ToType(), proc.Mp()))
 	vector.AppendFixed[float64](bat.Vecs[0], float64(0x00), false, proc.GetMPool())
 	updateStorageSize(bat.Vecs[0], uint64(size), 0)
 	require.Equal(t, float64(size)/1024/1024, vector.GetFixedAtWithTypeCheck[float64](bat.Vecs[0], 0))
@@ -274,7 +274,7 @@ func Test_updateCount(t *testing.T) {
 	ori := int64(0x12)
 	add := int64(0x12)
 	bat := batch.Batch{}
-	bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_int64.ToType()))
+	bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_int64.ToType(), proc.Mp()))
 	vector.AppendFixed[int64](bat.Vecs[0], ori, false, proc.GetMPool())
 	updateCount(bat.Vecs[0], add, 0)
 	require.Equal(t, ori+add, vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0))

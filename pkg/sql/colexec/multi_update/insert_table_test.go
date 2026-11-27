@@ -84,8 +84,8 @@ func newInsertTableHarness(
 
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().
-		Write(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, b *batch.Batch) error {
+		Write(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, b *batch.Batch, _ []string) error {
 			h.written = append(h.written, b)
 			return nil
 		}).AnyTimes()
@@ -110,10 +110,9 @@ func newInsertTableHarness(
 
 	// Pre-allocate the insertBuf only for the non-contiguous path. Contiguous
 	// path never reads it; passing it in keeps the call site's signature happy.
-	insertBuf := batch.NewOffHeapWithSize(len(insertCols))
-	insertBuf.SetAttributes(attrs)
+	insertBuf := batch.NewWithSize(len(insertCols))
 	for i := range insertCols {
-		insertBuf.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
+		insertBuf.Vecs[i] = vector.NewVec(colTypes[i], mp)
 	}
 	h.insertBuf = insertBuf
 	return h
@@ -132,8 +131,7 @@ func makeInputBatch(t *testing.T, mp *mpool.MPool, rowCount int) *batch.Batch {
 	c := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil, nil)
 	d := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil, nil)
 	bat := &batch.Batch{
-		Vecs:  []*vector.Vector{a, b, c, d},
-		Attrs: []string{"a", "b", "c", "d"},
+		Vecs: []*vector.Vector{a, b, c, d},
 	}
 	bat.SetRowCount(rowCount)
 	return bat
@@ -299,7 +297,7 @@ func TestInsertMainTableSkipNullPkUsesActualPkColumn(t *testing.T) {
 	input := makePkSecondInputBatch(mp, []int32{0, 7}, []uint64{0}, []int64{1, 0}, []uint64{1}, []int32{10, 20}, nil)
 
 	analyzer := process.NewTempAnalyzer()
-	require.NoError(t, op.insert_main_table(proc, analyzer, 0, input))
+	require.NoError(t, mainErr(op.insert_main_table(proc, analyzer, 0, input, false)))
 	require.Len(t, *written, 1)
 
 	got := (*written)[0]
@@ -325,7 +323,7 @@ func TestInsertMainTableSkipNullPkChecksNotNullAfterFilter(t *testing.T) {
 	input := makePkSecondInputBatch(mp, []int32{5, 6}, nil, []int64{0, 2}, []uint64{0}, []int32{0, 0}, []uint64{0, 1})
 
 	analyzer := process.NewTempAnalyzer()
-	err := op.insert_main_table(proc, analyzer, 0, input)
+	_, err := op.insert_main_table(proc, analyzer, 0, input, false)
 	require.ErrorContains(t, err, "Column 'b' cannot be null")
 	require.Empty(t, *written)
 
@@ -344,19 +342,18 @@ func TestInsertMainTableSkipNullPkRejectsZeroTemporalAfterFilter(t *testing.T) {
 	op.RejectZeroTemporal = true
 	updateCtx.TableDef.Cols[0].Typ = plan.Type{Id: int32(types.T_date)}
 
-	dates := vector.NewVec(types.T_date.ToType())
+	dates := vector.NewVec(types.T_date.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(dates, types.ZeroDate, false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(dates, types.ZeroDate, false, proc.Mp()))
 	ids := testutil.MakeInt64Vector([]int64{0, 2}, []uint64{0}, proc.Mp())
 	values := testutil.NewInt32Vector(2, types.T_int32.ToType(), proc.Mp(), false, nil, nil)
 	input := &batch.Batch{
-		Vecs:  []*vector.Vector{dates, ids, values},
-		Attrs: []string{"a", "id", "b"},
+		Vecs: []*vector.Vector{dates, ids, values},
 	}
 	input.SetRowCount(2)
 	defer input.Clean(proc.Mp())
 
-	err := op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input)
+	_, err := op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input, false)
 	require.Error(t, err)
 	require.Empty(t, *written)
 	op.Free(proc, true, err)
@@ -427,8 +424,8 @@ func newMainTablePkSecondHarness(t *testing.T, ctrl *gomock.Controller) (*MultiU
 	written := make([]*batch.Batch, 0, 1)
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().
-		Write(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, b *batch.Batch) error {
+		Write(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, b *batch.Batch, _ []string) error {
 			written = append(written, b)
 			return nil
 		}).AnyTimes()
@@ -462,7 +459,7 @@ func makePkSecondInputBatch(
 	aVec := testutil.MakeInt32Vector(aValues, aNulls, mp)
 	idVec := testutil.MakeInt64Vector(idValues, idNulls, mp)
 	bVec := testutil.MakeInt32Vector(bValues, bNulls, mp)
-	bat := batch.New([]string{"a", "id", "b"})
+	bat := batch.NewWithSize(3)
 	bat.SetVector(0, aVec)
 	bat.SetVector(1, idVec)
 	bat.SetVector(2, bVec)

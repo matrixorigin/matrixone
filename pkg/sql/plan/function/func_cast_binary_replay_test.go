@@ -46,7 +46,7 @@ func TestRegisteredBinaryAssignmentPhysicalReplay(t *testing.T) {
 			t.Run(tc.name+"/"+name, func(t *testing.T) {
 				proc := testutil.NewProcess(t)
 				proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return "STRICT_TRANS_TABLES", nil })
-				source := vector.NewVec(tc.source)
+				source := vector.NewVec(tc.source, proc.Mp())
 				defer source.Free(proc.Mp())
 				require.NoError(t, vector.AppendBytes(source, []byte(tc.input), tc.null, proc.Mp()))
 				target := vector.NewConstNull(tc.target, 1, proc.Mp())

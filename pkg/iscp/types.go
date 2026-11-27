@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	iscpmeta "github.com/matrixorigin/matrixone/pkg/iscp/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -44,12 +45,12 @@ const (
 )
 
 const (
-	ISCPJobState_Invalid int8 = iota
-	ISCPJobState_Pending
-	ISCPJobState_Running
-	ISCPJobState_Completed
-	ISCPJobState_Error
-	ISCPJobState_Canceled
+	ISCPJobState_Invalid   = iscpmeta.StateInvalid
+	ISCPJobState_Pending   = iscpmeta.StatePending
+	ISCPJobState_Running   = iscpmeta.StateRunning
+	ISCPJobState_Completed = iscpmeta.StateCompleted
+	ISCPJobState_Error     = iscpmeta.StateError
+	ISCPJobState_Canceled  = iscpmeta.StateCanceled
 )
 
 type DataRetriever interface {
@@ -94,12 +95,15 @@ type DataRetriever interface {
 type IterationContext struct {
 	accountID uint32
 	tableID   uint64
-	jobNames  []string
-	jobIDs    []uint64
-	lsn       []uint64
-	stages    []int8
-	fromTS    types.TS
-	toTS      types.TS
+	// indexJob keeps index reads separate from ordinary consumer reads.
+	indexJob bool
+	budget   iterationRowBudget
+	jobNames []string
+	jobIDs   []uint64
+	lsn      []uint64
+	stages   []int8
+	fromTS   types.TS
+	toTS     types.TS
 }
 
 type ISCPData struct {
@@ -112,8 +116,8 @@ type ISCPData struct {
 }
 
 const (
-	JobStage_Init int8 = iota
-	JobStage_Running
+	JobStage_Init    = iscpmeta.StageInit
+	JobStage_Running = iscpmeta.StageRunning
 )
 
 // atomicInitLifecycleVersion marks generations whose InitSQL effects and
@@ -211,8 +215,8 @@ type JobEntry struct {
 	stage              int8
 	dropAt             types.Timestamp
 	currentLSN         uint64
-	// isIndexJob marks a ConsumerType_IndexSync job, whose watermark is flushed
-	// on IndexFlushWatermarkInterval rather than the general threshold.
+	// isIndexJob marks a ConsumerType_IndexSync job. It selects its own
+	// range, may share an in-step read, and uses IndexFlushWatermarkInterval.
 	isIndexJob bool
 }
 
@@ -253,6 +257,9 @@ type Schedule struct {
 type TriggerSpec struct {
 	JobType uint16
 	Schedule
+	// TargetRows opts this independent iteration into a soft source-change
+	// row budget. Zero preserves the historical full-range behavior.
+	TargetRows int
 }
 
 type ConsumerInfo struct {

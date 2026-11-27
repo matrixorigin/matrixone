@@ -40,10 +40,12 @@ type AnalyzeModule struct {
 	// curNodeIdx is the current Node index when compilePlanScope
 	curNodeIdx int
 	// isFirst is the first opeator in pipeline for plan Node
-	isFirst        bool
-	qry            *plan.Query
-	phyPlan        *models.PhyPlan
-	remotePhyPlans []models.PhyPlan
+	isFirst               bool
+	qry                   *plan.Query
+	phyPlan               *models.PhyPlan
+	remotePhyPlans        []models.PhyPlan
+	partialExecutionPlan  *models.PhyPlan
+	partialExecutionQuery *plan.Query
 	// Added read-write lock
 	mu                              sync.RWMutex
 	retryTimes                      int
@@ -89,6 +91,7 @@ func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 		}
 
 		anal.remotePhyPlans = nil
+		anal.partialExecutionPlan, anal.partialExecutionQuery = nil, nil
 		anal.explainPhyBuffer = nil
 		anal.retryTimes = 0
 		anal.remoteUsage = resource.Usage{}
@@ -235,7 +238,15 @@ func (anal *AnalyzeModule) AppendRemotePhyPlan(remotePhyPlan models.PhyPlan) {
 }
 
 func (anal *AnalyzeModule) GetPhyPlan() *models.PhyPlan {
+	if anal.partialExecutionPlan != nil {
+		return anal.partialExecutionPlan
+	}
 	return anal.phyPlan
+}
+
+// GetPartialExecutionQuery returns the matching logical view until release.
+func (anal *AnalyzeModule) GetPartialExecutionQuery() *plan.Query {
+	return anal.partialExecutionQuery
 }
 
 func (anal *AnalyzeModule) GetExplainPhyBuffer() *bytes.Buffer {

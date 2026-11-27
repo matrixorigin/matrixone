@@ -89,7 +89,7 @@ func (f *membershipProbeFS) assertReleased(t *testing.T, snapshots int32) {
 
 func newMembershipTestFilter(t testing.TB, mp *mpool.MPool, kind string, ids []int64) docfilter.MembershipFilter {
 	t.Helper()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendFixedList(vec, ids, nil, mp))
 	var member docfilter.MembershipFilter
@@ -121,9 +121,9 @@ func newMembershipTestFilter(t testing.TB, mp *mpool.MPool, kind string, ids []i
 func persistMembershipTest(t testing.TB, fs fileservice.FileService, mp *mpool.MPool) Location {
 	t.Helper()
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_array_float32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_array_float32.ToType(), mp)
 	defer bat.Clean(mp)
 	keys := []string{"a0", "a1", "b0", "b1"}
 	for row, value := range []float32{4, 1, 3, 2} {
@@ -183,7 +183,7 @@ func TestReadBlockByMembershipAndTopN(t *testing.T) {
 						t.Run(fmt.Sprintf("sorted=%t", sorted), func(t *testing.T) {
 							ctx, cancel := context.WithCancel(t.Context())
 							defer cancel()
-							out := vector.NewVec(types.T_varchar.ToType())
+							out := vector.NewVec(types.T_varchar.ToType(), mp)
 							defer out.Free(mp)
 							rows, distances, _, err := ReadBlockByMembershipAndTopN(
 								ctx, []uint16{0, 1}, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
@@ -232,7 +232,7 @@ func TestReadBlockBySearchAndTopNCallbackCannotMutateCache(t *testing.T) {
 	location := persistMembershipTest(t, storage, mp)
 	fs := &membershipProbeFS{FileService: storage}
 	for attempt := range 2 {
-		out := vector.NewVec(types.T_varchar.ToType())
+		out := vector.NewVec(types.T_varchar.ToType(), mp)
 		func() {
 			defer out.Free(mp)
 			_, _, _, err := ReadBlockBySearchAndTopN(
@@ -264,7 +264,7 @@ func TestReadFilterMembershipConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
-			out := vector.NewVec(types.T_varchar.ToType())
+			out := vector.NewVec(types.T_varchar.ToType(), mp)
 			defer out.Free(mp)
 			rows, distances, _, err := ReadBlockByMembershipAndTopN(
 				t.Context(), []uint16{0, 1}, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
@@ -296,11 +296,11 @@ func TestReadFilterMembershipRejectsForeignImplementation(t *testing.T) {
 
 func TestReadFilterMembershipSecondaryLengthMismatch(t *testing.T) {
 	mp := newTopNTestMP(t)
-	pk := vector.NewVec(types.T_varchar.ToType())
+	pk := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer pk.Free(mp)
 	require.NoError(t, vector.AppendBytes(pk, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(pk, []byte("b"), false, mp))
-	ids := vector.NewVec(types.T_int64.ToType())
+	ids := vector.NewVec(types.T_int64.ToType(), mp)
 	defer ids.Free(mp)
 	require.NoError(t, vector.AppendFixed(ids, int64(1), false, mp))
 	// Both IDs are outside the fixture; two entries satisfy the bitmap builder.
@@ -326,8 +326,8 @@ func BenchmarkReadFilterMembershipBinding(b *testing.B) {
 	// Both arms use the same membership search. This measures binding cost only,
 	// not the end-to-end difference between legacy and scoped block consumers.
 	mp := newTopNTestMP(b)
-	pk := vector.NewVec(types.T_varchar.ToType())
-	ids := vector.NewVec(types.T_int64.ToType())
+	pk := vector.NewVec(types.T_varchar.ToType(), mp)
+	ids := vector.NewVec(types.T_int64.ToType(), mp)
 	b.Cleanup(func() { pk.Free(mp); ids.Free(mp) })
 	const rowCount = 8192
 	idValues := make([]int64, rowCount)

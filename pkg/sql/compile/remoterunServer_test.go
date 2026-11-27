@@ -240,7 +240,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	sourceProc := testutil.NewProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), sourceProc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, sourceProc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, sourceProc.Mp()))
 	t.Cleanup(func() { params.Free(sourceProc.Mp()) })
@@ -296,10 +296,6 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.Equal(t, "text", compile.proc.GetPrepareParams().GetStringAt(1))
 	require.True(t, compile.proc.GetPrepareParamIsBin(0))
 	require.False(t, compile.proc.GetPrepareParamIsBin(1))
-	require.Equal(t, vector.PrepareParamNone, compile.proc.GetPrepareParamKind(0))
-	require.Equal(t, vector.PrepareParamFloat, compile.proc.GetPrepareParamKind(1))
-	require.True(t, compile.proc.GetPrepareParamIsBinaryString(0))
-	require.False(t, compile.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, int64(42), compile.proc.GetAffectedRows())
 	require.True(t, compile.proc.GetStmtProfile().GetStatementIgnore())
 	require.True(t, compile.proc.IsSelectStatement())
@@ -382,7 +378,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 
 	// Create a valid ProcessInfo
 	proc := testutil.NewProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
 	t.Cleanup(func() { params.Free(proc.Mp()) })
@@ -714,6 +710,7 @@ func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
 		})
 
 	receiver := &messageReceiverOnServer{
+		batchOut:        newTestRemoteBatchBuffer(t),
 		messageCtx:      context.Background(),
 		connectionCtx:   context.Background(),
 		messageId:       401,
@@ -957,51 +954,9 @@ func TestRemoteNotifyCancellationReleasesCreditWaitAndRegistration(t *testing.T)
 
 }
 
-func TestMessageReceiverSendBatchOldProtocolDropsStringSourceOnly(t *testing.T) {
-	runtime := rt.ServiceRuntime("")
-	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
-	t.Cleanup(func() {
-		if hadOriginal {
-			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
-		} else {
-			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
-
-	mp := mpool.MustNewZero()
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("literal"), false, mp))
-	require.NoError(t, bat.Vecs[0].SetStringSource(types.StringSourceLiteral))
-	bat.SetRowCount(1)
-	defer bat.Clean(mp)
-
-	ctrl := gomock.NewController(t)
-	session := mock_morpc.NewMockClientSession(ctrl)
-	var sent *pipeline.Message
-	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, message any) error {
-			sent = message.(*pipeline.Message)
-			return nil
-		})
-	receiver := &messageReceiverOnServer{
-		messageCtx:      context.Background(),
-		connectionCtx:   context.Background(),
-		messageId:       405,
-		clientSession:   session,
-		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
-		maxMessageSize:  1 << 20,
-	}
-	require.NoError(t, receiver.sendBatch(bat))
-	require.NotNil(t, sent)
-	decoded := batch.NewOffHeapEmpty()
-	defer decoded.Clean(mp)
-	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
-	require.False(t, decoded.Vecs[0].HasStringSourceMetadata())
-}
-
-func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testing.T) {
+// Binary-string provenance is carried by the static vector type, so a
+// binary result no longer needs a per-row metadata trailer or a protocol gate.
+func TestMessageReceiverSendBatchCarriesStaticBinaryType(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -1014,21 +969,16 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varbinary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("raw"), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("text"), false, mp))
-	require.NoError(t, bat.Vecs[0].SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
-		types.RuntimeStringBinary, types.RuntimeStringText,
-	}, mp))
-	require.NoError(t, bat.Vecs[0].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
-		vector.PrepareParamInteger, vector.PrepareParamNone,
-	}, mp))
 	bat.SetRowCount(2)
 	defer bat.Clean(mp)
 
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
 	receiver := &messageReceiverOnServer{
+		batchOut:        newTestRemoteBatchBuffer(t),
 		messageCtx:      context.Background(),
 		connectionCtx:   context.Background(),
 		messageId:       404,
@@ -1036,58 +986,27 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
 		maxMessageSize:  1 << 20,
 	}
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion18")
-
 	var sent *pipeline.Message
 	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, message any) error {
 			sent = message.(*pipeline.Message)
 			return nil
 		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion22)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion23")
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion23)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
 	require.NoError(t, receiver.sendBatch(bat))
 	require.NotNil(t, sent)
-	decoded := batch.NewOffHeapEmpty()
+	decoded := batch.NewWithSize(0)
 	defer decoded.Clean(mp)
-	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
-	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
-	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
-	require.Equal(t, types.RuntimeStringText, decoded.Vecs[0].GetRuntimeStringDomainAt(1))
-	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
-
-	require.NoError(t, bat.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
-		types.StringSourceCOMStmt, types.StringSourceSQLPrepare,
-	}, mp))
-	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, message any) error {
-			sent = message.(*pipeline.Message)
-			return nil
-		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
-	require.NoError(t, receiver.sendBatch(bat))
-	decodedWithoutSources := batch.NewOffHeapEmpty()
-	defer decodedWithoutSources.Clean(mp)
-	require.NoError(t, decodedWithoutSources.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
-	require.False(t, decodedWithoutSources.Vecs[0].HasStringSourceMetadata())
-
-	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, message any) error {
-			sent = message.(*pipeline.Message)
-			return nil
-		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion37)
-	require.NoError(t, receiver.sendBatch(bat))
-	decodedWithSources := batch.NewOffHeapEmpty()
-	defer decodedWithSources.Clean(mp)
-	require.NoError(t, decodedWithSources.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
-	require.Equal(t, types.StringSourceCOMStmt, decodedWithSources.Vecs[0].GetStringSourceAt(0))
-	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
+	require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(sent.Data, mp))
+	require.Equal(t, types.T_varbinary, decoded.Vecs[0].GetType().Oid)
+	require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(*decoded.Vecs[0].GetType()))
+	require.Equal(t, "raw", decoded.Vecs[0].GetStringAt(0))
+	require.Equal(t, "text", decoded.Vecs[0].GetStringAt(1))
 }
 
-func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
+// Rolled-up ROLLUP keys are plain NULL constants, so sending them needs no
+// protocol gate: any peer version receives the stable batch.
+func TestMessageReceiverSendBatchSendsRolledUpNullsUngated(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, _ := runtime.GetGlobalVariables(rt.MOProtocolVersion)
 	t.Cleanup(func() { runtime.SetGlobalVariables(rt.MOProtocolVersion, original) })
@@ -1095,29 +1014,30 @@ func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	bat := batch.NewWithSize(1)
 	t.Cleanup(func() { bat.Clean(mp) })
-	bat.Vecs[0] = vector.NewRollupConst(types.T_int32.ToType(), 2, mp)
+	bat.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 2, mp)
 	bat.SetRowCount(2)
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
 	receiver := &messageReceiverOnServer{
+		batchOut:   newTestRemoteBatchBuffer(t),
 		messageCtx: context.Background(), connectionCtx: context.Background(),
 		clientSession: session, messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
 		maxMessageSize: 1 << 20,
 	}
-	for _, version := range []any{nil, "unknown", int64(86)} {
-		runtime.SetGlobalVariables(rt.MOProtocolVersion, version)
-		require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion87")
-	}
+	versions := []any{nil, "unknown", int64(86), int64(87)}
 	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, message any) error {
 			decoded, err := decodeBatch(mp, message.(*pipeline.Message).Data)
 			require.NoError(t, err)
 			defer decoded.Clean(mp)
-			require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())
+			require.Equal(t, 2, decoded.RowCount())
+			require.True(t, decoded.Vecs[0].IsConstNull())
 			return nil
-		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(87))
-	require.NoError(t, receiver.sendBatch(bat))
+		}).Times(len(versions))
+	for _, version := range versions {
+		runtime.SetGlobalVariables(rt.MOProtocolVersion, version)
+		require.NoError(t, receiver.sendBatch(bat))
+	}
 }
 
 func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *testing.T) {
@@ -1142,6 +1062,7 @@ func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *test
 		}).Times(2)
 
 	receiver := &messageReceiverOnServer{
+		batchOut:        newTestRemoteBatchBuffer(t),
 		messageCtx:      context.Background(),
 		connectionCtx:   context.Background(),
 		messageId:       402,
@@ -1177,6 +1098,7 @@ func TestMessageReceiverSendFragmentedBatchKeepsCreditUntilAck(t *testing.T) {
 		}).Times(2)
 
 	receiver := &messageReceiverOnServer{
+		batchOut:        newTestRemoteBatchBuffer(t),
 		messageCtx:      context.Background(),
 		connectionCtx:   context.Background(),
 		messageId:       403,
@@ -1218,4 +1140,285 @@ func TestLiveReceiverStopRejectsConnectionAndMessageCancellation(t *testing.T) {
 	r := &messageReceiverOnServer{messageCtx: context.Background(), connectionCtx: context.Background(),
 		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow}}
 	require.False(t, r.hasLiveReceiverStop(), "a later stop must not certify a previously failed flow")
+}
+
+// newTestRemoteBatchBuffer returns a stream batch buffer that is closed,
+// and checked to have freed its memory, when the test ends.
+func newTestRemoteBatchBuffer(t *testing.T) *remoteBatchBuffer {
+	mp := mpool.MustNewZero()
+	b := &remoteBatchBuffer{buf: mpool.NewMessageBuffer(mp, maxRetainedRemoteBatchBuffer)}
+	t.Cleanup(func() {
+		b.close()
+		require.Zero(t, mp.CurrNB())
+	})
+	return b
+}
+
+// A stream marshals every result batch into its one buffer, and a closed
+// stream sends nothing.
+func TestRemoteBatchBufferIsReusedAndClosed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	var data [][]byte
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			data = append(data, message.(*pipeline.Message).Data)
+			return nil
+		}).Times(2)
+	out := newTestRemoteBatchBuffer(t)
+	receiver := &messageReceiverOnServer{
+		batchOut:        out,
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+	}
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	for i := 0; i < 100; i++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, mp))
+	}
+	bat.SetRowCount(100)
+	defer bat.Clean(mp)
+
+	require.NoError(t, receiver.sendBatch(bat))
+	require.NoError(t, receiver.sendBatch(bat))
+	require.Len(t, data, 2)
+	require.True(t, &data[0][0] == &data[1][0], "both batches use the stream's buffer")
+
+	out.close()
+	require.Error(t, receiver.sendBatch(bat))
+}
+
+// A send resets the stream's buffer once its Writes return: a buffer larger
+// than the retention bound is freed before the stream waits for the next
+// batch or an acknowledgement, and a smaller one is kept for reuse.
+func TestRemoteBatchBufferFreesOversizedBufferAfterSend(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	bufPool := mpool.MustNewZero()
+	var assembled []byte
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
+		func(_ context.Context, message any) error {
+			require.NotZero(t, bufPool.CurrNB(), "the message points into the buffer while Write runs")
+			assembled = append(assembled, message.(*pipeline.Message).Data...)
+			return nil
+		})
+	mp := mpool.MustNewZero()
+	small := newRemoteSendTestBatch(t, mp, 0, 2)
+	defer small.Clean(mp)
+	large := newRemoteSendTestBatch(t, mp, 0, 200)
+	defer large.Clean(mp)
+	smallData, err := small.MarshalBinary()
+	require.NoError(t, err)
+	largeData, err := large.MarshalBinary()
+	require.NoError(t, err)
+
+	// Capacity rounds up, so bound well above the small batch and below the
+	// large one.
+	bound := 4 * len(smallData)
+	require.Greater(t, len(largeData), 2*bound)
+	out := &remoteBatchBuffer{buf: mpool.NewMessageBuffer(bufPool, bound)}
+	defer func() {
+		out.close()
+		require.Zero(t, bufPool.CurrNB())
+	}()
+	receiver := &messageReceiverOnServer{
+		batchOut:        out,
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  64,
+	}
+
+	require.NoError(t, receiver.sendBatch(large))
+	require.Equal(t, largeData, assembled)
+	require.Zero(t, bufPool.CurrNB(), "an oversized buffer is freed when the send returns")
+	require.Zero(t, out.buf.Len())
+
+	assembled = nil
+	require.NoError(t, receiver.sendBatch(small))
+	require.Equal(t, smallData, assembled)
+	require.NotZero(t, bufPool.CurrNB(), "a buffer within the bound is kept")
+	require.Zero(t, out.buf.Len(), "and reset")
+
+	assembled = nil
+	require.NoError(t, receiver.sendBatch(large))
+	require.Equal(t, largeData, assembled)
+	require.Zero(t, bufPool.CurrNB(), "a buffer grown past the bound is freed again")
+}
+
+func newRemoteSendTestBatch(t *testing.T, mp *mpool.MPool, base int64, rows int) *batch.Batch {
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	for i := 0; i < rows; i++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], base+int64(i), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("remote-batch-value-past-inline"), i%3 == 0, mp))
+	}
+	bat.SetRowCount(rows)
+	return bat
+}
+
+// A batch larger than a message goes out in chunks of the stream's buffer;
+// they reassemble to the batch, and a failure part way leaves the stream
+// usable.
+func TestRemoteBatchBufferChunkedSends(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	var chunks [][]byte
+	var assembled []byte
+	failAt := -1
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
+		func(_ context.Context, message any) error {
+			if len(chunks) == failAt {
+				return moerr.NewInternalErrorNoCtx("broken")
+			}
+			msg := message.(*pipeline.Message)
+			chunks = append(chunks, msg.Data)
+			// Copy now: the stream reuses its buffer once Write returns.
+			assembled = append(assembled, msg.Data...)
+			return nil
+		})
+	out := newTestRemoteBatchBuffer(t)
+	receiver := &messageReceiverOnServer{
+		batchOut:        out,
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  100,
+	}
+	mp := mpool.MustNewZero()
+	bat := newRemoteSendTestBatch(t, mp, 0, 30)
+	defer bat.Clean(mp)
+	want, err := bat.MarshalBinary()
+	require.NoError(t, err)
+
+	require.NoError(t, receiver.sendBatch(bat))
+	require.Equal(t, want, assembled)
+	require.Equal(t, (len(want)+99)/100, len(chunks))
+	for i := 1; i < len(chunks); i++ {
+		require.True(t, &chunks[i-1][0] != &chunks[i][0])
+		require.Len(t, chunks[i-1], 100, "chunks before the last are full")
+	}
+
+	chunks, assembled, failAt = nil, nil, 2
+	require.Error(t, receiver.sendBatch(bat), "a failed chunk fails the batch")
+	chunks, assembled, failAt = nil, nil, -1
+	require.NoError(t, receiver.sendBatch(bat))
+	require.Equal(t, want, assembled, "the stream is still usable")
+
+	bat.Vecs = append(bat.Vecs, nil)
+	chunks = nil
+	require.Error(t, receiver.sendBatch(bat), "a batch that cannot marshal")
+	require.Empty(t, chunks, "is not sent")
+	bat.Vecs = bat.Vecs[:2]
+}
+
+// Concurrent sends on a stream are serialized on its buffer: every message
+// carries a whole, uncorrupted batch.
+func TestRemoteBatchBufferConcurrentSends(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	var mu sync.Mutex
+	seen := map[int64]int{}
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
+		func(_ context.Context, message any) error {
+			decoded, err := batch.ViewBinary(message.(*pipeline.Message).Data)
+			if err != nil {
+				return err
+			}
+			first := vector.GetFixedAtNoTypeCheck[int64](decoded.Vecs[0], 0)
+			for i := 0; i < decoded.RowCount(); i++ {
+				if vector.GetFixedAtNoTypeCheck[int64](decoded.Vecs[0], i) != first+int64(i) {
+					return moerr.NewInternalErrorNoCtx("corrupt batch")
+				}
+			}
+			mu.Lock()
+			seen[first]++
+			mu.Unlock()
+			return nil
+		})
+	receiver := &messageReceiverOnServer{
+		batchOut:        newTestRemoteBatchBuffer(t),
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+	}
+	mp := mpool.MustNewZero()
+	var wg sync.WaitGroup
+	for g := int64(0); g < 8; g++ {
+		bat := newRemoteSendTestBatch(t, mp, g*1000, 10+int(g)*20)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 20; i++ {
+				require.NoError(t, receiver.sendBatch(bat))
+			}
+		}()
+		defer bat.Clean(mp)
+	}
+	wg.Wait()
+	require.Len(t, seen, 8)
+	for _, n := range seen {
+		require.Equal(t, 20, n)
+	}
+}
+
+// close does not free the buffer under an in-flight Write: it waits for the
+// send, so the transport never reads freed memory, and later sends fail.
+func TestRemoteBatchBufferCloseWaitsForInFlightSend(t *testing.T) {
+	mpool.EnableDebugPoisonOnFree()
+	defer mpool.DisableDebugPoisonOnFree()
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	inWrite := make(chan struct{})
+	release := make(chan struct{})
+	var readOK bool
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			close(inWrite)
+			<-release
+			// The transport encodes the message only now.
+			_, err := batch.ViewBinary(message.(*pipeline.Message).Data)
+			readOK = err == nil
+			return nil
+		})
+	out := newTestRemoteBatchBuffer(t)
+	receiver := &messageReceiverOnServer{
+		batchOut:        out,
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+	}
+	mp := mpool.MustNewZero()
+	bat := newRemoteSendTestBatch(t, mp, 0, 40)
+	defer bat.Clean(mp)
+
+	sent := make(chan error, 1)
+	go func() { sent <- receiver.sendBatch(bat) }()
+	<-inWrite
+	closed := make(chan struct{})
+	go func() {
+		out.close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("close freed the buffer during a Write")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-sent)
+	<-closed
+	require.True(t, readOK, "the transport read a live buffer")
+	require.Error(t, receiver.sendBatch(bat), "a closed stream sends nothing")
 }

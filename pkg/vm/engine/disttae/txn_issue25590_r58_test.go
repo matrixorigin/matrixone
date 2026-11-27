@@ -61,6 +61,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"testing"
 	"time"
 
@@ -139,12 +140,12 @@ func r58RecordStats(
 	for _, stats := range statsList {
 		name := stats.ObjectName().String()
 		require.NoError(t, writeObjectToFS(ctx, txn.engine.fs, name))
-		recBat := colexec.AllocCNS3ResultBat(false)
+		recBat := colexec.AllocCNS3ResultBat(false, mp)
 		require.NoError(t, colexec.ExpandObjectStatsToBatch(
 			mp, false, recBat, false, stats))
 		require.NoError(t, txn.WriteFile(
 			INSERT, 1, 7, 42, "db", "tbl",
-			name, recBat, txn.tnStores[0]),
+			name, recBat, catalog.ObjectInsertAttrs, txn.tnStores[0]),
 			"the statement records its S3 object before its GC is scheduled")
 		recBat.Clean(mp)
 	}

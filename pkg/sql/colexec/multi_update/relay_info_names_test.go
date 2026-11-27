@@ -37,7 +37,7 @@ func issue25590MakeStatsRows(
 	n int,
 ) (*batch.Batch, []string) {
 	t.Helper()
-	inner := colexec.AllocCNS3ResultBat(true)
+	inner := colexec.AllocCNS3ResultBat(true, proc.Mp())
 	names := make([]string, 0, n)
 	for i := 0; i < n; i++ {
 		rowid := types.RandomRowid()
@@ -62,7 +62,7 @@ func issue25590MakeInsertRows(
 	n int,
 ) (*batch.Batch, []string) {
 	t.Helper()
-	inner := colexec.AllocCNS3ResultBat(false)
+	inner := colexec.AllocCNS3ResultBat(false, proc.Mp())
 	names := make([]string, 0, n)
 	for i := 0; i < n; i++ {
 		rowid := types.RandomRowid()
@@ -95,7 +95,7 @@ func issue25590MakeRelayBatch(
 	rows []issue25590RelayRow,
 ) *batch.Batch {
 	t.Helper()
-	out := makeS3OutputBatch()
+	out := makeS3OutputBatch(proc.Mp())
 	for _, r := range rows {
 		require.NoError(t, vector.AppendFixed(
 			out.Vecs[0], uint8(r.action), false, proc.Mp()))
@@ -109,6 +109,8 @@ func issue25590MakeRelayBatch(
 		if r.origin != nil {
 			var buf bytes.Buffer
 			var err error
+			// Written without names: the recognizer locates the stats
+			// column from the writer's fixed layout, never from the wire.
 			val, err = r.origin.MarshalBinaryWithBuffer(&buf, true)
 			require.NoError(t, err)
 		}
@@ -157,13 +159,13 @@ func TestIssue25590RelayS3InfoNameExtraction(t *testing.T) {
 		"adoption derives the tombstone object's own name from the append tail, every insert tail object, and excludes row-only deletes")
 
 	// The wire shape: the production server encodes batches with
-	// MarshalBinaryForPipeline and the client decodes them with
-	// UnmarshalBinaryForPipeline before this recognizer runs.
+	// MarshalBinaryWithBuffer and the client decodes them with
+	// UnmarshalBinaryWithAnyMp before this recognizer runs.
 	var transport bytes.Buffer
-	data, err := bat.MarshalBinaryForPipeline(&transport, false, true)
+	data, err := bat.MarshalBinaryWithBuffer(&transport, false)
 	require.NoError(t, err)
-	wire := batch.NewOffHeapEmpty()
-	require.NoError(t, wire.UnmarshalBinaryForPipeline(data, mp))
+	wire := batch.NewWithSize(0)
+	require.NoError(t, wire.UnmarshalBinaryWithAnyMp(data, mp))
 	defer wire.CleanOnlyData()
 	wireNames, ok, err := TryExtractRelayS3InfoObjectNames(wire, mp)
 	require.NoError(t, err)
@@ -175,8 +177,7 @@ func TestIssue25590RelayS3InfoNameExtraction(t *testing.T) {
 	// tail lost the object-stats column cannot prove its objects, so
 	// the whole ack rejects fail-closed instead of adopting a subset.
 	typeless := batch.NewWithSize(1)
-	typeless.SetAttributes([]string{"not-a-stats-column"})
-	typeless.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	typeless.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	defer typeless.Clean(mp)
 	require.NoError(t, vector.AppendFixed(typeless.Vecs[0], int64(1), false, mp))
 	typeless.SetRowCount(1)
@@ -235,9 +236,8 @@ func TestIssue25590RelayS3InfoNameExtraction(t *testing.T) {
 
 	// An ordinary two-column data batch never matches the layout.
 	dataBatch := batch.NewWithSize(2)
-	dataBatch.SetAttributes([]string{"pk", "v"})
-	dataBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	dataBatch.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	dataBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	dataBatch.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	defer dataBatch.Clean(mp)
 	_, ok, _ = TryExtractRelayS3InfoObjectNames(dataBatch, mp)
 	require.False(t, ok, "an ordinary data batch does not adopt names")

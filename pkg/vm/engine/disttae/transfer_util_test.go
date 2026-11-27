@@ -99,9 +99,9 @@ func TestTransferBatchLimit(t *testing.T) {
 	t.Run("wide input and reset", func(t *testing.T) {
 		mp := mpool.MustNewZero()
 		func() {
-			staged := batch.NewWithSchema(false, []string{"rowid", "pk", "entry", "position"}, []types.Type{
+			staged := batch.NewWithTypes([]types.Type{
 				types.T_Rowid.ToType(), types.T_varchar.ToType(), types.T_int32.ToType(), types.T_int32.ToType(),
-			})
+			}, mp)
 			defer staged.Clean(mp)
 			key := make([]byte, types.MaxVarcharLen)
 			rowid := types.NewRowIDWithObjectIDBlkNumAndRowID(objectio.NewObjectid(), 0, 0)
@@ -141,8 +141,8 @@ func TestTransferFlowBatchesAcrossObjectBlocks(t *testing.T) {
 	rowCount := int(objectio.BlockMaxRows)
 
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(
 		input.Vecs[0], makeRepeated(rowID, rowCount), nil, mp))
 	require.NoError(t, vector.AppendFixedList(
@@ -151,8 +151,8 @@ func TestTransferFlowBatchesAcrossObjectBlocks(t *testing.T) {
 	defer input.Clean(mp)
 
 	staged := batch.NewWithSize(2)
-	staged.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	staged.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	staged.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	staged.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	flow := &TransferFlow{
 		isObjectDeletedFn: func(*objectio.ObjectId) bool { return true },
 		staged:            staged,
@@ -207,9 +207,9 @@ func TestTransferFlowStagesOnlyObjectsDeletedInWindow(t *testing.T) {
 	liveBatch.Vecs[6], err = vector.NewConstFixed(types.T_TS.ToType(), types.TS{}, 1, mp)
 	require.NoError(t, err)
 	liveBatch.SetRowCount(1)
-	liveProto, err := batch.BatchToProtoBatch(liveBatch)
+	liveEncoded, err := liveBatch.MarshalBinary()
 	require.NoError(t, err)
-	state.HandleDataObjectList(ctx, &api.Entry{Bat: liveProto}, nil, mp)
+	state.HandleDataObjectList(ctx, &api.Entry{Bat: api.NewEncodedBatch(liveEncoded)}, nil, mp)
 	_, exists := state.GetObject(*liveAppendableStats.ObjectShortName())
 	require.False(t, exists)
 
@@ -244,8 +244,8 @@ func TestTransferFlowStagesOnlyObjectsDeletedInWindow(t *testing.T) {
 	deletedName := deletedStats.ObjectName()
 
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	defer input.Clean(mp)
 
 	liveRowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
@@ -261,8 +261,8 @@ func TestTransferFlowStagesOnlyObjectsDeletedInWindow(t *testing.T) {
 	input.SetRowCount(2)
 
 	staged := batch.NewWithSize(2)
-	staged.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	staged.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	staged.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	staged.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	flow := &TransferFlow{
 		isObjectDeletedFn: newDeletedObjectFilter(deletedObjects),
 		staged:            staged,

@@ -55,7 +55,7 @@ func TestInternalAutoIncrementOwnsRelationNames(t *testing.T) {
 					bat, err := catalog.GenCreateDatabaseTuple("", 7, 1, 1, names.db, 10, "", proc.Mp(), packer)
 					require.NoError(t, err)
 					defer bat.Clean(proc.Mp())
-					_, err = fillRandomRowidAndZeroTs(bat, proc.Mp())
+					_, _, err = fillRandomRowidAndZeroTs(bat, catalog.MoDatabaseSchema, proc.Mp())
 					require.NoError(t, err)
 					eng.GetLatestCatalogCache().InsertDatabase(bat)
 				}()
@@ -63,7 +63,7 @@ func TestInternalAutoIncrementOwnsRelationNames(t *testing.T) {
 				insertCatalogTableForResetTest(t, eng, txn, 7, 10, 43, names.db, "next_table")
 
 				newInput := func(name string) *vector.Vector {
-					v := vector.NewVec(types.T_varchar.ToType())
+					v := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 					t.Cleanup(func() { v.Free(proc.Mp()) })
 					require.NoError(t, vector.AppendBytes(v, []byte(name), false, proc.Mp()))
 					if constant {

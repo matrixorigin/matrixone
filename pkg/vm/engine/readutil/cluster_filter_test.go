@@ -581,7 +581,7 @@ func TestNewReaderAttachesClusterFilter(t *testing.T) {
 		[]string{clusterTenantCol},
 		nil,
 		proc.Mp(),
-		batch.NewOffHeapWithSize(1),
+		batch.NewWithSize(1),
 	)
 	require.NoError(t, err)
 	require.True(t, isEnd)

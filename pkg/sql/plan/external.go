@@ -31,6 +31,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// IsExternalScanRequiringSelectPrivilege identifies external source scans
+// whose relation requires a table-level SELECT check. MongoDB scans use their
+// discriminator directly, while other supported external scans require an
+// external table definition.
+func IsExternalScanRequiringSelectPrivilege(node *plan.Node) bool {
+	if node == nil || node.GetNodeType() != plan.Node_EXTERNAL_SCAN || node.GetExternScan() == nil {
+		return false
+	}
+
+	switch plan.ExternType(node.GetExternScan().GetType()) {
+	case plan.ExternType_MONGODB_TB:
+		return true
+	case plan.ExternType_EXTERNAL_TB, plan.ExternType_DATASTREAM_TB,
+		plan.ExternType_FOREIGN_TB, plan.ExternType_ICEBERG_TB, plan.ExternType_KAFKA_TB:
+		return node.GetTableDef().GetTableType() == catalog.SystemExternalRel
+	default:
+		return false
+	}
+}
+
 //this file is duplicate with colexec/external/external.go , to avoid import cycle
 
 func filterFileList(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, []*plan.Expr, error) {
@@ -95,13 +115,9 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 
 func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string) *batch.Batch {
 	num := len(node.TableDef.Cols)
-	bat := &batch.Batch{
-		Attrs: make([]string, num),
-		Vecs:  make([]*vector.Vector, num),
-	}
+	bat := batch.NewWithSize(num)
 	for i := 0; i < num; i++ {
-		bat.Attrs[i] = node.TableDef.Cols[i].Name
-		if i == num-1 && bat.Attrs[i] == catalog.ExternalFilePath {
+		if i == num-1 && node.TableDef.Cols[i].Name == catalog.ExternalFilePath {
 			typ := types.T_varchar.ToType()
 			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)

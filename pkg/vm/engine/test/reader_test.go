@@ -111,7 +111,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 		require.NoError(t, err)
 
 		for idx := 0; idx < blockCnt; idx++ {
-			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx])))
+			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx]), bats[idx].Attrs))
 		}
 
 		require.NoError(t, txn.Commit(ctx))
@@ -155,9 +155,10 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	resultHit := 0
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
+	retAttrs := testutil.SchemaAttrs(schema, primaryKeyIdx)
 	for idx := 0; idx < blockCnt; idx++ {
-		_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, ret)
+		_, err = reader.Read(ctx, retAttrs, expr[0], mp, ret)
 		require.NoError(t, err)
 
 		resultHit += int(ret.RowCount())
@@ -273,9 +274,8 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		ret := batch.NewWithSize(1)
 		for _, col := range schema.ColDefs {
 			if col.Name == schema.ColDefs[primaryKeyIdx].Name {
-				vec := vector.NewVec(col.Type)
+				vec := vector.NewVec(col.Type, mp)
 				ret.Vecs[0] = vec
-				ret.Attrs = []string{col.Name}
 				break
 			}
 		}
@@ -297,14 +297,12 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		pkVec.CleanOnlyData()
 		for i := 0; i < rowsCnt; i++ {
 			buf := fmt.Sprintf("%s:%d", strings.Repeat("a", 200), i)
-			vector.AppendBytes(pkVec, []byte(buf), false, mp)
+			require.NoError(t, vector.AppendBytes(pkVec, []byte(buf), false, pkVec.MPool()))
 		}
 		defer bat.Close()
 		require.NoError(
 			t,
-			testutil.WriteToRelation(
-				ctx, txn, relation, containers.ToCNBatch(bat), false, true,
-			),
+			testutil.WriteToRelation(ctx, txn, relation, containers.ToCNBatch(bat), bat.Attrs, false, true),
 		)
 
 		reader, err := testutil.GetRelationReader(
@@ -320,8 +318,9 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 
 		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
 
-		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
-		reader.Read(ctx, ret.Attrs, nil, nmp, ret)
+		ret := testutil.EmptyBatchFromSchema(schema, nmp, primaryKeyIdx)
+		retAttrs := testutil.SchemaAttrs(schema, primaryKeyIdx)
+		reader.Read(ctx, retAttrs, nil, nmp, ret)
 		// ?  what is the expected error? require.Error(t, err)
 		require.NoError(t, txn.Commit(ctx))
 	}
@@ -684,9 +683,8 @@ func Test_ShardingRemoteReader(t *testing.T) {
 		ret := batch.NewWithSize(1)
 		for _, col := range schema.ColDefs {
 			if col.Name == schema.ColDefs[primaryKeyIdx].Name {
-				vec := vector.NewVec(col.Type)
+				vec := vector.NewVec(col.Type, mp)
 				ret.Vecs[0] = vec
-				ret.Attrs = []string{col.Name}
 				break
 			}
 		}
@@ -754,9 +752,8 @@ func Test_ShardingRemoteReader(t *testing.T) {
 			bat := batch.NewWithSize(1)
 			for _, col := range schema.ColDefs {
 				if col.Name == schema.ColDefs[primaryKeyIdx].Name {
-					vec := vector.NewVec(col.Type)
+					vec := vector.NewVec(col.Type, mp)
 					bat.Vecs[0] = vec
-					bat.Attrs = []string{col.Name}
 					break
 				}
 			}
@@ -781,7 +778,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 			res = res[1:]
 			l := types.DecodeUint32(res)
 			res = res[4:]
-			if err := bat.UnmarshalBinary(res[:l]); err != nil {
+			if err := bat.UnmarshalBinaryWithAnyMp(res[:l], mp); err != nil {
 				panic(err)
 			}
 			rows += int(bat.RowCount())
@@ -986,7 +983,7 @@ func Test_ShardingTableDelegate(t *testing.T) {
 	require.True(t, tomb.HasAnyInMemoryTombstone())
 
 	bat := batch.NewWithSize(1)
-	bat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
+	bat.SetVector(0, vector.NewVec(types.T_int64.ToType(), mpool.MustNewZero()))
 	_, err = delegate.PrimaryKeysMayBeUpserted(ctx, types.TS{}, types.MaxTs(), bat, 0)
 	require.NoError(t, err)
 
@@ -1208,9 +1205,8 @@ func Test_ShardingLocalReader(t *testing.T) {
 			bat := batch.NewWithSize(1)
 			for _, col := range schema.ColDefs {
 				if col.Name == schema.ColDefs[primaryKeyIdx].Name {
-					vec := vector.NewVec(col.Type)
+					vec := vector.NewVec(col.Type, mp)
 					bat.Vecs[0] = vec
-					bat.Attrs = []string{col.Name}
 					break
 				}
 			}
@@ -1255,7 +1251,7 @@ func Test_SimpleReader(t *testing.T) {
 	pkType := types.T_int32.ToType()
 	bat1 := readutil.NewCNTombstoneBatch(
 		&pkType,
-		objectio.HiddenColumnSelection_None,
+		objectio.HiddenColumnSelection_None, mp,
 	)
 	defer bat1.Clean(mp)
 	obj := types.NewObjectid()
@@ -1324,10 +1320,10 @@ func Test_SimpleReader(t *testing.T) {
 	defer ioutil.Stop("")
 	bat2 := readutil.NewCNTombstoneBatch(
 		&pkType,
-		objectio.HiddenColumnSelection_None,
+		objectio.HiddenColumnSelection_None, mp,
 	)
 	defer bat2.Clean(mp)
-	done, err := r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	done, err := r.Read(context.Background(), objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_None), nil, mp, bat2)
 	require.NoError(t, err)
 	require.False(t, done)
 	require.Equal(t, 20, bat2.RowCount())
@@ -1339,7 +1335,7 @@ func Test_SimpleReader(t *testing.T) {
 		require.Equal(t, rowids1[i], rowids2[i])
 	}
 
-	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	done, err = r.Read(context.Background(), objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_None), nil, mp, bat2)
 	require.NoError(t, err)
 	require.True(t, done)
 
@@ -1352,7 +1348,7 @@ func Test_SimpleReader(t *testing.T) {
 		),
 	)
 
-	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	done, err = r.Read(context.Background(), objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_None), nil, mp, bat2)
 	require.NoError(t, err)
 	require.False(t, done)
 	require.Equal(t, 20, bat2.RowCount())
@@ -1364,7 +1360,7 @@ func Test_SimpleReader(t *testing.T) {
 		require.Equal(t, rowids1[i], rowids2[i])
 	}
 
-	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	done, err = r.Read(context.Background(), objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_None), nil, mp, bat2)
 	require.NoError(t, err)
 	require.False(t, done)
 	require.Equal(t, 20, bat2.RowCount())
@@ -1376,7 +1372,7 @@ func Test_SimpleReader(t *testing.T) {
 		require.Equal(t, rowids1[i], rowids2[i])
 	}
 
-	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	done, err = r.Read(context.Background(), objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_None), nil, mp, bat2)
 	require.NoError(t, err)
 	require.True(t, done)
 }
@@ -1507,7 +1503,7 @@ func TestHandleShardingReadPrimaryKeysMayBeModified(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a test vector and serialize it
-	keyVector := vector.NewVec(schema.ColDefs[primaryKeyIdx].Type)
+	keyVector := vector.NewVec(schema.ColDefs[primaryKeyIdx].Type, mp)
 	err = vector.AppendFixed[int64](keyVector, 1, false, mp)
 	require.NoError(t, err)
 	keyVectorBytes, err := keyVector.MarshalBinary()

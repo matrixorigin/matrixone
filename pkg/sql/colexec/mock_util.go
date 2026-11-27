@@ -17,7 +17,6 @@ package colexec
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -90,7 +89,15 @@ func (op *MockOperator) Reset(proc *process.Process, pipelineFailed bool, err er
 func (op *MockOperator) Free(proc *process.Process, pipelineFailed bool, err error) {
 	for i := range op.batchs {
 		if op.batchs[i] != nil && op.batchs[i] != batch.EmptyBatch {
-			op.batchs[i].Clean(proc.Mp())
+			// The mock does not own a pool: each test vector is freed with
+			// the pool it was created with.
+			for j, vec := range op.batchs[i].Vecs {
+				if vec != nil {
+					vec.Free(vec.MPool())
+					op.batchs[i].Vecs[j] = nil
+				}
+			}
+			op.batchs[i].Clean(nil)
 		}
 	}
 	op.batchs = nil
@@ -145,7 +152,7 @@ func makeMockVecs(mp *mpool.MPool, values []int32, nulls []uint64) []*vector.Vec
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e datetime)
 func MakeMockBatchs(mp *mpool.MPool) *batch.Batch {
-	bat := batch.New([]string{"a", "b", "c", "d", "e"})
+	bat := batch.NewWithSize(5)
 	vecs := makeMockVecs(mp, []int32{1, 1000}, nil)
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
@@ -153,7 +160,7 @@ func MakeMockBatchs(mp *mpool.MPool) *batch.Batch {
 }
 
 func MakeMockPartitionBatchs(val int32, mp *mpool.MPool) *batch.Batch {
-	bat := batch.New([]string{"a"})
+	bat := batch.NewWithSize(1)
 	vecs := makeMockPartitionVecs(val, mp)
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
@@ -177,7 +184,7 @@ func makeMockTimeWinVecs(mp *mpool.MPool) []*vector.Vector {
 }
 
 func MakeMockTimeWinBatchs(mp *mpool.MPool) *batch.Batch {
-	bat := batch.New([]string{"ts", "b"})
+	bat := batch.NewWithSize(2)
 	vecs := makeMockTimeWinVecs(mp)
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
@@ -186,7 +193,7 @@ func MakeMockTimeWinBatchs(mp *mpool.MPool) *batch.Batch {
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e date)
 func MakeMockBatchsWithRowID(mp *mpool.MPool) *batch.Batch {
-	bat := batch.New([]string{catalog.Row_ID, "a", "b", "c", "d", "e"})
+	bat := batch.NewWithSize(6)
 	vecs := makeMockVecs(mp, []int32{1, 1000}, nil)
 
 	uuid1 := objectio.NewSegmentid()
@@ -204,7 +211,7 @@ func MakeMockBatchsWithRowID(mp *mpool.MPool) *batch.Batch {
 // new batchs with schema : (a int auto_increment, b uuid, c varchar, d json, e date)
 // vecs[0] is null,  use for test preinsert...
 func MakeMockBatchsWithNullVec(mp *mpool.MPool) *batch.Batch {
-	bat := batch.New([]string{"a", "b", "c", "d", "e"})
+	bat := batch.NewWithSize(5)
 	vecs := makeMockVecs(mp, []int32{1, 1}, []uint64{0, 1})
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
@@ -212,7 +219,7 @@ func MakeMockBatchsWithNullVec(mp *mpool.MPool) *batch.Batch {
 }
 
 func MakeMockBatchsWithNullVec1(mp *mpool.MPool) *batch.Batch {
-	bat := batch.New([]string{"a", "b", "c", "d", "e"})
+	bat := batch.NewWithSize(5)
 	vecs := makeMockVecs(mp, []int32{1, 1}, []uint64{1})
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
@@ -220,3 +227,17 @@ func MakeMockBatchsWithNullVec1(mp *mpool.MPool) *batch.Batch {
 }
 
 //@todo make more test batchs
+
+// FreeMockChildren frees the batches of op's MockOperator children. Operators
+// never free their children, so tests release their mock inputs with it.
+func FreeMockChildren(op vm.Operator) {
+	if op == nil {
+		return
+	}
+	base := op.GetOperatorBase()
+	for i := 0; i < base.NumChildren(); i++ {
+		if mock, ok := base.GetChildren(i).(*MockOperator); ok {
+			mock.Free(nil, false, nil)
+		}
+	}
+}

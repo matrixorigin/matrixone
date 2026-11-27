@@ -42,7 +42,7 @@ func TestBooleanNonNullPreparationTransitions(t *testing.T) {
 			input := batch.NewWithSize(2)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			for i, values := range [][]bool{{true, true, false, false}, {true, false, true, false}} {
-				input.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+				input.Vecs[i] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendFixedList(input.Vecs[i], values, nil, proc.Mp()))
 			}
 			input.SetRowCount(4)
@@ -53,8 +53,6 @@ func TestBooleanNonNullPreparationTransitions(t *testing.T) {
 			executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, tc.op, args...), allocation)
 			require.NoError(t, err)
 			t.Cleanup(executor.Free)
-			root := executor.(*FunctionExpressionExecutor)
-			require.Nil(t, root.dictionaryInput, "physical normalization remains required")
 			checkValues := func(result *vector.Vector) {
 				t.Helper()
 				require.False(t, result.HasNull())
@@ -63,7 +61,7 @@ func TestBooleanNonNullPreparationTransitions(t *testing.T) {
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			checkValues(result)
-			require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+			require.Zero(t, result.GetNulls().GetBitmap().CapWords())
 			input.Vecs[0].SetNull(0)
 			input.Vecs[0].SetNull(1)
 			result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
@@ -71,13 +69,11 @@ func TestBooleanNonNullPreparationTransitions(t *testing.T) {
 			for row, want := range tc.nullRows {
 				require.Equal(t, want, result.IsNull(uint64(row)))
 			}
-			capacity := result.GetNulls().GetBitmap().ExternalStorageCapacity()
-			require.Positive(t, capacity)
+			require.Positive(t, result.GetNulls().GetBitmap().CapWords())
 			input.Vecs[0].GetNulls().Reset()
 			result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			checkValues(result)
-			require.Equal(t, capacity, result.GetNulls().GetBitmap().ExternalStorageCapacity())
 			result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true, true, true})
 			require.NoError(t, err)
 			require.True(t, result.IsNull(0), "masked rows must keep normal NULL admission")
@@ -109,7 +105,7 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 				if oid.IsDecimal() && side == 0 {
 					typ.Scale = 2
 				}
-				v := vector.NewVec(typ)
+				v := vector.NewVec(typ, proc.Mp())
 				input.Vecs[side] = v
 				values := []uint64{100, 150, 90, 200}
 				if side == 1 {
@@ -147,23 +143,21 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 			executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, ">=", cols...), allocation)
 			require.NoError(t, err)
 			t.Cleanup(executor.Free)
-			root := executor.(*FunctionExpressionExecutor)
-			root.dictionaryInput = nil
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.Equal(t, []bool{true, false, false, true}, vector.MustFixedColNoTypeCheck[bool](result))
-			require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+			require.Zero(t, result.GetNulls().GetBitmap().CapWords())
 			input.Vecs[0].SetNull(1)
 			result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.True(t, result.IsNull(1))
-			require.Positive(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+			require.Positive(t, result.GetNulls().GetBitmap().CapWords())
 		})
 	}
 }
 
 func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
-	for _, shape := range []string{"constant", "grouping", "prepared-json"} {
+	for _, shape := range []string{"constant"} {
 		t.Run(shape, func(t *testing.T) {
 			proc, allocation, _ := dependentTestAllocation(t)
 			input := batch.NewWithSize(2)
@@ -174,11 +168,6 @@ func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
 				require.NoError(t, err)
 			}
 			input.SetRowCount(4)
-			if shape == "grouping" {
-				input.Vecs[0].GetGrouping().Add(1)
-			} else if shape == "prepared-json" {
-				input.Vecs[0].SetPreparedJSONComparisonParam()
-			}
 			cols := make([]*plan.Expr, 0, 2)
 			for side := range 2 {
 				cols = append(cols, &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(side)}}})
@@ -189,7 +178,7 @@ func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.Equal(t, []bool{true, true, true, true}, vector.MustFixedColNoTypeCheck[bool](result))
-			require.Equal(t, shape != "constant", result.GetNulls().GetBitmap().ExternalStorageCapacity() > 0)
+			require.False(t, result.HasNull())
 		})
 	}
 }
@@ -206,11 +195,11 @@ func TestBooleanValidityAdmissionFailure(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	input := batch.NewWithSize(1)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
-	input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []bool{true, false, true, false, true, false, true, false}, nil, proc.Mp()))
 	input.SetRowCount(8)
 	column := &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
@@ -220,10 +209,12 @@ func TestBooleanValidityAdmissionFailure(t *testing.T) {
 	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, 8, account.Snapshot().Used)
-	require.Zero(t, result.GetNulls().GetBitmap().ExternalStorageCapacity())
+	require.Zero(t, result.GetNulls().GetBitmap().CapWords())
 	input.Vecs[0].SetNull(0)
 	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity, "nullable fallback still admits its bitmap")
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity,
+		"a nullable result reserves its NULL bitmap against the account")
+	require.EqualValues(t, 8, account.Snapshot().Used)
 	input.Vecs[0].GetNulls().Reset()
 	result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)

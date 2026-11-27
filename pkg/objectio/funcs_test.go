@@ -525,7 +525,7 @@ func TestConstructorFactoryReleasesDecompressionDataOnError(t *testing.T) {
 
 func TestColumnCacheConstructorValidatesAndMarksV2(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(source, []byte("value longer than inline storage"), false, mp))
 	payload, err := source.MarshalBinary()
 	require.NoError(t, err)
@@ -551,13 +551,13 @@ func TestColumnCacheConstructorValidatesAndMarksV2(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "value longer than inline storage", obj.(*vector.Vector).GetStringAt(0))
 
-	target := vector.NewVecFromReuse()
+	target := new(vector.Vector)
 	require.NoError(t, MustVectorToCached(target, cacheData))
 	require.Equal(t, "value longer than inline storage", target.GetStringAt(0))
 
-	ownedTarget := vector.NewVecFromReuse()
+	ownedTarget := new(vector.Vector)
 	require.NoError(t, MustVectorToCachedWithMpool(ownedTarget, cacheData, mp))
-	require.False(t, ownedTarget.NeedDup())
+	require.False(t, ownedTarget.IsReadOnly())
 	require.Equal(t, "value longer than inline storage", ownedTarget.GetStringAt(0))
 	invalidOffset := uint32(len(encoded) + 1)
 	copy(ownedTarget.GetData()[4:8], types.EncodeUint32(&invalidOffset))
@@ -577,7 +577,7 @@ func TestCopyCachedVectorRowsMaterializesOnlySelectedRows(t *testing.T) {
 	)
 
 	writerMP := mpool.MustNewZero()
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), writerMP)
 	for i := 0; i < rowCount; i++ {
 		value := bytes.Repeat([]byte{byte('a' + i%26)}, valueLen)
 		require.NoError(t, vector.AppendBytes(source, value, false, writerMP))
@@ -603,7 +603,7 @@ func TestCopyCachedVectorRowsMaterializesOnlySelectedRows(t *testing.T) {
 	defer mpool.DeleteMPool(queryMP)
 
 	sels := []int64{0, 7, 511, 1024, 2047, 4095, 6000, 7001, 8000, 8191}
-	selected := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	selected := vector.NewVec(types.T_varchar.ToType(), queryMP)
 	require.NoError(t, CopyCachedVectorRows(selected, cacheData, sels, queryMP))
 	require.Equal(t, len(sels), selected.Length())
 	for i, sel := range sels {
@@ -617,25 +617,25 @@ func TestCopyCachedVectorRowsMaterializesOnlySelectedRows(t *testing.T) {
 	// The result owns its payload. Mutating it cannot invalidate the cache's
 	// validation marker or affect a later selected-row materialization.
 	selected.GetBytesAt(0)[0] = 'X'
-	again := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	again := vector.NewVec(types.T_varchar.ToType(), queryMP)
 	require.NoError(t, CopyCachedVectorRows(again, cacheData, sels[:1], queryMP))
 	require.Equal(t, bytes.Repeat([]byte{'a'}, valueLen), again.GetBytesAt(0))
 	probe := &validatedVectorBytesProbe{
 		backing: cacheData.(validatedVectorCacheDataMarker).validatedVectorBackingForScope(),
 	}
-	probeResult := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	probeResult := vector.NewVec(types.T_varchar.ToType(), queryMP)
 	require.NoError(t, CopyCachedVectorRows(probeResult, probe, sels[:1], queryMP))
 	require.Zero(t, probe.bytesCalls.Load(), "sealed backing must not be cloned before scoped materialization")
 
-	invalidRows := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	invalidRows := vector.NewVec(types.T_varchar.ToType(), queryMP)
 	require.NotPanics(t, func() {
 		err = CopyCachedVectorRows(invalidRows, cacheData, []int64{-1, rowCount}, queryMP)
 	})
 	require.Error(t, err)
 	require.Zero(t, invalidRows.Length())
-	wrongType := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	wrongType := vector.NewVec(types.T_int64.ToType(), queryMP)
 	require.Error(t, CopyCachedVectorRows(wrongType, cacheData, sels[:1], queryMP))
-	widerType := vector.NewOffHeapVecWithType(types.New(types.T_varchar, 512, 0))
+	widerType := vector.NewVec(types.New(types.T_varchar, 512, 0), queryMP)
 	require.NoError(t, CopyCachedVectorRows(widerType, cacheData, sels[:1], queryMP))
 	require.Equal(t, bytes.Repeat([]byte{'a'}, valueLen), widerType.GetBytesAt(0))
 	window, err := MaterializeCachedVectorWindow(cacheData, 7000, 3, queryMP)
@@ -687,7 +687,7 @@ func TestCopyCachedVectorRowsMaterializesOnlySelectedRows(t *testing.T) {
 
 	// Copying the complete 8192-row payload cannot fit in this pool. The same
 	// bounded pool succeeds above because only ten selected values are copied.
-	whole := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	whole := vector.NewVec(types.T_varchar.ToType(), queryMP)
 	require.Error(t, CopyCachedVectorAll(whole, cacheData, queryMP))
 
 	selected.Free(queryMP)
@@ -702,7 +702,7 @@ func TestCopyCachedVectorRowsMaterializesOnlySelectedRows(t *testing.T) {
 
 func TestSearchCachedVectorTopNDoesNotCloneSealedBacking(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := vector.NewVec(types.T_array_float32.ToType())
+	source := vector.NewVec(types.T_array_float32.ToType(), mp)
 	for _, row := range [][]float32{{10, 10}, {1, 2}, {5, 5}} {
 		require.NoError(t, vector.AppendBytes(
 			source,
@@ -751,7 +751,7 @@ func TestReadFilterSearchMatchesLegacyVarlenPredicates(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	makeVector := func(values []string) *vector.Vector {
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		for _, value := range values {
 			require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 		}
@@ -894,7 +894,7 @@ func TestReadFilterSearchMatchesLegacyVarlenPredicates(t *testing.T) {
 		types.T_varchar, [][]byte{[]byte("ab")},
 	).search(constNull, true))
 	constNull.Free(mp)
-	flatNull := vector.NewVec(types.T_varchar.ToType())
+	flatNull := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(flatNull, []byte("ab"), false, mp))
 	require.NoError(t, vector.AppendBytes(flatNull, nil, true, mp))
 	require.Equal(t, []int64{0, 1}, NewReadFilterSearch(
@@ -902,7 +902,7 @@ func TestReadFilterSearchMatchesLegacyVarlenPredicates(t *testing.T) {
 	).search(flatNull, false))
 	flatNull.Free(mp)
 
-	wrongOID := vector.NewVec(types.T_char.ToType())
+	wrongOID := vector.NewVec(types.T_char.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(wrongOID, []byte("missing"), false, mp))
 	require.Equal(t, []int64{0}, NewReadFilterSearch(
 		types.T_varchar, [][]byte{[]byte("ab")},
@@ -944,7 +944,7 @@ func TestCachedCommitTSHelpersBroadcastConstants(t *testing.T) {
 	require.True(t, usable)
 	require.True(t, matched)
 
-	abortVec := vector.NewVec(types.T_bool.ToType())
+	abortVec := vector.NewVec(types.T_bool.ToType(), mp)
 	for _, aborted := range []bool{false, false, false, true} {
 		require.NoError(t, vector.AppendFixed(abortVec, aborted, false, mp))
 	}
@@ -1022,7 +1022,7 @@ func TestReadFilterPrefixSearchDoesNotAllocatePerBlockRow(t *testing.T) {
 	const rowCount = 8192
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), mp)
 	for row := 0; row < rowCount; row++ {
 		require.NoError(t, vector.AppendBytes(
 			source,
@@ -1058,7 +1058,7 @@ func TestCombinedReadFilterSearchDoesNotAllocatePerBlockRow(t *testing.T) {
 	const rowCount = 8192
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), mp)
 	for row := 0; row < rowCount; row++ {
 		require.NoError(t, vector.AppendBytes(
 			source,
@@ -1091,7 +1091,7 @@ func TestCombinedReadFilterSearchDoesNotAllocatePerBlockRow(t *testing.T) {
 
 func TestColumnCacheConstructorRejectsInvalidV2BeforeAdmission(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(source, []byte("value longer than inline storage"), false, mp))
 	payload, err := source.MarshalBinary()
 	require.NoError(t, err)
@@ -1157,7 +1157,7 @@ func TestValidatedVectorCacheDataSliceDropsCapability(t *testing.T) {
 
 func TestValidatedVectorCacheDataDoesNotExposeMutableBackingBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(source, []byte("value longer than inline storage"), false, mp))
 	payload, err := source.MarshalBinary()
 	require.NoError(t, err)
@@ -1191,7 +1191,7 @@ func TestValidatedVectorCacheDataDoesNotExposeMutableBackingBytes(t *testing.T) 
 
 func TestValidatedVectorCacheDataDecodedVectorDoesNotMutateCache(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), mp)
 	const value = "value longer than inline storage"
 	require.NoError(t, vector.AppendBytes(source, []byte(value), false, mp))
 	payload, err := source.MarshalBinary()
@@ -1233,7 +1233,7 @@ func TestValidatedVectorCacheDataDecodedVectorDoesNotMutateCache(t *testing.T) {
 
 func TestValidatedVectorCapabilitySurvivesMemoryCache(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(source, []byte("cached value"), false, mp))
 	payload, err := source.MarshalBinary()
 	require.NoError(t, err)
@@ -1278,7 +1278,7 @@ func TestValidatedVectorCapabilitySurvivesMemoryCache(t *testing.T) {
 
 func TestRemoteColumnCacheHitIsValidatedBeforeMemoryAdmission(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(source, []byte("remote cached value"), false, mp))
 	payload, err := source.MarshalBinary()
 	require.NoError(t, err)
@@ -1392,7 +1392,7 @@ func TestReadOneBlockAllColumnsReleasesPartialReadOnError(t *testing.T) {
 
 func TestReadOneBlockAllColumnsWindowMaterializesRequestedRows(t *testing.T) {
 	writerMP := mpool.MustNewZero()
-	source := vector.NewVec(types.T_int64.ToType())
+	source := vector.NewVec(types.T_int64.ToType(), writerMP)
 	for i := int64(0); i < 8; i++ {
 		require.NoError(t, vector.AppendFixed(source, i, false, writerMP))
 	}

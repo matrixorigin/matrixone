@@ -24,7 +24,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -383,7 +382,6 @@ func (s *tier2RebuildSink) AbortAttempt(generation uint64, cause error) error {
 func TestCompileRunCarriesSequenceRetryStateAcrossRetryRebuilds(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().Buf = buffer.New()
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		if name == plan2.SQLSelectLimitVariable {
 			return ^uint64(0), nil
@@ -466,7 +464,6 @@ func TestCompileRunCarriesSequenceRetryStateAcrossRetryRebuilds(t *testing.T) {
 
 	c.Release()
 	proc.Free()
-	proc.GetSessionInfo().Buf.Free()
 }
 
 // tier2BarrierSink drives the publish-after-observation integration
@@ -561,7 +558,6 @@ func (s *tier2BarrierSink) AbortAttempt(generation uint64, cause error) error {
 func TestCompileRunPublishAfterObservationDeclinesRetry(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().Buf = buffer.New()
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		if name == plan2.SQLSelectLimitVariable {
 			return ^uint64(0), nil
@@ -643,7 +639,6 @@ func TestCompileRunPublishAfterObservationDeclinesRetry(t *testing.T) {
 
 	c.Release()
 	proc.Free()
-	proc.GetSessionInfo().Buf.Free()
 }
 
 // sequenceCancelProbeExecutor satisfies prober construction: the cancelled

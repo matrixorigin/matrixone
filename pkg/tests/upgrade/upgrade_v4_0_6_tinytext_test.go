@@ -574,14 +574,13 @@ func writeLegacyTinyTextCatalogAndRow(
 
 	mp := mpool.MustNewZero()
 	legacyRow := batch.NewWithSize(2)
-	legacyRow.Attrs = []string{"id", "payload"}
-	legacyRow.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	legacyRow.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	legacyRow.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	legacyRow.Vecs[1] = vector.NewVec(types.T_text.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(legacyRow.Vecs[0], int32(1), false, mp))
 	require.NoError(t, vector.AppendBytes(legacyRow.Vecs[1], []byte(strings.Repeat("x", 1000)), false, mp))
 	legacyRow.SetRowCount(1)
 	defer legacyRow.Clean(mp)
-	require.NoError(t, relation.Write(ctx, legacyRow))
+	require.NoError(t, relation.Write(ctx, legacyRow, []string{"id", "payload"}))
 
 	require.NoError(t, txn.Commit(ctx))
 	committed = true

@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -83,6 +85,38 @@ func TestCompactDiagnosticSnapshotAndTerminalRefresh(t *testing.T) {
 	h.Free()
 	h.Free()
 	require.Nil(t, h.Marshal(context.Background()))
+}
+
+func TestCompactPartialDiagnosticRetainsScanAndMissingRemote(t *testing.T) {
+	defer gostub.Stub(&motrace.UseCompactStatementDiagnostics, func() bool { return true }).Reset()
+	q, phy := compactDiagnosticFixture()
+	phy.Partial = models.PartialExecutionCapture{Interrupted: true, Attempt: 1, RemoteExpected: 2, RemoteObserved: 1, RemoteMissing: true}
+	q.GetQuery().Nodes[1].AnalyzeInfo.InputSize = 42
+	stmt := &motrace.StatementInfo{ResponseAt: time.Now(), Duration: time.Millisecond}
+	h := newJsonPlanHandler(context.Background(), stmt, nil, q, phy, context.Canceled)
+	defer h.Free()
+	d := decodeCompactDiagnostic(t, h)
+	require.Equal(t, "partial_execution", d.Detail.Capture)
+	require.Equal(t, phy.Partial, d.Detail.Partial)
+	require.Equal(t, "cancelled", d.Outcome)
+	require.NotEmpty(t, d.Physical)
+	_, stats := h.Stats(context.Background())
+	require.EqualValues(t, 10, stats.RowsRead)
+	require.EqualValues(t, 42, stats.BytesScan)
+
+	q.GetQuery().Nodes[1].AnalyzeInfo.Reset()
+	phy.Partial = models.PartialExecutionCapture{}
+	phy.LocalScope[0].RootOperator.Children[1].OpStats.Reset()
+	summary := resource.StatementResourceSummary{Memory: resource.MemoryTotals{MaxDomainPeakLiveBytes: 1 << 30}}
+	require.True(t, h.SetStatementDiagnostics(context.Background(), summary, context.Canceled))
+	final := decodeCompactDiagnostic(t, h)
+	require.Equal(t, 3, final.Level)
+	require.Equal(t, d.Detail, final.Detail)
+	require.Equal(t, d.Logical, final.Logical)
+	require.Equal(t, d.Physical, final.Physical)
+	_, stats = h.Stats(context.Background())
+	require.EqualValues(t, 10, stats.RowsRead)
+	require.EqualValues(t, 42, stats.BytesScan)
 }
 
 func TestCompactDiagnosticLateTriggerAndNormalControl(t *testing.T) {
@@ -347,4 +381,45 @@ func TestCompactDiagnosticUnknownWaitTerminalRefresh(t *testing.T) {
 		require.Equal(t, uint64(wall), d.Summary.ElapsedNS)
 		require.NotContains(t, string(h.Marshal(ctx)), `"wait_active_ns"`)
 	}
+}
+
+func TestLockReadCompactProjectionRetainsBoundedScalarWhenPlanWasCaptured(t *testing.T) {
+	d := &models.StatementDiagnostics{Version: models.DiagnosticsVersion, Level: 1, CapturedLevel: 1}
+	d.SetSummary(resource.StatementResourceSummary{}, time.Second, time.Second, true)
+	var out bytes.Buffer
+	require.NoError(t, d.WriteJSON(&out))
+	require.NotContains(t, out.String(), "lock_read")
+
+	lockRead := &resource.LockReadDiagnostic{
+		StatementID: uuid.New(), AttemptCount: math.MaxUint64, AcquisitionNS: math.MaxUint64, LogtailNS: math.MaxUint64,
+		PKCheckNS: math.MaxUint64, PKReadinessNS: math.MaxUint64, Seen: 15, Conflict: true,
+		RemotePKSubstagesUnavailable: true,
+		LastIncomplete:               "pk_readiness", ObservedConflictTxnID: strings.Repeat("f", 32), Outcome: "success",
+	}
+	summary := resource.StatementResourceSummary{
+		LockRead: lockRead, AttemptCount: math.MaxUint64,
+		RetryWallNS: math.MaxUint64, MissingFragmentCount: math.MaxUint64, MissingMemoryDomainCount: math.MaxUint64,
+		Usage: resource.Usage{ExclusiveActiveNS: math.MaxUint64, S3ReadBytes: math.MaxUint64, S3WriteBytes: math.MaxUint64, ClientEgressBytes: math.MaxUint64, SpillBytes: math.MaxUint64},
+	}
+	for i := range summary.Usage.WaitNS {
+		summary.Usage.WaitNS[i] = math.MaxUint64
+	}
+	for i := range summary.Usage.S3Requests {
+		summary.Usage.S3Requests[i] = math.MaxUint64
+	}
+	d.SetSummary(summary, time.Second, time.Second, true)
+	require.NoError(t, d.WriteJSON(&out))
+	require.LessOrEqual(t, out.Len(), models.DiagnosticsHeaderBudget)
+	var result models.ExplainData
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result))
+	require.NotNil(t, result.StatementDiagnostics)
+	require.Equal(t, &models.DiagnosticLockRead{
+		AttemptCount: math.MaxUint64, AcquisitionNS: math.MaxUint64, LogtailNS: math.MaxUint64,
+		PKCheckNS: math.MaxUint64, PKReadinessNS: math.MaxUint64, Seen: 15, Conflict: true,
+		RemotePKSubstagesUnavailable: true, LastIncomplete: "pk_readiness", Outcome: "success",
+	}, result.StatementDiagnostics.Summary.LockRead)
+	require.NotContains(t, out.String(), `"statement_id"`)
+	require.NotContains(t, out.String(), lockRead.StatementID.String())
+	require.NotContains(t, out.String(), `"observed_conflict_txn_id"`)
+	require.NotContains(t, out.String(), lockRead.ObservedConflictTxnID)
 }

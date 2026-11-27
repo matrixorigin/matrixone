@@ -273,14 +273,14 @@ func prepareTestEng(ctrl *gomock.Controller, relationResetReturnError bool) engi
 	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).AnyTimes()
 
 	relation := mock_frontend.NewMockRelation(ctrl)
-	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	relation.EXPECT().Write(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	if relationResetReturnError {
 		relation.EXPECT().Reset(gomock.Any()).Return(moerr.NewInternalErrorNoCtx("")).AnyTimes()
 	} else {
 		relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
 	}
 
-	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
 
@@ -433,7 +433,7 @@ func makeTestVarcharArray(rowCount int) []string {
 
 func makeTestRowIDVector(m *mpool.MPool, objectID *types.Objectid, blockNum uint16, rowCount int) *vector.Vector {
 	blockID := types.NewBlockidWithObjectID(objectID, blockNum+1000)
-	vec := vector.NewVec(types.T_Rowid.ToType())
+	vec := vector.NewVec(types.T_Rowid.ToType(), m)
 	for i := 0; i < rowCount; i++ {
 		rowID := types.NewRowid(&blockID, uint32(i)+1)
 		if err := vector.AppendFixed(vec, rowID, false, m); err != nil {

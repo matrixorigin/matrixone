@@ -36,6 +36,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBoundNDVByExactIntegerSpan(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		typ          types.T
+		lo, hi, want float64
+	}{
+		{"signed-cross-zero", types.T_int64, -100, 100, 201},
+		{"unsigned", types.T_uint64, 1, 20000, 20000},
+		{"last-supported-endpoint", types.T_int64, 1<<52 - 5, 1<<52 - 1, 5},
+		{"outside-supported-endpoints", types.T_int64, 1<<52 - 4, 1 << 52, 60144},
+		{"negative-unsigned", types.T_uint64, -1, 100, 60144},
+		{"rounded-signed", types.T_int64, 1 << 53, 1<<53 + 4, 60144},
+		{"rounded-unsigned", types.T_uint64, 1 << 53, 1<<53 + 4, 60144},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, boundNDVByExactIntegerSpan(60144, tc.typ, tc.lo, tc.hi, false))
+		})
+	}
+}
+
+func TestValidationCarriersDoNotAffectScheduling(t *testing.T) {
+	query := &planpb.Query{Nodes: []*planpb.Node{
+		{NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{}},
+		{NodeType: planpb.Node_TABLE_SCAN, ExtraOptions: validationPrivilegeCarrierExtraOptions},
+		{NodeType: planpb.Node_VALUE_SCAN, ExtraOptions: validationPrivilegeCarrierExtraOptions},
+	}, Steps: []int32{0}}
+	require.Equal(t, ExecTypeTP, GetExecType(query, false, false))
+	require.False(t, HasShuffleInPlan(query))
+	p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: query}}
+	require.NotPanics(t, func() { CalcQueryDOP(p, 1, 1, ExecTypeTP) })
+	require.Equal(t, int32(1), query.Nodes[0].Stats.Dop)
+}
+
 func TestReCalcInnerJoinCardinality(t *testing.T) {
 	ctx := NewMockCompilerContext(false, nil)
 	typ := planpb.Type{Id: int32(types.T_int64)}
@@ -2584,7 +2617,7 @@ func TestGuardedDiagnosticKeepsLoopJoinSupportedOrientation(t *testing.T) {
 	param := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_P{
 		P: &planpb.ParamRef{Pos: 0},
 	}}
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), ctx.proc.Mp())
 	proc := ctx.GetProcess()
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))

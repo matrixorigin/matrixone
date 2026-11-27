@@ -141,21 +141,21 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 		}
 		rowidVec, aerr := txn.batchAllocNewRowIds(rowsPerTable)
 		require.NoError(t, aerr)
-		defer rowidVec.Free(txn.proc.Mp())
+		defer rowidVec.Free(txn.workspaceMP())
 		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowidVec)
 		bat := batch.NewWithSize(3)
-		bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a", "v"})
-		rowidCol := vector.NewVec(types.T_Rowid.ToType())
+		batAttrs := []string{objectio.PhysicalAddr_Attr, "a", "v"}
+		rowidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(rowidCol, rowids, nil, txn.proc.Mp()))
-		aCol := vector.NewVec(types.T_int64.ToType())
+		aCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(aCol, pks, nil, txn.proc.Mp()))
-		vCol := vector.NewVec(types.T_int64.ToType())
+		vCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(vCol, vals, nil, txn.proc.Mp()))
 		bat.Vecs[0] = rowidCol
 		bat.Vecs[1] = aCol
 		bat.Vecs[2] = vCol
 		bat.SetRowCount(rowsPerTable)
-		txn.appendWorkspaceEntryLocked(Entry{
+		appendWorkspaceEntryForTest(t, txn, Entry{
 			typ:          INSERT,
 			accountId:    1,
 			databaseId:   issue25590DBID,
@@ -163,6 +163,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 			databaseName: "db",
 			tableName:    tt.name,
 			bat:          bat,
+			attrs:        batAttrs,
 		})
 	}
 	smallObjsDisarm := issue25590ArmKeyedFault(t, objectio.FJ_CNFlushSmallObjs, 20, "")
@@ -184,7 +185,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	for i := range txn.writes {
 		entry := txn.writes[i]
 		if entry.bat == nil || entry.bat.IsEmpty() ||
-			entry.typ != INSERT || entry.bat.Attrs[0] != catalog.BlockMeta_BlockInfo {
+			entry.typ != INSERT || entry.attrs[0] != catalog.BlockMeta_BlockInfo {
 			continue
 		}
 		metas = append(metas, metaBatInfo{idx: i, id: entry.tableId, name: entry.tableName})
@@ -226,16 +227,15 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 		name string
 	}{{metas[0].id, firstTailBlock, metas[0].name}, {metas[1].id, secondTailBlock, metas[1].name}} {
 		delBat := batch.NewWithSize(2)
-		delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
-		rowid := vector.NewVec(types.T_Rowid.ToType())
+		rowid := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(
 			rowid, []types.Rowid{types.NewRowid(&mt.blk, 0)}, nil, txn.proc.Mp()))
-		pkOne := vector.NewVec(types.T_int64.ToType())
+		pkOne := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(pkOne, []int64{1}, nil, txn.proc.Mp()))
 		delBat.Vecs[0] = rowid
 		delBat.Vecs[1] = pkOne
 		delBat.SetRowCount(1)
-		out, delErr := txn.deleteBatch(delBat, issue25590DBID, mt.id)
+		out, delErr := txn.deleteBatch(delBat, issue25590DBID, mt.id, txn.proc.Mp())
 		require.NoError(t, delErr)
 		t.Cleanup(func() { out.Clean(txn.proc.Mp()) })
 	}

@@ -186,7 +186,7 @@ func (ctr *container) cacheBatch(
 	src *batch.Batch,
 ) (*batch.Batch, error) {
 	if ctr.i == len(ctr.freeBats) {
-		if err := ctr.admitCachedBatch(proc, len(src.Vecs), len(src.Attrs)); err != nil {
+		if err := ctr.admitCachedBatch(proc, len(src.Vecs)); err != nil {
 			return nil, err
 		}
 	}
@@ -246,7 +246,7 @@ func (ctr *container) filterInsertedRows(
 
 func (ctr *container) cacheRecursiveBatch(proc *process.Process) (*batch.Batch, error) {
 	if ctr.i == len(ctr.freeBats) {
-		if err := ctr.admitCachedBatch(proc, 1, 1); err != nil {
+		if err := ctr.admitCachedBatch(proc, 1); err != nil {
 			return nil, err
 		}
 	}
@@ -260,11 +260,11 @@ func (ctr *container) cacheRecursiveBatch(proc *process.Process) (*batch.Batch, 
 	}
 	replacement, err := ctr.memory.BeginReplacement(proc.Ctx, cached, b)
 	if err != nil {
-		b.Clean(proc.Mp())
+		ctr.allocation.CleanBatch(proc, b)
 		return nil, err
 	}
 	if err = replacement.Commit(b); err != nil {
-		b.Clean(proc.Mp())
+		ctr.allocation.CleanBatch(proc, b)
 		replacement.Rollback()
 		return nil, err
 	}
@@ -272,7 +272,7 @@ func (ctr *container) cacheRecursiveBatch(proc *process.Process) (*batch.Batch, 
 		ctr.freeBats = append(ctr.freeBats, b)
 	} else {
 		if ctr.freeBats[ctr.i] != nil {
-			ctr.freeBats[ctr.i].Clean(proc.Mp())
+			ctr.allocation.CleanBatch(proc, ctr.freeBats[ctr.i])
 		}
 		ctr.freeBats[ctr.i] = b
 	}
@@ -283,8 +283,8 @@ func (ctr *container) cacheRecursiveBatch(proc *process.Process) (*batch.Batch, 
 // freeBats retains every cached batch until Reset. Charge its headers plus
 // the two pointer directories at the same lifetime, including append growth
 // and the fixed recursive marker payload.
-func (ctr *container) admitCachedBatch(proc *process.Process, vectors, attrs int) error {
-	size := uint64(unsafe.Sizeof(batch.Batch{})) + uint64(vectors)*uint64(unsafe.Sizeof(vector.Vector{})+unsafe.Sizeof((*vector.Vector)(nil))) + uint64(attrs)*16 + 128
+func (ctr *container) admitCachedBatch(proc *process.Process, vectors int) error {
+	size := uint64(unsafe.Sizeof(batch.Batch{})) + uint64(vectors)*uint64(unsafe.Sizeof(vector.Vector{})+unsafe.Sizeof((*vector.Vector)(nil))) + 128
 	return ctr.directories.ReserveMetadata(proc, size)
 }
 
@@ -295,7 +295,7 @@ func (ctr *container) bindMemory(proc *process.Process) error {
 	}
 	for _, bat := range ctr.freeBats {
 		if bat != nil {
-			bat.Clean(proc.Mp())
+			ctr.allocation.CleanBatch(proc, bat)
 		}
 	}
 	ctr.buf = nil
@@ -308,10 +308,7 @@ func (ctr *container) bindMemory(proc *process.Process) error {
 
 func makeRecursiveBatch(proc *process.Process) (*batch.Batch, error) {
 	b := batch.NewWithSize(1)
-	b.Attrs = []string{
-		"recursive_col",
-	}
-	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+	b.SetVector(0, vector.NewVec(types.T_varchar.ToType(), proc.Mp()))
 	if err := fillRecursiveBatch(proc, b); err != nil {
 		b.Clean(proc.Mp())
 		return nil, err
@@ -323,7 +320,6 @@ func fillRecursiveBatch(proc *process.Process, b *batch.Batch) error {
 	if err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool()); err != nil {
 		return err
 	}
-	b.Attrs = append(b.Attrs[:0], "recursive_col")
 	b.ShuffleIDX = 0
 	batch.SetLength(b, 1)
 	b.SetLast()

@@ -612,6 +612,12 @@ func (s *VectorIndexSearch) extendForSearch() bool {
 }
 
 func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	return s.read(rt, func(algo VectorIndexSearchIf) (any, []float64, error) {
+		return algo.Search(sqlproc, query, rt)
+	})
+}
+
+func (s *VectorIndexSearch) read(rt vectorindex.RuntimeConfig, read func(VectorIndexSearchIf) (any, []float64, error)) (keys any, distances []float64, err error) {
 
 	preloadWaiter := s.Status.Load() == STATUS_NOT_INIT
 	if preloadWaiter {
@@ -654,7 +660,7 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	if rt.SearchedBuildTS != nil {
 		*rt.SearchedBuildTS = s.buildTS.Load()
 	}
-	keys, distances, err = s.Algo.Search(sqlproc, query, rt)
+	keys, distances, err = read(s.Algo)
 	if rt.EmptyGeneration != nil {
 		*rt.EmptyGeneration = algoEmptyGeneration(s)
 	}
@@ -1245,6 +1251,40 @@ func (c *VectorIndexCache) Destroy() {
 // Get index from cache and return VectorIndexSearchIf interface
 func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	return c.use(sqlproc, key, newalgo, rt, func(entry *VectorIndexSearch, rt vectorindex.RuntimeConfig) (any, []float64, error) {
+		return entry.Search(sqlproc, newalgo, query, rt)
+	})
+}
+
+// Read borrows a governed generation for a read-only operation. The callback
+// must return owned results and may not retain references into the index.
+func (c *VectorIndexCache) Read(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf, read func(VectorIndexSearchIf) error) error {
+	_, _, err := c.use(sqlproc, key, newalgo, vectorindex.RuntimeConfig{}, func(entry *VectorIndexSearch, rt vectorindex.RuntimeConfig) (any, []float64, error) {
+		return entry.read(rt, func(algo VectorIndexSearchIf) (any, []float64, error) { return nil, nil, read(algo) })
+	})
+	return err
+}
+
+// ReadIfLoaded borrows an already loaded generation without loading on a miss.
+// Its lifetime and eviction protection are the same as Read and Search.
+func (c *VectorIndexCache) ReadIfLoaded(key string, read func(VectorIndexSearchIf) error) (bool, error) {
+	value, ok := c.IndexMap.Load(key)
+	if !ok {
+		return false, nil
+	}
+	entry := value.(*VectorIndexSearch)
+	if entry.Status.Load() != STATUS_LOADED {
+		return false, nil
+	}
+	_, _, err := entry.read(vectorindex.RuntimeConfig{}, func(algo VectorIndexSearchIf) (any, []float64, error) { return nil, nil, read(algo) })
+	if errors.Is(err, errIndexDestroyed) {
+		return false, nil
+	}
+	return true, err
+}
+
+func (c *VectorIndexCache) use(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf, rt vectorindex.RuntimeConfig,
+	use func(*VectorIndexSearch, vectorindex.RuntimeConfig) (any, []float64, error)) (keys any, distances []float64, err error) {
 	var emptyGen bool
 	rt.EmptyGeneration = &emptyGen
 	for {
@@ -1324,7 +1364,7 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			}
 			c.gov().chargeAndEnforce(sqlproc, key, algo)
 		}
-		keys, distances, err = algo.Search(sqlproc, newalgo, query, rt)
+		keys, distances, err = use(algo, rt)
 		if err != nil {
 			if errors.Is(err, errIndexDestroyed) {
 				// The CACHE tore this entry down underneath us -- retry. Gated on the private

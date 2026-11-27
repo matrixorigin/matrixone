@@ -69,7 +69,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -187,19 +186,20 @@ func r29NewObjectStats(t *testing.T) (objectio.ObjectStats, string) {
 	return *stats, stats.ObjectName().String()
 }
 
-// r29StatsTailBatch marshals the writer's own result batch shape
-// ([BlockMeta_BlockInfo, ObjectMeta_ObjectStats], one serialized
-// ObjectStats row per persisted object) exactly as the recording side
-// serializes an embedded metadata tail.
-func r29StatsTailBytes(t *testing.T, mp *mpool.MPool, stats []objectio.ObjectStats) []byte {
+// r29StatsTailBytes marshals the writer's own result batch shape (data:
+// [BlockMeta_BlockInfo, ObjectMeta_ObjectStats]; tombstone:
+// [ObjectMeta_ObjectStats]), one serialized ObjectStats row per persisted
+// object. It writes no names: the recognizers take the stats column from
+// the producer's fixed layout, never from the wire.
+func r29StatsTailBytes(t *testing.T, mp *mpool.MPool, isTombstone bool, stats []objectio.ObjectStats) []byte {
 	t.Helper()
-	inner := colexec.AllocCNS3ResultBat(false)
+	inner := colexec.AllocCNS3ResultBat(isTombstone, mp)
 	defer inner.Clean(mp)
 	for i := range stats {
 		require.NoError(t, colexec.ExpandObjectStatsToBatch(
-			mp, false, inner, true, stats[i]))
+			mp, isTombstone, inner, true, stats[i]))
 	}
-	inner.SetRowCount(inner.Vecs[1].Length())
+	inner.SetRowCount(inner.Vecs[len(inner.Vecs)-1].Length())
 	var buf bytes.Buffer
 	data, err := inner.MarshalBinaryWithBuffer(&buf, true)
 	require.NoError(t, err)
@@ -213,12 +213,11 @@ func r29RelayBatch(
 ) (*batch.Batch, []string) {
 	t.Helper()
 	out := batch.NewWithSize(5)
-	out.SetAttributes([]string{"action", "table_id", "row_count", "name", "data"})
-	out.Vecs[0] = vector.NewVec(types.T_uint8.ToType())
-	out.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
-	out.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
-	out.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
-	out.Vecs[4] = vector.NewVec(types.T_text.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_uint8.ToType(), mp)
+	out.Vecs[1] = vector.NewVec(types.T_uint64.ToType(), mp)
+	out.Vecs[2] = vector.NewVec(types.T_uint64.ToType(), mp)
+	out.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp)
+	out.Vecs[4] = vector.NewVec(types.T_text.ToType(), mp)
 	names := make([]string, 0, objectCount)
 	for i := 0; i < objectCount; i++ {
 		stats, name := r29NewObjectStats(t)
@@ -227,7 +226,7 @@ func r29RelayBatch(
 		if malformed {
 			tail = []byte("definitely not a marshaled metadata batch")
 		} else {
-			tail = r29StatsTailBytes(t, mp, []objectio.ObjectStats{stats})
+			tail = r29StatsTailBytes(t, mp, false, []objectio.ObjectStats{stats})
 		}
 		require.NoError(t, vector.AppendFixed(out.Vecs[0], uint8(0), false, mp))
 		require.NoError(t, vector.AppendFixed(out.Vecs[1], uint64(7), false, mp))
@@ -246,7 +245,7 @@ func r29InsertBatch(
 	t *testing.T, mp *mpool.MPool, objectCount int, malformed bool,
 ) (*batch.Batch, []string) {
 	t.Helper()
-	bat := colexec.AllocCNS3ResultBat(false)
+	bat := colexec.AllocCNS3ResultBat(false, mp)
 	names := make([]string, 0, objectCount)
 	for i := 0; i < objectCount; i++ {
 		if malformed {
@@ -278,25 +277,18 @@ func r29DeleteBatch(
 ) (*batch.Batch, []string) {
 	t.Helper()
 	out := batch.NewWithSize(5)
-	out.SetAttributes([]string{
-		catalog.BlockMeta_Delete_ID,
-		catalog.BlockMeta_DeltaLoc,
-		catalog.BlockMeta_Type,
-		catalog.BlockMeta_Partition,
-		catalog.BlockMeta_Deletes_Length,
-	})
-	out.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	out.Vecs[1] = vector.NewVec(types.T_text.ToType())
-	out.Vecs[2] = vector.NewVec(types.T_int8.ToType())
-	out.Vecs[3] = vector.NewVec(types.T_int32.ToType())
-	out.Vecs[4] = vector.NewVec(types.T_int32.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
+	out.Vecs[1] = vector.NewVec(types.T_text.ToType(), mp)
+	out.Vecs[2] = vector.NewVec(types.T_int8.ToType(), mp)
+	out.Vecs[3] = vector.NewVec(types.T_int32.ToType(), mp)
+	out.Vecs[4] = vector.NewVec(types.T_int32.ToType(), mp)
 	names := make([]string, 0, objectCount)
 	for i := 0; i < objectCount; i++ {
 		stats, name := r29NewObjectStats(t)
 		names = append(names, name)
 		require.NoError(t, vector.AppendBytes(
 			out.Vecs[0], []byte("segment"), false, mp))
-		tail := r29StatsTailBytes(t, mp, []objectio.ObjectStats{stats})
+		tail := r29StatsTailBytes(t, mp, true, []objectio.ObjectStats{stats})
 		if malformed {
 			tail = []byte("definitely not a marshaled stats batch")
 		}
@@ -695,7 +687,7 @@ func r29StubSender(
 func r29WireBatch(t *testing.T, bat *batch.Batch) *pipeline.Message {
 	t.Helper()
 	var buf bytes.Buffer
-	data, err := bat.MarshalBinaryForPipeline(&buf, true, true)
+	data, err := bat.MarshalBinaryWithBuffer(&buf, true)
 	require.NoError(t, err)
 	return &pipeline.Message{Data: data, BatchSequence: 1}
 }

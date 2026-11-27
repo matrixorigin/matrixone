@@ -47,7 +47,7 @@ func checkUnaryRows[T, R constraints.Signed | constraints.Float](t *testing.T, n
 			ov, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
 			require.NoError(t, err)
 			exec, _, _, _ := ov.GetExecuteMethod()
-			in := vector.NewVec(inputType.ToType())
+			in := vector.NewVec(inputType.ToType(), proc.Mp())
 			defer in.Free(proc.Mp())
 			require.NoError(t, vector.AppendFixedList(in, values, nil, proc.Mp()))
 			in.GetNulls().Add(1)
@@ -134,7 +134,7 @@ func TestUnaryMinusLegacyOverloadsPreserveSerializedContract(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			overload, err := GetFunctionById(proc.Ctx, test.overloadID)
 			require.NoError(t, err)
-			in := vector.NewVec(test.typ.ToType())
+			in := vector.NewVec(test.typ.ToType(), proc.Mp())
 			defer in.Free(proc.Mp())
 			require.NoError(t, test.append(in, proc.Mp()))
 			out := vector.NewFunctionResultWrapper(test.typ.ToType(), proc.Mp())
@@ -165,7 +165,7 @@ func TestUnaryMinusInt64Overflow(t *testing.T) {
 					in, err = vector.NewConstFixed(types.T_int64.ToType(), int64(math.MinInt64), 3, proc.Mp())
 					require.NoError(t, err)
 				} else {
-					in = vector.NewVec(types.T_int64.ToType())
+					in = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 					require.NoError(t, vector.AppendFixedList(in, []int64{math.MinInt64, math.MinInt64, math.MinInt64}, nil, proc.Mp()))
 				}
 				defer in.Free(proc.Mp())

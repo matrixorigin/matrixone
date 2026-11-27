@@ -140,9 +140,9 @@ func newKafkaTestParam(t *testing.T, ks *plan.KafkaScan) (*ExternalParam, *proce
 			Filter:    &FilterParam{},
 		},
 	}
-	bat := batch.NewOffHeap(names)
+	bat := batch.NewWithSize(len(names))
 	for i := range cols {
-		bat.Vecs[i] = vector.NewOffHeapVecWithType(makeType(&cols[i].Typ, false))
+		bat.Vecs[i] = vector.NewVec(makeType(&cols[i].Typ, false), proc.Mp())
 	}
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	return param, proc, bat
@@ -316,9 +316,9 @@ func TestKafkaReaderJSONLProjection(t *testing.T) {
 				param.Cols[i] = allCols[field]
 				names[i] = allCols[field].Name
 			}
-			bat := batch.NewOffHeap(names)
+			bat := batch.NewWithSize(len(names))
 			for i, col := range param.Cols {
-				bat.Vecs[i] = vector.NewOffHeapVecWithType(makeType(&col.Typ, false))
+				bat.Vecs[i] = vector.NewVec(makeType(&col.Typ, false), proc.Mp())
 			}
 			t.Cleanup(func() { bat.Clean(proc.Mp()) })
 			readAllKafka(t, param, proc, bat)
@@ -354,8 +354,8 @@ func TestKafkaReaderJSONLProjectionRejectsShortObject(t *testing.T) {
 			param.Attrs[0].ColIndex = 0
 			param.Cols = []*plan.ColDef{param.Cols[2]}
 			param.StrictSqlMode = strict
-			bat := batch.NewOffHeap([]string{catalog.KafkaMessageID})
-			bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			t.Cleanup(func() { bat.Clean(proc.Mp()) })
 			r := NewKafkaReader(param)
 			_, err := r.Open(param, proc)

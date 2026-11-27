@@ -238,16 +238,13 @@ func TestSnapshotCheckFn(t *testing.T) {
 
 // TestCreateObjectListBatch tests the CreateObjectListBatch function
 func TestCreateObjectListBatch(t *testing.T) {
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mpool.MustNewZero())
 
 	assert.NotNil(t, bat)
 	assert.Equal(t, len(ObjectListAttrs), len(bat.Vecs))
 	assert.Equal(t, len(ObjectListTypes), len(bat.Vecs))
 
 	// Verify attributes
-	for i, attr := range ObjectListAttrs {
-		assert.Equal(t, attr, bat.Attrs[i])
-	}
 
 	// Verify vector types
 	assert.Equal(t, types.T_varchar.ToType().Oid, bat.Vecs[ObjectListAttr_DbName_Idx].GetType().Oid)
@@ -317,7 +314,7 @@ func TestGetObjectListFromCKPWithExistingBatch(t *testing.T) {
 	fs := testutil.NewSharedFS()
 
 	// Pre-create a batch
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 	checkpointEntries := []*checkpoint.CheckpointEntry{}
 
 	err := GetObjectListFromCKP(
@@ -367,9 +364,6 @@ func TestGetObjectListFromCKPBatchCreation(t *testing.T) {
 
 	// Verify batch structure
 	assert.Equal(t, len(ObjectListAttrs), len(bat.Vecs))
-	for i, attr := range ObjectListAttrs {
-		assert.Equal(t, attr, bat.Attrs[i])
-	}
 }
 
 // TestCollectObjectListEmptyState tests CollectObjectList with empty partition state
@@ -378,7 +372,7 @@ func TestCollectObjectListEmptyState(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	state := NewPartitionState("test", false, 42, false)
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,
@@ -431,7 +425,7 @@ func TestCollectObjectListWithDataObjects(t *testing.T) {
 		DeleteTime:  types.BuildTS(8, 0),
 	})
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,
@@ -475,7 +469,7 @@ func TestCollectObjectListWithTombstoneObjects(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,
@@ -521,7 +515,7 @@ func TestCollectObjectListWithMixedObjects(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,
@@ -568,7 +562,7 @@ func TestCollectObjectListDeletedObjects(t *testing.T) {
 		DeleteTime:  types.BuildTS(80, 0),
 	})
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,
@@ -605,7 +599,7 @@ func TestCollectObjectListDeletedButDeleteTimeAfterEnd(t *testing.T) {
 		DeleteTime:  types.BuildTS(150, 0), // After end
 	})
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,
@@ -632,7 +626,7 @@ func TestCollectSnapshotObjectListEmptyState(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	state := NewPartitionState("test", false, 42, false)
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectSnapshotObjectList(
 		ctx,
@@ -691,7 +685,7 @@ func TestCollectSnapshotObjectListWithDataObjects(t *testing.T) {
 		DeleteTime:  types.BuildTS(50, 0),
 	})
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectSnapshotObjectList(
 		ctx,
@@ -723,7 +717,7 @@ func TestCollectSnapshotObjectListWithTombstoneObjects(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectSnapshotObjectList(
 		ctx,
@@ -759,7 +753,7 @@ func TestCollectSnapshotObjectListDeletedButAfterSnapshot(t *testing.T) {
 		DeleteTime:  types.BuildTS(150, 0),
 	})
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectSnapshotObjectList(
 		ctx,
@@ -808,7 +802,7 @@ func TestCollectObjectListMultipleObjects(t *testing.T) {
 		})
 	}
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,
@@ -858,7 +852,7 @@ func TestObjectStatsInBatch(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,
@@ -927,7 +921,7 @@ func TestCollectObjectListNilBatch(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	state := NewPartitionState("test", false, 42, false)
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	// Add an object
 	objID := objectio.NewObjectid()
@@ -971,7 +965,7 @@ func TestCollectObjectListVerifyTimestamps(t *testing.T) {
 		DeleteTime:  deleteTime,
 	})
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,
@@ -1062,7 +1056,7 @@ func TestCollectObjectListLargeDataset(t *testing.T) {
 		})
 	}
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,
@@ -1097,7 +1091,7 @@ func TestCollectSnapshotObjectListLargeDataset(t *testing.T) {
 		})
 	}
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectSnapshotObjectList(
 		ctx,
@@ -1131,7 +1125,7 @@ func TestCollectObjectListAllFiltered(t *testing.T) {
 		})
 	}
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,
@@ -1166,7 +1160,7 @@ func TestCollectSnapshotObjectListAllFiltered(t *testing.T) {
 		})
 	}
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectSnapshotObjectList(
 		ctx,
@@ -1200,7 +1194,7 @@ func TestCollectObjectListObjectDeletedExactlyAtEnd(t *testing.T) {
 		DeleteTime:  end,
 	})
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,
@@ -1264,7 +1258,7 @@ func TestCollectObjectListTimeBoundaries(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	bat := CreateObjectListBatch()
+	bat := CreateObjectListBatch(mp)
 
 	_, err := CollectObjectList(
 		ctx,

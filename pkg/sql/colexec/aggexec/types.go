@@ -66,23 +66,6 @@ func (ag *AggFuncExecExpression) GetAggID() int64 {
 	return ag.aggID
 }
 
-// PreservesFirstArgPrepareParamKind reports aggregates whose result is one of
-// the first argument's original values without a semantic type conversion.
-// Source conversion provenance may cross these materialization boundaries.
-func (ag *AggFuncExecExpression) PreservesFirstArgPrepareParamKind() bool {
-	switch ag.aggID {
-	case AggIdOfMin, AggIdOfMax, AggIdOfAny, AggIdOfMaxBy, AggIdOfMaxByNonNull,
-		WinIdOfFirstValue, WinIdOfLastValue, WinIdOfNthValue:
-		return true
-	case WinIdOfLag, WinIdOfLead:
-		// With no explicit default, LAG/LEAD return the first argument or NULL.
-		// A default expression can introduce a different source category.
-		return len(ag.argExpressions) < 3
-	default:
-		return false
-	}
-}
-
 func (ag *AggFuncExecExpression) IsDistinct() bool {
 	return ag.isDistinct
 }
@@ -154,11 +137,14 @@ type AggFuncExec interface {
 	// PreAllocateGroups pre-allocates more additional groups to reduce garbage collection overhead.
 	PreAllocateGroups(more int) error
 
-	// XXX: WTF.
+	// Fill adds a logical input row to an existing zero-based group. It owns
+	// any required admission; callers do not run batch preflight for Fill.
 	Fill(groupIndex int, row int, vectors []*vector.Vector) error
 	BulkFill(groupIndex int, vectors []*vector.Vector) error
 
-	// BatchFill : add values to the aggregation for multiple groups at once.
+	// BatchFill maps input offset+i to groups[i]-1 (zero skips the row).
+	// Accounted Group callers reserve capacity for the same work unit through
+	// BatchCapacityPreflight before publishing the batch.
 	BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
 
 	// XXX: WTF.
@@ -258,11 +244,13 @@ type GroupAggFuncExec interface {
 	AllocationAccountOwner
 	BatchCapacityPreflight
 	SpillStateCodec
-	PrepareParamKindStateAccessor
 
 	AdditionalMemorySize() int64
 	GetNumGroups() int
-	SetPrepareParamKind(vector.PrepareParamKind)
+	// ResultVectorForChunk returns the result vector of one state chunk, or
+	// nil when the aggregate keeps no vector there. Protocol gates inspect its
+	// string metadata before a partial result is sent to an older peer.
+	ResultVectorForChunk(chunk int) *vector.Vector
 }
 
 // RequiresCanonicalDistinctKeyWire reports whether an aggregate's saved
@@ -365,15 +353,6 @@ type DistinctArgumentDrain interface {
 	Abort()
 }
 
-// PrepareParamKindStateAccessor exposes the result vectors whose winner
-// provenance is carried by Group's spill/partial wire extension. Group owns
-// the codec and streams directly between these vectors and the wire; the
-// aggregate does not materialize a second row-sized metadata slice.
-type PrepareParamKindStateAccessor interface {
-	PrepareParamKindChunkCount() int
-	PrepareParamKindVectorForChunk(chunk int) *vector.Vector
-}
-
 // indicate who implements the AggFuncExec interface.
 var (
 	_ AggFuncExec = &groupConcatExec{}
@@ -451,40 +430,6 @@ func MakeSingleGroupAggWithLegacyTextMinMax(
 ) (GroupAggFuncExec, error) {
 	return makeGroupAgg(
 		mg, aggID, isDistinct, true, false, false, false, true, allocation, extraInformation, param...)
-}
-
-// MakeGroupAggWithLegacyRemoteState selects aggregate implementations whose
-// partial-state layout is understood by pre-upgrade CNs. Most callers are
-// remotely decoded pipelines; coordinator-side MergeGroup also uses it when a
-// state change must be compatible in both wire directions.
-func MakeGroupAggWithLegacyRemoteState(
-	mg *mpool.MPool,
-	aggID int64, isDistinct bool,
-	legacyTextMinMax bool, legacyVarianceState bool,
-	legacyDecimalSumState bool, legacyDecimalSumResult bool,
-	allocation *AllocationAccount,
-	extraInformation any,
-	param ...types.Type,
-) (GroupAggFuncExec, error) {
-	return makeGroupAgg(
-		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
-		legacyDecimalSumState, legacyDecimalSumResult, false,
-		allocation, extraInformation, param...)
-}
-
-func MakeSingleGroupAggWithLegacyRemoteState(
-	mg *mpool.MPool,
-	aggID int64, isDistinct bool,
-	legacyTextMinMax bool, legacyVarianceState bool,
-	legacyDecimalSumState bool, legacyDecimalSumResult bool,
-	allocation *AllocationAccount,
-	extraInformation any,
-	param ...types.Type,
-) (GroupAggFuncExec, error) {
-	return makeGroupAgg(
-		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
-		legacyDecimalSumState, legacyDecimalSumResult, true,
-		allocation, extraInformation, param...)
 }
 
 type singleGroupAggregate interface {
@@ -755,12 +700,7 @@ func makeApproxPercentile(
 		argType:   param,
 		emptyNull: true,
 	}
-	switch param.Oid {
-	case types.T_decimal64, types.T_decimal128:
-		info.retType = ApproxPercentileReturnType([]types.Type{param})
-	default:
-		info.retType = types.T_float64.ToType()
-	}
+	info.retType = ApproxPercentileReturnType([]types.Type{param})
 	return newApproxPercentileExec(mp, info)
 }
 
