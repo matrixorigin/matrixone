@@ -106,23 +106,30 @@ func (e *vectorPoolElement) lend() *vector.Vector {
 	return lent
 }
 
-// takeBack moves a lent vector's buffers back into the element and leaves
-// the lent struct empty, then returns the element to the pool.
-func (e *vectorPoolElement) takeBack(lent *vector.Vector) {
-	*e.vec = *lent
-	*lent = vector.Vector{}
-	e.lent.Store(nil)
-	e.put()
-}
-
 // returnToPool returns vec to the VectorPool that lent it, and reports
 // whether it was lent by one.
+//
+// Releases of the same lent vector may overlap. The one that swaps the
+// element's lent pointer from vec to nil owns the take-back; any other finds
+// either the swap already done (and reports true, doing nothing) or, once the
+// take-back has finished, no entry and an empty vec, which frees nothing.
+// The entry is deleted only after vec has been emptied, so no release can
+// see vec unregistered while it still holds the element's buffers.
 func returnToPool(vec *vector.Vector) bool {
-	e, ok := lentVectors.LoadAndDelete(vec)
+	v, ok := lentVectors.Load(vec)
 	if !ok {
 		return false
 	}
-	e.(*vectorPoolElement).takeBack(vec)
+	e := v.(*vectorPoolElement)
+	if !e.lent.CompareAndSwap(vec, nil) {
+		// another release of vec is taking it back, or already has and the
+		// element has since been lent again as a different vector
+		return true
+	}
+	*e.vec = *vec
+	*vec = vector.Vector{}
+	lentVectors.Delete(vec)
+	e.put()
 	return true
 }
 
@@ -392,6 +399,12 @@ func ReleaseVector(vec Vector) {
 		return
 	}
 	if returnToPool(vec) {
+		return
+	}
+	// A vector without a pool owns nothing: a read-only view, or a lent
+	// vector already taken back. Leave it untouched, so a late release that
+	// overlaps others writes nothing.
+	if vec.MPool() == nil {
 		return
 	}
 	vec.Free(vec.MPool())

@@ -15,6 +15,7 @@
 package containers
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -122,4 +123,49 @@ func TestMutatingReadOnlyPanics(t *testing.T) {
 	require.Panics(t, func() { UpdateValue(view, uint32(0), int32(2), false, view.MPool()) })
 	require.Error(t, view.Shrink([]int64{0}, true, view.MPool()))
 	require.Equal(t, int32(1), owner.GetValue(0), "the owner is untouched")
+}
+
+// Overlapping releases of one lent vector return its buffers to the pool
+// exactly once: none of them frees the buffers the pool now holds.
+func TestReleaseVectorPooledConcurrent(t *testing.T) {
+	mp := mpool.MustNewZero()
+	pool := NewVectorPool(t.Name(), 2, WithMPool(mp)) // one fixed-size and one varlena slot
+	defer pool.Destory()
+	typ := types.T_int64.ToType()
+
+	const releasers = 8
+	for round := 0; round < 5000; round++ {
+		vec := pool.GetVector(&typ)
+		require.True(t, isLent(vec))
+		for i := 0; i < 100; i++ {
+			vec.MustAppendValue(int64(i), false)
+		}
+		held := pool.Allocated()
+
+		var start, done sync.WaitGroup
+		start.Add(1)
+		for i := 0; i < releasers; i++ {
+			done.Add(1)
+			go func() {
+				defer done.Done()
+				start.Wait()
+				ReleaseVector(vec)
+			}()
+		}
+		start.Done()
+		done.Wait()
+
+		require.False(t, isLent(vec))
+		require.Equal(t, 0, vec.Length())
+		require.Equal(t, held, pool.Allocated(), "round %d: the buffers went back to the pool", round)
+		require.Equal(t, int64(held), mp.CurrNB(), "round %d: the pooled buffers are still allocated", round)
+		usedCnt, _ := pool.Used(false)
+		require.Equal(t, 0, usedCnt)
+	}
+
+	// the pooled buffers are still good to use
+	vec := pool.GetVector(&typ)
+	vec.MustAppendValue(int64(42), false)
+	require.Equal(t, int64(42), vec.GetValue(0))
+	ReleaseVector(vec)
 }
