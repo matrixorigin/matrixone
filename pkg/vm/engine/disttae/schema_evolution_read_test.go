@@ -211,24 +211,19 @@ func TestSchemaEvolutionDisttaeOracle(t *testing.T) {
 		}
 	})
 	t.Run("replayed row", func(t *testing.T) {
-		protoVec := func(typ types.Type, val any) api.Vector {
-			v := vector.NewVec(typ, mp)
-			// The serialized vector borrows v until HandleRowsInsert clones it.
-			t.Cleanup(func() { v.Free(mp) })
-			require.NoError(t, vector.AppendAny(v, val, false, mp))
-			proto, err := vector.VectorToProtoVector(v)
-			require.NoError(t, err)
-			return proto
-		}
+		rowIDVec := vector.NewVec(objectio.RowidType, mp)
+		tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+		idVec := vector.NewVec(idType, mp)
+		defer rowIDVec.Free(mp)
+		defer tsVec.Free(mp)
+		defer idVec.Free(mp)
+		require.NoError(t, vector.AppendFixed(rowIDVec, buildTestMaterializedSnapshotRowID(t, 2), false, mp))
+		require.NoError(t, vector.AppendFixed(tsVec, commit, false, mp))
+		require.NoError(t, vector.AppendFixed(idVec, int64(2), false, mp))
 		packer := types.NewPacker()
 		defer packer.Close()
-		state.HandleRowsInsert(ctx, &api.Batch{
-			Attrs: []string{objectio.PhysicalAddr_Attr, objectio.DefaultCommitTS_Attr, "id"},
-			Vecs: []api.Vector{
-				protoVec(objectio.RowidType, buildTestMaterializedSnapshotRowID(t, 2)),
-				protoVec(types.T_TS.ToType(), commit), protoVec(idType, int64(2)),
-			},
-		}, 0, packer, mp)
+		state.HandleRowsInsert(ctx, mustMarshalVectors(rowIDVec, tsVec, idVec),
+			[]string{objectio.PhysicalAddr_Attr, objectio.DefaultCommitTS_Attr, "id"}, 0, packer, mp)
 		source, err := NewLocalDataSource(ctx, table, 0, state, nil, nil, false, engine.Policy_SkipAll, engine.GeneralLocalDataSource)
 		require.NoError(t, err)
 		defer source.Close()

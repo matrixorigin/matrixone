@@ -3079,14 +3079,14 @@ func WithChangeReadSchema(ctx context.Context, seqnums []uint16, spec *objectio.
 	return context.WithValue(ctx, changeReadSchemaKey{}, changeReadSchema{seqnums: seqnums, spec: spec})
 }
 
-func (h *ChangeHandler) bindReadSchema(ctx context.Context) {
+func (p *ChangeHandler) bindReadSchema(ctx context.Context) {
 	layout, ok := ctx.Value(changeReadSchemaKey{}).(changeReadSchema)
 	if !ok {
 		return
 	}
-	h.readSpec = layout.spec
-	h.logicalSeqnums = slices.Clone(layout.seqnums)
-	h.primaryIdx = slices.Index(h.logicalSeqnums, uint16(h.primarySeqnum))
+	p.readSpec = layout.spec
+	p.logicalSeqnums = slices.Clone(layout.seqnums)
+	p.primaryIdx = slices.Index(p.logicalSeqnums, uint16(p.primarySeqnum))
 }
 
 type ChangeHandler struct {
@@ -4390,18 +4390,18 @@ func appendProjectedChangeWindow(dst **batch.Batch, src *batch.Batch, start, end
 	return nil
 }
 
-func (h *ChangeHandler) appendProjectedInsert(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) error {
+func (p *ChangeHandler) appendProjectedInsert(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) error {
 	offset := 0
-	if h.retainRowID {
+	if p.retainRowID {
 		offset = 1
 	}
 	if *bat == nil {
-		*bat = batch.NewWithSize(offset + len(h.logicalSeqnums) + 1)
-		if h.retainRowID {
+		*bat = batch.NewWithSize(offset + len(p.logicalSeqnums) + 1)
+		if p.retainRowID {
 			(*bat).Vecs[0] = vector.NewVec(objectio.RowidType, mp)
 		}
-		for i, seq := range h.logicalSeqnums {
-			typ, err := h.readSpec.ColumnType(seq)
+		for i, seq := range p.logicalSeqnums {
+			typ, err := p.readSpec.ColumnType(seq)
 			if err != nil {
 				return err
 			}
@@ -4409,19 +4409,19 @@ func (h *ChangeHandler) appendProjectedInsert(bat **batch.Batch, entry *RowEntry
 		}
 		(*bat).Vecs[len((*bat).Vecs)-1] = vector.NewVec(objectio.TSType, mp)
 	}
-	if h.retainRowID {
+	if p.retainRowID {
 		if err := vector.AppendFixed((*bat).Vecs[0], entry.RowID, false, mp); err != nil {
 			return err
 		}
 	}
-	for i, seq := range h.logicalSeqnums {
-		src, err := entry.Batch.DataColumn(seq, h.readSpec)
+	for i, seq := range p.logicalSeqnums {
+		src, err := entry.Batch.DataColumn(seq, p.readSpec)
 		if err != nil {
 			return err
 		}
 		dst := (*bat).Vecs[offset+i]
 		if src == nil {
-			err = h.readSpec.AppendMissingRows(seq, dst, 1, mp)
+			err = p.readSpec.AppendMissingRows(seq, dst, 1, mp)
 		} else if !dst.GetType().Eq(*src.GetType()) {
 			return moerr.NewInternalErrorNoCtxf("column sequence %d has a different type in the logtail batch", seq)
 		} else {
@@ -4661,21 +4661,21 @@ func prefetchObjects(
 // readProjectedChangeBlock keeps logical data columns before their storage-only
 // columns. Rewrite the special positions to match the projected vectors so an
 // old commit timestamp cannot be mistaken for a new data column.
-func (h *ChangeHandler) readProjectedChangeBlock(
+func (p *ChangeHandler) readProjectedChangeBlock(
 	ctx context.Context, fs fileservice.FileService, loc objectio.Location,
 	meta *objectio.ObjectDataMeta, block objectio.BlockObject, layout objectio.SpecialColumnLayout,
 	rowOffset, rows, byteBudget int, mp *mpool.MPool,
 ) (*persistedBlockWindow, error) {
-	physical := make([]uint16, 0, len(h.logicalSeqnums)+3)
-	positions := make([]int, len(h.logicalSeqnums))
-	typesByColumn := make([]types.Type, len(h.logicalSeqnums))
-	for i, seq := range h.logicalSeqnums {
-		typ, err := h.readSpec.ColumnType(seq)
+	physical := make([]uint16, 0, len(p.logicalSeqnums)+3)
+	positions := make([]int, len(p.logicalSeqnums))
+	typesByColumn := make([]types.Type, len(p.logicalSeqnums))
+	for i, seq := range p.logicalSeqnums {
+		typ, err := p.readSpec.ColumnType(seq)
 		if err != nil {
 			return nil, err
 		}
 		typesByColumn[i] = typ
-		col, err := h.readSpec.ResolveColumnMeta(block, seq)
+		col, err := p.readSpec.ResolveColumnMeta(block, seq)
 		if err != nil {
 			return nil, err
 		}
@@ -4687,7 +4687,7 @@ func (h *ChangeHandler) readProjectedChangeBlock(
 		physical = append(physical, seq)
 	}
 	dataColumns := len(physical)
-	if !h.retainRowID {
+	if !p.retainRowID {
 		layout.PhysicalAddr = objectio.InvalidSpecialColumnPosition
 	}
 	// These positions are indexes in the projected batch, not in the block.
@@ -4704,7 +4704,7 @@ func (h *ChangeHandler) readProjectedChangeBlock(
 		ctx, meta, loc.Name().String(), uint32(loc.ID()), physical,
 		rowOffset, rows, fileservice.SkipAllCache, fs, mp, byteBudget,
 		func(ctx context.Context) (objectio.ColumnWindowSpill, error) {
-			return newLegacyColumnSpill(ctx, h.spillConfig)
+			return newLegacyColumnSpill(ctx, p.spillConfig)
 		},
 	)
 	if err != nil {
@@ -4713,11 +4713,11 @@ func (h *ChangeHandler) readProjectedChangeBlock(
 	for i, pos := range positions {
 		if pos >= 0 && !typesByColumn[i].Eq(*loaded.Vecs[pos].GetType()) {
 			loaded.Clean(mp)
-			return nil, moerr.NewInternalErrorNoCtxf("column sequence %d has a different type in the persisted block", h.logicalSeqnums[i])
+			return nil, moerr.NewInternalErrorNoCtxf("column sequence %d has a different type in the persisted block", p.logicalSeqnums[i])
 		}
 	}
 	var rowID *vector.Vector
-	if h.retainRowID && projectedLayout.PhysicalAddr == objectio.InvalidSpecialColumnPosition {
+	if p.retainRowID && projectedLayout.PhysicalAddr == objectio.InvalidSpecialColumnPosition {
 		blockID := objectio.NewBlockidWithObjectID(loc.Name().ObjectId(), loc.ID())
 		rowID, err = objectio.ConstructRowidColumn(&blockID, uint32(rowOffset), uint32(rows), mp)
 		if err != nil {
