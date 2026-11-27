@@ -114,6 +114,7 @@ func TestS3FSReadDiskCacheAllocationFailure(t *testing.T) {
 			}))
 			if tc.cached {
 				require.NoError(t, fs.PrefetchFile(ctx, path))
+				fs.diskCache.Flush(ctx)
 			}
 			if tc.truncated {
 				require.NoError(t, os.Truncate(fs.diskCache.pathForFile(path), 0))
@@ -183,6 +184,7 @@ func TestS3FSReadDiskCacheAllocationFailure(t *testing.T) {
 				Policy:   SkipAllCache,
 			}))
 			require.NoError(t, fs.PrefetchFile(ctx, path))
+			fs.diskCache.Flush(ctx)
 
 			ownedBuffers := 0
 			if tc.data == nil {
