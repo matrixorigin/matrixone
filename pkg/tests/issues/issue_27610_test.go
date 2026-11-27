@@ -22,7 +22,10 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -93,5 +96,46 @@ func TestIssue27610PreExecutionRollback(t *testing.T) {
 				})
 			}
 		}
+		t.Run("retired_temporary_table", func(t *testing.T) {
+			temp := schema + ".retired"
+			exec := func(query string) {
+				t.Helper()
+				_, err := conn.ExecContext(ctx, query)
+				require.NoError(t, err)
+			}
+			exec("set mo_rollback_txn_on_error=1")
+			exec("create table " + schema + ".guard (id int)")
+			exec("create temporary table " + temp + " (id int)")
+			var physical string
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select relname from mo_catalog.mo_tables where reldatabase=? and relkind='temporary_table'", schema).Scan(&physical))
+			service := cn.RawService().(cnservice.Service)
+			lookupCtx := defines.AttachAccountId(ctx, 0)
+			physicalExists := func() bool {
+				t.Helper()
+				var exists bool
+				err := service.GetSQLExecutor().ExecTxn(lookupCtx, func(txn executor.TxnExecutor) error {
+					database, err := service.GetEngine().Database(lookupCtx, schema, txn.Txn())
+					if err != nil {
+						return err
+					}
+					exists, err = database.RelationExists(lookupCtx, physical, nil)
+					return err
+				}, executor.Options{}.WithAccountID(0))
+				require.NoError(t, err)
+				return exists
+			}
+			require.True(t, physicalExists())
+			exec("begin")
+			exec("insert into " + schema + ".guard values (4)")
+			exec("drop temporary table " + temp)
+			require.True(t, physicalExists())
+			_, err := conn.ExecContext(ctx, "selec 1")
+			require.Error(t, err)
+			require.False(t, physicalExists())
+			exec("create temporary table " + temp + " (id int)")
+			exec("drop temporary table " + temp)
+		})
+
 	})
 }

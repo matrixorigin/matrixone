@@ -6018,9 +6018,7 @@ func executeStmtWithWorkspace(ses FeSession,
 		if finishTxnOnReturn {
 			err = finishTxnFunc(ses, err, execCtx)
 		}
-		if owner, ok := ses.(*Session); ok && owner.GetTxnHandler().GetTxn() == nil {
-			owner.cleanupRetiredTempTables(execCtx.reqCtx)
-		}
+		cleanupRetiredTempTablesAfterTxn(ses, execCtx)
 	}()
 
 	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
@@ -6560,6 +6558,13 @@ func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr
 		ses.Error(execCtx.reqCtx, "rollback whole txn on error failed",
 			zap.Error(rbErr), zap.Error(retErr))
 	}
+	cleanupRetiredTempTablesAfterTxn(ses, execCtx)
+}
+
+func cleanupRetiredTempTablesAfterTxn(ses FeSession, execCtx *ExecCtx) {
+	if owner, ok := ses.(*Session); ok && owner.GetTxnHandler().GetTxn() == nil {
+		owner.cleanupRetiredTempTables(execCtx.reqCtx)
+	}
 }
 
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
@@ -6688,7 +6693,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		markRowCountFailed(ses, proc)
 
-		rollbackWholeTxnOnPreExecutionError(ses, execCtx, retErr)
+		// Binary CLOSE uses an internal DEALLOCATE and sends no statement error
+		// to the client. Its early cleanup errors do not own the user's transaction.
+		if ses.GetCmd() != COM_STMT_CLOSE {
+			rollbackWholeTxnOnPreExecutionError(ses, execCtx, retErr)
+		}
 	}()
 
 	if ses.GetTenantInfo() != nil {
