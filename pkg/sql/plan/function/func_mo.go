@@ -925,7 +925,15 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 					}
 				}
 				if columnIndex >= 0 {
-					strval := getValueInStr(tValues[columnIndex][minMaxIdx])
+					// Decimal extrema need the chosen column's scale to render
+					// the formatted value; every other type ignores it.
+					var scale int32
+					if usePlanner {
+						scale = planner.Cols[columnIndex].Typ.Scale
+					} else {
+						scale = attrs[columnIndex].Type.Scale
+					}
+					strval := getValueInStr(tValues[columnIndex][minMaxIdx], scale)
 					if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(strval)); err != nil {
 						return err
 					}
@@ -953,7 +961,9 @@ func plannerExtremaColumnIndex(cols []*plan.ColDef, name string, valueCount int)
 	return -1
 }
 
-func getValueInStr(value any) string {
+// getValueInStr renders one zonemap extremum. The scale is the chosen
+// column's declared scale and is only read by the DECIMAL renderings.
+func getValueInStr(value any, scale int32) string {
 	switch v := value.(type) {
 	case bool:
 		if v {
@@ -1008,9 +1018,9 @@ func getValueInStr(value any) string {
 	case types.Uuid:
 		return v.String()
 	case types.Decimal64:
-		return v.Format(0)
+		return v.Format(scale)
 	case types.Decimal128:
-		return v.Format(0)
+		return v.Format(scale)
 	case types.Enum:
 		return v.String()
 	default:
