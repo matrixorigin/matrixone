@@ -119,6 +119,8 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 			requireCode("delete from items where tenant = 1", 1054)
 			requireCode("delete from items order by tenant limit 1", 1054)
 			requireCode("delete from items where id = 1 returning note", 1054)
+			requireCode("explain update items set amount = 50 where id = 1", 20101)
+			requireCode("explain analyze delete from items where id = 1", 20101)
 			requireAffected("update items as i set i.amount = 50 where i.id = 2", 0)
 		}
 
@@ -128,6 +130,9 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 		requireValue(conn.QueryRowContext(ctx, "select amount from items where id = 1"), 12)
 
 		execUser("set enable_remap_hint = 0")
+		execUser("prepare policy_update from 'update items set amount = 51 where id = 1'")
+		requireCode("explain execute policy_update", 20101)
+		execUser("deallocate prepare policy_update")
 		func() {
 			prepared, err := conn.PrepareContext(ctx, "update items set amount = ? where id = ?")
 			require.NoError(t, err)
@@ -145,6 +150,16 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 		}()
 		requireValue(admin.QueryRowContext(ctx, "select id from "+target+" force index (idx_amount) where amount = 51"), 1)
 		requireValue(admin.QueryRowContext(ctx, "select amount from "+target+" where id = 2"), 20)
+		func() {
+			// A selective key predicate may prune the scan. The division still
+			// runs only over rows admitted by the role rule.
+			execUser("update items set amount = 50 where id = 2 and amount / (id - 2) > 0")
+			rows, err := conn.QueryContext(ctx, "show warnings")
+			require.NoError(t, err)
+			defer rows.Close()
+			require.False(t, rows.Next())
+			require.NoError(t, rows.Err())
+		}()
 		func() {
 			rows, err := conn.QueryContext(ctx, "update items set amount = 52 where id = 1 returning *")
 			require.NoError(t, err)

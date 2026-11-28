@@ -521,8 +521,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		if node.FilterIsBarrier {
 			var safeFilters []*plan.Expr
 			if _, safePolicy := builder.dmlRewriteFilters[nodeID]; safePolicy {
+				preparedDiagnosticsFree := builder.preparedParameterDiagnosticsFree()
 				for _, filter := range filters {
-					if isTruncationSafePredicateExpr(filter) {
+					if dmlRewritePredicateIsTotal(filter, preparedDiagnosticsFree) {
 						safeFilters = append(safeFilters, filter)
 					} else {
 						cantPushdown = append(cantPushdown, filter)

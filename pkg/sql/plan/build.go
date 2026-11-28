@@ -644,16 +644,8 @@ func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bo
 		v2.TxnStatementBuildExplainHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	// DML plans can expose the physical row image and policy predicates.
-	var rewrite *tree.RewriteOption
-	switch dml := stmt.(type) {
-	case *tree.Update:
-		rewrite = dml.RewriteOption
-	case *tree.Delete:
-		rewrite = dml.RewriteOption
-	}
-	if rewrite != nil && len(rewrite.Rewrites) != 0 {
-		return nil, rewritePrivilegeError(ctx.GetContext())
+	if err := CheckDMLRewriteExplain(ctx.GetContext(), stmt); err != nil {
+		return nil, err
 	}
 
 	plan, err := BuildPlan(ctx, stmt, isPrepareStmt, planningInput)

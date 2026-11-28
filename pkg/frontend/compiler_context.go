@@ -195,6 +195,9 @@ func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*pl
 		execPlan,
 		"",
 	)
+	if err == nil {
+		err = plan2.CheckDMLRewriteExplain(tcc.execCtx.reqCtx, st)
+	}
 	if err == nil && !tcc.execCtx.ses.IsBackgroundSession() {
 		// EXPLAIN delegates EXECUTE binding here rather than through the ordinary
 		// Execute wrapper. Authorize the resolved AST before releasing ownership.

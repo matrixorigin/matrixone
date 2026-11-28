@@ -17,6 +17,8 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -27,17 +29,40 @@ import (
 const pointUpdateRoleRule = "/*+ {\"rewrites\":{\"tpch.nation\":\"select n_nationkey, n_name from tpch.nation where n_regionkey = 1\"}} */ "
 
 func TestRoleRuleDMLKeepsSinglePointScan(t *testing.T) {
+	const update = "update nation set n_name = 'updated' where n_nationkey = "
 	for _, tc := range []struct {
 		statement string
 		prepared  bool
+		parameter string
+		wantPoint bool
 	}{
-		{statement: "update nation set n_name = 'updated' where n_nationkey = 5"},
-		{statement: "update nation set n_name = 'updated' where n_nationkey = ?", prepared: true},
-		{statement: "delete from nation where n_nationkey = 5"},
+		{statement: update + "5", wantPoint: true},
+		{statement: "delete from nation where n_nationkey = 5", wantPoint: true},
+		{statement: update + "?", prepared: true},
+		{statement: update + "?", parameter: "5", wantPoint: true},
 	} {
-		t.Run(tc.statement, func(t *testing.T) {
+		t.Run(tc.statement+tc.parameter, func(t *testing.T) {
 			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
-			p := buildRoleRuleDMLTestPlan(t, ctx, pointUpdateRoleRule+tc.statement, tc.prepared)
+			sql := pointUpdateRoleRule + tc.statement
+			var p *Plan
+			if tc.parameter == "" {
+				p = buildRoleRuleDMLTestPlan(t, ctx, sql, tc.prepared)
+			} else {
+				proc := ctx.GetProcess()
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
+				t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+				require.NoError(t, vector.AppendBytes(params, []byte(tc.parameter), false, proc.Mp()))
+				proc.SetPrepareParams(params)
+				stmt := parseRoleRuleDMLTestStatement(t, ctx, sql)
+				defer stmt.Free()
+				source := types.T_int64.ToType()
+				bound, err := BuildPreparedExecutionPlan(ctx, stmt,
+					[]PreparedSourceBinding{{Position: 0, Type: source}},
+					[]any{ParamValue{Value: tc.parameter, IsBinaryProtocol: true, SourceType: source, HasSourceType: true}})
+				require.NoError(t, err)
+				require.True(t, bound.DiagnosticFree)
+				p = bound.Plan
+			}
 			query := p.GetQuery()
 			_, def, err := ctx.Resolve("tpch", "nation", nil, nil)
 			require.NoError(t, err)
@@ -52,7 +77,8 @@ func TestRoleRuleDMLKeepsSinglePointScan(t *testing.T) {
 				node := query.Nodes[id]
 				if node.NodeType == plan.Node_TABLE_SCAN && node.GetTableDef().GetTblId() == def.TblId {
 					scans++
-					require.NotEmpty(t, node.FilterList, "the primary-key predicate must reach the scan")
+					require.Equal(t, tc.wantPoint, len(node.FilterList) != 0,
+						"only the proven primary-key predicate can reach the scan")
 				}
 				if node.NodeType == plan.Node_FILTER && node.FilterIsBarrier {
 					barriers++
@@ -93,11 +119,17 @@ func BenchmarkRoleRulePointUpdatePlan(b *testing.B) {
 
 func buildRoleRuleDMLTestPlan(t testing.TB, ctx CompilerContext, sql string, prepared bool) *Plan {
 	t.Helper()
-	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
-	require.NoError(t, err)
+	stmt := parseRoleRuleDMLTestStatement(t, ctx, sql)
 	defer stmt.Free()
-	require.NoError(t, parsers.AddRewriteHints(ctx.GetContext(), []tree.Statement{stmt}, sql))
 	p, err := BuildPlan(ctx, stmt, prepared, nil)
 	require.NoError(t, err)
 	return p
+}
+
+func parseRoleRuleDMLTestStatement(t testing.TB, ctx CompilerContext, sql string) tree.Statement {
+	t.Helper()
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	require.NoError(t, parsers.AddRewriteHints(ctx.GetContext(), []tree.Statement{stmt}, sql))
+	return stmt
 }

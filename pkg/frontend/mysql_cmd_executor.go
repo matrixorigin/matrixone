@@ -2627,6 +2627,9 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt,
 // The caller supplies only statement-local scheduling text whose provenance is
 // known. Without it, EXPLAIN retains the unscoped planning path.
 func doExplainStmtWithExecutionInput(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt, proc *process.Process, schedulingSQL, rawSQL string) error {
+	if err := plan2.CheckDMLRewriteExplain(reqCtx, stmt.Statement); err != nil {
+		return err
+	}
 	//1. generate the plan
 	es, err := getExplainOption(reqCtx, stmt.Options)
 	if err != nil {

@@ -15,12 +15,31 @@
 package plan
 
 import (
+	"context"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
+
+// CheckDMLRewriteExplain keeps the physical write image and role predicate
+// out of EXPLAIN output. Check the resolved statement for EXPLAIN EXECUTE.
+func CheckDMLRewriteExplain(ctx context.Context, stmt tree.Statement) error {
+	var rewrite *tree.RewriteOption
+	switch dml := stmt.(type) {
+	case *tree.Update:
+		rewrite = dml.RewriteOption
+	case *tree.Delete:
+		rewrite = dml.RewriteOption
+	}
+	if rewrite != nil && len(rewrite.Rewrites) != 0 {
+		return rewritePrivilegeError(ctx)
+	}
+	return nil
+}
 
 // A writable rewrite must keep the identity and values of each selected base
 // row. The DML projection still carries the full physical row for maintenance.
@@ -277,7 +296,9 @@ func (builder *QueryBuilder) applyDMLTargetRewrite(
 		// Total predicates may narrow the scan beneath another total predicate.
 		// Other predicates remain above the policy to preserve error and side
 		// effect behavior for rows the policy excludes.
-		if inputID == nodeID && areTruncationSafePredicates(filters) {
+		if inputID == nodeID && !slices.ContainsFunc(filters, func(filter *plan.Expr) bool {
+			return !dmlRewritePredicateIsTotal(filter, false)
+		}) {
 			if builder.dmlRewriteFilters == nil {
 				builder.dmlRewriteFilters = make(map[int32]struct{})
 			}
@@ -287,6 +308,46 @@ func (builder *QueryBuilder) applyDMLTargetRewrite(
 	}
 	ctx.restrictDMLBinding(binding, target.visible)
 	return nodeID, nil
+}
+
+// A predicate on either side of the policy must be total before their
+// evaluation can be reordered. An implicit integer cast of an in-range
+// literal is total even when the source type as a whole would not fit.
+func dmlRewritePredicateIsTotal(expr *plan.Expr, preparedDiagnosticsFree bool) bool {
+	if !preparedDiagnosticsFree && function.ContainsParameter(expr) {
+		return false
+	}
+	if isTruncationSafePredicateExpr(expr) {
+		return true
+	}
+	fn := expr.GetF()
+	if fn.GetFunc() == nil || len(fn.Args) != 2 || expr.Typ.Id != int32(types.T_bool) {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	return comparisonEvaluationIsTotal(id, fn.Args[0].Typ, fn.Args[1].Typ) &&
+		dmlRewriteComparisonOperandIsTotal(fn.Args[0], preparedDiagnosticsFree) &&
+		dmlRewriteComparisonOperandIsTotal(fn.Args[1], preparedDiagnosticsFree)
+}
+
+func dmlRewriteComparisonOperandIsTotal(expr *plan.Expr, preparedDiagnosticsFree bool) bool {
+	if isTruncationSafePredicateValue(expr) {
+		return true
+	}
+	fn := expr.GetF()
+	if fn.GetFunc() == nil || len(fn.Args) != 2 || fn.Args[1].GetT() == nil ||
+		!types.T(expr.Typ.Id).IsInteger() {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id != function.CAST || fn.GetSyntaxExplicitCast() {
+		return false
+	}
+	source := fn.Args[0]
+	// Only conversions established by the current binding's ordinary
+	// diagnostic proof may move ahead of the role filter.
+	return (types.T(source.Typ.Id).IsInteger() && integerLiteralFitsAssignmentTarget(source, expr.Typ)) ||
+		(preparedDiagnosticsFree && source.GetP() != nil && function.MayDiagnoseStatementParameter(expr))
 }
 
 func (builder *QueryBuilder) dmlReturningVisibleColumns() map[string]int32 {
