@@ -1101,35 +1101,6 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			if supplied != nil {
 				want = sourceItems[i].expr
 			}
-			if visit.hasDivision {
-				for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
-					modes = append(modes, mode|tableDumpBindingLegacyIntegerFloatDiv)
-				}
-			}
-			if decimalPrecision || integerDecimal {
-				baseModes := append([]tableDumpBindingMode(nil), modes...)
-				if decimalPrecision {
-					for _, mode := range baseModes {
-						modes = append(modes, mode|tableDumpBindingPreDecimalPrecision)
-					}
-				}
-				if integerDecimal {
-					// Compose complete eras, without redundant precision/integer
-					// combinations: the integer era already predates precision,
-					// and pre-integer-decimal expressions necessarily predate
-					// the DECIMAL integer-division change.
-					for _, mode := range baseModes {
-						if visit.hasDivision && mode&tableDumpBindingLegacyIntegerFloatDiv != 0 {
-							continue
-						}
-						combined := mode | tableDumpBindingPreIntegerDecimal
-						if visit.hasDivision {
-							combined |= tableDumpBindingLegacyIntegerFloatDiv
-						}
-						modes = append(modes, combined)
-					}
-				}
-			}
 			// All session witnesses share the ordinary cancellation and total
 			// candidate-node budget. Only complete rebound trees can match.
 			var fatal error
@@ -1165,6 +1136,46 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				return result, err
 			}
 			var first *planpb.Expr
+			hasLegacyDivDiff := false
+			if visit.hasDivision {
+				dependency = tableDumpDefaultSession{}
+				curBound, curErr := bind(0, tableDumpBindingCurrent, zone, locale)
+				legBound, legErr := bind(0, tableDumpBindingCurrent|tableDumpBindingLegacyIntegerFloatDiv, zone, locale)
+				if fatal != nil {
+					stmt.Free()
+					return false, fatal
+				}
+				hasLegacyDivDiff = curErr != nil || legErr != nil || !sameTableDumpBoundExpression(curBound, legBound)
+				if hasLegacyDivDiff {
+					for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
+						modes = append(modes, mode|tableDumpBindingLegacyIntegerFloatDiv)
+					}
+				}
+			}
+			if decimalPrecision || integerDecimal {
+				baseModes := append([]tableDumpBindingMode(nil), modes...)
+				if decimalPrecision {
+					for _, mode := range baseModes {
+						modes = append(modes, mode|tableDumpBindingPreDecimalPrecision)
+					}
+				}
+				if integerDecimal {
+					// Compose complete eras, without redundant precision/integer
+					// combinations: the integer era already predates precision,
+					// and pre-integer-decimal expressions necessarily predate
+					// the DECIMAL integer-division change.
+					for _, mode := range baseModes {
+						if hasLegacyDivDiff && mode&tableDumpBindingLegacyIntegerFloatDiv != 0 {
+							continue
+						}
+						combined := mode | tableDumpBindingPreIntegerDecimal
+						if hasLegacyDivDiff {
+							combined |= tableDumpBindingLegacyIntegerFloatDiv
+						}
+						modes = append(modes, combined)
+					}
+				}
+			}
 			matchCandidate := func(mode tableDumpBindingMode, candidate *planpb.Expr) (accepted bool, matchErr error) {
 				defer func() {
 					if accepted && matchErr == nil && item.kind == "default" {
@@ -1210,6 +1221,8 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			var probes []*legacyFloatSessionProbe
 			probeKeys := make(map[string]int)
 			incrementInvariantModes := make(map[tableDumpBindingMode]bool)
+			baseBoundAtZero := make(map[tableDumpBindingMode]*planpb.Expr)
+			equivalentLegacyDivModes := make(map[tableDumpBindingMode]bool)
 			for increment := int64(0); increment <= maxIncrement && !(matched && sensitive); increment++ {
 				if err := ctx.GetContext().Err(); err != nil {
 					stmt.Free()
@@ -1218,7 +1231,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				needsIncompleteEra := true
 				for modeIndex := 0; modeIndex < len(modes) && !(matched && sensitive); modeIndex++ {
 					mode := modes[modeIndex]
-					if increment > 0 && incrementInvariantModes[mode] {
+					if increment > 0 && (incrementInvariantModes[mode] || equivalentLegacyDivModes[mode]) {
 						continue
 					}
 					if item.kind == "default" && mode&tableDumpBindingPreIncompleteTemporal != 0 && !needsIncompleteEra {
@@ -1226,8 +1239,20 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					}
 					dependency = tableDumpDefaultSession{captureUnfolded: item.kind == "default"}
 					candidate, err := bind(increment, mode, zone, locale)
-					if increment == 0 && err == nil && candidate != nil && !tableDumpHasDecimalType(candidate) {
-						incrementInvariantModes[mode] = true
+					if increment == 0 && err == nil && candidate != nil {
+						if mode&tableDumpBindingLegacyIntegerFloatDiv != 0 && !dependency.folded && !tableDumpHasDecimalType(candidate) {
+							incrementInvariantModes[mode] = true
+						}
+						if mode&tableDumpBindingLegacyIntegerFloatDiv == 0 {
+							baseBoundAtZero[mode] = candidate
+						} else if baseCand, ok := baseBoundAtZero[mode&^tableDumpBindingLegacyIntegerFloatDiv]; ok &&
+							sameTableDumpBoundExpression(baseCand, candidate) {
+							// LegacyIntegerFloatDiv produced the exact same AST as its
+							// base mode (e.g. DECIMAL/DECIMAL division); skip redundant
+							// increment retries and timezone session searches.
+							equivalentLegacyDivModes[mode] = true
+							continue
+						}
 					}
 					if normalizedDecimal && dependency.floatFormatting && !integerDecimal {
 						// A persisted ALTER may already have removed the old casts.
