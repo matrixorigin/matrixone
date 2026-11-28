@@ -128,7 +128,8 @@ func constructCreateTableSQLWithCommentFormat(
 	var createStr string
 	noBackslashEscapes := mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes)
 	rewritePairs := make([]struct {
-		display string
+		start   int
+		length  int
 		rewrite string
 	}, 0)
 	var checkDefs []string
@@ -504,27 +505,26 @@ func constructCreateTableSQLWithCommentFormat(
 				}
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
-						display string
+						start   int
+						length  int
 						rewrite string
-					}{display: indexStr, rewrite: rewriteIndexStr})
+					}{start: -1, length: len(indexStr), rewrite: rewriteIndexStr})
 				}
 			}
 			if indexdef.Comment != "" {
 				formattedComment := formatStrInSingleQuotesForSQLMode(indexdef.Comment, sqlMode)
 				indexStr += fmt.Sprintf(" COMMENT '%s'", formattedComment)
-				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
-					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
-					rewritePairs[len(rewritePairs)-1] = struct {
-						display string
-						rewrite string
-					}{
-						display: indexStr,
-						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formattedComment),
-					}
+				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].start < 0 &&
+					rewritePairs[len(rewritePairs)-1].length < len(indexStr) {
+					rewritePairs[len(rewritePairs)-1].length = len(indexStr)
+					rewritePairs[len(rewritePairs)-1].rewrite = rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formattedComment)
 				}
 			}
 			if rowCount != 0 {
 				createStr += ",\n"
+			}
+			if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].start < 0 {
+				rewritePairs[len(rewritePairs)-1].start = len(createStr)
 			}
 			createStr += indexStr
 		}
@@ -943,14 +943,30 @@ func constructCreateTableSQLWithCommentFormat(
 		}
 	}
 	var stmt tree.Statement
-	// replayStr is the executable shape of the same statement: display SQL
-	// with the recorded index spellings rewritten (for example the SHOW CREATE
-	// display "SPATIAL KEY" becomes the parseable "KEY ... USING RTREE").
+	// replayStr is the executable shape of the same statement: the display
+	// string with the recorded index fragments rewritten at their recorded
+	// construction offsets (for example the SHOW CREATE display
+	// "SPATIAL KEY" becomes the parseable "KEY ... USING RTREE"). Splicing by
+	// construction offsets cannot collide with identical text quoted
+	// elsewhere in the statement (for example inside a column COMMENT), and
+	// no text is searched or replaced inside arbitrary quoted input.
 	// Internal replay owners must consume this spelling; SHOW CREATE and
 	// persisted DUMP schema fingerprints keep the display string.
 	replayStr := createStr
-	for _, pair := range rewritePairs {
-		replayStr = strings.Replace(replayStr, pair.display, pair.rewrite, 1)
+	if len(rewritePairs) > 0 {
+		var replayBuf strings.Builder
+		replayBuf.Grow(len(createStr))
+		prev := 0
+		for _, pair := range rewritePairs {
+			if pair.start < prev || pair.start+pair.length > len(createStr) {
+				continue
+			}
+			replayBuf.WriteString(createStr[prev:pair.start])
+			replayBuf.WriteString(pair.rewrite)
+			prev = pair.start + pair.length
+		}
+		replayBuf.WriteString(createStr[prev:])
+		replayStr = replayBuf.String()
 	}
 	// replayOut, when non-nil, receives the replay form so this builder's
 	// long-standing error exits stay unchanged.

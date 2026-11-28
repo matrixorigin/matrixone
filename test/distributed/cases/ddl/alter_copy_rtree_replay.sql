@@ -39,6 +39,18 @@ insert into c_int values (1, 10), (2, 20);
 alter table c_int algorithm=copy, add column lead int default 7 first;
 select id, lead from c_int order by id;
 
+-- Review 6094583688: a column comment quoting the SHOW CREATE display fragment
+-- must not divert the replay rewrite. The copy rewrites the actual SPATIAL KEY
+-- declaration to the executable KEY USING RTREE spelling while the comment
+-- bytes, the index definition and the rows survive, and the spatial indexed
+-- predicate is still served after the copy.
+create table c_collide(id int primary key, g point not null, note varchar(64) default null comment '  SPATIAL KEY `idx_g` (`g`)', key idx_g using rtree(g));
+insert into c_collide values (1, ST_GeomFromText('POINT(5 6)'), 'keep');
+alter table c_collide algorithm=copy, add column lead int default 7 first;
+select id, lead, note, ST_AsText(g) from c_collide;
+show create table c_collide;
+select id from c_collide where ST_Intersects(g, ST_GeomFromText('POINT(5 6)'));
+
 drop database if exists alter_copy_rtree_replay;
 
 -- Persistent rows, geometry and index identity after COPY in a fresh connection

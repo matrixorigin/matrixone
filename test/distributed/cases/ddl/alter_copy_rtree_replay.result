@@ -67,4 +67,23 @@ select id, lead from c_int order by id;
 ➤ id[4,32,0]  ¦  lead[4,32,0]  𝄀
 1  ¦  7  𝄀
 2  ¦  7
+create table c_collide(id int primary key, g point not null, note varchar(64) default null comment '  SPATIAL KEY `idx_g` (`g`)', key idx_g using rtree(g));
+insert into c_collide values (1, ST_GeomFromText('POINT(5 6)'), 'keep');
+alter table c_collide algorithm=copy, add column lead int default 7 first;
+select id, lead, note, ST_AsText(g) from c_collide;
+➤ id[4,32,0]  ¦  lead[4,32,0]  ¦  note[12,64,0]  ¦  ST_AsText(g)[12,65535,0]  𝄀
+1  ¦  7  ¦  keep  ¦  POINT(5 6)
+show create table c_collide;
+➤ Table[12,9,0]  ¦  Create Table[12,218,0]  𝄀
+c_collide  ¦  CREATE TABLE `c_collide` (
+  `lead` int DEFAULT 7,
+  `id` int NOT NULL,
+  `g` point NOT NULL,
+  `note` varchar(64) DEFAULT NULL COMMENT '  SPATIAL KEY `idx_g` (`g`)',
+  PRIMARY KEY (`id`),
+  SPATIAL KEY `idx_g` (`g`)
+)
+select id from c_collide where ST_Intersects(g, ST_GeomFromText('POINT(5 6)'));
+➤ id[4,32,0]  𝄀
+1
 drop database if exists alter_copy_rtree_replay;
