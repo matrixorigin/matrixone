@@ -2502,6 +2502,19 @@ func (ses *Session) invalidateCachedPlans(prepared bool) {
 	}
 }
 
+func (ses *Session) invalidateForeignKeyDeletePlans() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache != nil {
+		ses.planCache.invalidateForeignKeyDeletePlans()
+	}
+	for _, stmt := range ses.prepareStmts {
+		if deletePlanDependsOnForeignKeyChecks(stmt.PreparePlan.GetDcl().GetPrepare().GetPlan()) {
+			stmt.needsRebuild = true
+		}
+	}
+}
+
 // markPreparedPlansForRollupAlgorithmChange marks prepared plan generations
 // stale without closing their handles. The session variable is read while
 // building the physical rollup plan, so EXECUTE must rebuild the plan after
