@@ -126,126 +126,30 @@ func GetOffsetOfOrdered[T types.OrderedT](column []T, val T, skipmask *nulls.Nul
 	return
 }
 
+// GetOffsetByVal binary-searches data, sorted ascending, for v (a value as
+// vector.GetAny returns it). A match that skipmask contains is not found.
 func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Nulls) (offset int, exist bool) {
-	vec := data
-	switch data.GetType().Oid {
-	case types.T_bool:
-		vs := vector.MustFixedColNoTypeCheck[bool](vec)
-		return GetOffsetWithFunc(vs, v.(bool), CompareBool, skipmask)
-	case types.T_bit:
-		vs := vector.MustFixedColNoTypeCheck[uint64](vec)
-		return GetOffsetOfOrdered(vs, v.(uint64), skipmask)
-	case types.T_int8:
-		vs := vector.MustFixedColNoTypeCheck[int8](vec)
-		return GetOffsetOfOrdered(vs, v.(int8), skipmask)
-	case types.T_int16:
-		vs := vector.MustFixedColNoTypeCheck[int16](vec)
-		return GetOffsetOfOrdered(vs, v.(int16), skipmask)
-	case types.T_int32:
-		vs := vector.MustFixedColNoTypeCheck[int32](vec)
-		return GetOffsetOfOrdered(vs, v.(int32), skipmask)
-	case types.T_int64:
-		vs := vector.MustFixedColNoTypeCheck[int64](vec)
-		return GetOffsetOfOrdered(vs, v.(int64), skipmask)
-	case types.T_uint8:
-		vs := vector.MustFixedColNoTypeCheck[uint8](vec)
-		return GetOffsetOfOrdered(vs, v.(uint8), skipmask)
-	case types.T_uint16:
-		vs := vector.MustFixedColNoTypeCheck[uint16](vec)
-		return GetOffsetOfOrdered(vs, v.(uint16), skipmask)
-	case types.T_uint32:
-		vs := vector.MustFixedColNoTypeCheck[uint32](vec)
-		return GetOffsetOfOrdered(vs, v.(uint32), skipmask)
-	case types.T_uint64:
-		vs := vector.MustFixedColNoTypeCheck[uint64](vec)
-		return GetOffsetOfOrdered(vs, v.(uint64), skipmask)
-	case types.T_float32:
-		vs := vector.MustFixedColNoTypeCheck[float32](vec)
-		return GetOffsetOfOrdered(vs, v.(float32), skipmask)
-	case types.T_float64:
-		vs := vector.MustFixedColNoTypeCheck[float64](vec)
-		return GetOffsetOfOrdered(vs, v.(float64), skipmask)
-	case types.T_date:
-		vs := vector.MustFixedColNoTypeCheck[types.Date](vec)
-		return GetOffsetOfOrdered(vs, v.(types.Date), skipmask)
-	case types.T_time:
-		vs := vector.MustFixedColNoTypeCheck[types.Time](vec)
-		return GetOffsetOfOrdered(vs, v.(types.Time), skipmask)
-	case types.T_datetime:
-		vs := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-		return GetOffsetOfOrdered(vs, v.(types.Datetime), skipmask)
-	case types.T_timestamp:
-		vs := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
-		return GetOffsetOfOrdered(vs, v.(types.Timestamp), skipmask)
-	case types.T_enum:
-		vs := vector.MustFixedColNoTypeCheck[types.Enum](vec)
-		return GetOffsetOfOrdered(vs, v.(types.Enum), skipmask)
-	case types.T_decimal64:
-		vs := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
-		return GetOffsetWithFunc(
-			vs,
-			v.(types.Decimal64),
-			types.CompareDecimal64,
-			skipmask)
-	case types.T_decimal128:
-		vs := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
-		return GetOffsetWithFunc(
-			vs,
-			v.(types.Decimal128),
-			types.CompareDecimal128,
-			skipmask)
-	case types.T_TS:
-		return GetOffsetWithFunc(
-			vector.MustFixedColNoTypeCheck[types.TS](vec),
-			v.(types.TS),
-			types.CompareTSTSAligned,
-			skipmask)
-	case types.T_Rowid:
-		return GetOffsetWithFunc(
-			vector.MustFixedColNoTypeCheck[types.Rowid](vec),
-			v.(types.Rowid),
-			types.CompareRowidRowidAligned,
-			skipmask)
-	case types.T_Blockid:
-		return GetOffsetWithFunc(
-			vector.MustFixedColNoTypeCheck[types.Blockid](vec),
-			v.(types.Blockid),
-			types.CompareBlockidBlockidAligned,
-			skipmask)
-	case types.T_uuid:
-		return GetOffsetWithFunc(
-			vector.MustFixedColNoTypeCheck[types.Uuid](vec),
-			v.(types.Uuid),
-			types.CompareUuid,
-			skipmask)
-	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_json, types.T_text,
-		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink:
-		// data is retrieved from DN vector, hence T_array can be handled here.
-		val := v.([]byte)
-		start, end := 0, data.Length()-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			res := bytes.Compare(data.GetBytesAt(mid), val)
-			if res > 0 {
-				end = mid - 1
-			} else if res < 0 {
-				start = mid + 1
-			} else {
-				if skipmask != nil && skipmask.Contains(uint64(mid)) {
-					return
-				}
-				offset = mid
-				exist = true
-				return
-			}
-		}
-		return
-	default:
+	t := data.GetType()
+	if !vector.SupportsAny(t.Oid) {
 		panic("unsupported type")
 	}
+	key := vector.RawFromValue(t.Oid, v)
+	start, end := 0, data.Length()-1
+	for start <= end {
+		mid := (start + end) / 2
+		res := Compare(data.GetRawBytesAt(mid), key, t.Oid, t.Scale, t.Scale)
+		if res > 0 {
+			end = mid - 1
+		} else if res < 0 {
+			start = mid + 1
+		} else {
+			if skipmask != nil && skipmask.Contains(uint64(mid)) {
+				return
+			}
+			return mid, true
+		}
+	}
+	return
 }
 
 func GetOrderedMinAndMax[T types.OrderedT](vs ...T) (minv, maxv T) {

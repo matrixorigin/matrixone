@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"encoding/binary"
 	"fmt"
 	"slices"
 
@@ -48,15 +49,16 @@ type typeOps struct {
 	shuffleWithBuf func(v *Vector, sels []int64, buf *[]byte) error
 
 	// rowKey is row i as a comparable map key: equal keys mean equal
-	// values. A fixed-size value is itself, a varlena one a string copy.
-	rowKey func(v *Vector, i int) any
+	// values. A fixed-size value is itself, a varlena one a string, a copy
+	// unless view is set.
+	rowKey func(v *Vector, i int, view bool) any
 	// valueFromRaw is the value whose raw bytes are raw (a copy for a
 	// varlena type); rawFromValue is the raw bytes of a value.
 	valueFromRaw func(raw []byte) any
 	rawFromValue func(val any) []byte
-	// exportValue is row i as the value code outside the engine works with
-	// (see ExportValue).
-	exportValue func(v *Vector, i int) any
+	// exportFromRaw is the value whose raw bytes are raw in the form code
+	// outside the engine works with (see ExportValue).
+	exportFromRaw func(raw []byte) any
 
 	// constructors of per-type functions
 	unionAll    func(mp *mpool.MPool) func(v, w *Vector) error              // getUnionAllFunction
@@ -84,7 +86,7 @@ func fixedOps[T types.FixedSizeT]() typeOps {
 		shrinkByMask:   shrinkFixedByMask[T],
 		shuffle:        shuffleFixedNoTypeCheck[T],
 		shuffleWithBuf: shuffleFixedNoTypeCheckWithBuf[T],
-		rowKey: func(v *Vector, i int) any {
+		rowKey: func(v *Vector, i int, _ bool) any {
 			return GetFixedAtNoTypeCheck[T](v, i)
 		},
 		valueFromRaw: func(raw []byte) any {
@@ -93,8 +95,8 @@ func fixedOps[T types.FixedSizeT]() typeOps {
 		rawFromValue: func(val any) []byte {
 			return types.EncodeFixed(val.(T))
 		},
-		exportValue: func(v *Vector, i int) any {
-			return GetFixedAtNoTypeCheck[T](v, i)
+		exportFromRaw: func(raw []byte) any {
+			return types.DecodeFixed[T](raw)
 		},
 		unionAll:    unionAllFixed[T],
 		appendBytes: appendBytesToFixSized[T],
@@ -128,7 +130,10 @@ func varlenOps() typeOps {
 	ops.appendRaw = func(v *Vector, raw []byte, isNull bool, mp *mpool.MPool) error {
 		return AppendBytes(v, raw, isNull, mp)
 	}
-	ops.rowKey = func(v *Vector, i int) any {
+	ops.rowKey = func(v *Vector, i int, view bool) any {
+		if view {
+			return v.UnsafeGetStringAt(i)
+		}
 		return v.GetStringAt(i)
 	}
 	ops.valueFromRaw = func(raw []byte) any {
@@ -137,8 +142,8 @@ func varlenOps() typeOps {
 	ops.rawFromValue = func(val any) []byte {
 		return val.([]byte)
 	}
-	ops.exportValue = func(v *Vector, i int) any {
-		return v.CloneBytesAt(i)
+	ops.exportFromRaw = func(raw []byte) any {
+		return slices.Clone(raw)
 	}
 	ops.unionAll = unionAllVarlen
 	ops.appendBytes = func(vec *Vector) func([]byte, bool, *mpool.MPool) error {
@@ -153,8 +158,8 @@ func varlenOps() typeOps {
 // jsonOps are varlenOps whose exported value is the decoded document.
 func jsonOps() typeOps {
 	ops := varlenOps()
-	ops.exportValue = func(v *Vector, i int) any {
-		return types.DecodeJson(v.CloneBytesAt(i))
+	ops.exportFromRaw = func(raw []byte) any {
+		return types.DecodeJson(slices.Clone(raw))
 	}
 	return ops
 }
@@ -163,8 +168,8 @@ func jsonOps() typeOps {
 // the []T of the row.
 func arrayOps[T types.ArrayElement]() typeOps {
 	ops := varlenOps()
-	ops.exportValue = func(v *Vector, i int) any {
-		return GetArrayAt[T](v, i)
+	ops.exportFromRaw = func(raw []byte) any {
+		return types.BytesToArray[T](slices.Clone(raw))
 	}
 	return ops
 }
@@ -302,11 +307,30 @@ func AppendRaw(vec *Vector, raw []byte, isNull bool, mp *mpool.MPool) error {
 // value itself for a fixed-size type and a copy of the bytes, as a string,
 // for a varlena type. It panics for a type SupportsAny rejects.
 func RowKey(vec *Vector, i int) any {
+	return rowKey(vec, i, false)
+}
+
+// RowKeyView is RowKey without the copy: a varlena key refers to vec's
+// memory, so it is only for looking up a map, not for storing in one.
+func RowKeyView(vec *Vector, i int) any {
+	return rowKey(vec, i, true)
+}
+
+// RowKeyValue returns the value of key, a RowKey of a row, as GetAny
+// returns it.
+func RowKeyValue(key any) any {
+	if s, ok := key.(string); ok {
+		return []byte(s)
+	}
+	return key
+}
+
+func rowKey(vec *Vector, i int, view bool) any {
 	ops, ok := opsOf(vec)
 	if !ok {
 		panic(moerr.NewInternalErrorNoCtxf("RowKey: unsupported type %s", vec.typ.String()))
 	}
-	return ops.rowKey(vec, i)
+	return ops.rowKey(vec, i, view)
 }
 
 // ValueFromRaw returns the value of type oid whose raw bytes are raw, as
@@ -341,9 +365,32 @@ func ExportValue(vec *Vector, i int) any {
 	if vec.IsNull(uint64(i)) {
 		return nil
 	}
-	ops, ok := opsOf(vec)
-	if !ok {
-		panic(moerr.NewInternalErrorNoCtxf("ExportValue: unsupported type %s", vec.typ.String()))
+	return ExportValueFromRaw(vec.typ.Oid, vec.GetRawBytesAt(i))
+}
+
+// ExportValueFromRaw returns the value of type oid whose raw bytes are raw
+// (a zone map bound, for example) in the form ExportValue returns, copied
+// out of raw. It panics for a type SupportsAny rejects.
+func ExportValueFromRaw(oid types.T, raw []byte) any {
+	ops := &vectorTypeOps[oid]
+	if !ops.supported {
+		panic(moerr.NewInternalErrorNoCtxf("ExportValue: unsupported type %s", oid.String()))
 	}
-	return ops.exportValue(vec, i)
+	return ops.exportFromRaw(raw)
+}
+
+// FixedValueOfInt returns a value of the fixed-size type oid made from n, for
+// test data: the value whose memory is n in little-endian order, cut or
+// zero-padded to the type's size. For integer, decimal, temporal and enum
+// types that is the value n (for n >= 0, and for a negative n of a signed
+// integer); distinct n give distinct values. It panics for a varlena type, or
+// for bool and the float types, whose memory n does not fit.
+func FixedValueOfInt(oid types.T, n int64) any {
+	typ := oid.ToType()
+	if typ.IsVarlen() || oid == types.T_bool || oid.IsFloat() {
+		panic(moerr.NewInternalErrorNoCtxf("FixedValueOfInt: %s", oid.String()))
+	}
+	raw := make([]byte, max(typ.TypeSize(), 8))
+	binary.LittleEndian.PutUint64(raw, uint64(n))
+	return ValueFromRaw(oid, raw[:typ.TypeSize()])
 }

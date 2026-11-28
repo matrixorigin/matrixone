@@ -3528,7 +3528,7 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := source.GetStrValue(i)
 		if null {
-			if err := jsonAppendNull(result, toType); err != nil {
+			if err := jsonAppendNull(result); err != nil {
 				return err
 			}
 			continue
@@ -3541,7 +3541,7 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 				return jsonCastErr(ctx, toType.Oid)
 			}
 			if isNull {
-				if err := jsonAppendNull(result, toType); err != nil {
+				if err := jsonAppendNull(result); err != nil {
 					return err
 				}
 				continue
@@ -3555,7 +3555,7 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 				return jsonCastErr(ctx, toType.Oid)
 			}
 			if isNull {
-				if err := jsonAppendNull(result, toType); err != nil {
+				if err := jsonAppendNull(result); err != nil {
 					return err
 				}
 				continue
@@ -3579,7 +3579,7 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 				return jsonCastErr(ctx, toType.Oid)
 			}
 			if isNull {
-				if err := jsonAppendNull(result, toType); err != nil {
+				if err := jsonAppendNull(result); err != nil {
 					return err
 				}
 				continue
@@ -3593,7 +3593,7 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 				return jsonCastErr(ctx, toType.Oid)
 			}
 			if isNull {
-				if err := jsonAppendNull(result, toType); err != nil {
+				if err := jsonAppendNull(result); err != nil {
 					return err
 				}
 				continue
@@ -3822,35 +3822,13 @@ func jsonScalarConditionalTruthy(bj bytejson.ByteJson) (value bool, isNull bool,
 	}
 }
 
-func jsonAppendNull(result vector.FunctionResultWrapper, toType types.Type) error {
-	switch toType.Oid {
-	case types.T_int8:
-		return vector.MustFunctionResult[int8](result).Append(0, true)
-	case types.T_int16:
-		return vector.MustFunctionResult[int16](result).Append(0, true)
-	case types.T_int32:
-		return vector.MustFunctionResult[int32](result).Append(0, true)
-	case types.T_int64:
-		return vector.MustFunctionResult[int64](result).Append(0, true)
-	case types.T_uint8:
-		return vector.MustFunctionResult[uint8](result).Append(0, true)
-	case types.T_uint16:
-		return vector.MustFunctionResult[uint16](result).Append(0, true)
-	case types.T_uint32:
-		return vector.MustFunctionResult[uint32](result).Append(0, true)
-	case types.T_uint64:
-		return vector.MustFunctionResult[uint64](result).Append(0, true)
-	case types.T_float32:
-		return vector.MustFunctionResult[float32](result).Append(0, true)
-	case types.T_float64:
-		return vector.MustFunctionResult[float64](result).Append(0, true)
-	case types.T_decimal64:
-		return vector.MustFunctionResult[types.Decimal64](result).Append(0, true)
-	case types.T_decimal128:
-		return vector.MustFunctionResult[types.Decimal128](result).Append(types.Decimal128{}, true)
-	default:
+func jsonAppendNull(result vector.FunctionResultWrapper) error {
+	r, ok := result.(interface{ AppendMustNull() })
+	if !ok {
 		panic("jsonAppendNull: unsupported type")
 	}
+	r.AppendMustNull()
+	return nil
 }
 
 func jsonAppendValue(ctx context.Context, result vector.FunctionResultWrapper, toType types.Type, f float64) error {

@@ -19,7 +19,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -56,68 +55,57 @@ func NewSimpleTableIndex() *simpleTableIndex {
 	}
 }
 
-func DedupOp[T comparable](
-	t *types.Type,
-	attr string,
-	vs []T,
-	tree map[any]uint32) (err error) {
-	for _, v := range vs {
-		if _, ok := tree[v]; ok {
-			entry := common.TypeStringValue(*t, v, false)
+// DedupOp returns a duplicate-entry error for the first row of col whose key
+// is in tree.
+func DedupOp(attr string, col containers.Vector, tree map[any]uint32) error {
+	for i := 0; i < col.Length(); i++ {
+		if _, ok := tree[vector.RowKeyView(col, i)]; ok {
+			entry := common.TypeStringValue(*col.GetType(), vector.GetAny(col, i, false), false)
 			return newDuplicateEntryWithLog(attr, entry, "txnimpl.DedupOp")
 		}
 	}
-	return
+	return nil
 }
 
-func InsertOp[T comparable](
-	t *types.Type,
+// InsertOp adds rows [start, start+count) of col to tree, numbering them from
+// fromRow, and fails on a key already there. With dedupInput it only checks
+// that the rows have distinct keys.
+func InsertOp(
 	attr string,
-	vals []T,
+	col containers.Vector,
 	start, count int,
 	fromRow uint32,
 	dedupInput bool,
-	tree map[any]uint32) (err error) {
+	tree map[any]uint32) error {
+	t := col.GetType()
 	if dedupInput {
-		set := make(map[T]bool)
-		for _, v := range vals[start : start+count] {
-			if _, ok := set[v]; ok {
-				entry := common.TypeStringValue(*t, v, false)
+		set := make(map[any]bool, count)
+		for i := start; i < start+count; i++ {
+			key := vector.RowKeyView(col, i)
+			if _, ok := set[key]; ok {
+				entry := common.TypeStringValue(*t, vector.GetAny(col, i, false), false)
 				return newDuplicateEntryWithLog(attr, entry, "txnimpl.InsertOp.dedupInput")
 			}
-			set[v] = true
+			set[key] = true
 		}
-		return
+		return nil
 	}
-	for _, v := range vals[start : start+count] {
-		if _, ok := tree[v]; ok {
-			entry := common.TypeStringValue(*t, v, false)
+	for i := start; i < start+count; i++ {
+		key := vector.RowKey(col, i)
+		if _, ok := tree[key]; ok {
+			entry := common.TypeStringValue(*t, vector.GetAny(col, i, false), false)
 			return newDuplicateEntryWithLog(attr, entry, "txnimpl.InsertOp.tree")
 		}
-		tree[v] = fromRow
+		tree[key] = fromRow
 		fromRow++
 	}
-	return
+	return nil
 }
 
 func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 	vec := makeWorkspaceVector(kType)
-	switch kType.Oid {
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		for k := range idx.tree {
-			vec.MustAppendValue([]byte(k.(string)), false)
-		}
-	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
-		// No usage for this func.
-		for k := range idx.tree {
-			vec.MustAppendValue(k.([]byte), false)
-		}
-	default:
-		for k := range idx.tree {
-			vec.MustAppendValue(k, false)
-		}
+	for k := range idx.tree {
+		vec.MustAppendValue(vector.RowKeyValue(k), false)
 	}
 	return vec
 }
@@ -125,41 +113,12 @@ func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector {
 	vec := makeWorkspaceVector(kType)
 	var vecs []containers.Vector
-	switch kType.Oid {
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		for k := range idx.tree {
-			if vec.Length() > int(MaxNodeRows) {
-				vecs = append(vecs, vec)
-				vec = makeWorkspaceVector(kType)
-			}
-			vec.MustAppendValue([]byte(k.(string)), false)
+	for k := range idx.tree {
+		if vec.Length() > int(MaxNodeRows) {
+			vecs = append(vecs, vec)
+			vec = makeWorkspaceVector(kType)
 		}
-	case types.T_array_float32:
-		// No usage for this func.
-		for k := range idx.tree {
-			if vec.Length() > int(MaxNodeRows) {
-				vecs = append(vecs, vec)
-				vec = makeWorkspaceVector(kType)
-			}
-			vec.MustAppendValue(types.BytesToArrayToString[float32](k.([]byte)), false)
-		}
-	case types.T_array_float64:
-		for k := range idx.tree {
-			if vec.Length() > int(MaxNodeRows) {
-				vecs = append(vecs, vec)
-				vec = makeWorkspaceVector(kType)
-			}
-			vec.MustAppendValue(types.BytesToArrayToString[float64](k.([]byte)), false)
-		}
-	default:
-		for k := range idx.tree {
-			if vec.Length() > int(MaxNodeRows) {
-				vecs = append(vecs, vec)
-				vec = makeWorkspaceVector(kType)
-			}
-			vec.MustAppendValue(k, false)
-		}
+		vec.MustAppendValue(vector.RowKeyValue(k), false)
 	}
 	if vec.Length() > 0 {
 		vecs = append(vecs, vec)
@@ -225,267 +184,18 @@ func (idx *simpleTableIndex) BatchInsert(
 	dedupInput bool) error {
 	idx.Lock()
 	defer idx.Unlock()
-	colType := col.GetType()
-	switch colType.Oid {
-	case types.T_bool:
-		vs := vector.MustFixedColNoTypeCheck[bool](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_bit:
-		vs := vector.MustFixedColNoTypeCheck[uint64](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_int8:
-		vs := vector.MustFixedColNoTypeCheck[int8](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_int16:
-		vs := vector.MustFixedColNoTypeCheck[int16](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_int32:
-		vs := vector.MustFixedColNoTypeCheck[int32](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_int64:
-		vs := vector.MustFixedColNoTypeCheck[int64](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_uint8:
-		vs := vector.MustFixedColNoTypeCheck[uint8](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_uint16:
-		vs := vector.MustFixedColNoTypeCheck[uint16](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_uint32:
-		vs := vector.MustFixedColNoTypeCheck[uint32](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_uint64:
-		vs := vector.MustFixedColNoTypeCheck[uint64](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_decimal64:
-		vs := vector.MustFixedColNoTypeCheck[types.Decimal64](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_decimal128:
-		vs := vector.MustFixedColNoTypeCheck[types.Decimal128](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_uuid:
-		vs := vector.MustFixedColNoTypeCheck[types.Uuid](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_float32:
-		vs := vector.MustFixedColNoTypeCheck[float32](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_float64:
-		vs := vector.MustFixedColNoTypeCheck[float64](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_date:
-		vs := vector.MustFixedColNoTypeCheck[types.Date](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_timestamp:
-		vs := vector.MustFixedColNoTypeCheck[types.Timestamp](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_time:
-		vs := vector.MustFixedColNoTypeCheck[types.Time](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_datetime:
-		vs := vector.MustFixedColNoTypeCheck[types.Datetime](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_enum:
-		vs := vector.MustFixedColNoTypeCheck[types.Enum](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_year:
-		vs := vector.MustFixedColNoTypeCheck[types.MoYear](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_TS:
-		vs := vector.MustFixedColNoTypeCheck[types.TS](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_Rowid:
-		vs := vector.MustFixedColNoTypeCheck[types.Rowid](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_Blockid:
-		vs := vector.MustFixedColNoTypeCheck[types.Blockid](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		vec := col
-		if dedupInput {
-			set := make(map[string]bool)
-			for i := start; i < start+count; i++ {
-				v := vec.UnsafeGetStringAt(i)
-				if _, ok := set[v]; ok {
-					entry := common.TypeStringValue(*colType, []byte(v), false)
-					return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.string.dedupInput")
-				}
-				set[v] = true
-			}
-			break
-		}
-		for i := start; i < start+count; i++ {
-			// Use GetStringAt (copies bytes) instead of UnsafeGetStringAt to avoid
-			// dangling pointers: the vector's C-allocated area may be freed after the
-			// caller closes the batch, while map keys in idx.tree must outlive it.
-			v := vec.GetStringAt(i)
-			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(*colType, []byte(v), false)
-				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.string.tree")
-			}
-			idx.tree[v] = row
-			row++
-		}
-	case types.T_array_float32:
-		vec := col
-		if dedupInput {
-			set := make(map[string]bool)
-			for i := start; i < start+count; i++ {
-				v := types.ArrayToString[float32](vector.GetArrayAt[float32](vec, i))
-				if _, ok := set[v]; ok {
-					entry := common.TypeStringValue(*colType, vec.GetBytesAt(i), false)
-					return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.array32.dedupInput")
-				}
-				set[v] = true
-			}
-			break
-		}
-		for i := start; i < start+count; i++ {
-			v := types.ArrayToString[float32](vector.GetArrayAt[float32](vec, i))
-			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(*colType, vec.GetBytesAt(i), false)
-				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.array32.tree")
-			}
-			idx.tree[v] = row
-			row++
-		}
-	case types.T_array_float64:
-		vec := col
-		if dedupInput {
-			set := make(map[string]bool)
-			for i := start; i < start+count; i++ {
-				v := types.ArrayToString[float64](vector.GetArrayAt[float64](vec, i))
-				if _, ok := set[v]; ok {
-					entry := common.TypeStringValue(*colType, vec.GetBytesAt(i), false)
-					return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.array64.dedupInput")
-				}
-				set[v] = true
-			}
-			break
-		}
-		for i := start; i < start+count; i++ {
-			v := types.ArrayToString[float64](vector.GetArrayAt[float64](vec, i))
-			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(*colType, vec.GetBytesAt(i), false)
-				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchInsert.array64.tree")
-			}
-			idx.tree[v] = row
-			row++
-		}
-	default:
+	if !vector.SupportsAny(col.GetType().Oid) {
 		panic(moerr.NewInternalErrorNoCtxf("%s not supported", col.GetType().String()))
 	}
-	return nil
+	return InsertOp(attr, col, start, count, row, dedupInput, idx.tree)
 }
 
 // TODO: rewrite
 func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) error {
 	idx.RLock()
 	defer idx.RUnlock()
-	colType := col.GetType()
-	switch colType.Oid {
-	case types.T_bool:
-		vals := vector.MustFixedColNoTypeCheck[bool](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_bit:
-		vals := vector.MustFixedColNoTypeCheck[uint64](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_int8:
-		vals := vector.MustFixedColNoTypeCheck[int8](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_int16:
-		vals := vector.MustFixedColNoTypeCheck[int16](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_int32:
-		vals := vector.MustFixedColNoTypeCheck[int32](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_int64:
-		vals := vector.MustFixedColNoTypeCheck[int64](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_uint8:
-		vals := vector.MustFixedColNoTypeCheck[uint8](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_uint16:
-		vals := vector.MustFixedColNoTypeCheck[uint16](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_uint32:
-		vals := vector.MustFixedColNoTypeCheck[uint32](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_uint64:
-		vals := vector.MustFixedColNoTypeCheck[uint64](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_decimal64:
-		vals := vector.MustFixedColNoTypeCheck[types.Decimal64](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_decimal128:
-		vals := vector.MustFixedColNoTypeCheck[types.Decimal128](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_float32:
-		vals := vector.MustFixedColNoTypeCheck[float32](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_float64:
-		vals := vector.MustFixedColNoTypeCheck[float64](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_date:
-		vals := vector.MustFixedColNoTypeCheck[types.Date](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_time:
-		vals := vector.MustFixedColNoTypeCheck[types.Time](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_datetime:
-		vals := vector.MustFixedColNoTypeCheck[types.Datetime](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_timestamp:
-		vals := vector.MustFixedColNoTypeCheck[types.Timestamp](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_enum:
-		vals := vector.MustFixedColNoTypeCheck[types.Enum](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_year:
-		vals := vector.MustFixedColNoTypeCheck[types.MoYear](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_TS:
-		vals := vector.MustFixedColNoTypeCheck[types.TS](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_Rowid:
-		vals := vector.MustFixedColNoTypeCheck[types.Rowid](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_Blockid:
-		vals := vector.MustFixedColNoTypeCheck[types.Blockid](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		vec := col
-		for i := 0; i < col.Length(); i++ {
-			bs := vec.GetBytesAt(i)
-			v := util.UnsafeBytesToString(bs)
-			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(*colType, bs, false)
-				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchDedup.string")
-			}
-		}
-	case types.T_array_float32:
-		vec := col
-		for i := 0; i < col.Length(); i++ {
-			bs := vec.GetBytesAt(i)
-			v := types.BytesToArrayToString[float32](bs)
-			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(*colType, bs, false)
-				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchDedup.array32")
-			}
-		}
-	case types.T_array_float64:
-		vec := col
-		for i := 0; i < col.Length(); i++ {
-			bs := vec.GetBytesAt(i)
-			v := types.BytesToArrayToString[float64](bs)
-			if _, ok := idx.tree[v]; ok {
-				entry := common.TypeStringValue(*colType, bs, false)
-				return newDuplicateEntryWithLog(attr, entry, "txnimpl.BatchDedup.array64")
-			}
-		}
-	default:
+	if !vector.SupportsAny(col.GetType().Oid) {
 		panic(moerr.NewInternalErrorNoCtxf("%s not supported", col.GetType().String()))
 	}
-	return nil
+	return DedupOp(attr, col, idx.tree)
 }

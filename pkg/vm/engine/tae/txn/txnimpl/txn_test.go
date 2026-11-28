@@ -1035,31 +1035,42 @@ func TestIndex(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestDedupOpDuplicateEntry(t *testing.T) {
-	colType := types.T_int64.ToType()
-	tree := map[any]uint32{int64(7): 1}
+func int64KeyVector(vals ...int64) containers.Vector {
+	vec := containers.MakeVector(types.T_int64.ToType(), nil)
+	for _, v := range vals {
+		vec.MustAppendValue(v, false)
+	}
+	return vec
+}
 
-	err := DedupOp(&colType, "pk", []int64{3, 7}, tree)
+func TestDedupOpDuplicateEntry(t *testing.T) {
+	tree := map[any]uint32{int64(7): 1}
+	col := int64KeyVector(3, 7)
+	defer containers.ReleaseVector(col)
+
+	err := DedupOp("pk", col, tree)
 	assert.Error(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 }
 
 func TestInsertOpDuplicateEntry(t *testing.T) {
 	t.Run("dedup input", func(t *testing.T) {
-		colType := types.T_int64.ToType()
 		tree := make(map[any]uint32)
+		col := int64KeyVector(5, 5)
+		defer containers.ReleaseVector(col)
 
-		err := InsertOp(&colType, "pk", []int64{5, 5}, 0, 2, 0, true, tree)
+		err := InsertOp("pk", col, 0, 2, 0, true, tree)
 		assert.Error(t, err)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 		assert.Len(t, tree, 0)
 	})
 
 	t.Run("tree conflict", func(t *testing.T) {
-		colType := types.T_int64.ToType()
 		tree := map[any]uint32{int64(9): 2}
+		col := int64KeyVector(9, 10)
+		defer containers.ReleaseVector(col)
 
-		err := InsertOp(&colType, "pk", []int64{9, 10}, 0, 2, 0, false, tree)
+		err := InsertOp("pk", col, 0, 2, 0, false, tree)
 		assert.Error(t, err)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	})
@@ -1117,7 +1128,7 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 
 	t.Run("array32 batch insert tree conflict", func(t *testing.T) {
 		idx := NewSimpleTableIndex()
-		key := types.ArrayToString([]float32{1, 2})
+		key := string(types.ArrayToBytes([]float32{1, 2}))
 		idx.tree[key] = 1
 		vec := makeWorkspaceVector(types.T_array_float32.ToType())
 		defer containers.ReleaseVector(vec)
@@ -1130,7 +1141,7 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 
 	t.Run("array32 batch dedup", func(t *testing.T) {
 		idx := NewSimpleTableIndex()
-		key := types.ArrayToString([]float32{1, 2})
+		key := string(types.ArrayToBytes([]float32{1, 2}))
 		idx.tree[key] = 1
 		vec := makeWorkspaceVector(types.T_array_float32.ToType())
 		defer containers.ReleaseVector(vec)
@@ -1156,7 +1167,7 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 
 	t.Run("array64 batch insert tree conflict", func(t *testing.T) {
 		idx := NewSimpleTableIndex()
-		key := types.ArrayToString([]float64{1, 2})
+		key := string(types.ArrayToBytes([]float64{1, 2}))
 		idx.tree[key] = 1
 		vec := makeWorkspaceVector(types.T_array_float64.ToType())
 		defer containers.ReleaseVector(vec)
@@ -1169,7 +1180,7 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 
 	t.Run("array64 batch dedup", func(t *testing.T) {
 		idx := NewSimpleTableIndex()
-		key := types.ArrayToString([]float64{1, 2})
+		key := string(types.ArrayToBytes([]float64{1, 2}))
 		idx.tree[key] = 1
 		vec := makeWorkspaceVector(types.T_array_float64.ToType())
 		defer containers.ReleaseVector(vec)
