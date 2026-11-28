@@ -1367,14 +1367,18 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 
 	case plan.Node_FILTER:
-		//filters which can not push down to scan nodes. hard to estimate selectivity
-		node.Stats.Outcnt = childStats.Outcnt * 0.05
-		if node.Stats.Outcnt < 1 {
-			node.Stats.Outcnt = 1
-		}
 		node.Stats.Cost = childStats.Cost
-		node.Stats.Selectivity = 0.05
 		node.Stats.BlockNum = childStats.BlockNum
+		if _, boundToRowImage := builder.dmlRowFilters[nodeID]; boundToRowImage {
+			// Every input row can pass write validation. Size the downstream
+			// operators for that case, including when IGNORE can skip a row.
+			node.Stats.Outcnt = childStats.Outcnt
+			node.Stats.Selectivity = 1
+			break
+		}
+		// Selectivity is hard to estimate for filters that cannot be pushed down.
+		node.Stats.Outcnt = max(1, childStats.Outcnt*0.05)
+		node.Stats.Selectivity = 0.05
 
 	case plan.Node_FUNCTION_SCAN:
 		if !computeFunctionScan(node.TableDef.TblFunc.Name, node.TblFuncExprList, node.Stats) {

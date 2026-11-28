@@ -42,6 +42,26 @@ func (c *fixedProcessCompilerContext) GetProcess() *process.Process {
 	return c.proc
 }
 
+func TestDMLRowFilterKeepsFinalImage(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_UPDATE, NewMockCompilerContext(true), false, false)
+	tag := builder.genNewBindTag()
+	builder.qry.Nodes = []*plan.Node{{
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{tag},
+		Stats:       &plan.Stats{Outcnt: 100},
+	}}
+	check := GetColExpr(Type{Id: int32(types.T_bool)}, tag, 0)
+	id := builder.appendDMLRowFilter(nil, 0, []*plan.Expr{check}, nil)
+	parent := makePlan2BoolConstExprWithType(false)
+
+	require.Equal(t, float64(100), builder.qry.Nodes[id].Stats.Outcnt)
+	root, residual := builder.pushdownFilters(id, []*plan.Expr{parent}, false)
+	require.Equal(t, id, root)
+	require.Equal(t, []*plan.Expr{check}, builder.qry.Nodes[id].FilterList)
+	require.Equal(t, []*plan.Expr{parent}, residual)
+	require.Empty(t, builder.qry.Nodes[0].FilterList)
+}
+
 func setupLeftJoinBase(t *testing.T) (*MockCompilerContext, *QueryBuilder, *plan.Expr, *plan.Expr, *plan.Expr) {
 	t.Helper()
 

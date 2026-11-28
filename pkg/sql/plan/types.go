@@ -297,6 +297,7 @@ type QueryBuilder struct {
 	preserveInsertProjection         map[int32]struct{}
 	preserveScanProjection           map[int32]struct{}
 	positionalSinkScans              map[int32]struct{}
+	dmlRowFilters                    map[int32]struct{}
 	repeatedUpdateStats              map[int32]repeatedUpdateStatsHint
 	equalityRowBounds                map[*plan.Expr]float64
 

@@ -83,6 +83,14 @@ func putDeleteNodeInfo(info *deleteNodeInfo) {
 	deleteNodeInfoPool.Put(info)
 }
 
+type updateCheckMode uint8
+
+const (
+	skipUpdateCheck updateCheckMode = iota
+	assertUpdateCheck
+	filterUpdateCheck
+)
+
 type dmlPlanCtx struct {
 	objRef     *ObjectRef
 	tableDef   *TableDef
@@ -100,6 +108,7 @@ type dmlPlanCtx struct {
 	rowIdPos               int
 	insertColPos           []int
 	updateColPosMap        map[string]int
+	checkMode              updateCheckMode
 	allDelTableIDs         map[uint64]struct{}
 	allDelTables           map[FkReferKey]struct{}
 	isFkRecursionCall      bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
@@ -4354,8 +4363,22 @@ func makePreUpdateDeletePlan(
 		lastNodeId = builder.appendNode(filterNode, bindCtx)
 	}
 
-	// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-	// nextSourceStep := builder.appendStep(lastNodeId)
+	// The target's selected row image feeds both the delete and the insert.
+	// Apply CHECK after dedup and the outer-join row-id guard, before any write.
+	if delCtx.checkMode != skipUpdateCheck && len(delCtx.tableDef.Checks) > 0 {
+		var err error
+		lastNodeId, err = appendCheckConstraintPlanWithColLookup(
+			builder, bindCtx, delCtx.tableDef, lastNodeId, 0,
+			func(name string, tablePos int32) (int32, bool) {
+				if pos, updated := delCtx.updateColPosMap[name]; updated {
+					return int32(pos), true
+				}
+				return tablePos, true
+			}, delCtx.checkMode == filterUpdateCheck)
+		if err != nil {
+			return -1, err
+		}
+	}
 
 	// lock old pk for delete statement
 	lastProjectList := getProjectionByLastNode(builder, lastNodeId)

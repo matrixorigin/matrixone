@@ -166,6 +166,22 @@ func appendCheckConstraintPlan(
 	colName2Idx map[string]int32,
 	ignoreMode bool,
 ) (int32, error) {
+	return appendCheckConstraintPlanWithColLookup(builder, bindCtx, tableDef, lastNodeID, inputTag,
+		func(name string, _ int32) (int32, bool) {
+			pos, ok := colName2Idx[tableDef.Name+"."+name]
+			return pos, ok
+		}, ignoreMode)
+}
+
+func appendCheckConstraintPlanWithColLookup(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeID int32,
+	inputTag int32,
+	lookupColPos func(name string, tablePos int32) (int32, bool),
+	ignoreMode bool,
+) (int32, error) {
 	if len(tableDef.Checks) == 0 {
 		return lastNodeID, nil
 	}
@@ -178,7 +194,7 @@ func appendCheckConstraintPlan(
 		if col.Name == catalog.Row_ID {
 			continue
 		}
-		colPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+		colPos, ok := lookupColPos(col.Name, int32(i))
 		if !ok {
 			return 0, moerr.NewInternalErrorf(
 				builder.GetContext(),
@@ -228,12 +244,8 @@ func appendCheckConstraintPlan(
 		filterList = append(filterList, assertExpr)
 	}
 
-	return builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_FILTER,
-		Children:    []int32{lastNodeID},
-		FilterList:  filterList,
-		ProjectList: getProjectionByLastNodeIfAvailable(builder, lastNodeID),
-	}, bindCtx), nil
+	return builder.appendDMLRowFilter(bindCtx, lastNodeID, filterList,
+		getProjectionByLastNodeIfAvailable(builder, lastNodeID)), nil
 }
 
 func requireCheckConstraintProtocol(ctx context.Context, proc *process.Process) error {

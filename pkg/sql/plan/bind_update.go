@@ -410,11 +410,33 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 
 	for i, tableDef := range dmlCtx.tableDefs {
-		columns := asyncDatalinkUpdateColumns(dmlCtx, i, newColName2Idx)
-		if len(dmlCtx.updateCol2Expr[i]) == 0 || len(columns) == 0 {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
 		}
 		alias := dmlCtx.aliases[i]
+		lookup := func(name string) (int32, bool) {
+			key := alias + "." + name
+			if pos, ok := newColName2Idx[key]; ok {
+				return pos, true
+			}
+			pos, ok := oldColName2Idx[key]
+			return pos, ok
+		}
+		// Nullable join targets use the legacy per-target path. Here each row
+		// belongs to the one writable target and already has its final values.
+		if len(tableDef.Checks) > 0 {
+			lastNodeID, err = appendCheckConstraintPlanWithColLookup(
+				builder, bindCtx, tableDef, lastNodeID, selectNodeTag,
+				func(name string, _ int32) (int32, bool) { return lookup(name) }, stmt.Ignore)
+			if err != nil {
+				return 0, err
+			}
+		}
+
+		columns := asyncDatalinkUpdateColumns(dmlCtx, i, newColName2Idx)
+		if len(columns) == 0 {
+			continue
+		}
 		rowIDPos, ok := oldColName2Idx[alias+"."+catalog.Row_ID]
 		if !ok {
 			return 0, moerr.NewInternalErrorf(builder.GetContext(), "missing row_id for Datalink target %s", alias)
@@ -423,14 +445,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		if err != nil {
 			return 0, err
 		}
-		lastNodeID, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, columns, lastNodeID, selectNodeTag, func(name string) (int32, bool) {
-			key := alias + "." + name
-			if pos, ok := newColName2Idx[key]; ok {
-				return pos, true
-			}
-			pos, ok := oldColName2Idx[key]
-			return pos, ok
-		}, eligible)
+		lastNodeID, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, columns, lastNodeID, selectNodeTag, lookup, eligible)
 		if err != nil {
 			return 0, err
 		}

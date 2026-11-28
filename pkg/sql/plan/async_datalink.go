@@ -138,5 +138,5 @@ func appendAsyncDatalinkAdmission(builder *QueryBuilder, bindCtx *BindContext, t
 		}
 		filters = append(filters, check)
 	}
-	return builder.appendNode(&plan.Node{NodeType: plan.Node_FILTER, Children: []int32{nodeID}, FilterList: filters}, bindCtx), nil
+	return builder.appendDMLRowFilter(bindCtx, nodeID, filters, nil), nil
 }

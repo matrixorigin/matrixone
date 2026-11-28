@@ -152,11 +152,16 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	sourceStep = builder.appendStep(lastNodeId)
 
 	beginIdx := 0
+	checkMode := assertUpdateCheck
+	if stmt.Ignore {
+		checkMode = filterUpdateCheck
+	}
 	var detectSqls []string
 	for i, tableDef := range tblInfo.tableDefs {
 		upPlanCtx := updatePlanCtxs[i]
 		upPlanCtx.beginIdx = beginIdx
 		upPlanCtx.sourceStep = sourceStep
+		upPlanCtx.checkMode = checkMode
 
 		updateBindCtx := NewBindContext(builder, nil)
 		beginIdx = beginIdx + upPlanCtx.updateColLength + len(tableDef.Cols)
