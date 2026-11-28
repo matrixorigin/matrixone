@@ -523,6 +523,7 @@ func LockTableForSnapshotRefreshWithContext(
 
 // LockRows locks rows for the lifetime of the current transaction. When the
 // query context opts in, pre-pipeline acquisitions contribute to its diagnostic.
+// An exact request must fit within the configured per-request row limit.
 func LockRows(
 	eng engine.Engine,
 	proc *process.Process,
@@ -534,6 +535,7 @@ func LockRows(
 	lockMode lock.LockMode,
 	sharding lock.Sharding,
 	group uint32,
+	exactRows bool,
 ) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
@@ -571,6 +573,7 @@ func LockRows(
 		WithLockMode(lockMode).
 		WithLockGroup(group).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
+	opts.requireExactRows = exactRows
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		eng,

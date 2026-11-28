@@ -4884,6 +4884,7 @@ func lockRows(
 		lockMode,
 		sharding,
 		group,
+		false,
 	)
 }
 

@@ -69,7 +69,8 @@ func openAccountLockSQL(t *testing.T, cluster embed.Cluster, index int) (*sql.DB
 }
 
 func TestDropAccountWithMinimumRowLockCount(t *testing.T) {
-	cluster := startAccountLockCluster(t, 1, lockservice.Config{MaxLockRowCount: 1})
+	// Force accumulated metadata keys to span multiple lock-service segments.
+	cluster := startAccountLockCluster(t, 1, lockservice.Config{MaxLockRowCount: 1, MaxFixedSliceSize: 4})
 	db, cn := openAccountLockSQL(t, cluster, 0)
 	ctx := t.Context()
 	exec := func(stmt string) {
