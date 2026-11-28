@@ -16,6 +16,7 @@ package vector
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -46,6 +47,14 @@ type typeOps struct {
 	shuffle        func(v *Vector, sels []int64, mp *mpool.MPool) error
 	shuffleWithBuf func(v *Vector, sels []int64, buf *[]byte) error
 
+	// rowKey is row i as a comparable map key: equal keys mean equal
+	// values. A fixed-size value is itself, a varlena one a string copy.
+	rowKey func(v *Vector, i int) any
+	// valueFromRaw is the value whose raw bytes are raw (a copy for a
+	// varlena type); rawFromValue is the raw bytes of a value.
+	valueFromRaw func(raw []byte) any
+	rawFromValue func(val any) []byte
+
 	// constructors of per-type functions
 	unionAll    func(mp *mpool.MPool) func(v, w *Vector) error              // getUnionAllFunction
 	appendBytes func(vec *Vector) func([]byte, bool, *mpool.MPool) error    // MakeAppendBytesFunc
@@ -72,8 +81,17 @@ func fixedOps[T types.FixedSizeT]() typeOps {
 		shrinkByMask:   shrinkFixedByMask[T],
 		shuffle:        shuffleFixedNoTypeCheck[T],
 		shuffleWithBuf: shuffleFixedNoTypeCheckWithBuf[T],
-		unionAll:       unionAllFixed[T],
-		appendBytes:    appendBytesToFixSized[T],
+		rowKey: func(v *Vector, i int) any {
+			return GetFixedAtNoTypeCheck[T](v, i)
+		},
+		valueFromRaw: func(raw []byte) any {
+			return types.DecodeFixed[T](raw)
+		},
+		rawFromValue: func(val any) []byte {
+			return types.EncodeFixed(val.(T))
+		},
+		unionAll:    unionAllFixed[T],
+		appendBytes: appendBytesToFixSized[T],
 		newResult: func(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
 			return newResultFunc[T](typ, mp)
 		},
@@ -103,6 +121,15 @@ func varlenOps() typeOps {
 	}
 	ops.appendRaw = func(v *Vector, raw []byte, isNull bool, mp *mpool.MPool) error {
 		return AppendBytes(v, raw, isNull, mp)
+	}
+	ops.rowKey = func(v *Vector, i int) any {
+		return v.GetStringAt(i)
+	}
+	ops.valueFromRaw = func(raw []byte) any {
+		return slices.Clone(raw)
+	}
+	ops.rawFromValue = func(val any) []byte {
+		return val.([]byte)
 	}
 	ops.unionAll = unionAllVarlen
 	ops.appendBytes = func(vec *Vector) func([]byte, bool, *mpool.MPool) error {
@@ -240,4 +267,38 @@ func AppendRaw(vec *Vector, raw []byte, isNull bool, mp *mpool.MPool) error {
 		return moerr.NewInternalErrorNoCtxf("AppendRaw: unsupported type %s", vec.typ.String())
 	}
 	return ops.appendRaw(vec, raw, isNull, mp)
+}
+
+// RowKey returns row i of vec as a comparable key for a map or set over the
+// rows of one type: keys are equal exactly when the values are. It is the
+// value itself for a fixed-size type and a copy of the bytes, as a string,
+// for a varlena type. It panics for a type SupportsAny rejects.
+func RowKey(vec *Vector, i int) any {
+	ops, ok := opsOf(vec)
+	if !ok {
+		panic(moerr.NewInternalErrorNoCtxf("RowKey: unsupported type %s", vec.typ.String()))
+	}
+	return ops.rowKey(vec, i)
+}
+
+// ValueFromRaw returns the value of type oid whose raw bytes are raw, as
+// GetAny would return it: the Go element type for a fixed-size type, a copy
+// of raw for a varlena one. It panics for a type SupportsAny rejects.
+func ValueFromRaw(oid types.T, raw []byte) any {
+	ops := &vectorTypeOps[oid]
+	if !ops.supported {
+		panic(moerr.NewInternalErrorNoCtxf("ValueFromRaw: unsupported type %s", oid.String()))
+	}
+	return ops.valueFromRaw(raw)
+}
+
+// RawFromValue returns the raw bytes of val, a value of type oid as GetAny
+// returns it; ValueFromRaw reverses it. It panics for a type SupportsAny
+// rejects.
+func RawFromValue(oid types.T, val any) []byte {
+	ops := &vectorTypeOps[oid]
+	if !ops.supported {
+		panic(moerr.NewInternalErrorNoCtxf("RawFromValue: unsupported type %s", oid.String()))
+	}
+	return ops.rawFromValue(val)
 }

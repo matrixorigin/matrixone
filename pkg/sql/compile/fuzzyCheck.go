@@ -582,9 +582,6 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	case types.T_decimal128:
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIndex)
 		return val.Format(vec.GetType().Scale), nil
-	case types.T_decimal256:
-		val := vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, rowIndex)
-		return val.Format(vec.GetType().Scale), nil
 	case types.T_json:
 		val := vec.GetBytesAt(rowIndex)
 		byteJson := types.DecodeJson(val)

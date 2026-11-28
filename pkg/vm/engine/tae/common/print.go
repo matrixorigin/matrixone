@@ -193,9 +193,6 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	case types.T_decimal128:
 		val := v.(types.Decimal128)
 		return val.Format(t.Scale)
-	case types.T_decimal256:
-		val := v.(types.Decimal256)
-		return val.Format(t.Scale)
 	case types.T_json:
 		val := v.([]byte)
 		j := types.DecodeJson(val)
@@ -289,8 +286,6 @@ func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string
 		return vec2Str(vector.MustFixedColWithTypeCheck[types.Decimal64](v)[:printN], v)
 	case types.T_decimal128:
 		return vec2Str(vector.MustFixedColWithTypeCheck[types.Decimal128](v)[:printN], v)
-	case types.T_decimal256:
-		return vec2Str(vector.MustFixedColWithTypeCheck[types.Decimal256](v)[:printN], v)
 	case types.T_uuid:
 		return vec2Str(vector.MustFixedColWithTypeCheck[types.Uuid](v)[:printN], v)
 	case types.T_TS:

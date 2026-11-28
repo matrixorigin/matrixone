@@ -326,11 +326,6 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewDecimal128Vector(n, typ, m, random, vs)
 		}
 		return NewDecimal128Vector(n, typ, m, random, nil)
-	case types.T_decimal256:
-		if vs, ok := Values.([]types.Decimal256); ok {
-			return NewDecimal256Vector(n, typ, m, random, vs)
-		}
-		return NewDecimal256Vector(n, typ, m, random, nil)
 	case types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		if vs, ok := Values.([]string); ok {
@@ -785,31 +780,6 @@ func NewDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs 
 			v = rand.Int()
 		}
 		d := types.Decimal128{B0_63: uint64(v), B64_127: 0}
-		if err := vector.AppendFixed(vec, d, false, m); err != nil {
-			vec.Free(m)
-			return nil
-		}
-	}
-	return vec
-}
-
-func NewDecimal256Vector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Decimal256) *vector.Vector {
-	vec := vector.NewVec(typ, m)
-	if vs != nil {
-		for i := range vs {
-			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
-				vec.Free(m)
-				return nil
-			}
-		}
-		return vec
-	}
-	for i := 0; i < n; i++ {
-		v := i
-		if random {
-			v = rand.Int()
-		}
-		d := types.Decimal256{B0_63: uint64(v)}
 		if err := vector.AppendFixed(vec, d, false, m); err != nil {
 			vec.Free(m)
 			return nil

@@ -247,12 +247,6 @@ func AppendVectorSQLLiteral(ctx context.Context, vec *vector.Vector, row int, bu
 		buf = append(buf, '\'')
 		buf = append(buf, value...)
 		buf = append(buf, '\'')
-	case types.T_decimal256:
-		scale := typ.Scale
-		value := vector.GetFixedAtWithTypeCheck[types.Decimal256](vec, row).Format(scale)
-		buf = append(buf, '\'')
-		buf = append(buf, value...)
-		buf = append(buf, '\'')
 	case types.T_uuid:
 		value := vector.GetFixedAtWithTypeCheck[types.Uuid](vec, row).String()
 		buf = append(buf, '\'')

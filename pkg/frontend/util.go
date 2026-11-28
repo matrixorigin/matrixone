@@ -2173,7 +2173,6 @@ func padZerofillDecimalText(text string, intDigits int) string {
 }
 
 func mysqlDecimalType(precision, scale int32) types.Type {
-	// typeswitch:partial(decimal) it picks decimal64, decimal128 or decimal256 by precision; the decimal256 result is the first case
 	switch {
 	case precision > types.T_decimal128.ToType().Width:
 		return types.New(types.T_decimal256, precision, scale)

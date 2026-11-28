@@ -6140,7 +6140,6 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 	// Keep uint64/bit as-is so values greater than math.MaxInt64 can still be treated as out-of-range and return NULL.
 	if inputs[0].Oid == types.T_int64 || inputs[0].Oid == types.T_uint64 || inputs[0].Oid == types.T_bit || inputs[0].Oid == types.T_any {
 		castTypes[0] = inputs[0]
-		// typeswitch:partial(decimal) a decimal256 argument is not matched here and takes the int64 cast below
 	} else if inputs[0].Oid == types.T_bool || inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() ||
 		inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 {
 		shouldCast = true
@@ -6277,7 +6276,6 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	castTypes := make([]types.Type, len(inputs))
 
 	// First argument (bits) must be numeric
-	// typeswitch:partial(decimal) a decimal256 bits argument is matched by a cast to int64
 	isNumeric := inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() || inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_bit
 	if !isNumeric && inputs[0].Oid != types.T_any {
 		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
@@ -6363,7 +6361,6 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	var getBitsValue func(uint64) (uint64, bool)
 
 	// Create appropriate parameter wrapper based on type (once, outside loop)
-	// typeswitch:partial(decimal) makeSetCheck casts a decimal256 bits argument to int64, the default branch
 	switch bitsType {
 	case types.T_int8:
 		param := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
@@ -6543,7 +6540,6 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 
 	// First argument (bits) must be numeric
 	// Check if it's a numeric type (integer, float, or decimal)
-	// typeswitch:partial(decimal) a decimal256 bits argument is matched by a cast to int64
 	isNumeric := inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() || inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_bit
 	if !isNumeric && inputs[0].Oid != types.T_any {
 		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
@@ -6640,7 +6636,6 @@ func makeExportSetBitsGetter(vec *vector.Vector) (func(uint64) (uint64, bool), e
 		return func(uint64) (uint64, bool) { return 0, true }, nil
 	}
 
-	// typeswitch:partial(decimal) exportSetCheck casts a decimal256 bits argument to int64
 	switch vec.GetType().Oid {
 	case types.T_int8:
 		return makeExportSetIntegerGetter[int8](vec), nil

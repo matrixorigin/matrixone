@@ -1394,7 +1394,6 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = float64ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_decimal64:
 		var s vector.FunctionParameterWrapper[types.Decimal64]
-		// typeswitch:partial(decimal) decimal256 targets return earlier, through castToDecimal256
 		if toType.Oid == types.T_decimal64 || toType.Oid == types.T_decimal128 {
 			result.UseOptFunctionParamFrame(1)
 			s = vector.OptGetParamFromWrapper[types.Decimal64](result, 0, from)
@@ -1501,7 +1500,6 @@ func widenDecimal256Batch(from *vector.Vector, to *vector.FunctionResult[types.D
 	}
 	dst := vector.MustFixedColNoTypeCheck[types.Decimal256](to.GetResultVector())
 	_ = dst[length-1]
-	// typeswitch:partial(decimal) only narrower decimals widen; a decimal256 source returns false and takes the general cast
 	switch source.Oid {
 	case types.T_decimal64:
 		values := vector.MustFixedColNoTypeCheck[types.Decimal64](from)
@@ -1606,7 +1604,6 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 
 func scalarNullToOthers(ctx context.Context,
 	totype types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before NewCast dispatches on the source type
 	switch totype.Oid {
 	case types.T_bool:
 		return appendNulls[bool](result, length, selectList)
@@ -1668,7 +1665,6 @@ func scalarNullToOthers(ctx context.Context,
 func boolToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[bool],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before NewCast dispatches on the source type
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -2370,7 +2366,6 @@ func float32ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[float32],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before NewCast dispatches on the source type
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -2442,7 +2437,6 @@ func float64ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[float64],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before NewCast dispatches on the source type
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -2503,7 +2497,6 @@ func float64ToOthers(proc *process.Process,
 func dateToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Date],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before NewCast dispatches on the source type
 	switch toType.Oid {
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
@@ -2550,7 +2543,6 @@ func dateToOthers(proc *process.Process,
 func datetimeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Datetime],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before NewCast dispatches on the source type
 	switch toType.Oid {
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
@@ -2602,7 +2594,6 @@ func timestampToOthers(proc *process.Process,
 		zone = proc.GetSessionInfo().TimeZone
 	}
 
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before NewCast dispatches on the source type
 	switch toType.Oid {
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
@@ -2647,7 +2638,6 @@ func timeToOthers(proc *process.Process,
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
 	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before NewCast dispatches on the source type
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
@@ -2800,7 +2790,6 @@ func decimal128ToOthers(proc *process.Process,
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
 	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before NewCast dispatches on the source type
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -3136,7 +3125,6 @@ func strTypeToOthers(proc *process.Process,
 			// rest of the flow is similar to strTypeToOthers.
 		}
 	}
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before NewCast dispatches on the source type
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
@@ -3341,7 +3329,6 @@ func jsonToOthers(proc *process.Process, ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
 	strictStringWidth bool, allowTrailingSpaceTrim bool, assignment bool, explicitCast bool, reportDataTooLong bool) error {
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before NewCast dispatches on the source type
 	switch toType.Oid {
 	case types.T_json:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -3547,7 +3534,6 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 			continue
 		}
 		bj := types.DecodeJson(v)
-		// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before this dispatch
 		switch toType.Oid {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 			value, isNull, ok := jsonToInt64Scalar(bj)
@@ -3633,7 +3619,6 @@ func jsonIntegerText(bj bytejson.ByteJson) (string, bool) {
 }
 
 func jsonAppendDecimalText(result vector.FunctionResultWrapper, toType types.Type, text string) (bool, error) {
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before this dispatch
 	switch toType.Oid {
 	case types.T_decimal64:
 		d, err := types.ParseDecimal64(text, toType.Width, toType.Scale)
@@ -3863,8 +3848,6 @@ func jsonAppendNull(result vector.FunctionResultWrapper, toType types.Type) erro
 		return vector.MustFunctionResult[types.Decimal64](result).Append(0, true)
 	case types.T_decimal128:
 		return vector.MustFunctionResult[types.Decimal128](result).Append(types.Decimal128{}, true)
-	case types.T_decimal256:
-		return vector.MustFunctionResult[types.Decimal256](result).Append(types.Decimal256{}, true)
 	default:
 		panic("jsonAppendNull: unsupported type")
 	}
@@ -11737,7 +11720,6 @@ func yearToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.MoYear],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
-	// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before NewCast dispatches on the source type
 	switch toType.Oid {
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)

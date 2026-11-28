@@ -150,7 +150,7 @@ func TestBlockScaledVectorUnmarshalRejectsMalformedCell(t *testing.T) {
 			// A malformed cell in a live vector renders its error instead of panicking.
 			bad := append([]byte(nil), cells[2]...)
 			bad[0] = 0x7f
-			require.Contains(t, blockScaledCellString(bad), "version")
+			require.Contains(t, types.ValueText(types.T_array_float8.ToType(), bad), "version")
 		})
 	}
 }

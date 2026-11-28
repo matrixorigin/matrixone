@@ -109,7 +109,6 @@ func (expr *FunctionExpressionExecutor) decimal128ProducesNoNulls() bool {
 			return false
 		}
 		oid := left.GetType().Oid
-		// typeswitch:partial(decimal) a decimal64/decimal128 null proof; decimal256 makes no claim, which is conservative
 		return oid == right.GetType().Oid && (oid == types.T_decimal64 || oid == types.T_decimal128)
 	case function.CAST:
 		if expr.rowScopedDecimalCast || expr.rowScopedDiagnostics || !decimalValueIsNonNull(expr.parameterResults[0]) {

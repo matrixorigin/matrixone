@@ -98,7 +98,6 @@ func AppendColumnBufferRange(k *ColumnBuffer, vec *vector.Vector, start, n int, 
 	d := k.Data
 	nul := func(i int) bool { return k.Nulls != nil && i < len(k.Nulls) && k.Nulls[i] }
 	var err error
-	// typeswitch:partial(decimal) decimal256 is not an IVF-FLAT INCLUDE column type (SupportedIncludeColumnTypes)
 	switch k.Type {
 	case types.T_int64:
 		for i := start; err == nil && i < end; i++ {

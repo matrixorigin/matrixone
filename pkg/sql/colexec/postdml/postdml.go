@@ -213,8 +213,6 @@ func GetAnyAsString(vec *vector.Vector, i int) (string, error) {
 		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, i).Format(vec.GetType().Scale), nil
 	case types.T_decimal128:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, i).Format(vec.GetType().Scale), nil
-	case types.T_decimal256:
-		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, i).Format(vec.GetType().Scale), nil
 	case types.T_uuid:
 		return vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String(), nil
 	case types.T_TS:

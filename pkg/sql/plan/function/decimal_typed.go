@@ -127,7 +127,6 @@ func DecimalArithmeticChunk(op int32, x, y, out *vector.Vector, xi, yi, oi, n in
 		sx = out.GetType().Scale - x.GetType().Scale
 		sy = out.GetType().Scale - y.GetType().Scale
 	}
-	// typeswitch:partial(decimal) the default branch is decimal256
 	switch x.GetType().Oid {
 	case types.T_decimal64:
 		return decimalChunkRight(op, vector.MustFixedColNoTypeCheck[types.Decimal64](x), y, out, xi, yi, oi, n, x.IsConst(), sx, sy)
@@ -153,7 +152,6 @@ func decimalWide[T decimalCoefficient](v T) types.Decimal256 {
 	}
 }
 func decimalChunkRight[A decimalCoefficient](op int32, x []A, y, out *vector.Vector, xi, yi, oi, n int, xc bool, sx, sy int32) error {
-	// typeswitch:partial(decimal) the default branch is decimal256
 	switch y.GetType().Oid {
 	case types.T_decimal64:
 		return decimalChunkOutput(op, x, vector.MustFixedColNoTypeCheck[types.Decimal64](y), out, xi, yi, oi, n, xc, y.IsConst(), sx, sy)
@@ -164,7 +162,6 @@ func decimalChunkRight[A decimalCoefficient](op int32, x []A, y, out *vector.Vec
 	}
 }
 func decimalChunkOutput[A, B decimalCoefficient](op int32, x []A, y []B, out *vector.Vector, xi, yi, oi, n int, xc, yc bool, sx, sy int32) error {
-	// typeswitch:partial(decimal) the default branch is decimal256
 	switch out.GetType().Oid {
 	case types.T_decimal64:
 		return decimalChunkLoop(op, x, y, vector.MustFixedColNoTypeCheck[types.Decimal64](out), xi, yi, oi, n, xc, yc, sx, sy)

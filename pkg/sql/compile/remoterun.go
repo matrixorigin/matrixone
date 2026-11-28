@@ -1993,7 +1993,6 @@ func isJSONOpaqueGroupConcatAggregate(agg aggexec.AggFuncExecExpression) bool {
 func isDecimalStatisticalAggregate(agg aggexec.AggFuncExecExpression) bool {
 	args := agg.GetArgExpressions()
 	return isVarianceAggregate(agg) && len(args) == 1 && args[0] != nil &&
-		// typeswitch:partial(decimal) only decimal64/decimal128 variance states need this rewrite
 		(types.T(args[0].Typ.Id) == types.T_decimal64 || types.T(args[0].Typ.Id) == types.T_decimal128)
 }
 
@@ -2285,10 +2284,6 @@ func EncodeMergeGroup(merge *group.MergeGroup, pipe *pipeline.Group) {
 			result := merge.PartialResults[i].(types.Decimal128)
 			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
 			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_decimal256:
-			result := merge.PartialResults[i].(types.Decimal256)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
 		case types.T_uuid:
 			result := merge.PartialResults[i].(types.Uuid)
 			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
@@ -2392,10 +2387,6 @@ func DecodeMergeGroup(merge *group.MergeGroup, pipe *pipeline.Group) {
 			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
 		case types.T_decimal128:
 			result := *(*types.Decimal128)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_decimal256:
-			result := *(*types.Decimal256)(unsafe.Pointer(&pipe.PartialResults[0]))
 			merge.PartialResults = append(merge.PartialResults, result)
 			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
 		case types.T_uuid:

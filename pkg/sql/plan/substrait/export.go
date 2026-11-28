@@ -1291,7 +1291,6 @@ func substraitType(t *planpb.Type) (*spb.Type, error) {
 	if t.NotNullable {
 		n = spb.Type_NULLABILITY_REQUIRED
 	}
-	// typeswitch:partial(decimal) the Substrait export handles decimals of at most 38 digits; decimal256 is not eligible
 	switch types.T(t.Id) {
 	case types.T_bool:
 		return &spb.Type{Kind: &spb.Type_Bool{Bool: &spb.Type_Boolean{Nullability: n}}}, nil
@@ -1806,7 +1805,6 @@ func tpchCharacterSliceSourceIsText(expr *planpb.Expr) bool {
 }
 
 func isDecimalType(value types.T) bool {
-	// typeswitch:partial(decimal) the Substrait export handles decimals of at most 38 digits
 	return value == types.T_decimal64 || value == types.T_decimal128
 }
 
@@ -1864,7 +1862,6 @@ func tpchCastTypes(input, output *planpb.Type) bool {
 		return false
 	}
 	source, target := types.T(input.Id), types.T(output.Id)
-	// typeswitch:partial(decimal) the Substrait export handles decimals of at most 38 digits
 	switch target {
 	case types.T_int32, types.T_int64, types.T_decimal64, types.T_decimal128:
 		return source == types.T_int32 || source == types.T_int64 ||
@@ -1946,7 +1943,6 @@ func validateScalarSignature(name string, out *planpb.Type, args []*planpb.Expr)
 		if t == nil {
 			return false
 		}
-		// typeswitch:partial(decimal) the Substrait export handles decimals of at most 38 digits
 		switch types.T(t.Id) {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
 			return true

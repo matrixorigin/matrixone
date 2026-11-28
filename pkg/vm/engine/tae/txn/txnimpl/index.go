@@ -263,9 +263,6 @@ func (idx *simpleTableIndex) BatchInsert(
 	case types.T_decimal128:
 		vs := vector.MustFixedColNoTypeCheck[types.Decimal128](col)
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
-	case types.T_decimal256:
-		vs := vector.MustFixedColNoTypeCheck[types.Decimal256](col)
-		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_uuid:
 		vs := vector.MustFixedColNoTypeCheck[types.Uuid](col)
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
@@ -422,9 +419,6 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_decimal128:
 		vals := vector.MustFixedColNoTypeCheck[types.Decimal128](col)
-		return DedupOp(colType, attr, vals, idx.tree)
-	case types.T_decimal256:
-		vals := vector.MustFixedColNoTypeCheck[types.Decimal256](col)
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_float32:
 		vals := vector.MustFixedColNoTypeCheck[float32](col)

@@ -850,9 +850,6 @@ func checkPKDup(
 	case types.T_decimal128:
 		vs := vector.MustFixedColNoTypeCheck[types.Decimal128](pk)
 		return checkPKDupGeneric[types.Decimal128](mp, colType, pk, vs, start, count)
-	case types.T_decimal256:
-		vs := vector.MustFixedColNoTypeCheck[types.Decimal256](pk)
-		return checkPKDupGeneric[types.Decimal256](mp, colType, pk, vs, start, count)
 	case types.T_uuid:
 		vs := vector.MustFixedColNoTypeCheck[types.Uuid](pk)
 		return checkPKDupGeneric[types.Uuid](mp, colType, pk, vs, start, count)

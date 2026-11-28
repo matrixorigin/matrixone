@@ -410,7 +410,6 @@ func renderDecimalBinarySource(v []byte, targetType types.Type, radixCoefficient
 		return decimalBinaryOutcome{text: text}, nil
 	}
 	s := convertByteSliceToString(v)
-	// typeswitch:partial(decimal) the default branch is decimal256
 	switch targetType.Oid {
 	case types.T_decimal64:
 		d, e := types.ParseDecimal64FromByte(s, targetType.Width, targetType.Scale)
@@ -564,7 +563,6 @@ func classifyUnsignedDecimalStringSource(s string, retainPrefix bool, targetType
 
 // unsignedDecimalPrefixRange mirrors the assignment cast's retained-prefix policy.
 func unsignedDecimalPrefixRange(prefix string, targetType types.Type) (clipped bool, err error) {
-	// typeswitch:partial(decimal) the default branch is decimal256
 	switch targetType.Oid {
 	case types.T_decimal64:
 		_, clipped, err = parseDecimal64CastStringWithOverflow(prefix, targetType.Width, targetType.Scale, true)

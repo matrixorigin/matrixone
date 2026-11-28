@@ -627,7 +627,6 @@ func (builder *QueryBuilder) cteAggregateIsTotal(
 		// Match the executor's data-error contract. Floating SUM permits
 		// infinity, Decimal64 accumulates unchecked into Decimal128, and the
 		// Decimal128 fast path checks overflow only above precision 28.
-		// typeswitch:partial(decimal) SUM over decimal256 may overflow, so it is not treated as total
 		switch types.T(fn.Args[0].Typ.Id) {
 		case types.T_float32, types.T_float64, types.T_decimal64:
 			return true

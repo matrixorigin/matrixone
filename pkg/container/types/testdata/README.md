@@ -42,14 +42,6 @@ switch typ.Oid {
 
 A tag without a reason fails the test. Do not add the switch to the baseline.
 
-A tag excuses every family by default. To excuse only some, name them in parentheses, so
-the switch is still checked for the others:
-
-```go
-// typeswitch:partial(decimal) decimal256 targets are cast by castToDecimal256 before this dispatch
-switch toType.Oid {
-```
-
 ## The baseline
 
 `typeswitch_baseline.txt` lists the untagged partial switches that predate the test, one

@@ -544,7 +544,6 @@ var supportedAggInNewFramework = []FuncNew{
 			}
 
 			// check Arg[1]: must be a supported integer, float, or decimal type
-			// typeswitch:partial(decimal) this aggregate does not accept a decimal256 second argument; it fails type checking
 			switch finalTypes[1].Oid {
 			case types.T_any:
 				finalTypes[1] = types.T_float64.ToType()

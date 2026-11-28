@@ -194,13 +194,6 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Nulls) (offse
 			v.(types.Decimal128),
 			types.CompareDecimal128,
 			skipmask)
-	case types.T_decimal256:
-		vs := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
-		return GetOffsetWithFunc(
-			vs,
-			v.(types.Decimal256),
-			types.CompareDecimal256,
-			skipmask)
 	case types.T_TS:
 		return GetOffsetWithFunc(
 			vector.MustFixedColNoTypeCheck[types.TS](vec),

@@ -157,7 +157,6 @@ func vector2DataVector(v *vector.Vector) (*udf.DataVector, error) {
 		size = 1
 	}
 	dv.Data = make([]*udf.Data, size)
-	// typeswitch:partial(decimal) python UDFs do not accept decimal256 arguments; it is an error
 	switch v.GetType().Oid {
 	case types.T_bool:
 		p := vector.GenerateFunctionFixedTypeParameter[bool](v)
@@ -341,7 +340,6 @@ func writeResponse(response *udf.Response, result vector.FunctionResultWrapper) 
 
 	result.GetResultVector().SetTypeScale(scale)
 
-	// typeswitch:partial(decimal) python UDFs do not return decimal256; it is an error
 	switch retType {
 	case types.T_bool:
 		res := vector.MustFunctionResult[bool](result)
@@ -639,7 +637,6 @@ func writeResponse(response *udf.Response, result vector.FunctionResultWrapper) 
 }
 
 var (
-	// typeswitch:partial(decimal) python UDFs do not return decimal256; it is an error
 	t2DataType = map[types.T]udf.DataType{
 		types.T_bool:       udf.DataType_BOOL,
 		types.T_int8:       udf.DataType_INT8,

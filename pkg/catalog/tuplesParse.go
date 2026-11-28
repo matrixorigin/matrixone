@@ -511,11 +511,6 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
-		case types.T_decimal256:
-			col := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
 		case types.T_uuid:
 			col := vector.MustFixedColNoTypeCheck[types.Uuid](vec)
 			for j := 0; j < vec.Length(); j++ {

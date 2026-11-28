@@ -185,9 +185,6 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
 		row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex).Format(scale)
-	case types.T_decimal256:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal256](vec, rowIndex).Format(scale)
 	case types.T_uuid:
 		row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex).String()
 	case types.T_Rowid:
@@ -368,11 +365,6 @@ func convertColIntoSql(
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_decimal128:
-		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_decimal256:
 		value := data.(string)
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)

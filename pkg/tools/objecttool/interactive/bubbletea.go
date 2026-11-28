@@ -760,8 +760,6 @@ func (m *model) formatCell(vec *vector.Vector, rowIdx int, col objecttool.ColInf
 		value = vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIdx)
 	case types.T_decimal128:
 		value = vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIdx)
-	case types.T_decimal256:
-		value = vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, rowIdx)
 	default:
 		if col.Type.IsFixedLen() {
 			value = fmt.Sprintf("<binary:%d bytes>", col.Type.TypeSize())

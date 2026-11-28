@@ -2763,7 +2763,6 @@ func foldedScalarBytes(expr *plan.Expr) ([]byte, bool) {
 		return nil, false
 	}
 	oid := types.T(expr.Typ.Id)
-	// typeswitch:partial(decimal) a decimal256 constant reports no folded bytes, which callers treat as unknown
 	switch oid {
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_text, types.T_blob, types.T_datalink:
@@ -2779,7 +2778,6 @@ func foldedScalarBytes(expr *plan.Expr) ([]byte, bool) {
 	if len(fold.Data) != oid.TypeLen() {
 		return nil, false
 	}
-	// typeswitch:partial(decimal) only the types admitted above reach this switch
 	switch oid {
 	case types.T_bool:
 		if fold.Data[0] > 1 {

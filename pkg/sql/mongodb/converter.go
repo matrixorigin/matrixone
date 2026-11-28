@@ -360,12 +360,6 @@ func (c *Converter) appendValue(
 				return errConversion
 			}
 			return vector.AppendFixed(vec, v, false, mp)
-		case types.T_decimal256:
-			v, err := types.ParseDecimal256(text, column.Width, column.Scale)
-			if err != nil {
-				return errConversion
-			}
-			return vector.AppendFixed(vec, v, false, mp)
 		default:
 			v, err := types.ParseDecimal256(text, column.Width, column.Scale)
 			if err != nil {

@@ -212,13 +212,10 @@ func scanTypeSwitches(t *testing.T, root string, families map[string][]string) (
 					continue
 				}
 				if reason, ok := tagOf(line); ok {
-					families, reason := tagFamilies(reason)
 					if reason == "" {
 						bare = append(bare, rel+":"+strconv.Itoa(line))
 					}
-					if families == nil || families[fam.name] {
-						continue
-					}
+					continue
 				}
 				family := fam.name
 				if kind != "switch" {
@@ -388,24 +385,6 @@ func namesWholeSubfamily(subs []typeSwitchSubfamily, members []string, names map
 	return false
 }
 
-// tagFamilies splits a typeswitch:partial tag's text into the families it
-// names and its reason: "(decimal,temporal) reason" excuses only those
-// families; a tag without a family list excuses every family.
-func tagFamilies(text string) (map[string]bool, string) {
-	if !strings.HasPrefix(text, "(") {
-		return nil, text
-	}
-	end := strings.Index(text, ")")
-	if end < 0 {
-		return nil, text
-	}
-	families := map[string]bool{}
-	for _, f := range strings.Split(text[1:end], ",") {
-		families[strings.TrimSpace(f)] = true
-	}
-	return families, strings.TrimSpace(text[end+1:])
-}
-
 // baselineProblems returns the sites found that the baseline does not
 // allow: more untagged partial switches under a key than it lists, or a
 // listed switch that misses a member its entry does not list (so a type
@@ -447,15 +426,6 @@ func TestTypeSwitchBaselineProblems(t *testing.T) {
 	require.Len(t, baselineProblems(map[string][]string{"pkg/y/y.go\tg\ttemporal": {site("T_year")}}, baseline), 1,
 		"an unlisted key is flagged")
 	require.Equal(t, []string{"T_a", "T_b"}, siteMisses("p.go:3 f: temporal chain misses T_a, T_b"))
-
-	fams, reason := tagFamilies("(decimal, temporal) only plain decimals reach here")
-	require.Equal(t, map[string]bool{"decimal": true, "temporal": true}, fams)
-	require.Equal(t, "only plain decimals reach here", reason)
-	fams, reason = tagFamilies("any reason")
-	require.Nil(t, fams, "a tag without a family list excuses every family")
-	require.Equal(t, "any reason", reason)
-	_, reason = tagFamilies("(decimal)")
-	require.Empty(t, reason, "a family list is not a reason")
 }
 
 // baselineEntry is one line of typeswitch_baseline.txt: how many untagged

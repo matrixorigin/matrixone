@@ -107,11 +107,6 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 		for _, v := range vs {
 			mp[v] = true
 		}
-	case types.T_decimal256:
-		vs := vector.MustFixedColNoTypeCheck[types.Decimal256](pk)
-		for _, v := range vs {
-			mp[v] = true
-		}
 	case types.T_uuid:
 		vs := vector.MustFixedColNoTypeCheck[types.Uuid](pk)
 		for _, v := range vs {
@@ -303,13 +298,6 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			}
 		case types.T_decimal128:
 			vs := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
-			for i, v := range vs {
-				if mp[v] {
-					sels = append(sels, int64(i))
-				}
-			}
-		case types.T_decimal256:
-			vs := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))

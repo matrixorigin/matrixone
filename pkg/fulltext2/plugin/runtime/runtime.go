@@ -109,7 +109,6 @@ func (CatalogHooks) SupportedIncludeColumnTypes() []types.T {
 // runtime. Keep this in lockstep with encodePk's switch so DDL validation and the codec
 // agree.
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T {
-	// typeswitch:partial(decimal) fulltext2 pk codec has no decimal256 encoding, so DDL rejects such primary keys
 	return []types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,

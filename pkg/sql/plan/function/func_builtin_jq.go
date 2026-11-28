@@ -677,8 +677,6 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 			encodeDecimal[types.Decimal64](op, params[i], ulen)
 		case types.T_decimal128:
 			encodeDecimal[types.Decimal128](op, params[i], ulen)
-		case types.T_decimal256:
-			encodeDecimal[types.Decimal256](op, params[i], ulen)
 		case types.T_date:
 			encodeFixedStringer[types.Date](op, params[i], ulen)
 		case types.T_time:

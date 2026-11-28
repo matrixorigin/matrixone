@@ -2264,10 +2264,6 @@ func tryGetMinMaxValueByFloat64(typ types.Type, buf []byte) (float64, bool) {
 		// Fix: Use Decimal128ToFloat64 to handle negative values correctly
 		dec := types.DecodeDecimal128(buf)
 		return types.Decimal128ToFloat64(dec, typ.Scale), true
-	case types.T_decimal256:
-		// Fix: Use Decimal256ToFloat64 to handle negative values correctly
-		dec := types.DecodeDecimal256(buf)
-		return types.Decimal256ToFloat64(dec, typ.Scale), true
 	default:
 		return 0, false
 	}
@@ -2420,7 +2416,6 @@ func collectTableStats(
 				// ZoneMapArea and BFExtent are block-level metadata, not column-level, so they are excluded
 				info.ColumnSize[idx] = int64(columnMeta.Location().OriginSize())
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
-					// typeswitch:partial(decimal) decimal256 columns get no shuffle range, which only means range shuffle is not used on them
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_year, types.T_decimal64, types.T_decimal128:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
@@ -2485,7 +2480,6 @@ func collectTableStats(
 				if info.ShuffleRanges[idx] == nil {
 					// Use accumulated NDV and total row count to decide if ShuffleRanges should be created
 					if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(info.TableRowCount) {
-						// typeswitch:partial(decimal) decimal256 columns get no shuffle range, which only means range shuffle is not used on them
 						switch info.DataTypes[idx].Oid {
 						case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_year, types.T_decimal64, types.T_decimal128:
 							info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
@@ -2513,7 +2507,6 @@ func collectTableStats(
 
 				// Update existing ShuffleRanges with current object's data
 				if info.ShuffleRanges[idx] != nil {
-					// typeswitch:partial(decimal) decimal256 columns get no shuffle range, which only means range shuffle is not used on them
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_year, types.T_decimal64, types.T_decimal128:
 						minValue := getMinMaxValueByFloat64(info.DataTypes[idx], zoneMap.GetMinBuf())
