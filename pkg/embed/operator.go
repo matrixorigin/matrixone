@@ -355,7 +355,6 @@ func (op *operator) startTNServiceAfterReadyLocked(
 		&c,
 		op.reset.rt,
 		fs,
-		op.reset.shutdownC,
 		func(owner tnservice.Service) { op.reset.svc = owner },
 		tnservice.WithConfigData(commonConfigKVMap),
 	)

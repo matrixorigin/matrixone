@@ -52,9 +52,10 @@ def exercise():
     granted_attempts = {run_id: runs[run_id] for run_id in (51, 54)}
     original_worker_reads = 0
 
-    def api(path, payload=None):
+    def api(path, payload=None, *, cache=None):
         nonlocal original_worker_reads
         if payload is not None:
+            assert cache is None
             assert path == f"/actions/workflows/{standby.WORKER}/dispatches", path
             assert payload["ref"] == standby.WORKER_REF and payload["inputs"]["pool"] == "cs"
             ticket = json.loads(payload["inputs"]["ticket"])
@@ -77,8 +78,10 @@ def exercise():
             if path == f"/actions/runs/{run_id}/attempts/1":
                 if run_id == 51:
                     original_worker_reads += 1
-                    # Fail the result poll and the first pre-rerun read independently.
-                    if original_worker_reads in (1, 3):
+                    assert (cache is not None) == (original_worker_reads <= 2)
+                    if original_worker_reads == 1:
+                        raise urllib.error.HTTPError(path, 403, "rate limited", {"Retry-After": "120"}, None)
+                    if original_worker_reads == 3:
                         raise urllib.error.HTTPError(path, 503, "worker result temporarily unavailable", None, None)
                 return granted_attempts[run_id], 0
             if path == f"/actions/runs/{run_id}/attempts/1/jobs?per_page=100":

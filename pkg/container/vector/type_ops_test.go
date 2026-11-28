@@ -415,6 +415,10 @@ func TestAppendRaw(t *testing.T) {
 			require.NoError(t, AppendRaw(dst, src.GetRawBytesAt(row), src.IsNull(uint64(row)), mp), oid.OidString())
 		}
 		requireSameVector(t, src, dst, oid.OidString()+": AppendRaw")
+		// a NULL with no payload
+		require.NoError(t, AppendRaw(dst, nil, true, mp), oid.OidString())
+		require.Equal(t, src.Length()+1, dst.Length(), oid.OidString())
+		require.True(t, dst.IsNull(uint64(src.Length())), oid.OidString())
 		src.Free(mp)
 		dst.Free(mp)
 	}

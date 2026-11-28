@@ -1,0 +1,202 @@
+drop database if exists alter_copy_identifier_replay;
+create database alter_copy_identifier_replay;
+use alter_copy_identifier_replay;
+set @s = concat('create table ck(id bigint primary key, v int, constraint ', char(96), 'c', char(39), 'k', char(96), ' check (v >= 0))');
+prepare p1 from @s;
+execute p1;
+deallocate prepare p1;
+insert into ck (id, v) values (1, 5);
+select constraint_name, HEX(constraint_name) from information_schema.table_constraints where constraint_schema = database() and table_name = 'ck' and constraint_type = 'CHECK';
+➤ constraint_name[12,5000,0]  ¦  HEX(constraint_name)[12,40000,0]  𝄀
+c'k  ¦  63276B
+alter table ck algorithm=copy, add column marker int default 7 first;
+select id, marker, v from ck order by id;
+➤ id[-5,64,0]  ¦  marker[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  7  ¦  5
+select constraint_name, HEX(constraint_name) from information_schema.table_constraints where constraint_schema = database() and table_name = 'ck' and constraint_type = 'CHECK';
+➤ constraint_name[12,5000,0]  ¦  HEX(constraint_name)[12,40000,0]  𝄀
+c'k  ¦  63276B
+show create table ck;
+➤ Table[12,2,0]  ¦  Create Table[12,153,0]  𝄀
+ck  ¦  CREATE TABLE `ck` (
+  `marker` int DEFAULT 7,
+  `id` bigint NOT NULL,
+  `v` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  CONSTRAINT `c'k` CHECK (`v` >= 0)
+)
+insert into ck (id, v) values (2, -1);
+constraint violation: Check constraint 'c'k' is violated
+set @d = concat('alter table ck drop constraint ', char(96), 'c', char(39), 'k', char(96));
+prepare p2 from @d;
+execute p2;
+deallocate prepare p2;
+select count(*) from information_schema.table_constraints where constraint_schema = database() and table_name = 'ck' and constraint_type = 'CHECK';
+➤ count(*)[-5,64,0]  𝄀
+0
+create table ck_ord(id bigint primary key, v int, constraint ck check (v >= 0));
+insert into ck_ord (id, v) values (1, 5);
+alter table ck_ord algorithm=copy, add column marker int default 7 first;
+select constraint_name, HEX(constraint_name) from information_schema.table_constraints where constraint_schema = database() and table_name = 'ck_ord' and constraint_type = 'CHECK';
+➤ constraint_name[12,5000,0]  ¦  HEX(constraint_name)[12,40000,0]  𝄀
+ck  ¦  636B
+set @sbt = concat('create table ck_bt(id bigint primary key, v int, constraint ', char(96), 'w', char(96), char(96), 'q', char(96), ' check (v >= 0))');
+prepare p3 from @sbt;
+execute p3;
+deallocate prepare p3;
+insert into ck_bt (id, v) values (1, 5);
+alter table ck_bt algorithm=copy, add column marker int default 7 first;
+select constraint_name, HEX(constraint_name) from information_schema.table_constraints where constraint_schema = database() and table_name = 'ck_bt' and constraint_type = 'CHECK';
+➤ constraint_name[12,5000,0]  ¦  HEX(constraint_name)[12,40000,0]  𝄀
+w`q  ¦  776071
+show create table ck_bt;
+➤ Table[12,5,0]  ¦  Create Table[12,157,0]  𝄀
+ck_bt  ¦  CREATE TABLE `ck_bt` (
+  `marker` int DEFAULT 7,
+  `id` bigint NOT NULL,
+  `v` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  CONSTRAINT `w``q` CHECK (`v` >= 0)
+)
+set @sv = concat('create table ivf_bad(id bigint primary key, v vecf32(3), ', char(96), 'pay', char(39), 'load', char(96), ' int)');
+prepare p4 from @sv;
+execute p4;
+deallocate prepare p4;
+insert into ivf_bad values (1, '[1,2,3]', 100), (2, '[1,2,4]', 200);
+set @si = concat('create index iv using ivfflat on ivf_bad(v) lists=1 op_type ', char(39), 'vector_l2_ops', char(39), ' include(', char(96), 'pay', char(39), 'load', char(96), ')');
+prepare p5 from @si;
+execute p5;
+deallocate prepare p5;
+alter table ivf_bad algorithm=copy, add column marker int default 7 first;
+set @sp = concat('select id, marker, ', char(96), 'pay', char(39), 'load', char(96), ' from ivf_bad order by id');
+prepare p6 from @sp;
+execute p6;
+➤ id[-5,64,0]  ¦  marker[4,32,0]  ¦  pay'load[4,32,0]  𝄀
+1  ¦  7  ¦  100  𝄀
+2  ¦  7  ¦  200
+deallocate prepare p6;
+show create table ivf_bad;
+➤ Table[12,7,0]  ¦  Create Table[12,247,0]  𝄀
+ivf_bad  ¦  CREATE TABLE `ivf_bad` (
+  `marker` int DEFAULT 7,
+  `id` bigint NOT NULL,
+  `v` vecf32(3) DEFAULT NULL,
+  `pay'load` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `iv` USING ivfflat (`v`) lists = 1  op_type 'vector_l2_ops'  INCLUDE (`pay'load`)
+)
+set @sp_post = concat('select id, ', char(96), 'pay', char(39), 'load', char(96), ' from ivf_bad order by l2_distance(v, ', char(39), '[1,2,3]', char(39), ') limit 2 by rank with option ', char(39), 'mode=post', char(39));
+prepare s_post from @sp_post;
+execute s_post;
+➤ id[-5,64,0]  ¦  pay'load[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  200
+deallocate prepare s_post;
+set @se_post = concat('explain select id, ', char(96), 'pay', char(39), 'load', char(96), ' from ivf_bad order by l2_distance(v, ', char(39), '[1,2,3]', char(39), ') limit 2 by rank with option ', char(39), 'mode=post', char(39));
+prepare e_post from @se_post;
+execute e_post;
+-- @regex("Vector Index Scan on iv .l2_distance.", true)
+-- @regex("Metric: l2_distance", true)
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,0] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (#[0,0] = ivf_bad.id)  𝄀
+              ->  Vector Index Scan on iv [l2_distance]  𝄀
+                    Vector Index: iv, Metric: l2_distance, Candidate Limit: 2, NProbe: 5  𝄀
+              ->  Table Scan on alter_copy_identifier_replay.ivf_bad
+deallocate prepare e_post;
+set @sp_cov = concat('select id, ', char(96), 'pay', char(39), 'load', char(96), ' from ivf_bad where ', char(96), 'pay', char(39), 'load', char(96), ' >= 150 order by l2_distance(v, ', char(39), '[1,2,3]', char(39), ') limit 2 by rank with option ', char(39), 'mode=iterative', char(39));
+prepare s_cov from @sp_cov;
+execute s_cov;
+➤ id[-5,64,0]  ¦  pay'load[4,32,0]  𝄀
+2  ¦  200
+deallocate prepare s_cov;
+set @se_map = concat('explain analyze verbose select id, ', char(96), 'pay', char(39), 'load', char(96), ' from ivf_bad where ', char(96), 'pay', char(39), 'load', char(96), ' >= 100 order by l2_distance(v, ', char(39), '[1,2,3]', char(39), ') limit 2 by rank with option ', char(39), 'mode=iterative', char(39));
+prepare e_map from @se_map;
+execute e_map;
+-- @regex("__mo_index_include_pay.load", true)
+-- @regex("__mo_index_include_pay.load >= 100", true)
+➤ ap query plan on multicn(16 core)[12,-1,0]  𝄀
+Project[2] (cost=2.00 outcnt=2.00 selectivity=1.0000 dop=1 blockNum=1 rowsize=100.00)  𝄀
+  Output: #[0,0], #[0,1]  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=24 bytes OutputSize=24 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=24 bytes (min=24 bytes, max=24 bytes)  𝄀
+  ->  Sort[1] (cost=2.00 outcnt=2.00 selectivity=1.0000 dop=1 blockNum=1 rowsize=100.00)  𝄀
+        Output: #[0,0], #[0,2]  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=40 bytes OutputSize=24 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=24 bytes (min=24 bytes, max=24 bytes)  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan[0] on iv [l2_distance] (cost=2.00 outcnt=2.00 selectivity=1.0000 dop=1 blockNum=1 rowsize=104.00)  𝄀
+              Output: pkid, score, __mo_index_include_pay'load  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=40 bytes OutputSize=40 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=80 bytes (min=80 bytes, max=80 bytes)  𝄀
+              Vector Index: iv, Metric: l2_distance, Candidate Limit: 2, NProbe: 5, BucketExpandStep: 5, ThreadsSearch: 0, Index Filter: (__mo_index_include_pay'load >= 100)  𝄀
+  Vector Index Search Round 1: bucket_window=0:1 row_limit=2 output_rows=2 exhausted=true  𝄀
+  Vector Index Search Summary: search_count=1 round_count=1 buckets_searched=1 bucket_windows=0:1 row_limits=2 empty_rounds=0  𝄀
+  Vector Index Execution: search_count=1 readers=1 metadata_blocks=2 metadata_rows=1 metadata_time_ns=88268 centroid_blocks=0 centroid_rows=0 centroid_time_ns=0 entry_blocks_selected=2 entry_blocks_read=1 entry_output_rows=2 entry_time_ns=89311 storage_filter_rows=2:2 vector_rows_scored=2 vector_chunks=1 vector_chunk_cache_hits=1 vector_compressed_bytes=71 vector_decoded_bytes=86 block_topk_rows=2 output_rows=2
+deallocate prepare e_map;
+set @sp_force = concat('select id, ', char(96), 'pay', char(39), 'load', char(96), ' from ivf_bad order by l2_distance(v, ', char(39), '[1,2,3]', char(39), ') limit 2 by rank with option ', char(39), 'mode=force', char(39));
+prepare s_force from @sp_force;
+execute s_force;
+➤ id[-5,64,0]  ¦  pay'load[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  200
+deallocate prepare s_force;
+create table ivf_ord(id bigint primary key, v vecf32(3), payload int);
+insert into ivf_ord values (1, '[1,2,3]', 100), (2, '[1,2,4]', 200);
+create index ivg using ivfflat on ivf_ord(v) lists=1 op_type 'vector_l2_ops' include(payload);
+alter table ivf_ord algorithm=copy, add column marker int default 7 first;
+select id, marker, payload from ivf_ord order by id;
+➤ id[-5,64,0]  ¦  marker[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  7  ¦  100  𝄀
+2  ¦  7  ¦  200
+set experimental_fulltext2_index = 1;
+set @sf = concat('create table ft2_bad(id bigint primary key, body text, ', char(96), 'sta', char(39), 'tus', char(96), ' int)');
+prepare p8 from @sf;
+execute p8;
+deallocate prepare p8;
+insert into ft2_bad values (1, 'alpha beta word', 100), (2, 'gamma word delta', 200);
+set @sft = concat('create fulltext2 index ftx on ft2_bad(body) include(', char(96), 'sta', char(39), 'tus', char(96), ') with parser gojieba');
+prepare p9 from @sft;
+execute p9;
+deallocate prepare p9;
+alter table ft2_bad algorithm=copy, add column marker int default 7 first;
+select id, marker from ft2_bad order by id;
+➤ id[-5,64,0]  ¦  marker[4,32,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  7
+set @ft2_index = (select index_table_name from mo_catalog.mo_indexes where name = 'ftx' and algo = 'fulltext2' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ft2_bad') limit 1);
+set @wait_base_sql = concat('select count(*) > 0 as ready from `', database(), '`.`', @ft2_index, '` where tag = 0');
+prepare wait_base from @wait_base_sql;
+execute wait_base;
+➤ ready[-6,8,0]  𝄀
+1
+deallocate prepare wait_base;
+set @sm = concat('select id, marker, ', char(96), 'sta', char(39), 'tus', char(96), ' from ft2_bad where match(body) against(', char(39), 'word', char(39), ') order by id');
+prepare p10 from @sm;
+execute p10;
+➤ id[-5,64,0]  ¦  marker[4,32,0]  ¦  sta'tus[4,32,0]  𝄀
+1  ¦  7  ¦  100  𝄀
+2  ¦  7  ¦  200
+deallocate prepare p10;
+show create table ft2_bad;
+➤ Table[12,7,0]  ¦  Create Table[12,221,0]  𝄀
+ft2_bad  ¦  CREATE TABLE `ft2_bad` (
+  `marker` int DEFAULT 7,
+  `id` bigint NOT NULL,
+  `body` text DEFAULT NULL,
+  `sta'tus` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+ FULLTEXT2 `ftx`(`body`) INCLUDE (`sta'tus`) WITH PARSER gojieba
+)
+create table ft2_ord(id bigint primary key, body text, status int);
+insert into ft2_ord values (1, 'alpha beta word', 100), (2, 'gamma word delta', 200);
+create fulltext2 index fto on ft2_ord(body) include(status) with parser gojieba;
+alter table ft2_ord algorithm=copy, add column marker int default 7 first;
+select id, marker, status from ft2_ord order by id;
+➤ id[-5,64,0]  ¦  marker[4,32,0]  ¦  status[4,32,0]  𝄀
+1  ¦  7  ¦  100  𝄀
+2  ¦  7  ¦  200
+drop database if exists alter_copy_identifier_replay;

@@ -2401,8 +2401,60 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	tbl.typs = typs
 }
 
-// rewriteObjectByDeletion rewrites obj's surviving rows — every block
-// minus its pending deleted offsets — into a fresh storage object and
+// objectTombstones snapshots the logical table's files that may delete rows of
+// this object. The workspace index lock is released before reading any files.
+func (t *workspaceFlushedTombstones) objectTombstones(tableID uint64, objectID *objectio.ObjectId) []objectio.ObjectStats {
+	var tombstones []objectio.ObjectStats
+	t.forEach(tableID, func(stats objectio.ObjectStats) {
+		if stats.SortKeyZoneMap().RowidPrefixEq(objectID[:]) {
+			tombstones = append(tombstones, stats)
+		}
+	})
+	return tombstones
+}
+
+// mergeTombstoneOffsets applies persisted visibility to the old block ID before
+// its surviving rows receive new RowIDs. It leaves the input offsets untouched.
+func mergeTombstoneOffsets(
+	ctx context.Context,
+	fs fileservice.FileService,
+	snapshot *types.TS,
+	blockID *objectio.Blockid,
+	tombstones []objectio.ObjectStats,
+	deletes []int64,
+	scratch *[]int64,
+) ([]int64, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	mask := objectio.GetReusableBitmap()
+	defer mask.Release()
+
+	next := func() (*objectio.ObjectStats, error) {
+		if len(tombstones) == 0 {
+			return nil, nil
+		}
+		stats := &tombstones[0]
+		tombstones = tombstones[1:]
+		return stats, nil
+	}
+	if err := ioutil.GetTombstonesByBlockId(ctx, snapshot, blockID, next, &mask, fs); err != nil {
+		return nil, err
+	}
+	if mask.IsEmpty() {
+		return deletes, nil
+	}
+	for _, offset := range deletes {
+		mask.Add(uint64(offset))
+	}
+	offsets := mask.ToI64Array(scratch)
+	if scratch != nil {
+		*scratch = offsets
+	}
+	return offsets, nil
+}
+
+// rewriteObjectByDeletion rewrites obj's surviving rows into a fresh object and
 // returns the replacement's metadata batch, its file name, the names of
 // the objects the rewrite persisted (or may have persisted through a
 // commit-ambiguous Sync error; the snapshot is taken BEFORE the writer's
@@ -2426,6 +2478,17 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	var fs fileservice.FileService
 	if fs, err = colexec.GetSharedFSFromProc(proc); err != nil {
 		return nil, "", nil, err
+	}
+
+	txn := tbl.getTxn()
+	var tombstones []objectio.ObjectStats
+	var snapshot types.TS
+	var offsetsScratch []int64
+	if txn.isCloneTxn {
+		tombstones = txn.flushedTombstones.objectTombstones(tbl.tableId, obj.ObjectName().ObjectId())
+		if len(tombstones) != 0 {
+			snapshot = types.TimestampToTS(txn.op.SnapshotTS())
+		}
 	}
 
 	s3Writer := colexec.NewCNS3DataWriterForService(
@@ -2470,6 +2533,12 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		nil,
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 			deletes := blockDeletes[blk.BlockID]
+			if len(tombstones) != 0 {
+				deletes, err = mergeTombstoneOffsets(ctx, fs, &snapshot, &blk.BlockID, tombstones, deletes, &offsetsScratch)
+				if err != nil {
+					return false
+				}
+			}
 			slices.Sort(deletes)
 			if rowsBat == nil {
 				rowsBat = batch.NewWithSize(len(tbl.seqnums))

@@ -82,7 +82,12 @@ func fixedOps[T types.FixedSizeT]() typeOps {
 			return SetFixedAtNoTypeCheck(v, i, val.(T))
 		},
 		appendRaw: func(v *Vector, raw []byte, isNull bool, mp *mpool.MPool) error {
-			return AppendFixed(v, types.DecodeFixed[T](raw), isNull, mp)
+			var val T
+			if !isNull {
+				// a NULL carries no payload: raw may be nil
+				val = types.DecodeFixed[T](raw)
+			}
+			return AppendFixed(v, val, isNull, mp)
 		},
 		shrink:         shrinkFixed[T],
 		shrinkByMask:   shrinkFixedByMask[T],
@@ -301,7 +306,8 @@ func SetAny(vec *Vector, i int, val any, mp *mpool.MPool) error {
 
 // AppendRaw appends a value given as its raw bytes: the value's memory for a
 // fixed-size type (types.EncodeFixed), the bytes themselves for a varlena
-// type. It returns an error for a type SupportsAny rejects.
+// type. A NULL needs no payload: raw is ignored when isNull is set, and may be
+// nil. It returns an error for a type SupportsAny rejects.
 func AppendRaw(vec *Vector, raw []byte, isNull bool, mp *mpool.MPool) error {
 	ops, ok := opsOf(vec)
 	if !ok {

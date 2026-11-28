@@ -49,3 +49,14 @@ enable-write = true
 enable-delete = true
 enable-dml = true
 enable-maintenance = true
+
+[cn.sirius]
+# Opt in with a Sirius-enabled build and a suitable GPU configuration.
+enabled = false
+native-config-path = "./etc/launch/sirius-dgx-spark.yaml"
+# GPU pipeline worker count.
+gpu-streams = 2
+max-waiting-queries = 16
+# Includes admission, MO scans, and native execution.
+request-timeout = "1m"
+cleanup-timeout = "30s"

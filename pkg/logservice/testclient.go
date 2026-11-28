@@ -69,9 +69,11 @@ func newTestService(genCfg func() Config) (*Service, ClientConfig, error) {
 	}
 
 	cmd := pb.ScheduleCommand{
+		UUID: service.ID(),
 		ConfigChange: &pb.ConfigChange{
 			ChangeType: pb.StartReplica,
 			Replica: pb.Replica{
+				UUID:      service.ID(),
 				ShardID:   1,
 				ReplicaID: 1,
 			},

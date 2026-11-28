@@ -107,6 +107,9 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
   if (context.eventName !== 'workflow_run' || context.payload.action !== 'completed' ||
       !Number.isSafeInteger(event?.id) || !Number.isSafeInteger(event?.run_attempt) ||
       event.run_attempt < 1) throw new Error('Expected a completed workflow run attempt');
+  // A successful selector observed its worker finish. Failed and cancelled
+  // attempts still need discovery because they can lose a dispatch response.
+  if (event.status === 'completed' && event.conclusion === 'success') return;
   const repo = context.repo;
   const entry = (await github.rest.actions.getWorkflow({ ...repo, workflow_id: 'entrypoint.yaml' })).data;
   const parent = (await github.rest.actions.getWorkflowRunAttempt({
@@ -142,18 +145,18 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
     throw new Error('Invalid completed parent time window');
   }
   const stamp = sec => new Date(sec * 1000).toISOString().replace('.000Z', 'Z');
-  async function scan(status, lo, hi) {
+  async function scan(lo, hi) {
     for (let page = 1; ; page++) {
       const { data } = await github.rest.actions.listWorkflowRuns({
         ...repo, workflow_id: worker.id, branch: 'main', event: 'workflow_dispatch',
-        status, created: `${stamp(lo)}..${stamp(hi)}`, per_page: 100, page,
+        created: `${stamp(lo)}..${stamp(hi)}`, per_page: 100, page,
       });
       // GitHub caps filtered searches at 1000 results, even with pagination.
       if (data.total_count > 1000) {
         if (lo === hi) throw new Error('Coverage worker search saturated within one second');
         const mid = Math.floor((lo + hi) / 2);
-        await scan(status, lo, mid);
-        await scan(status, mid + 1, hi);
+        await scan(lo, mid);
+        await scan(mid + 1, hi);
         return;
       }
       // Short titles are just discovery hints. Check the same full identity
@@ -168,7 +171,7 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
   }
   async function scanReservations() {
     for (let round = 0; round < 3; round++) {
-      for (const status of active) await scan(status, first, last);
+      await scan(first, last);
       if (round < 2) await wait(5_000);
     }
   }
