@@ -465,9 +465,10 @@ func (m *memThrottler) PrintUsage() {
 	)
 }
 
-// Acquire requires memory from memThrottler,
-// it returns (new available, true) if success, or
-// (available, false).
+// Acquire requires memory from memThrottler. On a Merge admission decision,
+// its returned availability is the remaining aggregate budget; Available and
+// Release still report raw headroom. Zero-sized and queued requests keep their
+// existing return-value behavior.
 func (m *memThrottler) Acquire(ask int64) (int64, bool) {
 	if ask < 0 {
 		return m.Available(), false
@@ -604,14 +605,22 @@ func WithAcquirePolicy(
 func defaultAcquirePolicy(m *memThrottler, ask int64) (int64, bool) {
 	for {
 		avail := m.Available()
-		if !m.options.allowOutOfMemoryAcquire && (avail < ask || !m.physicalFits(ask)) {
-			return avail, false
-		}
-
 		currReserved := m.reserved.Load()
 		if currReserved < 0 {
 			currReserved = 0
 		}
+		if m.options.specializedForMerge {
+			// The per-task Merge estimate keeps one third of TN headroom free.
+			// Enforce the same margin across all admitted reservations, since
+			// several tasks may be sized against the same sampled RSS.
+			headroom := max(0, m.limit.Load()-m.rss.Load())
+			budget := headroom/3*2 + (headroom%3)*2/3
+			avail = max(0, budget-currReserved)
+		}
+		if !m.options.allowOutOfMemoryAcquire && (avail < ask || !m.physicalFits(ask)) {
+			return avail, false
+		}
+
 		newReserved := currReserved + ask
 		if m.reserved.CompareAndSwap(currReserved, newReserved) {
 			return avail - ask, true
