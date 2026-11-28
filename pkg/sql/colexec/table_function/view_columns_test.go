@@ -252,6 +252,7 @@ func TestSkippableViewDescriptionError(t *testing.T) {
 		moerr.NewNoSuchTable(ctx, "db", "source"),
 		moerr.NewBadFieldError(ctx, "missing", "field list"),
 		moerr.NewBadDB(ctx, "source_db"),
+		moerr.NewFtMatchingKeyNotFound(ctx),
 	} {
 		require.True(t, skippableViewDescriptionError(err), err)
 	}
