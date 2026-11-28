@@ -22,6 +22,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -50,6 +51,63 @@ func Test_BasicGet(t *testing.T) {
 	require.Equal(t, pc.get("abcd").sql, "abcd")
 
 	require.False(t, pc.isCached("abcde"))
+}
+
+func TestSessionForeignKeyChecksInvalidatesParentDeletePlans(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	defer ses.Close()
+
+	deleteNode := func(refChildren ...uint64) *plan.Node {
+		return &plan.Node{
+			NodeType:  pbplan.Node_DELETE,
+			DeleteCtx: &pbplan.DeleteCtx{TableDef: &plan.TableDef{RefChildTbls: refChildren}},
+		}
+	}
+	deleteQuery := func(nodes ...*plan.Node) *plan.Plan {
+		return &plan.Plan{Plan: &pbplan.Plan_Query{Query: &plan.Query{
+			StmtType: pbplan.Query_DELETE,
+			Nodes:    nodes,
+		}}}
+	}
+	parent, plain := deleteQuery(deleteNode(), deleteNode(2)), deleteQuery(deleteNode())
+	input := &UserInput{sql: "delete from plain; delete from parent"}
+	input.genHash()
+	hash := input.getHash()
+	cachedParent, cachedPlain := &trackedStatement{}, &trackedStatement{}
+	ses.cachePlan(hash, []tree.Statement{&trackedStatement{}, cachedParent}, []*plan.Plan{plain, parent})
+	ses.cachePlan("plain", []tree.Statement{cachedPlain}, []*plan.Plan{plain})
+	prepare := func(name string, p *plan.Plan) *PrepareStmt {
+		stmt := &PrepareStmt{Name: name, PreparePlan: &plan.Plan{Plan: &pbplan.Plan_Dcl{Dcl: &pbplan.DataControl{
+			Control: &pbplan.DataControl_Prepare{Prepare: &pbplan.Prepare{Plan: p}},
+		}}}}
+		require.NoError(t, ses.SetPrepareStmt(ctx, name, stmt))
+		return stmt
+	}
+	preparedParent, preparedPlain := prepare("parent", parent), prepare("plain", plain)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "FOREIGN_KEY_CHECKS", "ON"))
+	require.Error(t, ses.SetSessionSysVar(ctx, "foreign_key_checks", "invalid"))
+	require.False(t, preparedParent.needsRebuild)
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, input: input}
+	wrappers, err := GetComputationWrapper(execCtx, "", "", nil, ses.GetProc(), ses)
+	require.NoError(t, err)
+	require.Len(t, wrappers, 2)
+	require.Same(t, cachedParent, wrappers[1].GetAst())
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "foreign_key_checks", 0))
+	require.True(t, preparedParent.needsRebuild)
+	require.False(t, preparedPlain.needsRebuild)
+	require.True(t, ses.isCached(hash), "the request must not republish its borrowed ASTs")
+	require.True(t, ses.isCached("plain"))
+	for _, wrapper := range wrappers {
+		wrapper.Free()
+	}
+	require.Zero(t, cachedParent.freed)
+	require.Nil(t, ses.getCachedPlan(hash))
+	require.Equal(t, 1, cachedParent.freed)
+	require.Zero(t, cachedPlain.freed)
 }
 
 func Test_LRU(t *testing.T) {

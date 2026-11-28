@@ -726,6 +726,30 @@ func TestInitExecuteStmtParamUsesTxnSnapshotAfterRebuild(t *testing.T) {
 	require.Equal(t, ses.getDDLVersion(), prepareStmt.ddlVersion)
 }
 
+func TestInitExecuteStmtParamRetriesStalePreparedPlan(t *testing.T) {
+	ses, prepared, cw, execCtx := newPreparedExecuteEnv(t, 101)
+	defer prepared.Close()
+	original := prepared.PreparePlan
+
+	prepared.needsRebuild = true
+	prepared.cloneSQL = "select from"
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)
+	require.Error(t, err)
+	require.True(t, prepared.needsRebuild)
+	require.Same(t, original, prepared.PreparePlan)
+
+	prepared.cloneSQL = ""
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)
+	require.NoError(t, err)
+	require.False(t, prepared.needsRebuild)
+	refreshed := prepared.PreparePlan
+	require.NotSame(t, original, refreshed)
+
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)
+	require.NoError(t, err)
+	require.Same(t, refreshed, prepared.PreparePlan)
+}
+
 func TestInitExecuteStmtParamSkipsPrepareCompileWithoutCache(t *testing.T) {
 	_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 100)
 	defer prepareStmt.Close()

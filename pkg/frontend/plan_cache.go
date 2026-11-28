@@ -16,9 +16,10 @@ package frontend
 
 import (
 	"container/list"
+	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type cachedPlan struct {
@@ -26,6 +27,7 @@ type cachedPlan struct {
 	stmts           []tree.Statement
 	plans           []*plan.Plan
 	protocolVersion int64
+	invalid         bool
 }
 
 // planCache uses LRU to cache plan for the same sql
@@ -112,8 +114,12 @@ func (pc *planCache) get(sql string) *cachedPlan {
 		return nil
 	}
 	if element, ok := pc.cachePool[sql]; ok {
-		pc.lruList.MoveToFront(element)
 		cp := element.Value.(*cachedPlan)
+		if cp.invalid {
+			pc.remove(sql)
+			return nil
+		}
+		pc.lruList.MoveToFront(element)
 		return cp
 	}
 	return nil
@@ -125,6 +131,29 @@ func (pc *planCache) isCached(sql string) bool {
 	}
 	_, isCached := pc.cachePool[sql]
 	return isCached
+}
+
+func (pc *planCache) invalidateForeignKeyDeletePlans() {
+	for _, element := range pc.cachePool {
+		cached := element.Value.(*cachedPlan)
+		if !cached.invalid && slices.ContainsFunc(cached.plans, deletePlanDependsOnForeignKeyChecks) {
+			// Keep the entry resident until lookup so the current request
+			// retains its borrowed ASTs and cannot cache them a second time.
+			cached.invalid = true
+		}
+	}
+}
+
+func deletePlanDependsOnForeignKeyChecks(p *plan.Plan) bool {
+	query := p.GetQuery()
+	if query.GetStmtType() != plan.Query_DELETE {
+		return false
+	}
+	// Legacy DELETE retains the target definition even when checks are OFF
+	// and the plan can truncate instead of checking referencing rows.
+	return slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return len(node.GetDeleteCtx().GetTableDef().GetRefChildTbls()) != 0
+	})
 }
 
 func (pc *planCache) clean() {

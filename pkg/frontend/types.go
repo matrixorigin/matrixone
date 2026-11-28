@@ -325,6 +325,8 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
+	// EXECUTE rebuilds a stale plan without discarding the prepared handle.
+	needsRebuild bool
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
@@ -1553,6 +1555,19 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		}
 	}
 
+	foreignKeyChecks := name == "foreign_key_checks"
+	var oldForeignKeyChecks interface{}
+	if foreignKeyChecks {
+		oldForeignKeyChecks, err = ses.GetSessionSysVar(name)
+		if err != nil {
+			return err
+		}
+		oldForeignKeyChecks, err = def.GetType().Convert(oldForeignKeyChecks)
+		if err != nil {
+			return err
+		}
+	}
+
 	// ensure session system variables container exists in embed/basic cluster
 	if ses.sesSysVars == nil {
 		ses.sesSysVars = &SystemVariables{mp: make(map[string]interface{})}
@@ -1572,6 +1587,9 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	}
 	if err == nil && name == "optimizer_hints" && oldOptimizerHints != val.(string) {
 		ses.cleanCache()
+	}
+	if err == nil && foreignKeyChecks && oldForeignKeyChecks != val {
+		ses.invalidateForeignKeyDeletePlans()
 	}
 
 	// Update rewriteEnabled cache when enable_remap_hint is changed
