@@ -784,6 +784,7 @@ func DeleteAllWithCommitTS(t *testing.T, accountID uint32, db *db.DB, dbName, ta
 	pkIdx := schema.GetPrimaryKey().Idx
 	rowIDIdx := schema.GetColIdx(catalog.PhyAddrColumnName)
 	it := rel.MakeObjectIt(false)
+	defer it.Close()
 	for it.Next() {
 		blk := it.GetObject()
 		defer blk.Close()
@@ -791,7 +792,22 @@ func DeleteAllWithCommitTS(t *testing.T, accountID uint32, db *db.DB, dbName, ta
 		for i := uint16(0); i < blkCnt; i++ {
 			var view *containers.Batch
 			err := blk.HybridScan(context.Background(), &view, i, []int{rowIDIdx, pkIdx}, common.DefaultAllocator)
-			require.NoError(t, err)
+			if err != nil {
+				// A scan error is not the empty-object contract (HybridScanByBlock
+				// clears its batch on several errors). Release any partial scan
+				// state and roll the active transaction back before the aborting
+				// assertion so nothing dangles, then fail with the original error.
+				if view != nil {
+					view.Close()
+				}
+				_ = txn.Rollback(context.Background())
+				require.NoError(t, err)
+			}
+			if view == nil {
+				// Same empty-object contract as DeleteAll: a successful nil scan
+				// means nothing to collect or delete from this object.
+				continue
+			}
 			defer view.Close()
 			view.Compact()
 			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], view.Vecs[1], handle.DT_Normal)

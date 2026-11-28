@@ -252,9 +252,10 @@ select * from s_nestedcte2.v_nestedcte2 order by id;
 drop database s_nestedcte2;
 -- @session
 
--- a later-declared sibling inside a derived table masks the outer CTE of the
--- same name: the binder stops the outward lookup, so the view depends on the
--- physical table even though both scopes declare a CTE with its name
+-- a later-declared sibling inside a derived table does not mask the enclosing
+-- outer CTE of the same name: the reference binds to the visible outer
+-- declaration, so the subscribed view returns the CTE value while the
+-- conservative physical-relation requirement of the publication still holds
 create table src(id int);
 insert into src values (4);
 create view v_mask as with src as (select 9 as id) select * from (with a as (select id from src), src as (select 1 as id) select id from a) as d;

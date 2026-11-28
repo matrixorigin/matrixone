@@ -283,21 +283,23 @@ func inferViewColumns(
 		expandedSelectLists = bindCtx.expandedSelectLists
 	}
 	var err error
-	switch s := stmt.Select.(type) {
-	case *tree.ParenSelect:
-		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
-			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
-			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
-		if err != nil {
-			return nil, err
-		}
+	// Bind the COMPLETE defining select: a WITH attached to the enclosing
+	// source node carries the view's own lexical scope, so unwrapping a
+	// top-level ParenSelect before binding would drop it and let a
+	// same-name physical table silently take over (or the CTE vanish
+	// when no homonym exists).
+	// A marker-free restored definition follows the released CREATE inference
+	// boundary generally: the immediate parenthesized child becomes the
+	// schema/dependency inference input in every paren-form shape, exactly as
+	// the released genViewTableDef case arm binds it. Only this inference
+	// input changes: every other consumer of the authored stmt below keeps the
+	// complete defining select.
+	inferenceInput := restoredLegacyInnerWindowInferenceInput(ctx, viewDatabase, viewName, stmt)
+	stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
+		plan.Query_SELECT, ctx, inferenceInput, false, true, validate, captureColumnTypes, true,
+		objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil, nil)
+	if err != nil {
+		return nil, err
 	}
 
 	query := stmtPlan.GetQuery()
@@ -392,6 +394,8 @@ func inferViewColumns(
 	}, nil
 }
 
+var currentCTEScopeProtocolInstance = currentCTEScopeProtocol
+
 func genViewTableDef(
 	ctx CompilerContext,
 	stmt *tree.Select,
@@ -461,6 +465,10 @@ func genViewTableDef(
 		LowerCaseTableNames:     &lowerCaseTableNames,
 		Dependencies:            inferred.dependencies,
 		RequiredProtocolVersion: persistedRequiredProtocol,
+		// Fresh authoring (CREATE/ALTER/CREATE-OR-REPLACE and restore) always
+		// stamps the current CTE lexical generation; only definitions written
+		// by releases before this marker lack the field.
+		CTEScopeProtocol: &currentCTEScopeProtocolInstance,
 	})
 	if err != nil {
 		return nil, err
@@ -1644,6 +1652,110 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 	return nil
 }
 
+// ReleasedChildOnlyCtasSource positions the merge-base CTAS source: a wrapper
+// owning no WITH selects the immediate parenthesized child only, so the
+// child's own clauses (LIMIT/ORDER BY/time window) are owned by that child
+// and are not duplicate-checked against the wrapper's (PREPARE p FROM
+// 'CREATE TABLE t AS (SELECT 7 AS a LIMIT 1) LIMIT 1' stays accepted). A
+// wrapper carrying an enclosing WITH keeps the complete source so the
+// declared CTE's lexical scope stays visible to the projection. Every
+// consumer that re-binds or re-renders the CTAS source - inference, the
+// follow-up INSERT and the frontend privilege re-plan - starts from this
+// same boundary. The wrapper is selected away only under the unavoidable
+// compatibility exception of releasedCtasWrapperOwnedIdempotentLiteralLimit:
+// a semantically redundant outer literal integer LIMIT count (one at least
+// the child's own count, the equal-count form included). Every other
+// wrapper - fresh ordering, pagination with offsets, time windows, locks,
+// export targets, parameterized or non-literal counts, or any authored
+// narrower count - keeps the complete source, so those authored clauses
+// stay effective in the executed INSERT copy, stay covered by the privilege
+// re-plan of the same effective source, and keep their ordinary duplicate-
+// owner validation rather than a rendered-text elision.
+func ReleasedChildOnlyCtasSource(stmt *tree.Select) *tree.Select {
+	if stmt == nil {
+		return nil
+	}
+	if sel, ok := stmt.Select.(*tree.ParenSelect); ok && sel.Select != nil && stmt.With == nil &&
+		releasedCtasWrapperOwnedIdempotentLiteralLimit(stmt, sel.Select) {
+		return sel.Select
+	}
+	return stmt
+}
+
+// releasedCtasWrapperOwnedIdempotentLiteralLimit guards the one unavoidable
+// compatibility exception: the wrapper and its immediate parenthesized child
+// each own a literal integer LIMIT count, with no offset authored on either
+// side and no other outer-owned clause, and the outer count is at least the
+// child's own count - the prior equal-count form included. `(X LIMIT n)
+// LIMIT m` with m >= n is then semantically redundant (the child already
+// caps the result at or below the outer count), so the shared selection may
+// select the child for inference, the follow-up INSERT and the privilege
+// re-plan without accepting a genuinely duplicate owner, silently choosing
+// between authored limits, or dropping an authored narrower count. Every
+// other form - offsets,
+// parameters, ordering, windows, locks, exports, narrower or non-literal
+// counts or any further wrapper-owned clause - keeps the complete wrapper
+// and its ordinary duplicate-owner validation.
+func releasedCtasWrapperOwnedIdempotentLiteralLimit(wrapper *tree.Select, child *tree.Select) bool {
+	if wrapper.IsPerform || wrapper.DeprecatedInto ||
+		wrapper.RewriteOption != nil || wrapper.RankOption != nil ||
+		wrapper.Ep != nil || len(wrapper.IntoVars) > 0 || wrapper.SelectLockInfo != nil ||
+		len(wrapper.OrderBy) > 0 || wrapper.TimeWindow != nil {
+		return false
+	}
+	if wrapper.Limit == nil || child.Limit == nil {
+		return false
+	}
+	outerCount, ok := releasedCtasLiteralLimitCount(wrapper.Limit)
+	if !ok {
+		return false
+	}
+	innerCount, innerOk := releasedCtasLiteralLimitCount(child.Limit)
+	if !innerOk {
+		return false
+	}
+	return outerCount >= innerCount
+}
+
+// releasedCtasLiteralLimitCount extracts the authored count of a LIMIT
+// clause only when that count is a literal integer with no independently
+// authored offset: transparent grouping parens around the literal are the
+// one allowed wrapping, parameters and every other expression form are
+// rejected, and negative values never qualify as idempotent counts.
+func releasedCtasLiteralLimitCount(clause *tree.Limit) (uint64, bool) {
+	if clause == nil || clause.Offset != nil {
+		return 0, false
+	}
+	count := clause.Count
+	for {
+		if paren, ok := count.(*tree.ParenExpr); ok {
+			count = paren.Expr
+			continue
+		}
+		break
+	}
+	num, ok := count.(*tree.NumVal)
+	if !ok || num.Negative() {
+		return 0, false
+	}
+	switch num.ValType {
+	case tree.P_int64:
+		v, isInt := num.Int64()
+		if !isInt || v < 0 {
+			return 0, false
+		}
+		return uint64(v), true
+	case tree.P_uint64:
+		v, isUint := num.Uint64()
+		if !isUint {
+			return 0, false
+		}
+		return v, true
+	default:
+		return 0, false
+	}
+}
+
 func genAsSelectCols(
 	ctx CompilerContext,
 	stmt *tree.Select,
@@ -1663,9 +1775,14 @@ func genAsSelectCols(
 		bindCtx.ctasExecutionProtocolRequirement = &executionProtocol
 	}
 
-	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
-		stmt = s.Select
-	}
+	// The complete CTAS source select carries any enclosing WITH and wrapper
+	// clauses; peeling the paren body would drop the source's own lexical
+	// scope and expose a same-name physical table instead of the declared CTE.
+	// The merge-base child-only boundary is selected exactly once by the
+	// caller: buildCreateTable normalizes its private source before this call
+	// (and the frontend privilege re-plan normalizes its own copy the same
+	// way). genAsSelectCols must not peel again - a nested paren body keeps
+	// its immediate middle wrapper in inference, matching fresh main.
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
 		return nil, nil, 0, err
 	}
@@ -3105,8 +3222,14 @@ func buildCreateTable(
 		// Binding qualifies and rewrites SELECT nodes in place. Keep the caller's
 		// source intact for admission retries and prepared execution, while using
 		// the same private source for inferred columns and the follow-up INSERT.
+		// The merge-base child-only boundary is selected exactly once here: a
+		// no-WITH wrapper positions its immediate parenthesized child on this
+		// private source, so inference and the follow-up INSERT render that
+		// child instead of re-binding both clause owners of the wrapper. The
+		// frontend privilege re-plan selects the same boundary on its own copy,
+		// and genAsSelectCols must not peel again.
 		private := *stmt
-		private.AsSource = DeepCopySelect(stmt.AsSource)
+		private.AsSource = ReleasedChildOnlyCtasSource(DeepCopySelect(stmt.AsSource))
 		stmt = &private
 		explicitTargetColumns := make(map[string]struct{})
 		for _, item := range stmt.Defs {

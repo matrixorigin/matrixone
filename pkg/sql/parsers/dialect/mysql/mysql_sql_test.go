@@ -3436,10 +3436,10 @@ var (
 			output: "replace into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
 		}, {
 			input:  "create table t (a int) properties(\"host\" = \"127.0.0.1\", \"port\" = \"8239\", \"user\" = \"mysql_user\", \"password\" = \"mysql_passwd\")",
-			output: "create table t (a int) properties(host = 127.0.0.1, port = 8239, user = mysql_user, password = mysql_passwd)",
+			output: "create table t (a int) properties('host' = '127.0.0.1', 'port' = '8239', 'user' = 'mysql_user', 'password' = 'mysql_passwd')",
 		}, {
 			input:  "create table t (a int) properties('a' = 'b')",
-			output: "create table t (a int) properties(a = b)",
+			output: "create table t (a int) properties('a' = 'b')",
 		}, {
 			input: "create table t (a int, b char, check (1 + 1) enforced)",
 		}, {
@@ -3790,7 +3790,7 @@ var (
 			output: "create table a (a int) partition by key algorithm = 2 (a, b, db.t.c) (partition xx row_format = dynamic max_rows = 1000 min_rows = 100)",
 		}, {
 			input:  "create table a (a int) engine = 'innodb' row_format = dynamic comment = 'table A' compression = 'lz4' data directory = '/data' index directory = '/index' max_rows = 1000 min_rows = 100",
-			output: "create table a (a int) engine = innodb row_format = dynamic comment = 'table A' compression = lz4 data directory = /data index directory = /index max_rows = 1000 min_rows = 100",
+			output: "create table a (a int) engine = innodb row_format = dynamic comment = 'table A' compression = 'lz4' data directory = '/data' index directory = '/index' max_rows = 1000 min_rows = 100",
 		}, {
 			input:  "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
 			output: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
@@ -5506,10 +5506,10 @@ var (
 		},
 		{
 			input:  "create table t1(a int) STORAGE DISK;",
-			output: "create table t1 (a int) tablespace =  STORAGE DISK",
+			output: "create table t1 (a int) STORAGE DISK",
 		}, {
 			input:  "create table t1 (a int) STORAGE DISK;",
-			output: "create table t1 (a int) tablespace =  STORAGE DISK",
+			output: "create table t1 (a int) STORAGE DISK",
 		}, {
 			input: "create table t1 (a numeric(10, 2))",
 		}, {
@@ -5533,7 +5533,7 @@ var (
 			input: "create table t1 (a int) AUTOEXTEND_SIZE = 10",
 		}, {
 			input:  "create table t1 (a int) ENGINE_ATTRIBUTE = 'abc'",
-			output: "create table t1 (a int) ENGINE_ATTRIBUTE = abc",
+			output: "create table t1 (a int) ENGINE_ATTRIBUTE = 'abc'",
 		}, {
 			input: "create table t1 (a int) INSERT_METHOD = NO",
 		}, {
@@ -5544,7 +5544,7 @@ var (
 			input: "create table t1 (a int) START TRANSACTION",
 		}, {
 			input:  "create table t1 (a int) SECONDARY_ENGINE_ATTRIBUTE = 'abc'",
-			output: "create table t1 (a int) SECONDARY_ENGINE_ATTRIBUTE = abc",
+			output: "create table t1 (a int) SECONDARY_ENGINE_ATTRIBUTE = 'abc'",
 		}, {
 			input:  "create table /*! if not exists */ t1 (a int)",
 			output: "create table if not exists t1 (a int)",
@@ -7449,7 +7449,7 @@ func TestParenthesizedTimeWindowPagination(t *testing.T) {
 		{
 			name:       "offset with order",
 			input:      "(SELECT 1) INTERVAL(ts, 1, day) ORDER BY 1 OFFSET 1",
-			output:     "(select 1) order by 1 interval(ts, 1, day) offset 1",
+			output:     "(select 1) interval(ts, 1, day) order by 1 offset 1",
 			wantOffset: true,
 			wantOrder:  true,
 		},

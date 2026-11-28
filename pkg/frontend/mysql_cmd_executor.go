@@ -2637,14 +2637,14 @@ func doExplainStmtWithExecutionInput(reqCtx context.Context, ses *Session, stmt 
 	input, intent, eligible := planningInputForStatement(ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt)
 	if eligible {
 		compiler := ses.GetTxnCompileCtx()
-		exPlan, err = buildPlanWithAuthorization(reqCtx, ses, compiler, stmt.Statement, input)
+		exPlan, err = buildPlanWithAuthorization(reqCtx, ses, compiler, stmt.Statement, input, nil)
 		if err == nil {
 			exPlan, _, err = validateCapturedExecutionBeforeCompile(exPlan, &intent, ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt, func() (*plan.Plan, error) {
-				return buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement, nil)
+				return buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement, nil, nil)
 			})
 		}
 	} else {
-		exPlan, err = buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement, nil)
+		exPlan, err = buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement, nil, nil)
 	}
 	if err != nil {
 		return err
@@ -3203,7 +3203,7 @@ func createPrepareStmtInSession(
 		previousStmt := execCtx.stmt
 		execCtx.stmt = stmt
 		defer func() { execCtx.stmt = previousStmt }()
-		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), stmt, nil)
+		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), stmt, nil, executionOwnerOf(stmt))
 		return err
 	})
 	if err != nil {
@@ -3389,7 +3389,7 @@ func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
 }
 
 func doDeallocateInSession(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.Deallocate) error {
-	deallocatePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), st, nil)
+	deallocatePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), st, nil, executionOwnerOf(st))
 	if err != nil {
 		return err
 	}
@@ -4305,7 +4305,10 @@ func buildPlan(
 	ctx plan2.CompilerContext,
 	stmt tree.Statement,
 ) (*plan2.Plan, error) {
-	return buildPlanWithPrepareMode(reqCtx, ses, ctx, stmt, false, nil)
+	// This convenience entry serves the privilege-only CTAS and DATA BRANCH
+	// classification callers: no route through it owns an executable export
+	// statement, so its preliminary plans stay ownership-neutral.
+	return buildPlanWithPrepareMode(reqCtx, ses, ctx, stmt, false, nil, nil)
 }
 
 func buildPlanWithPrepareMode(
@@ -4315,6 +4318,7 @@ func buildPlanWithPrepareMode(
 	stmt tree.Statement,
 	forcePrepare bool,
 	planningInput *plan2.PlanningInput,
+	execOwner *tree.Select,
 ) (*plan2.Plan, error) {
 	return buildPlanWithStats(reqCtx, ses, ctx, func() (*plan2.Plan, error) {
 		// LOAD planning may inspect an external source before producing a plan.
@@ -4345,7 +4349,7 @@ func buildPlanWithPrepareMode(
 		// Handle specific statement types
 		if s, ok := stmt.(*tree.Insert); ok {
 			if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt, nil)
+				ret, err = plan2.BuildPlanWithExecutionOwner(ctx, stmt, isPrepareStmt, nil, execOwner)
 				if err != nil {
 					return nil, err
 				}
@@ -4373,7 +4377,7 @@ func buildPlanWithPrepareMode(
 				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex, *tree.ShowIndexIgnored, *tree.ShowIndexStatus,
 				*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 				opt := plan2.NewBaseOptimizer(ctx)
-				optimized, err := opt.Optimize(stmt, isPrepareStmt, planningInput)
+				optimized, err := opt.OptimizeWithExecutionOwner(stmt, isPrepareStmt, planningInput, execOwner)
 				if err != nil {
 					return nil, err
 				}
@@ -4384,7 +4388,7 @@ func buildPlanWithPrepareMode(
 					},
 				}
 			default:
-				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt, planningInput)
+				ret, err = plan2.BuildPlanWithExecutionOwner(ctx, stmt, isPrepareStmt, planningInput, execOwner)
 			}
 		}
 
@@ -4461,12 +4465,12 @@ func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.Compile
 // buildPlanWithAuthorization wraps buildPlan with the plan-level permission
 // check. LOAD's pre-plan target check is performed inside buildPlanWithPrepareMode,
 // the common planning boundary shared by this and direct compile paths.
-var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement, scope *plan2.PlanningInput) (*plan2.Plan, error) {
+var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement, scope *plan2.PlanningInput, execOwner *tree.Select) (*plan2.Plan, error) {
 	planContext := ctx.GetContext()
 	stats := statistic.StatsInfoFromContext(planContext)
 
 	// Step 1: Call buildPlan to construct the execution plan
-	plan, err := buildPlanWithPrepareMode(reqCtx, ses, ctx, stmt, false, scope)
+	plan, err := buildPlanWithPrepareMode(reqCtx, ses, ctx, stmt, false, scope, execOwner)
 	if err != nil {
 		return nil, err
 	}

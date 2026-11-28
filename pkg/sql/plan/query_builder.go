@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"reflect"
 	"slices"
 	"strconv"
@@ -5909,6 +5910,7 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 			cteBindType:   CteBindTypeNonRecur,
 			cte:           cteRef,
 			recScanNodeId: -1})
+	subCtx.cteOwnerChain = &cteOwnerNode{cte: cteRef, next: subCtx.cteOwnerChain}
 	cteRef.isRecursive = false
 
 	func() {
@@ -6068,6 +6070,10 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	left *tree.SelectStatement,
 	stmts []tree.SelectStatement,
 	distinct bool,
+	bodyScope *BindContext,
+	effectiveLimit *tree.Limit,
+	enclosingClauses []*tree.Limit,
+	effectiveOrderBy tree.OrderBy,
 ) (nodeID int32, outputCtx *BindContext, err error) {
 	// Recursive binding wires and coerces existing feedback nodes.
 	builder.stableCTERoots = nil
@@ -6076,7 +6082,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		builder.cteRecursiveBindingDepth--
 		builder.stableCTERoots = nil
 	}()
-	if len(s.OrderBy) > 0 {
+	if len(s.OrderBy) > 0 || len(effectiveOrderBy) > 0 {
 		return 0, nil, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
 	}
 	if builder.isForUpdate {
@@ -6089,7 +6095,11 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	}
 	//1. bind initial statement
 	targets := ctx.numericTableProjectionTypes[numericProjectionTableKey(ctx, table)]
-	initCtx := NewBindContext(builder, cteRef.declarationCtx)
+	initParent := cteRef.declarationCtx
+	if bodyScope != nil {
+		initParent = bodyScope
+	}
+	initCtx := NewBindContext(builder, initParent)
 	initCtx.cteName = table
 	if len(targets) > 0 {
 		initCtx.numericProjectionTypes = targets
@@ -6100,6 +6110,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 			cte:           cteRef,
 			recScanNodeId: -1})
 	initCtx.sinkTag = builder.genNewBindTag()
+	initCtx.cteOwnerChain = &cteOwnerNode{cte: cteRef, next: initCtx.cteOwnerChain}
 	initLastNodeID, err1 := builder.bindSelect(&tree.Select{Select: *left}, initCtx, false)
 	if err1 != nil {
 		err = err1
@@ -6131,7 +6142,11 @@ func (builder *QueryBuilder) bindRecursiveCte(
 
 	//3. bind recursive parts
 	for i, r := range stmts {
-		subCtx := NewBindContext(builder, cteRef.declarationCtx)
+		memberParent := cteRef.declarationCtx
+		if bodyScope != nil {
+			memberParent = bodyScope
+		}
+		subCtx := NewBindContext(builder, memberParent)
 		subCtx.cteName = table
 		subCtx.sinkTag = initCtx.sinkTag
 		if len(targets) > 0 {
@@ -6151,6 +6166,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 				cteBindType:   CteBindTypeRecurStmt,
 				cte:           cteRef,
 				recScanNodeId: recScanId})
+		subCtx.cteOwnerChain = &cteOwnerNode{cte: cteRef, next: subCtx.cteOwnerChain}
 
 		var recursiveLastNodeID int32
 		recursiveLastNodeID, err = builder.bindSelect(&tree.Select{Select: r}, subCtx, false)
@@ -6234,9 +6250,21 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	}
 
 	// union all statement
-	offsetExpr, limitExpr, _, err := builder.bindLimit(initCtx, s.Limit, nil)
+	offsetExpr, limitExpr, _, err := builder.bindLimit(initCtx, effectiveLimit, nil)
 	if err != nil {
 		return 0, nil, err
+	}
+	// A prepared NULL OFFSET means skip-nothing on every channel the
+	// innermost clause feeds: the emission cover's saturation bound and
+	// the composed pagination seeds, matching the enclosing-stage
+	// normalization below. NULL COUNT still yields no rows, and an absent
+	// COUNT stays unbounded.
+	if offsetExpr != nil && (offsetExpr.GetLit() == nil || offsetExpr.GetLit().Isnull) {
+		zero := MakePlan2Uint64ConstExprWithType(0)
+		if offsetExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce",
+			[]*Expr{DeepCopyExpr(offsetExpr), zero}); err != nil {
+			return 0, nil, err
+		}
 	}
 
 	//4. add CTE Scan Node
@@ -6283,9 +6311,140 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	//5.1 add Sink Scan Node as the scan node of the recursive cte
 	sourceStep := builder.appendStep(unionAllLastNodeID)
 	nodeID = appendSinkScanNodeWithTag(builder, ctx, sourceStep, initCtx.sinkTag)
-	// Skipped result rows must still reach the recursive member through the
-	// shared sink. Apply OFFSET only on this non-feedback consumer.
-	builder.qry.Nodes[nodeID].Offset = offsetExpr
+	// Pagination applies only on this non-feedback consumer; skipped rows
+	// still reach the recursive member through the shared sink.
+	// Every enclosing wrapper of the union's own block is one pagination
+	// stage of the same query expression: compose the stages page by page
+	// from the inside out, so each stage keeps its own offset and count
+	// while the emission cover still bounds the recursion.
+	if len(enclosingClauses) == 0 {
+		// The recursion's own clause already saturates the emission cover;
+		// the non-feedback output keeps the plain skip and the cover-bounded
+		// stream, so explicit output limits must not reenter the bound.
+		builder.qry.Nodes[nodeID].Offset = offsetExpr
+		builder.qry.Nodes[nodeID].Limit = nil
+		return nodeID, initCtx, nil
+	}
+	// Compose the pagination stages over an exact signed scale-zero decimal
+	// carrier. MO's uint64 subtraction raises a typed out-of-range error on
+	// underflow while the lazily guarded case form duplicates the prior
+	// width per stage, so each channel references its growing prior
+	// coordinate exactly once here: the floored width subtract and the
+	// clamped start add operate on exact width-fixed decimal128 (never
+	// floats), and both coordinates convert back exactly - already
+	// clamped into the uint64 range - at the sink boundary.
+	decimalTyp := types.T_decimal128.ToType()
+	decPlanType := makePlan2Type(&decimalTyp)
+	widen := func(e *Expr) (*Expr, error) {
+		if e == nil {
+			return nil, nil
+		}
+		return makePlan2CastExpr(builder.GetContext(), e, decPlanType)
+	}
+	decZero, zerr := widen(MakePlan2Uint64ConstExprWithType(0))
+	if zerr != nil {
+		return 0, nil, zerr
+	}
+	decMax, merr := widen(MakePlan2Uint64ConstExprWithType(math.MaxUint64))
+	if merr != nil {
+		return 0, nil, merr
+	}
+	startCarrier, oerr := widen(offsetExpr)
+	if oerr != nil {
+		return 0, nil, oerr
+	}
+	widthCarrier, werr := widen(limitExpr)
+	if werr != nil {
+		return 0, nil, werr
+	}
+	for _, stage := range enclosingClauses {
+		stageOffset, stageLimit, _, serr := builder.bindLimit(ctx, stage, nil)
+		if serr != nil {
+			return 0, nil, serr
+		}
+		// A prepared NULL OFFSET means skip-nothing (coalesced to zero); a
+		// prepared NULL COUNT keeps yielding empty rows and an absent COUNT
+		// stays unbounded - only the offset is normalized here.
+		if stageOffset != nil && (stageOffset.GetLit() == nil || stageOffset.GetLit().Isnull) {
+			zero := MakePlan2Uint64ConstExprWithType(0)
+			co, cerr := BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce",
+				[]*Expr{DeepCopyExpr(stageOffset), zero})
+			if cerr != nil {
+				return 0, nil, cerr
+			}
+			stageOffset = co
+		}
+		skipDec, serr2 := widen(stageOffset)
+		if serr2 != nil {
+			return 0, nil, serr2
+		}
+		if skipDec != nil && startCarrier != nil {
+			sum, aerr := BindFuncExprImplByPlanExpr(builder.GetContext(), "+",
+				[]*Expr{startCarrier, skipDec})
+			if aerr != nil {
+				return 0, nil, aerr
+			}
+			if startCarrier, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "least",
+				[]*Expr{sum, DeepCopyExpr(decMax)}); err != nil {
+				return 0, nil, err
+			}
+		} else if skipDec != nil && startCarrier == nil {
+			startCarrier = skipDec
+		}
+		if skipDec != nil && widthCarrier != nil {
+			diff, derr2 := BindFuncExprImplByPlanExpr(builder.GetContext(), "-",
+				[]*Expr{widthCarrier, skipDec})
+			if derr2 != nil {
+				return 0, nil, derr2
+			}
+			// Eager and exact: the carrier ranges within [-MaxUint64, MaxUint64],
+			// so the floored subtract can afford one reference per stage and the
+			// serialized tree stays linear in the number of admitted stages.
+			if widthCarrier, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "greatest",
+				[]*Expr{diff, DeepCopyExpr(decZero)}); err != nil {
+				return 0, nil, err
+			}
+		}
+		if stageLimit != nil {
+			countDec, cerr2 := widen(stageLimit)
+			if cerr2 != nil {
+				return 0, nil, cerr2
+			}
+			if widthCarrier == nil {
+				widthCarrier = countDec
+			} else {
+				negCount, nerr := BindFuncExprImplByPlanExpr(builder.GetContext(), "<",
+					[]*Expr{DeepCopyExpr(countDec), DeepCopyExpr(decZero)})
+				if nerr != nil {
+					return 0, nil, nerr
+				}
+				intersected, ierr := BindFuncExprImplByPlanExpr(builder.GetContext(), "least",
+					[]*Expr{widthCarrier, DeepCopyExpr(countDec)})
+				if ierr != nil {
+					return 0, nil, ierr
+				}
+				if widthCarrier, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case",
+					[]*Expr{negCount, DeepCopyExpr(decZero), intersected}); err != nil {
+					return 0, nil, err
+				}
+			}
+		}
+	}
+	// Exact conversion at the consumer boundary: both carriers are already
+	// clamped inside the uint64 range, so the casts are exact and never
+	// approximate.
+	u64Typ := types.T_uint64.ToType()
+	u64PlanType := makePlan2Type(&u64Typ)
+	if startCarrier != nil {
+		if builder.qry.Nodes[nodeID].Offset, err = makePlan2CastExpr(builder.GetContext(), startCarrier, u64PlanType); err != nil {
+			return 0, nil, err
+		}
+	}
+	if widthCarrier != nil {
+		if builder.qry.Nodes[nodeID].Limit, err = makePlan2CastExpr(builder.GetContext(), widthCarrier, u64PlanType); err != nil {
+			return 0, nil, err
+		}
+	}
 	outputCtx = initCtx
 	return
 }
@@ -6319,6 +6478,487 @@ func (bc *BindContext) bindingRecurQueryBlock() bool {
 		bc.queryBlockOwner == bc.cteState.recursiveRefQueryBlock
 }
 
+// bodyWithDeclaresName reports whether the body select's own WITH declares a
+// CTE of the given spelling: such a declaration lexically shadows the outer
+// CTE for every later reference in the body, so the union inspection cannot
+// count those references as the outer name's self-reference.
+func bodyWithDeclaresName(s *tree.Select, name string) bool {
+	// Recursion classification must observe the UNION member's whole lexical
+	// chain: a body can sit behind several parenthesized wrappers, and any of
+	// them may carry its own WITH whose declarations shadow the inspected
+	// name (an inner same-name CTE is then an ordinary shadowing declaration,
+	// not a recursive self-reference). Walk the nested chain instead of
+	// consulting only the first WITH-bearing select.
+	for s != nil {
+		if s.With != nil {
+			for _, c := range s.With.CTEs {
+				if c != nil && c.Name != nil && string(c.Name.Alias) == name {
+					return true
+				}
+			}
+		}
+		switch stmt := s.Select.(type) {
+		case *tree.ParenSelect:
+			if stmt.Select == nil {
+				return false
+			}
+			s = stmt.Select
+		case *tree.Select:
+			if stmt.Select == nil {
+				return false
+			}
+			s = stmt
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// selectTreePreservingWith peels parenthesized wrappers like getSelectTree but
+// stops at the first node carrying its own WITH clause, so an inner WITH that
+// sits behind intermediate wrappers still reaches bindSelect with its whole
+// lexical scope.
+func selectTreePreservingWith(s *tree.Select) *tree.Select {
+	for s != nil {
+		if s.With != nil {
+			return s
+		}
+		switch stmt := s.Select.(type) {
+		case *tree.ParenSelect:
+			if stmt.Select == nil {
+				return s
+			}
+			s = stmt.Select
+		case *tree.Select:
+			if stmt.Select == nil {
+				return s
+			}
+			s = stmt
+		default:
+			return s
+		}
+	}
+	return nil
+}
+
+// ordinaryPaginationWrap rewrites an ordinary CTE body whose parenthesized
+// query expression carries enclosing OFFSET/LIMIT/ORDER BY stages into the
+// equivalent derived-table nest. Each stage's clauses move to the wrapped
+// select that consumes the inner result, so the stages compose inside out on
+// single-clause selects that the existing binder and pager already validate;
+// no stage is overwritten, skipped or reordered, and any WITH stays with the
+// select it belongs to (a WITH-bearing level is never wrapped).
+// registerSyntheticPages marks the wrap's generated page selects by pointer
+// identity for the duration of one body bind: the star expansion then carries
+// the sole derived binding's columns by ordinal, and never a user-authored
+// star or an unrelated select.
+func (builder *QueryBuilder) registerSyntheticPages(pages []*tree.Select) func() {
+	if len(pages) == 0 {
+		return func() {}
+	}
+	if builder.syntheticPageClauses == nil {
+		builder.syntheticPageClauses = make(map[*tree.SelectClause]bool, len(pages))
+	}
+	// The window's ordinal keys: entries created while this page binds must
+	// leave with it on success or error, so snapshot what already exists -
+	// an enclosing page's live entries stay untouched and compose.
+	priorOrdinals := make(map[*tree.UnresolvedName]struct{}, len(builder.syntheticStarOrdinals))
+	for key := range builder.syntheticStarOrdinals {
+		priorOrdinals[key] = struct{}{}
+	}
+	for _, node := range pages {
+		if pageClause, isClause := node.Select.(*tree.SelectClause); isClause {
+			builder.syntheticPageClauses[pageClause] = true
+		}
+	}
+	return func() {
+		for key := range builder.syntheticStarOrdinals {
+			if _, preexisting := priorOrdinals[key]; !preexisting {
+				delete(builder.syntheticStarOrdinals, key)
+			}
+		}
+		for _, node := range pages {
+			if pageClause, isClause := node.Select.(*tree.SelectClause); isClause {
+				delete(builder.syntheticPageClauses, pageClause)
+			}
+		}
+	}
+}
+
+func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tree.Select, root *tree.Select, enclosing ...*tree.Select) (*tree.Select, []*tree.Select, map[*tree.SelectClause]*tree.SelectClause, bool) {
+	if s == nil {
+		return nil, nil, nil, false
+	}
+	// The CTE body AST is owned by the declaration (cteRef.ast.Stmt) and can
+	// be bound repeatedly - by rebinds, prepared replans or persisted-view
+	// regeneration capture - so this traversal reads the authored root and
+	// never clears clauses in place. A WITH on the consuming root stays the
+	// root's own scope (the cur != s guard below), a declined rewrite never
+	// copies anything, and the only copy is a bounded select-level clone of
+	// an inner WITH-bearing level made after the rewrite is confirmed.
+	type pageStage struct {
+		limit   *tree.Limit
+		orderBy tree.OrderBy
+	}
+	var pages []*tree.Select
+	var stages []pageStage
+	withStopped := false
+	var withLevel *tree.Select
+	var stageWith *tree.With
+	var clauseMemo map[*tree.SelectClause]*tree.SelectClause
+	// An inner wrapper's WITH owns that level's lexical region: its own trailing
+	// clauses are captured as the page wrapping that whole level and cleared
+	// from the node, so the WITH keeps owning its scope while the enclosing
+	// stages still apply inside out instead of leaking into bindSelect's
+	// flattening (which rejects the combined clause sets).
+	collectInnerWithStage := func(cur *tree.Select) {
+		stages = append(stages, pageStage{limit: cur.Limit, orderBy: cur.OrderBy})
+		withLevel = cur
+		withStopped = true
+	}
+	// The enclosing wrappers the caller peeled before the WITH-bearing
+	// region are the outermost authored pages. They are recorded outermost
+	// first, so the reverse synthesis pass applies the nearest enclosing
+	// page before the outermost one; the WITH itself is hosted lower down,
+	// inside the composition, at the boundary this function computes. A
+	// wrapper reaching this helper with
+	// any non-page clause set - a window, a rank, a lock, a different export action
+	// or a perform marker - was never recorded and still declines here.
+	for _, node := range enclosing {
+		if node == nil || node.DeprecatedInto || node.IsPerform ||
+			node.RankOption != nil || node.TimeWindow != nil || node.SelectLockInfo != nil {
+			return nil, nil, nil, false
+		}
+		// The routed root is the one authored position an assignment or an
+		// export may own while still peeling to the WITH-bearing region:
+		// the executor performs them from the original routed statement.
+		// Any other wrapper owning them, or a foreign export owner, keeps
+		// the plain binder's complete rejection.
+		rootAuthored := node == root
+		if node.Ep != nil &&
+			!((exportOwner != nil && exportOwner.Ep == node.Ep) || (rootAuthored && exportOwner == nil)) {
+			return nil, nil, nil, false
+		}
+		if !rootAuthored && node.IntoVars != nil {
+			return nil, nil, nil, false
+		}
+		stages = append(stages, pageStage{limit: node.Limit, orderBy: node.OrderBy})
+	}
+	cur := s
+	for {
+		paren, ok := cur.Select.(*tree.ParenSelect)
+		if !ok || paren.Select == nil {
+			// The terminal select binds as the composed body: its ordinary
+			// window/rank/lock clauses stay with it on the plain binder.
+			// Its authored INTO family, though, is exactly the nested-owner
+			// case - a clause authored inside the parenthesized body itself
+			// - and must decline instead of being silently absorbed into
+			// the composition: the routed-root exemption above never
+			// reaches a terminal child, so the nested INTO/OUTFILE keeps
+			// the plain binder's duplicate-owner rejection.
+			if cur != root && (cur.IntoVars != nil || cur.Ep != nil) {
+				return nil, nil, nil, false
+			}
+			break
+		}
+		rootAuthored := cur == root
+		epUnauthorized := cur.Ep != nil && ((!rootAuthored && (exportOwner == nil || exportOwner.Ep == nil || cur.Ep != exportOwner.Ep)) ||
+			(rootAuthored && exportOwner != nil && exportOwner.Ep != nil && cur.Ep != exportOwner.Ep))
+		if cur.RankOption != nil || cur.TimeWindow != nil ||
+			cur.SelectLockInfo != nil || epUnauthorized || (!rootAuthored && cur.IntoVars != nil) {
+			// A wrapper carrying BY RANK or an interval window keeps the whole
+			// expression on the normal binder: its single-clause semantics and
+			// typed error behavior are already correct there. A wrapper whose
+			// authored state the reconstruction would discard - a lock, an
+			// export (INTO) or variable targets - stays whole for the same
+			// reason: nothing may silently strip an authored clause there.
+			// The composed ROOT is the one authored position those clauses
+			// may ride: the frontend executor performs the authored
+			// assignment and export from the original routed statement, so
+			// only the page reconstruction happens here while non-root and
+			// owner-mismatched INTO/OUTFILE clauses stay rejected above.
+			return nil, nil, nil, false
+		}
+		if cur.With != nil && cur != s {
+			collectInnerWithStage(cur)
+			break
+		}
+		stages = append(stages, pageStage{limit: cur.Limit, orderBy: cur.OrderBy})
+		cur = paren.Select
+	}
+	nonEmpty := 0
+	for _, st := range stages {
+		if st.limit != nil || len(st.orderBy) > 0 {
+			nonEmpty++
+		}
+	}
+	if nonEmpty == 0 {
+		return nil, nil, nil, false
+	}
+	if nonEmpty < 2 && !withStopped && cur.Limit == nil && len(cur.OrderBy) == 0 {
+		// One enclosing page over a plain, clause-free innermost select keeps
+		// the native flattened binding: the inner projection never passes
+		// through a synthetic star, so an explicit CTE column list still
+		// renames duplicate inner headings by position, and a single stage
+		// applied on one flattened select stays one legal clause set.
+		return nil, nil, nil, false
+	}
+	if withLevel != nil {
+		content, withClauseMemo := cloneTreeSelectCorrespondence(withLevel, captureOrigins)
+		if content == nil {
+			return nil, nil, nil, false
+		}
+		clauseMemo = withClauseMemo
+		// The inner WITH-bearing level's own page moves out of the content:
+		// clear it on the copy alone so the authored declaration keeps its
+		// clauses for every later reader (rebinds, prepared replans and
+		// persisted-view regeneration). Its WITH owns exactly that page's
+		// lexical region: the generated node which receives this level's
+		// clauses binds the WITH through the normal preprocessCte and the
+		// ordinary binder, so the moved ORDER BY and its expressions resolve
+		// in the scope that authored them, while the copied content below
+		// only binds as that page's input.
+		if withLevel.Limit != nil || len(withLevel.OrderBy) > 0 {
+			// This level owns a local page that carries its clauses, so its
+			// WITH moves with them. An unpaged WITH-bearing level keeps the
+			// declaration on its unchanged authored owner: nothing skips it.
+			stageWith = content.With
+			content.Limit, content.OrderBy, content.With = nil, nil, nil
+		}
+		cur = content
+	}
+	inner := cur
+	withHosted := false
+	// adoptAuthoredPageClauses applies one pagination stage's ORDER BY (and
+	// its LIMIT) directly onto a clone of a pure, clause-free paren subject
+	// chain. A stage's ORDER BY is authored beside the subject, so its bare
+	// column references lexically belong to the subject's own FROM/WITH
+	// scope: wrapping the subject in a synthetic star page derives that
+	// scope away, and an unprojected sort name then falls through to an
+	// enclosing query - silently choosing by the outer column - or fails to
+	// resolve outright. Adopting the clauses onto the cloned chain's
+	// terminal select keeps the authored binding exactly like the inner
+	// spelling. A WITH declaration carried anywhere on the subject chain
+	// stays attached to its authored position in the clone - the reviews'
+	// inner-WITH subject keeps composing with its own scope while any
+	// clause-bearing subject still takes the ordinary derived-page wrap
+	// below - and truly correlated references, aliases, qualified names and
+	// ordinals keep their existing resolution. No hidden output columns are
+	// introduced: the subject's projection stays precisely what it authored.
+	adoptAuthoredPageClauses := func(subject *tree.Select, limit *tree.Limit, orderBy tree.OrderBy, capture bool) (*tree.Select, map[*tree.SelectClause]*tree.SelectClause, bool) {
+		if subject == nil {
+			return nil, nil, false
+		}
+		// Reviews 6096924595/6096934987: an ORDER-BY-only stage enclosing a
+		// subject whose top level carries its own LIMIT composes exactly the
+		// base's single flattened clause set - order first, then the
+		// subject's own LIMIT - at the subject's own page level, WITH its
+		// declaration attached, instead of deriving the sort's scope away
+		// through a synthetic page that hides the authored FROM.
+		ownLimitCompose := limit == nil && len(orderBy) > 0 &&
+			subject.Limit != nil && len(subject.OrderBy) == 0
+		chk := subject
+		for {
+			if (chk.Limit != nil || len(chk.OrderBy) > 0) &&
+				!(ownLimitCompose && chk == subject) {
+				return nil, nil, false
+			}
+			if chk.IntoVars != nil || chk.Ep != nil || chk.RankOption != nil ||
+				chk.TimeWindow != nil || chk.SelectLockInfo != nil {
+				return nil, nil, false
+			}
+			paren, ok := chk.Select.(*tree.ParenSelect)
+			if !ok || paren.Select == nil {
+				break
+			}
+			chk = paren.Select
+		}
+		content, memo := cloneTreeSelectCorrespondence(subject, capture)
+		if content == nil {
+			return nil, nil, false
+		}
+		if ownLimitCompose {
+			content.OrderBy = orderBy
+			return content, memo, true
+		}
+		terminal := content
+		for {
+			paren, ok := terminal.Select.(*tree.ParenSelect)
+			if !ok || paren.Select == nil {
+				break
+			}
+			terminal = paren.Select
+		}
+		terminal.Limit = limit
+		terminal.OrderBy = orderBy
+		return content, memo, true
+	}
+	enclosingBoundary := len(enclosing)
+	for i := len(stages) - 1; i >= 0; i-- {
+		limit, orderBy := stages[i].limit, stages[i].orderBy
+		hostEnclosingWith := func() {
+			// The WITH stays on its terminal region: a clause-free carrier
+			// hosted here, where the WITH-bearing composition ends and just
+			// before the first enclosing page applies, keeps the CTE scope
+			// inside. The enclosing pages wrap around the carrier in their
+			// authored order, so their ORDER BY and LIMIT expressions keep
+			// resolving in the outer scope and never acquire inner CTE
+			// visibility. Hosting is a no-op once composed, and reviews
+			// 6096924595/6096934987 keep it AFTER the ORDER-STAGE adoption
+			// attempt: a successfully adopted subject already composes with
+			// its own declaration attached and needs no distinct owner.
+			if len(enclosing) > 0 && i < enclosingBoundary && s.With != nil && !withHosted {
+				carrier := &tree.Select{
+					Select: &tree.SelectClause{
+						Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.UnqualifiedStar{}}},
+						From: &tree.From{
+							Tables: tree.TableExprs{
+								&tree.AliasedTableExpr{
+									Expr: &tree.ParenTableExpr{Expr: inner},
+									As:   tree.AliasClause{Alias: tree.Identifier("ordinary_cte_page_withregion")},
+								},
+							},
+						},
+					},
+					With: s.With,
+				}
+				inner = carrier
+				pages = append(pages, carrier)
+				withHosted = true
+			}
+		}
+		if limit == nil && len(orderBy) == 0 {
+			// A pure grouping wrapper without its own clauses is already the
+			// inner select's semantic: keep the body as bound, but the first
+			// boundary stage still hosts the region's WITH.
+			hostEnclosingWith()
+			continue
+		}
+		if len(orderBy) > 0 {
+			if adopted, memo, ok := adoptAuthoredPageClauses(inner, limit, orderBy, captureOrigins); ok {
+				if len(memo) > 0 {
+					if clauseMemo == nil {
+						clauseMemo = make(map[*tree.SelectClause]*tree.SelectClause, len(memo))
+					}
+					for k, v := range memo {
+						clauseMemo[k] = v
+					}
+					// Normalize where the clone layers meet. An adoption
+					// clone of the already-cloned WITH region records its
+					// counterparts against that intermediate copy (clone ->
+					// intermediate), while the region's own memo already
+					// binds the intermediate to the authored clause. The
+					// callers only canonicalize composed maps when a prior
+					// enclosing map exists, so a first-entered wrap would
+					// otherwise install the chain unresolved and capture
+					// under the discarded intermediate - leaving the
+					// authored freeze walk unable to reach the expansion.
+					// Resolve every entry to its final authored target here,
+					// bounded by the map size with a seen set, mirroring the
+					// callers' canonical composition.
+					for k, v := range clauseMemo {
+						final := v
+						seen := map[*tree.SelectClause]struct{}{final: {}}
+						for {
+							next, ok := clauseMemo[final]
+							if !ok || final == next {
+								break
+							}
+							if _, circular := seen[next]; circular {
+								break
+							}
+							seen[next] = struct{}{}
+							final = next
+						}
+						clauseMemo[k] = final
+					}
+				}
+				if stageWith != nil && i == len(stages)-1 {
+					// The withLevel-owning page moved its WITH out of the
+					// cloned content into stageWith before this loop; a
+					// successful native adoption must reattach that
+					// declaration to its authored region - the top of the
+					// adopted chain - or the subject would silently lose
+					// its CTE and bind a same-name enclosing relation
+					// instead (or fail on the missing relation outright).
+					// Clearing stageWith also preserves the single-attach
+					// invariant the wrap fallback below relies on.
+					adopted.With = stageWith
+					stageWith = nil
+				}
+				inner = adopted
+				continue
+			}
+		}
+		// The adoption declined for this stage - or the stage carries only a
+		// LIMIT - so the synthetic page below will compose over the authored
+		// region. Hosting must happen before that wrap: an unhosted WITH
+		// would let the tail attach s.With to the outermost enclosing page,
+		// placing the region's declaration outside its own scope for
+		// rebinds and captures.
+		hostEnclosingWith()
+		alias := tree.AliasClause{Alias: tree.Identifier(fmt.Sprintf("ordinary_cte_page_%d", i))}
+		wrapped := &tree.Select{
+			Select: &tree.SelectClause{
+				Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.UnqualifiedStar{}}},
+				From: &tree.From{
+					Tables: tree.TableExprs{
+						// The parser's table_factor rule for a FROM subquery
+						// wraps the select in a ParenTableExpr (mysql_sql.y
+						// table_subquery), which is the shape buildTable
+						// accepts; a bare tree.Subquery is only the scalar-
+						// expression form.
+						&tree.AliasedTableExpr{
+							Expr: &tree.ParenTableExpr{Expr: inner},
+							As:   alias,
+						},
+					},
+				},
+			},
+			Limit:   limit,
+			OrderBy: orderBy,
+		}
+		if stageWith != nil && i == len(stages)-1 {
+			wrapped.With = stageWith
+		}
+		inner = wrapped
+		pages = append(pages, wrapped)
+	}
+	// Without enclosing pages the body's own WITH declares the fragments
+	// the whole expression reads and lands on the outermost wrapped
+	// select, keeping the lexical scope identical. When the inner page
+	// that now owns its level's WITH is itself the outermost node, a
+	// distinct clause-free outer owner carries the consuming root's WITH:
+	// it introduces no pagination stage of its own and passes the child's
+	// projection through by ordinal. With enclosing pages applied, the
+	// carrier in the loop above already hosted the WITH inside them, so
+	// this tail leaves it where the authored region put it.
+	if s.With != nil && !withHosted {
+		if inner.With != nil {
+			outer := &tree.Select{
+				Select: &tree.SelectClause{
+					Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.UnqualifiedStar{}}},
+					From: &tree.From{
+						Tables: tree.TableExprs{
+							&tree.AliasedTableExpr{
+								Expr: &tree.ParenTableExpr{Expr: inner},
+								As:   tree.AliasClause{Alias: tree.Identifier("ordinary_cte_page_outer")},
+							},
+						},
+					},
+				},
+				With: s.With,
+			}
+			inner = outer
+			pages = append(pages, outer)
+		} else {
+			inner.With = s.With
+		}
+	}
+	return inner, pages, clauseMemo, true
+}
+
 func (builder *QueryBuilder) bindCte(
 	ctx *BindContext,
 	stmt tree.NodeFormatter,
@@ -6335,30 +6975,157 @@ func (builder *QueryBuilder) bindCte(
 	}
 	viewCount := len(cteRef.declarationCtx.views)
 	var s *tree.Select
+	var fullBody *tree.Select
 	switch stmt := cteRef.ast.Stmt.(type) {
 	case *tree.Select:
-		s = getSelectTree(stmt)
+		fullBody = stmt
 	case *tree.ParenSelect:
-		s = getSelectTree(stmt.Select)
+		fullBody = stmt.Select
 	default:
 		err = moerr.NewParseErrorf(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
 		return
+	}
+
+	// A marker-free stored definition replays the released interpretation:
+	// the historical pure parenthesis peel selects the terminal select with
+	// the clauses owned by it, before recursive/ordinary classification or
+	// any stage collection below. Enclosing wrapper stages - and a
+	// wrapper-local WITH - are dropped exactly as the released binder did;
+	// marker-present definitions keep the full composed chain.
+	var outerClauses []*tree.Limit
+	var outerOrderBy tree.OrderBy
+	if !ctx.legacyCTEScope {
+		// Wrappers outside the first WITH-bearing select still own pagination of
+		// the same query expression; their clauses must survive the
+		// scope-preserving peel above and join the enclosing chain as the
+		// outermost stages so no owner is silently discarded. The marker-free
+		// path never collects them: see the released peel above.
+		s = selectTreePreservingWith(fullBody)
+		for outer := fullBody; outer != nil && outer != s; {
+			if outer.Limit != nil {
+				outerClauses = append(outerClauses, outer.Limit)
+			}
+			if len(outerOrderBy) == 0 && len(outer.OrderBy) > 0 {
+				outerOrderBy = outer.OrderBy
+			}
+			inner := outer
+			switch sel := inner.Select.(type) {
+			case *tree.ParenSelect:
+				inner = sel.Select
+			case *tree.Select:
+				inner = sel
+			}
+			if inner == outer {
+				break
+			}
+			outer = inner
+		}
+	} else {
+		s = getSelectTree(fullBody)
 	}
 
 	var outputCtx *BindContext
 	var left *tree.SelectStatement
 	var stmts []tree.SelectStatement
 	var distinct bool
-	left, distinct, err = builder.splitRecursiveMember(&s.Select, table, &stmts)
-	if err != nil {
-		return 0, err
+	// Recursive-union inspection must look through parenthesized wrappers
+	// around a WITH-bearing body, while the binder keeps the full select for
+	// its lexical scope.
+	inspection := s.Select
+	for {
+		paren, ok := inspection.(*tree.ParenSelect)
+		if !ok || paren.Select == nil {
+			break
+		}
+		inspection = paren.Select.Select
+	}
+	// Classification follows resolved declaration identity, not spelling: a
+	// same-spelling declaration in the body's own WITH shadows the outer name
+	// for every reference the union inspection collects, so the spelling walk
+	// is skipped entirely in that case - its recursive-only guards (multiple
+	// recursive tables, outer-join members) must not fire for a shadowed
+	// ordinary reference from the earliest error path down. A true
+	// self-reference (no shadowing declaration) and the RECURSIVE-keyword
+	// contract still reach those guards unchanged.
+	shadowed := bodyWithDeclaresName(s, table)
+	if !shadowed {
+		left, distinct, err = builder.splitRecursiveMember(&inspection, table, &stmts)
+		if err != nil {
+			return 0, err
+		}
 	}
 	isR := len(stmts) > 0
+	if shadowed {
+		isR = false
+		stmts = nil
+	}
 
 	if isR && !cteRef.isRecursive {
 		return 0, moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
 	} else if !isR {
-		nodeID, err = builder.bindNoRecursiveCte(ctx, s, cteRef, table)
+		bodyForBinding := fullBody
+		// A release-authored (marker-free) definition rebinds with the
+		// released page interpretation: the enclosing wrapper stages of the
+		// stored body are discarded and only the innermost select with its
+		// own clauses binds, exactly as the release that persisted the SQL
+		// did - a supported upgrade must keep the rows the release authored
+		// without any definition rewrite. A definition recorded with the
+		// current generation composes each enclosing page inside out as the
+		// equivalent derived-table nest.
+		if ctx.legacyCTEScope {
+			bodyForBinding = s
+		} else if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(fullBody, ctx.captureViewStarExpansion, nil, nil); rewritten {
+			unregisterSyntheticPages := builder.registerSyntheticPages(pages)
+			defer unregisterSyntheticPages()
+			if len(clauseMemo) > 0 {
+				previous := builder.clauseCorrespondence
+				composed := clauseMemo
+				if previous != nil {
+					composed = make(map[*tree.SelectClause]*tree.SelectClause, len(previous)+len(clauseMemo))
+					for k, v := range previous {
+						composed[k] = v
+					}
+					for k, v := range clauseMemo {
+						composed[k] = v
+					}
+					// Canonicalize per-entered origin: an inner wrap can clone
+					// an intermediate clause whose recorded counterpart is
+					// itself a clone of an enclosing wrap's authored clause.
+					// The capture boundary records one key, so resolve every
+					// entry to its final authored pointer here, bounded by the
+					// map size with a seen set.
+					for k, v := range composed {
+						final := v
+						seen := map[*tree.SelectClause]struct{}{final: {}}
+						for {
+							next, ok := composed[final]
+							if !ok || final == next {
+								break
+							}
+							if _, circular := seen[next]; circular {
+								break
+							}
+							seen[next] = struct{}{}
+							final = next
+						}
+						composed[k] = final
+					}
+				}
+				builder.clauseCorrespondence = composed
+				defer func() { builder.clauseCorrespondence = previous }()
+			}
+			// An ordinary CTE body can be a whole parenthesized query
+			// expression whose enclosing wrappers each carry their own
+			// OFFSET/LIMIT/ORDER BY stage (MySQL parenthesized query
+			// expressions). bindSelect deliberately rejects multiple pagination
+			// clauses on one flattened select, so bind the expression as the
+			// equivalent derived-table nest instead: every stage keeps its own
+			// clauses in its own scope, applied inside out, and the innermost
+			// select (including a body-local WITH and its own clauses) stays
+			// untouched.
+			bodyForBinding = wrapped
+		}
+		nodeID, err = builder.bindNoRecursiveCte(ctx, bodyForBinding, cteRef, table)
 		if err != nil {
 			return 0, err
 		}
@@ -6368,7 +7135,89 @@ func (builder *QueryBuilder) bindCte(
 		recursiveCtx := NewBindContext(builder, ctx)
 		recursiveCtx.numericTableProjectionTypes = ctx.numericTableProjectionTypes
 		recursiveCtx.numericTableProjectionAmbiguous = ctx.numericTableProjectionAmbiguous
-		nodeID, outputCtx, err = builder.bindRecursiveCte(recursiveCtx, s, cteRef, table, left, stmts, distinct)
+		// A recursive CTE body may declare its own WITH; its names merge onto
+		// an exclusive per-body scope only: the shared per-WITH declaration
+		// frame is never reassigned, so siblings cannot see body-local names,
+		// and the scope starts from a value snapshot of the shared map so
+		// displaced-outers keep recording.
+		newBodyScope := func() *BindContext {
+			scope := NewBindContext(builder, cteRef.declarationCtx)
+			scope.cteByName = make(map[string]*CTERef, len(cteRef.declarationCtx.cteByName))
+			for n, r := range cteRef.declarationCtx.cteByName {
+				scope.cteByName[n] = r
+			}
+			// The copied declaration map records what the enclosing WITH
+			// declared, but it does not carry this recursion's own
+			// declaration-order restrictions: record the recursive owner on
+			// the exclusive body scope so a displaced enclosing candidate is
+			// still checked against the sibling order that makes it pending
+			// here (a declaration following this CTE is not in scope inside
+			// its body).
+			scope.cteOwnerChain = &cteOwnerNode{cte: cteRef, next: scope.cteOwnerChain}
+			return scope
+		}
+		var bodyScope *BindContext
+		if s.With != nil {
+			bodyScope = newBodyScope()
+			if err = builder.preprocessCte(s, bodyScope); err != nil {
+				return 0, err
+			}
+		}
+		// Keep the wrapped recursive body's whole query expression: along the
+		// same paren peel the recursive inspection uses, every intermediate
+		// WITH declares its own frame on the exclusive body scope, the
+		// innermost LIMIT / ORDER BY clause owns the recursive emission, and
+		// every enclosing clause paginates the result inside out.
+		effectiveLimit, effectiveOrderBy := s.Limit, s.OrderBy
+		var wrapperClauses []*tree.Limit
+		if s.Limit != nil {
+			wrapperClauses = append(wrapperClauses, s.Limit)
+		}
+		wrapper := s.Select
+		for {
+			paren, ok := wrapper.(*tree.ParenSelect)
+			if !ok || paren.Select == nil {
+				break
+			}
+			inner := paren.Select
+			if inner.With != nil {
+				if bodyScope == nil {
+					bodyScope = newBodyScope()
+				}
+				if err = builder.preprocessCte(inner, bodyScope); err != nil {
+					return 0, err
+				}
+			}
+			if inner.Limit != nil {
+				wrapperClauses = append(wrapperClauses, inner.Limit)
+			}
+			if len(effectiveOrderBy) == 0 && len(inner.OrderBy) > 0 {
+				effectiveOrderBy = inner.OrderBy
+			}
+			wrapper = inner.Select
+		}
+		// The innermost clause is the union's own pagination block: it owns
+		// the recursive emission cover. Enclosing clauses paginate that
+		// cover-bounded result page by page, applied inside out.
+		enclosingClauses := make([]*tree.Limit, 0, len(wrapperClauses))
+		if n := len(wrapperClauses); n > 0 {
+			effectiveLimit = wrapperClauses[n-1]
+			for i := n - 2; i >= 0; i-- {
+				enclosingClauses = append(enclosingClauses, wrapperClauses[i])
+			}
+		}
+		// Wrappers outside the first WITH-bearing select are the outermost
+		// pagination owners of the same body: append them after the inside
+		// wrappers so the pages still compose inside out.
+		for i := len(outerClauses) - 1; i >= 0; i-- {
+			enclosingClauses = append(enclosingClauses, outerClauses[i])
+		}
+		// An outer wrapper may carry the consumer ordering that no inner
+		// clause owns; capture it with the same first-owner rule.
+		if len(effectiveOrderBy) == 0 && len(outerOrderBy) > 0 {
+			effectiveOrderBy = outerOrderBy
+		}
+		nodeID, outputCtx, err = builder.bindRecursiveCte(recursiveCtx, s, cteRef, table, left, stmts, distinct, bodyScope, effectiveLimit, enclosingClauses, effectiveOrderBy)
 		if err != nil {
 			return 0, err
 		}
@@ -6418,7 +7267,7 @@ func cteReferences(with *tree.With) (map[string]*CTERef, string) {
 		for _, name := range later {
 			masked[name] = true
 		}
-		refs[name] = &CTERef{ast: cte, isRecursive: with.IsRecursive, maskedCTEs: masked}
+		refs[name] = &CTERef{ast: cte, isRecursive: with.IsRecursive, maskedCTEs: masked, withClause: with}
 		later = append(later, name)
 	}
 	return refs, ""
@@ -6430,15 +7279,167 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 		if duplicate != "" {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "WITH query name %q specified more than once", duplicate)
 		}
-		ctx.cteByName = refs
+		// Copy-merge instead of replacing: enclosing CTEs stay lexically
+		// visible when an inner (possibly parenthesized) WITH is preprocessed
+		// into the same BindContext, inner names legally shadow the outer
+		// ones with declaration order preserved, and a parent-shared map
+		// inherited through BindContext is never mutated. A marker-free
+		// persisted definition keeps the released preprocessing instead:
+		// its binder replaced the visible map, so the enclosing declarations
+		// this stored WITH shadowed at authoring time do not resurface while
+		// replaying the released rows.
+		if ctx.legacyCTEScope {
+			ctx.cteByName = refs
+		} else {
+			merged := make(map[string]*CTERef, len(ctx.cteByName)+len(refs))
+			for name, ref := range ctx.cteByName {
+				merged[name] = ref
+			}
+			for name, ref := range refs {
+				if outer, ok := ctx.cteByName[name]; ok && outer != ref && (outer.withClause == nil || outer.withClause != ref.withClause) {
+					// Same-name inner declaration: keep the displaced enclosing
+					// definition reachable for lookups that happen before the
+					// inner name enters scope.
+					ref.shadowedOuter = outer
+				} else if ref.shadowedOuter == nil {
+					// The per-body declaration scope starts empty (body
+					// isolation), so the enclosing definition this inner name
+					// displaces may live only in an ancestor frame: walk outward
+					// and record the first visible same-name definition so the
+					// displaced chain keeps the real declaration ancestry across
+					// multiple pending scopes.
+					for p := ctx.parent; p != nil; p = p.parent {
+						if outer, ok := p.cteByName[name]; ok && outer != ref && (outer.withClause == nil || outer.withClause != ref.withClause) {
+							ref.shadowedOuter = outer
+							break
+						}
+					}
+				}
+				merged[name] = ref
+			}
+			ctx.cteByName = merged
+		}
+		// One declaration scope per WITH clause: every ref in the same WITH
+		// shares a single declaration context, which is also the identifier
+		// the masked-lookup walk uses to distinguish a pending same-WITH
+		// sibling from an enclosing definition.
+		declaration := newCTEDeclarationContext(builder, ctx)
 		for _, ref := range refs {
-			ref.declarationCtx = newCTEDeclarationContext(builder, ctx)
+			ref.declarationCtx = declaration
 		}
 	}
 	return nil
 }
 
-func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool, execOwner ...*tree.Select) (nodeID int32, err error) {
+	// The executable export owner enters ONLY at this initial bind of the
+	// statement the frontend actually routed; every recursive or nested
+	// call below omits the optional argument and stays ownership-neutral.
+	owner := (*tree.Select)(nil)
+	if len(execOwner) > 0 {
+		owner = execOwner[0]
+	}
+	// The routed statement root is the first select this builder binds:
+	// CTE bodies, view sources, set-operation members and prepared replans
+	// (fresh builders) enter later and never overwrite it, so the root-based
+	// pagination exemptions below distinguish the authored routed root from
+	// any WITH-bearing entry the composition helper receives.
+	if builder.routedRootSelect == nil {
+		builder.routedRootSelect = stmt
+	}
+	rootSelect := builder.routedRootSelect
+	withStmt := stmt
+	if stmt != nil && !ctx.legacyCTEScope {
+		// The consuming WITH-bearing query expression owns the composed
+		// pages. A transparent enclosing parenthesis group - one that owns
+		// no clause of its own - is read through without rewriting, so the
+		// pages of the WITH select it encloses still compose. The
+		// executable statement's INTO OUTFILE Ep is a planner-level
+		// exemption only: the frontend executor keeps the unique authored
+		// Ep, path authorization and deferred cleanup on the original
+		// statement. An ordinary no-WITH statement keeps the
+		// flatten-and-reject contract, so duplicate ORDER BY/LIMIT clause
+		// sets stay the documented syntax error. A marker-free persisted
+		// definition keeps the released bindSelect unwrap instead: its
+		// legacy route never reaches the generated pagination tree.
+		var enclosing []*tree.Select
+		for withStmt.With == nil {
+			paren, ok := withStmt.Select.(*tree.ParenSelect)
+			// A wrapper owning only pagination (ORDER BY / LIMIT) keeps the
+			// WITH descent alive. Every enclosing wrapper this peel passes
+			// through is recorded here, outermost first, together with its
+			// authored clause set, so the composition below replays those
+			// pages instead of silently dropping them. The routed root is
+			// the one authored position an assignment (INTO variables) or an
+			// export (INTO OUTFILE) rides through: the executor performs
+			// them from the original routed statement, so only the pagination
+			// replay happens here, while a non-root wrapper owning them, or
+			// a foreign export owner, still declines the rewrite.
+			rootOwned := withStmt == rootSelect
+			epRejected := false
+			if withStmt.Ep != nil {
+				ownerMatches := owner != nil && owner.Ep == withStmt.Ep
+				if rootOwned {
+					epRejected = owner != nil && !ownerMatches
+				} else {
+					epRejected = !ownerMatches
+				}
+			}
+			if !ok || paren.Select == nil ||
+				epRejected || (!rootOwned && withStmt.IntoVars != nil) ||
+				withStmt.TimeWindow != nil || withStmt.RankOption != nil || withStmt.RewriteOption != nil || withStmt.SelectLockInfo != nil || withStmt.DeprecatedInto || withStmt.IsPerform {
+				withStmt = nil
+				break
+			}
+			enclosing = append(enclosing, withStmt)
+			withStmt = paren.Select
+		}
+		if withStmt != nil {
+			if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(withStmt, ctx.captureViewStarExpansion, owner, rootSelect, enclosing...); rewritten {
+				unregisterSyntheticPages := builder.registerSyntheticPages(pages)
+				defer unregisterSyntheticPages()
+				if len(clauseMemo) > 0 {
+					previous := builder.clauseCorrespondence
+					composed := clauseMemo
+					if previous != nil {
+						composed = make(map[*tree.SelectClause]*tree.SelectClause, len(previous)+len(clauseMemo))
+						for k, v := range previous {
+							composed[k] = v
+						}
+						for k, v := range clauseMemo {
+							composed[k] = v
+						}
+						// Canonicalize per-entered origin: an inner wrap can clone
+						// an intermediate clause whose recorded counterpart is
+						// itself a clone of an enclosing wrap's authored clause.
+						// The capture boundary records one key, so resolve every
+						// entry to its final authored pointer here, bounded by the
+						// map size with a seen set.
+						for k, v := range composed {
+							final := v
+							seen := map[*tree.SelectClause]struct{}{final: {}}
+							for {
+								next, ok := composed[final]
+								if !ok || final == next {
+									break
+								}
+								if _, circular := seen[next]; circular {
+									break
+								}
+								seen[next] = struct{}{}
+								final = next
+							}
+							composed[k] = final
+						}
+					}
+					builder.clauseCorrespondence = composed
+					defer func() { builder.clauseCorrespondence = previous }()
+				}
+				return builder.bindSelect(wrapped, ctx, isRoot)
+			}
+		}
+	}
+
 	// This source was introduced solely to evaluate windows after grouping.
 	// Its AST identity, not its SQL alias, owns metadata transparency.
 	if ctx.parent != nil && ctx.parent.integerPrecisionGeneratedSource == stmt {
@@ -6503,25 +7504,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	ctx.projectTag = builder.genNewBindTag()
 	ctx.windowTag = builder.genNewBindTag()
 	ctx.sampleTag = builder.genNewBindTag()
-	if astTimeWindow != nil {
-		if err = validateTimeWindowIntervalUnits(builder.GetContext(), astTimeWindow); err != nil {
-			return
-		}
-		ctx.timeTag = builder.genNewBindTag() // ctx.timeTag > 0
-		// GAPFILL uses the same second-stage aggregate state machine as an
-		// explicit sliding window even when its external SQL is a tumbling
-		// INTERVAL. Mark it before aggregate binding so SUM/COUNT/AVG are
-		// remapped to consume the child aggregate's partial-result type and the
-		// projected type matches the executor's actual vector.
-		if astTimeWindow.Sliding != nil || astTimeWindow.GapFill {
-			ctx.sliding = true
-		}
-		ctx.explicitSliding = astTimeWindow.Sliding != nil
-
-		if helpFunc, err = makeHelpFuncForTimeWindow(astTimeWindow); err != nil {
-			return
-		}
-	}
 
 	effectiveSelectLockInfo := stmt.SelectLockInfo
 
@@ -6551,6 +7533,18 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 				astRankOption = selectClause.Select.RankOption
 			}
+			if !ctx.releasedTimeWindowPlacement {
+				// A legacy-generation persisted relation expansion keeps the released
+				// TimeWindow ownership: the incoming root clause remains authoritative
+				// and this peeled wrapper's TimeWindow is neither adopted nor
+				// duplicate-checked, matching the released ordinary binder.
+				if selectClause.Select.TimeWindow != nil {
+					if astTimeWindow != nil {
+						return 0, moerr.NewSyntaxError(builder.GetContext(), "multiple time window clauses not allowed")
+					}
+					astTimeWindow = selectClause.Select.TimeWindow
+				}
+			}
 			stmt = selectClause.Select
 			if stmt.SelectLockInfo != nil {
 				effectiveSelectLockInfo = stmt.SelectLockInfo
@@ -6564,6 +7558,31 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 		} else {
 			break
+		}
+	}
+
+	// The effective time window is only known after the parenthesized body is
+	// unwrapped: the clause can live on the inner select while bindSelect's
+	// stmt parameter is the outer wrapper. Adopt
+	// it above like ORDER BY/LIMIT/BY RANK, then initialize time-window
+	// binding state from the effective clause.
+	if astTimeWindow != nil {
+		if err = validateTimeWindowIntervalUnits(builder.GetContext(), astTimeWindow); err != nil {
+			return
+		}
+		ctx.timeTag = builder.genNewBindTag() // ctx.timeTag > 0
+		// GAPFILL uses the same second-stage aggregate state machine as an
+		// explicit sliding window even when its external SQL is a tumbling
+		// INTERVAL. Mark it before aggregate binding so SUM/COUNT/AVG are
+		// remapped to consume the child aggregate's partial-result type and the
+		// projected type matches the executor's actual vector.
+		if astTimeWindow.Sliding != nil || astTimeWindow.GapFill {
+			ctx.sliding = true
+		}
+		ctx.explicitSliding = astTimeWindow.Sliding != nil
+
+		if helpFunc, err = makeHelpFuncForTimeWindow(astTimeWindow); err != nil {
+			return
 		}
 	}
 
@@ -6786,7 +7805,16 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				if isRoot {
 					builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
 				}
-				captureGroupingSetViewStarExpansion(ctx, expandedSelectClause, selectStmts, hiddenResultLen)
+				groupingCapturedClause := expandedSelectClause
+				if authoredClause, ok := builder.clauseCorrespondence[expandedSelectClause]; ok {
+					groupingCapturedClause = authoredClause
+				}
+				for i, branch := range selectStmts {
+					if authoredBranch, ok := builder.clauseCorrespondence[branch]; ok {
+						selectStmts[i] = authoredBranch
+					}
+				}
+				captureGroupingSetViewStarExpansion(ctx, groupingCapturedClause, selectStmts, hiddenResultLen)
 				return
 			}
 		}
@@ -6838,7 +7866,14 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if len(headings) > len(selectList) {
 			headings = headings[len(headings)-len(selectList):]
 		}
-		ctx.expandedSelectLists[expandedSelectClause] = cloneViewSelectExprsForView(
+		captureClause := expandedSelectClause
+		if authoredClause, ok := builder.clauseCorrespondence[expandedSelectClause]; ok {
+			// A paginated view binds its authored star through the wrap copy:
+			// the freeze walk looks the expansion up on the authored clause,
+			// so the capture records the authored identity.
+			captureClause = authoredClause
+		}
+		ctx.expandedSelectLists[captureClause] = cloneViewSelectExprsForView(
 			ctx,
 			expandedSelectClause,
 			selectList,
@@ -8059,6 +9094,7 @@ func numericCteBindingContext(ctx *BindContext, ref *CTERef) *BindContext {
 		snapshot:         snapshot,
 		numericCteByName: scope.numericCteByName,
 		cteState:         state,
+		cteOwnerChain:    scope.cteOwnerChain,
 	}
 }
 
@@ -9556,6 +10592,16 @@ func (builder *QueryBuilder) bindSelectClause(
 
 	ctx.binder = NewWhereBinder(builder, ctx)
 	// unfold stars and generate headings
+	pageStarRegistered := false
+	if ctx != nil && builder.syntheticPageClauses[clause] {
+		pageStarRegistered = !ctx.syntheticPageStar
+		ctx.syntheticPageStar = true
+	}
+	defer func() {
+		if pageStarRegistered {
+			ctx.syntheticPageStar = false
+		}
+	}()
 	if selectList, err = appendSelectList(builder, ctx, selectList, clause.Exprs...); err != nil {
 		return
 	}
@@ -11168,6 +12214,31 @@ func cloneTreeSelect(stmt *tree.Select) *tree.Select {
 	return cloned.Interface().(*tree.Select)
 }
 
+// cloneTreeSelectCorrespondence returns the pure clone together with the
+// bounded clone-to-authored SelectClause mapping for one pagination wrap. The
+// correspondence is scoped to the active bind: the wrapped tree, the star
+// expansion capture inside it and the cleanup happen in the same bind.
+func cloneTreeSelectCorrespondence(stmt *tree.Select, captureOrigins bool) (*tree.Select, map[*tree.SelectClause]*tree.SelectClause) {
+	if stmt == nil {
+		return nil, nil
+	}
+	if !captureOrigins {
+		// The ordinary path never builds an origin map: no view capture is
+		// pending, so the clone stays the plain deep copy with no extra walk.
+		return cloneTreeSelect(stmt), nil
+	}
+	visited := make(map[treeClonePointer]reflect.Value)
+	origins := make(map[*tree.SelectClause]*tree.SelectClause)
+	cloned := cloneTreeValueCapture(reflect.ValueOf(stmt), visited, &origins)
+	if !cloned.IsValid() || cloned.IsNil() {
+		return nil, nil
+	}
+	if len(origins) == 0 {
+		return cloned.Interface().(*tree.Select), nil
+	}
+	return cloned.Interface().(*tree.Select), origins
+}
+
 func cloneTreeSelectExprs(exprs tree.SelectExprs) tree.SelectExprs {
 	if len(exprs) == 0 {
 		return nil
@@ -11325,6 +12396,10 @@ func DeepCopySelect(source *tree.Select) *tree.Select {
 }
 
 func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Value) reflect.Value {
+	return cloneTreeValueCapture(value, visited, nil)
+}
+
+func cloneTreeValueCapture(value reflect.Value, visited map[treeClonePointer]reflect.Value, selectOrigins *map[*tree.SelectClause]*tree.SelectClause) reflect.Value {
 	if !value.IsValid() {
 		return value
 	}
@@ -11334,7 +12409,7 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		if value.IsNil() {
 			return reflect.Zero(value.Type())
 		}
-		cloned := cloneTreeValue(value.Elem(), visited)
+		cloned := cloneTreeValueCapture(value.Elem(), visited, selectOrigins)
 		result := reflect.New(value.Type()).Elem()
 		result.Set(cloned)
 		return result
@@ -11350,20 +12425,32 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		visited[key] = result
 		if value.Elem().Kind() == reflect.Struct {
 			result.Elem().Set(value.Elem())
-			cloneTreeStructFields(result.Elem(), value.Elem(), visited)
+			cloneTreeStructFields(result.Elem(), value.Elem(), visited, selectOrigins)
 			if sample, ok := value.Interface().(*tree.SampleExpr); ok {
 				columns, star := sample.GetColumns()
 				result.Interface().(*tree.SampleExpr).SetColumns(
-					cloneTreeValue(reflect.ValueOf(columns), visited).Interface().(tree.Exprs), star)
+					cloneTreeValueCapture(reflect.ValueOf(columns), visited, selectOrigins).Interface().(tree.Exprs), star)
+			}
+			if selectOrigins != nil && value.Type() == reflect.TypeOf((*tree.SelectClause)(nil)) {
+				// Typed origin recorded at creation: this same traversal copies
+				// every branch the clone supports - a WITH's CTE bodies, derived
+				// FROM subqueries, scalar subqueries and the accessor-copied
+				// SAMPLE branches included - so the capture receives a complete
+				// clone-to-authored SelectClause map with no second walk.
+				authoredClause, authoredOK := value.Interface().(*tree.SelectClause)
+				clonedClause, clonedOK := result.Interface().(*tree.SelectClause)
+				if authoredOK && clonedOK && authoredClause != nil && clonedClause != nil {
+					(*selectOrigins)[clonedClause] = authoredClause
+				}
 			}
 		} else {
-			result.Elem().Set(cloneTreeValue(value.Elem(), visited))
+			result.Elem().Set(cloneTreeValueCapture(value.Elem(), visited, selectOrigins))
 		}
 		return result
 	case reflect.Struct:
 		result := reflect.New(value.Type()).Elem()
 		result.Set(value)
-		cloneTreeStructFields(result, value, visited)
+		cloneTreeStructFields(result, value, visited, selectOrigins)
 		return result
 	case reflect.Slice:
 		if value.IsNil() {
@@ -11371,7 +12458,7 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		}
 		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
 		for i := 0; i < value.Len(); i++ {
-			result.Index(i).Set(cloneTreeValue(value.Index(i), visited))
+			result.Index(i).Set(cloneTreeValueCapture(value.Index(i), visited, selectOrigins))
 		}
 		return result
 	case reflect.Map:
@@ -11385,13 +12472,13 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		result := reflect.MakeMapWithSize(value.Type(), value.Len())
 		visited[key] = result
 		for iter := value.MapRange(); iter.Next(); {
-			result.SetMapIndex(cloneTreeValue(iter.Key(), visited), cloneTreeValue(iter.Value(), visited))
+			result.SetMapIndex(cloneTreeValueCapture(iter.Key(), visited, selectOrigins), cloneTreeValueCapture(iter.Value(), visited, selectOrigins))
 		}
 		return result
 	case reflect.Array:
 		result := reflect.New(value.Type()).Elem()
 		for i := 0; i < value.Len(); i++ {
-			result.Index(i).Set(cloneTreeValue(value.Index(i), visited))
+			result.Index(i).Set(cloneTreeValueCapture(value.Index(i), visited, selectOrigins))
 		}
 		return result
 	default:
@@ -11399,12 +12486,12 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 	}
 }
 
-func cloneTreeStructFields(dst, src reflect.Value, visited map[treeClonePointer]reflect.Value) {
+func cloneTreeStructFields(dst, src reflect.Value, visited map[treeClonePointer]reflect.Value, selectOrigins *map[*tree.SelectClause]*tree.SelectClause) {
 	for i := 0; i < src.NumField(); i++ {
 		if src.Type().Field(i).PkgPath != "" {
 			continue
 		}
-		dst.Field(i).Set(cloneTreeValue(src.Field(i), visited))
+		dst.Field(i).Set(cloneTreeValueCapture(src.Field(i), visited, selectOrigins))
 	}
 }
 
@@ -12667,9 +13754,54 @@ func appendSelectListWithGroupingOrder(
 		}
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
-			cols, names, provenances, err := ctx.unfoldStar(builder.GetContext(), "", accountId == catalog.System_Account)
-			if err != nil {
-				return nil, err
+			var cols []tree.SelectExpr
+			var names []string
+			var provenances headingProvenanceMap
+			if ctx.syntheticPageStar && len(ctx.bindingByTable) == 1 {
+				// A generated page's own star carries its sole derived
+				// binding's visible columns by relation tag and ordinal:
+				// the authored display names and heading provenance still
+				// travel, but the reference never resolves through a name
+				// so duplicate authored headings stay positional here.
+				for _, binding := range ctx.bindingByTable {
+					displayCols := binding.originCols
+					if len(displayCols) != len(binding.cols) {
+						displayCols = binding.cols
+					}
+					for i, col := range binding.cols {
+						// The page's inventory is the sole derived relation's
+						// logical, already-projected slots, so visibility is decided
+						// per ordinal only: a genuinely hidden slot skips by its bit,
+						// while an authored alias keeps its slot even when its chosen
+						// spelling collides with a reserved internal name. Table-star
+						// hidden/external/privilege filtering stays upstream where the
+						// user authored the projection.
+						if binding.colIsHidden[i] {
+							continue
+						}
+						if accountId != catalog.System_Account && binding.isClusterTable && util.IsClusterTableAttribute(col) {
+							continue
+						}
+						expr := tree.NewUnresolvedName(tree.NewCStr(binding.table, ctx.lower), tree.NewCStr(col, 1))
+						if builder.syntheticStarOrdinals == nil {
+							builder.syntheticStarOrdinals = make(map[*tree.UnresolvedName]syntheticStarOrdinal)
+						}
+						builder.syntheticStarOrdinals[expr] = syntheticStarOrdinal{binding: binding, colPos: int32(i)}
+						cols = append(cols, tree.SelectExpr{Expr: expr})
+						names = append(names, displayCols[i])
+						if provenance, ok := binding.headingProvenance[int32(i)]; ok {
+							if provenances == nil {
+								provenances = make(headingProvenanceMap)
+							}
+							provenances[int32(len(cols)-1)] = cloneHeadingProvenance(provenance)
+						}
+					}
+				}
+			} else {
+				cols, names, provenances, err = ctx.unfoldStar(builder.GetContext(), "", accountId == catalog.System_Account)
+				if err != nil {
+					return nil, err
+				}
 			}
 			for i, name := range names {
 				selectList = append(selectList, cols[i])
@@ -13188,7 +14320,10 @@ func (builder *QueryBuilder) checkRecursiveTable(stmt tree.TableExpr, name strin
 
 	case *tree.TableName:
 		table := string(tbl.ObjectName)
-		if table == name {
+		// Follow buildTable's CTE resolution: only an unqualified reference can be
+		// this CTE's recursive self-reference; a qualified reference resolves
+		// against the physical catalog and must not count as recursion.
+		if tbl.SchemaName == "" && table == name {
 			return 1, nil
 		}
 		return 0, nil
@@ -13282,6 +14417,21 @@ func (builder *QueryBuilder) bindView(
 			return 0, err
 		}
 	}
+
+	// This definition's own persisted marker selects its binding generation in
+	// BOTH directions: a release-authored (marker-free) definition rebinds
+	// under the released legacy masking so an upgraded deployment keeps the
+	// result the release authored, while a definition recorded with the
+	// current generation keeps the corrected lexicals even when an enclosing
+	// legacy definition surrounds it - the enclosing inference's ambient
+	// marker must never leak through this fresh view binding context, so the
+	// explicit assignment below clears it instead of only setting it.
+	viewCtx.legacyCTEScope = viewData.CTEScopeProtocol == nil
+	// The same per-definition marker also selects the released TimeWindow
+	// ownership for this ordinary relation expansion: a release-authored view
+	// keeps its authored root clause while peeled-wrapper TimeWindow clauses
+	// stay inert, exactly as the released ordinary binder behaved.
+	viewCtx.releasedTimeWindowPlacement = viewData.CTEScopeProtocol == nil
 
 	viewData.Stmt, err = builder.metadataViewColumnsSQL(schema, table, viewData.Stmt, snapshot)
 	if err != nil {
@@ -13919,8 +15069,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		}
 
 		if len(schema) == 0 && ctx.bindingNonRecurCte() && table == ctx.cteName {
-			return 0, "", moerr.NewParseErrorf(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
-		} else if len(schema) == 0 {
+			// A same-spelling nested declaration can legally shadow the CTE
+			// currently being bound: reject by resolved declaration identity,
+			// not spelling, so shadowed references still reach the inner CTE.
+			resolved := ctx.findCTE(table)
+			if refIn, inBinding := ctx.cteRefInBinding(table); resolved == nil || (inBinding && resolved == refIn) {
+				return 0, "", moerr.NewParseErrorf(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
+			}
+		}
+		if len(schema) == 0 {
 			cteRef := ctx.findCTE(table)
 			if cteRef != nil {
 				// The reference resolved to the very declaration that is being
@@ -13933,7 +15090,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					return 0, "", moerr.NewParseErrorf(builder.GetContext(),
 						"In the initial statement of Recursive Common Table Expression %s, the recursive table must not be referenced", table)
 				}
-				if ctx.cteInBinding(table) {
+				if refIn, inBinding := ctx.cteRefInBinding(table); inBinding && cteRef == refIn {
 					if ctx.bindingNonRecurCte() {
 						return 0, "", moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
 					}

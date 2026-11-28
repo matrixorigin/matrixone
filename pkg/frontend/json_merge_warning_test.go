@@ -79,7 +79,7 @@ func TestBuildPlanWithPrepareModeReusesJSONMergeWarningLifecycle(t *testing.T) {
 			compilerCtx := plan.NewEmptyCompilerContext(newPlanTestProcess(t))
 			originalContext := plan.WithJSONMergeWarningContext(ctx, sink, plan.JSONMergeWarningUser)
 			compilerCtx.SetContext(originalContext)
-			_, err = buildPlanWithPrepareMode(ctx, nil, compilerCtx, stmt, false, nil)
+			_, err = buildPlanWithPrepareMode(ctx, nil, compilerCtx, stmt, false, nil, nil)
 			require.NoError(t, err)
 			beforeRetry := compilerCtx.GetContext()
 			_, err = buildPlanForCompileRetry(ctx, nil, compilerCtx, stmt, false, nil, nil)
@@ -116,7 +116,7 @@ func TestJSONMergeWarningProductionEntrySurvivesCompileRetry(t *testing.T) {
 	// Enter through the same statement boundary used by doComQuery instead of
 	// manually installing a warning origin in the compiler context.
 	resetDiagnosticsForStatement(ses, execCtx, input, stmt)
-	_, err = buildPlanWithPrepareMode(ctx, ses, ses.GetTxnCompileCtx(), stmt, false, nil)
+	_, err = buildPlanWithPrepareMode(ctx, ses, ses.GetTxnCompileCtx(), stmt, false, nil, nil)
 	require.NoError(t, err)
 	_, err = buildPlanForCompileRetry(ctx, ses, ses.GetTxnCompileCtx(), stmt, false, nil, nil)
 	require.NoError(t, err)
@@ -148,7 +148,7 @@ func TestCTASPrivilegePlanningDoesNotReplayJSONMergeWarning(t *testing.T) {
 			// compiler below is used only for the privilege-only source rebind.
 			sourceCompiler := plan.NewEmptyCompilerContext(newPlanTestProcess(t))
 			sourceCompiler.SetContext(originalContext)
-			_, err = buildPlanWithPrepareMode(ctx, ses, sourceCompiler, stmt.(*tree.CreateTable).AsSource, false, nil)
+			_, err = buildPlanWithPrepareMode(ctx, ses, sourceCompiler, stmt.(*tree.CreateTable).AsSource, false, nil, nil)
 			require.NoError(t, err)
 			originalContext = sourceCompiler.GetContext()
 			compilerCtx.SetContext(originalContext)

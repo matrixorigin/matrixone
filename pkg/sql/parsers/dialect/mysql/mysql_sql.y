@@ -223,6 +223,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     tableNames tree.TableNames
     columnTableDef *tree.ColumnTableDef
     tableOption tree.TableOption
+    charsetNameOrigin tree.CharsetNameOrigin
     tableOptions []tree.TableOption
     tableExprs tree.TableExprs
     tableExpr tree.TableExpr
@@ -928,6 +929,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <foreignTableOption> foreign_option
 %type <str> foreign_engine_kind
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
+%type <charsetNameOrigin> table_charset_name
+%type <str> table_charset_bare_ident
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
@@ -964,7 +967,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <funcExpr> function_call_window
 %type <expr> sample_function_expr
 
-%type <unresolvedName> column_name column_name_unresolved normal_ident
+%type <unresolvedName> column_name column_name_unresolved column_decl_name normal_ident
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam create_cdc_opt create_cdc_opts
 %type <str> charset_keyword db_name db_name_opt
 %type <str> backup_type_opt backup_timestamp_opt
@@ -972,7 +975,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <str> non_reserved_keyword
 %type <str> equal_opt column_keyword_opt
 %type <str> as_opt_id name_string
-%type <cstr> ident as_name_opt db_name_ident
+%type <cstr> ident as_name_opt db_name_ident ident_or_end
 %type <str> table_alias explain_sym prepare_sym deallocate_sym stmt_name reset_sym
 %type <unresolvedObjectName> unresolved_object_name table_column_name
 %type <unresolvedObjectName> table_name_unresolved
@@ -1036,6 +1039,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <privilegeType> priv_type
 %type <privilegeLevel> priv_level
 %type <unresolveNames> column_name_list
+%type <unresolveNames> partition_column_name_list
+%type <unresolveNames> include_decl_name_list
+%type <unresolveNames> cluster_decl_name_list
 %type <partitionOption> partition_by_opt
 %type <clusterByOption> cluster_by_opt
 %type <partitionBy> partition_method sub_partition_method sub_partition_opt
@@ -2270,6 +2276,10 @@ normal_ident:
         tblNameCStr := yylex.(*Lexer).GetDbOrTblNameCStr($3.Origin())
         $$ = tree.NewUnresolvedName(dbNameCStr, tblNameCStr, $5)
     }
+|   END
+    {
+        $$ = tree.NewUnresolvedName(tree.NewCStr($1, 1))
+    }
 
 columns_or_variable_list_opt:
     {
@@ -2305,7 +2315,7 @@ columns_or_variable_list:
     }
 
 columns_or_variable:
-    column_name_unresolved
+    column_decl_name
     {
         $$ = $1
     }
@@ -3683,6 +3693,15 @@ update_value:
     {
         $$ = &tree.UpdateExpr{Names: []*tree.UnresolvedName{$1}, Expr: $3}
     }
+|   END '=' expr_or_default
+    {
+        $$ = &tree.UpdateExpr{
+            Names: []*tree.UnresolvedName{
+                tree.NewUnresolvedName(tree.NewCStr($1, 1)),
+            },
+            Expr: $3,
+        }
+    }
 
 lock_stmt:
     lock_table_stmt
@@ -4645,7 +4664,7 @@ alter_option:
         opt := tree.NewAlterTableModifyColumnClause(typ, newColumn, position)
 	    $$ = tree.AlterTableOption(opt)
     }
-|   CHANGE column_keyword_opt column_name column_def column_position
+|   CHANGE column_keyword_opt column_decl_name column_def column_position
     {
         // Type OldColumnName NewColumn Position
         var typ = tree.AlterTableChangeColumn
@@ -4655,7 +4674,7 @@ alter_option:
         opt := tree.NewAlterTableChangeColumnClause(typ, oldColumnName, newColumn, position)
     	$$ = tree.AlterTableOption(opt)
     }
-|  RENAME COLUMN column_name TO column_name
+|  RENAME COLUMN column_decl_name TO column_decl_name
     {
         var typ = tree.AlterTableRenameColumn
         var oldColumnName = $3
@@ -4663,7 +4682,7 @@ alter_option:
         opt := tree.NewAlterTableRenameColumnClause(typ, oldColumnName, newColumnName)
 	    $$ = tree.AlterTableOption(opt)
     }
-|  ALTER column_keyword_opt column_name SET DEFAULT bit_expr
+|  ALTER column_keyword_opt column_decl_name SET DEFAULT bit_expr
     {
         var typ = tree.AlterTableAlterColumn
         var columnName = $3
@@ -4673,7 +4692,7 @@ alter_option:
         opt := tree.NewAlterTableAlterColumnClause(typ, columnName, defaultExpr, visibility, optionType)
 	    $$ = tree.AlterTableOption(opt)
     }
-|  ALTER column_keyword_opt column_name SET visibility
+|  ALTER column_keyword_opt column_decl_name SET visibility
     {
         var typ = tree.AlterTableAlterColumn
         var columnName = $3
@@ -4683,7 +4702,7 @@ alter_option:
         opt := tree.NewAlterTableAlterColumnClause(typ, columnName, defaultExpr, visibility, optionType)
 	    $$ = tree.AlterTableOption(opt)
     }
-|  ALTER column_keyword_opt column_name DROP DEFAULT
+|  ALTER column_keyword_opt column_decl_name DROP DEFAULT
     {
         var typ = tree.AlterTableAlterColumn
         var columnName = $3
@@ -4729,38 +4748,38 @@ alter_option:
     }
 |   default_opt charset_keyword equal_opt charset_name COLLATE equal_opt charset_name
     {
-        opt := tree.NewTableOptionCharset($4)
+        opt := tree.NewTableOptionCharset($4, false)
         opt.Collate = $7
         $$ = opt
     }
 |   CONVERT TO charset_keyword charset_name
     {
-        opt := tree.NewTableOptionCharset($4)
+        opt := tree.NewTableOptionCharset($4, false)
         opt.Convert = true
         $$ = opt
     }
 |   CONVERT TO charset_keyword charset_name COLLATE equal_opt charset_name
     {
-        opt := tree.NewTableOptionCharset($4)
+        opt := tree.NewTableOptionCharset($4, false)
         opt.Collate = $7
         opt.Convert = true
         $$ = opt
     }
 |   able_type KEYS
     {
-        opt := tree.NewTableOptionCharset($1)
+        opt := tree.NewTableOptionCharset($1, false)
         opt.NonCharsetSyntax = true
         $$ = opt
     }
 |   space_type TABLESPACE
     {
-        opt := tree.NewTableOptionCharset($1)
+        opt := tree.NewTableOptionCharset($1, false)
         opt.NonCharsetSyntax = true
         $$ = opt
     }
 |   FORCE
     {
-        opt := tree.NewTableOptionCharset($1)
+        opt := tree.NewTableOptionCharset($1, false)
         opt.NonCharsetSyntax = true
         $$ = opt
     }
@@ -4770,7 +4789,7 @@ alter_option:
     }
 |   with_type VALIDATION
     {
-        opt := tree.NewTableOptionCharset($1)
+        opt := tree.NewTableOptionCharset($1, false)
         opt.NonCharsetSyntax = true
         $$ = opt
     }
@@ -4827,7 +4846,7 @@ column_position:
         var relativeColumn *tree.UnresolvedName
         $$ = tree.NewColumnPosition(typ, relativeColumn);
     }
-|   AFTER column_name
+|   AFTER column_decl_name
     {
         var typ = tree.ColumnPositionAfter;
         var relativeColumn = $2
@@ -4859,6 +4878,16 @@ alter_table_rename:
         $$ = tree.NewAlterOptionTableName(name)
     }
 
+ident_or_end:
+    ident
+    {
+        $$ = $1
+    }
+|   END
+    {
+        $$ = tree.NewCStr($1, 1)
+    }
+
 alter_table_drop:
     INDEX ident
     {
@@ -4872,13 +4901,13 @@ alter_table_drop:
         var name = tree.Identifier($2.Compare());
         $$ = tree.NewAlterOptionDrop(dropType, name);
     }
-|   ident
+|   ident_or_end
     {
         var dropType = tree.AlterTableDropColumn;
         var name = tree.Identifier($1.Compare());
         $$ = tree.NewAlterOptionDrop(dropType, name);
     }
-|   COLUMN ident
+|   COLUMN ident_or_end
     {
         var dropType = tree.AlterTableDropColumn;
         var name = tree.Identifier($2.Compare());
@@ -6917,6 +6946,10 @@ insert_target_column:
     {
         $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin()))
     }
+|   END
+    {
+        $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbOrTblNameCStr($1))
+    }
 |   ident '.' ident
     {
         tblName := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
@@ -7455,6 +7488,19 @@ select_no_parens:
             return 1
         }
     }
+|   with_clause select_with_parens
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, Ep: tree.SelectIntoExportOr($2, nil), IntoVars: intoVars, DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
 
 time_window_opt:
 	{
@@ -7477,7 +7523,7 @@ time_window:
 	}
 
 interval:
-	INTERVAL '(' column_name ',' INTEGRAL ',' time_unit ')'
+	INTERVAL '(' column_decl_name ',' INTEGRAL ',' time_unit ')'
 	{
 		str := fmt.Sprintf("%v", $5)
 		v, errStr := util.GetInt64($5)
@@ -10367,7 +10413,7 @@ index_option:
         io.ITopkSize = val
         $$ = io
      }
-|   INCLUDE '(' column_name_list ')'
+|   INCLUDE '(' include_decl_name_list ')'
     {
         io := tree.NewIndexOption()
         io.IncludeColumns = $3
@@ -10586,6 +10632,22 @@ index_column:
         $$ = tree.NewKeyPart(
             ColName,
             Length, 
+            Direction,
+            Expr,
+        )
+    }
+|   END length_opt asc_desc_opt
+    {
+        // A bare END column name is already accepted at declaration sites
+        // (column_def) and by inline primary keys; extend the same name
+        // resolution to the unambiguous table-level key position. END stays a block terminator everywhere else.
+        var ColName = tree.NewUnresolvedName(tree.NewCStr($1, 1))
+        var Length = int($2)
+        var Direction = $3
+        var Expr tree.Expr
+        $$ = tree.NewKeyPart(
+            ColName,
+            Length,
             Direction,
             Expr,
         )
@@ -11200,6 +11262,60 @@ create_table_stmt:
         if intoErr := tree.ValidateSelectIntoNotAllowed($11); intoErr != "" { yylex.Error(intoErr); goto ret1 }
         t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.CTASConflict = $9; t.AsSource = $11; $$ = t
     }
+// MySQL orders table options before [IGNORE|REPLACE] [AS] query_expression
+// (options after the query stay rejected). The option list is the non-empty
+// table_option_list so an empty list can never compete with '(' (#32542).
+|   CREATE temporary_opt TABLE not_exists_opt table_name table_option_list ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($7); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        t := tree.NewCreateTable()
+        t.IsAsSelect = true
+        t.Temporary = $2
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Options = $6
+        t.AsSource = $7
+        $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($10); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        t := tree.NewCreateTable()
+        t.IsAsSelect = true
+        t.Temporary = $2
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.Options = $9
+        t.AsSource = $10
+        $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name table_option_list ctas_conflict_required ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($8); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Options = $6; t.CTASConflict = $7; t.AsSource = $8; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list ctas_conflict_required ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($11); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.Options = $9; t.CTASConflict = $10; t.AsSource = $11; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name table_option_list ctas_conflict_opt AS ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($9); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Options = $6; t.CTASConflict = $7; t.AsSource = $9; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list ctas_conflict_opt AS ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($12); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.Options = $9; t.CTASConflict = $10; t.AsSource = $12; $$ = t
+    }
 |   CREATE temporary_opt TABLE not_exists_opt table_name LIKE table_name
     {
         t := tree.NewCreateTable()
@@ -11644,7 +11760,7 @@ cluster_by_opt:
     {
         $$ = nil
     }
-|   CLUSTER BY column_name
+|   CLUSTER BY column_decl_name
     {
         var ColumnList = []*tree.UnresolvedName{$3}
         $$ = tree.NewClusterByOption(
@@ -11652,12 +11768,54 @@ cluster_by_opt:
         )
 
     }
-    | CLUSTER BY '(' column_name_list ')'
+    | CLUSTER BY '(' cluster_decl_name_list ')'
     {
         var ColumnList = $4
         $$ = tree.NewClusterByOption(
             ColumnList,
         )
+    }
+
+// partition_column_name_list is confined to the PARTITION BY name lists of
+// KEY, RANGE COLUMNS and LIST COLUMNS: it accepts the same declaration
+// identifier rule (including the unquoted END column) without widening the
+// shared column_name_list used by privilege/INCLUDE contexts.
+partition_column_name_list:
+    column_decl_name
+    {
+        $$ = []*tree.UnresolvedName{$1}
+    }
+|   partition_column_name_list ',' column_decl_name
+    {
+        $$ = append($1, $3)
+    }
+
+// include_decl_name_list is confined to the index INCLUDE option: it
+// accepts the same declaration identifier rule (including the unquoted
+// END column this compatibility work admits at its true column-reference
+// positions) without widening the shared column_name_list used by
+// privilege contexts.
+include_decl_name_list:
+    column_decl_name
+    {
+        $$ = []*tree.UnresolvedName{$1}
+    }
+|   include_decl_name_list ',' column_decl_name
+    {
+        $$ = append($1, $3)
+    }
+
+// cluster_decl_name_list is confined to CLUSTER BY: it accepts the same
+// declaration identifier rule (including the unquoted END column) without
+// widening the shared column_name_list used by privilege/INCLUDE contexts.
+cluster_decl_name_list:
+    column_decl_name
+    {
+        $$ = []*tree.UnresolvedName{$1}
+    }
+|   cluster_decl_name_list ',' column_decl_name
+    {
+        $$ = append($1, $3)
     }
 
 sub_partition_opt:
@@ -11847,7 +12005,7 @@ partition_method:
             rangeTyp,
         )
     }
-|   RANGE fields_or_columns '(' column_name_list ')'
+|   RANGE fields_or_columns '(' partition_column_name_list ')'
     {
         rangeTyp := tree.NewRangeType()
         rangeTyp.ColumnList = $4
@@ -11863,7 +12021,7 @@ partition_method:
             listTyp,
         )
     }
-|   LIST fields_or_columns '(' column_name_list ')'
+|   LIST fields_or_columns '(' partition_column_name_list ')'
     {
         listTyp := tree.NewListType()
         listTyp.ColumnList = $4
@@ -11883,7 +12041,7 @@ sub_partition_method:
             keyTyp,
         )
     }
-|   linear_opt KEY algorithm_opt '(' column_name_list ')'
+|   linear_opt KEY algorithm_opt '(' partition_column_name_list ')'
     {
         keyTyp := tree.NewKeyType()
         keyTyp.Linear = $1
@@ -12188,13 +12346,13 @@ table_option:
     {
         $$ = tree.NewTableOptionAvgRowLength(integralToUint64($3))
     }
-|   default_opt charset_keyword equal_opt charset_name
+|   default_opt charset_keyword equal_opt table_charset_name
     {
-        $$ = tree.NewTableOptionCharset($4)
+        $$ = tree.NewTableOptionCharsetFrom($4)
     }
-|   default_opt COLLATE equal_opt charset_name
+|   default_opt COLLATE equal_opt table_charset_name
     {
-        $$ = tree.NewTableOptionCollate($4)
+        $$ = tree.NewTableOptionCollateFrom($4)
     }
 |   CHECKSUM equal_opt INTEGRAL
     {
@@ -12397,6 +12555,44 @@ row_format_options:
 charset_name:
     name_string { $$ = yylex.(*Lexer).rewriteMergeName($1) }
 |   BINARY
+
+// table_charset_name captures the authored charset/collate name together
+// with the grammar alternative that produced it: the CREATE-side table
+// options carry that origin into the tree so the canonical catalog render
+// re-emits every accepted spelling - bare identifier keywords folded
+// exactly as before, backtick identifiers re-quoted, string literals
+// escaped - instead of a bare token the parser cannot consume back.
+table_charset_name:
+      table_charset_bare_ident
+    {
+        $$ = tree.CharsetNameOrigin{Kind: tree.CharsetNameBare, Value: $1}
+    }
+|   QUOTE_ID
+    {
+        $$ = tree.CharsetNameOrigin{Kind: tree.CharsetNameBacktick, Value: yylex.(*Lexer).rewriteMergeName(tree.NewCStr($1, 1).Compare())}
+    }
+|   STRING
+    {
+        $$ = tree.CharsetNameOrigin{Kind: tree.CharsetNameString, Value: yylex.(*Lexer).rewriteMergeName($1)}
+    }
+|   BINARY
+    {
+        $$ = tree.CharsetNameOrigin{Kind: tree.CharsetNameBare, Value: $1}
+    }
+
+table_charset_bare_ident:
+      ID
+    {
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = yylex.(*Lexer).rewriteMergeName(tree.NewCStr($1, 1).Compare())
+    }
+|   not_keyword
+    {
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = yylex.(*Lexer).rewriteMergeName(tree.NewCStr($1, 1).Compare())
+    }
+|   non_reserved_keyword
+    {
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = yylex.(*Lexer).rewriteMergeName(tree.NewCStr($1, 1).Compare())
+    }
 
 collate_name:
     name_string { $$ = yylex.(*Lexer).rewriteMergeName($1) }
@@ -12856,11 +13052,11 @@ index_name:
 	}
 
 column_def:
-    column_name column_type column_attribute_list_opt
+    column_decl_name column_type column_attribute_list_opt
     {
         $$ = tree.NewColumnTableDef($1, $2, $3)
     }
-|   column_name SERIAL column_attribute_list_opt
+|   column_decl_name SERIAL column_attribute_list_opt
     {
         // MySQL SERIAL is the alias for BIGINT UNSIGNED NOT NULL
         // AUTO_INCREMENT UNIQUE. Expanding at the column-definition owner
@@ -12884,6 +13080,19 @@ column_def:
             tree.NewAttributeUnique(),
         }
         $$ = tree.NewColumnTableDef($1, typ, append(serialAttrs, $3...))
+    }
+
+// The bare END declaration name shares one owner rule across the ordinary
+// column_type alternative and the SERIAL alias alternative, so `end SERIAL`
+// parses exactly like the quoted name and the expanded type. END outside a declaration position is untouched.
+column_decl_name:
+    column_name
+    {
+        $$ = $1
+    }
+|   END
+    {
+        $$ = tree.NewUnresolvedName(tree.NewCStr($1, 1))
     }
 
 column_name_unresolved:
@@ -15045,6 +15254,20 @@ function_call_generic:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3},
+        }
+    }
+|   VALUES '(' END ')'
+    {
+        // Syntax: VALUES(<column>) in INSERT ... ON DUPLICATE KEY UPDATE
+        // resolves the conflicting row's column value. The ON DUPLICATE KEY
+        // UPDATE binder owns this accessor, and the bare END keyword resolves
+        // as that column reference only here; every other END use outside its
+        // explicitly admitted positions stays rejected.
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{tree.NewUnresolvedName(tree.NewCStr($3, 1))},
         }
     }
 

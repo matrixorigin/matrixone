@@ -6884,6 +6884,7 @@ func (c *Compile) compileBroadcastAsofBuildLeft(
 	if len(rightScopes) != 1 || rightScopes[0].NodeInfo.Mcpu != 1 {
 		rightScopes = []*Scope{c.newMergeScope(rightScopes)}
 	}
+	rightScopes = c.wrapLazyBroadcastProbeOwner(rightScopes)
 	rightScopes, leftScopes = c.colocateBroadcastJoinInputs(rightScopes, leftScopes)
 
 	leftTypes := make([]types.Type, len(left.ProjectList))
@@ -7150,6 +7151,25 @@ func (c *Compile) newProbeScopeListForBroadcastJoin(probeScopes []*Scope, forceO
 		}
 	}
 	// don't need to break pipelines for probe side of broadcast join
+	return c.wrapLazyBroadcastProbeOwner(probeScopes)
+}
+
+// wrapLazyBroadcastProbeOwner is the single ordinary probe-owner boundary
+// shared by every broadcast join family. A lazily admitted UNION pagination
+// stream must not own the join build: compileBuildSideForBroadcastJoin
+// attaches the required HashBuild to the returned probe scope's
+// PreScopes, and the union starter's sequential-branch admission space
+// never schedules anything appended there, so an unadmitted build would
+// leave the join probe waiting forever regardless of join type or hashing
+// choice. Before any caller installs its join operator, wrap a lone lazy
+// coordinator probe in one ordinary local merge scope instead - keeping the
+// lazy child intact (starter, branch order, count, receivers) and the build
+// attached beside the stream as an ordinary sibling outside the lazy
+// admission space.
+func (c *Compile) wrapLazyBroadcastProbeOwner(probeScopes []*Scope) []*Scope {
+	if len(probeScopes) == 1 && probeScopes[0].LazyPreScopes && c.scopesRunOnCoordinator(probeScopes) {
+		return []*Scope{c.newMergeScope(probeScopes)}
+	}
 	return probeScopes
 }
 

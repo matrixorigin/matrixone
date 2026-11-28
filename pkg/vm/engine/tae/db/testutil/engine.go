@@ -248,19 +248,38 @@ func (e *TestEngine) TryAppend(bat *containers.Batch) {
 	_ = txn.Commit(context.Background())
 }
 func (e *TestEngine) DeleteAll(skipConflict bool) error {
+	ctx := context.Background()
 	txn, rel := e.GetRelation()
 	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchemaLocked(false)
 	pkIdx := schema.GetPrimaryKey().Idx
 	rowIDIdx := schema.GetColIdx(catalog.PhyAddrColumnName)
 	it := rel.MakeObjectIt(false)
+	defer it.Close()
 	for it.Next() {
 		blk := it.GetObject()
 		defer blk.Close()
 		blkCnt := uint16(blk.BlkCnt())
 		for i := uint16(0); i < blkCnt; i++ {
 			var view *containers.Batch
-			err := blk.HybridScan(context.Background(), &view, i, []int{rowIDIdx, pkIdx}, common.DefaultAllocator)
-			assert.NoError(e.T, err)
+			err := blk.HybridScan(ctx, &view, i, []int{rowIDIdx, pkIdx}, common.DefaultAllocator)
+			if err != nil {
+				// A scan error is not the empty-object contract: HybridScanByBlock
+				// deliberately clears its batch on several errors, so err with a
+				// nil view must fail here. Preserve the actual failure: release
+				// any partial scan state, roll back the active transaction, and
+				// return the initial error so no partial delete can ever commit.
+				if view != nil {
+					view.Close()
+				}
+				_ = txn.Rollback(ctx)
+				return err
+			}
+			if view == nil {
+				// A successful nil scan is a legitimate empty-object outcome: the
+				// engine's own consumers (e.g. tables/jobs/flushTableTail) and
+				// ForEachColumnView treat it as empty rather than failing.
+				continue
+			}
 			defer view.Close()
 			view.Compact()
 			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], view.Vecs[1], handle.DT_Normal)

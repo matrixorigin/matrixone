@@ -810,7 +810,11 @@ func materializeSubqueryUnified(
 	if stmt.Keys.Select == nil {
 		return nil, moerr.NewInvalidInputNoCtx("KEYS subquery is nil")
 	}
-	subqueryPlan, err := buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), stmt.Keys.Select, nil)
+	// The KEYS subquery is preplanned for key materialization only and is
+	// later wrapped as the internal __mo_pick_sub derived source: it is never
+	// this session's export executor, so its preliminary plan stays
+	// ownership-neutral and cannot confer a page-Ex exemption.
+	subqueryPlan, err := buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), stmt.Keys.Select, nil, nil)
 	if err != nil {
 		return nil, err
 	}

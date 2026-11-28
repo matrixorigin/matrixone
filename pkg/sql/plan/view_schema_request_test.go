@@ -1921,3 +1921,208 @@ func BenchmarkViewSchemaRequest(b *testing.B) {
 		})
 	}
 }
+
+// The review #6032620661 gate: the REAL ViewSchemaRequest (open -> authorize
+// -> derivation -> inferViewColumns) driving the EXACT marker-free wrapped
+// INTERVAL definition bytes the v4.2.9 release authored and root verified
+// through the true-RESTORE readback. The authoring/derivation half binds the
+// wrapped interval for EVERY generation form - release marker-free, current
+// and unknown non-nil - because the generation gate belongs to the ordinary
+// relation expansion, not to this schema-inference caller.
+func TestViewSchemaRequestDescribesAuthenticMarkerFreeWrappedInterval(t *testing.T) {
+	// The EXACT marker-free wrapped-INTERVAL definition bytes the v4.2.9
+	// release authored (root-verified through the true-RESTORE readback), plus
+	// the two generation-bearing forms of the same authored statement. The
+	// authentic marker-free definition carries NO creation-time
+	// lower_case_table_names, and the REAL ViewSchemaRequest derivation
+	// responds with the release-authentic typed first denial
+	// (LEGACY_CONTEXT_UNAVAILABLE - the same first cause the authentic
+	// release-written relation produced in the real-service probe); a
+	// definition that records its creation context derives the positive
+	// wrapped-interval schema through the same real request code path.
+	const db = "pg122"
+	const authenticReleaseDefinition = `{"Stmt":"create view v_wrapped_wstart as with c as (select ts from tw_src) (select _wstart, count(*) as counted from tw_src interval(ts, 1, minute)) limit 5","DefaultDatabase":"pg122","sql_mode":"ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES","security_type":"DEFINER"}`
+	const currentGenerationDefinition = `{"Stmt":"create view v_wrapped_wstart as with c as (select ts from tw_src) (select _wstart, count(*) as counted from tw_src interval(ts, 1, minute)) limit 5","DefaultDatabase":"pg122","sql_mode":"ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES","security_type":"DEFINER","lower_case_table_names":1,"cte_scope_protocol":1}`
+	const unknownMarkerDefinition = `{"Stmt":"create view v_wrapped_wstart as with c as (select ts from tw_src) (select _wstart, count(*) as counted from tw_src interval(ts, 1, minute)) limit 5","DefaultDatabase":"pg122","sql_mode":"ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES","security_type":"DEFINER","lower_case_table_names":1,"cte_scope_protocol":99}`
+	for _, tc := range []struct {
+		name       string
+		definition string
+	}{
+		{"authentic release marker-free definition", authenticReleaseDefinition},
+		{"current generation definition", currentGenerationDefinition},
+		{"unknown non nil marker definition", unknownMarkerDefinition},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			tsType := types.T_datetime.ToType()
+			f.compiler.objects["tw_src"] = &ObjectRef{DbName: db, ObjName: "tw_src", Obj: 42}
+			f.compiler.tables["tw_src"] = &TableDef{
+				Name: "tw_src", DbName: db,
+				Cols: []*ColDef{
+					{Name: "ts", Typ: makePlan2Type(&tsType)},
+					{Name: "v", Typ: planpb.Type{Id: int32(types.T_int32)}},
+				},
+			}
+			def := &TableDef{
+				Name: "v_wrapped_wstart", DbName: db, DbId: 7, TblId: 4242, LogicalId: 4242, Version: 5,
+				TableType: catalog.SystemViewRel,
+				ViewSql:   &planpb.ViewDef{View: tc.definition},
+				Cols:      []*ColDef{{Name: "stale", Typ: planpb.Type{Id: int32(types.T_int8)}}},
+			}
+			f.compiler.tables["v_wrapped_wstart"] = def
+			f.compiler.objects["v_wrapped_wstart"] = &ObjectRef{Db: 7, Obj: 4242, SchemaName: db, ObjName: "v_wrapped_wstart"}
+			r := f.request(t)
+			r.memoDisabled = true
+			result, err := r.Describe(db, "v_wrapped_wstart", nil)
+			if tc.name == "authentic release marker-free definition" {
+				// The release-authentic first denial through the REAL request:
+				// the marker-free persisted view records no creation-time
+				// lower_case_table_names, so the derivation's legacy gate fires
+				// exactly as the real-service probe of the same catalog bytes
+				// proved (LEGACY_CONTEXT_UNAVAILABLE precedes the star guard).
+				require.Error(t, err)
+				require.ErrorContains(t, err, "LEGACY_CONTEXT_UNAVAILABLE")
+				require.Nil(t, result)
+				return
+			}
+			require.NoError(t, err, "the creation-context-bearing definition derives through the real request")
+			require.NotNil(t, result)
+			t.Cleanup(result.Release)
+			oracle, err := RegenerateViewDefinition(f.compiler, tc.definition)
+			require.NoError(t, err, "the authoring inference binds the wrapped interval for every generation form")
+			columns, err := result.Columns()
+			require.NoError(t, err)
+			require.Equal(t, oracle.TableDef.Cols, columns, "the real request derivation matches the authoring inference")
+			require.Len(t, columns, 2)
+			require.Equal(t, "_wstart", columns[0].Name)
+			require.Equal(t, int32(types.T_datetime), columns[0].Typ.Id)
+			require.Equal(t, "counted", columns[1].Name)
+			require.Equal(t, int32(types.T_int64), columns[1].Typ.Id)
+			dependencies, err := result.Dependencies()
+			require.NoError(t, err)
+			require.NotEmpty(t, dependencies)
+			// The dependency graph includes the described root alongside its
+			// sources; assert the source presence independently of the
+			// graph's ordering.
+			found := false
+			for _, dependency := range dependencies {
+				if dependency.RelationName == "tw_src" {
+					found = true
+				}
+			}
+			require.True(t, found, "the derived dependency graph resolves the wrapped interval's physical source tw_src")
+		})
+	}
+}
+
+// TestViewSchemaRequestLegacyPeelExpansionSplit is the review #6032620661
+// synthetic control for the authenticated scratch-run finding: a definition
+// that carries ONLY the missing creation-time lower_case_table_names (the
+// release bytes plus that one synthetic field) passes the real request's
+// creation-context gate, so the typed derivation derives BOTH wrapped-interval
+// columns, while the ordinary stored-relation expansion path (the real bindView
+// peel) keeps the released interpretation and leaves the wrapped boundary
+// column unresolvable; current-generation markers adopt the wrapped interval
+// and build. The authentic native contrast (typed 20105 LEGACY_CONTEXT_UNAVAILABLE
+// versus ordinary 1054 for the marker-free bytes themselves) was captured on
+// the real restored pg122 catalog through the scratch route.
+func TestViewSchemaRequestLegacyPeelExpansionSplit(t *testing.T) {
+	const db = "pg122"
+	const contextCloneDefinition = `{"Stmt":"create view v_wrapped_wstart as with c as (select ts from tw_src) (select _wstart, count(*) as counted from tw_src interval(ts, 1, minute)) limit 5","DefaultDatabase":"pg122","sql_mode":"ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES","security_type":"DEFINER","lower_case_table_names":1}`
+	currentDefinition := contextCloneDefinition[:len(contextCloneDefinition)-1] + `,"cte_scope_protocol":1}`
+	unknownDefinition := contextCloneDefinition[:len(contextCloneDefinition)-1] + `,"cte_scope_protocol":99}`
+
+	addTwSrc := func(compiler CompilerContext) {
+		tsType := types.T_datetime.ToType()
+		mock := compiler.(*viewSchemaTestCompiler).MockCompilerContext
+		mock.objects["tw_src"] = &ObjectRef{DbName: db, ObjName: "tw_src", Obj: 42}
+		mock.tables["tw_src"] = &TableDef{
+			Name: "tw_src", DbName: db,
+			Cols: []*ColDef{
+				{Name: "ts", Typ: makePlan2Type(&tsType)},
+				{Name: "v", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			},
+		}
+	}
+
+	t.Run("typed describe derives both columns for the context clone", func(t *testing.T) {
+		f := newViewSchemaTestFixture(t)
+		addTwSrc(f.compiler)
+		def := &TableDef{
+			Name: "v_wrapped_wstart", DbName: db, DbId: 7, TblId: 4252, LogicalId: 4252, Version: 5,
+			TableType: catalog.SystemViewRel,
+			ViewSql:   &planpb.ViewDef{View: contextCloneDefinition},
+			Cols:      []*ColDef{{Name: "stale", Typ: planpb.Type{Id: int32(types.T_int8)}}},
+		}
+		f.compiler.tables["v_wrapped_wstart"] = def
+		f.compiler.objects["v_wrapped_wstart"] = &ObjectRef{Db: 7, Obj: 4252, SchemaName: db, ObjName: "v_wrapped_wstart"}
+		r := f.request(t)
+		r.memoDisabled = true
+		result, err := r.Describe(db, "v_wrapped_wstart", nil)
+		require.NoError(t, err, "the context clone passes the creation-context gate")
+		require.NotNil(t, result)
+		t.Cleanup(result.Release)
+		columns, err := result.Columns()
+		require.NoError(t, err)
+		require.Len(t, columns, 2)
+		require.Equal(t, "_wstart", columns[0].Name)
+		require.Equal(t, int32(types.T_datetime), columns[0].Typ.Id)
+		require.Equal(t, "counted", columns[1].Name)
+		require.Equal(t, int32(types.T_int64), columns[1].Typ.Id)
+		dependencies, err := result.Dependencies()
+		require.NoError(t, err)
+		found := false
+		for _, dependency := range dependencies {
+			if dependency.RelationName == "tw_src" {
+				found = true
+			}
+		}
+		require.True(t, found, "the typed derivation resolves the physical tw_src dependency")
+	})
+
+	storedExpansion := func(t *testing.T, definition string) (*Plan, error) {
+		t.Helper()
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
+		tsType := types.T_datetime.ToType()
+		// The mock's binder resolves only its own default database, so the
+		// expansion replica rewrites the stored definition's database label to
+		// that domain; the authentic pg122 bytes are exercised verbatim by the
+		// fixture-based typed Describe cell above the real-catalog scratch run.
+		database := mock.ctxt.DefaultDatabase()
+		definition = strings.ReplaceAll(definition, `"DefaultDatabase":"pg122"`, `"DefaultDatabase":"`+database+`"`)
+		mock.ctxt.objects["tw_src"] = &ObjectRef{DbName: database, ObjName: "tw_src", Obj: 4262}
+		mock.ctxt.tables["tw_src"] = &TableDef{
+			Name: "tw_src", DbName: database,
+			Cols: []*ColDef{
+				{Name: "ts", Typ: makePlan2Type(&tsType)},
+				{Name: "v", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			},
+		}
+		mock.ctxt.tables["v_wrapped_wstart"] = &TableDef{
+			Name: "v_wrapped_wstart", DbName: database, TblId: 4272, LogicalId: 4272,
+			TableType: catalog.SystemViewRel,
+			ViewSql:   &planpb.ViewDef{View: definition},
+		}
+		mock.ctxt.objects["v_wrapped_wstart"] = &ObjectRef{DbName: database, ObjName: "v_wrapped_wstart", Obj: 4272}
+		return runOneStmt(mock, t, "select * from v_wrapped_wstart")
+	}
+
+	t.Run("legacy peel leaves the wrapped boundary column unresolvable", func(t *testing.T) {
+		plan, err := storedExpansion(t, contextCloneDefinition)
+		require.Error(t, err, "the released interpretation keeps the wrapped interval inert on the ordinary expansion path")
+		require.ErrorContains(t, err, "_wstart does not exist", "the moerr typed unknown-column text captured on the real catalog")
+		require.Nil(t, plan)
+	})
+
+	t.Run("current generation adopts the wrapped interval", func(t *testing.T) {
+		plan, err := storedExpansion(t, currentDefinition)
+		require.NoError(t, err, "the current generation adopts the wrapped interval and resolves the boundary column")
+		require.NotNil(t, plan)
+	})
+
+	t.Run("unknown non nil marker keeps current expansion", func(t *testing.T) {
+		plan, err := storedExpansion(t, unknownDefinition)
+		require.NoError(t, err, "an unrecognized non-nil marker selects the current expansion contract")
+		require.NotNil(t, plan)
+	})
+}

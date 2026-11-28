@@ -767,6 +767,17 @@ const (
 	TimeWindowEnd   = "_wend"
 )
 
+// pageStarOrdinal resolves a generated page star reference through its
+// pointer identity only; an ordinary written column reference never enters
+// the registry and keeps the normal name-bound ambiguity below.
+func (b *baseBinder) pageStarOrdinal(astExpr *tree.UnresolvedName) (ordinal syntheticStarOrdinal, registered bool) {
+	if b.builder == nil {
+		return syntheticStarOrdinal{}, false
+	}
+	ordinal, registered = b.builder.syntheticStarOrdinals[astExpr]
+	return ordinal, registered
+}
+
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	if b.ctx == nil {
 		return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", astExpr.ColNameOrigin())
@@ -809,7 +820,17 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	// branch below.
 	var joinOnUnresolved error
 
-	if len(table) == 0 {
+	if ordinal, registered := b.pageStarOrdinal(astExpr); registered && b.ctx != nil {
+		// The wrap's generated page star reference: bind positionally to the
+		// sole derived binding's column by relation tag and ordinal. A
+		// user-written reference to an authored duplicate name never enters
+		// this map: it keeps the ordinary name-bound ambiguity below.
+		resolvedBinding = ordinal.binding
+		relPos = ordinal.binding.tag
+		colPos = ordinal.colPos
+		typ = DeepCopyType(ordinal.binding.types[colPos])
+		table = ordinal.binding.table
+	} else if len(table) == 0 {
 		if binding, ok := b.ctx.bindingByCol[col]; ok {
 			if binding != nil {
 				resolvedBinding = binding

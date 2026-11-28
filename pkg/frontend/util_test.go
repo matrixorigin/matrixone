@@ -961,7 +961,7 @@ func TestGetExprValue(t *testing.T) {
 		// through the session compiler context after SET evaluation.
 		nextStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select 1", 1)
 		cvey.So(err, cvey.ShouldBeNil)
-		_, err = buildPlanWithPrepareMode(ctx, ses, ses.txnCompileCtx, nextStmt, false, nil)
+		_, err = buildPlanWithPrepareMode(ctx, ses, ses.txnCompileCtx, nextStmt, false, nil, nil)
 		cvey.So(err, cvey.ShouldBeNil)
 
 	})

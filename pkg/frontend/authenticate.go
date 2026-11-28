@@ -10390,7 +10390,10 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 	}
 
 	// Rebuild source-select plan and reuse normal table-scan privilege extraction,
-	// instead of manually parsing AST table references.
+	// instead of manually parsing AST table references. The rebuilt plan uses
+	// the same merge-base child-only CTAS source boundary the plan build binds:
+	// a no-WITH wrapper's own clauses add no referenced object, and binding the
+	// full wrapper would duplicate-check the child's clauses against them.
 	compilerContext := ses.GetTxnCompileCtx()
 	originalContext := compilerContext.GetContext()
 	planningContext := originalContext
@@ -10399,7 +10402,8 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 	}
 	compilerContext.SetContext(plan2.WithJSONMergeWarningOrigin(planningContext, plan2.JSONMergeWarningInternalReprepare))
 	defer compilerContext.SetContext(originalContext)
-	sourcePlan, err := buildPlan(ctx, ses, compilerContext, plan2.DeepCopySelect(st.AsSource))
+	sourcePlan, err := buildPlan(ctx, ses, compilerContext,
+		plan2.ReleasedChildOnlyCtasSource(plan2.DeepCopySelect(st.AsSource)))
 	if err != nil {
 		return false, stats, err
 	}

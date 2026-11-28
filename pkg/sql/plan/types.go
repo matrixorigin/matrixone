@@ -372,6 +372,8 @@ type BaseOptimizer struct {
 	ctx              CompilerContext
 }
 
+const currentCTEScopeProtocol int64 = 1
+
 type ViewData struct {
 	Stmt                string
 	Definition          string `json:"definition,omitempty"`
@@ -385,6 +387,15 @@ type ViewData struct {
 	// persisted view expression on a local CN. It is a defense-in-depth marker;
 	// cluster admission remains the authoritative old-CN re-entry fence.
 	RequiredProtocolVersion *int64 `json:"required_protocol_version,omitempty"`
+	// CTEScopeProtocol records the CTE lexical-resolution generation this
+	// definition was authored under. It follows the same persisted-marker
+	// contract as RequiredProtocolVersion: definitions persisted before the
+	// corrected displaced-declaration visibility carry no field (the released
+	// writers omitted it) and rebind under the released legacy masking, while
+	// every fresh CREATE/ALTER/CREATE-OR-REPLACE writer stamps the current
+	// generation below so authored and upgraded deployments keep their
+	// results without any definition rewrite.
+	CTEScopeProtocol *int64 `json:"cte_scope_protocol,omitempty"`
 }
 
 // updateTargetScope borrows the existing target-side binding while UPDATE FROM
@@ -395,6 +406,30 @@ type updateTargetScope struct {
 }
 
 type QueryBuilder struct {
+	// syntheticPageSelects marks the exact *tree.Select nodes the ordinary
+	// pagination wrap generated as internal page stages: pointer identity of
+	// the generated page owner, not any alias spelling or shared flag.
+	syntheticPageClauses map[*tree.SelectClause]bool
+	// clauseCorrespondence maps the cloned SelectClause pointers produced by the
+	// pagination wrap copy back to the authored counterparts. The view star
+	// expansion capture keys its freeze by the clause being bound: for a
+	// paginated view that clause is a clone, while the catalog formatter
+	// walks the authored statement, so the capture records the authored key.
+	clauseCorrespondence map[*tree.SelectClause]*tree.SelectClause
+	// routedRootSelect records the first select this builder binds for the
+	// plan - the authored statement the executor actually routed. The
+	// pagination helpers treat the routed root as the one authored position
+	// an assignment or export clause may ride through the composition,
+	// while every nested body (CTE bodies, view sources, set members)
+	// stays subject to the plain duplicate-owner validation.
+	routedRootSelect *tree.Select
+
+	// syntheticStarOrdinals carries, for the wrap's generated star refs
+	// only, the sole derived binding's visible column by relation tag and
+	// ordinal, so duplicate authored headings bind positionally while a
+	// user-written reference to the same name keeps its typed ambiguity.
+	syntheticStarOrdinals map[*tree.UnresolvedName]syntheticStarOrdinal
+
 	// mixedDomainCoalesce is set when the statement binds a binary-typed
 	// COALESCE that can return a text value; see coalesce_text_domain.go.
 	mixedDomainCoalesce bool
@@ -791,7 +826,44 @@ type OptimizerHints struct {
 	rollupSort int
 }
 
+// cteOwnerNode keeps one immutable snapshot of the CTE whose body region a
+// lookup runs inside. Nodes are appended at region entry and never rewritten
+// in place, so nested CTE body regions compose their restrictions instead of
+// overwriting each other (PR 32906 reviews 5985861342/5985871552/5985967332,
+// root19 C2/C3).
+type cteOwnerNode struct {
+	cte  *CTERef
+	next *cteOwnerNode
+}
+
+// pendingCTE reports whether cte is the later same-WITH declaration of any
+// region owner on the chain: a name is withheld only when it belongs to that
+// owner's maskedCTEs (its true not-yet-in-scope set) and the candidate entry
+// carries the same WITH identity, so legal earlier siblings stay visible
+// (root19 C1).
+func (n *cteOwnerNode) pendingCTE(name string, cte *CTERef) bool {
+	for node := n; node != nil; node = node.next {
+		if node.cte == nil || cte == nil || cte.withClause == nil {
+			continue
+		}
+		if node.cte.maskedCTEs[name] && cte.withClause == node.cte.withClause {
+			return true
+		}
+	}
+	return false
+}
+
 type CTERef struct {
+	// shadowedOuter keeps the enclosing definition that a same-name later
+	// declaration displaced while merging scopes, so lookups during the
+	// not-yet-in-scope window resolve to it instead of failing (PR 32906
+	// review 5985871552).
+	shadowedOuter *CTERef
+	// withClause keeps the WITH clause this ref was declared by: comparing it
+	// identifies same-WITH siblings (a pending later declaration) robustly,
+	// because every binding pass derives refs from the same parsed AST
+	// (PR 32906 review 5985871552).
+	withClause     *tree.With
 	isRecursive    bool
 	ast            *tree.CTE
 	maskedCTEs     map[string]bool
@@ -939,6 +1011,11 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
+	// syntheticPageStar is set only while the projections of one registered
+	// generated page select bind: it restricts the star's ordinal expansion
+	// to the generated page owner's own select.
+	syntheticPageStar bool
+
 	builder *QueryBuilder
 	// Internal UPDATE/DELETE target projections need the persisted value for
 	// old secondary-index keys. The user predicate in the same SELECT still
@@ -1009,7 +1086,21 @@ type BindContext struct {
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
 	//cteState records state of binding cte
-	cteState                     CteBindState
+	cteState      CteBindState
+	cteOwnerChain *cteOwnerNode
+	// legacyCTEScope is set only on the isolated binding context of a
+	// persisted view definition authored before the corrected displaced-
+	// declaration visibility (a missing CTEScopeProtocol marker). Children
+	// inherit it, and it restores the released masking behavior for that
+	// binding alone: masked names fall through to the enclosing catalog and
+	// displaced links are never consulted.
+	legacyCTEScope bool
+	// releasedTimeWindowPlacement marks a legacy-generation persisted relation whose
+	// ordinary expansion keeps the released TimeWindow ownership: the incoming root
+	// clause stays authoritative and peeled-wrapper TimeWindow clauses are neither
+	// adopted nor duplicate-checked. It mirrors the same per-definition marker as
+	// legacyCTEScope and inherits only through NewBindContext.
+	releasedTimeWindowPlacement  bool
 	sliding                      bool
 	explicitSliding              bool
 	isDistinct                   bool
@@ -1436,6 +1527,15 @@ const (
 	NotFound      int32 = math.MaxInt32
 	AmbiguousName int32 = math.MinInt32
 )
+
+// syntheticStarOrdinal binds one generated page star reference to its
+// sole derived binding's visible column by ordinal: the authored display
+// name still travels on the heading, the type and tag stay owned by the
+// binding itself.
+type syntheticStarOrdinal struct {
+	binding *Binding
+	colPos  int32
+}
 
 type Binding struct {
 	tag    int32

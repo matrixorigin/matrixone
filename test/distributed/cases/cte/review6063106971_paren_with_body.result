@@ -1,0 +1,17 @@
+with cte as (select 1 as a) (select * from cte);
+➤ a[-5,64,0]  𝄀
+1
+with cte as (select 1 as a) select * from cte;
+➤ a[-5,64,0]  𝄀
+1
+create table pw606(x int);
+insert into pw606 values (7);
+with q as (select x from pw606) (select * from q) order by x limit 1;
+➤ x[4,32,0]  𝄀
+7
+with cte as (select 1 as a) (select * from cte order by a) order by a;
+➤ a[-5,64,0]  𝄀
+1
+(select x from pw606 limit 1) limit 1;
+SQL syntax error: multiple LIMIT clauses not allowed
+drop table pw606;

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type restoredViewDefinitionKey struct{}
@@ -68,6 +69,57 @@ func restoredViewLowerCase(ctx context.Context, data ViewData, fallback int64) (
 	return mode, nil
 }
 
+// restoredLegacyInnerWindowInferenceInput reproduces the released server's
+// CREATE inference boundary for marker-free restored definitions generally:
+// the released genViewTableDef switch binds the immediate parenthesized child
+// in every paren-form shape (`case *tree.ParenSelect` -> bind(s.Select), with
+// no condition on the outer window, a WITH or any inner clause - see
+// build_ddl.go:171-182 at the v4.2.9 release commit 6c05e42), while every
+// non-parenthesized form binds the whole statement. The restored
+// schema/dependency inference selects that same inner input, so an
+// extra-grouping layer or an authored WITH inside the body resolves exactly
+// as the release did; every other shape keeps the complete defining select.
+func restoredLegacyInnerWindowInferenceInput(ctx CompilerContext, database, name string, stmt *tree.Select) *tree.Select {
+	inner, ok := restoredLegacyInnerWindow(ctx, database, name, stmt)
+	if !ok || inner == nil {
+		return stmt
+	}
+	return inner
+}
+
+func restoredLegacyInnerWindow(ctx CompilerContext, database, name string, stmt *tree.Select) (*tree.Select, bool) {
+	if ctx == nil || ctx.GetContext() == nil || stmt == nil {
+		return nil, false
+	}
+	source, ok := ctx.GetContext().Value(restoredViewDefinitionKey{}).(restoredViewDefinition)
+	if !ok || source.database != database || source.name != name || source.createSQL == "" {
+		return nil, false
+	}
+	var data ViewData
+	if err := json.Unmarshal([]byte(source.definition), &data); err != nil || data.CTEScopeProtocol != nil {
+		return nil, false
+	}
+	// The released server's genViewTableDef binds the immediate parenthesized
+	// child for CREATE VIEW inference in every paren-form shape: its switch arm
+	// is `case *tree.ParenSelect` -> bind(s.Select) with no condition on the
+	// outer window, a WITH, lock/export/INTO state or any inner clause, while
+	// the non-paren forms bind the whole statement (build_ddl.go:171-182 at the
+	// v4.2.9 release commit 6c05e42). This guard mirrors that boundary for
+	// marker-free restored definitions: a *tree.ParenSelect body hands the
+	// immediate child to the schema/dependency inference whatever clauses
+	// either level carries, and every other shape keeps the complete defining
+	// select so current-generation validation stays whole. The authentic
+	// release-authored extra-grouping capture proves the immediate child may
+	// itself be a transparent paren layer whose window binds through, and the
+	// release rejects the WITH-paren-body spelling outright (1064), so no
+	// marker-free definition of that shape can exist.
+	paren, ok := stmt.Select.(*tree.ParenSelect)
+	if !ok || paren.Select == nil {
+		return nil, false
+	}
+	return paren.Select, true
+}
+
 func restoredViewCreationContext(ctx CompilerContext, database, name string) (CompilerContext, error) {
 	if ctx.GetContext() == nil {
 		return ctx, nil
@@ -95,8 +147,13 @@ func restoredViewCreationContext(ctx CompilerContext, database, name string) (Co
 	if value, present := fields["DefaultDatabase"]; present && string(value) != "null" {
 		db = data.DefaultDatabase
 	}
+	// The restored definition is re-authored in the generation it was authored
+	// under: a release-era definition (persisted without cte_scope_protocol)
+	// keeps the legacy resolution for its re-inferred columns and dependencies,
+	// while a definition recorded with the current generation stays corrected.
 	return &viewRegenerationContext{CompilerContext: ctx, defaultDatabase: db,
-		rootSQL: ctx.GetRootSql(), lowerCaseTableNames: lower}, nil
+		rootSQL: ctx.GetRootSql(), lowerCaseTableNames: lower,
+		legacyCTEScope: data.CTEScopeProtocol == nil}, nil
 }
 
 func preserveRestoredViewDefinition(ctx context.Context, database, name, generated string) (string, error) {
