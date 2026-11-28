@@ -1516,7 +1516,13 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	change = change || schemaChanged
 	if schemasValidated && !change && validateSubscriptions {
-		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
+		// The validations above resolved metadata through the EXECUTING
+		// transaction, whose snapshot can sit below the shared catalog-cache
+		// watermark (a repeatable-read transaction opened before a metadata
+		// change). Cap the checked watermark at that transaction's own
+		// snapshot so a later execution revalidates the newer metadata.
+		prepareStmt.preparedMetadataCheckTS = metadataCheckedThrough(
+			preparedMetadataTS, currentTxnSnapshotTSForProcess(cwft.proc))
 	}
 
 	// These DDL plans cache catalog state that is not represented by a table
@@ -1675,9 +1681,13 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
 		prepareStmt.ddlVersion = currentDDLVersion
-		// The rebuilt plan has incorporated the metadata visible through this
-		// high-watermark. A later logtail event will advance it again.
-		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
+		// The rebuilt plan resolved metadata through the EXECUTING transaction,
+		// whose snapshot can sit below the shared catalog-cache watermark (a
+		// repeatable-read transaction opened before a metadata change). Cap the
+		// checked watermark at that transaction's own snapshot so a later
+		// execution revalidates the newer metadata.
+		prepareStmt.preparedMetadataCheckTS = metadataCheckedThrough(
+			preparedMetadataTS, prepareTs)
 		prepareStmt.protocolVersion = protocolVersion
 		prepareStmt.needsRebuild = false
 	}
@@ -2200,6 +2210,23 @@ func preparedSubscriptionsNeedValidation(
 	checkedTS timestamp.Timestamp,
 ) bool {
 	return metadataTS.Greater(checkedTS) && metadataTS.Greater(prepareTS)
+}
+
+// metadataCheckedThrough returns the metadata watermark that the EXECUTING
+// transaction could actually observe. A transaction pinned below the shared
+// catalog-cache watermark — a repeatable-read transaction opened before a
+// metadata change (issues #33353/#33367) — cannot have validated that change,
+// so the checked watermark captured on its behalf must not advance past the
+// transaction's own snapshot. The next execution in a later transaction then
+// revalidates against the newer metadata instead of skipping it.
+func metadataCheckedThrough(
+	metadataTS timestamp.Timestamp,
+	executionSnapshotTS timestamp.Timestamp,
+) timestamp.Timestamp {
+	if executionSnapshotTS.Less(metadataTS) {
+		return executionSnapshotTS
+	}
+	return metadataTS
 }
 
 func preparedNamedSnapshotsNeedValidation(

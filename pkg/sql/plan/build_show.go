@@ -202,7 +202,17 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	sql := "SELECT %s AS `Table`, %s AS `Create Table`"
 	sql = fmt.Sprintf(sql, formatStrLit(tblName), formatStrLit(ddlStr))
 
-	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
+	result, err := returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
+	if err != nil {
+		return nil, err
+	}
+	// The literal rewrite never scans t, so PREPARE would otherwise capture no
+	// dependency and a cross-session alteration or snapshot loss could not
+	// invalidate a warmed handle (#33353). The snapshot-qualified ref keeps the
+	// historical identity immutable while the plan still revalidates the named
+	// snapshot itself.
+	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, nil, false, snapshot)
+	return result, nil
 }
 
 // buildShowCreateView
@@ -223,7 +233,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 		return nil, err
 	}
 
-	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +258,15 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 
 	// logutil.Info(sqlStr)
 
-	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE)
+	result, err := returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE)
+	if err != nil {
+		return nil, err
+	}
+	// The stored definition is materialized as a literal, so the plan itself
+	// cannot recover the view identity. Capture the resolved target for
+	// EXECUTE-time invalidation, exactly as SHOW COLUMNS does (#33353).
+	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, nil, false, snapshot)
+	return result, nil
 }
 
 // showCreateViewSQL returns the rewrite query for SHOW CREATE VIEW. The view
@@ -559,7 +577,7 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 	if err != nil {
 		return nil, err
 	}
-	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, dependencies, dependsOnUdf)
+	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, dependencies, dependsOnUdf, nil)
 	return result, nil
 }
 
@@ -629,7 +647,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 	if err != nil {
 		return nil, err
 	}
-	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, dependencies, dependsOnUdf)
+	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, dependencies, dependsOnUdf, nil)
 	return result, nil
 }
 
@@ -638,11 +656,18 @@ func isUserViewMetadata(database string, def *TableDef) bool {
 		!slices.Contains(catalog.SystemDatabases, strings.ToLower(database))
 }
 
-func setShowMetadataDependencies(query *Query, obj *ObjectRef, def *TableDef, dependencies []*ObjectRef, dependsOnUdf bool) {
+// setShowMetadataDependencies records the resolved target of a rewritten SHOW
+// plan so PREPARE captures its identity for EXECUTE-time invalidation. The
+// rewritten SELECT (a literal for SHOW CREATE, catalog scans for SHOW COLUMNS
+// and SHOW INDEX) does not scan the target itself, so dependency collection has
+// no scan to recover the object. snapshot is the qualifier the builder resolved
+// the target under: a snapshot-qualified ref is immutable history, while an
+// ordinary ref must revalidate the live table.
+func setShowMetadataDependencies(query *Query, obj *ObjectRef, def *TableDef, dependencies []*ObjectRef, dependsOnUdf bool, snapshot *Snapshot) {
 	query.CatalogDependencies = appendPrepareSchemas(query.CatalogDependencies, dependencies...)
 	// Include ordinary targets too: replacing a table with a View changes the
 	// metadata row source, not just the values stored in the catalog.
-	query.CatalogDependencies = appendPrepareSchemas(query.CatalogDependencies, prepareSchemaRefWithSnapshot(obj, def, nil))
+	query.CatalogDependencies = appendPrepareSchemas(query.CatalogDependencies, prepareSchemaRefWithSnapshot(obj, def, snapshot))
 	query.ViewMetadataDependsOnUdf = query.ViewMetadataDependsOnUdf || dependsOnUdf
 }
 
@@ -874,7 +899,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext, isPrepareStmt
 	if err != nil {
 		return nil, err
 	}
-	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, viewDependencies, viewMetadataDependsOnUdf)
+	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, viewDependencies, viewMetadataDependsOnUdf, nil)
 	return result, nil
 }
 
@@ -1174,10 +1199,22 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	}
 	showIndexSql := fmt.Sprintf(sql, sqlquote.String(displayTblName), MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, sqlquote.String(dbName), sqlquote.String(tblName), sqlquote.String(catalog.AliasPrefix+"%"))
 
+	var result *Plan
 	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, showIndexSql, stmt.Where, ddlType)
+		result, err = returnByWhereAndBaseSQL(ctx, showIndexSql, stmt.Where, ddlType)
+	} else {
+		result, err = returnByRewriteSQL(ctx, showIndexSql, ddlType)
 	}
-	return returnByRewriteSQL(ctx, showIndexSql, ddlType)
+	if err != nil {
+		return nil, err
+	}
+	// The rewritten query scans the catalog rather than the target, so a
+	// dropped or rebuilt table would otherwise keep serving warmed handles
+	// from its old plan (#33367). Capture the resolved object so EXECUTE
+	// revalidates the target's identity and version, and a missing table
+	// rebuilds into the same error a direct or fresh statement reports.
+	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, nil, false, snapshot)
+	return result, nil
 }
 
 // buildShowGrants rewrites SHOW GRANTS into a single query over

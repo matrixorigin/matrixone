@@ -510,4 +510,95 @@ show tables like 'prepared_nested_proc_table';
 deallocate prepare prepared_nested_proc_drop;
 drop procedure prepared_outer_ddl;
 drop procedure prepared_inner_ddl;
+create table show_inval_target (id int primary key, v int, key idx_show_v(v));
+prepare show_inval_create_stmt from 'show create table show_inval_target';
+execute show_inval_create_stmt;
+➤ Table[12,17,0]  ¦  Create Table[12,128,0]  𝄀
+show_inval_target  ¦  CREATE TABLE `show_inval_target` (
+  `id` int NOT NULL,
+  `v` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_show_v` (`v`)
+)
+use prepare_ddl_schema_change;
+alter table show_inval_target algorithm=copy, add column note varchar(20) default 'x';
+execute show_inval_create_stmt;
+➤ Table[12,17,0]  ¦  Create Table[12,162,0]  𝄀
+show_inval_target  ¦  CREATE TABLE `show_inval_target` (
+  `id` int NOT NULL,
+  `v` int DEFAULT NULL,
+  `note` varchar(20) DEFAULT 'x',
+  PRIMARY KEY (`id`),
+  KEY `idx_show_v` (`v`)
+)
+select column_name
+from information_schema.columns
+where table_schema = 'prepare_ddl_schema_change'
+and table_name = 'show_inval_target'
+order by ordinal_position;
+➤ column_name[12,256,0]  𝄀
+id  𝄀
+v  𝄀
+note
+deallocate prepare show_inval_create_stmt;
+prepare show_index_stmt from 'show index from show_inval_target';
+execute show_index_stmt;
+➤ Table[12,17,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+show_inval_target  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+show_inval_target  ¦  1  ¦  idx_show_v  ¦  1  ¦  v  ¦  A  ¦  0  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
+use prepare_ddl_schema_change;
+drop table show_inval_target;
+execute show_index_stmt;
+no such table prepare_ddl_schema_change.show_inval_target
+show index from show_inval_target;
+no such table prepare_ddl_schema_change.show_inval_target
+create table show_inval_target (id int primary key, v int, key idx_show_new(v));
+execute show_index_stmt;
+➤ Table[12,17,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+show_inval_target  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+show_inval_target  ¦  1  ¦  idx_show_new  ¦  1  ¦  v  ¦  A  ¦  0  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
+show index from show_inval_target;
+➤ Table[12,17,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[-5,64,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,65535,0]  𝄀
+show_inval_target  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  null  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+show_inval_target  ¦  1  ¦  idx_show_new  ¦  1  ¦  v  ¦  A  ¦  0  ¦  null  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
+deallocate prepare show_index_stmt;
+drop table show_inval_target;
+create table show_snapshot_target (a int);
+create snapshot show_inv_snapshot for database prepare_ddl_schema_change;
+prepare show_snapshot_stmt from
+'show create table show_snapshot_target {snapshot = ''show_inv_snapshot''}';
+execute show_snapshot_stmt;
+➤ Table[12,20,0]  ¦  Create Table[12,89,0]  𝄀
+show_snapshot_target  ¦  CREATE TABLE `show_snapshot_target` (
+  `a` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
+set session transaction isolation level repeatable read;
+begin;
+select * from show_snapshot_target;
+➤ a[4,32,0]
+use prepare_ddl_schema_change;
+drop snapshot show_inv_snapshot;
+execute show_snapshot_stmt;
+➤ Table[12,20,0]  ¦  Create Table[12,89,0]  𝄀
+show_snapshot_target  ¦  CREATE TABLE `show_snapshot_target` (
+  `a` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
+show create table show_snapshot_target {snapshot = 'show_inv_snapshot'};
+➤ Table[12,20,0]  ¦  Create Table[12,89,0]  𝄀
+show_snapshot_target  ¦  CREATE TABLE `show_snapshot_target` (
+  `a` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
+commit;
+execute show_snapshot_stmt;
+internal error: find 0 snapshot records by name(show_inv_snapshot), expect only 1
+execute show_snapshot_stmt;
+internal error: find 0 snapshot records by name(show_inv_snapshot), expect only 1
+show create table show_snapshot_target {snapshot = 'show_inv_snapshot'};
+internal error: find 0 snapshot records by name(show_inv_snapshot), expect only 1
+prepare show_snapshot_fresh from
+'show create table show_snapshot_target {snapshot = ''show_inv_snapshot''}';
+internal error: find 0 snapshot records by name(show_inv_snapshot), expect only 1
+deallocate prepare show_snapshot_stmt;
+set session transaction isolation level read committed;
+drop table show_snapshot_target;
 drop database prepare_ddl_schema_change;
