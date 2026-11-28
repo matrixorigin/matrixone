@@ -111,6 +111,9 @@ func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Con
 	if function.LegacyUnixTimestampDatetime(ctx.GetContext()) {
 		bound = function.WithLegacyUnixTimestampDatetime(bound)
 	}
+	if function.LegacyUnixTimestampOverloads(ctx.GetContext()) {
+		bound = function.WithLegacyUnixTimestampOverloads(bound)
+	}
 	// D11 carrier two: standalone DDL binders take no QueryBuilder and no
 	// BindContext, so the boolean-semantics statement setting rides this same
 	// carrier. A native-mode session authors persisted expressions with the

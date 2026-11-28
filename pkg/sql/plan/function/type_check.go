@@ -348,6 +348,20 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 // implicit TIME -> DATETIME cast uses the host date and cannot supply a valid
 // UNIX epoch for the statement's date.
 func unixTimestampTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 0 {
+		return fixedTypeMatchOnly(overloads, inputs, 0)
+	}
+	if len(inputs) == 1 && inputs[0].Oid == types.T_datetime {
+		return fixedTypeMatchOnly(overloads, inputs, 8)
+	}
+	result := fixedTypeMatch(overloads[5:8], inputs)
+	if result.status == succeedMatched || result.status == succeedWithCast {
+		result.idx += 5
+	}
+	return result
+}
+
+func legacyUnixTimestampTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) == 1 && inputs[0].Oid == types.T_datetime {
 		return fixedTypeMatchOnly(overloads, inputs, 4)
 	}

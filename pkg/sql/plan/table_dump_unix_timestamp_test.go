@@ -19,11 +19,172 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPersistedUnixTimestampDefaultRetainsReleasedOverload(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	compiler := NewMockCompilerContext(false, proc)
+	stmt, err := mysql.ParseOne(t.Context(), "create table t("+
+		"future bigint default (unix_timestamp('3001-01-20 00:00:00')),"+
+		"in_range bigint default (unix_timestamp('3001-01-18 23:59:58')))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false, nil)
+	require.NoError(t, err)
+	current := built.GetDdl().GetCreateTable().GetTableDef()
+	legacy := proto.Clone(current).(*planpb.TableDef)
+	for _, col := range legacy.Cols[:2] {
+		found := false
+		require.NoError(t, planpb.VisitExprTree(col.Default.Expr, func(expr *planpb.Expr) error {
+			if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "unix_timestamp" {
+				fid, overload := function.DecodeOverloadID(fn.Func.Obj)
+				require.Equal(t, int32(function.UNIX_TIMESTAMP), fid)
+				require.Equal(t, int32(6), overload)
+				fn.Func.Obj = function.EncodeOverloadID(fid, 2)
+				found = true
+			}
+			return nil
+		}))
+		require.True(t, found)
+	}
+	encoded, err := proto.Marshal(legacy)
+	require.NoError(t, err)
+	var restored planpb.TableDef
+	require.NoError(t, proto.Unmarshal(encoded, &restored))
+	_, err = AnalyzeTableDumpBindings(compiler, &restored, &restored)
+	require.NoError(t, err)
+	_, err = AnalyzeTableDumpBindings(compiler, current, &restored)
+	require.NoError(t, err)
+	evaluate := func(col *planpb.ColDef) int64 {
+		t.Helper()
+		expr, err := getDefaultExprForAssignment(t.Context(), col, "", proc, false)
+		require.NoError(t, err)
+		executor, err := colexec.NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+		result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		require.NoError(t, err)
+		return vector.GetFixedAtNoTypeCheck[int64](result, 0)
+	}
+	require.Equal(t, int64(0), evaluate(current.Cols[0]))
+	require.Equal(t, int64(32536857600), evaluate(restored.Cols[0]))
+	require.Equal(t, int64(32536771198), evaluate(current.Cols[1]))
+	require.Equal(t, int64(32536771198), evaluate(restored.Cols[1]))
+}
+
+func TestTableDumpV1UnixTimestampDefaultWithStableLiteral(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	compiler := NewMockCompilerContext(false, proc)
+	stmt, err := mysql.ParseOne(t.Context(),
+		"create table t(a bigint default (unix_timestamp('1971-01-01 00:00:00')))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false, nil)
+	require.NoError(t, err)
+	current := built.GetDdl().GetCreateTable().GetTableDef()
+	legacy := proto.Clone(current).(*planpb.TableDef)
+	changed := false
+	require.NoError(t, planpb.VisitExprTree(legacy.Cols[0].Default.Expr, func(expr *planpb.Expr) error {
+		if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "unix_timestamp" {
+			id, overload := function.DecodeOverloadID(fn.Func.Obj)
+			require.Equal(t, int32(function.UNIX_TIMESTAMP), id)
+			require.Equal(t, int32(6), overload)
+			fn.Func.Obj = function.EncodeOverloadID(id, 2)
+			changed = true
+		}
+		return nil
+	}))
+	require.True(t, changed)
+
+	for _, tc := range []struct {
+		name string
+		def  *planpb.TableDef
+	}{{"current", current}, {"legacy", legacy}} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := proto.Clone(tc.def)
+			_, err := AnalyzeTableDumpBindings(compiler, tc.def, tc.def)
+			require.NoError(t, err)
+			sensitive, err := AnalyzeTableDumpBindings(compiler, tc.def, nil)
+			require.NoError(t, err)
+			require.False(t, sensitive, "v1 restore has no bound payload, but these overloads agree for the literal")
+			require.True(t, proto.Equal(before, tc.def))
+		})
+	}
+}
+
+func TestTableDumpV1UnixTimestampBoundaryRemainsSensitive(t *testing.T) {
+	for _, value := range []string{"1970-01-01 00:00:00", "3001-01-20 00:00:00"} {
+		t.Run(value, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			proc.GetSessionInfo().TimeZone = time.UTC
+			compiler := NewMockCompilerContext(false, proc)
+			stmt, err := mysql.ParseOne(t.Context(),
+				"create table t(a bigint default (unix_timestamp('"+value+"')))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(compiler, stmt, false, nil)
+			require.NoError(t, err)
+			def := built.GetDdl().GetCreateTable().GetTableDef()
+			sensitive, err := AnalyzeTableDumpBindings(compiler, def, nil)
+			require.NoError(t, err)
+			require.True(t, sensitive, "v1 has no payload to distinguish the changed range semantics")
+		})
+	}
+}
+
+func TestTableDumpV1UnixTimestampDatetimeRemainsSensitive(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	compiler := NewMockCompilerContext(false, proc)
+	stmt, err := mysql.ParseOne(t.Context(),
+		"create table t(a bigint default (unix_timestamp(cast('1971-01-01 00:00:00' as datetime))))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false, nil)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef()
+	sensitive, err := AnalyzeTableDumpBindings(compiler, def, nil)
+	require.NoError(t, err)
+	require.True(t, sensitive, "v1 cannot distinguish the earlier DATETIME-to-string binding")
+}
+
+func TestTableDumpReleasedUnixTimestampDatetimeOverload(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	compiler := NewMockCompilerContext(false, proc)
+	stmt, err := mysql.ParseOne(t.Context(),
+		"create table t(a bigint default (unix_timestamp(cast('3001-01-20 00:00:00' as datetime))))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false, nil)
+	require.NoError(t, err)
+	current := built.GetDdl().GetCreateTable().GetTableDef()
+	legacy := proto.Clone(current).(*planpb.TableDef)
+	found := false
+	require.NoError(t, planpb.VisitExprTree(legacy.Cols[0].Default.Expr, func(expr *planpb.Expr) error {
+		if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "unix_timestamp" {
+			fid, overload := function.DecodeOverloadID(fn.Func.Obj)
+			require.Equal(t, int32(8), overload)
+			fn.Func.Obj = function.EncodeOverloadID(fid, 4)
+			found = true
+		}
+		return nil
+	}))
+	require.True(t, found)
+	_, err = AnalyzeTableDumpBindings(compiler, legacy, legacy)
+	require.NoError(t, err)
+	_, err = AnalyzeTableDumpBindings(compiler, current, legacy)
+	require.NoError(t, err)
+}
 
 func TestTableDumpHistoricalUnixTimestampDatetimeDefault(t *testing.T) {
 	for _, tc := range []struct{ name, value, column string }{

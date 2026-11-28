@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -444,6 +445,11 @@ func TestSystemVariableLocaleType(t *testing.T) {
 	got, err = typ.ConvertFromString(" fr_fr ")
 	assert.NoError(t, err)
 	assert.Equal(t, "fr_FR", got)
+	for _, locale := range function.TemporalLocaleNames() {
+		got, err = typ.ConvertFromString(locale)
+		assert.NoError(t, err, locale)
+		assert.Equal(t, locale, got)
+	}
 	_, err = typ.Convert(1)
 	assert.Error(t, err)
 	_, err = typ.ConvertFromString("xx_XX")
