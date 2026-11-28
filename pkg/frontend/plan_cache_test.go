@@ -624,6 +624,53 @@ func TestSessionDivPrecisionIncrementChangeClearsPlanCache(t *testing.T) {
 	require.Equal(t, 1, stmt.freed)
 }
 
+func TestSessionForeignKeyChecksInvalidatesParentDeletePlans(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+
+	deleteNode := func(refChildren ...uint64) *plan.Node {
+		return &plan.Node{
+			NodeType:  pbplan.Node_DELETE,
+			DeleteCtx: &pbplan.DeleteCtx{TableDef: &plan.TableDef{RefChildTbls: refChildren}},
+		}
+	}
+	deleteQuery := func(nodes ...*plan.Node) *plan.Plan {
+		return &plan.Plan{Plan: &pbplan.Plan_Query{Query: &plan.Query{
+			StmtType: pbplan.Query_DELETE,
+			Nodes:    nodes,
+		}}}
+	}
+	parent, plain := deleteQuery(deleteNode(), deleteNode(2)), deleteQuery(deleteNode())
+	cachedParent, cachedPlain := &trackedStatement{}, &trackedStatement{}
+	ses.cachePlan("parent", []tree.Statement{&trackedStatement{}, cachedParent}, []*plan.Plan{plain, parent})
+	ses.cachePlan("plain", []tree.Statement{cachedPlain}, []*plan.Plan{plain})
+	prepare := func(name string, p *plan.Plan) *PrepareStmt {
+		stmt := &PrepareStmt{Name: name, PreparePlan: &plan.Plan{Plan: &pbplan.Plan_Dcl{Dcl: &pbplan.DataControl{
+			Control: &pbplan.DataControl_Prepare{Prepare: &pbplan.Prepare{Plan: p}},
+		}}}}
+		require.NoError(t, ses.SetPrepareStmt(ctx, name, stmt))
+		return stmt
+	}
+	preparedParent, preparedPlain := prepare("parent", parent), prepare("plain", plain)
+
+	// Equivalent and invalid SETs leave both warmed generations eligible.
+	require.NoError(t, ses.SetSessionSysVar(ctx, "FOREIGN_KEY_CHECKS", "ON"))
+	require.Error(t, ses.SetSessionSysVar(ctx, "foreign_key_checks", "invalid"))
+	require.True(t, ses.isCached("parent"))
+	require.False(t, preparedParent.needsRebuild)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "foreign_key_checks", 0))
+	require.True(t, preparedParent.needsRebuild)
+	require.False(t, preparedPlain.needsRebuild)
+	require.False(t, ses.isCached("parent"))
+	require.True(t, ses.isCached("plain"))
+	require.Zero(t, cachedParent.freed, "SET must leave borrowed ASTs alive")
+	require.Nil(t, ses.getCachedPlan("parent"))
+	require.Equal(t, 1, cachedParent.freed)
+	require.Zero(t, cachedPlain.freed)
+}
+
 func TestSessionRollupAlgorithmChangeClearsPlanCache(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))

@@ -3851,7 +3851,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		batchCase2 := func() *batch.Batch {
 			bat := genBatch()
-			for i := 0; i < len(bat.Attrs); i++ {
+			for i := 0; i < len(bat.Vecs); i++ {
 				for j := 0; j < bat.Vecs[0].Length(); j++ {
 					bat.Vecs[i].GetNulls().Add(uint64(j))
 				}
@@ -3925,7 +3925,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		batchCase2 := func() *batch.Batch {
 			bat := genBatch()
 
-			for i := 0; i < len(bat.Attrs); i++ {
+			for i := 0; i < len(bat.Vecs); i++ {
 				for j := 0; j < 1; j++ {
 					bat.Vecs[i].GetNulls().Add(uint64(j))
 				}
@@ -4013,7 +4013,7 @@ func Test_typeconvert(t *testing.T) {
 }
 
 func allocTestBatch(mp *mpool.MPool, attrName []string, tt []types.Type, batchSize int) *batch.Batch {
-	batchData := batch.New(attrName)
+	batchData := batch.NewWithSize(len(attrName))
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
@@ -4478,6 +4478,32 @@ func TestGetComputationWrapperUsesRequestRewriteSnapshot(t *testing.T) {
 	// or the planner misses the role rule (issue #29161).
 	require.Len(t, selectStmt.RewriteOption.Rewrites["dst.t"], 1)
 	require.NotContains(t, selectStmt.RewriteOption.Rewrites, "src.t")
+}
+
+func TestComStmtPrepareRejectsFlushPrivileges(t *testing.T) {
+	stubEmptyRewriteRuleCache(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.txnHandler = &TxnHandler{}
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	resp, err := ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("flush privileges"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.Equal(t, int(COM_STMT_PREPARE), resp.cmd)
+	require.True(t, moerr.IsMoErrCode(resp.GetData().(error), moerr.ErrParseError),
+		"the COM_STMT_PREPARE rejection must come from the prepareable-statement parser: %v", resp.GetData())
+
+	prepared, err := ses.GetPrepareStmt(ctx, getPrepareStmtName(ses.GetLastStmtId()))
+	require.Error(t, err)
+	require.Nil(t, prepared)
 }
 
 func TestExecRequestStmtPreparePreservesMandatoryRewritePolicy(t *testing.T) {
@@ -10202,7 +10228,7 @@ func Test_getSqlType(t *testing.T) {
 			{name: "internal input", tenant: &TenantInfo{User: "dump"}, internal: true},
 			{name: "absent tenant"},
 			{name: "internal account", tenant: &TenantInfo{Tenant: "sys", User: "internal"}},
-			{name: "special user", tenant: &TenantInfo{User: specialUser}},
+			{name: "special user", tenant: &TenantInfo{Tenant: "sys", TenantID: sysAccountID, UserID: ^uint32(0), User: specialUser}},
 			{name: "field list", tenant: &TenantInfo{User: "dump"}, sql: cmdFieldListSql},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -10266,7 +10292,7 @@ func Test_getSqlType(t *testing.T) {
 
 		user := "special_user"
 		tenant := &TenantInfo{
-			User: user,
+			Tenant: "sys", TenantID: sysAccountID, UserID: ^uint32(0), User: user,
 		}
 		ses.SetTenantInfo(tenant)
 		SetSpecialUser(user, nil)

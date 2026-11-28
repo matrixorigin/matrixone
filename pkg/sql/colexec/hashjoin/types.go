@@ -87,6 +87,8 @@ type container struct {
 	checkBuildArea   bool
 	checkProbeArea   bool
 	pendingOutput    outputRow
+	// Upper bound for one retained build value in the inner gather.
+	gatherBuildRowBytes int64
 
 	lastIdx int
 	// process idx for zvs and vs, which returned by hashmap.Iterator.Find()
@@ -559,8 +561,11 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 }
 
 func (ctr *container) cleanHashMap() {
+	// The remaining match group belongs to the current JoinMap.
+	ctr.sels = nil
 	ctr.buildAreaChecked = false
 	ctr.checkBuildArea = false
+	ctr.gatherBuildRowBytes = 0
 	ctr.checkProbeArea = false
 	ctr.pendingOutput = outputRow{}
 	hashmap.IteratorClearOwner(ctr.itr)

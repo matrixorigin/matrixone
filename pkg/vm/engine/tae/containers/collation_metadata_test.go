@@ -12,11 +12,12 @@ package containers
 
 import (
 	"bytes"
+	"io"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
-	"io"
-	"testing"
 )
 
 func TestCollationMetadataBatchReadersRejectBeforeAllocation(t *testing.T) {
@@ -25,16 +26,16 @@ func TestCollationMetadataBatchReadersRejectBeforeAllocation(t *testing.T) {
 	for _, variant := range []string{"current", "v1", "v2"} {
 		t.Run(variant, func(t *testing.T) {
 			envelope := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-			defer envelope.Close()
-			envelope.Append(types.EncodeFixed(uint16(1)), false)
-			envelope.Append([]byte("v"), false)
-			envelope.Append(types.EncodeType(&typ), false)
+			defer ReleaseVector(envelope)
+			envelope.MustAppendValue(types.EncodeFixed(uint16(1)), false)
+			envelope.MustAppendValue([]byte("v"), false)
+			envelope.MustAppendValue(types.EncodeType(&typ), false)
 			var wire bytes.Buffer
 			var err error
 			if variant == "current" {
-				_, err = envelope.WriteTo(&wire)
+				_, err = writeVector(envelope, &wire)
 			} else {
-				_, err = envelope.WriteToV1(&wire)
+				_, err = writeVectorV1(envelope, &wire)
 			}
 			require.NoError(t, err)
 			bat := NewBatch()
@@ -61,23 +62,23 @@ func TestCollationMetadataBatchPayloadRejection(t *testing.T) {
 		t.Run(variant, func(t *testing.T) {
 			typ := types.NewWithCharset(types.T_varchar, 8, 0, 3)
 			envelope := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-			defer envelope.Close()
-			envelope.Append(types.EncodeFixed(uint16(1)), false)
-			envelope.Append([]byte("v"), false)
-			envelope.Append(types.EncodeType(&typ), false)
+			defer ReleaseVector(envelope)
+			envelope.MustAppendValue(types.EncodeFixed(uint16(1)), false)
+			envelope.MustAppendValue([]byte("v"), false)
+			envelope.MustAppendValue(types.EncodeType(&typ), false)
 			data := MakeVector(typ, common.DefaultAllocator)
-			defer data.Close()
-			data.Append([]byte("x"), false)
+			defer ReleaseVector(data)
+			data.MustAppendValue([]byte("x"), false)
 			var wire, payload bytes.Buffer
 			var err error
 			if variant == "current" {
-				_, err = envelope.WriteTo(&wire)
+				_, err = writeVector(envelope, &wire)
 				require.NoError(t, err)
-				_, err = data.WriteTo(&payload)
+				_, err = writeVector(data, &payload)
 			} else {
-				_, err = envelope.WriteToV1(&wire)
+				_, err = writeVectorV1(envelope, &wire)
 				require.NoError(t, err)
-				_, err = data.WriteToV1(&payload)
+				_, err = writeVectorV1(data, &payload)
 			}
 			require.NoError(t, err)
 			// TN length prefix, vector class, then byte 3 of the native Type.
@@ -108,13 +109,13 @@ func TestCollationMetadataBatchEnvelopeShape(t *testing.T) {
 	} {
 		envelope := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 		for _, row := range rows {
-			envelope.Append(row, row == nil)
+			envelope.MustAppendValue(row, row == nil)
 		}
 		require.Error(t, validateBatchTypeMetadata(envelope))
-		envelope.Close()
+		ReleaseVector(envelope)
 	}
 	envelope := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
-	defer envelope.Close()
-	envelope.Append(types.EncodeFixed(uint16(0)), false)
+	defer ReleaseVector(envelope)
+	envelope.MustAppendValue(types.EncodeFixed(uint16(0)), false)
 	require.NoError(t, validateBatchTypeMetadata(envelope))
 }

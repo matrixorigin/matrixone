@@ -153,7 +153,7 @@ func (spool *dataBranchOutputSpool) next() (batchWithKind, bool, error) {
 		spool.readBatch.CleanOnlyData()
 	}
 	limitedReader := &io.LimitedReader{R: spool.reader, N: int64(batchSize)}
-	if err = spool.readBatch.UnmarshalFromReaderWithMetadata(
+	if err = spool.readBatch.UnmarshalSizedFrom(
 		limitedReader, int64(batchSize), spool.mp); err != nil {
 		return batchWithKind{}, false, err
 	}

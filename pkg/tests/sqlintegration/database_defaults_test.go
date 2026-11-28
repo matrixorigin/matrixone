@@ -206,7 +206,10 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 		})
 
 		t.Run("combined default and redeclaration validate stored repertoire", func(t *testing.T) {
-			for i, option := range []string{
+			const table = "combined_repertoire"
+			exec(t, first, "create table "+table+"(v varchar(8)) collate utf8mb4_bin")
+			exec(t, first, "insert into "+table+" values ('😀')")
+			for _, option := range []string{
 				"default collate=utf8_unicode_ci, modify v varchar(8)",
 				"modify v varchar(8), default collate=utf8_unicode_ci",
 				"default collate=utf8_unicode_ci, change v v varchar(8)",
@@ -214,20 +217,21 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 				"default collate=utf8_unicode_ci, modify v varchar(8), algorithm=copy",
 				"modify v varchar(8) collate utf8_unicode_ci",
 			} {
-				t.Run(option, func(t *testing.T) {
-					table := fmt.Sprintf("combined_repertoire_%d", i)
-					exec(t, first, "create table "+table+"(v varchar(8)) collate utf8mb4_bin")
-					exec(t, first, "insert into "+table+" values ('😀')")
+				if !t.Run(option, func(t *testing.T) {
 					_, err := first.ExecContext(ctx, "alter table "+table+" "+option)
 					require.Error(t, err, "a narrower inherited domain must reject stored emoji before publication")
 					require.Equal(t, "utf8mb4_bin", collation(t, table, "v"))
+					var rows int
 					var original, tableDefault string
-					require.NoError(t, first.QueryRowContext(ctx, "select v from "+table).Scan(&original))
+					require.NoError(t, first.QueryRowContext(ctx, "select count(*),min(v) from "+table).Scan(&rows, &original))
+					require.Equal(t, 1, rows)
 					require.Equal(t, "😀", original)
 					require.NoError(t, first.QueryRowContext(ctx, "select table_collation from information_schema.tables where table_schema=? and table_name=?", schema, table).Scan(&tableDefault))
 					require.Equal(t, "utf8mb4_bin", tableDefault)
 					require.Zero(t, count(t, "select count(*) from information_schema.tables where table_schema='"+schema+"' and table_name like '"+table+"_copy_%'"))
-				})
+				}) {
+					break // A failed check may have left the shared table changed.
+				}
 			}
 			// DEFAULT alone changes inheritance, not the repertoire of old bytes.
 			exec(t, first, "create table combined_default_only(v varchar(8)) collate utf8mb4_bin")

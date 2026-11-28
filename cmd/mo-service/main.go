@@ -312,7 +312,7 @@ func startService(
 	case metadata.ServiceType_CN:
 		return startCNService(cfg, stopper, fs, gossipNode)
 	case metadata.ServiceType_TN:
-		return startTNService(cfg, stopper, fs, shutdownC)
+		return startTNService(cfg, stopper, fs)
 	case metadata.ServiceType_LOG:
 		return startLogService(cfg, stopper, fs, shutdownC)
 	case metadata.ServiceType_PYTHON_UDF:
@@ -461,7 +461,6 @@ func startTNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	shutdownC chan struct{},
 ) error {
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
@@ -501,7 +500,6 @@ func startTNService(
 			&c,
 			mustGetRuntime(cfg),
 			fileService,
-			shutdownC,
 			func(value tnservice.Service) {
 				owner = value
 			},

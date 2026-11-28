@@ -258,7 +258,7 @@ test('closed PR cancellation handles normal completion, API errors and malformed
   assert.deepEqual(invalid.calls, []);
 });
 
-function coverageHarness({ children, parentOverride = {}, tick, receipts = [], listed = () => true } = {}) {
+function coverageHarness({ children, parentOverride = {}, tick, receipts = [], listed = () => true, jobsError } = {}) {
   const sha = 'a'.repeat(40);
   const parent = { id: 600, run_attempt: 2, workflow_id: 42, event: 'pull_request_target',
     path: '.github/workflows/entrypoint.yaml', repository: { full_name: 'matrixorigin/matrixone' },
@@ -287,17 +287,25 @@ function coverageHarness({ children, parentOverride = {}, tick, receipts = [], l
       assert.equal(branch, 'main');
       assert.equal(event, 'workflow_dispatch');
       assert.equal(per_page, 100);
+      assert.equal(status, undefined);
       const [lo, hi] = created.split('..').map(Date.parse);
       assert.ok(lo >= Date.parse(parent.run_started_at) && hi <= Date.parse(parent.updated_at) + 60000);
       const found = [...rows.values()].filter(run => {
         const when = Date.parse(run.created_at || parent.run_started_at);
-        return listed(run, elapsed) && run.status === status && lo <= when && when <= hi;
+        return listed(run, elapsed) && lo <= when && when <= hi;
       });
       return { data: { total_count: found.length, workflow_runs: found.slice((page-1)*100, page*100) } };
     },
     getWorkflowRun: async ({ run_id }) => {
       if (!rows.has(run_id)) throw Object.assign(new Error('missing'), { status: 404 });
       return { data: { ...rows.get(run_id) } };
+    },
+    listJobsForWorkflowRunAttempt: async ({ run_id, attempt_number }) => {
+      assert.equal(attempt_number, 1);
+      const status = jobsError?.(run_id, elapsed);
+      if (status) throw Object.assign(new Error(`jobs HTTP ${status}`), { status });
+      const jobs = rows.get(run_id)?.fixtureJobs || [];
+      return { data: { total_count: jobs.length, jobs } };
     },
     cancelWorkflowRun: async ({ run_id }) => { calls.push(['cancel', run_id, elapsed]); },
   };
@@ -330,9 +338,161 @@ test('congested standby discovery paginates and only cancels the owned child', a
 
 test('completed parent attempt releases only its queued and running standby children', async () => {
   const h = coverageHarness();
+  const actions = h.options.github.rest.actions;
+  const list = actions.listWorkflowRuns;
+  let pages = 0;
+  actions.listWorkflowRuns = async params => {
+    pages++;
+    return list(params);
+  };
   await h.run();
+  assert.equal(pages, 3);
   assert.deepEqual(h.calls, [['cancel', 700, 10000], ['cancel', 701, 10000],
     ['force', 700, 130000], ['force', 701, 130000]]);
+});
+
+test('successful parent completion needs no standby discovery', async () => {
+  const h = coverageHarness({ children: [],
+    parentOverride: { conclusion: 'success' } });
+  Object.assign(h.options.context.payload.workflow_run, { status: 'completed', conclusion: 'success' });
+  h.options.github.rest.actions = {};
+  await h.run();
+  assert.deepEqual(h.calls, []);
+});
+
+test('short worker names never authorize cleanup without the original exact identity', async () => {
+  const h = coverageHarness({ children: [] });
+  const title = h.child(700, 0, 'cs').display_title;
+  for (const [id, pipeline, overrides] of [
+    [700, title, {}],
+    [701, title.replace(' / 600/', ' / 601/'), {}],
+    [702, title, { run_id: 700 }],
+    [703, title, { conclusion: 'success' }],
+    [704, null, {}],
+    [705, title.replace('/2/0/', '/1/0/'), {}],
+    [706, title.replace('/2/0/', '/2/1/'), {}],
+    [708, 'unexpanded marker', {}],
+    [709, title, { run_attempt: 2 }],
+  ]) {
+    const run = h.child(id, 0, 'cs', { display_title: 'GROUP0' });
+    run.fixtureJobs = pipeline ? [{ name: pipeline + ' / Run identity', run_id: id,
+      run_attempt: 1, status: 'completed', conclusion: 'skipped', ...overrides }] : [];
+    h.rows.set(id, run);
+  }
+  const group1 = h.child(707, 1, 'idc');
+  h.rows.set(707, { ...group1, display_title: 'GROUP1', fixtureJobs: [{
+    name: group1.display_title + ' / Run identity', run_id: 707,
+    run_attempt: 1, status: 'completed', conclusion: 'skipped',
+  }] });
+  await assert.rejects(h.run(), err => {
+    for (const id of [702, 703, 704, 706, 708, 709]) assert.match(err.message, new RegExp(id + ':'));
+    for (const id of [700, 701, 705, 707]) assert.doesNotMatch(err.message, new RegExp(id + ':'));
+    return true;
+  });
+  assert.deepEqual(h.calls.map(([kind, id]) => [kind, id]),
+    [['cancel', 700], ['cancel', 707], ['force', 700], ['force', 707]]);
+});
+
+test('queued and running short workers retry jobs 404 and empty markers without delaying proven siblings', async () => {
+  const h = coverageHarness({
+    children: [],
+    jobsError: (_id, elapsed) => elapsed === 10000 ? 404 : null,
+    tick(rows, _parent, elapsed) {
+      if (elapsed !== 20000) return;
+      for (const [id, group, pool] of [[710, 0, 'cs'], [711, 1, 'idc'], [712, 0, 'cs']]) {
+        const title = h.child(id, group, pool).display_title;
+        rows.get(id).fixtureJobs = [{ name: (id === 712 ? title.replace('600/2/', '601/2/') : title) +
+          ' / Run identity', run_id: id, run_attempt: 1, status: 'completed', conclusion: 'skipped' }];
+      }
+    },
+  });
+  for (const [id, group, pool] of [[710, 0, 'cs'], [711, 1, 'idc'], [712, 0, 'cs']]) {
+    h.rows.set(id, h.child(id, group, pool, { display_title: 'GROUP' + group,
+      status: group ? 'in_progress' : 'queued' }));
+  }
+  h.rows.set(713, h.child(713, 1, 'cs'));
+  await h.run();
+  assert.deepEqual(h.calls.filter(([op]) => op === 'cancel'),
+    [['cancel', 713, 10000], ['cancel', 710, 20000], ['cancel', 711, 20000]]);
+  assert.deepEqual(h.calls.filter(([op]) => op === 'force').map(([, id]) => id), [713, 710, 711]);
+});
+
+test('permanently missing and ambiguous identities fail visibly without cancellation', async () => {
+  const h = coverageHarness({ children: [] });
+  const run = h.child(720, 0, 'cs');
+  const marker = { name: run.display_title + ' / Run identity', run_id: 721, run_attempt: 1,
+    status: 'completed', conclusion: 'skipped' };
+  h.rows.set(720, { ...run, display_title: 'GROUP0' });
+  h.rows.set(721, { ...run, id: 721, display_title: 'GROUP0', fixtureJobs: [marker, marker] });
+  const actions = h.options.github.rest.actions, list = actions.listJobsForWorkflowRunAttempt;
+  const reads = [];
+  actions.listJobsForWorkflowRunAttempt = args => { reads.push(args.run_id); return list(args); };
+  await assert.rejects(h.run(), err => {
+    assert.match(err.message, /720:.*identity/i);
+    assert.match(err.message, /721:.*identity/i);
+    return true;
+  });
+  assert.deepEqual(reads, [720, 721, 720, 720]);
+  assert.deepEqual(h.calls, []);
+});
+
+test('persistent jobs 404 exhausts the lookup budget; jobs 403 is not retried', async () => {
+  const reads = [];
+  const h = coverageHarness({ children: [], jobsError(id) {
+    reads.push(id);
+    return id === 730 ? 404 : 403;
+  } });
+  for (const id of [730, 731]) h.rows.set(id, h.child(id, 0, 'cs', { display_title: 'GROUP0' }));
+  await assert.rejects(h.run(), err => {
+    assert.match(err.message, /730: [^;]*404/);
+    assert.match(err.message, /731: jobs HTTP 403/);
+    return true;
+  });
+  assert.deepEqual(reads, [730, 731, 730, 730]);
+  assert.deepEqual(h.calls, []);
+});
+
+test('a previously verified short worker cannot be force-cancelled with a missing marker', async () => {
+  const h = coverageHarness({ children: [], tick(rows) {
+    if (h.calls.length) rows.get(722).fixtureJobs = [];
+  } });
+  const run = h.child(722, 1, 'idc');
+  h.rows.set(722, { ...run, display_title: 'GROUP1', fixtureJobs: [{
+    name: run.display_title + ' / Run identity', run_id: 722, run_attempt: 1,
+    status: 'completed', conclusion: 'skipped',
+  }] });
+  await assert.rejects(h.run(), /722:.*identity/i);
+  assert.deepEqual(h.calls, [['cancel', 722, 10000]]);
+});
+
+test('a temporary missing marker during grace does not fail a completed teardown', async () => {
+  const h = coverageHarness({ children: [], tick(rows, _parent, elapsed) {
+    if (elapsed === 20000) rows.get(724).fixtureJobs = [];
+    if (elapsed === 30000) rows.get(724).status = 'completed';
+  } });
+  const run = h.child(724, 1, 'idc');
+  h.rows.set(724, { ...run, display_title: 'GROUP1', fixtureJobs: [{
+    name: run.display_title + ' / Run identity', run_id: 724, run_attempt: 1,
+    status: 'completed', conclusion: 'skipped',
+  }] });
+  await h.run();
+  assert.deepEqual(h.calls, [['cancel', 724, 10000]]);
+});
+
+test('a deferred short worker is not cancelled if the parent no longer matches', async () => {
+  const h = coverageHarness({ children: [], tick(rows, parent, elapsed) {
+    if (elapsed !== 15000) return;
+    parent.head_sha = 'f'.repeat(40);
+    rows.get(723).fixtureJobs[0].status = 'completed';
+    rows.get(723).fixtureJobs[0].conclusion = 'skipped';
+  } });
+  const run = h.child(723, 0, 'cs');
+  h.rows.set(723, { ...run, display_title: 'GROUP0', fixtureJobs: [{
+    name: run.display_title + ' / Run identity', run_id: 723, run_attempt: 1,
+    status: 'queued', conclusion: null,
+  }] });
+  await h.run();
+  assert.deepEqual(h.calls, []);
 });
 
 test('admitted worker absent from all list scans is cancelled by its paginated receipt', async () => {

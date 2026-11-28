@@ -108,7 +108,7 @@ void* pairwise_distance_async(const raft::resources& res,
                              uint32_t dim,
                              distance_type_t metric,
                              float* dist) {
-    auto stream = raft::resource::get_cuda_stream(res);
+    auto stream = cuda_stream_handle(res);
 
     // Helper to align sizes to 256 bytes (CUDA default alignment)
     auto align_size = [](size_t size) {
@@ -172,7 +172,7 @@ void pairwise_distance(const raft::resources& res,
                        uint32_t dim,
                        distance_type_t metric,
                        float* dist) {
-    auto stream = raft::resource::get_cuda_stream(res);
+    auto stream = cuda_stream_handle(res);
     void* d_ptr = pairwise_distance_async(res, x, n_x, y, n_y, dim, metric, dist);
     raft::resource::sync_stream(res);
     

@@ -33,6 +33,9 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	defer ses.ExitFPrint(FPExecInFrontEnd)
 	//check transaction states
 	switch st := execCtx.stmt.(type) {
+	case *tree.FlushPrivileges:
+		// Compatibility no-op: authorization has already been checked.
+
 	case *tree.BeginTransaction:
 		ses.EnterFPrint(FPBeginTxn)
 		defer ses.ExitFPrint(FPBeginTxn)
@@ -458,6 +461,10 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		defer ses.ExitFPrint(FPCreateUser)
 		ses.InvalidatePrivilegeCache()
 		if err = handleCreateUser(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.RenameUser:
+		if err = doRenameUser(execCtx.reqCtx, ses, st); err != nil {
 			return
 		}
 	case *tree.DropUser:

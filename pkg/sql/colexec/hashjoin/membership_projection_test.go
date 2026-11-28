@@ -155,6 +155,11 @@ func TestHashJoinProbeOutputArea(t *testing.T) {
 	mpool.CapLimit = 1 << 20
 	t.Cleanup(func() { mpool.CapLimit = previousLimit })
 
+	probeKeys := make([]int32, hashmap.UnitLimit/2+1)
+	for i := range probeKeys {
+		probeKeys[i] = 1
+	}
+	joinedKeys := append(append([]int32(nil), probeKeys...), probeKeys...)
 	for _, shape := range []struct {
 		name           string
 		joinType       plan.Node_JoinType
@@ -167,7 +172,23 @@ func TestHashJoinProbeOutputArea(t *testing.T) {
 		wantKeys       []int32
 		batchRows      []int
 		checkProbeArea bool
+		sharedPayload  bool
+		gatherBuild    bool
 	}{
+		{
+			name: "left-empty-build-shared-probe", joinType: plan.Node_LEFT, valueBytes: 600 << 10,
+			sharedPayload: true, buildKeys: []int32{}, batchRows: []int{1, 1}, checkProbeArea: true,
+		},
+		{
+			name: "inner-shared-probe-duplicate-groups", joinType: plan.Node_INNER, valueBytes: 600 << 10,
+			sharedPayload: true, buildKeys: []int32{1, 1, 2, 2}, wantKeys: []int32{1, 1, 2, 2},
+			batchRows: []int{2, 2}, checkProbeArea: true,
+		},
+		{
+			name: "inner-gather-wide-build-boundary", joinType: plan.Node_INNER, valueBytes: int(mpool.MaxAllocationSize() / hashmap.UnitLimit),
+			buildPayload: true, gatherBuild: true, buildKeys: []int32{1, 1}, probeKeys: probeKeys,
+			wantKeys: joinedKeys, batchRows: []int{hashmap.UnitLimit, 2},
+		},
 		{
 			name: "semi-flat", joinType: plan.Node_SEMI, valueBytes: 256 << 10,
 			buildKeys: []int32{1, 1, 2}, batchRows: []int{2},
@@ -247,10 +268,17 @@ func TestHashJoinProbeOutputArea(t *testing.T) {
 			payload := vector.NewVec(textType, mp)
 			value := bytes.Repeat([]byte{'x'}, shape.valueBytes)
 			source.Vecs = append(source.Vecs, payload)
-			for range source.RowCount() {
-				require.NoError(t, vector.AppendBytes(payload, value, false, mp))
+			if shape.sharedPayload {
+				seed := vector.NewVec(textType, mp)
+				defer seed.Free(mp)
+				require.NoError(t, vector.AppendBytes(seed, value, false, mp))
+				require.NoError(t, payload.UnionMulti(seed, 0, source.RowCount(), mp))
+			} else {
+				for range source.RowCount() {
+					require.NoError(t, vector.AppendBytes(payload, value, false, mp))
+				}
 			}
-			require.True(t, payload.VarlenaAreaIsDisjoint())
+			require.Equal(t, !shape.sharedPayload, payload.VarlenaAreaIsDisjoint())
 
 			resetChildrenWithBatch(tc.arg, probe)
 			resetHashBuildChildrenWithBatch(tc.barg, build)
@@ -268,7 +296,7 @@ func TestHashJoinProbeOutputArea(t *testing.T) {
 				require.Equal(t, rows, res.Batch.RowCount())
 				require.Equal(t, shape.uniqueBuild, tc.arg.ctr.probeHashOnPK)
 				require.Equal(t, shape.checkProbeArea, tc.arg.ctr.checkProbeArea)
-				require.Equal(t, shape.buildPayload, tc.arg.ctr.checkBuildArea)
+				require.Equal(t, shape.buildPayload && !shape.gatherBuild, tc.arg.ctr.checkBuildArea)
 				for row := range rows {
 					require.Equal(t, wantKeys[next], vector.GetFixedAtNoTypeCheck[int32](res.Batch.Vecs[0], row))
 					require.True(t, bytes.Equal(value, res.Batch.Vecs[1].GetBytesAt(row)))

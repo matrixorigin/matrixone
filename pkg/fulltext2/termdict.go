@@ -184,14 +184,18 @@ func (d *termDict) forEachTermInRange(lo, hi string, fn func(term string) (bool,
 // vocabulary as a []string — so a large high-cardinality
 // index's MERGE reconstruction (forEachPosting) doesn't spike O(vocabulary) of strings.
 func (d *termDict) forEachTerm(fn func(term string) error) error {
+	return d.forEachEntry(func(term string, _ uint64) error { return fn(term) })
+}
+
+func (d *termDict) forEachEntry(fn func(term string, offset uint64) error) error {
 	it, ok, err := d.prefixIter("")
 	if err != nil || !ok {
 		return err
 	}
 	defer func() { _ = it.Close() }()
 	for {
-		term, _ := it.Current()
-		if err := fn(string(term)); err != nil {
+		term, offset := it.Current()
+		if err := fn(string(term), offset); err != nil {
 			return err
 		}
 		if err := it.Next(); err == vellum.ErrIteratorDone {

@@ -17,16 +17,13 @@ package compile
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -325,41 +322,4 @@ func TestCompileDistributedShuffleAsofBuildLeftMovesCompletionWait(t *testing.T)
 		require.True(t, foundCompletionWait,
 			"logical-right probe stream must receive the build completion wait")
 	}
-}
-
-func TestRemoteAsofJoinProtocolGate(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	rt := runtime.ServiceRuntime(proc.GetService())
-	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-	arg := hashjoin.NewArgument()
-	arg.JoinType = plan.Node_ASOF
-	arg.EqConds = [][]*plan.Expr{{}, {}}
-	defer arg.Release()
-	for _, version := range []int64{
-		defines.MORPCVersion17,
-		defines.MORPCVersion20,
-		defines.MORPCVersion22,
-		defines.MORPCVersion23,
-		defines.MORPCVersion24,
-		defines.MORPCVersion25,
-		defines.MORPCVersion26,
-	} {
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
-		_, _, err := convertToPipelineInstruction(arg, proc, &scopeContext{}, 1)
-		require.ErrorContains(t, err, "protocol version 27")
-	}
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion27)
-	arg.JoinType = plan.Node_ASOF_LEFT
-	arg.AsofBuildLeft = true
-	_, instruction, err := convertToPipelineInstruction(arg, proc, &scopeContext{}, 1)
-	require.NoError(t, err)
-	require.True(t, instruction.GetHashJoin().GetAsofBuildLeft())
-	restored, err := convertToVmOperator(instruction, &scopeContext{}, nil)
-	require.NoError(t, err)
-	restoredHashJoin, ok := restored.(*hashjoin.HashJoin)
-	require.True(t, ok)
-	require.True(t, restoredHashJoin.AsofBuildLeft)
-	restoredHashJoin.Release()
-	require.NoError(t, validateRemoteJoinProtocol(proc, plan.Node_ASOF_LEFT))
-	require.NoError(t, validateRemoteJoinProtocol(proc, plan.Node_INNER))
 }

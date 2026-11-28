@@ -124,6 +124,90 @@ test('API failure falls back to full and both sides of pagination check the revi
   }
 });
 
+test('scope planning recovers a confirmed throttle and still checks the live revision', async () => {
+  const rateLimit = Object.assign(new Error('API rate limit exceeded for installation'), {
+    status: 403, response: { headers: { 'retry-after': '60' } },
+  });
+  for (const stale of [false, true]) {
+    const fixture = client();
+    const get = fixture.github.rest.pulls.get;
+    const waits = [];
+    let reads = 0;
+    fixture.github.rest.pulls.get = async (...args) => {
+      if (++reads === 1) throw rateLimit;
+      if (stale && reads === 3) return { data: { ...fixture.pr, head: { sha: 'new' } } };
+      return get(...args);
+    };
+    const result = resolveScope({ ...fixture, sleep: async ms => waits.push(ms) });
+    if (stale) await assert.rejects(result, /revision changed while classifying/);
+    else assert.deepEqual(await result, { scope: 'ut', sdk_required: false });
+    assert.deepEqual(waits, [60_000]);
+    assert.equal(reads, 3);
+  }
+
+  for (const [error, expectedWaits, expectedReads] of [
+    [rateLimit, [60_000, 60_000], 3],
+    [Object.assign(new Error('secondary rate limit'), { status: 403 }), [60_000], 2],
+    [Object.assign(new Error('Resource not accessible by integration'), { status: 403 }), [], 1],
+  ]) {
+    const fixture = client();
+    const waits = [];
+    let reads = 0;
+    fixture.github.rest.pulls.get = async () => {
+      reads++;
+      throw error;
+    };
+    await assert.rejects(resolveScope({ ...fixture, sleep: async ms => waits.push(ms) }), e => e === error);
+    assert.deepEqual(waits, expectedWaits);
+    assert.equal(reads, expectedReads);
+  }
+});
+
+test('a new explicit rate-limit hint can shorten the retry delay', async () => {
+  const fixture = client();
+  const get = fixture.github.rest.pulls.get;
+  const waits = [];
+  const retryAfter = ['60', '5'];
+  fixture.github.rest.pulls.get = async (...args) => {
+    if (retryAfter.length) throw Object.assign(new Error('rate limited'), {
+      status: 429, response: { headers: { 'retry-after': retryAfter.shift() } },
+    });
+    return get(...args);
+  };
+  assert.deepEqual(await resolveScope({ ...fixture, sleep: async ms => waits.push(ms) }),
+    { scope: 'ut', sdk_required: false });
+  assert.deepEqual(waits, [60_000, 5_000]);
+});
+
+test('limited file pagination keeps full CI and still verifies the live revision', async () => {
+  for (const exhausted of [false, true]) {
+    const fixture = client();
+    const get = fixture.github.rest.pulls.get;
+    const calls = [];
+    const headers = exhausted ? { 'x-ratelimit-remaining': '0', 'retry-after': '60' } :
+      { 'retry-after': '121' };
+    fixture.github.rest.pulls.get = async (...args) => {
+      calls.push('revision');
+      return get(...args);
+    };
+    fixture.github.paginate = async () => {
+      calls.push('files');
+      throw Object.assign(new Error('rate limited'), { status: 429, response: { headers } });
+    };
+    assert.deepEqual(await resolveScope({ ...fixture, sleep: async ms => calls.push(ms) }),
+      { scope: 'full', sdk_required: true });
+    assert.deepEqual(calls, exhausted ? ['revision', 'files', 60_000, 'revision'] :
+      ['revision', 'files', 'revision']);
+  }
+});
+
+test('file counts beyond the API cap use full CI without paginating', async () => {
+  const fixture = client();
+  fixture.pr.changed_files = 3000;
+  fixture.github.paginate = async () => assert.fail('capped file list cannot select a narrower plan');
+  assert.deepEqual(await resolveScope(fixture), { scope: 'full', sdk_required: true });
+});
+
 function results() {
   const needs = Object.fromEntries(['docs-check', 'python-sdk', 'matrixone-ci',
     'matrixone-ut-coverage', 'matrixone-compose-ci', 'matrixone-standalone-ci',
@@ -135,11 +219,31 @@ function results() {
   return needs;
 }
 
-function entrypointJobs() {
-  const workflow = readFileSync(`${__dirname}/../workflows/entrypoint.yaml`, 'utf8');
+function workflowJobs(filename) {
+  const workflow = readFileSync(join(__dirname, '../workflows', filename), 'utf8');
   return Object.fromEntries([...workflow.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:\n|$(?![\s\S]))/gm)]
     .map(match => [match[1], match[2]]));
 }
+
+const entrypointJobs = () => workflowJobs('entrypoint.yaml');
+
+test('coverage standby opts in only for the 4.2-dev base and pins the worker protocol', () => {
+  const dispatcher = entrypointJobs()['matrixone-ut-coverage'];
+  assert.match(dispatcher, /^      enable_4_2_dev: \$\{\{ github\.base_ref == '4\.2-dev' \}\}$/m);
+  const worker = workflowJobs('coverage-standby-worker.yaml');
+  const calls = [
+    [dispatcher, 'coverage-ut-standby'],
+    [worker.cs, 'coverage-worker-cs'],
+    [worker.idc, 'coverage-worker-idc'],
+  ];
+  const pins = calls.map(([job, expected]) => {
+    const call = job.match(/^    uses: matrixorigin\/CI\/\.github\/workflows\/([\w-]+)\.yaml@([0-9a-f]{40})$/m);
+    assert.ok(call, `expected an immutable ${expected} workflow reference`);
+    assert.equal(call[1], expected);
+    return call[2];
+  });
+  assert.equal(new Set(pins).size, 1, 'update the dispatcher and both worker pins together');
+});
 
 test('actual preflight applies main-only SDK policy to routing and the required check', async () => {
   const block = entrypointJobs().preflight;

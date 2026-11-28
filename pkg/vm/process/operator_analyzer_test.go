@@ -71,6 +71,7 @@ func TestOperatorStatsCloneForExportDetachesMutableReferences(t *testing.T) {
 
 	var nilStats *OperatorStats
 	require.Nil(t, nilStats.CloneForExport())
+	require.Nil(t, (&OperatorStats{}).CloneForExport().startupResource)
 }
 
 func TestOperatorStatsResourceDelta(t *testing.T) {

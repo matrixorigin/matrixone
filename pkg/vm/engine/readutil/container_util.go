@@ -26,6 +26,6 @@ func NewCNTombstoneBatch(
 	hidden objectio.HiddenColumnSelection,
 	mp *mpool.MPool,
 ) *batch.Batch {
-	attrs, attrTypes := objectio.GetTombstoneSchema(*pkType, hidden)
-	return batch.NewWithSchema(attrs, attrTypes, mp)
+	_, attrTypes := objectio.GetTombstoneSchema(*pkType, hidden)
+	return batch.NewWithTypes(attrTypes, mp)
 }

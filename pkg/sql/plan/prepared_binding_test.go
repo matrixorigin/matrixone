@@ -731,7 +731,7 @@ func TestPreparedTemporalDecimalProbeControls(t *testing.T) {
 				executor, err := colexec.NewExpressionExecutor(proc, &decoded)
 				require.NoError(t, err)
 				defer executor.Free()
-				input := batch.New(nil)
+				input := batch.NewWithSize(0)
 				defer input.Clean(proc.Mp())
 				for _, rows := range []int{2, 3} {
 					input.SetRowCount(rows)

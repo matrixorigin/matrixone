@@ -457,3 +457,20 @@ func TestCheckNoUpcast(t *testing.T) {
 	require.NoError(t, CheckNoUpcast("ivfflat", "float32", types.T_array_float64))
 	require.NoError(t, CheckNoUpcast("ivfflat", "garbage", types.T_array_int8))
 }
+
+func TestReconstructionParams(t *testing.T) {
+	for _, tc := range []struct {
+		q      string
+		lo, hi float64
+	}{{"int8", -128, 127}, {"uint8", 0, 255}} {
+		require.True(t, NeedsBounds(tc.q))
+		scale, offset, err := ReconstructionParams(tc.q, -10, 10)
+		require.NoError(t, err)
+		require.InDelta(t, -10, tc.lo*scale+offset, 1e-12)
+		require.InDelta(t, 10, tc.hi*scale+offset, 1e-12)
+		for _, bounds := range [][2]float64{{0, 0}, {2, 1}, {math.NaN(), 1}, {0, math.Inf(1)}} {
+			_, _, err := ReconstructionParams(tc.q, bounds[0], bounds[1])
+			require.Error(t, err)
+		}
+	}
+}

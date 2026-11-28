@@ -111,7 +111,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 		require.NoError(t, err)
 
 		for idx := 0; idx < blockCnt; idx++ {
-			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx])))
+			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx]), bats[idx].Attrs))
 		}
 
 		require.NoError(t, txn.Commit(ctx))
@@ -133,7 +133,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	expr := []*plan.Expr{
 		readutil.MakeFunctionExprForTest("=", []*plan.Expr{
 			readutil.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
-			plan2.MakePlan2Int64ConstExprWithType(bats[0].Vecs[primaryKeyIdx].Get(0).(int64)),
+			plan2.MakePlan2Int64ConstExprWithType(bats[0].Vecs[primaryKeyIdx].GetValue(0).(int64)),
 		}),
 	}
 	for _, e := range expr {
@@ -156,8 +156,9 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 
 	resultHit := 0
 	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
+	retAttrs := testutil.SchemaAttrs(schema, primaryKeyIdx)
 	for idx := 0; idx < blockCnt; idx++ {
-		_, err = reader.Read(ctx, ret.Attrs, expr[0], mp, ret)
+		_, err = reader.Read(ctx, retAttrs, expr[0], mp, ret)
 		require.NoError(t, err)
 
 		resultHit += int(ret.RowCount())
@@ -275,7 +276,6 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 			if col.Name == schema.ColDefs[primaryKeyIdx].Name {
 				vec := vector.NewVec(col.Type, mp)
 				ret.Vecs[0] = vec
-				ret.Attrs = []string{col.Name}
 				break
 			}
 		}
@@ -293,7 +293,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 
 		rowsCnt := 4000
 		bat := catalog2.MockBatch(schema, rowsCnt)
-		pkVec := bat.Vecs[primaryKeyIdx].GetDownstreamVector()
+		pkVec := bat.Vecs[primaryKeyIdx]
 		pkVec.CleanOnlyData()
 		for i := 0; i < rowsCnt; i++ {
 			buf := fmt.Sprintf("%s:%d", strings.Repeat("a", 200), i)
@@ -302,9 +302,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		defer bat.Close()
 		require.NoError(
 			t,
-			testutil.WriteToRelation(
-				ctx, txn, relation, containers.ToCNBatch(bat), false, true,
-			),
+			testutil.WriteToRelation(ctx, txn, relation, containers.ToCNBatch(bat), bat.Attrs, false, true),
 		)
 
 		reader, err := testutil.GetRelationReader(
@@ -321,7 +319,8 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
 
 		ret := testutil.EmptyBatchFromSchema(schema, nmp, primaryKeyIdx)
-		reader.Read(ctx, ret.Attrs, nil, nmp, ret)
+		retAttrs := testutil.SchemaAttrs(schema, primaryKeyIdx)
+		reader.Read(ctx, retAttrs, nil, nmp, ret)
 		// ?  what is the expected error? require.Error(t, err)
 		require.NoError(t, txn.Commit(ctx))
 	}
@@ -686,7 +685,6 @@ func Test_ShardingRemoteReader(t *testing.T) {
 			if col.Name == schema.ColDefs[primaryKeyIdx].Name {
 				vec := vector.NewVec(col.Type, mp)
 				ret.Vecs[0] = vec
-				ret.Attrs = []string{col.Name}
 				break
 			}
 		}
@@ -756,7 +754,6 @@ func Test_ShardingRemoteReader(t *testing.T) {
 				if col.Name == schema.ColDefs[primaryKeyIdx].Name {
 					vec := vector.NewVec(col.Type, mp)
 					bat.Vecs[0] = vec
-					bat.Attrs = []string{col.Name}
 					break
 				}
 			}
@@ -1210,7 +1207,6 @@ func Test_ShardingLocalReader(t *testing.T) {
 				if col.Name == schema.ColDefs[primaryKeyIdx].Name {
 					vec := vector.NewVec(col.Type, mp)
 					bat.Vecs[0] = vec
-					bat.Attrs = []string{col.Name}
 					break
 				}
 			}
@@ -1327,7 +1323,7 @@ func Test_SimpleReader(t *testing.T) {
 		objectio.HiddenColumnSelection_None, mp,
 	)
 	defer bat2.Clean(mp)
-	done, err := r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	done, err := r.Read(context.Background(), objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_None), nil, mp, bat2)
 	require.NoError(t, err)
 	require.False(t, done)
 	require.Equal(t, 20, bat2.RowCount())
@@ -1339,7 +1335,7 @@ func Test_SimpleReader(t *testing.T) {
 		require.Equal(t, rowids1[i], rowids2[i])
 	}
 
-	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	done, err = r.Read(context.Background(), objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_None), nil, mp, bat2)
 	require.NoError(t, err)
 	require.True(t, done)
 
@@ -1352,7 +1348,7 @@ func Test_SimpleReader(t *testing.T) {
 		),
 	)
 
-	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	done, err = r.Read(context.Background(), objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_None), nil, mp, bat2)
 	require.NoError(t, err)
 	require.False(t, done)
 	require.Equal(t, 20, bat2.RowCount())
@@ -1364,7 +1360,7 @@ func Test_SimpleReader(t *testing.T) {
 		require.Equal(t, rowids1[i], rowids2[i])
 	}
 
-	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	done, err = r.Read(context.Background(), objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_None), nil, mp, bat2)
 	require.NoError(t, err)
 	require.False(t, done)
 	require.Equal(t, 20, bat2.RowCount())
@@ -1376,7 +1372,7 @@ func Test_SimpleReader(t *testing.T) {
 		require.Equal(t, rowids1[i], rowids2[i])
 	}
 
-	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
+	done, err = r.Read(context.Background(), objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_None), nil, mp, bat2)
 	require.NoError(t, err)
 	require.True(t, done)
 }

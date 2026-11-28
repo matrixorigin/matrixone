@@ -44,7 +44,7 @@ func TestProjectionSelectedInput(t *testing.T) {
 		selection.Init(bitmapTestMP)
 		mustBitmapOK(selection.InitWithSize(5, bitmapTestMP))
 		selection.AddMany([]uint64{1, 3, 4})
-		input.SetSelection(5, &selection)
+		input.SetSelection(&selection)
 
 		arg := NewArgument()
 		arg.ProjectList = []*plan.Expr{

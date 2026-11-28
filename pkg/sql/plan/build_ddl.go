@@ -3023,7 +3023,7 @@ func buildCreateTable(
 			cloneStmt,
 			recoveredLegacyChecks,
 			sub,
-			false, *parserSQLModeFromContext(ctx),
+			false, *parserSQLModeFromContext(ctx), nil,
 		)
 		if err != nil {
 			return nil, err

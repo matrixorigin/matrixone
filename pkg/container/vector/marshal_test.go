@@ -518,8 +518,8 @@ func TestUnmarshalBinaryTrustedRequiresPriorSemanticValidation(t *testing.T) {
 	require.NoError(t, trusted.UnmarshalBinaryTrusted(corrupted))
 }
 
-// Every vector wire format (protobuf, MarshalBinary with and without copying
-// on decode, and legacy V1) keeps a string type's collation identity and
+// Every vector wire format (MarshalBinary with and without copying on decode,
+// and legacy V1) keeps a string type's collation identity and
 // revision, and every decoder rejects an unknown revision.
 func TestVectorWireFormatsKeepCollationMetadata(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -528,13 +528,6 @@ func TestVectorWireFormatsKeepCollationMetadata(t *testing.T) {
 		typ.CollationVersion = domain.revision
 		src := NewVec(typ, mp)
 		require.NoError(t, AppendBytes(src, []byte("😀"), false, mp))
-		proto, err := VectorToProtoVector(src)
-		require.NoError(t, err)
-		fromProto, err := ProtoVectorToVector(proto, mp)
-		require.NoError(t, err)
-		require.Equal(t, typ, *fromProto.GetType())
-		require.Equal(t, "😀", fromProto.GetStringAt(0))
-		fromProto.Free(mp)
 		wire, err := src.MarshalBinary()
 		require.NoError(t, err)
 		for _, copyData := range []bool{false, true} {
@@ -555,10 +548,6 @@ func TestVectorWireFormatsKeepCollationMetadata(t *testing.T) {
 		require.NoError(t, restored.UnmarshalBinaryV1(legacy.Bytes()))
 		require.Equal(t, typ, *restored.GetType())
 		restored.Free(mp)
-		proto.Type.CollationVersion = 257
-		bad, err := ProtoVectorToVector(proto, mp)
-		require.Error(t, err)
-		require.Nil(t, bad)
 		// Byte 3 within the native Type is its revision, after the vector class.
 		wire[1+3] = 2
 		for _, decode := range []func(*Vector) error{

@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -38,17 +39,111 @@ func TestGenCreateTableTuplePreservesExplicitCreatedTime(t *testing.T) {
 		vector.MustFixedColNoTypeCheck[types.Timestamp](bat.Vecs[MO_TABLES_CREATED_TIME_IDX])[0])
 }
 
-func mustToPBBatch(bat *batch.Batch) *api.Batch {
-	rbat := new(api.Batch)
-	rbat.Attrs = bat.Attrs
-	for _, vec := range bat.Vecs {
-		pbVector, err := vector.VectorToProtoVector(vec)
-		if err != nil {
-			panic(err)
-		}
-		rbat.Vecs = append(rbat.Vecs, pbVector)
+func mustMarshalBatch(bat *batch.Batch) []byte {
+	data, err := batch.MarshalVectors(bat.Vecs)
+	if err != nil {
+		panic(err)
 	}
-	return rbat
+	return data
+}
+
+// wireVector is one vector of a batch.MarshalBinary encoding, split into its
+// fields so tests can corrupt them one at a time.
+type wireVector struct {
+	class  byte
+	typ    []byte
+	length uint32
+	data   []byte
+	area   []byte
+	nulls  []byte
+	sorted byte
+}
+
+// wireBatch is a batch.MarshalBinary encoding split into its fields.
+type wireBatch struct {
+	rows int64
+	vecs []wireVector
+	tail []byte // extra buffer, Recursive and ShuffleIDX
+}
+
+type wireCursor struct{ data []byte }
+
+func (c *wireCursor) next(n int) []byte {
+	if n > len(c.data) {
+		panic("short batch encoding")
+	}
+	v := slices.Clone(c.data[:n])
+	c.data = c.data[n:]
+	return v
+}
+
+func (c *wireCursor) u32() uint32 { return types.DecodeUint32(c.next(4)) }
+
+func (c *wireCursor) sized() []byte { return c.next(int(c.u32())) }
+
+func decodeWireVector(data []byte) wireVector {
+	c := wireCursor{data: data}
+	var v wireVector
+	v.class = c.next(1)[0]
+	v.typ = c.next(types.TSize)
+	v.length = c.u32()
+	v.data = c.sized()
+	v.area = c.sized()
+	v.nulls = c.sized()
+	v.sorted = c.next(1)[0]
+	if len(c.data) != 0 {
+		panic("trailing vector encoding")
+	}
+	return v
+}
+
+func decodeWireBatch(data []byte) *wireBatch {
+	c := wireCursor{data: data}
+	w := &wireBatch{rows: types.DecodeInt64(c.next(8))}
+	n := int(c.u32())
+	for i := 0; i < n; i++ {
+		w.vecs = append(w.vecs, decodeWireVector(c.sized()))
+	}
+	w.tail = c.data
+	return w
+}
+
+func (v wireVector) encode() []byte {
+	out := append(append([]byte{v.class}, v.typ...), types.EncodeUint32(&v.length)...)
+	for _, part := range [][]byte{v.data, v.area, v.nulls} {
+		n := uint32(len(part))
+		out = append(out, types.EncodeUint32(&n)...)
+		out = append(out, part...)
+	}
+	return append(out, v.sorted)
+}
+
+func (w *wireBatch) encode() []byte {
+	out := slices.Clone(types.EncodeInt64(&w.rows))
+	n := int32(len(w.vecs))
+	out = append(out, types.EncodeInt32(&n)...)
+	for _, v := range w.vecs {
+		enc := v.encode()
+		size := uint32(len(enc))
+		out = append(out, types.EncodeUint32(&size)...)
+		out = append(out, enc...)
+	}
+	return append(out, w.tail...)
+}
+
+// editWire decodes e.Bat, applies edit and re-encodes it.
+func editWire(e *api.Entry, edit func(*wireBatch)) {
+	w := decodeWireBatch(e.Bat.Bytes())
+	edit(w)
+	e.Bat = api.NewEncodedBatch(w.encode())
+}
+
+func mustWireVector(vec *vector.Vector) wireVector {
+	data, err := vec.MarshalBinary()
+	if err != nil {
+		panic(err)
+	}
+	return decodeWireVector(data)
 }
 
 // improve test coverage
@@ -66,7 +161,8 @@ func TestParseError(t *testing.T) {
 			EntryType:  api.Entry_Alter,
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    MO_TABLES_ID,
-			Bat:        mustToPBBatch(bat1),
+			Attrs:      slices.Clone(MoTablesSchema),
+			Bat:        api.NewEncodedBatch(mustMarshalBatch(bat1)),
 		}
 		_, _, err := ParseEntryList([]*api.Entry{e})
 		t.Log(err)
@@ -90,7 +186,8 @@ func TestParseError(t *testing.T) {
 			EntryType:  api.Entry_Insert,
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    MO_COLUMNS_ID,
-			Bat:        mustToPBBatch(bat2),
+			Attrs:      slices.Clone(MoColumnsSchema),
+			Bat:        api.NewEncodedBatch(mustMarshalBatch(bat2)),
 		}
 
 		_, _, err := ParseEntryList([]*api.Entry{e2})
@@ -103,7 +200,8 @@ func TestParseError(t *testing.T) {
 			EntryType:  api.Entry_Insert,
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    MO_TABLES_ID,
-			Bat:        mustToPBBatch(bat1),
+			Attrs:      slices.Clone(MoTablesSchema),
+			Bat:        api.NewEncodedBatch(mustMarshalBatch(bat1)),
 		}
 		typ := types.T_int64.ToType()
 		typBytes, _ := types.Encode(&typ)
@@ -124,7 +222,8 @@ func TestParseError(t *testing.T) {
 			EntryType:  api.Entry_Insert,
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    100000, // bad target table id
-			Bat:        mustToPBBatch(bat2),
+			Attrs:      slices.Clone(MoColumnsSchema),
+			Bat:        api.NewEncodedBatch(mustMarshalBatch(bat2)),
 		}
 		_, _, err := ParseEntryList([]*api.Entry{e1, e2})
 		require.Error(t, err) // mismatched column batch
@@ -142,7 +241,8 @@ func TestParseError(t *testing.T) {
 			EntryType:  api.Entry_Insert,
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    MO_COLUMNS_ID,
-			Bat:        mustToPBBatch(bat2),
+			Attrs:      slices.Clone(MoColumnsSchema),
+			Bat:        api.NewEncodedBatch(mustMarshalBatch(bat2)),
 		}
 		_, _, err = ParseEntryList([]*api.Entry{e1, e3})
 		t.Log(err)
@@ -168,7 +268,7 @@ func TestParseMoColumnsUpdateEntry(t *testing.T) {
 		DatabaseId: MO_CATALOG_ID,
 		TableId:    MO_COLUMNS_ID,
 		TableName:  MO_COLUMNS_UPDATE,
-		Bat:        &api.Batch{},
+		Bat:        api.NewEncodedBatch([]byte{}),
 	}
 
 	req, remaining, err := ParseEntryList([]*api.Entry{e})
@@ -181,7 +281,6 @@ func TestGenRowsGeometry(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{"g"}
 	vec := vector.NewVec(types.T_geometry.ToType(), mp)
 	require.NoError(t, vector.AppendBytesList(vec, [][]byte{
 		[]byte("POINT(1 1)"),
@@ -205,21 +304,42 @@ func TestParseDatabaseEntryRejectsMalformedTuple(t *testing.T) {
 		t.Helper()
 		var bat *batch.Batch
 		var err error
+		attrs := DropDatabaseTupleAttrs
 		if kind == api.Entry_Insert {
+			attrs = MoDatabaseSchema
 			bat, err = GenCreateDatabaseTuple("", 0, 0, 0, "catalog_guard_database_long_name", 123, "", m, packer)
 		} else {
 			bat, err = GenDropDatabaseTuple(types.Rowid{}, 0, 123, "catalog_guard_database_long_name", m, packer)
 		}
 		require.NoError(t, err)
 		defer bat.Clean(m)
-		protoBatch := mustToPBBatch(bat)
-		for i := range protoBatch.Vecs {
-			v := &protoBatch.Vecs[i]
-			v.Data = append([]byte(nil), v.Data...)
-			v.Area = append([]byte(nil), v.Area...)
-			v.Nsp = append([]byte(nil), v.Nsp...)
+		return &api.Entry{
+			EntryType:  kind,
+			DatabaseId: MO_CATALOG_ID,
+			TableId:    MO_DATABASE_ID,
+			// Tests mutate the names; never alias the shared schema slices.
+			Attrs: slices.Clone(attrs),
+			Bat:   api.NewEncodedBatch(mustMarshalBatch(bat)),
 		}
-		return &api.Entry{EntryType: kind, DatabaseId: MO_CATALOG_ID, TableId: MO_DATABASE_ID, Bat: protoBatch}
+	}
+	// nameIdx is the datname column, a varchar longer than the inline limit.
+	nameIdx := func(e *api.Entry) int {
+		if e.EntryType == api.Entry_Delete {
+			return 3
+		}
+		return MO_DATABASE_DAT_NAME_IDX
+	}
+	// replaceVector swaps vector i of e's encoding for a well-formed vec.
+	replaceVector := func(e *api.Entry, i int, vec *vector.Vector) {
+		defer vec.Free(m)
+		editWire(e, func(w *wireBatch) { w.vecs[i] = mustWireVector(vec) })
+	}
+	nullsShow := func(n *nulls.Nulls) []byte {
+		data, err := n.Show()
+		if err != nil {
+			panic(err)
+		}
+		return data
 	}
 
 	for _, kind := range []api.Entry_EntryType{api.Entry_Insert, api.Entry_Delete} {
@@ -232,40 +352,105 @@ func TestParseDatabaseEntryRejectsMalformedTuple(t *testing.T) {
 		} else {
 			require.IsType(t, &DropDatabaseReq{}, req)
 		}
+
+		// The wire helpers below round-trip an untouched encoding exactly,
+		// so each rejection comes from its mutation alone.
+		original := slices.Clone(e.Bat.Bytes())
+		editWire(e, func(*wireBatch) {})
+		require.Equal(t, original, e.Bat.Bytes())
+
+		// Two valid rows parse; "invalid later row" differs only by its null.
+		editWire(e, func(w *wireBatch) {
+			w.rows = 2
+			for i := range w.vecs {
+				v := &w.vecs[i]
+				v.data = append(v.data, v.data...)
+				v.length = 2
+			}
+		})
+		_, _, err = ParseEntryList([]*api.Entry{e})
+		require.NoError(t, err)
 	}
 
 	for _, tc := range []struct {
 		name   string
 		mutate func(*api.Entry)
 	}{
-		{"nil batch", func(e *api.Entry) { e.Bat = nil }},
-		{"generic DML delete", func(e *api.Entry) { e.Bat.Vecs = e.Bat.Vecs[:2]; e.Bat.Attrs = e.Bat.Attrs[:2] }},
-		{"extra column", func(e *api.Entry) {
-			e.Bat.Vecs = append(e.Bat.Vecs, e.Bat.Vecs[0])
-			e.Bat.Attrs = append(e.Bat.Attrs, "extra")
+		{"nil batch", func(e *api.Entry) { e.Bat = api.EncodedBatch{} }},
+		{"truncated batch", func(e *api.Entry) { data := e.Bat.Bytes(); e.Bat = api.NewEncodedBatch(data[:len(data)-1]) }},
+		{"generic DML delete", func(e *api.Entry) {
+			editWire(e, func(w *wireBatch) { w.vecs = w.vecs[:2] })
+			e.Attrs = e.Attrs[:2]
 		}},
-		{"wrong column order", func(e *api.Entry) { e.Bat.Attrs[2] = "datname" }},
-		{"wrong type", func(e *api.Entry) { e.Bat.Vecs[2].Type.Id = int32(types.T_int64) }},
-		{"unknown type", func(e *api.Entry) { e.Bat.Vecs[2].Type.Id = 255 }},
-		{"malformed null bitmap", func(e *api.Entry) { e.Bat.Vecs[2].Nsp = []byte{1} }},
-		{"short data", func(e *api.Entry) { e.Bat.Vecs[2].Data = nil }},
-		{"uneven vectors", func(e *api.Entry) { e.Bat.Vecs[3].Len = 2 }},
-		{"constant vector", func(e *api.Entry) { e.Bat.Vecs[2].IsConst = true }},
-		{"null database id", func(e *api.Entry) { e.Bat.Vecs[2].Nsp, _ = mustNullsOK(nulls.Build(1, bitmapTestMP, 0)).Show() }},
+		{"extra column", func(e *api.Entry) {
+			editWire(e, func(w *wireBatch) { w.vecs = append(w.vecs, w.vecs[0]) })
+			e.Attrs = append(e.Attrs, "extra")
+		}},
+		{"missing vector", func(e *api.Entry) {
+			editWire(e, func(w *wireBatch) { w.vecs = w.vecs[:len(w.vecs)-1] })
+		}},
+		{"missing attr", func(e *api.Entry) { e.Attrs = e.Attrs[:len(e.Attrs)-1] }},
+		{"wrong column order", func(e *api.Entry) { e.Attrs[2] = "datname" }},
+		{"wrong type", func(e *api.Entry) {
+			vec := vector.NewVec(types.T_int64.ToType(), m)
+			require.NoError(t, vector.AppendFixed(vec, int64(123), false, m))
+			replaceVector(e, 2, vec)
+		}},
+		{"wrong type, same width", func(e *api.Entry) {
+			editWire(e, func(w *wireBatch) {
+				typ := types.DecodeType(w.vecs[2].typ)
+				if typ.Oid == types.T_uint64 {
+					typ.Oid = types.T_int64
+				} else {
+					typ.Oid = types.T_text
+				}
+				w.vecs[2].typ = slices.Clone(types.EncodeType(&typ))
+			})
+		}},
+		{"unknown type", func(e *api.Entry) {
+			editWire(e, func(w *wireBatch) { w.vecs[2].typ[0] = 255 })
+		}},
+		{"malformed null bitmap", func(e *api.Entry) {
+			editWire(e, func(w *wireBatch) { w.vecs[2].nulls = []byte{1} })
+		}},
+		{"short data", func(e *api.Entry) {
+			editWire(e, func(w *wireBatch) { w.vecs[2].data = nil })
+		}},
+		{"uneven vectors", func(e *api.Entry) {
+			// A well-formed two-row vector in a one-row batch.
+			vec := vector.NewVec(types.T_varchar.ToType(), m)
+			require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, m))
+			require.NoError(t, vector.AppendBytes(vec, []byte("b"), false, m))
+			replaceVector(e, 3, vec)
+		}},
+		{"uneven vector length", func(e *api.Entry) {
+			editWire(e, func(w *wireBatch) { w.vecs[3].length = 2 })
+		}},
+		{"row count mismatch", func(e *api.Entry) {
+			editWire(e, func(w *wireBatch) { w.rows = 2 })
+		}},
+		{"constant vector", func(e *api.Entry) {
+			editWire(e, func(w *wireBatch) { w.vecs[2].class = vector.CONSTANT })
+		}},
+		{"null database id", func(e *api.Entry) {
+			editWire(e, func(w *wireBatch) {
+				w.vecs[2].nulls = nullsShow(mustNullsOK(nulls.Build(1, bitmapTestMP, 0)))
+			})
+		}},
 		{"invalid later row", func(e *api.Entry) {
-			for i := range e.Bat.Vecs {
-				v := &e.Bat.Vecs[i]
-				v.Data = append(v.Data, v.Data...)
-				v.Len = 2
-			}
-			e.Bat.Vecs[3].Nsp, _ = mustNullsOK(nulls.Build(2, bitmapTestMP, 1)).Show()
+			editWire(e, func(w *wireBatch) {
+				w.rows = 2
+				for i := range w.vecs {
+					v := &w.vecs[i]
+					v.data = append(v.data, v.data...)
+					v.length = 2
+				}
+				w.vecs[3].nulls = nullsShow(mustNullsOK(nulls.Build(2, bitmapTestMP, 1)))
+			})
 		}},
 		{"invalid varlen area", func(e *api.Entry) {
-			nameIdx := MO_DATABASE_DAT_NAME_IDX
-			if e.EntryType == api.Entry_Delete {
-				nameIdx = 3
-			}
-			e.Bat.Vecs[nameIdx].Area = nil
+			idx := nameIdx(e)
+			editWire(e, func(w *wireBatch) { w.vecs[idx].area = nil })
 		}},
 		{"unsupported entry type", func(e *api.Entry) { e.EntryType = api.Entry_Alter }},
 	} {

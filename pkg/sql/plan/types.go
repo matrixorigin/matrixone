@@ -404,6 +404,7 @@ type QueryBuilder struct {
 	// DELETE owns these generated scan identities. Optimizer consumers must
 	// revalidate the binding and table after join rewrites.
 	deleteIndexScanTables    map[int32]deleteIndexScan
+	equalityRowBounds        map[*plan.Expr]float64
 	planningInput            *PlanningInput
 	scanBorrows              []scanBorrow
 	borrowResolutionDisabled bool
@@ -1441,6 +1442,7 @@ type Binding struct {
 	db                     string
 	table                  string
 	tableID                uint64
+	caseInsensitiveTable   bool // unaliased relation in a case-insensitive system schema
 	// lower case: used for binding/lookup
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)

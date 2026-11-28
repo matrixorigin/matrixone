@@ -110,7 +110,6 @@ func issue25590InsertBatch(t *testing.T, txn *Transaction, v int64) *batch.Batch
 	defer rowidVec.Free(txn.workspaceMP())
 
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{objectio.PhysicalAddr_Attr, "v"}
 	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowidVec)
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), txn.workspaceMP())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowids[0], false, txn.workspaceMP()))
@@ -180,6 +179,7 @@ func runIssue25590Statements(
 			databaseName: "db",
 			tableName:    "tbl",
 			bat:          insert,
+			attrs:        issue25590InsertAttrs,
 		})
 		prevBat = insert
 
@@ -389,6 +389,7 @@ func TestIssue25590RollbackAfterRetiredHistory(t *testing.T) {
 		databaseName: "db",
 		tableName:    "tbl",
 		bat:          bat,
+		attrs:        issue25590InsertAttrs,
 	})
 
 	require.NoError(t, txn.RollbackLastStatement(ctx))
@@ -490,7 +491,6 @@ func newIssue25590InsertBatchWithPKsForTest(t *testing.T, txn *Transaction, pks 
 	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowidVec)
 
 	bat := batch.NewWithSize(2)
-	bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
 	rowidCol := vector.NewVec(types.T_Rowid.ToType(), txn.workspaceMP())
 	require.NoError(t, vector.AppendFixedList(rowidCol, rowids, nil, txn.workspaceMP()))
 	bat.Vecs[0] = rowidCol
@@ -525,6 +525,7 @@ func issue25590AppendInsertEntry(t *testing.T, txn *Transaction, pks ...int64) *
 		databaseName: "db",
 		tableName:    "tbl",
 		bat:          bat,
+		attrs:        issue25590PKInsertAttrs,
 	})
 	return bat
 }
@@ -653,7 +654,7 @@ func TestIssue25590RetirementKeepsSurvivingEntriesAcrossDumpAndRollback(t *testi
 	require.Empty(t, txn.batchSelectList, "the failed statement's marks must be discarded")
 	require.NotEmpty(t, txn.writes[1].fileName, "the flushed entry must be retained")
 	require.Equal(t, 1, txn.writes[1].bat.RowCount())
-	require.Equal(t, catalog.BlockMeta_BlockInfo, txn.writes[1].bat.Attrs[0])
+	require.Equal(t, catalog.BlockMeta_BlockInfo, txn.writes[1].attrs[0])
 	require.Equal(t, []int64{3}, issue25590VisibleValuesLocked(t, txn),
 		"reader visibility must be restored to the surviving row")
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
@@ -837,7 +838,7 @@ func TestIssue25590MergeBranchSkipsRetiredNilSlots(t *testing.T) {
 	}
 	for i := 0; i < 31; i++ {
 		bat := batch.NewWithSize(2)
-		bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
+		batAttrs := []string{objectio.PhysicalAddr_Attr, "pk"}
 		rowidCol := vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(rowidCol,
 			[]types.Rowid{types.RandomRowid()}, nil, proc.Mp()))
@@ -855,6 +856,7 @@ func TestIssue25590MergeBranchSkipsRetiredNilSlots(t *testing.T) {
 			databaseName: "db",
 			tableName:    "tbl",
 			bat:          bat,
+			attrs:        batAttrs,
 		})
 	}
 	issue25590AppendInsertEntry(t, txn, 500)
@@ -1081,6 +1083,7 @@ func TestIssue25590InsertDumpSyncFailurePartialPublication(t *testing.T) {
 			databaseName: "db",
 			tableName:    "tbl2",
 			bat:          bat,
+			attrs:        issue25590PKInsertAttrs,
 		})
 		return bat
 	}
@@ -1250,7 +1253,7 @@ func TestIssue25590DeleteDumpFailureRetainsEveryStagedSource(t *testing.T) {
 func issue25590AppendDeleteEntry(t *testing.T, txn *Transaction, pk int64) *batch.Batch {
 	t.Helper()
 	delBat := batch.NewWithSize(2)
-	delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
+	delBatAttrs := []string{objectio.PhysicalAddr_Attr, "pk"}
 	rowidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 	require.NoError(t, vector.AppendFixed(
 		rowidCol, types.RandomRowid(), false, txn.proc.Mp()))
@@ -1267,6 +1270,7 @@ func issue25590AppendDeleteEntry(t *testing.T, txn *Transaction, pk int64) *batc
 		databaseName: "db",
 		tableName:    "tbl",
 		bat:          delBat,
+		attrs:        delBatAttrs,
 	})
 	return delBat
 }
@@ -1348,7 +1352,7 @@ func TestIssue25590MergeFailureKeepsPriorStatementIntact(t *testing.T) {
 	require.Equal(t, 3, pkCount)
 	require.Len(t, txn.writes, 1)
 	require.NotEmpty(t, txn.writes[0].fileName)
-	require.Equal(t, catalog.BlockMeta_BlockInfo, txn.writes[0].bat.Attrs[0])
+	require.Equal(t, catalog.BlockMeta_BlockInfo, txn.writes[0].attrs[0])
 	// The published rows carry the object's own rowids (the reader's view),
 	// not batchA's workspace rowids; block offsets stay 0..2 in order.
 	infoCol, infoArea := vector.MustVarlenaRawData(txn.writes[0].bat.Vecs[0])
@@ -1368,7 +1372,6 @@ func TestIssue25590MergeFailureKeepsPriorStatementIntact(t *testing.T) {
 	admit()
 	require.Equal(t, []int{0, 2}, txn.offsets)
 	delBat := batch.NewWithSize(2)
-	delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
 	rowidVec := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 	require.NoError(t, vector.AppendFixedList(
 		rowidVec, aRowids[:2], nil, txn.proc.Mp()))
@@ -1824,6 +1827,7 @@ func TestIssue25590InsertDumpPostPersistFailureCleansOrphans(t *testing.T) {
 			databaseName: "db",
 			tableName:    "tbl2",
 			bat:          bat,
+			attrs:        issue25590PKInsertAttrs,
 		})
 		return bat
 	}
@@ -2538,7 +2542,7 @@ func issue25590MetadataEntry(
 	for i := range txn.writes {
 		e := txn.writes[i]
 		if e.bat == nil || e.bat.IsEmpty() ||
-			e.typ != INSERT || e.bat.Attrs[0] != catalog.BlockMeta_BlockInfo {
+			e.typ != INSERT || e.attrs[0] != catalog.BlockMeta_BlockInfo {
 			continue
 		}
 		statsCol, statsArea = vector.MustVarlenaRawData(e.bat.Vecs[1])
@@ -2593,6 +2597,7 @@ func TestIssue25590CompactPublishFailureKeepsPendingDeletes(t *testing.T) {
 		databaseName: "db",
 		tableName:    "tbl",
 		bat:          batchA,
+		attrs:        issue25590PKInsertAttrs,
 	})
 	smallObjsDisarm := issue25590ArmKeyedFault(t, objectio.FJ_CNFlushSmallObjs, 20, "")
 	txn.Lock()
@@ -2627,7 +2632,6 @@ func TestIssue25590CompactPublishFailureKeepsPendingDeletes(t *testing.T) {
 	// on the dirty object.
 	admit()
 	delBat := batch.NewWithSize(2)
-	delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
 	rowidVec := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 	require.NoError(t, vector.AppendFixedList(
 		rowidVec, []types.Rowid{
@@ -2854,7 +2858,7 @@ func issue25590AllMetadataEntries(t *testing.T, txn *Transaction) []int {
 	for i := range txn.writes {
 		e := txn.writes[i]
 		if e.bat == nil || e.bat.IsEmpty() ||
-			e.typ != INSERT || e.bat.Attrs[0] != catalog.BlockMeta_BlockInfo {
+			e.typ != INSERT || e.attrs[0] != catalog.BlockMeta_BlockInfo {
 			continue
 		}
 		idxes = append(idxes, i)
@@ -2948,6 +2952,7 @@ func TestIssue25590CompactSecondPublishFailureKeepsEveryOriginal(t *testing.T) {
 			databaseName: "db",
 			tableName:    "tbl",
 			bat:          bat,
+			attrs:        issue25590PKInsertAttrs,
 		})
 		smallObjsDisarm := issue25590ArmKeyedFault(t, objectio.FJ_CNFlushSmallObjs, 20, "")
 		txn.Lock()
@@ -2977,7 +2982,6 @@ func TestIssue25590CompactSecondPublishFailureKeepsEveryOriginal(t *testing.T) {
 
 	deleteTwoMarkedRows := func(obj2FirstBlock types.Blockid, pkBase int64, obj1Rows int) {
 		delBat := batch.NewWithSize(2)
-		delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
 		rowidVec := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(
 			rowidVec, []types.Rowid{
@@ -4665,7 +4669,7 @@ func TestIssue25590RollbackProducersEnterTheCapacityBound(t *testing.T) {
 		name := stats.ObjectName().String()
 		tx.Lock()
 		err := tx.WriteFileLocked(
-			INSERT, 1, 7, 1, "db", "tbl", name, bat, DNStore{})
+			INSERT, 1, 7, 1, "db", "tbl", name, bat, catalog.ObjectInsertAttrs, DNStore{})
 		tx.Unlock()
 		return name, err
 	}
@@ -5999,7 +6003,7 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 	defer rowidVec.Free(txn.workspaceMP())
 	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowidVec)
 	batchA := batch.NewWithSize(3)
-	batchA.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a", "v"})
+	batchAAttrs := []string{objectio.PhysicalAddr_Attr, "a", "v"}
 	rowidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 	require.NoError(t, vector.AppendFixedList(rowidCol, rowids, nil, txn.proc.Mp()))
 	aCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
@@ -6018,6 +6022,7 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 		databaseName: "db",
 		tableName:    "ctbl",
 		bat:          batchA,
+		attrs:        batchAAttrs,
 	})
 	smallObjsDisarm := issue25590ArmKeyedFault(t, objectio.FJ_CNFlushSmallObjs, 20, "")
 	txn.Lock()
@@ -6056,7 +6061,6 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 	// the only record that those rows are gone.
 	admit()
 	delBat := batch.NewWithSize(2)
-	delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
 	rowidVec2 := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 	require.NoError(t, vector.AppendFixedList(
 		rowidVec2, []types.Rowid{
@@ -6278,7 +6282,6 @@ func TestIssue25590DirectWritesReserveAndRetainOnUnwind(t *testing.T) {
 
 	writeRows := func(pks ...int64) *batch.Batch {
 		bat := batch.NewWithSize(1)
-		bat.SetAttributes([]string{"pk"})
 		pkCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(pkCol, pks, nil, txn.proc.Mp()))
 		bat.Vecs[0] = pkCol
@@ -6357,7 +6360,7 @@ func TestIssue25590DirectWritesReserveAndRetainOnUnwind(t *testing.T) {
 	t.Cleanup(func() { meta1.Clean(txn.proc.Mp()) })
 	txn.Lock()
 	err = txn.WriteFileLocked(INSERT, 1, 7, 42, "db", "tbl",
-		"", meta1, DNStore{})
+		"", meta1, catalog.ObjectInsertAttrs, DNStore{})
 	txn.Unlock()
 	require.NoError(t, err,
 		"the record of the reserved object converts its own reservation")
@@ -6550,7 +6553,7 @@ func TestIssue25590TwoDirtyObjectCompactionIsAtomicAcrossReplacements(t *testing
 	defer rowidVec.Free(txn.workspaceMP())
 	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowidVec)
 	batchA := batch.NewWithSize(3)
-	batchA.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a", "v"})
+	batchAAttrs := []string{objectio.PhysicalAddr_Attr, "a", "v"}
 	rowidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 	require.NoError(t, vector.AppendFixedList(rowidCol, rowids, nil, txn.proc.Mp()))
 	aCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
@@ -6569,6 +6572,7 @@ func TestIssue25590TwoDirtyObjectCompactionIsAtomicAcrossReplacements(t *testing
 		databaseName: "db",
 		tableName:    "ctbl",
 		bat:          batchA,
+		attrs:        batchAAttrs,
 	})
 	smallObjsDisarm := issue25590ArmKeyedFault(t, objectio.FJ_CNFlushSmallObjs, 20, "")
 	txn.Lock()
@@ -6609,7 +6613,6 @@ func TestIssue25590TwoDirtyObjectCompactionIsAtomicAcrossReplacements(t *testing
 	// object's first blocks - TWO dirty objects for the next pass.
 	admit()
 	delBat := batch.NewWithSize(2)
-	delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
 	rowidVec2 := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 	require.NoError(t, vector.AppendFixedList(
 		rowidVec2, []types.Rowid{
@@ -6874,7 +6877,7 @@ func TestIssue25590RecordFailureAfterStagedReplacementRetracts(t *testing.T) {
 		defer rowidVec.Free(txn.workspaceMP())
 		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowidVec)
 		bat := batch.NewWithSize(3)
-		bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a", "v"})
+		batAttrs := []string{objectio.PhysicalAddr_Attr, "a", "v"}
 		rowidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(rowidCol, rowids, nil, txn.proc.Mp()))
 		aCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
@@ -6893,6 +6896,7 @@ func TestIssue25590RecordFailureAfterStagedReplacementRetracts(t *testing.T) {
 			databaseName: "db",
 			tableName:    tt.name,
 			bat:          bat,
+			attrs:        batAttrs,
 		})
 	}
 	smallObjsDisarm := issue25590ArmKeyedFault(t, objectio.FJ_CNFlushSmallObjs, 20, "")
@@ -6914,7 +6918,7 @@ func TestIssue25590RecordFailureAfterStagedReplacementRetracts(t *testing.T) {
 	for i := range txn.writes {
 		entry := txn.writes[i]
 		if entry.bat == nil || entry.bat.IsEmpty() ||
-			entry.typ != INSERT || entry.bat.Attrs[0] != catalog.BlockMeta_BlockInfo {
+			entry.typ != INSERT || entry.attrs[0] != catalog.BlockMeta_BlockInfo {
 			continue
 		}
 		metas = append(metas, metaBatInfo{idx: i, id: entry.tableId, name: entry.tableName})
@@ -6956,7 +6960,6 @@ func TestIssue25590RecordFailureAfterStagedReplacementRetracts(t *testing.T) {
 		blk types.Blockid
 	}{{metas[0].id, firstTailBlock}, {metas[1].id, secondTailBlock}} {
 		delBat := batch.NewWithSize(2)
-		delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
 		rowid := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(
 			rowid, []types.Rowid{types.NewRowid(&mt.blk, 0)}, nil, txn.proc.Mp()))
@@ -7142,7 +7145,6 @@ func TestIssue25590FailedRecordCopyKeepsObjectRetrievable(t *testing.T) {
 
 	writeRows := func(pks ...int64) *batch.Batch {
 		bat := batch.NewWithSize(1)
-		bat.SetAttributes([]string{"pk"})
 		pkCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(pkCol, pks, nil, txn.proc.Mp()))
 		bat.Vecs[0] = pkCol
@@ -7178,7 +7180,7 @@ func TestIssue25590FailedRecordCopyKeepsObjectRetrievable(t *testing.T) {
 	capSaved := mpool.CapLimit
 	mpool.CapLimit = 1
 	txn.Lock()
-	err = txn.WriteFileLocked(INSERT, 1, 7, 42, "db", "tbl", "", metaA, DNStore{})
+	err = txn.WriteFileLocked(INSERT, 1, 7, 42, "db", "tbl", "", metaA, catalog.ObjectInsertAttrs, DNStore{})
 	txn.Unlock()
 	require.Error(t, err, "the record's own batch copy fails at the allocation cap")
 	mpool.CapLimit = capSaved
@@ -7235,7 +7237,7 @@ func TestIssue25590FailedRecordCopyKeepsObjectRetrievable(t *testing.T) {
 	t.Cleanup(func() { unpublishedPendingAdmissionLimit = knobSaved })
 	currNB := txn.proc.Mp().CurrNB()
 	txn.Lock()
-	err = txn.WriteFileLocked(INSERT, 1, 7, 42, "db", "tbl", "", metaB, DNStore{})
+	err = txn.WriteFileLocked(INSERT, 1, 7, 42, "db", "tbl", "", metaB, catalog.ObjectInsertAttrs, DNStore{})
 	txn.Unlock()
 	require.ErrorContains(t, err, "workspace admission paused",
 		"the record's choke refuses the fresh name behind the pinned bound")
@@ -7314,7 +7316,6 @@ func TestIssue25590TombstoneWriterReserveAndRetainOnUnwind(t *testing.T) {
 		defer rowidVec.Free(txn.workspaceMP())
 		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowidVec)
 		bat := batch.NewWithSize(2)
-		bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
 		rowidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(rowidCol, rowids, nil, txn.proc.Mp()))
 		pkCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
@@ -7487,7 +7488,6 @@ func issue25590Round21TombstoneStatsBatch(
 ) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(2)
-	bat.SetAttributes([]string{catalog.ObjectMeta_ObjectStats, "pk"})
 	statsVec := vector.NewVec(types.T_text.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(statsVec, stats.Marshal(), false, mp))
 	pkVec := vector.NewVec(types.T_int64.ToType(), mp)
@@ -7539,7 +7539,6 @@ func issue25590Round22PushTombstoneResult(
 	defer rowidVec.Free(txn.workspaceMP())
 	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowidVec)
 	bat := batch.NewWithSize(2)
-	bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
 	rowidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 	require.NoError(t, vector.AppendFixedList(rowidCol, rowids, nil, txn.proc.Mp()))
 	pkCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
@@ -7624,7 +7623,7 @@ func TestIssue25590InflightPublicationSurvivesDrain(t *testing.T) {
 	// metadata entry.
 	bat := issue25590Round21TombstoneStatsBatch(t, txn.proc.Mp(), stats)
 	require.NoError(t, txn.writeFileWithAutoIncrEpoch(DELETE, 1, issue25590DBID,
-		issue25590TableID, "db", "tbl", name, bat,
+		issue25590TableID, "db", "tbl", name, bat, issue25590TombstoneStatsAttrs,
 		metadata.TNService{ServiceID: "issue25590-dn"}, 0))
 	require.Contains(t, failFS.persistedSnapshot(), name)
 
@@ -7685,9 +7684,10 @@ func TestIssue25590RecordedBeforeBoundaryKeepsObjectOutofQueue(t *testing.T) {
 
 	// The consumer records INSIDE the statement.
 	bat := issue25590Round21TombstoneStatsBatch(t, txn.proc.Mp(), stats)
+	defer bat.Clean(txn.proc.Mp())
 	require.NoError(t, txn.writeFileWithAutoIncrEpoch(DELETE, 1, issue25590DBID,
-		issue25590TableID, "db", "tbl", name, bat,
-		metadata.TNService{ServiceID: "issue25590-dn"}, 0))
+		issue25590TableID, "db", "tbl", name, bat, issue25590TombstoneStatsAttrs,
+		catalogCreateTNStoreForTest(), 0))
 
 	// Commit preparation drafts the payload: the quiesced handoff runs
 	// first (recorded-recheck), nothing moves to the queue, and — G3 — the
@@ -7772,9 +7772,10 @@ func TestIssue25590ParkedCommitKeepsUnitAndFailureTransfersOnce(t *testing.T) {
 	txnA.UpdateSnapshotWriteOffset()
 	nameA, statsA, wA := issue25590Round21PushTombstone(t, txnA, failFS)
 	batA := issue25590Round21TombstoneStatsBatch(t, txnA.proc.Mp(), statsA)
+	defer batA.Clean(txnA.proc.Mp())
 	require.NoError(t, txnA.writeFileWithAutoIncrEpoch(DELETE, 1, issue25590DBID,
-		issue25590TableID, "db", "tbl", nameA, batA,
-		metadata.TNService{ServiceID: "issue25590-dn"}, 0))
+		issue25590TableID, "db", "tbl", nameA, batA, issue25590TombstoneStatsAttrs,
+		catalogCreateTNStoreForTest(), 0))
 	wA.Close()
 	_, live, _ := issue25590LedgerNow(e)
 	require.Equal(t, int64(1), live, "the recorded object holds the bound's one unit")
@@ -7828,9 +7829,10 @@ func TestIssue25590ParkedCommitKeepsUnitAndFailureTransfersOnce(t *testing.T) {
 	issue25590BindRound21Txn(t, txnC)
 	nameC, statsC, wC := issue25590Round21PushTombstone(t, txnC, failFS)
 	batC := issue25590Round21TombstoneStatsBatch(t, txnC.proc.Mp(), statsC)
+	defer batC.Clean(txnC.proc.Mp())
 	require.NoError(t, txnC.writeFileWithAutoIncrEpoch(DELETE, 1, issue25590DBID,
-		issue25590TableID, "db", "tbl", nameC, batC,
-		metadata.TNService{ServiceID: "issue25590-dn"}, 0))
+		issue25590TableID, "db", "tbl", nameC, batC, issue25590TombstoneStatsAttrs,
+		catalogCreateTNStoreForTest(), 0))
 	wC.Close()
 	_, err = txnC.Commit(ctx)
 	require.NoError(t, err)
@@ -7855,9 +7857,10 @@ func TestIssue25590ParkedCommitKeepsUnitAndFailureTransfersOnce(t *testing.T) {
 	issue25590BindRound21Txn(t, txnD)
 	nameD, statsD, wD := issue25590Round21PushTombstone(t, txnD, failFS)
 	batD := issue25590Round21TombstoneStatsBatch(t, txnD.proc.Mp(), statsD)
+	defer batD.Clean(txnD.proc.Mp())
 	require.NoError(t, txnD.writeFileWithAutoIncrEpoch(DELETE, 1, issue25590DBID,
-		issue25590TableID, "db", "tbl", nameD, batD,
-		metadata.TNService{ServiceID: "issue25590-dn"}, 0))
+		issue25590TableID, "db", "tbl", nameD, batD, issue25590TombstoneStatsAttrs,
+		catalogCreateTNStoreForTest(), 0))
 	wD.Close()
 	_, err = txnD.Commit(ctx)
 	require.NoError(t, err)
@@ -7919,7 +7922,6 @@ func TestIssue25590StandaloneDeleteFlushProducerBindsReservesAndHandsOver(t *tes
 		require.NoError(t, vector.AppendFixedList(rowidCol, rowids, nil, txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixedList(pkCol, pks, nil, txn.proc.Mp()))
 		bat := batch.NewWithSize(2)
-		bat.SetAttributes([]string{catalog.Row_ID, "pk"})
 		bat.Vecs[0] = rowidCol
 		bat.Vecs[1] = pkCol
 		bat.SetRowCount(n)
@@ -8052,7 +8054,7 @@ func TestIssue25590RemoteFragmentSettlement(t *testing.T) {
 	coordinatorTxn.UpdateSnapshotWriteOffset()
 	batR := issue25590Round21TombstoneStatsBatch(t, coordinatorTxn.proc.Mp(), statsR)
 	require.NoError(t, coordinatorTxn.writeFileWithAutoIncrEpoch(DELETE, 1, issue25590DBID,
-		issue25590TableID, "db", "tbl", nameR, batR,
+		issue25590TableID, "db", "tbl", nameR, batR, catalog.ObjectDeleteAttrs,
 		metadata.TNService{ServiceID: "issue25590-dn"}, 0))
 	_, liveC, _ := issue25590LedgerNow(engineC)
 	require.Equal(t, int64(1), liveC,
@@ -8102,7 +8104,7 @@ func TestIssue25590RemoteFragmentSettlement(t *testing.T) {
 	require.NoError(t, engineC.reserveUnpublishedPendingObject(parkedName))
 	batR2 := issue25590Round21TombstoneStatsBatch(t, coordinatorTxn2.proc.Mp(), statsR2)
 	err := coordinatorTxn2.writeFileWithAutoIncrEpoch(DELETE, 1, issue25590DBID,
-		issue25590TableID, "db", "tbl", nameR2, batR2,
+		issue25590TableID, "db", "tbl", nameR2, batR2, catalog.ObjectDeleteAttrs,
 		metadata.TNService{ServiceID: "issue25590-dn"}, 0)
 	require.ErrorContains(t, err, "workspace admission paused",
 		"the saturated recording side refuses the fragment's record")
@@ -8208,7 +8210,7 @@ func TestIssue25590RemoteIntakeAdoptsBeforeRelease(t *testing.T) {
 	coordinatorTxn.UpdateSnapshotWriteOffset()
 	batA := issue25590Round21TombstoneStatsBatch(t, coordinatorTxn.proc.Mp(), statsA)
 	require.NoError(t, coordinatorTxn.writeFileWithAutoIncrEpoch(DELETE, 1, issue25590DBID,
-		issue25590TableID, "db", "tbl", nameA, batA,
+		issue25590TableID, "db", "tbl", nameA, batA, catalog.ObjectDeleteAttrs,
 		metadata.TNService{ServiceID: "issue25590-dn"}, 0))
 	_, liveC2, inFlightC2 := issue25590LedgerNow(engineC)
 	require.Equal(t, int64(1), liveC2,
@@ -8288,7 +8290,7 @@ func TestIssue25590RemoteIntakeAdoptsBeforeRelease(t *testing.T) {
 		t, objectio.FJ_CNWorkspaceRecordStageFailed, 0, "tbl")
 	batC := issue25590Round21TombstoneStatsBatch(t, coordinatorTxn3.proc.Mp(), statsC)
 	err := coordinatorTxn3.writeFileWithAutoIncrEpoch(DELETE, 1, issue25590DBID,
-		issue25590TableID, "db", "tbl", nameC, batC,
+		issue25590TableID, "db", "tbl", nameC, batC, catalog.ObjectDeleteAttrs,
 		metadata.TNService{ServiceID: "issue25590-dn"}, 0)
 	require.ErrorContains(t, err, "fault injection: workspace record staging failed",
 		"the record's preparation failed after the intake adoption - before its admission")
@@ -8453,7 +8455,7 @@ func TestIssue25590SustainedTwoEngineRefusalBounded(t *testing.T) {
 			recTxn.UpdateSnapshotWriteOffset()
 			batRec := issue25590Round21TombstoneStatsBatch(t, recTxn.proc.Mp(), stats)
 			require.NoError(t, recTxn.writeFileWithAutoIncrEpoch(DELETE, 1, issue25590DBID,
-				issue25590TableID, "db", "tbl", name, batRec,
+				issue25590TableID, "db", "tbl", name, batRec, catalog.ObjectDeleteAttrs,
 				metadata.TNService{ServiceID: "issue25590-dn"}, 0))
 			recTxn.EndStatement()
 		} else {
@@ -8706,10 +8708,6 @@ func TestIssue25590StandaloneProducerFormatsAdoptBeforeRelease(t *testing.T) {
 	rowBytes, err := rowBat.MarshalBinary()
 	require.NoError(t, err)
 	delBatch := batch.NewWithSize(4)
-	delBatch.SetAttributes([]string{
-		catalog.BlockMeta_Delete_ID, catalog.BlockMeta_DeltaLoc,
-		catalog.BlockMeta_Type, catalog.BlockMeta_Partition,
-	})
 	delBatch.Vecs[0] = vector.NewVec(types.T_text.ToType(), delTxn.proc.Mp())
 	delBatch.Vecs[1] = vector.NewVec(types.T_text.ToType(), delTxn.proc.Mp())
 	delBatch.Vecs[2] = vector.NewVec(types.T_int8.ToType(), delTxn.proc.Mp())
@@ -8922,7 +8920,7 @@ func TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement(t *testing.T) {
 		t.Cleanup(func() { rowidVec.Free(txn.workspaceMP()) })
 		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowidVec)
 		bat := batch.NewWithSize(3)
-		bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a", "v"})
+		batAttrs := []string{objectio.PhysicalAddr_Attr, "a", "v"}
 		rowidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(rowidCol, rowids, nil, txn.proc.Mp()))
 		aCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
@@ -8941,6 +8939,7 @@ func TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement(t *testing.T) {
 			databaseName: "db",
 			tableName:    "ctbl",
 			bat:          bat,
+			attrs:        batAttrs,
 		})
 		smallObjsDisarm := issue25590ArmKeyedFault(t, objectio.FJ_CNFlushSmallObjs, 20, "")
 		txn.Lock()
@@ -8973,7 +8972,6 @@ func TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement(t *testing.T) {
 			pks[r] = nextPK - int64(rows) + int64(r)
 		}
 		delBat := batch.NewWithSize(2)
-		delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
 		rowidVec2 := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(rowidVec2, rowids, nil, txn.proc.Mp()))
 		pk2Vec := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
@@ -9089,7 +9087,7 @@ func TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement(t *testing.T) {
 	t.Cleanup(func() { mixedRowidVec.Free(txn.workspaceMP()) })
 	mixedRowids := vector.MustFixedColNoTypeCheck[types.Rowid](mixedRowidVec)
 	mixedBat := batch.NewWithSize(3)
-	mixedBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a", "v"})
+	mixedBatAttrs := []string{objectio.PhysicalAddr_Attr, "a", "v"}
 	mRidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 	require.NoError(t, vector.AppendFixedList(mRidCol, mixedRowids, nil, txn.proc.Mp()))
 	mACol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
@@ -9108,6 +9106,7 @@ func TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement(t *testing.T) {
 		databaseName: "db",
 		tableName:    "ctbl",
 		bat:          mixedBat,
+		attrs:        mixedBatAttrs,
 	})
 	mixedDisarm := issue25590ArmKeyedFault(t, objectio.FJ_CNFlushSmallObjs, 20, "")
 	txn.Lock()
@@ -9165,7 +9164,6 @@ func TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement(t *testing.T) {
 	}
 	require.Equal(t, deletedRows, r)
 	requiring := batch.NewWithSize(2)
-	requiring.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
 	delRidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 	require.NoError(t, vector.AppendFixedList(delRidCol, delRowids, nil, txn.proc.Mp()))
 	delPKCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
@@ -9216,3 +9214,10 @@ func liveEntryCount(txn *Transaction) int {
 	}
 	return live
 }
+
+// Column names of the issue25590 test batch helpers.
+var (
+	issue25590InsertAttrs         = []string{objectio.PhysicalAddr_Attr, "v"}
+	issue25590PKInsertAttrs       = []string{objectio.PhysicalAddr_Attr, "pk"}
+	issue25590TombstoneStatsAttrs = []string{catalog.ObjectMeta_ObjectStats, "pk"}
+)

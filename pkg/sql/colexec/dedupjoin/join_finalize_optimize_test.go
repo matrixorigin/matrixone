@@ -898,7 +898,7 @@ func TestUnionSelsByBatch(t *testing.T) {
 
 	t.Run("small_sels_single_batch", func(t *testing.T) {
 		vals := []int32{10, 20, 30, 40, 50}
-		bat := batch.New([]string{"v"})
+		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = makeInt32Vec(t, proc, vals)
 		bat.SetRowCount(len(vals))
 		defer bat.Clean(proc.Mp())
@@ -919,7 +919,7 @@ func TestUnionSelsByBatch(t *testing.T) {
 		for i := range vals {
 			vals[i] = int32(i * 10)
 		}
-		bat := batch.New([]string{"v"})
+		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = makeInt32Vec(t, proc, vals)
 		bat.SetRowCount(len(vals))
 		defer bat.Clean(proc.Mp())
@@ -950,12 +950,12 @@ func TestUnionSelsByBatch(t *testing.T) {
 		for i := range vals1 {
 			vals1[i] = int32(i + 9000)
 		}
-		bat0 := batch.New([]string{"v"})
+		bat0 := batch.NewWithSize(1)
 		bat0.Vecs[0] = makeInt32Vec(t, proc, vals0)
 		bat0.SetRowCount(len(vals0))
 		defer bat0.Clean(proc.Mp())
 
-		bat1 := batch.New([]string{"v"})
+		bat1 := batch.NewWithSize(1)
 		bat1.Vecs[0] = makeInt32Vec(t, proc, vals1)
 		bat1.SetRowCount(len(vals1))
 		defer bat1.Clean(proc.Mp())
@@ -986,7 +986,7 @@ func TestUnionSelsByBatch(t *testing.T) {
 		for i := range vals {
 			vals[i] = int32(i * 7)
 		}
-		bat := batch.New([]string{"v"})
+		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = makeInt32Vec(t, proc, vals)
 		bat.SetRowCount(len(vals))
 		defer bat.Clean(proc.Mp())

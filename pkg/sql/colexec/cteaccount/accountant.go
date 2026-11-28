@@ -232,7 +232,6 @@ func (a *Accountant) CacheBatch(proc *process.Process, analyzer process.Analyzer
 		}
 		appBat.Recursive = src.Recursive
 		appBat.ShuffleIDX = src.ShuffleIDX
-		appBat.Attrs = append(appBat.Attrs[:0], src.Attrs...)
 		appBat.SetRowCount(src.RowCount())
 		if selectedRows != nil {
 			if err := appBat.Shrink(selectedRows, false, proc.Mp()); err != nil {

@@ -61,6 +61,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	colexec.NewServer("")
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 	issue25590InitDumpableFixture(t, txn)
+	txn.tnStores = []DNStore{catalogCreateTNStoreForTest()}
 	// The round-21 binding: the process carries the transaction operator
 	// (the structural workspace resolution the commit ceremony drives
 	// performs), plus the commit-path operator surface.
@@ -144,7 +145,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 		defer rowidVec.Free(txn.workspaceMP())
 		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowidVec)
 		bat := batch.NewWithSize(3)
-		bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a", "v"})
+		batAttrs := []string{objectio.PhysicalAddr_Attr, "a", "v"}
 		rowidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(rowidCol, rowids, nil, txn.proc.Mp()))
 		aCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
@@ -163,6 +164,8 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 			databaseName: "db",
 			tableName:    tt.name,
 			bat:          bat,
+			attrs:        batAttrs,
+			tnStore:      txn.tnStores[0],
 		})
 	}
 	smallObjsDisarm := issue25590ArmKeyedFault(t, objectio.FJ_CNFlushSmallObjs, 20, "")
@@ -184,7 +187,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	for i := range txn.writes {
 		entry := txn.writes[i]
 		if entry.bat == nil || entry.bat.IsEmpty() ||
-			entry.typ != INSERT || entry.bat.Attrs[0] != catalog.BlockMeta_BlockInfo {
+			entry.typ != INSERT || entry.attrs[0] != catalog.BlockMeta_BlockInfo {
 			continue
 		}
 		metas = append(metas, metaBatInfo{idx: i, id: entry.tableId, name: entry.tableName})
@@ -226,7 +229,6 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 		name string
 	}{{metas[0].id, firstTailBlock, metas[0].name}, {metas[1].id, secondTailBlock, metas[1].name}} {
 		delBat := batch.NewWithSize(2)
-		delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
 		rowid := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(
 			rowid, []types.Rowid{types.NewRowid(&mt.blk, 0)}, nil, txn.proc.Mp()))

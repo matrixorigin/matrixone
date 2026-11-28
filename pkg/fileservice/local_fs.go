@@ -632,7 +632,10 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 	}
 	nativePath := l.toNativeFilePath(path.File)
 
+	wait := ReadWaitTrackerFromContext(ctx)
+	start := wait.Start()
 	file, err := os.Open(nativePath)
+	wait.Stop(start)
 	if os.IsNotExist(err) {
 		return moerr.NewFileNotFoundNoCtx(path.File)
 	}
@@ -659,6 +662,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 		if entry.WriterForRead != nil {
 			fileWithChecksum, put := l.newChecksumOSFile(ctx, file)
 			defer put.Put()
+			fileWithChecksum.readWait = wait
 
 			if entry.Offset > 0 {
 				_, err = fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
@@ -725,6 +729,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 		} else {
 			fileWithChecksum, put := l.newChecksumOSFile(ctx, file)
 			defer put.Put()
+			fileWithChecksum.readWait = wait
 
 			if entry.Offset > 0 {
 				_, err = fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
@@ -804,7 +809,10 @@ func (l *LocalFS) handleReadCloserForRead(
 		}
 	}()
 
+	wait := ReadWaitTrackerFromContext(ctx)
+	start := wait.Start()
 	file, err = os.Open(nativePath)
+	wait.Stop(start)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return moerr.NewFileNotFoundNoCtx(path.File)
@@ -813,6 +821,7 @@ func (l *LocalFS) handleReadCloserForRead(
 	}
 
 	fileWithChecksum := l.newChecksumFile(ctx, file)
+	fileWithChecksum.readWait = wait
 
 	entry := vector.Entries[i]
 	if entry.Offset > 0 {

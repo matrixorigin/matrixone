@@ -44,7 +44,7 @@ func TestPrepareDeleteBatchesAppendFailure(t *testing.T) {
 			defer mpool.DeleteMPool(mp)
 
 			rowID := types.BuildTestRowid(1, 1)
-			src := batch.New([]string{"rowid", "pk"})
+			src := batch.NewWithSize(2)
 			src.Vecs[RowIDIdx] = vector.NewVec(types.T_Rowid.ToType(), mp)
 			if tc.varlenPK {
 				src.Vecs[PkIdx] = vector.NewVec(types.T_varchar.ToType(), mp)

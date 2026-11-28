@@ -331,7 +331,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				// Without a residual, fan-out uses UnionMulti to copy a flat
 				// probe payload once per group in each result batch.
 				probePayloadCopiedOnce := ctr.probeHashOnPK || hashJoin.NonEqCond == nil
-				ctr.checkProbeArea = !hashJoin.IsShuffle && ctr.mp != nil && !ctr.skipProbe &&
+				ctr.checkProbeArea = !hashJoin.IsShuffle && !ctr.skipProbe &&
 					!ctr.checkBuildArea && needsOutputAreaCheck(hashJoin.ResultCols, bat, 0, probePayloadCopiedOnce)
 			}
 
@@ -773,8 +773,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 	if ctr.itr == nil {
 		ctr.itr = ctr.mp.NewIterator()
 	}
-	if hashJoin.IsInner() && hashJoin.NonEqCond == nil && !ctr.probeHashOnPK &&
-		!ctr.probeTrackBuildMatches && ctr.spillEngine == nil && !ctr.checkBuildArea && !ctr.checkProbeArea {
+	if hashJoin.gathersInnerPayload() && !ctr.checkBuildArea {
 		return ctr.probeInnerPayload(hashJoin, proc, result)
 	}
 	leftRowCnt := ctr.leftBat.RowCount()
@@ -1647,10 +1646,20 @@ func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, resu
 	if err != nil {
 		return err
 	}
-	rowCnt := ctr.leftBat.RowCount()
+	start := ctr.lastIdx
+	total := ctr.leftBat.RowCount()
+	rowCnt := total - start
+	if !hashJoin.IsShuffle && ctr.globalBuildRowCnt == 0 {
+		// Split a globally empty broadcast build. Empty shuffle buckets
+		// retain the existing whole-batch MARK truth-table handling.
+		rowCnt = min(rowCnt, ctr.maxOutputRows())
+		if ctr.checkProbeArea {
+			rowCnt = ctr.fitEmptyProbe(hashJoin, start, rowCnt)
+		}
+	}
 	for i, rp := range hashJoin.ResultCols {
 		if rp.Rel == 0 {
-			err := ctr.resBat.Vecs[i].UnionBatch(ctr.leftBat.Vecs[rp.Pos], 0, rowCnt, nil, resMP)
+			err := ctr.resBat.Vecs[i].UnionBatch(ctr.leftBat.Vecs[rp.Pos], int64(start), rowCnt, nil, resMP)
 			if err != nil {
 				return err
 			}
@@ -1669,8 +1678,11 @@ func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, resu
 	}
 	ctr.resBat.AddRowCount(rowCnt)
 	result.Batch = ctr.resBat
-	ctr.lastIdx = 0
-	ctr.leftBat = nil
+	ctr.lastIdx += rowCnt
+	if ctr.lastIdx == total {
+		ctr.lastIdx = 0
+		ctr.leftBat = nil
+	}
 	return nil
 }
 

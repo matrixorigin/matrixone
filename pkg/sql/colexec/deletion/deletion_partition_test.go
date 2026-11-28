@@ -64,7 +64,6 @@ func TestPartitionDeleteCallDoesNotMutateSharedObjectRef(t *testing.T) {
 		},
 	}
 	bat := batch.NewWithSize(2)
-	bat.SetAttributes([]string{"row_id", "pk"})
 	bat.Vecs[0] = testutil.MakeRowIdVector([]types.Rowid{types.BuildTestRowid(1, 1)}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp())
 	bat.SetRowCount(1)

@@ -388,6 +388,14 @@ func (c *Compile) evaluateQueryPlacement(
 	ctx context.Context,
 	mode queryCandidateMode,
 ) (schedule.QueryDecision, string, error) {
+	return c.evaluateQueryPlacementForExecType(ctx, mode, c.execType)
+}
+
+func (c *Compile) evaluateQueryPlacementForExecType(
+	ctx context.Context,
+	mode queryCandidateMode,
+	execType plan2.ExecType,
+) (schedule.QueryDecision, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -395,7 +403,7 @@ func (c *Compile) evaluateQueryPlacement(
 	// TP and AP_ONECN are already local, so inspecting workspace/AST state
 	// cannot change their placement. Keep their legacy hot path untouched and
 	// derive these guards only for the remotely schedulable execution kind.
-	if c.execType == plan2.ExecTypeAP_MULTICN {
+	if execType == plan2.ExecTypeAP_MULTICN {
 		requireCurrentCN = c.executionRequiresCurrentCN()
 		ingressOnly = c.ingressOnlyExecution()
 		var qry *plan.Query
@@ -414,7 +422,7 @@ func (c *Compile) evaluateQueryPlacement(
 	currentCN := c.currentCNWorker()
 	intent := c.effectiveQuerySchedulingIntent()
 	req := schedule.QueryRequest{
-		ExecKind:             toScheduleExecKind(c.execType),
+		ExecKind:             toScheduleExecKind(execType),
 		CurrentCN:            currentCN,
 		RequireCurrentCN:     requireCurrentCN,
 		IngressOnly:          ingressOnly,
@@ -428,7 +436,7 @@ func (c *Compile) evaluateQueryPlacement(
 	if schedule.ValidateSchedulingIntent(intent) != "" {
 		return schedule.DecideQueryPlacement(req), "", nil
 	}
-	if c.execType == plan2.ExecTypeAP_MULTICN {
+	if execType == plan2.ExecTypeAP_MULTICN {
 		if err := ctx.Err(); err != nil {
 			return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
 		}
@@ -442,7 +450,7 @@ func (c *Compile) evaluateQueryPlacement(
 		}
 		return schedule.DecideQueryPlacement(req), "", nil
 	}
-	if c.execType != plan2.ExecTypeAP_MULTICN {
+	if execType != plan2.ExecTypeAP_MULTICN {
 		req.CandidateResolution = schedule.CandidateResolution{
 			DiscoverySource: schedule.CandidateSourceNotRequired,
 			PoolResolution:  schedule.PoolResolutionNotRequired,

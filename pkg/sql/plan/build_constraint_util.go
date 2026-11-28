@@ -2256,11 +2256,17 @@ func bindIntegerAssignmentLiteral(
 }
 
 func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (*plan.Expr, error) {
+	return makeInsertValueConstExprWithMode(proc, numVal, colType, isIgnore, function.StrictSqlModeForAssignment(proc))
+}
+
+// All literal cells in one VALUES plan use the same SQL mode. The caller
+// resolves it once so a large VALUES list does not repeatedly query the session.
+func makeInsertValueConstExprWithMode(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore, strictMode bool) (*plan.Expr, error) {
 	if numVal.ValType == tree.P_null || numVal.ValType == tree.P_nulltext {
 		return makePlan2NullConstExprWithType(), nil
 	}
 	decimalTarget := colType.Oid.IsDecimal()
-	lenient := decimalTarget && (isIgnore || !function.StrictSqlModeForAssignment(proc))
+	lenient := decimalTarget && (isIgnore || !strictMode)
 	scaleLoss := decimalTarget && !lenient && function.DecimalAssignmentLosesScale(numVal.String(), colType.Scale)
 	if decimalTarget {
 		if source := decimalRadixAssignmentSource(numVal); source != nil {
@@ -2282,10 +2288,10 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 	// building the plan. The runtime assignment cast owns the adjustment and
 	// warning so INSERT ... VALUES, INSERT ... SELECT, UPDATE, and prepared
 	// executions share one contract and diagnostics are emitted per logical row.
-	if (isIgnore || colType.Oid == types.T_date || scaleLoss ||
-		(!function.StrictSqlModeForAssignment(proc) && useSqlModeAssignmentCast(makePlan2Type(colType)))) &&
-		numVal.ValType == tree.P_char &&
-		useIgnoreConversionAssignmentCast(makePlan2Type(colType)) {
+	if numVal.ValType == tree.P_char &&
+		useIgnoreConversionAssignmentCast(makePlan2Type(colType)) &&
+		(isIgnore || colType.Oid == types.T_date || scaleLoss ||
+			(useSqlModeAssignmentCast(makePlan2Type(colType)) && !strictMode)) {
 		expr := MakePlan2StringConstExprWithType(numVal.String())
 		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
 	}
@@ -2295,6 +2301,8 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		numVal.ValType == tree.P_decimal || numVal.ValType == tree.P_float64) {
 		return bindIntegerAssignmentLiteral(proc, numVal, colType, isIgnore)
 	}
+	// typeswitch:partial only float32/64 and vecf32/vecf64 have this literal
+	// fast path; low-precision floats and other vectors use generic binding.
 	switch colType.Oid {
 	case types.T_bool:
 		canInsert, num, err := util.SetInsertValueBool(proc, numVal)
@@ -2472,6 +2480,7 @@ func buildValueScan(
 	effectiveColumns := append([]string(nil), updateColumns...)
 
 	proc := builder.compCtx.GetProcess()
+	strictMode := function.StrictSqlModeForAssignment(proc)
 	lastTag := builder.genNewBindTag()
 	colCount := len(updateColumns)
 	rowsetData := &plan.RowsetData{
@@ -2571,7 +2580,7 @@ func buildValueScan(
 					literal = unwrapParenExpr(literal)
 				}
 				if nv, ok := literal.(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {
-					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
+					expr, err := makeInsertValueConstExprWithMode(proc, nv, &colTyp, builder.isInsertIgnore, strictMode)
 					if err != nil {
 						return nil, err
 					}

@@ -888,65 +888,9 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWra
 		return newResultFunc[types.Varlena](typ, mp)
 	}
 
-	switch typ.Oid {
-	case types.T_bool:
-		return newResultFunc[bool](typ, mp)
-	case types.T_bit:
-		return newResultFunc[uint64](typ, mp)
-	case types.T_int8:
-		return newResultFunc[int8](typ, mp)
-	case types.T_int16:
-		return newResultFunc[int16](typ, mp)
-	case types.T_int32:
-		return newResultFunc[int32](typ, mp)
-	case types.T_int64:
-		return newResultFunc[int64](typ, mp)
-	case types.T_uint8:
-		return newResultFunc[uint8](typ, mp)
-	case types.T_uint16:
-		return newResultFunc[uint16](typ, mp)
-	case types.T_uint32:
-		return newResultFunc[uint32](typ, mp)
-	case types.T_uint64:
-		return newResultFunc[uint64](typ, mp)
-	case types.T_float32:
-		return newResultFunc[float32](typ, mp)
-	case types.T_float64:
-		return newResultFunc[float64](typ, mp)
-	case types.T_bf16:
-		return newResultFunc[types.BF16](typ, mp)
-	case types.T_float16:
-		return newResultFunc[types.Float16](typ, mp)
-	case types.T_float8:
-		return newResultFunc[types.Float8](typ, mp)
-	case types.T_float4:
-		return newResultFunc[types.Float4](typ, mp)
-	case types.T_date:
-		return newResultFunc[types.Date](typ, mp)
-	case types.T_year:
-		return newResultFunc[types.MoYear](typ, mp)
-	case types.T_datetime:
-		return newResultFunc[types.Datetime](typ, mp)
-	case types.T_time:
-		return newResultFunc[types.Time](typ, mp)
-	case types.T_timestamp:
-		return newResultFunc[types.Timestamp](typ, mp)
-	case types.T_decimal64:
-		return newResultFunc[types.Decimal64](typ, mp)
-	case types.T_decimal128:
-		return newResultFunc[types.Decimal128](typ, mp)
-	case types.T_decimal256:
-		return newResultFunc[types.Decimal256](typ, mp)
-	case types.T_TS:
-		return newResultFunc[types.TS](typ, mp)
-	case types.T_Rowid:
-		return newResultFunc[types.Rowid](typ, mp)
-	case types.T_Blockid:
-		return newResultFunc[types.Blockid](typ, mp)
-	case types.T_uuid:
-		return newResultFunc[types.Uuid](typ, mp)
-	case types.T_enum:
-		return newResultFunc[types.Enum](typ, mp)
+	ops := &vectorTypeOps[typ.Oid]
+	if !ops.supported {
+		panic(fmt.Sprintf("unexpected type %s for function result", typ))
 	}
-	panic(fmt.Sprintf("unexpected type %s for function result", typ))
+	return ops.newResult(typ, mp)
 }

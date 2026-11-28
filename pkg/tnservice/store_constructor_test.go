@@ -69,7 +69,7 @@ func TestTNConstructorMetadataFailureRetiresOwners(t *testing.T) {
 	cfg := &Config{UUID: sid, DataDir: t.TempDir(), InStandalone: true}
 	cfg.LockService.ListenAddress = "unix://" + socketDir + "/lock.sock"
 	cfg.LockService.ServiceAddress = cfg.LockService.ListenAddress
-	owner, err := NewService(cfg, rt, metadataReadFailure{fs, sentinel}, nil, func(value Service) { acquired = value.(*store) },
+	owner, err := NewService(cfg, rt, metadataReadFailure{fs, sentinel}, func(value Service) { acquired = value.(*store) },
 		WithHAKeeperClientFactory(func() (logservice.TNHAKeeperClient, error) { return h, nil }))
 	require.Nil(t, owner)
 	require.Same(t, sentinel, err)
@@ -107,7 +107,7 @@ func TestTNConstructorPrerequisiteFailureDoesNotStartIO(t *testing.T) {
 			})
 			sentinel := errors.New("HA acquisition refused")
 			calls := 0
-			owner, err := NewService(&Config{UUID: sid, DataDir: t.TempDir()}, rt, fs, nil, func(value Service) { acquired = value },
+			owner, err := NewService(&Config{UUID: sid, DataDir: t.TempDir()}, rt, fs, func(value Service) { acquired = value },
 				WithHAKeeperClientFactory(func() (logservice.TNHAKeeperClient, error) { calls++; return nil, sentinel }))
 			require.Nil(t, owner)
 			if hasClock {
@@ -150,7 +150,7 @@ func TestTNConstructorUnwindPublishesOwner(t *testing.T) {
 			go func() {
 				defer close(done)
 				defer func() { recovered = recover() }()
-				_, _ = NewService(&Config{UUID: t.Name()}, rt, fs, nil,
+				_, _ = NewService(&Config{UUID: t.Name()}, rt, fs,
 					func(value Service) { owner = value },
 					func(s *store) {
 						if owner != s {
@@ -195,7 +195,7 @@ func TestTNConstructorRetainsOwnerOnIncompleteCleanup(t *testing.T) {
 			published.stopper.Stop()
 		}
 	})
-	owner, err := NewService(&Config{UUID: sid, DataDir: t.TempDir()}, rt, fs, nil,
+	owner, err := NewService(&Config{UUID: sid, DataDir: t.TempDir()}, rt, fs,
 		func(value Service) { published = value.(*store) },
 		func(s *store) {
 			s.server = &failingDrainServer{

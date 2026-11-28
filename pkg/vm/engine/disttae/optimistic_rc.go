@@ -109,7 +109,7 @@ func validateOptimisticWriteEntry(ctx context.Context, tbl *txnTable, e Entry, f
 		} else {
 			pk := tbl.GetTableDef(ctx).Pkey
 			if pk != nil {
-				for n, attr := range e.bat.Attrs {
+				for n, attr := range e.attrs {
 					if attr == pk.PkeyColName {
 						pos = n
 						break
@@ -142,7 +142,7 @@ func validateOptimisticWriteEntry(ctx context.Context, tbl *txnTable, e Entry, f
 				return false
 			}
 			defer release()
-			checkErr = check(cols[0].GetDownstreamVector())
+			checkErr = check(cols[0])
 			return checkErr == nil
 		}, stats)
 		if checkErr != nil {

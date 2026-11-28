@@ -169,7 +169,6 @@ func TestS3WriterDelegateTombstoneWriterBindsAndRetains(t *testing.T) {
 		types.NewRowid(&blkid, 1),
 	}
 	delBat := batch.NewWithSize(2)
-	delBat.SetAttributes([]string{"a", "pk"})
 	delBat.Vecs[0] = testutil.MakeRowIdVector(rows, nil, proc.Mp())
 	delBat.Vecs[1] = testutil.MakeInt64Vector([]int64{1, 2}, nil, proc.Mp())
 	delBat.SetRowCount(2)

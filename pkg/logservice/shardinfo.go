@@ -131,16 +131,16 @@ func getShardMembership(
 	sid string,
 	address string,
 	shardID uint64,
-) (map[uint64]string, bool, error) {
+) (map[uint64]string, uint64, bool, error) {
 	si, ok, err := queryShardInfoRawFn(ctx, sid, address, shardID, true, false)
 	if err != nil || !ok {
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	members := make(map[uint64]string, len(si.Replicas))
 	for replicaID, info := range si.Replicas {
-		members[replicaID] = info.ServiceAddress
+		members[replicaID] = info.UUID
 	}
-	return members, true, nil
+	return members, si.Epoch, true, nil
 }
 
 // queryShardInfoRaw issues the GET_SHARD_INFO RPC and returns the raw response

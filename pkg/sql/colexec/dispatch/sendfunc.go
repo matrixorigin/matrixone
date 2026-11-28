@@ -15,12 +15,12 @@
 package dispatch
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -60,12 +60,30 @@ var (
 	sendToAnyRemote = sendToAnyRemoteFunc
 )
 
-// marshalRemoteBatch encodes a batch in the stable Batch wire format.
-func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buffer) ([]byte, error) {
+// dispatchSendPool holds the dispatch operators' send buffers.
+var dispatchSendPool = mpool.MustNew("dispatch_send")
+
+// maxRetainedSendBuffer bounds the send buffer an operator keeps between
+// batches; a larger batch's buffer is freed when the next batch is sent.
+const maxRetainedSendBuffer = 64 << 20
+
+// marshalRemoteBatch encodes a batch in the Batch wire format into buf, off
+// heap, and returns the encoding. The messages sent from it point into buf;
+// that is safe because a server session's ClientSession.Write returns only
+// after the transport has encoded the message or dropped it, so the next
+// batch can reuse the bytes.
+func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *mpool.MessageBuffer) ([]byte, error) {
 	if bat == nil {
 		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
 	}
-	return bat.MarshalBinaryWithBuffer(buf, true)
+	if buf.Pool() == nil {
+		*buf = mpool.NewMessageBuffer(dispatchSendPool, maxRetainedSendBuffer)
+	}
+	buf.Reset()
+	if err := bat.MarshalBinaryTo(buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (ctr *container) removeIdxReceiver(idx int) {
@@ -101,7 +119,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	}
 
 	{ // send to remote regs
-		encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
+		encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.sendBuf)
 		if errEncode != nil {
 			return false, errEncode
 		}
@@ -160,7 +178,7 @@ func sendBatToIndexOutcome(ap *Dispatch, proc *process.Process, bat *batch.Batch
 		if shuffleIndex == batIndex {
 			if bat != nil && !bat.IsEmpty() {
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
+				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.sendBuf)
 				if errEncode != nil {
 					return false, errEncode
 				}
@@ -228,7 +246,7 @@ func sendBatToMultiMatchedRegOutcome(ap *Dispatch, proc *process.Process, bat *b
 		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
+				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.sendBuf)
 				if errEncode != nil {
 					return false, errEncode
 				}
@@ -355,7 +373,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	default:
 	}
 
-	encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
+	encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.sendBuf)
 	if errEncode != nil {
 		return false, errEncode
 	}

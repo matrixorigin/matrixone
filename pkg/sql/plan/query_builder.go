@@ -12723,7 +12723,8 @@ func appendSelectListWithGroupingOrder(
 					provenance := ctx.generatedHeadingProvenance[int32(exprIdx)]
 					ctx.appendHeading(selectExpr.As.Origin(), provenance)
 				} else {
-					ctx.appendHeading(expr.ColNameOrigin(), headingProvenance{})
+					heading, provenance := implicitSelectHeading(expr)
+					ctx.appendHeading(heading, provenance)
 				}
 
 				newExpr, err := qualifyExpr(expr)
@@ -12748,7 +12749,8 @@ func appendSelectListWithGroupingOrder(
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
 				ctx.appendHeading(selectExpr.As.Origin(), headingProvenance{})
 			} else {
-				ctx.appendHeading(legalUTF8GeneratedHeading(tree.String(expr, dialect.MYSQL)), headingProvenance{})
+				heading, provenance := implicitSelectHeading(expr)
+				ctx.appendHeading(heading, provenance)
 			}
 
 			selectList = append(selectList, tree.SelectExpr{
@@ -12760,18 +12762,14 @@ func appendSelectListWithGroupingOrder(
 				provenance := ctx.generatedHeadingProvenance[int32(exprIdx)]
 				ctx.appendHeading(selectExpr.As.Origin(), provenance)
 			} else {
+				heading, provenance := implicitSelectHeading(expr)
+				ctx.appendHeading(heading, provenance)
 				for {
-					if parenExpr, ok := expr.(*tree.ParenExpr); ok {
-						expr = parenExpr.Expr
-					} else {
+					paren, ok := expr.(*tree.ParenExpr)
+					if !ok {
 						break
 					}
-				}
-				if heading, ok := tree.NameConstHeading(expr); ok {
-					ctx.appendHeading(legalUTF8GeneratedHeading(heading), headingProvenance{})
-				} else {
-					heading, provenance := formatSelectExpressionHeading(expr)
-					ctx.appendHeading(legalUTF8GeneratedHeading(heading), provenance)
+					expr = paren.Expr
 				}
 			}
 
@@ -12900,6 +12898,31 @@ func qualifyGroupingSetHiddenOrderExpr(
 // text of an unaliased expression can carry raw literal bytes (e.g. a _binary
 // literal), so the derived name gets invalid sequences replaced. Aliases and
 // catalog names are appended by other sites and are intentionally untouched.
+// SelectOutputColumnName returns the derived-table binding name for one
+// select expression. Star expansion requires the source schema.
+func SelectOutputColumnName(expr tree.SelectExpr) string {
+	if expr.As != nil && !expr.As.Empty() {
+		return strings.ToLower(expr.As.Origin())
+	}
+	heading, _ := implicitSelectHeading(expr.Expr)
+	return strings.ToLower(heading)
+}
+
+func implicitSelectHeading(expr tree.Expr) (string, headingProvenance) {
+	switch value := expr.(type) {
+	case *tree.UnresolvedName:
+		return value.ColNameOrigin(), headingProvenance{}
+	case *tree.NumVal:
+		return legalUTF8GeneratedHeading(tree.String(value, dialect.MYSQL)), headingProvenance{}
+	default:
+		if heading, ok := tree.NameConstHeading(expr); ok {
+			return legalUTF8GeneratedHeading(heading), headingProvenance{}
+		}
+		heading, provenance := formatSelectExpressionHeading(expr)
+		return legalUTF8GeneratedHeading(heading), provenance
+	}
+}
+
 func legalUTF8GeneratedHeading(s string) string {
 	if utf8.ValidString(s) {
 		return s
@@ -14837,6 +14860,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		}
 	}
 
+	binding.caseInsensitiveTable = alias.Alias == "" && slices.Contains(mysql.CaseInsensitiveDbs, sqlDatabase)
+
 	if bindingToReplace != nil {
 		ctx.replaceBinding(bindingToReplace, binding)
 	} else {
@@ -15350,6 +15375,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildSqlTvf(tbl, ctx, exprs, nil)
 		case "table_stats":
 			nodeId = builder.buildTableStats(tbl, ctx, exprs, nil)
+		case "mo_index_stats":
+			nodeId, err = builder.buildIndexStats(tbl, ctx, exprs)
 		case "load_file_chunks":
 			nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, nil)
 		case indexFileChunksFuncName:
@@ -15706,7 +15733,7 @@ func (builder *QueryBuilder) applyIcebergRefToScan(scan *plan.IcebergScan, ref *
 
 	switch ref.Type {
 	case tree.IcebergRefSnapshot:
-		snapshotID, err := parseIcebergSnapshotID(builder.GetContext(), ref.Snapshot)
+		snapshotID, err := ParseIcebergSnapshotID(builder.GetContext(), ref.Snapshot)
 		if err != nil {
 			return err
 		}
@@ -15729,7 +15756,8 @@ func (builder *QueryBuilder) applyIcebergRefToScan(scan *plan.IcebergScan, ref *
 	return nil
 }
 
-func parseIcebergSnapshotID(ctx context.Context, expr tree.Expr) (int64, error) {
+// ParseIcebergSnapshotID converts an Iceberg snapshot literal to its catalog ID.
+func ParseIcebergSnapshotID(ctx context.Context, expr tree.Expr) (int64, error) {
 	raw, err := icebergRefLiteralText(ctx, expr, "snapshot")
 	if err != nil {
 		return 0, err
@@ -15742,24 +15770,44 @@ func parseIcebergSnapshotID(ctx context.Context, expr tree.Expr) (int64, error) 
 }
 
 func (builder *QueryBuilder) parseIcebergTimestampAsOfMS(expr tree.Expr) (int64, error) {
-	raw, err := icebergRefLiteralText(builder.GetContext(), expr, "timestamp")
+	ctx := builder.GetContext()
+	datetime, raw, err := parseIcebergTimestampDatetime(ctx, expr)
 	if err != nil {
 		return 0, err
 	}
-
 	loc := time.UTC
 	if proc := builder.compCtx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
 		loc = proc.GetSessionInfo().TimeZone
 	}
-	ts, err := types.ParseTimestamp(loc, raw, 6)
-	if err != nil {
-		return 0, moerr.NewInvalidInputf(builder.GetContext(), "invalid FOR ICEBERG TIMESTAMP AS OF value: %s", raw)
-	}
-	epochMicros := int64(ts) - int64(types.UnixToTimestamp(0))
+	epochMicros := int64(datetime.ToTimestamp(loc)) - int64(types.UnixToTimestamp(0))
 	if epochMicros < 0 {
-		return 0, moerr.NewInvalidInputf(builder.GetContext(), "FOR ICEBERG TIMESTAMP AS OF must be at or after Unix epoch: %s", raw)
+		return 0, moerr.NewInvalidInputf(ctx, "FOR ICEBERG TIMESTAMP AS OF must be at or after Unix epoch: %s", raw)
 	}
 	return epochMicros / 1000, nil
+}
+
+// SameIcebergTimestampMillis compares selectors that produce the same instant
+// at scan precision in any session time zone. Zone offsets and DST gap
+// adjustments are in whole seconds and preserve the fractional second.
+func SameIcebergTimestampMillis(ctx context.Context, left, right tree.Expr) bool {
+	a, _, err := parseIcebergTimestampDatetime(ctx, left)
+	if err != nil {
+		return false
+	}
+	b, _, err := parseIcebergTimestampDatetime(ctx, right)
+	return err == nil && a != types.ZeroDatetime && b != types.ZeroDatetime && int64(a)/1000 == int64(b)/1000
+}
+
+func parseIcebergTimestampDatetime(ctx context.Context, expr tree.Expr) (types.Datetime, string, error) {
+	raw, err := icebergRefLiteralText(ctx, expr, "timestamp")
+	if err != nil {
+		return 0, "", err
+	}
+	datetime, err := types.ParseDatetime(raw, 6)
+	if err != nil {
+		return 0, "", moerr.NewInvalidInputf(ctx, "invalid FOR ICEBERG TIMESTAMP AS OF value: %s", raw)
+	}
+	return datetime, raw, nil
 }
 
 func icebergRefLiteralText(ctx context.Context, expr tree.Expr, kind string) (string, error) {

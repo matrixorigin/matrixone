@@ -76,7 +76,7 @@ func TestPartitionInsertCallDoesNotMutateSharedObjectRef(t *testing.T) {
 			return relation, nil
 		},
 	).AnyTimes()
-	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	relation.EXPECT().Write(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
 
 	proc := testutil.NewProc(t)
@@ -101,7 +101,6 @@ func TestPartitionInsertCallDoesNotMutateSharedObjectRef(t *testing.T) {
 	require.NoError(t, raw.Prepare(proc))
 
 	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{"a"}
 	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp())
 	bat.SetRowCount(1)
 

@@ -52,7 +52,7 @@ func TestIVFFlushPreservesPartitionOwnership(t *testing.T) {
 	blockID := objectio.NewBlockidWithObjectID(&objID, 0)
 	rowID := types.NewRowid(&blockID, 0)
 	row := batch.NewWithSize(3)
-	row.Attrs = []string{"__mo_rowid", "__mo_commit_ts", "pk"}
+	rowAttrs := []string{"__mo_rowid", "__mo_commit_ts", "pk"}
 	row.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	row.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	row.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
@@ -61,17 +61,17 @@ func TestIVFFlushPreservesPartitionOwnership(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(row.Vecs[1], insert, false, mp))
 	require.NoError(t, vector.AppendBytes(row.Vecs[2], []byte(pk), false, mp))
 	row.SetRowCount(1)
-	proto, err := batch.BatchToProtoBatch(row)
+	rowData, err := batch.MarshalVectors(row.Vecs)
 	require.NoError(t, err)
 	packer := types.NewPacker()
 	defer packer.Close()
 	before := logtailreplay.NewPartitionState("pre-apply", false, 1234, false)
-	before.HandleRowsInsert(ctx, proto, 0, packer, mp)
+	before.HandleRowsInsert(ctx, rowData, rowAttrs, 0, packer, mp)
 	decoded := func() *batch.Batch {
 		mem := before.NewRowsIter(snapshot, nil, false)
 		defer mem.Close()
 		require.True(t, mem.Next())
-		return mem.Entry().Batch
+		return mem.Entry().Batch.Batch
 	}()
 	defer decoded.Clean(mp)
 	require.Equal(t, pk, decoded.Vecs[2].GetStringAt(0))
@@ -80,7 +80,6 @@ func TestIVFFlushPreservesPartitionOwnership(t *testing.T) {
 	// Reproduce the old appendable object's persisted representation (same ID,
 	// original row commit TS) with a real writer, as flushObjTask does.
 	persisted := batch.NewWithSize(2)
-	persisted.Attrs = []string{"pk", "__mo_commit_ts"}
 	persisted.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	persisted.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	defer persisted.Clean(mp)
@@ -109,7 +108,7 @@ func TestIVFFlushPreservesPartitionOwnership(t *testing.T) {
 	// Replay the real live object-list format consumed from the TN, including
 	// the flush transaction start TS used as its in-memory eviction boundary.
 	objectList := batch.NewWithSize(2 + len(logtail.ObjectInfoAttr))
-	objectList.Attrs = append([]string{"__mo_rowid", "__mo_commit_ts"}, logtail.ObjectInfoAttr...)
+	objectListAttrs := append([]string{"__mo_rowid", "__mo_commit_ts"}, logtail.ObjectInfoAttr...)
 	objectList.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	objectList.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	for i, typ := range logtail.ObjectInfoTypes {
@@ -132,9 +131,9 @@ func TestIVFFlushPreservesPartitionOwnership(t *testing.T) {
 	appendObject(snapshotStats, create, flushCommit)
 	appendObject(immutableStats, flushCommit, types.TS{})
 	objectList.SetRowCount(2)
-	objects, err := batch.BatchToProtoBatch(objectList)
+	objects, err := batch.MarshalVectors(objectList.Vecs)
 	require.NoError(t, err)
-	after.HandleDataObjectList(ctx, &api.Entry{EntryType: api.Entry_DataObject, DatabaseId: 12, TableId: 1234, Bat: objects}, fs, mp)
+	after.HandleDataObjectList(ctx, &api.Entry{EntryType: api.Entry_DataObject, DatabaseId: 12, TableId: 1234, Attrs: objectListAttrs, Bat: api.NewEncodedBatch(objects)}, fs, mp)
 	require.Zero(t, after.ApproxInMemRows(), "applied flush removes committed rows from the replay memtable")
 	require.Equal(t, 1, before.ApproxInMemRows(), "other replica still precedes the flush")
 

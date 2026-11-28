@@ -1406,7 +1406,7 @@ func jsonObjectAggColExpr(t *testing.T, keyPos, valPos int32) aggexec.AggFuncExe
 // makeKeyValBatch builds a batch of (varchar key, int32 value) columns for
 // json_objectagg tests. keyNullPos lists the NULL key row positions (may be nil).
 func makeKeyValBatch(mp *mpool.MPool, keys []string, keyNullPos []uint64, vals []int32) *batch.Batch {
-	bat := batch.New([]string{"k", "v"})
+	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = testutil.MakeVarcharVector(keys, keyNullPos, mp)
 	bat.Vecs[1] = testutil.MakeInt32Vector(vals, nil, mp)
 	bat.SetRowCount(len(keys))
