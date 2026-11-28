@@ -421,9 +421,17 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	for _, col := range binding.cols {
 		returnCtx.bindingByCol[col] = binding
 	}
-	if visible := builder.dmlReturningVisibleColumns(); visible != nil {
+	if target := builder.dmlReturningRewrite(); target != nil {
 		// Keep SINK_SCAN positions aligned with the final row image.
-		returnCtx.restrictDMLBinding(binding, visible)
+		returnCtx.restrictDMLBinding(binding, target.visible)
+		if target.orderedColumns != nil {
+			binding.starColumnOrder = make([]int32, 0, len(target.orderedColumns))
+			for _, name := range target.orderedColumns {
+				if pos, ok := binding.colIdByName[name]; ok {
+					binding.starColumnOrder = append(binding.starColumnOrder, pos)
+				}
+			}
+		}
 	}
 
 	selectList, err := appendSelectList(builder, returnCtx, nil, exprs...)

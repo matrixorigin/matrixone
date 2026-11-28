@@ -59,14 +59,14 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 		execAdmin("create index idx_tenant on " + target + "(tenant)")
 		execAdmin("create index idx_amount on " + target + "(amount)")
 		execAdmin("create index idx_expression on " + target + " ((tenant + 1))")
-		execAdmin("insert into " + target + " values (1, 1, 10, 'first'), (2, 2, 20, 'second'), (3, 1, 30, 'third')")
-		execAdmin("create table " + other + " (id int primary key)")
-		execAdmin("insert into " + other + " values (2), (3)")
+		execAdmin("insert into " + target + " values (1, 1, 10, 'first'), (2, 2, 20, 'second'), (3, 1, 30, 'third'), (4, 1, 40, 'fourth')")
+		execAdmin("create table " + other + " (id int primary key, amount int)")
+		execAdmin("insert into " + other + " values (2, 53), (3, 30)")
 		execAdmin("create role " + role)
 		execAdmin("grant connect on account * to " + role)
 		execAdmin("grant select, update, delete on table " + target + " to " + role)
 		execAdmin("grant select, update on table " + other + " to " + role)
-		execAdmin("alter role " + role + " add rule '((select id, amount from " + target + " where tenant = 1))' on table " + target)
+		execAdmin("alter role " + role + " add rule '((select amount, id from " + target + " where tenant = 1))' on table " + target)
 		execAdmin("create user " + user + " identified by '" + password + "' default role " + role)
 
 		dsn := fmt.Sprintf("sys#%s#%s:%s@tcp(127.0.0.1:%d)/%s?interpolateParams=false", user, role, password, port, db)
@@ -177,21 +177,28 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 			require.False(t, rows.Next())
 			require.NoError(t, rows.Err())
 		}()
-		func() {
-			rows, err := conn.QueryContext(ctx, "update items set amount = 52 where id = 1 returning *")
-			require.NoError(t, err)
+		requireProjection := func(statement string, wantAmount, wantID int) {
+			t.Helper()
+			rows, err := conn.QueryContext(ctx, statement)
+			require.NoError(t, err, statement)
 			defer rows.Close()
 			columns, err := rows.Columns()
-			require.NoError(t, err)
-			require.Equal(t, []string{"id", "amount"}, columns)
-			require.True(t, rows.Next())
-			var id, amount int
-			require.NoError(t, rows.Scan(&id, &amount))
-			require.Equal(t, 1, id)
-			require.Equal(t, 52, amount)
-			require.False(t, rows.Next())
-			require.NoError(t, rows.Err())
-		}()
+			require.NoError(t, err, statement)
+			require.Equal(t, []string{"amount", "id"}, columns, statement)
+			require.True(t, rows.Next(), statement)
+			var amount, id int
+			require.NoError(t, rows.Scan(&amount, &id), statement)
+			require.Equal(t, wantAmount, amount, statement)
+			require.Equal(t, wantID, id, statement)
+			require.False(t, rows.Next(), statement)
+			require.NoError(t, rows.Err(), statement)
+		}
+		requireProjection("select * from items where id = 1", 51, 1)
+		requireProjection("update items set amount = 52 where id = 1 returning *", 52, 1)
+		execUser("set enable_remap_hint = 1")
+		requireProjection(`/*+ {"rewrites":{"`+target+`":"select * from `+target+`"}} */ `+
+			"delete from items where id = 4 returning items.*", 40, 4)
+		execUser("set enable_remap_hint = 0")
 
 		// Both base targets require DELETE privileges. Their index writes are internal.
 		const joinedDelete = "delete i, o from items as i join other as o on i.id = o.id"
@@ -200,6 +207,21 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 		execUser(joinedDelete)
 		requireValue(admin.QueryRowContext(ctx, "select count(*) from "+other+" where id = 2"), 1)
 		requireValue(admin.QueryRowContext(ctx, "select count(*) from "+other+" where id = 3"), 0)
+
+		// LIMIT keeps the joined source readable, while its projected columns
+		// determine which unqualified SET names belong to the writable table.
+		execAdmin("alter role " + role + " add rule 'select id from " + other + " limit 1' on table " + other)
+		const joinedUpdate = "update items i join other o on o.id = i.id + 1 "
+		requireAffected(joinedUpdate+"set amount = amount + 1 where i.id = 1", 1)
+		requireValue(admin.QueryRowContext(ctx, "select amount from "+target+" where id = 1"), 53)
+		execAdmin("alter role " + role + " add rule 'select id, amount from " + other + " limit 1' on table " + other)
+		_, err = conn.ExecContext(ctx, joinedUpdate+"set amount = 54 where i.id = 1")
+		require.ErrorContains(t, err, "ambiguous column")
+		requireCode(joinedUpdate+"set o.amount = 54 where i.id = 1", 20101)
+		requireCode("update other o join items i using (amount) set amount = 54", 20101)
+		requireValue(admin.QueryRowContext(ctx, "select amount from "+target+" where id = 1"), 53)
+		requireValue(admin.QueryRowContext(ctx, "select amount from "+other+" where id = 2"), 53)
+
 		requireAffected("delete from items", 1)
 		requireValue(admin.QueryRowContext(ctx, "select count(*) from "+target+" force index (idx_tenant) where tenant = 1"), 0)
 		requireValue(admin.QueryRowContext(ctx, "select id from "+target), 2)

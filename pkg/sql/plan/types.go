@@ -1457,6 +1457,8 @@ type Binding struct {
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)
 	originCols []string
+	// Optional logical order of star expansion over the binding's physical columns.
+	starColumnOrder []int32
 	// headingProvenance carries expression-heading syntax through a derived
 	// table/CTE so SELECT * can retain the original literal spelling. It is
 	// sparse and keyed by column ordinal.

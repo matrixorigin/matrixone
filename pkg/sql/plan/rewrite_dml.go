@@ -41,14 +41,15 @@ func CheckDMLRewriteExplain(ctx context.Context, query *plan.Query) error {
 // A writable rewrite must keep the identity and values of each selected base
 // row. The DML projection still carries the full physical row for maintenance.
 type dmlTargetRewrite struct {
-	source     *tree.TableName
-	alias      string
-	tableIndex int
-	tableID    uint64
-	key        string
-	chain      []*tree.Rewrite
-	layers     []dmlRewriteLayer
-	visible    map[string]int32
+	source         *tree.TableName
+	alias          string
+	tableIndex     int
+	tableID        uint64
+	key            string
+	chain          []*tree.Rewrite
+	layers         []dmlRewriteLayer
+	visible        map[string]int32
+	orderedColumns []string
 }
 
 type dmlRewriteLayer struct {
@@ -113,7 +114,7 @@ func resolveDMLTargetRewrites(
 			}
 		}
 		if !def.IsTemporary && def.TableType == catalog.SystemOrdinaryRel {
-			target.layers, target.visible = writableRewriteLayers(chain, def, database, table, policyDefault, lower)
+			target.layers, target.visible, target.orderedColumns = writableRewriteLayers(chain, def, database, table, policyDefault, lower)
 		}
 		if targets == nil {
 			targets = make(map[string]*dmlTargetRewrite)
@@ -125,7 +126,7 @@ func resolveDMLTargetRewrites(
 
 func writableRewriteLayers(
 	chain []*tree.Rewrite, def *plan.TableDef, database, table, defaultDatabase string, lower int64,
-) ([]dmlRewriteLayer, map[string]int32) {
+) ([]dmlRewriteLayer, map[string]int32, []string) {
 	visible := make(map[string]int32, len(def.Cols))
 	for i, col := range def.Cols {
 		if !col.Hidden {
@@ -134,21 +135,22 @@ func writableRewriteLayers(
 	}
 
 	layers := make([]dmlRewriteLayer, 0, len(chain))
+	var orderedColumns []string
 	for _, rewrite := range chain {
 		if rewrite == nil {
-			return nil, nil
+			return nil, nil, nil
 		}
 		clause := rewriteSelectClause(rewrite.Stmt, true)
 		if clause == nil {
-			return nil, nil
+			return nil, nil, nil
 		}
 		qualifier, aliased, ok := rewriteSingleTableSource(clause, database, table, defaultDatabase, lower)
 		if !ok {
-			return nil, nil
+			return nil, nil, nil
 		}
 		names, all, ok := rewriteProjectionColumns(clause.Exprs, database, qualifier, aliased, lower)
-		if !ok || (all && len(clause.Exprs) != 1) || (!all && len(names) != len(clause.Exprs)) {
-			return nil, nil
+		if !ok || all && len(clause.Exprs) != 1 {
+			return nil, nil, nil
 		}
 
 		layers = append(layers, dmlRewriteLayer{qualifier: qualifier, input: visible, where: clause.Where})
@@ -156,16 +158,18 @@ func writableRewriteLayers(
 			continue
 		}
 		projected := make(map[string]int32, len(names))
-		for name := range names {
+		for _, name := range names {
 			pos, ok := visible[name]
-			if !ok {
-				return nil, nil
+			_, duplicate := projected[name]
+			if !ok || duplicate {
+				return nil, nil, nil
 			}
 			projected[name] = pos
 		}
 		visible = projected
+		orderedColumns = names
 	}
-	return layers, visible
+	return layers, visible, orderedColumns
 }
 
 func (builder *QueryBuilder) enableDMLTargetRewrites(
@@ -341,10 +345,10 @@ func dmlRewriteComparisonOperandIsTotal(expr *plan.Expr, preparedDiagnosticsFree
 		(preparedDiagnosticsFree && source.GetP() != nil && function.MayDiagnoseStatementParameter(expr))
 }
 
-func (builder *QueryBuilder) dmlReturningVisibleColumns() map[string]int32 {
+func (builder *QueryBuilder) dmlReturningRewrite() *dmlTargetRewrite {
 	for _, target := range builder.dmlRewriteTargets {
 		if target.tableID == builder.returningTableDef.TblId {
-			return target.visible
+			return target
 		}
 	}
 	return nil

@@ -5904,6 +5904,9 @@ func validateUpdateAssignmentTargets(builder *QueryBuilder, bindCtx *BindContext
 				return err
 			}
 
+			if target := dmlCtx.updateRewrites[binding.table]; target != nil && target.visible == nil {
+				return rewritePrivilegeError(builder.GetContext())
+			}
 			idx, writable := dmlCtx.aliasMap[binding.table]
 			if !writable || binding.tableID != dmlCtx.tableDefs[idx].TblId {
 				return moerr.NewInvalidInputf(builder.GetContext(), "UPDATE target table '%s' is not updatable", binding.table)

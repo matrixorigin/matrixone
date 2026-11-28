@@ -288,7 +288,15 @@ func rewriteVisibleColumns(stmt tree.Statement, database, table string, lower in
 	if !ok {
 		return nil, false, false
 	}
-	return rewriteProjectionColumns(clause.Exprs, database, qualifier, aliased, lower)
+	names, all, ok := rewriteProjectionColumns(clause.Exprs, database, qualifier, aliased, lower)
+	if !ok || all {
+		return nil, all, ok
+	}
+	visible := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		visible[name] = struct{}{}
+	}
+	return visible, false, true
 }
 
 // Parentheses preserve a projection. For writable rules also prove that
@@ -324,11 +332,11 @@ func rewriteSelectClause(stmt tree.Statement, writable bool) *tree.SelectClause 
 	}
 }
 
-func rewriteProjectionColumns(exprs tree.SelectExprs, database, qualifier string, aliased bool, lower int64) (map[string]struct{}, bool, bool) {
+func rewriteProjectionColumns(exprs tree.SelectExprs, database, qualifier string, aliased bool, lower int64) ([]string, bool, bool) {
 	matches := func(value, expected string) bool {
 		return tree.NewCStr(value, lower).Compare() == tree.NewCStr(expected, lower).Compare()
 	}
-	names := make(map[string]struct{}, len(exprs))
+	var names []string
 	all := false
 	for _, expr := range exprs {
 		switch value := expr.Expr.(type) {
@@ -352,7 +360,7 @@ func rewriteProjectionColumns(exprs tree.SelectExprs, database, qualifier string
 			if expr.As != nil && !expr.As.Empty() && !strings.EqualFold(expr.As.Origin(), value.ColNameOrigin()) {
 				return nil, false, false
 			}
-			names[strings.ToLower(value.ColName())] = struct{}{}
+			names = append(names, strings.ToLower(value.ColName()))
 		default:
 			return nil, false, false
 		}

@@ -558,91 +558,67 @@ func (bc *BindContext) addUsingColForCrossL2(col string, typ plan.Node_JoinType,
 }
 
 func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccount bool) ([]tree.SelectExpr, []string, headingProvenanceMap, error) {
-	if len(table) == 0 {
-		// unfold *
-		var exprs []tree.SelectExpr
-		var names []string
-		var provenances headingProvenanceMap
+	var exprs []tree.SelectExpr
+	var names []string
+	var provenances headingProvenanceMap
 
-		bc.doUnfoldStar(ctx, bc.bindingTree, make(map[string]bool), &exprs, &names, &provenances, isSysAccount)
-
-		return exprs, names, provenances, nil
+	if table == "" {
+		bc.doUnfoldStar(bc.bindingTree, make(map[string]bool), &exprs, &names, &provenances, isSysAccount)
 	} else {
-		// unfold tbl.*
 		binding, ok := bc.bindingByTable[table]
 		if !ok {
 			return nil, nil, nil, moerr.NewInvalidInputf(ctx, "missing FROM-clause entry for table '%s'", table)
 		}
+		exprs = make([]tree.SelectExpr, 0)
+		names = make([]string, 0)
+		bc.appendBindingStar(binding, table, nil, &exprs, &names, &provenances, isSysAccount)
+	}
+	return exprs, names, provenances, nil
+}
 
-		displayCols := binding.originCols
-		if len(displayCols) != len(binding.cols) {
-			displayCols = binding.cols
+func (bc *BindContext) appendBindingStar(binding *Binding, table string, visitedUsingCols map[string]bool, exprs *[]tree.SelectExpr, names *[]string, provenances *headingProvenanceMap, isSysAccount bool) {
+	displayCols := binding.originCols
+	if len(displayCols) != len(binding.cols) {
+		displayCols = binding.cols
+	}
+
+	count := len(binding.cols)
+	order := binding.starColumnOrder
+	if order != nil {
+		count = len(order)
+	}
+	for i := range count {
+		if order != nil {
+			i = int(order[i])
 		}
-
-		exprs := make([]tree.SelectExpr, 0)
-		names := make([]string, 0)
-		var provenances headingProvenanceMap
-
-		for i, col := range binding.cols {
-			if binding.colIsHidden[i] {
-				continue
-			}
-			if catalog.ContainExternalHidenCol(col) {
-				continue
-			}
-			//the non-sys account skips the column account_id for the cluster table
-			if !isSysAccount && binding.isClusterTable && util.IsClusterTableAttribute(col) {
-				continue
-			}
-			expr := tree.NewUnresolvedName(tree.NewCStr(table, bc.lower), tree.NewCStr(col, 1))
-			exprs = append(exprs, tree.SelectExpr{Expr: expr})
-			names = append(names, displayCols[i])
-			if provenance, ok := binding.headingProvenance[int32(i)]; ok {
-				if provenances == nil {
-					provenances = make(headingProvenanceMap)
-				}
-				provenances[int32(len(exprs)-1)] = cloneHeadingProvenance(provenance)
-			}
+		col := binding.cols[i]
+		if binding.colIsHidden[i] || catalog.ContainExternalHidenCol(col) {
+			continue
 		}
-
-		return exprs, names, provenances, nil
+		if !isSysAccount && binding.isClusterTable && util.IsClusterTableAttribute(col) {
+			continue
+		}
+		if visitedUsingCols[col] {
+			continue
+		}
+		expr := tree.NewUnresolvedName(tree.NewCStr(table, bc.lower), tree.NewCStr(col, 1))
+		*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
+		*names = append(*names, displayCols[i])
+		if provenance, ok := binding.headingProvenance[int32(i)]; ok {
+			if *provenances == nil {
+				*provenances = make(headingProvenanceMap)
+			}
+			(*provenances)[int32(len(*exprs)-1)] = cloneHeadingProvenance(provenance)
+		}
 	}
 }
 
-func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, visitedUsingCols map[string]bool, exprs *[]tree.SelectExpr, names *[]string, provenances *headingProvenanceMap, isSysAccount bool) {
+func (bc *BindContext) doUnfoldStar(root *BindingTreeNode, visitedUsingCols map[string]bool, exprs *[]tree.SelectExpr, names *[]string, provenances *headingProvenanceMap, isSysAccount bool) {
 	if root == nil {
 		return
 	}
 	if root.binding != nil {
-		displayCols := root.binding.originCols
-		if len(displayCols) != len(root.binding.cols) {
-			displayCols = root.binding.cols
-		}
-
-		for i, col := range root.binding.cols {
-			if root.binding.colIsHidden[i] {
-				continue
-			}
-			if catalog.ContainExternalHidenCol(col) {
-				continue
-			}
-			//the non-sys account skips the column account_id for the cluster table
-			if !isSysAccount && root.binding.isClusterTable && util.IsClusterTableAttribute(col) {
-				continue
-			}
-			if !visitedUsingCols[col] {
-				expr := tree.NewUnresolvedName(tree.NewCStr(root.binding.table, bc.lower), tree.NewCStr(col, 1))
-				*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
-				*names = append(*names, displayCols[i])
-				if provenance, ok := root.binding.headingProvenance[int32(i)]; ok {
-					if *provenances == nil {
-						*provenances = make(headingProvenanceMap)
-					}
-					(*provenances)[int32(len(*exprs)-1)] = cloneHeadingProvenance(provenance)
-				}
-			}
-		}
-
+		bc.appendBindingStar(root.binding, root.binding.table, visitedUsingCols, exprs, names, provenances, isSysAccount)
 		return
 	}
 
@@ -682,11 +658,11 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 	}
 
 	if root.rightJoinUsingStar {
-		bc.doUnfoldStar(ctx, root.right, visitedUsingCols, exprs, names, provenances, isSysAccount)
-		bc.doUnfoldStar(ctx, root.left, visitedUsingCols, exprs, names, provenances, isSysAccount)
+		bc.doUnfoldStar(root.right, visitedUsingCols, exprs, names, provenances, isSysAccount)
+		bc.doUnfoldStar(root.left, visitedUsingCols, exprs, names, provenances, isSysAccount)
 	} else {
-		bc.doUnfoldStar(ctx, root.left, visitedUsingCols, exprs, names, provenances, isSysAccount)
-		bc.doUnfoldStar(ctx, root.right, visitedUsingCols, exprs, names, provenances, isSysAccount)
+		bc.doUnfoldStar(root.left, visitedUsingCols, exprs, names, provenances, isSysAccount)
+		bc.doUnfoldStar(root.right, visitedUsingCols, exprs, names, provenances, isSysAccount)
 	}
 
 	for _, col := range handledUsingCols {
