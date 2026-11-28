@@ -18,10 +18,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
@@ -30,6 +32,78 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRoutinePayloadRemoteRoundTrip(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	typ := types.T_int64.ToType().PlanType()
+	expr := &planpb.Expr{Typ: typ, Expr: &planpb.Expr_F{F: &planpb.Function{
+		RoutineCall: &planpb.RoutineCall{
+			FunctionRef: &planpb.FunctionRef{FunctionId: 7, Revision: 3},
+			Language:    "python",
+			ReturnType:  typ,
+			Implementation: &planpb.RoutineCall_Python{
+				Python: &planpb.PythonRoutineImplementation{},
+			},
+		},
+	}}}
+	project := projection.NewArgument()
+	t.Cleanup(project.Release)
+	project.ProjectList = []*planpb.Expr{expr, plan2.MakePlan2Int64ConstExprWithType(42)}
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Addr: "remote:6001"}, RootOp: project}
+	wire, err := encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	decoded, err := decodeScope(wire, c.proc, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(decoded.release)
+	got := decoded.RootOp.(*projection.Projection).ProjectList
+	require.Len(t, got, len(project.ProjectList))
+	for i, want := range project.ProjectList {
+		require.True(t, proto.Equal(want, got[i]), "decoded projection expression %d", i)
+	}
+	require.Zero(t, client.calls)
+
+	dependent := &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Dependent{
+		Dependent: &planpb.DependentExpr{ProgramId: 1, Inputs: []*planpb.Expr{expr}},
+	}}
+	project.ProjectList = []*planpb.Expr{dependent}
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "coordinator execution owner")
+
+	wire, err = (&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: project.ProjectList}}}).Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(wire, c.proc, true, nil)
+	require.ErrorContains(t, err, "coordinator execution owner")
+}
+
+func TestRoutinePayloadInsideIndexSearchScan(t *testing.T) {
+	for _, field := range []string{"query_payload", "algo_expr"} {
+		t.Run(field, func(t *testing.T) {
+			call := &planpb.RoutineCall{FunctionRef: &planpb.FunctionRef{FunctionId: 7, Revision: 3}, Language: "python"}
+			expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{RoutineCall: call}}}
+			scan := &planpb.IndexSearchScan{AlgoOptions: []byte(`{}`)}
+			if field == "query_payload" {
+				scan.QueryPayload = expr
+			} else {
+				scan.AlgoExprs = []*planpb.Expr{expr}
+				scan.AlgoExprNames = []string{"first_round_limit"}
+			}
+			cloned := plan2.DeepCopyNode(&planpb.Node{NodeType: planpb.Node_INDEX_SEARCH_SCAN, IndexSearchScan: scan})
+			require.True(t, proto.Equal(scan, cloned.IndexSearchScan))
+			clonedExpr := cloned.IndexSearchScan.QueryPayload
+			if field == "algo_expr" {
+				clonedExpr = cloned.IndexSearchScan.AlgoExprs[0]
+			}
+			require.NotSame(t, call, clonedExpr.GetF().GetRoutineCall())
+			require.NotSame(t, call.FunctionRef, clonedExpr.GetF().GetRoutineCall().GetFunctionRef())
+			data, err := (&pipeline.Pipeline{DataSource: &pipeline.Source{Node: cloned}}).Marshal()
+			require.NoError(t, err)
+			var received pipeline.Pipeline
+			require.NoError(t, received.Unmarshal(data))
+			require.True(t, proto.Equal(scan, received.DataSource.Node.IndexSearchScan))
+			require.NoError(t, validateRemoteExpressionPipeline(nil, &received))
+		})
+	}
+}
 
 type expressionVersionClient struct {
 	fakeQueryClient

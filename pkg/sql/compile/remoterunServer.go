@@ -78,7 +78,7 @@ func CnServerMessageHandler(
 	cs morpc.ClientSession,
 	storageEngine engine.Engine, fileService fileservice.FileService, lockService lockservice.LockService,
 	queryClient qclient.QueryClient,
-	HaKeeper logservice.CNHAKeeperClient, udfService udf.Service, txnClient client.TxnClient,
+	HaKeeper logservice.CNHAKeeperClient, udfService udf.Runtime, txnClient client.TxnClient,
 	autoIncreaseCM *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) (err error) {
 
@@ -981,7 +981,7 @@ type cnInformation struct {
 	lockService lockservice.LockService
 	queryClient qclient.QueryClient
 	hakeeper    logservice.CNHAKeeperClient
-	udfService  udf.Service
+	udfService  udf.Runtime
 	aicm        *defines.AutoIncrCacheManager
 }
 
@@ -1069,7 +1069,7 @@ func newMessageReceiverOnServer(
 	lockService lockservice.LockService,
 	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
-	udfService udf.Service,
+	udfService udf.Runtime,
 	txnClient client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
 	colexecServer *colexec.Server) (messageReceiverOnServer, error) {

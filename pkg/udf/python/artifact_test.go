@@ -1,0 +1,399 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package python
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/stretchr/testify/require"
+)
+
+func TestFileArtifactStoreRequiresDurableSharedRoot(t *testing.T) {
+	ctx := t.Context()
+	shared := defines.SharedFileServiceName
+	for _, backend := range []struct {
+		name string
+		open func(string) (fileservice.FileService, error)
+	}{
+		{"disk", func(root string) (fileservice.FileService, error) {
+			return fileservice.NewLocalFS(ctx, shared, root, fileservice.DisabledCacheConfig, nil)
+		}},
+		{"disk-v2", func(root string) (fileservice.FileService, error) {
+			return fileservice.NewLocalFS2(ctx, shared, root, fileservice.DisabledCacheConfig, nil)
+		}},
+		{"local-etl", func(root string) (fileservice.FileService, error) {
+			return fileservice.NewLocalETLFS(shared, root)
+		}},
+		{"disk-object-storage", func(root string) (fileservice.FileService, error) {
+			args := fileservice.ObjectStorageArguments{
+				Name: shared, Endpoint: "disk", Bucket: root, KeyPrefix: "prefix",
+			}
+			return fileservice.NewS3FS(ctx, args, fileservice.DisabledCacheConfig, nil, false, true)
+		}},
+	} {
+		t.Run(backend.name, func(t *testing.T) {
+			base := t.TempDir()
+			parent := filepath.Join(base, "write-and-traverse")
+			require.NoError(t, os.Mkdir(parent, 0700))
+			root := filepath.Join(parent, "new", "storage")
+			t.Cleanup(func() { require.NoError(t, os.Chmod(parent, 0700)) })
+			require.NoError(t, os.Chmod(parent, 0300))
+			f, err := os.Open(parent)
+			if err == nil {
+				require.NoError(t, f.Close())
+				t.Skip("test user can open a directory without read permission")
+			}
+			require.ErrorIs(t, err, os.ErrPermission)
+
+			// Ordinary startup can create the root even without read
+			// permission on its ancestor. A restart sees the existing root.
+			fs, err := backend.open(root)
+			require.NoError(t, err)
+			fs.Close(context.Background())
+			require.DirExists(t, root)
+
+			alias := filepath.Join(base, "configured-root")
+			require.NoError(t, os.Symlink(root, alias))
+			fs, err = backend.open(alias)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			store, err := NewFileArtifactStore(fs, DefaultMaxArtifactBytes)
+			require.NoError(t, err)
+			store.maxPublications = 1
+			const source = "def f(ctx): return 7"
+			want := udf.PythonInlineArtifactDigest("f", source)
+			for range 2 {
+				published, err := store.Publish(ctx, 7, "f", source)
+				require.ErrorIs(t, err, os.ErrPermission)
+				require.Empty(t, published)
+			}
+			for _, path := range []string{artifactAdmissionPath(0), artifactPath(7, want)} {
+				_, err = fs.StatFile(ctx, path)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%s: %v", path, err)
+			}
+
+			require.NoError(t, os.Chmod(parent, 0700))
+			for range 2 {
+				published, err := store.Publish(ctx, 7, "f", source)
+				require.NoError(t, err)
+				require.Equal(t, want, published)
+			}
+			require.NoError(t, os.Chmod(parent, 0100))
+			published, err := store.Publish(ctx, 7, "f", source)
+			require.ErrorIs(t, err, os.ErrPermission)
+			require.Empty(t, published)
+			resolved, err := store.Resolve(ctx, 7, "f", want)
+			require.NoError(t, err)
+			require.Equal(t, source, resolved)
+		})
+	}
+}
+
+func TestFileArtifactStoreLocalPublishRetryRequiresSync(t *testing.T) {
+	const source = "def f(ctx): return 7"
+	digest := udf.PythonInlineArtifactDigest("f", source)
+	for _, tc := range []struct {
+		name, directory, visible string
+	}{
+		{"artifact", filepath.Join(udf.PythonArtifactDirectory, "7"), artifactPath(7, digest)},
+		{"artifact ancestor", udf.PythonArtifactDirectory, artifactPath(7, digest)},
+		{"admission", udf.PythonArtifactAdmissionDirectory, artifactAdmissionPath(0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			root := t.TempDir()
+			fs, err := fileservice.NewLocalFS2(ctx, defines.SharedFileServiceName, root, fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			store, err := NewFileArtifactStore(fs, DefaultMaxArtifactBytes)
+			require.NoError(t, err)
+			store.maxPublications = 1
+
+			dir := filepath.Join(root, tc.directory)
+			require.NoError(t, os.MkdirAll(filepath.Join(root, udf.PythonArtifactDirectory, "7"), 0700))
+			require.NoError(t, os.MkdirAll(dir, 0700))
+			// Search and write permissions let the link succeed. Without read
+			// permission, opening the directory for sync fails.
+			t.Cleanup(func() { require.NoError(t, os.Chmod(dir, 0700)) })
+			require.NoError(t, os.Chmod(dir, 0300))
+			handle, err := os.Open(dir)
+			if err == nil {
+				require.NoError(t, handle.Close())
+				t.Skip("test user can open a directory without read permission")
+			}
+			require.ErrorIs(t, err, os.ErrPermission)
+
+			published, err := store.Publish(ctx, 7, "f", source)
+			require.ErrorIs(t, err, os.ErrPermission)
+			require.Empty(t, published)
+			_, err = fs.StatFile(ctx, tc.visible)
+			require.NoError(t, err, "the link is visible after failed sync")
+			if tc.visible == artifactPath(7, digest) {
+				resolved, err := store.Resolve(ctx, 7, "f", digest)
+				require.NoError(t, err)
+				require.Equal(t, source, resolved)
+			}
+
+			published, err = store.Publish(ctx, 7, "f", source)
+			require.ErrorIs(t, err, os.ErrPermission)
+			require.Empty(t, published)
+			if tc.visible == artifactAdmissionPath(0) {
+				_, err = store.Resolve(ctx, 7, "f", digest)
+				require.ErrorContains(t, err, "unavailable")
+			}
+
+			require.NoError(t, os.Chmod(dir, 0700))
+			published, err = store.Publish(ctx, 7, "f", source)
+			require.NoError(t, err)
+			require.Equal(t, digest, published)
+			resolved, err := store.Resolve(ctx, 7, "f", digest)
+			require.NoError(t, err)
+			require.Equal(t, source, resolved)
+			_, err = store.Publish(ctx, 7, "f", "def f(ctx): return 8")
+			require.ErrorContains(t, err, "RESOURCE_EXHAUSTED")
+		})
+	}
+}
+
+func newTestArtifactStore(t *testing.T, maxSize int64) *FileArtifactStore {
+	t.Helper()
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	store, err := NewFileArtifactStore(fs, maxSize)
+	require.NoError(t, err)
+	return store
+}
+
+func TestFileArtifactStorePublishesAndResolvesByAccount(t *testing.T) {
+	store := newTestArtifactStore(t, DefaultMaxArtifactBytes)
+	ctx := context.Background()
+	source := "def add(ctx, value):\n    return value + 1\n"
+	digest := udf.PythonInlineArtifactDigest("add", source)
+
+	published, err := store.Publish(ctx, 7, "add", source)
+	require.NoError(t, err)
+	require.Equal(t, digest, published)
+	resolved, err := store.Resolve(ctx, 7, "add", digest)
+	require.NoError(t, err)
+	require.Equal(t, source, resolved)
+
+	_, err = store.Resolve(ctx, 8, "add", digest)
+	require.ErrorContains(t, err, "unavailable")
+	second, err := store.Publish(ctx, 7, "add", source)
+	require.NoError(t, err)
+	require.Equal(t, digest, second, "republication of the exact immutable object is idempotent")
+}
+
+func TestFileArtifactStoreRejectsCorruptionAndDigestCollision(t *testing.T) {
+	store := newTestArtifactStore(t, DefaultMaxArtifactBytes)
+	ctx := context.Background()
+	source := "def add(ctx, value): return value + 1"
+	digest := udf.PythonInlineArtifactDigest("add", source)
+
+	path := artifactPath(7, digest)
+	err := store.fs.Write(ctx, fileservice.IOVector{
+		FilePath: path,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len("corrupt")), Data: []byte("corrupt")}},
+	})
+	require.NoError(t, err)
+	_, err = store.Resolve(ctx, 7, "add", digest)
+	require.ErrorContains(t, err, "content digest mismatch")
+	_, err = store.Publish(ctx, 7, "add", source)
+	require.ErrorContains(t, err, "invalid existing object")
+}
+
+func TestFileArtifactStoreRejectsOversizedSourceBeforeWrite(t *testing.T) {
+	store := newTestArtifactStore(t, 4)
+	_, err := store.Publish(context.Background(), 7, "add", "12345")
+	require.ErrorContains(t, err, "exceeds 4 bytes")
+	_, statErr := store.fs.StatFile(context.Background(), artifactPath(7, udf.PythonInlineArtifactDigest("add", "12345")))
+	require.Error(t, statErr)
+}
+
+func TestNewFileArtifactStoreRequiresSharedFileService(t *testing.T) {
+	local, err := fileservice.NewMemoryFS("LOCAL", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	_, err = NewFileArtifactStore(local, 0)
+	require.ErrorContains(t, err, "shared FileService")
+
+	shared, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	_, err = NewFileArtifactStore(shared, DefaultMaxArtifactBytes+1)
+	require.ErrorContains(t, err, "exceeds the current contract limit")
+}
+
+func TestFileArtifactStoreRejectsInvalidDirectConstruction(t *testing.T) {
+	var nilStore *FileArtifactStore
+	_, err := nilStore.Publish(context.Background(), 7, "add", "source")
+	require.ErrorContains(t, err, "no FileService")
+	_, err = nilStore.Resolve(context.Background(), 7, "add", strings.Repeat("a", 64))
+	require.ErrorContains(t, err, "no FileService")
+
+	store := &FileArtifactStore{}
+	_, err = store.Publish(context.Background(), 7, "add", "source")
+	require.ErrorContains(t, err, "no FileService")
+}
+
+func TestFileArtifactStoreRejectsInvalidUTF8(t *testing.T) {
+	store := newTestArtifactStore(t, DefaultMaxArtifactBytes)
+	_, err := store.Publish(context.Background(), 7, "add", string([]byte{'\xff'}))
+	require.ErrorContains(t, err, "not valid UTF-8")
+}
+
+// The wrapper deliberately has no recognized exclusive-write capability.
+type readOnlyArtifactFS struct{ fileservice.FileService }
+
+func TestFileArtifactStorePreservesLegacyReadWithoutExclusiveWriter(t *testing.T) {
+	legacy := newTestArtifactStore(t, DefaultMaxArtifactBytes)
+	const source = "def f(ctx): return 7"
+	digest := udf.PythonInlineArtifactDigest("f", source)
+	// An existing artifact from before admission is an immutable baseline.
+	require.NoError(t, legacy.fs.Write(t.Context(), fileservice.IOVector{
+		FilePath: artifactPath(7, digest),
+		Entries:  []fileservice.IOEntry{{Size: int64(len(source)), Data: []byte(source)}},
+	}))
+	store, err := NewFileArtifactStore(readOnlyArtifactFS{legacy.fs}, DefaultMaxArtifactBytes)
+	require.NoError(t, err)
+	resolved, err := store.Resolve(t.Context(), 7, "f", digest)
+	require.NoError(t, err)
+	require.Equal(t, source, resolved)
+	_, err = store.Publish(t.Context(), 7, "f", source)
+	require.NoError(t, err, "existing objects do not require new reservations")
+	_, err = store.Publish(t.Context(), 7, "f", "def f(ctx): return 8")
+	require.ErrorContains(t, err, "requires exclusive publication")
+	for _, err := range legacy.fs.List(t.Context(), "udf-artifact-admission") {
+		require.NoError(t, err)
+		t.Fatal("unsupported backend must not reserve capacity")
+	}
+}
+
+func TestFileArtifactStoreAdmissionRecoveryAndSharedDigest(t *testing.T) {
+	store := newTestArtifactStore(t, DefaultMaxArtifactBytes)
+	store.maxPublications = 1
+	ctx := t.Context()
+	source := "def f(ctx): return 1"
+	digest := udf.PythonInlineArtifactDigest("f", source)
+	// Simulate a crash after admission but before writing any source. The
+	// durable reservation must be reusable by another CN instance.
+	identity := fmt.Sprintf("7/%s", digest)
+	require.NoError(t, fileservice.WriteExclusive(ctx, store.fs, fileservice.IOVector{
+		FilePath: artifactAdmissionPath(0),
+		Entries:  []fileservice.IOEntry{{Size: int64(len(identity)), Data: []byte(identity)}},
+	}))
+	restarted, err := NewFileArtifactStore(store.fs, DefaultMaxArtifactBytes)
+	require.NoError(t, err)
+	restarted.maxPublications = 1
+	_, err = restarted.Publish(ctx, 7, "f", source)
+	require.NoError(t, err)
+	// A failed catalog transaction does not release this identity: a second
+	// committed revision or a snapshot can already depend on the same digest.
+	_, err = store.Publish(ctx, 7, "f", source)
+	require.NoError(t, err)
+	_, err = restarted.Publish(ctx, 8, "f", source)
+	require.ErrorContains(t, err, "publication budget")
+	_, err = restarted.Publish(ctx, 7, "f", "def f(ctx): return 2")
+	require.ErrorContains(t, err, "publication budget")
+	resolved, err := restarted.Resolve(ctx, 7, "f", digest)
+	require.NoError(t, err)
+	require.Equal(t, source, resolved)
+	for _, dir := range []string{"udf-artifacts/7", "udf-artifact-admission/v1"} {
+		count := 0
+		for entry, err := range store.fs.List(ctx, dir) {
+			require.NoError(t, err)
+			require.False(t, entry.IsDir)
+			count++
+		}
+		require.Equal(t, 1, count)
+	}
+}
+
+func TestFileArtifactStoreConcurrentAdmission(t *testing.T) {
+	for _, same := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shared_digest_%t", same), func(t *testing.T) {
+			first := newTestArtifactStore(t, DefaultMaxArtifactBytes)
+			second, err := NewFileArtifactStore(first.fs, DefaultMaxArtifactBytes)
+			require.NoError(t, err)
+			first.maxPublications, second.maxPublications = 1, 1
+			start := make(chan struct{})
+			results := make(chan error, 2)
+			var wg sync.WaitGroup
+			for i, store := range []*FileArtifactStore{first, second} {
+				wg.Add(1)
+				go func(i int, store *FileArtifactStore) {
+					defer wg.Done()
+					<-start
+					if same {
+						i = 0
+					}
+					_, err := store.Publish(t.Context(), 7, "f", fmt.Sprintf("def f(ctx): return %d", i))
+					results <- err
+				}(i, store)
+			}
+			close(start)
+			wg.Wait()
+			close(results)
+			success := 0
+			for err := range results {
+				if err == nil {
+					success++
+				} else {
+					require.ErrorContains(t, err, "publication budget")
+				}
+			}
+			if same {
+				require.Equal(t, 2, success)
+			} else {
+				require.Equal(t, 1, success)
+			}
+			count := 0
+			for entry, err := range first.fs.List(t.Context(), "udf-artifacts/7") {
+				require.NoError(t, err)
+				require.False(t, entry.IsDir)
+				count++
+			}
+			require.Equal(t, 1, count, "losing admission must not write another object")
+		})
+	}
+}
+
+func TestFileArtifactStoreAdmissionCapacityTwo(t *testing.T) {
+	store := newTestArtifactStore(t, DefaultMaxArtifactBytes)
+	store.maxPublications = 2
+	for _, source := range []string{"def f(ctx): return 1", "def f(ctx): return 2"} {
+		_, err := store.Publish(t.Context(), 7, "f", source)
+		require.NoError(t, err)
+	}
+	_, err := store.Publish(t.Context(), 7, "f", "def f(ctx): return 3")
+	require.ErrorContains(t, err, "publication budget")
+	for _, dir := range []string{"udf-artifacts/7", "udf-artifact-admission/v1"} {
+		count := 0
+		for entry, err := range store.fs.List(t.Context(), dir) {
+			require.NoError(t, err)
+			require.False(t, entry.IsDir)
+			count++
+		}
+		require.Equal(t, 2, count)
+	}
+}

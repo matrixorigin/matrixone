@@ -22,11 +22,14 @@ import (
 	"time"
 )
 
-const batchedOwnerSetup = `source ./run_ut.sh UT
+const batchedOwnerSetup = `fixture_loader_path=${LD_LIBRARY_PATH-}
+source ./run_ut.sh UT
 function logger() { :; }
 function checkpoint_ut_event() { :; }
 UT_TIMEOUT=1
-LD_LIBRARY_PATH=''; CGO_CFLAGS=''; CGO_LDFLAGS=''
+# Fixtures don't use the native libraries added by run_ut.sh, but the
+# host Python used to archive their diagnostics may need its runtime library.
+LD_LIBRARY_PATH="$fixture_loader_path"; CGO_CFLAGS=''; CGO_LDFLAGS=''
 UT_REPORT="$CASE_DIR/authoritative.out"
 UT_STDERR="$CASE_DIR/stderr.log"
 PREBUILT_RACE_REPORT="$CASE_DIR/issues-report"

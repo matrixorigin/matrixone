@@ -467,6 +467,11 @@ func execBackup(
 
 	taeFileList = append(taeFileList, checkpointMetaFiles...)
 	taeFileList = append(taeFileList, historyFiles...)
+	artifactFiles, err := copyFiles.copyPythonArtifactFiles(ctx, srcFs, dstFs, start)
+	if err != nil {
+		return err
+	}
+	taeFileList = append(taeFileList, artifactFiles...)
 	// copy gc meta
 	sizeList, err := copyFiles.copyGCDir(ctx, srcFs, dstFs, "gc", start, minTs)
 	if err != nil {
