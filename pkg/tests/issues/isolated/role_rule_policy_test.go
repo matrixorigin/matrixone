@@ -119,16 +119,16 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 		"set view_security_type = 'INVOKER'",
 		"create view policy_fixture.docs_view as select * from policy_fixture.docs",
 		"create view policy_fixture.docs_nested as select * from policy_fixture.docs_view",
-		"create role policy_reader, policy_other",
+		"create role policy_reader, policy_other, policy_equivalent",
 		"alter role policy_other add rule 'select id from policy_fixture.docs where id = 2' on table policy_fixture.docs",
 		"create user policy_test_user identified by '111' default role policy_reader",
-		"grant connect on account * to policy_reader, policy_other",
-		"grant select on table policy_fixture.docs to policy_reader, policy_other",
+		"grant connect on account * to policy_reader, policy_other, policy_equivalent",
+		"grant select on table policy_fixture.docs to policy_reader, policy_other, policy_equivalent",
 		"grant select on view policy_fixture.docs_view to policy_reader",
 		"grant select on view policy_fixture.docs_nested to policy_reader",
 		"grant insert, update, delete on table policy_fixture.docs to policy_reader",
 		"grant select, insert, update, delete on table policy_fixture.summary to policy_reader",
-		"grant policy_other to policy_test_user",
+		"grant policy_other, policy_equivalent to policy_test_user",
 	} {
 		exec(admin, statement)
 	}
@@ -223,7 +223,16 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	for range 2 {
 		selectIDs(reader, "select 1 as id", 1)
 	}
-	publishPolicy("select id, body, embedding from policy_fixture.docs where id <= 2")
+	// A change between two unruled principals retains normal prepared reuse.
+	exec(reader, "set role policy_equivalent")
+	exec(reader, "set @move_doc_id = 2")
+	selectIDs(reader, "execute move_doc using @move_doc_id", 2)
+	assertIDs(func() (*sql.Rows, error) { return native.QueryContext(ctx, 2) }, 2)
+	exec(reader, "set role policy_reader")
+
+	const sharedRule = "select id, body, embedding from policy_fixture.docs where id <= 2"
+	publishPolicy(sharedRule)
+	exec(observer, fmt.Sprintf("alter role policy_equivalent add rule '%s' on table policy_fixture.docs", sharedRule))
 	// The old source handle and a stale export are both ineligible once
 	// the receiving statement would be subject to a new mandatory policy.
 	export = rpc.NewRequest(query.CmdMethod_MigrateConnFrom)
@@ -348,6 +357,22 @@ func TestMandatoryRoleRulesAcrossConnections(t *testing.T) {
 	defer prepared.Close()
 	assertIDs(func() (*sql.Rows, error) { return prepared.QueryContext(ctx) }, 1, 2)
 	exec(reader, "prepare text_policy from 'select id from policy_fixture.docs order by id'")
+	selectIDs(reader, "execute text_policy", 1, 2)
+
+	// Both roles have the same static, authorized projection. The policy
+	// principal still changes, so a fresh prepare is required on both paths.
+	exec(reader, "set role policy_equivalent")
+	assertQueryDenied(func() (*sql.Rows, error) { return prepared.QueryContext(ctx) }, "prepare the statement again")
+	assertDenied("execute text_policy", "prepare the statement again")
+	reprepared, err := reader.PrepareContext(ctx, relational)
+	require.NoError(t, err)
+	defer reprepared.Close()
+	assertIDs(func() (*sql.Rows, error) { return reprepared.QueryContext(ctx) }, 1, 2)
+	exec(reader, "prepare refreshed_policy from 'select id from policy_fixture.docs order by id'")
+	selectIDs(reader, "execute refreshed_policy", 1, 2)
+	exec(reader, "deallocate prepare refreshed_policy")
+	exec(reader, "set role policy_reader")
+	assertIDs(func() (*sql.Rows, error) { return prepared.QueryContext(ctx) }, 1, 2)
 	selectIDs(reader, "execute text_policy", 1, 2)
 
 	// Update from another CN while the original restricted session stays open.

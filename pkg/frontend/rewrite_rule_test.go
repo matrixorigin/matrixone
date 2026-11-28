@@ -475,7 +475,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 		{30, "db2.t2", "select * from db2.t2 where age > 30"},
 	})
 
-	cache, err := readRoleRules(context.Background(), bh, ses.GetTenantInfo(), 1)
+	cache, err := readRoleRules(context.Background(), bh, currentAuthorizationPrincipal(ses), 1)
 	require.NoError(t, err)
 	rules, err := cache.forSQLMode(context.Background(), "")
 	require.NoError(t, err)
@@ -512,7 +512,7 @@ func TestRoleRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 		{10, "db1.t1", "select a from"},
 	})
 
-	cache, err := readRoleRules(context.Background(), bh, ses.GetTenantInfo(), 1)
+	cache, err := readRoleRules(context.Background(), bh, currentAuthorizationPrincipal(ses), 1)
 	require.NoError(t, err)
 	_, err = cache.forSQLMode(context.Background(), "")
 	require.Error(t, err)
@@ -521,7 +521,7 @@ func TestRoleRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 
 func TestRoleRuleCacheRetainsCaseSensitiveTargets(t *testing.T) {
 	ctx := t.Context()
-	tenant := &TenantInfo{DefaultRoleID: 10}
+	principal := authorizationPrincipal{role: 10}
 	bh := &backgroundExecTest{}
 	bh.init()
 	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId(nil)
@@ -530,7 +530,7 @@ func TestRoleRuleCacheRetainsCaseSensitiveTargets(t *testing.T) {
 		{10, "PolicyDb.docs", "select id from PolicyDb.docs where id = 2"},
 	})
 	for _, mode := range []int64{0, 2} {
-		cache, err := readRoleRules(ctx, bh, tenant, mode)
+		cache, err := readRoleRules(ctx, bh, principal, mode)
 		require.NoError(t, err)
 		rules, err := cache.forSQLMode(ctx, "")
 		require.NoError(t, err)
@@ -538,7 +538,7 @@ func TestRoleRuleCacheRetainsCaseSensitiveTargets(t *testing.T) {
 		require.Contains(t, rules, "PolicyDb.Docs")
 		require.Contains(t, rules, "PolicyDb.docs")
 	}
-	cache, err := readRoleRules(ctx, bh, tenant, 1)
+	cache, err := readRoleRules(ctx, bh, principal, 1)
 	require.NoError(t, err)
 	_, err = cache.forSQLMode(ctx, "")
 	require.ErrorContains(t, err, "ambiguous case spellings")

@@ -107,7 +107,7 @@ var captureRoleRuleCache = func(ctx context.Context, ses *Session) (*roleRuleCac
 	}
 	ses.ruleCacheMu.Unlock()
 
-	rules, err := loadRoleRuleCacheAtSnapshot(ctx, ses, snapshot, storage, reader)
+	rules, err := loadRoleRuleCacheAtSnapshot(ctx, ses, principal, snapshot, storage, reader)
 	if err != nil {
 		ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
 		return nil, err
@@ -660,7 +660,8 @@ func (prepareStmt *PrepareStmt) checkRoleRulePolicy(ctx context.Context, ses *Se
 		return nil
 	}
 	mode := sessionSQLModeForParser(ses)
-	if current.lowerCaseTableNames == prepareStmt.roleRules.lowerCaseTableNames &&
+	if current.proof.principal == prepareStmt.roleRules.proof.principal &&
+		current.lowerCaseTableNames == prepareStmt.roleRules.lowerCaseTableNames &&
 		mysql.ParseSQLModeFlags(mode) == mysql.ParseSQLModeFlags(prepareStmt.schedulingSQLMode) {
 		if current == prepareStmt.roleRules {
 			return nil
@@ -1008,7 +1009,7 @@ func (proof *roleRuleCacheProof) valid(ctx context.Context, principal authorizat
 		slices.Equal(observed, proof.versions[:])
 }
 
-func captureRoleRuleCacheProof(ctx context.Context, ses *Session, bh BackgroundExec, snapshot timestamp.Timestamp, storage engine.Engine, reader engine.TableContentReader) (proof roleRuleCacheProof) {
+func captureRoleRuleCacheProof(ctx context.Context, principal authorizationPrincipal, bh BackgroundExec, snapshot timestamp.Timestamp, storage engine.Engine, reader engine.TableContentReader) (proof roleRuleCacheProof) {
 	if reader == nil || snapshot.IsEmpty() {
 		return proof
 	}
@@ -1020,7 +1021,7 @@ func captureRoleRuleCacheProof(ctx context.Context, ses *Session, bh BackgroundE
 	if op == nil || !op.SnapshotTS().Equal(snapshot) || op.Txn().Isolation != pbtxn.TxnIsolation_SI || !op.TxnOptions().ReadOnly() {
 		return proof
 	}
-	proof.principal = currentAuthorizationPrincipal(ses)
+	proof.principal = principal
 	// The physical rule and role-grant tables provide data versions. The
 	// system table catalog also covers changes to their name bindings.
 	names := [roleRuleDependencyCount]string{catalog.MO_ROLE_RULE, "mo_user_grant", "mo_role_grant", catalog.MO_TABLES, catalog.MO_DATABASE}
@@ -1054,7 +1055,7 @@ func captureRoleRuleCacheProof(ctx context.Context, ses *Session, bh BackgroundE
 	return proof
 }
 
-func loadRoleRuleCacheAtSnapshot(ctx context.Context, ses *Session, snapshot timestamp.Timestamp, storage engine.Engine, reader engine.TableContentReader) (rules *roleRuleCache, err error) {
+func loadRoleRuleCacheAtSnapshot(ctx context.Context, ses *Session, principal authorizationPrincipal, snapshot timestamp.Timestamp, storage engine.Engine, reader engine.TableContentReader) (rules *roleRuleCache, err error) {
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, readSnapshot: snapshot})
 	defer bh.Close()
 	if err = bh.Exec(ctx, "begin;"); err != nil {
@@ -1062,10 +1063,10 @@ func loadRoleRuleCacheAtSnapshot(ctx context.Context, ses *Session, snapshot tim
 	}
 	defer func() { err = finishTxn(ctx, bh, err) }()
 
-	proof := captureRoleRuleCacheProof(ctx, ses, bh, snapshot, storage, reader)
+	proof := captureRoleRuleCacheProof(ctx, principal, bh, snapshot, storage, reader)
 	// The authenticated session retains its own table-name mode. Read it
 	// when loading rules so a cache hit does not need the system-variable lock.
-	rules, err = readRoleRules(ctx, bh, ses.GetTenantInfo(), parserLowerCaseTableNames(ses))
+	rules, err = readRoleRules(ctx, bh, principal, parserLowerCaseTableNames(ses))
 	if err != nil {
 		return nil, err
 	}
@@ -1077,7 +1078,7 @@ func loadRoleRuleCacheAtSnapshot(ctx context.Context, ses *Session, snapshot tim
 		}
 	}
 	var observed [roleRuleDependencyCount]engine.TableContentVersion
-	if proof.valid(ctx, currentAuthorizationPrincipal(ses), reader, snapshot, observed[:]) {
+	if proof.valid(ctx, principal, reader, snapshot, observed[:]) {
 		rules.proof = proof
 	}
 	return rules, nil
@@ -1138,10 +1139,16 @@ func proveFoldedRoleTargets(ctx context.Context, storage engine.Engine, txn TxnO
 	return proven
 }
 
-func readRoleRules(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, lower int64) (*roleRuleCache, error) {
-	rules := &roleRuleCache{first: make(map[string]string), lowerCaseTableNames: lower}
+func readRoleRules(ctx context.Context, bh BackgroundExec, principal authorizationPrincipal, lower int64) (*roleRuleCache, error) {
+	// Prepared plans need the subject of the rule lookup even when the engine
+	// cannot supply a catalog version proof for cache reuse.
+	rules := &roleRuleCache{
+		first:               make(map[string]string),
+		lowerCaseTableNames: lower,
+		proof:               roleRuleCacheProof{principal: principal},
+	}
 
-	roleIDs, err := loadActiveRoleIDsForRuleCache(ctx, bh, tenant)
+	roleIDs, err := loadActiveRoleIDsForRuleCache(ctx, bh, principal)
 	if err != nil {
 		return nil, err
 	}
@@ -1241,7 +1248,7 @@ type rewriteRuleRow struct {
 	rule     string
 }
 
-func loadActiveRoleIDsForRuleCache(ctx context.Context, bh BackgroundExec, tenant *TenantInfo) ([]int64, error) {
+func loadActiveRoleIDsForRuleCache(ctx context.Context, bh BackgroundExec, principal authorizationPrincipal) ([]int64, error) {
 	roleSet := make(map[int64]struct{})
 	roleQueue := make([]int64, 0, 1)
 
@@ -1253,10 +1260,10 @@ func loadActiveRoleIDsForRuleCache(ctx context.Context, bh BackgroundExec, tenan
 		roleQueue = append(roleQueue, roleID)
 	}
 
-	addRoleID(int64(tenant.GetDefaultRoleID()))
+	addRoleID(int64(principal.role))
 
-	if tenant.GetUseSecondaryRole() {
-		sql := getSqlForRoleIDsOfUserForRuleCache(int(tenant.GetUserID()))
+	if principal.secondary {
+		sql := getSqlForRoleIDsOfUserForRuleCache(int(principal.user))
 		bh.ClearExecResultSet()
 		if err := bh.Exec(ctx, sql); err != nil {
 			return nil, err
