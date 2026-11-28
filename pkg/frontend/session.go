@@ -1206,6 +1206,7 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 	if len(opts) > 0 && opts[0] != nil {
 		be.backSes.fromRealUser = opts[0].fromRealUser
 		be.backSes.forcePessimisticRC = opts[0].forcePessimisticRC
+		be.backSes.catalogMaintenance = opts[0].catalogMaintenance
 		if opts[0].currentRoleContext != nil {
 			be.backSes.currentRoleContext = *opts[0].currentRoleContext
 		}

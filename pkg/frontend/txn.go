@@ -418,10 +418,10 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		txnclient.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit),
 		txnclient.WithFootPrints(&th.footPrints))
 
-	// The task service performs CDC cleanup over its own SQL transaction
-	// during account removal. It shares catalog metadata with the restore.
+	// Account removal and restore revisit catalog metadata across statements.
+	// The task service can share those locks during its own CDC cleanup.
 	back, _ := execCtx.ses.(*backSession)
-	if (back != nil && back.GetRestore()) || (tenant != nil && tenant.taskServiceUser) {
+	if (back != nil && (back.catalogMaintenance || back.GetRestore())) || (tenant != nil && tenant.taskServiceUser) {
 		opts = append(opts, txnclient.WithCatalogMaintenance())
 	}
 

@@ -1086,6 +1086,7 @@ type backSession struct {
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
 	forcePessimisticRC              bool
+	catalogMaintenance              bool
 	processHook                     backExecProcessHook
 	readSnapshot                    timestamp.Timestamp
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
