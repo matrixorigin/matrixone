@@ -167,9 +167,10 @@ func (txn *Transaction) transferWorkspaceWritesForAlterLocked(
 				return err
 			}
 			if len(renameColMap) > 0 {
-				for i, attr := range transferred.bat.Attrs {
+				transferred.attrs = slices.Clone(cur.attrs)
+				for i, attr := range transferred.attrs {
 					if newName, ok := renameColMap[attr]; ok {
-						transferred.bat.Attrs[i] = newName
+						transferred.attrs[i] = newName
 					}
 				}
 			}
@@ -548,13 +549,14 @@ func (txn *Transaction) WriteBatch(
 	databaseName string,
 	tableName string,
 	bat *batch.Batch,
+	attrs []string,
 	tnStore DNStore) (genRowidVec *vector.Vector, err error) {
 	ctx := context.Background()
 	if txn.proc != nil && txn.proc.Ctx != nil {
 		ctx = txn.proc.Ctx
 	}
 	return txn.writeBatchWithAutoIncrEpochKnown(ctx, typ, note, accountId, databaseId, tableId,
-		databaseName, tableName, bat, tnStore, 0, false)
+		databaseName, tableName, bat, attrs, tnStore, 0, false)
 }
 
 func (txn *Transaction) writeBatchWithAutoIncrEpoch(
@@ -566,11 +568,12 @@ func (txn *Transaction) writeBatchWithAutoIncrEpoch(
 	databaseName string,
 	tableName string,
 	bat *batch.Batch,
+	attrs []string,
 	tnStore DNStore,
 	autoIncrEpoch uint32,
 ) (genRowidVec *vector.Vector, err error) {
 	return txn.writeBatchWithAutoIncrEpochKnown(ctx, typ, note, accountId, databaseId, tableId,
-		databaseName, tableName, bat, tnStore, autoIncrEpoch, true)
+		databaseName, tableName, bat, attrs, tnStore, autoIncrEpoch, true)
 }
 
 func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
@@ -582,6 +585,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	databaseName string,
 	tableName string,
 	bat *batch.Batch,
+	attrs []string,
 	tnStore DNStore,
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
@@ -589,6 +593,8 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	if ctx == nil {
 		return nil, moerr.NewInvalidInputNoCtx("disttae workspace write context is nil")
 	}
+	// The entry owns its copy of the names: ALTER renames them in place.
+	attrs = slices.Clone(attrs)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -632,6 +638,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 			tableName,
 			tableId,
 			bat,
+			attrs,
 		)
 		if err != nil {
 			return nil, err
@@ -669,7 +676,8 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 			return nil, moerr.NewInternalErrorNoCtx("workspace insert batch is not a workspace copy")
 		}
 		genRowidVec = rowIdVec
-		bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
+		bat.InsertVector(0, genRowidVec)
+		attrs = slices.Insert(attrs, 0, objectio.PhysicalAddr_Attr)
 		rowIdVec = nil // the batch is now the sole release owner
 
 	}
@@ -728,6 +736,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		typ:                typ,
 		accountId:          accountId,
 		bat:                bat,
+		attrs:              attrs,
 		tableId:            tableId,
 		databaseId:         databaseId,
 		tableName:          tableName,
@@ -1003,9 +1012,9 @@ func (txn *Transaction) checkDup(ctx context.Context) error {
 			if e.pkCheckReady {
 				index := e.pkCheckPos
 				if index >= 0 {
-					if index >= len(e.bat.Vecs) || index >= len(e.bat.Attrs) {
+					if index >= len(e.bat.Vecs) || index >= len(e.attrs) {
 						logutil.Warnf("pk check pos out of range, database:%s, table:%s, pos:%d, attrs:%v",
-							e.databaseName, e.tableName, index, e.bat.Attrs)
+							e.databaseName, e.tableName, index, e.attrs)
 						fallbackToLegacy = true
 					} else {
 						if _, ok := insertPks[e.tableId]; !ok {
@@ -1024,7 +1033,7 @@ func (txn *Transaction) checkDup(ctx context.Context) error {
 								e.databaseName,
 								e.tableName,
 								"write-entry")
-							return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[index])
+							return moerr.NewDuplicateEntryNoCtx(pk, e.attrs[index])
 						}
 					}
 				}
@@ -1034,6 +1043,7 @@ func (txn *Transaction) checkDup(ctx context.Context) error {
 			}
 
 			bat := e.bat
+			attrs := e.attrs
 			index, err := legacyPKIndex(e)
 			if err != nil {
 				return err
@@ -1041,10 +1051,10 @@ func (txn *Transaction) checkDup(ctx context.Context) error {
 			if index != -1 {
 				if *bat.Vecs[0].GetType() == types.T_Rowid.ToType() {
 					bat2 := batch.NewWithSize(len(bat.Vecs) - 1)
-					bat2.SetAttributes(bat.Attrs[1:])
 					bat2.Vecs = bat.Vecs[1:]
 					bat2.SetRowCount(bat.Vecs[0].Length())
 					bat = bat2
+					attrs = attrs[1:]
 				}
 				if _, ok := insertPks[e.tableId]; !ok {
 					insertPks[e.tableId] = make(map[any]bool)
@@ -1062,7 +1072,7 @@ func (txn *Transaction) checkDup(ctx context.Context) error {
 						e.databaseName,
 						e.tableName,
 						"legacy-tabledef")
-					return moerr.NewDuplicateEntryNoCtx(pk, bat.Attrs[index])
+					return moerr.NewDuplicateEntryNoCtx(pk, attrs[index])
 				}
 			}
 			continue
@@ -1073,9 +1083,9 @@ func (txn *Transaction) checkDup(ctx context.Context) error {
 			if e.pkCheckReady {
 				index := e.pkCheckPos
 				if index >= 0 {
-					if index >= len(e.bat.Vecs) || index >= len(e.bat.Attrs) {
+					if index >= len(e.bat.Vecs) || index >= len(e.attrs) {
 						logutil.Warnf("pk check pos out of range, database:%s, table:%s, pos:%d, attrs:%v",
-							e.databaseName, e.tableName, index, e.bat.Attrs)
+							e.databaseName, e.tableName, index, e.attrs)
 						fallbackToLegacy = true
 					} else {
 						if _, ok := delPks[e.tableId]; !ok {
@@ -1094,7 +1104,7 @@ func (txn *Transaction) checkDup(ctx context.Context) error {
 								e.databaseName,
 								e.tableName,
 								"write-entry")
-							return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[index])
+							return moerr.NewDuplicateEntryNoCtx(pk, e.attrs[index])
 						}
 					}
 				}
@@ -1129,7 +1139,7 @@ func (txn *Transaction) checkDup(ctx context.Context) error {
 						e.databaseName,
 						e.tableName,
 						"legacy-tabledef")
-					return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[1])
+					return moerr.NewDuplicateEntryNoCtx(pk, e.attrs[1])
 				}
 			}
 		}
@@ -2833,7 +2843,6 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		bat := txn.writes[i].bat
 		// skip rowid
 		newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
-		newBatch.SetAttributes(bat.Attrs[1:])
 		newBatch.Vecs = bat.Vecs[1:]
 		newBatch.SetRowCount(bat.Vecs[0].Length())
 		mp[tbKey] = append(mp[tbKey], newBatch)
@@ -2974,6 +2983,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			table.tableName,
 			fileName,
 			bat,
+			catalog.ObjectInsertAttrs,
 			table.getTxn().tnStores[0],
 			tbKey.autoIncrEpoch,
 			tbKey.autoIncrEpochKnown,
@@ -3093,7 +3103,6 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 		bat := txn.writes[i].bat
 
 		newBat := batch.NewWithSize(len(bat.Vecs))
-		newBat.SetAttributes(bat.Attrs)
 		newBat.Vecs = bat.Vecs
 		newBat.SetRowCount(bat.Vecs[0].Length())
 
@@ -3241,6 +3250,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			table.tableName,
 			fileName,
 			bat,
+			catalog.ObjectDeleteAttrs,
 			table.getTxn().tnStores[0],
 			tbKey.autoIncrEpoch,
 			tbKey.autoIncrEpochKnown,
@@ -3454,6 +3464,7 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 	databaseName, tableName string,
 	tableId uint64,
 	bat *batch.Batch,
+	attrs []string,
 ) (int, bool, error) {
 	if bat == nil || bat.RowCount() == 0 {
 		return -1, true, nil
@@ -3496,19 +3507,19 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 		return 1, true, nil
 	}
 
-	for i, attr := range bat.Attrs {
+	for i, attr := range attrs {
 		if attr == pkName {
 			return i, true, nil
 		}
 	}
-	for i, attr := range bat.Attrs {
+	for i, attr := range attrs {
 		if strings.EqualFold(attr, pkName) {
 			return i, true, nil
 		}
 	}
 
 	logutil.Warnf("pk column %s not found in write attrs, database:%s, table:%s, attrs:%v",
-		pkName, databaseName, tableName, bat.Attrs)
+		pkName, databaseName, tableName, attrs)
 	return -1, false, nil
 }
 
@@ -3579,10 +3590,11 @@ func (txn *Transaction) WriteFileLocked(
 	tableName string,
 	fileName string,
 	inputBat *batch.Batch,
+	attrs []string,
 	tnStore DNStore,
 ) (err error) {
 	return txn.writeFileLockedWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
-		databaseName, tableName, fileName, inputBat, tnStore, 0, false)
+		databaseName, tableName, fileName, inputBat, attrs, tnStore, 0, false)
 }
 
 func (txn *Transaction) writeFileLockedWithAutoIncrEpoch(
@@ -3594,11 +3606,12 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpoch(
 	tableName string,
 	fileName string,
 	inputBat *batch.Batch,
+	attrs []string,
 	tnStore DNStore,
 	autoIncrEpoch uint32,
 ) (err error) {
 	return txn.writeFileLockedWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
-		databaseName, tableName, fileName, inputBat, tnStore, autoIncrEpoch, true)
+		databaseName, tableName, fileName, inputBat, attrs, tnStore, autoIncrEpoch, true)
 }
 
 // stagedWorkspaceRecord holds one S3 metadata record between its
@@ -3618,6 +3631,7 @@ type stagedWorkspaceRecord struct {
 	tableName          string
 	fileName           string
 	bat                *batch.Batch
+	attrs              []string
 	tnStore            DNStore
 	skipTransfer       bool
 	autoIncrEpoch      uint32
@@ -3686,6 +3700,7 @@ func (txn *Transaction) stageWorkspaceRecordLocked(
 	tableName string,
 	fileName string,
 	inputBat *batch.Batch,
+	attrs []string,
 	tnStore DNStore,
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
@@ -3745,6 +3760,7 @@ func (txn *Transaction) stageWorkspaceRecordLocked(
 		tableName:          tableName,
 		fileName:           fileName,
 		bat:                copied,
+		attrs:              slices.Clone(attrs),
 		tnStore:            tnStore,
 		skipTransfer:       skipTransfer,
 		autoIncrEpoch:      autoIncrEpoch,
@@ -3794,6 +3810,7 @@ func (txn *Transaction) publishStagedWorkspaceRecordLocked(s *stagedWorkspaceRec
 		databaseName:       s.databaseName,
 		fileName:           s.fileName,
 		bat:                s.bat,
+		attrs:              s.attrs,
 		tnStore:            s.tnStore,
 		pkCheckPos:         -1,
 		pkCheckReady:       true,
@@ -3835,12 +3852,13 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 	tableName string,
 	fileName string,
 	inputBat *batch.Batch,
+	attrs []string,
 	tnStore DNStore,
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) (err error) {
 	stagedRec, err := txn.stageWorkspaceRecordLocked(typ, accountId, databaseId, tableId,
-		databaseName, tableName, fileName, inputBat, tnStore,
+		databaseName, tableName, fileName, inputBat, attrs, tnStore,
 		autoIncrEpoch, autoIncrEpochKnown, false)
 	if err != nil {
 		return err
@@ -4360,10 +4378,11 @@ func (txn *Transaction) WriteFileLockedSkipTransfer(
 	tableName string,
 	fileName string,
 	inputBat *batch.Batch,
+	attrs []string,
 	tnStore DNStore,
 ) (err error) {
 	return txn.writeFileLockedSkipTransferWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
-		databaseName, tableName, fileName, inputBat, tnStore, 0, false)
+		databaseName, tableName, fileName, inputBat, attrs, tnStore, 0, false)
 }
 
 func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpoch(
@@ -4375,11 +4394,12 @@ func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpoch(
 	tableName string,
 	fileName string,
 	inputBat *batch.Batch,
+	attrs []string,
 	tnStore DNStore,
 	autoIncrEpoch uint32,
 ) (err error) {
 	return txn.writeFileLockedSkipTransferWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
-		databaseName, tableName, fileName, inputBat, tnStore, autoIncrEpoch, true)
+		databaseName, tableName, fileName, inputBat, attrs, tnStore, autoIncrEpoch, true)
 }
 
 func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
@@ -4391,6 +4411,7 @@ func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
 	tableName string,
 	fileName string,
 	inputBat *batch.Batch,
+	attrs []string,
 	tnStore DNStore,
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
@@ -4402,7 +4423,7 @@ func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
 	// counting commits so a failed copy leaves the object reachable for
 	// the unwinding retainer.
 	stagedRec, err := txn.stageWorkspaceRecordLocked(typ, accountId, databaseId, tableId,
-		databaseName, tableName, fileName, inputBat, tnStore,
+		databaseName, tableName, fileName, inputBat, attrs, tnStore,
 		autoIncrEpoch, autoIncrEpochKnown, true)
 	if err != nil {
 		return err
@@ -4422,10 +4443,11 @@ func (txn *Transaction) WriteFile(
 	tableName string,
 	fileName string,
 	bat *batch.Batch,
+	attrs []string,
 	tnStore DNStore,
 ) error {
 	return txn.writeFileWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
-		databaseName, tableName, fileName, bat, tnStore, 0, false)
+		databaseName, tableName, fileName, bat, attrs, tnStore, 0, false)
 }
 
 func (txn *Transaction) writeFileWithAutoIncrEpoch(
@@ -4437,11 +4459,12 @@ func (txn *Transaction) writeFileWithAutoIncrEpoch(
 	tableName string,
 	fileName string,
 	bat *batch.Batch,
+	attrs []string,
 	tnStore DNStore,
 	autoIncrEpoch uint32,
 ) error {
 	return txn.writeFileWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
-		databaseName, tableName, fileName, bat, tnStore, autoIncrEpoch, true)
+		databaseName, tableName, fileName, bat, attrs, tnStore, autoIncrEpoch, true)
 }
 
 func (txn *Transaction) writeFileWithAutoIncrEpochKnown(
@@ -4453,6 +4476,7 @@ func (txn *Transaction) writeFileWithAutoIncrEpochKnown(
 	tableName string,
 	fileName string,
 	bat *batch.Batch,
+	attrs []string,
 	tnStore DNStore,
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
@@ -4470,6 +4494,7 @@ func (txn *Transaction) writeFileWithAutoIncrEpochKnown(
 		tableName,
 		fileName,
 		bat,
+		attrs,
 		tnStore,
 		autoIncrEpoch,
 		autoIncrEpochKnown,
@@ -4600,7 +4625,7 @@ func (txn *Transaction) deleteTableWrites(
 		}
 
 		// skip BlockMeta
-		if entry.bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
+		if entry.attrs[0] == catalog.BlockMeta_BlockInfo {
 			continue
 		}
 
@@ -4735,8 +4760,8 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 
 	for i, e := range txn.writes {
 		if e.bat == nil || e.bat.IsEmpty() ||
-			e.bat.Attrs[0] == catalog.BlockMeta_BlockInfo || // inserts object
-			e.bat.Attrs[0] == catalog.ObjectMeta_ObjectStats { // deletes object
+			e.attrs[0] == catalog.BlockMeta_BlockInfo || // inserts object
+			e.attrs[0] == catalog.ObjectMeta_ObjectStats { // deletes object
 			continue
 		}
 
@@ -4817,7 +4842,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				firstColumn = 1
 			}
 			payload := batch.NewWithSize(0)
-			payload.Vecs, payload.Attrs = a.bat.Vecs[firstColumn:], a.bat.Attrs[firstColumn:]
+			payload.Vecs = a.bat.Vecs[firstColumn:]
 			payload.SetRowCount(a.bat.RowCount())
 			payload.Recursive, payload.ShuffleIDX = a.bat.Recursive, a.bat.ShuffleIDX
 			staged, dupErr := txn.copyWorkspaceBatch(payload)
@@ -4829,7 +4854,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			}
 			for _, j := range sources {
 				source := txn.writes[j].bat
-				payload.Vecs, payload.Attrs = source.Vecs[firstColumn:], source.Attrs[firstColumn:]
+				payload.Vecs = source.Vecs[firstColumn:]
 				payload.SetRowCount(source.RowCount())
 				if _, aerr := staged.Append(ctx, txn.workspaceMP(), payload); aerr != nil {
 					staged.Clean(mp)
@@ -4842,7 +4867,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			if rowIdVector != nil {
 				// All fallible work is complete. The staged batch becomes the
 				// sole owner; no old rowid was copied, appended or overwritten.
-				staged.InsertVector(0, objectio.PhysicalAddr_Attr, rowIdVector)
+				staged.InsertVector(0, rowIdVector)
 				staged.SetRowCount(rowCount) // also handles a rowid-only batch
 				rowIdVector = nil
 			}
@@ -5059,6 +5084,7 @@ func (txn *Transaction) publishStagedRepublicationLocked(
 		databaseName:       r.databaseName,
 		fileName:           r.name,
 		bat:                r.bat,
+		attrs:              catalog.ObjectInsertAttrs,
 		tnStore:            r.tnStore,
 		pkCheckPos:         -1,
 		pkCheckReady:       true,
@@ -5213,7 +5239,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		}
 
 		if entry.typ != INSERT ||
-			entry.bat.Attrs[0] != catalog.BlockMeta_BlockInfo {
+			entry.attrs[0] != catalog.BlockMeta_BlockInfo {
 			continue
 		}
 
@@ -5433,6 +5459,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			r.writeName,
 			r.fileName,
 			r.bat,
+			catalog.ObjectInsertAttrs,
 			txn.tnStores[0],
 			r.tbKey.autoIncrEpoch,
 			r.tbKey.autoIncrEpochKnown,
@@ -5586,7 +5613,7 @@ func collectObjectStatsFromEntry(entry Entry) []objectio.ObjectStats {
 	}
 
 	statsIdx := -1
-	for i, attr := range entry.bat.Attrs {
+	for i, attr := range entry.attrs {
 		if attr == catalog.ObjectMeta_ObjectStats {
 			statsIdx = i
 			break
@@ -5869,14 +5896,14 @@ func (txn *Transaction) pendingCreatedDatabaseWrites() map[databaseKey]uint64 {
 // to TN.  It intentionally derives identity from tuple data instead of Entry.note:
 // notes are diagnostic metadata and must not be able to certify a wrong tenant,
 // name, or allocated database ID.
-func consumeCreatedDatabaseWrites(pending map[databaseKey]uint64, bat *batch.Batch) {
+func consumeCreatedDatabaseWrites(pending map[databaseKey]uint64, bat *batch.Batch, attrs []string) {
 	if len(pending) == 0 || bat == nil || bat.RowCount() == 0 {
 		return
 	}
 
 	findAttr := func(name string) int {
-		for i := range bat.Attrs {
-			if bat.Attrs[i] == name {
+		for i := range attrs {
+			if attrs[i] == name {
 				return i
 			}
 		}
@@ -5934,6 +5961,7 @@ func missingCreatedDatabaseWriteError(ctx context.Context, pending map[databaseK
 }
 
 func (txn *Transaction) FinalizeCommit(ctx context.Context) {
+	txn.releaseCommitPayload()
 	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
 		txn.engine.ccprTxnCache.OnTxnCommit(txn.op.Txn().ID)
 	}
@@ -5962,6 +5990,7 @@ func (txn *Transaction) FinalizeCommit(ctx context.Context) {
 }
 
 func (txn *Transaction) FinalizeCommitWithUnknownResult(ctx context.Context) {
+	txn.releaseCommitPayload()
 	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
 		txn.engine.ccprTxnCache.OnTxnUnknownResult(txn.op.Txn().ID)
 	}
@@ -6155,6 +6184,7 @@ func skipTransfer(ctx context.Context, txn *Transaction) bool {
 }
 
 func (txn *Transaction) Rollback(ctx context.Context) error {
+	txn.releaseCommitPayload()
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
 	if !txn.ReadOnly() && len(txn.writes) > 0 {

@@ -155,7 +155,7 @@ func TestInstallTypedPrepareParams(t *testing.T) {
 		{Position: 2, Type: types.T_int64.ToType()},
 		{Position: 3, Type: types.T_float64.ToType()},
 	}
-	require.NoError(t, installTypedPrepareParams(proc, bindings))
+	require.NoError(t, installTypedPrepareParams(proc, bindings, nil))
 	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](proc.GetTypedPrepareParam(0), 0))
 	require.Nil(t, proc.GetTypedPrepareParam(1), "string binding keeps the TEXT transport")
 	require.Nil(t, proc.GetTypedPrepareParam(2), "NULL keeps the TEXT transport")
@@ -163,6 +163,68 @@ func TestInstallTypedPrepareParams(t *testing.T) {
 
 	// Nothing typed: no batch is installed.
 	proc.SetOwnedPrepareParamsWithIsBin(params, nil)
-	require.NoError(t, installTypedPrepareParams(proc, bindings[1:3]))
+	require.NoError(t, installTypedPrepareParams(proc, bindings[1:3], nil))
 	require.Nil(t, proc.GetTypedPrepareParams())
+}
+
+// A prepared statement allocates its typed parameters on the first execution
+// only; later executions rewrite them in place and the process borrows them.
+func TestInstallTypedPrepareParamsReusesStatementStorage(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { proc.SetPrepareParams(nil) })
+	bindings := []plan2.PreparedSourceBinding{
+		{Position: 0, Type: types.T_int64.ToType()},
+		{Position: 1, Type: types.T_float64.ToType()},
+		{Position: 2, Type: types.T_json.ToType()},
+	}
+	execute := func(store *typedPrepareParams, values ...string) {
+		params := vector.NewVec(types.T_text.ToType(), proc.Mp())
+		for _, v := range values {
+			require.NoError(t, vector.AppendBytes(params, []byte(v), false, proc.Mp()))
+		}
+		proc.SetOwnedPrepareParamsWithIsBin(params, nil)
+		require.NoError(t, installTypedPrepareParams(proc, bindings, store))
+	}
+	var store typedPrepareParams
+	int32Type := types.T_int32.ToType()
+
+	execute(&store, "7", "2.5", `{"a":1}`)
+	first := []*vector.Vector{proc.GetTypedPrepareParam(0), proc.GetTypedPrepareParam(1), proc.GetTypedPrepareParam(2)}
+	narrowed, err := proc.GetTypedPrepareParamAsInteger(0, int32Type)
+	require.NoError(t, err)
+	require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](narrowed, 0))
+
+	// Second execution: new values, no allocation for parameter binding.
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
+	for _, v := range []string{"8", "3.5", `{"b":22}`} {
+		require.NoError(t, vector.AppendBytes(params, []byte(v), false, proc.Mp()))
+	}
+	proc.SetOwnedPrepareParamsWithIsBin(params, nil)
+	allocs := proc.Mp().Stats().NumAlloc.Load()
+	require.NoError(t, installTypedPrepareParams(proc, bindings, &store))
+	again, err := proc.GetTypedPrepareParamAsInteger(0, int32Type)
+	require.NoError(t, err)
+	require.Equal(t, allocs, proc.Mp().Stats().NumAlloc.Load(), "an execution after the first must not allocate")
+	for i, vec := range first {
+		require.Same(t, vec, proc.GetTypedPrepareParam(i))
+	}
+	require.Same(t, narrowed, again)
+	require.Equal(t, int64(8), vector.GetFixedAtNoTypeCheck[int64](proc.GetTypedPrepareParam(0), 0))
+	require.Equal(t, 3.5, vector.GetFixedAtNoTypeCheck[float64](proc.GetTypedPrepareParam(1), 0))
+	require.Equal(t, int32(8), vector.GetFixedAtNoTypeCheck[int32](again, 0))
+
+	// A value that no longer fits the narrowed type is not served converted.
+	execute(&store, "3000000000", "1", "1")
+	tooWide, err := proc.GetTypedPrepareParamAsInteger(0, int32Type)
+	require.NoError(t, err)
+	require.Nil(t, tooWide)
+
+	// The process only borrows: replacing its parameters frees nothing of the
+	// statement's, and releasing the statement detaches the process.
+	execute(&store, "9", "1", "1")
+	require.NotNil(t, proc.GetTypedPrepareParams())
+	store.release(proc)
+	require.Nil(t, proc.GetTypedPrepareParams())
+	proc.SetPrepareParams(nil)
+	require.Zero(t, proc.Mp().CurrNB())
 }

@@ -232,11 +232,11 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
-	seedRewriteRuleCacheProofForTest(ses)
 
 	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 	defer stubs.Reset()
 	_ = ses.InitSystemVariables(context.TODO(), nil)
+	seedRewriteRuleCacheProofForTest(ses)
 	ses.mrs = &MysqlResultSet{}
 
 	return ses

@@ -26,10 +26,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// These budgets are hang guards, not performance assertions. A locally
+// race-built run finishes each group in under 10s, and an idle CI runner in
+// about 35s. A memory-saturated shared runner has been seen to take more than
+// 90s. Keep enough headroom that only a real hang trips them.
+const (
+	issue29572GroupBudget   = 5 * time.Minute
+	issue29572CleanupBudget = 2 * time.Minute
+)
+
 func TestIssue29572LogicalViewAuthorization(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		// Bound shared setup separately from the scenario groups below.
-		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), issue29572GroupBudget)
 		defer cancel()
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
@@ -45,7 +54,7 @@ func TestIssue29572LogicalViewAuthorization(t *testing.T) {
 		const account = "issue_29572"
 		execSQLRequire(t, ctx, sys, "create account "+account+" admin_name 'admin' identified by '111'")
 		t.Cleanup(func() {
-			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+			cleanup, stop := context.WithTimeout(context.Background(), issue29572CleanupBudget)
 			defer stop()
 			_, err := sys.ExecContext(cleanup, "drop account if exists "+account)
 			require.NoError(t, err)
@@ -73,7 +82,7 @@ func TestIssue29572LogicalViewAuthorization(t *testing.T) {
 		// Each group has its own hang guard: earlier SQL must not consume a
 		// later group's budget, especially under the CI race detector.
 		t.Run("current", func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), issue29572GroupBudget)
 			defer cancel()
 			for _, mode := range []string{"off", "on"} {
 				t.Run("cache="+mode, func(t *testing.T) {
@@ -157,7 +166,7 @@ func TestIssue29572LogicalViewAuthorization(t *testing.T) {
 			}
 		})
 		t.Run("nested_snapshot", func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), issue29572GroupBudget)
 			defer cancel()
 			// A live wrapper must retain each nested reference's historical security
 			// definition. Reuse the account/data and vary only the leaf scan shape.
@@ -181,7 +190,7 @@ func TestIssue29572LogicalViewAuthorization(t *testing.T) {
 			}
 			execAdmin(t, "create snapshot issue29572_nested for account "+account)
 			t.Cleanup(func() {
-				cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+				cleanup, stop := context.WithTimeout(context.Background(), issue29572CleanupBudget)
 				defer stop()
 				_, err := admin.ExecContext(cleanup, "drop snapshot if exists issue29572_nested")
 				require.NoError(t, err)
@@ -264,7 +273,7 @@ func TestIssue29572LogicalViewAuthorization(t *testing.T) {
 			}
 		})
 		t.Run("cross_account", func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), issue29572GroupBudget)
 			defer cancel()
 			// Cross-account DEFINER identity must follow the publisher, while the
 			// root VIEW grant belongs to the subscriber. Reuse this authenticated
@@ -273,7 +282,7 @@ func TestIssue29572LogicalViewAuthorization(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, src.Close()) })
 			t.Cleanup(func() {
-				cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+				cleanup, stop := context.WithTimeout(context.Background(), issue29572CleanupBudget)
 				defer stop()
 				for _, q := range []string{"drop publication if exists issue29572_pub", "drop snapshot if exists issue29572_clone", "drop database if exists issue29572_src"} {
 					_, err := sys.ExecContext(cleanup, q)

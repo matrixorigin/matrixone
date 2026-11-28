@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -314,6 +313,11 @@ func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string
 }
 
 func MoBatchToString(moBat *batch.Batch, printN int) string {
+	return moBatchToString(moBat, nil, printN)
+}
+
+// moBatchToString prints moBat's columns, labelled with attrs when given.
+func moBatchToString(moBat *batch.Batch, attrs []string, printN int) string {
 	if moBat == nil {
 		return "empty batch"
 	}
@@ -327,21 +331,13 @@ func MoBatchToString(moBat *batch.Batch, printN int) string {
 		if n = vec.Length(); n < printN {
 			printN = n
 		}
-		if len(moBat.Attrs) == 0 {
+		if i >= len(attrs) {
 			fmt.Fprintf(buf, "[col%v] = %v\n", i, MoVectorToString(vec, printN))
 		} else {
-			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], MoVectorToString(vec, printN, WithDoNotPrintBin{}))
+			fmt.Fprintf(buf, "[%v] = %v\n", attrs[i], MoVectorToString(vec, printN, WithDoNotPrintBin{}))
 		}
 	}
 	return buf.String()
-}
-
-func ApiBatchToString(apiBat *api.Batch, printN int) string {
-	if apiBat == nil {
-		return ""
-	}
-	bat, _ := batch.ProtoBatchToBatch(apiBat, nil)
-	return MoBatchToString(bat, printN)
 }
 
 func DebugMoBatch(moBat *batch.Batch) string {

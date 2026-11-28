@@ -705,6 +705,80 @@ func TestAddRewriteHints_ValidSimple(t *testing.T) {
 	}
 }
 
+func TestAddRewriteHints_RawSQLBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql, mode string
+		invalid         bool
+	}{
+		{name: "binary literal", sql: "select _binary /* \xff */ '\xff'"},
+		{name: "ordinary comments", sql: "select db. /* \xff */ t.id from db.t -- \xff"},
+		{name: "double quoted binary string", sql: "select _binary \"\xff\""},
+		{name: "double quoted identifier", sql: "select _binary \"\xff\"", mode: "ANSI_QUOTES", invalid: true},
+		{name: "text literal", sql: "select '\xff'", invalid: true},
+		{name: "hint", sql: "select 1 /*+ \xff */", invalid: true},
+		{name: "executable comment", sql: "select /*!00000 '\xff' */", invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(map[string]any{"rewrites": map[string]any{"db.t": EncodeRewriteHintSQL(tc.sql)}})
+			require.NoError(t, err)
+			chains, _, err := DecodeRewriteHint(t.Context(), string(data))
+			require.NoError(t, err)
+			require.Equal(t, []string{tc.sql}, chains["db.t"])
+			sql := "/*+ " + string(data) + " */ select * from db.t"
+			stmt, err := ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			err = AddRewriteHintsWithSQLMode(t.Context(), []tree.Statement{stmt}, sql, tc.mode)
+			if tc.invalid {
+				require.ErrorContains(t, err, "invalid UTF-8 outside binary literals")
+				return
+			}
+			require.NoError(t, err)
+			opts := stmt.(*tree.Select).RewriteOption
+			require.Len(t, opts.Rewrites["db.t"], 1)
+		})
+	}
+	_, err := decodeRewriteChain(t.Context(), json.RawMessage(`{"sql_bytes":"invalid base64!"}`))
+	require.Error(t, err)
+}
+
+func TestAddRewriteHints_ShowMetadata(t *testing.T) {
+	const hint = `/*+ {"rewrites":{"db1.t1":"select id from db1.t1"}} */ `
+	ctx := context.Background()
+	for _, sql := range []string{
+		"show full fields from db1.t1",
+		"prepare p from show create table db1.t1",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, "")
+			require.NoError(t, err)
+			defer stmt.Free()
+			formatted := tree.String(stmt, dialect.MYSQL)
+
+			require.NoError(t, AddRewriteHints(ctx, []tree.Statement{stmt}, hint+sql))
+			require.Equal(t, formatted, tree.String(stmt, dialect.MYSQL))
+
+			metadata := stmt
+			if prepare, ok := stmt.(*tree.PrepareStmt); ok {
+				metadata = prepare.Stmt
+			}
+			var option *tree.RewriteOption
+			switch show := metadata.(type) {
+			case *tree.ShowColumns:
+				option = show.RewriteOption
+			case *tree.ShowCreateTable:
+				option = show.RewriteOption
+			default:
+				t.Fatalf("unexpected statement type: %T", metadata)
+			}
+			require.NotNil(t, option)
+			chain := option.Rewrites["db1.t1"]
+			require.Len(t, chain, 1)
+			require.IsType(t, &tree.Select{}, chain[0].Stmt)
+		})
+	}
+}
+
 func TestAddRewriteHints_CreateTableAsSelect(t *testing.T) {
 	sql := `/*+ {"rewrites": {"db1.t1": "select * from db1.t1 where tenant_id = 1"}} */ create table db1.copy as select * from db1.t1`
 	stmts, err := parseAndApply(t, sql)

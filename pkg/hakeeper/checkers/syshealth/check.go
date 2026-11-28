@@ -15,11 +15,7 @@
 package syshealth
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -27,60 +23,18 @@ const (
 	defaultLogShardSize = 3
 )
 
-// Check checks system healthy or not.
-// If system wasn't healthy, we would generate
-// operators in order to shut down all stores.
-func Check(
-	cfg hakeeper.Config,
-	cluster pb.ClusterInfo,
-	tnState pb.TNState,
-	logState pb.LogState,
-	currTick uint64,
-) ([]*operator.Operator, bool) {
-	sysHealthy := true
-
-	// parse all log stores for expired stores mainly
+// Healthy reports whether shards affected by expired stores have enough reported replicas.
+func Healthy(cfg hakeeper.Config, cluster pb.ClusterInfo, logState pb.LogState, currTick uint64) bool {
 	logStores := parseLogState(cfg, logState, currTick)
 	if len(logStores.expired) == 0 {
-		return nil, sysHealthy
+		return true
 	}
-
-	// check system healthy or not
-	expiredShards := listExpiredShards(logStores.expired, logStores.working, logState, cluster)
-	for _, shard := range expiredShards {
-		// if one of log shards wasn't healthy, the entire system wasn't healthy.
+	for _, shard := range listExpiredShards(logStores.expired, logStores.working, logState, cluster) {
 		if !shard.healthy() {
-			sysHealthy = false
-			break
+			return false
 		}
 	}
-
-	if sysHealthy {
-		return nil, sysHealthy
-	}
-
-	detail := "Expired logStore info..."
-	for uuid := range logStores.expired {
-		detail += fmt.Sprintf("store %s replicas: [", uuid)
-		for _, replicaInfo := range logState.Stores[uuid].Replicas {
-			detail += fmt.Sprintf("%d-%d, ", replicaInfo.ShardID, replicaInfo.ReplicaID)
-		}
-		detail += "]; "
-	}
-
-	logutil.GetGlobalLogger().Info(detail)
-
-	// parse all tn stores
-	tnStores := parseTnState(cfg, tnState, currTick)
-
-	// generate operators to shut down all stores
-	operators := make([]*operator.Operator, 0, logStores.length()+tnStores.length())
-	operators = append(operators, logStores.shutdownExpiredStores()...)
-	operators = append(operators, logStores.shutdownWorkingStores()...)
-	operators = append(operators, tnStores.shutdownExpiredStores()...)
-	operators = append(operators, tnStores.shutdownWorkingStores()...)
-
-	return operators, sysHealthy
+	return true
 }
 
 // logShardMap is just a syntax sugar.
@@ -191,37 +145,20 @@ func (s *logShard) healthy() bool {
 
 // storeSet separates stores as expired and working.
 type storeSet struct {
-	serviceType pb.ServiceType
-	working     map[string]struct{}
-	expired     map[string]struct{}
+	working map[string]struct{}
+	expired map[string]struct{}
 }
 
-func newStoreSet(serviceType pb.ServiceType) *storeSet {
+func newStoreSet() *storeSet {
 	return &storeSet{
-		serviceType: serviceType,
-		working:     make(map[string]struct{}),
-		expired:     make(map[string]struct{}),
+		working: make(map[string]struct{}),
+		expired: make(map[string]struct{}),
 	}
-}
-
-// length returns number of all stores within this set.
-func (s *storeSet) length() int {
-	return len(s.working) + len(s.expired)
-}
-
-// shutdownExpiredStores
-func (s *storeSet) shutdownExpiredStores() []*operator.Operator {
-	return shutdownStores(s.serviceType, s.expired)
-}
-
-// shutdownWorkingStores generates operators to shut down working stores.
-func (s *storeSet) shutdownWorkingStores() []*operator.Operator {
-	return shutdownStores(s.serviceType, s.working)
 }
 
 // parseLogState separates log stores as expired and working.
 func parseLogState(cfg hakeeper.Config, logState pb.LogState, currTick uint64) *storeSet {
-	set := newStoreSet(pb.LogService)
+	set := newStoreSet()
 	for id, storeInfo := range logState.Stores {
 		if cfg.LogStoreExpired(storeInfo.Tick, currTick) {
 			set.expired[id] = struct{}{}
@@ -230,45 +167,4 @@ func parseLogState(cfg hakeeper.Config, logState pb.LogState, currTick uint64) *
 		}
 	}
 	return set
-}
-
-// parseTnState separates tn stores as expired and working.
-func parseTnState(cfg hakeeper.Config, tnState pb.TNState, currTick uint64) *storeSet {
-	set := newStoreSet(pb.TNService)
-	for id, storeInfo := range tnState.Stores {
-		if cfg.TNStoreExpired(storeInfo.Tick, currTick) {
-			set.expired[id] = struct{}{}
-		} else {
-			set.working[id] = struct{}{}
-		}
-	}
-	return set
-}
-
-// shutdownStores generates operators to shut down stores.
-func shutdownStores(serviceType pb.ServiceType, stores map[string]struct{}) []*operator.Operator {
-	ops := make([]*operator.Operator, 0, len(stores))
-
-	switch serviceType {
-	case pb.LogService:
-		for id := range stores {
-			op := operator.NewOperator(
-				"logservice", operator.NoopShardID, operator.NoopEpoch,
-				operator.StopLogStore{StoreID: id},
-			)
-			ops = append(ops, op)
-		}
-	case pb.TNService:
-		for id := range stores {
-			op := operator.NewOperator(
-				"tnservice", operator.NoopShardID, operator.NoopEpoch,
-				operator.StopTnStore{StoreID: id},
-			)
-			ops = append(ops, op)
-		}
-	default:
-		panic("unexpected service type")
-	}
-
-	return ops
 }

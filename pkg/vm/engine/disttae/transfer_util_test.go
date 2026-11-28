@@ -99,7 +99,7 @@ func TestTransferBatchLimit(t *testing.T) {
 	t.Run("wide input and reset", func(t *testing.T) {
 		mp := mpool.MustNewZero()
 		func() {
-			staged := batch.NewWithSchema([]string{"rowid", "pk", "entry", "position"}, []types.Type{
+			staged := batch.NewWithTypes([]types.Type{
 				types.T_Rowid.ToType(), types.T_varchar.ToType(), types.T_int32.ToType(), types.T_int32.ToType(),
 			}, mp)
 			defer staged.Clean(mp)
@@ -207,9 +207,9 @@ func TestTransferFlowStagesOnlyObjectsDeletedInWindow(t *testing.T) {
 	liveBatch.Vecs[6], err = vector.NewConstFixed(types.T_TS.ToType(), types.TS{}, 1, mp)
 	require.NoError(t, err)
 	liveBatch.SetRowCount(1)
-	liveProto, err := batch.BatchToProtoBatch(liveBatch)
+	liveEncoded, err := liveBatch.MarshalBinary()
 	require.NoError(t, err)
-	state.HandleDataObjectList(ctx, &api.Entry{Bat: liveProto}, nil, mp)
+	state.HandleDataObjectList(ctx, &api.Entry{Bat: api.NewEncodedBatch(liveEncoded)}, nil, mp)
 	_, exists := state.GetObject(*liveAppendableStats.ObjectShortName())
 	require.False(t, exists)
 

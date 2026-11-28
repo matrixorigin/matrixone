@@ -27,7 +27,7 @@ import (
 func IsAdministrativeStatement(stmt tree.Statement) bool {
 	switch st := stmt.(type) {
 	case *tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
-		*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+		*tree.CreateUser, *tree.DropUser, *tree.AlterUser, *tree.RenameUser,
 		*tree.CreateRole, *tree.DropRole,
 		*tree.Revoke, *tree.Grant,
 		*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
@@ -285,7 +285,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.SetLogserviceSettings:
 		return true, nil
 		//others
-	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *tree.ExplainPhyPlan, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
+	case *tree.FlushPrivileges, *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *tree.ExplainPhyPlan, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
 		return true, nil
 	case *tree.PrepareStmt:
 		if isDataBranchStatement(st.Stmt) {

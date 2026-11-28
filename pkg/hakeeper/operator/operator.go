@@ -67,6 +67,14 @@ func (o *Operator) OpSteps() []OpStep {
 	return o.steps
 }
 
+// activeStep is the first step not yet observed as complete by Check.
+func (o *Operator) activeStep() OpStep {
+	if o.IsEnd() || int(o.currentStep) >= len(o.steps) {
+		return nil
+	}
+	return o.steps[o.currentStep]
+}
+
 // Status returns operator status.
 func (o *Operator) Status() OpStatus {
 	return o.status.Status()

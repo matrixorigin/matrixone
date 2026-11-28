@@ -131,11 +131,6 @@ func readSingleBlockToBatch(
 	// Create batch
 	bat := batch.NewWithSize(len(cols))
 	bat.Vecs = vecs
-	attrs := make([]string, len(cols))
-	for i := range cols {
-		attrs[i] = fmt.Sprintf("col_%d", i)
-	}
-	bat.SetAttributes(attrs)
 	bat.SetRowCount(vecs[0].Length())
 
 	return bat, nil
@@ -243,7 +238,7 @@ func convertObjectToBatch(
 		if !ownershipTransferred {
 			for _, vec := range vecs {
 				if vec != nil {
-					vec.Close()
+					containers.ReleaseVector(vec)
 				}
 			}
 		}
@@ -263,8 +258,8 @@ func convertObjectToBatch(
 				pos, ok := objectio.ResolveSpecialColumnLayout(blkMeta).Resolve(seqnum)
 				if !ok {
 					if seqnum == objectio.SEQNUM_ABORT {
-						for range int(blkMeta.GetRows()) {
-							vecs[i].Append(false, false)
+						if err := vector.AppendMultiFixed(vecs[i], false, false, int(blkMeta.GetRows()), vecs[i].MPool()); err != nil {
+							return nil, err
 						}
 						continue
 					}
@@ -277,7 +272,9 @@ func convertObjectToBatch(
 					// Generate null values for missing columns
 					length := int(blkMeta.GetRows())
 					for j := 0; j < length; j++ {
-						vecs[i].Append(nil, true)
+						if err := vector.AppendAny(vecs[i], nil, true, vecs[i].MPool()); err != nil {
+							return nil, err
+						}
 					}
 					continue
 				}
@@ -305,7 +302,7 @@ func convertObjectToBatch(
 			vec := obj.(*vector.Vector)
 
 			// Extend result vector with this block's data
-			if err := vecs[i].ExtendVec(vec); err != nil {
+			if err := vecs[i].UnionBatch(vec, 0, vec.Length(), nil, vecs[i].MPool()); err != nil {
 				return nil, moerr.NewInternalErrorf(ctx, "failed to extend vector: %v", err)
 			}
 		}
@@ -353,14 +350,14 @@ func filterBatchBySnapshotTS(
 	}
 
 	// Get commit TS values
-	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
+	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
 	var aborts []bool
 	if abortPos, ok := bat.Nameidx[objectio.TombstoneAttr_Abort_Attr]; ok {
 		abortVec := bat.Vecs[abortPos]
 		if abortVec.GetType().Oid != types.T_bool {
 			return nil, nil, moerr.NewInternalErrorf(ctx, "abort column has invalid type")
 		}
-		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec.GetDownstreamVector())
+		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
 		if len(aborts) != len(commitTSs) {
 			return nil, nil, moerr.NewInternalErrorf(
 				ctx,
@@ -389,8 +386,15 @@ func filterBatchBySnapshotTS(
 	}
 
 	// Compact all vectors to remove deleted rows
+	dels := make([]int64, 0, deletes.GetCardinality())
+	itr := deletes.Iterator()
+	for itr.HasNext() {
+		dels = append(dels, int64(itr.Next()))
+	}
 	for _, vec := range bat.Vecs {
-		vec.Compact(deletes)
+		if err := vec.Shrink(dels, true, vec.MPool()); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return bat, originalRowOffsets, nil
@@ -462,7 +466,8 @@ func createObjectFromBatch(
 
 	// Step 3: Remove appendable-only MVCC columns.
 	commitTSIdx, abortIdx := -1, -1
-	for i, attr := range cnBat.Attrs {
+	// cnBat's columns are named by the TN batch it shares vectors with.
+	for i, attr := range bat.Attrs {
 		if attr == objectio.TombstoneAttr_CommitTs_Attr {
 			commitTSIdx = i
 		} else if attr == objectio.TombstoneAttr_Abort_Attr {
@@ -475,12 +480,10 @@ func createObjectFromBatch(
 
 	// Create new batch without commit TS and abort.
 	newBat := &batch.Batch{
-		Vecs:  make([]*vector.Vector, 0, len(cnBat.Vecs)-2),
-		Attrs: make([]string, 0, len(cnBat.Attrs)-2),
+		Vecs: make([]*vector.Vector, 0, len(cnBat.Vecs)-2),
 	}
 	for i, vec := range cnBat.Vecs {
 		if i != commitTSIdx && i != abortIdx {
-			newBat.Attrs = append(newBat.Attrs, cnBat.Attrs[i])
 			newBat.Vecs = append(newBat.Vecs, vec)
 		}
 	}

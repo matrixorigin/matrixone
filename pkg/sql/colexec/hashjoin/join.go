@@ -330,7 +330,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				// Without a residual, fan-out uses UnionMulti to copy a flat
 				// probe payload once per group in each result batch.
 				probePayloadCopiedOnce := ctr.probeHashOnPK || hashJoin.NonEqCond == nil
-				ctr.checkProbeArea = !hashJoin.IsShuffle && ctr.mp != nil && !ctr.skipProbe &&
+				ctr.checkProbeArea = !hashJoin.IsShuffle && !ctr.skipProbe &&
 					!ctr.checkBuildArea && needsOutputAreaCheck(hashJoin.ResultCols, bat, 0, probePayloadCopiedOnce)
 			}
 
@@ -619,7 +619,8 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 	if hashJoin.EmitUnmatchedBuild() {
 		if ctr.rightRowCnt > 0 {
-			ctr.rightRowsMatched, err = colexec.NewRowBitmap(ctr.rightRowCnt)
+			ctr.rightRowsMatched.Free()
+			ctr.rightRowsMatched, err = colexec.NewRowBitmap(ctr.rightRowCnt, proc.Mp())
 			if err != nil {
 				return err
 			}
@@ -700,8 +701,9 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 						ctr.rightRowCnt = jm.GetRowCount()
 						ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 						if hashJoin.EmitUnmatchedBuild() && ctr.rightRowCnt > 0 {
+							ctr.rightRowsMatched.Free()
 							ctr.rightRowsMatched, allocationErr =
-								colexec.NewRowBitmap(ctr.rightRowCnt)
+								colexec.NewRowBitmap(ctr.rightRowCnt, proc.Mp())
 							ctr.rightMatchedIter = nil
 						}
 					}
@@ -768,8 +770,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 	if ctr.itr == nil {
 		ctr.itr = ctr.mp.NewIterator()
 	}
-	if hashJoin.IsInner() && hashJoin.NonEqCond == nil && !ctr.probeHashOnPK &&
-		!ctr.probeTrackBuildMatches && ctr.spillEngine == nil && !ctr.checkBuildArea && !ctr.checkProbeArea {
+	if hashJoin.gathersInnerPayload() && !ctr.checkBuildArea {
 		return ctr.probeInnerPayload(hashJoin, proc, result)
 	}
 	leftRowCnt := ctr.leftBat.RowCount()
@@ -1642,10 +1643,20 @@ func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, resu
 	if err != nil {
 		return err
 	}
-	rowCnt := ctr.leftBat.RowCount()
+	start := ctr.lastIdx
+	total := ctr.leftBat.RowCount()
+	rowCnt := total - start
+	if !hashJoin.IsShuffle && ctr.globalBuildRowCnt == 0 {
+		// Split a globally empty broadcast build. Empty shuffle buckets
+		// retain the existing whole-batch MARK truth-table handling.
+		rowCnt = min(rowCnt, ctr.maxOutputRows())
+		if ctr.checkProbeArea {
+			rowCnt = ctr.fitEmptyProbe(hashJoin, start, rowCnt)
+		}
+	}
 	for i, rp := range hashJoin.ResultCols {
 		if rp.Rel == 0 {
-			err := ctr.resBat.Vecs[i].UnionBatch(ctr.leftBat.Vecs[rp.Pos], 0, rowCnt, nil, resMP)
+			err := ctr.resBat.Vecs[i].UnionBatch(ctr.leftBat.Vecs[rp.Pos], int64(start), rowCnt, nil, resMP)
 			if err != nil {
 				return err
 			}
@@ -1664,8 +1675,11 @@ func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, resu
 	}
 	ctr.resBat.AddRowCount(rowCnt)
 	result.Batch = ctr.resBat
-	ctr.lastIdx = 0
-	ctr.leftBat = nil
+	ctr.lastIdx += rowCnt
+	if ctr.lastIdx == total {
+		ctr.lastIdx = 0
+		ctr.leftBat = nil
+	}
 	return nil
 }
 
@@ -1707,7 +1721,9 @@ func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc 
 		// vector has rowCnt rows.  Establish the visible result range before
 		// merging probe-side NULLs; otherwise a bounded external bitmap treats
 		// every probe NULL as outside the destination and silently drops it.
-		marker.GetNulls().GetBitmap().TryExpandWithSize(rowCnt)
+		if err := marker.GetNulls().GetBitmap().TryExpandWithSize(rowCnt); err != nil {
+			return err
+		}
 		nulls.Or(marker.GetNulls(), vec.GetNulls(), marker.GetNulls())
 	}
 	return nil
@@ -1766,6 +1782,8 @@ func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) erro
 				}
 				matchedCnt += v.Count()
 				ctr.rightRowsMatched.Or(v)
+				// Receive transferred v to the merger.
+				v.Free()
 			}
 
 			if ctr.probeSingle && matchedCnt > ctr.rightRowsMatched.Count() {

@@ -66,7 +66,7 @@ func TestAutoIncrEpochFenceIsModeIndependent(t *testing.T) {
 			insertBatch := catalog.MockBatch(schema, 1)
 			defer insertBatch.Close()
 			entry, err := makePBEntry(INSERT, databaseID, tableID, testutil.DefaultTestDB,
-				schema.Name, "", containers.ToCNBatch(insertBatch))
+				schema.Name, "", containers.ToCNBatch(insertBatch), insertBatch.Attrs)
 			require.NoError(t, err)
 			entry.AutoIncrEpoch = 0
 			entry.AutoIncrEpochKnown = true
@@ -127,18 +127,17 @@ func TestHandleCommitStaleTableGenerationRequestsDefinitionRetry(t *testing.T) {
 	insertBatch := catalog.MockBatch(schema, 1)
 	defer insertBatch.Close()
 	insertEntry, err := makePBEntry(INSERT, databaseID, oldTableID,
-		testutil.DefaultTestDB, schema.Name, "", containers.ToCNBatch(insertBatch))
+		testutil.DefaultTestDB, schema.Name, "", containers.ToCNBatch(insertBatch), insertBatch.Attrs)
 	require.NoError(t, err)
 
 	softDeleteBatch := batch.NewWithSize(1)
-	softDeleteBatch.SetAttributes([]string{"object_id"})
 	softDeleteBatch.Vecs[0] = vector.NewVec(types.T_binary.ToType(), h.m)
 	objectID := types.NewObjectid()
 	require.NoError(t, vector.AppendBytes(softDeleteBatch.Vecs[0], objectID[:], false, h.m))
 	softDeleteBatch.SetRowCount(1)
 	defer softDeleteBatch.Clean(h.m)
 	softDeleteEntry, err := makePBEntry(DELETE, databaseID, oldTableID,
-		testutil.DefaultTestDB, schema.Name, softDeleteObjectPrefix+"false", softDeleteBatch)
+		testutil.DefaultTestDB, schema.Name, softDeleteObjectPrefix+"false", softDeleteBatch, nil)
 	require.NoError(t, err)
 
 	for _, entryCase := range []struct {
@@ -338,10 +337,10 @@ func TestHandleCommitImportsMultipleObjects(t *testing.T) {
 		metaLocBat := containers.BuildBatch(attrs, vecTypes, vecOpts)
 		// The protobuf entry borrows the vector bytes through payload marshaling.
 		defer metaLocBat.Close()
-		metaLocBat.Vecs[0].Append([]byte(stat[:]), false)
+		metaLocBat.Vecs[0].MustAppendValue([]byte(stat[:]), false)
 		metaLocMoBat := containers.ToCNBatch(metaLocBat)
 		addS3BlkEntry, err := makePBEntry(INSERT, dbTestID,
-			tbTestID, dbName, schema.Name, stat.ObjectName().String(), metaLocMoBat)
+			tbTestID, dbName, schema.Name, stat.ObjectName().String(), metaLocMoBat, attrs)
 		require.NoError(t, err)
 		entries = append(entries, addS3BlkEntry)
 	}
@@ -374,7 +373,7 @@ func TestHandleCommitImportsMultipleObjects(t *testing.T) {
 	require.NoError(t, err)
 	expected, actual := make(map[[2]int32]int), make(map[[2]int32]int)
 	for row := 0; row < taeBat.Length(); row++ {
-		expected[[2]int32{taeBat.Vecs[0].Get(row).(int32), taeBat.Vecs[1].Get(row).(int32)}]++
+		expected[[2]int32{taeBat.Vecs[0].GetValue(row).(int32), taeBat.Vecs[1].GetValue(row).(int32)}]++
 	}
 	objectCount := 0
 	testutil.ForEachObject(t, readRel, func(obj handle.Object) error {
@@ -391,7 +390,7 @@ func TestHandleCommitImportsMultipleObjects(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, view)
 				for row := 0; row < view.Length(); row++ {
-					actual[[2]int32{view.Vecs[0].Get(row).(int32), view.Vecs[1].Get(row).(int32)}]++
+					actual[[2]int32{view.Vecs[0].GetValue(row).(int32), view.Vecs[1].GetValue(row).(int32)}]++
 				}
 			}()
 		}
@@ -480,13 +479,13 @@ func TestApplyDeltaloc(t *testing.T) {
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
 		assert.NoError(t, err)
 		rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-		rowIDVec.Append(objectio.NewRowid(&id.BlockID, offset), false)
+		rowIDVec.MustAppendValue(objectio.NewRowid(&id.BlockID, offset), false)
 		pkVec := containers.MakeVector(schema.GetPrimaryKey().GetType(), common.DefaultAllocator)
-		pkVec.Append(val, false)
+		pkVec.MustAppendValue(val, false)
 		bat := containers.NewBatch()
 		bat.AddVector(objectio.TombstoneAttr_Rowid_Attr, rowIDVec)
 		bat.AddVector(schema.GetPrimaryKey().GetName(), pkVec)
-		insertEntry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "", containers.ToCNBatch(bat))
+		insertEntry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "", containers.ToCNBatch(bat), bat.Attrs)
 		assert.NoError(t, err)
 
 		txn := mock1PCTxn(h.db)
@@ -510,19 +509,19 @@ func TestApplyDeltaloc(t *testing.T) {
 	assert.NoError(t, txn0.Commit(context.Background()))
 
 	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
-	defer pkVec.Close()
+	defer containers.ReleaseVector(pkVec)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
-	defer rowIDVec.Close()
+	defer containers.ReleaseVector(rowIDVec)
 	for i := 0; i < rowCount; i++ {
-		val := taeBat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		val := taeBat.Vecs[schema.GetSingleSortKeyIdx()].GetValue(i)
 		if i%5 == 0 {
 			// try apply deltaloc
 			filter := handle.NewEQFilter(val)
 			id, offset, err := rel.GetByFilter(context.Background(), filter)
 			assert.NoError(t, err)
 			rowid := types.NewRowIDWithObjectIDBlkNumAndRowID(*id.ObjectID(), id.BlockID.Sequence(), offset)
-			pkVec.Append(val, false)
-			rowIDVec.Append(rowid, false)
+			pkVec.MustAppendValue(val, false)
+			rowIDVec.MustAppendValue(rowid, false)
 		} else {
 			// in memory deletes
 			makeDeleteTxnFn(val)
@@ -546,8 +545,8 @@ func TestApplyDeltaloc(t *testing.T) {
 	stats, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, rowIDVec, pkVec, schema, txn0)
 	assert.NoError(t, err)
 	require.False(t, stats.IsZero())
-	delLocBat.Vecs[0].Append(stats.Marshal(), false)
-	deleteS3Entry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "file", containers.ToCNBatch(delLocBat))
+	delLocBat.Vecs[0].MustAppendValue(stats.Marshal(), false)
+	deleteS3Entry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "file", containers.ToCNBatch(delLocBat), delLocBat.Attrs)
 	assert.NoError(t, err)
 	deleteS3Txn := mock1PCTxn(h.db)
 	precommitWriteCmd := &api.PrecommitWriteCmd{EntryList: []*api.Entry{deleteS3Entry}}
@@ -634,12 +633,12 @@ func TestColumnSequenceExhaustionRollsBackEarlierDDL(t *testing.T) {
 	encoded, err := add.Marshal()
 	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{"alter_table"}
+	batAttrs := []string{"alter_table"}
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), h.m)
 	defer bat.Clean(h.m)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], encoded, false, h.m))
 	bat.SetRowCount(1)
-	alter, err := makePBEntry(INSERT, databaseID, tableID, testutil.DefaultTestDB, schema.Name, "", bat)
+	alter, err := makePBEntry(INSERT, databaseID, tableID, testutil.DefaultTestDB, schema.Name, "", bat, batAttrs)
 	require.NoError(t, err)
 	alter.EntryType = api.Entry_Alter
 	payload, err := (&api.PrecommitWriteCmd{EntryList: append(entries, alter)}).MarshalBinary()

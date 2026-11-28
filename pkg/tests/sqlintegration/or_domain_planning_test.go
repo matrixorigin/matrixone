@@ -74,7 +74,9 @@ func TestLargeORPlanningSemantics(t *testing.T) {
 			require.NoError(t, err)
 		}()
 		exec("CREATE TABLE or_planning_regression.probe (scenario_id INT, fact_id BIGINT, amount DECIMAL(24,6))")
-		exec("INSERT INTO or_planning_regression.probe SELECT MOD(result,200)+1,MOD(result,1024)+1,CAST(MOD(result,100000) AS DECIMAL(24,6))/1000 FROM generate_series(1,23790) g")
+		// The regression depends on predicate width, not table cardinality.
+		// Keep matches at both ends, a duplicate, and a nonmember in the same scenario.
+		exec("INSERT INTO or_planning_regression.probe VALUES (191,1,0.001),(191,1024,0.002),(191,2048,0.004),(191,2048,0.008),(191,2049,0.016),(190,1,0.032),(190,2049,0.064)")
 		aggregate := func(t *testing.T, query string, count int64, sum string, args ...any) {
 			t.Helper()
 			started := time.Now()
@@ -89,8 +91,8 @@ func TestLargeORPlanningSemantics(t *testing.T) {
 			t.Run(shape, func(t *testing.T) {
 				predicate := orPlanningPredicate(2048, shape)
 				query := "SELECT COUNT(*),SUM(amount) FROM or_planning_regression.probe WHERE scenario_id=191 AND " + predicate
-				aggregate(t, query, 119, "1426.810000")
-				aggregate(t, query, 119, "1426.810000") // Identical cached repeat must remain correct.
+				aggregate(t, query, 4, "0.015000")
+				aggregate(t, query, 4, "0.015000") // Identical cached repeat must remain correct.
 				rows, err := db.QueryContext(ctx, "EXPLAIN SELECT COUNT(*),SUM(p.amount) FROM or_planning_regression.probe p WHERE p.scenario_id=191 AND "+strings.ReplaceAll(predicate, "fact_id", "p.fact_id"))
 				require.NoError(t, err)
 				defer rows.Close()
@@ -106,12 +108,13 @@ func TestLargeORPlanningSemantics(t *testing.T) {
 					var count int64
 					var sum string
 					require.NoError(t, prepared.QueryRowContext(ctx, scenario).Scan(&count, &sum))
-					require.Equal(t, int64(119), count)
-					expected := "1426.810000"
 					if scenario == 190 {
-						expected = "1426.691000"
+						require.Equal(t, int64(1), count)
+						require.Equal(t, "0.032000", sum)
+					} else {
+						require.Equal(t, int64(4), count)
+						require.Equal(t, "0.015000", sum)
 					}
-					require.Equal(t, expected, sum)
 				}
 			})
 		}
@@ -146,6 +149,6 @@ func TestLargeORPlanningSemantics(t *testing.T) {
 		defer stop()
 		_, err = db.ExecContext(expired, "SELECT COUNT(*) FROM or_planning_regression.probe WHERE scenario_id=191 AND "+orPlanningPredicate(8192, "flat"))
 		require.ErrorIs(t, err, context.DeadlineExceeded)
-		aggregate(t, "SELECT COUNT(*),SUM(amount) FROM or_planning_regression.probe WHERE scenario_id=191", 119, "1426.810000")
+		aggregate(t, "SELECT COUNT(*),SUM(amount) FROM or_planning_regression.probe WHERE scenario_id=191", 5, "0.031000")
 	})
 }

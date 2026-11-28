@@ -1123,13 +1123,20 @@ kill -TERM "$$"
 func TestCancellationReportsCompletedSlowCases(t *testing.T) {
 	t.Parallel()
 	script := `source ./run_ut.sh UT
-function logger() { printf "%s\n" "$2"; }
+function logger() { printf "%s\n" "$2"; echo called >> "$CASE_DIR/logger-calls"; }
 UT_REPORT="$CASE_DIR/report.json"
 UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
 mkdir -p "$UT_DIAGNOSTIC_DIR"
 cat > "$UT_REPORT" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/slow","Test":"TestSlow"}
 {"Time":"2026-09-10T01:00:04Z","Action":"pass","Package":"example/slow","Test":"TestSlow","Elapsed":3.5}
+EOF
+for ((i=0; i<200; i++)); do
+ printf '%s\n' '{"Action":"output","Package":"example/fast","Test":"TestFailed","Output":"detail line\n"}' >> "$UT_REPORT"
+done
+cat >> "$UT_REPORT" <<'EOF'
+{"Time":"2026-09-10T01:00:04Z","Action":"output","Package":"example/fast","Test":"TestFailed","Output":"assertion: unexpected result\n"}
+{"Time":"2026-09-10T01:00:04Z","Action":"fail","Package":"example/fast","Test":"TestFailed","Elapsed":0.01}
 {"Time":"2026-09-10T01:00:05Z","Action":"run","Package":"example/slow","Test":"TestBlocked"}
 EOF
 trap handle_ut_termination TERM
@@ -1142,6 +1149,9 @@ set -e
 [[ -s "$UT_DIAGNOSTIC_DIR/ut-report.json" ]] || exit 92
 [[ -s "$UT_DIAGNOSTIC_DIR/ut-checkpoint.log" ]] || exit 93
 grep -q 'TestSlow' "$UT_DIAGNOSTIC_DIR/top.txt"
+grep -q 'TestFailed' "$UT_DIAGNOSTIC_DIR/top.txt"
+grep -q 'assertion: unexpected result' "$UT_DIAGNOSTIC_DIR/top.txt"
+[[ $(wc -l < "$CASE_DIR/logger-calls" | tr -d ' ') -lt 50 ]] || exit 94
 `
 	out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
@@ -1149,6 +1159,127 @@ exit 0
 `)
 	if err != nil {
 		t.Fatalf("cancellation diagnostics: %v\n%s", err, out)
+	}
+}
+
+func TestCancellationSummarizesUnmergedFailureReports(t *testing.T) {
+	for _, mode := range []string{"joined", "prebuilt", "empty-main", "light", "engine", "plan", "prebuilt-symlink", "prebuilt-nonnumeric", "midpoint"} {
+		t.Run(mode, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
+UT_REPORT="$CASE_DIR/main-report"
+: > "$UT_REPORT"
+if [[ "$MODE" != empty-main ]]; then
+ printf '%s\n' '{"Action":"pass","Package":"example/main","Elapsed":3}' > "$UT_REPORT"
+fi
+report="$CASE_DIR/helper-report"
+cat > "$report.00" <<'EOF'
+{"Action":"start","Package":"example/issues"}
+{"Action":"run","Package":"example/issues","Test":"TestShardFailure"}
+{"Action":"output","Package":"example/issues","Test":"TestShardFailure","Output":"shard assertion\n"}
+{"Action":"fail","Package":"example/issues","Test":"TestShardFailure","Elapsed":0.01}
+{"Action":"fail","Package":"example/issues","Elapsed":0.1}
+EOF
+printf '%s' '{"Action":"fail","Package":"example/issues","Test":"TestIncomplete","Elapsed":1}' > "$report.01"
+case "$MODE" in
+ prebuilt-symlink|prebuilt-nonnumeric)
+  mv "$report.00" "$report"; rm "$report.01"
+  printf '%s\n' '{"Action":"fail","Package":"example/issues","Test":"TestIneligible"}' > "$CASE_DIR/other"
+  if [[ "$MODE" == prebuilt-symlink ]]; then
+   ln -s "$CASE_DIR/other" "$report.00"
+  else
+   cp "$CASE_DIR/other" "$report.other"
+  fi
+  PREBUILT_RACE_REPORT="$report"; CLUSTER_PREBUILD_DRAIN_FAILED=1 ;;
+ joined) PREBUILT_RACE_REPORT="$report" ;;
+ midpoint)
+  python3 - "$report.00" "${UT_MIDPOINT_FILL_MIB:-9}" <<'PYFIXTURE'
+import pathlib, sys
+report = pathlib.Path(sys.argv[1])
+terminal = report.read_bytes()
+line = b'{"Action":"run","Package":"example/noise","Test":"TestNoise"}\n'
+# Other tests can emit output between an assertion and its terminal event.
+terminal = terminal.replace(
+    b'{"Action":"fail","Package":"example/issues","Test":"TestShardFailure"',
+    line * 100 + b'{"Action":"output","Package":"example/noise","n":' + b'9' * 5000 + b'}\n' +
+    b'{"Action":"fail","Package":"example/issues","Test":"TestShardFailure"',
+    1,
+)
+block = line * ((1024 * 1024 + len(line) - 1) // len(line))
+with report.open("wb") as stream:
+    for group in range(2):
+        for _ in range(int(sys.argv[2])):
+            stream.write(block)
+        if not group:
+            stream.write(terminal)
+PYFIXTURE
+  PREBUILT_RACE_REPORT="$report"; CURRENT_UT_DRAIN_FAILED=1 ;;
+ prebuilt|empty-main) PREBUILT_RACE_REPORT="$report"; CURRENT_UT_DRAIN_FAILED=1 ;;
+ light) LIGHT_RACE_REPORT="$report.00"; LIGHT_RACE_DRAIN_FAILED=1 ;;
+ engine) ENGINE_RACE_REPORT="$report"; ENGINE_RACE_DRAIN_FAILED=1; cp "$report.00" "$report"; : > "$report.ready" ;;
+ plan) PLAN_RACE_REPORT="$report"; PLAN_RACE_DRAIN_FAILED=1; printf 'partial base\n' > "$report" ;;
+esac
+set +e
+( trap handle_ut_termination TERM; fixture_self_pid pid; kill -TERM "$pid"; exit 89 )
+status=$?
+set -e
+if [[ "$MODE" == joined ]]; then
+ [[ "$status" == 143 ]] || exit 90
+ grep -q TestShardFailure "$UT_DIAGNOSTIC_DIR/ut-report.json" || exit 91
+else
+ [[ "$status" == 125 ]] || exit 92
+ ! grep -q TestShardFailure "$UT_DIAGNOSTIC_DIR/ut-report.json" || exit 93
+ if [[ "$MODE" == prebuilt-* ]]; then
+  [[ "$report" -ef "$UT_DIAGNOSTIC_DIR/live-prebuilt-$G_TS/live.base.jsonl" ]] || exit 94
+  ! grep -q TestIneligible "$UT_DIAGNOSTIC_DIR/top.txt" || exit 98
+ else
+  [[ -f "$report.00" ]] || exit 94
+ fi
+fi
+[[ $(grep -c 'action=fail package="example/issues" test="TestShardFailure"' "$UT_DIAGNOSTIC_DIR/top.txt") == 1 ]] || exit 95
+grep -A 1 'action=fail package="example/issues" test="TestShardFailure"' "$UT_DIAGNOSTIC_DIR/top.txt" |
+ grep -q '^\[failed_ut_output\] shard assertion' || exit 96
+if [[ "$MODE" != joined ]]; then
+ ! grep -q TestIncomplete "$UT_DIAGNOSTIC_DIR/top.txt" || exit 97
+fi
+`
+			out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`, "MODE="+mode)
+			if err != nil {
+				t.Fatalf("termination report %s: %v\n%s", mode, err, out)
+			}
+		})
+	}
+}
+
+func TestCancellationSummarizesMainWhenHelperHasNoSource(t *testing.T) {
+	for _, mode := range []string{"absent", "missing-ready-base"} {
+		t.Run(mode, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+set -u
+UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
+UT_REPORT="$CASE_DIR/main-report"
+printf '%s\n' '{"Action":"fail","Package":"example/main","Test":"TestMainFailure"}' > "$UT_REPORT"
+PREBUILT_RACE_REPORT="$CASE_DIR/helper-report"
+CURRENT_UT_DRAIN_FAILED=1
+if [[ "$MODE" == missing-ready-base ]]; then : > "$PREBUILT_RACE_REPORT.ready"; fi
+set +e
+( handle_ut_termination )
+status=$?
+set -e
+[[ "$status" == 125 ]] || exit 90
+grep -q 'action=fail package="example/main" test="TestMainFailure"' "$UT_DIAGNOSTIC_DIR/top.txt" || exit 91
+`
+			out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`, "MODE="+mode)
+			if err != nil {
+				t.Fatalf("termination report %s: %v\n%s", mode, err, out)
+			}
+		})
 	}
 }
 

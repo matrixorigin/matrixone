@@ -664,15 +664,21 @@ func TestFixedBorrowValidityLifetimeAndWindow(t *testing.T) {
 	require.False(t, bat.Vecs[0].IsNull(1))
 	require.False(t, bat.Vecs[0].IsNull(2))
 
+	// A window of a borrowed column aliases the same Arrow buffer, which the
+	// caller keeps alive until it drops every batch and window over it.
 	window, err := bat.Vecs[0].Window(1, 3)
 	require.NoError(t, err)
-	record.Release()
-	sliced.Release()
-	base.Release()
+	// The window outlives bat below: its payload is the Arrow buffer, but its
+	// nulls are a view of bat's bitmap, so it takes its own copy.
+	require.NoError(t, window.DetachNulls(mp))
 	bat.Clean(mp)
 	require.Equal(t, []int64{30, 40}, vector.MustFixedColNoTypeCheck[int64](window))
 	require.False(t, window.IsNull(0))
 	window.Free(mp)
+	require.Positive(t, alloc.CurrentAlloc(), "the caller's record still owns the buffer")
+	record.Release()
+	sliced.Release()
+	base.Release()
 	require.Equal(t, int64(0), mp.CurrNB())
 	alloc.AssertSize(t, 0)
 }
@@ -943,7 +949,8 @@ func TestVarlenBorrowLongInlineShortAndLifetime(t *testing.T) {
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()
 
-	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{MaxPinAmplification: 100})
+	var scratch Descriptors
+	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{MaxPinAmplification: 100, Descriptors: &scratch})
 	require.NoError(t, err)
 	require.Equal(t, int64(len(long)), stats.BorrowedPayloadBytes)
 	require.Equal(t, int64(len(long)), stats.EligiblePayloadBytes)
@@ -960,11 +967,82 @@ func TestVarlenBorrowLongInlineShortAndLifetime(t *testing.T) {
 	require.Equal(t, long, string(bat.Vecs[0].GetBytesAt(1)))
 	require.True(t, bat.Vecs[0].IsNull(2))
 
+	// The descriptors live in the caller's scratch and the values in the
+	// caller's record: dropping the batch frees neither.
+	bat.Clean(mp)
+	require.Positive(t, mp.CurrNB(), "the descriptor scratch is the caller's")
+	require.Positive(t, alloc.CurrentAlloc(), "the record is the caller's")
+	scratch.Free()
 	record.Release()
 	arr.Release()
-	require.Equal(t, long, string(bat.Vecs[0].GetBytesAt(1)), "vector lease must outlive Arrow record")
-	bat.Clean(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+// Without the caller's descriptor scratch a varlen column cannot borrow: its
+// descriptors would have no owner, so it is materialized.
+func TestVarlenWithoutDescriptorsMaterializes(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewStringBuilder(alloc)
+	long := "this payload is definitely longer than twenty three bytes"
+	builder.Append(long)
+	arr := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "s", Type: arrow.BinaryTypes.String}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{arr}, 1)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "s", Type: types.T_varchar.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{MaxPinAmplification: 100})
+	require.NoError(t, err)
+	require.False(t, bat.Vecs[0].IsReadOnly())
+	require.Zero(t, stats.BorrowedColumns)
+	require.Equal(t, int64(1), stats.MaterializedColumns)
+	require.Equal(t, long, string(bat.Vecs[0].GetBytesAt(0)))
+	bat.Clean(mp)
+	record.Release()
+	arr.Release()
+	require.Zero(t, mp.CurrNB())
+	alloc.AssertSize(t, 0)
+}
+
+// The descriptor scratch is allocated once per column and reused by every
+// later conversion that fits.
+func TestDescriptorsReuseColumnBuffer(t *testing.T) {
+	alloc := memory.NewCheckedAllocator(memory.NewGoAllocator())
+	builder := array.NewStringBuilder(alloc)
+	long := "this payload is definitely longer than twenty three bytes"
+	builder.AppendValues([]string{long, long, long}, nil)
+	arr := builder.NewArray()
+	builder.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "s", Type: arrow.BinaryTypes.String}}, nil)
+	record := array.NewRecordBatch(schema, []arrow.Array{arr}, 3)
+	plan, err := Bind(context.Background(), schema, []TargetColumn{{Name: "s", Type: types.T_varchar.ToType()}}, MatchByName)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	var scratch Descriptors
+
+	first, _, err := plan.Convert(context.Background(), record, mp, ConvertOptions{MaxPinAmplification: 100, Descriptors: &scratch})
+	require.NoError(t, err)
+	require.True(t, first.Vecs[0].IsReadOnly())
+	firstDescriptors := unsafe.SliceData(first.Vecs[0].GetData())
+	allocated := mp.CurrNB()
+	first.Clean(mp)
+
+	window := record.NewSlice(1, 3)
+	second, _, err := plan.Convert(context.Background(), window, mp, ConvertOptions{MaxPinAmplification: 100, Descriptors: &scratch})
+	require.NoError(t, err)
+	require.Same(t, firstDescriptors, unsafe.SliceData(second.Vecs[0].GetData()), "the column's buffer is reused")
+	require.Equal(t, allocated, mp.CurrNB(), "no new descriptor allocation")
+	require.Equal(t, long, string(second.Vecs[0].GetBytesAt(1)))
+	second.Clean(mp)
+
+	scratch.Free()
+	window.Release()
+	record.Release()
+	arr.Release()
+	require.Zero(t, mp.CurrNB())
 	alloc.AssertSize(t, 0)
 }
 
@@ -981,7 +1059,8 @@ func TestVarlenPinAmplificationMaterializes(t *testing.T) {
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()
 
-	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{MaxPinAmplification: 0.0001})
+	var scratch Descriptors
+	bat, stats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{MaxPinAmplification: 0.0001, Descriptors: &scratch})
 	require.NoError(t, err)
 	require.False(t, bat.Vecs[0].IsReadOnly())
 	require.Zero(t, stats.BorrowedPayloadBytes)
@@ -993,6 +1072,7 @@ func TestVarlenPinAmplificationMaterializes(t *testing.T) {
 	record.Release()
 	arr.Release()
 	bat.Clean(mp)
+	scratch.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
 	alloc.AssertSize(t, 0)
 }
@@ -1092,7 +1172,8 @@ func TestForceMaterializeBorrowEligibleColumns(t *testing.T) {
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()
 
-	borrowed, borrowedStats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{})
+	var scratch Descriptors
+	borrowed, borrowedStats, err := plan.Convert(context.Background(), record, mp, ConvertOptions{Descriptors: &scratch})
 	require.NoError(t, err)
 	require.Equal(t, int64(2), borrowedStats.BorrowedColumns)
 	require.Zero(t, borrowedStats.MaterializedColumns)
@@ -1112,6 +1193,7 @@ func TestForceMaterializeBorrowEligibleColumns(t *testing.T) {
 	require.False(t, materialized.Vecs[1].IsReadOnly())
 
 	borrowed.Clean(mp)
+	scratch.Free()
 	materialized.Clean(mp)
 	record.Release()
 	intValues.Release()

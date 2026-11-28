@@ -118,18 +118,11 @@ func BuildUniqueKeyBatch(
 	)
 
 	if originTablePrimaryKey == "" {
-		b = &batch.Batch{
-			Attrs: make([]string, 1),
-			Vecs:  make([]*vector.Vector, 1),
-		}
-		b.Attrs[0] = catalog.IndexTableIndexColName
+		// [IndexTableIndexColName]
+		b = batch.NewWithSize(1)
 	} else {
-		b = &batch.Batch{
-			Attrs: make([]string, 2),
-			Vecs:  make([]*vector.Vector, 2),
-		}
-		b.Attrs[0] = catalog.IndexTableIndexColName
-		b.Attrs[1] = catalog.IndexTablePrimaryColName
+		// [IndexTableIndexColName, IndexTablePrimaryColName]
+		b = batch.NewWithSize(2)
 	}
 	if len(parts) > 1 {
 		isCompoundIndex = true
@@ -150,6 +143,9 @@ func BuildUniqueKeyBatch(
 		}
 		b.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		bitMap, err = serialWithCompacted(vs, b.Vecs[0], proc, packers, DefaultPackerSize)
+		// serialWithCompacted's bitmap is owned here; compactSingleIndexCol
+		// below returns the input vector's own.
+		defer bitMap.Free()
 	} else {
 		var vec *vector.Vector
 		for i, name := range attrs {
@@ -162,7 +158,7 @@ func BuildUniqueKeyBatch(
 		bitMap, err = compactSingleIndexCol(vec, b.Vecs[0], proc)
 	}
 
-	if len(b.Attrs) > 1 {
+	if originTablePrimaryKey != "" {
 		var vec *vector.Vector
 		for i, name := range attrs {
 			if originTablePrimaryKey == name {
@@ -228,7 +224,9 @@ func serialWithCompacted(
 			packers.ps[i].Reset()
 		}
 	}()
+	// bitMap is allocated from proc's pool; the caller frees it.
 	bitMap := new(nulls.Nulls)
+	bitMap.Init(proc.Mp())
 
 	ps := packers.ps
 	for _, v := range vs {
@@ -574,9 +572,11 @@ func serialWithCompacted(
 		}
 	}
 
-	err := vector.AppendBytesList(vec, val, nil, proc.Mp())
-
-	return bitMap, err
+	if err := vector.AppendBytesList(vec, val, nil, proc.Mp()); err != nil {
+		bitMap.Free()
+		return nil, err
+	}
+	return bitMap, nil
 }
 
 // serialWithoutCompacted is similar to serialWithCompacted and builtInSerial
@@ -595,8 +595,8 @@ func serialWithoutCompacted(
 	packerSize uint64,
 ) (*nulls.Nulls, error) {
 	if len(vs) == 0 {
-		// return empty bitmap
-		return new(nulls.Nulls), nil
+		// A nil Nulls has no rows.
+		return nil, nil
 	}
 
 	rowCount := vs[0].Length()
@@ -627,7 +627,7 @@ func serialWithoutCompacted(
 		}
 	}
 
-	return new(nulls.Nulls), nil
+	return nil, nil
 }
 
 func compactSingleIndexCol(

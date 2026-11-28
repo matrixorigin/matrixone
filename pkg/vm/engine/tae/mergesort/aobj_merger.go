@@ -266,7 +266,7 @@ func newAObjMerger[T comparable](
 
 	totalRowCnt := 0
 	for i, blk := range batches {
-		sortKeyCol := blk.Vecs[sortKeyPos].GetDownstreamVector()
+		sortKeyCol := blk.Vecs[sortKeyPos]
 		m.df.mustToCol(sortKeyCol, uint32(i))
 		m.nulls[i] = sortKeyCol.GetNulls()
 		m.rowIdx[i] = 0
@@ -322,7 +322,7 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []i
 		}
 		rowIdx := am.rowIdx[blkIdx]
 		for i := range batches[blkCnt].Vecs {
-			err := batches[blkCnt].Vecs[i].UnionOne(am.bats[blkIdx].Vecs[i].GetDownstreamVector(), rowIdx, am.vpool.GetMPool())
+			err := batches[blkCnt].Vecs[i].UnionOne(am.bats[blkIdx].Vecs[i], rowIdx, am.vpool.GetMPool())
 			if err != nil {
 				releaseAll()
 				return nil, nil, nil, err

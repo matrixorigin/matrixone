@@ -20,6 +20,7 @@ const (
 	ReasonScanMissingStats    = "missing-stats"
 	ReasonScanForceOneCN      = "force-one-cn"
 	ReasonScanForceSingle     = "force-single"
+	ReasonScanStarCountCache  = "starcount-cache-locality"
 	ReasonScanSmallBlocks     = "small-blocks"
 	ReasonScanMultiCN         = "multi-cn-scan"
 	ReasonScanQueryLocalExec  = "query-local-exec-type"

@@ -304,28 +304,19 @@ func TestFkCatalogMutationSqlEscapesIdentifiers(t *testing.T) {
 		getSqlForCheckHasDBRefersTo(db))
 }
 
-func Test_buildPreDeleteFullTextIndexAsync(t *testing.T) {
-	{
-		//invalid json
-		idxdef := &plan.IndexDef{
-			IndexAlgoParams: `{"async":1}`,
-		}
-
-		err := buildPreDeleteFullTextIndex(nil, nil, nil, nil, idxdef, 0, nil, nil)
-		require.NotNil(t, err)
+func TestIrregularDeleteByPkAsync(t *testing.T) {
+	var builder *QueryBuilder
+	fulltext := func(params string) *plan.IndexDef {
+		return &plan.IndexDef{IndexAlgo: catalog.MOIndexFullTextAlgo.ToString(), IndexAlgoParams: params}
+	}
+	ivf := func(params string) *MultiTableIndex {
+		return &MultiTableIndex{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoParams: params}
 	}
 
-	{
-
-		// async true
-		idxdef := &plan.IndexDef{
-			IndexAlgoParams: `{"async":"true"}`,
-		}
-
-		err := buildPreDeleteFullTextIndex(nil, nil, nil, nil, idxdef, 0, nil, nil)
-		require.Nil(t, err)
-	}
-
+	require.Error(t, builder.buildIrregularFulltextDeleteByPk(nil, fulltext(`{"async":1}`), 0))
+	require.NoError(t, builder.buildIrregularFulltextDeleteByPk(nil, fulltext(`{"async":"true"}`), 0))
+	require.Error(t, builder.buildIrregularIvfDeleteByPk(nil, ivf(`{"async":1}`), 0))
+	require.NoError(t, builder.buildIrregularIvfDeleteByPk(nil, ivf(`{"async":"true"}`), 0))
 }
 
 // Test WITH clause support for INSERT statement (Issue #22583)

@@ -486,7 +486,8 @@ func (h *Handle) apiEntryToWriteEntry(
 	prefetch bool,
 ) *cmd_util.WriteReq {
 
-	moBat, err := batch.ProtoBatchToBatch(pe.GetBat(), nil)
+	// The CN encodes the entry from its own valid workspace batch.
+	moBat, err := batch.ViewTrustedBinary(pe.Bat.Bytes())
 	if err != nil {
 		panic(err)
 	}
@@ -501,6 +502,7 @@ func (h *Handle) apiEntryToWriteEntry(
 		AutoIncrEpochKnown: pe.GetAutoIncrEpochKnown(),
 		FileName:           pe.GetFileName(),
 		Batch:              moBat,
+		Attrs:              pe.GetAttrs(),
 		PkCheck:            cmd_util.PKCheckType(pe.GetPkCheckByTn()),
 	}
 
@@ -764,7 +766,7 @@ func (h *Handle) HandleCreateDatabase(
 	// Write to mo_database table
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	databaseTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_DATABASE_ID)
-	err = AppendDataToTable(ctx, databaseTbl, req.Bat)
+	err = AppendDataToTable(ctx, databaseTbl, req.Bat, req.Attrs)
 
 	return
 }
@@ -791,11 +793,10 @@ func (h *Handle) HandleDropDatabase(
 	// Delete in mo_database table
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	databaseTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_DATABASE_ID)
-	mp := common.WorkspaceAllocator
-	rowIDVec := containers.ToTNVector(req.Bat.GetVector(0), mp)
-	defer rowIDVec.Close()
-	pkVec := containers.ToTNVector(req.Bat.GetVector(1), mp)
-	defer pkVec.Close()
+	rowIDVec := req.Bat.GetVector(0)
+	defer containers.ReleaseVector(rowIDVec)
+	pkVec := req.Bat.GetVector(1)
+	defer containers.ReleaseVector(pkVec)
 	err = databaseTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
 
 	return
@@ -829,12 +830,12 @@ func (h *Handle) HandleCreateRelation(
 
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	tablesTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_TABLES_ID)
-	if err := AppendDataToTable(ctx, tablesTbl, req.TableBat); err != nil {
+	if err := AppendDataToTable(ctx, tablesTbl, req.TableBat, req.TableAttrs); err != nil {
 		return err
 	}
 	columnsTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
-	for _, bat := range req.ColumnBat {
-		if err := AppendDataToTable(ctx, columnsTbl, bat); err != nil {
+	for i, bat := range req.ColumnBat {
+		if err := AppendDataToTable(ctx, columnsTbl, bat, req.ColumnAttrs[i]); err != nil {
 			return err
 		}
 	}
@@ -871,21 +872,20 @@ func (h *Handle) HandleDropRelation(
 
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	tablesTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_TABLES_ID)
-	mp := common.WorkspaceAllocator
 	dt := handle.DT_Normal
-	rowIDVec := containers.ToTNVector(req.TableBat.GetVector(0), mp)
-	defer rowIDVec.Close()
-	pkVec := containers.ToTNVector(req.TableBat.GetVector(1), mp)
-	defer pkVec.Close()
+	rowIDVec := req.TableBat.GetVector(0)
+	defer containers.ReleaseVector(rowIDVec)
+	pkVec := req.TableBat.GetVector(1)
+	defer containers.ReleaseVector(pkVec)
 	if err := tablesTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, dt); err != nil {
 		return err
 	}
 	columnsTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
 	for _, bat := range req.ColumnBat {
-		rowIDVec := containers.ToTNVector(bat.GetVector(0), mp)
-		defer rowIDVec.Close()
-		pkVec := containers.ToTNVector(bat.GetVector(1), mp)
-		defer pkVec.Close()
+		rowIDVec := bat.GetVector(0)
+		defer containers.ReleaseVector(rowIDVec)
+		pkVec := bat.GetVector(1)
+		defer containers.ReleaseVector(pkVec)
 		if err := columnsTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, dt); err != nil {
 			return err
 		}
@@ -962,7 +962,7 @@ func (h *Handle) HandleWrite(
 			}
 			err = tb.AddDataFiles(
 				ctx,
-				containers.ToTNVector(statsVec, common.WorkspaceAllocator),
+				statsVec,
 			)
 			return
 		}
@@ -983,7 +983,7 @@ func (h *Handle) HandleWrite(
 			postFunc = append(postFunc, parse_merge_settings_set(req.Batch, h.db.MergeScheduler))
 		}
 
-		err = AppendDataToTable(ctx, tb, req.Batch)
+		err = AppendDataToTable(ctx, tb, req.Batch, req.Attrs)
 		return
 	}
 
@@ -1048,8 +1048,8 @@ func (h *Handle) HandleWrite(
 	if len(req.Batch.Vecs) != 2 {
 		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
 	}
-	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0), common.WorkspaceAllocator)
-	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
+	rowIDVec := req.Batch.GetVector(0)
+	pkVec := req.Batch.GetVector(1)
 	if req.DatabaseId == pkgcatalog.MO_CATALOG_ID && req.TableName == pkgcatalog.MO_MERGE_SETTINGS {
 		var unset func(types.TS)
 		if unset, err = parse_merge_settings_unset(pkVec, h.db.MergeScheduler); err != nil {
@@ -1170,7 +1170,7 @@ func parse_merge_settings_unset(
 ) (func(types.TS), error) {
 	tids := make([]uint64, 0, 1)
 	for i := 0; i < pkVec.Length(); i++ {
-		bs, ok := pkVec.Get(i).([]byte)
+		bs, ok := pkVec.GetValue(i).([]byte)
 		if !ok {
 			return nil, moerr.NewInternalErrorNoCtxf("invalid merge setting key at row %d", i)
 		}

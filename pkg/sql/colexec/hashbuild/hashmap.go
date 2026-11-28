@@ -712,6 +712,9 @@ func (hb *HashmapBuilder) buildHashmap(
 	}
 
 	if hb.IsDedup && (hb.OnDuplicateAction == plan.Node_IGNORE || dedupBuildKeepLast) {
+		// Every rebuild path frees it first today; freeing here keeps a new
+		// retry path from leaking the previous bitmap.
+		hb.freeIgnoreRows(proc.Mp())
 		hb.IgnoreRows, err = hb.newDedupBitmap(
 			hb.InputBatchRowCount,
 			proc.Mp(),
@@ -1292,8 +1295,8 @@ func (hb *HashmapBuilder) keepDiscardedRowsForDelete(proc *process.Process) erro
 		if err != nil {
 			return err
 		}
-	} else {
-		hb.DelRows.InitWithSize(int64(newRows))
+	} else if err = hb.DelRows.InitWithSize(int64(newRows), hb.DelRows.MPool()); err != nil {
+		return err
 	}
 	for i := range discardedWithDeletes {
 		hb.DelRows.Add(uint64(activeCount + i))
@@ -1324,7 +1327,6 @@ func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Proces
 		bat.Clean(proc.Mp())
 		return nil, nil, err
 	}
-	bat.Attrs = hb.Batches.Buf[0].Attrs
 	for colIdx, vec := range hb.Batches.Buf[0].Vecs {
 		bat.SetVector(int32(colIdx), vector.NewVec(*vec.GetType(), deleteOnlyMP))
 	}

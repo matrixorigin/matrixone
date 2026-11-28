@@ -30,7 +30,7 @@ import (
 func TestStaticFilterNumeric(t *testing.T) {
 	typ := types.T_int32.ToType()
 	data := containers.MockVector2(typ, 40000, 0)
-	defer data.Close()
+	defer containers.ReleaseVector(data)
 	sf, err := NewBloomFilter(data, nil, nil, nil)
 	require.NoError(t, err)
 	var positive *nulls.Nulls
@@ -54,15 +54,15 @@ func TestStaticFilterNumeric(t *testing.T) {
 	})
 
 	query := containers.MockVector2(typ, 2000, 1000)
-	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query)
+	defer containers.ReleaseVector(query)
+	exist, positive, err = sf.MayContainsAnyKeys(query, bitmapTestMP)
 	require.NoError(t, err)
 	require.Equal(t, 2000, positive.Count())
 	require.True(t, exist)
 
 	query = containers.MockVector2(typ, 20000, 40000)
-	defer query.Close()
-	_, positive, err = sf.MayContainsAnyKeys(query)
+	defer containers.ReleaseVector(query)
+	_, positive, err = sf.MayContainsAnyKeys(query, bitmapTestMP)
 	require.NoError(t, err)
 	fpRate := float32(positive.Count()) / float32(20000)
 	require.True(t, fpRate < float32(0.01))
@@ -72,15 +72,15 @@ func TestStaticFilterNumeric(t *testing.T) {
 	require.NoError(t, err)
 
 	vec := containers.MockVector2(typ, 0, 0)
-	defer vec.Close()
+	defer containers.ReleaseVector(vec)
 	sf1, err := NewBloomFilter(vec, nil, nil, nil)
 	require.NoError(t, err)
 	err = sf1.Unmarshal(buf)
 	require.NoError(t, err)
 
 	query = containers.MockVector2(typ, 40000, 0)
-	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query)
+	defer containers.ReleaseVector(query)
+	exist, positive, err = sf.MayContainsAnyKeys(query, bitmapTestMP)
 	require.NoError(t, err)
 	require.Equal(t, 40000, positive.Count())
 	require.True(t, exist)
@@ -89,7 +89,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 func TestNewBinaryFuseFilter(t *testing.T) {
 	typ := types.T_uint32.ToType()
 	data := containers.MockVector2(typ, 2000, 0)
-	defer data.Close()
+	defer containers.ReleaseVector(data)
 	_, err := NewBloomFilter(data, nil, nil, nil)
 	require.NoError(t, err)
 }
@@ -97,7 +97,7 @@ func TestNewBinaryFuseFilter(t *testing.T) {
 func BenchmarkCreateFilter(b *testing.B) {
 	rows := 1000
 	data := containers.MockVector2(types.T_int64.ToType(), rows, 0)
-	defer data.Close()
+	defer containers.ReleaseVector(data)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		NewBloomFilter(data, nil, nil, nil)
@@ -107,7 +107,7 @@ func BenchmarkCreateFilter(b *testing.B) {
 func BenchmarkHybridBloomFilter(b *testing.B) {
 	rows := 8192
 	data := containers.MockVector(types.T_Rowid.ToType(), rows, true, nil)
-	defer data.Close()
+	defer containers.ReleaseVector(data)
 
 	prefixFn := func(in []byte) []byte {
 		return in
@@ -129,7 +129,7 @@ func BenchmarkHybridBloomFilter(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			var bf bloomFilter
-			bf.Unmarshal(buf)
+			mustBitmapOK(bf.Unmarshal(buf))
 		}
 	})
 
@@ -137,7 +137,7 @@ func BenchmarkHybridBloomFilter(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			var hbf hybridFilter
-			hbf.Unmarshal(hbf_buf)
+			mustBitmapOK(hbf.Unmarshal(hbf_buf))
 		}
 	})
 
@@ -172,14 +172,14 @@ func TestHybridBloomFilter(t *testing.T) {
 	blk3_2 := types.NewBlockidWithObjectID(&obj3, 2)
 	blk3_3 := types.NewBlockidWithObjectID(&obj3, 3)
 	rowids := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	defer rowids.Close()
+	defer containers.ReleaseVector(rowids)
 	for i := 0; i < 10; i++ {
-		rowids.Append(types.NewRowid(&blk1_0, uint32(i)), false)
-		rowids.Append(types.NewRowid(&blk1_1, uint32(i)), false)
-		rowids.Append(types.NewRowid(&blk2_0, uint32(i)), false)
-		rowids.Append(types.NewRowid(&blk3_0, uint32(i)), false)
-		rowids.Append(types.NewRowid(&blk3_1, uint32(i)), false)
-		rowids.Append(types.NewRowid(&blk3_2, uint32(i)), false)
+		rowids.MustAppendValue(types.NewRowid(&blk1_0, uint32(i)), false)
+		rowids.MustAppendValue(types.NewRowid(&blk1_1, uint32(i)), false)
+		rowids.MustAppendValue(types.NewRowid(&blk2_0, uint32(i)), false)
+		rowids.MustAppendValue(types.NewRowid(&blk3_0, uint32(i)), false)
+		rowids.MustAppendValue(types.NewRowid(&blk3_1, uint32(i)), false)
+		rowids.MustAppendValue(types.NewRowid(&blk3_2, uint32(i)), false)
 	}
 	objectFn := func(in []byte) []byte {
 		return in[:types.ObjectBytesSize]
@@ -245,7 +245,7 @@ func TestHybridBloomFilter(t *testing.T) {
 	// false postive
 	// require.False(t, ok)
 
-	idVec := rowids.GetDownstreamVector()
+	idVec := rowids
 	ids := vector.MustFixedColWithTypeCheck[types.Rowid](idVec)
 	for i := 0; i < len(ids); i++ {
 		id := ids[i]
@@ -264,7 +264,7 @@ func TestHybridBloomFilter(t *testing.T) {
 func TestStaticFilterString(t *testing.T) {
 	typ := types.T_varchar.ToType()
 	data := containers.MockVector2(typ, 40000, 0)
-	defer data.Close()
+	defer containers.ReleaseVector(data)
 	sf, err := NewBloomFilter(data, nil, nil, nil)
 	require.NoError(t, err)
 	var positive *nulls.Nulls
@@ -280,15 +280,15 @@ func TestStaticFilterString(t *testing.T) {
 	require.False(t, res)
 
 	query := containers.MockVector2(typ, 2000, 1000)
-	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query)
+	defer containers.ReleaseVector(query)
+	exist, positive, err = sf.MayContainsAnyKeys(query, bitmapTestMP)
 	require.NoError(t, err)
 	require.Equal(t, 2000, positive.Count())
 	require.True(t, exist)
 
 	query = containers.MockVector2(typ, 20000, 40000)
-	defer query.Close()
-	_, positive, err = sf.MayContainsAnyKeys(query)
+	defer containers.ReleaseVector(query)
+	_, positive, err = sf.MayContainsAnyKeys(query, bitmapTestMP)
 	require.NoError(t, err)
 	fpRate := float32(positive.Count()) / float32(20000)
 	require.True(t, fpRate < float32(0.01))
@@ -298,15 +298,15 @@ func TestStaticFilterString(t *testing.T) {
 	require.NoError(t, err)
 
 	query = containers.MockVector2(typ, 0, 0)
-	defer query.Close()
+	defer containers.ReleaseVector(query)
 	sf1, err := NewBloomFilter(query, nil, nil, nil)
 	require.NoError(t, err)
 	err = sf1.Unmarshal(buf)
 	require.NoError(t, err)
 
 	query = containers.MockVector2(typ, 40000, 0)
-	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query)
+	defer containers.ReleaseVector(query)
+	exist, positive, err = sf.MayContainsAnyKeys(query, bitmapTestMP)
 	require.NoError(t, err)
 	require.Equal(t, 40000, positive.Count())
 	require.True(t, exist)
@@ -328,7 +328,7 @@ func TestBloomFilterBuilderReuse(t *testing.T) {
 		sf, err := NewBloomFilter(data, &hashBuf, &builder, nil)
 		require.NoError(t, err)
 		filters[i] = sf
-		data.Close()
+		containers.ReleaseVector(data)
 	}
 
 	// Each filter must contain its own keys

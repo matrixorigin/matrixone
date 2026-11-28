@@ -131,9 +131,8 @@ func TestQuantileExactWeightedEmptyAndSkippedGroups(t *testing.T) {
 	defer allNullValues.Free(mp)
 	for i := 0; i < 3; i++ {
 		// Untyped int literals would bind vector.AppendFixed's generic
-		// parameter to int; the race build's vector type check rejects the
-		// int cast over float64 storage, and a plain build would write int
-		// bit patterns into the weights. Keep the literals float64.
+		// parameter to int and write int bit patterns into float64 storage.
+		// Keep the literals float64.
 		require.NoError(t, vector.AppendFixed(allNullValues, 0.0, true, mp))
 	}
 	weights := vector.NewVec(types.T_float64.ToType(), mp)

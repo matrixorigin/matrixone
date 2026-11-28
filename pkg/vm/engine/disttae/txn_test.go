@@ -54,7 +54,6 @@ func TestValidateAutoIncrEpochAdvance(t *testing.T) {
 func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 	t.Run("matching production tuple is encoded", func(t *testing.T) {
 		txn := newCatalogCreateTxnForTest(t)
-		defer cleanTxnWritesForTest(txn)
 		addActiveDatabaseCreateForTest(txn, 7, "db", 42, 1)
 		appendCreateDatabaseTupleForTest(t, txn, 7, "db", 42, 7, "db", false)
 
@@ -66,8 +65,9 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 		entry := cmd.EntryList[0]
 		require.Equal(t, uint64(catalog.MO_CATALOG_ID), entry.DatabaseId)
 		require.Equal(t, uint64(catalog.MO_DATABASE_ID), entry.TableId)
-		bat, err := batch.ProtoBatchToBatch(entry.Bat, txn.proc.Mp())
+		bat, err := batch.ViewBinary(entry.Bat.Bytes())
 		require.NoError(t, err)
+		defer bat.Clean(txn.proc.Mp())
 		require.Equal(t, uint64(42), vector.GetFixedAtNoTypeCheck[uint64](bat.Vecs[catalog.MO_DATABASE_DAT_ID_IDX], 0))
 		require.Equal(t, "db", string(bat.Vecs[catalog.MO_DATABASE_DAT_NAME_IDX].GetBytesAt(0)))
 		require.Equal(t, uint32(7), vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[catalog.MO_DATABASE_ACCOUNT_ID_IDX], 0))
@@ -87,7 +87,6 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 	} {
 		t.Run(tc.name+" fails closed", func(t *testing.T) {
 			txn := newCatalogCreateTxnForTest(t)
-			defer cleanTxnWritesForTest(txn)
 			addActiveDatabaseCreateForTest(txn, 7, "db", 42, 1)
 			appendCreateDatabaseTupleForTest(t, txn, tc.tupleAccount, tc.tupleName, tc.tupleID, 7, "db", tc.empty)
 
@@ -114,7 +113,6 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 
 	t.Run("multiple databases are independently certified", func(t *testing.T) {
 		txn := newCatalogCreateTxnForTest(t)
-		defer cleanTxnWritesForTest(txn)
 		addActiveDatabaseCreateForTest(txn, 7, "alpha", 41, 1)
 		addActiveDatabaseCreateForTest(txn, 8, "beta", 42, 1)
 		appendCreateDatabaseTupleForTest(t, txn, 7, "alpha", 41, 7, "alpha", false)
@@ -128,7 +126,6 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 
 	t.Run("superseded create cannot certify recreated database id", func(t *testing.T) {
 		txn := newCatalogCreateTxnForTest(t)
-		defer cleanTxnWritesForTest(txn)
 		addActiveDatabaseCreateForTest(txn, 7, "db", 41, 1)
 		txn.databaseOps.addDeleteDatabase(genDatabaseKey(7, "db"), 2, 41)
 		addActiveDatabaseCreateForTest(txn, 7, "db", 42, 3)
@@ -170,9 +167,58 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 	})
 }
 
+func TestGenWriteReqsRequiresReportedTNShardForWrites(t *testing.T) {
+	t.Run("DML", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		txn.haveDDL.Store(false)
+		attrs := []string{"pk"}
+		bat := newInt64BatchForTest(t, txn.proc, attrs, []int64{1})
+		defer bat.Clean(txn.proc.Mp())
+		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, attrs, catalogCreateTNStoreForTest())
+		require.NoError(t, err)
+
+		reqs, err := genWriteReqs(context.Background(), txn)
+		require.NoError(t, err)
+		require.Len(t, reqs, 1)
+		require.Len(t, decodePrecommitWriteCmdForTest(t, reqs[0]).EntryList, 1)
+
+		txn.writes[0].tnStore.Shards = nil
+		reqs, err = genWriteReqs(context.Background(), txn)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable), "%v", err)
+		require.Empty(t, reqs)
+		require.ErrorContains(t, err, "TN tn-test has no reported shard")
+
+		txn.writes[0].bat.SetRowCount(0)
+		reqs, err = genWriteReqs(context.Background(), txn)
+		require.NoError(t, err)
+		require.Empty(t, reqs)
+	})
+
+	t.Run("DDL", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		addActiveDatabaseCreateForTest(txn, 7, "db", 42, 1)
+		appendCreateDatabaseTupleForTest(t, txn, 7, "db", 42, 7, "db", false)
+		txn.writes[0].tnStore.Shards = nil
+
+		reqs, err := genWriteReqs(context.Background(), txn)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable), "%v", err)
+		require.Empty(t, reqs)
+	})
+
+	t.Run("no writes", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		reqs, err := genWriteReqs(context.Background(), txn)
+		require.NoError(t, err)
+		require.Empty(t, reqs)
+	})
+}
+
 func newCatalogCreateTxnForTest(t *testing.T) *Transaction {
 	t.Helper()
 	proc := testutil.NewProc(t)
+	beforeOffHeap, beforeOnHeap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
 	txn := &Transaction{
 		proc:            proc,
 		databaseOps:     newDbOps(),
@@ -181,6 +227,12 @@ func newCatalogCreateTxnForTest(t *testing.T) *Transaction {
 	}
 	txn.op = newTxnOperatorForTestWithWorkspace(t, txn)
 	txn.haveDDL.Store(true)
+	t.Cleanup(func() {
+		cleanTxnWritesForTest(txn)
+		txn.closeWorkspaceAllocation()
+		require.Equal(t, beforeOffHeap, proc.Mp().CurrNB(), "release transaction fixture's off-heap allocations")
+		require.Equal(t, beforeOnHeap, proc.Mp().OnHeapCurrNB(), "release transaction fixture's on-heap allocations")
+	})
 	return txn
 }
 
@@ -210,10 +262,11 @@ func appendCreateDatabaseTupleForTest(t *testing.T, txn *Transaction, tupleAccou
 		"create database "+tupleName, tupleAccountID, 1, 1, tupleName, tupleDatabaseID, "", txn.proc.Mp(), packer,
 	)
 	require.NoError(t, err)
+	defer bat.Clean(txn.proc.Mp())
 	_, err = txn.WriteBatch(
 		INSERT, noteForCreate(uint64(noteAccountID), noteName), catalog.System_Account,
 		catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, catalog.MO_CATALOG, catalog.MO_DATABASE,
-		bat, catalogCreateTNStoreForTest(),
+		bat, catalog.MoDatabaseSchema, catalogCreateTNStoreForTest(),
 	)
 	require.NoError(t, err)
 	if empty {
@@ -230,6 +283,8 @@ func decodePrecommitWriteCmdForTest(t *testing.T, req txnpb.TxnRequest) *api.Pre
 }
 
 func cleanTxnWritesForTest(txn *Transaction) {
+	// The commit's terminal hook would give the payload buffer back.
+	txn.releaseCommitPayload()
 	for i := range txn.writes {
 		if txn.writes[i].bat != nil {
 			txn.writes[i].bat.Clean(txn.workspaceMP())
@@ -319,6 +374,7 @@ func TestPrecommitEntryCarriesAutoIncrEpoch(t *testing.T) {
 				bat:                bat,
 				autoIncrEpoch:      tc.version,
 				autoIncrEpochKnown: tc.known,
+				attrs:              []string{objectio.PhysicalAddr_Attr, "pk"},
 			})
 			require.NoError(t, err)
 
@@ -384,7 +440,7 @@ func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
 		txn := newTxn(t)
 		_, err := txn.writeBatchWithAutoIncrEpochKnown(
 			context.Background(),
-			INSERT, "", 1, 2, 3, "db", "tbl", nil, DNStore{}, 1, true,
+			INSERT, "", 1, 2, 3, "db", "tbl", nil, nil, DNStore{}, 1, true,
 		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
 		require.Empty(t, txn.writes)
@@ -394,7 +450,7 @@ func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
 	t.Run("file", func(t *testing.T) {
 		txn := newTxn(t)
 		err := txn.writeFileLockedWithAutoIncrEpochKnown(
-			INSERT, 1, 2, 3, "db", "tbl", "file", nil, DNStore{}, 1, true,
+			INSERT, 1, 2, 3, "db", "tbl", "file", nil, catalog.ObjectInsertAttrs, DNStore{}, 1, true,
 		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
 		require.Empty(t, txn.writes)
@@ -405,7 +461,7 @@ func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
 	t.Run("skip transfer file", func(t *testing.T) {
 		txn := newTxn(t)
 		err := txn.writeFileLockedSkipTransferWithAutoIncrEpochKnown(
-			INSERT, 1, 2, 3, "db", "tbl", "file", nil, DNStore{}, 1, true,
+			INSERT, 1, 2, 3, "db", "tbl", "file", nil, catalog.ObjectInsertAttrs, DNStore{}, 1, true,
 		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
 		require.Empty(t, txn.writes)
@@ -428,15 +484,14 @@ func TestWorkspaceFlushedTombstoneOwnership(t *testing.T) {
 	rowID := types.RandomRowid()
 	stats := objectio.NewObjectStatsWithObjectID(rowID.BorrowObjectID(), false, false, true)
 	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
 	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType(), mp)
 	defer bat.Clean(mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats[:], false, mp))
 	bat.SetRowCount(1)
 
 	var txn Transaction
-	a := Entry{typ: DELETE, tableId: 1, fileName: "tombstone", bat: bat}
-	b := Entry{typ: DELETE, tableId: 2, fileName: "tombstone", bat: bat}
+	a := Entry{typ: DELETE, tableId: 1, fileName: "tombstone", bat: bat, attrs: catalog.ObjectDeleteAttrs}
+	b := Entry{typ: DELETE, tableId: 2, fileName: "tombstone", bat: bat, attrs: catalog.ObjectDeleteAttrs}
 	duplicate := a
 	txn.accountWorkspaceEntryLocked(&a)
 	txn.accountWorkspaceEntryLocked(&duplicate)
@@ -556,8 +611,9 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 	t.Run("insert without engine falls back", func(t *testing.T) {
 		txn := &Transaction{proc: proc, op: op}
 		bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2})
+		batAttrs := []string{"pk"}
 
-		_, err := txn.WriteBatch(INSERT, "", 0, 1, 42, "db", "tbl", bat, DNStore{})
+		_, err := txn.WriteBatch(INSERT, "", 0, 1, 42, "db", "tbl", bat, batAttrs, DNStore{})
 		require.NoError(t, err)
 		require.Len(t, txn.writes, 1)
 		require.False(t, txn.writes[0].pkCheckReady)
@@ -570,8 +626,9 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 	t.Run("delete without engine falls back", func(t *testing.T) {
 		txn := &Transaction{proc: proc, op: op}
 		bat := newDeleteBatchForTest(t, proc, []int64{1})
+		batAttrs := []string{objectio.PhysicalAddr_Attr, "pk"}
 
-		_, err := txn.WriteBatch(DELETE, "", 0, 1, 42, "db", "tbl", bat, DNStore{})
+		_, err := txn.WriteBatch(DELETE, "", 0, 1, 42, "db", "tbl", bat, batAttrs, DNStore{})
 		require.NoError(t, err)
 		require.Len(t, txn.writes, 1)
 		require.False(t, txn.writes[0].pkCheckReady)
@@ -583,8 +640,9 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 	t.Run("insert with active pk table resolves position", func(t *testing.T) {
 		txn := newTransactionWithActivePKTableForTest(t, "pk")
 		bat := newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1, 2})
+		batAttrs := []string{"pk"}
 
-		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{})
+		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, batAttrs, DNStore{})
 		require.NoError(t, err)
 		require.Len(t, txn.writes, 1)
 		require.True(t, txn.writes[0].pkCheckReady)
@@ -596,8 +654,9 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 	t.Run("user write records planned AUTO_INCREMENT epoch", func(t *testing.T) {
 		txn := newTransactionWithActivePKTableForTest(t, "pk")
 		bat := newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1})
+		batAttrs := []string{"pk"}
 
-		_, err := txn.writeBatchWithAutoIncrEpoch(context.Background(), INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{}, 7)
+		_, err := txn.writeBatchWithAutoIncrEpoch(context.Background(), INSERT, "", 1, 7, 42, "db", "tbl", bat, batAttrs, DNStore{}, 7)
 		require.NoError(t, err)
 		require.Len(t, txn.writes, 1)
 		require.Equal(t, uint32(7), txn.writes[0].autoIncrEpoch)
@@ -609,8 +668,9 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 	t.Run("missing pk attr keeps legacy fallback", func(t *testing.T) {
 		txn := newTransactionWithActivePKTableForTest(t, "pk")
 		bat := newInt64BatchForTest(t, txn.proc, []string{"other"}, []int64{1, 2})
+		batAttrs := []string{"other"}
 
-		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{})
+		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, batAttrs, DNStore{})
 		require.NoError(t, err)
 		require.Len(t, txn.writes, 1)
 		require.False(t, txn.writes[0].pkCheckReady)
@@ -636,6 +696,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 					bat:          newInt64BatchForTest(t, testutil.NewProc(t), []string{"pk"}, []int64{1, 1}),
 					pkCheckPos:   0,
 					pkCheckReady: true,
+					attrs:        []string{"pk"},
 				},
 			},
 		}
@@ -661,6 +722,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 					bat:          newDeleteBatchForTest(t, proc, []int64{3, 3}),
 					pkCheckPos:   1,
 					pkCheckReady: true,
+					attrs:        []string{objectio.PhysicalAddr_Attr, "pk"},
 				},
 			},
 		}
@@ -686,6 +748,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 					bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2}),
 					pkCheckPos:   -1,
 					pkCheckReady: true,
+					attrs:        []string{"pk"},
 				},
 				{
 					typ:          DELETE,
@@ -696,6 +759,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 					bat:          newDeleteBatchForTest(t, proc, []int64{4, 5}),
 					pkCheckPos:   1,
 					pkCheckReady: true,
+					attrs:        []string{objectio.PhysicalAddr_Attr, "pk"},
 				},
 			},
 		}
@@ -716,6 +780,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 				bat:          newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{9, 9}),
 				pkCheckPos:   3,
 				pkCheckReady: true,
+				attrs:        []string{"pk"},
 			},
 		}
 
@@ -736,6 +801,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 				databaseName: "db",
 				bat:          newInsertBatchWithRowIDForTest(t, txn.proc, []int64{8, 8}),
 				pkCheckReady: false,
+				attrs:        []string{objectio.PhysicalAddr_Attr, "pk"},
 			},
 		}
 
@@ -756,6 +822,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 				databaseName: "db",
 				bat:          newDeleteBatchForTest(t, txn.proc, []int64{6, 6}),
 				pkCheckReady: false,
+				attrs:        []string{objectio.PhysicalAddr_Attr, "pk"},
 			},
 		}
 
@@ -776,6 +843,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 				databaseName: "db",
 				bat:          newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1}),
 				pkCheckReady: false,
+				attrs:        []string{"pk"},
 			},
 		}
 
@@ -855,11 +923,12 @@ func TestTxnTableWriteTnPartitionHonorsCanceledContext(t *testing.T) {
 	require.NotNil(t, tbl)
 	tbl.extraInfo = &api.SchemaExtra{}
 	bat := newDeleteBatchForTest(t, txn.proc, []int64{1})
+	batAttrs := []string{objectio.PhysicalAddr_Attr, "pk"}
 	defer bat.Clean(txn.proc.Mp())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := tbl.writeTnPartition(ctx, bat)
+	err := tbl.writeTnPartition(ctx, bat, batAttrs)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, txn.writes)
 }
@@ -872,11 +941,12 @@ func TestTxnTableDeleteHonorsCanceledContext(t *testing.T) {
 	require.NotNil(t, tbl)
 	tbl.extraInfo = &api.SchemaExtra{}
 	bat := newDeleteBatchForTest(t, txn.proc, []int64{1})
+	batAttrs := []string{objectio.PhysicalAddr_Attr, "pk"}
 	defer bat.Clean(txn.proc.Mp())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := tbl.Delete(ctx, bat, "")
+	err := tbl.Delete(ctx, bat, batAttrs, "")
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, txn.writes)
 }
@@ -884,25 +954,26 @@ func TestTxnTableDeleteHonorsCanceledContext(t *testing.T) {
 func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
 	txn := &Transaction{}
 
-	pos, ready, err := txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", 1, nil)
+	pos, ready, err := txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", 1, nil, nil)
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, -1, pos)
 
 	proc := testutil.NewProc(t)
 	bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1})
+	batAttrs := []string{"pk"}
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), ALTER, 0, "db", "tbl", 1, bat)
+	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), ALTER, 0, "db", "tbl", 1, bat, batAttrs)
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, -1, pos)
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", catalog.MO_TABLES_ID, bat)
+	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", catalog.MO_TABLES_ID, bat, batAttrs)
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, -1, pos)
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", 42, bat)
+	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", 42, bat, batAttrs)
 	require.NoError(t, err)
 	require.False(t, ready)
 	require.Equal(t, -1, pos)
@@ -945,6 +1016,7 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 			tableName:    "t",
 			databaseName: "db",
 			bat:          newInsertBatchWithRowIDForTest(t, proc, []int64{int64(i)}),
+			attrs:        []string{objectio.PhysicalAddr_Attr, "pk"},
 		})
 	}
 
@@ -956,6 +1028,7 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 		databaseName: catalog.MO_CATALOG,
 		note:         noteForCreate(criticalTableID, "critical"),
 		bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1}),
+		attrs:        []string{"pk"},
 	})
 	appendWorkspaceEntryForTest(t, txn, Entry{
 		typ:          INSERT,
@@ -964,6 +1037,7 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 		tableName:    "critical",
 		databaseName: "db",
 		bat:          newInsertBatchWithRowIDForTest(t, proc, []int64{100}),
+		attrs:        []string{objectio.PhysicalAddr_Attr, "pk"},
 	})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
@@ -985,6 +1059,7 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 func TestMergeTxnWorkspaceDeduplicatesDeleteSelections(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{10, 20, 30, 40})
+	batAttrs := []string{objectio.PhysicalAddr_Attr, "pk"}
 	txn := &Transaction{
 		proc:            proc,
 		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
@@ -995,6 +1070,7 @@ func TestMergeTxnWorkspaceDeduplicatesDeleteSelections(t *testing.T) {
 		tableId:    42,
 		databaseId: 7,
 		bat:        bat,
+		attrs:      batAttrs,
 	})
 	defer txn.releaseWorkspaceEntryBatchLocked(0)
 
@@ -1031,9 +1107,9 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 	committed := newInsertBatchWithRowIDForTest(t, proc, []int64{1, 2})
 	rolledBack := newInsertBatchWithRowIDForTest(t, proc, []int64{3, 4, 5})
 	rolledBackDelete := newDeleteBatchForTest(t, proc, []int64{1, 2})
-	appendWorkspaceEntryForTest(t, txn, Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: committed})
-	appendWorkspaceEntryForTest(t, txn, Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: rolledBack})
-	appendWorkspaceEntryForTest(t, txn, Entry{typ: DELETE, databaseId: 7, tableId: 42, bat: rolledBackDelete})
+	appendWorkspaceEntryForTest(t, txn, Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: committed, attrs: []string{objectio.PhysicalAddr_Attr, "pk"}})
+	appendWorkspaceEntryForTest(t, txn, Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: rolledBack, attrs: []string{objectio.PhysicalAddr_Attr, "pk"}})
+	appendWorkspaceEntryForTest(t, txn, Entry{typ: DELETE, databaseId: 7, tableId: 42, bat: rolledBackDelete, attrs: []string{objectio.PhysicalAddr_Attr, "pk"}})
 	txn.statementID = 1
 	txn.offsets = []int{1}
 	require.True(t, txn.IsTableDeletedAtTxnClose(42))
@@ -1062,7 +1138,7 @@ func TestIssue25589MergeTxnWorkspaceRestoresAccountingForTablesInVain(t *testing
 		batchSelectList: make(map[*batch.Batch][]int64),
 		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 	}
-	appendWorkspaceEntryForTest(t, txn, Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
+	appendWorkspaceEntryForTest(t, txn, Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat, attrs: []string{objectio.PhysicalAddr_Attr, "pk"}})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
 	require.Nil(t, txn.writes[0].bat)
@@ -1081,7 +1157,7 @@ func TestIssue25589MergeTxnWorkspaceRestoresAccountingAfterShrink(t *testing.T) 
 		batchSelectList: map[*batch.Batch][]int64{bat: {1, 3}},
 		deletedBlocks:   &deletedBlocks{offsets: make(map[uint64]map[types.Blockid][]int64)},
 	}
-	appendWorkspaceEntryForTest(t, txn, Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
+	appendWorkspaceEntryForTest(t, txn, Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat, attrs: []string{objectio.PhysicalAddr_Attr, "pk"}})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
 	require.Equal(t, 2, bat.RowCount())
@@ -1109,6 +1185,7 @@ func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *t
 			databaseId: 7,
 			tableId:    42,
 			bat:        newInsertBatchWithRowIDForTest(t, proc, []int64{int64(i)}),
+			attrs:      []string{objectio.PhysicalAddr_Attr, "pk"},
 		})
 	}
 
@@ -1147,6 +1224,7 @@ func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 		databaseName: "db",
 		tableName:    "tbl",
 		bat:          newInsertBatchWithRowIDForTest(t, txn.proc, []int64{1, 2, 3}),
+		attrs:        []string{objectio.PhysicalAddr_Attr, "pk"},
 	})
 
 	fs, err := colexec.GetSharedFSFromProc(txn.proc)
@@ -1216,6 +1294,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		"tbl",
 		42,
 		newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1}),
+		[]string{"pk"},
 	)
 	require.NoError(t, err)
 	require.True(t, ready)
@@ -1229,6 +1308,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		"tbl",
 		42,
 		newInt64BatchForTest(t, txn.proc, []string{"PK"}, []int64{1}),
+		[]string{"PK"},
 	)
 	require.NoError(t, err)
 	require.True(t, ready)
@@ -1242,6 +1322,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		"tbl",
 		42,
 		newDeleteBatchForTest(t, txn.proc, []int64{1}),
+		[]string{objectio.PhysicalAddr_Attr, "pk"},
 	)
 	require.NoError(t, err)
 	require.True(t, ready)
@@ -1255,6 +1336,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 		"tbl",
 		42,
 		newInt64BatchForTest(t, txn.proc, []string{"other"}, []int64{1}),
+		[]string{"other"},
 	)
 	require.NoError(t, err)
 	require.False(t, ready)
@@ -1265,8 +1347,9 @@ func TestWriteFileLockedMarksPKCheckReady(t *testing.T) {
 	proc := testutil.NewProc(t)
 	txn := &Transaction{proc: proc}
 	bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1})
+	batAttrs := []string{"pk"}
 
-	err := txn.WriteFileLocked(ALTER, 0, 1, 2, "db", "tbl", "file", bat, DNStore{})
+	err := txn.WriteFileLocked(ALTER, 0, 1, 2, "db", "tbl", "file", bat, batAttrs, DNStore{})
 	require.NoError(t, err)
 	require.Len(t, txn.writes, 1)
 	require.True(t, txn.writes[0].pkCheckReady)
@@ -1888,7 +1971,6 @@ func newInt64BatchForTest(
 ) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(len(cols))
-	bat.SetAttributes(attrs)
 	for i, vals := range cols {
 		vec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(vec, vals, nil, proc.Mp()))
@@ -1910,7 +1992,6 @@ func newDeleteBatchForTest(
 	}
 
 	bat := batch.NewWithSize(2)
-	bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
 
 	rowidVec := vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(rowidVec, rowids, nil, proc.Mp()))
@@ -1936,7 +2017,6 @@ func newInsertBatchWithRowIDForTest(
 	}
 
 	bat := batch.NewWithSize(2)
-	bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
 
 	rowidVec := vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(rowidVec, rowids, nil, proc.Mp()))
@@ -2217,6 +2297,7 @@ func newDumpableTxnForTest(t *testing.T) *Transaction {
 				tableName:    "tbl",
 				databaseName: "db",
 				bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2}),
+				attrs:        []string{"pk"},
 			},
 		},
 	}
@@ -2334,6 +2415,7 @@ func TestIssue25557_DumpDeleteBatchReentrantGetTableDoesNotDeadlock(t *testing.T
 				tableName:    "tbl",
 				databaseName: "db",
 				bat:          newDeleteBatchForTest(t, proc, []int64{1, 2}),
+				attrs:        []string{objectio.PhysicalAddr_Attr, "pk"},
 			},
 		},
 	}

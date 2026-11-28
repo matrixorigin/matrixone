@@ -110,7 +110,7 @@ func (data *dedupConflictObjectData) GetDuplicatedRows(
 	rowIDs containers.Vector,
 	_ *mpool.MPool,
 ) error {
-	rowIDs.Update(0, data.rowID, false)
+	containers.UpdateValue(rowIDs, uint32(0), data.rowID, false, rowIDs.MPool())
 	return moerr.NewTxnWWConflictNoCtx(0, "")
 }
 
@@ -150,8 +150,8 @@ func TestIncrementalGetRowsByPKReleasesResultOnError(t *testing.T) {
 		},
 	})
 	pks := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
-	defer pks.Close()
-	pks.Append(int64(1), false)
+	defer containers.ReleaseVector(pks)
+	pks.MustAppendValue(int64(1), false)
 
 	rowIDs, err := table.incrementalGetRowsByPK(
 		context.Background(),
@@ -161,7 +161,7 @@ func TestIncrementalGetRowsByPKReleasesResultOnError(t *testing.T) {
 		dedupMetricPrePrepare,
 	)
 	if rowIDs != nil {
-		defer rowIDs.Close()
+		defer containers.ReleaseVector(rowIDs)
 	}
 	require.ErrorIs(t, err, dedupErr)
 	require.Nil(t, rowIDs)
@@ -184,9 +184,17 @@ func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
 		},
 	}
 
+	const capacity = 1 << 20
+	candidatePool, err := mpool.NewMPool(t.Name(), capacity, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(candidatePool)
 	candidates, err := newDuplicatedRowIDs(pool, 1)
 	require.NoError(t, err)
 	defer candidates.Close()
+	// The combined vector can record the delete. Publishing it to the
+	// original candidate requires a separate allocation.
+	containers.ReleaseVector(candidates.appendable)
+	candidates.appendable = containers.MakeVector(objectio.RowidType, candidatePool)
 	appendableObjectID := objectio.NewObjectid()
 	appendableID := types.NewRowIDWithObjectIDBlkNumAndRowID(appendableObjectID, 0, 0)
 	nonAppendableObjectID := objectio.NewObjectid()
@@ -203,7 +211,7 @@ func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
 		func(*catalog.ObjectEntry) data.Object {
 			return &containsObjectData{
 				contains: func(keys containers.Vector) error {
-					containers.UpdateValue(keys.GetDownstreamVector(), 0, nil, true, common.WorkspaceAllocator)
+					containers.UpdateValue(keys, 0, nil, true, common.WorkspaceAllocator)
 					return nil
 				},
 			}
@@ -228,15 +236,164 @@ func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
 	entry.AddEntryLocked(first)
 	entry.AddEntryLocked(second)
 
+	t.Run("copyback allocation error takes precedence over conflict", func(t *testing.T) {
+		filler, err := candidatePool.Alloc(capacity-int(candidatePool.CurrNB()), true)
+		require.NoError(t, err)
+		defer candidatePool.Free(filler)
+		err = tbl.findDeletesForCandidates(t.Context(), candidates, types.TS{}, types.MaxTs(), dedupMetricLookup)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "%v", err)
+		require.False(t, candidates.appendable.IsNull(0))
+	})
+
 	err = tbl.findDeletesForCandidates(context.Background(), candidates, types.TS{}, types.MaxTs(), dedupMetricLookup)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
-	require.True(t, candidates.appendable.IsNull(candidates.appendableByKey[0][0]))
-	require.False(t, candidates.nonAppendable.IsNull(candidates.nonAppendableByKey[0][0]))
+	require.True(t, candidates.appendable.IsNull(uint64(candidates.appendableByKey[0][0])))
+	require.False(t, candidates.nonAppendable.IsNull(uint64(candidates.nonAppendableByKey[0][0])))
 
-	merged := candidates.Merge(pool)
-	defer merged.Close()
+	merged, err := candidates.Merge(pool)
+	require.NoError(t, err)
+	defer containers.ReleaseVector(merged)
 	require.False(t, merged.IsNull(0))
-	require.Equal(t, nonAppendableID, vector.GetFixedAtNoTypeCheck[types.Rowid](merged.GetDownstreamVector(), 0))
+	require.Equal(t, nonAppendableID, vector.GetFixedAtNoTypeCheck[types.Rowid](merged, 0))
+}
+
+func TestFindDeletesForCandidatesDoesNotPublishPartialFilteringOnError(t *testing.T) {
+	schema := catalog.MockSchemaAll(3, 2)
+	entry := catalog.MockStaloneTableEntry(1, schema)
+	pool := containers.NewVectorPool(t.Name(), 8)
+	defer pool.Destory()
+	txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(100, 0))
+	tbl := &txnTable{
+		entry: entry,
+		store: &txnStore{
+			txn: txn,
+			rt:  dbutils.NewRuntime(dbutils.WithRuntimeSmallPool(pool)),
+		},
+	}
+	candidates, err := newDuplicatedRowIDs(pool, 1)
+	require.NoError(t, err)
+	defer candidates.Close()
+	firstObjectID := objectio.NewObjectid()
+	firstID := types.NewRowIDWithObjectIDBlkNumAndRowID(firstObjectID, 0, 0)
+	secondObjectID := objectio.NewObjectid()
+	secondID := types.NewRowIDWithObjectIDBlkNumAndRowID(secondObjectID, 0, 0)
+	candidates.add(true, 0, firstID)
+	candidates.add(false, 0, secondID)
+
+	firstStats := objectio.NewObjectStatsWithObjectID(&firstObjectID, false, false, false)
+	first := catalog.MockObjectEntry(
+		entry,
+		firstStats,
+		true,
+		func(*catalog.ObjectEntry) data.Object {
+			return &containsObjectData{
+				contains: func(keys containers.Vector) error {
+					return containers.MarkNull(keys, 0)
+				},
+			}
+		},
+		types.BuildTS(1, 0),
+	)
+	secondStats := objectio.NewObjectStatsWithObjectID(&secondObjectID, false, false, false)
+	second := catalog.MockObjectEntry(
+		entry,
+		secondStats,
+		true,
+		func(*catalog.ObjectEntry) data.Object {
+			return &containsObjectData{
+				contains: func(containers.Vector) error {
+					return moerr.NewMPoolCapacityNoCtxf("test capacity")
+				},
+			}
+		},
+		types.BuildTS(2, 0),
+	)
+	entry.AddEntryLocked(first)
+	entry.AddEntryLocked(second)
+
+	err = tbl.findDeletesForCandidates(context.Background(), candidates, types.TS{}, types.MaxTs(), dedupMetricLookup)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), err)
+	require.False(t, candidates.appendable.IsNull(uint64(candidates.appendableByKey[0][0])))
+	require.False(t, candidates.nonAppendable.IsNull(uint64(candidates.nonAppendableByKey[0][0])))
+}
+
+func TestFindDeletesForCandidatesReturnsCopyBackCapacityError(t *testing.T) {
+	const capacity = 1 << 20
+	mp, err := mpool.NewMPool(t.Name(), capacity, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	schema := catalog.MockSchemaAll(3, 2)
+	entry := catalog.MockStaloneTableEntry(1, schema)
+	pool := containers.NewVectorPool(t.Name(), 1, containers.WithMPool(mp))
+	defer pool.Destory()
+	txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(100, 0))
+	tbl := &txnTable{
+		entry: entry,
+		store: &txnStore{
+			txn: txn,
+			rt:  dbutils.NewRuntime(dbutils.WithRuntimeSmallPool(pool)),
+		},
+	}
+	candidates, err := newDuplicatedRowIDs(pool, 1)
+	require.NoError(t, err)
+	defer candidates.Close()
+	appendableObjectID := objectio.NewObjectid()
+	appendableID := types.NewRowIDWithObjectIDBlkNumAndRowID(appendableObjectID, 0, 0)
+	nonAppendableObjectID := objectio.NewObjectid()
+	nonAppendableID := types.NewRowIDWithObjectIDBlkNumAndRowID(nonAppendableObjectID, 0, 0)
+	candidates.add(true, 0, appendableID)
+	candidates.add(false, 0, nonAppendableID)
+
+	var filler []byte
+	defer func() {
+		if filler != nil {
+			mp.Free(filler)
+		}
+	}()
+	firstStats := objectio.NewObjectStatsWithObjectID(&appendableObjectID, false, false, false)
+	first := catalog.MockObjectEntry(
+		entry,
+		firstStats,
+		true,
+		func(*catalog.ObjectEntry) data.Object {
+			return &containsObjectData{
+				contains: func(keys containers.Vector) error {
+					if err := containers.MarkNull(keys, 0); err != nil {
+						return err
+					}
+					var err error
+					filler, err = mp.Alloc(capacity-int(mp.CurrNB()), true)
+					return err
+				},
+			}
+		},
+		types.BuildTS(1, 0),
+	)
+	secondStats := objectio.NewObjectStatsWithObjectID(&nonAppendableObjectID, false, false, false)
+	second := catalog.MockObjectEntry(
+		entry,
+		secondStats,
+		true,
+		func(*catalog.ObjectEntry) data.Object {
+			return &containsObjectData{
+				contains: func(containers.Vector) error {
+					return moerr.NewTxnWWConflictNoCtx(0, "")
+				},
+			}
+		},
+		types.BuildTS(2, 0),
+	)
+	entry.AddEntryLocked(first)
+	entry.AddEntryLocked(second)
+
+	err = tbl.findDeletesForCandidates(context.Background(), candidates, types.TS{}, types.MaxTs(), dedupMetricLookup)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), err)
+	require.False(t, candidates.appendable.IsNull(uint64(candidates.appendableByKey[0][0])))
+	require.False(t, candidates.nonAppendable.IsNull(uint64(candidates.nonAppendableByKey[0][0])))
+	require.NotNil(t, filler)
+	mp.Free(filler)
+	filler = nil
 }
 
 func TestDedupSnapByPKClosesCandidatesOnWWConflict(t *testing.T) {
@@ -271,8 +428,8 @@ func TestDedupSnapByPKClosesCandidatesOnWWConflict(t *testing.T) {
 	entry.AddEntryLocked(object)
 
 	keys := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
-	defer keys.Close()
-	keys.Append(int64(1), false)
+	defer containers.ReleaseVector(keys)
+	keys.MustAppendValue(int64(1), false)
 
 	err := tbl.DedupSnapByPK(context.Background(), keys, false)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
@@ -706,7 +863,7 @@ func TestConcurrentFreezeAppendReservations(t *testing.T) {
 	require.NoError(t, err)
 	pkIdx := schema.GetSingleSortKeyIdx()
 	for row := 0; row < allRows.Length(); row++ {
-		pk := allRows.Vecs[pkIdx].Get(row)
+		pk := allRows.Vecs[pkIdx].GetValue(row)
 		value, isNull, err := readRel.GetValueByFilter(ctx, handle.NewEQFilter(pk), pkIdx)
 		require.NoError(t, err)
 		require.False(t, isNull)
@@ -840,7 +997,8 @@ func TestIndex(t *testing.T) {
 	err = idx.BatchInsert(bat.Attrs[1], bat.Vecs[1], 0, bat.Vecs[1].Length(), 0, false)
 	assert.Nil(t, err)
 
-	window := bat.Vecs[1].Window(20, 2)
+	window, err := bat.Vecs[1].Window(20, 22)
+	require.NoError(t, err)
 	assert.Equal(t, 2, window.Length())
 	err = idx.BatchDedup(bat.Attrs[1], window)
 	assert.NotNil(t, err)
@@ -854,7 +1012,8 @@ func TestIndex(t *testing.T) {
 	err = idx.BatchInsert(bat.Attrs[12], bat.Vecs[12], 0, bat.Vecs[12].Length(), 0, false)
 	assert.Nil(t, err)
 
-	window = bat.Vecs[12].Window(20, 2)
+	window, err = bat.Vecs[12].Window(20, 22)
+	require.NoError(t, err)
 	assert.Equal(t, 2, window.Length())
 	err = idx.BatchDedup(bat.Attrs[12], window)
 	assert.Error(t, err)
@@ -869,7 +1028,8 @@ func TestIndex(t *testing.T) {
 	err = idx.BatchInsert(bat.Attrs[19], bat.Vecs[19], 0, bat.Vecs[19].Length(), 0, false)
 	assert.Nil(t, err)
 
-	window = bat.Vecs[19].Window(20, 2)
+	window, err = bat.Vecs[19].Window(20, 22)
+	require.NoError(t, err)
 	assert.Equal(t, 2, window.Length())
 	err = idx.BatchDedup(bat.Attrs[19], window)
 	assert.Error(t, err)
@@ -909,9 +1069,9 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 	t.Run("string batch insert dedup input", func(t *testing.T) {
 		idx := NewSimpleTableIndex()
 		vec := makeWorkspaceVector(types.T_varchar.ToType())
-		defer vec.Close()
-		vec.Append([]byte("dup"), false)
-		vec.Append([]byte("dup"), false)
+		defer containers.ReleaseVector(vec)
+		vec.MustAppendValue([]byte("dup"), false)
+		vec.MustAppendValue([]byte("dup"), false)
 
 		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, true)
 		assert.Error(t, err)
@@ -922,8 +1082,8 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		idx := NewSimpleTableIndex()
 		idx.tree["dup"] = 1
 		vec := makeWorkspaceVector(types.T_varchar.ToType())
-		defer vec.Close()
-		vec.Append([]byte("dup"), false)
+		defer containers.ReleaseVector(vec)
+		vec.MustAppendValue([]byte("dup"), false)
 
 		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, false)
 		assert.Error(t, err)
@@ -934,8 +1094,8 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		idx := NewSimpleTableIndex()
 		idx.tree["dup"] = 1
 		vec := makeWorkspaceVector(types.T_varchar.ToType())
-		defer vec.Close()
-		vec.Append([]byte("dup"), false)
+		defer containers.ReleaseVector(vec)
+		vec.MustAppendValue([]byte("dup"), false)
 
 		err := idx.BatchDedup("pk", vec)
 		assert.Error(t, err)
@@ -945,10 +1105,10 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 	t.Run("array32 batch insert dedup input", func(t *testing.T) {
 		idx := NewSimpleTableIndex()
 		vec := makeWorkspaceVector(types.T_array_float32.ToType())
-		defer vec.Close()
+		defer containers.ReleaseVector(vec)
 		val := types.ArrayToBytes([]float32{1, 2})
-		vec.Append(val, false)
-		vec.Append(val, false)
+		vec.MustAppendValue(val, false)
+		vec.MustAppendValue(val, false)
 
 		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, true)
 		assert.Error(t, err)
@@ -960,8 +1120,8 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		key := types.ArrayToString([]float32{1, 2})
 		idx.tree[key] = 1
 		vec := makeWorkspaceVector(types.T_array_float32.ToType())
-		defer vec.Close()
-		vec.Append(types.ArrayToBytes([]float32{1, 2}), false)
+		defer containers.ReleaseVector(vec)
+		vec.MustAppendValue(types.ArrayToBytes([]float32{1, 2}), false)
 
 		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, false)
 		assert.Error(t, err)
@@ -973,8 +1133,8 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		key := types.ArrayToString([]float32{1, 2})
 		idx.tree[key] = 1
 		vec := makeWorkspaceVector(types.T_array_float32.ToType())
-		defer vec.Close()
-		vec.Append(types.ArrayToBytes([]float32{1, 2}), false)
+		defer containers.ReleaseVector(vec)
+		vec.MustAppendValue(types.ArrayToBytes([]float32{1, 2}), false)
 
 		err := idx.BatchDedup("pk", vec)
 		assert.Error(t, err)
@@ -984,10 +1144,10 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 	t.Run("array64 batch insert dedup input", func(t *testing.T) {
 		idx := NewSimpleTableIndex()
 		vec := makeWorkspaceVector(types.T_array_float64.ToType())
-		defer vec.Close()
+		defer containers.ReleaseVector(vec)
 		val := types.ArrayToBytes([]float64{1, 2})
-		vec.Append(val, false)
-		vec.Append(val, false)
+		vec.MustAppendValue(val, false)
+		vec.MustAppendValue(val, false)
 
 		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, true)
 		assert.Error(t, err)
@@ -999,8 +1159,8 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		key := types.ArrayToString([]float64{1, 2})
 		idx.tree[key] = 1
 		vec := makeWorkspaceVector(types.T_array_float64.ToType())
-		defer vec.Close()
-		vec.Append(types.ArrayToBytes([]float64{1, 2}), false)
+		defer containers.ReleaseVector(vec)
+		vec.MustAppendValue(types.ArrayToBytes([]float64{1, 2}), false)
 
 		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, false)
 		assert.Error(t, err)
@@ -1012,8 +1172,8 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 		key := types.ArrayToString([]float64{1, 2})
 		idx.tree[key] = 1
 		vec := makeWorkspaceVector(types.T_array_float64.ToType())
-		defer vec.Close()
-		vec.Append(types.ArrayToBytes([]float64{1, 2}), false)
+		defer containers.ReleaseVector(vec)
+		vec.MustAppendValue(types.ArrayToBytes([]float64{1, 2}), false)
 
 		err := idx.BatchDedup("pk", vec)
 		assert.Error(t, err)
@@ -1834,12 +1994,12 @@ func TestPrePrepareDedupRangeCoverage(t *testing.T) {
 				bat := containers.BuildBatch(base.schema.Attrs(), base.schema.Types(), containers.Options{Allocator: common.DefaultAllocator})
 				defer bat.Close()
 				for _, vec := range bat.Vecs {
-					vec.Append(nil, true)
+					vec.MustAppendValue(nil, true)
 				}
 				if isTombstone {
-					bat.Vecs[0].Update(0, types.Rowid{}, false)
+					containers.UpdateValue(bat.Vecs[0], uint32(0), types.Rowid{}, false, bat.Vecs[0].MPool())
 				} else {
-					bat.Vecs[0].Update(0, int64(1), false)
+					containers.UpdateValue(bat.Vecs[0], uint32(0), int64(1), false, bat.Vecs[0].MPool())
 				}
 				base.tableSpace = &tableSpace{node: &anode{data: bat, rows: 1}}
 				oid := objectio.NewObjectid()

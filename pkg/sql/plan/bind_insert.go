@@ -33,6 +33,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"go.uber.org/zap"
 )
@@ -270,6 +271,35 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 	}
 
 	return
+}
+
+// hasSyncIrregularIndex reports whether tableDef has an irregular index that is
+// not maintained asynchronously by CDC, and whether any such index lacks modern
+// in-statement maintenance.
+func hasSyncIrregularIndex(tableDef *plan.TableDef) (sync, unmaintained bool, err error) {
+	for _, idxDef := range tableDef.Indexes {
+		if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			continue
+		}
+		idxSync, maintained, idxErr := syncIrregularIndex(idxDef)
+		if idxErr != nil {
+			return false, false, idxErr
+		}
+		sync = sync || idxSync
+		unmaintained = unmaintained || (idxSync && !maintained)
+	}
+	return sync, unmaintained, nil
+}
+
+// syncIrregularIndex reports whether DML maintains the irregular index idxDef
+// in the statement instead of CDC, and whether the modern planner supports
+// that maintenance.
+func syncIrregularIndex(idxDef *plan.IndexDef) (sync, maintained bool, err error) {
+	async, err := indexplugin.IsAsync(idxDef.IndexAlgo, idxDef.IndexAlgoParams)
+	if err != nil || async {
+		return false, false, err
+	}
+	return true, isModernMaintainedIrregularAlgo(idxDef.IndexAlgo), nil
 }
 
 // isModernMaintainedIrregularAlgo reports whether an irregular index algorithm has
@@ -1106,6 +1136,31 @@ func (builder *QueryBuilder) deletePkColExpr(relPos, sourceStep int32) *plan.Exp
 	}
 }
 
+// appendIrregularDeleteRuntimeFilter limits the hidden-table scan of a
+// delete-by-key join to the keys of the build side. scanKey is the scan's
+// origin-key column and deleteKey the build-side key column.
+func (builder *QueryBuilder) appendIrregularDeleteRuntimeFilter(scanID, joinID int32, scanKey, deleteKey *plan.Expr) {
+	buildKey := deleteKey.GetCol()
+	if buildKey == nil {
+		return
+	}
+	probeSpec, buildSpec, ok := builder.makeExactRuntimeFilterPair(
+		builder.genNewMsgTag(),
+		false,
+		GetInFilterCardLimit(builder.compCtx.GetProcess().GetService()),
+		DeepCopyExpr(scanKey),
+		&plan.Expr{Typ: deleteKey.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: buildKey.ColPos}}},
+		true,
+	)
+	if !ok {
+		return
+	}
+	scan := builder.qry.Nodes[scanID]
+	scan.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
+	scan.Stats.ForceOneCN = true
+	builder.qry.Nodes[joinID].RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
+}
+
 // buildIrregularIvfDeleteByPk drops the stale IVF entries keyed by the recorded PK
 // position, and the ignored rows of those keys. It projects only the hidden table's
 // row_id + primary key into the join output (the join key is the base PK, never the
@@ -1182,9 +1237,10 @@ func (builder *QueryBuilder) buildIrregularHiddenDeleteByPk(bindCtx *BindContext
 	srcScan := appendSinkScanNode(builder, bindCtx, sourceStep)
 
 	// join the hidden table (left) with the image (right) on origin_pk == old/final PK.
+	deleteKey := builder.deletePkColExpr(1, sourceStep)
 	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 		{Typ: orgPkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
-		builder.deletePkColExpr(1, sourceStep),
+		deleteKey,
 	})
 	if err != nil {
 		return err
@@ -1199,6 +1255,7 @@ func (builder *QueryBuilder) buildIrregularHiddenDeleteByPk(bindCtx *BindContext
 			{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1, Name: pkCol}}},
 		},
 	}, bindCtx)
+	builder.appendIrregularDeleteRuntimeFilter(scanID, joinID, scanProj[2], deleteKey)
 
 	delNodeInfo := makeDeleteNodeInfo(builder.compCtx, hiddenObjRef, hiddenTableDef, 0, false, 1, pkTyp, false)
 	lastID, err := makeOneDeletePlan(builder, bindCtx, joinID, delNodeInfo, false, true, false)
@@ -1267,9 +1324,10 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 	srcScan := appendSinkScanNode(builder, bindCtx, sourceStep)
 
 	// join index (left) with the image (right) on doc_id == old/final PK.
+	deleteKey := builder.deletePkColExpr(1, sourceStep)
 	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 		{Typ: docIdTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
-		builder.deletePkColExpr(1, sourceStep),
+		deleteKey,
 	})
 	if err != nil {
 		return err
@@ -1284,6 +1342,7 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 			{Typ: fakePkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2, Name: catalog.FakePrimaryKeyColName}}},
 		},
 	}, bindCtx)
+	builder.appendIrregularDeleteRuntimeFilter(idxScanID, joinID, scanProj[1], deleteKey)
 
 	delNodeInfo := makeDeleteNodeInfo(builder.compCtx, indexObjRef, indexTableDef, 0, false, 1, fakePkTyp, false)
 	lastID, err := makeOneDeletePlan(builder, bindCtx, joinID, delNodeInfo, false, true, false)
@@ -1346,9 +1405,10 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 	srcScan := appendSinkScanNode(builder, bindCtx, sourceStep)
 
 	// join index (left) with the image (right) on __mo_index_pri_col == old/final PK.
+	deleteKey := builder.deletePkColExpr(1, sourceStep)
 	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 		{Typ: priColTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
-		builder.deletePkColExpr(1, sourceStep),
+		deleteKey,
 	})
 	if err != nil {
 		return err
@@ -1363,6 +1423,7 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 			{Typ: idxColTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2, Name: catalog.MasterIndexTableIndexColName}}},
 		},
 	}, bindCtx)
+	builder.appendIrregularDeleteRuntimeFilter(idxScanID, joinID, scanProj[1], deleteKey)
 
 	// Master index table has __mo_index_idx_col as PRIMARY KEY, so the delete keys
 	// on it directly (pkPos points to the index column in the join output).
@@ -1384,23 +1445,15 @@ func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, 
 	if len(builder.irregularMaintIndexes) == 0 && len(builder.irregularMaintInsertOnlyIndexes) == 0 && len(builder.irregularUpdateMaints) == 0 {
 		return nil
 	}
-	if len(builder.irregularUpdateMaints) > 0 {
-		for _, maint := range builder.irregularUpdateMaints {
-			builder.irregularMaintSourceStep = maint.sourceStep
-			builder.irregularMaintDeleteStep = maint.deleteStep
-			builder.irregularMaintDeletePkPos = maint.deletePkPos
-			builder.irregularMaintDeletePkTyp = maint.deletePkTyp
-			builder.irregularMaintIndexes = maint.indexes
-			builder.irregularMaintInsertOnlySourceStep = maint.insertOnlySourceStep
-			builder.irregularMaintInsertOnlyIndexes = maint.insertOnlyIndexes
-			builder.irregularMaintValueChangedSourceSteps = maint.valueChangedSourceSteps
-			builder.irregularMaintTableDef = maint.tableDef
-			builder.irregularMaintObjRef = maint.objRef
-			if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
-				return err
-			}
+	single := builder.saveIrregularMaint()
+	for _, maint := range builder.irregularUpdateMaints {
+		builder.restoreIrregularMaint(maint)
+		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
+			return err
 		}
-	} else if len(builder.irregularMaintIndexes) > 0 || len(builder.irregularMaintInsertOnlyIndexes) > 0 {
+	}
+	builder.restoreIrregularMaint(single)
+	if len(single.indexes) > 0 || len(single.insertOnlyIndexes) > 0 {
 		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
 			return err
 		}
@@ -6506,6 +6559,7 @@ func (builder *QueryBuilder) buildValueScan(
 	}
 
 	proc := builder.compCtx.GetProcess()
+	strictMode := function.StrictSqlModeForAssignment(proc)
 	lastTag := builder.genNewBindTag()
 	colCount := len(colNames)
 	rowsetData := &plan.RowsetData{
@@ -6627,7 +6681,7 @@ func (builder *QueryBuilder) buildValueScan(
 					literal = unwrapParenExpr(literal)
 				}
 				if nv, ok := literal.(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {
-					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
+					expr, err := makeInsertValueConstExprWithMode(proc, nv, &colTyp, builder.isInsertIgnore, strictMode)
 					if err != nil {
 						return 0, nil, err
 					}

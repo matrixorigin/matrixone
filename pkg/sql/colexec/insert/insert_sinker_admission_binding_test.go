@@ -102,7 +102,7 @@ func TestRebindWorkspaceReplacesCleanupOwnership(t *testing.T) {
 	require.True(t, w.HasUncommittedCapacityHook())
 	require.False(t, w.WorkspaceOwnsCleanup(), "the new hook-only owner must not inherit the old cleanup owner")
 
-	bat := &batch.Batch{Attrs: []string{"a", "b"}, Vecs: []*vector.Vector{
+	bat := &batch.Batch{Vecs: []*vector.Vector{
 		testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
 		testutil.MakeVarcharVector([]string{"value"}, nil, proc.Mp()),
 	}}
@@ -149,7 +149,6 @@ func TestInsertToWriteS3BindsWorkspaceAdmissionAndRetainsOnFree(t *testing.T) {
 	// The writer persists one object - the exact production shape of a
 	// spill whose downstream record never ran when the pipeline fails.
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{"a", "b"}
 	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp())
 	bat.SetRowCount(1)

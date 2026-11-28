@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -371,9 +372,15 @@ func LoadBlkColumnsByMeta(
 			if pkgVec.Length() == 0 {
 				vec = containers.MakeVector(colTypes[i], mp)
 			} else {
-				srcVec := containers.ToTNVector(pkgVec, mp)
-				defer srcVec.Close()
-				vec = srcVec.CloneWindow(0, srcVec.Length(), mp)
+				srcVec := pkgVec
+				defer containers.ReleaseVector(srcVec)
+				if vec, err = srcVec.CloneWindow(0, srcVec.Length(), mp); err != nil {
+					for _, b := range bats {
+						b.Close()
+					}
+					bat.Close()
+					return nil, err
+				}
 			}
 			bat.AddVector(colNames[idx], vec)
 			bat.Vecs[i] = vec
@@ -428,7 +435,7 @@ func formatBatch(bat *containers.Batch) {
 	}
 	for i := range bat.Vecs {
 		if bat.Vecs[i].Length() == 0 {
-			bat.Vecs[i] = containers.NewConstNullVector(*bat.Vecs[i].GetType(), length, common.DefaultAllocator)
+			bat.Vecs[i] = vector.NewConstNull(*bat.Vecs[i].GetType(), length, common.DefaultAllocator)
 		}
 	}
 }

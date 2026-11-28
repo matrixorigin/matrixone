@@ -24,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
@@ -85,7 +83,7 @@ func TestObjectColumnMetasBuilderNullBatches(t *testing.T) {
 				}
 				rows += len(values)
 				builder.AddRowCnt(len(values))
-				builder.InspectVector(0, containers.ToTNVector(vec, common.DefaultAllocator), false)
+				builder.InspectVector(0, vec, false)
 				zm := index.NewZM(types.T_int32, 0)
 				require.NoError(t, index.BatchUpdateZM(zm, vec))
 				builder.UpdateZm(0, zm)

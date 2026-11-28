@@ -15,8 +15,6 @@
 package dispatch
 
 import (
-	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/google/uuid"
@@ -71,12 +69,14 @@ type container struct {
 
 	batchCnt []int
 	rowCnt   []int
-
-	marshalBuf bytes.Buffer
 }
 
 type Dispatch struct {
-	ctr               *container
+	ctr *container
+	// sendBuf is the marshal buffer of the batches sent to remote receivers.
+	// It outlives each execution, so the operator reuses it every time it
+	// runs, and is freed by Free or Release.
+	sendBuf           mpool.MessageBuffer
 	cleanupSpool      *pSpool.PipelineSpool
 	allocationAccount *mpool.AllocationAccount
 
@@ -204,6 +204,7 @@ func NewArgument() *Dispatch {
 
 func (dispatch *Dispatch) Release() {
 	if dispatch != nil {
+		dispatch.sendBuf.Free()
 		reuse.Free[Dispatch](dispatch, nil)
 	}
 }
@@ -295,21 +296,22 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 	dispatch.ctr = nil
 }
 
-// CleanupDeferredSpool reclaims spool cache memory after the paired Merge
-// cleanup has returned on a normal End path. The normal path drains queued
-// GetFromSpool signals; a cleanup-time timeout releases the current reference
-// and leaves no receiver goroutine that can read pending signals later.
+// CleanupDeferredSpool frees the spool's cached batches after the paired Merge
+// cleanup has returned on a normal End path. With an allocation account the
+// spool is kept until the account is drained, so FinalizeAfterConsumersQuiesced
+// can release slots whose GetFromSpool signals were bypassed by a typed
+// terminal signal.
 func (dispatch *Dispatch) CleanupDeferredSpool() {
 	if dispatch.cleanupSpool == nil {
 		return
 	}
+	dispatch.cleanupSpool.ReleaseCache()
 	if dispatch.allocationAccount != nil {
-		dispatch.cleanupSpool.ReleaseReusableCacheAfterProducerQuiesced()
 		return
 	}
-	dispatch.cleanupSpool.ForceCleanupAfterTerminalSignal()
 	dispatch.cleanupSpool = nil
 }
 
 func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {
+	dispatch.sendBuf.Free()
 }

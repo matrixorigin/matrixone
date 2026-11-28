@@ -1468,15 +1468,13 @@ func doSetVar(
 	var userVarIsBin bool
 	var userVarRuntimeDomain types.RuntimeStringDomain
 	var userVarType plan.Type
-	var userVarPrepareParamKind types.StringConversionKind
 	type evaluatedAssignment struct {
-		assign                  *tree.VarAssignmentExpr
-		value                   interface{}
-		setNamesCollation       string
-		userVarIsBin            bool
-		userVarRuntimeDomain    types.RuntimeStringDomain
-		valueType               plan.Type
-		userVarPrepareParamKind types.StringConversionKind
+		assign               *tree.VarAssignmentExpr
+		value                interface{}
+		setNamesCollation    string
+		userVarIsBin         bool
+		userVarRuntimeDomain types.RuntimeStringDomain
+		valueType            plan.Type
 	}
 	type systemVarReplayabilitySnapshot struct {
 		replayable bool
@@ -1518,7 +1516,6 @@ func doSetVar(
 	}
 	evaluateAssignment := func(index int, assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
-		prepareParamKind := types.StringConversionString
 		var value interface{}
 		var valueType plan.Type
 		var runtimeDomain types.RuntimeStringDomain
@@ -1539,19 +1536,25 @@ func doSetVar(
 				}
 				value, valueType, evalErr = getExprValueWithPrepareMeta(
 					assign.Value, ses, execCtx, true,
-					&prepareParamKind, &runtimeDomain, leafIsBin)
+					&runtimeDomain, leafIsBin)
 			} else {
 				value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
 					preparedItems[index].Value, ses, execCtx,
-					&prepareParamKind, &runtimeDomain, &isBin)
+					&runtimeDomain, &isBin)
 			}
 		} else {
 			value, valueType, evalErr = getExprValueWithPrepareMeta(
 				assign.Value, ses, execCtx, preparedExpression,
-				&prepareParamKind, &runtimeDomain, nil)
+				&runtimeDomain, nil)
 		}
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
+		}
+		if !assign.System && !assign.SetNames {
+			value, valueType, evalErr = systemVariableNumericCopy(ses, assign.Value, value, valueType)
+			if evalErr != nil {
+				return evaluatedAssignment{}, evalErr
+			}
 		}
 
 		if systemVar, exists := gSysVarsDefs[assign.Name]; exists {
@@ -1631,13 +1634,12 @@ func doSetVar(
 			}
 		}
 		return evaluatedAssignment{
-			assign:                  assign,
-			value:                   value,
-			setNamesCollation:       setNamesCollation,
-			userVarIsBin:            isBin,
-			userVarRuntimeDomain:    runtimeDomain,
-			valueType:               valueType,
-			userVarPrepareParamKind: prepareParamKind,
+			assign:               assign,
+			value:                value,
+			setNamesCollation:    setNamesCollation,
+			userVarIsBin:         isBin,
+			userVarRuntimeDomain: runtimeDomain,
+			valueType:            valueType,
 		}, nil
 	}
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
@@ -1676,8 +1678,8 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-				name, value, sql, userVarIsBin, userVarType, userVarPrepareParamKind,
+			err = ses.setUserDefinedVarWithTypeAndReplayability(
+				name, value, sql, userVarIsBin, userVarType,
 				!preparedExpression && sql != "" && execCtx.singleStatementQuery,
 				userVarRuntimeDomain)
 			if err != nil {
@@ -1741,7 +1743,6 @@ func doSetVar(
 		userVarIsBin = item.userVarIsBin
 		userVarRuntimeDomain = item.userVarRuntimeDomain
 		userVarType = item.valueType
-		userVarPrepareParamKind = item.userVarPrepareParamKind
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
@@ -3170,6 +3171,9 @@ func createPrepareStmtInSession(
 	if err := executableExplainLocalLoadReject(execCtx.reqCtx, saveStmt); err != nil {
 		return nil, err
 	}
+	if _, ok := saveStmt.(*tree.FlushPrivileges); ok {
+		return nil, moerr.NewNotSupported(execCtx.reqCtx, "preparing FLUSH PRIVILEGES")
+	}
 	// Every executable handle must prove which policy actually participated
 	// in planning. Publication cannot repair missing provenance afterward.
 	if !preparedOwnerPolicyCaptured(execCtx) {
@@ -4223,7 +4227,7 @@ func parseExplainBool(value string) (bool, bool) {
 }
 
 func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill outputCallBackFunc) error {
-	bat := batch.New([]string{explainColName})
+	bat := batch.NewWithSize(1)
 	rs := buffer.Lines
 	vs := make([][]byte, len(rs))
 
@@ -4257,7 +4261,7 @@ func buildMoExplainPhyPlan(
 	fill outputCallBackFunc,
 	trace schedule.Trace,
 ) error {
-	bat := batch.New([]string{explainColName})
+	bat := batch.NewWithSize(1)
 	vs := make([][]byte, 0)
 	count := 0
 	for {
@@ -4551,9 +4555,9 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		}
 		for i := range p.Query.Nodes {
 			node := p.Query.Nodes[i]
-			// table_changes has a synthetic output schema. Its source is
-			// validated through CatalogDependencies below.
-			if def := node.TableDef; def != nil && !isTableChangesScan(node) {
+			// Source-resolving functions expose a synthetic output schema. Their
+			// source versions are validated through CatalogDependencies below.
+			if def := node.TableDef; def != nil && !plan2.IsSourceResolvingTableFunction(node) {
 				flag, err := checkFn(node.ObjRef, def, node.ScanSnapshot)
 				if err != nil || flag {
 					return true, err
@@ -6430,9 +6434,6 @@ func executeStmt(ses *Session,
 		ses.SetShowStmtType(ShowTableStatus)
 		ses.SetData(nil)
 	case *tree.ShowGrants:
-		if len(st.Username) == 0 {
-			st.Username = execCtx.userName
-		}
 		if len(st.Hostname) == 0 || st.Hostname == "%" {
 			st.Hostname = rootHost
 		}
@@ -6846,7 +6847,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		stmt := cw.GetAst()
 		// The assignment performed by SELECT ... INTO @var changes the
 		// variable's bind-time type.  Do not cache this statement after it has
-		// run; setUserDefinedVarWithTypeAndKind clears the existing cache, but
+		// run; setUserDefinedVarWithTypeAndReplayability clears the existing cache, but
 		// the outer request must also avoid writing this just-executed plan back.
 		if selectStmt, ok := stmt.(*tree.Select); ok && len(selectStmt.IntoVars) > 0 {
 			canCache = false

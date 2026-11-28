@@ -13,7 +13,7 @@ Native B, Sirius #27, merged as
 
 Current status: numeric lowering (#29757), public campaign (#30021), and
 embedded cutover (#30251) are merged. All 22 canonical TPC-H queries have public
-numeric and campaign evidence. The [embedded guide](../guides/sirius-embedded.md)
+numeric and campaign evidence. The [embedded guide](../../Sirius.md#configure-and-query)
 describes current configuration; the [cutover design](sirius-embedded-cutover.md)
 records acceptance. Dated evidence below retains its original source identities
 and the execution paths available at those revisions.

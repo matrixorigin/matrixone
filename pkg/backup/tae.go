@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -58,11 +57,23 @@ const (
 	backupProtectionRemoveCmd = "remove_checker.backup."
 )
 
-func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
-	var err error
-	cr := ctl.Result{}
-	err = json.Unmarshal(retBytes[0][0], &cr)
+// getBackupFileNames decodes the control result while its vector still owns the bytes.
+func getBackupFileNames(ctx context.Context, exec executor.SQLExecutor, opts executor.Options) ([]string, error) {
+	res, err := exec.Exec(ctx, "select mo_ctl('dn','Backup','')", opts)
 	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+
+	if len(res.Batches) == 0 || res.Batches[0].RowCount() == 0 || len(res.Batches[0].Vecs) == 0 {
+		return nil, moerr.NewInternalError(ctx, "empty backup control result")
+	}
+	payload, err := res.Batches[0].Vecs[0].GetBytesAtChecked(0)
+	if err != nil {
+		return nil, err
+	}
+	var cr ctl.Result
+	if err := json.Unmarshal(payload, &cr); err != nil {
 		return nil, err
 	}
 	rsSlice, ok := cr.Data.([]interface{})
@@ -83,7 +94,7 @@ func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
 			fileName = append(fileName, x)
 		}
 	}
-	return fileName, err
+	return fileName, nil
 }
 
 func BackupData(
@@ -100,20 +111,7 @@ func BackupData(
 	}
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}
-	sql := "select mo_ctl('dn','Backup','')"
-	res, err := exec.Exec(ctx, sql, opts)
-	if err != nil {
-		return err
-	}
-
-	var retByts [][][]byte
-	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
-		retByts = append(retByts, executor.GetBytesRows(cols[0]))
-		return true
-	})
-	res.Close()
-
-	fileName, err := getFileNames(ctx, retByts)
+	fileName, err := getBackupFileNames(ctx, exec, opts)
 	if err != nil {
 		return err
 	}

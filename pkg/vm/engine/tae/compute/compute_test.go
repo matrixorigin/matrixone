@@ -17,7 +17,6 @@ package compute
 import (
 	"testing"
 
-	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,11 +32,11 @@ func TestGetOffsetByValNarrowArray(t *testing.T) {
 	mp := mpool.MustNewZero()
 	typ := types.New(types.T_array_int8, 2, 0)
 	vec := containers.MakeVector(typ, mp)
-	defer vec.Close()
+	defer containers.ReleaseVector(vec)
 	// byte-sorted rows so binary search is well-defined
-	vec.Append(types.ArrayToBytes([]int8{1, 1}), false)
-	vec.Append(types.ArrayToBytes([]int8{2, 2}), false)
-	vec.Append(types.ArrayToBytes([]int8{3, 3}), false)
+	vec.MustAppendValue(types.ArrayToBytes([]int8{1, 1}), false)
+	vec.MustAppendValue(types.ArrayToBytes([]int8{2, 2}), false)
+	vec.MustAppendValue(types.ArrayToBytes([]int8{3, 3}), false)
 
 	off, exist := GetOffsetByVal(vec, types.ArrayToBytes([]int8{2, 2}), nil)
 	require.True(t, exist)
@@ -59,27 +58,6 @@ func TestSortAndDedup(t *testing.T) {
 	t.Log(vals)
 }
 
-func TestShuffleByDeletes(t *testing.T) {
-	origMask := roaring.New()
-	origVals := make(map[uint32]any)
-	origMask.Add(1)
-	origVals[1] = 1
-	origMask.Add(10)
-	origVals[10] = 10
-	origMask.Add(20)
-	origVals[20] = 20
-	origMask.Add(30)
-	origVals[30] = 30
-
-	deletes := nulls.NewWithSize(1)
-	deletes.Add(0)
-	deletes.Add(8)
-	deletes.Add(22)
-
-	destDelets := ShuffleByDeletes(deletes, deletes)
-	t.Log(destDelets.String())
-}
-
 func TestCheckRowExists(t *testing.T) {
 	typ := types.T_int32.ToType()
 	vec := containers.MockVector2(typ, 100, 0)
@@ -97,7 +75,7 @@ func TestCheckRowExists(t *testing.T) {
 	_, exist = GetOffsetByVal(vec, int32(114514), nil)
 	require.False(t, exist)
 
-	dels := nulls.NewWithSize(1)
+	dels := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 	dels.Add(uint64(55))
 	_, exist = GetOffsetByVal(vec, int32(55), dels)
 	require.False(t, exist)
@@ -107,8 +85,8 @@ func TestAppendNull(t *testing.T) {
 	colTypes := types.MockColTypes()
 	check := func(typ types.Type) {
 		vec := containers.MockVector2(typ, 10, 0)
-		defer vec.Close()
-		vec.Append(nil, true)
+		defer containers.ReleaseVector(vec)
+		vec.MustAppendValue(nil, true)
 		assert.Equal(t, 11, vec.Length())
 		assert.True(t, vec.IsNull(10))
 		t.Log(vec.String())

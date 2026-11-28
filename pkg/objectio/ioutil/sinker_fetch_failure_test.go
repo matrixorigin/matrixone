@@ -32,8 +32,8 @@ type fetchTrackingBuffer struct {
 	last *batch.Batch
 }
 
-func (b *fetchTrackingBuffer) FetchWithSchema(attrs []string, typs []types.Type, mp *mpool.MPool) *batch.Batch {
-	b.last = b.BatchFreeList.FetchWithSchema(attrs, typs, mp)
+func (b *fetchTrackingBuffer) FetchWithTypes(typs []types.Type, mp *mpool.MPool) *batch.Batch {
+	b.last = b.BatchFreeList.FetchWithTypes(typs, mp)
 	return b.last
 }
 
@@ -54,9 +54,9 @@ func TestFetchBufferPreExtendFailureReleasesBatch(t *testing.T) {
 			defer mp.Free(filler)
 			attrs := []string{"a", "b", "c"}
 			typs := []types.Type{types.T_int32.ToType(), types.T_int32.ToType(), types.T_int32.ToType()}
-			buf := &fetchTrackingBuffer{BatchFreeList: containers.NewBatchFreeList(attrs, typs, true)}
+			buf := &fetchTrackingBuffer{BatchFreeList: containers.NewBatchFreeList(typs, true)}
 			if tc.reuse {
-				bat := buf.FetchWithSchema(attrs, typs, mp)
+				bat := buf.FetchWithTypes(typs, mp)
 				require.NoError(t, bat.Vecs[0].PreExtend(objectio.BlockMaxRows, mp))
 				buf.Putback(bat, mp)
 			}

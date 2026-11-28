@@ -217,7 +217,7 @@ func (space *tableSpace) prepareApplyANode(ctx context.Context, node *anode, sta
 		vec = space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		defer func() {
 			if err != nil {
-				vec.Close()
+				containers.ReleaseVector(vec)
 			}
 		}()
 	} else {
@@ -311,20 +311,20 @@ func (space *tableSpace) prepareApplyANode(ctx context.Context, node *anode, sta
 		col := space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
-			col.GetDownstreamVector(),
+			col,
 			&blkID,
 			anode.GetMaxRow()-toAppend,
 			toAppend,
-			col.GetAllocator(),
+			col.MPool(),
 		); err != nil {
-			col.Close()
+			containers.ReleaseVector(col)
 			return err
 		}
-		if err = vec.ExtendVec(col.GetDownstreamVector()); err != nil {
-			col.Close()
+		if err = vec.UnionBatch(col, 0, col.Length(), nil, vec.MPool()); err != nil {
+			containers.ReleaseVector(col)
 			return err
 		}
-		col.Close()
+		containers.ReleaseVector(col)
 		id := appender.GetID()
 		space.table.store.warChecker.Insert(appender.GetMeta().(*catalog.ObjectEntry))
 		space.table.store.txn.GetMemo().AddObject(space.table.entry.GetDB().ID,
@@ -335,7 +335,7 @@ func (space *tableSpace) prepareApplyANode(ctx context.Context, node *anode, sta
 		}
 	}
 	if startOffset == 0 {
-		node.data.Vecs[space.table.GetLocalSchema(space.isTombstone).PhyAddrKey.Idx].Close()
+		containers.ReleaseVector(node.data.Vecs[space.table.GetLocalSchema(space.isTombstone).PhyAddrKey.Idx])
 		node.data.Vecs[space.table.GetLocalSchema(space.isTombstone).PhyAddrKey.Idx] = vec
 	}
 	return nil
@@ -545,19 +545,25 @@ func (space *tableSpace) BatchDedup(key containers.Vector) error {
 
 func (space *tableSpace) Scan(
 	ctx context.Context, bat **containers.Batch, colIdxes []int, mp *mpool.MPool,
-) {
-	n := space.node
-	n.Scan(ctx, bat, colIdxes, mp)
+) error {
+	return space.node.Scan(ctx, bat, colIdxes, mp)
 }
 
 func (space *tableSpace) HybridScan(
 	ctx context.Context, bat **containers.Batch, colIdxes []int, mp *mpool.MPool,
-) {
-	space.node.Scan(ctx, bat, colIdxes, mp)
+) error {
+	if err := space.node.Scan(ctx, bat, colIdxes, mp); err != nil {
+		return err
+	}
+	if space.node.data.Deletes.IsEmpty() {
+		return nil
+	}
 	if (*bat).Deletes == nil {
 		(*bat).Deletes = &nulls.Nulls{}
+		(*bat).Deletes.Init(mp)
 	}
 	(*bat).Deletes.Or(space.node.data.Deletes)
+	return nil
 }
 
 func (space *tableSpace) Prefetch(obj *catalog.ObjectEntry) error {

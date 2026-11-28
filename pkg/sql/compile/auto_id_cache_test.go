@@ -90,10 +90,10 @@ func TestAutoIDCacheRemoteWireGate(t *testing.T) {
 	require.Equal(t, vm.PreInsert, restoredPreInsert.OpType())
 	require.Equal(t, uint64(1), restoredPreInsert.TableDef.AutoIdCache)
 	p := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{InstructionList: []*pipeline.Instruction{instruction}}}}
-	require.NoError(t, validateRemoteAutoIDCachePipelineProtocol(proc, p))
-	require.NoError(t, validateRemoteAutoIDCachePipelineProtocol(nil, nil))
-	require.NoError(t, validateRemoteAutoIDCachePipelineProtocol(nil, &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{Op: int32(vm.PreInsert), PreInsert: &pipeline.PreInsert{}}}}))
-	require.ErrorContains(t, validateRemoteAutoIDCachePipelineProtocol(nil, p), "requires a process")
+	require.NoError(t, validateRemoteAutoIDCachePipeline(proc, p))
+	require.NoError(t, validateRemoteAutoIDCachePipeline(nil, nil))
+	require.NoError(t, validateRemoteAutoIDCachePipeline(nil, &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{Op: int32(vm.PreInsert), PreInsert: &pipeline.PreInsert{}}}}))
+	require.ErrorContains(t, validateRemoteAutoIDCachePipeline(nil, p), "requires a process")
 	_, _, err = convertToPipelineInstruction(op, nil, ctx, 1)
 	require.ErrorContains(t, err, "requires a process")
 
@@ -111,12 +111,12 @@ func TestAutoIDCacheRemoteWireGate(t *testing.T) {
 
 	// A stripped marker cannot silently downgrade a nonzero policy on a new receiver.
 	instruction.Op = int32(vm.PreInsert)
-	require.ErrorContains(t, validateRemoteAutoIDCachePipelineProtocol(proc, p), "marker")
+	require.ErrorContains(t, validateRemoteAutoIDCachePipeline(proc, p), "marker")
 	_, err = convertToVmOperator(instruction, ctx, nil)
 	require.ErrorContains(t, err, "marker")
 	instruction.Op = int32(vm.PreInsertAutoIDCache)
 	instruction.PreInsert.TableDef.AutoIdCache = 0
-	require.ErrorContains(t, validateRemoteAutoIDCachePipelineProtocol(proc, p), "marker")
+	require.ErrorContains(t, validateRemoteAutoIDCachePipeline(proc, p), "marker")
 	// The decoder's default path rejects unknown appended opcodes (the same
 	// path a pre-feature decoder takes for PreInsertAutoIDCache).
 	instruction.Op = int32(vm.OpTypeEnd)

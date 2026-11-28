@@ -29,13 +29,26 @@ import (
 )
 
 type IBatchBuffer interface {
-	// FetchWithSchema and Fetch return a batch whose vectors belong to mp.
-	FetchWithSchema([]string, []types.Type, *mpool.MPool) *batch.Batch
+	// FetchWithTypes and Fetch return a batch whose vectors belong to mp.
+	FetchWithTypes([]types.Type, *mpool.MPool) *batch.Batch
 	Fetch(*mpool.MPool) *batch.Batch
 	Putback(*batch.Batch, *mpool.MPool)
 	Close(*mpool.MPool)
 	Len() int
 	Usage() (int, int, int, int)
+}
+
+// MarkNull marks an existing row in an owned mutable vector as NULL. Unlike
+// UpdateValue, it returns bitmap allocation errors to the caller.
+func MarkNull(vec *vector.Vector, row uint32) error {
+	mask := vec.GetNulls()
+	if int64(row) >= mask.Len() {
+		if err := nulls.TryExpand(mask, int(row)+1); err != nil {
+			return err
+		}
+	}
+	mask.Add(uint64(row))
+	return nil
 }
 
 type GeneralBatchBuffer struct {
@@ -58,7 +71,7 @@ func (bb *GeneralBatchBuffer) Len() int {
 	return len(bb.fixedSizeVectors) + len(bb.varlenVectors)
 }
 
-func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type, mp *mpool.MPool) *batch.Batch {
+func (bb *GeneralBatchBuffer) FetchWithTypes(types []types.Type, mp *mpool.MPool) *batch.Batch {
 	bb.Lock()
 	defer bb.Unlock()
 
@@ -66,7 +79,6 @@ func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type
 	// either from the pool or by allocating fresh ones.  This avoids
 	// wasting vector allocations for positions that the pool can serve.
 	bat := batch.NewWithSize(len(types))
-	bat.Attrs = attrs
 
 	// if no vectors in buffer, allocate all fresh and return
 	if len(bb.fixedSizeVectors) == 0 && len(bb.varlenVectors) == 0 {
@@ -284,29 +296,31 @@ func NewOneSchemaBatchBuffer(
 	}
 }
 
+// Attrs returns the column names of the buffer's schema.
+func (bb *OneSchemaBatchBuffer) Attrs() []string {
+	return bb.attrs
+}
+
 func (bb *OneSchemaBatchBuffer) Len() int {
 	bb.Lock()
 	defer bb.Unlock()
 	return len(bb.buffer)
 }
 
-func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Type, mp *mpool.MPool) *batch.Batch {
+func (bb *OneSchemaBatchBuffer) FetchWithTypes(types []types.Type, mp *mpool.MPool) *batch.Batch {
 	bb.Lock()
 	defer bb.Unlock()
-	if len(attrs) != len(bb.attrs) || len(types) != len(bb.typs) {
-		panic(fmt.Sprintf("the length of attrs or types not match: bb.attrs=%v, bb.types=%v, attrs=%v, types=%v",
-			bb.attrs, bb.typs, attrs, types))
+	if len(types) != len(bb.typs) {
+		panic(fmt.Sprintf("the length of types not match: bb.types=%v, types=%v",
+			bb.typs, types))
 	}
-	for i, attr := range attrs {
-		if attr != bb.attrs[i] || types[i] != bb.typs[i] {
-			panic(fmt.Sprintf("attrs not match: %s %s", attr, bb.attrs[i]))
-		}
+	for i := range types {
 		if types[i].Oid != bb.typs[i].Oid {
 			panic(fmt.Sprintf("types not match: %s %s", types[i].String(), bb.typs[i].String()))
 		}
 	}
 	if len(bb.buffer) == 0 || !batchOfPool(bb.buffer[len(bb.buffer)-1], mp) {
-		return batch.NewWithSchema(bb.attrs, bb.typs, mp)
+		return batch.NewWithTypes(bb.typs, mp)
 	}
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
@@ -320,7 +334,7 @@ func (bb *OneSchemaBatchBuffer) Fetch(mp *mpool.MPool) *batch.Batch {
 	bb.Lock()
 	defer bb.Unlock()
 	if len(bb.buffer) == 0 || !batchOfPool(bb.buffer[len(bb.buffer)-1], mp) {
-		return batch.NewWithSchema(bb.attrs, bb.typs, mp)
+		return batch.NewWithTypes(bb.typs, mp)
 	}
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
@@ -372,233 +386,77 @@ func (bb *OneSchemaBatchBuffer) Close(mp *mpool.MPool) {
 // ### Shallow copy Functions
 
 func ToCNBatch(tnBat *Batch) *batch.Batch {
-	cnBat := batch.New(tnBat.Attrs)
-	for i, vec := range tnBat.Vecs {
-		cnBat.Vecs[i] = vec.GetDownstreamVector()
-	}
+	cnBat := batch.NewWithSize(len(tnBat.Attrs))
+	copy(cnBat.Vecs, tnBat.Vecs)
 	cnBat.SetRowCount(tnBat.Length())
 	return cnBat
 }
 
-func ToTNBatch(cnBat *batch.Batch, mp *mpool.MPool) *Batch {
+// ToTNBatch wraps cnBat's vectors in a TN batch whose columns are named by
+// attrs, one name per vector.
+func ToTNBatch(cnBat *batch.Batch, attrs []string, mp *mpool.MPool) *Batch {
 	tnBat := NewEmptyBatch()
 	for i, vec := range cnBat.Vecs {
-		v := ToTNVector(vec, mp)
-		tnBat.AddVector(cnBat.Attrs[i], v)
+		tnBat.AddVector(attrs[i], vec)
 	}
 	return tnBat
 }
 
-func ToTNVector(v *vector.Vector, mp *mpool.MPool) Vector {
-	vec := MakeVector(*v.GetType(), mp)
-	vec.setDownstreamVector(v)
-	return vec
-}
-
+// CloneVector copies src into a vector lent by vp, or owned by mp when vp is
+// nil.
 func CloneVector(src *vector.Vector, mp *mpool.MPool, vp *VectorPool) (Vector, error) {
-	var vec Vector
 	if vp != nil {
-		vec = vp.GetVector(src.GetType())
-		mp = vp.GetMPool()
-		if err := src.CloneWindowTo(
-			vec.GetDownstreamVector(), 0, src.Length(), mp,
-		); err != nil {
-			vec.Close()
+		vec := vp.GetVector(src.GetType())
+		if err := src.CloneWindowTo(vec, 0, src.Length(), vp.GetMPool()); err != nil {
+			ReleaseVector(vec)
 			return nil, err
 		}
-	} else {
-		vec = MakeVector(*src.GetType(), mp)
-		if v, err := src.CloneWindow(0, src.Length(), mp); err != nil {
-			vec.Close()
-			return nil, err
-		} else {
-			vec.setDownstreamVector(v)
-		}
+		return vec, nil
 	}
-	return vec, nil
+	return src.CloneWindow(0, src.Length(), mp)
 }
 
 // ### Get Functions
 
-// getNonNullValue Please don't merge it with GetValue(). Used in Vector for getting NonNullValue.
+// getNonNullValue returns row row of col as a value, without copying a
+// varlena value and without looking at its NULL bit. Please don't merge it
+// with GetValue(): Vector uses it for getting a non-null value.
 func getNonNullValue(col *vector.Vector, row uint32) any {
-
-	switch col.GetType().Oid {
-	case types.T_bool:
-		return vector.GetFixedAtNoTypeCheck[bool](col, int(row))
-	case types.T_bit:
-		return vector.GetFixedAtNoTypeCheck[uint64](col, int(row))
-	case types.T_int8:
-		return vector.GetFixedAtNoTypeCheck[int8](col, int(row))
-	case types.T_int16:
-		return vector.GetFixedAtNoTypeCheck[int16](col, int(row))
-	case types.T_int32:
-		return vector.GetFixedAtNoTypeCheck[int32](col, int(row))
-	case types.T_int64:
-		return vector.GetFixedAtNoTypeCheck[int64](col, int(row))
-	case types.T_uint8:
-		return vector.GetFixedAtNoTypeCheck[uint8](col, int(row))
-	case types.T_uint16:
-		return vector.GetFixedAtNoTypeCheck[uint16](col, int(row))
-	case types.T_uint32:
-		return vector.GetFixedAtNoTypeCheck[uint32](col, int(row))
-	case types.T_uint64:
-		return vector.GetFixedAtNoTypeCheck[uint64](col, int(row))
-	case types.T_decimal64:
-		return vector.GetFixedAtNoTypeCheck[types.Decimal64](col, int(row))
-	case types.T_decimal128:
-		return vector.GetFixedAtNoTypeCheck[types.Decimal128](col, int(row))
-	case types.T_uuid:
-		return vector.GetFixedAtNoTypeCheck[types.Uuid](col, int(row))
-	case types.T_float32:
-		return vector.GetFixedAtNoTypeCheck[float32](col, int(row))
-	case types.T_float64:
-		return vector.GetFixedAtNoTypeCheck[float64](col, int(row))
-	case types.T_bf16:
-		return vector.GetFixedAtNoTypeCheck[types.BF16](col, int(row))
-	case types.T_float16:
-		return vector.GetFixedAtNoTypeCheck[types.Float16](col, int(row))
-	case types.T_float8:
-		return vector.GetFixedAtNoTypeCheck[types.Float8](col, int(row))
-	case types.T_float4:
-		return vector.GetFixedAtNoTypeCheck[types.Float4](col, int(row))
-	case types.T_date:
-		return vector.GetFixedAtNoTypeCheck[types.Date](col, int(row))
-	case types.T_time:
-		return vector.GetFixedAtNoTypeCheck[types.Time](col, int(row))
-	case types.T_datetime:
-		return vector.GetFixedAtNoTypeCheck[types.Datetime](col, int(row))
-	case types.T_timestamp:
-		return vector.GetFixedAtNoTypeCheck[types.Timestamp](col, int(row))
-	case types.T_enum:
-		return vector.GetFixedAtNoTypeCheck[types.Enum](col, int(row))
-	case types.T_year:
-		return vector.GetFixedAtNoTypeCheck[types.MoYear](col, int(row))
-	case types.T_TS:
-		return vector.GetFixedAtNoTypeCheck[types.TS](col, int(row))
-	case types.T_Rowid:
-		return vector.GetFixedAtNoTypeCheck[types.Rowid](col, int(row))
-	case types.T_Blockid:
-		return vector.GetFixedAtNoTypeCheck[types.Blockid](col, int(row))
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
-		types.T_array_float8, types.T_array_float4, types.T_datalink:
-		return col.GetBytesAt(int(row))
-	default:
-		//return vector.ErrVecTypeNotSupport
+	if !vector.SupportsAny(col.GetType().Oid) {
 		panic(any("No Support"))
 	}
+	return vector.GetAny(col, int(row), false)
 }
 
 // ### Update Function
 
-func GenericUpdateFixedValue[T types.FixedSizeT](
-	vec *vector.Vector, row uint32, v any, isNull bool, _ *mpool.MPool,
-) {
-	if isNull {
-		vec.GetNulls().Add(uint64(row))
-	} else {
-		err := vector.SetFixedAtNoTypeCheck(vec, int(row), v.(T))
-		if err != nil {
-			panic(err)
-		}
-		if vec.GetNulls().Contains(uint64(row)) {
-			vec.GetNulls().Unset(uint64(row))
-		}
-	}
-}
-
-func GenericUpdateBytes(
-	vec *vector.Vector, row uint32, v any, isNull bool, mp *mpool.MPool,
-) {
-	if isNull {
-		vec.GetNulls().Add(uint64(row))
-	} else {
-		err := vector.SetBytesAt(vec, int(row), v.([]byte), mp)
-		if err != nil {
-			panic(err)
-		}
-		if vec.GetNulls().Contains(uint64(row)) {
-			vec.GetNulls().Unset(uint64(row))
-		}
-	}
-}
-
+// UpdateValue sets row to val, or to NULL. It panics on a const or read-only
+// vector.
 func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool.MPool) {
-	switch col.GetType().Oid {
-	case types.T_bool:
-		GenericUpdateFixedValue[bool](col, row, val, isNull, mp)
-	case types.T_bit:
-		GenericUpdateFixedValue[uint64](col, row, val, isNull, mp)
-	case types.T_int8:
-		GenericUpdateFixedValue[int8](col, row, val, isNull, mp)
-	case types.T_int16:
-		GenericUpdateFixedValue[int16](col, row, val, isNull, mp)
-	case types.T_int32:
-		GenericUpdateFixedValue[int32](col, row, val, isNull, mp)
-	case types.T_int64:
-		GenericUpdateFixedValue[int64](col, row, val, isNull, mp)
-	case types.T_uint8:
-		GenericUpdateFixedValue[uint8](col, row, val, isNull, mp)
-	case types.T_uint16:
-		GenericUpdateFixedValue[uint16](col, row, val, isNull, mp)
-	case types.T_uint32:
-		GenericUpdateFixedValue[uint32](col, row, val, isNull, mp)
-	case types.T_uint64:
-		GenericUpdateFixedValue[uint64](col, row, val, isNull, mp)
-	case types.T_decimal64:
-		GenericUpdateFixedValue[types.Decimal64](col, row, val, isNull, mp)
-	case types.T_decimal128:
-		GenericUpdateFixedValue[types.Decimal128](col, row, val, isNull, mp)
-	case types.T_float32:
-		GenericUpdateFixedValue[float32](col, row, val, isNull, mp)
-	case types.T_float64:
-		GenericUpdateFixedValue[float64](col, row, val, isNull, mp)
-	case types.T_bf16:
-		GenericUpdateFixedValue[types.BF16](col, row, val, isNull, mp)
-	case types.T_float16:
-		GenericUpdateFixedValue[types.Float16](col, row, val, isNull, mp)
-	case types.T_float8:
-		GenericUpdateFixedValue[types.Float8](col, row, val, isNull, mp)
-	case types.T_float4:
-		GenericUpdateFixedValue[types.Float4](col, row, val, isNull, mp)
-	case types.T_date:
-		GenericUpdateFixedValue[types.Date](col, row, val, isNull, mp)
-	case types.T_time:
-		GenericUpdateFixedValue[types.Time](col, row, val, isNull, mp)
-	case types.T_datetime:
-		GenericUpdateFixedValue[types.Datetime](col, row, val, isNull, mp)
-	case types.T_timestamp:
-		GenericUpdateFixedValue[types.Timestamp](col, row, val, isNull, mp)
-	case types.T_enum:
-		GenericUpdateFixedValue[types.Enum](col, row, val, isNull, mp)
-	case types.T_uuid:
-		GenericUpdateFixedValue[types.Uuid](col, row, val, isNull, mp)
-	case types.T_TS:
-		GenericUpdateFixedValue[types.TS](col, row, val, isNull, mp)
-	case types.T_Rowid:
-		GenericUpdateFixedValue[types.Rowid](col, row, val, isNull, mp)
-	case types.T_Blockid:
-		GenericUpdateFixedValue[types.Blockid](col, row, val, isNull, mp)
-	case types.T_varchar, types.T_char, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
-		types.T_array_float8, types.T_array_float4, types.T_datalink:
-		GenericUpdateBytes(col, row, val, isNull, mp)
-	default:
+	if col.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("update to const vector"))
+	}
+	if !vector.SupportsAny(col.GetType().Oid) {
 		panic(moerr.NewInternalErrorNoCtxf("%v not supported", col.GetType()))
+	}
+	if isNull {
+		col.SetNull(uint64(row))
+		return
+	}
+	if err := vector.SetAny(col, int(row), val, mp); err != nil {
+		panic(err)
+	}
+	if col.GetNulls().Contains(uint64(row)) {
+		col.UnsetNull(uint64(row))
 	}
 }
 
 // ### Only used in testcases
 
-func NewNonNullBatchWithSharedMemory(b *batch.Batch, mp *mpool.MPool) *Batch {
+func NewNonNullBatchWithSharedMemory(b *batch.Batch, attrs []string, mp *mpool.MPool) *Batch {
 	bat := NewBatch()
-	for i, attr := range b.Attrs {
-		v := ToTNVector(b.Vecs[i], mp)
-		bat.AddVector(attr, v)
+	for i, attr := range attrs {
+		bat.AddVector(attr, b.Vecs[i])
 	}
 	return bat
 }
@@ -615,7 +473,7 @@ func ForeachVectorWindow(
 	sel *nulls.Nulls,
 ) (err error) {
 	typ := vec.GetType()
-	col := vec.GetDownstreamVector()
+	col := vec
 	if typ.IsVarlen() {
 		var op func([]byte, bool, int) error
 		if op1 != nil {

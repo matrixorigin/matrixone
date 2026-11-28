@@ -392,7 +392,7 @@ func (tbl *txnTable) workspaceInsertRowEstimate() float64 {
 			rows += float64(entry.bat.RowCount())
 			continue
 		}
-		idx := slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats)
+		idx := slices.Index(entry.attrs, catalog.ObjectMeta_ObjectStats)
 		if idx < 0 || idx >= len(entry.bat.Vecs) || entry.bat.Vecs[idx] == nil || entry.bat.Vecs[idx].GetType().Oid != types.T_varchar {
 			return float64(^uint64(0))
 		}
@@ -502,7 +502,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 		tbl.getTxn().GetSnapshotWriteOffset(),
 		func(entry Entry) {
 			if entry.typ == INSERT {
-				for i, s := range entry.bat.Attrs {
+				for i, s := range entry.attrs {
 					if _, ok := neededCols[s]; ok {
 						szInPart += uint64(entry.bat.Vecs[i].Size())
 					}
@@ -659,6 +659,25 @@ func ForeachVisibleObjects(
 		return err
 	}
 	return context.Cause(ctx)
+}
+
+func (tbl *txnTable) VisibleObjectCount(ctx context.Context) (int, error) {
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return 0, err
+	}
+	snapshot := types.TimestampToTS(tbl.db.op.SnapshotTS())
+	n := 0
+	count := func(context.Context, objectio.ObjectEntry) error {
+		n++
+		return nil
+	}
+	for _, tombstone := range []bool{false, true} {
+		if err := ForeachVisibleObjects(ctx, state, snapshot, count, nil, tombstone); err != nil {
+			return 0, err
+		}
+	}
+	return n, nil
 }
 
 // not accurate!  only used by stats
@@ -1080,7 +1099,7 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 
 			// Persisted inserts have ObjectStats in column 1 (one row per object; batch may have multiple objects).
 			// In-memory inserts have raw data rows.
-			if len(entry.bat.Attrs) >= 2 && entry.bat.Attrs[1] == catalog.ObjectMeta_ObjectStats {
+			if len(entry.attrs) >= 2 && entry.attrs[1] == catalog.ObjectMeta_ObjectStats {
 				vec := entry.bat.Vecs[1]
 				for i := 0; i < vec.Length(); i++ {
 					var stats objectio.ObjectStats
@@ -1648,7 +1667,7 @@ func (tbl *txnTable) collectUnCommittedObjStats(
 
 			// Data and tombstone write batches do not have to place object stats
 			// at the same column offset.
-			statsIdx := slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats)
+			statsIdx := slices.Index(entry.attrs, catalog.ObjectMeta_ObjectStats)
 			if statsIdx == -1 {
 				return
 			}
@@ -2229,7 +2248,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		}
 		// WriteBatch copies the rows into the workspace; the batch stays ours.
 		_, err = txn.WriteBatch(ALTER, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, bat, txn.tnStores[0])
+			tbl.db.databaseName, tbl.tableName, bat, catalog.TableAlterTupleAttrs, txn.tnStores[0])
 		bat.Clean(txn.proc.Mp())
 		if err != nil {
 			return err
@@ -2316,7 +2335,7 @@ func (tbl *txnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, e
 	return attrs, nil
 }
 
-func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
+func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch, attrs []string) error {
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("write operation is not allowed in snapshot transaction")
 	}
@@ -2324,7 +2343,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		return nil
 	}
 	// for writing S3 Block
-	if bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
+	if attrs[0] == catalog.BlockMeta_BlockInfo {
 		tbl.getTxn().hasS3Op.Store(true)
 		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
 		fileName := objectio.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
@@ -2337,6 +2356,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			tbl.writeTableName(ctx),
 			fileName,
 			bat,
+			attrs,
 			tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
 	}
 	ibat, err := tbl.getTxn().copyWorkspaceBatchForTable(bat, tbl.db.databaseName)
@@ -2354,6 +2374,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.db.databaseName,
 		tableName,
 		ibat,
+		attrs,
 		tbl.getTxn().tnStores[0],
 		tbl.extraInfo.AutoIncrEpoch,
 	); err != nil {
@@ -2380,8 +2401,60 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	tbl.typs = typs
 }
 
-// rewriteObjectByDeletion rewrites obj's surviving rows — every block
-// minus its pending deleted offsets — into a fresh storage object and
+// objectTombstones snapshots the logical table's files that may delete rows of
+// this object. The workspace index lock is released before reading any files.
+func (t *workspaceFlushedTombstones) objectTombstones(tableID uint64, objectID *objectio.ObjectId) []objectio.ObjectStats {
+	var tombstones []objectio.ObjectStats
+	t.forEach(tableID, func(stats objectio.ObjectStats) {
+		if stats.SortKeyZoneMap().RowidPrefixEq(objectID[:]) {
+			tombstones = append(tombstones, stats)
+		}
+	})
+	return tombstones
+}
+
+// mergeTombstoneOffsets applies persisted visibility to the old block ID before
+// its surviving rows receive new RowIDs. It leaves the input offsets untouched.
+func mergeTombstoneOffsets(
+	ctx context.Context,
+	fs fileservice.FileService,
+	snapshot *types.TS,
+	blockID *objectio.Blockid,
+	tombstones []objectio.ObjectStats,
+	deletes []int64,
+	scratch *[]int64,
+) ([]int64, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	mask := objectio.GetReusableBitmap()
+	defer mask.Release()
+
+	next := func() (*objectio.ObjectStats, error) {
+		if len(tombstones) == 0 {
+			return nil, nil
+		}
+		stats := &tombstones[0]
+		tombstones = tombstones[1:]
+		return stats, nil
+	}
+	if err := ioutil.GetTombstonesByBlockId(ctx, snapshot, blockID, next, &mask, fs); err != nil {
+		return nil, err
+	}
+	if mask.IsEmpty() {
+		return deletes, nil
+	}
+	for _, offset := range deletes {
+		mask.Add(uint64(offset))
+	}
+	offsets := mask.ToI64Array(scratch)
+	if scratch != nil {
+		*scratch = offsets
+	}
+	return offsets, nil
+}
+
+// rewriteObjectByDeletion rewrites obj's surviving rows into a fresh object and
 // returns the replacement's metadata batch, its file name, the names of
 // the objects the rewrite persisted (or may have persisted through a
 // commit-ambiguous Sync error; the snapshot is taken BEFORE the writer's
@@ -2405,6 +2478,17 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	var fs fileservice.FileService
 	if fs, err = colexec.GetSharedFSFromProc(proc); err != nil {
 		return nil, "", nil, err
+	}
+
+	txn := tbl.getTxn()
+	var tombstones []objectio.ObjectStats
+	var snapshot types.TS
+	var offsetsScratch []int64
+	if txn.isCloneTxn {
+		tombstones = txn.flushedTombstones.objectTombstones(tbl.tableId, obj.ObjectName().ObjectId())
+		if len(tombstones) != 0 {
+			snapshot = types.TimestampToTS(txn.op.SnapshotTS())
+		}
 	}
 
 	s3Writer := colexec.NewCNS3DataWriterForService(
@@ -2449,6 +2533,12 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		nil,
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 			deletes := blockDeletes[blk.BlockID]
+			if len(tombstones) != 0 {
+				deletes, err = mergeTombstoneOffsets(ctx, fs, &snapshot, &blk.BlockID, tombstones, deletes, &offsetsScratch)
+				if err != nil {
+					return false
+				}
+			}
 			slices.Sort(deletes)
 			if rowsBat == nil {
 				rowsBat = batch.NewWithSize(len(tbl.seqnums))
@@ -2517,7 +2607,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 }
 
 func (tbl *txnTable) Delete(
-	ctx context.Context, bat *batch.Batch, name string,
+	ctx context.Context, bat *batch.Batch, attrs []string, name string,
 ) error {
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete operation is not allowed in snapshot transaction")
@@ -2530,7 +2620,7 @@ func (tbl *txnTable) Delete(
 	}
 
 	var (
-		deletionTyp = bat.Attrs[0]
+		deletionTyp = attrs[0]
 	)
 
 	switch deletionTyp {
@@ -2548,7 +2638,7 @@ func (tbl *txnTable) Delete(
 			ibat.Clean(txn.workspaceMP())
 			return err
 		}
-		return tbl.writeTnPartitionCopy(ctx, ibat)
+		return tbl.writeTnPartitionCopy(ctx, ibat, attrs)
 
 	case catalog.ObjectMeta_ObjectStats:
 		tbl.getTxn().hasS3Op.Store(true)
@@ -2560,13 +2650,13 @@ func (tbl *txnTable) Delete(
 		if skipTransfer {
 			tbl.getTxn().Lock()
 			err := tbl.getTxn().writeFileLockedSkipTransferWithAutoIncrEpoch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-				tbl.db.databaseName, tbl.writeTableName(ctx), fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
+				tbl.db.databaseName, tbl.writeTableName(ctx), fileName, bat, attrs, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
 			tbl.getTxn().Unlock()
 			return err
 		}
 
 		if err := tbl.getTxn().writeFileWithAutoIncrEpoch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.writeTableName(ctx), fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
+			tbl.db.databaseName, tbl.writeTableName(ctx), fileName, bat, attrs, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 			return err
 		}
 
@@ -2588,7 +2678,6 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 	// Create a batch containing ObjectID for soft delete object
 	// Batch structure: one column with ObjectID bytes (18 bytes as binary)
 	bat := batch.NewWithSize(1)
-	bat.SetAttributes([]string{"object_id"})
 
 	// The entry enters the workspace directly, so it is built in its pool.
 	objIDVec, wmp, err := tbl.getTxn().newWorkspaceVector(types.T_binary.ToType())
@@ -2607,6 +2696,7 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 	entry := Entry{
 		typ:                SOFT_DELETE_OBJECT,
 		bat:                bat,
+		attrs:              []string{"object_id"},
 		tnStore:            tbl.getTxn().tnStores[0],
 		tableId:            tbl.tableId,
 		databaseId:         tbl.db.databaseId,
@@ -2625,19 +2715,19 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 	return nil
 }
 
-func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
+func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch, attrs []string) error {
 	ibat, err := tbl.getTxn().copyWorkspaceBatchForTable(bat, tbl.db.databaseName)
 	if err != nil {
 		return err
 	}
-	return tbl.writeTnPartitionCopy(ctx, ibat)
+	return tbl.writeTnPartitionCopy(ctx, ibat, attrs)
 }
 
 // writeTnPartitionCopy writes ibat, a workspace copy, as a delete entry.
-func (tbl *txnTable) writeTnPartitionCopy(ctx context.Context, ibat *batch.Batch) error {
+func (tbl *txnTable) writeTnPartitionCopy(ctx context.Context, ibat *batch.Batch, attrs []string) error {
 	txn := tbl.getTxn()
 	if _, err := txn.writeBatchWithAutoIncrEpoch(ctx, DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.writeTableName(ctx), ibat, txn.tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
+		tbl.db.databaseName, tbl.writeTableName(ctx), ibat, attrs, txn.tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 		txn.takeWorkspaceCopy(ibat)
 		ibat.Clean(txn.workspaceMP())
 		return err

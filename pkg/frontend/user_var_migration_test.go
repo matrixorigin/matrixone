@@ -71,7 +71,7 @@ func TestUserDefinedVarMigrationRoundTrip(t *testing.T) {
 		"vec_value":       []float32{1, 2, 3},
 	}
 	for name, value := range values {
-		require.NoError(t, ses.setUserDefinedVarWithKind(name, value, "set @"+name+" = expression", name == "text_value", types.StringConversionDecimal))
+		require.NoError(t, ses.setUserDefinedVar(name, value, "set @"+name+" = expression", name == "text_value"))
 	}
 
 	snapshot, err := ses.snapshotUserDefinedVars(context.Background())
@@ -91,7 +91,6 @@ func TestUserDefinedVarMigrationRoundTrip(t *testing.T) {
 		}
 		require.Equal(t, value, restored[name].Value)
 		require.Equal(t, "set @"+name+" = expression", restored[name].Sql)
-		require.Equal(t, types.StringConversionDecimal, restored[name].PrepareParamKind)
 	}
 }
 
@@ -114,12 +113,14 @@ func TestUserDefinedVarMigrationPreservesType(t *testing.T) {
 		Charset:     uint32(types.CharsetUTF8),
 	}
 	source := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
-	require.NoError(t, source.setUserDefinedVarWithTypeAndKind(
-		"amount", types.Decimal64(12345), "set @amount = 123.4500", false, typ, types.StringConversionDecimal))
+	require.NoError(t, source.setUserDefinedVarWithType(
+		"amount", types.Decimal64(12345), "set @amount = 123.4500", false, typ))
 
 	snapshot, err := source.snapshotUserDefinedVars(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, typ, *snapshot[0].Type)
+	// CNs that still read the kind get the one the type implies.
+	require.Equal(t, uint32(types.StringConversionDecimal), snapshot[0].PrepareParamKind)
 
 	restored, err := decodeUserDefinedVars(context.Background(), snapshot, false)
 	require.NoError(t, err)
@@ -155,8 +156,8 @@ func TestUserDefinedVarMigrationPreservesRuntimeStringDomain(t *testing.T) {
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 
 	typ := plan.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)}
-	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-		"text_override", "你", "", false, typ, types.StringConversionString,
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
+		"text_override", "你", "", false, typ,
 		false, types.RuntimeStringText))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
@@ -554,8 +555,8 @@ func TestUserVariableNullRegexpHistoryMigration(t *testing.T) {
 				if _, text := tc.previous.(string); text {
 					valueSQL = "'abc'"
 				}
-				require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-					"history", tc.previous, "set @history = "+valueSQL, false, inferUserDefinedVarType(tc.previous), types.StringConversionString, true))
+				require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
+					"history", tc.previous, "set @history = "+valueSQL, false, inferUserDefinedVarType(tc.previous), true))
 			}
 			typ := plan.Type{Id: int32(tc.typed)}
 			assignmentSQL := "set @history = null"
@@ -573,8 +574,8 @@ func TestUserVariableNullRegexpHistoryMigration(t *testing.T) {
 			case types.T_date:
 				assignmentSQL = "set @history = cast(null as date)"
 			}
-			require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-				"history", nil, assignmentSQL, false, typ, types.StringConversionString, true))
+			require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
+				"history", nil, assignmentSQL, false, typ, true))
 			require.Equal(t, !tc.wantReplay, ses.hasUnreplayableMigrationUserVars())
 			for i := 0; i < 3; i++ {
 				variable, err := ses.GetUserDefinedVar("history")
@@ -624,8 +625,8 @@ func TestUserVariableNullRegexpHistoryMigrationProtocol(t *testing.T) {
 			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion108)
 		}
 	})
-	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-		"fresh", nil, "set @fresh = null", false, plan.Type{}, types.StringConversionString, true))
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
+		"fresh", nil, "set @fresh = null", false, plan.Type{}, true))
 	for _, version := range []int64{defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion107} {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
 		_, err := ses.snapshotUserDefinedVars(context.Background())

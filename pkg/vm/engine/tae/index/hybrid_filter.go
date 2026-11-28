@@ -20,6 +20,7 @@ import (
 	"unsafe"
 
 	"github.com/FastFilter/xorfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -75,7 +76,7 @@ func NewHybridBloomFilter(
 		return nil
 	}
 	if err := containers.ForeachWindowBytes(
-		data.GetDownstreamVector(), 0, n, op, nil,
+		data, 0, n, op, nil,
 	); err != nil {
 		return nil, err
 	}
@@ -188,9 +189,9 @@ func (bf *hybridFilter) MayContainsKey(key []byte) (bool, error) {
 }
 
 func (bf *hybridFilter) MayContainsAnyKeys(
-	keys containers.Vector,
+	keys containers.Vector, mp *mpool.MPool,
 ) (bool, *nulls.Nulls, error) {
-	return bf.bloomFilter.MayContainsAnyKeys(keys)
+	return bf.bloomFilter.MayContainsAnyKeys(keys, mp)
 }
 
 func (bf *hybridFilter) MayContainsAny(

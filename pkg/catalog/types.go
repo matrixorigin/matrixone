@@ -876,8 +876,10 @@ type CreateDatabase struct {
 }
 
 type CreateDatabaseReq struct {
-	Bat  *batch.Batch
-	Cmds []CreateDatabase
+	Bat *batch.Batch
+	// Attrs names Bat's columns, as the CN sent them.
+	Attrs []string
+	Cmds  []CreateDatabase
 }
 
 type DropDatabase struct {
@@ -886,8 +888,10 @@ type DropDatabase struct {
 }
 
 type DropDatabaseReq struct {
-	Bat  *batch.Batch
-	Cmds []DropDatabase
+	Bat *batch.Batch
+	// Attrs names Bat's columns, as the CN sent them.
+	Attrs []string
+	Cmds  []DropDatabase
 }
 
 type CreateTable struct {
@@ -912,7 +916,11 @@ type CreateTable struct {
 type CreateTableReq struct {
 	TableBat  *batch.Batch
 	ColumnBat []*batch.Batch
-	Cmds      []CreateTable
+	// TableAttrs and ColumnAttrs name the columns of TableBat and of each
+	// ColumnBat, as the CN sent them.
+	TableAttrs  []string
+	ColumnAttrs [][]string
+	Cmds        []CreateTable
 }
 
 func (t CreateTable) String() string {
@@ -932,7 +940,11 @@ type DropTable struct {
 type DropTableReq struct {
 	TableBat  *batch.Batch
 	ColumnBat []*batch.Batch
-	Cmds      []DropTable
+	// TableAttrs and ColumnAttrs name the columns of TableBat and of each
+	// ColumnBat, as the CN sent them.
+	TableAttrs  []string
+	ColumnAttrs [][]string
+	Cmds        []DropTable
 }
 
 var (

@@ -1,0 +1,49 @@
+drop database if exists issue_33159_exact_scan;
+create database issue_33159_exact_scan;
+use issue_33159_exact_scan;
+create table full_update(id int primary key, bucket int);
+insert into full_update select result, 42 from generate_series(1, 8192) g;
+set @flush_result = (select mo_ctl('dn', 'flush', 'issue_33159_exact_scan.full_update'));
+update full_update set bucket = 99;
+select count(*) from full_update where bucket = 42;
+count(*)
+0
+select count(*) from full_update where bucket = 99;
+count(*)
+8192
+select count(*) from full_update where bucket + 0 = 42;
+count(*)
+0
+select id, bucket from full_update where bucket = 42 order by id limit 5;
+id    bucket
+create table partial_update(id int primary key, bucket int);
+insert into partial_update select result, 42 from generate_series(1, 8192) g;
+set @flush_result = (select mo_ctl('dn', 'flush', 'issue_33159_exact_scan.partial_update'));
+update partial_update set bucket = 99 where id <= 128;
+select count(*) from partial_update where bucket = 42;
+count(*)
+8064
+select count(*) from partial_update where bucket = 99;
+count(*)
+128
+create table mixed_blocks(id int primary key, bucket int);
+insert into mixed_blocks select result, 42 from generate_series(1, 16384) g;
+set @flush_result = (select mo_ctl('dn', 'flush', 'issue_33159_exact_scan.mixed_blocks'));
+update mixed_blocks set bucket = 99 where id <= 8192;
+select count(*) from mixed_blocks where bucket = 42;
+count(*)
+8192
+select count(*) from mixed_blocks where bucket = 99;
+count(*)
+8192
+create table full_delete(id int primary key, bucket int);
+insert into full_delete select result, 42 from generate_series(1, 8192) g;
+set @flush_result = (select mo_ctl('dn', 'flush', 'issue_33159_exact_scan.full_delete'));
+delete from full_delete;
+select count(*) from full_delete where bucket = 42;
+count(*)
+0
+drop database issue_33159_exact_scan;
+select count(*) from information_schema.schemata where schema_name = 'issue_33159_exact_scan';
+count(*)
+0

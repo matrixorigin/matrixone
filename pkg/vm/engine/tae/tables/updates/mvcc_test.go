@@ -250,9 +250,9 @@ func TestFillInCommitTSVecPreservesPhysicalRowGaps(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 	commitTS := containers.MakeVector(types.T_TS.ToType(), mp)
-	defer commitTS.Close()
+	defer containers.ReleaseVector(commitTS)
 	h.RLock()
-	h.FillInCommitTSVecLocked(commitTS, 10, mp)
+	require.NoError(t, h.FillInCommitTSVecLocked(commitTS, 10, mp))
 	h.RUnlock()
 
 	require.Equal(t, 10, commitTS.Length())
@@ -264,7 +264,7 @@ func TestFillInCommitTSVecPreservesPhysicalRowGaps(t *testing.T) {
 		txnif.UncommitTS, txnif.UncommitTS,
 	}
 	for row, ts := range expected {
-		require.Equal(t, ts, commitTS.Get(row), "row %d", row)
+		require.Equal(t, ts, commitTS.GetValue(row), "row %d", row)
 	}
 }
 
@@ -458,9 +458,10 @@ func TestCollectAppendWaitsForTxnPrepareTS(t *testing.T) {
 	mp := mpool.MustNewZero()
 	go func() {
 		h.RLock()
-		selection, commits, aborts := h.CollectAppendLocked(
+		selection, commits, aborts, err := h.CollectAppendLocked(
 			prepareTS.Prev(), prepareTS, mp,
 		)
+		require.NoError(t, err)
 		h.RUnlock()
 		done <- collectResult{selection, commits, aborts}
 	}()
@@ -476,8 +477,8 @@ func TestCollectAppendWaitsForTxnPrepareTS(t *testing.T) {
 	releaseTxn()
 
 	result := <-done
-	defer result.commits.Close()
-	defer result.aborts.Close()
+	defer containers.ReleaseVector(result.commits)
+	defer containers.ReleaseVector(result.aborts)
 	require.Equal(t, uint32(1), result.selection.MaxRow)
 	require.Equal(t, 1, result.commits.Length())
 	require.Equal(t, 1, result.aborts.Length())

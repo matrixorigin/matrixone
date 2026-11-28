@@ -188,7 +188,6 @@ func TestCommittedReplayAdmitsOutputBeforeAdvancing(t *testing.T) {
 			require.NoError(t, err)
 			out := batch.NewWithSize(1)
 			defer out.Clean(selection)
-			out.Attrs = []string{"id"}
 			out.Vecs[0] = vector.NewVec(typ, selection)
 
 			err = ls.filterInMemCommittedInserts(ctx, []types.Type{typ}, []uint16{0}, selection, out)
@@ -219,7 +218,6 @@ func TestLocalCommittedInsertReadsTimeFromRowEntry(t *testing.T) {
 	}
 	defer ls.Close()
 	out := batch.NewWithSize(2)
-	out.SetAttributes([]string{"id", objectio.DefaultCommitTS_Attr})
 	out.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	out.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	defer out.Clean(mp)
@@ -362,7 +360,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	// This batch can be obtained by 'insert into db.t1 select result from generate_series(1, 67117056) g;'
 	s3Bat := batch.NewWithSize(2)
 	s3Bat.SetRowCount(8193)
-	s3Bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
+	s3BatAttrs := []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 	txn := &Transaction{
 		proc:          testutil.NewProc(t),
 		op:            txnOp,
@@ -374,6 +372,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 				tableId:    22,
 				fileName:   "a-s3-file-name",
 				bat:        s3Bat,
+				attrs:      s3BatAttrs,
 			},
 		},
 	}
@@ -384,7 +383,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	m := mpool.MustNewZero()
 	normalBat.SetRowCount(1)
 	require.NoError(t, vector.AppendFixed(normalBat.Vecs[0], int32(1), false, txn.proc.Mp()))
-	_, err := txn.WriteBatch(INSERT, "", 0, 11, 23, "db", "t2", normalBat, DNStore{})
+	_, err := txn.WriteBatch(INSERT, "", 0, 11, 23, "db", "t2", normalBat, nil, DNStore{})
 	require.NoError(t, err)
 
 	txnOp.AddWorkspace(txn)
@@ -460,7 +459,7 @@ func TestIvfWorkspaceReaderPreservesPhysicalPK(t *testing.T) {
 				in.Vecs[i+1] = vector.NewVec(typ, mp)
 				out.Vecs[i] = vector.NewVec(typ, mp)
 			}
-			in.SetAttributes(append([]string{catalog.Row_ID}, cols...))
+			inAttrs := append([]string{catalog.Row_ID}, cols...)
 			require.NoError(t, vector.AppendFixed(in.Vecs[1], int64(0), false, mp))
 			require.NoError(t, vector.AppendFixed(in.Vecs[2], int64(0), false, mp))
 			require.NoError(t, vector.AppendFixed(in.Vecs[3], int32(42), false, mp))
@@ -487,7 +486,7 @@ func TestIvfWorkspaceReaderPreservesPhysicalPK(t *testing.T) {
 			pool := fileservice.NewPool(1, func() *types.Packer { return packer },
 				func(p *types.Packer) { p.Reset() }, func(*types.Packer) {})
 			txn := &Transaction{op: txnOp, engine: &Engine{packerPool: pool},
-				writes: []Entry{{typ: INSERT, databaseId: 11, tableId: 22, bat: in}}}
+				writes: []Entry{{typ: INSERT, databaseId: 11, tableId: 22, bat: in, attrs: inAttrs}}}
 			txnOp.AddWorkspace(txn)
 			source := &LocalDisttaeDataSource{ctx: ctx, txnOffset: len(txn.writes),
 				table:    &txnTable{db: &txnDatabase{op: txnOp, databaseId: 11}, tableId: 22},
@@ -549,7 +548,7 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 	require.False(t, delVec.GetSorted())
 
 	delBat := batch.NewWithSize(1)
-	delBat.SetAttributes([]string{catalog.Row_ID})
+	delBatAttrs := []string{catalog.Row_ID}
 	delBat.Vecs[0] = delVec
 	delBat.SetRowCount(len(rows1))
 
@@ -558,7 +557,7 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 		require.NoError(t, vector.AppendFixed(delVec2, row, false, m))
 	}
 	delBat2 := batch.NewWithSize(1)
-	delBat2.SetAttributes([]string{catalog.Row_ID})
+	delBat2Attrs := []string{catalog.Row_ID}
 	delBat2.Vecs[0] = delVec2
 	delBat2.SetRowCount(len(rows2))
 
@@ -570,12 +569,14 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 				databaseId: 11,
 				tableId:    22,
 				bat:        delBat,
+				attrs:      delBatAttrs,
 			},
 			{
 				typ:        DELETE,
 				databaseId: 11,
 				tableId:    22,
 				bat:        delBat2,
+				attrs:      delBat2Attrs,
 			},
 		},
 	}
@@ -642,6 +643,7 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesLargeDeleteSet(t *testing.T)
 			databaseId: 11,
 			tableId:    22,
 			bat:        newWorkspaceDeleteBatch(t, []types.Rowid{types.NewRowid(bid, offset)}),
+			attrs:      []string{catalog.Row_ID},
 		})
 	}
 
@@ -698,6 +700,7 @@ func TestLocalDatasourceWorkspaceDeleteEntriesIndexesHotBlock(t *testing.T) {
 			databaseId: 11,
 			tableId:    22,
 			bat:        newWorkspaceDeleteBatch(t, []types.Rowid{types.NewRowid(&blk, uint32(i))}),
+			attrs:      []string{catalog.Row_ID},
 		})
 	}
 	writes = append(writes, Entry{
@@ -705,6 +708,7 @@ func TestLocalDatasourceWorkspaceDeleteEntriesIndexesHotBlock(t *testing.T) {
 		databaseId: 11,
 		tableId:    22,
 		bat:        newWorkspaceDeleteBatch(t, []types.Rowid{types.NewRowid(&otherBlk, 7)}),
+		attrs:      []string{catalog.Row_ID},
 	})
 	txn := &Transaction{op: txnOp, writes: writes}
 	txnOp.AddWorkspace(txn)
@@ -745,7 +749,8 @@ func TestLocalDatasourceWorkspaceDeleteEntriesIndexesHotBlock(t *testing.T) {
 	// a miss above must now be filtered.
 	txn.writes = append(txn.writes, Entry{
 		typ: DELETE, databaseId: 11, tableId: 22,
-		bat: newWorkspaceDeleteBatch(t, []types.Rowid{types.NewRowid(&blk, indexWorkspaceDeleteEntriesForBlockThreshold)}),
+		bat:   newWorkspaceDeleteBatch(t, []types.Rowid{types.NewRowid(&blk, indexWorkspaceDeleteEntriesForBlockThreshold)}),
+		attrs: []string{catalog.Row_ID},
 	})
 	ls.txnOffset = len(txn.writes)
 	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), indexWorkspaceDeleteEntriesForBlockThreshold+1)
@@ -926,12 +931,14 @@ func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChang
 				databaseId: 11,
 				tableId:    22,
 				bat:        newWorkspaceDeleteBatch(t, []types.Rowid{row}),
+				attrs:      []string{catalog.Row_ID},
 			},
 			{
 				typ:        DELETE,
 				databaseId: 11,
 				tableId:    22,
 				bat:        newWorkspaceDeleteBatch(t, []types.Rowid{row2}),
+				attrs:      []string{catalog.Row_ID},
 			},
 		},
 	}
@@ -975,7 +982,6 @@ func newWorkspaceDeleteBatch(t *testing.T, rows []types.Rowid) *batch.Batch {
 	}
 
 	delBat := batch.NewWithSize(1)
-	delBat.SetAttributes([]string{catalog.Row_ID})
 	delBat.Vecs[0] = delVec
 	delBat.SetRowCount(len(rows))
 	return delBat

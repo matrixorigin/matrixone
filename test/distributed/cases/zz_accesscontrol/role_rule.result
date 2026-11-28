@@ -10,7 +10,6 @@ drop user if exists test_rule_user_where;
 drop user if exists test_rule_user_dup_projection;
 drop user if exists test_rule_user_expr_projection;
 drop user if exists test_rule_user_columns;
-drop user if exists test_rule_user_legacy;
 drop user if exists test_rule_user_dependency;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
@@ -31,7 +30,6 @@ drop role if exists test_rule_role_dup_projection_b;
 drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
 drop role if exists test_rule_role_columns;
-drop role if exists test_rule_role_legacy;
 drop role if exists test_rule_role_dependency;
 drop database if exists db1;
 drop database if exists db2;
@@ -112,12 +110,14 @@ select * from db1.v_t1;
 100  ¦  30
 create table db1.t_columns(id int, tenant int, amount int, secret varchar(20));
 create table db1.t_hidden(id int, secret varchar(20));
+create table db1.t_columns_unruled(id int, public_note varchar(20));
 insert into db1.t_columns values (1, 1, 100, 's1'), (2, 2, 200, 's2');
 create role test_rule_role_columns;
 alter role test_rule_role_columns add rule "select id, amount from db1.t_columns where tenant = 1" on table db1.t_columns;
 create user test_rule_user_columns identified by '123456' default role test_rule_role_columns;
 grant connect on account * to test_rule_role_columns;
 grant select on table db1.t_columns to test_rule_role_columns;
+grant select on table db1.t_columns_unruled to test_rule_role_columns;
 set enable_remap_hint = 1;
 select * from db1.t_columns order by id;
 ➤ id[4,32,0]  ¦  amount[4,32,0]  𝄀
@@ -126,14 +126,57 @@ select column_name from information_schema.columns where table_schema = 'db1' an
 ➤ column_name[12,256,0]  𝄀
 id  𝄀
 amount
+desc db1.t_columns;
+internal error: do not have privilege to execute the statement
+show create table db1.t_columns;
+internal error: do not have privilege to execute the statement
+use db1;
+desc t_columns;
+internal error: do not have privilege to execute the statement
+show create table t_columns;
+internal error: do not have privilege to execute the statement
+desc db1.t_hidden;
+internal error: do not have privilege to execute the statement
+show create table db1.t_hidden;
+internal error: do not have privilege to execute the statement
 select count(*) from information_schema.columns where table_schema = 'db1' and table_name = 't_hidden';
 ➤ count(*)[-5,64,0]  𝄀
 0
+desc db1.t_columns_unruled;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+public_note  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table db1.t_columns_unruled;
+➤ Table[12,17,0]  ¦  Create Table[12,102,0]  𝄀
+t_columns_unruled  ¦  CREATE TABLE `t_columns_unruled` (
+  `id` int DEFAULT NULL,
+  `public_note` varchar(20) DEFAULT NULL
+)
 set enable_remap_hint = 0;
 select column_name from information_schema.columns where table_schema = 'db1' and table_name = 't_columns' order by ordinal_position;
 ➤ column_name[12,256,0]  𝄀
 id  𝄀
 amount
+grant show databases on account * to test_rule_role_columns;
+desc db1.t_columns;
+internal error: do not have privilege to execute the statement
+show create table db1.t_columns;
+internal error: do not have privilege to execute the statement
+revoke show databases on account * from test_rule_role_columns;
+desc db1.t_columns;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+tenant  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+amount  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+secret  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table db1.t_columns;
+➤ Table[12,9,0]  ¦  Create Table[12,147,0]  𝄀
+t_columns  ¦  CREATE TABLE `t_columns` (
+  `id` int DEFAULT NULL,
+  `tenant` int DEFAULT NULL,
+  `amount` int DEFAULT NULL,
+  `secret` varchar(20) DEFAULT NULL
+)
 show rules on role test_rule_role_columns;
 ➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
 db1.t_columns  ¦  select id, amount from db1.t_columns where tenant = 1
@@ -194,25 +237,94 @@ not supported: renaming a table while any role rewrite rules exist is not suppor
 select * from db1.t_rename_chain_guard;
 ➤ a[4,32,0]
 7
-create table db1.t_rename_legacy(a int, age int);
-insert into db1.t_rename_legacy values (1,1),(100,30);
-create role test_rule_role_legacy;
-alter role test_rule_role_legacy add rule "select * from db1.t_rename_legacy where age > 28" on table db1.` t_rename_legacy`;
-create user test_rule_user_legacy identified by '123456' default role test_rule_role_legacy;
-grant connect on account * to test_rule_role_legacy;
-grant select on table db1.t_rename_legacy to test_rule_role_legacy;
-set enable_remap_hint = 1;
-select * from db1.t_rename_legacy order by a;
+drop account if exists role_rule_case_modes;
+create account role_rule_case_modes admin_name 'admin' identified by '123456';
+set global lower_case_table_names = 0;
+select @@lower_case_table_names;
+➤ @@lower_case_table_names[-5,64,0]  𝄀
+0
+create database rule_db;
+create table rule_db.t_target(id int);
+create table rule_db.t_source(id int);
+create table rule_db.T_SOURCE(id int);
+insert into rule_db.t_target values (4);
+insert into rule_db.t_source values (2),(3);
+insert into rule_db.T_SOURCE values (2),(3),(4);
+create role case_primary, case_later;
+alter role case_primary add rule "select id from rule_db.t_source where id = 3" on table rule_db.t_target;
+alter role case_later add rule "select id from rule_db.T_SOURCE where id = 2" on table rule_db.t_target;
+create user case_reader identified by '123456' default role case_primary;
+grant connect on account * to case_primary, case_later;
+grant select on table rule_db.t_target to case_primary, case_later;
+grant select on table rule_db.t_source to case_primary, case_later;
+grant select on table rule_db.T_SOURCE to case_primary, case_later;
+grant case_later to case_reader;
+create table rule_db.t_catalog(id int);
+create table rule_db.T_CATALOG(id int);
+create role case_replace, case_drop;
+alter role case_replace add rule "select id from rule_db.t_source where id = 2" on table rule_db.T_CATALOG;
+alter role case_replace add rule "select id from rule_db.t_source where id = 3" on table rule_db.t_catalog;
+alter role case_drop add rule "select id from rule_db.t_source where id = 2" on table rule_db.T_CATALOG;
+show rules on role case_replace;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+rule_db.T_CATALOG  ¦  select id from rule_db.t_source where id = 2  𝄀
+rule_db.t_catalog  ¦  select id from rule_db.t_source where id = 3
+show rules on role case_drop;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+rule_db.T_CATALOG  ¦  select id from rule_db.t_source where id = 2
+create table rule_db.t_rename_legacy(a int, age int);
+create table rule_db.T_RENAME_LEGACY(a int, age int);
+insert into rule_db.t_rename_legacy values (1,1),(100,30);
+create role case_rename;
+alter role case_rename add rule "select id as a, id as age from rule_db.t_source where id = 3" on table rule_db.T_RENAME_LEGACY;
+create user case_rename_reader identified by '123456' default role case_rename;
+grant connect on account * to case_rename;
+grant select on table rule_db.t_rename_legacy to case_rename;
+grant select on table rule_db.t_source to case_rename;
+select id from rule_db.t_target order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from rule_db.t_target order by id;
+➤ id[4,32,0]  𝄀
+2
+grant case_later to case_primary;
+select id from rule_db.t_target order by id;
+➤ id[4,32,0]  𝄀
+2
+set global lower_case_table_names = 1;
+select @@lower_case_table_names;
+➤ @@lower_case_table_names[-5,64,0]  𝄀
+1
+alter role case_replace add rule "select id from rule_db.t_source where id = 4" on table rule_db.T_CATALOG;
+show rules on role case_replace;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+rule_db.t_catalog  ¦  select id from rule_db.t_source where id = 4
+show rules on role case_drop;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+rule_db.T_CATALOG  ¦  select id from rule_db.t_source where id = 2
+alter role case_drop drop rule on table rule_db.t_catalog;
+show rules on role case_drop;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]
+show rules on role case_replace;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+rule_db.t_catalog  ¦  select id from rule_db.t_source where id = 4
+show rules on role case_rename;
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+rule_db.T_RENAME_LEGACY  ¦  select id as a, id as age from rule_db.t_source where id = 3
+select * from rule_db.t_rename_legacy order by a;
 ➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
-100  ¦  30
-alter table db1.t_rename_legacy rename to db1.t_rename_legacy_after;
+3  ¦  3
+alter table rule_db.t_rename_legacy rename to rule_db.t_rename_legacy_after;
 not supported: renaming a table while any role rewrite rules exist is not supported; drop all rules first
-rename table db1.t_rename_legacy to db1.t_rename_legacy_after;
+rename table rule_db.t_rename_legacy to rule_db.t_rename_legacy_after;
 not supported: renaming a table while any role rewrite rules exist is not supported; drop all rules first
-set enable_remap_hint = 1;
-select * from db1.t_rename_legacy order by a;
+select * from rule_db.t_rename_legacy order by a;
 ➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
-100  ¦  30
+3  ¦  3
+drop account role_rule_case_modes;
+select count(*) from mo_catalog.mo_account where account_name = 'role_rule_case_modes';
+➤ count(*)[-5,64,0]  𝄀
+0
 create table db1.t_rename_rule_dependency(id int primary key, tenant_id int);
 insert into db1.t_rename_rule_dependency values (1,1),(2,2);
 create table db1.t_rename_rule_allowlist(tenant_id int);
@@ -283,12 +395,30 @@ alter role test_rule_role_inherit_b add rule "select a, age from db2.t2 where ag
 create user test_rule_user_inherit identified by '123456' default role test_rule_role_inherit_a;
 grant connect on account * to test_rule_role_inherit_a;
 grant select on table db2.t2 to test_rule_role_inherit_b;
+create table db2.t_string(name varchar(10));
+insert into db2.t_string values ('Alice'),('Bob'),('Cara');
+alter role test_rule_role_inherit_a add rule "select name from db2.t_string where name = 'Alice'" on table db2.t_string;
+alter role test_rule_role_inherit_b add rule "select name from db2.t_string where name = 'Bob'" on table db2.t_string;
+grant select on table db2.t_string to test_rule_role_inherit_a;
+grant select on table db2.t_string to test_rule_role_inherit_b;
+grant connect on account * to test_rule_role_inherit_b;
+grant test_rule_role_inherit_b to test_rule_user_inherit;
+select name from db2.t_string order by name;
+➤ name[12,10,0]  𝄀
+Alice
+select name from db2.t_string order by name;
+➤ name[12,10,0]  𝄀
+Bob
 grant test_rule_role_inherit_b to test_rule_role_inherit_a;
 set enable_remap_hint = 1;
 select * from db2.t2 order by a;
 ➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
 20  ¦  35  𝄀
 200  ¦  60
+select name from db2.t_string order by name;
+➤ name[12,10,0]  𝄀
+Alice  𝄀
+Bob
 alter role test_rule_role_inherit_a add rule "select a, cast(age as char) collate utf8mb4_bin as age from db2.t2 where a = 10" on table db2.t2;
 alter role test_rule_role_inherit_b add rule "select a, cast(age as char) collate utf8mb4_bin as age from db2.t2 where a = 20" on table db2.t2;
 set enable_remap_hint = 1;
@@ -296,6 +426,172 @@ select * from db2.t2 order by a;
 ➤ a[4,32,0]  ¦  age[12,65535,0]  𝄀
 10  ¦  10  𝄀
 20  ¦  35
+create table db1.t_rule_text(id int, code varchar(20));
+insert into db1.t_rule_text values (1, '0001'), (2, '1'), (3, '销售订单'), (4, 'O''Brien');
+grant select on table db1.t_rule_text to test_rule_role_inherit_a;
+grant select on table db1.t_rule_text to test_rule_role_inherit_b;
+alter role test_rule_role_inherit_a add rule "select * from db1.t_rule_text where code = '0001'" on table db1.t_rule_text;
+select id from db1.t_rule_text order by id;
+➤ id[4,32,0]  𝄀
+1
+alter role test_rule_role_inherit_b add rule "select * from db1.t_rule_text where trim(code) = '销售订单'" on table db1.t_rule_text;
+select id from db1.t_rule_text order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+alter role test_rule_role_inherit_b add rule "select * from db1.t_rule_text where code = 'O''Brien'" on table db1.t_rule_text;
+select id from db1.t_rule_text order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+4
+create table db1.t_rule_lookup(code varchar(20));
+insert into db1.t_rule_lookup values ('0001'), ('1');
+grant select on table db1.t_rule_lookup to test_rule_role_inherit_a;
+alter role test_rule_role_inherit_a add rule "select * from db1.t_rule_text where code in (select code from db1.t_rule_lookup where code in ('0001'))" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select * from db1.t_rule_text where code = '销售订单'" on table db1.t_rule_text;
+select id, code from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  code[12,20,0]  𝄀
+1  ¦  0001  𝄀
+3  ¦  销售订单
+alter role test_rule_role_inherit_a add rule 'select "code" as x from db1.t_rule_text where (select true)' on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select 'code' as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+set session sql_mode = '';
+select x, count(*) from db1.t_rule_text group by x;
+➤ x[12,4,0]  ¦  count(*)[-5,64,0]  𝄀
+code  ¦  4
+set session sql_mode = 'ANSI_QUOTES';
+select x, count(*) from db1.t_rule_text group by x;
+➤ x[12,4,0]  ¦  count(*)[-5,64,0]  𝄀
+code  ¦  1
+set session sql_mode = '';
+select x, count(*) from db1.t_rule_text group by x;
+➤ x[12,4,0]  ¦  count(*)[-5,64,0]  𝄀
+code  ¦  4
+alter role test_rule_role_inherit_b drop rule on table db1.t_rule_text;
+alter role test_rule_role_inherit_a add rule "select * from db1.t_rule_text where code = 'O\\'Brien'" on table db1.t_rule_text;
+select id from db1.t_rule_text;
+➤ id[4,32,0]  𝄀
+4
+set session sql_mode = 'NO_BACKSLASH_ESCAPES';
+select id from db1.t_rule_text;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 52 near "Brien'";
+commit;
+rollback;
+set session sql_mode = '';
+select id from db1.t_rule_text;
+➤ id[4,32,0]  𝄀
+4
+alter role test_rule_role_inherit_a add rule "select id, cast(code as char character set 'UTF8MB4') collate 'UTF8MB4_BIN' as code from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, cast(code as char character set 'utf8mb4') collate 'utf8mb4_bin' as code from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select id, code from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  code[12,20,0]  𝄀
+1  ¦  0001  𝄀
+3  ¦  销售订单
+alter role test_rule_role_inherit_a add rule "select trim(`Code`) as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select trim(code) as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select x from db1.t_rule_text order by x;
+➤ x[12,20,0]  𝄀
+0001  𝄀
+销售订单
+alter role test_rule_role_inherit_a add rule "select _binary 'A' from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select _binary 0x41 from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select count(`0x41`), min(hex(`0x41`)) from db1.t_rule_text;
+➤ count(0x41)[-5,64,0]  ¦  min(hex(0x41))[12,2,0]  𝄀
+1  ¦  41
+alter role test_rule_role_inherit_a add rule "select _binary 'A' as code from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select _binary 0x41 as code from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select count(code), min(hex(code)) from db1.t_rule_text;
+➤ count(code)[-5,64,0]  ¦  min(hex(code))[12,2,0]  𝄀
+2  ¦  41
+alter role test_rule_role_inherit_a add rule "select id, _binary 0xA as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, _binary 0x0A as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select id, hex(x) from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  hex(x)[12,2,0]  𝄀
+1  ¦  0A  𝄀
+3  ¦  0A
+alter role test_rule_role_inherit_b add rule "select id, _binary 0x00A as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select id, hex(x) from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  hex(x)[12,4,0]  𝄀
+3  ¦  000A
+alter role test_rule_role_inherit_a add rule "select id, 0xA as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, 0x0A as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  hex(x)[12,8,0]  ¦  length(x)[-5,64,0]  ¦  x is null[-6,8,0]  𝄀
+1  ¦  0A  ¦  1  ¦  0  𝄀
+3  ¦  0A  ¦  1  ¦  0
+alter role test_rule_role_inherit_a add rule "select id, b'1010' as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, 0b00001010 as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  hex(x)[12,8,0]  ¦  length(x)[-5,64,0]  ¦  x is null[-6,8,0]  𝄀
+1  ¦  0A  ¦  1  ¦  0  𝄀
+3  ¦  0A  ¦  1  ¦  0
+alter role test_rule_role_inherit_a add rule "select id, _binary '' as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, _binary X'' as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  hex(x)[12,536870911,0]  ¦  length(x)[-5,64,0]  ¦  x is null[-6,8,0]  𝄀
+1  ¦    ¦  0  ¦  0  𝄀
+3  ¦    ¦  0  ¦  0
+set @role_rule_saved_lctn = @@global.lower_case_table_names;
+set global lower_case_table_names = 1;
+alter role test_rule_role_inherit_a add rule "select id from db1.t_rule_text as `X` where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id from db1.t_rule_text as x where x.id = 3" on table db1.t_rule_text;
+select id from db1.t_rule_text order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+set global lower_case_table_names = 0;
+select @@lower_case_table_names;
+➤ @@lower_case_table_names[-5,64,0]  𝄀
+0
+select id from db1.t_rule_text order by id;
+➤ id[4,32,0]  𝄀
+3
+set global lower_case_table_names = 1;
+grant select on table information_schema.character_sets to test_rule_role_inherit_a;
+alter role test_rule_role_inherit_a add rule "select character_set_name, maxlen from information_schema.character_sets where maxlen = 1" on table information_schema.character_sets;
+alter role test_rule_role_inherit_b add rule "select character_set_name, maxlen from INFORMATION_SCHEMA.CHARACTER_SETS where INFORMATION_SCHEMA.CHARACTER_SETS.maxlen = 4" on table information_schema.character_sets;
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+➤ character_set_name[12,64,0]  𝄀
+binary  𝄀
+utf8mb4
+set global lower_case_table_names = 0;
+select @@lower_case_table_names;
+➤ @@lower_case_table_names[-5,64,0]  𝄀
+0
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+➤ character_set_name[12,64,0]  𝄀
+binary  𝄀
+utf8mb4
+select (select ChArAcTeR_SeTs.maxlen from (select 1 as marker) as n) as maxlen from (select 73 as maxlen) as ChArAcTeR_SeTs;
+➤ maxlen[-5,64,0]  𝄀
+73
+select (select ChArAcTeR_SeTs.maxlen from information_schema.character_sets where character_set_name = 'binary') as maxlen from (select 73 as maxlen) as ChArAcTeR_SeTs;
+➤ maxlen[4,32,0]  𝄀
+1
+select (select ChArAcTeR_SeTs.maxlen from information_schema.character_sets cross join INFORMATION_SCHEMA.CHARACTER_SETS where character_sets.character_set_name = 'binary' and CHARACTER_SETS.character_set_name = 'binary') as maxlen from (select 73 as maxlen) as ChArAcTeR_SeTs;
+invalid input: ambiguous table reference 'ChArAcTeR_SeTs'
+set global lower_case_table_names = 2;
+select @@lower_case_table_names;
+➤ @@lower_case_table_names[-5,64,0]  𝄀
+2
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+➤ character_set_name[12,64,0]  𝄀
+binary  𝄀
+utf8mb4
+alter role test_rule_role_inherit_a add rule "select character_set_name, maxlen from character_sets where maxlen = 1" on table information_schema.character_sets;
+alter role test_rule_role_inherit_b add rule "select character_set_name, maxlen from CHARACTER_SETS where maxlen = 4" on table information_schema.character_sets;
+use information_schema;
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+➤ character_set_name[12,64,0]  𝄀
+binary  𝄀
+utf8mb4
+set global lower_case_table_names = 0;
+use information_schema;
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+➤ character_set_name[12,64,0]  𝄀
+binary  𝄀
+utf8mb4
+set global lower_case_table_names = @role_rule_saved_lctn;
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;
 alter role test_rule_role_validate add rule "delete from db1.t1 where a = 1" on table db1.t1;
@@ -370,17 +666,16 @@ select count(*) from db1.t_dup;
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
 alter role test_rule_role_expr_projection_a add rule "select a + 1 as b from db1.t_dup where marker = 1" on table db1.t_dup;
-alter role test_rule_role_expr_projection_b add rule "select a + 1 as b from db1.t_dup where marker = 2" on table db1.t_dup;
+alter role test_rule_role_expr_projection_b add rule "select a + 1 as B from db1.t_dup where marker = 2" on table db1.t_dup;
 create user test_rule_user_expr_projection identified by '123456' default role test_rule_role_expr_projection_a;
 grant connect on account * to test_rule_role_expr_projection_a;
 grant select on table db1.t_dup to test_rule_role_expr_projection_a;
 grant select on table db1.t_dup to test_rule_role_expr_projection_b;
-grant test_rule_role_expr_projection_b to test_rule_user_expr_projection;
+grant test_rule_role_expr_projection_b to test_rule_role_expr_projection_a;
 set enable_remap_hint = 1;
-set secondary role all;
 select b, count(*) from db1.t_dup group by b order by b;
 ➤ b[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
-2  ¦  1
+2  ¦  2
 create user test_rule_user_show identified by '123456';
 show rules on role test_rule_role_validate;
 internal error: do not have privilege to execute the statement
@@ -395,7 +690,6 @@ drop user if exists test_rule_user_where;
 drop user if exists test_rule_user_dup_projection;
 drop user if exists test_rule_user_expr_projection;
 drop user if exists test_rule_user_columns;
-drop user if exists test_rule_user_legacy;
 drop user if exists test_rule_user_dependency;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
@@ -416,7 +710,6 @@ drop role if exists test_rule_role_dup_projection_b;
 drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
 drop role if exists test_rule_role_columns;
-drop role if exists test_rule_role_legacy;
 drop role if exists test_rule_role_dependency;
 drop database if exists db1;
 drop database if exists db2;
@@ -429,8 +722,8 @@ select count(*) from mo_catalog.mo_role where role_name in ('test_rule_role','te
 select count(*) from mo_catalog.mo_role_rule where rule_name in ('db1.t1','db2.t2','db1.t_rename_legacy','db1. t_rename_legacy','db1.t_dup','db1.t_columns','db1.t_rename_rule_dependency');
 ➤ count(*)[-5,64,0]
 0
-select count(*) from mo_catalog.mo_tables where reldatabase in ('db1','db2') and relname in ('t_rename_no_rule','t_rename_no_rule_after','t.with.dot','t.with.dot.after','t_rename_chain_ok_a','t_rename_chain_ok_a_after','t_rename_chain_ok_b','t_rename_chain_ok_b_after','t_rename_chain_guard','t_rename_chain_guard_after','t_rename_legacy','t_rename_legacy_after','t_rename_rule_dependency','t_rename_rule_allowlist','t_rename_rule_allowlist_old','t_columns','t_hidden');
-➤ count(*)[-5,64,0]
+select count(*) from mo_catalog.mo_tables where reldatabase in ('db1','db2') and relname in ('t_rename_no_rule','t_rename_no_rule_after','t.with.dot','t.with.dot.after','t_rename_chain_ok_a','t_rename_chain_ok_a_after','t_rename_chain_ok_b','t_rename_chain_ok_b_after','t_rename_chain_guard','t_rename_chain_guard_after','t_rename_legacy','t_rename_legacy_after','t_rename_rule_dependency','t_rename_rule_allowlist','t_rename_rule_allowlist_old','t_columns','t_hidden','t_columns_unruled');
+➤ count(*)[-5,64,0]  𝄀
 0
 select count(*) from mo_catalog.mo_database where datname in ('db1','db2');
 ➤ count(*)[-5,64,0]

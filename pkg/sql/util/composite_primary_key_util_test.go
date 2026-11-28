@@ -166,7 +166,11 @@ func TestFillCompositePKeyBatch(t *testing.T) {
 	columnSize := 10
 	rowCount := 10
 	bat, pkeyDef, valueCount := MakeBatch(columnSize, rowCount, proc.Mp())
-	err := FillCompositeKeyBatch(bat, catalog.CPrimaryKeyColName, pkeyDef.Names, proc)
+	attrs := make([]string, columnSize)
+	for i := range attrs {
+		attrs[i] = strconv.Itoa(i)
+	}
+	err := FillCompositeKeyBatch(bat, attrs, catalog.CPrimaryKeyColName, pkeyDef.Names, proc)
 	require.Equal(t, err, nil)
 	bs := vector.InefficientMustBytesCol(bat.Vecs[len(bat.Vecs)-1])
 	tuples := make([]types.Tuple, 0)
@@ -200,7 +204,7 @@ func MakeBatch(columnSize int, rowCount int, mp *mpool.MPool) (*batch.Batch, *pl
 			keys = append(keys, strconv.Itoa(i))
 		}
 	}
-	bat := batch.New(attrs)
+	bat := batch.NewWithSize(len(attrs))
 	valueCount := make(map[[2]int]interface{})
 	for i := 0; i < columnSize; i++ {
 		bat.Vecs[i] = vector.NewVec(randType().ToType(), mp)

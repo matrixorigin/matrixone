@@ -32,10 +32,10 @@ import (
 func TestMutIndexDeleteAtPreservesOtherPositions(t *testing.T) {
 	idx := NewMutIndex(types.T_int32.ToType())
 	keys := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer keys.Close()
-	keys.Append(int32(7), false)
-	keys.Append(int32(7), false)
-	require.NoError(t, idx.BatchUpsert(keys.GetDownstreamVector(), 0))
+	defer containers.ReleaseVector(keys)
+	keys.MustAppendValue(int32(7), false)
+	keys.MustAppendValue(int32(7), false)
+	require.NoError(t, idx.BatchUpsert(keys, 0))
 
 	require.NoError(t, idx.DeleteAt(int32(7), 0))
 	rows, err := idx.GetActiveRow(int32(7))
@@ -46,23 +46,23 @@ func TestMutIndexDeleteAtPreservesOtherPositions(t *testing.T) {
 func TestForeachRowsByKeysSkipsNullAndMissingKeys(t *testing.T) {
 	idx := NewMutIndex(types.T_int32.ToType())
 	indexed := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer indexed.Close()
-	indexed.Append(int32(7), false)
-	indexed.Append(int32(8), false)
-	indexed.Append(int32(7), false)
-	require.NoError(t, idx.BatchUpsert(indexed.GetDownstreamVector(), 0))
+	defer containers.ReleaseVector(indexed)
+	indexed.MustAppendValue(int32(7), false)
+	indexed.MustAppendValue(int32(8), false)
+	indexed.MustAppendValue(int32(7), false)
+	require.NoError(t, idx.BatchUpsert(indexed, 0))
 
 	query := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer query.Close()
-	query.Append(int32(7), false)
-	query.Append(nil, true)
-	query.Append(int32(9), false)
+	defer containers.ReleaseVector(query)
+	query.MustAppendValue(int32(7), false)
+	query.MustAppendValue(nil, true)
+	query.MustAppendValue(int32(9), false)
 	queryZM := index.NewZM(types.T_int32, 0)
-	require.NoError(t, index.BatchUpdateZM(queryZM, query.GetDownstreamVector()))
+	require.NoError(t, index.BatchUpdateZM(queryZM, query))
 
 	var rows []uint32
 	require.NoError(t, idx.ForeachRowsByKeys(
-		query.GetDownstreamVector(), queryZM,
+		query, queryZM,
 		func(row uint32) { rows = append(rows, row) },
 	))
 	require.Equal(t, []uint32{0, 2}, rows)
@@ -71,27 +71,27 @@ func TestForeachRowsByKeysSkipsNullAndMissingKeys(t *testing.T) {
 func TestGetDuplicatedRowsSkipsIneligibleCandidates(t *testing.T) {
 	idx := NewMutIndex(types.T_int32.ToType())
 	indexedKeys := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer indexedKeys.Close()
+	defer containers.ReleaseVector(indexedKeys)
 	for i := 0; i < 3; i++ {
-		indexedKeys.Append(int32(7), false)
+		indexedKeys.MustAppendValue(int32(7), false)
 	}
-	require.NoError(t, idx.BatchUpsert(indexedKeys.GetDownstreamVector(), 0))
+	require.NoError(t, idx.BatchUpsert(indexedKeys, 0))
 
 	query := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer query.Close()
-	query.Append(int32(7), false)
+	defer containers.ReleaseVector(query)
+	query.MustAppendValue(int32(7), false)
 	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	defer rowIDs.Close()
-	rowIDs.Append(nil, true)
+	defer containers.ReleaseVector(rowIDs)
+	rowIDs.MustAppendValue(nil, true)
 
 	objID := types.NewObjectid()
 	blkID := types.NewBlockidWithObjectID(&objID, 0)
 	err := idx.GetDuplicatedRows(
 		context.Background(),
-		query.GetDownstreamVector(),
+		query,
 		nil,
 		&blkID,
-		rowIDs.GetDownstreamVector(),
+		rowIDs,
 		func(row uint32) bool { return row < 3 },
 		func(row uint32) error {
 			if row > 0 {
@@ -103,18 +103,18 @@ func TestGetDuplicatedRowsSkipsIneligibleCandidates(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.False(t, rowIDs.IsNull(0))
-	rid := rowIDs.Get(0).(types.Rowid)
+	rid := rowIDs.GetValue(0).(types.Rowid)
 	require.Equal(t, uint32(0), rid.GetRowOffset())
 
 	skippedRowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	defer skippedRowIDs.Close()
-	skippedRowIDs.Append(nil, true)
+	defer containers.ReleaseVector(skippedRowIDs)
+	skippedRowIDs.MustAppendValue(nil, true)
 	err = idx.GetDuplicatedRows(
 		context.Background(),
-		query.GetDownstreamVector(),
+		query,
 		nil,
 		&blkID,
-		skippedRowIDs.GetDownstreamVector(),
+		skippedRowIDs,
 		func(row uint32) bool { return row < 3 },
 		func(uint32) error { return index.ErrNotFound },
 		common.DefaultAllocator,
@@ -127,25 +127,25 @@ func TestGetDuplicatedRowsChecksOnlyMatchingRows(t *testing.T) {
 	idx := NewMutIndex(types.T_int32.ToType())
 	defer idx.Close()
 	indexed := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer indexed.Close()
-	indexed.Append(int32(7), false)
-	indexed.Append(int32(9), false)
-	require.NoError(t, idx.BatchUpsert(indexed.GetDownstreamVector(), 0))
+	defer containers.ReleaseVector(indexed)
+	indexed.MustAppendValue(int32(7), false)
+	indexed.MustAppendValue(int32(9), false)
+	require.NoError(t, idx.BatchUpsert(indexed, 0))
 
 	query := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
-	defer query.Close()
-	query.Append(int32(8), false) // Inside the zonemap, absent from ART.
-	query.Append(int32(9), false)
+	defer containers.ReleaseVector(query)
+	query.MustAppendValue(int32(8), false) // Inside the zonemap, absent from ART.
+	query.MustAppendValue(int32(9), false)
 	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	defer rowIDs.Close()
-	rowIDs.Append(nil, true)
-	rowIDs.Append(nil, true)
+	defer containers.ReleaseVector(rowIDs)
+	rowIDs.MustAppendValue(nil, true)
+	rowIDs.MustAppendValue(nil, true)
 
 	var checked []uint32
 	blockID := types.Blockid{}
 	err := idx.GetDuplicatedRows(
-		context.Background(), query.GetDownstreamVector(), nil, &blockID,
-		rowIDs.GetDownstreamVector(),
+		context.Background(), query, nil, &blockID,
+		rowIDs,
 		func(row uint32) bool {
 			checked = append(checked, row)
 			return true
@@ -221,18 +221,18 @@ func TestContainsSkipsIneligibleTombstoneCandidates(t *testing.T) {
 	rowID := types.NewRowid(&blkID, 42)
 
 	indexedKeys := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	defer indexedKeys.Close()
+	defer containers.ReleaseVector(indexedKeys)
 	for i := 0; i < 3; i++ {
-		indexedKeys.Append(rowID, false)
+		indexedKeys.MustAppendValue(rowID, false)
 	}
-	require.NoError(t, idx.BatchUpsert(indexedKeys.GetDownstreamVector(), 0))
+	require.NoError(t, idx.BatchUpsert(indexedKeys, 0))
 
 	query := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	defer query.Close()
-	query.Append(rowID, false)
+	defer containers.ReleaseVector(query)
+	query.MustAppendValue(rowID, false)
 	err := idx.Contains(
 		context.Background(),
-		query.GetDownstreamVector(),
+		query,
 		nil,
 		&blkID,
 		func(row uint32) error {
@@ -247,11 +247,11 @@ func TestContainsSkipsIneligibleTombstoneCandidates(t *testing.T) {
 	require.True(t, query.IsNull(0))
 
 	allSkipped := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	defer allSkipped.Close()
-	allSkipped.Append(rowID, false)
+	defer containers.ReleaseVector(allSkipped)
+	allSkipped.MustAppendValue(rowID, false)
 	err = idx.Contains(
 		context.Background(),
-		allSkipped.GetDownstreamVector(),
+		allSkipped,
 		nil,
 		&blkID,
 		func(uint32) error { return index.ErrNotFound },
@@ -261,12 +261,12 @@ func TestContainsSkipsIneligibleTombstoneCandidates(t *testing.T) {
 	require.False(t, allSkipped.IsNull(0))
 
 	conflicting := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	defer conflicting.Close()
-	conflicting.Append(rowID, false)
+	defer containers.ReleaseVector(conflicting)
+	conflicting.MustAppendValue(rowID, false)
 	conflictErr := errors.New("prepared tombstone conflict")
 	err = idx.Contains(
 		context.Background(),
-		conflicting.GetDownstreamVector(),
+		conflicting,
 		nil,
 		&blkID,
 		func(row uint32) error {
@@ -279,4 +279,41 @@ func TestContainsSkipsIneligibleTombstoneCandidates(t *testing.T) {
 	)
 	require.ErrorIs(t, err, conflictErr)
 	require.False(t, conflicting.IsNull(0))
+}
+
+func TestContainsReturnsTombstoneBitmapCapacityError(t *testing.T) {
+	const capacity = 1 << 20
+	pool, err := mpool.NewMPool(t.Name(), capacity, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(pool)
+
+	objID := types.NewObjectid()
+	blkID := types.NewBlockidWithObjectID(&objID, 0)
+	rowID := types.NewRowid(&blkID, 42)
+	keys := containers.MakeVector(types.T_Rowid.ToType(), pool)
+	defer containers.ReleaseVector(keys)
+	keys.MustAppendValue(rowID, false)
+
+	idx := NewMutIndex(types.T_Rowid.ToType())
+	defer idx.Close()
+	require.NoError(t, idx.BatchUpsert(keys, 0))
+
+	contains := func(skip func(uint32) error) error {
+		return idx.Contains(t.Context(), keys, nil, &blkID, skip, pool)
+	}
+	before := pool.CurrNB()
+	t.Run("under pressure", func(t *testing.T) {
+		filler, err := pool.Alloc(capacity-int(before), true)
+		require.NoError(t, err)
+		defer pool.Free(filler)
+		require.NoError(t, contains(func(uint32) error { return index.ErrNotFound }))
+		require.False(t, keys.IsNull(0))
+		err = contains(func(uint32) error { return nil })
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "%v", err)
+		require.False(t, keys.IsNull(0))
+		require.EqualValues(t, capacity, pool.CurrNB())
+	})
+	require.Equal(t, before, pool.CurrNB())
+	require.NoError(t, contains(func(uint32) error { return nil }))
+	require.True(t, keys.IsNull(0))
 }

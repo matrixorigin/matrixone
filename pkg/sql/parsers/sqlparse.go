@@ -20,6 +20,7 @@ import (
 	gotrace "runtime/trace"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -357,8 +358,7 @@ func extractLeadingHintsWithSQLMode(ctx context.Context, sql string, sqlMode str
 
 type RewriteMap struct {
 	// RawRewrites carries the raw JSON value for each table key. Each value is
-	// either a single SQL string or an ordered array of SQL strings (a stacked
-	// rewrite chain: innermost first, outermost last).
+	// either a single SQL layer or an ordered array (innermost first, outermost last).
 	RawRewrites map[string]json.RawMessage `json:"rewrites"`
 	// RemapDb maps a source database name to a target database name, applied
 	// before the table rewrites.
@@ -383,22 +383,96 @@ func isValidDbIdentifier(s string) bool {
 	return true
 }
 
-// decodeRewriteChain decodes a rewrite value that is either a JSON string or a
-// JSON array of strings into an ordered list of SQL strings.
+type rewriteHintSQL string
+
+type rewriteHintSQLBytes struct {
+	SQLBytes []byte `json:"sql_bytes"`
+}
+
+// EncodeRewriteHintSQL preserves arbitrary SQL bytes in an internal hint layer.
+func EncodeRewriteHintSQL(sql string) any {
+	if utf8.ValidString(sql) {
+		return sql
+	}
+	// JSON strings cannot carry arbitrary bytes. Keep the original spelling for
+	// generated headings and parsing, including inside nested SELECTs.
+	return rewriteHintSQLBytes{SQLBytes: []byte(sql)}
+}
+
+func (sql *rewriteHintSQL) UnmarshalJSON(raw []byte) error {
+	if len(raw) != 0 && raw[0] == '{' {
+		var binary rewriteHintSQLBytes
+		if err := json.Unmarshal(raw, &binary); err != nil {
+			return err
+		}
+		*sql = rewriteHintSQL(binary.SQLBytes)
+		return nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return err
+	}
+	*sql = rewriteHintSQL(text)
+	return nil
+}
+
+// ValidateRewriteSQLBytes accepts invalid UTF-8 only in binary strings and
+// ordinary comments. Executable comments and optimizer hints may carry SQL
+// semantics and follow the same checks as the surrounding statement.
+func ValidateRewriteSQLBytes(ctx context.Context, sql string, mode mysql.SQLModeFlags) error {
+	if utf8.ValidString(sql) {
+		return nil
+	}
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
+	defer mysql.PutScanner(scanner)
+	var previous, checked int
+	for {
+		scan := scanner.ScanWithComments
+		if previous == '.' {
+			scan = scanner.ScanWithCommentsAfterDot
+		}
+		token, value := scan()
+		if !utf8.ValidString(sql[checked:scanner.PrePos]) {
+			break
+		}
+		if token == 0 || token == mysql.EofChar() || token == mysql.LEX_ERROR {
+			if utf8.ValidString(sql[scanner.PrePos:]) {
+				return nil // Syntax errors are reported when parsing the rule.
+			}
+			break
+		}
+		ordinaryComment := token == mysql.COMMENT && !strings.HasPrefix(value, "/*!") && !strings.HasPrefix(value, "/*+")
+		binaryString := previous == mysql.UNDERSCORE_BINARY && token == mysql.STRING
+		if !ordinaryComment && !binaryString && !utf8.ValidString(sql[scanner.PrePos:scanner.Pos]) {
+			break
+		}
+		checked = scanner.Pos
+		if token != mysql.COMMENT {
+			previous = token
+		}
+	}
+	return moerr.NewInvalidInput(ctx, "rewrite rule contains invalid UTF-8 outside binary literals or ordinary comments")
+}
+
+// decodeRewriteChain decodes a single SQL layer or an ordered array of layers.
 func decodeRewriteChain(ctx context.Context, raw json.RawMessage) ([]string, error) {
 	trimmed := strings.TrimSpace(string(raw))
 	if len(trimmed) > 0 && trimmed[0] == '[' {
-		var arr []string
-		if err := json.Unmarshal(raw, &arr); err != nil {
+		var layers []rewriteHintSQL
+		if err := json.Unmarshal(raw, &layers); err != nil {
 			return nil, moerr.NewParseError(ctx, err.Error())
 		}
-		return arr, nil
+		sqls := make([]string, len(layers))
+		for i, layer := range layers {
+			sqls[i] = string(layer)
+		}
+		return sqls, nil
 	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
+	var sql rewriteHintSQL
+	if err := json.Unmarshal(raw, &sql); err != nil {
 		return nil, moerr.NewParseError(ctx, err.Error())
 	}
-	return []string{s}, nil
+	return []string{string(sql)}, nil
 }
 
 // AddRewriteHints The position of the hint at the beginning is different from that in MySQL.
@@ -681,6 +755,13 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 		}
 		return moerr.NewParseError(ctx, "parse hints bug")
 	}
+	mode := mysql.ParseSQLModeFlags(sqlMode)
+	parseRewrite := func(sql string) (tree.Statement, error) {
+		if err := ValidateRewriteSQLBytes(ctx, sql, mode); err != nil {
+			return nil, err
+		}
+		return ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, lowerCaseTableNames, sqlMode)
+	}
 	for i, stmt := range stmts {
 		hint := strings.TrimSpace(hints[i])
 		if hint == "" || hint[0] != '{' {
@@ -695,7 +776,7 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 				if v == "" {
 					return moerr.NewParseError(ctx, "statement")
 				}
-				st, parseErr := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, lowerCaseTableNames, sqlMode)
+				st, parseErr := parseRewrite(v)
 				if parseErr != nil {
 					return moerr.NewParseError(ctx, parseErr.Error())
 				}
@@ -752,7 +833,7 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 					freeRewriteOption()
 					return moerr.NewParseError(ctx, "statement")
 				}
-				st, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, lowerCaseTableNames, sqlMode)
+				st, err := parseRewrite(v)
 				if err != nil {
 					freeRewriteChain(chain)
 					freeRewriteOption()
@@ -777,6 +858,10 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 		}
 		switch s := attachStmt.(type) {
 		case *tree.Select:
+			s.RewriteOption = rewriteOption
+		case *tree.ShowColumns:
+			s.RewriteOption = rewriteOption
+		case *tree.ShowCreateTable:
 			s.RewriteOption = rewriteOption
 		case *tree.ParenSelect:
 			if s.Select != nil {

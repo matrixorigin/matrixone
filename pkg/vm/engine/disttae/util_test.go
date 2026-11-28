@@ -1167,10 +1167,7 @@ func TestCollectAndCalculateStatsDoesNotApplyFailedObjectScan(t *testing.T) {
 
 func TestShrinkBatchWithRowids(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bat := batch.NewWithSchema(
-		[]string{"rowid"},
-		[]types.Type{types.T_Rowid.ToType()}, mp,
-	)
+	bat := batch.NewWithTypes([]types.Type{types.T_Rowid.ToType()}, mp)
 	defer bat.Clean(mp)
 
 	var rowid objectio.Rowid

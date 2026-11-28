@@ -236,7 +236,7 @@ func NewFlushTableTailTask(
 // impl DisposableVecPool
 func (task *flushTableTailTask) GetVector(typ *types.Type) (*vector.Vector, func()) {
 	v := task.rt.VectorPool.Transient.GetVector(typ)
-	return v.GetDownstreamVector(), v.Close
+	return v, func() { containers.ReleaseVector(v) }
 }
 
 func (task *flushTableTailTask) GetMPool() *mpool.MPool {
@@ -533,8 +533,8 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 			logutil.Info("[FLUSH-STEP]", zap.String("task", task.Name()), common.AnyField("sort-key", bat.Attrs[sortKeyPos]))
 		}
 		sortMapping, err = mergesort.SortBlockColumns(bat.Vecs, sortKeyPos, task.rt.VectorPool.Transient)
-		if bat.Deletes != nil {
-			nulls.Filter(bat.Deletes, sortMapping, false)
+		if bat.Deletes != nil && err == nil {
+			err = nulls.Filter(bat.Deletes, sortMapping, false)
 		}
 		if err != nil {
 			return

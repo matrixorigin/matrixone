@@ -2244,7 +2244,7 @@ func TestCalculateTableStatsWithAppendableRows(t *testing.T) {
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
 			Time:    types.BuildTS(5, uint32(i)),
-			Batch:   bat,
+			Batch:   &ReplayBatch{Batch: bat},
 			Offset:  int64(i),
 			ID:      int64(i),
 			Deleted: false,
@@ -2265,11 +2265,78 @@ func TestCalculateTableStatsWithAppendableRows(t *testing.T) {
 	assert.Equal(t, 0, stats.TombstoneObjectCnt)
 }
 
+func TestReplayInsertPayloadLifetime(t *testing.T) {
+	const payload = "long enough to use the varchar area"
+	for _, mode := range []string{"received", "local", "keys-only"} {
+		t.Run(mode, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			packer := types.NewPacker()
+			defer packer.Close()
+			row := clusterRow{rowID: types.RandomRowid(), ts: types.BuildTS(1, 0), pk: 42, serial: []byte(payload)}
+			src := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(src) })
+			attrs := []string{"rowid", "time", "pk", clusterTestCompoundAttr}
+			rowIDVec := vector.NewVec(types.T_Rowid.ToType(), src)
+			tsVec := vector.NewVec(types.T_TS.ToType(), src)
+			pkVec := vector.NewVec(types.T_int64.ToType(), src)
+			clusterVec := vector.NewVec(types.T_varchar.ToType(), src)
+			newClusterVecOwner(t, src, rowIDVec, tsVec, pkVec, clusterVec)
+			require.NoError(t, vector.AppendFixed(rowIDVec, row.rowID, false, src))
+			require.NoError(t, vector.AppendFixed(tsVec, row.ts, false, src))
+			require.NoError(t, vector.AppendFixed(pkVec, row.pk, false, src))
+			require.NoError(t, vector.AppendBytes(clusterVec, row.serial, false, src))
+			input := mustMarshalVectors(rowIDVec, tsVec, pkVec, clusterVec)
+			state := NewPartitionState("", mode == "keys-only", 42, false)
+			if mode == "local" {
+				state.HandleRowsInsert(t.Context(), input, attrs, 0, packer, mp)
+			} else {
+				msg := api.Entry{EntryType: api.Entry_Insert, TableName: "t", Attrs: attrs, Bat: api.NewEncodedBatch(input)}
+				wire, err := msg.Marshal()
+				require.NoError(t, err)
+				var received api.Entry
+				require.NoError(t, received.Unmarshal(wire))
+				state.HandleLogtailEntry(t.Context(), nil, &received, 0, packer, mp)
+				received.Reset()
+				// The client reuses its receive buffer once the response is
+				// consumed: the rows keep their own copy.
+				clear(wire)
+				// The sender can reuse its encoding buffer once it is on the wire.
+				clear(input)
+			}
+			// The source vectors' owner can reuse their buffers: the encoded
+			// input is a copy, not an alias of them.
+			clear(pkVec.GetData())
+			clear(clusterVec.GetData())
+			clear(clusterVec.GetArea())
+			old := state.Copy()
+			stats := objectio.NewObjectStatsWithObjectID(row.rowID.BorrowObjectID(), true, false, false)
+			require.NoError(t, objectio.SetObjectStatsSize(stats, 1000))
+			require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+			obj := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: row.ts, DeleteTime: types.BuildTS(2, 0)}
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, obj, false))
+			require.Zero(t, state.rows.Len())
+			require.Zero(t, state.rowPrimaryKeyIndex.Len())
+
+			it := old.NewRowsIter(row.ts, nil, false)
+			defer it.Close()
+			require.True(t, it.Next())
+			entry := it.Entry()
+			if mode == "keys-only" {
+				require.Nil(t, entry.Batch)
+			} else {
+				require.Equal(t, row.pk, vector.GetFixedAtWithTypeCheck[int64](entry.Batch.Vecs[2], int(entry.Offset)))
+				require.Equal(t, payload, entry.Batch.Vecs[3].GetStringAt(int(entry.Offset)))
+			}
+			require.Zero(t, mp.CurrNB(), "replay payload cannot require per-row mpool cleanup")
+		})
+	}
+}
+
 func TestCollectDataStatsCountsCompactReplayPhysicalColumns(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	input := batch.NewWithSize(3)
-	input.SetAttributes([]string{"rowid", "time", "id"})
 	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	input.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	input.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
@@ -2278,12 +2345,12 @@ func TestCollectDataStatsCountsCompactReplayPhysicalColumns(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(1, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(input.Vecs[2], int64(42), false, mp))
 	input.SetRowCount(1)
-	proto, err := batch.BatchToProtoBatch(input)
+	encoded, err := batch.MarshalVectors(input.Vecs)
 	require.NoError(t, err)
 	state := NewPartitionState("test", false, 42, false)
 	packer := types.NewPacker()
 	defer packer.Close()
-	state.HandleRowsInsert(context.Background(), proto, 0, packer, mp)
+	state.HandleRowsInsert(context.Background(), encoded, []string{"rowid", "time", "id"}, 0, packer, mp)
 	stats, err := state.CollectDataStats(context.Background(), types.BuildTS(2, 0), nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), stats.Rows)
@@ -2374,7 +2441,7 @@ func TestCalculateTableStatsPairedInsertDelete(t *testing.T) {
 		BlockID: rid.CloneBlockID(),
 		RowID:   rid,
 		Time:    types.BuildTS(5, 0),
-		Batch:   bat,
+		Batch:   &ReplayBatch{Batch: bat},
 		Offset:  0,
 		ID:      0,
 		Deleted: false,
@@ -2441,7 +2508,7 @@ func TestCalculateTableStatsFilterByObjectVisibility(t *testing.T) {
 			BlockID: rid1.CloneBlockID(),
 			RowID:   rid1,
 			Time:    types.BuildTS(5, uint32(i)),
-			Batch:   bat,
+			Batch:   &ReplayBatch{Batch: bat},
 			Offset:  int64(i),
 			ID:      int64(i),
 			Deleted: false,
@@ -2512,7 +2579,7 @@ func TestCalculateTableStatsIntegration(t *testing.T) {
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
 			Time:    types.BuildTS(5, uint32(i)),
-			Batch:   bat,
+			Batch:   &ReplayBatch{Batch: bat},
 			Offset:  int64(i),
 			ID:      int64(i),
 			Deleted: false,
@@ -2979,9 +3046,9 @@ func TestCheckpointDurableAppendableObjectReplay(t *testing.T) {
 			mp := mpool.MustNewZero()
 			liveProto := newReplayObjectListBatch(t, mp, entry, entry.CreateTime)
 			if tombstone {
-				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: liveProto}, nil, mp)
+				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: api.NewEncodedBatch(liveProto)}, nil, mp)
 			} else {
-				state.HandleDataObjectList(t.Context(), &api.Entry{Bat: liveProto}, nil, mp)
+				state.HandleDataObjectList(t.Context(), &api.Entry{Bat: api.NewEncodedBatch(liveProto)}, nil, mp)
 			}
 			require.Zero(t, index.Len(), "live creation is filtered even when stats are nonzero")
 			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
@@ -3034,9 +3101,9 @@ func TestTombstoneReplayReclamationBoundaries(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(input.Vecs[3], types.NewRowid(&block, uint32(i)), false, pool))
 			}
 			input.SetRowCount(len(rowIDs))
-			proto, err := batch.BatchToProtoBatch(input)
+			encoded, err := batch.MarshalVectors(input.Vecs)
 			require.NoError(t, err)
-			state.HandleRowsDelete(t.Context(), proto, packer, pool)
+			state.HandleRowsDelete(t.Context(), encoded, packer, pool)
 			retained, ok := state.rows.Get(&RowEntry{
 				BlockID: dataBlock,
 				RowID:   rowIDs[0],
@@ -3063,7 +3130,7 @@ func TestTombstoneReplayReclamationBoundaries(t *testing.T) {
 					return
 				}
 				proto := newReplayObjectListBatch(t, pool, entry, types.BuildTS(2, 0))
-				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: proto}, nil, pool)
+				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: api.NewEncodedBatch(proto)}, nil, pool)
 			}
 			checkRows := func(expected []types.Rowid) {
 				iter := state.NewRowsIter(types.BuildTS(10, 0), nil, true)
@@ -3121,7 +3188,7 @@ func TestTombstoneReplayReclamationBoundaries(t *testing.T) {
 }
 
 // Match the real object-list wire layout for both replay entry points.
-func newReplayObjectListBatch(tb testing.TB, pool *mpool.MPool, entry objectio.ObjectEntry, start types.TS) *api.Batch {
+func newReplayObjectListBatch(tb testing.TB, pool *mpool.MPool, entry objectio.ObjectEntry, start types.TS) []byte {
 	tb.Helper()
 	live := batch.NewWithSize(10)
 	tb.Cleanup(func() { live.Clean(pool) })
@@ -3139,7 +3206,7 @@ func newReplayObjectListBatch(tb testing.TB, pool *mpool.MPool, entry objectio.O
 		require.NoError(tb, err)
 	}
 	live.SetRowCount(1)
-	proto, err := batch.BatchToProtoBatch(live)
+	encoded, err := live.MarshalBinary()
 	require.NoError(tb, err)
-	return proto
+	return encoded
 }

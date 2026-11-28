@@ -199,6 +199,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 }
 
 %union {
+    renameUserPairs []tree.RenameUserPair
+
     statement tree.Statement
     statements []tree.Statement
 
@@ -479,6 +481,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 %token LEX_ERROR
 %token <str> JSON_TABLE JSON_TABLE_PATH JSON_TABLE_NESTED JSON_TABLE_ORDINALITY JSON_TABLE_EMPTY JSON_TABLE_ERROR
+%type <renameUserPairs> rename_user_pairs
+
 %type <jsonTableColumn> json_table_column json_table_policies
 %type <jsonTableColumns> json_table_columns
 %type <jsonTableResponse> json_table_response json_table_on_empty json_table_on_error
@@ -790,7 +794,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt load_table_stmt dump_table_stmt
 %type <statement> analyze_stmt check_table_stmt show_profile_stmt
-%type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
+%type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt flush_privileges_stmt
 %type <statement> replace_stmt
 %type <statement> do_stmt perform_stmt
 %type <statement> declare_stmt
@@ -1002,6 +1006,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <roles> role_spec_list using_roles_opt
 %type <role> role_spec
 %type <cstr> role_name
+%type <str> id_only_bare_name
 %type <usernameRecord> user_name
 %type <user> user_spec drop_user_spec user_spec_with_identified
 %type <users> user_spec_list drop_user_spec_list user_spec_list_of_create_user
@@ -1164,10 +1169,10 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> AUTO_ID_CACHE
 // Shift the contextual SOUNDS LIKE phrase before reducing a bare select alias.
 %left <str> SOUNDS
-// MySQL SERIAL column-alias type. Declared last so every existing token
-// keeps its generated lexer constant number, per the append-to-end contract
-// above.
+// MySQL SERIAL column-alias type. Keep new tokens after this append-only
+// boundary so existing generated lexer constants remain stable.
 %token <str> SERIAL
+%token <str> FLUSH
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -1203,12 +1208,21 @@ stmt_list:
             yylex.(*Lexer).AppendStmt($1)
         }
     }
+|   flush_privileges_stmt
+    {
+        yylex.(*Lexer).AppendStmt($1)
+    }
 |   stmt_list ';' stmt
     {
         yylex.(*Lexer).AppendTopLevelSemicolon($<pos>2)
         if $3 != nil {
             yylex.(*Lexer).AppendStmt($3)
         }
+    }
+|   stmt_list ';' flush_privileges_stmt
+    {
+        yylex.(*Lexer).AppendTopLevelSemicolon($<pos>2)
+        yylex.(*Lexer).AppendStmt($3)
     }
 
 block_stmt:
@@ -1314,6 +1328,12 @@ normal_stmt:
 |   resume_ccpr_subscription_stmt
 |   pause_ccpr_subscription_stmt
 |   branch_stmt
+
+flush_privileges_stmt:
+    FLUSH PRIVILEGES
+    {
+        $$ = &tree.FlushPrivileges{}
+    }
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt backup_timestamp_opt
@@ -4305,6 +4325,15 @@ rename_stmt:
         renameTables := tree.NewRenameTable(alterTables)
         $$ = renameTables
     }
+
+|   RENAME USER rename_user_pairs
+    { $$ = &tree.RenameUser{Pairs: $3} }
+
+rename_user_pairs:
+    drop_user_spec TO drop_user_spec
+    { $$ = []tree.RenameUserPair{{From: $1, To: $3}} }
+|   rename_user_pairs ',' drop_user_spec TO drop_user_spec
+    { $$ = append($1, tree.RenameUserPair{From: $3, To: $5}) }
 
 rename_table_list:
     rename_option
@@ -8192,7 +8221,7 @@ where_expression_opt:
     }
 |   WHERE expression
     {
-        $$ = &tree.Where{Type: tree.AstWhere, Expr: $2}
+        $$ = yylex.(*Lexer).whereClause($2, $<pos>1, yyrcvr.Lookahead() >= 0)
     }
 
 select_expression_list:
@@ -10033,10 +10062,21 @@ role_spec:
         )
     }
 
-role_name:
+// These bitmap names were bare IDs before they needed dedicated tokens for
+// window calls. Keep other keyword tokens out of role and Iceberg ref names.
+id_only_bare_name:
     ID
+|   BITMAP_CONSTRUCT_AGG
+|   BITMAP_OR_AGG
+
+role_name:
+    id_only_bare_name
 	{
 		$$ = tree.NewCStr($1, 1)
+    }
+|   FLUSH
+    {
+        $$ = tree.NewCStr($1, 1)
     }
 |   QUOTE_ID
 	{
@@ -12298,11 +12338,11 @@ row_format_options:
     }
 
 charset_name:
-    name_string
+    name_string { $$ = yylex.(*Lexer).rewriteMergeName($1) }
 |   BINARY
 
 collate_name:
-    name_string
+    name_string { $$ = yylex.(*Lexer).rewriteMergeName($1) }
 |   BINARY
 
 table_name_list:
@@ -12362,7 +12402,11 @@ iceberg_ref_opt:
     }
 
 iceberg_ref_name:
-    ID
+    id_only_bare_name
+    {
+        $$ = $1
+    }
+|   FLUSH
     {
         $$ = $1
     }
@@ -14749,6 +14793,16 @@ function_call_generic:
             Exprs: $3,
         }
     }
+|   FLUSH '(' expression_list_opt ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            IsGeneric: isSQLModeSensitiveFunctionName($1),
+            Exprs: $3,
+        }
+    }
 |   SERIAL '(' expression_list_opt ')'
     {
         // `serial` is a keyword (SERIAL column-alias type, see column_def) but
@@ -17017,7 +17071,8 @@ equal_opt:
 //|   MYSQL_COMPATIBILITY_MODE
 
 non_reserved_keyword:
-    ACCOUNT
+    FLUSH
+|   ACCOUNT
 |   JSON_TABLE_PATH
 |   JSON_TABLE_NESTED
 |   JSON_TABLE_ORDINALITY
@@ -17560,7 +17615,9 @@ not_keyword:
 |   BIT_CAST
 |   BITMAP_BIT_POSITION
 |   BITMAP_BUCKET_NUMBER
+|   BITMAP_CONSTRUCT_AGG
 |   BITMAP_COUNT
+|   BITMAP_OR_AGG
 |   PERCENTILE_CONT
 |   PERCENTILE_DISC
 |   EWM_MEAN

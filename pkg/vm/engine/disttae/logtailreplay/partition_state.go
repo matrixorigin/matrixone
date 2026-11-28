@@ -398,7 +398,7 @@ func (p *PartitionState) GetEnd() types.TS {
 }
 
 func (p *PartitionState) LogEntry(entry *api.Entry, msg string) {
-	data, _ := batch.ProtoBatchToBatch(entry.Bat, nil)
+	data, _ := batch.ViewBinary(entry.Bat.Bytes())
 	logutil.Info(
 		msg,
 		zap.String("table-name", entry.TableName),
@@ -654,6 +654,9 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 
 	return
 }
+
+// HandleLogtailEntry consumes a received entry. Its decoded buffers must be
+// immutable: partition snapshots can retain row data after this call returns.
 func (p *PartitionState) HandleLogtailEntry(
 	ctx context.Context,
 	fs fileservice.FileService,
@@ -679,14 +682,18 @@ func (p *PartitionState) HandleLogtailEntry(
 			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-MEM-INS")
 			}
-			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer, pool, keys...)
+			// Insert replay keeps only an owned copy of the user columns, so
+			// it reads the bytes in place.
+			p.HandleRowsInsert(ctx, entry.Bat.Bytes(), entry.Attrs, primarySeqnum, packer, pool, keys...)
 		}
 
 	case api.Entry_Delete:
 		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 			p.LogEntry(entry, "INJECT-TRACE-PS-MEM-DEL")
 		}
-		p.HandleRowsDelete(ctx, entry.Bat, packer, pool)
+		// Delete replay keeps only an owned copy of the primary key, so it
+		// reads the bytes in place.
+		p.HandleRowsDelete(ctx, entry.Bat.Bytes(), packer, pool)
 	case api.Entry_DataObject:
 		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 			p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-INS")
@@ -712,24 +719,13 @@ func (p *PartitionState) HandleDataObjectList(
 
 	var numDeleted, blockDeleted int64
 
-	statsVec := mustVectorFromProto(ee.Bat.Vecs[2])
-	defer statsVec.Free(pool)
-
-	vec := mustVectorFromProto(ee.Bat.Vecs[5])
-	defer vec.Free(pool)
-	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[6])
-	defer vec.Free(pool)
-	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[7])
-	defer vec.Free(pool)
-	startTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[9])
-	defer vec.Free(pool)
-	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
+	objBat := viewObjectList(ee.Bat.Bytes())
+	defer releaseObjectList(objBat)
+	statsVec := objBat.Vecs[2]
+	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[5])
+	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[6])
+	startTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[7])
+	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[9])
 
 	for idx := 0; idx < statsVec.Length(); idx++ {
 		if t := commitTSCol[idx]; t.GT(&p.lastFlushTimestamp) {
@@ -834,24 +830,13 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	var clusterPacker types.Packer
 	defer clusterPacker.Close()
 
-	statsVec := mustVectorFromProto(ee.Bat.Vecs[2])
-	defer statsVec.Free(pool)
-
-	vec := mustVectorFromProto(ee.Bat.Vecs[5])
-	defer vec.Free(pool)
-	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[6])
-	defer vec.Free(pool)
-	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[7])
-	defer vec.Free(pool)
-	startTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[9])
-	defer vec.Free(pool)
-	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
+	objBat := viewObjectList(ee.Bat.Bytes())
+	defer releaseObjectList(objBat)
+	statsVec := objBat.Vecs[2]
+	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[5])
+	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[6])
+	startTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[7])
+	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[9])
 
 	var tbIter = p.inMemTombstoneRowIdIndex.Copy().Iter()
 	defer tbIter.Release()
@@ -936,25 +921,27 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	})
 }
 
+// HandleRowsDelete replays an encoded batch of deleted rows. It reads input
+// only during the call: the rows keep their own copy of the primary key,
+// the one column they retain, so input — and the row ids and timestamps it
+// also holds — can be reused or collected afterwards.
 func (p *PartitionState) HandleRowsDelete(
 	ctx context.Context,
-	input *api.Batch,
+	input []byte,
 	packer *types.Packer,
 	_ *mpool.MPool,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
 
-	sourceBatch, err := batch.ProtoBatchToBatch(input, nil)
-	if err != nil {
-		panic(err)
-	}
+	sourceBatch := mustViewEntryBatch(input)
 	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[0])
 	timeVector := vector.MustFixedColWithTypeCheck[types.TS](sourceBatch.Vecs[1])
 	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[3])
+	replayed := &ReplayBatch{Batch: sourceBatch}
 
 	var primaryKeys [][]byte
-	if len(input.Vecs) > 2 {
+	if len(sourceBatch.Vecs) > 2 {
 		// has primary key
 		primaryKeys = readutil.EncodePrimaryKeyVector(
 			sourceBatch.Vecs[2],
@@ -990,7 +977,7 @@ func (p *PartitionState) HandleRowsDelete(
 			entry.PrimaryIndexBytes = primaryKeys[i]
 		}
 		if !p.noData {
-			entry.Batch = sourceBatch
+			entry.Batch = replayed
 			entry.Offset = int64(i)
 		}
 		p.rows.Set(entry)
@@ -1025,25 +1012,28 @@ func (p *PartitionState) HandleRowsDelete(
 	}
 	if !p.noData {
 		// No reader can observe this mutable replay state until the handler
-		// returns. Reuse its batch header and vector slice, but clear every
-		// reference beyond the PK before shortening the slice: GC scans the
-		// entire backing array, including elements past len.
-		sourceBatch.Vecs[0] = sourceBatch.Vecs[2]
-		clear(sourceBatch.Vecs[1:])
-		sourceBatch.Vecs = sourceBatch.Vecs[:1]
-		sourceBatch.Attrs = nil
+		// returns. The rows keep a batch of the primary key alone, in bytes
+		// of its own: a view would pin the whole encoding it came from.
+		kept := batch.NewWithSize(1)
+		kept.Vecs[0] = ownReplayVector(sourceBatch.Vecs[2])
+		kept.SetRowCount(sourceBatch.RowCount())
+		replayed.Batch = kept
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 	})
 }
 
+// HandleRowsInsert replays an encoded batch of inserted rows whose columns
+// attrs names. It reads input only during the call: the rows keep a copy of
+// the user columns in bytes of their own.
 func (p *PartitionState) HandleRowsInsert(
 	ctx context.Context,
-	input *api.Batch,
+	input []byte,
+	attrs []string,
 	primarySeqnum int,
 	packer *types.Packer,
-	mp *mpool.MPool,
+	_ *mpool.MPool,
 	keys ...*readutil.ClusterKeyDescriptor,
 ) (
 	primaryKeys [][]byte,
@@ -1051,17 +1041,20 @@ func (p *PartitionState) HandleRowsInsert(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	sourceBatch, err := batch.ProtoBatchToBatch(input, mp)
-	if err != nil {
-		panic(err)
-	}
+	// Snapshots share RowEntry batches. Their immutable payload must follow
+	// Go reachability: removing a row is not a last-owner notification.
+	sourceBatch := mustViewEntryBatch(input)
 	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[0])
 	timeVector := vector.MustFixedColWithTypeCheck[types.TS](sourceBatch.Vecs[1])
+	var replayed *ReplayBatch
+	if !p.noData {
+		replayed = &ReplayBatch{Batch: ownReplayRows(sourceBatch), Attrs: attrs}
+	}
 	primaryKeys = readutil.EncodePrimaryKeyVector(
 		sourceBatch.Vecs[2+primarySeqnum],
 		packer,
 	)
-	clusterKeys := p.encodeClusterKeys(sourceBatch, packer, keys)
+	clusterKeys := p.encodeClusterKeys(sourceBatch, attrs, packer, keys)
 
 	var numInserted int64
 	for i, rowID := range rowIDVector {
@@ -1083,7 +1076,7 @@ func (p *PartitionState) HandleRowsInsert(
 		}
 
 		if !p.noData {
-			entry.Batch = sourceBatch
+			entry.Batch = replayed
 			entry.Offset = int64(i)
 		}
 		entry.PrimaryIndexBytes = primaryKeys[i]
@@ -1113,15 +1106,6 @@ func (p *PartitionState) HandleRowsInsert(
 			p.rowClusterIndex.Set(pe)
 		}
 	}
-	if !p.noData {
-		// ProtoBatchToBatch borrows the input vector bytes. RowEntry owns
-		// the physical RowID and commit time, so release the decoded vectors'
-		// references after the entire replay loop has consumed them. Their
-		// types and positions remain for existing in-memory column readers.
-		sourceBatch.Vecs[0].Free(mp)
-		sourceBatch.Vecs[1].Free(mp)
-	}
-
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 	})
 
@@ -1139,7 +1123,9 @@ func (p *PartitionState) disableClusterIndex() {
 	p.rowClusterIndex = nil
 }
 
-func (p *PartitionState) encodeClusterKeys(bat *batch.Batch, packer *types.Packer, keys []*readutil.ClusterKeyDescriptor) [][]byte {
+// encodeClusterKeys encodes the cluster-key column of bat, whose columns attrs
+// names.
+func (p *PartitionState) encodeClusterKeys(bat *batch.Batch, attrs []string, packer *types.Packer, keys []*readutil.ClusterKeyDescriptor) [][]byte {
 	if p.clusterIndexDisabled || p.noData {
 		return nil
 	}
@@ -1157,15 +1143,15 @@ func (p *PartitionState) encodeClusterKeys(bat *batch.Batch, packer *types.Packe
 		return nil
 	}
 	pos := int(key.Seqnum) + 2
-	if pos < 2 || pos >= len(bat.Attrs) || pos >= len(bat.Vecs) ||
-		bat.Attrs[pos] != key.Name || bat.Vecs[pos] == nil ||
+	if pos < 2 || pos >= len(attrs) || pos >= len(bat.Vecs) ||
+		attrs[pos] != key.Name || bat.Vecs[pos] == nil ||
 		bat.Vecs[pos].GetType().Oid != types.T_varchar ||
 		bat.Vecs[pos].Length() != bat.Vecs[0].Length() || (bat.Vecs[pos].IsConstNull() || bat.Vecs[pos].GetNulls().Any()) {
 		p.disableClusterIndex()
 		return nil
 	}
 	matches := 0
-	for _, name := range bat.Attrs {
+	for _, name := range attrs {
 		if name == key.Name {
 			matches++
 		}
@@ -1204,9 +1190,11 @@ func (p *PartitionState) deleteRowIndexes(entry *RowEntry, packer *types.Packer)
 	if p.rowClusterIndex == nil || entry.Deleted {
 		return
 	}
+	// The row's batch passed encodeClusterKeys's name check when it was
+	// inserted: a non-empty batch that fails it disables the index for good.
 	pos := int(p.clusterKey.Seqnum) + 2
-	if entry.Batch == nil || pos >= len(entry.Batch.Vecs) || pos >= len(entry.Batch.Attrs) ||
-		entry.Batch.Attrs[pos] != p.clusterKey.Name || entry.Batch.Vecs[pos] == nil || entry.Offset < 0 ||
+	if entry.Batch == nil || pos >= len(entry.Batch.Vecs) ||
+		entry.Batch.Vecs[pos] == nil || entry.Offset < 0 ||
 		entry.Batch.Vecs[pos].GetType().Oid != types.T_varchar ||
 		entry.Offset >= int64(entry.Batch.Vecs[pos].Length()) {
 		p.disableClusterIndex()

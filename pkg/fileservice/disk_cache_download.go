@@ -186,6 +186,7 @@ func (o *objectDownload) estimate(end int64) (int64, time.Duration) {
 // waitFor waits until the bytes before end are written, or until the whole object is when
 // end is negative. It returns the bytes written, and false when they will never cover end.
 func (o *objectDownload) waitFor(ctx context.Context, end int64, timeout time.Duration) (int64, bool) {
+	wait := ReadWaitTrackerFromContext(ctx)
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
@@ -198,11 +199,15 @@ func (o *objectDownload) waitFor(ctx context.Context, end int64, timeout time.Du
 		if ended {
 			return written, false
 		}
+		start := wait.Start()
 		select {
 		case <-changed:
+			wait.Stop(start)
 		case <-ctx.Done():
+			wait.Stop(start)
 			return written, false
 		case <-timer.C:
+			wait.Stop(start)
 			return written, false
 		}
 	}

@@ -133,16 +133,20 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 		fakePKProvided = fakePKProvided || def.FakePK
 		destVec := n.data.Vecs[def.Idx]
 		// logutil.Infof("destVec: %s, %d, %d", destVec.String(), cnt, data.Length())
-		destVec.ExtendWithOffset(data.Vecs[def.Idx], int(offset), int(an))
+		if an > 0 {
+			if err = destVec.UnionBatch(data.Vecs[def.Idx], int64(offset), int(an), nil, destVec.MPool()); err != nil {
+				return
+			}
+		}
 	}
 	if schema.HasFakePK() && !fakePKProvided {
 		fakePK := n.data.Vecs[schema.GetPrimaryKey().Idx]
 		if err = cnvector.AppendMultiFixed(
-			fakePK.GetDownstreamVector(),
+			fakePK,
 			uint64(0),
 			false,
 			int(an),
-			fakePK.GetAllocator(),
+			fakePK.MPool(),
 		); err != nil {
 			return
 		}
@@ -161,26 +165,18 @@ func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	col := n.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	blkID := objectio.NewBlockidWithObjectID(n.meta.ID(), 0)
 	if err = objectio.ConstructRowidColumnTo(
-		col.GetDownstreamVector(),
+		col,
 		&blkID, startRow, length,
-		col.GetAllocator(),
+		col.MPool(),
 	); err != nil {
-		col.Close()
+		containers.ReleaseVector(col)
 		return
 	}
-	err = n.data.Vecs[n.table.GetLocalSchema(n.isTombstone).PhyAddrKey.Idx].ExtendVec(col.GetDownstreamVector())
-	col.Close()
-	return
-}
-
-func (n *anode) FillBlockView(
-	view *containers.Batch, colIdxes []int, mp *mpool.MPool,
-) (err error) {
-	for _, colIdx := range colIdxes {
-		orig := n.data.Vecs[colIdx]
-		view.AddVector(n.data.Attrs[colIdx], orig.CloneWindow(0, orig.Length(), mp))
+	dst := n.data.Vecs[n.table.GetLocalSchema(n.isTombstone).PhyAddrKey.Idx]
+	if col.Length() > 0 {
+		err = dst.UnionBatch(col, 0, col.Length(), nil, dst.MPool())
 	}
-	view.Deletes = n.data.Deletes
+	containers.ReleaseVector(col)
 	return
 }
 
@@ -194,7 +190,7 @@ func (n *anode) Compact() {
 
 func (n *anode) GetValue(col int, row uint32) (any, bool, error) {
 	vec := n.data.Vecs[col]
-	return vec.Get(int(row)), vec.IsNull(int(row)), nil
+	return vec.GetValue(int(row)), vec.IsNull(uint64(int(row))), nil
 }
 
 func (n *anode) RangeDelete(start, end uint32) error {
@@ -217,12 +213,23 @@ func (n *anode) WindowColumn(start, end uint32, pos int) (vec containers.Vector,
 	data := n.data
 	deletes := data.WindowDeletes(int(start), int(end-start), false)
 	if deletes != nil {
-		vec = data.Vecs[pos].CloneWindow(int(start), int(end-start))
-		vec.CompactByBitmap(deletes)
-	} else {
-		vec = data.Vecs[pos].Window(int(start), int(end-start))
+		defer deletes.Free()
+		src := data.Vecs[pos]
+		if vec, err = src.CloneWindow(int(start), int(end), src.MPool()); err != nil {
+			return
+		}
+		dels := make([]int64, 0, deletes.Count())
+		deletes.Foreach(func(i uint64) bool {
+			dels = append(dels, int64(i))
+			return true
+		})
+		if err = vec.Shrink(dels, true, vec.MPool()); err != nil {
+			vec.Free(vec.MPool())
+			vec = nil
+		}
+		return
 	}
-	return
+	return data.Vecs[pos].Window(int(start), int(end))
 }
 
 func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
@@ -236,21 +243,33 @@ func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
 	return
 }
 
-func (n *anode) Scan(ctx context.Context, bat **containers.Batch, colIdxes []int, mp *mpool.MPool) {
+func (n *anode) Scan(ctx context.Context, bat **containers.Batch, colIdxes []int, mp *mpool.MPool) error {
 	if *bat == nil {
-		*bat = containers.NewBatch()
+		newBat := containers.NewBatch()
 		for _, colIdx := range colIdxes {
 			orig := n.data.Vecs[colIdx]
 			attr := n.data.Attrs[colIdx]
-			(*bat).AddVector(attr, orig.CloneWindow(0, orig.Length(), mp))
+			vec, err := orig.CloneWindow(0, orig.Length(), mp)
+			if err != nil {
+				newBat.Close()
+				return err
+			}
+			newBat.AddVector(attr, vec)
 		}
-		return
+		*bat = newBat
+		return nil
 	}
 	for _, colIdx := range colIdxes {
 		orig := n.data.Vecs[colIdx]
-		attr := n.data.Attrs[colIdx]
-		(*bat).GetVectorByName(attr).Extend(orig)
+		if orig.Length() == 0 {
+			continue
+		}
+		dst := (*bat).GetVectorByName(n.data.Attrs[colIdx])
+		if err := dst.UnionBatch(orig, 0, orig.Length(), nil, dst.MPool()); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (n *anode) Prefetch() error {
