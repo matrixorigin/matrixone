@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"strconv"
@@ -40,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -48,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -219,6 +216,7 @@ func (external *External) Prepare(proc *process.Process) error {
 	// Error-mode columns are resolved from the pruned attribute list before any
 	// reader is built, so every reader sees the same decision.
 	resolveExternalErrorMode(param)
+	param.colLoaders = nil
 	param.outputMP = external.OutputAllocation
 
 	// Create reader (single dispatch point)
@@ -1102,6 +1100,7 @@ func getTailSizeStrictAttempt(param *tree.ExternParam, cols []*plan.ColDef, r io
 	if err != nil {
 		return 0, err
 	}
+	validators := newFieldValidators(quietCtx, param, cols)
 	var fields []csvparser.Field
 	for attempts := 0; attempts < strictProbeMaxRecords; attempts++ {
 		if err := ctx.Err(); err != nil {
@@ -1126,7 +1125,7 @@ func getTailSizeStrictAttempt(param *tree.ExternParam, cols []*plan.ColDef, r io
 		if len(fields) < len(cols) {
 			continue
 		}
-		legal := isLegalLineWithContext(quietCtx, param, cols, fields)
+		legal := isLegalLineWithValidators(quietCtx, param, validators, fields)
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
@@ -1138,305 +1137,111 @@ func getTailSizeStrictAttempt(param *tree.ExternParam, cols []*plan.ColDef, r io
 }
 
 func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparser.Field) bool {
-	return isLegalLineWithContext(moerr.Context(), param, cols, fields)
+	ctx := moerr.Context()
+	return isLegalLineWithValidators(ctx, param, newFieldValidators(ctx, param, cols), fields)
 }
 
-func isLegalLineWithContext(ctx context.Context, param *tree.ExternParam, cols []*plan.ColDef, fields []csvparser.Field) bool {
-	for idx, col := range cols {
+// fieldValidator checks the field of one column during the strict probe,
+// with the parse the loader uses, resolved once per probe.
+type fieldValidator struct {
+	name            string
+	enumValues      string
+	id              types.T
+	enumOrSet, trim bool
+	emptyIsNull     bool
+	valid           func(ctx context.Context, field csvparser.Field) bool
+}
+
+func newFieldValidators(ctx context.Context, param *tree.ExternParam, cols []*plan.ColDef) []fieldValidator {
+	validators := make([]fieldValidator, len(cols))
+	for i, col := range cols {
+		id := types.T(col.Typ.Id)
+		typ := types.New(id, col.Typ.Width, col.Typ.Scale)
+		isSet := id == types.T_uint64 && col.Typ.Enumvalues != ""
+		isString := id == types.T_char || id == types.T_varchar || id == types.T_binary || id == types.T_varbinary ||
+			id == types.T_blob || id == types.T_text || id == types.T_datalink
+		v := fieldValidator{
+			name:       col.Name,
+			enumValues: col.Typ.Enumvalues,
+			id:         id,
+			enumOrSet:  id == types.T_enum || isSet,
+		}
+		// T_bit carries raw bytes (parsed byte-by-byte, not as text), so
+		// whitespace bytes are data and must not be trimmed.
+		v.trim = !v.enumOrSet && !isString && id != types.T_json && id != types.T_bit
+		v.emptyIsNull = !v.enumOrSet && !isString && id != types.T_json
+		switch {
+		case isSet:
+			v.valid = func(ctx context.Context, field csvparser.Field) bool {
+				_, err := types.ParseSetWithContext(ctx, col.Typ.Enumvalues, field.Val)
+				return err == nil
+			}
+		case id == types.T_enum:
+			v.valid = func(ctx context.Context, field csvparser.Field) bool {
+				_, err := types.ParseEnumWithContext(ctx, col.Typ.Enumvalues, field.Val)
+				return err == nil
+			}
+		case id == types.T_bit:
+			width := col.Typ.Width
+			v.valid = func(_ context.Context, field csvparser.Field) bool {
+				_, ok := bitFieldValue(field.Val, width)
+				return ok
+			}
+		case isString:
+			v.valid = func(context.Context, csvparser.Field) bool { return true }
+		case id == types.T_json && param.Format != tree.CSV:
+			v.valid = func(context.Context, csvparser.Field) bool { return true }
+		default:
+			// isLegalLine is only used for file offset calculation in
+			// parallel LOAD DATA, not for loading: timestamps are read in
+			// time.Local since the session is not available.
+			opts := types.TextParseOptions{Ctx: ctx, Loc: time.Local, AllowTruncation: true}
+			parse, err := types.ParseAnyFunc(typ, opts)
+			if err != nil {
+				v.valid = func(context.Context, csvparser.Field) bool { return false }
+				break
+			}
+			// unquoted YEAR text is a number (see types.TextParseOptions)
+			opts.NumericYear = true
+			parseUnquoted, _ := types.ParseAnyFunc(typ, opts)
+			trimQuotes := id == types.T_json
+			v.valid = func(_ context.Context, field csvparser.Field) bool {
+				text := field.Val
+				if trimQuotes {
+					text = strings.Trim(text, "\"")
+				}
+				p := parseUnquoted
+				if field.HasStringQuote {
+					p = parse
+				}
+				_, err := p(text)
+				return err == nil
+			}
+		}
+		validators[i] = v
+	}
+	return validators
+}
+
+func isLegalLineWithValidators(ctx context.Context, param *tree.ExternParam, validators []fieldValidator, fields []csvparser.Field) bool {
+	for idx := range validators {
 		if ctx.Err() != nil {
 			return false
 		}
+		v := &validators[idx]
 		field := fields[idx]
-		id := types.T(col.Typ.Id)
-		isSet := id == types.T_uint64 && col.Typ.Enumvalues != ""
 		emptyIsNull := false
-		// T_bit carries raw bytes (parsed byte-by-byte, not as text), so
-		// whitespace bytes are data and must not be trimmed.
-		if id == types.T_enum || isSet {
-			field.Val, emptyIsNull = normalizeEnumSetCSVValueWithContext(ctx, id, col.Typ.Enumvalues, field.Val)
-		} else if id != types.T_char && id != types.T_varchar && id != types.T_json &&
-			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
-			id != types.T_bit {
+		if v.enumOrSet {
+			field.Val, emptyIsNull = normalizeEnumSetCSVValueWithContext(ctx, v.id, v.enumValues, field.Val)
+		} else if v.trim {
 			field.Val = strings.TrimSpace(field.Val)
 		}
-		isNullOrEmpty := field.IsNull || getNullFlag(param.NullMap, col.Name, field.Val) || emptyIsNull
-		if id != types.T_char && id != types.T_varchar &&
-			id != types.T_binary && id != types.T_varbinary && id != types.T_json && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
-			id != types.T_enum && !isSet {
-			isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
-		}
+		isNullOrEmpty := field.IsNull || getNullFlag(param.NullMap, v.name, field.Val) || emptyIsNull ||
+			(v.emptyIsNull && len(field.Val) == 0)
 		if isNullOrEmpty {
 			continue
 		}
-		switch id {
-		case types.T_bool:
-			_, err := types.ParseBoolWithContext(ctx, field.Val)
-			if err != nil {
-				return false
-			}
-
-		case types.T_bit:
-			if len(field.Val) > 8 {
-				return false
-			}
-			width := col.Typ.Width
-			var val uint64
-			for i := 0; i < len(field.Val); i++ {
-				val = (val << 8) | uint64(field.Val[i])
-			}
-			if val > uint64(1<<width-1) {
-				return false
-			}
-		case types.T_int8:
-			_, err := strconv.ParseInt(field.Val, 10, 8)
-			if err != nil {
-				if errors.Is(err, strconv.ErrRange) {
-					return false
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < math.MinInt8 || f > math.MaxInt8 {
-					return false
-				}
-			}
-		case types.T_int16:
-			_, err := strconv.ParseInt(field.Val, 10, 16)
-			if err != nil {
-				if errors.Is(err, strconv.ErrRange) {
-					return false
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < math.MinInt16 || f > math.MaxInt16 {
-					return false
-				}
-			}
-		case types.T_int32:
-			bits := 32
-			min, max := float64(math.MinInt32), float64(math.MaxInt32)
-			if (types.Type{Oid: types.T_int32, Width: col.Typ.Width}).IsMediumInt() {
-				bits = 24
-				min, max = -(1 << 23), (1<<23)-1
-			}
-			_, err := strconv.ParseInt(field.Val, 10, bits)
-			if err != nil {
-				if errors.Is(err, strconv.ErrRange) {
-					return false
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < min || f > max {
-					return false
-				}
-			}
-		case types.T_int64:
-			_, err := strconv.ParseInt(field.Val, 10, 64)
-			if err != nil {
-				if errors.Is(err, strconv.ErrRange) {
-					return false
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < math.MinInt64 || f > math.MaxInt64 {
-					return false
-				}
-			}
-		case types.T_uint8:
-			_, err := strconv.ParseUint(field.Val, 10, 8)
-			if err != nil {
-				if errors.Is(err, strconv.ErrRange) {
-					return false
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint8 {
-					return false
-				}
-			}
-		case types.T_uint16:
-			_, err := strconv.ParseUint(field.Val, 10, 16)
-			if err != nil {
-				if errors.Is(err, strconv.ErrRange) {
-					return false
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint16 {
-					return false
-				}
-			}
-		case types.T_uint32:
-			bits := 32
-			max := float64(math.MaxUint32)
-			if (types.Type{Oid: types.T_uint32, Width: col.Typ.Width}).IsMediumInt() {
-				bits = 24
-				max = (1 << 24) - 1
-			}
-			_, err := strconv.ParseUint(field.Val, 10, bits)
-			if err != nil {
-				if errors.Is(err, strconv.ErrRange) {
-					return false
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > max {
-					return false
-				}
-			}
-		case types.T_uint64:
-			if len(col.Typ.Enumvalues) > 0 {
-				// SET column: validate as set member name or numeric bitmap
-				_, err := types.ParseSetWithContext(ctx, col.Typ.Enumvalues, field.Val)
-				if err != nil {
-					return false
-				}
-			} else {
-				_, err := strconv.ParseUint(field.Val, 10, 64)
-				if err != nil {
-					if errors.Is(err, strconv.ErrRange) {
-						return false
-					}
-					f, err := strconv.ParseFloat(field.Val, 64)
-					if err != nil || f < 0 || f > math.MaxUint64 {
-						return false
-					}
-				}
-			}
-		case types.T_float32:
-			// origin float32 data type
-			if col.Typ.Scale < 0 || col.Typ.Width == 0 {
-				_, err := strconv.ParseFloat(field.Val, 32)
-				if err != nil {
-					return false
-				}
-			} else {
-				_, err := types.ParseDecimal128WithContext(ctx, field.Val, col.Typ.Width, col.Typ.Scale)
-				if err != nil {
-					return false
-				}
-			}
-		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-			if _, err := strconv.ParseFloat(field.Val, 32); err != nil {
-				return false
-			}
-		case types.T_float64:
-			// origin float64 data type
-			if col.Typ.Scale < 0 || col.Typ.Width == 0 {
-				_, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil {
-					return false
-				}
-			} else {
-				_, err := types.ParseDecimal128WithContext(ctx, field.Val, col.Typ.Width, col.Typ.Scale)
-				if err != nil {
-					return false
-				}
-
-			}
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-			continue
-		case types.T_array_float32:
-			_, err := types.StringToArrayToBytesWithContext[float32](ctx, field.Val)
-			if err != nil {
-				return false
-			}
-		case types.T_array_float64:
-			_, err := types.StringToArrayToBytesWithContext[float64](ctx, field.Val)
-			if err != nil {
-				return false
-			}
-		case types.T_array_float8, types.T_array_float4:
-			f, _ := id.BlockScaledFormat()
-			if _, err := types.StringToBlockScaled(f, field.Val); err != nil {
-				return false
-			}
-		case types.T_array_bf16:
-			_, err := types.StringToArrayToBytesWithContext[types.BF16](ctx, field.Val)
-			if err != nil {
-				return false
-			}
-		case types.T_array_float16:
-			_, err := types.StringToArrayToBytesWithContext[types.Float16](ctx, field.Val)
-			if err != nil {
-				return false
-			}
-		case types.T_array_int8:
-			_, err := types.StringToArrayToBytesWithContext[int8](ctx, field.Val)
-			if err != nil {
-				return false
-			}
-		case types.T_array_uint8:
-			_, err := types.StringToArrayToBytesWithContext[uint8](ctx, field.Val)
-			if err != nil {
-				return false
-			}
-		case types.T_json:
-			if param.Format == tree.CSV {
-				field.Val = fmt.Sprintf("%v", strings.Trim(field.Val, "\""))
-				byteJson, err := types.ParseStringToByteJsonWithContext(ctx, field.Val)
-				if err != nil {
-					return false
-				}
-				_, err = types.EncodeJson(byteJson)
-				if err != nil {
-					return false
-				}
-			}
-		case types.T_date:
-			_, err := types.ParseDateCastWithContext(ctx, field.Val)
-			if err != nil {
-				return false
-			}
-		case types.T_time:
-			_, err := types.ParseTimeWithContext(ctx, field.Val, col.Typ.Scale)
-			if err != nil {
-				return false
-			}
-		case types.T_datetime:
-			_, err := types.ParseDatetimeWithContext(ctx, field.Val, col.Typ.Scale)
-			if err != nil {
-				return false
-			}
-		case types.T_year:
-			if _, err := parseLoadDataYearWithContext(ctx, field); err != nil {
-				return false
-			}
-		case types.T_enum:
-			if _, err := types.ParseEnumWithContext(ctx, col.Typ.Enumvalues, field.Val); err != nil {
-				return false
-			}
-		case types.T_decimal64:
-			_, err := types.ParseDecimal64WithContext(ctx, field.Val, col.Typ.Width, col.Typ.Scale)
-			if err != nil {
-				// we tolerate loss of digits.
-				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
-					return false
-				}
-			}
-		case types.T_decimal128:
-			_, err := types.ParseDecimal128WithContext(ctx, field.Val, col.Typ.Width, col.Typ.Scale)
-			if err != nil {
-				// we tolerate loss of digits.
-				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
-					return false
-				}
-			}
-		case types.T_decimal256:
-			_, err := types.ParseDecimal256WithContext(ctx, field.Val, col.Typ.Width, col.Typ.Scale)
-			if err != nil {
-				// we tolerate loss of digits.
-				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
-					return false
-				}
-			}
-		case types.T_timestamp:
-			// Note: isLegalLine is only used for file offset calculation in parallel LOAD DATA,
-			// not for actual data loading. It uses time.Local as fallback since proc is not available.
-			// The actual data loading uses getColData which correctly uses session timezone.
-			t := time.Local
-			_, err := types.ParseTimestampWithContext(ctx, t, field.Val, col.Typ.Scale)
-			if err != nil {
-				return false
-			}
-		case types.T_uuid:
-			_, err := types.ParseUuid(field.Val)
-			if err != nil {
-				return false
-			}
-		default:
+		if !v.valid(ctx, field) {
 			return false
 		}
 	}
@@ -1533,8 +1338,6 @@ func checkLineStrict(param *ExternalParam) bool {
 // through byte-exact so historical plain-text files keep loading as-is
 // (matrixone#30635).
 const JsonBinaryKey = "$binary"
-
-var loadZeroBytes = []byte("0")
 
 func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 	if nullMap == nil || len(nullMap[attr]) == 0 {
@@ -1638,77 +1441,12 @@ func shouldApplyLoadDataNonStrictAdjustments(param *ExternalParam) bool {
 		!param.StrictSqlMode
 }
 
-type loadDataTemporalValue struct {
-	date      types.Date
-	datetime  types.Datetime
-	timestamp types.Timestamp
-}
-
-func normalizeLoadDataNonStrictTemporalValue(
-	proc *process.Process,
-	id types.T,
-	scale int32,
-	val string,
-) (string, loadDataTemporalValue) {
-	var parsed loadDataTemporalValue
-	switch id {
-	case types.T_date:
-		var err error
-		parsed.date, err = types.ParseDateCast(val)
-		if err != nil {
-			parsed.date = types.ZeroDate
-			val = "0000-00-00"
-		}
-	case types.T_datetime:
-		var err error
-		parsed.datetime, err = types.ParseDatetime(val, scale)
-		if err != nil {
-			parsed.datetime = types.ZeroDatetime
-			val = "0000-00-00 00:00:00"
-		}
-	case types.T_timestamp:
-		tz := time.Local
-		if proc != nil {
-			tz = proc.GetSessionInfo().TimeZone
-			if tz == nil {
-				tz = time.Local
-			}
-		}
-		var err error
-		parsed.timestamp, err = types.ParseTimestamp(tz, val, scale)
-		if err != nil || !types.ValidTimestamp(parsed.timestamp) {
-			parsed.timestamp = types.ZeroTimestamp
-			val = "0000-00-00 00:00:00"
-		}
-	}
-	return val, parsed
-}
-
 func isLoadNumericZeroFillType(id types.T) bool {
-	switch id {
-	case types.T_bool,
-		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64,
-		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
-		types.T_decimal64, types.T_decimal128, types.T_decimal256:
-		return true
-	default:
-		return false
-	}
+	return id == types.T_bool || isLoadNumericAdjustedValueType(id)
 }
 
 func isLoadNumericAdjustedValueType(id types.T) bool {
-	switch id {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64,
-		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
-		types.T_decimal64, types.T_decimal128, types.T_decimal256:
-		return true
-	default:
-		return false
-	}
+	return id.IsInteger() || id.IsFloat() || id.IsDecimal()
 }
 
 func loadDataNonStrictNumericPrefix(val string) string {
@@ -1760,62 +1498,6 @@ func truncateLoadDataStringValue(val string, width int32) string {
 		return val
 	}
 	return string([]rune(val)[:width])
-}
-
-func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp *mpool.MPool) error {
-	if asBytes {
-		return vector.AppendBytes(vec, loadZeroBytes, false, mp)
-	}
-	switch id {
-	case types.T_bool:
-		return vector.AppendFixed(vec, false, false, mp)
-	case types.T_int8:
-		return vector.AppendFixed(vec, int8(0), false, mp)
-	case types.T_int16:
-		return vector.AppendFixed(vec, int16(0), false, mp)
-	case types.T_int32:
-		return vector.AppendFixed(vec, int32(0), false, mp)
-	case types.T_int64:
-		return vector.AppendFixed(vec, int64(0), false, mp)
-	case types.T_uint8:
-		return vector.AppendFixed(vec, uint8(0), false, mp)
-	case types.T_uint16:
-		return vector.AppendFixed(vec, uint16(0), false, mp)
-	case types.T_uint32:
-		return vector.AppendFixed(vec, uint32(0), false, mp)
-	case types.T_uint64:
-		return vector.AppendFixed(vec, uint64(0), false, mp)
-	case types.T_float32:
-		return vector.AppendFixed(vec, float32(0), false, mp)
-	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		return appendLowPrecFloatFromFloat32(vec, 0, mp)
-	case types.T_float64:
-		return vector.AppendFixed(vec, float64(0), false, mp)
-	case types.T_decimal64:
-		return vector.AppendFixed(vec, types.Decimal64(0), false, mp)
-	case types.T_decimal128:
-		return vector.AppendFixed(vec, types.Decimal128{}, false, mp)
-	case types.T_decimal256:
-		return vector.AppendFixed(vec, types.Decimal256{}, false, mp)
-	default:
-		return moerr.NewInternalErrorNoCtxf("unsupported type %v for empty numeric LOAD DATA zero-fill", id)
-	}
-}
-
-// appendLowPrecFloatFromFloat32 rounds v to the low-precision float type of vec
-// (bf16/float16/float8/float4) and appends it. Used by the CSV/LOAD field parser.
-func appendLowPrecFloatFromFloat32(vec *vector.Vector, v float32, mp *mpool.MPool) error {
-	switch vec.GetType().Oid {
-	case types.T_bf16:
-		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.BF16FromFloat32(v)), false, mp)
-	case types.T_float16:
-		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.Float16FromFloat32(v)), false, mp)
-	case types.T_float8:
-		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.Float8FromFloat32(v)), false, mp)
-	case types.T_float4:
-		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.Float4FromFloat32(v)), false, mp)
-	}
-	return moerr.NewInternalErrorNoCtxf("not a low-precision float: %v", vec.GetType().Oid)
 }
 
 // resolveExternalErrorMode decides, once per scan, whether the error-mode
@@ -2000,6 +1682,7 @@ func recordText(line []csvparser.Field, param *ExternalParam) string {
 
 func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam) error {
 	mp := param.outputPool(proc)
+	loaders := param.columnLoaders(bat, proc)
 	// Kafka JSONL object conversion already checks the declared key count.
 	// Its field slice contains only projected data positions, so its length
 	// cannot be used as the record width. Synthetic attrs are filled by
@@ -2011,8 +1694,8 @@ func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser
 				return err
 			}
 		}
-		for _, attr := range param.Attrs {
-			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
+		for i, attr := range param.Attrs {
+			if err := loaders[i].load(bat.Vecs[attr.ColIndex], line, rowIdx, param, proc, mp); err != nil {
 				return err
 			}
 		}
@@ -2020,17 +1703,17 @@ func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser
 	}
 
 	if kafkaJSON || int32(len(line)) >= param.ColumnListLen {
-		for _, attr := range param.Attrs {
-			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
+		for i, attr := range param.Attrs {
+			if err := loaders[i].load(bat.Vecs[attr.ColIndex], line, rowIdx, param, proc, mp); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 
-	for _, attr := range param.Attrs {
+	for i, attr := range param.Attrs {
 		if attr.ColFieldIndex < int32(len(line)) {
-			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
+			if err := loaders[i].load(bat.Vecs[attr.ColIndex], line, rowIdx, param, proc, mp); err != nil {
 				return err
 			}
 			continue
@@ -2068,47 +1751,6 @@ func loadAttributedDecimalTextInput(param *ExternalParam, typ *plan.Type) bool {
 		return false
 	}
 	return isAttributedDecimalStagingTarget(typ)
-}
-
-// parseCSVInt preserves the integer fast path and LOAD conversion policy.
-// Exact assignment rounding applies only where getColData classified the input
-// as unquoted external CSV or JSONLINE file text (external SELECT or directly
-// decoded LOAD); quoted text keeps the original conversion policy.
-// An initial integer overflow can precede an exponent that scales into range;
-// validate the complete decimal value before enforcing the destination width.
-func parseCSVInt(field csvparser.Field, bits int, round bool) (int64, error) {
-	value, err := strconv.ParseInt(field.Val, 10, bits)
-	if err == nil || !round || field.HasStringQuote {
-		return value, err
-	}
-	integer, err := function.ParseDecimalInteger(field.Val)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.ParseInt(integer, 10, bits)
-}
-
-func parseCSVUint(field csvparser.Field, bits int, round bool) (uint64, error) {
-	value, err := strconv.ParseUint(field.Val, 10, bits)
-	if err == nil || !round || field.HasStringQuote {
-		return value, err
-	}
-	integer, err := function.ParseDecimalInteger(field.Val)
-	if err != nil {
-		return 0, err
-	}
-	// Keep negative zero accepted, while negative fractions that round to zero
-	// still fail unsigned conversion as before.
-	if integer == "-0" {
-		mantissa := field.Val
-		if exponent := strings.IndexAny(mantissa, "eE"); exponent >= 0 {
-			mantissa = mantissa[:exponent]
-		}
-		if strings.Trim(mantissa, "-0.") == "" {
-			integer = "0"
-		}
-	}
-	return strconv.ParseUint(integer, 10, bits)
 }
 
 // jsonNumberBitLexeme converts the canonical decimal lexeme of a nonnegative
@@ -2149,650 +1791,6 @@ func jsonNumberBitLexeme(lexeme string, width int32) (string, bool) {
 		n--
 	}
 	return string(buf[8-n:]), true
-}
-
-func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, attr plan.ExternAttr, proc *process.Process) error {
-	colIdx := attr.ColIndex
-	colName := attr.ColName
-	vec := bat.Vecs[colIdx]
-	col := param.Cols[colIdx]
-
-	fieldIdx := attr.ColFieldIndex
-
-	var colId uint64
-	if col != nil {
-		colId = col.ColId
-	}
-	field := getFieldFromLine(line, colName, colId, param, fieldIdx)
-	id := types.T(col.Typ.Id)
-	// SET is stored as uint64 but is a logical string type: it must not get
-	// the numeric empty-to-zero fill or numeric-prefix rewriting ("0" may be a
-	// member name).
-	isSet := id == types.T_uint64 && len(col.Typ.Enumvalues) > 0
-	loadDataNonStrictAdjustments := shouldApplyLoadDataNonStrictAdjustments(param)
-	trimSpace := false
-	emptyIsNull := false
-	// T_bit carries raw bytes (parsed byte-by-byte, not as text), so whitespace
-	// bytes are data and must not be trimmed (a whitespace-only bit value would
-	// otherwise even be converted to NULL below).
-	if id == types.T_enum || isSet {
-		field.Val, emptyIsNull = normalizeEnumSetCSVValue(id, col.Typ.Enumvalues, field.Val)
-	} else if id != types.T_char && id != types.T_varchar && id != types.T_json &&
-		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
-		id != types.T_bit {
-		field.Val = strings.TrimSpace(field.Val)
-		trimSpace = true
-	}
-	// ES|QL CSV renders dates as ISO 8601 UTC ("2026-01-15T10:20:30.123Z");
-	// MO's temporal parsers reject the trailing 'Z' and interpret zone-less
-	// text in the session time zone, so both ESQL paths (foreign table and
-	// schema-mode esql_tvf) rewrite the value as session-zone wall clock,
-	// preserving the UTC instant.
-	if param.ESQLTemporalUTC &&
-		(id == types.T_timestamp || id == types.T_datetime || id == types.T_date) {
-		field.Val = normalizeISO8601Zulu(field.Val, proc.GetSessionInfo().TimeZone)
-	}
-	mappedNull := getNullFlag(param.Extern.NullMap, colName, field.Val)
-	isNullOrEmpty := field.IsNull || mappedNull || emptyIsNull
-	emptyNumericField := len(field.Val) == 0 && !field.IsNull && !mappedNull && !isSet && shouldLoadEmptyNumericAsZero(param, id)
-	if emptyNumericField {
-		field.Val = "0"
-		isNullOrEmpty = false
-	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty {
-		isNullOrEmpty = true
-	}
-	if isNullOrEmpty {
-		return vector.AppendBytes(vec, nil, true, mp)
-	}
-
-	// A JSON NUMBER field for a BIT column is the exact uint64 the JSONLINE
-	// writer emitted, not a raw-byte CSV payload. Convert it after the raw
-	// NULLIF decision above and before both consumers: the staged varchar
-	// handoff below and the direct type construction below read the field as
-	// big-endian bytes, so canonical value bytes reach either consumer as the
-	// exact BIT value. Tokens that are not canonical nonnegative uint64
-	// integers, or that exceed the BIT width, keep the original text and with
-	// it today's conversion values and errors.
-	if id == types.T_bit && field.IsJSONNumber {
-		if encoded, ok := jsonNumberBitLexeme(field.Val, col.Typ.Width); ok {
-			field.Val = encoded
-		}
-	}
-
-	var temporalValue loadDataTemporalValue
-	if loadDataNonStrictAdjustments {
-		switch {
-		case isLoadNumericAdjustedValueType(id) && !isSet:
-			// Attributed DECIMAL targets stage raw trimmed field bytes
-			// unmodified (raw-field preservation boundary): the source sign and
-			// every truncation/invalid-input diagnostic belong to the shared
-			// admission boundary. Unattributed types keep today's rewrite.
-			if !field.HasStringQuote && !isAttributedDecimalStagingTarget(&col.Typ) {
-				field.Val = loadDataNonStrictNumericPrefix(field.Val)
-			}
-		case id == types.T_date || id == types.T_datetime || id == types.T_timestamp:
-			field.Val, temporalValue = normalizeLoadDataNonStrictTemporalValue(proc, id, col.Typ.Scale, field.Val)
-		case id == types.T_char || id == types.T_varchar:
-			field.Val = truncateLoadDataStringValue(field.Val, col.Typ.Width)
-		}
-	}
-
-	// In strict SQL mode (non-LOCAL load), an over-width CHAR/VARCHAR value is
-	// rejected instead of silently truncated, matching strict assignment casts
-	// (cast_strict) and MySQL's "Data too long" behavior. Uses rune count, like
-	// strToStr. LOCAL / non-strict loads keep the lenient (truncate) behavior.
-	if checkLineStrict(param) && (id == types.T_char || id == types.T_varchar) &&
-		col.Typ.Width > 0 && utf8.RuneCountInString(field.Val) > int(col.Typ.Width) {
-		return moerr.NewInternalErrorf(param.Ctx, "Data too long for column '%s' at row %d", colName, rowIdx+1)
-	}
-
-	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) ||
-		loadAttributedDecimalTextInput(param, &col.Typ) {
-		return appendFieldText(vec, field.Val, mp)
-	}
-
-	// roundTextInteger classifies when integer assignment may use the exact
-	// decimal half-away rounding helper: unquoted external CSV text, and
-	// JSONLINE file records — external SELECT and directly decoded LOAD alike —
-	// whose scalar text never carries CSV quotes. Parallel staged LOAD keeps
-	// its varchar staging and cast projection, CSV LOAD keeps the truncation
-	// policy, and Kafka carries its own extern type so it stays excluded.
-	roundTextInteger := (param.Extern.ExternType == int32(plan.ExternType_EXTERNAL_TB) && param.Extern.Format == tree.CSV) ||
-		(param.Extern.Format == tree.JSONLINE && (param.Extern.ExternType == int32(plan.ExternType_EXTERNAL_TB) ||
-			param.Extern.ExternType == int32(plan.ExternType_LOAD)))
-	switch id {
-	case types.T_bool:
-		b, err := types.ParseBool(field.Val)
-		if err != nil {
-			return err
-		}
-		if err = vector.AppendFixed(vec, b, false, mp); err != nil {
-			return err
-		}
-	case types.T_bit:
-		if len(field.Val) > 8 {
-			return moerr.NewInternalErrorf(param.Ctx, "data too long, len(val) = %v", len(field.Val))
-		}
-
-		width := col.Typ.Width
-		var val uint64
-		for i := 0; i < len(field.Val); i++ {
-			val = (val << 8) | uint64(field.Val[i])
-		}
-		if val > uint64(1<<width-1) {
-			return moerr.NewInternalErrorf(param.Ctx, "data too long, type width = %d, val = %b", width, val)
-		}
-
-		if err := vector.AppendFixed(vec, val, false, mp); err != nil {
-			return err
-		}
-	case types.T_int8:
-		d, err := parseCSVInt(field, 8, roundTextInteger)
-		if err == nil {
-			if err := vector.AppendFixed(vec, int8(d), false, mp); err != nil {
-				return err
-			}
-		} else {
-			// if field.HasStringQuote is true, like load "1.9" into int type, return error, if load 1.9, can load successful
-			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int8 type for column %d", field.Val, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < math.MinInt8 || f > math.MaxInt8 {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int8 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, int8(f), false, mp); err != nil {
-				return err
-			}
-		}
-	case types.T_int16:
-		d, err := parseCSVInt(field, 16, roundTextInteger)
-		if err == nil {
-			if err := vector.AppendFixed(vec, int16(d), false, mp); err != nil {
-				return err
-			}
-		} else {
-			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int16 type for column %d", field.Val, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < math.MinInt16 || f > math.MaxInt16 {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int16 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, int16(f), false, mp); err != nil {
-				return err
-			}
-		}
-	case types.T_int32:
-		bits := 32
-		min, max := float64(math.MinInt32), float64(math.MaxInt32)
-		valueType := "int32"
-		if (types.Type{Oid: types.T_int32, Width: col.Typ.Width}).IsMediumInt() {
-			bits = 24
-			min, max = -(1 << 23), (1<<23)-1
-			valueType = "mediumint"
-		}
-		d, err := parseCSVInt(field, bits, roundTextInteger)
-		if err == nil {
-			if err := vector.AppendFixed(vec, int32(d), false, mp); err != nil {
-				return err
-			}
-		} else {
-			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < min || f > max {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
-			}
-			if err := vector.AppendFixed(vec, int32(f), false, mp); err != nil {
-				return err
-			}
-		}
-	case types.T_int64:
-		d, err := parseCSVInt(field, 64, roundTextInteger)
-		if err == nil {
-			if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-				return err
-			}
-		} else {
-			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int64 type for column %d", field.Val, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < math.MinInt64 || f > math.MaxInt64 {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int64 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, int64(f), false, mp); err != nil {
-				return err
-			}
-		}
-	case types.T_uint8:
-		d, err := parseCSVUint(field, 8, roundTextInteger)
-		if err == nil {
-			if err := vector.AppendFixed(vec, uint8(d), false, mp); err != nil {
-				return err
-			}
-		} else {
-			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint8 type for column %d", field.Val, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < 0 || f > math.MaxUint8 {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint8 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, uint8(f), false, mp); err != nil {
-				return err
-			}
-		}
-	case types.T_uint16:
-		d, err := parseCSVUint(field, 16, roundTextInteger)
-		if err == nil {
-			if err := vector.AppendFixed(vec, uint16(d), false, mp); err != nil {
-				return err
-			}
-		} else {
-			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < 0 || f > math.MaxUint16 {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, uint16(f), false, mp); err != nil {
-				return err
-			}
-		}
-	case types.T_uint32:
-		bits := 32
-		max := float64(math.MaxUint32)
-		valueType := "uint32"
-		if (types.Type{Oid: types.T_uint32, Width: col.Typ.Width}).IsMediumInt() {
-			bits = 24
-			max = (1 << 24) - 1
-			valueType = "mediumint unsigned"
-		}
-		d, err := parseCSVUint(field, bits, roundTextInteger)
-		if err == nil {
-			if err := vector.AppendFixed(vec, uint32(d), false, mp); err != nil {
-				return err
-			}
-		} else {
-			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < 0 || f > max {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
-			}
-			if err := vector.AppendFixed(vec, uint32(f), false, mp); err != nil {
-				return err
-			}
-		}
-	case types.T_uint64:
-		if len(col.Typ.Enumvalues) > 0 {
-			// SET column: parse member names or numeric bitmap
-			d, err := types.ParseSet(col.Typ.Enumvalues, field.Val)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return err
-			}
-			if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-				return err
-			}
-		} else {
-			d, err := parseCSVUint(field, 64, roundTextInteger)
-			if err == nil {
-				if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-					return err
-				}
-			} else {
-				if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
-				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint64 {
-					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-					return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
-				}
-				if err := vector.AppendFixed(vec, uint64(f), false, mp); err != nil {
-					return err
-				}
-			}
-		}
-	case types.T_float32:
-		// origin float32 data type
-		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-			d, err := strconv.ParseFloat(field.Val, 32)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not float32 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, float32(d), false, mp); err != nil {
-				return err
-			}
-		} else {
-			d, err := types.ParseDecimal128(field.Val, vec.GetType().Width, vec.GetType().Scale)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not float32 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, float32(types.Decimal128ToFloat64(d, vec.GetType().Scale)), false, mp); err != nil {
-				return err
-			}
-		}
-	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		// Low-precision floats: parse as float32 then round to the target format.
-		// Reject NaN/Inf and out-of-range values (strict, like the narrow-vector
-		// element parser) instead of silently saturating.
-		d, d64, err := types.Float32RoundToOddString(field.Val)
-		if err != nil {
-			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, vec.GetType().Oid, colIdx)
-		}
-		if err := types.RejectNarrowFloatInput(d, vec.GetType().Oid, d64, field.Val); err != nil {
-			return err
-		}
-		if err := appendLowPrecFloatFromFloat32(vec, d, mp); err != nil {
-			return err
-		}
-	case types.T_float64:
-		// origin float64 data type
-		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-			d, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not float64 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-				return err
-			}
-		} else {
-			d, err := types.ParseDecimal128(field.Val, vec.GetType().Width, vec.GetType().Scale)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not float64 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, types.Decimal128ToFloat64(d, vec.GetType().Scale), false, mp); err != nil {
-				return err
-			}
-		}
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		if err := appendFieldText(vec, field.Val, mp); err != nil {
-			return err
-		}
-	case types.T_array_float32:
-		arr, err := types.StringToArray[float32](field.Val)
-		if err != nil {
-			return err
-		}
-		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
-			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
-		}
-		if err = vector.AppendBytes(vec, types.ArrayToBytes[float32](arr), false, mp); err != nil {
-			return err
-		}
-	case types.T_array_float64:
-		arr, err := types.StringToArray[float64](field.Val)
-		if err != nil {
-			return err
-		}
-		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
-			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
-		}
-		if err = vector.AppendBytes(vec, types.ArrayToBytes[float64](arr), false, mp); err != nil {
-			return err
-		}
-	case types.T_array_float8, types.T_array_float4:
-		// "[...]" is quantized; the exact form (a JSON object) is the cell as written
-		f, _ := vec.GetType().Oid.BlockScaledFormat()
-		cell, err := types.StringToBlockScaled(f, field.Val)
-		if err != nil {
-			return err
-		}
-		if dim := types.BlockScaledDim(cell); int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != dim {
-			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), dim)
-		}
-		if err = vector.AppendBytes(vec, cell, false, mp); err != nil {
-			return err
-		}
-	case types.T_array_bf16:
-		arr, err := types.StringToArray[types.BF16](field.Val)
-		if err != nil {
-			return err
-		}
-		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
-			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
-		}
-		if err = vector.AppendBytes(vec, types.ArrayToBytes[types.BF16](arr), false, mp); err != nil {
-			return err
-		}
-	case types.T_array_float16:
-		arr, err := types.StringToArray[types.Float16](field.Val)
-		if err != nil {
-			return err
-		}
-		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
-			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
-		}
-		if err = vector.AppendBytes(vec, types.ArrayToBytes[types.Float16](arr), false, mp); err != nil {
-			return err
-		}
-	case types.T_array_int8:
-		arr, err := types.StringToArray[int8](field.Val)
-		if err != nil {
-			return err
-		}
-		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
-			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
-		}
-		if err = vector.AppendBytes(vec, types.ArrayToBytes[int8](arr), false, mp); err != nil {
-			return err
-		}
-	case types.T_array_uint8:
-		arr, err := types.StringToArray[uint8](field.Val)
-		if err != nil {
-			return err
-		}
-		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
-			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
-		}
-		if err = vector.AppendBytes(vec, types.ArrayToBytes[uint8](arr), false, mp); err != nil {
-			return err
-		}
-	case types.T_json:
-		var jsonBytes []byte
-		if param.Extern.Format != tree.CSV {
-			jsonBytes = []byte(field.Val)
-		} else {
-			field.Val = fmt.Sprintf("%v", strings.Trim(field.Val, "\""))
-			byteJson, err := types.ParseStringToByteJson(field.Val)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not json type for column %d", field.Val, colIdx)
-			}
-			jsonBytes, err = types.EncodeJson(byteJson)
-			if err != nil {
-				logutil.Errorf("encode json[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not json type for column %d", field.Val, colIdx)
-			}
-		}
-
-		if err := vector.AppendBytes(vec, jsonBytes, false, mp); err != nil {
-			return err
-		}
-	case types.T_date:
-		d := temporalValue.date
-		if !loadDataNonStrictAdjustments {
-			var err error
-			d, err = types.ParseDateCast(field.Val)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Date type for column %d", field.Val, colIdx)
-			}
-		}
-
-		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-			return err
-		}
-	case types.T_time:
-		d, err := types.ParseTime(field.Val, vec.GetType().Scale)
-		if err != nil {
-			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Time type for column %d", field.Val, colIdx)
-		}
-
-		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-			return err
-		}
-	case types.T_datetime:
-		d := temporalValue.datetime
-		if !loadDataNonStrictAdjustments {
-			var err error
-			d, err = types.ParseDatetime(field.Val, vec.GetType().Scale)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Datetime type for column %d", field.Val, colIdx)
-			}
-		}
-		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-			return err
-		}
-	case types.T_year:
-		d, err := parseLoadDataYear(field)
-		if err != nil {
-			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Year type for column %d", field.Val, colIdx)
-		}
-		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-			return err
-		}
-	case types.T_enum:
-		v, err := types.ParseEnum(col.Typ.Enumvalues, field.Val)
-		if err != nil {
-			return err
-		}
-		return vector.AppendFixed(vec, v, false, mp)
-	case types.T_decimal64:
-		d, err := types.ParseDecimal64(field.Val, vec.GetType().Width, vec.GetType().Scale)
-		if err != nil {
-			// we tolerate loss of digits.
-			if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is invalid Decimal64 type for column %d", field.Val, colIdx)
-			}
-		}
-		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-			return err
-		}
-	case types.T_decimal128:
-		d, err := types.ParseDecimal128(field.Val, vec.GetType().Width, vec.GetType().Scale)
-		if err != nil {
-			// we tolerate loss of digits.
-			if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is invalid Decimal128 type for column %d", field.Val, colIdx)
-			}
-		}
-		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-			return err
-		}
-	case types.T_decimal256:
-		d, err := types.ParseDecimal256(field.Val, vec.GetType().Width, vec.GetType().Scale)
-		if err != nil {
-			// we tolerate loss of digits.
-			if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is invalid Decimal256 type for column %d", field.Val, colIdx)
-			}
-		}
-		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-			return err
-		}
-	case types.T_timestamp:
-		d := temporalValue.timestamp
-		if !loadDataNonStrictAdjustments {
-			t := time.Local
-			if proc != nil {
-				t = proc.GetSessionInfo().TimeZone
-				if t == nil {
-					t = time.Local
-				}
-			}
-			var err error
-			d, err = types.ParseTimestamp(t, field.Val, vec.GetType().Scale)
-			if err != nil {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field.Val, colIdx)
-			}
-			if !types.ValidTimestamp(d) {
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field.Val, colIdx)
-			}
-		}
-		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-			return err
-		}
-	case types.T_uuid:
-		d, err := types.ParseUuid(field.Val)
-		if err != nil {
-			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uuid type for column %d", field.Val, colIdx)
-		}
-		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-			return err
-		}
-	case types.T_geometry, types.T_geometry32:
-		// The CSV field is (E)WKT text such as "POINT (-87.6 41.8)". Normalize it
-		// to the stored bare-WKB form (float32 for GEOMETRY32) and enforce the
-		// column's declared subtype, exactly like cast_geometry_to_subtype does
-		// for an INSERT, so an external read and an INSERT store identical bytes.
-		// The column subtype is carried in Typ.Scale as a geo.Subtype enum.
-		columnSubtype := ""
-		if s := geo.Subtype(col.Typ.Scale); s != geo.GENERIC {
-			columnSubtype = strings.ToUpper(s.String())
-		}
-		wkb, err := function.NormalizeGeometryForStorage(proc, []byte(field.Val), columnSubtype, id == types.T_geometry32)
-		if err != nil {
-			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not a valid geometry for column %d: %v", field.Val, colIdx, err)
-		}
-		if err := vector.AppendBytes(vec, wkb, false, mp); err != nil {
-			return err
-		}
-	default:
-		return moerr.NewInternalErrorf(param.Ctx, "the value type %s is not support now", id.String())
-	}
-	return nil
-}
-
-func parseLoadDataYear(field csvparser.Field) (types.MoYear, error) {
-	return parseLoadDataYearWithContext(moerr.Context(), field)
-}
-
-func parseLoadDataYearWithContext(ctx context.Context, field csvparser.Field) (types.MoYear, error) {
-	if field.HasStringQuote {
-		return types.ParseMoYearWithContext(ctx, field.Val)
-	}
-	d, err := strconv.ParseInt(field.Val, 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	return types.ParseMoYearFromIntWithContext(ctx, d)
 }
 
 func loadFormatIsValid(param *tree.ExternParam) bool {

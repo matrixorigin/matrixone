@@ -161,10 +161,7 @@ pkg/sql/colexec/evalExpressionDecimalMulSub.go	decimalLiteral	decimal chain	1	T_
 pkg/sql/colexec/evalExpressionDecimalMulSub.go	decimalMulSubLiteralValue	decimal	1	T_decimal256
 pkg/sql/colexec/evalExpressionDecimalTyped.go	decimalTypedColumn	decimal chain	1	T_decimal64
 pkg/sql/colexec/evalExpressionNullProof.go	decimal128ProducesNoNulls	decimal chain	1	T_decimal256
-pkg/sql/colexec/external/external.go	getColData	temporal	1	T_time,T_year
-pkg/sql/colexec/external/external.go	getColData	temporal chain	2	T_time,T_year
 pkg/sql/colexec/external/external.go	isDirectParallelLoadType	vector chain	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
-pkg/sql/colexec/external/external.go	normalizeLoadDataNonStrictTemporalValue	temporal	1	T_time,T_year
 pkg/sql/colexec/external/iceberg_delete_apply.go	parquetValueEqualityValue	temporal	1	T_time,T_year
 pkg/sql/colexec/external/iceberg_delete_apply.go	vectorEqualityValue	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/colexec/external/iceberg_delete_apply.go	vectorEqualityValue	temporal	1	T_time,T_year

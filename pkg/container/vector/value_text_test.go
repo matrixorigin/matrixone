@@ -124,3 +124,68 @@ func TestRawToFloat64(t *testing.T) {
 	_, ok = types.RawToFloat64(types.T_json.ToType(), nil)
 	require.False(t, ok)
 }
+
+// TestTextAppenderCoversTypeOps: every type id on the table either has no
+// text form (and says so) or parses a sample, and the parse of the value's
+// ValueText reads back the same value. A new type must be added to one of
+// the two lists.
+func TestTextAppenderCoversTypeOps(t *testing.T) {
+	mp := mpool.MustNewZero()
+	noText := map[types.T]bool{
+		types.T_enum: true, types.T_TS: true, types.T_Rowid: true, types.T_Blockid: true,
+		types.T_geometry: true, types.T_geometry32: true,
+	}
+	samples := map[types.T]string{
+		types.T_bool: "true", types.T_bit: "5",
+		types.T_int8: "-5", types.T_int16: "-300", types.T_int32: "-70000", types.T_int64: "-5000000000",
+		types.T_uint8: "200", types.T_uint16: "60000", types.T_uint32: "4000000000", types.T_uint64: "18000000000000000000",
+		types.T_float32: "1.5", types.T_float64: "2.25",
+		types.T_bf16: "1.5", types.T_float16: "1.5", types.T_float8: "1.5", types.T_float4: "1.5",
+		types.T_decimal64: "12.34", types.T_decimal128: "-123456789012345678.12", types.T_decimal256: "-1234567890123456789012345678901234567890.12",
+		types.T_date: "2024-02-29", types.T_time: "12:34:56", types.T_datetime: "2024-02-29 12:34:56",
+		types.T_timestamp: "2024-02-29 12:34:56", types.T_year: "2024", types.T_uuid: "123e4567-e89b-12d3-a456-426614174000",
+		types.T_json: `{"a": 1}`,
+		types.T_char: "abc", types.T_varchar: "abc", types.T_text: "abc", types.T_binary: "abc",
+		types.T_varbinary: "abc", types.T_blob: "abc", types.T_datalink: "abc",
+		types.T_array_float32: "[1, 2, 3]", types.T_array_float64: "[1, 2, 3]", types.T_array_bf16: "[1, 2, 3]",
+		types.T_array_float16: "[1, 2, 3]", types.T_array_int8: "[1, 2, 3]", types.T_array_uint8: "[1, 2, 3]",
+		types.T_array_float8: "[1, 2, 3]", types.T_array_float4: "[1, 2, 3]",
+	}
+	opts := types.TextParseOptions{Loc: time.UTC}
+	for _, row := range typeOpsRows {
+		oid := row.oid
+		typ := oid.ToType()
+		switch {
+		case oid.IsDecimal():
+			typ = types.New(oid, 50, 2)
+			if oid == types.T_decimal64 {
+				typ = types.New(oid, 18, 2)
+			} else if oid == types.T_decimal128 {
+				typ = types.New(oid, 38, 2)
+			}
+		case oid.IsArray():
+			typ = types.New(oid, 3, 0)
+		case oid == types.T_bit:
+			typ = types.New(oid, 8, 0)
+		}
+		appendText, err := TextAppender(typ, opts)
+		if noText[oid] {
+			require.Error(t, err, "%s is listed as having no text form", oid)
+			continue
+		}
+		require.NoError(t, err, "%s: add a TextAppender sample or list it as having no text form", oid)
+		sample, ok := samples[oid]
+		require.True(t, ok, "%s has no sample", oid)
+
+		vec := NewVec(typ, mp)
+		require.NoError(t, appendText(vec, sample, mp), oid.String())
+		text := string(types.AppendValueText(nil, typ, GetAny(vec, 0, false), time.UTC))
+		require.NoError(t, appendText(vec, text, mp), "%s: its ValueText %q parses", oid, text)
+		require.Equal(t, vec.GetRawBytesAt(0), vec.GetRawBytesAt(1), "%s: %q reads back the same value", oid, text)
+		if samples[oid] != "abc" { // a string accepts any text
+			require.Error(t, appendText(vec, "not a value", mp), "%s rejects bad text", oid)
+			require.Equal(t, 2, vec.Length(), "%s: a failed parse appends nothing", oid)
+		}
+		vec.Free(mp)
+	}
+}

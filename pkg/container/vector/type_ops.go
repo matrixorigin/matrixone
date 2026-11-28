@@ -61,6 +61,9 @@ type typeOps struct {
 	exportFromRaw func(raw []byte) any
 	// setConst makes v a constant vector of length rows of val.
 	setConst func(v *Vector, val any, length int, mp *mpool.MPool) error
+	// textAppender resolves, for type t, the function that parses a value's
+	// text and appends it (see TextAppender).
+	textAppender func(t types.Type, opts types.TextParseOptions) (TextAppendFunc, error)
 
 	// constructors of per-type functions
 	unionAll    func(mp *mpool.MPool) func(v, w *Vector) error              // getUnionAllFunction
@@ -107,6 +110,19 @@ func fixedOps[T types.FixedSizeT]() typeOps {
 		},
 		setConst: func(v *Vector, val any, length int, mp *mpool.MPool) error {
 			return SetConstFixed(v, val.(T), length, mp)
+		},
+		textAppender: func(t types.Type, opts types.TextParseOptions) (TextAppendFunc, error) {
+			parse, err := types.ParseFunc[T](t, opts)
+			if err != nil {
+				return nil, err
+			}
+			return func(v *Vector, text string, mp *mpool.MPool) error {
+				val, err := parse(text)
+				if err != nil {
+					return err
+				}
+				return AppendFixed(v, val, false, mp)
+			}, nil
 		},
 		unionAll:    unionAllFixed[T],
 		appendBytes: appendBytesToFixSized[T],
@@ -157,6 +173,19 @@ func varlenOps() typeOps {
 	}
 	ops.setConst = func(v *Vector, val any, length int, mp *mpool.MPool) error {
 		return SetConstBytes(v, val.([]byte), length, mp)
+	}
+	ops.textAppender = func(t types.Type, opts types.TextParseOptions) (TextAppendFunc, error) {
+		parse, err := types.ParseFunc[[]byte](t, opts)
+		if err != nil {
+			return nil, err
+		}
+		return func(v *Vector, text string, mp *mpool.MPool) error {
+			val, err := parse(text)
+			if err != nil {
+				return err
+			}
+			return AppendBytes(v, val, false, mp)
+		}, nil
 	}
 	ops.unionAll = unionAllVarlen
 	ops.appendBytes = func(vec *Vector) func([]byte, bool, *mpool.MPool) error {
@@ -407,6 +436,21 @@ func FixedValueOfInt(oid types.T, n int64) any {
 	raw := make([]byte, max(typ.TypeSize(), 8))
 	binary.LittleEndian.PutUint64(raw, uint64(n))
 	return ValueFromRaw(oid, raw[:typ.TypeSize()])
+}
+
+// TextAppendFunc parses text, a value of the vector's type, and appends the
+// value to v. A parse error is returned with nothing appended.
+type TextAppendFunc func(v *Vector, text string, mp *mpool.MPool) error
+
+// TextAppender returns the TextAppendFunc for vectors of type t, resolved
+// once (types.ParseFunc), so that appending a row does no type dispatch. It
+// returns an error for a type SupportsAny rejects or that has no text form.
+func TextAppender(t types.Type, opts types.TextParseOptions) (TextAppendFunc, error) {
+	ops := &vectorTypeOps[t.Oid]
+	if !ops.supported {
+		return nil, moerr.NewNotSupportedNoCtxf("parsing a %s value from text", t.String())
+	}
+	return ops.textAppender(t, opts)
 }
 
 // SetConstValue makes vec a constant vector of length rows of val, a value

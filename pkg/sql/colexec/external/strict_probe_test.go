@@ -383,7 +383,8 @@ func TestStrictLegalityQuietConversions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cols := []*plan.ColDef{{Name: "d", Typ: plan.Type{Id: int32(tc.oid), Width: 12, Scale: 2, Enumvalues: tc.domain}}}
 			fields := []csvparser.Field{{Val: tc.value, HasStringQuote: tc.quoted}}
-			require.False(t, isLegalLineWithContext(ctx, strictProbeParam(t.Context()), cols, fields))
+			param := strictProbeParam(t.Context())
+			require.False(t, isLegalLineWithValidators(ctx, param, newFieldValidators(ctx, param, cols), fields))
 			require.Zero(t, reports.Load())
 		})
 	}

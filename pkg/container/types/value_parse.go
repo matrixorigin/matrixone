@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"errors"
 	"math"
 	"strconv"
@@ -23,99 +24,323 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-// ParseValue parses s, the text of a value of type t, into the value
-// (as vector.GetAny returns it): the one text-to-value parse for a
-// constant. An integer may be written as a float that is exactly an
-// integer ("2024.0"); a timestamp is read in loc, or in time.Local when loc
-// is nil. ENUM and SET values need their member list, which t does not
-// carry, and vectors are not parsed: those, and types with no text form,
-// return an error.
+// TextParseOptions are the choices a text parse leaves to its caller.
+type TextParseOptions struct {
+	// Ctx is the error-reporting context of parse errors; nil means the
+	// default one.
+	Ctx context.Context
+	// Loc is the time zone timestamp text is read in; nil means time.Local.
+	Loc *time.Location
+	// AllowTruncation keeps a decimal whose extra fraction digits were
+	// rounded away instead of returning the truncation error.
+	AllowTruncation bool
+	// ZeroInvalidTemporal reads invalid date, datetime and timestamp text as
+	// the zero value (MySQL's non-strict LOAD DATA).
+	ZeroInvalidTemporal bool
+	// NumericYear reads YEAR text as a number, in which 0 is year 0000, as
+	// MySQL reads an unquoted value; otherwise it is a year string, in which
+	// '0' is 2000.
+	NumericYear bool
+}
+
+// ZeroTemporalText is the text of the zero value of a temporal type that has
+// one ("0000-00-00" for a date), which ZeroInvalidTemporal produces.
+func ZeroTemporalText(t T) (string, bool) {
+	switch t {
+	case T_date:
+		return "0000-00-00", true
+	case T_datetime, T_timestamp:
+		return "0000-00-00 00:00:00", true
+	case T_time, T_year:
+		return "", false
+	default:
+		return "", false
+	}
+}
+
+// textParser is a resolved parser: typed is a func(string) (V, error) for
+// the value type V of the parsed type, boxed the same parse returning any.
+type textParser struct {
+	typed any
+	boxed func(string) (any, error)
+}
+
+func newTextParser[V any](f func(string) (V, error)) textParser {
+	return textParser{typed: f, boxed: func(s string) (any, error) {
+		v, err := f(s)
+		return v, err
+	}}
+}
+
+// ParseFunc returns the parser of the text of a value of type t, resolved
+// once so that each call does no type dispatch: the one text-to-value parse.
+// V is t's value type, as vector.GetAny returns it: the Go element type for a
+// fixed-size type, []byte for a varlena one (a vector as its encoded
+// elements). An integer may be written as a float ("2024.0"); MEDIUMINT
+// is range-checked; a FLOAT(p,s) or DOUBLE(p,s) value is rounded to s
+// digits; a low-precision float that is NaN, infinite or out of range is
+// rejected; a vector must have the column's dimension. ENUM and SET values
+// need their member list, which t does not carry: those, and types with no
+// text form, return an error, as does a V that is not t's value type. Adding
+// a type means adding its case to textParserOf.
+func ParseFunc[V any](t Type, opts TextParseOptions) (func(string) (V, error), error) {
+	p, err := textParserOf(t, opts)
+	if err != nil {
+		return nil, err
+	}
+	f, ok := p.typed.(func(string) (V, error))
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtxf("ParseFunc: %T is not the value type of %s", *new(V), t.String())
+	}
+	return f, nil
+}
+
+// ParseAnyFunc is ParseFunc for a caller that does not know t's value type:
+// the parse returns the value as any.
+func ParseAnyFunc(t Type, opts TextParseOptions) (func(string) (any, error), error) {
+	p, err := textParserOf(t, opts)
+	if err != nil {
+		return nil, err
+	}
+	return p.boxed, nil
+}
+
+// ParseValue parses s, the text of a value of type t, into the value (as
+// vector.GetAny returns it): ParseFunc for a single value, such as a
+// constant. A timestamp is read in loc, or in time.Local when loc is nil.
 func ParseValue(t Type, s string, loc *time.Location) (any, error) {
+	p, err := textParserOf(t, TextParseOptions{Loc: loc})
+	if err != nil {
+		return nil, err
+	}
+	return p.boxed(s)
+}
+
+func textParserOf(t Type, opts TextParseOptions) (textParser, error) {
+	ctx := opts.Ctx
+	if ctx == nil {
+		ctx = moerr.Context()
+	}
 	switch t.Oid {
 	case T_bool:
-		return ParseBool(s)
+		return newTextParser(func(s string) (bool, error) { return ParseBoolWithContext(ctx, s) }), nil
 	case T_bit:
 		width := int(t.Width)
 		if width <= 0 || width > 64 {
 			width = 64
 		}
-		return strconv.ParseUint(s, 10, width)
+		return newTextParser(func(s string) (uint64, error) { return strconv.ParseUint(s, 10, width) }), nil
 	case T_int8:
-		v, err := parseIntWithFloatFallback(s, 8)
-		return int8(v), err
+		return newTextParser(func(s string) (int8, error) {
+			v, err := parseIntWithFloatFallback(s, 8)
+			return int8(v), err
+		}), nil
 	case T_int16:
-		v, err := parseIntWithFloatFallback(s, 16)
-		return int16(v), err
+		return newTextParser(func(s string) (int16, error) {
+			v, err := parseIntWithFloatFallback(s, 16)
+			return int16(v), err
+		}), nil
 	case T_int32:
-		v, err := parseIntWithFloatFallback(s, 32)
-		return int32(v), err
+		bits := 32
+		if t.IsMediumInt() {
+			bits = 24
+		}
+		return newTextParser(func(s string) (int32, error) {
+			v, err := parseIntWithFloatFallback(s, bits)
+			return int32(v), err
+		}), nil
 	case T_int64:
-		return parseIntWithFloatFallback(s, 64)
+		return newTextParser(func(s string) (int64, error) { return parseIntWithFloatFallback(s, 64) }), nil
 	case T_uint8:
-		v, err := parseUintWithFloatFallback(s, 8)
-		return uint8(v), err
+		return newTextParser(func(s string) (uint8, error) {
+			v, err := parseUintWithFloatFallback(s, 8)
+			return uint8(v), err
+		}), nil
 	case T_uint16:
-		v, err := parseUintWithFloatFallback(s, 16)
-		return uint16(v), err
+		return newTextParser(func(s string) (uint16, error) {
+			v, err := parseUintWithFloatFallback(s, 16)
+			return uint16(v), err
+		}), nil
 	case T_uint32:
-		v, err := parseUintWithFloatFallback(s, 32)
-		return uint32(v), err
+		bits := 32
+		if t.IsMediumInt() {
+			bits = 24
+		}
+		return newTextParser(func(s string) (uint32, error) {
+			v, err := parseUintWithFloatFallback(s, bits)
+			return uint32(v), err
+		}), nil
 	case T_uint64:
-		return parseUintWithFloatFallback(s, 64)
+		return newTextParser(func(s string) (uint64, error) { return parseUintWithFloatFallback(s, 64) }), nil
 	case T_float32:
-		v, err := strconv.ParseFloat(s, 32)
-		return float32(v), err
+		if t.Scale < 0 || t.Width == 0 {
+			return newTextParser(func(s string) (float32, error) {
+				v, err := strconv.ParseFloat(s, 32)
+				return float32(v), err
+			}), nil
+		}
+		return newTextParser(func(s string) (float32, error) {
+			d, err := ParseDecimal128WithContext(ctx, s, t.Width, t.Scale)
+			return float32(Decimal128ToFloat64(d, t.Scale)), err
+		}), nil
 	case T_float64:
-		return strconv.ParseFloat(s, 64)
-	case T_bf16, T_float16, T_float8, T_float4:
-		v, err := strconv.ParseFloat(s, 32)
-		if err != nil {
-			return nil, err
+		if t.Scale < 0 || t.Width == 0 {
+			return newTextParser(func(s string) (float64, error) { return strconv.ParseFloat(s, 64) }), nil
 		}
-		switch t.Oid {
-		case T_bf16:
-			return BF16FromFloat32(float32(v)), nil
-		case T_float16:
-			return Float16FromFloat32(float32(v)), nil
-		case T_float8:
-			return Float8FromFloat32(float32(v)), nil
-		case T_float4:
-			return Float4FromFloat32(float32(v)), nil
-		default:
-			panic("unreachable")
-		}
+		return newTextParser(func(s string) (float64, error) {
+			d, err := ParseDecimal128WithContext(ctx, s, t.Width, t.Scale)
+			return Decimal128ToFloat64(d, t.Scale), err
+		}), nil
+	case T_bf16:
+		return newTextParser(lowPrecFloatParser(T_bf16, BF16FromFloat32)), nil
+	case T_float16:
+		return newTextParser(lowPrecFloatParser(T_float16, Float16FromFloat32)), nil
+	case T_float8:
+		return newTextParser(lowPrecFloatParser(T_float8, Float8FromFloat32)), nil
+	case T_float4:
+		return newTextParser(lowPrecFloatParser(T_float4, Float4FromFloat32)), nil
 	case T_decimal64:
-		return ParseDecimal64(s, t.Width, t.Scale)
+		return newTextParser(func(s string) (Decimal64, error) {
+			d, err := ParseDecimal64WithContext(ctx, s, t.Width, t.Scale)
+			return d, allowTruncation(err, opts)
+		}), nil
 	case T_decimal128:
-		return ParseDecimal128(s, t.Width, t.Scale)
+		return newTextParser(func(s string) (Decimal128, error) {
+			d, err := ParseDecimal128WithContext(ctx, s, t.Width, t.Scale)
+			return d, allowTruncation(err, opts)
+		}), nil
 	case T_decimal256:
-		return ParseDecimal256(s, t.Width, t.Scale)
+		return newTextParser(func(s string) (Decimal256, error) {
+			d, err := ParseDecimal256WithContext(ctx, s, t.Width, t.Scale)
+			return d, allowTruncation(err, opts)
+		}), nil
 	case T_date:
-		return ParseDateCast(s)
+		return newTextParser(func(s string) (Date, error) {
+			d, err := ParseDateCastWithContext(ctx, s)
+			if err != nil && opts.ZeroInvalidTemporal {
+				return ZeroDate, nil
+			}
+			return d, err
+		}), nil
 	case T_datetime:
-		return ParseDatetime(s, t.Scale)
+		return newTextParser(func(s string) (Datetime, error) {
+			d, err := ParseDatetimeWithContext(ctx, s, t.Scale)
+			if err != nil && opts.ZeroInvalidTemporal {
+				return ZeroDatetime, nil
+			}
+			return d, err
+		}), nil
 	case T_timestamp:
+		loc := opts.Loc
 		if loc == nil {
 			loc = time.Local
 		}
-		return ParseTimestamp(loc, s, t.Scale)
+		return newTextParser(func(s string) (Timestamp, error) {
+			d, err := ParseTimestampWithContext(ctx, loc, s, t.Scale)
+			if err == nil && !ValidTimestamp(d) {
+				err = moerr.NewInvalidInputf(ctx, "timestamp out of range: %s", s)
+			}
+			if err != nil && opts.ZeroInvalidTemporal {
+				return ZeroTimestamp, nil
+			}
+			return d, err
+		}), nil
 	case T_time:
-		return ParseTime(s, t.Scale)
+		return newTextParser(func(s string) (Time, error) { return ParseTimeWithContext(ctx, s, t.Scale) }), nil
 	case T_year:
-		return ParseMoYear(s)
+		if opts.NumericYear {
+			return newTextParser(func(s string) (MoYear, error) {
+				d, err := strconv.ParseInt(s, 10, 64)
+				if err != nil {
+					return 0, err
+				}
+				return ParseMoYearFromIntWithContext(ctx, d)
+			}), nil
+		}
+		return newTextParser(func(s string) (MoYear, error) { return ParseMoYearWithContext(ctx, s) }), nil
 	case T_uuid:
-		return ParseUuid(s)
+		return newTextParser(ParseUuid), nil
 	case T_json:
-		j, err := ParseStringToByteJson(s)
+		return newTextParser(func(s string) ([]byte, error) {
+			j, err := ParseStringToByteJsonWithContext(ctx, s)
+			if err != nil {
+				return nil, err
+			}
+			return j.Marshal()
+		}), nil
+	case T_char, T_varchar, T_text, T_binary, T_varbinary, T_blob, T_datalink:
+		return newTextParser(func(s string) ([]byte, error) { return []byte(s), nil }), nil
+	case T_array_float32:
+		return newTextParser(arrayParser[float32](ctx, t)), nil
+	case T_array_float64:
+		return newTextParser(arrayParser[float64](ctx, t)), nil
+	case T_array_bf16:
+		return newTextParser(arrayParser[BF16](ctx, t)), nil
+	case T_array_float16:
+		return newTextParser(arrayParser[Float16](ctx, t)), nil
+	case T_array_int8:
+		return newTextParser(arrayParser[int8](ctx, t)), nil
+	case T_array_uint8:
+		return newTextParser(arrayParser[uint8](ctx, t)), nil
+	case T_array_float8, T_array_float4:
+		// "[...]" is quantized; the exact form (a JSON object) is the cell as written
+		f, _ := t.Oid.BlockScaledFormat()
+		return newTextParser(func(s string) ([]byte, error) {
+			cell, err := StringToBlockScaled(f, s)
+			if err != nil {
+				return nil, err
+			}
+			return cell, checkArrayDim(t, BlockScaledDim(cell))
+		}), nil
+	default:
+		return textParser{}, moerr.NewNotSupportedNoCtxf("parsing a %s value from text", t.String())
+	}
+}
+
+// lowPrecFloatParser parses a low-precision float: rounded to float32 by
+// round-to-odd, so the second rounding to the target is exact, and rejected
+// when NaN, infinite or out of the target's range rather than saturated.
+func lowPrecFloatParser[F LowPrecFloat](oid T, from func(float32) F) func(string) (F, error) {
+	return func(s string) (F, error) {
+		var zero F
+		f, f64, err := Float32RoundToOddString(s)
+		if err != nil {
+			return zero, err
+		}
+		if err := RejectNarrowFloatInput(f, oid, f64, s); err != nil {
+			return zero, err
+		}
+		return CanonicalLowPrecFloat(from(f)), nil
+	}
+}
+
+func arrayParser[E ArrayElement](ctx context.Context, t Type) func(string) ([]byte, error) {
+	return func(s string) ([]byte, error) {
+		arr, err := stringToArrayWithContext[E](ctx, s)
 		if err != nil {
 			return nil, err
 		}
-		return j.Marshal()
-	case T_char, T_varchar, T_text, T_binary, T_varbinary, T_blob, T_datalink:
-		return []byte(s), nil
-	default:
-		return nil, moerr.NewNotSupportedNoCtxf("parsing a %s value from text", t.String())
+		if err := checkArrayDim(t, len(arr)); err != nil {
+			return nil, err
+		}
+		return ArrayToBytes(arr), nil
 	}
+}
+
+// checkArrayDim checks a vector of dim elements against the declared
+// dimension of t (MaxArrayDimension accepts any).
+func checkArrayDim(t Type, dim int) error {
+	if int(t.Width) != MaxArrayDimension && int(t.Width) != dim {
+		return moerr.NewArrayDefMismatchNoCtx(int(t.Width), dim)
+	}
+	return nil
+}
+
+func allowTruncation(err error, opts TextParseOptions) error {
+	if err != nil && opts.AllowTruncation && moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+		return nil
+	}
+	return err
 }
 
 // Float-domain boundary constants for 64-bit overflow detection.
@@ -143,7 +368,7 @@ const (
 	float64IntExactLimit      = 0x1p53 // 2^53, largest |x| with consecutive-integer precision
 )
 
-// parseIntWithFloatFallback is the integer rule of ParseValue (the one getColData also follows):
+// parseIntWithFloatFallback is the integer rule of ParseFunc:
 // 1. ParseInt succeeds → use it
 // 2. ParseInt fails with ErrRange → reject (no fallback for overflow)
 // 3. ParseInt fails otherwise → ParseFloat + range check
@@ -191,7 +416,7 @@ func parseIntWithFloatFallback(s string, bitSize int) (int64, error) {
 	return int64(f), nil
 }
 
-// parseUintWithFloatFallback is the unsigned integer rule of ParseValue:
+// parseUintWithFloatFallback is the unsigned integer rule of ParseFunc:
 // 1. ParseUint succeeds → use it
 // 2. ParseUint fails with ErrRange → reject (no fallback for overflow)
 // 3. ParseUint fails otherwise → ParseFloat + range check
