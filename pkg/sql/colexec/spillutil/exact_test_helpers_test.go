@@ -83,7 +83,12 @@ func newTestSpillFileWithSize(fd *os.File, rows int64, size uint64, release func
 			}
 			return os.Open(name)
 		},
-		func() error { return os.Remove(name) }, rows, size, release,
+		func() error { return os.Remove(name) }, rows, size,
+		func(removed bool) {
+			if removed && release != nil {
+				release()
+			}
+		},
 	)
 }
 

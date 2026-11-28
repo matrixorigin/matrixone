@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -1100,29 +1101,24 @@ func (c *distinctSpillController) flushSortSet(
 		return nil, err
 	}
 	if err = c.ctr.openSpillBucket(proc, spillfs, run); err != nil {
-		_ = run.free()
-		return nil, err
+		return nil, errors.Join(err, run.free())
 	}
 	it := set.NewIter(nil, nil)
 	defer it.Close()
 	for ok, key, _ := it.First(); ok; ok, key, _ = it.Next() {
 		if err, canceled := vm.CancelCheck(proc); canceled {
-			_ = run.free()
-			return nil, err
+			return nil, errors.Join(err, run.free())
 		}
 		if err := writeDistinctSortKey(run.writer, key); err != nil {
-			_ = run.free()
-			return nil, err
+			return nil, errors.Join(err, run.free())
 		}
 		run.cnt++
 	}
 	if run.cnt == 0 {
-		_ = run.free()
-		return nil, moerr.NewInternalErrorNoCtx("empty distinct sort run")
+		return nil, errors.Join(moerr.NewInternalErrorNoCtx("empty distinct sort run"), run.free())
 	}
 	if err := run.flushWriter(); err != nil {
-		_ = run.free()
-		return nil, err
+		return nil, errors.Join(err, run.free())
 	}
 	return run, nil
 }
@@ -1132,7 +1128,7 @@ func (c *distinctSpillController) mergeSortRuns(
 	spillfs fileservice.MutableFileService,
 	left *spillBucket,
 	right *spillBucket,
-) (*spillBucket, error) {
+) (result *spillBucket, retErr error) {
 	if c == nil || proc == nil || spillfs == nil || left == nil || right == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
@@ -1165,18 +1161,20 @@ func (c *distinctSpillController) mergeSortRuns(
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if result == nil {
+			retErr = errors.Join(retErr, out.free())
+		}
+	}()
 	if err = c.ctr.openSpillBucket(proc, spillfs, out); err != nil {
-		_ = out.free()
 		return nil, err
 	}
 	leftKey, leftEOF, err := readDistinctSortKey(leftReader, c.mergeLeft)
 	if err != nil {
-		_ = out.free()
 		return nil, err
 	}
 	rightKey, rightEOF, err := readDistinctSortKey(rightReader, c.mergeRight)
 	if err != nil {
-		_ = out.free()
 		return nil, err
 	}
 	write := func(key []byte) error {
@@ -1188,7 +1186,6 @@ func (c *distinctSpillController) mergeSortRuns(
 	}
 	for !leftEOF || !rightEOF {
 		if err, canceled := vm.CancelCheck(proc); canceled {
-			_ = out.free()
 			return nil, err
 		}
 		comparison := 0
@@ -1201,19 +1198,16 @@ func (c *distinctSpillController) mergeSortRuns(
 		}
 		if comparison < 0 {
 			if err := write(leftKey); err != nil {
-				_ = out.free()
 				return nil, err
 			}
 			leftKey, leftEOF, err = readDistinctSortKey(leftReader, c.mergeLeft)
 		} else if comparison > 0 {
 			if err := write(rightKey); err != nil {
-				_ = out.free()
 				return nil, err
 			}
 			rightKey, rightEOF, err = readDistinctSortKey(rightReader, c.mergeRight)
 		} else {
 			if err := write(leftKey); err != nil {
-				_ = out.free()
 				return nil, err
 			}
 			leftKey, leftEOF, err = readDistinctSortKey(leftReader, c.mergeLeft)
@@ -1223,20 +1217,16 @@ func (c *distinctSpillController) mergeSortRuns(
 			}
 		}
 		if err != nil {
-			_ = out.free()
 			return nil, err
 		}
 	}
 	if err := out.flushWriter(); err != nil {
-		_ = out.free()
 		return nil, err
 	}
 	if err := left.free(); err != nil {
-		_ = out.free()
 		return nil, err
 	}
 	if err := right.free(); err != nil {
-		_ = out.free()
 		return nil, err
 	}
 	return out, nil
@@ -1247,11 +1237,14 @@ func (c *distinctSpillController) addSortRun(
 	spillfs fileservice.MutableFileService,
 	slots *[64]*spillBucket,
 	run *spillBucket,
-) error {
+) (retErr error) {
+	// The current run can become an intermediate unknown to the caller.
+	defer func() { retErr = errors.Join(retErr, run.free()) }()
 	for level := 0; level < len(slots); level++ {
 		if slots[level] == nil {
 			run.lv = level
 			slots[level] = run
+			run = nil
 			return nil
 		}
 		merged, err := c.mergeSortRuns(proc, spillfs, slots[level], run)
@@ -1261,7 +1254,6 @@ func (c *distinctSpillController) addSortRun(
 		slots[level] = nil
 		run = merged
 	}
-	_ = run.free()
 	return moerr.NewInternalErrorNoCtx("distinct external sort level overflow")
 }
 
@@ -1311,7 +1303,7 @@ func (c *distinctSpillController) externalSortH0Partition(
 	defer func() {
 		for i := range slots {
 			if slots[i] != nil {
-				_ = slots[i].free()
+				retErr = errors.Join(retErr, slots[i].free())
 				slots[i] = nil
 			}
 		}
@@ -1335,7 +1327,6 @@ func (c *distinctSpillController) externalSortH0Partition(
 			return err
 		}
 		if err := c.addSortRun(proc, spillfs, &slots, run); err != nil {
-			_ = run.free()
 			return err
 		}
 		c.ctr.mp.Free(buffer)
@@ -1401,6 +1392,12 @@ func (c *distinctSpillController) externalSortH0Partition(
 	}
 
 	var final *spillBucket
+	// final can already own a popped run before a later merge fails.
+	defer func() {
+		if final != nil {
+			retErr = errors.Join(retErr, final.free())
+		}
+	}()
 	for level := range slots {
 		if slots[level] == nil {
 			continue
@@ -1420,13 +1417,6 @@ func (c *distinctSpillController) externalSortH0Partition(
 	if final == nil {
 		return make([]uint64, aggregateCount), nil
 	}
-	defer func() {
-		if final != nil {
-			if err := final.free(); retErr == nil && err != nil {
-				retErr = err
-			}
-		}
-	}()
 	if err := final.flushWriter(); err != nil {
 		return nil, err
 	}

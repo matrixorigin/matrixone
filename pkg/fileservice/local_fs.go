@@ -67,6 +67,7 @@ type LocalFS struct {
 	// framing), matching the S3 (disk-backed) on-disk format. Selected by the
 	// DISK-V2 backend.
 	noChecksum bool
+	spillRoot  spillRootHolder
 }
 
 var _ FileService = new(LocalFS)
@@ -1483,6 +1484,7 @@ func (l *LocalFS) IndexFileCache() *IndexFileCache {
 }
 
 func (l *LocalFS) Close(ctx context.Context) {
+	l.spillRoot.close()
 	caches := fileServiceCaches{memory: l.memCache, disk: l.diskCache, index: l.indexFileCache}
 	caches.close(ctx)
 	closeDirFiles(&l.RWMutex, l.dirFiles)
@@ -1564,5 +1566,5 @@ func (l *LocalFS) RemoveFile(ctx context.Context, filePath string) error {
 }
 
 func (l *LocalFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
-	return createAndRemoveMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath, unlinkLocalFile)
+	return createAndRemoveMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath, unlinkAnonymousLocalFile)
 }
