@@ -1,4 +1,4 @@
-name: PR 32922 / first CS pool (isolated)
+name: PR 32922 / capacity check before first CS dispatch (isolated)
 on:
   push:
     branches: [weilu-runner-test]
@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   authorize:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == '0c03d3c0d61bf8c336c7b5da1aa972eba787cf92' && github.ref == 'refs/heads/weilu-runner-test'
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == '02b5bbbd37a8c8d12c7bcadaef925029c852db7a' && github.ref == 'refs/heads/weilu-runner-test'
     runs-on: ubuntu-latest
     environment: ci
     permissions:
@@ -18,15 +18,17 @@ jobs:
       allowed: ${{ steps.auth.outputs.allowed }}
       source: ${{ steps.auth.outputs.head_repository }}
       sha: ${{ steps.auth.outputs.head_sha }}
+      snapshot: ${{ steps.capacity.outputs.snapshot }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: matrixorigin/CI
-          ref: 27887597968a080f78e942fc54636e5b9354033c
+          ref: beac93287d3f83d21a92b471a9a52774c58a5939
           path: fixed-ci
           sparse-checkout: |
             scripts/coverage_cache_preflight.py
             scripts/coverage_pr_entry.py
+            scripts/coverage_standby.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -52,8 +54,8 @@ jobs:
           from coverage_pr_entry import ENTRY, PROJECT, has_s3_fixture, route
           import node_cache_real_pr_gate as approved
 
-          number, run_id, preflight = 32922, 46057870893, 140704664963
-          head, source, author = "365f74726bf9282c510a743b26d6b72e3cb541d7", "Ariznawlll/matrixone", "Ariznawlll"
+          number, run_id, preflight = 32922, 46135152456, 140948674422
+          head, source, author = "af575c76dbf4b84b2228d10b28306aaa72dad599", "Ariznawlll/matrixone", "Ariznawlll"
           def check(ok, message):
               if not ok:
                   raise SystemExit(message)
@@ -123,6 +125,26 @@ jobs:
           name: real-pr-snapshot-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/real-pr-authorization.json
           if-no-files-found: error
+      - id: capacity
+        name: Validate the fresh read-only capacity receipt before dispatch
+        env:
+          TRIAL_CAPACITY: >-
+            {"captured_at":1795863975,"pools":[{"pool":"cs-mty-nc-n0-pr-v1","slots":0,"pending":1},{"pool":"cs-mty-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-jed-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-jed-nc-n1-pr-v1","slots":0,"pending":3},{"pool":"cs-jed-nc-n2-pr-v1","slots":1,"pending":0},{"pool":"cs-ruh-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n2-pr-v1","slots":2,"pending":0}]}
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/fixed-ci/scripts" python3 - <<'PY'
+          import json, os, time
+          from coverage_standby import first_cs_pool_plan
+
+          receipt = os.environ["TRIAL_CAPACITY"]
+          plan = first_cs_pool_plan(receipt, time.time())
+          if len(plan) != 2:
+              raise SystemExit("No current two-pool plan; did not dispatch this isolated test.")
+          for row in json.loads(receipt)["pools"]:
+              print(f"{row['pool']}: {row['slots']} whole slots, {row['pending']} pending")
+          print(f"First target for GROUP0: {plan[0]}; GROUP1: {plan[1]}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              print("snapshot=" + receipt, file=out)
+          PY
   coverage:
     name: Route Coverage group ${{ matrix.group }}
     needs: authorize
@@ -143,8 +165,7 @@ jobs:
       head: ${{ needs.authorize.outputs.sha }}
       source: ${{ needs.authorize.outputs.source }}
       enable_cs_site_retry: false
-      first_pool_snapshot: >-
-        {"captured_at":1795846610,"pools":[{"pool":"cs-mnl2-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-mnl2-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-mnl2-nc-n2-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n2-pr-v1","slots":2,"pending":0}]}
+      first_pool_snapshot: ${{ needs.authorize.outputs.snapshot }}
   merge:
     needs: [authorize, coverage]
     runs-on: ubuntu-latest

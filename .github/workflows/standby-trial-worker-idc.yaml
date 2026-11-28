@@ -31,7 +31,7 @@ jobs:
       uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
         repository: matrixorigin/CI
-        ref: 9166306c4e767110eecf4d75a48c121a42fde4d5
+        ref: beac93287d3f83d21a92b471a9a52774c58a5939
         path: .standby
         sparse-checkout: scripts/coverage_standby.py
         sparse-checkout-cone-mode: false

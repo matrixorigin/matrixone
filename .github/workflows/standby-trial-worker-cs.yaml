@@ -23,12 +23,11 @@ jobs:
       github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-worker.yaml@refs/heads/weilu-runner-test' &&
       github.run_attempt == 1 && (inputs.group == 0 || inputs.group == 1) && inputs.ticket != '' &&
       (!fromJSON(inputs.ticket).site || contains(fromJSON('["mty","jed","mnl2","ruh"]'), fromJSON(inputs.ticket).site)) &&
-      (!fromJSON(inputs.ticket).scale_set || (!fromJSON(inputs.ticket).site &&
-      contains(fromJSON('["cs-mnl2-nc-n0-pr-v1","cs-mnl2-nc-n1-pr-v1","cs-mnl2-nc-n2-pr-v1","cs-ruh-nc-n0-pr-v1","cs-ruh-nc-n1-pr-v1","cs-ruh-nc-n2-pr-v1"]'), fromJSON(inputs.ticket).scale_set)))
+      (!fromJSON(inputs.ticket).scale_set ||
+      (fromJSON(inputs.ticket).pr == 32922 && fromJSON(inputs.ticket).attempt == 1 && !fromJSON(inputs.ticket).site &&
+      contains(fromJSON('["cs-mty-nc-n0-pr-v1","cs-mty-nc-n1-pr-v1","cs-jed-nc-n0-pr-v1","cs-jed-nc-n1-pr-v1","cs-jed-nc-n2-pr-v1","cs-mnl2-nc-n0-pr-v1","cs-mnl2-nc-n1-pr-v1","cs-mnl2-nc-n2-pr-v1","cs-ruh-nc-n0-pr-v1","cs-ruh-nc-n1-pr-v1","cs-ruh-nc-n2-pr-v1"]'), fromJSON(inputs.ticket).scale_set)))
     runs-on: >-
-      ${{ fromJSON(fromJSON(inputs.ticket || '{}').scale_set &&
-      format('["{0}"]', fromJSON(inputs.ticket || '{}').scale_set) ||
-      fromJSON(inputs.ticket || '{}').site &&
+      ${{ fromJSON(inputs.ticket || '{}').scale_set || fromJSON(fromJSON(inputs.ticket || '{}').site &&
       format('["cs-node-cache-7c14g","cs-{0}-node-cache-all"]', fromJSON(inputs.ticket || '{}').site) ||
       '["cs-node-cache-7c14g"]') }}
     environment: ci
@@ -38,7 +37,7 @@ jobs:
       uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
         repository: matrixorigin/CI
-        ref: 9166306c4e767110eecf4d75a48c121a42fde4d5
+        ref: beac93287d3f83d21a92b471a9a52774c58a5939
         path: .standby
         sparse-checkout: |
           scripts/coverage_standby.py
