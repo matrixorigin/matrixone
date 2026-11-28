@@ -235,9 +235,6 @@ pkg/sql/colexec/window/window.go	searchRightWithLocation	float	1	T_bf16,T_float1
 pkg/sql/colexec/window/window.go	searchRightWithLocation	temporal	1	T_year
 pkg/sql/colexec/window/window.go	validateRangeFrameBound	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/colexec/zero_temporal.go	CheckZeroTemporalVector	temporal	1	T_time,T_year
-pkg/sql/compile/compile.go	evalAggOptimize	decimal	2	T_decimal256
-pkg/sql/compile/compile.go	evalAggOptimize	float	2	T_bf16,T_float16,T_float4,T_float8
-pkg/sql/compile/compile.go	evalAggOptimize	temporal	2	T_year
 pkg/sql/compile/fuzzyCheck.go	newFuzzyCheck	float chain	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/compile/fuzzyCheck.go	vectorToString	decimal	1	T_decimal256
 pkg/sql/compile/fuzzyCheck.go	vectorToString	float	1	T_bf16,T_float16,T_float4,T_float8
@@ -249,12 +246,6 @@ pkg/sql/compile/parallel_set_membership.go	setMembershipIdentityKeys	decimal	1	T
 pkg/sql/compile/parallel_set_membership.go	setMembershipIdentityKeys	temporal	1	T_year
 pkg/sql/compile/parallel_union_distinct.go	parallelUnionDistinct	decimal	1	T_decimal256
 pkg/sql/compile/parallel_union_distinct.go	parallelUnionDistinct	temporal	1	T_year
-pkg/sql/compile/remoterun.go	DecodeMergeGroup	decimal	1	T_decimal256
-pkg/sql/compile/remoterun.go	DecodeMergeGroup	float	1	T_bf16,T_float16,T_float4,T_float8
-pkg/sql/compile/remoterun.go	DecodeMergeGroup	temporal	1	T_year
-pkg/sql/compile/remoterun.go	EncodeMergeGroup	decimal	1	T_decimal256
-pkg/sql/compile/remoterun.go	EncodeMergeGroup	float	1	T_bf16,T_float16,T_float4,T_float8
-pkg/sql/compile/remoterun.go	EncodeMergeGroup	temporal	1	T_year
 pkg/sql/compile/remoterun.go	isDecimalStatisticalAggregate	decimal chain	1	T_decimal256
 pkg/sql/compile/sirius_batch.go	siriusElementSize	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/compile/sirius_batch.go	siriusElementSize	temporal	1	T_datetime,T_time,T_year

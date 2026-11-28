@@ -519,7 +519,7 @@ func (zm ZM) getValue(buf []byte) any {
 	case types.T_Rowid:
 		return types.DecodeFixed[types.Rowid](buf)
 	case types.T_Blockid:
-		return types.DecodeFixed[types.Rowid](buf)
+		return types.DecodeFixed[types.Blockid](buf)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		return buf
