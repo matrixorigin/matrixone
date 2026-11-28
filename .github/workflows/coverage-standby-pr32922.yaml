@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   authorize:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == '02b5bbbd37a8c8d12c7bcadaef925029c852db7a' && github.ref == 'refs/heads/weilu-runner-test'
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == 'c613f57e07c79bb54a808376e82fd151fe89d015' && github.ref == 'refs/heads/weilu-runner-test'
     runs-on: ubuntu-latest
     environment: ci
     permissions:
@@ -129,7 +129,7 @@ jobs:
         name: Validate the fresh read-only capacity receipt before dispatch
         env:
           TRIAL_CAPACITY: >-
-            {"captured_at":1795863975,"pools":[{"pool":"cs-mty-nc-n0-pr-v1","slots":0,"pending":1},{"pool":"cs-mty-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-jed-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-jed-nc-n1-pr-v1","slots":0,"pending":3},{"pool":"cs-jed-nc-n2-pr-v1","slots":1,"pending":0},{"pool":"cs-ruh-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n2-pr-v1","slots":2,"pending":0}]}
+            {"captured_at":1795866065,"pools":[{"pool":"cs-ruh-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n1-pr-v1","slots":2,"pending":0}]}
         run: |
           PYTHONPATH="$GITHUB_WORKSPACE/fixed-ci/scripts" python3 - <<'PY'
           import json, os, time
