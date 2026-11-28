@@ -373,11 +373,12 @@ test('Coverage rollout is opt-in and selects exactly one route', () => {
     ['main', '32100', '32000', false],
     ['main', '32000', '32000', true],
     ['4.2-dev', '32000', '32000', true],
-    ['4.2-dev', 'shared', '32000', true],
-    ['main', 'shared', '32000', true],
-    ['v4.2.8-hotfix', 'shared', '32000', false],
+    ['4.2-dev', 'shared', '32000', false],
+    ['main', 'shared', '32000', false],
+    ['v4.2.8-hotfix', '32000', '32000', false],
     ['3.0-dev', '32000', '32000', false],
     ['main', '', '', false],
+    ['main', 'shared', 'shared', false],
   ];
   for (const [base, setting, pr, expected] of cases) {
     const directory = mkdtempSync(join(tmpdir(), 'coverage-rollout-'));

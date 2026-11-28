@@ -81,7 +81,7 @@ jobs:
           set -euo pipefail
           native_coverage=false
           if [[ ( "$BASE_REF" == main || "$BASE_REF" == 4.2-dev ) &&
-                ( "$COVERAGE_ROLLOUT" == shared || ( -n "$PR_NUMBER" && "$COVERAGE_ROLLOUT" == "$PR_NUMBER" ) ) ]]; then
+                "$PR_NUMBER" =~ ^[1-9][0-9]*$ && "$COVERAGE_ROLLOUT" == "$PR_NUMBER" ]]; then
             native_coverage=true
           fi
           compose_group=$(( (${{ github.run_id }} + ${{ github.run_attempt }}) % 2 ))
@@ -98,7 +98,7 @@ jobs:
             echo "- Compose + Proxy: group ${compose_group}"
             echo "- Launch + Pessimistic: group ${launch_group}"
             echo "- Generation: ${generation}"
-            echo "- Native Coverage: ${native_coverage}"
+            echo "- Native Coverage canary requested: ${native_coverage}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   docs-check:
