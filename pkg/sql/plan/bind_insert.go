@@ -2701,6 +2701,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			BindingTags: []int32{selectTag},
 		}, bindCtx)
 
+		if onDupAction == plan.Node_UPDATE {
+			lastNodeID, err = appendCheckConstraintPlan(
+				builder, bindCtx, tableDef, lastNodeID, selectTag, colName2Idx, false)
+			if err != nil {
+				return 0, err
+			}
+		}
+
 		// ON DUPLICATE KEY UPDATE: materialize the final merged image (this PROJECT)
 		// so the main plan, the irregular-index maintenance, and the row-scoped
 		// child→parent foreign-key check can all read it. The dedup PK is immutable,
@@ -2899,7 +2907,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 	}
 
-	if onDupAction != plan.Node_IGNORE {
+	if onDupAction == plan.Node_FAIL {
 		lastNodeID, err = appendCheckConstraintPlan(
 			builder,
 			bindCtx,

@@ -2739,7 +2739,7 @@ func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
 
 	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
 		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "default-marker")
-	if !nodeContainsStringLiteral(node, "job-default") {
+	if !exprContainsStringLiteral(node.ProjectList[len(mock.ctxt.tables["emp"].Cols)+1], "job-default") {
 		t.Fatalf("generated column should use expanded DEFAULT expression, got %v", node.ProjectList)
 	}
 }
@@ -2757,7 +2757,7 @@ func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
 
 	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
 		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "on-update-marker")
-	if !nodeContainsStringLiteral(node, "job-on-update") {
+	if !exprContainsStringLiteral(node.ProjectList[len(mock.ctxt.tables["emp"].Cols)+1], "job-on-update") {
 		t.Fatalf("generated column should use ON UPDATE expression, got %v", node.ProjectList)
 	}
 }
@@ -2935,7 +2935,7 @@ func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.
 	deptCols := len(mock.ctxt.tables["dept"].Cols)
 	expectedLen := empCols + 1 + deptCols + 1 + 1 // emp SET + dept SET + dname generated
 	node := requireFallbackSourceProjectNode(t, query, expectedLen, "non-first-gen")
-	if !nodeContainsStringLiteral(node, "non-first-gen") {
+	if !exprContainsStringLiteral(node.ProjectList[expectedLen-1], "non-first-gen") {
 		t.Fatalf("generated column on non-first table should contain the SET value, got %v", node.ProjectList)
 	}
 }
@@ -2959,12 +2959,8 @@ func TestUpdateFallbackGeneratedColumnChainAfterOptimize(t *testing.T) {
 	// Position of generated sal: after emp cols (9) + SET comm (1) = index 10
 	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(), expectedLen,
 		empCols+1, "chain-opt-marker")
-	if generatedExpr == nil {
-		t.Fatal("generated column position after optimization should not be nil")
-	}
-	// The generated expr should be a non-nil expression (DeepCopy of the SET value).
-	// We don't check the exact contents since substituteColRefsInExpr deep-copies,
-	// but we verify the expression exists at the expected position.
+	require.NotNil(t, generatedExpr, "generated column should survive optimization")
+	require.False(t, exprContainsColName(generatedExpr, "comm"), "read the SET value, not old comm")
 }
 
 func TestUpdateGeneratedColumnDerivedTableSourceOnFKTable(t *testing.T) {
@@ -3081,28 +3077,26 @@ func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
 }
 
 func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int, marker string) *Node {
+	t.Helper()
 	for _, node := range query.Nodes {
 		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
 			continue
 		}
-		return node
+		view := &Node{ProjectList: make([]*Expr, len(node.ProjectList))}
+		for i, expr := range node.ProjectList {
+			view.ProjectList[i] = traceFallbackProjectExpr(query, node, expr)
+		}
+		return view
 	}
 	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
 	return nil
 }
 
 func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
-	for _, node := range query.Nodes {
-		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
-			continue
-		}
-		if pos >= len(node.ProjectList) {
-			continue
-		}
-		return node.ProjectList[pos]
-	}
-	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
-	return nil
+	t.Helper()
+	node := requireFallbackSourceProjectNode(t, query, projectLen, marker)
+	require.Less(t, pos, len(node.ProjectList))
+	return node.ProjectList[pos]
 }
 
 func isFallbackSourceProjectNode(query *Query, node *Node, projectLen int, marker string) bool {
@@ -3116,11 +3110,30 @@ func isFallbackSourceProjectNode(query *Query, node *Node, projectLen int, marke
 		}
 	}
 	for _, expr := range node.ProjectList {
-		if exprContainsStringLiteral(expr, marker) {
+		if exprContainsStringLiteral(traceFallbackProjectExpr(query, node, expr), marker) {
 			return true
 		}
 	}
 	return false
+}
+
+// Follow optimized physical slot references through adjacent projections to
+// prove origins without requiring generated expressions inline the SET value.
+func traceFallbackProjectExpr(query *Query, node *Node, expr *Expr) *Expr {
+	if col := expr.GetCol(); col != nil && col.RelPos == 0 && len(node.Children) == 1 {
+		child := query.Nodes[node.Children[0]]
+		if child.NodeType == plan.Node_PROJECT && col.ColPos >= 0 && int(col.ColPos) < len(child.ProjectList) {
+			return traceFallbackProjectExpr(query, child, child.ProjectList[col.ColPos])
+		}
+	}
+	if expr.GetF() != nil {
+		out := DeepCopyExpr(expr)
+		for i, arg := range out.GetF().Args {
+			out.GetF().Args[i] = traceFallbackProjectExpr(query, node, arg)
+		}
+		return out
+	}
+	return expr
 }
 
 func hasUpdateFromDedupAnyValueAgg(query *Query, groupByLen int) bool {

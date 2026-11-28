@@ -17,7 +17,6 @@ package plan
 import (
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -195,17 +194,6 @@ func appendRepeatedImages(
 		project = append(project, output[current[col]])
 	}
 	first.updateColLength = len(names)
-	first.insertColPos = nil
-	for i, col := range table.Cols {
-		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
-			continue
-		}
-		if pos, ok := first.updateColPosMap[col.Name]; ok {
-			first.insertColPos = append(first.insertColPos, pos)
-		} else {
-			first.insertColPos = append(first.insertColPos, i)
-		}
-	}
 	updatePK := false
 	for _, up := range plans {
 		updatePK = updatePK || up.updatePkCol

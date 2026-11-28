@@ -163,16 +163,15 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[0] = childID
 
 	case plan.Node_FILTER:
-		// Admission consumes the final row image. Optimize its source without
-		// moving resource checks below joins/projections. IsEnd is reserved for
-		// assertions that discard their output, so it cannot mark this filter.
-		if len(node.FilterList) > 0 && node.FilterList[0].GetF() != nil && node.FilterList[0].GetF().Func.ObjName == "_check_async_datalink_source" {
+		// CHECK and Datalink admission consume the exact row image at this
+		// point. Keep filters on their own side of that boundary.
+		if _, boundToRowImage := builder.dmlRowFilters[nodeID]; boundToRowImage {
 			childID, residual := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
 			if len(residual) > 0 {
 				childID = builder.appendNode(&plan.Node{NodeType: plan.Node_FILTER, Children: []int32{childID}, FilterList: residual}, nil)
 			}
 			node.Children[0] = childID
-			return originalNodeID, filters
+			return originalNodeID, append(cantPushdown, filters...)
 		}
 		// IsEnd filters are terminal assertions/action selectors. Moving their
 		// predicates below joins can change both assertion scope and marker layout.

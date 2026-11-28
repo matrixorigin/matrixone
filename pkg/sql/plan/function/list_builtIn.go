@@ -14548,7 +14548,7 @@ var supportedOthersBuiltIns = []FuncNew{
 								if errType == "fk_row_is_referenced" {
 									return moerr.NewErrFKRowIsReferenced(proc.Ctx)
 								}
-								if errType == "fk_ambiguous_parent_mapping" {
+								if errType == "fk_ambiguous_parent_mapping" || errType == "fk_action_not_supported" {
 									return moerr.NewNotSupported(proc.Ctx, errMsg)
 								}
 								return moerr.NewInternalError(proc.Ctx, errMsg)

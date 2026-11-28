@@ -2509,6 +2509,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
+		if _, boundToRowImage := builder.dmlRowFilters[nodeID]; boundToRowImage {
+			// Discard the binding-time projection before adding the remapped columns.
+			node.ProjectList = node.ProjectList[:0]
+		}
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
@@ -2553,7 +2557,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		var newProjList []*plan.Expr
 		if _, preserve := builder.preserveScanProjection[nodeID]; preserve {
 			for i := range node.ProjectList {
-				colRefCnt[[2]int32{tag, int32(i)}] = 1
+				// Pin the scan slot without discarding references from
+				// validation filters and their consumers.
+				ref := [2]int32{tag, int32(i)}
+				colRefCnt[ref] = max(1, colRefCnt[ref])
 			}
 		}
 
@@ -2772,9 +2779,17 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
 		_, preserveProjection := builder.preserveLockProjection[nodeID]
-		if preserveProjection && len(preNode.BindingTags) > 0 {
-			for i := range preNode.ProjectList {
-				colRefCnt[[2]int32{preNode.BindingTags[0], int32(i)}]++
+		if preserveProjection {
+			// FILTER passes through its child's binding. Preserve the full row
+			// through the validation boundary just as for a direct PROJECT.
+			projectionNode := preNode
+			for projectionNode.NodeType == plan.Node_FILTER && len(projectionNode.Children) == 1 {
+				projectionNode = builder.qry.Nodes[projectionNode.Children[0]]
+			}
+			if len(projectionNode.BindingTags) > 0 {
+				for i := range projectionNode.ProjectList {
+					colRefCnt[[2]int32{projectionNode.BindingTags[0], int32(i)}]++
+				}
 			}
 		}
 
@@ -8716,6 +8731,21 @@ func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
 	stepPos := len(builder.qry.Steps)
 	builder.qry.Steps = append(builder.qry.Steps, nodeID)
 	return int32(stepPos)
+}
+
+// appendDMLRowFilter keeps validation on the row image that the write consumes.
+func (builder *QueryBuilder) appendDMLRowFilter(bindCtx *BindContext, input int32, filters, projection []*plan.Expr) int32 {
+	if builder.dmlRowFilters == nil {
+		builder.dmlRowFilters = make(map[int32]struct{})
+	}
+	// Register the next node before appendNode calculates its statistics.
+	builder.dmlRowFilters[int32(len(builder.qry.Nodes))] = struct{}{}
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_FILTER,
+		Children:    []int32{input},
+		FilterList:  filters,
+		ProjectList: projection,
+	}, bindCtx)
 }
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {

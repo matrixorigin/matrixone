@@ -352,6 +352,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
+	var generatedProject []*plan.Expr
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
@@ -359,24 +360,37 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		tableDef := dmlCtx.tableDefs[i]
 
-		// Recompute generated columns after UPDATE FROM dedup so generated
-		// expressions read the same deduped base values that will be written.
+		// Generate from the evaluated assignment slots after UPDATE FROM dedup,
+		// not by copying expressions like NEXTVAL into the generated columns.
 		for _, col := range tableDef.Cols {
 			if col.GeneratedCol == nil {
 				continue
+			}
+			if generatedProject == nil {
+				generatedProject = getProjectionByLastNodeWithTag(builder, lastNodeID, selectNodeTag)
 			}
 			genExpr := builder.applyGeneratedColumnAssignmentCast(
 				DeepCopyExpr(col.GeneratedCol.Expr),
 				stmt.Ignore,
 			)
-			genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[i])
+			genExpr = substituteColRefsInExpr(genExpr, generatedProject, colOffsets[i])
 
 			oldPos := oldColName2Idx[alias+"."+col.Name]
 			newColName2Idx[alias+"."+col.Name] = oldPos
-			oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
-			selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
-			selectNode.ProjectList[oldPos] = genExpr
+			oldColName2Idx[alias+"."+col.Name] = int32(len(generatedProject))
+			generatedProject = append(generatedProject, generatedProject[oldPos])
+			generatedProject[oldPos] = genExpr
 		}
+	}
+	if generatedProject != nil {
+		selectNodeTag = builder.genNewBindTag()
+		selectNode = &plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeID},
+			BindingTags: []int32{selectNodeTag},
+			ProjectList: generatedProject,
+		}
+		lastNodeID = builder.appendNode(selectNode, bindCtx)
 	}
 
 	fkChecksEnabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
@@ -410,11 +424,33 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 
 	for i, tableDef := range dmlCtx.tableDefs {
-		columns := asyncDatalinkUpdateColumns(dmlCtx, i, newColName2Idx)
-		if len(dmlCtx.updateCol2Expr[i]) == 0 || len(columns) == 0 {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
 		}
 		alias := dmlCtx.aliases[i]
+		lookup := func(name string) (int32, bool) {
+			key := alias + "." + name
+			if pos, ok := newColName2Idx[key]; ok {
+				return pos, true
+			}
+			pos, ok := oldColName2Idx[key]
+			return pos, ok
+		}
+		// Nullable join targets use the legacy per-target path. Here each row
+		// belongs to the one writable target and already has its final values.
+		if len(tableDef.Checks) > 0 {
+			lastNodeID, err = appendCheckConstraintPlanWithColLookup(
+				builder, bindCtx, tableDef, lastNodeID, selectNodeTag,
+				func(name string, _ int32) (int32, bool) { return lookup(name) }, stmt.Ignore)
+			if err != nil {
+				return 0, err
+			}
+		}
+
+		columns := asyncDatalinkUpdateColumns(dmlCtx, i, newColName2Idx)
+		if len(columns) == 0 {
+			continue
+		}
 		rowIDPos, ok := oldColName2Idx[alias+"."+catalog.Row_ID]
 		if !ok {
 			return 0, moerr.NewInternalErrorf(builder.GetContext(), "missing row_id for Datalink target %s", alias)
@@ -423,14 +459,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		if err != nil {
 			return 0, err
 		}
-		lastNodeID, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, columns, lastNodeID, selectNodeTag, func(name string) (int32, bool) {
-			key := alias + "." + name
-			if pos, ok := newColName2Idx[key]; ok {
-				return pos, true
-			}
-			pos, ok := oldColName2Idx[key]
-			return pos, ok
-		}, eligible)
+		lastNodeID, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, columns, lastNodeID, selectNodeTag, lookup, eligible)
 		if err != nil {
 			return 0, err
 		}

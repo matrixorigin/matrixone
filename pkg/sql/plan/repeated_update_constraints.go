@@ -23,34 +23,6 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func repeatedGeneratedColumns(table *planpb.TableDef, names []string) ([]int, error) {
-	changed := make([]bool, len(table.Cols))
-	for _, name := range names {
-		col, ok := table.Name2ColIndex[name]
-		if !ok || col < 0 || int(col) >= len(changed) {
-			return nil, moerr.NewInternalErrorNoCtx("invalid repeated UPDATE candidate column")
-		}
-		changed[col] = true
-	}
-	var generated []int
-	for i, col := range table.Cols {
-		if col.GeneratedCol == nil || col.GeneratedCol.Expr == nil {
-			continue
-		}
-		for _, dependency := range collectRefColPos(col.GeneratedCol.Expr) {
-			if dependency < 0 || int(dependency) >= len(changed) {
-				return nil, moerr.NewInternalErrorNoCtx("invalid generated UPDATE dependency")
-			}
-			if changed[dependency] {
-				generated = append(generated, i)
-				changed[i] = true
-				break
-			}
-		}
-	}
-	return generated, nil
-}
-
 // appendRepeatedCandidate computes generated values and CHECK eligibility for
 // one role using the last accepted row. An inactive role first selects the
 // current values, so it cannot manufacture a candidate from absent inputs.
@@ -58,7 +30,7 @@ func appendRepeatedCandidate(
 	builder *QueryBuilder, bindCtx *BindContext, last int32, table *planpb.TableDef,
 	rowID, activePos int, current []int, names []string, values []int, isIgnore bool,
 ) (int32, []string, []int, int, error) {
-	generated, err := repeatedGeneratedColumns(table, names)
+	generated, err := affectedGeneratedColumns(table, names)
 	if err != nil {
 		return -1, nil, nil, 0, err
 	}
@@ -90,17 +62,8 @@ func appendRepeatedCandidate(
 		UpdateUniqueCtx: &planpb.UpdateUniqueCtx{RowId: int32(rowID), Active: int32(activePos), Values: pairs},
 	}, bindCtx)
 	for _, colIdx := range generated {
-		input = getProjectionByLastNode(builder, last)
-		lookup := make([]*planpb.Expr, len(table.Cols))
-		for i := range lookup {
-			lookup[i] = input[candidate[i]]
-		}
 		col := table.Cols[colIdx]
-		value := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(col.GeneratedCol.Expr), isIgnore)
-		value = substituteColRefsInExpr(value, lookup, 0)
-		candidate[colIdx] = len(input)
-		input = append(input, value)
-		last = builder.appendNode(&planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{last}, ProjectList: input}, bindCtx)
+		last, candidate[colIdx] = appendGeneratedUpdateColumn(builder, bindCtx, last, 0, col, candidate, isIgnore)
 		names = append(names, col.Name)
 		proposals = append(proposals, candidate[colIdx])
 	}
