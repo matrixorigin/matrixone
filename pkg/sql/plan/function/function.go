@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -106,6 +107,22 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 		}
 	}
 	return false
+}
+
+// IsRowLocalDataBuiltin recognizes built-ins whose overloads only transform
+// their arguments. Foldability alone does not prove the absence of side effects.
+func IsRowLocalDataBuiltin(name string) bool {
+	name = strings.ToLower(name)
+	id, ok := getFunctionIdByNameWithoutErr(name)
+	if !ok {
+		return false
+	}
+	switch id {
+	case ABS, CEIL, FLOOR, ROUND, LENGTH, LOWER, UPPER:
+		return !GetFunctionIsVolatileOrRealTimeRelatedByName(name)
+	default:
+		return false
+	}
 }
 
 func GetFunctionIsWinOrderFunById(overloadID int64) bool {

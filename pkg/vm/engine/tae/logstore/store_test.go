@@ -51,7 +51,7 @@ func TestNewClientFailed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 	idx := 0
-	mockFactory := func() (logservice.Client, error) {
+	mockFactory := func(context.Context) (logservice.Client, error) {
 
 		if idx > 10 {
 			rmFn()
@@ -67,5 +67,5 @@ func TestNewClientFailed(t *testing.T) {
 		}
 		return client, err
 	}
-	logservicedriver.NewClient(mockFactory, 100, 100, time.Millisecond*100, time.Minute*5)
+	logservicedriver.NewClient(t.Context(), mockFactory, 100, 100, time.Millisecond*100, time.Minute*5)
 }

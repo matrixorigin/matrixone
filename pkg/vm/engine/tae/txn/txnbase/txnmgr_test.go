@@ -18,13 +18,87 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/stretchr/testify/require"
 )
+
+type oversizeWALTestStore struct {
+	NoopTxnStore
+	reject           bool
+	rollbackErr      error
+	preparedRollback bool
+	appliedRollback  bool
+}
+
+func (s *oversizeWALTestStore) PrepareWAL() error {
+	if s.reject {
+		return wal.NewRecordTooLargeError(101, 100)
+	}
+	return nil
+}
+
+func (s *oversizeWALTestStore) PrepareRollback() error {
+	s.preparedRollback = true
+	return s.rollbackErr
+}
+
+func (s *oversizeWALTestStore) ApplyRollback() error {
+	s.appliedRollback = true
+	return nil
+}
+
+func TestOversizeWALRollsBackBeforeAppend(t *testing.T) {
+	firstStore := &oversizeWALTestStore{reject: true}
+	secondStore := &oversizeWALTestStore{}
+	var started atomic.Int32
+	mgr := NewTxnManager(func() txnif.TxnStore {
+		if started.Add(1) == 1 {
+			return firstStore
+		}
+		return secondStore
+	}, nil, types.NewMockHLCClock(1), WithTxnSkipFlag(TxnFlag_Heartbeat))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+	mgr.StopHeartbeat()
+
+	first, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	err = first.Commit(context.Background())
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), "%v", err)
+	require.ErrorContains(t, err, "WAL record is too large")
+	require.True(t, firstStore.preparedRollback)
+	require.True(t, firstStore.appliedRollback)
+	require.Equal(t, txnif.TxnStateRollbacked, first.GetTxnState(false))
+
+	second, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	require.NoError(t, second.Commit(context.Background()))
+	require.Equal(t, txnif.TxnStateCommitted, second.GetTxnState(false))
+}
+
+func TestExplicitRollbackReportsPrepareCleanupError(t *testing.T) {
+	cleanupErr := errors.New("cleanup failed")
+	store := &oversizeWALTestStore{rollbackErr: cleanupErr}
+	mgr := NewTxnManager(func() txnif.TxnStore { return store }, nil,
+		types.NewMockHLCClock(1), WithTxnSkipFlag(TxnFlag_Heartbeat))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+	mgr.StopHeartbeat()
+
+	txn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	require.ErrorIs(t, txn.Rollback(context.Background()), cleanupErr)
+	require.True(t, store.preparedRollback)
+	require.True(t, store.appliedRollback)
+	require.Equal(t, txnif.TxnStateRollbacked, txn.GetTxnState(false))
+}
 
 func TestTxnWaiterCancelAndReuse(t *testing.T) {
 	var waiter txnWaiter

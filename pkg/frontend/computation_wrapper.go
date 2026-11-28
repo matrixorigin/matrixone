@@ -66,9 +66,8 @@ type TxnComputationWrapper struct {
 	runResult *util2.RunResult
 
 	ifIsExeccute bool
-	// stmtBorrowed means PrepareStmt or an ExecStmt caller owns the AST; this
-	// wrapper must not return it to the AST pool. The zero value intentionally
-	// means owned so ordinary wrappers preserve their existing lifecycle.
+	// stmtBorrowed identifies ASTs owned by a prepared handle, plan cache, or
+	// ExecStmt caller. The zero value means the wrapper owns the AST.
 	stmtBorrowed bool
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
@@ -333,7 +332,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 	}
 
-	if !cwft.ses.IsBackgroundSession() {
+	_, isTextProtExecute := cwft.stmt.(*tree.Execute)
+	isPreparedExecution := isTextProtExecute || execCtx.input.isBinaryProtExecute
+	if !cwft.ses.IsBackgroundSession() && !isPreparedExecution {
 		cwft.ses.SetPlan(cwft.plan)
 		authStats, err := checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session))
 		if err != nil {
@@ -342,7 +343,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		stats.PermissionAuth.Add(&authStats)
 	}
 
-	if _, isTextProtExecute := cwft.stmt.(*tree.Execute); isTextProtExecute || execCtx.input.isBinaryProtExecute {
+	if isPreparedExecution {
 		owner, ownerErr := preparedStatementOwner(execCtx.reqCtx, cwft.ses)
 		if ownerErr != nil {
 			return nil, ownerErr
@@ -366,11 +367,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			}
 			if !cwft.ses.IsBackgroundSession() {
 				authStats, err := authenticatePreparedStatement(execCtx.reqCtx, owner, stmt, plan, execCtx.prepareStmt)
-				if err != nil {
-					return nil, err
-				}
-				stats.PermissionAuth.Add(&authStats)
-				authStats, err = checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), owner)
 				if err != nil {
 					return nil, err
 				}
@@ -409,6 +405,14 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.stmt = stmt
 				cwft.stmtBorrowed = true
 			}
+		}
+		if !cwft.ses.IsBackgroundSession() {
+			cwft.ses.SetPlan(cwft.plan)
+			authStats, err := checkResultQueryPrivilege(cwft.proc, cwft.plan, execCtx.reqCtx, cwft.ses.GetService(), owner)
+			if err != nil {
+				return nil, err
+			}
+			stats.PermissionAuth.Add(&authStats)
 		}
 		refreshProcessStmtProfileForPreparedStmt(cwft.proc, stmt)
 		originSQL = sql
@@ -705,6 +709,9 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
+	if err := prepareStmt.checkRoleRulePolicy(reqCtx, owner); err != nil {
+		return nil, nil, nil, "", false, err
+	}
 	execCtx.prepareStmt = prepareStmt
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
@@ -794,7 +801,7 @@ func initExecuteStmtParamWithResolverInSession(
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
-	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive ||
+	needRebuild := prepareStmt.needsRebuild || preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive ||
 		prepareStmt.optimizerHints != currentOptimizerHints
 
 	// Rebuild the plan when catalog schema, session temporary-table name
@@ -838,6 +845,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 		prepareStmt.protocolVersion = protocolVersion
 		prepareStmt.optimizerHints = currentOptimizerHints
+		prepareStmt.needsRebuild = false
 	}
 
 	// Recreate the cached compile only when a plan dependency changed.

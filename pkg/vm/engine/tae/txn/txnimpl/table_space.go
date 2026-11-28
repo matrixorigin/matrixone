@@ -120,12 +120,13 @@ func (space *tableSpace) ApplyAppend() (err error) {
 			space.table.store.txn); err != nil {
 			return
 		}
-		id := ctx.driver.GetID()
-		ctx.node.AddApplyInfo(
-			ctx.start,
-			ctx.count,
-			uint32(destOff),
-			ctx.count, id)
+		if uint32(destOff) != ctx.destOff {
+			return moerr.NewInternalErrorNoCtxf(
+				"append destination offset changed after WAL preflight: reserved=%d actual=%d",
+				ctx.destOff,
+				destOff,
+			)
+		}
 	}
 	if space.tableHandle != nil {
 		space.table.entry.GetTableData().ApplyHandle(space.tableHandle, space.isTombstone)
@@ -213,14 +214,16 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 		appender.UnlockFreeze()
 		/// ------- Attach AppendNode Successfully -----
 
-		objID := appender.GetMeta().(*catalog.ObjectEntry).ID()
+		reservedOff := anode.GetMaxRow() - toAppend
+		objectEntry := appender.GetMeta().(*catalog.ObjectEntry)
+		objID := objectEntry.ID()
 		col := space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		defer col.Close()
 		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),
 			&blkID,
-			anode.GetMaxRow()-toAppend,
+			reservedOff,
 			toAppend,
 			col.GetAllocator(),
 		); err != nil {
@@ -230,11 +233,12 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 			return err
 		}
 		ctx := &appendCtx{
-			driver: appender,
-			node:   node,
-			anode:  anode,
-			start:  appended,
-			count:  toAppend,
+			driver:  appender,
+			node:    node,
+			anode:   anode,
+			start:   appended,
+			count:   toAppend,
+			destOff: reservedOff,
 		}
 		if created {
 			if err = space.table.store.IncreateWriteCnt("prepare apply anode"); err != nil {
@@ -243,7 +247,17 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 			space.table.txnEntries.Append(anode)
 		}
 		id := appender.GetID()
-		space.table.store.warChecker.Insert(appender.GetMeta().(*catalog.ObjectEntry))
+		// PrepareAppend has reserved this exact destination range. Add it now
+		// so the final WAL command can be sized before ApplyAppend mutates the
+		// object data and primary-key index.
+		ctx.node.AddApplyInfo(
+			ctx.start,
+			ctx.count,
+			ctx.destOff,
+			ctx.count,
+			id,
+		)
+		space.table.store.warChecker.Insert(objectEntry)
 		space.table.store.txn.GetMemo().AddObject(space.table.entry.GetDB().ID,
 			id.TableID, id.ObjectID(), space.isTombstone)
 		space.appends = append(space.appends, ctx)

@@ -32,6 +32,7 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
+	readerStartupMeasured  bool
 	maxAllocSize           int
 	buf                    *batch.Batch
 	msgReceiver            *message.MessageReceiver
@@ -101,6 +102,7 @@ func (tableScan *TableScan) Release() {
 }
 
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.ctr.readerStartupMeasured = false
 	allocSize := int64(0)
 	allocSize += int64(tableScan.ctr.maxAllocSize)
 	if tableScan.ProjectList != nil {
@@ -136,6 +138,7 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.ctr.readerStartupMeasured = false
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil

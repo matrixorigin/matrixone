@@ -346,6 +346,15 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 			default:
 				storage, err := s.createTxnStorage(r.createCtx, shard, s.server)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder) {
+						r.finishStart(err)
+						s.mu.Lock()
+						if s.replicas.CompareAndDelete(shard.ShardID, r) {
+							s.removeTNShardLocked(shard.ShardID)
+						}
+						s.mu.Unlock()
+						return
+					}
 					r.logger.Error("start DNShard failed",
 						zap.Error(err))
 					if err := waitCreateRetry(stopperCtx, r.createCtx); err != nil {

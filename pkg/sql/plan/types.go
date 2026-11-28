@@ -279,6 +279,9 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
+	// A write admitted by its row-local shape cannot fall back to a UDF.
+	roleRuleRowLocalWrite bool
+
 	ctxByNode                        []*BindContext
 	nameByColRef                     map[[2]int32]string
 	protectedScans                   map[int32]int

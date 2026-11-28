@@ -30,6 +30,7 @@ type Delete struct {
 	Limit          *Limit
 	With           *With
 	Returning      SelectExprs
+	RewriteOption  *RewriteOption
 }
 
 func (node *Delete) Format(ctx *FmtCtx) {

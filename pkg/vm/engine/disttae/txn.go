@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"runtime"
@@ -2057,6 +2058,9 @@ func (txn *Transaction) batchAllocNewRowIds(count int) (*vector.Vector, error) {
 }
 
 func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
+	if txn.compactionErr != nil {
+		return txn.compactionErr
+	}
 	txn.restoreTxnTableFunc = txn.restoreTxnTableFunc[:0]
 
 	if len(txn.batchSelectList) > 0 {
@@ -2263,11 +2267,19 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 }
 
 // CN blocks compaction for txn
-func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
+func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) (err error) {
 
 	if txn.deletedBlocks.size() == 0 {
 		return nil
 	}
+
+	// Legacy maintenance may have changed earlier workspace batches. After
+	// a compaction failure only a whole-transaction rollback is safe.
+	defer func() {
+		if err != nil {
+			txn.compactionErr = err
+		}
+	}()
 
 	// resolve every affected table BEFORE building the compaction state and
 	// spawning workers; workers must not call getTable (see
@@ -2289,10 +2301,6 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		batch   *batch.Batch
 	}
 	affectedBats := make(map[tableBatch]struct{})
-
-	defer func() {
-		txn.deletedBlocks.clean()
-	}()
 
 	txn.deletedBlocks.iter(
 		func(block deletedBlockKey, offsets []int64) bool {
@@ -2324,53 +2332,61 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			return true
 		})
 
-	waiter := sync.WaitGroup{}
-	locker := sync.Mutex{}
+	var waiter sync.WaitGroup
+	var locker sync.Mutex
+	var rewriteErr error
 
-	compactFunc := func(key cnObjectKey, stats objectio.ObjectStats) {
-		defer func() {
-			waiter.Done()
-		}()
-
+	compactFunc := func(key cnObjectKey, stats objectio.ObjectStats) (err error) {
 		tbKey := objTables[key]
-
-		panicWhenFailed := func(err error, hint string) {
-			logutil.Panic(hint,
-				zap.Error(err),
-				zap.String("txn", txn.op.Txn().DebugString()),
-				zap.Uint32("account id", tbKey.accountId),
-				zap.String("db name", tbKey.dbName),
-				zap.String("tbl name", tbKey.name),
-				zap.String("obj", stats.String()),
-			)
-		}
-
-		// resolveCompactTablesLocked guarantees every table referenced by
-		// txn.deletedBlocks is in the map
 		rel, ok := tables[tbKey.tableKey]
 		if !ok {
-			panicWhenFailed(moerr.NewInternalErrorNoCtx(
-				"table not pre-resolved for object compaction"), "get table failed")
+			return moerr.NewInternalErrorNoCtx("table not pre-resolved for object compaction")
 		}
 
 		tbl, ok := rel.(*txnTable)
 		if !ok {
-			delegate := rel.(*txnTableDelegate)
-			tbl = delegate.origin
+			tbl = rel.(*txnTableDelegate).origin
 		}
 
-		locker.Lock()
-		tbl.ensureSeqnumsAndTypesExpectRowid()
-		locker.Unlock()
+		func() {
+			locker.Lock()
+			defer locker.Unlock()
+			tbl.ensureSeqnumsAndTypesExpectRowid()
+		}()
 
-		bat, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[key])
+		owner := txn.engine.NewLocalInsertObjectStream()
+		if owner == nil {
+			return moerr.NewInternalErrorNoCtx("missing object reservation registry for compaction")
+		}
+		if err := owner.Begin(ctx); err != nil {
+			return err
+		}
+		defer func() {
+			if n := owner.Finish(); n != 0 && err == nil {
+				err = moerr.NewInternalErrorf(ctx, "compaction left %d unpublished objects", n)
+			}
+		}()
+
+		writer, bat, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[key], owner)
 		if err != nil {
-			panicWhenFailed(err, "rewrite object by deletion failed")
+			return err
+		}
+		defer func() {
+			if closeErr := writer.Close(); closeErr != nil {
+				if err == nil {
+					err = closeErr
+				} else {
+					err = errors.Join(err, closeErr)
+				}
+			}
+		}()
+		if bat.IsEmpty() {
+			return nil
 		}
 
 		locker.Lock()
 		defer locker.Unlock()
-		if err = txn.writeFileLockedWithAutoIncrEpochKnown(
+		if err := txn.writeFileLockedWithAutoIncrEpochKnown(
 			INSERT,
 			tbl.accountId,
 			tbl.db.databaseId,
@@ -2383,11 +2399,14 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			tbKey.autoIncrEpoch,
 			tbKey.autoIncrEpochKnown,
 		); err != nil {
-			bat.Clean(txn.proc.Mp())
-			panicWhenFailed(err, "write txn file failed")
+			return err
 		}
-
-		bat.Clean(txn.proc.Mp())
+		// The workspace now owns the replacements, including full rollback.
+		for i := range bat.Vecs[1].Length() {
+			stats := objectio.ObjectStats(bat.Vecs[1].GetBytesAt(i))
+			owner.Adopt(*stats.ObjectName().ObjectId())
+		}
+		return nil
 	}
 
 	type dirtyObject struct {
@@ -2395,6 +2414,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		stats objectio.ObjectStats
 	}
 	var dirtyObjects []dirtyObject
+	retiredEntries := make([]int, 0, len(affectedBats))
 
 	ll := len(txn.writes)
 	for i, entry := range txn.writes[:ll] {
@@ -2425,11 +2445,13 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				bat := colexec.AllocCNS3ResultBat(false)
 				if err := bat.Vecs[0].UnionBatch(entry.bat.Vecs[0],
 					int64(offset), int(stats.BlkCnt()), nil, txn.proc.Mp()); err != nil {
+					bat.Clean(txn.proc.Mp())
 					return err
 				}
 				if err := vector.AppendBytes(
 					bat.Vecs[1], stats.Marshal(), false, txn.proc.Mp()); err != nil {
-					return nil
+					bat.Clean(txn.proc.Mp())
+					return err
 				}
 
 				bat.SetRowCount(bat.Vecs[0].Length())
@@ -2461,7 +2483,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			offset += int(stats.BlkCnt())
 		}
 
-		txn.releaseWorkspaceEntryBatchLocked(i)
+		retiredEntries = append(retiredEntries, i)
 	}
 
 	if txn.compactWorker == nil {
@@ -2472,16 +2494,56 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		}()
 	}
 
+	recordRewriteError := func(err error) {
+		if err == nil {
+			return
+		}
+		locker.Lock()
+		defer locker.Unlock()
+		if rewriteErr == nil {
+			rewriteErr = err
+		} else {
+			rewriteErr = errors.Join(rewriteErr, err)
+		}
+	}
 	retiredStats := make([]objectio.ObjectStats, 0, len(dirtyObjects))
 	for _, object := range dirtyObjects {
+		locker.Lock()
+		failed := rewriteErr != nil
+		locker.Unlock()
+		if failed {
+			break
+		}
 		retiredStats = append(retiredStats, object.stats)
 		waiter.Add(1)
-		txn.compactWorker.Submit(func() {
-			compactFunc(object.key, object.stats)
-		})
+		if submitErr := txn.compactWorker.Submit(func() {
+			defer waiter.Done()
+			completed := false
+			defer func() {
+				if !completed {
+					// The pool logs unexpected panics. Keep the originals when a worker exits without a result.
+					recordRewriteError(moerr.NewInternalErrorNoCtx("object compaction worker did not complete"))
+				}
+			}()
+			recordRewriteError(compactFunc(object.key, object.stats))
+			completed = true
+		}); submitErr != nil {
+			waiter.Done()
+			recordRewriteError(submitErr)
+			break
+		}
 	}
 
 	waiter.Wait()
+	if rewriteErr != nil {
+		return rewriteErr
+	}
+	// The originals and the marks remain transaction-owned until every
+	// replacement has been recorded, including objects shared by siblings.
+	for _, i := range retiredEntries {
+		txn.releaseWorkspaceEntryBatchLocked(i)
+	}
+	txn.deletedBlocks.clean()
 	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(retiredStats, nil)
 	_ = txn.GCObjsByStats(retiredStats...)
 

@@ -325,6 +325,8 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
+	// EXECUTE rebuilds a stale plan without discarding the prepared handle.
+	needsRebuild bool
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
@@ -332,7 +334,9 @@ type PrepareStmt struct {
 	schedulingSQLMode string
 	// optimizerHints is the session value used to build this prepared plan.
 	// EXECUTE rebuilds when it changes without dropping the statement handle.
-	optimizerHints string
+	optimizerHints   string
+	roleRules        *roleRuleCache // policy encoded in the retained statement and plan
+	optionalRewrites bool
 }
 
 /*
@@ -904,13 +908,14 @@ type ExecCtx struct {
 	prepareStmt *PrepareStmt
 	runResult   *util.RunResult
 	// Authorization uses a statement view independently of an old user SI transaction.
-	authorizationMu       sync.Mutex
-	authorizationSnapshot timestamp.Timestamp
-	showMetadataRead      *backExec
-	protectedPolicyLoaded bool
-	protectedPolicyRaw    string
-	sequenceAuthorization sync.Once
-	sequenceAuthErr       error
+	authorizationMu             sync.Mutex
+	authorizationSnapshot       timestamp.Timestamp
+	authorizationSnapshotPinned bool
+	showMetadataRead            *backExec
+	protectedPolicyLoaded       bool
+	protectedPolicyRaw          string
+	sequenceAuthorization       sync.Once
+	sequenceAuthErr             error
 	// rootSQLOverride is the authoritative SQL for a statement planned
 	// recursively inside this request, such as the statement owned by PREPARE.
 	// A nil value falls back to the session SQL.
@@ -997,10 +1002,20 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.rewriteEnabled = false
 }
 
+// A derived query evaluates part of its parent's statement under the same
+// authorization view, even when it needs a separate execution context.
+func (execCtx *ExecCtx) inheritAuthorizationSnapshot(parent *ExecCtx) {
+	parent.authorizationMu.Lock()
+	defer parent.authorizationMu.Unlock()
+	execCtx.authorizationSnapshot = parent.authorizationSnapshot
+	execCtx.authorizationSnapshotPinned = parent.authorizationSnapshotPinned
+}
+
 func (execCtx *ExecCtx) resetAuthorization() {
 	execCtx.authorizationMu.Lock()
 	defer execCtx.authorizationMu.Unlock()
 	execCtx.authorizationSnapshot = timestamp.Timestamp{}
+	execCtx.authorizationSnapshotPinned = false
 	execCtx.protectedPolicyLoaded = false
 	execCtx.protectedPolicyRaw = ""
 	execCtx.sequenceAuthorization = sync.Once{}
@@ -1553,6 +1568,19 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		}
 	}
 
+	foreignKeyChecks := name == "foreign_key_checks"
+	var oldForeignKeyChecks interface{}
+	if foreignKeyChecks {
+		oldForeignKeyChecks, err = ses.GetSessionSysVar(name)
+		if err != nil {
+			return err
+		}
+		oldForeignKeyChecks, err = def.GetType().Convert(oldForeignKeyChecks)
+		if err != nil {
+			return err
+		}
+	}
+
 	// ensure session system variables container exists in embed/basic cluster
 	if ses.sesSysVars == nil {
 		ses.sesSysVars = &SystemVariables{mp: make(map[string]interface{})}
@@ -1572,6 +1600,9 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	}
 	if err == nil && name == "optimizer_hints" && oldOptimizerHints != val.(string) {
 		ses.cleanCache()
+	}
+	if err == nil && foreignKeyChecks && oldForeignKeyChecks != val {
+		ses.invalidateForeignKeyDeletePlans()
 	}
 
 	// Update rewriteEnabled cache when enable_remap_hint is changed

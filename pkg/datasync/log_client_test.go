@@ -30,6 +30,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUpstreamLogClientAttachesReadOnly(t *testing.T) {
+	logservice.RunClientTest(t, false, nil, func(t *testing.T, _ *logservice.Service, cfg logservice.ClientConfig, writer logservice.Client) {
+		common := common{
+			log:            runtime.DefaultRuntime().Logger(),
+			haKeeperConfig: logservice.HAKeeperClientConfig{ServiceAddresses: cfg.ServiceAddresses},
+		}
+		c := &consumer{txnClient: newMockTxnClient(nil)}
+		c.fill(common)
+		reader := c.upstreamLogClient.(*logClient)
+		reader.haKeeperClient = &mockHAKeeperClient{}
+		defer reader.close()
+		ctx, cancel := context.WithTimeout(t.Context(), contextTimeout)
+		defer cancel()
+
+		_, err := reader.getLatestLsn(ctx)
+		require.NoError(t, err)
+		require.True(t, reader.client.Config().ReadOnly)
+		rec := writer.GetLogRecord(8)
+		lsn, err := writer.Append(ctx, rec)
+		require.NoError(t, err)
+		records, _, err := reader.readEntries(ctx, lsn)
+		require.NoError(t, err)
+		require.Len(t, records, 1)
+		require.Equal(t, rec.Data, records[0].Data)
+
+		// A read error resets the managed connection. The next operation
+		// reconnects without touching the writer's lease.
+		_, _, err = reader.readEntries(ctx, lsn+1)
+		require.ErrorIs(t, err, dragonboat.ErrInvalidRange)
+		_, err = reader.getLatestLsn(ctx)
+		require.NoError(t, err)
+		_, err = writer.Append(ctx, rec)
+		require.NoError(t, err)
+	})
+}
+
 func TestGetLeaderID(t *testing.T) {
 	fn := func(t *testing.T, s *logservice.Service, cfg logservice.ClientConfig, c logservice.Client) {
 		rt := runtime.DefaultRuntime()

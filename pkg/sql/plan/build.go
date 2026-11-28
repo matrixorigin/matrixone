@@ -324,6 +324,7 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	}()
 
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, true)
+	builder.roleRuleRowLocalWrite = stmt.RewriteOption != nil && len(stmt.RewriteOption.RoleRules) != 0
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -379,6 +380,7 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	}
 
 	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, isPrepareStmt, true)
+	builder.roleRuleRowLocalWrite = stmt.RewriteOption != nil && len(stmt.RewriteOption.RoleRules) != 0
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -591,8 +593,14 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		}
 		return bindAndOptimizeReplaceQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Update:
+		if err := checkRoleRuleWriteTarget(ctx, stmt.Tables, stmt.RewriteOption); err != nil {
+			return nil, err
+		}
 		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Delete:
+		if err := checkRoleRuleWriteTarget(ctx, stmt.Tables, stmt.RewriteOption); err != nil {
+			return nil, err
+		}
 		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Merge:
 		if stmt.HasReturning() {

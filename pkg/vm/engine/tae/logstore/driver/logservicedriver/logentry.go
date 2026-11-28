@@ -18,12 +18,14 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	walentry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"go.uber.org/zap"
 )
 
@@ -71,11 +73,12 @@ func init() {
 }
 
 type LogEntryWriter struct {
-	Entry      LogEntry
-	Footer     LogEntryFooter
-	buf        bytes.Buffer
-	entries    []*entry.Entry
-	approxSize int64
+	mu          sync.Mutex
+	Entry       LogEntry
+	Footer      LogEntryFooter
+	buf         bytes.Buffer
+	entries     []*entry.Entry
+	encodedSize int64
 }
 
 func NewLogEntryWriter() *LogEntryWriter {
@@ -88,6 +91,12 @@ func NewLogEntryWriter() *LogEntryWriter {
 }
 
 func (w *LogEntryWriter) Reset() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.resetLocked()
+}
+
+func (w *LogEntryWriter) resetLocked() {
 	if w.Entry.Capacity() >= int(mpool.MB)*2 {
 		w.Entry = NewLogEntry()
 	} else {
@@ -104,11 +113,22 @@ func (w *LogEntryWriter) Reset() {
 	} else {
 		w.buf.Reset()
 	}
-	w.approxSize = 0
-	w.NotifyDone(nil)
+	w.encodedSize = 0
+	w.notifyDoneLocked(nil)
 }
 
 func (w *LogEntryWriter) NotifyDone(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.notifyDoneLocked(err)
+}
+
+func (w *LogEntryWriter) notifyDoneLocked(err error) {
+	if err != nil && len(w.entries) > 0 {
+		groupErr := walentry.NewGroupError(err)
+		defer groupErr.Release()
+		err = groupErr
+	}
 	for i := 0; i < len(w.entries); i++ {
 		w.entries[i].DoneWithErr(err)
 		w.entries[i] = nil
@@ -117,10 +137,12 @@ func (w *LogEntryWriter) NotifyDone(err error) {
 }
 
 func (w *LogEntryWriter) Close() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.Entry = nil
 	w.Footer = nil
 	w.buf.Reset()
-	w.NotifyDone(nil)
+	w.notifyDoneLocked(nil)
 	w.entries = nil
 }
 
@@ -128,8 +150,8 @@ func (w *LogEntryWriter) Size() int {
 	return w.Entry.Size() + w.Footer.Size()
 }
 
-func (w *LogEntryWriter) ApproxSize() int64 {
-	return w.approxSize
+func (w *LogEntryWriter) PendingEncodedSize() int64 {
+	return w.encodedSize
 }
 
 func (w *LogEntryWriter) Capacity() int {
@@ -137,6 +159,12 @@ func (w *LogEntryWriter) Capacity() int {
 }
 
 func (w *LogEntryWriter) Append(buf []byte) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.appendLocked(buf)
+}
+
+func (w *LogEntryWriter) appendLocked(buf []byte) {
 	offset, length := w.Entry.AppendEntry(buf)
 	w.Footer.AppendEntry(offset, length)
 }
@@ -146,11 +174,20 @@ func (w *LogEntryWriter) SetSafeDSN(dsn uint64) {
 }
 
 func (w *LogEntryWriter) AppendEntry(entry *entry.Entry) (err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.appendEntryLocked(entry)
+}
+
+func (w *LogEntryWriter) appendEntryLocked(entry *entry.Entry) (err error) {
+	if err = entry.Prepare(); err != nil {
+		return err
+	}
 	if len(w.entries) == 0 {
 		w.Entry.SetStartDSN(entry.DSN)
 	}
 	w.entries = append(w.entries, entry)
-	w.approxSize += entry.Entry.GetApproxPayloadSize()
+	w.encodedSize += int64(entry.GetSize() + OneEntryFooterSize)
 
 	return
 }
@@ -160,18 +197,16 @@ func (w *LogEntryWriter) SetStartDSN(dsn uint64) {
 }
 
 func (w *LogEntryWriter) Finish() (LogEntry, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	for _, e := range w.entries {
-		if err := e.Entry.ExecuteGroupWalPreCallbacks(); err != nil {
+		w.buf.Reset()
+		if _, err := e.WriteTo(&w.buf); err != nil {
 			return nil, err
 		}
 
-		w.buf.Reset()
-		if _, err := e.WriteTo(&w.buf); err != nil {
-			panic(err)
-		}
-
 		eBuf := w.buf.Bytes()
-		w.Append(eBuf)
+		w.appendLocked(eBuf)
 	}
 
 	w.Entry.SetFooter(w.Footer)

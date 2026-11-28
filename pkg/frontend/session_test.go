@@ -688,6 +688,8 @@ func TestSession_Migrate(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(0)] = newMrsForInheritedRoleIdOfRoleId(nil)
+		bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{0})] = newMrsForRewriteRules(nil)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -698,22 +700,12 @@ func TestSession_Migrate(t *testing.T) {
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
 			DB:               "d1",
+			RoleState:        migrationRoleState(s),
 			LastAffectedRows: 7,
-			PrepareStmts: []*query.PrepareStmt{
-				{Name: "p1", SQL: `select ?`},
-				{Name: "p2", SQL: `select ?`},
-				{Name: "a-b", SQL: `select ?`},
-				{Name: "select", SQL: `select ?`},
-				{Name: "a`b", SQL: `select ?`},
-				{Name: "from", SQL: `select ?`},
-			},
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, "d1", s.GetDatabaseName())
-		assert.Len(t, s.prepareStmts, 6)
-		for _, name := range []string{"a-b", "select", "a`b", "from"} {
-			assert.Contains(t, s.prepareStmts, name)
-		}
+		assert.Empty(t, s.prepareStmts)
 		assert.Equal(t, int64(7), s.GetLastAffectedRows())
 		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
 
@@ -735,6 +727,68 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
 	})
 
+	t.Run("reject role mismatch without prepared statements", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		s.SetLastAffectedRows(9)
+		s.GetTenantInfo().SetDefaultRole("renamed_role")
+		role := migrationRoleState(s)
+		sources := []*query.MigrateConnRoleState{nil}
+		for _, change := range []func(*query.MigrateConnRoleState){
+			func(state *query.MigrateConnRoleState) { state.AccountID++ },
+			func(state *query.MigrateConnRoleState) { state.UserID++ },
+			func(state *query.MigrateConnRoleState) { state.PrimaryRoleID++ },
+			func(state *query.MigrateConnRoleState) { state.AllSecondaryRoles = !state.AllSecondaryRoles },
+			func(state *query.MigrateConnRoleState) { state.PrimaryRoleName = "original_role" },
+			func(state *query.MigrateConnRoleState) { state.PrimaryRoleName = "" },
+			func(state *query.MigrateConnRoleState) {
+				state.LowerCaseTableNames = (state.LowerCaseTableNames + 1) % 3
+			},
+			func(state *query.MigrateConnRoleState) { state.LowerCaseTableNames = 3 },
+		} {
+			source := *role
+			change(&source)
+			sources = append(sources, &source)
+		}
+		for _, source := range sources {
+			err := Migrate(t.Context(), s, &query.MigrateConnToRequest{
+				DB: "d1", LastAffectedRows: 7, RoleState: source,
+			})
+			expected := moerr.GetOkExpectedNotSafeToStartTransfer()
+			if source != nil && source.AccountID == role.AccountID && source.UserID == role.UserID &&
+				source.AllSecondaryRoles == role.AllSecondaryRoles && source.PrimaryRoleName != "" {
+				switch {
+				case source.LowerCaseTableNames == role.LowerCaseTableNames:
+					expected = moerr.GetOkExpectedMigrationRoleChanged()
+				case source.LowerCaseTableNames >= 0 && source.LowerCaseTableNames <= 2:
+					expected = moerr.GetOkExpectedMigrationTableNameModeChanged()
+				}
+			}
+			require.ErrorIs(t, err, expected)
+			require.Empty(t, s.GetDatabaseName())
+			require.Equal(t, int64(9), s.GetLastAffectedRows())
+		}
+	})
+
+	t.Run("reject unverified prepared state", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		s.SetLastAffectedRows(9)
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+			DB: "d1", LastAffectedRows: 7, RoleState: migrationRoleState(s),
+			PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select 1"}},
+		})
+		require.ErrorIs(t, err, moerr.GetOkExpectedNotSafeToStartTransfer())
+		require.Empty(t, s.prepareStmts)
+		require.Equal(t, int64(9), s.GetLastAffectedRows())
+	})
+
 	t.Run("reject user-level locks", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -750,8 +804,9 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			ConnID: 88,
-			DB:     "d1",
+			ConnID:    88,
+			DB:        "d1",
+			RoleState: migrationRoleState(s),
 			UserLevelLocks: []*query.UserLevelLock{
 				{Name: "restored_lock", Count: 2},
 			},
@@ -774,7 +829,7 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d2", context.Canceled)
-		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d2"})
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d2", RoleState: migrationRoleState(s)})
 		assert.Equal(t, "", s.GetDatabaseName())
 		assert.NoError(t, err)
 	})

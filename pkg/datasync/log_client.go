@@ -113,7 +113,7 @@ func (c *logClient) prepare(ctx context.Context) error {
 			c.sid,
 			logservice.ClientConfig{
 				Tag:              "datasync",
-				ReadOnly:         false,
+				ReadOnly:         c.shardID == upstreamLogShardID,
 				LogShardID:       c.shardID,
 				DiscoveryAddress: c.common.haKeeperConfig.DiscoveryAddress,
 				ServiceAddresses: c.common.haKeeperConfig.ServiceAddresses,

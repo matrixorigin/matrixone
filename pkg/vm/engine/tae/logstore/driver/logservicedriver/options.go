@@ -31,14 +31,19 @@ const (
 	DefaultMaxTimeout          = time.Minute * 3
 	DefaultOneTryTimeout       = time.Minute
 	DefaultClientMaxEntryCount = 50
+	// The Log Service default is 100 MiB. Keep space for the LogRecord and
+	// RPC envelope even when TN's own RPC limit is configured higher.
+	DefaultMaxWALRecordSize = 99 * mpool.MB
 )
 
 type Config struct {
 	ClientMaxCount      int
 	ClientBufSize       int
 	ClientMaxEntryCount int
+	MaxWALRecordSize    int
 
-	MaxTimeout time.Duration
+	MaxTimeout   time.Duration
+	CloseTimeout time.Duration
 
 	ClientRetryTimes    int
 	ClientRetryInterval time.Duration
@@ -54,7 +59,7 @@ type ConfigOption func(*Config)
 
 func NewMockServiceAndClientFactory() (MockBackend, LogServiceClientFactory) {
 	backend := NewMockBackend()
-	return backend, func() (logservice.Client, error) {
+	return backend, func(context.Context) (logservice.Client, error) {
 		return newMockBackendClient(backend), nil
 	}
 }
@@ -69,9 +74,9 @@ func WithConfigOptClientFactory(f LogServiceClientFactory) ConfigOption {
 func WithConfigOptClientConfig(sid string, clientCfg *logservice.ClientConfig) ConfigOption {
 	return func(cfg *Config) {
 		cfg.IsMockBackend = false
-		cfg.ClientFactory = func() (client logservice.Client, err error) {
+		cfg.ClientFactory = func(ctx context.Context) (client logservice.Client, err error) {
 			ctx, cancel := context.WithTimeoutCause(
-				context.Background(), cfg.MaxTimeout, moerr.CauseNewLogServiceClient,
+				ctx, cfg.MaxTimeout, moerr.CauseNewLogServiceClient,
 			)
 			defer cancel()
 			if client, err = logservice.NewClient(ctx, sid, *clientCfg); err != nil {
@@ -94,6 +99,12 @@ func WithConfigOptClientBufSize(bufSize int) ConfigOption {
 	}
 }
 
+func WithConfigOptMaxWALRecordSize(size int) ConfigOption {
+	return func(cfg *Config) {
+		cfg.MaxWALRecordSize = size
+	}
+}
+
 func WithConfigOptMaxTimeout(timeout time.Duration) ConfigOption {
 	return func(cfg *Config) {
 		cfg.MaxTimeout = timeout
@@ -103,7 +114,7 @@ func WithConfigOptMaxTimeout(timeout time.Duration) ConfigOption {
 func WithConfigMockClient(backend MockBackend) ConfigOption {
 	return func(cfg *Config) {
 		cfg.IsMockBackend = true
-		cfg.ClientFactory = func() (logservice.Client, error) {
+		cfg.ClientFactory = func(context.Context) (logservice.Client, error) {
 			return newMockBackendClient(backend), nil
 		}
 	}
@@ -148,6 +159,9 @@ func (cfg *Config) fillDefaults() {
 	}
 	if cfg.ClientMaxEntryCount <= 0 {
 		cfg.ClientMaxEntryCount = DefaultClientMaxEntryCount
+	}
+	if cfg.MaxWALRecordSize <= 0 {
+		cfg.MaxWALRecordSize = DefaultMaxWALRecordSize
 	}
 	if cfg.ClientRetryTimes <= 0 {
 		cfg.ClientRetryTimes = DefaultRetryTimes

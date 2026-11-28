@@ -647,16 +647,30 @@ func (rt *Routine) migrateConnectionFromWithContext(
 	if ses.hasForeignConns() {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
+	roleState := migrationRoleState(ses)
+	if roleState == nil {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	prepared, err := rt.exportMigrationPrepares(ses)
+	if err != nil {
+		return err
+	}
+	if len(prepared) != 0 {
+		// Check for policy publication since prepare using the source identity.
+		roleCtx := defines.AttachAccount(operationCtx, roleState.AccountID, roleState.UserID, roleState.PrimaryRoleID)
+		rules, err := captureRoleRuleCache(roleCtx, ses)
+		if err != nil {
+			return err
+		}
+		if len(rules.first) != 0 {
+			return moerr.GetOkExpectedMigrationPolicyChanged()
+		}
+	}
+	resp.PrepareStmts = prepared
+	resp.RoleState = roleState
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
-	for _, st := range ses.GetPrepareStmts() {
-		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
-			Name:       st.Name,
-			SQL:        st.Sql,
-			ParamTypes: st.ParamTypes,
-		})
-	}
 	if cause := context.Cause(operationCtx); cause != nil {
 		return cause
 	}

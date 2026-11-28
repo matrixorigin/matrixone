@@ -254,7 +254,9 @@ func TestManifestHTTPActiveGenerationLifecycle(t *testing.T) {
 	http.DefaultServeMux.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	tae2 := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	// Both generations are live during registration, so they need separate stores.
+	tae2, err := db.Open(ctx, t.TempDir(), config.WithLongScanAndCKPOpts(nil))
+	require.NoError(t, err)
 	createManifestHTTPTable(t, ctx, tae2, "gen_db2", "gen_tbl2")
 	RegisterManifestHTTP(tae2)
 	require.NoError(t, tae1.Close())

@@ -15,8 +15,17 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"slices"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // migrateController is created in Routine and used to serialize lifecycle
@@ -175,4 +184,196 @@ func (mc *migrateController) getGoroutineId() uint64 {
 	mc.Lock()
 	defer mc.Unlock()
 	return mc.goroutineID
+}
+
+func migrationRoleState(ses *Session) *query.MigrateConnRoleState {
+	if ses.GetTenantInfo() == nil {
+		return nil
+	}
+	principal := currentAuthorizationPrincipal(ses)
+	return &query.MigrateConnRoleState{
+		AccountID: principal.account, UserID: principal.user,
+		PrimaryRoleID: principal.role, AllSecondaryRoles: principal.secondary,
+		PrimaryRoleName: principal.roleName, LowerCaseTableNames: parserLowerCaseTableNames(ses),
+	}
+}
+
+// Replay client SQL after role equivalence is established on the destination.
+func replayMigrationVariables(ctx context.Context, ses *Session, statements []string) error {
+	for _, sql := range statements {
+		stmt, err := mysql.ParseOneWithSQLMode(ctx, sql, parserLowerCaseTableNames(ses), sessionSQLModeForParser(ses))
+		if err != nil {
+			return err
+		}
+		_, isSet := stmt.(*tree.SetVar)
+		stmt.Free()
+		if !isSet {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
+
+		ec := &ExecCtx{reqCtx: ctx, ses: ses, inMigration: true}
+		resp, err := ExecRequest(ses, ec, &Request{cmd: COM_QUERY, data: []byte(sql)})
+		ec.Close()
+		if err != nil {
+			return err
+		}
+		if resp != nil && resp.category == ErrorResponse {
+			return resp.GetData().(error)
+		}
+	}
+	return nil
+}
+
+// Only verified, unrewritten SQL can currently be replayed without moving
+// additional session state. Comparisons include the authenticated role, the
+// preparation database and SQL mode, and client-visible protocol metadata.
+func migrationPrepareProof(ses *Session, stmt *PrepareStmt) []byte {
+	if ses.GetTenantInfo() == nil || stmt == nil || stmt.roleRules == nil || len(stmt.roleRules.first) != 0 ||
+		stmt.optionalRewrites || stmt.IsCloudNonuser || stmt.Sql == "" ||
+		len(stmt.getFromSendLongData) != 0 || len(stmt.remapDb) != 0 ||
+		!migrationTempTablesMatch(ses, stmt) ||
+		stmt.defaultDatabase != ses.GetDatabaseName() ||
+		stmt.schedulingSQLMode != sessionSQLModeForParser(ses) ||
+		stmt.NativeMode != ses.sqlModeHasMatrixOneNative() {
+		return nil
+	}
+	if !canReplayMigrationStatement(stmt.PrepareStmt) {
+		return nil
+	}
+	control := stmt.PreparePlan.GetDcl().GetPrepare()
+	if control == nil {
+		return nil
+	}
+	principal := currentAuthorizationPrincipal(ses)
+	proof, err := json.Marshal(struct {
+		Account, User, Role uint32
+		Secondary, Native   bool
+		Name, SQL, DB, Mode string
+		ParamTypes          []byte
+		Columns             [][]byte
+		ParameterCount      int
+		LowerCaseTableNames int64
+		OptimizerHints      string
+	}{
+		Account: principal.account, User: principal.user, Role: principal.role,
+		Secondary: principal.secondary, Native: stmt.NativeMode,
+		Name: stmt.Name, SQL: stmt.Sql, DB: stmt.defaultDatabase, Mode: stmt.schedulingSQLMode,
+		ParamTypes: stmt.ParamTypes, Columns: stmt.ColDefData, ParameterCount: len(control.ParamTypes),
+		LowerCaseTableNames: parserLowerCaseTableNames(ses), OptimizerHints: stmt.optimizerHints,
+	})
+	if err != nil {
+		return nil
+	}
+	digest := sha256.Sum256(proof)
+	return digest[:]
+}
+
+func migrationTempTablesMatch(ses *Session, stmt *PrepareStmt) bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return len(ses.tempTables) == 0 && stmt.tempTableVersion == ses.tempTableVersion
+}
+
+func canReplayMigrationStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.Select, *tree.ParenSelect, *tree.Insert, *tree.Update, *tree.Delete, *tree.Replace:
+		return true
+	default:
+		return false
+	}
+}
+
+func (rt *Routine) exportMigrationPrepares(ses *Session) ([]*query.PrepareStmt, error) {
+	// A no-response command can still be running after the proxy has sent
+	// it. Keep the prepared metadata stable until its wire copy is complete.
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.inProcessRequest {
+		return nil, moerr.GetOkExpectedMigrationPreparedState()
+	}
+	statements := ses.GetPrepareStmts()
+	if len(statements) == 0 {
+		return nil, nil
+	}
+	exported := make([]*query.PrepareStmt, 0, len(statements))
+	for _, stmt := range statements {
+		proof := migrationPrepareProof(ses, stmt)
+		if len(proof) == 0 {
+			return nil, moerr.GetOkExpectedMigrationPreparedState()
+		}
+		exported = append(exported, &query.PrepareStmt{
+			Name: stmt.Name, SQL: stmt.Sql, ParamTypes: slices.Clone(stmt.ParamTypes), ReplayProof: proof,
+		})
+	}
+	return exported, nil
+}
+
+func replayMigrationPrepares(ctx context.Context, ses *Session, stmts []*query.PrepareStmt) (err error) {
+	if len(stmts) == 0 {
+		return nil
+	}
+	if len(ses.GetPrepareStmts()) != 0 {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	var maxID uint32
+	defer func() {
+		if err != nil {
+			for _, stmt := range stmts {
+				ses.RemovePrepareStmt(stmt.Name)
+			}
+		}
+	}()
+	for _, wire := range stmts {
+		if err = replayMigrationPrepare(ctx, ses, wire); err != nil {
+			return err
+		}
+		maxID = max(maxID, parsePrepareStmtID(wire.Name))
+	}
+	if err = context.Cause(ctx); err != nil {
+		return err
+	}
+	ses.SetLastStmtID(maxID)
+	return nil
+}
+
+func replayMigrationPrepare(ctx context.Context, ses *Session, wire *query.PrepareStmt) error {
+	ec := &ExecCtx{reqCtx: ctx, inMigration: true}
+	beginStatementAuthorization(ses, ec)
+	defer ec.Close()
+	rules, err := captureRoleRuleCache(ctx, ses)
+	if err != nil {
+		return err
+	}
+	if len(rules.first) != 0 {
+		return moerr.GetOkExpectedMigrationPolicyChanged()
+	}
+	mode := sessionSQLModeForParser(ses)
+	// The exported text must describe a single replayable parameterized
+	// statement. Preparing it never executes the inner query.
+	parsed, err := mysql.ParseWithSQLMode(ctx, wire.SQL, parserLowerCaseTableNames(ses), mode)
+	if err != nil {
+		return moerr.GetOkExpectedMigrationPreparedState()
+	}
+	supported := len(parsed) == 1 && canReplayMigrationStatement(parsed[0])
+	freeStatements(parsed)
+	if !supported {
+		return moerr.GetOkExpectedMigrationPreparedState()
+	}
+	input := &UserInput{rewritePolicy: &rewritePolicySnapshot{roleRules: rules}, rewritePolicyMaterialized: true}
+	stmt := tree.NewPrepareString(tree.Identifier(wire.Name), wire.SQL)
+	input.stmt = stmt
+	input.sql = "prepare " + quoteIdentifierForSQL(wire.Name) + " from ''"
+	// PREPARE FROM a string retains ownership of the parsed inner statement.
+	if err := doComQuery(ses, ec, input); err != nil {
+		return err
+	}
+	replayed, err := ses.GetPrepareStmt(ctx, wire.Name)
+	if err != nil {
+		return err
+	}
+	replayed.ParamTypes = slices.Clone(wire.ParamTypes)
+	if mode != replayed.schedulingSQLMode || !bytes.Equal(wire.ReplayProof, migrationPrepareProof(ses, replayed)) {
+		return moerr.GetOkExpectedMigrationPreparedState()
+	}
+	return nil
 }

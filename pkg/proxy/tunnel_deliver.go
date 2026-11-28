@@ -15,6 +15,8 @@
 package proxy
 
 import (
+	"time"
+
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -58,6 +60,9 @@ func (d *tunnelDeliver) Deliver(t *tunnel, typ transferType) {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.migrationDeferred(time.Now()) {
+		return
+	}
 	if !t.mu.started {
 		d.logger.DebugEvent(eventTunnelTransferSkippedNotStarted)
 		return

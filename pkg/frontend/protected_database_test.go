@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -371,6 +372,7 @@ func TestProtectedPolicyRespectsAuthorizationSnapshot(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		prior     bool
+		pinned    bool
 		supported bool
 		commit    int64
 		target    int64
@@ -379,6 +381,8 @@ func TestProtectedPolicyRespectsAuthorizationSnapshot(t *testing.T) {
 	}{
 		{name: "fresh authorization", supported: true, target: 200},
 		{name: "prior authorization", prior: true, supported: true, target: 200},
+		{name: "role rules pin authorization", prior: true, pinned: true, supported: true, target: 200},
+		{name: "role rules pin ordered fallback", prior: true, pinned: true},
 		{name: "session commit floor", supported: true, commit: 175, target: 200},
 		{name: "ordered fallback", supported: false},
 		{name: "authorization read fails", supported: true, readErr: readErr, wantErr: true},
@@ -404,6 +408,7 @@ func TestProtectedPolicyRespectsAuthorizationSnapshot(t *testing.T) {
 			if tc.prior {
 				general.PhysicalTime = 170
 				execution.authorizationSnapshot = general
+				execution.authorizationSnapshotPinned = tc.pinned
 			}
 			if tc.commit != 0 {
 				ses.updateLastCommitTS(timestamp.Timestamp{PhysicalTime: tc.commit})
@@ -436,13 +441,17 @@ func TestProtectedPolicyRespectsAuthorizationSnapshot(t *testing.T) {
 			if commit := ses.getLastCommitTS(); commit.Greater(min) {
 				min = commit
 			}
+			final := min.Next()
 			if tc.supported {
 				require.Equal(t, min, eng.min, "policy snapshot must include authorization visibility")
-				require.Equal(t, eng.snapshot, execution.authorizationSnapshot)
+				final = eng.snapshot
 			} else {
 				require.Equal(t, min, eng.waited, "fallback must retain authorization visibility")
-				require.Equal(t, min.Next(), execution.authorizationSnapshot)
 			}
+			if tc.pinned {
+				final = general
+			}
+			require.Equal(t, final, execution.authorizationSnapshot)
 		})
 	}
 }
@@ -491,10 +500,16 @@ func TestAuthorizationWaitHonorsCancellation(t *testing.T) {
 			execution.authorizationMu.Lock()
 			done := make(chan error, 1)
 			go func() { done <- tc.read(ctx, ses) }()
-			<-ctx.checked
+			checkedBeforeLock := false
+			select {
+			case <-ctx.checked:
+				checkedBeforeLock = true
+			case <-time.After(5 * time.Second):
+			}
 			cancel()
 			execution.authorizationMu.Unlock()
 			require.ErrorIs(t, <-done, context.Canceled)
+			require.True(t, checkedBeforeLock, "authorization must check cancellation before waiting for the lock")
 		})
 	}
 }

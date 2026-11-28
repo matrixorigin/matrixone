@@ -56,9 +56,10 @@ func currentAuthorizationPrincipal(ses *Session) authorizationPrincipal {
 // native checks and old user SI transactions acquire the same visibility as a
 // fresh RC statement, without opening a user transaction or workspace.
 func authorizationReadSnapshot(ctx context.Context, ses *Session) (timestamp.Timestamp, error) {
-	if err := ctx.Err(); err != nil {
-		return timestamp.Timestamp{}, err
-	}
+	return readStatementAuthorizationSnapshot(ctx, ses, false)
+}
+
+func statementAuthorizationContext(ses *Session) *ExecCtx {
 	var execution *ExecCtx
 	if compiler := ses.GetTxnCompileCtx(); compiler != nil {
 		compiler.mu.Lock()
@@ -66,8 +67,16 @@ func authorizationReadSnapshot(ctx context.Context, ses *Session) (timestamp.Tim
 		compiler.mu.Unlock()
 	}
 	if execution != nil && (execution.ses != ses || execution.reqCtx == nil) {
-		execution = nil
+		return nil
 	}
+	return execution
+}
+
+func readStatementAuthorizationSnapshot(ctx context.Context, ses *Session, pin bool) (timestamp.Timestamp, error) {
+	if err := ctx.Err(); err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	execution := statementAuthorizationContext(ses)
 	if execution != nil {
 		execution.authorizationMu.Lock()
 		defer execution.authorizationMu.Unlock()
@@ -78,6 +87,7 @@ func authorizationReadSnapshot(ctx context.Context, ses *Session) (timestamp.Tim
 	snapshot, err := authorizationReadSnapshotLocked(ctx, ses, execution)
 	if err == nil && execution != nil {
 		execution.authorizationSnapshot = snapshot
+		execution.authorizationSnapshotPinned = execution.authorizationSnapshotPinned || pin
 	}
 	return snapshot, err
 }

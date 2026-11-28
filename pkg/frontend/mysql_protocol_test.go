@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -237,6 +239,14 @@ func newMrsForSleep(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+// Protocol fixtures use mock storage without a role catalog. Return a typed
+// empty policy result for the authenticated fixture role.
+func stubEmptyRoleRuleRows(bh *backgroundExecTest, tenant *TenantInfo) {
+	roleID := int64(tenant.GetDefaultRoleID())
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(roleID)] = newMrsForInheritedRoleIdOfRoleId(nil)
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{roleID})] = newMrsForRewriteRules(nil)
+}
+
 func TestKill(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connect
@@ -265,7 +275,7 @@ func TestKill(t *testing.T) {
 			txnOp := newTestTxnOp()
 			return txnOp, nil
 		}).AnyTimes()
-	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+	pu, err := getParameterUnit("test/system_vars_config.toml", eng, &authorizationSnapshotReader{TxnClient: txnClient, snapshot: timestamp.Timestamp{PhysicalTime: 1}})
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 0
@@ -276,10 +286,20 @@ func TestKill(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		tenant := upstream.GetTenantInfo()
+		stubEmptyRoleRuleRows(bh, tenant)
 		bh.sql2result[getSqlForActiveRolesForAuthorization(tenant, true)] = newMrsForRoleIdOfUserId([][]interface{}{{int64(tenant.GetUserID())}})
 		return bh
 	})
 	defer authorization.Reset()
+
+	var roleCatalogUnavailable atomic.Bool
+	readPolicy := captureRoleRuleCache
+	authorization.Stub(&captureRoleRuleCache, func(ctx context.Context, ses *Session) (*roleRuleCache, error) {
+		if roleCatalogUnavailable.Load() {
+			return nil, moerr.NewInternalError(ctx, "test role catalog unavailable")
+		}
+		return readPolicy(ctx, ses)
+	})
 
 	setSessionAlloc("", NewLeakCheckAllocator())
 	sql1 := "select connection_id();"
@@ -448,6 +468,12 @@ func TestKill(t *testing.T) {
 	}
 
 	waitForQueryStart(resultSet[sql5].startedCh)
+	roleCatalogUnavailable.Store(true)
+	for _, query := range []string{"select 1", fmt.Sprintf("kill query %d; select 1", conn1Id)} {
+		_, err := conn2.ExecContext(ctx, query)
+		require.ErrorContains(t, err, "test role catalog unavailable")
+	}
+	require.Zero(t, resultSet[sql5].resultX.Load())
 
 	logutil.Infof("conn2 kill query on conn1")
 	//conn2 kills the query
@@ -462,6 +488,7 @@ func TestKill(t *testing.T) {
 	res := resultSet[sql5]
 	require.Equal(t, res.resultX.Load(), contextCancel)
 	logutil.Infof("conn2 kill query on conn1 done")
+	roleCatalogUnavailable.Store(false)
 
 	//================================
 
@@ -483,6 +510,7 @@ func TestKill(t *testing.T) {
 	}()
 
 	waitForQueryStart(res.startedCh)
+	roleCatalogUnavailable.Store(true)
 
 	logutil.Infof("conn2 kill conn1")
 	//conn2 kills the connection 1
@@ -1727,12 +1755,19 @@ func TestMysqlResultSet(t *testing.T) {
 		txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		return txnOp, nil
 	}).AnyTimes()
-	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+	pu, err := getParameterUnit("test/system_vars_config.toml", eng, &authorizationSnapshotReader{TxnClient: txnClient, snapshot: timestamp.Timestamp{PhysicalTime: 1}})
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
+	policy := gostub.Stub(&NewBackgroundExec, func(_ context.Context, upstream FeSession, _ ...*BackgroundExecOption) BackgroundExec {
+		bh := &backgroundExecTest{}
+		bh.init()
+		stubEmptyRoleRuleRows(bh, upstream.GetTenantInfo())
+		return bh
+	})
+	defer policy.Reset()
 
 	noResultSet := make(map[string]bool)
 	resultSet := make(map[string]*result)

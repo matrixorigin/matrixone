@@ -37,12 +37,13 @@ type Update struct {
 	// From is the optional PostgreSQL-style FROM clause that introduces
 	// additional read-only join sources. It is nil for the classic
 	// single-table and multi-table (comma) UPDATE syntaxes.
-	From      *From
-	Where     *Where
-	OrderBy   OrderBy
-	Limit     *Limit
-	With      *With
-	Returning SelectExprs
+	From          *From
+	Where         *Where
+	OrderBy       OrderBy
+	Limit         *Limit
+	With          *With
+	Returning     SelectExprs
+	RewriteOption *RewriteOption
 }
 
 func (node *Update) Format(ctx *FmtCtx) {
