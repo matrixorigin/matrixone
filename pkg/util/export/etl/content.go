@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -57,12 +58,24 @@ type ContentWriter struct {
 }
 
 func NewContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher) *ContentWriter {
+	return newContentWriter(ctx, tbl, fileFlusher, uuid.Nil, uuid.Nil)
+}
+
+func NewMetricContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher, id, publisher uuid.UUID) *ContentWriter {
+	return newContentWriter(ctx, tbl, fileFlusher, id, publisher)
+}
+
+func newContentWriter(ctx context.Context, tbl *table.Table, fileFlusher table.Flusher, id, publisher uuid.UUID) *ContentWriter {
+	sqlFlusher := NewSQLFlusher(tbl)
+	sqlFlusher.metricBatchID = id
+	sqlFlusher.metricPublisher = publisher
+	sqlFlusher.ctx = ctx
 	return &ContentWriter{
 		ctx: ctx,
 		tbl: tbl,
 		// buf dependent on SetContent to set.
 
-		sqlFlusher: NewSQLFlusher(tbl),
+		sqlFlusher: sqlFlusher,
 		csvFlusher: NewFileContentFlusher(fileFlusher),
 	}
 }
@@ -169,18 +182,30 @@ func (c *ContentWriter) FlushAndClose() (n int, err error) {
 var _ table.Flusher = (*SQLFlusher)(nil)
 
 type SQLFlusher struct {
-	database string
-	table    string
+	ctx             context.Context
+	database        string
+	table           string
+	columns         []table.Column
+	metricBatchID   uuid.UUID
+	metricPublisher uuid.UUID
 }
 
 func NewSQLFlusher(tbl *table.Table) *SQLFlusher {
 	return &SQLFlusher{
 		database: tbl.GetDatabase(),
 		table:    tbl.GetName(),
+		columns:  tbl.Columns,
 	}
 }
 
 func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
+	if f.metricBatchID != uuid.Nil {
+		if buf.Len() == 0 {
+			return 0, nil
+		}
+		return 0, f.flushMetricBatch(f.ctx, buf.Bytes(), f.metricBatchID, db_holder.MetricFilePublication{}, true)
+	}
+
 	forceNewConn := !db_holder.DBConnErrCount.Check()
 	conn, err := db_holder.GetOrInitDBConn(forceNewConn, true)
 	if err != nil {
@@ -194,48 +219,57 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 		return 0, err
 	}
 
-	src := buf.Bytes()
-	extraEscapes := 0
-	for _, c := range src {
-		if c == '\\' || c == '\'' {
-			extraEscapes++
-		}
-	}
-
-	var loadSQL strings.Builder
-	loadSQL.Grow(len("LOAD DATA INLINE FORMAT='csv', DATA='' INTO TABLE . FIELDS TERMINATED BY ','") +
-		len(src) + extraEscapes + len(f.database) + len(f.table))
-	loadSQL.WriteString("LOAD DATA INLINE FORMAT='csv', DATA='")
-	for i := 0; i < len(src); i++ {
-		c := src[i]
-		// case \: mo sql NEED quote '\'
-		// case ': sql (load data inline ... DATA='' ...) quotes inline CSV with "'"
-		if c == '\\' || c == '\'' {
-			// \ -> \\
-			// ' -> ''
-			loadSQL.WriteByte(c)
-		}
-		loadSQL.WriteByte(c)
-	}
-	loadSQL.WriteString("' INTO TABLE ")
-	loadSQL.WriteString(f.database)
-	loadSQL.WriteByte('.')
-	loadSQL.WriteString(f.table)
-	loadSQL.WriteString(" FIELDS TERMINATED BY ','")
-	loadSQLStr := loadSQL.String()
-	v2.TraceMOLoggerExportSqlHistogram.Observe(float64(len(loadSQLStr)))
-
-	_, err = conn.Exec(loadSQLStr)
-	if len(loadSQLStr) > 10*mpool.MB {
-		logutil.Info("generate req sql", zap.String("type", f.table), zap.Int("csv", buf.Len()), zap.Int("sql", len(loadSQLStr)))
-	}
+	loadSQL := f.loadSQL(buf.Bytes(), true)
+	_, err = conn.Exec(loadSQL)
 	if err != nil {
 		_ = db_holder.DBConnErrCount.Count()
 	} else {
 		db_holder.DBConnErrCount.Reset()
 	}
-
 	return 0, err
+}
+
+const loadInlineCSVPrefix = "LOAD DATA INLINE FORMAT='csv', DATA='"
+
+func (f *SQLFlusher) loadSuffix() string {
+	return "' INTO TABLE " + f.database + "." + f.table + " FIELDS TERMINATED BY ','"
+}
+
+func needsInlineSQLEscape(c byte, escapeBackslashes bool) bool {
+	return c == '\'' || (escapeBackslashes && c == '\\')
+}
+
+func countInlineSQLEscapes(src []byte, escapeBackslashes bool) int {
+	extraEscapes := 0
+	for _, c := range src {
+		if needsInlineSQLEscape(c, escapeBackslashes) {
+			extraEscapes++
+		}
+	}
+
+	return extraEscapes
+}
+
+func (f *SQLFlusher) loadSQL(src []byte, escapeBackslashes bool) string {
+	suffix := f.loadSuffix()
+	var loadSQL strings.Builder
+	loadSQL.Grow(len(loadInlineCSVPrefix) + len(src) + countInlineSQLEscapes(src, escapeBackslashes) + len(suffix))
+	loadSQL.WriteString(loadInlineCSVPrefix)
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if needsInlineSQLEscape(c, escapeBackslashes) {
+			loadSQL.WriteByte(c)
+		}
+		loadSQL.WriteByte(c)
+	}
+	loadSQL.WriteString(suffix)
+	loadSQLStr := loadSQL.String()
+	v2.TraceMOLoggerExportSqlHistogram.Observe(float64(len(loadSQLStr)))
+
+	if len(loadSQLStr) > 10*mpool.MB {
+		logutil.Info("generate req sql", zap.String("type", f.table), zap.Int("csv", len(src)), zap.Int("sql", len(loadSQLStr)))
+	}
+	return loadSQLStr
 }
 
 var _ table.Flusher = (*FileFlusher)(nil)

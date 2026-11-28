@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	dbholder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -257,6 +258,13 @@ func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 	if _, err := txn.Exec(SqlCreateDBConst, executor.StatementOption{}); err != nil {
 		return err
 	}
+	for _, ddl := range []string{dbholder.CreateMetricBatchReceipt, dbholder.CreateMetricFileProgress} {
+		result, err := txn.Exec(ddl, executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		result.Close()
+	}
 
 	var createCost time.Duration
 	defer func() {
@@ -311,6 +319,8 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 		mustExec(SqlDropDBConst)
 	}
 	mustExec(SqlCreateDBConst)
+	mustExec(dbholder.CreateMetricBatchReceipt)
+	mustExec(dbholder.CreateMetricFileProgress)
 	var createCost time.Duration
 	defer func() {
 		logutil.Debugf(

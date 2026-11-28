@@ -330,6 +330,109 @@ func TestCloseDBConnClearsGlobalPointer(t *testing.T) {
 	})
 }
 
+func TestMetricDBConnRebuildHonorsCancellation(t *testing.T) {
+	CloseDBConn()
+	defer CloseDBConn()
+	SetSQLWriterDBUser("user", "password")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer SetSQLWriterDBAddressFunc(GetSQLWriterDBAddressFunc())
+	SetSQLWriterDBAddressFunc(func(ctx context.Context, _ bool) (string, error) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-release:
+			return "", errors.New("address lookup outlived cancellation")
+		}
+	})
+	buildCtx, stopBuild := context.WithCancel(context.Background())
+	defer stopBuild()
+	builder := make(chan error, 1)
+	go func() {
+		_, err := GetOrInitMetricDBConn(buildCtx)
+		builder <- err
+	}()
+	defer func() {
+		stopBuild()
+		select {
+		case err := <-builder:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(time.Second):
+			close(release)
+			<-builder
+			t.Error("address lookup did not stop on cancellation")
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("address lookup did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	waiter := make(chan error, 1)
+	go func() {
+		_, err := GetOrInitMetricDBConn(ctx)
+		waiter <- err
+	}()
+	select {
+	case err := <-waiter:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(time.Second):
+		stopBuild()
+		<-waiter
+		t.Error("connection rebuild wait did not stop on cancellation")
+	}
+}
+
+func TestMetricDBConnRebuildsAfterSparseFailure(t *testing.T) {
+	CloseDBConn()
+	defer CloseDBConn()
+	SetSQLWriterDBUser("user", "password")
+	oldDB, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer oldDB.Close()
+	SetDBConn(oldDB)
+	newDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	mock.ExpectPing()
+
+	var reselections int
+	defer SetSQLWriterDBAddressFunc(GetSQLWriterDBAddressFunc())
+	SetSQLWriterDBAddressFunc(func(ctx context.Context, random bool) (string, error) {
+		require.True(t, random)
+		_, hasDeadline := ctx.Deadline()
+		require.True(t, hasDeadline)
+		reselections++
+		return "127.0.0.1:6001", nil
+	})
+	stubs := gostub.Stub(&openDBConn, func(string, string) (*sql.DB, error) {
+		return newDB, nil
+	})
+	defer stubs.Reset()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	got, err := GetOrInitMetricDBConn(ctx)
+	require.NoError(t, err)
+	require.Same(t, oldDB, got)
+	MarkMetricDBConnFailed(oldDB)
+	// Even if the shared error window is now empty, this pool failed.
+	DBConnErrCount.Reset()
+	got, err = GetOrInitMetricDBConn(ctx)
+	require.NoError(t, err)
+	require.Same(t, newDB, got)
+
+	MarkMetricDBConnFailed(oldDB)
+	got, err = GetOrInitMetricDBConn(ctx)
+	require.NoError(t, err)
+	require.Same(t, newDB, got)
+	require.Equal(t, 1, reselections)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestGetOrInitDBConn_ForceReconnectSuccessResetsBackoff(t *testing.T) {
 	SyncTestWriteRowRecords(t, func(t *testing.T) {
 		setDBConnBackoffExceeded(t)

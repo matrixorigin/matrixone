@@ -119,6 +119,16 @@ func (p *ETLPath) Parse(ctx context.Context) error {
 	filename := elems[PathIdxFilename]
 	p.table = elems[PathIdxTable]
 
+	if p.table == "metric" || p.table == "sql_statement_cu" {
+		if stem, ok := strings.CutSuffix(filename, CsvExtension); ok {
+			if _, ok := compactMetricBatchID(stem); ok {
+				// Compact metric filenames carry the batch UUID only.
+				p.timestamps = nil
+				return nil
+			}
+		}
+	}
+
 	// parse filename => timestamps
 	fnElems := strings.Split(strings.Trim(filename, CsvExtension), FilenameSeparator)
 	if len(fnElems) != FilenameElems && len(fnElems) != FilenameElemsV2 {

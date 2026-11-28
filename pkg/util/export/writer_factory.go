@@ -18,7 +18,10 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
@@ -104,11 +107,29 @@ func (rw *reactWriter) AddAfter(hook table.AckHook) {
 
 func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, enableSqlWriter bool) table.WriterFactory {
 	cfg := table.FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: table.CsvExtension}
+	var metricPublishers sync.Map
 	factory := func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
-		options := []etl.FSWriterOption{
-			etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
+		if tbl.UsesMetricBatchReceipt() {
+			// Keep each independently scheduled table/account in its own stream.
+			key := [2]string{account, tbl.Table}
+			published, ok := metricPublishers.Load(key)
+			if !ok {
+				published, _ = metricPublishers.LoadOrStore(key, &metricPublisher{id: uuid.New()})
+			}
+			publisher := published.(*metricPublisher)
+			batchID := uuid.New()
+			filePath := table.SequencedMetricBatchLogPath(account, tbl, ts, batchID)
+			cw := etl.NewCSVWriter(ctx, &metricFileWriter{
+				ctx: ctx, fs: fs, path: filePath,
+				publisher: publisher,
+			})
+			if enableSqlWriter {
+				return newWriter(ctx, etl.NewMetricContentWriter(ctx, tbl, cw, batchID, publisher.id))
+			}
+			return newWriter(ctx, cw)
 		}
-		cw := etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
+		filePath := cfg.LogsFilePathFactory(account, tbl, ts)
+		cw := etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, etl.WithFilePath(filePath)))
 		if enableSqlWriter {
 			return newWriter(ctx, etl.NewContentWriter(ctx, tbl, cw))
 		}
