@@ -137,7 +137,7 @@ func (a StartLogService) IsFinish(state ClusterState) bool {
 		return true
 	}
 	for _, replicaInfo := range state.LogState.Stores[a.UUID].Replicas {
-		if replicaInfo.ShardID == a.ShardID {
+		if replicaInfo.ShardID == a.ShardID && replicaInfo.ReplicaID == a.ReplicaID && !replicaInfo.IsNonVoting {
 			return true
 		}
 	}
@@ -158,7 +158,7 @@ func (a StartNonVotingLogService) IsFinish(state ClusterState) bool {
 		return true
 	}
 	for _, replicaInfo := range state.LogState.Stores[a.UUID].Replicas {
-		if replicaInfo.ShardID == a.ShardID {
+		if replicaInfo.ShardID == a.ShardID && replicaInfo.ReplicaID == a.ReplicaID && replicaInfo.IsNonVoting {
 			return true
 		}
 	}
@@ -251,38 +251,6 @@ func (a RemoveTnReplica) IsFinish(state ClusterState) bool {
 		if a.ShardID == info.GetShardID() && a.ReplicaID == info.GetReplicaID() {
 			return false
 		}
-	}
-	return true
-}
-
-// StopTnStore corresponds to tn store shutdown command.
-type StopTnStore struct {
-	StoreID string
-}
-
-func (a StopTnStore) String() string {
-	return fmt.Sprintf("stopping tn store %s", a.StoreID)
-}
-
-func (a StopTnStore) IsFinish(state ClusterState) bool {
-	if _, ok := state.TNState.Stores[a.StoreID]; ok {
-		return false
-	}
-	return true
-}
-
-// StopLogStore corresponds to log store shutdown command.
-type StopLogStore struct {
-	StoreID string
-}
-
-func (a StopLogStore) String() string {
-	return fmt.Sprintf("stopping log store %s", a.StoreID)
-}
-
-func (a StopLogStore) IsFinish(state ClusterState) bool {
-	if _, ok := state.LogState.Stores[a.StoreID]; ok {
-		return false
 	}
 	return true
 }
@@ -390,7 +358,7 @@ func (a BootstrapShard) IsFinish(state ClusterState) bool {
 		return true
 	}
 	for _, replicaInfo := range state.LogState.Stores[a.UUID].Replicas {
-		if replicaInfo.ShardID == a.ShardID {
+		if replicaInfo.ShardID == a.ShardID && replicaInfo.ReplicaID == a.ReplicaID && !replicaInfo.IsNonVoting {
 			return true
 		}
 	}

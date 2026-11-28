@@ -155,7 +155,7 @@ an accepted consequence of embedding and must be visible in readiness/health.
 
 ## Packaging, validation and rollout
 
-See the [development guide](../guides/sirius-embedded.md) and
+See the [development guide](../../Sirius.md#configure-and-query) and
 [bridge build contract](../../pkg/sql/compile/siriusbridge/README.md) for the
 CPU, Sirius and combined cuVS build modes and guarded native provenance.
 The native pin remains unchanged by E.

@@ -377,28 +377,16 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 			},
 		}
 		sc1 := pb.ScheduleCommand{
-			UUID: "uuid1",
-			ConfigChange: &pb.ConfigChange{
-				Replica: pb.Replica{
-					ShardID: 1,
-				},
-			},
+			UUID: "uuid1", ServiceType: pb.LogService,
+			CreateTaskService: &pb.CreateTaskService{TaskDatabase: "one"},
 		}
 		sc2 := pb.ScheduleCommand{
-			UUID: "uuid2",
-			ConfigChange: &pb.ConfigChange{
-				Replica: pb.Replica{
-					ShardID: 2,
-				},
-			},
+			UUID: "uuid2", ServiceType: pb.LogService,
+			CreateTaskService: &pb.CreateTaskService{TaskDatabase: "two"},
 		}
 		sc3 := pb.ScheduleCommand{
-			UUID: "uuid1",
-			ConfigChange: &pb.ConfigChange{
-				Replica: pb.Replica{
-					ShardID: 3,
-				},
-			},
+			UUID: "uuid1", ServiceType: pb.LogService,
+			CreateTaskService: &pb.CreateTaskService{TaskDatabase: "three"},
 		}
 		require.NoError(t,
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
@@ -690,8 +678,14 @@ func TestServiceCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.
 
 func TestServiceCommandDeliveryActivationWaitsForPendingHAKeeperAdmission(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
+		require.NoError(t, s.store.setInitialClusterInfo(1, 1, 1, hapkg.K8SIDRangeEnd+10, nil, nil))
+		require.NoError(t, s.store.updateNonVotingReplicaNum(ctx, 1))
+		s.store.hakeeperTick()
+		state, err := s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		require.NotZero(t, state.LogStoreTimeoutPolicyTerm)
 
 		heartbeat := func(uuid string, supported bool) pb.Response {
 			message := pb.LogStoreHeartbeat{
@@ -709,18 +703,24 @@ func TestServiceCommandDeliveryActivationWaitsForPendingHAKeeperAdmission(t *tes
 
 		require.Equal(t, uint32(moerr.Ok), heartbeat(s.store.id(), true).ErrorCode)
 		require.Equal(t, uint32(moerr.Ok), heartbeat("legacy", false).ErrorCode)
+		state, err = s.store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		epoch := state.LogState.Shards[hapkg.DefaultHAKeeperShardID].Epoch
+		require.NotZero(t, epoch)
 		command := pb.ScheduleCommand{
 			UUID:        s.store.id(),
 			ServiceType: pb.LogService,
 			ConfigChange: &pb.ConfigChange{
-				ChangeType: pb.AddReplica,
+				ChangeType: pb.AddNonVotingReplica,
 				Replica: pb.Replica{
-					UUID:    "legacy",
-					ShardID: hapkg.DefaultHAKeeperShardID,
+					UUID:      "legacy",
+					ShardID:   hapkg.DefaultHAKeeperShardID,
+					ReplicaID: 2,
+					Epoch:     epoch,
 				},
 			},
 		}
-		require.NoError(t, s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{command}))
+		require.NoError(t, s.store.addScheduleCommands(ctx, state.LogStoreTimeoutPolicyTerm, []pb.ScheduleCommand{command}))
 
 		// The leader-side read prevents even proposing an update tag that the
 		// pending legacy member could later replay.

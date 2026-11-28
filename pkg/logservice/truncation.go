@@ -157,8 +157,7 @@ func (l *store) processTruncateLog(ctx context.Context) error {
 		}
 		replicas := activeReplicas[shard.ShardID]
 		if _, ok := replicas[shard.ReplicaID]; !ok {
-			if len(replicas) > 0 ||
-				l.isSkippedZombie(shard.ShardID, shard.ReplicaID) {
+			if l.canCleanInactiveDataReplica(shard.ShardID, shard.ReplicaID, len(replicas) > 0) {
 				// NodeHost state and local metadata are independent snapshots.
 				// Re-read NodeHost immediately before cleanup so a replica that
 				// became active after the outer snapshot is never classified as stale.
@@ -166,8 +165,7 @@ func (l *store) processTruncateLog(ctx context.Context) error {
 				if _, ok := replicas[shard.ReplicaID]; ok {
 					continue
 				}
-				if len(replicas) == 0 &&
-					!l.isSkippedZombie(shard.ShardID, shard.ReplicaID) {
+				if !l.canCleanInactiveDataReplica(shard.ShardID, shard.ReplicaID, len(replicas) > 0) {
 					continue
 				}
 				l.cleanupStaleReplica(shard.ShardID, shard.ReplicaID,
@@ -184,6 +182,15 @@ func (l *store) processTruncateLog(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (l *store) canCleanInactiveDataReplica(shardID, replicaID uint64, replaced bool) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if absence, skipped := l.mu.skippedZombies[zombieKey{shardID, replicaID}]; skipped {
+		return absence.retired
+	}
+	return replaced
 }
 
 func (l *store) startedReplicaIDs() map[uint64]map[uint64]struct{} {
@@ -229,7 +236,20 @@ func (l *store) cleanupStaleReplica(
 ) {
 	// Fence new exports before checking whether an admitted request can still
 	// publish into this replica's export directory.
-	l.markReplicaRetiring(shardID, replicaID)
+	l.mu.Lock()
+	if l.localReplicaPresent(shardID, replicaID) {
+		l.mu.Unlock()
+		return
+	}
+	// A startup membership reply can be stale. Until HAKeeper confirms a
+	// Start or Kill, it can keep the replica stopped but cannot retire it
+	// or authorize deletion of its exported snapshots.
+	if absence, skipped := l.mu.skippedZombies[zombieKey{shardID, replicaID}]; skipped && !absence.retired {
+		l.mu.Unlock()
+		return
+	}
+	l.markReplicaRetiringLocked(shardID, replicaID)
+	l.mu.Unlock()
 	if err := l.snapshotMgr.RemoveReplica(shardID, replicaID); err != nil {
 		if errors.Is(err, errSnapshotExportPending) {
 			return
