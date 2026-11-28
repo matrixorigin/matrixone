@@ -4380,10 +4380,14 @@ func makePreUpdateDeletePlan(
 		Children:    []int32{lastNodeId},
 		LockTargets: []*plan.LockTarget{lockTarget},
 	}
-	if delCtx.preserveUpdateSourceProjection {
-		lockNode.ProjectList = getProjectionByLastNode(builder, lastNodeId)
-	}
 	lastNodeId = builder.appendNode(lockNode, bindCtx)
+	if delCtx.preserveUpdateSourceProjection {
+		// The REPLACE child writer reads fixed positions from this sink.
+		if builder.preserveLockProjection == nil {
+			builder.preserveLockProjection = make(map[int32]struct{})
+		}
+		builder.preserveLockProjection[lastNodeId] = struct{}{}
+	}
 
 	//lock new pk for update statement (if update pk)
 	updatesPrimaryKey := false

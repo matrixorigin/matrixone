@@ -177,4 +177,22 @@ select * from fk_generated_parent order by id;
 select id, pid, g, doubled from fk_generated_child force index(idx_generated)
     where doubled in (2, 4, 6, 10, 12, 14) order by id;
 
+create table fk_combined_parent(id int primary key, v int);
+create table fk_combined_child(
+    id int primary key, a int, b int,
+    g int generated always as (ifnull(a, 0) + ifnull(b, 0)) stored,
+    constraint ck_combined_generated check(g > 0),
+    foreign key(a) references fk_combined_parent(id) on delete set null,
+    foreign key(b) references fk_combined_parent(id) on delete set null
+);
+insert into fk_combined_parent values (1, 10), (2, 20);
+insert into fk_combined_child(id, a, b) values (10, 1, 2);
+
+-- Both SET NULL actions contribute to the same final row.
+replace into fk_combined_parent values (1, 100), (2, 200);
+select * from fk_combined_parent order by id;
+replace into fk_combined_parent values (1, 100);
+select * from fk_combined_parent order by id;
+select * from fk_combined_child;
+
 drop database check_constraint_test;

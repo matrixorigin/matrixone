@@ -2776,9 +2776,17 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
 		_, preserveProjection := builder.preserveLockProjection[nodeID]
-		if preserveProjection && len(preNode.BindingTags) > 0 {
-			for i := range preNode.ProjectList {
-				colRefCnt[[2]int32{preNode.BindingTags[0], int32(i)}]++
+		if preserveProjection {
+			// FILTER passes through its child's binding. Preserve the full row
+			// through the validation boundary just as for a direct PROJECT.
+			projectionNode := preNode
+			for projectionNode.NodeType == plan.Node_FILTER && len(projectionNode.Children) == 1 {
+				projectionNode = builder.qry.Nodes[projectionNode.Children[0]]
+			}
+			if len(projectionNode.BindingTags) > 0 {
+				for i := range projectionNode.ProjectList {
+					colRefCnt[[2]int32{projectionNode.BindingTags[0], int32(i)}]++
+				}
 			}
 		}
 
