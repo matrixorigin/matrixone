@@ -458,4 +458,70 @@ deallocate prepare prepared_nested_proc_drop;
 drop procedure prepared_outer_ddl;
 drop procedure prepared_inner_ddl;
 
+-- Prepared SHOW metadata invalidation across sessions (issues #33353/#33367):
+-- a warmed handle must refresh after committed cross-session DDL, preserve the
+-- refreshed definitions, and fail with the exact missing-table and
+-- missing-snapshot errors after a cross-session DROP.
+create table show_inval_target (id int primary key, v int, key idx_show_v(v));
+prepare show_inval_create_stmt from 'show create table show_inval_target';
+execute show_inval_create_stmt;
+-- @session:id=1
+use prepare_ddl_schema_change;
+alter table show_inval_target algorithm=copy, add column note varchar(20) default 'x';
+-- @session
+execute show_inval_create_stmt;
+select column_name
+from information_schema.columns
+where table_schema = 'prepare_ddl_schema_change'
+  and table_name = 'show_inval_target'
+order by ordinal_position;
+deallocate prepare show_inval_create_stmt;
+
+-- The whole lifecycle runs on ONE warmed SHOW INDEX handle. The actual
+-- original handle is executed before the other session drops the table, so
+-- its old index rows are asserted while warm; after the committed DROP the
+-- same handle must report the exact missing-table error; and after the
+-- recreate the SAME handle must serve the exact updated index rows.
+prepare show_index_stmt from 'show index from show_inval_target';
+execute show_index_stmt;
+-- @session:id=1
+use prepare_ddl_schema_change;
+drop table show_inval_target;
+-- @session
+execute show_index_stmt;
+show index from show_inval_target;
+create table show_inval_target (id int primary key, v int, key idx_show_new(v));
+execute show_index_stmt;
+show index from show_inval_target;
+deallocate prepare show_index_stmt;
+drop table show_inval_target;
+
+-- #33353: a warmed snapshot-qualified handle keeps the transaction's own
+-- visibility policy inside a repeatable-read transaction, and after the commit
+-- the same handle, the direct control, and a fresh PREPARE all report the
+-- dropped snapshot.
+create table show_snapshot_target (a int);
+create snapshot show_inv_snapshot for database prepare_ddl_schema_change;
+prepare show_snapshot_stmt from
+    'show create table show_snapshot_target {snapshot = ''show_inv_snapshot''}';
+execute show_snapshot_stmt;
+set session transaction isolation level repeatable read;
+begin;
+select * from show_snapshot_target;
+-- @session:id=1
+use prepare_ddl_schema_change;
+drop snapshot show_inv_snapshot;
+-- @session
+execute show_snapshot_stmt;
+show create table show_snapshot_target {snapshot = 'show_inv_snapshot'};
+commit;
+execute show_snapshot_stmt;
+execute show_snapshot_stmt;
+show create table show_snapshot_target {snapshot = 'show_inv_snapshot'};
+prepare show_snapshot_fresh from
+    'show create table show_snapshot_target {snapshot = ''show_inv_snapshot''}';
+deallocate prepare show_snapshot_stmt;
+set session transaction isolation level read committed;
+drop table show_snapshot_target;
+
 drop database prepare_ddl_schema_change;

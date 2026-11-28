@@ -376,6 +376,86 @@ func TestIssue33353PreparedShowInvalidationNative(t *testing.T) {
 			t.Logf("missing-snapshot error class=%d fresh-prepare-err=%v", execNo, freshPrepareErr)
 		})
 
+		t.Run("repeatable_read_boundary_revalidates_after_commit", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			admin := issue3335xSession(t, ctx, cn, "dump:111", "")
+			prep := issue3335xSession(t, ctx, cn, "dump:111", "")
+			ddl := issue3335xSession(t, ctx, cn, "dump:111", "")
+			defer func() { issue3335xBestEffort(ctx, admin, "drop database if exists e3335x_rr") }()
+
+			issue3335xExec(t, ctx, admin, "create database e3335x_rr")
+			issue3335xExec(t, ctx, admin, "create table e3335x_rr.t2(a int, b int)")
+			issue3335xExec(t, ctx, admin, "insert into e3335x_rr.t2 values (1, 2)")
+			issue3335xExec(t, ctx, ddl, "create snapshot e3335x_sp for database e3335x_rr")
+			defer func() { issue3335xBestEffort(ctx, ddl, "drop snapshot if exists e3335x_sp") }()
+
+			// Warm one server-side prepared snapshot-qualified SHOW CREATE handle.
+			issue3335xExec(t, ctx, prep,
+				"prepare p_rr from 'SHOW CREATE TABLE e3335x_rr.t2 {snapshot = ''e3335x_sp''}'")
+			defer func() { issue3335xBestEffort(ctx, prep, "deallocate prepare p_rr") }()
+			warm := issue3335xRows(t, ctx, prep, "execute p_rr")
+			require.NotEqual(t, "", issue3335xText(warm),
+				"the snapshot-qualified handle must warm before the transaction")
+
+			// Begin a repeatable-read transaction and pin its visibility with
+			// an actual read through the same session.
+			issue3335xExec(t, ctx, prep, "set session transaction isolation level repeatable read")
+			issue3335xExec(t, ctx, prep, "begin")
+			pinned := issue3335xRows(t, ctx, prep, "select * from e3335x_rr.t2")
+			require.Equal(t, [][]string{{"1", "2"}}, pinned,
+				"the pinning read must observe the row inside the old transaction")
+
+			// A separate autocommit session drops the named snapshot while the
+			// old transaction holds its visibility.
+			issue3335xExec(t, ctx, ddl, "drop snapshot e3335x_sp")
+
+			// During the old transaction the handle keeps that transaction's
+			// actual visibility policy: it must agree with the direct
+			// snapshot-qualified control issued in the same session state.
+			inTxnErr := issue3335xQueryErr(ctx, prep, "execute p_rr")
+			inTxnDirectErr := issue3335xQueryErr(ctx, prep,
+				"show create table e3335x_rr.t2 {snapshot = 'e3335x_sp'}")
+			require.Equal(t, inTxnDirectErr == nil, inTxnErr == nil,
+				"inside the old transaction the prepared handle must keep the direct route's visibility policy")
+			if inTxnErr != nil {
+				require.Equal(t,
+					issue3335xMysqlErrNo(t, inTxnErr),
+					issue3335xMysqlErrNo(t, inTxnDirectErr),
+					"inside the old transaction the prepared handle must keep the direct route's exact error class")
+			} else {
+				inTxnRows := issue3335xRows(t, ctx, prep, "execute p_rr")
+				require.Equal(t, warm, inTxnRows,
+					"a transaction that can still see the snapshot must keep serving its definition")
+				t.Logf("repeatable-read in-transaction visibility kept the snapshot result")
+			}
+
+			issue3335xExec(t, ctx, prep, "commit")
+
+			// No further metadata mutation: the same old handle must now carry
+			// the exact missing-snapshot error, like direct and fresh.
+			postErr := issue3335xQueryErr(ctx, prep, "execute p_rr")
+			require.Error(t, postErr,
+				"after commit the same old handle must report the dropped snapshot")
+			require.Equal(t, 20101, issue3335xMysqlErrNo(t, postErr),
+				"after commit the old handle must fail with the exact missing-snapshot error")
+			reuseErr := issue3335xQueryErr(ctx, prep, "execute p_rr")
+			require.Error(t, reuseErr, "post-failure reuse must keep failing")
+			require.Equal(t, 20101, issue3335xMysqlErrNo(t, reuseErr),
+				"post-failure reuse must keep the exact missing-snapshot error")
+			directErr := issue3335xQueryErr(ctx, prep,
+				"show create table e3335x_rr.t2 {snapshot = 'e3335x_sp'}")
+			require.Error(t, directErr, "the direct control must report the dropped snapshot")
+			require.Equal(t, 20101, issue3335xMysqlErrNo(t, directErr),
+				"the direct control must fail with the exact missing-snapshot error")
+			_, freshPrepareErr := prep.ExecContext(ctx,
+				"prepare f_rr from 'SHOW CREATE TABLE e3335x_rr.t2 {snapshot = ''e3335x_sp''}'")
+			require.Error(t, freshPrepareErr, "a fresh PREPARE must fail on the dropped snapshot")
+			require.Equal(t, 20101, issue3335xMysqlErrNo(t, freshPrepareErr),
+				"a fresh PREPARE must fail with the exact missing-snapshot error")
+			issue3335xExec(t, ctx, prep, "set session transaction isolation level read committed")
+		})
+
 		t.Run("show_index_drop_recreate_qualified_target", func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
