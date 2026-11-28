@@ -139,6 +139,10 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 			"select c,count(c) from d group by c order by c",
 			"select x.id,x.c,y.v from d x left join (select sum(c) as v from d where id<0) y on true order by x.id",
 			"select x.id,x.c,y.v from d x left join (select sum(c) as v from d where id=3) y on true order by x.id",
+			// Exact plans must materialize SUBSTRING's constant bounds before
+			// GPU admission in both projections and grouped decimal aggregates.
+			"select t.n,substring(t.s from 1 for 2),d.a from t left join d on t.n=d.id order by t.n",
+			"select substring(t.s from 1 for 2) as prefix,count(*),sum(d.a),sum(d.b),sum(d.c) from t left join d on t.n=d.id group by prefix order by prefix",
 		} {
 			t.Run(statement, func(t *testing.T) {
 				names, values := readSiriusPublicRows(t, ctx, db, statement)
@@ -172,9 +176,16 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 			execSQLRequire(t, cleanup, db, "set session sql_mode='"+strings.ReplaceAll(original, "'", "''")+"'")
 		})
 		execSQLRequire(t, ctx, db, "set session sql_mode=''")
-		execSQLRequire(t, ctx, db, "create table date_input (id int not null primary key, v date)")
-		execSQLRequire(t, ctx, db, "insert into date_input values (1,'0001-01-01'),(2,'2000-02-29'),(3,'9999-12-31'),(4,NULL),(5,'0000-00-00')")
+		execSQLRequire(t, ctx, db, "create table date_input (id int not null primary key, v date, amount decimal(15,2))")
+		execSQLRequire(t, ctx, db, "insert into date_input values (1,'0001-01-01',1.25),(2,'2000-02-29',2.50),(3,'9999-12-31',-3.75),(4,NULL,4.00),(5,'0000-00-00',5.00)")
 		compare("select id,extract(year from v),extract(month from v),extract(day from v) from date_input order by id")
+		// A decimal column selects exact-plan import, which skips DuckDB's
+		// ordinary optimizer. The zero-date guard must still arrive on the GPU
+		// with a typed DATE constant, including in projections and group keys.
+		for _, unit := range []string{"year", "month", "day"} {
+			compare(fmt.Sprintf("select id,extract(%s from v),amount from date_input order by id", unit))
+			compare(fmt.Sprintf("select extract(%s from v) as component,sum(amount),count(*) from date_input group by component order by component", unit))
+		}
 		names, values := readSiriusPublicRows(t, ctx, db, "/*+ SIDECAR GPU */ select extract(year from v),extract(month from v),extract(day from v) from date_input where id=5")
 		require.Len(t, names, 3)
 		require.Equal(t, [][]sql.NullString{{{String: "0", Valid: true}, {String: "0", Valid: true}, {String: "0", Valid: true}}}, values)

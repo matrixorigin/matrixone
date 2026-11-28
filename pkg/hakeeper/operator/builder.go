@@ -43,6 +43,7 @@ type Builder struct {
 	desc    string
 	shardID uint64
 	epoch   uint64
+	target  string
 
 	// operation record
 	originPeers peersMap
@@ -60,6 +61,12 @@ type Builder struct {
 	toAddNonVoting, toRemoveNonVoting peersMap // pending tasks.
 
 	steps []OpStep // generated steps.
+}
+
+// WithTarget selects the retained voter that will execute membership changes.
+func (b *Builder) WithTarget(target string) *Builder {
+	b.target = target
+	return b
 }
 
 // NewBuilder creates a Builder.
@@ -227,6 +234,13 @@ func (b *Builder) prepareBuild() string {
 }
 
 func (b *Builder) selectRetainedVotingTarget() (string, error) {
+	if b.target != "" {
+		id, retained := b.targetPeers[b.target]
+		if original, exists := b.originPeers[b.target]; retained && exists && id == original {
+			return b.target, nil
+		}
+		return "", moerr.NewInternalErrorNoCtx("membership target is not a retained voting peer")
+	}
 	var targets []string
 	for target, replicaID := range b.targetPeers {
 		if originReplicaID, ok := b.originPeers[target]; ok && originReplicaID == replicaID {
