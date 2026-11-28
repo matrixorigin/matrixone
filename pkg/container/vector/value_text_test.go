@@ -63,7 +63,25 @@ func TestValueTextCoversTypeOps(t *testing.T) {
 			require.NotEmpty(t, lit, oid.String())
 		}
 
-		require.Equal(t, RowKey(vec, 0), RowKey(vec, 0), oid.String())
+		// Equal values give equal keys, from another vector and from a view;
+		// a value whose raw bytes differ gives a different key.
+		key := RowKey(vec, 0)
+		same := NewVec(typ, mp)
+		require.NoError(t, AppendRaw(same, vec.GetRawBytesAt(0), false, mp))
+		require.Equal(t, key, RowKey(same, 0), "%s: equal values, equal keys", oid)
+		require.Equal(t, key, RowKeyView(same, 0), "%s: a view key equals the stored key", oid)
+		other := append([]byte(nil), vec.GetRawBytesAt(0)...)
+		if typ.IsVarlen() {
+			other = append(other, 'x')
+		} else {
+			other[0] ^= 1
+		}
+		diff := NewVec(typ, mp)
+		require.NoError(t, AppendRaw(diff, other, false, mp))
+		require.NotEqual(t, key, RowKey(diff, 0), "%s: different values, different keys", oid)
+		same.Free(mp)
+		diff.Free(mp)
+
 		raw := RawFromValue(oid, val)
 		require.Equal(t, vec.GetRawBytesAt(0), raw, oid.String())
 		require.Equal(t, val, ValueFromRaw(oid, raw), oid.String())

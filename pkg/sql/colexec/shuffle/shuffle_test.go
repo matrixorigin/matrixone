@@ -1954,3 +1954,81 @@ func appendStringHashSels(ap *Shuffle, sels [][]int32, vec *vector.Vector, col [
 		partition.startMixed(len(col))
 	}
 }
+
+// TestHashShuffleAgreesAcrossVectorShapes routes the same values through a
+// plain vector, a vector that also holds a NULL, and one constant vector per
+// value. An equal key must reach the same bucket whatever the vector's shape,
+// or a DEDUP join sees its build and probe copies in different partitions.
+func TestHashShuffleAgreesAcrossVectorShapes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	const rows, bucketNum = 64, 16
+	cases := []struct {
+		typ   types.Type
+		value func(i int) any
+	}{
+		{types.T_int8.ToType(), func(i int) any { return int8(i) }},
+		{types.T_int64.ToType(), func(i int) any { return int64(i) * 7919 }},
+		{types.T_uint16.ToType(), func(i int) any { return uint16(i) }},
+		{types.New(types.T_decimal64, 18, 2), func(i int) any { return types.Decimal64(i * 100) }},
+		{types.New(types.T_decimal128, 38, 2), func(i int) any {
+			return types.Decimal128{B0_63: uint64(i) * 100, B64_127: uint64(i % 3)}
+		}},
+		{types.T_date.ToType(), func(i int) any { return types.Date(i) }},
+		{types.T_uuid.ToType(), func(i int) any {
+			var u types.Uuid
+			binary.LittleEndian.PutUint64(u[:8], uint64(i))
+			return u
+		}},
+		{types.T_varchar.ToType(), func(i int) any { return []byte(fmt.Sprintf("k%d", i)) }},
+	}
+	bucketsOf := func(t *testing.T, vec *vector.Vector) []uint64 {
+		arg := NewArgument()
+		arg.BucketNum = bucketNum
+		part := bucketSelections{sels: make([][]int32, bucketNum)}
+		if vec.HasNull() {
+			getShuffledSelsByHashWithNull(arg, vec, &part)
+		} else {
+			getShuffledSelsByHashWithoutNull(arg, vec, &part)
+		}
+		got := make([]uint64, vec.Length())
+		if !part.mixed {
+			for i := range got {
+				got[i] = part.first
+			}
+			return got
+		}
+		for b, sel := range part.sels {
+			for _, row := range sel {
+				got[row] = uint64(b)
+			}
+		}
+		return got
+	}
+	for _, tc := range cases {
+		t.Run(tc.typ.String(), func(t *testing.T) {
+			plain := vector.NewVec(tc.typ, mp)
+			nullable := vector.NewVec(tc.typ, mp)
+			defer plain.Free(mp)
+			defer nullable.Free(mp)
+			for i := 0; i < rows; i++ {
+				require.NoError(t, vector.AppendAny(plain, tc.value(i), false, mp))
+				require.NoError(t, vector.AppendAny(nullable, tc.value(i), false, mp))
+			}
+			require.NoError(t, vector.AppendAny(nullable, tc.value(0), true, mp))
+
+			want := bucketsOf(t, plain)
+			got := bucketsOf(t, nullable)
+			require.Equal(t, want, got[:rows], "nullable vector")
+			require.Equal(t, uint64(0), got[rows], "NULL row")
+
+			arg := NewArgument()
+			arg.BucketNum = bucketNum
+			for i := 0; i < rows; i++ {
+				c := vector.NewVec(tc.typ, mp)
+				require.NoError(t, vector.SetConstValue(c, vector.GetAny(plain, i, false), 1, mp))
+				require.Equal(t, want[i], shuffleConstVectorByHash(arg, c), "const vector row %d", i)
+				c.Free(mp)
+			}
+		})
+	}
+}

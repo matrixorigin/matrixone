@@ -465,6 +465,12 @@ func (zm ZM) getValue(buf []byte) any {
 		// cannot safely store 32-byte min/max payloads yet.
 		return nil
 	}
+	if oid == types.T_json {
+		// A varlena bound is a prefix of at most 30 bytes, adjusted upward for
+		// a max: for json that is not a complete encoded document, so it stays
+		// raw bytes rather than being decoded.
+		return buf
+	}
 	if !vector.SupportsAny(oid) {
 		panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
 	}

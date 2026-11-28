@@ -2907,3 +2907,61 @@ func TestGetColDataIntegerRoundingScope(t *testing.T) {
 		})
 	}
 }
+
+// TestGetColDataLoadCSVWideIntegerTruncatesExactly covers unquoted float-form
+// text for a BIGINT / BIGINT UNSIGNED column in a CSV LOAD, which truncates
+// toward zero. Past 2^53 a float64 cannot hold every integer, so the value is
+// converted exactly; the range is still checked before truncation.
+func TestGetColDataLoadCSVWideIntegerTruncatesExactly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		typ     types.T
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{typ: types.T_int64, value: "9007199254740991.0", want: "9007199254740991"},
+		{typ: types.T_int64, value: "9007199254740992.0", want: "9007199254740992"},
+		{typ: types.T_int64, value: "9007199254740993.7", want: "9007199254740993"},
+		{typ: types.T_int64, value: "-9007199254740993.7", want: "-9007199254740993"},
+		{typ: types.T_int64, value: "9.007199254740993e15", want: "9007199254740993"},
+		{typ: types.T_int64, value: "9223372036854775807.0", want: "9223372036854775807"},
+		{typ: types.T_int64, value: "-9223372036854775808.0", want: "-9223372036854775808"},
+		{typ: types.T_int64, value: "9223372036854775807.5", wantErr: true}, // above max before truncation
+		{typ: types.T_int64, value: "9223372036854775808.0", wantErr: true},
+		{typ: types.T_int64, value: "-9223372036854775808.1", wantErr: true},
+		{typ: types.T_int64, value: "1e20", wantErr: true},
+		{typ: types.T_int64, value: "1.9", want: "1"}, // below 2^53: the shared rule
+		{typ: types.T_uint64, value: "18446744073709551615.0", want: "18446744073709551615"},
+		{typ: types.T_uint64, value: "9007199254740993.2e0", want: "9007199254740993"},
+		{typ: types.T_uint64, value: "18446744073709551616.0", wantErr: true},
+		{typ: types.T_uint64, value: "-9007199254740993.0", wantErr: true},
+	} {
+		t.Run(tc.typ.String()+"_"+tc.value, func(t *testing.T) {
+			typ := tc.typ.ToType()
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
+			defer bat.Clean(proc.Mp())
+			param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background(),
+				Cols: []*plan.ColDef{{Name: "i", Typ: plan.Type{Id: int32(typ.Oid)}}},
+				Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.CSV},
+					ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)}}}, ExParam: ExParam{Fileparam: &ExFileparam{}}}
+			err := getColData(bat, []csvparser.Field{{Val: tc.value}}, 0, param, proc.Mp(),
+				plan.ExternAttr{ColName: "i", ColIndex: 0, ColFieldIndex: 0}, proc)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Zero(t, bat.Vecs[0].Length())
+				return
+			}
+			require.NoError(t, err)
+			var got string
+			if tc.typ == types.T_int64 {
+				got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0))
+			} else {
+				got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[uint64](bat.Vecs[0], 0))
+			}
+			require.Equal(t, tc.want, got)
+		})
+	}
+}

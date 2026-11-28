@@ -85,6 +85,9 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 		rowCount := bat.RowCount()
 		in_list = make([]string, 0, rowCount)
 		// The key type is the same on every row: decide how to quote it once.
+		// A timestamp is written in the session time zone: the generated SQL
+		// runs in this session, which casts the literal back with that zone.
+		loc := postDmlTimeZone(proc)
 		var quote, noBackslashEscapes bool
 		switch pkTyp.Oid {
 		case types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_uuid,
@@ -100,7 +103,7 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 			}
 		}
 		for i := 0; i < rowCount; i++ {
-			pkey, err := GetAnyAsString(pkvec, i)
+			pkey, err := GetAnyAsString(pkvec, i, loc)
 			if err != nil {
 				return err
 			}
@@ -174,10 +177,19 @@ func postDmlNoBackslashEscapes(proc *process.Process) bool {
 	return mysql.HasSQLMode(mode, "NO_BACKSLASH_ESCAPES")
 }
 
-func GetAnyAsString(vec *vector.Vector, i int) (string, error) {
+// postDmlTimeZone is the zone the session casts a timestamp literal with,
+// the same fallback the cast uses when the session sets none.
+func postDmlTimeZone(proc *process.Process) *time.Location {
+	if proc != nil && proc.GetSessionInfo().TimeZone != nil {
+		return proc.GetSessionInfo().TimeZone
+	}
+	return time.Local
+}
+
+// GetAnyAsString returns the text of row i; a timestamp is written in loc.
+func GetAnyAsString(vec *vector.Vector, i int, loc *time.Location) (string, error) {
 	if !vector.SupportsAny(vec.GetType().Oid) {
 		return "", moerr.NewInternalErrorNoCtx("GetAnyAsString: invalid type")
 	}
-	// a timestamp is written in UTC, the instant the generated SQL names
-	return string(types.AppendValueText(nil, *vec.GetType(), vector.GetAny(vec, i, false), time.UTC)), nil
+	return string(types.AppendValueText(nil, *vec.GetType(), vector.GetAny(vec, i, false), loc)), nil
 }

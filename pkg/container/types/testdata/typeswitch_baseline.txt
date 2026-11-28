@@ -188,7 +188,6 @@ pkg/sql/colexec/postdml/postdml.go	runPostDml	vector	1	T_array_bf16,T_array_floa
 pkg/sql/colexec/productl2/product_l2.go	build	vector	1	T_array_bf16,T_array_float16,T_array_float4,T_array_float8,T_array_int8,T_array_uint8
 pkg/sql/colexec/productl2/product_l2.go	newMat	vector	1	T_array_float32,T_array_float4,T_array_float8
 pkg/sql/colexec/runtimefilter/contract.go	CloseFloatSignedZero	float	1	T_bf16,T_float16,T_float4,T_float8
-pkg/sql/colexec/shuffle/shuffle.go	getShuffledSelsByHashWithoutNull	decimal	1	T_decimal256
 pkg/sql/colexec/table_function/filter_helper_gpu.go	filterColTypeFromOid	float	1	T_bf16,T_float16,T_float4,T_float8
 pkg/sql/colexec/table_function/generate_series.go	call	temporal	1	T_date,T_time,T_timestamp,T_year
 pkg/sql/colexec/table_function/generate_series.go	start	temporal	1	T_date,T_time,T_timestamp,T_year

@@ -741,6 +741,7 @@ func (shuffle *Shuffle) clearSels() [][]int32 {
 // shuffleConstVectorByHash returns the bucket of a constant key vector.
 func shuffleConstVectorByHash(ap *Shuffle, groupByVec *vector.Vector) uint64 {
 	lenRegs := uint64(ap.BucketNum)
+	// typeswitch:partial decimal256 has no numeric hash; it takes the raw-byte default in every vector shape
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
@@ -760,6 +761,12 @@ func shuffleConstVectorByHash(ap *Shuffle, groupByVec *vector.Vector) uint64 {
 	case types.T_uint16:
 		groupByCol := vector.MustFixedColNoTypeCheck[uint16](groupByVec)
 		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
+	case types.T_decimal64:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Decimal64](groupByVec)
+		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
+	case types.T_decimal128:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Decimal128](groupByVec)
+		return plan2.SimpleInt64HashToRange(decimal128Hash(groupByCol[0]), lenRegs)
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
@@ -778,6 +785,7 @@ func shuffleConstVectorByHash(ap *Shuffle, groupByVec *vector.Vector) uint64 {
 // getShuffledSelsByHashWithNull routes the rows of a key vector with NULLs.
 func getShuffledSelsByHashWithNull(ap *Shuffle, groupByVec *vector.Vector, partition *bucketSelections) {
 	lenRegs := uint64(ap.BucketNum)
+	// typeswitch:partial decimal256 has no numeric hash; it takes the raw-byte default in every vector shape
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
@@ -801,6 +809,60 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, groupByVec *vector.Vector, parti
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		appendStringHashBuckets(ap, partition, groupByVec, groupByCol, area, lenRegs, true)
+	case types.T_decimal64:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Decimal64](groupByVec)
+		partitionNullableIntegerHash(groupByCol, lenRegs, groupByVec, partition)
+	case types.T_decimal128:
+		groupByCol := vector.MustFixedColNoTypeCheck[types.Decimal128](groupByVec)
+		{
+			routingRows := len(groupByCol)
+			if routingRows > 0 {
+				var routedBucket uint64
+				{
+					row := 0
+					v := groupByCol[row]
+
+					var regIndex uint64 = 0
+					if !groupByVec.IsNull(uint64(row)) {
+						regIndex = plan2.SimpleInt64HashToRange(decimal128Hash(v), lenRegs)
+					}
+					routedBucket = regIndex
+
+				}
+				firstBucket := routedBucket
+				partition.first = firstBucket
+				row := 1
+				for ; row < routingRows; row++ {
+					v := groupByCol[row]
+
+					var regIndex uint64 = 0
+					if !groupByVec.IsNull(uint64(row)) {
+						regIndex = plan2.SimpleInt64HashToRange(decimal128Hash(v), lenRegs)
+					}
+					routedBucket = regIndex
+
+					if routedBucket != firstBucket {
+						break
+					}
+				}
+				if row < routingRows {
+					partition.startMixed(row)
+					sels := partition.sels
+					sels[routedBucket] = append(sels[routedBucket], int32(row))
+					for row++; row < routingRows; row++ {
+						v := groupByCol[row]
+
+						var regIndex uint64 = 0
+						if !groupByVec.IsNull(uint64(row)) {
+							regIndex = plan2.SimpleInt64HashToRange(decimal128Hash(v), lenRegs)
+						}
+						routedBucket = regIndex
+
+						sels[routedBucket] = append(sels[routedBucket], int32(row))
+					}
+				}
+			}
+		}
 	case types.T_uuid:
 		groupByCol := vector.MustFixedColNoTypeCheck[types.Uuid](groupByVec)
 		{
@@ -860,6 +922,7 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, groupByVec *vector.Vector, parti
 // getShuffledSelsByHashWithoutNull routes the rows of a key vector without NULLs.
 func getShuffledSelsByHashWithoutNull(ap *Shuffle, groupByVec *vector.Vector, partition *bucketSelections) {
 	bucketNum := uint64(ap.BucketNum)
+	// typeswitch:partial decimal256 has no numeric hash; it takes the raw-byte default in every vector shape
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		partitionIntegerHash(vector.MustFixedColNoTypeCheck[int64](groupByVec), bucketNum, partition)
@@ -891,7 +954,7 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, groupByVec *vector.Vector, pa
 					row := 0
 					v := groupByCol[row]
 
-					regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127), bucketNum)
+					regIndex := plan2.SimpleInt64HashToRange(decimal128Hash(v), bucketNum)
 					routedBucket = regIndex
 
 				}
@@ -901,7 +964,7 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, groupByVec *vector.Vector, pa
 				for ; row < routingRows; row++ {
 					v := groupByCol[row]
 
-					regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127), bucketNum)
+					regIndex := plan2.SimpleInt64HashToRange(decimal128Hash(v), bucketNum)
 					routedBucket = regIndex
 
 					if routedBucket != firstBucket {
@@ -915,7 +978,7 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, groupByVec *vector.Vector, pa
 					for row++; row < routingRows; row++ {
 						v := groupByCol[row]
 
-						regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127), bucketNum)
+						regIndex := plan2.SimpleInt64HashToRange(decimal128Hash(v), bucketNum)
 						routedBucket = regIndex
 
 						sels[routedBucket] = append(sels[routedBucket], int32(row))
@@ -1984,6 +2047,13 @@ func rangeShuffleVec(ap *Shuffle, partition *bucketSelections, vec *vector.Vecto
 
 // uuidHash reduces a UUID to one uint64 for bucket selection, the same
 // fold used for DECIMAL128 above. Bucketing only partitions rows.
+// decimal128Hash folds a DECIMAL128 to one uint64 for bucket selection. Every
+// vector shape (plain, nullable, constant) must route a value through it, or
+// equal keys land in different buckets.
+func decimal128Hash(v types.Decimal128) uint64 {
+	return v.B0_63 ^ v.B64_127
+}
+
 func uuidHash(v types.Uuid) uint64 {
 	return binary.LittleEndian.Uint64(v[0:8]) ^ binary.LittleEndian.Uint64(v[8:16])
 }

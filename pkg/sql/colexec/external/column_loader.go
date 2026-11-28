@@ -15,6 +15,8 @@
 package external
 
 import (
+	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +73,9 @@ type columnLoader struct {
 	// away from zero (unquoted external CSV, JSONLINE files); otherwise a
 	// quoted value must be a plain integer, and an unquoted one may be a float
 	roundInteger, unsigned bool
+	// wide: a 64-bit integer column, whose float-form text the shared rule
+	// cannot convert exactly past 2^53 (see truncateWideIntegerText)
+	wide bool
 	// keepParseErrors: a vector's parse errors say what is wrong with it
 	// (malformed, wrong dimension), so they are returned as they are
 	keepParseErrors bool
@@ -212,6 +217,7 @@ func newColumnLoader(key columnLoaderKey, param *ExternalParam) *columnLoader {
 		(key.format == tree.JSONLINE && (key.externType == int32(plan.ExternType_EXTERNAL_TB) ||
 			key.externType == int32(plan.ExternType_LOAD)))
 	l.unsigned = id.IsUnsignedInt()
+	l.wide = id == types.T_int64 || id == types.T_uint64
 	l.keepParseErrors = id.IsArray()
 
 	l.parsed, _ = vector.TextAppender(typ, opts)
@@ -396,8 +402,14 @@ func appendCSVJSONField(l *columnLoader, vec *vector.Vector, field csvparser.Fie
 func appendIntegerField(l *columnLoader, vec *vector.Vector, field csvparser.Field, param *ExternalParam, _ *process.Process, mp *mpool.MPool) error {
 	text := field.Val
 	if !field.HasStringQuote && !l.roundInteger {
-		// the shared rule as it is: the usual LOAD DATA case
-		return l.appendParsed(vec, text, text, false, param, mp)
+		// the shared rule, the usual LOAD DATA case; a wide column first
+		// truncates float-form text the rule would refuse for precision
+		if l.wide && !isIntegerText(text) {
+			if exact, ok := truncateWideIntegerText(text, l.unsigned); ok {
+				text = exact
+			}
+		}
+		return l.appendParsed(vec, text, field.Val, false, param, mp)
 	}
 	if !isIntegerText(text) {
 		if field.HasStringQuote {
@@ -413,6 +425,42 @@ func appendIntegerField(l *columnLoader, vec *vector.Vector, field csvparser.Fie
 	}
 	return l.appendParsed(vec, text, field.Val, field.HasStringQuote, param, mp)
 }
+
+// truncateWideIntegerText converts decimal or exponent text whose magnitude
+// is at least 2^53 to the integer text of its value truncated toward zero,
+// for an int64 (or, when unsigned, uint64) column. The shared rule converts
+// such text through float64, which cannot hold every integer past 2^53, so
+// it refuses it; this conversion is exact. As in the shared rule, the bounds
+// are checked before truncation. ok is false when text is below 2^53 (left
+// to the shared rule), not a number, or out of range; the caller then hands
+// the text to the shared rule, which reports it.
+func truncateWideIntegerText(text string, unsigned bool) (string, bool) {
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || math.Abs(f) < 0x1p53 {
+		return "", false
+	}
+	// |f| >= 2^53 bounds the value, so the exact value costs no more than the
+	// length of text to compute, however large its exponent.
+	r, ok := new(big.Rat).SetString(text)
+	if !ok {
+		return "", false
+	}
+	lo, hi := minInt64Rat, maxInt64Rat
+	if unsigned {
+		lo, hi = zeroRat, maxUint64Rat
+	}
+	if r.Cmp(lo) < 0 || r.Cmp(hi) > 0 {
+		return "", false
+	}
+	return new(big.Int).Quo(r.Num(), r.Denom()).String(), true
+}
+
+var (
+	zeroRat      = new(big.Rat)
+	minInt64Rat  = new(big.Rat).SetInt64(math.MinInt64)
+	maxInt64Rat  = new(big.Rat).SetInt64(math.MaxInt64)
+	maxUint64Rat = new(big.Rat).SetUint64(math.MaxUint64)
+)
 
 // isIntegerText reports whether s is an optionally signed decimal integer.
 func isIntegerText(s string) bool {
