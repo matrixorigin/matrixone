@@ -315,9 +315,9 @@ func (m *memThrottler) PrintUsage() {
 	)
 }
 
-// Acquire requires memory from memThrottler,
-// it returns (new available, true) if success, or
-// (available, false).
+// Acquire requires memory from memThrottler. Its returned availability is the
+// grantable admission budget; Merge's Available and Release still report raw
+// memory headroom before the aggregate safety margin.
 func (m *memThrottler) Acquire(ask int64) (int64, bool) {
 
 	m.Refresh()
@@ -338,6 +338,7 @@ func (m *memThrottler) Acquire(ask int64) (int64, bool) {
 			fmt.Sprintf("%s-Acquire", MemoryThrottlerLogHeader),
 			zap.String("err", "out of available"),
 			zap.String("ask", common.HumanReadableBytes(int(ask))),
+			zap.String("admission-available", common.HumanReadableBytes(int(left))),
 			zap.String("detail", m.String()),
 		)
 	}
@@ -447,7 +448,18 @@ func defaultAcquirePolicy(m *memThrottler, ask int64) (int64, bool) {
 // tryAcquire binds the availability check to the reservation committed by CAS.
 func (m *memThrottler) tryAcquire(ask, observed int64) (left int64, granted, retry bool) {
 	reserved := max(0, observed)
-	avail := m.availableForReserved(reserved)
+	var avail int64
+	if m.options.specializedForMerge {
+		// resourceAvailable keeps one third of the current TN headroom free
+		// when sizing an individual Merge task. Apply the same margin to
+		// the aggregate reservation at the final admission point, otherwise
+		// several tasks gathered against the same headroom can consume it all.
+		headroom := m.availableForReserved(0)
+		budget := headroom/3*2 + (headroom%3)*2/3
+		avail = max(0, budget-reserved)
+	} else {
+		avail = m.availableForReserved(reserved)
+	}
 	if !m.options.allowOutOfMemoryAcquire && avail < ask {
 		return avail, false, false
 	}

@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jonboulle/clockwork"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -38,6 +39,35 @@ import (
 type reservationProbeDecision struct {
 	ask     int64
 	granted bool
+}
+
+type observedRetryClock struct {
+	*fakeClock
+	resets chan retryTimerReset
+}
+
+func (c *observedRetryClock) NewTimer(d time.Duration) clockwork.Timer {
+	return &observedRetryTimer{Timer: c.fakeClock.NewTimer(d), clock: c.fakeClock, resets: c.resets}
+}
+
+type retryTimerReset struct {
+	at    time.Time
+	delay time.Duration
+}
+
+type observedRetryTimer struct {
+	clockwork.Timer
+	clock  *fakeClock
+	resets chan<- retryTimerReset
+}
+
+func (t *observedRetryTimer) Reset(d time.Duration) bool {
+	ok := t.Timer.Reset(d)
+	select {
+	case t.resets <- retryTimerReset{at: t.clock.Now(), delay: d}:
+	default:
+	}
+	return ok
 }
 
 type reservationProbeRSC struct {
@@ -295,9 +325,9 @@ func TestMergeReservationContinuesAfterDenial(t *testing.T) {
 	clock := newFakeClock()
 	rc := &reservationProbeRSC{limit: large * 3 / 2}
 	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 3)}
-	sched := NewMergeScheduler(time.Hour, &dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched := NewMergeScheduler(5*time.Second, &dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
 	sched.PatchTestRscController(rc)
-	trigger := NewMMsgTaskTrigger(table).WithAssignedTasks([]mergeTask{
+	trigger := NewMMsgTaskTrigger(table).WithByUser(true).WithAssignedTasks([]mergeTask{
 		{objs: table.stats[:3]}, {objs: table.stats[3:6]}, {objs: table.stats[6:]},
 	})
 	sched.handleTaskTrigger(nil, trigger)
@@ -322,6 +352,17 @@ func TestMergeReservationContinuesAfterDenial(t *testing.T) {
 	first.doneCB.OnExecDone(nil)
 	require.Zero(t, rc.held)
 	require.Equal(t, []int64{small, large}, rc.releases)
+
+	clock.Advance(5 * time.Second)
+	sched.doSched(nil, supp.todo)
+	require.Len(t, executor.tasks, 1, "already submitted candidates must not run again")
+	retried := <-executor.tasks
+	t.Cleanup(func() { retried.doneCB.OnExecDone(nil) })
+	require.Equal(t, table.stats[3:6], retried.objs)
+	require.Equal(t, large, rc.held)
+	retried.doneCB.OnExecDone(nil)
+	require.Zero(t, rc.held)
+	require.Empty(t, supp.triggers)
 }
 
 type inlineCompletionExecutor struct {
@@ -386,4 +427,799 @@ func TestMergeReservationInlineCompletion(t *testing.T) {
 	executor.tasks[0].doneCB.OnExecDone(nil)
 	require.Zero(t, rc.held)
 	require.Equal(t, []int64{size, size, size}, rc.releases)
+}
+
+// The simulated RSS and reservations let gathering and aggregate admission
+// see different available budgets without relying on the test host's memory.
+type manualMergeAdmissionProbe struct {
+	*testRscController
+	budget    int64
+	decisions chan reservationProbeDecision
+}
+
+func (r *manualMergeAdmissionProbe) Acquire(ask int64) (int64, bool) {
+	available := max(0, r.budget-r.reserved.Load())
+	granted := ask <= available
+	if granted {
+		r.reserved.Add(ask)
+		available -= ask
+	}
+	select {
+	case r.decisions <- reservationProbeDecision{ask: ask, granted: granted}:
+	default:
+	}
+	return available, granted
+}
+
+func TestManualMergeAfterReservationDenial(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		held    int64
+		expires bool
+	}{
+		{name: "budget_available"},
+		{name: "retry_after_release", held: 3 * common.Const1GBytes},
+		{name: "bounded_retry", held: 3 * common.Const1GBytes, expires: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := promotionTable(8904)
+			objs := []*objectio.ObjectStats{
+				newTestObjectStats(t, 1, 3, 300*common.Const1MBytes, 2, 1, nil, 0),
+				newTestObjectStats(t, 2, 4, 300*common.Const1MBytes, 2, 1, nil, 0),
+			}
+			const interval = 5 * time.Second
+			clock := newFakeClock()
+			rc := &manualMergeAdmissionProbe{
+				testRscController: newTestRscController(6 * common.Const1GBytes),
+				budget:            4 * common.Const1GBytes,
+				decisions:         make(chan reservationProbeDecision, 4),
+			}
+			rc.reserved.Store(tc.held)
+			estimate := int64(mergesort.EstimateMergeSizeWithBlockRows(
+				IterStats(objs), table.GetBlockMaxRows()))
+			require.True(t, resourceAvailable(estimate, rc), "both objects must pass gathering")
+			if tc.held != 0 {
+				require.Greater(t, estimate, rc.budget-tc.held, "final admission must deny the full task")
+			}
+
+			executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 2)}
+			sched := NewMergeScheduler(interval, &dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+			sched.PatchTestRscController(rc)
+			sched.Start()
+			t.Cleanup(sched.Stop)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			query := func() *QueryAnswer {
+				answer, err := sched.Query(ctx, table)
+				require.NoError(t, err)
+				return answer
+			}
+			sched.PauseTable(table)
+			require.False(t, query().AutoMergeOn)
+			require.NoError(t, sched.SendTrigger(NewMMsgTaskTrigger(table).WithByUser(true).
+				WithAssignedTasks(NewMergeTaskFromSpecObjects(objs, 1))))
+
+			select {
+			case decision := <-rc.decisions:
+				require.Equal(t, reservationProbeDecision{ask: estimate, granted: tc.held == 0}, decision)
+			case <-ctx.Done():
+				t.Fatal("manual merge did not reach admission")
+			}
+			if tc.held != 0 {
+				require.Zero(t, query().DataMergeCnt)
+				require.Empty(t, executor.tasks)
+				require.Equal(t, tc.held, rc.reserved.Load())
+				if tc.expires {
+					require.NotEmpty(t, query().Triggers, "denied manual work should remain visible")
+					clock.Advance(2 * time.Minute)
+					require.Eventually(t, func() bool {
+						answer, err := sched.Query(ctx, table)
+						return err == nil && answer.Triggers == ""
+					}, time.Second, time.Millisecond)
+					require.Empty(t, rc.decisions, "expired work must not attempt admission again")
+					require.Empty(t, executor.tasks)
+					require.Equal(t, tc.held, rc.reserved.Load())
+					return
+				}
+				rc.Release(tc.held)
+				clock.Advance(interval)
+				query()
+			}
+
+			select {
+			case task := <-executor.tasks:
+				require.Equal(t, objs, task.objs)
+				require.Equal(t, estimate, rc.reserved.Load())
+				task.doneCB.OnExecDone(nil)
+			case <-ctx.Done():
+				t.Fatal("queued manual merge was lost after reservation capacity returned")
+			}
+			clock.Advance(interval)
+			answer := query()
+			require.EqualValues(t, 1, answer.DataMergeCnt)
+			require.Zero(t, answer.PendingMergeCnt)
+			require.Empty(t, answer.Triggers)
+			require.Empty(t, executor.tasks)
+			require.Zero(t, rc.reserved.Load())
+		})
+	}
+}
+
+func TestManualMergeRetryWakesWhenBusyTaskCompletes(t *testing.T) {
+	for _, phase := range []string{"running", "restart", "stopped"} {
+		t.Run(phase, func(t *testing.T) {
+			runManualMergeRetryCompletion(t, phase)
+		})
+	}
+}
+
+func runManualMergeRetryCompletion(t *testing.T, completionPhase string) {
+	table := promotionTable(8905)
+	firstObjs := []*objectio.ObjectStats{
+		newTestObjectStats(t, 1, 2, 300*common.Const1MBytes, 2, 1, nil, 0),
+		newTestObjectStats(t, 2, 3, 300*common.Const1MBytes, 2, 1, nil, 0),
+	}
+	secondObjs := []*objectio.ObjectStats{
+		newTestObjectStats(t, 3, 4, 300*common.Const1MBytes, 2, 1, nil, 0),
+		newTestObjectStats(t, 4, 5, 300*common.Const1MBytes, 2, 1, nil, 0),
+	}
+	estimate := int64(mergesort.EstimateMergeSizeWithBlockRows(
+		IterStats(firstObjs), table.GetBlockMaxRows()))
+	rc := &manualMergeAdmissionProbe{
+		testRscController: newTestRscController(6 * common.Const1GBytes),
+		budget:            estimate,
+		decisions:         make(chan reservationProbeDecision, 4),
+	}
+	clock := newFakeClock()
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 2)}
+	sched := NewMergeScheduler(100*time.Second, &dummyCatalogSource{
+		initTables: []catalog.MergeTable{table},
+	}, executor, clock)
+	sched.PatchTestRscController(rc)
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	query := func() *QueryAnswer {
+		answer, err := sched.Query(ctx, table)
+		require.NoError(t, err)
+		return answer
+	}
+	sched.PauseTable(table)
+	require.False(t, query().AutoMergeOn)
+	tasks := append(NewMergeTaskFromSpecObjects(firstObjs, 1),
+		NewMergeTaskFromSpecObjects(secondObjs, 1)...)
+	require.NoError(t, sched.SendTrigger(NewMMsgTaskTrigger(table).
+		WithByUser(true).WithAssignedTasks(tasks)))
+	for _, granted := range []bool{true, false} {
+		select {
+		case decision := <-rc.decisions:
+			require.Equal(t, reservationProbeDecision{ask: estimate, granted: granted}, decision)
+		case <-ctx.Done():
+			t.Fatal("initial manual merge did not reach both admissions")
+		}
+	}
+	first := <-executor.tasks
+	t.Cleanup(func() { first.doneCB.OnExecDone(nil) })
+	require.Equal(t, firstObjs, first.objs)
+	require.NotEmpty(t, query().Triggers)
+
+	// The first retry fires while the table is busy. Keep the next check
+	// inside the manual retry window even if the completion wake is lost.
+	clock.Advance(15 * time.Second)
+	require.Eventually(t, func() bool {
+		due := query().NextCheckDue
+		return due > 0 && due <= 15*time.Second
+	}, time.Second, time.Millisecond)
+	switch completionPhase {
+	case "running":
+		clock.Advance(time.Second)
+		first.doneCB.OnExecDone(nil)
+	case "restart":
+		oldGeneration := sched.generation.Load()
+		sched.Stop()
+		sched.Start()
+		require.NotSame(t, oldGeneration, sched.generation.Load())
+		query() // wait until the new loop has rearmed retained retries
+		clock.Advance(time.Second)
+		first.doneCB.OnExecDone(nil)
+	case "stopped":
+		sched.Stop()
+		first.doneCB.OnExecDone(nil)
+		sched.Start()
+	}
+	select {
+	case second := <-executor.tasks:
+		t.Cleanup(func() { second.doneCB.OnExecDone(nil) })
+		require.Equal(t, secondObjs, second.objs)
+		second.doneCB.OnExecDone(nil)
+	case <-ctx.Done():
+		t.Fatal("completion did not wake the denied manual merge")
+	}
+	answer := query()
+	require.EqualValues(t, 2, answer.DataMergeCnt)
+	require.Zero(t, answer.PendingMergeCnt)
+	require.Empty(t, answer.Triggers)
+	require.Zero(t, rc.reserved.Load())
+}
+
+func TestManualMergeRetrySurvivesTablePause(t *testing.T) {
+	table := promotionTable(8906)
+	clock := newFakeClock()
+	rc := &reservationProbeRSC{limit: 100}
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	supp := sched.supps[table.ID()]
+	retry := NewMMsgTaskTrigger(table).WithByUser(true)
+	retry.retryUntil = clock.Now().Add(manualMergeRetryWindow)
+	retry.assigns = []mergeTask{{eSize: 40, note: "manual retry"}}
+	background := NewMMsgTaskTrigger(table).WithAssignedTasks([]mergeTask{{eSize: 1}})
+	supp.triggers = append(supp.triggers, retry, background)
+	sched.pq.Update(supp.todo, clock.Now().Add(5*time.Second))
+
+	sched.handleSwitch(MMsgSwitch{Table: table, On: false})
+	require.True(t, supp.paused)
+	require.Equal(t, 5*time.Second, supp.todo.readyAt.Sub(clock.Now()))
+	clock.Advance(5 * time.Second)
+	sched.doSched(nil, supp.todo)
+	require.Len(t, executor.tasks, 1)
+	task := <-executor.tasks
+	t.Cleanup(func() { task.doneCB.OnExecDone(nil) })
+	require.Equal(t, "manual retry", task.note)
+	require.Equal(t, int64(40), rc.held)
+	task.doneCB.OnExecDone(nil)
+	require.Zero(t, rc.held)
+	require.Empty(t, supp.triggers)
+
+	sched.handleSwitch(MMsgSwitch{Table: table, On: true})
+	sched.handleSwitch(MMsgSwitch{Table: table, On: false})
+	require.Equal(t, 24*time.Hour, supp.todo.readyAt.Sub(clock.Now()),
+		"a paused table without manual work retains the ordinary long delay")
+}
+
+func TestManualMergeRetriesAreFairAcrossRequests(t *testing.T) {
+	table := promotionTable(8907)
+	clock := newFakeClock()
+	rc := &reservationProbeRSC{limit: 60}
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 2)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	supp := sched.supps[table.ID()]
+	policy := NewMMsgTaskTrigger(table).WithExpire(clock.Now().Add(2 * time.Minute))
+	small := NewMMsgTaskTrigger(table).WithByUser(true)
+	small.retryUntil = clock.Now().Add(manualMergeRetryWindow)
+	small.assigns = []mergeTask{{eSize: 40, note: "earlier small request"}}
+	large := NewMMsgTaskTrigger(table).WithByUser(true)
+	large.retryUntil = small.retryUntil
+	large.assigns = []mergeTask{{eSize: 80, note: "later large request"}}
+	supp.triggers = []*MMsgTaskTrigger{policy, small, large}
+
+	sched.doSched(nil, supp.todo)
+	require.Equal(t, []reservationProbeDecision{
+		{ask: 80, granted: false}, {ask: 40, granted: true},
+	}, rc.decisions)
+	require.Equal(t, []*MMsgTaskTrigger{policy, large}, supp.triggers,
+		"both requests must receive an admission attempt in one pass")
+	require.Len(t, executor.tasks, 1)
+	first := <-executor.tasks
+	t.Cleanup(func() { first.doneCB.OnExecDone(nil) })
+	require.Equal(t, "earlier small request", first.note)
+	first.doneCB.OnExecDone(nil)
+	rc.limit = 100
+	clock.Advance(15 * time.Second)
+	sched.doSched(nil, supp.todo)
+	require.Len(t, executor.tasks, 1)
+	second := <-executor.tasks
+	t.Cleanup(func() { second.doneCB.OnExecDone(nil) })
+	require.Equal(t, "later large request", second.note)
+	second.doneCB.OnExecDone(nil)
+	require.Equal(t, []reservationProbeDecision{
+		{ask: 80, granted: false}, {ask: 40, granted: true}, {ask: 80, granted: true},
+	}, rc.decisions)
+	require.Same(t, policy, supp.triggers[0])
+	require.Zero(t, rc.held)
+}
+
+func TestOldMergeCompletionCannotWakeReplacementTable(t *testing.T) {
+	table := promotionTable(8908)
+	clock := newFakeClock()
+	sched := NewMergeScheduler(time.Hour,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}},
+		&delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}, clock)
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	oldSupporter := sched.supps[table.ID()]
+	sched.Stop()
+	// A table with the same ID can have a new supporter after the old one is
+	// removed. An old task still owns its reservation and completion callback.
+	oldSupporter.todo.table = &droppedMergeTable{MergeTable: table}
+	sched.doSched(nil, oldSupporter.todo)
+	replacement := promotionTable(table.ID())
+	sched.handleAddTable(replacement)
+	newSupporter := sched.supps[table.ID()]
+	require.NotSame(t, oldSupporter, newSupporter)
+	due := newSupporter.todo.readyAt
+	sched.Start()
+	sched.notifyReservationReleased()
+	_, err := sched.Query(context.Background(), replacement)
+	require.NoError(t, err) // message-queue barrier
+	require.Equal(t, due, newSupporter.todo.readyAt)
+}
+
+func TestManualMergeRetrySurvivesMetadataCommit(t *testing.T) {
+	table := promotionTable(8914)
+	clock := newFakeClock()
+	rc := &reservationProbeRSC{limit: 60}
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	supp := sched.supps[table.ID()]
+	retry := NewMMsgTaskTrigger(table).WithByUser(true)
+	retry.retryUntil = clock.Now().Add(manualMergeRetryWindow)
+	retry.assigns = []mergeTask{{eSize: 80, note: "retained after ALTER"}}
+	supp.triggers = append(supp.triggers, retry)
+	sched.pq.Update(supp.todo, clock.Now())
+
+	replacement := promotionTable(table.ID())
+	sched.handleAddTable(replacement)
+	require.Same(t, supp, sched.supps[table.ID()])
+	require.Equal(t, replacement, supp.todo.table)
+	require.Len(t, sched.pq, 1)
+	require.Same(t, retry, supp.triggers[0])
+
+	rc.limit = 100
+	clock.Advance(manualMergeRetryWindow)
+	sched.doSched(nil, supp.todo)
+	require.Len(t, executor.tasks, 1)
+	task := <-executor.tasks
+	t.Cleanup(func() { task.doneCB.OnExecDone(nil) })
+	require.Equal(t, "retained after ALTER", task.note)
+	task.doneCB.OnExecDone(nil)
+	require.Empty(t, supp.triggers)
+	require.Zero(t, rc.held)
+}
+
+func TestExpiredManualMergeRetryReleasesMetadataUnderMemoryPressure(t *testing.T) {
+	table := promotionTable(8915)
+	clock := &observedRetryClock{fakeClock: newFakeClock(), resets: make(chan retryTimerReset, 8)}
+	rc := newTestRscController(400 * common.Const1MBytes)
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	supp := sched.supps[table.ID()]
+	retry := NewMMsgTaskTrigger(table).WithByUser(true)
+	retry.retryUntil = clock.Now().Add(manualMergeRetryWindow)
+	retry.assigns = []mergeTask{{eSize: 40 * common.Const1MBytes, note: "expire under pressure"}}
+	supp.triggers = append(supp.triggers, retry)
+	sched.pq.Update(supp.todo, clock.Now())
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for {
+		select {
+		case reset := <-clock.resets:
+			if reset.delay <= 15*time.Second {
+				goto timerArmed
+			}
+		case <-ctx.Done():
+			t.Fatal("memory-pressure retry timer was not armed")
+		}
+	}
+timerArmed:
+	clock.Advance(manualMergeRetryWindow + time.Second)
+	for {
+		answer, err := sched.Query(ctx, table)
+		require.NoError(t, err)
+		if answer.Triggers == "" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("expired retry remained queued under memory pressure")
+		default:
+		}
+	}
+	sched.Stop()
+	require.Empty(t, supp.triggers)
+	require.Nil(t, retry.assigns)
+	require.Empty(t, executor.tasks)
+}
+
+func TestExpiredManualMergeRetryReleasesMetadataWhilePaused(t *testing.T) {
+	table := promotionTable(8917)
+	clock := &observedRetryClock{fakeClock: newFakeClock(), resets: make(chan retryTimerReset, 4)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}},
+		&delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}, clock)
+	sched.allPaused = true
+	supp := sched.supps[table.ID()]
+	retry := NewMMsgTaskTrigger(table).WithByUser(true)
+	retry.retryUntil = clock.Now().Add(manualMergeRetryWindow)
+	retry.assigns = []mergeTask{{eSize: 1, note: "expire while paused"}}
+	supp.triggers = append(supp.triggers, retry)
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	select {
+	case reset := <-clock.resets:
+		require.Equal(t, manualMergeRetryWindow, reset.delay)
+	case <-ctx.Done():
+		t.Fatal("paused scheduler did not arm the retry expiry")
+	}
+	clock.Advance(manualMergeRetryWindow)
+	for {
+		answer, err := sched.Query(ctx, table)
+		require.NoError(t, err)
+		if answer.Triggers == "" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("paused scheduler retained the expired retry")
+		default:
+		}
+	}
+	sched.Stop()
+	require.Empty(t, supp.triggers)
+	require.Nil(t, retry.assigns)
+}
+
+func TestManualMergeRetryChecksRecoveredHeadroomBeforeDeadline(t *testing.T) {
+	table := promotionTable(8916)
+	clock := &observedRetryClock{fakeClock: newFakeClock(), resets: make(chan retryTimerReset, 8)}
+	rc := &manualMergeAdmissionProbe{
+		testRscController: newTestRscController(2 * common.Const1GBytes),
+		budget:            700 * common.Const1MBytes,
+		decisions:         make(chan reservationProbeDecision, 2),
+	}
+	rc.reserved.Store(650 * common.Const1MBytes)
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	supp := sched.supps[table.ID()]
+	retry := NewMMsgTaskTrigger(table).WithByUser(true)
+	retry.retryUntil = clock.Now().Add(15 * time.Second)
+	retry.assigns = []mergeTask{{eSize: 80 * common.Const1MBytes, note: "headroom recovered"}}
+	supp.triggers = append(supp.triggers, retry)
+	sched.pq.Update(supp.todo, clock.Now())
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	select {
+	case decision := <-rc.decisions:
+		require.False(t, decision.granted)
+	case <-ctx.Done():
+		t.Fatal("initial retry admission did not run")
+	}
+	for {
+		select {
+		case reset := <-clock.resets:
+			if reset.delay == 14*time.Second {
+				goto finalCheckArmed
+			}
+		case <-ctx.Done():
+			t.Fatal("retry check was not scheduled before expiry")
+		}
+	}
+finalCheckArmed:
+	clock.Advance(time.Second)
+	rc.Release(650 * common.Const1MBytes) // no merge-completion notification
+	clock.Advance(13 * time.Second)
+	select {
+	case task := <-executor.tasks:
+		t.Cleanup(func() { task.doneCB.OnExecDone(nil) })
+		require.Equal(t, "headroom recovered", task.note)
+		task.doneCB.OnExecDone(nil)
+	case <-ctx.Done():
+		t.Fatal("recovered headroom was missed before the retry deadline")
+	}
+	require.Zero(t, rc.reserved.Load())
+}
+
+func TestManualMergeRetryRechecksAfterMemoryPressure(t *testing.T) {
+	table := promotionTable(8908)
+	clock := &observedRetryClock{fakeClock: newFakeClock(), resets: make(chan retryTimerReset, 8)}
+	rc := newTestRscController(400 * common.Const1MBytes)
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	supp := sched.supps[table.ID()]
+	retry := NewMMsgTaskTrigger(table).WithByUser(true)
+	retry.retryUntil = clock.Now().Add(manualMergeRetryWindow)
+	retry.assigns = []mergeTask{{eSize: 40 * common.Const1MBytes, note: "pressure retry"}}
+	supp.triggers = append(supp.triggers, retry)
+	sched.pq.Update(supp.todo, clock.Now())
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	answer, err := sched.Query(ctx, table)
+	require.NoError(t, err)
+	require.NotEmpty(t, answer.Triggers)
+	require.Empty(t, executor.tasks)
+	// The query reply can precede the next loop iteration. Wait until the
+	// low-memory branch has actually armed its retry timer.
+	for {
+		select {
+		case reset := <-clock.resets:
+			if reset.delay <= 15*time.Second {
+				goto retryArmed
+			}
+		case <-ctx.Done():
+			t.Fatal("low-memory retry timer was not armed")
+		}
+	}
+retryArmed:
+	rc.limit.Store(600 * common.Const1MBytes)
+	clock.Advance(15 * time.Second)
+	for {
+		select {
+		case task := <-executor.tasks:
+			t.Cleanup(func() { task.doneCB.OnExecDone(nil) })
+			require.Equal(t, "pressure retry", task.note)
+			task.doneCB.OnExecDone(nil)
+			goto retryCompleted
+		case reset := <-clock.resets:
+			if !reset.at.Before(clock.Now()) && reset.delay <= 15*time.Second {
+				clock.Advance(reset.delay)
+			}
+		case <-ctx.Done():
+			t.Fatal("low-memory gate did not recheck the queued manual retry")
+		}
+	}
+retryCompleted:
+	_, err = sched.Query(ctx, table)
+	require.NoError(t, err)
+	require.Zero(t, rc.reserved.Load())
+}
+
+func TestDeferredMergeWakesWhenAnotherTableReleasesMemory(t *testing.T) {
+	tableA := promotionTable(8909)
+	tableB := promotionTable(8910)
+	clock := newFakeClock()
+	objects := []*objectio.ObjectStats{
+		newTestObjectStats(t, 1, 2, 300*common.Const1MBytes, 2, 1, nil, 0),
+		newTestObjectStats(t, 2, 3, 300*common.Const1MBytes, 2, 1, nil, 0),
+	}
+	estimate := int64(mergesort.EstimateMergeSizeWithBlockRows(
+		IterStats(objects), tableB.GetBlockMaxRows()))
+	rc := &manualMergeAdmissionProbe{
+		testRscController: newTestRscController(6 * common.Const1GBytes),
+		budget:            estimate,
+		decisions:         make(chan reservationProbeDecision, 16),
+	}
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 2)}
+	sched := NewMergeScheduler(5*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{tableA, tableB}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	sched.handleTaskTrigger(nil, NewMMsgTaskTrigger(tableB).WithByUser(true).
+		WithAssignedTasks(NewMergeTaskFromSpecObjects(objects, 1)))
+	sched.doSched(nil, sched.supps[tableB.ID()].todo)
+	require.Len(t, executor.tasks, 1)
+	busy := <-executor.tasks
+	t.Cleanup(func() { busy.doneCB.OnExecDone(nil) })
+	require.Equal(t, estimate, rc.reserved.Load())
+
+	// Table A's already denied request has its final scheduled retry at 60s.
+	// Release B's reservation at 58s, after A's 55s check.
+	retry := NewMMsgTaskTrigger(tableA).WithByUser(true)
+	retry.retryUntil = clock.Now().Add(manualMergeRetryWindow)
+	retry.assigns = []mergeTask{{eSize: int(estimate), note: "other table retry"}}
+	suppA := sched.supps[tableA.ID()]
+	suppA.triggers = append(suppA.triggers, retry)
+	sched.pq.Update(suppA.todo, clock.Now())
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	query := func() *QueryAnswer {
+		answer, err := sched.Query(ctx, tableA)
+		require.NoError(t, err)
+		return answer
+	}
+	require.NotEmpty(t, query().Triggers)
+	for range 11 {
+		clock.Advance(5 * time.Second)
+		require.NotEmpty(t, query().Triggers)
+	}
+	require.Empty(t, executor.tasks)
+	clock.Advance(3 * time.Second)
+	busy.doneCB.OnExecDone(nil)
+	select {
+	case admitted := <-executor.tasks:
+		t.Cleanup(func() { admitted.doneCB.OnExecDone(nil) })
+		require.Equal(t, "other table retry", admitted.note)
+		admitted.doneCB.OnExecDone(nil)
+	case <-ctx.Done():
+		t.Fatal("another table's released reservation did not wake the retry before expiry")
+	}
+	require.Empty(t, query().Triggers)
+	require.Zero(t, rc.reserved.Load())
+}
+
+func TestVacuumAssignedTaskRetriedAfterAdmissionDenial(t *testing.T) {
+	table := promotionTable(8911)
+	clock := newFakeClock()
+	objects := []*objectio.ObjectStats{
+		newTestObjectStats(t, 1, 2, 300*common.Const1MBytes, 2, 1, nil, 0),
+	}
+	rc := &manualMergeAdmissionProbe{
+		testRscController: newTestRscController(6 * common.Const1GBytes),
+		decisions:         make(chan reservationProbeDecision, 2),
+	}
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	opts := NewVacuumOpts()
+	opts.HollowTopK = 2 // one candidate must not arm the ordinary vacuum recheck
+	opts.testInject = &vacuumTestInject{compactTask: []mergeTask{{
+		objs: objects, level: 1, note: "vacuum compact",
+	}}}
+	sched.ioVacuumCheck(newMergeSchedulerGeneration(), MMsgVacuumCheck{Table: table, opts: opts})
+	require.Len(t, sched.msgChan, 1)
+	msg := <-sched.msgChan
+	require.Equal(t, MMsgKindTrigger, msg.Kind)
+	trigger := msg.Value.(*MMsgTaskTrigger)
+	require.False(t, trigger.byUser)
+	require.Len(t, trigger.assigns, 1)
+	assignedNote := trigger.assigns[0].note
+	sched.handleTaskTrigger(nil, trigger)
+	supp := sched.supps[table.ID()]
+	sched.doSched(nil, supp.todo)
+	require.Len(t, rc.decisions, 1)
+	require.False(t, (<-rc.decisions).granted)
+	require.Empty(t, executor.tasks)
+	require.Len(t, supp.triggers, 1, "denied vacuum work must remain queued")
+	require.False(t, supp.triggers[0].byUser)
+	require.False(t, supp.triggers[0].retryUntil.IsZero())
+
+	rc.budget = 6 * common.Const1GBytes
+	clock.Advance(15 * time.Second)
+	sched.doSched(nil, supp.todo)
+	require.Len(t, executor.tasks, 1)
+	admitted := <-executor.tasks
+	t.Cleanup(func() { admitted.doneCB.OnExecDone(nil) })
+	require.Equal(t, assignedNote, admitted.note)
+	admitted.doneCB.OnExecDone(nil)
+	require.Empty(t, supp.triggers)
+	require.Zero(t, rc.reserved.Load())
+}
+
+func TestManualMergeRetryDrainsDeepQueue(t *testing.T) {
+	table := promotionTable(8912)
+	clock := newFakeClock()
+	rc := &manualMergeAdmissionProbe{
+		testRscController: newTestRscController(6 * common.Const1GBytes),
+		budget:            60,
+		decisions:         make(chan reservationProbeDecision, 4),
+	}
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	supp := sched.supps[table.ID()]
+	supp.paused = true
+	for i, size := range []int{40, 80, 80, 80} {
+		retry := NewMMsgTaskTrigger(table).WithByUser(true)
+		retry.retryUntil = clock.Now().Add(manualMergeRetryWindow)
+		retry.assigns = []mergeTask{{eSize: size, note: fmt.Sprintf("request %d", i)}}
+		supp.triggers = append(supp.triggers, retry)
+	}
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	answer, err := sched.Query(ctx, table) // main-loop barrier
+	require.NoError(t, err)
+	require.EqualValues(t, 1, answer.DataMergeCnt)
+	for _, want := range []reservationProbeDecision{
+		{ask: 80, granted: false},
+		{ask: 80, granted: false},
+		{ask: 80, granted: false},
+		{ask: 40, granted: true},
+	} {
+		select {
+		case got := <-rc.decisions:
+			require.Equal(t, want, got)
+		case <-ctx.Done():
+			t.Fatal("a queued manual request did not get an admission attempt")
+		}
+	}
+	select {
+	case task := <-executor.tasks:
+		t.Cleanup(func() { task.doneCB.OnExecDone(nil) })
+		require.Equal(t, "request 0", task.note)
+		task.doneCB.OnExecDone(nil)
+	case <-ctx.Done():
+		t.Fatal("the fitting request was not admitted before its retry deadline")
+	}
+}
+
+func TestDeferredMergeOwnsGatheredTasksAcrossTriggers(t *testing.T) {
+	table := promotionTable(8913)
+	clock := newFakeClock()
+	rc := &manualMergeAdmissionProbe{
+		testRscController: newTestRscController(6 * common.Const1GBytes),
+		decisions:         make(chan reservationProbeDecision, 2),
+	}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}},
+		&delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}, clock)
+	sched.PatchTestRscController(rc)
+	firstObjs := []*objectio.ObjectStats{
+		newTestObjectStats(t, 1, 2, 300*common.Const1MBytes, 2, 1, nil, 0),
+	}
+	secondObjs := []*objectio.ObjectStats{
+		newTestObjectStats(t, 3, 4, 300*common.Const1MBytes, 2, 1, nil, 0),
+	}
+	first := NewMMsgTaskTrigger(table).WithByUser(true).
+		WithAssignedTasks(NewMergeTaskFromSpecObjects(firstObjs, 1))
+	second := NewMMsgTaskTrigger(table).WithByUser(true).
+		WithAssignedTasks(NewMergeTaskFromSpecObjects(secondObjs, 1))
+	supp := sched.supps[table.ID()]
+	supp.triggers = []*MMsgTaskTrigger{first, second}
+	sched.doSched(nil, supp.todo)
+	require.Len(t, supp.triggers, 2)
+	require.Equal(t, firstObjs, supp.triggers[0].assigns[0].objs)
+	require.Equal(t, secondObjs, supp.triggers[1].assigns[0].objs)
+	require.Zero(t, rc.reserved.Load())
+}
+
+func TestQueuedOneShotWakesAfterEarlierTaskCompletes(t *testing.T) {
+	table := promotionTable(8914)
+	clock := newFakeClock()
+	firstObjs := []*objectio.ObjectStats{
+		newTestObjectStats(t, 1, 2, 300*common.Const1MBytes, 2, 1, nil, 0),
+	}
+	secondObjs := []*objectio.ObjectStats{
+		newTestObjectStats(t, 3, 4, 300*common.Const1MBytes, 2, 1, nil, 0),
+	}
+	estimate := int64(mergesort.EstimateMergeSizeWithBlockRows(
+		IterStats(firstObjs), table.GetBlockMaxRows()))
+	rc := &manualMergeAdmissionProbe{
+		testRscController: newTestRscController(6 * common.Const1GBytes),
+		budget:            estimate,
+		decisions:         make(chan reservationProbeDecision, 2),
+	}
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 2)}
+	sched := NewMergeScheduler(100*time.Second,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}}, executor, clock)
+	sched.PatchTestRscController(rc)
+	sched.supps[table.ID()].triggers = []*MMsgTaskTrigger{
+		NewMMsgTaskTrigger(table).WithByUser(true).
+			WithAssignedTasks(NewMergeTaskFromSpecObjects(firstObjs, 1)),
+		NewMMsgTaskTrigger(table).WithByUser(true).
+			WithAssignedTasks(NewMergeTaskFromSpecObjects(secondObjs, 1)),
+	}
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	answer, err := sched.Query(ctx, table)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, answer.DataMergeCnt)
+	first := <-executor.tasks
+	t.Cleanup(func() { first.doneCB.OnExecDone(nil) })
+	require.Equal(t, secondObjs, first.objs)
+	first.doneCB.OnExecDone(nil)
+	select {
+	case second := <-executor.tasks:
+		t.Cleanup(func() { second.doneCB.OnExecDone(nil) })
+		require.Equal(t, firstObjs, second.objs)
+		second.doneCB.OnExecDone(nil)
+	case <-ctx.Done():
+		t.Fatal("an earlier task's completion did not wake queued one-shot work")
+	}
+	require.Zero(t, rc.reserved.Load())
 }
