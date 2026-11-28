@@ -18,6 +18,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -46,6 +47,24 @@ func TestUsearchQuantizationNameToType(t *testing.T) {
 	require.Equal(t, Quantization_F64, UsearchQuantizationNameToType[Quantization_F64_Str])
 	require.Equal(t, Quantization_INT8, UsearchQuantizationNameToType[Quantization_INT8_Str])
 	require.Equal(t, Quantization_UINT8, UsearchQuantizationNameToType[Quantization_UINT8_Str])
+}
+
+func TestCuvsStorageQuantization(t *testing.T) {
+	for _, test := range []struct {
+		base types.T
+		name string
+		want QuantizationType
+	}{
+		{types.T_array_float32, "", Quantization_F32},
+		{types.T_array_float32, "float16", Quantization_F16},
+		{types.T_array_float16, "", Quantization_F16},
+		{types.T_array_float16, "float32", Quantization_F16},
+		{types.T_array_float16, "float16", Quantization_F16},
+		{types.T_array_float16, "int8", Quantization_INT8},
+		{types.T_array_float16, "uint8", Quantization_UINT8},
+	} {
+		require.Equal(t, test.want, CuvsStorageQuantization(test.base, test.name), "%s/%q", test.base, test.name)
+	}
 }
 
 func TestCuvsQuantizationNameToType(t *testing.T) {

@@ -31,6 +31,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/json"
 )
@@ -404,7 +405,8 @@ func newMockStorage(t *testing.T) (*mysqlTaskStorage, sqlmock.Sqlmock) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	return &mysqlTaskStorage{
-		db: db,
+		db:       db,
+		fencedDB: db,
 	}, mock
 }
 
@@ -506,20 +508,10 @@ func TestAddCdcTask(t *testing.T) {
 		newDaemonTaskRows(t, dt),
 	)
 
-	mock.ExpectExec(updateDaemonTask).WithArgs(
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-	).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(updateDaemonTaskState+" AND task_status IN (0)").
+		WithArgs(task.TaskStatus_Canceled, uint64(0)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	callback2 := func(ctx context.Context, ts task.TaskStatus, keyMap map[CDCTaskKey]struct{}, se SqlExecutor) (int, error) {
 		keyMap[CDCTaskKey{
@@ -543,6 +535,7 @@ func TestAddCdcTask(t *testing.T) {
 	mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(
 		newDaemonTaskRows(t, dt),
 	)
+	mock.ExpectRollback()
 
 	_, err = storage.UpdateCDCTask(
 		context.Background(),
@@ -734,7 +727,7 @@ func TestDaemonTaskInSqlMock(t *testing.T) {
 	assert.Equal(t, 1, update)
 
 	mock.ExpectBegin()
-	mock.ExpectExec(heartbeatDaemonTask).WithArgs(time.Time{}, 0).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(heartbeatDaemonTask).WithArgs(time.Time{}, 0, "").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	heartbeat, err := storage.HeartbeatDaemonTask(context.Background(), []task.DaemonTask{{
@@ -752,6 +745,44 @@ func TestNewMysqlTaskStorage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, store)
 	require.NoError(t, store.Close())
+}
+
+func TestTaskLeaseFencedDSN(t *testing.T) {
+	dsn := "user:password@tcp(localhost:3306)/mo_task?parseTime=true&disable_txn_trace=1&" + defines.TaskLeaseSnapshotSysVar + "=0"
+	fenced, err := taskLeaseFencedDSN(dsn)
+	require.NoError(t, err)
+	config, err := mysqlDriver.ParseDSN(fenced)
+	require.NoError(t, err)
+	require.Equal(t, "1", config.Params[defines.TaskLeaseSnapshotSysVar])
+	require.Equal(t, "1", config.Params["disable_txn_trace"])
+	require.True(t, config.ParseTime)
+	require.Equal(t, "mo_task", config.DBName)
+	original, err := mysqlDriver.ParseDSN(dsn)
+	require.NoError(t, err)
+	require.Equal(t, "0", original.Params[defines.TaskLeaseSnapshotSysVar])
+}
+
+func TestTaskLeaseFencedTxnDoesNotFallBack(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	storage.fencedDB = nil
+	_, err := storage.beginFencedTxn(context.Background())
+	require.ErrorContains(t, err, "task lease snapshot connection is unavailable")
+	require.NoError(t, mock.ExpectationsWereMet(), "the ordinary pool must not be used")
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func TestTaskStorageClosesBothPools(t *testing.T) {
+	ordinary, ordinaryMock, err := sqlmock.New()
+	require.NoError(t, err)
+	fenced, fencedMock, err := sqlmock.New()
+	require.NoError(t, err)
+	storage := &mysqlTaskStorage{db: ordinary, fencedDB: fenced}
+	ordinaryMock.ExpectClose()
+	fencedMock.ExpectClose()
+	require.NoError(t, storage.Close())
+	require.NoError(t, ordinaryMock.ExpectationsWereMet())
+	require.NoError(t, fencedMock.ExpectationsWereMet())
 }
 
 func TestDeleteAsyncTaskInSqlMock(t *testing.T) {
@@ -1518,6 +1549,7 @@ func TestUpdateDaemonTaskBranchesInSqlMock(t *testing.T) {
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
 	})
+
 }
 
 func TestRunUpdateDaemonTaskBranches(t *testing.T) {
@@ -1780,6 +1812,146 @@ func TestAddCDCTaskBranchesInSqlMock(t *testing.T) {
 	})
 }
 
+func TestClaimCDCRestartTransaction(t *testing.T) {
+	claimed := newCdcInfo(t)
+	claimed.ID = 7
+	claimed.TaskStatus = task.TaskStatus_Running
+	claimed.TaskRunner = "new-cn"
+	claimed.LastHeartbeat = time.Now()
+	claimed.LastRun, claimed.UpdateAt = claimed.LastHeartbeat, claimed.LastHeartbeat
+	staleBefore := time.Now().Add(-time.Minute)
+	commitErr := errors.New("commit acknowledgement lost")
+	for _, tc := range []struct {
+		name           string
+		catalogMatched int64
+		daemonMatched  int64
+		commitErr      error
+		wantClaim      bool
+	}{
+		{name: "committed", catalogMatched: 1, daemonMatched: 1, wantClaim: true},
+		{name: "catalog superseded", catalogMatched: 0},
+		{name: "owner superseded", catalogMatched: 1, daemonMatched: 0},
+		{name: "commit unknown", catalogMatched: 1, daemonMatched: 1, commitErr: commitErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storage, mock := newMockStorage(t)
+			mock.ExpectBegin()
+			mock.ExpectExec("update mo_catalog.mo_cdc_task set state=? where account_id=? and task_id=? and state in (?,?,?)").
+				WithArgs("restarting", claimed.AccountID, claimed.Metadata.ID, "failed", "restarting", "running").
+				WillReturnResult(sqlmock.NewResult(0, tc.catalogMatched))
+			if tc.catalogMatched == 1 {
+				mock.ExpectExec("update sys_daemon_task set task_status=?,task_runner=?,last_heartbeat=?,update_at=?,last_run=?,details=? where task_id=? and coalesce(task_runner,'')=? and task_status=? and task_metadata_id=? and task_metadata_executor=? and account_id=? and task_type=? and (last_heartbeat<=? or last_heartbeat is null)").
+					WithArgs(claimed.TaskStatus, claimed.TaskRunner, claimed.LastHeartbeat, claimed.UpdateAt, claimed.LastRun, sqlmock.AnyArg(),
+						claimed.ID, "old-cn", task.TaskStatus_RestartRequested, claimed.Metadata.ID, task.TaskCode_InitCdc,
+						claimed.AccountID, task.TaskType_CreateCdc.String(), staleBefore.Format("2006-01-02 15:04:05")).
+					WillReturnResult(sqlmock.NewResult(0, tc.daemonMatched))
+			}
+			if tc.catalogMatched != 1 || tc.daemonMatched != 1 {
+				mock.ExpectRollback()
+			} else if tc.commitErr != nil {
+				mock.ExpectCommit().WillReturnError(tc.commitErr)
+			} else {
+				mock.ExpectCommit()
+			}
+			ok, err := storage.ClaimCDCRestart(context.Background(), claimed, "old-cn", staleBefore)
+			require.Equal(t, tc.wantClaim, ok)
+			if tc.commitErr != nil {
+				require.ErrorIs(t, err, tc.commitErr)
+				var storeErr *CDCTaskStorageError
+				require.ErrorAs(t, err, &storeErr)
+				require.True(t, storeErr.CommitUnknown)
+			} else {
+				require.NoError(t, err)
+			}
+			mock.ExpectClose()
+			require.NoError(t, storage.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestUpdateOwnedCDCTaskTransaction(t *testing.T) {
+	owner := CDCTaskOwner{DaemonID: 7, Runner: "cn1", Status: task.TaskStatus_Running, Key: CDCTaskKey{TaskId: "cdc1"}}
+	for _, tc := range []struct {
+		name       string
+		matched    int64
+		catalogErr error
+		commitErr  error
+		wantErr    string
+	}{
+		{name: "commit", matched: 1},
+		{name: "lost owner", wantErr: "no longer has the expected owner"},
+		{name: "catalog error", catalogErr: errors.New("catalog failed"), wantErr: "catalog failed"},
+		{name: "unknown commit", matched: 1, commitErr: errors.New("commit failed"), wantErr: "commit failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storage, mock := newMockStorage(t)
+			mock.ExpectBegin()
+			if tc.catalogErr == nil {
+				mock.ExpectExec("update sys_daemon_task set task_status=? where task_id=? and task_runner=? and task_status=? and task_metadata_id=? and task_metadata_executor=? and account_id=? and task_type=?").
+					WithArgs(task.TaskStatus_Running, owner.DaemonID, owner.Runner, owner.Status,
+						owner.Key.TaskId, task.TaskCode_InitCdc, owner.Key.AccountId, task.TaskType_CreateCdc.String()).
+					WillReturnResult(sqlmock.NewResult(0, tc.matched))
+			}
+			if tc.catalogErr != nil || tc.matched != 1 {
+				mock.ExpectRollback()
+			} else if tc.commitErr != nil {
+				mock.ExpectCommit().WillReturnError(tc.commitErr)
+			} else {
+				mock.ExpectCommit()
+			}
+			err := storage.UpdateOwnedCDCTask(context.Background(), owner, CDCTaskTransition{Status: task.TaskStatus_Running},
+				func(context.Context, SqlExecutor) error { return tc.catalogErr })
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+			if tc.commitErr != nil {
+				require.ErrorIs(t, err, tc.commitErr)
+				var storeErr *CDCTaskStorageError
+				require.ErrorAs(t, err, &storeErr)
+				require.True(t, storeErr.CommitUnknown)
+			}
+			if tc.name == "lost owner" {
+				var ownerErr *CDCTaskOwnerMismatch
+				require.ErrorAs(t, err, &ownerErr)
+			}
+			mock.ExpectClose()
+			require.NoError(t, storage.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+	t.Run("panic rolls back", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectRollback()
+		require.PanicsWithValue(t, "mutation panic", func() {
+			_ = storage.UpdateOwnedCDCTask(context.Background(), owner, CDCTaskTransition{Status: task.TaskStatus_Running},
+				func(context.Context, SqlExecutor) error { panic("mutation panic") })
+		})
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	t.Run("rollback error preserves mutation cause", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mutationErr, rollbackErr := errors.New("mutation failed"), errors.New("rollback failed")
+		mock.ExpectBegin()
+		mock.ExpectRollback().WillReturnError(rollbackErr)
+		err := storage.UpdateOwnedCDCTask(context.Background(), owner, CDCTaskTransition{Status: task.TaskStatus_Running},
+			func(context.Context, SqlExecutor) error { return mutationErr })
+		require.ErrorIs(t, err, mutationErr)
+		require.ErrorIs(t, err, rollbackErr)
+		var storeErr *CDCTaskStorageError
+		require.ErrorAs(t, err, &storeErr)
+		require.False(t, storeErr.CommitUnknown)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
 func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 	ctx := context.Background()
 	base := newCdcInfo(t)
@@ -1806,15 +1978,36 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 
 	t.Run("collector rollback join error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
+		conflict := &mysqlDriver.MySQLError{Number: moerr.ErrTxnWWConflict, Message: "collector failed"}
+		rollbackErr := errors.New("rollback failed")
 		mock.ExpectBegin()
-		mock.ExpectRollback().WillReturnError(errors.New("rollback failed"))
+		mock.ExpectRollback().WillReturnError(rollbackErr)
 		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error) {
-			return 0, errors.New("collector failed")
+			return 0, conflict
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "collector failed")
+		require.ErrorIs(t, err, conflict)
+		require.ErrorIs(t, err, rollbackErr)
+		_, direct := err.(*mysqlDriver.MySQLError)
+		require.False(t, direct, "rollback failure must not be exposed as a bare conflict")
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
+	})
+
+	t.Run("collector panic after catalog write rolls back", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectExec("update mo_catalog.mo_cdc_task set state=1").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectRollback()
+		require.PanicsWithValue(t, "collector panic", func() {
+			_, _ = storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(ctx context.Context, _ task.TaskStatus, _ map[CDCTaskKey]struct{}, tx SqlExecutor) (int, error) {
+				_, err := tx.ExecContext(ctx, "update mo_catalog.mo_cdc_task set state=1")
+				require.NoError(t, err)
+				panic("collector panic")
+			})
+		})
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("empty task key map", func(t *testing.T) {
@@ -1899,7 +2092,9 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 
 		mock.ExpectBegin()
 		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, d))
-		mock.ExpectExec(updateDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(updateDaemonTaskState+" AND task_status IN (1)").
+			WithArgs(task.TaskStatus_PauseRequested, uint64(0)).
+			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_PauseRequested, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
 			keyMap[CDCTaskKey{
@@ -1910,6 +2105,41 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, 2, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("concurrent status change rolls back", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		d := base
+		d.TaskStatus = task.TaskStatus_Running
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, d))
+		mock.ExpectExec(updateDaemonTaskState+" AND task_status IN (1)").
+			WithArgs(task.TaskStatus_PauseRequested, uint64(0)).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectRollback()
+		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_PauseRequested, func(_ context.Context, _ task.TaskStatus, keys map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
+			keys[CDCTaskKey{AccountId: uint64(catalog.System_Account), TaskId: d.Metadata.ID}] = struct{}{}
+			return 1, nil
+		})
+		require.ErrorContains(t, err, "status changed concurrently")
+		require.Zero(t, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("commit failure is returned", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		commitErr := &mysqlDriver.MySQLError{Number: moerr.ErrTxnWWConflict, Message: "commit failed"}
+		mock.ExpectBegin()
+		mock.ExpectCommit().WillReturnError(commitErr)
+		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error) {
+			return 0, nil
+		})
+		require.ErrorIs(t, err, commitErr)
+		_, direct := err.(*mysqlDriver.MySQLError)
+		require.False(t, direct, "commit failure must retain its transaction boundary")
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
 	})

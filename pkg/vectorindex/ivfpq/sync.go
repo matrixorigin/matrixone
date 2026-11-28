@@ -265,7 +265,7 @@ func (s *IvfpqSync) Save(sqlproc *sqlexec.SqlProcess) error {
 		s.idxname, nRecords, nBytes, len(sqls), nextId)
 	s.pendingRecords = s.pendingRecords[:0]
 	s.pendingSizes = s.pendingSizes[:0]
-	veccache.Cache.Remove(s.tblcfg.IndexTable)
+	veccache.Cache.RemoveCuvs(s.tblcfg.IndexTable)
 	return nil
 }
 

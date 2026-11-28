@@ -18,9 +18,10 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/smartystreets/goconvey/convey"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 func TestEventSchedulerDefaultDisabled(t *testing.T) {
@@ -366,4 +367,16 @@ func TestRollbackTxnOnErrorVarDefinition(t *testing.T) {
 		_, err = sv.Type.Convert("sometimes")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
+}
+
+func TestTaskLeaseSnapshotSysVarIsSessionOnly(t *testing.T) {
+	sv, ok := gSysVarsDefs[defines.TaskLeaseSnapshotSysVar]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, sv.Scope)
+	assert.True(t, sv.Dynamic)
+	assert.False(t, sv.SetVarHintApplies)
+	assert.Equal(t, int8(0), sv.Default)
+	value, err := sv.Type.Convert("1")
+	assert.NoError(t, err)
+	assert.Equal(t, int8(1), value)
 }

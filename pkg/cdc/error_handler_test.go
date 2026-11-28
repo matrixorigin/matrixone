@@ -63,6 +63,9 @@ func TestCDCRetryErrorTransportEquivalence(t *testing.T) {
 		{"backend cannot connect", moerr.NewBackendCannotConnect(t.Context()), true},
 		{"TN shard not found", moerr.NewTNShardNotFound(t.Context(), "shard", 1), true},
 		{"RPC error", moerr.NewRpcError(t.Context(), "opaque"), true},
+		{"write conflict", moerr.NewTxnWriteConflict(t.Context(), "opaque"), true},
+		{"read-write conflict", moerr.NewTxnRWConflict(t.Context()), true},
+		{"write-write conflict", moerr.NewTxnWWConflict(t.Context(), 1, "opaque"), true},
 		{"client closed", moerr.NewClientClosed(t.Context()), false},
 		{"stream closed", moerr.NewStreamClosed(t.Context()), false},
 	} {

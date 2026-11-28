@@ -17,6 +17,7 @@ package iscp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +55,7 @@ const (
 
 type DataRetriever interface {
 	Next() (iscpData *ISCPData)
+	GuardSnapshot(ctx context.Context, cnUUID string, txn client.TxnOperator) error
 	UpdateWatermark(ctx context.Context, cnUUID string, txn client.TxnOperator) error
 	GetDataType() int8
 	GetAccountID() uint32
@@ -133,9 +135,9 @@ type InitWatermark struct {
 type ISCPTaskExecutor struct {
 	tables      *btree.BTreeG[*TableEntry]
 	tableMu     sync.RWMutex
-	packer      *types.Packer
 	mp          *mpool.MPool
 	cnUUID      string
+	taskID      uint64
 	txnEngine   engine.Engine
 	cnTxnClient client.TxnClient
 	// rootFS is the CN's root FileService (the one that resolves the LOCAL SSD
@@ -166,6 +168,11 @@ type ISCPTaskExecutor struct {
 
 	running   bool
 	runningMu sync.Mutex
+	// recoveryMu lets Pause interrupt recovery while recovery owns runningMu.
+	recoveryMu     sync.Mutex
+	recoveryCancel context.CancelFunc
+	pauseRequested bool
+	stopEpoch      uint64
 
 	runtimeMu        sync.Mutex
 	fencedJobs       map[JobRuntimeKey]JobFence
@@ -254,6 +261,15 @@ type ConsumerInfo struct {
 	Columns      []string
 	SrcTable     TableInfo
 	InitSQL      string
+	// Build from the source and index definitions in the guarded snapshot.
+	// InitSQL is for initializers that do not cover the source snapshot.
+	InitSQLCoversSnapshot bool `json:",omitempty"`
+	// Settings frozen by the DDL for the deferred build, in typed session metadata format.
+	SnapshotBuildVars json.RawMessage `json:",omitempty"`
+}
+
+func (info *ConsumerInfo) needsInitializer() bool {
+	return info.InitSQLCoversSnapshot || info.InitSQL != ""
 }
 
 type TableInfo struct {

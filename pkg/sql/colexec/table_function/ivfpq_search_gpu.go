@@ -38,6 +38,7 @@ import (
 )
 
 type ivfpqSearchState struct {
+	cacheKey  string
 	inited    bool
 	param     vectorindex.IvfpqParam
 	tblcfg    vectorindex.IndexTableConfig
@@ -193,18 +194,6 @@ func (u *ivfpqSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 			u.idxcfg.CuvsIvfpq.DistributionMode = uint16(vectorindex.DistributionMode_SINGLE_GPU)
 		}
 
-		// quantization
-		switch u.param.Quantization {
-		case metric.Quantization_F16_Str:
-			u.idxcfg.CuvsIvfpq.Quantization = uint16(metric.Quantization_F16)
-		case metric.Quantization_INT8_Str:
-			u.idxcfg.CuvsIvfpq.Quantization = uint16(metric.Quantization_INT8)
-		case metric.Quantization_UINT8_Str:
-			u.idxcfg.CuvsIvfpq.Quantization = uint16(metric.Quantization_UINT8)
-		default:
-			u.idxcfg.CuvsIvfpq.Quantization = uint16(metric.Quantization_F32)
-		}
-
 		// ---- IndexTableConfig ----
 		cfgVec := tf.ctr.argVecs[0]
 		if cfgVec.GetType().Oid != types.T_varchar {
@@ -239,13 +228,9 @@ func (u *ivfpqSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 			return moerr.NewInvalidInput(proc.Ctx, "query vector type does not match the index base column type")
 		}
 
-		// A vecf16 base with no QUANTIZATION stores natively as half: derive the
-		// storage qtype from the (f16) base type so newIvfpqAlgo dispatches
-		// NewIvfpqSearch[cuvs.Float16]. (vecf16 + QUANTIZATION keeps int8/uint8.)
-		if types.T(u.tblcfg.KeyPartType) == types.T_array_float16 &&
-			metric.QuantizationType(u.idxcfg.CuvsIvfpq.Quantization) == metric.Quantization_F32 {
-			u.idxcfg.CuvsIvfpq.Quantization = uint16(metric.Quantization_F16)
-		}
+		format := metric.CuvsStorageQuantization(types.T(u.tblcfg.KeyPartType), u.param.Quantization)
+		u.idxcfg.CuvsIvfpq.Quantization = uint16(format)
+		u.cacheKey = veccache.CuvsKey(u.tblcfg.IndexTable, format)
 
 		u.batch = tf.createResultBatch()
 		u.inited = true
@@ -314,7 +299,7 @@ func ivfpqRunSearchQuery(proc *process.Process, u *ivfpqSearchState, fa any) (er
 		FilterJSON:   u.predsJSON,
 	}
 	var keys any
-	keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, fa, rt)
+	keys, u.distances, err = veccache.Cache.SearchCuvs(sqlexec.NewSqlProcess(proc), u.cacheKey, algo, fa, rt)
 	if err != nil {
 		return err
 	}

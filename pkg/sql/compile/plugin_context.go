@@ -16,12 +16,15 @@ package compile
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 
 	// Blank-import the central plugin registration list so every
 	// vector-index plugin's init() fires whenever compile is loaded
@@ -151,9 +154,55 @@ func (p *pluginCompileCtx) SinkerTypeFromAlgo(algo string) int8 {
 	return getSinkerTypeFromAlgo(algo)
 }
 
+func (p *pluginCompileCtx) TxnOperator() client.TxnOperator {
+	return p.c.proc.GetTxnOperator()
+}
+
 func (p *pluginCompileCtx) CreateIndexCdcTask(dbName, tableName string, tableID uint64, indexName string,
 	sinkerType int8, startFromNow bool, sql string, tableDef *plan.TableDef) error {
+	if p.isCopyReplacement(dbName, tableName, tableID) {
+		// COPY's workspace rows commit after the DDL snapshot. Bootstrap the
+		// replacement from committed rows before consuming later changes.
+		startFromNow = false
+		for _, idx := range p.originalTableDef.Indexes {
+			if idx.IndexName == indexName {
+				if plugin, ok := indexplugin.Get(idx.IndexAlgo); ok {
+					if init, ok := plugin.Compile().(compileplugin.SourceSnapshotInitializer); ok {
+						return p.CreateIndexSnapshotCdcTask(indexName, sinkerType, false, init.SourceSnapshotBuildVars())
+					}
+				}
+				break
+			}
+		}
+	}
 	return CreateIndexCdcTask(p.c, dbName, tableName, tableID, indexName, sinkerType, startFromNow, sql, tableDef)
+}
+
+func (p *pluginCompileCtx) CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, builtInline bool, buildVars []string) error {
+	table := p.originalTableDef
+	if builtInline && !p.isCopyReplacement(p.qryDatabase, table.Name, table.TblId) {
+		// Workspace rows commit after the inline build's snapshot. A committed
+		// rebuild covers those rows and any later writes in the same transaction.
+		workspace, ok := p.c.proc.GetTxnOperator().GetWorkspace().(*disttae.Transaction)
+		if ok && !workspace.HasTableWrites(table.TblId) {
+			return CreateIndexCdcTask(p.c, p.qryDatabase, table.Name, table.TblId, indexName, sinkerType, true, "", table)
+		}
+	}
+	settings, err := compileplugin.CaptureVars(p.ResolveVariable, buildVars)
+	if err != nil {
+		return err
+	}
+	return createIndexCdcTask(p.c, p.qryDatabase, table.Name, table.TblId, indexName, sinkerType, false, "", true, settings, table)
+}
+
+func (p *pluginCompileCtx) isCopyReplacement(database, table string, id uint64) bool {
+	if p.scope == nil || p.originalTableDef == nil {
+		return false
+	}
+	alter := p.scope.Plan.GetDdl().GetAlterTable()
+	return alter != nil && alter.AlgorithmType == plan.AlterTable_COPY &&
+		database == p.qryDatabase && table == p.originalTableDef.Name &&
+		id != 0 && id == p.mainTableID && id == p.originalTableDef.TblId && id != alter.TableDef.GetTblId()
 }
 
 func (p *pluginCompileCtx) DropIndexCdcTask(tableDef *plan.TableDef, dbName, tableName, indexName string) error {

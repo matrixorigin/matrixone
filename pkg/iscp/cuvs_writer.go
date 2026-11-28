@@ -19,13 +19,15 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -145,11 +147,7 @@ func NewCuvsCdcWriter(algoName, dbName, tblName, indexName string,
 
 	// Resolve INCLUDE columns from indexAlgoParams. Returns zero
 	// values when no INCLUDE columns are configured.
-	bindings, colMetaJSON, ibpr, err := cuvscdc.ResolveIncludeColumns(
-		includedColumnsFromAlgoParams(idxdef.IndexAlgoParams),
-		tabledef.Name2ColIndex,
-		func(pos int32) int32 { return tabledef.Cols[pos].Typ.Id },
-	)
+	bindings, colMetaJSON, ibpr, err := cuvscdc.ResolveIndexIncludeColumns(tabledef, idxdef.IndexAlgoParams)
 	if err != nil {
 		return nil, err
 	}
@@ -158,24 +156,6 @@ func NewCuvsCdcWriter(algoName, dbName, tblName, indexName string,
 	w.includeBytesPer = ibpr
 
 	return w, nil
-}
-
-// includedColumnsFromAlgoParams extracts the comma-separated INCLUDE
-// column names from indexAlgoParams (key catalog.IncludedColumns).
-// Returns "" if absent or unparseable.
-func includedColumnsFromAlgoParams(indexAlgoParams string) string {
-	if indexAlgoParams == "" {
-		return ""
-	}
-	val, err := sonic.Get([]byte(indexAlgoParams), catalog.IncludedColumns)
-	if err != nil {
-		return ""
-	}
-	joined, err := val.StrictString()
-	if err != nil {
-		return ""
-	}
-	return joined
 }
 
 // Accessors used by per-algo Hooks.Run impls to build their algo's
@@ -338,7 +318,6 @@ type CuvsSyncFactory func(sqlproc *sqlexec.SqlProcess) (CuvsSync, error)
 // HNSW stays on RunHnsw[T] / VectorIndexCdc[T] — different sync
 // architecture (in-memory graph mutation, no event log).
 func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever, factory CuvsSyncFactory) {
-	datatype := r.GetDataType()
 
 	var sync CuvsSync
 	err := c.RunTxn(ctx, r, 30*time.Minute, func(sqlproc *sqlexec.SqlProcess) error {
@@ -386,14 +365,11 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 					if e := sync.Save(sqlproc); e != nil {
 						return e
 					}
-					if datatype == ISCPDataType_Tail {
-						if objectio.ISCPIndexWatermarkErrInjected() {
-							return injectedISCPIndexErr("watermark")
-						}
-						sqlctx := sqlproc.SqlCtx
-						return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
+					if objectio.ISCPIndexWatermarkErrInjected() {
+						return injectedISCPIndexErr("watermark")
 					}
-					return nil
+					sqlctx := sqlproc.SqlCtx
+					return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 				})
 				if err != nil {
 					reportIndexConsumerErr(errch, err)
@@ -413,4 +389,25 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 			}
 		}
 	}
+}
+
+var _ SourceSnapshotWriter = (*CuvsCdcWriter)(nil)
+
+func (w *CuvsCdcWriter) PrepareSourceSnapshot(proc *sqlexec.SqlProcess) (func() error, error) {
+	cfg := vectorindex.IndexTableConfig{DbName: w.dbName, SrcTable: w.tblName}
+	for _, idx := range w.indexdef {
+		switch idx.IndexAlgoTableType {
+		case catalog.Cagra_TblType_Storage, catalog.Ivfpq_TblType_Storage:
+			cfg.IndexTable = idx.IndexTableName
+		}
+	}
+	if cfg.IndexTable == "" {
+		return nil, moerr.NewInternalError(proc.GetContext(), "cuVS snapshot storage table is missing")
+	}
+	// A warmed clone can already have a model on this worker's GPU. Release
+	// it before allocating the replacement; publication invalidates again.
+	cache.Cache.RemoveCuvs(cfg.IndexTable)
+	return cuvscdc.PrepareSnapshotMarker(cfg, w.colMetaJSON, func(sql string) (executor.Result, error) {
+		return ExecWithResult(proc.GetContext(), sql, proc.SqlCtx.GetService(), proc.SqlCtx.Txn())
+	})
 }

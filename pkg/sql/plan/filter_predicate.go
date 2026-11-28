@@ -19,8 +19,10 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/bytedance/sonic"
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -77,18 +79,37 @@ func parseIncludedColumnsFromParams(indexAlgoParams string) ([]string, error) {
 	if indexAlgoParams == "" {
 		return nil, nil
 	}
-	val, err := sonic.Get([]byte(indexAlgoParams), catalog.IncludedColumns)
-	if err != nil {
-		val, err = sonic.Get([]byte(indexAlgoParams), "include_columns")
-		if err != nil {
-			return nil, nil
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(indexAlgoParams), &params); err != nil {
+		return nil, err
+	}
+	if params == nil {
+		return nil, moerr.NewInternalErrorNoCtx("index parameters must be an object")
+	}
+	var columns []string
+	found := false
+	for _, key := range []string{catalog.IncludedColumns, "include_columns"} {
+		raw, ok := params[key]
+		if !ok {
+			continue
 		}
+		var joined string
+		if string(raw) == "null" {
+			return nil, moerr.NewInternalErrorNoCtx("INCLUDE metadata must be a string")
+		}
+		if err := json.Unmarshal(raw, &joined); err != nil {
+			return nil, err
+		}
+		parsed, err := catalog.ParseIncludeColumnsValue(joined)
+		if err != nil {
+			return nil, err
+		}
+		if found && !slices.Equal(columns, parsed) {
+			return nil, moerr.NewInternalErrorNoCtx("conflicting INCLUDE metadata")
+		}
+		columns, found = parsed, true
 	}
-	joined, err := val.StrictString()
-	if err != nil || joined == "" {
-		return nil, nil
-	}
-	return catalog.ParseIncludeColumnsValue(joined)
+	return columns, nil
 }
 
 // filterJSONPred mirrors one entry of the predicate array (see file header

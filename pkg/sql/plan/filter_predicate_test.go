@@ -556,3 +556,10 @@ func TestParseIncludedColumnsFromParams(t *testing.T) {
 		})
 	}
 }
+
+func TestParseIncludedColumnsRejectsAmbiguousMetadata(t *testing.T) {
+	for _, params := range []string{`{`, `null`, `[]`, `{"included_columns":5}`, `{"included_columns":null}`, `{"included_columns":"price","include_columns":"other"}`} {
+		_, err := parseIncludedColumnsFromParams(params)
+		require.Error(t, err, params)
+	}
+}

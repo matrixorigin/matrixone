@@ -18,9 +18,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -755,6 +757,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	var addIndex []*plan.IndexDef
 	var dropIndexMap = make(map[string]bool)
 	var alterIndex *plan.IndexDef
+	indexVisibilityUpdates := make(map[string]bool)
+	indexParamUpdates := make(map[string]string)
 
 	reqs := make([]*api.AlterTableReq, 0)
 	did := rel.GetDBID(c.proc.Ctx)
@@ -966,6 +970,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					alterIndex = indexdef
 					alterIndex.Visible = tableAlterIndex.Visible
 					oTableDef.Indexes[i].Visible = tableAlterIndex.Visible
+					indexVisibilityUpdates[indexdef.IndexName] = tableAlterIndex.Visible
 					// update the index visibility in mo_catalog.mo_indexes.
 					// Escape the index name the same as the AUTO_UPDATE / REINDEX
 					// branches: it is user-supplied and a backticked identifier may
@@ -1030,6 +1035,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// 2. Update IndexDef and mo_catalog.mo_indexes.
 					alterIndex.IndexAlgoParams = newAlgoParams
 					oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+					indexParamUpdates[indexDef.IndexName] = newAlgoParams
 					// Escape the SQL string literals, same as the REINDEX branch
 					// below: algo_params is a JSON blob (JSON does not escape SQL
 					// quotes/backslashes) and the index name is user-supplied, so
@@ -1074,7 +1080,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			//in the beginning for pessimistic mode. We need to see how to reduce the critical section.
 			hasUpdateConstraints = true
 			tableAlterIndex := act.AlterReindex
+			forceSync := tableAlterIndex.ForceSync
 			constraintName := tableAlterIndex.IndexName
+			paramUpdate := compileplugin.ReindexParamUpdate{
+				Params: reindexSpecifiedParams(c.stmt, constraintName),
+				Merge:  tableAlterIndex.Merge,
+			}
 			multiTableIndexes := make(map[string]*MultiTableIndex)
 
 			for i, indexDef := range oTableDef.Indexes {
@@ -1085,29 +1096,18 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if !indexplugin.IsVectorIndexAlgo(indexAlgo) && !catalog.IsFullText2IndexAlgo(indexAlgo) {
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
-					// Each algorithm's plugin owns parameter-update
-					// semantics via Compile.ValidateReindexParams: it
-					// merges the build options it honors on a rebuild
-					// (e.g. IVF-FLAT's `lists`, HNSW's `m`/`ef_*`, CAGRA's
-					// graph degrees) into the algo params and rejects any
-					// other option it does not support. (quantization is left
-					// entirely to the vecf16 quantization work — reindexSpecified
-					// Params does not extract it, so reindex ignores it.) The
-					// REINDEX rule shares index_option_list with CREATE INDEX, so
-					// the specified options are read straight off the parse tree
-					// (c.stmt) here — no plan proto field is needed to carry them.
+					// The algorithm validates and merges the requested build options.
 					oldParams, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
 					if err != nil {
 						return err
 					}
 					p, _ := indexplugin.Get(indexAlgo)
-					newParamsMap, err := p.Compile().ValidateReindexParams(oldParams,
-						compileplugin.ReindexParamUpdate{
-							Params: reindexSpecifiedParams(c.stmt, constraintName),
-							Merge:  tableAlterIndex.Merge,
-						})
+					newParamsMap, err := p.Compile().ValidateReindexParams(oldParams, paramUpdate)
 					if err != nil {
 						return err
+					}
+					if publication, ok := p.Compile().(compileplugin.SynchronousReindex); ok {
+						forceSync = forceSync || publication.RequiresSyncReindex(oTableDef, indexDef, oldParams, newParamsMap)
 					}
 					// Preserve the captured session_vars (skipped by the flat
 					// parser above) across the param rewrite.
@@ -1122,6 +1122,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if newAlgoParams != alterIndex.IndexAlgoParams {
 						alterIndex.IndexAlgoParams = newAlgoParams
 						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+						indexParamUpdates[indexDef.IndexName] = newAlgoParams
 						// Escape the SQL string literals: algo_params can carry
 						// user-supplied option values and JSON encoding does not
 						// escape single quotes, so an unescaped value could break
@@ -1156,7 +1157,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if cctx == nil {
 						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
 					}
-					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync, tableAlterIndex.Merge)
+					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, forceSync, tableAlterIndex.Merge)
 				}
 
 				if err != nil {
@@ -1225,15 +1226,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			t.Indexes = remainingIndexes
 
 			t.Indexes = append(t.Indexes, addIndex...)
-			if alterIndex != nil {
-				for i, idx := range t.Indexes {
-					if alterIndex.IndexName == idx.IndexName {
-						t.Indexes[i].Visible = alterIndex.Visible
-						// NOTE: algo param is same for all the indexDefs of the same indexName.
-						// ie for IVFFLAT: meta, centroids, entries all have same algo params.
-						// so we don't need multiple `alterIndex`.
-						t.Indexes[i].IndexAlgoParams = alterIndex.IndexAlgoParams
-					}
+			for _, idx := range t.Indexes {
+				if visible, ok := indexVisibilityUpdates[idx.IndexName]; ok {
+					idx.Visible = visible
+				}
+				if params, ok := indexParamUpdates[idx.IndexName]; ok {
+					idx.IndexAlgoParams = params
 				}
 			}
 			newCt.Cts = append(newCt.Cts, t)
@@ -1307,13 +1305,22 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		}
 	}
 
-	// remove refChildTbls for drop foreign key clause
-	//remove the child table id -- tblId from the parent table -- fkTblId
+	// A parent tracks child tables, not individual foreign keys. Retain the
+	// child while any remaining key still refers to that parent.
+	removedParents := make(map[uint64]bool)
 	for _, fkTblId := range removeRefChildTbls {
+		if removedParents[fkTblId] || slices.ContainsFunc(newFkeys, func(fk *plan.ForeignKeyDef) bool {
+			return fk.ForeignTbl == fkTblId
+		}) {
+			continue
+		}
+		removedParents[fkTblId] = true
 		var fkRelation engine.Relation
+		childID := tblId
 		if fkTblId == 0 {
 			//fk self refer
 			fkRelation = rel
+			childID = 0
 		} else {
 			_, _, fkRelation, err = c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkTblId)
 			if err != nil {
@@ -1321,7 +1328,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			}
 		}
 
-		err = s.removeChildTblIdFromParentTable(c, fkRelation, tblId)
+		err = s.removeChildTblIdFromParentTable(c, fkRelation, childID)
 		if err != nil {
 			return err
 		}
@@ -4158,13 +4165,9 @@ func (s *Scope) TableClone(c *Compile) error {
 //     seed with `DELETE … WHERE TRUE` (a content delete that keeps the table
 //     and its id — NOT truncate, which re-creates the table);
 //  3. s.Run(c): clone the main table + index hidden tables (append onto empty);
-//  4. re-register each index's CDC startFromNow=true with a PLUGIN-PROVIDED
-//     InitSQL. For a vector index that InitSQL is `ALTER … REINDEX … FORCE_SYNC`,
-//     so the CDC's first iteration runs the reindex in its own post-commit txn —
-//     rebuilding the model from the committed cloned rows and re-arming the CDC
-//     at the post-clone watermark. Running it as InitSQL (not inline in this
-//     clone txn) is what avoids the SnapshotTS replay that double-counts the
-//     cloned rows.
+//  4. register each index's CDC. Full-source initializers rebuild the committed
+//     clone and publish its watermark together. Other plugins supply their
+//     own post-commit initialization or catch up from the source watermark.
 func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 	tableDef := clonePlan.GetCreateTable().GetDdl().GetCreateTable().GetTableDef()
 	if tableDef == nil {
@@ -4201,9 +4204,7 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		return err
 	}
 
-	// 4. group plugin indexes, then re-register each index's CDC startFromNow=true
-	//    with a plugin-provided InitSQL (vector: ALTER REINDEX … FORCE_SYNC;
-	//    fulltext: "" — none). tblId comes from CreateTable's tableDef.
+	// 4. Restore each logical index once, after the source clone commits.
 	multiTableIndexes := make(map[string]*MultiTableIndex)
 	for _, idx := range tableDef.GetIndexes() {
 		valid, err := checkValidIndexCdcByIndexdef(idx)
@@ -4231,6 +4232,13 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		if cctx == nil {
 			cctx = newPluginCompileCtx(s, c, tableDef.GetTblId(), nil, nil, dbName, tableDef, nil)
 		}
+		sinkerType := getSinkerTypeFromAlgo(mti.IndexAlgo)
+		if _, ok := p.Compile().(compileplugin.SourceSnapshotInitializer); ok {
+			if err := createIndexCdcTask(c, dbName, tblName, tableDef.GetTblId(), name, sinkerType, false, "", true, nil, tableDef); err != nil {
+				return err
+			}
+			continue
+		}
 		startFromNow, initSQL, err := p.Compile().RestoreInitSQL(cctx, mti.IndexDefs)
 		if err != nil {
 			return err
@@ -4242,7 +4250,7 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		}
 		logutil.Infof("[RestoreTable] re-register CDC index=%s startFromNow=%v initSQL=%q", name, startFromNow, initSQL)
 		if err := CreateIndexCdcTask(c, dbName, tblName, tableDef.GetTblId(), name,
-			getSinkerTypeFromAlgo(mti.IndexAlgo), startFromNow, initSQL, tableDef); err != nil {
+			sinkerType, startFromNow, initSQL, tableDef); err != nil {
 			return err
 		}
 	}
@@ -6017,10 +6025,18 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
-			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to connect to source, please check the connection, err: %v", err)
+		conn, connectErr := cdc.OpenDbConn(
+			ctx, opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
+		)
+		if connectErr != nil {
+			if errors.Is(connectErr, context.Canceled) || errors.Is(connectErr, context.DeadlineExceeded) {
+				err = connectErr
+				return
+			}
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to source, please check the connection, err: %v", connectErr)
+			return
+		}
+		if err = conn.Close(); err != nil {
 			return
 		}
 	}
@@ -6045,10 +6061,18 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
-			opts.SinkUriInfo.User, opts.SinkUriInfo.Password, opts.SinkUriInfo.Ip, opts.SinkUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", err)
+		conn, connectErr := cdc.OpenDbConn(
+			ctx, opts.SinkUriInfo.User, opts.SinkUriInfo.Password, opts.SinkUriInfo.Ip, opts.SinkUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
+		)
+		if connectErr != nil {
+			if errors.Is(connectErr, context.Canceled) || errors.Is(connectErr, context.DeadlineExceeded) {
+				err = connectErr
+				return
+			}
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", connectErr)
+			return
+		}
+		if err = conn.Close(); err != nil {
 			return
 		}
 	}

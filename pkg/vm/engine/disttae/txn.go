@@ -2680,6 +2680,20 @@ func (txn *Transaction) ForEachTableWrites(databaseId uint64, tableId uint64, of
 	}
 }
 
+// HasTableWrites reports whether the workspace has pending writes to a physical table.
+// Spilled data and tombstone files also have workspace entries. Deletes of
+// uncommitted block rows are covered by the entries that added those blocks.
+func (txn *Transaction) HasTableWrites(tableID uint64) bool {
+	txn.Lock()
+	defer txn.Unlock()
+	for _, entry := range txn.writes {
+		if entry.tableId == tableID && entry.bat != nil && !entry.bat.IsEmpty() {
+			return true
+		}
+	}
+	return false
+}
+
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
 // Before it gets the cached table, it checks whether the table is deleted by another
 // transaction by go through the delete tables slice, and advance its cachedIndex.

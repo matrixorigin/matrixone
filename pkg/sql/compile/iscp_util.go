@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -143,6 +144,10 @@ func isTableInCCPRImpl(c *Compile, tableid uint64) bool {
 
 // NOTE: CreateIndexCdcTask will create CDC task without any checking.  Original TableDef may be empty
 func CreateIndexCdcTask(c *Compile, dbname string, tablename string, tableid uint64, indexname string, sinker_type int8, startFromNow bool, sql string, tableDef *plan.TableDef) error {
+	return createIndexCdcTask(c, dbname, tablename, tableid, indexname, sinker_type, startFromNow, sql, false, nil, tableDef)
+}
+
+func createIndexCdcTask(c *Compile, dbname, tablename string, tableid uint64, indexname string, sinker_type int8, startFromNow bool, sql string, coversSnapshot bool, snapshotBuildVars json.RawMessage, tableDef *plan.TableDef) error {
 	var err error
 
 	// Skip ISCP task creation if table is from CCPR subscription (from_publication = true)
@@ -159,10 +164,12 @@ func CreateIndexCdcTask(c *Compile, dbname string, tablename string, tableid uin
 
 	spec := &iscp.JobSpec{
 		ConsumerInfo: iscp.ConsumerInfo{ConsumerType: sinker_type,
-			DBName:    dbname,
-			TableName: tablename,
-			IndexName: indexname,
-			InitSQL:   sql},
+			DBName:                dbname,
+			TableName:             tablename,
+			IndexName:             indexname,
+			InitSQL:               sql,
+			InitSQLCoversSnapshot: coversSnapshot,
+			SnapshotBuildVars:     snapshotBuildVars},
 	}
 	job := &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(indexname)}
 
@@ -172,6 +179,9 @@ func CreateIndexCdcTask(c *Compile, dbname string, tablename string, tableid uin
 		return err
 	}
 
+	if !ok && coversSnapshot {
+		return moerr.NewInternalErrorf(c.proc.Ctx, "source snapshot initializer for index %q was not registered", indexname)
+	}
 	if !ok {
 		// cdc task already exist. ignore it.  IVFFLAT alter reindex will call CreateIndexCdcTask multiple times.
 		logutil.Infof("index cdc task (%s, %s, %s) already exists", dbname, tablename, indexname)

@@ -16,6 +16,7 @@ package cuvs
 
 import (
 	"encoding/hex"
+	"errors"
 	"math"
 	"regexp"
 	"strings"
@@ -23,7 +24,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
@@ -231,4 +238,64 @@ func TestPeekColMetaJSON_NoHeader(t *testing.T) {
 	got, err := PeekColMetaJSON([]EventChunk{{ChunkId: 0, Data: framed}})
 	require.NoError(t, err)
 	require.Equal(t, "", got)
+}
+
+func TestReindexChangesStorageType(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		columnType types.T
+		newFormat  string
+		change     bool
+	}{
+		{"vecf32 changes representation", types.T_array_float32, "float16", true},
+		{"vecf16 keeps representation", types.T_array_float16, "float16", false},
+		{"vecf16 changes representation", types.T_array_float16, "int8", true},
+		{"explicit same format", types.T_array_float32, "float32", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := &plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.columnType)}}}}
+			index := &plan.IndexDef{Parts: []string{"V"}}
+			require.Equal(t, tc.change, ReindexChangesStorageType(table, index, "float32", tc.newFormat))
+		})
+	}
+}
+
+func TestReplaceSnapshotPreservesTailGeneration(t *testing.T) {
+	cfg := smallTailTblcfg()
+	old := int64(8)
+	buildErr := errors.New("build failed")
+	for _, failBuild := range []bool{false, true} {
+		mp := mpool.MustNewZero()
+		next := old
+		var calls []string
+		runSQL := func(sql string) (executor.Result, error) {
+			calls = append(calls, sql)
+			switch sql {
+			case NextChunkIdSql(cfg, vectorindex.CdcTailId, vectorindex.Tag_CdcEvents):
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], next, false, mp))
+				bat.SetRowCount(1)
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
+			case "clear":
+				next = 0
+			case "build":
+				if failBuild {
+					return executor.Result{}, buildErr
+				}
+				next = 1
+			}
+			return executor.Result{}, nil
+		}
+		storage := &plan.IndexDef{IndexTableName: cfg.IndexTable}
+		err := ReplaceSnapshot(cfg.DbName, &plan.TableDef{}, storage, []string{"clear", "build"}, runSQL)
+		if failBuild {
+			require.ErrorIs(t, err, buildErr)
+			require.Len(t, calls, 3)
+			continue
+		}
+		require.NoError(t, err)
+		require.Len(t, calls, 5)
+		require.Contains(t, calls[4], "'"+vectorindex.CdcTailId+"',8,unhex(")
+	}
 }

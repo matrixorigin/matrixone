@@ -929,7 +929,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -956,6 +956,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			t.Context(),
 			sinkUri,
 			1,
 			"task-1",
@@ -980,7 +981,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1008,6 +1009,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			t.Context(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1029,7 +1031,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 	})
 
 	t.Run("NewExecutorFails", func(t *testing.T) {
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return nil, moerr.NewInternalErrorNoCtx("connection failed")
 		})
 		defer stub.Reset()
@@ -1048,6 +1050,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			t.Context(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1071,7 +1074,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1092,6 +1095,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			t.Context(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1116,7 +1120,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1138,6 +1142,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			t.Context(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1162,7 +1167,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1186,6 +1191,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			t.Context(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1210,7 +1216,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1233,6 +1239,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			t.Context(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1257,7 +1264,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1290,6 +1297,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			t.Context(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1313,7 +1321,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1346,6 +1354,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			t.Context(),
 			sinkUri,
 			1,
 			"task-1",
@@ -1376,7 +1385,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
 
-			stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 				return db, nil
 			})
 			defer stub.Reset()
@@ -1402,6 +1411,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 			}
 
 			sinker, err := CreateMysqlSinker2(
+				t.Context(),
 				sinkUri,
 				uint64(i),
 				fmt.Sprintf("task-%d", i),
@@ -1436,7 +1446,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 			return db, nil
 		})
 		defer stub.Reset()
@@ -1459,6 +1469,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		}
 
 		sinker, err := CreateMysqlSinker2(
+			t.Context(),
 			sinkUri,
 			1,
 			"task-1",

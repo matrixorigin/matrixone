@@ -323,7 +323,7 @@ func (s *CagraSync) Save(sqlproc *sqlexec.SqlProcess) error {
 
 	// search-side caches load (tag=0+tag=1) at fault time, keyed by
 	// index_id; bump the cache so the next search reloads the new events.
-	veccache.Cache.Remove(s.tblcfg.IndexTable)
+	veccache.Cache.RemoveCuvs(s.tblcfg.IndexTable)
 	return nil
 }
 

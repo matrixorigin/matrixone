@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -146,76 +147,24 @@ func (w *worker) Submit(iteration *IterationContext) error {
 }
 
 func (w *worker) onItem(iterCtx *IterationContext) {
-	iterCtx = w.exec.filterFencedIteration(iterCtx)
-	if iterCtx == nil {
+	var recovery error
+	err := retry(w.ctx, func() error {
+		err := ExecuteIterationWithRuntime(w.ctx, w.exec, w.cnUUID, w.cnEngine, w.cnTxnClient, iterCtx, w.mp)
+		if errors.Is(err, errIterationNeedsRecovery) {
+			recovery = err
+			return nil
+		}
+		return err
+	}, SubmitRetryTimes, DefaultRetryInterval, SubmitRetryDuration)
+	if recovery != nil {
+		err = recovery
+	}
+	if err == nil || w.ctx.Err() != nil {
 		return
 	}
-	err := retry(
-		w.ctx,
-		func() error {
-			err := ExecuteIterationWithRuntime(
-				w.ctx,
-				w.exec,
-				w.cnUUID,
-				w.cnEngine,
-				w.cnTxnClient,
-				iterCtx,
-				w.mp,
-			)
-			if err != nil {
-				logutil.Error(
-					"ISCP-Task execute iteration failed",
-					zap.Uint64("tableID", iterCtx.tableID),
-					zap.Any("iterCtx", iterCtx.jobNames),
-					zap.Error(err),
-				)
-			}
-			return err
-		},
-		SubmitRetryTimes,
-		DefaultRetryInterval,
-		SubmitRetryDuration,
-	)
-	if err != nil {
-		statuses := make([]*JobStatus, len(iterCtx.jobNames))
-		for i := range statuses {
-			statuses[i] = &JobStatus{
-				ErrorMsg: err.Error(),
-			}
-		}
-		preLSN := make([]uint64, len(iterCtx.lsn))
-		for i := range iterCtx.lsn {
-			preLSN[i] = iterCtx.lsn[i] - 1
-		}
-		err = retry(
-			w.ctx,
-			func() error {
-				return FlushJobStatusOnIterationState(
-					w.ctx,
-					w.cnUUID,
-					w.cnEngine,
-					w.cnTxnClient,
-					iterCtx.accountID,
-					iterCtx.tableID,
-					iterCtx.jobNames,
-					iterCtx.jobIDs,
-					iterCtx.lsn,
-					statuses,
-					iterCtx.fromTS,
-					ISCPJobState_Completed,
-					preLSN,
-				)
-			},
-			SubmitRetryTimes,
-			DefaultRetryInterval,
-			SubmitRetryDuration,
-		)
-		if err != nil {
-			logutil.Error(
-				"ISCP-Task workerflush job status failed",
-				zap.Error(err),
-			)
-		}
+	logutil.Error("ISCP-Task worker cannot establish iteration ownership", zap.Error(err))
+	if w.exec != nil {
+		go w.exec.abandonWorker(w)
 	}
 }
 

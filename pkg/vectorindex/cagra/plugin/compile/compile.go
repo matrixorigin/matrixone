@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	cagraruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 )
 
 // insertIntoCagraIndexTableFormat is the SQL template used to populate the
@@ -55,6 +56,8 @@ var _ compileplugin.Hooks = Hooks{}
 // Hooks implements plugin/compile.Hooks for CAGRA.
 type Hooks struct{}
 
+const threadsBuildVar = "cagra_threads_build"
+
 // HandleCreateIndex is lifted from Scope.handleVectorCagraIndex
 // (pkg/sql/compile/ddl_index_algo.go:732).
 //
@@ -62,46 +65,37 @@ type Hooks struct{}
 // IndexAlgoParam (catalog.IndexParamAsync). Default (key missing or
 // "false"): forceSync=true — cagra_create runs inline in the user's
 // CREATE INDEX txn before the CDC task is registered. Explicit
-// async="true": forceSync=false — the build SQL is stashed as
-// ConsumerInfo.InitSQL and runs at the first CDC iteration.
+// async="true": forceSync=false — the first CDC iteration builds the model.
 func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
 	metaDef, ok := indexDefs[catalog.Cagra_TblType_Metadata]
 	if !ok || metaDef == nil {
-		return h.handleCreate(ctx, indexDefs, true)
+		return h.handleCreate(ctx, indexDefs, true, false)
 	}
 	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
-	return h.handleCreate(ctx, indexDefs, !async)
+	return h.handleCreate(ctx, indexDefs, !async, false)
 }
 
-// HandleReindex runs the same code path as create, but honors
-// forceSync. The idxcron background reindex executor passes
-// forceSync=true so the build happens synchronously inside the txn
-// before the CDC task picks up forward changes. Mirrors IVF-FLAT.
+// HandleReindex uses the shared build path. An inline rebuild publishes the
+// replacement model before handing off forward changes to CDC.
 func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool, _ bool) error {
-	return h.handleCreate(ctx, indexDefs, forceSync)
+	return h.handleCreate(ctx, indexDefs, forceSync, true)
 }
 
-// RestoreInitSQL returns the CDC InitSQL that rebuilds the CAGRA index from the
-// cloned rows during restore — run post-commit by the CDC's first iteration
-// (ProcessInitSQL), so it sees the committed clone and re-arms the CDC at the
-// post-clone watermark. See Scope.RestoreTable.
-func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
-	metaDef, ok := indexDefs[catalog.Cagra_TblType_Metadata]
-	if !ok {
-		return false, "", moerr.NewInternalErrorNoCtx("cagra_meta index definition not found")
-	}
-	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` cagra FORCE_SYNC",
-		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+func (Hooks) RequiresSyncReindex(table *plan.TableDef, index *plan.IndexDef, oldParams, newParams map[string]string) bool {
+	return cuvscdc.ReindexChangesStorageType(table, index, oldParams[catalog.Quantization], newParams[catalog.Quantization])
 }
 
-// handleCreate is the shared body for HandleCreateIndex and
-// HandleReindex. forceSync controls whether cagra_create runs inside
-// the current txn (true — background reindex) or is deferred to the
-// CDC pipeline via InitSQL (false — the always-async default path).
-func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+// RestoreInitSQL is bypassed for full-source initializers.
+func (Hooks) RestoreInitSQL(compileplugin.CompileContext, map[string]*plan.IndexDef) (bool, string, error) {
+	return false, "", nil
+}
+
+// handleCreate runs the build in the current transaction if forceSync is set.
+// Otherwise ISCP builds it from a committed snapshot.
+func (h Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync, reindex bool) error {
 	logutil.Infof("[plugin] cagra handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// Gate the experimental flag check on frontend context only. The
 	// flag was enforced at the original CREATE INDEX time; re-entry
@@ -148,62 +142,56 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return nil
 	}
 
-	cache.Cache.Remove(storageDef.IndexTableName)
-
-	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
-	if err != nil {
-		return err
-	}
-	for _, sql := range sqls {
-		if err = ctx.RunSql(sql); err != nil {
+	if forceSync {
+		cache.Cache.RemoveCuvs(storageDef.IndexTableName)
+		statements, err := h.SourceSnapshotInitSQL(ctx, indexDefs)
+		if err != nil {
 			return err
 		}
+		if reindex {
+			if err := cuvscdc.ReplaceSnapshot(ctx.QryDatabase(), originalTableDef, storageDef, statements, ctx.RunSqlWithResult); err != nil {
+				return err
+			}
+		} else {
+			for _, sql := range statements {
+				if err := ctx.RunSql(sql); err != nil {
+					return err
+				}
+			}
+		}
 	}
-
-	buildSqls, err := genBuildSQL(ctx, indexDefs)
-	if err != nil {
+	db := ctx.QryDatabase()
+	if err := ctx.DropIndexCdcTask(originalTableDef, db, originalTableDef.Name, metaDef.IndexName); err != nil {
 		return err
 	}
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexCagraAlgo.ToString())
-	indexName := metaDef.IndexName
-
-	if forceSync {
-		// Background reindex: build cagra_create synchronously inside
-		// the current txn so the new tag=0 model lands before
-		// subsequent steps observe the index. Then re-register the
-		// CDC task with startFromNow=true (CDC catches only forward
-		// changes; the build we just ran already produced tag=0).
-		for _, sql := range buildSqls {
-			if err = ctx.RunSql(sql); err != nil {
-				return err
-			}
-		}
-		if err = ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(),
-			originalTableDef.Name, indexName); err != nil {
-			return err
-		}
-		if err = ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
-			indexName, sinkerType, true, "", originalTableDef); err != nil {
-			return err
-		}
-		return registerIdxcronUpdate(ctx, metaDef, ctx.QryDatabase(), originalTableDef)
-	}
-
-	// Always-async path (CREATE INDEX, foreground reindex): defer the
-	// cagra_create build to the CDC pipeline's ProcessInitSQL step.
-	// cuvs storage needs both tag=0 (model blob) and tag=1 (CDC
-	// events); CagraSync only writes tag=1, so we stash the build SQL
-	// as InitSQL — unlike HNSW which passes "" because HnswSync
-	// derives both layers from the event stream alone.
-	if err = ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(),
-		originalTableDef.Name, indexName); err != nil {
+	if err := ctx.CreateIndexSnapshotCdcTask(metaDef.IndexName, sinkerType, forceSync, h.SourceSnapshotBuildVars()); err != nil {
 		return err
 	}
-	if err = ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
-		indexName, sinkerType, false, strings.Join(buildSqls, ";"), originalTableDef); err != nil {
+	if err := registerIdxcronUpdate(ctx, metaDef, db, originalTableDef); err != nil {
 		return err
 	}
-	return registerIdxcronUpdate(ctx, metaDef, ctx.QryDatabase(), originalTableDef)
+	if forceSync && reindex {
+		cache.Cache.RemoveCuvsOnCommit(ctx.TxnOperator(), storageDef.IndexTableName)
+	}
+	return nil
+}
+
+func (Hooks) SourceSnapshotBuildVars() []string {
+	return []string{threadsBuildVar, cuvscdc.GPUMultiSimulationVar}
+}
+
+// SourceSnapshotInitSQL replaces the complete model from a single source snapshot.
+func (Hooks) SourceSnapshotInitSQL(ctx compileplugin.SourceSnapshotContext, defs map[string]*plan.IndexDef) ([]string, error) {
+	clear, err := genDeleteSQL(defs, ctx.QryDatabase())
+	if err != nil {
+		return nil, err
+	}
+	build, err := genBuildSQL(ctx, defs)
+	if err != nil {
+		return nil, err
+	}
+	return append(clear, build...), nil
 }
 
 // registerIdxcronUpdate writes the cron task's frozen-metadata row into
@@ -263,9 +251,8 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 	logutil.Infof("[plugin] cagra HandleDropIndex: defs=%d", len(defs))
 	// Evict the cached search index so its GPU resources are freed NOW, rather
 	// than lingering until the 5-min VectorIndexCacheTTL housekeeping reaps it.
-	// Mirrors the create-side cache.Cache.Remove(storageDef.IndexTableName).
 	if storageDef, ok := defs[catalog.Cagra_TblType_Storage]; ok {
-		cache.Cache.Remove(storageDef.IndexTableName)
+		cache.Cache.RemoveCuvs(storageDef.IndexTableName)
 	}
 	return nil
 }
@@ -308,13 +295,13 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 		return nil, moerr.NewInternalErrorNoCtx("cagra_index index definition not found")
 	}
 	return []string{
-		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, meta.IndexTableName)),
-		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, idx.IndexTableName)),
+		fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, meta.IndexTableName)),
+		fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, idx.IndexTableName)),
 	}, nil
 }
 
 // genBuildSQL is lifted from pkg/sql/compile/util.go:688.
-func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) ([]string, error) {
+func genBuildSQL(ctx compileplugin.SourceSnapshotContext, indexDefs map[string]*plan.IndexDef) ([]string, error) {
 	originalTableDef := ctx.OriginalTableDef()
 	qryDatabase := ctx.QryDatabase()
 	const srcAlias = "src"
@@ -338,7 +325,7 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 		KeyPart:       idx.Parts[0],
 	}
 
-	threads, err := ctx.ResolveVariable("cagra_threads_build", true, false)
+	threads, err := ctx.ResolveVariable(threadsBuildVar, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +333,7 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 
 	// max_index_capacity now rides algo_params as a flat key (written at
 	// CREATE INDEX); cagra_create reads it from there.
-	gpusim, err := ctx.ResolveVariable("gpu_multi_simulation", true, false)
+	gpusim, err := ctx.ResolveVariable(cuvscdc.GPUMultiSimulationVar, true, false)
 	if err != nil {
 		return nil, err
 	}

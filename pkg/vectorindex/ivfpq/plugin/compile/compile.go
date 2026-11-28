@@ -57,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
 )
 
@@ -80,6 +81,8 @@ const actionIvfpqReindex = "ivfpq_reindex"
 // this file) breaks the build.
 type Hooks struct{}
 
+const threadsBuildVar = "ivfpq_threads_build"
+
 // HandleCreateIndex runs during CREATE INDEX (and as the worker for
 // HandleReindex). Called once per multi-table index; indexDefs is keyed by
 // IndexAlgoTableType (the same strings CatalogHooks.HiddenTableTypes()
@@ -98,47 +101,40 @@ type Hooks struct{}
 // IndexAlgoParam (catalog.IndexParamAsync). Default (key missing or
 // "false"): forceSync=true — ivfpq_create runs inline before the CDC
 // task is registered. Explicit async="true": forceSync=false — the
-// build SQL is stashed as ConsumerInfo.InitSQL and runs at the first
-// CDC iteration.
+// first CDC iteration builds the model.
 //
 // Lifted from Scope.handleVectorIvfpqIndex
 // (pkg/sql/compile/ddl_index_algo.go:802).
 func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
 	metaDef, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
 	if !ok || metaDef == nil {
-		return h.handleCreate(ctx, indexDefs, true)
+		return h.handleCreate(ctx, indexDefs, true, false)
 	}
 	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
-	return h.handleCreate(ctx, indexDefs, !async)
+	return h.handleCreate(ctx, indexDefs, !async, false)
 }
 
-// HandleReindex runs during ALTER … REINDEX (foreground forceSync=false)
-// and during idxcron background reindex (forceSync=true). The forceSync
-// branch builds ivfpq_create synchronously inside the txn so the new
-// tag=0 model lands before subsequent steps observe the index — mirrors
-// IVF-FLAT and CAGRA.
+// HandleReindex uses the shared build path. An inline rebuild publishes the
+// replacement model before handing off forward changes to CDC.
 func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool, _ bool) error {
-	return h.handleCreate(ctx, indexDefs, forceSync)
+	return h.handleCreate(ctx, indexDefs, forceSync, true)
 }
 
-// RestoreInitSQL — see CAGRA. Rebuilds the IVF-PQ index post-commit during restore.
-func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
-	metaDef, ok := indexDefs[catalog.Ivfpq_TblType_Metadata]
-	if !ok {
-		return false, "", moerr.NewInternalErrorNoCtx("ivfpq_meta index definition not found")
-	}
-	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` ivfpq FORCE_SYNC",
-		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+func (Hooks) RequiresSyncReindex(table *plan.TableDef, index *plan.IndexDef, oldParams, newParams map[string]string) bool {
+	return cuvscdc.ReindexChangesStorageType(table, index, oldParams[catalog.Quantization], newParams[catalog.Quantization])
 }
 
-// handleCreate is the shared body for HandleCreateIndex and
-// HandleReindex. forceSync controls whether ivfpq_create runs inside
-// the current txn (true — background reindex) or is deferred to the
-// CDC pipeline via InitSQL (false — the always-async default path).
-func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+// RestoreInitSQL is bypassed for full-source initializers.
+func (Hooks) RestoreInitSQL(compileplugin.CompileContext, map[string]*plan.IndexDef) (bool, string, error) {
+	return false, "", nil
+}
+
+// handleCreate runs the build in the current transaction if forceSync is set.
+// Otherwise ISCP builds it from a committed snapshot.
+func (h Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync, reindex bool) error {
 	logutil.Infof("[plugin] ivfpq handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// 0. experimental flag gate (mirrors HNSW's check at ddl_index_algo.go:627).
 	// Frontend-only: re-entry from background (idxcron ALTER REINDEX,
@@ -186,61 +182,56 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return nil
 	}
 
-	// 3. clear the cache
-	cache.Cache.Remove(storageDef.IndexTableName)
-
-	// 4. delete old data first
-	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
-	if err != nil {
-		return err
-	}
-	for _, sql := range sqls {
-		if err = ctx.RunSql(sql); err != nil {
+	if forceSync {
+		cache.Cache.RemoveCuvs(storageDef.IndexTableName)
+		statements, err := h.SourceSnapshotInitSQL(ctx, indexDefs)
+		if err != nil {
 			return err
 		}
+		if reindex {
+			if err := cuvscdc.ReplaceSnapshot(ctx.QryDatabase(), originalTableDef, storageDef, statements, ctx.RunSqlWithResult); err != nil {
+				return err
+			}
+		} else {
+			for _, sql := range statements {
+				if err := ctx.RunSql(sql); err != nil {
+					return err
+				}
+			}
+		}
 	}
-
-	// 5. Generate the ivfpq_create build SQL. forceSync controls when
-	// it actually runs. See CAGRA's compile.go for the full rationale
-	// on why we stash the build SQL as InitSQL rather than passing "".
-	buildSqls, err := genBuildSQL(ctx, indexDefs)
-	if err != nil {
+	db := ctx.QryDatabase()
+	if err := ctx.DropIndexCdcTask(originalTableDef, db, originalTableDef.Name, metaDef.IndexName); err != nil {
 		return err
 	}
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexIvfpqAlgo.ToString())
-	indexName := metaDef.IndexName
-
-	if forceSync {
-		// Background reindex: build ivfpq_create synchronously inside
-		// this txn, then re-register CDC starting from now (the build
-		// produced tag=0; CDC handles only forward changes).
-		for _, sql := range buildSqls {
-			if err = ctx.RunSql(sql); err != nil {
-				return err
-			}
-		}
-		if err = ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(),
-			originalTableDef.Name, indexName); err != nil {
-			return err
-		}
-		if err = ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
-			indexName, sinkerType, true, "", originalTableDef); err != nil {
-			return err
-		}
-		return registerIdxcronUpdate(ctx, metaDef, ctx.QryDatabase(), originalTableDef)
-	}
-
-	// Always-async path: defer ivfpq_create to the CDC pipeline's
-	// ProcessInitSQL.
-	if err = ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(),
-		originalTableDef.Name, indexName); err != nil {
+	if err := ctx.CreateIndexSnapshotCdcTask(metaDef.IndexName, sinkerType, forceSync, h.SourceSnapshotBuildVars()); err != nil {
 		return err
 	}
-	if err = ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
-		indexName, sinkerType, false, strings.Join(buildSqls, ";"), originalTableDef); err != nil {
+	if err := registerIdxcronUpdate(ctx, metaDef, db, originalTableDef); err != nil {
 		return err
 	}
-	return registerIdxcronUpdate(ctx, indexDefs[catalog.Ivfpq_TblType_Metadata], ctx.QryDatabase(), originalTableDef)
+	if forceSync && reindex {
+		cache.Cache.RemoveCuvsOnCommit(ctx.TxnOperator(), storageDef.IndexTableName)
+	}
+	return nil
+}
+
+func (Hooks) SourceSnapshotBuildVars() []string {
+	return []string{threadsBuildVar, cuvscdc.GPUMultiSimulationVar}
+}
+
+// SourceSnapshotInitSQL replaces the complete model from a single source snapshot.
+func (Hooks) SourceSnapshotInitSQL(ctx compileplugin.SourceSnapshotContext, defs map[string]*plan.IndexDef) ([]string, error) {
+	clear, err := genDeleteSQL(defs, ctx.QryDatabase())
+	if err != nil {
+		return nil, err
+	}
+	build, err := genBuildSQL(ctx, defs)
+	if err != nil {
+		return nil, err
+	}
+	return append(clear, build...), nil
 }
 
 // registerIdxcronUpdate writes the cron task's frozen-metadata row into
@@ -306,21 +297,13 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 	return merged, nil
 }
 
-// HandleDropIndex runs algorithm-specific cleanup beyond the generic
-// hidden-table deletion the SQL layer already performs.
-//
-// Implementations typically: unregister CDC tasks (DropIndexCdcTask),
-// remove idxcron schedules, clear runtime caches.
-//
-// IVF-PQ does none of those — generic hidden-table deletion is enough —
-// so this is a no-op. Compare HNSW, which does maintain CDC tasks.
+// HandleDropIndex releases the cached GPU models for the dropped storage table.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] ivfpq HandleDropIndex: defs=%d", len(defs))
 	// Evict the cached search index so its GPU resources are freed NOW, rather
 	// than lingering until the 5-min VectorIndexCacheTTL housekeeping reaps it.
-	// Mirrors the create-side cache.Cache.Remove(storageDef.IndexTableName).
 	if storageDef, ok := defs[catalog.Ivfpq_TblType_Storage]; ok {
-		cache.Cache.Remove(storageDef.IndexTableName)
+		cache.Cache.RemoveCuvs(storageDef.IndexTableName)
 	}
 	return nil
 }
@@ -368,13 +351,13 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 		return nil, moerr.NewInternalErrorNoCtx("ivfpq_index index definition not found")
 	}
 	return []string{
-		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, meta.IndexTableName)),
-		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, idx.IndexTableName)),
+		fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, meta.IndexTableName)),
+		fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, idx.IndexTableName)),
 	}, nil
 }
 
 // genBuildSQL is lifted from pkg/sql/compile/util.go:757.
-func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) ([]string, error) {
+func genBuildSQL(ctx compileplugin.SourceSnapshotContext, indexDefs map[string]*plan.IndexDef) ([]string, error) {
 	originalTableDef := ctx.OriginalTableDef()
 	qryDatabase := ctx.QryDatabase()
 	const srcAlias = "src"
@@ -398,7 +381,7 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 		KeyPart:       idx.Parts[0],
 	}
 
-	threads, err := ctx.ResolveVariable("ivfpq_threads_build", true, false)
+	threads, err := ctx.ResolveVariable(threadsBuildVar, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -406,7 +389,7 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 
 	// max_index_capacity now rides algo_params as a flat key (written at
 	// CREATE INDEX); ivfpq_create reads it from there.
-	gpusim, err := ctx.ResolveVariable("gpu_multi_simulation", true, false)
+	gpusim, err := ctx.ResolveVariable(cuvscdc.GPUMultiSimulationVar, true, false)
 	if err != nil {
 		return nil, err
 	}

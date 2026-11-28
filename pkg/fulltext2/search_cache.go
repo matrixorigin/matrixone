@@ -74,12 +74,13 @@ type Fulltext2Search struct {
 
 	// Generation captured at Load (same txn snapshot as the loaded data) for the cache's
 	// cross-CN freshness check (IsStale, called off the housekeeping goroutine): loadedTs =
-	// MAX(metadata.timestamp) (REBUILD/MERGE), loadedTail = MAX(tag=1 CdcTail chunk_id) (CDC
-	// append). cnUUID/accountID are the durable handles to re-query in the background.
+	// MAX(metadata.timestamp) (REBUILD/MERGE), loadedTailMin/loadedTail = MIN/MAX(tag=1 CdcTail chunk_id)
+	// (replacement/append). cnUUID/accountID are the durable handles to re-query in the background.
 	// genValid is false when capture failed / no resolver (unit tests) → IsStale is a no-op.
 	cnUUID         string
 	accountID      uint32
 	loadedTs       int64
+	loadedTailMin  int64
 	loadedTail     int64
 	genValid       bool
 	loadWaiters    atomic.Int64
@@ -158,13 +159,13 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if trace != nil {
 		trace.addInternalSQL(time.Since(budgetStart))
 	}
-	var baseGeneration, observedTail int64
+	var baseGeneration, observedMin, observedTail int64
 	var generationReady bool
 	var generationStart time.Time
 	if trace != nil {
 		generationStart = time.Now()
 	}
-	baseGeneration, observedTail, err = LoadGeneration(sqlproc, s.cfg)
+	baseGeneration, observedMin, observedTail, err = LoadGeneration(sqlproc, s.cfg)
 	if trace != nil {
 		trace.addInternalSQL(time.Since(generationStart))
 	}
@@ -190,7 +191,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	var deletes map[any]int64
 	var appliedTail int64
 	if generationReady {
-		tails, deletes, appliedTail, err = loadTailWithReuseForGeneration(sqlproc, s.cfg, baseGeneration, observedTail, trace, generation)
+		tails, deletes, appliedTail, err = loadTailWithReuseForGeneration(sqlproc, s.cfg, baseGeneration, observedMin, observedTail, trace, generation)
 	} else {
 		tails, deletes, appliedTail, err = loadTailSegmentsAfter(sqlproc, s.cfg, -1, trace)
 	}
@@ -211,27 +212,15 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	// stays false and IsStale reports the entry as uncheckable-hence-stale (evict + reload to
 	// retry capture) rather than pinning it in cache forever — see IsStale.
 	s.cnUUID = sqlproc.GetService()
-	if acc, e := sqlproc.GetAccountID(); e == nil {
-		var genStart time.Time
-		if trace != nil {
-			genStart = time.Now()
-		}
-		ts, _, e2 := LoadGeneration(sqlproc, s.cfg)
-		if trace != nil {
-			trace.addInternalSQL(time.Since(genStart))
-		}
-		if e2 == nil {
-			s.accountID = acc
-			// Keep the generation actually applied to the assembled Index. If a
-			// writer committed while loading, IsStale will force a later refresh
-			// instead of falsely declaring the older snapshot current.
-			s.loadedTs, s.loadedTail, s.genValid = baseGeneration, appliedTail, true
-			if !generationReady {
-				s.loadedTs, s.loadedTail = ts, appliedTail
-			}
-			trace.setGeneration(s.loadedTs, s.loadedTail)
-		}
+	s.genValid = false
+	if acc, e := sqlproc.GetAccountID(); e == nil && generationReady {
+		s.accountID = acc
+		// Retain exactly the generation used for reuse and assembly. If capture
+		// failed, the uncached load remains usable but uncheckable; IsStale evicts
+		// it instead of assigning a later observation to an older loaded snapshot.
+		s.loadedTs, s.loadedTailMin, s.loadedTail, s.genValid = baseGeneration, observedMin, appliedTail, true
 	}
+
 	return nil
 }
 
@@ -292,7 +281,7 @@ func (s *Fulltext2Search) FinishLoadObservation() {
 
 // IsStale reports whether the underlying index has changed since this entry was loaded, by
 // comparing the load-time generation to the current one (a REBUILD/MERGE bumps the metadata
-// timestamp; a CDC append bumps the tag=1 tail chunk_id). Run on the cache housekeeping
+// timestamp; tail MIN/MAX detect replacement and append). Run on the cache housekeeping
 // goroutine (NOT the search path), so it opens its own short auto-commit txn via the durable
 // cnUUID/accountID captured at load.
 //
@@ -311,13 +300,13 @@ func (s *Fulltext2Search) IsStale() (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	ts, tail, err := QueryGeneration(ctx, s.cnUUID, s.accountID, s.cfg)
+	ts, first, tail, err := QueryGeneration(ctx, s.cnUUID, s.accountID, s.cfg)
 	if err != nil {
 		return true, err
 	}
-	stale := ts != s.loadedTs || tail != s.loadedTail
-	logutil.Debugf("[ft2-isstale] index=%s loadedGen=(ts=%d,tail=%d) curGen=(ts=%d,tail=%d) stale=%v",
-		s.cfg.IndexTable, s.loadedTs, s.loadedTail, ts, tail, stale)
+	stale := ts != s.loadedTs || first != s.loadedTailMin || tail != s.loadedTail
+	logutil.Debugf("[ft2-isstale] index=%s loadedGen=(ts=%d,tail=%d..%d) curGen=(ts=%d,tail=%d..%d) stale=%v",
+		s.cfg.IndexTable, s.loadedTs, s.loadedTailMin, s.loadedTail, ts, first, tail, stale)
 	return stale, nil
 }
 

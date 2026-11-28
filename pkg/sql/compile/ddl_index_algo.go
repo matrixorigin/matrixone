@@ -124,7 +124,7 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 		TargetTableName: indexDef.IndexTableName,
 		SkipPkDedup:     true,
 	}
-	stmtOpt := executor.StatementOption{}.WithAlterCopyOpt(opt).WithIndexBackfillSourceID(sourceID)
+	stmtOpt := executor.StatementOption{}.WithIndexBackfillOpt(dbName, opt).WithIndexBackfillSourceID(sourceID)
 
 	restoreCtx := c.proc.Ctx
 	if restoreCtx == nil {

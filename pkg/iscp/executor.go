@@ -18,8 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -53,7 +55,10 @@ const (
 	MOISCPLogTableName = catalog.MO_ISCP_LOG
 )
 
-var running atomic.Bool
+// An executor owns its CN's admission for its whole lifetime, including pause
+// and recovery. The runtime registry is separate: it publishes a generation
+// only after initialization, and remains available while recovery drains it.
+var admittedExecutors sync.Map // map[cnUUID]*ISCPTaskExecutor
 
 const (
 	DefaultGCInterval             = time.Hour
@@ -91,19 +96,13 @@ func ISCPTaskExecutorFactory(
 	return func(ctx context.Context, task task.Task) (err error) {
 		var exec *ISCPTaskExecutor
 
-		if !running.CompareAndSwap(false, true) {
-			// already running
-			logutil.Error("ISCPTaskExecutor is already running")
-			return moerr.NewErrExecutorRunning(ctx, "ISCPTaskExecutor")
-		}
-		defer running.Store(false)
-
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		exec, err = NewISCPTaskExecutor(
 			ctx,
 			txnEngine,
 			cnTxnClient,
 			cdUUID,
+			task.GetID(),
 			nil,
 			mp,
 		)
@@ -114,14 +113,18 @@ func ISCPTaskExecutorFactory(
 		// before RegisterExecutorRuntime and any worker iteration), so index CDC
 		// consumers can resolve the LOCAL SSD spill dir via GetExecutorRuntime.
 		exec.rootFS = rootFS
-		defer exec.terminateLifetime()
+		defer exec.Cancel()
 		if err = attachToTask(ctx, task.GetID(), exec); err != nil {
 			return
 		}
 
-		if err = exec.Start(); err != nil {
-			return
+		if err = exec.start(false); err != nil {
+			if !errors.Is(err, errExecutorPaused) {
+				return
+			}
+			logutil.Info("ISCP-Task initial admission stopped while paused", zap.Error(err))
 		}
+		err = nil
 		exec.waitForTermination(ctx)
 		exec.Stop()
 		return
@@ -153,11 +156,15 @@ func fillDefaultOption(option *ISCPExecutorOption) *ISCPExecutorOption {
 	return option
 }
 
+// NewISCPTaskExecutor reserves this CN's executor admission until Cancel.
+// Callers must cancel it even if Start fails; Stop and Pause retain admission
+// so the same executor can resume without overlapping another local instance.
 func NewISCPTaskExecutor(
 	ctx context.Context,
 	txnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	cdUUID string,
+	taskID uint64,
 	option *ISCPExecutorOption,
 	mp *mpool.MPool,
 ) (exec *ISCPTaskExecutor, err error) {
@@ -179,14 +186,17 @@ func NewISCPTaskExecutor(
 		)
 	}()
 	option = fillDefaultOption(option)
+	if taskID == 0 {
+		return nil, moerr.NewInvalidTask(ctx, cdUUID, taskID)
+	}
 	ownerCtx, terminate := context.WithCancel(ctx)
 	exec = &ISCPTaskExecutor{
 		ownerCtx:    ownerCtx,
 		terminate:   terminate,
 		ctx:         ownerCtx,
-		packer:      types.NewPacker(),
 		tables:      newISCPTableTree(),
 		cnUUID:      cdUUID,
+		taskID:      taskID,
 		txnEngine:   txnEngine,
 		cnTxnClient: cnTxnClient,
 		wg:          sync.WaitGroup{},
@@ -197,6 +207,10 @@ func NewISCPTaskExecutor(
 		runningConsumers: make(
 			map[JobRuntimeKey]map[uint64]*RunningJobConsumer,
 		),
+	}
+	if _, loaded := admittedExecutors.LoadOrStore(cdUUID, exec); loaded {
+		terminate()
+		return nil, moerr.NewErrExecutorRunning(ctx, "ISCPTaskExecutor")
 	}
 	return exec, nil
 }
@@ -239,7 +253,7 @@ func (exec *ISCPTaskExecutor) deleteTableEntry(table *TableEntry) {
 }
 
 func (exec *ISCPTaskExecutor) Resume() error {
-	err := exec.Start()
+	err := exec.start(true)
 	if err != nil {
 		return err
 	}
@@ -254,22 +268,86 @@ func (exec *ISCPTaskExecutor) Cancel() error {
 	// may hold the lock while doing recovery I/O; its generation context is
 	// derived from ownerCtx and must remain cancelable during that wait.
 	exec.terminateLifetime()
-	exec.runningMu.Lock()
-	defer exec.runningMu.Unlock()
-	exec.stopLocked()
+	exec.Stop()
+	admittedExecutors.CompareAndDelete(exec.cnUUID, exec)
 	return nil
 }
+
+// A failed worker cannot safely release its admitted generations. Stop the
+// generation and rebuild from durable state before admitting more work.
+func (exec *ISCPTaskExecutor) abandonWorker(failed Worker) {
+	exec.runningMu.Lock()
+	defer exec.runningMu.Unlock()
+	if !exec.running || exec.worker != failed || exec.isTerminated() {
+		return
+	}
+	exec.stopGenerationLocked(false)
+	parent := exec.ownerCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	exec.recoveryMu.Lock()
+	if exec.pauseRequested || exec.isTerminated() {
+		exec.recoveryMu.Unlock()
+		UnregisterExecutorRuntime(exec.cnUUID, exec)
+		return
+	}
+	recoveryCtx, recoveryCancel := context.WithCancel(parent)
+	exec.recoveryCancel = recoveryCancel
+	exec.recoveryMu.Unlock()
+	err := exec.initStateLocked(recoveryCtx)
+	exec.recoveryMu.Lock()
+	exec.recoveryCancel = nil
+	paused := exec.pauseRequested
+	exec.recoveryMu.Unlock()
+	if err != nil {
+		interrupted := recoveryCtx.Err() != nil && errors.Is(err, recoveryCtx.Err())
+		recoveryCancel()
+		UnregisterExecutorRuntime(exec.cnUUID, exec)
+		logutil.Error("ISCP-Task recovery failed", zap.Error(err))
+		if !interrupted && !paused {
+			exec.terminateLifetime()
+		}
+		return
+	}
+	generationCancel := exec.cancel
+	exec.cancel = func() { generationCancel(); recoveryCancel() }
+	go exec.run(exec.ctx, exec.worker)
+}
+
 func (exec *ISCPTaskExecutor) Restart() error {
 	exec.Stop()
-	err := exec.Start()
+	err := exec.start(true)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 func (exec *ISCPTaskExecutor) Start() error {
+	return exec.start(true)
+}
+
+var errExecutorPaused = moerr.NewInternalErrorNoCtx("ISCP executor is paused")
+
+func (exec *ISCPTaskExecutor) start(resume bool) error {
+	exec.recoveryMu.Lock()
+	epoch := exec.stopEpoch
+	exec.recoveryMu.Unlock()
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
+	exec.recoveryMu.Lock()
+	if epoch != exec.stopEpoch {
+		exec.recoveryMu.Unlock()
+		return errors.Join(errExecutorPaused, context.Canceled)
+	}
+	if exec.pauseRequested && !resume {
+		exec.recoveryMu.Unlock()
+		return errExecutorPaused
+	}
+	if resume {
+		exec.pauseRequested = false
+	}
+	exec.recoveryMu.Unlock()
 	if exec.isTerminated() {
 		return moerr.NewInternalErrorNoCtx("ISCP-Task Executor is canceled")
 	}
@@ -280,10 +358,29 @@ func (exec *ISCPTaskExecutor) Start() error {
 	if parent == nil {
 		parent = context.Background()
 	}
-	err := exec.initStateLocked(parent)
+	initCtx, initCancel := context.WithCancel(parent)
+	exec.recoveryMu.Lock()
+	if epoch != exec.stopEpoch {
+		exec.recoveryMu.Unlock()
+		initCancel()
+		return errors.Join(errExecutorPaused, context.Canceled)
+	}
+	exec.recoveryCancel = initCancel
+	exec.recoveryMu.Unlock()
+	err := exec.initStateLocked(initCtx)
+	exec.recoveryMu.Lock()
+	exec.recoveryCancel = nil
+	paused := exec.pauseRequested
+	exec.recoveryMu.Unlock()
 	if err != nil {
+		initCancel()
+		if paused {
+			return errors.Join(errExecutorPaused, err)
+		}
 		return err
 	}
+	generationCancel := exec.cancel
+	exec.cancel = func() { generationCancel(); initCancel() }
 	go exec.run(exec.ctx, exec.worker)
 	return nil
 }
@@ -362,12 +459,23 @@ func (exec *ISCPTaskExecutor) initStateLocked(parent context.Context) (err error
 }
 
 func (exec *ISCPTaskExecutor) Stop() {
+	exec.recoveryMu.Lock()
+	exec.stopEpoch++
+	exec.pauseRequested = true
+	if exec.recoveryCancel != nil {
+		exec.recoveryCancel()
+	}
+	exec.recoveryMu.Unlock()
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
 	exec.stopLocked()
 }
 
 func (exec *ISCPTaskExecutor) stopLocked() {
+	exec.stopGenerationLocked(true)
+}
+
+func (exec *ISCPTaskExecutor) stopGenerationLocked(unregister bool) {
 	if !exec.running {
 		return
 	}
@@ -378,51 +486,208 @@ func (exec *ISCPTaskExecutor) stopLocked() {
 	exec.cancel()
 	exec.worker.Stop()
 	exec.wg.Wait()
-	UnregisterExecutorRuntime(exec.cnUUID, exec)
+	if unregister {
+		UnregisterExecutorRuntime(exec.cnUUID, exec)
+	}
 	exec.ctx, exec.cancel = nil, nil
 	exec.worker = nil
 }
 
-func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err error) {
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+// Select outside the lease-fenced write transaction: scanning a large catalog
+// must not make that transaction conflict with every healthy heartbeat.
+func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	sql := fmt.Sprintf(
-		`UPDATE mo_catalog.mo_iscp_log
-        SET job_state = %d
-        WHERE job_state IN (%d, %d);
-        `,
-		ISCPJobState_Completed,
-		ISCPJobState_Pending,
-		ISCPJobState_Running,
-	)
+	for {
+		selected, err := exec.repairAbandonedJobsPass(ctx)
+		if err != nil || !selected {
+			return err
+		}
+	}
+}
+
+// A stopped predecessor can still publish a job after a scan. Recheck after
+// each pass before publishing the replacement executor's in-memory state.
+func (exec *ISCPTaskExecutor) repairAbandonedJobsPass(ctx context.Context) (bool, error) {
+	result, err := exec.selectAbandonedJobs(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer result.Close()
+
+	const batchSize = 128
+	jobs := make([]JobRuntimeKey, 0, batchSize)
+	selected := false
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		accounts := vector.MustFixedColWithTypeCheck[uint32](cols[0])
+		tables := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+		ids := vector.MustFixedColWithTypeCheck[uint64](cols[3])
+		for i := 0; i < rows; i++ {
+			selected = true
+			jobs = append(jobs, NewJobRuntimeKey(accounts[i], tables[i], cols[2].GetStringAt(i), ids[i]))
+			if len(jobs) == batchSize {
+				err = exec.repairAbandonedJobBatch(ctx, jobs)
+				if err != nil {
+					return false
+				}
+				jobs = jobs[:0]
+			}
+		}
+		return true
+	})
+	if err != nil {
+		return selected, err
+	}
+	// Even an empty scan must verify that this executor still owns the lease.
+	if len(jobs) != 0 || !selected {
+		if err := exec.repairAbandonedJobBatch(ctx, jobs); err != nil {
+			return selected, err
+		}
+	}
+	return selected, nil
+}
+
+// Finish the read before writing any batch. getTxn supplies the CN's last
+// committed timestamp, including when freshness-sacrificing reads are enabled.
+func (exec *ISCPTaskExecutor) selectAbandonedJobs(ctx context.Context) (result executor.Result, err error) {
+	txnOp, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "iscp select abandoned jobs")
+	if err != nil {
+		return result, err
+	}
+	completed := false
+	defer func() {
+		if !completed {
+			result.Close()
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+			defer cancel()
+			if rollbackErr := txnOp.Rollback(cleanupCtx); rollbackErr != nil {
+				logutil.Error("ISCP-Task selection rollback after abnormal exit failed", zap.Error(rollbackErr))
+			}
+			return
+		}
+		err = finishISCPTransaction(ctx, txnOp, err)
+		if err != nil {
+			result.Close()
+			result = executor.Result{}
+		}
+	}()
+	if err = txnOp.GetWorkspace().AdvanceSnapshot(ctx, timestamp.Timestamp{}); err != nil {
+		completed = true
+		return result, err
+	}
+	query := fmt.Sprintf("SELECT account_id, table_id, job_name, job_id FROM mo_catalog.mo_iscp_log WHERE drop_at IS NULL AND job_state IN (%d, %d)", ISCPJobState_Pending, ISCPJobState_Running)
+	result, err = ExecWithResult(ctx, query, exec.cnUUID, txnOp)
+	completed = true
+	return result, err
+}
+
+// Every batch validates the owner and the selected job rows in the same SI
+// transaction. Previously committed batches remain safe across a handoff.
+func (exec *ISCPTaskExecutor) repairAbandonedJobBatch(ctx context.Context, jobs []JobRuntimeKey) (err error) {
 	nowTs := exec.txnEngine.LatestLogtailAppliedTime()
+	if latestCommitTS := exec.cnTxnClient.GetLatestCommitTS(); latestCommitTS.Greater(nowTs) {
+		nowTs = latestCommitTS
+	}
 	createByOpt := client.WithTxnCreateBy(
 		0,
 		"",
 		"iscp init state",
 		0)
-	txnOp, err := exec.cnTxnClient.New(ctxWithTimeout, nowTs, createByOpt)
-	if txnOp != nil {
-		defer func() {
-			if err != nil {
-				err = errors.Join(err, txnOp.Rollback(ctxWithTimeout))
-				return
+	txnOp, err := exec.cnTxnClient.New(ctx, nowTs, createByOpt,
+		client.WithTxnMode(txn.TxnMode_Pessimistic),
+		// Keep the snapshot used to validate job and lease writes fixed through
+		// commit. RC may advance it at commit after an optimistic lease takeover,
+		// allowing a stale owner to overwrite its successor.
+		client.WithTxnIsolation(txn.TxnIsolation_SI),
+	)
+	if txnOp == nil {
+		if err == nil {
+			err = moerr.NewInternalErrorNoCtx("iscp repair transaction is nil")
+		}
+		return err
+	}
+	completed := false
+	defer func() {
+		if !completed {
+			// An abnormal exit must roll back without swallowing the panic.
+			cleanupCtx, cleanupCancel := context.WithTimeoutCause(context.WithoutCancel(ctx), time.Minute, moerr.NewInternalErrorNoCtx("iscp repair rollback timed out"))
+			defer cleanupCancel()
+			if rollbackErr := txnOp.Rollback(cleanupCtx); rollbackErr != nil {
+				logutil.Error("ISCP-Task repair rollback after abnormal exit failed", zap.Error(rollbackErr))
 			}
-			err = txnOp.Commit(ctxWithTimeout)
-		}()
+			return
+		}
+		err = finishISCPTransaction(ctx, txnOp, err)
+	}()
+	if err == nil {
+		err = exec.repairAbandonedJobsInTxn(ctx, txnOp, jobs)
 	}
+	completed = true
+	return err
+}
+
+func (exec *ISCPTaskExecutor) repairAbandonedJobsInTxn(ctx context.Context, txnOp client.TxnOperator, jobs []JobRuntimeKey) error {
+	if err := exec.txnEngine.New(ctx, txnOp); err != nil {
+		return err
+	}
+	owners, err := ExecWithResult(ctx, "SELECT count(*) FROM mo_task.sys_daemon_task WHERE task_type = 'ISCP'", exec.cnUUID, txnOp)
 	if err != nil {
-		return
+		return err
 	}
-	err = exec.txnEngine.New(ctxWithTimeout, txnOp)
+	defer owners.Close()
+	var ownerCount int64
+	var countRows int
+	owners.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			ownerCount = vector.GetFixedAtNoTypeCheck[int64](cols[0], i)
+			countRows++
+		}
+		return true
+	})
+	if countRows != 1 || ownerCount != 1 {
+		logutil.Error("ISCP-Task unexpected daemon task count", zap.Int64("count", ownerCount))
+		return moerr.NewInvalidTask(ctx, exec.cnUUID, exec.taskID)
+	}
+	// Pin the SI snapshot immediately before the first write. DDL passes its
+	// caller-owned transaction to UnregisterJob, so not every writer of
+	// mo_iscp_log follows ISCP's transaction mode. Refreshing after the repair
+	// UPDATE could hide an optimistic DDL commit and restore a retired job.
+	if err = txnOp.GetWorkspace().AdvanceSnapshot(ctx, timestamp.Timestamp{}); err != nil {
+		return err
+	}
+	if len(jobs) != 0 {
+		var sql strings.Builder
+		fmt.Fprintf(&sql, "UPDATE mo_catalog.mo_iscp_log SET job_state = %d WHERE drop_at IS NULL AND job_state IN (%d, %d) AND (", ISCPJobState_Completed, ISCPJobState_Pending, ISCPJobState_Running)
+		for i, job := range jobs {
+			if i != 0 {
+				sql.WriteString(" OR ")
+			}
+			fmt.Fprintf(&sql, "(account_id = %d AND table_id = %d AND job_name = %s AND job_id = %d)", job.AccountID, job.TableID, sqlquote.String(job.JobName), job.JobID)
+		}
+		sql.WriteString(")")
+		result, err := ExecWithResult(ctx, sql.String(), exec.cnUUID, txnOp)
+		if err != nil {
+			return err
+		}
+		result.Close()
+	}
+
+	// The repair and ownership check must commit together. A pre-check alone
+	// permits a new runner to claim the daemon task before this update commits.
+	// Take the lease row last so a job lock does not hold up task heartbeats.
+	guard := fmt.Sprintf(
+		"UPDATE mo_task.sys_daemon_task SET task_runner = task_runner WHERE task_id = %d AND task_metadata_executor = %d AND task_type = 'ISCP' AND task_runner = %s AND task_status IN (%d, %d, %d, %d, %d)",
+		exec.taskID, task.TaskCode_ISCPExecutor, sqlquote.String(exec.cnUUID), task.TaskStatus_Running,
+		task.TaskStatus_PauseRequested, task.TaskStatus_ResumeRequested, task.TaskStatus_CancelRequested, task.TaskStatus_RestartRequested,
+	)
+	lease, err := ExecWithResult(ctx, guard, exec.cnUUID, txnOp)
 	if err != nil {
-		return
+		return err
 	}
-	result, err := ExecWithResult(ctxWithTimeout, sql, exec.cnUUID, txnOp)
-	if err != nil {
-		return
+	defer lease.Close()
+	if lease.AffectedRows != 1 {
+		return moerr.NewInvalidTask(ctx, exec.cnUUID, exec.taskID)
 	}
-	defer result.Close()
 	return nil
 }
 
@@ -550,7 +815,11 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 						logutil.Infof("ISCP-Task injected hook %s", msg)
 					}
 				} else {
-					table.UpdateWatermark(iter)
+					if err := table.UpdateWatermark(iter); err != nil {
+						logutil.Error("ISCP-Task clean iteration requires recovery", zap.Error(err))
+						go exec.Cancel()
+						return
+					}
 				}
 			}
 		case <-flushWatermarkTrigger.C:
@@ -813,13 +1082,13 @@ func (exec *ISCPTaskExecutor) loadReplay(
 			zap.Error(err),
 		)
 	}()
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "iscp replay")
 	if err != nil {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
-	defer cancel()
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, txn.Rollback(ctx))
@@ -1127,36 +1396,51 @@ func (exec *ISCPTaskExecutor) getDirtyTables(
 	)
 	return
 }
-func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) error {
+func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) (err error) {
 	tables := exec.getAllTables()
 	if len(tables) == 0 {
 		return nil
 	}
-	txn, err := getTxn(exec.ctx, exec.txnEngine, exec.cnTxnClient, "flush watermark for all tables")
+	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
+	defer cancel()
+	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "flush watermark for all tables",
+		client.WithTxnIsolation(txn.TxnIsolation_SI),
+	)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
-	defer cancel()
+	var updates []watermarkFlush
 	defer func() {
 		if err != nil {
-			err2 := txn.Rollback(ctx)
-			if err2 != nil {
-				logutil.Errorf("flush watermark for all tables rollback failed, err: %v", err2)
+			err = errors.Join(err, txn.Rollback(ctx))
+			return
+		}
+		if err = txn.Commit(ctx); err != nil {
+			return
+		}
+		for _, update := range updates {
+			update.table.mu.Lock()
+			current := update.table.jobs[JobKey{JobName: update.job.jobName, JobID: update.job.jobID}]
+			if current == update.job && current.currentLSN == update.lsn && current.state == ISCPJobState_Completed {
+				current.state = ISCPJobState_Pending
+				current.currentLSN = update.lsn + 1
+				current.persistedWatermark = update.watermark
 			}
-		} else {
-			err = txn.Commit(ctx)
+			update.table.mu.Unlock()
 		}
 	}()
-	jobCount := 0
 	for _, table := range tables {
-		flushCount := table.tryFlushWatermark(ctx, txn, ttl)
-		jobCount += flushCount
+		var tableUpdates []watermarkFlush
+		tableUpdates, err = table.tryFlushWatermark(ctx, txn, ttl)
+		if err != nil {
+			return err
+		}
+		updates = append(updates, tableUpdates...)
 	}
 	logutil.Info(
 		"ISCP-Task flush watermark",
 		zap.Any("table count", len(tables)),
-		zap.Int("jobCount", jobCount),
+		zap.Int("jobCount", len(updates)),
 	)
 	return nil
 }
@@ -1207,6 +1491,9 @@ func retry(
 	for i := 0; i < retryTimes; i++ {
 		select {
 		case <-ctx.Done():
+			if err != nil && !errors.Is(err, ctx.Err()) {
+				return errors.Join(err, ctx.Err())
+			}
 			return ctx.Err()
 		default:
 		}
@@ -1217,6 +1504,10 @@ func retry(
 		if err == nil {
 			return
 		}
+		var taskErr *moerr.Error
+		if errors.As(err, &taskErr) && moerr.IsMoErrCode(taskErr, moerr.ErrInvalidTask) {
+			return err
+		}
 		if i == retryTimes-1 {
 			break
 		}
@@ -1224,7 +1515,10 @@ func retry(
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			if errors.Is(err, ctx.Err()) {
+				return err
+			}
+			return errors.Join(err, ctx.Err())
 		case <-timer.C:
 		}
 		interval *= 2

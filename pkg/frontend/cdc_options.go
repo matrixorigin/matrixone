@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
@@ -111,11 +112,19 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
-			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
+		conn, connectErr := cdc.OpenDbConn(
+			ctx, opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
+		)
+		if connectErr != nil {
+			if errors.Is(connectErr, context.Canceled) || errors.Is(connectErr, context.DeadlineExceeded) {
+				err = connectErr
+				return
+			}
 			err = moerr.NewInternalErrorf(ctx, ""+
-				"failed to connect to source, please check the connection, err: %v", err)
+				"failed to connect to source, please check the connection, err: %v", connectErr)
+			return
+		}
+		if err = conn.Close(); err != nil {
 			return
 		}
 	}
@@ -140,10 +149,18 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
-			opts.SinkUriInfo.User, opts.SinkUriInfo.Password, opts.SinkUriInfo.Ip, opts.SinkUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", err)
+		conn, connectErr := cdc.OpenDbConn(
+			ctx, opts.SinkUriInfo.User, opts.SinkUriInfo.Password, opts.SinkUriInfo.Ip, opts.SinkUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
+		)
+		if connectErr != nil {
+			if errors.Is(connectErr, context.Canceled) || errors.Is(connectErr, context.DeadlineExceeded) {
+				err = connectErr
+				return
+			}
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", connectErr)
+			return
+		}
+		if err = conn.Close(); err != nil {
 			return
 		}
 	}

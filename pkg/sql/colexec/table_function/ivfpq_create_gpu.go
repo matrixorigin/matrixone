@@ -273,20 +273,6 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			u.idxcfg.CuvsIvfpq.DistributionMode = uint16(vectorindex.DistributionMode_SINGLE_GPU)
 		}
 
-		// quantization
-		var qt metric.QuantizationType
-		switch u.param.Quantization {
-		case metric.Quantization_F16_Str:
-			qt = metric.Quantization_F16
-		case metric.Quantization_INT8_Str:
-			qt = metric.Quantization_INT8
-		case metric.Quantization_UINT8_Str:
-			qt = metric.Quantization_UINT8
-		default:
-			qt = metric.Quantization_F32
-		}
-		u.idxcfg.CuvsIvfpq.Quantization = uint16(qt)
-
 		// ---- IndexTableConfig ----
 		cfgVec := tf.ctr.argVecs[0]
 		if cfgVec.GetType().Oid != types.T_varchar {
@@ -402,13 +388,8 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 		u.baseOid = faVec.GetType().Oid
 
-		// Derive the storage qtype from the base column type when no QUANTIZATION
-		// was given: a vecf16 base with no quantization is stored natively as half.
-		// (vecf16 + QUANTIZATION=int8/uint8 keeps qt = int8/uint8 — quantize path.)
-		if u.baseOid == types.T_array_float16 && qt == metric.Quantization_F32 {
-			qt = metric.Quantization_F16
-			u.idxcfg.CuvsIvfpq.Quantization = uint16(qt)
-		}
+		qt := metric.CuvsStorageQuantization(u.baseOid, u.param.Quantization)
+		u.idxcfg.CuvsIvfpq.Quantization = uint16(qt)
 
 		// dimension
 		u.idxcfg.CuvsIvfpq.Dimensions = uint(faVec.GetType().Width)

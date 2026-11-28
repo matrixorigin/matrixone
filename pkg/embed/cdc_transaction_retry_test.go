@@ -98,7 +98,7 @@ func TestCDCTransactionAbortReplaysAllRowsOnMO(t *testing.T) {
 				require.NoError(t, err)
 				failed, attempts := false, 0
 				cause := &mysql.MySQLError{Number: code, Message: "controlled transaction abort"}
-				cdc.OpenDbConn = func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+				cdc.OpenDbConn = func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
 					cfg := mysql.NewConfig()
 					cfg.User, cfg.Passwd, cfg.Net = user, password, "tcp"
 					cfg.Addr = net.JoinHostPort(ip, strconv.Itoa(port))
@@ -122,7 +122,7 @@ func TestCDCTransactionAbortReplaysAllRowsOnMO(t *testing.T) {
 						return nil
 					}}), nil
 				}
-				exec, err := cdc.NewExecutor("dump", "111", "127.0.0.1", port, 2, time.Minute, "10s", false)
+				exec, err := cdc.NewExecutor(ctx, "dump", "111", "127.0.0.1", port, 2, time.Minute, "10s", false)
 				require.NoError(t, err)
 				defer func() { require.NoError(t, exec.Close()) }()
 				a := []byte("     INSERT INTO cdc_transaction_retry.t VALUES (1,10)")

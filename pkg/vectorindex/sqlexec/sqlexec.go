@@ -136,6 +136,14 @@ func (s *SqlProcess) GetResolveVariableFunc() func(varName string, isSystemVar, 
 	return nil
 }
 
+// Txn returns the transaction used by internal index reads.
+func (s *SqlProcess) Txn() client.TxnOperator {
+	if s.Proc != nil {
+		return s.Proc.GetTxnOperator()
+	}
+	return s.SqlCtx.Txn()
+}
+
 // GetService returns the CN UUID (service name) of the underlying proc or SqlContext.
 // Captured at load so a later background query (e.g. the cache IsStale check) can reach
 // the internal SQL executor by service name.
@@ -384,20 +392,39 @@ func GetTxn(
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	info string,
+	txnOptions ...client.TxnOption,
 ) (client.TxnOperator, error) {
 	nowTs := cnEngine.LatestLogtailAppliedTime()
+	if latestCommitTS := cnTxnClient.GetLatestCommitTS(); latestCommitTS.Greater(nowTs) {
+		// Preserve read-your-writes when the local logtail is behind this CN's
+		// latest acknowledged commit. New waits for this timestamp to be applied.
+		nowTs = latestCommitTS
+	}
 	createByOpt := client.WithTxnCreateBy(
 		0,
 		"",
 		info,
 		0)
-	op, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	options := make([]client.TxnOption, 0, len(txnOptions)+1)
+	options = append(options, createByOpt)
+	options = append(options, txnOptions...)
+	op, err := cnTxnClient.New(ctx, nowTs, options...)
 	if err != nil {
-		return nil, err
+		if op == nil {
+			return nil, err
+		}
+		cleanupCtx, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), time.Minute, moerr.NewInternalErrorNoCtx("sql transaction creation rollback timed out"))
+		defer cancel()
+		return nil, errors.Join(err, op.Rollback(cleanupCtx))
+	}
+	if op == nil {
+		return nil, moerr.NewInternalErrorNoCtx("sql transaction client returned a nil transaction")
 	}
 	err = cnEngine.New(ctx, op)
 	if err != nil {
-		return nil, err
+		cleanupCtx, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), time.Minute, moerr.NewInternalErrorNoCtx("sql transaction setup rollback timed out"))
+		defer cancel()
+		return nil, errors.Join(err, op.Rollback(cleanupCtx))
 	}
 	return op, nil
 }
@@ -411,13 +438,14 @@ func RunTxnWithSqlContext(ctx context.Context,
 	duration time.Duration,
 	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error),
 	cbdata any,
-	f func(sqlproc *SqlProcess, data any) error) (err error) {
+	f func(sqlproc *SqlProcess, data any) error,
+	txnOptions ...client.TxnOption) (err error) {
 
 	newctx := context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 	newctx, cancel := context.WithTimeout(newctx, duration)
 	defer cancel()
 
-	txnOp, err := GetTxn(newctx, cnEngine, cnTxnClient, "runTxnWithSqlContext")
+	txnOp, err := GetTxn(newctx, cnEngine, cnTxnClient, "runTxnWithSqlContext", txnOptions...)
 	if err != nil {
 		return err
 	}

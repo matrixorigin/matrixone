@@ -384,35 +384,17 @@ func (exec *ISCPTaskExecutor) UnregisterRunningConsumer(h *RunningJobConsumer) {
 	close(h.done)
 }
 
-func (exec *ISCPTaskExecutor) filterFencedIteration(iter *IterationContext) *IterationContext {
-	if exec == nil || iter == nil || len(iter.jobNames) == 0 {
-		return iter
-	}
-	keepJobNames := make([]string, 0, len(iter.jobNames))
-	keepJobIDs := make([]uint64, 0, len(iter.jobIDs))
-	keepLSN := make([]uint64, 0, len(iter.lsn))
-	for i, jobName := range iter.jobNames {
-		key := NewJobRuntimeKey(iter.accountID, iter.tableID, jobName, iter.jobIDs[i])
-		if exec.IsJobFenced(key) {
-			continue
-		}
-		keepJobNames = append(keepJobNames, jobName)
-		keepJobIDs = append(keepJobIDs, iter.jobIDs[i])
-		keepLSN = append(keepLSN, iter.lsn[i])
-	}
-	if len(keepJobNames) == 0 {
+// An already submitted iteration carries optimistic scheduler state. If any
+// member is fenced, recovery must reload the whole durable generation: a DDL
+// rollback can make the fenced member live again.
+func (exec *ISCPTaskExecutor) checkIterationFences(iter *IterationContext) error {
+	if exec == nil || iter == nil {
 		return nil
 	}
-	if len(keepJobNames) == len(iter.jobNames) {
-		return iter
+	for i, name := range iter.jobNames {
+		if exec.IsJobFenced(NewJobRuntimeKey(iter.accountID, iter.tableID, name, iter.jobIDs[i])) {
+			return errIterationNeedsRecovery
+		}
 	}
-	return &IterationContext{
-		accountID: iter.accountID,
-		tableID:   iter.tableID,
-		jobNames:  keepJobNames,
-		jobIDs:    keepJobIDs,
-		lsn:       keepLSN,
-		fromTS:    iter.fromTS,
-		toTS:      iter.toTS,
-	}
+	return nil
 }

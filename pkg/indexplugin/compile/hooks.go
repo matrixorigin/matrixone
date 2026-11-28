@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -32,17 +33,16 @@ import (
 // plugin code never touches *compile.Compile directly, which keeps the
 // plugin package out of an import cycle with pkg/sql/compile.
 type CompileContext interface {
+	SourceSnapshotContext
+
 	// Ctx returns the request context (for cancellation, txn, etc.).
 	Ctx() Context
 
+	// TxnOperator provides the transaction lifecycle for publication callbacks.
+	TxnOperator() client.TxnOperator
+
 	// Database is the engine.Database for the indexed table's database.
 	Database() engine.Database
-
-	// QryDatabase is the database name from the parsed query.
-	QryDatabase() string
-
-	// OriginalTableDef is the table-def the index is being created on.
-	OriginalTableDef() *plan.TableDef
 
 	// IndexInfo is the CreateTable carrying the hidden index-table DDL.
 	// May be nil for the ALTER REINDEX path.
@@ -61,9 +61,6 @@ type CompileContext interface {
 	// BuildIndexTable creates one hidden table for the index. Wraps the
 	// existing indexTableBuild helper in pkg/sql/compile/ddl.go.
 	BuildIndexTable(def *plan.TableDef) error
-
-	// ResolveVariable forwards to process.GetResolveVariableFunc().
-	ResolveVariable(name string, isSystemVar, isGlobalVar bool) (any, error)
 
 	// IsFrontend reports whether the Compile is running attached to a
 	// frontend client session (mysql client query or in-frontend
@@ -114,6 +111,10 @@ type CompileContext interface {
 	// table's creation timestamp.
 	CreateIndexCdcTask(dbName, tableName string, tableID uint64, indexName string,
 		sinkerType int8, startFromNow bool, sql string, tableDef *plan.TableDef) error
+
+	// CreateIndexSnapshotCdcTask initializes CDC from a complete source snapshot.
+	// An inline build can supply that snapshot when it only read committed rows.
+	CreateIndexSnapshotCdcTask(indexName string, sinkerType int8, builtInline bool, buildVars []string) error
 
 	// DropIndexCdcTask removes any ISCP CDC task previously registered
 	// for this (table, index). Safe to call when no task exists.
@@ -246,4 +247,27 @@ func MergeReindexParams(old map[string]string, update ReindexParamUpdate, algo s
 		out[k] = v
 	}
 	return out, nil
+}
+
+// SourceSnapshotInitializer is implemented by indexes whose model must be built
+// from committed source rows. The returned statements replace all derived output
+// and cover the complete source snapshot; executing only a training/model stage
+// does not satisfy this contract. ISCP publishes that snapshot with the output.
+type SourceSnapshotInitializer interface {
+	SourceSnapshotBuildVars() []string
+	SourceSnapshotInitSQL(ctx SourceSnapshotContext, indexDefs map[string]*plan.IndexDef) ([]string, error)
+}
+
+// SynchronousReindex is implemented by plugins that must publish a model and
+// its changed format in the same transaction.
+type SynchronousReindex interface {
+	RequiresSyncReindex(table *plan.TableDef, index *plan.IndexDef, oldParams, newParams map[string]string) bool
+}
+
+// SourceSnapshotContext supplies the source schema and build settings from the
+// transaction that executes the rebuild.
+type SourceSnapshotContext interface {
+	QryDatabase() string
+	OriginalTableDef() *plan.TableDef
+	ResolveVariable(name string, isSystemVar, isGlobalVar bool) (any, error)
 }

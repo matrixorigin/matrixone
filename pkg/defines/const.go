@@ -34,6 +34,11 @@ const (
 	SpillFileServiceName = "__spill"
 )
 
+// TaskLeaseSnapshotSysVar is a versioned connection capability used by the
+// task service for lease-fenced catalog transactions. An older CN must reject
+// it rather than silently run a fenced transaction with RC isolation.
+const TaskLeaseSnapshotSysVar = "mo_task_lease_snapshot_v1"
+
 const (
 	MORPCMinVersion    int64 = math.MinInt64
 	MORPCVersion1      int64 = 1

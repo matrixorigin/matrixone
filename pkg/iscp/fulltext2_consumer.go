@@ -87,11 +87,16 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 					reportIndexConsumerErr(errch, ferr)
 					return
 				}
-				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
-					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+				err = c.RunTxn(ctx, r, time.Hour,
+					func(sqlproc *sqlexec.SqlProcess) (err error) {
 						startChunk, err := fulltext2.NextTailChunkId(sqlproc, w.cfg)
 						if err != nil {
 							return err
+						}
+						if datatype == ISCPDataType_Snapshot {
+							if err := c.clearSnapshotOutput(sqlproc); err != nil {
+								return err
+							}
 						}
 						// The frames are already on disk (TailBuilder spilled them into packed spool
 						// files): persist their bytes, batched at maxInsertTuples rows per
@@ -102,17 +107,19 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						if err != nil {
 							return err
 						}
+						if datatype == ISCPDataType_Snapshot && chunkID == startChunk {
+							if err := fulltext2.PersistEmptyTail(sqlproc, w.cfg, startChunk); err != nil {
+								return err
+							}
+						}
 
 						// Per-flush-cycle sink summary: Debug, not Info — a continuously-ingesting index
 						// flushes often, so this would flood production logs at Info (see the 46 GB
 						// stdout incident). Available at Debug when diagnosing CDC ingest.
 						logutil.Debugf("[ftv2-sink] db=%s index=%s type=%d events=%d frames=%d chunk_id=%d..%d",
 							w.cfg.DbName, w.cfg.IndexTable, datatype, nevents, len(segs), startChunk, chunkID)
-						if datatype == ISCPDataType_Tail {
-							sqlctx := sqlproc.SqlCtx
-							return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
-						}
-						return nil
+						sqlctx := sqlproc.SqlCtx
+						return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 					})
 				if err != nil {
 					reportIndexConsumerErr(errch, err)
@@ -124,7 +131,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 				// NOTE: this eviction is LOCAL to this CN — cross-CN cache coherence is
 				// a known cache-layer gap deferred to a follow-up PR (see the Decision
 				// block on veccache.VectorIndexCache.Remove).
-				if len(segs) > 0 {
+				if datatype == ISCPDataType_Snapshot || len(segs) > 0 {
 					fulltext2.NewFulltext2Search(w.cfg).OnCacheInvalidated(string(fulltext2.LoadMissCDCFlush))
 					veccache.Cache.Remove(w.cfg.IndexTable)
 					logutil.Debugf("[ftv2-sink] evicted search cache for index=%s", w.cfg.IndexTable) // per-flush: Debug, not Info

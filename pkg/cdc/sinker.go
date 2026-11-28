@@ -24,6 +24,7 @@ import (
 )
 
 var NewSinker = func(
+	ctx context.Context,
 	sinkUri UriInfo,
 	accountId uint64,
 	taskId string,
@@ -43,6 +44,7 @@ var NewSinker = func(
 
 	// Use the new v2 architecture
 	return CreateMysqlSinker2(
+		ctx,
 		sinkUri,
 		accountId,
 		taskId,

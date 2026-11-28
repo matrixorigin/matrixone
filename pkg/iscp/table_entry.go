@@ -240,35 +240,58 @@ func (t *TableEntry) markIterationPending(iter *IterationContext) error {
 	return nil
 }
 
-func (t *TableEntry) UpdateWatermark(iter *IterationContext) {
+func (t *TableEntry) UpdateWatermark(iter *IterationContext) error {
 	if iter.fromTS.GE(&iter.toTS) {
-		return
+		return nil
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if len(iter.jobNames) != len(iter.jobIDs) || len(iter.jobNames) != len(iter.lsn) {
+		return moerr.NewInternalErrorNoCtx("invalid ISCP clean iteration")
+	}
 	for i, jobName := range iter.jobNames {
 		jobEntry := t.jobs[JobKey{
 			JobName: jobName,
 			JobID:   iter.jobIDs[i],
 		}]
-		jobEntry.UpdateWatermark(iter.fromTS, iter.toTS, t.exec.option.FlushWatermarkInterval)
+		if jobEntry == nil || jobEntry.dropAt != 0 || jobEntry.state != ISCPJobState_Completed || jobEntry.currentLSN+1 != iter.lsn[i] || (t.exec != nil && t.exec.IsJobFenced(NewJobRuntimeKey(t.accountID, t.tableID, jobName, iter.jobIDs[i]))) {
+			return nil
+		}
+		next := jobEntry.watermark.Next()
+		if !next.EQ(&iter.fromTS) {
+			return moerr.NewInternalErrorNoCtxf("ISCP clean iteration watermark mismatch for job %s/%d", jobName, iter.jobIDs[i])
+		}
 	}
+	for i, jobName := range iter.jobNames {
+		t.jobs[JobKey{JobName: jobName, JobID: iter.jobIDs[i]}].watermark = iter.toTS
+	}
+	return nil
+}
+
+type watermarkFlush struct {
+	table     *TableEntry
+	job       *JobEntry
+	lsn       uint64
+	watermark types.TS
 }
 
 func (t *TableEntry) tryFlushWatermark(
 	ctx context.Context,
 	txn client.TxnOperator,
 	threshold time.Duration,
-) (flushCount int) {
+) (updates []watermarkFlush, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, jobEntry := range t.jobs {
 		needFlush, err := jobEntry.tryFlushWatermark(ctx, txn, threshold)
-		if needFlush && err == nil {
-			flushCount++
+		if err != nil {
+			return nil, err
+		}
+		if needFlush {
+			updates = append(updates, watermarkFlush{table: t, job: jobEntry, lsn: jobEntry.currentLSN, watermark: jobEntry.watermark})
 		}
 	}
-	return flushCount
+	return updates, nil
 }
 
 func (t *TableEntry) String() string {
