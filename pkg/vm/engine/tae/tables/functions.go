@@ -237,7 +237,7 @@ func getDuplicateRowIDNABlkFuncFactory[T any](comp func(T, T) int) func(args ...
 				nil,
 			); existed {
 				rowID := objectio.NewRowid(&blkID, uint32(offset))
-				containers.UpdateRow(rowIDs, row, rowID, false)
+				containers.UpdateValue(rowIDs, uint32(row), rowID, false, rowIDs.MPool())
 			}
 			return
 		}
@@ -279,7 +279,7 @@ func getDuplicatedRowIDsNABlkBytesFunc(args ...any) func([]byte, bool, int) erro
 			nil,
 		); existed {
 			rowID := objectio.NewRowid(&blkID, uint32(offset))
-			containers.UpdateRow(rowIDs, row, rowID, false)
+			containers.UpdateValue(rowIDs, uint32(row), rowID, false, rowIDs.MPool())
 		}
 		return
 	}
@@ -299,7 +299,7 @@ func getDuplicatedRowIDNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, b
 			nil,
 		); existed {
 			rowID := objectio.NewRowid(&blkID, uint32(offset))
-			containers.UpdateRow(rowIDs, row, rowID, false)
+			containers.UpdateValue(rowIDs, uint32(row), rowID, false, rowIDs.MPool())
 		}
 		return
 	}
@@ -361,7 +361,7 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 					return nil
 				}
 				rowID := objectio.NewRowid(&blkID, uint32(row))
-				containers.UpdateRow(rowIDs, rowOffset, rowID, false)
+				containers.UpdateValue(rowIDs, uint32(rowOffset), rowID, false, rowIDs.MPool())
 				return nil
 			}
 			commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec, row)
@@ -387,7 +387,7 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				return txnif.ErrTxnWWConflict
 			}
 			rowID := objectio.NewRowid(&blkID, uint32(row))
-			containers.UpdateRow(rowIDs, rowOffset, rowID, false)
+			containers.UpdateValue(rowIDs, uint32(rowOffset), rowID, false, rowIDs.MPool())
 			return nil
 		}
 		if lookup.heads != nil {
@@ -460,10 +460,10 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 							return nil
 						}
 						rowID := objectio.NewRowid(&blkID, uint32(row))
-						containers.UpdateRow(rowIDs, rowOffset, rowID, false)
+						containers.UpdateValue(rowIDs, uint32(rowOffset), rowID, false, rowIDs.MPool())
 						return nil
 					}
-					commitTS := containers.GetValue(tsVec, row).(types.TS)
+					commitTS := tsVec.GetValue(row).(types.TS)
 					if commitTS.Equal(&txnif.UncommitTS) {
 						return nil
 					}
@@ -484,7 +484,7 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 						return txnif.ErrTxnWWConflict
 					}
 					rowID := objectio.NewRowid(&blkID, uint32(row))
-					containers.UpdateRow(rowIDs, rowOffset, rowID, false)
+					containers.UpdateValue(rowIDs, uint32(rowOffset), rowID, false, rowIDs.MPool())
 					return nil
 				}, nil, nil)
 		}
@@ -531,7 +531,7 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 					if isAborted(abortVec, row) {
 						continue
 					}
-					commitTS := containers.GetValue(tsVec, row).(types.TS)
+					commitTS := tsVec.GetValue(row).(types.TS)
 					if commitTS.Equal(&txnif.UncommitTS) {
 						continue
 					}

@@ -1339,7 +1339,7 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 
 	deleteFn := func() {
 		txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
-		pkVal := containers.GetValue(bat.Vecs[0], 0)
+		pkVal := bat.Vecs[0].GetValue(0)
 		filter := handle.NewEQFilter(pkVal)
 		err = rel.DeleteByFilter(ctx, filter)
 		require.Nil(t, err)

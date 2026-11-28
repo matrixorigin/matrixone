@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -118,13 +117,13 @@ func TestPartialFlushPreservesDeletesAndWriter(t *testing.T) {
 
 			deleteTxn, finishDelete := flushProgressTxn(t, ctx, engine)
 			deleteRel := flushProgressRelation(t, deleteTxn, schema.Name)
-			readyID, _, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(containers.GetValue(rows.Vecs[0], 0)))
+			readyID, _, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(rows.Vecs[0].GetValue(0)))
 			require.NoError(t, err)
-			busyID, _, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(containers.GetValue(rows.Vecs[0], 4)))
+			busyID, _, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(rows.Vecs[0].GetValue(4)))
 			require.NoError(t, err)
 			require.NotEqual(t, *readyID.ObjectID(), *busyID.ObjectID())
 			for _, i := range []int{0, 4} {
-				require.NoError(t, deleteRel.DeleteByFilter(ctx, handle.NewEQFilter(containers.GetValue(rows.Vecs[0], i))))
+				require.NoError(t, deleteRel.DeleteByFilter(ctx, handle.NewEQFilter(rows.Vecs[0].GetValue(i))))
 			}
 			require.NoError(t, deleteTxn.Commit(ctx))
 			finishDelete()
@@ -207,15 +206,15 @@ func TestPartialFlushPreservesDeletesAndWriter(t *testing.T) {
 				}
 				testutil.CheckAllColRowsByScan(t, rel, wantRows, true)
 				for i := 0; i < 6; i++ {
-					id, row, err := rel.GetByFilter(ctx, handle.NewEQFilter(containers.GetValue(rows.Vecs[0], i)))
+					id, row, err := rel.GetByFilter(ctx, handle.NewEQFilter(rows.Vecs[0].GetValue(i)))
 					if i == 0 || i == 4 || (i == 5 && !wantPending) {
-						require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound), "key %v: %v", containers.GetValue(rows.Vecs[0], i), err)
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound), "key %v: %v", rows.Vecs[0].GetValue(i), err)
 					} else {
-						require.NoError(t, err, "key %v", containers.GetValue(rows.Vecs[0], i))
+						require.NoError(t, err, "key %v", rows.Vecs[0].GetValue(i))
 						value, isNull, err := rel.GetValue(id, row, 1, false)
 						require.NoError(t, err)
 						require.False(t, isNull)
-						require.Equal(t, containers.GetValue(rows.Vecs[1], i), value)
+						require.Equal(t, rows.Vecs[1].GetValue(i), value)
 					}
 				}
 				require.NoError(t, txn.Commit(ctx))

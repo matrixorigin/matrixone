@@ -65,7 +65,7 @@ func TestMergeCommand(t *testing.T) {
 	schema.Name = "test1"
 	table, err := testutil.CreateRelation2(ctx, asyncTxn, database, schema)
 	require.NoError(t, err)
-	vector := containers.NewVector(types.T_varchar.ToType())
+	vector := containers.MakeVector(types.T_varchar.ToType(), nil)
 	{
 		id := objectio.NewObjectid()
 		stats := objectio.NewObjectStatsWithObjectID(&id, false, true, false)
@@ -75,7 +75,7 @@ func TestMergeCommand(t *testing.T) {
 		index.UpdateZM(zm, types.EncodeInt32(&v1))
 		index.UpdateZM(zm, types.EncodeInt32(&v2))
 		objectio.SetObjectStatsSortKeyZoneMap(stats, zm)
-		containers.AppendValue(vector, stats.Marshal(), false)
+		vector.MustAppendValue(stats.Marshal(), false)
 
 		id = objectio.NewObjectid()
 		stats = objectio.NewObjectStatsWithObjectID(&id, false, true, false)
@@ -85,7 +85,7 @@ func TestMergeCommand(t *testing.T) {
 		index.UpdateZM(zm, types.EncodeInt32(&v1))
 		index.UpdateZM(zm, types.EncodeInt32(&v2))
 		objectio.SetObjectStatsSortKeyZoneMap(stats, zm)
-		containers.AppendValue(vector, stats.Marshal(), false)
+		vector.MustAppendValue(stats.Marshal(), false)
 	}
 	require.NoError(t, table.AddDataFiles(ctx, vector))
 	require.NoError(t, asyncTxn.Commit(context.Background()))

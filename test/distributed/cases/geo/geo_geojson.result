@@ -82,3 +82,43 @@ select id, st_astext(g) from gj_t;
 id    st_astext(g)
 1    POINT(10 20)
 drop table gj_t;
+select st_geomfromgeojson('{"type":"Point","coordinates":null}');
+invalid input: invalid GeoJSON Point: coordinates is null
+select st_geomfromgeojson('{"type":"Point","coordinates":null}', 0);
+invalid input: invalid GeoJSON Point: coordinates is null
+select st_geomfromgeojson('{"type":"Point","coordinates":null,"Coordinates":[1,2]}');
+invalid input: invalid GeoJSON Point: coordinates is null
+select st_geomfromgeojson('{"type":"Point","Coordinates":[1,2],"coordinates":null}');
+invalid input: invalid GeoJSON Point: coordinates is null
+select st_geomfromgeojson('{"type":"Point","Coordinates":[1,2]}');
+invalid input: invalid GeoJSON Point: missing coordinates
+select st_geomfromgeojson('{"type":"GeometryCollection"}');
+invalid input: invalid GeoJSON GeometryCollection: geometries is required
+select st_geomfromgeojson('{"type":"GeometryCollection","geometries":null,"Geometries":[{"type":"Point","coordinates":[1,2]}]}');
+invalid input: invalid GeoJSON GeometryCollection: geometries is required
+select st_geomfromgeojson('{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":null,"Coordinates":[1,2]}]}');
+invalid input: invalid GeoJSON Point: coordinates is null
+select st_astext(st_geomfromgeojson('{"type":"Point","coordinates":[]}')) as pt_empty;
+pt_empty
+POINT EMPTY
+select st_astext(st_geomfromgeojson('{"type":"Point","coordinates":[],"Coordinates":[1,2]}')) as pt_empty_shadowed;
+pt_empty_shadowed
+POINT EMPTY
+select st_astext(st_geomfromgeojson('{"type":"GeometryCollection","geometries":[]}')) as gc_empty;
+gc_empty
+GEOMETRYCOLLECTION EMPTY
+select st_astext(st_geomfromgeojson('{"type":"GeometryCollection","geometries":[],"Geometries":[{"type":"Point","coordinates":[1,2]}]}')) as gc_empty_shadowed;
+gc_empty_shadowed
+GEOMETRYCOLLECTION EMPTY
+select st_astext(st_geomfromgeojson('{"type":"Point","coordinates":[5,6],"Coordinates":[9,9]}')) as pt_canonical;
+pt_canonical
+POINT(5 6)
+select st_srid(st_geomfromgeojson('{"type":"Point","coordinates":[5,6],"Coordinates":[9,9]}', 0)) as pt_srid0_kept;
+pt_srid0_kept
+0
+select st_astext(st_geomfromgeojson('{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1,2]}],"Geometries":[]}', 0)) as gc_child_kept;
+gc_child_kept
+GEOMETRYCOLLECTION(POINT(1 2))
+select 2 as after_case_fold_checks;
+after_case_fold_checks
+2

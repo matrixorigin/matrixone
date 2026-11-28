@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "helper.h"
 #include <raft/core/device_mdarray.hpp>
 #include <raft/core/host_mdarray.hpp>
 #include <raft/core/resources.hpp>
@@ -104,7 +105,7 @@ public:
                 raft::linalg::unaryOp(
                     out_ptr, chunk_device_int8.data_handle(), n_rows * n_cols,
                     [] __device__(int8_t v) { return static_cast<uint8_t>(static_cast<int>(v) + 128); },
-                    raft::resource::get_cuda_stream(res));
+                    cuda_stream_handle(res));
             }
         } else {
             // For host pointers, transform into a temporary device int8 buffer first.
@@ -117,7 +118,7 @@ public:
                 raft::linalg::unaryOp(
                     tmp_u8.data_handle(), tmp_dev.data_handle(), n_rows * n_cols,
                     [] __device__(int8_t v) { return static_cast<uint8_t>(static_cast<int>(v) + 128); },
-                    raft::resource::get_cuda_stream(res));
+                    cuda_stream_handle(res));
                 auto out_view = raft::make_host_matrix_view<uint8_t, int64_t>(out_ptr, n_rows, n_cols);
                 raft::copy(res, out_view, tmp_u8.view());
             } else {

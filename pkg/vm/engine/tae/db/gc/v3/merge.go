@@ -158,17 +158,27 @@ func MergeCheckpoint(
 	newFiles = append(newFiles, files...)
 	bat := makeBatchFromSchema(checkpoint.CheckpointSchema)
 	var cptLocation objectio.LocationSlice
-	containers.AppendValue(bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS), ckpEntries[0].GetStart(), false)
-	containers.AppendValue(bat.GetVectorByName(checkpoint.CheckpointAttr_EndTS), *end, false)
-	containers.AppendValue(bat.GetVectorByName(checkpoint.CheckpointAttr_MetaLocation), []byte(location), false)
-	containers.AppendValue(bat.GetVectorByName(checkpoint.CheckpointAttr_EntryType), false, false)
-	containers.AppendValue(bat.GetVectorByName(checkpoint.CheckpointAttr_Version), logtail.CheckpointCurrentVersion, false)
-	containers.AppendValue(bat.GetVectorByName(checkpoint.CheckpointAttr_AllLocations), []byte(location), false)
-	containers.AppendValue(bat.GetVectorByName(checkpoint.CheckpointAttr_CheckpointLSN), uint64(0), false)
-	containers.AppendValue(bat.GetVectorByName(checkpoint.CheckpointAttr_TruncateLSN), uint64(0), false)
-	containers.AppendValue(bat.GetVectorByName(checkpoint.CheckpointAttr_Type), int8(checkpoint.ET_Compacted), false)
-	containers.AppendValue(bat.GetVectorByName(checkpoint.CheckpointAttr_TableIDLocation), []byte(cptLocation), false)
 	defer bat.Close()
+	for _, col := range []struct {
+		attr string
+		val  any
+	}{
+		{checkpoint.CheckpointAttr_StartTS, ckpEntries[0].GetStart()},
+		{checkpoint.CheckpointAttr_EndTS, *end},
+		{checkpoint.CheckpointAttr_MetaLocation, []byte(location)},
+		{checkpoint.CheckpointAttr_EntryType, false},
+		{checkpoint.CheckpointAttr_Version, logtail.CheckpointCurrentVersion},
+		{checkpoint.CheckpointAttr_AllLocations, []byte(location)},
+		{checkpoint.CheckpointAttr_CheckpointLSN, uint64(0)},
+		{checkpoint.CheckpointAttr_TruncateLSN, uint64(0)},
+		{checkpoint.CheckpointAttr_Type, int8(checkpoint.ET_Compacted)},
+		{checkpoint.CheckpointAttr_TableIDLocation, []byte(cptLocation)},
+	} {
+		vec := bat.GetVectorByName(col.attr)
+		if err = vector.AppendAny(vec, col.val, false, vec.MPool()); err != nil {
+			return
+		}
+	}
 	name := ioutil.EncodeCompactCKPMetadataFullName(ckpEntries[0].GetStart(), *end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {

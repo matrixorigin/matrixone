@@ -2476,6 +2476,7 @@ func TestPreparedStatementsValidateRefreshedRewritePolicy(t *testing.T) {
 			ses.ruleCache = map[string]string{}
 			if tc.enabled {
 				ses.ruleCache["db.t"] = "select * from db.t where tenant = 1"
+				seedRewriteRuleCacheProofForTest(ses)
 			}
 			ses.prepareStmts["fresh"] = fresh
 			ses.validatePreparedStatementsAfterRewritePolicyRefresh(

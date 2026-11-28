@@ -732,7 +732,7 @@ func (obj *baseObject) GetValue(
 		}
 		isNull = bat.Vecs[0].IsNull(uint64(row))
 		if !isNull {
-			v = containers.GetValue(bat.Vecs[0], row)
+			v = bat.Vecs[0].GetValue(row)
 		}
 		return
 	}
@@ -748,7 +748,7 @@ func (obj *baseObject) GetValue(
 	}
 	isNull = bat.Vecs[0].IsNull(uint64(row))
 	if !isNull {
-		v = containers.GetValue(bat.Vecs[0], row)
+		v = bat.Vecs[0].GetValue(row)
 	}
 	bat.Close()
 	return
