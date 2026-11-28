@@ -20,7 +20,7 @@ jobs:
       github.repository == 'matrixorigin/matrixone' && github.event_name == 'push' &&
       github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-pr32922.yaml@refs/heads/weilu-runner-test' &&
       github.actor == 'Ariznawlll' && github.run_attempt == 1 &&
-      github.event.before == 'b0f4ab7d198ba88bbcf5095afa17687d396f2f33'
+      github.event.before == '0c03d3c0d61bf8c336c7b5da1aa972eba787cf92'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     environment: ci
@@ -81,7 +81,9 @@ jobs:
         ACTIONS_TOKEN: ${{ github.token }}
       run: python3 -I .coverage-trial/.github/standby-trial/ci495_trial.py wait
     - name: Cancel the selected worker if the selector stops
-      if: ${{ always() && steps.select.outputs.child != '' && steps.wait.outcome != 'success' }}
+      if: >-
+        ${{ always() && steps.wait.outcome != 'success' &&
+            (steps.select.outputs.child != '' || steps.select.outcome == 'failure' || steps.select.outcome == 'cancelled') }}
       timeout-minutes: 2
       env:
         CHILD: ${{ steps.select.outputs.child }}

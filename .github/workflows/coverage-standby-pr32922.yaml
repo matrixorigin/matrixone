@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   authorize:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == 'b0f4ab7d198ba88bbcf5095afa17687d396f2f33' && github.ref == 'refs/heads/weilu-runner-test'
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == '0c03d3c0d61bf8c336c7b5da1aa972eba787cf92' && github.ref == 'refs/heads/weilu-runner-test'
     runs-on: ubuntu-latest
     environment: ci
     permissions:
@@ -144,7 +144,7 @@ jobs:
       source: ${{ needs.authorize.outputs.source }}
       enable_cs_site_retry: false
       first_pool_snapshot: >-
-        {"captured_at":1795843887,"pools":[{"pool":"cs-mnl2-nc-n0-pr-v1","slots":1,"pending":0},{"pool":"cs-mnl2-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-mnl2-nc-n2-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n2-pr-v1","slots":2,"pending":0}]}
+        {"captured_at":1795846610,"pools":[{"pool":"cs-mnl2-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-mnl2-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-mnl2-nc-n2-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n0-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n1-pr-v1","slots":2,"pending":0},{"pool":"cs-ruh-nc-n2-pr-v1","slots":2,"pending":0}]}
   merge:
     needs: [authorize, coverage]
     runs-on: ubuntu-latest
