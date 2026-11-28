@@ -180,6 +180,8 @@ type Lexer struct {
 	parseFirst            bool
 	stopLexing            bool
 	statementEnd          int
+	hasLockingRead        bool
+	afterLockInShare      bool
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -220,6 +222,8 @@ func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.parseFirst = false
 	l.stopLexing = false
 	l.statementEnd = 0
+	l.hasLockingRead = false
+	l.afterLockInShare = false
 }
 
 func (l *Lexer) HasSQLMode(flag SQLModeFlag) bool {
@@ -256,6 +260,13 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		}
 		*l.scanner = snapshot
 	}
+	// In a valid SELECT these token sequences are only accepted as locking
+	// clauses. Use the parser's tokens so comments and literals stay distinct.
+	if (l.lastToken == FOR && (typ == UPDATE || typ == SHARE)) ||
+		(l.afterLockInShare && typ == MODE) {
+		l.hasLockingRead = true
+	}
+	l.afterLockInShare = typ == SHARE && l.lastToken == IN && l.previousToken == LOCK
 
 	switch typ {
 	case INTEGRAL:
@@ -327,6 +338,16 @@ func (l *Lexer) Error(err string) {
 }
 
 func (l *Lexer) AppendStmt(stmt tree.Statement) {
+	if l.hasLockingRead {
+		query := stmt
+		if prepared, ok := query.(*tree.PrepareStmt); ok {
+			query = prepared.Stmt
+		}
+		if sel, ok := query.(*tree.Select); ok {
+			sel.HasLockingRead = true
+		}
+		l.hasLockingRead = false
+	}
 	l.stmts = append(l.stmts, stmt)
 	if l.parseFirst && len(l.stmts) == 1 {
 		l.statementEnd = l.scanner.Pos

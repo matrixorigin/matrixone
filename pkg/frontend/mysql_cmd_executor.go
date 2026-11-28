@@ -4197,6 +4197,7 @@ func executeStmtWithWorkspace(ses FeSession,
 		return
 	}
 	var autocommit bool
+	var finishMaxExecutionTimer func(error) error
 	//derived stmt shares the same txn with ancestor.
 	//it only executes select statements.
 
@@ -4213,8 +4214,18 @@ func executeStmtWithWorkspace(ses FeSession,
 
 			ses.Error(execCtx.reqCtx, "recover from panic before finishTxnFunc", zap.Error(err))
 		}
+		if finishMaxExecutionTimer != nil {
+			err = finishMaxExecutionTimer(err)
+		}
 		err = finishTxnFunc(ses, err, execCtx)
 	}()
+
+	if session, ok := ses.(*Session); ok {
+		finishMaxExecutionTimer, err = startMaxExecutionTimer(session, execCtx)
+		if err != nil {
+			return err
+		}
+	}
 
 	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
 

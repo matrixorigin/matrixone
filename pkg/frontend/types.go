@@ -900,9 +900,11 @@ type SessionLoggerGetter interface {
 }
 
 type ExecCtx struct {
-	reqCtx      context.Context
-	prepareStmt *PrepareStmt
-	runResult   *util.RunResult
+	reqCtx context.Context
+	// txnAdmissionCtx bounds TxnClient.New for a timed SELECT.
+	txnAdmissionCtx context.Context
+	prepareStmt     *PrepareStmt
+	runResult       *util.RunResult
 	// Authorization uses a statement view independently of an old user SI transaction.
 	authorizationMu       sync.Mutex
 	authorizationSnapshot timestamp.Timestamp
@@ -975,6 +977,7 @@ func (execCtx *ExecCtx) Close() {
 		execCtx.returning = nil
 	}
 	execCtx.reqCtx = nil
+	execCtx.txnAdmissionCtx = nil
 	execCtx.prepareStmt = nil
 	execCtx.runResult = nil
 	execCtx.rootSQLOverride = nil

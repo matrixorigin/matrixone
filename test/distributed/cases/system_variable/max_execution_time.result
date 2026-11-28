@@ -1,0 +1,12 @@
+set @saved_max_execution_time = @@session.max_execution_time;
+set session max_execution_time = 500;
+select sleep(3) as slept;
+Query execution was interrupted, maximum statement execution time exceeded
+select 1 as reusable;
+reusable
+1
+set session max_execution_time = 0;
+select sleep(0.75) as slept;
+slept
+0
+set session max_execution_time = @saved_max_execution_time;

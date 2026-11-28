@@ -470,7 +470,13 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		opts = append(opts, txnclient.WithReadOnlySnapshot(backSes.readSnapshot))
 	}
 
-	tempCtx, tempCancel := context.WithTimeoutCause(th.txnCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
+	// TxnClient.New uses this context for admission and snapshot acquisition.
+	// The workspace and terminal operations still use the long-lived txnCtx.
+	admissionCtx := th.txnCtx
+	if execCtx.txnAdmissionCtx != nil {
+		admissionCtx = execCtx.txnAdmissionCtx
+	}
+	tempCtx, tempCancel := context.WithTimeoutCause(admissionCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
 	defer tempCancel()
 
 	txnClient := pu.TxnClient
