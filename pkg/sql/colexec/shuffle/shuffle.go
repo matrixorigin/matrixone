@@ -659,7 +659,7 @@ func (shuffle *Shuffle) evalAndShuffle(bat *batch.Batch, proc *process.Process) 
 		if shuffle.ShuffleType == int32(plan.ShuffleType_Range) {
 			shuffleIdx = rangeShuffleConstVec(shuffle, vec)
 		} else {
-			shuffleIdx = shuffleConstVecByHash(shuffle, vec)
+			shuffleIdx = shuffleConstVectorByHash(shuffle, vec)
 		}
 		return shuffle.routeSingleBucket(bat, int32(shuffleIdx), proc)
 	}
@@ -668,11 +668,10 @@ func (shuffle *Shuffle) evalAndShuffle(bat *batch.Batch, proc *process.Process) 
 	if shuffle.ShuffleType == int32(plan.ShuffleType_Range) {
 		rangeShuffleVec(shuffle, &partition, vec)
 	} else {
-		lenRegs := uint64(shuffle.BucketNum)
 		if vec.HasNull() {
-			hashShuffleVecWithNull(shuffle, &partition, vec, lenRegs)
+			getShuffledSelsByHashWithNull(shuffle, vec, &partition)
 		} else {
-			hashShuffleVecWithoutNull(shuffle, &partition, vec, lenRegs)
+			getShuffledSelsByHashWithoutNull(shuffle, vec, &partition)
 		}
 	}
 
@@ -739,9 +738,9 @@ func (shuffle *Shuffle) clearSels() [][]int32 {
 	return shuffle.ctr.sels
 }
 
-func shuffleConstVectorByHash(ap *Shuffle, bat *batch.Batch) uint64 {
+// shuffleConstVectorByHash returns the bucket of a constant key vector.
+func shuffleConstVectorByHash(ap *Shuffle, groupByVec *vector.Vector) uint64 {
 	lenRegs := uint64(ap.BucketNum)
-	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
@@ -769,13 +768,16 @@ func shuffleConstVectorByHash(ap *Shuffle, bat *batch.Batch) uint64 {
 		groupByCol := vector.MustFixedColNoTypeCheck[types.Uuid](groupByVec)
 		return plan2.SimpleInt64HashToRange(uuidHash(groupByCol[0]), lenRegs)
 	default:
-		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
+		if !vector.SupportsAny(groupByVec.GetType().Oid) {
+			panic("unsupported shuffle type, wrong plan!") //something got wrong here!
+		}
+		return stringHashToRange(ap, groupByVec.GetRawBytesAt(0), lenRegs)
 	}
 }
 
-func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch, partition *bucketSelections) {
+// getShuffledSelsByHashWithNull routes the rows of a key vector with NULLs.
+func getShuffledSelsByHashWithNull(ap *Shuffle, groupByVec *vector.Vector, partition *bucketSelections) {
 	lenRegs := uint64(ap.BucketNum)
-	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
@@ -851,13 +853,13 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch, partition *buc
 			}
 		}
 	default:
-		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
+		appendRawHashBuckets(ap, partition, groupByVec, lenRegs, true)
 	}
 }
 
-func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch, partition *bucketSelections) {
+// getShuffledSelsByHashWithoutNull routes the rows of a key vector without NULLs.
+func getShuffledSelsByHashWithoutNull(ap *Shuffle, groupByVec *vector.Vector, partition *bucketSelections) {
 	bucketNum := uint64(ap.BucketNum)
-	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		partitionIntegerHash(vector.MustFixedColNoTypeCheck[int64](groupByVec), bucketNum, partition)
@@ -968,7 +970,42 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch, partition *
 			}
 		}
 	default:
-		panic(fmt.Sprintf("unsupported shuffle type %v, wrong plan!", groupByVec.GetType())) //something got wrong here!
+		appendRawHashBuckets(ap, partition, groupByVec, bucketNum, false)
+	}
+}
+
+// appendRawHashBuckets routes the rows of a key type without its own loop
+// above by the hash of the value's raw bytes; a NULL row goes to bucket 0
+// when withNull is set.
+func appendRawHashBuckets(ap *Shuffle, partition *bucketSelections, vec *vector.Vector, bucketNum uint64, withNull bool) {
+	if !vector.SupportsAny(vec.GetType().Oid) {
+		panic(fmt.Sprintf("unsupported shuffle type %v, wrong plan!", vec.GetType())) //something got wrong here!
+	}
+	bucketOf := func(row int) uint64 {
+		if withNull && vec.IsNull(uint64(row)) {
+			return 0
+		}
+		return stringHashToRange(ap, vec.GetRawBytesAt(row), bucketNum)
+	}
+	routingRows := vec.Length()
+	if routingRows == 0 {
+		return
+	}
+	firstBucket := bucketOf(0)
+	partition.first = firstBucket
+	row := 1
+	for ; row < routingRows; row++ {
+		if bucketOf(row) != firstBucket {
+			break
+		}
+	}
+	if row < routingRows {
+		partition.startMixed(row)
+		sels := partition.sels
+		for ; row < routingRows; row++ {
+			b := bucketOf(row)
+			sels[b] = append(sels[b], int32(row))
+		}
 	}
 }
 
@@ -1006,14 +1043,14 @@ func hashShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.B
 		return ap.routeSingleBucket(bat, 0, proc)
 	}
 	if groupByVec.IsConst() {
-		return ap.routeSingleBucket(bat, int32(shuffleConstVectorByHash(ap, bat)), proc)
+		return ap.routeSingleBucket(bat, int32(shuffleConstVectorByHash(ap, groupByVec)), proc)
 	}
 
 	partition := bucketSelections{sels: ap.clearSels()}
 	if groupByVec.HasNull() {
-		getShuffledSelsByHashWithNull(ap, bat, &partition)
+		getShuffledSelsByHashWithNull(ap, groupByVec, &partition)
 	} else {
-		getShuffledSelsByHashWithoutNull(ap, bat, &partition)
+		getShuffledSelsByHashWithoutNull(ap, groupByVec, &partition)
 	}
 	if !partition.mixed && bat.RowCount() > 0 {
 		return ap.routeSingleBucket(bat, int32(partition.first), proc)
@@ -1623,30 +1660,6 @@ func rangeShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.
 	return nil, err
 }
 
-// shuffleConstVecByHash computes the bucket index for a constant vector.
-func shuffleConstVecByHash(ap *Shuffle, vec *vector.Vector) uint64 {
-	lenRegs := uint64(ap.BucketNum)
-	switch vec.GetType().Oid {
-	case types.T_int64:
-		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[int64](vec)[0]), lenRegs)
-	case types.T_int32:
-		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[int32](vec)[0]), lenRegs)
-	case types.T_int16:
-		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[int16](vec)[0]), lenRegs)
-	case types.T_uint64:
-		return plan2.SimpleInt64HashToRange(vector.MustFixedColNoTypeCheck[uint64](vec)[0], lenRegs)
-	case types.T_uint32:
-		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[uint32](vec)[0]), lenRegs)
-	case types.T_uint16:
-		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[uint16](vec)[0]), lenRegs)
-	case types.T_char, types.T_varchar, types.T_text:
-		groupByCol, area := vector.MustVarlenaRawData(vec)
-		return stringHashToRangeForType(ap, *vec.GetType(), groupByCol[0].GetByteSlice(area), lenRegs)
-	default:
-		panic("unsupported shuffle type, wrong plan!")
-	}
-}
-
 // rangeShuffleConstVec computes the range bucket index for a constant vector.
 func rangeShuffleConstVec(ap *Shuffle, vec *vector.Vector) uint64 {
 	bucketNum := uint64(ap.BucketNum)
@@ -1966,63 +1979,6 @@ func rangeShuffleVec(ap *Shuffle, partition *bucketSelections, vec *vector.Vecto
 		}
 	default:
 		panic("unsupported shuffle type, wrong plan!")
-	}
-}
-
-func hashShuffleVecWithNull(ap *Shuffle, partition *bucketSelections, vec *vector.Vector, lenRegs uint64) {
-	switch vec.GetType().Oid {
-	case types.T_int64:
-		col := vector.MustFixedColNoTypeCheck[int64](vec)
-		partitionNullableIntegerHash(col, lenRegs, vec, partition)
-	case types.T_int32:
-		col := vector.MustFixedColNoTypeCheck[int32](vec)
-		partitionNullableIntegerHash(col, lenRegs, vec, partition)
-	case types.T_int16:
-		col := vector.MustFixedColNoTypeCheck[int16](vec)
-		partitionNullableIntegerHash(col, lenRegs, vec, partition)
-	case types.T_uint64:
-		col := vector.MustFixedColNoTypeCheck[uint64](vec)
-		partitionNullableIntegerHash(col, lenRegs, vec, partition)
-	case types.T_uint32:
-		col := vector.MustFixedColNoTypeCheck[uint32](vec)
-		partitionNullableIntegerHash(col, lenRegs, vec, partition)
-	case types.T_uint16:
-		col := vector.MustFixedColNoTypeCheck[uint16](vec)
-		partitionNullableIntegerHash(col, lenRegs, vec, partition)
-	case types.T_char, types.T_varchar, types.T_text:
-		col, area := vector.MustVarlenaRawData(vec)
-		appendStringHashBuckets(ap, partition, vec, col, area, lenRegs, true)
-	default:
-		panic(fmt.Sprintf("unsupported shuffle type %v, wrong plan!", vec.GetType()))
-	}
-}
-
-// hashShuffleVecWithoutNull hashes a vector without null values into shuffle bucket selections.
-func hashShuffleVecWithoutNull(ap *Shuffle, partition *bucketSelections, vec *vector.Vector, lenRegs uint64) {
-	switch vec.GetType().Oid {
-	case types.T_int64:
-		col := vector.MustFixedColNoTypeCheck[int64](vec)
-		partitionIntegerHash(col, lenRegs, partition)
-	case types.T_int32:
-		col := vector.MustFixedColNoTypeCheck[int32](vec)
-		partitionIntegerHash(col, lenRegs, partition)
-	case types.T_int16:
-		col := vector.MustFixedColNoTypeCheck[int16](vec)
-		partitionIntegerHash(col, lenRegs, partition)
-	case types.T_uint64:
-		col := vector.MustFixedColNoTypeCheck[uint64](vec)
-		partitionIntegerHash(col, lenRegs, partition)
-	case types.T_uint32:
-		col := vector.MustFixedColNoTypeCheck[uint32](vec)
-		partitionIntegerHash(col, lenRegs, partition)
-	case types.T_uint16:
-		col := vector.MustFixedColNoTypeCheck[uint16](vec)
-		partitionIntegerHash(col, lenRegs, partition)
-	case types.T_char, types.T_varchar, types.T_text:
-		col, area := vector.MustVarlenaRawData(vec)
-		appendStringHashBuckets(ap, partition, vec, col, area, lenRegs, false)
-	default:
-		panic(fmt.Sprintf("unsupported shuffle type %v, wrong plan!", vec.GetType()))
 	}
 }
 

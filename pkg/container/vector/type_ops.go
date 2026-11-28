@@ -59,6 +59,8 @@ type typeOps struct {
 	// exportFromRaw is the value whose raw bytes are raw in the form code
 	// outside the engine works with (see ExportValue).
 	exportFromRaw func(raw []byte) any
+	// setConst makes v a constant vector of length rows of val.
+	setConst func(v *Vector, val any, length int, mp *mpool.MPool) error
 
 	// constructors of per-type functions
 	unionAll    func(mp *mpool.MPool) func(v, w *Vector) error              // getUnionAllFunction
@@ -97,6 +99,9 @@ func fixedOps[T types.FixedSizeT]() typeOps {
 		},
 		exportFromRaw: func(raw []byte) any {
 			return types.DecodeFixed[T](raw)
+		},
+		setConst: func(v *Vector, val any, length int, mp *mpool.MPool) error {
+			return SetConstFixed(v, val.(T), length, mp)
 		},
 		unionAll:    unionAllFixed[T],
 		appendBytes: appendBytesToFixSized[T],
@@ -144,6 +149,9 @@ func varlenOps() typeOps {
 	}
 	ops.exportFromRaw = func(raw []byte) any {
 		return slices.Clone(raw)
+	}
+	ops.setConst = func(v *Vector, val any, length int, mp *mpool.MPool) error {
+		return SetConstBytes(v, val.([]byte), length, mp)
 	}
 	ops.unionAll = unionAllVarlen
 	ops.appendBytes = func(vec *Vector) func([]byte, bool, *mpool.MPool) error {
@@ -393,4 +401,14 @@ func FixedValueOfInt(oid types.T, n int64) any {
 	raw := make([]byte, max(typ.TypeSize(), 8))
 	binary.LittleEndian.PutUint64(raw, uint64(n))
 	return ValueFromRaw(oid, raw[:typ.TypeSize()])
+}
+
+// SetConstValue makes vec a constant vector of length rows of val, a value
+// as GetAny returns it. It returns an error for a type SupportsAny rejects.
+func SetConstValue(vec *Vector, val any, length int, mp *mpool.MPool) error {
+	ops, ok := opsOf(vec)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("SetConstValue: unsupported type %s", vec.typ.String())
+	}
+	return ops.setConst(vec, val, length, mp)
 }

@@ -719,53 +719,12 @@ func (m *model) findPrevMatch() {
 // formatCell formats cell value
 func (m *model) formatCell(vec *vector.Vector, rowIdx int, col objecttool.ColInfo) string {
 	var value any
-	switch col.Type.Oid {
-	case types.T_bool:
-		value = vector.GetFixedAtNoTypeCheck[bool](vec, rowIdx)
-	case types.T_int8:
-		value = vector.GetFixedAtNoTypeCheck[int8](vec, rowIdx)
-	case types.T_int16:
-		value = vector.GetFixedAtNoTypeCheck[int16](vec, rowIdx)
-	case types.T_int32:
-		value = vector.GetFixedAtNoTypeCheck[int32](vec, rowIdx)
-	case types.T_int64:
-		value = vector.GetFixedAtNoTypeCheck[int64](vec, rowIdx)
-	case types.T_uint8:
-		value = vector.GetFixedAtNoTypeCheck[uint8](vec, rowIdx)
-	case types.T_uint16:
-		value = vector.GetFixedAtNoTypeCheck[uint16](vec, rowIdx)
-	case types.T_uint32:
-		value = vector.GetFixedAtNoTypeCheck[uint32](vec, rowIdx)
-	case types.T_uint64:
-		value = vector.GetFixedAtNoTypeCheck[uint64](vec, rowIdx)
-	case types.T_float32:
-		value = vector.GetFixedAtNoTypeCheck[float32](vec, rowIdx)
-	case types.T_float64:
-		value = vector.GetFixedAtNoTypeCheck[float64](vec, rowIdx)
-	case types.T_varchar, types.T_char, types.T_text, types.T_json:
+	if vector.SupportsAny(col.Type.Oid) {
+		value = vector.GetAny(vec, rowIdx, false)
+	} else if col.Type.IsFixedLen() {
+		value = fmt.Sprintf("<binary:%d bytes>", col.Type.TypeSize())
+	} else {
 		value = vec.GetBytesAt(rowIdx)
-	case types.T_blob:
-		value = vec.GetBytesAt(rowIdx)
-	case types.T_uuid:
-		value = vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIdx)
-	case types.T_date:
-		value = vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx)
-	case types.T_datetime:
-		value = vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIdx)
-	case types.T_time:
-		value = vector.GetFixedAtNoTypeCheck[types.Time](vec, rowIdx)
-	case types.T_timestamp:
-		value = vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, rowIdx)
-	case types.T_decimal64:
-		value = vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIdx)
-	case types.T_decimal128:
-		value = vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIdx)
-	default:
-		if col.Type.IsFixedLen() {
-			value = fmt.Sprintf("<binary:%d bytes>", col.Type.TypeSize())
-		} else {
-			value = vec.GetBytesAt(rowIdx)
-		}
 	}
 
 	formatter := m.state.formatter.GetFormatter(col.Idx, col.Type, value)

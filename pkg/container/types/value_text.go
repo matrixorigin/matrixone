@@ -159,34 +159,25 @@ func appendSQLLiteral(buf []byte, t Type, v any, loc *time.Location, mo bool) ([
 	if v == nil {
 		return append(buf, "NULL"...), nil
 	}
+	if mo {
+		if out, ok := appendMOExactLiteral(buf, t, v); ok {
+			return out, nil
+		}
+	}
+	oid := t.Oid
 	switch {
-	case t.Oid == T_float64:
-		if f := v.(float64); mo && (math.IsNaN(f) || math.IsInf(f, 0)) {
-			raw := EncodeFloat64(&f)
-			return appendBitCast(buf, raw, "DOUBLE"), nil
-		}
+	case oid == T_bool, oid.IsInteger(), oid.IsFloat(), oid == T_enum:
 		return AppendValueText(buf, t, v, loc), nil
-	case t.Oid.IsFloat():
-		if f := floatValue32(t, v); mo && (math.IsNaN(float64(f)) || math.IsInf(float64(f), 0)) {
-			raw := EncodeFloat32(&f)
-			return appendBitCast(buf, raw, "FLOAT"), nil
-		}
-		return AppendValueText(buf, t, v, loc), nil
-	case t.Oid == T_bool, t.Oid.IsInteger(), t.Oid == T_enum:
-		return AppendValueText(buf, t, v, loc), nil
-	case t.Oid == T_timestamp && mo:
-		ts := v.(Timestamp)
-		return appendBitCast(buf, EncodeTimestamp(&ts), "TIMESTAMP("+strconv.Itoa(int(t.Scale))+")"), nil
-	case t.Oid == T_bit:
+	case oid == T_bit:
 		value := v.(uint64)
 		byteLength := min(max((t.Width+7)/8, 1), 8)
 		b := slices.Clone(EncodeUint64(&value)[:byteLength])
 		slices.Reverse(b)
 		return appendHexLiteral(buf, b), nil
-	case t.Oid == T_binary, t.Oid == T_varbinary, t.Oid == T_blob,
-		t.Oid == T_geometry, t.Oid == T_geometry32:
+	case oid == T_binary, oid == T_varbinary, oid == T_blob,
+		oid == T_geometry, oid == T_geometry32:
 		return appendHexLiteral(buf, v.([]byte)), nil
-	case t.Oid.IsBlockScaledArray():
+	case oid.IsBlockScaledArray():
 		text, err := BlockScaledToJSON(v.([]byte))
 		if err != nil {
 			return buf, err
@@ -195,6 +186,29 @@ func appendSQLLiteral(buf []byte, t Type, v any, loc *time.Location, mo bool) ([
 	default:
 		return appendQuoted(buf, string(AppendValueText(nil, t, v, loc))), nil
 	}
+}
+
+// appendMOExactLiteral appends the BIT_CAST literal AppendMOSQLLiteral uses
+// for a timestamp and for a NaN or infinite float; ok is false for any other
+// value.
+func appendMOExactLiteral(buf []byte, t Type, v any) (_ []byte, ok bool) {
+	if t.Oid == T_timestamp {
+		ts := v.(Timestamp)
+		return appendBitCast(buf, EncodeTimestamp(&ts), "TIMESTAMP("+strconv.Itoa(int(t.Scale))+")"), true
+	}
+	if !t.Oid.IsFloat() {
+		return buf, false
+	}
+	if f, isDouble := v.(float64); isDouble {
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return appendBitCast(buf, EncodeFloat64(&f), "DOUBLE"), true
+		}
+		return buf, false
+	}
+	if f := floatValue32(t, v); math.IsNaN(float64(f)) || math.IsInf(float64(f), 0) {
+		return appendBitCast(buf, EncodeFloat32(&f), "FLOAT"), true
+	}
+	return buf, false
 }
 
 // floatValue32 is a float32 or low-precision float value as a float32.

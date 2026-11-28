@@ -368,8 +368,29 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 		}
 		return NewEnumVector(n, typ, m, random, nil)
 	default:
-		panic(moerr.NewInternalErrorNoCtxf("unsupport vector's type '%v", typ))
+		if typ.IsVarlen() || !vector.SupportsAny(typ.Oid) {
+			panic(moerr.NewInternalErrorNoCtxf("unsupport vector's type '%v", typ))
+		}
+		return newFixedValueVector(n, typ, m, random)
 	}
+}
+
+// newFixedValueVector returns n values of a fixed-size type without its own
+// generator above, made from 0..n-1 (or random numbers) by
+// vector.FixedValueOfInt.
+func newFixedValueVector(n int, typ types.Type, m *mpool.MPool, random bool) *vector.Vector {
+	vec := vector.NewVec(typ, m)
+	for i := 0; i < n; i++ {
+		v := int64(i)
+		if random {
+			v = rand.Int63()
+		}
+		if err := vector.AppendAny(vec, vector.FixedValueOfInt(typ.Oid, v), false, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
 }
 
 func NewTsVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []types.TS) *vector.Vector {

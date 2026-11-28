@@ -1816,11 +1816,6 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 		ap.ctr.sels = make([][]int32, ap.BucketNum)
 		return ap
 	}
-	batchOf := func(vec *vector.Vector) *batch.Batch {
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vec
-		return bat
-	}
 	bucketOf := func(sels [][]int32, row int32) int {
 		for b, sel := range sels {
 			for _, r := range sel {
@@ -1841,7 +1836,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 
 		ap := newArg()
 		partition := bucketSelections{sels: ap.clearSels()}
-		getShuffledSelsByHashWithoutNull(ap, batchOf(vec), &partition)
+		getShuffledSelsByHashWithoutNull(ap, vec, &partition)
 		if !partition.mixed && vec.Length() > 0 {
 			partition.startMixed(vec.Length())
 		}
@@ -1859,7 +1854,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 
 		ap := newArg()
 		partition := bucketSelections{sels: ap.clearSels()}
-		getShuffledSelsByHashWithNull(ap, batchOf(vec), &partition)
+		getShuffledSelsByHashWithNull(ap, vec, &partition)
 		if !partition.mixed && vec.Length() > 0 {
 			partition.startMixed(vec.Length())
 		}
@@ -1876,7 +1871,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 
 			ap := newArg()
 			partition := bucketSelections{sels: ap.clearSels()}
-			getShuffledSelsByHashWithoutNull(ap, batchOf(vec), &partition)
+			getShuffledSelsByHashWithoutNull(ap, vec, &partition)
 			if !partition.mixed && vec.Length() > 0 {
 				partition.startMixed(vec.Length())
 			}
@@ -1902,7 +1897,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 
 		ap := newArg()
 		partition := bucketSelections{sels: ap.clearSels()}
-		getShuffledSelsByHashWithoutNull(ap, batchOf(vec), &partition)
+		getShuffledSelsByHashWithoutNull(ap, vec, &partition)
 		if !partition.mixed && vec.Length() > 0 {
 			partition.startMixed(vec.Length())
 		}
@@ -1924,7 +1919,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 
 		ap := newArg()
 		partition := bucketSelections{sels: ap.clearSels()}
-		getShuffledSelsByHashWithNull(ap, batchOf(vec), &partition)
+		getShuffledSelsByHashWithNull(ap, vec, &partition)
 		if !partition.mixed && vec.Length() > 0 {
 			partition.startMixed(vec.Length())
 		}
@@ -1942,12 +1937,12 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 		defer vec.Free(proc.Mp())
 
 		ap := newArg()
-		require.Less(t, shuffleConstVectorByHash(ap, batchOf(vec)), uint64(ap.BucketNum))
+		require.Less(t, shuffleConstVectorByHash(ap, vec), uint64(ap.BucketNum))
 
 		vb, err := vector.NewConstBytes(types.T_varbinary.ToType(), []byte("AB"), 4, proc.Mp())
 		require.NoError(t, err)
 		defer vb.Free(proc.Mp())
-		require.Less(t, shuffleConstVectorByHash(ap, batchOf(vb)), uint64(ap.BucketNum))
+		require.Less(t, shuffleConstVectorByHash(ap, vb), uint64(ap.BucketNum))
 	})
 }
 

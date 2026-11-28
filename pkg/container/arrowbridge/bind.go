@@ -26,6 +26,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/decimal128"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 const (
@@ -301,25 +302,11 @@ func validArrowTimeUnit(unit arrow.TimeUnit) bool {
 }
 
 func validateLoadTargetType(ctx context.Context, typ types.Type) error {
-	var expected int32
-	switch typ.Oid {
-	case types.T_bool, types.T_int8, types.T_uint8:
-		expected = 1
-	case types.T_int16, types.T_uint16, types.T_year:
-		expected = 2
-	case types.T_int32, types.T_uint32, types.T_date, types.T_float32:
-		expected = 4
-	case types.T_int64, types.T_uint64, types.T_datetime, types.T_time, types.T_timestamp,
-		types.T_float64, types.T_decimal64:
-		expected = 8
-	case types.T_decimal128:
-		expected = 16
-	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
-		expected = int32(types.VarlenaSize)
-	default:
+	if !vector.SupportsAny(typ.Oid) {
 		return nil
 	}
-	if typ.Size != expected {
+	// the type's size in the traits table: its element size, or a Varlena
+	if expected := typ.Oid.ToType().Size; typ.Size != expected {
 		return moerr.NewInvalidInputf(ctx,
 			"invalid MatrixOne target type size %d for %s, expected %d",
 			typ.Size, typ.Oid, expected)

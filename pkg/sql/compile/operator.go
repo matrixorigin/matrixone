@@ -3880,63 +3880,13 @@ func getPercentileConfigValue(vec *vector.Vector, functionName string, allowSing
 			"percentile argument of %s cannot be NULL", functionName)
 	}
 
-	var p float64
-	var config string
-	switch vec.GetType().Oid {
-	case types.T_bit:
-		v := vector.MustFixedColWithTypeCheck[uint64](vec)[0]
-		p = float64(v)
-		config = strconv.FormatUint(v, 10)
-	case types.T_int8:
-		v := vector.MustFixedColWithTypeCheck[int8](vec)[0]
-		p = float64(v)
-		config = strconv.FormatInt(int64(v), 10)
-	case types.T_int16:
-		v := vector.MustFixedColWithTypeCheck[int16](vec)[0]
-		p = float64(v)
-		config = strconv.FormatInt(int64(v), 10)
-	case types.T_float64:
-		p = vector.MustFixedColWithTypeCheck[float64](vec)[0]
-		config = strconv.FormatFloat(p, 'f', -1, 64)
-	case types.T_float32:
-		p = float64(vector.MustFixedColWithTypeCheck[float32](vec)[0])
-		config = strconv.FormatFloat(p, 'f', -1, 32)
-	case types.T_int64:
-		v := vector.MustFixedColWithTypeCheck[int64](vec)[0]
-		p = float64(v)
-		config = strconv.FormatInt(v, 10)
-	case types.T_int32:
-		v := vector.MustFixedColWithTypeCheck[int32](vec)[0]
-		p = float64(v)
-		config = strconv.FormatInt(int64(v), 10)
-	case types.T_uint8:
-		v := vector.MustFixedColWithTypeCheck[uint8](vec)[0]
-		p = float64(v)
-		config = strconv.FormatUint(uint64(v), 10)
-	case types.T_uint16:
-		v := vector.MustFixedColWithTypeCheck[uint16](vec)[0]
-		p = float64(v)
-		config = strconv.FormatUint(uint64(v), 10)
-	case types.T_uint32:
-		v := vector.MustFixedColWithTypeCheck[uint32](vec)[0]
-		p = float64(v)
-		config = strconv.FormatUint(uint64(v), 10)
-	case types.T_uint64:
-		v := vector.MustFixedColWithTypeCheck[uint64](vec)[0]
-		p = float64(v)
-		config = strconv.FormatUint(v, 10)
-	case types.T_decimal64:
-		d := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0]
-		p = types.Decimal64ToFloat64(d, vec.GetType().Scale)
-		config = d.Format(vec.GetType().Scale)
-	case types.T_decimal128:
-		d := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0]
-		p = types.Decimal128ToFloat64(d, vec.GetType().Scale)
-		config = d.Format(vec.GetType().Scale)
-	default:
+	typ := *vec.GetType()
+	if !(typ.Oid == types.T_bit || typ.Oid.IsInteger() || typ.Oid.IsFloat() || typ.Oid.IsDecimal()) {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"unsupported percentile type %s for %s", vec.GetType().String(), functionName)
 	}
+	p, _ := types.RawToFloat64(typ, vec.GetRawBytesAt(0))
+	config := types.ValueText(typ, vector.GetAny(vec, 0, false))
 	if math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"percentile argument of %s must be finite and in [0,1], got %v", functionName, p)

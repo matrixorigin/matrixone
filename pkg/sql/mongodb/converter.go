@@ -347,26 +347,11 @@ func (c *Converter) appendValue(
 		if !ok {
 			return errConversion
 		}
-		switch target {
-		case types.T_decimal64:
-			v, err := types.ParseDecimal64(text, column.Width, column.Scale)
-			if err != nil {
-				return errConversion
-			}
-			return vector.AppendFixed(vec, v, false, mp)
-		case types.T_decimal128:
-			v, err := types.ParseDecimal128(text, column.Width, column.Scale)
-			if err != nil {
-				return errConversion
-			}
-			return vector.AppendFixed(vec, v, false, mp)
-		default:
-			v, err := types.ParseDecimal256(text, column.Width, column.Scale)
-			if err != nil {
-				return errConversion
-			}
-			return vector.AppendFixed(vec, v, false, mp)
+		v, err := types.ParseValue(types.New(target, column.Width, column.Scale), text, nil)
+		if err != nil {
+			return errConversion
 		}
+		return vector.AppendAny(vec, v, false, mp)
 	case types.T_date, types.T_datetime, types.T_timestamp:
 		millis, ok := value.DateTimeOK()
 		if !ok {
