@@ -2510,9 +2510,16 @@ func Test_connectToBackend_UsesRouteSelectedOnlyForFirstLogin(t *testing.T) {
 	require.Greater(t, router.routeCalls, 0, "first login must route through Route")
 	require.Equal(t, 0, router.routeForTransferCalls)
 
-	// Migration / transfer: must use plain Connect and NOT mutate breaker
-	// state via ConnectRouteSelected.
+	// Migration / transfer must export the source first and use plain Connect.
+	source := &migrationUserLockQueryClient{userLevelLockReleaseSupported: true}
+	cluster := clusterservice.NewMOCluster("", nil, 0, clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{
+			{ServiceID: "source", SQLAddress: "127.0.0.1:7000", QueryAddress: "query"},
+		}, nil))
+	defer cluster.Close()
+	cConn.queryClient, cConn.moCluster = source, cluster
 	sConn, err = cConn.connectToBackend("127.0.0.1:7000")
+	require.Equal(t, 1, source.sourceCalls)
 	require.Error(t, err)
 	require.Nil(t, sConn)
 	require.GreaterOrEqual(t, router.connectRouteSelectedCalls, 1)

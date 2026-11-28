@@ -2910,7 +2910,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 	}
 
 	// not a builtin func, look to resolve udf
-	if b.builder == nil {
+	if b.builder == nil || b.builder.roleRuleRowLocalWrite {
 		return nil, moerr.NewInvalidInputf(
 			b.GetContext(),
 			"function '%s' is not allowed in this expression",

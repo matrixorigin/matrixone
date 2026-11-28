@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,11 +31,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
@@ -55,12 +59,11 @@ type rewriteHintPayload struct {
 	RemapDb map[string]string `json:"remapdb"`
 }
 
-// rewritePolicySnapshot freezes the effective request policy before any
-// statement in a multi-statement COM_QUERY can mutate session variables. SQL
-// text is still rewritten one staged statement at a time, using the SQL mode
-// that is current when that statement is parsed.
+// rewritePolicySnapshot captures optional rewrites at the request boundary.
+// Each staged statement uses its current SQL mode and active role catalog.
 type rewritePolicySnapshot struct {
 	enabled        bool
+	sessionEnabled bool
 	roleRules      *roleRuleCache
 	sessionRules   map[string]string
 	sessionRemapDb map[string]string
@@ -77,35 +80,63 @@ func cloneRewriteMap(src map[string]string) map[string]string {
 	return dst
 }
 
-func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
-	policy := &rewritePolicySnapshot{enabled: ses.rewriteEnabled.Load()}
-	if !policy.enabled {
-		return policy, nil
+func (policy *rewritePolicySnapshot) hasRoleRules() bool {
+	return policy != nil && policy.roleRules != nil && len(policy.roleRules.first) > 0
+}
+
+var captureRoleRuleCache = func(ctx context.Context, ses *Session) (*roleRuleCache, error) {
+	if ses.GetTenantInfo() == nil {
+		return &roleRuleCache{}, nil
 	}
+	snapshot, err := readStatementAuthorizationSnapshot(ctx, ses, true)
+	if err != nil {
+		return nil, err
+	}
+	if snapshot.IsEmpty() && ses.GetFromRealUser() {
+		return nil, moerr.NewInternalError(ctx, "authorization snapshot is unavailable for role rules")
+	}
+	storage := getPu(ses.GetService()).StorageEngine
+	reader, _ := storage.(engine.TableContentReader)
+	principal := currentAuthorizationPrincipal(ses)
 
-	ses.ruleCacheMu.RLock()
-	policy.roleRules = ses.ruleCache
-	ses.ruleCacheMu.RUnlock()
-
-	if policy.roleRules == nil {
-		rules, err := loadRuleCache(ctx, ses)
-		if err != nil {
-			ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
-			return nil, err
-		}
-
-		ses.ruleCacheMu.Lock()
-		if ses.ruleCache == nil {
-			ses.ruleCache = rules
-		}
-		policy.roleRules = ses.ruleCache
+	ses.ruleCacheMu.Lock()
+	cache := ses.ruleCache
+	if cache != nil && cache.proof.valid(ctx, principal, reader, snapshot, ses.ruleCacheObserved[:]) {
 		ses.ruleCacheMu.Unlock()
+		return cache, nil
 	}
+	ses.ruleCacheMu.Unlock()
 
-	policy.sessionRules, policy.sessionRemapDb = getSessionRewriteRules(ctx, ses)
-	policy.sessionRules = cloneRewriteMap(policy.sessionRules)
-	policy.sessionRemapDb = cloneRewriteMap(policy.sessionRemapDb)
-	return policy, nil
+	rules, err := loadRoleRuleCacheAtSnapshot(ctx, ses, principal, snapshot, storage, reader)
+	if err != nil {
+		ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
+		return nil, err
+	}
+	ses.ruleCacheMu.Lock()
+	ses.ruleCache = rules
+	ses.ruleCacheMu.Unlock()
+	return rules, nil
+}
+
+func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
+	policy := &rewritePolicySnapshot{sessionEnabled: ses.rewriteEnabled.Load()}
+	if policy.sessionEnabled {
+		policy.sessionRules, policy.sessionRemapDb = getSessionRewriteRules(ctx, ses)
+		policy.sessionRules = cloneRewriteMap(policy.sessionRules)
+		policy.sessionRemapDb = cloneRewriteMap(policy.sessionRemapDb)
+	}
+	return policy.withCurrentRoleRules(ctx, ses)
+}
+
+func (policy *rewritePolicySnapshot) withCurrentRoleRules(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
+	cache, err := captureRoleRuleCache(ctx, ses)
+	if err != nil {
+		return nil, err
+	}
+	next := *policy
+	next.roleRules = cache
+	next.enabled = next.sessionEnabled || next.hasRoleRules()
+	return &next, nil
 }
 
 // validateRemapDb checks a remapdb map: every source/target is a valid database
@@ -194,7 +225,9 @@ func formatRewriteHintChains(ctx context.Context, chains map[string][]string, re
 		return "", moerr.NewInternalErrorf(ctx, "failed to serialize rewrite rules: %v", err)
 	}
 	// Encode appends a trailing newline, trim it
-	return hintPrefix + strings.TrimSpace(buf.String()) + hintSuffix, nil
+	// A rule can contain a SQL comment terminator inside a literal. Escape
+	// the slash in JSON so it survives the outer SQL hint comment.
+	return hintPrefix + strings.ReplaceAll(strings.TrimSpace(buf.String()), "*/", `*\/`) + hintSuffix, nil
 }
 
 // parseRewriteHint parses a hint string back into a rules map.
@@ -221,7 +254,7 @@ func parseRewriteHint(ctx context.Context, hint string) (map[string]string, erro
 // rule narrows the role-rewritten relation rather than replacing it. See the
 // chain-building comment below for details.
 // If the combined rule set is empty, the original SQL is returned unchanged.
-// This function only injects hints when enable_remap_hint is true.
+// The session switch controls optional rewrites. Active role rules are mandatory.
 // Rule cache load failures are returned to the caller so access-control rewrites
 // do not silently fall back to the unmodified SQL.
 func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
@@ -249,7 +282,7 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 		if ruleErr != nil && !isRoleRuleRecoveryStatement(ctx, fragment, sqlMode) {
 			return fragment, ruleErr
 		}
-		return rewriteSingleSQL(ctx, fragment, roleRules, policy.sessionRules, policy.sessionRemapDb)
+		return rewriteSingleSQL(ctx, fragment, roleRules, policy.sessionRules, policy.sessionRemapDb, policy.sessionEnabled)
 	}
 	if len(fragments) == 1 {
 		if !parsers.FragmentHasStatement(sql) {
@@ -275,8 +308,23 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 	return rewritten, nil
 }
 
-// A broken rule must not prevent ending a transaction, dropping secondary roles,
-// or restoring a usable mode. None of these statements reads protected rows.
+// A catalog load error permits only standalone controls that do not read
+// protected rows. Their ordinary authorization and handlers still apply.
+func isStandaloneRoleRuleControl(ctx context.Context, sql, sqlMode string) bool {
+	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, sqlMode)
+	if err != nil {
+		return false
+	}
+	defer stmt.Free()
+	switch stmt.(type) {
+	case *tree.CommitTransaction, *tree.RollbackTransaction, *tree.Kill:
+		return true
+	}
+	return false
+}
+
+// Recovery can end a transaction, reset policy-dependent session settings or
+// drop a table. These operations still undergo normal object authorization.
 func isRoleRuleRecoveryStatement(ctx context.Context, sql, sqlMode string) bool {
 	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, sqlMode)
 	if err != nil {
@@ -284,7 +332,8 @@ func isRoleRuleRecoveryStatement(ctx context.Context, sql, sqlMode string) bool 
 	}
 	defer stmt.Free()
 	switch s := stmt.(type) {
-	case *tree.CommitTransaction, *tree.RollbackTransaction:
+	case *tree.CommitTransaction, *tree.RollbackTransaction, *tree.Kill, *tree.DropTable,
+		*tree.AlterRoleAddRule, *tree.AlterRoleDropRule:
 		return true
 	case *tree.SetRole:
 		return s.SecondaryRole && s.SecondaryRoleType == tree.SecondaryRoleTypeNone
@@ -317,16 +366,20 @@ func rewriteSingleSQL(
 	cache map[string]string,
 	sessionRules map[string]string,
 	sessionRemapDb map[string]string,
+	sessionEnabled bool,
 ) (string, error) {
-
 	// Inline /*+ {...} */ rewrites and database remaps. A user-provided rewrite
 	// value must be a single SQL string; arrays/objects are rejected here. The
 	// array form exists only internally, to carry the role->session->inline
 	// stacked-view chain to the planner. Validate the inline hint up front so an
 	// invalid value is caught even when there is no role/session config to merge.
-	inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, sql)
-	if err != nil {
-		return sql, err
+	var inlineRules, inlineRemapDb map[string]string
+	if sessionEnabled {
+		var err error
+		inlineRules, inlineRemapDb, err = extractInlineRewrites(ctx, sql)
+		if err != nil {
+			return sql, err
+		}
 	}
 
 	if len(cache) == 0 && len(sessionRules) == 0 && len(sessionRemapDb) == 0 &&
@@ -381,7 +434,7 @@ func rewriteSingleSQL(
 // nested SQL's own inline hint on top. It intentionally does not read session
 // or role state again: earlier statements in the same COM_QUERY may already
 // have changed that state after the request was parsed.
-func rewriteSQLFromMaterializedPolicy(ctx context.Context, outerSQL, innerSQL string) (string, error) {
+func rewriteSQLFromMaterializedPolicy(ctx context.Context, outerSQL, innerSQL string, sessionEnabled bool) (string, error) {
 	chains := make(map[string][]string)
 	remapDb := make(map[string]string)
 	if content, ok := leadingHintContent(outerSQL); ok {
@@ -400,15 +453,17 @@ func rewriteSQLFromMaterializedPolicy(ctx context.Context, outerSQL, innerSQL st
 		}
 	}
 
-	inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, innerSQL)
-	if err != nil {
-		return innerSQL, err
-	}
-	for key, rule := range inlineRules {
-		chains[key] = append(chains[key], rule)
-	}
-	for src, dst := range inlineRemapDb {
-		remapDb[src] = dst
+	if sessionEnabled {
+		inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, innerSQL)
+		if err != nil {
+			return innerSQL, err
+		}
+		for key, rule := range inlineRules {
+			chains[key] = append(chains[key], rule)
+		}
+		for src, dst := range inlineRemapDb {
+			remapDb[src] = dst
+		}
 	}
 	if len(chains) == 0 && len(remapDb) == 0 {
 		return innerSQL, nil
@@ -419,6 +474,211 @@ func rewriteSQLFromMaterializedPolicy(ctx context.Context, outerSQL, innerSQL st
 		return innerSQL, err
 	}
 	return hint + " " + innerSQL, nil
+}
+
+// addStatementRewriteHints preserves the normal privilege path while requiring
+// a rewrite-capable execution path for statements that can read table data.
+func addStatementRewriteHints(ctx context.Context, stmts []tree.Statement, sql, sqlMode string, input *UserInput) error {
+	if input == nil || !input.rewritePolicy.hasRoleRules() {
+		return parsers.AddRewriteHintsWithSQLMode(ctx, stmts, sql, sqlMode)
+	}
+	targets := make([]tree.Statement, len(stmts))
+	var appliesRules bool
+	for i, stmt := range stmts {
+		target := authorizationStatement(stmt)
+		rewrite, supported := roleRuleStatementSupport(target)
+		if !supported {
+			return moerr.NewNotSupported(ctx, "statement cannot enforce active role rules")
+		}
+		appliesRules = appliesRules || rewrite
+		targets[i] = target
+	}
+	var roleRules map[string]string
+	lower := int64(1)
+	var provenFoldedTargets map[string]uint64
+	if appliesRules {
+		var err error
+		cache := input.rewritePolicy.roleRules
+		lower = cache.lowerCaseTableNames
+		provenFoldedTargets = cache.provenFoldedTargets
+		roleRules, err = cache.forSQLMode(ctx, sqlMode)
+		if err != nil {
+			return err
+		}
+	}
+	return parsers.AddRewriteHintsWithRoleRules(ctx, targets, sql, sqlMode, roleRules, lower, provenFoldedTargets)
+}
+
+// roleRuleStatementSupport classifies statements by whether planning binds the
+// active rules. PREPARE, EXECUTE and SET validate their nested statements at
+// their respective planning boundaries. Metadata SHOW is limited to row-local
+// expressions because its synthesized queries do not carry role rules.
+func roleRuleStatementSupport(stmt tree.Statement) (rewrite, supported bool) {
+	switch stmt := stmt.(type) {
+	case *tree.Select, *tree.ParenSelect, *tree.Insert:
+		return true, true
+	case *tree.Update:
+		if stmt.With != nil || stmt.MultiTable || stmt.From != nil || stmt.HasReturning() ||
+			!roleRuleWriteRowLocal(stmt.Where, stmt.OrderBy, stmt.Limit) {
+			return false, false
+		}
+		for _, assignment := range stmt.Exprs {
+			if !rowLocalExpr(assignment.Expr, true) {
+				return false, false
+			}
+		}
+		return true, true
+	case *tree.Delete:
+		if stmt.With != nil || stmt.TableRefs != nil || stmt.HasReturning() ||
+			!roleRuleWriteRowLocal(stmt.Where, stmt.OrderBy, stmt.Limit) {
+			return false, false
+		}
+		return true, true
+	case *tree.DumpTable, *tree.MoDump, *tree.BackupStart:
+		// Physical exports do not enforce role rules.
+		return false, false
+	case *tree.CreateCDC, *tree.ResumeCDC, *tree.RestartCDC:
+		// Each can activate a reader that does not enforce the caller's role rules.
+		return false, false
+	case *tree.CreateTable:
+		return stmt.AsSource != nil, true
+	case *tree.CreateView, *tree.AlterView, *tree.CloneTable, *tree.CloneDatabase, *tree.CallStmt,
+		*tree.ExecuteSQLTask, *tree.ShowTableValues, *tree.DataBranchCreateTable,
+		*tree.DataBranchCreateDatabase, *tree.DataBranchDiff, *tree.DataBranchMerge,
+		*tree.DataBranchPick, *tree.RestoreSnapShot, *tree.RestorePitr:
+		return false, false
+	case *tree.ShowColumns:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowDatabases:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowTarget:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowTableStatus:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowTables:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowCollation:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowVariables:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowStatus:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowFunctionOrProcedureStatus:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowIcebergCatalogs:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowIcebergNamespaces:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowIcebergTables:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowMongoDBConnections:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, stmt.Like)
+	case *tree.ShowIndex:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, nil)
+	case *tree.ShowSequences:
+		return false, roleRuleMetadataFilterSupported(stmt.Where, nil)
+	case *tree.ShowAccounts:
+		return false, roleRuleMetadataFilterSupported(nil, stmt.Like)
+	case *tree.ShowPublications:
+		return false, roleRuleMetadataFilterSupported(nil, stmt.Like)
+	case *tree.ShowSubscriptions:
+		return false, roleRuleMetadataFilterSupported(nil, stmt.Like)
+	case *tree.ShowRolesStmt:
+		return false, roleRuleMetadataFilterSupported(nil, stmt.Like)
+	case *tree.ShowStages:
+		return false, roleRuleMetadataFilterSupported(nil, stmt.Like)
+	default:
+		kind := stmt.GetQueryType()
+		return false, kind != tree.QueryTypeDML && kind != tree.QueryTypeDQL
+	}
+}
+
+func roleRuleWriteRowLocal(where *tree.Where, order tree.OrderBy, limit *tree.Limit) bool {
+	if where != nil && !rowLocalExpr(where.Expr, true) {
+		return false
+	}
+	for _, term := range order {
+		if !rowLocalExpr(term.Expr, true) {
+			return false
+		}
+	}
+	return limit == nil || (rowLocalExpr(limit.Offset, true) && rowLocalExpr(limit.Count, true))
+}
+
+func roleRuleMetadataFilterSupported(where *tree.Where, like *tree.ComparisonExpr) bool {
+	return (where == nil || showMetadataRowLocalExpr(where.Expr)) &&
+		(like == nil || showMetadataRowLocalExpr(like))
+}
+
+// applyRoleRulesToSetExpression covers the SELECT synthesized by SET, which
+// enters planning with an AST in place of materialized SQL.
+func applyRoleRulesToSetExpression(execCtx *ExecCtx, ses *Session, stmt *tree.Select, expr tree.Expr, preparedExpression bool) error {
+	switch expr.(type) {
+	case *tree.NumVal, *tree.DefaultVal:
+		// Literals also allow SQL mode recovery when a rule cannot be parsed.
+		return nil
+	}
+	var cache *roleRuleCache
+	if preparedExpression && execCtx.prepareStmt != nil {
+		cache = execCtx.prepareStmt.roleRules
+	} else if execCtx.input != nil && execCtx.input.rewritePolicy != nil {
+		cache = execCtx.input.rewritePolicy.roleRules
+	}
+	if cache == nil || len(cache.first) == 0 {
+		return nil
+	}
+
+	ctx := execCtx.reqCtx
+	sqlMode := sessionSQLModeForParser(ses)
+	rules, err := cache.forSQLMode(ctx, sqlMode)
+	if err != nil {
+		return err
+	}
+	chains := make(map[string][]string, len(rules))
+	for key, rule := range rules {
+		chains[key] = []string{rule}
+	}
+	hint, err := formatRewriteHintChains(ctx, chains, nil)
+	if err != nil {
+		return err
+	}
+	return parsers.AddRewriteHintsWithRoleRules(ctx, []tree.Statement{stmt}, hint+" select 1", sqlMode, rules, cache.lowerCaseTableNames, cache.provenFoldedTargets)
+}
+
+func (prepareStmt *PrepareStmt) checkRoleRulePolicy(ctx context.Context, ses *Session) error {
+	current, err := captureRoleRuleCache(ctx, ses)
+	if err != nil {
+		return err
+	}
+	if prepareStmt.roleRules == nil {
+		if len(current.first) > 0 {
+			return moerr.NewInvalidInput(ctx, "prepared statement is missing its active role rules; prepare it again")
+		}
+		return nil
+	}
+	if len(prepareStmt.roleRules.first) == 0 && len(current.first) == 0 {
+		return nil
+	}
+	mode := sessionSQLModeForParser(ses)
+	if current.proof.principal == prepareStmt.roleRules.proof.principal &&
+		current.lowerCaseTableNames == prepareStmt.roleRules.lowerCaseTableNames &&
+		mysql.ParseSQLModeFlags(mode) == mysql.ParseSQLModeFlags(prepareStmt.schedulingSQLMode) {
+		if current == prepareStmt.roleRules {
+			return nil
+		}
+		oldRules, err := prepareStmt.roleRules.forSQLMode(ctx, mode)
+		if err != nil {
+			return err
+		}
+		activeRules, err := current.forSQLMode(ctx, mode)
+		if err != nil {
+			return err
+		}
+		if maps.Equal(oldRules, activeRules) && maps.Equal(prepareStmt.roleRules.provenFoldedTargets, current.provenFoldedTargets) {
+			return nil
+		}
+	}
+	return moerr.NewInvalidInput(ctx, "active role rule policy changed; prepare the statement again")
 }
 
 // extractInlineRewrites returns the per-table rewrite rules and database-remap
@@ -578,7 +838,7 @@ func validateRemapRewrites(ctx context.Context, val interface{}) error {
 		if err := validateRewriteTableKey(ctx, key); err != nil {
 			return err
 		}
-		if err := validateRewriteRuleSQL(ctx, rule); err != nil {
+		if err := validateRewriteRuleSQL(ctx, rule, 1, ""); err != nil {
 			return err
 		}
 	}
@@ -646,10 +906,14 @@ func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMe
 // Catalog text is immutable after publication. Each request keeps the captured
 // generation, but each statement interprets it under its own parser mode.
 type roleRuleCache struct {
-	first      map[string]string
-	later      map[string][]string // competing rules only, in active-role priority order
-	hasNonUTF8 bool
-	last       atomic.Pointer[mergedRoleRules]
+	lowerCaseTableNames int64
+	caseCollision       bool
+	provenFoldedTargets map[string]uint64
+	proof               roleRuleCacheProof
+	first               map[string]string
+	later               map[string][]string // competing rules only, in active-role priority order
+	hasNonUTF8          bool
+	last                atomic.Pointer[mergedRoleRules]
 }
 
 type mergedRoleRules struct {
@@ -661,6 +925,9 @@ func (c *roleRuleCache) forSQLMode(ctx context.Context, sqlMode string) (map[str
 	if c == nil {
 		return nil, nil
 	}
+	if c.caseCollision {
+		return nil, moerr.NewInvalidInput(ctx, "active role rules contain ambiguous case spellings")
+	}
 	if len(c.later) == 0 && !c.hasNonUTF8 {
 		return c.first, nil
 	}
@@ -671,7 +938,7 @@ func (c *roleRuleCache) forSQLMode(ctx context.Context, sqlMode string) (map[str
 	rules := cloneRewriteMap(c.first)
 	for name, later := range c.later {
 		for _, rule := range later {
-			merged, err := mergeRewriteRules(ctx, rules[name], rule, sqlMode)
+			merged, err := mergeRewriteRules(ctx, c.lowerCaseTableNames, rules[name], rule, sqlMode)
 			if err != nil {
 				return nil, err
 			}
@@ -726,17 +993,162 @@ func roleRuleHintSQL(ctx context.Context, rule string, mode mysql.SQLModeFlags) 
 	return "", moerr.NewInvalidInput(ctx, "rewrite rule contains invalid UTF-8 outside binary literals")
 }
 
-func loadRuleCache(ctx context.Context, ses *Session) (*roleRuleCache, error) {
-	rules := &roleRuleCache{first: make(map[string]string)}
-	tenant := ses.GetTenantInfo()
-	if tenant == nil {
-		return rules, nil
+const roleRuleDependencyCount = 5
+
+type roleRuleCacheProof struct {
+	principal    authorizationPrincipal
+	snapshot     timestamp.Timestamp
+	dependencies [roleRuleDependencyCount]engine.TableContentDependency
+	versions     [roleRuleDependencyCount]engine.TableContentVersion
+}
+
+func (proof *roleRuleCacheProof) valid(ctx context.Context, principal authorizationPrincipal, reader engine.TableContentReader, snapshot timestamp.Timestamp, observed []engine.TableContentVersion) bool {
+	return reader != nil && !proof.snapshot.IsEmpty() && !snapshot.Less(proof.snapshot) &&
+		proof.principal == principal &&
+		reader.ReadTableContentVersions(ctx, snapshot, proof.dependencies[:], observed) &&
+		slices.Equal(observed, proof.versions[:])
+}
+
+func captureRoleRuleCacheProof(ctx context.Context, principal authorizationPrincipal, bh BackgroundExec, snapshot timestamp.Timestamp, storage engine.Engine, reader engine.TableContentReader) (proof roleRuleCacheProof) {
+	if reader == nil || snapshot.IsEmpty() {
+		return proof
+	}
+	txnSource, ok := bh.(interface{ GetTxnOperator() TxnOperator })
+	if !ok {
+		return proof
+	}
+	op := txnSource.GetTxnOperator()
+	if op == nil || !op.SnapshotTS().Equal(snapshot) || op.Txn().Isolation != pbtxn.TxnIsolation_SI || !op.TxnOptions().ReadOnly() {
+		return proof
+	}
+	proof.principal = principal
+	// The physical rule and role-grant tables provide data versions. The
+	// system table catalog also covers changes to their name bindings.
+	names := [roleRuleDependencyCount]string{catalog.MO_ROLE_RULE, "mo_user_grant", "mo_role_grant", catalog.MO_TABLES, catalog.MO_DATABASE}
+	for i, name := range names {
+		account := proof.principal.account
+		if name == catalog.MO_TABLES || name == catalog.MO_DATABASE {
+			account = sysAccountID
+		}
+		tableCtx := defines.AttachAccountId(ctx, account)
+		db, err := storage.Database(tableCtx, catalog.MO_CATALOG, op)
+		if err != nil {
+			return roleRuleCacheProof{}
+		}
+		dbID, err := strconv.ParseUint(db.GetDatabaseId(tableCtx), 10, 64)
+		if err != nil {
+			return roleRuleCacheProof{}
+		}
+		relation, err := db.Relation(tableCtx, name, nil)
+		if err != nil || relation == nil {
+			return roleRuleCacheProof{}
+		}
+		tableID := relation.GetTableID(tableCtx)
+		if err := storage.TryToSubscribeTable(tableCtx, uint64(account), dbID, tableID, catalog.MO_CATALOG, name); err != nil {
+			return roleRuleCacheProof{}
+		}
+		proof.dependencies[i] = engine.TableContentDependency{DatabaseID: dbID, TableID: tableID}
+	}
+	if reader.ReadTableContentVersions(ctx, snapshot, proof.dependencies[:], proof.versions[:]) {
+		proof.snapshot = snapshot
+	}
+	return proof
+}
+
+func loadRoleRuleCacheAtSnapshot(ctx context.Context, ses *Session, principal authorizationPrincipal, snapshot timestamp.Timestamp, storage engine.Engine, reader engine.TableContentReader) (rules *roleRuleCache, err error) {
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, readSnapshot: snapshot})
+	defer bh.Close()
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return nil, err
+	}
+	defer func() { err = finishTxn(ctx, bh, err) }()
+
+	proof := captureRoleRuleCacheProof(ctx, principal, bh, snapshot, storage, reader)
+	// The authenticated session retains its own table-name mode. Read it
+	// when loading rules so a cache hit does not need the system-variable lock.
+	rules, err = readRoleRules(ctx, bh, principal, parserLowerCaseTableNames(ses))
+	if err != nil {
+		return nil, err
+	}
+	if rules.lowerCaseTableNames != 1 {
+		if source, ok := bh.(interface{ GetTxnOperator() TxnOperator }); ok {
+			if op := source.GetTxnOperator(); op != nil {
+				rules.provenFoldedTargets = proveFoldedRoleTargets(ctx, storage, op, rules.first)
+			}
+		}
+	}
+	var observed [roleRuleDependencyCount]engine.TableContentVersion
+	if proof.valid(ctx, principal, reader, snapshot, observed[:]) {
+		rules.proof = proof
+	}
+	return rules, nil
+}
+
+// proveFoldedRoleTargets enumerates the directory once per authorization
+// generation, at the same catalog snapshot that supplied the role rows.
+// A unique exact lowercase relation is sufficient for that spelling only.
+func proveFoldedRoleTargets(ctx context.Context, storage engine.Engine, txn TxnOperator, rules map[string]string) map[string]uint64 {
+	targets := make(map[string][]string)
+	for key := range rules {
+		db, table, valid := parsers.SplitRewriteKey(key)
+		if valid && key == db+"."+table && key == strings.ToLower(key) && !parsers.RoleRuleAlwaysFolds(db) {
+			targets[db] = append(targets[db], table)
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	names, err := storage.Databases(ctx, txn)
+	if err != nil {
+		return nil
+	}
+	dbMatches := make(map[string]int, len(targets))
+	for _, name := range names {
+		folded := strings.ToLower(name)
+		if _, wanted := targets[folded]; wanted {
+			dbMatches[folded]++
+		}
+	}
+	proven := make(map[string]uint64)
+	for db, tables := range targets {
+		if dbMatches[db] != 1 || !slices.Contains(names, db) {
+			continue
+		}
+		database, err := storage.Database(ctx, db, txn)
+		if err != nil || database == nil || database.IsSubscription(ctx) {
+			continue
+		}
+		relations, err := database.Relations(ctx)
+		if err != nil {
+			continue
+		}
+		counts := make(map[string]int, len(relations))
+		for _, relation := range relations {
+			counts[strings.ToLower(relation)]++
+		}
+		for _, table := range tables {
+			if counts[table] != 1 || !slices.Contains(relations, table) {
+				continue
+			}
+			relation, err := database.Relation(ctx, table, nil)
+			if err == nil && relation != nil {
+				proven[db+"."+table] = relation.GetTableID(ctx)
+			}
+		}
+	}
+	return proven
+}
+
+func readRoleRules(ctx context.Context, bh BackgroundExec, principal authorizationPrincipal, lower int64) (*roleRuleCache, error) {
+	// Prepared plans need the subject of the rule lookup even when the engine
+	// cannot supply a catalog version proof for cache reuse.
+	rules := &roleRuleCache{
+		first:               make(map[string]string),
+		lowerCaseTableNames: lower,
+		proof:               roleRuleCacheProof{principal: principal},
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	roleIDs, err := loadActiveRoleIDsForRuleCache(ctx, bh, tenant)
+	roleIDs, err := loadActiveRoleIDsForRuleCache(ctx, bh, principal)
 	if err != nil {
 		return nil, err
 	}
@@ -807,7 +1219,16 @@ func loadRuleCache(ctx context.Context, ses *Session) (*roleRuleCache, error) {
 		return cmp.Compare(a.ruleName, b.ruleName)
 	})
 
+	rawSpellings := make(map[string]string, len(ruleRows))
 	for _, row := range ruleRows {
+		if db, table, ok := parsers.SplitRewriteKey(row.ruleName); ok {
+			key := parsers.RoleRuleKey(db, table, lower)
+			if prior, exists := rawSpellings[key]; exists && prior != row.ruleName {
+				rules.caseCollision = true
+			}
+			rawSpellings[key] = row.ruleName
+			row.ruleName = key
+		}
 		if _, ok := rules.first[row.ruleName]; !ok {
 			rules.first[row.ruleName] = row.rule
 			continue
@@ -827,7 +1248,7 @@ type rewriteRuleRow struct {
 	rule     string
 }
 
-func loadActiveRoleIDsForRuleCache(ctx context.Context, bh BackgroundExec, tenant *TenantInfo) ([]int64, error) {
+func loadActiveRoleIDsForRuleCache(ctx context.Context, bh BackgroundExec, principal authorizationPrincipal) ([]int64, error) {
 	roleSet := make(map[int64]struct{})
 	roleQueue := make([]int64, 0, 1)
 
@@ -839,10 +1260,10 @@ func loadActiveRoleIDsForRuleCache(ctx context.Context, bh BackgroundExec, tenan
 		roleQueue = append(roleQueue, roleID)
 	}
 
-	addRoleID(int64(tenant.GetDefaultRoleID()))
+	addRoleID(int64(principal.role))
 
-	if tenant.GetUseSecondaryRole() {
-		sql := getSqlForRoleIDsOfUserForRuleCache(int(tenant.GetUserID()))
+	if principal.secondary {
+		sql := getSqlForRoleIDsOfUserForRuleCache(int(principal.user))
 		bh.ClearExecResultSet()
 		if err := bh.Exec(ctx, sql); err != nil {
 			return nil, err
@@ -912,7 +1333,7 @@ func getSqlForRoleRulesOfRoleIDs(roleIDs []int64) string {
 		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, builder.String())
 }
 
-func mergeRewriteRules(ctx context.Context, leftRule, rightRule, sqlMode string) (string, error) {
+func mergeRewriteRules(ctx context.Context, lower int64, leftRule, rightRule, sqlMode string) (string, error) {
 	leftRule = trimRewriteRuleForMerge(leftRule)
 	rightRule = trimRewriteRuleForMerge(rightRule)
 
@@ -920,7 +1341,7 @@ func mergeRewriteRules(ctx context.Context, leftRule, rightRule, sqlMode string)
 		return leftRule, nil
 	}
 
-	mergedRule, ok, err := mergeRewriteRulesSafely(ctx, leftRule, rightRule, sqlMode)
+	mergedRule, ok, err := mergeRewriteRulesSafely(ctx, lower, leftRule, rightRule, sqlMode)
 	if err != nil {
 		return "", err
 	}
@@ -951,8 +1372,8 @@ type rewriteRuleMergeShape struct {
 // filters expresses that row union directly. This is intentionally not a
 // UNION DISTINCT equivalent for partial projections; two visible base rows that
 // project to the same values should both remain visible.
-func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode string) (string, bool, error) {
-	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, leftRule, sqlMode)
+func mergeRewriteRulesSafely(ctx context.Context, lower int64, leftRule, rightRule, sqlMode string) (string, bool, error) {
+	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, lower, leftRule, sqlMode)
 	if err != nil {
 		return "", false, err
 	}
@@ -960,7 +1381,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule, sqlMode s
 		return "", false, nil
 	}
 
-	rightShape, ok, err := rewriteRuleMergeShapeForRule(ctx, rightRule, sqlMode)
+	rightShape, ok, err := rewriteRuleMergeShapeForRule(ctx, lower, rightRule, sqlMode)
 	if err != nil {
 		return "", false, err
 	}
@@ -989,30 +1410,30 @@ func rewriteRuleFormatOptions(sqlMode string) []tree.FmtCtxOption {
 	return opts
 }
 
-func rewriteRuleMergeShapeForRule(ctx context.Context, rule, sqlMode string) (*rewriteRuleMergeShape, bool, error) {
-	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, 1, sqlMode)
+func rewriteRuleMergeShapeForRule(ctx context.Context, lower int64, rule, sqlMode string) (*rewriteRuleMergeShape, bool, error) {
+	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, lower, sqlMode)
 	if err != nil {
 		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse rewrite rule %q while merging rewrite rules: %v", rule, err)
 	}
-	shape, ok := rewriteRuleMergeShapeForStatement(stmt, sqlMode)
+	shape, ok := rewriteRuleMergeShapeForStatement(stmt, lower, sqlMode)
 	return shape, ok, nil
 }
 
-func rewriteRuleMergeShapeForStatement(stmt tree.Statement, sqlMode string) (*rewriteRuleMergeShape, bool) {
+func rewriteRuleMergeShapeForStatement(stmt tree.Statement, lower int64, sqlMode string) (*rewriteRuleMergeShape, bool) {
 	switch s := stmt.(type) {
 	case *tree.Select:
-		return rewriteRuleMergeShapeForSelect(s, sqlMode)
+		return rewriteRuleMergeShapeForSelect(s, lower, sqlMode)
 	case *tree.ParenSelect:
 		if s.Select == nil {
 			return nil, false
 		}
-		return rewriteRuleMergeShapeForStatement(s.Select, sqlMode)
+		return rewriteRuleMergeShapeForStatement(s.Select, lower, sqlMode)
 	default:
 		return nil, false
 	}
 }
 
-func rewriteRuleMergeShapeForSelect(stmt *tree.Select, sqlMode string) (*rewriteRuleMergeShape, bool) {
+func rewriteRuleMergeShapeForSelect(stmt *tree.Select, lower int64, sqlMode string) (*rewriteRuleMergeShape, bool) {
 	if stmt == nil || len(stmt.OrderBy) > 0 || stmt.Limit != nil || stmt.With != nil ||
 		stmt.TimeWindow != nil || stmt.RankOption != nil || stmt.Ep != nil || stmt.SelectLockInfo != nil {
 		return nil, false
@@ -1023,7 +1444,7 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select, sqlMode string) (*rewrite
 		return nil, false
 	}
 
-	table, ok := rewriteRuleSingleTableSource(clause.From)
+	table, ok := rewriteRuleSingleTableSource(clause.From, lower)
 	if !ok {
 		return nil, false
 	}
@@ -1031,7 +1452,7 @@ func rewriteRuleMergeShapeForSelect(stmt *tree.Select, sqlMode string) (*rewrite
 	return &rewriteRuleMergeShape{
 		stmt:       stmt,
 		clause:     clause,
-		selectList: rewriteRuleProjectionKey(&clause.Exprs, sqlMode),
+		selectList: rewriteRuleProjectionKey(&clause.Exprs, lower, sqlMode),
 		table:      table,
 	}, true
 }
@@ -1068,7 +1489,7 @@ func rewriteRuleSelectExprIsStar(expr tree.Expr) bool {
 	}
 }
 
-func rewriteRuleSingleTableSource(from *tree.From) (string, bool) {
+func rewriteRuleSingleTableSource(from *tree.From, lower int64) (string, bool) {
 	if from == nil || len(from.Tables) != 1 {
 		return "", false
 	}
@@ -1078,7 +1499,11 @@ func rewriteRuleSingleTableSource(from *tree.From) (string, bool) {
 		return "", false
 	}
 
-	return normalizeRewriteSQL(tree.StringWithOpts(tableExpr, dialect.MYSQL, tree.WithQuoteIdentifier())), true
+	sql := tree.StringWithOpts(tableExpr, dialect.MYSQL, tree.WithQuoteIdentifier())
+	if lower != 1 {
+		return sql, true
+	}
+	return normalizeRewriteSQL(sql), true
 }
 
 func rewriteRuleSingleTableExpr(expr tree.TableExpr) (*tree.AliasedTableExpr, bool) {
@@ -1124,7 +1549,10 @@ func mergeRewriteRuleWhere(left, right *tree.Where) *tree.Where {
 
 // Preserve literal spelling and type delimiters while folding the surrounding
 // SQL as before. In particular, the column `x` is not the string '`x`'.
-func rewriteRuleProjectionKey(exprs *tree.SelectExprs, sqlMode string) string {
+func rewriteRuleProjectionKey(exprs *tree.SelectExprs, lower int64, sqlMode string) string {
+	if lower != 1 {
+		return tree.StringWithOpts(exprs, dialect.MYSQL, rewriteRuleFormatOptions(sqlMode)...)
+	}
 	var literals []tree.StringLiteralPosition
 	opts := append(rewriteRuleFormatOptions(sqlMode), tree.WithStringLiteralPositions(&literals))
 	sql := tree.StringWithOpts(exprs, dialect.MYSQL, opts...)
@@ -1262,15 +1690,16 @@ func rewriteFuncExprName(fn *tree.FuncExpr) string {
 	return ""
 }
 
-func validateRewriteRuleSQL(ctx context.Context, rule string) error {
+func validateRewriteRuleSQL(ctx context.Context, rule string, lower int64, sqlMode string) error {
 	if strings.TrimSpace(rule) == "" {
 		return moerr.NewInvalidInput(ctx, "rewrite rule SQL is empty")
 	}
 
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, rule, lower, sqlMode)
 	if err != nil {
 		return moerr.NewInvalidInputf(ctx, "invalid rewrite rule SQL %q: %v", rule, err)
 	}
+	defer stmt.Free()
 
 	switch stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
@@ -1287,21 +1716,67 @@ func escapeSQLString(s string) string {
 	return buf.String()
 }
 
+func deleteMatchingRoleRuleKeys(ctx context.Context, bh BackgroundExec, roleID int64, target string, lower int64) (bool, error) {
+	sql := fmt.Sprintf("select rule_name from %s.%s where role_id = %d",
+		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil || !execResultArrayHasData(results) {
+		return false, err
+	}
+	var keys []string
+	for i := uint64(0); i < results[0].GetRowCount(); i++ {
+		name, err := results[0].GetString(ctx, i, 0)
+		if err != nil {
+			return false, err
+		}
+		if name != target {
+			db, table, ok := parsers.SplitRewriteKey(name)
+			if !ok || parsers.RoleRuleKey(db, table, lower) != target {
+				continue
+			}
+		}
+		keys = append(keys, escapeSQLString(name))
+	}
+	if len(keys) == 0 {
+		return false, nil
+	}
+	sql = fmt.Sprintf("delete from %s.%s where role_id = %d and cast(rule_name as binary) in (%s)",
+		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, strings.Join(keys, ", "))
+	return true, bh.Exec(ctx, sql)
+}
+
+func roleRuleDDLKey(ctx context.Context, db, table string, lower int64) (string, error) {
+	key := db + "." + table
+	parsedDB, parsedTable, ok := parsers.SplitRewriteKey(key)
+	if !ok || parsedDB != db || parsedTable != table {
+		return "", moerr.NewInvalidInput(ctx, "role rule requires an unambiguous database and table name")
+	}
+	return parsers.RoleRuleKey(db, table, lower), nil
+}
+
 // handleAlterRoleAddRule verifies role existence, then inserts or updates a mo_role_rule record.
-func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleAddRule) error {
+func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleAddRule) (err error) {
 	ctx := execCtx.reqCtx
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	// Begin transaction
-	err := bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
+	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
 	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+		if err == nil {
+			ses.ruleCacheMu.Lock()
+			ses.ruleCache = nil
+			ses.ruleCacheMu.Unlock()
+		}
+	}()
 
 	// Step 1: Verify role exists and get role_id
 	sqlStr, err := getSqlForRoleIdOfRole(ctx, stmt.RoleName)
@@ -1317,17 +1792,16 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 	}
 	roleID := vr.id
 
-	if err = validateRewriteRuleSQL(ctx, stmt.RuleSQL); err != nil {
+	lower := parserLowerCaseTableNames(ses)
+	if err = validateRewriteRuleSQL(ctx, stmt.RuleSQL, lower, sessionSQLModeForParser(ses)); err != nil {
 		return err
 	}
 
-	// Derive rule_name from db.tbl
-	ruleName := stmt.DbName + "." + stmt.TblName
-
-	// Delete existing rule (if any), then insert the new one
-	deleteSQL := fmt.Sprintf("delete from %s.%s where role_id = %d and rule_name = %s",
-		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(ruleName))
-	if err = bh.Exec(ctx, deleteSQL); err != nil {
+	ruleName, err := roleRuleDDLKey(ctx, stmt.DbName, stmt.TblName, lower)
+	if err != nil {
+		return err
+	}
+	if _, err = deleteMatchingRoleRuleKeys(ctx, bh, roleID, ruleName, lower); err != nil {
 		return err
 	}
 
@@ -1338,32 +1812,28 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 		return err
 	}
 
-	// Invalidate current session's rule cache after successful rule modification
-	// Note: This only affects the current session. Other sessions using the same role
-	// will need to reconnect or execute SET ROLE to refresh their cache.
-	// TODO: Implement cross-session cache invalidation for better consistency.
-	ses.ruleCacheMu.Lock()
-	ses.ruleCache = nil
-	ses.ruleCacheMu.Unlock()
-
-	return err
+	return nil
 }
 
 // handleAlterRoleDropRule verifies role and rule existence, then deletes the mo_role_rule record.
-func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleDropRule) error {
+func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRoleDropRule) (err error) {
 	ctx := execCtx.reqCtx
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	// Begin transaction
-	err := bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
+	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
 	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+		if err == nil {
+			ses.ruleCacheMu.Lock()
+			ses.ruleCache = nil
+			ses.ruleCacheMu.Unlock()
+		}
+	}()
 
 	// Step 1: Verify role exists and get role_id
 	sqlStr, err := getSqlForRoleIdOfRole(ctx, stmt.RoleName)
@@ -1379,43 +1849,20 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 	}
 	roleID := vr.id
 
-	// Derive rule_name from db.tbl
-	ruleName := stmt.DbName + "." + stmt.TblName
-
-	// Step 2: Check if rule_name exists for this role_id
-	checkSQL := fmt.Sprintf("select `rule` from %s.%s where role_id = %d and rule_name = %s",
-		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(ruleName))
-
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, checkSQL); err != nil {
-		return err
-	}
-
-	erArray, err := getResultSet(ctx, bh)
+	lower := parserLowerCaseTableNames(ses)
+	ruleName, err := roleRuleDDLKey(ctx, stmt.DbName, stmt.TblName, lower)
 	if err != nil {
 		return err
 	}
-
-	if !execResultArrayHasData(erArray) {
+	deleted, err := deleteMatchingRoleRuleKeys(ctx, bh, roleID, ruleName, lower)
+	if err != nil {
+		return err
+	}
+	if !deleted {
 		return moerr.NewInternalErrorf(ctx, "rule '%s' does not exist for role '%s'", ruleName, stmt.RoleName)
 	}
 
-	// Step 3: Delete the matching record
-	deleteSQL := fmt.Sprintf("delete from %s.%s where role_id = %d and rule_name = %s",
-		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID, escapeSQLString(ruleName))
-	if err = bh.Exec(ctx, deleteSQL); err != nil {
-		return err
-	}
-
-	// Invalidate current session's rule cache after successful rule modification
-	// Note: This only affects the current session. Other sessions using the same role
-	// will need to reconnect or execute SET ROLE to refresh their cache.
-	// TODO: Implement cross-session cache invalidation for better consistency.
-	ses.ruleCacheMu.Lock()
-	ses.ruleCache = nil
-	ses.ruleCacheMu.Unlock()
-
-	return err
+	return nil
 }
 
 // handleShowRules queries and returns all rewrite rules for the specified role.

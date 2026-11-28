@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
@@ -258,37 +259,60 @@ func showMetadataPredicateSafe(stmt tree.Statement) bool {
 }
 
 func showMetadataRowLocalExpr(expr tree.Expr) bool {
+	return rowLocalExpr(expr, false)
+}
+
+// rowLocalExpr restricts expressions to forms with no independent data source.
+func rowLocalExpr(expr tree.Expr, allowDML bool) bool {
 	if expr == nil {
 		return true
 	}
 	switch e := expr.(type) {
 	case *tree.NumVal, *tree.UnresolvedName:
 		return true
+	case *tree.ParamExpr, *tree.DefaultVal:
+		return allowDML
+	case *tree.FuncExpr:
+		if !allowDML || e.Type != tree.FUNC_TYPE_DEFAULT || e.AggType != 0 ||
+			e.WindowSpec != nil || len(e.OrderBy) != 0 {
+			return false
+		}
+		ref, ok := e.Func.FunctionReference.(*tree.UnresolvedName)
+		if !ok || ref.NumParts != 1 || ref.Star ||
+			!function.IsRowLocalDataBuiltin(ref.ColName()) {
+			return false
+		}
+		for _, arg := range e.Exprs {
+			if !rowLocalExpr(arg, true) {
+				return false
+			}
+		}
+		return true
 	case *tree.ComparisonExpr:
-		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right) && showMetadataRowLocalExpr(e.Escape)
+		return rowLocalExpr(e.Left, allowDML) && rowLocalExpr(e.Right, allowDML) && rowLocalExpr(e.Escape, allowDML)
 	case *tree.BinaryExpr:
-		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right)
+		return rowLocalExpr(e.Left, allowDML) && rowLocalExpr(e.Right, allowDML)
 	case *tree.AndExpr:
-		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right)
+		return rowLocalExpr(e.Left, allowDML) && rowLocalExpr(e.Right, allowDML)
 	case *tree.OrExpr:
-		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right)
+		return rowLocalExpr(e.Left, allowDML) && rowLocalExpr(e.Right, allowDML)
 	case *tree.XorExpr:
-		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.Right)
+		return rowLocalExpr(e.Left, allowDML) && rowLocalExpr(e.Right, allowDML)
 	case *tree.NotExpr:
-		return showMetadataRowLocalExpr(e.Expr)
+		return rowLocalExpr(e.Expr, allowDML)
 	case *tree.ParenExpr:
-		return showMetadataRowLocalExpr(e.Expr)
+		return rowLocalExpr(e.Expr, allowDML)
 	case *tree.UnaryExpr:
-		return showMetadataRowLocalExpr(e.Expr)
+		return rowLocalExpr(e.Expr, allowDML)
 	case *tree.IsNullExpr:
-		return showMetadataRowLocalExpr(e.Expr)
+		return rowLocalExpr(e.Expr, allowDML)
 	case *tree.IsNotNullExpr:
-		return showMetadataRowLocalExpr(e.Expr)
+		return rowLocalExpr(e.Expr, allowDML)
 	case *tree.RangeCond:
-		return showMetadataRowLocalExpr(e.Left) && showMetadataRowLocalExpr(e.From) && showMetadataRowLocalExpr(e.To)
+		return rowLocalExpr(e.Left, allowDML) && rowLocalExpr(e.From, allowDML) && rowLocalExpr(e.To, allowDML)
 	case *tree.Tuple:
 		for _, item := range e.Exprs {
-			if !showMetadataRowLocalExpr(item) {
+			if !rowLocalExpr(item, allowDML) {
 				return false
 			}
 		}

@@ -58,10 +58,13 @@ func TestRewritePolicySavedResult(t *testing.T) {
 				cleanup("drop database rewrite_saved")
 				exec("create table rewrite_saved.t(id int, secret int)")
 				exec("insert into rewrite_saved.t values (1,10),(2,20)")
+				exec("create table rewrite_saved.allowed(id int primary key)")
+				exec("insert into rewrite_saved.allowed values (1)")
 				exec("create role rewrite_saved_reader")
 				cleanup("drop role rewrite_saved_reader")
 				exec("grant connect on account * to rewrite_saved_reader")
 				exec("grant select on table rewrite_saved.t to rewrite_saved_reader")
+				exec("grant select on table rewrite_saved.allowed to rewrite_saved_reader")
 				exec("create user rewrite_saved_user identified by '111' default role rewrite_saved_reader")
 				cleanup("drop user rewrite_saved_user")
 				connect := func(t *testing.T) *sql.Conn {
@@ -100,6 +103,28 @@ func TestRewritePolicySavedResult(t *testing.T) {
 					readRows(t, rows, columns, want)
 					require.NoError(t, rows.Err())
 				}
+				assertSaved := func(t *testing.T, conn *sql.Conn, id string, active bool, columns []string, rows [][]int) {
+					t.Helper()
+					result := fmt.Sprintf("select * from result_scan('%s') as saved order by id", id)
+					meta := fmt.Sprintf("select count(*) from meta_scan('%s') as meta", id)
+					var value int
+					if active {
+						for _, query := range []string{result, meta} {
+							err := conn.QueryRowContext(ctx, query).Scan(&value)
+							require.ErrorContains(t, err, "saved result cannot enforce the active role rule policy")
+						}
+						return
+					}
+					read(t, conn, result, columns, rows)
+					require.NoError(t, conn.QueryRowContext(ctx, meta).Scan(&value))
+					require.Equal(t, 1, value)
+				}
+				lastID := func(t *testing.T, conn *sql.Conn) string {
+					t.Helper()
+					var id string
+					require.NoError(t, conn.QueryRowContext(ctx, "select last_query_id()").Scan(&id))
+					return id
+				}
 				var savedID string
 				for i, tc := range []struct {
 					name, rule string
@@ -114,44 +139,27 @@ func TestRewritePolicySavedResult(t *testing.T) {
 					if i > 1 {
 						exec("alter role rewrite_saved_reader drop rule on table rewrite_saved.t")
 					}
-					if tc.rule != "" {
+					active := tc.rule != ""
+					if active {
 						exec(fmt.Sprintf("alter role rewrite_saved_reader add rule %q on table rewrite_saved.t", tc.rule))
 					}
 					t.Run(tc.name, func(t *testing.T) {
-						// Fresh sessions isolate rewrite correctness from policy-cache invalidation.
 						conn := connect(t)
 						if tc.name == "combined" {
 							_, err := conn.ExecContext(ctx, "set enable_remap_hint=0")
 							require.NoError(t, err)
-							read(t, conn, "/* save_result */ select * from rewrite_saved.t order by id", []string{"id", "secret"}, [][]int{{1, 10}, {2, 20}})
-							var id string
-							require.NoError(t, conn.QueryRowContext(ctx, "select last_query_id()").Scan(&id))
-							read(t, conn, fmt.Sprintf("select * from result_scan('%s') as saved order by id", id), []string{"id", "secret"}, [][]int{{1, 10}, {2, 20}})
-							_, err = conn.ExecContext(ctx, "set enable_remap_hint=1")
-							require.NoError(t, err)
 						}
-						markers := []string{"/* save_result */"}
-						if tc.name == "combined" {
-							markers = append(markers, "", "/* cloud_nonuser */", "/* save_result */")
-						}
-						for _, marker := range markers {
-							read(t, conn, marker+" select * from rewrite_saved.t order by id", tc.columns, tc.rows)
-							var id string
-							require.NoError(t, conn.QueryRowContext(ctx, "select last_query_id()").Scan(&id))
-							query := fmt.Sprintf("select * from result_scan('%s') as saved order by id", id)
-							if marker != "/* save_result */" {
-								var value int
-								err := conn.QueryRowContext(ctx, query).Scan(&value)
-								var mysqlErr *mysql.MySQLError
-								require.ErrorAs(t, err, &mysqlErr)
-								require.EqualValues(t, 20440, mysqlErr.Number)
-								continue
-							}
-							read(t, conn, query, tc.columns, tc.rows)
-							var count int
-							require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf("select count(*) from meta_scan('%s') as meta", id)).Scan(&count))
-							require.Equal(t, 1, count)
+						read(t, conn, "/* save_result */ select * from rewrite_saved.t order by id", tc.columns, tc.rows)
+						id := lastID(t, conn)
+						assertSaved(t, conn, id, active, tc.columns, tc.rows)
+						if !active {
 							savedID = id
+							read(t, conn, "/* cloud_nonuser */ select * from rewrite_saved.t order by id", tc.columns, tc.rows)
+							var value int
+							err := conn.QueryRowContext(ctx, fmt.Sprintf("select * from result_scan('%s') as saved", lastID(t, conn))).Scan(&value)
+							var mysqlErr *mysql.MySQLError
+							require.ErrorAs(t, err, &mysqlErr)
+							require.EqualValues(t, 20440, mysqlErr.Number)
 						}
 						if tc.name == "none" || tc.name == "combined" {
 							// One COM_QUERY, only the second statement opts into persistence.
@@ -172,22 +180,31 @@ func TestRewritePolicySavedResult(t *testing.T) {
 							var mysqlErr *mysql.MySQLError
 							require.ErrorAs(t, err, &mysqlErr)
 							require.EqualValues(t, 20440, mysqlErr.Number)
-							read(t, conn, fmt.Sprintf("select * from result_scan('%s') as saved order by id", second), tc.columns, tc.rows)
-							require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf("select count(*) from meta_scan('%s') as meta", second)).Scan(&value))
-							require.Equal(t, 1, value)
+							assertSaved(t, conn, second, active, tc.columns, tc.rows)
 						}
 						if tc.name == "column" || tc.name == "combined" {
 							var secret int
 							err := conn.QueryRowContext(ctx, "/* save_result */ select secret from rewrite_saved.t").Scan(&secret)
 							require.ErrorContains(t, err, "secret")
-							// A failed marked query must not poison the next request's source.
+							// A failed marked query must not poison the next request.
 							read(t, conn, "/* save_result */ select * from rewrite_saved.t order by id", tc.columns, tc.rows)
-							var recovered string
-							require.NoError(t, conn.QueryRowContext(ctx, "select last_query_id()").Scan(&recovered))
-							read(t, conn, fmt.Sprintf("select * from result_scan('%s') as saved order by id", recovered), tc.columns, tc.rows)
+							assertSaved(t, conn, lastID(t, conn), true, tc.columns, tc.rows)
 						}
 					})
 				}
+				exec("alter role rewrite_saved_reader drop rule on table rewrite_saved.t")
+				t.Run("mutable_policy_input", func(t *testing.T) {
+					exec("alter role rewrite_saved_reader add rule 'select id from rewrite_saved.t where id in (select id from rewrite_saved.allowed)' on table rewrite_saved.t")
+					defer exec("alter role rewrite_saved_reader drop rule on table rewrite_saved.t")
+					conn := connect(t)
+					const live = "select * from rewrite_saved.t order by id"
+					columns := []string{"id"}
+					read(t, conn, "/* save_result */ "+live, columns, [][]int{{1}})
+					id := lastID(t, conn)
+					exec("update rewrite_saved.allowed set id=2")
+					read(t, conn, live, columns, [][]int{{2}})
+					assertSaved(t, conn, id, true, nil, nil)
+				})
 				t.Run("show_source", func(t *testing.T) {
 					// SHOW persistence is a source contract, independent of role privileges.
 					conn := admin
@@ -199,7 +216,7 @@ func TestRewritePolicySavedResult(t *testing.T) {
 					})
 					for _, marker := range []string{"/* save_result */", "/* cloud_nonuser */"} {
 						var table string
-						require.NoError(t, conn.QueryRowContext(ctx, marker+" show tables from rewrite_saved").Scan(&table))
+						require.NoError(t, conn.QueryRowContext(ctx, marker+" show tables from rewrite_saved like 't'").Scan(&table))
 						require.Equal(t, "t", table)
 						var id string
 						require.NoError(t, conn.QueryRowContext(ctx, "select last_query_id()").Scan(&id))
@@ -213,6 +230,9 @@ func TestRewritePolicySavedResult(t *testing.T) {
 							require.EqualValues(t, 20440, mysqlErr.Number)
 						}
 					}
+				})
+				t.Run("unruled_saved_result", func(t *testing.T) {
+					assertSaved(t, connect(t), savedID, false, []string{"id", "secret"}, [][]int{{1, 10}, {2, 20}})
 				})
 				exec("revoke select on table rewrite_saved.t from rewrite_saved_reader")
 				t.Run("revoked", func(t *testing.T) {

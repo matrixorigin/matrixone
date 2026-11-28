@@ -8926,6 +8926,10 @@ func (builder *QueryBuilder) bindView(
 		return 0, nil
 	}
 	viewCtx := NewBindContext(builder, nil)
+	viewCtx.remapOption = mandatoryRewrites(ctx.remapOption)
+	if viewCtx.remapOption != nil && (IsSnapshotValid(snapshot) || obj.PubInfo != nil) {
+		return 0, moerr.NewNotSupported(builder.GetContext(), "historical or published view cannot enforce active role rules")
+	}
 	viewCtx.snapshot = snapshot
 	viewCtx.lower = ctx.lower
 
@@ -9313,7 +9317,29 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				schema = builder.compCtx.DefaultDatabase()
 			}
 			key := schema + "." + table
+			roleKey, exact, ambiguous := roleRuleTarget(ctx.remapOption, schema, table)
+			if ambiguous {
+				return 0, moerr.NewInvalidInput(builder.GetContext(), "role rule target has an ambiguous case spelling")
+			}
+			if exact {
+				key = roleKey
+			}
 			if chain, ok := ctx.remapOption.Rewrites[key]; ok && len(chain) > 0 {
+				// Replacement SQL has its own table references. An explicit
+				// qualifier on the replaced reference cannot be inherited safely.
+				if len(ctx.remapOption.RoleRules) != 0 && (tbl.AtTsExpr != nil || tbl.IcebergRef != nil) {
+					return 0, moerr.NewInvalidInput(builder.GetContext(), "table history qualifiers are not supported with active role-rule rewrites")
+				}
+				if targetID := ctx.remapOption.ProvenFoldedRoleTargets[roleKey]; exact && targetID != 0 {
+					ref, def, err := builder.compCtx.Resolve(schema, table, ctx.snapshot)
+					if err != nil {
+						return 0, err
+					}
+					if ref == nil || def == nil || def.IsTemporary || ref.PubInfo != nil ||
+						ref.SchemaName != schema || ref.ObjName != table || uint64(ref.Obj) != targetID {
+						return 0, moerr.NewInvalidInput(builder.GetContext(), "role rule target identity is unverified")
+					}
+				}
 				// Apply the rewrite chain as stacked views: build the outermost
 				// (last) layer now. A reference to this same table inside that
 				// layer's body resolves to the next inner layer (the chain minus
@@ -9321,31 +9347,45 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				// the base table. Peeling one layer per nested reference also
 				// guarantees termination.
 				//
-				// Inside a layer's body, only this table's remaining chain stays
-				// active; every other table's rewrite is disabled (matching the
-				// long-standing behavior where rewrites do not apply within a
-				// rewrite body). Sibling tables in the original query still get
-				// rewritten because ctx.remapOption is restored below before the
-				// caller builds them.
+				// Optional layers keep mandatory rules for their other table
+				// references. A trusted role rule resolves its own body against
+				// base relations, which also terminates nested policy binding.
 				top := chain[len(chain)-1]
-				m := ctx.remapOption
-				if len(chain) == 1 {
-					ctx.remapOption = nil
-				} else {
-					ctx.remapOption = &tree.RewriteOption{
-						Rewrites: map[string][]*tree.Rewrite{key: chain[:len(chain)-1]},
+				option := ctx.remapOption
+				ctx.remapOption = nil
+				if len(chain) > 1 || len(option.RoleRules[key]) == 0 {
+					next := maps.Clone(option.RoleRules)
+					if len(chain) > 1 {
+						if next == nil {
+							next = make(map[string][]*tree.Rewrite, 1)
+						}
+						next[key] = chain[:len(chain)-1]
+					}
+					if len(next) > 0 {
+						ctx.remapOption = &tree.RewriteOption{
+							Rewrites:                    next,
+							RoleRules:                   option.RoleRules,
+							RoleRuleLowerCaseTableNames: option.RoleRuleLowerCaseTableNames,
+							ProvenFoldedRoleTargets:     option.ProvenFoldedRoleTargets,
+						}
 					}
 				}
 				nodeID, err = builder.buildTable(top.Stmt, ctx, tableInput)
+				ctx.remapOption = option
 				if err != nil {
 					return
 				}
 				// Do not bind here to avoid double-binding. Instead, set the
 				// subquery context name so the outer AliasedTableExpr binds once.
 				if int(nodeID) < len(builder.ctxByNode) && builder.ctxByNode[nodeID] != nil {
-					builder.ctxByNode[nodeID].cteName = key
+					bindingName := key
+					if exact {
+						// The role key identifies the physical relation. Column
+						// qualifiers use the ordinary unqualified binding name.
+						bindingName = tree.NewCStr(table, option.RoleRuleLowerCaseTableNames).Compare()
+					}
+					builder.ctxByNode[nodeID].cteName = bindingName
 				}
-				ctx.remapOption = m
 				return
 			}
 		}

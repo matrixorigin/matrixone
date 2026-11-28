@@ -35,8 +35,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
@@ -1532,6 +1534,13 @@ func TestTransferSync_SkipCachePopOnMigration(t *testing.T) {
 	serverProxy, server := net.Pipe()
 	defer serverProxy.Close()
 	defer server.Close()
+	source := &migrationUserLockQueryClient{userLevelLockReleaseSupported: true}
+	cluster := clusterservice.NewMOCluster("", nil, 0, clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{
+			{ServiceID: "source", SQLAddress: serverProxy.RemoteAddr().String(), QueryAddress: "query"},
+		}, nil))
+	defer cluster.Close()
+	cc.queryClient, cc.moCluster = source, cluster
 
 	tun.cc = cc
 	tun.mu.started = true
@@ -1551,6 +1560,7 @@ func TestTransferSync_SkipCachePopOnMigration(t *testing.T) {
 	tun.mu.scp.mu.lastCmdTime = now.Add(time.Second)
 
 	err := tun.transferSync(ctx)
-	require.Error(t, err)
+	require.ErrorContains(t, err, "route failed in transfer")
+	require.Equal(t, 1, source.sourceCalls)
 	require.Equal(t, 0, cache.popCount)
 }

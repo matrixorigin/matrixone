@@ -501,6 +501,15 @@ func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Ses
 	var stats statistic.StatsArray
 	stats.Reset()
 
+	rules, err := captureRoleRuleCache(reqCtx, ses)
+	if err != nil {
+		return stats, err
+	}
+	// The saved payload cannot prove that today's policy authorizes its
+	// rows and columns. Even identical rule text may read different inputs.
+	if rules != nil && len(rules.first) != 0 {
+		return stats, moerr.NewInvalidInput(reqCtx, "saved result cannot enforce the active role rule policy")
+	}
 	f := getPu(ses.GetService()).FileService
 	for _, id := range uuids {
 		// var size int64 = -1

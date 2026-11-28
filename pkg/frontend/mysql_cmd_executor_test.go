@@ -412,6 +412,7 @@ func TestTxnComputationWrapperCompileRefreshesProfileForBinaryExecute(t *testing
 }
 
 func Test_mce(t *testing.T) {
+	stubSeededRoleRuleCache(t)
 	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 	convey.Convey("boot mce succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -585,6 +586,7 @@ func Test_mce(t *testing.T) {
 			cws = append(cws, select_2)
 		}
 
+		statement := 0
 		stubs := gostub.Stub(&GetComputationWrapper, func(
 			execCtx *ExecCtx,
 			db string,
@@ -596,7 +598,12 @@ func Test_mce(t *testing.T) {
 			if strings.HasPrefix(strings.ToLower(execCtx.input.getSql()), "use ") {
 				return []ComputationWrapper{use_t}, nil
 			}
-			return cws, nil
+			if statement >= len(cws) {
+				return nil, moerr.NewInternalError(ctx, "unexpected statement in protocol fixture")
+			}
+			wrapper := cws[statement]
+			statement++
+			return []ComputationWrapper{wrapper}, nil
 		})
 		defer stubs.Reset()
 
@@ -607,6 +614,7 @@ func Test_mce(t *testing.T) {
 
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 		ses := NewSession(ctx, "", proto, nil)
+		ses.ruleCache = &roleRuleCache{}
 		ses.SetTenantInfo(&TenantInfo{
 			Tenant:        sysAccountName,
 			User:          rootName,
@@ -1477,7 +1485,7 @@ func TestGetComputationWrapperUsesRequestRewriteSnapshot(t *testing.T) {
 	execCtx.input = &UserInput{
 		sql: `/*+ {"rewrites":{"src.t":["select * from src.t where keep = 1"]},` +
 			`"remapdb":{"src":"dst"}} */ select * from src.t`,
-		rewritePolicy:             &rewritePolicySnapshot{enabled: true},
+		rewritePolicy:             &rewritePolicySnapshot{enabled: true, sessionEnabled: true},
 		rewritePolicyMaterialized: true,
 	}
 	cws, err := GetComputationWrapper(execCtx, "src", "root", nil, proc, ses)
@@ -2400,7 +2408,7 @@ func TestPrepareSQLModeStagedExecution(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			first, _, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), test.sql)
+			first, _, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), test.sql, false)
 			if test.wantError {
 				require.Error(t, err)
 				return
@@ -2419,7 +2427,7 @@ func TestNextSQLModeStatementUsesCurrentSessionMode(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
 
 	input := &UserInput{sql: `set sql_mode=concat('ANSI_','QUOTES'); select "c"`}
-	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql)
+	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql, false)
 	require.NoError(t, err)
 	require.True(t, staged)
 	require.NotEmpty(t, first)
@@ -2580,6 +2588,7 @@ func TestNestedBackgroundSessionInheritsEffectiveSQLMode(t *testing.T) {
 }
 
 func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
+	stubSeededRoleRuleCache(t)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
@@ -2605,7 +2614,7 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 			cw.Free()
 		}
 	}
-	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql)
+	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql, false)
 	require.NoError(t, err)
 	require.True(t, staged)
 	firstInput, err := rewriteSQLStatementInput(ctx, ses, newSQLStatementInput(input, first))
@@ -2754,11 +2763,8 @@ func TestExecRequestStmtPrepareBindsSource(t *testing.T) {
 				require.True(t, ok)
 				_, ok = prepare.Stmt.(*tree.Select)
 				require.True(t, ok)
-				if enabled {
-					require.Contains(t, ec.input.getSql(), "select id from db.t where id=1")
-				} else {
-					require.NotContains(t, ec.input.getSql(), "select id from db.t where id=1")
-				}
+				require.Contains(t, ec.input.getSql(), "select id from db.t where id=1")
+				require.Equal(t, enabled, ec.input.rewritePolicy.sessionEnabled)
 				observed = true
 				return nil, moerr.NewInternalError(ctx, "stop after native prepare source check")
 			})
@@ -3295,7 +3301,7 @@ func TestPrepareStringCreateViewUsesRewrittenInnerRootSQL(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	const outerSQL = `/*+ {"remapdb":{"src":"dst"}} */ prepare inline_view from 'create view v as select 1'`
 	const innerSQL = "create view v as select 1"
-	want, err := rewriteSQLFromMaterializedPolicy(ctx, outerSQL, innerSQL)
+	want, err := rewriteSQLFromMaterializedPolicy(ctx, outerSQL, innerSQL, true)
 	require.NoError(t, err)
 
 	runTestHandle("prepare string create view root SQL", t, func(ses *Session) error {
@@ -3409,7 +3415,7 @@ func TestHandleAnalyzeStmtInheritsCurrentStatementRewriteOnly(t *testing.T) {
 			execCtx.rewriteEnabled = true
 			execCtx.input = &UserInput{
 				sql:           tt.commandSQL,
-				rewritePolicy: &rewritePolicySnapshot{enabled: true},
+				rewritePolicy: &rewritePolicySnapshot{enabled: true, sessionEnabled: true},
 			}
 			execCtx.sqlOfStmt = tt.statementSQL
 			var gotDerived string

@@ -16,13 +16,94 @@ package plan
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
+
+// mandatoryRewrites carries the invoker's policy into a bind scope that must
+// keep independent name resolution and must not inherit optional rewrites.
+func mandatoryRewrites(option *tree.RewriteOption) *tree.RewriteOption {
+	if option == nil || len(option.RoleRules) == 0 {
+		return nil
+	}
+	return &tree.RewriteOption{
+		Rewrites: option.RoleRules, RoleRules: option.RoleRules,
+		RoleRuleLowerCaseTableNames: option.RoleRuleLowerCaseTableNames,
+		ProvenFoldedRoleTargets:     option.ProvenFoldedRoleTargets,
+	}
+}
+
+func roleRuleTarget(option *tree.RewriteOption, db, table string) (key string, exact, ambiguous bool) {
+	if option == nil || len(option.RoleRules) == 0 {
+		return "", false, false
+	}
+	key = parsers.RoleRuleKey(db, table, option.RoleRuleLowerCaseTableNames)
+	folded := strings.ToLower(key)
+	if option.RoleRuleLowerCaseTableNames != 1 &&
+		!parsers.RoleRuleAlwaysFolds(db) && len(option.RoleRules[folded]) > 0 {
+		// Released writers folded the entire key, even for distinct
+		// identifiers. Test the group before accepting an apparent exact hit.
+		if key != folded || option.ProvenFoldedRoleTargets[folded] == 0 {
+			return key, false, true
+		}
+	}
+	return key, len(option.RoleRules[key]) > 0, false
+}
+
+// checkRoleRuleWriteTarget proves that the only relation in a row-local
+// UPDATE or DELETE is an ordinary unprotected table. Foreign key checks
+// and actions can access other tables, so they require a different path.
+func checkRoleRuleWriteTarget(ctx CompilerContext, tables tree.TableExprs, option *tree.RewriteOption) error {
+	if option == nil || len(option.RoleRules) == 0 {
+		return nil
+	}
+	reqCtx := ctx.GetContext()
+	unsupported := func() error {
+		return moerr.NewNotSupported(reqCtx, "write target cannot enforce active role rules")
+	}
+	if len(tables) != 1 || IsSnapshotValid(ctx.GetSnapshot()) {
+		return unsupported()
+	}
+	expr := tables[0]
+	if aliased, ok := expr.(*tree.AliasedTableExpr); ok {
+		expr = aliased.Expr
+	}
+	table, ok := expr.(*tree.TableName)
+	if !ok || table.AtTsExpr != nil || table.IcebergRef != nil || table.ExplicitCatalog {
+		return unsupported()
+	}
+	db, name := string(table.Schema()), string(table.Name())
+	if db == "" {
+		db = ctx.DefaultDatabase()
+	}
+	if db == "" || name == "" {
+		return unsupported()
+	}
+	key, protected, ambiguous := roleRuleTarget(option, db, name)
+	if protected || ambiguous {
+		return unsupported()
+	}
+	ref, def, err := ctx.Resolve(db, name, nil)
+	if err != nil {
+		return err
+	}
+	if ref == nil || def == nil || ref.Obj == 0 || uint64(ref.Obj) != def.TblId ||
+		ref.PubInfo != nil || ref.SubscriptionName != "" || def.IsTemporary || def.TableType != catalog.SystemOrdinaryRel || def.ViewSql != nil ||
+		len(def.Fkeys) > 0 || len(def.RefChildTbls) > 0 {
+		return unsupported()
+	}
+	resolvedKey, protected, ambiguous := roleRuleTarget(option, ref.SchemaName, ref.ObjName)
+	if resolvedKey != key || protected || ambiguous {
+		return unsupported()
+	}
+	return nil
+}
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{

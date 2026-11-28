@@ -2942,6 +2942,57 @@ func TestQueryBuilderIcebergTimeTravelSnapshot(t *testing.T) {
 	require.Equal(t, "main", scan.Ref)
 }
 
+func TestRoleRuleTargetUsesMandatoryIdentity(t *testing.T) {
+	option := &tree.RewriteOption{
+		Rewrites:  map[string][]*tree.Rewrite{"db.Docs": {{TableName: "Docs"}}},
+		RoleRules: map[string][]*tree.Rewrite{"db.docs": {{TableName: "docs"}}},
+	}
+	option = mandatoryRewrites(option)
+	_, exact, ambiguous := roleRuleTarget(option, "db", "Docs")
+	require.False(t, exact)
+	require.True(t, ambiguous)
+	_, exact, ambiguous = roleRuleTarget(option, "db", "other")
+	require.False(t, exact)
+	require.False(t, ambiguous)
+	_, exact, ambiguous = roleRuleTarget(option, "db", "docs")
+	require.False(t, exact)
+	require.True(t, ambiguous)
+	option.ProvenFoldedRoleTargets = map[string]uint64{"db.docs": 123}
+	key, exact, ambiguous := roleRuleTarget(option, "db", "docs")
+	require.Equal(t, "db.docs", key)
+	require.True(t, exact)
+	require.False(t, ambiguous)
+	option.RoleRules["db.Docs"] = []*tree.Rewrite{{TableName: "Docs"}}
+	_, exact, ambiguous = roleRuleTarget(option, "db", "Docs")
+	require.False(t, exact)
+	require.True(t, ambiguous)
+	delete(option.RoleRules, "db.docs")
+	key, exact, ambiguous = roleRuleTarget(option, "db", "Docs")
+	require.Equal(t, "db.Docs", key)
+	require.True(t, exact)
+	require.False(t, ambiguous)
+	option.RoleRules["db.docs"] = []*tree.Rewrite{{TableName: "docs"}}
+	option.RoleRuleLowerCaseTableNames = 1
+	key, exact, ambiguous = roleRuleTarget(option, "DB", "Docs")
+	require.Equal(t, "db.docs", key)
+	require.True(t, exact)
+	require.False(t, ambiguous)
+}
+
+func TestQueryBuilderIcebergHistoryRejectsRoleRewrite(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select id from gold_orders for iceberg snapshot 1", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	replacement, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select id from gold_orders", 1)
+	require.NoError(t, err)
+	defer replacement.Free()
+	rules := map[string][]*tree.Rewrite{"tpch.gold_orders": {{Stmt: replacement}}}
+	stmt.(*tree.Select).RewriteOption = &tree.RewriteOption{Rewrites: rules, RoleRules: rules, RoleRuleLowerCaseTableNames: 1}
+	_, err = BuildPlan(ctx, stmt, false)
+	require.ErrorContains(t, err, "table history qualifiers are not supported with active role-rule rewrites")
+}
+
 func TestQueryBuilderIcebergTimeTravelTimestampUsesSessionTimezone(t *testing.T) {
 	loc := time.FixedZone("KSA", 3*60*60)
 	ctx := newIcebergTestCompilerContext(t, loc)

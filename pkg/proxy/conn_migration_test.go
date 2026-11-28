@@ -90,6 +90,7 @@ func runTestWithQueryServiceHandler(
 					DB:                            "d1",
 					LastAffectedRows:              7,
 					UserLevelLockReleaseSupported: true,
+					RoleState:                     &pb.MigrateConnRoleState{PrimaryRoleID: 5},
 				}
 				return nil
 			}, false)
@@ -167,11 +168,16 @@ func TestQueryServiceMigrateTo(t *testing.T) {
 
 func TestQueryServiceMigrateToClearsReadDeadlineAfterControlReads(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
-	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+	handler := func(_ context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		assert.Equal(t, []string{"set @mode = 'PIPES_AS_CONCAT'"}, req.MigrateConnToRequest.SetVarStmts)
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
 		local, remote := net.Pipe()
 		defer remote.Close()
 		raw := &phaseDeadlineConn{Conn: local}
-		statements := make([]string, 0, 2)
+		statements := make([]string, 0, 1)
 		sc := &deadlineRearmingServerConn{
 			ServerConn: newMockServerConn(raw),
 			raw:        raw,
@@ -183,7 +189,6 @@ func TestQueryServiceMigrateToClearsReadDeadlineAfterControlReads(t *testing.T) 
 		require.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{LastAffectedRows: 7}))
 		assert.Equal(t, []string{
 			"/* cloud_nonuser */ set transferred=1;",
-			"set @mode = 'PIPES_AS_CONCAT'",
 		}, statements)
 		assert.True(t, raw.readDeadline().IsZero(),
 			"migration must clear the deadline armed by its final control read")
@@ -330,6 +335,8 @@ func TestMigrateConnToContextCancelsReplay(t *testing.T) {
 }
 
 type migrationUserLockQueryClient struct {
+	sourceError                   error
+	sourceCalls                   int
 	userLevelLocks                []*pb.UserLevelLock
 	userLevelLockReleaseSupported bool
 }
@@ -341,10 +348,15 @@ func (c *migrationUserLockQueryClient) ServiceID() string {
 func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error) {
 	switch req.CmdMethod {
 	case pb.CmdMethod_MigrateConnFrom:
+		c.sourceCalls++
+		if c.sourceError != nil {
+			return nil, c.sourceError
+		}
 		return &pb.Response{MigrateConnFromResponse: &pb.MigrateConnFromResponse{
 			DB:                            "d1",
 			UserLevelLocks:                c.userLevelLocks,
 			UserLevelLockReleaseSupported: c.userLevelLockReleaseSupported,
+			RoleState:                     &pb.MigrateConnRoleState{},
 		}}, nil
 	default:
 		return nil, moerr.NewInternalError(ctx, "unexpected request")
@@ -380,7 +392,7 @@ func TestMigrateConnContextRejectsUserLevelLocks(t *testing.T) {
 	}
 	ccc.moCluster = cluster
 
-	err := ccc.migrateConnContext(context.Background(), "pipe", nil)
+	_, err := ccc.migrationSourceContext(context.Background(), "pipe")
 	assert.ErrorContains(t, err, "cannot migrate connection while user-level locks are held")
 }
 
@@ -400,6 +412,25 @@ func TestMigrateConnContextRejectsOldUserLevelLockProtocol(t *testing.T) {
 	ccc.queryClient = &migrationUserLockQueryClient{}
 	ccc.moCluster = cluster
 
-	err := ccc.migrateConnContext(context.Background(), "pipe", nil)
+	_, err := ccc.migrationSourceContext(context.Background(), "pipe")
 	assert.ErrorContains(t, err, "cannot migrate connection from CN without user-level lock release support")
+}
+
+func TestMigrateConnSourceRefusalStopsBeforeRouting(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster("", nil, 0, clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	t.Cleanup(cluster.Close)
+
+	raw, closeFn := createNewClientConn(t)
+	t.Cleanup(closeFn)
+	cc := raw.(*clientConn)
+	source := &migrationUserLockQueryClient{sourceError: moerr.GetOkExpectedNotSafeToStartTransfer()}
+	router := &testRouter{mod: 1}
+	cc.queryClient, cc.moCluster, cc.router = source, cluster, router
+	conn, err := cc.connectToBackendContext(t.Context(), "pipe")
+	require.ErrorIs(t, err, moerr.GetOkExpectedNotSafeToStartTransfer())
+	require.Nil(t, conn)
+	require.Equal(t, 1, source.sourceCalls)
+	require.Zero(t, router.cnt)
 }

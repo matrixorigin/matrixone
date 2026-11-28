@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"runtime"
@@ -53,6 +54,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -172,9 +174,10 @@ type Session struct {
 
 	errInfo *errInfo
 
-	cache       *privilegeCache
-	ruleCache   *roleRuleCache // nil means not loaded
-	ruleCacheMu sync.RWMutex   // protects ruleCache
+	cache             *privilegeCache
+	ruleCache         *roleRuleCache                                      // nil means not loaded
+	ruleCacheMu       sync.RWMutex                                        // protects ruleCache
+	ruleCacheObserved [roleRuleDependencyCount]engine.TableContentVersion // guarded by ruleCacheMu
 
 	// foreignConns caches connections to foreign data sources (Elasticsearch,
 	// external SQL databases) opened by esql_tvf_connect / sql_tvf_connect and
@@ -2280,44 +2283,7 @@ func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
 		ses:         ses,
 	}
 	defer tempExecCtx.Close()
-	return doComQuery(ses, tempExecCtx, &UserInput{sql: "use `" + d.db + "`"})
-}
-
-type prepareStmtMigration struct {
-	name       string
-	sql        string
-	paramTypes []byte
-	commitFn   func(*Session, error) error
-}
-
-func quotePrepareStmtName(name string) string {
-	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
-}
-
-func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepareStmtMigration {
-	return &prepareStmtMigration{
-		name:       name,
-		sql:        sql,
-		paramTypes: paramTypes,
-		commitFn:   commitAfterMigrate,
-	}
-}
-
-func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error {
-	ses.EnterFPrint(FPMigratePrepareStmt)
-	defer ses.ExitFPrint(FPMigratePrepareStmt)
-	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
-		p.sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(p.name), p.sql)
-	}
-
-	tempExecCtx := &ExecCtx{
-		reqCtx:            ctx,
-		inMigration:       true,
-		ses:               ses,
-		executeParamTypes: p.paramTypes,
-	}
-	defer tempExecCtx.Close()
-	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
+	return doComQuery(ses, tempExecCtx, &UserInput{sql: "use " + quoteIdentifierForSQL(d.db)})
 }
 
 func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest) error {
@@ -2331,7 +2297,31 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
-	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
+	// The proxy handshakes with the original login credentials. It must
+	// keep the source if that login no longer reproduces its role selection.
+	currentRole := migrationRoleState(ses)
+	sourceRole := req.RoleState
+	if currentRole == nil || sourceRole == nil ||
+		currentRole.AccountID != sourceRole.AccountID || currentRole.UserID != sourceRole.UserID ||
+		currentRole.AllSecondaryRoles != sourceRole.AllSecondaryRoles ||
+		sourceRole.LowerCaseTableNames < 0 || sourceRole.LowerCaseTableNames > 2 {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if currentRole.PrimaryRoleName != sourceRole.PrimaryRoleName || currentRole.PrimaryRoleID != sourceRole.PrimaryRoleID {
+		if currentRole.PrimaryRoleName == "" || sourceRole.PrimaryRoleName == "" {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
+		return moerr.GetOkExpectedMigrationRoleChanged()
+	}
+	for _, stmt := range req.PrepareStmts {
+		if stmt == nil || len(stmt.ReplayProof) != sha256.Size {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
+	}
+	if currentRole.LowerCaseTableNames != sourceRole.LowerCaseTableNames {
+		return moerr.GetOkExpectedMigrationTableNameModeChanged()
+	}
+	// USE is replayed as an internal statement and updates ROW_COUNT().
 	// Restore the source session value after all replay work has finished.
 	defer restoreRowCount(ses, ses.GetProc(), req.LastAffectedRows)
 	// Migration work is bounded by both its caller/lifecycle context and the
@@ -2365,6 +2355,9 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	if len(req.UserLevelLocks) > 0 {
 		return moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
 	}
+	if err := replayMigrationVariables(migrationCtx, ses, req.SetVarStmts); err != nil {
+		return err
+	}
 
 	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(migrationCtx, ses); err != nil {
@@ -2376,27 +2369,10 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 			req.DB, req.ConnID, err)
 	}
 
-	var maxStmtID uint32
-	for _, p := range req.PrepareStmts {
-		if p == nil {
-			continue
-		}
-		pm := newPrepareStmtMigration(p.Name, p.SQL, p.ParamTypes)
-		if err := pm.Migrate(migrationCtx, ses); err != nil {
-			return moerr.AttachCause(migrationCtx, err)
-		}
-		id := parsePrepareStmtID(p.Name)
-		if id > maxStmtID {
-			maxStmtID = id
-		}
-	}
-	if maxStmtID > 0 {
-		ses.SetLastStmtID(maxStmtID)
-	}
 	if cause := context.Cause(migrationCtx); cause != nil {
 		return cause
 	}
-	return nil
+	return replayMigrationPrepares(migrationCtx, ses, req.PrepareStmts)
 }
 
 func (ses *Session) GetLogger() SessionLogger {
