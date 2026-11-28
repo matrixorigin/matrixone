@@ -155,7 +155,12 @@ type ExternalErrorMode struct {
 type ExParam struct {
 	// ErrorMode is resolved in Prepare from the pruned attributes.
 	ErrorMode ExternalErrorMode
-	Fileparam *ExFileparam
+	// colLoaders are the loaders of Attrs for the batch colLoadersBat (see
+	// columnLoaders); Prepare clears them.
+	colLoaders      []*columnLoader
+	colLoadersBat   *batch.Batch
+	colLoadersAttrs *plan.ExternAttr
+	Fileparam       *ExFileparam
 	// KafkaMeta carries the per-message metadata FIFO of a running Kafka
 	// scan (set by KafkaReader.Open, consumed row-by-row in makeBatchRows).
 	KafkaMeta *KafkaMetaState

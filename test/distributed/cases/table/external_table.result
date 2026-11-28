@@ -65,61 +65,61 @@ select * from  ex_table_1;
 null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
 create external table ex_table_2_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_1;
-internal error: the input value 'abc' is not int8 type for column 0
+internal error: the input value 'abc' is not TINYINT type for column 0
 create external table ex_table_2_2(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_2.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_2;
-internal error: the input value 'cd' is not int16 type for column 1
+internal error: the input value 'cd' is not SMALLINT type for column 1
 create external table ex_table_2_3(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_3.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_3;
-internal error: the input value 'e' is not int32 type for column 2
+internal error: the input value 'e' is not INT type for column 2
 create external table ex_table_2_4(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_4.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_4;
-internal error: the input value 'i' is not int64 type for column 3
+internal error: the input value 'i' is not BIGINT type for column 3
 create external table ex_table_2_5(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_5.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_5;
-internal error: the input value 'u' is not uint8 type for column 4
+internal error: the input value 'u' is not TINYINT UNSIGNED type for column 4
 create external table ex_table_2_6(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_6.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_6;
-internal error: the input value '中文' is not uint16 type for column 5
+internal error: the input value '中文' is not SMALLINT UNSIGNED type for column 5
 create external table ex_table_2_7(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_7.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_7;
-internal error: the input value '%*' is not uint32 type for column 6
+internal error: the input value '%*' is not INT UNSIGNED type for column 6
 create external table ex_table_2_8(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_8.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_8;
-internal error: the input value '0op' is not uint64 type for column 7
+internal error: the input value '0op' is not BIGINT UNSIGNED type for column 7
 create external table ex_table_2_9(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_9.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_9;
-internal error: the input value 'er众' is not float32 type for column 8
+internal error: the input value 'er众' is not FLOAT(5,3) type for column 8
 create external table ex_table_2_10(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_10.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_10;
-internal error: the input value 'abc' is not float64 type for column 9
+internal error: the input value 'abc' is not DOUBLE(6,5) type for column 9
 create external table ex_table_2_11(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_11.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_11;
-internal error: the input value '纸123' is invalid Decimal128 type for column 10
+internal error: the input value '纸123' is not DECIMAL(38,19) type for column 10
 create external table ex_table_2_12(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_12.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_12;
-internal error: the input value '128' is not int8 type for column 0
+internal error: the input value '128' is not TINYINT type for column 0
 create external table ex_table_2_13(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_13.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_13;
-internal error: the input value '-32769' is not int16 type for column 1
+internal error: the input value '-32769' is not SMALLINT type for column 1
 create external table ex_table_2_14(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_14.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_14;
-internal error: the input value '2147483648' is not int32 type for column 2
+internal error: the input value '2147483648' is not INT type for column 2
 create external table ex_table_2_15(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_15.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_15;
-internal error: the input value '9223372036854775808' is not int64 type for column 3
+internal error: the input value '9223372036854775808' is not BIGINT type for column 3
 create external table ex_table_2_16(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_16.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_16;
-internal error: the input value '-1' is not uint8 type for column 4
+internal error: the input value '-1' is not TINYINT UNSIGNED type for column 4
 create external table ex_table_2_17(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_17.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_17;
-internal error: the input value '65536' is not uint16 type for column 5
+internal error: the input value '65536' is not SMALLINT UNSIGNED type for column 5
 create external table ex_table_2_18(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_18.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_18;
-internal error: the input value '4294967296' is not uint32 type for column 6
+internal error: the input value '4294967296' is not INT UNSIGNED type for column 6
 create external table ex_table_2_19(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19))infile{"filepath"='$resources/external_table_file/ex_table_2_19.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_2_19;
-internal error: the input value '-2.7976931348623157E+308' is not float64 type for column 9
+internal error: the input value '-2.7976931348623157E+308' is not DOUBLE(6,5) type for column 9
 create external table ex_table_3(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_char.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select char_1,char_2,date_1,date_2 from ex_table_3;
 ➤ char_1[1,20,0]  ¦  char_2[12,-1,0]  ¦  date_1[91,64,0]  ¦  date_2[93,64,0]  𝄀
@@ -133,13 +133,13 @@ select * from ex_table_3_1;
 cat  ¦  yellow 芝士  ¦  2020-10-09  ¦  0001-01-01 00:00:00  ¦  1970-01-02 00:00:01
 create external table ex_table_3_2(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_2.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_2;
-internal error: the input value '0001' is not Date type for column 2
+internal error: the input value '0001' is not DATE type for column 2
 create external table ex_table_3_3(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_3.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_3;
-internal error: the input value '0000-12-31 23:59:59.000000' is not Datetime type for column 3
+internal error: the input value '0000-12-31 23:59:59.000000' is not DATETIME type for column 3
 create external table ex_table_3_4(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_4.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_4;
-internal error: the input value '0000-0-20 03:14:07.999999' is not Timestamp type for column 4
+internal error: the input value '0000-0-20 03:14:07.999999' is not TIMESTAMP type for column 4
 create external table ex_table_3_5(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_5.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_5;
 ➤ char_1[1,20,0]  ¦  char_2[12,-1,0]  ¦  date_1[91,64,0]  ¦  date_2[93,64,0]  ¦  date_3[93,64,0]  𝄀

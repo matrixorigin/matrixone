@@ -48,6 +48,10 @@ the reachable artifact/input, and the consequence or missing required proof.
 - Check authority during failure and recovery when two paths coexist. Count
   steady-state and failure costs, including background work, compatibility
   branches and operator burden. Tie each material cost to a concrete benefit.
+- Type dispatch: a switch or `if` chain over (almost) all type ids outside
+  `pkg/container/types`/`pkg/container/vector` is a finding; route it through
+  the shared operation. So is any type, scale or constness branch inside a
+  per-row vector loop; it must be resolved once before the loop.
 - Check implementation, tests and docs independently. Count maintained
   responsibilities and distinct oracles. A line-count change helps locate work
   for review. It cannot establish improvement or bloat by itself.

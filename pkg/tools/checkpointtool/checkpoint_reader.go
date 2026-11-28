@@ -863,25 +863,5 @@ func vecValueToString(vec *vector.Vector, idx int) string {
 	if vec.IsNull(uint64(idx)) {
 		return "NULL"
 	}
-
-	if vec.GetType().Oid == types.T_time {
-		rowIdx := idx
-		if vec.IsConst() {
-			rowIdx = 0
-		}
-		values := vector.MustFixedColWithTypeCheck[types.Time](vec)
-		if rowIdx >= 0 && rowIdx < len(values) {
-			return values[rowIdx].String2(vec.GetType().Scale)
-		}
-	}
-	switch vec.GetType().Oid {
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text, types.T_datalink, types.T_geometry:
-		return string(vec.GetBytesAt(idx))
-	}
-	value := vec.RowToString(idx)
-	if value == "null" {
-		return "NULL"
-	}
-	return value
+	return types.ValueText(*vec.GetType(), vector.GetAny(vec, idx, false))
 }

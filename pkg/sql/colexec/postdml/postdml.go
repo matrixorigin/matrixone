@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -84,6 +85,9 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 		rowCount := bat.RowCount()
 		in_list = make([]string, 0, rowCount)
 		// The key type is the same on every row: decide how to quote it once.
+		// A timestamp is written in the session time zone: the generated SQL
+		// runs in this session, which casts the literal back with that zone.
+		loc := postDmlTimeZone(proc)
 		var quote, noBackslashEscapes bool
 		switch pkTyp.Oid {
 		case types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_uuid,
@@ -99,7 +103,7 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 			}
 		}
 		for i := 0; i < rowCount; i++ {
-			pkey, err := GetAnyAsString(pkvec, i)
+			pkey, err := GetAnyAsString(pkvec, i, loc)
 			if err != nil {
 				return err
 			}
@@ -173,57 +177,19 @@ func postDmlNoBackslashEscapes(proc *process.Process) bool {
 	return mysql.HasSQLMode(mode, "NO_BACKSLASH_ESCAPES")
 }
 
-func GetAnyAsString(vec *vector.Vector, i int) (string, error) {
-	switch vec.GetType().Oid {
-	case types.T_bool:
-		return fmt.Sprint(vector.GetFixedAtNoTypeCheck[bool](vec, i)), nil
-	case types.T_bit:
-		return fmt.Sprint(vector.GetFixedAtNoTypeCheck[uint64](vec, i)), nil
-	case types.T_int8:
-		return fmt.Sprint(vector.GetFixedAtNoTypeCheck[int8](vec, i)), nil
-	case types.T_int16:
-		return fmt.Sprint(vector.GetFixedAtNoTypeCheck[int16](vec, i)), nil
-	case types.T_int32:
-		return fmt.Sprint(vector.GetFixedAtNoTypeCheck[int32](vec, i)), nil
-	case types.T_int64:
-		return fmt.Sprint(vector.GetFixedAtNoTypeCheck[int64](vec, i)), nil
-	case types.T_uint8:
-		return fmt.Sprint(vector.GetFixedAtNoTypeCheck[uint8](vec, i)), nil
-	case types.T_uint16:
-		return fmt.Sprint(vector.GetFixedAtNoTypeCheck[uint16](vec, i)), nil
-	case types.T_uint32:
-		return fmt.Sprint(vector.GetFixedAtNoTypeCheck[uint32](vec, i)), nil
-	case types.T_uint64:
-		return fmt.Sprint(vector.GetFixedAtNoTypeCheck[uint64](vec, i)), nil
-	case types.T_float32:
-		return fmt.Sprint(vector.GetFixedAtNoTypeCheck[float32](vec, i)), nil
-	case types.T_float64:
-		return fmt.Sprint(vector.GetFixedAtNoTypeCheck[float64](vec, i)), nil
-	case types.T_date:
-		return vector.GetFixedAtNoTypeCheck[types.Date](vec, i).String(), nil
-	case types.T_datetime:
-		return vector.GetFixedAtNoTypeCheck[types.Datetime](vec, i).String(), nil
-	case types.T_time:
-		return vector.GetFixedAtNoTypeCheck[types.Time](vec, i).String(), nil
-	case types.T_timestamp:
-		return vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, i).String(), nil
-	case types.T_enum:
-		return vector.GetFixedAtNoTypeCheck[types.Enum](vec, i).String(), nil
-	case types.T_decimal64:
-		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, i).Format(vec.GetType().Scale), nil
-	case types.T_decimal128:
-		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, i).Format(vec.GetType().Scale), nil
-	case types.T_uuid:
-		return vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String(), nil
-	case types.T_TS:
-		return vector.GetFixedAtNoTypeCheck[types.TS](vec, i).ToString(), nil
-	case types.T_Rowid:
-		return vector.GetFixedAtNoTypeCheck[types.Rowid](vec, i).String(), nil
-	case types.T_Blockid:
-		return "", moerr.NewInternalErrorNoCtx("GetAnyAsString: block_id not supported") // vector.GetFixedAtNoTypeCheck[types.Blockid](vec, i)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
-		return string(vec.GetBytesAt(i)), nil
+// postDmlTimeZone is the zone the session casts a timestamp literal with,
+// the same fallback the cast uses when the session sets none.
+func postDmlTimeZone(proc *process.Process) *time.Location {
+	if proc != nil && proc.GetSessionInfo().TimeZone != nil {
+		return proc.GetSessionInfo().TimeZone
 	}
-	return "", moerr.NewInternalErrorNoCtx("GetAnyAsString: invalid type")
+	return time.Local
+}
+
+// GetAnyAsString returns the text of row i; a timestamp is written in loc.
+func GetAnyAsString(vec *vector.Vector, i int, loc *time.Location) (string, error) {
+	if !vector.SupportsAny(vec.GetType().Oid) {
+		return "", moerr.NewInternalErrorNoCtx("GetAnyAsString: invalid type")
+	}
+	return string(types.AppendValueText(nil, *vec.GetType(), vector.GetAny(vec, i, false), loc)), nil
 }

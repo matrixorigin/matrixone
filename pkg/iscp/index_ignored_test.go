@@ -351,9 +351,9 @@ func TestIgnoredRowsPkString(t *testing.T) {
 	g := &ignoredRows{serial: true}
 	require.Equal(t, vectorindex.SerialPkString(p.GetBuf()), g.pkString(p.GetBuf()))
 	require.Equal(t, vectorindex.SerialPkString(p.GetBuf()), g.pkString(string(p.GetBuf())))
-	require.Equal(t, "7", (&ignoredRows{}).pkString(int64(7)))
-	require.Equal(t, "b", (&ignoredRows{pkEnum: "a,b"}).pkString(types.Enum(2)), "users read the member")
-	require.Equal(t, "3", (&ignoredRows{pkEnum: "a,b"}).pkString(types.Enum(3)), "no such member")
+	require.Equal(t, "7", (&ignoredRows{pkType: &types.Type{Oid: types.T_int64}}).pkString(int64(7)))
+	require.Equal(t, "b", (&ignoredRows{pkEnum: "a,b", pkType: &types.Type{Oid: types.T_enum}}).pkString(types.Enum(2)), "users read the member")
+	require.Equal(t, "3", (&ignoredRows{pkEnum: "a,b", pkType: &types.Type{Oid: types.T_enum}}).pkString(types.Enum(3)), "no such member")
 	lit, err := (&ignoredRows{pkEnum: "a,b"}).pkLiteral(context.Background(), types.Enum(0))
 	require.NoError(t, err)
 	require.Equal(t, "SERIAL_EXTRACT(X'503d14', 0 AS ENUM('a','b'))", lit, "a key that names no member")

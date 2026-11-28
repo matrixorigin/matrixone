@@ -62,6 +62,7 @@ Read a reference when its trigger applies:
 | `colexec`/`process`/pipeline lifecycle, typed terminal signals, distributed dispatch/receiver hangs | [references/operator-pipeline.md](references/operator-pipeline.md) |
 | Creating, holding, copying, or freeing a `bitmap.Bitmap` / `nulls.Nulls` outside a Vector; bitmap/nulls leaks; Gobra verification of bitmap/nulls | [references/bitmap-memory.md](references/bitmap-memory.md) |
 | Creating, holding, copying, encoding, decoding, or freeing a `batch.Batch`; views, windows, borrowed batches; batch leaks or use-after-free; any change to the `Batch` struct or the batch encoding | [references/batch-memory.md](references/batch-memory.md) |
+| Writing or changing code that behaves differently per data type: a `switch`/`if` on `types.T`, a per-type helper, a loop over vector rows that depends on type or constness | [references/type-dispatch.md](references/type-dispatch.md) |
 | Creating, holding, passing through, modifying, windowing, or freeing a `vector.Vector`; vector pools, read-only vectors; vector leaks or pool mismatches; any change to the `Vector` struct | [references/vector-memory.md](references/vector-memory.md) |
 | Planner/explain/rewrite correctness or a credible overfit in product behavior | [references/counterexample-testing.md](references/counterexample-testing.md) |
 | Vector/fulltext algorithm registry, build-tag registration, ISCP/CDC and index-plugin review | [references/index-plugin.md](references/index-plugin.md) |
@@ -81,7 +82,7 @@ Read a reference when its trigger applies:
 | **G-VECTOR** | Any change to the `vector.Vector` struct; code that creates, modifies, windows or frees a `Vector`, or passes one through an operator | Read [vector-memory.md](references/vector-memory.md). **Never add a field to `Vector` on your own decision: stop and get a human developer's careful review and confirmation first.** One owner per vector, one exact pool (nil = read-only), free only what you created, never modify an input in place. |
 | **G-COUNTEREXAMPLE** | Planner/explain/rewrite correctness or a credible overfit in product behavior | Read the counterexample reference. Define invariant/negation/reachability and use independent public and typed oracles where each proves a distinct claim. Use the shared evidence checks for test or CI selection, assertions, and execution mode. |
 | **G-INDEXPLUGIN** | Index algorithm dispatch/plugin/registry/ISCP paths change | Read the index-plugin reference and its review section. New SQL/catalog per-algorithm dispatch is forbidden. |
-| **G-TYPESWITCH** | Adding a `types.T` constant, writing or editing a `switch` over `types.T`, or a `TestTypeSwitchFamilies` failure | Read `pkg/container/types/testdata/README.md`. Handle every member of the family (or of one subfamily) in the switch, or tag it `// typeswitch:partial <reason>`; never add a switch to `typeswitch_baseline.txt`. Regenerate the baseline only to remove fixed/tagged entries, and check its diff only removes lines. |
+| **G-TYPESWITCH** | Adding a `types.T` constant, writing or editing a `switch` over `types.T`, or a `TestTypeSwitchFamilies` failure | Read [references/type-dispatch.md](references/type-dispatch.md) and `pkg/container/types/testdata/README.md`. A switch that must handle all or almost all types belongs only in `types`/`vector` (traits table, type-ops table); elsewhere use the function they supply, and when one misses a type, remove the switch instead of adding the case. Outside those packages switch on type ids only to pick among a few related ids (an overload). Resolve type and constant decisions once, before any vector loop. Handle every member of the family (or of one subfamily) in an overload switch, or tag it `// typeswitch:partial <reason>`; never add a switch to `typeswitch_baseline.txt`. Regenerate the baseline only to remove fixed/tagged entries, and check its diff only removes lines. |
 | **G-STATIC-INCREMENTAL** | Any Go source/test edit or SCA failure | Derive the changed package closure from the merge base (including local staged/unstaged files), run gofmt/vet/lint only for that closure first, and escalate to the full repository scan only under the rules below. |
 | **G-CI-TRIAGE** | A CI job fails, hangs, is cancelled, or is unexpectedly skipped | Capture the exact job step, SHA, platform/toolchain, and terminal result; classify code/static/test failure separately from network/cache/quota/disk/runner failure before changing code or deciding to rerun. |
 | **G-EVIDENCE** | Before claiming pass/done or attributing a failure | Apply semantic evidence validity. Pending/empty selection/partial output is not a pass; a “pre-existing” claim requires the same failure at the verified clean baseline. |
@@ -109,6 +110,13 @@ Read a reference when its trigger applies:
 7. Preserve user scope and permissions. Read-only review/diagnosis does not
    authorize production changes, GitHub review submission, or other external
    mutations.
+8. Dispatch per type in one place. A switch that must handle all or almost all
+   types lives only in `pkg/container/types` or `pkg/container/vector`; callers
+   use the function it supplies. When it misses a type, remove the site switch
+   instead of adding the case. Elsewhere, switch on type ids only to pick among
+   a few related ids (an overload). Make type, scale and constness decisions
+   once, before a vector loop, never per row. See
+   [type-dispatch.md](references/type-dispatch.md).
 
 ## Efficient validation and completion
 

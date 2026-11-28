@@ -162,7 +162,7 @@ func TestGetColDataDecimal256NullEmptyInvalidAndOverflow(t *testing.T) {
 
 			err := getColData(bat, []csvparser.Field{{Val: value}}, 0, param, proc.Mp(), param.Attrs[0], proc)
 			require.Error(t, err)
-			require.Contains(t, err.Error(), "invalid Decimal256 type")
+			require.Contains(t, err.Error(), "is not DECIMAL(")
 			require.Zero(t, bat.Vecs[0].Length())
 		})
 	}
@@ -201,18 +201,6 @@ func TestIsLegalLineDecimal256AndParallelBoundary(t *testing.T) {
 	err := getColData(bat, []csvparser.Field{{Val: valid}}, 0, parallelParam, proc.Mp(), parallelParam.Attrs[0], proc)
 	require.NoError(t, err)
 	require.Equal(t, valid, string(bat.Vecs[0].GetBytesAt(0)))
-}
-
-func TestAppendLoadEmptyNumericZeroDecimal256(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-
-	vec := vector.NewVec(types.New(types.T_decimal256, 50, 10), proc.Mp())
-	defer vec.Free(proc.Mp())
-
-	require.NoError(t, appendLoadEmptyNumericZero(vec, types.T_decimal256, false, proc.Mp()))
-	require.Equal(t, []types.Decimal256{{}}, vector.MustFixedColWithTypeCheck[types.Decimal256](vec))
-	require.False(t, vec.GetNulls().Contains(0))
 }
 
 func TestDecimal256CSVAndJSONLineObjectArray(t *testing.T) {
@@ -290,7 +278,7 @@ func TestDecimal256CSVAndJSONLineDroppedTail(t *testing.T) {
 					err := readAllText(t, param, proc, bat, content)
 					if tc.want == "" {
 						require.Error(t, err)
-						require.Contains(t, err.Error(), "invalid Decimal256 type")
+						require.Contains(t, err.Error(), "is not DECIMAL(")
 						require.Zero(t, bat.Vecs[0].Length())
 						require.Zero(t, bat.RowCount())
 						return

@@ -459,91 +459,24 @@ func (zm ZM) setInited() {
 }
 
 func (zm ZM) getValue(buf []byte) any {
-	switch types.T(zm[63]) {
-	case types.T_bool:
-		return types.DecodeFixed[bool](buf)
-	case types.T_bit:
-		return types.DecodeFixed[uint64](buf)
-	case types.T_int8:
-		return types.DecodeFixed[int8](buf)
-	case types.T_int16:
-		return types.DecodeFixed[int16](buf)
-	case types.T_int32:
-		return types.DecodeFixed[int32](buf)
-	case types.T_int64:
-		return types.DecodeFixed[int64](buf)
-	case types.T_uint8:
-		return types.DecodeFixed[uint8](buf)
-	case types.T_uint16:
-		return types.DecodeFixed[uint16](buf)
-	case types.T_uint32:
-		return types.DecodeFixed[uint32](buf)
-	case types.T_uint64:
-		return types.DecodeFixed[uint64](buf)
-	case types.T_float32:
-		return types.DecodeFixed[float32](buf)
-	case types.T_float64:
-		return types.DecodeFixed[float64](buf)
-	case types.T_bf16:
-		return types.DecodeFixed[types.BF16](buf)
-	case types.T_float16:
-		return types.DecodeFixed[types.Float16](buf)
-	case types.T_float8:
-		return types.DecodeFixed[types.Float8](buf)
-	case types.T_float4:
-		return types.DecodeFixed[types.Float4](buf)
-	case types.T_date:
-		return types.DecodeFixed[types.Date](buf)
-	case types.T_time:
-		return types.DecodeFixed[types.Time](buf)
-	case types.T_datetime:
-		return types.DecodeFixed[types.Datetime](buf)
-	case types.T_timestamp:
-		return types.DecodeFixed[types.Timestamp](buf)
-	case types.T_enum:
-		return types.DecodeFixed[types.Enum](buf)
-	case types.T_year:
-		return types.DecodeFixed[types.MoYear](buf)
-	case types.T_decimal64:
-		return types.DecodeFixed[types.Decimal64](buf)
-	case types.T_decimal128:
-		return types.DecodeFixed[types.Decimal128](buf)
-	case types.T_decimal256:
+	oid := types.T(zm[63])
+	if oid == types.T_decimal256 {
 		// Decimal256 zonemaps are intentionally skipped because the fixed ZM layout
 		// cannot safely store 32-byte min/max payloads yet.
 		return nil
-	case types.T_uuid:
-		return types.DecodeFixed[types.Uuid](buf)
-	case types.T_TS:
-		return types.DecodeFixed[types.TS](buf)
-	case types.T_Rowid:
-		return types.DecodeFixed[types.Rowid](buf)
-	case types.T_Blockid:
-		return types.DecodeFixed[types.Rowid](buf)
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		return buf
-	case types.T_array_float32:
-		// Used by MO_TABLE_COL_MAX and ZoneMap.String()
-		return types.BytesToArray[float32](buf)
-	case types.T_array_float64:
-		return types.BytesToArray[float64](buf)
-	// Narrow vector element types. Omitting them made MO_TABLE_COL_MAX panic on
-	// a table that merely CONTAINS a bf16/f16/int8/uint8 vector column, without
-	// the query touching it.
-	case types.T_array_bf16:
-		return types.BytesToArray[types.BF16](buf)
-	case types.T_array_float16:
-		return types.BytesToArray[types.Float16](buf)
-	case types.T_array_int8:
-		return types.BytesToArray[int8](buf)
-	case types.T_array_uint8:
-		return types.BytesToArray[uint8](buf)
-	case types.T_array_float8, types.T_array_float4:
-		// Block-scaled cells have no typed element slice; the value is the cell.
+	}
+	if oid == types.T_json {
+		// A varlena bound is a prefix of at most 30 bytes, adjusted upward for
+		// a max: for json that is not a complete encoded document, so it stays
+		// raw bytes rather than being decoded.
 		return buf
 	}
-	panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
+	if !vector.SupportsAny(oid) {
+		panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
+	}
+	// Used by MO_TABLE_COL_MAX and ZoneMap.String(): a vector bound is its
+	// typed elements, a block-scaled one its cell.
+	return vector.ExportValueFromRaw(oid, buf)
 }
 
 func (zm ZM) updateMinString(v []byte) {
@@ -1808,6 +1741,11 @@ func applyArithmetic(v1, v2, res ZM, op byte, scale1, scale2 int32) (ok bool) {
 		res.SetScale(newScale)
 		UpdateZM(res, types.EncodeDecimal128(&minv))
 		UpdateZM(res, types.EncodeDecimal128(&maxv))
+	default:
+		// No arithmetic for this type (decimal256 has no scaled Add, Sub or
+		// Mul): report that the result zone map cannot be derived, rather
+		// than ok with res never set.
+		return false
 	}
 	return
 }

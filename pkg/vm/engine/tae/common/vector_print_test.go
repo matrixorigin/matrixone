@@ -40,7 +40,7 @@ func TestMoVectorToStringScalarTypes(t *testing.T) {
 	checkFixedVectorPrint(t, types.T_date, types.Date(2), "0001-01-03")
 	ts, err := types.ParseTimestamp(time.Local, "2020-01-02 03:04:05", 6)
 	require.NoError(t, err)
-	checkFixedVectorPrint(t, types.T_timestamp, ts, "2020-01-02 03:04:05.000000")
+	checkFixedVectorPrint(t, types.T_timestamp, ts, "2020-01-02 03:04:05") // the column scale, 0
 	checkFixedVectorPrint(t, types.T_decimal128, types.Decimal128{B0_63: 7}, "7")
 	checkFixedVectorPrint(t, types.T_uuid, types.Uuid{}, "00000000-0000-0000-0000-000000000000")
 }
@@ -79,8 +79,8 @@ func TestMoVectorToStringVariableAndEmpty(t *testing.T) {
 	}
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	unsupported := vector.NewVec(types.T_decimal256.ToType(), mp)
-	defer unsupported.Free(mp)
-	require.NoError(t, vector.AppendFixed(unsupported, types.Decimal256{B0_63: 7}, false, mp))
-	require.Equal(t, "unkown type vec... DECIMAL256", MoVectorToString(unsupported, 10))
+	dec := vector.NewVec(types.T_decimal256.ToType(), mp)
+	defer dec.Free(mp)
+	require.NoError(t, vector.AppendFixed(dec, types.Decimal256{B0_63: 7}, false, mp))
+	require.Equal(t, "[1]: 7", MoVectorToString(dec, 10))
 }

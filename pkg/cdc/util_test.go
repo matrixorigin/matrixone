@@ -270,6 +270,19 @@ func Test_convertColIntoSql(t *testing.T) {
 
 	ts := types.BuildTS(1234, 5678)
 
+	dt, err := types.ParseDatetime("2023-02-03 01:23:45", 0)
+	require.Nil(t, err)
+	tm, err := types.ParseTime("01:23:45", 0)
+	require.Nil(t, err)
+	tstamp, err := types.ParseTimestamp(time.UTC, "2023-02-03 01:23:45", 0)
+	require.Nil(t, err)
+	d64, err := types.ParseDecimal64("1.1", 10, 1)
+	require.Nil(t, err)
+	d128, err := types.ParseDecimal128("1.1", 20, 1)
+	require.Nil(t, err)
+	uid, err := types.ParseUuid("123e4567-e89b-12d3-a456-426614174000")
+	require.Nil(t, err)
+
 	type args struct {
 		ctx     context.Context
 		data    any
@@ -438,33 +451,33 @@ func Test_convertColIntoSql(t *testing.T) {
 			wantErr: assert.NoError,
 		},
 		{
-			args:    args{ctx: context.Background(), data: "2023-02-03 01:23:45", typ: &types.Type{Oid: types.T_datetime}, sqlBuff: []byte{}},
+			args:    args{ctx: context.Background(), data: dt, typ: &types.Type{Oid: types.T_datetime}, sqlBuff: []byte{}},
 			want:    []byte("'2023-02-03 01:23:45'"),
 			wantErr: assert.NoError,
 		},
 		{
-			args:    args{ctx: context.Background(), data: "01:23:45", typ: &types.Type{Oid: types.T_time}, sqlBuff: []byte{}},
+			args:    args{ctx: context.Background(), data: tm, typ: &types.Type{Oid: types.T_time}, sqlBuff: []byte{}},
 			want:    []byte("'01:23:45'"),
 			wantErr: assert.NoError,
 		},
 		{
-			args:    args{ctx: context.Background(), data: "2023-02-03 01:23:45", typ: &types.Type{Oid: types.T_timestamp}, sqlBuff: []byte{}},
+			args:    args{ctx: context.Background(), data: tstamp, typ: &types.Type{Oid: types.T_timestamp}, sqlBuff: []byte{}},
 			want:    []byte("'2023-02-03 01:23:45'"),
 			wantErr: assert.NoError,
 		},
 		{
-			args:    args{ctx: context.Background(), data: "1.1", typ: &types.Type{Oid: types.T_decimal64}, sqlBuff: []byte{}},
+			args:    args{ctx: context.Background(), data: d64, typ: &types.Type{Oid: types.T_decimal64, Scale: 1}, sqlBuff: []byte{}},
 			want:    []byte("'1.1'"),
 			wantErr: assert.NoError,
 		},
 		{
-			args:    args{ctx: context.Background(), data: "1.1", typ: &types.Type{Oid: types.T_decimal128}, sqlBuff: []byte{}},
+			args:    args{ctx: context.Background(), data: d128, typ: &types.Type{Oid: types.T_decimal128, Scale: 1}, sqlBuff: []byte{}},
 			want:    []byte("'1.1'"),
 			wantErr: assert.NoError,
 		},
 		{
-			args:    args{ctx: context.Background(), data: "1.1", typ: &types.Type{Oid: types.T_uuid}, sqlBuff: []byte{}},
-			want:    []byte("'1.1'"),
+			args:    args{ctx: context.Background(), data: uid, typ: &types.Type{Oid: types.T_uuid}, sqlBuff: []byte{}},
+			want:    []byte("'123e4567-e89b-12d3-a456-426614174000'"),
 			wantErr: assert.NoError,
 		},
 		{
@@ -484,7 +497,7 @@ func Test_convertColIntoSql(t *testing.T) {
 		},
 		{
 			args:    args{ctx: context.Background(), data: types.Enum(1), typ: &types.Type{Oid: types.T_enum}, sqlBuff: []byte{}},
-			want:    []byte("'1'"),
+			want:    []byte("1"), // the member ordinal; '1' would name a member labelled 1
 			wantErr: assert.NoError,
 		},
 	}
@@ -529,6 +542,10 @@ func Test_extractRowFromVector(t *testing.T) {
 	blockid := types.BuildTestBlockid(1234, 5678)
 
 	ts := types.BuildTS(1234, 5678)
+
+	timeVec := testutil.MakeTimeVector([]string{"2023-02-03 01:23:45"}, nil, mp)
+	datetimeVec := testutil.MakeDatetimeVector([]string{"2023-02-03 01:23:45"}, nil, mp)
+	timestampVec := testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil, mp)
 
 	type args struct {
 		ctx      context.Context
@@ -723,34 +740,34 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeTimeVector([]string{"2023-02-03 01:23:45"}, nil, mp),
+				vec:      timeVec,
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
 			},
-			wantRow: []any{"01:23:45"},
+			wantRow: []any{vector.GetFixedAtNoTypeCheck[types.Time](timeVec, 0)},
 			wantErr: assert.NoError,
 		},
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeDatetimeVector([]string{"2023-02-03 01:23:45"}, nil, mp),
+				vec:      datetimeVec,
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
 			},
-			wantRow: []any{"2023-02-03 01:23:45"},
+			wantRow: []any{vector.GetFixedAtNoTypeCheck[types.Datetime](datetimeVec, 0)},
 			wantErr: assert.NoError,
 		},
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil, mp),
+				vec:      timestampVec,
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
 			},
-			wantRow: []any{"2023-02-03 01:23:45"},
+			wantRow: []any{vector.GetFixedAtNoTypeCheck[types.Timestamp](timestampVec, 0)},
 			wantErr: assert.NoError,
 		},
 		// TODO decimal
@@ -762,7 +779,7 @@ func Test_extractRowFromVector(t *testing.T) {
 				row:      make([]any, 1),
 				rowIndex: 0,
 			},
-			wantRow: []any{"31323334-3536-3738-3930-313233343536"},
+			wantRow: []any{types.Uuid([]byte("1234567890123456"))},
 			wantErr: assert.NoError,
 		},
 		{
@@ -801,13 +818,28 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      vector.NewVec(types.T_decimal256.ToType(), mp),
+				vec:      vector.NewVec(types.T_any.ToType(), mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
 			},
 			wantRow: []any{},
 			wantErr: assert.Error,
+		},
+		{
+			args: args{
+				ctx: context.Background(),
+				vec: func() *vector.Vector {
+					v := vector.NewVec(types.New(types.T_decimal256, 50, 2), mp)
+					_ = vector.AppendFixed(v, types.Decimal256{B0_63: 12345}, false, mp)
+					return v
+				}(),
+				i:        0,
+				row:      make([]any, 1),
+				rowIndex: 0,
+			},
+			wantRow: []any{types.Decimal256{B0_63: 12345}},
+			wantErr: assert.NoError,
 		},
 	}
 

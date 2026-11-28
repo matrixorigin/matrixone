@@ -25,6 +25,7 @@ import (
 	"math/big"
 	"slices"
 	"strconv"
+	"time"
 	"unicode/utf8"
 
 	"github.com/itchyny/gojq"
@@ -673,18 +674,6 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 			encodeLowPrecFloat[types.Float8](op, params[i], ulen)
 		case types.T_float4:
 			encodeLowPrecFloat[types.Float4](op, params[i], ulen)
-		case types.T_decimal64:
-			encodeDecimal[types.Decimal64](op, params[i], ulen)
-		case types.T_decimal128:
-			encodeDecimal[types.Decimal128](op, params[i], ulen)
-		case types.T_date:
-			encodeFixedStringer[types.Date](op, params[i], ulen)
-		case types.T_time:
-			encodeFixedStringer[types.Time](op, params[i], ulen)
-		case types.T_datetime:
-			encodeFixedStringer[types.Datetime](op, params[i], ulen)
-		case types.T_timestamp:
-			encodeFixedStringer[types.Timestamp](op, params[i], ulen)
 		case types.T_char, types.T_varchar, types.T_text:
 			encodeString(op, params[i], ulen)
 		case types.T_binary, types.T_varbinary, types.T_blob:
@@ -713,14 +702,15 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 			if err := encodeBlockScaledArray(op, params[i], ulen); err != nil {
 				return err
 			}
-		case types.T_uuid:
-			encodeFixedStringer[types.Uuid](op, params[i], ulen)
 		case types.T_json:
 			if err := encodeJson(proc.Ctx, op, params[i], ulen); err != nil {
 				return err
 			}
 		default:
-			return moerr.NewInvalidInputf(proc.Ctx, "unsupported type for json_row: %v", fromType.String())
+			if !vector.SupportsAny(fromType.Oid) {
+				return moerr.NewInvalidInputf(proc.Ctx, "unsupported type for json_row: %v", fromType.String())
+			}
+			encodeValueText(op, params[i], ulen, proc.GetSessionInfo().TimeZone)
 		}
 	}
 
@@ -785,28 +775,22 @@ func encodeFloat[T constraints.Float](op *opBuiltInJsonRow, v *vector.Vector, le
 	}
 }
 
-func encodeDecimal[T types.DecimalWithFormat](op *opBuiltInJsonRow, v *vector.Vector, length uint64) {
-	p := vector.GenerateFunctionFixedTypeParameter[T](v)
-	fromTyp := v.GetType()
+// encodeValueText encodes each row as its types.ValueText: a decimal as a
+// JSON number, any other value as a JSON string. Timestamps are shown in
+// loc.
+func encodeValueText(op *opBuiltInJsonRow, v *vector.Vector, length uint64, loc *time.Location) {
+	typ := *v.GetType()
+	var buf []byte
 	for i := uint64(0); i < length; i++ {
-		v, null := p.GetValue(i)
-		if null {
+		if v.IsNull(i) {
 			op.enc[i].w.WriteString("null")
-		} else {
-			bs := []byte(v.Format(fromTyp.Scale))
-			op.enc[i].w.Write(bs)
+			continue
 		}
-	}
-}
-
-func encodeFixedStringer[T types.FixedWithStringer](op *opBuiltInJsonRow, v *vector.Vector, length uint64) {
-	p := vector.GenerateFunctionFixedTypeParameter[T](v)
-	for i := uint64(0); i < length; i++ {
-		v, null := p.GetValue(i)
-		if null {
-			op.enc[i].w.WriteString("null")
+		buf = types.AppendValueText(buf[:0], typ, vector.GetAny(v, int(i), false), loc)
+		if typ.Oid.IsDecimal() {
+			op.enc[i].w.Write(buf)
 		} else {
-			op.enc[i].encodeString(v.String())
+			op.enc[i].encodeString(string(buf))
 		}
 	}
 }

@@ -408,79 +408,14 @@ func UpdateStatsInfo(info *TableStatsInfo, tableDef *plan.TableDef, s *pb.StatsI
 			s.MinValMap[colName] = 0
 			s.MaxValMap[colName] = 0
 		} else {
-			switch info.DataTypes[i].Oid {
-			case types.T_bit:
-				s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_int8:
-				s.MinValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_int16:
-				s.MinValMap[colName] = float64(types.DecodeInt16(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeInt16(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_int32:
-				s.MinValMap[colName] = float64(types.DecodeInt32(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeInt32(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_int64:
-				s.MinValMap[colName] = float64(types.DecodeInt64(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeInt64(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_uint8:
-				s.MinValMap[colName] = float64(types.DecodeUint8(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeUint8(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_uint16:
-				s.MinValMap[colName] = float64(types.DecodeUint16(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeUint16(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_uint32:
-				s.MinValMap[colName] = float64(types.DecodeUint32(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeUint32(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_uint64:
-				s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_float32:
-				s.MinValMap[colName] = float64(types.DecodeFloat32(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeFloat32(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_float64:
-				s.MinValMap[colName] = float64(types.DecodeFloat64(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeFloat64(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_date:
-				s.MinValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_time:
-				s.MinValMap[colName] = float64(types.DecodeTime(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeTime(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_timestamp:
-				s.MinValMap[colName] = float64(types.DecodeTimestamp(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeTimestamp(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_datetime:
-				s.MinValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
-				s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
-				s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
-			case types.T_decimal64:
-				// Fix: Use Decimal64ToFloat64 with proper scale to handle negative values correctly
-				// Direct cast to float64 treats negative values (stored as two's complement) as large positive numbers
-				// IMPORTANT: Use ZoneMap's scale, not TableDef's scale
-				// ZoneMap stores the scale from when data was written (may differ from current schema after ALTER TABLE)
-				scale := info.ColumnZMs[i].GetScale()
-				minDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMinBuf())
-				maxDec := types.DecodeDecimal64(info.ColumnZMs[i].GetMaxBuf())
-				minFloat := types.Decimal64ToFloat64(minDec, scale)
-				maxFloat := types.Decimal64ToFloat64(maxDec, scale)
-				s.MinValMap[colName] = minFloat
-				s.MaxValMap[colName] = maxFloat
-
-			case types.T_decimal128:
-				// Fix: Use actual scale from ZoneMap (not TableDef)
-				// This ensures consistency with getMinMaxValueByFloat64 in disttae/stats.go
-				scale := info.ColumnZMs[i].GetScale()
-				minDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMinBuf())
-				maxDec := types.DecodeDecimal128(info.ColumnZMs[i].GetMaxBuf())
-				minFloat := types.Decimal128ToFloat64(minDec, scale)
-				maxFloat := types.Decimal128ToFloat64(maxDec, scale)
-				s.MinValMap[colName] = minFloat
-				s.MaxValMap[colName] = maxFloat
-
+			// the zone map's own scale: it is the scale the data was written
+			// with, which may differ from the table's after ALTER TABLE
+			typ := info.DataTypes[i]
+			typ.Scale = info.ColumnZMs[i].GetScale()
+			if minVal, ok := types.RawToFloat64(typ, info.ColumnZMs[i].GetMinBuf()); ok {
+				maxVal, _ := types.RawToFloat64(typ, info.ColumnZMs[i].GetMaxBuf())
+				s.MinValMap[colName] = minVal
+				s.MaxValMap[colName] = maxVal
 			}
 		}
 
@@ -1375,20 +1310,19 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	if expr.GetF().Func.ObjName == "prefix_in" || expr.GetF().Func.ObjName == "prefix_eq" || expr.GetF().Func.ObjName == "prefix_between" || expr.GetF().Func.ObjName == "prefix_in_range" {
 		return 0 //make prefix_in and prefix_eq always the first filter
 	}
-	switch expr.Typ.Id {
-	case int32(types.T_decimal64):
+	switch oid := types.T(expr.Typ.Id); {
+	case oid.IsDecimal():
+		// a decimal costs its size in bytes
+		w += float64(oid.TypeLen())
+	case oid == types.T_float32, oid == types.T_float64:
 		w += 8
-	case int32(types.T_decimal128):
-		w += 16
-	case int32(types.T_float32), int32(types.T_float64):
-		w += 8
-	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text):
+	case oid == types.T_char, oid == types.T_varchar, oid == types.T_text:
 		if expr.Typ.Width < types.VarlenaInlineSize {
 			w += 1
 		} else {
 			w += float64(expr.Typ.Width)
 		}
-	case int32(types.T_json), int32(types.T_datalink):
+	case oid == types.T_json, oid == types.T_datalink:
 		w += 32
 	}
 	switch exprImpl := expr.Expr.(type) {

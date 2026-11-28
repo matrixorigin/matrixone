@@ -312,7 +312,7 @@ const (
 
 type RowIterator interface {
 	Next() bool
-	Row(ctx context.Context, row []any, repr ValueRepr) error
+	Row(ctx context.Context, row []any) error
 	Close()
 }
 
@@ -418,14 +418,13 @@ func (iter *atomicBatchRowIter) Next() bool {
 	return iter.iter.Next()
 }
 
-func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any, repr ValueRepr) error {
+func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any) error {
 	batchRow := iter.iter.Item()
 	return extractRowFromEveryVector(
 		ctx,
 		batchRow.Src,
 		batchRow.Offset,
 		row,
-		repr,
 	)
 }
 

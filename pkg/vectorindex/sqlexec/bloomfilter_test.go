@@ -16,6 +16,7 @@ package sqlexec
 
 import (
 	"context"
+	"encoding/hex"
 	"math"
 	"testing"
 
@@ -517,7 +518,9 @@ func TestAppendVectorSQLLiteral(t *testing.T) {
 
 		vecTs := testutil.MakeTimestampVector([]string{"2023-01-01 12:00:00"}, nil, proc.Mp())
 		buf, _ = AppendVectorSQLLiteral(ctx, vecTs, 0, nil)
-		require.Equal(t, "'2023-01-01 12:00:00'", string(buf))
+		// the exact encoding, independent of the session time zone
+		ts := vector.GetFixedAtNoTypeCheck[types.Timestamp](vecTs, 0)
+		require.Equal(t, "bit_cast(unhex('"+hex.EncodeToString(types.EncodeTimestamp(&ts))+"') AS TIMESTAMP(0))", string(buf))
 	})
 
 	t.Run("decimal", func(t *testing.T) {
@@ -563,7 +566,7 @@ func TestAppendVectorSQLLiteral(t *testing.T) {
 		vec := vector.NewVec(types.T_enum.ToType(), mp)
 		vector.AppendFixed(vec, types.Enum(1), false, proc.Mp())
 		buf, _ := AppendVectorSQLLiteral(ctx, vec, 0, nil)
-		require.Equal(t, "'1'", string(buf))
+		require.Equal(t, "1", string(buf), "the member ordinal")
 	})
 
 	t.Run("unsupported", func(t *testing.T) {

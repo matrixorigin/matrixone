@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"maps"
 	"time"
-	"unsafe"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -2205,206 +2205,41 @@ func EncodeMergeGroup(merge *group.MergeGroup, pipe *pipeline.Group) {
 	}
 	pipe.PartialResultTypes = make([]uint32, len(merge.PartialResultTypes))
 	pipe.PartialResults = make([]byte, 0)
-	for i := range pipe.PartialResultTypes {
-		pipe.PartialResultTypes[i] = uint32(merge.PartialResultTypes[i])
-		switch merge.PartialResultTypes[i] {
-		case types.T_bool:
-			result := merge.PartialResults[i].(bool)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_bit:
-			result := merge.PartialResults[i].(uint64)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_int8:
-			result := merge.PartialResults[i].(int8)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_int16:
-			result := merge.PartialResults[i].(int16)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_int32:
-			result := merge.PartialResults[i].(int32)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_int64:
-			result := merge.PartialResults[i].(int64)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_uint8:
-			result := merge.PartialResults[i].(uint8)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_uint16:
-			result := merge.PartialResults[i].(uint16)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_uint32:
-			result := merge.PartialResults[i].(uint32)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_uint64:
-			result := merge.PartialResults[i].(uint64)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_float32:
-			result := merge.PartialResults[i].(float32)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_float64:
-			result := merge.PartialResults[i].(float64)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_date:
-			result := merge.PartialResults[i].(types.Date)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_time:
-			result := merge.PartialResults[i].(types.Time)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_datetime:
-			result := merge.PartialResults[i].(types.Datetime)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_timestamp:
-			result := merge.PartialResults[i].(types.Timestamp)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_enum:
-			result := merge.PartialResults[i].(types.Enum)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_decimal64:
-			result := merge.PartialResults[i].(types.Decimal64)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_decimal128:
-			result := merge.PartialResults[i].(types.Decimal128)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_uuid:
-			result := merge.PartialResults[i].(types.Uuid)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_TS:
-			result := merge.PartialResults[i].(types.TS)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_Rowid:
-			result := merge.PartialResults[i].(types.Rowid)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
-		case types.T_Blockid:
-			result := merge.PartialResults[i].(types.Blockid)
-			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
-			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+	for i, oid := range merge.PartialResultTypes {
+		if merge.PartialResults[i] == nil || !mergePartialResultEncoded(oid) {
+			// no block contributed a value: sent as T_any with no bytes, so
+			// every later aggregate keeps its position
+			pipe.PartialResultTypes[i] = uint32(types.T_any)
+			continue
 		}
+		pipe.PartialResultTypes[i] = uint32(oid)
+		pipe.PartialResults = append(pipe.PartialResults, vector.RawFromValue(oid, merge.PartialResults[i])...)
 	}
 }
 
+// mergePartialResultEncoded reports whether a partial result of type oid is
+// sent: every fixed-size type is, as its raw bytes.
+func mergePartialResultEncoded(oid types.T) bool {
+	return vector.SupportsAny(oid) && !oid.ToType().IsVarlen()
+}
+
+// DecodeMergeGroup is the inverse of EncodeMergeGroup. PartialResults has one
+// slot per aggregate (nil for T_any), since the merge reads it by position.
 func DecodeMergeGroup(merge *group.MergeGroup, pipe *pipeline.Group) {
 	if pipe.PartialResults == nil {
 		return
 	}
 	merge.PartialResultTypes = make([]types.T, len(pipe.PartialResultTypes))
-	merge.PartialResults = make([]any, 0)
+	merge.PartialResults = make([]any, len(pipe.PartialResultTypes))
+	data := pipe.PartialResults
 	for i := range merge.PartialResultTypes {
-		merge.PartialResultTypes[i] = types.T(pipe.PartialResultTypes[i])
-		switch merge.PartialResultTypes[i] {
-		case types.T_bool:
-			result := *(*bool)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_bit:
-			result := *(*uint64)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_int8:
-			result := *(*int8)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_int16:
-			result := *(*int16)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_int32:
-			result := *(*int32)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_int64:
-			result := *(*int64)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_uint8:
-			result := *(*uint8)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_uint16:
-			result := *(*uint16)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_uint32:
-			result := *(*uint32)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_uint64:
-			result := *(*uint64)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_float32:
-			result := *(*float32)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_float64:
-			result := *(*float64)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_date:
-			result := *(*types.Date)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_time:
-			result := *(*types.Time)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_datetime:
-			result := *(*types.Datetime)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_timestamp:
-			result := *(*types.Timestamp)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_enum:
-			result := *(*types.Enum)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_decimal64:
-			result := *(*types.Decimal64)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_decimal128:
-			result := *(*types.Decimal128)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_uuid:
-			result := *(*types.Uuid)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_TS:
-			result := *(*types.TS)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_Rowid:
-			result := *(*types.Rowid)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
-		case types.T_Blockid:
-			result := *(*types.Blockid)(unsafe.Pointer(&pipe.PartialResults[0]))
-			merge.PartialResults = append(merge.PartialResults, result)
-			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		oid := types.T(pipe.PartialResultTypes[i])
+		merge.PartialResultTypes[i] = oid
+		if !mergePartialResultEncoded(oid) {
+			continue
 		}
+		size := oid.FixedLength()
+		merge.PartialResults[i] = vector.ValueFromRaw(oid, data[:size])
+		data = data[size:]
 	}
 }

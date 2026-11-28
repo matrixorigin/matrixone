@@ -2603,7 +2603,7 @@ func TestRowToString(t *testing.T) {
 		v := NewVec(types.T_Blockid.ToType(), mp)
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		require.Equal(t, "[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]", v.RowToString(1))
+		require.Equal(t, "00000000-0000-0000-0000-000000000000-0-0", v.RowToString(1))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}

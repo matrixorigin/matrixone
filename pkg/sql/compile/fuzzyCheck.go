@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -541,75 +540,10 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	if vec.GetNulls().Contains(uint64(rowIndex)) {
 		return "", nil
 	}
-	switch vec.GetType().Oid {
-	case types.T_bool:
-		flag := vector.GetFixedAtNoTypeCheck[bool](vec, rowIndex)
-		if flag {
-			return "true", nil
-		}
-		return "false", nil
-	case types.T_bit:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint64](vec, rowIndex)), nil
-	case types.T_int8:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[int8](vec, rowIndex)), nil
-	case types.T_int16:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[int16](vec, rowIndex)), nil
-	case types.T_int32:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[int32](vec, rowIndex)), nil
-	case types.T_int64:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[int64](vec, rowIndex)), nil
-	case types.T_uint8:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint8](vec, rowIndex)), nil
-	case types.T_uint16:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint16](vec, rowIndex)), nil
-	case types.T_uint32:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint32](vec, rowIndex)), nil
-	case types.T_uint64:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint64](vec, rowIndex)), nil
-	case types.T_float32:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[float32](vec, rowIndex)), nil
-	case types.T_float64:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[float64](vec, rowIndex)), nil
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
-		return vec.GetStringAt(rowIndex), nil
-	case types.T_array_float32:
-		return types.ArrayToString[float32](vector.GetArrayAt[float32](vec, rowIndex)), nil
-	case types.T_array_float64:
-		return types.ArrayToString[float64](vector.GetArrayAt[float64](vec, rowIndex)), nil
-	case types.T_decimal64:
-		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIndex)
-		return val.Format(vec.GetType().Scale), nil
-	case types.T_decimal128:
-		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIndex)
-		return val.Format(vec.GetType().Scale), nil
-	case types.T_json:
-		val := vec.GetBytesAt(rowIndex)
-		byteJson := types.DecodeJson(val)
-		return byteJson.String(), nil
-	case types.T_uuid:
-		val := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIndex)
-		return val.String(), nil
-	case types.T_date:
-		val := vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIndex)
-		return val.String(), nil
-	case types.T_time:
-		val := vector.GetFixedAtNoTypeCheck[types.Time](vec, rowIndex)
-		return val.String(), nil
-	case types.T_timestamp:
-		loc := time.Local
-		val := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, rowIndex)
-		return val.String2(loc, vec.GetType().Scale), nil
-	case types.T_datetime:
-		val := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIndex)
-		return val.String2(vec.GetType().Scale), nil
-	case types.T_year:
-		val := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIndex)
-		return val.String(), nil
-	case types.T_enum:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[types.Enum](vec, rowIndex)), nil
-	default:
+	if !vector.SupportsAny(vec.GetType().Oid) {
 		return "", moerr.NewInternalErrorNoCtxf("fuzzy filter can not parse correct string for type id : %d", vec.GetType().Oid)
 	}
+	return types.ValueText(*vec.GetType(), vector.GetAny(vec, rowIndex, false)), nil
 }
 
 // for decimal type in batch.vector that read from pipeline, its scale is empty

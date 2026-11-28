@@ -1324,72 +1324,11 @@ func (top *Top) getTopValue() ([]byte, bool) {
 		// fail open to the unpruned exact scan.
 		return nil, false
 	}
-	if vec.GetType().IsVarlen() {
-		return vec.GetBytesAt(x), true
+	oid := vec.GetType().Oid
+	if !vector.SupportsAny(oid) {
+		return nil, false
 	}
-	switch vec.GetType().Oid {
-	case types.T_int8:
-		v := vector.GetFixedAtNoTypeCheck[int8](vec, x)
-		return types.EncodeInt8(&v), true
-	case types.T_int16:
-		v := vector.GetFixedAtNoTypeCheck[int16](vec, x)
-		return types.EncodeInt16(&v), true
-	case types.T_int32:
-		v := vector.GetFixedAtNoTypeCheck[int32](vec, x)
-		return types.EncodeInt32(&v), true
-	case types.T_int64:
-		v := vector.GetFixedAtNoTypeCheck[int64](vec, x)
-		return types.EncodeInt64(&v), true
-	case types.T_uint8:
-		v := vector.GetFixedAtNoTypeCheck[uint8](vec, x)
-		return types.EncodeUint8(&v), true
-	case types.T_uint16:
-		v := vector.GetFixedAtNoTypeCheck[uint16](vec, x)
-		return types.EncodeUint16(&v), true
-	case types.T_uint32:
-		v := vector.GetFixedAtNoTypeCheck[uint32](vec, x)
-		return types.EncodeUint32(&v), true
-	case types.T_uint64:
-		v := vector.GetFixedAtNoTypeCheck[uint64](vec, x)
-		return types.EncodeUint64(&v), true
-	case types.T_float32:
-		v := vector.GetFixedAtNoTypeCheck[float32](vec, x)
-		return types.EncodeFloat32(&v), true
-	case types.T_float64:
-		v := vector.GetFixedAtNoTypeCheck[float64](vec, x)
-		return types.EncodeFloat64(&v), true
-	case types.T_bf16:
-		return types.EncodeFixed(vector.GetFixedAtNoTypeCheck[types.BF16](vec, x)), true
-	case types.T_float16:
-		return types.EncodeFixed(vector.GetFixedAtNoTypeCheck[types.Float16](vec, x)), true
-	case types.T_float8:
-		return types.EncodeFixed(vector.GetFixedAtNoTypeCheck[types.Float8](vec, x)), true
-	case types.T_float4:
-		return types.EncodeFixed(vector.GetFixedAtNoTypeCheck[types.Float4](vec, x)), true
-	case types.T_date:
-		v := vector.GetFixedAtNoTypeCheck[types.Date](vec, x)
-		return types.EncodeDate(&v), true
-	case types.T_datetime:
-		v := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, x)
-		return types.EncodeDatetime(&v), true
-	case types.T_timestamp:
-		v := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, x)
-		return types.EncodeTimestamp(&v), true
-	case types.T_time:
-		v := vector.GetFixedAtNoTypeCheck[types.Time](vec, x)
-		return types.EncodeTime(&v), true
-	case types.T_decimal64:
-		v := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, x)
-		return types.EncodeDecimal64(&v), true
-	case types.T_decimal128:
-		v := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, x)
-		return types.EncodeDecimal128(&v), true
-	case types.T_enum:
-		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, x)
-		return types.EncodeEnum(&v), true
-	case types.T_year:
-		v := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, x)
-		return types.EncodeMoYear(&v), true
-	}
-	return nil, false
+	// the value's raw bytes: a copy for a fixed-size type, the vector's
+	// bytes for a varlena one
+	return vector.RawFromValue(oid, vector.GetAny(vec, x, false)), true
 }

@@ -48,9 +48,9 @@ create external table csv_overflow(v tinyint)
 infile{'filepath'='$resources/external_table_file/csv_integer_overflow.csv', 'format'='csv'}
 fields terminated by ',' lines terminated by '\n';
 select v from csv_overflow;
-internal error: the input value '127.5' is not int8 type for column 0
+internal error: the input value '127.5' is not TINYINT type for column 0
 select v is null as rejected, __mo_file_line as line,
-__mo_error_message like '%not int8 type%' as conversion_error from csv_overflow;
+__mo_error_message like '%not TINYINT type%' as conversion_error from csv_overflow;
 ➤ rejected[-7,1,0]  ¦  line[-5,64,0]  ¦  conversion_error[-7,1,0]  𝄀
 1  ¦  1  ¦  1
 create external table json_lines(a int, s varchar(8))

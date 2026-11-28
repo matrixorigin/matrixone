@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -290,7 +291,13 @@ func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vecto
 			vec.MustAppendValue(types.ArrayToBytes([]float64{i + 1, i}), false)
 		}
 	default:
-		panic(fmt.Sprintf("%v %s", t.Oid, "not supported"))
+		if t.IsVarlen() {
+			panic(fmt.Sprintf("%v %s", t.Oid, "not supported"))
+		}
+		// any other fixed-size type: distinct values from the global sequence
+		for i := 0; i < rows; i++ {
+			vec.MustAppendValue(vector.FixedValueOfInt(t.Oid, int64(common.NextGlobalSeqNum())), false)
+		}
 	}
 	return
 }
@@ -396,7 +403,12 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 			vec.MustAppendValue(arr, false)
 		}
 	default:
-		panic("not support")
+		if typ.IsVarlen() {
+			panic("not support")
+		}
+		for i := 0; i < rows; i++ {
+			vec.MustAppendValue(vector.FixedValueOfInt(typ.Oid, int64(i+offset)), false)
+		}
 	}
 	return vec
 }

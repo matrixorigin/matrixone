@@ -85,11 +85,6 @@ func (w *Fulltext2SqlWriter) setIgnored(g *ignoredRows) {
 	w.ignored = g
 }
 
-// ignoredKey returns pk, a native primary key, as the ignored rows key it.
-func (w *Fulltext2SqlWriter) ignoredKey(pk any) any {
-	return sqlStringRepr(pk, w.pkTyp)
-}
-
 // leaveOut records that the index cannot store the row with key pk because of err, and reports
 // whether it does; an error that is no such reason, or an index without an ignored table, is
 // returned.
@@ -100,13 +95,13 @@ func (w *Fulltext2SqlWriter) leaveOut(pk any, err error) (bool, error) {
 	if _, ok := vectorindex.UnstorableCode(err); !ok {
 		return false, err
 	}
-	return true, w.ignored.ignore(w.ignoredKey(pk), err)
+	return true, w.ignored.ignore(pk, err)
 }
 
 // indexed records that the row with key pk is in the index or no longer exists.
 func (w *Fulltext2SqlWriter) indexed(pk any) {
 	if w.ignored != nil {
-		w.ignored.indexed(w.ignoredKey(pk))
+		w.ignored.indexed(pk)
 	}
 }
 

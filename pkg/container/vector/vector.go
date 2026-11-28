@@ -26,7 +26,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -3969,122 +3968,6 @@ func (v *Vector) String() string {
 	}
 }
 
-func implFixedRowToString[T types.FixedSizeT](v *Vector, idx int) string {
-	if v.IsConstNull() {
-		return "null"
-	}
-
-	if v.IsConst() {
-		if v.nsp.Contains(0) {
-			return "null"
-		} else {
-			return fmt.Sprintf("%v", GetFixedAtNoTypeCheck[T](v, 0))
-		}
-	}
-	if v.nsp.Contains(uint64(idx)) {
-		return "null"
-	} else {
-		return fmt.Sprintf("%v", GetFixedAtNoTypeCheck[T](v, idx))
-	}
-}
-
-// Low-precision scalar storage contains bit codes; present their numeric values
-// using the same float32 convention as ordinary scalar rows.
-func implLowPrecisionFloatRowToString(v *Vector, idx int) string {
-	if v.IsConst() {
-		idx = 0
-	}
-	if v.IsConstNull() || v.nsp.Contains(uint64(idx)) {
-		return "null"
-	}
-	value, _ := GetLowPrecisionFloatAt(v, idx)
-	return fmt.Sprintf("%v", value)
-}
-
-func implTimestampRowToString(v *Vector, idx int) string {
-	if v.IsConstNull() {
-		return "null"
-	}
-
-	loc := time.Local
-	if v.IsConst() {
-		if v.nsp.Contains(0) {
-			return "null"
-		} else {
-			return GetFixedAtNoTypeCheck[types.Timestamp](v, 0).String2(loc, v.typ.Scale)
-		}
-	}
-	if v.nsp.Contains(uint64(idx)) {
-		return "null"
-	} else {
-		return GetFixedAtNoTypeCheck[types.Timestamp](v, idx).String2(loc, v.typ.Scale)
-	}
-}
-
-func implDatetimeRowToString(v *Vector, idx int) string {
-	if v.IsConstNull() {
-		return "null"
-	}
-
-	var dt types.Datetime
-	if v.IsConst() {
-		if v.nsp.Contains(0) {
-			return "null"
-		} else {
-			dt = GetFixedAtNoTypeCheck[types.Datetime](v, 0)
-		}
-	} else {
-		if v.nsp.Contains(uint64(idx)) {
-			return "null"
-		} else {
-			dt = GetFixedAtNoTypeCheck[types.Datetime](v, idx)
-		}
-	}
-
-	return dt.String2(v.typ.Scale)
-}
-
-func implDecimalRowToString[T types.DecimalWithFormat](v *Vector, idx int) string {
-	if v.IsConstNull() {
-		return "null"
-	}
-
-	if v.IsConst() {
-		if v.nsp.Contains(0) {
-			return "null"
-		} else {
-			return GetFixedAtNoTypeCheck[T](v, 0).Format(v.typ.Scale)
-		}
-	}
-	if v.nsp.Contains(uint64(idx)) {
-		return "null"
-	} else {
-		return GetFixedAtNoTypeCheck[T](v, idx).Format(v.typ.Scale)
-	}
-}
-
-// blockScaledCellString renders a vecf8/vecf4 cell; a malformed cell renders its error.
-func blockScaledCellString(cell []byte) string {
-	s, err := types.BlockScaledToString(cell)
-	if err != nil {
-		return err.Error()
-	}
-	return s
-}
-
-func blockScaledRowToString(v *Vector, idx int) string {
-	if v.IsConstNull() {
-		return "null"
-	}
-	if v.IsConst() {
-		idx = 0
-	}
-	if v.nsp.Contains(uint64(idx)) {
-		return "null"
-	}
-	return blockScaledCellString(v.GetBytesAt(idx))
-}
-
 func blockScaledVectorString(v *Vector) string {
 	if v.IsConstNull() {
 		return "null"
@@ -4095,7 +3978,7 @@ func blockScaledVectorString(v *Vector) string {
 	}
 	strs := make([]string, n)
 	for i := range strs {
-		strs[i] = blockScaledRowToString(v, i)
+		strs[i] = v.RowToString(i)
 	}
 	if n == 1 {
 		return strs[0]
@@ -4103,111 +3986,13 @@ func blockScaledVectorString(v *Vector) string {
 	return fmt.Sprintf("%v-%s", strings.Join(strs, types.DefaultArraysToStringSep), v.nsp.GetBitmap().String())
 }
 
-func implArrayRowToString[T types.ArrayElement](v *Vector, idx int) string {
-	if v.IsConstNull() {
-		return "null"
-	}
-
-	if v.IsConst() {
-		if v.nsp.Contains(0) {
-			return "null"
-		} else {
-			return types.ArrayToString(GetArrayAt[T](v, 0))
-		}
-	}
-	if v.nsp.Contains(uint64(idx)) {
-		return "null"
-	} else {
-		return types.ArrayToString(GetArrayAt[T](v, idx))
-	}
-}
-
+// RowToString returns row idx as text: "null" for a NULL row, otherwise
+// types.ValueText of the value.
 func (v *Vector) RowToString(idx int) string {
-	switch v.typ.Oid {
-	case types.T_bool:
-		return implFixedRowToString[bool](v, idx)
-	case types.T_bit:
-		return implFixedRowToString[uint64](v, idx)
-	case types.T_int8:
-		return implFixedRowToString[int8](v, idx)
-	case types.T_int16:
-		return implFixedRowToString[int16](v, idx)
-	case types.T_int32:
-		return implFixedRowToString[int32](v, idx)
-	case types.T_int64:
-		return implFixedRowToString[int64](v, idx)
-	case types.T_uint8:
-		return implFixedRowToString[uint8](v, idx)
-	case types.T_uint16:
-		return implFixedRowToString[uint16](v, idx)
-	case types.T_uint32:
-		return implFixedRowToString[uint32](v, idx)
-	case types.T_uint64:
-		return implFixedRowToString[uint64](v, idx)
-	case types.T_float32:
-		return implFixedRowToString[float32](v, idx)
-	case types.T_float64:
-		return implFixedRowToString[float64](v, idx)
-	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		return implLowPrecisionFloatRowToString(v, idx)
-	case types.T_date:
-		return implFixedRowToString[types.Date](v, idx)
-	case types.T_year:
-		return implFixedRowToString[types.MoYear](v, idx)
-	case types.T_datetime:
-		return implDatetimeRowToString(v, idx)
-	case types.T_time:
-		return implFixedRowToString[types.Time](v, idx)
-	case types.T_timestamp:
-		return implTimestampRowToString(v, idx)
-	case types.T_enum:
-		return implFixedRowToString[types.Enum](v, idx)
-	case types.T_decimal64:
-		return implDecimalRowToString[types.Decimal64](v, idx)
-	case types.T_decimal128:
-		return implDecimalRowToString[types.Decimal128](v, idx)
-	case types.T_decimal256:
-		return implDecimalRowToString[types.Decimal256](v, idx)
-	case types.T_uuid:
-		return implFixedRowToString[types.Uuid](v, idx)
-	case types.T_TS:
-		return implFixedRowToString[types.TS](v, idx)
-	case types.T_Rowid:
-		return implFixedRowToString[types.Rowid](v, idx)
-	case types.T_Blockid:
-		return implFixedRowToString[types.Blockid](v, idx)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
-		col := MustFixedColNoTypeCheck[types.Varlena](v)
-		if len(col) == 1 {
-			if v.nsp.Contains(0) {
-				return "null"
-			} else {
-				return col[0].UnsafeGetString(v.area)
-			}
-		}
-		if v.nsp.Contains(uint64(idx)) {
-			return "null"
-		} else {
-			return col[idx].UnsafeGetString(v.area)
-		}
-		//return fmt.Sprintf("%v-%s", col, v.nsp.GetBitmap().String())
-	case types.T_array_float32:
-		return implArrayRowToString[float32](v, idx)
-	case types.T_array_float64:
-		return implArrayRowToString[float64](v, idx)
-	case types.T_array_bf16:
-		return implArrayRowToString[types.BF16](v, idx)
-	case types.T_array_float16:
-		return implArrayRowToString[types.Float16](v, idx)
-	case types.T_array_int8:
-		return implArrayRowToString[int8](v, idx)
-	case types.T_array_uint8:
-		return implArrayRowToString[uint8](v, idx)
-	case types.T_array_float8, types.T_array_float4:
-		return blockScaledRowToString(v, idx)
-	default:
-		panic("vec to string unknown types.")
+	if v.IsNull(uint64(idx)) {
+		return "null"
 	}
+	return types.ValueText(v.typ, GetAny(v, idx, false))
 }
 
 func SetConstNull(vec *Vector, length int, mp *mpool.MPool) error {

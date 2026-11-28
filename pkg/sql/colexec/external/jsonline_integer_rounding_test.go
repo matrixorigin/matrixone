@@ -37,7 +37,7 @@ import (
 // decimal rounding on both EXTERNAL_TB SELECT and directly decoded LOAD.
 // The reader path is the production one: bytejson.ParseNodeString keeps the
 // original number lexeme, jsonLineScalarText renders it as Field text without
-// CSV quotes, and getColData reuses parseCSVInt/parseCSVUint.
+// CSV quotes, and getColData applies the same integer rounding.
 func TestJSONLineIntegerAssignmentRounding(t *testing.T) {
 	type jsonLineIntCase struct {
 		name     string
@@ -177,7 +177,7 @@ func TestJSONLineErrorModeTolerantFractionalInteger(t *testing.T) {
 		`{"a":-2.5,"s":"delta"}` + "\n"
 	require.NoError(t, readAllText(t, param, proc, bat, content))
 	requireRows(t, bat, []wantRow{
-		{line: 1, message: "is not int32 type", text: `{"a":"notanint","s":"beta"}`},
+		{line: 1, message: "is not INT type", text: `{"a":"notanint","s":"beta"}`},
 		{a: 3, s: "gamma", line: 2},
 		{a: -3, s: "delta", line: 3},
 	})

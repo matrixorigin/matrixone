@@ -38,7 +38,7 @@ infile{'filepath'='$resources/external_table_file/csv_integer_overflow.csv', 'fo
 fields terminated by ',' lines terminated by '\n';
 select v from csv_overflow;
 select v is null as rejected, __mo_file_line as line,
-__mo_error_message like '%not int8 type%' as conversion_error from csv_overflow;
+__mo_error_message like '%not TINYINT type%' as conversion_error from csv_overflow;
 -- JSONLINE retains its format-specific blank-record policy.
 create external table json_lines(a int, s varchar(8))
 infile{'filepath'='$resources/external_table_file/jsonline_whitespace_records.jsonl', 'format'='jsonline', 'jsondata'='object'};

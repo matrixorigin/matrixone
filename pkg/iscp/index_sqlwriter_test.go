@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -309,7 +310,7 @@ func TestNewIvfflatSqlWriterInsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `__mo_index_pri_col`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, __mo_index_pri_col, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
+	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `__mo_index_pri_col`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,'[1, 2, 3]'),ROW(2000,'[5, 6, 7]'),ROW(3000,'[5, 6, 7]')) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, __mo_index_pri_col, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
 }
 
 func TestNewIvfflatSqlWriterUpsert(t *testing.T) {
@@ -335,7 +336,7 @@ func TestNewIvfflatSqlWriterUpsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `__mo_index_pri_col`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, __mo_index_pri_col, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
+	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `__mo_index_pri_col`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,'[1, 2, 3]'),ROW(2000,'[5, 6, 7]'),ROW(3000,'[5, 6, 7]')) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, __mo_index_pri_col, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
 }
 
 func TestNewIvfflatSqlWriterUpsertWithIncludeColumns(t *testing.T) {
@@ -429,9 +430,14 @@ func TestNewIvfflatSqlWriterPreservesTemporalIncludeScale(t *testing.T) {
 				ivfflatIncludeColSpec{name: "tm", typ: types.T_time, scale: scale})
 			writer, err := NewIvfflatSqlWriter("ivfflat", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
 			require.NoError(t, err)
+			ts, err := types.ParseTimestamp(time.UTC, "2026-01-02 03:04:05.123456", 6)
+			require.NoError(t, err)
+			dt, err := types.ParseDatetime("2026-01-02 03:04:05.123456", 6)
+			require.NoError(t, err)
+			tm, err := types.ParseTime("03:04:05.123456", 6)
+			require.NoError(t, err)
 			for _, write := range []func(context.Context, []any) error{writer.Insert, writer.Upsert} {
-				require.NoError(t, write(t.Context(), []any{int64(1), []float32{1, 2}, nil,
-					"2026-01-02 03:04:05.123456", "2026-01-02 03:04:05.123456", "03:04:05.123456"}))
+				require.NoError(t, write(t.Context(), []any{int64(1), []float32{1, 2}, nil, ts, dt, tm}))
 				require.NoError(t, write(t.Context(), []any{int64(2), []float32{2, 1}, nil, nil, nil, nil}))
 				sqlBytes, err := writer.ToSql()
 				require.NoError(t, err)
@@ -542,7 +548,7 @@ func TestIvfflatSqlWriterEnumReplay(t *testing.T) {
 				generated, err := writer.ToSql()
 				require.NoError(t, err)
 				sql := string(generated)
-				require.Contains(t, sql, "VALUES ROW(x'503d1501',CAST('[0, 0]' as VECF32(2)),x'503d1502'),ROW(x'503d1502',CAST('[1, 0]' as VECF32(2)),x'00'),ROW(x'503d14',CAST('[2, 0]' as VECF32(2)),x'503d14')")
+				require.Contains(t, sql, "VALUES ROW(x'503d1501','[0, 0]',x'503d1502'),ROW(x'503d1502','[1, 0]',x'00'),ROW(x'503d14','[2, 0]',x'503d14')")
 				stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 				require.NoError(t, err)
 				stmt.Free()

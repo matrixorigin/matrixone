@@ -1096,3 +1096,27 @@ func TestZMFloatArithmeticBounds(t *testing.T) {
 		}
 	}
 }
+
+// TestZMJsonBoundIsRawPrefix builds the zone map of a JSON document longer
+// than a bound holds: the bounds are 30-byte prefixes, not documents, so
+// reading or printing them must not decode them as JSON.
+func TestZMJsonBoundIsRawPrefix(t *testing.T) {
+	mp := mpool.MustNewZero()
+	doc, err := types.ParseStringToByteJson(`{"name":"a fairly long json document","tags":["x","y","z"],"n":12345}`)
+	require.NoError(t, err)
+	raw, err := types.EncodeJson(doc)
+	require.NoError(t, err)
+	require.Greater(t, len(raw), 30)
+
+	vec := vector.NewVec(types.T_json.ToType(), mp)
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendBytes(vec, raw, false, mp))
+	zm := NewZM(types.T_json, 0)
+	require.NoError(t, BatchUpdateZM(zm, vec))
+
+	require.NotPanics(t, func() {
+		require.Equal(t, raw[:30], zm.GetMin())
+		require.Len(t, zm.GetMax(), 30)
+		_ = zm.String()
+	})
+}

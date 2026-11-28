@@ -297,87 +297,6 @@ func TestGetColDataParallelLoadEmptyNumericAsTypedZero(t *testing.T) {
 	require.Equal(t, []types.Decimal64{0}, vector.MustFixedColWithTypeCheck[types.Decimal64](bat.Vecs[0]))
 }
 
-func TestAppendLoadEmptyNumericZeroAppendsTypedZero(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-
-	cases := []struct {
-		name string
-		id   types.T
-		typ  types.Type
-		want any
-	}{
-		{name: "bool", id: types.T_bool, typ: types.T_bool.ToType(), want: false},
-		{name: "int8", id: types.T_int8, typ: types.T_int8.ToType(), want: int8(0)},
-		{name: "int16", id: types.T_int16, typ: types.T_int16.ToType(), want: int16(0)},
-		{name: "int32", id: types.T_int32, typ: types.T_int32.ToType(), want: int32(0)},
-		{name: "int64", id: types.T_int64, typ: types.T_int64.ToType(), want: int64(0)},
-		{name: "uint8", id: types.T_uint8, typ: types.T_uint8.ToType(), want: uint8(0)},
-		{name: "uint16", id: types.T_uint16, typ: types.T_uint16.ToType(), want: uint16(0)},
-		{name: "uint32", id: types.T_uint32, typ: types.T_uint32.ToType(), want: uint32(0)},
-		{name: "uint64", id: types.T_uint64, typ: types.T_uint64.ToType(), want: uint64(0)},
-		{name: "float32", id: types.T_float32, typ: types.T_float32.ToType(), want: float32(0)},
-		{name: "float64", id: types.T_float64, typ: types.T_float64.ToType(), want: float64(0)},
-		{name: "decimal64", id: types.T_decimal64, typ: types.T_decimal64.ToType(), want: types.Decimal64(0)},
-		{name: "decimal128", id: types.T_decimal128, typ: types.T_decimal128.ToType(), want: types.Decimal128{}},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(tc.typ, proc.Mp())
-			defer vec.Free(proc.Mp())
-
-			require.NoError(t, appendLoadEmptyNumericZero(vec, tc.id, false, proc.Mp()))
-			require.Equal(t, 1, vec.Length())
-			require.False(t, vec.GetNulls().Contains(0))
-
-			switch want := tc.want.(type) {
-			case bool:
-				require.Equal(t, []bool{want}, vector.MustFixedColWithTypeCheck[bool](vec))
-			case int8:
-				require.Equal(t, []int8{want}, vector.MustFixedColWithTypeCheck[int8](vec))
-			case int16:
-				require.Equal(t, []int16{want}, vector.MustFixedColWithTypeCheck[int16](vec))
-			case int32:
-				require.Equal(t, []int32{want}, vector.MustFixedColWithTypeCheck[int32](vec))
-			case int64:
-				require.Equal(t, []int64{want}, vector.MustFixedColWithTypeCheck[int64](vec))
-			case uint8:
-				require.Equal(t, []uint8{want}, vector.MustFixedColWithTypeCheck[uint8](vec))
-			case uint16:
-				require.Equal(t, []uint16{want}, vector.MustFixedColWithTypeCheck[uint16](vec))
-			case uint32:
-				require.Equal(t, []uint32{want}, vector.MustFixedColWithTypeCheck[uint32](vec))
-			case uint64:
-				require.Equal(t, []uint64{want}, vector.MustFixedColWithTypeCheck[uint64](vec))
-			case float32:
-				require.Equal(t, []float32{want}, vector.MustFixedColWithTypeCheck[float32](vec))
-			case float64:
-				require.Equal(t, []float64{want}, vector.MustFixedColWithTypeCheck[float64](vec))
-			case types.Decimal64:
-				require.Equal(t, []types.Decimal64{want}, vector.MustFixedColWithTypeCheck[types.Decimal64](vec))
-			case types.Decimal128:
-				require.Equal(t, []types.Decimal128{want}, vector.MustFixedColWithTypeCheck[types.Decimal128](vec))
-			default:
-				t.Fatalf("unexpected want type %T", want)
-			}
-		})
-	}
-}
-
-func TestAppendLoadEmptyNumericZeroUnsupportedTypeReturnsError(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
-	defer bat.Clean(proc.Mp())
-
-	err := appendLoadEmptyNumericZero(bat.Vecs[0], types.T_varchar, false, proc.Mp())
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported type")
-}
-
 func TestPrepareSetsLoadEmptyNumericAsZeroForParallelRequestedLoad(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -628,7 +547,7 @@ func TestGetColDataLoadDataYear(t *testing.T) {
 		proc,
 	)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "not Year type")
+	require.Contains(t, err.Error(), "not YEAR type")
 }
 
 // TestGetColDataGeometry exercises the geometry/geography branch of the external
@@ -799,7 +718,7 @@ func TestGetColDataLoadDataStrictRejectsInvalidInteger(t *testing.T) {
 		proc,
 	)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "not int32 type")
+	require.Contains(t, err.Error(), "not INT type")
 }
 
 func TestGetColDataLoadDataAdjustmentsOnlyLocalCSVNonStrict(t *testing.T) {
@@ -855,7 +774,7 @@ func TestGetColDataLoadDataAdjustmentsOnlyLocalCSVNonStrict(t *testing.T) {
 			)
 			if tc.wantErr {
 				require.Error(t, err)
-				require.Contains(t, err.Error(), "not int32 type")
+				require.Contains(t, err.Error(), "not INT type")
 				return
 			}
 			require.NoError(t, err)
@@ -879,7 +798,7 @@ func TestGetColDataLoadDataNonStrictAdjustmentRejectsQuotedInvalidNumeric(t *tes
 			vecType:     types.T_int32.ToType(),
 			colType:     plan.Type{Id: int32(types.T_int32)},
 			fieldVal:    "abc",
-			wantErrText: "not int32 type",
+			wantErrText: "not INT type",
 		},
 		{
 			name:        "quoted invalid decimal is not adjusted",
@@ -887,7 +806,7 @@ func TestGetColDataLoadDataNonStrictAdjustmentRejectsQuotedInvalidNumeric(t *tes
 			vecType:     types.New(types.T_decimal64, 5, 2),
 			colType:     plan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2},
 			fieldVal:    "10x",
-			wantErrText: "invalid Decimal64 type",
+			wantErrText: "is not DECIMAL(5,2) type",
 		},
 	}
 
@@ -1058,7 +977,7 @@ func TestGetColDataLoadDataNonStrictTemporalNormalization(t *testing.T) {
 			fieldVal:          "1970-01-01 00:00:00",
 			sessionTZ:         time.UTC,
 			wantParallelText:  "1970-01-01 00:00:00",
-			wantDirectErrText: "not Timestamp type",
+			wantDirectErrText: "not TIMESTAMP type",
 			local:             true,
 			format:            tree.CSV,
 			strict:            true,
@@ -1069,7 +988,7 @@ func TestGetColDataLoadDataNonStrictTemporalNormalization(t *testing.T) {
 			vecType:           types.T_date.ToType(),
 			fieldVal:          "2024-02-31",
 			wantParallelText:  "2024-02-31",
-			wantDirectErrText: "not Date type",
+			wantDirectErrText: "not DATE type",
 			local:             true,
 			format:            tree.CSV,
 			strict:            true,
@@ -1080,7 +999,7 @@ func TestGetColDataLoadDataNonStrictTemporalNormalization(t *testing.T) {
 			vecType:           types.T_datetime.ToType(),
 			fieldVal:          "2024-02-31 25:61:61",
 			wantParallelText:  "2024-02-31 25:61:61",
-			wantDirectErrText: "not Datetime type",
+			wantDirectErrText: "not DATETIME type",
 			local:             false,
 			format:            tree.CSV,
 		},
@@ -1091,7 +1010,7 @@ func TestGetColDataLoadDataNonStrictTemporalNormalization(t *testing.T) {
 			fieldVal:          "not-a-timestamp",
 			sessionTZ:         utc8,
 			wantParallelText:  "not-a-timestamp",
-			wantDirectErrText: "not Timestamp type",
+			wantDirectErrText: "not TIMESTAMP type",
 			local:             true,
 			format:            tree.JSONLINE,
 		},
@@ -2752,20 +2671,6 @@ func TestGetColDataLowPrecFloat(t *testing.T) {
 	}
 }
 
-// TestAppendLoadEmptyNumericZeroLowPrecFloat covers the zero-fill path for the four
-// low-precision float types.
-func TestAppendLoadEmptyNumericZeroLowPrecFloat(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
-		vec := vector.NewVec(oid.ToType(), proc.Mp())
-		require.NoError(t, appendLoadEmptyNumericZero(vec, oid, false, proc.Mp()))
-		require.Equal(t, 1, vec.Length())
-		require.False(t, vec.GetNulls().Contains(0))
-		vec.Free(proc.Mp())
-	}
-}
-
 func TestGetColDataEmptyDomains(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -2999,6 +2904,64 @@ func TestGetColDataIntegerRoundingScope(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, []uint64{tc.want}, vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0]))
+		})
+	}
+}
+
+// TestGetColDataLoadCSVWideIntegerTruncatesExactly covers unquoted float-form
+// text for a BIGINT / BIGINT UNSIGNED column in a CSV LOAD, which truncates
+// toward zero. Past 2^53 a float64 cannot hold every integer, so the value is
+// converted exactly; the range is still checked before truncation.
+func TestGetColDataLoadCSVWideIntegerTruncatesExactly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		typ     types.T
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{typ: types.T_int64, value: "9007199254740991.0", want: "9007199254740991"},
+		{typ: types.T_int64, value: "9007199254740992.0", want: "9007199254740992"},
+		{typ: types.T_int64, value: "9007199254740993.7", want: "9007199254740993"},
+		{typ: types.T_int64, value: "-9007199254740993.7", want: "-9007199254740993"},
+		{typ: types.T_int64, value: "9.007199254740993e15", want: "9007199254740993"},
+		{typ: types.T_int64, value: "9223372036854775807.0", want: "9223372036854775807"},
+		{typ: types.T_int64, value: "-9223372036854775808.0", want: "-9223372036854775808"},
+		{typ: types.T_int64, value: "9223372036854775807.5", wantErr: true}, // above max before truncation
+		{typ: types.T_int64, value: "9223372036854775808.0", wantErr: true},
+		{typ: types.T_int64, value: "-9223372036854775808.1", wantErr: true},
+		{typ: types.T_int64, value: "1e20", wantErr: true},
+		{typ: types.T_int64, value: "1.9", want: "1"}, // below 2^53: the shared rule
+		{typ: types.T_uint64, value: "18446744073709551615.0", want: "18446744073709551615"},
+		{typ: types.T_uint64, value: "9007199254740993.2e0", want: "9007199254740993"},
+		{typ: types.T_uint64, value: "18446744073709551616.0", wantErr: true},
+		{typ: types.T_uint64, value: "-9007199254740993.0", wantErr: true},
+	} {
+		t.Run(tc.typ.String()+"_"+tc.value, func(t *testing.T) {
+			typ := tc.typ.ToType()
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
+			defer bat.Clean(proc.Mp())
+			param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background(),
+				Cols: []*plan.ColDef{{Name: "i", Typ: plan.Type{Id: int32(typ.Oid)}}},
+				Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.CSV},
+					ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)}}}, ExParam: ExParam{Fileparam: &ExFileparam{}}}
+			err := getColData(bat, []csvparser.Field{{Val: tc.value}}, 0, param, proc.Mp(),
+				plan.ExternAttr{ColName: "i", ColIndex: 0, ColFieldIndex: 0}, proc)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Zero(t, bat.Vecs[0].Length())
+				return
+			}
+			require.NoError(t, err)
+			var got string
+			if tc.typ == types.T_int64 {
+				got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0))
+			} else {
+				got = fmt.Sprint(vector.GetFixedAtWithTypeCheck[uint64](bat.Vecs[0], 0))
+			}
+			require.Equal(t, tc.want, got)
 		})
 	}
 }

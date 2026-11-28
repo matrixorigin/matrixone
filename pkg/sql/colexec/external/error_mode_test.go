@@ -198,7 +198,7 @@ func TestCSVErrorModeTolerates(t *testing.T) {
 	require.NoError(t, readAllText(t, param, proc, bat, "1,alpha\nnotanint,beta\n3,gamma\n"))
 	requireRows(t, bat, []wantRow{
 		{a: 1, s: "alpha", line: 1},
-		{line: 2, message: "is not int32 type", text: "notanint,beta"},
+		{line: 2, message: "is not INT type", text: "notanint,beta"},
 		{a: 3, s: "gamma", line: 3},
 	})
 	require.Equal(t, "/tmp/rows.dat", string(bat.Vecs[colPath].GetBytesAt(1)),
@@ -210,7 +210,7 @@ func TestCSVErrorModeTolerates(t *testing.T) {
 		require.NoError(t, readAllText(t, param, proc, bat, "42949672960e-10,alpha\n2147483647.5,beta\n25000000000e-10,gamma\n"))
 		requireRows(t, bat, []wantRow{
 			{a: 4, s: "alpha", line: 1},
-			{line: 2, message: "is not int32 type", text: "2147483647.5,beta"},
+			{line: 2, message: "is not INT type", text: "2147483647.5,beta"},
 			{a: 3, s: "gamma", line: 3},
 		})
 	})
@@ -222,7 +222,7 @@ func TestCSVWithoutErrorColumnsStillFails(t *testing.T) {
 	param, proc, bat := errorModeParam(t, tree.CSV, "", colMsg) // through __mo_file_line
 	err := readAllText(t, param, proc, bat, "1,alpha\nnotanint,beta\n3,gamma\n")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "is not int32 type")
+	require.Contains(t, err.Error(), "is not INT type")
 }
 
 // TestCSVErrorModeReportsRecordStartLine: a quoted field spanning lines makes
@@ -247,7 +247,7 @@ func TestCSVErrorModeReportsRecordStartLine(t *testing.T) {
 			require.NoError(t, readAllText(t, param, proc, bat, tc.content))
 			requireRows(t, bat, []wantRow{
 				{a: 1, s: "al\npha", line: tc.lines[0]},
-				{line: tc.lines[1], message: "is not int32 type", text: "notanint,beta"},
+				{line: tc.lines[1], message: "is not INT type", text: "notanint,beta"},
 			})
 		})
 	}
@@ -266,7 +266,7 @@ func TestJSONLineErrorModeTolerates(t *testing.T) {
 		require.NoError(t, readAllText(t, param, proc, bat, content))
 		requireRows(t, bat, []wantRow{
 			{a: 1, s: "alpha", line: 1},
-			{line: 2, message: "is not int32 type", text: `{"a":"notanint","s":"beta"}`},
+			{line: 2, message: "is not INT type", text: `{"a":"notanint","s":"beta"}`},
 			{line: 3, message: "not a well-formed json object", text: "this is not json"},
 			{a: 3, s: "gamma", line: 4},
 		})
@@ -465,7 +465,7 @@ func TestKafkaErrorModeTolerates(t *testing.T) {
 				"row %d: a kafka record has no file line", i)
 		}
 		// row 1: the value does not convert; row 2: wrong field count
-		require.Contains(t, string(bat.Vecs[colMsg].GetBytesAt(1)), "is not int32 type")
+		require.Contains(t, string(bat.Vecs[colMsg].GetBytesAt(1)), "is not INT type")
 		require.Equal(t, "notanint,beta", string(bat.Vecs[colText].GetBytesAt(1)))
 		require.Contains(t, string(bat.Vecs[colMsg].GetBytesAt(2)), "is not equal to input columns")
 		require.Equal(t, "1,a,extra", string(bat.Vecs[colText].GetBytesAt(2)))
@@ -643,6 +643,6 @@ func TestErrorTextUsesTheConfiguredSeparator(t *testing.T) {
 	require.NoError(t, readAllText(t, param, proc, bat, "1|alpha\nnotanint|beta\n"))
 	requireRows(t, bat, []wantRow{
 		{a: 1, s: "alpha", line: 1},
-		{line: 2, message: "is not int32 type", text: "notanint|beta"},
+		{line: 2, message: "is not INT type", text: "notanint|beta"},
 	})
 }

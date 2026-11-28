@@ -26,7 +26,6 @@ import (
 	"math/rand"
 	"net"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -105,102 +103,13 @@ func extractRowFromEveryVector(
 
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int) error {
-	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
-		row[i] = nil
-		return nil
-	}
-
-	switch vec.GetType().Oid { //get col
-	case types.T_json:
-		row[i] = types.DecodeJson(vec.CloneBytesAt(rowIndex))
-	case types.T_bool:
-		row[i] = vector.GetFixedAtWithTypeCheck[bool](vec, rowIndex)
-	case types.T_bit:
-		row[i] = vector.GetFixedAtWithTypeCheck[uint64](vec, rowIndex)
-	case types.T_int8:
-		row[i] = vector.GetFixedAtWithTypeCheck[int8](vec, rowIndex)
-	case types.T_uint8:
-		row[i] = vector.GetFixedAtWithTypeCheck[uint8](vec, rowIndex)
-	case types.T_int16:
-		row[i] = vector.GetFixedAtWithTypeCheck[int16](vec, rowIndex)
-	case types.T_uint16:
-		row[i] = vector.GetFixedAtWithTypeCheck[uint16](vec, rowIndex)
-	case types.T_int32:
-		row[i] = vector.GetFixedAtWithTypeCheck[int32](vec, rowIndex)
-	case types.T_uint32:
-		row[i] = vector.GetFixedAtWithTypeCheck[uint32](vec, rowIndex)
-	case types.T_int64:
-		row[i] = vector.GetFixedAtWithTypeCheck[int64](vec, rowIndex)
-	case types.T_uint64:
-		row[i] = vector.GetFixedAtWithTypeCheck[uint64](vec, rowIndex)
-	case types.T_float32:
-		row[i] = vector.GetFixedAtWithTypeCheck[float32](vec, rowIndex)
-	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		row[i], _ = vector.GetLowPrecisionFloatAt(vec, rowIndex)
-	case types.T_float64:
-		row[i] = vector.GetFixedAtWithTypeCheck[float64](vec, rowIndex)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		row[i] = vec.CloneBytesAt(rowIndex)
-	case types.T_array_float32:
-		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
-		//+------------------------------+
-		//| abs(cast([1,2,3] as vecf32)) |
-		//+------------------------------+
-		//|   �?   @  @@                  |
-		//+------------------------------+
-		row[i] = vector.GetArrayAt[float32](vec, rowIndex)
-	// Narrow vector element types — kept separate from T_varchar for the same
-	// raw-binary reason noted above. Without these, CDC on a table with a
-	// bf16/f16/int8/uint8 vector column fails permanently on the first row.
-	case types.T_array_bf16:
-		row[i] = vector.GetArrayAt[types.BF16](vec, rowIndex)
-	case types.T_array_float16:
-		row[i] = vector.GetArrayAt[types.Float16](vec, rowIndex)
-	case types.T_array_int8:
-		row[i] = vector.GetArrayAt[int8](vec, rowIndex)
-	case types.T_array_uint8:
-		row[i] = vector.GetArrayAt[uint8](vec, rowIndex)
-	case types.T_array_float8, types.T_array_float4:
-		// The block-scaled cell; convertColIntoSql renders it as text.
-		row[i] = vec.GetBytesAt(rowIndex)
-	case types.T_array_float64:
-		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
-	case types.T_date:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Date](vec, rowIndex)
-	case types.T_datetime:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Datetime](vec, rowIndex).String2(scale)
-	case types.T_time:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Time](vec, rowIndex).String2(scale)
-	case types.T_timestamp:
-		scale := vec.GetType().Scale
-		//TODO:get the right timezone
-		//timeZone := ses.GetTimeZone()
-		timeZone := time.UTC
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
-	case types.T_decimal64:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, rowIndex).Format(scale)
-	case types.T_decimal128:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex).Format(scale)
-	case types.T_uuid:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex).String()
-	case types.T_Rowid:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Rowid](vec, rowIndex)
-	case types.T_Blockid:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Blockid](vec, rowIndex)
-	case types.T_TS:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.TS](vec, rowIndex)
-	case types.T_enum:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Enum](vec, rowIndex)
-	default:
+	if !vector.SupportsAny(vec.GetType().Oid) {
 		logutil.Error(
 			"Failed to extract row from vector, unsupported type",
 			zap.Int("typeID", int(vec.GetType().Oid)))
 		return moerr.NewInternalErrorf(ctx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 	}
+	row[i] = vector.ExportValue(vec, rowIndex)
 	return nil
 }
 
@@ -214,201 +123,8 @@ func convertColIntoSql(
 	data any,
 	typ *types.Type,
 	sqlBuff []byte) ([]byte, error) {
-	if data == nil {
-		sqlBuff = appendString(sqlBuff, "NULL")
-		return sqlBuff, nil
-	}
-	var temp string
-	switch typ.Oid { //get col
-	case types.T_json:
-		sqlBuff = appendByte(sqlBuff, '\'')
-		temp = data.(bytejson.ByteJson).String()
-		temp = strings.Replace(temp, "\\", "\\\\", -1)
-		temp = strings.Replace(temp, "'", "\\'", -1)
-		sqlBuff = appendString(sqlBuff, temp)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_bool:
-		b := data.(bool)
-		if b {
-			temp = "true"
-		} else {
-			temp = "false"
-		}
-		sqlBuff = appendString(sqlBuff, temp)
-	case types.T_bit:
-		value := data.(uint64)
-		bitLength := typ.Width
-		if bitLength <= 0 {
-			bitLength = 1
-		}
-		byteLength := (bitLength + 7) / 8
-		if byteLength > 8 {
-			byteLength = 8
-		}
-		b := types.EncodeUint64(&value)[:byteLength]
-		slices.Reverse(b)
-		sqlBuff = appendHex(sqlBuff, b)
-	case types.T_int8:
-		value := data.(int8)
-		sqlBuff = appendInt64(sqlBuff, int64(value))
-	case types.T_uint8:
-		value := data.(uint8)
-		sqlBuff = appendUint64(sqlBuff, uint64(value))
-	case types.T_int16:
-		value := data.(int16)
-		sqlBuff = appendInt64(sqlBuff, int64(value))
-	case types.T_uint16:
-		value := data.(uint16)
-		sqlBuff = appendUint64(sqlBuff, uint64(value))
-	case types.T_int32:
-		value := data.(int32)
-		sqlBuff = appendInt64(sqlBuff, int64(value))
-	case types.T_uint32:
-		value := data.(uint32)
-		sqlBuff = appendUint64(sqlBuff, uint64(value))
-	case types.T_int64:
-		value := data.(int64)
-		sqlBuff = appendInt64(sqlBuff, value)
-	case types.T_uint64:
-		value := data.(uint64)
-		sqlBuff = appendUint64(sqlBuff, value)
-	case types.T_float32, types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		value := data.(float32)
-		sqlBuff = appendFloat64(sqlBuff, float64(value), 32)
-	case types.T_float64:
-		value := data.(float64)
-		sqlBuff = appendFloat64(sqlBuff, value, 64)
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		sqlBuff = appendHex(sqlBuff, data.([]byte))
-	case types.T_char,
-		types.T_varchar,
-		types.T_text,
-		types.T_datalink:
-		value := string(data.([]byte))
-		value = strings.Replace(value, "\\", "\\\\", -1)
-		value = strings.Replace(value, "'", "\\'", -1)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendBytes(sqlBuff, []byte(value))
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_array_float32:
-		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
-		//+------------------------------+
-		//| abs(cast([1,2,3] as vecf32)) |
-		//+------------------------------+
-		//|   �?   @  @@                  |
-		//+------------------------------+
-		value := data.([]float32)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_array_float64:
-		value := data.([]float64)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
-		sqlBuff = appendByte(sqlBuff, '\'')
-	// Narrow vector element types — ArrayToString is generic over
-	// types.ArrayElement, so each decodes to its own slice type and formats the
-	// same way. Quoted like the f32/f64 cases.
-	case types.T_array_float8, types.T_array_float4:
-		// the exact text: replaying it stores the same cell, where the decoded values would
-		// be quantized again (a vecf4 global scale follows the decoded maximum)
-		text, err := types.BlockScaledToJSON(data.([]byte))
-		if err != nil {
-			return nil, err
-		}
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, text)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_array_bf16:
-		value := data.([]types.BF16)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_array_float16:
-		value := data.([]types.Float16)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_array_int8:
-		value := data.([]int8)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_array_uint8:
-		value := data.([]uint8)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_date:
-		value := data.(types.Date)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_datetime:
-		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_time:
-		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_timestamp:
-		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_decimal64:
-		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_decimal128:
-		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_uuid:
-		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_Rowid:
-		value := data.(types.Rowid)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_Blockid:
-		value := data.(types.Blockid)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_TS:
-		value := data.(types.TS)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.ToString())
-		sqlBuff = appendByte(sqlBuff, '\'')
-	case types.T_enum:
-		value := data.(types.Enum)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '\'')
-	default:
-		logutil.Error(
-			"Failed to extract row from vector, unsupported type",
-			zap.Int("typeID", int(typ.Oid)))
-		return nil, moerr.NewInternalErrorf(ctx, "extractRowFromVector : unsupported type %d", typ.Oid)
-	}
-
-	return sqlBuff, nil
-}
-
-func appendHex(dst []byte, src []byte) []byte {
-	dst = append(dst, "x'"...)
-	dst = hex.AppendEncode(dst, src)
-	dst = append(dst, '\'')
-	return dst
+	// a timestamp is written in UTC
+	return types.AppendSQLLiteral(sqlBuff, *typ, data, time.UTC)
 }
 
 func appendByte(buf []byte, d byte) []byte {

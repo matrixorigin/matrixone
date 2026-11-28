@@ -435,8 +435,30 @@ func NewVectorWithNulls(n int, typ types.Type, m *mpool.MPool, random bool, null
 		}
 		return NewUUIDVector(n, typ, m, random, nulls, nil)
 	default:
-		panic(moerr.NewInternalErrorNoCtxf("unsupport vector's type '%v", typ))
+		if typ.IsVarlen() || !vector.SupportsAny(typ.Oid) {
+			panic(moerr.NewInternalErrorNoCtxf("unsupport vector's type '%v", typ))
+		}
+		return newFixedValueVector(n, typ, m, random, nulls)
 	}
+}
+
+// newFixedValueVector returns n values of a fixed-size type without its own
+// generator above, made from 0..n-1 (or random numbers) by
+// vector.FixedValueOfInt, with the rows nulls marks NULL.
+func newFixedValueVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool) *vector.Vector {
+	vec := vector.NewVec(typ, m)
+	for i := 0; i < n; i++ {
+		v := int64(i)
+		if random {
+			v = rand.Int63()
+		}
+		isNull := len(nulls) > i && nulls[i]
+		if err := vector.AppendAny(vec, vector.FixedValueOfInt(typ.Oid, v), isNull, m); err != nil {
+			vec.Free(m)
+			return nil
+		}
+	}
+	return vec
 }
 
 func NewTsVector(n int, typ types.Type, m *mpool.MPool, _ bool, nulls []bool, vs []types.TS) *vector.Vector {

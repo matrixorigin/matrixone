@@ -18,10 +18,8 @@ import (
 	"context"
 	"encoding/hex"
 	"math"
-	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 
@@ -152,131 +150,10 @@ func BuildExactPkFilter(ctx context.Context, vec *vector.Vector) (string, error)
 // AppendVectorSQLLiteral appends the SQL literal representation of vec[row] to buf.
 func AppendVectorSQLLiteral(ctx context.Context, vec *vector.Vector, row int, buf []byte) ([]byte, error) {
 	typ := vec.GetType()
-	switch typ.Oid {
-	case types.T_bool:
-		if vector.GetFixedAtWithTypeCheck[bool](vec, row) {
-			buf = append(buf, "true"...)
-		} else {
-			buf = append(buf, "false"...)
-		}
-	case types.T_bit:
-		value := vector.GetFixedAtWithTypeCheck[uint64](vec, row)
-		bitLength := typ.Width
-		byteLength := (bitLength + 7) / 8
-		b := types.EncodeUint64(&value)[:byteLength]
-		slices.Reverse(b)
-		// Emit as a hex literal x'..' rather than quoting the raw bytes: the
-		// big-endian bit bytes can contain quotes, backslashes, or comment-like
-		// sequences that would otherwise break out of the string literal and
-		// alter the IN (...) SQL this feeds into. Hex is byte-identical and safe.
-		buf = AppendHex(buf, b)
-	case types.T_int8:
-		value := vector.GetFixedAtWithTypeCheck[int8](vec, row)
-		buf = AppendInt64(buf, int64(value))
-	case types.T_uint8:
-		value := vector.GetFixedAtWithTypeCheck[uint8](vec, row)
-		buf = AppendUint64(buf, uint64(value))
-	case types.T_int16:
-		value := vector.GetFixedAtWithTypeCheck[int16](vec, row)
-		buf = AppendInt64(buf, int64(value))
-	case types.T_uint16:
-		value := vector.GetFixedAtWithTypeCheck[uint16](vec, row)
-		buf = AppendUint64(buf, uint64(value))
-	case types.T_int32:
-		value := vector.GetFixedAtWithTypeCheck[int32](vec, row)
-		buf = AppendInt64(buf, int64(value))
-	case types.T_uint32:
-		value := vector.GetFixedAtWithTypeCheck[uint32](vec, row)
-		buf = AppendUint64(buf, uint64(value))
-	case types.T_int64:
-		value := vector.GetFixedAtWithTypeCheck[int64](vec, row)
-		buf = AppendInt64(buf, value)
-	case types.T_uint64:
-		value := vector.GetFixedAtWithTypeCheck[uint64](vec, row)
-		buf = AppendUint64(buf, value)
-	case types.T_float32:
-		value := vector.GetFixedAtWithTypeCheck[float32](vec, row)
-		buf = AppendFloat64(buf, float64(value), 32)
-	case types.T_float64:
-		value := vector.GetFixedAtWithTypeCheck[float64](vec, row)
-		buf = AppendFloat64(buf, value, 64)
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		buf = AppendHex(buf, vec.GetBytesAt(row))
-	case types.T_char,
-		types.T_varchar,
-		types.T_text,
-		types.T_datalink:
-		value := string(vec.GetBytesAt(row))
-		value = strings.ReplaceAll(value, "\\", "\\\\")
-		value = strings.ReplaceAll(value, "'", "\\'")
-		buf = append(buf, '\'')
-		buf = append(buf, value...)
-		buf = append(buf, '\'')
-	case types.T_date:
-		value := vector.GetFixedAtWithTypeCheck[types.Date](vec, row)
-		buf = append(buf, '\'')
-		buf = append(buf, value.String()...)
-		buf = append(buf, '\'')
-	case types.T_datetime:
-		scale := typ.Scale
-		value := vector.GetFixedAtWithTypeCheck[types.Datetime](vec, row).String2(scale)
-		buf = append(buf, '\'')
-		buf = append(buf, value...)
-		buf = append(buf, '\'')
-	case types.T_time:
-		scale := typ.Scale
-		value := vector.GetFixedAtWithTypeCheck[types.Time](vec, row).String2(scale)
-		buf = append(buf, '\'')
-		buf = append(buf, value...)
-		buf = append(buf, '\'')
-	case types.T_timestamp:
-		scale := typ.Scale
-		value := vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, row).String2(time.UTC, scale)
-		buf = append(buf, '\'')
-		buf = append(buf, value...)
-		buf = append(buf, '\'')
-	case types.T_decimal64:
-		scale := typ.Scale
-		value := vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, row).Format(scale)
-		buf = append(buf, '\'')
-		buf = append(buf, value...)
-		buf = append(buf, '\'')
-	case types.T_decimal128:
-		scale := typ.Scale
-		value := vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, row).Format(scale)
-		buf = append(buf, '\'')
-		buf = append(buf, value...)
-		buf = append(buf, '\'')
-	case types.T_uuid:
-		value := vector.GetFixedAtWithTypeCheck[types.Uuid](vec, row).String()
-		buf = append(buf, '\'')
-		buf = append(buf, value...)
-		buf = append(buf, '\'')
-	case types.T_Rowid:
-		value := vector.GetFixedAtWithTypeCheck[types.Rowid](vec, row).String()
-		buf = append(buf, '\'')
-		buf = append(buf, value...)
-		buf = append(buf, '\'')
-	case types.T_Blockid:
-		value := vector.GetFixedAtWithTypeCheck[types.Blockid](vec, row)
-		buf = append(buf, '\'')
-		buf = append(buf, (&value).String()...)
-		buf = append(buf, '\'')
-	case types.T_TS:
-		value := vector.GetFixedAtWithTypeCheck[types.TS](vec, row).ToString()
-		buf = append(buf, '\'')
-		buf = append(buf, value...)
-		buf = append(buf, '\'')
-	case types.T_enum:
-		value := vector.GetFixedAtWithTypeCheck[types.Enum](vec, row).String()
-		buf = append(buf, '\'')
-		buf = append(buf, value...)
-		buf = append(buf, '\'')
-	default:
+	if !vector.SupportsAny(typ.Oid) {
 		return nil, moerr.NewInternalErrorf(ctx, "IVF membership filter: unsupported pk type %d", typ.Oid)
 	}
-
-	return buf, nil
+	return types.AppendMOSQLLiteral(buf, *typ, vector.ExportValue(vec, row))
 }
 
 // AppendHex appends hex-encoded binary literal to buf.

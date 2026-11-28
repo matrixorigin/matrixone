@@ -294,7 +294,7 @@ func TestGetAny(t *testing.T) {
 		v := vector.NewVec(types.T_int8.ToType(), mp)
 		err := vector.AppendFixed(v, int8(0), false, mp)
 		require.NoError(t, err)
-		s, err := GetAnyAsString(v, 0)
+		s, err := GetAnyAsString(v, 0, time.UTC)
 		require.NoError(t, err)
 		v.Free(mp)
 		require.Equal(t, "0", s)
@@ -304,7 +304,7 @@ func TestGetAny(t *testing.T) {
 		w := vector.NewVec(types.T_varchar.ToType(), mp)
 		err := vector.AppendBytes(w, []byte("x"), false, mp)
 		require.NoError(t, err)
-		s, err := GetAnyAsString(w, 0)
+		s, err := GetAnyAsString(w, 0, time.UTC)
 		require.NoError(t, err)
 		w.Free(mp)
 		require.Equal(t, "x", s)
@@ -314,7 +314,7 @@ func TestGetAny(t *testing.T) {
 		w := vector.NewVec(types.T_bool.ToType(), mp)
 		err := vector.AppendFixedList(w, []bool{true, false, true, false}, nil, mp)
 		require.NoError(t, err)
-		s, err := GetAnyAsString(w, 0)
+		s, err := GetAnyAsString(w, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "true", s)
 
@@ -327,7 +327,7 @@ func TestGetAny(t *testing.T) {
 		err := vector.AppendFixedList(w, []int8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s, err := GetAnyAsString(w, 0)
+		s, err := GetAnyAsString(w, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "1", s)
 
@@ -340,7 +340,7 @@ func TestGetAny(t *testing.T) {
 		err := vector.AppendFixedList(w, []int16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s, err := GetAnyAsString(w, 0)
+		s, err := GetAnyAsString(w, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "1", s)
 
@@ -353,7 +353,7 @@ func TestGetAny(t *testing.T) {
 		err := vector.AppendFixedList(w, []int32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s, err := GetAnyAsString(w, 0)
+		s, err := GetAnyAsString(w, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "1", s)
 
@@ -366,7 +366,7 @@ func TestGetAny(t *testing.T) {
 		err := vector.AppendFixedList(w, []int64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s, err := GetAnyAsString(w, 0)
+		s, err := GetAnyAsString(w, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "1", s)
 
@@ -379,7 +379,7 @@ func TestGetAny(t *testing.T) {
 		err := vector.AppendFixedList(w, []uint8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s, err := GetAnyAsString(w, 0)
+		s, err := GetAnyAsString(w, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "1", s)
 
@@ -392,7 +392,7 @@ func TestGetAny(t *testing.T) {
 		err := vector.AppendFixedList(w, []uint16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s, err := GetAnyAsString(w, 0)
+		s, err := GetAnyAsString(w, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "1", s)
 
@@ -405,7 +405,7 @@ func TestGetAny(t *testing.T) {
 		err := vector.AppendFixedList(w, []uint32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s, err := GetAnyAsString(w, 0)
+		s, err := GetAnyAsString(w, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "1", s)
 
@@ -418,7 +418,7 @@ func TestGetAny(t *testing.T) {
 		err := vector.AppendFixedList(w, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s, err := GetAnyAsString(w, 0)
+		s, err := GetAnyAsString(w, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "1", s)
 
@@ -431,7 +431,7 @@ func TestGetAny(t *testing.T) {
 		err := vector.AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
 		require.NoError(t, err)
 
-		s, err := GetAnyAsString(v, 0)
+		s, err := GetAnyAsString(v, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "1", s)
 
@@ -443,7 +443,7 @@ func TestGetAny(t *testing.T) {
 		v := vector.NewVec(types.T_time.ToType(), mp)
 		err := vector.AppendFixedList(v, []types.Time{12 * 3600 * 1000 * 1000, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		s, err := GetAnyAsString(v, 0)
+		s, err := GetAnyAsString(v, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "12:00:00", s)
 		v.Free(mp)
@@ -454,9 +454,9 @@ func TestGetAny(t *testing.T) {
 		v := vector.NewVec(types.T_timestamp.ToType(), mp)
 		err := vector.AppendFixedList(v, []types.Timestamp{10000000, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		s, err := GetAnyAsString(v, 0)
+		s, err := GetAnyAsString(v, 0, time.UTC)
 		require.NoError(t, err)
-		require.Equal(t, "0001-01-01 00:00:10.000000 UTC", s)
+		require.Equal(t, "0001-01-01 00:00:10", s)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -467,7 +467,7 @@ func TestGetAny(t *testing.T) {
 		v := vector.NewVec(typ, mp)
 		err := vector.AppendFixedList(v, []types.Decimal64{1234, 2000}, nil, mp)
 		require.NoError(t, err)
-		s, err := GetAnyAsString(v, 0)
+		s, err := GetAnyAsString(v, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "12.34", s)
 		v.Free(mp)
@@ -480,7 +480,7 @@ func TestGetAny(t *testing.T) {
 		v := vector.NewVec(typ, mp)
 		err := vector.AppendFixedList(v, []types.Decimal128{{B0_63: 1234, B64_127: 0}, {B0_63: 2345, B64_127: 0}}, nil, mp)
 		require.NoError(t, err)
-		s, err := GetAnyAsString(v, 0)
+		s, err := GetAnyAsString(v, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "12.34", s)
 		v.Free(mp)
@@ -492,7 +492,7 @@ func TestGetAny(t *testing.T) {
 		v := vector.NewVec(types.T_uuid.ToType(), mp)
 		err := vector.AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		s, err := GetAnyAsString(v, 0)
+		s, err := GetAnyAsString(v, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "00000000-0000-0000-0000-000000000000", s)
 		v.Free(mp)
@@ -504,7 +504,7 @@ func TestGetAny(t *testing.T) {
 		v := vector.NewVec(types.T_TS.ToType(), mp)
 		err := vector.AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		s, err := GetAnyAsString(v, 0)
+		s, err := GetAnyAsString(v, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "0-0", s)
 		v.Free(mp)
@@ -516,10 +516,69 @@ func TestGetAny(t *testing.T) {
 		v := vector.NewVec(types.T_Rowid.ToType(), mp)
 		err := vector.AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		s, err := GetAnyAsString(v, 0)
+		s, err := GetAnyAsString(v, 0, time.UTC)
 		require.NoError(t, err)
 		require.Equal(t, "00000000-0000-0000-0000-000000000000-0-0-0", s)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+	}
+}
+
+// TestPostDmlTimestampKeyUsesSessionTimeZone checks that a TIMESTAMP primary
+// key in the generated fulltext SQL names the same instant when the session
+// that runs that SQL casts it back with its own time zone.
+func TestPostDmlTimestampKeyUsesSessionTimeZone(t *testing.T) {
+	for _, zone := range []string{"UTC", "Asia/Shanghai", "America/New_York"} {
+		t.Run(zone, func(t *testing.T) {
+			loc, err := time.LoadLocation(zone)
+			require.NoError(t, err)
+			proc := testutil.NewProc(t)
+			proc.Ctx = context.TODO()
+			proc.GetSessionInfo().TimeZone = loc
+
+			want, err := types.ParseTimestamp(time.UTC, "2024-03-10 06:30:00", 0)
+			require.NoError(t, err)
+
+			arg := PostDml{
+				PostDmlCtx: &PostDmlCtx{
+					Ref:            &plan.ObjectRef{SchemaName: "d", ObjName: "t"},
+					PrimaryKeyIdx:  0,
+					PrimaryKeyName: "pk",
+					IsDelete:       true,
+					FullText: &PostDmlFullTextCtx{
+						SourceTableName: "t",
+						IndexTableName:  "idx",
+						Parts:           []string{"body"},
+					},
+				},
+				ctr: container{},
+			}
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], want, false, proc.Mp()))
+			bat.SetRowCount(1)
+			op := colexec.NewMockOperator()
+			op.WithBatchs([]*batch.Batch{bat})
+			arg.Children = nil
+			arg.AppendChild(op)
+
+			require.NoError(t, arg.Prepare(proc))
+			_, err = vm.Exec(&arg, proc)
+			require.NoError(t, err)
+
+			deleteSQL, ok := proc.Base.PostDmlSqlList.Get(0)
+			require.True(t, ok)
+			literals := scanPostDmlStringLiterals(t, deleteSQL, "")
+			require.Len(t, literals, 1)
+			got, err := types.ParseTimestamp(loc, literals[0], 0)
+			require.NoError(t, err)
+			require.Equal(t, want, got, "literal %q", literals[0])
+
+			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(&arg)
+			arg.Release()
+			proc.Free()
+			require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+		})
 	}
 }
