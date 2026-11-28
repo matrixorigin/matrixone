@@ -47,25 +47,15 @@ endif
 .DEFAULT_GOAL := all
 
 ifeq ($(MO_CL_CUDA),1)
-# The cuda/cuvs objects are produced by sub-makes (incremental — only changed
-# .cu/.cpp/.hpp recompile). cuda_objs / cuvs_objs are ORDER-ONLY prerequisites,
-# so the sub-makes ALWAYS run (rebuilding any changed object); because those
-# phony prereqs always "run", libmo.so / libmo.a are re-linked on EVERY build
-# from the freshest objects. The relink is cheap (~1s) and GUARANTEES the libs
-# can never be stale.
-#
-# Why this matters: the old rules listed only $(OBJS) (the cgo C objects), so a
-# change to only a cuvs source rebuilt cuvs/*.o but left libmo.so STALE. Since
-# mo-service loads libmo.so *dynamically*, it then silently ran old C++ code —
-# costing hours of "fix doesn't work" confusion. Always-relink ends that, and
-# you no longer need the `rm -f cgo/libmo.so cgo/libmo.a` workaround.
-# (The wildcard normal-prereqs add no "no rule" errors on a clean build — they
-# match only already-built objects; the order-only sub-makes create them.)
+# Each sub-make owns its objects. Use its actual output timestamp to decide
+# whether libmo needs relinking after the sub-make has checked its inputs.
 cuda_objs:
 	$(MAKE) -C cuda $(if $(filter debug,$(DEBUG_OPT)),dbg=1)
 cuvs_objs:
 	$(MAKE) -C cuvs $(if $(filter debug,$(DEBUG_OPT)),debug)
-LIB_PREREQS := $(OBJS) $(wildcard cuda/*.o cuvs/*.o) | cuda_objs cuvs_objs
+cuda/cuda.o: cuda_objs ;
+cuvs/libmocuvs.so: cuvs_objs ;
+LIB_PREREQS := $(OBJS) cuda/cuda.o cuvs/libmocuvs.so
 else
 LIB_PREREQS := $(OBJS)
 endif

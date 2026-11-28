@@ -114,7 +114,7 @@ var containsAlkFunctions = map[types.T]any{
 }
 
 func parseNAGetDuplicatedArgs(args ...any) (vec *vector.Vector, rowIDs containers.Vector, blkID types.Blockid) {
-	vec = args[0].(containers.Vector).GetDownstreamVector()
+	vec = args[0].(containers.Vector)
 	if args[1] != nil {
 		rowIDs = args[1].(containers.Vector)
 	}
@@ -125,7 +125,7 @@ func parseNAGetDuplicatedArgs(args ...any) (vec *vector.Vector, rowIDs container
 }
 
 func parseNAContainsArgs(args ...any) (vec *vector.Vector, rowIDs containers.Vector) {
-	vec = args[0].(containers.Vector).GetDownstreamVector()
+	vec = args[0].(containers.Vector)
 	if args[1] != nil {
 		rowIDs = args[1].(containers.Vector)
 	}
@@ -182,22 +182,22 @@ func isAborted(abort containers.Vector, row int) bool {
 	if abort == nil || abort.IsConstNull() || row >= abort.Length() {
 		return false
 	}
-	return vector.GetFixedAtNoTypeCheck[bool](abort.GetDownstreamVector(), row)
+	return vector.GetFixedAtNoTypeCheck[bool](abort, row)
 }
 
 func (loader *commitTSLoader) close() {
 	if loader.commitTS != nil {
-		loader.commitTS.Close()
+		containers.ReleaseVector(loader.commitTS)
 		loader.commitTS = nil
 	}
 	if loader.abort != nil {
-		loader.abort.Close()
+		containers.ReleaseVector(loader.abort)
 		loader.abort = nil
 	}
 }
 
 func missingCommitTS(vec containers.Vector, row int) bool {
-	return vec == nil || row >= vec.Length() || vec.IsNull(row)
+	return vec == nil || row >= vec.Length() || vec.IsNull(uint64(row))
 }
 
 func parseAContainsArgs(args ...any) (
@@ -227,7 +227,7 @@ func getDuplicateRowIDNABlkFuncFactory[T any](comp func(T, T) int) func(args ...
 		vs := vector.MustFixedColNoTypeCheck[T](vec)
 		return func(v T, _ bool, row int) (err error) {
 			// logutil.Infof("row=%d,v=%v", row, v)
-			if !rowIDs.IsNull(row) {
+			if !rowIDs.IsNull(uint64(row)) {
 				return
 			}
 			if offset, existed := compute.GetOffsetWithFunc(
@@ -237,7 +237,7 @@ func getDuplicateRowIDNABlkFuncFactory[T any](comp func(T, T) int) func(args ...
 				nil,
 			); existed {
 				rowID := objectio.NewRowid(&blkID, uint32(offset))
-				rowIDs.Update(row, rowID, false)
+				containers.UpdateValue(rowIDs, uint32(row), rowID, false, rowIDs.MPool())
 			}
 			return
 		}
@@ -250,7 +250,7 @@ func containsNABlkFuncFactory[T any](comp func(T, T) int) func(args ...any) func
 		vs := vector.MustFixedColNoTypeCheck[T](vec)
 		return func(v T, isNull bool, row int) (err error) {
 			// logutil.Infof("row=%d,v=%v", row, v)
-			if rowIDs.IsNull(row) {
+			if rowIDs.IsNull(uint64(row)) {
 				return
 			}
 			if _, existed := compute.GetOffsetWithFunc(
@@ -259,7 +259,7 @@ func containsNABlkFuncFactory[T any](comp func(T, T) int) func(args ...any) func
 				comp,
 				nil,
 			); existed {
-				return containers.MarkNull(rowIDs.GetDownstreamVector(), uint32(row))
+				return containers.MarkNull(rowIDs, uint32(row))
 			}
 			return
 		}
@@ -270,7 +270,7 @@ func getDuplicatedRowIDsNABlkBytesFunc(args ...any) func([]byte, bool, int) erro
 	vec, rowIDs, blkID := parseNAGetDuplicatedArgs(args...)
 	return func(v []byte, _ bool, row int) (err error) {
 		// logutil.Infof("row=%d,v=%v", row, v)
-		if !rowIDs.IsNull(row) {
+		if !rowIDs.IsNull(uint64(row)) {
 			return
 		}
 		if offset, existed := compute.GetOffsetOfBytes(
@@ -279,7 +279,7 @@ func getDuplicatedRowIDsNABlkBytesFunc(args ...any) func([]byte, bool, int) erro
 			nil,
 		); existed {
 			rowID := objectio.NewRowid(&blkID, uint32(offset))
-			rowIDs.Update(row, rowID, false)
+			containers.UpdateValue(rowIDs, uint32(row), rowID, false, rowIDs.MPool())
 		}
 		return
 	}
@@ -290,7 +290,7 @@ func getDuplicatedRowIDNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, b
 	vs := vector.MustFixedColNoTypeCheck[T](vec)
 	return func(v T, _ bool, row int) (err error) {
 		// logutil.Infof("row=%d,v=%v", row, v)
-		if !rowIDs.IsNull(row) {
+		if !rowIDs.IsNull(uint64(row)) {
 			return
 		}
 		if offset, existed := compute.GetOffsetOfOrdered(
@@ -299,7 +299,7 @@ func getDuplicatedRowIDNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, b
 			nil,
 		); existed {
 			rowID := objectio.NewRowid(&blkID, uint32(offset))
-			rowIDs.Update(row, rowID, false)
+			containers.UpdateValue(rowIDs, uint32(row), rowID, false, rowIDs.MPool())
 		}
 		return
 	}
@@ -308,7 +308,7 @@ func getDuplicatedRowIDNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, b
 func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 	vec, rowIDs, blkID, loader, txn, from, to := parseAGetDuplicateRowIDsArgs(args...)
 	blockRows := vec.Length()
-	data := vec.GetDownstreamVector()
+	data := vec
 	// The immutable block is consumed sequentially. Index repeated probes with
 	// bounded samples: hashing and retained memory must not grow with key width.
 	// Full bytes are checked before MVCC is loaded, including bucket collisions.
@@ -323,7 +323,7 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 		next   []int
 	}{}
 	return func(v1 []byte, _ bool, rowOffset int) error {
-		if !rowIDs.IsNull(rowOffset) {
+		if !rowIDs.IsNull(uint64(rowOffset)) {
 			return nil
 		}
 		if lookup.heads == nil && blockRows > 32 {
@@ -333,7 +333,7 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				lookup.next = make([]int, blockRows)
 				for row := 0; row < blockRows; row++ {
 					var value []byte
-					if !vec.IsNull(row) {
+					if !vec.IsNull(uint64(row)) {
 						value = data.GetBytesAt(row)
 					}
 					key := bucketKey(value)
@@ -361,10 +361,10 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 					return nil
 				}
 				rowID := objectio.NewRowid(&blkID, uint32(row))
-				rowIDs.Update(rowOffset, rowID, false)
+				containers.UpdateValue(rowIDs, uint32(rowOffset), rowID, false, rowIDs.MPool())
 				return nil
 			}
-			commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec.GetDownstreamVector(), row)
+			commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec, row)
 			if commitTS.Equal(&txnif.UncommitTS) {
 				return nil
 			}
@@ -387,13 +387,13 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				return txnif.ErrTxnWWConflict
 			}
 			rowID := objectio.NewRowid(&blkID, uint32(row))
-			rowIDs.Update(rowOffset, rowID, false)
+			containers.UpdateValue(rowIDs, uint32(rowOffset), rowID, false, rowIDs.MPool())
 			return nil
 		}
 		if lookup.heads != nil {
 			for pos := lookup.heads[bucketKey(v1)]; pos != 0; pos = lookup.next[pos-1] {
 				var value []byte
-				if !vec.IsNull(pos - 1) {
+				if !vec.IsNull(uint64(pos - 1)) {
 					value = data.GetBytesAt(pos - 1)
 				}
 				if compute.CompareBytes(v1, value) != 0 {
@@ -402,7 +402,7 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				if err := visitMatch(pos - 1); err != nil {
 					return err
 				}
-				if !rowIDs.IsNull(rowOffset) {
+				if !rowIDs.IsNull(uint64(rowOffset)) {
 					return nil
 				}
 			}
@@ -410,7 +410,7 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 		}
 		for row := blockRows - 1; row >= 0; row-- {
 			var value []byte
-			if !vec.IsNull(row) {
+			if !vec.IsNull(uint64(row)) {
 				value = data.GetBytesAt(row)
 			}
 			if compute.CompareBytes(v1, value) != 0 {
@@ -419,7 +419,7 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 			if err := visitMatch(row); err != nil {
 				return err
 			}
-			if !rowIDs.IsNull(rowOffset) {
+			if !rowIDs.IsNull(uint64(rowOffset)) {
 				return nil
 			}
 		}
@@ -431,16 +431,16 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 	return func(args ...any) func(T, bool, int) error {
 		vec, rowIDs, blkID, loader, txn, from, to := parseAGetDuplicateRowIDsArgs(args...)
 		return func(v1 T, _ bool, rowOffset int) error {
-			if !rowIDs.IsNull(rowOffset) {
+			if !rowIDs.IsNull(uint64(rowOffset)) {
 				return nil
 			}
 			return containers.ForeachWindowFixed(
-				vec.GetDownstreamVector(),
+				vec,
 				0,
 				vec.Length(),
 				true,
 				func(v2 T, _ bool, row int) (err error) {
-					if !rowIDs.IsNull(rowOffset) {
+					if !rowIDs.IsNull(uint64(rowOffset)) {
 						return nil
 					}
 					if comp(v1, v2) != 0 {
@@ -460,10 +460,10 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 							return nil
 						}
 						rowID := objectio.NewRowid(&blkID, uint32(row))
-						rowIDs.Update(rowOffset, rowID, false)
+						containers.UpdateValue(rowIDs, uint32(rowOffset), rowID, false, rowIDs.MPool())
 						return nil
 					}
-					commitTS := tsVec.Get(row).(types.TS)
+					commitTS := tsVec.GetValue(row).(types.TS)
 					if commitTS.Equal(&txnif.UncommitTS) {
 						return nil
 					}
@@ -484,7 +484,7 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 						return txnif.ErrTxnWWConflict
 					}
 					rowID := objectio.NewRowid(&blkID, uint32(row))
-					rowIDs.Update(rowOffset, rowID, false)
+					containers.UpdateValue(rowIDs, uint32(rowOffset), rowID, false, rowIDs.MPool())
 					return nil
 				}, nil, nil)
 		}
@@ -494,19 +494,19 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
 		vec, rowIDs, scanFn, txn, delsFn := parseAContainsArgs(args...)
-		vs := vector.MustFixedColNoTypeCheck[T](vec.GetDownstreamVector())
+		vs := vector.MustFixedColNoTypeCheck[T](vec)
 		return func(v1 T, _ bool, rowOffset int) error {
-			if rowIDs.IsNull(rowOffset) {
+			if rowIDs.IsNull(uint64(rowOffset)) {
 				return nil
 			}
 			var tsVec, abortVec containers.Vector
 			defer func() {
 				if tsVec != nil {
-					tsVec.Close()
+					containers.ReleaseVector(tsVec)
 					tsVec = nil
 				}
 				if abortVec != nil {
-					abortVec.Close()
+					containers.ReleaseVector(abortVec)
 					abortVec = nil
 				}
 			}()
@@ -531,11 +531,11 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 					if isAborted(abortVec, row) {
 						continue
 					}
-					commitTS := tsVec.Get(row).(types.TS)
+					commitTS := tsVec.GetValue(row).(types.TS)
 					if commitTS.Equal(&txnif.UncommitTS) {
 						continue
 					}
-					if err := containers.MarkNull(rowIDs.GetDownstreamVector(), uint32(rowOffset)); err != nil {
+					if err := containers.MarkNull(rowIDs, uint32(rowOffset)); err != nil {
 						return err
 					}
 					startTS := txn.GetStartTS()

@@ -12,24 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package containers
+package tree
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-)
+// FlushPrivileges is an administrator-only compatibility no-op.
+type FlushPrivileges struct{ statementImpl }
 
-// bitmapTestMP backs the null bitmaps of tests that do not check pool
-// accounting.
-var bitmapTestMP = mpool.MustNewZero()
-
-func mustBitmapOK(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
-func mustNullsOK(n *nulls.Nulls, err error) *nulls.Nulls {
-	mustBitmapOK(err)
-	return n
-}
+func (*FlushPrivileges) Format(ctx *FmtCtx)       { ctx.WriteString("flush privileges") }
+func (*FlushPrivileges) GetStatementType() string { return "Flush Privileges" }
+func (*FlushPrivileges) GetQueryType() string     { return QueryTypeOth }
+func (*FlushPrivileges) StmtKind() StmtKind       { return frontendStatusTyp }

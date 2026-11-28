@@ -378,7 +378,7 @@ func LogInputTombstoneObjectAsync(
 			if err != nil {
 				continue
 			}
-			cnVec := vectors[0].GetDownstreamVector()
+			cnVec := vectors[0]
 			rids := vector.MustFixedColNoTypeCheck[types.Rowid](cnVec)
 			for j := range len(rids) {
 				rowids[*rids[j].BorrowObjectID()]++

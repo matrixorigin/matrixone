@@ -318,7 +318,7 @@ func replayVector(bat *containers.Batch, name string) *vector.Vector {
 	if !ok {
 		return nil
 	}
-	return bat.Vecs[idx].GetDownstreamVector()
+	return bat.Vecs[idx]
 }
 
 func replayFixed[T any](bat *containers.Batch, name string, row int) T {

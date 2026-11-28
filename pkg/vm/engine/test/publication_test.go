@@ -695,19 +695,19 @@ func TestExecuteIteration1(t *testing.T) {
 	pkIdx := schema.GetPrimaryKey().Idx
 	// Delete first 3 rows using primary key filter
 	// Get the primary key value from the first row of the batch
-	pkVal := bat.Vecs[pkIdx].Get(0)
+	pkVal := bat.Vecs[pkIdx].GetValue(0)
 	filter := handle.NewEQFilter(pkVal)
 	err = taeRel.DeleteByFilter(srcCtxWithTimeout, filter)
 	require.NoError(t, err)
 
 	// Delete second row
-	pkVal2 := bat.Vecs[pkIdx].Get(1)
+	pkVal2 := bat.Vecs[pkIdx].GetValue(1)
 	filter2 := handle.NewEQFilter(pkVal2)
 	err = taeRel.DeleteByFilter(srcCtxWithTimeout, filter2)
 	require.NoError(t, err)
 
 	// Delete third row
-	pkVal3 := bat.Vecs[pkIdx].Get(2)
+	pkVal3 := bat.Vecs[pkIdx].GetValue(2)
 	filter3 := handle.NewEQFilter(pkVal3)
 	err = taeRel.DeleteByFilter(srcCtxWithTimeout, filter3)
 	require.NoError(t, err)
@@ -1140,6 +1140,13 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 }
 
+func logPublicationCatalogOnFailure(t *testing.T, storage *testutil.TestTxnStorage) {
+	t.Helper()
+	if t.Failed() {
+		t.Log(storage.GetDB().Catalog.SimplePPString(3))
+	}
+}
+
 func TestExecuteIterationWithIndex(t *testing.T) {
 	enableWorkspaceDebugForTest(t)
 	catalog.SetupDefines("")
@@ -1178,6 +1185,8 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 		taeHandler.Close(true)
 		rpcAgent.Close()
 	}()
+
+	defer logPublicationCatalogOnFailure(t, taeHandler)
 
 	// Disable sync protection validator for this test since we're not registering sync protection
 	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
@@ -1279,16 +1288,14 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, createTableSQL)
 	require.NoError(t, err)
 
-	// Insert data into source table using SQL
-	// Insert 10 rows with consistent column definitions
+	// Seed the same ten rows before replication starts.
+	rows := make([]string, 0, 10)
 	for i := 0; i < 10; i++ {
-		insertSQL := fmt.Sprintf(
-			`INSERT INTO %s.%s (id, value_col, name) VALUES (%d, %d, 'name_%d')`,
-			srcDBName, srcTableName, i, i*10, i,
-		)
-		err = exec_sql(disttaeEngine, srcCtxWithTimeout, insertSQL)
-		require.NoError(t, err)
+		rows = append(rows, fmt.Sprintf("(%d, %d, 'name_%d')", i, i*10, i))
 	}
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout,
+		fmt.Sprintf("INSERT INTO %s.%s (id, value_col, name) VALUES %s", srcDBName, srcTableName, strings.Join(rows, ", ")))
+	require.NoError(t, err)
 
 	// Step 2: Write mo_ccpr_log table in destination account context
 	taskID := uuid.New().String()
@@ -1380,8 +1387,6 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 		nil,                  // syncProtectionWorker
 		nil,                  // syncProtectionRetryOpt
 	)
-
-	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	// Signal checkpoint goroutine to stop
 	close(checkpointDone)
@@ -1484,8 +1489,6 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 
 	err = txn3.Commit(queryIndexCtx)
 	require.NoError(t, err)
-
-	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	// Step 8: Delete the upstream table
 	txnDelete, err := disttaeEngine.NewTxnOperator(srcCtxWithTimeout, disttaeEngine.Now())
@@ -1606,8 +1609,6 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 
 	err = txn5.Commit(queryDestCtx2)
 	require.NoError(t, err)
-
-	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 }
 
 func TestGetObjectChunk(t *testing.T) {
@@ -3045,6 +3046,8 @@ func TestCCPRAlterTable(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
+	defer logPublicationCatalogOnFailure(t, taeHandler)
+
 	// Disable sync protection validator for this test since we're not registering sync protection
 	taeHandler.GetDB().Runtime.SyncProtectionValidator = nil
 
@@ -3285,8 +3288,6 @@ func TestCCPRAlterTable(t *testing.T) {
 	err = txn.Commit(queryDestCtx)
 	require.NoError(t, err)
 
-	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
-
 	// Step 8: Delete the source table
 	txnDelete, err := disttaeEngine.NewTxnOperator(srcCtxWithTimeout, disttaeEngine.Now())
 	require.NoError(t, err)
@@ -3369,7 +3370,6 @@ func TestCCPRAlterTable(t *testing.T) {
 		nil,                  // syncProtectionRetryOpt
 	)
 
-	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	// Signal checkpoint goroutine to stop
 	close(checkpointDone2)
 

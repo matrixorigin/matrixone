@@ -2492,6 +2492,10 @@ func hasPrimaryKeyEquality(node *plan.Node) bool {
 	return true
 }
 
+func hasOrderedPrimaryKey(table *plan.TableDef) bool {
+	return table.ClusterBy == nil && table.Pkey != nil && !catalog.IsFakePkName(table.Pkey.PkeyColName)
+}
+
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	return builder.applyIndicesForFiltersRegularIndexAtPhase(nodeID, node, colRefCnt, idxColMap, false)
 }
@@ -2515,7 +2519,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAttempt(
 
 	forceIndex := builder.scanHintsForceIndexes(node)
 	pointBlocked := !forceIndex && hasPrimaryKeyEquality(node)
-	if pointBlocked && node.TableDef.ClusterBy == nil && !catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
+	if pointBlocked && hasOrderedPrimaryKey(node.TableDef) {
 		// A real, physically ordered full PK is already a point lookup.
 		// Do not build or score partial secondary candidates for a singleton.
 		return nodeID, nil

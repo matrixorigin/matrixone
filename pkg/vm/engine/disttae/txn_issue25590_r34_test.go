@@ -61,6 +61,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	colexec.NewServer("")
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 	issue25590InitDumpableFixture(t, txn)
+	txn.tnStores = []DNStore{catalogCreateTNStoreForTest()}
 	// The round-21 binding: the process carries the transaction operator
 	// (the structural workspace resolution the commit ceremony drives
 	// performs), plus the commit-path operator surface.
@@ -164,6 +165,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 			tableName:    tt.name,
 			bat:          bat,
 			attrs:        batAttrs,
+			tnStore:      txn.tnStores[0],
 		})
 	}
 	smallObjsDisarm := issue25590ArmKeyedFault(t, objectio.FJ_CNFlushSmallObjs, 20, "")

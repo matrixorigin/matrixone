@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
@@ -53,23 +52,15 @@ func exactHistoryFixture(t testing.TB, versions int) (*PartitionState, []types.R
 		require.NoError(t, vector.AppendFixed(rowVec, row, false, pool))
 		require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(ts, 0), false, pool))
 		require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, pool))
-		input := &api.Batch{Attrs: []string{"rowid", "time", "pk"}, Vecs: []api.Vector{
-			mustVectorToProto(rowVec), mustVectorToProto(tsVec), mustVectorToProto(pkVec),
-		}}
 		if deleted {
 			tombstone := vector.NewVec(types.T_Rowid.ToType(), pool)
 			defer tombstone.Free(pool)
 			require.NoError(t, vector.AppendFixed(tombstone, types.RandomRowid(), false, pool))
-			input.Vecs = append(input.Vecs, mustVectorToProto(tombstone))
-			for i := range input.Vecs {
-				input.Vecs[i].Data = bytes.Clone(input.Vecs[i].Data)
-			}
-			state.HandleRowsDelete(context.Background(), input, packer, pool)
+			state.HandleRowsDelete(context.Background(),
+				mustMarshalVectors(rowVec, tsVec, pkVec, tombstone), packer, pool)
 		} else {
-			for i := range input.Vecs {
-				input.Vecs[i].Data = bytes.Clone(input.Vecs[i].Data)
-			}
-			state.HandleRowsInsert(context.Background(), input, 0, packer, pool)
+			state.HandleRowsInsert(context.Background(),
+				mustMarshalVectors(rowVec, tsVec, pkVec), []string{"rowid", "time", "pk"}, 0, packer, pool)
 		}
 	}
 	for i := range rowIDs {

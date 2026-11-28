@@ -26,6 +26,7 @@ import (
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDispatchAndRemoveOperator(t *testing.T) {
@@ -82,6 +83,38 @@ func TestRemoveFinishedOperator(t *testing.T) {
 	}
 	c.RemoveFinishedOperator(logState, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
 	assert.Equal(t, []*Operator(nil), c.GetOperators(1))
+}
+
+func TestReconcileLogMembershipEpoch(t *testing.T) {
+	c := NewController()
+	shard := pb.LogShardInfo{ShardID: 1, Epoch: 7,
+		Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"}, NonVotingReplicas: map[uint64]string{4: "d"}}
+	state := pb.LogState{Shards: map[uint64]pb.LogShardInfo{1: shard}, Stores: map[string]pb.LogStoreInfo{"e": {}}}
+	staleAdd := NewOperator("", 1, 7, AddLogService{Target: "a", Replica: Replica{UUID: "f", ShardID: 1, ReplicaID: 6, Epoch: 7}})
+	staleRemove := NewOperator("", 1, 7, RemoveLogService{Target: "a", Replica: Replica{UUID: "b", ShardID: 1, ReplicaID: 2, Epoch: 7}})
+	staleLearner := NewOperator("", 1, 7, RemoveNonVotingLogService{Target: "a", Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4, Epoch: 7}})
+	progress := NewOperator("", 1, 7,
+		AddLogService{Target: "a", Replica: Replica{UUID: "e", ShardID: 1, ReplicaID: 5, Epoch: 7}},
+		StartLogService{Replica: Replica{UUID: "e", ShardID: 1, ReplicaID: 5}})
+	ops := []*Operator{staleAdd, staleRemove, staleLearner, progress}
+	require.Len(t, c.Dispatch(ops, state, pb.TNState{}, pb.CNState{}, pb.ProxyState{}), len(ops))
+	// No newer configuration is known: these commands may still commit.
+	c.RemoveFinishedOperator(state, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
+	require.Equal(t, ops, c.GetOperators(1))
+
+	// A different change wins the epoch, except for progress, whose Add has
+	// committed and must advance to Start rather than be discarded.
+	shard.Epoch++
+	shard.Replicas[5] = "e"
+	state.Shards[1] = shard
+	c.RemoveFinishedOperator(state, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
+	require.Equal(t, []*Operator{progress}, c.GetOperators(1))
+	for _, op := range []*Operator{staleAdd, staleRemove, staleLearner} {
+		require.Equal(t, CANCELED, op.Status())
+	}
+	require.Equal(t, STARTED, progress.Status())
+	require.Equal(t, []uint64{5}, c.GetExecutingReplicas().Starting[1])
+	require.Empty(t, c.GetExecutingReplicas().Adding[1], "a finished Add cannot occupy the next configuration change")
 }
 
 func TestDispatchRegisteredOperatorDoesNotDuplicateOwnership(t *testing.T) {

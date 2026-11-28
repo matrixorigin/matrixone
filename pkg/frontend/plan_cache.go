@@ -16,10 +16,11 @@ package frontend
 
 import (
 	"container/list"
+	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type cachedPlan struct {
@@ -298,6 +299,28 @@ func (pc *planCache) invalidatePlanGeneration(
 	// wrapper that discovered the stale generation. The next lookup removes it
 	// after that wrapper has completed its lifecycle.
 	cached.invalid = true
+}
+
+func (pc *planCache) invalidateForeignKeyDeletePlans() {
+	for _, element := range pc.cachePool {
+		cached := element.Value.(*cachedPlan)
+		if !cached.invalid && slices.ContainsFunc(cached.plans, deletePlanDependsOnForeignKeyChecks) {
+			// A running wrapper may still borrow this entry's AST.
+			cached.invalid = true
+		}
+	}
+}
+
+func deletePlanDependsOnForeignKeyChecks(p *plan.Plan) bool {
+	query := p.GetQuery()
+	if query.GetStmtType() != plan.Query_DELETE {
+		return false
+	}
+	// Legacy DELETE retains the target definition even when checks are OFF
+	// and the plan can truncate instead of checking referencing rows.
+	return slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return len(node.GetDeleteCtx().GetTableDef().GetRefChildTbls()) != 0
+	})
 }
 
 func (pc *planCache) clean() {

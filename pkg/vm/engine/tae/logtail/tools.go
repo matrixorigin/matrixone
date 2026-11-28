@@ -45,8 +45,8 @@ func ToStringTemplate(vec containers.Vector, printN int, opts ...common.TypePrin
 		if !first {
 			_ = w.WriteByte(',')
 		}
-		v := vec.Get(i)
-		vIsNull := vec.IsNull(i)
+		v := vec.GetValue(i)
+		vIsNull := vec.IsNull(uint64(i))
 		_, _ = w.WriteString(common.TypeStringValue(*typ, v, vIsNull, opts...))
 		first = false
 	}
@@ -109,7 +109,7 @@ func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *container
 
 // GetDataWindowForLogtail returns the batch according to the writeSchema.
 // columns are sorted by seqnum and vacancy is filled with zero value
-func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batch {
+func DataChangeToLogtailBatch(src *containers.BatchWithVersion) (*containers.Batch, error) {
 	seqnums := src.Seqnums
 	if len(seqnums) != len(src.Vecs) {
 		panic("unmatched seqnums length")
@@ -138,6 +138,8 @@ func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batc
 	bat.AddVector(src.Attrs[rowIDPos], src.Vecs[rowIDPos])
 	bat.AddVector(src.Attrs[commitTSPos], src.Vecs[commitTSPos])
 
+	// converted holds the flat copies made here, released on failure.
+	var converted []containers.Vector
 	for i, seqnum := range seqnums {
 		if seqnum >= objectio.SEQNUM_UPPER {
 			// two special column has been moved
@@ -146,9 +148,27 @@ func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batc
 		for len(bat.Vecs) < 2+int(seqnum) {
 			bat.AppendPlaceholder()
 		}
-		bat.AddVector(src.Attrs[i], src.Vecs[i].TryConvertConst())
+		vec := src.Vecs[i]
+		if vec.IsConst() {
+			// logtail consumers expect flat vectors: expand a const one.
+			mp := vec.MPool()
+			if mp == nil {
+				mp = common.LogtailAllocator
+			}
+			flat := vector.NewVec(*vec.GetType(), mp)
+			if err := flat.UnionBatch(vec, 0, vec.Length(), nil, mp); err != nil {
+				flat.Free(mp)
+				for _, v := range converted {
+					containers.ReleaseVector(v)
+				}
+				return nil, err
+			}
+			converted = append(converted, flat)
+			vec = flat
+		}
+		bat.AddVector(src.Attrs[i], vec)
 	}
-	return bat
+	return bat, nil
 }
 
 func TombstoneChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batch {
@@ -188,11 +208,11 @@ func filterAbortedLogtailRows(src *containers.BatchWithVersion) {
 	}
 	var aborts []bool
 	if abortPos != -1 && !src.Vecs[abortPos].IsConstNull() {
-		aborts = vector.MustFixedColWithTypeCheck[bool](src.Vecs[abortPos].GetDownstreamVector())
+		aborts = vector.MustFixedColWithTypeCheck[bool](src.Vecs[abortPos])
 	}
 	var commitTSs []types.TS
 	if commitTSPos != -1 && !src.Vecs[commitTSPos].IsConstNull() {
-		commitTSs = vector.MustFixedColWithTypeCheck[types.TS](src.Vecs[commitTSPos].GetDownstreamVector())
+		commitTSs = vector.MustFixedColWithTypeCheck[types.TS](src.Vecs[commitTSPos])
 	}
 	for row := 0; row < src.Length(); row++ {
 		if (row < len(aborts) && aborts[row]) ||
@@ -205,7 +225,19 @@ func filterAbortedLogtailRows(src *containers.BatchWithVersion) {
 	}
 }
 
-func containersBatchToProtoBatch(bat *containers.Batch) (*api.Batch, error) {
-	mobat := containers.ToCNBatch(bat)
-	return batch.BatchToProtoBatch(mobat, bat.Attrs)
+// marshalContainersBatch encodes bat for an api.Entry, whose attrs are
+// bat.Attrs. The encoding borrows bat's buffers: the builders close their
+// batches only through the callback that runs after the response is sent.
+//
+// A dropped column's placeholder (AppendPlaceholder) is an empty vector; it
+// is encoded as a constant null of the batch's length, so every vector of
+// the entry holds its row count and the column keeps its seqnum position.
+func marshalContainersBatch(bat *containers.Batch) (api.EncodedBatch, error) {
+	cnBat := containers.ToCNBatch(bat)
+	for i, vec := range bat.Vecs {
+		if vec == containers.EMPTY_VECTOR {
+			cnBat.Vecs[i] = vector.NewConstNull(*vec.GetType(), bat.Length(), nil)
+		}
+	}
+	return batch.Encode(cnBat)
 }

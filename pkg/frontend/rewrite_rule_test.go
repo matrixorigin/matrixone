@@ -683,7 +683,9 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 		{10, "db3.t3", "select * from db3.t3 /* persisted */ where id = 1"},
 	})
 
-	rules, _, err := loadRuleCache(context.Background(), ses, 1)
+	rules, variants, err := loadRuleCache(context.Background(), ses, 1)
+	require.NoError(t, err)
+	rules, err = variants.forMode(context.Background(), rules, 1, "", "")
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
 		"db1.t1": "select a, age from db1.t1 where (age < 3) or (age > 28)",
@@ -699,7 +701,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	require.NoError(t, parsers.AddRewriteHints(context.Background(), stmts, sql))
 }
 
-func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
+func TestRewritePolicyReturnsParseErrorForConflictingRules(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -720,13 +722,17 @@ func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 	}
 	ses.SetTenantInfo(tenant)
 
-	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
-	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10})] = newMrsForRewriteRules([][]interface{}{
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{{20, false}})
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 20})] = newMrsForRewriteRules([][]interface{}{
 		{10, "db1.t1", "select a from db1.t1"},
-		{10, "db1.t1", "select a from"},
+		{20, "db1.t1", "select a from"},
 	})
 
-	_, _, err := loadRuleCache(context.Background(), ses, 1)
+	policy, err := captureRewritePolicy(context.Background(), ses)
+	require.NoError(t, err)
+	_, err = policy.rewrite(context.Background(), "rollback", "")
+	require.NoError(t, err)
+	_, err = policy.rewrite(context.Background(), "select a from db1.t1", "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to parse rewrite rule")
 }
@@ -790,10 +796,10 @@ func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
 	ses.SetTenantInfo(tenant)
 	ses.rewriteEnabled.Store(true)
 
-	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
-	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10})] = newMrsForRewriteRules([][]interface{}{
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{{20, false}})
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 20})] = newMrsForRewriteRules([][]interface{}{
 		{10, "db1.t1", "select a from db1.t1"},
-		{10, "db1.t1", "select a from"},
+		{20, "db1.t1", "select a from"},
 	})
 
 	sql := "select * from db1.t1"
@@ -1215,6 +1221,7 @@ func TestRewriteSQLUsesCanonicalKeysAcrossLayers(t *testing.T) {
 	ses.ruleCache = map[string]string{
 		"DstMixed.T": "select * from DstMixed.T where role_keep = 1",
 	}
+	seedRewriteRuleCacheProofForTest(ses)
 	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
 		`{"rewrites":{"dSTMixed.t":"select * from DstMixed.T where session_keep=1"},`+
 			`"remapdb":{"SrcMixed":"DstMixed"}}`))
@@ -1871,27 +1878,36 @@ func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) 
 	targetSQL, err := getSqlForCheckDatabaseTable(ctx, "db1", "t1")
 	require.NoError(t, err)
 	bh.sql2result[targetSQL] = newMrsForCheckDatabaseTable([][]interface{}{{int64(100)}})
+	const keysSQL = "select rule_name from mo_catalog.mo_role_rule where role_id = 10"
+	bh.sql2result[keysSQL] = newMrsForSqlForShowDatabases([][]interface{}{
+		{"DB1.T1"}, {"db1.t1"}, {" db1 . t1 "}, {"db1.t2"}, {"db1.invalid.key"},
+	})
 
-	stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "select a from db1.t1", "db1", "t1")
-	require.NoError(t, handleAlterRoleAddRule(ses, execCtx, stmt))
-
-	var deleted, inserted bool
-	for _, sql := range bh.executedSQLs {
-		lowerSQL := strings.ToLower(sql)
-		if strings.Contains(lowerSQL, "delete from mo_catalog.mo_role_rule") &&
-			strings.Contains(lowerSQL, "role_id = 10") &&
-			strings.Contains(lowerSQL, "'db1.t1'") {
-			deleted = true
-		}
-		if strings.Contains(lowerSQL, "insert into mo_catalog.mo_role_rule") &&
-			strings.Contains(lowerSQL, "10") &&
-			strings.Contains(lowerSQL, "'db1.t1'") &&
-			strings.Contains(lowerSQL, "'select a from db1.t1'") {
-			inserted = true
-		}
+	for _, tc := range []struct {
+		sql  string
+		mode string
+	}{
+		{`select "a" from "db1"."t1" where "a" = 'Keep'`, "ANSI_QUOTES"},
+		{`select a from db1.t1 where a = 'Keep\'`, "NO_BACKSLASH_ESCAPES"},
+	} {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", tc.mode))
+		stmt := tree.NewAlterRoleAddRule("role10", "DB1.T1", tc.sql, "DB1", "T1")
+		require.ErrorContains(t, handleAlterRoleAddRule(ses, execCtx, stmt), "rewrite rule SQL")
+		require.Equal(t, []string{"begin;", "select 1", roleSQL, "rollback;"}, bh.executedSQLs)
+		require.Equal(t, "select old_a from db1.t1", ses.ruleCache["db1.t1"])
+		bh.executedSQLs = nil
 	}
-	require.True(t, deleted)
-	require.True(t, inserted)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
+	rule := "select `a` from `db1`.`t1` where `a` = 'Keep'"
+	stmt := tree.NewAlterRoleAddRule("role10", "DB1.T1", rule, "DB1", "T1")
+	require.NoError(t, handleAlterRoleAddRule(ses, execCtx, stmt))
+	require.Equal(t, []string{
+		"begin;", "select 1", roleSQL, targetSQL, keysSQL,
+		"delete from mo_catalog.mo_role_rule where role_id = 10 and cast(rule_name as binary) in ('DB1.T1', 'db1.t1', ' db1 . t1 ')",
+		"insert into mo_catalog.mo_role_rule (role_id, rule_name, `rule`) values (10, 'db1.t1', " + escapeSQLString(rule) + ")",
+		"commit;",
+	}, bh.executedSQLs)
 
 	ses.ruleCacheMu.RLock()
 	defer ses.ruleCacheMu.RUnlock()
@@ -1899,15 +1915,20 @@ func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) 
 }
 
 func TestHandleAlterRoleRuleCommitFailuresPreserveCache(t *testing.T) {
-	for _, action := range []string{"add", "drop"} {
+	for _, action := range []string{"add", "drop", "insert failure"} {
 		t.Run(action, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
 			bh := &backgroundExecTest{}
 			bh.init()
-			commitErr := fmt.Errorf("%s rule commit failed", action)
-			bh.sql2err["commit;"] = commitErr
+			writeErr := fmt.Errorf("%s rule write failed", action)
+			wantCommit := action != "insert failure"
+			if wantCommit {
+				bh.sql2err["commit;"] = writeErr
+			} else {
+				bh.sqlPrefixErr = map[string]error{"insert into mo_catalog.mo_role_rule": writeErr}
+			}
 			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 			defer bhStub.Reset()
 
@@ -1920,31 +1941,83 @@ func TestHandleAlterRoleRuleCommitFailuresPreserveCache(t *testing.T) {
 			roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
 			require.NoError(t, err)
 			bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
+			const keysSQL = "select rule_name from mo_catalog.mo_role_rule where role_id = 10"
+			bh.sql2result[keysSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"DB1.T1"}})
+			const deleteSQL = "delete from mo_catalog.mo_role_rule where role_id = 10 and cast(rule_name as binary) in ('DB1.T1')"
+			expectedSQL := []string{"begin;", "select 1", roleSQL}
 
 			var runErr error
 			switch action {
-			case "add":
+			case "add", "insert failure":
 				targetSQL, getErr := getSqlForCheckDatabaseTable(ctx, "db1", "t1")
 				require.NoError(t, getErr)
 				bh.sql2result[targetSQL] = newMrsForCheckDatabaseTable([][]interface{}{{int64(100)}})
 				stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "select a from db1.t1", "db1", "t1")
 				runErr = handleAlterRoleAddRule(ses, execCtx, stmt)
+				expectedSQL = append(expectedSQL, targetSQL, keysSQL, deleteSQL,
+					"insert into mo_catalog.mo_role_rule (role_id, rule_name, `rule`) values (10, 'db1.t1', 'select a from db1.t1')")
 			case "drop":
-				ruleSQL := fmt.Sprintf(
-					"select `rule` from mo_catalog.mo_role_rule where role_id = 10 and rule_name = %s",
-					escapeSQLString("db1.t1"),
-				)
-				bh.sql2result[ruleSQL] = newMrsForRewriteRules([][]interface{}{{
-					int64(10), "db1.t1", "select a from db1.t1",
-				}})
 				stmt := tree.NewAlterRoleDropRule("role10", "db1", "t1")
 				runErr = handleAlterRoleDropRule(ses, execCtx, stmt)
+				expectedSQL = append(expectedSQL, keysSQL, deleteSQL)
 			}
 
-			require.ErrorIs(t, runErr, commitErr)
-			require.Contains(t, bh.executedSQLs, "commit;")
-			require.Contains(t, bh.executedSQLs, "rollback;")
+			if wantCommit {
+				expectedSQL = append(expectedSQL, "commit;")
+			}
+			require.ErrorIs(t, runErr, writeErr)
+			require.Equal(t, append(expectedSQL, "rollback;"), bh.executedSQLs)
 			require.Equal(t, originalCache, ses.ruleCache)
+		})
+	}
+}
+
+func TestHandleAlterRoleDropRuleMatchesTargetInSessionCaseMode(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		lower    int64
+		target   string
+		wantKeys string
+	}{
+		{"case sensitive", 0, "T1", "'db1.T1'"},
+		{"case folding", 1, "t1", "'db1.T1', 'db1. t1'"},
+		{"case preserving", 2, "t1", "'db1.T1', 'db1. t1'"},
+		{"case sensitive legacy whitespace", 0, "t1", "'db1. t1'"},
+		{"missing target", 1, "t2", ""},
+		{"dotted legacy key", 1, "t.with.dot", "'db1.t.with.dot'"},
+		{"no case folding for ambiguous keys", 1, "t.with.other.dot", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			ses := newSes(&privilege{}, gomock.NewController(t))
+			ses.sesSysVars.Set("lower_case_table_names", tc.lower)
+			bh := &backgroundExecTest{}
+			bh.init()
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer stub.Reset()
+			roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
+			require.NoError(t, err)
+			bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
+			const keysSQL = "select rule_name from mo_catalog.mo_role_rule where role_id = 10"
+			bh.sql2result[keysSQL] = newMrsForSqlForShowDatabases([][]interface{}{
+				{"db1.T1"}, {"db1. t1"}, {"db1.t.with.dot"}, {"db1.T.With.Dot"}, {"db1.T.With.Other.Dot"},
+			})
+
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "alter role role10 drop rule on table db1.`"+tc.target+"`", tc.lower)
+			require.NoError(t, err)
+			defer stmt.Free()
+			err = handleAlterRoleDropRule(ses, &ExecCtx{reqCtx: ctx, ses: ses}, stmt.(*tree.AlterRoleDropRule))
+			expectedSQL := []string{"begin;", "select 1", roleSQL, keysSQL}
+			if tc.wantKeys == "" {
+				require.ErrorContains(t, err, "does not exist for role 'role10'")
+				expectedSQL = append(expectedSQL, "rollback;")
+			} else {
+				require.NoError(t, err)
+				expectedSQL = append(expectedSQL,
+					"delete from mo_catalog.mo_role_rule where role_id = 10 and cast(rule_name as binary) in ("+tc.wantKeys+")",
+					"commit;")
+			}
+			require.Equal(t, expectedSQL, bh.executedSQLs)
 		})
 	}
 }
@@ -1975,6 +2048,37 @@ func TestHandleAlterRoleAddRuleRejectsNonSelectRuleSQLBeforeWriting(t *testing.T
 	for _, sql := range bh.executedSQLs {
 		require.NotContains(t, strings.ToLower(sql), "delete from mo_catalog.mo_role_rule")
 		require.NotContains(t, strings.ToLower(sql), "insert into mo_catalog.mo_role_rule")
+	}
+}
+
+func TestMergeRewriteRulesProjectionNames(t *testing.T) {
+	const lower = 0
+	const left = "select ABS(id) as ID from DB.T where id = 1"
+	const union = "select ABS(id) as ID from DB.T where (id = 1) or (id = 2)"
+	for _, tc := range []struct {
+		name       string
+		projection string
+		merge      bool
+	}{
+		{"function spelling", "abs(id) as ID", true},
+		{"alias spelling", "ABS(id) as id", true},
+		{"different alias", "ABS(id) as other_id", false},
+		{"different function", "ceil(id) as ID", false},
+		{"different argument", "abs(other_id) as ID", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			right := "select " + tc.projection + " from DB.T where id = 2"
+			merged, err := mergeRewriteRulesInMode(t.Context(), left, right, lower, 0, false)
+			require.NoError(t, err)
+			if !tc.merge {
+				require.Equal(t, right, merged)
+				return
+			}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, merged, lower)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, union, tree.String(stmt, dialect.MYSQL))
+		})
 	}
 }
 
@@ -2141,6 +2245,14 @@ func TestMergeRewriteRulesPreservesPredicateSource(t *testing.T) {
 			require.Equal(t, parse(unfiltered, ""), parse(got, ""), rule)
 		}
 	}
+}
+
+func TestMergeRewriteRulesPreservesGetFormatKeyword(t *testing.T) {
+	left := "select id from db.t where get_format(DATE, 'USA') is not null"
+	right := "select id from db.t where id = 2"
+	got, err := mergeRewriteRules(t.Context(), left, right)
+	require.NoError(t, err)
+	require.Equal(t, "select id from db.t where (get_format(DATE, 'USA') is not null) or (id = 2)", got)
 }
 
 func TestMergeRewriteRulesScalarSubquery(t *testing.T) {

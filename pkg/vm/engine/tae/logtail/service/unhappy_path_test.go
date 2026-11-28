@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -518,7 +519,7 @@ func newTransportProbeTestSession(
 	t.Cleanup(transport.cancel)
 	table := mockTable(1, 1, 1)
 	id := MarshalTableID(&table)
-	return &Session{
+	return withTestSendBuffer(t, &Session{
 		sessionCtx:  ctx,
 		cancelFunc:  cancel,
 		logger:      mockMOLogger(),
@@ -529,7 +530,19 @@ func newTransportProbeTestSession(
 		tables:      map[TableID]tableSubscription{id: {state: TableSubscribed}},
 		exactFrom:   exactFrom,
 		sentThrough: sentThrough,
-	}, transport
+	}), transport
+}
+
+// withTestSendBuffer gives a session built without NewSession its send
+// buffer, and checks at cleanup that the buffer's memory is all freed.
+func withTestSendBuffer(t *testing.T, s *Session) *Session {
+	mp := mpool.MustNewZero()
+	s.sendBuf = mpool.NewMessageBuffer(mp, maxRetainedSendBuffer)
+	t.Cleanup(func() {
+		s.sendBuf.Free()
+		require.Zero(t, mp.CurrNB())
+	})
+	return s
 }
 
 func receiveCapturedLogtailResponse(

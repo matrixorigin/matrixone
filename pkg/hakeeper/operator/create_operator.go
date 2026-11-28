@@ -24,20 +24,20 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func CreateAddReplica(uuid string, shardInfo pb.LogShardInfo, replicaID uint64) (*Operator, error) {
-	return NewBuilder("", shardInfo).AddPeer(uuid, replicaID).Build()
+func CreateAddReplica(uuid string, shardInfo pb.LogShardInfo, replicaID uint64, target string) (*Operator, error) {
+	return NewBuilder("", shardInfo).WithTarget(target).AddPeer(uuid, replicaID).Build()
 }
 
-func CreateAddNonVotingReplica(uuid string, shardInfo pb.LogShardInfo, replicaID uint64) (*Operator, error) {
-	return NewBuilder("", shardInfo).AddNonVotingPeer(uuid, replicaID).Build()
+func CreateAddNonVotingReplica(uuid string, shardInfo pb.LogShardInfo, replicaID uint64, target string) (*Operator, error) {
+	return NewBuilder("", shardInfo).WithTarget(target).AddNonVotingPeer(uuid, replicaID).Build()
 }
 
-func CreateRemoveReplica(uuid string, shardInfo pb.LogShardInfo) (*Operator, error) {
-	return NewBuilder("", shardInfo).RemovePeer(uuid).Build()
+func CreateRemoveReplica(uuid string, shardInfo pb.LogShardInfo, target string) (*Operator, error) {
+	return NewBuilder("", shardInfo).WithTarget(target).RemovePeer(uuid).Build()
 }
 
-func CreateRemoveNonVotingReplica(uuid string, shardInfo pb.LogShardInfo) (*Operator, error) {
-	return NewBuilder("", shardInfo).RemoveNonVotingPeer(uuid).Build()
+func CreateRemoveNonVotingReplica(uuid string, shardInfo pb.LogShardInfo, target string) (*Operator, error) {
+	return NewBuilder("", shardInfo).WithTarget(target).RemoveNonVotingPeer(uuid).Build()
 }
 
 func CreateStopReplica(brief string, uuid string, shardID uint64, epoch uint64) *Operator {

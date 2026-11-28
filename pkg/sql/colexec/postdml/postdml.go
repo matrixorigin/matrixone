@@ -81,32 +81,35 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 
 	var values string
 	if !postdml.PostDmlCtx.IsDeleteWithoutFilters {
-		in_list = make([]string, 0, bat.RowCount())
-		var noBackslashEscapes bool
-		var sqlModeResolved bool
-		for i := 0; i < bat.RowCount(); i++ {
+		rowCount := bat.RowCount()
+		in_list = make([]string, 0, rowCount)
+		// The key type is the same on every row: decide how to quote it once.
+		var quote, noBackslashEscapes bool
+		switch pkTyp.Oid {
+		case types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_uuid,
+			types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json,
+			types.T_blob, types.T_text, types.T_datalink:
+			quote = true
+			if rowCount > 0 {
+				noBackslashEscapes = postDmlNoBackslashEscapes(proc)
+			}
+		case types.T_array_float32, types.T_array_float64:
+			if rowCount > 0 {
+				return moerr.NewInternalError(proc.Ctx, "array cannot be primary key")
+			}
+		}
+		for i := 0; i < rowCount; i++ {
 			pkey, err := GetAnyAsString(pkvec, i)
 			if err != nil {
 				return err
 			}
-
-			switch pkTyp.Oid {
-			case types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_uuid,
-				types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json,
-				types.T_blob, types.T_text, types.T_datalink:
-				if !sqlModeResolved {
-					noBackslashEscapes = postDmlNoBackslashEscapes(proc)
-					sqlModeResolved = true
-				}
+			if quote {
 				if noBackslashEscapes {
 					pkey = "'" + strings.ReplaceAll(pkey, "'", "''") + "'"
 				} else {
 					pkey = sqlquote.String(pkey)
 				}
-			case types.T_array_float32, types.T_array_float64:
-				return moerr.NewInternalError(proc.Ctx, "array cannot be primary key")
 			}
-
 			in_list = append(in_list, pkey)
 		}
 		values = strings.Join(in_list, ",")

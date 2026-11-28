@@ -22,6 +22,7 @@ import (
 	"github.com/RoaringBitmap/roaring/v2"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -115,14 +116,18 @@ func (b *TxnLogtailRespBuilder) visitObject(iobj any) {
 		if b.batches[batchIdx] == nil {
 			b.batches[batchIdx] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 		}
-		visitObject(b.batches[batchIdx], obj, node, true, true, b.txn.GetPrepareTS())
+		if err := visitObject(b.batches[batchIdx], obj, node, true, true, b.txn.GetPrepareTS()); err != nil {
+			panic(err) // the visitors have no error result
+		}
 		return
 	}
 
 	if b.batches[batchIdx] == nil {
 		b.batches[batchIdx] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 	}
-	visitObject(b.batches[batchIdx], obj, node, false, true, b.txn.GetPrepareTS())
+	if err := visitObject(b.batches[batchIdx], obj, node, false, true, b.txn.GetPrepareTS()); err != nil {
+		panic(err) // the visitors have no error result
+	}
 }
 
 func (b *TxnLogtailRespBuilder) visitAppend(ibat any, isTombstone bool) {
@@ -134,27 +139,38 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any, isTombstone bool) {
 		b.visitAppendData(src)
 	}
 }
+
+// cloneSmall copies the first n rows of vec into a vector of the small pool.
+// The visitors have no error result, so a failed allocation panics.
+func (b *TxnLogtailRespBuilder) cloneSmall(vec containers.Vector, n int) containers.Vector {
+	cloned, err := b.rt.VectorPool.Small.CloneWindow(vec, 0, n)
+	if err != nil {
+		panic(err)
+	}
+	return cloned
+}
+
 func (b *TxnLogtailRespBuilder) visitAppendTombstone(src *containers.BatchWithVersion) {
 
 	mybat := containers.NewBatchWithCapacity(3)
 	mybat.AddVector(
 		objectio.TombstoneAttr_Rowid_Attr,
-		src.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
+		b.cloneSmall(src.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr), src.Length()),
 	)
 	tsType := types.T_TS.ToType()
 	commitVec := b.rt.VectorPool.Small.GetVector(&tsType)
-	commitVec.PreExtend(src.Length())
-	for i := 0; i < src.Length(); i++ {
-		commitVec.Append(b.txn.GetPrepareTS(), false)
+	// the visitors have no error result
+	if err := vector.AppendMultiFixed(commitVec, b.txn.GetPrepareTS(), false, src.Length(), commitVec.MPool()); err != nil {
+		panic(err)
 	}
 	mybat.AddVector(objectio.DefaultCommitTS_Attr, commitVec)
 	mybat.AddVector(
 		objectio.TombstoneAttr_PK_Attr,
-		src.GetVectorByName(objectio.TombstoneAttr_PK_Attr).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
+		b.cloneSmall(src.GetVectorByName(objectio.TombstoneAttr_PK_Attr), src.Length()),
 	)
 	mybat.AddVector(
 		catalog.PhyAddrColumnName,
-		src.GetVectorByName(catalog.PhyAddrColumnName).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
+		b.cloneSmall(src.GetVectorByName(catalog.PhyAddrColumnName), src.Length()),
 	)
 
 	if b.batches[dataDelBatch] == nil {
@@ -169,13 +185,13 @@ func (b *TxnLogtailRespBuilder) visitAppendData(src *containers.BatchWithVersion
 	mybat := containers.NewBatchWithCapacity(int(src.NextSeqnum) + 2)
 	mybat.AddVector(
 		catalog.PhyAddrColumnName,
-		src.GetVectorByName(catalog.PhyAddrColumnName).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small),
+		b.cloneSmall(src.GetVectorByName(catalog.PhyAddrColumnName), src.Length()),
 	)
 	tsType := types.T_TS.ToType()
 	commitVec := b.rt.VectorPool.Small.GetVector(&tsType)
-	commitVec.PreExtend(src.Length())
-	for i := 0; i < src.Length(); i++ {
-		commitVec.Append(b.txn.GetPrepareTS(), false)
+	// the visitors have no error result
+	if err := vector.AppendMultiFixed(commitVec, b.txn.GetPrepareTS(), false, src.Length(), commitVec.MPool()); err != nil {
+		panic(err)
 	}
 	mybat.AddVector(objectio.DefaultCommitTS_Attr, commitVec)
 
@@ -186,7 +202,7 @@ func (b *TxnLogtailRespBuilder) visitAppendData(src *containers.BatchWithVersion
 		for len(mybat.Vecs) < 2+int(seqnum) {
 			mybat.AppendPlaceholder()
 		}
-		vec := src.Vecs[i].CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Small)
+		vec := b.cloneSmall(src.Vecs[i], src.Length())
 		mybat.AddVector(src.Attrs[i], vec)
 	}
 
@@ -216,7 +232,7 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 	// 		tid, tableName, delete, bat.PPString(5), b.txn.GetPrepareTS().ToString(),
 	// 	)
 	// }
-	apiBat, err := containersBatchToProtoBatch(bat)
+	apiBat, err := marshalContainersBatch(bat)
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf(
 			"[logtail] from table %d-%s, delete %v, batch length %d @%s",
@@ -239,6 +255,7 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 		TableName:    tableName,
 		DatabaseId:   dbid,
 		DatabaseName: dbName,
+		Attrs:        bat.Attrs,
 		Bat:          apiBat,
 	}
 	ts := b.txn.GetPrepareTS().ToTimestamp()

@@ -138,6 +138,8 @@ func TestPreparedFreshnessAdmissionRequestScope(t *testing.T) {
 				// owner has already installed an equal cache for that identity.
 				ses.tenant.UserID++
 				ses.ruleCacheIdentity = rewriteRuleSessionIdentity(ses)
+				ses.ruleCacheLowerCaseTableNames = parserLowerCaseTableNames(ses)
+				ses.ruleCacheSQLMode = sessionSQLModeForParser(ses)
 			case "generation":
 				ses.bumpRewritePolicyGeneration()
 			case "revision":
@@ -226,6 +228,8 @@ func TestPreparedFreshnessRequestEndsDuringRefresh(t *testing.T) {
 func seedRewriteRuleCacheProofForTest(ses *Session) {
 	ses.ruleCacheVersion = 1
 	ses.ruleCacheIdentity = rewriteRuleSessionIdentity(ses)
+	ses.ruleCacheLowerCaseTableNames = parserLowerCaseTableNames(ses)
+	ses.ruleCacheSQLMode = sessionSQLModeForParser(ses)
 	ses.ruleCacheVersionProvider = func(context.Context, *Session) (any, error) { return 1, nil }
 }
 
@@ -261,7 +265,7 @@ func TestPreparedRefreshDoesNotMaterializeOrAliasPolicy(t *testing.T) {
 func TestRewriteRuleCacheFreshness(t *testing.T) {
 	for _, materialize := range []bool{true, false} {
 		t.Run(fmt.Sprintf("materialize_%v", materialize), func(t *testing.T) {
-			for _, scenario := range []string{"stable", "unrelated catalog change", "changed rules", "changed competing source", "table name mode", "default database", "unknown proof", "proof error", "proof and read error", "proof canceled", "proof deadline", "pre-read stamp", "account change", "role change", "secondary roles"} {
+			for _, scenario := range []string{"stable", "unrelated catalog change", "changed rules", "changed competing source", "table name mode", "single legacy key mode", "default database", "unknown proof", "proof error", "proof and read error", "proof canceled", "proof deadline", "pre-read stamp", "account change", "role change", "secondary roles"} {
 				t.Run(scenario, func(t *testing.T) {
 					ctx := context.Background()
 					ses := newSes(&privilege{}, gomock.NewController(t))
@@ -269,7 +273,14 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 					bh := &backgroundExecTest{}
 					bh.init()
 					bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId(nil)
-					query := getSqlForRoleRulesOfRoleIDs([]int64{10})
+					roleIDs := []int64{10}
+					switch scenario {
+					case "changed competing source", "table name mode", "default database":
+						roleIDs = append(roleIDs, 20)
+						bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] =
+							newMrsForInheritedRoleIdOfRoleId([][]interface{}{{20, false}})
+					}
+					query := getSqlForRoleRulesOfRoleIDs(roleIDs)
 					bh.sql2result[query] = newMrsForRewriteRules(nil)
 					stub := gostub.StubFunc(&NewBackgroundExec, bh)
 					defer stub.Reset()
@@ -287,14 +298,20 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 					if scenario == "changed competing source" {
 						bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{
 							{10, "db.t", "select 'East' from db.t where a = 1"},
-							{10, "db.t", "select east from db.t where a = 2"},
+							{20, "db.t", "select east from db.t where a = 2"},
 						})
 					}
 					if scenario == "table name mode" {
 						ctx = context.WithValue(ctx, rewritePolicyRequestKey{}, &rewritePolicyRequest{owner: ses})
 						bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{
 							{10, "db.t", "select id from db.t as X where id = 1"},
-							{10, "db.t", "select id from db.t as x where x.id = 2"},
+							{20, "db.t", "select id from db.t as x where x.id = 2"},
+						})
+					}
+					if scenario == "single legacy key mode" {
+						ctx = context.WithValue(ctx, rewritePolicyRequestKey{}, &rewritePolicyRequest{owner: ses})
+						bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{
+							{10, "DB.T", "select id from db.t"},
 						})
 					}
 					if scenario == "default database" {
@@ -302,12 +319,18 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 						ses.sesSysVars.Set("lower_case_table_names", int64(0))
 						bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{
 							{10, "information_schema.character_sets", "select id from character_sets where id = 1"},
-							{10, "information_schema.character_sets", "select id from CHARACTER_SETS where id = 2"},
+							{20, "information_schema.character_sets", "select id from CHARACTER_SETS where id = 2"},
 						})
 					}
 					initial := capture()
 					if scenario == "table name mode" {
-						require.Contains(t, ses.ruleCache["db.t"], "or (x.id = 2)")
+						rules, err := ses.ruleVariants.forMode(ctx, ses.ruleCache, initial.lowerCaseTableNames, "", "")
+						require.NoError(t, err)
+						require.Contains(t, rules["db.t"], "or (x.id = 2)")
+						require.True(t, preparedPolicyAlreadyRefreshed(ctx, ses))
+					}
+					if scenario == "single legacy key mode" {
+						require.Contains(t, ses.ruleCache, "db.t")
 						require.True(t, preparedPolicyAlreadyRefreshed(ctx, ses))
 					}
 					old := &PrepareStmt{Name: "old", rewritePolicyCaptured: true, rewritePolicyGeneration: initial.generation}
@@ -328,13 +351,13 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 						proof = 2
 						bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{
 							{10, "db.t", `select "East" from db.t where a = 1`},
-							{10, "db.t", "select east from db.t where a = 2"},
+							{20, "db.t", "select east from db.t where a = 2"},
 						})
 					case "default database":
 						require.True(t, preparedPolicyAlreadyRefreshed(ctx, ses))
 						ses.SetDatabaseName("information_schema")
 						require.False(t, preparedPolicyAlreadyRefreshed(ctx, ses))
-					case "table name mode":
+					case "table name mode", "single legacy key mode":
 						ses.sesSysVars.Set("lower_case_table_names", int64(0))
 						require.False(t, preparedPolicyAlreadyRefreshed(ctx, ses))
 					case "changed rules":
@@ -377,8 +400,13 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 						return
 					}
 					refreshed := capture()
+					if scenario == "single legacy key mode" {
+						require.Equal(t, map[string]string{"DB.T": "select id from db.t"}, ses.ruleCache)
+					}
 					if scenario == "table name mode" {
-						require.Equal(t, "select id from db.t as x where x.id = 2", ses.ruleCache["db.t"])
+						rules, err := ses.ruleVariants.forMode(ctx, ses.ruleCache, refreshed.lowerCaseTableNames, "", "")
+						require.NoError(t, err)
+						require.Equal(t, "select id from db.t as x where x.id = 2", rules["db.t"])
 					}
 					if scenario == "default database" && materialize {
 						query := "select id from information_schema.character_sets"
@@ -389,7 +417,7 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 						require.NoError(t, err)
 						require.Contains(t, after, "(id = 1) or (id = 2)")
 					}
-					changed := scenario == "default database" || scenario == "table name mode" || scenario == "changed rules" || scenario == "changed competing source" || scenario == "unknown proof" || scenario == "proof error"
+					changed := scenario == "default database" || scenario == "table name mode" || scenario == "single legacy key mode" || scenario == "changed rules" || scenario == "changed competing source" || scenario == "unknown proof" || scenario == "proof error"
 					require.Equal(t, changed, old.rewritePolicyInvalidated.Load())
 					if changed {
 						require.NotEmpty(t, ses.ruleCache)
@@ -426,6 +454,47 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 					require.Equal(t, expected, loads)
 				})
 			}
+		})
+	}
+}
+
+func TestPreparedRoleRuleParserModeChange(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		rule    string
+		changed bool
+	}{
+		{"equivalent", "select id from db.t where id = 1", false},
+		{"same bytes with different meaning", `select id from db.t where name = 'A\nB'`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newSes(&privilege{}, gomock.NewController(t))
+			t.Cleanup(ses.Close)
+			ses.SetTenantInfo(&TenantInfo{DefaultRoleID: 10})
+			seedRewriteRuleCacheProofForTest(ses)
+			ctx := context.WithValue(t.Context(), rewritePolicyRequestKey{}, &rewritePolicyRequest{owner: ses})
+			require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+
+			bh := &backgroundExecTest{}
+			bh.init()
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			t.Cleanup(stub.Reset)
+			query := getSqlForRoleRulesOfRoleIDs([]int64{10})
+			bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{{10, "db.t", tc.rule}})
+			policy, err := captureRewritePolicy(ctx, ses)
+			require.NoError(t, err)
+			old := &PrepareStmt{
+				Name: "old", rewritePolicyCaptured: true, rewritePolicyEnabled: true,
+				rewritePolicyGeneration: policy.generation,
+			}
+			ses.prepareStmts[old.Name] = old
+
+			require.True(t, preparedPolicyAlreadyRefreshed(ctx, ses))
+			require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "NO_BACKSLASH_ESCAPES"))
+			require.False(t, preparedPolicyAlreadyRefreshed(ctx, ses))
+			require.NoError(t, refreshPreparedRewritePolicy(ctx, ses))
+			require.Equal(t, tc.changed, old.rewritePolicyInvalidated.Load())
+			require.True(t, preparedPolicyAlreadyRefreshed(ctx, ses))
 		})
 	}
 }

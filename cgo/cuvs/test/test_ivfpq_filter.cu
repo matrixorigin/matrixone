@@ -81,6 +81,7 @@
 #include <random>
 #include <vector>
 
+#include <cuda/stream_ref>
 #include <cuda_runtime.h>
 
 #pragma GCC diagnostic push
@@ -177,7 +178,8 @@ void print_row(const char* label, const int64_t* nb, const float* d, uint32_t k)
 int main() {
     CHECK_CUDA(cudaSetDevice(0));
     raft::resources res;
-    auto stream = raft::resource::get_cuda_stream(res);
+    const cuda::stream_ref stream_ref = raft::resource::get_cuda_stream(res);
+    const cudaStream_t stream = stream_ref.get();
 
     // ---- dataset H2D --------------------------------------------------------
     std::vector<float> host_ds = make_dataset();

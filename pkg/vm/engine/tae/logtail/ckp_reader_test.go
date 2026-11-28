@@ -855,21 +855,21 @@ func TestCompatibilityForV12PropagatesAppendError(t *testing.T) {
 	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
 	require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
 	require.NoError(t, vector.AppendFixed(
-		source.Vecs[0].GetDownstreamVector(), int8(0), false, sourceMP))
+		source.Vecs[0], int8(0), false, sourceMP))
 	require.NoError(t, vector.AppendBytes(
-		source.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector(),
+		source.Vecs[ObjectInfo_ObjectStats_Idx+2],
 		stats[:], false, sourceMP))
 	require.NoError(t, vector.AppendFixed(
-		source.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector(),
+		source.Vecs[ObjectInfo_DBID_Idx+2],
 		uint64(1), false, sourceMP))
 	require.NoError(t, vector.AppendFixed(
-		source.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector(),
+		source.Vecs[ObjectInfo_TID_Idx+2],
 		uint64(1), false, sourceMP))
 	now := types.NextGlobalTsForTest()
 	require.NoError(t, vector.AppendFixed(
-		source.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector(), now, false, sourceMP))
+		source.Vecs[ObjectInfo_CreateAt_Idx+2], now, false, sourceMP))
 	require.NoError(t, vector.AppendFixed(
-		source.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector(), now, false, sourceMP))
+		source.Vecs[ObjectInfo_DeleteAt_Idx+2], now, false, sourceMP))
 
 	destMP, err := mpool.NewMPool("v12-compatibility-error", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
@@ -948,13 +948,13 @@ func TestCompatibilityForV12PropagatesEveryAppendError(t *testing.T) {
 	name := objectio.MockObjectName()
 	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
 	require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
-	require.NoError(t, vector.AppendFixed(source.Vecs[0].GetDownstreamVector(), int8(0), false, sourceMP))
-	require.NoError(t, vector.AppendBytes(source.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector(), stats[:], false, sourceMP))
-	require.NoError(t, vector.AppendFixed(source.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector(), uint64(1), false, sourceMP))
-	require.NoError(t, vector.AppendFixed(source.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector(), uint64(1), false, sourceMP))
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int8(0), false, sourceMP))
+	require.NoError(t, vector.AppendBytes(source.Vecs[ObjectInfo_ObjectStats_Idx+2], stats[:], false, sourceMP))
+	require.NoError(t, vector.AppendFixed(source.Vecs[ObjectInfo_DBID_Idx+2], uint64(1), false, sourceMP))
+	require.NoError(t, vector.AppendFixed(source.Vecs[ObjectInfo_TID_Idx+2], uint64(1), false, sourceMP))
 	now := types.NextGlobalTsForTest()
-	require.NoError(t, vector.AppendFixed(source.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector(), now, false, sourceMP))
-	require.NoError(t, vector.AppendFixed(source.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector(), now, false, sourceMP))
+	require.NoError(t, vector.AppendFixed(source.Vecs[ObjectInfo_CreateAt_Idx+2], now, false, sourceMP))
+	require.NoError(t, vector.AppendFixed(source.Vecs[ObjectInfo_DeleteAt_Idx+2], now, false, sourceMP))
 
 	const capacity = 1 << 20
 	for _, test := range []struct {
@@ -1073,15 +1073,15 @@ func makeV12DataObjectBatch(t *testing.T, mp *mpool.MPool, block int) *container
 	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
 	require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
 
-	require.NoError(t, vector.AppendFixed(bat.Vecs[0].GetDownstreamVector(), types.Rowid{}, false, mp))
-	require.NoError(t, vector.AppendFixed(bat.Vecs[1].GetDownstreamVector(), types.TS{}, false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[2].GetDownstreamVector(), stats[:], false, mp))
-	require.NoError(t, vector.AppendFixed(bat.Vecs[3].GetDownstreamVector(), uint64(1), false, mp))
-	require.NoError(t, vector.AppendFixed(bat.Vecs[4].GetDownstreamVector(), uint64(1), false, mp))
-	require.NoError(t, vector.AppendFixed(bat.Vecs[5].GetDownstreamVector(), types.TS{}, false, mp))
-	require.NoError(t, vector.AppendFixed(bat.Vecs[6].GetDownstreamVector(), types.TS{}, false, mp))
-	require.NoError(t, vector.AppendFixed(bat.Vecs[7].GetDownstreamVector(), types.TS{}, false, mp))
-	require.NoError(t, vector.AppendFixed(bat.Vecs[8].GetDownstreamVector(), types.TS{}, false, mp))
-	require.NoError(t, vector.AppendFixed(bat.Vecs[9].GetDownstreamVector(), types.TS{}, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Rowid{}, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.TS{}, false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[2], stats[:], false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3], uint64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[4], uint64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[5], types.TS{}, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[6], types.TS{}, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[7], types.TS{}, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[8], types.TS{}, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[9], types.TS{}, false, mp))
 	return bat
 }

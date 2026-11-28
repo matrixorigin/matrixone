@@ -54,7 +54,6 @@ func TestValidateAutoIncrEpochAdvance(t *testing.T) {
 func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 	t.Run("matching production tuple is encoded", func(t *testing.T) {
 		txn := newCatalogCreateTxnForTest(t)
-		defer cleanTxnWritesForTest(txn)
 		addActiveDatabaseCreateForTest(txn, 7, "db", 42, 1)
 		appendCreateDatabaseTupleForTest(t, txn, 7, "db", 42, 7, "db", false)
 
@@ -66,8 +65,9 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 		entry := cmd.EntryList[0]
 		require.Equal(t, uint64(catalog.MO_CATALOG_ID), entry.DatabaseId)
 		require.Equal(t, uint64(catalog.MO_DATABASE_ID), entry.TableId)
-		bat, err := batch.ProtoBatchToBatch(entry.Bat, txn.proc.Mp())
+		bat, err := batch.ViewBinary(entry.Bat.Bytes())
 		require.NoError(t, err)
+		defer bat.Clean(txn.proc.Mp())
 		require.Equal(t, uint64(42), vector.GetFixedAtNoTypeCheck[uint64](bat.Vecs[catalog.MO_DATABASE_DAT_ID_IDX], 0))
 		require.Equal(t, "db", string(bat.Vecs[catalog.MO_DATABASE_DAT_NAME_IDX].GetBytesAt(0)))
 		require.Equal(t, uint32(7), vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[catalog.MO_DATABASE_ACCOUNT_ID_IDX], 0))
@@ -87,7 +87,6 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 	} {
 		t.Run(tc.name+" fails closed", func(t *testing.T) {
 			txn := newCatalogCreateTxnForTest(t)
-			defer cleanTxnWritesForTest(txn)
 			addActiveDatabaseCreateForTest(txn, 7, "db", 42, 1)
 			appendCreateDatabaseTupleForTest(t, txn, tc.tupleAccount, tc.tupleName, tc.tupleID, 7, "db", tc.empty)
 
@@ -114,7 +113,6 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 
 	t.Run("multiple databases are independently certified", func(t *testing.T) {
 		txn := newCatalogCreateTxnForTest(t)
-		defer cleanTxnWritesForTest(txn)
 		addActiveDatabaseCreateForTest(txn, 7, "alpha", 41, 1)
 		addActiveDatabaseCreateForTest(txn, 8, "beta", 42, 1)
 		appendCreateDatabaseTupleForTest(t, txn, 7, "alpha", 41, 7, "alpha", false)
@@ -128,7 +126,6 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 
 	t.Run("superseded create cannot certify recreated database id", func(t *testing.T) {
 		txn := newCatalogCreateTxnForTest(t)
-		defer cleanTxnWritesForTest(txn)
 		addActiveDatabaseCreateForTest(txn, 7, "db", 41, 1)
 		txn.databaseOps.addDeleteDatabase(genDatabaseKey(7, "db"), 2, 41)
 		addActiveDatabaseCreateForTest(txn, 7, "db", 42, 3)
@@ -170,9 +167,58 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 	})
 }
 
+func TestGenWriteReqsRequiresReportedTNShardForWrites(t *testing.T) {
+	t.Run("DML", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		txn.haveDDL.Store(false)
+		attrs := []string{"pk"}
+		bat := newInt64BatchForTest(t, txn.proc, attrs, []int64{1})
+		defer bat.Clean(txn.proc.Mp())
+		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, attrs, catalogCreateTNStoreForTest())
+		require.NoError(t, err)
+
+		reqs, err := genWriteReqs(context.Background(), txn)
+		require.NoError(t, err)
+		require.Len(t, reqs, 1)
+		require.Len(t, decodePrecommitWriteCmdForTest(t, reqs[0]).EntryList, 1)
+
+		txn.writes[0].tnStore.Shards = nil
+		reqs, err = genWriteReqs(context.Background(), txn)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable), "%v", err)
+		require.Empty(t, reqs)
+		require.ErrorContains(t, err, "TN tn-test has no reported shard")
+
+		txn.writes[0].bat.SetRowCount(0)
+		reqs, err = genWriteReqs(context.Background(), txn)
+		require.NoError(t, err)
+		require.Empty(t, reqs)
+	})
+
+	t.Run("DDL", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		addActiveDatabaseCreateForTest(txn, 7, "db", 42, 1)
+		appendCreateDatabaseTupleForTest(t, txn, 7, "db", 42, 7, "db", false)
+		txn.writes[0].tnStore.Shards = nil
+
+		reqs, err := genWriteReqs(context.Background(), txn)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable), "%v", err)
+		require.Empty(t, reqs)
+	})
+
+	t.Run("no writes", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		reqs, err := genWriteReqs(context.Background(), txn)
+		require.NoError(t, err)
+		require.Empty(t, reqs)
+	})
+}
+
 func newCatalogCreateTxnForTest(t *testing.T) *Transaction {
 	t.Helper()
 	proc := testutil.NewProc(t)
+	beforeOffHeap, beforeOnHeap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
 	txn := &Transaction{
 		proc:            proc,
 		databaseOps:     newDbOps(),
@@ -181,6 +227,12 @@ func newCatalogCreateTxnForTest(t *testing.T) *Transaction {
 	}
 	txn.op = newTxnOperatorForTestWithWorkspace(t, txn)
 	txn.haveDDL.Store(true)
+	t.Cleanup(func() {
+		cleanTxnWritesForTest(txn)
+		txn.closeWorkspaceAllocation()
+		require.Equal(t, beforeOffHeap, proc.Mp().CurrNB(), "release transaction fixture's off-heap allocations")
+		require.Equal(t, beforeOnHeap, proc.Mp().OnHeapCurrNB(), "release transaction fixture's on-heap allocations")
+	})
 	return txn
 }
 
@@ -210,6 +262,7 @@ func appendCreateDatabaseTupleForTest(t *testing.T, txn *Transaction, tupleAccou
 		"create database "+tupleName, tupleAccountID, 1, 1, tupleName, tupleDatabaseID, "", txn.proc.Mp(), packer,
 	)
 	require.NoError(t, err)
+	defer bat.Clean(txn.proc.Mp())
 	_, err = txn.WriteBatch(
 		INSERT, noteForCreate(uint64(noteAccountID), noteName), catalog.System_Account,
 		catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, catalog.MO_CATALOG, catalog.MO_DATABASE,
@@ -230,6 +283,8 @@ func decodePrecommitWriteCmdForTest(t *testing.T, req txnpb.TxnRequest) *api.Pre
 }
 
 func cleanTxnWritesForTest(txn *Transaction) {
+	// The commit's terminal hook would give the payload buffer back.
+	txn.releaseCommitPayload()
 	for i := range txn.writes {
 		if txn.writes[i].bat != nil {
 			txn.writes[i].bat.Clean(txn.workspaceMP())

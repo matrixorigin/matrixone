@@ -293,8 +293,8 @@ func TestTransferredTombstoneSinkRetriesRealPersistedObject(t *testing.T) {
 	defer bat.Close()
 	objectID := objectio.NewObjectid()
 	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(objectID, 0, 0)
-	bat.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowID, false)
-	bat.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(int32(1), false)
+	bat.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).MustAppendValue(rowID, false)
+	bat.GetVectorByName(objectio.TombstoneAttr_PK_Attr).MustAppendValue(int32(1), false)
 
 	require.NoError(t, sink.write(ctx, containers.ToCNBatch(bat)))
 	require.NoError(t, raw.Sync(ctx))
@@ -346,8 +346,8 @@ func TestTransferredTombstoneSinkCleansAmbiguousSyncObject(t *testing.T) {
 	defer bat.Close()
 	objectID := objectio.NewObjectid()
 	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(objectID, 0, 0)
-	bat.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowID, false)
-	bat.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(int32(1), false)
+	bat.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).MustAppendValue(rowID, false)
+	bat.GetVectorByName(objectio.TombstoneAttr_PK_Attr).MustAppendValue(int32(1), false)
 
 	require.NoError(t, sink.write(ctx, containers.ToCNBatch(bat)))
 	opErr := sink.publish(ctx, func(...objectio.ObjectStats) {

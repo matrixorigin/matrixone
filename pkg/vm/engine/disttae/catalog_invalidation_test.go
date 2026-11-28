@@ -16,12 +16,13 @@ package disttae
 
 import (
 	"context"
+	"sync"
+	"testing"
+
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"sync"
-	"testing"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -59,7 +60,7 @@ func insertCatalogTableAt(
 	}, txn.proc.Mp(), packer)
 	require.NoError(t, err)
 	defer bat.Clean(txn.proc.Mp())
-	_, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, txn.proc.Mp())
+	_, _, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, txn.proc.Mp())
 	require.NoError(t, err)
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(cache.MO_TIMESTAMP_IDX))
 	timestamps[0] = ts
@@ -133,7 +134,7 @@ func TestSessionTemporarySchemaCatalogVisibility(t *testing.T) {
 			bat, err := catalog.GenCreateTableTuple(catalog.Table{AccountId: tc.account, DatabaseId: 10, DatabaseName: "db", TableId: uint64(42 + i), TableName: tc.name, Kind: tc.kind}, txn.proc.Mp(), packer)
 			require.NoError(t, err)
 			defer bat.Clean(txn.proc.Mp())
-			_, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, txn.proc.Mp())
+			_, _, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, txn.proc.Mp())
 			require.NoError(t, err)
 			vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(cache.MO_TIMESTAMP_IDX))[0] = types.BuildTS(old.PhysicalTime+1, 0)
 			eng.GetLatestCatalogCache().InsertTable(bat)

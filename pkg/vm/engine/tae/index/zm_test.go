@@ -841,10 +841,10 @@ func testDecimal64Sum(t *testing.T) {
 
 func BenchmarkZM(b *testing.B) {
 	vec := containers.MockVector(types.T_char.ToType(), 10000, true, nil)
-	defer vec.Close()
+	defer containers.ReleaseVector(vec)
 	var bs [][]byte
 	for i := 0; i < vec.Length(); i++ {
-		bs = append(bs, vec.Get(i).([]byte))
+		bs = append(bs, vec.GetValue(i).([]byte))
 	}
 
 	zm := NewZM(vec.GetType().Oid, 0)
@@ -862,10 +862,10 @@ func BenchmarkZM(b *testing.B) {
 	})
 
 	vec = containers.MockVector(types.T_float64.ToType(), 10000, true, nil)
-	defer vec.Close()
+	defer containers.ReleaseVector(vec)
 	var vs []float64
 	for i := 0; i < vec.Length(); i++ {
-		vs = append(vs, vec.Get(i).(float64))
+		vs = append(vs, vec.GetValue(i).(float64))
 	}
 
 	zm = NewZM(vec.GetType().Oid, 0)
@@ -887,8 +887,8 @@ func BenchmarkZM(b *testing.B) {
 func BenchmarkUpdateZMVector(b *testing.B) {
 	zm := NewZM(types.T_int64, 0)
 	tnVec := containers.MockVector(types.T_int64.ToType(), 10000, false, nil)
-	defer tnVec.Close()
-	vec := tnVec.GetDownstreamVector()
+	defer containers.ReleaseVector(tnVec)
+	vec := tnVec
 
 	b.Run("update-vector", func(b *testing.B) {
 		b.ResetTimer()
