@@ -18,7 +18,6 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -290,12 +289,11 @@ func (builder *QueryBuilder) applyDMLTargetRewrite(
 	return nodeID, nil
 }
 
-func (builder *QueryBuilder) dmlReturningColumnVisible(name string) bool {
+func (builder *QueryBuilder) dmlReturningVisibleColumns() map[string]int32 {
 	for _, target := range builder.dmlRewriteTargets {
 		if target.tableID == builder.returningTableDef.TblId {
-			_, visible := target.visible[name]
-			return visible
+			return target.visible
 		}
 	}
-	return true
+	return nil
 }

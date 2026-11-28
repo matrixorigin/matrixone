@@ -347,9 +347,6 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 		if col.Hidden || col.Name == catalog.Row_ID {
 			continue
 		}
-		if !builder.dmlReturningColumnVisible(col.Name) {
-			continue
-		}
 		pos, ok := builder.returningColPos[strings.ToLower(col.Name)]
 		if !ok || pos < 0 || int(pos) >= len(sourceSink.ProjectList) {
 			return moerr.NewInternalErrorf(builder.GetContext(), "DML RETURNING cannot locate final image column %s", col.Name)
@@ -423,6 +420,10 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	}
 	for _, col := range binding.cols {
 		returnCtx.bindingByCol[col] = binding
+	}
+	if visible := builder.dmlReturningVisibleColumns(); visible != nil {
+		// Keep SINK_SCAN positions aligned with the final row image.
+		returnCtx.restrictDMLBinding(binding, visible)
 	}
 
 	selectList, err := appendSelectList(builder, returnCtx, nil, exprs...)

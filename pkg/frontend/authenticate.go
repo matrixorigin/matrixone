@@ -7821,9 +7821,9 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 			} else if node.NodeType == plan.Node_DELETE {
 				if node.DeleteCtx != nil && node.DeleteCtx.Ref != nil {
 					objRef := node.DeleteCtx.Ref
-					// do not check the privilege of the index table
+					// Legacy DELETE stores its target identity in DeleteCtx.Ref.
 					viewPath := node.GetViewPath()
-					if !isIndexTable(node.ObjRef.GetObjName()) {
+					if !isIndexTable(objRef.GetObjName()) {
 						appendPt(privilegeTips{
 							typ:                   t,
 							objType:               objectTypeTable,

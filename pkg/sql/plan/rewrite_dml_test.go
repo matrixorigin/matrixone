@@ -27,13 +27,17 @@ import (
 const pointUpdateRoleRule = "/*+ {\"rewrites\":{\"tpch.nation\":\"select n_nationkey, n_name from tpch.nation where n_regionkey = 1\"}} */ "
 
 func TestRoleRuleDMLKeepsSinglePointScan(t *testing.T) {
-	for _, statement := range []string{
-		"update nation set n_name = 'updated' where n_nationkey = 5",
-		"delete from nation where n_nationkey = 5",
+	for _, tc := range []struct {
+		statement string
+		prepared  bool
+	}{
+		{statement: "update nation set n_name = 'updated' where n_nationkey = 5"},
+		{statement: "update nation set n_name = 'updated' where n_nationkey = ?", prepared: true},
+		{statement: "delete from nation where n_nationkey = 5"},
 	} {
-		t.Run(statement, func(t *testing.T) {
+		t.Run(tc.statement, func(t *testing.T) {
 			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
-			p := buildRoleRuleDMLTestPlan(t, ctx, pointUpdateRoleRule+statement)
+			p := buildRoleRuleDMLTestPlan(t, ctx, pointUpdateRoleRule+tc.statement, tc.prepared)
 			query := p.GetQuery()
 			_, def, err := ctx.Resolve("tpch", "nation", nil, nil)
 			require.NoError(t, err)
@@ -81,19 +85,19 @@ func BenchmarkRoleRulePointUpdatePlan(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				buildRoleRuleDMLTestPlan(b, ctx, tc.sql)
+				buildRoleRuleDMLTestPlan(b, ctx, tc.sql, false)
 			}
 		})
 	}
 }
 
-func buildRoleRuleDMLTestPlan(t testing.TB, ctx CompilerContext, sql string) *Plan {
+func buildRoleRuleDMLTestPlan(t testing.TB, ctx CompilerContext, sql string, prepared bool) *Plan {
 	t.Helper()
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 	require.NoError(t, parsers.AddRewriteHints(ctx.GetContext(), []tree.Statement{stmt}, sql))
-	p, err := BuildPlan(ctx, stmt, false, nil)
+	p, err := BuildPlan(ctx, stmt, prepared, nil)
 	require.NoError(t, err)
 	return p
 }

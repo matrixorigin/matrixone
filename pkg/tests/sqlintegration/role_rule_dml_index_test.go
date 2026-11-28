@@ -65,7 +65,7 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 		execAdmin("create role " + role)
 		execAdmin("grant connect on account * to " + role)
 		execAdmin("grant select, update, delete on table " + target + " to " + role)
-		execAdmin("grant select, update, delete on table " + other + " to " + role)
+		execAdmin("grant select, update on table " + other + " to " + role)
 		execAdmin("alter role " + role + " add rule 'select id, amount from " + target + " where tenant = 1' on table " + target)
 		execAdmin("create user " + user + " identified by '" + password + "' default role " + role)
 
@@ -110,6 +110,8 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 			requireValue(conn.QueryRowContext(ctx, hiddenIndexes), 0)
 			requireValue(conn.QueryRowContext(ctx, visibleIndex), 1)
 			requireCode("show index from items", 20101)
+			requireCode("show index ignored from items", 20101)
+			requireCode("show index status from items", 20101)
 			execUser("show index from other")
 			requireCode("update items set amount = 50 where tenant = 1", 1054)
 			requireCode("update items set tenant = 1 where id = 1", 1054)
@@ -159,8 +161,11 @@ func TestRoleRuleDMLAndIndexVisibility(t *testing.T) {
 			require.NoError(t, rows.Err())
 		}()
 
-		// Exercise legacy multi-target DELETE and then the single-table path.
-		execUser("delete i, o from items as i join other as o on i.id = o.id")
+		// Both base targets require DELETE privileges. Their index writes are internal.
+		const joinedDelete = "delete i, o from items as i join other as o on i.id = o.id"
+		requireCode(joinedDelete, 20101)
+		execAdmin("grant delete on table " + other + " to " + role)
+		execUser(joinedDelete)
 		requireValue(admin.QueryRowContext(ctx, "select count(*) from "+other+" where id = 2"), 1)
 		requireValue(admin.QueryRowContext(ctx, "select count(*) from "+other+" where id = 3"), 0)
 		requireAffected("delete from items", 1)
