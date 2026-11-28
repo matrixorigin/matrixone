@@ -60,8 +60,11 @@ pixi run --frozen --manifest-path "$SIRIUS_SRC/pixi.toml" -e mo \
 
 ## Configure a local runtime
 
-Add this section to the CN file selected by your launch manifest (for the
-default local launch, `etc/launch/cn.toml`). Use an absolute path to a Sirius
+For the default local launch, open `etc/launch/cn.toml` and set `enabled = true`
+in the existing `[cn.sirius]` section. If your launch manifest selects a different
+CN file, edit its existing section or add the example below if the section is missing.
+
+Use an absolute path to a Sirius
 YAML configuration. The small `test/cpp/operator/result.yaml` in Sirius is a
 known integration-test example, not a production capacity profile.
 
