@@ -217,3 +217,138 @@ func TestIssue33113DeleteCascadeAndUpdateCascadeDiamondSetNullFirst(t *testing.T
 	addIssue33113Diamond(t, mock, false)
 	requireIssue33113DeletePlan(t, mock)
 }
+
+func TestIssue33113OrderReferentialChildTableIDs(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	addIssue33113Diamond(t, mock, false)
+	builder := NewQueryBuilder(plan.Query_DELETE, mock.CurrentContext(), false, true)
+	parent := mock.ctxt.tables["fk33113_p"]
+
+	require.Nil(t, orderReferentialChildTableIDs(builder, nil))
+	require.Nil(t, orderReferentialChildTableIDs(builder, &plan.TableDef{}))
+
+	saved := parent.RefChildTbls
+	parent.RefChildTbls = []uint64{mockIssue33113SetNullID, mockIssue33113CascadeID, mockIssue33113SetNullID}
+	defer func() { parent.RefChildTbls = saved }()
+	require.Equal(t,
+		[]uint64{mockIssue33113CascadeID, mockIssue33113SetNullID},
+		orderReferentialChildTableIDs(builder, parent),
+		"CASCADE children come first and duplicate ids are dropped")
+}
+
+func TestIssue33113ChildHasOnDeleteCascade(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	addIssue33113Diamond(t, mock, true)
+	builder := NewQueryBuilder(plan.Query_DELETE, mock.CurrentContext(), false, true)
+	parent := mock.ctxt.tables["fk33113_p"]
+
+	require.False(t, childHasOnDeleteCascade(builder, nil, mockIssue33113CascadeID))
+	require.True(t, childHasOnDeleteCascade(builder, parent, mockIssue33113CascadeID))
+	require.False(t, childHasOnDeleteCascade(builder, parent, mockIssue33113SetNullID))
+	require.False(t, childHasOnDeleteCascade(builder, parent, 987654321), "unknown table")
+	require.False(t, childHasOnDeleteCascade(nil, parent, mockIssue33113CascadeID), "no compiler context")
+	require.False(t, childHasOnDeleteCascade(builder, parent, 0), "parent has no self reference")
+
+	selfRef := &plan.TableDef{
+		TblId: 77939,
+		Fkeys: []*plan.ForeignKeyDef{{ForeignTbl: 0, OnDelete: plan.ForeignKeyDef_CASCADE}},
+	}
+	require.True(t, childHasOnDeleteCascade(builder, selfRef, 0), "self-referencing CASCADE")
+}
+
+func TestIssue33113ProjectRowIDHelpers(t *testing.T) {
+	rowIDTyp := plan.Type{Id: int32(types.T_Rowid), Width: 16}
+	intTyp := plan.Type{Id: int32(types.T_int32), Width: 32}
+	project := []*plan.Expr{
+		{Typ: intTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0, Name: "id"}}},
+		{Typ: intTyp, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+		{Typ: rowIDTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2, Name: catalog.Row_ID}}},
+	}
+	require.True(t, projectHasRowIDAt(project, 2))
+	require.False(t, projectHasRowIDAt(project, 0))
+	require.False(t, projectHasRowIDAt(project, 1), "literal is not a rowid column")
+	require.False(t, projectHasRowIDAt(project, -1))
+	require.False(t, projectHasRowIDAt(project, 3))
+	require.Equal(t, int32(2), projectRowIDPos(project))
+	require.Equal(t, int32(-1), projectRowIDPos(project[:2]))
+}
+
+func TestIssue33113AppendExcludeRegisteredDeleteRowsEdges(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	rowIDTyp := plan.Type{Id: int32(types.T_Rowid), Width: 16}
+	intTyp := plan.Type{Id: int32(types.T_int32), Width: 32}
+	col := func(pos int32, name string, typ plan.Type) *plan.Expr {
+		return &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos, Name: name}}}
+	}
+	newBuilder := func() (*QueryBuilder, *BindContext) {
+		builder := NewQueryBuilder(plan.Query_DELETE, mock.CurrentContext(), false, true)
+		return builder, NewBindContext(builder, nil)
+	}
+	// registers a delete source whose sink projects deleteProject.
+	register := func(builder *QueryBuilder, bindCtx *BindContext, tableID uint64, deleteProject []*plan.Expr) {
+		src := builder.appendNode(&plan.Node{NodeType: plan.Node_PROJECT, ProjectList: deleteProject}, bindCtx)
+		sink := appendSinkNode(builder, bindCtx, src)
+		builder.appendStep(sink)
+		builder.deleteNode[tableID] = sink
+	}
+	input := func(builder *QueryBuilder, bindCtx *BindContext) int32 {
+		return builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: []*plan.Expr{col(0, "id", intTyp), col(1, catalog.Row_ID, rowIDTyp)},
+		}, bindCtx)
+	}
+	const tbl uint64 = 77940
+
+	t.Run("no registered delete", func(t *testing.T) {
+		builder, bindCtx := newBuilder()
+		in := input(builder, bindCtx)
+		out, err := appendExcludeRegisteredDeleteRows(builder, bindCtx, in, tbl, 1)
+		require.NoError(t, err)
+		require.Equal(t, in, out)
+	})
+	t.Run("negative rowid position", func(t *testing.T) {
+		builder, bindCtx := newBuilder()
+		register(builder, bindCtx, tbl, []*plan.Expr{col(0, catalog.Row_ID, rowIDTyp)})
+		in := input(builder, bindCtx)
+		out, err := appendExcludeRegisteredDeleteRows(builder, bindCtx, in, tbl, -1)
+		require.NoError(t, err)
+		require.Equal(t, in, out)
+	})
+	t.Run("registered sink is not a step", func(t *testing.T) {
+		builder, bindCtx := newBuilder()
+		in := input(builder, bindCtx)
+		builder.deleteNode[tbl] = in
+		out, err := appendExcludeRegisteredDeleteRows(builder, bindCtx, in, tbl, 1)
+		require.NoError(t, err)
+		require.Equal(t, in, out)
+	})
+	t.Run("update rowid out of range", func(t *testing.T) {
+		builder, bindCtx := newBuilder()
+		register(builder, bindCtx, tbl, []*plan.Expr{col(0, catalog.Row_ID, rowIDTyp)})
+		in := input(builder, bindCtx)
+		_, err := appendExcludeRegisteredDeleteRows(builder, bindCtx, in, tbl, 5)
+		require.ErrorContains(t, err, "update source rowid is unavailable")
+	})
+	t.Run("registered delete has no rowid", func(t *testing.T) {
+		builder, bindCtx := newBuilder()
+		register(builder, bindCtx, tbl, []*plan.Expr{col(0, "id", intTyp)})
+		in := input(builder, bindCtx)
+		_, err := appendExcludeRegisteredDeleteRows(builder, bindCtx, in, tbl, 1)
+		require.ErrorContains(t, err, "registered delete rowid is unavailable")
+	})
+	t.Run("delete rowid found at another position", func(t *testing.T) {
+		builder, bindCtx := newBuilder()
+		register(builder, bindCtx, tbl, []*plan.Expr{col(0, catalog.Row_ID, rowIDTyp), col(1, "id", intTyp)})
+		in := input(builder, bindCtx)
+		out, err := appendExcludeRegisteredDeleteRows(builder, bindCtx, in, tbl, 1)
+		require.NoError(t, err)
+		join := builder.qry.Nodes[out]
+		require.Equal(t, plan.Node_JOIN, join.NodeType)
+		require.Equal(t, plan.Node_ANTI, join.JoinType)
+		require.Len(t, join.ProjectList, 2)
+		args := join.OnList[0].GetF().Args
+		require.Equal(t, int32(1), args[0].GetCol().ColPos, "candidate rowid")
+		require.Equal(t, int32(0), args[1].GetCol().ColPos, "registered delete rowid located by name")
+		require.Equal(t, int32(1), args[1].GetCol().RelPos)
+	})
+}
