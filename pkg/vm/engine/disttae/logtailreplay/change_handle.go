@@ -1311,10 +1311,15 @@ func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fil
 		maxBytes:    baseHandle.changesHandle.maxInMemoryBytes,
 	}
 }
-func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
+func (h *CNObjectHandle) prefetch(ctx context.Context) error {
 	t0 := time.Now()
+	defer func() { h.base.changesHandle.readDuration += time.Since(t0) }()
+	readCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	jobs := make([]*tasks.Job, 0)
 	blks := make([]types.Blockid, 0)
+	tsStart := len(h.TSs)
 	prefetchWidth := objectPrefetchWidth(h.maxRows, h.maxBytes)
 	bounded := h.maxRows > 0 || h.maxBytes > 0
 	for i := 0; i < prefetchWidth; i++ {
@@ -1331,7 +1336,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		h.TSs = append(h.TSs, entry.CreateTime)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 		job := prefetchObjects(
-			ctx, uint32(h.blkOffsetCursor), rowOffset, h.fs, &stats,
+			readCtx, uint32(h.blkOffsetCursor), rowOffset, h.fs, &stats,
 			h.base.changesHandle.scheduler, h.maxRows, h.maxBytes,
 			h.base.changesHandle.spillConfig, h.mp,
 		)
@@ -1340,19 +1345,12 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 			h.advanceBlock(stats.BlkCnt())
 		}
 	}
-	for i, job := range jobs {
-		res := job.GetResult()
-		if res.Err != nil {
-			err = res.Err
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				logutil.Info("ChangesHandle-FileNotFound",
-					zap.String("err", err.Error()))
-			}
-			h.base.changesHandle.readDuration += time.Since(t0)
-			return
-		}
-		putJob(job)
-		window := res.Res.(*persistedBlockWindow)
+	var windows [LoadParallism]*persistedBlockWindow
+	if err := collectPrefetchWindows(readCtx, cancel, jobs, windows[:len(jobs)], nil, h.mp); err != nil {
+		h.TSs = h.TSs[:tsStart]
+		return err
+	}
+	for i, window := range windows[:len(jobs)] {
 		h.cache = append(h.cache, window.batch)
 		h.prepared = append(h.prepared, false)
 		h.blks = append(h.blks, blks[i])
@@ -1364,8 +1362,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 			}
 		}
 	}
-	h.base.changesHandle.readDuration += time.Since(t0)
-	return
+	return nil
 }
 
 func (h *CNObjectHandle) advanceBlock(blockCount uint32) {
@@ -1566,8 +1563,12 @@ func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, star
 // commit-ts zonemap at block granularity before loading block data.
 func (h *AObjectHandle) nextPrefetchTarget(
 	ctx context.Context,
+	metadata *aobjPlanPrefetch,
 ) (obj *objectio.ObjectEntry, blk uint16, ok bool, err error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, false, err
+		}
 		if h.objectOffsetCursor >= len(h.objects) {
 			return nil, 0, false, nil
 		}
@@ -1578,10 +1579,10 @@ func (h *AObjectHandle) nextPrefetchTarget(
 			continue
 		}
 		blk = uint16(h.blkOffsetCursor)
-		changes := h.p.changesHandle
-		if blk == 0 && changes.enableCommitTSBlockPrune &&
-			changes.pkFilter != nil && changes.pkFilter.PrefetchObjectMeta {
-			h.prefetchBlockPlans(ctx)
+		if metadata != nil && blk == 0 && h.needsBlockPlan(obj) {
+			if err := h.awaitBlockPlan(ctx, metadata, obj); err != nil {
+				return nil, 0, false, err
+			}
 		}
 		h.blkOffsetCursor++
 		if h.blkOffsetCursor >= int(obj.BlkCnt()) {
@@ -1598,30 +1599,78 @@ func (h *AObjectHandle) nextPrefetchTarget(
 	}
 }
 
-// Build plans ahead of the cursor so cold metadata reads overlap. Use each
-// plan (and return its error) in the normal replay order.
-func (h *AObjectHandle) prefetchBlockPlans(ctx context.Context) {
-	first := h.objectOffsetCursor
-	if _, ok := h.blockPlans[h.objects[first].ObjectShortName().ShortString()]; ok {
+type aobjPlanRead struct {
+	plan *aobjBlockPlan
+	done chan struct{}
+}
+
+// aobjPlanPrefetch belongs to one payload prefetch call. Its workers only
+// write their own plans. The replay cursor publishes completed plans.
+type aobjPlanPrefetch struct {
+	cancel  context.CancelFunc
+	pending map[string]aobjPlanRead
+}
+
+func (h *AObjectHandle) awaitBlockPlan(ctx context.Context, prefetch *aobjPlanPrefetch, obj *objectio.ObjectEntry) error {
+	key := obj.ObjectShortName().ShortString()
+	if _, ok := h.blockPlans[key]; ok {
+		return nil
+	}
+	read, pending := prefetch.pending[key]
+	if !pending {
+		h.finishBlockPlanPrefetch(prefetch)
+		readCtx, cancel := context.WithCancel(ctx)
+		prefetch.cancel = cancel
+		first := h.objectOffsetCursor
+		last := min(first+LoadParallism, len(h.objects))
+		prefetch.pending = make(map[string]aobjPlanRead, last-first)
+		for _, candidate := range h.objects[first:last] {
+			if candidate == nil || candidate.BlkCnt() == 0 || !h.needsBlockPlan(candidate) {
+				continue
+			}
+			candidateKey := candidate.ObjectShortName().ShortString()
+			if _, ok := h.blockPlans[candidateKey]; ok {
+				continue
+			}
+			if _, ok := prefetch.pending[candidateKey]; ok {
+				continue
+			}
+			entry := aobjPlanRead{plan: &aobjBlockPlan{}, done: make(chan struct{})}
+			prefetch.pending[candidateKey] = entry
+			go func() {
+				entry.plan.err = h.buildBlockPlan(readCtx, candidate, entry.plan)
+				close(entry.done)
+			}()
+		}
+		read = prefetch.pending[key]
+	}
+
+	// A later speculative plan may still be loading. Only the current
+	// plan is required to choose and dispatch the next payload.
+	select {
+	case <-read.done:
+		h.blockPlans[key] = read.plan
+		delete(prefetch.pending, key)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (h *AObjectHandle) finishBlockPlanPrefetch(prefetch *aobjPlanPrefetch) {
+	if prefetch.cancel == nil {
 		return
 	}
-	var reads sync.WaitGroup
-	last := min(first+LoadParallism, len(h.objects))
-	for _, obj := range h.objects[first:last] {
-		if obj == nil || obj.BlkCnt() == 0 {
-			continue
+	prefetch.cancel()
+	for key, read := range prefetch.pending {
+		<-read.done
+		// Keep useful read-ahead across payload windows. A speculative
+		// failure may be the cancellation above, so retry it when needed.
+		if read.plan.err == nil {
+			h.blockPlans[key] = read.plan
 		}
-		key := obj.ObjectShortName().ShortString()
-		if _, ok := h.blockPlans[key]; ok {
-			continue
-		}
-		plan := &aobjBlockPlan{}
-		h.blockPlans[key] = plan
-		reads.Go(func() {
-			plan.err = h.buildBlockPlan(ctx, obj, plan)
-		})
 	}
-	reads.Wait()
+	*prefetch = aobjPlanPrefetch{}
 }
 
 // shouldReadBlock decides whether one block may contain rows in [start, end].
@@ -1639,10 +1688,9 @@ func (h *AObjectHandle) shouldReadBlock(
 	if obj == nil {
 		return false, nil
 	}
-	changes := h.p.changesHandle
 	// Appendable objects do not use commit-TS block pruning, but persisted
 	// appendable objects in a checkpoint can still be pruned by their PK column.
-	if !h.pruneByCommitTS(obj) && (changes.pkFilter == nil || len(changes.pkFilter.Segments) == 0) {
+	if !h.needsBlockPlan(obj) {
 		return true, nil
 	}
 	key := obj.ObjectShortName().ShortString()
@@ -1658,7 +1706,7 @@ func (h *AObjectHandle) shouldReadBlock(
 		return false, plan.err
 	}
 	if !plan.evaluable {
-		if h.pruneByCommitTS(obj) && changes.strictCommitTSBlockPrune {
+		if h.pruneByCommitTS(obj) && h.p.changesHandle.strictCommitTSBlockPrune {
 			logutil.Warn(
 				"ChangesHandle-CommitTSBlockPlan strict fallback",
 				zap.String("object", obj.ObjectShortName().ShortString()),
@@ -1686,6 +1734,11 @@ func (h *AObjectHandle) shouldReadBlock(
 
 func (h *AObjectHandle) pruneByCommitTS(obj *objectio.ObjectEntry) bool {
 	return h.p.changesHandle.enableCommitTSBlockPrune && !obj.GetAppendable() && !obj.GetCNCreated()
+}
+
+func (h *AObjectHandle) needsBlockPlan(obj *objectio.ObjectEntry) bool {
+	filter := h.p.changesHandle.pkFilter
+	return h.pruneByCommitTS(obj) || (filter != nil && len(filter.Segments) > 0)
 }
 
 func (h *AObjectHandle) buildBlockPlan(
@@ -1928,6 +1981,19 @@ func (h *AObjectHandle) prefetch(ctx context.Context) error {
 
 	readCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	width := LoadParallism
+	var metadata *aobjPlanPrefetch
+	changes := h.p.changesHandle
+	if changes.enableCommitTSBlockPrune && changes.pkFilter != nil && changes.pkFilter.PrefetchObjectMeta {
+		if fileservice.SupportsReadCancellation(h.fs) {
+			metadata = &aobjPlanPrefetch{}
+			defer h.finishBlockPlanPrefetch(metadata)
+		} else {
+			// An unrelated read must not delay the caller's snapshot fallback.
+			// Read one block at a time when we cannot cancel in-flight I/O.
+			width = 1
+		}
+	}
 
 	var blockIDs [LoadParallism]uint16
 	var groups [LoadParallism]aObjectReadGroup
@@ -1970,11 +2036,11 @@ func (h *AObjectHandle) prefetch(ctx context.Context) error {
 	}
 
 	groupCount := 0
-	for i := range blockIDs {
+	for i := range blockIDs[:width] {
 		if readCtx.Err() != nil {
 			break
 		}
-		obj, blk, ok, targetErr := h.nextPrefetchTarget(readCtx)
+		obj, blk, ok, targetErr := h.nextPrefetchTarget(readCtx, metadata)
 		if targetErr != nil {
 			cancel(targetErr)
 			break
@@ -2057,12 +2123,17 @@ func (h *AObjectHandle) prefetch(ctx context.Context) error {
 	return err
 }
 
-func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
+func (h *AObjectHandle) prefetchWindows(ctx context.Context) error {
 	t0 := time.Now()
+	defer func() { h.p.changesHandle.readDuration += time.Since(t0) }()
+	readCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	jobs := make([]*tasks.Job, 0)
 	blks := make([]types.Blockid, 0)
 	prefetchWidth := objectPrefetchWidth(h.maxRows, h.maxBytes)
 	bounded := h.maxRows > 0 || h.maxBytes > 0
+	var planningErr error
 	for i := 0; i < prefetchWidth; i++ {
 		var obj *objectio.ObjectEntry
 		var blk uint16
@@ -2070,14 +2141,9 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 			obj, blk = h.pendingObject, h.pendingBlock
 		} else {
 			var ok bool
-			var targetErr error
-			obj, blk, ok, targetErr = h.nextPrefetchTarget(ctx)
-			if targetErr != nil {
-				err = targetErr
-				h.p.changesHandle.readDuration += time.Since(t0)
-				return
-			}
-			if !ok {
+			// Bounded reads plan only the current block.
+			obj, blk, ok, planningErr = h.nextPrefetchTarget(readCtx, nil)
+			if planningErr != nil || !ok {
 				break
 			}
 			if bounded {
@@ -2086,26 +2152,18 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 		}
 		stats := obj.ObjectStats
 		job := prefetchObjects(
-			ctx, uint32(blk), h.blockRowOffset, h.fs, &stats,
+			readCtx, uint32(blk), h.blockRowOffset, h.fs, &stats,
 			h.p.changesHandle.scheduler, h.maxRows, h.maxBytes,
 			h.p.changesHandle.spillConfig, h.mp,
 		)
 		jobs = append(jobs, job)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 	}
-	for i, job := range jobs {
-		res := job.GetResult()
-		if res.Err != nil {
-			err = res.Err
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				logutil.Info("ChangesHandle-FileNotFound",
-					zap.String("err", err.Error()))
-			}
-			h.p.changesHandle.readDuration += time.Since(t0)
-			return
-		}
-		putJob(job)
-		window := res.Res.(*persistedBlockWindow)
+	var windows [LoadParallism]*persistedBlockWindow
+	if err := collectPrefetchWindows(readCtx, cancel, jobs, windows[:len(jobs)], planningErr, h.mp); err != nil {
+		return err
+	}
+	for i, window := range windows[:len(jobs)] {
 		h.cache = append(h.cache, window.batch)
 		h.specialLayouts = append(h.specialLayouts, window.specialLayout)
 		h.seqnums = append(h.seqnums, window.seqnums)
@@ -2118,8 +2176,7 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 			}
 		}
 	}
-	h.p.changesHandle.readDuration += time.Since(t0)
-	return
+	return nil
 }
 
 func (h *AObjectHandle) init(ctx context.Context, quick bool) (err error) {
@@ -4492,8 +4549,51 @@ func prefetchObjects(
 			return
 		},
 	)
-	scheduler.Schedule(job)
+	if err := scheduler.Schedule(job); err != nil {
+		job.DoneWithErr(err)
+	}
 	return
+}
+
+// collectPrefetchWindows owns all submitted jobs until the window can be
+// published. A failed plan or payload must leave no reads using the handle.
+func collectPrefetchWindows(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	jobs []*tasks.Job,
+	windows []*persistedBlockWindow,
+	err error,
+	mp *mpool.MPool,
+) error {
+	if err != nil {
+		cancel()
+	}
+	for i, job := range jobs {
+		res := job.GetResult()
+		putJob(job)
+		if res.Err != nil {
+			if err == nil {
+				err = res.Err
+				cancel()
+			}
+			continue
+		}
+		windows[i] = res.Res.(*persistedBlockWindow)
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		for _, window := range windows {
+			if window != nil {
+				window.batch.Clean(mp)
+			}
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			logutil.Info("ChangesHandle-FileNotFound", zap.String("err", err.Error()))
+		}
+	}
+	return err
 }
 
 func prependRowIDVectorIfNeeded(bat *batch.Batch, blk *types.Blockid, mp *mpool.MPool) error {

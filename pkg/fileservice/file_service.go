@@ -72,6 +72,14 @@ type FileService interface {
 	Close(ctx context.Context)
 }
 
+// SupportsReadCancellation reports whether a service opts in to read-ahead
+// that cancels and joins outstanding reads before returning. Unknown services
+// are ineligible because their in-flight storage requests may ignore cancellation.
+func SupportsReadCancellation(fs FileService) bool {
+	capable, ok := fs.(interface{ SupportsReadCancellation() bool })
+	return ok && capable.SupportsReadCancellation()
+}
+
 // ObjectCopier is an optional FileService capability for copying an object in
 // the backing store without streaming its contents through the caller.  The
 // boolean result is false when the source and destination backends cannot do a
