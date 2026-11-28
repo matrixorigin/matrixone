@@ -38,7 +38,8 @@ test('pinned failed-group retry and completed-attempt cleanup isolate same-name 
       return { data: parent };
     },
     listWorkflowRuns: async ({ status }) => {
-      const rows = Object.values(runs).filter(run => run.status === status);
+      assert.equal(status, undefined);
+      const rows = Object.values(runs);
       return { data: { workflow_runs: rows, total_count: rows.length } };
     },
     listWorkflowRunArtifacts: async () => ({ data: { artifacts } }),

@@ -287,11 +287,12 @@ function coverageHarness({ children, parentOverride = {}, tick, receipts = [], l
       assert.equal(branch, 'main');
       assert.equal(event, 'workflow_dispatch');
       assert.equal(per_page, 100);
+      assert.equal(status, undefined);
       const [lo, hi] = created.split('..').map(Date.parse);
       assert.ok(lo >= Date.parse(parent.run_started_at) && hi <= Date.parse(parent.updated_at) + 60000);
       const found = [...rows.values()].filter(run => {
         const when = Date.parse(run.created_at || parent.run_started_at);
-        return listed(run, elapsed) && run.status === status && lo <= when && when <= hi;
+        return listed(run, elapsed) && lo <= when && when <= hi;
       });
       return { data: { total_count: found.length, workflow_runs: found.slice((page-1)*100, page*100) } };
     },
@@ -337,9 +338,26 @@ test('congested standby discovery paginates and only cancels the owned child', a
 
 test('completed parent attempt releases only its queued and running standby children', async () => {
   const h = coverageHarness();
+  const actions = h.options.github.rest.actions;
+  const list = actions.listWorkflowRuns;
+  let pages = 0;
+  actions.listWorkflowRuns = async params => {
+    pages++;
+    return list(params);
+  };
   await h.run();
+  assert.equal(pages, 3);
   assert.deepEqual(h.calls, [['cancel', 700, 10000], ['cancel', 701, 10000],
     ['force', 700, 130000], ['force', 701, 130000]]);
+});
+
+test('successful parent completion needs no standby discovery', async () => {
+  const h = coverageHarness({ children: [],
+    parentOverride: { conclusion: 'success' } });
+  Object.assign(h.options.context.payload.workflow_run, { status: 'completed', conclusion: 'success' });
+  h.options.github.rest.actions = {};
+  await h.run();
+  assert.deepEqual(h.calls, []);
 });
 
 test('short worker names never authorize cleanup without the original exact identity', async () => {

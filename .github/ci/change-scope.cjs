@@ -33,9 +33,11 @@ function category(path) {
   return 'full';
 }
 
+const fileListLimit = 3000;
+
 function classify(files, expectedCount, forceFull = false) {
   if (forceFull || !Array.isArray(files) || files.length === 0 ||
-      files.length !== expectedCount || files.length >= 3000) return { scope: 'full', sdk_required: true };
+      files.length !== expectedCount || files.length >= fileListLimit) return { scope: 'full', sdk_required: true };
   const kinds = new Set();
   const names = new Set();
   let sdkRequired = false;
@@ -61,7 +63,22 @@ function classify(files, expectedCount, forceFull = false) {
   return { scope, sdk_required: sdkRequired };
 }
 
-async function resolveScope({ github, context, forceFull }) {
+function rateLimit(error) {
+  const headers = error?.response?.headers ?? {};
+  const retryAfter = headers['retry-after'];
+  const exhausted = headers['x-ratelimit-remaining'] === '0';
+  const rateLimited = error?.status === 429 || (error?.status === 403 &&
+    (retryAfter !== undefined || exhausted ||
+      /^api rate limit exceeded|secondary rate limit/i.test(error.message ?? '')));
+  if (!rateLimited) return undefined;
+  const seconds = Number(retryAfter);
+  const reset = Number(headers['x-ratelimit-reset']);
+  const delay = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 :
+    exhausted && Number.isFinite(reset) ? reset * 1000 - Date.now() : undefined;
+  return { delay: delay === undefined ? undefined : Math.max(delay, 1000), exhausted };
+}
+
+async function resolveScope({ github, context, forceFull, sleep = require('node:timers/promises').setTimeout }) {
   const eventPR = context.payload.pull_request;
   if (!eventPR) throw new Error('Missing pull request');
   const baseRef = eventPR.base?.ref;
@@ -69,17 +86,41 @@ async function resolveScope({ github, context, forceFull }) {
   const params = { ...context.repo, pull_number: eventPR.number };
   const sameRevision = pr => pr.head.sha === eventPR.head.sha &&
     pr.base.sha === eventPR.base.sha && pr.base.ref === baseRef;
-  const before = (await github.rest.pulls.get(params)).data;
+  // Share one recovery allowance across all reads inside the preflight job.
+  let remainingWait = 120_000;
+  async function waitForQuota(error, delay) {
+    if (delay > remainingWait) throw error;
+    remainingWait -= delay;
+    await sleep(delay);
+  }
+  async function readRevision() {
+    let backoff = 0;
+    for (;;) {
+      try {
+        return (await github.rest.pulls.get(params)).data;
+      } catch (error) {
+        const throttle = rateLimit(error);
+        if (!throttle) throw error;
+        backoff = throttle.delay === undefined ? Math.max(60_000, backoff * 2) : 0;
+        await waitForQuota(error, throttle.delay ?? backoff);
+      }
+    }
+  }
+  const before = await readRevision();
   if (!sameRevision(before)) throw new Error('PR revision changed; use the newer CI run');
   let plan = { scope: 'full', sdk_required: true };
-  try {
-    const files = await github.paginate(github.rest.pulls.listFiles, { ...params, per_page: 100 });
-    plan = classify(files, before.changed_files, forceFull);
-  } catch {
-    // An unavailable or incomplete file list must never grant a test exemption.
-    plan = { scope: 'full', sdk_required: true };
+  if (!forceFull && before.changed_files > 0 && before.changed_files < fileListLimit) {
+    try {
+      const files = await github.paginate(github.rest.pulls.listFiles, { ...params, per_page: 100 });
+      plan = classify(files, before.changed_files);
+    } catch (error) {
+      // Keep the full plan. Only a proven shared quota blocks the next
+      // revision read too. Do not restart a partial file-list pagination.
+      const throttle = rateLimit(error);
+      if (throttle?.exhausted) await waitForQuota(error, throttle.delay ?? 60_000);
+    }
   }
-  const after = (await github.rest.pulls.get(params)).data;
+  const after = await readRevision();
   if (!sameRevision(after)) throw new Error('PR revision changed while classifying');
   // The SDK PR contract is maintained on main. SDK-only release edits retain
   // full kernel CI instead of becoming a successful empty plan.

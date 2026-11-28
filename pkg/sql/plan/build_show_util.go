@@ -60,11 +60,12 @@ func ConstructCreateTableSQL(
 		sqlMode = *parserSQLModeFromContext(ctx)
 		sourceSubscription = ctx.GetQueryingSubscription()
 	}
-	return constructCreateTableSQL(
+	displaySQL, stmt, err := constructCreateTableSQL(
 		ctx, tableDef, snapshot, useDbName, cloneStmt, true,
 		sourceSubscription,
-		false, sqlMode,
+		false, sqlMode, nil,
 	)
+	return displaySQL, stmt, err
 }
 
 func createTableIndexVisible(indexDef *plan.IndexDef) bool {
@@ -86,10 +87,11 @@ func constructCreateTableSQL(
 	sourceSubscription *SubscriptionMeta,
 	legacyDumpDefaults bool,
 	sqlMode string,
+	replayOut *string,
 ) (string, tree.Statement, error) {
 	return constructCreateTableSQLWithCommentFormat(
 		ctx, tableDef, snapshot, useDbName, cloneStmt, includeChecks,
-		sourceSubscription, legacyDumpDefaults, false, sqlMode,
+		sourceSubscription, legacyDumpDefaults, false, sqlMode, replayOut,
 	)
 }
 
@@ -99,7 +101,7 @@ func constructCreateTableSQL(
 // consumers must use ConstructCreateTableSQL, which renders both for replay.
 func ConstructCreateTableSQLForSchemaHash(tableDef *plan.TableDef) (string, error) {
 	sql, _, err := constructCreateTableSQLWithCommentFormat(
-		nil, tableDef, nil, false, nil, true, nil, true, true, "",
+		nil, tableDef, nil, false, nil, true, nil, true, true, "", nil,
 	)
 	return sql, err
 }
@@ -115,6 +117,7 @@ func constructCreateTableSQLWithCommentFormat(
 	legacyDumpDefaults bool,
 	legacyStoredComments bool,
 	sqlMode string,
+	replayOut *string,
 ) (string, tree.Statement, error) {
 	// Replaying native metadata through a legacy SQL alias would change its
 	// semantics. Until activation, reject rather than emit a lossy dump.
@@ -125,12 +128,13 @@ func constructCreateTableSQLWithCommentFormat(
 	var createStr string
 	noBackslashEscapes := mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes)
 	rewritePairs := make([]struct {
-		display string
+		start   int
+		length  int
 		rewrite string
 	}, 0)
 	var checkDefs []string
 	if includeChecks {
-		checkDefs = constructCheckDefs(tableDef)
+		checkDefs = constructCheckDefs(tableDef, legacyStoredComments)
 	}
 	var mongoEnvelope sqlmongodb.CreateSQLEnvelope
 	mongoColumns := make(map[string]sqlmongodb.ColumnMapping)
@@ -373,7 +377,7 @@ func constructCreateTableSQLWithCommentFormat(
 				if incErr != nil {
 					return "", nil, incErr
 				}
-				indexStr += indexIncludeColumnsToString(includedColumns, colNameToOriginName)
+				indexStr += indexIncludeColumnsToString(includedColumns, colNameToOriginName, legacyStoredComments)
 
 				if indexdef.IndexAlgoParams != "" {
 					val, err := sonic.Get([]byte(indexdef.IndexAlgoParams), "parser")
@@ -492,7 +496,7 @@ func constructCreateTableSQLWithCommentFormat(
 				if err != nil {
 					return "", nil, err
 				}
-				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
+				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName, legacyStoredComments)
 				indexStr += includeList
 				rewriteIndexStr += includeList
 				if !indexVisible {
@@ -501,27 +505,26 @@ func constructCreateTableSQLWithCommentFormat(
 				}
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
-						display string
+						start   int
+						length  int
 						rewrite string
-					}{display: indexStr, rewrite: rewriteIndexStr})
+					}{start: -1, length: len(indexStr), rewrite: rewriteIndexStr})
 				}
 			}
 			if indexdef.Comment != "" {
 				formattedComment := formatStrInSingleQuotesForSQLMode(indexdef.Comment, sqlMode)
 				indexStr += fmt.Sprintf(" COMMENT '%s'", formattedComment)
-				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
-					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
-					rewritePairs[len(rewritePairs)-1] = struct {
-						display string
-						rewrite string
-					}{
-						display: indexStr,
-						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formattedComment),
-					}
+				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].start < 0 &&
+					rewritePairs[len(rewritePairs)-1].length < len(indexStr) {
+					rewritePairs[len(rewritePairs)-1].length = len(indexStr)
+					rewritePairs[len(rewritePairs)-1].rewrite = rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formattedComment)
 				}
 			}
 			if rowCount != 0 {
 				createStr += ",\n"
+			}
+			if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].start < 0 {
+				rewritePairs[len(rewritePairs)-1].start = len(createStr)
 			}
 			createStr += indexStr
 		}
@@ -940,12 +943,38 @@ func constructCreateTableSQLWithCommentFormat(
 		}
 	}
 	var stmt tree.Statement
-	if ctx != nil {
-		rewriteStr := createStr
+	// replayStr is the executable shape of the same statement: the display
+	// string with the recorded index fragments rewritten at their recorded
+	// construction offsets (for example the SHOW CREATE display
+	// "SPATIAL KEY" becomes the parseable "KEY ... USING RTREE"). Splicing by
+	// construction offsets cannot collide with identical text quoted
+	// elsewhere in the statement (for example inside a column COMMENT), and
+	// no text is searched or replaced inside arbitrary quoted input.
+	// Internal replay owners must consume this spelling; SHOW CREATE and
+	// persisted DUMP schema fingerprints keep the display string.
+	replayStr := createStr
+	if len(rewritePairs) > 0 {
+		var replayBuf strings.Builder
+		replayBuf.Grow(len(createStr))
+		prev := 0
 		for _, pair := range rewritePairs {
-			rewriteStr = strings.Replace(rewriteStr, pair.display, pair.rewrite, 1)
+			if pair.start < prev || pair.start+pair.length > len(createStr) {
+				continue
+			}
+			replayBuf.WriteString(createStr[prev:pair.start])
+			replayBuf.WriteString(pair.rewrite)
+			prev = pair.start + pair.length
 		}
-		stmt, err = getRewriteSQLStmtWithSQLMode(ctx, rewriteStr, sqlMode)
+		replayBuf.WriteString(createStr[prev:])
+		replayStr = replayBuf.String()
+	}
+	// replayOut, when non-nil, receives the replay form so this builder's
+	// long-standing error exits stay unchanged.
+	if replayOut != nil {
+		*replayOut = replayStr
+	}
+	if ctx != nil {
+		stmt, err = getRewriteSQLStmtWithSQLMode(ctx, replayStr, sqlMode)
 	}
 	return createStr, stmt, err
 }
@@ -1041,7 +1070,19 @@ func tableCharsetForShowCreate(ctx CompilerContext, charset uint32) string {
 	}
 }
 
-func indexIncludeColumnsToString(includedColumns []string, colNameToOriginName map[string]string) string {
+// dumpHashIdent renders a persisted-schema-hash identifier. Historical archive
+// fingerprints froze the apostrophe-doubled formatStr spelling of CHECK and
+// INCLUDE identifiers into the SHA-256 input that DUMP manifests store and LOAD
+// compares exactly, so that path must keep those bytes. SHOW CREATE and
+// executable replay quote identifiers verbatim so authored names round-trip.
+func dumpHashIdent(name string, historicalDumpIdent bool) string {
+	if historicalDumpIdent {
+		return fmt.Sprintf("`%s`", formatStr(name))
+	}
+	return sqlquote.Ident(name)
+}
+
+func indexIncludeColumnsToString(includedColumns []string, colNameToOriginName map[string]string, historicalDumpIdent bool) string {
 	if len(includedColumns) == 0 {
 		return ""
 	}
@@ -1052,7 +1093,11 @@ func indexIncludeColumnsToString(includedColumns []string, colNameToOriginName m
 		if originName := colNameToOriginName[resolvedName]; originName != "" {
 			resolvedName = originName
 		}
-		names = append(names, fmt.Sprintf("`%s`", formatStr(resolvedName)))
+		// INCLUDE columns are identifiers. Backtick quoting must not also
+		// apply string-literal apostrophe doubling, or replay would decode
+		// `pay'load` as a different column name; only the persisted DUMP
+		// schema-hash input keeps the historical doubled spelling.
+		names = append(names, dumpHashIdent(resolvedName, historicalDumpIdent))
 	}
 	return fmt.Sprintf(" INCLUDE (%s)", strings.Join(names, ", "))
 }
@@ -1081,7 +1126,7 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 	return checks
 }
 
-func constructCheckDefs(tableDef *plan.TableDef) []string {
+func constructCheckDefs(tableDef *plan.TableDef, historicalDumpIdent bool) []string {
 	if tableDef == nil || tableDef.TableType == catalog.SystemExternalRel {
 		return nil
 	}
@@ -1094,11 +1139,16 @@ func constructCheckDefs(tableDef *plan.TableDef) []string {
 		if check == nil || check.OriginSql == "" {
 			continue
 		}
+		// CHECK names are identifiers. Backtick quoting must not also apply
+		// string-literal apostrophe doubling, or COPY replay would persist the
+		// constraint under a doubled name and the authored name would stop
+		// matching DROP CONSTRAINT; only the persisted DUMP schema-hash input
+		// keeps the historical doubled spelling.
 		checks = append(
 			checks,
 			fmt.Sprintf(
-				"CONSTRAINT `%s` CHECK (%s)",
-				formatStr(check.Name),
+				"CONSTRAINT %s CHECK (%s)",
+				dumpHashIdent(check.Name, historicalDumpIdent),
 				check.OriginSql,
 			),
 		)
