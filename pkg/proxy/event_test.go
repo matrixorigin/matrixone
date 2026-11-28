@@ -216,6 +216,7 @@ func runEventTest(t *testing.T,
 	defer ssc1.Close()
 	// get connection id from result.
 	connID := uint32(ret[6])
+	require.Equal(t, cn1.connID, connID)
 
 	// tunnel2 is on cn2, connection ID is 20.
 	ssc2, _, err := tp.ru.Connect(cn2, testPacket, tu2)

@@ -329,7 +329,8 @@ func testHandle(h *testHandler) {
 	extraInfo := proxy.ExtraInfo{}
 	reader := bufio.NewReader(h.conn.RawConn())
 	if err := extraInfo.Decode(reader); err == nil {
-		h.mysqlProto.SetU32(frontend.CONNID, extraInfo.ConnectionID)
+		h.connID = extraInfo.ConnectionID
+		h.mysqlProto.SetU32(frontend.CONNID, h.connID)
 	}
 	// server writes init handshake.
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeHandshakePayload())
