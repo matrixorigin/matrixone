@@ -1,0 +1,37 @@
+name: CS Coverage runner concurrency probe (4 slots)
+on:
+  push:
+    branches: [weilu-runner-test]
+    paths: [.github/workflows/cs-coverage-capacity-small-probe.yaml]
+permissions: {}
+jobs:
+  probe:
+    name: Probe ${{ matrix.pool }}
+    if: >-
+      github.repository == 'matrixorigin/matrixone' &&
+      github.ref == 'refs/heads/weilu-runner-test' &&
+      github.actor == 'Ariznawlll' && github.run_attempt == 1 &&
+      github.event.before == '6d06c0b31eb920746d3d63eeebd89b9f3a16421c'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        pool: [cs-mnl2-nc-n0-pr-v1, cs-mnl2-nc-n1-pr-v1, cs-ruh-nc-n0-pr-v1, cs-ruh-nc-n1-pr-v1]
+    runs-on: ${{ matrix.pool }}
+    timeout-minutes: 2
+    steps:
+      - name: Verify a Coverage-size work volume and hold for 50 seconds
+        env:
+          EXPECTED_POOL: ${{ matrix.pool }}
+          ASSIGNED_RUNNER: ${{ runner.name }}
+        run: |
+          set -euo pipefail
+          [[ "$ASSIGNED_RUNNER" == "$EXPECTED_POOL-"* ]]
+          df -Pk "$RUNNER_TEMP" | awk 'NR==2 {
+            printf "Work filesystem total: %.1f GiB\n", $2/1048576
+            if ($2 < 75*1048576) exit 1
+            ok=1
+          } END { if (!ok) exit 1 }'
+          date -u '+Probe began at %Y-%m-%dT%H:%M:%SZ'
+          sleep 50
+          date -u '+Probe released at %Y-%m-%dT%H:%M:%SZ'
