@@ -53,7 +53,7 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
+	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -147,6 +147,7 @@ func main() {
 	if *launchFile != "" {
 		startErr = startCluster(ctx, stopper, shutdownC)
 	} else if *configFile != "" {
+		serviceLifecycle.pythonWorkerRequired = true
 		cfg := NewConfig()
 		if err := parseConfigFromFile(*configFile, cfg); err != nil {
 			startErr = fmt.Errorf("failed to parse config from %s, error: %w", *configFile, err)
@@ -264,6 +265,14 @@ func startService(
 	if err != nil {
 		return err
 	}
+	if st == metadata.ServiceType_PYTHON_UDF && cfg.legacyPythonUdfServer {
+		const migration = "retired [python-udf-server] role; use [python-udf-worker] and explicitly enable the CN Python UDF client to use Arrow Flight"
+		if serviceLifecycle != nil && serviceLifecycle.pythonWorkerRequired {
+			return errors.New(migration)
+		}
+		logutil.GetGlobalLogger().Warn("skipping " + migration)
+		return nil
+	}
 
 	setupServiceRuntime(cfg, stopper)
 
@@ -316,7 +325,7 @@ func startService(
 	case metadata.ServiceType_LOG:
 		return startLogService(cfg, stopper, fs, shutdownC)
 	case metadata.ServiceType_PYTHON_UDF:
-		return startPythonUdfService(cfg, stopper)
+		return startPythonUdfWorker(cfg, stopper)
 	default:
 		panic("unknown service type")
 	}
@@ -773,12 +782,16 @@ func waitProxyFileServiceRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// startPythonUdfService starts the python udf service.
-func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
+// startPythonUdfWorker starts the Python UDF worker.
+func startPythonUdfWorker(cfg *Config, stopper *stopper.Stopper) error {
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
-	finish := serviceLifecycle.registerTask(serviceRolePython)
+	return startManagedPythonWorker(cfg.PythonUdfWorkerConfig, stopper, serviceLifecycle)
+}
+
+func startManagedPythonWorker(cfg python.Config, stopper *stopper.Stopper, lifecycle *serviceSupervisor) error {
+	finish := lifecycle.registerTask(serviceRolePython)
 	serviceWG.Add(1)
 	var taskDone sync.Once
 	finishTask := func(err error) {
@@ -787,22 +800,43 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 			finish(err)
 		})
 	}
-	err := stopper.RunNamedTask("python-udf-service", func(ctx context.Context) {
+	err := stopper.RunNamedTask("python-udf-worker", func(ctx context.Context) {
 		var closeErr error
 		defer func() { finishTask(closeErr) }()
-		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRolePython)
+		roleCtx, cancelRole := lifecycle.roleContext(ctx, serviceRolePython)
 		defer cancelRole()
-		s, err := pythonservice.NewService(cfg.PythonUdfServerConfig)
+		reportFailure := func(message string, err error) {
+			logutil.GetGlobalLogger().Error(message, zap.Error(err))
+			if lifecycle != nil && lifecycle.pythonWorkerRequired && roleCtx.Err() == nil {
+				lifecycle.notifyFatal(fmt.Errorf("%s: %w", message, err))
+			}
+		}
+		s, err := python.NewSupervisor(cfg)
 		if err != nil {
-			panic(err)
+			reportFailure("invalid Python UDF worker configuration", err)
+			return
 		}
 		if err := s.Start(); err != nil {
-			panic(err)
+			reportFailure("failed to start Python UDF worker", err)
+			return
 		}
-		<-roleCtx.Done()
-		if err := s.Close(); err != nil {
-			closeErr = err
-			logutil.GetGlobalLogger().Error("failed to close python udf service", zap.Error(err))
+		workerDone := s.Done()
+		select {
+		case <-roleCtx.Done():
+			if err := s.Close(); err != nil {
+				closeErr = err
+				logutil.GetGlobalLogger().Error("failed to close Python UDF worker", zap.Error(err))
+			}
+		case <-workerDone:
+			// The supervisor has reaped the worker. A shutdown-driven exit
+			// is already handled by the role's lifecycle.
+			if roleCtx.Err() == nil {
+				workerErr := s.Err()
+				if workerErr == nil {
+					workerErr = errors.New("process exited without an error")
+				}
+				reportFailure("Python UDF worker exited unexpectedly", workerErr)
+			}
 		}
 	})
 	if err != nil {

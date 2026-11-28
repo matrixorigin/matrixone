@@ -36,12 +36,11 @@ while IFS= read -r script_path; do
     relative_path=${script_path#"${case_root}/"}
     [[ "${relative_path}" == *optimistic* ]] && continue
     top_level=${relative_path%%/*}
-
     case "${top_level}" in
         array|auto_increment|benchmark|dataXtest|ddl|disttae|fake_pk|function|hint|join|keyword|load_data|mo_cloud|optimizer|pg_cast|plugin|prepare|procedure|query_result|sample|save_query_result|sequence|snapshot|sql_inject|stage|system|system_variable|temporary|tenant|tenxcloud_xx|time_window|union|util|vector|view)
             assigned_group=0
             ;;
-        analyze|charset_collation|comment|cte|database|distinct|dml|dtype|expression|feature_limit|foreign_key|fulltext|geo|git4data|iceberg|log|metadata|operator|pessimistic_transaction|pitr|plan_cache|publication_subscription|qexec|recursive_cte|replace_statement|result_count|security|set|sql_source_type|statement_query_type|subquery|table|task|udf|window|zz_accesscontrol|zz_statement_query_type)
+        analyze|charset_collation|comment|cte|database|distinct|dml|dtype|expression|feature_limit|foreign_key|fulltext|geo|git4data|iceberg|log|metadata|operator|pessimistic_transaction|pitr|plan_cache|publication_subscription|qexec|recursive_cte|replace_statement|result_count|security|set|sql_source_type|statement_query_type|subquery|table|task|udf|udf_python|window|zz_accesscontrol|zz_statement_query_type)
             assigned_group=1
             ;;
         *)

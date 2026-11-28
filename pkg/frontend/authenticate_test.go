@@ -699,7 +699,7 @@ func Test_initFunction(t *testing.T) {
 					FamilyString: "INT",
 					Width:        24,
 					Locale:       &locale,
-					Oid:          uint32(defines.MYSQL_TYPE_INT24),
+					Oid:          uint32(defines.MYSQL_TYPE_LONG),
 				},
 			}),
 			Body:     "",
@@ -745,6 +745,9 @@ func TestSQLUdfCatalogPowerBody(t *testing.T) {
 	const modified = "2026-11-26 12:00:00"
 	compiler := &TxnCompilerContext{dbName: db, execCtx: &ExecCtx{ses: ses, reqCtx: ctx}}
 	_, lookup := udfCatalogLookup(ctx, nil, name, db)
+	bh.sql2result["select active_revision, namespace_version, security_type from mo_catalog.mo_user_defined_function where function_id = 42;"] = resolveUdfCatalogResult(
+		[]string{"active_revision", "namespace_version", "security_type"}, []interface{}{int64(0), int64(0), "DEFINER"},
+	)
 	for _, tc := range []struct {
 		name, body, sqlMode string
 		power               bool
@@ -777,13 +780,6 @@ func TestSQLUdfCatalogPowerBody(t *testing.T) {
 			} else {
 				require.Equal(t, tc.body, raw, "unrelated SQL body must be unchanged in the catalog")
 			}
-			mrs := &MysqlResultSet{}
-			for _, field := range []string{"args", "body", "language", "rettype", "db", "modified_time", "sql_mode"} {
-				col := &MysqlColumn{}
-				col.SetName(field)
-				col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-				mrs.AddColumn(col)
-			}
 			for _, record := range []struct {
 				raw    string
 				legacy bool
@@ -791,8 +787,10 @@ func TestSQLUdfCatalogPowerBody(t *testing.T) {
 				{tc.body, true}, // Unmarked catalog records include the released writer.
 				{raw, !tc.power},
 			} {
-				mrs.Data = [][]interface{}{{"[]", record.raw, "sql", "double", db, modified, tc.sqlMode}}
-				bh.sql2result[lookup] = mrs
+				bh.sql2result[lookup] = resolveUdfCatalogResult(
+					[]string{"function_id", "args", "body", "language", "rettype", "db", "modified_time", "sql_mode"},
+					[]interface{}{int64(42), "[]", record.raw, "sql", "double", db, modified, tc.sqlMode},
+				)
 				udf, err := compiler.ResolveUdf(name, nil)
 				require.NoError(t, err)
 				require.NotNil(t, udf)
@@ -10535,6 +10533,30 @@ func Test_doDropFunctionIfExistsWithDifferentOverload(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeleteUserDefinedFunctionRevisionsIfPresent(t *testing.T) {
+	ctx := context.Background()
+	functionID := int64(91)
+	deleteSQL := fmt.Sprintf(deleteUserDefinedFunctionRevisionsFormat, functionID)
+
+	t.Run("missing revision table is compatible with legacy SQL UDF drop", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2err[deleteSQL] = moerr.NewNoSuchTableNoCtx("mo_catalog", "mo_function_revisions")
+
+		require.NoError(t, deleteUserDefinedFunctionRevisionsIfPresent(ctx, bh, functionID))
+		require.Equal(t, []string{deleteSQL}, bh.executedSQLs)
+	})
+
+	t.Run("unexpected cleanup failure is not hidden", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("revision cleanup failed")
+		bh.sql2err[deleteSQL] = wantErr
+
+		require.ErrorIs(t, deleteUserDefinedFunctionRevisionsIfPresent(ctx, bh, functionID), wantErr)
+	})
 }
 
 func Test_doDropRole(t *testing.T) {

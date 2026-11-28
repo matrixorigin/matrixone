@@ -986,6 +986,8 @@ func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
 		bh := &renameTxnExec{backgroundExecTest: &backgroundExecTest{}, op: &accountDropTestTxn{}}
 		bh.init()
 		seedAccountUser(bh.backgroundExecTest, 0, "root")
+		bh.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
+		configureSQLFunctionIdentityLookup(bh.backgroundExecTest, 1)
 		checkSQL := getSqlForCheckProcedureExistence("p_answer", "destination")
 		bh.sql2result[checkSQL] = newMrsForPasswordOfUser(nil)
 
@@ -994,11 +996,15 @@ func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
 			ses, bh, newStatement(), newSource(),
 		)
 		require.NoError(t, err)
-		require.Len(t, bh.executedSQLs, 6)
+		require.Len(t, bh.executedSQLs, 10)
 		require.Equal(t, "create database `destination`", bh.executedSQLs[0])
-		require.Contains(t, bh.executedSQLs[2], "insert into mo_catalog.mo_user_defined_function")
-		require.Equal(t, checkSQL, bh.executedSQLs[3])
-		require.Contains(t, bh.executedSQLs[5], "insert into mo_catalog.mo_stored_procedure")
+		require.Equal(t, functionRevisionCatalogSchemaCheck, bh.executedSQLs[1])
+		require.Contains(t, bh.executedSQLs[3], "insert into mo_catalog.mo_user_defined_function")
+		require.Contains(t, bh.executedSQLs[4], "select function_id from mo_catalog.mo_user_defined_function")
+		require.Contains(t, bh.executedSQLs[5], "insert into mo_catalog.mo_function_revisions")
+		require.Contains(t, bh.executedSQLs[6], "update mo_catalog.mo_user_defined_function set active_revision")
+		require.Equal(t, checkSQL, bh.executedSQLs[7])
+		require.Contains(t, bh.executedSQLs[9], "insert into mo_catalog.mo_stored_procedure")
 	})
 
 	t.Run("propagates procedure restoration failures", func(t *testing.T) {
@@ -1008,6 +1014,8 @@ func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
 		bh := &renameTxnExec{backgroundExecTest: &backgroundExecTest{}, op: &accountDropTestTxn{}}
 		bh.init()
 		seedAccountUser(bh.backgroundExecTest, 0, "root")
+		bh.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
+		configureSQLFunctionIdentityLookup(bh.backgroundExecTest, 1)
 		checkSQL := getSqlForCheckProcedureExistence("p_answer", "destination")
 		wantErr := errors.New("procedure lookup failed")
 		bh.sql2err[checkSQL] = wantErr
@@ -1017,10 +1025,14 @@ func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
 			ses, bh, newStatement(), newSource(),
 		)
 		require.ErrorIs(t, err, wantErr)
-		require.Len(t, bh.executedSQLs, 4)
+		require.Len(t, bh.executedSQLs, 8)
 		require.Equal(t, "create database `destination`", bh.executedSQLs[0])
-		require.Contains(t, bh.executedSQLs[2], "insert into mo_catalog.mo_user_defined_function")
-		require.Equal(t, checkSQL, bh.executedSQLs[3])
+		require.Equal(t, functionRevisionCatalogSchemaCheck, bh.executedSQLs[1])
+		require.Contains(t, bh.executedSQLs[3], "insert into mo_catalog.mo_user_defined_function")
+		require.Contains(t, bh.executedSQLs[4], "select function_id from mo_catalog.mo_user_defined_function")
+		require.Contains(t, bh.executedSQLs[5], "insert into mo_catalog.mo_function_revisions")
+		require.Contains(t, bh.executedSQLs[6], "update mo_catalog.mo_user_defined_function set active_revision")
+		require.Equal(t, checkSQL, bh.executedSQLs[7])
 	})
 
 	t.Run("rejects imported functions before target database creation", func(t *testing.T) {

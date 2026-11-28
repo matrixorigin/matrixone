@@ -44,7 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
+	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -117,8 +117,10 @@ type Config struct {
 	CN cnservice.Config `toml:"cn"`
 	// ProxyConfig is the config of proxy.
 	ProxyConfig proxy.Config `toml:"proxy"`
-	// PythonUdfServerConfig is the config of python udf server
-	PythonUdfServerConfig pythonservice.Config `toml:"python-udf-server"`
+	// PythonUdfWorkerConfig is the config of the Python UDF worker.
+	PythonUdfWorkerConfig python.Config `toml:"python-udf-worker"`
+	// Released manifests used this role for the retired Python server.
+	legacyPythonUdfServer bool
 	// Observability parameters for the metric/trace
 	Observability config.ObservabilityParameters `toml:"observability"`
 
@@ -194,7 +196,14 @@ func parseFromString(data string, cfg any) error {
 	if err != nil {
 		return err
 	}
-	return cnservice.ValidateSiriusConfigKeys(metadata)
+	if err := cnservice.ValidateSiriusConfigKeys(metadata); err != nil {
+		return err
+	}
+	if serviceConfig, ok := cfg.(*Config); ok {
+		serviceConfig.legacyPythonUdfServer =
+			metadata.IsDefined("python-udf-server") && !metadata.IsDefined("python-udf-worker")
+	}
+	return nil
 }
 
 func (c *Config) validate() error {
@@ -564,7 +573,7 @@ func (c *Config) mustGetServiceUUID() string {
 	case metadata.ServiceType_PROXY:
 		return c.ProxyConfig.UUID
 	case metadata.ServiceType_PYTHON_UDF:
-		return c.PythonUdfServerConfig.UUID
+		return c.PythonUdfWorkerConfig.UUID
 	}
 	panic("impossible")
 }

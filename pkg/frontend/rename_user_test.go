@@ -18,7 +18,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -26,10 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
-	"math"
-	"strings"
-	"testing"
-	"time"
 )
 
 func renameRows(data ...[]interface{}) *MysqlResultSet {
@@ -196,6 +198,7 @@ func TestCloneRoutineTransactionModesBeforeTargetCreation(t *testing.T) {
 			raw := &backgroundExecTest{}
 			raw.init()
 			seedAccountUser(raw, 0, "root")
+			raw.sql2err[functionRevisionCatalogSchemaCheck] = moerr.NewNoSuchTableNoCtx("mo_catalog", "mo_function_revisions")
 			op := mock_frontend.NewMockTxnOperator(ctrl)
 			op.EXPECT().Txn().Return(txn.TxnMeta{Mode: tc.mode, Isolation: tc.isolation}).AnyTimes()
 			bh := &renameTxnExec{raw, op}
@@ -356,10 +359,12 @@ func TestRoutineDefinerLiteralCreateAndReplace(t *testing.T) {
 				ctx := defines.AttachAccountId(context.Background(), 17)
 				tenant := &TenantInfo{TenantID: 17, UserID: 8, User: "stale"}
 				if kind == "function" {
+					bh.sql2err[functionRevisionCatalogSchemaCheck] = moerr.NewNoSuchTableNoCtx("mo_catalog", "mo_function_revisions")
 					var id *int64
 					if replace {
 						x := int64(3)
 						id = &x
+						bh.sql2result["select language from mo_catalog.mo_user_defined_function where function_id = 3;"] = singleStringResult("language", "sql")
 					}
 					require.NoError(t, persistUserDefinedFunction(ctx, bh, tenant, 1, userDefinedFunctionDefinition{name: "f", args: "{}", retType: "int", body: "select 1", lang: "sql", dbName: "db"}, id))
 				} else {

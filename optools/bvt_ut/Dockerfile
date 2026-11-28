@@ -10,6 +10,17 @@ ENV ENABLE_UT="false"
 
 RUN go env -w GOPROXY="${GOPROXY}"
 
+# The ordinary launch BVT starts the Python UDF worker together with the
+# MatrixOne services. Keep its environment pinned to the same contract used by
+# the compose worker image.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends python3-pip && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY pkg/udf/python/worker/requirements.txt /tmp/python-udf-requirements.txt
+RUN python3 -m pip install --break-system-packages --no-cache-dir --only-binary=:all: \
+    -r /tmp/python-udf-requirements.txt
+
 RUN mkdir -p /matrixone-test
 
 WORKDIR /matrixone-test

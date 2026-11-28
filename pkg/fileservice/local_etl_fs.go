@@ -43,12 +43,9 @@ type LocalETLFS struct {
 var _ FileService = new(LocalETLFS)
 
 func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
-	rootPath, rootFile, err := prepareLocalRoot(rootPath)
+	rootPath, err := prepareLocalRoot(rootPath)
 	if err != nil {
 		return nil, err
-	}
-	if rootFile != nil {
-		defer rootFile.Close()
 	}
 
 	// resolve symlinks in the path to get the canonical path
@@ -173,12 +170,7 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 
 	// move
 	if exclusiveWrite(ctx) {
-		// Link installs the complete temporary file atomically and refuses an
-		// existing name, using the filesystem's own alias equivalence.
-		if err := os.Link(tempPath, nativePath); err != nil {
-			if os.IsExist(err) {
-				return moerr.NewFileAlreadyExistsNoCtx(path.File)
-			}
+		if err := linkLocalFile(tempPath, nativePath, path.File); err != nil {
 			return err
 		}
 	} else {
