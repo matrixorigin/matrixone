@@ -319,6 +319,29 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	nextSourceStep := builder.appendStep(lastNodeId)
 	updatePlanCtx.sourceStep = nextSourceStep
 
+	// A row already scheduled for a referential DELETE must not be rewritten
+	// by a later UPDATE CASCADE / SET NULL on the same table. Delete wins
+	// when both actions reach the row (#33113).
+	if _, hasScheduledDelete := builder.deleteNode[updatePlanCtx.tableDef.TblId]; hasScheduledDelete {
+		lastNodeId = appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
+		if updatePlanCtx.preserveUpdateSourceProjection {
+			builder.preserveScanProjection[lastNodeId] = struct{}{}
+			builder.positionalSinkScans[lastNodeId] = struct{}{}
+		}
+		lastNodeId, err = appendExcludeRegisteredDeleteRows(
+			builder, bindCtx, lastNodeId, updatePlanCtx.tableDef.TblId, int32(updatePlanCtx.rowIdPos))
+		if err != nil {
+			return err
+		}
+		if updatePlanCtx.preserveUpdateSourceProjection {
+			lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+			builder.preserveSinkProjection[lastNodeId] = struct{}{}
+		} else {
+			lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+		}
+		updatePlanCtx.sourceStep = builder.appendStep(lastNodeId)
+	}
+
 	// build delete plans
 	err = buildDeletePlans(ctx, builder, bindCtx, updatePlanCtx)
 	if err != nil {
@@ -1204,7 +1227,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		baseProject := getProjectionByLastNode(builder, lastNodeId)
 
 		seenChild := make(map[uint64]bool)
-		for _, tableId := range delCtx.tableDef.RefChildTbls {
+		// Walk ON DELETE CASCADE children first so a grandchild reached by both
+		// a cascade-delete and an update-cascade already has its delete source
+		// registered when the update is planned (#33113).
+		for _, tableId := range orderReferentialChildTableIDs(builder, delCtx.tableDef) {
 			if seenChild[tableId] {
 				continue
 			}
@@ -2573,6 +2599,156 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 
 	return nil
+}
+
+// orderReferentialChildTableIDs puts children with an ON DELETE CASCADE edge
+// to parentDef ahead of SET NULL / other actions. It preserves the original
+// relative order inside each group and drops duplicate table ids.
+func orderReferentialChildTableIDs(builder *QueryBuilder, parentDef *TableDef) []uint64 {
+	if parentDef == nil || len(parentDef.RefChildTbls) == 0 {
+		return nil
+	}
+	var cascade, other []uint64
+	seen := make(map[uint64]bool, len(parentDef.RefChildTbls))
+	for _, tableId := range parentDef.RefChildTbls {
+		if seen[tableId] {
+			continue
+		}
+		seen[tableId] = true
+		if childHasOnDeleteCascade(builder, parentDef, tableId) {
+			cascade = append(cascade, tableId)
+		} else {
+			other = append(other, tableId)
+		}
+	}
+	return append(cascade, other...)
+}
+
+func childHasOnDeleteCascade(builder *QueryBuilder, parentDef *TableDef, tableId uint64) bool {
+	if parentDef == nil {
+		return false
+	}
+	var childDef *TableDef
+	if tableId == 0 {
+		childDef = parentDef
+	} else if builder != nil && builder.compCtx != nil {
+		_, resolved, err := builder.compCtx.ResolveById(tableId, nil)
+		if err != nil || resolved == nil {
+			return false
+		}
+		childDef = resolved
+	}
+	if childDef == nil {
+		return false
+	}
+	for _, fk := range childDef.Fkeys {
+		selfRefer := fk.ForeignTbl == 0 && childDef.TblId == parentDef.TblId
+		if (fk.ForeignTbl == parentDef.TblId || selfRefer) &&
+			fk.OnDelete == plan.ForeignKeyDef_CASCADE {
+			return true
+		}
+	}
+	return false
+}
+
+// appendExcludeRegisteredDeleteRows anti-joins input rows against a delete
+// source already registered for the same table. The join is on __mo_row_id
+// and uses the post-remap positional ABI (left=0, right=1).
+func appendExcludeRegisteredDeleteRows(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	inputNodeID int32,
+	tableId uint64,
+	rowIdPos int32,
+) (int32, error) {
+	sinkNodeId, ok := builder.deleteNode[tableId]
+	if !ok || rowIdPos < 0 {
+		return inputNodeID, nil
+	}
+	step := getStepByNodeId(builder, sinkNodeId)
+	if step < 0 {
+		return inputNodeID, nil
+	}
+	inputProject := builder.qry.Nodes[inputNodeID].ProjectList
+	if int(rowIdPos) >= len(inputProject) {
+		return 0, moerr.NewInternalErrorf(
+			builder.GetContext(), "update source rowid is unavailable")
+	}
+	deleteScanID := appendSinkScanNode(builder, bindCtx, int32(step))
+	if builder.positionalSinkScans == nil {
+		builder.positionalSinkScans = make(map[int32]struct{})
+	}
+	builder.positionalSinkScans[deleteScanID] = struct{}{}
+	deleteProject := builder.qry.Nodes[deleteScanID].ProjectList
+	deleteRowIdPos := rowIdPos
+	if int(deleteRowIdPos) >= len(deleteProject) || !projectHasRowIDAt(deleteProject, deleteRowIdPos) {
+		deleteRowIdPos = projectRowIDPos(deleteProject)
+	}
+	if deleteRowIdPos < 0 {
+		return 0, moerr.NewInternalErrorf(
+			builder.GetContext(), "registered delete rowid is unavailable")
+	}
+
+	candidateRowID := &Expr{
+		Typ: inputProject[rowIdPos].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 0,
+			ColPos: rowIdPos,
+			Name:   catalog.Row_ID,
+		}},
+	}
+	deletedRowID := &Expr{
+		Typ: deleteProject[deleteRowIdPos].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 1,
+			ColPos: deleteRowIdPos,
+			Name:   catalog.Row_ID,
+		}},
+	}
+	on, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "=", []*Expr{candidateRowID, deletedRowID})
+	if err != nil {
+		return 0, err
+	}
+	candidateProjection := make([]*Expr, len(inputProject))
+	for i, expr := range inputProject {
+		name := ""
+		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
+			name = col.Col.Name
+		}
+		candidateProjection[i] = &Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: int32(i),
+				Name:   name,
+			}},
+		}
+	}
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_JOIN,
+		Children:    []int32{inputNodeID, deleteScanID},
+		JoinType:    plan.Node_ANTI,
+		OnList:      []*Expr{on},
+		ProjectList: candidateProjection,
+	}, bindCtx), nil
+}
+
+func projectHasRowIDAt(project []*Expr, pos int32) bool {
+	if pos < 0 || int(pos) >= len(project) {
+		return false
+	}
+	col, ok := project[pos].Expr.(*plan.Expr_Col)
+	return ok && col.Col.Name == catalog.Row_ID
+}
+
+func projectRowIDPos(project []*Expr) int32 {
+	for i, expr := range project {
+		if col, ok := expr.Expr.(*plan.Expr_Col); ok && col.Col.Name == catalog.Row_ID {
+			return int32(i)
+		}
+	}
+	return -1
 }
 
 // appendExcludeSelfReferCascadeRoots keeps a recursive cascade source disjoint
